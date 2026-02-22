@@ -14,6 +14,16 @@ A Next.js 15 starter for multi-model routing with tri-layer memory:
 - Vercel KV (`@vercel/kv`)
 - AI SDK providers (`@ai-sdk/openai`, `@ai-sdk/google`)
 
+## Where the UI lives (no `index.html` in Next.js App Router)
+
+This project uses **Next.js App Router**, so you typically do not author a root `index.html` file manually.
+
+- `app/layout.tsx` is the root HTML shell (it renders `<html>` and `<body>`).
+- `app/page.tsx` is the `/` route UI (equivalent to a homepage entrypoint).
+- `app/globals.css` contains global styles.
+
+At build/runtime, Next.js generates the final HTML for each route from these files.
+
 ## Run
 
 ```bash
@@ -21,7 +31,13 @@ npm install
 npm run dev
 ```
 
-Set env vars:
+Set env vars in a local environment file:
+
+1. Create `/.env.local` at the repository root (same level as `package.json`).
+2. Copy values from `.env.example` and fill in your real secrets.
+3. Never commit real API keys to git.
+
+Required keys:
 
 - `POSTGRES_URL`
 - `KV_URL`, `KV_REST_API_URL`, `KV_REST_API_TOKEN`, `KV_REST_API_READ_ONLY_TOKEN`
