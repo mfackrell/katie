@@ -40,7 +40,7 @@ export async function updateIntermediarySummary(actorId: string, chatId: string)
   };
 
   await put(`chats/${actorId}/${chatId}.json`, JSON.stringify(updatedChatData), {
-    access: 'private' as any,
+    access: 'public',
     addRandomSuffix: false,
     contentType: 'application/json',
   });

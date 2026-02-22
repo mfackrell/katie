@@ -1,7 +1,11 @@
-// app/api/chat/route.ts
-import { OpenAI } from 'openai';
 import { list, put } from '@vercel/blob';
-import { OpenAIStream, StreamingTextResponse } from 'ai'; // <--- Add this import
+import { OpenAI } from 'openai';
+import { OpenAIStream, StreamingTextResponse } from 'ai';
+
+type ChatMessage = {
+  role: 'system' | 'user' | 'assistant';
+  content: string;
+};
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
@@ -12,59 +16,75 @@ function blobAuthHeaders() {
 }
 
 export async function POST(req: Request) {
-  const { prompt, actorId, chatId, messages } = await req.json();
+  const { actorId, chatId, messages } = (await req.json()) as {
+    actorId?: string;
+    chatId?: string;
+    messages?: ChatMessage[];
+  };
 
-  const { blobs } = await list({
-    prefix: `chats/${actorId}/${chatId}.json`,
-  });
-  const { blobs: actorBlobs } = await list({
-    prefix: `actors/${actorId}.json`,
-  });
-
-  if (blobs.length === 0 || actorBlobs.length === 0) {
-    return new Response('Not Found', { status: 404 });
+  if (!actorId || !chatId || !Array.isArray(messages) || messages.length === 0) {
+    return new Response('Invalid request', { status: 400 });
   }
 
-  const chatRes = await fetch(blobs[0].url, { headers: blobAuthHeaders() });
-  const actorRes = await fetch(actorBlobs[0].url, { headers: blobAuthHeaders() });
+  const [chatListResult, actorListResult] = await Promise.all([
+    list({ prefix: `chats/${actorId}/${chatId}.json` }),
+    list({ prefix: `actors/${actorId}.json` }),
+  ]);
 
-  if (!chatRes.ok || !actorRes.ok) {
-    return new Response('Failed to read actor/chat state', { status: 500 });
+  if (chatListResult.blobs.length === 0 || actorListResult.blobs.length === 0) {
+    return new Response('Actor or chat not found', { status: 404 });
   }
 
-  const chatData = await chatRes.json();
-  const actorData = await actorRes.json();
+  const [chatResponse, actorResponse] = await Promise.all([
+    fetch(chatListResult.blobs[0].url, { headers: blobAuthHeaders() }),
+    fetch(actorListResult.blobs[0].url, { headers: blobAuthHeaders() }),
+  ]);
 
-  const modelToUse = process.env.MASTER_ROUTER_MODEL || 'gpt-4o';
+  if (!chatResponse.ok || !actorResponse.ok) {
+    return new Response('Failed to load chat state', { status: 500 });
+  }
+
+  const chatData = await chatResponse.json();
+  const actorData = await actorResponse.json();
+
+  const ephemeralMessages = messages.slice(-15);
+  const latestUserPrompt = [...messages].reverse().find((message) => message.role === 'user')?.content ?? '';
 
   const completion = await openai.chat.completions.create({
-    model: modelToUse,
-    stream: true, // 1. Add this
+    model: process.env.MASTER_ROUTER_MODEL || 'gpt-4o',
+    stream: true,
     messages: [
       {
         role: 'system',
-        content: `PURPOSE: ${actorData.systemPurpose}\nSUMMARY: ${chatData.intermediarySummary}`,
+        content: `PERMANENT_ACTOR_PURPOSE: ${actorData.systemPurpose}\nINTERMEDIARY_SUMMARY: ${chatData.intermediarySummary ?? ''}`,
       },
-      ...(messages ?? []).slice(-15),
-      { role: 'user', content: prompt },
+      ...ephemeralMessages,
     ],
   });
 
-  const stream = OpenAIStream(response, {
-    onCompletion: async (completion) => {
+  const stream = OpenAIStream(completion as any, {
+    onCompletion: async (assistantCompletion) => {
       const updatedHistory = [
-        ...chatData.history,
-        { role: 'user', content: prompt },
-        { role: 'assistant', content: completion },
+        ...(chatData.history ?? []),
+        { role: 'user', content: latestUserPrompt },
+        { role: 'assistant', content: assistantCompletion },
       ];
 
-      await put(`chats/${actorId}/${chatId}.json`, JSON.stringify({ ...chatData, history: updatedHistory }), {
-        access: 'public',
-        addRandomSuffix: false,
-        contentType: 'application/json',
-      });
+      await put(
+        `chats/${actorId}/${chatId}.json`,
+        JSON.stringify({
+          ...chatData,
+          history: updatedHistory,
+          updatedAt: new Date().toISOString(),
+        }),
+        {
+          access: 'public',
+          addRandomSuffix: false,
+          contentType: 'application/json',
+        },
+      );
     },
   });
 
-  return new StreamingTextResponse(stream); // 4. Replace your manual Response block with this
+  return new StreamingTextResponse(stream);
 }

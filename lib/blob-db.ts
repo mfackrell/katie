@@ -1,36 +1,58 @@
-import { put, list } from '@vercel/blob';
+import { list, put } from '@vercel/blob';
 
-// --- ACTOR LOGIC ---
+type Actor = {
+  id: string;
+  name: string;
+  systemPurpose: string;
+  createdAt: string;
+};
 
-export async function createActor(name: string, systemPurpose: string) {
+type ChatState = {
+  id: string;
+  actorId: string;
+  title: string;
+  intermediarySummary: string;
+  history: Array<{ role: string; content: string }>;
+  createdAt: string;
+};
+
+function blobAuthHeaders() {
+  return {
+    Authorization: `Bearer ${process.env.BLOB_READ_WRITE_TOKEN}`,
+  };
+}
+
+export async function createActor(name: string, systemPurpose: string): Promise<Actor> {
   const actorId = crypto.randomUUID();
-  const actorData = { id: actorId, name, systemPurpose, createdAt: new Date() };
+  const actorData: Actor = {
+    id: actorId,
+    name,
+    systemPurpose,
+    createdAt: new Date().toISOString(),
+  };
 
-  // Store as a private JSON file
   await put(`actors/${actorId}.json`, JSON.stringify(actorData), {
-    access: 'private' as any,
-    addRandomSuffix: false, // Keep the URL predictable
+    access: 'public',
+    addRandomSuffix: false,
     contentType: 'application/json',
   });
+
   return actorData;
 }
 
-export async function getAllActors() {
+export async function getAllActors(): Promise<Actor[]> {
   const { blobs } = await list({ prefix: 'actors/' });
-  // We'll need to fetch the content of each blob to get the names/IDs
-  return Promise.all(blobs.map(async (b) => {
-    const res = await fetch(b.url, {
-      headers: { Authorization: `Bearer ${process.env.BLOB_READ_WRITE_TOKEN}` },
-    });
-    return res.json();
-  }));
+  return Promise.all(
+    blobs.map(async (blob) => {
+      const response = await fetch(blob.url, { headers: blobAuthHeaders() });
+      return response.json() as Promise<Actor>;
+    }),
+  );
 }
 
-// --- CHAT LOGIC ---
-
-export async function saveChat(actorId: string, chatId: string, chatState: any) {
-  return await put(`chats/${actorId}/${chatId}.json`, JSON.stringify(chatState), {
-    access: 'private' as any,
+export async function saveChat(actorId: string, chatId: string, chatState: ChatState) {
+  return put(`chats/${actorId}/${chatId}.json`, JSON.stringify(chatState), {
+    access: 'public',
     addRandomSuffix: false,
     contentType: 'application/json',
   });
