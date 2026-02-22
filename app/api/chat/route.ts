@@ -50,8 +50,8 @@ export async function POST(req: Request) {
     ],
   });
 
-  const stream = OpenAIStream(completion, {
-    onCompletion: async (text) as any, {
+  const stream = OpenAIStream(completion as any, {
+    onCompletion: async (text) =>, {
       const updatedHistory = [
         ...chatData.history,
         { role: 'user', content: prompt },
