@@ -1,13 +1,13 @@
-import { put, list, del } from '@vercel/blob';
+import { put, list } from '@vercel/blob';
 
 // --- ACTOR LOGIC ---
 
 export async function createActor(name: string, systemPurpose: string) {
   const actorId = crypto.randomUUID();
   const actorData = { id: actorId, name, systemPurpose, createdAt: new Date() };
-  
+
   // Store as a private JSON file
-  const { url } = await put(`actors/${actorId}.json`, JSON.stringify(actorData), {
+  await put(`actors/${actorId}.json`, JSON.stringify(actorData), {
     access: 'private' as any,
     addRandomSuffix: false, // Keep the URL predictable
     contentType: 'application/json',
@@ -16,10 +16,12 @@ export async function createActor(name: string, systemPurpose: string) {
 }
 
 export async function getAllActors() {
-  const { blobs } = await list({ prefix: 'actors/', access: 'private' as any });
+  const { blobs } = await list({ prefix: 'actors/' });
   // We'll need to fetch the content of each blob to get the names/IDs
   return Promise.all(blobs.map(async (b) => {
-    const res = await fetch(b.url);
+    const res = await fetch(b.url, {
+      headers: { Authorization: `Bearer ${process.env.BLOB_READ_WRITE_TOKEN}` },
+    });
     return res.json();
   }));
 }

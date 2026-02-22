@@ -15,11 +15,9 @@ export async function POST(req: Request) {
 
   const { blobs } = await list({
     prefix: `chats/${actorId}/${chatId}.json`,
-    access: 'private' as any,
   });
   const { blobs: actorBlobs } = await list({
     prefix: `actors/${actorId}.json`,
-    access: 'private' as any,
   });
 
   if (blobs.length === 0 || actorBlobs.length === 0) {
@@ -50,36 +48,19 @@ export async function POST(req: Request) {
     ],
   });
 
-  const encoder = new TextEncoder();
-  let fullOutput = '';
+  const stream = OpenAIStream(response, {
+    onCompletion: async (completion) => {
+      const updatedHistory = [
+        ...chatData.history,
+        { role: 'user', content: prompt },
+        { role: 'assistant', content: completion },
+      ];
 
-  const stream = new ReadableStream({
-    async start(controller) {
-      try {
-        for await (const chunk of completion) {
-          const token = chunk.choices?.[0]?.delta?.content ?? '';
-          if (!token) continue;
-          fullOutput += token;
-          controller.enqueue(encoder.encode(token));
-        }
-
-        const updatedHistory = [
-          ...chatData.history,
-          { role: 'user', content: prompt },
-          { role: 'assistant', content: fullOutput },
-        ];
-
-        await put(`chats/${actorId}/${chatId}.json`, JSON.stringify({ ...chatData, history: updatedHistory }), {
-          access: 'private' as any,
-          addRandomSuffix: false,
-          contentType: 'application/json',
-        });
-
-        controller.close();
-      } catch (error) {
-        console.error('Streaming chat error:', error);
-        controller.error(error);
-      }
+      await put(`chats/${actorId}/${chatId}.json`, JSON.stringify({ ...chatData, history: updatedHistory }), {
+        access: 'private' as any,
+        addRandomSuffix: false,
+        contentType: 'application/json',
+      });
     },
   });
 
