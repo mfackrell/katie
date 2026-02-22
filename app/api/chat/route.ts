@@ -1,6 +1,7 @@
 // app/api/chat/route.ts
 import { OpenAI } from 'openai';
 import { list, put } from '@vercel/blob';
+import { OpenAIStream, StreamingTextResponse } from 'ai'; // <--- Add this import
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
@@ -38,6 +39,7 @@ export async function POST(req: Request) {
 
   const completion = await openai.chat.completions.create({
     model: modelToUse,
+    stream: true, // 1. Add this
     messages: [
       {
         role: 'system',
@@ -48,12 +50,12 @@ export async function POST(req: Request) {
     ],
   });
 
-  const stream = OpenAIStream(response, {
-    onCompletion: async (completion) => {
+  const stream = OpenAIStream(completion, {
+    onCompletion: async (text) => {
       const updatedHistory = [
         ...chatData.history,
         { role: 'user', content: prompt },
-        { role: 'assistant', content: completion },
+        { role: 'assistant', content: text },
       ];
 
       await put(`chats/${actorId}/${chatId}.json`, JSON.stringify({ ...chatData, history: updatedHistory }), {
@@ -64,11 +66,5 @@ export async function POST(req: Request) {
     },
   });
 
-  return new Response(stream, {
-    headers: {
-      'Content-Type': 'text/plain; charset=utf-8',
-      'Cache-Control': 'no-cache',
-      Connection: 'keep-alive',
-    },
-  });
+  return new StreamingTextResponse(stream); // 4. Replace your manual Response block with this
 }
