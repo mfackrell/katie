@@ -1,5 +1,4 @@
 // app/api/chat/route.ts
-import { OpenAIStream, StreamingTextResponse } from 'ai';
 import { OpenAI } from 'openai';
 import { list, put } from '@vercel/blob';
 
@@ -37,9 +36,8 @@ export async function POST(req: Request) {
 
   const modelToUse = process.env.MASTER_ROUTER_MODEL || 'gpt-4o';
 
-  const response = await openai.chat.completions.create({
+  const completion = await openai.chat.completions.create({
     model: modelToUse,
-    stream: true,
     messages: [
       {
         role: 'system',
@@ -66,5 +64,11 @@ export async function POST(req: Request) {
     },
   });
 
-  return new StreamingTextResponse(stream);
+  return new Response(stream, {
+    headers: {
+      'Content-Type': 'text/plain; charset=utf-8',
+      'Cache-Control': 'no-cache',
+      Connection: 'keep-alive',
+    },
+  });
 }

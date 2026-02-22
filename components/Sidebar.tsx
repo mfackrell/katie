@@ -1,4 +1,3 @@
-// components/Sidebar.tsx
 import { list } from '@vercel/blob';
 import ModelDiscovery from './ModelDiscovery';
 import CreateActorTrigger from './CreateActorTrigger';
