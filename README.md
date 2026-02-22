@@ -27,9 +27,10 @@ At build/runtime, Next.js generates the final HTML for each route from these fil
 ## Run
 
 ```bash
-npm install
 npm run dev
 ```
+
+`npm run dev` now auto-runs dependency install via a `predev` hook, so manual `npm install` is not required for normal local startup.
 
 Set env vars in a local environment file:
 
