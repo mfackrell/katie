@@ -1,5 +1,6 @@
-// components/NewActorModal.tsx
-import { createActorAction } from '@/app/actions/actors';
+'use client';
+
+import { createActorAction } from '../app/actions/actors';
 
 export default function NewActorModal() {
   return (
@@ -8,18 +9,18 @@ export default function NewActorModal() {
       <form action={createActorAction} className="space-y-4">
         <div>
           <label className="block text-xs font-bold text-zinc-500 uppercase mb-1">Actor Name</label>
-          <input 
-            name="name" 
-            placeholder="e.g. Expert Web Designer" 
+          <input
+            name="name"
+            placeholder="e.g. Expert Web Designer"
             className="w-full bg-zinc-800 border border-zinc-700 rounded-lg p-2 text-sm focus:outline-none focus:border-blue-500"
           />
         </div>
         <div>
           <label className="block text-xs font-bold text-zinc-500 uppercase mb-1">Permanent Purpose (System Prompt)</label>
-          <textarea 
-            name="systemPurpose" 
+          <textarea
+            name="systemPurpose"
             rows={4}
-            placeholder="Describe exactly how this AI should behave..." 
+            placeholder="Describe exactly how this AI should behave..."
             className="w-full bg-zinc-800 border border-zinc-700 rounded-lg p-2 text-sm focus:outline-none focus:border-blue-500"
           />
         </div>
