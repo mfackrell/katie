@@ -2,7 +2,7 @@
 import { list } from '@vercel/blob';
 
 export default async function Sidebar() {
-  const { blobs: actorBlobs } = await list({ prefix: 'actors/', access: 'public' });
+  const { blobs: actorBlobs } = await list({ prefix: 'actors/', access: 'private' });
   const actors = await Promise.all(actorBlobs.map(async (b) => (await fetch(b.url)).json()));
 
   return (
@@ -10,9 +10,9 @@ export default async function Sidebar() {
       <nav className="flex-1 overflow-y-auto px-2 space-y-4 pt-4">
         {actors.map(async (actor) => {
           // Fetch nested chats for THIS specific actor
-          const { blobs: chatBlobs } = await list({ 
-            prefix: `chats/${actor.id}/`, 
-            access: 'public' 
+          const { blobs: chatBlobs } = await list({
+            prefix: `chats/${actor.id}/`,
+            access: 'private'
           });
           const chats = await Promise.all(chatBlobs.map(async (b) => (await fetch(b.url)).json()));
 
