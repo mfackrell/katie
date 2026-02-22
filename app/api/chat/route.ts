@@ -1,55 +1,47 @@
-// app/api/chat/route.ts
+import { OpenAIStream, StreamingTextResponse } from 'ai'; // Helper from Vercel AI SDK
 import { OpenAI } from 'openai';
-import { GoogleGenerativeAI } from '@google/generative-ai';
+import { put } from '@vercel/blob';
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
 
 export async function POST(req: Request) {
-  const { prompt, history, actorPurpose, intermediarySummary } = await req.json();
+  const { prompt, actorId, chatId, messages } = await req.json();
 
-  // 1. Check for Manual Override
-  const overrideModel = checkForOverride(prompt);
-  let selectedModel;
-  let reason = "User manual selection";
+  // 1. Fetch the Actor & Chat data from Vercel Blob
+  const chatUrl = `https://[your-id].public.blob.vercel-storage.com/chats/${actorId}/${chatId}.json`;
+  const actorUrl = `https://[your-id].public.blob.vercel-storage.com/actors/${actorId}.json`;
+  
+  const [chatRes, actorRes] = await Promise.all([fetch(chatUrl), fetch(actorUrl)]);
+  const chatData = await chatRes.json();
+  const actorData = await actorRes.json();
 
-  if (overrideModel) {
-    selectedModel = overrideModel;
-  } else {
-    // 2. The Decision Step (The "Master")
-    // We use a cheap/fast model to decide the router logic
-    const decision = await openai.chat.completions.create({
-      model: "gpt-4o-mini",
-      messages: [
-        { role: "system", content: "You are an LLM Router. Based on the user prompt and context, choose the best model. Return ONLY a JSON object: { 'provider': 'openai' | 'google', 'model': 'model-name', 'reason': 'short explanation' }" },
-        { role: "user", content: `Prompt: ${prompt}\nContext: ${intermediarySummary}` }
-      ],
-      response_format: { type: "json_object" }
-    });
+  // 2. The Master Router Decision (Simple Version)
+  // Logic: Use GPT-4o for complex logic, Gemini for long-context creative tasks
+  const selectedModel = prompt.length > 500 ? 'gemini-1.5-pro' : 'gpt-4o';
 
-    const choice = JSON.parse(decision.choices[0].message.content!);
-    selectedModel = choice;
-    reason = choice.reason;
-  }
+  // 3. Assemble the "Tri-Layer" Context
+  const fullContext = [
+    { role: 'system', content: `PURPOSE: ${actorData.systemPurpose}\nSUMMARY: ${chatData.intermediarySummary}` },
+    ...messages.slice(-15), // Ephemeral Layer (Last 15 messages)
+    { role: 'user', content: prompt }
+  ];
 
-  // 3. Assemble the "Tri-Layer" Prompt
-  const finalPrompt = `
-    PERMANENT PURPOSE: ${actorPurpose}
-    CONTEXT SUMMARY: ${intermediarySummary}
-    RECENT HISTORY: ${JSON.stringify(history.slice(-10))}
-    CURRENT REQUEST: ${prompt}
-  `;
+  // 4. Request Stream
+  const response = await openai.chat.completions.create({
+    model: selectedModel,
+    stream: true,
+    messages: fullContext,
+  });
 
-  // 4. Execute based on selection
-  if (selectedModel.provider === 'openai') {
-    return streamOpenAI(selectedModel.model, finalPrompt, reason);
-  } else {
-    return streamGemini(selectedModel.model, finalPrompt, reason);
-  }
-}
+  const stream = OpenAIStream(response, {
+    onCompletion: async (completion) => {
+      // 5. UPDATE BLOB IN BACKGROUND: Save new message to history
+      const updatedHistory = [...chatData.history, { role: 'user', content: prompt }, { role: 'assistant', content: completion }];
+      await put(`chats/${actorId}/${chatId}.json`, JSON.stringify({ ...chatData, history: updatedHistory }), {
+        access: 'public', addRandomSuffix: false, contentType: 'application/json',
+      });
+    }
+  });
 
-function checkForOverride(prompt: string) {
-  if (prompt.toLowerCase().includes('/gpt4')) return { provider: 'openai', model: 'gpt-4o' };
-  if (prompt.toLowerCase().includes('/gemini')) return { provider: 'google', model: 'gemini-1.5-pro' };
-  return null;
+  return new StreamingTextResponse(stream);
 }
