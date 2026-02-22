@@ -1,51 +1,36 @@
+// components/Sidebar.tsx
 import { list } from '@vercel/blob';
 import ModelDiscovery from './ModelDiscovery';
-import CreateActorTrigger from './CreateActorTrigger';
 
 export default async function Sidebar() {
-  const { blobs: actorBlobs } = await list({ prefix: 'actors/', access: 'private' as any });
-  const actors = await Promise.all(
-    actorBlobs.map(async (b) =>
-      (
-        await fetch(b.url, {
-          headers: { Authorization: `Bearer ${process.env.BLOB_READ_WRITE_TOKEN}` },
-        })
-      ).json(),
-    ),
-  );
+  const headers = { Authorization: `Bearer ${process.env.BLOB_READ_WRITE_TOKEN}` };
+
+  // FIX: Removed 'access' from list()
+  const { blobs: actorBlobs } = await list({ prefix: 'actors/' });
+  
+  const actors = await Promise.all(actorBlobs.map(async (b) => {
+    // FIX: Added headers for private fetch
+    const res = await fetch(b.url, { headers });
+    return res.json();
+  }));
 
   const actorSections = await Promise.all(
     actors.map(async (actor) => {
-      const { blobs: chatBlobs } = await list({
-        prefix: `chats/${actor.id}/`,
-        access: 'private' as any,
-      });
-      const chats = await Promise.all(
-        chatBlobs.map(async (b) =>
-          (
-            await fetch(b.url, {
-              headers: { Authorization: `Bearer ${process.env.BLOB_READ_WRITE_TOKEN}` },
-            })
-          ).json(),
-        ),
-      );
-
-      return {
-        actor,
-        chats,
-      };
+      const { blobs: chatBlobs } = await list({ prefix: `chats/${actor.id}/` });
+      const chats = await Promise.all(chatBlobs.map(async (b) => {
+        const res = await fetch(b.url, { headers });
+        return res.json();
+      }));
+      return { actor, chats };
     }),
   );
 
   return (
     <aside className="w-72 bg-zinc-950 flex flex-col border-r border-zinc-800">
-      <CreateActorTrigger />
-      <nav className="flex-1 overflow-y-auto px-2 space-y-4">
+      <nav className="flex-1 overflow-y-auto px-2 space-y-4 pt-4">
         {actorSections.map(({ actor, chats }) => (
           <div key={actor.id}>
-            <div className="text-xs font-bold text-zinc-500 uppercase px-2 mb-1">
-              {actor.name}
-            </div>
+            <div className="text-xs font-bold text-zinc-500 uppercase px-2 mb-1">{actor.name}</div>
             <div className="space-y-1">
               {chats.map((chat) => (
                 <a key={chat.id} href={`/chat/${chat.id}`} className="block px-3 py-2 text-sm rounded-md hover:bg-zinc-900 text-zinc-400 truncate">
@@ -55,7 +40,6 @@ export default async function Sidebar() {
             </div>
           </div>
         ))}
-
         <ModelDiscovery />
       </nav>
     </aside>
