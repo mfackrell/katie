@@ -14,7 +14,11 @@ export async function updateIntermediarySummary(actorId: string, chatId: string)
 
   if (blobs.length === 0) return;
 
-  const response = await fetch(blobs[0].url);
+  const response = await fetch(blobs[0].url, {
+    headers: { Authorization: `Bearer ${process.env.BLOB_READ_WRITE_TOKEN}` }
+  });
+  if (!response.ok) return;
+
   const chatData = await response.json();
 
   if (chatData.history.length < 15) return;

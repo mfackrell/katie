@@ -1,10 +1,42 @@
 // components/Sidebar.tsx
 import { list } from '@vercel/blob';
 import ModelDiscovery from './ModelDiscovery';
+import CreateActorTrigger from './CreateActorTrigger';
 
 export default async function Sidebar() {
   const { blobs: actorBlobs } = await list({ prefix: 'actors/', access: 'private' as any });
-  const actors = await Promise.all(actorBlobs.map(async (b) => (await fetch(b.url)).json()));
+  const actors = await Promise.all(
+    actorBlobs.map(async (b) =>
+      (
+        await fetch(b.url, {
+          headers: { Authorization: `Bearer ${process.env.BLOB_READ_WRITE_TOKEN}` },
+        })
+      ).json(),
+    ),
+  );
+
+  const actorSections = await Promise.all(
+    actors.map(async (actor) => {
+      const { blobs: chatBlobs } = await list({
+        prefix: `chats/${actor.id}/`,
+        access: 'private' as any,
+      });
+      const chats = await Promise.all(
+        chatBlobs.map(async (b) =>
+          (
+            await fetch(b.url, {
+              headers: { Authorization: `Bearer ${process.env.BLOB_READ_WRITE_TOKEN}` },
+            })
+          ).json(),
+        ),
+      );
+
+      return {
+        actor,
+        chats,
+      };
+    }),
+  );
 
   const actorSections = await Promise.all(
     actors.map(async (actor) => {
@@ -23,7 +55,8 @@ export default async function Sidebar() {
 
   return (
     <aside className="w-72 bg-zinc-950 flex flex-col border-r border-zinc-800">
-      <nav className="flex-1 overflow-y-auto px-2 space-y-4 pt-4">
+      <CreateActorTrigger />
+      <nav className="flex-1 overflow-y-auto px-2 space-y-4">
         {actorSections.map(({ actor, chats }) => (
           <div key={actor.id}>
             <div className="text-xs font-bold text-zinc-500 uppercase px-2 mb-1">
