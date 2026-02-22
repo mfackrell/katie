@@ -38,6 +38,21 @@ export default async function Sidebar() {
     }),
   );
 
+  const actorSections = await Promise.all(
+    actors.map(async (actor) => {
+      const { blobs: chatBlobs } = await list({
+        prefix: `chats/${actor.id}/`,
+        access: 'private' as any,
+      });
+      const chats = await Promise.all(chatBlobs.map(async (b) => (await fetch(b.url)).json()));
+
+      return {
+        actor,
+        chats,
+      };
+    }),
+  );
+
   return (
     <aside className="w-72 bg-zinc-950 flex flex-col border-r border-zinc-800">
       <CreateActorTrigger />
