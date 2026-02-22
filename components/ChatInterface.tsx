@@ -8,24 +8,47 @@ export default function ChatInterface({ actorId, chatId }: { actorId: string, ch
   });
 
   return (
-    <div className="flex flex-col h-full">
-      <div className="flex-1 overflow-y-auto p-4 space-y-4">
-        {messages.map(m => (
-          <div key={m.id} className={`p-4 rounded-lg ${m.role === 'user' ? 'bg-zinc-800 ml-auto max-w-[80%]' : 'bg-zinc-900 border border-zinc-800'}`}>
-            <p className="text-sm">{m.content}</p>
+    // Inside your ChatInterface component return statement
+    <div className="flex-1 overflow-y-auto scroll-smooth">
+      <div className="max-w-3xl mx-auto py-10 px-4 space-y-8">
+        {messages.map((m) => (
+          <div key={m.id} className="group flex gap-4 transition-all animate-in fade-in slide-in-from-bottom-2">
+            {/* Avatar Section */}
+            <div className={`w-8 h-8 rounded-md flex items-center justify-center text-xs font-bold shrink-0 shadow-md ${
+              m.role === 'user' ? 'bg-zinc-700' : 'bg-blue-600 text-white'
+            }`}>
+              {m.role === 'user' ? 'MF' : <i className="fa-solid fa-bolt text-[10px]" />}
+            </div>
+            
+            {/* Message Content */}
+            <div className="flex-1 space-y-2 overflow-hidden">
+              <p className="text-sm font-semibold text-zinc-400 uppercase tracking-tight text-[10px]">
+                {m.role === 'user' ? 'You' : 'Orchestrator'}
+              </p>
+              <div className="text-sm leading-relaxed text-zinc-200 prose prose-invert max-w-none">
+                {m.content}
+              </div>
+            </div>
           </div>
         ))}
-        {isLoading && <div className="text-xs text-zinc-500 animate-pulse">Master Router selecting best model...</div>}
       </div>
-
-      <form onSubmit={handleSubmit} className="p-4 bg-zinc-950 border-t border-zinc-800">
-        <input 
-          value={input} 
-          onChange={handleInputChange} 
+    </div>
+    
+    {/* The Input Area: Floating and Centered */}
+    <div className="p-4 bg-gradient-to-t from-zinc-900 via-zinc-900 to-transparent">
+      <div className="max-w-3xl mx-auto relative group">
+        <textarea 
+          className="w-full bg-zinc-800 border border-zinc-700 focus:border-zinc-500 focus:ring-1 focus:ring-zinc-500 rounded-2xl py-4 pl-4 pr-12 text-sm resize-none shadow-2xl transition-all"
           placeholder="Message your Actor..."
-          className="w-full bg-zinc-900 border border-zinc-800 rounded-xl p-3 text-sm focus:outline-none focus:border-blue-500"
+          rows={1}
         />
-      </form>
+        <button className="absolute right-3 bottom-3 p-1.5 bg-zinc-100 text-black rounded-lg hover:bg-white transition-colors">
+          <i className="fa-solid fa-arrow-up" />
+        </button>
+      </div>
+      <p className="text-[10px] text-center text-zinc-600 mt-2 uppercase tracking-widest font-medium">
+        Tri-Layer Memory: Permanent • Intermediary • Ephemeral
+      </p>
     </div>
   );
 }
