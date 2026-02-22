@@ -1,39 +1,36 @@
+// components/Sidebar.tsx
 import { list } from '@vercel/blob';
-import Link from 'next/link';
 
 export default async function Sidebar() {
-  // 1. Fetch all Actor blobs
   const { blobs: actorBlobs } = await list({ prefix: 'actors/', access: 'public' });
-
-  // 2. Fetch the actual content for each actor (parallelized for speed)
-  const actors = await Promise.all(
-    actorBlobs.map(async (blob) => {
-      const response = await fetch(blob.url);
-      return response.json();
-    })
-  );
+  const actors = await Promise.all(actorBlobs.map(async (b) => (await fetch(b.url)).json()));
 
   return (
     <aside className="w-72 bg-zinc-950 flex flex-col border-r border-zinc-800">
-      <div className="p-4">
-        {/* Trigger for the New Actor Modal we created earlier */}
-        <button className="w-full py-2 bg-zinc-800 rounded-lg text-sm font-medium">
-          + New Actor
-        </button>
-      </div>
+      <nav className="flex-1 overflow-y-auto px-2 space-y-4 pt-4">
+        {actors.map(async (actor) => {
+          // Fetch nested chats for THIS specific actor
+          const { blobs: chatBlobs } = await list({ 
+            prefix: `chats/${actor.id}/`, 
+            access: 'public' 
+          });
+          const chats = await Promise.all(chatBlobs.map(async (b) => (await fetch(b.url)).json()));
 
-      <nav className="flex-1 overflow-y-auto px-2">
-        {actors.map((actor) => (
-          <div key={actor.id} className="mb-4">
-            <div className="flex items-center text-xs font-bold text-zinc-500 uppercase p-2">
-               <span>{actor.name}</span>
+          return (
+            <div key={actor.id}>
+              <div className="text-xs font-bold text-zinc-500 uppercase px-2 mb-1">
+                {actor.name}
+              </div>
+              <div className="space-y-1">
+                {chats.map((chat) => (
+                  <a key={chat.id} href={`/chat/${chat.id}`} className="block px-3 py-2 text-sm rounded-md hover:bg-zinc-900 text-zinc-400 truncate">
+                    {chat.title}
+                  </a>
+                ))}
+              </div>
             </div>
-            {/* 3. Sub-chats will be fetched here in the next step */}
-            <div className="space-y-1 ml-2">
-               <p className="text-[10px] text-zinc-600 italic px-2">No active chats...</p>
-            </div>
-          </div>
-        ))}
+          );
+        })}
       </nav>
     </aside>
   );
