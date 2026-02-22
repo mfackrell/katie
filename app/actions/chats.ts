@@ -23,7 +23,7 @@ export async function createChatAction(actorId: string, title: string) {
   try {
     // Save to Vercel Blob: chats/[actorId]/[chatId].json
     await put(`chats/${actorId}/${chatId}.json`, JSON.stringify(chatData), {
-      access: 'private' as any,
+      access: 'public',
       addRandomSuffix: false,
       contentType: 'application/json',
     });

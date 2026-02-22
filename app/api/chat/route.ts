@@ -50,16 +50,16 @@ export async function POST(req: Request) {
     ],
   });
 
-  const stream = OpenAIStream(completion as any, {
-    onCompletion: async (text) => {
+  const stream = OpenAIStream(response, {
+    onCompletion: async (completion) => {
       const updatedHistory = [
         ...chatData.history,
         { role: 'user', content: prompt },
-        { role: 'assistant', content: text },
+        { role: 'assistant', content: completion },
       ];
 
       await put(`chats/${actorId}/${chatId}.json`, JSON.stringify({ ...chatData, history: updatedHistory }), {
-        access: 'private' as any,
+        access: 'public',
         addRandomSuffix: false,
         contentType: 'application/json',
       });
