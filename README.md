@@ -31,7 +31,13 @@ npm install
 npm run dev
 ```
 
-Set env vars:
+Set env vars in a local environment file:
+
+1. Create `/.env.local` at the repository root (same level as `package.json`).
+2. Copy values from `.env.example` and fill in your real secrets.
+3. Never commit real API keys to git.
+
+Required keys:
 
 - `POSTGRES_URL`
 - `KV_URL`, `KV_REST_API_URL`, `KV_REST_API_TOKEN`, `KV_REST_API_READ_ONLY_TOKEN`
