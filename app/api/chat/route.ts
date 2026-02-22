@@ -1,7 +1,7 @@
 // app/api/chat/route.ts
-import { OpenAIStream, StreamingTextResponse } from 'ai';
 import { OpenAI } from 'openai';
 import { list, put } from '@vercel/blob';
+import { OpenAIStream, StreamingTextResponse } from 'ai'; // <--- Add this import
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
@@ -37,9 +37,9 @@ export async function POST(req: Request) {
 
   const modelToUse = process.env.MASTER_ROUTER_MODEL || 'gpt-4o';
 
-  const response = await openai.chat.completions.create({
+  const completion = await openai.chat.completions.create({
     model: modelToUse,
-    stream: true,
+    stream: true, // 1. Add this
     messages: [
       {
         role: 'system',
@@ -66,5 +66,5 @@ export async function POST(req: Request) {
     },
   });
 
-  return new StreamingTextResponse(stream);
+  return new StreamingTextResponse(stream); // 4. Replace your manual Response block with this
 }

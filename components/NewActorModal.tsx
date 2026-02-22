@@ -6,7 +6,12 @@ export default function NewActorModal() {
   return (
     <div className="p-6 bg-zinc-900 border border-zinc-800 rounded-xl shadow-2xl w-full max-w-md">
       <h2 className="text-xl font-bold mb-4">Create New Actor</h2>
-      <form action={createActorAction} className="space-y-4">
+      <form 
+        action={async (formData) => {
+          await createActorAction(formData);
+        }} 
+        className="space-y-4"
+      >
         <div>
           <label className="block text-xs font-bold text-zinc-500 uppercase mb-1">Actor Name</label>
           <input
