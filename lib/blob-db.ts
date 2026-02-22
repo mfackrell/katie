@@ -8,7 +8,7 @@ export async function createActor(name: string, systemPurpose: string) {
   
   // Store as a private JSON file
   const { url } = await put(`actors/${actorId}.json`, JSON.stringify(actorData), {
-    access: 'private',
+    access: 'private' as any,
     addRandomSuffix: false, // Keep the URL predictable
     contentType: 'application/json',
   });
@@ -16,7 +16,7 @@ export async function createActor(name: string, systemPurpose: string) {
 }
 
 export async function getAllActors() {
-  const { blobs } = await list({ prefix: 'actors/', access: 'private' });
+  const { blobs } = await list({ prefix: 'actors/', access: 'private' as any });
   // We'll need to fetch the content of each blob to get the names/IDs
   return Promise.all(blobs.map(async (b) => {
     const res = await fetch(b.url);
@@ -28,7 +28,7 @@ export async function getAllActors() {
 
 export async function saveChat(actorId: string, chatId: string, chatState: any) {
   return await put(`chats/${actorId}/${chatId}.json`, JSON.stringify(chatState), {
-    access: 'private',
+    access: 'private' as any,
     addRandomSuffix: false,
     contentType: 'application/json',
   });

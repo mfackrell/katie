@@ -9,7 +9,7 @@ export async function updateIntermediarySummary(actorId: string, chatId: string)
   // Use list to find the authenticated, private URL dynamically
   const { blobs } = await list({
     prefix: `chats/${actorId}/${chatId}.json`,
-    access: 'private'
+    access: 'private' as any
   });
 
   if (blobs.length === 0) return;
@@ -37,7 +37,7 @@ export async function updateIntermediarySummary(actorId: string, chatId: string)
   };
 
   await put(`chats/${actorId}/${chatId}.json`, JSON.stringify(updatedChatData), {
-    access: 'private',
+    access: 'private' as any,
     addRandomSuffix: false,
     contentType: 'application/json',
   });

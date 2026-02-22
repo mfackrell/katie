@@ -3,14 +3,14 @@ import { list } from '@vercel/blob';
 import ModelDiscovery from './ModelDiscovery';
 
 export default async function Sidebar() {
-  const { blobs: actorBlobs } = await list({ prefix: 'actors/', access: 'private' });
+  const { blobs: actorBlobs } = await list({ prefix: 'actors/', access: 'private' as any });
   const actors = await Promise.all(actorBlobs.map(async (b) => (await fetch(b.url)).json()));
 
   const actorSections = await Promise.all(
     actors.map(async (actor) => {
       const { blobs: chatBlobs } = await list({
         prefix: `chats/${actor.id}/`,
-        access: 'private',
+        access: 'private' as any,
       });
       const chats = await Promise.all(chatBlobs.map(async (b) => (await fetch(b.url)).json()));
 

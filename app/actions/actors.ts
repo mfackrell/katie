@@ -20,7 +20,7 @@ export async function createActorAction(formData: FormData) {
   try {
     // We store the file as actors/[id].json
     await put(`actors/${actorId}.json`, JSON.stringify(actorData), {
-      access: 'private',
+      access: 'private' as any,
       addRandomSuffix: false,
       contentType: 'application/json',
     });
