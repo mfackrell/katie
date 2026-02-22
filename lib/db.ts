@@ -3,7 +3,7 @@ import type { Actor, ChatMessage } from '@/lib/types';
 
 export async function getActor(actorId: string): Promise<Actor> {
   const result = await sql<Actor>`
-    SELECT id, name, system_prompt AS "systemPrompt"
+    SELECT id, name, avatar_url AS "avatarUrl", system_prompt AS "systemPrompt"
     FROM actors
     WHERE id = ${actorId}
     LIMIT 1

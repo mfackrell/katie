@@ -9,5 +9,6 @@ export interface ChatMessage {
 export interface Actor {
   id: string;
   name: string;
+  avatarUrl?: string;
   systemPrompt: string;
 }

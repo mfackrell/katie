@@ -61,6 +61,15 @@ Flow:
 4. Route to best model via `lib/router/master-router.ts`.
 5. Stream answer and persist chat messages.
 
+
+### Upload endpoint
+
+`POST /api/upload` accepts multipart form-data with a `file` field (image only) and returns:
+
+```json
+{ "url": "https://..." }
+```
+
 ## SQL schema
 
 Use `db/schema.sql` to initialize Vercel Postgres.
