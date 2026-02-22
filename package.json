@@ -7,9 +7,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "typecheck": "tsc --noEmit",
-    "predev": "npm install --no-audit --no-fund",
-    "prebuild": "npm install --no-audit --no-fund"
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@ai-sdk/google": "^1.1.10",
@@ -17,7 +15,7 @@
     "@vercel/kv": "^1.0.1",
     "@vercel/postgres": "^0.10.0",
     "ai": "^4.1.30",
-    "next": "15.1.4",
+    "next": "^15.2.0",
     "react": "19.0.0",
     "react-dom": "19.0.0",
     "zod": "^3.24.1"

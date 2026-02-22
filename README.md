@@ -24,21 +24,16 @@ This project uses **Next.js App Router**, so you typically do not author a root 
 
 At build/runtime, Next.js generates the final HTML for each route from these files.
 
-## Run
+## Deploy (Vercel + GitHub only)
 
-```bash
-npm run dev
-```
+This repository is intended for **cloud deployment only** (Vercel + GitHub), not local runtime workflows.
 
-`npm run dev` now auto-runs dependency install via a `predev` hook, so manual `npm install` is not required for normal local startup.
+1. Push to GitHub.
+2. Import the repo in Vercel.
+3. Add Environment Variables in **Vercel Project Settings → Environment Variables**.
+4. Deploy.
 
-Set env vars in a local environment file:
-
-1. Create `/.env.local` at the repository root (same level as `package.json`).
-2. Copy values from `.env.example` and fill in your real secrets.
-3. Never commit real API keys to git.
-
-Required keys:
+Required Vercel environment variables:
 
 - `POSTGRES_URL`
 - `KV_URL`, `KV_REST_API_URL`, `KV_REST_API_TOKEN`, `KV_REST_API_READ_ONLY_TOKEN`
@@ -69,3 +64,9 @@ Flow:
 ## SQL schema
 
 Use `db/schema.sql` to initialize Vercel Postgres.
+
+
+## Deployment notes
+
+- Next.js dependency is pinned to a patched 15.x range to avoid CVE-2025-66478 deployment blocking.
+- Vercel installs dependencies automatically during build. This repo does not rely on local preinstall hooks.
