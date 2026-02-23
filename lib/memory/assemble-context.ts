@@ -22,11 +22,13 @@ export async function assembleContext(actorId: string, chatId: string): Promise<
     `LAYER 2 - INTERMEDIARY MEMORY (CONVERSATION SUMMARY):\n${summary || "No summary available yet."}`
   ].join("\n\n");
 
+  const history = recentMessages.map((message) => ({
+    role: message.role,
+    content: message.content
+  }));
+
   return {
     systemPrompt,
-    history: recentMessages.map((message) => ({
-      role: message.role,
-      content: message.content
-    }))
+    history
   };
 }
