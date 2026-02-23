@@ -82,7 +82,7 @@ export async function chooseProvider(prompt: string, providers: LlmProvider[]): 
       .join(", ");
 
     const completion = await routingClient.chat.completions.create({
-      model: "gpt-4o-mini",
+      model: "gpt-5.2",
       messages: [
         {
           role: "system",
