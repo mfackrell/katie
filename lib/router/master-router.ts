@@ -1,6 +1,10 @@
 import OpenAI from "openai";
 import { LlmProvider } from "@/lib/providers/types";
 
+const routingClient = process.env.OPENAI_API_KEY
+  ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY, fetch: globalThis.fetch.bind(globalThis) })
+  : null;
+
 function keywordOverride(prompt: string): "openai" | "google" | null {
   const lowered = prompt.toLowerCase();
   if (lowered.includes("use gpt") || lowered.includes("use openai")) {
@@ -27,11 +31,10 @@ export async function chooseProvider(prompt: string, providers: LlmProvider[]): 
     return providers[0];
   }
 
-  if (process.env.OPENAI_API_KEY) {
-    const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+  if (routingClient) {
     const options = providers.map((provider) => provider.name).join(", ");
 
-    const completion = await client.chat.completions.create({
+    const completion = await routingClient.chat.completions.create({
       model: "gpt-4o-mini",
       messages: [
         {
