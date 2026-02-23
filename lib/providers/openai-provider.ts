@@ -20,7 +20,7 @@ export class OpenAiProvider implements LlmProvider {
       model: params.modelId ?? this.defaultModel,
       messages: [
         { role: "system", content: params.system },
-        ...(params.history ?? []),
+        ...params.history,
         { role: "user", content: params.user }
       ]
     });
