@@ -25,7 +25,7 @@ function pickDefaultModel(provider: LlmProvider, models: string[]): string {
     return models.find((model) => model.includes("gemini-2.5-pro")) ?? models[0] ?? "gemini-2.5-pro";
   }
 
-  return models.find((model) => model.includes("gpt-4o")) ?? models[0] ?? "gpt-4o";
+  return models.find((model) => model.includes("gpt-5.2")) ?? models[0] ?? "gpt-5.2";
 }
 
 function normalizeRoutingChoice(rawChoice: string): { providerName: "openai" | "google"; modelId: string } | null {
