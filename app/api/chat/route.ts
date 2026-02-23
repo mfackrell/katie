@@ -13,66 +13,82 @@ const requestSchema = z.object({
 });
 
 export async function POST(request: NextRequest) {
-  const body = await request.json();
-  const parsed = requestSchema.safeParse(body);
-
-  if (!parsed.success) {
-    return NextResponse.json({ error: "Invalid request payload" }, { status: 400 });
-  }
-
-  const { actorId, chatId, message } = parsed.data;
-
   try {
+    // LOG 1: Capture the raw incoming request
+    const body = await request.json();
+    console.log(`[Chat API] Incoming request body:`, JSON.stringify(body));
+
+    const parsed = requestSchema.safeParse(body);
+
+    if (!parsed.success) {
+      console.error("[Chat API] Validation Failed:", parsed.error.format());
+      return NextResponse.json({ error: "Invalid request payload" }, { status: 400 });
+    }
+
+    const { actorId, chatId, message } = parsed.data;
+
+    // LOG 2: Verify IDs are extracted correctly
+    console.log(`[Chat API] Processing - Actor: ${actorId}, Chat: ${chatId}`);
+
     const providers = getAvailableProviders();
     if (!providers.length) {
+      console.error("[Chat API] Error: No providers configured in environment variables.");
       return NextResponse.json(
-        {
-          error:
-            "No providers configured. Add OPENAI_API_KEY and/or GOOGLE_API_KEY in Vercel project environment variables."
-        },
+        { error: "No providers configured. Add OPENAI_API_KEY and/or GOOGLE_API_KEY." },
         { status: 500 }
       );
     }
 
+    // LOG 3: Track context assembly and provider selection
+    console.log(`[Chat API] Assembling context and selecting provider...`);
     const [systemContext, provider] = await Promise.all([
       assembleContext(actorId, chatId),
       chooseProvider(message, providers)
     ]);
+    console.log(`[Chat API] Selected Provider: ${provider.name}`);
 
+    // Save User Message
     await saveMessage(chatId, "user", message);
 
+    // LOG 4: Start AI Generation
+    console.log(`[Chat API] Sending request to AI provider...`);
     const result = await provider.generate({
       system: systemContext,
       user: message
     });
 
+    if (!result || !result.text) {
+      throw new Error("AI Provider returned an empty response.");
+    }
+
+    // LOG 5: Save Assistant Response
+    console.log(`[Chat API] Generation successful. Saving assistant response.`);
     await saveMessage(chatId, "assistant", result.text);
-    void maybeUpdateSummary(chatId);
+    
+    // Background task (doesn't block response)
+    void maybeUpdateSummary(chatId).catch(err => 
+      console.error("[Chat API] Background Summary Error:", err)
+    );
 
-    const stream = new ReadableStream({
-      start(controller) {
-        controller.enqueue(
-          new TextEncoder().encode(
-            JSON.stringify({
-              provider: result.provider,
-              model: result.model,
-              text: result.text
-            })
-          )
-        );
-        controller.close();
-      }
-    });
-
-    return new NextResponse(stream, {
+    return NextResponse.json({ text: result.text }, {
       headers: {
         "Content-Type": "application/json",
         "Cache-Control": "no-cache"
       }
     });
-  } catch (error) {
+
+  } catch (error: any) {
+    // LOG 6: Global Catch-All for any crash in the route
+    console.error("[Chat API] Fatal Runtime Error:", {
+      message: error.message,
+      stack: error.stack,
+    });
+    
     return NextResponse.json(
-      { error: error instanceof Error ? error.message : "Unexpected error" },
+      { 
+        error: error instanceof Error ? error.message : "Unexpected error",
+        details: error?.message 
+      },
       { status: 500 }
     );
   }
