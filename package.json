@@ -1,6 +1,6 @@
 {
   "name": "polyglot-actor-orchestrator",
-  "version": "0.1.5",
+  "version": "0.1.9",
   "private": true,
   "scripts": {
     "dev": "node --disable-warning=DEP0169 ./node_modules/next/dist/bin/next dev",
