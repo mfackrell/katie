@@ -6,8 +6,8 @@ export type RoutingDecision = [LlmProvider, string];
 type ProviderName = "openai" | "google";
 type RoutingChoice = { providerName: ProviderName; modelId: string };
 
-const ORCHESTRATOR_MODELS = ["gpt-5.2-pro", "gemini-3.1-pro"] as const;
-const DEFAULT_ORCHESTRATOR_MODEL = "gpt-5.2-pro";
+const ORCHESTRATOR_MODELS = ["gpt-5.2", "gemini-3.1-pro"] as const;
+const DEFAULT_ORCHESTRATOR_MODEL = "gpt-5.2";
 
 function getOrchestratorModel(): (typeof ORCHESTRATOR_MODELS)[number] {
   const configuredModel = process.env.ROUTING_ORCHESTRATOR_MODEL;
