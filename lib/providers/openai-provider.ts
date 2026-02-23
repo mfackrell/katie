@@ -1,22 +1,29 @@
-import OpenAI from "openai";
+import { openaiClient } from "@/lib/openai";
 import { LlmProvider, ChatGenerateParams, ProviderResponse } from "@/lib/providers/types";
 
 export class OpenAiProvider implements LlmProvider {
   name = "openai" as const;
-  private client: OpenAI;
   private defaultModel = "gpt-4o";
 
   constructor(apiKey: string) {
-    this.client = new OpenAI({ apiKey });
+    void apiKey;
   }
 
   async listModels(): Promise<string[]> {
-    const models = await this.client.models.list();
+    if (!openaiClient) {
+      return [];
+    }
+
+    const models = await openaiClient.models.list();
     return models.data.map((model) => model.id);
   }
 
   async generate(params: ChatGenerateParams): Promise<ProviderResponse> {
-    const completion = await this.client.chat.completions.create({
+    if (!openaiClient) {
+      throw new Error("OPENAI_API_KEY is not configured.");
+    }
+
+    const completion = await openaiClient.chat.completions.create({
       model: this.defaultModel,
       messages: [
         { role: "system", content: params.system },

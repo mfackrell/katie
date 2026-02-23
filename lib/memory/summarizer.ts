@@ -1,20 +1,19 @@
-import OpenAI from "openai";
 import { getRecentMessages } from "@/lib/data/blob-store";
 import { setConversationSummary } from "@/lib/data/blob-store";
+import { openaiClient } from "@/lib/openai";
 
 const summarizerModel = "gpt-4o-mini";
-const client = process.env.OPENAI_API_KEY ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY }) : null;
 
 export async function maybeUpdateSummary(chatId: string): Promise<void> {
   const recent = await getRecentMessages(chatId, 60);
 
-  if (!client || recent.length < 10 || recent.length % 5 !== 0) {
+  if (!openaiClient || recent.length < 10 || recent.length % 5 !== 0) {
     return;
   }
 
   const transcript = recent.map((m) => `${m.role}: ${m.content}`).join("\n");
 
-  const response = await client.chat.completions.create({
+  const response = await openaiClient.chat.completions.create({
     model: summarizerModel,
     messages: [
       {

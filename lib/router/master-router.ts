@@ -1,4 +1,4 @@
-import OpenAI from "openai";
+import { openaiClient } from "@/lib/openai";
 import { LlmProvider } from "@/lib/providers/types";
 
 function keywordOverride(prompt: string): "openai" | "google" | null {
@@ -27,11 +27,10 @@ export async function chooseProvider(prompt: string, providers: LlmProvider[]): 
     return providers[0];
   }
 
-  if (process.env.OPENAI_API_KEY) {
-    const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+  if (openaiClient) {
     const options = providers.map((provider) => provider.name).join(", ");
 
-    const completion = await client.chat.completions.create({
+    const completion = await openaiClient.chat.completions.create({
       model: "gpt-4o-mini",
       messages: [
         {
