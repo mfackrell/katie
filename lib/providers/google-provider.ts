@@ -40,6 +40,14 @@ export class GoogleProvider implements LlmProvider {
       parts: [{ text: message.content }]
     }));
 
+    const contents = [
+      ...mappedHistory,
+      {
+        role: "user",
+        parts: [{ text: params.user }]
+      }
+    ];
+
     const response = await fetch(endpoint, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -47,17 +55,13 @@ export class GoogleProvider implements LlmProvider {
         systemInstruction: {
           parts: [{ text: params.system }]
         },
-        contents: [
-          ...mappedHistory,
-          {
-            role: "user",
-            parts: [{ text: params.user }]
-          }
-        ]
+        contents
       })
     });
 
     if (!response.ok) {
+      const errorBody = await response.text();
+      console.error(`[GoogleProvider] Gemini error body for model ${selectedModel}: ${errorBody}`);
       throw new Error(`Gemini request failed for model ${selectedModel} (${response.status})`);
     }
 
