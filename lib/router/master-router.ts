@@ -110,10 +110,7 @@ export async function chooseProvider(prompt: string, providers: LlmProvider[]): 
             ? parsedChoice.modelId
             : pickDefaultModel(selectedProvider.provider, selectedProvider.models);
 
-          return {
-            provider: selectedProvider.provider,
-            modelId
-          };
+          return [selectedProvider.provider, modelId];
         }
       }
     }
