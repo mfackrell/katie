@@ -47,7 +47,11 @@ export async function getRecentMessages(chatId: string, limit = 20): Promise<Mes
 }
 
 export async function saveMessage(chatId: string, role: "user" | "assistant", content: string): Promise<void> {
-  const current = memoryMessages.get(chatId) ?? [];
+  const blobMessages = await blobGet<Message[]>(`messages/${chatId}.json`);
+  const memoryCurrent = memoryMessages.get(chatId) ?? [];
+  const current = Array.from(
+    new Map([...blobMessages ?? [], ...memoryCurrent].map((message) => [message.id, message])).values()
+  );
   const next = [
     ...current,
     {

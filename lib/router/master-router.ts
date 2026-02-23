@@ -28,28 +28,32 @@ export async function chooseProvider(prompt: string, providers: LlmProvider[]): 
   }
 
   if (process.env.OPENAI_API_KEY) {
-    const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-    const options = providers.map((provider) => provider.name).join(", ");
+    try {
+      const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+      const options = providers.map((provider) => provider.name).join(", ");
 
-    const completion = await client.chat.completions.create({
-      model: "gpt-4o-mini",
-      messages: [
-        {
-          role: "system",
-          content:
-            "You are a routing model. Return only one provider name from the allowed options. Prefer google for long-form synthesis and openai for coding/logic."
-        },
-        {
-          role: "user",
-          content: `Prompt: ${prompt}\nAllowed providers: ${options}`
-        }
-      ]
-    });
+      const completion = await client.chat.completions.create({
+        model: "gpt-4o-mini",
+        messages: [
+          {
+            role: "system",
+            content:
+              "You are a routing model. Return only one provider name from the allowed options. Prefer google for long-form synthesis and openai for coding/logic."
+          },
+          {
+            role: "user",
+            content: `Prompt: ${prompt}\nAllowed providers: ${options}`
+          }
+        ]
+      });
 
-    const choice = completion.choices[0]?.message?.content?.trim().toLowerCase();
-    const selected = providers.find((provider) => provider.name === choice);
-    if (selected) {
-      return selected;
+      const choice = completion.choices[0]?.message?.content?.trim().toLowerCase();
+      const selected = providers.find((provider) => provider.name === choice);
+      if (selected) {
+        return selected;
+      }
+    } catch (error) {
+      console.warn("Provider router model failed; falling back to heuristics.", error);
     }
   }
 
