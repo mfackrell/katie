@@ -1,10 +1,7 @@
 import OpenAI from "openai";
 import { LlmProvider } from "@/lib/providers/types";
 
-export interface RoutingDecision {
-  provider: LlmProvider;
-  modelId: string;
-}
+export type RoutingDecision = [LlmProvider, string];
 
 const routingClient = process.env.OPENAI_API_KEY
   ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY, fetch: globalThis.fetch.bind(globalThis) })
@@ -67,19 +64,16 @@ export async function chooseProvider(prompt: string, providers: LlmProvider[]): 
   if (override) {
     const selectedProvider = availableByProvider.find(({ provider }) => provider.name === override);
     if (selectedProvider) {
-      return {
-        provider: selectedProvider.provider,
-        modelId: pickDefaultModel(selectedProvider.provider, selectedProvider.models)
-      };
+      return [
+        selectedProvider.provider,
+        pickDefaultModel(selectedProvider.provider, selectedProvider.models)
+      ];
     }
   }
 
   if (availableByProvider.length === 1) {
     const selected = availableByProvider[0];
-    return {
-      provider: selected.provider,
-      modelId: pickDefaultModel(selected.provider, selected.models)
-    };
+    return [selected.provider, pickDefaultModel(selected.provider, selected.models)];
   }
 
   if (routingClient) {
@@ -132,8 +126,5 @@ export async function chooseProvider(prompt: string, providers: LlmProvider[]): 
 
   const fallbackProvider = preferredProvider ?? availableByProvider[0];
 
-  return {
-    provider: fallbackProvider.provider,
-    modelId: pickDefaultModel(fallbackProvider.provider, fallbackProvider.models)
-  };
+  return [fallbackProvider.provider, pickDefaultModel(fallbackProvider.provider, fallbackProvider.models)];
 }
