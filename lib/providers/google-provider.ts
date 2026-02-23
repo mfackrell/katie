@@ -4,6 +4,10 @@ interface GoogleModelsResponse {
   models?: Array<{ name?: string; supportedGenerationMethods?: string[] }>;
 }
 
+function normalizeGoogleModelId(modelId: string): string {
+  return modelId.trim().replace(/^models\//, "");
+}
+
 export class GoogleProvider implements LlmProvider {
   name = "google" as const;
   private apiKey: string;
@@ -31,33 +35,37 @@ export class GoogleProvider implements LlmProvider {
   }
 
   async generate(params: ChatGenerateParams): Promise<ProviderResponse> {
-    const selectedModel = params.modelId ?? this.defaultModel;
+    const selectedModel = normalizeGoogleModelId(params.modelId ?? this.defaultModel);
     console.log(`[GoogleProvider] Using model: ${selectedModel}`);
 
-    const endpoint = `https://generativelanguage.googleapis.com/v1/models/${selectedModel}:generateContent?key=${this.apiKey}`;
-    const mappedHistory = (params.history ?? []).map((message) => ({
+    const endpoint = `https://generativelanguage.googleapis.com/v1/models/${encodeURIComponent(selectedModel)}:generateContent?key=${this.apiKey}`;
+    const mappedHistory = params.history.map((message) => ({
       role: message.role === "assistant" ? "model" : "user",
       parts: [{ text: message.content }]
     }));
+
+    const contents = [
+      ...mappedHistory,
+      {
+        role: "user",
+        parts: [{ text: params.user }]
+      }
+    ];
 
     const response = await fetch(endpoint, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        systemInstruction: {
+        system_instruction: {
           parts: [{ text: params.system }]
         },
-        contents: [
-          ...mappedHistory,
-          {
-            role: "user",
-            parts: [{ text: params.user }]
-          }
-        ]
+        contents
       })
     });
 
     if (!response.ok) {
+      const errorBody = await response.text();
+      console.error(`[GoogleProvider] Gemini error body for model ${selectedModel}: ${errorBody}`);
       throw new Error(`Gemini request failed for model ${selectedModel} (${response.status})`);
     }
 
