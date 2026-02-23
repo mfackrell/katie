@@ -35,29 +35,33 @@ export class GoogleProvider implements LlmProvider {
     console.log(`[GoogleProvider] Using model: ${selectedModel}`);
 
     const endpoint = `https://generativelanguage.googleapis.com/v1/models/${selectedModel}:generateContent?key=${this.apiKey}`;
-    const mappedHistory = (params.history ?? []).map((message) => ({
+    const mappedHistory = params.history.map((message) => ({
       role: message.role === "assistant" ? "model" : "user",
       parts: [{ text: message.content }]
     }));
+
+    const contents = [
+      ...mappedHistory,
+      {
+        role: "user",
+        parts: [{ text: params.user }]
+      }
+    ];
 
     const response = await fetch(endpoint, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        systemInstruction: {
+        system_instruction: {
           parts: [{ text: params.system }]
         },
-        contents: [
-          ...mappedHistory,
-          {
-            role: "user",
-            parts: [{ text: params.user }]
-          }
-        ]
+        contents
       })
     });
 
     if (!response.ok) {
+      const errorBody = await response.text();
+      console.error(`[GoogleProvider] Gemini error body for model ${selectedModel}: ${errorBody}`);
       throw new Error(`Gemini request failed for model ${selectedModel} (${response.status})`);
     }
 
