@@ -1,4 +1,4 @@
-# Polyglot Actor Orchestrator
+# Polyglot Actor Orchestrator.
 
 Cloud-first Next.js (App Router) interface for multi-model chat orchestration with tri-layer memory:
 
