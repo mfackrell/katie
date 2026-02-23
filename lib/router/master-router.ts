@@ -22,7 +22,7 @@ function keywordOverride(prompt: string): "openai" | "google" | null {
 
 function pickDefaultModel(provider: LlmProvider, models: string[]): string {
   if (provider.name === "google") {
-    return models.find((model) => model.includes("gemini-2.5-pro")) ?? models[0] ?? "gemini-2.5-pro";
+    return models.find((model) => model.includes("gemini-3.1-pro")) ?? models[0] ?? "gemini-3.1-pro";
   }
 
   return models.find((model) => model.includes("gpt-5.2")) ?? models[0] ?? "gpt-5.2";
