@@ -7,7 +7,7 @@ export class OpenAiProvider implements LlmProvider {
   private defaultModel = "gpt-4o";
 
   constructor(apiKey: string) {
-    this.client = new OpenAI({ apiKey });
+    this.client = new OpenAI({ apiKey, fetch: globalThis.fetch.bind(globalThis) });
   }
 
   async listModels(): Promise<string[]> {

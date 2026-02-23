@@ -2,7 +2,7 @@ import OpenAI from "openai";
 import { LlmProvider } from "@/lib/providers/types";
 
 const routingClient = process.env.OPENAI_API_KEY
-  ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
+  ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY, fetch: globalThis.fetch.bind(globalThis) })
   : null;
 
 function keywordOverride(prompt: string): "openai" | "google" | null {
