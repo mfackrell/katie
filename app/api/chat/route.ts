@@ -56,6 +56,7 @@ export async function POST(request: NextRequest) {
     console.log(`[Chat API] Requesting generation from ${provider.name} using model ${modelId}...`);
     const result = await provider.generate({
       system: systemContext,
+      history,
       user: message,
       modelId
     });

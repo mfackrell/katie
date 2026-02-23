@@ -28,6 +28,25 @@ function pickDefaultModel(provider: LlmProvider, models: string[]): string {
   return models.find((model) => model.includes("gpt-4o")) ?? models[0] ?? "gpt-4o";
 }
 
+function normalizeRoutingChoice(rawChoice: string): { providerName: "openai" | "google"; modelId: string } | null {
+  const [providerNameRaw, ...modelParts] = rawChoice.split(":");
+  const providerName = providerNameRaw?.trim().toLowerCase();
+
+  if ((providerName !== "openai" && providerName !== "google") || modelParts.length === 0) {
+    return null;
+  }
+
+  const modelId = modelParts.join(":").trim();
+  if (!modelId) {
+    return null;
+  }
+
+  return {
+    providerName,
+    modelId
+  };
+}
+
 export async function chooseProvider(prompt: string, providers: LlmProvider[]): Promise<RoutingDecision> {
   const modelEntries = await Promise.all(
     providers.map(async (provider) => ({
@@ -68,7 +87,7 @@ export async function chooseProvider(prompt: string, providers: LlmProvider[]): 
         {
           role: "system",
           content:
-            "You are a routing model. Return only one option in the exact format provider:model from the allowed options. Prefer google for long-form synthesis and openai for coding/logic."
+            "You are a routing model. Return only one option in the exact format provider:model. You MUST ONLY select from the provided list of Allowed Options. Do not invent or guess new model versions."
         },
         {
           role: "user",
@@ -77,7 +96,7 @@ export async function chooseProvider(prompt: string, providers: LlmProvider[]): 
       ]
     });
 
-    const choice = completion.choices[0]?.message?.content?.trim().toLowerCase();
+    const choice = completion.choices[0]?.message?.content?.trim();
     if (choice) {
       const [providerName, ...modelParts] = choice.split(":");
       const modelId = modelParts.join(":");

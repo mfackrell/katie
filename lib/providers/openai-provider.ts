@@ -37,6 +37,7 @@ export class OpenAiProvider implements LlmProvider {
       model: selectedModel,
       messages: [
         { role: "system", content: params.system },
+        ...params.history,
         { role: "user", content: params.user }
       ]
     });
