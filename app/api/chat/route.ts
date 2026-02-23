@@ -42,10 +42,8 @@ export async function POST(request: NextRequest) {
 
     // LOG 3: Context Assembly & Provider Selection
     console.log(`[Chat API] Assembling context and selecting provider...`);
-    const [{ systemPrompt, history }, [provider, modelId]] = await Promise.all([
-      assembleContext(actorId, chatId),
-      chooseProvider(message, providers)
-    ]);
+    const { systemPrompt, history } = await assembleContext(actorId, chatId);
+    const [provider, modelId] = await chooseProvider(message, systemPrompt, providers);
     console.log(`[Chat API] Selected Provider: ${provider.name}, Model: ${modelId}`);
 
     // LOG 4: Save User Message to Blob

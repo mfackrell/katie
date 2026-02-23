@@ -3,22 +3,25 @@ import { LlmProvider } from "@/lib/providers/types";
 
 export type RoutingDecision = [LlmProvider, string];
 
+type ProviderName = "openai" | "google";
+type RoutingChoice = { providerName: ProviderName; modelId: string };
+
+const ORCHESTRATOR_MODELS = ["gpt-5.2-pro", "gemini-3.1-pro"] as const;
+const DEFAULT_ORCHESTRATOR_MODEL = "gpt-5.2-pro";
+
+function getOrchestratorModel(): (typeof ORCHESTRATOR_MODELS)[number] {
+  const configuredModel = process.env.ROUTING_ORCHESTRATOR_MODEL;
+
+  if (configuredModel && ORCHESTRATOR_MODELS.includes(configuredModel as (typeof ORCHESTRATOR_MODELS)[number])) {
+    return configuredModel as (typeof ORCHESTRATOR_MODELS)[number];
+  }
+
+  return DEFAULT_ORCHESTRATOR_MODEL;
+}
+
 const routingClient = process.env.OPENAI_API_KEY
   ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY, fetch: globalThis.fetch.bind(globalThis) })
   : null;
-
-function keywordOverride(prompt: string): "openai" | "google" | null {
-  const lowered = prompt.toLowerCase();
-  if (lowered.includes("use gpt") || lowered.includes("use openai")) {
-    return "openai";
-  }
-
-  if (lowered.includes("use gemini") || lowered.includes("use google")) {
-    return "google";
-  }
-
-  return null;
-}
 
 function pickDefaultModel(provider: LlmProvider, models: string[]): string {
   if (provider.name === "google") {
@@ -28,7 +31,23 @@ function pickDefaultModel(provider: LlmProvider, models: string[]): string {
   return models.find((model) => model.includes("gpt-5.2")) ?? models[0] ?? "gpt-5.2";
 }
 
-function normalizeRoutingChoice(rawChoice: string): { providerName: "openai" | "google"; modelId: string } | null {
+function normalizeRoutingChoice(rawChoice: string): RoutingChoice | null {
+  const trimmedChoice = rawChoice.trim();
+
+  if (trimmedChoice.startsWith("{")) {
+    try {
+      const parsed = JSON.parse(trimmedChoice) as { provider?: unknown; model?: unknown };
+      const providerName = typeof parsed.provider === "string" ? parsed.provider.trim().toLowerCase() : null;
+      const modelId = typeof parsed.model === "string" ? parsed.model.trim() : "";
+
+      if ((providerName === "openai" || providerName === "google") && modelId) {
+        return { providerName, modelId };
+      }
+    } catch {
+      return null;
+    }
+  }
+
   const [providerNameRaw, ...modelParts] = rawChoice.split(":");
   const providerName = providerNameRaw?.trim().toLowerCase();
 
@@ -47,7 +66,11 @@ function normalizeRoutingChoice(rawChoice: string): { providerName: "openai" | "
   };
 }
 
-export async function chooseProvider(prompt: string, providers: LlmProvider[]): Promise<RoutingDecision> {
+export async function chooseProvider(
+  prompt: string,
+  context: string,
+  providers: LlmProvider[]
+): Promise<RoutingDecision> {
   const modelEntries = await Promise.all(
     providers.map(async (provider) => ({
       provider,
@@ -60,17 +83,6 @@ export async function chooseProvider(prompt: string, providers: LlmProvider[]): 
     models: models.length ? models : [pickDefaultModel(provider, [])]
   }));
 
-  const override = keywordOverride(prompt);
-  if (override) {
-    const selectedProvider = availableByProvider.find(({ provider }) => provider.name === override);
-    if (selectedProvider) {
-      return [
-        selectedProvider.provider,
-        pickDefaultModel(selectedProvider.provider, selectedProvider.models)
-      ];
-    }
-  }
-
   if (availableByProvider.length === 1) {
     const selected = availableByProvider[0];
     return [selected.provider, pickDefaultModel(selected.provider, selected.models)];
@@ -81,17 +93,23 @@ export async function chooseProvider(prompt: string, providers: LlmProvider[]): 
       .flatMap(({ provider, models }) => models.map((model) => `${provider.name}:${model}`))
       .join(", ");
 
+    const manifest = availableByProvider
+      .map(({ provider, models }) => `${provider.name}: ${models.join(", ")}`)
+      .join("\n");
+
     const completion = await routingClient.chat.completions.create({
-      model: "gpt-5.2",
+      model: getOrchestratorModel(),
       messages: [
         {
           role: "system",
           content:
-            "You are a routing model. Return only one option in the exact format provider:model. You MUST ONLY select from the provided list of Allowed Options. Do not invent or guess new model versions."
+            "You are the Polyglot Actor Orchestrator. Your only job is to select the best model from the provided list based on the conversation context and the user's latest intent. Do not use heuristics; use your full reasoning capability.\n\nAvailable model manifest:\n" +
+            manifest +
+            "\n\nReturn only one selection as either a plain string in the exact format provider:model or strict JSON: {\"provider\":\"openai|google\",\"model\":\"model-id\"}. You MUST ONLY select from the manifest above."
         },
         {
           role: "user",
-          content: `Prompt: ${prompt}\nAllowed options: ${options}`
+          content: `Conversation context:\n${context}\n\nLatest user intent:\n${prompt}\n\nAllowed options: ${options}`
         }
       ]
     });
@@ -116,12 +134,7 @@ export async function chooseProvider(prompt: string, providers: LlmProvider[]): 
     }
   }
 
-  const preferredProvider =
-    prompt.length > 600
-      ? availableByProvider.find(({ provider }) => provider.name === "google")
-      : availableByProvider.find(({ provider }) => provider.name === "openai");
-
-  const fallbackProvider = preferredProvider ?? availableByProvider[0];
+  const fallbackProvider = availableByProvider[0];
 
   return [fallbackProvider.provider, pickDefaultModel(fallbackProvider.provider, fallbackProvider.models)];
 }
