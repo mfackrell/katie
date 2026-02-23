@@ -16,8 +16,25 @@ export class OpenAiProvider implements LlmProvider {
   }
 
   async generate(params: ChatGenerateParams): Promise<ProviderResponse> {
+    const selectedModel = params.modelId ?? this.defaultModel;
+    const isLegacyCompletionModel =
+      selectedModel.toLowerCase().includes("codex") || selectedModel.toLowerCase().includes("instruct");
+
+    if (isLegacyCompletionModel) {
+      const completion = await this.client.completions.create({
+        model: selectedModel,
+        prompt: `${params.system}\n\nUser request:\n${params.user}`
+      });
+
+      return {
+        text: completion.choices[0]?.text ?? "",
+        model: selectedModel,
+        provider: this.name
+      };
+    }
+
     const completion = await this.client.chat.completions.create({
-      model: this.defaultModel,
+      model: selectedModel,
       messages: [
         { role: "system", content: params.system },
         { role: "user", content: params.user }
@@ -26,7 +43,7 @@ export class OpenAiProvider implements LlmProvider {
 
     return {
       text: completion.choices[0]?.message?.content ?? "",
-      model: this.defaultModel,
+      model: selectedModel,
       provider: this.name
     };
   }

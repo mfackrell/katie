@@ -42,21 +42,22 @@ export async function POST(request: NextRequest) {
 
     // LOG 3: Context Assembly & Provider Selection
     console.log(`[Chat API] Assembling context and selecting provider...`);
-    const [systemContext, provider] = await Promise.all([
+    const [systemContext, [provider, modelId]] = await Promise.all([
       assembleContext(actorId, chatId),
       chooseProvider(message, providers)
     ]);
-    console.log(`[Chat API] Selected Provider: ${provider.name}`);
+    console.log(`[Chat API] Selected Provider: ${provider.name}, Model: ${modelId}`);
 
     // LOG 4: Save User Message to Blob
     console.log(`[Chat API] Saving user message...`);
     await saveMessage(chatId, "user", message);
 
     // LOG 5: Generate AI Response
-    console.log(`[Chat API] Requesting generation from ${provider.name}...`);
+    console.log(`[Chat API] Requesting generation from ${provider.name} using model ${modelId}...`);
     const result = await provider.generate({
       system: systemContext,
-      user: message
+      user: message,
+      modelId
     });
 
     if (!result || !result.text) {
