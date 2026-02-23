@@ -1,6 +1,7 @@
 export interface ChatGenerateParams {
   system: string;
   user: string;
+  history?: { role: "user" | "assistant"; content: string }[];
   modelId?: string;
 }
 

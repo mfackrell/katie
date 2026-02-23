@@ -35,20 +35,23 @@ export class GoogleProvider implements LlmProvider {
     console.log(`[GoogleProvider] Using model: ${selectedModel}`);
 
     const endpoint = `https://generativelanguage.googleapis.com/v1/models/${selectedModel}:generateContent?key=${this.apiKey}`;
+    const mappedHistory = (params.history ?? []).map((message) => ({
+      role: message.role === "assistant" ? "model" : "user",
+      parts: [{ text: message.content }]
+    }));
+
     const response = await fetch(endpoint, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
+        systemInstruction: {
+          parts: [{ text: params.system }]
+        },
         contents: [
+          ...mappedHistory,
           {
-            parts: [
-              {
-                text: `${params.system}
-
-User request:
-${params.user}`
-              }
-            ]
+            role: "user",
+            parts: [{ text: params.user }]
           }
         ]
       })
