@@ -42,25 +42,26 @@ export async function POST(request: NextRequest) {
 
     // LOG 3: Context Assembly & Provider Selection
     console.log(`[Chat API] Assembling context and selecting provider...`);
-    const [systemContext, provider] = await Promise.all([
+    const [systemContext, routingDecision] = await Promise.all([
       assembleContext(actorId, chatId),
       chooseProvider(message, providers)
     ]);
-    console.log(`[Chat API] Selected Provider: ${provider.name}`);
+    console.log(`[Chat API] Selected Provider: ${routingDecision.provider.name}, Model: ${routingDecision.modelId}`);
 
     // LOG 4: Save User Message to Blob
     console.log(`[Chat API] Saving user message...`);
     await saveMessage(chatId, "user", message);
 
     // LOG 5: Generate AI Response
-    console.log(`[Chat API] Requesting generation from ${provider.name}...`);
-    const result = await provider.generate({
+    console.log(`[Chat API] Requesting generation from ${routingDecision.provider.name} using model ${routingDecision.modelId}...`);
+    const result = await routingDecision.provider.generate({
       system: systemContext,
-      user: message
+      user: message,
+      modelId: routingDecision.modelId
     });
 
     if (!result || !result.text) {
-      throw new Error(`AI Provider ${provider.name} returned an empty response.`);
+      throw new Error(`AI Provider ${routingDecision.provider.name} returned an empty response.`);
     }
 
     // LOG 6: Save Assistant Response & Update Summary

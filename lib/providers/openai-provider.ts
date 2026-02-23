@@ -17,7 +17,7 @@ export class OpenAiProvider implements LlmProvider {
 
   async generate(params: ChatGenerateParams): Promise<ProviderResponse> {
     const completion = await this.client.chat.completions.create({
-      model: this.defaultModel,
+      model: params.modelId ?? this.defaultModel,
       messages: [
         { role: "system", content: params.system },
         { role: "user", content: params.user }
@@ -26,7 +26,7 @@ export class OpenAiProvider implements LlmProvider {
 
     return {
       text: completion.choices[0]?.message?.content ?? "",
-      model: this.defaultModel,
+      model: params.modelId ?? this.defaultModel,
       provider: this.name
     };
   }
