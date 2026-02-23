@@ -4,6 +4,10 @@ interface GoogleModelsResponse {
   models?: Array<{ name?: string; supportedGenerationMethods?: string[] }>;
 }
 
+function normalizeGoogleModelId(modelId: string): string {
+  return modelId.trim().replace(/^models\//, "");
+}
+
 export class GoogleProvider implements LlmProvider {
   name = "google" as const;
   private apiKey: string;
@@ -31,10 +35,10 @@ export class GoogleProvider implements LlmProvider {
   }
 
   async generate(params: ChatGenerateParams): Promise<ProviderResponse> {
-    const selectedModel = params.modelId ?? this.defaultModel;
+    const selectedModel = normalizeGoogleModelId(params.modelId ?? this.defaultModel);
     console.log(`[GoogleProvider] Using model: ${selectedModel}`);
 
-    const endpoint = `https://generativelanguage.googleapis.com/v1/models/${selectedModel}:generateContent?key=${this.apiKey}`;
+    const endpoint = `https://generativelanguage.googleapis.com/v1/models/${encodeURIComponent(selectedModel)}:generateContent?key=${this.apiKey}`;
     const mappedHistory = params.history.map((message) => ({
       role: message.role === "assistant" ? "model" : "user",
       parts: [{ text: message.content }]

@@ -32,16 +32,21 @@ function pickDefaultModel(provider: LlmProvider, models: string[]): string {
 }
 
 function normalizeRoutingChoice(rawChoice: string): { providerName: "openai" | "google"; modelId: string } | null {
-  const [providerNameRaw, ...modelParts] = rawChoice.toLowerCase().split(":");
-  const providerName = providerNameRaw?.trim();
+  const [providerNameRaw, ...modelParts] = rawChoice.split(":");
+  const providerName = providerNameRaw?.trim().toLowerCase();
 
   if ((providerName !== "openai" && providerName !== "google") || modelParts.length === 0) {
     return null;
   }
 
+  const modelId = modelParts.join(":").trim();
+  if (!modelId) {
+    return null;
+  }
+
   return {
     providerName,
-    modelId: modelParts.join(":").trim()
+    modelId
   };
 }
 
