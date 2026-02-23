@@ -11,6 +11,7 @@ function normalizeGoogleModelId(modelId: string): string {
 export class GoogleProvider implements LlmProvider {
   name = "google" as const;
   private apiKey: string;
+  private apiVersion = "v1beta";
   private defaultModel = "gemini-1.5-pro";
 
   constructor(apiKey: string) {
@@ -18,7 +19,7 @@ export class GoogleProvider implements LlmProvider {
   }
 
   async listModels(): Promise<string[]> {
-    const endpoint = `https://generativelanguage.googleapis.com/v1/models?key=${this.apiKey}`;
+    const endpoint = `https://generativelanguage.googleapis.com/${this.apiVersion}/models?key=${this.apiKey}`;
     const response = await fetch(endpoint);
 
     if (!response.ok) {
@@ -38,7 +39,7 @@ export class GoogleProvider implements LlmProvider {
     const selectedModel = normalizeGoogleModelId(params.modelId ?? this.defaultModel);
     console.log(`[GoogleProvider] Using model: ${selectedModel}`);
 
-    const endpoint = `https://generativelanguage.googleapis.com/v1/models/${encodeURIComponent(selectedModel)}:generateContent?key=${this.apiKey}`;
+    const endpoint = `https://generativelanguage.googleapis.com/${this.apiVersion}/models/${encodeURIComponent(selectedModel)}:generateContent?key=${this.apiKey}`;
     const mappedHistory = params.history.map((message) => ({
       role: message.role === "assistant" ? "model" : "user",
       parts: [{ text: message.content }]
