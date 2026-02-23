@@ -6,9 +6,6 @@ interface GoogleModelMetadata {
   supportedGenerationMethods?: string[];
 }
 
-function normalizeGoogleModelId(modelId: string): string {
-  return modelId.trim().replace(/^models\//, "");
-}
 
 function normalizeGoogleModelId(modelId: string): string {
   return modelId.trim().replace(/^models\//, "");
