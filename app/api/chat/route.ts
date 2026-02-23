@@ -42,7 +42,7 @@ export async function POST(request: NextRequest) {
 
     // LOG 3: Context Assembly & Provider Selection
     console.log(`[Chat API] Assembling context and selecting provider...`);
-    const [{ systemPrompt, history }, routingDecision] = await Promise.all([
+    const [{ systemPrompt: systemContext, history }, routingDecision] = await Promise.all([
       assembleContext(actorId, chatId),
       chooseProvider(message, providers)
     ]);
@@ -55,7 +55,7 @@ export async function POST(request: NextRequest) {
     // LOG 5: Generate AI Response
     console.log(`[Chat API] Requesting generation from ${routingDecision.provider.name} using model ${routingDecision.modelId}...`);
     const result = await routingDecision.provider.generate({
-      system: systemPrompt,
+      system: systemContext,
       history,
       user: message,
       modelId: routingDecision.modelId
