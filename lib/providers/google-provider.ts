@@ -22,7 +22,7 @@ export class GoogleProvider implements LlmProvider {
     };
     listModels?: () => Promise<{ models?: GoogleModelMetadata[] } | GoogleModelMetadata[]>;
   };
-  private defaultModel = "gemini-1.5-pro";
+  private defaultModel = "gemini-2.5-pro";
 
   constructor(apiKey: string) {
     this.apiKey = apiKey;
