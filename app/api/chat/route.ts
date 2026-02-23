@@ -42,7 +42,7 @@ export async function POST(request: NextRequest) {
 
     // LOG 3: Context Assembly & Provider Selection
     console.log(`[Chat API] Assembling context and selecting provider...`);
-    const [systemContext, [provider, modelId]] = await Promise.all([
+    const [{ systemPrompt, history }, { provider, modelId }] = await Promise.all([
       assembleContext(actorId, chatId),
       chooseProvider(message, providers)
     ]);
@@ -55,14 +55,14 @@ export async function POST(request: NextRequest) {
     // LOG 5: Generate AI Response
     console.log(`[Chat API] Requesting generation from ${provider.name} using model ${modelId}...`);
     const result = await provider.generate({
-      system: systemContext,
+      system: systemPrompt,
       history,
       user: message,
       modelId
     });
 
     if (!result || !result.text) {
-      throw new Error(`AI Provider ${routingDecision.provider.name} returned an empty response.`);
+      throw new Error(`AI Provider ${provider.name} returned an empty response.`);
     }
 
     // LOG 6: Save Assistant Response & Update Summary
