@@ -1,5 +1,9 @@
 import { ChatGenerateParams, LlmProvider, ProviderResponse } from "@/lib/providers/types";
 
+interface GoogleModelsResponse {
+  models?: Array<{ name?: string; supportedGenerationMethods?: string[] }>;
+}
+
 export class GoogleProvider implements LlmProvider {
   name = "google" as const;
   private apiKey: string;
@@ -10,11 +14,27 @@ export class GoogleProvider implements LlmProvider {
   }
 
   async listModels(): Promise<string[]> {
-    return ["gemini-1.5-pro", "gemini-1.5-flash", "gemini-2.0-flash-exp"];
+    const endpoint = `https://generativelanguage.googleapis.com/v1/models?key=${this.apiKey}`;
+    const response = await fetch(endpoint);
+
+    if (!response.ok) {
+      throw new Error(`Gemini listModels failed (${response.status})`);
+    }
+
+    const json = (await response.json()) as GoogleModelsResponse;
+    const models = json.models
+      ?.filter((model) => model.supportedGenerationMethods?.includes("generateContent"))
+      .map((model) => model.name?.replace("models/", ""))
+      .filter((model): model is string => Boolean(model));
+
+    return models ?? [];
   }
 
   async generate(params: ChatGenerateParams): Promise<ProviderResponse> {
-    const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${this.defaultModel}:generateContent?key=${this.apiKey}`;
+    const selectedModel = params.modelId ?? this.defaultModel;
+    console.log(`[GoogleProvider] Using model: ${selectedModel}`);
+
+    const endpoint = `https://generativelanguage.googleapis.com/v1/models/${selectedModel}:generateContent?key=${this.apiKey}`;
     const response = await fetch(endpoint, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -23,7 +43,10 @@ export class GoogleProvider implements LlmProvider {
           {
             parts: [
               {
-                text: `${params.system}\n\nUser request:\n${params.user}`
+                text: `${params.system}
+
+User request:
+${params.user}`
               }
             ]
           }
@@ -32,7 +55,7 @@ export class GoogleProvider implements LlmProvider {
     });
 
     if (!response.ok) {
-      throw new Error(`Gemini request failed (${response.status})`);
+      throw new Error(`Gemini request failed for model ${selectedModel} (${response.status})`);
     }
 
     const json = (await response.json()) as {
@@ -43,7 +66,7 @@ export class GoogleProvider implements LlmProvider {
 
     return {
       text,
-      model: this.defaultModel,
+      model: selectedModel,
       provider: this.name
     };
   }

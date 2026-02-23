@@ -1,6 +1,7 @@
 export interface ChatGenerateParams {
   system: string;
   user: string;
+  modelId?: string;
 }
 
 export interface ProviderResponse {
