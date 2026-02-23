@@ -1,7 +1,13 @@
+import { GoogleGenerativeAI } from "@google/generative-ai";
 import { ChatGenerateParams, LlmProvider, ProviderResponse } from "@/lib/providers/types";
 
-interface GoogleModelsResponse {
-  models?: Array<{ name?: string; supportedGenerationMethods?: string[] }>;
+interface GoogleModelMetadata {
+  name?: string;
+  supportedGenerationMethods?: string[];
+}
+
+function normalizeGoogleModelId(modelId: string): string {
+  return modelId.trim().replace(/^models\//, "");
 }
 
 function normalizeGoogleModelId(modelId: string): string {
@@ -11,75 +17,71 @@ function normalizeGoogleModelId(modelId: string): string {
 export class GoogleProvider implements LlmProvider {
   name = "google" as const;
   private apiKey: string;
-  private apiVersion = "v1beta";
+  private genAI: {
+    getGenerativeModel: (params: { model: string; systemInstruction: string }) => {
+      generateContent: (request: {
+        contents: Array<{ role: "user" | "model"; parts: Array<{ text: string }> }>;
+      }) => Promise<{ response?: { text?: () => string } }>;
+    };
+    listModels?: () => Promise<{ models?: GoogleModelMetadata[] } | GoogleModelMetadata[]>;
+  };
   private defaultModel = "gemini-1.5-pro";
 
   constructor(apiKey: string) {
     this.apiKey = apiKey;
+    this.genAI = new GoogleGenerativeAI(this.apiKey) as unknown as GoogleProvider["genAI"];
   }
 
   async listModels(): Promise<string[]> {
-    const endpoint = `https://generativelanguage.googleapis.com/${this.apiVersion}/models?key=${this.apiKey}`;
-    const response = await fetch(endpoint);
-
-    if (!response.ok) {
-      throw new Error(`Gemini listModels failed (${response.status})`);
+    if (!this.genAI.listModels) {
+      return [];
     }
 
-    const json = (await response.json()) as GoogleModelsResponse;
-    const models = json.models
-      ?.filter((model) => model.supportedGenerationMethods?.includes("generateContent"))
+    const listResponse = await this.genAI.listModels();
+    const models = Array.isArray(listResponse) ? listResponse : listResponse.models ?? [];
+
+    return models
+      .filter((model) => model.supportedGenerationMethods?.includes("generateContent"))
       .map((model) => model.name?.replace("models/", ""))
       .filter((model): model is string => Boolean(model));
-
-    return models ?? [];
   }
 
   async generate(params: ChatGenerateParams): Promise<ProviderResponse> {
     const selectedModel = normalizeGoogleModelId(params.modelId ?? this.defaultModel);
     console.log(`[GoogleProvider] Using model: ${selectedModel}`);
 
-    const endpoint = `https://generativelanguage.googleapis.com/${this.apiVersion}/models/${encodeURIComponent(selectedModel)}:generateContent?key=${this.apiKey}`;
-    const mappedHistory = params.history.map((message) => ({
-      role: message.role === "assistant" ? "model" : "user",
-      parts: [{ text: message.content }]
-    }));
+    const model = this.genAI.getGenerativeModel({
+      model: selectedModel,
+      systemInstruction: params.system
+    });
 
-    const contents = [
-      ...mappedHistory,
+    const historyContents: Array<{ role: "user" | "model"; parts: Array<{ text: string }> }> =
+      params.history.map((message) => ({
+        role: message.role === "assistant" ? "model" : "user",
+        parts: [{ text: message.content }]
+      }));
+
+    const contents: Array<{ role: "user" | "model"; parts: Array<{ text: string }> }> = [
+      ...historyContents,
       {
         role: "user",
         parts: [{ text: params.user }]
       }
     ];
 
-    const response = await fetch(endpoint, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        system_instruction: {
-          parts: [{ text: params.system }]
-        },
-        contents
-      })
-    });
+    try {
+      const result = await model.generateContent({ contents });
+      const text = result.response?.text?.() ?? "";
 
-    if (!response.ok) {
-      const errorBody = await response.text();
-      console.error(`[GoogleProvider] Gemini error body for model ${selectedModel}: ${errorBody}`);
-      throw new Error(`Gemini request failed for model ${selectedModel} (${response.status})`);
+      return {
+        text,
+        model: selectedModel,
+        provider: this.name
+      };
+    } catch (error: unknown) {
+      const detail = error instanceof Error ? error.message : String(error);
+      console.error(`[GoogleProvider] Gemini error body for model ${selectedModel}: ${detail}`);
+      throw new Error(`Gemini request failed for model ${selectedModel}`);
     }
-
-    const json = (await response.json()) as {
-      candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
-    };
-
-    const text = json.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
-
-    return {
-      text,
-      model: selectedModel,
-      provider: this.name
-    };
   }
 }
