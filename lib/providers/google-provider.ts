@@ -10,6 +10,10 @@ function normalizeGoogleModelId(modelId: string): string {
   return modelId.trim().replace(/^models\//, "");
 }
 
+function normalizeGoogleModelId(modelId: string): string {
+  return modelId.trim().replace(/^models\//, "");
+}
+
 export class GoogleProvider implements LlmProvider {
   name = "google" as const;
   private apiKey: string;
