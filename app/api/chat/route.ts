@@ -61,7 +61,7 @@ export async function POST(request: NextRequest) {
     });
 
     if (!result || !result.text) {
-      throw new Error(`AI Provider ${provider.name} returned an empty response.`);
+      throw new Error(`AI Provider ${routingDecision.provider.name} returned an empty response.`);
     }
 
     // LOG 6: Save Assistant Response & Update Summary
