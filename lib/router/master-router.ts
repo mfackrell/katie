@@ -22,7 +22,7 @@ function keywordOverride(prompt: string): "openai" | "google" | null {
 
 function pickDefaultModel(provider: LlmProvider, models: string[]): string {
   if (provider.name === "google") {
-    return models.find((model) => model.includes("gemini-1.5-pro")) ?? models[0] ?? "gemini-1.5-pro";
+    return models.find((model) => model.includes("gemini-2.5-pro")) ?? models[0] ?? "gemini-2.5-pro";
   }
 
   return models.find((model) => model.includes("gpt-4o")) ?? models[0] ?? "gpt-4o";
@@ -98,14 +98,23 @@ export async function chooseProvider(prompt: string, providers: LlmProvider[]): 
 
     const choice = completion.choices[0]?.message?.content?.trim();
     if (choice) {
-      const [providerName, ...modelParts] = choice.split(":");
-      const modelId = modelParts.join(":");
-      const selected = availableByProvider.find(
-        ({ provider, models }) => provider.name === providerName && models.includes(modelId)
-      );
+      const parsedChoice = normalizeRoutingChoice(choice);
+      if (parsedChoice) {
+        const selectedProvider = availableByProvider.find(
+          ({ provider }) => provider.name === parsedChoice.providerName
+        );
 
-      if (selected) {
-        return [selected.provider, modelId];
+        if (selectedProvider) {
+          const isAvailableModel = selectedProvider.models.includes(parsedChoice.modelId);
+          const modelId = isAvailableModel
+            ? parsedChoice.modelId
+            : pickDefaultModel(selectedProvider.provider, selectedProvider.models);
+
+          return {
+            provider: selectedProvider.provider,
+            modelId
+          };
+        }
       }
     }
   }
