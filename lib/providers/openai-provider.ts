@@ -23,7 +23,7 @@ export class OpenAiProvider implements LlmProvider {
     if (isLegacyCompletionModel) {
       const completion = await this.client.completions.create({
         model: selectedModel,
-        prompt: `${params.system}\n\nUser request:\n${params.user}`
+        prompt: `${params.persona}\n\nCONVERSATION SUMMARY:\n${params.summary}\n\nUser request:\n${params.user}`
       });
 
       return {
@@ -36,7 +36,8 @@ export class OpenAiProvider implements LlmProvider {
     const completion = await this.client.chat.completions.create({
       model: selectedModel,
       messages: [
-        { role: "system", content: params.system },
+        { role: "system", content: params.persona },
+        { role: "user", content: `CONVERSATION SUMMARY:\n${params.summary}` },
         ...params.history,
         { role: "user", content: params.user }
       ]

@@ -8,7 +8,7 @@ const client = process.env.OPENAI_API_KEY ? new OpenAI({ apiKey: process.env.OPE
 export async function maybeUpdateSummary(chatId: string): Promise<void> {
   const recent = await getRecentMessages(chatId, 60);
 
-  if (!client || recent.length < 10 || recent.length % 5 !== 0) {
+  if (!client || recent.length < 3 || recent.length % 2 !== 0) {
     return;
   }
 
