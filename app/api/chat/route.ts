@@ -10,7 +10,9 @@ import { saveMessage } from "@/lib/data/blob-store";
 const requestSchema = z.object({
   actorId: z.string().min(1),
   chatId: z.string().min(1),
-  message: z.string().min(1)
+  message: z.string().min(1),
+  overrideProvider: z.string().min(1).optional(),
+  overrideModel: z.string().min(1).optional()
 });
 
 export async function POST(request: NextRequest) {
@@ -26,7 +28,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Invalid request payload" }, { status: 400 });
     }
 
-    const { actorId, chatId, message } = parsed.data;
+    const { actorId, chatId, message, overrideProvider, overrideModel } = parsed.data;
 
     // LOG 2: Verification of IDs
     console.log(`[Chat API] Processing - Actor: ${actorId}, Chat: ${chatId}`);
@@ -44,9 +46,23 @@ export async function POST(request: NextRequest) {
     console.log(`[Chat API] Assembling context and selecting provider...`);
     const { persona, summary, history } = await assembleContext(actorId, chatId);
     const historyForProvider = history.map(({ role, content }) => ({ role, content }));
-    const routingContext = `${persona}\n\nCONVERSATION SUMMARY:\n${summary}`;
-    const [provider, modelId] = await chooseProvider(message, routingContext, providers);
-    console.log(`[Chat API] Selected Provider: ${provider.name}, Model: ${modelId}`);
+    let provider = providers[0];
+    let modelId = "";
+
+    if (overrideProvider && overrideModel) {
+      const manualProvider = providers.find((candidate) => candidate.name === overrideProvider);
+      if (!manualProvider) {
+        return NextResponse.json({ error: `Unknown override provider: ${overrideProvider}` }, { status: 400 });
+      }
+
+      provider = manualProvider;
+      modelId = overrideModel;
+      console.log(`[Chat API] Override active. Provider: ${provider.name}, Model: ${modelId}`);
+    } else {
+      const routingContext = `${persona}\n\nCONVERSATION SUMMARY:\n${summary}`;
+      [provider, modelId] = await chooseProvider(message, routingContext, providers);
+      console.log(`[Chat API] Selected Provider: ${provider.name}, Model: ${modelId}`);
+    }
 
     // LOG 4: Save User Message to Blob
     console.log(`[Chat API] Saving user message...`);

@@ -1,7 +1,16 @@
 "use client";
 
-import { FormEvent, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
 import type { Message } from "@/lib/types/chat";
+
+type ProviderName = "openai" | "google";
+
+type AvailableModels = Partial<Record<ProviderName, string[]>>;
+
+type SelectedOverride = {
+  providerName: ProviderName;
+  modelId: string;
+} | null;
 
 interface ChatPanelProps {
   actorId: string;
@@ -13,8 +22,25 @@ export function ChatPanel({ actorId, chatId }: ChatPanelProps) {
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [meta, setMeta] = useState<{ provider: string; model: string } | null>(null);
+  const [availableModels, setAvailableModels] = useState<AvailableModels>({});
+  const [selectedOverride, setSelectedOverride] = useState<SelectedOverride>(null);
 
   const canSend = useMemo(() => input.trim().length > 0 && !loading, [input, loading]);
+
+  useEffect(() => {
+    async function fetchModels() {
+      const response = await fetch("/api/models");
+      const data = (await response.json()) as AvailableModels;
+
+      if (!response.ok) {
+        return;
+      }
+
+      setAvailableModels(data);
+    }
+
+    void fetchModels();
+  }, []);
 
   async function onSubmit(event: FormEvent) {
     event.preventDefault();
@@ -40,7 +66,13 @@ export function ChatPanel({ actorId, chatId }: ChatPanelProps) {
     const response = await fetch("/api/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ actorId, chatId, message: content })
+      body: JSON.stringify({
+        actorId,
+        chatId,
+        message: content,
+        overrideProvider: selectedOverride?.providerName,
+        overrideModel: selectedOverride?.modelId
+      })
     });
 
     const data = (await response.json()) as { text?: string; provider?: string; model?: string; error?: string };
@@ -75,16 +107,53 @@ export function ChatPanel({ actorId, chatId }: ChatPanelProps) {
     setLoading(false);
   }
 
+  const providerNames = Object.keys(availableModels) as ProviderName[];
+
   return (
     <main className="flex h-screen flex-1 flex-col">
       <header className="border-b border-zinc-800 px-6 py-4">
-        <p className="text-xs uppercase tracking-wide text-zinc-400">Master Router</p>
-        <h2 className="text-lg font-semibold">Polyglot Actor Orchestrator</h2>
-        {meta ? (
-          <p className="mt-1 text-xs text-zinc-400">
-            Last response via <span className="text-zinc-200">{meta.provider}</span> · {meta.model}
-          </p>
-        ) : null}
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <p className="text-xs uppercase tracking-wide text-zinc-400">Master Router</p>
+            <h2 className="text-lg font-semibold">Polyglot Actor Orchestrator</h2>
+            {meta ? (
+              <p className="mt-1 text-xs text-zinc-400">
+                Last response via <span className="text-zinc-200">{meta.provider}</span> · {meta.model}
+              </p>
+            ) : null}
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            {providerNames.map((providerName) => {
+              const options = availableModels[providerName] ?? [];
+              const selectedValue =
+                selectedOverride?.providerName === providerName ? selectedOverride.modelId : "";
+
+              return (
+                <label key={providerName} className="flex items-center gap-2 text-xs text-zinc-300">
+                  <span className="capitalize text-zinc-400">{providerName}</span>
+                  <select
+                    value={selectedValue}
+                    onChange={(event) => {
+                      const nextModel = event.target.value;
+                      setSelectedOverride(
+                        nextModel ? { providerName, modelId: nextModel } : null
+                      );
+                    }}
+                    className="rounded-md border border-zinc-700 bg-zinc-900 px-2 py-1 text-xs text-zinc-100 outline-none ring-emerald-500 focus:ring"
+                  >
+                    <option value="">Master Router (Auto)</option>
+                    {options.map((modelId) => (
+                      <option key={modelId} value={modelId}>
+                        {modelId}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              );
+            })}
+          </div>
+        </div>
       </header>
 
       <section className="flex-1 space-y-3 overflow-y-auto p-6">
