@@ -59,7 +59,7 @@ export async function POST(request: NextRequest) {
       modelId = overrideModel;
       console.log(`[Chat API] Override active. Provider: ${provider.name}, Model: ${modelId}`);
     } else {
-      const routingContext = `${persona}\n\nCONVERSATION SUMMARY:\n${summary}`;
+      const routingContext = "";
       [provider, modelId] = await chooseProvider(message, routingContext, providers);
       console.log(`[Chat API] Selected Provider: ${provider.name}, Model: ${modelId}`);
     }
