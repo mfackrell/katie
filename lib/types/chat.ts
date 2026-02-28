@@ -16,6 +16,7 @@ export interface Message {
   id: string;
   chatId: string;
   role: Role;
+  model?: string;
   content: string;
   createdAt: string;
 }

@@ -84,7 +84,7 @@ export async function POST(request: NextRequest) {
 
     // LOG 6: Save Assistant Response & Update Summary
     console.log(`[Chat API] Generation successful. Saving assistant response.`);
-    await saveMessage(actorId, "assistant", result.text, chatId);
+    await saveMessage(actorId, "assistant", result.text, chatId, result.model);
     
     // Non-blocking summary update
     void maybeUpdateSummary(actorId).catch((err: unknown) => 

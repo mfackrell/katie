@@ -99,6 +99,7 @@ export function ChatPanel({ actorId, chatId }: ChatPanelProps) {
         id: crypto.randomUUID(),
         chatId,
         role: "assistant",
+        model: data.model,
         content: data.text ?? "",
         createdAt: new Date().toISOString()
       }
@@ -169,7 +170,9 @@ export function ChatPanel({ actorId, chatId }: ChatPanelProps) {
                 : "border-zinc-700 bg-zinc-900"
             }`}
           >
-            <p className="mb-1 text-xs uppercase text-zinc-400">{message.role}</p>
+            <p className="mb-1 text-xs uppercase text-zinc-400">
+              {message.role}{message.role === "assistant" && message.model ? ` (${message.model})` : ""}
+            </p>
             <p className="whitespace-pre-wrap">{message.content}</p>
           </div>
         ))}
