@@ -62,17 +62,20 @@ export class GoogleProvider implements LlmProvider {
 
   async listModels(): Promise<string[]> {
     try {
-      const response = await this.client.models.list();
-      // The 2026 SDK provides models directly in the .models property
-      const models = response.models || [];
+      const listResponse = await this.client.models.list();
+      const modelIds: string[] = [];
 
-      return models
-        .filter((model) => model.supportedGenerationMethods?.includes("generateContent"))
-        .map((model) => model.name?.replace("models/", ""))
-        .filter((model): model is string => Boolean(model));
+      // The Pager returned by list() is an Async Iterable in the 2026 SDK
+      for await (const model of listResponse) {
+        if (model.supportedGenerationMethods?.includes("generateContent") && model.name) {
+          modelIds.push(model.name.replace("models/", ""));
+        }
+      }
+
+      return modelIds;
     } catch (error) {
-      console.error("[GoogleProvider] Failed to fetch Gemini models:", error);
-      return []; // Return empty array so the UI doesn't crash
+      console.error("[GoogleProvider] Failed to list models:", error);
+      return []; // Return empty list on failure to avoid breaking the UI
     }
   }
 
