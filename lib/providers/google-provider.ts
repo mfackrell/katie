@@ -66,18 +66,18 @@ export class GoogleProvider implements LlmProvider {
   }
 
   async listModels(): Promise<string[]> {
-    const listResponse = await this.client.models.list();
+    try {
+      const response = await this.client.models.list();
+      const models = response.models || [];
 
-    const models = Array.isArray(listResponse)
-      ? listResponse
-      : "page" in listResponse
-        ? ((listResponse.page as { models?: GoogleModelMetadata[] })?.models ?? [])
-        : ((listResponse as { models?: GoogleModelMetadata[] }).models ?? []);
-
-    return models
-      .filter((model) => model.supportedGenerationMethods?.includes("generateContent"))
-      .map((model) => model.name?.replace("models/", ""))
-      .filter((model): model is string => Boolean(model));
+      return models
+        .filter((model) => model.supportedGenerationMethods?.includes("generateContent"))
+        .map((model) => model.name?.replace("models/", ""))
+        .filter((model): model is string => Boolean(model));
+    } catch (error) {
+      console.error("[GoogleProvider] Failed to list models:", error);
+      return [];
+    }
   }
 
   async generate(params: ChatGenerateParams): Promise<ProviderResponse> {
