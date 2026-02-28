@@ -1,4 +1,4 @@
-import { GoogleGenerativeAI } from "@google/generative-ai";
+import { GoogleGenAI } from "@google/genai";
 import { ChatGenerateParams, LlmProvider, ProviderResponse } from "@/lib/providers/types";
 
 interface GoogleModelMetadata {
@@ -6,35 +6,57 @@ interface GoogleModelMetadata {
   supportedGenerationMethods?: string[];
 }
 
+type ThinkingLevel = "minimal" | "low" | "medium" | "high";
+
+const GOOGLE_MODEL_ALIASES: Record<string, string> = {
+  "gemini-pro": "gemini-3.1-pro",
+  "gemini-3-pro": "gemini-3.1-pro",
+  "gemini-flash": "gemini-3.1-flash",
+  "gemini-3-flash": "gemini-3.1-flash"
+};
+
 function normalizeGoogleModelId(modelId: string): string {
-  return modelId.trim().replace(/^models\//, "");
+  const normalized = modelId.trim().replace(/^models\//, "");
+  return GOOGLE_MODEL_ALIASES[normalized] ?? normalized;
+}
+
+function parseThinkingLevel(modelId: string): { normalizedModel: string; thinkingLevel?: ThinkingLevel } {
+  const match = modelId
+    .trim()
+    .match(/^(.+?)(?:[#:]thinking=(minimal|low|medium|high)|[#:]?(minimal|low|medium|high))$/i);
+
+  if (!match) {
+    return { normalizedModel: normalizeGoogleModelId(modelId) };
+  }
+
+  const thinkingLevel = (match[2] ?? match[3])?.toLowerCase() as ThinkingLevel | undefined;
+  return {
+    normalizedModel: normalizeGoogleModelId(match[1]),
+    thinkingLevel
+  };
+}
+
+function isGemini3Model(modelId: string): boolean {
+  return /^gemini-3(\.|-)/.test(modelId);
 }
 
 export class GoogleProvider implements LlmProvider {
   name = "google" as const;
-  private apiKey: string;
-  private genAI: {
-    getGenerativeModel: (params: { model: string; systemInstruction: string }) => {
-      generateContent: (request: {
-        contents: Array<{ role: "user" | "model"; parts: Array<{ text: string }> }>;
-      }) => Promise<{ response?: { text?: () => string } }>;
-    };
-    listModels?: () => Promise<{ models?: GoogleModelMetadata[] } | GoogleModelMetadata[]>;
-  };
-  private defaultModel = "gemini-2.5-pro";
+  private client: GoogleGenAI;
+  private defaultModel = "gemini-3.1-pro";
 
   constructor(apiKey: string) {
-    this.apiKey = apiKey;
-    this.genAI = new GoogleGenerativeAI(this.apiKey) as unknown as GoogleProvider["genAI"];
+    this.client = new GoogleGenAI({ apiKey });
   }
 
   async listModels(): Promise<string[]> {
-    if (!this.genAI.listModels) {
-      return [];
-    }
+    const listResponse = await this.client.models.list();
 
-    const listResponse = await this.genAI.listModels();
-    const models = Array.isArray(listResponse) ? listResponse : listResponse.models ?? [];
+    const models = Array.isArray(listResponse)
+      ? listResponse
+      : "page" in listResponse
+        ? ((listResponse.page as { models?: GoogleModelMetadata[] })?.models ?? [])
+        : ((listResponse as { models?: GoogleModelMetadata[] }).models ?? []);
 
     return models
       .filter((model) => model.supportedGenerationMethods?.includes("generateContent"))
@@ -43,13 +65,8 @@ export class GoogleProvider implements LlmProvider {
   }
 
   async generate(params: ChatGenerateParams): Promise<ProviderResponse> {
-    const selectedModel = normalizeGoogleModelId(params.modelId ?? this.defaultModel);
-    console.log(`[GoogleProvider] Using model: ${selectedModel}`);
-
-    const model = this.genAI.getGenerativeModel({
-      model: selectedModel,
-      systemInstruction: params.persona
-    });
+    const parsedModel = parseThinkingLevel(params.modelId ?? this.defaultModel);
+    const selectedModel = parsedModel.normalizedModel;
 
     const historyContents: Array<{ role: "user" | "model"; parts: Array<{ text: string }> }> =
       params.history.map((message) => ({
@@ -69,9 +86,20 @@ export class GoogleProvider implements LlmProvider {
       }
     ];
 
+    const thinkingLevel =
+      parsedModel.thinkingLevel ?? (isGemini3Model(selectedModel) ? ("medium" as ThinkingLevel) : undefined);
+
     try {
-      const result = await model.generateContent({ contents });
-      const text = result.response?.text?.() ?? "";
+      const result = await this.client.models.generateContent({
+        model: selectedModel,
+        contents,
+        config: {
+          systemInstruction: params.persona,
+          ...(thinkingLevel ? { thinkingConfig: { thinkingLevel } } : {})
+        }
+      });
+
+      const text = result.text ?? "";
 
       return {
         text,
