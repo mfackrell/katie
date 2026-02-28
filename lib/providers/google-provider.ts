@@ -65,9 +65,9 @@ export class GoogleProvider implements LlmProvider {
       const listResponse = await this.client.models.list();
       const modelIds: string[] = [];
 
-      // The Pager returned by list() is an Async Iterable in the 2026 SDK
+      // The Pager returned by list() is an Async Iterable in the 1.x SDK
       for await (const model of listResponse) {
-        if (model.supportedGenerationMethods?.includes("generateContent") && model.name) {
+        if (model.supportedActions?.includes("generateContent") && model.name) {
           modelIds.push(model.name.replace("models/", ""));
         }
       }
