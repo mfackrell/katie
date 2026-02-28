@@ -19,7 +19,7 @@ export async function assembleContext(actorId: string): Promise<AssembledContext
     throw new Error(`Actor not found: ${actorId}`);
   }
 
-  const history = recentMessages.slice(-5);
+  const history = recentMessages.slice(-20);
 
   return {
     persona: actor.purpose,
