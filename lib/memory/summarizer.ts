@@ -6,10 +6,10 @@ const summarizerModel = "gpt-4o-mini";
 const client = process.env.OPENAI_API_KEY ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY }) : null;
 
 export async function maybeUpdateSummary(actorId: string, chatId: string): Promise<void> {
-  void chatId;
   const recent = await getRecentMessages(actorId, 60);
+  const hasCurrentChatActivity = recent.some((message) => message.chatId === chatId);
 
-  if (!client || recent.length < 3 || recent.length % 2 !== 0) {
+  if (!client || recent.length < 3 || recent.length % 2 !== 0 || !hasCurrentChatActivity) {
     return;
   }
 

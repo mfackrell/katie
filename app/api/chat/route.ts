@@ -44,7 +44,7 @@ export async function POST(request: NextRequest) {
 
     // LOG 3: Context Assembly & Provider Selection
     console.log(`[Chat API] Assembling context and selecting provider...`);
-    const { persona, summary, history } = await assembleContext(actorId, chatId);
+    const { persona, summary, history } = await assembleContext(actorId);
     const historyForProvider = history.map(({ role, content }) => ({ role, content }));
     let provider = providers[0];
     let modelId = "";
