@@ -83,43 +83,89 @@ export class OpenAiProvider implements LlmProvider {
   }
 
   async generate(params: ChatGenerateParams): Promise<ProviderResponse> {
-    const selectedModel = params.modelId ?? this.defaultModel;
-    const modelCandidates = this.getModelCandidates(selectedModel);
-
+    const requestedModel = params.modelId ?? this.defaultModel;
+    const modelCandidates = this.getModelCandidates(requestedModel);
     let lastError: unknown;
 
-    for (const model of modelCandidates) {
+    for (const selectedModel of modelCandidates) {
+      const modelLower = selectedModel.toLowerCase();
+
+      // 1. LEGACY ROUTING: For gpt-3.5-turbo-instruct and older Davinci models
+      const isLegacy =
+        modelLower.includes("instruct") && !modelLower.includes("gpt-4") && !modelLower.includes("gpt-5");
+
+      // 2. CHAT COMPLETIONS ROUTING: Specifically for gpt-4, gpt-3.5, and Search Preview models
+      // The 'search-preview' models are NOT supported on the Responses API.
+      const isChatOnly =
+        modelLower.includes("search-preview") ||
+        (modelLower.includes("gpt-4") && !modelLower.includes("gpt-5")) ||
+        modelLower.includes("gpt-3.5");
+
+      // 3. RESPONSES API ROUTING: For modern GPT-5 series frontier models
+      const isResponsesApi = modelLower.includes("gpt-5") && !modelLower.includes("search-preview");
+
       try {
-        const response = await this.client.responses.create({
-          model,
-          input: toStatefulInput(params)
-        });
+        if (isLegacy) {
+          const completion = await this.client.completions.create({
+            model: selectedModel,
+            prompt: `${params.persona}\n\nUser request:\n${params.user}`
+          });
 
-        const contentItems = extractOutputItems(response);
-        const text = extractText(contentItems, response.output_text);
+          return {
+            text: completion.choices[0]?.text ?? "",
+            model: selectedModel,
+            provider: this.name
+          };
+        }
 
-        return {
-          text,
-          model,
-          provider: this.name,
-          content: contentItems,
-          usage: response.usage
-            ? {
-                inputTokens: response.usage.input_tokens,
-                outputTokens: response.usage.output_tokens,
-                totalTokens: response.usage.total_tokens
-              }
-            : undefined
-        };
+        if (isResponsesApi) {
+          const response = await this.client.responses.create({
+            model: selectedModel,
+            input: toStatefulInput(params)
+          });
+
+          const contentItems = extractOutputItems(response);
+          const text = extractText(contentItems, response.output_text);
+
+          return {
+            text,
+            model: selectedModel,
+            provider: this.name,
+            content: contentItems,
+            usage: response.usage
+              ? {
+                  inputTokens: response.usage.input_tokens,
+                  outputTokens: response.usage.output_tokens,
+                  totalTokens: response.usage.total_tokens
+                }
+              : undefined
+          };
+        }
+
+        if (isChatOnly || !isLegacy) {
+          const completion = await this.client.chat.completions.create({
+            model: selectedModel,
+            messages: [
+              { role: "system", content: params.persona },
+              { role: "user", content: `CONVERSATION SUMMARY:\n${params.summary}` },
+              ...params.history,
+              { role: "user", content: params.user }
+            ]
+          });
+
+          return {
+            text: completion.choices[0]?.message?.content ?? "",
+            model: selectedModel,
+            provider: this.name
+          };
+        }
       } catch (error: unknown) {
         lastError = error;
         const detail = error instanceof Error ? error.message : String(error);
-        console.error(`[OpenAiProvider] Responses API failed for model ${model}: ${detail}`);
+        console.error(`[OpenAiProvider] API failure for ${selectedModel}: ${detail}`);
       }
     }
 
-    throw new Error(
-      `OpenAI Responses request failed for model ${selectedModel}${lastError ? `: ${String(lastError)}` : ""}`
-    );
+    throw new Error(`OpenAI request failed for model ${requestedModel}${lastError ? `: ${String(lastError)}` : ""}`);
   }
 }
