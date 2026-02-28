@@ -87,7 +87,7 @@ export async function POST(request: NextRequest) {
     await saveMessage(actorId, "assistant", result.text, chatId);
     
     // Non-blocking summary update
-    void maybeUpdateSummary(actorId, chatId).catch((err: unknown) => 
+    void maybeUpdateSummary(actorId).catch((err: unknown) => 
       console.error("[Chat API] Background Summary Update Error:", err)
     );
 
