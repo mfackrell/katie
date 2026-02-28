@@ -1,11 +1,6 @@
 import { GoogleGenAI, ThinkingLevel as GoogleThinkingLevel } from "@google/genai";
 import { ChatGenerateParams, LlmProvider, ProviderResponse } from "@/lib/providers/types";
 
-interface GoogleModelMetadata {
-  name?: string;
-  supportedGenerationMethods?: string[];
-}
-
 type ThinkingLevelInput = "minimal" | "low" | "medium" | "high";
 
 const GOOGLE_MODEL_ALIASES: Record<string, string> = {
@@ -68,6 +63,7 @@ export class GoogleProvider implements LlmProvider {
   async listModels(): Promise<string[]> {
     try {
       const response = await this.client.models.list();
+      // The 2026 SDK provides models directly in the .models property
       const models = response.models || [];
 
       return models
@@ -75,8 +71,8 @@ export class GoogleProvider implements LlmProvider {
         .map((model) => model.name?.replace("models/", ""))
         .filter((model): model is string => Boolean(model));
     } catch (error) {
-      console.error("[GoogleProvider] Failed to list models:", error);
-      return [];
+      console.error("[GoogleProvider] Failed to fetch Gemini models:", error);
+      return []; // Return empty array so the UI doesn't crash
     }
   }
 
