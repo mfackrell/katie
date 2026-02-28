@@ -1,4 +1,4 @@
-import { GoogleGenAI } from "@google/genai";
+import { GoogleGenAI, ThinkingLevel as GoogleThinkingLevel } from "@google/genai";
 import { ChatGenerateParams, LlmProvider, ProviderResponse } from "@/lib/providers/types";
 
 interface GoogleModelMetadata {
@@ -6,7 +6,7 @@ interface GoogleModelMetadata {
   supportedGenerationMethods?: string[];
 }
 
-type ThinkingLevel = "minimal" | "low" | "medium" | "high";
+type ThinkingLevelInput = "minimal" | "low" | "medium" | "high";
 
 const GOOGLE_MODEL_ALIASES: Record<string, string> = {
   "gemini-pro": "gemini-3.1-pro",
@@ -20,7 +20,10 @@ function normalizeGoogleModelId(modelId: string): string {
   return GOOGLE_MODEL_ALIASES[normalized] ?? normalized;
 }
 
-function parseThinkingLevel(modelId: string): { normalizedModel: string; thinkingLevel?: ThinkingLevel } {
+function parseThinkingLevel(modelId: string): {
+  normalizedModel: string;
+  thinkingLevelInput?: ThinkingLevelInput;
+} {
   const match = modelId
     .trim()
     .match(/^(.+?)(?:[#:]thinking=(minimal|low|medium|high)|[#:]?(minimal|low|medium|high))$/i);
@@ -29,11 +32,24 @@ function parseThinkingLevel(modelId: string): { normalizedModel: string; thinkin
     return { normalizedModel: normalizeGoogleModelId(modelId) };
   }
 
-  const thinkingLevel = (match[2] ?? match[3])?.toLowerCase() as ThinkingLevel | undefined;
+  const thinkingLevelInput = (match[2] ?? match[3])?.toLowerCase() as ThinkingLevelInput | undefined;
   return {
     normalizedModel: normalizeGoogleModelId(match[1]),
-    thinkingLevel
+    thinkingLevelInput
   };
+}
+
+function toGoogleThinkingLevel(thinkingLevelInput: ThinkingLevelInput): GoogleThinkingLevel {
+  switch (thinkingLevelInput) {
+    case "minimal":
+      return GoogleThinkingLevel.MINIMAL;
+    case "low":
+      return GoogleThinkingLevel.LOW;
+    case "medium":
+      return GoogleThinkingLevel.MEDIUM;
+    case "high":
+      return GoogleThinkingLevel.HIGH;
+  }
 }
 
 function isGemini3Model(modelId: string): boolean {
@@ -86,8 +102,8 @@ export class GoogleProvider implements LlmProvider {
       }
     ];
 
-    const thinkingLevel =
-      parsedModel.thinkingLevel ?? (isGemini3Model(selectedModel) ? ("medium" as ThinkingLevel) : undefined);
+    const thinkingLevelInput =
+      parsedModel.thinkingLevelInput ?? (isGemini3Model(selectedModel) ? "medium" : undefined);
 
     try {
       const result = await this.client.models.generateContent({
@@ -95,7 +111,9 @@ export class GoogleProvider implements LlmProvider {
         contents,
         config: {
           systemInstruction: params.persona,
-          ...(thinkingLevel ? { thinkingConfig: { thinkingLevel } } : {})
+          ...(thinkingLevelInput
+            ? { thinkingConfig: { thinkingLevel: toGoogleThinkingLevel(thinkingLevelInput) } }
+            : {})
         }
       });
 
