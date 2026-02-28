@@ -50,7 +50,8 @@ export async function saveMessage(
   actorId: string,
   role: "user" | "assistant",
   content: string,
-  chatId: string
+  chatId: string,
+  model?: string
 ): Promise<void> {
   const current = memoryMessages.get(actorId) ?? [];
   const next = [
@@ -59,6 +60,7 @@ export async function saveMessage(
       id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       chatId,
       role,
+      model,
       content,
       createdAt: new Date().toISOString()
     }
