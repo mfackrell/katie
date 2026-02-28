@@ -66,7 +66,7 @@ export async function POST(request: NextRequest) {
 
     // LOG 4: Save User Message to Blob
     console.log(`[Chat API] Saving user message...`);
-    await saveMessage(chatId, "user", message);
+    await saveMessage(actorId, "user", message, chatId);
 
     // LOG 5: Generate AI Response
     console.log(`[Chat API] Requesting generation from ${provider.name} using model ${modelId}...`);
@@ -84,10 +84,10 @@ export async function POST(request: NextRequest) {
 
     // LOG 6: Save Assistant Response & Update Summary
     console.log(`[Chat API] Generation successful. Saving assistant response.`);
-    await saveMessage(chatId, "assistant", result.text);
+    await saveMessage(actorId, "assistant", result.text, chatId);
     
     // Non-blocking summary update
-    void maybeUpdateSummary(chatId).catch((err: unknown) => 
+    void maybeUpdateSummary(actorId, chatId).catch((err: unknown) => 
       console.error("[Chat API] Background Summary Update Error:", err)
     );
 
