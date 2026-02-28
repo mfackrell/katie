@@ -10,6 +10,17 @@ export interface ProviderResponse {
   text: string;
   model: string;
   provider: "openai" | "google";
+  content?: Array<{
+    type: string;
+    text?: string;
+    [key: string]: unknown;
+  }>;
+  usage?: {
+    inputTokens?: number;
+    outputTokens?: number;
+    totalTokens?: number;
+    [key: string]: unknown;
+  };
 }
 
 export interface LlmProvider {

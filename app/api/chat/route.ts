@@ -60,8 +60,13 @@ export async function POST(request: NextRequest) {
       console.log(`[Chat API] Override active. Provider: ${provider.name}, Model: ${modelId}`);
     } else {
       const routingContext = "";
-      [provider, modelId] = await chooseProvider(message, routingContext, providers);
+      const { provider: selectedProvider, modelId: selectedModelId, reasoning } = await chooseProvider(message, routingContext, providers);
+      provider = selectedProvider;
+      modelId = selectedModelId;
       console.log(`[Chat API] Selected Provider: ${provider.name}, Model: ${modelId}`);
+      if (reasoning) {
+        console.log(`[Chat API] Routing Reasoning: ${reasoning}`);
+      }
     }
 
     // LOG 4: Save User Message to Blob
