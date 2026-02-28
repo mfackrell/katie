@@ -1,9 +1,11 @@
 import { getConversationSummary } from "@/lib/data/blob-store";
 import { getActorById, getRecentMessages } from "@/lib/data/blob-store";
+import type { Message } from "@/lib/types/chat";
 
 interface AssembledContext {
-  systemPrompt: string;
-  history: { role: "user" | "assistant"; content: string }[];
+  persona: string;
+  summary: string;
+  history: Message[];
 }
 
 export async function assembleContext(actorId: string, chatId: string): Promise<AssembledContext> {
@@ -17,18 +19,11 @@ export async function assembleContext(actorId: string, chatId: string): Promise<
     throw new Error(`Actor not found: ${actorId}`);
   }
 
-  const systemPrompt = [
-    `LAYER 1 - PERMANENT MEMORY (ACTOR PERSONA):\n${actor.purpose}`,
-    `LAYER 2 - INTERMEDIARY MEMORY (CONVERSATION SUMMARY):\n${summary || "No summary available yet."}`
-  ].join("\n\n");
-
-  const history = recentMessages.map((message) => ({
-    role: message.role,
-    content: message.content
-  }));
+  const history = recentMessages.slice(-5);
 
   return {
-    systemPrompt,
+    persona: actor.purpose,
+    summary: summary || "No summary available yet.",
     history
   };
 }

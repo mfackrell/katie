@@ -48,7 +48,7 @@ export class GoogleProvider implements LlmProvider {
 
     const model = this.genAI.getGenerativeModel({
       model: selectedModel,
-      systemInstruction: params.system
+      systemInstruction: params.persona
     });
 
     const historyContents: Array<{ role: "user" | "model"; parts: Array<{ text: string }> }> =
@@ -58,6 +58,10 @@ export class GoogleProvider implements LlmProvider {
       }));
 
     const contents: Array<{ role: "user" | "model"; parts: Array<{ text: string }> }> = [
+      {
+        role: "user",
+        parts: [{ text: `CONVERSATION SUMMARY:\n${params.summary}` }]
+      },
       ...historyContents,
       {
         role: "user",

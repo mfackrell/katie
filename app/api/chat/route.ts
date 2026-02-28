@@ -42,8 +42,10 @@ export async function POST(request: NextRequest) {
 
     // LOG 3: Context Assembly & Provider Selection
     console.log(`[Chat API] Assembling context and selecting provider...`);
-    const { systemPrompt, history } = await assembleContext(actorId, chatId);
-    const [provider, modelId] = await chooseProvider(message, systemPrompt, providers);
+    const { persona, summary, history } = await assembleContext(actorId, chatId);
+    const historyForProvider = history.map(({ role, content }) => ({ role, content }));
+    const routingContext = `${persona}\n\nCONVERSATION SUMMARY:\n${summary}`;
+    const [provider, modelId] = await chooseProvider(message, routingContext, providers);
     console.log(`[Chat API] Selected Provider: ${provider.name}, Model: ${modelId}`);
 
     // LOG 4: Save User Message to Blob
@@ -53,8 +55,9 @@ export async function POST(request: NextRequest) {
     // LOG 5: Generate AI Response
     console.log(`[Chat API] Requesting generation from ${provider.name} using model ${modelId}...`);
     const result = await provider.generate({
-      system: systemPrompt,
-      history,
+      persona,
+      summary,
+      history: historyForProvider,
       user: message,
       modelId
     });
