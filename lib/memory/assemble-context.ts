@@ -11,8 +11,8 @@ interface AssembledContext {
 export async function assembleContext(actorId: string, chatId: string): Promise<AssembledContext> {
   const [actor, summary, recentMessages] = await Promise.all([
     getActorById(actorId),
-    getConversationSummary(chatId),
-    getRecentMessages(chatId)
+    getConversationSummary(actorId),
+    getRecentMessages(actorId)
   ]);
 
   if (!actor) {
