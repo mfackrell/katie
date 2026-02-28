@@ -1,7 +1,11 @@
 import OpenAI from "openai";
 import { LlmProvider } from "@/lib/providers/types";
 
-export type RoutingDecision = [LlmProvider, string];
+export type RoutingDecision = {
+  provider: LlmProvider;
+  modelId: string;
+  reasoning?: string;
+};
 
 type ProviderName = "openai" | "google";
 type RoutingChoice = { providerName: ProviderName; modelId: string };
@@ -85,7 +89,11 @@ export async function chooseProvider(
 
   if (availableByProvider.length === 1) {
     const selected = availableByProvider[0];
-    return [selected.provider, pickDefaultModel(selected.provider, selected.models)];
+    return {
+      provider: selected.provider,
+      modelId: pickDefaultModel(selected.provider, selected.models),
+      reasoning: "Single provider available; selected default model."
+    };
   }
 
   if (routingClient) {
@@ -97,44 +105,57 @@ export async function chooseProvider(
       .map(({ provider, models }) => `${provider.name}: ${models.join(", ")}`)
       .join("\n");
 
-    const completion = await routingClient.chat.completions.create({
-      model: getOrchestratorModel(),
-      messages: [
-        {
-          role: "system",
-          content:
-            "You are the Polyglot Actor Orchestrator. Your only job is to select the best model from the provided list based on the conversation context and the user's latest intent. Do not use heuristics; use your full reasoning capability.\n\nAvailable model manifest:\n" +
-            manifest +
-            "\n\nReturn only one selection as either a plain string in the exact format provider:model or strict JSON: {\"provider\":\"openai|google\",\"model\":\"model-id\"}. You MUST ONLY select from the manifest above."
-        },
-        {
-          role: "user",
-          content: `Conversation context:\n${context}\n\nLatest user intent:\n${prompt}\n\nAllowed options: ${options}`
-        }
-      ]
-    });
+    try {
+      const completion = await routingClient.responses.create({
+        model: getOrchestratorModel(),
+        input: [
+          {
+            role: "system",
+            content:
+              "You are the Polyglot Actor Orchestrator. Your only job is to select the best model from the provided list based on the conversation context and the user's latest intent. Do not use heuristics; use your full reasoning capability.\n\nAvailable model manifest:\n" +
+              manifest +
+              "\n\nReturn only one selection as either a plain string in the exact format provider:model or strict JSON: {\"provider\":\"openai|google\",\"model\":\"model-id\"}. You MUST ONLY select from the manifest above."
+          },
+          {
+            role: "user",
+            content: `Conversation context:\n${context}\n\nLatest user intent:\n${prompt}\n\nAllowed options: ${options}`
+          }
+        ]
+      });
 
-    const choice = completion.choices[0]?.message?.content?.trim();
-    if (choice) {
-      const parsedChoice = normalizeRoutingChoice(choice);
-      if (parsedChoice) {
-        const selectedProvider = availableByProvider.find(
-          ({ provider }) => provider.name === parsedChoice.providerName
-        );
+      const choice = completion.output_text?.trim();
+      if (choice) {
+        const parsedChoice = normalizeRoutingChoice(choice);
+        if (parsedChoice) {
+          const selectedProvider = availableByProvider.find(
+            ({ provider }) => provider.name === parsedChoice.providerName
+          );
 
-        if (selectedProvider) {
-          const isAvailableModel = selectedProvider.models.includes(parsedChoice.modelId);
-          const modelId = isAvailableModel
-            ? parsedChoice.modelId
-            : pickDefaultModel(selectedProvider.provider, selectedProvider.models);
+          if (selectedProvider) {
+            const isAvailableModel = selectedProvider.models.includes(parsedChoice.modelId);
+            const modelId = isAvailableModel
+              ? parsedChoice.modelId
+              : pickDefaultModel(selectedProvider.provider, selectedProvider.models);
 
-          return [selectedProvider.provider, modelId];
+            return {
+              provider: selectedProvider.provider,
+              modelId,
+              reasoning: `Orchestrator selected ${parsedChoice.providerName}:${parsedChoice.modelId}.`
+            };
+          }
         }
       }
+    } catch (error: unknown) {
+      const detail = error instanceof Error ? error.message : String(error);
+      console.error(`[Router] Orchestrator routing failed: ${detail}`);
     }
   }
 
   const fallbackProvider = availableByProvider[0];
 
-  return [fallbackProvider.provider, pickDefaultModel(fallbackProvider.provider, fallbackProvider.models)];
+  return {
+    provider: fallbackProvider.provider,
+    modelId: pickDefaultModel(fallbackProvider.provider, fallbackProvider.models),
+    reasoning: "Fallback to first available provider/model after routing unavailable or invalid."
+  };
 }
