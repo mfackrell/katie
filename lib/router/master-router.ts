@@ -5,6 +5,7 @@ export type RoutingDecision = {
   provider: LlmProvider;
   modelId: string;
   reasoning: string;
+  routerModel: string;
 };
 
 type ProviderName = "openai" | "google";
@@ -108,10 +109,12 @@ export async function chooseProvider(
 
   if (availableByProvider.length === 1) {
     const selected = availableByProvider[0];
+    const modelId = pickDefaultModel(selected.provider, selected.models);
     return {
       provider: selected.provider,
-      modelId: pickDefaultModel(selected.provider, selected.models),
-      reasoning: "Single provider available; selected default model."
+      modelId,
+      reasoning: `Single provider available; selected default ${selected.provider.name}:${modelId}.`,
+      routerModel: modelId
     };
   }
 
@@ -161,7 +164,8 @@ export async function chooseProvider(
             return {
               provider: selectedProvider.provider,
               modelId,
-              reasoning: `Orchestrator selected ${parsedChoice.providerName}:${parsedChoice.modelId}.`
+              reasoning: `Orchestrator selected ${parsedChoice.providerName}:${modelId}.`,
+              routerModel: modelId
             };
           }
         }
@@ -173,10 +177,12 @@ export async function chooseProvider(
   }
 
   const fallbackProvider = availableByProvider[0];
+  const modelId = pickDefaultModel(fallbackProvider.provider, fallbackProvider.models);
 
   return {
     provider: fallbackProvider.provider,
-    modelId: pickDefaultModel(fallbackProvider.provider, fallbackProvider.models),
-    reasoning: "Fallback to first available provider/model after routing unavailable or invalid."
+    modelId,
+    reasoning: `Fallback to ${fallbackProvider.provider.name}:${modelId} after routing unavailable or invalid.`,
+    routerModel: modelId
   };
 }
