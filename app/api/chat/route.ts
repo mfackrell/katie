@@ -29,6 +29,7 @@ export async function POST(request: NextRequest) {
     }
 
     const { actorId, chatId, message, overrideProvider, overrideModel } = parsed.data;
+    const encoder = new TextEncoder();
 
     // LOG 2: Verification of IDs
     console.log(`[Chat API] Processing - Actor: ${actorId}, Chat: ${chatId}`);
@@ -68,59 +69,77 @@ export async function POST(request: NextRequest) {
       console.log(`[Chat API] Routing Reasoning: ${routingDecision.reasoning}`);
     }
 
-    // LOG 4: Save User Message to Blob
-    console.log(`[Chat API] Saving user message...`);
-    await saveMessage(actorId, "user", message, chatId);
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        void (async () => {
+          try {
+            const metadataChunk = JSON.stringify({
+              type: "metadata",
+              modelId,
+              provider: provider.name
+            });
+            controller.enqueue(encoder.encode(`${metadataChunk}\n`));
 
-    // LOG 5: Generate AI Response
-    console.log(`[Chat API] Requesting generation from ${provider.name} using model ${modelId}...`);
-    const result = await provider.generate({
-      persona,
-      summary,
-      history: historyForProvider,
-      user: message,
-      modelId
-    });
+            // LOG 4: Save User Message to Blob
+            console.log(`[Chat API] Saving user message...`);
+            await saveMessage(actorId, "user", message, chatId);
 
-    if (!result || !result.text) {
-      throw new Error(`AI Provider ${provider.name} returned an empty response.`);
-    }
+            // LOG 5: Generate AI Response
+            console.log(`[Chat API] Requesting generation from ${provider.name} using model ${modelId}...`);
+            const result = await provider.generate({
+              persona,
+              summary,
+              history: historyForProvider,
+              user: message,
+              modelId
+            });
 
-    // LOG 6: Save Assistant Response & Update Summary
-    console.log(`[Chat API] Generation successful. Saving assistant response.`);
-    await saveMessage(actorId, "assistant", result.text, chatId, result.model);
-    
-    // Non-blocking summary update
-    void maybeUpdateSummary(actorId).catch((err: unknown) => 
-      console.error("[Chat API] Background Summary Update Error:", err)
-    );
+            if (!result || !result.text) {
+              throw new Error(`AI Provider ${provider.name} returned an empty response.`);
+            }
 
-    // LOG 7: Return final response
-    // Note: Since your provider returns the full text, we return it as JSON.
-    // If your frontend useChat hook requires a stream, we can wrap this text in one.
-    return NextResponse.json({
-      text: result.text,
-      provider: result.provider,
-      model: result.model,
-      routingModel: overrideModel ?? modelId
-    }, {
-      headers: {
-        "Content-Type": "application/json",
-        "Cache-Control": "no-cache"
+            const contentChunk = JSON.stringify({
+              type: "content",
+              text: result.text,
+              provider: result.provider,
+              model: result.model
+            });
+            controller.enqueue(encoder.encode(`${contentChunk}\n`));
+
+            // LOG 6: Save Assistant Response & Update Summary
+            console.log(`[Chat API] Generation successful. Saving assistant response.`);
+            await saveMessage(actorId, "assistant", result.text, chatId, result.model);
+
+            // Non-blocking summary update
+            void maybeUpdateSummary(actorId).catch((err: unknown) =>
+              console.error("[Chat API] Background Summary Update Error:", err)
+            );
+
+            controller.close();
+          } catch (error: unknown) {
+            console.error("[Chat API] Stream Runtime Error:", error);
+            controller.error(error);
+          }
+        })();
       }
     });
 
+    return new NextResponse(stream, {
+      headers: {
+        "Content-Type": "application/x-ndjson; charset=utf-8",
+        "Cache-Control": "no-cache",
+        "X-Routing-Model": modelId,
+        "X-Routing-Provider": provider.name
+      }
+    });
   } catch (error: unknown) {
     // LOG 8: Catch-all for 500 errors
     const errorMessage = error instanceof Error ? error.message : "Unexpected error";
     console.error("[Chat API] Fatal Runtime Error:", {
       message: errorMessage,
-      stack: error instanceof Error ? error.stack : undefined,
+      stack: error instanceof Error ? error.stack : undefined
     });
-    
-    return NextResponse.json(
-      { error: errorMessage },
-      { status: 500 }
-    );
+
+    return NextResponse.json({ error: errorMessage }, { status: 500 });
   }
 }

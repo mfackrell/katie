@@ -24,6 +24,7 @@ export function ChatPanel({ actorId, chatId }: ChatPanelProps) {
   const [meta, setMeta] = useState<{ provider: string; model: string } | null>(null);
   const [availableModels, setAvailableModels] = useState<AvailableModels>({});
   const [selectedOverride, setSelectedOverride] = useState<SelectedOverride>(null);
+  const [streamingModel, setStreamingModel] = useState<string | null>(null);
 
   const canSend = useMemo(() => input.trim().length > 0 && !loading, [input, loading]);
 
@@ -51,6 +52,7 @@ export function ChatPanel({ actorId, chatId }: ChatPanelProps) {
     const content = input.trim();
     setInput("");
     setLoading(true);
+    setStreamingModel(null);
 
     setMessages((current) => [
       ...current,
@@ -63,49 +65,127 @@ export function ChatPanel({ actorId, chatId }: ChatPanelProps) {
       }
     ]);
 
-    const response = await fetch("/api/chat", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        actorId,
-        chatId,
-        message: content,
-        overrideProvider: selectedOverride?.providerName,
-        overrideModel: selectedOverride?.modelId
-      })
-    });
+    try {
+      const response = await fetch("/api/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          actorId,
+          chatId,
+          message: content,
+          overrideProvider: selectedOverride?.providerName,
+          overrideModel: selectedOverride?.modelId
+        })
+      });
 
-    const data = (await response.json()) as { text?: string; provider?: string; model?: string; error?: string };
+      if (!response.ok) {
+        const errorData = (await response.json()) as { error?: string };
+        setMessages((current) => [
+          ...current,
+          {
+            id: crypto.randomUUID(),
+            chatId,
+            role: "assistant",
+            content: errorData.error ?? "Something went wrong.",
+            createdAt: new Date().toISOString()
+          }
+        ]);
+        return;
+      }
 
-    if (!response.ok) {
+      const headerRoutingModel = response.headers.get("X-Routing-Model");
+      if (headerRoutingModel) {
+        setStreamingModel(headerRoutingModel);
+      }
+
+      if (!response.body) {
+        throw new Error("Missing response stream from /api/chat.");
+      }
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffered = "";
+      let textContent = "";
+      let provider = "unknown";
+      let model = "unknown";
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) {
+          break;
+        }
+
+        buffered += decoder.decode(value, { stream: true });
+        const lines = buffered.split("\n");
+        buffered = lines.pop() ?? "";
+
+        for (const line of lines) {
+          if (!line.trim()) {
+            continue;
+          }
+
+          const chunk = JSON.parse(line) as
+            | { type: "metadata"; modelId: string; provider: string }
+            | { type: "content"; text: string; provider?: string; model?: string };
+
+          if (chunk.type === "metadata") {
+            setStreamingModel(chunk.modelId);
+            provider = chunk.provider;
+          }
+
+          if (chunk.type === "content") {
+            textContent += chunk.text;
+            provider = chunk.provider ?? provider;
+            model = chunk.model ?? model;
+          }
+        }
+      }
+
+      if (buffered.trim()) {
+        const trailingChunk = JSON.parse(buffered) as
+          | { type: "metadata"; modelId: string; provider: string }
+          | { type: "content"; text: string; provider?: string; model?: string };
+
+        if (trailingChunk.type === "metadata") {
+          setStreamingModel(trailingChunk.modelId);
+          provider = trailingChunk.provider;
+        }
+
+        if (trailingChunk.type === "content") {
+          textContent += trailingChunk.text;
+          provider = trailingChunk.provider ?? provider;
+          model = trailingChunk.model ?? model;
+        }
+      }
+
+      setMeta({ provider, model });
       setMessages((current) => [
         ...current,
         {
           id: crypto.randomUUID(),
           chatId,
           role: "assistant",
-          content: data.error ?? "Something went wrong.",
+          model,
+          content: textContent,
           createdAt: new Date().toISOString()
         }
       ]);
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : "Something went wrong.";
+      setMessages((current) => [
+        ...current,
+        {
+          id: crypto.randomUUID(),
+          chatId,
+          role: "assistant",
+          content: message,
+          createdAt: new Date().toISOString()
+        }
+      ]);
+    } finally {
       setLoading(false);
-      return;
+      setStreamingModel(null);
     }
-
-    setMeta({ provider: data.provider ?? "unknown", model: data.model ?? "unknown" });
-    setMessages((current) => [
-      ...current,
-      {
-        id: crypto.randomUUID(),
-        chatId,
-        role: "assistant",
-        model: data.model,
-        content: data.text ?? "",
-        createdAt: new Date().toISOString()
-      }
-    ]);
-
-    setLoading(false);
   }
 
   const providerNames = Object.keys(availableModels) as ProviderName[];
@@ -180,7 +260,7 @@ export function ChatPanel({ actorId, chatId }: ChatPanelProps) {
           <div className="flex w-fit items-center gap-3 rounded-lg border border-zinc-700 bg-zinc-900 px-4 py-3 text-sm text-zinc-400">
             <div className="h-4 w-4 animate-spin rounded-full border-2 border-emerald-500 border-t-transparent" />
             <p className="italic">
-              {selectedOverride ? `${selectedOverride.modelId}` : "Master Router"} is thinking...
+              {streamingModel ?? selectedOverride?.modelId ?? "Master Router"} is thinking...
             </p>
           </div>
         )}
