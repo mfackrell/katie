@@ -37,19 +37,17 @@ function extractImageUrl(part: { type?: string; [key: string]: unknown }): strin
     return `data:image/png;base64,${part.b64_json}`;
   }
 
-  if (
-    part.inlineData &&
-    typeof part.inlineData === "object" &&
-    "data" in part.inlineData &&
-    typeof (part.inlineData as { data?: unknown }).data === "string"
-  ) {
-    const mimeType =
-      (part.inlineData as { mimeType?: unknown }).mimeType &&
-      typeof (part.inlineData as { mimeType?: unknown }).mimeType === "string"
-        ? ((part.inlineData as { mimeType: string }).mimeType)
-        : "image/png";
+  if (part.inlineData && typeof part.inlineData === "object") {
+    const inlineData = part.inlineData as Record<string, unknown>;
+    const data = typeof inlineData.data === "string" ? inlineData.data : null;
 
-    return `data:${mimeType};base64,${(part.inlineData as { data: string }).data}`;
+    if (!data) {
+      return null;
+    }
+
+    const mimeType = typeof inlineData.mimeType === "string" ? inlineData.mimeType : "image/png";
+
+    return `data:${mimeType};base64,${data}`;
   }
 
   return null;
