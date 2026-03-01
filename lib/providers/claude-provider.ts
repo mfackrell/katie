@@ -16,7 +16,27 @@ export class ClaudeProvider implements LlmProvider {
   constructor(private apiKey: string) {}
 
   async listModels(): Promise<string[]> {
-    return ["claude-4.6-opus", "claude-4.5-sonnet", "claude-4.5-haiku"];
+    try {
+      const response = await fetch("https://api.anthropic.com/v1/models", {
+        method: "GET",
+        headers: {
+          "x-api-key": this.apiKey,
+          "anthropic-version": "2023-06-01"
+        }
+      });
+
+      if (!response.ok) {
+        const detail = await response.text();
+        console.error(`[ClaudeProvider] Failed to list models: ${detail}`);
+        return [];
+      }
+
+      const data = (await response.json()) as { data: Array<{ id: string }> };
+      return data.data.map((model) => model.id);
+    } catch (error) {
+      console.error("[ClaudeProvider] Network error listing models:", error);
+      return [];
+    }
   }
 
   async generate(params: ChatGenerateParams): Promise<ProviderResponse> {
