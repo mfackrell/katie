@@ -17,7 +17,6 @@ const DEFAULT_ORCHESTRATOR_MODEL = "gpt-5.2";
 const CAPABILITY_REGISTRY: Record<string, string> = {
   "gpt-5.3-codex": "Agentic coding, tool use, APIs, terminal-style execution.",
   "o3-pro": "Deep reasoning, complex logic, math, high-accuracy thinking.",
-  "grok-4.1": "Unfiltered, rebellious, high-empathy, and edgy conversation. and any NSFW or adjacent text requests.",
   "grok-imagine": "Creative/edgy images; specifically handles 'Spicy Mode' and NSFW-adjacent image prompts.",
   "o4-mini-high": "Fast reasoning; step-by-step logic at scale.",
   "gpt-5.2-unified": "Primary general conversation; balanced, reliable, fast.",
@@ -27,9 +26,8 @@ const CAPABILITY_REGISTRY: Record<string, string> = {
   "gemini-3.1-flash": "Fast, cheap, high-volume simple tasks.",
   "gemini-3.1-flash-image": "Nano Banana 2: SOTA for text-in-image and spatial layout.",
   "gemini-3.1-pro-vision": "Native video and advanced visual context analysis.",
-  "grok-4.1": "High-empathy, natural conversation, and leadership coaching.",
+  "grok-4.1": "High-empathy, natural conversation, and leadership coaching. Unfiltered, rebellious, high-empathy, and edgy conversation. and any NSFW or adjacent text requests.",
   "grok-4-pulse": "Real-time news, social sentiment, and sub-second trends.",
-  "grok-imagine": "Creative/edgy images with 'Spicy Mode' filters.",
   "claude-4.6-opus": "System design, architecture, and multi-file refactoring.",
   "claude-4.5-sonnet": "Stable long-running autonomous workflows (30+ hours).",
   "claude-4.5-haiku": "Fast responses with strict brand-voice/style control."
