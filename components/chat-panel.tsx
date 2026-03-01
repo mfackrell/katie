@@ -239,6 +239,15 @@ export function ChatPanel({ actorId, chatId }: ChatPanelProps) {
 
   const providerNames = Object.keys(availableModels) as ProviderName[];
 
+  function handleDownload(dataUrl: string, filename: string) {
+    const link = document.createElement("a");
+    link.href = dataUrl;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  }
+
   return (
     <main className="flex h-screen flex-1 flex-col">
       <header className="border-b border-zinc-800 px-6 py-4">
@@ -304,15 +313,24 @@ export function ChatPanel({ actorId, chatId }: ChatPanelProps) {
             </p>
             {message.content ? <p className="whitespace-pre-wrap">{message.content}</p> : null}
             {message.assets?.filter((asset) => asset.type === "image").map((asset) => (
-              <div key={asset.url} className="relative mt-3 h-80 w-full overflow-hidden rounded-md border border-zinc-700">
-                <Image
-                  src={asset.url}
-                  alt="Generated asset"
-                  fill
-                  sizes="(max-width: 768px) 100vw, 768px"
-                  className="object-contain"
-                  unoptimized
-                />
+              <div key={asset.url} className="group relative mt-3">
+                <div className="relative h-80 w-full overflow-hidden rounded-md border border-zinc-700">
+                  <Image
+                    src={asset.url}
+                    alt="Generated asset"
+                    fill
+                    sizes="(max-width: 768px) 100vw, 768px"
+                    className="object-contain"
+                    unoptimized
+                  />
+                </div>
+                <button
+                  type="button"
+                  onClick={() => handleDownload(asset.url, `katie-generated-${Date.now()}.png`)}
+                  className="absolute right-2 top-2 rounded-md bg-zinc-950/85 px-2 py-1 text-xs font-medium text-white opacity-0 transition-opacity hover:bg-zinc-800 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 group-hover:opacity-100"
+                >
+                  Download
+                </button>
               </div>
             ))}
           </div>
