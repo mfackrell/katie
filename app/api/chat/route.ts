@@ -15,6 +15,44 @@ const requestSchema = z.object({
   overrideModel: z.string().min(1).optional()
 });
 
+function extractImageUrl(part: { type?: string; [key: string]: unknown }): string | null {
+  if (typeof part.url === "string") {
+    return part.url;
+  }
+
+  if (typeof part.image_url === "string") {
+    return part.image_url;
+  }
+
+  if (
+    part.image_url &&
+    typeof part.image_url === "object" &&
+    "url" in part.image_url &&
+    typeof (part.image_url as { url?: unknown }).url === "string"
+  ) {
+    return (part.image_url as { url: string }).url;
+  }
+
+  if (typeof part.b64_json === "string") {
+    return `data:image/png;base64,${part.b64_json}`;
+  }
+
+  if (part.inlineData && typeof part.inlineData === "object") {
+    const inlineData = part.inlineData as Record<string, unknown>;
+    const data = typeof inlineData.data === "string" ? inlineData.data : null;
+
+    if (!data) {
+      return null;
+    }
+
+    const mimeType = typeof inlineData.mimeType === "string" ? inlineData.mimeType : "image/png";
+
+    return `data:${mimeType};base64,${data}`;
+  }
+
+  return null;
+}
+
 export async function POST(request: NextRequest) {
   try {
     // LOG 1: Capture the incoming request
@@ -103,8 +141,20 @@ export async function POST(request: NextRequest) {
 
             const imageAssets =
               result.content
-                ?.filter((part) => part.type === "image" && typeof part.url === "string")
-                .map((part) => ({ type: "image", url: part.url as string })) ?? [];
+                ?.map((part) => {
+                  const partType = typeof part.type === "string" ? part.type.toLowerCase() : "";
+                  if (!partType.includes("image")) {
+                    return null;
+                  }
+
+                  const url = extractImageUrl(part);
+                  if (!url) {
+                    return null;
+                  }
+
+                  return { type: "image", url };
+                })
+                .filter((asset): asset is { type: "image"; url: string } => Boolean(asset)) ?? [];
 
             const contentChunk = JSON.stringify({
               type: "content",
