@@ -49,7 +49,6 @@ export async function POST(request: NextRequest) {
     const historyForProvider = history.map(({ role, content }) => ({ role, content }));
     let provider = providers[0];
     let modelId = "";
-    let routingDecisionModelId = "";
 
     if (overrideProvider && overrideModel) {
       const manualProvider = providers.find((candidate) => candidate.name === overrideProvider);
@@ -59,14 +58,12 @@ export async function POST(request: NextRequest) {
 
       provider = manualProvider;
       modelId = overrideModel;
-      routingDecisionModelId = overrideModel;
       console.log(`[Chat API] Override active. Provider: ${provider.name}, Model: ${modelId}`);
     } else {
       const routingContext = "";
       const routingDecision = await chooseProvider(message, routingContext, providers);
       provider = routingDecision.provider;
       modelId = routingDecision.modelId;
-      routingDecisionModelId = routingDecision.modelId;
       console.log(`[Chat API] Selected Provider: ${provider.name}, Model: ${modelId}`);
       console.log(`[Chat API] Routing Model For UI: ${routingDecision.routerModel}`);
       console.log(`[Chat API] Routing Reasoning: ${routingDecision.reasoning}`);
