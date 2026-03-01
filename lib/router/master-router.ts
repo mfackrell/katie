@@ -4,7 +4,7 @@ import { LlmProvider } from "@/lib/providers/types";
 export type RoutingDecision = {
   provider: LlmProvider;
   modelId: string;
-  reasoning?: string;
+  reasoning: string;
 };
 
 type ProviderName = "openai" | "google";
@@ -12,6 +12,25 @@ type RoutingChoice = { providerName: ProviderName; modelId: string };
 
 const ORCHESTRATOR_MODELS = ["gpt-5.2", "gemini-3.1-pro"] as const;
 const DEFAULT_ORCHESTRATOR_MODEL = "gpt-5.2";
+
+const CAPABILITY_REGISTRY: Record<string, string> = {
+  "gpt-5.3-codex": "Agentic coding, tool use, APIs, terminal-style execution.",
+  "o3-pro": "Deep reasoning, complex logic, math, high-accuracy thinking.",
+  "o4-mini-high": "Fast reasoning; step-by-step logic at scale.",
+  "gpt-5.2-unified": "Primary general conversation; balanced, reliable, fast.",
+  "gpt-4o-data-extraction": "Strict JSON/schema extraction and SQL mapping.",
+  "gpt-4o-audio": "Native audio processing; tone and sarcasm detection.",
+  "gemini-3.1-pro": "Massive context leadership (2M+ tokens); complex doc/video analysis.",
+  "gemini-3.1-flash": "Fast, cheap, high-volume simple tasks.",
+  "gemini-3.1-flash-image": "Nano Banana 2: SOTA for text-in-image and spatial layout.",
+  "gemini-3.1-pro-vision": "Native video and advanced visual context analysis.",
+  "grok-4.1": "High-empathy, natural conversation, and leadership coaching.",
+  "grok-4-pulse": "Real-time news, social sentiment, and sub-second trends.",
+  "grok-imagine": "Creative/edgy images with 'Spicy Mode' filters.",
+  "claude-4.6-opus": "System design, architecture, and multi-file refactoring.",
+  "claude-4.5-sonnet": "Stable long-running autonomous workflows (30+ hours).",
+  "claude-4.5-haiku": "Fast responses with strict brand-voice/style control."
+};
 
 function getOrchestratorModel(): (typeof ORCHESTRATOR_MODELS)[number] {
   const configuredModel = process.env.ROUTING_ORCHESTRATOR_MODEL;
@@ -112,7 +131,9 @@ export async function chooseProvider(
           {
             role: "system",
             content:
-              "You are the Polyglot Actor Orchestrator. Your only job is to select the best model from the provided list based on the conversation context and the user's latest intent. Do not use heuristics; use your full reasoning capability.\n\nAvailable model manifest:\n" +
+              "You are the Polyglot Actor Orchestrator. Your only job is to select the best model from the provided list based on the conversation context and the user's latest intent. Use the capability metadata below as your primary selection criteria, then constrain your final choice to the currently available model manifest.\n\nCapability Registry:\n" +
+              JSON.stringify(CAPABILITY_REGISTRY, null, 2) +
+              "\n\nAvailable model manifest:\n" +
               manifest +
               "\n\nReturn only one selection as either a plain string in the exact format provider:model or strict JSON: {\"provider\":\"openai|google\",\"model\":\"model-id\"}. You MUST ONLY select from the manifest above."
           },
