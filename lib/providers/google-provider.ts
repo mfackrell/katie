@@ -51,6 +51,11 @@ function isGemini3Model(modelId: string): boolean {
   return /^gemini-3(\.|-)/.test(modelId);
 }
 
+function isImageGenerationModel(modelId: string): boolean {
+  const lowerModel = modelId.toLowerCase();
+  return lowerModel.includes("image") || lowerModel.includes("banana");
+}
+
 export class GoogleProvider implements LlmProvider {
   name = "google" as const;
   private client: GoogleGenAI;
@@ -103,6 +108,7 @@ export class GoogleProvider implements LlmProvider {
 
     const thinkingLevelInput =
       parsedModel.thinkingLevelInput ?? (isGemini3Model(selectedModel) ? "medium" : undefined);
+    const isImageTask = isImageGenerationModel(selectedModel);
 
     try {
       const result = await this.client.models.generateContent({
@@ -110,6 +116,7 @@ export class GoogleProvider implements LlmProvider {
         contents,
         config: {
           systemInstruction: params.persona,
+          responseModalities: isImageTask ? ["TEXT", "IMAGE"] : ["TEXT"],
           ...(thinkingLevelInput
             ? { thinkingConfig: { thinkingLevel: toGoogleThinkingLevel(thinkingLevelInput) } }
             : {})
