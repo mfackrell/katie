@@ -42,6 +42,10 @@ export async function getActorById(actorId: string): Promise<Actor | null> {
 
 export async function getRecentMessages(actorId: string, limit = 20): Promise<Message[]> {
   const blobMessages = await blobGet<Message[]>(`messages/${actorId}.json`);
+  if (blobMessages) {
+    memoryMessages.set(actorId, blobMessages);
+  }
+
   const messages = blobMessages ?? memoryMessages.get(actorId) ?? [];
   return messages.slice(-limit);
 }
@@ -53,7 +57,12 @@ export async function saveMessage(
   chatId: string,
   model?: string
 ): Promise<void> {
-  const current = memoryMessages.get(actorId) ?? [];
+  let current = memoryMessages.get(actorId);
+
+  if (!current) {
+    current = (await blobGet<Message[]>(`messages/${actorId}.json`)) ?? [];
+  }
+
   const next = [
     ...current,
     {
