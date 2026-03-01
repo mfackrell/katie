@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, KeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
 import type { Message } from "@/lib/types/chat";
 
 type ProviderName = "openai" | "google";
@@ -26,6 +26,7 @@ export function ChatPanel({ actorId, chatId }: ChatPanelProps) {
   const [selectedOverride, setSelectedOverride] = useState<SelectedOverride>(null);
   const [streamingModel, setStreamingModel] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const canSend = useMemo(() => input.trim().length > 0 && !loading, [input, loading]);
 
@@ -192,6 +193,29 @@ export function ChatPanel({ actorId, chatId }: ChatPanelProps) {
     }
   }
 
+  function handleKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
+    if (event.key === "Enter" && !event.shiftKey) {
+      event.preventDefault();
+      void onSubmit(event);
+    }
+  }
+
+  function handleInputChange(event: FormEvent<HTMLTextAreaElement>) {
+    const textarea = event.currentTarget;
+    setInput(textarea.value);
+
+    textarea.style.height = "auto";
+    textarea.style.height = `${Math.min(textarea.scrollHeight, 192)}px`;
+  }
+
+  useEffect(() => {
+    if (!textareaRef.current || input.length !== 0) {
+      return;
+    }
+
+    textareaRef.current.style.height = "auto";
+  }, [input]);
+
   const providerNames = Object.keys(availableModels) as ProviderName[];
 
   return (
@@ -272,12 +296,15 @@ export function ChatPanel({ actorId, chatId }: ChatPanelProps) {
       </section>
 
       <form onSubmit={onSubmit} className="border-t border-zinc-800 p-4">
-        <div className="flex gap-2">
-          <input
+        <div className="flex items-end gap-2">
+          <textarea
+            ref={textareaRef}
+            rows={1}
             value={input}
-            onChange={(event) => setInput(event.target.value)}
+            onChange={handleInputChange}
+            onKeyDown={handleKeyDown}
             placeholder="Ask your actor something..."
-            className="flex-1 rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm outline-none ring-emerald-500 focus:ring"
+            className="min-h-[40px] max-h-48 flex-1 resize-none overflow-y-auto rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm outline-none ring-emerald-500 focus:ring"
           />
           <button
             type="submit"
