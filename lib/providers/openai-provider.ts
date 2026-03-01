@@ -101,9 +101,10 @@ export class OpenAiProvider implements LlmProvider {
         (modelLower.includes("gpt-4") && !modelLower.includes("gpt-5")) ||
         modelLower.includes("gpt-3.5");
 
-      // 3. RESPONSES API ROUTING: For GPT-5 and o-series reasoning models (excluding search preview)
+      // 3. RESPONSES API ROUTING: For GPT-5, image, and o-series reasoning models (excluding search preview)
       const isResponsesApi =
-        (modelLower.includes("gpt-5") || /^o[1-4]/.test(modelLower)) && !modelLower.includes("search-preview");
+        (modelLower.includes("gpt-5") || modelLower.includes("image") || /^o[1-4]/.test(modelLower)) &&
+        !modelLower.includes("search-preview");
 
       try {
         if (isLegacy) {
