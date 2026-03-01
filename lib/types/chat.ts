@@ -26,4 +26,5 @@ export interface ChatRequest {
   actorId: string;
   chatId: string;
   message: string;
+  images?: string[];
 }
