@@ -64,6 +64,7 @@ export async function POST(request: NextRequest) {
       provider = routingDecision.provider;
       modelId = routingDecision.modelId;
       console.log(`[Chat API] Selected Provider: ${provider.name}, Model: ${modelId}`);
+      console.log(`[Chat API] Routing Model For UI: ${routingDecision.routerModel}`);
       console.log(`[Chat API] Routing Reasoning: ${routingDecision.reasoning}`);
     }
 
@@ -100,7 +101,8 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({
       text: result.text,
       provider: result.provider,
-      model: result.model
+      model: result.model,
+      routingModel: overrideModel ?? modelId
     }, {
       headers: {
         "Content-Type": "application/json",
