@@ -239,13 +239,27 @@ export function ChatPanel({ actorId, chatId }: ChatPanelProps) {
 
   const providerNames = Object.keys(availableModels) as ProviderName[];
 
-  function handleDownload(dataUrl: string, filename: string) {
-    const link = document.createElement("a");
-    link.href = dataUrl;
-    link.download = filename;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+  async function handleDownload(imageUrl: string, filename: string) {
+    try {
+      const response = await fetch(imageUrl);
+      if (!response.ok) {
+        throw new Error(`Image download failed with status ${response.status}`);
+      }
+
+      const imageBlob = await response.blob();
+      const blobUrl = URL.createObjectURL(imageBlob);
+
+      const link = document.createElement("a");
+      link.href = blobUrl;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+
+      URL.revokeObjectURL(blobUrl);
+    } catch {
+      window.open(imageUrl, "_blank", "noopener,noreferrer");
+    }
   }
 
   return (
@@ -326,7 +340,7 @@ export function ChatPanel({ actorId, chatId }: ChatPanelProps) {
                 </div>
                 <button
                   type="button"
-                  onClick={() => handleDownload(asset.url, `katie-generated-${Date.now()}.png`)}
+                  onClick={() => void handleDownload(asset.url, `katie-generated-${Date.now()}.png`)}
                   className="absolute right-2 top-2 rounded-md bg-zinc-950/85 px-2 py-1 text-xs font-medium text-white opacity-0 transition-opacity hover:bg-zinc-800 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 group-hover:opacity-100"
                 >
                   Download
