@@ -38,7 +38,7 @@ export async function POST(request: NextRequest) {
     if (!providers.length) {
       console.error("[Chat API] Error: No AI providers found in environment variables.");
       return NextResponse.json(
-        { error: "No providers configured. Add OPENAI_API_KEY and/or GOOGLE_API_KEY." },
+        { error: "No providers configured. Add OPENAI_API_KEY, GOOGLE_API_KEY, grok_api_key, and/or CLAUDE_API_KEY." },
         { status: 500 }
       );
     }
@@ -60,7 +60,10 @@ export async function POST(request: NextRequest) {
       modelId = overrideModel;
       console.log(`[Chat API] Override active. Provider: ${provider.name}, Model: ${modelId}`);
     } else {
-      const routingContext = "";
+      const routingContext = `
+  Persona: ${persona}
+  Recent History: ${JSON.stringify(history.slice(-3))}
+`;
       const routingDecision = await chooseProvider(message, routingContext, providers);
       provider = routingDecision.provider;
       modelId = routingDecision.modelId;

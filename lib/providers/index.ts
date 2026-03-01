@@ -2,6 +2,7 @@ import { GoogleProvider } from "@/lib/providers/google-provider";
 import { OpenAiProvider } from "@/lib/providers/openai-provider";
 import { GrokProvider } from "@/lib/providers/grok-provider";
 import { LlmProvider } from "@/lib/providers/types";
+import { ClaudeProvider } from "@/lib/providers/claude-provider";
 
 export function getAvailableProviders(): LlmProvider[] {
   const providers: LlmProvider[] = [];
@@ -17,6 +18,11 @@ export function getAvailableProviders(): LlmProvider[] {
   const grokKey = process.env["grok_api_key"];
   if (grokKey) {
     providers.push(new GrokProvider(grokKey));
+  }
+
+  const claudeKey = process.env.CLAUDE_API_KEY ?? process.env["claude_api_key"];
+  if (claudeKey) {
+    providers.push(new ClaudeProvider(claudeKey));
   }
 
   return providers;
