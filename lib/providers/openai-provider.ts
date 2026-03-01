@@ -52,7 +52,7 @@ function toResponsesInput(params: ChatGenerateParams): OpenAI.Responses.Response
   const userContent: OpenAI.Responses.ResponseInputMessageContentList = [{ type: "input_text", text: params.user }];
   if (params.images) {
     params.images.forEach((url) => {
-      userContent.push({ type: "input_image", image_url: url });
+      userContent.push({ type: "input_image", image_url: url, detail: "auto" });
     });
   }
 
