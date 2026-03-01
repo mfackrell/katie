@@ -8,7 +8,7 @@ export type RoutingDecision = {
   routerModel: string;
 };
 
-type ProviderName = "openai" | "google";
+type ProviderName = "openai" | "google" | "grok";
 type RoutingChoice = { providerName: ProviderName; modelId: string };
 
 const ORCHESTRATOR_MODELS = ["gpt-5.2", "gemini-3.1-pro"] as const;
@@ -52,6 +52,10 @@ function pickDefaultModel(provider: LlmProvider, models: string[]): string {
     return models.find((model) => model.includes("gemini-3.1-pro-preview")) ?? models[0] ?? "gemini-3.1-pro-preview";
   }
 
+  if (provider.name === "grok") {
+    return models.find((model) => model.includes("grok-2-1212")) ?? models[0] ?? "grok-2-1212";
+  }
+
   return models.find((model) => model.includes("gpt-5.2")) ?? models[0] ?? "gpt-5.2";
 }
 
@@ -64,7 +68,7 @@ function normalizeRoutingChoice(rawChoice: string): RoutingChoice | null {
       const providerName = typeof parsed.provider === "string" ? parsed.provider.trim().toLowerCase() : null;
       const modelId = typeof parsed.model === "string" ? parsed.model.trim() : "";
 
-      if ((providerName === "openai" || providerName === "google") && modelId) {
+      if ((providerName === "openai" || providerName === "google" || providerName === "grok") && modelId) {
         return { providerName, modelId };
       }
     } catch {
@@ -75,7 +79,7 @@ function normalizeRoutingChoice(rawChoice: string): RoutingChoice | null {
   const [providerNameRaw, ...modelParts] = rawChoice.split(":");
   const providerName = providerNameRaw?.trim().toLowerCase();
 
-  if ((providerName !== "openai" && providerName !== "google") || modelParts.length === 0) {
+  if ((providerName !== "openai" && providerName !== "google" && providerName !== "grok") || modelParts.length === 0) {
     return null;
   }
 
@@ -138,7 +142,7 @@ export async function chooseProvider(
               JSON.stringify(CAPABILITY_REGISTRY, null, 2) +
               "\n\nAvailable model manifest:\n" +
               manifest +
-              "\n\nReturn only one selection as either a plain string in the exact format provider:model or strict JSON: {\"provider\":\"openai|google\",\"model\":\"model-id\"}. You MUST ONLY select from the manifest above."
+              "\n\nReturn only one selection as either a plain string in the exact format provider:model or strict JSON: {\"provider\":\"openai|google|grok\",\"model\":\"model-id\"}. You MUST ONLY select from the manifest above."
           },
           {
             role: "user",

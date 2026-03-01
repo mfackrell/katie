@@ -9,7 +9,7 @@ export interface ChatGenerateParams {
 export interface ProviderResponse {
   text: string;
   model: string;
-  provider: "openai" | "google";
+  provider: "openai" | "google" | "grok";
   content?: Array<{
     type: string;
     text?: string;
@@ -24,7 +24,7 @@ export interface ProviderResponse {
 }
 
 export interface LlmProvider {
-  name: "openai" | "google";
+  name: "openai" | "google" | "grok";
   listModels(): Promise<string[]>;
   generate(params: ChatGenerateParams): Promise<ProviderResponse>;
 }
