@@ -121,29 +121,19 @@ export class GoogleProvider implements LlmProvider {
       const content: Array<{ type: string; url: string }> = [];
 
       for (const part of responseParts) {
-        if (typeof part.text === "string" && part.text.length > 0) {
+        if (part.text) {
           text += part.text;
-        }
-
-        if (
-          part.inlineData &&
-          typeof part.inlineData.data === "string" &&
-          typeof part.inlineData.mimeType === "string"
-        ) {
-          content.push({
-            type: "image",
-            url: `data:${part.inlineData.mimeType};base64,${part.inlineData.data}`
-          });
+        } else if (part.inlineData) {
+          const dataUrl = `data:${part.inlineData.mimeType};base64,${part.inlineData.data}`;
+          content.push({ type: "image", url: dataUrl });
         }
       }
 
-      text = text || result.text || "";
-
       return {
-        text,
+        text: text || (content.length > 0 ? "[Image Generated]" : ""),
         model: selectedModel,
         provider: this.name,
-        content
+        content: content.length > 0 ? content : undefined
       };
     } catch (error: unknown) {
       const detail = error instanceof Error ? error.message : String(error);
