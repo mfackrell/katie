@@ -29,7 +29,19 @@ function extractOutputItems(response: OpenAI.Responses.Response): ResponseConten
   const items: ResponseContentItem[] = [];
 
   for (const outputItem of response.output ?? []) {
-    if (!outputItem || !("content" in outputItem) || !Array.isArray(outputItem.content)) {
+    if (!outputItem) {
+      continue;
+    }
+
+    if (
+      outputItem.type === "image_generation_call" &&
+      "result" in outputItem &&
+      typeof outputItem.result === "string"
+    ) {
+      items.push({ type: outputItem.type, b64_json: outputItem.result });
+    }
+
+    if (!("content" in outputItem) || !Array.isArray(outputItem.content)) {
       continue;
     }
 
@@ -61,6 +73,10 @@ function extractText(outputItems: ResponseContentItem[], outputText: string | nu
     .map((item) => item.text)
     .join("\n")
     .trim();
+}
+
+function isImageGenerationModel(modelLower: string): boolean {
+  return modelLower.includes("image") || modelLower.includes("nano-banana");
 }
 
 export class OpenAiProvider implements LlmProvider {
@@ -103,7 +119,7 @@ export class OpenAiProvider implements LlmProvider {
 
       // 3. RESPONSES API ROUTING: For GPT-5, image, and o-series reasoning models (excluding search preview)
       const isResponsesApi =
-        (modelLower.includes("gpt-5") || modelLower.includes("image") || /^o[1-4]/.test(modelLower)) &&
+        (modelLower.includes("gpt-5") || modelLower.includes("image") || modelLower.includes("nano-banana") || /^o[1-4]/.test(modelLower)) &&
         !modelLower.includes("search-preview");
 
       try {
@@ -121,9 +137,16 @@ export class OpenAiProvider implements LlmProvider {
         }
 
         if (isResponsesApi) {
+          const wantsImageOutput = isImageGenerationModel(modelLower);
           const response = await this.client.responses.create({
             model: selectedModel,
-            input: toStatefulInput(params)
+            input: toStatefulInput(params),
+            ...(wantsImageOutput
+              ? {
+                  modalities: ["text", "image"],
+                  image: { size: "1024x1024" }
+                }
+              : {})
           });
 
           const contentItems = extractOutputItems(response);
