@@ -18,6 +18,7 @@ export interface Message {
   role: Role;
   model?: string;
   content: string;
+  assets?: Array<{ type: string; url: string }>;
   createdAt: string;
 }
 

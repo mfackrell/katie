@@ -55,7 +55,8 @@ export async function saveMessage(
   role: "user" | "assistant",
   content: string,
   chatId: string,
-  model?: string
+  model?: string,
+  assets?: Array<{ type: string; url: string }>
 ): Promise<void> {
   let current = memoryMessages.get(actorId);
 
@@ -71,6 +72,7 @@ export async function saveMessage(
       role,
       model,
       content,
+      assets,
       createdAt: new Date().toISOString()
     }
   ];
