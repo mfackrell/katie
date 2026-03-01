@@ -72,51 +72,58 @@ export async function POST(request: NextRequest) {
       console.log(`[Chat API] Routing Reasoning: ${routingDecision.reasoning}`);
     }
 
-    // LOG 4: Save User Message to Blob
-    console.log(`[Chat API] Saving user message...`);
-    await saveMessage(actorId, "user", message, chatId);
-
-    // LOG 5: Generate AI Response
-    console.log(`[Chat API] Requesting generation from ${provider.name} using model ${modelId}...`);
-    const result = await provider.generate({
-      persona,
-      summary,
-      history: historyForProvider,
-      user: message,
-      modelId
-    });
-
-    if (!result || !result.text) {
-      throw new Error(`AI Provider ${provider.name} returned an empty response.`);
-    }
-
-    // LOG 6: Save Assistant Response & Update Summary
-    console.log(`[Chat API] Generation successful. Saving assistant response.`);
-    await saveMessage(actorId, "assistant", result.text, chatId, result.model);
-    
-    // Non-blocking summary update
-    void maybeUpdateSummary(actorId).catch((err: unknown) => 
-      console.error("[Chat API] Background Summary Update Error:", err)
-    );
-
-    // LOG 7: Return streaming response with metadata + content chunks.
     const stream = new ReadableStream<Uint8Array>({
       start(controller) {
-        const metadataChunk = JSON.stringify({
-          type: "metadata",
-          modelId: routingDecisionModelId,
-          provider: result.provider,
-          model: result.model
-        });
+        void (async () => {
+          try {
+            const metadataChunk = JSON.stringify({
+              type: "metadata",
+              modelId,
+              provider: provider.name
+            });
+            controller.enqueue(encoder.encode(`${metadataChunk}\n`));
 
-        const contentChunk = JSON.stringify({
-          type: "content",
-          text: result.text
-        });
+            // LOG 4: Save User Message to Blob
+            console.log(`[Chat API] Saving user message...`);
+            await saveMessage(actorId, "user", message, chatId);
 
-        controller.enqueue(encoder.encode(`${metadataChunk}\n`));
-        controller.enqueue(encoder.encode(`${contentChunk}\n`));
-        controller.close();
+            // LOG 5: Generate AI Response
+            console.log(`[Chat API] Requesting generation from ${provider.name} using model ${modelId}...`);
+            const result = await provider.generate({
+              persona,
+              summary,
+              history: historyForProvider,
+              user: message,
+              modelId
+            });
+
+            if (!result || !result.text) {
+              throw new Error(`AI Provider ${provider.name} returned an empty response.`);
+            }
+
+            const contentChunk = JSON.stringify({
+              type: "content",
+              text: result.text,
+              provider: result.provider,
+              model: result.model
+            });
+            controller.enqueue(encoder.encode(`${contentChunk}\n`));
+
+            // LOG 6: Save Assistant Response & Update Summary
+            console.log(`[Chat API] Generation successful. Saving assistant response.`);
+            await saveMessage(actorId, "assistant", result.text, chatId, result.model);
+
+            // Non-blocking summary update
+            void maybeUpdateSummary(actorId).catch((err: unknown) =>
+              console.error("[Chat API] Background Summary Update Error:", err)
+            );
+
+            controller.close();
+          } catch (error: unknown) {
+            console.error("[Chat API] Stream Runtime Error:", error);
+            controller.error(error);
+          }
+        })();
       }
     });
 
@@ -126,18 +133,14 @@ export async function POST(request: NextRequest) {
         "Cache-Control": "no-cache"
       }
     });
-
   } catch (error: unknown) {
     // LOG 8: Catch-all for 500 errors
     const errorMessage = error instanceof Error ? error.message : "Unexpected error";
     console.error("[Chat API] Fatal Runtime Error:", {
       message: errorMessage,
-      stack: error instanceof Error ? error.stack : undefined,
+      stack: error instanceof Error ? error.stack : undefined
     });
-    
-    return NextResponse.json(
-      { error: errorMessage },
-      { status: 500 }
-    );
+
+    return NextResponse.json({ error: errorMessage }, { status: 500 });
   }
 }

@@ -120,34 +120,36 @@ export function ChatPanel({ actorId, chatId }: ChatPanelProps) {
           }
 
           const chunk = JSON.parse(line) as
-            | { type: "metadata"; modelId: string; provider: string; model: string }
-            | { type: "content"; text: string };
+            | { type: "metadata"; modelId: string; provider: string }
+            | { type: "content"; text: string; provider?: string; model?: string };
 
           if (chunk.type === "metadata") {
             setStreamingModel(chunk.modelId);
             provider = chunk.provider;
-            model = chunk.model;
           }
 
           if (chunk.type === "content") {
             textContent += chunk.text;
+            provider = chunk.provider ?? provider;
+            model = chunk.model ?? model;
           }
         }
       }
 
       if (buffered.trim()) {
         const trailingChunk = JSON.parse(buffered) as
-          | { type: "metadata"; modelId: string; provider: string; model: string }
-          | { type: "content"; text: string };
+          | { type: "metadata"; modelId: string; provider: string }
+          | { type: "content"; text: string; provider?: string; model?: string };
 
         if (trailingChunk.type === "metadata") {
           setStreamingModel(trailingChunk.modelId);
           provider = trailingChunk.provider;
-          model = trailingChunk.model;
         }
 
         if (trailingChunk.type === "content") {
           textContent += trailingChunk.text;
+          provider = trailingChunk.provider ?? provider;
+          model = trailingChunk.model ?? model;
         }
       }
 
