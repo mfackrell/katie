@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import { FormEvent, KeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
 import type { Message } from "@/lib/types/chat";
 
@@ -303,12 +304,16 @@ export function ChatPanel({ actorId, chatId }: ChatPanelProps) {
             </p>
             {message.content ? <p className="whitespace-pre-wrap">{message.content}</p> : null}
             {message.assets?.filter((asset) => asset.type === "image").map((asset) => (
-              <img
-                key={asset.url}
-                src={asset.url}
-                alt="Generated content"
-                className="mt-3 max-h-80 rounded-md border border-zinc-700"
-              />
+              <div key={asset.url} className="relative mt-3 h-80 w-full overflow-hidden rounded-md border border-zinc-700">
+                <Image
+                  src={asset.url}
+                  alt="Generated asset"
+                  fill
+                  sizes="(max-width: 768px) 100vw, 768px"
+                  className="object-contain"
+                  unoptimized
+                />
+              </div>
             ))}
           </div>
         ))}
