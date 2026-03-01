@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import type { Message } from "@/lib/types/chat";
 
 type ProviderName = "openai" | "google";
@@ -25,8 +25,13 @@ export function ChatPanel({ actorId, chatId }: ChatPanelProps) {
   const [availableModels, setAvailableModels] = useState<AvailableModels>({});
   const [selectedOverride, setSelectedOverride] = useState<SelectedOverride>(null);
   const [streamingModel, setStreamingModel] = useState<string | null>(null);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const canSend = useMemo(() => input.trim().length > 0 && !loading, [input, loading]);
+
+  const scrollToBottom = () => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  };
 
   useEffect(() => {
     async function fetchModels() {
@@ -42,6 +47,10 @@ export function ChatPanel({ actorId, chatId }: ChatPanelProps) {
 
     void fetchModels();
   }, []);
+
+  useEffect(() => {
+    scrollToBottom();
+  }, [messages, loading]);
 
   async function onSubmit(event: FormEvent) {
     event.preventDefault();
@@ -259,6 +268,7 @@ export function ChatPanel({ actorId, chatId }: ChatPanelProps) {
             </p>
           </div>
         )}
+        <div ref={messagesEndRef} />
       </section>
 
       <form onSubmit={onSubmit} className="border-t border-zinc-800 p-4">
