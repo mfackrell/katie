@@ -26,7 +26,7 @@ const CAPABILITY_REGISTRY: Record<string, string> = {
   "gemini-3.1-flash": "Fast, cheap, high-volume simple tasks.",
   "gemini-3.1-flash-image": "Nano Banana 2: SOTA for text-in-image and spatial layout.",
   "gemini-3.1-pro-vision": "Native video and advanced visual context analysis.",
-  "grok-4.1": "High-empathy, natural conversation, and leadership coaching. Unfiltered, rebellious, high-empathy, and edgy conversation. and any NSFW or adjacent text requests.",
+  "grok-4.1": "High-empathy, natural conversation, and leadership coaching. Anything sexual in nature that is not strictly educational. Unfiltered, rebellious, high-empathy, and edgy conversation. and any NSFW or adjacent text requests.",
   "grok-4-pulse": "Real-time news, social sentiment, and sub-second trends.",
   "claude-4.6-opus": "System design, architecture, and multi-file refactoring.",
   "claude-4.5-sonnet": "Stable long-running autonomous workflows (30+ hours).",
