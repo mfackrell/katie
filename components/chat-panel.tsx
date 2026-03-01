@@ -237,8 +237,10 @@ export function ChatPanel({ actorId, chatId }: ChatPanelProps) {
     files.forEach((file) => {
       const reader = new FileReader();
       reader.onloadend = () => {
-        if (typeof reader.result === "string") {
-          setSelectedImages((current) => [...current, reader.result]);
+        const result = reader.result;
+
+        if (typeof result === "string") {
+          setSelectedImages((current) => [...current, result]);
         }
       };
       reader.readAsDataURL(file);
