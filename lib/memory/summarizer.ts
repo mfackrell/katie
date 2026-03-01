@@ -20,7 +20,7 @@ export async function maybeUpdateSummary(actorId: string): Promise<void> {
       {
         role: "system",
         content:
-          "Summarize the ongoing conversation as themes, decisions made, open questions, and current blockers. Keep it concise and factual."
+          "Summarize the ongoing conversation as themes, decisions made, open questions, and current blockers. Keep it concise and factual. IMPORTANT: Refer to the assistant ONLY as 'The Assistant' or 'Katie'. Do NOT use brand names like GPT, Grok, or Gemini."
       },
       { role: "user", content: transcript }
     ]
