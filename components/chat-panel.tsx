@@ -26,10 +26,12 @@ export function ChatPanel({ actorId, chatId }: ChatPanelProps) {
   const [availableModels, setAvailableModels] = useState<AvailableModels>({});
   const [selectedOverride, setSelectedOverride] = useState<SelectedOverride>(null);
   const [streamingModel, setStreamingModel] = useState<string | null>(null);
+  const [selectedImages, setSelectedImages] = useState<string[]>([]);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const canSend = useMemo(() => input.trim().length > 0 && !loading, [input, loading]);
+  const canSend = useMemo(() => (input.trim().length > 0 || selectedImages.length > 0) && !loading, [input, loading, selectedImages.length]);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -61,7 +63,12 @@ export function ChatPanel({ actorId, chatId }: ChatPanelProps) {
     }
 
     const content = input.trim();
+    const imagesToSend = [...selectedImages];
     setInput("");
+    setSelectedImages([]);
+    if (fileInputRef.current) {
+      fileInputRef.current.value = "";
+    }
     setLoading(true);
     setStreamingModel(null);
 
@@ -83,7 +90,8 @@ export function ChatPanel({ actorId, chatId }: ChatPanelProps) {
         body: JSON.stringify({
           actorId,
           chatId,
-          message: content,
+          message: content || "[image]",
+          images: imagesToSend,
           overrideProvider: selectedOverride?.providerName,
           overrideModel: selectedOverride?.modelId
         })
@@ -219,6 +227,22 @@ export function ChatPanel({ actorId, chatId }: ChatPanelProps) {
       event.preventDefault();
       void onSubmit(event);
     }
+  }
+
+
+
+  function handleFileChange(event: FormEvent<HTMLInputElement>) {
+    const files = Array.from(event.currentTarget.files ?? []);
+
+    files.forEach((file) => {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        if (typeof reader.result === "string") {
+          setSelectedImages((current) => [...current, reader.result]);
+        }
+      };
+      reader.readAsDataURL(file);
+    });
   }
 
   function handleInputChange(event: FormEvent<HTMLTextAreaElement>) {
@@ -361,7 +385,47 @@ export function ChatPanel({ actorId, chatId }: ChatPanelProps) {
       </section>
 
       <form onSubmit={onSubmit} className="border-t border-zinc-800 p-4">
+        {selectedImages.length > 0 ? (
+          <div className="mb-3 flex flex-wrap gap-2">
+            {selectedImages.map((image, index) => (
+              <div key={`${image.slice(0, 32)}-${index}`} className="relative h-20 w-20 overflow-hidden rounded-md border border-zinc-700">
+                <Image
+                  src={image}
+                  alt={`Selected image ${index + 1}`}
+                  fill
+                  sizes="80px"
+                  className="object-cover"
+                  unoptimized
+                />
+                <button
+                  type="button"
+                  onClick={() => setSelectedImages((current) => current.filter((_, currentIndex) => currentIndex !== index))}
+                  className="absolute right-0 top-0 bg-red-500 px-1 text-xs text-white"
+                >
+                  ✕
+                </button>
+              </div>
+            ))}
+          </div>
+        ) : null}
+
         <div className="flex items-end gap-2">
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="image/*"
+            multiple
+            onChange={handleFileChange}
+            className="hidden"
+          />
+          <button
+            type="button"
+            onClick={() => fileInputRef.current?.click()}
+            className="rounded-lg bg-zinc-800 px-3 py-2 text-sm text-zinc-400 hover:text-white"
+            aria-label="Attach images"
+          >
+            📷
+          </button>
           <textarea
             ref={textareaRef}
             rows={1}

@@ -4,6 +4,7 @@ export interface ChatGenerateParams {
   user: string;
   history: { role: "user" | "assistant"; content: string }[];
   modelId?: string;
+  images?: string[];
 }
 
 export interface ProviderResponse {

@@ -11,6 +11,7 @@ const requestSchema = z.object({
   actorId: z.string().min(1),
   chatId: z.string().min(1),
   message: z.string().min(1),
+  images: z.array(z.string()).optional(),
   overrideProvider: z.string().min(1).optional(),
   overrideModel: z.string().min(1).optional()
 });
@@ -66,7 +67,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Invalid request payload" }, { status: 400 });
     }
 
-    const { actorId, chatId, message, overrideProvider, overrideModel } = parsed.data;
+    const { actorId, chatId, message, images, overrideProvider, overrideModel } = parsed.data;
     const encoder = new TextEncoder();
 
     // LOG 2: Verification of IDs
@@ -132,6 +133,7 @@ export async function POST(request: NextRequest) {
               summary,
               history: historyForProvider,
               user: message,
+              images,
               modelId
             });
 

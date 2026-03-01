@@ -15,13 +15,48 @@ const MODEL_FALLBACKS: Record<string, string[]> = {
 
 function toStatefulInput(params: ChatGenerateParams): Array<{
   role: "system" | "user" | "assistant";
-  content: string;
+  content:
+    | string
+    | Array<
+        | { type: "input_text"; text: string }
+        | { type: "input_image"; image_url: string }
+      >;
 }> {
+  const userContent: Array<{ type: "input_text"; text: string } | { type: "input_image"; image_url: string }> = [
+    { type: "input_text", text: params.user }
+  ];
+
+  params.images?.forEach((image) => {
+    userContent.push({ type: "input_image", image_url: image });
+  });
+
   return [
     { role: "system", content: params.persona },
     { role: "system", content: `CONVERSATION SUMMARY:\n${params.summary}` },
     ...params.history.map((message) => ({ role: message.role, content: message.content })),
-    { role: "user", content: params.user }
+    { role: "user", content: userContent }
+  ];
+}
+
+function toChatCompletionMessages(params: ChatGenerateParams): Array<{
+  role: "system" | "user" | "assistant";
+  content:
+    | string
+    | Array<{ type: "text"; text: string } | { type: "image_url"; image_url: { url: string } }>;
+}> {
+  const userContent: Array<{ type: "text"; text: string } | { type: "image_url"; image_url: { url: string } }> = [
+    { type: "text", text: params.user }
+  ];
+
+  params.images?.forEach((image) => {
+    userContent.push({ type: "image_url", image_url: { url: image } });
+  });
+
+  return [
+    { role: "system", content: params.persona },
+    { role: "system", content: `CONVERSATION SUMMARY:\n${params.summary}` },
+    ...params.history.map((message) => ({ role: message.role, content: message.content })),
+    { role: "user", content: userContent }
   ];
 }
 
@@ -106,20 +141,19 @@ export class OpenAiProvider implements LlmProvider {
     for (const selectedModel of modelCandidates) {
       const modelLower = selectedModel.toLowerCase();
 
-      // 1. LEGACY ROUTING: For gpt-3.5-turbo-instruct and older Davinci models
       const isLegacy =
         modelLower.includes("instruct") && !modelLower.includes("gpt-4") && !modelLower.includes("gpt-5");
 
-      // 2. CHAT COMPLETIONS ROUTING: Specifically for gpt-4, gpt-3.5, and Search Preview models
-      // The 'search-preview' models are NOT supported on the Responses API.
       const isChatOnly =
         modelLower.includes("search-preview") ||
         (modelLower.includes("gpt-4") && !modelLower.includes("gpt-5")) ||
         modelLower.includes("gpt-3.5");
 
-      // 3. RESPONSES API ROUTING: For GPT-5, image, and o-series reasoning models (excluding search preview)
       const isResponsesApi =
-        (modelLower.includes("gpt-5") || modelLower.includes("image") || modelLower.includes("nano-banana") || /^o[1-4]/.test(modelLower)) &&
+        (modelLower.includes("gpt-5") ||
+          modelLower.includes("image") ||
+          modelLower.includes("nano-banana") ||
+          /^o[1-4]/.test(modelLower)) &&
         !modelLower.includes("search-preview");
 
       try {
@@ -170,12 +204,7 @@ export class OpenAiProvider implements LlmProvider {
         if (isChatOnly || !isLegacy) {
           const completion = await this.client.chat.completions.create({
             model: selectedModel,
-            messages: [
-              { role: "system", content: params.persona },
-              { role: "user", content: `CONVERSATION SUMMARY:\n${params.summary}` },
-              ...params.history,
-              { role: "user", content: params.user }
-            ]
+            messages: toChatCompletionMessages(params)
           });
 
           return {
