@@ -5,6 +5,10 @@ export class GrokProvider implements LlmProvider {
   name = "grok" as const;
   private client: OpenAI;
   private defaultModel = "grok-2-1212";
+  private aliasToModel: Record<string, string> = {
+    "grok-imagine": this.defaultModel,
+    "grok-imagine-image": this.defaultModel
+  };
 
   constructor(apiKey: string) {
     this.client = new OpenAI({
@@ -25,7 +29,19 @@ export class GrokProvider implements LlmProvider {
   }
 
   async generate(params: ChatGenerateParams): Promise<ProviderResponse> {
-    const selectedModel = params.modelId ?? this.defaultModel;
+    const requestedModel = params.modelId ?? this.defaultModel;
+    const aliasedModel = this.aliasToModel[requestedModel] ?? requestedModel;
+
+    const availableModels = await this.listModels();
+    const selectedModel = availableModels.length === 0 || availableModels.includes(aliasedModel)
+      ? aliasedModel
+      : this.defaultModel;
+
+    if (selectedModel !== requestedModel) {
+      console.warn(
+        `[GrokProvider] Requested model '${requestedModel}' is not available. Falling back to '${selectedModel}'.`
+      );
+    }
 
     try {
       const completion = await this.client.chat.completions.create({
