@@ -1,7 +1,7 @@
 "use client";
 
 import Image from "next/image";
-import { FormEvent, KeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
+import { ClipboardEvent, FormEvent, KeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
 import type { Message } from "@/lib/types/chat";
 
 type ProviderName = "openai" | "google";
@@ -229,7 +229,30 @@ export function ChatPanel({ actorId, chatId }: ChatPanelProps) {
     }
   }
 
+  function handlePaste(event: ClipboardEvent<HTMLTextAreaElement>) {
+    const items = event.clipboardData.items;
 
+    for (const item of items) {
+      if (!item.type.startsWith("image/")) {
+        continue;
+      }
+
+      const file = item.getAsFile();
+      if (!file) {
+        continue;
+      }
+
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        const result = reader.result;
+
+        if (typeof result === "string") {
+          setSelectedImages((current) => [...current, result]);
+        }
+      };
+      reader.readAsDataURL(file);
+    }
+  }
 
   function handleFileChange(event: FormEvent<HTMLInputElement>) {
     const files = Array.from(event.currentTarget.files ?? []);
@@ -434,6 +457,7 @@ export function ChatPanel({ actorId, chatId }: ChatPanelProps) {
             value={input}
             onChange={handleInputChange}
             onKeyDown={handleKeyDown}
+            onPaste={handlePaste}
             placeholder="Ask your actor something..."
             className="min-h-[40px] max-h-48 flex-1 resize-none overflow-y-auto rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm outline-none ring-emerald-500 focus:ring"
           />
