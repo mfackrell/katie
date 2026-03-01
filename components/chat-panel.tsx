@@ -176,6 +176,14 @@ export function ChatPanel({ actorId, chatId }: ChatPanelProps) {
             <p className="whitespace-pre-wrap">{message.content}</p>
           </div>
         ))}
+        {loading && (
+          <div className="flex w-fit items-center gap-3 rounded-lg border border-zinc-700 bg-zinc-900 px-4 py-3 text-sm text-zinc-400">
+            <div className="h-4 w-4 animate-spin rounded-full border-2 border-emerald-500 border-t-transparent" />
+            <p className="italic">
+              {selectedOverride ? `${selectedOverride.modelId}` : "Master Router"} is thinking...
+            </p>
+          </div>
+        )}
       </section>
 
       <form onSubmit={onSubmit} className="border-t border-zinc-800 p-4">
