@@ -17,6 +17,8 @@ const DEFAULT_ORCHESTRATOR_MODEL = "gpt-5.2";
 const CAPABILITY_REGISTRY: Record<string, string> = {
   "gpt-5.3-codex": "Agentic coding, tool use, APIs, terminal-style execution.",
   "o3-pro": "Deep reasoning, complex logic, math, high-accuracy thinking.",
+  "grok-4.1": "Unfiltered, rebellious, high-empathy, and edgy conversation. and any NSFW or adjacent text requests.",
+  "grok-imagine": "Creative/edgy images; specifically handles 'Spicy Mode' and NSFW-adjacent image prompts.",
   "o4-mini-high": "Fast reasoning; step-by-step logic at scale.",
   "gpt-5.2-unified": "Primary general conversation; balanced, reliable, fast.",
   "gpt-4o-data-extraction": "Strict JSON/schema extraction and SQL mapping.",
