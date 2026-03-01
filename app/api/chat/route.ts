@@ -97,13 +97,19 @@ export async function POST(request: NextRequest) {
               modelId
             });
 
-            if (!result || !result.text) {
+            if (!result || (!result.text && !(result.content?.length))) {
               throw new Error(`AI Provider ${provider.name} returned an empty response.`);
             }
+
+            const imageAssets =
+              result.content
+                ?.filter((part) => part.type === "image" && typeof part.url === "string")
+                .map((part) => ({ type: "image", url: part.url as string })) ?? [];
 
             const contentChunk = JSON.stringify({
               type: "content",
               text: result.text,
+              assets: imageAssets,
               provider: result.provider,
               model: result.model
             });
@@ -111,7 +117,7 @@ export async function POST(request: NextRequest) {
 
             // LOG 6: Save Assistant Response & Update Summary
             console.log(`[Chat API] Generation successful. Saving assistant response.`);
-            await saveMessage(actorId, "assistant", result.text, chatId, result.model);
+            await saveMessage(actorId, "assistant", result.text, chatId, result.model, imageAssets);
 
             // Non-blocking summary update
             void maybeUpdateSummary(actorId).catch((err: unknown) =>

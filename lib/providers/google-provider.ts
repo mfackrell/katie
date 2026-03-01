@@ -116,12 +116,30 @@ export class GoogleProvider implements LlmProvider {
         }
       });
 
-      const text = result.text ?? "";
+      const responseParts = result.response?.candidates?.[0]?.content?.parts ?? [];
+      let text = "";
+      const content: Array<{ type: string; url: string }> = [];
+
+      for (const part of responseParts) {
+        if (part.text) {
+          text += part.text;
+        }
+
+        if (part.inlineData?.data && part.inlineData?.mimeType) {
+          content.push({
+            type: "image",
+            url: `data:${part.inlineData.mimeType};base64,${part.inlineData.data}`
+          });
+        }
+      }
+
+      text = text || result.text || "";
 
       return {
         text,
         model: selectedModel,
-        provider: this.name
+        provider: this.name,
+        content
       };
     } catch (error: unknown) {
       const detail = error instanceof Error ? error.message : String(error);

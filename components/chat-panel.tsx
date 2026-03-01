@@ -111,6 +111,7 @@ export function ChatPanel({ actorId, chatId }: ChatPanelProps) {
       const decoder = new TextDecoder();
       let buffered = "";
       let textContent = "";
+      let assets: Array<{ type: string; url: string }> = [];
       let provider = "unknown";
       let model = "unknown";
 
@@ -131,7 +132,13 @@ export function ChatPanel({ actorId, chatId }: ChatPanelProps) {
 
           const chunk = JSON.parse(line) as
             | { type: "metadata"; modelId: string; provider: string }
-            | { type: "content"; text: string; provider?: string; model?: string };
+            | {
+                type: "content";
+                text: string;
+                assets?: Array<{ type: string; url: string }>;
+                provider?: string;
+                model?: string;
+              };
 
           if (chunk.type === "metadata") {
             setStreamingModel(chunk.modelId);
@@ -140,6 +147,9 @@ export function ChatPanel({ actorId, chatId }: ChatPanelProps) {
 
           if (chunk.type === "content") {
             textContent += chunk.text;
+            if (chunk.assets?.length) {
+              assets = [...assets, ...chunk.assets];
+            }
             provider = chunk.provider ?? provider;
             model = chunk.model ?? model;
           }
@@ -149,7 +159,13 @@ export function ChatPanel({ actorId, chatId }: ChatPanelProps) {
       if (buffered.trim()) {
         const trailingChunk = JSON.parse(buffered) as
           | { type: "metadata"; modelId: string; provider: string }
-          | { type: "content"; text: string; provider?: string; model?: string };
+          | {
+              type: "content";
+              text: string;
+              assets?: Array<{ type: string; url: string }>;
+              provider?: string;
+              model?: string;
+            };
 
         if (trailingChunk.type === "metadata") {
           setStreamingModel(trailingChunk.modelId);
@@ -158,6 +174,9 @@ export function ChatPanel({ actorId, chatId }: ChatPanelProps) {
 
         if (trailingChunk.type === "content") {
           textContent += trailingChunk.text;
+          if (trailingChunk.assets?.length) {
+            assets = [...assets, ...trailingChunk.assets];
+          }
           provider = trailingChunk.provider ?? provider;
           model = trailingChunk.model ?? model;
         }
@@ -172,6 +191,7 @@ export function ChatPanel({ actorId, chatId }: ChatPanelProps) {
           role: "assistant",
           model,
           content: textContent,
+          assets,
           createdAt: new Date().toISOString()
         }
       ]);
@@ -281,7 +301,15 @@ export function ChatPanel({ actorId, chatId }: ChatPanelProps) {
             <p className="mb-1 text-xs uppercase text-zinc-400">
               {message.role}{message.role === "assistant" && message.model ? ` (${message.model})` : ""}
             </p>
-            <p className="whitespace-pre-wrap">{message.content}</p>
+            {message.content ? <p className="whitespace-pre-wrap">{message.content}</p> : null}
+            {message.assets?.filter((asset) => asset.type === "image").map((asset) => (
+              <img
+                key={asset.url}
+                src={asset.url}
+                alt="Generated content"
+                className="mt-3 max-h-80 rounded-md border border-zinc-700"
+              />
+            ))}
           </div>
         ))}
         {loading && (
