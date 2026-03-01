@@ -13,51 +13,51 @@ const MODEL_FALLBACKS: Record<string, string[]> = {
   "gpt-5": ["gpt-5.2", "gpt-4o"]
 };
 
-function toStatefulInput(params: ChatGenerateParams): Array<{
-  role: "system" | "user" | "assistant";
-  content:
-    | string
-    | Array<
-        | { type: "input_text"; text: string }
-        | { type: "input_image"; image_url: string }
-      >;
-}> {
-  const userContent: Array<{ type: "input_text"; text: string } | { type: "input_image"; image_url: string }> = [
-    { type: "input_text", text: params.user }
-  ];
+function toChatMessages(params: ChatGenerateParams): OpenAI.Chat.ChatCompletionMessageParam[] {
+  const history: OpenAI.Chat.ChatCompletionMessageParam[] = params.history.map((msg) => ({
+    role: msg.role,
+    content: msg.content
+  }));
 
-  params.images?.forEach((image) => {
-    userContent.push({ type: "input_image", image_url: image });
-  });
+  const userContent: OpenAI.Chat.ChatCompletionContentPart[] = [{ type: "text", text: params.user }];
+
+  if (params.images) {
+    params.images.forEach((url) => {
+      userContent.push({ type: "image_url", image_url: { url } });
+    });
+  }
 
   return [
     { role: "system", content: params.persona },
     { role: "system", content: `CONVERSATION SUMMARY:\n${params.summary}` },
-    ...params.history.map((message) => ({ role: message.role, content: message.content })),
+    ...history,
     { role: "user", content: userContent }
   ];
 }
 
-function toChatCompletionMessages(params: ChatGenerateParams): Array<{
-  role: "system" | "user" | "assistant";
-  content:
-    | string
-    | Array<{ type: "text"; text: string } | { type: "image_url"; image_url: { url: string } }>;
-}> {
-  const userContent: Array<{ type: "text"; text: string } | { type: "image_url"; image_url: { url: string } }> = [
-    { type: "text", text: params.user }
+function toResponsesInput(params: ChatGenerateParams): OpenAI.Responses.ResponseInput {
+  const mapContent = (text: string): OpenAI.Responses.ResponseInputMessageContentList => [
+    { type: "input_text", text }
   ];
 
-  params.images?.forEach((image) => {
-    userContent.push({ type: "image_url", image_url: { url: image } });
-  });
-
-  return [
-    { role: "system", content: params.persona },
-    { role: "system", content: `CONVERSATION SUMMARY:\n${params.summary}` },
-    ...params.history.map((message) => ({ role: message.role, content: message.content })),
-    { role: "user", content: userContent }
+  const messages: OpenAI.Responses.ResponseInput = [
+    { role: "system", content: mapContent(params.persona) },
+    { role: "system", content: mapContent(`CONVERSATION SUMMARY:\n${params.summary}`) },
+    ...params.history.map((msg) => ({
+      role: msg.role,
+      content: mapContent(msg.content)
+    }))
   ];
+
+  const userContent: OpenAI.Responses.ResponseInputMessageContentList = [{ type: "input_text", text: params.user }];
+  if (params.images) {
+    params.images.forEach((url) => {
+      userContent.push({ type: "input_image", image_url: url });
+    });
+  }
+
+  messages.push({ role: "user", content: userContent });
+  return messages;
 }
 
 function extractOutputItems(response: OpenAI.Responses.Response): ResponseContentItem[] {
@@ -174,7 +174,7 @@ export class OpenAiProvider implements LlmProvider {
           const wantsImageOutput = isImageGenerationModel(modelLower);
           const response = await this.client.responses.create({
             model: selectedModel,
-            input: toStatefulInput(params),
+            input: toResponsesInput(params),
             ...(wantsImageOutput
               ? {
                   modalities: ["text", "image"],
@@ -204,7 +204,7 @@ export class OpenAiProvider implements LlmProvider {
         if (isChatOnly || !isLegacy) {
           const completion = await this.client.chat.completions.create({
             model: selectedModel,
-            messages: toChatCompletionMessages(params)
+            messages: toChatMessages(params)
           });
 
           return {
