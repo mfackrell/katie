@@ -29,6 +29,7 @@ export async function POST(request: NextRequest) {
     }
 
     const { actorId, chatId, message, overrideProvider, overrideModel } = parsed.data;
+    const encoder = new TextEncoder();
 
     // LOG 2: Verification of IDs
     console.log(`[Chat API] Processing - Actor: ${actorId}, Chat: ${chatId}`);
@@ -48,6 +49,7 @@ export async function POST(request: NextRequest) {
     const historyForProvider = history.map(({ role, content }) => ({ role, content }));
     let provider = providers[0];
     let modelId = "";
+    let routingDecisionModelId = "";
 
     if (overrideProvider && overrideModel) {
       const manualProvider = providers.find((candidate) => candidate.name === overrideProvider);
@@ -57,12 +59,14 @@ export async function POST(request: NextRequest) {
 
       provider = manualProvider;
       modelId = overrideModel;
+      routingDecisionModelId = overrideModel;
       console.log(`[Chat API] Override active. Provider: ${provider.name}, Model: ${modelId}`);
     } else {
       const routingContext = "";
       const routingDecision = await chooseProvider(message, routingContext, providers);
       provider = routingDecision.provider;
       modelId = routingDecision.modelId;
+      routingDecisionModelId = routingDecision.modelId;
       console.log(`[Chat API] Selected Provider: ${provider.name}, Model: ${modelId}`);
       console.log(`[Chat API] Routing Model For UI: ${routingDecision.routerModel}`);
       console.log(`[Chat API] Routing Reasoning: ${routingDecision.reasoning}`);
@@ -95,17 +99,30 @@ export async function POST(request: NextRequest) {
       console.error("[Chat API] Background Summary Update Error:", err)
     );
 
-    // LOG 7: Return final response
-    // Note: Since your provider returns the full text, we return it as JSON.
-    // If your frontend useChat hook requires a stream, we can wrap this text in one.
-    return NextResponse.json({
-      text: result.text,
-      provider: result.provider,
-      model: result.model,
-      routingModel: overrideModel ?? modelId
-    }, {
+    // LOG 7: Return streaming response with metadata + content chunks.
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        const metadataChunk = JSON.stringify({
+          type: "metadata",
+          modelId: routingDecisionModelId,
+          provider: result.provider,
+          model: result.model
+        });
+
+        const contentChunk = JSON.stringify({
+          type: "content",
+          text: result.text
+        });
+
+        controller.enqueue(encoder.encode(`${metadataChunk}\n`));
+        controller.enqueue(encoder.encode(`${contentChunk}\n`));
+        controller.close();
+      }
+    });
+
+    return new NextResponse(stream, {
       headers: {
-        "Content-Type": "application/json",
+        "Content-Type": "application/x-ndjson; charset=utf-8",
         "Cache-Control": "no-cache"
       }
     });
