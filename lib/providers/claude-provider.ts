@@ -9,6 +9,12 @@ type ClaudeMessageResponse = {
   };
 };
 
+const MODEL_MAPPING: Record<string, string> = {
+  "claude-4.6-opus": "claude-3-opus-20240229",
+  "claude-4.5-sonnet": "claude-3-5-sonnet-20241022",
+  "claude-4.5-haiku": "claude-3-5-haiku-20241022"
+};
+
 export class ClaudeProvider implements LlmProvider {
   name = "anthropic" as const;
   private defaultModel = "claude-4.5-sonnet";
@@ -21,6 +27,7 @@ export class ClaudeProvider implements LlmProvider {
 
   async generate(params: ChatGenerateParams): Promise<ProviderResponse> {
     const selectedModel = params.modelId ?? this.defaultModel;
+    const actualModelId = MODEL_MAPPING[selectedModel] ?? selectedModel;
 
     const response = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
@@ -30,7 +37,7 @@ export class ClaudeProvider implements LlmProvider {
         "anthropic-version": "2023-06-01"
       },
       body: JSON.stringify({
-        model: selectedModel,
+        model: actualModelId,
         max_tokens: 4096,
         system: `${params.persona}\n\nCONVERSATION SUMMARY:\n${params.summary}`,
         messages: [
@@ -45,8 +52,12 @@ export class ClaudeProvider implements LlmProvider {
 
     if (!response.ok) {
       const detail = await response.text();
-      console.error(`[ClaudeProvider] API failure for ${selectedModel}: ${detail}`);
-      throw new Error(`Claude request failed for model ${selectedModel}: ${detail}`);
+      console.error(
+        `[ClaudeProvider] API failure for ${selectedModel} (resolved to ${actualModelId}): ${detail}`
+      );
+      throw new Error(
+        `Claude request failed for model ${selectedModel} (resolved to ${actualModelId}): ${detail}`
+      );
     }
 
     const body = (await response.json()) as ClaudeMessageResponse;
