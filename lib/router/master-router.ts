@@ -149,7 +149,7 @@ export async function chooseProvider(
           {
             role: "system",
             content:
-              "You are the Polyglot Actor Orchestrator. Your only job is to select the best model from the provided list based on the conversation context and the user's latest intent. Use the capability metadata below as your primary selection criteria, then constrain your final choice to the currently available model manifest.\n\nCapability Registry:\n" +
+              "You are the Polyglot Actor Orchestrator. Your only job is to select the best model from the provided list based on the conversation context and the user's latest intent. Use the capability metadata below as your primary selection criteria, then constrain your final choice to the currently available model manifest.\n\All image requests must be routed to Google/Gemini models, never OpenAI models.\n\nCapability Registry:\n" +
               JSON.stringify(CAPABILITY_REGISTRY, null, 2) +
               "\n\nAvailable model manifest:\n" +
               manifest +
