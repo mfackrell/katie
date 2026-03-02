@@ -1,6 +1,7 @@
 import OpenAI from "openai";
 import { LlmProvider, ChatGenerateParams, ProviderResponse } from "@/lib/providers/types";
 import { buildMemoryContext } from "@/lib/providers/memory-context";
+import { MATH_EXECUTION_PROTOCOL } from "@/lib/providers/math-execution-protocol";
 
 type ResponseContentItem = {
   type: string;
@@ -24,7 +25,7 @@ function toChatMessages(params: ChatGenerateParams): OpenAI.Chat.ChatCompletionM
   }
 
   return [
-    { role: "system", content: params.persona },
+    { role: "system", content: `${MATH_EXECUTION_PROTOCOL}\n\n${params.persona}` },
     { role: "system", content: `CONVERSATION SUMMARY:\n${params.summary}` },
     { role: "system", content: buildMemoryContext(params.history) },
     { role: "user", content: userContent }
@@ -45,7 +46,7 @@ function toResponsesInput(params: ChatGenerateParams): OpenAI.Responses.Response
   const memoryContext = buildMemoryContext(params.history);
 
   const messages: ResponseInputMessage[] = [
-    { role: "system", content: mapContent(params.persona) },
+    { role: "system", content: mapContent(`${MATH_EXECUTION_PROTOCOL}\n\n${params.persona}`) },
     { role: "system", content: mapContent(`CONVERSATION SUMMARY:\n${params.summary}`) },
     { role: "system", content: mapContent(memoryContext) }
   ];

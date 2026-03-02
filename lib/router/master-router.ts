@@ -15,14 +15,14 @@ const ORCHESTRATOR_MODELS = ["gpt-5.2", "gemini-3.1-pro"] as const;
 const DEFAULT_ORCHESTRATOR_MODEL = "gpt-5.2";
 
 const CAPABILITY_REGISTRY: Record<string, string> = {
-  "gpt-5.3-codex": "Agentic coding, tool use, APIs, terminal-style execution.",
-  "o3-pro": "Deep reasoning, complex logic, math, high-accuracy thinking.",
+  "gpt-5.3-codex": "Agentic coding, tool use, APIs, terminal-style execution; ideal for math-heavy intents that must strictly follow MATH_EXECUTION_PROTOCOL via executable scripts.",
+  "o3-pro": "Deep reasoning and complex logic; for math-heavy tasks it must strictly follow MATH_EXECUTION_PROTOCOL using executed scripts.",
   "grok-2-1212": "Balanced Grok default for general-purpose chat and reasoning tasks.",
-  "o4-mini-high": "Fast reasoning; step-by-step logic at scale.",
-  "gpt-5.2-unified": "Primary general conversation; balanced, reliable, fast.",
+  "o4-mini-high": "Fast reasoning; for math-heavy tasks it must strictly follow MATH_EXECUTION_PROTOCOL using executed scripts.",
+  "gpt-5.2-unified": "Primary general conversation; balanced, reliable, fast; for math-heavy tasks it must strictly follow MATH_EXECUTION_PROTOCOL using executed scripts.",
   "gpt-4o-data-extraction": "Strict JSON/schema extraction and SQL mapping.",
   "gpt-4o-audio": "Native audio processing; tone and sarcasm detection.",
-  "gemini-3.1-pro": "Massive context leadership (2M+ tokens); complex doc/video analysis.",
+  "gemini-3.1-pro": "Massive context leadership (2M+ tokens); complex doc/video analysis; for math-heavy tasks it must strictly follow MATH_EXECUTION_PROTOCOL using executed scripts.",
   "gemini-3.1-flash": "Fast, cheap, high-volume simple tasks.",
   "gemini-3.1-flash-image-preview": "Nano Banana 2: High-efficiency SOTA model for image generation, high-fidelity asset creation, and 4K resolution support.",  
   "nano-banana-pro-preview": "Nano Banana Pro: The state-of-the-art model for high-fidelity image generation, professional asset creation, and precise visual reasoning.",
@@ -31,7 +31,7 @@ const CAPABILITY_REGISTRY: Record<string, string> = {
   "grok-4.1": "High-empathy, natural conversation, and leadership coaching. Unfiltered, rebellious, high-empathy, and edgy conversation.",
   "grok-4-pulse": "Real-time news, social sentiment, and sub-second trends.",
   "claude-4.6-opus": "High Level System design, back end architecture, monolith-to-microservices migration, and multi-file refactoring.",
-  "claude-4.5-sonnet": "Stable long-running autonomous workflows (30+ hours).",
+  "claude-4.5-sonnet": "Stable long-running autonomous workflows (30+ hours); for math-heavy tasks it must strictly follow MATH_EXECUTION_PROTOCOL using executed scripts.",
   "claude-4.5-haiku": "Fast responses with strict brand-voice/style control."
 };
 
@@ -149,7 +149,7 @@ export async function chooseProvider(
           {
             role: "system",
             content:
-              "You are the Polyglot Actor Orchestrator. Your only job is to select the best model from the provided list based on the conversation context and the user's latest intent. Use the capability metadata below as your primary selection criteria, then constrain your final choice to the currently available model manifest.\n\All image requests must be routed to Google/Gemini models, never OpenAI models.\n\nCapability Registry:\n" +
+              "You are the Polyglot Actor Orchestrator. Your only job is to select the best model from the provided list based on the conversation context and the user's latest intent. Use the capability metadata below as your primary selection criteria, then constrain your final choice to the currently available model manifest.\n\All image requests must be routed to Google/Gemini models, never OpenAI models.\nFor complex mathematical, statistical, or logic-heavy intents, prioritize models with robust code-execution/tool-use capabilities and enforce strict adherence to MATH_EXECUTION_PROTOCOL.\n\nCapability Registry:\n" +
               JSON.stringify(CAPABILITY_REGISTRY, null, 2) +
               "\n\nAvailable model manifest:\n" +
               manifest +

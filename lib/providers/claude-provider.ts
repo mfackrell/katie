@@ -1,5 +1,6 @@
 import { ChatGenerateParams, LlmProvider, ProviderResponse } from "@/lib/providers/types";
 import { buildMemoryContext } from "@/lib/providers/memory-context";
+import { MATH_EXECUTION_PROTOCOL } from "@/lib/providers/math-execution-protocol";
 
 type ClaudeMessageResponse = {
   content?: Array<{ type: string; text?: string; [key: string]: unknown }>;
@@ -53,7 +54,7 @@ export class ClaudeProvider implements LlmProvider {
       body: JSON.stringify({
         model: selectedModel,
         max_tokens: 4096,
-        system: `${params.persona}\n\nCONVERSATION SUMMARY:\n${params.summary}\n\n${buildMemoryContext(params.history)}`,
+        system: `${MATH_EXECUTION_PROTOCOL}\n\n${params.persona}\n\nCONVERSATION SUMMARY:\n${params.summary}\n\n${buildMemoryContext(params.history)}`,
         messages: [{ role: "user", content: params.user }]
       })
     });

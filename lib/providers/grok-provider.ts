@@ -1,6 +1,7 @@
 import OpenAI from "openai";
 import { ChatGenerateParams, LlmProvider, ProviderResponse } from "@/lib/providers/types";
 import { buildMemoryContext } from "@/lib/providers/memory-context";
+import { MATH_EXECUTION_PROTOCOL } from "@/lib/providers/math-execution-protocol";
 
 export class GrokProvider implements LlmProvider {
   name = "grok" as const;
@@ -48,7 +49,7 @@ export class GrokProvider implements LlmProvider {
       const completion = await this.client.chat.completions.create({
         model: selectedModel,
         messages: [
-          { role: "system", content: params.persona },
+          { role: "system", content: `${MATH_EXECUTION_PROTOCOL}\n\n${params.persona}` },
           { role: "system", content: `CONVERSATION SUMMARY:\n${params.summary}` },
           { role: "system", content: buildMemoryContext(params.history) },
           { role: "user", content: params.user }
