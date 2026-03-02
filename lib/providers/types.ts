@@ -1,3 +1,14 @@
+export interface FileReference {
+  fileId: string;
+  fileName: string;
+  mimeType: string;
+  preview: string;
+  providerRef?: {
+    openaiFileId?: string;
+    googleFileUri?: string;
+  };
+}
+
 export interface ChatGenerateParams {
   persona: string;
   summary: string;
@@ -5,11 +16,7 @@ export interface ChatGenerateParams {
   history: { role: "user" | "assistant"; content: string }[];
   modelId?: string;
   images?: string[];
-  attachments?: Array<{
-    name: string;
-    mimeType: string;
-    text: string;
-  }>;
+  attachments?: FileReference[];
 }
 
 export interface ProviderResponse {

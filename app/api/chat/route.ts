@@ -2,67 +2,43 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { assembleContext } from "@/lib/memory/assemble-context";
 import { maybeUpdateSummary } from "@/lib/memory/summarizer";
+import { saveMessage } from "@/lib/data/blob-store";
 import { getAvailableProviders } from "@/lib/providers";
 import { chooseProvider } from "@/lib/router/master-router";
-import { saveMessage } from "@/lib/data/blob-store";
-import { parseTextFiles, type ParsedAttachment } from "@/lib/uploads/parse-text-files";
 
-// Use the naming convention from your Frontend and Zod schema
+const fileReferenceSchema = z.object({
+  fileId: z.string().min(1),
+  fileName: z.string().min(1),
+  mimeType: z.string().min(1),
+  preview: z.string().min(1).max(2200),
+  providerRef: z
+    .object({
+      openaiFileId: z.string().min(1).optional(),
+      googleFileUri: z.string().min(1).optional()
+    })
+    .optional()
+});
+
 const requestSchema = z.object({
   actorId: z.string().min(1),
   chatId: z.string().min(1),
   message: z.string().min(1),
   images: z.array(z.string()).optional(),
+  fileReferences: z.array(fileReferenceSchema).optional(),
   overrideProvider: z.string().min(1).optional(),
   overrideModel: z.string().min(1).optional()
 });
 
 type RequestPayload = z.infer<typeof requestSchema>;
 
-function readOptionalString(formData: FormData, key: string): string | undefined {
-  const value = formData.get(key);
-
-  if (typeof value !== "string") {
-    return undefined;
-  }
-
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : undefined;
-}
-
-async function parseIncomingPayload(request: NextRequest): Promise<{ payload: RequestPayload; files: File[] }> {
+async function parseIncomingPayload(request: NextRequest): Promise<RequestPayload> {
   const contentType = request.headers.get("content-type") ?? "";
 
-  if (contentType.includes("multipart/form-data")) {
-    const formData = await request.formData();
-    const imageValues = formData
-      .getAll("images")
-      .filter((value): value is string => typeof value === "string" && value.length > 0);
-
-    const payload = {
-      actorId: readOptionalString(formData, "actorId") ?? "",
-      chatId: readOptionalString(formData, "chatId") ?? "",
-      message: readOptionalString(formData, "message") ?? "",
-      images: imageValues.length ? imageValues : undefined,
-      overrideProvider: readOptionalString(formData, "overrideProvider"),
-      overrideModel: readOptionalString(formData, "overrideModel")
-    };
-
-    const parsed = requestSchema.safeParse(payload);
-
-    if (!parsed.success) {
-      console.error("[Chat API] Validation Failed:", parsed.error.format());
-      throw new Error("Invalid request payload");
-    }
-
-    const files = formData.getAll("files").filter((value): value is File => value instanceof File);
-
-    return { payload: parsed.data, files };
+  if (!contentType.includes("application/json")) {
+    throw new Error("Invalid request payload");
   }
 
   const body = await request.json();
-  console.log(`[Chat API] Received request body:`, JSON.stringify(body));
-
   const parsed = requestSchema.safeParse(body);
 
   if (!parsed.success) {
@@ -70,7 +46,7 @@ async function parseIncomingPayload(request: NextRequest): Promise<{ payload: Re
     throw new Error("Invalid request payload");
   }
 
-  return { payload: parsed.data, files: [] };
+  return parsed.data;
 }
 
 function extractImageUrl(part: { type?: string; [key: string]: unknown }): string | null {
@@ -113,21 +89,11 @@ function extractImageUrl(part: { type?: string; [key: string]: unknown }): strin
 
 export async function POST(request: NextRequest) {
   try {
-    // LOG 1: Capture and normalize the incoming request
-    const { payload, files } = await parseIncomingPayload(request);
-    const { actorId, chatId, message, images, overrideProvider, overrideModel } = payload;
-    let attachments: ParsedAttachment[] | undefined;
-
-    if (files.length) {
-      const nonImageFiles = files.filter((file) => !file.type.startsWith("image/"));
-      if (nonImageFiles.length) {
-        attachments = await parseTextFiles(nonImageFiles);
-      }
-    }
-
+    const payload = await parseIncomingPayload(request);
+    const { actorId, chatId, message, images, fileReferences, overrideProvider, overrideModel } = payload;
+    const attachments = fileReferences;
     const encoder = new TextEncoder();
 
-    // LOG 2: Verification of IDs
     console.log(`[Chat API] Processing - Actor: ${actorId}, Chat: ${chatId}`);
 
     const providers = getAvailableProviders();
@@ -139,8 +105,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // LOG 3: Context Assembly & Provider Selection
-    console.log(`[Chat API] Assembling context and selecting provider...`);
+    console.log("[Chat API] Assembling context and selecting provider...");
     const { persona, summary, history } = await assembleContext(actorId);
     const historyForProvider = history.map(({ role, content }) => ({ role, content }));
     let provider = providers[0];
@@ -156,10 +121,7 @@ export async function POST(request: NextRequest) {
       modelId = overrideModel;
       console.log(`[Chat API] Override active. Provider: ${provider.name}, Model: ${modelId}`);
     } else {
-      const routingContext = `
-  Persona: ${persona}
-  Recent History: ${JSON.stringify(history.slice(-3))}
-`;
+      const routingContext = `\n  Persona: ${persona}\n  Recent History: ${JSON.stringify(history.slice(-3))}\n`;
       const routingDecision = await chooseProvider(message, routingContext, providers);
       provider = routingDecision.provider;
       modelId = routingDecision.modelId;
@@ -179,11 +141,9 @@ export async function POST(request: NextRequest) {
             });
             controller.enqueue(encoder.encode(`${metadataChunk}\n`));
 
-            // LOG 4: Save User Message to Blob
-            console.log(`[Chat API] Saving user message...`);
+            console.log("[Chat API] Saving user message...");
             await saveMessage(actorId, "user", message, chatId);
 
-            // LOG 5: Generate AI Response
             console.log(`[Chat API] Requesting generation from ${provider.name} using model ${modelId}...`);
             const result = await provider.generate({
               persona,
@@ -225,11 +185,9 @@ export async function POST(request: NextRequest) {
             });
             controller.enqueue(encoder.encode(`${contentChunk}\n`));
 
-            // LOG 6: Save Assistant Response & Update Summary
-            console.log(`[Chat API] Generation successful. Saving assistant response.`);
+            console.log("[Chat API] Generation successful. Saving assistant response.");
             await saveMessage(actorId, "assistant", result.text, chatId, result.model, imageAssets);
 
-            // Non-blocking summary update
             void maybeUpdateSummary(actorId).catch((err: unknown) =>
               console.error("[Chat API] Background Summary Update Error:", err)
             );
@@ -252,11 +210,10 @@ export async function POST(request: NextRequest) {
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : "Unexpected error";
 
-    if (errorMessage === "Invalid request payload" || errorMessage.includes("Unsupported file type") || errorMessage.includes("Too many files") || errorMessage.includes("too large")) {
+    if (errorMessage === "Invalid request payload") {
       return NextResponse.json({ error: errorMessage }, { status: 400 });
     }
 
-    // LOG 8: Catch-all for 500 errors
     console.error("[Chat API] Fatal Runtime Error:", {
       message: errorMessage,
       stack: error instanceof Error ? error.stack : undefined
