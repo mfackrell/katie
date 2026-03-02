@@ -109,13 +109,16 @@ export class GoogleProvider implements LlmProvider {
     const thinkingLevelInput =
       parsedModel.thinkingLevelInput ?? (isGemini3Model(selectedModel) ? "medium" : undefined);
     const isImageTask = isImageGenerationModel(selectedModel);
+    const systemInstruction = isImageTask
+      ? `${params.persona}\n\nIMPORTANT: You have direct image generation capabilities. If the user asks for a photo, design asset, or image, generate it directly as an image modality response.`
+      : params.persona;
 
     try {
       const result = await this.client.models.generateContent({
         model: selectedModel,
         contents,
         config: {
-          systemInstruction: params.persona,
+          systemInstruction,
           responseModalities: isImageTask ? ["TEXT", "IMAGE"] : ["TEXT"],
           ...(thinkingLevelInput
             ? { thinkingConfig: { thinkingLevel: toGoogleThinkingLevel(thinkingLevelInput) } }
