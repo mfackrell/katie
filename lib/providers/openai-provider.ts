@@ -36,14 +36,25 @@ function toChatMessages(params: ChatGenerateParams): OpenAI.Chat.ChatCompletionM
 }
 
 function toResponsesInput(params: ChatGenerateParams): OpenAI.Responses.ResponseInput {
-  const mapContent = (
-    text: string,
-    role: "assistant" | "system" | "user"
-  ): OpenAI.Responses.ResponseInputMessageContentList => [
+  type ResponseInputContentItem =
+    | { type: "input_text"; text: string }
+    | { type: "output_text"; text: string }
+    | { type: "input_image"; image_url: string; detail: "auto" };
+
+  type ResponseInputMessage = {
+    role: "assistant" | "system" | "user";
+    content: ResponseInputContentItem[];
+  };
+
+  /**
+   * We keep local message typing broader than the SDK's ResponseInputMessageContentList
+   * because assistant history requires `output_text`, which the current SDK type omits.
+   */
+  const mapContent = (text: string, role: "assistant" | "system" | "user"): ResponseInputContentItem[] => [
     { type: role === "assistant" ? "output_text" : "input_text", text }
   ];
 
-  const messages: OpenAI.Responses.ResponseInput = [
+  const messages: ResponseInputMessage[] = [
     { role: "system", content: mapContent(params.persona, "system") },
     { role: "system", content: mapContent(`CONVERSATION SUMMARY:\n${params.summary}`, "system") },
     ...params.history.map((msg) => ({
@@ -52,15 +63,21 @@ function toResponsesInput(params: ChatGenerateParams): OpenAI.Responses.Response
     }))
   ];
 
-  const userContent: OpenAI.Responses.ResponseInputMessageContentList = [{ type: "input_text", text: params.user }];
+  const userContent: ResponseInputContentItem[] = [{ type: "input_text", text: params.user }];
   if (params.images) {
     params.images.forEach((url) => {
-      userContent.push({ type: "input_image", image_url: url, detail: "auto" });
+      userContent.push({
+        type: "input_image",
+        image_url: url,
+        detail: "auto"
+      });
     });
   }
 
   messages.push({ role: "user", content: userContent });
-  return messages;
+
+  // Cast via unknown to satisfy generate() while preserving the required runtime payload.
+  return messages as unknown as OpenAI.Responses.ResponseInput;
 }
 
 function extractOutputItems(response: OpenAI.Responses.Response): ResponseContentItem[] {
