@@ -1,5 +1,6 @@
 import OpenAI from "openai";
 import { ChatGenerateParams, LlmProvider, ProviderResponse } from "@/lib/providers/types";
+import { buildMemoryContext } from "@/lib/providers/memory-context";
 
 export class GrokProvider implements LlmProvider {
   name = "grok" as const;
@@ -48,8 +49,8 @@ export class GrokProvider implements LlmProvider {
         model: selectedModel,
         messages: [
           { role: "system", content: params.persona },
-          { role: "user", content: `CONVERSATION SUMMARY:\n${params.summary}` },
-          ...params.history,
+          { role: "system", content: `CONVERSATION SUMMARY:\n${params.summary}` },
+          { role: "system", content: buildMemoryContext(params.history) },
           { role: "user", content: params.user }
         ]
       });

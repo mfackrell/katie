@@ -1,5 +1,6 @@
 import OpenAI from "openai";
 import { LlmProvider, ChatGenerateParams, ProviderResponse } from "@/lib/providers/types";
+import { buildMemoryContext } from "@/lib/providers/memory-context";
 
 type ResponseContentItem = {
   type: string;
@@ -14,11 +15,6 @@ const MODEL_FALLBACKS: Record<string, string[]> = {
 };
 
 function toChatMessages(params: ChatGenerateParams): OpenAI.Chat.ChatCompletionMessageParam[] {
-  const history: OpenAI.Chat.ChatCompletionMessageParam[] = params.history.map((msg) => ({
-    role: msg.role,
-    content: msg.content
-  }));
-
   const userContent: OpenAI.Chat.ChatCompletionContentPart[] = [{ type: "text", text: params.user }];
 
   if (params.images) {
@@ -30,7 +26,7 @@ function toChatMessages(params: ChatGenerateParams): OpenAI.Chat.ChatCompletionM
   return [
     { role: "system", content: params.persona },
     { role: "system", content: `CONVERSATION SUMMARY:\n${params.summary}` },
-    ...history,
+    { role: "system", content: buildMemoryContext(params.history) },
     { role: "user", content: userContent }
   ];
 }
@@ -38,29 +34,20 @@ function toChatMessages(params: ChatGenerateParams): OpenAI.Chat.ChatCompletionM
 function toResponsesInput(params: ChatGenerateParams): OpenAI.Responses.ResponseInput {
   type ResponseInputContentItem =
     | { type: "input_text"; text: string }
-    | { type: "output_text"; text: string }
     | { type: "input_image"; image_url: string; detail: "auto" };
 
   type ResponseInputMessage = {
-    role: "assistant" | "system" | "user";
+    role: "system" | "user";
     content: ResponseInputContentItem[];
   };
 
-  /**
-   * We keep local message typing broader than the SDK's ResponseInputMessageContentList
-   * because assistant history requires `output_text`, which the current SDK type omits.
-   */
-  const mapContent = (text: string, role: "assistant" | "system" | "user"): ResponseInputContentItem[] => [
-    { type: role === "assistant" ? "output_text" : "input_text", text }
-  ];
+  const mapContent = (text: string): ResponseInputContentItem[] => [{ type: "input_text", text }];
+  const memoryContext = buildMemoryContext(params.history);
 
   const messages: ResponseInputMessage[] = [
-    { role: "system", content: mapContent(params.persona, "system") },
-    { role: "system", content: mapContent(`CONVERSATION SUMMARY:\n${params.summary}`, "system") },
-    ...params.history.map((msg) => ({
-      role: msg.role as "user" | "assistant",
-      content: mapContent(msg.content, msg.role)
-    }))
+    { role: "system", content: mapContent(params.persona) },
+    { role: "system", content: mapContent(`CONVERSATION SUMMARY:\n${params.summary}`) },
+    { role: "system", content: mapContent(memoryContext) }
   ];
 
   const userContent: ResponseInputContentItem[] = [{ type: "input_text", text: params.user }];
