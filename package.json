@@ -7,7 +7,9 @@
     "build": "node --disable-warning=DEP0169 ./node_modules/next/dist/bin/next build",
     "start": "node --disable-warning=DEP0169 ./node_modules/next/dist/bin/next start",
     "lint": "next lint",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "node --test tests/url-api.test.mjs",
+    "check:url": "node scripts/check-no-legacy-url.mjs"
   },
   "dependencies": {
     "next": "15.1.11",
