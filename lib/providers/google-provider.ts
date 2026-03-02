@@ -1,6 +1,7 @@
 import { GoogleGenAI, ThinkingLevel as GoogleThinkingLevel } from "@google/genai";
 import { ChatGenerateParams, LlmProvider, ProviderResponse } from "@/lib/providers/types";
 import { buildMemoryContext } from "@/lib/providers/memory-context";
+import { MATH_EXECUTION_PROTOCOL } from "@/lib/providers/math-execution-protocol";
 
 type ThinkingLevelInput = "minimal" | "low" | "medium" | "high";
 
@@ -100,7 +101,7 @@ export class GoogleProvider implements LlmProvider {
       parsedModel.thinkingLevelInput ?? (isGemini3Model(selectedModel) ? "medium" : undefined);
     const isImageTask = isImageGenerationModel(selectedModel);
     const memoryContext = buildMemoryContext(params.history);
-    const baseSystemInstruction = `${params.persona}\n\nCONVERSATION SUMMARY:\n${params.summary}\n\n${memoryContext}`;
+    const baseSystemInstruction = `${MATH_EXECUTION_PROTOCOL}\n\n${params.persona}\n\nCONVERSATION SUMMARY:\n${params.summary}\n\n${memoryContext}`;
     const systemInstruction = isImageTask
       ? `${baseSystemInstruction}\n\nIMPORTANT: You have direct image generation capabilities. If the user asks for a photo, design asset, or image, generate it directly as an image modality response.`
       : baseSystemInstruction;
