@@ -4,6 +4,7 @@ export interface Actor {
   id: string;
   name: string;
   purpose: string;
+  parentId?: string;
 }
 
 export interface ChatThread {

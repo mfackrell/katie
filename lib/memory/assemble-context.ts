@@ -8,11 +8,11 @@ interface AssembledContext {
   history: Message[];
 }
 
-export async function assembleContext(actorId: string): Promise<AssembledContext> {
+export async function assembleContext(actorId: string, chatId: string): Promise<AssembledContext> {
   const [actor, summary, recentMessages] = await Promise.all([
     getActorById(actorId),
-    getConversationSummary(actorId),
-    getRecentMessages(actorId)
+    getConversationSummary(chatId),
+    getRecentMessages(chatId)
   ]);
 
   if (!actor) {

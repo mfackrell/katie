@@ -5,8 +5,8 @@ import { setConversationSummary } from "@/lib/data/blob-store";
 const summarizerModel = "gpt-4o-mini";
 const client = process.env.OPENAI_API_KEY ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY }) : null;
 
-export async function maybeUpdateSummary(actorId: string): Promise<void> {
-  const recent = await getRecentMessages(actorId, 60);
+export async function maybeUpdateSummary(chatId: string): Promise<void> {
+  const recent = await getRecentMessages(chatId, 60);
 
   if (!client || recent.length < 3 || recent.length % 2 !== 0) {
     return;
@@ -28,6 +28,6 @@ export async function maybeUpdateSummary(actorId: string): Promise<void> {
 
   const summary = response.choices[0]?.message?.content?.trim();
   if (summary) {
-    await setConversationSummary(actorId, summary);
+    await setConversationSummary(chatId, summary);
   }
 }

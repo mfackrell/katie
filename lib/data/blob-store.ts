@@ -40,28 +40,27 @@ export async function getActorById(actorId: string): Promise<Actor | null> {
   return actor ?? demoActors.find((item) => item.id === actorId) ?? null;
 }
 
-export async function getRecentMessages(actorId: string, limit = 20): Promise<Message[]> {
-  const blobMessages = await blobGet<Message[]>(`messages/${actorId}.json`);
+export async function getRecentMessages(chatId: string, limit = 20): Promise<Message[]> {
+  const blobMessages = await blobGet<Message[]>(`messages/${chatId}.json`);
   if (blobMessages) {
-    memoryMessages.set(actorId, blobMessages);
+    memoryMessages.set(chatId, blobMessages);
   }
 
-  const messages = blobMessages ?? memoryMessages.get(actorId) ?? [];
+  const messages = blobMessages ?? memoryMessages.get(chatId) ?? [];
   return messages.slice(-limit);
 }
 
 export async function saveMessage(
-  actorId: string,
+  chatId: string,
   role: "user" | "assistant",
   content: string,
-  chatId: string,
   model?: string,
   assets?: Array<{ type: string; url: string }>
 ): Promise<void> {
-  let current = memoryMessages.get(actorId);
+  let current = memoryMessages.get(chatId);
 
   if (!current) {
-    current = (await blobGet<Message[]>(`messages/${actorId}.json`)) ?? [];
+    current = (await blobGet<Message[]>(`messages/${chatId}.json`)) ?? [];
   }
 
   const next = [
@@ -77,16 +76,20 @@ export async function saveMessage(
     }
   ];
 
-  memoryMessages.set(actorId, next);
-  await blobPut(`messages/${actorId}.json`, next);
+  memoryMessages.set(chatId, next);
+  await blobPut(`messages/${chatId}.json`, next);
 }
 
-export async function getConversationSummary(actorId: string): Promise<string> {
-  const summary = await blobGet<string>(`summaries/${actorId}.json`);
-  return summary ?? memorySummaries.get(actorId) ?? "";
+export async function getConversationSummary(chatId: string): Promise<string> {
+  const summary = await blobGet<string>(`summaries/${chatId}.json`);
+  return summary ?? memorySummaries.get(chatId) ?? "";
 }
 
-export async function setConversationSummary(actorId: string, summary: string): Promise<void> {
-  memorySummaries.set(actorId, summary);
-  await blobPut(`summaries/${actorId}.json`, summary);
+export async function setConversationSummary(chatId: string, summary: string): Promise<void> {
+  memorySummaries.set(chatId, summary);
+  await blobPut(`summaries/${chatId}.json`, summary);
+}
+
+export async function saveActor(actor: Actor): Promise<void> {
+  await blobPut(`actors/${actor.id}.json`, actor);
 }
