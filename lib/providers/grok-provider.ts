@@ -2,6 +2,7 @@ import OpenAI from "openai";
 import { ChatGenerateParams, LlmProvider, ProviderResponse } from "@/lib/providers/types";
 import { buildMemoryContext } from "@/lib/providers/memory-context";
 import { MATH_EXECUTION_PROTOCOL } from "@/lib/providers/math-execution-protocol";
+import { formatAttachmentContext } from "@/lib/providers/attachment-context";
 
 export class GrokProvider implements LlmProvider {
   name = "grok" as const;
@@ -46,14 +47,22 @@ export class GrokProvider implements LlmProvider {
     }
 
     try {
+      const attachmentContext = formatAttachmentContext(params.attachments);
+      const messages: OpenAI.Chat.ChatCompletionMessageParam[] = [
+        { role: "system", content: `${MATH_EXECUTION_PROTOCOL}\n\nCORE_PERSONA: ${params.persona}` },
+        { role: "system", content: `MEMORY_CONTEXT:\n${params.summary}\nEND_MEMORY_CONTEXT` },
+        { role: "system", content: buildMemoryContext(params.history) }
+      ];
+
+      if (attachmentContext) {
+        messages.push({ role: "system", content: attachmentContext });
+      }
+
+      messages.push({ role: "user", content: params.user });
+
       const completion = await this.client.chat.completions.create({
         model: selectedModel,
-        messages: [
-          { role: "system", content: `${MATH_EXECUTION_PROTOCOL}\n\nCORE_PERSONA: ${params.persona}` },
-          { role: "system", content: `MEMORY_CONTEXT:\n${params.summary}\nEND_MEMORY_CONTEXT` },
-          { role: "system", content: buildMemoryContext(params.history) },
-          { role: "user", content: params.user }
-        ]
+        messages
       });
 
       return {

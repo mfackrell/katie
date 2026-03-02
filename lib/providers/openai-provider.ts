@@ -2,6 +2,7 @@ import OpenAI from "openai";
 import { LlmProvider, ChatGenerateParams, ProviderResponse } from "@/lib/providers/types";
 import { buildMemoryContext } from "@/lib/providers/memory-context";
 import { MATH_EXECUTION_PROTOCOL } from "@/lib/providers/math-execution-protocol";
+import { formatAttachmentContext } from "@/lib/providers/attachment-context";
 
 type ResponseContentItem = {
   type: string;
@@ -16,6 +17,7 @@ const MODEL_FALLBACKS: Record<string, string[]> = {
 };
 
 function toChatMessages(params: ChatGenerateParams): OpenAI.Chat.ChatCompletionMessageParam[] {
+  const attachmentContext = formatAttachmentContext(params.attachments);
   const userContent: OpenAI.Chat.ChatCompletionContentPart[] = [{ type: "text", text: params.user }];
 
   if (params.images) {
@@ -24,12 +26,19 @@ function toChatMessages(params: ChatGenerateParams): OpenAI.Chat.ChatCompletionM
     });
   }
 
-  return [
+  const messages: OpenAI.Chat.ChatCompletionMessageParam[] = [
     { role: "system", content: `${MATH_EXECUTION_PROTOCOL}\n\nCORE_PERSONA: ${params.persona}` },
     { role: "system", content: `MEMORY_CONTEXT:\n${params.summary}\nEND_MEMORY_CONTEXT` },
     { role: "system", content: buildMemoryContext(params.history) },
-    { role: "user", content: userContent }
   ];
+
+  if (attachmentContext) {
+    messages.push({ role: "system", content: attachmentContext });
+  }
+
+  messages.push({ role: "user", content: userContent });
+
+  return messages;
 }
 
 function toResponsesInput(params: ChatGenerateParams): OpenAI.Responses.ResponseInput {
@@ -44,12 +53,17 @@ function toResponsesInput(params: ChatGenerateParams): OpenAI.Responses.Response
 
   const mapContent = (text: string): ResponseInputContentItem[] => [{ type: "input_text", text }];
   const memoryContext = buildMemoryContext(params.history);
+  const attachmentContext = formatAttachmentContext(params.attachments);
 
   const messages: ResponseInputMessage[] = [
     { role: "system", content: mapContent(`${MATH_EXECUTION_PROTOCOL}\n\nCORE_PERSONA: ${params.persona}`) },
     { role: "system", content: mapContent(`MEMORY_CONTEXT:\n${params.summary}\nEND_MEMORY_CONTEXT`) },
     { role: "system", content: mapContent(memoryContext) }
   ];
+
+  if (attachmentContext) {
+    messages.push({ role: "system", content: mapContent(attachmentContext) });
+  }
 
   const userContent: ResponseInputContentItem[] = [{ type: "input_text", text: params.user }];
   if (params.images) {
