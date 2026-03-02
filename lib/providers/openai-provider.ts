@@ -58,7 +58,7 @@ function toResponsesInput(params: ChatGenerateParams): OpenAI.Responses.Response
     { role: "system", content: mapContent(params.persona, "system") },
     { role: "system", content: mapContent(`CONVERSATION SUMMARY:\n${params.summary}`, "system") },
     ...params.history.map((msg) => ({
-      role: msg.role as const,
+      role: msg.role as "user" | "assistant",
       content: mapContent(msg.content, msg.role)
     }))
   ];
