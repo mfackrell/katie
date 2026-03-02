@@ -2,6 +2,7 @@ import { GoogleGenAI, ThinkingLevel as GoogleThinkingLevel } from "@google/genai
 import { ChatGenerateParams, LlmProvider, ProviderResponse } from "@/lib/providers/types";
 import { buildMemoryContext } from "@/lib/providers/memory-context";
 import { MATH_EXECUTION_PROTOCOL } from "@/lib/providers/math-execution-protocol";
+import { formatAttachmentContext } from "@/lib/providers/attachment-context";
 
 type ThinkingLevelInput = "minimal" | "low" | "medium" | "high";
 
@@ -101,10 +102,14 @@ export class GoogleProvider implements LlmProvider {
       parsedModel.thinkingLevelInput ?? (isGemini3Model(selectedModel) ? "medium" : undefined);
     const isImageTask = isImageGenerationModel(selectedModel);
     const memoryContext = buildMemoryContext(params.history);
+    const attachmentContext = formatAttachmentContext(params.attachments);
     const baseSystemInstruction = `${MATH_EXECUTION_PROTOCOL}\n\nCORE_PERSONA: ${params.persona}\n\nMEMORY_CONTEXT:\n${params.summary}\nEND_MEMORY_CONTEXT\n\n${memoryContext}`;
-    const systemInstruction = isImageTask
+    const systemInstructionBase = isImageTask
       ? `${baseSystemInstruction}\n\nIMPORTANT: You have direct image generation capabilities. If the user asks for a photo, design asset, or image, generate it directly as an image modality response.`
       : baseSystemInstruction;
+    const systemInstruction = attachmentContext
+      ? `${systemInstructionBase}\n\n${attachmentContext}`
+      : systemInstructionBase;
 
     try {
       const result = await this.client.models.generateContent({

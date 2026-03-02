@@ -1,6 +1,7 @@
 import { ChatGenerateParams, LlmProvider, ProviderResponse } from "@/lib/providers/types";
 import { buildMemoryContext } from "@/lib/providers/memory-context";
 import { MATH_EXECUTION_PROTOCOL } from "@/lib/providers/math-execution-protocol";
+import { formatAttachmentContext } from "@/lib/providers/attachment-context";
 
 type ClaudeMessageResponse = {
   content?: Array<{ type: string; text?: string; [key: string]: unknown }>;
@@ -43,6 +44,9 @@ export class ClaudeProvider implements LlmProvider {
 
   async generate(params: ChatGenerateParams): Promise<ProviderResponse> {
     const selectedModel = params.modelId ?? this.defaultModel;
+    const attachmentContext = formatAttachmentContext(params.attachments);
+    const systemPrompt = `${MATH_EXECUTION_PROTOCOL}\n\nCORE_PERSONA: ${params.persona}\n\nMEMORY_CONTEXT:\n${params.summary}\nEND_MEMORY_CONTEXT\n\n${buildMemoryContext(params.history)}`;
+    const system = attachmentContext ? `${systemPrompt}\n\n${attachmentContext}` : systemPrompt;
 
     const response = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
@@ -54,7 +58,7 @@ export class ClaudeProvider implements LlmProvider {
       body: JSON.stringify({
         model: selectedModel,
         max_tokens: 4096,
-        system: `${MATH_EXECUTION_PROTOCOL}\n\nCORE_PERSONA: ${params.persona}\n\nMEMORY_CONTEXT:\n${params.summary}\nEND_MEMORY_CONTEXT\n\n${buildMemoryContext(params.history)}`,
+        system,
         messages: [{ role: "user", content: params.user }]
       })
     });
