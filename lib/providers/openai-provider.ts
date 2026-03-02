@@ -36,31 +36,39 @@ function toChatMessages(params: ChatGenerateParams): OpenAI.Chat.ChatCompletionM
 }
 
 function toResponsesInput(params: ChatGenerateParams): OpenAI.Responses.ResponseInput {
-  const mapContent = (
-    text: string,
-    role: "assistant" | "system" | "user"
-  ): OpenAI.Responses.ResponseInputMessageContentList => [
+  /**
+   * We use any[] as a return type here because the SDK's 'ResponseInputMessageContentList'
+   * type is currently too restrictive—it does not allow 'output_text', which is
+   * mandatory for assistant messages in the Responses API.
+   */
+  const mapContent = (text: string, role: string): any[] => [
     { type: role === "assistant" ? "output_text" : "input_text", text }
   ];
 
-  const messages: OpenAI.Responses.ResponseInput = [
-    { role: "system", content: mapContent(params.persona, "system") },
-    { role: "system", content: mapContent(`CONVERSATION SUMMARY:\n${params.summary}`, "system") },
+  const messages = [
+    { role: "system" as const, content: mapContent(params.persona, "system") },
+    { role: "system" as const, content: mapContent(`CONVERSATION SUMMARY:\n${params.summary}`, "system") },
     ...params.history.map((msg) => ({
-      role: msg.role,
+      role: msg.role as const,
       content: mapContent(msg.content, msg.role)
     }))
   ];
 
-  const userContent: OpenAI.Responses.ResponseInputMessageContentList = [{ type: "input_text", text: params.user }];
+  const userContent: any[] = [{ type: "input_text", text: params.user }];
   if (params.images) {
     params.images.forEach((url) => {
-      userContent.push({ type: "input_image", image_url: url, detail: "auto" });
+      userContent.push({
+        type: "input_image",
+        image_url: url,
+        detail: "auto"
+      });
     });
   }
 
-  messages.push({ role: "user", content: userContent });
-  return messages;
+  messages.push({ role: "user" as const, content: userContent });
+
+  // Cast the final array to ResponseInput to satisfy the generate() call
+  return messages as OpenAI.Responses.ResponseInput;
 }
 
 function extractOutputItems(response: OpenAI.Responses.Response): ResponseContentItem[] {
