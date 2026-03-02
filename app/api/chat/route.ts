@@ -5,6 +5,7 @@ import { maybeUpdateSummary } from "@/lib/memory/summarizer";
 import { getAvailableProviders } from "@/lib/providers";
 import { chooseProvider } from "@/lib/router/master-router";
 import { saveMessage } from "@/lib/data/blob-store";
+import { parseTextFiles, type ParsedAttachment } from "@/lib/uploads/parse-text-files";
 
 // Use the naming convention from your Frontend and Zod schema
 const requestSchema = z.object({
@@ -15,6 +16,62 @@ const requestSchema = z.object({
   overrideProvider: z.string().min(1).optional(),
   overrideModel: z.string().min(1).optional()
 });
+
+type RequestPayload = z.infer<typeof requestSchema>;
+
+function readOptionalString(formData: FormData, key: string): string | undefined {
+  const value = formData.get(key);
+
+  if (typeof value !== "string") {
+    return undefined;
+  }
+
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
+async function parseIncomingPayload(request: NextRequest): Promise<{ payload: RequestPayload; files: File[] }> {
+  const contentType = request.headers.get("content-type") ?? "";
+
+  if (contentType.includes("multipart/form-data")) {
+    const formData = await request.formData();
+    const imageValues = formData
+      .getAll("images")
+      .filter((value): value is string => typeof value === "string" && value.length > 0);
+
+    const payload = {
+      actorId: readOptionalString(formData, "actorId") ?? "",
+      chatId: readOptionalString(formData, "chatId") ?? "",
+      message: readOptionalString(formData, "message") ?? "",
+      images: imageValues.length ? imageValues : undefined,
+      overrideProvider: readOptionalString(formData, "overrideProvider"),
+      overrideModel: readOptionalString(formData, "overrideModel")
+    };
+
+    const parsed = requestSchema.safeParse(payload);
+
+    if (!parsed.success) {
+      console.error("[Chat API] Validation Failed:", parsed.error.format());
+      throw new Error("Invalid request payload");
+    }
+
+    const files = formData.getAll("files").filter((value): value is File => value instanceof File);
+
+    return { payload: parsed.data, files };
+  }
+
+  const body = await request.json();
+  console.log(`[Chat API] Received request body:`, JSON.stringify(body));
+
+  const parsed = requestSchema.safeParse(body);
+
+  if (!parsed.success) {
+    console.error("[Chat API] Validation Failed:", parsed.error.format());
+    throw new Error("Invalid request payload");
+  }
+
+  return { payload: parsed.data, files: [] };
+}
 
 function extractImageUrl(part: { type?: string; [key: string]: unknown }): string | null {
   if (typeof part.url === "string") {
@@ -56,18 +113,18 @@ function extractImageUrl(part: { type?: string; [key: string]: unknown }): strin
 
 export async function POST(request: NextRequest) {
   try {
-    // LOG 1: Capture the incoming request
-    const body = await request.json();
-    console.log(`[Chat API] Received request body:`, JSON.stringify(body));
+    // LOG 1: Capture and normalize the incoming request
+    const { payload, files } = await parseIncomingPayload(request);
+    const { actorId, chatId, message, images, overrideProvider, overrideModel } = payload;
+    let attachments: ParsedAttachment[] | undefined;
 
-    const parsed = requestSchema.safeParse(body);
-
-    if (!parsed.success) {
-      console.error("[Chat API] Validation Failed:", parsed.error.format());
-      return NextResponse.json({ error: "Invalid request payload" }, { status: 400 });
+    if (files.length) {
+      const nonImageFiles = files.filter((file) => !file.type.startsWith("image/"));
+      if (nonImageFiles.length) {
+        attachments = await parseTextFiles(nonImageFiles);
+      }
     }
 
-    const { actorId, chatId, message, images, overrideProvider, overrideModel } = parsed.data;
     const encoder = new TextEncoder();
 
     // LOG 2: Verification of IDs
@@ -134,7 +191,8 @@ export async function POST(request: NextRequest) {
               history: historyForProvider,
               user: message,
               images,
-              modelId
+              modelId,
+              attachments
             });
 
             if (!result || (!result.text && !(result.content?.length))) {
@@ -192,8 +250,13 @@ export async function POST(request: NextRequest) {
       }
     });
   } catch (error: unknown) {
-    // LOG 8: Catch-all for 500 errors
     const errorMessage = error instanceof Error ? error.message : "Unexpected error";
+
+    if (errorMessage === "Invalid request payload" || errorMessage.includes("Unsupported file type") || errorMessage.includes("Too many files") || errorMessage.includes("too large")) {
+      return NextResponse.json({ error: errorMessage }, { status: 400 });
+    }
+
+    // LOG 8: Catch-all for 500 errors
     console.error("[Chat API] Fatal Runtime Error:", {
       message: errorMessage,
       stack: error instanceof Error ? error.stack : undefined
