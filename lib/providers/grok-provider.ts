@@ -49,8 +49,8 @@ export class GrokProvider implements LlmProvider {
       const completion = await this.client.chat.completions.create({
         model: selectedModel,
         messages: [
-          { role: "system", content: `${MATH_EXECUTION_PROTOCOL}\n\n${params.persona}` },
-          { role: "system", content: `CONVERSATION SUMMARY:\n${params.summary}` },
+          { role: "system", content: `${MATH_EXECUTION_PROTOCOL}\n\nCORE_PERSONA: ${params.persona}` },
+          { role: "system", content: `MEMORY_CONTEXT:\n${params.summary}\nEND_MEMORY_CONTEXT` },
           { role: "system", content: buildMemoryContext(params.history) },
           { role: "user", content: params.user }
         ]

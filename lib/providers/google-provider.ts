@@ -101,7 +101,7 @@ export class GoogleProvider implements LlmProvider {
       parsedModel.thinkingLevelInput ?? (isGemini3Model(selectedModel) ? "medium" : undefined);
     const isImageTask = isImageGenerationModel(selectedModel);
     const memoryContext = buildMemoryContext(params.history);
-    const baseSystemInstruction = `${MATH_EXECUTION_PROTOCOL}\n\n${params.persona}\n\nCONVERSATION SUMMARY:\n${params.summary}\n\n${memoryContext}`;
+    const baseSystemInstruction = `${MATH_EXECUTION_PROTOCOL}\n\nCORE_PERSONA: ${params.persona}\n\nMEMORY_CONTEXT:\n${params.summary}\nEND_MEMORY_CONTEXT\n\n${memoryContext}`;
     const systemInstruction = isImageTask
       ? `${baseSystemInstruction}\n\nIMPORTANT: You have direct image generation capabilities. If the user asks for a photo, design asset, or image, generate it directly as an image modality response.`
       : baseSystemInstruction;

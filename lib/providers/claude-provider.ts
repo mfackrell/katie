@@ -54,7 +54,7 @@ export class ClaudeProvider implements LlmProvider {
       body: JSON.stringify({
         model: selectedModel,
         max_tokens: 4096,
-        system: `${MATH_EXECUTION_PROTOCOL}\n\n${params.persona}\n\nCONVERSATION SUMMARY:\n${params.summary}\n\n${buildMemoryContext(params.history)}`,
+        system: `${MATH_EXECUTION_PROTOCOL}\n\nCORE_PERSONA: ${params.persona}\n\nMEMORY_CONTEXT:\n${params.summary}\nEND_MEMORY_CONTEXT\n\n${buildMemoryContext(params.history)}`,
         messages: [{ role: "user", content: params.user }]
       })
     });
