@@ -1,5 +1,6 @@
 import { GoogleGenAI, ThinkingLevel as GoogleThinkingLevel } from "@google/genai";
 import { ChatGenerateParams, LlmProvider, ProviderResponse } from "@/lib/providers/types";
+import { buildMemoryContext } from "@/lib/providers/memory-context";
 
 type ThinkingLevelInput = "minimal" | "low" | "medium" | "high";
 
@@ -88,18 +89,7 @@ export class GoogleProvider implements LlmProvider {
     const parsedModel = parseThinkingLevel(params.modelId ?? this.defaultModel);
     const selectedModel = parsedModel.normalizedModel;
 
-    const historyContents: Array<{ role: "user" | "model"; parts: Array<{ text: string }> }> =
-      params.history.map((message) => ({
-        role: message.role === "assistant" ? "model" : "user",
-        parts: [{ text: message.content }]
-      }));
-
-    const contents: Array<{ role: "user" | "model"; parts: Array<{ text: string }> }> = [
-      {
-        role: "user",
-        parts: [{ text: `CONVERSATION SUMMARY:\n${params.summary}` }]
-      },
-      ...historyContents,
+    const contents: Array<{ role: "user"; parts: Array<{ text: string }> }> = [
       {
         role: "user",
         parts: [{ text: params.user }]
@@ -109,9 +99,11 @@ export class GoogleProvider implements LlmProvider {
     const thinkingLevelInput =
       parsedModel.thinkingLevelInput ?? (isGemini3Model(selectedModel) ? "medium" : undefined);
     const isImageTask = isImageGenerationModel(selectedModel);
+    const memoryContext = buildMemoryContext(params.history);
+    const baseSystemInstruction = `${params.persona}\n\nCONVERSATION SUMMARY:\n${params.summary}\n\n${memoryContext}`;
     const systemInstruction = isImageTask
-      ? `${params.persona}\n\nIMPORTANT: You have direct image generation capabilities. If the user asks for a photo, design asset, or image, generate it directly as an image modality response.`
-      : params.persona;
+      ? `${baseSystemInstruction}\n\nIMPORTANT: You have direct image generation capabilities. If the user asks for a photo, design asset, or image, generate it directly as an image modality response.`
+      : baseSystemInstruction;
 
     try {
       const result = await this.client.models.generateContent({
