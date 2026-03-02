@@ -25,8 +25,8 @@ function toChatMessages(params: ChatGenerateParams): OpenAI.Chat.ChatCompletionM
   }
 
   return [
-    { role: "system", content: `${MATH_EXECUTION_PROTOCOL}\n\n${params.persona}` },
-    { role: "system", content: `CONVERSATION SUMMARY:\n${params.summary}` },
+    { role: "system", content: `${MATH_EXECUTION_PROTOCOL}\n\nCORE_PERSONA: ${params.persona}` },
+    { role: "system", content: `MEMORY_CONTEXT:\n${params.summary}\nEND_MEMORY_CONTEXT` },
     { role: "system", content: buildMemoryContext(params.history) },
     { role: "user", content: userContent }
   ];
@@ -46,8 +46,8 @@ function toResponsesInput(params: ChatGenerateParams): OpenAI.Responses.Response
   const memoryContext = buildMemoryContext(params.history);
 
   const messages: ResponseInputMessage[] = [
-    { role: "system", content: mapContent(`${MATH_EXECUTION_PROTOCOL}\n\n${params.persona}`) },
-    { role: "system", content: mapContent(`CONVERSATION SUMMARY:\n${params.summary}`) },
+    { role: "system", content: mapContent(`${MATH_EXECUTION_PROTOCOL}\n\nCORE_PERSONA: ${params.persona}`) },
+    { role: "system", content: mapContent(`MEMORY_CONTEXT:\n${params.summary}\nEND_MEMORY_CONTEXT`) },
     { role: "system", content: mapContent(memoryContext) }
   ];
 

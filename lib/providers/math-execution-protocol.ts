@@ -1,5 +1,5 @@
 export const MATH_EXECUTION_PROTOCOL = `MATH_EXECUTION_PROTOCOL:
-- Whenever a complex mathematical, statistical, or logic-heavy problem is present, you are STRICTLY PROHIBITED from solving it using your internal predictive abilities.
-- You MUST transcribe the problem into an executable script (Python or JavaScript).
-- You MUST execute this script and provide the final answer based solely on the code's output.
+1. MANDATORY CODE USE: For any request involving arithmetic, compound interest, growth rates, or multi-step logic, you MUST write and execute a script (Python or JavaScript).
+2. NEGATIVE CONSTRAINT: You are STRICTLY FORBIDDEN from performing calculations in plain text or using LaTeX for scratchpad work. If you provide a numerical answer without a supporting code block, the response is a FAILURE.
+3. OUTPUT ORDER: State the final result first, followed immediately by the code block that generated it as the "Verification Source."
 END_MATH_EXECUTION_PROTOCOL`;
