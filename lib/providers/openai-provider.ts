@@ -36,16 +36,19 @@ function toChatMessages(params: ChatGenerateParams): OpenAI.Chat.ChatCompletionM
 }
 
 function toResponsesInput(params: ChatGenerateParams): OpenAI.Responses.ResponseInput {
-  const mapContent = (text: string): OpenAI.Responses.ResponseInputMessageContentList => [
-    { type: "input_text", text }
+  const mapContent = (
+    text: string,
+    role: "assistant" | "system" | "user"
+  ): OpenAI.Responses.ResponseInputMessageContentList => [
+    { type: role === "assistant" ? "output_text" : "input_text", text }
   ];
 
   const messages: OpenAI.Responses.ResponseInput = [
-    { role: "system", content: mapContent(params.persona) },
-    { role: "system", content: mapContent(`CONVERSATION SUMMARY:\n${params.summary}`) },
+    { role: "system", content: mapContent(params.persona, "system") },
+    { role: "system", content: mapContent(`CONVERSATION SUMMARY:\n${params.summary}`, "system") },
     ...params.history.map((msg) => ({
       role: msg.role,
-      content: mapContent(msg.content)
+      content: mapContent(msg.content, msg.role)
     }))
   ];
 
