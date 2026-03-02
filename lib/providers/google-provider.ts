@@ -6,6 +6,10 @@ import { formatAttachmentContext } from "@/lib/providers/attachment-context";
 
 type ThinkingLevelInput = "minimal" | "low" | "medium" | "high";
 
+type GoogleInputPart =
+  | { text: string }
+  | { fileData: { fileUri: string; mimeType: string } };
+
 const GOOGLE_MODEL_ALIASES: Record<string, string> = {
   "gemini-pro": "gemini-3.1-pro",
   "gemini-3-pro": "gemini-3.1-pro",
@@ -59,6 +63,23 @@ function isImageGenerationModel(modelId: string): boolean {
   return lowerModel.includes("image") || lowerModel.includes("banana");
 }
 
+function buildGoogleFileParts(params: ChatGenerateParams): GoogleInputPart[] {
+  if (!params.attachments?.length) {
+    return [];
+  }
+
+  return params.attachments
+    .filter((attachment): attachment is typeof attachment & { providerRef: { googleFileUri: string } } =>
+      Boolean(attachment.providerRef?.googleFileUri)
+    )
+    .map((attachment) => ({
+      fileData: {
+        fileUri: attachment.providerRef.googleFileUri,
+        mimeType: attachment.mimeType
+      }
+    }));
+}
+
 export class GoogleProvider implements LlmProvider {
   name = "google" as const;
   private client: GoogleGenAI;
@@ -73,7 +94,6 @@ export class GoogleProvider implements LlmProvider {
       const listResponse = await this.client.models.list();
       const modelIds: string[] = [];
 
-      // The Pager returned by list() is an Async Iterable in the 1.x SDK
       for await (const model of listResponse) {
         if (model.supportedActions?.includes("generateContent") && model.name) {
           modelIds.push(model.name.replace("models/", ""));
@@ -83,7 +103,7 @@ export class GoogleProvider implements LlmProvider {
       return modelIds;
     } catch (error) {
       console.error("[GoogleProvider] Failed to list models:", error);
-      return []; // Return empty list on failure to avoid breaking the UI
+      return [];
     }
   }
 
@@ -91,10 +111,11 @@ export class GoogleProvider implements LlmProvider {
     const parsedModel = parseThinkingLevel(params.modelId ?? this.defaultModel);
     const selectedModel = parsedModel.normalizedModel;
 
-    const contents: Array<{ role: "user"; parts: Array<{ text: string }> }> = [
+    const parts: GoogleInputPart[] = [{ text: params.user }, ...buildGoogleFileParts(params)];
+    const contents: Array<{ role: "user"; parts: GoogleInputPart[] }> = [
       {
         role: "user",
-        parts: [{ text: params.user }]
+        parts
       }
     ];
 

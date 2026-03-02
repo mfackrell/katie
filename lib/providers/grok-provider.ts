@@ -56,6 +56,10 @@ export class GrokProvider implements LlmProvider {
 
       if (attachmentContext) {
         messages.push({ role: "system", content: attachmentContext });
+        messages.push({
+          role: "system",
+          content: "IMPORTANT: Attachment previews are truncated excerpts, not full files."
+        });
       }
 
       messages.push({ role: "user", content: params.user });

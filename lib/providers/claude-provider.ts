@@ -45,8 +45,11 @@ export class ClaudeProvider implements LlmProvider {
   async generate(params: ChatGenerateParams): Promise<ProviderResponse> {
     const selectedModel = params.modelId ?? this.defaultModel;
     const attachmentContext = formatAttachmentContext(params.attachments);
+    const attachmentSafetyNotice = attachmentContext
+      ? "\n\nIMPORTANT: Attachment previews are truncated excerpts, not full files."
+      : "";
     const systemPrompt = `${MATH_EXECUTION_PROTOCOL}\n\nCORE_PERSONA: ${params.persona}\n\nMEMORY_CONTEXT:\n${params.summary}\nEND_MEMORY_CONTEXT\n\n${buildMemoryContext(params.history)}`;
-    const system = attachmentContext ? `${systemPrompt}\n\n${attachmentContext}` : systemPrompt;
+    const system = attachmentContext ? `${systemPrompt}\n\n${attachmentContext}${attachmentSafetyNotice}` : systemPrompt;
 
     const response = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",

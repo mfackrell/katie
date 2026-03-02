@@ -2,6 +2,7 @@
 
 import Image from "next/image";
 import { ClipboardEvent, FormEvent, KeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
+import type { FileReference } from "@/lib/providers/types";
 import type { Message } from "@/lib/types/chat";
 
 type ProviderName = "openai" | "google";
@@ -28,13 +29,19 @@ export function ChatPanel({ actorId, chatId }: ChatPanelProps) {
   const [streamingModel, setStreamingModel] = useState<string | null>(null);
   const [selectedImages, setSelectedImages] = useState<string[]>([]);
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
+  const [uploadingFiles, setUploadingFiles] = useState(false);
+  const [fileReferences, setFileReferences] = useState<FileReference[]>([]);
+  const [statusMessage, setStatusMessage] = useState("");
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const canSend = useMemo(
-    () => (input.trim().length > 0 || selectedImages.length > 0 || selectedFiles.length > 0) && !loading,
-    [input, loading, selectedFiles.length, selectedImages.length]
+    () =>
+      (input.trim().length > 0 || selectedImages.length > 0 || selectedFiles.length > 0 || fileReferences.length > 0) &&
+      !loading &&
+      !uploadingFiles,
+    [input, loading, selectedFiles.length, selectedImages.length, uploadingFiles, fileReferences.length]
   );
 
   const scrollToBottom = () => {
@@ -60,6 +67,40 @@ export function ChatPanel({ actorId, chatId }: ChatPanelProps) {
     scrollToBottom();
   }, [messages, loading]);
 
+  async function uploadFiles(files: File[]): Promise<FileReference[]> {
+    if (files.length === 0) {
+      return [];
+    }
+
+    setUploadingFiles(true);
+    setStatusMessage(`Uploading ${files.length} file${files.length > 1 ? "s" : ""}...`);
+
+    try {
+      const formData = new FormData();
+      files.forEach((file) => {
+        formData.append("files", file);
+      });
+
+      const response = await fetch("/api/upload", {
+        method: "POST",
+        body: formData
+      });
+
+      const payload = (await response.json()) as { fileReferences?: FileReference[]; error?: string };
+
+      if (!response.ok || !payload.fileReferences) {
+        throw new Error(payload.error ?? "File upload failed.");
+      }
+
+      setStatusMessage(
+        `Uploaded ${payload.fileReferences.length} file${payload.fileReferences.length > 1 ? "s" : ""}.`
+      );
+      return payload.fileReferences;
+    } finally {
+      setUploadingFiles(false);
+    }
+  }
+
   async function onSubmit(event: FormEvent) {
     event.preventDefault();
     if (!canSend) {
@@ -68,11 +109,14 @@ export function ChatPanel({ actorId, chatId }: ChatPanelProps) {
 
     const content = input.trim();
     const imagesToSend = [...selectedImages];
-    const filesToSend = [...selectedFiles];
+    const filesToUpload = [...selectedFiles];
+    const priorReferences = [...fileReferences];
     const hasImages = imagesToSend.length > 0;
+
     setInput("");
     setSelectedImages([]);
     setSelectedFiles([]);
+    setFileReferences([]);
     if (fileInputRef.current) {
       fileInputRef.current.value = "";
     }
@@ -91,30 +135,23 @@ export function ChatPanel({ actorId, chatId }: ChatPanelProps) {
     ]);
 
     try {
-      const formData = new FormData();
-      formData.append("actorId", actorId);
-      formData.append("chatId", chatId);
-      formData.append("message", content || (hasImages ? "[image]" : "[file]"));
-
-      if (selectedOverride?.providerName) {
-        formData.append("overrideProvider", selectedOverride.providerName);
-      }
-
-      if (selectedOverride?.modelId) {
-        formData.append("overrideModel", selectedOverride.modelId);
-      }
-
-      imagesToSend.forEach((image) => {
-        formData.append("images", image);
-      });
-
-      filesToSend.forEach((file) => {
-        formData.append("files", file);
-      });
+      const uploadedReferences = filesToUpload.length > 0 ? await uploadFiles(filesToUpload) : [];
+      const refsToSend = [...priorReferences, ...uploadedReferences];
 
       const response = await fetch("/api/chat", {
         method: "POST",
-        body: formData
+        headers: {
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          actorId,
+          chatId,
+          message: content || (hasImages ? "[image]" : "[file]"),
+          images: imagesToSend,
+          fileReferences: refsToSend,
+          overrideProvider: selectedOverride?.providerName,
+          overrideModel: selectedOverride?.modelId
+        })
       });
 
       if (!response.ok) {
@@ -129,6 +166,7 @@ export function ChatPanel({ actorId, chatId }: ChatPanelProps) {
             createdAt: new Date().toISOString()
           }
         ]);
+        setStatusMessage(errorData.error ?? "Message failed.");
         return;
       }
 
@@ -224,6 +262,7 @@ export function ChatPanel({ actorId, chatId }: ChatPanelProps) {
           createdAt: new Date().toISOString()
         }
       ]);
+      setStatusMessage("Response received.");
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : "Something went wrong.";
       setMessages((current) => [
@@ -236,6 +275,7 @@ export function ChatPanel({ actorId, chatId }: ChatPanelProps) {
           createdAt: new Date().toISOString()
         }
       ]);
+      setStatusMessage(message);
     } finally {
       setLoading(false);
       setStreamingModel(null);
@@ -281,7 +321,9 @@ export function ChatPanel({ actorId, chatId }: ChatPanelProps) {
       return;
     }
 
-    setSelectedFiles((current) => [...current, ...files]);
+    const nextFiles = files.filter((file) => !file.type.startsWith("image/"));
+    setSelectedFiles((current) => [...current, ...nextFiles]);
+    setStatusMessage(`${nextFiles.length} non-image file${nextFiles.length === 1 ? "" : "s"} ready for upload.`);
 
     files
       .filter((file) => file.type.startsWith("image/"))
@@ -366,9 +408,7 @@ export function ChatPanel({ actorId, chatId }: ChatPanelProps) {
                     value={selectedValue}
                     onChange={(event) => {
                       const nextModel = event.target.value;
-                      setSelectedOverride(
-                        nextModel ? { providerName, modelId: nextModel } : null
-                      );
+                      setSelectedOverride(nextModel ? { providerName, modelId: nextModel } : null);
                     }}
                     className="rounded-md border border-zinc-700 bg-zinc-900 px-2 py-1 text-xs text-zinc-100 outline-none ring-emerald-500 focus:ring"
                   >
@@ -430,7 +470,7 @@ export function ChatPanel({ actorId, chatId }: ChatPanelProps) {
           <div className="flex w-fit items-center gap-3 rounded-lg border border-zinc-700 bg-zinc-900 px-4 py-3 text-sm text-zinc-400">
             <div className="h-4 w-4 animate-spin rounded-full border-2 border-emerald-500 border-t-transparent" />
             <p className="italic">
-              {streamingModel ?? selectedOverride?.modelId ?? "Master Router"} is thinking...
+              {uploadingFiles ? "Uploading attachments..." : `${streamingModel ?? selectedOverride?.modelId ?? "Master Router"} is thinking...`}
             </p>
           </div>
         )}
@@ -438,6 +478,10 @@ export function ChatPanel({ actorId, chatId }: ChatPanelProps) {
       </section>
 
       <form onSubmit={onSubmit} className="border-t border-zinc-800 p-4">
+        <p className="sr-only" role="status" aria-live="polite">
+          {statusMessage}
+        </p>
+
         {selectedImages.length > 0 ? (
           <div className="mb-3 flex flex-wrap gap-2">
             {selectedImages.map((image, index) => (
@@ -462,6 +506,14 @@ export function ChatPanel({ actorId, chatId }: ChatPanelProps) {
           </div>
         ) : null}
 
+        {selectedFiles.length > 0 ? (
+          <ul className="mb-3 space-y-1 text-xs text-zinc-400" aria-live="polite">
+            {selectedFiles.map((file, index) => (
+              <li key={`${file.name}-${index}`}>📄 {file.name}</li>
+            ))}
+          </ul>
+        ) : null}
+
         <div className="flex items-end gap-2">
           <input
             ref={fileInputRef}
@@ -474,7 +526,7 @@ export function ChatPanel({ actorId, chatId }: ChatPanelProps) {
           <button
             type="button"
             onClick={() => fileInputRef.current?.click()}
-            className="rounded-lg bg-zinc-800 px-3 py-2 text-sm text-zinc-400 hover:text-white"
+            className="rounded-lg bg-zinc-800 px-3 py-2 text-sm text-zinc-400 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
             aria-label="Attach files"
           >
             📷
@@ -494,7 +546,7 @@ export function ChatPanel({ actorId, chatId }: ChatPanelProps) {
             disabled={!canSend}
             className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
           >
-            {loading ? "Routing..." : "Send"}
+            {loading || uploadingFiles ? "Routing..." : "Send"}
           </button>
         </div>
       </form>

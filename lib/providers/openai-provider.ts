@@ -1,5 +1,5 @@
 import OpenAI from "openai";
-import { LlmProvider, ChatGenerateParams, ProviderResponse } from "@/lib/providers/types";
+import { ChatGenerateParams, FileReference, LlmProvider, ProviderResponse } from "@/lib/providers/types";
 import { buildMemoryContext } from "@/lib/providers/memory-context";
 import { MATH_EXECUTION_PROTOCOL } from "@/lib/providers/math-execution-protocol";
 import { formatAttachmentContext } from "@/lib/providers/attachment-context";
@@ -16,6 +16,17 @@ const MODEL_FALLBACKS: Record<string, string[]> = {
   "gpt-5": ["gpt-5.2", "gpt-4o"]
 };
 
+function buildOpenAiFileInputs(attachments: FileReference[] | undefined): Array<{ type: "input_file"; file_id: string }> {
+  if (!attachments?.length) {
+    return [];
+  }
+
+  return attachments
+    .map((attachment) => attachment.providerRef?.openaiFileId)
+    .filter((fileId): fileId is string => Boolean(fileId))
+    .map((fileId) => ({ type: "input_file", file_id: fileId }));
+}
+
 function toChatMessages(params: ChatGenerateParams): OpenAI.Chat.ChatCompletionMessageParam[] {
   const attachmentContext = formatAttachmentContext(params.attachments);
   const userContent: OpenAI.Chat.ChatCompletionContentPart[] = [{ type: "text", text: params.user }];
@@ -29,7 +40,7 @@ function toChatMessages(params: ChatGenerateParams): OpenAI.Chat.ChatCompletionM
   const messages: OpenAI.Chat.ChatCompletionMessageParam[] = [
     { role: "system", content: `${MATH_EXECUTION_PROTOCOL}\n\nCORE_PERSONA: ${params.persona}` },
     { role: "system", content: `MEMORY_CONTEXT:\n${params.summary}\nEND_MEMORY_CONTEXT` },
-    { role: "system", content: buildMemoryContext(params.history) },
+    { role: "system", content: buildMemoryContext(params.history) }
   ];
 
   if (attachmentContext) {
@@ -44,7 +55,8 @@ function toChatMessages(params: ChatGenerateParams): OpenAI.Chat.ChatCompletionM
 function toResponsesInput(params: ChatGenerateParams): OpenAI.Responses.ResponseInput {
   type ResponseInputContentItem =
     | { type: "input_text"; text: string }
-    | { type: "input_image"; image_url: string; detail: "auto" };
+    | { type: "input_image"; image_url: string; detail: "auto" }
+    | { type: "input_file"; file_id: string };
 
   type ResponseInputMessage = {
     role: "system" | "user";
@@ -76,9 +88,9 @@ function toResponsesInput(params: ChatGenerateParams): OpenAI.Responses.Response
     });
   }
 
+  userContent.push(...buildOpenAiFileInputs(params.attachments));
   messages.push({ role: "user", content: userContent });
 
-  // Cast via unknown to satisfy generate() while preserving the required runtime payload.
   return messages as unknown as OpenAI.Responses.ResponseInput;
 }
 
