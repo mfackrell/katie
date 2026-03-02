@@ -106,7 +106,7 @@ export async function POST(request: NextRequest) {
     }
 
     console.log("[Chat API] Assembling context and selecting provider...");
-    const { persona, summary, history } = await assembleContext(actorId);
+    const { persona, summary, history } = await assembleContext(actorId, chatId);
     const historyForProvider = history.map(({ role, content }) => ({ role, content }));
     let provider = providers[0];
     let modelId = "";
@@ -142,7 +142,7 @@ export async function POST(request: NextRequest) {
             controller.enqueue(encoder.encode(`${metadataChunk}\n`));
 
             console.log("[Chat API] Saving user message...");
-            await saveMessage(actorId, "user", message, chatId);
+            await saveMessage(chatId, "user", message);
 
             console.log(`[Chat API] Requesting generation from ${provider.name} using model ${modelId}...`);
             const result = await provider.generate({
@@ -186,9 +186,9 @@ export async function POST(request: NextRequest) {
             controller.enqueue(encoder.encode(`${contentChunk}\n`));
 
             console.log("[Chat API] Generation successful. Saving assistant response.");
-            await saveMessage(actorId, "assistant", result.text, chatId, result.model, imageAssets);
+            await saveMessage(chatId, "assistant", result.text, result.model, imageAssets);
 
-            void maybeUpdateSummary(actorId).catch((err: unknown) =>
+            void maybeUpdateSummary(chatId).catch((err: unknown) =>
               console.error("[Chat API] Background Summary Update Error:", err)
             );
 
