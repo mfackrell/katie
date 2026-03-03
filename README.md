@@ -19,8 +19,8 @@ Cloud-first Next.js (App Router) interface for multi-model chat orchestration wi
 1. Push this repo to GitHub.
 2. Import into Vercel.
 3. Configure Blob variables:
-   - `BLOB_BASE_URL` (public blob base URL where JSON files are read)
-   - `BLOB_WRITE_TOKEN` (token allowed to write updated summaries/messages)
+   - `BLOB_BASE_URL` or `BLOB_URL` (public blob base URL where JSON files are read)
+   - `BLOB_READ_WRITE_TOKEN` or `BLOB_WRITE_TOKEN` (token allowed to write updated summaries/messages)
 4. Add API keys in Vercel env vars using secrets.
 
 ### Secret Manager for API keys
