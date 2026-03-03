@@ -54,7 +54,12 @@ export async function POST(request: NextRequest) {
       ...(parentId ? { parentId } : {})
     };
 
-    await saveActor(actor);
+    try {
+      await saveActor(actor);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unknown save error";
+      return NextResponse.json({ error: message }, { status: 500 });
+    }
 
     return NextResponse.json({ actor }, { status: 201 });
   } catch {
