@@ -3,18 +3,27 @@ import type { Actor, Message } from "@/lib/types/chat";
 
 const memoryMessages = new Map<string, Message[]>();
 const memorySummaries = new Map<string, string>();
-const memoryActors = new Map<string, Actor>();
 const deletedActorIds = new Set<string>();
 
 const base = process.env.BLOB_BASE_URL;
 const writeToken = process.env.BLOB_WRITE_TOKEN;
 
-async function blobGet<T>(path: string): Promise<T | null> {
+function requireBlobConfig(): { baseUrl: string; token: string } {
   if (!base) {
-    return null;
+    throw new Error("Config Error: BLOB_BASE_URL is not defined");
   }
 
-  const response = await fetch(`${base}/${path}`, { cache: "no-store" });
+  if (!writeToken) {
+    throw new Error("Config Error: BLOB_WRITE_TOKEN is not defined");
+  }
+
+  return { baseUrl: base, token: writeToken };
+}
+
+async function blobGet<T>(path: string): Promise<T | null> {
+  const { baseUrl } = requireBlobConfig();
+
+  const response = await fetch(`${baseUrl}/${path}`, { cache: "no-store" });
   if (!response.ok) {
     return null;
   }
@@ -23,29 +32,29 @@ async function blobGet<T>(path: string): Promise<T | null> {
 }
 
 async function blobPut(path: string, payload: unknown): Promise<void> {
-  if (!base || !writeToken) {
-    return;
-  }
+  const { baseUrl, token } = requireBlobConfig();
 
-  await fetch(`${base}/${path}`, {
+  const response = await fetch(`${baseUrl}/${path}`, {
     method: "PUT",
     headers: {
       "Content-Type": "application/json",
-      Authorization: `Bearer ${writeToken}`
+      Authorization: `Bearer ${token}`
     },
     body: JSON.stringify(payload)
   });
+
+  if (!response.ok) {
+    throw new Error(`Failed to PUT ${path}: ${response.status} ${response.statusText}`);
+  }
 }
 
 async function blobDelete(path: string): Promise<void> {
-  if (!base || !writeToken) {
-    return;
-  }
+  const { baseUrl, token } = requireBlobConfig();
 
-  await fetch(`${base}/${path}`, {
+  await fetch(`${baseUrl}/${path}`, {
     method: "DELETE",
     headers: {
-      Authorization: `Bearer ${writeToken}`
+      Authorization: `Bearer ${token}`
     }
   });
 }
@@ -66,13 +75,16 @@ export async function getActorById(actorId: string): Promise<Actor | null> {
     return null;
   }
 
-  const inMemory = memoryActors.get(actorId);
-  if (inMemory) {
-    return inMemory;
+  const { baseUrl } = requireBlobConfig();
+  const path = `actors/${actorId}.json`;
+  console.log(`Fetching actor from URL: ${baseUrl}/${path}`);
+
+  const actor = await blobGet<Actor>(path);
+  if (actor) {
+    return actor;
   }
 
-  const actor = await blobGet<Actor>(`actors/${actorId}.json`);
-  return actor ?? demoActors.find((item) => item.id === actorId) ?? null;
+  return demoActors.find((item) => item.id === actorId) ?? null;
 }
 
 export async function listActors(): Promise<Actor[]> {
@@ -83,17 +95,13 @@ export async function listActors(): Promise<Actor[]> {
   const blobActors = (
     await Promise.all(
       blobActorIds.map(async (actorId) => {
-        const actor = await blobGet<Actor>(`actors/${actorId}.json`);
-        if (actor) {
-          memoryActors.set(actor.id, actor);
-        }
-        return actor;
+        return blobGet<Actor>(`actors/${actorId}.json`);
       })
     )
   ).filter((actor): actor is Actor => Boolean(actor));
 
   const deduped = new Map<string, Actor>();
-  [...demoActors, ...memoryActors.values(), ...blobActors].forEach((actor) => {
+  [...demoActors, ...blobActors].forEach((actor) => {
     if (!deleted.has(actor.id)) {
       deduped.set(actor.id, actor);
     }
@@ -153,10 +161,14 @@ export async function setConversationSummary(chatId: string, summary: string): P
 }
 
 export async function saveActor(actor: Actor): Promise<void> {
-  deletedActorIds.delete(actor.id);
-  memoryActors.set(actor.id, actor);
-  await blobPut(`actors/${actor.id}.json`, actor);
+  const actorPath = `actors/${actor.id}.json`;
+  console.log(`Attempting to save actor: [${actor.id}] to [${actorPath}]...`);
 
+  deletedActorIds.delete(actor.id);
+  await blobPut(actorPath, actor);
+  console.log(`Actor [${actor.id}] saved successfully.`);
+
+  console.log("Updating actor index...");
   const currentIndex = (await blobGet<string[]>("actors/index.json")) ?? [];
   if (!currentIndex.includes(actor.id)) {
     await blobPut("actors/index.json", [...currentIndex, actor.id]);
@@ -174,7 +186,6 @@ export async function deleteActorsById(actorIds: string[]): Promise<void> {
   await blobPut("actors/index.json", nextIndex);
 
   actorIds.forEach((actorId) => {
-    memoryActors.delete(actorId);
     deletedActorIds.add(actorId);
   });
 
