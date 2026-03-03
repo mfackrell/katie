@@ -23,7 +23,13 @@ function requireBlobConfig(): { baseUrl: string; token: string } {
 async function blobGet<T>(path: string): Promise<T | null> {
   const { baseUrl } = requireBlobConfig();
 
-  const response = await fetch(`${baseUrl}/${path}`, { cache: "no-store" });
+  const response = await fetch(`${baseUrl}/${path}`, {
+    cache: "no-store",
+    headers: {
+      Pragma: "no-cache",
+      "Cache-Control": "no-cache"
+    }
+  });
   if (!response.ok) {
     return null;
   }
@@ -77,14 +83,35 @@ export async function getActorById(actorId: string): Promise<Actor | null> {
 
   const { baseUrl } = requireBlobConfig();
   const path = `actors/${actorId}.json`;
+  const retries = 3;
+  const baseDelayMs = 400;
+
   console.log(`Fetching actor from URL: ${baseUrl}/${path}`);
 
-  const actor = await blobGet<Actor>(path);
-  if (actor) {
-    return actor;
+  for (let attempt = 0; attempt < retries; attempt += 1) {
+    try {
+      const actor = await blobGet<Actor>(path);
+      if (actor) {
+        return actor;
+      }
+
+      throw new Error(`Actor not found in Blob yet: ${actorId}`);
+    } catch (error: unknown) {
+      console.warn(`Retry ${attempt + 1}: Actor ${actorId} not found in Blob yet.`, error);
+
+      if (attempt < retries - 1) {
+        const delayMs = baseDelayMs * (attempt + 1);
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+      }
+    }
   }
 
-  return demoActors.find((item) => item.id === actorId) ?? null;
+  const demoActor = demoActors.find((item) => item.id === actorId) ?? null;
+  if (demoActor) {
+    return demoActor;
+  }
+
+  throw new Error(`Actor not found: ${actorId} after ${retries} attempts.`);
 }
 
 export async function listActors(): Promise<Actor[]> {
