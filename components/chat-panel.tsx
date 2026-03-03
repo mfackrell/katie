@@ -67,6 +67,13 @@ export function ChatPanel({ actorId, chatId }: ChatPanelProps) {
     scrollToBottom();
   }, [messages, loading]);
 
+  useEffect(() => {
+    setMessages([]);
+    setMeta(null);
+    setStatusMessage("");
+    setStreamingModel(null);
+  }, [actorId, chatId]);
+
   async function uploadFiles(files: File[]): Promise<FileReference[]> {
     if (files.length === 0) {
       return [];
