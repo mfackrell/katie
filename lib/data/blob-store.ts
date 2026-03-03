@@ -165,6 +165,13 @@ export async function saveActor(actor: Actor): Promise<void> {
   console.log(`Attempting to save actor: [${actor.id}] to [${actorPath}]...`);
 
   deletedActorIds.delete(actor.id);
+
+  const deletedIndex = (await blobGet<string[]>("actors/deleted-index.json")) ?? [];
+  if (deletedIndex.includes(actor.id)) {
+    const nextDeletedIndex = deletedIndex.filter((deletedId) => deletedId !== actor.id);
+    await blobPut("actors/deleted-index.json", nextDeletedIndex);
+  }
+
   await blobPut(actorPath, actor);
   console.log(`Actor [${actor.id}] saved successfully.`);
 
