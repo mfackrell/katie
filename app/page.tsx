@@ -78,6 +78,33 @@ export default function HomePage() {
     setActiveChatId(chatId);
   }
 
+  async function deleteActor(actor: Actor) {
+    const response = await fetch(`/api/actors?id=${encodeURIComponent(actor.id)}`, {
+      method: "DELETE"
+    });
+
+    const payload = (await response.json()) as { deletedActorIds?: string[]; error?: string };
+
+    if (!response.ok || !payload.deletedActorIds?.length) {
+      throw new Error(payload.error ?? "Failed to delete actor.");
+    }
+
+    const deletedIds = new Set(payload.deletedActorIds);
+    const nextActors = actors.filter((item) => !deletedIds.has(item.id));
+    const nextChats = chats.filter((chat) => !deletedIds.has(chat.actorId));
+
+    setActors(nextActors);
+    setChats(nextChats);
+
+    if (deletedIds.has(activeActorId)) {
+      setActiveActorId(nextActors[0]?.id ?? "");
+    }
+
+    if (deletedIds.has(activeChatId)) {
+      setActiveChatId(nextChats[0]?.id ?? "");
+    }
+  }
+
   return (
     <div className="flex min-h-screen bg-zinc-950 text-zinc-100">
       <Sidebar
@@ -89,6 +116,7 @@ export default function HomePage() {
         onSelectChat={setActiveChatId}
         onOpenCreateActor={() => setModalState({ type: "primary" })}
         onOpenCreateSubActor={(actor) => setModalState({ type: "sub", parentActor: actor })}
+        onDeleteActor={deleteActor}
       />
       <ChatPanel actorId={activeActorId} chatId={activeChatId} />
 
