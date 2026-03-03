@@ -3,27 +3,38 @@ import type { Actor, Message } from "@/lib/types/chat";
 
 const memoryMessages = new Map<string, Message[]>();
 const memorySummaries = new Map<string, string>();
+const memoryActors = new Map<string, Actor>();
 const deletedActorIds = new Set<string>();
 
-const base = process.env.BLOB_BASE_URL;
-const writeToken = process.env.BLOB_WRITE_TOKEN;
+const base = process.env.BLOB_BASE_URL ?? process.env.BLOB_URL;
+const writeToken = process.env.BLOB_READ_WRITE_TOKEN ?? process.env.BLOB_WRITE_TOKEN;
 
-function requireBlobConfig(): { baseUrl: string; token: string } {
-  if (!base) {
-    throw new Error("Config Error: BLOB_BASE_URL is not defined");
-  }
+function getBlobBaseUrl(): string | null {
+  return base ?? null;
+}
 
-  if (!writeToken) {
-    throw new Error("Config Error: BLOB_WRITE_TOKEN is not defined");
+function getBlobWriteConfig(): { baseUrl: string; token: string } | null {
+  if (!base || !writeToken) {
+    return null;
   }
 
   return { baseUrl: base, token: writeToken };
 }
 
 async function blobGet<T>(path: string): Promise<T | null> {
-  const { baseUrl } = requireBlobConfig();
+  const baseUrl = getBlobBaseUrl();
+  if (!baseUrl) {
+    return null;
+  }
 
-  const response = await fetch(`${baseUrl}/${path}`, { cache: "no-store" });
+  const response = await fetch(`${baseUrl}/${path}`, {
+    cache: "no-store",
+    headers: {
+      Pragma: "no-cache",
+      "Cache-Control": "no-cache"
+    }
+  });
+
   if (!response.ok) {
     return null;
   }
@@ -32,13 +43,16 @@ async function blobGet<T>(path: string): Promise<T | null> {
 }
 
 async function blobPut(path: string, payload: unknown): Promise<void> {
-  const { baseUrl, token } = requireBlobConfig();
+  const writeConfig = getBlobWriteConfig();
+  if (!writeConfig) {
+    return;
+  }
 
-  const response = await fetch(`${baseUrl}/${path}`, {
+  const response = await fetch(`${writeConfig.baseUrl}/${path}`, {
     method: "PUT",
     headers: {
       "Content-Type": "application/json",
-      Authorization: `Bearer ${token}`
+      Authorization: `Bearer ${writeConfig.token}`
     },
     body: JSON.stringify(payload)
   });
@@ -49,12 +63,15 @@ async function blobPut(path: string, payload: unknown): Promise<void> {
 }
 
 async function blobDelete(path: string): Promise<void> {
-  const { baseUrl, token } = requireBlobConfig();
+  const writeConfig = getBlobWriteConfig();
+  if (!writeConfig) {
+    return;
+  }
 
-  await fetch(`${baseUrl}/${path}`, {
+  await fetch(`${writeConfig.baseUrl}/${path}`, {
     method: "DELETE",
     headers: {
-      Authorization: `Bearer ${token}`
+      Authorization: `Bearer ${writeConfig.token}`
     }
   });
 }
@@ -75,16 +92,45 @@ export async function getActorById(actorId: string): Promise<Actor | null> {
     return null;
   }
 
-  const { baseUrl } = requireBlobConfig();
-  const path = `actors/${actorId}.json`;
-  console.log(`Fetching actor from URL: ${baseUrl}/${path}`);
-
-  const actor = await blobGet<Actor>(path);
-  if (actor) {
-    return actor;
+  const memoryActor = memoryActors.get(actorId);
+  if (memoryActor) {
+    return memoryActor;
   }
 
-  return demoActors.find((item) => item.id === actorId) ?? null;
+  const path = `actors/${actorId}.json`;
+  const retries = 3;
+  const baseDelayMs = 400;
+  const baseUrl = getBlobBaseUrl();
+
+  if (baseUrl) {
+    console.log(`Fetching actor from URL: ${baseUrl}/${path}`);
+
+    for (let attempt = 0; attempt < retries; attempt += 1) {
+      try {
+        const actor = await blobGet<Actor>(path);
+        if (actor) {
+          memoryActors.set(actor.id, actor);
+          return actor;
+        }
+
+        throw new Error(`Actor not found in Blob yet: ${actorId}`);
+      } catch (error: unknown) {
+        console.warn(`Retry ${attempt + 1}: Actor ${actorId} not found in Blob yet.`, error);
+
+        if (attempt < retries - 1) {
+          const delayMs = baseDelayMs * (attempt + 1);
+          await new Promise((resolve) => setTimeout(resolve, delayMs));
+        }
+      }
+    }
+  }
+
+  const demoActor = demoActors.find((item) => item.id === actorId) ?? null;
+  if (demoActor) {
+    return demoActor;
+  }
+
+  throw new Error(`Actor not found: ${actorId} after ${retries} attempts.`);
 }
 
 export async function listActors(): Promise<Actor[]> {
@@ -100,8 +146,12 @@ export async function listActors(): Promise<Actor[]> {
     )
   ).filter((actor): actor is Actor => Boolean(actor));
 
+  blobActors.forEach((actor) => {
+    memoryActors.set(actor.id, actor);
+  });
+
   const deduped = new Map<string, Actor>();
-  [...demoActors, ...blobActors].forEach((actor) => {
+  [...demoActors, ...memoryActors.values(), ...blobActors].forEach((actor) => {
     if (!deleted.has(actor.id)) {
       deduped.set(actor.id, actor);
     }
@@ -165,6 +215,7 @@ export async function saveActor(actor: Actor): Promise<void> {
   console.log(`Attempting to save actor: [${actor.id}] to [${actorPath}]...`);
 
   deletedActorIds.delete(actor.id);
+  memoryActors.set(actor.id, actor);
 
   const deletedIndex = (await blobGet<string[]>("actors/deleted-index.json")) ?? [];
   if (deletedIndex.includes(actor.id)) {
@@ -194,6 +245,7 @@ export async function deleteActorsById(actorIds: string[]): Promise<void> {
 
   actorIds.forEach((actorId) => {
     deletedActorIds.add(actorId);
+    memoryActors.delete(actorId);
   });
 
   await Promise.all(actorIds.map(async (actorId) => blobDelete(`actors/${actorId}.json`)));
