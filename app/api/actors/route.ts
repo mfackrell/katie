@@ -1,12 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { getActorById, listActors, saveActor } from "@/lib/data/blob-store";
+import { deleteActorsById, getActorById, listActors, saveActor } from "@/lib/data/blob-store";
 import type { Actor } from "@/lib/types/chat";
 
 const createActorSchema = z.object({
   name: z.string().min(1),
   purpose: z.string().optional(),
   parentId: z.string().min(1).optional()
+});
+
+const actorIdParamSchema = z.object({
+  id: z.string().min(1)
 });
 
 function buildActorId(): string {
@@ -50,10 +54,52 @@ export async function POST(request: NextRequest) {
       ...(parentId ? { parentId } : {})
     };
 
-    await saveActor(actor);
+    try {
+      await saveActor(actor);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unknown save error";
+      return NextResponse.json({ error: message }, { status: 500 });
+    }
 
     return NextResponse.json({ actor }, { status: 201 });
   } catch {
     return NextResponse.json({ error: "Invalid request payload" }, { status: 400 });
+  }
+}
+
+
+export async function DELETE(request: NextRequest) {
+  const url = new URL(request.url);
+
+  try {
+    const { id: actorId } = actorIdParamSchema.parse({ id: url.searchParams.get("id") });
+    const actors = await listActors();
+
+    const target = actors.find((actor) => actor.id === actorId);
+    if (!target) {
+      return NextResponse.json({ error: `Actor not found: ${actorId}` }, { status: 404 });
+    }
+
+    const toDelete = new Set<string>([actorId]);
+    const queue = [actorId];
+
+    while (queue.length > 0) {
+      const currentId = queue.shift()!;
+      const childIds = actors.filter((actor) => actor.parentId === currentId).map((actor) => actor.id);
+
+      childIds.forEach((childId) => {
+        if (!toDelete.has(childId)) {
+          toDelete.add(childId);
+          queue.push(childId);
+        }
+      });
+    }
+
+    const deletedActorIds = [...toDelete];
+    await deleteActorsById(deletedActorIds);
+
+    return NextResponse.json({ deletedActorIds });
+  } catch {
+    return NextResponse.json({ error: "Invalid actor id" }, { status: 400 });
   }
 }

@@ -11,6 +11,7 @@ interface SidebarProps {
   onSelectChat: (chatId: string) => void;
   onOpenCreateActor: () => void;
   onOpenCreateSubActor: (actor: Actor) => void;
+  onDeleteActor: (actor: Actor) => void;
 }
 
 export function Sidebar({
@@ -21,7 +22,8 @@ export function Sidebar({
   onSelectActor,
   onSelectChat,
   onOpenCreateActor,
-  onOpenCreateSubActor
+  onOpenCreateSubActor,
+  onDeleteActor
 }: SidebarProps) {
   const sortedActors = [...actors].sort((a, b) => a.name.localeCompare(b.name));
 
@@ -56,13 +58,22 @@ export function Sidebar({
                   {isSubActor ? "↳ " : ""}
                   {actor.name}
                 </button>
-                <button
-                  className="rounded border border-zinc-700 px-2 py-1 text-xs text-zinc-300 hover:bg-zinc-800"
-                  onClick={() => onOpenCreateSubActor(actor)}
-                  title={`Branch from ${actor.name}`}
-                >
-                  Branch
-                </button>
+                <div className="flex items-center gap-1">
+                  <button
+                    className="rounded border border-zinc-700 px-2 py-1 text-xs text-zinc-300 hover:bg-zinc-800"
+                    onClick={() => onOpenCreateSubActor(actor)}
+                    title={`Branch from ${actor.name}`}
+                  >
+                    Branch
+                  </button>
+                  <button
+                    className="rounded border border-red-800 px-2 py-1 text-xs text-red-300 hover:bg-red-950"
+                    onClick={() => onDeleteActor(actor)}
+                    title={`Delete ${actor.name}`}
+                  >
+                    Delete
+                  </button>
+                </div>
               </div>
 
               <div className="border-t border-zinc-800 p-2">
