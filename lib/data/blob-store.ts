@@ -4,6 +4,7 @@ import type { Actor, Message } from "@/lib/types/chat";
 const memoryMessages = new Map<string, Message[]>();
 const memorySummaries = new Map<string, string>();
 const memoryActors = new Map<string, Actor>();
+const deletedActorIds = new Set<string>();
 
 const base = process.env.BLOB_BASE_URL;
 const writeToken = process.env.BLOB_WRITE_TOKEN;
@@ -36,7 +37,35 @@ async function blobPut(path: string, payload: unknown): Promise<void> {
   });
 }
 
+async function blobDelete(path: string): Promise<void> {
+  if (!base || !writeToken) {
+    return;
+  }
+
+  await fetch(`${base}/${path}`, {
+    method: "DELETE",
+    headers: {
+      Authorization: `Bearer ${writeToken}`
+    }
+  });
+}
+
+async function getDeletedActorIds(): Promise<string[]> {
+  const deletedFromBlob = (await blobGet<string[]>("actors/deleted-index.json")) ?? [];
+
+  deletedFromBlob.forEach((actorId) => {
+    deletedActorIds.add(actorId);
+  });
+
+  return [...deletedActorIds];
+}
+
 export async function getActorById(actorId: string): Promise<Actor | null> {
+  const deletedIds = await getDeletedActorIds();
+  if (deletedIds.includes(actorId)) {
+    return null;
+  }
+
   const inMemory = memoryActors.get(actorId);
   if (inMemory) {
     return inMemory;
@@ -47,6 +76,8 @@ export async function getActorById(actorId: string): Promise<Actor | null> {
 }
 
 export async function listActors(): Promise<Actor[]> {
+  const deletedIds = await getDeletedActorIds();
+  const deleted = new Set(deletedIds);
   const blobActorIds = (await blobGet<string[]>("actors/index.json")) ?? [];
 
   const blobActors = (
@@ -63,7 +94,9 @@ export async function listActors(): Promise<Actor[]> {
 
   const deduped = new Map<string, Actor>();
   [...demoActors, ...memoryActors.values(), ...blobActors].forEach((actor) => {
-    deduped.set(actor.id, actor);
+    if (!deleted.has(actor.id)) {
+      deduped.set(actor.id, actor);
+    }
   });
 
   return [...deduped.values()];
@@ -120,6 +153,7 @@ export async function setConversationSummary(chatId: string, summary: string): P
 }
 
 export async function saveActor(actor: Actor): Promise<void> {
+  deletedActorIds.delete(actor.id);
   memoryActors.set(actor.id, actor);
   await blobPut(`actors/${actor.id}.json`, actor);
 
@@ -127,4 +161,23 @@ export async function saveActor(actor: Actor): Promise<void> {
   if (!currentIndex.includes(actor.id)) {
     await blobPut("actors/index.json", [...currentIndex, actor.id]);
   }
+}
+
+export async function deleteActorsById(actorIds: string[]): Promise<void> {
+  if (!actorIds.length) {
+    return;
+  }
+
+  const currentIndex = (await blobGet<string[]>("actors/index.json")) ?? [];
+  const nextIndex = currentIndex.filter((actorId) => !actorIds.includes(actorId));
+
+  await blobPut("actors/index.json", nextIndex);
+
+  actorIds.forEach((actorId) => {
+    memoryActors.delete(actorId);
+    deletedActorIds.add(actorId);
+  });
+
+  await Promise.all(actorIds.map(async (actorId) => blobDelete(`actors/${actorId}.json`)));
+  await blobPut("actors/deleted-index.json", [...deletedActorIds]);
 }
