@@ -37,8 +37,16 @@ export interface ProviderResponse {
   };
 }
 
+export interface ProviderStreamHandlers {
+  onTextDelta?: (delta: string) => void | Promise<void>;
+}
+
 export interface LlmProvider {
   name: "openai" | "google" | "grok" | "anthropic";
   listModels(): Promise<string[]>;
   generate(params: ChatGenerateParams): Promise<ProviderResponse>;
+  generateStream?(
+    params: ChatGenerateParams,
+    handlers: ProviderStreamHandlers
+  ): Promise<ProviderResponse>;
 }
