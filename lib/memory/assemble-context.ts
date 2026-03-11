@@ -3,6 +3,7 @@ import { getActorById, getRecentMessages } from "@/lib/data/blob-store";
 import type { Message } from "@/lib/types/chat";
 
 interface AssembledContext {
+  name: string;
   persona: string;
   summary: string;
   history: Message[];
@@ -22,6 +23,7 @@ export async function assembleContext(actorId: string, chatId: string): Promise<
   const history = recentMessages.slice(-20);
 
   return {
+    name: process.env.ASSISTANT_NAME || "Katie",
     persona: actor.purpose,
     summary: summary || "No summary available yet.",
     history

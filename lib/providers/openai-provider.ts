@@ -16,6 +16,28 @@ const MODEL_FALLBACKS: Record<string, string[]> = {
   "gpt-5": ["gpt-5.2", "gpt-4o"]
 };
 
+const BEHAVIORAL_DIRECTIVE =
+  "Always respond in a conversational style. Use a direct, clear, and action-oriented voice. Be direct and to the point. Clearly state the purpose or opinion upfront. Use straightforward language. Focus on actionable points and clear reasoning.";
+
+function buildSystemPromptSections(params: ChatGenerateParams): string[] {
+  return [
+    `IDENTITY:
+Your name is ${params.name}. ${BEHAVIORAL_DIRECTIVE}
+
+CORE_PERSONA: ${params.persona}
+
+${MATH_EXECUTION_PROTOCOL}`,
+    `SEMANTIC_MEMORY (Summary):
+Below is a summary of past interactions and decisions made.
+
+${params.summary}`,
+    `EPISODIC_MEMORY (History):
+Below is the recent log of this specific conversation.
+
+${buildMemoryContext(params.history)}`
+  ];
+}
+
 function buildOpenAiFileInputs(attachments: FileReference[] | undefined): Array<{ type: "input_file"; file_id: string }> {
   if (!attachments?.length) {
     return [];
@@ -37,11 +59,10 @@ function toChatMessages(params: ChatGenerateParams): OpenAI.Chat.ChatCompletionM
     });
   }
 
-  const messages: OpenAI.Chat.ChatCompletionMessageParam[] = [
-    { role: "system", content: `${MATH_EXECUTION_PROTOCOL}\n\nCORE_PERSONA: ${params.persona}` },
-    { role: "system", content: `MEMORY_CONTEXT:\n${params.summary}\nEND_MEMORY_CONTEXT` },
-    { role: "system", content: buildMemoryContext(params.history) }
-  ];
+  const messages: OpenAI.Chat.ChatCompletionMessageParam[] = buildSystemPromptSections(params).map((content) => ({
+    role: "system",
+    content
+  }));
 
   if (attachmentContext) {
     messages.push({ role: "system", content: attachmentContext });
@@ -64,14 +85,12 @@ function toResponsesInput(params: ChatGenerateParams): OpenAI.Responses.Response
   };
 
   const mapContent = (text: string): ResponseInputContentItem[] => [{ type: "input_text", text }];
-  const memoryContext = buildMemoryContext(params.history);
   const attachmentContext = formatAttachmentContext(params.attachments);
 
-  const messages: ResponseInputMessage[] = [
-    { role: "system", content: mapContent(`${MATH_EXECUTION_PROTOCOL}\n\nCORE_PERSONA: ${params.persona}`) },
-    { role: "system", content: mapContent(`MEMORY_CONTEXT:\n${params.summary}\nEND_MEMORY_CONTEXT`) },
-    { role: "system", content: mapContent(memoryContext) }
-  ];
+  const messages: ResponseInputMessage[] = buildSystemPromptSections(params).map((content) => ({
+    role: "system",
+    content: mapContent(content)
+  }));
 
   if (attachmentContext) {
     messages.push({ role: "system", content: mapContent(attachmentContext) });
@@ -194,7 +213,7 @@ export class OpenAiProvider implements LlmProvider {
         if (isLegacy) {
           const completion = await this.client.completions.create({
             model: selectedModel,
-            prompt: `${params.persona}\n\nUser request:\n${params.user}`
+            prompt: `IDENTITY:\nYour name is ${params.name}. ${BEHAVIORAL_DIRECTIVE}\n\nCORE_PERSONA: ${params.persona}\n\n${MATH_EXECUTION_PROTOCOL}\n\nUser request:\n${params.user}`
           });
 
           return {

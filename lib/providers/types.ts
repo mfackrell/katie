@@ -10,6 +10,7 @@ export interface FileReference {
 }
 
 export interface ChatGenerateParams {
+  name: string;
   persona: string;
   summary: string;
   user: string;
