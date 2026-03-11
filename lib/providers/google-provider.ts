@@ -17,6 +17,28 @@ const GOOGLE_MODEL_ALIASES: Record<string, string> = {
   "gemini-3-flash": "gemini-3.1-flash"
 };
 
+const BEHAVIORAL_DIRECTIVE =
+  "Always respond in a conversational style. Use a direct, clear, and action-oriented voice. Be direct and to the point. Clearly state the purpose or opinion upfront. Use straightforward language. Focus on actionable points and clear reasoning.";
+
+function buildSystemInstruction(params: ChatGenerateParams): string {
+  return `${MATH_EXECUTION_PROTOCOL}
+
+IDENTITY:
+Your name is ${params.name}. ${BEHAVIORAL_DIRECTIVE}
+
+CORE_PERSONA: ${params.persona}
+
+SEMANTIC_MEMORY (Summary):
+Below is a summary of past interactions and decisions made.
+
+${params.summary}
+
+EPISODIC_MEMORY (History):
+Below is the recent log of this specific conversation.
+
+${buildMemoryContext(params.history)}`;
+}
+
 function normalizeGoogleModelId(modelId: string): string {
   const normalized = modelId.trim().replace(/^models\//, "");
   return GOOGLE_MODEL_ALIASES[normalized] ?? normalized;
@@ -122,9 +144,8 @@ export class GoogleProvider implements LlmProvider {
     const thinkingLevelInput =
       parsedModel.thinkingLevelInput ?? (isGemini3Model(selectedModel) ? "medium" : undefined);
     const isImageTask = isImageGenerationModel(selectedModel);
-    const memoryContext = buildMemoryContext(params.history);
     const attachmentContext = formatAttachmentContext(params.attachments);
-    const baseSystemInstruction = `${MATH_EXECUTION_PROTOCOL}\n\nCORE_PERSONA: ${params.persona}\n\nMEMORY_CONTEXT:\n${params.summary}\nEND_MEMORY_CONTEXT\n\n${memoryContext}`;
+    const baseSystemInstruction = buildSystemInstruction(params);
     const systemInstructionBase = isImageTask
       ? `${baseSystemInstruction}\n\nIMPORTANT: You have direct image generation capabilities. If the user asks for a photo, design asset, or image, generate it directly as an image modality response.`
       : baseSystemInstruction;

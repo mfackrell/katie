@@ -106,7 +106,7 @@ export async function POST(request: NextRequest) {
     }
 
     console.log("[Chat API] Assembling context and selecting provider...");
-    const { persona, summary, history } = await assembleContext(actorId, chatId);
+    const { name, persona, summary, history } = await assembleContext(actorId, chatId);
     const historyForProvider = history.map(({ role, content }) => ({ role, content }));
     let provider = providers[0];
     let modelId = "";
@@ -146,6 +146,7 @@ export async function POST(request: NextRequest) {
 
             console.log(`[Chat API] Requesting generation from ${provider.name} using model ${modelId}...`);
             const result = await provider.generate({
+              name,
               persona,
               summary,
               history: historyForProvider,

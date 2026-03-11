@@ -7,5 +7,5 @@ export function flattenHistory(history: ChatGenerateParams["history"]): string {
 }
 
 export function buildMemoryContext(history: ChatGenerateParams["history"]): string {
-  return `MEMORY_CONTEXT\n${flattenHistory(history)}\nEND_MEMORY_CONTEXT`;
+  return `[EPISODIC_MEMORY_LOG]\n${flattenHistory(history)}\n[/EPISODIC_MEMORY_LOG]`;
 }
