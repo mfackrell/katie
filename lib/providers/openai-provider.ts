@@ -1,5 +1,11 @@
 import OpenAI from "openai";
-import { ChatGenerateParams, FileReference, LlmProvider, ProviderResponse } from "@/lib/providers/types";
+import {
+  ChatGenerateParams,
+  FileReference,
+  LlmProvider,
+  ProviderResponse,
+  ProviderStreamHandlers
+} from "@/lib/providers/types";
 import { buildMemoryContext } from "@/lib/providers/memory-context";
 import { MATH_EXECUTION_PROTOCOL } from "@/lib/providers/math-execution-protocol";
 import { formatAttachmentContext } from "@/lib/providers/attachment-context";
@@ -184,6 +190,62 @@ export class OpenAiProvider implements LlmProvider {
   private getModelCandidates(selectedModel: string): string[] {
     const configuredFallbacks = MODEL_FALLBACKS[selectedModel] ?? [];
     return [selectedModel, ...configuredFallbacks.filter((candidate) => candidate !== selectedModel)];
+  }
+
+
+  async generateStream(params: ChatGenerateParams, handlers: ProviderStreamHandlers): Promise<ProviderResponse> {
+    const requestedModel = params.modelId ?? this.defaultModel;
+    const modelCandidates = this.getModelCandidates(requestedModel);
+
+    for (const selectedModel of modelCandidates) {
+      const modelLower = selectedModel.toLowerCase();
+      const isChatOnly =
+        modelLower.includes("search-preview") ||
+        (modelLower.includes("gpt-4") && !modelLower.includes("gpt-5")) ||
+        modelLower.includes("gpt-3.5");
+
+      const isResponsesApi =
+        (modelLower.includes("gpt-5") ||
+          modelLower.includes("image") ||
+          modelLower.includes("nano-banana") ||
+          /^o[1-4]/.test(modelLower)) &&
+        !modelLower.includes("search-preview");
+
+      if (!isChatOnly && !isResponsesApi) {
+        continue;
+      }
+
+      try {
+        const stream = await this.client.chat.completions.create({
+          model: selectedModel,
+          messages: toChatMessages(params),
+          stream: true
+        });
+
+        let fullText = "";
+
+        for await (const chunk of stream) {
+          const delta = chunk.choices[0]?.delta?.content ?? "";
+          if (!delta) {
+            continue;
+          }
+
+          fullText += delta;
+          await handlers.onTextDelta?.(delta);
+        }
+
+        return {
+          text: fullText,
+          model: selectedModel,
+          provider: this.name
+        };
+      } catch (error: unknown) {
+        const detail = error instanceof Error ? error.message : String(error);
+        console.error(`[OpenAiProvider] Streaming API failure for ${selectedModel}: ${detail}`);
+      }
+    }
+
+    return this.generate(params);
   }
 
   async generate(params: ChatGenerateParams): Promise<ProviderResponse> {
