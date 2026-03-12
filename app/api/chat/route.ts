@@ -145,18 +145,52 @@ export async function POST(request: NextRequest) {
             await saveMessage(chatId, "user", message);
 
             console.log(`[Chat API] Requesting generation from ${provider.name} using model ${modelId}...`);
-            const result = await provider.generate({
-              name,
-              persona,
-              summary,
-              history: historyForProvider,
-              user: message,
-              images,
-              modelId,
-              attachments
-            });
+            let streamedText = "";
+            let firstDeltaLogged = false;
+            if (provider.generateStream) {
+              console.log(`[Chat API] Streaming response enabled for provider ${provider.name}.`);
+            } else {
+              console.log(`[Chat API] Streaming not available for provider ${provider.name}; using non-streaming generation.`);
+            }
 
-            if (!result || (!result.text && !(result.content?.length))) {
+            const result = provider.generateStream
+              ? await provider.generateStream(
+                  {
+                    name,
+                    persona,
+                    summary,
+                    history: historyForProvider,
+                    user: message,
+                    images,
+                    modelId,
+                    attachments
+                  },
+                  {
+                    onTextDelta(delta) {
+                      streamedText += delta;
+
+                      if (!firstDeltaLogged) {
+                        firstDeltaLogged = true;
+                        console.log(`[Chat API] First streamed token received from ${provider.name}.`);
+                      }
+
+                      const deltaChunk = JSON.stringify({ type: "delta", text: delta });
+                      controller.enqueue(encoder.encode(`${deltaChunk}\n`));
+                    }
+                  }
+                )
+              : await provider.generate({
+                  name,
+                  persona,
+                  summary,
+                  history: historyForProvider,
+                  user: message,
+                  images,
+                  modelId,
+                  attachments
+                });
+
+            if (!result || (!result.text && !(result.content?.length) && !streamedText)) {
               throw new Error(`AI Provider ${provider.name} returned an empty response.`);
             }
 
@@ -177,9 +211,13 @@ export async function POST(request: NextRequest) {
                 })
                 .filter((asset): asset is { type: "image"; url: string } => Boolean(asset)) ?? [];
 
+            console.log(
+              `[Chat API] Generation complete. Streamed characters: ${streamedText.length}. Final text characters: ${(result.text || streamedText).length}.`
+            );
+
             const contentChunk = JSON.stringify({
               type: "content",
-              text: result.text,
+              text: result.text || streamedText,
               assets: imageAssets,
               provider: result.provider,
               model: result.model
@@ -187,7 +225,8 @@ export async function POST(request: NextRequest) {
             controller.enqueue(encoder.encode(`${contentChunk}\n`));
 
             console.log("[Chat API] Generation successful. Saving assistant response.");
-            await saveMessage(chatId, "assistant", result.text, result.model, imageAssets);
+            const assistantText = result.text || streamedText;
+            await saveMessage(chatId, "assistant", assistantText, result.model, imageAssets);
 
             void maybeUpdateSummary(chatId).catch((err: unknown) =>
               console.error("[Chat API] Background Summary Update Error:", err)
