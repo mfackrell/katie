@@ -5,6 +5,7 @@ import { maybeUpdateSummary } from "@/lib/memory/summarizer";
 import { saveMessage } from "@/lib/data/blob-store";
 import { getAvailableProviders } from "@/lib/providers";
 import { chooseProvider } from "@/lib/router/master-router";
+import { LlmProvider, ProviderResponse } from "@/lib/providers/types";
 
 const fileReferenceSchema = z.object({
   fileId: z.string().min(1),
@@ -30,6 +31,61 @@ const requestSchema = z.object({
 });
 
 type RequestPayload = z.infer<typeof requestSchema>;
+
+
+function buildGenerationParams({
+  name,
+  persona,
+  summary,
+  history,
+  message,
+  images,
+  modelId,
+  attachments
+}: {
+  name: string;
+  persona: string;
+  summary: string;
+  history: { role: "user" | "assistant"; content: string }[];
+  message: string;
+  images?: string[];
+  modelId: string;
+  attachments?: RequestPayload["fileReferences"];
+}) {
+  return {
+    name,
+    persona,
+    summary,
+    history,
+    user: message,
+    images,
+    modelId,
+    attachments
+  };
+}
+
+async function runGeneration({
+  provider,
+  params,
+  onTextDelta
+}: {
+  provider: LlmProvider;
+  params: ReturnType<typeof buildGenerationParams>;
+  onTextDelta: (delta: string) => void;
+}): Promise<{ result: ProviderResponse; streamedText: string }> {
+  let streamedText = "";
+
+  const result = provider.generateStream
+    ? await provider.generateStream(params, {
+        onTextDelta(delta) {
+          streamedText += delta;
+          onTextDelta(delta);
+        }
+      })
+    : await provider.generate(params);
+
+  return { result, streamedText };
+}
 
 async function parseIncomingPayload(request: NextRequest): Promise<RequestPayload> {
   const contentType = request.headers.get("content-type") ?? "";
@@ -145,37 +201,67 @@ export async function POST(request: NextRequest) {
             await saveMessage(chatId, "user", message);
 
             console.log(`[Chat API] Requesting generation from ${provider.name} using model ${modelId}...`);
+            const enqueueDelta = (delta: string) => {
+              const deltaChunk = JSON.stringify({ type: "delta", text: delta });
+              controller.enqueue(encoder.encode(`${deltaChunk}\n`));
+            };
+
+            const createParams = (selectedModelId: string) =>
+              buildGenerationParams({
+                name,
+                persona,
+                summary,
+                history: historyForProvider,
+                message,
+                images,
+                modelId: selectedModelId,
+                attachments
+              });
+
+            let result: ProviderResponse;
             let streamedText = "";
-            const result = provider.generateStream
-              ? await provider.generateStream(
-                  {
-                    name,
-                    persona,
-                    summary,
-                    history: historyForProvider,
-                    user: message,
-                    images,
-                    modelId,
-                    attachments
-                  },
-                  {
-                    onTextDelta(delta) {
-                      streamedText += delta;
-                      const deltaChunk = JSON.stringify({ type: "delta", text: delta });
-                      controller.enqueue(encoder.encode(`${deltaChunk}\n`));
-                    }
-                  }
-                )
-              : await provider.generate({
-                  name,
-                  persona,
-                  summary,
-                  history: historyForProvider,
-                  user: message,
-                  images,
-                  modelId,
-                  attachments
-                });
+
+            try {
+              ({ result, streamedText } = await runGeneration({
+                provider,
+                params: createParams(modelId),
+                onTextDelta: enqueueDelta
+              }));
+            } catch (generationError: unknown) {
+              if (provider.name !== "openai") {
+                throw generationError;
+              }
+
+              const googleProvider = providers.find((candidate) => candidate.name === "google");
+              if (!googleProvider) {
+                throw generationError;
+              }
+
+              const googleModels = await googleProvider.listModels();
+              const googleModelId =
+                googleModels.find((candidateModel) => candidateModel.includes("gemini-3.1-pro")) ||
+                googleModels[0] ||
+                "gemini-3.1-pro";
+
+              console.warn(
+                `[Chat API] OpenAI generation failed (${generationError instanceof Error ? generationError.message : String(generationError)}). Falling back to google:${googleModelId}.`
+              );
+
+              provider = googleProvider;
+              modelId = googleModelId;
+              const failoverMetadataChunk = JSON.stringify({
+                type: "metadata",
+                modelId,
+                provider: provider.name
+              });
+              controller.enqueue(encoder.encode(`${failoverMetadataChunk}\n`));
+
+              ({ result, streamedText } = await runGeneration({
+                provider,
+                params: createParams(modelId),
+                onTextDelta: enqueueDelta
+              }));
+            }
 
             if (!result || (!result.text && !(result.content?.length) && !streamedText)) {
               throw new Error(`AI Provider ${provider.name} returned an empty response.`);
