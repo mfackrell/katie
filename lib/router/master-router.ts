@@ -11,8 +11,9 @@ export type RoutingDecision = {
 type ProviderName = "openai" | "google" | "grok" | "anthropic";
 type RoutingChoice = { providerName: ProviderName; modelId: string };
 
-const ORCHESTRATOR_MODELS = ["gpt-5.2", "gemini-3.1-pro"] as const;
-const DEFAULT_ORCHESTRATOR_MODEL = "gpt-5.2";
+const ORCHESTRATOR_MODELS = ["gpt-4o-mini", "gpt-5.2", "gemini-3.1-pro"] as const;
+const DEFAULT_ORCHESTRATOR_MODEL = "gpt-4o-mini";
+const BLOCKED_ROUTING_MODELS = new Set(["gpt-5.4-pro"]);
 
 const CAPABILITY_REGISTRY: Record<string, string> = {
   "gpt-5.3-codex": "Agentic coding, tool use, APIs, terminal-style execution; ideal for math-heavy intents that must strictly follow MATH_EXECUTION_PROTOCOL via executable scripts.",
@@ -113,7 +114,7 @@ export async function chooseProvider(
   const modelEntries = await Promise.all(
     providers.map(async (provider) => ({
       provider,
-      models: await provider.listModels()
+      models: (await provider.listModels()).filter((modelId) => !BLOCKED_ROUTING_MODELS.has(modelId))
     }))
   );
 
