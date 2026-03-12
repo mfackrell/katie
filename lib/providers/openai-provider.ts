@@ -197,6 +197,8 @@ export class OpenAiProvider implements LlmProvider {
     const requestedModel = params.modelId ?? this.defaultModel;
     const modelCandidates = this.getModelCandidates(requestedModel);
 
+    console.log(`[OpenAiProvider] Streaming requested. Model candidates: ${modelCandidates.join(", ")}`);
+
     for (const selectedModel of modelCandidates) {
       const modelLower = selectedModel.toLowerCase();
       const isChatOnly =
@@ -212,10 +214,12 @@ export class OpenAiProvider implements LlmProvider {
         !modelLower.includes("search-preview");
 
       if (!isChatOnly && !isResponsesApi) {
+        console.log(`[OpenAiProvider] Skipping streaming for non-chat model ${selectedModel}.`);
         continue;
       }
 
       try {
+        console.log(`[OpenAiProvider] Starting streaming request with model ${selectedModel}.`);
         const stream = await this.client.chat.completions.create({
           model: selectedModel,
           messages: toChatMessages(params),
@@ -223,6 +227,7 @@ export class OpenAiProvider implements LlmProvider {
         });
 
         let fullText = "";
+        let firstDeltaLogged = false;
 
         for await (const chunk of stream) {
           const delta = chunk.choices[0]?.delta?.content ?? "";
@@ -231,8 +236,18 @@ export class OpenAiProvider implements LlmProvider {
           }
 
           fullText += delta;
+
+          if (!firstDeltaLogged) {
+            firstDeltaLogged = true;
+            console.log(`[OpenAiProvider] First streamed token received for model ${selectedModel}.`);
+          }
+
           await handlers.onTextDelta?.(delta);
         }
+
+        console.log(
+          `[OpenAiProvider] Streaming request complete for ${selectedModel}. Output characters: ${fullText.length}.`
+        );
 
         return {
           text: fullText,
@@ -244,6 +259,10 @@ export class OpenAiProvider implements LlmProvider {
         console.error(`[OpenAiProvider] Streaming API failure for ${selectedModel}: ${detail}`);
       }
     }
+
+    console.log(
+      `[OpenAiProvider] Streaming unavailable or failed for all candidates. Falling back to non-streaming generate for ${requestedModel}.`
+    );
 
     return this.generate(params);
   }
