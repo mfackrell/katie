@@ -146,13 +146,6 @@ export async function POST(request: NextRequest) {
 
             console.log(`[Chat API] Requesting generation from ${provider.name} using model ${modelId}...`);
             let streamedText = "";
-            let firstDeltaLogged = false;
-            if (provider.generateStream) {
-              console.log(`[Chat API] Streaming response enabled for provider ${provider.name}.`);
-            } else {
-              console.log(`[Chat API] Streaming not available for provider ${provider.name}; using non-streaming generation.`);
-            }
-
             const result = provider.generateStream
               ? await provider.generateStream(
                   {
@@ -168,12 +161,6 @@ export async function POST(request: NextRequest) {
                   {
                     onTextDelta(delta) {
                       streamedText += delta;
-
-                      if (!firstDeltaLogged) {
-                        firstDeltaLogged = true;
-                        console.log(`[Chat API] First streamed token received from ${provider.name}.`);
-                      }
-
                       const deltaChunk = JSON.stringify({ type: "delta", text: delta });
                       controller.enqueue(encoder.encode(`${deltaChunk}\n`));
                     }
@@ -210,10 +197,6 @@ export async function POST(request: NextRequest) {
                   return { type: "image", url };
                 })
                 .filter((asset): asset is { type: "image"; url: string } => Boolean(asset)) ?? [];
-
-            console.log(
-              `[Chat API] Generation complete. Streamed characters: ${streamedText.length}. Final text characters: ${(result.text || streamedText).length}.`
-            );
 
             const contentChunk = JSON.stringify({
               type: "content",
