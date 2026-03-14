@@ -1,5 +1,4 @@
 import { ChatGenerateParams, LlmProvider, ProviderResponse } from "@/lib/providers/types";
-import { buildMemoryContext } from "@/lib/providers/memory-context";
 import { MATH_EXECUTION_PROTOCOL } from "@/lib/providers/math-execution-protocol";
 import { formatAttachmentContext } from "@/lib/providers/attachment-context";
 
@@ -48,8 +47,15 @@ export class ClaudeProvider implements LlmProvider {
     const attachmentSafetyNotice = attachmentContext
       ? "\n\nIMPORTANT: Attachment previews are truncated excerpts, not full files."
       : "";
-    const systemPrompt = `${MATH_EXECUTION_PROTOCOL}\n\nCORE_PERSONA: ${params.persona}\n\nMEMORY_CONTEXT:\n${params.summary}\nEND_MEMORY_CONTEXT\n\n${buildMemoryContext(params.history)}`;
+    const systemPrompt = `${MATH_EXECUTION_PROTOCOL}\n\nCORE_PERSONA: ${params.persona}\n\nMEMORY_CONTEXT:\n${params.summary}\nEND_MEMORY_CONTEXT`;
     const system = attachmentContext ? `${systemPrompt}\n\n${attachmentContext}${attachmentSafetyNotice}` : systemPrompt;
+    const messages = [
+      ...params.history.map((entry) => ({
+        role: entry.role,
+        content: entry.content
+      })),
+      { role: "user" as const, content: params.user }
+    ];
 
     const response = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
@@ -62,7 +68,7 @@ export class ClaudeProvider implements LlmProvider {
         model: selectedModel,
         max_tokens: 4096,
         system,
-        messages: [{ role: "user", content: params.user }]
+        messages
       })
     });
 
