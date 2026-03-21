@@ -7,6 +7,16 @@ import { getAvailableProviders } from "@/lib/providers";
 import { chooseProvider } from "@/lib/router/master-router";
 import { LlmProvider, ProviderResponse } from "@/lib/providers/types";
 
+const hasImages = Array.isArray(images) && images.length > 0;
+
+const routingContext = `
+  Persona: ${persona}
+  Recent History: ${JSON.stringify(history.slice(-3))}
+  Has Attached Images: ${hasImages}
+`;
+
+const routingDecision = await chooseProvider(message, routingContext, providers);
+
 const fileReferenceSchema = z.object({
   fileId: z.string().min(1),
   fileName: z.string().min(1),
