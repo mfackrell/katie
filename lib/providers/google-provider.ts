@@ -8,7 +8,8 @@ type ThinkingLevelInput = "minimal" | "low" | "medium" | "high";
 
 type GoogleInputPart =
   | { text: string }
-  | { fileData: { fileUri: string; mimeType: string } };
+  | { fileData: { fileUri: string; mimeType: string } }
+  | { inlineData: { mimeType: string; data: string } };
 
 const GOOGLE_MODEL_ALIASES: Record<string, string> = {
   "gemini-pro": "gemini-3.1-pro",
@@ -102,6 +103,25 @@ function buildGoogleFileParts(params: ChatGenerateParams): GoogleInputPart[] {
     }));
 }
 
+function buildGoogleImageParts(params: ChatGenerateParams): GoogleInputPart[] {
+  if (!params.images?.length) {
+    return [];
+  }
+
+  return params.images.map((dataUrl) => {
+    const [header, base64Data] = dataUrl.split(",");
+    const mimeTypeMatch = header.match(/data:(.*?);base64/);
+    const mimeType = mimeTypeMatch ? mimeTypeMatch[1] : "image/jpeg";
+
+    return {
+      inlineData: {
+        mimeType,
+        data: base64Data
+      }
+    };
+  });
+}
+
 export class GoogleProvider implements LlmProvider {
   name = "google" as const;
   private client: GoogleGenAI;
@@ -133,7 +153,11 @@ export class GoogleProvider implements LlmProvider {
     const parsedModel = parseThinkingLevel(params.modelId ?? this.defaultModel);
     const selectedModel = parsedModel.normalizedModel;
 
-    const parts: GoogleInputPart[] = [{ text: params.user }, ...buildGoogleFileParts(params)];
+    const parts: GoogleInputPart[] = [
+      { text: params.user },
+      ...buildGoogleFileParts(params),
+      ...buildGoogleImageParts(params)
+    ];
     const contents: Array<{ role: "user"; parts: GoogleInputPart[] }> = [
       {
         role: "user",
