@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from "next/server";
+import { after, NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { assembleContext } from "@/lib/memory/assemble-context";
 import { maybeUpdateSummary } from "@/lib/memory/summarizer";
@@ -6,7 +6,6 @@ import { saveMessage } from "@/lib/data/blob-store";
 import { getAvailableProviders } from "@/lib/providers";
 import { chooseProvider } from "@/lib/router/master-router";
 import { LlmProvider, ProviderResponse } from "@/lib/providers/types";
-
 
 const fileReferenceSchema = z.object({
   fileId: z.string().min(1),
@@ -32,7 +31,6 @@ const requestSchema = z.object({
 });
 
 type RequestPayload = z.infer<typeof requestSchema>;
-
 
 function buildGenerationParams({
   name,
@@ -177,21 +175,14 @@ export async function POST(request: NextRequest) {
       provider = manualProvider;
       modelId = overrideModel;
       console.log(`[Chat API] Override active. Provider: ${provider.name}, Model: ${modelId}`);
-} else {
-      // 1. Check for images in the payload
+    } else {
       const hasImages = Array.isArray(images) && images.length > 0;
-      
-      // 2. Build the context with the image flag
-      const routingContext = `\n  Persona: ${persona}\n  Recent History: ${JSON.stringify(history.slice(-3))}\n  Has Attached Images: ${hasImages}\n`;
-      
-      // 3. Get the decision from the master router
+      const routingContext = `\n  Persona: ${persona}\n  Rolling Summary: ${summary}\n  Recent History: ${JSON.stringify(history.slice(-3))}\n  Has Attached Images: ${hasImages}\n`;
       const routingDecision = await chooseProvider(message, routingContext, providers);
-      
-      // 4. THIS IS THE CRITICAL FIX: Assign the values to be used in the stream
+
       provider = routingDecision.provider;
       modelId = routingDecision.modelId;
-      
-      // 5. Log the results
+
       console.log(`[Chat API] Selected Provider: ${provider.name}, Model: ${modelId}`);
       console.log(`[Chat API] Routing Model For UI: ${routingDecision.routerModel}`);
       console.log(`[Chat API] Routing Reasoning: ${routingDecision.reasoning}`);
@@ -308,9 +299,13 @@ export async function POST(request: NextRequest) {
             const assistantText = result.text || streamedText;
             await saveMessage(chatId, "assistant", assistantText, result.model, imageAssets);
 
-            void maybeUpdateSummary(chatId).catch((err: unknown) =>
-              console.error("[Chat API] Background Summary Update Error:", err)
-            );
+            after(async () => {
+              try {
+                await maybeUpdateSummary(chatId);
+              } catch (error: unknown) {
+                console.error("[Chat API] Background Summary Update Error:", error);
+              }
+            });
 
             controller.close();
           } catch (error: unknown) {
