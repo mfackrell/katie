@@ -1,33 +1,73 @@
 import OpenAI from "openai";
-import { getRecentMessages } from "@/lib/data/blob-store";
-import { setConversationSummary } from "@/lib/data/blob-store";
+import { getConversationSummary, getRecentMessages, setConversationSummary as saveConversationSummary } from "@/lib/data/blob-store";
 
-const summarizerModel = "gpt-4o-mini";
+const SUMMARY_INTERVAL = 5;
+const SUMMARY_MESSAGE_WINDOW = 20;
+const SUMMARY_MODEL = "gpt-4o-mini";
+
 const client = process.env.OPENAI_API_KEY ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY }) : null;
 
+function formatTranscript(messages: Awaited<ReturnType<typeof getRecentMessages>>): string {
+  return messages
+    .map((message, index) => {
+      const timestamp = message.createdAt ? ` (${message.createdAt})` : "";
+      return `${index + 1}. ${message.role}${timestamp}: ${message.content}`;
+    })
+    .join("\n");
+}
+
 export async function maybeUpdateSummary(chatId: string): Promise<void> {
-  const recent = await getRecentMessages(chatId, 60);
+  try {
+    if (!client) {
+      return;
+    }
 
-  if (!client || recent.length < 3 || recent.length % 2 !== 0) {
-    return;
-  }
+    const allMessages = await getRecentMessages(chatId, Number.MAX_SAFE_INTEGER);
+    const messageCount = allMessages.length;
 
-  const transcript = recent.map((m) => `${m.role}: ${m.content}`).join("\n");
+    if (!messageCount || messageCount % SUMMARY_INTERVAL !== 0) {
+      return;
+    }
 
-  const response = await client.chat.completions.create({
-    model: summarizerModel,
-    messages: [
-      {
-        role: "system",
-        content:
-          "Summarize the ongoing conversation as themes, decisions made, open questions, and current blockers. Keep it concise and factual. IMPORTANT: Refer to the assistant ONLY as 'Katie' or 'You'. Do NOT use brand names like GPT, Grok, or Gemini."
-      },
-      { role: "user", content: transcript }
-    ]
-  });
+    const [existingSummary, recentMessages] = await Promise.all([
+      getConversationSummary(chatId),
+      Promise.resolve(allMessages.slice(-SUMMARY_MESSAGE_WINDOW))
+    ]);
 
-  const summary = response.choices[0]?.message?.content?.trim();
-  if (summary) {
-    await setConversationSummary(chatId, summary);
+    if (!recentMessages.length) {
+      return;
+    }
+
+    const response = await client.chat.completions.create({
+      model: SUMMARY_MODEL,
+      temperature: 0.2,
+      messages: [
+        {
+          role: "system",
+          content:
+            "You maintain a rolling conversation summary for a memory system. Produce exactly one concise paragraph that merges the prior summary with the newest conversation details. Preserve durable facts, decisions, goals, constraints, unresolved questions, and newly introduced context. Do not use bullet points. If there is no prior summary, create one from the recent messages only."
+        },
+        {
+          role: "user",
+          content: [
+            `Chat ID: ${chatId}`,
+            `Existing summary: ${existingSummary || "None yet."}`,
+            "Recent messages to fold in:",
+            formatTranscript(recentMessages),
+            "Return only the updated rolling summary as a single paragraph."
+          ].join("\n\n")
+        }
+      ]
+    });
+
+    const updatedSummary = response.choices[0]?.message?.content?.trim();
+
+    if (!updatedSummary) {
+      return;
+    }
+
+    await saveConversationSummary(chatId, updatedSummary);
+  } catch (error: unknown) {
+    console.error("[Summarizer] Failed to update rolling summary:", error);
   }
 }
