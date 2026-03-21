@@ -186,11 +186,21 @@ export async function POST(request: NextRequest) {
       provider = manualProvider;
       modelId = overrideModel;
       console.log(`[Chat API] Override active. Provider: ${provider.name}, Model: ${modelId}`);
-    } else {
-      const routingContext = `\n  Persona: ${persona}\n  Recent History: ${JSON.stringify(history.slice(-3))}\n`;
+} else {
+      // 1. Check for images in the payload
+      const hasImages = Array.isArray(images) && images.length > 0;
+      
+      // 2. Build the context with the image flag
+      const routingContext = `\n  Persona: ${persona}\n  Recent History: ${JSON.stringify(history.slice(-3))}\n  Has Attached Images: ${hasImages}\n`;
+      
+      // 3. Get the decision from the master router
       const routingDecision = await chooseProvider(message, routingContext, providers);
+      
+      // 4. THIS IS THE CRITICAL FIX: Assign the values to be used in the stream
       provider = routingDecision.provider;
       modelId = routingDecision.modelId;
+      
+      // 5. Log the results
       console.log(`[Chat API] Selected Provider: ${provider.name}, Model: ${modelId}`);
       console.log(`[Chat API] Routing Model For UI: ${routingDecision.routerModel}`);
       console.log(`[Chat API] Routing Reasoning: ${routingDecision.reasoning}`);
