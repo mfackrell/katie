@@ -11,8 +11,8 @@ export type RoutingDecision = {
 type ProviderName = "openai" | "google" | "grok" | "anthropic";
 type RoutingChoice = { providerName: ProviderName; modelId: string };
 
-const ORCHESTRATOR_MODELS = ["gpt-4o-mini", "gpt-5.2", "gemini-3.1-pro"] as const;
-const DEFAULT_ORCHESTRATOR_MODEL = "gpt-4o-mini";
+const ORCHESTRATOR_MODELS = ["gpt-5", "gemini-pro-latest"] as const;
+const DEFAULT_ORCHESTRATOR_MODEL = "gpt-5";
 const BLOCKED_ROUTING_MODELS = new Set(["gpt-5.4-pro"]);
 
 const CAPABILITY_REGISTRY: Record<string, string> = {
