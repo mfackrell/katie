@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Polyglot Actor Orchestrator",
+  title: "Katie",
   description: "Tri-layer memory orchestration UI"
 };
 
