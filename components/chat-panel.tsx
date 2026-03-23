@@ -1,11 +1,19 @@
 "use client";
 
 import Image from "next/image";
-import { ClipboardEvent, FormEvent, KeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
+import {
+  ClipboardEvent,
+  FormEvent,
+  KeyboardEvent,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import type { FileReference } from "@/lib/providers/types";
 import type { Message } from "@/lib/types/chat";
 
-type ProviderName = "openai" | "google";
+type ProviderName = "openai" | "google" | "grok" | "anthropic";
 
 type AvailableModels = Partial<Record<ProviderName, string[]>>;
 
@@ -23,28 +31,57 @@ export function ChatPanel({ actorId, chatId }: ChatPanelProps) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
-  const [meta, setMeta] = useState<{ provider: string; model: string } | null>(null);
+  const [meta, setMeta] = useState<{ provider: string; model: string } | null>(
+    null,
+  );
   const [availableModels, setAvailableModels] = useState<AvailableModels>({});
-  const [selectedOverride, setSelectedOverride] = useState<SelectedOverride>(null);
+  const [selectedOverride, setSelectedOverride] =
+    useState<SelectedOverride>(null);
   const [streamingModel, setStreamingModel] = useState<string | null>(null);
   const [selectedImages, setSelectedImages] = useState<string[]>([]);
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
   const [uploadingFiles, setUploadingFiles] = useState(false);
   const [fileReferences, setFileReferences] = useState<FileReference[]>([]);
   const [statusMessage, setStatusMessage] = useState("");
+  const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
+  const messagesContainerRef = useRef<HTMLElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const abortControllerRef = useRef<AbortController | null>(null);
+  const copiedFeedbackTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null,
+  );
 
   const canSend = useMemo(
     () =>
-      (input.trim().length > 0 || selectedImages.length > 0 || selectedFiles.length > 0 || fileReferences.length > 0) &&
+      (input.trim().length > 0 ||
+        selectedImages.length > 0 ||
+        selectedFiles.length > 0 ||
+        fileReferences.length > 0) &&
       !loading &&
       !uploadingFiles,
-    [input, loading, selectedFiles.length, selectedImages.length, uploadingFiles, fileReferences.length]
+    [
+      input,
+      loading,
+      selectedFiles.length,
+      selectedImages.length,
+      uploadingFiles,
+      fileReferences.length,
+    ],
   );
 
+  const scrollToTop = () => {
+    messagesContainerRef.current?.scrollTo({ top: 0, behavior: "smooth" });
+  };
+
   const scrollToBottom = () => {
+    const container = messagesContainerRef.current;
+    if (container) {
+      container.scrollTo({ top: container.scrollHeight, behavior: "smooth" });
+      return;
+    }
+
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   };
 
@@ -68,11 +105,23 @@ export function ChatPanel({ actorId, chatId }: ChatPanelProps) {
   }, [messages, loading]);
 
   useEffect(() => {
+    abortControllerRef.current?.abort();
     setMessages([]);
     setMeta(null);
     setStatusMessage("");
     setStreamingModel(null);
+    setCopiedMessageId(null);
   }, [actorId, chatId]);
+
+  useEffect(
+    () => () => {
+      abortControllerRef.current?.abort();
+      if (copiedFeedbackTimeoutRef.current) {
+        clearTimeout(copiedFeedbackTimeoutRef.current);
+      }
+    },
+    [],
+  );
 
   async function uploadFiles(files: File[]): Promise<FileReference[]> {
     if (files.length === 0) {
@@ -80,7 +129,9 @@ export function ChatPanel({ actorId, chatId }: ChatPanelProps) {
     }
 
     setUploadingFiles(true);
-    setStatusMessage(`Uploading ${files.length} file${files.length > 1 ? "s" : ""}...`);
+    setStatusMessage(
+      `Uploading ${files.length} file${files.length > 1 ? "s" : ""}...`,
+    );
 
     try {
       const formData = new FormData();
@@ -90,17 +141,20 @@ export function ChatPanel({ actorId, chatId }: ChatPanelProps) {
 
       const response = await fetch("/api/upload", {
         method: "POST",
-        body: formData
+        body: formData,
       });
 
-      const payload = (await response.json()) as { fileReferences?: FileReference[]; error?: string };
+      const payload = (await response.json()) as {
+        fileReferences?: FileReference[];
+        error?: string;
+      };
 
       if (!response.ok || !payload.fileReferences) {
         throw new Error(payload.error ?? "File upload failed.");
       }
 
       setStatusMessage(
-        `Uploaded ${payload.fileReferences.length} file${payload.fileReferences.length > 1 ? "s" : ""}.`
+        `Uploaded ${payload.fileReferences.length} file${payload.fileReferences.length > 1 ? "s" : ""}.`,
       );
       return payload.fileReferences;
     } finally {
@@ -137,19 +191,24 @@ export function ChatPanel({ actorId, chatId }: ChatPanelProps) {
         chatId,
         role: "user",
         content,
-        createdAt: new Date().toISOString()
-      }
+        createdAt: new Date().toISOString(),
+      },
     ]);
 
     try {
-      const uploadedReferences = filesToUpload.length > 0 ? await uploadFiles(filesToUpload) : [];
+      const uploadedReferences =
+        filesToUpload.length > 0 ? await uploadFiles(filesToUpload) : [];
       const refsToSend = [...priorReferences, ...uploadedReferences];
+
+      const abortController = new AbortController();
+      abortControllerRef.current = abortController;
 
       const response = await fetch("/api/chat", {
         method: "POST",
         headers: {
-          "content-type": "application/json"
+          "content-type": "application/json",
         },
+        signal: abortController.signal,
         body: JSON.stringify({
           actorId,
           chatId,
@@ -157,8 +216,8 @@ export function ChatPanel({ actorId, chatId }: ChatPanelProps) {
           images: imagesToSend,
           fileReferences: refsToSend,
           overrideProvider: selectedOverride?.providerName,
-          overrideModel: selectedOverride?.modelId
-        })
+          overrideModel: selectedOverride?.modelId,
+        }),
       });
 
       if (!response.ok) {
@@ -170,8 +229,8 @@ export function ChatPanel({ actorId, chatId }: ChatPanelProps) {
             chatId,
             role: "assistant",
             content: errorData.error ?? "Something went wrong.",
-            createdAt: new Date().toISOString()
-          }
+            createdAt: new Date().toISOString(),
+          },
         ]);
         setStatusMessage(errorData.error ?? "Message failed.");
         return;
@@ -256,6 +315,7 @@ export function ChatPanel({ actorId, chatId }: ChatPanelProps) {
         }
       }
 
+      abortControllerRef.current = null;
       setMeta({ provider, model });
       setMessages((current) => [
         ...current,
@@ -266,12 +326,20 @@ export function ChatPanel({ actorId, chatId }: ChatPanelProps) {
           model,
           content: textContent,
           assets,
-          createdAt: new Date().toISOString()
-        }
+          createdAt: new Date().toISOString(),
+        },
       ]);
       setStatusMessage("Response received.");
     } catch (error: unknown) {
-      const message = error instanceof Error ? error.message : "Something went wrong.";
+      abortControllerRef.current = null;
+
+      if (error instanceof DOMException && error.name === "AbortError") {
+        setStatusMessage("Request canceled.");
+        return;
+      }
+
+      const message =
+        error instanceof Error ? error.message : "Something went wrong.";
       setMessages((current) => [
         ...current,
         {
@@ -279,14 +347,32 @@ export function ChatPanel({ actorId, chatId }: ChatPanelProps) {
           chatId,
           role: "assistant",
           content: message,
-          createdAt: new Date().toISOString()
-        }
+          createdAt: new Date().toISOString(),
+        },
       ]);
       setStatusMessage(message);
     } finally {
+      abortControllerRef.current = null;
       setLoading(false);
       setStreamingModel(null);
     }
+  }
+
+  function handleCancelRequest() {
+    abortControllerRef.current?.abort();
+  }
+
+  async function handleCopyMessage(messageId: string, content: string) {
+    await navigator.clipboard.writeText(content);
+    setCopiedMessageId(messageId);
+
+    if (copiedFeedbackTimeoutRef.current) {
+      clearTimeout(copiedFeedbackTimeoutRef.current);
+    }
+
+    copiedFeedbackTimeoutRef.current = setTimeout(() => {
+      setCopiedMessageId((current) => (current === messageId ? null : current));
+    }, 1500);
   }
 
   function handleKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
@@ -330,7 +416,9 @@ export function ChatPanel({ actorId, chatId }: ChatPanelProps) {
 
     const nextFiles = files.filter((file) => !file.type.startsWith("image/"));
     setSelectedFiles((current) => [...current, ...nextFiles]);
-    setStatusMessage(`${nextFiles.length} non-image file${nextFiles.length === 1 ? "" : "s"} ready for upload.`);
+    setStatusMessage(
+      `${nextFiles.length} non-image file${nextFiles.length === 1 ? "" : "s"} ready for upload.`,
+    );
 
     files
       .filter((file) => file.type.startsWith("image/"))
@@ -393,29 +481,58 @@ export function ChatPanel({ actorId, chatId }: ChatPanelProps) {
       <header className="border-b border-zinc-800 px-6 py-4">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
-            <p className="text-xs uppercase tracking-wide text-zinc-400">Master Router</p>
-            <h2 className="text-lg font-semibold">Polyglot Actor Orchestrator</h2>
+            <p className="text-xs uppercase tracking-wide text-zinc-400">
+              Master Router
+            </p>
+            <h2 className="text-lg font-semibold">
+              Polyglot Actor Orchestrator
+            </h2>
             {meta ? (
               <p className="mt-1 text-xs text-zinc-400">
-                Last response via <span className="text-zinc-200">{meta.provider}</span> · {meta.model}
+                Last response via{" "}
+                <span className="text-zinc-200">{meta.provider}</span> ·{" "}
+                {meta.model}
               </p>
             ) : null}
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={scrollToTop}
+              className="rounded-md border border-zinc-700 bg-zinc-900 px-3 py-1 text-xs text-zinc-200 transition hover:border-zinc-500 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
+            >
+              Top
+            </button>
+            <button
+              type="button"
+              onClick={scrollToBottom}
+              className="rounded-md border border-zinc-700 bg-zinc-900 px-3 py-1 text-xs text-zinc-200 transition hover:border-zinc-500 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
+            >
+              Bottom
+            </button>
             {providerNames.map((providerName) => {
               const options = availableModels[providerName] ?? [];
               const selectedValue =
-                selectedOverride?.providerName === providerName ? selectedOverride.modelId : "";
+                selectedOverride?.providerName === providerName
+                  ? selectedOverride.modelId
+                  : "";
 
               return (
-                <label key={providerName} className="flex items-center gap-2 text-xs text-zinc-300">
-                  <span className="capitalize text-zinc-400">{providerName}</span>
+                <label
+                  key={providerName}
+                  className="flex items-center gap-2 text-xs text-zinc-300"
+                >
+                  <span className="capitalize text-zinc-400">
+                    {providerName}
+                  </span>
                   <select
                     value={selectedValue}
                     onChange={(event) => {
                       const nextModel = event.target.value;
-                      setSelectedOverride(nextModel ? { providerName, modelId: nextModel } : null);
+                      setSelectedOverride(
+                        nextModel ? { providerName, modelId: nextModel } : null,
+                      );
                     }}
                     className="rounded-md border border-zinc-700 bg-zinc-900 px-2 py-1 text-xs text-zinc-100 outline-none ring-emerald-500 focus:ring"
                   >
@@ -433,9 +550,14 @@ export function ChatPanel({ actorId, chatId }: ChatPanelProps) {
         </div>
       </header>
 
-      <section className="flex-1 space-y-3 overflow-y-auto p-6">
+      <section
+        ref={messagesContainerRef}
+        className="flex-1 space-y-3 overflow-y-auto p-6"
+      >
         {messages.length === 0 ? (
-          <p className="text-sm text-zinc-500">Start a new message to invoke the master router.</p>
+          <p className="text-sm text-zinc-500">
+            Start a new message to invoke the master router.
+          </p>
         ) : null}
         {messages.map((message) => (
           <div
@@ -446,38 +568,63 @@ export function ChatPanel({ actorId, chatId }: ChatPanelProps) {
                 : "border-zinc-700 bg-zinc-900"
             }`}
           >
-            <p className="mb-1 text-xs uppercase text-zinc-400">
-              {message.role}{message.role === "assistant" && message.model ? ` (${message.model})` : ""}
-            </p>
-            {message.content ? <p className="whitespace-pre-wrap">{message.content}</p> : null}
-            {message.assets?.filter((asset) => asset.type === "image").map((asset) => (
-              <div key={asset.url} className="group relative mt-3">
-                <div className="relative h-80 w-full overflow-hidden rounded-md border border-zinc-700">
-                  <Image
-                    src={asset.url}
-                    alt="Generated asset"
-                    fill
-                    sizes="(max-width: 768px) 100vw, 768px"
-                    className="object-contain"
-                    unoptimized
-                  />
+            <div className="mb-1 flex items-start justify-between gap-3">
+              <p className="text-xs uppercase text-zinc-400">
+                {message.role}
+                {message.role === "assistant" && message.model
+                  ? ` (${message.model})`
+                  : ""}
+              </p>
+              <button
+                type="button"
+                onClick={() =>
+                  void handleCopyMessage(message.id, message.content ?? "")
+                }
+                className="rounded-md border border-zinc-700 px-2 py-1 text-[11px] text-zinc-300 transition hover:border-zinc-500 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
+              >
+                {copiedMessageId === message.id ? "Copied" : "Copy"}
+              </button>
+            </div>
+            {message.content ? (
+              <p className="whitespace-pre-wrap">{message.content}</p>
+            ) : null}
+            {message.assets
+              ?.filter((asset) => asset.type === "image")
+              .map((asset) => (
+                <div key={asset.url} className="group relative mt-3">
+                  <div className="relative h-80 w-full overflow-hidden rounded-md border border-zinc-700">
+                    <Image
+                      src={asset.url}
+                      alt="Generated asset"
+                      fill
+                      sizes="(max-width: 768px) 100vw, 768px"
+                      className="object-contain"
+                      unoptimized
+                    />
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      void handleDownload(
+                        asset.url,
+                        `katie-generated-${Date.now()}.png`,
+                      )
+                    }
+                    className="absolute right-2 top-2 rounded-md bg-zinc-950/85 px-2 py-1 text-xs font-medium text-white opacity-0 transition-opacity hover:bg-zinc-800 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 group-hover:opacity-100"
+                  >
+                    Download
+                  </button>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => void handleDownload(asset.url, `katie-generated-${Date.now()}.png`)}
-                  className="absolute right-2 top-2 rounded-md bg-zinc-950/85 px-2 py-1 text-xs font-medium text-white opacity-0 transition-opacity hover:bg-zinc-800 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 group-hover:opacity-100"
-                >
-                  Download
-                </button>
-              </div>
-            ))}
+              ))}
           </div>
         ))}
         {loading && (
           <div className="flex w-fit items-center gap-3 rounded-lg border border-zinc-700 bg-zinc-900 px-4 py-3 text-sm text-zinc-400">
             <div className="h-4 w-4 animate-spin rounded-full border-2 border-emerald-500 border-t-transparent" />
             <p className="italic">
-              {uploadingFiles ? "Uploading attachments..." : `${streamingModel ?? selectedOverride?.modelId ?? "Master Router"} is thinking...`}
+              {uploadingFiles
+                ? "Uploading attachments..."
+                : `${streamingModel ?? selectedOverride?.modelId ?? "Master Router"} is thinking...`}
             </p>
           </div>
         )}
@@ -492,7 +639,10 @@ export function ChatPanel({ actorId, chatId }: ChatPanelProps) {
         {selectedImages.length > 0 ? (
           <div className="mb-3 flex flex-wrap gap-2">
             {selectedImages.map((image, index) => (
-              <div key={`${image.slice(0, 32)}-${index}`} className="relative h-20 w-20 overflow-hidden rounded-md border border-zinc-700">
+              <div
+                key={`${image.slice(0, 32)}-${index}`}
+                className="relative h-20 w-20 overflow-hidden rounded-md border border-zinc-700"
+              >
                 <Image
                   src={image}
                   alt={`Selected image ${index + 1}`}
@@ -503,7 +653,13 @@ export function ChatPanel({ actorId, chatId }: ChatPanelProps) {
                 />
                 <button
                   type="button"
-                  onClick={() => setSelectedImages((current) => current.filter((_, currentIndex) => currentIndex !== index))}
+                  onClick={() =>
+                    setSelectedImages((current) =>
+                      current.filter(
+                        (_, currentIndex) => currentIndex !== index,
+                      ),
+                    )
+                  }
                   className="absolute right-0 top-0 bg-red-500 px-1 text-xs text-white"
                 >
                   ✕
@@ -514,7 +670,10 @@ export function ChatPanel({ actorId, chatId }: ChatPanelProps) {
         ) : null}
 
         {selectedFiles.length > 0 ? (
-          <ul className="mb-3 space-y-1 text-xs text-zinc-400" aria-live="polite">
+          <ul
+            className="mb-3 space-y-1 text-xs text-zinc-400"
+            aria-live="polite"
+          >
             {selectedFiles.map((file, index) => (
               <li key={`${file.name}-${index}`}>📄 {file.name}</li>
             ))}
@@ -548,6 +707,15 @@ export function ChatPanel({ actorId, chatId }: ChatPanelProps) {
             placeholder="Ask your actor something..."
             className="min-h-[40px] max-h-48 flex-1 resize-none overflow-y-auto rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm outline-none ring-emerald-500 focus:ring"
           />
+          {loading ? (
+            <button
+              type="button"
+              onClick={handleCancelRequest}
+              className="rounded-lg border border-red-500/70 px-4 py-2 text-sm font-medium text-red-200 transition hover:bg-red-500/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-400"
+            >
+              Cancel
+            </button>
+          ) : null}
           <button
             type="submit"
             disabled={!canSend}
