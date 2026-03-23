@@ -15,6 +15,9 @@ type ModalState =
     }
   | null;
 
+const ACTIVE_ACTOR_STORAGE_KEY = "katie.activeActorId";
+const ACTIVE_CHAT_STORAGE_KEY = "katie.activeChatId";
+
 function buildChatId(): string {
   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
     return crypto.randomUUID();
@@ -23,33 +26,118 @@ function buildChatId(): string {
   return `chat-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
+function pickActiveActorId(actors: Actor[], preferredActorId: string | null): string {
+  if (preferredActorId && actors.some((actor) => actor.id === preferredActorId)) {
+    return preferredActorId;
+  }
+
+  return actors[0]?.id ?? "";
+}
+
+function pickActiveChatId(chats: ChatThread[], actorId: string, preferredChatId: string | null): string {
+  const actorChats = chats.filter((chat) => chat.actorId === actorId);
+
+  if (preferredChatId && actorChats.some((chat) => chat.id === preferredChatId)) {
+    return preferredChatId;
+  }
+
+  return actorChats[0]?.id ?? "";
+}
+
 export default function HomePage() {
   const [actors, setActors] = useState<Actor[]>(demoActors);
   const [chats, setChats] = useState<ChatThread[]>(demoChats);
-  const [activeActorId, setActiveActorId] = useState(demoActors[0].id);
-  const [activeChatId, setActiveChatId] = useState(demoChats[0].id);
+  const [activeActorId, setActiveActorId] = useState(demoActors[0]?.id ?? "");
+  const [activeChatId, setActiveChatId] = useState(demoChats[0]?.id ?? "");
   const [modalState, setModalState] = useState<ModalState>(null);
+  const [hasLoadedPersistedState, setHasLoadedPersistedState] = useState(false);
 
   useEffect(() => {
-    async function fetchActors() {
-      const response = await fetch("/api/actors");
-      if (!response.ok) {
-        return;
-      }
+    async function fetchInitialData() {
+      try {
+        const [actorsResponse, chatsResponse] = await Promise.all([
+          fetch("/api/actors", { cache: "no-store" }),
+          fetch("/api/chats", { cache: "no-store" })
+        ]);
 
-      const payload = (await response.json()) as { actors?: Actor[] };
-      if (payload.actors?.length) {
-        setActors(payload.actors);
+        const actorsPayload = actorsResponse.ok
+          ? ((await actorsResponse.json()) as { actors?: Actor[] })
+          : { actors: [] };
+        const chatsPayload = chatsResponse.ok
+          ? ((await chatsResponse.json()) as { chats?: ChatThread[] })
+          : { chats: [] };
+
+        const persistedActors = actorsPayload.actors ?? [];
+        const persistedChats = chatsPayload.chats ?? [];
+        const hasPersistedActors = persistedActors.length > 0;
+        const hasPersistedChats = persistedChats.length > 0;
+        const nextActors = hasPersistedActors ? persistedActors : demoActors;
+        const nextChats = hasPersistedChats ? persistedChats : hasPersistedActors ? [] : demoChats;
+        const storedActorId = window.localStorage.getItem(ACTIVE_ACTOR_STORAGE_KEY);
+        const storedChatId = window.localStorage.getItem(ACTIVE_CHAT_STORAGE_KEY);
+        const nextActiveActorId = pickActiveActorId(nextActors, storedActorId);
+        const nextActiveChatId = pickActiveChatId(nextChats, nextActiveActorId, storedChatId);
+
+        setActors(nextActors);
+        setChats(nextChats);
+        setActiveActorId(nextActiveActorId);
+        setActiveChatId(nextActiveChatId);
+      } finally {
+        setHasLoadedPersistedState(true);
       }
     }
 
-    void fetchActors();
+    void fetchInitialData();
   }, []);
+
+  useEffect(() => {
+    if (!hasLoadedPersistedState) {
+      return;
+    }
+
+    if (activeActorId) {
+      window.localStorage.setItem(ACTIVE_ACTOR_STORAGE_KEY, activeActorId);
+      return;
+    }
+
+    window.localStorage.removeItem(ACTIVE_ACTOR_STORAGE_KEY);
+  }, [activeActorId, hasLoadedPersistedState]);
+
+  useEffect(() => {
+    if (!hasLoadedPersistedState) {
+      return;
+    }
+
+    if (activeChatId) {
+      window.localStorage.setItem(ACTIVE_CHAT_STORAGE_KEY, activeChatId);
+      return;
+    }
+
+    window.localStorage.removeItem(ACTIVE_CHAT_STORAGE_KEY);
+  }, [activeChatId, hasLoadedPersistedState]);
+
+  useEffect(() => {
+    if (!hasLoadedPersistedState || actors.length === 0) {
+      return;
+    }
+
+    if (!actors.some((actor) => actor.id === activeActorId)) {
+      const nextActorId = actors[0]?.id ?? "";
+      setActiveActorId(nextActorId);
+      setActiveChatId(pickActiveChatId(chats, nextActorId, null));
+      return;
+    }
+
+    const actorChats = chats.filter((chat) => chat.actorId === activeActorId);
+    if (!actorChats.some((chat) => chat.id === activeChatId)) {
+      setActiveChatId(actorChats[0]?.id ?? "");
+    }
+  }, [activeActorId, activeChatId, actors, chats, hasLoadedPersistedState]);
 
   const filteredChats = useMemo(() => chats, [chats]);
 
   async function createActor(input: { name: string; purpose?: string; parentId?: string }) {
-    const response = await fetch("/api/actors", {
+    const actorResponse = await fetch("/api/actors", {
       method: "POST",
       headers: {
         "content-type": "application/json"
@@ -57,25 +145,36 @@ export default function HomePage() {
       body: JSON.stringify(input)
     });
 
-    const payload = (await response.json()) as { actor?: Actor; error?: string };
+    const actorPayload = (await actorResponse.json()) as { actor?: Actor; error?: string };
 
-    if (!response.ok || !payload.actor) {
-      throw new Error(payload.error ?? "Failed to create actor.");
+    if (!actorResponse.ok || !actorPayload.actor) {
+      throw new Error(actorPayload.error ?? "Failed to create actor.");
     }
 
-    const createdActor = payload.actor;
-    setActors((current) => [...current, createdActor]);
-
+    const createdActor = actorPayload.actor;
     const chatId = buildChatId();
-    const chat: ChatThread = {
-      id: chatId,
-      actorId: createdActor.id,
-      title: "New Chat"
-    };
+    const chatResponse = await fetch("/api/chats", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({
+        id: chatId,
+        actorId: createdActor.id,
+        title: "New Chat"
+      })
+    });
+    const chatPayload = (await chatResponse.json()) as { chat?: ChatThread; error?: string };
 
-    setChats((current) => [...current, chat]);
+    if (!chatResponse.ok || !chatPayload.chat) {
+      throw new Error(chatPayload.error ?? "Failed to create initial chat.");
+    }
+
+    const createdChat = chatPayload.chat;
+    setActors((current) => [...current.filter((actor) => actor.id !== createdActor.id), createdActor]);
+    setChats((current) => [...current.filter((chat) => chat.id !== createdChat.id), createdChat]);
     setActiveActorId(createdActor.id);
-    setActiveChatId(chatId);
+    setActiveChatId(createdChat.id);
   }
 
   async function deleteActor(actor: Actor) {
@@ -92,17 +191,17 @@ export default function HomePage() {
     const deletedIds = new Set(payload.deletedActorIds);
     const nextActors = actors.filter((item) => !deletedIds.has(item.id));
     const nextChats = chats.filter((chat) => !deletedIds.has(chat.actorId));
+    const nextActiveActorId = deletedIds.has(activeActorId)
+      ? pickActiveActorId(nextActors, null)
+      : activeActorId;
+    const nextActiveChatId = deletedIds.has(activeChatId)
+      ? pickActiveChatId(nextChats, nextActiveActorId, null)
+      : pickActiveChatId(nextChats, nextActiveActorId, activeChatId);
 
     setActors(nextActors);
     setChats(nextChats);
-
-    if (deletedIds.has(activeActorId)) {
-      setActiveActorId(nextActors[0]?.id ?? "");
-    }
-
-    if (deletedIds.has(activeChatId)) {
-      setActiveChatId(nextChats[0]?.id ?? "");
-    }
+    setActiveActorId(nextActiveActorId);
+    setActiveChatId(nextActiveChatId);
   }
 
   return (

@@ -105,12 +105,46 @@ export function ChatPanel({ actorId, chatId }: ChatPanelProps) {
   }, [messages, loading]);
 
   useEffect(() => {
-    abortControllerRef.current?.abort();
-    setMessages([]);
-    setMeta(null);
-    setStatusMessage("");
-    setStreamingModel(null);
-    setCopiedMessageId(null);
+    let cancelled = false;
+
+    async function fetchMessages() {
+      abortControllerRef.current?.abort();
+      setMeta(null);
+      setStatusMessage("");
+      setStreamingModel(null);
+      setCopiedMessageId(null);
+
+      if (!chatId) {
+        setMessages([]);
+        return;
+      }
+
+      try {
+        const response = await fetch(`/api/messages?chatId=${encodeURIComponent(chatId)}`, {
+          cache: "no-store"
+        });
+        const payload = (await response.json()) as { messages?: Message[]; error?: string };
+
+        if (!response.ok) {
+          throw new Error(payload.error ?? "Failed to load messages.");
+        }
+
+        if (!cancelled) {
+          setMessages(payload.messages ?? []);
+        }
+      } catch (error: unknown) {
+        if (!cancelled) {
+          setMessages([]);
+          setStatusMessage(error instanceof Error ? error.message : "Failed to load messages.");
+        }
+      }
+    }
+
+    void fetchMessages();
+
+    return () => {
+      cancelled = true;
+    };
   }, [actorId, chatId]);
 
   useEffect(
@@ -265,6 +299,7 @@ export function ChatPanel({ actorId, chatId }: ChatPanelProps) {
 
           const chunk = JSON.parse(line) as
             | { type: "metadata"; modelId: string; provider: string }
+            | { type: "delta"; text: string }
             | {
                 type: "content";
                 text: string;
@@ -278,8 +313,14 @@ export function ChatPanel({ actorId, chatId }: ChatPanelProps) {
             provider = chunk.provider;
           }
 
-          if (chunk.type === "content") {
+          if (chunk.type === "delta") {
             textContent += chunk.text;
+          }
+
+          if (chunk.type === "content") {
+            if (!textContent) {
+              textContent = chunk.text;
+            }
             if (chunk.assets?.length) {
               assets = [...assets, ...chunk.assets];
             }
@@ -292,6 +333,7 @@ export function ChatPanel({ actorId, chatId }: ChatPanelProps) {
       if (buffered.trim()) {
         const trailingChunk = JSON.parse(buffered) as
           | { type: "metadata"; modelId: string; provider: string }
+          | { type: "delta"; text: string }
           | {
               type: "content";
               text: string;
@@ -305,8 +347,14 @@ export function ChatPanel({ actorId, chatId }: ChatPanelProps) {
           provider = trailingChunk.provider;
         }
 
-        if (trailingChunk.type === "content") {
+        if (trailingChunk.type === "delta") {
           textContent += trailingChunk.text;
+        }
+
+        if (trailingChunk.type === "content") {
+          if (!textContent) {
+            textContent = trailingChunk.text;
+          }
           if (trailingChunk.assets?.length) {
             assets = [...assets, ...trailingChunk.assets];
           }
