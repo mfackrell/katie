@@ -477,37 +477,46 @@ export function ChatPanel({ actorId, chatId }: ChatPanelProps) {
   }
 
   return (
-    <main className="flex h-screen flex-1 flex-col">
-      <header className="border-b border-zinc-800 px-6 py-4">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div>
-            <p className="text-xs uppercase tracking-wide text-zinc-400">
+    <main className="relative flex h-[calc(100vh-2rem)] flex-1 flex-col overflow-hidden bg-gradient-to-b from-white/[0.02] via-transparent to-black/10">
+      <header className="border-b border-white/10 px-5 py-5 sm:px-8">
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div className="max-w-2xl">
+            <p className="text-[11px] font-semibold uppercase tracking-[0.28em] text-zinc-500">
               Master Router
             </p>
-            <h2 className="text-lg font-semibold">
-              Polyglot Actor Orchestrator
-            </h2>
+            <div className="mt-3 flex items-center gap-3">
+              <div className="flex h-11 w-11 items-center justify-center rounded-2xl border border-white/10 bg-gradient-to-br from-sky-400/20 via-white/10 to-emerald-400/15 shadow-[0_10px_30px_rgba(0,0,0,0.3)]">
+                <span className="text-lg">✦</span>
+              </div>
+              <div>
+                <h2 className="text-2xl font-semibold tracking-tight text-white">
+                  Polyglot Actor Orchestrator
+                </h2>
+                <p className="mt-1 text-sm text-zinc-400">
+                  Coordinate premium multi-model routing, branching, and execution from a unified workspace.
+                </p>
+              </div>
+            </div>
             {meta ? (
-              <p className="mt-1 text-xs text-zinc-400">
-                Last response via{" "}
-                <span className="text-zinc-200">{meta.provider}</span> ·{" "}
-                {meta.model}
+              <p className="mt-4 inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-xs text-zinc-400">
+                <span className="h-2 w-2 rounded-full bg-emerald-400 shadow-[0_0_12px_rgba(52,211,153,0.7)]" />
+                Last response via <span className="text-zinc-200">{meta.provider}</span> · {meta.model}
               </p>
             ) : null}
           </div>
 
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="flex flex-wrap items-center justify-end gap-2.5">
             <button
               type="button"
               onClick={scrollToTop}
-              className="rounded-md border border-zinc-700 bg-zinc-900 px-3 py-1 text-xs text-zinc-200 transition hover:border-zinc-500 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
+              className="rounded-2xl border border-white/10 bg-white/[0.04] px-3.5 py-2 text-xs font-medium text-zinc-200 transition hover:border-white/20 hover:bg-white/[0.07] hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
             >
               Top
             </button>
             <button
               type="button"
               onClick={scrollToBottom}
-              className="rounded-md border border-zinc-700 bg-zinc-900 px-3 py-1 text-xs text-zinc-200 transition hover:border-zinc-500 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
+              className="rounded-2xl border border-white/10 bg-white/[0.04] px-3.5 py-2 text-xs font-medium text-zinc-200 transition hover:border-white/20 hover:bg-white/[0.07] hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
             >
               Bottom
             </button>
@@ -521,11 +530,9 @@ export function ChatPanel({ actorId, chatId }: ChatPanelProps) {
               return (
                 <label
                   key={providerName}
-                  className="flex items-center gap-2 text-xs text-zinc-300"
+                  className="flex items-center gap-2 rounded-2xl border border-white/10 bg-white/[0.04] px-3 py-2 text-xs text-zinc-300"
                 >
-                  <span className="capitalize text-zinc-400">
-                    {providerName}
-                  </span>
+                  <span className="capitalize text-zinc-400">{providerName}</span>
                   <select
                     value={selectedValue}
                     onChange={(event) => {
@@ -534,7 +541,7 @@ export function ChatPanel({ actorId, chatId }: ChatPanelProps) {
                         nextModel ? { providerName, modelId: nextModel } : null,
                       );
                     }}
-                    className="rounded-md border border-zinc-700 bg-zinc-900 px-2 py-1 text-xs text-zinc-100 outline-none ring-emerald-500 focus:ring"
+                    className="rounded-xl border border-white/10 bg-zinc-950/90 px-2.5 py-1.5 text-xs text-zinc-100 outline-none ring-emerald-500 transition focus:ring"
                   >
                     <option value="">Master Router (Auto)</option>
                     {options.map((modelId) => (
@@ -552,24 +559,28 @@ export function ChatPanel({ actorId, chatId }: ChatPanelProps) {
 
       <section
         ref={messagesContainerRef}
-        className="flex-1 space-y-3 overflow-y-auto p-6"
+        className="flex-1 space-y-5 overflow-y-auto px-5 py-6 sm:px-8 sm:py-8"
       >
         {messages.length === 0 ? (
-          <p className="text-sm text-zinc-500">
-            Start a new message to invoke the master router.
-          </p>
+          <div className="max-w-2xl rounded-[28px] border border-white/10 bg-white/[0.035] p-6 shadow-[0_20px_60px_rgba(0,0,0,0.18)] backdrop-blur-sm">
+            <p className="text-sm font-medium text-zinc-200">Ready for orchestration.</p>
+            <p className="mt-2 text-sm leading-6 text-zinc-500">
+              Start a new message to invoke the master router.
+            </p>
+          </div>
         ) : null}
         {messages.map((message) => (
           <div
             key={message.id}
-            className={`max-w-3xl rounded-lg border px-4 py-3 text-sm ${
+            className={[
+              "max-w-4xl rounded-[28px] border px-5 py-4 text-sm shadow-[0_20px_60px_rgba(0,0,0,0.18)] backdrop-blur-sm",
               message.role === "user"
-                ? "ml-auto border-emerald-700 bg-emerald-950/50"
-                : "border-zinc-700 bg-zinc-900"
-            }`}
+                ? "ml-auto border-emerald-400/20 bg-gradient-to-br from-emerald-400/14 via-emerald-500/8 to-sky-500/10"
+                : "border-white/10 bg-white/[0.035]"
+            ].join(" ")}
           >
-            <div className="mb-1 flex items-start justify-between gap-3">
-              <p className="text-xs uppercase text-zinc-400">
+            <div className="mb-3 flex items-start justify-between gap-3">
+              <p className="text-[11px] font-semibold uppercase tracking-[0.24em] text-zinc-400">
                 {message.role}
                 {message.role === "assistant" && message.model
                   ? ` (${message.model})`
@@ -580,19 +591,19 @@ export function ChatPanel({ actorId, chatId }: ChatPanelProps) {
                 onClick={() =>
                   void handleCopyMessage(message.id, message.content ?? "")
                 }
-                className="rounded-md border border-zinc-700 px-2 py-1 text-[11px] text-zinc-300 transition hover:border-zinc-500 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
+                className="rounded-xl border border-white/10 bg-white/[0.03] px-2.5 py-1.5 text-[11px] font-medium text-zinc-300 transition hover:border-white/20 hover:bg-white/[0.06] hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
               >
                 {copiedMessageId === message.id ? "Copied" : "Copy"}
               </button>
             </div>
             {message.content ? (
-              <p className="whitespace-pre-wrap">{message.content}</p>
+              <p className="whitespace-pre-wrap leading-7 text-zinc-100/95">{message.content}</p>
             ) : null}
             {message.assets
               ?.filter((asset) => asset.type === "image")
               .map((asset) => (
-                <div key={asset.url} className="group relative mt-3">
-                  <div className="relative h-80 w-full overflow-hidden rounded-md border border-zinc-700">
+                <div key={asset.url} className="group relative mt-4">
+                  <div className="relative h-80 w-full overflow-hidden rounded-[22px] border border-white/10 bg-black/20">
                     <Image
                       src={asset.url}
                       alt="Generated asset"
@@ -610,7 +621,7 @@ export function ChatPanel({ actorId, chatId }: ChatPanelProps) {
                         `katie-generated-${Date.now()}.png`,
                       )
                     }
-                    className="absolute right-2 top-2 rounded-md bg-zinc-950/85 px-2 py-1 text-xs font-medium text-white opacity-0 transition-opacity hover:bg-zinc-800 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 group-hover:opacity-100"
+                    className="absolute right-3 top-3 rounded-xl border border-white/10 bg-zinc-950/80 px-3 py-1.5 text-xs font-medium text-white opacity-0 transition-opacity hover:bg-zinc-900 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 group-hover:opacity-100"
                   >
                     Download
                   </button>
@@ -619,9 +630,9 @@ export function ChatPanel({ actorId, chatId }: ChatPanelProps) {
           </div>
         ))}
         {loading && (
-          <div className="flex w-fit items-center gap-3 rounded-lg border border-zinc-700 bg-zinc-900 px-4 py-3 text-sm text-zinc-400">
-            <div className="h-4 w-4 animate-spin rounded-full border-2 border-emerald-500 border-t-transparent" />
-            <p className="italic">
+          <div className="flex w-fit items-center gap-3 rounded-[24px] border border-white/10 bg-white/[0.04] px-4 py-3 text-sm text-zinc-300 shadow-[0_20px_60px_rgba(0,0,0,0.18)] backdrop-blur-sm">
+            <div className="h-4 w-4 animate-spin rounded-full border-2 border-emerald-400 border-t-transparent" />
+            <p className="italic text-zinc-400">
               {uploadingFiles
                 ? "Uploading attachments..."
                 : `${streamingModel ?? selectedOverride?.modelId ?? "Master Router"} is thinking...`}
@@ -631,23 +642,23 @@ export function ChatPanel({ actorId, chatId }: ChatPanelProps) {
         <div ref={messagesEndRef} />
       </section>
 
-      <form onSubmit={onSubmit} className="border-t border-zinc-800 p-4">
+      <form onSubmit={onSubmit} className="border-t border-white/10 px-5 py-5 sm:px-8">
         <p className="sr-only" role="status" aria-live="polite">
           {statusMessage}
         </p>
 
         {selectedImages.length > 0 ? (
-          <div className="mb-3 flex flex-wrap gap-2">
+          <div className="mb-4 flex flex-wrap gap-3">
             {selectedImages.map((image, index) => (
               <div
                 key={`${image.slice(0, 32)}-${index}`}
-                className="relative h-20 w-20 overflow-hidden rounded-md border border-zinc-700"
+                className="relative h-24 w-24 overflow-hidden rounded-2xl border border-white/10 bg-white/[0.04]"
               >
                 <Image
                   src={image}
                   alt={`Selected image ${index + 1}`}
                   fill
-                  sizes="80px"
+                  sizes="96px"
                   className="object-cover"
                   unoptimized
                 />
@@ -660,7 +671,7 @@ export function ChatPanel({ actorId, chatId }: ChatPanelProps) {
                       ),
                     )
                   }
-                  className="absolute right-0 top-0 bg-red-500 px-1 text-xs text-white"
+                  className="absolute right-1.5 top-1.5 rounded-full bg-red-500/90 px-1.5 py-0.5 text-xs text-white shadow-lg"
                 >
                   ✕
                 </button>
@@ -671,7 +682,7 @@ export function ChatPanel({ actorId, chatId }: ChatPanelProps) {
 
         {selectedFiles.length > 0 ? (
           <ul
-            className="mb-3 space-y-1 text-xs text-zinc-400"
+            className="mb-4 space-y-2 rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3 text-xs text-zinc-400"
             aria-live="polite"
           >
             {selectedFiles.map((file, index) => (
@@ -680,49 +691,51 @@ export function ChatPanel({ actorId, chatId }: ChatPanelProps) {
           </ul>
         ) : null}
 
-        <div className="flex items-end gap-2">
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept="image/*,.txt,.md,.json,.csv"
-            multiple
-            onChange={handleFileChange}
-            className="hidden"
-          />
-          <button
-            type="button"
-            onClick={() => fileInputRef.current?.click()}
-            className="rounded-lg bg-zinc-800 px-3 py-2 text-sm text-zinc-400 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
-            aria-label="Attach files"
-          >
-            📷
-          </button>
-          <textarea
-            ref={textareaRef}
-            rows={1}
-            value={input}
-            onChange={handleInputChange}
-            onKeyDown={handleKeyDown}
-            onPaste={handlePaste}
-            placeholder="Ask your actor something..."
-            className="min-h-[40px] max-h-48 flex-1 resize-none overflow-y-auto rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm outline-none ring-emerald-500 focus:ring"
-          />
-          {loading ? (
+        <div className="rounded-[28px] border border-white/10 bg-white/[0.04] p-3 shadow-[0_20px_60px_rgba(0,0,0,0.2)] backdrop-blur-sm">
+          <div className="flex items-end gap-3">
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/*,.txt,.md,.json,.csv"
+              multiple
+              onChange={handleFileChange}
+              className="hidden"
+            />
             <button
               type="button"
-              onClick={handleCancelRequest}
-              className="rounded-lg border border-red-500/70 px-4 py-2 text-sm font-medium text-red-200 transition hover:bg-red-500/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-400"
+              onClick={() => fileInputRef.current?.click()}
+              className="rounded-2xl border border-white/10 bg-white/[0.05] px-3.5 py-3 text-sm text-zinc-300 transition hover:border-white/20 hover:bg-white/[0.08] hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
+              aria-label="Attach files"
             >
-              Cancel
+              📷
             </button>
-          ) : null}
-          <button
-            type="submit"
-            disabled={!canSend}
-            className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
-          >
-            {loading || uploadingFiles ? "Routing..." : "Send"}
-          </button>
+            <textarea
+              ref={textareaRef}
+              rows={1}
+              value={input}
+              onChange={handleInputChange}
+              onKeyDown={handleKeyDown}
+              onPaste={handlePaste}
+              placeholder="Ask your actor something..."
+              className="min-h-[48px] max-h-48 flex-1 resize-none overflow-y-auto rounded-2xl border border-white/10 bg-zinc-950/80 px-4 py-3 text-sm text-zinc-100 outline-none ring-emerald-500 placeholder:text-zinc-500 focus:ring"
+            />
+            {loading ? (
+              <button
+                type="button"
+                onClick={handleCancelRequest}
+                className="rounded-2xl border border-red-400/30 bg-red-500/10 px-4 py-3 text-sm font-medium text-red-100 transition hover:bg-red-500/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-400"
+              >
+                Cancel
+              </button>
+            ) : null}
+            <button
+              type="submit"
+              disabled={!canSend}
+              className="rounded-2xl bg-gradient-to-r from-emerald-500 to-sky-500 px-5 py-3 text-sm font-semibold text-white shadow-[0_14px_30px_rgba(16,185,129,0.25)] transition hover:brightness-110 disabled:opacity-50"
+            >
+              {loading || uploadingFiles ? "Routing..." : "Send"}
+            </button>
+          </div>
         </div>
       </form>
     </main>
