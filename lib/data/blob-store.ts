@@ -1,4 +1,3 @@
-import { demoActors, demoChats } from "@/lib/data/mock";
 import type { Actor, ChatThread, Message } from "@/lib/types/chat";
 
 const memoryMessages = new Map<string, Message[]>();
@@ -32,8 +31,8 @@ async function blobGet<T>(path: string): Promise<T | null> {
     cache: "no-store",
     headers: {
       Pragma: "no-cache",
-      "Cache-Control": "no-cache"
-    }
+      "Cache-Control": "no-cache",
+    },
   });
 
   if (!response.ok) {
@@ -53,9 +52,9 @@ async function blobPut(path: string, payload: unknown): Promise<void> {
     method: "PUT",
     headers: {
       "Content-Type": "application/json",
-      Authorization: `Bearer ${writeConfig.token}`
+      Authorization: `Bearer ${writeConfig.token}`,
     },
-    body: JSON.stringify(payload)
+    body: JSON.stringify(payload),
   });
 
   if (!response.ok) {
@@ -72,16 +71,15 @@ async function blobDelete(path: string): Promise<void> {
   await fetch(`${writeConfig.baseUrl}/${path}`, {
     method: "DELETE",
     headers: {
-      Authorization: `Bearer ${writeConfig.token}`
-    }
+      Authorization: `Bearer ${writeConfig.token}`,
+    },
   });
 }
 
-
 function sortChats(chats: ChatThread[]): ChatThread[] {
   return [...chats].sort((left, right) => {
-    const leftTimestamp = left.updatedAt ?? left.createdAt ?? "";
-    const rightTimestamp = right.updatedAt ?? right.createdAt ?? "";
+    const leftTimestamp = left.updatedAt ?? left.createdAt;
+    const rightTimestamp = right.updatedAt ?? right.createdAt;
 
     return rightTimestamp.localeCompare(leftTimestamp) || left.title.localeCompare(right.title);
   });
@@ -114,8 +112,6 @@ export async function getActorById(actorId: string): Promise<Actor | null> {
   const baseUrl = getBlobBaseUrl();
 
   if (baseUrl) {
-    console.log(`Fetching actor from URL: ${baseUrl}/${path}`);
-
     for (let attempt = 0; attempt < retries; attempt += 1) {
       try {
         const actor = await blobGet<Actor>(path);
@@ -125,9 +121,7 @@ export async function getActorById(actorId: string): Promise<Actor | null> {
         }
 
         throw new Error(`Actor not found in Blob yet: ${actorId}`);
-      } catch (error: unknown) {
-        console.warn(`Retry ${attempt + 1}: Actor ${actorId} not found in Blob yet.`, error);
-
+      } catch {
         if (attempt < retries - 1) {
           const delayMs = baseDelayMs * (attempt + 1);
           await new Promise((resolve) => setTimeout(resolve, delayMs));
@@ -136,12 +130,7 @@ export async function getActorById(actorId: string): Promise<Actor | null> {
     }
   }
 
-  const demoActor = demoActors.find((item) => item.id === actorId) ?? null;
-  if (demoActor) {
-    return demoActor;
-  }
-
-  throw new Error(`Actor not found: ${actorId} after ${retries} attempts.`);
+  return null;
 }
 
 export async function listActors(): Promise<Actor[]> {
@@ -150,11 +139,7 @@ export async function listActors(): Promise<Actor[]> {
   const blobActorIds = (await blobGet<string[]>("actors/index.json")) ?? [];
 
   const blobActors = (
-    await Promise.all(
-      blobActorIds.map(async (actorId) => {
-        return blobGet<Actor>(`actors/${actorId}.json`);
-      })
-    )
+    await Promise.all(blobActorIds.map(async (actorId) => blobGet<Actor>(`actors/${actorId}.json`)))
   ).filter((actor): actor is Actor => Boolean(actor));
 
   blobActors.forEach((actor) => {
@@ -162,7 +147,7 @@ export async function listActors(): Promise<Actor[]> {
   });
 
   const deduped = new Map<string, Actor>();
-  [...demoActors, ...memoryActors.values(), ...blobActors].forEach((actor) => {
+  [...memoryActors.values(), ...blobActors].forEach((actor) => {
     if (!deleted.has(actor.id)) {
       deduped.set(actor.id, actor);
     }
@@ -183,11 +168,6 @@ export async function getChatById(chatId: string): Promise<ChatThread | null> {
     return chat;
   }
 
-  const demoChat = demoChats.find((item) => item.id === chatId) ?? null;
-  if (demoChat) {
-    return demoChat;
-  }
-
   return null;
 }
 
@@ -195,11 +175,7 @@ export async function listChats(): Promise<ChatThread[]> {
   const blobChatIds = (await blobGet<string[]>("chats/index.json")) ?? [];
 
   const blobChats = (
-    await Promise.all(
-      blobChatIds.map(async (chatId) => {
-        return blobGet<ChatThread>(`chats/${chatId}.json`);
-      })
-    )
+    await Promise.all(blobChatIds.map(async (chatId) => blobGet<ChatThread>(`chats/${chatId}.json`)))
   ).filter((chat): chat is ChatThread => Boolean(chat));
 
   blobChats.forEach((chat) => {
@@ -207,7 +183,7 @@ export async function listChats(): Promise<ChatThread[]> {
   });
 
   const deduped = new Map<string, ChatThread>();
-  [...demoChats, ...memoryChats.values(), ...blobChats].forEach((chat) => {
+  [...memoryChats.values(), ...blobChats].forEach((chat) => {
     deduped.set(chat.id, chat);
   });
 
@@ -225,7 +201,7 @@ export async function saveChat(chat: ChatThread): Promise<ChatThread> {
     ...chat,
     title: chat.title.trim(),
     createdAt: chat.createdAt ?? now,
-    updatedAt: now
+    updatedAt: now,
   };
 
   memoryChats.set(nextChat.id, nextChat);
@@ -241,60 +217,56 @@ export async function saveChat(chat: ChatThread): Promise<ChatThread> {
 
 export async function deleteChat(chatId: string): Promise<void> {
   memoryChats.delete(chatId);
+  memoryMessages.delete(chatId);
+  memorySummaries.delete(chatId);
 
   const currentIndex = (await blobGet<string[]>("chats/index.json")) ?? [];
   const nextIndex = currentIndex.filter((currentChatId) => currentChatId !== chatId);
 
   await blobPut("chats/index.json", nextIndex);
-  await blobDelete(`chats/${chatId}.json`);
+  await Promise.all([
+    blobDelete(`chats/${chatId}.json`),
+    blobDelete(`messages/${chatId}.json`),
+    blobDelete(`summaries/${chatId}.json`),
+  ]);
 }
 
-export async function getRecentMessages(chatId: string, limit = 20): Promise<Message[]> {
+export async function getMessages(chatId: string): Promise<Message[]> {
   const blobMessages = await blobGet<Message[]>(`messages/${chatId}.json`);
   if (blobMessages) {
     memoryMessages.set(chatId, blobMessages);
+    return blobMessages;
   }
 
-  const messages = blobMessages ?? memoryMessages.get(chatId) ?? [];
+  return memoryMessages.get(chatId) ?? [];
+}
+
+export async function getRecentMessages(chatId: string, limit = 20): Promise<Message[]> {
+  const messages = await getMessages(chatId);
   return messages.slice(-limit);
 }
 
-export async function saveMessage(
-  chatId: string,
-  role: "user" | "assistant",
-  content: string,
-  model?: string,
-  assets?: Array<{ type: string; url: string }>
-): Promise<void> {
-  let current = memoryMessages.get(chatId);
+export async function saveMessage(chatId: string, message: Omit<Message, "chatId" | "createdAt"> & Partial<Pick<Message, "chatId" | "createdAt">>): Promise<Message> {
+  const current = await getMessages(chatId);
+  const nextMessage: Message = {
+    ...message,
+    chatId,
+    createdAt: message.createdAt ?? new Date().toISOString(),
+  };
+  const nextMessages = [...current, nextMessage];
 
-  if (!current) {
-    current = (await blobGet<Message[]>(`messages/${chatId}.json`)) ?? [];
-  }
-
-  const next = [
-    ...current,
-    {
-      id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-      chatId,
-      role,
-      model,
-      content,
-      assets,
-      createdAt: new Date().toISOString()
-    }
-  ];
-
-  memoryMessages.set(chatId, next);
-  await blobPut(`messages/${chatId}.json`, next);
+  memoryMessages.set(chatId, nextMessages);
+  await blobPut(`messages/${chatId}.json`, nextMessages);
 
   const existingChat = await getChatById(chatId);
   if (existingChat) {
     await saveChat({
       ...existingChat,
-      updatedAt: new Date().toISOString()
+      updatedAt: new Date().toISOString(),
     });
   }
+
+  return nextMessage;
 }
 
 export async function getConversationSummary(chatId: string): Promise<string> {
@@ -309,7 +281,6 @@ export async function setConversationSummary(chatId: string, summary: string): P
 
 export async function saveActor(actor: Actor): Promise<void> {
   const actorPath = `actors/${actor.id}.json`;
-  console.log(`Attempting to save actor: [${actor.id}] to [${actorPath}]...`);
 
   deletedActorIds.delete(actor.id);
   memoryActors.set(actor.id, actor);
@@ -321,9 +292,7 @@ export async function saveActor(actor: Actor): Promise<void> {
   }
 
   await blobPut(actorPath, actor);
-  console.log(`Actor [${actor.id}] saved successfully.`);
 
-  console.log("Updating actor index...");
   const currentIndex = (await blobGet<string[]>("actors/index.json")) ?? [];
   if (!currentIndex.includes(actor.id)) {
     await blobPut("actors/index.json", [...currentIndex, actor.id]);
@@ -349,7 +318,7 @@ export async function deleteActorsById(actorIds: string[]): Promise<void> {
 
   await Promise.all([
     ...actorIds.map(async (actorId) => blobDelete(`actors/${actorId}.json`)),
-    ...chatsToDelete.map(async (chat) => deleteChat(chat.id))
+    ...chatsToDelete.map(async (chat) => deleteChat(chat.id)),
   ]);
   await blobPut("actors/deleted-index.json", [...deletedActorIds]);
 }

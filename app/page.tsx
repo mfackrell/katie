@@ -4,7 +4,6 @@ import { useEffect, useMemo, useState } from "react";
 import { ActorFormModal } from "@/components/actor-form-modal";
 import { ChatPanel } from "@/components/chat-panel";
 import { Sidebar } from "@/components/sidebar";
-import { demoActors, demoChats } from "@/lib/data/mock";
 import type { Actor, ChatThread } from "@/lib/types/chat";
 
 type ModalState =
@@ -17,6 +16,7 @@ type ModalState =
 
 const ACTIVE_ACTOR_STORAGE_KEY = "katie.activeActorId";
 const ACTIVE_CHAT_STORAGE_KEY = "katie.activeChatId";
+const ACTOR_CHAT_SELECTIONS_STORAGE_KEY = "katie.actorChatSelections";
 
 function buildChatId(): string {
   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
@@ -34,21 +34,32 @@ function pickActiveActorId(actors: Actor[], preferredActorId: string | null): st
   return actors[0]?.id ?? "";
 }
 
-function pickActiveChatId(chats: ChatThread[], actorId: string, preferredChatId: string | null): string {
+function pickActiveChatId(
+  chats: ChatThread[],
+  actorId: string,
+  preferredChatId: string | null,
+  actorChatSelections: Record<string, string>,
+): string {
   const actorChats = chats.filter((chat) => chat.actorId === actorId);
+  const preferredIds = [preferredChatId, actorChatSelections[actorId]].filter(
+    (value): value is string => Boolean(value),
+  );
 
-  if (preferredChatId && actorChats.some((chat) => chat.id === preferredChatId)) {
-    return preferredChatId;
+  for (const candidateId of preferredIds) {
+    if (actorChats.some((chat) => chat.id === candidateId)) {
+      return candidateId;
+    }
   }
 
   return actorChats[0]?.id ?? "";
 }
 
 export default function HomePage() {
-  const [actors, setActors] = useState<Actor[]>(demoActors);
-  const [chats, setChats] = useState<ChatThread[]>(demoChats);
-  const [activeActorId, setActiveActorId] = useState(demoActors[0]?.id ?? "");
-  const [activeChatId, setActiveChatId] = useState(demoChats[0]?.id ?? "");
+  const [actors, setActors] = useState<Actor[]>([]);
+  const [chats, setChats] = useState<ChatThread[]>([]);
+  const [activeActorId, setActiveActorId] = useState("");
+  const [activeChatId, setActiveChatId] = useState("");
+  const [actorChatSelections, setActorChatSelections] = useState<Record<string, string>>({});
   const [modalState, setModalState] = useState<ModalState>(null);
   const [hasLoadedPersistedState, setHasLoadedPersistedState] = useState(false);
 
@@ -57,7 +68,7 @@ export default function HomePage() {
       try {
         const [actorsResponse, chatsResponse] = await Promise.all([
           fetch("/api/actors", { cache: "no-store" }),
-          fetch("/api/chats", { cache: "no-store" })
+          fetch("/api/chats", { cache: "no-store" }),
         ]);
 
         const actorsPayload = actorsResponse.ok
@@ -69,17 +80,25 @@ export default function HomePage() {
 
         const persistedActors = actorsPayload.actors ?? [];
         const persistedChats = chatsPayload.chats ?? [];
-        const hasPersistedActors = persistedActors.length > 0;
-        const hasPersistedChats = persistedChats.length > 0;
-        const nextActors = hasPersistedActors ? persistedActors : demoActors;
-        const nextChats = hasPersistedChats ? persistedChats : hasPersistedActors ? [] : demoChats;
         const storedActorId = window.localStorage.getItem(ACTIVE_ACTOR_STORAGE_KEY);
         const storedChatId = window.localStorage.getItem(ACTIVE_CHAT_STORAGE_KEY);
-        const nextActiveActorId = pickActiveActorId(nextActors, storedActorId);
-        const nextActiveChatId = pickActiveChatId(nextChats, nextActiveActorId, storedChatId);
+        const storedActorSelections = window.localStorage.getItem(
+          ACTOR_CHAT_SELECTIONS_STORAGE_KEY,
+        );
+        const nextActorChatSelections = storedActorSelections
+          ? (JSON.parse(storedActorSelections) as Record<string, string>)
+          : {};
+        const nextActiveActorId = pickActiveActorId(persistedActors, storedActorId);
+        const nextActiveChatId = pickActiveChatId(
+          persistedChats,
+          nextActiveActorId,
+          storedChatId,
+          nextActorChatSelections,
+        );
 
-        setActors(nextActors);
-        setChats(nextChats);
+        setActors(persistedActors);
+        setChats(persistedChats);
+        setActorChatSelections(nextActorChatSelections);
         setActiveActorId(nextActiveActorId);
         setActiveChatId(nextActiveChatId);
       } finally {
@@ -117,32 +136,79 @@ export default function HomePage() {
   }, [activeChatId, hasLoadedPersistedState]);
 
   useEffect(() => {
+    if (!hasLoadedPersistedState) {
+      return;
+    }
+
+    window.localStorage.setItem(
+      ACTOR_CHAT_SELECTIONS_STORAGE_KEY,
+      JSON.stringify(actorChatSelections),
+    );
+  }, [actorChatSelections, hasLoadedPersistedState]);
+
+  useEffect(() => {
     if (!hasLoadedPersistedState || actors.length === 0) {
+      if (hasLoadedPersistedState && actors.length === 0) {
+        setActiveActorId("");
+        setActiveChatId("");
+      }
       return;
     }
 
     if (!actors.some((actor) => actor.id === activeActorId)) {
-      const nextActorId = actors[0]?.id ?? "";
+      const nextActorId = pickActiveActorId(actors, null);
       setActiveActorId(nextActorId);
-      setActiveChatId(pickActiveChatId(chats, nextActorId, null));
+      setActiveChatId(pickActiveChatId(chats, nextActorId, null, actorChatSelections));
       return;
     }
 
-    const actorChats = chats.filter((chat) => chat.actorId === activeActorId);
-    if (!actorChats.some((chat) => chat.id === activeChatId)) {
-      setActiveChatId(actorChats[0]?.id ?? "");
+    const nextChatId = pickActiveChatId(chats, activeActorId, activeChatId, actorChatSelections);
+    if (nextChatId !== activeChatId) {
+      setActiveChatId(nextChatId);
     }
-  }, [activeActorId, activeChatId, actors, chats, hasLoadedPersistedState]);
+  }, [
+    activeActorId,
+    activeChatId,
+    actorChatSelections,
+    actors,
+    chats,
+    hasLoadedPersistedState,
+  ]);
 
   const filteredChats = useMemo(() => chats, [chats]);
+
+  async function createChat(actorId: string) {
+    const chatResponse = await fetch("/api/chats", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        id: buildChatId(),
+        actorId,
+        title: `Chat ${new Date().toLocaleString()}`,
+      }),
+    });
+    const chatPayload = (await chatResponse.json()) as { chat?: ChatThread; error?: string };
+
+    if (!chatResponse.ok || !chatPayload.chat) {
+      throw new Error(chatPayload.error ?? "Failed to create chat.");
+    }
+
+    const createdChat = chatPayload.chat;
+    setChats((current) => [createdChat, ...current.filter((chat) => chat.id !== createdChat.id)]);
+    setActorChatSelections((current) => ({ ...current, [actorId]: createdChat.id }));
+    setActiveActorId(actorId);
+    setActiveChatId(createdChat.id);
+  }
 
   async function createActor(input: { name: string; purpose?: string; parentId?: string }) {
     const actorResponse = await fetch("/api/actors", {
       method: "POST",
       headers: {
-        "content-type": "application/json"
+        "content-type": "application/json",
       },
-      body: JSON.stringify(input)
+      body: JSON.stringify(input),
     });
 
     const actorPayload = (await actorResponse.json()) as { actor?: Actor; error?: string };
@@ -152,34 +218,13 @@ export default function HomePage() {
     }
 
     const createdActor = actorPayload.actor;
-    const chatId = buildChatId();
-    const chatResponse = await fetch("/api/chats", {
-      method: "POST",
-      headers: {
-        "content-type": "application/json"
-      },
-      body: JSON.stringify({
-        id: chatId,
-        actorId: createdActor.id,
-        title: "New Chat"
-      })
-    });
-    const chatPayload = (await chatResponse.json()) as { chat?: ChatThread; error?: string };
-
-    if (!chatResponse.ok || !chatPayload.chat) {
-      throw new Error(chatPayload.error ?? "Failed to create initial chat.");
-    }
-
-    const createdChat = chatPayload.chat;
     setActors((current) => [...current.filter((actor) => actor.id !== createdActor.id), createdActor]);
-    setChats((current) => [...current.filter((chat) => chat.id !== createdChat.id), createdChat]);
-    setActiveActorId(createdActor.id);
-    setActiveChatId(createdChat.id);
+    await createChat(createdActor.id);
   }
 
   async function deleteActor(actor: Actor) {
     const response = await fetch(`/api/actors?id=${encodeURIComponent(actor.id)}`, {
-      method: "DELETE"
+      method: "DELETE",
     });
 
     const payload = (await response.json()) as { deletedActorIds?: string[]; error?: string };
@@ -191,17 +236,44 @@ export default function HomePage() {
     const deletedIds = new Set(payload.deletedActorIds);
     const nextActors = actors.filter((item) => !deletedIds.has(item.id));
     const nextChats = chats.filter((chat) => !deletedIds.has(chat.actorId));
+    const nextSelections = Object.fromEntries(
+      Object.entries(actorChatSelections).filter(
+        ([actorId, chatId]) => !deletedIds.has(actorId) && nextChats.some((chat) => chat.id === chatId),
+      ),
+    );
     const nextActiveActorId = deletedIds.has(activeActorId)
       ? pickActiveActorId(nextActors, null)
       : activeActorId;
-    const nextActiveChatId = deletedIds.has(activeChatId)
-      ? pickActiveChatId(nextChats, nextActiveActorId, null)
-      : pickActiveChatId(nextChats, nextActiveActorId, activeChatId);
+    const nextActiveChatId = pickActiveChatId(
+      nextChats,
+      nextActiveActorId,
+      deletedIds.has(activeChatId) ? null : activeChatId,
+      nextSelections,
+    );
 
     setActors(nextActors);
     setChats(nextChats);
+    setActorChatSelections(nextSelections);
     setActiveActorId(nextActiveActorId);
     setActiveChatId(nextActiveChatId);
+  }
+
+  function handleSelectActor(nextActorId: string) {
+    setActiveActorId(nextActorId);
+    setActiveChatId((current) =>
+      pickActiveChatId(chats, nextActorId, current, actorChatSelections),
+    );
+  }
+
+  function handleSelectChat(nextChatId: string) {
+    const selectedChat = chats.find((chat) => chat.id === nextChatId);
+    if (!selectedChat) {
+      return;
+    }
+
+    setActiveActorId(selectedChat.actorId);
+    setActiveChatId(nextChatId);
+    setActorChatSelections((current) => ({ ...current, [selectedChat.actorId]: nextChatId }));
   }
 
   return (
@@ -220,8 +292,9 @@ export default function HomePage() {
           chats={filteredChats}
           activeActorId={activeActorId}
           activeChatId={activeChatId}
-          onSelectActor={setActiveActorId}
-          onSelectChat={setActiveChatId}
+          onSelectActor={handleSelectActor}
+          onSelectChat={handleSelectChat}
+          onCreateChat={createChat}
           onOpenCreateActor={() => setModalState({ type: "primary" })}
           onOpenCreateSubActor={(actor) => setModalState({ type: "sub", parentActor: actor })}
           onDeleteActor={deleteActor}

@@ -9,6 +9,7 @@ interface SidebarProps {
   activeChatId: string;
   onSelectActor: (actorId: string) => void;
   onSelectChat: (chatId: string) => void;
+  onCreateChat: (actorId: string) => void | Promise<void>;
   onOpenCreateActor: () => void;
   onOpenCreateSubActor: (actor: Actor) => void;
   onDeleteActor: (actor: Actor) => void;
@@ -21,9 +22,10 @@ export function Sidebar({
   activeChatId,
   onSelectActor,
   onSelectChat,
+  onCreateChat,
   onOpenCreateActor,
   onOpenCreateSubActor,
-  onDeleteActor
+  onDeleteActor,
 }: SidebarProps) {
   const sortedActors = [...actors].sort((a, b) => a.name.localeCompare(b.name));
 
@@ -64,14 +66,11 @@ export function Sidebar({
                   activeActor
                     ? "border-emerald-400/30 bg-gradient-to-br from-emerald-500/12 via-zinc-900/95 to-zinc-950 ring-1 ring-emerald-400/20"
                     : "border-white/8 bg-white/[0.03] hover:border-white/15 hover:bg-white/[0.05]",
-                  isSubActor ? "ml-4" : ""
+                  isSubActor ? "ml-4" : "",
                 ].join(" ")}
               >
                 <div className="flex items-start justify-between gap-3 px-1 py-1">
-                  <button
-                    className="flex-1 text-left"
-                    onClick={() => onSelectActor(actor.id)}
-                  >
+                  <button className="flex-1 text-left" onClick={() => onSelectActor(actor.id)}>
                     <div className="flex items-center gap-2">
                       {isSubActor ? (
                         <span className="text-xs text-emerald-300/80">↳</span>
@@ -87,6 +86,13 @@ export function Sidebar({
                     </p>
                   </button>
                   <div className="flex flex-col items-end gap-1.5 opacity-90 transition group-hover:opacity-100">
+                    <button
+                      className="rounded-xl border border-white/10 bg-white/[0.04] px-2.5 py-1 text-[11px] font-medium text-zinc-300 transition hover:border-emerald-400/30 hover:bg-emerald-400/10 hover:text-white"
+                      onClick={() => void onCreateChat(actor.id)}
+                      title={`New chat for ${actor.name}`}
+                    >
+                      New Chat
+                    </button>
                     <button
                       className="rounded-xl border border-white/10 bg-white/[0.04] px-2.5 py-1 text-[11px] font-medium text-zinc-300 transition hover:border-emerald-400/30 hover:bg-emerald-400/10 hover:text-white"
                       onClick={() => onOpenCreateSubActor(actor)}
@@ -119,7 +125,7 @@ export function Sidebar({
                             "block w-full rounded-2xl px-3 py-2 text-left text-xs transition",
                             activeChat
                               ? "border border-white/10 bg-white/[0.08] text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.05)]"
-                              : "border border-transparent text-zinc-400 hover:border-white/8 hover:bg-white/[0.04] hover:text-zinc-200"
+                              : "border border-transparent text-zinc-400 hover:border-white/8 hover:bg-white/[0.04] hover:text-zinc-200",
                           ].join(" ")}
                           onClick={() => {
                             onSelectActor(actor.id);
