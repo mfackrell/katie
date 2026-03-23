@@ -16,6 +16,61 @@ type GoogleInputPart =
   | { fileData: { fileUri: string; mimeType: string } }
   | { inlineData: { mimeType: string; data: string } };
 
+
+const BEHAVIORAL_DIRECTIVE =
+  "Always respond in a conversational style. Use a direct, clear, and action-oriented voice. Be direct and to the point. Clearly state the purpose or opinion upfront. Use straightforward language. Focus on actionable points and clear reasoning.";
+
+function buildSystemInstruction(params: ChatGenerateParams): string {
+  return `${MATH_EXECUTION_PROTOCOL}
+
+IDENTITY:
+Your name is ${params.name}. ${BEHAVIORAL_DIRECTIVE}
+
+CORE_PERSONA: ${params.persona}
+
+SEMANTIC_MEMORY (Summary):
+Below is a summary of past interactions and decisions made.
+
+${params.summary}
+
+EPISODIC_MEMORY (History):
+Below is the recent log of this specific conversation.
+
+${buildMemoryContext(params.history)}`;
+}
+
+function parseThinkingLevel(modelId: string): {
+  normalizedModel: string;
+  thinkingLevelInput?: ThinkingLevelInput;
+} {
+  const match = modelId
+    .trim()
+    .match(/^(.+?)(?:[#:]thinking=(minimal|low|medium|high)|[#:]?(minimal|low|medium|high))$/i);
+
+  if (!match) {
+    return { normalizedModel: normalizeGoogleModelId(modelId) };
+  }
+
+  const thinkingLevelInput = (match[2] ?? match[3])?.toLowerCase() as ThinkingLevelInput | undefined;
+  return {
+    normalizedModel: normalizeGoogleModelId(match[1]),
+    thinkingLevelInput
+  };
+}
+
+function toGoogleThinkingLevel(thinkingLevelInput: ThinkingLevelInput): GoogleThinkingLevel {
+  switch (thinkingLevelInput) {
+    case "minimal":
+      return GoogleThinkingLevel.MINIMAL;
+    case "low":
+      return GoogleThinkingLevel.LOW;
+    case "medium":
+      return GoogleThinkingLevel.MEDIUM;
+    case "high":
+      return GoogleThinkingLevel.HIGH;
+  }
+}
+
 function buildGoogleFileParts(params: ChatGenerateParams): GoogleInputPart[] {
   if (!params.attachments?.length) {
     return [];
