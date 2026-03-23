@@ -31,6 +31,8 @@ interface ChatPanelProps {
 
 export function ChatPanel({ actorId, chatId }: ChatPanelProps) {
   const [messages, setMessages] = useState<Message[]>([]);
+  const [messagesByChatId, setMessagesByChatId] = useState<Record<string, Message[]>>({});
+  const [isHydratingMessages, setIsHydratingMessages] = useState(false);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [meta, setMeta] = useState<{ provider: string; model: string } | null>(
@@ -108,6 +110,12 @@ export function ChatPanel({ actorId, chatId }: ChatPanelProps) {
     scrollToBottom();
   }, [messages, loading]);
 
+  const messagesByChatIdRef = useRef<Record<string, Message[]>>({});
+
+  useEffect(() => {
+    messagesByChatIdRef.current = messagesByChatId;
+  }, [messagesByChatId]);
+
   useEffect(() => {
     let cancelled = false;
 
@@ -120,12 +128,21 @@ export function ChatPanel({ actorId, chatId }: ChatPanelProps) {
 
       if (!chatId) {
         setMessages([]);
+        setIsHydratingMessages(false);
         return;
+      }
+
+      const cachedMessages = messagesByChatIdRef.current[chatId];
+      if (cachedMessages) {
+        setMessages(cachedMessages);
+        setIsHydratingMessages(false);
+      } else {
+        setIsHydratingMessages(true);
       }
 
       try {
         const response = await fetch(`/api/messages?chatId=${encodeURIComponent(chatId)}`, {
-          cache: "no-store"
+          cache: "no-store",
         });
         const payload = (await response.json()) as { messages?: Message[]; error?: string };
 
@@ -134,12 +151,15 @@ export function ChatPanel({ actorId, chatId }: ChatPanelProps) {
         }
 
         if (!cancelled) {
-          setMessages(payload.messages ?? []);
+          const nextMessages = payload.messages ?? [];
+          setMessages(nextMessages);
+          setMessagesByChatId((current) => ({ ...current, [chatId]: nextMessages }));
+          setIsHydratingMessages(false);
         }
       } catch (error: unknown) {
         if (!cancelled) {
-          setMessages([]);
           setStatusMessage(error instanceof Error ? error.message : "Failed to load messages.");
+          setIsHydratingMessages(false);
         }
       }
     }
@@ -149,7 +169,7 @@ export function ChatPanel({ actorId, chatId }: ChatPanelProps) {
     return () => {
       cancelled = true;
     };
-  }, [actorId, chatId]);
+  }, [chatId]);
 
   useEffect(
     () => () => {
@@ -222,16 +242,19 @@ export function ChatPanel({ actorId, chatId }: ChatPanelProps) {
     setLoading(true);
     setStreamingModel(null);
 
-    setMessages((current) => [
-      ...current,
-      {
-        id: crypto.randomUUID(),
-        chatId,
-        role: "user",
-        content,
-        createdAt: new Date().toISOString(),
-      },
-    ]);
+    const optimisticUserMessage: Message = {
+      id: crypto.randomUUID(),
+      chatId,
+      role: "user",
+      content,
+      createdAt: new Date().toISOString(),
+    };
+
+    setMessages((current) => {
+      const nextMessages = [...current, optimisticUserMessage];
+      setMessagesByChatId((cache) => ({ ...cache, [chatId]: nextMessages }));
+      return nextMessages;
+    });
 
     try {
       const uploadedReferences =
@@ -260,16 +283,18 @@ export function ChatPanel({ actorId, chatId }: ChatPanelProps) {
 
       if (!response.ok) {
         const errorData = (await response.json()) as { error?: string };
-        setMessages((current) => [
-          ...current,
-          {
-            id: crypto.randomUUID(),
-            chatId,
-            role: "assistant",
-            content: errorData.error ?? "Something went wrong.",
-            createdAt: new Date().toISOString(),
-          },
-        ]);
+        const failureMessage: Message = {
+          id: crypto.randomUUID(),
+          chatId,
+          role: "assistant",
+          content: errorData.error ?? "Something went wrong.",
+          createdAt: new Date().toISOString(),
+        };
+        setMessages((current) => {
+          const nextMessages = [...current, failureMessage];
+          setMessagesByChatId((cache) => ({ ...cache, [chatId]: nextMessages }));
+          return nextMessages;
+        });
         setStatusMessage(errorData.error ?? "Message failed.");
         return;
       }
@@ -369,18 +394,20 @@ export function ChatPanel({ actorId, chatId }: ChatPanelProps) {
 
       abortControllerRef.current = null;
       setMeta({ provider, model });
-      setMessages((current) => [
-        ...current,
-        {
-          id: crypto.randomUUID(),
-          chatId,
-          role: "assistant",
-          model,
-          content: textContent,
-          assets,
-          createdAt: new Date().toISOString(),
-        },
-      ]);
+      const assistantMessage: Message = {
+        id: crypto.randomUUID(),
+        chatId,
+        role: "assistant",
+        model,
+        content: textContent,
+        assets,
+        createdAt: new Date().toISOString(),
+      };
+      setMessages((current) => {
+        const nextMessages = [...current, assistantMessage];
+        setMessagesByChatId((cache) => ({ ...cache, [chatId]: nextMessages }));
+        return nextMessages;
+      });
       setStatusMessage("Response received.");
     } catch (error: unknown) {
       abortControllerRef.current = null;
@@ -392,16 +419,18 @@ export function ChatPanel({ actorId, chatId }: ChatPanelProps) {
 
       const message =
         error instanceof Error ? error.message : "Something went wrong.";
-      setMessages((current) => [
-        ...current,
-        {
-          id: crypto.randomUUID(),
-          chatId,
-          role: "assistant",
-          content: message,
-          createdAt: new Date().toISOString(),
-        },
-      ]);
+      const errorMessage: Message = {
+        id: crypto.randomUUID(),
+        chatId,
+        role: "assistant",
+        content: message,
+        createdAt: new Date().toISOString(),
+      };
+      setMessages((current) => {
+        const nextMessages = [...current, errorMessage];
+        setMessagesByChatId((cache) => ({ ...cache, [chatId]: nextMessages }));
+        return nextMessages;
+      });
       setStatusMessage(message);
     } finally {
       abortControllerRef.current = null;
@@ -653,7 +682,12 @@ export function ChatPanel({ actorId, chatId }: ChatPanelProps) {
         ref={messagesContainerRef}
         className="flex-1 space-y-5 overflow-y-auto px-4 py-4 sm:px-6 sm:py-5"
       >
-        {messages.length === 0 ? (
+        {isHydratingMessages ? (
+          <div className="max-w-2xl rounded-[28px] border border-white/10 bg-white/[0.035] p-6 shadow-[0_20px_60px_rgba(0,0,0,0.18)] backdrop-blur-sm">
+            <p className="text-sm font-medium text-zinc-200">Loading saved thread…</p>
+            <p className="mt-2 text-sm leading-6 text-zinc-500">Rehydrating the full persisted transcript for this chat.</p>
+          </div>
+        ) : messages.length === 0 ? (
           <div className="max-w-2xl rounded-[28px] border border-white/10 bg-white/[0.035] p-6 shadow-[0_20px_60px_rgba(0,0,0,0.18)] backdrop-blur-sm">
             <p className="text-sm font-medium text-zinc-200">Ready for orchestration.</p>
             <p className="mt-2 text-sm leading-6 text-zinc-500">

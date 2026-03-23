@@ -203,7 +203,11 @@ export async function POST(request: NextRequest) {
             controller.enqueue(encoder.encode(`${metadataChunk}\n`));
 
             console.log("[Chat API] Saving user message...");
-            await saveMessage(chatId, "user", message);
+            await saveMessage(chatId, {
+              id: crypto.randomUUID(),
+              role: "user",
+              content: message,
+            });
 
             console.log(`[Chat API] Requesting generation from ${provider.name} using model ${modelId}...`);
             const enqueueDelta = (delta: string) => {
@@ -300,7 +304,13 @@ export async function POST(request: NextRequest) {
 
             console.log("[Chat API] Generation successful. Saving assistant response.");
             const assistantText = result.text || streamedText;
-            await saveMessage(chatId, "assistant", assistantText, result.model, imageAssets);
+            await saveMessage(chatId, {
+              id: crypto.randomUUID(),
+              role: "assistant",
+              model: result.model,
+              content: assistantText,
+              assets: imageAssets,
+            });
 
             after(async () => {
               try {

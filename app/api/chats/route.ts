@@ -25,6 +25,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: `Actor not found: ${payload.actorId}` }, { status: 404 });
     }
 
+    const now = new Date().toISOString();
     const chat: ChatThread = {
       id:
         payload.id ??
@@ -32,7 +33,9 @@ export async function POST(request: NextRequest) {
           ? crypto.randomUUID()
           : `chat-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`),
       actorId: payload.actorId,
-      title: payload.title.trim()
+      title: payload.title.trim(),
+      createdAt: now,
+      updatedAt: now
     };
 
     const savedChat = await saveChat(chat);

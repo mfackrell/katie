@@ -11,8 +11,8 @@ export interface ChatThread {
   id: string;
   actorId: string;
   title: string;
-  createdAt?: string;
-  updatedAt?: string;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface Message {
