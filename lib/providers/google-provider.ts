@@ -3,6 +3,11 @@ import { ChatGenerateParams, LlmProvider, ProviderResponse } from "@/lib/provide
 import { buildMemoryContext } from "@/lib/providers/memory-context";
 import { MATH_EXECUTION_PROTOCOL } from "@/lib/providers/math-execution-protocol";
 import { formatAttachmentContext } from "@/lib/providers/attachment-context";
+import {
+  isImageGenerationModel,
+  normalizeGoogleModelId,
+  supportsThinking
+} from "@/lib/providers/google-model-capabilities";
 
 type ThinkingLevelInput = "minimal" | "low" | "medium" | "high";
 
@@ -11,12 +16,6 @@ type GoogleInputPart =
   | { fileData: { fileUri: string; mimeType: string } }
   | { inlineData: { mimeType: string; data: string } };
 
-const GOOGLE_MODEL_ALIASES: Record<string, string> = {
-  "gemini-pro": "gemini-3.1-pro",
-  "gemini-3-pro": "gemini-3.1-pro",
-  "gemini-flash": "gemini-3.1-flash",
-  "gemini-3-flash": "gemini-3.1-flash"
-};
 
 const BEHAVIORAL_DIRECTIVE =
   "Always respond in a conversational style. Use a direct, clear, and action-oriented voice. Be direct and to the point. Clearly state the purpose or opinion upfront. Use straightforward language. Focus on actionable points and clear reasoning.";
@@ -38,11 +37,6 @@ EPISODIC_MEMORY (History):
 Below is the recent log of this specific conversation.
 
 ${buildMemoryContext(params.history)}`;
-}
-
-function normalizeGoogleModelId(modelId: string): string {
-  const normalized = modelId.trim().replace(/^models\//, "");
-  return GOOGLE_MODEL_ALIASES[normalized] ?? normalized;
 }
 
 function parseThinkingLevel(modelId: string): {
@@ -75,15 +69,6 @@ function toGoogleThinkingLevel(thinkingLevelInput: ThinkingLevelInput): GoogleTh
     case "high":
       return GoogleThinkingLevel.HIGH;
   }
-}
-
-function isGemini3Model(modelId: string): boolean {
-  return /^gemini-3(\.|-)/.test(modelId);
-}
-
-function isImageGenerationModel(modelId: string): boolean {
-  const lowerModel = modelId.toLowerCase();
-  return lowerModel.includes("image") || lowerModel.includes("banana");
 }
 
 function buildGoogleFileParts(params: ChatGenerateParams): GoogleInputPart[] {
@@ -165,8 +150,9 @@ export class GoogleProvider implements LlmProvider {
       }
     ];
 
-    const thinkingLevelInput =
-      parsedModel.thinkingLevelInput ?? (isGemini3Model(selectedModel) ? "medium" : undefined);
+    const thinkingLevelInput = supportsThinking(selectedModel)
+      ? parsedModel.thinkingLevelInput ?? "medium"
+      : undefined;
     const isImageTask = isImageGenerationModel(selectedModel);
     const attachmentContext = formatAttachmentContext(params.attachments);
     const baseSystemInstruction = buildSystemInstruction(params);

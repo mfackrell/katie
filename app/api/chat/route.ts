@@ -177,8 +177,11 @@ export async function POST(request: NextRequest) {
       console.log(`[Chat API] Override active. Provider: ${provider.name}, Model: ${modelId}`);
     } else {
       const hasImages = Array.isArray(images) && images.length > 0;
-      const routingContext = `\n  Persona: ${persona}\n  Rolling Summary: ${summary}\n  Recent History: ${JSON.stringify(history.slice(-3))}\n  Has Attached Images: ${hasImages}\n`;
-      const routingDecision = await chooseProvider(message, routingContext, providers);
+      const hasImageAttachments =
+        Array.isArray(attachments) && attachments.some((attachment) => attachment.mimeType.startsWith("image/"));
+      const hasVisualInput = hasImages || hasImageAttachments;
+      const routingContext = `\n  Persona: ${persona}\n  Rolling Summary: ${summary}\n  Recent History: ${JSON.stringify(history.slice(-3))}\n  Has Attached Images: ${hasVisualInput}\n`;
+      const routingDecision = await chooseProvider(message, routingContext, providers, { hasImages: hasVisualInput });
 
       provider = routingDecision.provider;
       modelId = routingDecision.modelId;
