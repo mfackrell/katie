@@ -9,6 +9,8 @@ export type RoutingDecision = {
   routerModel: string;
 };
 
+type ProviderName = "openai" | "google" | "grok" | "anthropic";
+type RoutingChoice = { providerName: ProviderName; modelId: string };
 
 const ORCHESTRATOR_MODELS = ["gpt-5", "gemini-pro-latest"] as const;
 const DEFAULT_ORCHESTRATOR_MODEL = "gpt-5";
