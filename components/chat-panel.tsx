@@ -490,7 +490,7 @@ export function ChatPanel({ actorId, chatId }: ChatPanelProps) {
                   Master Router
                 </p>
                 <h2 className="truncate text-lg font-semibold tracking-tight text-white sm:text-xl">
-                  Polyglot Actor Orchestrator
+                  Katie - AI Command Center
                 </h2>
               </div>
             </div>
