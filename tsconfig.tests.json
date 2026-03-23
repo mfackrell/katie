@@ -1,0 +1,21 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "noEmitOnError": false,
+    "outDir": ".test-dist",
+    "module": "commonjs",
+    "moduleResolution": "node",
+    "target": "es2022",
+    "types": [],
+    "paths": {
+      "@/*": ["./*"]
+    }
+  },
+  "include": [
+    "lib/providers/google-model-capabilities.ts",
+    "lib/router/model-intent.ts",
+    "lib/providers/types.ts",
+    "tests/google-routing.test.ts"
+  ]
+}
