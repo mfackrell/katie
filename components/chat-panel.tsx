@@ -514,7 +514,7 @@ export function ChatPanel({ actorId, chatId }: ChatPanelProps) {
               return (
                 <label
                   key={providerName}
-                  className="flex items-center gap-1.5 rounded-xl border border-white/10 bg-white/[0.035] px-2.5 py-1.5 text-[11px] text-zinc-200"
+                  className="flex items-center gap-1.5 rounded-xl border border-white/10 bg-white/[0.035] px-2 py-1 text-[11px] text-zinc-300 whitespace-nowrap"
                 >
                   <span className="capitalize text-zinc-500">{providerName}</span>
                   <select
@@ -525,7 +525,7 @@ export function ChatPanel({ actorId, chatId }: ChatPanelProps) {
                         nextModel ? { providerName, modelId: nextModel } : null,
                       );
                     }}
-                    className="min-w-0 rounded-lg border border-white/10 bg-zinc-950/90 px-2 py-1 text-[11px] text-zinc-100 outline-none ring-emerald-500 transition focus:ring"
+                    className="w-[170px] rounded-lg border border-white/10 bg-zinc-950/90 px-2 py-1 text-[11px] text-zinc-100 outline-none ring-emerald-500 transition focus:ring"
                   >
                     <option value="">Master Router (Auto)</option>
                     {options.map((modelId) => (
