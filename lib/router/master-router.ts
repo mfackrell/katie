@@ -1,4 +1,5 @@
 import OpenAI from "openai";
+import { inferRequestIntent, validateRoutingDecision } from "@/lib/router/model-intent";
 import { LlmProvider } from "@/lib/providers/types";
 
 export type RoutingDecision = {
@@ -8,8 +9,6 @@ export type RoutingDecision = {
   routerModel: string;
 };
 
-type ProviderName = "openai" | "google" | "grok" | "anthropic";
-type RoutingChoice = { providerName: ProviderName; modelId: string };
 
 const ORCHESTRATOR_MODELS = ["gpt-5", "gemini-pro-latest"] as const;
 const DEFAULT_ORCHESTRATOR_MODEL = "gpt-5";
@@ -46,13 +45,19 @@ function getOrchestratorModel(): (typeof ORCHESTRATOR_MODELS)[number] {
   return DEFAULT_ORCHESTRATOR_MODEL;
 }
 
+
 const routingClient = process.env.OPENAI_API_KEY
   ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY, fetch: globalThis.fetch.bind(globalThis) })
   : null;
 
 function pickDefaultModel(provider: LlmProvider, models: string[]): string {
   if (provider.name === "google") {
-    return models.find((model) => model.includes("gemini-3.1-pro-preview")) ?? models[0] ?? "gemini-3.1-pro-preview";
+    return (
+      models.find((model) => model === "gemini-3.1-pro") ??
+      models.find((model) => model.includes("gemini-3.1-pro")) ??
+      models[0] ??
+      "gemini-3.1-pro"
+    );
   }
 
   if (provider.name === "grok") {
@@ -109,7 +114,8 @@ function normalizeRoutingChoice(rawChoice: string): RoutingChoice | null {
 export async function chooseProvider(
   prompt: string,
   context: string,
-  providers: LlmProvider[]
+  providers: LlmProvider[],
+  options?: { hasImages?: boolean }
 ): Promise<RoutingDecision> {
   const modelEntries = await Promise.all(
     providers.map(async (provider) => ({
@@ -123,13 +129,16 @@ export async function chooseProvider(
     models: models.length ? models : [pickDefaultModel(provider, [])]
   }));
 
+  const intent = inferRequestIntent(prompt, Boolean(options?.hasImages));
+
   if (availableByProvider.length === 1) {
     const selected = availableByProvider[0];
     const modelId = pickDefaultModel(selected.provider, selected.models);
+    const validated = validateRoutingDecision({ providerName: selected.provider.name, modelId }, availableByProvider, intent);
     return {
-      provider: selected.provider,
-      modelId,
-      reasoning: `Single provider available; selected default ${selected.provider.name}:${modelId}.`,
+      provider: validated.provider,
+      modelId: validated.modelId,
+      reasoning: `Single provider available. ${validated.reasoning}`,
       routerModel: modelId
     };
   }
@@ -177,10 +186,11 @@ export async function chooseProvider(
               ? parsedChoice.modelId
               : pickDefaultModel(selectedProvider.provider, selectedProvider.models);
 
+            const validated = validateRoutingDecision({ providerName: parsedChoice.providerName, modelId }, availableByProvider, intent);
             return {
-              provider: selectedProvider.provider,
-              modelId,
-              reasoning: `Orchestrator selected ${parsedChoice.providerName}:${modelId}.`,
+              provider: validated.provider,
+              modelId: validated.modelId,
+              reasoning: `Orchestrator selected ${parsedChoice.providerName}:${modelId}. ${validated.reasoning}`,
               routerModel: modelId
             };
           }
@@ -196,10 +206,12 @@ export async function chooseProvider(
   const fallbackProvider = googleEntry || availableByProvider[0];
   const modelId = pickDefaultModel(fallbackProvider.provider, fallbackProvider.models);
 
+  const validated = validateRoutingDecision({ providerName: fallbackProvider.provider.name, modelId }, availableByProvider, intent);
+
   return {
-    provider: fallbackProvider.provider,
-    modelId,
-    reasoning: `Fallback to ${fallbackProvider.provider.name}:${modelId} after routing unavailable or invalid.`,
+    provider: validated.provider,
+    modelId: validated.modelId,
+    reasoning: `Fallback routing selected ${fallbackProvider.provider.name}:${modelId}. ${validated.reasoning}`,
     routerModel: modelId
   };
 }
