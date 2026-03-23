@@ -1,10 +1,12 @@
 "use client";
 
 import Image from "next/image";
+import EmojiPicker, { Theme } from "emoji-picker-react";
 import {
   ClipboardEvent,
   FormEvent,
   KeyboardEvent,
+  MouseEvent as ReactMouseEvent,
   useEffect,
   useMemo,
   useRef,
@@ -44,10 +46,12 @@ export function ChatPanel({ actorId, chatId }: ChatPanelProps) {
   const [fileReferences, setFileReferences] = useState<FileReference[]>([]);
   const [statusMessage, setStatusMessage] = useState("");
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
+  const [emojiPickerOpen, setEmojiPickerOpen] = useState(false);
   const messagesContainerRef = useRef<HTMLElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const emojiPickerRef = useRef<HTMLDivElement>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
   const copiedFeedbackTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(
     null,
@@ -423,6 +427,62 @@ export function ChatPanel({ actorId, chatId }: ChatPanelProps) {
     }, 1500);
   }
 
+
+  useEffect(() => {
+    if (!emojiPickerOpen) {
+      return;
+    }
+
+    function handlePointerDown(event: MouseEvent) {
+      const target = event.target;
+
+      if (!(target instanceof Node)) {
+        return;
+      }
+
+      if (emojiPickerRef.current?.contains(target)) {
+        return;
+      }
+
+      setEmojiPickerOpen(false);
+    }
+
+    document.addEventListener("mousedown", handlePointerDown);
+
+    return () => {
+      document.removeEventListener("mousedown", handlePointerDown);
+    };
+  }, [emojiPickerOpen]);
+
+  function handleEmojiToggle(event: ReactMouseEvent<HTMLButtonElement>) {
+    event.stopPropagation();
+    setEmojiPickerOpen((current) => !current);
+  }
+
+  function handleEmojiSelect(emoji: { emoji: string }) {
+    const textarea = textareaRef.current;
+    const selectionStart = textarea?.selectionStart ?? input.length;
+    const selectionEnd = textarea?.selectionEnd ?? input.length;
+    const nextValue = `${input.slice(0, selectionStart)}${emoji.emoji}${input.slice(selectionEnd)}`;
+    const nextCursorPosition = selectionStart + emoji.emoji.length;
+
+    setInput(nextValue);
+    setEmojiPickerOpen(false);
+
+    requestAnimationFrame(() => {
+      const nextTextarea = textareaRef.current;
+
+      if (!nextTextarea) {
+        return;
+      }
+
+      nextTextarea.focus();
+      nextTextarea.setSelectionRange(nextCursorPosition, nextCursorPosition);
+      nextTextarea.style.height = "auto";
+      nextTextarea.style.height = `${Math.min(nextTextarea.scrollHeight, 192)}px`;
+    });
+  }
+
   function handleKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
     if (event.key === "Enter" && !event.shiftKey) {
       event.preventDefault();
@@ -759,16 +819,42 @@ export function ChatPanel({ actorId, chatId }: ChatPanelProps) {
             >
               📷
             </button>
-            <textarea
-              ref={textareaRef}
-              rows={1}
-              value={input}
-              onChange={handleInputChange}
-              onKeyDown={handleKeyDown}
-              onPaste={handlePaste}
-              placeholder="Ask your actor something..."
-              className="min-h-[48px] max-h-48 flex-1 resize-none overflow-y-auto rounded-2xl border border-white/10 bg-zinc-950/80 px-4 py-3 text-sm text-zinc-100 outline-none ring-emerald-500 placeholder:text-zinc-500 focus:ring"
-            />
+            <div className="relative flex-1">
+              <textarea
+                ref={textareaRef}
+                rows={1}
+                value={input}
+                onChange={handleInputChange}
+                onKeyDown={handleKeyDown}
+                onPaste={handlePaste}
+                placeholder="Ask your actor something..."
+                className="min-h-[48px] max-h-48 w-full resize-none overflow-y-auto rounded-2xl border border-white/10 bg-zinc-950/80 px-4 py-3 pr-14 text-sm text-zinc-100 outline-none ring-emerald-500 placeholder:text-zinc-500 focus:ring"
+              />
+              <div ref={emojiPickerRef} className="absolute bottom-2 right-2">
+                <button
+                  type="button"
+                  onClick={handleEmojiToggle}
+                  className="flex h-9 w-9 items-center justify-center rounded-xl border border-white/10 bg-white/[0.05] text-base text-zinc-300 transition hover:border-white/20 hover:bg-white/[0.08] hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
+                  aria-label="Insert emoji"
+                  aria-expanded={emojiPickerOpen}
+                >
+                  😊
+                </button>
+                {emojiPickerOpen ? (
+                  <div className="absolute bottom-12 right-0 z-20 overflow-hidden rounded-2xl border border-white/10 bg-zinc-950 shadow-[0_24px_60px_rgba(0,0,0,0.35)]">
+                    <EmojiPicker
+                      onEmojiClick={handleEmojiSelect}
+                      theme={Theme.DARK}
+                      autoFocusSearch={false}
+                      lazyLoadEmojis
+                      skinTonesDisabled
+                      width={320}
+                      height={400}
+                    />
+                  </div>
+                ) : null}
+              </div>
+            </div>
             {loading ? (
               <button
                 type="button"
