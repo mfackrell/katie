@@ -503,7 +503,7 @@ export function ChatPanel({ actorId, chatId }: ChatPanelProps) {
             ) : null}
           </div>
 
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="flex items-center gap-2 overflow-x-auto">
             {providerNames.map((providerName) => {
               const options = availableModels[providerName] ?? [];
               const selectedValue =
