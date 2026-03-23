@@ -514,7 +514,7 @@ export function ChatPanel({ actorId, chatId }: ChatPanelProps) {
               return (
                 <label
                   key={providerName}
-                  className="flex items-center gap-1.5 rounded-xl border border-white/10 bg-white/[0.035] px-2.5 py-1.5 text-[11px] text-zinc-300"
+                  className="flex items-center gap-1.5 rounded-xl border border-white/10 bg-white/[0.035] px-2.5 py-1.5 text-[11px] text-zinc-200"
                 >
                   <span className="capitalize text-zinc-500">{providerName}</span>
                   <select
