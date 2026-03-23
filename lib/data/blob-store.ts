@@ -1,9 +1,10 @@
-import { demoActors } from "@/lib/data/mock";
-import type { Actor, Message } from "@/lib/types/chat";
+import { demoActors, demoChats } from "@/lib/data/mock";
+import type { Actor, ChatThread, Message } from "@/lib/types/chat";
 
 const memoryMessages = new Map<string, Message[]>();
 const memorySummaries = new Map<string, string>();
 const memoryActors = new Map<string, Actor>();
+const memoryChats = new Map<string, ChatThread>();
 const deletedActorIds = new Set<string>();
 
 const base = process.env.BLOB_BASE_URL ?? process.env.BLOB_URL;
@@ -73,6 +74,16 @@ async function blobDelete(path: string): Promise<void> {
     headers: {
       Authorization: `Bearer ${writeConfig.token}`
     }
+  });
+}
+
+
+function sortChats(chats: ChatThread[]): ChatThread[] {
+  return [...chats].sort((left, right) => {
+    const leftTimestamp = left.updatedAt ?? left.createdAt ?? "";
+    const rightTimestamp = right.updatedAt ?? right.createdAt ?? "";
+
+    return rightTimestamp.localeCompare(leftTimestamp) || left.title.localeCompare(right.title);
   });
 }
 
@@ -160,6 +171,84 @@ export async function listActors(): Promise<Actor[]> {
   return [...deduped.values()];
 }
 
+export async function getChatById(chatId: string): Promise<ChatThread | null> {
+  const memoryChat = memoryChats.get(chatId);
+  if (memoryChat) {
+    return memoryChat;
+  }
+
+  const chat = await blobGet<ChatThread>(`chats/${chatId}.json`);
+  if (chat) {
+    memoryChats.set(chat.id, chat);
+    return chat;
+  }
+
+  const demoChat = demoChats.find((item) => item.id === chatId) ?? null;
+  if (demoChat) {
+    return demoChat;
+  }
+
+  return null;
+}
+
+export async function listChats(): Promise<ChatThread[]> {
+  const blobChatIds = (await blobGet<string[]>("chats/index.json")) ?? [];
+
+  const blobChats = (
+    await Promise.all(
+      blobChatIds.map(async (chatId) => {
+        return blobGet<ChatThread>(`chats/${chatId}.json`);
+      })
+    )
+  ).filter((chat): chat is ChatThread => Boolean(chat));
+
+  blobChats.forEach((chat) => {
+    memoryChats.set(chat.id, chat);
+  });
+
+  const deduped = new Map<string, ChatThread>();
+  [...demoChats, ...memoryChats.values(), ...blobChats].forEach((chat) => {
+    deduped.set(chat.id, chat);
+  });
+
+  return sortChats([...deduped.values()]);
+}
+
+export async function listChatsByActorId(actorId: string): Promise<ChatThread[]> {
+  const chats = await listChats();
+  return chats.filter((chat) => chat.actorId === actorId);
+}
+
+export async function saveChat(chat: ChatThread): Promise<ChatThread> {
+  const now = new Date().toISOString();
+  const nextChat: ChatThread = {
+    ...chat,
+    title: chat.title.trim(),
+    createdAt: chat.createdAt ?? now,
+    updatedAt: now
+  };
+
+  memoryChats.set(nextChat.id, nextChat);
+  await blobPut(`chats/${nextChat.id}.json`, nextChat);
+
+  const currentIndex = (await blobGet<string[]>("chats/index.json")) ?? [];
+  if (!currentIndex.includes(nextChat.id)) {
+    await blobPut("chats/index.json", [...currentIndex, nextChat.id]);
+  }
+
+  return nextChat;
+}
+
+export async function deleteChat(chatId: string): Promise<void> {
+  memoryChats.delete(chatId);
+
+  const currentIndex = (await blobGet<string[]>("chats/index.json")) ?? [];
+  const nextIndex = currentIndex.filter((currentChatId) => currentChatId !== chatId);
+
+  await blobPut("chats/index.json", nextIndex);
+  await blobDelete(`chats/${chatId}.json`);
+}
+
 export async function getRecentMessages(chatId: string, limit = 20): Promise<Message[]> {
   const blobMessages = await blobGet<Message[]>(`messages/${chatId}.json`);
   if (blobMessages) {
@@ -198,6 +287,14 @@ export async function saveMessage(
 
   memoryMessages.set(chatId, next);
   await blobPut(`messages/${chatId}.json`, next);
+
+  const existingChat = await getChatById(chatId);
+  if (existingChat) {
+    await saveChat({
+      ...existingChat,
+      updatedAt: new Date().toISOString()
+    });
+  }
 }
 
 export async function getConversationSummary(chatId: string): Promise<string> {
@@ -248,6 +345,11 @@ export async function deleteActorsById(actorIds: string[]): Promise<void> {
     memoryActors.delete(actorId);
   });
 
-  await Promise.all(actorIds.map(async (actorId) => blobDelete(`actors/${actorId}.json`)));
+  const chatsToDelete = (await listChats()).filter((chat) => actorIds.includes(chat.actorId));
+
+  await Promise.all([
+    ...actorIds.map(async (actorId) => blobDelete(`actors/${actorId}.json`)),
+    ...chatsToDelete.map(async (chat) => deleteChat(chat.id))
+  ]);
   await blobPut("actors/deleted-index.json", [...deletedActorIds]);
 }
