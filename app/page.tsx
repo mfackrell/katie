@@ -88,17 +88,24 @@ export default function HomePage() {
         const nextActorChatSelections = storedActorSelections
           ? (JSON.parse(storedActorSelections) as Record<string, string>)
           : {};
+        const validActorIds = new Set(persistedActors.map((actor) => actor.id));
+        const validChatIds = new Set(persistedChats.map((chat) => chat.id));
+        const sanitizedActorChatSelections = Object.fromEntries(
+          Object.entries(nextActorChatSelections).filter(
+            ([actorId, chatId]) => validActorIds.has(actorId) && validChatIds.has(chatId),
+          ),
+        );
         const nextActiveActorId = pickActiveActorId(persistedActors, storedActorId);
         const nextActiveChatId = pickActiveChatId(
           persistedChats,
           nextActiveActorId,
           storedChatId,
-          nextActorChatSelections,
+          sanitizedActorChatSelections,
         );
 
         setActors(persistedActors);
         setChats(persistedChats);
-        setActorChatSelections(nextActorChatSelections);
+        setActorChatSelections(sanitizedActorChatSelections);
         setActiveActorId(nextActiveActorId);
         setActiveChatId(nextActiveChatId);
       } finally {
@@ -175,7 +182,10 @@ export default function HomePage() {
     hasLoadedPersistedState,
   ]);
 
-  const filteredChats = useMemo(() => chats, [chats]);
+  const filteredChats = useMemo(
+    () => chats.filter((chat) => actors.some((actor) => actor.id === chat.actorId)),
+    [actors, chats],
+  );
 
   async function createChat(actorId: string) {
     const chatResponse = await fetch("/api/chats", {

@@ -133,7 +133,7 @@ export function ChatPanel({ actorId, chatId }: ChatPanelProps) {
       }
 
       const cachedMessages = messagesByChatIdRef.current[chatId];
-      if (cachedMessages) {
+      if (cachedMessages !== undefined) {
         setMessages(cachedMessages);
         setIsHydratingMessages(false);
       } else {
