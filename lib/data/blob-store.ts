@@ -14,9 +14,34 @@ const CHAT_REGISTRY_PATH = "chats/registry.json";
 
 const base = process.env.BLOB_BASE_URL ?? process.env.BLOB_URL;
 const writeToken = process.env.BLOB_READ_WRITE_TOKEN ?? process.env.BLOB_WRITE_TOKEN;
+const allowMemoryFallback = process.env.KATIE_ALLOW_MEMORY_FALLBACK === "true";
+
+type PersistenceMode = "durable" | "memory-fallback";
+
+class PersistenceError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "PersistenceError";
+  }
+}
 
 function getBlobBaseUrl(): string | null {
   return base ?? null;
+}
+
+function getPersistenceMode(): PersistenceMode {
+  return allowMemoryFallback ? "memory-fallback" : "durable";
+}
+
+function requireBlobBaseUrl(): string {
+  const baseUrl = getBlobBaseUrl();
+  if (baseUrl) {
+    return baseUrl;
+  }
+
+  throw new PersistenceError(
+    "Durable persistence is required but blob read configuration is missing. Set BLOB_BASE_URL (or BLOB_URL), or explicitly enable KATIE_ALLOW_MEMORY_FALLBACK=true for local/demo mode."
+  );
 }
 
 function getBlobWriteConfig(): { baseUrl: string; token: string } | null {
@@ -27,8 +52,66 @@ function getBlobWriteConfig(): { baseUrl: string; token: string } | null {
   return { baseUrl: base, token: writeToken };
 }
 
+function requireBlobWriteConfig(): { baseUrl: string; token: string } {
+  const writeConfig = getBlobWriteConfig();
+  if (writeConfig) {
+    return writeConfig;
+  }
+
+  throw new PersistenceError(
+    "Durable persistence is required but blob write configuration is missing. Set BLOB_READ_WRITE_TOKEN (or BLOB_WRITE_TOKEN), or explicitly enable KATIE_ALLOW_MEMORY_FALLBACK=true for local/demo mode."
+  );
+}
+
+function canUseBlobReads(): boolean {
+  return Boolean(getBlobBaseUrl());
+}
+
+function canUseBlobWrites(): boolean {
+  return Boolean(getBlobWriteConfig());
+}
+
+export function getPersistenceDiagnostics(): {
+  mode: PersistenceMode;
+  blobReadConfigured: boolean;
+  blobWriteConfigured: boolean;
+  ready: boolean;
+} {
+  const mode = getPersistenceMode();
+  const blobReadConfigured = canUseBlobReads();
+  const blobWriteConfigured = canUseBlobWrites();
+  return {
+    mode,
+    blobReadConfigured,
+    blobWriteConfigured,
+    ready: mode === "memory-fallback" ? true : blobReadConfigured && blobWriteConfigured,
+  };
+}
+
+function logPersistenceStatus(): void {
+  const diagnostics = getPersistenceDiagnostics();
+  if (diagnostics.mode === "memory-fallback") {
+    console.warn("[BlobStore] Running in explicit memory fallback mode (KATIE_ALLOW_MEMORY_FALLBACK=true). Data is not durable.");
+    return;
+  }
+
+  if (!diagnostics.ready) {
+    console.error(
+      `[BlobStore] Durable persistence is not ready. blobReadConfigured=${diagnostics.blobReadConfigured}, blobWriteConfigured=${diagnostics.blobWriteConfigured}.`
+    );
+    return;
+  }
+
+  console.info("[BlobStore] Durable blob persistence is configured.");
+}
+
+logPersistenceStatus();
+
 async function blobGet<T>(path: string): Promise<T | null> {
-  const baseUrl = getBlobBaseUrl();
+  const baseUrl =
+    getPersistenceMode() === "memory-fallback"
+      ? getBlobBaseUrl()
+      : requireBlobBaseUrl();
   if (!baseUrl) {
     return null;
   }
@@ -41,15 +124,22 @@ async function blobGet<T>(path: string): Promise<T | null> {
     },
   });
 
-  if (!response.ok) {
+  if (response.status === 404) {
     return null;
+  }
+
+  if (!response.ok) {
+    throw new PersistenceError(`Failed to GET ${path}: ${response.status} ${response.statusText}`);
   }
 
   return (await response.json()) as T;
 }
 
 async function blobPut(path: string, payload: unknown): Promise<void> {
-  const writeConfig = getBlobWriteConfig();
+  const writeConfig =
+    getPersistenceMode() === "memory-fallback"
+      ? getBlobWriteConfig()
+      : requireBlobWriteConfig();
   if (!writeConfig) {
     return;
   }
@@ -69,17 +159,28 @@ async function blobPut(path: string, payload: unknown): Promise<void> {
 }
 
 async function blobDelete(path: string): Promise<void> {
-  const writeConfig = getBlobWriteConfig();
+  const writeConfig =
+    getPersistenceMode() === "memory-fallback"
+      ? getBlobWriteConfig()
+      : requireBlobWriteConfig();
   if (!writeConfig) {
     return;
   }
 
-  await fetch(`${writeConfig.baseUrl}/${path}`, {
+  const response = await fetch(`${writeConfig.baseUrl}/${path}`, {
     method: "DELETE",
     headers: {
       Authorization: `Bearer ${writeConfig.token}`,
     },
   });
+
+  if (response.status === 404) {
+    return;
+  }
+
+  if (!response.ok) {
+    throw new PersistenceError(`Failed to DELETE ${path}: ${response.status} ${response.statusText}`);
+  }
 }
 
 function sortChats(chats: ChatThread[]): ChatThread[] {
@@ -92,15 +193,25 @@ function sortChats(chats: ChatThread[]): ChatThread[] {
 }
 
 async function blobGetWithRetry<T>(path: string, retries = 3, baseDelayMs = 250): Promise<T | null> {
+  let lastError: unknown;
+
   for (let attempt = 0; attempt < retries; attempt += 1) {
-    const value = await blobGet<T>(path);
-    if (value !== null) {
-      return value;
+    try {
+      const value = await blobGet<T>(path);
+      if (value !== null) {
+        return value;
+      }
+    } catch (error) {
+      lastError = error;
     }
 
     if (attempt < retries - 1) {
       await new Promise((resolve) => setTimeout(resolve, baseDelayMs * (attempt + 1)));
     }
+  }
+
+  if (lastError) {
+    throw lastError;
   }
 
   return null;
@@ -253,8 +364,6 @@ export async function saveChat(chat: ChatThread): Promise<ChatThread> {
     updatedAt: now,
   };
 
-  memoryChats.set(nextChat.id, nextChat);
-
   const [currentIndex, registryChats] = await Promise.all([
     blobGetWithRetry<string[]>(CHAT_INDEX_PATH).then((value) => value ?? []),
     readChatRegistry(),
@@ -271,14 +380,12 @@ export async function saveChat(chat: ChatThread): Promise<ChatThread> {
     writeChatRegistry(nextRegistry),
   ]);
 
+  memoryChats.set(nextChat.id, nextChat);
+
   return nextChat;
 }
 
 export async function deleteChat(chatId: string): Promise<void> {
-  memoryChats.delete(chatId);
-  memoryMessages.delete(chatId);
-  memorySummaries.delete(chatId);
-
   const [currentIndex, registryChats] = await Promise.all([
     blobGetWithRetry<string[]>(CHAT_INDEX_PATH).then((value) => value ?? []),
     readChatRegistry(),
@@ -293,6 +400,10 @@ export async function deleteChat(chatId: string): Promise<void> {
     blobDelete(`messages/${chatId}.json`),
     blobDelete(`summaries/${chatId}.json`),
   ]);
+
+  memoryChats.delete(chatId);
+  memoryMessages.delete(chatId);
+  memorySummaries.delete(chatId);
 }
 
 export async function deleteChatById(chatId: string): Promise<void> {
@@ -323,8 +434,8 @@ export async function saveMessage(chatId: string, message: Omit<Message, "chatId
   };
   const nextMessages = [...current, nextMessage];
 
-  memoryMessages.set(chatId, nextMessages);
   await blobPut(`messages/${chatId}.json`, nextMessages);
+  memoryMessages.set(chatId, nextMessages);
 
   const existingChat = await getChatById(chatId);
   if (existingChat) {
@@ -348,15 +459,12 @@ export async function getConversationSummary(chatId: string): Promise<string> {
 }
 
 export async function setConversationSummary(chatId: string, summary: string): Promise<void> {
-  memorySummaries.set(chatId, summary);
   await blobPut(`summaries/${chatId}.json`, summary);
+  memorySummaries.set(chatId, summary);
 }
 
 export async function saveActor(actor: Actor): Promise<void> {
   const actorPath = `actors/${actor.id}.json`;
-
-  deletedActorIds.delete(actor.id);
-  memoryActors.set(actor.id, actor);
 
   const [deletedIndex, currentIndex, registryActors] = await Promise.all([
     blobGetWithRetry<string[]>(ACTOR_DELETED_INDEX_PATH).then((value) => value ?? []),
@@ -373,6 +481,9 @@ export async function saveActor(actor: Actor): Promise<void> {
     currentIndex.includes(actor.id) ? Promise.resolve() : blobPut(ACTOR_INDEX_PATH, [...currentIndex, actor.id]),
     writeActorRegistry(nextRegistry),
   ]);
+
+  deletedActorIds.delete(actor.id);
+  memoryActors.set(actor.id, actor);
 }
 
 export async function deleteActorsById(actorIds: string[]): Promise<void> {
@@ -387,11 +498,6 @@ export async function deleteActorsById(actorIds: string[]): Promise<void> {
   const nextIndex = currentIndex.filter((actorId) => !actorIds.includes(actorId));
   const nextRegistry = registryActors.filter((actor) => !actorIds.includes(actor.id));
 
-  actorIds.forEach((actorId) => {
-    deletedActorIds.add(actorId);
-    memoryActors.delete(actorId);
-  });
-
   const chatsToDelete = (await listChats()).filter((chat) => actorIds.includes(chat.actorId));
 
   await Promise.all([
@@ -400,5 +506,11 @@ export async function deleteActorsById(actorIds: string[]): Promise<void> {
     ...actorIds.map(async (actorId) => blobDelete(`actors/${actorId}.json`)),
     ...chatsToDelete.map(async (chat) => deleteChat(chat.id)),
   ]);
+
+  actorIds.forEach((actorId) => {
+    deletedActorIds.add(actorId);
+    memoryActors.delete(actorId);
+  });
+
   await blobPut(ACTOR_DELETED_INDEX_PATH, [...deletedActorIds]);
 }

@@ -21,6 +21,7 @@ Cloud-first Next.js (App Router) interface for multi-model chat orchestration wi
 3. Configure Blob variables:
    - `BLOB_BASE_URL` or `BLOB_URL` (public blob base URL where JSON files are read)
    - `BLOB_READ_WRITE_TOKEN` or `BLOB_WRITE_TOKEN` (token allowed to write updated summaries/messages)
+   - Optional (dev/demo only): `KATIE_ALLOW_MEMORY_FALLBACK=true` to explicitly allow non-durable memory mode
 4. Add API keys in Vercel env vars using secrets.
 
 ### Secret Manager for API keys
@@ -41,7 +42,8 @@ Then map in Vercel Project Settings → Environment Variables:
 - `messages/<chat-id>.json`
 - `summaries/<chat-id>.json`
 
-If blob docs are missing, the app falls back to in-memory/session defaults for development previews.
+By default the app requires durable blob read/write configuration and will return persistence errors if it is missing.
+Memory-only behavior is allowed only when `KATIE_ALLOW_MEMORY_FALLBACK=true` is explicitly set.
 
 ## Local validation commands
 
