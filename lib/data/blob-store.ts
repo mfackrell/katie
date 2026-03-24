@@ -13,6 +13,11 @@ const CHAT_INDEX_PATH = "chats/index.json";
 const CHAT_REGISTRY_PATH = "chats/registry.json";
 const BLOB_PATH_MAP_PATH = "_meta/blob-path-map.json";
 const BLOB_API_BASE_URL = "https://blob.vercel-storage.com";
+const CRITICAL_DURABLE_BOOTSTRAP_PATHS = new Set<string>([
+  ACTOR_REGISTRY_PATH,
+  CHAT_REGISTRY_PATH,
+  ACTOR_DELETED_INDEX_PATH,
+]);
 
 const base = process.env.BLOB_BASE_URL ?? process.env.BLOB_URL;
 const writeToken = process.env.BLOB_READ_WRITE_TOKEN ?? process.env.BLOB_WRITE_TOKEN;
@@ -75,6 +80,37 @@ function resolveBlobPath(baseUrl: string, path: string): string {
   return `${normalizedBase}/${normalizedPath}`;
 }
 
+function parseBlobNamespace(urlOrBase: string): {
+  raw: string;
+  host: string;
+  normalizedPath: string;
+  namespace: string;
+} | null {
+  try {
+    const parsed = new URL(urlOrBase);
+    const normalizedPath = parsed.pathname.replace(/\/+$/, "");
+    return {
+      raw: urlOrBase,
+      host: parsed.host,
+      normalizedPath,
+      namespace: `${parsed.host}${normalizedPath}`,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function isUrlInReadNamespace(url: string, readBaseUrl: string): boolean {
+  const urlNamespace = parseBlobNamespace(url);
+  const readNamespace = parseBlobNamespace(readBaseUrl);
+
+  if (!urlNamespace || !readNamespace) {
+    return false;
+  }
+
+  return urlNamespace.namespace.startsWith(readNamespace.namespace);
+}
+
 async function blobFetchJson<T>(url: string): Promise<T | null> {
   const response = await fetch(url, {
     cache: "no-store",
@@ -118,9 +154,16 @@ async function getBlobPathMap(forceRefresh = false): Promise<Record<string, stri
 
   const pathMap = await blobFetchJson<Record<string, string>>(resolveBlobPath(baseUrl, BLOB_PATH_MAP_PATH));
   blobPathMapCache = pathMap ?? {};
+  const mismatchedNamespaces = Object.entries(blobPathMapCache)
+    .filter(([, mappedUrl]) => !isUrlInReadNamespace(mappedUrl, baseUrl))
+    .slice(0, 5)
+    .map(([path, mappedUrl]) => ({ path, mappedUrl }));
   logPersistenceDebug("Loaded blob path-map.", {
     source: forceRefresh ? "refreshed" : "cached-or-remote",
     entries: Object.keys(blobPathMapCache).length,
+    readNamespace: parseBlobNamespace(baseUrl)?.namespace ?? "unparseable",
+    mismatchedNamespaceEntries: mismatchedNamespaces.length,
+    mismatchedNamespaceExamples: mismatchedNamespaces,
   });
   return blobPathMapCache;
 }
@@ -217,15 +260,23 @@ export function getPersistenceDiagnostics(): {
   mode: PersistenceMode;
   blobReadConfigured: boolean;
   blobWriteConfigured: boolean;
+  readBaseUrl: string | null;
+  readNamespace: string | null;
+  writeApiBaseUrl: string;
   ready: boolean;
 } {
   const mode = getPersistenceMode();
+  const readBaseUrl = getBlobBaseUrl();
+  const readNamespace = readBaseUrl ? parseBlobNamespace(readBaseUrl)?.namespace ?? null : null;
   const blobReadConfigured = canUseBlobReads();
   const blobWriteConfigured = canUseBlobWrites();
   return {
     mode,
     blobReadConfigured,
     blobWriteConfigured,
+    readBaseUrl,
+    readNamespace,
+    writeApiBaseUrl: BLOB_API_BASE_URL,
     ready: mode === "memory-fallback" ? true : blobReadConfigured && blobWriteConfigured,
   };
 }
@@ -244,7 +295,12 @@ function logPersistenceStatus(): void {
     return;
   }
 
-  console.info("[BlobStore] Durable blob persistence is configured.");
+  logPersistenceDebug("Durable blob persistence is configured.", {
+    readBaseUrl: diagnostics.readBaseUrl,
+    readNamespace: diagnostics.readNamespace,
+    writeConfigured: diagnostics.blobWriteConfigured,
+    writeApiBaseUrl: diagnostics.writeApiBaseUrl,
+  });
 }
 
 logPersistenceStatus();
@@ -274,6 +330,15 @@ async function blobGet<T>(path: string): Promise<T | null> {
     const refreshedPathMap = await getBlobPathMap(true);
     const refreshedMappedUrl = refreshedPathMap[path];
     if (!refreshedMappedUrl) {
+      if (
+        getPersistenceMode() === "durable" &&
+        CRITICAL_DURABLE_BOOTSTRAP_PATHS.has(path) &&
+        Object.keys(refreshedPathMap).length === 0
+      ) {
+        throw new PersistenceError(
+          `Durable persistence is configured, but critical bootstrap file "${path}" is missing and blob path-map is empty at read base "${baseUrl}". This usually means blob read base and blob write namespace are misaligned.`
+        );
+      }
       return null;
     }
 
@@ -288,6 +353,16 @@ async function blobGet<T>(path: string): Promise<T | null> {
   if (mappedValue !== null) {
     logPersistenceDebug("Read durable blob by path-map URL.", { path, mappedUrl });
     return mappedValue;
+  }
+
+  if (!isUrlInReadNamespace(mappedUrl, baseUrl)) {
+    console.error("[BlobStore] Direct-path read failed and path-map points to a different blob namespace.", {
+      path,
+      configuredReadBaseUrl: baseUrl,
+      configuredReadNamespace: parseBlobNamespace(baseUrl)?.namespace ?? "unparseable",
+      mappedUrl,
+      mappedNamespace: parseBlobNamespace(mappedUrl)?.namespace ?? "unparseable",
+    });
   }
 
   const refreshedPathMap = await getBlobPathMap(true);
@@ -314,6 +389,18 @@ async function blobPut(path: string, payload: unknown): Promise<void> {
 
   const blobUrl = await blobUploadJson(path, payload, writeConfig.token);
   logPersistenceDebug("Wrote durable blob.", { path, blobUrl });
+
+  const readBaseUrl = getBlobBaseUrl();
+  if (readBaseUrl && !isUrlInReadNamespace(blobUrl, readBaseUrl)) {
+    console.error("[BlobStore] Blob write completed to a namespace that does not match configured read base URL.", {
+      path,
+      configuredReadBaseUrl: readBaseUrl,
+      configuredReadNamespace: parseBlobNamespace(readBaseUrl)?.namespace ?? "unparseable",
+      writtenBlobUrl: blobUrl,
+      writtenBlobNamespace: parseBlobNamespace(blobUrl)?.namespace ?? "unparseable",
+      writeApiBaseUrl: BLOB_API_BASE_URL,
+    });
+  }
 
   if (path === BLOB_PATH_MAP_PATH) {
     return;
