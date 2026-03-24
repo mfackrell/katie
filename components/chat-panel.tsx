@@ -13,8 +13,8 @@ import {
   useState,
 } from "react";
 import type { FileReference } from "@/lib/providers/types";
-import type { Message } from "@/lib/types/chat";
-import { canSubmitChatRequest } from "@/lib/chat/request-guards";
+import type { Actor, ChatThread, Message } from "@/lib/types/chat";
+import { canSubmitChatRequest, hasResolvedChatSelection } from "@/lib/chat/request-guards";
 
 type ProviderName = "openai" | "google" | "grok" | "anthropic";
 
@@ -28,9 +28,11 @@ type SelectedOverride = {
 interface ChatPanelProps {
   actorId: string;
   chatId: string;
+  actors: Actor[];
+  chats: ChatThread[];
 }
 
-export function ChatPanel({ actorId, chatId }: ChatPanelProps) {
+export function ChatPanel({ actorId, chatId, actors, chats }: ChatPanelProps) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [messagesByChatId, setMessagesByChatId] = useState<Record<string, Message[]>>({});
   const [isHydratingMessages, setIsHydratingMessages] = useState(false);
@@ -65,10 +67,14 @@ export function ChatPanel({ actorId, chatId }: ChatPanelProps) {
     () => canSubmitChatRequest(actorId, chatId),
     [actorId, chatId],
   );
+  const hasResolvedSelection = useMemo(
+    () => hasResolvedChatSelection(actorId, chatId, actors, chats),
+    [actorId, chatId, actors, chats],
+  );
 
   const canSend = useMemo(
     () =>
-      hasValidChatSelection &&
+      hasResolvedSelection &&
       (input.trim().length > 0 ||
         selectedImages.length > 0 ||
         selectedFiles.length > 0 ||
@@ -82,7 +88,7 @@ export function ChatPanel({ actorId, chatId }: ChatPanelProps) {
       selectedImages.length,
       uploadingFiles,
       fileReferences.length,
-      hasValidChatSelection,
+      hasResolvedSelection,
     ],
   );
 
@@ -235,6 +241,10 @@ export function ChatPanel({ actorId, chatId }: ChatPanelProps) {
       setStatusMessage(
         "Select an actor and chat before sending a message.",
       );
+      return;
+    }
+    if (!hasResolvedSelection) {
+      setStatusMessage("Selected actor or chat could not be resolved. Refresh and try again.");
       return;
     }
     if (!canSend) {

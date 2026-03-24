@@ -6,10 +6,8 @@ const memoryActors = new Map<string, Actor>();
 const memoryChats = new Map<string, ChatThread>();
 const deletedActorIds = new Set<string>();
 
-const ACTOR_INDEX_PATH = "actors/index.json";
 const ACTOR_REGISTRY_PATH = "actors/registry.json";
 const ACTOR_DELETED_INDEX_PATH = "actors/deleted-index.json";
-const CHAT_INDEX_PATH = "chats/index.json";
 const CHAT_REGISTRY_PATH = "chats/registry.json";
 const BLOB_API_BASE_URL = "https://blob.vercel-storage.com";
 
@@ -387,13 +385,11 @@ let deletedActorIdsCache: string[] | null = null;
 async function readActorRegistry(): Promise<Actor[]> {
   const remoteRegistry = await blobGetWithRetry<Actor[]>(ACTOR_REGISTRY_PATH);
   if (remoteRegistry !== null) {
-    if (remoteRegistry.length === 0 && actorRegistryCache && actorRegistryCache.length > 0) {
-      return actorRegistryCache;
-    }
     actorRegistryCache = remoteRegistry;
     return remoteRegistry;
   }
-  return actorRegistryCache ?? [];
+  actorRegistryCache = [];
+  return [];
 }
 
 async function writeActorRegistry(actors: Actor[]): Promise<void> {
@@ -404,13 +400,11 @@ async function writeActorRegistry(actors: Actor[]): Promise<void> {
 async function readChatRegistry(): Promise<ChatThread[]> {
   const remoteRegistry = await blobGetWithRetry<ChatThread[]>(CHAT_REGISTRY_PATH);
   if (remoteRegistry !== null) {
-    if (remoteRegistry.length === 0 && chatRegistryCache && chatRegistryCache.length > 0) {
-      return chatRegistryCache;
-    }
     chatRegistryCache = remoteRegistry;
     return remoteRegistry;
   }
-  return chatRegistryCache ?? [];
+  chatRegistryCache = [];
+  return [];
 }
 
 async function writeChatRegistry(chats: ChatThread[]): Promise<void> {
@@ -422,10 +416,9 @@ async function writeChatRegistry(chats: ChatThread[]): Promise<void> {
 async function getDeletedActorIds(): Promise<string[]> {
   const deletedFromBlob = await blobGetWithRetry<string[]>(ACTOR_DELETED_INDEX_PATH);
   if (deletedFromBlob !== null) {
-    if (deletedFromBlob.length === 0 && deletedActorIdsCache && deletedActorIdsCache.length > 0) {
-      return [...new Set([...deletedActorIds, ...deletedActorIdsCache])];
-    }
     deletedActorIdsCache = deletedFromBlob;
+  } else {
+    deletedActorIdsCache = [];
   }
   const effectiveDeleted = deletedActorIdsCache ?? [];
 
@@ -437,6 +430,10 @@ async function getDeletedActorIds(): Promise<string[]> {
 }
 
 export async function getActorById(actorId: string): Promise<Actor | null> {
+  if (!actorId.trim()) {
+    return null;
+  }
+
   const deletedIds = await getDeletedActorIds();
   if (deletedIds.includes(actorId)) {
     return null;
@@ -498,6 +495,10 @@ export async function listActors(): Promise<Actor[]> {
 }
 
 export async function getChatById(chatId: string): Promise<ChatThread | null> {
+  if (!chatId.trim()) {
+    return null;
+  }
+
   if (isMemoryFallbackMode()) {
     const memoryChat = memoryChats.get(chatId);
     if (memoryChat) {
@@ -519,7 +520,7 @@ export async function getChatById(chatId: string): Promise<ChatThread | null> {
     return registryChat;
   }
 
-  return isMemoryFallbackMode() ? memoryChats.get(chatId) ?? null : null;
+  return null;
 }
 
 export async function listChats(): Promise<ChatThread[]> {
@@ -576,7 +577,6 @@ export async function saveChat(chat: ChatThread): Promise<ChatThread> {
 
     await blobPut(`chats/${nextChat.id}.json`, nextChat);
     await writeChatRegistry(nextRegistry);
-    await blobPut(CHAT_INDEX_PATH, nextRegistry.map((item) => item.id));
   });
   logPersistenceDebug("Saved chat to durable state.", {
     chatId: nextChat.id,
@@ -592,7 +592,6 @@ export async function deleteChat(chatId: string): Promise<void> {
     const registryChats = await readChatRegistry();
     const nextRegistry = registryChats.filter((chat) => chat.id !== chatId);
     await writeChatRegistry(nextRegistry);
-    await blobPut(CHAT_INDEX_PATH, nextRegistry.map((item) => item.id));
 
     await blobDelete(`chats/${chatId}.json`);
     await blobDelete(`messages/${chatId}.json`);
@@ -673,7 +672,6 @@ export async function saveActor(actor: Actor): Promise<void> {
 
     await blobPut(actorPath, actor);
     await writeActorRegistry(nextRegistry);
-    await blobPut(ACTOR_INDEX_PATH, nextRegistry.map((item) => item.id));
     if (deletedIndex.includes(actor.id)) {
       await blobPut(ACTOR_DELETED_INDEX_PATH, nextDeletedIndex);
       deletedActorIdsCache = nextDeletedIndex;
@@ -704,11 +702,9 @@ export async function deleteActorsById(actorIds: string[]): Promise<void> {
     const nextChatRegistry = chatRegistry.filter((chat) => !chatIdsToDelete.includes(chat.id));
 
     await writeActorRegistry(nextRegistry);
-    await blobPut(ACTOR_INDEX_PATH, nextRegistry.map((item) => item.id));
     await blobPut(ACTOR_DELETED_INDEX_PATH, nextDeleted);
     deletedActorIdsCache = nextDeleted;
     await writeChatRegistry(nextChatRegistry);
-    await blobPut(CHAT_INDEX_PATH, nextChatRegistry.map((item) => item.id));
 
     for (const actorId of actorIds) {
       await blobDelete(`actors/${actorId}.json`);

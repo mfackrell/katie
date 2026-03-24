@@ -85,6 +85,17 @@ test("saving an actor on empty durable store creates readable actor and registry
   assert.deepEqual(actors.map((item) => item.id), ["a1"]);
 });
 
+test("getActorById falls back to actor registry when actor file is missing", async () => {
+  setupBlobMock({
+    "actors/registry.json": [{ id: "a-reg-only", name: "Registry Actor", purpose: "x" }],
+    "actors/deleted-index.json": [],
+  });
+  const blobStore = loadBlobStore();
+
+  const actor = await blobStore.getActorById("a-reg-only");
+  assert.equal(actor?.id, "a-reg-only");
+});
+
 test("saving a chat creates readable chat and registry entry", async () => {
   const { store } = setupBlobMock();
   const blobStore = loadBlobStore();
@@ -98,6 +109,18 @@ test("saving a chat creates readable chat and registry entry", async () => {
   assert.equal(chat?.id, "c1");
   assert.equal(Array.isArray(store.get("chats/registry.json")), true);
   assert.deepEqual(chats.map((item) => item.id), ["c1"]);
+});
+
+test("getChatById falls back to chat registry when chat file is missing", async () => {
+  setupBlobMock({
+    "actors/registry.json": [{ id: "a1", name: "Actor", purpose: "x" }],
+    "actors/deleted-index.json": [],
+    "chats/registry.json": [{ id: "c-reg-only", actorId: "a1", title: "Registry Chat", createdAt: "2026-03-24T00:00:00.000Z", updatedAt: "2026-03-24T00:00:00.000Z" }],
+  });
+  const blobStore = loadBlobStore();
+
+  const chat = await blobStore.getChatById("c-reg-only");
+  assert.equal(chat?.id, "c-reg-only");
 });
 
 test("listActors uses registry even when index file is stale", async () => {
@@ -140,6 +163,7 @@ test("deleting actors and chats keeps registries consistent", async () => {
 
   assert.deepEqual((store.get("actors/registry.json") as Array<{ id: string }>).map((item) => item.id), ["a2"]);
   assert.deepEqual((store.get("chats/registry.json") as Array<{ id: string }>).map((item) => item.id), []);
+  assert.deepEqual(store.get("actors/deleted-index.json"), ["a1"]);
 });
 
 test("path-map absence does not break actor/chat/message reads", async () => {

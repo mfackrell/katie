@@ -2,7 +2,7 @@ import { after, NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { assembleContext } from "@/lib/memory/assemble-context";
 import { maybeUpdateSummary } from "@/lib/memory/summarizer";
-import { saveMessage } from "@/lib/data/blob-store";
+import { getActorById, getChatById, saveMessage } from "@/lib/data/blob-store";
 import { getAvailableProviders } from "@/lib/providers";
 import { chooseProvider } from "@/lib/router/master-router";
 import { LlmProvider, ProviderResponse } from "@/lib/providers/types";
@@ -157,6 +157,20 @@ export async function POST(request: NextRequest) {
       return NextResponse.json(
         { error: "No providers configured. Add OPENAI_API_KEY, GOOGLE_API_KEY, grok_api_key, and/or CLAUDE_API_KEY." },
         { status: 500 }
+      );
+    }
+
+    const [actor, chat] = await Promise.all([getActorById(actorId), getChatById(chatId)]);
+    if (!actor) {
+      return NextResponse.json({ error: `Actor not found: ${actorId}` }, { status: 404 });
+    }
+    if (!chat) {
+      return NextResponse.json({ error: `Chat not found: ${chatId}` }, { status: 404 });
+    }
+    if (chat.actorId !== actorId) {
+      return NextResponse.json(
+        { error: `Chat ${chatId} is not associated with actor ${actorId}` },
+        { status: 400 }
       );
     }
 
