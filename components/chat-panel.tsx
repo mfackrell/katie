@@ -14,6 +14,7 @@ import {
 } from "react";
 import type { FileReference } from "@/lib/providers/types";
 import type { Message } from "@/lib/types/chat";
+import { canSubmitChatRequest } from "@/lib/chat/request-guards";
 
 type ProviderName = "openai" | "google" | "grok" | "anthropic";
 
@@ -60,8 +61,14 @@ export function ChatPanel({ actorId, chatId }: ChatPanelProps) {
     null,
   );
 
+  const hasValidChatSelection = useMemo(
+    () => canSubmitChatRequest(actorId, chatId),
+    [actorId, chatId],
+  );
+
   const canSend = useMemo(
     () =>
+      hasValidChatSelection &&
       (input.trim().length > 0 ||
         selectedImages.length > 0 ||
         selectedFiles.length > 0 ||
@@ -75,6 +82,7 @@ export function ChatPanel({ actorId, chatId }: ChatPanelProps) {
       selectedImages.length,
       uploadingFiles,
       fileReferences.length,
+      hasValidChatSelection,
     ],
   );
 
@@ -223,6 +231,12 @@ export function ChatPanel({ actorId, chatId }: ChatPanelProps) {
 
   async function onSubmit(event: FormEvent) {
     event.preventDefault();
+    if (!hasValidChatSelection) {
+      setStatusMessage(
+        "Select an actor and chat before sending a message.",
+      );
+      return;
+    }
     if (!canSend) {
       return;
     }
@@ -822,6 +836,11 @@ export function ChatPanel({ actorId, chatId }: ChatPanelProps) {
         <p className="sr-only" role="status" aria-live="polite">
           {statusMessage}
         </p>
+        {!hasValidChatSelection ? (
+          <p className="mb-3 rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-100">
+            Select an actor and chat to enable sending.
+          </p>
+        ) : null}
 
         {selectedImages.length > 0 ? (
           <div className="mb-4 flex flex-wrap gap-3">

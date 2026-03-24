@@ -8,7 +8,7 @@
     "start": "node --disable-warning=DEP0169 ./node_modules/next/dist/bin/next start",
     "lint": "next lint",
     "typecheck": "tsc --noEmit",
-    "test": "node --test tests/url-api.test.mjs && rm -rf .test-dist && (tsc -p tsconfig.tests.json || true) && mkdir -p .test-dist/node_modules && ln -sfn .. .test-dist/node_modules/@ && test -f .test-dist/tests/google-routing.test.js && node --test .test-dist/tests/google-routing.test.js",
+    "test": "node --test tests/url-api.test.mjs && rm -rf .test-dist && (tsc -p tsconfig.tests.json || true) && mkdir -p .test-dist/node_modules && ln -sfn .. .test-dist/node_modules/@ && test -f .test-dist/tests/google-routing.test.js && node --test .test-dist/tests/google-routing.test.js .test-dist/tests/blob-store.test.js .test-dist/tests/chat-panel-guard.test.js",
     "check:url": "node scripts/check-no-legacy-url.mjs"
   },
   "dependencies": {

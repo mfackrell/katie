@@ -11,16 +11,7 @@ const ACTOR_REGISTRY_PATH = "actors/registry.json";
 const ACTOR_DELETED_INDEX_PATH = "actors/deleted-index.json";
 const CHAT_INDEX_PATH = "chats/index.json";
 const CHAT_REGISTRY_PATH = "chats/registry.json";
-const BLOB_PATH_MAP_PATH = "_meta/blob-path-map.json";
 const BLOB_API_BASE_URL = "https://blob.vercel-storage.com";
-const OPTIONAL_BOOTSTRAP_PATHS = new Set<string>([
-  ACTOR_REGISTRY_PATH,
-  ACTOR_INDEX_PATH,
-  ACTOR_DELETED_INDEX_PATH,
-  CHAT_REGISTRY_PATH,
-  CHAT_INDEX_PATH,
-  BLOB_PATH_MAP_PATH,
-]);
 
 const base = process.env.BLOB_BASE_URL ?? process.env.BLOB_URL;
 const writeToken = process.env.BLOB_READ_WRITE_TOKEN ?? process.env.BLOB_WRITE_TOKEN;
@@ -83,19 +74,11 @@ function resolveBlobPath(baseUrl: string, path: string): string {
   return `${normalizedBase}/${normalizedPath}`;
 }
 
-function parseBlobNamespace(urlOrBase: string): {
-  raw: string;
-  host: string;
-  normalizedPath: string;
-  namespace: string;
-} | null {
+function parseBlobNamespace(urlOrBase: string): { namespace: string } | null {
   try {
     const parsed = new URL(urlOrBase);
     const normalizedPath = parsed.pathname.replace(/\/+$/, "");
     return {
-      raw: urlOrBase,
-      host: parsed.host,
-      normalizedPath,
       namespace: `${parsed.host}${normalizedPath}`,
     };
   } catch {
@@ -134,8 +117,6 @@ async function blobFetchJson<T>(url: string): Promise<T | null> {
   return (await response.json()) as T;
 }
 
-let blobPathMapCache: Record<string, string> | null = null;
-
 function logPersistenceDebug(message: string, meta?: Record<string, unknown>): void {
   if (meta) {
     console.info(`[BlobStore] ${message}`, meta);
@@ -144,73 +125,9 @@ function logPersistenceDebug(message: string, meta?: Record<string, unknown>): v
   console.info(`[BlobStore] ${message}`);
 }
 
-async function getBlobPathMap(forceRefresh = false): Promise<Record<string, string>> {
-  if (!forceRefresh && blobPathMapCache) {
-    return blobPathMapCache;
-  }
-
-  const baseUrl = getBlobBaseUrl();
-  if (!baseUrl) {
-    blobPathMapCache = {};
-    return blobPathMapCache;
-  }
-
-  const pathMap = await blobFetchJson<Record<string, string>>(resolveBlobPath(baseUrl, BLOB_PATH_MAP_PATH));
-  blobPathMapCache = pathMap ?? {};
-  const mismatchedNamespaces = Object.entries(blobPathMapCache)
-    .filter(([, mappedUrl]) => !isUrlInReadNamespace(mappedUrl, baseUrl))
-    .slice(0, 5)
-    .map(([path, mappedUrl]) => ({ path, mappedUrl }));
-  logPersistenceDebug("Loaded blob path-map.", {
-    source: forceRefresh ? "refreshed" : "cached-or-remote",
-    entries: Object.keys(blobPathMapCache).length,
-    readNamespace: parseBlobNamespace(baseUrl)?.namespace ?? "unparseable",
-    mismatchedNamespaceEntries: mismatchedNamespaces.length,
-    mismatchedNamespaceExamples: mismatchedNamespaces,
-  });
-  if (mismatchedNamespaces.length > 0) {
-    console.error("[BlobStore] Blob path-map contains entries outside the configured read namespace.", {
-      readBaseUrl: baseUrl,
-      readNamespace: parseBlobNamespace(baseUrl)?.namespace ?? "unparseable",
-      mismatchedNamespaceExamples: mismatchedNamespaces,
-    });
-  }
-  return blobPathMapCache;
-}
-
-async function persistBlobPathMap(pathMap: Record<string, string>, token: string): Promise<void> {
-  const response = await fetch(
-    `${BLOB_API_BASE_URL}/${encodeURI(BLOB_PATH_MAP_PATH)}?addRandomSuffix=false&allowOverwrite=true`,
-    {
-      method: "PUT",
-      headers: {
-        Authorization: `Bearer ${token}`,
-        "Content-Type": "application/json",
-        "x-content-type": "application/json",
-      },
-      body: JSON.stringify(pathMap),
-    }
-  );
-
-  if (!response.ok) {
-    throw new PersistenceError(
-      `Failed to PUT ${BLOB_PATH_MAP_PATH}: ${response.status} ${response.statusText}`
-    );
-  }
-
-  logPersistenceDebug("Persisted blob path-map.", {
-    entries: Object.keys(pathMap).length,
-  });
-
-  await verifyDurableReadAfterWrite(BLOB_PATH_MAP_PATH, {
-    reason: "persist-path-map",
-    expectedPathMapEntryCount: Object.keys(pathMap).length,
-  });
-}
-
 async function verifyDurableReadAfterWrite(
   path: string,
-  options?: { reason?: string; expectedBlobUrl?: string; expectedPathMapEntryCount?: number }
+  options?: { reason?: string }
 ): Promise<void> {
   if (getPersistenceMode() !== "durable") {
     return;
@@ -223,17 +140,7 @@ async function verifyDurableReadAfterWrite(
 
   for (let attempt = 0; attempt < retries; attempt += 1) {
     const directUrl = resolveBlobPath(baseUrl, path);
-    const directRead = await blobFetchJson<unknown>(directUrl);
-
-    if (directRead !== null) {
-      verificationSucceeded = true;
-      break;
-    }
-
-    const pathMap = await getBlobPathMap(true);
-    const mappedUrl = options?.expectedBlobUrl ?? pathMap[path];
-    const mappedRead = mappedUrl ? await blobFetchJson<unknown>(mappedUrl) : null;
-    if (mappedRead !== null) {
+    if ((await blobFetchJson<unknown>(directUrl)) !== null) {
       verificationSucceeded = true;
       break;
     }
@@ -243,28 +150,10 @@ async function verifyDurableReadAfterWrite(
     }
   }
 
-  if (
-    verificationSucceeded &&
-    path === BLOB_PATH_MAP_PATH &&
-    typeof options?.expectedPathMapEntryCount === "number"
-  ) {
-    const refreshedPathMap = await getBlobPathMap(true);
-    if (Object.keys(refreshedPathMap).length < options.expectedPathMapEntryCount) {
-      verificationSucceeded = false;
-    }
-  }
-
   if (!verificationSucceeded) {
     const message =
       `Durable write verification warning for "${path}": write succeeded but immediate durable read-back was not consistently visible. ` +
       "Treating as eventual-consistency/read-lag and continuing.";
-    if (path === BLOB_PATH_MAP_PATH) {
-      console.warn(`[BlobStore] ${message}`, {
-        reason: options?.reason ?? "unspecified",
-        expectedPathMapEntryCount: options?.expectedPathMapEntryCount,
-      });
-      return;
-    }
     console.warn(`[BlobStore] ${message}`, {
       reason: options?.reason ?? "unspecified",
     });
@@ -397,72 +286,11 @@ async function blobGet<T>(path: string): Promise<T | null> {
   if (!baseUrl) {
     return null;
   }
-  const directValue = await blobFetchJson<T>(resolveBlobPath(baseUrl, path));
-  if (directValue !== null) {
+  const value = await blobFetchJson<T>(resolveBlobPath(baseUrl, path));
+  if (value !== null) {
     logPersistenceDebug("Read durable blob by direct path.", { path });
-    return directValue;
   }
-
-  if (path === BLOB_PATH_MAP_PATH) {
-    return null;
-  }
-
-  const pathMap = await getBlobPathMap();
-  const mappedUrl = pathMap[path];
-  if (!mappedUrl) {
-    const logMethod = OPTIONAL_BOOTSTRAP_PATHS.has(path) ? console.info : console.warn;
-    logMethod("[BlobStore] Durable blob path not found (direct/path-map miss).", {
-      path,
-      optionalBootstrapFile: OPTIONAL_BOOTSTRAP_PATHS.has(path),
-    });
-    const refreshedPathMap = await getBlobPathMap(true);
-    const refreshedMappedUrl = refreshedPathMap[path];
-    if (!refreshedMappedUrl) {
-      if (OPTIONAL_BOOTSTRAP_PATHS.has(path)) {
-        logPersistenceDebug("Optional bootstrap file is not present yet; treating as empty state.", { path });
-      }
-      return null;
-    }
-
-    const refreshedMappedValue = await blobFetchJson<T>(refreshedMappedUrl);
-    if (refreshedMappedValue !== null) {
-      logPersistenceDebug("Read durable blob by refreshed path-map URL.", { path, mappedUrl: refreshedMappedUrl });
-    }
-    return refreshedMappedValue;
-  }
-
-  const mappedValue = await blobFetchJson<T>(mappedUrl);
-  if (mappedValue !== null) {
-    logPersistenceDebug("Read durable blob by path-map URL.", { path, mappedUrl });
-    return mappedValue;
-  }
-
-  if (!isUrlInReadNamespace(mappedUrl, baseUrl)) {
-    throw new PersistenceError(`Durable persistence namespace mismatch for "${path}" via blob path-map.`);
-  }
-
-  const refreshedPathMap = await getBlobPathMap(true);
-  const refreshedMappedUrl = refreshedPathMap[path];
-  if (refreshedMappedUrl && !isUrlInReadNamespace(refreshedMappedUrl, baseUrl)) {
-    throw new PersistenceError(`Durable persistence namespace mismatch for "${path}" via refreshed blob path-map.`);
-  }
-
-  if (refreshedMappedUrl && refreshedMappedUrl !== mappedUrl) {
-    logPersistenceDebug("Path-map entry changed after refresh.", {
-      path,
-      previousMappedUrl: mappedUrl,
-      refreshedMappedUrl,
-    });
-  }
-  if (!refreshedMappedUrl) {
-    return null;
-  }
-
-  const refreshedMappedValue = await blobFetchJson<T>(refreshedMappedUrl);
-  if (refreshedMappedValue !== null) {
-    logPersistenceDebug("Read durable blob by refreshed path-map URL.", { path, mappedUrl: refreshedMappedUrl });
-  }
-  return refreshedMappedValue;
+  return value;
 }
 
 async function blobPut(path: string, payload: unknown): Promise<void> {
@@ -489,24 +317,8 @@ async function blobPut(path: string, payload: unknown): Promise<void> {
     });
   }
 
-  if (path === BLOB_PATH_MAP_PATH) {
-    await verifyDurableReadAfterWrite(path, {
-      reason: "blob-put-direct",
-      expectedBlobUrl: blobUrl,
-    });
-    return;
-  }
-
-  const pathMap = await getBlobPathMap();
-  if (pathMap[path] !== blobUrl) {
-    const nextPathMap = { ...pathMap, [path]: blobUrl };
-    blobPathMapCache = nextPathMap;
-    await persistBlobPathMap(nextPathMap, writeConfig.token);
-  }
-
   await verifyDurableReadAfterWrite(path, {
-    reason: "blob-put-with-path-map",
-    expectedBlobUrl: blobUrl,
+    reason: "blob-put-direct",
   });
 }
 
@@ -519,17 +331,8 @@ async function blobDelete(path: string): Promise<void> {
     return;
   }
 
-  const pathMap = await getBlobPathMap();
-  const deleteTarget = pathMap[path] ?? path;
-  await blobDeleteByPathOrUrl(deleteTarget, writeConfig.token);
-  logPersistenceDebug("Deleted durable blob.", { path, deleteTarget });
-
-  if (pathMap[path]) {
-    const nextPathMap = { ...pathMap };
-    delete nextPathMap[path];
-    blobPathMapCache = nextPathMap;
-    await persistBlobPathMap(nextPathMap, writeConfig.token);
-  }
+  await blobDeleteByPathOrUrl(path, writeConfig.token);
+  logPersistenceDebug("Deleted durable blob.", { path });
 }
 
 function sortChats(chats: ChatThread[]): ChatThread[] {
@@ -566,26 +369,67 @@ async function blobGetWithRetry<T>(path: string, retries = 3, baseDelayMs = 250)
   return null;
 }
 
+let metadataWriteQueue: Promise<void> = Promise.resolve();
+
+function withMetadataWriteLock<T>(operation: () => Promise<T>): Promise<T> {
+  const nextOperation = metadataWriteQueue.then(operation, operation);
+  metadataWriteQueue = nextOperation.then(
+    () => undefined,
+    () => undefined
+  );
+  return nextOperation;
+}
+
+let actorRegistryCache: Actor[] | null = null;
+let chatRegistryCache: ChatThread[] | null = null;
+let deletedActorIdsCache: string[] | null = null;
+
 async function readActorRegistry(): Promise<Actor[]> {
-  return (await blobGetWithRetry<Actor[]>(ACTOR_REGISTRY_PATH)) ?? [];
+  const remoteRegistry = await blobGetWithRetry<Actor[]>(ACTOR_REGISTRY_PATH);
+  if (remoteRegistry !== null) {
+    if (remoteRegistry.length === 0 && actorRegistryCache && actorRegistryCache.length > 0) {
+      return actorRegistryCache;
+    }
+    actorRegistryCache = remoteRegistry;
+    return remoteRegistry;
+  }
+  return actorRegistryCache ?? [];
 }
 
 async function writeActorRegistry(actors: Actor[]): Promise<void> {
   await blobPut(ACTOR_REGISTRY_PATH, actors);
+  actorRegistryCache = actors;
 }
 
 async function readChatRegistry(): Promise<ChatThread[]> {
-  return (await blobGetWithRetry<ChatThread[]>(CHAT_REGISTRY_PATH)) ?? [];
+  const remoteRegistry = await blobGetWithRetry<ChatThread[]>(CHAT_REGISTRY_PATH);
+  if (remoteRegistry !== null) {
+    if (remoteRegistry.length === 0 && chatRegistryCache && chatRegistryCache.length > 0) {
+      return chatRegistryCache;
+    }
+    chatRegistryCache = remoteRegistry;
+    return remoteRegistry;
+  }
+  return chatRegistryCache ?? [];
 }
 
 async function writeChatRegistry(chats: ChatThread[]): Promise<void> {
-  await blobPut(CHAT_REGISTRY_PATH, sortChats(chats));
+  const sorted = sortChats(chats);
+  await blobPut(CHAT_REGISTRY_PATH, sorted);
+  chatRegistryCache = sorted;
 }
 
 async function getDeletedActorIds(): Promise<string[]> {
-  const deletedFromBlob = (await blobGet<string[]>(ACTOR_DELETED_INDEX_PATH)) ?? [];
+  const deletedFromBlob = await blobGetWithRetry<string[]>(ACTOR_DELETED_INDEX_PATH);
+  if (deletedFromBlob !== null) {
+    if (deletedFromBlob.length === 0 && deletedActorIdsCache && deletedActorIdsCache.length > 0) {
+      return [...new Set([...deletedActorIds, ...deletedActorIdsCache])];
+    }
+    deletedActorIdsCache = deletedFromBlob;
+  }
+  const effectiveDeleted = deletedActorIdsCache ?? [];
 
-  deletedFromBlob.forEach((actorId) => {
+  effectiveDeleted.forEach((actorId) => {
     deletedActorIds.add(actorId);
   });
 
@@ -625,13 +469,8 @@ export async function listActors(): Promise<Actor[]> {
   const deletedIds = await getDeletedActorIds();
   const deleted = new Set(deletedIds);
   const registryActors = await readActorRegistry();
-  const blobActorIds = (await blobGetWithRetry<string[]>(ACTOR_INDEX_PATH)) ?? [];
-  const indexedActors = (
-    await Promise.all(blobActorIds.map(async (actorId) => blobGetWithRetry<Actor>(`actors/${actorId}.json`)))
-  ).filter((actor): actor is Actor => Boolean(actor));
-
   const deduped = new Map<string, Actor>();
-  [...registryActors, ...indexedActors].forEach((actor) => {
+  registryActors.forEach((actor) => {
     if (!deleted.has(actor.id)) {
       deduped.set(actor.id, actor);
     }
@@ -649,7 +488,6 @@ export async function listActors(): Promise<Actor[]> {
   logPersistenceDebug("Listed actors from durable state.", {
     deletedCount: deleted.size,
     registryCount: registryActors.length,
-    indexCount: blobActorIds.length,
     durableCount: durableActors.length,
   });
   durableActors.forEach((actor) => {
@@ -686,15 +524,10 @@ export async function getChatById(chatId: string): Promise<ChatThread | null> {
 
 export async function listChats(): Promise<ChatThread[]> {
   const registryChats = await readChatRegistry();
-  const blobChatIds = (await blobGetWithRetry<string[]>(CHAT_INDEX_PATH)) ?? [];
-  const indexedChats = (
-    await Promise.all(blobChatIds.map(async (chatId) => blobGetWithRetry<ChatThread>(`chats/${chatId}.json`)))
-  ).filter((chat): chat is ChatThread => Boolean(chat));
-
   const actors = await listActors();
   const validActorIds = new Set(actors.map((actor) => actor.id));
   const deduped = new Map<string, ChatThread>();
-  [...registryChats, ...indexedChats].forEach((chat) => {
+  registryChats.forEach((chat) => {
     if (validActorIds.has(chat.actorId)) {
       deduped.set(chat.id, chat);
     }
@@ -714,7 +547,6 @@ export async function listChats(): Promise<ChatThread[]> {
   });
   logPersistenceDebug("Listed chats from durable state.", {
     registryCount: registryChats.length,
-    indexCount: blobChatIds.length,
     durableCount: durableChats.length,
     actorCount: validActorIds.size,
   });
@@ -735,25 +567,19 @@ export async function saveChat(chat: ChatThread): Promise<ChatThread> {
     updatedAt: now,
   };
 
-  const [currentIndex, registryChats] = await Promise.all([
-    blobGetWithRetry<string[]>(CHAT_INDEX_PATH).then((value) => value ?? []),
-    readChatRegistry(),
-  ]);
+  await withMetadataWriteLock(async () => {
+    const registryChats = await readChatRegistry();
+    const nextRegistry = [
+      nextChat,
+      ...registryChats.filter((currentChat) => currentChat.id !== nextChat.id),
+    ];
 
-  const nextRegistry = [
-    nextChat,
-    ...registryChats.filter((currentChat) => currentChat.id !== nextChat.id),
-  ];
-
-  await Promise.all([
-    blobPut(`chats/${nextChat.id}.json`, nextChat),
-    currentIndex.includes(nextChat.id) ? Promise.resolve() : blobPut(CHAT_INDEX_PATH, [...currentIndex, nextChat.id]),
-    writeChatRegistry(nextRegistry),
-  ]);
+    await blobPut(`chats/${nextChat.id}.json`, nextChat);
+    await writeChatRegistry(nextRegistry);
+    await blobPut(CHAT_INDEX_PATH, nextRegistry.map((item) => item.id));
+  });
   logPersistenceDebug("Saved chat to durable state.", {
     chatId: nextChat.id,
-    indexHadChat: currentIndex.includes(nextChat.id),
-    registrySize: nextRegistry.length,
   });
 
   memoryChats.set(nextChat.id, nextChat);
@@ -762,20 +588,16 @@ export async function saveChat(chat: ChatThread): Promise<ChatThread> {
 }
 
 export async function deleteChat(chatId: string): Promise<void> {
-  const [currentIndex, registryChats] = await Promise.all([
-    blobGetWithRetry<string[]>(CHAT_INDEX_PATH).then((value) => value ?? []),
-    readChatRegistry(),
-  ]);
-  const nextIndex = currentIndex.filter((currentChatId) => currentChatId !== chatId);
-  const nextRegistry = registryChats.filter((chat) => chat.id !== chatId);
+  await withMetadataWriteLock(async () => {
+    const registryChats = await readChatRegistry();
+    const nextRegistry = registryChats.filter((chat) => chat.id !== chatId);
+    await writeChatRegistry(nextRegistry);
+    await blobPut(CHAT_INDEX_PATH, nextRegistry.map((item) => item.id));
 
-  await Promise.all([
-    blobPut(CHAT_INDEX_PATH, nextIndex),
-    writeChatRegistry(nextRegistry),
-    blobDelete(`chats/${chatId}.json`),
-    blobDelete(`messages/${chatId}.json`),
-    blobDelete(`summaries/${chatId}.json`),
-  ]);
+    await blobDelete(`chats/${chatId}.json`);
+    await blobDelete(`messages/${chatId}.json`);
+    await blobDelete(`summaries/${chatId}.json`);
+  });
 
   memoryChats.delete(chatId);
   memoryMessages.delete(chatId);
@@ -843,27 +665,22 @@ export async function setConversationSummary(chatId: string, summary: string): P
 
 export async function saveActor(actor: Actor): Promise<void> {
   const actorPath = `actors/${actor.id}.json`;
+  await withMetadataWriteLock(async () => {
+    const deletedIndex = await getDeletedActorIds();
+    const registryActors = await readActorRegistry();
+    const nextDeletedIndex = deletedIndex.filter((deletedId) => deletedId !== actor.id);
+    const nextRegistry = [...registryActors.filter((currentActor) => currentActor.id !== actor.id), actor];
 
-  const [deletedIndex, currentIndex, registryActors] = await Promise.all([
-    blobGetWithRetry<string[]>(ACTOR_DELETED_INDEX_PATH).then((value) => value ?? []),
-    blobGetWithRetry<string[]>(ACTOR_INDEX_PATH).then((value) => value ?? []),
-    readActorRegistry(),
-  ]);
-
-  const nextDeletedIndex = deletedIndex.filter((deletedId) => deletedId !== actor.id);
-  const nextRegistry = [...registryActors.filter((currentActor) => currentActor.id !== actor.id), actor];
-
-  await Promise.all([
-    deletedIndex.includes(actor.id) ? blobPut(ACTOR_DELETED_INDEX_PATH, nextDeletedIndex) : Promise.resolve(),
-    blobPut(actorPath, actor),
-    currentIndex.includes(actor.id) ? Promise.resolve() : blobPut(ACTOR_INDEX_PATH, [...currentIndex, actor.id]),
-    writeActorRegistry(nextRegistry),
-  ]);
+    await blobPut(actorPath, actor);
+    await writeActorRegistry(nextRegistry);
+    await blobPut(ACTOR_INDEX_PATH, nextRegistry.map((item) => item.id));
+    if (deletedIndex.includes(actor.id)) {
+      await blobPut(ACTOR_DELETED_INDEX_PATH, nextDeletedIndex);
+      deletedActorIdsCache = nextDeletedIndex;
+    }
+  });
   logPersistenceDebug("Saved actor to durable state.", {
     actorId: actor.id,
-    indexHadActor: currentIndex.includes(actor.id),
-    registrySize: nextRegistry.length,
-    removedFromDeletedIndex: deletedIndex.includes(actor.id),
   });
 
   deletedActorIds.delete(actor.id);
@@ -875,32 +692,45 @@ export async function deleteActorsById(actorIds: string[]): Promise<void> {
     return;
   }
 
-  const [currentIndex, registryActors] = await Promise.all([
-    blobGetWithRetry<string[]>(ACTOR_INDEX_PATH).then((value) => value ?? []),
-    readActorRegistry(),
-  ]);
-  const nextIndex = currentIndex.filter((actorId) => !actorIds.includes(actorId));
-  const nextRegistry = registryActors.filter((actor) => !actorIds.includes(actor.id));
+  await withMetadataWriteLock(async () => {
+    const registryActors = await readActorRegistry();
+    const chatRegistry = await readChatRegistry();
+    const deletedIndex = await getDeletedActorIds();
+    const nextRegistry = registryActors.filter((actor) => !actorIds.includes(actor.id));
+    const nextDeleted = [...new Set([...deletedIndex, ...actorIds])];
+    const chatIdsToDelete = chatRegistry
+      .filter((chat) => actorIds.includes(chat.actorId))
+      .map((chat) => chat.id);
+    const nextChatRegistry = chatRegistry.filter((chat) => !chatIdsToDelete.includes(chat.id));
 
-  const chatsToDelete = (await listChats()).filter((chat) => actorIds.includes(chat.actorId));
+    await writeActorRegistry(nextRegistry);
+    await blobPut(ACTOR_INDEX_PATH, nextRegistry.map((item) => item.id));
+    await blobPut(ACTOR_DELETED_INDEX_PATH, nextDeleted);
+    deletedActorIdsCache = nextDeleted;
+    await writeChatRegistry(nextChatRegistry);
+    await blobPut(CHAT_INDEX_PATH, nextChatRegistry.map((item) => item.id));
 
-  await Promise.all([
-    blobPut(ACTOR_INDEX_PATH, nextIndex),
-    writeActorRegistry(nextRegistry),
-    ...actorIds.map(async (actorId) => blobDelete(`actors/${actorId}.json`)),
-    ...chatsToDelete.map(async (chat) => deleteChat(chat.id)),
-  ]);
-  logPersistenceDebug("Deleted actors from durable state.", {
-    deletedCount: actorIds.length,
-    remainingIndexCount: nextIndex.length,
-    remainingRegistryCount: nextRegistry.length,
-    deletedChatsCount: chatsToDelete.length,
+    for (const actorId of actorIds) {
+      await blobDelete(`actors/${actorId}.json`);
+    }
+    for (const chatId of chatIdsToDelete) {
+      await blobDelete(`chats/${chatId}.json`);
+      await blobDelete(`messages/${chatId}.json`);
+      await blobDelete(`summaries/${chatId}.json`);
+      memoryChats.delete(chatId);
+      memoryMessages.delete(chatId);
+      memorySummaries.delete(chatId);
+    }
+
+    logPersistenceDebug("Deleted actors from durable state.", {
+      deletedCount: actorIds.length,
+      remainingRegistryCount: nextRegistry.length,
+      deletedChatsCount: chatIdsToDelete.length,
+    });
   });
 
   actorIds.forEach((actorId) => {
     deletedActorIds.add(actorId);
     memoryActors.delete(actorId);
   });
-
-  await blobPut(ACTOR_DELETED_INDEX_PATH, [...deletedActorIds]);
 }
