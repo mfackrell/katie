@@ -13,10 +13,13 @@ const CHAT_INDEX_PATH = "chats/index.json";
 const CHAT_REGISTRY_PATH = "chats/registry.json";
 const BLOB_PATH_MAP_PATH = "_meta/blob-path-map.json";
 const BLOB_API_BASE_URL = "https://blob.vercel-storage.com";
-const CRITICAL_DURABLE_BOOTSTRAP_PATHS = new Set<string>([
+const OPTIONAL_BOOTSTRAP_PATHS = new Set<string>([
   ACTOR_REGISTRY_PATH,
-  CHAT_REGISTRY_PATH,
+  ACTOR_INDEX_PATH,
   ACTOR_DELETED_INDEX_PATH,
+  CHAT_REGISTRY_PATH,
+  CHAT_INDEX_PATH,
+  BLOB_PATH_MAP_PATH,
 ]);
 
 const base = process.env.BLOB_BASE_URL ?? process.env.BLOB_URL;
@@ -165,6 +168,13 @@ async function getBlobPathMap(forceRefresh = false): Promise<Record<string, stri
     mismatchedNamespaceEntries: mismatchedNamespaces.length,
     mismatchedNamespaceExamples: mismatchedNamespaces,
   });
+  if (mismatchedNamespaces.length > 0) {
+    console.error("[BlobStore] Blob path-map contains entries outside the configured read namespace.", {
+      readBaseUrl: baseUrl,
+      readNamespace: parseBlobNamespace(baseUrl)?.namespace ?? "unparseable",
+      mismatchedNamespaceExamples: mismatchedNamespaces,
+    });
+  }
   return blobPathMapCache;
 }
 
@@ -190,6 +200,49 @@ async function persistBlobPathMap(pathMap: Record<string, string>, token: string
 
   logPersistenceDebug("Persisted blob path-map.", {
     entries: Object.keys(pathMap).length,
+  });
+
+  await verifyDurableReadAfterWrite(BLOB_PATH_MAP_PATH, {
+    reason: "persist-path-map",
+    expectedPathMapEntryCount: Object.keys(pathMap).length,
+  });
+}
+
+async function verifyDurableReadAfterWrite(
+  path: string,
+  options?: { reason?: string; expectedBlobUrl?: string; expectedPathMapEntryCount?: number }
+): Promise<void> {
+  if (getPersistenceMode() !== "durable") {
+    return;
+  }
+
+  const baseUrl = requireBlobBaseUrl();
+  const directUrl = resolveBlobPath(baseUrl, path);
+  const directRead = await blobFetchJson<unknown>(directUrl);
+
+  if (directRead === null) {
+    const pathMap = await getBlobPathMap(true);
+    const mappedUrl = options?.expectedBlobUrl ?? pathMap[path];
+    const mappedRead = mappedUrl ? await blobFetchJson<unknown>(mappedUrl) : null;
+    if (mappedRead === null) {
+      throw new PersistenceError(
+        `Durable write verification failed for "${path}": write succeeded but read-back from configured durable store returned missing content.`
+      );
+    }
+  }
+
+  if (path === BLOB_PATH_MAP_PATH && typeof options?.expectedPathMapEntryCount === "number") {
+    const refreshedPathMap = await getBlobPathMap(true);
+    if (Object.keys(refreshedPathMap).length < options.expectedPathMapEntryCount) {
+      throw new PersistenceError(
+        `Durable write verification failed for "${path}": refreshed path-map did not include expected entries.`
+      );
+    }
+  }
+
+  logPersistenceDebug("Verified durable read after write.", {
+    path,
+    reason: options?.reason ?? "unspecified",
   });
 }
 
@@ -326,18 +379,16 @@ async function blobGet<T>(path: string): Promise<T | null> {
   const pathMap = await getBlobPathMap();
   const mappedUrl = pathMap[path];
   if (!mappedUrl) {
-    logPersistenceDebug("Durable blob path not found (direct/path-map miss).", { path });
+    const logMethod = OPTIONAL_BOOTSTRAP_PATHS.has(path) ? console.info : console.warn;
+    logMethod("[BlobStore] Durable blob path not found (direct/path-map miss).", {
+      path,
+      optionalBootstrapFile: OPTIONAL_BOOTSTRAP_PATHS.has(path),
+    });
     const refreshedPathMap = await getBlobPathMap(true);
     const refreshedMappedUrl = refreshedPathMap[path];
     if (!refreshedMappedUrl) {
-      if (
-        getPersistenceMode() === "durable" &&
-        CRITICAL_DURABLE_BOOTSTRAP_PATHS.has(path) &&
-        Object.keys(refreshedPathMap).length === 0
-      ) {
-        throw new PersistenceError(
-          `Durable persistence is configured, but critical bootstrap file "${path}" is missing and blob path-map is empty at read base "${baseUrl}". This usually means blob read base and blob write namespace are misaligned.`
-        );
+      if (OPTIONAL_BOOTSTRAP_PATHS.has(path)) {
+        logPersistenceDebug("Optional bootstrap file is not present yet; treating as empty state.", { path });
       }
       return null;
     }
@@ -356,17 +407,22 @@ async function blobGet<T>(path: string): Promise<T | null> {
   }
 
   if (!isUrlInReadNamespace(mappedUrl, baseUrl)) {
-    console.error("[BlobStore] Direct-path read failed and path-map points to a different blob namespace.", {
-      path,
-      configuredReadBaseUrl: baseUrl,
-      configuredReadNamespace: parseBlobNamespace(baseUrl)?.namespace ?? "unparseable",
-      mappedUrl,
-      mappedNamespace: parseBlobNamespace(mappedUrl)?.namespace ?? "unparseable",
-    });
+    throw new PersistenceError(`Durable persistence namespace mismatch for "${path}" via blob path-map.`);
   }
 
   const refreshedPathMap = await getBlobPathMap(true);
   const refreshedMappedUrl = refreshedPathMap[path];
+  if (refreshedMappedUrl && !isUrlInReadNamespace(refreshedMappedUrl, baseUrl)) {
+    throw new PersistenceError(`Durable persistence namespace mismatch for "${path}" via refreshed blob path-map.`);
+  }
+
+  if (refreshedMappedUrl && refreshedMappedUrl !== mappedUrl) {
+    logPersistenceDebug("Path-map entry changed after refresh.", {
+      path,
+      previousMappedUrl: mappedUrl,
+      refreshedMappedUrl,
+    });
+  }
   if (!refreshedMappedUrl) {
     return null;
   }
@@ -403,6 +459,10 @@ async function blobPut(path: string, payload: unknown): Promise<void> {
   }
 
   if (path === BLOB_PATH_MAP_PATH) {
+    await verifyDurableReadAfterWrite(path, {
+      reason: "blob-put-direct",
+      expectedBlobUrl: blobUrl,
+    });
     return;
   }
 
@@ -412,6 +472,11 @@ async function blobPut(path: string, payload: unknown): Promise<void> {
     blobPathMapCache = nextPathMap;
     await persistBlobPathMap(nextPathMap, writeConfig.token);
   }
+
+  await verifyDurableReadAfterWrite(path, {
+    reason: "blob-put-with-path-map",
+    expectedBlobUrl: blobUrl,
+  });
 }
 
 async function blobDelete(path: string): Promise<void> {
