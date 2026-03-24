@@ -14,6 +14,16 @@ export type RequestIntent =
   | "vision-analysis"
   | "multimodal-reasoning"
   | "image-generation";
+export type ScoreAdjustment = { label: string; delta: number };
+export type CandidateScoreBreakdown = {
+  providerName: ProviderName;
+  modelId: string;
+  baseScore: number | null;
+  adjustments: ScoreAdjustment[];
+  finalScore: number;
+  excluded: boolean;
+  exclusionReason: string | null;
+};
 
 const IMAGE_GENERATION_PROMPT =
   /\b(generate|create|make|design|render)\b[\s\S]{0,80}\b(image|photo|picture|illustration|art|hero image|logo|banner|visual)\b/i;
@@ -229,6 +239,122 @@ export function scoreModelsForIntent(
         .filter((candidate) => candidate.score >= 0)
     )
     .sort((left, right) => right.score - left.score);
+}
+
+export function scoreModelCandidateWithBreakdown(
+  providerName: ProviderName,
+  modelId: string,
+  intent: RequestIntent
+): CandidateScoreBreakdown {
+  const normalizedModel = modelId.toLowerCase();
+  const adjustments: ScoreAdjustment[] = [];
+
+  const finalize = (baseScore: number | null, finalScore: number, exclusionReason: string | null): CandidateScoreBreakdown => ({
+    providerName,
+    modelId,
+    baseScore,
+    adjustments,
+    finalScore,
+    excluded: finalScore < 0,
+    exclusionReason: exclusionReason ?? (finalScore < 0 ? "score_below_zero" : null)
+  });
+
+  switch (intent) {
+    case "image-generation": {
+      if (!isImageGenerationModel(providerName, modelId)) {
+        return finalize(null, -1, "intent_mismatch:image-generation");
+      }
+      const baseScore = normalizedModel.includes("banana") ? 4 : 2;
+      return finalize(baseScore, baseScore, null);
+    }
+    case "multimodal-reasoning": {
+      if (!modelSupportsIntent(providerName, modelId, intent)) {
+        return finalize(null, -1, "intent_mismatch:multimodal-reasoning");
+      }
+      const baseScore = 1;
+      if (normalizedModel.includes("pro") && normalizedModel.includes("vision")) {
+        adjustments.push({ label: "vision_pro_bonus", delta: 4 });
+      } else if (normalizedModel.includes("pro")) {
+        adjustments.push({ label: "pro_bonus", delta: 3 });
+      } else if (normalizedModel.includes("flash")) {
+        adjustments.push({ label: "flash_bonus", delta: 2 });
+      }
+      const finalScore = baseScore + adjustments.reduce((total, current) => total + current.delta, 0);
+      return finalize(baseScore, finalScore, null);
+    }
+    case "vision-analysis": {
+      if (!modelSupportsIntent(providerName, modelId, intent)) {
+        return finalize(null, -1, "intent_mismatch:vision-analysis");
+      }
+      const baseScore = 1;
+      if (normalizedModel.includes("vision")) {
+        adjustments.push({ label: "vision_bonus", delta: 4 });
+      } else if (normalizedModel.includes("pro")) {
+        adjustments.push({ label: "pro_bonus", delta: 3 });
+      } else if (normalizedModel.includes("flash")) {
+        adjustments.push({ label: "flash_bonus", delta: 2 });
+      }
+      const finalScore = baseScore + adjustments.reduce((total, current) => total + current.delta, 0);
+      return finalize(baseScore, finalScore, null);
+    }
+    case "text": {
+      if (!modelSupportsIntent(providerName, modelId, intent)) {
+        return finalize(null, -1, "intent_mismatch:text");
+      }
+      const baseScore = 10;
+      if (normalizedModel.includes("flash") || normalizedModel.includes("haiku") || normalizedModel.includes("mini")) {
+        adjustments.push({ label: "speed_efficiency_bonus", delta: 8 });
+      }
+      if (normalizedModel.includes("gpt-5.2-unified") || normalizedModel.includes("grok-2-1212")) {
+        adjustments.push({ label: "preferred_general_model_bonus", delta: 6 });
+      }
+      if (normalizedModel.includes("unified") || normalizedModel.includes("grok-2")) {
+        adjustments.push({ label: "general_conversation_bonus", delta: 3 });
+      }
+      if (
+        normalizedModel.includes("opus") ||
+        normalizedModel.includes("o3-pro") ||
+        normalizedModel.includes("codex") ||
+        normalizedModel.includes("architect") ||
+        normalizedModel.includes("reason")
+      ) {
+        adjustments.push({ label: "deep_reasoning_penalty", delta: -8 });
+      }
+      if (normalizedModel.includes("pro") && !normalizedModel.includes("gpt-5.2-unified")) {
+        adjustments.push({ label: "pro_model_penalty", delta: -4 });
+      }
+      const finalScore = baseScore + adjustments.reduce((total, current) => total + current.delta, 0);
+      return finalize(baseScore, finalScore, null);
+    }
+    case "technical-debugging":
+    case "architecture-review":
+    case "code-generation": {
+      if (isImageGenerationModel(providerName, modelId)) {
+        return finalize(null, -1, "image_generation_model_excluded_for_technical_intent");
+      }
+      const baseScore = 10;
+      if (normalizedModel.includes("codex") || normalizedModel.includes("o3-pro")) {
+        adjustments.push({ label: "coding_reasoning_bonus", delta: 8 });
+      }
+      if (normalizedModel.includes("opus") || normalizedModel.includes("sonnet")) {
+        adjustments.push({ label: "architecture_depth_bonus", delta: 6 });
+      }
+      if (normalizedModel.includes("pro")) {
+        adjustments.push({ label: "pro_bonus", delta: 4 });
+      }
+      if (normalizedModel.includes("gpt-5") || normalizedModel.includes("gpt-4.1")) {
+        adjustments.push({ label: "latest_gpt_bonus", delta: 4 });
+      }
+      if (normalizedModel.includes("mini") || normalizedModel.includes("flash") || normalizedModel.includes("haiku")) {
+        adjustments.push({ label: "small_model_penalty", delta: -4 });
+      }
+      if (normalizedModel.includes("pulse")) {
+        adjustments.push({ label: "realtime_model_penalty", delta: -6 });
+      }
+      const finalScore = baseScore + adjustments.reduce((total, current) => total + current.delta, 0);
+      return finalize(baseScore, finalScore, null);
+    }
+  }
 }
 
 export function validateRoutingDecision(
