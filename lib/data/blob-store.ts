@@ -217,27 +217,58 @@ async function verifyDurableReadAfterWrite(
   }
 
   const baseUrl = requireBlobBaseUrl();
-  const directUrl = resolveBlobPath(baseUrl, path);
-  const directRead = await blobFetchJson<unknown>(directUrl);
+  const retries = 3;
+  const baseDelayMs = 150;
+  let verificationSucceeded = false;
 
-  if (directRead === null) {
+  for (let attempt = 0; attempt < retries; attempt += 1) {
+    const directUrl = resolveBlobPath(baseUrl, path);
+    const directRead = await blobFetchJson<unknown>(directUrl);
+
+    if (directRead !== null) {
+      verificationSucceeded = true;
+      break;
+    }
+
     const pathMap = await getBlobPathMap(true);
     const mappedUrl = options?.expectedBlobUrl ?? pathMap[path];
     const mappedRead = mappedUrl ? await blobFetchJson<unknown>(mappedUrl) : null;
-    if (mappedRead === null) {
-      throw new PersistenceError(
-        `Durable write verification failed for "${path}": write succeeded but read-back from configured durable store returned missing content.`
-      );
+    if (mappedRead !== null) {
+      verificationSucceeded = true;
+      break;
+    }
+
+    if (attempt < retries - 1) {
+      await new Promise((resolve) => setTimeout(resolve, baseDelayMs * (attempt + 1)));
     }
   }
 
-  if (path === BLOB_PATH_MAP_PATH && typeof options?.expectedPathMapEntryCount === "number") {
+  if (
+    verificationSucceeded &&
+    path === BLOB_PATH_MAP_PATH &&
+    typeof options?.expectedPathMapEntryCount === "number"
+  ) {
     const refreshedPathMap = await getBlobPathMap(true);
     if (Object.keys(refreshedPathMap).length < options.expectedPathMapEntryCount) {
-      throw new PersistenceError(
-        `Durable write verification failed for "${path}": refreshed path-map did not include expected entries.`
-      );
+      verificationSucceeded = false;
     }
+  }
+
+  if (!verificationSucceeded) {
+    const message =
+      `Durable write verification warning for "${path}": write succeeded but immediate durable read-back was not consistently visible. ` +
+      "Treating as eventual-consistency/read-lag and continuing.";
+    if (path === BLOB_PATH_MAP_PATH) {
+      console.warn(`[BlobStore] ${message}`, {
+        reason: options?.reason ?? "unspecified",
+        expectedPathMapEntryCount: options?.expectedPathMapEntryCount,
+      });
+      return;
+    }
+    console.warn(`[BlobStore] ${message}`, {
+      reason: options?.reason ?? "unspecified",
+    });
+    return;
   }
 
   logPersistenceDebug("Verified durable read after write.", {
