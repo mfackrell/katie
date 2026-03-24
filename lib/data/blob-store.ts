@@ -231,6 +231,10 @@ export async function deleteChat(chatId: string): Promise<void> {
   ]);
 }
 
+export async function deleteChatById(chatId: string): Promise<void> {
+  await deleteChat(chatId);
+}
+
 export async function getMessages(chatId: string): Promise<Message[]> {
   const blobMessages = await blobGet<Message[]>(`messages/${chatId}.json`);
   if (blobMessages) {

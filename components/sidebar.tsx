@@ -13,6 +13,7 @@ interface SidebarProps {
   onOpenCreateActor: () => void;
   onOpenCreateSubActor: (actor: Actor) => void;
   onDeleteActor: (actor: Actor) => void;
+  onDeleteChat: (chat: ChatThread) => void | Promise<void>;
 }
 
 export function Sidebar({
@@ -26,6 +27,7 @@ export function Sidebar({
   onOpenCreateActor,
   onOpenCreateSubActor,
   onDeleteActor,
+  onDeleteChat,
 }: SidebarProps) {
   const sortedActors = [...actors].sort((a, b) => a.name.localeCompare(b.name));
 
@@ -119,21 +121,35 @@ export function Sidebar({
                     {actorChats.map((chat) => {
                       const activeChat = chat.id === activeChatId;
                       return (
-                        <button
+                        <div
                           key={chat.id}
                           className={[
-                            "block w-full rounded-2xl px-3 py-2 text-left text-xs transition",
+                            "flex items-center gap-2 rounded-2xl px-3 py-2 text-xs transition",
                             activeChat
                               ? "border border-white/10 bg-white/[0.08] text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.05)]"
                               : "border border-transparent text-zinc-400 hover:border-white/8 hover:bg-white/[0.04] hover:text-zinc-200",
                           ].join(" ")}
-                          onClick={() => {
-                            onSelectActor(actor.id);
-                            onSelectChat(chat.id);
-                          }}
                         >
-                          <span className="block truncate font-medium">{chat.title}</span>
-                        </button>
+                          <button
+                            className="block flex-1 text-left"
+                            onClick={() => {
+                              onSelectActor(actor.id);
+                              onSelectChat(chat.id);
+                            }}
+                          >
+                            <span className="block truncate font-medium">{chat.title}</span>
+                          </button>
+                          <button
+                            className="rounded-lg border border-red-500/20 bg-red-500/5 px-2 py-1 text-[10px] font-medium text-red-200 transition hover:border-red-400/40 hover:bg-red-500/10 hover:text-white"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              void onDeleteChat(chat);
+                            }}
+                            title={`Delete ${chat.title}`}
+                          >
+                            Delete
+                          </button>
+                        </div>
                       );
                     })}
                   </div>

@@ -54,6 +54,24 @@ function pickActiveChatId(
   return actorChats[0]?.id ?? "";
 }
 
+function pickNextActiveChatAfterDeletion(
+  chats: ChatThread[],
+  deletedChat: ChatThread,
+  actorChatSelections: Record<string, string>,
+): string {
+  const sameActorChatId = pickActiveChatId(chats, deletedChat.actorId, null, actorChatSelections);
+  if (sameActorChatId) {
+    return sameActorChatId;
+  }
+
+  const nextActorId = chats[0]?.actorId ?? "";
+  if (!nextActorId) {
+    return "";
+  }
+
+  return pickActiveChatId(chats, nextActorId, null, actorChatSelections);
+}
+
 export default function HomePage() {
   const [actors, setActors] = useState<Actor[]>([]);
   const [chats, setChats] = useState<ChatThread[]>([]);
@@ -258,6 +276,43 @@ export default function HomePage() {
     setActiveChatId(nextActiveChatId);
   }
 
+  async function deleteChat(chat: ChatThread) {
+    const response = await fetch(`/api/chats?id=${encodeURIComponent(chat.id)}`, {
+      method: "DELETE",
+    });
+
+    const payload = (await response.json()) as { deletedChatId?: string; error?: string };
+
+    if (!response.ok || payload.deletedChatId !== chat.id) {
+      throw new Error(payload.error ?? "Failed to delete chat.");
+    }
+
+    const nextChats = chats.filter((item) => item.id !== chat.id);
+    const nextSelections = Object.fromEntries(
+      Object.entries(actorChatSelections).flatMap(([actorId, chatId]) => {
+        if (chatId !== chat.id) {
+          return [[actorId, chatId]];
+        }
+
+        const nextChatId = pickActiveChatId(nextChats, actorId, null, actorChatSelections);
+        return nextChatId ? [[actorId, nextChatId]] : [];
+      }),
+    );
+    const nextActiveChatId =
+      activeChatId === chat.id
+        ? pickNextActiveChatAfterDeletion(nextChats, chat, nextSelections)
+        : activeChatId;
+    const nextActiveActorId =
+      activeChatId === chat.id && nextActiveChatId
+        ? nextChats.find((item) => item.id === nextActiveChatId)?.actorId ?? activeActorId
+        : activeActorId;
+
+    setChats(nextChats);
+    setActorChatSelections(nextSelections);
+    setActiveActorId(nextActiveActorId);
+    setActiveChatId(nextActiveChatId);
+  }
+
   function handleSelectActor(nextActorId: string) {
     setActiveActorId(nextActorId);
     setActiveChatId((current) =>
@@ -298,6 +353,7 @@ export default function HomePage() {
           onOpenCreateActor={() => setModalState({ type: "primary" })}
           onOpenCreateSubActor={(actor) => setModalState({ type: "sub", parentActor: actor })}
           onDeleteActor={deleteActor}
+          onDeleteChat={deleteChat}
         />
         <ChatPanel actorId={activeActorId} chatId={activeChatId} />
       </div>
