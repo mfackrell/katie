@@ -18,9 +18,13 @@
     "lib/providers/types.ts",
     "lib/types/chat.ts",
     "lib/chat/request-guards.ts",
+    "lib/chat/inflight-guards.ts",
+    "lib/chat/starter-chat.ts",
     "lib/data/blob-store.ts",
     "tests/google-routing.test.ts",
     "tests/blob-store.test.ts",
-    "tests/chat-panel-guard.test.ts"
+    "tests/chat-panel-guard.test.ts",
+    "tests/inflight-guards.test.ts",
+    "tests/starter-chat-idempotency.test.ts"
   ]
 }

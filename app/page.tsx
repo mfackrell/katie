@@ -1,9 +1,10 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { ActorFormModal } from "@/components/actor-form-modal";
 import { ChatPanel } from "@/components/chat-panel";
 import { Sidebar } from "@/components/sidebar";
+import { beginInFlightRequest, endInFlightRequest } from "@/lib/chat/inflight-guards";
 import type { Actor, ChatThread } from "@/lib/types/chat";
 
 type ModalState =
@@ -17,14 +18,6 @@ type ModalState =
 const ACTIVE_ACTOR_STORAGE_KEY = "katie.activeActorId";
 const ACTIVE_CHAT_STORAGE_KEY = "katie.activeChatId";
 const ACTOR_CHAT_SELECTIONS_STORAGE_KEY = "katie.actorChatSelections";
-
-function buildChatId(): string {
-  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
-    return crypto.randomUUID();
-  }
-
-  return `chat-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-}
 
 function pickActiveActorId(actors: Actor[], preferredActorId: string | null): string {
   if (preferredActorId && actors.some((actor) => actor.id === preferredActorId)) {
@@ -82,6 +75,9 @@ export default function HomePage() {
   const [hasLoadedPersistedState, setHasLoadedPersistedState] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [uiError, setUiError] = useState("");
+  const [creatingChatByActorId, setCreatingChatByActorId] = useState<Record<string, boolean>>({});
+  const creatingChatByActorIdRef = useRef(new Set<string>());
+  const creatingActorRef = useRef(false);
 
   useEffect(() => {
     async function fetchInitialData() {
@@ -245,58 +241,90 @@ export default function HomePage() {
     [actors, chats],
   );
 
-  async function createChat(actorId: string) {
-    setUiError("");
-    const chatResponse = await fetch("/api/chats", {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        id: buildChatId(),
-        actorId,
-        title: `Chat ${new Date().toLocaleString()}`,
-      }),
-    });
-    const chatPayload = (await chatResponse.json()) as { chat?: ChatThread; error?: string };
-
-    if (!chatResponse.ok || !chatPayload.chat) {
-      const message = chatPayload.error ?? "Failed to create chat.";
-      setUiError(message);
-      throw new Error(message);
+  async function createChat(
+    actorId: string,
+    options?: { createStarterChat?: boolean; title?: string },
+  ) {
+    const normalizedActorId = actorId.trim();
+    if (!beginInFlightRequest(creatingChatByActorIdRef.current, normalizedActorId)) {
+      return;
     }
 
-    const createdChat = chatPayload.chat;
-    setChats((current) => [createdChat, ...current.filter((chat) => chat.id !== createdChat.id)]);
-    setActorChatSelections((current) => ({ ...current, [actorId]: createdChat.id }));
-    setActiveActorId(actorId);
-    setActiveChatId(createdChat.id);
-    setSidebarOpen(false);
+    setCreatingChatByActorId((current) => ({ ...current, [normalizedActorId]: true }));
+    setUiError("");
+
+    try {
+      const chatResponse = await fetch("/api/chats", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          actorId: normalizedActorId,
+          title: options?.title ?? `Chat ${new Date().toLocaleString()}`,
+          ...(options?.createStarterChat ? { createStarterChat: true } : {}),
+        }),
+      });
+      const chatPayload = (await chatResponse.json()) as { chat?: ChatThread; error?: string };
+
+      if (!chatResponse.ok || !chatPayload.chat) {
+        const message = chatPayload.error ?? "Failed to create chat.";
+        setUiError(message);
+        throw new Error(message);
+      }
+
+      const createdChat = chatPayload.chat;
+      setChats((current) => [createdChat, ...current.filter((chat) => chat.id !== createdChat.id)]);
+      setActorChatSelections((current) => ({ ...current, [normalizedActorId]: createdChat.id }));
+      setActiveActorId(normalizedActorId);
+      setActiveChatId(createdChat.id);
+      setSidebarOpen(false);
+    } finally {
+      endInFlightRequest(creatingChatByActorIdRef.current, normalizedActorId);
+      setCreatingChatByActorId((current) => {
+        const next = { ...current };
+        delete next[normalizedActorId];
+        return next;
+      });
+    }
   }
 
   async function createActor(input: { name: string; purpose?: string; parentId?: string }) {
-    setUiError("");
-    const actorResponse = await fetch("/api/actors", {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-      },
-      body: JSON.stringify(input),
-    });
-
-    const actorPayload = (await actorResponse.json()) as { actor?: Actor; error?: string };
-
-    if (!actorResponse.ok || !actorPayload.actor) {
-      throw new Error(actorPayload.error ?? "Failed to create actor.");
+    if (creatingActorRef.current) {
+      return;
     }
 
-    const createdActor = actorPayload.actor;
-    setActors((current) => [...current.filter((actor) => actor.id !== createdActor.id), createdActor]);
-    setSidebarOpen(false);
+    creatingActorRef.current = true;
+    setUiError("");
+
     try {
-      await createChat(createdActor.id);
-    } catch {
-      // createChat already writes user-facing UI error state.
+      const actorResponse = await fetch("/api/actors", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+        },
+        body: JSON.stringify(input),
+      });
+
+      const actorPayload = (await actorResponse.json()) as { actor?: Actor; error?: string };
+
+      if (!actorResponse.ok || !actorPayload.actor) {
+        throw new Error(actorPayload.error ?? "Failed to create actor.");
+      }
+
+      const createdActor = actorPayload.actor;
+      setActors((current) => [
+        ...current.filter((actor) => actor.id !== createdActor.id),
+        createdActor,
+      ]);
+      setSidebarOpen(false);
+      try {
+        await createChat(createdActor.id, { createStarterChat: true });
+      } catch {
+        // createChat already writes user-facing UI error state.
+      }
+    } finally {
+      creatingActorRef.current = false;
     }
   }
 
@@ -430,6 +458,7 @@ export default function HomePage() {
             onDeleteActor={deleteActor}
             onDeleteChat={deleteChat}
             onError={setUiError}
+            isCreatingChat={(actorId) => Boolean(creatingChatByActorId[actorId])}
           />
         </div>
 
@@ -445,12 +474,10 @@ export default function HomePage() {
           onClick={() => setSidebarOpen(false)}
           aria-hidden
         />
+        {sidebarOpen ? (
         <aside
-          className={[
-            "absolute inset-y-0 left-0 z-50 w-[min(22rem,86vw)] border-r border-white/10 shadow-[0_24px_80px_rgba(0,0,0,0.5)] transition-transform duration-200 ease-out lg:hidden",
-            sidebarOpen ? "translate-x-0" : "-translate-x-full",
-          ].join(" ")}
-          aria-hidden={!sidebarOpen}
+          className="absolute inset-y-0 left-0 z-50 w-[min(22rem,86vw)] border-r border-white/10 shadow-[0_24px_80px_rgba(0,0,0,0.5)] transition-transform duration-200 ease-out lg:hidden translate-x-0"
+          aria-hidden={false}
         >
           <Sidebar
             actors={actors}
@@ -465,8 +492,10 @@ export default function HomePage() {
             onDeleteActor={deleteActor}
             onDeleteChat={deleteChat}
             onError={setUiError}
+            isCreatingChat={(actorId) => Boolean(creatingChatByActorId[actorId])}
           />
         </aside>
+        ) : null}
       </div>
 
       {uiError ? (
