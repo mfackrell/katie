@@ -342,6 +342,10 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: errorMessage }, { status: 400 });
     }
 
+    if (errorMessage.includes("not found")) {
+      return NextResponse.json({ error: errorMessage }, { status: 404 });
+    }
+
     console.error("[Chat API] Fatal Runtime Error:", {
       message: errorMessage,
       stack: error instanceof Error ? error.stack : undefined

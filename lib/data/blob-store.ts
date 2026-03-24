@@ -1,690 +1,217 @@
+import { getSupabaseAdminClient } from "@/lib/data/supabase/admin";
 import type { Actor, ChatThread, Message } from "@/lib/types/chat";
 
-const memoryMessages = new Map<string, Message[]>();
-const memorySummaries = new Map<string, string>();
-const memoryActors = new Map<string, Actor>();
-const memoryChats = new Map<string, ChatThread>();
-const deletedActorIds = new Set<string>();
+type JsonRecord = Record<string, unknown>;
 
-const ACTOR_INDEX_PATH = "actors/index.json";
-const ACTOR_REGISTRY_PATH = "actors/registry.json";
-const ACTOR_DELETED_INDEX_PATH = "actors/deleted-index.json";
-const CHAT_INDEX_PATH = "chats/index.json";
-const CHAT_REGISTRY_PATH = "chats/registry.json";
-const BLOB_API_BASE_URL = "https://blob.vercel-storage.com";
+type ActorRow = {
+  id: string;
+  name: string;
+  system_prompt: string;
+  parent_actor_id: string | null;
+  created_at: string;
+  updated_at: string;
+};
 
-const base = process.env.BLOB_BASE_URL ?? process.env.BLOB_URL;
-const writeToken = process.env.BLOB_READ_WRITE_TOKEN ?? process.env.BLOB_WRITE_TOKEN;
-const allowMemoryFallback = process.env.KATIE_ALLOW_MEMORY_FALLBACK === "true";
+type ChatRow = {
+  id: string;
+  actor_id: string;
+  title: string | null;
+  created_at: string;
+  updated_at: string;
+};
 
-type PersistenceMode = "durable" | "memory-fallback";
+type MessageRow = {
+  id: string;
+  actor_id: string;
+  chat_id: string;
+  role: Message["role"];
+  content: string;
+  created_at: string;
+};
 
-class PersistenceError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "PersistenceError";
-  }
-}
+type MemoryRow = {
+  id: string;
+  actor_id: string;
+  chat_id: string;
+  content: JsonRecord | null;
+  created_at: string;
+  updated_at: string;
+};
 
-function getBlobBaseUrl(): string | null {
-  return base ?? null;
-}
-
-function getPersistenceMode(): PersistenceMode {
-  return allowMemoryFallback ? "memory-fallback" : "durable";
-}
-
-function isMemoryFallbackMode(): boolean {
-  return getPersistenceMode() === "memory-fallback";
-}
-
-function requireBlobBaseUrl(): string {
-  const baseUrl = getBlobBaseUrl();
-  if (baseUrl) {
-    return baseUrl;
-  }
-
-  throw new PersistenceError(
-    "Durable persistence is required but blob read configuration is missing. Set BLOB_BASE_URL (or BLOB_URL), or explicitly enable KATIE_ALLOW_MEMORY_FALLBACK=true for local/demo mode."
-  );
-}
-
-function getBlobWriteConfig(): { baseUrl: string; token: string } | null {
-  if (!base || !writeToken) {
-    return null;
-  }
-
-  return { baseUrl: base, token: writeToken };
-}
-
-function requireBlobWriteConfig(): { baseUrl: string; token: string } {
-  const writeConfig = getBlobWriteConfig();
-  if (writeConfig) {
-    return writeConfig;
-  }
-
-  throw new PersistenceError(
-    "Durable persistence is required but blob write configuration is missing. Set BLOB_READ_WRITE_TOKEN (or BLOB_WRITE_TOKEN), or explicitly enable KATIE_ALLOW_MEMORY_FALLBACK=true for local/demo mode."
-  );
-}
-
-function resolveBlobPath(baseUrl: string, path: string): string {
-  const normalizedBase = baseUrl.replace(/\/+$/, "");
-  const normalizedPath = path.replace(/^\/+/, "");
-  return `${normalizedBase}/${normalizedPath}`;
-}
-
-function parseBlobNamespace(urlOrBase: string): { namespace: string } | null {
-  try {
-    const parsed = new URL(urlOrBase);
-    const normalizedPath = parsed.pathname.replace(/\/+$/, "");
-    return {
-      namespace: `${parsed.host}${normalizedPath}`,
-    };
-  } catch {
-    return null;
-  }
-}
-
-function isUrlInReadNamespace(url: string, readBaseUrl: string): boolean {
-  const urlNamespace = parseBlobNamespace(url);
-  const readNamespace = parseBlobNamespace(readBaseUrl);
-
-  if (!urlNamespace || !readNamespace) {
-    return false;
-  }
-
-  return urlNamespace.namespace.startsWith(readNamespace.namespace);
-}
-
-async function blobFetchJson<T>(url: string): Promise<T | null> {
-  const response = await fetch(url, {
-    cache: "no-store",
-    headers: {
-      Pragma: "no-cache",
-      "Cache-Control": "no-cache",
-    },
-  });
-
-  if (response.status === 404) {
-    return null;
-  }
-
-  if (!response.ok) {
-    throw new PersistenceError(`Failed to GET ${url}: ${response.status} ${response.statusText}`);
-  }
-
-  return (await response.json()) as T;
-}
-
-function logPersistenceDebug(message: string, meta?: Record<string, unknown>): void {
-  if (meta) {
-    console.info(`[BlobStore] ${message}`, meta);
-    return;
-  }
-  console.info(`[BlobStore] ${message}`);
-}
-
-async function verifyDurableReadAfterWrite(
-  path: string,
-  options?: { reason?: string }
-): Promise<void> {
-  if (getPersistenceMode() !== "durable") {
-    return;
-  }
-
-  const baseUrl = requireBlobBaseUrl();
-  const retries = 3;
-  const baseDelayMs = 150;
-  let verificationSucceeded = false;
-
-  for (let attempt = 0; attempt < retries; attempt += 1) {
-    const directUrl = resolveBlobPath(baseUrl, path);
-    if ((await blobFetchJson<unknown>(directUrl)) !== null) {
-      verificationSucceeded = true;
-      break;
-    }
-
-    if (attempt < retries - 1) {
-      await new Promise((resolve) => setTimeout(resolve, baseDelayMs * (attempt + 1)));
-    }
-  }
-
-  if (!verificationSucceeded) {
-    const message =
-      `Durable write verification warning for "${path}": write succeeded but immediate durable read-back was not consistently visible. ` +
-      "Treating as eventual-consistency/read-lag and continuing.";
-    console.warn(`[BlobStore] ${message}`, {
-      reason: options?.reason ?? "unspecified",
-    });
-    return;
-  }
-
-  logPersistenceDebug("Verified durable read after write.", {
-    path,
-    reason: options?.reason ?? "unspecified",
-  });
-}
-
-async function blobUploadJson(path: string, payload: unknown, token: string): Promise<string> {
-  const response = await fetch(
-    `${BLOB_API_BASE_URL}/${encodeURI(path)}?addRandomSuffix=false&allowOverwrite=true`,
-    {
-      method: "PUT",
-      headers: {
-        Authorization: `Bearer ${token}`,
-        "Content-Type": "application/json",
-        "x-content-type": "application/json",
-      },
-      body: JSON.stringify(payload),
-    }
-  );
-
-  if (!response.ok) {
-    throw new PersistenceError(`Failed to PUT ${path}: ${response.status} ${response.statusText}`);
-  }
-
-  const uploaded = (await response.json()) as { url?: string };
-  if (!uploaded.url) {
-    throw new PersistenceError(`Failed to PUT ${path}: missing blob URL in response.`);
-  }
-
-  return uploaded.url;
-}
-
-async function blobDeleteByPathOrUrl(pathOrUrl: string, token: string): Promise<void> {
-  const targetPath = pathOrUrl.startsWith("http")
-    ? (() => {
-        try {
-          return new URL(pathOrUrl).pathname.slice(1);
-        } catch {
-          return pathOrUrl;
-        }
-      })()
-    : pathOrUrl;
-
-  const response = await fetch(`${BLOB_API_BASE_URL}/${encodeURI(targetPath)}`, {
-    method: "DELETE",
-    headers: {
-      Authorization: `Bearer ${token}`,
-    },
-  });
-
-  if (response.status === 404) {
-    return;
-  }
-
-  if (!response.ok) {
-    throw new PersistenceError(
-      `Failed to DELETE ${pathOrUrl}: ${response.status} ${response.statusText}`
-    );
-  }
-}
-
-function canUseBlobReads(): boolean {
-  return Boolean(getBlobBaseUrl());
-}
-
-function canUseBlobWrites(): boolean {
-  return Boolean(getBlobWriteConfig());
-}
-
-export function getPersistenceDiagnostics(): {
-  mode: PersistenceMode;
-  blobReadConfigured: boolean;
-  blobWriteConfigured: boolean;
-  readBaseUrl: string | null;
-  readNamespace: string | null;
-  writeApiBaseUrl: string;
-  ready: boolean;
-} {
-  const mode = getPersistenceMode();
-  const readBaseUrl = getBlobBaseUrl();
-  const readNamespace = readBaseUrl ? parseBlobNamespace(readBaseUrl)?.namespace ?? null : null;
-  const blobReadConfigured = canUseBlobReads();
-  const blobWriteConfigured = canUseBlobWrites();
+function toActor(row: ActorRow): Actor {
   return {
-    mode,
-    blobReadConfigured,
-    blobWriteConfigured,
-    readBaseUrl,
-    readNamespace,
-    writeApiBaseUrl: BLOB_API_BASE_URL,
-    ready: mode === "memory-fallback" ? true : blobReadConfigured && blobWriteConfigured,
+    id: row.id,
+    name: row.name,
+    purpose: row.system_prompt,
+    ...(row.parent_actor_id ? { parentId: row.parent_actor_id } : {}),
   };
 }
 
-function logPersistenceStatus(): void {
-  const diagnostics = getPersistenceDiagnostics();
-  if (diagnostics.mode === "memory-fallback") {
-    console.warn("[BlobStore] Running in explicit memory fallback mode (KATIE_ALLOW_MEMORY_FALLBACK=true). Data is not durable.");
-    return;
-  }
-
-  if (!diagnostics.ready) {
-    console.error(
-      `[BlobStore] Durable persistence is not ready. blobReadConfigured=${diagnostics.blobReadConfigured}, blobWriteConfigured=${diagnostics.blobWriteConfigured}.`
-    );
-    return;
-  }
-
-  logPersistenceDebug("Durable blob persistence is configured.", {
-    readBaseUrl: diagnostics.readBaseUrl,
-    readNamespace: diagnostics.readNamespace,
-    writeConfigured: diagnostics.blobWriteConfigured,
-    writeApiBaseUrl: diagnostics.writeApiBaseUrl,
-  });
+function toChat(row: ChatRow): ChatThread {
+  return {
+    id: row.id,
+    actorId: row.actor_id,
+    title: row.title ?? "Untitled chat",
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
 }
 
-logPersistenceStatus();
-
-async function blobGet<T>(path: string): Promise<T | null> {
-  const baseUrl =
-    getPersistenceMode() === "memory-fallback"
-      ? getBlobBaseUrl()
-      : requireBlobBaseUrl();
-  if (!baseUrl) {
-    return null;
-  }
-  const value = await blobFetchJson<T>(resolveBlobPath(baseUrl, path));
-  if (value !== null) {
-    logPersistenceDebug("Read durable blob by direct path.", { path });
-  }
-  return value;
+function toMessage(row: MessageRow): Message {
+  return {
+    id: row.id,
+    chatId: row.chat_id,
+    role: row.role,
+    content: row.content,
+    createdAt: row.created_at,
+  };
 }
 
-async function blobPut(path: string, payload: unknown): Promise<void> {
-  const writeConfig =
-    getPersistenceMode() === "memory-fallback"
-      ? getBlobWriteConfig()
-      : requireBlobWriteConfig();
-  if (!writeConfig) {
-    return;
+function toMemoryContent(row: MemoryRow | null): JsonRecord {
+  if (!row?.content || typeof row.content !== "object") {
+    return {};
   }
 
-  const blobUrl = await blobUploadJson(path, payload, writeConfig.token);
-  logPersistenceDebug("Wrote durable blob.", { path, blobUrl });
-
-  const readBaseUrl = getBlobBaseUrl();
-  if (readBaseUrl && !isUrlInReadNamespace(blobUrl, readBaseUrl)) {
-    console.error("[BlobStore] Blob write completed to a namespace that does not match configured read base URL.", {
-      path,
-      configuredReadBaseUrl: readBaseUrl,
-      configuredReadNamespace: parseBlobNamespace(readBaseUrl)?.namespace ?? "unparseable",
-      writtenBlobUrl: blobUrl,
-      writtenBlobNamespace: parseBlobNamespace(blobUrl)?.namespace ?? "unparseable",
-      writeApiBaseUrl: BLOB_API_BASE_URL,
-    });
-  }
-
-  await verifyDurableReadAfterWrite(path, {
-    reason: "blob-put-direct",
-  });
+  return row.content;
 }
 
-async function blobDelete(path: string): Promise<void> {
-  const writeConfig =
-    getPersistenceMode() === "memory-fallback"
-      ? getBlobWriteConfig()
-      : requireBlobWriteConfig();
-  if (!writeConfig) {
-    return;
-  }
-
-  await blobDeleteByPathOrUrl(path, writeConfig.token);
-  logPersistenceDebug("Deleted durable blob.", { path });
-}
-
-function sortChats(chats: ChatThread[]): ChatThread[] {
-  return [...chats].sort((left, right) => {
-    const leftTimestamp = left.updatedAt ?? left.createdAt;
-    const rightTimestamp = right.updatedAt ?? right.createdAt;
-
-    return rightTimestamp.localeCompare(leftTimestamp) || left.title.localeCompare(right.title);
-  });
-}
-
-async function blobGetWithRetry<T>(path: string, retries = 3, baseDelayMs = 250): Promise<T | null> {
-  let lastError: unknown;
-
-  for (let attempt = 0; attempt < retries; attempt += 1) {
-    try {
-      const value = await blobGet<T>(path);
-      if (value !== null) {
-        return value;
-      }
-    } catch (error) {
-      lastError = error;
+function parseMessageContent(content: string): { text: string; model?: string; assets?: Array<{ type: string; url: string }> } {
+  try {
+    const parsed = JSON.parse(content) as { text?: unknown; model?: unknown; assets?: unknown };
+    if (typeof parsed.text === "string") {
+      return {
+        text: parsed.text,
+        ...(typeof parsed.model === "string" ? { model: parsed.model } : {}),
+        ...(Array.isArray(parsed.assets)
+          ? {
+              assets: parsed.assets.filter(
+                (asset): asset is { type: string; url: string } =>
+                  Boolean(asset) &&
+                  typeof (asset as { type?: unknown }).type === "string" &&
+                  typeof (asset as { url?: unknown }).url === "string"
+              ),
+            }
+          : {}),
+      };
     }
-
-    if (attempt < retries - 1) {
-      await new Promise((resolve) => setTimeout(resolve, baseDelayMs * (attempt + 1)));
-    }
+  } catch {
+    // noop; non-json content is supported.
   }
 
-  if (lastError) {
-    throw lastError;
+  return { text: content };
+}
+
+function encodeMessageContent(message: Pick<Message, "content" | "model" | "assets">): string {
+  if (message.model || (message.assets && message.assets.length > 0)) {
+    return JSON.stringify({ text: message.content, model: message.model, assets: message.assets ?? [] });
   }
 
-  return null;
+  return message.content;
 }
 
-let metadataWriteQueue: Promise<void> = Promise.resolve();
+async function requireActor(actorId: string): Promise<ActorRow> {
+  const client = getSupabaseAdminClient();
+  const { data, error } = await client
+    .from("actors")
+    .select("id,name,system_prompt,parent_actor_id,created_at,updated_at")
+    .eq("id", actorId)
+    .maybeSingle<ActorRow>();
 
-function withMetadataWriteLock<T>(operation: () => Promise<T>): Promise<T> {
-  const nextOperation = metadataWriteQueue.then(operation, operation);
-  metadataWriteQueue = nextOperation.then(
-    () => undefined,
-    () => undefined
-  );
-  return nextOperation;
-}
-
-let actorRegistryCache: Actor[] | null = null;
-let chatRegistryCache: ChatThread[] | null = null;
-let deletedActorIdsCache: string[] | null = null;
-
-async function readActorRegistry(): Promise<Actor[]> {
-  const remoteRegistry = await blobGetWithRetry<Actor[]>(ACTOR_REGISTRY_PATH);
-  if (remoteRegistry !== null) {
-    if (remoteRegistry.length === 0 && actorRegistryCache && actorRegistryCache.length > 0) {
-      return actorRegistryCache;
-    }
-    actorRegistryCache = remoteRegistry;
-    return remoteRegistry;
+  if (error) {
+    throw new Error(`Failed to load actor ${actorId}: ${error.message}`);
   }
-  return actorRegistryCache ?? [];
-}
 
-async function writeActorRegistry(actors: Actor[]): Promise<void> {
-  await blobPut(ACTOR_REGISTRY_PATH, actors);
-  actorRegistryCache = actors;
-}
-
-async function readChatRegistry(): Promise<ChatThread[]> {
-  const remoteRegistry = await blobGetWithRetry<ChatThread[]>(CHAT_REGISTRY_PATH);
-  if (remoteRegistry !== null) {
-    if (remoteRegistry.length === 0 && chatRegistryCache && chatRegistryCache.length > 0) {
-      return chatRegistryCache;
-    }
-    chatRegistryCache = remoteRegistry;
-    return remoteRegistry;
+  if (!data) {
+    throw new Error(`Actor not found: ${actorId}`);
   }
-  return chatRegistryCache ?? [];
+
+  return data;
 }
 
-async function writeChatRegistry(chats: ChatThread[]): Promise<void> {
-  const sorted = sortChats(chats);
-  await blobPut(CHAT_REGISTRY_PATH, sorted);
-  chatRegistryCache = sorted;
-}
+async function requireChat(chatId: string): Promise<ChatRow> {
+  const client = getSupabaseAdminClient();
+  const { data, error } = await client
+    .from("chats")
+    .select("id,actor_id,title,created_at,updated_at")
+    .eq("id", chatId)
+    .maybeSingle<ChatRow>();
 
-async function getDeletedActorIds(): Promise<string[]> {
-  const deletedFromBlob = await blobGetWithRetry<string[]>(ACTOR_DELETED_INDEX_PATH);
-  if (deletedFromBlob !== null) {
-    if (deletedFromBlob.length === 0 && deletedActorIdsCache && deletedActorIdsCache.length > 0) {
-      return [...new Set([...deletedActorIds, ...deletedActorIdsCache])];
-    }
-    deletedActorIdsCache = deletedFromBlob;
+  if (error) {
+    throw new Error(`Failed to load chat ${chatId}: ${error.message}`);
   }
-  const effectiveDeleted = deletedActorIdsCache ?? [];
 
-  effectiveDeleted.forEach((actorId) => {
-    deletedActorIds.add(actorId);
-  });
+  if (!data) {
+    throw new Error(`Chat not found: ${chatId}`);
+  }
 
-  return [...deletedActorIds];
+  return data;
+}
+
+export function getPersistenceDiagnostics() {
+  return {
+    mode: "durable" as const,
+    blobReadConfigured: false,
+    blobWriteConfigured: false,
+    readBaseUrl: null,
+    readNamespace: null,
+    writeApiBaseUrl: "",
+    ready: true,
+  };
 }
 
 export async function getActorById(actorId: string): Promise<Actor | null> {
-  const deletedIds = await getDeletedActorIds();
-  if (deletedIds.includes(actorId)) {
-    return null;
+  const client = getSupabaseAdminClient();
+  const { data, error } = await client
+    .from("actors")
+    .select("id,name,system_prompt,parent_actor_id,created_at,updated_at")
+    .eq("id", actorId)
+    .maybeSingle<ActorRow>();
+
+  if (error) {
+    throw new Error(`Failed to load actor ${actorId}: ${error.message}`);
   }
 
-  if (isMemoryFallbackMode()) {
-    const memoryActor = memoryActors.get(actorId);
-    if (memoryActor) {
-      return memoryActor;
-    }
-  }
-
-  const actorFromBlob = await blobGetWithRetry<Actor>(`actors/${actorId}.json`);
-  if (actorFromBlob) {
-    logPersistenceDebug("Loaded actor from durable blob.", { actorId });
-    memoryActors.set(actorFromBlob.id, actorFromBlob);
-    return actorFromBlob;
-  }
-
-  const registryActor = (await readActorRegistry()).find((actor) => actor.id === actorId) ?? null;
-  if (registryActor) {
-    logPersistenceDebug("Loaded actor from durable registry.", { actorId });
-    memoryActors.set(registryActor.id, registryActor);
-  }
-
-  return registryActor;
+  return data ? toActor(data) : null;
 }
 
 export async function listActors(): Promise<Actor[]> {
-  const deletedIds = await getDeletedActorIds();
-  const deleted = new Set(deletedIds);
-  const registryActors = await readActorRegistry();
-  const deduped = new Map<string, Actor>();
-  registryActors.forEach((actor) => {
-    if (!deleted.has(actor.id)) {
-      deduped.set(actor.id, actor);
-    }
-  });
+  const client = getSupabaseAdminClient();
+  const { data, error } = await client
+    .from("actors")
+    .select("id,name,system_prompt,parent_actor_id,created_at,updated_at")
+    .order("name", { ascending: true })
+    .order("created_at", { ascending: true })
+    ;
 
-  if (isMemoryFallbackMode()) {
-    [...memoryActors.values()].forEach((actor) => {
-      if (!deleted.has(actor.id)) {
-        deduped.set(actor.id, actor);
-      }
-    });
+  if (error) {
+    throw new Error(`Failed to list actors: ${error.message}`);
   }
 
-  const durableActors = [...deduped.values()];
-  logPersistenceDebug("Listed actors from durable state.", {
-    deletedCount: deleted.size,
-    registryCount: registryActors.length,
-    durableCount: durableActors.length,
-  });
-  durableActors.forEach((actor) => {
-    memoryActors.set(actor.id, actor);
-  });
-
-  return durableActors;
+  return (data ?? []).map(toActor);
 }
 
-export async function getChatById(chatId: string): Promise<ChatThread | null> {
-  if (isMemoryFallbackMode()) {
-    const memoryChat = memoryChats.get(chatId);
-    if (memoryChat) {
-      return memoryChat;
-    }
-  }
-
-  const chatFromBlob = await blobGetWithRetry<ChatThread>(`chats/${chatId}.json`);
-  if (chatFromBlob) {
-    logPersistenceDebug("Loaded chat from durable blob.", { chatId });
-    memoryChats.set(chatFromBlob.id, chatFromBlob);
-    return chatFromBlob;
-  }
-
-  const registryChat = (await readChatRegistry()).find((chat) => chat.id === chatId) ?? null;
-  if (registryChat) {
-    logPersistenceDebug("Loaded chat from durable registry.", { chatId });
-    memoryChats.set(registryChat.id, registryChat);
-    return registryChat;
-  }
-
-  return isMemoryFallbackMode() ? memoryChats.get(chatId) ?? null : null;
-}
-
-export async function listChats(): Promise<ChatThread[]> {
-  const registryChats = await readChatRegistry();
-  const actors = await listActors();
-  const validActorIds = new Set(actors.map((actor) => actor.id));
-  const deduped = new Map<string, ChatThread>();
-  registryChats.forEach((chat) => {
-    if (validActorIds.has(chat.actorId)) {
-      deduped.set(chat.id, chat);
-    }
-  });
-
-  if (isMemoryFallbackMode()) {
-    [...memoryChats.values()].forEach((chat) => {
-      if (validActorIds.has(chat.actorId)) {
-        deduped.set(chat.id, chat);
-      }
-    });
-  }
-
-  const durableChats = sortChats([...deduped.values()]);
-  durableChats.forEach((chat) => {
-    memoryChats.set(chat.id, chat);
-  });
-  logPersistenceDebug("Listed chats from durable state.", {
-    registryCount: registryChats.length,
-    durableCount: durableChats.length,
-    actorCount: validActorIds.size,
-  });
-  return durableChats;
-}
-
-export async function listChatsByActorId(actorId: string): Promise<ChatThread[]> {
-  const chats = await listChats();
-  return chats.filter((chat) => chat.actorId === actorId);
-}
-
-export async function saveChat(chat: ChatThread): Promise<ChatThread> {
+export async function saveActor(actor: Actor): Promise<Actor> {
+  const client = getSupabaseAdminClient();
   const now = new Date().toISOString();
-  const nextChat: ChatThread = {
-    ...chat,
-    title: chat.title.trim(),
-    createdAt: chat.createdAt ?? now,
-    updatedAt: now,
+  const payload = {
+    id: actor.id,
+    name: actor.name.trim(),
+    system_prompt: actor.purpose,
+    parent_actor_id: actor.parentId ?? null,
+    updated_at: now,
   };
 
-  await withMetadataWriteLock(async () => {
-    const registryChats = await readChatRegistry();
-    const nextRegistry = [
-      nextChat,
-      ...registryChats.filter((currentChat) => currentChat.id !== nextChat.id),
-    ];
+  const { data, error } = await client
+    .from("actors")
+    .upsert(payload, { onConflict: "id" })
+    .select("id,name,system_prompt,parent_actor_id,created_at,updated_at")
+    .single<ActorRow>();
 
-    await blobPut(`chats/${nextChat.id}.json`, nextChat);
-    await writeChatRegistry(nextRegistry);
-    await blobPut(CHAT_INDEX_PATH, nextRegistry.map((item) => item.id));
-  });
-  logPersistenceDebug("Saved chat to durable state.", {
-    chatId: nextChat.id,
-  });
-
-  memoryChats.set(nextChat.id, nextChat);
-
-  return nextChat;
-}
-
-export async function deleteChat(chatId: string): Promise<void> {
-  await withMetadataWriteLock(async () => {
-    const registryChats = await readChatRegistry();
-    const nextRegistry = registryChats.filter((chat) => chat.id !== chatId);
-    await writeChatRegistry(nextRegistry);
-    await blobPut(CHAT_INDEX_PATH, nextRegistry.map((item) => item.id));
-
-    await blobDelete(`chats/${chatId}.json`);
-    await blobDelete(`messages/${chatId}.json`);
-    await blobDelete(`summaries/${chatId}.json`);
-  });
-
-  memoryChats.delete(chatId);
-  memoryMessages.delete(chatId);
-  memorySummaries.delete(chatId);
-}
-
-export async function deleteChatById(chatId: string): Promise<void> {
-  await deleteChat(chatId);
-}
-
-export async function getMessages(chatId: string): Promise<Message[]> {
-  const blobMessages = await blobGetWithRetry<Message[]>(`messages/${chatId}.json`);
-  if (blobMessages) {
-    logPersistenceDebug("Loaded messages from durable blob.", { chatId, count: blobMessages.length });
-    memoryMessages.set(chatId, blobMessages);
-    return blobMessages;
+  if (error) {
+    throw new Error(`Failed to save actor ${actor.id}: ${error.message}`);
   }
 
-  return isMemoryFallbackMode() ? memoryMessages.get(chatId) ?? [] : [];
-}
-
-export async function getRecentMessages(chatId: string, limit = 20): Promise<Message[]> {
-  const messages = await getMessages(chatId);
-  return messages.slice(-limit);
-}
-
-export async function saveMessage(chatId: string, message: Omit<Message, "chatId" | "createdAt"> & Partial<Pick<Message, "chatId" | "createdAt">>): Promise<Message> {
-  const current = await getMessages(chatId);
-  const nextMessage: Message = {
-    ...message,
-    chatId,
-    createdAt: message.createdAt ?? new Date().toISOString(),
-  };
-  const nextMessages = [...current, nextMessage];
-
-  await blobPut(`messages/${chatId}.json`, nextMessages);
-  memoryMessages.set(chatId, nextMessages);
-
-  const existingChat = await getChatById(chatId);
-  if (existingChat) {
-    await saveChat({
-      ...existingChat,
-      updatedAt: new Date().toISOString(),
-    });
-  }
-
-  return nextMessage;
-}
-
-export async function getConversationSummary(chatId: string): Promise<string> {
-  const summary = await blobGetWithRetry<string>(`summaries/${chatId}.json`);
-  if (summary !== null) {
-    logPersistenceDebug("Loaded summary from durable blob.", { chatId, length: summary.length });
-    memorySummaries.set(chatId, summary);
-    return summary;
-  }
-
-  return isMemoryFallbackMode() ? memorySummaries.get(chatId) ?? "" : "";
-}
-
-export async function setConversationSummary(chatId: string, summary: string): Promise<void> {
-  await blobPut(`summaries/${chatId}.json`, summary);
-  memorySummaries.set(chatId, summary);
-}
-
-export async function saveActor(actor: Actor): Promise<void> {
-  const actorPath = `actors/${actor.id}.json`;
-  await withMetadataWriteLock(async () => {
-    const deletedIndex = await getDeletedActorIds();
-    const registryActors = await readActorRegistry();
-    const nextDeletedIndex = deletedIndex.filter((deletedId) => deletedId !== actor.id);
-    const nextRegistry = [...registryActors.filter((currentActor) => currentActor.id !== actor.id), actor];
-
-    await blobPut(actorPath, actor);
-    await writeActorRegistry(nextRegistry);
-    await blobPut(ACTOR_INDEX_PATH, nextRegistry.map((item) => item.id));
-    if (deletedIndex.includes(actor.id)) {
-      await blobPut(ACTOR_DELETED_INDEX_PATH, nextDeletedIndex);
-      deletedActorIdsCache = nextDeletedIndex;
-    }
-  });
-  logPersistenceDebug("Saved actor to durable state.", {
-    actorId: actor.id,
-  });
-
-  deletedActorIds.delete(actor.id);
-  memoryActors.set(actor.id, actor);
+  return toActor(data);
 }
 
 export async function deleteActorsById(actorIds: string[]): Promise<void> {
@@ -692,45 +219,330 @@ export async function deleteActorsById(actorIds: string[]): Promise<void> {
     return;
   }
 
-  await withMetadataWriteLock(async () => {
-    const registryActors = await readActorRegistry();
-    const chatRegistry = await readChatRegistry();
-    const deletedIndex = await getDeletedActorIds();
-    const nextRegistry = registryActors.filter((actor) => !actorIds.includes(actor.id));
-    const nextDeleted = [...new Set([...deletedIndex, ...actorIds])];
-    const chatIdsToDelete = chatRegistry
-      .filter((chat) => actorIds.includes(chat.actorId))
-      .map((chat) => chat.id);
-    const nextChatRegistry = chatRegistry.filter((chat) => !chatIdsToDelete.includes(chat.id));
+  const client = getSupabaseAdminClient();
+  const { error } = await client.from("actors").in("id", actorIds).delete();
 
-    await writeActorRegistry(nextRegistry);
-    await blobPut(ACTOR_INDEX_PATH, nextRegistry.map((item) => item.id));
-    await blobPut(ACTOR_DELETED_INDEX_PATH, nextDeleted);
-    deletedActorIdsCache = nextDeleted;
-    await writeChatRegistry(nextChatRegistry);
-    await blobPut(CHAT_INDEX_PATH, nextChatRegistry.map((item) => item.id));
+  if (error) {
+    throw new Error(`Failed to delete actors: ${error.message}`);
+  }
+}
 
-    for (const actorId of actorIds) {
-      await blobDelete(`actors/${actorId}.json`);
-    }
-    for (const chatId of chatIdsToDelete) {
-      await blobDelete(`chats/${chatId}.json`);
-      await blobDelete(`messages/${chatId}.json`);
-      await blobDelete(`summaries/${chatId}.json`);
-      memoryChats.delete(chatId);
-      memoryMessages.delete(chatId);
-      memorySummaries.delete(chatId);
-    }
+export async function getChatById(chatId: string): Promise<ChatThread | null> {
+  const client = getSupabaseAdminClient();
+  const { data, error } = await client
+    .from("chats")
+    .select("id,actor_id,title,created_at,updated_at")
+    .eq("id", chatId)
+    .maybeSingle<ChatRow>();
 
-    logPersistenceDebug("Deleted actors from durable state.", {
-      deletedCount: actorIds.length,
-      remainingRegistryCount: nextRegistry.length,
-      deletedChatsCount: chatIdsToDelete.length,
+  if (error) {
+    throw new Error(`Failed to load chat ${chatId}: ${error.message}`);
+  }
+
+  return data ? toChat(data) : null;
+}
+
+export async function listChats(): Promise<ChatThread[]> {
+  const client = getSupabaseAdminClient();
+  const { data, error } = await client
+    .from("chats")
+    .select("id,actor_id,title,created_at,updated_at")
+    .order("updated_at", { ascending: false })
+    .order("created_at", { ascending: false })
+    ;
+
+  if (error) {
+    throw new Error(`Failed to list chats: ${error.message}`);
+  }
+
+  return (data ?? []).map(toChat);
+}
+
+export async function listChatsByActorId(actorId: string): Promise<ChatThread[]> {
+  const client = getSupabaseAdminClient();
+  const { data, error } = await client
+    .from("chats")
+    .select("id,actor_id,title,created_at,updated_at")
+    .eq("actor_id", actorId)
+    .order("updated_at", { ascending: false })
+    .order("created_at", { ascending: false })
+    ;
+
+  if (error) {
+    throw new Error(`Failed to list chats for actor ${actorId}: ${error.message}`);
+  }
+
+  return (data ?? []).map(toChat);
+}
+
+async function ensureMemoryRows(actorId: string, chatId: string): Promise<void> {
+  const client = getSupabaseAdminClient();
+  const emptyContent: JsonRecord = {};
+
+  const statements = ["short_term_memory", "intermediate_memory", "long_term_memory"].map((table) =>
+    client
+      .from(table)
+      .upsert({ actor_id: actorId, chat_id: chatId, content: emptyContent, updated_at: new Date().toISOString() }, { onConflict: "actor_id,chat_id" })
+  );
+
+  const results = await Promise.all(statements);
+  const failed = results.find((result) => result.error);
+  if (failed?.error) {
+    throw new Error(`Failed to provision memory rows: ${failed.error.message}`);
+  }
+}
+
+export async function saveChat(chat: ChatThread): Promise<ChatThread> {
+  await requireActor(chat.actorId);
+
+  const client = getSupabaseAdminClient();
+  const { data, error } = await client
+    .from("chats")
+    .upsert(
+      {
+        id: chat.id,
+        actor_id: chat.actorId,
+        title: chat.title.trim(),
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: "id" }
+    )
+    .select("id,actor_id,title,created_at,updated_at")
+    .single<ChatRow>();
+
+  if (error) {
+    throw new Error(`Failed to save chat ${chat.id}: ${error.message}`);
+  }
+
+  await ensureMemoryRows(data.actor_id, data.id);
+
+  return toChat(data);
+}
+
+export async function deleteChat(chatId: string): Promise<void> {
+  const client = getSupabaseAdminClient();
+  const { error } = await client.from("chats").eq("id", chatId).delete();
+
+  if (error) {
+    throw new Error(`Failed to delete chat ${chatId}: ${error.message}`);
+  }
+}
+
+export async function deleteChatById(chatId: string): Promise<void> {
+  await deleteChat(chatId);
+}
+
+export async function getMessages(chatId: string): Promise<Message[]> {
+  const client = getSupabaseAdminClient();
+  const { data, error } = await client
+    .from("messages")
+    .select("id,actor_id,chat_id,role,content,created_at")
+    .eq("chat_id", chatId)
+    .order("created_at", { ascending: true })
+    ;
+
+  if (error) {
+    throw new Error(`Failed to load messages for chat ${chatId}: ${error.message}`);
+  }
+
+  return (data ?? []).map((row: MessageRow) => {
+    const parsed = parseMessageContent(row.content);
+    return {
+      ...toMessage(row),
+      content: parsed.text,
+      ...(parsed.model ? { model: parsed.model } : {}),
+      ...(parsed.assets ? { assets: parsed.assets } : {}),
+    };
+  });
+}
+
+export async function getRecentMessages(chatId: string, limit = 20): Promise<Message[]> {
+  const client = getSupabaseAdminClient();
+  const { data, error } = await client
+    .from("messages")
+    .select("id,actor_id,chat_id,role,content,created_at")
+    .eq("chat_id", chatId)
+    .order("created_at", { ascending: false })
+    .limit(limit)
+    ;
+
+  if (error) {
+    throw new Error(`Failed to load recent messages for chat ${chatId}: ${error.message}`);
+  }
+
+  return (data ?? [])
+    .reverse()
+    .map((row: MessageRow) => {
+      const parsed = parseMessageContent(row.content);
+      return {
+        ...toMessage(row),
+        content: parsed.text,
+        ...(parsed.model ? { model: parsed.model } : {}),
+        ...(parsed.assets ? { assets: parsed.assets } : {}),
+      };
     });
-  });
+}
 
-  actorIds.forEach((actorId) => {
-    deletedActorIds.add(actorId);
-    memoryActors.delete(actorId);
-  });
+export async function saveMessage(
+  chatId: string,
+  message: Omit<Message, "chatId" | "createdAt"> & Partial<Pick<Message, "chatId" | "createdAt">>
+): Promise<Message> {
+  const chat = await requireChat(chatId);
+  const client = getSupabaseAdminClient();
+
+  const { data, error } = await client
+    .from("messages")
+    .insert({
+      id: message.id,
+      actor_id: chat.actor_id,
+      chat_id: chatId,
+      role: message.role,
+      content: encodeMessageContent(message),
+      created_at: message.createdAt ?? new Date().toISOString(),
+    })
+    .select("id,actor_id,chat_id,role,content,created_at")
+    .single<MessageRow>();
+
+  if (error) {
+    throw new Error(`Failed to save message for chat ${chatId}: ${error.message}`);
+  }
+
+  const { error: chatTouchError } = await client
+    .from("chats")
+    .eq("id", chatId)
+    .update({ updated_at: new Date().toISOString() });
+
+  if (chatTouchError) {
+    throw new Error(`Failed to update chat timestamp for ${chatId}: ${chatTouchError.message}`);
+  }
+
+  const parsed = parseMessageContent(data.content);
+  return {
+    ...toMessage(data),
+    content: parsed.text,
+    ...(parsed.model ? { model: parsed.model } : {}),
+    ...(parsed.assets ? { assets: parsed.assets } : {}),
+  };
+}
+
+export async function appendUserMessage(chatId: string, params: { id: string; content: string; createdAt?: string }): Promise<Message> {
+  return saveMessage(chatId, { ...params, role: "user" });
+}
+
+export async function appendAssistantMessage(
+  chatId: string,
+  params: { id: string; content: string; model?: string; assets?: Array<{ type: string; url: string }>; createdAt?: string }
+): Promise<Message> {
+  return saveMessage(chatId, { ...params, role: "assistant" });
+}
+
+async function getMemory(table: "short_term_memory" | "intermediate_memory" | "long_term_memory", actorId: string, chatId: string): Promise<JsonRecord> {
+  const client = getSupabaseAdminClient();
+  const { data, error } = await client
+    .from(table)
+    .select("id,actor_id,chat_id,content,created_at,updated_at")
+    .eq("actor_id", actorId)
+    .eq("chat_id", chatId)
+    .maybeSingle<MemoryRow>();
+
+  if (error) {
+    throw new Error(`Failed to load ${table} for actor ${actorId} chat ${chatId}: ${error.message}`);
+  }
+
+  return toMemoryContent(data ?? null);
+}
+
+async function setMemory(
+  table: "short_term_memory" | "intermediate_memory" | "long_term_memory",
+  actorId: string,
+  chatId: string,
+  payload: JsonRecord
+): Promise<void> {
+  const client = getSupabaseAdminClient();
+  const { error } = await client
+    .from(table)
+    .upsert(
+      {
+        actor_id: actorId,
+        chat_id: chatId,
+        content: payload,
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: "actor_id,chat_id" }
+    );
+
+  if (error) {
+    throw new Error(`Failed to save ${table} for actor ${actorId} chat ${chatId}: ${error.message}`);
+  }
+}
+
+export async function getShortTermMemory(actorId: string, chatId: string): Promise<JsonRecord> {
+  return getMemory("short_term_memory", actorId, chatId);
+}
+
+export async function setShortTermMemory(actorId: string, chatId: string, payload: JsonRecord): Promise<void> {
+  await setMemory("short_term_memory", actorId, chatId, payload);
+}
+
+export async function getIntermediateMemory(actorId: string, chatId: string): Promise<JsonRecord> {
+  return getMemory("intermediate_memory", actorId, chatId);
+}
+
+export async function setIntermediateMemory(actorId: string, chatId: string, payload: JsonRecord): Promise<void> {
+  await setMemory("intermediate_memory", actorId, chatId, payload);
+}
+
+export async function getLongTermMemory(actorId: string, chatId: string): Promise<JsonRecord> {
+  return getMemory("long_term_memory", actorId, chatId);
+}
+
+export async function setLongTermMemory(actorId: string, chatId: string, payload: JsonRecord): Promise<void> {
+  await setMemory("long_term_memory", actorId, chatId, payload);
+}
+
+export async function getConversationSummary(chatId: string): Promise<string> {
+  const chat = await requireChat(chatId);
+  const intermediate = await getIntermediateMemory(chat.actor_id, chatId);
+  return typeof intermediate.summary === "string" ? intermediate.summary : "";
+}
+
+export async function setConversationSummary(chatId: string, summary: string): Promise<void> {
+  const chat = await requireChat(chatId);
+  const current = await getIntermediateMemory(chat.actor_id, chatId);
+  await setIntermediateMemory(chat.actor_id, chatId, { ...current, summary });
+}
+
+export async function getChatContextState(actorId: string, chatId: string): Promise<{
+  actor: Actor;
+  chat: ChatThread;
+  shortTermMemory: JsonRecord;
+  intermediateMemory: JsonRecord;
+  longTermMemory: JsonRecord;
+  recentMessages: Message[];
+}> {
+  const [actor, chat, shortTermMemory, intermediateMemory, longTermMemory, recentMessages] = await Promise.all([
+    getActorById(actorId),
+    getChatById(chatId),
+    getShortTermMemory(actorId, chatId),
+    getIntermediateMemory(actorId, chatId),
+    getLongTermMemory(actorId, chatId),
+    getRecentMessages(chatId),
+  ]);
+
+  if (!actor) {
+    throw new Error(`Actor not found: ${actorId}`);
+  }
+
+  if (!chat || chat.actorId !== actorId) {
+    throw new Error(`Chat not found for actor ${actorId}: ${chatId}`);
+  }
+
+  return {
+    actor,
+    chat,
+    shortTermMemory,
+    intermediateMemory,
+    longTermMemory,
+    recentMessages,
+  };
 }
