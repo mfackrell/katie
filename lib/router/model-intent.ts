@@ -6,22 +6,52 @@ import { LlmProvider } from "@/lib/providers/types";
 
 export type ProviderName = "openai" | "google" | "grok" | "anthropic";
 export type RoutingChoice = { providerName: ProviderName; modelId: string };
-export type RequestIntent = "text" | "vision-analysis" | "multimodal-reasoning" | "image-generation";
+export type RequestIntent =
+  | "text"
+  | "technical-debugging"
+  | "architecture-review"
+  | "code-generation"
+  | "vision-analysis"
+  | "multimodal-reasoning"
+  | "image-generation";
 
 const IMAGE_GENERATION_PROMPT =
   /\b(generate|create|make|design|render)\b[\s\S]{0,80}\b(image|photo|picture|illustration|art|hero image|logo|banner|visual)\b/i;
 const ANALYSIS_PROMPT =
   /\b(read|analy[sz]e|inspect|interpret|estimate|project|forecast|extract|summari[sz]e|compare|classify)\b/i;
 const REASONING_PROMPT = /\b(project|forecast|predict|reason|infer|trend|next|quarters?|months?|years?)\b/i;
+const TECHNICAL_DEBUGGING_PROMPT =
+  /\b(debug|bug|fix|error|exception|stack\s*trace|failing|broken|troubleshoot|regression|incident)\b/i;
+const ARCHITECTURE_REVIEW_PROMPT =
+  /\b(architecture|system\s*design|design\s*review|scalability|trade[\s-]?offs?|microservices?|monolith|repo\s*review|codebase\s*review|review\s+(this\s+)?repo)\b/i;
+const CODE_GENERATION_PROMPT =
+  /\b(write|generate|create|implement|patch|refactor)\b[\s\S]{0,50}\b(code|function|class|script|module|typescript|javascript|python|sql|api|router)\b|\bcode\s+generation\b/i;
+const TECHNICAL_FILE_PROMPT = /\b[\w./-]+\.(ts|tsx|js|jsx|py|go|java|rs|cpp|c|cs|rb|php|swift|kt|sql)\b/i;
+
+const IMAGE_GENERATION_MODEL_PATTERNS = [
+  "banana",
+  "image",
+  "image-preview",
+  "imagen",
+  "stable-diffusion",
+  "sdxl",
+  "dall-e",
+  "midjourney",
+  "flux"
+];
 
 function isImageGenerationModel(providerName: ProviderName, modelId: string): boolean {
   const normalizedModel = modelId.toLowerCase();
+
+  if (IMAGE_GENERATION_MODEL_PATTERNS.some((pattern) => normalizedModel.includes(pattern))) {
+    return true;
+  }
 
   if (providerName === "google") {
     return isGoogleImageGenerationModel(modelId);
   }
 
-  return normalizedModel.includes("image");
+  return false;
 }
 
 function isVisionAnalysisModel(providerName: ProviderName, modelId: string): boolean {
@@ -36,6 +66,18 @@ function isVisionAnalysisModel(providerName: ProviderName, modelId: string): boo
 export function inferRequestIntent(prompt: string, hasImages: boolean): RequestIntent {
   if (IMAGE_GENERATION_PROMPT.test(prompt)) {
     return "image-generation";
+  }
+
+  if (TECHNICAL_DEBUGGING_PROMPT.test(prompt)) {
+    return "technical-debugging";
+  }
+
+  if (ARCHITECTURE_REVIEW_PROMPT.test(prompt)) {
+    return "architecture-review";
+  }
+
+  if (CODE_GENERATION_PROMPT.test(prompt) || TECHNICAL_FILE_PROMPT.test(prompt)) {
+    return "code-generation";
   }
 
   if (!hasImages) {
@@ -61,8 +103,41 @@ function modelSupportsIntent(providerName: ProviderName, modelId: string, intent
         !isImageGenerationModel(providerName, modelId)
       );
     case "text":
+    case "technical-debugging":
+    case "architecture-review":
+    case "code-generation":
       return !isImageGenerationModel(providerName, modelId);
   }
+}
+
+function rankTechnicalModel(providerName: ProviderName, modelId: string): number {
+  if (isImageGenerationModel(providerName, modelId)) {
+    return -1;
+  }
+
+  const normalizedModel = modelId.toLowerCase();
+  let score = 10;
+
+  if (normalizedModel.includes("codex") || normalizedModel.includes("o3-pro")) {
+    score += 8;
+  }
+  if (normalizedModel.includes("opus") || normalizedModel.includes("sonnet")) {
+    score += 6;
+  }
+  if (normalizedModel.includes("pro")) {
+    score += 4;
+  }
+  if (normalizedModel.includes("gpt-5") || normalizedModel.includes("gpt-4.1")) {
+    score += 4;
+  }
+  if (normalizedModel.includes("mini") || normalizedModel.includes("flash") || normalizedModel.includes("haiku")) {
+    score -= 4;
+  }
+  if (normalizedModel.includes("pulse")) {
+    score -= 6;
+  }
+
+  return score;
 }
 
 function rankModelForIntent(providerName: ProviderName, modelId: string, intent: RequestIntent): number {
@@ -104,6 +179,10 @@ function rankModelForIntent(providerName: ProviderName, modelId: string, intent:
       return 1;
     case "text":
       return modelSupportsIntent(providerName, modelId, intent) ? 1 : -1;
+    case "technical-debugging":
+    case "architecture-review":
+    case "code-generation":
+      return rankTechnicalModel(providerName, modelId);
   }
 }
 
