@@ -35,6 +35,10 @@ function getPersistenceMode(): PersistenceMode {
   return allowMemoryFallback ? "memory-fallback" : "durable";
 }
 
+function isMemoryFallbackMode(): boolean {
+  return getPersistenceMode() === "memory-fallback";
+}
+
 function requireBlobBaseUrl(): string {
   const baseUrl = getBlobBaseUrl();
   if (baseUrl) {
@@ -365,9 +369,11 @@ export async function getActorById(actorId: string): Promise<Actor | null> {
     return null;
   }
 
-  const memoryActor = memoryActors.get(actorId);
-  if (memoryActor) {
-    return memoryActor;
+  if (isMemoryFallbackMode()) {
+    const memoryActor = memoryActors.get(actorId);
+    if (memoryActor) {
+      return memoryActor;
+    }
   }
 
   const actorFromBlob = await blobGetWithRetry<Actor>(`actors/${actorId}.json`);
@@ -388,31 +394,32 @@ export async function listActors(): Promise<Actor[]> {
   const deletedIds = await getDeletedActorIds();
   const deleted = new Set(deletedIds);
   const registryActors = await readActorRegistry();
-
-  registryActors.forEach((actor) => {
-    memoryActors.set(actor.id, actor);
-  });
-
-  let blobActors = registryActors;
-  if (blobActors.length === 0) {
-    const blobActorIds = (await blobGetWithRetry<string[]>(ACTOR_INDEX_PATH)) ?? [];
-    blobActors = (
-      await Promise.all(blobActorIds.map(async (actorId) => blobGetWithRetry<Actor>(`actors/${actorId}.json`)))
-    ).filter((actor): actor is Actor => Boolean(actor));
-
-    blobActors.forEach((actor) => {
-      memoryActors.set(actor.id, actor);
-    });
-  }
+  const blobActorIds = (await blobGetWithRetry<string[]>(ACTOR_INDEX_PATH)) ?? [];
+  const indexedActors = (
+    await Promise.all(blobActorIds.map(async (actorId) => blobGetWithRetry<Actor>(`actors/${actorId}.json`)))
+  ).filter((actor): actor is Actor => Boolean(actor));
 
   const deduped = new Map<string, Actor>();
-  [...blobActors, ...memoryActors.values()].forEach((actor) => {
+  [...registryActors, ...indexedActors].forEach((actor) => {
     if (!deleted.has(actor.id)) {
       deduped.set(actor.id, actor);
     }
   });
 
-  return [...deduped.values()];
+  if (isMemoryFallbackMode()) {
+    [...memoryActors.values()].forEach((actor) => {
+      if (!deleted.has(actor.id)) {
+        deduped.set(actor.id, actor);
+      }
+    });
+  }
+
+  const durableActors = [...deduped.values()];
+  durableActors.forEach((actor) => {
+    memoryActors.set(actor.id, actor);
+  });
+
+  return durableActors;
 }
 
 export async function getChatById(chatId: string): Promise<ChatThread | null> {

@@ -9,11 +9,12 @@ interface SidebarProps {
   activeChatId: string;
   onSelectActor: (actorId: string) => void;
   onSelectChat: (chatId: string) => void;
-  onCreateChat: (actorId: string) => void | Promise<void>;
+  onCreateChat: (actorId: string) => Promise<void>;
   onOpenCreateActor: () => void;
   onOpenCreateSubActor: (actor: Actor) => void;
   onDeleteActor: (actor: Actor) => void;
   onDeleteChat: (chat: ChatThread) => void | Promise<void>;
+  onError: (message: string) => void;
 }
 
 export function Sidebar({
@@ -28,6 +29,7 @@ export function Sidebar({
   onOpenCreateSubActor,
   onDeleteActor,
   onDeleteChat,
+  onError,
 }: SidebarProps) {
   const sortedActors = [...actors].sort((a, b) => a.name.localeCompare(b.name));
 
@@ -90,7 +92,15 @@ export function Sidebar({
                   <div className="grid grid-cols-3 gap-1.5 sm:flex sm:flex-col sm:items-end">
                     <button
                       className="min-h-10 rounded-xl border border-white/10 bg-white/[0.04] px-2.5 py-1 text-[11px] font-medium text-zinc-300 transition hover:border-emerald-400/30 hover:bg-emerald-400/10 hover:text-white"
-                      onClick={() => void onCreateChat(actor.id)}
+                      onClick={async () => {
+                        try {
+                          await onCreateChat(actor.id);
+                        } catch (error) {
+                          const message =
+                            error instanceof Error ? error.message : "Failed to create chat.";
+                          onError(message);
+                        }
+                      }}
                       title={`New chat for ${actor.name}`}
                     >
                       New Chat
