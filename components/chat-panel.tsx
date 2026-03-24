@@ -626,7 +626,7 @@ export function ChatPanel({ actorId, chatId }: ChatPanelProps) {
 
   return (
     <main className="relative flex min-h-0 flex-1 flex-col overflow-hidden bg-gradient-to-b from-white/[0.02] via-transparent to-black/10">
-      <header className="border-b border-white/10 px-4 py-3 sm:px-6 sm:py-3.5">
+      <header className="shrink-0 border-b border-white/10 px-4 py-3 sm:px-6 sm:py-3.5">
         <div className="flex flex-col gap-3">
           <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
             <div className="flex min-w-0 items-center gap-2.5">
@@ -712,7 +712,7 @@ export function ChatPanel({ actorId, chatId }: ChatPanelProps) {
 
       <section
         ref={messagesContainerRef}
-        className="relative flex-1 space-y-4 overflow-y-auto px-4 py-4 pb-24 sm:space-y-5 sm:px-6 sm:py-5 sm:pb-28"
+        className="relative min-h-0 flex-1 space-y-4 overflow-y-auto px-4 py-4 pb-24 sm:space-y-5 sm:px-6 sm:py-5 sm:pb-28"
       >
         {isHydratingMessages ? (
           <div className="max-w-2xl rounded-[28px] border border-white/10 bg-white/[0.035] p-6 shadow-[0_20px_60px_rgba(0,0,0,0.18)] backdrop-blur-sm">
@@ -818,7 +818,7 @@ export function ChatPanel({ actorId, chatId }: ChatPanelProps) {
         <div ref={messagesEndRef} />
       </section>
 
-      <form onSubmit={onSubmit} className="border-t border-white/10 px-4 py-3 pb-[calc(env(safe-area-inset-bottom)+0.75rem)] sm:px-6 sm:py-4">
+      <form onSubmit={onSubmit} className="shrink-0 border-t border-white/10 px-4 py-3 pb-[calc(env(safe-area-inset-bottom)+0.75rem)] sm:px-6 sm:py-4">
         <p className="sr-only" role="status" aria-live="polite">
           {statusMessage}
         </p>
