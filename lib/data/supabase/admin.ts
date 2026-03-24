@@ -95,8 +95,8 @@ class PostgrestQuery {
   then<TResult1 = { data: unknown[]; error: { message: string } | null }, TResult2 = never>(
     onfulfilled?: ((value: { data: unknown[]; error: { message: string } | null }) => TResult1 | PromiseLike<TResult1>) | null,
     onrejected?: ((reason: unknown) => TResult2 | PromiseLike<TResult2>) | null
-  ) {
-    return this.execute<unknown[]>("GET").then(onfulfilled as any, onrejected as any);
+  ): Promise<TResult1 | TResult2> {
+    return this.execute<unknown[]>("GET").then(onfulfilled ?? undefined, onrejected ?? undefined);
   }
   private buildUrl(selectOverride?: string): string {
     const url = new URL(`${this.config.url}/rest/v1/${this.table}`);
