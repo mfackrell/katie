@@ -32,7 +32,7 @@ export function Sidebar({
   const sortedActors = [...actors].sort((a, b) => a.name.localeCompare(b.name));
 
   return (
-    <aside className="relative flex min-h-0 w-full flex-1 flex-col bg-gradient-to-b from-white/[0.03] via-zinc-950/40 to-zinc-950/80 p-4 sm:p-5">
+    <aside className="relative flex h-full min-h-0 w-full flex-col bg-gradient-to-b from-white/[0.03] via-zinc-950/40 to-zinc-950/80 p-4 sm:p-5">
       <div className="pointer-events-none absolute inset-x-0 top-0 h-32 bg-gradient-to-b from-sky-400/10 to-transparent" />
       <div className="relative flex min-h-0 flex-1 flex-col">
         <div className="mb-5 rounded-3xl border border-white/10 bg-white/[0.035] p-4 shadow-[0_18px_50px_rgba(0,0,0,0.25)] backdrop-blur-sm">

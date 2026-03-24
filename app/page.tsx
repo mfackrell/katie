@@ -370,20 +370,65 @@ export default function HomePage() {
 
       <div className="relative mx-auto flex min-h-[calc(100vh-2rem)] max-w-[1600px] overflow-hidden rounded-[28px] border border-white/10 bg-zinc-950/70 shadow-[0_40px_120px_rgba(0,0,0,0.55)] backdrop-blur-xl">
         <div className="pointer-events-none absolute inset-0 rounded-[28px] ring-1 ring-inset ring-white/5" />
-        <Sidebar
-          actors={actors}
-          chats={filteredChats}
-          activeActorId={activeActorId}
-          activeChatId={activeChatId}
-          onSelectActor={handleSelectActor}
-          onSelectChat={handleSelectChat}
-          onCreateChat={createChat}
-          onOpenCreateActor={() => setModalState({ type: "primary" })}
-          onOpenCreateSubActor={(actor) => setModalState({ type: "sub", parentActor: actor })}
-          onDeleteActor={deleteActor}
-          onDeleteChat={deleteChat}
+        <button
+          type="button"
+          className="absolute left-4 top-4 z-30 inline-flex min-h-10 items-center gap-2 rounded-xl border border-white/10 bg-zinc-900/75 px-3 py-2 text-sm font-medium text-zinc-100 shadow-[0_10px_30px_rgba(0,0,0,0.35)] backdrop-blur-sm transition hover:bg-zinc-900/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400 lg:hidden"
+          onClick={() => setSidebarOpen(true)}
+          aria-label="Open sidebar"
+        >
+          <span aria-hidden>☰</span>
+          <span>Actors</span>
+        </button>
+
+        <div className="hidden h-full w-80 min-w-[20rem] max-w-[22rem] flex-none border-r border-white/10 lg:flex">
+          <Sidebar
+            actors={actors}
+            chats={filteredChats}
+            activeActorId={activeActorId}
+            activeChatId={activeChatId}
+            onSelectActor={handleSelectActor}
+            onSelectChat={handleSelectChat}
+            onCreateChat={createChat}
+            onOpenCreateActor={() => setModalState({ type: "primary" })}
+            onOpenCreateSubActor={(actor) => setModalState({ type: "sub", parentActor: actor })}
+            onDeleteActor={deleteActor}
+            onDeleteChat={deleteChat}
+          />
+        </div>
+
+        <div className="min-w-0 flex-1">
+          <ChatPanel actorId={activeActorId} chatId={activeChatId} />
+        </div>
+
+        <div
+          className={[
+            "absolute inset-0 z-40 bg-black/60 backdrop-blur-[1px] transition-opacity duration-200 lg:hidden",
+            sidebarOpen ? "opacity-100" : "pointer-events-none opacity-0",
+          ].join(" ")}
+          onClick={() => setSidebarOpen(false)}
+          aria-hidden
         />
-        <ChatPanel actorId={activeActorId} chatId={activeChatId} />
+        <aside
+          className={[
+            "absolute inset-y-0 left-0 z-50 w-[min(22rem,86vw)] border-r border-white/10 shadow-[0_24px_80px_rgba(0,0,0,0.5)] transition-transform duration-200 ease-out lg:hidden",
+            sidebarOpen ? "translate-x-0" : "-translate-x-full",
+          ].join(" ")}
+          aria-hidden={!sidebarOpen}
+        >
+          <Sidebar
+            actors={actors}
+            chats={filteredChats}
+            activeActorId={activeActorId}
+            activeChatId={activeChatId}
+            onSelectActor={handleSelectActor}
+            onSelectChat={handleSelectChat}
+            onCreateChat={createChat}
+            onOpenCreateActor={() => setModalState({ type: "primary" })}
+            onOpenCreateSubActor={(actor) => setModalState({ type: "sub", parentActor: actor })}
+            onDeleteActor={deleteActor}
+            onDeleteChat={deleteChat}
+          />
+        </aside>
       </div>
 
       {modalState ? (
