@@ -54,6 +54,24 @@ function pickActiveChatId(
   return actorChats[0]?.id ?? "";
 }
 
+function pickNextActiveChatAfterDeletion(
+  chats: ChatThread[],
+  deletedChat: ChatThread,
+  actorChatSelections: Record<string, string>,
+): string {
+  const sameActorChatId = pickActiveChatId(chats, deletedChat.actorId, null, actorChatSelections);
+  if (sameActorChatId) {
+    return sameActorChatId;
+  }
+
+  const nextActorId = chats[0]?.actorId ?? "";
+  if (!nextActorId) {
+    return "";
+  }
+
+  return pickActiveChatId(chats, nextActorId, null, actorChatSelections);
+}
+
 export default function HomePage() {
   const [actors, setActors] = useState<Actor[]>([]);
   const [chats, setChats] = useState<ChatThread[]>([]);
@@ -284,6 +302,43 @@ export default function HomePage() {
     setActiveChatId(nextActiveChatId);
   }
 
+  async function deleteChat(chat: ChatThread) {
+    const response = await fetch(`/api/chats?id=${encodeURIComponent(chat.id)}`, {
+      method: "DELETE",
+    });
+
+    const payload = (await response.json()) as { deletedChatId?: string; error?: string };
+
+    if (!response.ok || payload.deletedChatId !== chat.id) {
+      throw new Error(payload.error ?? "Failed to delete chat.");
+    }
+
+    const nextChats = chats.filter((item) => item.id !== chat.id);
+    const nextSelections = Object.fromEntries(
+      Object.entries(actorChatSelections).flatMap(([actorId, chatId]) => {
+        if (chatId !== chat.id) {
+          return [[actorId, chatId]];
+        }
+
+        const nextChatId = pickActiveChatId(nextChats, actorId, null, actorChatSelections);
+        return nextChatId ? [[actorId, nextChatId]] : [];
+      }),
+    );
+    const nextActiveChatId =
+      activeChatId === chat.id
+        ? pickNextActiveChatAfterDeletion(nextChats, chat, nextSelections)
+        : activeChatId;
+    const nextActiveActorId =
+      activeChatId === chat.id && nextActiveChatId
+        ? nextChats.find((item) => item.id === nextActiveChatId)?.actorId ?? activeActorId
+        : activeActorId;
+
+    setChats(nextChats);
+    setActorChatSelections(nextSelections);
+    setActiveActorId(nextActiveActorId);
+    setActiveChatId(nextActiveChatId);
+  }
+
   function handleSelectActor(nextActorId: string) {
     setActiveActorId(nextActorId);
     setActiveChatId((current) =>
@@ -313,87 +368,21 @@ export default function HomePage() {
         <div className="absolute bottom-[-6rem] left-1/3 h-72 w-72 rounded-full bg-indigo-500/10 blur-3xl" />
       </div>
 
-      <div className="relative mx-auto flex min-h-[calc(100dvh-1.5rem)] max-w-[1600px] flex-col overflow-hidden rounded-[24px] border border-white/10 bg-zinc-950/70 shadow-[0_40px_120px_rgba(0,0,0,0.55)] backdrop-blur-xl lg:min-h-[calc(100dvh-3rem)] lg:flex-row lg:rounded-[28px]">
-        <div className="pointer-events-none absolute inset-0 rounded-[24px] ring-1 ring-inset ring-white/5 lg:rounded-[28px]" />
-
-        <div className="relative flex items-center justify-between gap-3 border-b border-white/10 px-4 py-3 lg:hidden">
-          <div className="min-w-0">
-            <p className="text-[10px] font-semibold uppercase tracking-[0.24em] text-zinc-500">
-              Navigation
-            </p>
-            <h1 className="truncate text-base font-semibold text-white">Katie Control Plane</h1>
-          </div>
-          <button
-            type="button"
-            onClick={() => setSidebarOpen(true)}
-            className="inline-flex min-h-11 items-center gap-2 rounded-2xl border border-white/10 bg-white/[0.05] px-4 py-2 text-sm font-medium text-zinc-100 transition hover:border-white/20 hover:bg-white/[0.08] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
-            aria-expanded={sidebarOpen}
-            aria-controls="mobile-sidebar"
-          >
-            <span aria-hidden="true">☰</span>
-            Browse chats
-          </button>
-        </div>
-
-        <div className="hidden lg:flex lg:w-80 lg:flex-none lg:border-r lg:border-white/10">
-          <Sidebar
-            actors={actors}
-            chats={filteredChats}
-            activeActorId={activeActorId}
-            activeChatId={activeChatId}
-            onSelectActor={handleSelectActor}
-            onSelectChat={handleSelectChat}
-            onCreateChat={createChat}
-            onOpenCreateActor={() => setModalState({ type: "primary" })}
-            onOpenCreateSubActor={(actor) => setModalState({ type: "sub", parentActor: actor })}
-            onDeleteActor={deleteActor}
-          />
-        </div>
-
-        {sidebarOpen ? (
-          <div className="absolute inset-0 z-30 lg:hidden" role="dialog" aria-modal="true" aria-label="Chat navigation drawer">
-            <button
-              type="button"
-              className="absolute inset-0 bg-black/70 backdrop-blur-sm"
-              onClick={() => setSidebarOpen(false)}
-              aria-label="Close navigation drawer"
-            />
-            <div
-              id="mobile-sidebar"
-              className="absolute inset-y-0 left-0 flex w-[min(88vw,24rem)] max-w-full flex-col border-r border-white/10 bg-zinc-950/95 shadow-[0_24px_80px_rgba(0,0,0,0.45)]"
-            >
-              <div className="flex items-center justify-between border-b border-white/10 px-4 py-3">
-                <div>
-                  <p className="text-[10px] font-semibold uppercase tracking-[0.24em] text-zinc-500">
-                    Navigation
-                  </p>
-                  <p className="text-sm font-semibold text-white">Actors & chats</p>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setSidebarOpen(false)}
-                  className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-2xl border border-white/10 bg-white/[0.05] text-zinc-100 transition hover:border-white/20 hover:bg-white/[0.08] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
-                  aria-label="Close navigation drawer"
-                >
-                  ✕
-                </button>
-              </div>
-              <Sidebar
-                actors={actors}
-                chats={filteredChats}
-                activeActorId={activeActorId}
-                activeChatId={activeChatId}
-                onSelectActor={handleSelectActor}
-                onSelectChat={handleSelectChat}
-                onCreateChat={createChat}
-                onOpenCreateActor={() => setModalState({ type: "primary" })}
-                onOpenCreateSubActor={(actor) => setModalState({ type: "sub", parentActor: actor })}
-                onDeleteActor={deleteActor}
-              />
-            </div>
-          </div>
-        ) : null}
-
+      <div className="relative mx-auto flex min-h-[calc(100vh-2rem)] max-w-[1600px] overflow-hidden rounded-[28px] border border-white/10 bg-zinc-950/70 shadow-[0_40px_120px_rgba(0,0,0,0.55)] backdrop-blur-xl">
+        <div className="pointer-events-none absolute inset-0 rounded-[28px] ring-1 ring-inset ring-white/5" />
+        <Sidebar
+          actors={actors}
+          chats={filteredChats}
+          activeActorId={activeActorId}
+          activeChatId={activeChatId}
+          onSelectActor={handleSelectActor}
+          onSelectChat={handleSelectChat}
+          onCreateChat={createChat}
+          onOpenCreateActor={() => setModalState({ type: "primary" })}
+          onOpenCreateSubActor={(actor) => setModalState({ type: "sub", parentActor: actor })}
+          onDeleteActor={deleteActor}
+          onDeleteChat={deleteChat}
+        />
         <ChatPanel actorId={activeActorId} chatId={activeChatId} />
       </div>
 

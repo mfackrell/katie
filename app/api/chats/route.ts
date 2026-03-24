@@ -1,12 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { getActorById, listChats, listChatsByActorId, saveChat } from "@/lib/data/blob-store";
+import { deleteChatById, getActorById, getChatById, listChats, listChatsByActorId, saveChat } from "@/lib/data/blob-store";
 import type { ChatThread } from "@/lib/types/chat";
 
 const createChatSchema = z.object({
   id: z.string().min(1).optional(),
   actorId: z.string().min(1),
   title: z.string().min(1)
+});
+
+const chatIdParamSchema = z.object({
+  id: z.string().min(1)
 });
 
 export async function GET(request: NextRequest) {
@@ -43,5 +47,24 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ chat: savedChat }, { status: 201 });
   } catch {
     return NextResponse.json({ error: "Invalid request payload" }, { status: 400 });
+  }
+}
+
+export async function DELETE(request: NextRequest) {
+  const url = new URL(request.url);
+
+  try {
+    const { id: chatId } = chatIdParamSchema.parse({ id: url.searchParams.get("id") });
+    const chat = await getChatById(chatId);
+
+    if (!chat) {
+      return NextResponse.json({ error: `Chat not found: ${chatId}` }, { status: 404 });
+    }
+
+    await deleteChatById(chatId);
+
+    return NextResponse.json({ success: true, deletedChatId: chatId });
+  } catch {
+    return NextResponse.json({ error: "Invalid chat id" }, { status: 400 });
   }
 }
