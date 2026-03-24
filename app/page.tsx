@@ -81,6 +81,7 @@ export default function HomePage() {
   const [modalState, setModalState] = useState<ModalState>(null);
   const [hasLoadedPersistedState, setHasLoadedPersistedState] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [uiError, setUiError] = useState("");
 
   useEffect(() => {
     async function fetchInitialData() {
@@ -98,7 +99,10 @@ export default function HomePage() {
           : { chats: [] };
 
         const persistedActors = actorsPayload.actors ?? [];
-        const persistedChats = chatsPayload.chats ?? [];
+        const persistedActorIds = new Set(persistedActors.map((actor) => actor.id));
+        const persistedChats = (chatsPayload.chats ?? []).filter((chat) =>
+          persistedActorIds.has(chat.actorId),
+        );
         const storedActorId = window.localStorage.getItem(ACTIVE_ACTOR_STORAGE_KEY);
         const storedChatId = window.localStorage.getItem(ACTIVE_CHAT_STORAGE_KEY);
         const storedActorSelections = window.localStorage.getItem(
@@ -108,10 +112,13 @@ export default function HomePage() {
           ? (JSON.parse(storedActorSelections) as Record<string, string>)
           : {};
         const validActorIds = new Set(persistedActors.map((actor) => actor.id));
-        const validChatIds = new Set(persistedChats.map((chat) => chat.id));
+        const chatById = new Map(persistedChats.map((chat) => [chat.id, chat]));
         const sanitizedActorChatSelections = Object.fromEntries(
           Object.entries(nextActorChatSelections).filter(
-            ([actorId, chatId]) => validActorIds.has(actorId) && validChatIds.has(chatId),
+            ([actorId, chatId]) =>
+              validActorIds.has(actorId) &&
+              chatById.has(chatId) &&
+              chatById.get(chatId)?.actorId === actorId,
           ),
         );
         const nextActiveActorId = pickActiveActorId(persistedActors, storedActorId);
@@ -175,6 +182,7 @@ export default function HomePage() {
   useEffect(() => {
     if (!hasLoadedPersistedState || actors.length === 0) {
       if (hasLoadedPersistedState && actors.length === 0) {
+        setActorChatSelections({});
         setActiveActorId("");
         setActiveChatId("");
       }
@@ -191,6 +199,24 @@ export default function HomePage() {
     const nextChatId = pickActiveChatId(chats, activeActorId, activeChatId, actorChatSelections);
     if (nextChatId !== activeChatId) {
       setActiveChatId(nextChatId);
+    }
+
+    const validActorIds = new Set(actors.map((actor) => actor.id));
+    const validChatsById = new Map(
+      chats
+        .filter((chat) => validActorIds.has(chat.actorId))
+        .map((chat) => [chat.id, chat]),
+    );
+    const sanitizedSelections = Object.fromEntries(
+      Object.entries(actorChatSelections).filter(
+        ([actorId, chatId]) =>
+          validActorIds.has(actorId) &&
+          validChatsById.has(chatId) &&
+          validChatsById.get(chatId)?.actorId === actorId,
+      ),
+    );
+    if (Object.keys(sanitizedSelections).length !== Object.keys(actorChatSelections).length) {
+      setActorChatSelections(sanitizedSelections);
     }
   }, [
     activeActorId,
@@ -220,6 +246,7 @@ export default function HomePage() {
   );
 
   async function createChat(actorId: string) {
+    setUiError("");
     const chatResponse = await fetch("/api/chats", {
       method: "POST",
       headers: {
@@ -234,7 +261,9 @@ export default function HomePage() {
     const chatPayload = (await chatResponse.json()) as { chat?: ChatThread; error?: string };
 
     if (!chatResponse.ok || !chatPayload.chat) {
-      throw new Error(chatPayload.error ?? "Failed to create chat.");
+      const message = chatPayload.error ?? "Failed to create chat.";
+      setUiError(message);
+      throw new Error(message);
     }
 
     const createdChat = chatPayload.chat;
@@ -246,6 +275,7 @@ export default function HomePage() {
   }
 
   async function createActor(input: { name: string; purpose?: string; parentId?: string }) {
+    setUiError("");
     const actorResponse = await fetch("/api/actors", {
       method: "POST",
       headers: {
@@ -263,10 +293,15 @@ export default function HomePage() {
     const createdActor = actorPayload.actor;
     setActors((current) => [...current.filter((actor) => actor.id !== createdActor.id), createdActor]);
     setSidebarOpen(false);
-    await createChat(createdActor.id);
+    try {
+      await createChat(createdActor.id);
+    } catch {
+      // createChat already writes user-facing UI error state.
+    }
   }
 
   async function deleteActor(actor: Actor) {
+    setUiError("");
     const response = await fetch(`/api/actors?id=${encodeURIComponent(actor.id)}`, {
       method: "DELETE",
     });
@@ -303,6 +338,7 @@ export default function HomePage() {
   }
 
   async function deleteChat(chat: ChatThread) {
+    setUiError("");
     const response = await fetch(`/api/chats?id=${encodeURIComponent(chat.id)}`, {
       method: "DELETE",
     });
@@ -393,6 +429,7 @@ export default function HomePage() {
             onOpenCreateSubActor={(actor) => setModalState({ type: "sub", parentActor: actor })}
             onDeleteActor={deleteActor}
             onDeleteChat={deleteChat}
+            onError={setUiError}
           />
         </div>
 
@@ -427,9 +464,16 @@ export default function HomePage() {
             onOpenCreateSubActor={(actor) => setModalState({ type: "sub", parentActor: actor })}
             onDeleteActor={deleteActor}
             onDeleteChat={deleteChat}
+            onError={setUiError}
           />
         </aside>
       </div>
+
+      {uiError ? (
+        <div className="relative mx-auto mt-3 max-w-[1600px] rounded-xl border border-red-500/40 bg-red-500/10 px-4 py-3 text-sm text-red-100">
+          {uiError}
+        </div>
+      ) : null}
 
       {modalState ? (
         <ActorFormModal
