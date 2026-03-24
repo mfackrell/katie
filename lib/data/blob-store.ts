@@ -4,7 +4,6 @@ const memoryMessages = new Map<string, Message[]>();
 const memorySummaries = new Map<string, string>();
 const memoryActors = new Map<string, Actor>();
 const memoryChats = new Map<string, ChatThread>();
-const deletedActorIds = new Set<string>();
 
 const ACTOR_REGISTRY_PATH = "actors/registry.json";
 const ACTOR_DELETED_INDEX_PATH = "actors/deleted-index.json";
@@ -383,13 +382,17 @@ let chatRegistryCache: ChatThread[] | null = null;
 let deletedActorIdsCache: string[] | null = null;
 
 async function readActorRegistry(): Promise<Actor[]> {
+  if (actorRegistryCache !== null) {
+    return actorRegistryCache;
+  }
+
   const remoteRegistry = await blobGetWithRetry<Actor[]>(ACTOR_REGISTRY_PATH);
   if (remoteRegistry !== null) {
     actorRegistryCache = remoteRegistry;
-    return remoteRegistry;
+    return actorRegistryCache;
   }
   actorRegistryCache = [];
-  return [];
+  return actorRegistryCache;
 }
 
 async function writeActorRegistry(actors: Actor[]): Promise<void> {
@@ -398,13 +401,17 @@ async function writeActorRegistry(actors: Actor[]): Promise<void> {
 }
 
 async function readChatRegistry(): Promise<ChatThread[]> {
+  if (chatRegistryCache !== null) {
+    return chatRegistryCache;
+  }
+
   const remoteRegistry = await blobGetWithRetry<ChatThread[]>(CHAT_REGISTRY_PATH);
   if (remoteRegistry !== null) {
     chatRegistryCache = remoteRegistry;
-    return remoteRegistry;
+    return chatRegistryCache;
   }
   chatRegistryCache = [];
-  return [];
+  return chatRegistryCache;
 }
 
 async function writeChatRegistry(chats: ChatThread[]): Promise<void> {
@@ -414,28 +421,21 @@ async function writeChatRegistry(chats: ChatThread[]): Promise<void> {
 }
 
 async function getDeletedActorIds(): Promise<string[]> {
+  if (deletedActorIdsCache !== null) {
+    return deletedActorIdsCache;
+  }
+
   const deletedFromBlob = await blobGetWithRetry<string[]>(ACTOR_DELETED_INDEX_PATH);
   if (deletedFromBlob !== null) {
     deletedActorIdsCache = deletedFromBlob;
   } else {
     deletedActorIdsCache = [];
   }
-  const effectiveDeleted = deletedActorIdsCache ?? [];
-
-  effectiveDeleted.forEach((actorId) => {
-    deletedActorIds.add(actorId);
-  });
-
-  return [...deletedActorIds];
+  return deletedActorIdsCache;
 }
 
 export async function getActorById(actorId: string): Promise<Actor | null> {
   if (!actorId.trim()) {
-    return null;
-  }
-
-  const deletedIds = await getDeletedActorIds();
-  if (deletedIds.includes(actorId)) {
     return null;
   }
 
@@ -444,13 +444,6 @@ export async function getActorById(actorId: string): Promise<Actor | null> {
     if (memoryActor) {
       return memoryActor;
     }
-  }
-
-  const actorFromBlob = await blobGetWithRetry<Actor>(`actors/${actorId}.json`);
-  if (actorFromBlob) {
-    logPersistenceDebug("Loaded actor from durable blob.", { actorId });
-    memoryActors.set(actorFromBlob.id, actorFromBlob);
-    return actorFromBlob;
   }
 
   const registryActor = (await readActorRegistry()).find((actor) => actor.id === actorId) ?? null;
@@ -463,27 +456,20 @@ export async function getActorById(actorId: string): Promise<Actor | null> {
 }
 
 export async function listActors(): Promise<Actor[]> {
-  const deletedIds = await getDeletedActorIds();
-  const deleted = new Set(deletedIds);
   const registryActors = await readActorRegistry();
   const deduped = new Map<string, Actor>();
   registryActors.forEach((actor) => {
-    if (!deleted.has(actor.id)) {
-      deduped.set(actor.id, actor);
-    }
+    deduped.set(actor.id, actor);
   });
 
   if (isMemoryFallbackMode()) {
     [...memoryActors.values()].forEach((actor) => {
-      if (!deleted.has(actor.id)) {
-        deduped.set(actor.id, actor);
-      }
+      deduped.set(actor.id, actor);
     });
   }
 
   const durableActors = [...deduped.values()];
   logPersistenceDebug("Listed actors from durable state.", {
-    deletedCount: deleted.size,
     registryCount: registryActors.length,
     durableCount: durableActors.length,
   });
@@ -504,13 +490,6 @@ export async function getChatById(chatId: string): Promise<ChatThread | null> {
     if (memoryChat) {
       return memoryChat;
     }
-  }
-
-  const chatFromBlob = await blobGetWithRetry<ChatThread>(`chats/${chatId}.json`);
-  if (chatFromBlob) {
-    logPersistenceDebug("Loaded chat from durable blob.", { chatId });
-    memoryChats.set(chatFromBlob.id, chatFromBlob);
-    return chatFromBlob;
   }
 
   const registryChat = (await readChatRegistry()).find((chat) => chat.id === chatId) ?? null;
@@ -681,7 +660,6 @@ export async function saveActor(actor: Actor): Promise<void> {
     actorId: actor.id,
   });
 
-  deletedActorIds.delete(actor.id);
   memoryActors.set(actor.id, actor);
 }
 
@@ -726,7 +704,6 @@ export async function deleteActorsById(actorIds: string[]): Promise<void> {
   });
 
   actorIds.forEach((actorId) => {
-    deletedActorIds.add(actorId);
     memoryActors.delete(actorId);
   });
 }
