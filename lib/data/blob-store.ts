@@ -6,6 +6,12 @@ const memoryActors = new Map<string, Actor>();
 const memoryChats = new Map<string, ChatThread>();
 const deletedActorIds = new Set<string>();
 
+const ACTOR_INDEX_PATH = "actors/index.json";
+const ACTOR_REGISTRY_PATH = "actors/registry.json";
+const ACTOR_DELETED_INDEX_PATH = "actors/deleted-index.json";
+const CHAT_INDEX_PATH = "chats/index.json";
+const CHAT_REGISTRY_PATH = "chats/registry.json";
+
 const base = process.env.BLOB_BASE_URL ?? process.env.BLOB_URL;
 const writeToken = process.env.BLOB_READ_WRITE_TOKEN ?? process.env.BLOB_WRITE_TOKEN;
 
@@ -85,8 +91,39 @@ function sortChats(chats: ChatThread[]): ChatThread[] {
   });
 }
 
+async function blobGetWithRetry<T>(path: string, retries = 3, baseDelayMs = 250): Promise<T | null> {
+  for (let attempt = 0; attempt < retries; attempt += 1) {
+    const value = await blobGet<T>(path);
+    if (value !== null) {
+      return value;
+    }
+
+    if (attempt < retries - 1) {
+      await new Promise((resolve) => setTimeout(resolve, baseDelayMs * (attempt + 1)));
+    }
+  }
+
+  return null;
+}
+
+async function readActorRegistry(): Promise<Actor[]> {
+  return (await blobGetWithRetry<Actor[]>(ACTOR_REGISTRY_PATH)) ?? [];
+}
+
+async function writeActorRegistry(actors: Actor[]): Promise<void> {
+  await blobPut(ACTOR_REGISTRY_PATH, actors);
+}
+
+async function readChatRegistry(): Promise<ChatThread[]> {
+  return (await blobGetWithRetry<ChatThread[]>(CHAT_REGISTRY_PATH)) ?? [];
+}
+
+async function writeChatRegistry(chats: ChatThread[]): Promise<void> {
+  await blobPut(CHAT_REGISTRY_PATH, sortChats(chats));
+}
+
 async function getDeletedActorIds(): Promise<string[]> {
-  const deletedFromBlob = (await blobGet<string[]>("actors/deleted-index.json")) ?? [];
+  const deletedFromBlob = (await blobGet<string[]>(ACTOR_DELETED_INDEX_PATH)) ?? [];
 
   deletedFromBlob.forEach((actorId) => {
     deletedActorIds.add(actorId);
@@ -106,48 +143,43 @@ export async function getActorById(actorId: string): Promise<Actor | null> {
     return memoryActor;
   }
 
-  const path = `actors/${actorId}.json`;
-  const retries = 3;
-  const baseDelayMs = 400;
-  const baseUrl = getBlobBaseUrl();
-
-  if (baseUrl) {
-    for (let attempt = 0; attempt < retries; attempt += 1) {
-      try {
-        const actor = await blobGet<Actor>(path);
-        if (actor) {
-          memoryActors.set(actor.id, actor);
-          return actor;
-        }
-
-        throw new Error(`Actor not found in Blob yet: ${actorId}`);
-      } catch {
-        if (attempt < retries - 1) {
-          const delayMs = baseDelayMs * (attempt + 1);
-          await new Promise((resolve) => setTimeout(resolve, delayMs));
-        }
-      }
-    }
+  const actorFromBlob = await blobGetWithRetry<Actor>(`actors/${actorId}.json`);
+  if (actorFromBlob) {
+    memoryActors.set(actorFromBlob.id, actorFromBlob);
+    return actorFromBlob;
   }
 
-  return null;
+  const registryActor = (await readActorRegistry()).find((actor) => actor.id === actorId) ?? null;
+  if (registryActor) {
+    memoryActors.set(registryActor.id, registryActor);
+  }
+
+  return registryActor;
 }
 
 export async function listActors(): Promise<Actor[]> {
   const deletedIds = await getDeletedActorIds();
   const deleted = new Set(deletedIds);
-  const blobActorIds = (await blobGet<string[]>("actors/index.json")) ?? [];
+  const registryActors = await readActorRegistry();
 
-  const blobActors = (
-    await Promise.all(blobActorIds.map(async (actorId) => blobGet<Actor>(`actors/${actorId}.json`)))
-  ).filter((actor): actor is Actor => Boolean(actor));
-
-  blobActors.forEach((actor) => {
+  registryActors.forEach((actor) => {
     memoryActors.set(actor.id, actor);
   });
 
+  let blobActors = registryActors;
+  if (blobActors.length === 0) {
+    const blobActorIds = (await blobGetWithRetry<string[]>(ACTOR_INDEX_PATH)) ?? [];
+    blobActors = (
+      await Promise.all(blobActorIds.map(async (actorId) => blobGetWithRetry<Actor>(`actors/${actorId}.json`)))
+    ).filter((actor): actor is Actor => Boolean(actor));
+
+    blobActors.forEach((actor) => {
+      memoryActors.set(actor.id, actor);
+    });
+  }
+
   const deduped = new Map<string, Actor>();
-  [...memoryActors.values(), ...blobActors].forEach((actor) => {
+  [...blobActors, ...memoryActors.values()].forEach((actor) => {
     if (!deleted.has(actor.id)) {
       deduped.set(actor.id, actor);
     }
@@ -162,29 +194,46 @@ export async function getChatById(chatId: string): Promise<ChatThread | null> {
     return memoryChat;
   }
 
-  const chat = await blobGet<ChatThread>(`chats/${chatId}.json`);
-  if (chat) {
-    memoryChats.set(chat.id, chat);
-    return chat;
+  const chatFromBlob = await blobGetWithRetry<ChatThread>(`chats/${chatId}.json`);
+  if (chatFromBlob) {
+    memoryChats.set(chatFromBlob.id, chatFromBlob);
+    return chatFromBlob;
   }
 
-  return null;
+  const registryChat = (await readChatRegistry()).find((chat) => chat.id === chatId) ?? null;
+  if (registryChat) {
+    memoryChats.set(registryChat.id, registryChat);
+  }
+
+  return registryChat;
 }
 
 export async function listChats(): Promise<ChatThread[]> {
-  const blobChatIds = (await blobGet<string[]>("chats/index.json")) ?? [];
+  const registryChats = await readChatRegistry();
 
-  const blobChats = (
-    await Promise.all(blobChatIds.map(async (chatId) => blobGet<ChatThread>(`chats/${chatId}.json`)))
-  ).filter((chat): chat is ChatThread => Boolean(chat));
-
-  blobChats.forEach((chat) => {
+  registryChats.forEach((chat) => {
     memoryChats.set(chat.id, chat);
   });
 
+  let blobChats = registryChats;
+  if (blobChats.length === 0) {
+    const blobChatIds = (await blobGetWithRetry<string[]>(CHAT_INDEX_PATH)) ?? [];
+    blobChats = (
+      await Promise.all(blobChatIds.map(async (chatId) => blobGetWithRetry<ChatThread>(`chats/${chatId}.json`)))
+    ).filter((chat): chat is ChatThread => Boolean(chat));
+
+    blobChats.forEach((chat) => {
+      memoryChats.set(chat.id, chat);
+    });
+  }
+
+  const actors = await listActors();
+  const validActorIds = new Set(actors.map((actor) => actor.id));
   const deduped = new Map<string, ChatThread>();
-  [...memoryChats.values(), ...blobChats].forEach((chat) => {
-    deduped.set(chat.id, chat);
+  [...blobChats, ...memoryChats.values()].forEach((chat) => {
+    if (validActorIds.has(chat.actorId)) {
+      deduped.set(chat.id, chat);
+    }
   });
 
   return sortChats([...deduped.values()]);
@@ -205,12 +254,22 @@ export async function saveChat(chat: ChatThread): Promise<ChatThread> {
   };
 
   memoryChats.set(nextChat.id, nextChat);
-  await blobPut(`chats/${nextChat.id}.json`, nextChat);
 
-  const currentIndex = (await blobGet<string[]>("chats/index.json")) ?? [];
-  if (!currentIndex.includes(nextChat.id)) {
-    await blobPut("chats/index.json", [...currentIndex, nextChat.id]);
-  }
+  const [currentIndex, registryChats] = await Promise.all([
+    blobGetWithRetry<string[]>(CHAT_INDEX_PATH).then((value) => value ?? []),
+    readChatRegistry(),
+  ]);
+
+  const nextRegistry = [
+    nextChat,
+    ...registryChats.filter((currentChat) => currentChat.id !== nextChat.id),
+  ];
+
+  await Promise.all([
+    blobPut(`chats/${nextChat.id}.json`, nextChat),
+    currentIndex.includes(nextChat.id) ? Promise.resolve() : blobPut(CHAT_INDEX_PATH, [...currentIndex, nextChat.id]),
+    writeChatRegistry(nextRegistry),
+  ]);
 
   return nextChat;
 }
@@ -220,11 +279,16 @@ export async function deleteChat(chatId: string): Promise<void> {
   memoryMessages.delete(chatId);
   memorySummaries.delete(chatId);
 
-  const currentIndex = (await blobGet<string[]>("chats/index.json")) ?? [];
+  const [currentIndex, registryChats] = await Promise.all([
+    blobGetWithRetry<string[]>(CHAT_INDEX_PATH).then((value) => value ?? []),
+    readChatRegistry(),
+  ]);
   const nextIndex = currentIndex.filter((currentChatId) => currentChatId !== chatId);
+  const nextRegistry = registryChats.filter((chat) => chat.id !== chatId);
 
-  await blobPut("chats/index.json", nextIndex);
   await Promise.all([
+    blobPut(CHAT_INDEX_PATH, nextIndex),
+    writeChatRegistry(nextRegistry),
     blobDelete(`chats/${chatId}.json`),
     blobDelete(`messages/${chatId}.json`),
     blobDelete(`summaries/${chatId}.json`),
@@ -236,7 +300,7 @@ export async function deleteChatById(chatId: string): Promise<void> {
 }
 
 export async function getMessages(chatId: string): Promise<Message[]> {
-  const blobMessages = await blobGet<Message[]>(`messages/${chatId}.json`);
+  const blobMessages = await blobGetWithRetry<Message[]>(`messages/${chatId}.json`);
   if (blobMessages) {
     memoryMessages.set(chatId, blobMessages);
     return blobMessages;
@@ -274,8 +338,13 @@ export async function saveMessage(chatId: string, message: Omit<Message, "chatId
 }
 
 export async function getConversationSummary(chatId: string): Promise<string> {
-  const summary = await blobGet<string>(`summaries/${chatId}.json`);
-  return summary ?? memorySummaries.get(chatId) ?? "";
+  const summary = await blobGetWithRetry<string>(`summaries/${chatId}.json`);
+  if (summary !== null) {
+    memorySummaries.set(chatId, summary);
+    return summary;
+  }
+
+  return memorySummaries.get(chatId) ?? "";
 }
 
 export async function setConversationSummary(chatId: string, summary: string): Promise<void> {
@@ -289,18 +358,21 @@ export async function saveActor(actor: Actor): Promise<void> {
   deletedActorIds.delete(actor.id);
   memoryActors.set(actor.id, actor);
 
-  const deletedIndex = (await blobGet<string[]>("actors/deleted-index.json")) ?? [];
-  if (deletedIndex.includes(actor.id)) {
-    const nextDeletedIndex = deletedIndex.filter((deletedId) => deletedId !== actor.id);
-    await blobPut("actors/deleted-index.json", nextDeletedIndex);
-  }
+  const [deletedIndex, currentIndex, registryActors] = await Promise.all([
+    blobGetWithRetry<string[]>(ACTOR_DELETED_INDEX_PATH).then((value) => value ?? []),
+    blobGetWithRetry<string[]>(ACTOR_INDEX_PATH).then((value) => value ?? []),
+    readActorRegistry(),
+  ]);
 
-  await blobPut(actorPath, actor);
+  const nextDeletedIndex = deletedIndex.filter((deletedId) => deletedId !== actor.id);
+  const nextRegistry = [...registryActors.filter((currentActor) => currentActor.id !== actor.id), actor];
 
-  const currentIndex = (await blobGet<string[]>("actors/index.json")) ?? [];
-  if (!currentIndex.includes(actor.id)) {
-    await blobPut("actors/index.json", [...currentIndex, actor.id]);
-  }
+  await Promise.all([
+    deletedIndex.includes(actor.id) ? blobPut(ACTOR_DELETED_INDEX_PATH, nextDeletedIndex) : Promise.resolve(),
+    blobPut(actorPath, actor),
+    currentIndex.includes(actor.id) ? Promise.resolve() : blobPut(ACTOR_INDEX_PATH, [...currentIndex, actor.id]),
+    writeActorRegistry(nextRegistry),
+  ]);
 }
 
 export async function deleteActorsById(actorIds: string[]): Promise<void> {
@@ -308,10 +380,12 @@ export async function deleteActorsById(actorIds: string[]): Promise<void> {
     return;
   }
 
-  const currentIndex = (await blobGet<string[]>("actors/index.json")) ?? [];
+  const [currentIndex, registryActors] = await Promise.all([
+    blobGetWithRetry<string[]>(ACTOR_INDEX_PATH).then((value) => value ?? []),
+    readActorRegistry(),
+  ]);
   const nextIndex = currentIndex.filter((actorId) => !actorIds.includes(actorId));
-
-  await blobPut("actors/index.json", nextIndex);
+  const nextRegistry = registryActors.filter((actor) => !actorIds.includes(actor.id));
 
   actorIds.forEach((actorId) => {
     deletedActorIds.add(actorId);
@@ -321,8 +395,10 @@ export async function deleteActorsById(actorIds: string[]): Promise<void> {
   const chatsToDelete = (await listChats()).filter((chat) => actorIds.includes(chat.actorId));
 
   await Promise.all([
+    blobPut(ACTOR_INDEX_PATH, nextIndex),
+    writeActorRegistry(nextRegistry),
     ...actorIds.map(async (actorId) => blobDelete(`actors/${actorId}.json`)),
     ...chatsToDelete.map(async (chat) => deleteChat(chat.id)),
   ]);
-  await blobPut("actors/deleted-index.json", [...deletedActorIds]);
+  await blobPut(ACTOR_DELETED_INDEX_PATH, [...deletedActorIds]);
 }

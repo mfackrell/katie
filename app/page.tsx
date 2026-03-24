@@ -80,6 +80,7 @@ export default function HomePage() {
   const [actorChatSelections, setActorChatSelections] = useState<Record<string, string>>({});
   const [modalState, setModalState] = useState<ModalState>(null);
   const [hasLoadedPersistedState, setHasLoadedPersistedState] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
 
   useEffect(() => {
     async function fetchInitialData() {
@@ -106,17 +107,24 @@ export default function HomePage() {
         const nextActorChatSelections = storedActorSelections
           ? (JSON.parse(storedActorSelections) as Record<string, string>)
           : {};
+        const validActorIds = new Set(persistedActors.map((actor) => actor.id));
+        const validChatIds = new Set(persistedChats.map((chat) => chat.id));
+        const sanitizedActorChatSelections = Object.fromEntries(
+          Object.entries(nextActorChatSelections).filter(
+            ([actorId, chatId]) => validActorIds.has(actorId) && validChatIds.has(chatId),
+          ),
+        );
         const nextActiveActorId = pickActiveActorId(persistedActors, storedActorId);
         const nextActiveChatId = pickActiveChatId(
           persistedChats,
           nextActiveActorId,
           storedChatId,
-          nextActorChatSelections,
+          sanitizedActorChatSelections,
         );
 
         setActors(persistedActors);
         setChats(persistedChats);
-        setActorChatSelections(nextActorChatSelections);
+        setActorChatSelections(sanitizedActorChatSelections);
         setActiveActorId(nextActiveActorId);
         setActiveChatId(nextActiveChatId);
       } finally {
@@ -193,7 +201,23 @@ export default function HomePage() {
     hasLoadedPersistedState,
   ]);
 
-  const filteredChats = useMemo(() => chats, [chats]);
+  useEffect(() => {
+    if (!sidebarOpen) {
+      return;
+    }
+
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+
+    return () => {
+      document.body.style.overflow = previousOverflow;
+    };
+  }, [sidebarOpen]);
+
+  const filteredChats = useMemo(
+    () => chats.filter((chat) => actors.some((actor) => actor.id === chat.actorId)),
+    [actors, chats],
+  );
 
   async function createChat(actorId: string) {
     const chatResponse = await fetch("/api/chats", {
@@ -218,6 +242,7 @@ export default function HomePage() {
     setActorChatSelections((current) => ({ ...current, [actorId]: createdChat.id }));
     setActiveActorId(actorId);
     setActiveChatId(createdChat.id);
+    setSidebarOpen(false);
   }
 
   async function createActor(input: { name: string; purpose?: string; parentId?: string }) {
@@ -237,6 +262,7 @@ export default function HomePage() {
 
     const createdActor = actorPayload.actor;
     setActors((current) => [...current.filter((actor) => actor.id !== createdActor.id), createdActor]);
+    setSidebarOpen(false);
     await createChat(createdActor.id);
   }
 
@@ -318,6 +344,7 @@ export default function HomePage() {
     setActiveChatId((current) =>
       pickActiveChatId(chats, nextActorId, current, actorChatSelections),
     );
+    setSidebarOpen(false);
   }
 
   function handleSelectChat(nextChatId: string) {
@@ -329,11 +356,12 @@ export default function HomePage() {
     setActiveActorId(selectedChat.actorId);
     setActiveChatId(nextChatId);
     setActorChatSelections((current) => ({ ...current, [selectedChat.actorId]: nextChatId }));
+    setSidebarOpen(false);
   }
 
   return (
-    <div className="relative min-h-screen overflow-hidden px-4 py-4 text-zinc-100 sm:px-5 lg:px-6 lg:py-6">
-      <div className="pointer-events-none absolute inset-0">
+    <div className="relative min-h-dvh px-3 py-3 text-zinc-100 sm:px-5 sm:py-4 lg:px-6 lg:py-6">
+      <div className="pointer-events-none absolute inset-0 overflow-hidden">
         <div className="absolute inset-x-0 top-0 h-72 bg-gradient-to-b from-white/[0.03] to-transparent" />
         <div className="absolute left-[8%] top-20 h-56 w-56 rounded-full bg-sky-500/10 blur-3xl" />
         <div className="absolute right-[10%] top-12 h-64 w-64 rounded-full bg-emerald-500/10 blur-3xl" />

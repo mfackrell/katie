@@ -49,6 +49,7 @@ export function ChatPanel({ actorId, chatId }: ChatPanelProps) {
   const [statusMessage, setStatusMessage] = useState("");
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
   const [emojiPickerOpen, setEmojiPickerOpen] = useState(false);
+  const [showModelControls, setShowModelControls] = useState(false);
   const messagesContainerRef = useRef<HTMLElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -133,7 +134,7 @@ export function ChatPanel({ actorId, chatId }: ChatPanelProps) {
       }
 
       const cachedMessages = messagesByChatIdRef.current[chatId];
-      if (cachedMessages) {
+      if (cachedMessages !== undefined) {
         setMessages(cachedMessages);
         setIsHydratingMessages(false);
       } else {
@@ -512,6 +513,16 @@ export function ChatPanel({ actorId, chatId }: ChatPanelProps) {
     });
   }
 
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    if (window.innerWidth >= 768) {
+      setShowModelControls(true);
+    }
+  }, []);
+
   function handleKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
     if (event.key === "Enter" && !event.shiftKey) {
       event.preventDefault();
@@ -614,73 +625,94 @@ export function ChatPanel({ actorId, chatId }: ChatPanelProps) {
   }
 
   return (
-    <main className="relative flex h-[calc(100vh-2rem)] flex-1 flex-col overflow-hidden bg-gradient-to-b from-white/[0.02] via-transparent to-black/10">
+    <main className="relative flex min-h-0 flex-1 flex-col overflow-hidden bg-gradient-to-b from-white/[0.02] via-transparent to-black/10">
       <header className="border-b border-white/10 px-4 py-3 sm:px-6 sm:py-3.5">
         <div className="flex flex-col gap-3">
-          <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
             <div className="flex min-w-0 items-center gap-2.5">
-              <div className="flex h-8 w-8 items-center justify-center rounded-xl border border-white/10 bg-gradient-to-br from-sky-400/15 via-white/10 to-emerald-400/10 shadow-[0_8px_24px_rgba(0,0,0,0.24)]">
+              <div className="flex h-8 w-8 flex-none items-center justify-center rounded-xl border border-white/10 bg-gradient-to-br from-sky-400/15 via-white/10 to-emerald-400/10 shadow-[0_8px_24px_rgba(0,0,0,0.24)]">
                 <span className="text-sm">✦</span>
               </div>
               <div className="min-w-0">
                 <p className="text-[10px] font-semibold uppercase tracking-[0.24em] text-zinc-500">
                   Master Router
                 </p>
-                <h2 className="truncate text-lg font-semibold tracking-tight text-white sm:text-xl">
+                <h2 className="truncate text-base font-semibold tracking-tight text-white sm:text-xl">
                   Katie - AI Command Center
                 </h2>
               </div>
             </div>
 
-            {meta ? (
-              <p className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-2.5 py-1 text-[11px] text-zinc-400">
-                <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 shadow-[0_0_10px_rgba(52,211,153,0.7)]" />
-                Last response via <span className="text-zinc-200">{meta.provider}</span> · {meta.model}
-              </p>
-            ) : null}
+            <div className="flex flex-wrap items-center gap-2 sm:justify-end">
+              {meta ? (
+                <p className="inline-flex max-w-full items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-2.5 py-1 text-[11px] text-zinc-400">
+                  <span className="h-1.5 w-1.5 flex-none rounded-full bg-emerald-400 shadow-[0_0_10px_rgba(52,211,153,0.7)]" />
+                  <span className="truncate">Last response via <span className="text-zinc-200">{meta.provider}</span> · {meta.model}</span>
+                </p>
+              ) : null}
+              <button
+                type="button"
+                onClick={() => setShowModelControls((current) => !current)}
+                className="inline-flex min-h-10 items-center justify-center rounded-2xl border border-white/10 bg-white/[0.05] px-3 py-2 text-xs font-medium text-zinc-200 transition hover:border-white/20 hover:bg-white/[0.08] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 md:hidden"
+                aria-expanded={showModelControls}
+                aria-controls="model-controls"
+              >
+                {showModelControls ? "Hide model overrides" : "Model overrides"}
+              </button>
+            </div>
           </div>
 
-          <div className="flex items-center gap-2 overflow-x-auto">
-            {providerNames.map((providerName) => {
-              const options = availableModels[providerName] ?? [];
-              const selectedValue =
-                selectedOverride?.providerName === providerName
-                  ? selectedOverride.modelId
-                  : "";
+          <div
+            id="model-controls"
+            className={[
+              "grid gap-2 overflow-hidden transition-all",
+              showModelControls ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0 md:grid-rows-[1fr] md:opacity-100",
+            ].join(" ")}
+          >
+            <div className="min-h-0">
+              <div className="flex flex-col gap-2 md:flex-row md:flex-wrap">
+                {providerNames.map((providerName) => {
+                  const options = availableModels[providerName] ?? [];
+                  const selectedValue =
+                    selectedOverride?.providerName === providerName
+                      ? selectedOverride.modelId
+                      : "";
 
-              return (
-                <label
-                  key={providerName}
-                  className="flex items-center gap-1.5 rounded-xl border border-white/10 bg-white/[0.035] px-2 py-1 text-[11px] text-zinc-300 whitespace-nowrap"
-                >
-                  <span className="capitalize text-zinc-500">{providerName}</span>
-                  <select
-                    value={selectedValue}
-                    onChange={(event) => {
-                      const nextModel = event.target.value;
-                      setSelectedOverride(
-                        nextModel ? { providerName, modelId: nextModel } : null,
-                      );
-                    }}
-                    className="w-[170px] rounded-lg border border-white/10 bg-zinc-950/90 px-2 py-1 text-[11px] text-zinc-100 outline-none ring-emerald-500 transition focus:ring"
-                  >
-                    <option value="">Master Router (Auto)</option>
-                    {options.map((modelId) => (
-                      <option key={modelId} value={modelId}>
-                        {modelId}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-              );
-            })}
+                  return (
+                    <label
+                      key={providerName}
+                      className="grid min-w-0 gap-1 rounded-2xl border border-white/10 bg-white/[0.035] p-2 text-[11px] text-zinc-300 md:w-[calc(50%-0.25rem)] lg:w-auto lg:min-w-[220px]"
+                    >
+                      <span className="capitalize text-zinc-500">{providerName}</span>
+                      <select
+                        value={selectedValue}
+                        onChange={(event) => {
+                          const nextModel = event.target.value;
+                          setSelectedOverride(
+                            nextModel ? { providerName, modelId: nextModel } : null,
+                          );
+                        }}
+                        className="min-w-0 rounded-xl border border-white/10 bg-zinc-950/90 px-2.5 py-2 text-xs text-zinc-100 outline-none ring-emerald-500 transition focus:ring"
+                      >
+                        <option value="">Master Router (Auto)</option>
+                        {options.map((modelId) => (
+                          <option key={modelId} value={modelId}>
+                            {modelId}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  );
+                })}
+              </div>
+            </div>
           </div>
         </div>
       </header>
 
       <section
         ref={messagesContainerRef}
-        className="flex-1 space-y-5 overflow-y-auto px-4 py-4 sm:px-6 sm:py-5"
+        className="relative flex-1 space-y-4 overflow-y-auto px-4 py-4 pb-24 sm:space-y-5 sm:px-6 sm:py-5 sm:pb-28"
       >
         {isHydratingMessages ? (
           <div className="max-w-2xl rounded-[28px] border border-white/10 bg-white/[0.035] p-6 shadow-[0_20px_60px_rgba(0,0,0,0.18)] backdrop-blur-sm">
@@ -699,13 +731,13 @@ export function ChatPanel({ actorId, chatId }: ChatPanelProps) {
           <div
             key={message.id}
             className={[
-              "max-w-4xl rounded-[28px] border px-5 py-4 text-sm shadow-[0_20px_60px_rgba(0,0,0,0.18)] backdrop-blur-sm",
+              "w-full max-w-4xl overflow-hidden rounded-[24px] border px-4 py-4 text-sm shadow-[0_20px_60px_rgba(0,0,0,0.18)] backdrop-blur-sm sm:px-5",
               message.role === "user"
                 ? "ml-auto border-emerald-400/20 bg-gradient-to-br from-emerald-400/14 via-emerald-500/8 to-sky-500/10"
                 : "border-white/10 bg-white/[0.035]"
             ].join(" ")}
           >
-            <div className="mb-3 flex items-start justify-between gap-3">
+            <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
               <p className="text-[11px] font-semibold uppercase tracking-[0.24em] text-zinc-400">
                 {message.role}
                 {message.role === "assistant" && message.model
@@ -723,7 +755,7 @@ export function ChatPanel({ actorId, chatId }: ChatPanelProps) {
               </button>
             </div>
             {message.content ? (
-              <p className="whitespace-pre-wrap leading-7 text-zinc-100/95">{message.content}</p>
+              <p className="whitespace-pre-wrap break-words leading-7 text-zinc-100/95">{message.content}</p>
             ) : null}
             {message.assets
               ?.filter((asset) => asset.type === "image")
@@ -765,11 +797,11 @@ export function ChatPanel({ actorId, chatId }: ChatPanelProps) {
             </p>
           </div>
         )}
-        <div className="sticky bottom-4 z-10 ml-auto flex w-fit flex-col gap-2 pr-1">
+        <div className="pointer-events-none sticky bottom-3 z-10 ml-auto flex w-fit flex-col gap-2 pr-1 sm:bottom-4">
           <button
             type="button"
             onClick={scrollToTop}
-            className="flex h-9 w-9 items-center justify-center rounded-full border border-white/10 bg-zinc-950/80 text-sm text-zinc-200 shadow-[0_14px_30px_rgba(0,0,0,0.3)] backdrop-blur transition hover:border-white/20 hover:bg-zinc-900/90 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
+            className="pointer-events-auto flex h-10 w-10 items-center justify-center rounded-full border border-white/10 bg-zinc-950/80 text-sm text-zinc-200 shadow-[0_14px_30px_rgba(0,0,0,0.3)] backdrop-blur transition hover:border-white/20 hover:bg-zinc-900/90 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
             aria-label="Scroll to top"
           >
             ↑
@@ -777,7 +809,7 @@ export function ChatPanel({ actorId, chatId }: ChatPanelProps) {
           <button
             type="button"
             onClick={scrollToBottom}
-            className="flex h-9 w-9 items-center justify-center rounded-full border border-white/10 bg-zinc-950/80 text-sm text-zinc-200 shadow-[0_14px_30px_rgba(0,0,0,0.3)] backdrop-blur transition hover:border-white/20 hover:bg-zinc-900/90 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
+            className="pointer-events-auto flex h-10 w-10 items-center justify-center rounded-full border border-white/10 bg-zinc-950/80 text-sm text-zinc-200 shadow-[0_14px_30px_rgba(0,0,0,0.3)] backdrop-blur transition hover:border-white/20 hover:bg-zinc-900/90 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
             aria-label="Scroll to bottom"
           >
             ↓
@@ -786,7 +818,7 @@ export function ChatPanel({ actorId, chatId }: ChatPanelProps) {
         <div ref={messagesEndRef} />
       </section>
 
-      <form onSubmit={onSubmit} className="border-t border-white/10 px-4 py-4 sm:px-6 sm:py-4">
+      <form onSubmit={onSubmit} className="border-t border-white/10 px-4 py-3 pb-[calc(env(safe-area-inset-bottom)+0.75rem)] sm:px-6 sm:py-4">
         <p className="sr-only" role="status" aria-live="polite">
           {statusMessage}
         </p>
@@ -836,7 +868,7 @@ export function ChatPanel({ actorId, chatId }: ChatPanelProps) {
         ) : null}
 
         <div className="rounded-[28px] border border-white/10 bg-white/[0.04] p-3 shadow-[0_20px_60px_rgba(0,0,0,0.2)] backdrop-blur-sm">
-          <div className="flex items-end gap-3">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
             <input
               ref={fileInputRef}
               type="file"
@@ -848,12 +880,12 @@ export function ChatPanel({ actorId, chatId }: ChatPanelProps) {
             <button
               type="button"
               onClick={() => fileInputRef.current?.click()}
-              className="rounded-2xl border border-white/10 bg-white/[0.05] px-3.5 py-3 text-sm text-zinc-300 transition hover:border-white/20 hover:bg-white/[0.08] hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
+              className="inline-flex min-h-11 items-center justify-center self-start rounded-2xl border border-white/10 bg-white/[0.05] px-3.5 py-3 text-sm text-zinc-300 transition hover:border-white/20 hover:bg-white/[0.08] hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 sm:self-auto"
               aria-label="Attach files"
             >
               📷
             </button>
-            <div className="relative flex-1">
+            <div className="relative min-w-0 flex-1">
               <textarea
                 ref={textareaRef}
                 rows={1}
@@ -875,7 +907,7 @@ export function ChatPanel({ actorId, chatId }: ChatPanelProps) {
                   😊
                 </button>
                 {emojiPickerOpen ? (
-                  <div className="absolute bottom-12 right-0 z-20 overflow-hidden rounded-2xl border border-white/10 bg-zinc-950 shadow-[0_24px_60px_rgba(0,0,0,0.35)]">
+                  <div className="absolute bottom-12 right-0 z-20 max-w-[calc(100vw-2rem)] overflow-hidden rounded-2xl border border-white/10 bg-zinc-950 shadow-[0_24px_60px_rgba(0,0,0,0.35)]">
                     <EmojiPicker
                       onEmojiClick={handleEmojiSelect}
                       theme={Theme.DARK}
@@ -889,22 +921,24 @@ export function ChatPanel({ actorId, chatId }: ChatPanelProps) {
                 ) : null}
               </div>
             </div>
-            {loading ? (
+            <div className="flex w-full flex-wrap justify-end gap-2 sm:w-auto sm:flex-nowrap">
+              {loading ? (
+                <button
+                  type="button"
+                  onClick={handleCancelRequest}
+                  className="min-h-11 rounded-2xl border border-red-400/30 bg-red-500/10 px-4 py-3 text-sm font-medium text-red-100 transition hover:bg-red-500/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-400"
+                >
+                  Cancel
+                </button>
+              ) : null}
               <button
-                type="button"
-                onClick={handleCancelRequest}
-                className="rounded-2xl border border-red-400/30 bg-red-500/10 px-4 py-3 text-sm font-medium text-red-100 transition hover:bg-red-500/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-400"
+                type="submit"
+                disabled={!canSend}
+                className="min-h-11 flex-1 rounded-2xl bg-gradient-to-r from-emerald-500 to-sky-500 px-5 py-3 text-sm font-semibold text-white shadow-[0_14px_30px_rgba(16,185,129,0.25)] transition hover:brightness-110 disabled:opacity-50 sm:flex-none"
               >
-                Cancel
+                {loading || uploadingFiles ? "Routing..." : "Send"}
               </button>
-            ) : null}
-            <button
-              type="submit"
-              disabled={!canSend}
-              className="rounded-2xl bg-gradient-to-r from-emerald-500 to-sky-500 px-5 py-3 text-sm font-semibold text-white shadow-[0_14px_30px_rgba(16,185,129,0.25)] transition hover:brightness-110 disabled:opacity-50"
-            >
-              {loading || uploadingFiles ? "Routing..." : "Send"}
-            </button>
+            </div>
           </div>
         </div>
       </form>
