@@ -15,6 +15,7 @@ interface SidebarProps {
   onDeleteActor: (actor: Actor) => void;
   onDeleteChat: (chat: ChatThread) => void | Promise<void>;
   onError: (message: string) => void;
+  isCreatingChat: (actorId: string) => boolean;
 }
 
 export function Sidebar({
@@ -30,6 +31,7 @@ export function Sidebar({
   onDeleteActor,
   onDeleteChat,
   onError,
+  isCreatingChat,
 }: SidebarProps) {
   const sortedActors = [...actors].sort((a, b) => a.name.localeCompare(b.name));
 
@@ -61,6 +63,7 @@ export function Sidebar({
             const actorChats = chats.filter((chat) => chat.actorId === actor.id);
             const activeActor = actor.id === activeActorId;
             const isSubActor = Boolean(actor.parentId);
+            const creatingChat = isCreatingChat(actor.id);
 
             return (
               <div
@@ -91,7 +94,7 @@ export function Sidebar({
                   </button>
                   <div className="grid grid-cols-3 gap-1.5 sm:flex sm:flex-col sm:items-end">
                     <button
-                      className="min-h-10 rounded-xl border border-white/10 bg-white/[0.04] px-2.5 py-1 text-[11px] font-medium text-zinc-300 transition hover:border-emerald-400/30 hover:bg-emerald-400/10 hover:text-white"
+                      className="min-h-10 rounded-xl border border-white/10 bg-white/[0.04] px-2.5 py-1 text-[11px] font-medium text-zinc-300 transition hover:border-emerald-400/30 hover:bg-emerald-400/10 hover:text-white disabled:cursor-not-allowed disabled:opacity-55"
                       onClick={async () => {
                         try {
                           await onCreateChat(actor.id);
@@ -102,8 +105,9 @@ export function Sidebar({
                         }
                       }}
                       title={`New chat for ${actor.name}`}
+                      disabled={creatingChat}
                     >
-                      New Chat
+                      {creatingChat ? "Creating..." : "New Chat"}
                     </button>
                     <button
                       className="min-h-10 rounded-xl border border-white/10 bg-white/[0.04] px-2.5 py-1 text-[11px] font-medium text-zinc-300 transition hover:border-emerald-400/30 hover:bg-emerald-400/10 hover:text-white"
