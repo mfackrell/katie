@@ -56,10 +56,11 @@ class PostgrestQuery {
         single: <T>() =>
           this.execute<T>("POST", payload, {
             select: columns,
-            prefer: "resolution=merge-duplicates",
+            prefer: "resolution=merge-duplicates,return=representation",
             onConflict: options?.onConflict,
             single: true,
             allowEmpty: false,
+            expectRepresentation: true,
           }),
       }),
       then: (onfulfilled: (v: { data: null; error: { message: string } | null }) => unknown) =>
@@ -77,8 +78,10 @@ class PostgrestQuery {
         single: <T>() =>
           this.execute<T>("POST", payload, {
             select: columns,
+            prefer: "return=representation",
             single: true,
             allowEmpty: false,
+            expectRepresentation: true,
           }),
       }),
     };
@@ -130,7 +133,14 @@ class PostgrestQuery {
   private async execute<T>(
     method: "GET" | "POST" | "PATCH" | "DELETE",
     body?: unknown,
-    options?: { select?: string; prefer?: string; single?: boolean; allowEmpty?: boolean; onConflict?: string }
+    options?: {
+      select?: string;
+      prefer?: string;
+      single?: boolean;
+      allowEmpty?: boolean;
+      onConflict?: string;
+      expectRepresentation?: boolean;
+    }
   ): QueryResult<T> {
     try {
       let requestUrl = this.buildUrl(options?.select);
@@ -166,7 +176,38 @@ class PostgrestQuery {
         return { data: null as T, error: null };
       }
 
-      const payload = (await response.json()) as T;
+      const rawBody = await response.text();
+      const hasBody = rawBody.trim().length > 0;
+
+      if (!hasBody) {
+        if (options?.allowEmpty) {
+          return { data: null as T, error: null };
+        }
+
+        if (options?.expectRepresentation) {
+          return {
+            data: null as T,
+            error: {
+              message: `Supabase returned an empty response body for ${method} ${this.table} when a representation was expected.`,
+            },
+          };
+        }
+
+        return { data: null as T, error: null };
+      }
+
+      let payload: T;
+      try {
+        payload = JSON.parse(rawBody) as T;
+      } catch {
+        return {
+          data: null as T,
+          error: {
+            message: `Supabase returned a non-JSON response body for ${method} ${this.table}.`,
+          },
+        };
+      }
+
       return { data: payload, error: null };
     } catch (error) {
       return { data: null as T, error: { message: error instanceof Error ? error.message : "Supabase request failed" } };
