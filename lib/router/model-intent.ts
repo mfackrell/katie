@@ -178,12 +178,57 @@ function rankModelForIntent(providerName: ProviderName, modelId: string, intent:
       }
       return 1;
     case "text":
-      return modelSupportsIntent(providerName, modelId, intent) ? 1 : -1;
+      if (!modelSupportsIntent(providerName, modelId, intent)) {
+        return -1;
+      }
+
+      let score = 10;
+
+      if (normalizedModel.includes("flash") || normalizedModel.includes("haiku") || normalizedModel.includes("mini")) {
+        score += 8;
+      }
+
+      if (normalizedModel.includes("gpt-5.2-unified") || normalizedModel.includes("grok-2-1212")) {
+        score += 6;
+      }
+
+      if (normalizedModel.includes("unified") || normalizedModel.includes("grok-2")) {
+        score += 3;
+      }
+
+      if (
+        normalizedModel.includes("opus") ||
+        normalizedModel.includes("o3-pro") ||
+        normalizedModel.includes("codex") ||
+        normalizedModel.includes("architect") ||
+        normalizedModel.includes("reason")
+      ) {
+        score -= 8;
+      }
+
+      if (normalizedModel.includes("pro") && !normalizedModel.includes("gpt-5.2-unified")) {
+        score -= 4;
+      }
+
+      return score;
     case "technical-debugging":
     case "architecture-review":
     case "code-generation":
       return rankTechnicalModel(providerName, modelId);
   }
+}
+
+export function scoreModelsForIntent(
+  availableByProvider: Array<{ provider: LlmProvider; models: string[] }>,
+  intent: RequestIntent
+): Array<{ provider: LlmProvider; modelId: string; score: number }> {
+  return availableByProvider
+    .flatMap(({ provider, models }) =>
+      models
+        .map((modelId) => ({ provider, modelId, score: rankModelForIntent(provider.name, modelId, intent) }))
+        .filter((candidate) => candidate.score >= 0)
+    )
+    .sort((left, right) => right.score - left.score);
 }
 
 export function validateRoutingDecision(
@@ -206,13 +251,7 @@ export function validateRoutingDecision(
     };
   }
 
-  const compatibleChoices = availableByProvider
-    .flatMap(({ provider, models }) =>
-      models
-        .map((modelId) => ({ provider, modelId, score: rankModelForIntent(provider.name, modelId, intent) }))
-        .filter((candidate) => candidate.score >= 0)
-    )
-    .sort((left, right) => right.score - left.score);
+  const compatibleChoices = scoreModelsForIntent(availableByProvider, intent);
 
   const fallback = compatibleChoices[0];
 

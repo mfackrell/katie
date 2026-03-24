@@ -1,5 +1,6 @@
 import OpenAI from "openai";
-import { inferRequestIntent, validateRoutingDecision } from "@/lib/router/model-intent";
+import { inferRequestIntent, scoreModelsForIntent, validateRoutingDecision } from "@/lib/router/model-intent";
+import { isBlockedRoutingModel } from "@/lib/router/routing-model-filters";
 import { LlmProvider } from "@/lib/providers/types";
 
 export type RoutingDecision = {
@@ -14,7 +15,6 @@ type RoutingChoice = { providerName: ProviderName; modelId: string };
 
 const ORCHESTRATOR_MODELS = ["gpt-5", "gemini-pro-latest"] as const;
 const DEFAULT_ORCHESTRATOR_MODEL = "gpt-5";
-const BLOCKED_ROUTING_MODELS = new Set(["gpt-5.4-pro"]);
 
 const CAPABILITY_REGISTRY: Record<string, string> = {
   "gpt-5.3-codex": "Agentic coding, tool use, APIs, terminal-style execution; ideal for math-heavy intents that must strictly follow MATH_EXECUTION_PROTOCOL via executable scripts.",
@@ -45,6 +45,26 @@ function getOrchestratorModel(): (typeof ORCHESTRATOR_MODELS)[number] {
   }
 
   return DEFAULT_ORCHESTRATOR_MODEL;
+}
+
+function topRoutingCandidates(
+  availableByProvider: Array<{ provider: LlmProvider; models: string[] }>,
+  intent: ReturnType<typeof inferRequestIntent>
+): string {
+  return scoreModelsForIntent(availableByProvider, intent)
+    .slice(0, 3)
+    .map(({ provider, modelId, score }) => `${provider.name}:${modelId}(${score})`)
+    .join(", ");
+}
+
+function logRoutingDecision(
+  intent: ReturnType<typeof inferRequestIntent>,
+  availableByProvider: Array<{ provider: LlmProvider; models: string[] }>,
+  selectedProviderName: string,
+  selectedModelId: string
+): void {
+  const candidates = topRoutingCandidates(availableByProvider, intent) || "none";
+  console.info(`[Router] intent=${intent} top_candidates=${candidates} selected=${selectedProviderName}:${selectedModelId}`);
 }
 
 
@@ -122,7 +142,7 @@ export async function chooseProvider(
   const modelEntries = await Promise.all(
     providers.map(async (provider) => ({
       provider,
-      models: (await provider.listModels()).filter((modelId) => !BLOCKED_ROUTING_MODELS.has(modelId))
+      models: (await provider.listModels()).filter((modelId) => !isBlockedRoutingModel(modelId))
     }))
   );
 
@@ -137,6 +157,7 @@ export async function chooseProvider(
     const selected = availableByProvider[0];
     const modelId = pickDefaultModel(selected.provider, selected.models);
     const validated = validateRoutingDecision({ providerName: selected.provider.name, modelId }, availableByProvider, intent);
+    logRoutingDecision(intent, availableByProvider, validated.provider.name, validated.modelId);
     return {
       provider: validated.provider,
       modelId: validated.modelId,
@@ -190,6 +211,7 @@ export async function chooseProvider(
               : pickDefaultModel(selectedProvider.provider, selectedProvider.models);
 
             const validated = validateRoutingDecision({ providerName: parsedChoice.providerName, modelId }, availableByProvider, intent);
+            logRoutingDecision(intent, availableByProvider, validated.provider.name, validated.modelId);
             return {
               provider: validated.provider,
               modelId: validated.modelId,
@@ -210,6 +232,7 @@ export async function chooseProvider(
   const modelId = pickDefaultModel(fallbackProvider.provider, fallbackProvider.models);
 
   const validated = validateRoutingDecision({ providerName: fallbackProvider.provider.name, modelId }, availableByProvider, intent);
+  logRoutingDecision(intent, availableByProvider, validated.provider.name, validated.modelId);
 
   return {
     provider: validated.provider,
