@@ -56,14 +56,16 @@ class PostgrestQuery {
         single: <T>() =>
           this.execute<T>("POST", payload, {
             select: columns,
-            prefer: `resolution=merge-duplicates${options?.onConflict ? `,on_conflict=${options.onConflict}` : ""}`,
+            prefer: "resolution=merge-duplicates",
+            onConflict: options?.onConflict,
             single: true,
             allowEmpty: false,
           }),
       }),
       then: (onfulfilled: (v: { data: null; error: { message: string } | null }) => unknown) =>
         this.execute<null>("POST", payload, {
-          prefer: `resolution=merge-duplicates${options?.onConflict ? `,on_conflict=${options.onConflict}` : ""}`,
+          prefer: "resolution=merge-duplicates",
+          onConflict: options?.onConflict,
           allowEmpty: true,
         }).then(onfulfilled),
     };
@@ -128,10 +130,17 @@ class PostgrestQuery {
   private async execute<T>(
     method: "GET" | "POST" | "PATCH" | "DELETE",
     body?: unknown,
-    options?: { select?: string; prefer?: string; single?: boolean; allowEmpty?: boolean }
+    options?: { select?: string; prefer?: string; single?: boolean; allowEmpty?: boolean; onConflict?: string }
   ): QueryResult<T> {
     try {
-      const response = await fetch(this.buildUrl(options?.select), {
+      let requestUrl = this.buildUrl(options?.select);
+      if (options?.onConflict) {
+        const url = new URL(requestUrl);
+        url.searchParams.set("on_conflict", options.onConflict);
+        requestUrl = url.toString();
+      }
+
+      const response = await fetch(requestUrl, {
         method,
         headers: {
           apikey: this.config.key,
