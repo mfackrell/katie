@@ -57,7 +57,15 @@ export async function POST(request: NextRequest) {
     try {
       await saveActor(actor);
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Unknown save error";
+      const message =
+        error instanceof Error
+          ? `${error.name}: ${error.message}`
+          : `Unknown save error: ${String(error)}`;
+      console.error("[ActorsAPI] saveActor failed.", {
+        actorId: actor.id,
+        actorName: actor.name,
+        error: message,
+      });
       return NextResponse.json({ error: message }, { status: 500 });
     }
 

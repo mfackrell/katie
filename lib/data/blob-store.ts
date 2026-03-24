@@ -179,33 +179,46 @@ async function getBlobPathMap(forceRefresh = false): Promise<Record<string, stri
 }
 
 async function persistBlobPathMap(pathMap: Record<string, string>, token: string): Promise<void> {
-  const response = await fetch(
-    `${BLOB_API_BASE_URL}/${encodeURI(BLOB_PATH_MAP_PATH)}?addRandomSuffix=false&allowOverwrite=true`,
-    {
-      method: "PUT",
-      headers: {
-        Authorization: `Bearer ${token}`,
-        "Content-Type": "application/json",
-        "x-content-type": "application/json",
-      },
-      body: JSON.stringify(pathMap),
-    }
-  );
-
-  if (!response.ok) {
-    throw new PersistenceError(
-      `Failed to PUT ${BLOB_PATH_MAP_PATH}: ${response.status} ${response.statusText}`
+  try {
+    const previousEntryCount = Object.keys(blobPathMapCache ?? {}).length;
+    const nextEntryCount = Object.keys(pathMap).length;
+    const response = await fetch(
+      `${BLOB_API_BASE_URL}/${encodeURI(BLOB_PATH_MAP_PATH)}?addRandomSuffix=false&allowOverwrite=true`,
+      {
+        method: "PUT",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+          "x-content-type": "application/json",
+        },
+        body: JSON.stringify(pathMap),
+      }
     );
+
+    if (!response.ok) {
+      throw new PersistenceError(
+        `Failed to PUT ${BLOB_PATH_MAP_PATH}: ${response.status} ${response.statusText}`
+      );
+    }
+
+    logPersistenceDebug("Persisted blob path-map.", {
+      previousEntryCount,
+      nextEntryCount,
+      changed: previousEntryCount !== nextEntryCount,
+      cacheUpdatedInMemory: blobPathMapCache === pathMap,
+    });
+
+    await verifyDurableReadAfterWrite(BLOB_PATH_MAP_PATH, {
+      reason: "persist-path-map",
+      expectedPathMapEntryCount: nextEntryCount,
+    });
+  } catch (error) {
+    console.error("[BlobStore] Failed while persisting blob path-map.", {
+      entries: Object.keys(pathMap).length,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    throw error;
   }
-
-  logPersistenceDebug("Persisted blob path-map.", {
-    entries: Object.keys(pathMap).length,
-  });
-
-  await verifyDurableReadAfterWrite(BLOB_PATH_MAP_PATH, {
-    reason: "persist-path-map",
-    expectedPathMapEntryCount: Object.keys(pathMap).length,
-  });
 }
 
 async function verifyDurableReadAfterWrite(
@@ -466,48 +479,72 @@ async function blobGet<T>(path: string): Promise<T | null> {
 }
 
 async function blobPut(path: string, payload: unknown): Promise<void> {
-  const writeConfig =
-    getPersistenceMode() === "memory-fallback"
-      ? getBlobWriteConfig()
-      : requireBlobWriteConfig();
-  if (!writeConfig) {
-    return;
-  }
+  try {
+    const writeConfig =
+      getPersistenceMode() === "memory-fallback"
+        ? getBlobWriteConfig()
+        : requireBlobWriteConfig();
+    if (!writeConfig) {
+      return;
+    }
 
-  const blobUrl = await blobUploadJson(path, payload, writeConfig.token);
-  logPersistenceDebug("Wrote durable blob.", { path, blobUrl });
+    const blobUrl = await blobUploadJson(path, payload, writeConfig.token);
+    logPersistenceDebug("Wrote durable blob.", { path, blobUrl });
 
-  const readBaseUrl = getBlobBaseUrl();
-  if (readBaseUrl && !isUrlInReadNamespace(blobUrl, readBaseUrl)) {
-    console.error("[BlobStore] Blob write completed to a namespace that does not match configured read base URL.", {
-      path,
-      configuredReadBaseUrl: readBaseUrl,
-      configuredReadNamespace: parseBlobNamespace(readBaseUrl)?.namespace ?? "unparseable",
-      writtenBlobUrl: blobUrl,
-      writtenBlobNamespace: parseBlobNamespace(blobUrl)?.namespace ?? "unparseable",
-      writeApiBaseUrl: BLOB_API_BASE_URL,
-    });
-  }
+    const readBaseUrl = getBlobBaseUrl();
+    if (readBaseUrl && !isUrlInReadNamespace(blobUrl, readBaseUrl)) {
+      console.error("[BlobStore] Blob write completed to a namespace that does not match configured read base URL.", {
+        path,
+        configuredReadBaseUrl: readBaseUrl,
+        configuredReadNamespace: parseBlobNamespace(readBaseUrl)?.namespace ?? "unparseable",
+        writtenBlobUrl: blobUrl,
+        writtenBlobNamespace: parseBlobNamespace(blobUrl)?.namespace ?? "unparseable",
+        writeApiBaseUrl: BLOB_API_BASE_URL,
+      });
+    }
 
-  if (path === BLOB_PATH_MAP_PATH) {
+    if (path === BLOB_PATH_MAP_PATH) {
+      await verifyDurableReadAfterWrite(path, {
+        reason: "blob-put-direct",
+        expectedBlobUrl: blobUrl,
+      });
+      return;
+    }
+
+    const pathMap = await getBlobPathMap();
+    const previousEntryCount = Object.keys(pathMap).length;
+    if (pathMap[path] !== blobUrl) {
+      const nextPathMap = { ...pathMap, [path]: blobUrl };
+      const nextEntryCount = Object.keys(nextPathMap).length;
+      blobPathMapCache = nextPathMap;
+      logPersistenceDebug("Updating blob path-map entry.", {
+        path,
+        blobUrl,
+        previousEntryCount,
+        nextEntryCount,
+        changed: previousEntryCount !== nextEntryCount,
+        cacheUpdatedInMemory: blobPathMapCache === nextPathMap,
+      });
+      await persistBlobPathMap(nextPathMap, writeConfig.token);
+    } else {
+      logPersistenceDebug("Blob path-map already up to date.", {
+        path,
+        blobUrl,
+        entries: previousEntryCount,
+      });
+    }
+
     await verifyDurableReadAfterWrite(path, {
-      reason: "blob-put-direct",
+      reason: "blob-put-with-path-map",
       expectedBlobUrl: blobUrl,
     });
-    return;
+  } catch (error) {
+    console.error("[BlobStore] blobPut failed.", {
+      path,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    throw error;
   }
-
-  const pathMap = await getBlobPathMap();
-  if (pathMap[path] !== blobUrl) {
-    const nextPathMap = { ...pathMap, [path]: blobUrl };
-    blobPathMapCache = nextPathMap;
-    await persistBlobPathMap(nextPathMap, writeConfig.token);
-  }
-
-  await verifyDurableReadAfterWrite(path, {
-    reason: "blob-put-with-path-map",
-    expectedBlobUrl: blobUrl,
-  });
 }
 
 async function blobDelete(path: string): Promise<void> {
@@ -852,13 +889,113 @@ export async function saveActor(actor: Actor): Promise<void> {
 
   const nextDeletedIndex = deletedIndex.filter((deletedId) => deletedId !== actor.id);
   const nextRegistry = [...registryActors.filter((currentActor) => currentActor.id !== actor.id), actor];
+  const shouldWriteDeletedIndex = deletedIndex.includes(actor.id);
+  const shouldWriteIndex = !currentIndex.includes(actor.id);
 
-  await Promise.all([
-    deletedIndex.includes(actor.id) ? blobPut(ACTOR_DELETED_INDEX_PATH, nextDeletedIndex) : Promise.resolve(),
-    blobPut(actorPath, actor),
-    currentIndex.includes(actor.id) ? Promise.resolve() : blobPut(ACTOR_INDEX_PATH, [...currentIndex, actor.id]),
-    writeActorRegistry(nextRegistry),
-  ]);
+  logPersistenceDebug("saveActor: starting durable writes.", {
+    actorId: actor.id,
+    actorPath,
+    shouldWriteDeletedIndex,
+    shouldWriteIndex,
+    nextIndexCount: shouldWriteIndex ? currentIndex.length + 1 : currentIndex.length,
+    nextRegistryCount: nextRegistry.length,
+  });
+
+  let actorBlobWriteSucceeded = false;
+  let actorIndexWriteSucceeded = !shouldWriteIndex;
+  let actorRegistryWriteSucceeded = false;
+  let actorDeletedIndexWriteSucceeded = !shouldWriteDeletedIndex;
+
+  const writeSteps: Array<{ step: string; run: () => Promise<void> }> = [
+    {
+      step: "write:actor-file",
+      run: async () => {
+        logPersistenceDebug("saveActor: before actor file write.", { actorId: actor.id, actorPath });
+        await blobPut(actorPath, actor);
+        actorBlobWriteSucceeded = true;
+        logPersistenceDebug("saveActor: actor file write succeeded.", { actorId: actor.id, actorPath });
+      },
+    },
+    {
+      step: "write:actor-index",
+      run: async () => {
+        if (!shouldWriteIndex) {
+          logPersistenceDebug("saveActor: actor already present in index; skipping index write.", {
+            actorId: actor.id,
+          });
+          return;
+        }
+        await blobPut(ACTOR_INDEX_PATH, [...currentIndex, actor.id]);
+        actorIndexWriteSucceeded = true;
+        logPersistenceDebug("saveActor: actor index write succeeded.", {
+          actorId: actor.id,
+          path: ACTOR_INDEX_PATH,
+        });
+      },
+    },
+    {
+      step: "write:actor-registry",
+      run: async () => {
+        await writeActorRegistry(nextRegistry);
+        actorRegistryWriteSucceeded = true;
+        logPersistenceDebug("saveActor: actor registry write succeeded.", {
+          actorId: actor.id,
+          path: ACTOR_REGISTRY_PATH,
+          registrySize: nextRegistry.length,
+        });
+      },
+    },
+    {
+      step: "write:deleted-index",
+      run: async () => {
+        if (!shouldWriteDeletedIndex) {
+          logPersistenceDebug("saveActor: actor not in deleted index; skipping deleted-index write.", {
+            actorId: actor.id,
+          });
+          return;
+        }
+        await blobPut(ACTOR_DELETED_INDEX_PATH, nextDeletedIndex);
+        actorDeletedIndexWriteSucceeded = true;
+        logPersistenceDebug("saveActor: deleted index write succeeded.", {
+          actorId: actor.id,
+          path: ACTOR_DELETED_INDEX_PATH,
+          deletedIndexSize: nextDeletedIndex.length,
+        });
+      },
+    },
+  ];
+
+  const writeResults = await Promise.allSettled(writeSteps.map((step) => step.run()));
+  const failedWrite = writeResults.find((result) => result.status === "rejected");
+
+  logPersistenceDebug("saveActor: Promise.allSettled completed.", {
+    actorId: actor.id,
+    actorBlobWriteSucceeded,
+    actorIndexWriteSucceeded,
+    actorRegistryWriteSucceeded,
+    actorDeletedIndexWriteSucceeded,
+    statuses: writeResults.map((result, index) => ({
+      step: writeSteps[index]?.step,
+      status: result.status,
+      reason:
+        result.status === "rejected"
+          ? result.reason instanceof Error
+            ? result.reason.message
+            : String(result.reason)
+          : "ok",
+    })),
+  });
+
+  if (failedWrite?.status === "rejected") {
+    const failedStepIndex = writeResults.indexOf(failedWrite);
+    const failedStep = writeSteps[failedStepIndex]?.step ?? "unknown-step";
+    const failedReason =
+      failedWrite.reason instanceof Error ? failedWrite.reason.message : String(failedWrite.reason);
+    throw new PersistenceError(
+      `saveActor failed at ${failedStep}: ${failedReason}. Success states: actorFile=${actorBlobWriteSucceeded}, actorIndex=${actorIndexWriteSucceeded}, actorRegistry=${actorRegistryWriteSucceeded}, deletedIndex=${actorDeletedIndexWriteSucceeded}`
+    );
+  }
+
   logPersistenceDebug("Saved actor to durable state.", {
     actorId: actor.id,
     indexHadActor: currentIndex.includes(actor.id),
