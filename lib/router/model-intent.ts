@@ -64,10 +64,6 @@ function isVisionAnalysisModel(providerName: ProviderName, modelId: string): boo
 
 // Request intent drives validation. The router is allowed to be creative. Validation is not.
 export function inferRequestIntent(prompt: string, hasImages: boolean): RequestIntent {
-  if (IMAGE_GENERATION_PROMPT.test(prompt)) {
-    return "image-generation";
-  }
-
   if (TECHNICAL_DEBUGGING_PROMPT.test(prompt)) {
     return "technical-debugging";
   }
@@ -80,12 +76,16 @@ export function inferRequestIntent(prompt: string, hasImages: boolean): RequestI
     return "code-generation";
   }
 
-  if (!hasImages) {
-    return "text";
+  if (IMAGE_GENERATION_PROMPT.test(prompt)) {
+    return "image-generation";
   }
 
-  if (ANALYSIS_PROMPT.test(prompt) && REASONING_PROMPT.test(prompt)) {
-    return "multimodal-reasoning";
+  if (!hasImages) {
+    if (ANALYSIS_PROMPT.test(prompt) && REASONING_PROMPT.test(prompt)) {
+      return "multimodal-reasoning";
+    }
+
+    return "text";
   }
 
   return "vision-analysis";
@@ -236,6 +236,13 @@ export function validateRoutingDecision(
   availableByProvider: Array<{ provider: LlmProvider; models: string[] }>,
   intent: RequestIntent
 ): { provider: LlmProvider; modelId: string; reasoning: string; changed: boolean } {
+  if (["technical-debugging", "code-generation", "architecture-review"].includes(intent)) {
+    availableByProvider = availableByProvider.map(({ provider, models }) => ({
+      provider,
+      models: models.filter((modelId) => !isImageGenerationModel(provider.name, modelId))
+    }));
+  }
+
   const selectedProvider = availableByProvider.find(({ provider }) => provider.name === decision.providerName);
 
   if (
