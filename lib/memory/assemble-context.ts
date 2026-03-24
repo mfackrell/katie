@@ -1,5 +1,4 @@
-import { getConversationSummary } from "@/lib/data/blob-store";
-import { getActorById, getRecentMessages } from "@/lib/data/blob-store";
+import { getChatContextState } from "@/lib/data/blob-store";
 import type { Message } from "@/lib/types/chat";
 
 interface AssembledContext {
@@ -10,22 +9,33 @@ interface AssembledContext {
 }
 
 export async function assembleContext(actorId: string, chatId: string): Promise<AssembledContext> {
-  const [actor, summary, recentMessages] = await Promise.all([
-    getActorById(actorId),
-    getConversationSummary(chatId),
-    getRecentMessages(chatId)
-  ]);
-
-  if (!actor) {
-    throw new Error(`Actor not found: ${actorId}`);
-  }
+  const { actor, recentMessages, shortTermMemory, intermediateMemory, longTermMemory } = await getChatContextState(
+    actorId,
+    chatId
+  );
 
   const history = recentMessages.slice(-20);
+  const summary =
+    (typeof intermediateMemory.summary === "string" && intermediateMemory.summary) ||
+    "No summary available yet.";
+
+  const memoryHeader = [
+    shortTermMemory,
+    intermediateMemory,
+    longTermMemory,
+  ]
+    .map((memory, index) =>
+      Object.keys(memory).length
+        ? `${index === 0 ? "Short-term" : index === 1 ? "Intermediate" : "Long-term"}: ${JSON.stringify(memory)}`
+        : ""
+    )
+    .filter(Boolean)
+    .join("\n");
 
   return {
     name: process.env.ASSISTANT_NAME || "Katie",
-    persona: actor.purpose,
-    summary: summary || "No summary available yet.",
-    history
+    persona: memoryHeader ? `${actor.purpose}\n\nMemory state:\n${memoryHeader}` : actor.purpose,
+    summary,
+    history,
   };
 }

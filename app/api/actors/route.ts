@@ -47,15 +47,17 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Purpose is required for primary actors." }, { status: 400 });
     }
 
-    const actor: Actor = {
+    const actorPayload: Actor = {
       id: buildActorId(),
       name: name.trim(),
       purpose,
       ...(parentId ? { parentId } : {})
     };
 
+    let actor: Actor;
+
     try {
-      await saveActor(actor);
+      actor = await saveActor(actorPayload);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unknown save error";
       return NextResponse.json({ error: message }, { status: 500 });
