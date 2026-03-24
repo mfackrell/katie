@@ -99,7 +99,12 @@ export async function DELETE(request: NextRequest) {
     await deleteActorsById(deletedActorIds);
 
     return NextResponse.json({ deletedActorIds });
-  } catch {
-    return NextResponse.json({ error: "Invalid actor id" }, { status: 400 });
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      return NextResponse.json({ error: "Invalid actor id" }, { status: 400 });
+    }
+
+    const message = error instanceof Error ? error.message : "Unknown persistence error";
+    return NextResponse.json({ error: message }, { status: 500 });
   }
 }

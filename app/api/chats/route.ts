@@ -45,8 +45,13 @@ export async function POST(request: NextRequest) {
     const savedChat = await saveChat(chat);
 
     return NextResponse.json({ chat: savedChat }, { status: 201 });
-  } catch {
-    return NextResponse.json({ error: "Invalid request payload" }, { status: 400 });
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      return NextResponse.json({ error: "Invalid request payload" }, { status: 400 });
+    }
+
+    const message = error instanceof Error ? error.message : "Unknown persistence error";
+    return NextResponse.json({ error: message }, { status: 500 });
   }
 }
 
@@ -64,7 +69,12 @@ export async function DELETE(request: NextRequest) {
     await deleteChatById(chatId);
 
     return NextResponse.json({ success: true, deletedChatId: chatId });
-  } catch {
-    return NextResponse.json({ error: "Invalid chat id" }, { status: 400 });
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      return NextResponse.json({ error: "Invalid chat id" }, { status: 400 });
+    }
+
+    const message = error instanceof Error ? error.message : "Unknown persistence error";
+    return NextResponse.json({ error: message }, { status: 500 });
   }
 }
