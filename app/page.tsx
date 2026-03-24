@@ -396,7 +396,7 @@ export default function HomePage() {
   }
 
   return (
-    <div className="relative min-h-dvh px-3 py-3 text-zinc-100 sm:px-5 sm:py-4 lg:px-6 lg:py-6">
+    <div className="relative min-h-dvh px-3 py-3 text-zinc-100 sm:px-5 sm:py-4 lg:h-dvh lg:overflow-hidden lg:px-6 lg:py-6">
       <div className="pointer-events-none absolute inset-0 overflow-hidden">
         <div className="absolute inset-x-0 top-0 h-72 bg-gradient-to-b from-white/[0.03] to-transparent" />
         <div className="absolute left-[8%] top-20 h-56 w-56 rounded-full bg-sky-500/10 blur-3xl" />
@@ -404,7 +404,7 @@ export default function HomePage() {
         <div className="absolute bottom-[-6rem] left-1/3 h-72 w-72 rounded-full bg-indigo-500/10 blur-3xl" />
       </div>
 
-      <div className="relative mx-auto flex min-h-[calc(100vh-2rem)] max-w-[1600px] overflow-hidden rounded-[28px] border border-white/10 bg-zinc-950/70 shadow-[0_40px_120px_rgba(0,0,0,0.55)] backdrop-blur-xl">
+      <div className="relative mx-auto flex min-h-[calc(100vh-2rem)] max-w-[1600px] overflow-hidden rounded-[28px] border border-white/10 bg-zinc-950/70 shadow-[0_40px_120px_rgba(0,0,0,0.55)] backdrop-blur-xl lg:h-[calc(100dvh-3rem)] lg:min-h-0">
         <div className="pointer-events-none absolute inset-0 rounded-[28px] ring-1 ring-inset ring-white/5" />
         <button
           type="button"
@@ -416,7 +416,7 @@ export default function HomePage() {
           <span>Actors</span>
         </button>
 
-        <div className="hidden h-full w-80 min-w-[20rem] max-w-[22rem] flex-none border-r border-white/10 lg:flex">
+        <div className="hidden h-full min-h-0 w-80 min-w-[20rem] max-w-[22rem] flex-none border-r border-white/10 lg:flex">
           <Sidebar
             actors={actors}
             chats={filteredChats}
@@ -433,7 +433,7 @@ export default function HomePage() {
           />
         </div>
 
-        <div className="min-w-0 flex-1">
+        <div className="flex min-h-0 min-w-0 flex-1 overflow-hidden">
           <ChatPanel actorId={activeActorId} chatId={activeChatId} />
         </div>
 

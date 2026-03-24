@@ -56,7 +56,7 @@ export function Sidebar({
           </button>
         </div>
 
-        <nav className="flex-1 space-y-3 overflow-y-auto pr-1 pb-4">
+        <nav className="min-h-0 flex-1 space-y-3 overflow-y-auto pr-1 pb-4">
           {sortedActors.map((actor) => {
             const actorChats = chats.filter((chat) => chat.actorId === actor.id);
             const activeActor = actor.id === activeActorId;
