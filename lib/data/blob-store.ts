@@ -124,7 +124,7 @@ function logPersistenceDebug(message: string, meta?: Record<string, unknown>): v
 
 async function verifyDurableReadAfterWrite(
   path: string,
-  options?: { reason?: string }
+  options?: { reason?: string; requiredForVisibility?: boolean }
 ): Promise<void> {
   if (getPersistenceMode() !== "durable") {
     return;
@@ -148,12 +148,17 @@ async function verifyDurableReadAfterWrite(
   }
 
   if (!verificationSucceeded) {
-    const message =
+    const reason = options?.reason ?? "unspecified";
+    if (options?.requiredForVisibility) {
+      throw new PersistenceError(
+        `Durable write verification failed for "${path}": write was acknowledged but durable read-back did not become visible. reason=${reason}`
+      );
+    }
+
+    const warningMessage =
       `Durable write verification warning for "${path}": write succeeded but immediate durable read-back was not consistently visible. ` +
       "Treating as eventual-consistency/read-lag and continuing.";
-    console.warn(`[BlobStore] ${message}`, {
-      reason: options?.reason ?? "unspecified",
-    });
+    console.warn(`[BlobStore] ${warningMessage}`, { reason });
     return;
   }
 
@@ -319,6 +324,36 @@ async function blobPut(path: string, payload: unknown): Promise<void> {
   });
 }
 
+async function blobPutAuthoritative(path: string, payload: unknown, reason: string): Promise<void> {
+  const writeConfig =
+    getPersistenceMode() === "memory-fallback"
+      ? getBlobWriteConfig()
+      : requireBlobWriteConfig();
+  if (!writeConfig) {
+    return;
+  }
+
+  const blobUrl = await blobUploadJson(path, payload, writeConfig.token);
+  logPersistenceDebug("Wrote durable blob.", { path, blobUrl });
+
+  const readBaseUrl = getBlobBaseUrl();
+  if (readBaseUrl && !isUrlInReadNamespace(blobUrl, readBaseUrl)) {
+    console.error("[BlobStore] Blob write completed to a namespace that does not match configured read base URL.", {
+      path,
+      configuredReadBaseUrl: readBaseUrl,
+      configuredReadNamespace: parseBlobNamespace(readBaseUrl)?.namespace ?? "unparseable",
+      writtenBlobUrl: blobUrl,
+      writtenBlobNamespace: parseBlobNamespace(blobUrl)?.namespace ?? "unparseable",
+      writeApiBaseUrl: BLOB_API_BASE_URL,
+    });
+  }
+
+  await verifyDurableReadAfterWrite(path, {
+    reason,
+    requiredForVisibility: true,
+  });
+}
+
 async function blobDelete(path: string): Promise<void> {
   const writeConfig =
     getPersistenceMode() === "memory-fallback"
@@ -396,7 +431,7 @@ async function readActorRegistry(): Promise<Actor[]> {
 }
 
 async function writeActorRegistry(actors: Actor[]): Promise<void> {
-  await blobPut(ACTOR_REGISTRY_PATH, actors);
+  await blobPutAuthoritative(ACTOR_REGISTRY_PATH, actors, "actor-registry-write");
   actorRegistryCache = actors;
 }
 
@@ -416,7 +451,7 @@ async function readChatRegistry(): Promise<ChatThread[]> {
 
 async function writeChatRegistry(chats: ChatThread[]): Promise<void> {
   const sorted = sortChats(chats);
-  await blobPut(CHAT_REGISTRY_PATH, sorted);
+  await blobPutAuthoritative(CHAT_REGISTRY_PATH, sorted, "chat-registry-write");
   chatRegistryCache = sorted;
 }
 
@@ -554,9 +589,20 @@ export async function saveChat(chat: ChatThread): Promise<ChatThread> {
       ...registryChats.filter((currentChat) => currentChat.id !== nextChat.id),
     ];
 
-    await blobPut(`chats/${nextChat.id}.json`, nextChat);
+    await blobPutAuthoritative(`chats/${nextChat.id}.json`, nextChat, "chat-object-write");
     await writeChatRegistry(nextRegistry);
   });
+
+  if (!isMemoryFallbackMode()) {
+    chatRegistryCache = null;
+    const readableChat = await getChatById(nextChat.id);
+    if (!readableChat) {
+      throw new PersistenceError(
+        `Chat persistence failed: write was acknowledged but authoritative durable read could not resolve chat "${nextChat.id}".`
+      );
+    }
+  }
+
   logPersistenceDebug("Saved chat to durable state.", {
     chatId: nextChat.id,
   });
@@ -649,13 +695,24 @@ export async function saveActor(actor: Actor): Promise<void> {
     const nextDeletedIndex = deletedIndex.filter((deletedId) => deletedId !== actor.id);
     const nextRegistry = [...registryActors.filter((currentActor) => currentActor.id !== actor.id), actor];
 
-    await blobPut(actorPath, actor);
+    await blobPutAuthoritative(actorPath, actor, "actor-object-write");
     await writeActorRegistry(nextRegistry);
     if (deletedIndex.includes(actor.id)) {
       await blobPut(ACTOR_DELETED_INDEX_PATH, nextDeletedIndex);
       deletedActorIdsCache = nextDeletedIndex;
     }
   });
+
+  if (!isMemoryFallbackMode()) {
+    actorRegistryCache = null;
+    const readableActor = await getActorById(actor.id);
+    if (!readableActor) {
+      throw new PersistenceError(
+        `Actor persistence failed: write was acknowledged but authoritative durable read could not resolve actor "${actor.id}".`
+      );
+    }
+  }
+
   logPersistenceDebug("Saved actor to durable state.", {
     actorId: actor.id,
   });

@@ -25,8 +25,19 @@ function setupBlobMock(initial: Record<string, StoredValue> = {}): {
   store: Map<string, StoredValue>;
   calls: string[];
 } {
+  return setupBlobMockWithOptions(initial);
+}
+
+function setupBlobMockWithOptions(
+  initial: Record<string, StoredValue> = {},
+  options?: { unreadablePaths?: string[] }
+): {
+  store: Map<string, StoredValue>;
+  calls: string[];
+} {
   const store = new Map<string, StoredValue>(Object.entries(initial));
   const calls: string[] = [];
+  const unreadablePaths = new Set(options?.unreadablePaths ?? []);
 
   global.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = typeof input === "string" ? input : input.toString();
@@ -35,7 +46,7 @@ function setupBlobMock(initial: Record<string, StoredValue> = {}): {
 
     if (url.startsWith(`${READ_BASE}/`)) {
       const path = parsePathFromReadUrl(url);
-      if (!store.has(path)) {
+      if (unreadablePaths.has(path) || !store.has(path)) {
         return makeJsonResponse(null, 404);
       }
       return makeJsonResponse(store.get(path));
@@ -181,4 +192,31 @@ test("path-map absence does not break actor/chat/message reads", async () => {
   assert.equal(actor?.id, "a1");
   assert.equal(chat?.id, "c1");
   assert.equal(messages.length, 1);
+});
+
+test("saveActor throws when authoritative actor registry write is not durably readable", async () => {
+  setupBlobMockWithOptions({}, { unreadablePaths: ["actors/registry.json"] });
+  const blobStore = loadBlobStore();
+
+  await assert.rejects(
+    blobStore.saveActor({ id: "a1", name: "Actor One", purpose: "hello" }),
+    /Durable write verification failed/
+  );
+});
+
+test("saveChat throws when authoritative chat registry write is not durably readable", async () => {
+  setupBlobMockWithOptions({}, { unreadablePaths: ["chats/registry.json"] });
+  const blobStore = loadBlobStore();
+  await blobStore.saveActor({ id: "a1", name: "Actor One", purpose: "hello" });
+
+  await assert.rejects(
+    blobStore.saveChat({
+      id: "c1",
+      actorId: "a1",
+      title: "Chat",
+      createdAt: "2026-03-24T00:00:00.000Z",
+      updatedAt: "2026-03-24T00:00:00.000Z",
+    }),
+    /Durable write verification failed/
+  );
 });
