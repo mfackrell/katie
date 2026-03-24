@@ -16,6 +16,11 @@
     "lib/providers/google-model-capabilities.ts",
     "lib/router/model-intent.ts",
     "lib/providers/types.ts",
-    "tests/google-routing.test.ts"
+    "lib/types/chat.ts",
+    "lib/chat/request-guards.ts",
+    "lib/data/blob-store.ts",
+    "tests/google-routing.test.ts",
+    "tests/blob-store.test.ts",
+    "tests/chat-panel-guard.test.ts"
   ]
 }
