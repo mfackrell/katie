@@ -11,6 +11,8 @@ const ACTOR_REGISTRY_PATH = "actors/registry.json";
 const ACTOR_DELETED_INDEX_PATH = "actors/deleted-index.json";
 const CHAT_INDEX_PATH = "chats/index.json";
 const CHAT_REGISTRY_PATH = "chats/registry.json";
+const BLOB_PATH_MAP_PATH = "_meta/blob-path-map.json";
+const BLOB_API_BASE_URL = "https://blob.vercel-storage.com";
 
 const base = process.env.BLOB_BASE_URL ?? process.env.BLOB_URL;
 const writeToken = process.env.BLOB_READ_WRITE_TOKEN ?? process.env.BLOB_WRITE_TOKEN;
@@ -61,6 +63,126 @@ function requireBlobWriteConfig(): { baseUrl: string; token: string } {
   throw new PersistenceError(
     "Durable persistence is required but blob write configuration is missing. Set BLOB_READ_WRITE_TOKEN (or BLOB_WRITE_TOKEN), or explicitly enable KATIE_ALLOW_MEMORY_FALLBACK=true for local/demo mode."
   );
+}
+
+function resolveBlobPath(baseUrl: string, path: string): string {
+  const normalizedBase = baseUrl.replace(/\/+$/, "");
+  const normalizedPath = path.replace(/^\/+/, "");
+  return `${normalizedBase}/${normalizedPath}`;
+}
+
+async function blobFetchJson<T>(url: string): Promise<T | null> {
+  const response = await fetch(url, {
+    cache: "no-store",
+    headers: {
+      Pragma: "no-cache",
+      "Cache-Control": "no-cache",
+    },
+  });
+
+  if (response.status === 404) {
+    return null;
+  }
+
+  if (!response.ok) {
+    throw new PersistenceError(`Failed to GET ${url}: ${response.status} ${response.statusText}`);
+  }
+
+  return (await response.json()) as T;
+}
+
+let blobPathMapCache: Record<string, string> | null = null;
+
+async function getBlobPathMap(): Promise<Record<string, string>> {
+  if (blobPathMapCache) {
+    return blobPathMapCache;
+  }
+
+  const baseUrl = getBlobBaseUrl();
+  if (!baseUrl) {
+    blobPathMapCache = {};
+    return blobPathMapCache;
+  }
+
+  const pathMap = await blobFetchJson<Record<string, string>>(resolveBlobPath(baseUrl, BLOB_PATH_MAP_PATH));
+  blobPathMapCache = pathMap ?? {};
+  return blobPathMapCache;
+}
+
+async function persistBlobPathMap(pathMap: Record<string, string>, token: string): Promise<void> {
+  const response = await fetch(
+    `${BLOB_API_BASE_URL}/${encodeURI(BLOB_PATH_MAP_PATH)}?addRandomSuffix=false&allowOverwrite=true`,
+    {
+      method: "PUT",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+        "x-content-type": "application/json",
+      },
+      body: JSON.stringify(pathMap),
+    }
+  );
+
+  if (!response.ok) {
+    throw new PersistenceError(
+      `Failed to PUT ${BLOB_PATH_MAP_PATH}: ${response.status} ${response.statusText}`
+    );
+  }
+}
+
+async function blobUploadJson(path: string, payload: unknown, token: string): Promise<string> {
+  const response = await fetch(
+    `${BLOB_API_BASE_URL}/${encodeURI(path)}?addRandomSuffix=false&allowOverwrite=true`,
+    {
+      method: "PUT",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+        "x-content-type": "application/json",
+      },
+      body: JSON.stringify(payload),
+    }
+  );
+
+  if (!response.ok) {
+    throw new PersistenceError(`Failed to PUT ${path}: ${response.status} ${response.statusText}`);
+  }
+
+  const uploaded = (await response.json()) as { url?: string };
+  if (!uploaded.url) {
+    throw new PersistenceError(`Failed to PUT ${path}: missing blob URL in response.`);
+  }
+
+  return uploaded.url;
+}
+
+async function blobDeleteByPathOrUrl(pathOrUrl: string, token: string): Promise<void> {
+  const targetPath = pathOrUrl.startsWith("http")
+    ? (() => {
+        try {
+          return new URL(pathOrUrl).pathname.slice(1);
+        } catch {
+          return pathOrUrl;
+        }
+      })()
+    : pathOrUrl;
+
+  const response = await fetch(`${BLOB_API_BASE_URL}/${encodeURI(targetPath)}`, {
+    method: "DELETE",
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+  });
+
+  if (response.status === 404) {
+    return;
+  }
+
+  if (!response.ok) {
+    throw new PersistenceError(
+      `Failed to DELETE ${pathOrUrl}: ${response.status} ${response.statusText}`
+    );
+  }
 }
 
 function canUseBlobReads(): boolean {
@@ -115,24 +237,22 @@ async function blobGet<T>(path: string): Promise<T | null> {
   if (!baseUrl) {
     return null;
   }
+  const directValue = await blobFetchJson<T>(resolveBlobPath(baseUrl, path));
+  if (directValue !== null) {
+    return directValue;
+  }
 
-  const response = await fetch(`${baseUrl}/${path}`, {
-    cache: "no-store",
-    headers: {
-      Pragma: "no-cache",
-      "Cache-Control": "no-cache",
-    },
-  });
-
-  if (response.status === 404) {
+  if (path === BLOB_PATH_MAP_PATH) {
     return null;
   }
 
-  if (!response.ok) {
-    throw new PersistenceError(`Failed to GET ${path}: ${response.status} ${response.statusText}`);
+  const pathMap = await getBlobPathMap();
+  const mappedUrl = pathMap[path];
+  if (!mappedUrl) {
+    return null;
   }
 
-  return (await response.json()) as T;
+  return blobFetchJson<T>(mappedUrl);
 }
 
 async function blobPut(path: string, payload: unknown): Promise<void> {
@@ -144,17 +264,17 @@ async function blobPut(path: string, payload: unknown): Promise<void> {
     return;
   }
 
-  const response = await fetch(`${writeConfig.baseUrl}/${path}`, {
-    method: "PUT",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${writeConfig.token}`,
-    },
-    body: JSON.stringify(payload),
-  });
+  const blobUrl = await blobUploadJson(path, payload, writeConfig.token);
 
-  if (!response.ok) {
-    throw new Error(`Failed to PUT ${path}: ${response.status} ${response.statusText}`);
+  if (path === BLOB_PATH_MAP_PATH) {
+    return;
+  }
+
+  const pathMap = await getBlobPathMap();
+  if (pathMap[path] !== blobUrl) {
+    const nextPathMap = { ...pathMap, [path]: blobUrl };
+    blobPathMapCache = nextPathMap;
+    await persistBlobPathMap(nextPathMap, writeConfig.token);
   }
 }
 
@@ -167,19 +287,15 @@ async function blobDelete(path: string): Promise<void> {
     return;
   }
 
-  const response = await fetch(`${writeConfig.baseUrl}/${path}`, {
-    method: "DELETE",
-    headers: {
-      Authorization: `Bearer ${writeConfig.token}`,
-    },
-  });
+  const pathMap = await getBlobPathMap();
+  const deleteTarget = pathMap[path] ?? path;
+  await blobDeleteByPathOrUrl(deleteTarget, writeConfig.token);
 
-  if (response.status === 404) {
-    return;
-  }
-
-  if (!response.ok) {
-    throw new PersistenceError(`Failed to DELETE ${path}: ${response.status} ${response.statusText}`);
+  if (pathMap[path]) {
+    const nextPathMap = { ...pathMap };
+    delete nextPathMap[path];
+    blobPathMapCache = nextPathMap;
+    await persistBlobPathMap(nextPathMap, writeConfig.token);
   }
 }
 
