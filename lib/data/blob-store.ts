@@ -181,7 +181,7 @@ export async function listActors(): Promise<Actor[]> {
     .select("id,name,system_prompt,parent_actor_id,created_at,updated_at")
     .order("name", { ascending: true })
     .order("created_at", { ascending: true })
-    ;
+    .returns<ActorRow>();
 
   if (error) {
     throw new Error(`Failed to list actors: ${error.message}`);
@@ -249,7 +249,7 @@ export async function listChats(): Promise<ChatThread[]> {
     .select("id,actor_id,title,created_at,updated_at")
     .order("updated_at", { ascending: false })
     .order("created_at", { ascending: false })
-    ;
+    .returns<ChatRow>();
 
   if (error) {
     throw new Error(`Failed to list chats: ${error.message}`);
@@ -266,7 +266,7 @@ export async function listChatsByActorId(actorId: string): Promise<ChatThread[]>
     .eq("actor_id", actorId)
     .order("updated_at", { ascending: false })
     .order("created_at", { ascending: false })
-    ;
+    .returns<ChatRow>();
 
   if (error) {
     throw new Error(`Failed to list chats for actor ${actorId}: ${error.message}`);
@@ -339,7 +339,7 @@ export async function getMessages(chatId: string): Promise<Message[]> {
     .select("id,actor_id,chat_id,role,content,created_at")
     .eq("chat_id", chatId)
     .order("created_at", { ascending: true })
-    ;
+    .returns<MessageRow>();
 
   if (error) {
     throw new Error(`Failed to load messages for chat ${chatId}: ${error.message}`);
@@ -364,7 +364,7 @@ export async function getRecentMessages(chatId: string, limit = 20): Promise<Mes
     .eq("chat_id", chatId)
     .order("created_at", { ascending: false })
     .limit(limit)
-    ;
+    .returns<MessageRow>();
 
   if (error) {
     throw new Error(`Failed to load recent messages for chat ${chatId}: ${error.message}`);
