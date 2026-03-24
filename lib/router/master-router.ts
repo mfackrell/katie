@@ -1,5 +1,11 @@
 import OpenAI from "openai";
-import { inferRequestIntent, scoreModelsForIntent, validateRoutingDecision } from "@/lib/router/model-intent";
+import {
+  CandidateScoreBreakdown,
+  inferRequestIntent,
+  scoreModelCandidateWithBreakdown,
+  scoreModelsForIntent,
+  validateRoutingDecision
+} from "@/lib/router/model-intent";
 import { isBlockedRoutingModel } from "@/lib/router/routing-model-filters";
 import { LlmProvider } from "@/lib/providers/types";
 
@@ -8,6 +14,37 @@ export type RoutingDecision = {
   modelId: string;
   reasoning: string;
   routerModel: string;
+};
+type RoutingTrace = {
+  request_id: string;
+  timestamp: string;
+  intent: { value: ReturnType<typeof inferRequestIntent>; confidence: number | null };
+  prompt_features: {
+    prompt_length: number;
+    has_images: boolean;
+    has_context: boolean;
+    context_length: number;
+  };
+  candidates: Array<{
+    provider: string;
+    model_id: string;
+    base_score: number | null;
+    adjustments: Array<{ label: string; delta: number }>;
+    final_score: number;
+    excluded: boolean;
+    exclusion_reason: string | null;
+  }>;
+  selection: {
+    ranked_candidates: Array<{ provider: string; model_id: string; score: number }>;
+    top_ranked: { provider: string; model_id: string; score: number } | null;
+    selected_model: { provider: string; model_id: string };
+    override_happened: boolean;
+    override_reason: string | null;
+  };
+  policy: {
+    router_version: string | null;
+    scoring_policy_version: string | null;
+  };
 };
 
 type ProviderName = "openai" | "google" | "grok" | "anthropic";
@@ -67,6 +104,94 @@ function logRoutingDecision(
   console.info(`[Router] intent=${intent} top_candidates=${candidates} selected=${selectedProviderName}:${selectedModelId}`);
 }
 
+function isRoutingTraceEnabled(perRequestOverride?: boolean): boolean {
+  if (perRequestOverride === true) {
+    return true;
+  }
+
+  return process.env.ROUTER_TRACE_ENABLED === "true";
+}
+
+function createCandidateBreakdown(
+  availableByProvider: Array<{ provider: LlmProvider; models: string[] }>,
+  intent: ReturnType<typeof inferRequestIntent>
+): CandidateScoreBreakdown[] {
+  return availableByProvider.flatMap(({ provider, models }) =>
+    models.map((modelId) => scoreModelCandidateWithBreakdown(provider.name, modelId, intent))
+  );
+}
+
+function buildRoutingTrace({
+  requestId,
+  timestamp,
+  intent,
+  prompt,
+  hasImages,
+  context,
+  availableByProvider,
+  selectedProviderName,
+  selectedModelId,
+  overrideReason
+}: {
+  requestId: string;
+  timestamp: string;
+  intent: ReturnType<typeof inferRequestIntent>;
+  prompt: string;
+  hasImages: boolean;
+  context: string;
+  availableByProvider: Array<{ provider: LlmProvider; models: string[] }>;
+  selectedProviderName: string;
+  selectedModelId: string;
+  overrideReason: string | null;
+}): RoutingTrace {
+  const scoredCandidates = scoreModelsForIntent(availableByProvider, intent).map(({ provider, modelId, score }) => ({
+    provider: provider.name,
+    model_id: modelId,
+    score
+  }));
+
+  return {
+    request_id: requestId,
+    timestamp,
+    intent: {
+      value: intent,
+      confidence: null
+    },
+    prompt_features: {
+      prompt_length: prompt.length,
+      has_images: hasImages,
+      has_context: Boolean(context),
+      context_length: context.length
+    },
+    candidates: createCandidateBreakdown(availableByProvider, intent).map((candidate) => ({
+      provider: candidate.providerName,
+      model_id: candidate.modelId,
+      base_score: candidate.baseScore,
+      adjustments: candidate.adjustments,
+      final_score: candidate.finalScore,
+      excluded: candidate.excluded,
+      exclusion_reason: candidate.exclusionReason
+    })),
+    selection: {
+      ranked_candidates: scoredCandidates,
+      top_ranked: scoredCandidates[0] ?? null,
+      selected_model: {
+        provider: selectedProviderName,
+        model_id: selectedModelId
+      },
+      override_happened: Boolean(overrideReason),
+      override_reason: overrideReason
+    },
+    policy: {
+      router_version: process.env.ROUTER_POLICY_VERSION ?? null,
+      scoring_policy_version: process.env.ROUTER_SCORING_POLICY_VERSION ?? null
+    }
+  };
+}
+
+function logRoutingTrace(trace: RoutingTrace): void {
+  console.info(`[RouterTrace] ${JSON.stringify(trace)}`);
+}
 
 const routingClient = process.env.OPENAI_API_KEY
   ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY, fetch: globalThis.fetch.bind(globalThis) })
@@ -137,7 +262,7 @@ export async function chooseProvider(
   prompt: string,
   context: string,
   providers: LlmProvider[],
-  options?: { hasImages?: boolean }
+  options?: { hasImages?: boolean; routingTraceEnabled?: boolean; routingRequestId?: string }
 ): Promise<RoutingDecision> {
   const modelEntries = await Promise.all(
     providers.map(async (provider) => ({
@@ -152,12 +277,32 @@ export async function chooseProvider(
   }));
 
   const intent = inferRequestIntent(prompt, Boolean(options?.hasImages));
+  const traceEnabled = isRoutingTraceEnabled(options?.routingTraceEnabled);
+  const traceRequestId = options?.routingRequestId ?? crypto.randomUUID();
+  const traceTimestamp = new Date().toISOString();
 
   if (availableByProvider.length === 1) {
     const selected = availableByProvider[0];
     const modelId = pickDefaultModel(selected.provider, selected.models);
     const validated = validateRoutingDecision({ providerName: selected.provider.name, modelId }, availableByProvider, intent);
     logRoutingDecision(intent, availableByProvider, validated.provider.name, validated.modelId);
+    if (traceEnabled) {
+      const overrideReason = validated.changed ? validated.reasoning : null;
+      logRoutingTrace(
+        buildRoutingTrace({
+          requestId: traceRequestId,
+          timestamp: traceTimestamp,
+          intent,
+          prompt,
+          hasImages: Boolean(options?.hasImages),
+          context,
+          availableByProvider,
+          selectedProviderName: validated.provider.name,
+          selectedModelId: validated.modelId,
+          overrideReason
+        })
+      );
+    }
     return {
       provider: validated.provider,
       modelId: validated.modelId,
@@ -167,7 +312,7 @@ export async function chooseProvider(
   }
 
   if (routingClient) {
-    const options = availableByProvider
+    const allowedOptions = availableByProvider
       .flatMap(({ provider, models }) => models.map((model) => `${provider.name}:${model}`))
       .join(", ");
 
@@ -191,7 +336,7 @@ export async function chooseProvider(
           },
           {
             role: "user",
-            content: `Conversation context:\n${context}\n\nLatest user intent:\n${prompt}\n\nAllowed options: ${options}`
+            content: `Conversation context:\n${context}\n\nLatest user intent:\n${prompt}\n\nAllowed options: ${allowedOptions}`
           }
         ]
       });
@@ -212,6 +357,25 @@ export async function chooseProvider(
 
             const validated = validateRoutingDecision({ providerName: parsedChoice.providerName, modelId }, availableByProvider, intent);
             logRoutingDecision(intent, availableByProvider, validated.provider.name, validated.modelId);
+            if (traceEnabled) {
+              const overrideReason = validated.changed
+                ? `validation_adjustment: ${validated.reasoning}`
+                : null;
+              logRoutingTrace(
+                buildRoutingTrace({
+                  requestId: traceRequestId,
+                  timestamp: traceTimestamp,
+                  intent,
+                  prompt,
+                  hasImages: Boolean(options?.hasImages),
+                  context,
+                  availableByProvider,
+                  selectedProviderName: validated.provider.name,
+                  selectedModelId: validated.modelId,
+                  overrideReason
+                })
+              );
+            }
             return {
               provider: validated.provider,
               modelId: validated.modelId,
@@ -233,6 +397,23 @@ export async function chooseProvider(
 
   const validated = validateRoutingDecision({ providerName: fallbackProvider.provider.name, modelId }, availableByProvider, intent);
   logRoutingDecision(intent, availableByProvider, validated.provider.name, validated.modelId);
+  if (traceEnabled) {
+    const overrideReason = `fallback_path: ${validated.reasoning}`;
+    logRoutingTrace(
+      buildRoutingTrace({
+        requestId: traceRequestId,
+        timestamp: traceTimestamp,
+        intent,
+        prompt,
+        hasImages: Boolean(options?.hasImages),
+        context,
+        availableByProvider,
+        selectedProviderName: validated.provider.name,
+        selectedModelId: validated.modelId,
+        overrideReason
+      })
+    );
+  }
 
   return {
     provider: validated.provider,
