@@ -258,7 +258,7 @@ export function evaluatePolicyRouting(args: {
   }
 
   const cheapest = Math.max(Math.min(...candidates.map((c) => c.estimatedCostUsd)), 0.000001);
-  let weights = { ...config.scoring_weights };
+  const weights = { ...config.scoring_weights };
   if (complexity === "low") {
     weights.capability += config.low_complexity_weight_shift.capability;
     weights.cost += config.low_complexity_weight_shift.cost;
