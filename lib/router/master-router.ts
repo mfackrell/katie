@@ -401,7 +401,7 @@ export async function chooseProvider(
   const modelEntries = await Promise.all(
     providers.map(async (provider) => ({
       provider,
-      models: (await provider.listModels()).filter(() => !isBlockedRoutingModel())
+      models: (await provider.listModels()).filter((modelId) => !isBlockedRoutingModel(modelId))
     }))
   );
 
