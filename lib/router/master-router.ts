@@ -7,6 +7,7 @@ import {
   validateRoutingDecision
 } from "@/lib/router/model-intent";
 import { isBlockedRoutingModel } from "@/lib/router/routing-model-filters";
+import { evaluatePolicyRouting, getPolicyConfig } from "@/lib/router/policy-engine";
 import { LlmProvider } from "@/lib/providers/types";
 
 export type RoutingDecision = {
@@ -203,6 +204,11 @@ function logRoutingTrace(trace: RoutingTrace): void {
   console.info(`[RouterTrace] ${JSON.stringify(trace)}`);
 }
 
+
+function logPolicyTrace(trace: unknown): void {
+  console.info(`[RouterPolicyTrace] ${JSON.stringify(trace)}`);
+}
+
 function buildSelectionExplainer({
   selectedProviderName,
   selectedModelId,
@@ -323,12 +329,75 @@ function normalizeRoutingChoice(rawChoice: string): RoutingChoice | null {
   };
 }
 
+type Selection = { provider: LlmProvider; modelId: string; reasoning: string; routerModel: string; summary: string; overrideReason: string | null };
+
 export async function chooseProvider(
   prompt: string,
   context: string,
   providers: LlmProvider[],
   options?: { hasImages?: boolean; routingTraceEnabled?: boolean; routingRequestId?: string }
 ): Promise<RoutingDecision> {
+  const applyPolicyIfEnabled = (base: Selection, availableByProvider: Array<{ provider: LlmProvider; models: string[] }>): RoutingDecision => {
+    if (!policyConfig.enabled) {
+      return {
+        provider: base.provider,
+        modelId: base.modelId,
+        reasoning: base.reasoning,
+        routerModel: base.routerModel,
+        explainer: buildSelectionExplainer({
+          selectedProviderName: base.provider.name,
+          selectedModelId: base.modelId,
+          intent,
+          availableByProvider,
+          overrideReason: base.overrideReason,
+          summary: base.summary
+        })
+      };
+    }
+
+    const evaluation = evaluatePolicyRouting({
+      prompt,
+      context,
+      availableByProvider,
+      traceId: traceRequestId,
+      currentSelection: { providerName: base.provider.name, modelId: base.modelId }
+    });
+
+    logPolicyTrace(evaluation.trace);
+
+    if (policyConfig.shadowMode || !evaluation.selected) {
+      return {
+        provider: base.provider,
+        modelId: base.modelId,
+        reasoning: `${base.reasoning} Policy engine ${policyConfig.shadowMode ? "shadow" : "fallback"} mode kept live selection.`,
+        routerModel: base.routerModel,
+        explainer: buildSelectionExplainer({
+          selectedProviderName: base.provider.name,
+          selectedModelId: base.modelId,
+          intent,
+          availableByProvider,
+          overrideReason: base.overrideReason,
+          summary: `${base.summary} Policy mode=${evaluation.trace.mode}.`
+        })
+      };
+    }
+
+    return {
+      provider: evaluation.selected.provider,
+      modelId: evaluation.selected.modelId,
+      reasoning: `${base.reasoning} Policy engine enforced selection ${evaluation.selected.provider.name}:${evaluation.selected.modelId}.`,
+      routerModel: base.routerModel,
+      explainer: buildSelectionExplainer({
+        selectedProviderName: evaluation.selected.provider.name,
+        selectedModelId: evaluation.selected.modelId,
+        intent,
+        availableByProvider,
+        overrideReason: `policy_enforced:${evaluation.trace.selection_summary}`,
+        summary: `${base.summary} Policy mode=${evaluation.trace.mode}.`
+      })
+    };
+  };
+
   const modelEntries = await Promise.all(
     providers.map(async (provider) => ({
       provider,
@@ -345,6 +414,7 @@ export async function chooseProvider(
   const traceEnabled = isRoutingTraceEnabled(options?.routingTraceEnabled);
   const traceRequestId = options?.routingRequestId ?? crypto.randomUUID();
   const traceTimestamp = new Date().toISOString();
+  const policyConfig = getPolicyConfig();
 
   if (availableByProvider.length === 1) {
     const selected = availableByProvider[0];
@@ -368,20 +438,14 @@ export async function chooseProvider(
         })
       );
     }
-    return {
+    return applyPolicyIfEnabled({
       provider: validated.provider,
       modelId: validated.modelId,
-      reasoning: `Single provider available. ${validated.reasoning}`,
+      reasoning: `Single provider available. ${validated.reasoning}` ,
       routerModel: modelId,
-      explainer: buildSelectionExplainer({
-        selectedProviderName: validated.provider.name,
-        selectedModelId: validated.modelId,
-        intent,
-        availableByProvider,
-        overrideReason: validated.changed ? validated.reasoning : null,
-        summary: "Single provider path."
-      })
-    };
+      summary: "Single provider path.",
+      overrideReason: validated.changed ? validated.reasoning : null
+    }, availableByProvider);
   }
 
   if (routingClient) {
@@ -449,20 +513,14 @@ export async function chooseProvider(
                 })
               );
             }
-            return {
+            return applyPolicyIfEnabled({
               provider: validated.provider,
               modelId: validated.modelId,
               reasoning: `Orchestrator selected ${parsedChoice.providerName}:${modelId}. ${validated.reasoning}`,
               routerModel: modelId,
-              explainer: buildSelectionExplainer({
-                selectedProviderName: validated.provider.name,
-                selectedModelId: validated.modelId,
-                intent,
-                availableByProvider,
-                overrideReason: validated.changed ? `validation_adjustment: ${validated.reasoning}` : null,
-                summary: "Orchestrator path."
-              })
-            };
+              summary: "Orchestrator path.",
+              overrideReason: validated.changed ? `validation_adjustment: ${validated.reasoning}` : null
+            }, availableByProvider);
           }
         }
       }
@@ -496,18 +554,12 @@ export async function chooseProvider(
     );
   }
 
-  return {
+  return applyPolicyIfEnabled({
     provider: validated.provider,
     modelId: validated.modelId,
     reasoning: `Fallback routing selected ${fallbackProvider.provider.name}:${modelId}. ${validated.reasoning}`,
     routerModel: modelId,
-    explainer: buildSelectionExplainer({
-      selectedProviderName: validated.provider.name,
-      selectedModelId: validated.modelId,
-      intent,
-      availableByProvider,
-      overrideReason: `fallback_path: ${validated.reasoning}`,
-      summary: "Fallback path."
-    })
-  };
+    summary: "Fallback path.",
+    overrideReason: `fallback_path: ${validated.reasoning}`
+  }, availableByProvider);
 }

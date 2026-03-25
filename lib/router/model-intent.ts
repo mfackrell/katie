@@ -90,11 +90,11 @@ export function inferRequestIntent(prompt: string, hasImages: boolean): RequestI
     return "image-generation";
   }
 
-  if (!hasImages) {
-    if (ANALYSIS_PROMPT.test(prompt) && REASONING_PROMPT.test(prompt)) {
-      return "multimodal-reasoning";
-    }
+  if (ANALYSIS_PROMPT.test(prompt) && REASONING_PROMPT.test(prompt)) {
+    return "multimodal-reasoning";
+  }
 
+  if (!hasImages) {
     return "text";
   }
 
