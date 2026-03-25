@@ -132,31 +132,42 @@ async function classifyIntentWithLLM(prompt: string, intents: RequestIntent[]): 
   }
 
   const intentGuide = intents.map((intent) => `- ${intent}: ${intentDescriptions[intent]}`).join("\n");
+  const examples = [
+    { user: "Rewrite this paragraph in a friendly tone.", intent: "rewrite" },
+    { user: "Summarise today’s NYT front page.", intent: "news-summary" },
+    { user: "Here is a Kubernetes deployment YAML. Spot the risks.", intent: "architecture-review" }
+  ];
+  const systemPrompt = `
+You are an expert intent classifier.
+Return ONLY a JSON object like {"intent":"<one_of:${intents.join("|")}>"}.
+If unsure use {"intent":"null"}.
+No other keys.
+${intentGuide}
+  `.trim();
+  const messages = [
+    { role: "system" as const, content: systemPrompt },
+    ...examples.flatMap((example) => [
+      { role: "user" as const, content: example.user },
+      { role: "assistant" as const, content: JSON.stringify({ intent: example.intent }) }
+    ]),
+    { role: "user" as const, content: prompt }
+  ];
 
   try {
     const llmResponse = await openai.chat.completions.create({
       model: INTENT_CLASSIFICATION_MODEL_ID,
       response_format: { type: "json_object" },
       temperature: 0,
-      max_tokens: 30,
-      messages: [
-        {
-          role: "system",
-          content: `
-You are an expert intent classifier. Return a JSON object
-exactly like {"intent":"<one_of:${intents.join("|")}>"}.
-If unsure use {"intent":"null"}. No other keys.
-${intentGuide}
-          `.trim()
-        },
-        { role: "user", content: prompt }
-      ]
+      max_tokens: 100,
+      messages
     });
+
+    const raw = llmResponse.choices[0]?.message?.content ?? "";
+    console.debug("[Intent Classifier] raw model output:", raw);
 
     let classifiedIntent: string | null = null;
 
     try {
-      const raw = llmResponse.choices[0]?.message?.content ?? "";
       const parsed = JSON.parse(raw);
       classifiedIntent = (parsed.intent ?? "").trim().toLowerCase();
     } catch (err) {
