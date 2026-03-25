@@ -103,7 +103,7 @@ function supportsWebSearch(providerName: ProviderName, modelId: string): boolean
 }
 
 // Request intent drives validation. The router is allowed to be creative. Validation is not.
-const INTENT_CLASSIFICATION_MODEL_ID = "o3-pro";
+const INTENT_CLASSIFICATION_MODEL_ID = "gpt-4o";
 
 const intentDescriptions: Record<RequestIntent, string> = {
   text: "General text processing, base type.",
@@ -123,49 +123,71 @@ const intentDescriptions: Record<RequestIntent, string> = {
   "image-generation": "For creating or generating images, photos, or digital art."
 };
 
-const intentClassifierClient = process.env.OPENAI_API_KEY ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY }) : null;
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
-async function callLlmForIntent(systemPrompt: string, prompt: string): Promise<string | null> {
-  if (!intentClassifierClient) {
+async function classifyIntentWithLLM(prompt: string, intents: RequestIntent[]): Promise<RequestIntent | null> {
+  if (!process.env.OPENAI_API_KEY) {
+    console.warn("[Intent Classifier] OPENAI_API_KEY is not configured. Falling back to heuristic defaults.");
     return null;
   }
 
-  const completion = await intentClassifierClient.chat.completions.create({
-    model: INTENT_CLASSIFICATION_MODEL_ID,
-    temperature: 0,
-    messages: [
-      { role: "system", content: systemPrompt },
-      { role: "user", content: prompt }
-    ]
-  });
-
-  return completion.choices[0]?.message?.content?.trim() ?? null;
-}
-
-async function classifyIntentWithLLM(prompt: string, intents: RequestIntent[]): Promise<RequestIntent | null> {
   const intentGuide = intents.map((intent) => `- ${intent}: ${intentDescriptions[intent]}`).join("\n");
   const systemPrompt = [
     "You are an expert intent classifier.",
-    "Classify the user prompt into exactly one of the allowed intents below:",
+    "Classify the user's prompt into exactly one of the allowed intents below:",
     intentGuide,
-    "Respond ONLY with the exact intent name and no explanation.",
-    "If uncertain, respond with null."
+    'Respond ONLY with the exact intent name (for example: "architecture-review") and no explanation.',
+    'If you cannot confidently classify into one of the provided options, respond with "null".'
   ].join("\n\n");
 
   try {
-    const raw = await callLlmForIntent(systemPrompt, prompt);
+    const completion = await openai.chat.completions.create({
+      model: INTENT_CLASSIFICATION_MODEL_ID,
+      temperature: 0,
+      max_tokens: 50,
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: prompt }
+      ]
+    });
+
+    const raw = completion.choices[0]?.message?.content?.trim();
 
     if (!raw) {
+      console.warn("[Intent Classifier] Empty response from LLM.");
       return null;
     }
 
     if (raw === "null") {
+      console.warn("[Intent Classifier] LLM returned null classification.");
       return null;
     }
 
-    return intents.includes(raw as RequestIntent) ? (raw as RequestIntent) : null;
+    if (!intents.includes(raw as RequestIntent)) {
+      console.warn(`[Intent Classifier] Invalid intent returned by LLM: ${raw}`);
+      return null;
+    }
+
+    return raw as RequestIntent;
   } catch (error) {
-    console.error("[Intent Classifier] Failed to classify request intent:", error);
+    const err = error as {
+      message?: string;
+      status?: number;
+      code?: string;
+      type?: string;
+      param?: string;
+      request_id?: string;
+    };
+
+    console.error("[Intent Classifier] Failed to classify request intent", {
+      message: err?.message ?? "Unknown error",
+      status: err?.status ?? null,
+      code: err?.code ?? null,
+      type: err?.type ?? null,
+      param: err?.param ?? null,
+      request_id: err?.request_id ?? null
+    });
+
     return null;
   }
 }
