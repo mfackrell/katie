@@ -207,7 +207,7 @@ export async function POST(request: NextRequest) {
           `[Intent Reuse] Reusing ${requestIntent} from ${new Date(intentSession.lastIntentTimestamp).toISOString()} for ack message "${message}".`
         );
       } else {
-        requestIntent = inferRequestIntent(message, hasVisualInput);
+        requestIntent = await inferRequestIntent(message, hasVisualInput);
 
         if (isSubstantiveIntent(requestIntent) && !isAckMessage) {
           await setShortTermMemory(actorId, chatId, {

@@ -29,13 +29,13 @@ function provider(name: LlmProvider["name"], models: string[]): { provider: LlmP
   };
 }
 
-test("google thinking support is opt-in per model", () => {
+test("google thinking support is opt-in per model", async () => {
   assert.equal(supportsThinking("gemini-3.1-pro"), true);
   assert.equal(supportsThinking("gemini-3-pro-image-preview"), false);
   assert.equal(supportsThinking("gemini-3.1-pro-vision"), false);
 });
 
-test("google model capability helpers separate generation from analysis", () => {
+test("google model capability helpers separate generation from analysis", async () => {
   assert.equal(isImageGenerationModel("nano-banana-pro-preview"), true);
   assert.equal(isImageGenerationModel("gemini-3-pro-image-preview"), false);
   assert.equal(isVisionAnalysisModel("gemini-3.1-pro"), true);
@@ -43,14 +43,14 @@ test("google model capability helpers separate generation from analysis", () => 
   assert.equal(isVisionAnalysisModel("nano-banana-pro-preview"), false);
 });
 
-test("attached chart analysis is classified as multimodal reasoning", () => {
+test("attached chart analysis is classified as multimodal reasoning", async () => {
   assert.equal(
-    inferRequestIntent("Read this chart, estimate the trend, and project the next 3 quarters.", true),
+    await inferRequestIntent("Read this chart, estimate the trend, and project the next 3 quarters.", true),
     "multimodal-reasoning"
   );
 });
 
-test("openai and anthropic multimodal models are valid for vision and multimodal intents", () => {
+test("openai and anthropic multimodal models are valid for vision and multimodal intents", async () => {
   const openaiVision = scoreModelCandidateWithBreakdown("openai", "gpt-5.3-codex", "vision-analysis");
   const anthropicMultimodal = scoreModelCandidateWithBreakdown("anthropic", "claude-4.5-sonnet", "multimodal-reasoning");
 
@@ -60,7 +60,7 @@ test("openai and anthropic multimodal models are valid for vision and multimodal
   assert.ok(anthropicMultimodal.finalScore >= 5);
 });
 
-test("router validation rejects image-generation models for attached-image reasoning", () => {
+test("router validation rejects image-generation models for attached-image reasoning", async () => {
   const validated = validateRoutingDecision(
     { providerName: "google", modelId: "gemini-3-pro-image-preview" },
     [
@@ -77,7 +77,7 @@ test("router validation rejects image-generation models for attached-image reaso
   assert.match(validated.reasoning, /Rejected google:gemini-3-pro-image-preview/);
 });
 
-test("router validation preserves true image generation routing", () => {
+test("router validation preserves true image generation routing", async () => {
   const validated = validateRoutingDecision(
     { providerName: "google", modelId: "nano-banana-pro-preview" },
     [provider("google", ["gemini-3.1-pro", "nano-banana-pro-preview"])],
@@ -88,12 +88,12 @@ test("router validation preserves true image generation routing", () => {
   assert.equal(validated.changed, false);
 });
 
-test("text-only intent does not require a vision model", () => {
-  assert.equal(inferRequestIntent("Summarize this board memo in five bullets.", false), "general-text");
+test("text-only intent does not require a vision model", async () => {
+  assert.equal(await inferRequestIntent("Summarize this board memo in five bullets.", false), "general-text");
 });
 
-test("repo review prompts are classified as architecture review and cannot use image-generation models", () => {
-  assert.equal(inferRequestIntent("review this repo and tell me what its purpose is", false), "architecture-review");
+test("repo review prompts are classified as architecture review and cannot use image-generation models", async () => {
+  assert.equal(await inferRequestIntent("review this repo and tell me what its purpose is", false), "architecture-review");
 
   const validated = validateRoutingDecision(
     { providerName: "google", modelId: "nano-banana-pro-preview" },
@@ -105,8 +105,8 @@ test("repo review prompts are classified as architecture review and cannot use i
   assert.equal(validated.changed, true);
 });
 
-test("bug-fix prompts are classified as technical debugging and reject image-generation models", () => {
-  assert.equal(inferRequestIntent("fix this bug in the router", false), "technical-debugging");
+test("bug-fix prompts are classified as technical debugging and reject image-generation models", async () => {
+  assert.equal(await inferRequestIntent("fix this bug in the router", false), "technical-debugging");
 
   const validated = validateRoutingDecision(
     { providerName: "google", modelId: "gemini-3.1-flash-image-preview" },
@@ -118,8 +118,8 @@ test("bug-fix prompts are classified as technical debugging and reject image-gen
   assert.equal(validated.changed, true);
 });
 
-test("code patch prompts are classified as code generation and reject image-generation models", () => {
-  assert.equal(inferRequestIntent("write code to patch master-router.ts", false), "code-generation");
+test("code patch prompts are classified as code generation and reject image-generation models", async () => {
+  assert.equal(await inferRequestIntent("write code to patch master-router.ts", false), "code-generation");
 
   const validated = validateRoutingDecision(
     { providerName: "google", modelId: "nano-banana-pro-preview" },
@@ -131,12 +131,12 @@ test("code patch prompts are classified as code generation and reject image-gene
   assert.equal(validated.changed, true);
 });
 
-test("explicit image generation prompts remain routable to image-generation models", () => {
-  assert.equal(inferRequestIntent("generate a product hero image", false), "image-generation");
+test("explicit image generation prompts remain routable to image-generation models", async () => {
+  assert.equal(await inferRequestIntent("generate a product hero image", false), "image-generation");
 });
 
-test("attached image analysis routes to vision analysis and rejects image-generation models", () => {
-  assert.equal(inferRequestIntent("analyze these attached images for defects", true), "vision-analysis");
+test("attached image analysis routes to vision analysis and rejects image-generation models", async () => {
+  assert.equal(await inferRequestIntent("analyze these attached images for defects", true), "vision-analysis");
 
   const validated = validateRoutingDecision(
     { providerName: "google", modelId: "nano-banana-pro-preview" },
@@ -148,13 +148,13 @@ test("attached image analysis routes to vision analysis and rejects image-genera
   assert.equal(validated.changed, true);
 });
 
-test("routing does not hardcode blocked model-name deny rules", () => {
+test("routing does not hardcode blocked model-name deny rules", async () => {
   assert.equal(isBlockedRoutingModel(), false);
   assert.equal(isBlockedRoutingModel(), false);
   assert.equal(isBlockedRoutingModel(), false);
 });
 
-test("plain text routing prefers lightweight models when available", () => {
+test("plain text routing prefers lightweight models when available", async () => {
   const validated = validateRoutingDecision(
     { providerName: "openai", modelId: "non-existent-model" },
     [provider("openai", ["claude-4.6-opus", "claude-4.5-haiku", "gpt-5.2-unified"])],
@@ -165,8 +165,8 @@ test("plain text routing prefers lightweight models when available", () => {
   assert.equal(validated.changed, true);
 });
 
-test("rewrite prompts are classified and favor claude-family models", () => {
-  assert.equal(inferRequestIntent("Rewrite this policy memo in a calmer tone.", false), "rewrite");
+test("rewrite prompts are classified and favor claude-family models", async () => {
+  assert.equal(await inferRequestIntent("Rewrite this policy memo in a calmer tone.", false), "rewrite");
 
   const claude = scoreModelCandidateWithBreakdown("anthropic", "claude-4.5-sonnet", "rewrite");
   const openai = scoreModelCandidateWithBreakdown("openai", "gpt-5.2-unified", "rewrite");
@@ -174,11 +174,11 @@ test("rewrite prompts are classified and favor claude-family models", () => {
   assert.ok(claude.finalScore > openai.finalScore);
 });
 
-test("news and current-events prompts are classified as web search", () => {
-  assert.equal(inferRequestIntent("What happened in AI news today?", false), "web-search");
+test("news and current-events prompts are classified as web search", async () => {
+  assert.equal(await inferRequestIntent("What happened in AI news today?", false), "web-search");
 });
 
-test("web-search intent excludes models without web-search capability", () => {
+test("web-search intent excludes models without web-search capability", async () => {
   const claude = scoreModelCandidateWithBreakdown("anthropic", "claude-4.5-sonnet", "web-search");
   const grok = scoreModelCandidateWithBreakdown("grok", "grok-2-1212", "web-search");
 
@@ -187,14 +187,14 @@ test("web-search intent excludes models without web-search capability", () => {
   assert.equal(grok.excluded, false);
 });
 
-test("gemini remains a first-class candidate for general text", () => {
+test("gemini remains a first-class candidate for general text", async () => {
   const gemini = scoreModelCandidateWithBreakdown("google", "gemini-3.1-pro", "general-text");
   const smallFast = scoreModelCandidateWithBreakdown("anthropic", "claude-4.5-haiku", "general-text");
 
   assert.ok(gemini.finalScore >= smallFast.finalScore);
 });
 
-test("technical debugging still prefers stronger technical models", () => {
+test("technical debugging still prefers stronger technical models", async () => {
   const validated = validateRoutingDecision(
     { providerName: "openai", modelId: "non-existent-model" },
     [provider("openai", ["claude-4.5-haiku", "o3-pro"])],
@@ -205,14 +205,14 @@ test("technical debugging still prefers stronger technical models", () => {
   assert.equal(validated.changed, true);
 });
 
-test("acknowledgment detector only matches short, explicit confirmations", () => {
+test("acknowledgment detector only matches short, explicit confirmations", async () => {
   assert.equal(isAcknowledgment("yes"), true);
   assert.equal(isAcknowledgment("sounds good"), true);
   assert.equal(isAcknowledgment("yes, please implement the full RFC and include tradeoffs"), false);
   assert.equal(isAcknowledgment("I have a new question"), false);
 });
 
-test("intent session parser safely falls back on malformed memory payloads", () => {
+test("intent session parser safely falls back on malformed memory payloads", async () => {
   assert.deepEqual(parseIntentSessionState({}), { lastSubstantiveIntent: null, lastIntentTimestamp: null });
   assert.deepEqual(parseIntentSessionState({ intentSession: { lastSubstantiveIntent: "architecture-review", lastIntentTimestamp: 42 } }), {
     lastSubstantiveIntent: "architecture-review",
