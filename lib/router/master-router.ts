@@ -1,6 +1,7 @@
 import {
   CandidateScoreBreakdown,
   inferRequestIntent,
+  RequestIntent,
   scoreModelCandidateWithBreakdown,
   scoreModelsForIntent,
   validateRoutingDecision
@@ -302,7 +303,7 @@ export async function chooseProvider(
   prompt: string,
   context: string,
   providers: LlmProvider[],
-  options?: { hasImages?: boolean; routingTraceEnabled?: boolean; routingRequestId?: string }
+  options?: { hasImages?: boolean; routingTraceEnabled?: boolean; routingRequestId?: string; requestIntent?: RequestIntent }
 ): Promise<RoutingDecision> {
   let rankedCandidates: Array<{ provider: LlmProvider; modelId: string; score: number }> = [];
 
@@ -398,7 +399,10 @@ export async function chooseProvider(
     models: models.length ? models : [pickDefaultModel(provider, [])]
   }));
 
-  const intent = inferRequestIntent(prompt, Boolean(options?.hasImages));
+  const intent = options?.requestIntent ?? inferRequestIntent(prompt, Boolean(options?.hasImages));
+  if (options?.requestIntent) {
+    console.info(`[Router] using provided intent=${intent}`);
+  }
   const traceEnabled = isRoutingTraceEnabled(options?.routingTraceEnabled);
   const traceRequestId = options?.routingRequestId ?? crypto.randomUUID();
   const traceTimestamp = new Date().toISOString();

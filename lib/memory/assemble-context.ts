@@ -6,6 +6,7 @@ interface AssembledContext {
   persona: string;
   summary: string;
   history: Message[];
+  shortTermMemory: Record<string, unknown>;
 }
 
 export async function assembleContext(actorId: string, chatId: string): Promise<AssembledContext> {
@@ -37,5 +38,6 @@ export async function assembleContext(actorId: string, chatId: string): Promise<
     persona: memoryHeader ? `${actor.purpose}\n\nMemory state:\n${memoryHeader}` : actor.purpose,
     summary,
     history,
+    shortTermMemory
   };
 }

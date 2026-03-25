@@ -5,6 +5,7 @@ import {
   scoreModelCandidateWithBreakdown,
   validateRoutingDecision
 } from "../lib/router/model-intent";
+import { isAcknowledgment, parseIntentSessionState } from "../lib/router/intent-context";
 import { isBlockedRoutingModel } from "../lib/router/routing-model-filters";
 import {
   isImageGenerationModel,
@@ -202,4 +203,19 @@ test("technical debugging still prefers stronger technical models", () => {
 
   assert.equal(validated.modelId, "o3-pro");
   assert.equal(validated.changed, true);
+});
+
+test("acknowledgment detector only matches short, explicit confirmations", () => {
+  assert.equal(isAcknowledgment("yes"), true);
+  assert.equal(isAcknowledgment("sounds good"), true);
+  assert.equal(isAcknowledgment("yes, please implement the full RFC and include tradeoffs"), false);
+  assert.equal(isAcknowledgment("I have a new question"), false);
+});
+
+test("intent session parser safely falls back on malformed memory payloads", () => {
+  assert.deepEqual(parseIntentSessionState({}), { lastSubstantiveIntent: null, lastIntentTimestamp: null });
+  assert.deepEqual(parseIntentSessionState({ intentSession: { lastSubstantiveIntent: "architecture-review", lastIntentTimestamp: 42 } }), {
+    lastSubstantiveIntent: "architecture-review",
+    lastIntentTimestamp: 42
+  });
 });

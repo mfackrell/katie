@@ -2,9 +2,16 @@ import { after, NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { assembleContext } from "@/lib/memory/assemble-context";
 import { maybeUpdateSummary } from "@/lib/memory/summarizer";
-import { saveMessage } from "@/lib/data/blob-store";
+import { saveMessage, setShortTermMemory } from "@/lib/data/blob-store";
 import { getAvailableProviders } from "@/lib/providers";
 import { chooseProvider } from "@/lib/router/master-router";
+import { inferRequestIntent, RequestIntent } from "@/lib/router/model-intent";
+import {
+  ACK_CONTEXT_TTL_MS,
+  isAcknowledgment,
+  isSubstantiveIntent,
+  parseIntentSessionState
+} from "@/lib/router/intent-context";
 import { LlmProvider, ProviderResponse } from "@/lib/providers/types";
 import type { SelectionExplainer } from "@/lib/router/master-router";
 
@@ -163,7 +170,7 @@ export async function POST(request: NextRequest) {
     }
 
     console.log("[Chat API] Assembling context and selecting provider...");
-    const { name, persona, summary, history } = await assembleContext(actorId, chatId);
+    const { name, persona, summary, history, shortTermMemory } = await assembleContext(actorId, chatId);
     const historyForProvider = history.map(({ role, content }) => ({ role, content }));
     let provider = providers[0];
     let modelId = "";
@@ -184,9 +191,40 @@ export async function POST(request: NextRequest) {
       const hasImageAttachments =
         Array.isArray(attachments) && attachments.some((attachment) => attachment.mimeType.startsWith("image/"));
       const hasVisualInput = hasImages || hasImageAttachments;
+      const now = Date.now();
+      const intentSession = parseIntentSessionState(shortTermMemory);
+      const isAckMessage = isAcknowledgment(message);
+      let requestIntent: RequestIntent;
+
+      if (
+        isAckMessage &&
+        intentSession.lastSubstantiveIntent &&
+        intentSession.lastIntentTimestamp &&
+        now - intentSession.lastIntentTimestamp < ACK_CONTEXT_TTL_MS
+      ) {
+        requestIntent = intentSession.lastSubstantiveIntent;
+        console.log(
+          `[Intent Reuse] Reusing ${requestIntent} from ${new Date(intentSession.lastIntentTimestamp).toISOString()} for ack message "${message}".`
+        );
+      } else {
+        requestIntent = inferRequestIntent(message, hasVisualInput);
+
+        if (isSubstantiveIntent(requestIntent) && !isAckMessage) {
+          await setShortTermMemory(actorId, chatId, {
+            ...shortTermMemory,
+            intentSession: {
+              lastSubstantiveIntent: requestIntent,
+              lastIntentTimestamp: now
+            }
+          });
+          console.log(`[Intent Update] Stored substantive intent ${requestIntent} at ${new Date(now).toISOString()}.`);
+        }
+      }
+
       const routingContext = `\n  Persona: ${persona}\n  Rolling Summary: ${summary}\n  Recent History: ${JSON.stringify(history.slice(-3))}\n  Has Attached Images: ${hasVisualInput}\n`;
       const routingDecision = await chooseProvider(message, routingContext, providers, {
         hasImages: hasVisualInput,
+        requestIntent,
         routingTraceEnabled,
         routingRequestId: request.headers.get("x-request-id") ?? undefined
       });
