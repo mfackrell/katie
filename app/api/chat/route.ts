@@ -6,6 +6,7 @@ import { saveMessage } from "@/lib/data/blob-store";
 import { getAvailableProviders } from "@/lib/providers";
 import { chooseProvider } from "@/lib/router/master-router";
 import { LlmProvider, ProviderResponse } from "@/lib/providers/types";
+import type { SelectionExplainer } from "@/lib/router/master-router";
 
 const fileReferenceSchema = z.object({
   fileId: z.string().min(1),
@@ -166,6 +167,7 @@ export async function POST(request: NextRequest) {
     const historyForProvider = history.map(({ role, content }) => ({ role, content }));
     let provider = providers[0];
     let modelId = "";
+    let selectionExplainer: SelectionExplainer | undefined;
 
     if (overrideProvider && overrideModel) {
       const manualProvider = providers.find((candidate) => candidate.name === overrideProvider);
@@ -190,6 +192,7 @@ export async function POST(request: NextRequest) {
 
       provider = routingDecision.provider;
       modelId = routingDecision.modelId;
+      selectionExplainer = routingDecision.explainer;
 
       console.log(`[Chat API] Selected Provider: ${provider.name}, Model: ${modelId}`);
       console.log(`[Chat API] Routing Model For UI: ${routingDecision.routerModel}`);
@@ -203,7 +206,8 @@ export async function POST(request: NextRequest) {
             const metadataChunk = JSON.stringify({
               type: "metadata",
               modelId,
-              provider: provider.name
+              provider: provider.name,
+              explainer: selectionExplainer
             });
             controller.enqueue(encoder.encode(`${metadataChunk}\n`));
 
