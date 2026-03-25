@@ -132,43 +132,48 @@ async function classifyIntentWithLLM(prompt: string, intents: RequestIntent[]): 
   }
 
   const intentGuide = intents.map((intent) => `- ${intent}: ${intentDescriptions[intent]}`).join("\n");
-  const systemPrompt = [
-    "You are an expert intent classifier.",
-    "Classify the user's prompt into exactly one of the allowed intents below:",
-    intentGuide,
-    'Respond ONLY with the exact intent name (for example: "architecture-review") and no explanation.',
-    'If you cannot confidently classify into one of the provided options, respond with "null".'
-  ].join("\n\n");
 
   try {
-    const completion = await openai.chat.completions.create({
+    const llmResponse = await openai.chat.completions.create({
       model: INTENT_CLASSIFICATION_MODEL_ID,
+      response_format: { type: "json_object" },
       temperature: 0,
-      max_tokens: 50,
+      max_tokens: 30,
       messages: [
-        { role: "system", content: systemPrompt },
+        {
+          role: "system",
+          content: `
+You are an expert intent classifier. Return a JSON object
+exactly like {"intent":"<one_of:${intents.join("|")}>"}.
+If unsure use {"intent":"null"}. No other keys.
+${intentGuide}
+          `.trim()
+        },
         { role: "user", content: prompt }
       ]
     });
 
-    const raw = completion.choices[0]?.message?.content?.trim();
+    let classifiedIntent: string | null = null;
 
-    if (!raw) {
-      console.warn("[Intent Classifier] Empty response from LLM.");
+    try {
+      const raw = llmResponse.choices[0]?.message?.content ?? "";
+      const parsed = JSON.parse(raw);
+      classifiedIntent = (parsed.intent ?? "").trim().toLowerCase();
+    } catch (err) {
+      console.error("[Intent Classifier] JSON parse error", err);
+    }
+
+    if (intents.includes(classifiedIntent as RequestIntent)) {
+      return classifiedIntent as RequestIntent;
+    }
+
+    if (classifiedIntent === "null") {
+      console.warn("[Intent Classifier] model returned null");
       return null;
     }
 
-    if (raw === "null") {
-      console.warn("[Intent Classifier] LLM returned null classification.");
-      return null;
-    }
-
-    if (!intents.includes(raw as RequestIntent)) {
-      console.warn(`[Intent Classifier] Invalid intent returned by LLM: ${raw}`);
-      return null;
-    }
-
-    return raw as RequestIntent;
+    console.warn(`[Intent Classifier] invalid intent "${classifiedIntent}"`);
+    return null;
   } catch (error) {
     const err = error as {
       message?: string;
