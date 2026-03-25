@@ -167,6 +167,7 @@ export async function POST(request: NextRequest) {
     const historyForProvider = history.map(({ role, content }) => ({ role, content }));
     let provider = providers[0];
     let modelId = "";
+    let fallbackChain: Array<{ provider: LlmProvider; modelId: string; score: number }> = [];
     let selectionExplainer: SelectionExplainer | undefined;
 
     if (overrideProvider && overrideModel) {
@@ -192,6 +193,7 @@ export async function POST(request: NextRequest) {
 
       provider = routingDecision.provider;
       modelId = routingDecision.modelId;
+      fallbackChain = routingDecision.fallbackChain;
       selectionExplainer = routingDecision.explainer;
 
       console.log(`[Chat API] Selected Provider: ${provider.name}, Model: ${modelId}`);
@@ -236,49 +238,42 @@ export async function POST(request: NextRequest) {
                 attachments
               });
 
-            let result: ProviderResponse;
+            let result: ProviderResponse | null = null;
             let streamedText = "";
+            let lastGenerationError: unknown = null;
+            const attempts = [{ provider, modelId }, ...fallbackChain];
 
-            try {
-              ({ result, streamedText } = await runGeneration({
-                provider,
-                params: createParams(modelId),
-                onTextDelta: enqueueDelta
-              }));
-            } catch (generationError: unknown) {
-              if (provider.name !== "openai") {
-                throw generationError;
+            for (let attemptIndex = 0; attemptIndex < attempts.length; attemptIndex += 1) {
+              const candidate = attempts[attemptIndex];
+              provider = candidate.provider;
+              modelId = candidate.modelId;
+
+              if (attemptIndex > 0) {
+                const failoverMetadataChunk = JSON.stringify({
+                  type: "metadata",
+                  modelId,
+                  provider: provider.name
+                });
+                controller.enqueue(encoder.encode(`${failoverMetadataChunk}\n`));
               }
 
-              const googleProvider = providers.find((candidate) => candidate.name === "google");
-              if (!googleProvider) {
-                throw generationError;
+              try {
+                ({ result, streamedText } = await runGeneration({
+                  provider,
+                  params: createParams(modelId),
+                  onTextDelta: enqueueDelta
+                }));
+                break;
+              } catch (generationError: unknown) {
+                lastGenerationError = generationError;
+                console.warn(
+                  `[Chat API] Generation failed for ${provider.name}:${modelId} (${generationError instanceof Error ? generationError.message : String(generationError)}).`
+                );
               }
+            }
 
-              const googleModels = await googleProvider.listModels();
-              const googleModelId =
-                googleModels.find((candidateModel) => candidateModel.includes("gemini-3.1-pro")) ||
-                googleModels[0] ||
-                "gemini-3.1-pro";
-
-              console.warn(
-                `[Chat API] OpenAI generation failed (${generationError instanceof Error ? generationError.message : String(generationError)}). Falling back to google:${googleModelId}.`
-              );
-
-              provider = googleProvider;
-              modelId = googleModelId;
-              const failoverMetadataChunk = JSON.stringify({
-                type: "metadata",
-                modelId,
-                provider: provider.name
-              });
-              controller.enqueue(encoder.encode(`${failoverMetadataChunk}\n`));
-
-              ({ result, streamedText } = await runGeneration({
-                provider,
-                params: createParams(modelId),
-                onTextDelta: enqueueDelta
-              }));
+            if (!result) {
+              throw (lastGenerationError ?? new Error("Generation failed for all routed candidates."));
             }
 
             if (!result || (!result.text && !(result.content?.length) && !streamedText)) {

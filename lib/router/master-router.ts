@@ -13,6 +13,7 @@ import { LlmProvider } from "@/lib/providers/types";
 export type RoutingDecision = {
   provider: LlmProvider;
   modelId: string;
+  fallbackChain: Array<{ provider: LlmProvider; modelId: string; score: number }>;
   reasoning: string;
   routerModel: string;
   explainer?: SelectionExplainer;
@@ -331,17 +332,73 @@ function normalizeRoutingChoice(rawChoice: string): RoutingChoice | null {
 
 type Selection = { provider: LlmProvider; modelId: string; reasoning: string; routerModel: string; summary: string; overrideReason: string | null };
 
+function buildFallbackChain({
+  scoredCandidates,
+  selectedProviderName,
+  selectedModelId,
+  availableByProvider,
+  intent
+}: {
+  scoredCandidates: Array<{ provider: LlmProvider; modelId: string; score: number }>;
+  selectedProviderName: string;
+  selectedModelId: string;
+  availableByProvider: Array<{ provider: LlmProvider; models: string[] }>;
+  intent: ReturnType<typeof inferRequestIntent>;
+}): Array<{ provider: LlmProvider; modelId: string; score: number }> {
+  const usedKeys = new Set<string>([`${selectedProviderName}:${selectedModelId}`]);
+  const fallbackChain: Array<{ provider: LlmProvider; modelId: string; score: number }> = [];
+
+  for (const candidate of scoredCandidates) {
+    const validated = validateRoutingDecision(
+      { providerName: candidate.provider.name, modelId: candidate.modelId },
+      availableByProvider,
+      intent
+    );
+    const key = `${validated.provider.name}:${validated.modelId}`;
+
+    if (usedKeys.has(key)) {
+      continue;
+    }
+
+    usedKeys.add(key);
+    fallbackChain.push({
+      provider: validated.provider,
+      modelId: validated.modelId,
+      score: candidate.score
+    });
+
+    if (fallbackChain.length >= 5) {
+      break;
+    }
+  }
+
+  return fallbackChain;
+}
+
 export async function chooseProvider(
   prompt: string,
   context: string,
   providers: LlmProvider[],
   options?: { hasImages?: boolean; routingTraceEnabled?: boolean; routingRequestId?: string }
 ): Promise<RoutingDecision> {
+  let rankedCandidates: Array<{ provider: LlmProvider; modelId: string; score: number }> = [];
+
   const applyPolicyIfEnabled = (base: Selection, availableByProvider: Array<{ provider: LlmProvider; models: string[] }>): RoutingDecision => {
+    const fallbackChain = buildFallbackChain({
+      scoredCandidates: rankedCandidates.filter(
+        (candidate) => !(candidate.provider.name === base.provider.name && candidate.modelId === base.modelId)
+      ),
+      selectedProviderName: base.provider.name,
+      selectedModelId: base.modelId,
+      availableByProvider,
+      intent
+    });
+
     if (!policyConfig.enabled) {
       return {
         provider: base.provider,
         modelId: base.modelId,
+        fallbackChain,
         reasoning: base.reasoning,
         routerModel: base.routerModel,
         explainer: buildSelectionExplainer({
@@ -369,6 +426,7 @@ export async function chooseProvider(
       return {
         provider: base.provider,
         modelId: base.modelId,
+        fallbackChain,
         reasoning: `${base.reasoning} Policy engine ${policyConfig.shadowMode ? "shadow" : "fallback"} mode kept live selection.`,
         routerModel: base.routerModel,
         explainer: buildSelectionExplainer({
@@ -385,6 +443,13 @@ export async function chooseProvider(
     return {
       provider: evaluation.selected.provider,
       modelId: evaluation.selected.modelId,
+      fallbackChain: buildFallbackChain({
+        scoredCandidates: rankedCandidates,
+        selectedProviderName: evaluation.selected.provider.name,
+        selectedModelId: evaluation.selected.modelId,
+        availableByProvider,
+        intent
+      }),
       reasoning: `${base.reasoning} Policy engine enforced selection ${evaluation.selected.provider.name}:${evaluation.selected.modelId}.`,
       routerModel: base.routerModel,
       explainer: buildSelectionExplainer({
@@ -415,6 +480,7 @@ export async function chooseProvider(
   const traceRequestId = options?.routingRequestId ?? crypto.randomUUID();
   const traceTimestamp = new Date().toISOString();
   const policyConfig = getPolicyConfig();
+  rankedCandidates = scoreModelsForIntent(availableByProvider, intent);
 
   if (availableByProvider.length === 1) {
     const selected = availableByProvider[0];
@@ -448,96 +514,13 @@ export async function chooseProvider(
     }, availableByProvider);
   }
 
-  if (routingClient) {
-    const allowedOptions = availableByProvider
-      .flatMap(({ provider, models }) => models.map((model) => `${provider.name}:${model}`))
-      .join(", ");
-
-    const manifest = availableByProvider
-      .map(({ provider, models }) => `${provider.name}: ${models.join(", ")}`)
-      .join("\n");
-
-    try {
-      const completion = await routingClient.responses.create({
-        model: getOrchestratorModel(),
-        input: [
-          {
-            role: "system",
-            content:
-              "You are the Polyglot Actor Orchestrator. Your only job is to select the best model from the provided list based on the conversation context and the user's latest intent. Use the capability metadata below as your primary selection criteria, then constrain your final choice to the currently available model manifest.\n\nSelect providers strictly according to the capability registry and the available manifest. Do not apply provider-specific hardcoded preferences.\nFor complex mathematical, statistical, or logic-heavy intents, prioritize models with robust code-execution/tool-use capabilities and enforce strict adherence to MATH_EXECUTION_PROTOCOL.\n\nCapability Registry:\nIf the conversation context indicates 'Has Attached Images: true', route the request to a model capable of visual analysis. For requests explicitly asking to CREATE or GENERATE an image, prioritize image-generation models from the manifest." +
-              "Technical debugging, code generation, bug fixing, repo review, architecture review, and implementation questions must NEVER be routed to image-generation or visually oriented models. Image-generation models are only valid when the user explicitly asks to generate/create an image.\n\n" +
-              JSON.stringify(CAPABILITY_REGISTRY, null, 2) +
-              "\n\nAvailable model manifest:\n" +
-              manifest +
-              "\n\nReturn only one selection as either a plain string in the exact format provider:model or strict JSON: {\"provider\":\"openai|google|grok|anthropic\",\"model\":\"model-id\"}. You MUST ONLY select from the manifest above."
-          },
-          {
-            role: "user",
-            content: `Conversation context:\n${context}\n\nLatest user intent:\n${prompt}\n\nAllowed options: ${allowedOptions}`
-          }
-        ]
-      });
-
-      const choice = completion.output_text?.trim();
-      if (choice) {
-        const parsedChoice = normalizeRoutingChoice(choice);
-        if (parsedChoice) {
-          const selectedProvider = availableByProvider.find(
-            ({ provider }) => provider.name === parsedChoice.providerName
-          );
-
-          if (selectedProvider) {
-            const isAvailableModel = selectedProvider.models.includes(parsedChoice.modelId);
-            const modelId = isAvailableModel
-              ? parsedChoice.modelId
-              : pickDefaultModel(selectedProvider.provider, selectedProvider.models);
-
-            const validated = validateRoutingDecision({ providerName: parsedChoice.providerName, modelId }, availableByProvider, intent);
-            logRoutingDecision(intent, availableByProvider, validated.provider.name, validated.modelId);
-            if (traceEnabled) {
-              const overrideReason = validated.changed
-                ? `validation_adjustment: ${validated.reasoning}`
-                : null;
-              logRoutingTrace(
-                buildRoutingTrace({
-                  requestId: traceRequestId,
-                  timestamp: traceTimestamp,
-                  intent,
-                  prompt,
-                  hasImages: Boolean(options?.hasImages),
-                  context,
-                  availableByProvider,
-                  selectedProviderName: validated.provider.name,
-                  selectedModelId: validated.modelId,
-                  overrideReason
-                })
-              );
-            }
-            return applyPolicyIfEnabled({
-              provider: validated.provider,
-              modelId: validated.modelId,
-              reasoning: `Orchestrator selected ${parsedChoice.providerName}:${modelId}. ${validated.reasoning}`,
-              routerModel: modelId,
-              summary: "Orchestrator path.",
-              overrideReason: validated.changed ? `validation_adjustment: ${validated.reasoning}` : null
-            }, availableByProvider);
-          }
-        }
-      }
-    } catch (error: unknown) {
-      const detail = error instanceof Error ? error.message : String(error);
-      console.error(`[Router] Orchestrator routing failed: ${detail}`);
-    }
-  }
-
-  const googleEntry = availableByProvider.find(({ provider }) => provider.name === "google");
-  const fallbackProvider = googleEntry || availableByProvider[0];
-  const modelId = pickDefaultModel(fallbackProvider.provider, fallbackProvider.models);
-
-  const validated = validateRoutingDecision({ providerName: fallbackProvider.provider.name, modelId }, availableByProvider, intent);
+  const topCandidate = rankedCandidates[0];
+  const initialProvider = topCandidate?.provider ?? availableByProvider[0].provider;
+  const initialModelId = topCandidate?.modelId ?? pickDefaultModel(initialProvider, availableByProvider[0].models);
+  const validated = validateRoutingDecision({ providerName: initialProvider.name, modelId: initialModelId }, availableByProvider, intent);
   logRoutingDecision(intent, availableByProvider, validated.provider.name, validated.modelId);
   if (traceEnabled) {
-    const overrideReason = `fallback_path: ${validated.reasoning}`;
+    const overrideReason = validated.changed ? `validation_adjustment: ${validated.reasoning}` : null;
     logRoutingTrace(
       buildRoutingTrace({
         requestId: traceRequestId,
@@ -557,9 +540,9 @@ export async function chooseProvider(
   return applyPolicyIfEnabled({
     provider: validated.provider,
     modelId: validated.modelId,
-    reasoning: `Fallback routing selected ${fallbackProvider.provider.name}:${modelId}. ${validated.reasoning}`,
-    routerModel: modelId,
-    summary: "Fallback path.",
-    overrideReason: `fallback_path: ${validated.reasoning}`
+    reasoning: `Score-ranked routing selected ${validated.provider.name}:${validated.modelId}. ${validated.reasoning}`,
+    routerModel: validated.modelId,
+    summary: "Ranked scoring path.",
+    overrideReason: validated.changed ? `validation_adjustment: ${validated.reasoning}` : null
   }, availableByProvider);
 }
