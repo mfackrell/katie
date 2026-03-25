@@ -399,7 +399,7 @@ export async function chooseProvider(
     models: models.length ? models : [pickDefaultModel(provider, [])]
   }));
 
-  const intent = options?.requestIntent ?? inferRequestIntent(prompt, Boolean(options?.hasImages));
+  const intent = options?.requestIntent ?? (await inferRequestIntent(prompt, Boolean(options?.hasImages)));
   if (options?.requestIntent) {
     console.info(`[Router] using provided intent=${intent}`);
   }

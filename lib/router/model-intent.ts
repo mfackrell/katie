@@ -1,3 +1,4 @@
+import OpenAI from "openai";
 import {
   isImageGenerationModel as isGoogleImageGenerationModel,
   isVisionAnalysisModel as isGoogleVisionAnalysisModel
@@ -29,27 +30,6 @@ export type CandidateScoreBreakdown = {
   excluded: boolean;
   exclusionReason: string | null;
 };
-
-const IMAGE_GENERATION_PROMPT =
-  /\b(generate|create|make|design|render)\b[\s\S]{0,80}\b(image|photo|picture|illustration|art|hero image|logo|banner|visual)\b/i;
-const ANALYSIS_PROMPT =
-  /\b(read|analy[sz]e|inspect|interpret|estimate|project|forecast|extract|summari[sz]e|compare|classify)\b/i;
-const REASONING_PROMPT = /\b(project|forecast|predict|reason|infer|trend|next|quarters?|months?|years?)\b/i;
-const TECHNICAL_DEBUGGING_PROMPT =
-  /\b(debug|bug|fix|error|exception|stack\s*trace|failing|broken|troubleshoot|regression|incident)\b/i;
-const ARCHITECTURE_REVIEW_PROMPT =
-  /\b(architecture|system\s*design|design\s*review|scalability|trade[\s-]?offs?|microservices?|monolith|repo\s*review|codebase\s*review|review\s+(this\s+)?repo)\b/i;
-const CODE_GENERATION_PROMPT =
-  /\b(write|generate|create|implement|patch|refactor)\b[\s\S]{0,50}\b(code|function|class|script|module|typescript|javascript|python|sql|api|router)\b|\bcode\s+generation\b/i;
-const TECHNICAL_FILE_PROMPT = /\b[\w./-]+\.(ts|tsx|js|jsx|py|go|java|rs|cpp|c|cs|rb|php|swift|kt|sql)\b/i;
-const WEB_SEARCH_PROMPT =
-  /\b(latest|current events?|breaking news|news|today|this week|right now|recent changes?|what'?s happening|up[-\s]?to[-\s]?date|public sentiment|live updates?)\b/i;
-const REWRITE_PROMPT =
-  /\b(rewrite|rephrase|edit|polish|refine|tighten|tone|calmer|softer|clearer|improve wording)\b/i;
-const EMOTIONAL_ANALYSIS_PROMPT =
-  /\b(emotion|emotional|sentiment|tone analysis|feelings?|empathetic|nuance|sensitive|subtext)\b/i;
-const NEWS_SUMMARY_PROMPT =
-  /\b(news summary|summari[sz]e.*news|headlines|current events?|what happened)\b/i;
 
 const IMAGE_GENERATION_MODEL_PATTERNS = [
   "banana",
@@ -123,49 +103,100 @@ function supportsWebSearch(providerName: ProviderName, modelId: string): boolean
 }
 
 // Request intent drives validation. The router is allowed to be creative. Validation is not.
-export function inferRequestIntent(prompt: string, hasImages: boolean): RequestIntent {
-  if (WEB_SEARCH_PROMPT.test(prompt)) {
-    return "web-search";
+const INTENT_CLASSIFICATION_MODEL_ID = "o3-pro";
+
+const intentDescriptions: Record<RequestIntent, string> = {
+  text: "General text processing, base type.",
+  "general-text":
+    "For broad, non-specific questions or casual conversation where no other specific intent applies.",
+  rewrite: "For rephrasing, editing, polishing, or adjusting the tone of text.",
+  "emotional-analysis": "For analyzing sentiment, tone, feelings, or emotional nuance in text.",
+  "news-summary": "For summarizing current events, headlines, or recent news.",
+  "web-search": "For queries requiring up-to-date information, current events, or live data via a web search.",
+  "technical-debugging": "For debugging, fixing, troubleshooting code, errors, exceptions, or system incidents.",
+  "architecture-review":
+    "For reviewing technical configurations, code, deployment manifests, system designs, or suggesting improvements for infrastructure.",
+  "code-generation": "For writing, generating, creating, implementing, or refactoring code, functions, or scripts.",
+  "vision-analysis": "For analyzing visual content (charts, images) to extract trends, outliers, or describe scenes.",
+  "multimodal-reasoning":
+    "For complex analytical tasks that might combine text, data, or require forecasting and deep reasoning.",
+  "image-generation": "For creating or generating images, photos, or digital art."
+};
+
+const intentClassifierClient = process.env.OPENAI_API_KEY ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY }) : null;
+
+async function callLlmForIntent(systemPrompt: string, prompt: string): Promise<string | null> {
+  if (!intentClassifierClient) {
+    return null;
   }
 
-  if (NEWS_SUMMARY_PROMPT.test(prompt)) {
-    return "news-summary";
-  }
+  const completion = await intentClassifierClient.chat.completions.create({
+    model: INTENT_CLASSIFICATION_MODEL_ID,
+    temperature: 0,
+    messages: [
+      { role: "system", content: systemPrompt },
+      { role: "user", content: prompt }
+    ]
+  });
 
-  if (EMOTIONAL_ANALYSIS_PROMPT.test(prompt)) {
-    return "emotional-analysis";
-  }
-
-  if (REWRITE_PROMPT.test(prompt)) {
-    return "rewrite";
-  }
-
-  if (TECHNICAL_DEBUGGING_PROMPT.test(prompt)) {
-    return "technical-debugging";
-  }
-
-  if (ARCHITECTURE_REVIEW_PROMPT.test(prompt)) {
-    return "architecture-review";
-  }
-
-  if (CODE_GENERATION_PROMPT.test(prompt) || TECHNICAL_FILE_PROMPT.test(prompt)) {
-    return "code-generation";
-  }
-
-  if (IMAGE_GENERATION_PROMPT.test(prompt)) {
-    return "image-generation";
-  }
-
-  if (ANALYSIS_PROMPT.test(prompt) && REASONING_PROMPT.test(prompt)) {
-    return "multimodal-reasoning";
-  }
-
-  if (!hasImages) {
-    return "general-text";
-  }
-
-  return "vision-analysis";
+  return completion.choices[0]?.message?.content?.trim() ?? null;
 }
+
+async function classifyIntentWithLLM(prompt: string, intents: RequestIntent[]): Promise<RequestIntent | null> {
+  const intentGuide = intents.map((intent) => `- ${intent}: ${intentDescriptions[intent]}`).join("\n");
+  const systemPrompt = [
+    "You are an expert intent classifier.",
+    "Classify the user prompt into exactly one of the allowed intents below:",
+    intentGuide,
+    "Respond ONLY with the exact intent name and no explanation.",
+    "If uncertain, respond with null."
+  ].join("\n\n");
+
+  try {
+    const raw = await callLlmForIntent(systemPrompt, prompt);
+
+    if (!raw) {
+      return null;
+    }
+
+    if (raw === "null") {
+      return null;
+    }
+
+    return intents.includes(raw as RequestIntent) ? (raw as RequestIntent) : null;
+  } catch (error) {
+    console.error("[Intent Classifier] Failed to classify request intent:", error);
+    return null;
+  }
+}
+
+export async function inferRequestIntent(prompt: string, hasImages: boolean): Promise<RequestIntent> {
+  const availableIntents: RequestIntent[] = [
+    "web-search",
+    "news-summary",
+    "emotional-analysis",
+    "rewrite",
+    "technical-debugging",
+    "architecture-review",
+    "code-generation",
+    "multimodal-reasoning",
+    "vision-analysis",
+    "image-generation"
+  ];
+
+  const classifiedIntent = await classifyIntentWithLLM(prompt, availableIntents);
+
+  if (classifiedIntent && availableIntents.includes(classifiedIntent)) {
+    return classifiedIntent;
+  }
+
+  if (hasImages) {
+    return "vision-analysis";
+  }
+
+  return "general-text";
+}
+
 
 function modelSupportsIntent(providerName: ProviderName, modelId: string, intent: RequestIntent): boolean {
   switch (intent) {
