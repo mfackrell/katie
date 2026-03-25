@@ -30,7 +30,7 @@ export type SelectionExplainer = {
 type RoutingTrace = {
   request_id: string;
   timestamp: string;
-  intent: { value: ReturnType<typeof inferRequestIntent>; confidence: number | null };
+  intent: { value: Awaited<ReturnType<typeof inferRequestIntent>>; confidence: number | null };
   prompt_features: {
     prompt_length: number;
     has_images: boolean;
@@ -61,7 +61,7 @@ type RoutingTrace = {
 
 function topRoutingCandidates(
   availableByProvider: Array<{ provider: LlmProvider; models: string[] }>,
-  intent: ReturnType<typeof inferRequestIntent>
+  intent: Awaited<ReturnType<typeof inferRequestIntent>>
 ): string {
   return scoreModelsForIntent(availableByProvider, intent)
     .slice(0, 3)
@@ -70,7 +70,7 @@ function topRoutingCandidates(
 }
 
 function logRoutingDecision(
-  intent: ReturnType<typeof inferRequestIntent>,
+  intent: Awaited<ReturnType<typeof inferRequestIntent>>,
   availableByProvider: Array<{ provider: LlmProvider; models: string[] }>,
   selectedProviderName: string,
   selectedModelId: string
@@ -89,7 +89,7 @@ function isRoutingTraceEnabled(perRequestOverride?: boolean): boolean {
 
 function createCandidateBreakdown(
   availableByProvider: Array<{ provider: LlmProvider; models: string[] }>,
-  intent: ReturnType<typeof inferRequestIntent>
+  intent: Awaited<ReturnType<typeof inferRequestIntent>>
 ): CandidateScoreBreakdown[] {
   return availableByProvider.flatMap(({ provider, models }) =>
     models.map((modelId) => scoreModelCandidateWithBreakdown(provider.name, modelId, intent))
@@ -110,7 +110,7 @@ function buildRoutingTrace({
 }: {
   requestId: string;
   timestamp: string;
-  intent: ReturnType<typeof inferRequestIntent>;
+  intent: Awaited<ReturnType<typeof inferRequestIntent>>;
   prompt: string;
   hasImages: boolean;
   context: string;
@@ -183,7 +183,7 @@ function buildSelectionExplainer({
 }: {
   selectedProviderName: string;
   selectedModelId: string;
-  intent: ReturnType<typeof inferRequestIntent>;
+  intent: Awaited<ReturnType<typeof inferRequestIntent>>;
   availableByProvider: Array<{ provider: LlmProvider; models: string[] }>;
   overrideReason: string | null;
   summary: string;
@@ -267,7 +267,7 @@ function buildFallbackChain({
   selectedProviderName: string;
   selectedModelId: string;
   availableByProvider: Array<{ provider: LlmProvider; models: string[] }>;
-  intent: ReturnType<typeof inferRequestIntent>;
+  intent: Awaited<ReturnType<typeof inferRequestIntent>>;
 }): Array<{ provider: LlmProvider; modelId: string; score: number }> {
   const usedKeys = new Set<string>([`${selectedProviderName}:${selectedModelId}`]);
   const fallbackChain: Array<{ provider: LlmProvider; modelId: string; score: number }> = [];
