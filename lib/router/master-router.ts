@@ -1,4 +1,3 @@
-import OpenAI from "openai";
 import {
   CandidateScoreBreakdown,
   inferRequestIntent,
@@ -58,43 +57,6 @@ type RoutingTrace = {
     scoring_policy_version: string | null;
   };
 };
-
-type ProviderName = "openai" | "google" | "grok" | "anthropic";
-type RoutingChoice = { providerName: ProviderName; modelId: string };
-
-const ORCHESTRATOR_MODELS = ["gpt-5", "gemini-pro-latest"] as const;
-const DEFAULT_ORCHESTRATOR_MODEL = "gpt-5";
-
-const CAPABILITY_REGISTRY: Record<string, string> = {
-  "gpt-5.3-codex": "Agentic coding, tool use, APIs, terminal-style execution; ideal for math-heavy intents that must strictly follow MATH_EXECUTION_PROTOCOL via executable scripts.",
-  "o3-pro": "Deep reasoning and complex logic; for math-heavy tasks it must strictly follow MATH_EXECUTION_PROTOCOL using executed scripts.",
-  "grok-2-1212": "Balanced Grok default for general-purpose chat and reasoning tasks.",
-  "o4-mini-high": "Fast reasoning; for math-heavy tasks it must strictly follow MATH_EXECUTION_PROTOCOL using executed scripts.",
-  "gpt-5.2-unified": "Primary general conversation; balanced, reliable, fast; for math-heavy tasks it must strictly follow MATH_EXECUTION_PROTOCOL using executed scripts.",
-  "gpt-4o-data-extraction": "Strict JSON/schema extraction and SQL mapping.",
-  "gpt-4o-audio": "Native audio processing; tone and sarcasm detection.",
-  "gemini-3.1-pro": "Massive context leadership (2M+ tokens); complex doc/video analysis; for math-heavy tasks it must strictly follow MATH_EXECUTION_PROTOCOL using executed scripts.",
-  "gemini-3.1-flash": "Fast, cheap, high-volume simple tasks.",
-  "gemini-3.1-flash-image-preview": "Nano Banana 2: High-efficiency SOTA model for image generation, high-fidelity asset creation, and 4K resolution support.",  
-  "nano-banana-pro-preview": "Nano Banana Pro: The state-of-the-art model for high-fidelity image generation, professional asset creation, and precise visual reasoning.",
-  "gemini-3.1-pro-vision": "Native video and advanced visual context analysis.",
-  "gpt-image-1": "Secondary OpenAI image model.",
-  "grok-4.1": "High-empathy, natural conversation, and leadership coaching. Unfiltered, rebellious, high-empathy, and edgy conversation.",
-  "grok-4-pulse": "Real-time news, social sentiment, and sub-second trends.",
-  "claude-4.6-opus": "High Level System design, back end architecture, monolith-to-microservices migration, and multi-file refactoring.",
-  "claude-4.5-sonnet": "Stable long-running autonomous workflows (30+ hours); for math-heavy tasks it must strictly follow MATH_EXECUTION_PROTOCOL using executed scripts.",
-  "claude-4.5-haiku": "Fast responses with strict brand-voice/style control."
-};
-
-function getOrchestratorModel(): (typeof ORCHESTRATOR_MODELS)[number] {
-  const configuredModel = process.env.ROUTING_ORCHESTRATOR_MODEL;
-
-  if (configuredModel && ORCHESTRATOR_MODELS.includes(configuredModel as (typeof ORCHESTRATOR_MODELS)[number])) {
-    return configuredModel as (typeof ORCHESTRATOR_MODELS)[number];
-  }
-
-  return DEFAULT_ORCHESTRATOR_MODEL;
-}
 
 function topRoutingCandidates(
   availableByProvider: Array<{ provider: LlmProvider; models: string[] }>,
@@ -265,10 +227,6 @@ function buildSelectionExplainer({
   };
 }
 
-const routingClient = process.env.OPENAI_API_KEY
-  ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY, fetch: globalThis.fetch.bind(globalThis) })
-  : null;
-
 function pickDefaultModel(provider: LlmProvider, models: string[]): string {
   if (provider.name === "google") {
     return (
@@ -293,41 +251,6 @@ function pickDefaultModel(provider: LlmProvider, models: string[]): string {
   }
 
   return models.find((model) => model.includes("gpt-5.2")) ?? models[0] ?? "gpt-5.2";
-}
-
-function normalizeRoutingChoice(rawChoice: string): RoutingChoice | null {
-  const trimmedChoice = rawChoice.trim();
-
-  if (trimmedChoice.startsWith("{")) {
-    try {
-      const parsed = JSON.parse(trimmedChoice) as { provider?: unknown; model?: unknown };
-      const providerName = typeof parsed.provider === "string" ? parsed.provider.trim().toLowerCase() : null;
-      const modelId = typeof parsed.model === "string" ? parsed.model.trim() : "";
-
-      if ((providerName === "openai" || providerName === "google" || providerName === "grok" || providerName === "anthropic") && modelId) {
-        return { providerName, modelId };
-      }
-    } catch {
-      return null;
-    }
-  }
-
-  const [providerNameRaw, ...modelParts] = rawChoice.split(":");
-  const providerName = providerNameRaw?.trim().toLowerCase();
-
-  if ((providerName !== "openai" && providerName !== "google" && providerName !== "grok" && providerName !== "anthropic") || modelParts.length === 0) {
-    return null;
-  }
-
-  const modelId = modelParts.join(":").trim();
-  if (!modelId) {
-    return null;
-  }
-
-  return {
-    providerName,
-    modelId
-  };
 }
 
 type Selection = { provider: LlmProvider; modelId: string; reasoning: string; routerModel: string; summary: string; overrideReason: string | null };
