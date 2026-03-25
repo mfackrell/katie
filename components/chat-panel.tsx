@@ -30,6 +30,40 @@ interface ChatPanelProps {
   chatId: string;
 }
 
+type SelectionExplainer = {
+  selected_model?: string;
+  intent?: { label?: string; confidence?: number | null };
+  summary?: string;
+  factors?: Array<{ label: string; delta?: number | null }>;
+  top_candidate_score?: number | null;
+  runner_up?: { model?: string; score?: number | null } | null;
+  override?: { applied?: boolean; reason?: string | null } | null;
+};
+
+const MODEL_EXPLAINER_HIDDEN_STORAGE_KEY = "ui:modelExplainerHidden";
+
+function hasExplainerData(explainer: SelectionExplainer | null): explainer is SelectionExplainer {
+  if (!explainer) {
+    return false;
+  }
+
+  return Boolean(
+    explainer.selected_model ||
+      explainer.intent?.label ||
+      (explainer.factors && explainer.factors.length > 0) ||
+      typeof explainer.top_candidate_score === "number" ||
+      explainer.runner_up?.model ||
+      (explainer.override?.applied && explainer.override.reason),
+  );
+}
+
+function formatSignedDelta(delta?: number | null): string {
+  if (typeof delta !== "number" || Number.isNaN(delta)) {
+    return "—";
+  }
+  return delta > 0 ? `+${delta.toFixed(2)}` : delta.toFixed(2);
+}
+
 export function ChatPanel({ actorId, chatId }: ChatPanelProps) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [messagesByChatId, setMessagesByChatId] = useState<Record<string, Message[]>>({});
@@ -51,6 +85,9 @@ export function ChatPanel({ actorId, chatId }: ChatPanelProps) {
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
   const [emojiPickerOpen, setEmojiPickerOpen] = useState(false);
   const [showModelControls, setShowModelControls] = useState(false);
+  const [selectionExplainer, setSelectionExplainer] = useState<SelectionExplainer | null>(null);
+  const [modelExplainerHidden, setModelExplainerHidden] = useState(false);
+  const [explainerOpen, setExplainerOpen] = useState(false);
   const messagesContainerRef = useRef<HTMLElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -60,6 +97,7 @@ export function ChatPanel({ actorId, chatId }: ChatPanelProps) {
   const copiedFeedbackTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(
     null,
   );
+  const explainerContainerRef = useRef<HTMLDivElement>(null);
 
   const hasValidChatSelection = useMemo(
     () => canSubmitChatRequest(actorId, chatId),
@@ -131,6 +169,8 @@ export function ChatPanel({ actorId, chatId }: ChatPanelProps) {
     async function fetchMessages() {
       abortControllerRef.current?.abort();
       setMeta(null);
+      setSelectionExplainer(null);
+      setExplainerOpen(false);
       setStatusMessage("");
       setStreamingModel(null);
       setCopiedMessageId(null);
@@ -189,6 +229,41 @@ export function ChatPanel({ actorId, chatId }: ChatPanelProps) {
     },
     [],
   );
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    const storedValue = window.localStorage.getItem(MODEL_EXPLAINER_HIDDEN_STORAGE_KEY);
+    setModelExplainerHidden(storedValue === "true");
+  }, []);
+
+  useEffect(() => {
+    function handlePointerDown(event: MouseEvent) {
+      if (!explainerContainerRef.current) {
+        return;
+      }
+
+      const target = event.target;
+      if (target instanceof Node && !explainerContainerRef.current.contains(target)) {
+        setExplainerOpen(false);
+      }
+    }
+
+    function handleEscape(event: globalThis.KeyboardEvent) {
+      if (event.key === "Escape") {
+        setExplainerOpen(false);
+      }
+    }
+
+    document.addEventListener("mousedown", handlePointerDown);
+    document.addEventListener("keydown", handleEscape);
+    return () => {
+      document.removeEventListener("mousedown", handlePointerDown);
+      document.removeEventListener("keydown", handleEscape);
+    };
+  }, []);
 
   async function uploadFiles(files: File[]): Promise<FileReference[]> {
     if (files.length === 0) {
@@ -342,7 +417,7 @@ export function ChatPanel({ actorId, chatId }: ChatPanelProps) {
           }
 
           const chunk = JSON.parse(line) as
-            | { type: "metadata"; modelId: string; provider: string }
+            | { type: "metadata"; modelId: string; provider: string; explainer?: SelectionExplainer }
             | { type: "delta"; text: string }
             | {
                 type: "content";
@@ -355,6 +430,7 @@ export function ChatPanel({ actorId, chatId }: ChatPanelProps) {
           if (chunk.type === "metadata") {
             setStreamingModel(chunk.modelId);
             provider = chunk.provider;
+            setSelectionExplainer(chunk.explainer ?? null);
           }
 
           if (chunk.type === "delta") {
@@ -376,7 +452,7 @@ export function ChatPanel({ actorId, chatId }: ChatPanelProps) {
 
       if (buffered.trim()) {
         const trailingChunk = JSON.parse(buffered) as
-          | { type: "metadata"; modelId: string; provider: string }
+          | { type: "metadata"; modelId: string; provider: string; explainer?: SelectionExplainer }
           | { type: "delta"; text: string }
           | {
               type: "content";
@@ -389,6 +465,7 @@ export function ChatPanel({ actorId, chatId }: ChatPanelProps) {
         if (trailingChunk.type === "metadata") {
           setStreamingModel(trailingChunk.modelId);
           provider = trailingChunk.provider;
+          setSelectionExplainer(trailingChunk.explainer ?? null);
         }
 
         if (trailingChunk.type === "delta") {
@@ -614,6 +691,18 @@ export function ChatPanel({ actorId, chatId }: ChatPanelProps) {
   }, [input]);
 
   const providerNames = Object.keys(availableModels) as ProviderName[];
+  const showExplainer = !modelExplainerHidden && hasExplainerData(selectionExplainer);
+
+  function handleModelExplainerVisibility(nextHidden: boolean) {
+    setModelExplainerHidden(nextHidden);
+    if (nextHidden) {
+      setExplainerOpen(false);
+    }
+
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem(MODEL_EXPLAINER_HIDDEN_STORAGE_KEY, String(nextHidden));
+    }
+  }
 
   async function handleDownload(imageUrl: string, filename: string) {
     try {
@@ -664,6 +753,83 @@ export function ChatPanel({ actorId, chatId }: ChatPanelProps) {
                   <span className="truncate">Last response via <span className="text-zinc-200">{meta.provider}</span> · {meta.model}</span>
                 </p>
               ) : null}
+              {showExplainer && selectionExplainer ? (
+                <div
+                  ref={explainerContainerRef}
+                  className="relative"
+                  onMouseEnter={() => {
+                    if (typeof window !== "undefined" && window.matchMedia("(hover: hover) and (pointer: fine)").matches) {
+                      setExplainerOpen(true);
+                    }
+                  }}
+                  onMouseLeave={() => {
+                    if (typeof window !== "undefined" && window.matchMedia("(hover: hover) and (pointer: fine)").matches) {
+                      setExplainerOpen(false);
+                    }
+                  }}
+                >
+                  <div className="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.04] pl-2.5 pr-1 py-1 text-[11px] text-zinc-300">
+                    <button
+                      type="button"
+                      onClick={() => setExplainerOpen((current) => !current)}
+                      className="inline-flex items-center gap-1 rounded-full px-1 text-left text-zinc-300 hover:text-zinc-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
+                      aria-expanded={explainerOpen}
+                      aria-controls="model-selection-explainer"
+                      aria-label="Open model selection explainer"
+                    >
+                      <span className="truncate">Model: {selectionExplainer.selected_model ?? meta?.model ?? "Unknown"} · Why?</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleModelExplainerVisibility(true)}
+                      className="rounded-full border border-white/10 bg-white/[0.05] px-1.5 py-0.5 text-[10px] text-zinc-400 transition hover:text-zinc-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
+                      aria-label="Hide model selection explainer"
+                    >
+                      Hide
+                    </button>
+                  </div>
+                  {explainerOpen ? (
+                    <div
+                      id="model-selection-explainer"
+                      role="dialog"
+                      aria-label="Model selection explainer details"
+                      className="absolute right-0 z-20 mt-2 w-72 rounded-2xl border border-white/10 bg-zinc-950/95 p-3 text-xs text-zinc-300 shadow-[0_18px_48px_rgba(0,0,0,0.45)] backdrop-blur"
+                    >
+                      <p className="font-semibold text-zinc-100">Why this model?</p>
+                      {selectionExplainer.intent?.label ? (
+                        <p className="mt-2 text-zinc-400">
+                          Intent: <span className="text-zinc-200">{selectionExplainer.intent.label}</span>
+                          {typeof selectionExplainer.intent.confidence === "number"
+                            ? ` (${(selectionExplainer.intent.confidence * 100).toFixed(0)}%)`
+                            : ""}
+                        </p>
+                      ) : null}
+                      {selectionExplainer.factors?.length ? (
+                        <ul className="mt-2 space-y-1">
+                          {selectionExplainer.factors.slice(0, 4).map((factor) => (
+                            <li key={factor.label} className="flex items-center justify-between gap-2">
+                              <span className="truncate text-zinc-400">{factor.label}</span>
+                              <span className="font-mono text-zinc-200">{formatSignedDelta(factor.delta)}</span>
+                            </li>
+                          ))}
+                        </ul>
+                      ) : null}
+                      {(typeof selectionExplainer.top_candidate_score === "number" || selectionExplainer.runner_up?.model) ? (
+                        <p className="mt-2 text-zinc-400">
+                          Score: <span className="text-zinc-200">{selectionExplainer.top_candidate_score ?? "—"}</span>
+                          {" vs "}
+                          <span className="text-zinc-200">
+                            {selectionExplainer.runner_up?.model ?? "Runner-up"} ({selectionExplainer.runner_up?.score ?? "—"})
+                          </span>
+                        </p>
+                      ) : null}
+                      {selectionExplainer.override?.applied && selectionExplainer.override.reason ? (
+                        <p className="mt-2 text-amber-200/90">Override: {selectionExplainer.override.reason}</p>
+                      ) : null}
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
               <button
                 type="button"
                 onClick={() => setShowModelControls((current) => !current)}
@@ -685,6 +851,16 @@ export function ChatPanel({ actorId, chatId }: ChatPanelProps) {
           >
             <div className="min-h-0">
               <div className="flex flex-col gap-2 md:flex-row md:flex-wrap">
+                <label className="flex min-h-10 items-center gap-2 rounded-2xl border border-white/10 bg-white/[0.035] px-3 py-2 text-xs text-zinc-300">
+                  <input
+                    type="checkbox"
+                    checked={!modelExplainerHidden}
+                    onChange={(event) => handleModelExplainerVisibility(!event.target.checked)}
+                    className="h-4 w-4 rounded border-white/15 bg-zinc-900 text-emerald-500 focus:ring-emerald-500"
+                    aria-label="Show model selection explainer"
+                  />
+                  <span>Show model selection explainer</span>
+                </label>
                 {providerNames.map((providerName) => {
                   const options = availableModels[providerName] ?? [];
                   const selectedValue =

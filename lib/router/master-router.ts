@@ -14,6 +14,16 @@ export type RoutingDecision = {
   modelId: string;
   reasoning: string;
   routerModel: string;
+  explainer?: SelectionExplainer;
+};
+export type SelectionExplainer = {
+  selected_model?: string;
+  intent?: { label?: string; confidence?: number | null };
+  summary?: string;
+  factors?: Array<{ label: string; delta?: number | null }>;
+  top_candidate_score?: number | null;
+  runner_up?: { model?: string; score?: number | null } | null;
+  override?: { applied?: boolean; reason?: string | null } | null;
 };
 type RoutingTrace = {
   request_id: string;
@@ -193,6 +203,61 @@ function logRoutingTrace(trace: RoutingTrace): void {
   console.info(`[RouterTrace] ${JSON.stringify(trace)}`);
 }
 
+function buildSelectionExplainer({
+  selectedProviderName,
+  selectedModelId,
+  intent,
+  availableByProvider,
+  overrideReason,
+  summary
+}: {
+  selectedProviderName: string;
+  selectedModelId: string;
+  intent: ReturnType<typeof inferRequestIntent>;
+  availableByProvider: Array<{ provider: LlmProvider; models: string[] }>;
+  overrideReason: string | null;
+  summary: string;
+}): SelectionExplainer {
+  const scoredCandidates = scoreModelsForIntent(availableByProvider, intent).map(({ provider, modelId, score }) => ({
+    model: `${provider.name}:${modelId}`,
+    score
+  }));
+  const selectedKey = `${selectedProviderName}:${selectedModelId}`;
+  const selectedScore = scoredCandidates.find((candidate) => candidate.model === selectedKey)?.score ?? null;
+  const runnerUp = scoredCandidates.find((candidate) => candidate.model !== selectedKey) ?? null;
+  const selectedBreakdown =
+    createCandidateBreakdown(availableByProvider, intent).find(
+      (candidate) => candidate.providerName === selectedProviderName && candidate.modelId === selectedModelId
+    ) ?? null;
+  const factors =
+    selectedBreakdown?.adjustments
+      .filter((factor) => factor.delta !== 0)
+      .sort((left, right) => Math.abs(right.delta) - Math.abs(left.delta))
+      .slice(0, 4)
+      .map((factor) => ({ label: factor.label, delta: factor.delta })) ?? [];
+
+  return {
+    selected_model: selectedKey,
+    intent: {
+      label: intent,
+      confidence: null
+    },
+    summary,
+    factors,
+    top_candidate_score: selectedScore,
+    runner_up: runnerUp
+      ? {
+          model: runnerUp.model,
+          score: runnerUp.score
+        }
+      : null,
+    override: {
+      applied: Boolean(overrideReason),
+      reason: overrideReason
+    }
+  };
+}
+
 const routingClient = process.env.OPENAI_API_KEY
   ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY, fetch: globalThis.fetch.bind(globalThis) })
   : null;
@@ -307,7 +372,15 @@ export async function chooseProvider(
       provider: validated.provider,
       modelId: validated.modelId,
       reasoning: `Single provider available. ${validated.reasoning}`,
-      routerModel: modelId
+      routerModel: modelId,
+      explainer: buildSelectionExplainer({
+        selectedProviderName: validated.provider.name,
+        selectedModelId: validated.modelId,
+        intent,
+        availableByProvider,
+        overrideReason: validated.changed ? validated.reasoning : null,
+        summary: "Single provider path."
+      })
     };
   }
 
@@ -380,7 +453,15 @@ export async function chooseProvider(
               provider: validated.provider,
               modelId: validated.modelId,
               reasoning: `Orchestrator selected ${parsedChoice.providerName}:${modelId}. ${validated.reasoning}`,
-              routerModel: modelId
+              routerModel: modelId,
+              explainer: buildSelectionExplainer({
+                selectedProviderName: validated.provider.name,
+                selectedModelId: validated.modelId,
+                intent,
+                availableByProvider,
+                overrideReason: validated.changed ? `validation_adjustment: ${validated.reasoning}` : null,
+                summary: "Orchestrator path."
+              })
             };
           }
         }
@@ -419,6 +500,14 @@ export async function chooseProvider(
     provider: validated.provider,
     modelId: validated.modelId,
     reasoning: `Fallback routing selected ${fallbackProvider.provider.name}:${modelId}. ${validated.reasoning}`,
-    routerModel: modelId
+    routerModel: modelId,
+    explainer: buildSelectionExplainer({
+      selectedProviderName: validated.provider.name,
+      selectedModelId: validated.modelId,
+      intent,
+      availableByProvider,
+      overrideReason: `fallback_path: ${validated.reasoning}`,
+      summary: "Fallback path."
+    })
   };
 }
