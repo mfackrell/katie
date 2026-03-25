@@ -65,11 +65,34 @@ function isImageGenerationModel(providerName: ProviderName, modelId: string): bo
 }
 
 function isVisionAnalysisModel(providerName: ProviderName, modelId: string): boolean {
+  const normalizedModel = modelId.toLowerCase();
+
+  if (isImageGenerationModel(providerName, modelId)) {
+    return false;
+  }
+
   if (providerName === "google") {
     return isGoogleVisionAnalysisModel(modelId);
   }
 
-  return false;
+  if (providerName === "openai") {
+    return (
+      normalizedModel.includes("gpt-4o") ||
+      normalizedModel.includes("gpt-4.1") ||
+      normalizedModel.includes("gpt-5") ||
+      normalizedModel.includes("o3")
+    );
+  }
+
+  if (providerName === "anthropic") {
+    return normalizedModel.includes("claude-4.5") || normalizedModel.includes("claude-4.6");
+  }
+
+  if (providerName === "grok") {
+    return normalizedModel.includes("vision");
+  }
+
+  return normalizedModel.includes("vision");
 }
 
 // Request intent drives validation. The router is allowed to be creative. Validation is not.
@@ -107,11 +130,7 @@ function modelSupportsIntent(providerName: ProviderName, modelId: string, intent
       return isImageGenerationModel(providerName, modelId);
     case "vision-analysis":
     case "multimodal-reasoning":
-      return (
-        providerName === "google" &&
-        isVisionAnalysisModel(providerName, modelId) &&
-        !isImageGenerationModel(providerName, modelId)
-      );
+      return isVisionAnalysisModel(providerName, modelId) && !isImageGenerationModel(providerName, modelId);
     case "text":
     case "technical-debugging":
     case "architecture-review":
@@ -163,6 +182,15 @@ function rankModelForIntent(providerName: ProviderName, modelId: string, intent:
       if (!modelSupportsIntent(providerName, modelId, intent)) {
         return -1;
       }
+      if (
+        normalizedModel.includes("gpt-5") ||
+        normalizedModel.includes("gpt-4o") ||
+        normalizedModel.includes("claude-4.5") ||
+        normalizedModel.includes("claude-4.6") ||
+        normalizedModel.includes("o3")
+      ) {
+        return 5;
+      }
       if (normalizedModel.includes("pro") && normalizedModel.includes("vision")) {
         return 5;
       }
@@ -176,6 +204,15 @@ function rankModelForIntent(providerName: ProviderName, modelId: string, intent:
     case "vision-analysis":
       if (!modelSupportsIntent(providerName, modelId, intent)) {
         return -1;
+      }
+      if (
+        normalizedModel.includes("gpt-5") ||
+        normalizedModel.includes("gpt-4o") ||
+        normalizedModel.includes("claude-4.5") ||
+        normalizedModel.includes("claude-4.6") ||
+        normalizedModel.includes("o3")
+      ) {
+        return 5;
       }
       if (normalizedModel.includes("vision")) {
         return 5;
@@ -272,7 +309,15 @@ export function scoreModelCandidateWithBreakdown(
         return finalize(null, -1, "intent_mismatch:multimodal-reasoning");
       }
       const baseScore = 1;
-      if (normalizedModel.includes("pro") && normalizedModel.includes("vision")) {
+      if (
+        normalizedModel.includes("gpt-5") ||
+        normalizedModel.includes("gpt-4o") ||
+        normalizedModel.includes("claude-4.5") ||
+        normalizedModel.includes("claude-4.6") ||
+        normalizedModel.includes("o3")
+      ) {
+        adjustments.push({ label: "frontier_multimodal_bonus", delta: 4 });
+      } else if (normalizedModel.includes("pro") && normalizedModel.includes("vision")) {
         adjustments.push({ label: "vision_pro_bonus", delta: 4 });
       } else if (normalizedModel.includes("pro")) {
         adjustments.push({ label: "pro_bonus", delta: 3 });
@@ -287,7 +332,15 @@ export function scoreModelCandidateWithBreakdown(
         return finalize(null, -1, "intent_mismatch:vision-analysis");
       }
       const baseScore = 1;
-      if (normalizedModel.includes("vision")) {
+      if (
+        normalizedModel.includes("gpt-5") ||
+        normalizedModel.includes("gpt-4o") ||
+        normalizedModel.includes("claude-4.5") ||
+        normalizedModel.includes("claude-4.6") ||
+        normalizedModel.includes("o3")
+      ) {
+        adjustments.push({ label: "frontier_vision_bonus", delta: 4 });
+      } else if (normalizedModel.includes("vision")) {
         adjustments.push({ label: "vision_bonus", delta: 4 });
       } else if (normalizedModel.includes("pro")) {
         adjustments.push({ label: "pro_bonus", delta: 3 });
