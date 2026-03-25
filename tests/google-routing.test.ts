@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { inferRequestIntent, validateRoutingDecision } from "../lib/router/model-intent";
+import { isBlockedRoutingModel } from "../lib/router/routing-model-filters";
 import {
   isImageGenerationModel,
   isVisionAnalysisModel,
@@ -129,5 +130,33 @@ test("attached image analysis routes to vision analysis and rejects image-genera
   );
 
   assert.equal(validated.modelId, "gemini-3.1-pro");
+  assert.equal(validated.changed, true);
+});
+
+test("routing does not hardcode blocked model-name deny rules", () => {
+  assert.equal(isBlockedRoutingModel("gpt-5.4-pro"), false);
+  assert.equal(isBlockedRoutingModel("gpt-5.4-pro-2026-03-05"), false);
+  assert.equal(isBlockedRoutingModel("gpt-5.2-unified"), false);
+});
+
+test("plain text routing prefers lightweight models when available", () => {
+  const validated = validateRoutingDecision(
+    { providerName: "openai", modelId: "non-existent-model" },
+    [provider("openai", ["claude-4.6-opus", "claude-4.5-haiku", "gpt-5.2-unified"])],
+    "text"
+  );
+
+  assert.ok(["claude-4.5-haiku", "gpt-5.2-unified"].includes(validated.modelId));
+  assert.equal(validated.changed, true);
+});
+
+test("technical debugging still prefers stronger technical models", () => {
+  const validated = validateRoutingDecision(
+    { providerName: "openai", modelId: "non-existent-model" },
+    [provider("openai", ["claude-4.5-haiku", "o3-pro"])],
+    "technical-debugging"
+  );
+
+  assert.equal(validated.modelId, "o3-pro");
   assert.equal(validated.changed, true);
 });

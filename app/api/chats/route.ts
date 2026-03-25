@@ -1,12 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { deleteChatById, getActorById, getChatById, listChats, listChatsByActorId, saveChat } from "@/lib/data/blob-store";
+import { resolveStarterChat } from "@/lib/chat/starter-chat";
 import type { ChatThread } from "@/lib/types/chat";
 
 const createChatSchema = z.object({
   id: z.string().min(1).optional(),
   actorId: z.string().min(1),
-  title: z.string().min(1)
+  title: z.string().min(1),
+  createStarterChat: z.boolean().optional(),
 });
 
 const chatIdParamSchema = z.object({
@@ -29,10 +31,17 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: `Actor not found: ${payload.actorId}` }, { status: 404 });
     }
 
+    if (payload.createStarterChat) {
+      const existingChats = await listChatsByActorId(payload.actorId);
+      const existingStarterChat = resolveStarterChat(existingChats, payload);
+      if (existingStarterChat) {
+        return NextResponse.json({ chat: existingStarterChat });
+      }
+    }
+
     const now = new Date().toISOString();
     const chat: ChatThread = {
-      id:
-        payload.id ??
+      id: (payload.createStarterChat ? undefined : payload.id) ??
         (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
           ? crypto.randomUUID()
           : `chat-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`),

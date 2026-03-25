@@ -6,6 +6,7 @@ import { saveMessage } from "@/lib/data/blob-store";
 import { getAvailableProviders } from "@/lib/providers";
 import { chooseProvider } from "@/lib/router/master-router";
 import { LlmProvider, ProviderResponse } from "@/lib/providers/types";
+import type { SelectionExplainer } from "@/lib/router/master-router";
 
 const fileReferenceSchema = z.object({
   fileId: z.string().min(1),
@@ -27,7 +28,8 @@ const requestSchema = z.object({
   images: z.array(z.string()).optional(),
   fileReferences: z.array(fileReferenceSchema).optional(),
   overrideProvider: z.string().min(1).optional(),
-  overrideModel: z.string().min(1).optional()
+  overrideModel: z.string().min(1).optional(),
+  routingTraceEnabled: z.boolean().optional()
 });
 
 type RequestPayload = z.infer<typeof requestSchema>;
@@ -145,7 +147,7 @@ function extractImageUrl(part: { type?: string; [key: string]: unknown }): strin
 export async function POST(request: NextRequest) {
   try {
     const payload = await parseIncomingPayload(request);
-    const { actorId, chatId, message, images, fileReferences, overrideProvider, overrideModel } = payload;
+    const { actorId, chatId, message, images, fileReferences, overrideProvider, overrideModel, routingTraceEnabled } = payload;
     const attachments = fileReferences;
     const encoder = new TextEncoder();
 
@@ -165,6 +167,7 @@ export async function POST(request: NextRequest) {
     const historyForProvider = history.map(({ role, content }) => ({ role, content }));
     let provider = providers[0];
     let modelId = "";
+    let selectionExplainer: SelectionExplainer | undefined;
 
     if (overrideProvider && overrideModel) {
       const manualProvider = providers.find((candidate) => candidate.name === overrideProvider);
@@ -181,10 +184,15 @@ export async function POST(request: NextRequest) {
         Array.isArray(attachments) && attachments.some((attachment) => attachment.mimeType.startsWith("image/"));
       const hasVisualInput = hasImages || hasImageAttachments;
       const routingContext = `\n  Persona: ${persona}\n  Rolling Summary: ${summary}\n  Recent History: ${JSON.stringify(history.slice(-3))}\n  Has Attached Images: ${hasVisualInput}\n`;
-      const routingDecision = await chooseProvider(message, routingContext, providers, { hasImages: hasVisualInput });
+      const routingDecision = await chooseProvider(message, routingContext, providers, {
+        hasImages: hasVisualInput,
+        routingTraceEnabled,
+        routingRequestId: request.headers.get("x-request-id") ?? undefined
+      });
 
       provider = routingDecision.provider;
       modelId = routingDecision.modelId;
+      selectionExplainer = routingDecision.explainer;
 
       console.log(`[Chat API] Selected Provider: ${provider.name}, Model: ${modelId}`);
       console.log(`[Chat API] Routing Model For UI: ${routingDecision.routerModel}`);
@@ -198,7 +206,8 @@ export async function POST(request: NextRequest) {
             const metadataChunk = JSON.stringify({
               type: "metadata",
               modelId,
-              provider: provider.name
+              provider: provider.name,
+              explainer: selectionExplainer
             });
             controller.enqueue(encoder.encode(`${metadataChunk}\n`));
 
@@ -340,6 +349,10 @@ export async function POST(request: NextRequest) {
 
     if (errorMessage === "Invalid request payload") {
       return NextResponse.json({ error: errorMessage }, { status: 400 });
+    }
+
+    if (errorMessage.includes("not found")) {
+      return NextResponse.json({ error: errorMessage }, { status: 404 });
     }
 
     console.error("[Chat API] Fatal Runtime Error:", {
