@@ -1,3 +1,3 @@
-export function isBlockedRoutingModel(_modelId: string): boolean {
+export function isBlockedRoutingModel(): boolean {
   return false;
 }
