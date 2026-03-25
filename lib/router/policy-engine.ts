@@ -277,12 +277,57 @@ function estimateTokens(input: string, intent: PolicyIntentLabel): { inTokens: n
   return { inTokens, outTokens: Math.max(80, Math.ceil(inTokens * outputMultiplier)) };
 }
 
+type ModelPricingProfile = {
+  quality: number;
+  latency: number;
+  inCost: number;
+  outCost: number;
+};
+
+const DEFAULT_MODEL_PRICING_PROFILE: ModelPricingProfile = {
+  quality: 3,
+  latency: 2200,
+  inCost: 3,
+  outCost: 12
+};
+
+const EXPLICIT_MODEL_PRICING_PROFILES: Record<string, ModelPricingProfile> = {
+  "claude-4.5-sonnet": { quality: 5, latency: 3200, inCost: 8, outCost: 24 },
+  "claude-4.6-sonnet": { quality: 5, latency: 3200, inCost: 8, outCost: 24 },
+  "claude-4.6-opus": { quality: 5, latency: 4200, inCost: 15, outCost: 45 },
+  "gpt-5.3-codex": { quality: 5, latency: 3600, inCost: 8, outCost: 24 },
+  "o3-pro": { quality: 5, latency: 3800, inCost: 8, outCost: 24 }
+};
+
+function resolveModelPricingProfile(modelId: string): ModelPricingProfile {
+  const lower = modelId.toLowerCase();
+  const explicitProfile = EXPLICIT_MODEL_PRICING_PROFILES[lower];
+  if (explicitProfile) {
+    return explicitProfile;
+  }
+
+  if (lower.includes("haiku") || lower.includes("flash")) {
+    return { quality: 3, latency: 1200, inCost: 0.8, outCost: 3.2 };
+  }
+
+  if (lower.startsWith("gpt-5")) {
+    return { quality: 4, latency: 3200, inCost: 8, outCost: 24 };
+  }
+
+  if (lower.startsWith("claude-4.5") || lower.startsWith("claude-4.6")) {
+    return { quality: 5, latency: 3200, inCost: 8, outCost: 24 };
+  }
+
+  if (lower.startsWith("o3-")) {
+    return { quality: 5, latency: 3800, inCost: 8, outCost: 24 };
+  }
+
+  return DEFAULT_MODEL_PRICING_PROFILE;
+}
+
 function modelMetadata(providerName: ProviderName, modelId: string): PolicyModelMetadata {
   const lower = modelId.toLowerCase();
-  const quality = lower.includes("opus") || lower.includes("o3-pro") ? 5 : lower.includes("pro") ? 4 : 3;
-  const latency = lower.includes("haiku") || lower.includes("flash") ? 1200 : lower.includes("pro") ? 3800 : 2200;
-  const inCost = lower.includes("opus") ? 15 : lower.includes("pro") ? 8 : lower.includes("flash") || lower.includes("haiku") ? 0.8 : 3;
-  const outCost = lower.includes("opus") ? 45 : lower.includes("pro") ? 24 : lower.includes("flash") || lower.includes("haiku") ? 3.2 : 12;
+  const pricingProfile = resolveModelPricingProfile(modelId);
   const byModel: Array<[string, Partial<ModelCapabilities>]> = [
     ["claude", { nuanced_reasoning: 0.92, emotional_intelligence: 0.9, architecture_design: 0.9, conversational_fluency: 0.88 }],
     ["gpt-4", { code_generation: 0.85, debugging_diagnosis: 0.84, speed: 0.8, nuanced_reasoning: 0.8 }],
@@ -300,10 +345,10 @@ function modelMetadata(providerName: ProviderName, modelId: string): PolicyModel
     provider: providerName,
     model_id: modelId,
     capabilities: caps,
-    input_cost_per_1m_tokens: inCost,
-    output_cost_per_1m_tokens: outCost,
-    latency_ms_p50: latency,
-    quality_tier: quality,
+    input_cost_per_1m_tokens: pricingProfile.inCost,
+    output_cost_per_1m_tokens: pricingProfile.outCost,
+    latency_ms_p50: pricingProfile.latency,
+    quality_tier: pricingProfile.quality,
     context_window: null,
     reasoning_tier: null
   };

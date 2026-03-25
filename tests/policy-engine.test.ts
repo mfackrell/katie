@@ -52,3 +52,23 @@ test("ambiguous scores can trigger broader-model tiebreaker", () => {
   assert.equal(typeof result.trace.tiebreaker_applied, "boolean");
   assert.ok(result.trace.selected_model.length > 0);
 });
+
+test("policy metadata assigns high quality tiers to explicit frontier models", () => {
+  const result = evaluatePolicyRouting({
+    prompt: "review this architecture and improve reliability",
+    context: "",
+    traceId: "test-quality-tier-overrides",
+    availableByProvider: [
+      provider("anthropic", ["claude-4.5-sonnet"]),
+      provider("openai", ["gpt-5.3-codex", "o3-pro"]),
+      provider("google", ["gemini-3.1-flash"])
+    ],
+    currentSelection: { providerName: "google", modelId: "gemini-3.1-flash" }
+  });
+
+  const qualityByModel = Object.fromEntries(result.trace.candidates.map((candidate) => [candidate.model, candidate.quality_score]));
+  assert.equal(qualityByModel["anthropic:claude-4.5-sonnet"], 1);
+  assert.equal(qualityByModel["openai:gpt-5.3-codex"], 1);
+  assert.equal(qualityByModel["openai:o3-pro"], 1);
+  assert.ok((qualityByModel["google:gemini-3.1-flash"] ?? 0) < 1);
+});

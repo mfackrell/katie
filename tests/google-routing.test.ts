@@ -1,6 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { inferRequestIntent, validateRoutingDecision } from "../lib/router/model-intent";
+import {
+  inferRequestIntent,
+  scoreModelCandidateWithBreakdown,
+  validateRoutingDecision
+} from "../lib/router/model-intent";
 import { isBlockedRoutingModel } from "../lib/router/routing-model-filters";
 import {
   isImageGenerationModel,
@@ -43,6 +47,16 @@ test("attached chart analysis is classified as multimodal reasoning", () => {
     inferRequestIntent("Read this chart, estimate the trend, and project the next 3 quarters.", true),
     "multimodal-reasoning"
   );
+});
+
+test("openai and anthropic multimodal models are valid for vision and multimodal intents", () => {
+  const openaiVision = scoreModelCandidateWithBreakdown("openai", "gpt-5.3-codex", "vision-analysis");
+  const anthropicMultimodal = scoreModelCandidateWithBreakdown("anthropic", "claude-4.5-sonnet", "multimodal-reasoning");
+
+  assert.equal(openaiVision.excluded, false);
+  assert.equal(anthropicMultimodal.excluded, false);
+  assert.ok(openaiVision.finalScore >= 5);
+  assert.ok(anthropicMultimodal.finalScore >= 5);
 });
 
 test("router validation rejects image-generation models for attached-image reasoning", () => {
