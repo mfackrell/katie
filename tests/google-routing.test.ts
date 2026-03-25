@@ -88,7 +88,7 @@ test("router validation preserves true image generation routing", () => {
 });
 
 test("text-only intent does not require a vision model", () => {
-  assert.equal(inferRequestIntent("Summarize this board memo in five bullets.", false), "text");
+  assert.equal(inferRequestIntent("Summarize this board memo in five bullets.", false), "general-text");
 });
 
 test("repo review prompts are classified as architecture review and cannot use image-generation models", () => {
@@ -157,11 +157,40 @@ test("plain text routing prefers lightweight models when available", () => {
   const validated = validateRoutingDecision(
     { providerName: "openai", modelId: "non-existent-model" },
     [provider("openai", ["claude-4.6-opus", "claude-4.5-haiku", "gpt-5.2-unified"])],
-    "text"
+    "general-text"
   );
 
   assert.ok(["claude-4.5-haiku", "gpt-5.2-unified"].includes(validated.modelId));
   assert.equal(validated.changed, true);
+});
+
+test("rewrite prompts are classified and favor claude-family models", () => {
+  assert.equal(inferRequestIntent("Rewrite this policy memo in a calmer tone.", false), "rewrite");
+
+  const claude = scoreModelCandidateWithBreakdown("anthropic", "claude-4.5-sonnet", "rewrite");
+  const openai = scoreModelCandidateWithBreakdown("openai", "gpt-5.2-unified", "rewrite");
+
+  assert.ok(claude.finalScore > openai.finalScore);
+});
+
+test("news and current-events prompts are classified as web search", () => {
+  assert.equal(inferRequestIntent("What happened in AI news today?", false), "web-search");
+});
+
+test("web-search intent excludes models without web-search capability", () => {
+  const claude = scoreModelCandidateWithBreakdown("anthropic", "claude-4.5-sonnet", "web-search");
+  const grok = scoreModelCandidateWithBreakdown("grok", "grok-2-1212", "web-search");
+
+  assert.equal(claude.excluded, true);
+  assert.equal(claude.exclusionReason, "missing_web_search_capability");
+  assert.equal(grok.excluded, false);
+});
+
+test("gemini remains a first-class candidate for general text", () => {
+  const gemini = scoreModelCandidateWithBreakdown("google", "gemini-3.1-pro", "general-text");
+  const smallFast = scoreModelCandidateWithBreakdown("anthropic", "claude-4.5-haiku", "general-text");
+
+  assert.ok(gemini.finalScore >= smallFast.finalScore);
 });
 
 test("technical debugging still prefers stronger technical models", () => {
