@@ -134,9 +134,9 @@ test("attached image analysis routes to vision analysis and rejects image-genera
 });
 
 test("routing does not hardcode blocked model-name deny rules", () => {
-  assert.equal(isBlockedRoutingModel(), false);
-  assert.equal(isBlockedRoutingModel(), false);
-  assert.equal(isBlockedRoutingModel(), false);
+  assert.equal(isBlockedRoutingModel("gpt-5.4-pro"), false);
+  assert.equal(isBlockedRoutingModel("gpt-5.4-pro-2026-03-05"), false);
+  assert.equal(isBlockedRoutingModel("gpt-5.2-unified"), false);
 });
 
 test("plain text routing prefers lightweight models when available", () => {
