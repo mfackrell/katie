@@ -31,12 +31,6 @@ type StreamEventWithResponse = {
   delta?: string;
 };
 
-const MODEL_FALLBACKS: Record<string, string[]> = {
-  "gpt-5.3-codex": ["gpt-5.2", "gpt-4o"],
-  "gpt-5.3": ["gpt-5.2", "gpt-4o"],
-  "gpt-5": ["gpt-5.2", "gpt-4o"]
-};
-
 const BEHAVIORAL_DIRECTIVE =
   "Always respond in a conversational style. Use a direct, clear, and action-oriented voice. Be direct and to the point. Clearly state the purpose or opinion upfront. Use straightforward language. Focus on actionable points and clear reasoning.";
 
@@ -272,8 +266,7 @@ export class OpenAiProvider implements LlmProvider {
   }
 
   private getModelCandidates(selectedModel: string): string[] {
-    const configuredFallbacks = MODEL_FALLBACKS[selectedModel] ?? [];
-    return [selectedModel, ...configuredFallbacks.filter((candidate) => candidate !== selectedModel)];
+    return [selectedModel];
   }
 
   private async generateViaLegacyCompletions(
