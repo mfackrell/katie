@@ -8,6 +8,11 @@ export type ProviderName = "openai" | "google" | "grok" | "anthropic";
 export type RoutingChoice = { providerName: ProviderName; modelId: string };
 export type RequestIntent =
   | "text"
+  | "general-text"
+  | "rewrite"
+  | "emotional-analysis"
+  | "news-summary"
+  | "web-search"
   | "technical-debugging"
   | "architecture-review"
   | "code-generation"
@@ -37,6 +42,14 @@ const ARCHITECTURE_REVIEW_PROMPT =
 const CODE_GENERATION_PROMPT =
   /\b(write|generate|create|implement|patch|refactor)\b[\s\S]{0,50}\b(code|function|class|script|module|typescript|javascript|python|sql|api|router)\b|\bcode\s+generation\b/i;
 const TECHNICAL_FILE_PROMPT = /\b[\w./-]+\.(ts|tsx|js|jsx|py|go|java|rs|cpp|c|cs|rb|php|swift|kt|sql)\b/i;
+const WEB_SEARCH_PROMPT =
+  /\b(latest|current events?|breaking news|news|today|this week|right now|recent changes?|what'?s happening|up[-\s]?to[-\s]?date|public sentiment|live updates?)\b/i;
+const REWRITE_PROMPT =
+  /\b(rewrite|rephrase|edit|polish|refine|tighten|tone|calmer|softer|clearer|improve wording)\b/i;
+const EMOTIONAL_ANALYSIS_PROMPT =
+  /\b(emotion|emotional|sentiment|tone analysis|feelings?|empathetic|nuance|sensitive|subtext)\b/i;
+const NEWS_SUMMARY_PROMPT =
+  /\b(news summary|summari[sz]e.*news|headlines|current events?|what happened)\b/i;
 
 const IMAGE_GENERATION_MODEL_PATTERNS = [
   "banana",
@@ -95,8 +108,38 @@ function isVisionAnalysisModel(providerName: ProviderName, modelId: string): boo
   return normalizedModel.includes("vision");
 }
 
+function supportsWebSearch(providerName: ProviderName, modelId: string): boolean {
+  const normalizedModel = modelId.toLowerCase();
+  if (providerName === "grok") {
+    return true;
+  }
+  if (providerName === "openai") {
+    return normalizedModel.includes("search") || normalizedModel.includes("gpt-5") || normalizedModel.includes("gpt-4.1");
+  }
+  if (providerName === "google") {
+    return normalizedModel.includes("gemini");
+  }
+  return false;
+}
+
 // Request intent drives validation. The router is allowed to be creative. Validation is not.
 export function inferRequestIntent(prompt: string, hasImages: boolean): RequestIntent {
+  if (WEB_SEARCH_PROMPT.test(prompt)) {
+    return "web-search";
+  }
+
+  if (NEWS_SUMMARY_PROMPT.test(prompt)) {
+    return "news-summary";
+  }
+
+  if (EMOTIONAL_ANALYSIS_PROMPT.test(prompt)) {
+    return "emotional-analysis";
+  }
+
+  if (REWRITE_PROMPT.test(prompt)) {
+    return "rewrite";
+  }
+
   if (TECHNICAL_DEBUGGING_PROMPT.test(prompt)) {
     return "technical-debugging";
   }
@@ -118,7 +161,7 @@ export function inferRequestIntent(prompt: string, hasImages: boolean): RequestI
   }
 
   if (!hasImages) {
-    return "text";
+    return "general-text";
   }
 
   return "vision-analysis";
@@ -126,12 +169,18 @@ export function inferRequestIntent(prompt: string, hasImages: boolean): RequestI
 
 function modelSupportsIntent(providerName: ProviderName, modelId: string, intent: RequestIntent): boolean {
   switch (intent) {
+    case "web-search":
+    case "news-summary":
+      return !isImageGenerationModel(providerName, modelId) && supportsWebSearch(providerName, modelId);
     case "image-generation":
       return isImageGenerationModel(providerName, modelId);
     case "vision-analysis":
     case "multimodal-reasoning":
       return isVisionAnalysisModel(providerName, modelId) && !isImageGenerationModel(providerName, modelId);
     case "text":
+    case "general-text":
+    case "rewrite":
+    case "emotional-analysis":
     case "technical-debugging":
     case "architecture-review":
     case "code-generation":
@@ -225,6 +274,11 @@ function rankModelForIntent(providerName: ProviderName, modelId: string, intent:
       }
       return 1;
     case "text":
+    case "general-text":
+    case "rewrite":
+    case "emotional-analysis":
+    case "news-summary":
+    case "web-search":
       if (!modelSupportsIntent(providerName, modelId, intent)) {
         return -1;
       }
@@ -232,7 +286,7 @@ function rankModelForIntent(providerName: ProviderName, modelId: string, intent:
       let score = 10;
 
       if (normalizedModel.includes("flash") || normalizedModel.includes("haiku") || normalizedModel.includes("mini")) {
-        score += 8;
+        score += 4;
       }
 
       if (normalizedModel.includes("gpt-5.2-unified") || normalizedModel.includes("grok-2-1212")) {
@@ -255,6 +309,16 @@ function rankModelForIntent(providerName: ProviderName, modelId: string, intent:
 
       if (normalizedModel.includes("pro") && !normalizedModel.includes("gpt-5.2-unified")) {
         score -= 4;
+      }
+
+      if (providerName === "anthropic" && (intent === "rewrite" || intent === "emotional-analysis")) {
+        score += 10;
+      }
+      if (providerName === "grok" && (intent === "news-summary" || intent === "web-search")) {
+        score += 9;
+      }
+      if (providerName === "google" && intent === "general-text") {
+        score += 4;
       }
 
       return score;
@@ -350,13 +414,19 @@ export function scoreModelCandidateWithBreakdown(
       const finalScore = baseScore + adjustments.reduce((total, current) => total + current.delta, 0);
       return finalize(baseScore, finalScore, null);
     }
-    case "text": {
+    case "text":
+    case "general-text":
+    case "rewrite":
+    case "emotional-analysis":
+    case "news-summary":
+    case "web-search": {
       if (!modelSupportsIntent(providerName, modelId, intent)) {
-        return finalize(null, -1, "intent_mismatch:text");
+        const reason = intent === "web-search" || intent === "news-summary" ? "missing_web_search_capability" : `intent_mismatch:${intent}`;
+        return finalize(null, -1, reason);
       }
       const baseScore = 10;
       if (normalizedModel.includes("flash") || normalizedModel.includes("haiku") || normalizedModel.includes("mini")) {
-        adjustments.push({ label: "speed_efficiency_bonus", delta: 8 });
+        adjustments.push({ label: "speed_efficiency_bonus", delta: 4 });
       }
       if (normalizedModel.includes("gpt-5.2-unified") || normalizedModel.includes("grok-2-1212")) {
         adjustments.push({ label: "preferred_general_model_bonus", delta: 6 });
@@ -375,6 +445,18 @@ export function scoreModelCandidateWithBreakdown(
       }
       if (normalizedModel.includes("pro") && !normalizedModel.includes("gpt-5.2-unified")) {
         adjustments.push({ label: "pro_model_penalty", delta: -4 });
+      }
+      if (providerName === "anthropic" && (intent === "rewrite" || intent === "emotional-analysis")) {
+        adjustments.push({ label: "claude_nuanced_writing_bonus", delta: 10 });
+      }
+      if (providerName === "grok" && (intent === "news-summary" || intent === "web-search")) {
+        adjustments.push({ label: "grok_realtime_news_bonus", delta: 9 });
+      }
+      if (providerName === "google" && intent === "general-text") {
+        adjustments.push({ label: "gemini_general_reasoning_bonus", delta: 4 });
+      }
+      if (intent === "web-search" && supportsWebSearch(providerName, modelId)) {
+        adjustments.push({ label: "web_search_hard_requirement_met", delta: 3 });
       }
       const finalScore = baseScore + adjustments.reduce((total, current) => total + current.delta, 0);
       return finalize(baseScore, finalScore, null);
