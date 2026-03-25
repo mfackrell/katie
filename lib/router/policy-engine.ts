@@ -118,6 +118,67 @@ const INTENT_CAPABILITY_WEIGHTS: Record<PolicyIntentLabel, Partial<ModelCapabili
 };
 
 const SELF_REFERENTIAL_PATTERN = /\b(katie|you|your|routing|route|why did you|previous response|continuity|personality|behavior)\b/i;
+const DEBUG_PATTERN = /\b(debug|bug|fix|error|exception|trace|failing|broken)\b/i;
+const ARCHITECTURE_PATTERN = /\b(architecture|system design|tradeoff|scalability|microservice|monolith)\b/i;
+const IMPLEMENTATION_PATTERN = /\b(write|implement|patch|refactor|typescript|python|api|function|class|repo)\b/i;
+const RESEARCH_PATTERN = /\b(research|synthesize|compare sources|literature|survey)\b/i;
+const CREATIVE_PATTERN = /\b(brainstorm|idea|creative|story|tagline)\b/i;
+const PERSONAL_PATTERN = /\b(feel|relationship|personal|anxious|stressed|support)\b/i;
+const EXPLANATION_PATTERN = /\b(how|explain|meta|why)\b/i;
+
+type IntentScoreMap = Record<PolicyIntentLabel, number>;
+
+function emptyIntentScores(): IntentScoreMap {
+  return {
+    quick_factual: 0,
+    debug_diagnosis: 0,
+    architecture_design: 0,
+    implementation_code: 0,
+    research_synthesis: 0,
+    conversation_reflection: 0,
+    explanation_meta: 0,
+    personal_relational: 0,
+    creative_brainstorm: 0
+  };
+}
+
+function parseContextHistory(context: string | string[]): string[] {
+  if (Array.isArray(context)) {
+    return context.map((turn) => turn.trim()).filter(Boolean);
+  }
+  return context
+    .split(/\n{2,}|(?=^\s*(?:user|assistant|system)\s*:)/gim)
+    .map((turn) => turn.trim())
+    .filter(Boolean);
+}
+
+function scoreIntentFromText(text: string): IntentScoreMap {
+  const lowered = text.toLowerCase();
+  const scores = emptyIntentScores();
+
+  if (SELF_REFERENTIAL_PATTERN.test(lowered)) {
+    scores.conversation_reflection += 0.9;
+    scores.explanation_meta += lowered.includes("why") || lowered.includes("route") ? 0.95 : 0.72;
+  }
+  if (DEBUG_PATTERN.test(lowered)) scores.debug_diagnosis += 0.86;
+  if (ARCHITECTURE_PATTERN.test(lowered)) scores.architecture_design += 0.83;
+  if (IMPLEMENTATION_PATTERN.test(lowered)) scores.implementation_code += 0.84;
+  if (RESEARCH_PATTERN.test(lowered)) scores.research_synthesis += 0.8;
+  if (CREATIVE_PATTERN.test(lowered)) scores.creative_brainstorm += 0.78;
+  if (PERSONAL_PATTERN.test(lowered)) scores.personal_relational += 0.8;
+  if (EXPLANATION_PATTERN.test(lowered)) scores.explanation_meta += 0.65;
+  scores.quick_factual += 0.58;
+
+  return scores;
+}
+
+function topIntent(scores: IntentScoreMap): { label: PolicyIntentLabel; confidence: number } {
+  let best: { label: PolicyIntentLabel; confidence: number } = { label: "quick_factual", confidence: 0 };
+  for (const [label, confidence] of Object.entries(scores) as Array<[PolicyIntentLabel, number]>) {
+    if (confidence > best.confidence) best = { label, confidence };
+  }
+  return best;
+}
 
 export function getPolicyConfig(): PolicyConfig {
   return {
@@ -152,21 +213,53 @@ export function getPolicyConfig(): PolicyConfig {
   };
 }
 
-export function classifyPolicyIntent(prompt: string, context: string): { label: PolicyIntentLabel; confidence: number } {
-  const text = prompt.toLowerCase();
-  if (SELF_REFERENTIAL_PATTERN.test(prompt)) {
-    return { label: text.includes("why") || text.includes("route") ? "explanation_meta" : "conversation_reflection", confidence: 0.92 };
+export function classifyPolicyIntent(prompt: string, context: string | string[]): { label: PolicyIntentLabel; confidence: number } {
+  const config = getPolicyConfig();
+  const currentWeight = config.min_current_message_intent_weight;
+  const historyWeightBudget = config.max_context_intent_weight;
+  const historyTurns = parseContextHistory(context);
+
+  const currentScores = scoreIntentFromText(prompt);
+  const blendedScores = emptyIntentScores();
+
+  for (const [label, score] of Object.entries(currentScores) as Array<[PolicyIntentLabel, number]>) {
+    blendedScores[label] += score * currentWeight;
   }
-  if (/\b(debug|bug|fix|error|exception|trace|failing|broken)\b/.test(text)) return { label: "debug_diagnosis", confidence: 0.86 };
-  if (/\b(architecture|system design|tradeoff|scalability|microservice|monolith)\b/.test(text)) return { label: "architecture_design", confidence: 0.83 };
-  if (/\b(write|implement|patch|refactor|typescript|python|api|function|class|repo)\b/.test(text)) return { label: "implementation_code", confidence: 0.84 };
-  if (/\b(research|synthesize|compare sources|literature|survey)\b/.test(text)) return { label: "research_synthesis", confidence: 0.8 };
-  if (/\b(brainstorm|idea|creative|story|tagline)\b/.test(text)) return { label: "creative_brainstorm", confidence: 0.78 };
-  if (/\b(feel|relationship|personal|anxious|stressed|support)\b/.test(text)) return { label: "personal_relational", confidence: 0.8 };
-  const ctxWeight = Math.min(getPolicyConfig().max_context_intent_weight, context ? 0.2 : 0);
-  const promptWeight = Math.max(getPolicyConfig().min_current_message_intent_weight, 1 - ctxWeight);
-  if (/\b(how|explain|meta|why)\b/.test(text)) return { label: "explanation_meta", confidence: 0.65 * promptWeight + 0.35 * ctxWeight };
-  return { label: "quick_factual", confidence: 0.58 * promptWeight + 0.42 * ctxWeight };
+
+  const historyDecayRaw = historyTurns.map((_, index) => 0.5 ** index);
+  const historyDecayTotal = historyDecayRaw.reduce((sum, value) => sum + value, 0);
+  const normalizedHistoryWeights =
+    historyDecayTotal === 0
+      ? []
+      : historyDecayRaw.map((rawWeight) => (rawWeight / historyDecayTotal) * historyWeightBudget);
+
+  const historyAggregate = emptyIntentScores();
+  for (let index = 0; index < historyTurns.length; index += 1) {
+    const turnScores = scoreIntentFromText(historyTurns[index]);
+    for (const [label, score] of Object.entries(turnScores) as Array<[PolicyIntentLabel, number]>) {
+      const weighted = score * (normalizedHistoryWeights[index] ?? 0);
+      blendedScores[label] += weighted;
+      historyAggregate[label] += weighted;
+    }
+  }
+
+  const strongestCurrent = topIntent(currentScores);
+  const strongestHistory = topIntent(historyAggregate);
+
+  // Intent Shift Override:
+  // If the current prompt intent is very strong and the historical winner conflicts heavily,
+  // the latest message should fully control the final choice.
+  const intentShiftOverride =
+    strongestCurrent.confidence > 0.85 &&
+    strongestHistory.confidence > 0 &&
+    strongestCurrent.label !== strongestHistory.label &&
+    strongestCurrent.confidence - strongestHistory.confidence >= 0.25;
+
+  if (intentShiftOverride) {
+    return strongestCurrent;
+  }
+
+  return topIntent(blendedScores);
 }
 
 function estimateComplexity(prompt: string, intent: PolicyIntentLabel): ComplexityLevel {
