@@ -18,7 +18,7 @@ const updateActorSchema = z.object({
   purpose: z.string().trim().min(1)
 });
 
-type ActorRow = {
+type ActorDbRow = {
   id: string;
   name: string;
   system_prompt: string;
@@ -98,14 +98,14 @@ export async function PATCH(request: NextRequest) {
     const now = new Date().toISOString();
     const client = getSupabaseAdminClient();
     const { data, error } = await client
-      .from("actors")
-      .update({
+      .from<ActorDbRow>("actors")
+      .update<ActorDbRow>({
         system_prompt: purpose.trim(),
         updated_at: now
       })
       .eq("id", actorId)
-      .select("id,name,system_prompt,parent_actor_id,created_at,updated_at")
-      .maybeSingle<ActorRow>();
+      .select()
+      .single();
 
     if (error) {
       return NextResponse.json({ error: error.message }, { status: 500 });
