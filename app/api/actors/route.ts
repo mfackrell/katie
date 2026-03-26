@@ -97,8 +97,8 @@ export async function PATCH(request: NextRequest) {
 
     const now = new Date().toISOString();
     const client = getSupabaseAdminClient();
-    const actorsTable = client.from("actors") as any;
-    const { data, error } = await actorsTable
+    const { data, error } = await client
+      .from("actors")
       .update({
         system_prompt: purpose.trim(),
         updated_at: now
