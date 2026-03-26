@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import type { Actor, ChatThread } from "@/lib/types/chat";
 
 interface SidebarProps {
@@ -15,6 +16,7 @@ interface SidebarProps {
   onDeleteActor: (actor: Actor) => void;
   onDeleteChat: (chat: ChatThread) => void | Promise<void>;
   onError: (message: string) => void;
+  onActorPurposeUpdated: (actor: Actor) => void;
   isCreatingChat: (actorId: string) => boolean;
 }
 
@@ -31,9 +33,56 @@ export function Sidebar({
   onDeleteActor,
   onDeleteChat,
   onError,
+  onActorPurposeUpdated,
   isCreatingChat,
 }: SidebarProps) {
   const sortedActors = [...actors].sort((a, b) => a.name.localeCompare(b.name));
+  const activeActor = actors.find((actor) => actor.id === activeActorId) ?? null;
+  const [editing, setEditing] = useState(false);
+  const [draftPurpose, setDraftPurpose] = useState(activeActor?.purpose ?? "");
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    setDraftPurpose(activeActor?.purpose ?? "");
+    setEditing(false);
+    setSaving(false);
+  }, [activeActorId, activeActor?.purpose]);
+
+  async function handleSave() {
+    if (!activeActor || !draftPurpose.trim()) {
+      return;
+    }
+
+    setSaving(true);
+    onActorPurposeUpdated({ ...activeActor, purpose: draftPurpose.trim() });
+
+    try {
+      const response = await fetch(`/api/actors?id=${encodeURIComponent(activeActor.id)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ purpose: draftPurpose.trim() }),
+      });
+
+      if (response.ok) {
+        const payload = (await response.json()) as { actor?: Actor; error?: string };
+        if (payload.actor) {
+          onActorPurposeUpdated(payload.actor);
+          setEditing(false);
+          setDraftPurpose(payload.actor.purpose);
+        }
+      } else {
+        const payload = (await response.json()) as { error?: string };
+        onError(payload.error ?? "Failed to update system prompt.");
+        onActorPurposeUpdated(activeActor);
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to update system prompt.";
+      onError(message);
+      onActorPurposeUpdated(activeActor);
+    } finally {
+      setSaving(false);
+    }
+  }
 
   return (
     <aside className="relative flex h-full min-h-0 w-full flex-col bg-gradient-to-b from-white/[0.03] via-zinc-950/40 to-zinc-950/80 p-4 sm:p-5">
@@ -58,7 +107,60 @@ export function Sidebar({
           </button>
         </div>
 
-        <nav className="min-h-0 flex-1 space-y-3 overflow-y-auto pr-1 pb-4">
+        {activeActor ? (
+          <section className="mb-4 rounded-2xl border border-white/10 bg-white/[0.03] p-3">
+            <div className="flex items-center justify-between gap-2">
+              <h2 className="text-sm font-semibold text-white">{activeActor.name} system prompt</h2>
+              {!editing ? (
+                <button
+                  className="rounded-lg border border-white/10 bg-white/[0.04] px-2.5 py-1 text-[11px] font-medium text-zinc-300 transition hover:border-emerald-400/30 hover:bg-emerald-400/10 hover:text-white"
+                  onClick={() => setEditing(true)}
+                  aria-label="Edit"
+                >
+                  Edit
+                </button>
+              ) : null}
+            </div>
+
+            {!editing ? (
+              <p className="mt-2 whitespace-pre-wrap break-words text-xs leading-5 text-zinc-400">
+                {activeActor.purpose || "Focused branch inheriting parent behavior."}
+              </p>
+            ) : (
+              <div className="mt-3 space-y-2">
+                <textarea
+                  className="min-h-28 w-full rounded-xl border border-white/10 bg-zinc-950/80 px-3 py-2 text-xs text-zinc-100 outline-none focus-visible:ring-2 focus-visible:ring-emerald-400"
+                  value={draftPurpose}
+                  onChange={(event) => setDraftPurpose(event.target.value)}
+                  aria-label="System prompt"
+                />
+                <div className="flex gap-2">
+                  <button
+                    className="rounded-lg border border-emerald-400/40 bg-emerald-500/15 px-3 py-1.5 text-xs font-medium text-emerald-100 transition hover:bg-emerald-500/20 disabled:cursor-not-allowed disabled:opacity-60"
+                    disabled={saving}
+                    onClick={handleSave}
+                    aria-label="Save"
+                  >
+                    {saving ? "Saving..." : "Save"}
+                  </button>
+                  <button
+                    className="rounded-lg border border-white/10 bg-white/[0.04] px-3 py-1.5 text-xs font-medium text-zinc-300 transition hover:border-white/20 hover:bg-white/[0.08] disabled:cursor-not-allowed disabled:opacity-60"
+                    disabled={saving}
+                    onClick={() => {
+                      setEditing(false);
+                      setDraftPurpose(activeActor.purpose);
+                    }}
+                    aria-label="Cancel"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            )}
+          </section>
+        ) : null}
+
+        <nav className="min-h-0 flex-1 space-y-3 overflow-y-auto pb-4 pr-1">
           {sortedActors.map((actor) => {
             const actorChats = chats.filter((chat) => chat.actorId === actor.id);
             const activeActor = actor.id === activeActorId;

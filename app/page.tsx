@@ -328,6 +328,13 @@ export default function HomePage() {
     }
   }
 
+
+  function updateActorPurpose(updatedActor: Actor) {
+    setActors((current) =>
+      current.map((actor) => (actor.id === updatedActor.id ? { ...actor, purpose: updatedActor.purpose } : actor)),
+    );
+  }
+
   async function deleteActor(actor: Actor) {
     setUiError("");
     const response = await fetch(`/api/actors?id=${encodeURIComponent(actor.id)}`, {
@@ -458,6 +465,7 @@ export default function HomePage() {
             onDeleteActor={deleteActor}
             onDeleteChat={deleteChat}
             onError={setUiError}
+            onActorPurposeUpdated={updateActorPurpose}
             isCreatingChat={(actorId) => Boolean(creatingChatByActorId[actorId])}
           />
         </div>
@@ -492,6 +500,7 @@ export default function HomePage() {
             onDeleteActor={deleteActor}
             onDeleteChat={deleteChat}
             onError={setUiError}
+            onActorPurposeUpdated={updateActorPurpose}
             isCreatingChat={(actorId) => Boolean(creatingChatByActorId[actorId])}
           />
         </aside>
