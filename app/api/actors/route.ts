@@ -97,13 +97,14 @@ export async function PATCH(request: NextRequest) {
 
     const now = new Date().toISOString();
     const client = getSupabaseAdminClient();
+    const payload = {
+      id: actorId,
+      system_prompt: purpose.trim(),
+      updated_at: now
+    };
     const { data, error } = await client
       .from("actors")
-      .update({
-        system_prompt: purpose.trim(),
-        updated_at: now
-      })
-      .eq("id", actorId)
+      .upsert(payload, { onConflict: "id" })
       .select(
         "id,name,system_prompt,parent_actor_id,created_at,updated_at"
       )
