@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { deleteActorsById, getActorById, listActors, saveActor } from "@/lib/data/blob-store";
+import { getSupabaseAdminClient } from "@/lib/data/supabase/admin";
 import type { Actor } from "@/lib/types/chat";
 
 const createActorSchema = z.object({
@@ -12,6 +13,19 @@ const createActorSchema = z.object({
 const actorIdParamSchema = z.object({
   id: z.string().min(1)
 });
+
+const updateActorSchema = z.object({
+  purpose: z.string().trim().min(1)
+});
+
+type ActorRow = {
+  id: string;
+  name: string;
+  system_prompt: string;
+  parent_actor_id: string | null;
+  created_at: string;
+  updated_at: string;
+};
 
 function buildActorId(): string {
   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
@@ -69,6 +83,55 @@ export async function POST(request: NextRequest) {
   }
 }
 
+export async function PATCH(request: NextRequest) {
+  const url = new URL(request.url);
+
+  try {
+    const { id: actorId } = actorIdParamSchema.parse({ id: url.searchParams.get("id") });
+    const { purpose } = updateActorSchema.parse(await request.json());
+
+    const existingActor = await getActorById(actorId);
+    if (!existingActor) {
+      return NextResponse.json({ error: `Actor not found: ${actorId}` }, { status: 404 });
+    }
+
+    const now = new Date().toISOString();
+    const client = getSupabaseAdminClient();
+    const actorsTable = client.from("actors") as any;
+    const { data, error } = await actorsTable
+      .update({
+        system_prompt: purpose.trim(),
+        updated_at: now
+      })
+      .eq("id", actorId)
+      .select("id,name,system_prompt,parent_actor_id,created_at,updated_at")
+      .maybeSingle<ActorRow>();
+
+    if (error) {
+      return NextResponse.json({ error: error.message }, { status: 500 });
+    }
+
+    if (!data) {
+      return NextResponse.json({ error: `Actor not found: ${actorId}` }, { status: 404 });
+    }
+
+    return NextResponse.json({
+      actor: {
+        id: data.id,
+        name: data.name,
+        purpose: data.system_prompt,
+        ...(data.parent_actor_id ? { parentId: data.parent_actor_id } : {})
+      }
+    });
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      return NextResponse.json({ error: "Invalid request payload" }, { status: 400 });
+    }
+
+    const message = error instanceof Error ? error.message : "Unknown persistence error";
+    return NextResponse.json({ error: message }, { status: 500 });
+  }
+}
 
 export async function DELETE(request: NextRequest) {
   const url = new URL(request.url);
