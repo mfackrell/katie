@@ -107,14 +107,10 @@ export async function PATCH(request: NextRequest) {
       .select(
         "id,name,system_prompt,parent_actor_id,created_at,updated_at"
       )
-      .maybeSingle<ActorDbRow>();
+      .single<ActorDbRow>();
 
     if (error) {
       return NextResponse.json({ error: error.message }, { status: 500 });
-    }
-
-    if (!data) {
-      return NextResponse.json({ error: `Actor not found: ${actorId}` }, { status: 404 });
     }
 
     return NextResponse.json({
