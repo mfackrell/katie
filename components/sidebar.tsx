@@ -109,23 +109,14 @@ export function Sidebar({
 
         {activeActor ? (
           <section className="mb-4 rounded-2xl border border-white/10 bg-white/[0.03] p-3">
-            <div className="flex items-center justify-between gap-2">
-              <h2 className="text-sm font-semibold text-white">{activeActor.name} system prompt</h2>
-              {!editing ? (
-                <button
-                  className="rounded-lg border border-white/10 bg-white/[0.04] px-2.5 py-1 text-[11px] font-medium text-zinc-300 transition hover:border-emerald-400/30 hover:bg-emerald-400/10 hover:text-white"
-                  onClick={() => setEditing(true)}
-                  aria-label="Edit"
-                >
-                  Edit
-                </button>
-              ) : null}
-            </div>
-
             {!editing ? (
-              <p className="mt-2 whitespace-pre-wrap break-words text-xs leading-5 text-zinc-400">
-                {activeActor.purpose || "Focused branch inheriting parent behavior."}
-              </p>
+              <button
+                className="w-full rounded-lg border border-white/10 bg-white/[0.04] px-3 py-2 text-left text-xs font-medium text-zinc-300 transition hover:border-emerald-400/30 hover:bg-emerald-400/10 hover:text-white"
+                onClick={() => setEditing(true)}
+                aria-label="Edit system instruction"
+              >
+                Edit system instruction
+              </button>
             ) : (
               <div className="mt-3 space-y-2">
                 <textarea
