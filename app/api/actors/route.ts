@@ -98,14 +98,16 @@ export async function PATCH(request: NextRequest) {
     const now = new Date().toISOString();
     const client = getSupabaseAdminClient();
     const { data, error } = await client
-      .from<ActorDbRow>("actors")
-      .update<ActorDbRow>({
+      .from("actors")
+      .update({
         system_prompt: purpose.trim(),
         updated_at: now
       })
       .eq("id", actorId)
-      .select()
-      .single();
+      .select(
+        "id,name,system_prompt,parent_actor_id,created_at,updated_at"
+      )
+      .maybeSingle<ActorDbRow>();
 
     if (error) {
       return NextResponse.json({ error: error.message }, { status: 500 });
