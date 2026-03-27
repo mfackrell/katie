@@ -8,7 +8,24 @@ function isWebSearchIntent(requestIntent: string | undefined): boolean {
   return requestIntent === "web-search" || requestIntent === "news-summary";
 }
 
-function extractResponseText(response: OpenAI.Responses.Response): string {
+type ResponseTextSource = {
+  output_text?: string | null;
+  output?: Array<{ content?: Array<{ text?: string }> }>;
+};
+
+type GrokResponseInputMessage = {
+  role: "system" | "user";
+  content: Array<{ type: "input_text"; text: string }>;
+};
+
+type GrokWebSearchResponse = {
+  output_text?: string | null;
+  output?: Array<{
+    content?: Array<{ text?: string }>;
+  }>;
+};
+
+function extractResponseText(response: ResponseTextSource): string {
   if (response.output_text?.trim()) {
     return response.output_text;
   }
@@ -23,6 +40,7 @@ function extractResponseText(response: OpenAI.Responses.Response): string {
 export class GrokProvider implements LlmProvider {
   name = "grok" as const;
   private client: OpenAI;
+  private apiKey: string;
   private defaultModel = "grok-2-1212";
   private aliasToModel: Record<string, string> = {
     "grok-imagine": this.defaultModel,
@@ -30,11 +48,75 @@ export class GrokProvider implements LlmProvider {
   };
 
   constructor(apiKey: string) {
+    this.apiKey = apiKey;
     this.client = new OpenAI({
       apiKey,
       baseURL: "https://api.x.ai/v1",
       fetch: globalThis.fetch.bind(globalThis)
     });
+  }
+
+  private buildWebSearchInput(params: ChatGenerateParams, attachmentContext: string | null): GrokResponseInputMessage[] {
+    return [
+      {
+        role: "system",
+        content: [{ type: "input_text", text: `${MATH_EXECUTION_PROTOCOL}\n\nCORE_PERSONA: ${params.persona}` }]
+      },
+      {
+        role: "system",
+        content: [{ type: "input_text", text: `MEMORY_CONTEXT:\n${params.summary}\nEND_MEMORY_CONTEXT` }]
+      },
+      {
+        role: "system",
+        content: [{ type: "input_text", text: buildMemoryContext(params.history) }]
+      },
+      ...(attachmentContext
+        ? [
+            {
+              role: "system" as const,
+              content: [{ type: "input_text" as const, text: attachmentContext }]
+            },
+            {
+              role: "system" as const,
+              content: [
+                {
+                  type: "input_text" as const,
+                  text: "IMPORTANT: Attachment previews are truncated excerpts, not full files."
+                }
+              ]
+            }
+          ]
+        : []),
+      { role: "user", content: [{ type: "input_text", text: params.user }] }
+    ];
+  }
+
+  private async createWebSearchResponse(model: string, input: GrokResponseInputMessage[]): Promise<GrokWebSearchResponse> {
+    const response = await fetch("https://api.x.ai/v1/responses", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${this.apiKey}`
+      },
+      body: JSON.stringify({
+        model,
+        input,
+        tools: [{ type: "web_search" }]
+      })
+    });
+
+    if (!response.ok) {
+      const bodyText = await response.text().catch(() => "");
+      throw new Error(
+        `xAI Responses API failed (${response.status}${response.statusText ? ` ${response.statusText}` : ""})${bodyText ? `: ${bodyText}` : ""}`
+      );
+    }
+
+    const parsed: unknown = await response.json();
+    if (!parsed || typeof parsed !== "object") {
+      throw new Error("xAI Responses API returned a non-object JSON payload.");
+    }
+    return parsed as GrokWebSearchResponse;
   }
 
   async listModels(): Promise<string[]> {
@@ -81,47 +163,8 @@ export class GrokProvider implements LlmProvider {
       messages.push({ role: "user", content: params.user });
 
       if (isWebSearchIntent(params.requestIntent)) {
-        const input: OpenAI.Responses.ResponseInput = [
-          {
-            role: "system",
-            content: [{ type: "input_text", text: `${MATH_EXECUTION_PROTOCOL}\n\nCORE_PERSONA: ${params.persona}` }]
-          },
-          {
-            role: "system",
-            content: [{ type: "input_text", text: `MEMORY_CONTEXT:\n${params.summary}\nEND_MEMORY_CONTEXT` }]
-          },
-          {
-            role: "system",
-            content: [{ type: "input_text", text: buildMemoryContext(params.history) }]
-          },
-          ...(attachmentContext
-            ? [
-                {
-                  role: "system" as const,
-                  content: [{ type: "input_text" as const, text: attachmentContext }]
-                },
-                {
-                  role: "system" as const,
-                  content: [
-                    {
-                      type: "input_text" as const,
-                      text: "IMPORTANT: Attachment previews are truncated excerpts, not full files."
-                    }
-                  ]
-                }
-              ]
-            : []),
-          { role: "user", content: [{ type: "input_text", text: params.user }] }
-        ];
-
-
-        const grokWebSearchTool = { type: "web_search" } as unknown as OpenAI.Responses.Tool;
-
-        const response = await this.client.responses.create({
-          model: selectedModel,
-          input,
-          tools: [grokWebSearchTool]
-        });
+        const input = this.buildWebSearchInput(params, attachmentContext);
+        const response = await this.createWebSearchResponse(selectedModel, input);
 
         return {
           text: extractResponseText(response),
