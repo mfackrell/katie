@@ -109,45 +109,13 @@ export function Sidebar({
 
         {activeActor ? (
           <section className="mb-4 rounded-2xl border border-white/10 bg-white/[0.03] p-3">
-            {!editing ? (
-              <button
-                className="w-full rounded-lg border border-white/10 bg-white/[0.04] px-3 py-2 text-left text-xs font-medium text-zinc-300 transition hover:border-emerald-400/30 hover:bg-emerald-400/10 hover:text-white"
-                onClick={() => setEditing(true)}
-                aria-label="Edit system instruction"
-              >
-                Edit system instruction
-              </button>
-            ) : (
-              <div className="mt-3 space-y-2">
-                <textarea
-                  className="min-h-28 w-full rounded-xl border border-white/10 bg-zinc-950/80 px-3 py-2 text-xs text-zinc-100 outline-none focus-visible:ring-2 focus-visible:ring-emerald-400"
-                  value={draftPurpose}
-                  onChange={(event) => setDraftPurpose(event.target.value)}
-                  aria-label="System prompt"
-                />
-                <div className="flex gap-2">
-                  <button
-                    className="rounded-lg border border-emerald-400/40 bg-emerald-500/15 px-3 py-1.5 text-xs font-medium text-emerald-100 transition hover:bg-emerald-500/20 disabled:cursor-not-allowed disabled:opacity-60"
-                    disabled={saving}
-                    onClick={handleSave}
-                    aria-label="Save"
-                  >
-                    {saving ? "Saving..." : "Save"}
-                  </button>
-                  <button
-                    className="rounded-lg border border-white/10 bg-white/[0.04] px-3 py-1.5 text-xs font-medium text-zinc-300 transition hover:border-white/20 hover:bg-white/[0.08] disabled:cursor-not-allowed disabled:opacity-60"
-                    disabled={saving}
-                    onClick={() => {
-                      setEditing(false);
-                      setDraftPurpose(activeActor.purpose);
-                    }}
-                    aria-label="Cancel"
-                  >
-                    Cancel
-                  </button>
-                </div>
-              </div>
-            )}
+            <button
+              className="w-full rounded-lg border border-white/10 bg-white/[0.04] px-3 py-2 text-left text-xs font-medium text-zinc-300 transition hover:border-emerald-400/30 hover:bg-emerald-400/10 hover:text-white"
+              onClick={() => setEditing(true)}
+              aria-label="Edit system instruction"
+            >
+              Edit system instruction
+            </button>
           </section>
         ) : null}
 
@@ -266,6 +234,65 @@ export function Sidebar({
           })}
         </nav>
       </div>
+
+      {activeActor && editing ? (
+        <div className="fixed inset-0 z-50 flex min-h-screen items-center justify-center bg-black/80 p-4 backdrop-blur-md sm:p-6">
+          <div className="absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(56,189,248,0.12),transparent_35%),radial-gradient(circle_at_bottom,rgba(16,185,129,0.1),transparent_32%)]" />
+          <div className="relative flex h-full w-full max-w-5xl flex-col overflow-hidden rounded-[28px] border border-white/10 bg-zinc-950/95 shadow-[0_30px_90px_rgba(0,0,0,0.6)]">
+            <div className="pointer-events-none absolute inset-0 bg-gradient-to-b from-white/[0.04] via-transparent to-transparent" />
+            <div className="relative flex items-start justify-between gap-4 border-b border-white/10 px-5 py-5 sm:px-7">
+              <div>
+                <p className="text-[11px] font-semibold uppercase tracking-[0.28em] text-zinc-500">Actor setup</p>
+                <h2 className="mt-2 text-2xl font-semibold tracking-tight text-white">Edit System Instruction</h2>
+                <p className="mt-2 text-sm text-zinc-400">Tune this actor&apos;s behavior and execution context without changing any backend logic.</p>
+              </div>
+              <button
+                className="rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-2 text-sm text-zinc-300 transition hover:border-white/20 hover:bg-white/[0.08] hover:text-white disabled:cursor-not-allowed disabled:opacity-60"
+                disabled={saving}
+                onClick={() => {
+                  setEditing(false);
+                  setDraftPurpose(activeActor.purpose);
+                }}
+                aria-label="Close editor"
+              >
+                Close
+              </button>
+            </div>
+
+            <div className="relative flex min-h-0 flex-1 flex-col px-5 py-5 sm:px-7">
+              <label className="mb-3 block text-xs font-semibold uppercase tracking-[0.24em] text-zinc-500">Purpose / System Prompt</label>
+              <textarea
+                className="min-h-0 flex-1 resize-none rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-3 text-sm leading-7 text-zinc-100 outline-none focus-visible:ring-2 focus-visible:ring-emerald-400"
+                value={draftPurpose}
+                onChange={(event) => setDraftPurpose(event.target.value)}
+                aria-label="System prompt"
+              />
+            </div>
+
+            <div className="relative flex justify-end gap-3 border-t border-white/10 px-5 py-5 sm:px-7">
+              <button
+                className="rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-2.5 text-sm font-medium text-zinc-300 transition hover:border-white/20 hover:bg-white/[0.08] hover:text-white disabled:cursor-not-allowed disabled:opacity-60"
+                disabled={saving}
+                onClick={() => {
+                  setEditing(false);
+                  setDraftPurpose(activeActor.purpose);
+                }}
+                aria-label="Cancel"
+              >
+                Cancel
+              </button>
+              <button
+                className="rounded-2xl border border-emerald-400/40 bg-gradient-to-r from-sky-500 to-emerald-500 px-4 py-2.5 text-sm font-semibold text-white shadow-[0_14px_30px_rgba(14,165,233,0.25)] transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-70"
+                disabled={saving}
+                onClick={handleSave}
+                aria-label="Save"
+              >
+                {saving ? "Saving..." : "Save"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </aside>
   );
 }
