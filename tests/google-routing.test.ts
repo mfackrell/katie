@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  hasDirectWebSearchHint,
   inferRequestIntent,
   scoreModelCandidateWithBreakdown,
   validateRoutingDecision
@@ -176,6 +177,13 @@ test("rewrite prompts are classified and favor claude-family models", async () =
 
 test("news and current-events prompts are classified as web search", async () => {
   assert.equal(await inferRequestIntent("What happened in AI news today?", false), "web-search");
+});
+
+test("url and video prompt hints force web-search classification", async () => {
+  assert.equal(hasDirectWebSearchHint("Please summarize https://example.com/post"), true);
+  assert.equal(hasDirectWebSearchHint("Can you watch this youtube clip and recap it?"), true);
+  assert.equal(await inferRequestIntent("Can you summarize this link: https://example.com/post", false), "web-search");
+  assert.equal(await inferRequestIntent("watch this mp4 and summarize it", false), "web-search");
 });
 
 test("web-search intent excludes models without web-search capability", async () => {

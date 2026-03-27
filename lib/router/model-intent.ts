@@ -125,6 +125,13 @@ const intentDescriptions: Record<RequestIntent, string> = {
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
+const URL_REGEX = /(https?:\/\/[^\s]+)/i;
+const VIDEO_HINTS_REGEX = /\b(youtube|youtu\.be|vimeo|video|watch|mp4|mov)\b/i;
+
+export function hasDirectWebSearchHint(prompt: string): boolean {
+  return URL_REGEX.test(prompt) || VIDEO_HINTS_REGEX.test(prompt);
+}
+
 async function classifyIntentWithLLM(prompt: string, intents: RequestIntent[]): Promise<RequestIntent | null> {
   if (!process.env.OPENAI_API_KEY) {
     console.warn("[Intent Classifier] OPENAI_API_KEY is not configured. Falling back to heuristic defaults.");
@@ -209,6 +216,11 @@ ${intentGuide}
 }
 
 export async function inferRequestIntent(prompt: string, hasImages: boolean): Promise<RequestIntent> {
+  // 0. Hard rule: obvious links and video references should always route through web search.
+  if (hasDirectWebSearchHint(prompt)) {
+    return "web-search";
+  }
+
   const availableIntents: RequestIntent[] = [
     "web-search",
     "news-summary",
