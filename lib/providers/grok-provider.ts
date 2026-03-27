@@ -15,8 +15,7 @@ function extractResponseText(response: OpenAI.Responses.Response): string {
 
   return (response.output ?? [])
     .flatMap((item) => ("content" in item && Array.isArray(item.content) ? item.content : []))
-    .filter((part): part is { text: string } => "text" in part && typeof part.text === "string")
-    .map((part) => part.text)
+    .flatMap((part) => ("text" in part && typeof part.text === "string" ? [part.text] : []))
     .join("\n")
     .trim();
 }
