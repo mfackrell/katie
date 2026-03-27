@@ -3,9 +3,11 @@ import assert from "node:assert/strict";
 import {
   hasDirectWebSearchHint,
   inferRequestIntent,
+  scoreModelsForIntent,
   scoreModelCandidateWithBreakdown,
   validateRoutingDecision
 } from "../lib/router/model-intent";
+import { chooseProvider } from "../lib/router/master-router";
 import { isAcknowledgment, parseIntentSessionState } from "../lib/router/intent-context";
 import { isBlockedRoutingModel } from "../lib/router/routing-model-filters";
 import {
@@ -211,6 +213,89 @@ test("technical debugging still prefers stronger technical models", async () => 
 
   assert.equal(validated.modelId, "o3-pro");
   assert.equal(validated.changed, true);
+});
+
+test("full ranking log includes every scored model in descending order", async () => {
+  const providers = [
+    provider("openai", ["gpt-5.2-unified", "gpt-5.2-mini"]),
+    provider("google", ["gemini-3.1-pro"]),
+    provider("anthropic", ["claude-4.5-sonnet"])
+  ].map(({ provider: instance }) => instance);
+  const expectedTotalModels = 4;
+
+  const capturedLogs: string[] = [];
+  const originalInfo = console.info;
+  console.info = (...args: unknown[]) => {
+    capturedLogs.push(args.map((arg) => String(arg)).join(" "));
+  };
+
+  try {
+    await chooseProvider("Route this generally.", "", providers, {
+      requestIntent: "general-text",
+      routingRequestId: "test-ranking-log"
+    });
+  } finally {
+    console.info = originalInfo;
+  }
+
+  const rankingLog = capturedLogs.find((line) => line.startsWith("[Router RANKING] "));
+  assert.ok(rankingLog, "expected [Router RANKING] log line");
+  const payload = JSON.parse((rankingLog ?? "").replace("[Router RANKING] ", "")) as {
+    requestId: string;
+    intent: string;
+    ranking: Array<{ provider: string; model: string; score: number }>;
+  };
+
+  assert.equal(payload.requestId, "test-ranking-log");
+  assert.equal(payload.intent, "general-text");
+  assert.equal(payload.ranking.length, expectedTotalModels);
+  const rankedKeys = payload.ranking.map((entry) => `${entry.provider}:${entry.model}`);
+  assert.ok(rankedKeys.includes("openai:gpt-5.2-unified"));
+  assert.ok(rankedKeys.includes("openai:gpt-5.2-mini"));
+  assert.ok(rankedKeys.includes("google:gemini-3.1-pro"));
+  assert.ok(rankedKeys.includes("anthropic:claude-4.5-sonnet"));
+  for (let index = 1; index < payload.ranking.length; index += 1) {
+    assert.ok(payload.ranking[index - 1].score >= payload.ranking[index].score, "ranking should be descending");
+  }
+});
+
+test("prompt containing Claude boosts anthropic scores by 5 points", async () => {
+  const candidates = [
+    provider("anthropic", ["claude-4.5-sonnet"]),
+    provider("openai", ["gpt-5.2-mini"])
+  ];
+  const unboosted = scoreModelsForIntent(candidates, "general-text", "");
+  const boosted = scoreModelsForIntent(candidates, "general-text", "Can Claude handle this?");
+  const anthropicUnboosted = unboosted.find((candidate) => candidate.provider.name === "anthropic");
+  const anthropicBoosted = boosted.find((candidate) => candidate.provider.name === "anthropic");
+
+  assert.ok(anthropicUnboosted);
+  assert.ok(anthropicBoosted);
+  assert.equal((anthropicBoosted?.score ?? 0) - (anthropicUnboosted?.score ?? 0), 5);
+});
+
+test('prompt "Claude, what do you think?" routes to anthropic model', async () => {
+  const decision = await chooseProvider(
+    "Claude, what do you think?",
+    "",
+    [provider("anthropic", ["claude-4.5-sonnet"]).provider, provider("google", ["gemini-3.1-pro"]).provider],
+    { requestIntent: "general-text", routingRequestId: "test-claude-routing" }
+  );
+
+  assert.equal(decision.provider.name, "anthropic");
+  assert.equal(decision.modelId, "claude-4.5-sonnet");
+});
+
+test("assistant-reflection intent prioritizes higher-quality model over cheaper option", async () => {
+  const decision = await chooseProvider(
+    "Evaluate your own output.",
+    "",
+    [provider("openai", ["gpt-5.3-codex"]).provider, provider("google", ["gemini-3.1-flash"]).provider],
+    { requestIntent: "assistant-reflection", routingRequestId: "test-reflection-routing" }
+  );
+
+  assert.equal(decision.provider.name, "openai");
+  assert.equal(decision.modelId, "gpt-5.3-codex");
 });
 
 test("acknowledgment detector only matches short, explicit confirmations", async () => {
