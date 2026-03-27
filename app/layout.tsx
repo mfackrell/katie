@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import "./globals.css";
+import Notepad from "@/components/Notepad";
 
 export const metadata: Metadata = {
   title: "Katie - AI Command Center",
@@ -9,7 +10,10 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en" className="dark">
-      <body>{children}</body>
+      <body>
+        {children}
+        <Notepad />
+      </body>
     </html>
   );
 }
