@@ -190,11 +190,30 @@ test("url and video prompt hints force web-search classification", async () => {
 
 test("web-search intent excludes models without web-search capability", async () => {
   const claude = scoreModelCandidateWithBreakdown("anthropic", "claude-4.5-sonnet", "web-search");
-  const grok = scoreModelCandidateWithBreakdown("grok", "grok-2-1212", "web-search");
+  const grok3Mini = scoreModelCandidateWithBreakdown("grok", "grok-3-mini", "web-search");
+  const grok2 = scoreModelCandidateWithBreakdown("grok", "grok-2-1212", "web-search");
+  const grok4 = scoreModelCandidateWithBreakdown("grok", "grok-4-0709", "web-search");
 
   assert.equal(claude.excluded, true);
   assert.equal(claude.exclusionReason, "missing_web_search_capability");
-  assert.equal(grok.excluded, false);
+  assert.equal(grok3Mini.excluded, true);
+  assert.equal(grok3Mini.exclusionReason, "missing_web_search_capability");
+  assert.equal(grok2.excluded, true);
+  assert.equal(grok2.exclusionReason, "missing_web_search_capability");
+  assert.equal(grok4.excluded, false);
+});
+
+test("web-search ranking excludes unsupported grok models", async () => {
+  const candidates = [
+    provider("grok", ["grok-3-mini", "grok-2-1212", "grok-4-0709"]),
+    provider("openai", ["gpt-5.2-mini"])
+  ];
+  const scored = scoreModelsForIntent(candidates, "web-search", "");
+  const grokCandidateKeys = scored
+    .filter((candidate) => candidate.provider.name === "grok")
+    .map((candidate) => candidate.modelId);
+
+  assert.deepEqual(grokCandidateKeys, ["grok-4-0709"]);
 });
 
 test("gemini remains a first-class candidate for general text", async () => {

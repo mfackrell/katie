@@ -92,7 +92,7 @@ function isVisionAnalysisModel(providerName: ProviderName, modelId: string): boo
 function supportsWebSearch(providerName: ProviderName, modelId: string): boolean {
   const normalizedModel = modelId.toLowerCase();
   if (providerName === "grok") {
-    return !isImageGenerationModel(providerName, modelId);
+    return !isImageGenerationModel(providerName, modelId) && normalizedModel.includes("grok-4");
   }
   if (providerName === "openai") {
     return normalizedModel.includes("search") || normalizedModel.includes("gpt-5") || normalizedModel.includes("gpt-4.1");
