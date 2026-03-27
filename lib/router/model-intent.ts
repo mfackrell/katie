@@ -3,6 +3,7 @@ import {
   isVisionAnalysisModel as isGoogleVisionAnalysisModel
 } from "@/lib/providers/google-model-capabilities";
 import { LlmProvider } from "@/lib/providers/types";
+import OpenAI from "openai";
 
 export type ProviderName = "openai" | "google" | "grok" | "anthropic";
 export type RoutingChoice = { providerName: ProviderName; modelId: string };
@@ -126,39 +127,30 @@ const intentDescriptions: Record<RequestIntent, string> = {
   "image-generation": "For creating or generating images, photos, or digital art."
 };
 
-let openaiClient:
-  | {
-      chat: {
-        completions: {
-          create: (args: unknown) => Promise<{ choices: Array<{ message?: { content?: string | null } }> }>;
-        };
-      };
-    }
-  | null
-  | undefined;
+let openaiClient: OpenAI | null | undefined;
 
-async function getOpenAIClient() {
-  if (openaiClient !== undefined) {
-    return openaiClient;
+type OpenAIClientResult =
+  | { client: OpenAI; reason: null }
+  | { client: null; reason: "missing_key" }
+  | { client: null; reason: "init_failed"; error: unknown };
+
+async function getOpenAIClient(): Promise<OpenAIClientResult> {
+  if (openaiClient instanceof OpenAI) {
+    return { client: openaiClient, reason: null };
   }
 
-  if (!process.env.OPENAI_API_KEY) {
+  const apiKey = process.env.OPENAI_API_KEY?.trim();
+  if (!apiKey) {
     openaiClient = null;
-    return openaiClient;
+    return { client: null, reason: "missing_key" };
   }
 
   try {
-    const dynamicImport = new Function("specifier", "return import(specifier);") as (specifier: string) => Promise<{
-      default: new (args: { apiKey?: string }) => NonNullable<typeof openaiClient>;
-    }>;
-    const loaded = await dynamicImport("openai");
-    const OpenAI = loaded.default;
-    openaiClient = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-    return openaiClient;
+    openaiClient = new OpenAI({ apiKey });
+    return { client: openaiClient, reason: null };
   } catch (error) {
-    console.warn("[Intent Classifier] openai package unavailable. Falling back to heuristic defaults.", error);
     openaiClient = null;
-    return openaiClient;
+    return { client: null, reason: "init_failed", error };
   }
 }
 
@@ -194,11 +186,20 @@ export function userPreferredProviderBoost(prompt: string, providerName: Provide
 }
 
 async function classifyIntentWithLLM(prompt: string, intents: RequestIntent[]): Promise<RequestIntent | null> {
-  const openai = await getOpenAIClient();
-  if (!openai) {
-    console.warn("[Intent Classifier] OPENAI_API_KEY is not configured. Falling back to heuristic defaults.");
+  const openaiClientResult = await getOpenAIClient();
+  if (!openaiClientResult.client) {
+    if (openaiClientResult.reason === "missing_key") {
+      console.warn("[Intent Classifier] OPENAI_API_KEY is not configured. Falling back to heuristic defaults.");
+    } else {
+      console.warn(
+        "[Intent Classifier] OpenAI client initialization failed. Falling back to heuristic defaults.",
+        openaiClientResult.error
+      );
+    }
     return null;
   }
+
+  const openai = openaiClientResult.client;
 
   const intentGuide = intents.map((intent) => `- ${intent}: ${intentDescriptions[intent]}`).join("\n");
   const examples = [
