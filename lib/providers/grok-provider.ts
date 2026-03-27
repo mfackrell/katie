@@ -114,10 +114,13 @@ export class GrokProvider implements LlmProvider {
           { role: "user", content: [{ type: "input_text", text: params.user }] }
         ];
 
+
+        const grokWebSearchTool = { type: "web_search" } as unknown as OpenAI.Responses.Tool;
+
         const response = await this.client.responses.create({
           model: selectedModel,
           input,
-          tools: [{ type: "web_search" as any }]
+          tools: [grokWebSearchTool]
         });
 
         return {
