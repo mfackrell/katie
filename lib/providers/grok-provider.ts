@@ -117,7 +117,7 @@ export class GrokProvider implements LlmProvider {
         const response = await this.client.responses.create({
           model: selectedModel,
           input,
-          tools: [{ type: "web_search_preview" }]
+          tools: [{ type: "web_search" as any }]
         });
 
         return {
