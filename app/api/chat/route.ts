@@ -5,7 +5,7 @@ import { maybeUpdateSummary } from "@/lib/memory/summarizer";
 import { saveMessage, setShortTermMemory } from "@/lib/data/blob-store";
 import { getAvailableProviders } from "@/lib/providers";
 import { chooseProvider } from "@/lib/router/master-router";
-import { inferRequestIntent, RequestIntent } from "@/lib/router/model-intent";
+import { hasDirectWebSearchHint, inferRequestIntent, RequestIntent } from "@/lib/router/model-intent";
 import {
   ACK_CONTEXT_TTL_MS,
   isAcknowledgment,
@@ -191,12 +191,15 @@ export async function POST(request: NextRequest) {
       const hasImageAttachments =
         Array.isArray(attachments) && attachments.some((attachment) => attachment.mimeType.startsWith("image/"));
       const hasVisualInput = hasImages || hasImageAttachments;
+      const explicitIntent: RequestIntent | undefined = hasDirectWebSearchHint(message) ? "web-search" : undefined;
       const now = Date.now();
       const intentSession = parseIntentSessionState(shortTermMemory);
       const isAckMessage = isAcknowledgment(message);
       let requestIntent: RequestIntent;
 
-      if (
+      if (explicitIntent) {
+        requestIntent = explicitIntent;
+      } else if (
         isAckMessage &&
         intentSession.lastSubstantiveIntent &&
         intentSession.lastIntentTimestamp &&
@@ -224,7 +227,7 @@ export async function POST(request: NextRequest) {
       const routingContext = `\n  Persona: ${persona}\n  Rolling Summary: ${summary}\n  Recent History: ${JSON.stringify(history.slice(-3))}\n  Has Attached Images: ${hasVisualInput}\n`;
       const routingDecision = await chooseProvider(message, routingContext, providers, {
         hasImages: hasVisualInput,
-        requestIntent,
+        requestIntent: explicitIntent ?? requestIntent,
         routingTraceEnabled,
         routingRequestId: request.headers.get("x-request-id") ?? undefined
       });
