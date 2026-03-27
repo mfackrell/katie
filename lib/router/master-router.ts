@@ -1,4 +1,5 @@
 import {
+  chooseRoutingWithLLM,
   CandidateScoreBreakdown,
   inferRequestIntent,
   RequestIntent,
@@ -61,9 +62,10 @@ type RoutingTrace = {
 
 function topRoutingCandidates(
   availableByProvider: Array<{ provider: LlmProvider; models: string[] }>,
-  intent: Awaited<ReturnType<typeof inferRequestIntent>>
+  intent: Awaited<ReturnType<typeof inferRequestIntent>>,
+  prompt: string
 ): string {
-  return scoreModelsForIntent(availableByProvider, intent)
+  return scoreModelsForIntent(availableByProvider, intent, prompt)
     .slice(0, 3)
     .map(({ provider, modelId, score }) => `${provider.name}:${modelId}(${score})`)
     .join(", ");
@@ -72,11 +74,25 @@ function topRoutingCandidates(
 function logRoutingDecision(
   intent: Awaited<ReturnType<typeof inferRequestIntent>>,
   availableByProvider: Array<{ provider: LlmProvider; models: string[] }>,
+  prompt: string,
   selectedProviderName: string,
   selectedModelId: string
 ): void {
-  const candidates = topRoutingCandidates(availableByProvider, intent) || "none";
+  const candidates = topRoutingCandidates(availableByProvider, intent, prompt) || "none";
   console.info(`[Router] intent=${intent} top_candidates=${candidates} selected=${selectedProviderName}:${selectedModelId}`);
+}
+
+function logFullRanking(
+  requestId: string,
+  intent: Awaited<ReturnType<typeof inferRequestIntent>>,
+  rankedCandidates: Array<{ provider: LlmProvider; modelId: string; score: number }>
+): void {
+  const ranking = rankedCandidates.map((candidate) => ({
+    provider: candidate.provider.name,
+    model: candidate.modelId,
+    score: candidate.score
+  }));
+  console.info(`[Router RANKING] ${JSON.stringify({ requestId, intent, ranking })}`);
 }
 
 function isRoutingTraceEnabled(perRequestOverride?: boolean): boolean {
@@ -119,7 +135,7 @@ function buildRoutingTrace({
   selectedModelId: string;
   overrideReason: string | null;
 }): RoutingTrace {
-  const scoredCandidates = scoreModelsForIntent(availableByProvider, intent).map(({ provider, modelId, score }) => ({
+  const scoredCandidates = scoreModelsForIntent(availableByProvider, intent, prompt).map(({ provider, modelId, score }) => ({
     provider: provider.name,
     model_id: modelId,
     score
@@ -177,6 +193,7 @@ function buildSelectionExplainer({
   selectedProviderName,
   selectedModelId,
   intent,
+  prompt,
   availableByProvider,
   overrideReason,
   summary
@@ -184,11 +201,12 @@ function buildSelectionExplainer({
   selectedProviderName: string;
   selectedModelId: string;
   intent: Awaited<ReturnType<typeof inferRequestIntent>>;
+  prompt: string;
   availableByProvider: Array<{ provider: LlmProvider; models: string[] }>;
   overrideReason: string | null;
   summary: string;
 }): SelectionExplainer {
-  const scoredCandidates = scoreModelsForIntent(availableByProvider, intent).map(({ provider, modelId, score }) => ({
+  const scoredCandidates = scoreModelsForIntent(availableByProvider, intent, prompt).map(({ provider, modelId, score }) => ({
     model: `${provider.name}:${modelId}`,
     score
   }));
@@ -329,6 +347,7 @@ export async function chooseProvider(
           selectedProviderName: base.provider.name,
           selectedModelId: base.modelId,
           intent,
+          prompt,
           availableByProvider,
           overrideReason: base.overrideReason,
           summary: base.summary
@@ -357,6 +376,7 @@ export async function chooseProvider(
           selectedProviderName: base.provider.name,
           selectedModelId: base.modelId,
           intent,
+          prompt,
           availableByProvider,
           overrideReason: base.overrideReason,
           summary: `${base.summary} Policy mode=${evaluation.trace.mode}.`
@@ -380,6 +400,7 @@ export async function chooseProvider(
         selectedProviderName: evaluation.selected.provider.name,
         selectedModelId: evaluation.selected.modelId,
         intent,
+        prompt,
         availableByProvider,
         overrideReason: `policy_enforced:${evaluation.trace.selection_summary}`,
         summary: `${base.summary} Policy mode=${evaluation.trace.mode}.`
@@ -407,13 +428,35 @@ export async function chooseProvider(
   const traceRequestId = options?.routingRequestId ?? crypto.randomUUID();
   const traceTimestamp = new Date().toISOString();
   const policyConfig = getPolicyConfig();
-  rankedCandidates = scoreModelsForIntent(availableByProvider, intent);
+  rankedCandidates = scoreModelsForIntent(availableByProvider, intent, prompt);
+  const llmRouting = await chooseRoutingWithLLM({
+    prompt,
+    intent,
+    candidates: rankedCandidates.map((candidate) => ({
+      providerName: candidate.provider.name,
+      modelId: candidate.modelId,
+      score: candidate.score
+    }))
+  });
+  if (llmRouting) {
+    const providerLookup = new Map(availableByProvider.map(({ provider }) => [provider.name, provider]));
+    rankedCandidates = llmRouting.ranking
+      .map((candidate) => {
+        const provider = providerLookup.get(candidate.providerName);
+        if (!provider) {
+          return null;
+        }
+        return { provider, modelId: candidate.modelId, score: candidate.score };
+      })
+      .filter((candidate): candidate is { provider: LlmProvider; modelId: string; score: number } => Boolean(candidate));
+  }
+  logFullRanking(traceRequestId, intent, rankedCandidates);
 
   if (availableByProvider.length === 1) {
     const selected = availableByProvider[0];
     const modelId = pickDefaultModel(selected.provider, selected.models);
     const validated = validateRoutingDecision({ providerName: selected.provider.name, modelId }, availableByProvider, intent);
-    logRoutingDecision(intent, availableByProvider, validated.provider.name, validated.modelId);
+    logRoutingDecision(intent, availableByProvider, prompt, validated.provider.name, validated.modelId);
     if (traceEnabled) {
       const overrideReason = validated.changed ? validated.reasoning : null;
       logRoutingTrace(
@@ -441,11 +484,16 @@ export async function chooseProvider(
     }, availableByProvider);
   }
 
-  const topCandidate = rankedCandidates[0];
+  const topCandidate = llmRouting
+    ? rankedCandidates.find(
+        (candidate) =>
+          candidate.provider.name === llmRouting.selected.providerName && candidate.modelId === llmRouting.selected.modelId
+      ) ?? rankedCandidates[0]
+    : rankedCandidates[0];
   const initialProvider = topCandidate?.provider ?? availableByProvider[0].provider;
   const initialModelId = topCandidate?.modelId ?? pickDefaultModel(initialProvider, availableByProvider[0].models);
   const validated = validateRoutingDecision({ providerName: initialProvider.name, modelId: initialModelId }, availableByProvider, intent);
-  logRoutingDecision(intent, availableByProvider, validated.provider.name, validated.modelId);
+  logRoutingDecision(intent, availableByProvider, prompt, validated.provider.name, validated.modelId);
   if (traceEnabled) {
     const overrideReason = validated.changed ? `validation_adjustment: ${validated.reasoning}` : null;
     logRoutingTrace(

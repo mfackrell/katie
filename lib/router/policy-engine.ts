@@ -299,6 +299,10 @@ const EXPLICIT_MODEL_PRICING_PROFILES: Record<string, ModelPricingProfile> = {
   "o3-pro": { quality: 5, latency: 3800, inCost: 8, outCost: 24 }
 };
 
+const QUALITY_WEIGHT = 10;
+const MAX_LATENCY_WEIGHT = 4;
+const MAX_COST_WEIGHT = 4;
+
 function resolveModelPricingProfile(modelId: string): ModelPricingProfile {
   const lower = modelId.toLowerCase();
   const explicitProfile = EXPLICIT_MODEL_PRICING_PROFILES[lower];
@@ -453,8 +457,24 @@ export function evaluatePolicyRouting(args: {
     const quality = (candidate.metadata.quality_tier ?? 0) / 5;
     const latency = 1 - Math.min((candidate.metadata.latency_ms_p50 ?? 5000) / 5000, 1);
     const cost = 1 - Math.min(costMultiplier / config.max_cost_multiplier_vs_cheapest, 1);
-    const final = (eligible ? capability * weights.capability + quality * weights.quality + latency * weights.latency + cost * weights.cost : -1) - policyPenalty;
-    return { candidate, capability, quality, latency, cost, policyPenalty, flags, reasons, eligible, final };
+    const capabilityContribution = capability * Math.max(0, weights.capability * 10);
+    const qualityContribution = quality * QUALITY_WEIGHT;
+    const latencyContribution = Math.min(MAX_LATENCY_WEIGHT, Math.max(0, latency * Math.max(0, weights.latency * 10)));
+    const costContribution = Math.min(MAX_COST_WEIGHT, Math.max(0, cost * Math.max(0, weights.cost * 10)));
+    const final =
+      (eligible ? capabilityContribution + qualityContribution + latencyContribution + costContribution : -1) - policyPenalty;
+    return {
+      candidate,
+      capability,
+      quality,
+      latency,
+      cost,
+      policyPenalty,
+      flags,
+      reasons,
+      eligible,
+      final
+    };
   });
 
   const eligible = scored.filter((s) => s.eligible).sort((a, b) => b.final - a.final);

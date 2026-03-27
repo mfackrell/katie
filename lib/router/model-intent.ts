@@ -1,4 +1,3 @@
-import OpenAI from "openai";
 import {
   isImageGenerationModel as isGoogleImageGenerationModel,
   isVisionAnalysisModel as isGoogleVisionAnalysisModel
@@ -7,6 +6,7 @@ import { LlmProvider } from "@/lib/providers/types";
 
 export type ProviderName = "openai" | "google" | "grok" | "anthropic";
 export type RoutingChoice = { providerName: ProviderName; modelId: string };
+export type LlmRoutingChoice = { providerName: ProviderName; modelId: string; score: number };
 export type RequestIntent =
   | "text"
   | "general-text"
@@ -17,6 +17,7 @@ export type RequestIntent =
   | "technical-debugging"
   | "architecture-review"
   | "code-generation"
+  | "assistant-reflection"
   | "vision-analysis"
   | "multimodal-reasoning"
   | "image-generation";
@@ -117,13 +118,49 @@ const intentDescriptions: Record<RequestIntent, string> = {
   "architecture-review":
     "For reviewing technical configurations, code, deployment manifests, system designs, or suggesting improvements for infrastructure.",
   "code-generation": "For writing, generating, creating, implementing, or refactoring code, functions, or scripts.",
+  "assistant-reflection":
+    "For prompts where the assistant is asked to critique, evaluate, review, or improve its own prior/system outputs.",
   "vision-analysis": "For analyzing visual content (charts, images) to extract trends, outliers, or describe scenes.",
   "multimodal-reasoning":
     "For complex analytical tasks that might combine text, data, or require forecasting and deep reasoning.",
   "image-generation": "For creating or generating images, photos, or digital art."
 };
 
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+let openaiClient:
+  | {
+      chat: {
+        completions: {
+          create: (args: unknown) => Promise<{ choices: Array<{ message?: { content?: string | null } }> }>;
+        };
+      };
+    }
+  | null
+  | undefined;
+
+async function getOpenAIClient() {
+  if (openaiClient !== undefined) {
+    return openaiClient;
+  }
+
+  if (!process.env.OPENAI_API_KEY) {
+    openaiClient = null;
+    return openaiClient;
+  }
+
+  try {
+    const dynamicImport = new Function("specifier", "return import(specifier);") as (specifier: string) => Promise<{
+      default: new (args: { apiKey?: string }) => NonNullable<typeof openaiClient>;
+    }>;
+    const loaded = await dynamicImport("openai");
+    const OpenAI = loaded.default;
+    openaiClient = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+    return openaiClient;
+  } catch (error) {
+    console.warn("[Intent Classifier] openai package unavailable. Falling back to heuristic defaults.", error);
+    openaiClient = null;
+    return openaiClient;
+  }
+}
 
 const URL_REGEX = /(https?:\/\/[^\s]+)/i;
 const VIDEO_HINTS_REGEX = /\b(youtube|youtu\.be|vimeo|video|watch|mp4|mov)\b/i;
@@ -132,8 +169,33 @@ export function hasDirectWebSearchHint(prompt: string): boolean {
   return URL_REGEX.test(prompt) || VIDEO_HINTS_REGEX.test(prompt);
 }
 
+const ASSISTANT_REFLECTION_REGEX =
+  /\b(what do you think about your last answer|critique (?:the )?assistant(?:'s)? previous response|review your system message|evaluate your own output|improve (?:the )?last reply|assess the quality of (?:that|your) response|your last answer|your previous response|your own output|your system message|reflect on your answer|self-critique|critique your response)\b/i;
+
+function hasAssistantReflectionHint(prompt: string): boolean {
+  return ASSISTANT_REFLECTION_REGEX.test(prompt);
+}
+
+export function userPreferredProviderBoost(prompt: string, providerName: ProviderName): number {
+  const normalizedPrompt = prompt.toLowerCase();
+  if (normalizedPrompt.includes("claude") && providerName === "anthropic") {
+    return 5;
+  }
+  if (normalizedPrompt.includes("gemini") && providerName === "google") {
+    return 5;
+  }
+  if (normalizedPrompt.includes("grok") && providerName === "grok") {
+    return 5;
+  }
+  if ((normalizedPrompt.includes("gpt") || normalizedPrompt.includes("chatgpt")) && providerName === "openai") {
+    return 5;
+  }
+  return 0;
+}
+
 async function classifyIntentWithLLM(prompt: string, intents: RequestIntent[]): Promise<RequestIntent | null> {
-  if (!process.env.OPENAI_API_KEY) {
+  const openai = await getOpenAIClient();
+  if (!openai) {
     console.warn("[Intent Classifier] OPENAI_API_KEY is not configured. Falling back to heuristic defaults.");
     return null;
   }
@@ -142,7 +204,33 @@ async function classifyIntentWithLLM(prompt: string, intents: RequestIntent[]): 
   const examples = [
     { user: "Rewrite this paragraph in a friendly tone.", intent: "rewrite" },
     { user: "Summarise today’s NYT front page.", intent: "news-summary" },
-    { user: "Here is a Kubernetes deployment YAML. Spot the risks.", intent: "architecture-review" }
+    { user: "Here is a Kubernetes deployment YAML. Spot the risks.", intent: "architecture-review" },
+    { user: "What do you think about your last answer?", intent: "assistant-reflection" },
+    { user: "Critique the assistant's previous response.", intent: "assistant-reflection" },
+    { user: "Review your system message.", intent: "assistant-reflection" },
+    { user: "Evaluate your own output.", intent: "assistant-reflection" },
+    { user: "How would you improve the last reply?", intent: "assistant-reflection" },
+    { user: "Assess the quality of that response.", intent: "assistant-reflection" },
+    { user: "Reflect on your previous answer and suggest improvements.", intent: "assistant-reflection" },
+    { user: "Self-critique your last message.", intent: "assistant-reflection" },
+    { user: "Was your prior response accurate and complete?", intent: "assistant-reflection" },
+    { user: "Audit your previous output for mistakes.", intent: "assistant-reflection" },
+    { user: "Rate your last answer and explain the score.", intent: "assistant-reflection" },
+    { user: "How good was your previous reply?", intent: "assistant-reflection" },
+    { user: "Find weaknesses in your last response.", intent: "assistant-reflection" },
+    { user: "Re-evaluate your earlier answer.", intent: "assistant-reflection" },
+    { user: "Could your previous response be improved?", intent: "assistant-reflection" },
+    { user: "Judge your own response quality.", intent: "assistant-reflection" },
+    { user: "Inspect your last output for bias.", intent: "assistant-reflection" },
+    { user: "Give a postmortem on your previous answer.", intent: "assistant-reflection" },
+    { user: "How well did you answer that?", intent: "assistant-reflection" },
+    { user: "Review and critique what you just wrote.", intent: "assistant-reflection" },
+    { user: "Evaluate whether your last answer followed instructions.", intent: "assistant-reflection" },
+    { user: "Check your previous response for hallucinations.", intent: "assistant-reflection" },
+    { user: "Analyze your own last reply for clarity.", intent: "assistant-reflection" },
+    { user: "Provide a self-review of the answer above.", intent: "assistant-reflection" },
+    { user: "Tell me what's wrong with your previous response.", intent: "assistant-reflection" },
+    { user: "Compare your last answer to best practices and critique it.", intent: "assistant-reflection" }
   ];
   const systemPrompt = `
 You are an expert intent classifier.
@@ -216,9 +304,38 @@ ${intentGuide}
 }
 
 export async function inferRequestIntent(prompt: string, hasImages: boolean): Promise<RequestIntent> {
+  const normalizedPrompt = prompt.toLowerCase();
+
   // 0. Hard rule: obvious links and video references should always route through web search.
   if (hasDirectWebSearchHint(prompt)) {
     return "web-search";
+  }
+  if (hasAssistantReflectionHint(prompt)) {
+    return "assistant-reflection";
+  }
+  if (/\b(generate|create|make)\b.*\b(image|photo|illustration|art)\b|\b(hero image|digital art)\b/i.test(normalizedPrompt)) {
+    return "image-generation";
+  }
+  if (/\b(rewrite|rephrase|edit|polish|improve tone)\b/i.test(normalizedPrompt)) {
+    return "rewrite";
+  }
+  if (/\b(sentiment|emotion|emotional|tone analysis|feelings)\b/i.test(normalizedPrompt)) {
+    return "emotional-analysis";
+  }
+  if (/\b(news|headlines|current events|what happened today|today in)\b/i.test(normalizedPrompt)) {
+    return "web-search";
+  }
+  if (/\b(debug|bug|fix|error|exception|traceback|failing)\b/i.test(normalizedPrompt)) {
+    return "technical-debugging";
+  }
+  if (/\b(architecture|system design|kubernetes|deployment|review this repo|repo review)\b/i.test(normalizedPrompt)) {
+    return "architecture-review";
+  }
+  if (/\b(write code|implement|patch|refactor|create function|build api)\b/i.test(normalizedPrompt)) {
+    return "code-generation";
+  }
+  if (hasImages && /\b(chart|trend|forecast|project|estimate)\b/i.test(normalizedPrompt)) {
+    return "multimodal-reasoning";
   }
 
   const availableIntents: RequestIntent[] = [
@@ -229,6 +346,7 @@ export async function inferRequestIntent(prompt: string, hasImages: boolean): Pr
     "technical-debugging",
     "architecture-review",
     "code-generation",
+    "assistant-reflection",
     "multimodal-reasoning",
     "vision-analysis",
     "image-generation"
@@ -265,6 +383,7 @@ function modelSupportsIntent(providerName: ProviderName, modelId: string, intent
     case "technical-debugging":
     case "architecture-review":
     case "code-generation":
+    case "assistant-reflection":
       return !isImageGenerationModel(providerName, modelId);
   }
 }
@@ -407,17 +526,42 @@ function rankModelForIntent(providerName: ProviderName, modelId: string, intent:
     case "architecture-review":
     case "code-generation":
       return rankTechnicalModel(providerName, modelId);
+    case "assistant-reflection": {
+      if (!modelSupportsIntent(providerName, modelId, intent)) {
+        return -1;
+      }
+      let score = 10;
+      if (
+        normalizedModel.includes("opus") ||
+        normalizedModel.includes("o3-pro") ||
+        normalizedModel.includes("codex") ||
+        normalizedModel.includes("sonnet") ||
+        normalizedModel.includes("pro") ||
+        normalizedModel.includes("gpt-5")
+      ) {
+        score += 8;
+      }
+      if (normalizedModel.includes("mini") || normalizedModel.includes("flash") || normalizedModel.includes("haiku")) {
+        score -= 6;
+      }
+      return score;
+    }
   }
 }
 
 export function scoreModelsForIntent(
   availableByProvider: Array<{ provider: LlmProvider; models: string[] }>,
-  intent: RequestIntent
+  intent: RequestIntent,
+  prompt = ""
 ): Array<{ provider: LlmProvider; modelId: string; score: number }> {
   return availableByProvider
     .flatMap(({ provider, models }) =>
       models
-        .map((modelId) => ({ provider, modelId, score: rankModelForIntent(provider.name, modelId, intent) }))
+        .map((modelId) => ({
+          provider,
+          modelId,
+          score: rankModelForIntent(provider.name, modelId, intent) + userPreferredProviderBoost(prompt, provider.name)
+        }))
         .filter((candidate) => candidate.score >= 0)
     )
     .sort((left, right) => right.score - left.score);
@@ -570,6 +714,27 @@ export function scoreModelCandidateWithBreakdown(
       const finalScore = baseScore + adjustments.reduce((total, current) => total + current.delta, 0);
       return finalize(baseScore, finalScore, null);
     }
+    case "assistant-reflection": {
+      if (isImageGenerationModel(providerName, modelId)) {
+        return finalize(null, -1, "image_generation_model_excluded_for_reflection_intent");
+      }
+      const baseScore = 10;
+      if (
+        normalizedModel.includes("opus") ||
+        normalizedModel.includes("o3-pro") ||
+        normalizedModel.includes("codex") ||
+        normalizedModel.includes("sonnet") ||
+        normalizedModel.includes("pro") ||
+        normalizedModel.includes("gpt-5")
+      ) {
+        adjustments.push({ label: "quality_reflection_bonus", delta: 8 });
+      }
+      if (normalizedModel.includes("mini") || normalizedModel.includes("flash") || normalizedModel.includes("haiku")) {
+        adjustments.push({ label: "small_model_reflection_penalty", delta: -6 });
+      }
+      const finalScore = baseScore + adjustments.reduce((total, current) => total + current.delta, 0);
+      return finalize(baseScore, finalScore, null);
+    }
   }
 }
 
@@ -578,7 +743,7 @@ export function validateRoutingDecision(
   availableByProvider: Array<{ provider: LlmProvider; models: string[] }>,
   intent: RequestIntent
 ): { provider: LlmProvider; modelId: string; reasoning: string; changed: boolean } {
-  if (["technical-debugging", "code-generation", "architecture-review"].includes(intent)) {
+  if (["technical-debugging", "code-generation", "architecture-review", "assistant-reflection"].includes(intent)) {
     availableByProvider = availableByProvider.map(({ provider, models }) => ({
       provider,
       models: models.filter((modelId) => !isImageGenerationModel(provider.name, modelId))
@@ -622,4 +787,98 @@ export function validateRoutingDecision(
     reasoning: `No compatible model found for ${intent}; kept closest available ${firstProvider.provider.name}:${modelId}.`,
     changed: true
   };
+}
+
+export async function chooseRoutingWithLLM(args: {
+  prompt: string;
+  intent: RequestIntent;
+  candidates: LlmRoutingChoice[];
+}): Promise<{ selected: RoutingChoice; ranking: LlmRoutingChoice[] } | null> {
+  const openai = await getOpenAIClient();
+  if (!openai || args.candidates.length === 0) {
+    return null;
+  }
+
+  const candidateList = args.candidates.map((candidate) => ({
+    provider: candidate.providerName,
+    model: candidate.modelId,
+    baselineScore: candidate.score
+  }));
+
+  const systemPrompt = `
+You are the final LLM router decision-maker.
+Given user prompt, intent, and candidate models, pick the single best model.
+Return ONLY JSON with:
+{
+  "selected":{"provider":"openai|google|grok|anthropic","model":"<model-id>"},
+  "ranking":[{"provider":"...","model":"...","score":<number>}]
+}
+Rules:
+- ranking must include ALL candidates exactly once, in descending score.
+- selected must be one of the provided candidates.
+- Heavily respect explicit user provider preference words (claude/gemini/grok/gpt/chatgpt) unless capability mismatch.
+- For assistant-reflection, prioritize response quality over cost/latency.
+`.trim();
+
+  try {
+    const response = await openai.chat.completions.create({
+      model: INTENT_CLASSIFICATION_MODEL_ID,
+      response_format: { type: "json_object" },
+      temperature: 0,
+      max_tokens: 500,
+      messages: [
+        { role: "system", content: systemPrompt },
+        {
+          role: "user",
+          content: JSON.stringify({
+            prompt: args.prompt,
+            intent: args.intent,
+            candidates: candidateList
+          })
+        }
+      ]
+    });
+
+    const raw = response.choices[0]?.message?.content ?? "";
+    const parsed = JSON.parse(raw) as {
+      selected?: { provider?: string; model?: string };
+      ranking?: Array<{ provider?: string; model?: string; score?: number }>;
+    };
+
+    const candidateKeySet = new Set(args.candidates.map((candidate) => `${candidate.providerName}:${candidate.modelId}`));
+    const parsedRanking: LlmRoutingChoice[] = (parsed.ranking ?? [])
+      .map((entry) => ({
+        providerName: (entry.provider ?? "").toLowerCase() as ProviderName,
+        modelId: entry.model ?? "",
+        score: typeof entry.score === "number" && Number.isFinite(entry.score) ? entry.score : -1
+      }))
+      .filter((entry) => candidateKeySet.has(`${entry.providerName}:${entry.modelId}`));
+
+    const rankingKeys = new Set(parsedRanking.map((entry) => `${entry.providerName}:${entry.modelId}`));
+    for (const candidate of args.candidates) {
+      const key = `${candidate.providerName}:${candidate.modelId}`;
+      if (!rankingKeys.has(key)) {
+        parsedRanking.push(candidate);
+      }
+    }
+    parsedRanking.sort((left, right) => right.score - left.score);
+
+    const selectedProvider = (parsed.selected?.provider ?? "").toLowerCase() as ProviderName;
+    const selectedModel = parsed.selected?.model ?? "";
+    const selectedKey = `${selectedProvider}:${selectedModel}`;
+    const selectedFromRanking = parsedRanking.find((candidate) => `${candidate.providerName}:${candidate.modelId}` === selectedKey);
+    const selected = selectedFromRanking ?? parsedRanking[0];
+
+    if (!selected) {
+      return null;
+    }
+
+    return {
+      selected: { providerName: selected.providerName, modelId: selected.modelId },
+      ranking: parsedRanking
+    };
+  } catch (error) {
+    console.warn("[Router LLM] Failed to get routing decision; falling back to deterministic ranking.", error);
+    return null;
+  }
 }
