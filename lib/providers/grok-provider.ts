@@ -4,6 +4,23 @@ import { buildMemoryContext } from "@/lib/providers/memory-context";
 import { MATH_EXECUTION_PROTOCOL } from "@/lib/providers/math-execution-protocol";
 import { formatAttachmentContext } from "@/lib/providers/attachment-context";
 
+function isWebSearchIntent(requestIntent: string | undefined): boolean {
+  return requestIntent === "web-search" || requestIntent === "news-summary";
+}
+
+function extractResponseText(response: OpenAI.Responses.Response): string {
+  if (response.output_text?.trim()) {
+    return response.output_text;
+  }
+
+  return (response.output ?? [])
+    .flatMap((item) => ("content" in item && Array.isArray(item.content) ? item.content : []))
+    .filter((part): part is { text: string } => "text" in part && typeof part.text === "string")
+    .map((part) => part.text)
+    .join("\n")
+    .trim();
+}
+
 export class GrokProvider implements LlmProvider {
   name = "grok" as const;
   private client: OpenAI;
@@ -63,6 +80,53 @@ export class GrokProvider implements LlmProvider {
       }
 
       messages.push({ role: "user", content: params.user });
+
+      if (isWebSearchIntent(params.requestIntent)) {
+        const input: OpenAI.Responses.ResponseInput = [
+          {
+            role: "system",
+            content: [{ type: "input_text", text: `${MATH_EXECUTION_PROTOCOL}\n\nCORE_PERSONA: ${params.persona}` }]
+          },
+          {
+            role: "system",
+            content: [{ type: "input_text", text: `MEMORY_CONTEXT:\n${params.summary}\nEND_MEMORY_CONTEXT` }]
+          },
+          {
+            role: "system",
+            content: [{ type: "input_text", text: buildMemoryContext(params.history) }]
+          },
+          ...(attachmentContext
+            ? [
+                {
+                  role: "system" as const,
+                  content: [{ type: "input_text" as const, text: attachmentContext }]
+                },
+                {
+                  role: "system" as const,
+                  content: [
+                    {
+                      type: "input_text" as const,
+                      text: "IMPORTANT: Attachment previews are truncated excerpts, not full files."
+                    }
+                  ]
+                }
+              ]
+            : []),
+          { role: "user", content: [{ type: "input_text", text: params.user }] }
+        ];
+
+        const response = await this.client.responses.create({
+          model: selectedModel,
+          input,
+          tools: [{ type: "web_search" }]
+        });
+
+        return {
+          text: extractResponseText(response),
+          model: selectedModel,
+          provider: this.name
+        };
+      }
 
       const completion = await this.client.chat.completions.create({
         model: selectedModel,

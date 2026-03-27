@@ -15,6 +15,7 @@ export interface ChatGenerateParams {
   summary: string;
   user: string;
   history: { role: "user" | "assistant"; content: string }[];
+  requestIntent?: string;
   modelId?: string;
   images?: string[];
   attachments?: FileReference[];

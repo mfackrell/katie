@@ -47,6 +47,7 @@ function buildGenerationParams({
   summary,
   history,
   message,
+  requestIntent,
   images,
   modelId,
   attachments
@@ -56,6 +57,7 @@ function buildGenerationParams({
   summary: string;
   history: { role: "user" | "assistant"; content: string }[];
   message: string;
+  requestIntent?: RequestIntent;
   images?: string[];
   modelId: string;
   attachments?: RequestPayload["fileReferences"];
@@ -66,6 +68,7 @@ function buildGenerationParams({
     summary,
     history,
     user: message,
+    requestIntent,
     images,
     modelId,
     attachments
@@ -176,6 +179,7 @@ export async function POST(request: NextRequest) {
     let modelId = "";
     let fallbackChain: Array<{ provider: LlmProvider; modelId: string; score: number }> = [];
     let selectionExplainer: SelectionExplainer | undefined;
+    let resolvedRequestIntent: RequestIntent | undefined;
 
     if (overrideProvider && overrideModel) {
       const manualProvider = providers.find((candidate) => candidate.name === overrideProvider);
@@ -224,10 +228,12 @@ export async function POST(request: NextRequest) {
         }
       }
 
+      resolvedRequestIntent = explicitIntent ?? requestIntent;
+
       const routingContext = `\n  Persona: ${persona}\n  Rolling Summary: ${summary}\n  Recent History: ${JSON.stringify(history.slice(-3))}\n  Has Attached Images: ${hasVisualInput}\n`;
       const routingDecision = await chooseProvider(message, routingContext, providers, {
         hasImages: hasVisualInput,
-        requestIntent: explicitIntent ?? requestIntent,
+        requestIntent: resolvedRequestIntent,
         routingTraceEnabled,
         routingRequestId: request.headers.get("x-request-id") ?? undefined
       });
@@ -274,6 +280,7 @@ export async function POST(request: NextRequest) {
                 summary,
                 history: historyForProvider,
                 message,
+                requestIntent: resolvedRequestIntent,
                 images,
                 modelId: selectedModelId,
                 attachments
