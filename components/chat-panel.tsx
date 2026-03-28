@@ -15,6 +15,13 @@ import {
 import type { FileReference } from "@/lib/providers/types";
 import type { Message } from "@/lib/types/chat";
 import { canSubmitChatRequest } from "@/lib/chat/request-guards";
+import {
+  applyReasoningEvent,
+  createReasoningUiState,
+  type ReasoningStreamEvent,
+  type ReasoningUiState
+} from "@/lib/chat/reasoning-stream";
+import { ReasoningExplainerPanel } from "@/components/reasoning-explainer-panel";
 
 type ProviderName = "openai" | "google" | "grok" | "anthropic";
 
@@ -43,6 +50,8 @@ type SelectionExplainer = {
 };
 
 const MODEL_EXPLAINER_HIDDEN_STORAGE_KEY = "ui:modelExplainerHidden";
+const LIVE_REASONING_VISIBLE_STORAGE_KEY = "ui:liveReasoningExplainerVisible";
+const FALLBACK_REASONING_CATEGORIES = ["Architecture", "Security", "Complexity", "Cost", "Reliability"];
 
 function hasExplainerData(explainer: SelectionExplainer | null): explainer is SelectionExplainer {
   if (!explainer) {
@@ -89,6 +98,8 @@ export function ChatPanel({ actorId, chatId, activeActorName, activeChatTitle }:
   const [showModelControls, setShowModelControls] = useState(false);
   const [selectionExplainer, setSelectionExplainer] = useState<SelectionExplainer | null>(null);
   const [modelExplainerHidden, setModelExplainerHidden] = useState(false);
+  const [showLiveReasoningExplainer, setShowLiveReasoningExplainer] = useState(true);
+  const [reasoningState, setReasoningState] = useState<ReasoningUiState>(createReasoningUiState);
   const [explainerOpen, setExplainerOpen] = useState(false);
   const messagesContainerRef = useRef<HTMLElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -175,6 +186,7 @@ export function ChatPanel({ actorId, chatId, activeActorName, activeChatTitle }:
       setExplainerOpen(false);
       setStatusMessage("");
       setStreamingModel(null);
+      setReasoningState(createReasoningUiState());
       setCopiedMessageId(null);
 
       if (!chatId) {
@@ -221,6 +233,23 @@ export function ChatPanel({ actorId, chatId, activeActorName, activeChatTitle }:
       cancelled = true;
     };
   }, [chatId]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+    const saved = window.localStorage.getItem(LIVE_REASONING_VISIBLE_STORAGE_KEY);
+    if (saved === "false") {
+      setShowLiveReasoningExplainer(false);
+    }
+  }, []);
+
+  function handleLiveReasoningVisibility(nextVisible: boolean) {
+    setShowLiveReasoningExplainer(nextVisible);
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem(LIVE_REASONING_VISIBLE_STORAGE_KEY, nextVisible ? "true" : "false");
+    }
+  }
 
   useEffect(
     () => () => {
@@ -333,6 +362,7 @@ export function ChatPanel({ actorId, chatId, activeActorName, activeChatTitle }:
     }
     setLoading(true);
     setStreamingModel(null);
+    setReasoningState(createReasoningUiState());
 
     const optimisticUserMessage: Message = {
       id: crypto.randomUUID(),
@@ -402,6 +432,47 @@ export function ChatPanel({ actorId, chatId, activeActorName, activeChatTitle }:
       let assets: Array<{ type: string; url: string }> = [];
       let provider = "unknown";
       let model = "unknown";
+      let sawReasoningStart = false;
+      let sawFinalReasoningAnswer = false;
+      let fallbackReasoningDeltaCount = 0;
+      let fallbackProgress = 0;
+
+      const applyFallbackReasoningFromDelta = (delta: string) => {
+        if (!delta.trim() || sawReasoningStart) {
+          return;
+        }
+        const now = new Date().toISOString();
+        setReasoningState((current) =>
+          applyReasoningEvent(current, {
+            type: "reasoning_start",
+            requestId: `fallback-${chatId}`,
+            categories: FALLBACK_REASONING_CATEGORIES,
+            startedAt: now
+          }),
+        );
+        sawReasoningStart = true;
+      };
+
+      const applyFallbackReasoningUpdate = (delta: string) => {
+        if (!delta.trim() || !sawReasoningStart) {
+          return;
+        }
+        const category = FALLBACK_REASONING_CATEGORIES[fallbackReasoningDeltaCount % FALLBACK_REASONING_CATEGORIES.length];
+        fallbackReasoningDeltaCount += 1;
+        fallbackProgress = Math.min(95, fallbackProgress + 4);
+        setReasoningState((current) =>
+          applyReasoningEvent(current, {
+            type: "reasoning_update",
+            requestId: current.requestId ?? `fallback-${chatId}`,
+            category,
+            explanationDelta: delta,
+            score: null,
+            confidence: null,
+            progress: fallbackProgress,
+            updatedAt: new Date().toISOString()
+          }),
+        );
+      };
 
       while (true) {
         const { done, value } = await reader.read();
@@ -421,6 +492,7 @@ export function ChatPanel({ actorId, chatId, activeActorName, activeChatTitle }:
           const chunk = JSON.parse(line) as
             | { type: "metadata"; modelId: string; provider: string; explainer?: SelectionExplainer }
             | { type: "delta"; text: string }
+            | ReasoningStreamEvent
             | {
                 type: "content";
                 text: string;
@@ -437,6 +509,24 @@ export function ChatPanel({ actorId, chatId, activeActorName, activeChatTitle }:
 
           if (chunk.type === "delta") {
             textContent += chunk.text;
+            applyFallbackReasoningFromDelta(chunk.text);
+            applyFallbackReasoningUpdate(chunk.text);
+          }
+
+          if (
+            chunk.type === "reasoning_start" ||
+            chunk.type === "reasoning_update" ||
+            chunk.type === "reasoning_snapshot" ||
+            chunk.type === "final_answer" ||
+            chunk.type === "reasoning_error"
+          ) {
+            if (chunk.type === "reasoning_start") {
+              sawReasoningStart = true;
+            }
+            if (chunk.type === "final_answer") {
+              sawFinalReasoningAnswer = true;
+            }
+            setReasoningState((current) => applyReasoningEvent(current, chunk));
           }
 
           if (chunk.type === "content") {
@@ -456,6 +546,7 @@ export function ChatPanel({ actorId, chatId, activeActorName, activeChatTitle }:
         const trailingChunk = JSON.parse(buffered) as
           | { type: "metadata"; modelId: string; provider: string; explainer?: SelectionExplainer }
           | { type: "delta"; text: string }
+          | ReasoningStreamEvent
           | {
               type: "content";
               text: string;
@@ -472,6 +563,24 @@ export function ChatPanel({ actorId, chatId, activeActorName, activeChatTitle }:
 
         if (trailingChunk.type === "delta") {
           textContent += trailingChunk.text;
+          applyFallbackReasoningFromDelta(trailingChunk.text);
+          applyFallbackReasoningUpdate(trailingChunk.text);
+        }
+
+        if (
+          trailingChunk.type === "reasoning_start" ||
+          trailingChunk.type === "reasoning_update" ||
+          trailingChunk.type === "reasoning_snapshot" ||
+          trailingChunk.type === "final_answer" ||
+          trailingChunk.type === "reasoning_error"
+        ) {
+          if (trailingChunk.type === "reasoning_start") {
+            sawReasoningStart = true;
+          }
+          if (trailingChunk.type === "final_answer") {
+            sawFinalReasoningAnswer = true;
+          }
+          setReasoningState((current) => applyReasoningEvent(current, trailingChunk));
         }
 
         if (trailingChunk.type === "content") {
@@ -502,6 +611,21 @@ export function ChatPanel({ actorId, chatId, activeActorName, activeChatTitle }:
         setMessagesByChatId((cache) => ({ ...cache, [chatId]: nextMessages }));
         return nextMessages;
       });
+      if (!sawFinalReasoningAnswer) {
+        setReasoningState((current) =>
+          applyReasoningEvent(current, {
+            type: "final_answer",
+            requestId: current.requestId ?? `fallback-${chatId}`,
+            answer: textContent,
+            summaryScores: current.categories.map((category) => ({
+              name: category.name,
+              score: category.score,
+              confidence: category.confidence
+            })),
+            completedAt: new Date().toISOString()
+          }),
+        );
+      }
       setStatusMessage("Response received.");
     } catch (error: unknown) {
       abortControllerRef.current = null;
@@ -877,6 +1001,16 @@ export function ChatPanel({ actorId, chatId, activeActorName, activeChatTitle }:
                   />
                   <span>Show model selection explainer</span>
                 </label>
+                <label className="flex min-h-10 items-center gap-2 rounded-2xl border border-white/10 bg-white/[0.035] px-3 py-2 text-xs text-zinc-300">
+                  <input
+                    type="checkbox"
+                    checked={showLiveReasoningExplainer}
+                    onChange={(event) => handleLiveReasoningVisibility(event.target.checked)}
+                    className="h-4 w-4 rounded border-white/15 bg-zinc-900 text-emerald-500 focus:ring-emerald-500"
+                    aria-label="Show live reasoning explainer"
+                  />
+                  <span>Show live reasoning explainer</span>
+                </label>
                 {providerNames.map((providerName) => {
                   const options = availableModels[providerName] ?? [];
                   const selectedValue =
@@ -931,6 +1065,11 @@ export function ChatPanel({ actorId, chatId, activeActorName, activeChatTitle }:
             <p className="mt-2 text-sm leading-6 text-zinc-500">
               Start a new message to invoke the master router.
             </p>
+          </div>
+        ) : null}
+        {showLiveReasoningExplainer && (loading || reasoningState.startedAt || reasoningState.finalAnswer || reasoningState.error) ? (
+          <div className="sticky top-3 z-20">
+            <ReasoningExplainerPanel loading={loading} state={reasoningState} />
           </div>
         ) : null}
         {messages.map((message) => (
