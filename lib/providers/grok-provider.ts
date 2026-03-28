@@ -16,8 +16,16 @@ type ResponseTextSource = {
 
 type GrokResponseInputMessage = {
   role: "system" | "user";
-  content: Array<{ type: "input_text"; text: string }>;
+  content: GrokResponseInputContentPart[];
 };
+
+type GrokResponseInputContentPart =
+  | { type: "input_text"; text: string }
+  | { type: "input_image"; image_url: string; detail: "auto" };
+
+type GrokChatUserContentPart =
+  | { type: "text"; text: string }
+  | { type: "image_url"; image_url: { url: string } };
 
 type GrokWebSearchResponse = {
   output_text?: string | null;
@@ -36,6 +44,33 @@ function extractResponseText(response: ResponseTextSource): string {
     .flatMap((part) => ("text" in part && typeof part.text === "string" ? [part.text] : []))
     .join("\n")
     .trim();
+}
+
+function buildChatUserContent(params: ChatGenerateParams): string | GrokChatUserContentPart[] {
+  if (!params.images?.length) {
+    return params.user;
+  }
+
+  return [
+    { type: "text", text: params.user },
+    ...params.images.map((url) => ({ type: "image_url" as const, image_url: { url } }))
+  ];
+}
+
+function buildResponsesUserContent(params: ChatGenerateParams): GrokResponseInputContentPart[] {
+  const content: GrokResponseInputContentPart[] = [{ type: "input_text", text: params.user }];
+
+  if (params.images?.length) {
+    params.images.forEach((url) => {
+      content.push({
+        type: "input_image",
+        image_url: url,
+        detail: "auto"
+      });
+    });
+  }
+
+  return content;
 }
 
 export class GrokProvider implements LlmProvider {
@@ -94,7 +129,7 @@ ${getKatieReasoningExplainerStatement()}` }]
             }
           ]
         : []),
-      { role: "user", content: [{ type: "input_text", text: params.user }] }
+      { role: "user", content: buildResponsesUserContent(params) }
     ];
   }
 
@@ -170,7 +205,7 @@ ${getKatieReasoningExplainerStatement()}` }
         });
       }
 
-      messages.push({ role: "user", content: params.user });
+      messages.push({ role: "user", content: buildChatUserContent(params) });
 
       if (isWebSearchIntent(params.requestIntent)) {
         const input = this.buildWebSearchInput(params, attachmentContext);
