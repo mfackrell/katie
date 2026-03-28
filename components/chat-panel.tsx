@@ -1098,7 +1098,7 @@ export function ChatPanel({ actorId, chatId, activeActorName, activeChatTitle }:
       </header>
 
       {showLiveReasoningExplainer && reasoningPopupVisible ? (
-        <div className="pointer-events-none absolute bottom-24 right-4 z-40 sm:bottom-28 sm:right-6">
+        <div className="pointer-events-none absolute bottom-24 left-1/2 z-40 w-[90%] -translate-x-1/2 sm:bottom-28">
           <div className="pointer-events-auto">
             <ReasoningExplainerPanel
               loading={loading}
