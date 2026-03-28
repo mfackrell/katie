@@ -15,6 +15,7 @@ interface SidebarProps {
   onOpenCreateSubActor: (actor: Actor) => void;
   onDeleteActor: (actor: Actor) => void;
   onDeleteChat: (chat: ChatThread) => void | Promise<void>;
+  onRenameChat: (chatId: string, title: string) => void | Promise<void>;
   onError: (message: string) => void;
   onActorPurposeUpdated: (actor: Actor) => void;
   isCreatingChat: (actorId: string) => boolean;
@@ -32,6 +33,7 @@ export function Sidebar({
   onOpenCreateSubActor,
   onDeleteActor,
   onDeleteChat,
+  onRenameChat,
   onError,
   onActorPurposeUpdated,
   isCreatingChat,
@@ -41,12 +43,26 @@ export function Sidebar({
   const [editing, setEditing] = useState(false);
   const [draftPurpose, setDraftPurpose] = useState(activeActor?.purpose ?? "");
   const [saving, setSaving] = useState(false);
+  const [editingChatId, setEditingChatId] = useState("");
+  const [draftChatTitle, setDraftChatTitle] = useState("");
+  const [savingChatId, setSavingChatId] = useState("");
 
   useEffect(() => {
     setDraftPurpose(activeActor?.purpose ?? "");
     setEditing(false);
     setSaving(false);
   }, [activeActorId, activeActor?.purpose]);
+
+  useEffect(() => {
+    if (!editingChatId) {
+      return;
+    }
+
+    if (!chats.some((chat) => chat.id === editingChatId)) {
+      setEditingChatId("");
+      setDraftChatTitle("");
+    }
+  }, [chats, editingChatId]);
 
   async function handleSave() {
     if (!activeActor || !draftPurpose.trim()) {
@@ -195,6 +211,8 @@ export function Sidebar({
                   <div className="space-y-1.5">
                     {actorChats.map((chat) => {
                       const activeChat = chat.id === activeChatId;
+                      const isEditingTitle = editingChatId === chat.id;
+                      const isSavingTitle = savingChatId === chat.id;
                       return (
                         <div
                           key={chat.id}
@@ -205,14 +223,79 @@ export function Sidebar({
                               : "border border-transparent text-zinc-400 hover:border-white/8 hover:bg-white/[0.04] hover:text-zinc-200",
                           ].join(" ")}
                         >
+                          {isEditingTitle ? (
+                            <div className="flex flex-1 items-center gap-2">
+                              <input
+                                className="h-8 min-w-0 flex-1 rounded-lg border border-white/15 bg-zinc-900/80 px-2 text-xs text-white outline-none ring-emerald-400/40 placeholder:text-zinc-500 focus:ring-2"
+                                value={draftChatTitle}
+                                onChange={(event) => setDraftChatTitle(event.target.value)}
+                                onClick={(event) => event.stopPropagation()}
+                                disabled={isSavingTitle}
+                                maxLength={120}
+                                autoFocus
+                              />
+                              <button
+                                className="rounded-lg border border-emerald-500/25 bg-emerald-500/10 px-2 py-1 text-[10px] font-medium text-emerald-200 transition hover:border-emerald-400/45 hover:bg-emerald-500/15 hover:text-white disabled:cursor-not-allowed disabled:opacity-60"
+                                disabled={isSavingTitle}
+                                onClick={async (event) => {
+                                  event.stopPropagation();
+                                  const nextTitle = draftChatTitle.trim();
+                                  if (!nextTitle) {
+                                    onError("Chat title cannot be empty.");
+                                    return;
+                                  }
+
+                                  try {
+                                    setSavingChatId(chat.id);
+                                    await onRenameChat(chat.id, nextTitle);
+                                    setEditingChatId("");
+                                    setDraftChatTitle("");
+                                  } catch (error) {
+                                    const message = error instanceof Error ? error.message : "Failed to rename chat.";
+                                    onError(message);
+                                  } finally {
+                                    setSavingChatId("");
+                                  }
+                                }}
+                                title="Save title"
+                              >
+                                Save
+                              </button>
+                              <button
+                                className="rounded-lg border border-white/15 bg-white/[0.04] px-2 py-1 text-[10px] font-medium text-zinc-300 transition hover:border-white/25 hover:bg-white/[0.08] hover:text-white disabled:cursor-not-allowed disabled:opacity-60"
+                                disabled={isSavingTitle}
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  setEditingChatId("");
+                                  setDraftChatTitle("");
+                                }}
+                                title="Cancel"
+                              >
+                                Cancel
+                              </button>
+                            </div>
+                          ) : (
+                            <button
+                              className="block flex-1 text-left"
+                              onClick={() => {
+                                onSelectActor(actor.id);
+                                onSelectChat(chat.id);
+                              }}
+                            >
+                              <span className="block truncate font-medium">{chat.title}</span>
+                            </button>
+                          )}
                           <button
-                            className="block flex-1 text-left"
-                            onClick={() => {
-                              onSelectActor(actor.id);
-                              onSelectChat(chat.id);
+                            className="rounded-lg border border-white/15 bg-white/[0.04] px-2 py-1 text-[10px] font-medium text-zinc-300 transition hover:border-white/25 hover:bg-white/[0.08] hover:text-white disabled:cursor-not-allowed disabled:opacity-60"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              setEditingChatId(chat.id);
+                              setDraftChatTitle(chat.title);
                             }}
+                            disabled={isEditingTitle}
+                            title={`Rename ${chat.title}`}
                           >
-                            <span className="block truncate font-medium">{chat.title}</span>
+                            Edit
                           </button>
                           <button
                             className="rounded-lg border border-red-500/20 bg-red-500/5 px-2 py-1 text-[10px] font-medium text-red-200 transition hover:border-red-400/40 hover:bg-red-500/10 hover:text-white"

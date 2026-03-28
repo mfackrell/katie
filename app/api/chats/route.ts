@@ -15,6 +15,11 @@ const chatIdParamSchema = z.object({
   id: z.string().min(1)
 });
 
+const updateChatSchema = z.object({
+  id: z.string().min(1),
+  title: z.string().min(1),
+});
+
 export async function GET(request: NextRequest) {
   const actorId = request.nextUrl.searchParams.get("actorId");
   const chats = actorId ? await listChatsByActorId(actorId) : await listChats();
@@ -54,6 +59,31 @@ export async function POST(request: NextRequest) {
     const savedChat = await saveChat(chat);
 
     return NextResponse.json({ chat: savedChat }, { status: 201 });
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      return NextResponse.json({ error: "Invalid request payload" }, { status: 400 });
+    }
+
+    const message = error instanceof Error ? error.message : "Unknown persistence error";
+    return NextResponse.json({ error: message }, { status: 500 });
+  }
+}
+
+export async function PATCH(request: NextRequest) {
+  try {
+    const payload = updateChatSchema.parse(await request.json());
+    const existingChat = await getChatById(payload.id);
+
+    if (!existingChat) {
+      return NextResponse.json({ error: `Chat not found: ${payload.id}` }, { status: 404 });
+    }
+
+    const updatedChat = await saveChat({
+      ...existingChat,
+      title: payload.title.trim(),
+    });
+
+    return NextResponse.json({ chat: updatedChat });
   } catch (error) {
     if (error instanceof z.ZodError) {
       return NextResponse.json({ error: "Invalid request payload" }, { status: 400 });
