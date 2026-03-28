@@ -418,6 +418,35 @@ export default function HomePage() {
     setActiveChatId(nextActiveChatId);
   }
 
+  async function renameChat(chatId: string, title: string) {
+    const normalizedTitle = title.trim();
+    if (!normalizedTitle) {
+      throw new Error("Chat title cannot be empty.");
+    }
+
+    setUiError("");
+    const response = await fetch("/api/chats", {
+      method: "PATCH",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        id: chatId,
+        title: normalizedTitle,
+      }),
+    });
+
+    const payload = (await response.json()) as { chat?: ChatThread; error?: string };
+    if (!response.ok || !payload.chat) {
+      throw new Error(payload.error ?? "Failed to rename chat.");
+    }
+
+    const updatedChat = payload.chat;
+    setChats((current) =>
+      current.map((chat) => (chat.id === updatedChat.id ? updatedChat : chat)),
+    );
+  }
+
   function handleSelectActor(nextActorId: string) {
     setActiveActorId(nextActorId);
     setActiveChatId((current) =>
@@ -472,6 +501,7 @@ export default function HomePage() {
             onOpenCreateSubActor={(actor) => setModalState({ type: "sub", parentActor: actor })}
             onDeleteActor={deleteActor}
             onDeleteChat={deleteChat}
+            onRenameChat={renameChat}
             onError={setUiError}
             onActorPurposeUpdated={updateActorPurpose}
             isCreatingChat={(actorId) => Boolean(creatingChatByActorId[actorId])}
@@ -512,6 +542,7 @@ export default function HomePage() {
             onOpenCreateSubActor={(actor) => setModalState({ type: "sub", parentActor: actor })}
             onDeleteActor={deleteActor}
             onDeleteChat={deleteChat}
+            onRenameChat={renameChat}
             onError={setUiError}
             onActorPurposeUpdated={updateActorPurpose}
             isCreatingChat={(actorId) => Boolean(creatingChatByActorId[actorId])}
