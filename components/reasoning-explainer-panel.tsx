@@ -1,14 +1,37 @@
 "use client";
 
-import { useEffect, useMemo, useRef } from "react";
+import { useMemo } from "react";
 import type { ReasoningUiState } from "@/lib/chat/reasoning-stream";
 
-function truncateSnippet(text: string): string {
+function truncateSnippet(text: string, maxLength = 72): string {
   const compact = text.replace(/\s+/g, " ").trim();
-  if (compact.length <= 120) {
+  if (compact.length <= maxLength) {
     return compact;
   }
-  return `${compact.slice(0, 117)}...`;
+  return `${compact.slice(0, maxLength - 3)}...`;
+}
+
+function sanitizeLiveExplainer(text: string): string {
+  const compact = text
+    .replace(/\s+/g, " ")
+    .replace(/\s*([,.;:!?])\s*/g, "$1 ")
+    .trim();
+
+  if (!compact) {
+    return "";
+  }
+
+  const sentences = compact
+    .split(/(?<=[.!?])\s+/)
+    .map((sentence) => sentence.trim())
+    .filter(Boolean);
+
+  if (sentences.length === 0) {
+    return compact.slice(-220);
+  }
+
+  const recent = sentences.slice(-2).join(" ");
+  return recent.length > 260 ? recent.slice(-260) : recent;
 }
 
 export function ReasoningExplainerPanel({
@@ -20,32 +43,35 @@ export function ReasoningExplainerPanel({
   state: ReasoningUiState;
   onClose?: () => void;
 }) {
-  const explainerRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (!loading) {
-      return;
-    }
-    explainerRef.current?.scrollTo({ top: explainerRef.current.scrollHeight, behavior: "smooth" });
-  }, [loading, state.liveExplainer]);
-
   const isWaitingToStart = loading && !state.startedAt;
   const hasFinalAnswer = Boolean(state.finalAnswer);
-  const summaryScores = useMemo(() => state.summaryScores, [state.summaryScores]);
-  const showFinalAnswer = !loading && hasFinalAnswer;
+  const cleanLiveExplainer = useMemo(() => sanitizeLiveExplainer(state.liveExplainer ?? ""), [state.liveExplainer]);
+
+  const compactCategories = useMemo(
+    () =>
+      state.categories
+        .filter(
+          (category) =>
+            typeof category.score === "number" ||
+            typeof category.progress === "number" ||
+            Boolean(category.explanation?.trim()),
+        )
+        .slice(0, 5),
+    [state.categories],
+  );
 
   return (
-    <div className="w-[min(92vw,460px)] max-h-[58vh] overflow-hidden rounded-2xl border border-white/20 bg-zinc-950/95 p-3 shadow-[0_24px_70px_rgba(0,0,0,0.55)] backdrop-blur-md sm:p-3.5">
-      <div className="mb-2.5 flex items-center justify-between gap-2 border-b border-white/10 pb-2">
+    <div className="w-[min(92vw,400px)] max-h-[52vh] overflow-hidden rounded-2xl border border-white/12 bg-zinc-950/90 p-3 shadow-[0_18px_48px_rgba(0,0,0,0.5)] backdrop-blur-md sm:p-3.5">
+      <div className="mb-2 flex items-start justify-between gap-2">
         <div className="min-w-0">
-          <h3 className="truncate text-[11px] font-semibold uppercase tracking-[0.18em] text-zinc-200">Thinking</h3>
-          <p className="text-[11px] text-zinc-400">{loading ? "Streaming" : hasFinalAnswer ? "Complete" : "Idle"}</p>
+          <h3 className="truncate text-[12px] font-medium text-zinc-100">Thinking</h3>
+          <p className="text-[11px] text-zinc-400">{loading ? "Streaming updates" : hasFinalAnswer ? "Done" : "Idle"}</p>
         </div>
         {onClose ? (
           <button
             type="button"
             onClick={onClose}
-            className="inline-flex h-7 w-7 items-center justify-center rounded-lg border border-white/15 bg-white/[0.04] text-sm text-zinc-300 transition hover:border-white/30 hover:bg-white/[0.08] hover:text-zinc-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
+            className="inline-flex h-7 w-7 items-center justify-center rounded-md text-sm text-zinc-400 transition hover:bg-white/[0.06] hover:text-zinc-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
             aria-label="Dismiss live reasoning popup"
           >
             ✕
@@ -53,67 +79,61 @@ export function ReasoningExplainerPanel({
         ) : null}
       </div>
 
-      <div className="max-h-[calc(58vh-54px)] space-y-2.5 overflow-y-auto pr-1">
-      {isWaitingToStart ? <p className="text-xs text-zinc-400">Waiting to start…</p> : null}
-      {state.error ? (
-        <p className="rounded-lg border border-amber-500/35 bg-amber-500/15 px-2.5 py-2 text-xs leading-5 text-amber-100">
-          {state.error.message}
-        </p>
-      ) : null}
+      <div className="space-y-2.5 overflow-y-auto pr-1 max-h-[calc(52vh-46px)]">
+        {isWaitingToStart ? <p className="text-xs text-zinc-400">Waiting to start…</p> : null}
+        {state.error ? (
+          <p className="rounded-md border border-amber-500/30 bg-amber-500/10 px-2 py-1.5 text-xs leading-5 text-amber-100">
+            {state.error.message}
+          </p>
+        ) : null}
 
-      <section className="rounded-lg border border-white/10 bg-white/[0.03] p-2.5">
-        <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-[0.16em] text-zinc-500">Live Explainer</p>
-        <div
-          ref={explainerRef}
-          className="max-h-24 overflow-y-auto rounded-lg border border-white/10 bg-zinc-950/70 px-2.5 py-2 text-xs leading-5 text-zinc-100"
-        >
-          {state.liveExplainer ? state.liveExplainer : <span className="text-zinc-500">Live reasoning updates will appear here.</span>}
-        </div>
-      </section>
-
-      <section className="rounded-lg border border-white/10 bg-white/[0.02] p-2.5">
-        <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-[0.16em] text-zinc-500">Category Ratings</p>
-        <div className="grid gap-1.5">
-          {state.categories.map((category) => (
-            <div key={category.name} className="rounded-lg border border-white/10 bg-zinc-900/60 p-2">
-              <div className="mb-1 flex items-center justify-between gap-2">
-                <p className="truncate text-xs font-medium text-zinc-200">{category.name}</p>
-                <p className="shrink-0 text-[10px] text-zinc-400">S {typeof category.score === "number" ? category.score.toFixed(1) : "—"}</p>
-              </div>
-              <p className="mb-1 text-[10px] text-zinc-500">Confidence {typeof category.confidence === "number" ? `${Math.round(category.confidence * 100)}%` : "—"}</p>
-              {typeof category.progress === "number" ? (
-                <div className="mb-1.5 h-1 overflow-hidden rounded-full bg-zinc-800">
-                  <div className="h-full rounded-full bg-emerald-400" style={{ width: `${Math.max(0, Math.min(100, category.progress))}%` }} />
-                </div>
-              ) : null}
-              <p className="text-[11px] leading-4 text-zinc-400">{category.explanation ? truncateSnippet(category.explanation) : "No explanation yet."}</p>
-            </div>
-          ))}
-        </div>
-      </section>
-
-      <section className="rounded-lg border border-white/10 bg-white/[0.02] p-2.5">
-        <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-[0.16em] text-zinc-500">Final Answer</p>
-        {showFinalAnswer ? (
-          <div className="rounded-lg border border-white/10 bg-zinc-950/70 px-2.5 py-2">
-            <p className="whitespace-pre-wrap text-xs leading-5 text-zinc-100">{state.finalAnswer}</p>
-            {summaryScores.length > 0 ? (
-              <ul className="mt-2 grid gap-1 text-[10px] text-zinc-400">
-                {summaryScores.map((score) => (
-                  <li key={score.name}>
-                    {score.name}: {typeof score.score === "number" ? score.score.toFixed(1) : "—"}
-                    {typeof score.confidence === "number" ? ` (${Math.round(score.confidence * 100)}%)` : ""}
-                  </li>
-                ))}
-              </ul>
-            ) : null}
+        <section>
+          <p className="mb-1 text-[10px] font-medium uppercase tracking-[0.14em] text-zinc-500">Live status</p>
+          <div className="max-h-24 overflow-y-auto rounded-md bg-white/[0.03] px-2.5 py-2 text-[12px] leading-5 text-zinc-200">
+            {cleanLiveExplainer ? (
+              <p>{cleanLiveExplainer}</p>
+            ) : (
+              <p className="text-zinc-500">Reasoning updates will appear here.</p>
+            )}
           </div>
-        ) : loading ? (
-          <p className="text-xs text-zinc-500">Final answer hidden while streaming.</p>
-        ) : (
-          <p className="text-xs text-zinc-500">Final answer will appear when generation is complete.</p>
-        )}
-      </section>
+        </section>
+
+        {compactCategories.length > 0 ? (
+          <section>
+            <p className="mb-1 text-[10px] font-medium uppercase tracking-[0.14em] text-zinc-500">Categories</p>
+            <ul className="space-y-1.5">
+              {compactCategories.map((category) => {
+                const progressValue =
+                  typeof category.progress === "number"
+                    ? Math.max(0, Math.min(100, category.progress))
+                    : typeof category.score === "number"
+                      ? Math.max(0, Math.min(100, category.score * 10))
+                      : null;
+
+                return (
+                  <li key={category.name} className="rounded-md bg-white/[0.02] px-2 py-1.5">
+                    <div className="flex items-center justify-between gap-2 text-xs">
+                      <span className="truncate text-zinc-300">{category.name}</span>
+                      <span className="shrink-0 text-[11px] text-zinc-400">
+                        {typeof category.score === "number" ? category.score.toFixed(1) : "—"}
+                      </span>
+                    </div>
+                    {progressValue !== null ? (
+                      <div className="mt-1 h-1 overflow-hidden rounded-full bg-zinc-800/80">
+                        <div className="h-full rounded-full bg-emerald-400/90" style={{ width: `${progressValue}%` }} />
+                      </div>
+                    ) : null}
+                    {category.explanation && category.explanation.trim().length > 25 ? (
+                      <p className="mt-1 truncate text-[10px] text-zinc-500">{truncateSnippet(category.explanation)}</p>
+                    ) : null}
+                  </li>
+                );
+              })}
+            </ul>
+          </section>
+        ) : null}
+
+        {!loading && hasFinalAnswer ? <p className="text-[11px] text-zinc-500">Final answer posted to chat.</p> : null}
       </div>
     </div>
   );
