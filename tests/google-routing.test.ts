@@ -16,6 +16,7 @@ import {
   supportsThinking
 } from "../lib/providers/google-model-capabilities";
 import type { LlmProvider } from "../lib/providers/types";
+import { isLikelyProviderRefusal } from "../lib/router/refusal-detection";
 
 function provider(name: LlmProvider["name"], models: string[]): { provider: LlmProvider; models: string[] } {
   return {
@@ -330,4 +331,60 @@ test("intent session parser safely falls back on malformed memory payloads", asy
     lastSubstantiveIntent: "architecture-review",
     lastIntentTimestamp: 42
   });
+});
+
+test("openai refusal text is detected for refusal fallback", async () => {
+  assert.equal(
+    isLikelyProviderRefusal(
+      {
+        provider: "openai",
+        model: "gpt-5.2",
+        text: "I can't assist with that request, but I can still help in a safer way."
+      },
+      "openai"
+    ),
+    true
+  );
+});
+
+test("google refusal text is detected for refusal fallback", async () => {
+  assert.equal(
+    isLikelyProviderRefusal(
+      {
+        provider: "google",
+        model: "gemini-3.1-pro",
+        text: "That request goes against our content policy. Instead, I can offer a safer alternative."
+      },
+      "google"
+    ),
+    true
+  );
+});
+
+test("normal successful response is not classified as refusal", async () => {
+  assert.equal(
+    isLikelyProviderRefusal(
+      {
+        provider: "openai",
+        model: "gpt-5.2",
+        text: "I can help with that. Here is a safe plan you can follow."
+      },
+      "openai"
+    ),
+    false
+  );
+});
+
+test("refusal detector is provider-scoped and ignores other providers", async () => {
+  assert.equal(
+    isLikelyProviderRefusal(
+      {
+        provider: "grok",
+        model: "grok-4-0709",
+        text: "I can't assist with that."
+      },
+      "grok"
+    ),
+    false
+  );
 });
