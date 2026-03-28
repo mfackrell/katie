@@ -529,6 +529,16 @@ export function ChatPanel({ actorId, chatId, activeActorName, activeChatTitle }:
             setReasoningState((current) => applyReasoningEvent(current, chunk));
           }
 
+          if (
+            chunk.type === "reasoning_start" ||
+            chunk.type === "reasoning_update" ||
+            chunk.type === "reasoning_snapshot" ||
+            chunk.type === "final_answer" ||
+            chunk.type === "reasoning_error"
+          ) {
+            setReasoningState((current) => applyReasoningEvent(current, chunk));
+          }
+
           if (chunk.type === "content") {
             if (!textContent) {
               textContent = chunk.text;
@@ -580,6 +590,16 @@ export function ChatPanel({ actorId, chatId, activeActorName, activeChatTitle }:
           if (trailingChunk.type === "final_answer") {
             sawFinalReasoningAnswer = true;
           }
+          setReasoningState((current) => applyReasoningEvent(current, trailingChunk));
+        }
+
+        if (
+          trailingChunk.type === "reasoning_start" ||
+          trailingChunk.type === "reasoning_update" ||
+          trailingChunk.type === "reasoning_snapshot" ||
+          trailingChunk.type === "final_answer" ||
+          trailingChunk.type === "reasoning_error"
+        ) {
           setReasoningState((current) => applyReasoningEvent(current, trailingChunk));
         }
 
