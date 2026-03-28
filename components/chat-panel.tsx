@@ -269,30 +269,26 @@ export function ChatPanel({ actorId, chatId, activeActorName, activeChatTitle }:
   );
 
   useEffect(() => {
+    if (reasoningPopupTimeoutRef.current) {
+      clearTimeout(reasoningPopupTimeoutRef.current);
+      reasoningPopupTimeoutRef.current = null;
+    }
+
     if (!showLiveReasoningExplainer) {
       setReasoningPopupVisible(false);
       setReasoningPopupDismissed(false);
-      if (reasoningPopupTimeoutRef.current) {
-        clearTimeout(reasoningPopupTimeoutRef.current);
+      return;
+    }
+
+    if (loading) {
+      if (!reasoningPopupDismissed) {
+        setReasoningPopupVisible(true);
       }
       return;
     }
 
-    if (loading && !reasoningPopupDismissed) {
-      if (reasoningPopupTimeoutRef.current) {
-        clearTimeout(reasoningPopupTimeoutRef.current);
-      }
-      setReasoningPopupVisible(true);
+    if (!reasoningPopupVisible) {
       return;
-    }
-
-    const hasReasoningData = Boolean(reasoningState.startedAt || reasoningState.finalAnswer || reasoningState.error);
-    if (!hasReasoningData) {
-      return;
-    }
-
-    if (reasoningPopupTimeoutRef.current) {
-      clearTimeout(reasoningPopupTimeoutRef.current);
     }
 
     const closeDelay = reasoningState.error ? 3000 : 1500;
@@ -303,9 +299,10 @@ export function ChatPanel({ actorId, chatId, activeActorName, activeChatTitle }:
     return () => {
       if (reasoningPopupTimeoutRef.current) {
         clearTimeout(reasoningPopupTimeoutRef.current);
+        reasoningPopupTimeoutRef.current = null;
       }
     };
-  }, [loading, reasoningPopupDismissed, reasoningState.error, reasoningState.finalAnswer, reasoningState.startedAt, showLiveReasoningExplainer]);
+  }, [loading, reasoningPopupDismissed, reasoningPopupVisible, reasoningState.error, showLiveReasoningExplainer]);
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -579,16 +576,6 @@ export function ChatPanel({ actorId, chatId, activeActorName, activeChatTitle }:
             setReasoningState((current) => applyReasoningEvent(current, chunk));
           }
 
-          if (
-            chunk.type === "reasoning_start" ||
-            chunk.type === "reasoning_update" ||
-            chunk.type === "reasoning_snapshot" ||
-            chunk.type === "final_answer" ||
-            chunk.type === "reasoning_error"
-          ) {
-            setReasoningState((current) => applyReasoningEvent(current, chunk));
-          }
-
           if (chunk.type === "content") {
             if (!textContent) {
               textContent = chunk.text;
@@ -640,16 +627,6 @@ export function ChatPanel({ actorId, chatId, activeActorName, activeChatTitle }:
           if (trailingChunk.type === "final_answer") {
             sawFinalReasoningAnswer = true;
           }
-          setReasoningState((current) => applyReasoningEvent(current, trailingChunk));
-        }
-
-        if (
-          trailingChunk.type === "reasoning_start" ||
-          trailingChunk.type === "reasoning_update" ||
-          trailingChunk.type === "reasoning_snapshot" ||
-          trailingChunk.type === "final_answer" ||
-          trailingChunk.type === "reasoning_error"
-        ) {
           setReasoningState((current) => applyReasoningEvent(current, trailingChunk));
         }
 
@@ -1120,6 +1097,21 @@ export function ChatPanel({ actorId, chatId, activeActorName, activeChatTitle }:
         </div>
       </header>
 
+      {showLiveReasoningExplainer && reasoningPopupVisible ? (
+        <div className="pointer-events-none absolute bottom-24 right-4 z-40 sm:bottom-28 sm:right-6">
+          <div className="pointer-events-auto">
+            <ReasoningExplainerPanel
+              loading={loading}
+              state={reasoningState}
+              onClose={() => {
+                setReasoningPopupVisible(false);
+                setReasoningPopupDismissed(true);
+              }}
+            />
+          </div>
+        </div>
+      ) : null}
+
       <section
         ref={messagesContainerRef}
         className="relative min-h-0 flex-1 space-y-4 overflow-y-auto px-4 py-4 pb-24 sm:space-y-5 sm:px-6 sm:py-5 sm:pb-28"
@@ -1135,20 +1127,6 @@ export function ChatPanel({ actorId, chatId, activeActorName, activeChatTitle }:
             <p className="mt-2 text-sm leading-6 text-zinc-500">
               Start a new message to invoke the master router.
             </p>
-          </div>
-        ) : null}
-        {showLiveReasoningExplainer && reasoningPopupVisible && (loading || reasoningState.startedAt || reasoningState.finalAnswer || reasoningState.error) ? (
-          <div className="pointer-events-none absolute bottom-4 right-4 z-40 sm:bottom-5 sm:right-6">
-            <div className="pointer-events-auto">
-              <ReasoningExplainerPanel
-                loading={loading}
-                state={reasoningState}
-                onClose={() => {
-                  setReasoningPopupVisible(false);
-                  setReasoningPopupDismissed(true);
-                }}
-              />
-            </div>
           </div>
         ) : null}
         {messages.map((message) => (
