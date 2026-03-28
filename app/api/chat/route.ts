@@ -15,6 +15,7 @@ import {
 import { LlmProvider, ProviderResponse } from "@/lib/providers/types";
 import type { SelectionExplainer } from "@/lib/router/master-router";
 import { DEFAULT_REASONING_CATEGORIES, ReasoningStateAccumulator } from "@/lib/chat/reasoning-stream";
+import { isLikelyProviderRefusal, shouldRetryOnProviderRefusal } from "@/lib/router/refusal-detection";
 
 const fileReferenceSchema = z.object({
   fileId: z.string().min(1),
@@ -323,6 +324,7 @@ export async function POST(request: NextRequest) {
             let streamedText = "";
             let lastGenerationError: unknown = null;
             const attempts = [{ provider, modelId }, ...fallbackChain];
+            const retryOnProviderRefusal = shouldRetryOnProviderRefusal();
 
             for (let attemptIndex = 0; attemptIndex < attempts.length; attemptIndex += 1) {
               const candidate = attempts[attemptIndex];
@@ -343,6 +345,29 @@ export async function POST(request: NextRequest) {
                   params: createParams(modelId),
                   onTextDelta: enqueueDelta
                 }));
+
+                if (
+                  retryOnProviderRefusal &&
+                  isLikelyProviderRefusal(
+                    {
+                      ...result,
+                      text: result.text || streamedText
+                    },
+                    provider.name
+                  ) &&
+                  attemptIndex < attempts.length - 1
+                ) {
+                  const nextCandidate = attempts[attemptIndex + 1];
+                  console.warn("[Chat API] Provider refusal detected. Attempting fallback candidate.", {
+                    requestId,
+                    provider: provider.name,
+                    modelId,
+                    nextProvider: nextCandidate.provider.name,
+                    nextModelId: nextCandidate.modelId
+                  });
+                  continue;
+                }
+
                 break;
               } catch (generationError: unknown) {
                 lastGenerationError = generationError;
