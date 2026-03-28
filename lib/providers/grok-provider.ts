@@ -3,7 +3,7 @@ import { ChatGenerateParams, LlmProvider, ProviderResponse } from "@/lib/provide
 import { buildMemoryContext } from "@/lib/providers/memory-context";
 import { MATH_EXECUTION_PROTOCOL } from "@/lib/providers/math-execution-protocol";
 import { formatAttachmentContext } from "@/lib/providers/attachment-context";
-import { getKatieOperationalRealityStatement } from "@/lib/providers/operational-reality";
+import { getKatieOperationalRealityStatement, getKatieReasoningExplainerStatement } from "@/lib/providers/operational-reality";
 
 function isWebSearchIntent(requestIntent: string | undefined): boolean {
   return requestIntent === "web-search" || requestIntent === "news-summary";
@@ -73,7 +73,9 @@ export class GrokProvider implements LlmProvider {
       },
       {
         role: "system",
-        content: [{ type: "input_text", text: getKatieOperationalRealityStatement() }]
+        content: [{ type: "input_text", text: `${getKatieOperationalRealityStatement()}
+
+${getKatieReasoningExplainerStatement()}` }]
       },
       ...(attachmentContext
         ? [
@@ -155,7 +157,9 @@ export class GrokProvider implements LlmProvider {
         { role: "system", content: `${MATH_EXECUTION_PROTOCOL}\n\nCORE_PERSONA: ${params.persona}` },
         { role: "system", content: `MEMORY_CONTEXT:\n${params.summary}\nEND_MEMORY_CONTEXT` },
         { role: "system", content: buildMemoryContext(params.history) },
-        { role: "system", content: getKatieOperationalRealityStatement() }
+        { role: "system", content: `${getKatieOperationalRealityStatement()}
+
+${getKatieReasoningExplainerStatement()}` }
       ];
 
       if (attachmentContext) {

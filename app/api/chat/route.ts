@@ -14,6 +14,7 @@ import {
 } from "@/lib/router/intent-context";
 import { LlmProvider, ProviderResponse } from "@/lib/providers/types";
 import type { SelectionExplainer } from "@/lib/router/master-router";
+import { DEFAULT_REASONING_CATEGORIES, ReasoningStateAccumulator } from "@/lib/chat/reasoning-stream";
 
 const fileReferenceSchema = z.object({
   fileId: z.string().min(1),
@@ -160,6 +161,7 @@ export async function POST(request: NextRequest) {
     const { actorId, chatId, message, images, fileReferences, overrideProvider, overrideModel, routingTraceEnabled } = payload;
     const attachments = fileReferences;
     const encoder = new TextEncoder();
+    const requestId = request.headers.get("x-request-id") ?? crypto.randomUUID();
 
     console.log(`[Chat API] Processing - Actor: ${actorId}, Chat: ${chatId}`);
 
@@ -248,17 +250,33 @@ export async function POST(request: NextRequest) {
       console.log(`[Chat API] Routing Reasoning: ${routingDecision.reasoning}`);
     }
 
+    let streamCancelled = false;
     const stream = new ReadableStream<Uint8Array>({
       start(controller) {
         void (async () => {
+          const requestStartedAtMs = Date.now();
+          let firstReasoningUpdateAtMs: number | null = null;
+          let reasoningUpdateCount = 0;
+          const reasoningState = new ReasoningStateAccumulator(requestId, [...DEFAULT_REASONING_CATEGORIES]);
+          let lastSnapshotEmitAt = Date.now();
+          const emitChunk = (chunk: Record<string, unknown>) => {
+            if (streamCancelled) {
+              return;
+            }
+            controller.enqueue(encoder.encode(`${JSON.stringify(chunk)}\n`));
+          };
+
           try {
-            const metadataChunk = JSON.stringify({
+            emitChunk({
               type: "metadata",
               modelId,
               provider: provider.name,
               explainer: selectionExplainer
             });
-            controller.enqueue(encoder.encode(`${metadataChunk}\n`));
+
+            const startEvent = reasoningState.start();
+            emitChunk(startEvent);
+            console.log("[Chat API] reasoning_start emitted", { requestId, categories: startEvent.categories });
 
             console.log("[Chat API] Saving user message...");
             await saveMessage(chatId, {
@@ -269,8 +287,23 @@ export async function POST(request: NextRequest) {
 
             console.log(`[Chat API] Requesting generation from ${provider.name} using model ${modelId}...`);
             const enqueueDelta = (delta: string) => {
-              const deltaChunk = JSON.stringify({ type: "delta", text: delta });
-              controller.enqueue(encoder.encode(`${deltaChunk}\n`));
+              if (streamCancelled) {
+                throw new Error("stream cancelled");
+              }
+              emitChunk({ type: "delta", text: delta });
+              const reasoningUpdate = reasoningState.addDelta(delta);
+              if (reasoningUpdate) {
+                reasoningUpdateCount += 1;
+                if (firstReasoningUpdateAtMs === null) {
+                  firstReasoningUpdateAtMs = Date.now();
+                }
+                emitChunk(reasoningUpdate);
+
+                if (Date.now() - lastSnapshotEmitAt > 900 || reasoningUpdateCount % 6 === 0) {
+                  emitChunk(reasoningState.snapshot());
+                  lastSnapshotEmitAt = Date.now();
+                }
+              }
             };
 
             const createParams = (selectedModelId: string) =>
@@ -297,12 +330,11 @@ export async function POST(request: NextRequest) {
               modelId = candidate.modelId;
 
               if (attemptIndex > 0) {
-                const failoverMetadataChunk = JSON.stringify({
+                emitChunk({
                   type: "metadata",
                   modelId,
                   provider: provider.name
                 });
-                controller.enqueue(encoder.encode(`${failoverMetadataChunk}\n`));
               }
 
               try {
@@ -345,14 +377,17 @@ export async function POST(request: NextRequest) {
                 })
                 .filter((asset): asset is { type: "image"; url: string } => Boolean(asset)) ?? [];
 
-            const contentChunk = JSON.stringify({
+            emitChunk({
               type: "content",
               text: result.text || streamedText,
               assets: imageAssets,
               provider: result.provider,
               model: result.model
             });
-            controller.enqueue(encoder.encode(`${contentChunk}\n`));
+
+            const finalAnswerEvent = reasoningState.finalize(result.text || streamedText);
+            emitChunk(reasoningState.snapshot());
+            emitChunk(finalAnswerEvent);
 
             console.log("[Chat API] Generation successful. Saving assistant response.");
             const assistantText = result.text || streamedText;
@@ -371,13 +406,26 @@ export async function POST(request: NextRequest) {
                 console.error("[Chat API] Background Summary Update Error:", error);
               }
             });
+            console.log("[Chat API] reasoning stream metrics", {
+              requestId,
+              reasoningUpdateCount,
+              timeToFirstReasoningUpdateMs: firstReasoningUpdateAtMs === null ? null : firstReasoningUpdateAtMs - requestStartedAtMs,
+              timeToFinalAnswerMs: Date.now() - requestStartedAtMs
+            });
 
             controller.close();
           } catch (error: unknown) {
             console.error("[Chat API] Stream Runtime Error:", error);
+            const message = error instanceof Error ? error.message : "Unknown stream error";
+            emitChunk(reasoningState.error(message, true));
+            console.error("[Chat API] reasoning stream error", { requestId, message });
             controller.error(error);
           }
         })();
+      },
+      cancel() {
+        streamCancelled = true;
+        console.log("[Chat API] stream cancelled by client", { requestId });
       }
     });
 
