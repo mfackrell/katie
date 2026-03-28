@@ -51,6 +51,7 @@ type SelectionExplainer = {
 
 const MODEL_EXPLAINER_HIDDEN_STORAGE_KEY = "ui:modelExplainerHidden";
 const LIVE_REASONING_VISIBLE_STORAGE_KEY = "ui:liveReasoningExplainerVisible";
+const FALLBACK_REASONING_CATEGORIES = ["Architecture", "Security", "Complexity", "Cost", "Reliability"];
 
 function hasExplainerData(explainer: SelectionExplainer | null): explainer is SelectionExplainer {
   if (!explainer) {
@@ -431,6 +432,47 @@ export function ChatPanel({ actorId, chatId, activeActorName, activeChatTitle }:
       let assets: Array<{ type: string; url: string }> = [];
       let provider = "unknown";
       let model = "unknown";
+      let sawReasoningStart = false;
+      let sawFinalReasoningAnswer = false;
+      let fallbackReasoningDeltaCount = 0;
+      let fallbackProgress = 0;
+
+      const applyFallbackReasoningFromDelta = (delta: string) => {
+        if (!delta.trim() || sawReasoningStart) {
+          return;
+        }
+        const now = new Date().toISOString();
+        setReasoningState((current) =>
+          applyReasoningEvent(current, {
+            type: "reasoning_start",
+            requestId: `fallback-${chatId}`,
+            categories: FALLBACK_REASONING_CATEGORIES,
+            startedAt: now
+          }),
+        );
+        sawReasoningStart = true;
+      };
+
+      const applyFallbackReasoningUpdate = (delta: string) => {
+        if (!delta.trim() || !sawReasoningStart) {
+          return;
+        }
+        const category = FALLBACK_REASONING_CATEGORIES[fallbackReasoningDeltaCount % FALLBACK_REASONING_CATEGORIES.length];
+        fallbackReasoningDeltaCount += 1;
+        fallbackProgress = Math.min(95, fallbackProgress + 4);
+        setReasoningState((current) =>
+          applyReasoningEvent(current, {
+            type: "reasoning_update",
+            requestId: current.requestId ?? `fallback-${chatId}`,
+            category,
+            explanationDelta: delta,
+            score: null,
+            confidence: null,
+            progress: fallbackProgress,
+            updatedAt: new Date().toISOString()
+          }),
+        );
+      };
 
       while (true) {
         const { done, value } = await reader.read();
@@ -467,6 +509,24 @@ export function ChatPanel({ actorId, chatId, activeActorName, activeChatTitle }:
 
           if (chunk.type === "delta") {
             textContent += chunk.text;
+            applyFallbackReasoningFromDelta(chunk.text);
+            applyFallbackReasoningUpdate(chunk.text);
+          }
+
+          if (
+            chunk.type === "reasoning_start" ||
+            chunk.type === "reasoning_update" ||
+            chunk.type === "reasoning_snapshot" ||
+            chunk.type === "final_answer" ||
+            chunk.type === "reasoning_error"
+          ) {
+            if (chunk.type === "reasoning_start") {
+              sawReasoningStart = true;
+            }
+            if (chunk.type === "final_answer") {
+              sawFinalReasoningAnswer = true;
+            }
+            setReasoningState((current) => applyReasoningEvent(current, chunk));
           }
 
           if (
@@ -513,6 +573,24 @@ export function ChatPanel({ actorId, chatId, activeActorName, activeChatTitle }:
 
         if (trailingChunk.type === "delta") {
           textContent += trailingChunk.text;
+          applyFallbackReasoningFromDelta(trailingChunk.text);
+          applyFallbackReasoningUpdate(trailingChunk.text);
+        }
+
+        if (
+          trailingChunk.type === "reasoning_start" ||
+          trailingChunk.type === "reasoning_update" ||
+          trailingChunk.type === "reasoning_snapshot" ||
+          trailingChunk.type === "final_answer" ||
+          trailingChunk.type === "reasoning_error"
+        ) {
+          if (trailingChunk.type === "reasoning_start") {
+            sawReasoningStart = true;
+          }
+          if (trailingChunk.type === "final_answer") {
+            sawFinalReasoningAnswer = true;
+          }
+          setReasoningState((current) => applyReasoningEvent(current, trailingChunk));
         }
 
         if (
@@ -553,6 +631,21 @@ export function ChatPanel({ actorId, chatId, activeActorName, activeChatTitle }:
         setMessagesByChatId((cache) => ({ ...cache, [chatId]: nextMessages }));
         return nextMessages;
       });
+      if (!sawFinalReasoningAnswer) {
+        setReasoningState((current) =>
+          applyReasoningEvent(current, {
+            type: "final_answer",
+            requestId: current.requestId ?? `fallback-${chatId}`,
+            answer: textContent,
+            summaryScores: current.categories.map((category) => ({
+              name: category.name,
+              score: category.score,
+              confidence: category.confidence
+            })),
+            completedAt: new Date().toISOString()
+          }),
+        );
+      }
       setStatusMessage("Response received.");
     } catch (error: unknown) {
       abortControllerRef.current = null;
@@ -995,7 +1088,9 @@ export function ChatPanel({ actorId, chatId, activeActorName, activeChatTitle }:
           </div>
         ) : null}
         {showLiveReasoningExplainer && (loading || reasoningState.startedAt || reasoningState.finalAnswer || reasoningState.error) ? (
-          <ReasoningExplainerPanel loading={loading} state={reasoningState} />
+          <div className="sticky top-3 z-20">
+            <ReasoningExplainerPanel loading={loading} state={reasoningState} />
+          </div>
         ) : null}
         {messages.map((message) => (
           <div
