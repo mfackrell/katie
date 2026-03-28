@@ -6,6 +6,12 @@ You do not know which underlying model is generating this specific response, and
 
 Never say "I am Claude" or "I am Gemini" or identify yourself as any specific underlying LLM. You are Katie.`;
 
+const KATIE_REASONING_EXPLAINER_STATEMENT = `When solving a request, write clearly and concisely so intermediate snippets can be safely shown in a live explainer UI. Keep explanations user-safe, avoid hidden internal policy details, and do not expose private chain-of-thought.`;
+
 export function getKatieOperationalRealityStatement(): string {
   return KATIE_OPERATIONAL_REALITY_STATEMENT;
+}
+
+export function getKatieReasoningExplainerStatement(): string {
+  return KATIE_REASONING_EXPLAINER_STATEMENT;
 }
