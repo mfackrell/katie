@@ -28,6 +28,8 @@ type SelectedOverride = {
 interface ChatPanelProps {
   actorId: string;
   chatId: string;
+  activeActorName: string;
+  activeChatTitle: string;
 }
 
 type SelectionExplainer = {
@@ -64,7 +66,7 @@ function formatSignedDelta(delta?: number | null): string {
   return delta > 0 ? `+${delta.toFixed(2)}` : delta.toFixed(2);
 }
 
-export function ChatPanel({ actorId, chatId }: ChatPanelProps) {
+export function ChatPanel({ actorId, chatId, activeActorName, activeChatTitle }: ChatPanelProps) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [messagesByChatId, setMessagesByChatId] = useState<Record<string, Message[]>>({});
   const [isHydratingMessages, setIsHydratingMessages] = useState(false);
@@ -747,6 +749,20 @@ export function ChatPanel({ actorId, chatId }: ChatPanelProps) {
             </div>
 
             <div className="flex flex-wrap items-center gap-2 sm:justify-end">
+              <p className="inline-flex max-w-full items-center gap-2 rounded-full border border-emerald-400/30 bg-emerald-500/10 px-2.5 py-1 text-[11px] text-emerald-100">
+                <span className="h-1.5 w-1.5 flex-none rounded-full bg-emerald-300 shadow-[0_0_10px_rgba(110,231,183,0.8)]" />
+                <span className="truncate">
+                  Active:
+                  {" "}
+                  <span className="font-semibold text-white">
+                    {activeActorName || "No actor"}
+                  </span>
+                  {" · "}
+                  <span className="font-semibold text-white">
+                    {activeChatTitle || "No chat"}
+                  </span>
+                </span>
+              </p>
               {meta ? (
                 <p className="inline-flex max-w-full items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-2.5 py-1 text-[11px] text-zinc-400">
                   <span className="h-1.5 w-1.5 flex-none rounded-full bg-emerald-400 shadow-[0_0_10px_rgba(52,211,153,0.7)]" />
