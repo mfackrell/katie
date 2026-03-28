@@ -240,6 +240,14 @@ export default function HomePage() {
     () => chats.filter((chat) => actors.some((actor) => actor.id === chat.actorId)),
     [actors, chats],
   );
+  const activeActor = useMemo(
+    () => actors.find((actor) => actor.id === activeActorId) ?? null,
+    [actors, activeActorId],
+  );
+  const activeChat = useMemo(
+    () => chats.find((chat) => chat.id === activeChatId) ?? null,
+    [chats, activeChatId],
+  );
 
   async function createChat(
     actorId: string,
@@ -471,7 +479,12 @@ export default function HomePage() {
         </div>
 
         <div className="flex min-h-0 min-w-0 flex-1 overflow-hidden">
-          <ChatPanel actorId={activeActorId} chatId={activeChatId} />
+          <ChatPanel
+            actorId={activeActorId}
+            chatId={activeChatId}
+            activeActorName={activeActor?.name ?? ""}
+            activeChatTitle={activeChat?.title ?? ""}
+          />
         </div>
 
         <div
