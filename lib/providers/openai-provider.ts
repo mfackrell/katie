@@ -9,6 +9,7 @@ import {
 import { buildMemoryContext } from "@/lib/providers/memory-context";
 import { MATH_EXECUTION_PROTOCOL } from "@/lib/providers/math-execution-protocol";
 import { formatAttachmentContext } from "@/lib/providers/attachment-context";
+import { getKatieOperationalRealityStatement } from "@/lib/providers/operational-reality";
 
 type ResponseContentItem = {
   type: string;
@@ -49,7 +50,8 @@ ${params.summary}`,
     `EPISODIC_MEMORY (History):
 Below is the recent log of this specific conversation.
 
-${buildMemoryContext(params.history)}`
+${buildMemoryContext(params.history)}`,
+    getKatieOperationalRealityStatement()
   ];
 }
 

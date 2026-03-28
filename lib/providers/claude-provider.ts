@@ -1,6 +1,7 @@
 import { ChatGenerateParams, LlmProvider, ProviderResponse } from "@/lib/providers/types";
 import { MATH_EXECUTION_PROTOCOL } from "@/lib/providers/math-execution-protocol";
 import { formatAttachmentContext } from "@/lib/providers/attachment-context";
+import { getKatieOperationalRealityStatement } from "@/lib/providers/operational-reality";
 
 type ClaudeMessageResponse = {
   content?: Array<{ type: string; text?: string; [key: string]: unknown }>;
@@ -47,7 +48,7 @@ export class ClaudeProvider implements LlmProvider {
     const attachmentSafetyNotice = attachmentContext
       ? "\n\nIMPORTANT: Attachment previews are truncated excerpts, not full files."
       : "";
-    const systemPrompt = `${MATH_EXECUTION_PROTOCOL}\n\nCORE_PERSONA: ${params.persona}\n\nMEMORY_CONTEXT:\n${params.summary}\nEND_MEMORY_CONTEXT`;
+    const systemPrompt = `${MATH_EXECUTION_PROTOCOL}\n\nCORE_PERSONA: ${params.persona}\n\nMEMORY_CONTEXT:\n${params.summary}\nEND_MEMORY_CONTEXT\n\n${getKatieOperationalRealityStatement()}`;
     const system = attachmentContext ? `${systemPrompt}\n\n${attachmentContext}${attachmentSafetyNotice}` : systemPrompt;
     const messages = [
       ...params.history.map((entry) => ({
