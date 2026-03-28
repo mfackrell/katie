@@ -795,10 +795,24 @@ export async function chooseRoutingWithLLM(args: {
   intent: RequestIntent;
   candidates: LlmRoutingChoice[];
 }): Promise<{ selected: RoutingChoice; ranking: LlmRoutingChoice[] } | null> {
-  const openai = await getOpenAIClient();
-  if (!openai || args.candidates.length === 0) {
+  const openaiClientResult = await getOpenAIClient();
+  if (!openaiClientResult.client) {
+    if (openaiClientResult.reason === "missing_key") {
+      console.warn("[Router LLM] OPENAI_API_KEY is not configured. Falling back to deterministic ranking.");
+    } else {
+      console.warn(
+        "[Router LLM] OpenAI client initialization failed. Falling back to deterministic ranking.",
+        openaiClientResult.error
+      );
+    }
     return null;
   }
+
+  if (args.candidates.length === 0) {
+    return null;
+  }
+
+  const openai = openaiClientResult.client;
 
   const candidateList = args.candidates.map((candidate) => ({
     provider: candidate.providerName,
