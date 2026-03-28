@@ -61,7 +61,7 @@ export function ReasoningExplainerPanel({
   );
 
   return (
-    <div className="w-[min(92vw,400px)] max-h-[52vh] overflow-hidden rounded-2xl border border-white/12 bg-zinc-950/90 p-3 shadow-[0_18px_48px_rgba(0,0,0,0.5)] backdrop-blur-md sm:p-3.5">
+    <div className="w-full max-h-[52vh] overflow-hidden rounded-2xl border border-white/12 bg-zinc-950/90 p-3 shadow-[0_18px_48px_rgba(0,0,0,0.5)] backdrop-blur-md sm:p-3.5">
       <div className="mb-2 flex items-start justify-between gap-2">
         <div className="min-w-0">
           <h3 className="truncate text-[12px] font-medium text-zinc-100">Thinking</h3>
