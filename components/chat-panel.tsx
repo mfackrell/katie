@@ -100,6 +100,8 @@ export function ChatPanel({ actorId, chatId, activeActorName, activeChatTitle }:
   const [modelExplainerHidden, setModelExplainerHidden] = useState(false);
   const [showLiveReasoningExplainer, setShowLiveReasoningExplainer] = useState(true);
   const [reasoningState, setReasoningState] = useState<ReasoningUiState>(createReasoningUiState);
+  const [reasoningPopupVisible, setReasoningPopupVisible] = useState(false);
+  const [reasoningPopupDismissed, setReasoningPopupDismissed] = useState(false);
   const [explainerOpen, setExplainerOpen] = useState(false);
   const messagesContainerRef = useRef<HTMLElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -110,6 +112,7 @@ export function ChatPanel({ actorId, chatId, activeActorName, activeChatTitle }:
   const copiedFeedbackTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(
     null,
   );
+  const reasoningPopupTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const explainerContainerRef = useRef<HTMLDivElement>(null);
 
   const hasValidChatSelection = useMemo(
@@ -187,6 +190,7 @@ export function ChatPanel({ actorId, chatId, activeActorName, activeChatTitle }:
       setStatusMessage("");
       setStreamingModel(null);
       setReasoningState(createReasoningUiState());
+      setReasoningPopupVisible(false);
       setCopiedMessageId(null);
 
       if (!chatId) {
@@ -257,9 +261,51 @@ export function ChatPanel({ actorId, chatId, activeActorName, activeChatTitle }:
       if (copiedFeedbackTimeoutRef.current) {
         clearTimeout(copiedFeedbackTimeoutRef.current);
       }
+      if (reasoningPopupTimeoutRef.current) {
+        clearTimeout(reasoningPopupTimeoutRef.current);
+      }
     },
     [],
   );
+
+  useEffect(() => {
+    if (!showLiveReasoningExplainer) {
+      setReasoningPopupVisible(false);
+      setReasoningPopupDismissed(false);
+      if (reasoningPopupTimeoutRef.current) {
+        clearTimeout(reasoningPopupTimeoutRef.current);
+      }
+      return;
+    }
+
+    if (loading && !reasoningPopupDismissed) {
+      if (reasoningPopupTimeoutRef.current) {
+        clearTimeout(reasoningPopupTimeoutRef.current);
+      }
+      setReasoningPopupVisible(true);
+      return;
+    }
+
+    const hasReasoningData = Boolean(reasoningState.startedAt || reasoningState.finalAnswer || reasoningState.error);
+    if (!hasReasoningData) {
+      return;
+    }
+
+    if (reasoningPopupTimeoutRef.current) {
+      clearTimeout(reasoningPopupTimeoutRef.current);
+    }
+
+    const closeDelay = reasoningState.error ? 3000 : 1500;
+    reasoningPopupTimeoutRef.current = setTimeout(() => {
+      setReasoningPopupVisible(false);
+    }, closeDelay);
+
+    return () => {
+      if (reasoningPopupTimeoutRef.current) {
+        clearTimeout(reasoningPopupTimeoutRef.current);
+      }
+    };
+  }, [loading, reasoningPopupDismissed, reasoningState.error, reasoningState.finalAnswer, reasoningState.startedAt, showLiveReasoningExplainer]);
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -363,6 +409,10 @@ export function ChatPanel({ actorId, chatId, activeActorName, activeChatTitle }:
     setLoading(true);
     setStreamingModel(null);
     setReasoningState(createReasoningUiState());
+    if (showLiveReasoningExplainer) {
+      setReasoningPopupDismissed(false);
+      setReasoningPopupVisible(true);
+    }
 
     const optimisticUserMessage: Message = {
       id: crypto.randomUUID(),
@@ -1087,9 +1137,18 @@ export function ChatPanel({ actorId, chatId, activeActorName, activeChatTitle }:
             </p>
           </div>
         ) : null}
-        {showLiveReasoningExplainer && (loading || reasoningState.startedAt || reasoningState.finalAnswer || reasoningState.error) ? (
-          <div className="sticky top-3 z-20">
-            <ReasoningExplainerPanel loading={loading} state={reasoningState} />
+        {showLiveReasoningExplainer && reasoningPopupVisible && (loading || reasoningState.startedAt || reasoningState.finalAnswer || reasoningState.error) ? (
+          <div className="pointer-events-none absolute bottom-4 right-4 z-40 sm:bottom-5 sm:right-6">
+            <div className="pointer-events-auto">
+              <ReasoningExplainerPanel
+                loading={loading}
+                state={reasoningState}
+                onClose={() => {
+                  setReasoningPopupVisible(false);
+                  setReasoningPopupDismissed(true);
+                }}
+              />
+            </div>
           </div>
         ) : null}
         {messages.map((message) => (
