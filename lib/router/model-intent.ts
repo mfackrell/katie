@@ -813,25 +813,23 @@ export async function chooseRoutingWithLLM(args: {
   }
 
   const openai = openaiClientResult.client;
-
-  const candidateList = args.candidates.map((candidate) => ({
+  const candidateKeySet = new Set(args.candidates.map((candidate) => `${candidate.providerName}:${candidate.modelId}`));
+  const candidateList = args.candidates.slice(0, 10).map((candidate) => ({
     provider: candidate.providerName,
     model: candidate.modelId,
     baselineScore: candidate.score
   }));
 
   const systemPrompt = `
-You are the final LLM router decision-maker.
-Given user prompt, intent, and candidate models, pick the single best model.
-Return ONLY JSON with:
-{
-  "selected":{"provider":"openai|google|grok|anthropic","model":"<model-id>"},
-  "ranking":[{"provider":"...","model":"...","score":<number>}]
-}
+You are a routing tie-breaker.
+Choose at most one override candidate from the provided shortlist.
+Return ONLY compact JSON:
+{"selected":{"provider":"openai|google|grok|anthropic","model":"<model-id>"}}
 Rules:
-- ranking must include ALL candidates exactly once, in descending score.
 - selected must be one of the provided candidates.
-- Heavily respect explicit user provider preference words (claude/gemini/grok/gpt/chatgpt) unless capability mismatch.
+- If uncertain, return {}.
+- Do not include ranking or explanations.
+- Respect explicit user provider preference words (claude/gemini/grok/gpt/chatgpt) unless capability mismatch.
 - For assistant-reflection, prioritize response quality over cost/latency.
 `.trim();
 
@@ -840,7 +838,7 @@ Rules:
       model: INTENT_CLASSIFICATION_MODEL_ID,
       response_format: { type: "json_object" },
       temperature: 0,
-      max_tokens: 500,
+      max_tokens: 120,
       messages: [
         { role: "system", content: systemPrompt },
         {
@@ -855,45 +853,36 @@ Rules:
     });
 
     const raw = response.choices[0]?.message?.content ?? "";
-    const parsed = JSON.parse(raw) as {
-      selected?: { provider?: string; model?: string };
-      ranking?: Array<{ provider?: string; model?: string; score?: number }>;
-    };
+    const rawPreview = raw.slice(0, 300).replace(/\s+/g, " ").trim();
 
-    const candidateKeySet = new Set(args.candidates.map((candidate) => `${candidate.providerName}:${candidate.modelId}`));
-    const parsedRanking: LlmRoutingChoice[] = (parsed.ranking ?? [])
-      .map((entry) => ({
-        providerName: (entry.provider ?? "").toLowerCase() as ProviderName,
-        modelId: entry.model ?? "",
-        score: typeof entry.score === "number" && Number.isFinite(entry.score) ? entry.score : -1
-      }))
-      .filter((entry) => candidateKeySet.has(`${entry.providerName}:${entry.modelId}`));
-
-    const rankingKeys = new Set(parsedRanking.map((entry) => `${entry.providerName}:${entry.modelId}`));
-    for (const candidate of args.candidates) {
-      const key = `${candidate.providerName}:${candidate.modelId}`;
-      if (!rankingKeys.has(key)) {
-        parsedRanking.push(candidate);
-      }
+    if (!raw.trim()) {
+      console.warn("[Router LLM] Ignoring empty reranker response; falling back to deterministic ranking.");
+      return null;
     }
-    parsedRanking.sort((left, right) => right.score - left.score);
 
-    const selectedProvider = (parsed.selected?.provider ?? "").toLowerCase() as ProviderName;
-    const selectedModel = parsed.selected?.model ?? "";
-    const selectedKey = `${selectedProvider}:${selectedModel}`;
-    const selectedFromRanking = parsedRanking.find((candidate) => `${candidate.providerName}:${candidate.modelId}` === selectedKey);
-    const selected = selectedFromRanking ?? parsedRanking[0];
+    let parsed: { selected?: { provider?: string; model?: string } };
+    try {
+      parsed = JSON.parse(raw) as { selected?: { provider?: string; model?: string } };
+    } catch {
+      console.warn(
+        `[Router LLM] Ignoring malformed reranker JSON; falling back to deterministic ranking. raw=${rawPreview || "<empty>"}`
+      );
+      return null;
+    }
 
-    if (!selected) {
+    const selectedProvider = (parsed.selected?.provider ?? "").trim().toLowerCase() as ProviderName;
+    const selectedModel = (parsed.selected?.model ?? "").trim();
+
+    if (!selectedProvider || !selectedModel || !candidateKeySet.has(`${selectedProvider}:${selectedModel}`)) {
       return null;
     }
 
     return {
-      selected: { providerName: selected.providerName, modelId: selected.modelId },
-      ranking: parsedRanking
+      selected: { providerName: selectedProvider, modelId: selectedModel },
+      ranking: args.candidates
     };
-  } catch (error) {
-    console.warn("[Router LLM] Failed to get routing decision; falling back to deterministic ranking.", error);
+  } catch {
+    console.warn("[Router LLM] Failed to get reranker override; falling back to deterministic ranking.");
     return null;
   }
 }
