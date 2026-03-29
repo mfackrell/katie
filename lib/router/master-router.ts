@@ -35,6 +35,7 @@ type RoutingTrace = {
   prompt_features: {
     prompt_length: number;
     has_images: boolean;
+    has_video_input: boolean;
     has_context: boolean;
     context_length: number;
   };
@@ -131,6 +132,7 @@ function buildRoutingTrace({
   intent,
   prompt,
   hasImages,
+  hasVideoInput,
   context,
   availableByProvider,
   selectedProviderName,
@@ -142,6 +144,7 @@ function buildRoutingTrace({
   intent: Awaited<ReturnType<typeof inferRequestIntent>>;
   prompt: string;
   hasImages: boolean;
+  hasVideoInput: boolean;
   context: string;
   availableByProvider: Array<{ provider: LlmProvider; models: string[] }>;
   selectedProviderName: string;
@@ -164,6 +167,7 @@ function buildRoutingTrace({
     prompt_features: {
       prompt_length: prompt.length,
       has_images: hasImages,
+      has_video_input: hasVideoInput,
       has_context: Boolean(context),
       context_length: context.length
     },
@@ -334,7 +338,13 @@ export async function chooseProvider(
   prompt: string,
   context: string,
   providers: LlmProvider[],
-  options?: { hasImages?: boolean; routingTraceEnabled?: boolean; routingRequestId?: string; requestIntent?: RequestIntent }
+  options?: {
+    hasImages?: boolean;
+    hasVideoInput?: boolean;
+    routingTraceEnabled?: boolean;
+    routingRequestId?: string;
+    requestIntent?: RequestIntent;
+  }
 ): Promise<RoutingDecision> {
   let rankedCandidates: Array<{ provider: LlmProvider; modelId: string; score: number }> = [];
 
@@ -433,7 +443,10 @@ export async function chooseProvider(
     models: models.length ? models : [pickDefaultModel(provider, [])]
   }));
 
-  const intent = options?.requestIntent ?? (await inferRequestIntent(prompt, Boolean(options?.hasImages)));
+  const intent = options?.requestIntent ?? (await inferRequestIntent(prompt, {
+    hasImages: Boolean(options?.hasImages),
+    hasVideoInput: Boolean(options?.hasVideoInput)
+  }));
   if (options?.requestIntent) {
     console.info(`[Router] using provided intent=${intent}`);
   }
@@ -480,6 +493,7 @@ export async function chooseProvider(
           intent,
           prompt,
           hasImages: Boolean(options?.hasImages),
+          hasVideoInput: Boolean(options?.hasVideoInput),
           context,
           availableByProvider,
           selectedProviderName: validated.provider.name,
@@ -517,6 +531,7 @@ export async function chooseProvider(
         intent,
         prompt,
         hasImages: Boolean(options?.hasImages),
+        hasVideoInput: Boolean(options?.hasVideoInput),
         context,
         availableByProvider,
         selectedProviderName: validated.provider.name,

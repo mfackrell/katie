@@ -73,6 +73,15 @@ function buildResponsesUserContent(params: ChatGenerateParams): GrokResponseInpu
   return content;
 }
 
+function hasVideoAttachments(params: ChatGenerateParams): boolean {
+  return Boolean(
+    params.attachments?.some(
+      (attachment) =>
+        attachment.attachmentKind === "video" || attachment.mimeType.startsWith("video/"),
+    ),
+  );
+}
+
 export class GrokProvider implements LlmProvider {
   name = "grok" as const;
   private client: OpenAI;
@@ -179,6 +188,10 @@ ${getKatieReasoningExplainerStatement()}` }]
   }
 
   async generate(params: ChatGenerateParams): Promise<ProviderResponse> {
+    if (hasVideoAttachments(params)) {
+      throw new Error("Grok provider does not support video attachments in this chat flow.");
+    }
+
     const requestedModel = params.modelId ?? this.defaultModel;
     const aliasedModel = this.aliasToModel[requestedModel] ?? requestedModel;
 

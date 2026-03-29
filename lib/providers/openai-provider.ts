@@ -68,6 +68,15 @@ function buildOpenAiFileInputs(attachments: FileReference[] | undefined): Array<
     .map((fileId) => ({ type: "input_file", file_id: fileId }));
 }
 
+function hasVideoAttachments(attachments: FileReference[] | undefined): boolean {
+  return Boolean(
+    attachments?.some(
+      (attachment) =>
+        attachment.attachmentKind === "video" || attachment.mimeType.startsWith("video/"),
+    ),
+  );
+}
+
 function toChatMessages(params: ChatGenerateParams): OpenAI.Chat.ChatCompletionMessageParam[] {
   const attachmentContext = formatAttachmentContext(params.attachments);
   const userContent: OpenAI.Chat.ChatCompletionContentPart[] = [{ type: "text", text: params.user }];
@@ -446,6 +455,12 @@ export class OpenAiProvider implements LlmProvider {
     classification: ModelClassification,
     handlers: ProviderStreamHandlers
   ): Promise<ProviderResponse> {
+    if (hasVideoAttachments(params.attachments) && classification.endpoint !== "responses") {
+      throw new Error(
+        `OpenAI model ${selectedModel} does not support video attachments in this flow. Use a Responses API-capable model.`,
+      );
+    }
+
     if (!classification.stream) {
       this.logRequest("Streaming fallback to non-streaming endpoint", {
         model: selectedModel,
@@ -517,6 +532,11 @@ export class OpenAiProvider implements LlmProvider {
 
     for (const [index, selectedModel] of modelCandidates.entries()) {
       const classification = classifyModel(selectedModel);
+      if (hasVideoAttachments(params.attachments) && classification.endpoint !== "responses") {
+        throw new Error(
+          `OpenAI model ${selectedModel} does not support video attachments in this flow. Use a Responses API-capable model.`,
+        );
+      }
 
       if (index > 0) {
         this.logRequest("Trying fallback model candidate", {

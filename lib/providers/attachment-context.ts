@@ -9,6 +9,7 @@ export function formatAttachmentContext(attachments: ChatGenerateParams["attachm
 
   return attachments
     .map((attachment) => {
+      const attachmentKind = attachment.attachmentKind ?? (attachment.mimeType.startsWith("video/") ? "video" : "file");
       const providerReferenceSummary = [
         attachment.providerRef?.openaiFileId
           ? `openaiFileId=${attachment.providerRef.openaiFileId}`
@@ -23,10 +24,15 @@ export function formatAttachmentContext(attachments: ChatGenerateParams["attachm
       const metadataLine = providerReferenceSummary
         ? ` (${providerReferenceSummary})`
         : "";
+      const mediaSummary = `kind=${attachmentKind}; mime=${attachment.mimeType}; fileId=${attachment.fileId}`;
+      const previewHeader = attachmentKind === "video"
+        ? "[Video metadata only. Transcript/frame extraction is not currently available.]"
+        : PREVIEW_TRUNCATION_NOTE;
 
       return [
         `### ATTACHED FILE: ${attachment.fileName}${metadataLine} ###`,
-        PREVIEW_TRUNCATION_NOTE,
+        mediaSummary,
+        previewHeader,
         attachment.preview,
         "### END OF FILE PREVIEW ###"
       ].join("\n");

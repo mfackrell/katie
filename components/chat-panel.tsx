@@ -89,6 +89,7 @@ export function ChatPanel({ actorId, chatId, activeActorName, activeChatTitle }:
     useState<SelectedOverride>(null);
   const [streamingModel, setStreamingModel] = useState<string | null>(null);
   const [selectedImages, setSelectedImages] = useState<string[]>([]);
+  const [selectedVideos, setSelectedVideos] = useState<File[]>([]);
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
   const [uploadingFiles, setUploadingFiles] = useState(false);
   const [fileReferences, setFileReferences] = useState<FileReference[]>([]);
@@ -125,6 +126,7 @@ export function ChatPanel({ actorId, chatId, activeActorName, activeChatTitle }:
       hasValidChatSelection &&
       (input.trim().length > 0 ||
         selectedImages.length > 0 ||
+        selectedVideos.length > 0 ||
         selectedFiles.length > 0 ||
         fileReferences.length > 0) &&
       !loading &&
@@ -134,6 +136,7 @@ export function ChatPanel({ actorId, chatId, activeActorName, activeChatTitle }:
       loading,
       selectedFiles.length,
       selectedImages.length,
+      selectedVideos.length,
       uploadingFiles,
       fileReferences.length,
       hasValidChatSelection,
@@ -392,12 +395,14 @@ export function ChatPanel({ actorId, chatId, activeActorName, activeChatTitle }:
 
     const content = input.trim();
     const imagesToSend = [...selectedImages];
+    const videosToUpload = [...selectedVideos];
     const filesToUpload = [...selectedFiles];
     const priorReferences = [...fileReferences];
     const hasImages = imagesToSend.length > 0;
 
     setInput("");
     setSelectedImages([]);
+    setSelectedVideos([]);
     setSelectedFiles([]);
     setFileReferences([]);
     if (fileInputRef.current) {
@@ -427,7 +432,9 @@ export function ChatPanel({ actorId, chatId, activeActorName, activeChatTitle }:
 
     try {
       const uploadedReferences =
-        filesToUpload.length > 0 ? await uploadFiles(filesToUpload) : [];
+        filesToUpload.length + videosToUpload.length > 0
+          ? await uploadFiles([...filesToUpload, ...videosToUpload])
+          : [];
       const refsToSend = [...priorReferences, ...uploadedReferences];
 
       const abortController = new AbortController();
@@ -442,7 +449,7 @@ export function ChatPanel({ actorId, chatId, activeActorName, activeChatTitle }:
         body: JSON.stringify({
           actorId,
           chatId,
-          message: content || (hasImages ? "[image]" : "[file]"),
+          message: content || (hasImages ? "[image]" : videosToUpload.length > 0 ? "[video]" : "[file]"),
           images: imagesToSend,
           fileReferences: refsToSend,
           overrideProvider: selectedOverride?.providerName,
@@ -826,10 +833,24 @@ export function ChatPanel({ actorId, chatId, activeActorName, activeChatTitle }:
       return;
     }
 
-    const nextFiles = files.filter((file) => !file.type.startsWith("image/"));
+    const nextFiles = files.filter(
+      (file) => !file.type.startsWith("image/") && !file.type.startsWith("video/"),
+    );
+    const nextVideos = files.filter((file) => file.type.startsWith("video/"));
+    setSelectedVideos((current) => [...current, ...nextVideos]);
     setSelectedFiles((current) => [...current, ...nextFiles]);
+    const statusSegments = [
+      nextFiles.length > 0
+        ? `${nextFiles.length} file${nextFiles.length === 1 ? "" : "s"}`
+        : null,
+      nextVideos.length > 0
+        ? `${nextVideos.length} video${nextVideos.length === 1 ? "" : "s"}`
+        : null
+    ].filter((segment): segment is string => Boolean(segment));
     setStatusMessage(
-      `${nextFiles.length} non-image file${nextFiles.length === 1 ? "" : "s"} ready for upload.`,
+      statusSegments.length > 0
+        ? `${statusSegments.join(" and ")} ready for upload.`
+        : "Attachments ready for upload.",
     );
 
     files
@@ -1273,13 +1294,23 @@ export function ChatPanel({ actorId, chatId, activeActorName, activeChatTitle }:
             ))}
           </ul>
         ) : null}
+        {selectedVideos.length > 0 ? (
+          <ul
+            className="mb-4 space-y-2 rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3 text-xs text-zinc-400"
+            aria-live="polite"
+          >
+            {selectedVideos.map((file, index) => (
+              <li key={`${file.name}-${index}`}>🎬 {file.name}</li>
+            ))}
+          </ul>
+        ) : null}
 
         <div className="rounded-[28px] border border-white/10 bg-white/[0.04] p-3 shadow-[0_20px_60px_rgba(0,0,0,0.2)] backdrop-blur-sm">
           <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
             <input
               ref={fileInputRef}
               type="file"
-              accept="image/*,.txt,.md,.json,.csv"
+              accept="image/*,.txt,.md,.json,.csv,video/mp4,video/quicktime,video/webm,video/x-m4v,.mp4,.mov,.webm,.m4v"
               multiple
               onChange={handleFileChange}
               className="hidden"

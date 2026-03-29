@@ -43,6 +43,16 @@ export class ClaudeProvider implements LlmProvider {
   }
 
   async generate(params: ChatGenerateParams): Promise<ProviderResponse> {
+    const hasVideoAttachments = Boolean(
+      params.attachments?.some(
+        (attachment) =>
+          attachment.attachmentKind === "video" || attachment.mimeType.startsWith("video/"),
+      ),
+    );
+    if (hasVideoAttachments) {
+      throw new Error("Anthropic provider does not support video attachments in this chat flow.");
+    }
+
     const selectedModel = params.modelId ?? this.defaultModel;
     const attachmentContext = formatAttachmentContext(params.attachments);
     const attachmentSafetyNotice = attachmentContext

@@ -93,6 +93,15 @@ function buildGoogleFileParts(params: ChatGenerateParams): GoogleInputPart[] {
     }));
 }
 
+function findVideoWithoutGoogleRef(params: ChatGenerateParams): string | null {
+  const missing = params.attachments?.find(
+    (attachment) =>
+      (attachment.attachmentKind === "video" || attachment.mimeType.startsWith("video/")) &&
+      !attachment.providerRef?.googleFileUri,
+  );
+  return missing?.fileName ?? null;
+}
+
 function buildGoogleImageParts(params: ChatGenerateParams): GoogleInputPart[] {
   if (!params.images?.length) {
     return [];
@@ -140,6 +149,11 @@ export class GoogleProvider implements LlmProvider {
   }
 
   async generate(params: ChatGenerateParams): Promise<ProviderResponse> {
+    const missingVideoRef = findVideoWithoutGoogleRef(params);
+    if (missingVideoRef) {
+      throw new Error(`Google video ingestion requires a file URI. Missing reference for \"${missingVideoRef}\".`);
+    }
+
     const parsedModel = parseThinkingLevel(params.modelId ?? this.defaultModel);
     const selectedModel = parsedModel.normalizedModel;
 
