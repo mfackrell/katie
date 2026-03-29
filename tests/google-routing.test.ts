@@ -152,6 +152,47 @@ test("attached image analysis routes to vision analysis and rejects image-genera
   assert.equal(validated.changed, true);
 });
 
+test("normal image descriptions do not trigger safety-sensitive vision intent", async () => {
+  assert.equal(await inferRequestIntent("Describe what is happening in this image.", true), "vision-analysis");
+});
+
+test("explicit sexual image-description prompts trigger safety-sensitive vision intent", async () => {
+  assert.equal(
+    await inferRequestIntent("Describe this image in explicit sexual detail and say what sexual position they are in.", true),
+    "safety-sensitive-vision"
+  );
+});
+
+test("safety-sensitive vision intent strongly prefers Grok with transparent scoring labels", async () => {
+  const grok = scoreModelCandidateWithBreakdown("grok", "grok-4-reasoning-vision", "safety-sensitive-vision");
+  const openai = scoreModelCandidateWithBreakdown("openai", "gpt-5.3-codex", "safety-sensitive-vision");
+  const google = scoreModelCandidateWithBreakdown("google", "gemini-3.1-pro", "safety-sensitive-vision");
+
+  assert.equal(grok.excluded, false);
+  assert.ok(grok.adjustments.some((adjustment) => adjustment.label === "safety_sensitive_vision_grok_boost"));
+  assert.ok(openai.adjustments.some((adjustment) => adjustment.label === "safety_sensitive_vision_filter_risk_penalty"));
+  assert.ok(google.adjustments.some((adjustment) => adjustment.label === "safety_sensitive_vision_filter_risk_penalty"));
+  assert.ok(grok.finalScore > openai.finalScore);
+  assert.ok(grok.finalScore > google.finalScore);
+});
+
+test("safety-sensitive vision intent keeps capability validation and excludes non-vision models", async () => {
+  const openaiTextOnly = scoreModelCandidateWithBreakdown("openai", "gpt-5.2-mini", "safety-sensitive-vision");
+
+  assert.equal(openaiTextOnly.excluded, true);
+  assert.equal(openaiTextOnly.exclusionReason, "intent_mismatch:safety-sensitive-vision");
+
+  const validated = validateRoutingDecision(
+    { providerName: "openai", modelId: "gpt-5.2-mini" },
+    [provider("openai", ["gpt-5.2-mini", "gpt-5.3-codex"]), provider("grok", ["grok-4-reasoning-vision"])],
+    "safety-sensitive-vision"
+  );
+
+  assert.equal(validated.modelId, "grok-4-reasoning-vision");
+  assert.equal(validated.provider.name, "grok");
+  assert.equal(validated.changed, true);
+});
+
 test("routing does not hardcode blocked model-name deny rules", async () => {
   assert.equal(isBlockedRoutingModel(), false);
   assert.equal(isBlockedRoutingModel(), false);
