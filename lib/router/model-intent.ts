@@ -19,6 +19,7 @@ export type RequestIntent =
   | "architecture-review"
   | "code-generation"
   | "assistant-reflection"
+  | "safety-sensitive-vision"
   | "vision-analysis"
   | "multimodal-reasoning"
   | "image-generation";
@@ -121,6 +122,8 @@ const intentDescriptions: Record<RequestIntent, string> = {
   "code-generation": "For writing, generating, creating, implementing, or refactoring code, functions, or scripts.",
   "assistant-reflection":
     "For prompts where the assistant is asked to critique, evaluate, review, or improve its own prior/system outputs.",
+  "safety-sensitive-vision":
+    "For image/vision prompts asking for explicit sexual detail or erotic interpretation likely to trigger strict safety filtering.",
   "vision-analysis": "For analyzing visual content (charts, images) to extract trends, outliers, or describe scenes.",
   "multimodal-reasoning":
     "For complex analytical tasks that might combine text, data, or require forecasting and deep reasoning.",
@@ -166,6 +169,20 @@ const ASSISTANT_REFLECTION_REGEX =
 
 function hasAssistantReflectionHint(prompt: string): boolean {
   return ASSISTANT_REFLECTION_REGEX.test(prompt);
+}
+
+const SAFETY_SENSITIVE_VISION_ANCHOR_REGEX =
+  /\b(image|photo|picture|pic|frame|screenshot|scene|visual|attached|this image|this photo|what is in this)\b/i;
+const SAFETY_SENSITIVE_VISION_EXPLICIT_REGEX =
+  /\b(explicit sexual detail|describe (?:this|the)?\s*image in explicit sexual detail|describe the sex act|what sexual position|what are they doing sexually|be explicit|porn|pornographic|erotic|nude sex scene|explicit adult scene|sexual detail|graphic sexual|describe (?:this|the)?\s*image sexually|sex act)\b/i;
+
+function isLikelySafetySensitiveVisionPrompt(prompt: string, hasImages: boolean): boolean {
+  if (!hasImages) {
+    return false;
+  }
+
+  const normalizedPrompt = prompt.trim().toLowerCase();
+  return SAFETY_SENSITIVE_VISION_ANCHOR_REGEX.test(normalizedPrompt) && SAFETY_SENSITIVE_VISION_EXPLICIT_REGEX.test(normalizedPrompt);
 }
 
 export function userPreferredProviderBoost(prompt: string, providerName: ProviderName): number {
@@ -336,6 +353,9 @@ export async function inferRequestIntent(prompt: string, hasImages: boolean): Pr
   if (/\b(write code|implement|patch|refactor|create function|build api)\b/i.test(normalizedPrompt)) {
     return "code-generation";
   }
+  if (isLikelySafetySensitiveVisionPrompt(prompt, hasImages)) {
+    return "safety-sensitive-vision";
+  }
   if (hasImages && /\b(chart|trend|forecast|project|estimate)\b/i.test(normalizedPrompt)) {
     return "multimodal-reasoning";
   }
@@ -349,6 +369,7 @@ export async function inferRequestIntent(prompt: string, hasImages: boolean): Pr
     "architecture-review",
     "code-generation",
     "assistant-reflection",
+    "safety-sensitive-vision",
     "multimodal-reasoning",
     "vision-analysis",
     "image-generation"
@@ -375,6 +396,7 @@ function modelSupportsIntent(providerName: ProviderName, modelId: string, intent
       return !isImageGenerationModel(providerName, modelId) && supportsWebSearch(providerName, modelId);
     case "image-generation":
       return isImageGenerationModel(providerName, modelId);
+    case "safety-sensitive-vision":
     case "vision-analysis":
     case "multimodal-reasoning":
       return isVisionAnalysisModel(providerName, modelId) && !isImageGenerationModel(providerName, modelId);
@@ -464,6 +486,26 @@ function rankModelForIntent(providerName: ProviderName, modelId: string, intent:
         normalizedModel.includes("o3")
       ) {
         return 5;
+      }
+      if (normalizedModel.includes("vision")) {
+        return 5;
+      }
+      if (normalizedModel.includes("pro")) {
+        return 4;
+      }
+      if (normalizedModel.includes("flash")) {
+        return 3;
+      }
+      return 1;
+    case "safety-sensitive-vision":
+      if (!modelSupportsIntent(providerName, modelId, intent)) {
+        return -1;
+      }
+      if (providerName === "grok" && /reason|grok-4|grok-3/.test(normalizedModel)) {
+        return 18;
+      }
+      if (providerName === "openai" || providerName === "google") {
+        return 1;
       }
       if (normalizedModel.includes("vision")) {
         return 5;
@@ -637,6 +679,27 @@ export function scoreModelCandidateWithBreakdown(
         adjustments.push({ label: "pro_bonus", delta: 3 });
       } else if (normalizedModel.includes("flash")) {
         adjustments.push({ label: "flash_bonus", delta: 2 });
+      }
+      const finalScore = baseScore + adjustments.reduce((total, current) => total + current.delta, 0);
+      return finalize(baseScore, finalScore, null);
+    }
+    case "safety-sensitive-vision": {
+      if (!modelSupportsIntent(providerName, modelId, intent)) {
+        return finalize(null, -1, "intent_mismatch:safety-sensitive-vision");
+      }
+      const baseScore = 1;
+      if (normalizedModel.includes("vision")) {
+        adjustments.push({ label: "vision_capability_bonus", delta: 4 });
+      } else if (normalizedModel.includes("pro")) {
+        adjustments.push({ label: "pro_bonus", delta: 3 });
+      } else if (normalizedModel.includes("flash")) {
+        adjustments.push({ label: "flash_bonus", delta: 2 });
+      }
+      if (providerName === "grok" && /reason|grok-4|grok-3/.test(normalizedModel)) {
+        adjustments.push({ label: "safety_sensitive_vision_grok_boost", delta: 12 });
+      }
+      if (providerName === "openai" || providerName === "google") {
+        adjustments.push({ label: "safety_sensitive_vision_filter_risk_penalty", delta: -8 });
       }
       const finalScore = baseScore + adjustments.reduce((total, current) => total + current.delta, 0);
       return finalize(baseScore, finalScore, null);

@@ -33,6 +33,7 @@ const KNOWN_INTENTS = new Set<RequestIntent>([
   "architecture-review",
   "code-generation",
   "assistant-reflection",
+  "safety-sensitive-vision",
   "vision-analysis",
   "multimodal-reasoning",
   "image-generation"
