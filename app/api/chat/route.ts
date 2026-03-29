@@ -15,7 +15,7 @@ import {
 import { LlmProvider, ProviderResponse } from "@/lib/providers/types";
 import type { SelectionExplainer } from "@/lib/router/master-router";
 import { DEFAULT_REASONING_CATEGORIES, ReasoningStateAccumulator } from "@/lib/chat/reasoning-stream";
-import { isLikelyProviderRefusal, shouldRetryOnProviderRefusal } from "@/lib/router/refusal-detection";
+import { isLikelyProviderRefusal, runWithRefusalFallback, shouldRetryOnProviderRefusal } from "@/lib/router/refusal-detection";
 
 const fileReferenceSchema = z.object({
   fileId: z.string().min(1),
@@ -322,64 +322,54 @@ export async function POST(request: NextRequest) {
 
             let result: ProviderResponse | null = null;
             let streamedText = "";
-            let lastGenerationError: unknown = null;
             const attempts = [{ provider, modelId }, ...fallbackChain];
             const retryOnProviderRefusal = shouldRetryOnProviderRefusal();
+            const generationAttempt = await runWithRefusalFallback({
+              attempts,
+              shouldRetryRefusal: retryOnProviderRefusal,
+              runAttempt: async (candidate, attemptIndex) => {
+                provider = candidate.provider;
+                modelId = candidate.modelId;
 
-            for (let attemptIndex = 0; attemptIndex < attempts.length; attemptIndex += 1) {
-              const candidate = attempts[attemptIndex];
-              provider = candidate.provider;
-              modelId = candidate.modelId;
+                if (attemptIndex > 0) {
+                  emitChunk({
+                    type: "metadata",
+                    modelId,
+                    provider: provider.name
+                  });
+                }
 
-              if (attemptIndex > 0) {
-                emitChunk({
-                  type: "metadata",
-                  modelId,
-                  provider: provider.name
-                });
-              }
-
-              try {
-                ({ result, streamedText } = await runGeneration({
+                const generation = await runGeneration({
                   provider,
                   params: createParams(modelId),
                   onTextDelta: enqueueDelta
-                }));
+                });
 
-                if (
-                  retryOnProviderRefusal &&
-                  isLikelyProviderRefusal(
-                    {
-                      ...result,
-                      text: result.text || streamedText
-                    },
-                    provider.name
-                  ) &&
-                  attemptIndex < attempts.length - 1
-                ) {
-                  const nextCandidate = attempts[attemptIndex + 1];
-                  console.warn("[Chat API] Provider refusal detected. Attempting fallback candidate.", {
-                    requestId,
-                    provider: provider.name,
-                    modelId,
-                    nextProvider: nextCandidate.provider.name,
-                    nextModelId: nextCandidate.modelId
-                  });
-                  continue;
-                }
-
-                break;
-              } catch (generationError: unknown) {
-                lastGenerationError = generationError;
+                streamedText = generation.streamedText;
+                return {
+                  ...generation.result,
+                  text: generation.result.text || generation.streamedText
+                };
+              },
+              detectRefusal: (generationResult, candidate) => isLikelyProviderRefusal(generationResult, candidate.provider.name),
+              onRefusalFallback: ({ attempt, nextAttempt }) => {
+                console.warn("[Chat API] Provider refusal detected. Attempting fallback candidate.", {
+                  requestId,
+                  provider: attempt.provider.name,
+                  modelId: attempt.modelId,
+                  nextProvider: nextAttempt.provider.name,
+                  nextModelId: nextAttempt.modelId
+                });
+              },
+              onError: ({ attempt, error }) => {
                 console.warn(
-                  `[Chat API] Generation failed for ${provider.name}:${modelId} (${generationError instanceof Error ? generationError.message : String(generationError)}).`
+                  `[Chat API] Generation failed for ${attempt.provider.name}:${attempt.modelId} (${error instanceof Error ? error.message : String(error)}).`
                 );
               }
-            }
-
-            if (!result) {
-              throw (lastGenerationError ?? new Error("Generation failed for all routed candidates."));
-            }
+            });
+            result = generationAttempt.result;
+            provider = generationAttempt.attempt.provider;
+            modelId = generationAttempt.attempt.modelId;
 
             if (!result || (!result.text && !(result.content?.length) && !streamedText)) {
               throw new Error(`AI Provider ${provider.name} returned an empty response.`);

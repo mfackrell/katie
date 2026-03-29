@@ -15,8 +15,8 @@ import {
   isVisionAnalysisModel,
   supportsThinking
 } from "../lib/providers/google-model-capabilities";
-import type { LlmProvider } from "../lib/providers/types";
-import { isLikelyProviderRefusal } from "../lib/router/refusal-detection";
+import type { LlmProvider, ProviderResponse } from "../lib/providers/types";
+import { isLikelyProviderRefusal, runWithRefusalFallback } from "../lib/router/refusal-detection";
 
 function provider(name: LlmProvider["name"], models: string[]): { provider: LlmProvider; models: string[] } {
   return {
@@ -387,4 +387,142 @@ test("refusal detector is provider-scoped and ignores other providers", async ()
     ),
     false
   );
+});
+
+test("openai refusal result triggers fallback to next candidate", async () => {
+  const attempts = [
+    { provider: "openai", modelId: "gpt-5.2" },
+    { provider: "grok", modelId: "grok-4-0709" }
+  ];
+  const executedProviders: string[] = [];
+
+  const { result, attempt } = await runWithRefusalFallback({
+    attempts,
+    shouldRetryRefusal: true,
+    runAttempt: async (candidate) => {
+      executedProviders.push(candidate.provider);
+      if (candidate.provider === "openai") {
+        return {
+          provider: "openai",
+          model: "gpt-5.2",
+          text: "I can't assist with that request, but I can still help in a safer way."
+        };
+      }
+      return {
+        provider: "grok",
+        model: "grok-4-0709",
+        text: "Here's the direct answer."
+      };
+    },
+    detectRefusal: (candidateResult, candidate) => isLikelyProviderRefusal(candidateResult, candidate.provider)
+  });
+
+  assert.deepEqual(executedProviders, ["openai", "grok"]);
+  assert.equal(attempt.provider, "grok");
+  assert.equal(result.text, "Here's the direct answer.");
+});
+
+test("google refusal result triggers fallback to next candidate", async () => {
+  const attempts = [
+    { provider: "google", modelId: "gemini-3.1-pro" },
+    { provider: "grok", modelId: "grok-4-0709" }
+  ];
+  const executedProviders: string[] = [];
+
+  const { attempt } = await runWithRefusalFallback({
+    attempts,
+    shouldRetryRefusal: true,
+    runAttempt: async (candidate) => {
+      executedProviders.push(candidate.provider);
+      if (candidate.provider === "google") {
+        return {
+          provider: "google",
+          model: "gemini-3.1-pro",
+          text: "That request violates our content policy. I can still help in a safer way."
+        };
+      }
+      return {
+        provider: "grok",
+        model: "grok-4-0709",
+        text: "Fallback completed."
+      };
+    },
+    detectRefusal: (candidateResult, candidate) => isLikelyProviderRefusal(candidateResult, candidate.provider)
+  });
+
+  assert.deepEqual(executedProviders, ["google", "grok"]);
+  assert.equal(attempt.provider, "grok");
+});
+
+test("non-refusal successful result is accepted without fallback", async () => {
+  const attempts = [
+    { provider: "openai", modelId: "gpt-5.2" },
+    { provider: "grok", modelId: "grok-4-0709" }
+  ];
+  const executedProviders: string[] = [];
+
+  const { attempt, result } = await runWithRefusalFallback({
+    attempts,
+    shouldRetryRefusal: true,
+    runAttempt: async (candidate) => {
+      executedProviders.push(candidate.provider);
+      return {
+        provider: "openai",
+        model: "gpt-5.2",
+        text: "Sure — here's the complete response."
+      };
+    },
+    detectRefusal: (candidateResult, candidate) => isLikelyProviderRefusal(candidateResult, candidate.provider)
+  });
+
+  assert.deepEqual(executedProviders, ["openai"]);
+  assert.equal(attempt.provider, "openai");
+  assert.equal(result.text, "Sure — here's the complete response.");
+});
+
+test("refusal on final candidate is returned when no fallback remains", async () => {
+  const refusalResult: ProviderResponse = {
+    provider: "google",
+    model: "gemini-3.1-pro",
+    text: "I can't help with that because it violates our content policy."
+  };
+
+  const { attempt, result } = await runWithRefusalFallback({
+    attempts: [{ provider: "google", modelId: "gemini-3.1-pro" }],
+    shouldRetryRefusal: true,
+    runAttempt: async () => refusalResult,
+    detectRefusal: (candidateResult, candidate) => isLikelyProviderRefusal(candidateResult, candidate.provider)
+  });
+
+  assert.equal(attempt.provider, "google");
+  assert.equal(result, refusalResult);
+});
+
+test("thrown provider errors still fall back to later candidates", async () => {
+  const attempts = [
+    { provider: "openai", modelId: "gpt-5.2" },
+    { provider: "google", modelId: "gemini-3.1-pro" }
+  ];
+  const executedProviders: string[] = [];
+
+  const { attempt, result } = await runWithRefusalFallback({
+    attempts,
+    shouldRetryRefusal: true,
+    runAttempt: async (candidate) => {
+      executedProviders.push(candidate.provider);
+      if (candidate.provider === "openai") {
+        throw new Error("upstream timeout");
+      }
+      return {
+        provider: "google",
+        model: "gemini-3.1-pro",
+        text: "Recovered from fallback."
+      };
+    },
+    detectRefusal: (candidateResult, candidate) => isLikelyProviderRefusal(candidateResult, candidate.provider)
+  });
+
+  assert.deepEqual(executedProviders, ["openai", "google"]);
+  assert.equal(attempt.provider, "google");
+  assert.equal(result.text, "Recovered from fallback.");
 });
