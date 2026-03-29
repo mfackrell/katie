@@ -45,7 +45,7 @@ export async function maybeUpdateSummary(chatId: string): Promise<void> {
         {
           role: "system",
           content:
-            "You maintain a rolling conversation summary for a memory system. Produce exactly one concise paragraph that merges the prior summary with the newest conversation details. Preserve durable facts, decisions, goals, constraints, unresolved questions, and newly introduced context. Do not use bullet points. If there is no prior summary, create one from the recent messages only."
+            "You maintain a rolling conversation summary for a memory system. Produce exactly one paragraph that merges the prior summary with the newest conversation details. Preserve durable facts, decisions, goals, constraints, unresolved questions, and newly introduced context. Do not use bullet points. If there is no prior summary, create one from the recent messages only."
         },
         {
           role: "user",
