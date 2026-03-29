@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   hasDirectWebSearchHint,
   inferRequestIntent,
+  inferRequestIntentFromMultimodalInput,
   scoreModelsForIntent,
   scoreModelCandidateWithBreakdown,
   validateRoutingDecision
@@ -45,6 +46,11 @@ test("google model capability helpers separate generation from analysis", async 
   assert.equal(isVisionAnalysisModel("gemini-3.1-pro"), true);
   assert.equal(isVisionAnalysisModel("gemini-3-pro-image-preview"), false);
   assert.equal(isVisionAnalysisModel("nano-banana-pro-preview"), false);
+});
+
+
+test("multimodal classifier returns null without image inputs", async () => {
+  assert.equal(await inferRequestIntentFromMultimodalInput("Describe this image", []), null);
 });
 
 test("attached chart analysis is classified as multimodal reasoning", async () => {
