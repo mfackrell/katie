@@ -5,7 +5,12 @@ import { maybeUpdateSummary } from "@/lib/memory/summarizer";
 import { saveMessage, setShortTermMemory } from "@/lib/data/blob-store";
 import { getAvailableProviders } from "@/lib/providers";
 import { chooseProvider } from "@/lib/router/master-router";
-import { hasDirectWebSearchHint, inferRequestIntent, RequestIntent } from "@/lib/router/model-intent";
+import {
+  hasDirectWebSearchHint,
+  inferRequestIntent,
+  inferRequestIntentFromMultimodalInput,
+  RequestIntent
+} from "@/lib/router/model-intent";
 import {
   ACK_CONTEXT_TTL_MS,
   isAcknowledgment,
@@ -217,7 +222,18 @@ export async function POST(request: NextRequest) {
           `[Intent Reuse] Reusing ${requestIntent} from ${new Date(intentSession.lastIntentTimestamp).toISOString()} for ack message "${message}".`
         );
       } else {
-        requestIntent = await inferRequestIntent(message, hasVisualInput);
+        if (hasVisualInput && hasImages) {
+          const multimodalIntent = await inferRequestIntentFromMultimodalInput(message, images);
+          if (multimodalIntent) {
+            requestIntent = multimodalIntent;
+            console.info(`[Intent Source] multimodal image classifier -> ${requestIntent}`);
+          } else {
+            requestIntent = await inferRequestIntent(message, hasVisualInput);
+            console.info(`[Intent Source] fallback path -> ${requestIntent}`);
+          }
+        } else {
+          requestIntent = await inferRequestIntent(message, hasVisualInput);
+        }
 
         if (isSubstantiveIntent(requestIntent) && !isAckMessage) {
           await setShortTermMemory(actorId, chatId, {
