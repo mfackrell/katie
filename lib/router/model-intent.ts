@@ -211,6 +211,30 @@ export function userPreferredProviderBoost(prompt: string, providerName: Provide
   return 0;
 }
 
+function parseIntentClassifierResponse(raw: string, intents: RequestIntent[], sourceLabel: string): RequestIntent | null {
+  let classifiedIntent: string | null = null;
+
+  try {
+    const parsed = JSON.parse(raw);
+    classifiedIntent = (parsed.intent ?? "").trim().toLowerCase();
+  } catch (err) {
+    console.error(`[Intent Classifier:${sourceLabel}] JSON parse error`, err);
+    return null;
+  }
+
+  if (intents.includes(classifiedIntent as RequestIntent)) {
+    return classifiedIntent as RequestIntent;
+  }
+
+  if (classifiedIntent === "null") {
+    console.warn(`[Intent Classifier:${sourceLabel}] model returned null`);
+    return null;
+  }
+
+  console.warn(`[Intent Classifier:${sourceLabel}] invalid intent "${classifiedIntent}"`);
+  return null;
+}
+
 async function classifyIntentWithLLM(prompt: string, intents: RequestIntent[]): Promise<RequestIntent | null> {
   const openaiClientResult = await getOpenAIClient();
   if (!openaiClientResult.client) {
@@ -219,7 +243,7 @@ async function classifyIntentWithLLM(prompt: string, intents: RequestIntent[]): 
     } else {
       console.warn(
         "[Intent Classifier] OpenAI client initialization failed. Falling back to heuristic defaults.",
-        openaiClientResult.error
+        "error" in openaiClientResult ? openaiClientResult.error : null
       );
     }
     return null;
@@ -288,26 +312,7 @@ ${intentGuide}
     const raw = llmResponse.choices[0]?.message?.content ?? "";
     console.debug("[Intent Classifier] raw model output:", raw);
 
-    let classifiedIntent: string | null = null;
-
-    try {
-      const parsed = JSON.parse(raw);
-      classifiedIntent = (parsed.intent ?? "").trim().toLowerCase();
-    } catch (err) {
-      console.error("[Intent Classifier] JSON parse error", err);
-    }
-
-    if (intents.includes(classifiedIntent as RequestIntent)) {
-      return classifiedIntent as RequestIntent;
-    }
-
-    if (classifiedIntent === "null") {
-      console.warn("[Intent Classifier] model returned null");
-      return null;
-    }
-
-    console.warn(`[Intent Classifier] invalid intent "${classifiedIntent}"`);
-    return null;
+    return parseIntentClassifierResponse(raw, intents, "text-llm");
   } catch (error) {
     const err = error as {
       message?: string;
@@ -331,6 +336,101 @@ ${intentGuide}
   }
 }
 
+
+
+export async function inferRequestIntentFromMultimodalInput(
+  prompt: string,
+  images: string[],
+  intents: RequestIntent[] = [
+    "web-search",
+    "news-summary",
+    "emotional-analysis",
+    "rewrite",
+    "technical-debugging",
+    "architecture-review",
+    "code-generation",
+    "assistant-reflection",
+    "safety-sensitive-vision",
+    "multimodal-reasoning",
+    "vision-analysis",
+    "image-generation"
+  ]
+): Promise<RequestIntent | null> {
+  if (!Array.isArray(images) || images.length === 0) {
+    return null;
+  }
+
+  const openaiClientResult = await getOpenAIClient();
+  if (!openaiClientResult.client) {
+    if (openaiClientResult.reason === "missing_key") {
+      console.warn("[Intent Classifier:multimodal] OPENAI_API_KEY is not configured.");
+    } else {
+      console.warn("[Intent Classifier:multimodal] OpenAI client initialization failed.", "error" in openaiClientResult ? openaiClientResult.error : null);
+    }
+
+    return null;
+  }
+
+  const openai = openaiClientResult.client;
+  const intentGuide = intents.map((intent) => `- ${intent}: ${intentDescriptions[intent]}`).join("\n");
+
+  try {
+    const response = await openai.chat.completions.create({
+      model: INTENT_CLASSIFICATION_MODEL_ID,
+      response_format: { type: "json_object" },
+      temperature: 0,
+      max_tokens: 100,
+      messages: [
+        {
+          role: "system",
+          content: [
+            "You classify request intent only.",
+            `Return strict JSON only: {\"intent\":\"<one_of:${intents.join("|")}>\"}.`,
+            'If uncertain, return {"intent":"null"}.',
+            "Never choose a provider or model.",
+            "Use image content plus user text, with special care for safety-sensitive-vision when the request seeks explicit sexual interpretation or has likely provider filtering risk.",
+            intentGuide
+          ].join("\n")
+        },
+        {
+          role: "user",
+          content: [
+            { type: "text", text: `User prompt:\n${prompt}` },
+            ...images.slice(0, 4).map((url) => ({
+              type: "image_url" as const,
+              image_url: { url }
+            }))
+          ]
+        }
+      ]
+    });
+
+    const raw = response.choices[0]?.message?.content ?? "";
+    console.debug("[Intent Classifier:multimodal] raw model output:", raw);
+    return parseIntentClassifierResponse(raw, intents, "multimodal");
+  } catch (error) {
+    const err = error as {
+      message?: string;
+      status?: number;
+      code?: string;
+      type?: string;
+      param?: string;
+      request_id?: string;
+    };
+
+    console.error("[Intent Classifier:multimodal] Failed to classify request intent", {
+      message: err?.message ?? "Unknown error",
+      status: err?.status ?? null,
+      code: err?.code ?? null,
+      type: err?.type ?? null,
+      param: err?.param ?? null,
+      request_id: err?.request_id ?? null
+    });
+
+    return null;
+  }
+}
+
 export async function inferRequestIntent(
   prompt: string,
   input: boolean | { hasImages: boolean; hasVideoInput?: boolean },
@@ -341,9 +441,11 @@ export async function inferRequestIntent(
 
   // 0. Hard rule: obvious links and video references should always route through web search.
   if (hasDirectWebSearchHint(prompt)) {
+    console.info("[Intent Source] text heuristic -> web-search");
     return "web-search";
   }
   if (hasAssistantReflectionHint(prompt)) {
+    console.info("[Intent Source] text heuristic -> assistant-reflection");
     return "assistant-reflection";
   }
   if (/\b(generate|create|make)\b.*\b(image|photo|illustration|art)\b|\b(hero image|digital art)\b/i.test(normalizedPrompt)) {
@@ -368,9 +470,11 @@ export async function inferRequestIntent(
     return "code-generation";
   }
   if (isLikelySafetySensitiveVisionPrompt(prompt, hasImages)) {
+    console.info("[Intent Source] text heuristic -> safety-sensitive-vision");
     return "safety-sensitive-vision";
   }
   if (hasImages && /\b(chart|trend|forecast|project|estimate)\b/i.test(normalizedPrompt)) {
+    console.info("[Intent Source] text heuristic -> multimodal-reasoning");
     return "multimodal-reasoning";
   }
   if (hasVideoInput && /\b(chart|trend|forecast|project|estimate|timeline|sequence)\b/i.test(normalizedPrompt)) {
@@ -395,16 +499,19 @@ export async function inferRequestIntent(
   const classifiedIntent = await classifyIntentWithLLM(prompt, availableIntents);
 
   if (classifiedIntent && availableIntents.includes(classifiedIntent)) {
+    console.info(`[Intent Source] text LLM classifier -> ${classifiedIntent}`);
     return classifiedIntent;
   }
 
   if (hasImages) {
+    console.info("[Intent Source] fallback path -> vision-analysis");
     return "vision-analysis";
   }
   if (hasVideoInput) {
     return "vision-analysis";
   }
 
+  console.info("[Intent Source] fallback path -> general-text");
   return "general-text";
 }
 

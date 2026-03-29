@@ -5,7 +5,12 @@ import { maybeUpdateSummary } from "@/lib/memory/summarizer";
 import { saveMessage, setShortTermMemory } from "@/lib/data/blob-store";
 import { getAvailableProviders } from "@/lib/providers";
 import { chooseProvider } from "@/lib/router/master-router";
-import { hasDirectWebSearchHint, inferRequestIntent, RequestIntent } from "@/lib/router/model-intent";
+import {
+  hasDirectWebSearchHint,
+  inferRequestIntent,
+  inferRequestIntentFromMultimodalInput,
+  RequestIntent
+} from "@/lib/router/model-intent";
 import {
   ACK_CONTEXT_TTL_MS,
   isAcknowledgment,
