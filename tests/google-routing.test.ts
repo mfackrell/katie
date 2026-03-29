@@ -176,6 +176,19 @@ test("safety-sensitive vision intent strongly prefers Grok with transparent scor
   assert.ok(grok.finalScore > google.finalScore);
 });
 
+test("grok vision capability includes multimodal families and excludes generation-only variants", async () => {
+  const grok3 = scoreModelCandidateWithBreakdown("grok", "grok-3", "vision-analysis");
+  const grok4 = scoreModelCandidateWithBreakdown("grok", "grok-4-0709", "vision-analysis");
+  const grok420 = scoreModelCandidateWithBreakdown("grok", "grok-4.20-multi-agent-0309", "vision-analysis");
+  const grokImagineVideo = scoreModelCandidateWithBreakdown("grok", "grok-imagine-video", "vision-analysis");
+
+  assert.equal(grok3.excluded, false);
+  assert.equal(grok4.excluded, false);
+  assert.equal(grok420.excluded, false);
+  assert.equal(grokImagineVideo.excluded, true);
+  assert.equal(grokImagineVideo.exclusionReason, "intent_mismatch:vision-analysis");
+});
+
 test("safety-sensitive vision intent keeps capability validation and excludes non-vision models", async () => {
   const openaiTextOnly = scoreModelCandidateWithBreakdown("openai", "gpt-5.2-mini", "safety-sensitive-vision");
 
@@ -191,6 +204,13 @@ test("safety-sensitive vision intent keeps capability validation and excludes no
   assert.equal(validated.modelId, "grok-4-reasoning-vision");
   assert.equal(validated.provider.name, "grok");
   assert.equal(validated.changed, true);
+});
+
+test("safety-sensitive vision capability gate allows grok-4 family models", async () => {
+  const grok = scoreModelCandidateWithBreakdown("grok", "grok-4-0709", "safety-sensitive-vision");
+
+  assert.equal(grok.excluded, false);
+  assert.ok(grok.adjustments.some((adjustment) => adjustment.label === "safety_sensitive_vision_grok_boost"));
 });
 
 test("routing does not hardcode blocked model-name deny rules", async () => {
