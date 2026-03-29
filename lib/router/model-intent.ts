@@ -3,7 +3,7 @@ import {
   isVisionAnalysisModel as isGoogleVisionAnalysisModel
 } from "@/lib/providers/google-model-capabilities";
 import { LlmProvider } from "@/lib/providers/types";
-import OpenAI from "openai";
+type OpenAIClient = import("openai").default;
 
 export type ProviderName = "openai" | "google" | "grok" | "anthropic";
 export type RoutingChoice = { providerName: ProviderName; modelId: string };
@@ -138,15 +138,15 @@ const intentDescriptions: Record<RequestIntent, string> = {
   "image-generation": "For creating or generating images, photos, or digital art."
 };
 
-let openaiClient: OpenAI | null | undefined;
+let openaiClient: OpenAIClient | null | undefined;
 
 type OpenAIClientResult =
-  | { client: OpenAI; reason: null }
+  | { client: OpenAIClient; reason: null }
   | { client: null; reason: "missing_key" }
   | { client: null; reason: "init_failed"; error: unknown };
 
 async function getOpenAIClient(): Promise<OpenAIClientResult> {
-  if (openaiClient instanceof OpenAI) {
+  if (openaiClient) {
     return { client: openaiClient, reason: null };
   }
 
@@ -157,6 +157,7 @@ async function getOpenAIClient(): Promise<OpenAIClientResult> {
   }
 
   try {
+    const { default: OpenAI } = await import("openai");
     openaiClient = new OpenAI({ apiKey });
     return { client: openaiClient, reason: null };
   } catch (error) {
@@ -430,7 +431,12 @@ export async function inferRequestIntentFromMultimodalInput(
   }
 }
 
-export async function inferRequestIntent(prompt: string, hasImages: boolean): Promise<RequestIntent> {
+export async function inferRequestIntent(
+  prompt: string,
+  input: boolean | { hasImages: boolean; hasVideoInput?: boolean },
+): Promise<RequestIntent> {
+  const hasImages = typeof input === "boolean" ? input : input.hasImages;
+  const hasVideoInput = typeof input === "boolean" ? false : Boolean(input.hasVideoInput);
   const normalizedPrompt = prompt.toLowerCase();
 
   // 0. Hard rule: obvious links and video references should always route through web search.
@@ -471,6 +477,9 @@ export async function inferRequestIntent(prompt: string, hasImages: boolean): Pr
     console.info("[Intent Source] text heuristic -> multimodal-reasoning");
     return "multimodal-reasoning";
   }
+  if (hasVideoInput && /\b(chart|trend|forecast|project|estimate|timeline|sequence)\b/i.test(normalizedPrompt)) {
+    return "multimodal-reasoning";
+  }
 
   const availableIntents: RequestIntent[] = [
     "web-search",
@@ -496,6 +505,9 @@ export async function inferRequestIntent(prompt: string, hasImages: boolean): Pr
 
   if (hasImages) {
     console.info("[Intent Source] fallback path -> vision-analysis");
+    return "vision-analysis";
+  }
+  if (hasVideoInput) {
     return "vision-analysis";
   }
 

@@ -27,6 +27,7 @@ const fileReferenceSchema = z.object({
   fileName: z.string().min(1),
   mimeType: z.string().min(1),
   preview: z.string().min(1).max(2200),
+  attachmentKind: z.enum(["image", "video", "text", "file"]).optional(),
   providerRef: z
     .object({
       openaiFileId: z.string().min(1).optional(),
@@ -47,6 +48,53 @@ const requestSchema = z.object({
 });
 
 type RequestPayload = z.infer<typeof requestSchema>;
+
+type AttachmentSupportCheck = { supported: true } | { supported: false; reason: string };
+
+function isVideoAttachment(attachment: NonNullable<RequestPayload["fileReferences"]>[number]): boolean {
+  return attachment.attachmentKind === "video" || attachment.mimeType.startsWith("video/");
+}
+
+function getAttachmentSupportForProvider(
+  providerName: LlmProvider["name"],
+  attachments: RequestPayload["fileReferences"] | undefined
+): AttachmentSupportCheck {
+  if (!attachments?.length) {
+    return { supported: true };
+  }
+
+  const videoAttachments = attachments.filter(isVideoAttachment);
+  if (videoAttachments.length === 0) {
+    return { supported: true };
+  }
+
+  if (providerName === "openai") {
+    const missingRef = videoAttachments.find((attachment) => !attachment.providerRef?.openaiFileId);
+    if (missingRef) {
+      return {
+        supported: false,
+        reason: `OpenAI video ingestion requires uploaded file references. Missing OpenAI file reference for \"${missingRef.fileName}\".`
+      };
+    }
+    return { supported: true };
+  }
+
+  if (providerName === "google") {
+    const missingRef = videoAttachments.find((attachment) => !attachment.providerRef?.googleFileUri);
+    if (missingRef) {
+      return {
+        supported: false,
+        reason: `Google video ingestion requires uploaded file references. Missing Google file URI for \"${missingRef.fileName}\".`
+      };
+    }
+    return { supported: true };
+  }
+
+  return {
+    supported: false,
+    reason: `Provider \"${providerName}\" does not currently support video attachments in this chat flow.`
+  };
+}
 
 function buildGenerationParams({
   name,
@@ -200,6 +248,7 @@ export async function POST(request: NextRequest) {
       console.log(`[Chat API] Override active. Provider: ${provider.name}, Model: ${modelId}`);
     } else {
       const hasImages = Array.isArray(images) && images.length > 0;
+      const hasVideoInput = Array.isArray(attachments) && attachments.some(isVideoAttachment);
       const hasImageAttachments =
         Array.isArray(attachments) && attachments.some((attachment) => attachment.mimeType.startsWith("image/"));
       const hasVisualInput = hasImages || hasImageAttachments;
@@ -222,18 +271,10 @@ export async function POST(request: NextRequest) {
           `[Intent Reuse] Reusing ${requestIntent} from ${new Date(intentSession.lastIntentTimestamp).toISOString()} for ack message "${message}".`
         );
       } else {
-        if (hasVisualInput && hasImages) {
-          const multimodalIntent = await inferRequestIntentFromMultimodalInput(message, images);
-          if (multimodalIntent) {
-            requestIntent = multimodalIntent;
-            console.info(`[Intent Source] multimodal image classifier -> ${requestIntent}`);
-          } else {
-            requestIntent = await inferRequestIntent(message, hasVisualInput);
-            console.info(`[Intent Source] fallback path -> ${requestIntent}`);
-          }
-        } else {
-          requestIntent = await inferRequestIntent(message, hasVisualInput);
-        }
+        requestIntent = await inferRequestIntent(message, {
+          hasImages: hasVisualInput,
+          hasVideoInput
+        });
 
         if (isSubstantiveIntent(requestIntent) && !isAckMessage) {
           await setShortTermMemory(actorId, chatId, {
@@ -252,6 +293,7 @@ export async function POST(request: NextRequest) {
       const routingContext = `\n  Persona: ${persona}\n  Rolling Summary: ${summary}\n  Recent History: ${JSON.stringify(history.slice(-3))}\n  Has Attached Images: ${hasVisualInput}\n`;
       const routingDecision = await chooseProvider(message, routingContext, providers, {
         hasImages: hasVisualInput,
+        hasVideoInput,
         requestIntent: resolvedRequestIntent,
         routingTraceEnabled,
         routingRequestId: request.headers.get("x-request-id") ?? undefined
@@ -265,6 +307,27 @@ export async function POST(request: NextRequest) {
       console.log(`[Chat API] Selected Provider: ${provider.name}, Model: ${modelId}`);
       console.log(`[Chat API] Routing Model For UI: ${routingDecision.routerModel}`);
       console.log(`[Chat API] Routing Reasoning: ${routingDecision.reasoning}`);
+    }
+
+    const selectedProviderSupport = getAttachmentSupportForProvider(provider.name, attachments);
+    if (!selectedProviderSupport.supported && !overrideProvider) {
+      const compatibleFallback = fallbackChain.find((candidate) => {
+        const support = getAttachmentSupportForProvider(candidate.provider.name, attachments);
+        return support.supported;
+      });
+
+      if (compatibleFallback) {
+        provider = compatibleFallback.provider;
+        modelId = compatibleFallback.modelId;
+      }
+    }
+
+    const finalProviderSupport = getAttachmentSupportForProvider(provider.name, attachments);
+    if (!finalProviderSupport.supported) {
+      return NextResponse.json(
+        { error: finalProviderSupport.reason },
+        { status: 400 }
+      );
     }
 
     let streamCancelled = false;

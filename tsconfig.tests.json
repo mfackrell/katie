@@ -18,6 +18,14 @@
     "lib/providers/google-model-capabilities.ts",
     "lib/router/model-intent.ts",
     "lib/providers/types.ts",
+    "lib/uploads/build-file-references.ts",
+    "lib/providers/openai-provider.ts",
+    "lib/providers/google-provider.ts",
+    "lib/providers/grok-provider.ts",
+    "lib/providers/attachment-context.ts",
+    "lib/providers/memory-context.ts",
+    "lib/providers/math-execution-protocol.ts",
+    "lib/providers/operational-reality.ts",
     "lib/types/chat.ts",
     "lib/chat/request-guards.ts",
     "lib/chat/inflight-guards.ts",
@@ -31,6 +39,7 @@
     "tests/starter-chat-idempotency.test.ts",
     "tests/reasoning-stream.test.ts",
     "tests/reasoning-ui-state.test.ts",
+    "tests/video-ingestion.test.ts",
     "lib/router/policy-engine.ts",
     "tests/policy-engine.test.ts"
   ]
