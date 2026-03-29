@@ -164,7 +164,14 @@ ${getKatieReasoningExplainerStatement()}` }]
   async listModels(): Promise<string[]> {
     try {
       const models = await this.client.models.list();
-      return models.data.map((model) => model.id);
+      const normalizedIds = models.data
+        .map((model) => model.id)
+        .filter((modelId): modelId is string => typeof modelId === "string" && modelId.length > 0)
+        .map((modelId) => {
+          const slashParts = modelId.split("/");
+          return slashParts[slashParts.length - 1] ?? modelId;
+        });
+      return Array.from(new Set(normalizedIds));
     } catch (error) {
       console.error("[GrokProvider] Failed to list models:", error);
       return [];
