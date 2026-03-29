@@ -235,6 +235,7 @@ async function classifyIntentWithLLM(prompt: string, intents: RequestIntent[]): 
   ];
   const systemPrompt = `
 You are an expert intent classifier.
+If the router determines there is at least a 90% probability that a request will trigger a safety filter, it should route the task to a Grok reasoning model.
 Return ONLY a JSON object like {"intent":"<one_of:${intents.join("|")}>"}.
 If unsure use {"intent":"null"}.
 No other keys.
