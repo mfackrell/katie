@@ -271,10 +271,17 @@ export async function POST(request: NextRequest) {
           `[Intent Reuse] Reusing ${requestIntent} from ${new Date(intentSession.lastIntentTimestamp).toISOString()} for ack message "${message}".`
         );
       } else {
-        requestIntent = await inferRequestIntent(message, {
-          hasImages: hasVisualInput,
-          hasVideoInput
-        });
+        const multimodalIntent =
+          hasVisualInput && Array.isArray(images) && images.length > 0
+            ? await inferRequestIntentFromMultimodalInput(message, images)
+            : null;
+
+        requestIntent =
+          multimodalIntent ??
+          (await inferRequestIntent(message, {
+            hasImages: hasVisualInput,
+            hasVideoInput
+          }));
 
         if (isSubstantiveIntent(requestIntent) && !isAckMessage) {
           await setShortTermMemory(actorId, chatId, {
