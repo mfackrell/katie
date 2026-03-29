@@ -50,3 +50,53 @@ export function isLikelyProviderRefusal(result: ProviderResponse, providerName: 
   const saferWayMentioned = SAFER_WAY_PATTERN.test(normalized);
   return policyMentioned && saferWayMentioned;
 }
+
+export async function runWithRefusalFallback<TAttempt>({
+  attempts,
+  runAttempt,
+  detectRefusal,
+  shouldRetryRefusal,
+  onRefusalFallback,
+  onError
+}: {
+  attempts: TAttempt[];
+  runAttempt: (attempt: TAttempt, attemptIndex: number) => Promise<ProviderResponse>;
+  detectRefusal: (result: ProviderResponse, attempt: TAttempt) => boolean;
+  shouldRetryRefusal: boolean;
+  onRefusalFallback?: (context: { attempt: TAttempt; attemptIndex: number; nextAttempt: TAttempt }) => void;
+  onError?: (context: { attempt: TAttempt; attemptIndex: number; error: unknown }) => void;
+}): Promise<{ result: ProviderResponse; attempt: TAttempt }> {
+  let lastGenerationError: unknown = null;
+  let lastRefusal: { result: ProviderResponse; attempt: TAttempt } | null = null;
+
+  for (let attemptIndex = 0; attemptIndex < attempts.length; attemptIndex += 1) {
+    const attempt = attempts[attemptIndex];
+
+    try {
+      const result = await runAttempt(attempt, attemptIndex);
+
+      if (!shouldRetryRefusal || !detectRefusal(result, attempt)) {
+        return { result, attempt };
+      }
+
+      const hasNextAttempt = attemptIndex < attempts.length - 1;
+      if (!hasNextAttempt) {
+        return { result, attempt };
+      }
+
+      lastRefusal = { result, attempt };
+      const nextAttempt = attempts[attemptIndex + 1];
+      onRefusalFallback?.({ attempt, attemptIndex, nextAttempt });
+      continue;
+    } catch (error: unknown) {
+      lastGenerationError = error;
+      onError?.({ attempt, attemptIndex, error });
+    }
+  }
+
+  if (lastRefusal) {
+    return lastRefusal;
+  }
+
+  throw (lastGenerationError ?? new Error("Generation failed for all routed candidates."));
+}
