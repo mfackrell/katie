@@ -15,7 +15,7 @@ export function getAvailableProviders(): LlmProvider[] {
     providers.push(new GoogleProvider(process.env.GOOGLE_API_KEY));
   }
 
-  const grokKey = process.env["grok_api_key"];
+  const grokKey = process.env.GROK_API_KEY ?? process.env.XAI_API_KEY ?? process.env["grok_api_key"];
   if (grokKey) {
     providers.push(new GrokProvider(grokKey));
   }

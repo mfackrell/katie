@@ -95,6 +95,19 @@ function logFullRanking(
   console.info(`[Router RANKING] ${JSON.stringify({ requestId, intent, ranking })}`);
 }
 
+function logRoutingCandidatePool(
+  requestId: string,
+  intent: Awaited<ReturnType<typeof inferRequestIntent>>,
+  availableByProvider: Array<{ provider: LlmProvider; models: string[] }>
+): void {
+  const providers = availableByProvider.map(({ provider, models }) => ({
+    provider: provider.name,
+    modelCount: models.length,
+    sampleModels: models.slice(0, 5)
+  }));
+  console.info(`[Router CANDIDATE_POOL] ${JSON.stringify({ requestId, intent, providers })}`);
+}
+
 function isRoutingTraceEnabled(perRequestOverride?: boolean): boolean {
   if (perRequestOverride === true) {
     return true;
@@ -428,6 +441,7 @@ export async function chooseProvider(
   const traceRequestId = options?.routingRequestId ?? crypto.randomUUID();
   const traceTimestamp = new Date().toISOString();
   const policyConfig = getPolicyConfig();
+  logRoutingCandidatePool(traceRequestId, intent, availableByProvider);
   rankedCandidates = scoreModelsForIntent(availableByProvider, intent, prompt);
   const llmRouting = await chooseRoutingWithLLM({
     prompt,
