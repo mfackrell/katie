@@ -85,7 +85,15 @@ function isVisionAnalysisModel(providerName: ProviderName, modelId: string): boo
   }
 
   if (providerName === "grok") {
-    return normalizedModel.includes("vision");
+    const isGenerationOnlyVariant =
+      normalizedModel.includes("imagine") ||
+      normalizedModel.includes("video") ||
+      normalizedModel.includes("image-gen");
+    if (isGenerationOnlyVariant) {
+      return false;
+    }
+
+    return normalizedModel.includes("grok-3") || normalizedModel.includes("grok-4");
   }
 
   return normalizedModel.includes("vision");
