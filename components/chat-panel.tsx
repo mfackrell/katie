@@ -1041,7 +1041,7 @@ export function ChatPanel({ actorId, chatId, activeActorName, activeChatTitle }:
                       id="model-selection-explainer"
                       role="dialog"
                       aria-label="Model selection explainer details"
-                      className="absolute right-0 z-20 mt-2 w-80 rounded-2xl border border-white/10 bg-zinc-950/95 p-3 text-xs text-zinc-300 shadow-[0_18px_48px_rgba(0,0,0,0.45)] backdrop-blur"
+                      className="absolute right-0 z-50 mt-2 w-80 rounded-2xl border border-white/10 bg-zinc-950/95 p-3 text-xs text-zinc-300 shadow-[0_18px_48px_rgba(0,0,0,0.45)] backdrop-blur"
                     >
                       {isRoutingSelectionInFlight || !selectionExplainer ? (
                         <div className="space-y-2">
