@@ -21,6 +21,11 @@ import {
   type ReasoningStreamEvent,
   type ReasoningUiState
 } from "@/lib/chat/reasoning-stream";
+import {
+  parseIntermediateMemoryDraft,
+  stringifyIntermediateMemoryContent,
+  type JsonRecord,
+} from "@/lib/chat/intermediate-memory-editor";
 import { ReasoningExplainerPanel } from "@/components/reasoning-explainer-panel";
 
 type ProviderName = "openai" | "google" | "grok" | "anthropic";
@@ -122,6 +127,12 @@ export function ChatPanel({ actorId, chatId, activeActorName, activeChatTitle }:
   const [reasoningPopupVisible, setReasoningPopupVisible] = useState(false);
   const [reasoningPopupDismissed, setReasoningPopupDismissed] = useState(false);
   const [explainerOpen, setExplainerOpen] = useState(false);
+  const [intermediateEditorOpen, setIntermediateEditorOpen] = useState(false);
+  const [intermediateMemoryDraft, setIntermediateMemoryDraft] = useState("");
+  const [intermediateMemoryValue, setIntermediateMemoryValue] = useState<JsonRecord>({});
+  const [intermediateMemoryError, setIntermediateMemoryError] = useState("");
+  const [loadingIntermediateMemory, setLoadingIntermediateMemory] = useState(false);
+  const [savingIntermediateMemory, setSavingIntermediateMemory] = useState(false);
   const messagesContainerRef = useRef<HTMLElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -259,6 +270,15 @@ export function ChatPanel({ actorId, chatId, activeActorName, activeChatTitle }:
       cancelled = true;
     };
   }, [chatId]);
+
+  useEffect(() => {
+    setIntermediateEditorOpen(false);
+    setIntermediateMemoryDraft("");
+    setIntermediateMemoryValue({});
+    setIntermediateMemoryError("");
+    setLoadingIntermediateMemory(false);
+    setSavingIntermediateMemory(false);
+  }, [actorId, chatId]);
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -970,6 +990,89 @@ export function ChatPanel({ actorId, chatId, activeActorName, activeChatTitle }:
     }
   }
 
+  async function openIntermediateEditor() {
+    if (!hasValidChatSelection) {
+      setIntermediateMemoryError("Select an actor and chat before editing intermediate memory.");
+      return;
+    }
+
+    setIntermediateEditorOpen(true);
+    setLoadingIntermediateMemory(true);
+    setIntermediateMemoryError("");
+
+    try {
+      const response = await fetch(
+        `/api/memory/intermediate?actorId=${encodeURIComponent(actorId)}&chatId=${encodeURIComponent(chatId)}`,
+        { cache: "no-store" },
+      );
+      const payload = (await response.json()) as { content?: JsonRecord; error?: string };
+      if (!response.ok) {
+        throw new Error(payload.error ?? "Failed to load intermediate memory.");
+      }
+
+      const content = payload.content ?? {};
+      setIntermediateMemoryValue(content);
+      setIntermediateMemoryDraft(stringifyIntermediateMemoryContent(content));
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Failed to load intermediate memory.";
+      setIntermediateMemoryError(message);
+      setIntermediateMemoryValue({});
+      setIntermediateMemoryDraft("{}");
+    } finally {
+      setLoadingIntermediateMemory(false);
+    }
+  }
+
+  async function saveIntermediateMemory() {
+    if (!hasValidChatSelection) {
+      setIntermediateMemoryError("Select an actor and chat before editing intermediate memory.");
+      return;
+    }
+
+    let nextContent: JsonRecord;
+    try {
+      nextContent = parseIntermediateMemoryDraft(intermediateMemoryDraft);
+      setIntermediateMemoryError("");
+    } catch (error) {
+      setIntermediateMemoryError(
+        error instanceof Error ? error.message : "Intermediate memory must be valid JSON.",
+      );
+      return;
+    }
+
+    const previousContent = intermediateMemoryValue;
+    setIntermediateMemoryValue(nextContent);
+    setSavingIntermediateMemory(true);
+
+    try {
+      const response = await fetch(
+        `/api/memory/intermediate?actorId=${encodeURIComponent(actorId)}&chatId=${encodeURIComponent(chatId)}`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ content: nextContent }),
+        },
+      );
+      const payload = (await response.json()) as { content?: JsonRecord; error?: string };
+      if (!response.ok) {
+        throw new Error(payload.error ?? "Failed to save intermediate memory.");
+      }
+
+      const savedContent = payload.content ?? {};
+      setIntermediateMemoryValue(savedContent);
+      setIntermediateMemoryDraft(stringifyIntermediateMemoryContent(savedContent));
+      setIntermediateEditorOpen(false);
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Failed to save intermediate memory.";
+      setIntermediateMemoryError(message);
+      setIntermediateMemoryValue(previousContent);
+    } finally {
+      setSavingIntermediateMemory(false);
+    }
+  }
+
   return (
     <main className="relative flex min-h-0 flex-1 flex-col overflow-hidden bg-gradient-to-b from-white/[0.02] via-transparent to-black/10">
       <header className="shrink-0 border-b border-white/10 px-4 py-3 sm:px-6 sm:py-3.5">
@@ -1158,6 +1261,15 @@ export function ChatPanel({ actorId, chatId, activeActorName, activeChatTitle }:
                 aria-controls="model-controls"
               >
                 {showModelControls ? "Hide model overrides" : "Model overrides"}
+              </button>
+              <button
+                type="button"
+                onClick={() => void openIntermediateEditor()}
+                disabled={!hasValidChatSelection}
+                className="inline-flex min-h-10 items-center justify-center rounded-2xl border border-white/10 bg-white/[0.05] px-3 py-2 text-xs font-medium text-zinc-200 transition hover:border-white/20 hover:bg-white/[0.08] disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
+                aria-label="Edit intermediate memory"
+              >
+                Edit intermediate memory
               </button>
             </div>
           </div>
@@ -1492,6 +1604,67 @@ export function ChatPanel({ actorId, chatId, activeActorName, activeChatTitle }:
           </div>
         </div>
       </form>
+
+      {intermediateEditorOpen ? (
+        <div className="fixed inset-0 z-50 flex min-h-screen items-center justify-center bg-black/80 p-4 backdrop-blur-md sm:p-6">
+          <div className="relative flex h-full w-full max-w-4xl flex-col overflow-hidden rounded-[28px] border border-white/10 bg-zinc-950/95 shadow-[0_30px_90px_rgba(0,0,0,0.6)]">
+            <div className="relative flex items-start justify-between gap-4 border-b border-white/10 px-5 py-5 sm:px-7">
+              <div>
+                <p className="text-[11px] font-semibold uppercase tracking-[0.28em] text-zinc-500">Memory layer</p>
+                <h2 className="mt-2 text-2xl font-semibold tracking-tight text-white">Edit Intermediate Memory</h2>
+                <p className="mt-2 text-sm text-zinc-400">
+                  Editing is scoped to actor <span className="text-zinc-200">{activeActorName || "unknown"}</span> and chat <span className="text-zinc-200">{activeChatTitle || "unknown"}</span>.
+                </p>
+              </div>
+              <button
+                className="rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-2 text-sm text-zinc-300 transition hover:border-white/20 hover:bg-white/[0.08] hover:text-white disabled:cursor-not-allowed disabled:opacity-60"
+                disabled={savingIntermediateMemory}
+                onClick={() => setIntermediateEditorOpen(false)}
+                aria-label="Close intermediate memory editor"
+              >
+                Close
+              </button>
+            </div>
+
+            <div className="flex min-h-0 flex-1 flex-col px-5 py-5 sm:px-7">
+              {intermediateMemoryError ? (
+                <p className="mb-3 rounded-xl border border-red-500/35 bg-red-500/10 px-3 py-2 text-xs text-red-100">
+                  {intermediateMemoryError}
+                </p>
+              ) : null}
+              <textarea
+                className="min-h-0 flex-1 resize-none rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-3 font-mono text-xs leading-6 text-zinc-100 outline-none focus-visible:ring-2 focus-visible:ring-emerald-400 disabled:opacity-60"
+                value={intermediateMemoryDraft}
+                onChange={(event) => setIntermediateMemoryDraft(event.target.value)}
+                disabled={loadingIntermediateMemory || savingIntermediateMemory}
+                aria-label="Intermediate memory JSON"
+              />
+              {loadingIntermediateMemory ? (
+                <p className="mt-3 text-xs text-zinc-400">Loading intermediate memory…</p>
+              ) : null}
+            </div>
+
+            <div className="flex justify-end gap-3 border-t border-white/10 px-5 py-5 sm:px-7">
+              <button
+                className="rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-2.5 text-sm font-medium text-zinc-300 transition hover:border-white/20 hover:bg-white/[0.08] hover:text-white disabled:cursor-not-allowed disabled:opacity-60"
+                disabled={savingIntermediateMemory}
+                onClick={() => setIntermediateEditorOpen(false)}
+                aria-label="Cancel intermediate memory edit"
+              >
+                Cancel
+              </button>
+              <button
+                className="rounded-2xl border border-emerald-400/40 bg-gradient-to-r from-sky-500 to-emerald-500 px-4 py-2.5 text-sm font-semibold text-white shadow-[0_14px_30px_rgba(14,165,233,0.25)] transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-70"
+                disabled={loadingIntermediateMemory || savingIntermediateMemory}
+                onClick={() => void saveIntermediateMemory()}
+                aria-label="Save intermediate memory"
+              >
+                {savingIntermediateMemory ? "Saving..." : "Save"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </main>
   );
 }
