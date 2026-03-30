@@ -79,7 +79,7 @@ function loadPatchHandler() {
   process.env.SUPABASE_SERVICE_ROLE_KEY = "service-role";
 
   const routePath = require.resolve("../app/api/actors/route");
-  const storePath = require.resolve("../lib/data/blob-store");
+  const storePath = require.resolve("../lib/data/persistence-store");
   delete require.cache[routePath];
   delete require.cache[storePath];
 

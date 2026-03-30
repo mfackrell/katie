@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { getMessages } from "@/lib/data/blob-store";
+import { getMessages } from "@/lib/data/persistence-store";
 
 const chatIdParamSchema = z.object({
   chatId: z.string().min(1)

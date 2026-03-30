@@ -1,4 +1,4 @@
-import { getActorById, saveActor } from "@/lib/data/blob-store";
+import { getActorById, saveActor } from "@/lib/data/persistence-store";
 import type { Actor } from "@/lib/types/chat";
 
 function buildActorId(): string {

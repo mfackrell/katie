@@ -2,7 +2,7 @@ import { after, NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { assembleContext } from "@/lib/memory/assemble-context";
 import { maybeUpdateSummary } from "@/lib/memory/summarizer";
-import { saveMessage, setShortTermMemory } from "@/lib/data/blob-store";
+import { saveMessage, setShortTermMemory } from "@/lib/data/persistence-store";
 import { getAvailableProviders } from "@/lib/providers";
 import { chooseProvider } from "@/lib/router/master-router";
 import {

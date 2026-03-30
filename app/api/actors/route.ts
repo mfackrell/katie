@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { deleteActorsById, getActorById, listActors, saveActor } from "@/lib/data/blob-store";
+import { deleteActorsById, getActorById, listActors, saveActor } from "@/lib/data/persistence-store";
 import { getSupabaseAdminClient } from "@/lib/data/supabase/admin";
 import type { Actor } from "@/lib/types/chat";
 

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { deleteChatById, getActorById, getChatById, listChats, listChatsByActorId, saveChat } from "@/lib/data/blob-store";
+import { deleteChatById, getActorById, getChatById, listChats, listChatsByActorId, saveChat } from "@/lib/data/persistence-store";
 import { resolveStarterChat } from "@/lib/chat/starter-chat";
 import type { ChatThread } from "@/lib/types/chat";
 

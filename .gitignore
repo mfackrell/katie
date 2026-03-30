@@ -1,6 +1,7 @@
 .next
 node_modules
 .env*
+!.env.example
 .DS_Store
 npm-debug.log*
 .vercel
