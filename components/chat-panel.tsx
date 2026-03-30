@@ -921,7 +921,7 @@ export function ChatPanel({ actorId, chatId, activeActorName, activeChatTitle }:
       if (!isRoutingSelectionInFlight && (!hasExplainerData(selectionExplainer) || isThinking)) {
         setExplainerOpen(false);
       }
-    }, [isRoutingSelectionInFlight, selectionExplainer, isThinking]);          
+    }, [isRoutingSelectionInFlight, selectionExplainer, loading]);          
   
     function handleModelExplainerVisibility(nextHidden: boolean) {
       setModelExplainerHidden(nextHidden);
