@@ -21,6 +21,12 @@ import { LlmProvider, ProviderResponse } from "@/lib/providers/types";
 import type { SelectionExplainer } from "@/lib/router/master-router";
 import { DEFAULT_REASONING_CATEGORIES, ReasoningStateAccumulator } from "@/lib/chat/reasoning-stream";
 import { isLikelyProviderRefusal, runWithRefusalFallback, shouldRetryOnProviderRefusal } from "@/lib/router/refusal-detection";
+import {
+  getAttachmentSupportForProvider,
+  isVideoAttachment,
+  resolveVideoRoutingPolicy,
+  selectGoogleModelForVideoRouting
+} from "@/lib/chat/video-routing";
 
 const fileReferenceSchema = z.object({
   fileId: z.string().min(1),
@@ -48,53 +54,6 @@ const requestSchema = z.object({
 });
 
 type RequestPayload = z.infer<typeof requestSchema>;
-
-type AttachmentSupportCheck = { supported: true } | { supported: false; reason: string };
-
-function isVideoAttachment(attachment: NonNullable<RequestPayload["fileReferences"]>[number]): boolean {
-  return attachment.attachmentKind === "video" || attachment.mimeType.startsWith("video/");
-}
-
-function getAttachmentSupportForProvider(
-  providerName: LlmProvider["name"],
-  attachments: RequestPayload["fileReferences"] | undefined
-): AttachmentSupportCheck {
-  if (!attachments?.length) {
-    return { supported: true };
-  }
-
-  const videoAttachments = attachments.filter(isVideoAttachment);
-  if (videoAttachments.length === 0) {
-    return { supported: true };
-  }
-
-  if (providerName === "openai") {
-    const missingRef = videoAttachments.find((attachment) => !attachment.providerRef?.openaiFileId);
-    if (missingRef) {
-      return {
-        supported: false,
-        reason: `OpenAI video ingestion requires uploaded file references. Missing OpenAI file reference for \"${missingRef.fileName}\".`
-      };
-    }
-    return { supported: true };
-  }
-
-  if (providerName === "google") {
-    const missingRef = videoAttachments.find((attachment) => !attachment.providerRef?.googleFileUri);
-    if (missingRef) {
-      return {
-        supported: false,
-        reason: `Google video ingestion requires uploaded file references. Missing Google file URI for \"${missingRef.fileName}\".`
-      };
-    }
-    return { supported: true };
-  }
-
-  return {
-    supported: false,
-    reason: `Provider \"${providerName}\" does not currently support video attachments in this chat flow.`
-  };
-}
 
 function buildGenerationParams({
   name,
@@ -214,6 +173,7 @@ export async function POST(request: NextRequest) {
     const payload = await parseIncomingPayload(request);
     const { actorId, chatId, message, images, fileReferences, overrideProvider, overrideModel, routingTraceEnabled } = payload;
     const attachments = fileReferences;
+    const hasVideoInput = Array.isArray(attachments) && attachments.some(isVideoAttachment);
     const encoder = new TextEncoder();
     const requestId = request.headers.get("x-request-id") ?? crypto.randomUUID();
 
@@ -236,6 +196,19 @@ export async function POST(request: NextRequest) {
     let fallbackChain: Array<{ provider: LlmProvider; modelId: string; score: number }> = [];
     let selectionExplainer: SelectionExplainer | undefined;
     let resolvedRequestIntent: RequestIntent | undefined;
+    const videoRoutingPolicy = resolveVideoRoutingPolicy(hasVideoInput, overrideProvider);
+
+    if (hasVideoInput) {
+      console.log("[Video Routing] detected video attachment(s); forcing provider=google");
+    }
+
+    if (videoRoutingPolicy.mode === "reject-override") {
+      console.warn(`[Video Routing] rejected override provider=${videoRoutingPolicy.provider} for video input`);
+      return NextResponse.json(
+        { error: "Video attachments are only supported through the Google/Gemini provider in this chat flow." },
+        { status: 400 }
+      );
+    }
 
     if (overrideProvider && overrideModel) {
       const manualProvider = providers.find((candidate) => candidate.name === overrideProvider);
@@ -246,9 +219,34 @@ export async function POST(request: NextRequest) {
       provider = manualProvider;
       modelId = overrideModel;
       console.log(`[Chat API] Override active. Provider: ${provider.name}, Model: ${modelId}`);
+    } else if (videoRoutingPolicy.mode === "force-google") {
+      const googleProvider = providers.find((candidate) => candidate.name === "google");
+      if (!googleProvider) {
+        return NextResponse.json(
+          { error: "Video attachments require the Google/Gemini provider, but it is not configured." },
+          { status: 400 }
+        );
+      }
+
+      provider = googleProvider;
+      modelId = await selectGoogleModelForVideoRouting(provider);
+      fallbackChain = [];
+      console.log(`[Video Routing] detected video attachment(s); forcing provider=google model=${modelId}`);
+    } else if (videoRoutingPolicy.mode === "manual-google") {
+      const googleProvider = providers.find((candidate) => candidate.name === "google");
+      if (!googleProvider) {
+        return NextResponse.json(
+          { error: "Video attachments require the Google/Gemini provider, but it is not configured." },
+          { status: 400 }
+        );
+      }
+
+      provider = googleProvider;
+      modelId = await selectGoogleModelForVideoRouting(provider, overrideModel);
+      fallbackChain = [];
+      console.log(`[Video Routing] override accepted; provider=google model=${modelId}`);
     } else {
       const hasImages = Array.isArray(images) && images.length > 0;
-      const hasVideoInput = Array.isArray(attachments) && attachments.some(isVideoAttachment);
       const hasImageAttachments =
         Array.isArray(attachments) && attachments.some((attachment) => attachment.mimeType.startsWith("image/"));
       const hasVisualInput = hasImages || hasImageAttachments;
