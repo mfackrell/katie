@@ -1,5 +1,6 @@
 import {
   buildCandidateMetadata,
+  buildRoutingPreferenceProfile,
   chooseRoutingWithLLM,
   CandidateScoreBreakdown,
   filterCandidatesForIntent,
@@ -59,6 +60,8 @@ type RoutingTrace = {
     deterministic_fallback_used: boolean;
     override_happened: boolean;
     override_reason: string | null;
+    llm_preference_profile: ReturnType<typeof buildRoutingPreferenceProfile>;
+    llm_candidates: Array<ReturnType<typeof buildCandidateMetadata>>;
   };
   policy: {
     router_version: string | null;
@@ -144,7 +147,9 @@ function buildRoutingTrace({
   selectedModelId,
   overrideReason,
   llmPrimaryUsed,
-  deterministicFallbackUsed
+  deterministicFallbackUsed,
+  llmPreferenceProfile,
+  llmCandidates
 }: {
   requestId: string;
   timestamp: string;
@@ -159,6 +164,8 @@ function buildRoutingTrace({
   overrideReason: string | null;
   llmPrimaryUsed: boolean;
   deterministicFallbackUsed: boolean;
+  llmPreferenceProfile: ReturnType<typeof buildRoutingPreferenceProfile>;
+  llmCandidates: Array<ReturnType<typeof buildCandidateMetadata>>;
 }): RoutingTrace {
   const scoredCandidates = scoreModelsForIntent(availableByProvider, intent, prompt).map(({ provider, modelId, score }) => ({
     provider: provider.name,
@@ -199,7 +206,9 @@ function buildRoutingTrace({
       llm_primary_used: llmPrimaryUsed,
       deterministic_fallback_used: deterministicFallbackUsed,
       override_happened: Boolean(overrideReason),
-      override_reason: overrideReason
+      override_reason: overrideReason,
+      llm_preference_profile: llmPreferenceProfile,
+      llm_candidates: llmCandidates
     },
     policy: {
       router_version: process.env.ROUTER_POLICY_VERSION ?? null,
@@ -361,6 +370,8 @@ export async function chooseProvider(
   let llmPrimaryUsed = false;
   let deterministicFallbackUsed = false;
   let fallbackReason: string | null = null;
+  let llmCandidatesUsed: Array<ReturnType<typeof buildCandidateMetadata>> = [];
+  const preferenceProfile = buildRoutingPreferenceProfile();
 
   const intent = options?.requestIntent ?? (await inferRequestIntent(prompt, {
     hasImages: Boolean(options?.hasImages),
@@ -385,9 +396,11 @@ export async function chooseProvider(
   const candidateCountBeforeFilter = availableByProvider.reduce((total, entry) => total + entry.models.length, 0);
 
   console.info(`[Route Policy] requestId=${traceRequestId} intent=${intent} hasVideoInput=${Boolean(options?.hasVideoInput)}`);
+  let hardRouteRule = "none";
 
   if (options?.hasVideoInput) {
     availableByProvider = availableByProvider.filter(({ provider }) => provider.name === "google");
+    hardRouteRule = "video-input-google-only";
   }
 
   availableByProvider = filterCandidatesForIntent(availableByProvider, intent, {
@@ -502,14 +515,38 @@ export async function chooseProvider(
   if (!rankedCandidates.length) {
     selected = fallbackToDeterministic("no_ranked_candidates");
   } else {
-    const candidateMetadata = rankedCandidates.map((candidate) =>
-      buildCandidateMetadata(candidate.provider.name, candidate.modelId, intent)
+    llmCandidatesUsed = rankedCandidates.map((candidate) => {
+      const metadata = buildCandidateMetadata(candidate.provider.name, candidate.modelId, intent);
+      const breakdown = scoreModelCandidateWithBreakdown(candidate.provider.name, candidate.modelId, intent);
+      return {
+        ...metadata,
+        score_breakdown: {
+          base_score: breakdown.baseScore,
+          final_score: breakdown.finalScore,
+          excluded: breakdown.excluded,
+          exclusion_reason: breakdown.exclusionReason,
+          adjustments: breakdown.adjustments
+        }
+      };
+    });
+    console.info(`[LLM Router Preferences] ${JSON.stringify({ requestId: traceRequestId, intent, preferenceProfile })}`);
+    console.info(
+      `[LLM Router Candidates] ${JSON.stringify({ requestId: traceRequestId, count: llmCandidatesUsed.length, candidates: llmCandidatesUsed })}`
     );
 
     const llmRouting: LlmRoutingResult = await chooseRoutingWithLLM({
       prompt,
       intent,
-      candidates: candidateMetadata
+      modalityFlags: {
+        has_images: Boolean(options?.hasImages),
+        has_video_input: Boolean(options?.hasVideoInput)
+      },
+      hardRouteContext: {
+        hard_rule_applied: hardRouteRule !== "none",
+        rule: hardRouteRule
+      },
+      preferenceProfile,
+      candidates: llmCandidatesUsed
     });
     console.info(`[LLM Router] requestId=${traceRequestId} output_accepted=${llmRouting.accepted}`);
 
@@ -576,7 +613,9 @@ export async function chooseProvider(
         selectedModelId: selected.modelId,
         overrideReason: selected.overrideReason,
         llmPrimaryUsed,
-        deterministicFallbackUsed
+        deterministicFallbackUsed,
+        llmPreferenceProfile: preferenceProfile,
+        llmCandidates: llmCandidatesUsed
       })
     );
   }
