@@ -276,8 +276,8 @@ export class GoogleProvider implements LlmProvider {
       let streamedText = "";
       const content: Array<{ type: string; url: string }> = [];
 
-      for await (const chunk of result.stream) {
-        const chunkText = typeof chunk.text === "function" ? chunk.text() : (chunk.text ?? "");
+      for await (const chunk of result) {
+        const chunkText = chunk.text ?? "";
         if (chunkText) {
           streamedText += chunkText;
           await handlers.onTextDelta?.(chunkText);
