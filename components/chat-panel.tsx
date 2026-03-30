@@ -918,7 +918,7 @@ export function ChatPanel({ actorId, chatId, activeActorName, activeChatTitle }:
       : null;
 
     useEffect(() => {
-      if (!isRoutingSelectionInFlight && (!hasExplainerData(selectionExplainer) || isThinking)) {
+      if (!isRoutingSelectionInFlight && (!hasExplainerData(selectionExplainer) || loading)) {
         setExplainerOpen(false);
       }
     }, [isRoutingSelectionInFlight, selectionExplainer, loading]);          
