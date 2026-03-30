@@ -41,11 +41,17 @@ interface ChatPanelProps {
 
 type SelectionExplainer = {
   selected_model?: string;
+  selected_provider?: string;
   intent?: { label?: string; confidence?: number | null };
   summary?: string;
-  factors?: Array<{ label: string; delta?: number | null }>;
+  preference_profile_applied?: string;
+  top_factors?: Array<{ label: string; detail?: string; delta?: number | null }>;
+  top_candidates?: Array<{ model?: string; provider?: string; score?: number | null; why_not_selected?: string }> | null;
+  selected_source?: "llm-primary" | "deterministic-fallback";
   top_candidate_score?: number | null;
-  runner_up?: { model?: string; score?: number | null } | null;
+  hard_rule_applied?: string | null;
+  fallback_used?: boolean;
+  fallback_reason?: string | null;
   override?: { applied?: boolean; reason?: string | null } | null;
 };
 
@@ -60,10 +66,14 @@ function hasExplainerData(explainer: SelectionExplainer | null): explainer is Se
 
   return Boolean(
     explainer.selected_model ||
+      explainer.selected_provider ||
       explainer.intent?.label ||
-      (explainer.factors && explainer.factors.length > 0) ||
+      (explainer.top_factors && explainer.top_factors.length > 0) ||
+      (explainer.top_candidates && explainer.top_candidates.length > 0) ||
       typeof explainer.top_candidate_score === "number" ||
-      explainer.runner_up?.model ||
+      explainer.hard_rule_applied ||
+      explainer.selected_source ||
+      explainer.fallback_used ||
       (explainer.override?.applied && explainer.override.reason),
   );
 }
@@ -73,6 +83,13 @@ function formatSignedDelta(delta?: number | null): string {
     return "—";
   }
   return delta > 0 ? `+${delta.toFixed(2)}` : delta.toFixed(2);
+}
+
+function formatIntentLabel(label?: string): string {
+  if (!label) {
+    return "unknown";
+  }
+  return label.replaceAll("-", " ");
 }
 
 export function ChatPanel({ actorId, chatId, activeActorName, activeChatTitle }: ChatPanelProps) {
@@ -985,7 +1002,9 @@ export function ChatPanel({ actorId, chatId, activeActorName, activeChatTitle }:
                       aria-controls="model-selection-explainer"
                       aria-label="Open model selection explainer"
                     >
-                      <span className="truncate">Model: {selectionExplainer.selected_model ?? meta?.model ?? "Unknown"} · Why?</span>
+                      <span className="truncate">
+                        Model: {selectionExplainer.selected_provider ?? meta?.provider ?? "unknown"} / {selectionExplainer.selected_model ?? meta?.model ?? "Unknown"} · Why?
+                      </span>
                     </button>
                     <button
                       type="button"
@@ -1001,36 +1020,83 @@ export function ChatPanel({ actorId, chatId, activeActorName, activeChatTitle }:
                       id="model-selection-explainer"
                       role="dialog"
                       aria-label="Model selection explainer details"
-                      className="absolute right-0 z-20 mt-2 w-72 rounded-2xl border border-white/10 bg-zinc-950/95 p-3 text-xs text-zinc-300 shadow-[0_18px_48px_rgba(0,0,0,0.45)] backdrop-blur"
+                      className="absolute right-0 z-20 mt-2 w-80 rounded-2xl border border-white/10 bg-zinc-950/95 p-3 text-xs text-zinc-300 shadow-[0_18px_48px_rgba(0,0,0,0.45)] backdrop-blur"
                     >
-                      <p className="font-semibold text-zinc-100">Why this model?</p>
-                      {selectionExplainer.intent?.label ? (
-                        <p className="mt-2 text-zinc-400">
-                          Intent: <span className="text-zinc-200">{selectionExplainer.intent.label}</span>
-                          {typeof selectionExplainer.intent.confidence === "number"
-                            ? ` (${(selectionExplainer.intent.confidence * 100).toFixed(0)}%)`
-                            : ""}
-                        </p>
-                      ) : null}
-                      {selectionExplainer.factors?.length ? (
-                        <ul className="mt-2 space-y-1">
-                          {selectionExplainer.factors.slice(0, 4).map((factor) => (
-                            <li key={factor.label} className="flex items-center justify-between gap-2">
-                              <span className="truncate text-zinc-400">{factor.label}</span>
-                              <span className="font-mono text-zinc-200">{formatSignedDelta(factor.delta)}</span>
-                            </li>
-                          ))}
-                        </ul>
-                      ) : null}
-                      {(typeof selectionExplainer.top_candidate_score === "number" || selectionExplainer.runner_up?.model) ? (
-                        <p className="mt-2 text-zinc-400">
-                          Score: <span className="text-zinc-200">{selectionExplainer.top_candidate_score ?? "—"}</span>
-                          {" vs "}
-                          <span className="text-zinc-200">
-                            {selectionExplainer.runner_up?.model ?? "Runner-up"} ({selectionExplainer.runner_up?.score ?? "—"})
+                      <div className="space-y-2">
+                        <div className="rounded-xl border border-white/10 bg-white/[0.03] p-2.5">
+                          <p className="font-semibold text-zinc-100">Why this model</p>
+                          <p className="mt-1 text-[11px] text-zinc-400">
+                            {selectionExplainer.selected_provider ?? "unknown"} / {selectionExplainer.selected_model ?? "unknown"}
+                          </p>
+                          {selectionExplainer.summary ? <p className="mt-1 text-zinc-300">{selectionExplainer.summary}</p> : null}
+                        </div>
+
+                        <div className="grid grid-cols-2 gap-2 text-[11px]">
+                          <p className="rounded-lg border border-white/10 bg-white/[0.02] px-2 py-1.5 text-zinc-400">
+                            Intent: <span className="text-zinc-200">{formatIntentLabel(selectionExplainer.intent?.label)}</span>
+                          </p>
+                          <p className="rounded-lg border border-white/10 bg-white/[0.02] px-2 py-1.5 text-zinc-400">
+                            Score: <span className="text-zinc-200">{selectionExplainer.top_candidate_score ?? "—"}</span>
+                          </p>
+                        </div>
+
+                        {selectionExplainer.preference_profile_applied ? (
+                          <p className="rounded-lg border border-white/10 bg-white/[0.02] px-2 py-1.5 text-[11px] text-zinc-300">
+                            {selectionExplainer.preference_profile_applied}
+                          </p>
+                        ) : null}
+
+                        {selectionExplainer.top_factors?.length ? (
+                          <div className="space-y-1.5">
+                            <p className="text-[11px] font-medium uppercase tracking-wide text-zinc-500">Key reasons</p>
+                            <ul className="space-y-1.5">
+                              {selectionExplainer.top_factors.slice(0, 5).map((factor, index) => (
+                                <li
+                                  key={`${factor.label}-${index}`}
+                                  className="rounded-lg border border-white/10 bg-white/[0.02] px-2 py-1.5 transition-opacity duration-300"
+                                  style={{ transitionDelay: `${index * 45}ms` }}
+                                >
+                                  <div className="flex items-center justify-between gap-2">
+                                    <span className="truncate text-zinc-300">{factor.label}</span>
+                                    <span className="font-mono text-zinc-200">{formatSignedDelta(factor.delta)}</span>
+                                  </div>
+                                  {factor.detail ? <p className="mt-1 text-[11px] text-zinc-500">{factor.detail}</p> : null}
+                                </li>
+                              ))}
+                            </ul>
+                          </div>
+                        ) : null}
+
+                        {selectionExplainer.top_candidates?.length ? (
+                          <div className="space-y-1.5">
+                            <p className="text-[11px] font-medium uppercase tracking-wide text-zinc-500">Top alternatives</p>
+                            <ul className="space-y-1.5">
+                              {selectionExplainer.top_candidates.slice(0, 3).map((candidate, index) => (
+                                <li key={`${candidate.provider}-${candidate.model}-${index}`} className="rounded-lg border border-white/10 bg-white/[0.02] px-2 py-1.5">
+                                  <p className="text-zinc-200">{candidate.provider ?? "unknown"} / {candidate.model ?? "unknown"}</p>
+                                  <p className="text-[11px] text-zinc-500">{candidate.why_not_selected ?? "Valid alternative."}</p>
+                                </li>
+                              ))}
+                            </ul>
+                          </div>
+                        ) : null}
+
+                        <div className="flex flex-wrap gap-1.5 pt-1">
+                          <span className="rounded-full border border-white/10 bg-white/[0.02] px-2 py-0.5 text-[10px] text-zinc-400">
+                            {selectionExplainer.selected_source === "llm-primary" ? "routing: llm-primary" : "routing: deterministic-fallback"}
                           </span>
-                        </p>
-                      ) : null}
+                          {selectionExplainer.hard_rule_applied ? (
+                            <span className="rounded-full border border-amber-400/30 bg-amber-500/10 px-2 py-0.5 text-[10px] text-amber-200">
+                              hard rule: {selectionExplainer.hard_rule_applied}
+                            </span>
+                          ) : null}
+                          {selectionExplainer.fallback_used ? (
+                            <span className="rounded-full border border-indigo-400/30 bg-indigo-500/10 px-2 py-0.5 text-[10px] text-indigo-200">
+                              fallback used{selectionExplainer.fallback_reason ? ` · ${selectionExplainer.fallback_reason}` : ""}
+                            </span>
+                          ) : null}
+                        </div>
+                      </div>
                       {selectionExplainer.override?.applied && selectionExplainer.override.reason ? (
                         <p className="mt-2 text-amber-200/90">Override: {selectionExplainer.override.reason}</p>
                       ) : null}
