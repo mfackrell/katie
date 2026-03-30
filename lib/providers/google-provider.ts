@@ -1,5 +1,10 @@
 import { GoogleGenAI, ThinkingLevel as GoogleThinkingLevel } from "@google/genai";
-import { ChatGenerateParams, LlmProvider, ProviderResponse } from "@/lib/providers/types";
+import {
+  ChatGenerateParams,
+  LlmProvider,
+  ProviderResponse,
+  ProviderStreamHandlers
+} from "@/lib/providers/types";
 import { buildMemoryContext } from "@/lib/providers/memory-context";
 import { MATH_EXECUTION_PROTOCOL } from "@/lib/providers/math-execution-protocol";
 import { formatAttachmentContext } from "@/lib/providers/attachment-context";
@@ -218,6 +223,87 @@ export class GoogleProvider implements LlmProvider {
       const detail = error instanceof Error ? error.message : String(error);
       console.error(`[GoogleProvider] Gemini error body for model ${selectedModel}: ${detail}`);
       throw new Error(`Gemini request failed for model ${selectedModel}`);
+    }
+  }
+
+  async generateStream(params: ChatGenerateParams, handlers: ProviderStreamHandlers): Promise<ProviderResponse> {
+    const missingVideoRef = findVideoWithoutGoogleRef(params);
+    if (missingVideoRef) {
+      throw new Error(`Google video ingestion requires a file URI. Missing reference for \"${missingVideoRef}\".`);
+    }
+
+    const parsedModel = parseThinkingLevel(params.modelId ?? this.defaultModel);
+    const selectedModel = parsedModel.normalizedModel;
+
+    const parts: GoogleInputPart[] = [
+      { text: params.user },
+      ...buildGoogleFileParts(params),
+      ...buildGoogleImageParts(params)
+    ];
+    const contents: Array<{ role: "user"; parts: GoogleInputPart[] }> = [
+      {
+        role: "user",
+        parts
+      }
+    ];
+
+    const thinkingLevelInput = supportsThinking(selectedModel)
+      ? parsedModel.thinkingLevelInput ?? "medium"
+      : undefined;
+    const isImageTask = isImageGenerationModel(selectedModel);
+    const attachmentContext = formatAttachmentContext(params.attachments);
+    const baseSystemInstruction = buildSystemInstruction(params);
+    const systemInstructionBase = isImageTask
+      ? `${baseSystemInstruction}\n\nIMPORTANT: You have direct image generation capabilities. If the user asks for a photo, design asset, or image, generate it directly as an image modality response.`
+      : baseSystemInstruction;
+    const systemInstruction = attachmentContext
+      ? `${systemInstructionBase}\n\n${attachmentContext}`
+      : systemInstructionBase;
+
+    try {
+      const result = await this.client.models.generateContentStream({
+        model: selectedModel,
+        contents,
+        config: {
+          systemInstruction,
+          responseModalities: isImageTask ? ["TEXT", "IMAGE"] : ["TEXT"],
+          ...(thinkingLevelInput
+            ? { thinkingConfig: { thinkingLevel: toGoogleThinkingLevel(thinkingLevelInput) } }
+            : {})
+        }
+      });
+
+      let streamedText = "";
+      const content: Array<{ type: string; url: string }> = [];
+
+      for await (const chunk of result.stream) {
+        const chunkText = typeof chunk.text === "function" ? chunk.text() : (chunk.text ?? "");
+        if (chunkText) {
+          streamedText += chunkText;
+          await handlers.onTextDelta?.(chunkText);
+        }
+
+        const chunkParts = chunk.candidates?.[0]?.content?.parts ?? [];
+        for (const part of chunkParts) {
+          if (!part.inlineData) {
+            continue;
+          }
+
+          const dataUrl = `data:${part.inlineData.mimeType};base64,${part.inlineData.data}`;
+          content.push({ type: "image", url: dataUrl });
+        }
+      }
+
+      return {
+        text: streamedText || (content.length > 0 ? "[Image Generated]" : ""),
+        model: selectedModel,
+        provider: this.name,
+        content: content.length > 0 ? content : undefined
+      };
+    } catch (error: unknown) {
+      const detail = error instanceof Error ? error.message : String(error);
+      console.error(`[GoogleProvider] Gemini streaming error body for model ${selectedModel}: ${detail}`);
+      throw new Error(`Gemini streaming request failed for model ${selectedModel}`);
     }
   }
 }
