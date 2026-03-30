@@ -4,6 +4,7 @@ import {
   CandidateScoreBreakdown,
   filterCandidatesForIntent,
   inferRequestIntent,
+  LlmRoutingResult,
   RequestIntent,
   scoreModelCandidateWithBreakdown,
   scoreModelsForIntent,
@@ -359,6 +360,7 @@ export async function chooseProvider(
   let rankedCandidates: Array<{ provider: LlmProvider; modelId: string; score: number }> = [];
   let llmPrimaryUsed = false;
   let deterministicFallbackUsed = false;
+  let fallbackReason: string | null = null;
 
   const intent = options?.requestIntent ?? (await inferRequestIntent(prompt, {
     hasImages: Boolean(options?.hasImages),
@@ -380,6 +382,7 @@ export async function chooseProvider(
     provider,
     models: models.length ? models : [pickDefaultModel(provider, [])]
   }));
+  const candidateCountBeforeFilter = availableByProvider.reduce((total, entry) => total + entry.models.length, 0);
 
   console.info(`[Route Policy] requestId=${traceRequestId} intent=${intent} hasVideoInput=${Boolean(options?.hasVideoInput)}`);
 
@@ -395,6 +398,9 @@ export async function chooseProvider(
   logRoutingCandidatePool(traceRequestId, intent, availableByProvider);
 
   rankedCandidates = scoreModelsForIntent(availableByProvider, intent, prompt);
+  console.info(
+    `[Router Candidate Hygiene] requestId=${traceRequestId} before=${candidateCountBeforeFilter} after=${rankedCandidates.length}`
+  );
 
   const applyPolicyGuardrail = (selection: Selection): RoutingDecision => {
     const fallbackChain = buildFallbackChain({
@@ -473,13 +479,14 @@ export async function chooseProvider(
     };
   };
 
-  const fallbackToDeterministic = (): Selection => {
+  const fallbackToDeterministic = (reason: string): Selection => {
     deterministicFallbackUsed = true;
+    fallbackReason = reason;
     const topCandidate = rankedCandidates[0];
     const provider = topCandidate?.provider ?? availableByProvider[0]?.provider ?? providers[0];
     const modelId = topCandidate?.modelId ?? pickDefaultModel(provider, availableByProvider.find((entry) => entry.provider.name === provider.name)?.models ?? []);
     const validated = validateRoutingDecision({ providerName: provider.name, modelId }, availableByProvider, intent);
-    console.info(`[Routing Fallback] selected=${validated.provider.name}:${validated.modelId}`);
+    console.info(`[Routing Fallback] reason=${reason} selected=${validated.provider.name}:${validated.modelId}`);
     return {
       provider: validated.provider,
       modelId: validated.modelId,
@@ -493,20 +500,21 @@ export async function chooseProvider(
   let selected: Selection;
 
   if (!rankedCandidates.length) {
-    selected = fallbackToDeterministic();
+    selected = fallbackToDeterministic("no_ranked_candidates");
   } else {
     const candidateMetadata = rankedCandidates.map((candidate) =>
       buildCandidateMetadata(candidate.provider.name, candidate.modelId, intent)
     );
 
-    const llmRouting = await chooseRoutingWithLLM({
+    const llmRouting: LlmRoutingResult = await chooseRoutingWithLLM({
       prompt,
       intent,
       candidates: candidateMetadata
     });
+    console.info(`[LLM Router] requestId=${traceRequestId} output_accepted=${llmRouting.accepted}`);
 
-    if (!llmRouting) {
-      selected = fallbackToDeterministic();
+    if (!llmRouting.accepted) {
+      selected = fallbackToDeterministic(`llm_router_rejected:${llmRouting.reason}`);
     } else {
       llmPrimaryUsed = true;
       const providerLookup = new Map(availableByProvider.map(({ provider }) => [provider.name, provider]));
@@ -522,7 +530,7 @@ export async function chooseProvider(
 
       const selectedProvider = providerLookup.get(llmRouting.selected.providerName);
       if (!selectedProvider) {
-        selected = fallbackToDeterministic();
+        selected = fallbackToDeterministic("llm_router_provider_missing");
       } else {
         const validated = validateRoutingDecision(
           { providerName: llmRouting.selected.providerName, modelId: llmRouting.selected.modelId },
@@ -531,7 +539,7 @@ export async function chooseProvider(
         );
         if (validated.changed) {
           console.warn(`[Routing Validation] rejected_llm_selection=${llmRouting.selected.providerName}:${llmRouting.selected.modelId}`);
-          selected = fallbackToDeterministic();
+          selected = fallbackToDeterministic("llm_router_selection_invalid_after_validation");
         } else {
           console.info(`[LLM Router] selected=${validated.provider.name}:${validated.modelId}`);
           selected = {
@@ -549,6 +557,9 @@ export async function chooseProvider(
 
   logFullRanking(traceRequestId, intent, rankedCandidates);
   logRoutingDecision(intent, availableByProvider, prompt, selected.provider.name, selected.modelId);
+  console.info(
+    `[Routing Final] requestId=${traceRequestId} source=${llmPrimaryUsed ? "llm-primary" : "deterministic-fallback"} fallback_reason=${fallbackReason ?? "none"}`
+  );
 
   if (traceEnabled) {
     logRoutingTrace(
