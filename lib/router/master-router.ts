@@ -1,6 +1,8 @@
 import {
+  buildCandidateMetadata,
   chooseRoutingWithLLM,
   CandidateScoreBreakdown,
+  filterCandidatesForIntent,
   inferRequestIntent,
   RequestIntent,
   scoreModelCandidateWithBreakdown,
@@ -52,6 +54,8 @@ type RoutingTrace = {
     ranked_candidates: Array<{ provider: string; model_id: string; score: number }>;
     top_ranked: { provider: string; model_id: string; score: number } | null;
     selected_model: { provider: string; model_id: string };
+    llm_primary_used: boolean;
+    deterministic_fallback_used: boolean;
     override_happened: boolean;
     override_reason: string | null;
   };
@@ -137,7 +141,9 @@ function buildRoutingTrace({
   availableByProvider,
   selectedProviderName,
   selectedModelId,
-  overrideReason
+  overrideReason,
+  llmPrimaryUsed,
+  deterministicFallbackUsed
 }: {
   requestId: string;
   timestamp: string;
@@ -150,6 +156,8 @@ function buildRoutingTrace({
   selectedProviderName: string;
   selectedModelId: string;
   overrideReason: string | null;
+  llmPrimaryUsed: boolean;
+  deterministicFallbackUsed: boolean;
 }): RoutingTrace {
   const scoredCandidates = scoreModelsForIntent(availableByProvider, intent, prompt).map(({ provider, modelId, score }) => ({
     provider: provider.name,
@@ -187,6 +195,8 @@ function buildRoutingTrace({
         provider: selectedProviderName,
         model_id: selectedModelId
       },
+      llm_primary_used: llmPrimaryUsed,
+      deterministic_fallback_used: deterministicFallbackUsed,
       override_happened: Boolean(overrideReason),
       override_reason: overrideReason
     },
@@ -347,33 +357,69 @@ export async function chooseProvider(
   }
 ): Promise<RoutingDecision> {
   let rankedCandidates: Array<{ provider: LlmProvider; modelId: string; score: number }> = [];
+  let llmPrimaryUsed = false;
+  let deterministicFallbackUsed = false;
 
-  const applyPolicyIfEnabled = (base: Selection, availableByProvider: Array<{ provider: LlmProvider; models: string[] }>): RoutingDecision => {
+  const intent = options?.requestIntent ?? (await inferRequestIntent(prompt, {
+    hasImages: Boolean(options?.hasImages),
+    hasVideoInput: Boolean(options?.hasVideoInput)
+  }));
+  const traceEnabled = isRoutingTraceEnabled(options?.routingTraceEnabled);
+  const traceRequestId = options?.routingRequestId ?? crypto.randomUUID();
+  const traceTimestamp = new Date().toISOString();
+  const policyConfig = getPolicyConfig();
+
+  const modelEntries = await Promise.all(
+    providers.map(async (provider) => ({
+      provider,
+      models: (await provider.listModels()).filter(() => !isBlockedRoutingModel())
+    }))
+  );
+
+  let availableByProvider = modelEntries.map(({ provider, models }) => ({
+    provider,
+    models: models.length ? models : [pickDefaultModel(provider, [])]
+  }));
+
+  console.info(`[Route Policy] requestId=${traceRequestId} intent=${intent} hasVideoInput=${Boolean(options?.hasVideoInput)}`);
+
+  if (options?.hasVideoInput) {
+    availableByProvider = availableByProvider.filter(({ provider }) => provider.name === "google");
+  }
+
+  availableByProvider = filterCandidatesForIntent(availableByProvider, intent, {
+    hasVideoInput: Boolean(options?.hasVideoInput)
+  });
+
+  console.info(`[Capability Filter] requestId=${traceRequestId} candidates=${availableByProvider.reduce((total, entry) => total + entry.models.length, 0)}`);
+  logRoutingCandidatePool(traceRequestId, intent, availableByProvider);
+
+  rankedCandidates = scoreModelsForIntent(availableByProvider, intent, prompt);
+
+  const applyPolicyGuardrail = (selection: Selection): RoutingDecision => {
     const fallbackChain = buildFallbackChain({
-      scoredCandidates: rankedCandidates.filter(
-        (candidate) => !(candidate.provider.name === base.provider.name && candidate.modelId === base.modelId)
-      ),
-      selectedProviderName: base.provider.name,
-      selectedModelId: base.modelId,
+      scoredCandidates: rankedCandidates,
+      selectedProviderName: selection.provider.name,
+      selectedModelId: selection.modelId,
       availableByProvider,
       intent
     });
 
     if (!policyConfig.enabled) {
       return {
-        provider: base.provider,
-        modelId: base.modelId,
+        provider: selection.provider,
+        modelId: selection.modelId,
         fallbackChain,
-        reasoning: base.reasoning,
-        routerModel: base.routerModel,
+        reasoning: selection.reasoning,
+        routerModel: selection.routerModel,
         explainer: buildSelectionExplainer({
-          selectedProviderName: base.provider.name,
-          selectedModelId: base.modelId,
+          selectedProviderName: selection.provider.name,
+          selectedModelId: selection.modelId,
           intent,
           prompt,
           availableByProvider,
-          overrideReason: base.overrideReason,
-          summary: base.summary
+          overrideReason: selection.overrideReason,
+          summary: selection.summary
         })
       };
     }
@@ -383,147 +429,128 @@ export async function chooseProvider(
       context,
       availableByProvider,
       traceId: traceRequestId,
-      currentSelection: { providerName: base.provider.name, modelId: base.modelId }
+      currentSelection: { providerName: selection.provider.name, modelId: selection.modelId },
+      resolvedIntent: intent
     });
 
     logPolicyTrace(evaluation.trace);
 
-    if (policyConfig.shadowMode || !evaluation.selected) {
+    if (!evaluation.selected || policyConfig.shadowMode) {
       return {
-        provider: base.provider,
-        modelId: base.modelId,
+        provider: selection.provider,
+        modelId: selection.modelId,
         fallbackChain,
-        reasoning: `${base.reasoning} Policy engine ${policyConfig.shadowMode ? "shadow" : "fallback"} mode kept live selection.`,
-        routerModel: base.routerModel,
+        reasoning: `${selection.reasoning} Policy guardrail did not enforce reroute.`,
+        routerModel: selection.routerModel,
         explainer: buildSelectionExplainer({
-          selectedProviderName: base.provider.name,
-          selectedModelId: base.modelId,
+          selectedProviderName: selection.provider.name,
+          selectedModelId: selection.modelId,
           intent,
           prompt,
           availableByProvider,
-          overrideReason: base.overrideReason,
-          summary: `${base.summary} Policy mode=${evaluation.trace.mode}.`
+          overrideReason: selection.overrideReason,
+          summary: selection.summary
         })
       };
     }
 
+    console.info(`[Policy Guardrail] enforced=${evaluation.selected.provider.name}:${evaluation.selected.modelId}`);
     return {
       provider: evaluation.selected.provider,
       modelId: evaluation.selected.modelId,
-      fallbackChain: buildFallbackChain({
-        scoredCandidates: rankedCandidates,
-        selectedProviderName: evaluation.selected.provider.name,
-        selectedModelId: evaluation.selected.modelId,
-        availableByProvider,
-        intent
-      }),
-      reasoning: `${base.reasoning} Policy engine enforced selection ${evaluation.selected.provider.name}:${evaluation.selected.modelId}.`,
-      routerModel: base.routerModel,
+      fallbackChain,
+      reasoning: `${selection.reasoning} Policy guardrail enforced hard constraint selection.`,
+      routerModel: selection.routerModel,
       explainer: buildSelectionExplainer({
         selectedProviderName: evaluation.selected.provider.name,
         selectedModelId: evaluation.selected.modelId,
         intent,
         prompt,
         availableByProvider,
-        overrideReason: `policy_enforced:${evaluation.trace.selection_summary}`,
-        summary: `${base.summary} Policy mode=${evaluation.trace.mode}.`
+        overrideReason: `policy_guardrail:${evaluation.trace.selection_summary}`,
+        summary: `${selection.summary} Policy guardrail enforced hard constraints.`
       })
     };
   };
 
-  const modelEntries = await Promise.all(
-    providers.map(async (provider) => ({
-      provider,
-      models: (await provider.listModels()).filter(() => !isBlockedRoutingModel())
-    }))
-  );
-
-  const availableByProvider = modelEntries.map(({ provider, models }) => ({
-    provider,
-    models: models.length ? models : [pickDefaultModel(provider, [])]
-  }));
-
-  const intent = options?.requestIntent ?? (await inferRequestIntent(prompt, {
-    hasImages: Boolean(options?.hasImages),
-    hasVideoInput: Boolean(options?.hasVideoInput)
-  }));
-  if (options?.requestIntent) {
-    console.info(`[Router] using provided intent=${intent}`);
-  }
-  const traceEnabled = isRoutingTraceEnabled(options?.routingTraceEnabled);
-  const traceRequestId = options?.routingRequestId ?? crypto.randomUUID();
-  const traceTimestamp = new Date().toISOString();
-  const policyConfig = getPolicyConfig();
-  logRoutingCandidatePool(traceRequestId, intent, availableByProvider);
-  rankedCandidates = scoreModelsForIntent(availableByProvider, intent, prompt);
-  const llmRouting = await chooseRoutingWithLLM({
-    prompt,
-    intent,
-    candidates: rankedCandidates.map((candidate) => ({
-      providerName: candidate.provider.name,
-      modelId: candidate.modelId,
-      score: candidate.score
-    }))
-  });
-  if (llmRouting) {
-    const providerLookup = new Map(availableByProvider.map(({ provider }) => [provider.name, provider]));
-    rankedCandidates = llmRouting.ranking
-      .map((candidate) => {
-        const provider = providerLookup.get(candidate.providerName);
-        if (!provider) {
-          return null;
-        }
-        return { provider, modelId: candidate.modelId, score: candidate.score };
-      })
-      .filter((candidate): candidate is { provider: LlmProvider; modelId: string; score: number } => Boolean(candidate));
-  }
-  logFullRanking(traceRequestId, intent, rankedCandidates);
-
-  if (availableByProvider.length === 1) {
-    const selected = availableByProvider[0];
-    const modelId = pickDefaultModel(selected.provider, selected.models);
-    const validated = validateRoutingDecision({ providerName: selected.provider.name, modelId }, availableByProvider, intent);
-    logRoutingDecision(intent, availableByProvider, prompt, validated.provider.name, validated.modelId);
-    if (traceEnabled) {
-      const overrideReason = validated.changed ? validated.reasoning : null;
-      logRoutingTrace(
-        buildRoutingTrace({
-          requestId: traceRequestId,
-          timestamp: traceTimestamp,
-          intent,
-          prompt,
-          hasImages: Boolean(options?.hasImages),
-          hasVideoInput: Boolean(options?.hasVideoInput),
-          context,
-          availableByProvider,
-          selectedProviderName: validated.provider.name,
-          selectedModelId: validated.modelId,
-          overrideReason
-        })
-      );
-    }
-    return applyPolicyIfEnabled({
+  const fallbackToDeterministic = (): Selection => {
+    deterministicFallbackUsed = true;
+    const topCandidate = rankedCandidates[0];
+    const provider = topCandidate?.provider ?? availableByProvider[0]?.provider ?? providers[0];
+    const modelId = topCandidate?.modelId ?? pickDefaultModel(provider, availableByProvider.find((entry) => entry.provider.name === provider.name)?.models ?? []);
+    const validated = validateRoutingDecision({ providerName: provider.name, modelId }, availableByProvider, intent);
+    console.info(`[Routing Fallback] selected=${validated.provider.name}:${validated.modelId}`);
+    return {
       provider: validated.provider,
       modelId: validated.modelId,
-      reasoning: `Single provider available. ${validated.reasoning}` ,
-      routerModel: modelId,
-      summary: "Single provider path.",
-      overrideReason: validated.changed ? validated.reasoning : null
-    }, availableByProvider);
+      reasoning: `Deterministic fallback selected ${validated.provider.name}:${validated.modelId}. ${validated.reasoning}`,
+      routerModel: validated.modelId,
+      summary: "Deterministic fallback path.",
+      overrideReason: validated.changed ? `validation_adjustment:${validated.reasoning}` : null
+    };
+  };
+
+  let selected: Selection;
+
+  if (!rankedCandidates.length) {
+    selected = fallbackToDeterministic();
+  } else {
+    const candidateMetadata = rankedCandidates.map((candidate) =>
+      buildCandidateMetadata(candidate.provider.name, candidate.modelId, intent)
+    );
+
+    const llmRouting = await chooseRoutingWithLLM({
+      prompt,
+      intent,
+      candidates: candidateMetadata
+    });
+
+    if (!llmRouting) {
+      selected = fallbackToDeterministic();
+    } else {
+      llmPrimaryUsed = true;
+      const providerLookup = new Map(availableByProvider.map(({ provider }) => [provider.name, provider]));
+      rankedCandidates = llmRouting.ranking
+        .map((candidate) => {
+          const provider = providerLookup.get(candidate.providerName);
+          if (!provider) {
+            return null;
+          }
+          return { provider, modelId: candidate.modelId, score: candidate.score };
+        })
+        .filter((candidate): candidate is { provider: LlmProvider; modelId: string; score: number } => Boolean(candidate));
+
+      const selectedProvider = providerLookup.get(llmRouting.selected.providerName);
+      if (!selectedProvider) {
+        selected = fallbackToDeterministic();
+      } else {
+        const validated = validateRoutingDecision(
+          { providerName: llmRouting.selected.providerName, modelId: llmRouting.selected.modelId },
+          availableByProvider,
+          intent
+        );
+        if (validated.changed) {
+          console.warn(`[Routing Validation] rejected_llm_selection=${llmRouting.selected.providerName}:${llmRouting.selected.modelId}`);
+          selected = fallbackToDeterministic();
+        } else {
+          console.info(`[LLM Router] selected=${validated.provider.name}:${validated.modelId}`);
+          selected = {
+            provider: validated.provider,
+            modelId: validated.modelId,
+            reasoning: `LLM-primary routing selected ${validated.provider.name}:${validated.modelId}.`,
+            routerModel: validated.modelId,
+            summary: "LLM-primary routing path.",
+            overrideReason: null
+          };
+        }
+      }
+    }
   }
 
-  const topCandidate = llmRouting
-    ? rankedCandidates.find(
-        (candidate) =>
-          candidate.provider.name === llmRouting.selected.providerName && candidate.modelId === llmRouting.selected.modelId
-      ) ?? rankedCandidates[0]
-    : rankedCandidates[0];
-  const initialProvider = topCandidate?.provider ?? availableByProvider[0].provider;
-  const initialModelId = topCandidate?.modelId ?? pickDefaultModel(initialProvider, availableByProvider[0].models);
-  const validated = validateRoutingDecision({ providerName: initialProvider.name, modelId: initialModelId }, availableByProvider, intent);
-  logRoutingDecision(intent, availableByProvider, prompt, validated.provider.name, validated.modelId);
+  logFullRanking(traceRequestId, intent, rankedCandidates);
+  logRoutingDecision(intent, availableByProvider, prompt, selected.provider.name, selected.modelId);
+
   if (traceEnabled) {
-    const overrideReason = validated.changed ? `validation_adjustment: ${validated.reasoning}` : null;
     logRoutingTrace(
       buildRoutingTrace({
         requestId: traceRequestId,
@@ -534,19 +561,14 @@ export async function chooseProvider(
         hasVideoInput: Boolean(options?.hasVideoInput),
         context,
         availableByProvider,
-        selectedProviderName: validated.provider.name,
-        selectedModelId: validated.modelId,
-        overrideReason
+        selectedProviderName: selected.provider.name,
+        selectedModelId: selected.modelId,
+        overrideReason: selected.overrideReason,
+        llmPrimaryUsed,
+        deterministicFallbackUsed
       })
     );
   }
 
-  return applyPolicyIfEnabled({
-    provider: validated.provider,
-    modelId: validated.modelId,
-    reasoning: `Score-ranked routing selected ${validated.provider.name}:${validated.modelId}. ${validated.reasoning}`,
-    routerModel: validated.modelId,
-    summary: "Ranked scoring path.",
-    overrideReason: validated.changed ? `validation_adjustment: ${validated.reasoning}` : null
-  }, availableByProvider);
+  return applyPolicyGuardrail(selected);
 }
