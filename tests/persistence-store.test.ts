@@ -1,5 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { extractDirectiveCandidate } from "../lib/directives/extraction";
+import { upsertManagedDirectiveBlock } from "../lib/directives/managed-block";
 
 type Row = Record<string, unknown>;
 
@@ -7,6 +9,7 @@ type DbState = {
   actors: Row[];
   chats: Row[];
   messages: Row[];
+  persistent_directives: Row[];
   short_term_memory: Row[];
   intermediate_memory: Row[];
   long_term_memory: Row[];
@@ -130,7 +133,7 @@ function loadStore() {
 
 function makeState(): DbState {
   return {
-    actors: [], chats: [], messages: [], short_term_memory: [], intermediate_memory: [], long_term_memory: [],
+    actors: [], chats: [], messages: [], persistent_directives: [], short_term_memory: [], intermediate_memory: [], long_term_memory: [],
   };
 }
 
@@ -207,4 +210,81 @@ test("chat context throws when actor or chat are missing", async () => {
   const store = loadStore();
 
   await assert.rejects(() => store.getChatContextState("missing", "chat"), /Actor not found/);
+});
+
+test("extractDirectiveCandidate auto-saves only high confidence patterns", () => {
+  const highConfidence = extractDirectiveCandidate("Please remember that I prefer concise answers.");
+  const ambiguous = extractDirectiveCandidate("Always be concise.");
+
+  assert.equal(highConfidence?.confidence, "high");
+  assert.equal(highConfidence?.directive, "I prefer concise answers");
+  assert.equal(ambiguous?.confidence, "ambiguous");
+});
+
+test("managed directive block upserts without touching external prompt content", () => {
+  const basePrompt = "You are an analyst.\nFollow user intent.";
+  const withBlock = upsertManagedDirectiveBlock(basePrompt, ["Be direct", "Use step-by-step plans"]);
+  const updated = upsertManagedDirectiveBlock(withBlock, ["Be direct"]);
+  const removed = upsertManagedDirectiveBlock(updated, []);
+
+  assert.match(withBlock, /## PERSISTENT DIRECTIVES — MANAGED BLOCK/);
+  assert.match(withBlock, /- Be direct/);
+  assert.match(updated, /- Be direct/);
+  assert.doesNotMatch(updated, /Use step-by-step plans/);
+  assert.equal(removed, basePrompt);
+  assert.equal((updated.match(/## PERSISTENT DIRECTIVES — MANAGED BLOCK/g) ?? []).length, 1);
+});
+
+test("saving directives dedupes and syncs actor system prompt in storage", async () => {
+  const state = makeState();
+  (globalThis as any).__KATIE_SUPABASE_ADMIN_CLIENT__ = createFakeClient(state);
+  const store = loadStore();
+
+  await store.saveActor({ id: "a1", name: "Actor", purpose: "Base prompt." });
+
+  const first = await store.saveDirective({
+    actorId: "a1",
+    userId: "u1",
+    directive: "Be blunt and direct.",
+    kind: "style",
+    scope: "actor",
+  });
+  const duplicate = await store.saveDirective({
+    actorId: "a1",
+    userId: "u1",
+    directive: "be blunt and direct",
+    kind: "style",
+    scope: "actor",
+  });
+  await store.syncActorSystemPromptWithDirectives("a1", "u1");
+
+  const actor = await store.getActorById("a1");
+  assert.equal(first.created, true);
+  assert.equal(duplicate.created, false);
+  assert.equal(state.persistent_directives.length, 1);
+  assert.match(actor?.purpose ?? "", /## PERSISTENT DIRECTIVES — MANAGED BLOCK/);
+  assert.match(actor?.purpose ?? "", /- Be blunt and direct\./);
+});
+
+test("deactivating directives removes managed block from actor prompt", async () => {
+  const state = makeState();
+  (globalThis as any).__KATIE_SUPABASE_ADMIN_CLIENT__ = createFakeClient(state);
+  const store = loadStore();
+
+  await store.saveActor({ id: "a1", name: "Actor", purpose: "Base prompt." });
+  await store.saveDirective({
+    actorId: "a1",
+    userId: "u1",
+    directive: "Prefer bullet points.",
+    kind: "preference",
+    scope: "actor",
+  });
+  await store.syncActorSystemPromptWithDirectives("a1", "u1");
+  await store.deactivateDirectivesForActor("a1", "u1");
+  await store.syncActorSystemPromptWithDirectives("a1", "u1");
+
+  const actor = await store.getActorById("a1");
+  assert.equal(state.persistent_directives[0].active, false);
+  assert.doesNotMatch(actor?.purpose ?? "", /PERSISTENT DIRECTIVES — MANAGED BLOCK/);
+  assert.equal(actor?.purpose, "Base prompt.");
 });

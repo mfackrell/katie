@@ -8,6 +8,7 @@ type DbState = {
   actors: Row[];
   chats: Row[];
   messages: Row[];
+  persistent_directives: Row[];
   short_term_memory: Row[];
   intermediate_memory: Row[];
   long_term_memory: Row[];
@@ -100,6 +101,7 @@ test("PATCH /api/actors updates the actor purpose", async () => {
     ],
     chats: [],
     messages: [],
+    persistent_directives: [],
     short_term_memory: [],
     intermediate_memory: [],
     long_term_memory: [],
