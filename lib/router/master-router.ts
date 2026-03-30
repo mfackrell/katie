@@ -296,7 +296,7 @@ function buildSelectionExplainer({
     createCandidateBreakdown(availableByProvider, intent).find(
       (candidate) => candidate.providerName === selectedProviderName && candidate.modelId === selectedModelId
     ) ?? null;
-  const topFactors =
+  const topFactors: NonNullable<SelectionExplainer["top_factors"]> =
     selectedBreakdown?.adjustments
       .filter((factor) => factor.delta !== 0)
       .sort((left, right) => Math.abs(right.delta) - Math.abs(left.delta))
