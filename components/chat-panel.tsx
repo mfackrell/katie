@@ -431,7 +431,7 @@ export function ChatPanel({ actorId, chatId, activeActorName, activeChatTitle }:
     setStreamingModel(null);
     setSelectionExplainer(null);
     setIsRoutingSelectionInFlight(true);
-    setExplainerOpen(false);
+    setExplainerOpen(true);
     setReasoningState(createReasoningUiState());
     if (showLiveReasoningExplainer) {
       setReasoningPopupDismissed(false);
@@ -911,10 +911,17 @@ export function ChatPanel({ actorId, chatId, activeActorName, activeChatTitle }:
 
   const providerNames = Object.keys(availableModels) as ProviderName[];
   const showExplainer = !modelExplainerHidden && (isRoutingSelectionInFlight || hasExplainerData(selectionExplainer));
+  const showExplainerPanel = isRoutingSelectionInFlight || explainerOpen;
   const overrideReason =
     !isRoutingSelectionInFlight && selectionExplainer?.override?.applied
       ? selectionExplainer.override?.reason
       : null;
+
+  useEffect(() => {
+    if (!isRoutingSelectionInFlight && !hasExplainerData(selectionExplainer)) {
+      setExplainerOpen(false);
+    }
+  }, [isRoutingSelectionInFlight, selectionExplainer]);
 
   function handleModelExplainerVisibility(nextHidden: boolean) {
     setModelExplainerHidden(nextHidden);
@@ -1029,7 +1036,7 @@ export function ChatPanel({ actorId, chatId, activeActorName, activeChatTitle }:
                       Hide
                     </button>
                   </div>
-                  {explainerOpen ? (
+                  {showExplainerPanel ? (
                     <div
                       id="model-selection-explainer"
                       role="dialog"
