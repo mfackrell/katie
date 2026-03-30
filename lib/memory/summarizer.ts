@@ -1,5 +1,5 @@
 import OpenAI from "openai";
-import { getConversationSummary, getRecentMessages, setConversationSummary as saveConversationSummary } from "@/lib/data/blob-store";
+import { getConversationSummary, getRecentMessages, setConversationSummary as saveConversationSummary } from "@/lib/data/persistence-store";
 
 const SUMMARY_INTERVAL = 5;
 const SUMMARY_MESSAGE_WINDOW = 20;

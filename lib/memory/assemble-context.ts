@@ -1,4 +1,4 @@
-import { getChatContextState } from "@/lib/data/blob-store";
+import { getChatContextState } from "@/lib/data/persistence-store";
 import type { Message } from "@/lib/types/chat";
 
 interface AssembledContext {

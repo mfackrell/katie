@@ -123,9 +123,9 @@ function createFakeClient(state: DbState) {
 function loadStore() {
   process.env.NEXT_PUBLIC_SUPABASE_URL = "http://localhost:54321";
   process.env.SUPABASE_SERVICE_ROLE_KEY = "service-role";
-  const modulePath = require.resolve("../lib/data/blob-store");
+  const modulePath = require.resolve("../lib/data/persistence-store");
   delete require.cache[modulePath];
-  return require("../lib/data/blob-store") as typeof import("../lib/data/blob-store");
+  return require("../lib/data/persistence-store") as typeof import("../lib/data/persistence-store");
 }
 
 function makeState(): DbState {
