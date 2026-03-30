@@ -2,6 +2,7 @@ import { after, NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { assembleContext } from "@/lib/memory/assemble-context";
 import { maybeUpdateSummary } from "@/lib/memory/summarizer";
+import { maybeUpdateLongTermMemory } from "@/lib/memory/long-term-editor";
 import { saveMessage, setShortTermMemory } from "@/lib/data/persistence-store";
 import { getAvailableProviders } from "@/lib/providers";
 import { chooseProvider } from "@/lib/router/master-router";
@@ -519,6 +520,12 @@ export async function POST(request: NextRequest) {
             });
 
             after(async () => {
+              try {
+                await maybeUpdateLongTermMemory(actorId, chatId, message);
+              } catch (error: unknown) {
+                console.error("[Chat API] Background Long-Term Memory Update Error:", error);
+              }
+
               try {
                 await maybeUpdateSummary(chatId);
               } catch (error: unknown) {
