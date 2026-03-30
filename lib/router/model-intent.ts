@@ -8,6 +8,9 @@ type OpenAIClient = import("openai").default;
 export type ProviderName = "openai" | "google" | "grok" | "anthropic";
 export type RoutingChoice = { providerName: ProviderName; modelId: string };
 export type LlmRoutingChoice = { providerName: ProviderName; modelId: string; score: number };
+export type LlmRoutingResult =
+  | { accepted: true; selected: RoutingChoice; ranking: LlmRoutingChoice[] }
+  | { accepted: false; reason: string };
 export type ModelSpecializationTag = "coding" | "debugging" | "architecture" | "writing" | "multimodal" | "research";
 export type CandidateMetadata = {
   providerName: ProviderName;
@@ -153,6 +156,10 @@ const intentDescriptions: Record<RequestIntent, string> = {
 };
 
 let openaiClient: OpenAIClient | null | undefined;
+
+function isProviderName(value: string): value is ProviderName {
+  return value === "openai" || value === "google" || value === "grok" || value === "anthropic";
+}
 
 type OpenAIClientResult =
   | { client: OpenAIClient; reason: null }
@@ -533,6 +540,8 @@ export async function inferRequestIntent(
 
 
 function modelSupportsIntent(providerName: ProviderName, modelId: string, intent: RequestIntent): boolean {
+  const modalitySpecialized = isModalitySpecializedGenerationModel(providerName, modelId);
+
   switch (intent) {
     case "web-search":
     case "news-summary":
@@ -551,8 +560,18 @@ function modelSupportsIntent(providerName: ProviderName, modelId: string, intent
     case "architecture-review":
     case "code-generation":
     case "assistant-reflection":
-      return !isImageGenerationModel(providerName, modelId);
+      return !isImageGenerationModel(providerName, modelId) && !modalitySpecialized;
   }
+}
+
+function isModalitySpecializedGenerationModel(providerName: ProviderName, modelId: string): boolean {
+  const normalizedModel = modelId.toLowerCase();
+
+  if (isImageGenerationModel(providerName, modelId)) {
+    return true;
+  }
+
+  return /\b(video|veo|sora|imagine|music|audio-gen|speech-gen|tts|voice-gen|lip-sync)\b/.test(normalizedModel);
 }
 
 function rankTechnicalModel(providerName: ProviderName, modelId: string): number {
@@ -1058,7 +1077,7 @@ export async function chooseRoutingWithLLM(args: {
   prompt: string;
   intent: RequestIntent;
   candidates: CandidateMetadata[];
-}): Promise<{ selected: RoutingChoice; ranking: LlmRoutingChoice[] } | null> {
+}): Promise<LlmRoutingResult> {
   const openaiClientResult = await getOpenAIClient();
   if (!openaiClientResult.client) {
     if (openaiClientResult.reason === "missing_key") {
@@ -1069,26 +1088,18 @@ export async function chooseRoutingWithLLM(args: {
         "error" in openaiClientResult ? openaiClientResult.error : null
       );
     }
-    return null;
+    return { accepted: false, reason: `client_unavailable:${openaiClientResult.reason}` };
   }
 
   if (args.candidates.length === 0) {
-    return null;
+    return { accepted: false, reason: "no_candidates" };
   }
 
   const openai = openaiClientResult.client;
   const candidateKeySet = new Set(args.candidates.map((candidate) => `${candidate.providerName}:${candidate.modelId}`));
-  const candidateList = args.candidates.slice(0, 24).map((candidate) => ({
+  const candidateList = args.candidates.map((candidate) => ({
     provider: candidate.providerName,
     model: candidate.modelId,
-    supports_web_search: candidate.supports_web_search,
-    supports_vision: candidate.supports_vision,
-    supports_video: candidate.supports_video,
-    supports_image_generation: candidate.supports_image_generation,
-    reasoning_depth_tier: candidate.reasoning_depth_tier,
-    speed_tier: candidate.speed_tier,
-    cost_tier: candidate.cost_tier,
-    specialization_tags: candidate.specialization_tags,
     prior_score: candidate.prior_score
   }));
 
@@ -1096,12 +1107,12 @@ export async function chooseRoutingWithLLM(args: {
 You are the primary model router.
 Choose the best single candidate from the valid candidate list.
 Return ONLY compact JSON:
-{"selected":{"provider":"openai|google|grok|anthropic","model":"<model-id>"},"ranking":[{"provider":"...","model":"...","score":0}]}
+{"selected":{"provider":"openai|google|grok|anthropic","model":"<model-id>"}}
 Rules:
 - selected must be one of the provided candidates.
-- ranking is optional; if present include only provided candidates and numeric scores.
 - Use prior_score as a light prior, not as a hard rule.
 - Respect explicit provider preferences only when clearly requested.
+- Do not include markdown or any non-JSON text.
 `.trim();
 
   try {
@@ -1128,49 +1139,46 @@ Rules:
 
     if (!raw.trim()) {
       console.warn("[Router LLM] Ignoring empty reranker response; falling back to deterministic ranking.");
-      return null;
+      return { accepted: false, reason: "empty_response" };
     }
 
-    let parsed: { selected?: { provider?: string; model?: string }; ranking?: Array<{ provider?: string; model?: string; score?: number }> };
+    let parsed: unknown;
     try {
-      parsed = JSON.parse(raw) as { selected?: { provider?: string; model?: string } };
+      parsed = JSON.parse(raw);
     } catch {
       console.warn(
         `[Router LLM] Ignoring malformed reranker JSON; falling back to deterministic ranking. raw=${rawPreview || "<empty>"}`
       );
-      return null;
+      return { accepted: false, reason: "malformed_json" };
     }
 
-    const selectedProvider = (parsed.selected?.provider ?? "").trim().toLowerCase() as ProviderName;
-    const selectedModel = (parsed.selected?.model ?? "").trim();
+    const parsedObject = typeof parsed === "object" && parsed !== null ? (parsed as Record<string, unknown>) : null;
+    const selectedObject =
+      parsedObject && typeof parsedObject.selected === "object" && parsedObject.selected !== null
+        ? (parsedObject.selected as Record<string, unknown>)
+        : null;
+
+    const selectedProviderRaw = typeof selectedObject?.provider === "string" ? selectedObject.provider.trim().toLowerCase() : "";
+    const selectedModel = typeof selectedObject?.model === "string" ? selectedObject.model.trim() : "";
+    const selectedProvider = isProviderName(selectedProviderRaw) ? selectedProviderRaw : null;
 
     if (!selectedProvider || !selectedModel || !candidateKeySet.has(`${selectedProvider}:${selectedModel}`)) {
-      return null;
+      return { accepted: false, reason: "invalid_or_out_of_pool_selection" };
     }
 
-    const ranking =
-      parsed.ranking
-        ?.map((candidate) => {
-          const providerName = (candidate.provider ?? "").trim().toLowerCase() as ProviderName;
-          const modelId = (candidate.model ?? "").trim();
-          const score = typeof candidate.score === "number" ? candidate.score : 0;
-          if (!providerName || !modelId || !candidateKeySet.has(`${providerName}:${modelId}`)) {
-            return null;
-          }
-          return { providerName, modelId, score };
-        })
-        .filter((candidate): candidate is LlmRoutingChoice => Boolean(candidate)) ?? [];
+    const ranking = args.candidates.map((candidate) => ({
+      providerName: candidate.providerName,
+      modelId: candidate.modelId,
+      score: candidate.prior_score
+    }));
 
     return {
+      accepted: true,
       selected: { providerName: selectedProvider, modelId: selectedModel },
-      ranking: ranking.length > 0 ? ranking : args.candidates.map((candidate) => ({
-        providerName: candidate.providerName,
-        modelId: candidate.modelId,
-        score: candidate.prior_score
-      }))
+      ranking
     };
   } catch {
     console.warn("[Router LLM] Failed to get reranker override; falling back to deterministic ranking.");
-    return null;
+    return { accepted: false, reason: "completion_error" };
   }
 }
