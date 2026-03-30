@@ -9,7 +9,8 @@ import {
   hasDirectWebSearchHint,
   inferRequestIntent,
   inferRequestIntentFromMultimodalInput,
-  RequestIntent
+  RequestIntent,
+  validateRoutingDecision
 } from "@/lib/router/model-intent";
 import {
   ACK_CONTEXT_TTL_MS,
@@ -214,6 +215,25 @@ export async function POST(request: NextRequest) {
       const manualProvider = providers.find((candidate) => candidate.name === overrideProvider);
       if (!manualProvider) {
         return NextResponse.json({ error: `Unknown override provider: ${overrideProvider}` }, { status: 400 });
+      }
+
+      const hasImages = Array.isArray(images) && images.length > 0;
+      const hasImageAttachments =
+        Array.isArray(attachments) && attachments.some((attachment) => attachment.mimeType.startsWith("image/"));
+      const hasVisualInput = hasImages || hasImageAttachments;
+      const overrideIntent = await inferRequestIntent(message, { hasImages: hasVisualInput, hasVideoInput });
+      const validatedOverride = validateRoutingDecision(
+        { providerName: manualProvider.name, modelId: overrideModel },
+        [{ provider: manualProvider, models: await manualProvider.listModels() }],
+        overrideIntent
+      );
+      if (validatedOverride.changed) {
+        return NextResponse.json(
+          {
+            error: `Override ${manualProvider.name}:${overrideModel} is incompatible with intent=${overrideIntent} or capabilities.`
+          },
+          { status: 400 }
+        );
       }
 
       provider = manualProvider;

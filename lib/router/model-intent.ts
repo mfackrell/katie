@@ -8,6 +8,20 @@ type OpenAIClient = import("openai").default;
 export type ProviderName = "openai" | "google" | "grok" | "anthropic";
 export type RoutingChoice = { providerName: ProviderName; modelId: string };
 export type LlmRoutingChoice = { providerName: ProviderName; modelId: string; score: number };
+export type ModelSpecializationTag = "coding" | "debugging" | "architecture" | "writing" | "multimodal" | "research";
+export type CandidateMetadata = {
+  providerName: ProviderName;
+  modelId: string;
+  supports_web_search: boolean;
+  supports_vision: boolean;
+  supports_video: boolean;
+  supports_image_generation: boolean;
+  reasoning_depth_tier: "low" | "medium" | "high";
+  speed_tier: "slow" | "medium" | "fast";
+  cost_tier: "low" | "medium" | "high";
+  specialization_tags: ModelSpecializationTag[];
+  prior_score: number;
+};
 export type RequestIntent =
   | "text"
   | "general-text"
@@ -196,18 +210,20 @@ function isLikelySafetySensitiveVisionPrompt(prompt: string, hasImages: boolean)
 
 export function userPreferredProviderBoost(prompt: string, providerName: ProviderName): number {
   const normalizedPrompt = prompt.toLowerCase();
-  if (normalizedPrompt.includes("claude") && providerName === "anthropic") {
-    return 5;
+  const explicitPreferencePatterns: Array<{ providerName: ProviderName; pattern: RegExp }> = [
+    { providerName: "anthropic", pattern: /\b(use|route to|pick|choose|prefer)\s+(claude|anthropic)\b/i },
+    { providerName: "google", pattern: /\b(use|route to|pick|choose|prefer)\s+(gemini|google)\b/i },
+    { providerName: "grok", pattern: /\b(use|route to|pick|choose|prefer)\s+grok\b/i },
+    { providerName: "openai", pattern: /\b(use|route to|pick|choose|prefer)\s+(gpt|chatgpt|openai)\b/i }
+  ];
+
+  const matchedExplicitPreference = explicitPreferencePatterns.find(
+    (candidate) => candidate.providerName === providerName && candidate.pattern.test(normalizedPrompt)
+  );
+  if (matchedExplicitPreference) {
+    return 1.5;
   }
-  if (normalizedPrompt.includes("gemini") && providerName === "google") {
-    return 5;
-  }
-  if (normalizedPrompt.includes("grok") && providerName === "grok") {
-    return 5;
-  }
-  if ((normalizedPrompt.includes("gpt") || normalizedPrompt.includes("chatgpt")) && providerName === "openai") {
-    return 5;
-  }
+
   return 0;
 }
 
@@ -545,25 +561,25 @@ function rankTechnicalModel(providerName: ProviderName, modelId: string): number
   }
 
   const normalizedModel = modelId.toLowerCase();
-  let score = 10;
+  let score = 1;
 
   if (normalizedModel.includes("codex") || normalizedModel.includes("o3-pro")) {
-    score += 8;
+    score += 1.5;
   }
   if (normalizedModel.includes("opus") || normalizedModel.includes("sonnet")) {
-    score += 6;
+    score += 1.2;
   }
   if (normalizedModel.includes("pro")) {
-    score += 4;
+    score += 0.8;
   }
   if (normalizedModel.includes("gpt-5") || normalizedModel.includes("gpt-4.1")) {
-    score += 4;
+    score += 1;
   }
   if (normalizedModel.includes("mini") || normalizedModel.includes("flash") || normalizedModel.includes("haiku")) {
-    score -= 4;
+    score -= 0.6;
   }
   if (normalizedModel.includes("pulse")) {
-    score -= 6;
+    score -= 0.8;
   }
 
   return score;
@@ -738,6 +754,44 @@ export function scoreModelsForIntent(
     .sort((left, right) => right.score - left.score);
 }
 
+function detectSpecializationTags(providerName: ProviderName, modelId: string): ModelSpecializationTag[] {
+  const normalizedModel = modelId.toLowerCase();
+  const tags: ModelSpecializationTag[] = [];
+  if (/codex|code|o3|sonnet|opus|gpt-5/.test(normalizedModel)) tags.push("coding");
+  if (/debug|reason|o3|codex|sonnet|opus/.test(normalizedModel)) tags.push("debugging");
+  if (/architect|reason|opus|sonnet|pro/.test(normalizedModel)) tags.push("architecture");
+  if (/claude|sonnet|haiku/.test(normalizedModel)) tags.push("writing");
+  if (isVisionAnalysisModel(providerName, modelId)) tags.push("multimodal");
+  if (supportsWebSearch(providerName, modelId)) tags.push("research");
+  return Array.from(new Set(tags));
+}
+
+export function buildCandidateMetadata(providerName: ProviderName, modelId: string, intent: RequestIntent): CandidateMetadata {
+  const normalizedModel = modelId.toLowerCase();
+  const prior_score = rankModelForIntent(providerName, modelId, intent);
+  const supportsVision = isVisionAnalysisModel(providerName, modelId);
+  const supportsImageGeneration = isImageGenerationModel(providerName, modelId);
+  const supportsVideo = providerName === "google" && normalizedModel.includes("gemini");
+  const reasoningDepth =
+    /o3|opus|sonnet|codex|pro|gpt-5/.test(normalizedModel) ? "high" : /flash|mini|haiku/.test(normalizedModel) ? "low" : "medium";
+  const speedTier = /flash|mini|haiku|pulse/.test(normalizedModel) ? "fast" : /o3|opus/.test(normalizedModel) ? "slow" : "medium";
+  const costTier = /flash|mini|haiku/.test(normalizedModel) ? "low" : /o3|opus|pro/.test(normalizedModel) ? "high" : "medium";
+
+  return {
+    providerName,
+    modelId,
+    supports_web_search: supportsWebSearch(providerName, modelId),
+    supports_vision: supportsVision,
+    supports_video: supportsVideo,
+    supports_image_generation: supportsImageGeneration,
+    reasoning_depth_tier: reasoningDepth,
+    speed_tier: speedTier,
+    cost_tier: costTier,
+    specialization_tags: detectSpecializationTags(providerName, modelId),
+    prior_score
+  };
+}
+
 export function scoreModelCandidateWithBreakdown(
   providerName: ProviderName,
   modelId: string,
@@ -886,22 +940,22 @@ export function scoreModelCandidateWithBreakdown(
       }
       const baseScore = 10;
       if (normalizedModel.includes("codex") || normalizedModel.includes("o3-pro")) {
-        adjustments.push({ label: "coding_reasoning_bonus", delta: 8 });
+        adjustments.push({ label: "coding_reasoning_bonus", delta: 2 });
       }
       if (normalizedModel.includes("opus") || normalizedModel.includes("sonnet")) {
-        adjustments.push({ label: "architecture_depth_bonus", delta: 6 });
+        adjustments.push({ label: "architecture_depth_bonus", delta: 1.5 });
       }
       if (normalizedModel.includes("pro")) {
-        adjustments.push({ label: "pro_bonus", delta: 4 });
+        adjustments.push({ label: "pro_bonus", delta: 1 });
       }
       if (normalizedModel.includes("gpt-5") || normalizedModel.includes("gpt-4.1")) {
-        adjustments.push({ label: "latest_gpt_bonus", delta: 4 });
+        adjustments.push({ label: "latest_gpt_bonus", delta: 1 });
       }
       if (normalizedModel.includes("mini") || normalizedModel.includes("flash") || normalizedModel.includes("haiku")) {
-        adjustments.push({ label: "small_model_penalty", delta: -4 });
+        adjustments.push({ label: "small_model_penalty", delta: -1 });
       }
       if (normalizedModel.includes("pulse")) {
-        adjustments.push({ label: "realtime_model_penalty", delta: -6 });
+        adjustments.push({ label: "realtime_model_penalty", delta: -1.5 });
       }
       const finalScore = baseScore + adjustments.reduce((total, current) => total + current.delta, 0);
       return finalize(baseScore, finalScore, null);
@@ -919,10 +973,10 @@ export function scoreModelCandidateWithBreakdown(
         normalizedModel.includes("pro") ||
         normalizedModel.includes("gpt-5")
       ) {
-        adjustments.push({ label: "quality_reflection_bonus", delta: 8 });
+        adjustments.push({ label: "quality_reflection_bonus", delta: 2 });
       }
       if (normalizedModel.includes("mini") || normalizedModel.includes("flash") || normalizedModel.includes("haiku")) {
-        adjustments.push({ label: "small_model_reflection_penalty", delta: -6 });
+        adjustments.push({ label: "small_model_reflection_penalty", delta: -1 });
       }
       const finalScore = baseScore + adjustments.reduce((total, current) => total + current.delta, 0);
       return finalize(baseScore, finalScore, null);
@@ -981,10 +1035,29 @@ export function validateRoutingDecision(
   };
 }
 
+export function filterCandidatesForIntent(
+  availableByProvider: Array<{ provider: LlmProvider; models: string[] }>,
+  intent: RequestIntent,
+  options?: { hasVideoInput?: boolean }
+): Array<{ provider: LlmProvider; models: string[] }> {
+  const hasVideoInput = Boolean(options?.hasVideoInput);
+  return availableByProvider
+    .map(({ provider, models }) => {
+      const scopedModels = models.filter((modelId) => {
+        if (hasVideoInput && provider.name !== "google") {
+          return false;
+        }
+        return modelSupportsIntent(provider.name, modelId, intent);
+      });
+      return { provider, models: scopedModels };
+    })
+    .filter(({ models }) => models.length > 0);
+}
+
 export async function chooseRoutingWithLLM(args: {
   prompt: string;
   intent: RequestIntent;
-  candidates: LlmRoutingChoice[];
+  candidates: CandidateMetadata[];
 }): Promise<{ selected: RoutingChoice; ranking: LlmRoutingChoice[] } | null> {
   const openaiClientResult = await getOpenAIClient();
   if (!openaiClientResult.client) {
@@ -993,7 +1066,7 @@ export async function chooseRoutingWithLLM(args: {
     } else {
       console.warn(
         "[Router LLM] OpenAI client initialization failed. Falling back to deterministic ranking.",
-        openaiClientResult.error
+        "error" in openaiClientResult ? openaiClientResult.error : null
       );
     }
     return null;
@@ -1005,23 +1078,30 @@ export async function chooseRoutingWithLLM(args: {
 
   const openai = openaiClientResult.client;
   const candidateKeySet = new Set(args.candidates.map((candidate) => `${candidate.providerName}:${candidate.modelId}`));
-  const candidateList = args.candidates.slice(0, 10).map((candidate) => ({
+  const candidateList = args.candidates.slice(0, 24).map((candidate) => ({
     provider: candidate.providerName,
     model: candidate.modelId,
-    baselineScore: candidate.score
+    supports_web_search: candidate.supports_web_search,
+    supports_vision: candidate.supports_vision,
+    supports_video: candidate.supports_video,
+    supports_image_generation: candidate.supports_image_generation,
+    reasoning_depth_tier: candidate.reasoning_depth_tier,
+    speed_tier: candidate.speed_tier,
+    cost_tier: candidate.cost_tier,
+    specialization_tags: candidate.specialization_tags,
+    prior_score: candidate.prior_score
   }));
 
   const systemPrompt = `
-You are a routing tie-breaker.
-Choose at most one override candidate from the provided shortlist.
+You are the primary model router.
+Choose the best single candidate from the valid candidate list.
 Return ONLY compact JSON:
-{"selected":{"provider":"openai|google|grok|anthropic","model":"<model-id>"}}
+{"selected":{"provider":"openai|google|grok|anthropic","model":"<model-id>"},"ranking":[{"provider":"...","model":"...","score":0}]}
 Rules:
 - selected must be one of the provided candidates.
-- If uncertain, return {}.
-- Do not include ranking or explanations.
-- Respect explicit user provider preference words (claude/gemini/grok/gpt/chatgpt) unless capability mismatch.
-- For assistant-reflection, prioritize response quality over cost/latency.
+- ranking is optional; if present include only provided candidates and numeric scores.
+- Use prior_score as a light prior, not as a hard rule.
+- Respect explicit provider preferences only when clearly requested.
 `.trim();
 
   try {
@@ -1051,7 +1131,7 @@ Rules:
       return null;
     }
 
-    let parsed: { selected?: { provider?: string; model?: string } };
+    let parsed: { selected?: { provider?: string; model?: string }; ranking?: Array<{ provider?: string; model?: string; score?: number }> };
     try {
       parsed = JSON.parse(raw) as { selected?: { provider?: string; model?: string } };
     } catch {
@@ -1068,9 +1148,26 @@ Rules:
       return null;
     }
 
+    const ranking =
+      parsed.ranking
+        ?.map((candidate) => {
+          const providerName = (candidate.provider ?? "").trim().toLowerCase() as ProviderName;
+          const modelId = (candidate.model ?? "").trim();
+          const score = typeof candidate.score === "number" ? candidate.score : 0;
+          if (!providerName || !modelId || !candidateKeySet.has(`${providerName}:${modelId}`)) {
+            return null;
+          }
+          return { providerName, modelId, score };
+        })
+        .filter((candidate): candidate is LlmRoutingChoice => Boolean(candidate)) ?? [];
+
     return {
       selected: { providerName: selectedProvider, modelId: selectedModel },
-      ranking: args.candidates
+      ranking: ranking.length > 0 ? ranking : args.candidates.map((candidate) => ({
+        providerName: candidate.providerName,
+        modelId: candidate.modelId,
+        score: candidate.prior_score
+      }))
     };
   } catch {
     console.warn("[Router LLM] Failed to get reranker override; falling back to deterministic ranking.");

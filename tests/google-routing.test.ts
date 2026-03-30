@@ -304,6 +304,26 @@ test("technical debugging still prefers stronger technical models", async () => 
   assert.equal(validated.changed, true);
 });
 
+test("technical deterministic bonuses are lightweight and no longer overwhelming", async () => {
+  const o3 = scoreModelCandidateWithBreakdown("openai", "o3-pro", "technical-debugging");
+  const sonnet = scoreModelCandidateWithBreakdown("anthropic", "claude-4.5-sonnet", "technical-debugging");
+
+  assert.ok(o3.finalScore - sonnet.finalScore <= 2);
+});
+
+test("router falls back to deterministic selection when LLM routing is unavailable", async () => {
+  delete process.env.OPENAI_API_KEY;
+
+  const decision = await chooseProvider(
+    "Please debug this failing test suite.",
+    "",
+    [provider("openai", ["gpt-5.2-mini"]).provider, provider("google", ["gemini-3.1-pro"]).provider],
+    { requestIntent: "technical-debugging", routingRequestId: "test-routing-fallback" }
+  );
+
+  assert.match(decision.reasoning, /Deterministic fallback selected/);
+});
+
 test("full ranking log includes every scored model in descending order", async () => {
   const providers = [
     provider("openai", ["gpt-5.2-unified", "gpt-5.2-mini"]),
@@ -348,27 +368,31 @@ test("full ranking log includes every scored model in descending order", async (
   }
 });
 
-test("prompt containing Claude boosts anthropic scores by 5 points", async () => {
+test("only explicit provider preference applies a small anthropic boost", async () => {
   const candidates = [
     provider("anthropic", ["claude-4.5-sonnet"]),
     provider("openai", ["gpt-5.2-mini"])
   ];
   const unboosted = scoreModelsForIntent(candidates, "general-text", "");
-  const boosted = scoreModelsForIntent(candidates, "general-text", "Can Claude handle this?");
+  const casualMention = scoreModelsForIntent(candidates, "general-text", "Can Claude handle this?");
+  const boosted = scoreModelsForIntent(candidates, "general-text", "Please use Claude for this.");
   const anthropicUnboosted = unboosted.find((candidate) => candidate.provider.name === "anthropic");
+  const anthropicCasualMention = casualMention.find((candidate) => candidate.provider.name === "anthropic");
   const anthropicBoosted = boosted.find((candidate) => candidate.provider.name === "anthropic");
 
   assert.ok(anthropicUnboosted);
+  assert.ok(anthropicCasualMention);
   assert.ok(anthropicBoosted);
-  assert.equal((anthropicBoosted?.score ?? 0) - (anthropicUnboosted?.score ?? 0), 5);
+  assert.equal((anthropicCasualMention?.score ?? 0) - (anthropicUnboosted?.score ?? 0), 0);
+  assert.equal((anthropicBoosted?.score ?? 0) - (anthropicUnboosted?.score ?? 0), 1.5);
 });
 
-test('prompt "Claude, what do you think?" routes to anthropic model', async () => {
+test('explicit provider request routes to anthropic model', async () => {
   const decision = await chooseProvider(
-    "Claude, what do you think?",
+    "Please use Claude for this task.",
     "",
     [provider("anthropic", ["claude-4.5-sonnet"]).provider, provider("google", ["gemini-3.1-pro"]).provider],
-    { requestIntent: "general-text", routingRequestId: "test-claude-routing" }
+    { requestIntent: "rewrite", routingRequestId: "test-claude-routing" }
   );
 
   assert.equal(decision.provider.name, "anthropic");
