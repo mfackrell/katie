@@ -917,17 +917,17 @@ export function ChatPanel({ actorId, chatId, activeActorName, activeChatTitle }:
       ? selectionExplainer.override?.reason
       : null;
 
-  useEffect(() => {
-    if (!isRoutingSelectionInFlight && !hasExplainerData(selectionExplainer)) {
-      setExplainerOpen(false);
-    }
-  }, [isRoutingSelectionInFlight, selectionExplainer]);
-
-  function handleModelExplainerVisibility(nextHidden: boolean) {
-    setModelExplainerHidden(nextHidden);
-    if (nextHidden) {
-      setExplainerOpen(false);
-    }
+    useEffect(() => {
+      if (!isRoutingSelectionInFlight && (!hasExplainerData(selectionExplainer) || isThinking)) {
+        setExplainerOpen(false);
+      }
+    }, [isRoutingSelectionInFlight, selectionExplainer, isThinking]);          
+  
+    function handleModelExplainerVisibility(nextHidden: boolean) {
+      setModelExplainerHidden(nextHidden);
+      if (nextHidden) {
+        setExplainerOpen(false);
+      }
 
     if (typeof window !== "undefined") {
       window.localStorage.setItem(MODEL_EXPLAINER_HIDDEN_STORAGE_KEY, String(nextHidden));
