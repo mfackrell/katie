@@ -1,4 +1,4 @@
-# Katie (Polyglot Actor Orchestrator)
+# Katie (Polyglot Actor Orchestrator).
 
 Katie is a Next.js App Router application for multi-provider AI chat with actor personas, model routing, file attachments, and durable conversation memory.
 
