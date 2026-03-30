@@ -916,12 +916,25 @@ export function ChatPanel({ actorId, chatId, activeActorName, activeChatTitle }:
     !isRoutingSelectionInFlight && selectionExplainer?.override?.applied
       ? selectionExplainer.override?.reason
       : null;
-
+    
     useEffect(() => {
-      if (!isRoutingSelectionInFlight && (!hasExplainerData(selectionExplainer) || loading)) {
+      if (!isRoutingSelectionInFlight && !hasExplainerData(selectionExplainer)) {
         setExplainerOpen(false);
       }
-    }, [isRoutingSelectionInFlight, selectionExplainer, loading]);          
+    }, [isRoutingSelectionInFlight, selectionExplainer]);
+    
+    useEffect(() => {
+      let timeout: ReturnType<typeof setTimeout> | null = null;
+      
+      if (!isRoutingSelectionInFlight && hasExplainerData(selectionExplainer)) {
+        // Give 1.5s to read the "Why this model" details, then hide
+        timeout = setTimeout(() => setExplainerOpen(false), 1500);
+      }
+    
+      return () => {
+        if (timeout) clearTimeout(timeout);
+      };
+    }, [isRoutingSelectionInFlight, selectionExplainer]);          
   
     function handleModelExplainerVisibility(nextHidden: boolean) {
       setModelExplainerHidden(nextHidden);
