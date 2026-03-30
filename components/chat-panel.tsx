@@ -911,6 +911,10 @@ export function ChatPanel({ actorId, chatId, activeActorName, activeChatTitle }:
 
   const providerNames = Object.keys(availableModels) as ProviderName[];
   const showExplainer = !modelExplainerHidden && (isRoutingSelectionInFlight || hasExplainerData(selectionExplainer));
+  const overrideReason =
+    !isRoutingSelectionInFlight && selectionExplainer?.override?.applied
+      ? selectionExplainer.override?.reason
+      : null;
 
   function handleModelExplainerVisibility(nextHidden: boolean) {
     setModelExplainerHidden(nextHidden);
@@ -1121,9 +1125,7 @@ export function ChatPanel({ actorId, chatId, activeActorName, activeChatTitle }:
                           </div>
                         </div>
                       )}
-                      {!isRoutingSelectionInFlight && selectionExplainer.override?.applied && selectionExplainer.override.reason ? (
-                        <p className="mt-2 text-amber-200/90">Override: {selectionExplainer.override.reason}</p>
-                      ) : null}
+                      {overrideReason ? <p className="mt-2 text-amber-200/90">Override: {overrideReason}</p> : null}
                     </div>
                   ) : null}
                 </div>
