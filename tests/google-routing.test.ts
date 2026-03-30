@@ -1,6 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  buildCandidateMetadata,
+  buildRoutingPreferenceProfile,
   hasDirectWebSearchHint,
   inferRequestIntent,
   inferRequestIntentFromMultimodalInput,
@@ -311,6 +313,31 @@ test("technical deterministic bonuses are lightweight and no longer overwhelming
   assert.ok(o3.finalScore - sonnet.finalScore <= 2);
 });
 
+test("candidate metadata exposes structured preference dimensions", async () => {
+  const metadata = buildCandidateMetadata("anthropic", "claude-4.5-sonnet", "assistant-reflection");
+
+  assert.equal(metadata.providerName, "anthropic");
+  assert.equal(metadata.modelId, "claude-4.5-sonnet");
+  assert.equal(metadata.supports_text, true);
+  assert.equal(typeof metadata.supports_web_search, "boolean");
+  assert.equal(typeof metadata.supports_vision, "boolean");
+  assert.equal(typeof metadata.supports_video, "boolean");
+  assert.equal(typeof metadata.supports_image_generation, "boolean");
+  assert.ok(["low", "medium", "high"].includes(metadata.reasoning_depth_tier));
+  assert.ok(["slow", "medium", "fast"].includes(metadata.speed_tier));
+  assert.ok(["low", "medium", "high"].includes(metadata.cost_tier));
+  assert.ok(Array.isArray(metadata.specialization_tags));
+  assert.ok(metadata.specialization_tags.includes("reflection"));
+});
+
+test("router preference profile is explicit and stable", async () => {
+  const profile = buildRoutingPreferenceProfile();
+  assert.equal(profile.prioritize_best_model_for_task, true);
+  assert.equal(profile.hard_constraints_are_non_negotiable, true);
+  assert.ok(profile.quality_over_cost_for.includes("architecture-review"));
+  assert.ok(profile.prefer_efficient_for.includes("general-text"));
+});
+
 test("router falls back to deterministic selection when LLM routing is unavailable", async () => {
   delete process.env.OPENAI_API_KEY;
 
@@ -322,6 +349,58 @@ test("router falls back to deterministic selection when LLM routing is unavailab
   );
 
   assert.match(decision.reasoning, /Deterministic fallback selected/);
+});
+
+test("llm router logs include preferences and candidate score breakdown payload", async () => {
+  delete process.env.OPENAI_API_KEY;
+  const capturedLogs: string[] = [];
+  const originalInfo = console.info;
+  console.info = (...args: unknown[]) => {
+    capturedLogs.push(args.map((arg) => String(arg)).join(" "));
+  };
+
+  try {
+    await chooseProvider(
+      "Please debug this flaky architecture test suite.",
+      "",
+      [provider("openai", ["gpt-5.3-codex"]).provider, provider("google", ["gemini-3.1-pro"]).provider],
+      { requestIntent: "technical-debugging", routingRequestId: "test-llm-router-metadata" }
+    );
+  } finally {
+    console.info = originalInfo;
+  }
+
+  const preferenceLog = capturedLogs.find((line) => line.startsWith("[LLM Router Preferences] "));
+  const candidatesLog = capturedLogs.find((line) => line.startsWith("[LLM Router Candidates] "));
+  assert.ok(preferenceLog);
+  assert.ok(candidatesLog);
+  assert.match(candidatesLog ?? "", /score_breakdown/);
+  assert.match(preferenceLog ?? "", /hard_constraints_are_non_negotiable/);
+});
+
+test("video input still applies deterministic hard route policy before llm routing", async () => {
+  delete process.env.OPENAI_API_KEY;
+  const capturedLogs: string[] = [];
+  const originalInfo = console.info;
+  console.info = (...args: unknown[]) => {
+    capturedLogs.push(args.map((arg) => String(arg)).join(" "));
+  };
+
+  try {
+    await chooseProvider(
+      "Summarize the attached video.",
+      "",
+      [provider("openai", ["gpt-5.2-mini"]).provider, provider("google", ["gemini-3.1-pro"]).provider],
+      { requestIntent: "vision-analysis", hasVideoInput: true, routingRequestId: "test-video-hard-rule" }
+    );
+  } finally {
+    console.info = originalInfo;
+  }
+
+  const candidatesLog = capturedLogs.find((line) => line.startsWith("[LLM Router Candidates] "));
+  assert.ok(candidatesLog);
+  assert.match(candidatesLog ?? "", /"providerName":"google"/);
+  assert.equal((candidatesLog ?? "").includes('"providerName":"openai"'), false);
 });
 
 test("full ranking log includes every scored model in descending order", async () => {

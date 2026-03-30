@@ -11,10 +11,19 @@ export type LlmRoutingChoice = { providerName: ProviderName; modelId: string; sc
 export type LlmRoutingResult =
   | { accepted: true; selected: RoutingChoice; ranking: LlmRoutingChoice[] }
   | { accepted: false; reason: string };
-export type ModelSpecializationTag = "coding" | "debugging" | "architecture" | "writing" | "multimodal" | "research";
+export type ModelSpecializationTag =
+  | "coding"
+  | "debugging"
+  | "architecture"
+  | "writing"
+  | "emotional-nuance"
+  | "multimodal"
+  | "research"
+  | "reflection";
 export type CandidateMetadata = {
   providerName: ProviderName;
   modelId: string;
+  supports_text: boolean;
   supports_web_search: boolean;
   supports_vision: boolean;
   supports_video: boolean;
@@ -24,6 +33,31 @@ export type CandidateMetadata = {
   cost_tier: "low" | "medium" | "high";
   specialization_tags: ModelSpecializationTag[];
   prior_score: number;
+  score_breakdown?: {
+    base_score: number | null;
+    final_score: number;
+    excluded: boolean;
+    exclusion_reason: string | null;
+    adjustments: ScoreAdjustment[];
+  };
+};
+export type RoutingPreferenceProfile = {
+  prioritize_best_model_for_task: true;
+  quality_over_cost_for: RequestIntent[];
+  prefer_efficient_for: RequestIntent[];
+  use_specialization_when_relevant: true;
+  avoid_cost_or_speed_dominance_for_depth_tasks: true;
+  hard_constraints_are_non_negotiable: true;
+};
+
+export type RoutingModalityFlags = {
+  has_images: boolean;
+  has_video_input: boolean;
+};
+
+export type HardRouteContext = {
+  hard_rule_applied: boolean;
+  rule: string;
 };
 export type RequestIntent =
   | "text"
@@ -780,8 +814,10 @@ function detectSpecializationTags(providerName: ProviderName, modelId: string): 
   if (/debug|reason|o3|codex|sonnet|opus/.test(normalizedModel)) tags.push("debugging");
   if (/architect|reason|opus|sonnet|pro/.test(normalizedModel)) tags.push("architecture");
   if (/claude|sonnet|haiku/.test(normalizedModel)) tags.push("writing");
+  if (/claude|sonnet|haiku|gpt-5|opus/.test(normalizedModel)) tags.push("emotional-nuance");
   if (isVisionAnalysisModel(providerName, modelId)) tags.push("multimodal");
   if (supportsWebSearch(providerName, modelId)) tags.push("research");
+  if (/opus|o3|codex|sonnet|pro|gpt-5/.test(normalizedModel)) tags.push("reflection");
   return Array.from(new Set(tags));
 }
 
@@ -799,6 +835,7 @@ export function buildCandidateMetadata(providerName: ProviderName, modelId: stri
   return {
     providerName,
     modelId,
+    supports_text: !supportsImageGeneration,
     supports_web_search: supportsWebSearch(providerName, modelId),
     supports_vision: supportsVision,
     supports_video: supportsVideo,
@@ -808,6 +845,17 @@ export function buildCandidateMetadata(providerName: ProviderName, modelId: stri
     cost_tier: costTier,
     specialization_tags: detectSpecializationTags(providerName, modelId),
     prior_score
+  };
+}
+
+export function buildRoutingPreferenceProfile(): RoutingPreferenceProfile {
+  return {
+    prioritize_best_model_for_task: true,
+    quality_over_cost_for: ["assistant-reflection", "architecture-review", "technical-debugging", "multimodal-reasoning"],
+    prefer_efficient_for: ["general-text", "text", "rewrite", "news-summary", "web-search"],
+    use_specialization_when_relevant: true,
+    avoid_cost_or_speed_dominance_for_depth_tasks: true,
+    hard_constraints_are_non_negotiable: true
   };
 }
 
@@ -1076,6 +1124,9 @@ export function filterCandidatesForIntent(
 export async function chooseRoutingWithLLM(args: {
   prompt: string;
   intent: RequestIntent;
+  modalityFlags: RoutingModalityFlags;
+  hardRouteContext: HardRouteContext;
+  preferenceProfile: RoutingPreferenceProfile;
   candidates: CandidateMetadata[];
 }): Promise<LlmRoutingResult> {
   const openaiClientResult = await getOpenAIClient();
@@ -1100,7 +1151,17 @@ export async function chooseRoutingWithLLM(args: {
   const candidateList = args.candidates.map((candidate) => ({
     provider: candidate.providerName,
     model: candidate.modelId,
-    prior_score: candidate.prior_score
+    supports_text: candidate.supports_text,
+    supports_web_search: candidate.supports_web_search,
+    supports_vision: candidate.supports_vision,
+    supports_video: candidate.supports_video,
+    supports_image_generation: candidate.supports_image_generation,
+    reasoning_depth_tier: candidate.reasoning_depth_tier,
+    speed_tier: candidate.speed_tier,
+    cost_tier: candidate.cost_tier,
+    specialization_tags: candidate.specialization_tags,
+    prior_score: candidate.prior_score,
+    score_breakdown: candidate.score_breakdown
   }));
 
   const systemPrompt = `
@@ -1110,7 +1171,11 @@ Return ONLY compact JSON:
 {"selected":{"provider":"openai|google|grok|anthropic","model":"<model-id>"}}
 Rules:
 - selected must be one of the provided candidates.
-- Use prior_score as a light prior, not as a hard rule.
+- Hard rules and invalid candidates have already been filtered deterministically; treat them as fixed constraints.
+- Use preference_profile and candidate metadata to choose the best fit for the actual task.
+- Optimize tradeoffs among quality, reasoning depth, speed, cost, specialization, and modality fit.
+- Use prior_score only as advisory guidance; do not blindly choose the highest prior_score.
+- If another candidate is clearly better for the task, choose it even when prior_score is lower.
 - Respect explicit provider preferences only when clearly requested.
 - Do not include markdown or any non-JSON text.
 `.trim();
@@ -1128,6 +1193,9 @@ Rules:
           content: JSON.stringify({
             prompt: args.prompt,
             intent: args.intent,
+            modality_flags: args.modalityFlags,
+            hard_route_context: args.hardRouteContext,
+            preference_profile: args.preferenceProfile,
             candidates: candidateList
           })
         }
