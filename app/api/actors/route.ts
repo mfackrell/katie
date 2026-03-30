@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { deleteActorsById, getActorById, listActors, saveActor } from "@/lib/data/persistence-store";
-import { getSupabaseAdminClient } from "@/lib/data/supabase/admin";
+import { deleteActorsById, getActorById, listActors, saveActor, updateActorSystemPrompt } from "@/lib/data/persistence-store";
 import type { Actor } from "@/lib/types/chat";
 
 const createActorSchema = z.object({
@@ -17,15 +16,6 @@ const actorIdParamSchema = z.object({
 const updateActorSchema = z.object({
   purpose: z.string().trim().min(1)
 });
-
-type ActorDbRow = {
-  id: string;
-  name: string;
-  system_prompt: string;
-  parent_actor_id: string | null;
-  created_at: string;
-  updated_at: string;
-};
 
 function buildActorId(): string {
   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
@@ -95,31 +85,13 @@ export async function PATCH(request: NextRequest) {
       return NextResponse.json({ error: `Actor not found: ${actorId}` }, { status: 404 });
     }
 
-    const now = new Date().toISOString();
-    const client = getSupabaseAdminClient();
-    const payload = {
-      id: actorId,
-      system_prompt: purpose.trim(),
-      updated_at: now
-    };
-    const { data, error } = await client
-      .from("actors")
-      .upsert(payload, { onConflict: "id" })
-      .select(
-        "id,name,system_prompt,parent_actor_id,created_at,updated_at"
-      )
-      .single<ActorDbRow>();
-
-    if (error) {
-      return NextResponse.json({ error: error.message }, { status: 500 });
-    }
-
+    const data = await updateActorSystemPrompt(actorId, purpose.trim());
     return NextResponse.json({
       actor: {
         id: data.id,
         name: data.name,
-        purpose: data.system_prompt,
-        ...(data.parent_actor_id ? { parentId: data.parent_actor_id } : {})
+        purpose: data.purpose,
+        ...(data.parentId ? { parentId: data.parentId } : {})
       }
     });
   } catch (error) {

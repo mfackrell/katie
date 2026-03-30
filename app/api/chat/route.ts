@@ -3,6 +3,7 @@ import { z } from "zod";
 import { assembleContext } from "@/lib/memory/assemble-context";
 import { maybeUpdateSummary } from "@/lib/memory/summarizer";
 import { saveMessage, setShortTermMemory } from "@/lib/data/persistence-store";
+import { processPersistentDirectiveMessage } from "@/lib/directives/service";
 import { getAvailableProviders } from "@/lib/providers";
 import { chooseProvider } from "@/lib/router/master-router";
 import {
@@ -173,6 +174,7 @@ export async function POST(request: NextRequest) {
   try {
     const payload = await parseIncomingPayload(request);
     const { actorId, chatId, message, images, fileReferences, overrideProvider, overrideModel, routingTraceEnabled } = payload;
+    const userId = request.headers.get("x-user-id")?.trim() || "anonymous-user";
     const attachments = fileReferences;
     const hasVideoInput = Array.isArray(attachments) && attachments.some(isVideoAttachment);
     const encoder = new TextEncoder();
@@ -390,6 +392,13 @@ export async function POST(request: NextRequest) {
               content: message,
             });
 
+            const directiveResult = await processPersistentDirectiveMessage({ actorId, userId, message });
+            let directiveAcknowledgement = "";
+            if (directiveResult.acknowledged) {
+              directiveAcknowledgement = "Got it. I'll remember that.";
+              emitChunk({ type: "delta", text: `${directiveAcknowledgement}\n\n` });
+            }
+
             console.log(`[Chat API] Requesting generation from ${provider.name} using model ${modelId}...`);
             const enqueueDelta = (delta: string) => {
               if (streamCancelled) {
@@ -496,20 +505,20 @@ export async function POST(request: NextRequest) {
                 })
                 .filter((asset): asset is { type: "image"; url: string } => Boolean(asset)) ?? [];
 
+            const assistantText = `${directiveAcknowledgement ? `${directiveAcknowledgement}\n\n` : ""}${result.text || streamedText}`;
             emitChunk({
               type: "content",
-              text: result.text || streamedText,
+              text: assistantText,
               assets: imageAssets,
               provider: result.provider,
               model: result.model
             });
 
-            const finalAnswerEvent = reasoningState.finalize(result.text || streamedText);
+            const finalAnswerEvent = reasoningState.finalize(assistantText);
             emitChunk(reasoningState.snapshot());
             emitChunk(finalAnswerEvent);
 
             console.log("[Chat API] Generation successful. Saving assistant response.");
-            const assistantText = result.text || streamedText;
             await saveMessage(chatId, {
               id: crypto.randomUUID(),
               role: "assistant",

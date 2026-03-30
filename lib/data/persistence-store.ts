@@ -1,5 +1,8 @@
 import { getSupabaseAdminClient } from "@/lib/data/supabase/admin";
+import { normalizeDirectiveForCompare } from "@/lib/directives/extraction";
+import { upsertManagedDirectiveBlock } from "@/lib/directives/managed-block";
 import type { Actor, ChatThread, Message } from "@/lib/types/chat";
+import type { DirectiveKind, DirectiveScope, PersistentDirective } from "@/lib/types/directives";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -34,6 +37,18 @@ type MemoryRow = {
   actor_id: string;
   chat_id: string;
   content: JsonRecord | null;
+  created_at: string;
+  updated_at: string;
+};
+
+type DirectiveRow = {
+  id: string;
+  user_id: string;
+  actor_id: string;
+  directive: string;
+  kind: DirectiveKind;
+  scope: DirectiveScope;
+  active: boolean;
   created_at: string;
   updated_at: string;
 };
@@ -73,6 +88,20 @@ function toMemoryContent(row: MemoryRow | null): JsonRecord {
   }
 
   return row.content;
+}
+
+function toDirective(row: DirectiveRow): PersistentDirective {
+  return {
+    id: row.id,
+    userId: row.user_id,
+    actorId: row.actor_id,
+    directive: row.directive,
+    kind: row.kind,
+    scope: row.scope,
+    active: row.active,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
 }
 
 function parseMessageContent(content: string): { text: string; model?: string; assets?: Array<{ type: string; url: string }> } {
@@ -172,6 +201,30 @@ export async function getActorById(actorId: string): Promise<Actor | null> {
   }
 
   return data ? toActor(data) : null;
+}
+
+export async function updateActorSystemPrompt(actorId: string, systemPrompt: string): Promise<Actor> {
+  const existing = await requireActor(actorId);
+  const client = getSupabaseAdminClient();
+  const payload = {
+    id: actorId,
+    name: existing.name,
+    parent_actor_id: existing.parent_actor_id,
+    system_prompt: systemPrompt,
+    updated_at: new Date().toISOString(),
+  };
+
+  const { data, error } = await client
+    .from("actors")
+    .upsert(payload, { onConflict: "id" })
+    .select("id,name,system_prompt,parent_actor_id,created_at,updated_at")
+    .single<ActorRow>();
+
+  if (error) {
+    throw new Error(`Failed to update actor system prompt ${actorId}: ${error.message}`);
+  }
+
+  return toActor(data);
 }
 
 export async function listActors(): Promise<Actor[]> {
@@ -545,4 +598,138 @@ export async function getChatContextState(actorId: string, chatId: string): Prom
     longTermMemory,
     recentMessages,
   };
+}
+
+export async function listDirectivesForActor(actorId: string, userId?: string): Promise<PersistentDirective[]> {
+  const client = getSupabaseAdminClient();
+  let query = client
+    .from("persistent_directives")
+    .select("id,user_id,actor_id,directive,kind,scope,active,created_at,updated_at")
+    .eq("actor_id", actorId)
+    .order("created_at", { ascending: true });
+
+  if (userId) {
+    query = query.eq("user_id", userId);
+  }
+
+  const { data, error } = await query;
+  if (error) {
+    throw new Error(`Failed to list directives for actor ${actorId}: ${error.message}`);
+  }
+
+  const rows = (data ?? []) as unknown as DirectiveRow[];
+  return rows.map(toDirective);
+}
+
+export async function listActiveDirectivesForActor(actorId: string, userId?: string): Promise<PersistentDirective[]> {
+  const client = getSupabaseAdminClient();
+  let query = client
+    .from("persistent_directives")
+    .select("id,user_id,actor_id,directive,kind,scope,active,created_at,updated_at")
+    .eq("actor_id", actorId)
+    .eq("active", true)
+    .order("created_at", { ascending: true });
+
+  if (userId) {
+    query = query.eq("user_id", userId);
+  }
+
+  const { data, error } = await query;
+  if (error) {
+    throw new Error(`Failed to list active directives for actor ${actorId}: ${error.message}`);
+  }
+
+  const rows = (data ?? []) as unknown as DirectiveRow[];
+  return rows.map(toDirective);
+}
+
+function directivesAreNearDuplicates(left: string, right: string): boolean {
+  const normalizedLeft = normalizeDirectiveForCompare(left);
+  const normalizedRight = normalizeDirectiveForCompare(right);
+  if (normalizedLeft === normalizedRight) {
+    return true;
+  }
+  return normalizedLeft.includes(normalizedRight) || normalizedRight.includes(normalizedLeft);
+}
+
+export async function saveDirective(params: {
+  actorId: string;
+  userId: string;
+  directive: string;
+  kind: DirectiveKind;
+  scope?: DirectiveScope;
+}): Promise<{ directive: PersistentDirective; created: boolean }> {
+  const { actorId, userId, directive, kind, scope = "actor" } = params;
+  const activeDirectives = await listActiveDirectivesForActor(actorId, userId);
+  const duplicate = activeDirectives.find((item) => directivesAreNearDuplicates(item.directive, directive));
+  if (duplicate) {
+    return { directive: duplicate, created: false };
+  }
+
+  const client = getSupabaseAdminClient();
+  const now = new Date().toISOString();
+  const payload = {
+    id: crypto.randomUUID(),
+    user_id: userId,
+    actor_id: actorId,
+    directive: directive.trim(),
+    kind,
+    scope,
+    active: true,
+    created_at: now,
+    updated_at: now,
+  };
+
+  const { data, error } = await client
+    .from("persistent_directives")
+    .upsert(payload, { onConflict: "id" })
+    .select("id,user_id,actor_id,directive,kind,scope,active,created_at,updated_at")
+    .single<DirectiveRow>();
+
+  if (error) {
+    throw new Error(`Failed to save directive for actor ${actorId}: ${error.message}`);
+  }
+
+  return { directive: toDirective(data), created: true };
+}
+
+export async function deactivateDirective(directiveId: string): Promise<void> {
+  const client = getSupabaseAdminClient();
+  const { error } = await client
+    .from("persistent_directives")
+    .eq("id", directiveId)
+    .update({ active: false, updated_at: new Date().toISOString() });
+
+  if (error) {
+    throw new Error(`Failed to deactivate directive ${directiveId}: ${error.message}`);
+  }
+}
+
+export async function deactivateDirectivesForActor(actorId: string, userId?: string): Promise<number> {
+  const directives = await listActiveDirectivesForActor(actorId, userId);
+  if (!directives.length) {
+    return 0;
+  }
+
+  await Promise.all(directives.map((directive) => deactivateDirective(directive.id)));
+  return directives.length;
+}
+
+export async function syncActorSystemPromptWithDirectives(actorId: string, userId?: string): Promise<Actor> {
+  const actor = await getActorById(actorId);
+  if (!actor) {
+    throw new Error(`Actor not found: ${actorId}`);
+  }
+
+  const directives = await listActiveDirectivesForActor(actorId, userId);
+  const updatedPrompt = upsertManagedDirectiveBlock(
+    actor.purpose,
+    directives.filter((directive) => directive.scope === "actor").map((directive) => directive.directive)
+  );
+
+  if (updatedPrompt === actor.purpose) {
+    return actor;
+  }
+
+  return updateActorSystemPrompt(actorId, updatedPrompt);
 }
