@@ -3,7 +3,7 @@ export type DirectiveCandidate = {
   confidence: "high" | "ambiguous";
 };
 
-function normalizeDirectiveText(text: string): string {
+export function normalizeDirectiveText(text: string): string {
   return text.replace(/^[\s,.:;-]+|[\s,.:;-]+$/g, "").replace(/\s+/g, " ").trim();
 }
 

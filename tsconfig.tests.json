@@ -43,6 +43,10 @@
     "tests/reasoning-ui-state.test.ts",
     "tests/video-ingestion.test.ts",
     "lib/router/policy-engine.ts",
-    "tests/policy-engine.test.ts"
+    "tests/policy-engine.test.ts",
+    "lib/directives/classifier.ts",
+    "lib/directives/service.ts",
+    "lib/directives/extraction.ts",
+    "tests/directive-flow.test.ts"
   ]
 }

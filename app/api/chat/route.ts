@@ -182,6 +182,46 @@ export async function POST(request: NextRequest) {
 
     console.log(`[Chat API] Processing - Actor: ${actorId}, Chat: ${chatId}`);
 
+    const directiveResult = await processPersistentDirectiveMessage({ actorId, userId, message });
+    console.log(
+      `[Directive Classifier] result action=${directiveResult.action} fallback=${directiveResult.usedFallback}`
+    );
+
+    if (directiveResult.handled) {
+      console.log(`[Directive Action] handled action=${directiveResult.action}; skipping normal routing`);
+      await saveMessage(chatId, {
+        id: crypto.randomUUID(),
+        role: "user",
+        content: message
+      });
+
+      const acknowledgement = directiveResult.acknowledgement ?? "Got it.";
+      await saveMessage(chatId, {
+        id: crypto.randomUUID(),
+        role: "assistant",
+        content: acknowledgement
+      });
+
+      const stream = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(encoder.encode(`${JSON.stringify({ type: "delta", text: `${acknowledgement}\n` })}\n`));
+          controller.enqueue(
+            encoder.encode(
+              `${JSON.stringify({ type: "content", text: acknowledgement, assets: [], provider: "directive-manager", model: "directive-handler" })}\n`
+            )
+          );
+          controller.close();
+        }
+      });
+
+      return new NextResponse(stream, {
+        headers: {
+          "Content-Type": "application/x-ndjson; charset=utf-8",
+          "Cache-Control": "no-cache"
+        }
+      });
+    }
+
     const providers = getAvailableProviders();
     if (!providers.length) {
       console.error("[Chat API] Error: No AI providers found in environment variables.");
@@ -392,13 +432,6 @@ export async function POST(request: NextRequest) {
               content: message,
             });
 
-            const directiveResult = await processPersistentDirectiveMessage({ actorId, userId, message });
-            let directiveAcknowledgement = "";
-            if (directiveResult.acknowledged) {
-              directiveAcknowledgement = "Got it. I'll remember that.";
-              emitChunk({ type: "delta", text: `${directiveAcknowledgement}\n\n` });
-            }
-
             console.log(`[Chat API] Requesting generation from ${provider.name} using model ${modelId}...`);
             const enqueueDelta = (delta: string) => {
               if (streamCancelled) {
@@ -505,7 +538,7 @@ export async function POST(request: NextRequest) {
                 })
                 .filter((asset): asset is { type: "image"; url: string } => Boolean(asset)) ?? [];
 
-            const assistantText = `${directiveAcknowledgement ? `${directiveAcknowledgement}\n\n` : ""}${result.text || streamedText}`;
+            const assistantText = result.text || streamedText;
             emitChunk({
               type: "content",
               text: assistantText,
