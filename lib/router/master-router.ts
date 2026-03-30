@@ -25,11 +25,17 @@ export type RoutingDecision = {
 };
 export type SelectionExplainer = {
   selected_model?: string;
+  selected_provider?: string;
   intent?: { label?: string; confidence?: number | null };
   summary?: string;
-  factors?: Array<{ label: string; delta?: number | null }>;
+  preference_profile_applied?: string;
+  top_factors?: Array<{ label: string; detail?: string; delta?: number | null }>;
+  top_candidates?: Array<{ model?: string; provider?: string; score?: number | null; why_not_selected?: string }> | null;
+  selected_source?: "llm-primary" | "deterministic-fallback";
   top_candidate_score?: number | null;
-  runner_up?: { model?: string; score?: number | null } | null;
+  hard_rule_applied?: string | null;
+  fallback_used?: boolean;
+  fallback_reason?: string | null;
   override?: { applied?: boolean; reason?: string | null } | null;
 };
 type RoutingTrace = {
@@ -230,52 +236,114 @@ function buildSelectionExplainer({
   selectedProviderName,
   selectedModelId,
   intent,
-  prompt,
   availableByProvider,
+  rankedCandidates,
+  llmCandidates,
+  selectedSource,
+  hardRouteRule,
+  fallbackUsed,
+  fallbackReason,
+  preferenceProfile,
   overrideReason,
   summary
 }: {
   selectedProviderName: string;
   selectedModelId: string;
   intent: Awaited<ReturnType<typeof inferRequestIntent>>;
-  prompt: string;
   availableByProvider: Array<{ provider: LlmProvider; models: string[] }>;
+  rankedCandidates: Array<{ provider: LlmProvider; modelId: string; score: number }>;
+  llmCandidates: Array<ReturnType<typeof buildCandidateMetadata>>;
+  selectedSource: "llm-primary" | "deterministic-fallback";
+  hardRouteRule: string;
+  fallbackUsed: boolean;
+  fallbackReason: string | null;
+  preferenceProfile: ReturnType<typeof buildRoutingPreferenceProfile>;
   overrideReason: string | null;
   summary: string;
 }): SelectionExplainer {
-  const scoredCandidates = scoreModelsForIntent(availableByProvider, intent, prompt).map(({ provider, modelId, score }) => ({
+  const scoredCandidates = rankedCandidates.map(({ provider, modelId, score }) => ({
     model: `${provider.name}:${modelId}`,
+    provider: provider.name,
     score
   }));
   const selectedKey = `${selectedProviderName}:${selectedModelId}`;
   const selectedScore = scoredCandidates.find((candidate) => candidate.model === selectedKey)?.score ?? null;
-  const runnerUp = scoredCandidates.find((candidate) => candidate.model !== selectedKey) ?? null;
+  const selectedCandidateMetadata =
+    llmCandidates.find((candidate) => candidate.providerName === selectedProviderName && candidate.modelId === selectedModelId) ?? null;
+  const topCandidates = scoredCandidates
+    .filter((candidate) => candidate.model !== selectedKey)
+    .slice(0, 3)
+    .map((candidate) => {
+      const candidateMetadata =
+        llmCandidates.find(
+          (llmCandidate) => `${llmCandidate.providerName}:${llmCandidate.modelId}` === candidate.model
+        ) ?? null;
+      const candidateDelta = selectedScore === null ? null : Number((selectedScore - candidate.score).toFixed(2));
+      const whyNotSelected =
+        candidateDelta !== null && candidateDelta > 0
+          ? `Strong option, but trailed the selected model by ${candidateDelta.toFixed(2)} routing points.`
+          : "Valid option, but selected model aligned better with current intent and preferences.";
+      return {
+        model: candidate.model.split(":")[1] ?? candidate.model,
+        provider: candidate.provider,
+        score: candidate.score,
+        why_not_selected: candidateMetadata?.score_breakdown?.excluded
+          ? "Candidate was de-prioritized by routing constraints."
+          : whyNotSelected
+      };
+    });
   const selectedBreakdown =
     createCandidateBreakdown(availableByProvider, intent).find(
       (candidate) => candidate.providerName === selectedProviderName && candidate.modelId === selectedModelId
     ) ?? null;
-  const factors =
+  const topFactors =
     selectedBreakdown?.adjustments
       .filter((factor) => factor.delta !== 0)
       .sort((left, right) => Math.abs(right.delta) - Math.abs(left.delta))
-      .slice(0, 4)
-      .map((factor) => ({ label: factor.label, delta: factor.delta })) ?? [];
+      .slice(0, 5)
+      .map((factor) => ({
+        label: factor.label.replaceAll("_", " "),
+        detail:
+          factor.delta > 0
+            ? "Improved selection confidence for this request."
+            : "Tradeoff accepted to better match higher-priority constraints.",
+        delta: factor.delta
+      })) ?? [];
+
+  if (selectedCandidateMetadata?.specialization_tags?.length) {
+    topFactors.unshift({
+      label: "specialization match",
+      detail: `Matched tags: ${selectedCandidateMetadata.specialization_tags.slice(0, 2).join(", ")}.`,
+      delta: null
+    });
+  }
+
+  const compactFactors = topFactors.slice(0, 5);
+  const preferenceSummary = preferenceProfile.quality_over_cost_for.includes(intent)
+    ? "Quality favored over cost for this task type."
+    : "Balanced speed, cost, and quality preferences.";
+  const hardRuleApplied = hardRouteRule !== "none" ? hardRouteRule : null;
+  const sourceSummary =
+    selectedSource === "llm-primary"
+      ? "Chosen by routing LLM after comparing valid candidates."
+      : "Deterministic fallback used due to routing validation failure.";
 
   return {
-    selected_model: selectedKey,
+    selected_model: selectedModelId,
+    selected_provider: selectedProviderName,
     intent: {
       label: intent,
       confidence: null
     },
-    summary,
-    factors,
+    summary: `${summary} ${sourceSummary}`,
+    preference_profile_applied: preferenceSummary,
+    top_factors: compactFactors,
+    top_candidates: topCandidates,
+    selected_source: selectedSource,
     top_candidate_score: selectedScore,
-    runner_up: runnerUp
-      ? {
-          model: runnerUp.model,
-          score: runnerUp.score
-        }
-      : null,
+    hard_rule_applied: hardRuleApplied,
+    fallback_used: fallbackUsed,
+    fallback_reason: fallbackReason,
     override: {
       applied: Boolean(overrideReason),
       reason: overrideReason
@@ -435,8 +503,14 @@ export async function chooseProvider(
           selectedProviderName: selection.provider.name,
           selectedModelId: selection.modelId,
           intent,
-          prompt,
           availableByProvider,
+          rankedCandidates,
+          llmCandidates: llmCandidatesUsed,
+          selectedSource: llmPrimaryUsed ? "llm-primary" : "deterministic-fallback",
+          hardRouteRule,
+          fallbackUsed: deterministicFallbackUsed,
+          fallbackReason,
+          preferenceProfile,
           overrideReason: selection.overrideReason,
           summary: selection.summary
         })
@@ -465,8 +539,14 @@ export async function chooseProvider(
           selectedProviderName: selection.provider.name,
           selectedModelId: selection.modelId,
           intent,
-          prompt,
           availableByProvider,
+          rankedCandidates,
+          llmCandidates: llmCandidatesUsed,
+          selectedSource: llmPrimaryUsed ? "llm-primary" : "deterministic-fallback",
+          hardRouteRule,
+          fallbackUsed: deterministicFallbackUsed,
+          fallbackReason,
+          preferenceProfile,
           overrideReason: selection.overrideReason,
           summary: selection.summary
         })
@@ -484,8 +564,14 @@ export async function chooseProvider(
         selectedProviderName: evaluation.selected.provider.name,
         selectedModelId: evaluation.selected.modelId,
         intent,
-        prompt,
         availableByProvider,
+        rankedCandidates,
+        llmCandidates: llmCandidatesUsed,
+        selectedSource: llmPrimaryUsed ? "llm-primary" : "deterministic-fallback",
+        hardRouteRule,
+        fallbackUsed: deterministicFallbackUsed,
+        fallbackReason,
+        preferenceProfile,
         overrideReason: `policy_guardrail:${evaluation.trace.selection_summary}`,
         summary: `${selection.summary} Policy guardrail enforced hard constraints.`
       })
