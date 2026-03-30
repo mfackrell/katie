@@ -928,7 +928,7 @@ export function ChatPanel({ actorId, chatId, activeActorName, activeChatTitle }:
       
       if (!isRoutingSelectionInFlight && hasExplainerData(selectionExplainer)) {
         // Give 1.5s to read the "Why this model" details, then hide
-        timeout = setTimeout(() => setExplainerOpen(false), 1500);
+        timeout = setTimeout(() => setExplainerOpen(false), 3000);
       }
     
       return () => {
