@@ -82,9 +82,12 @@ function formatTranscript(messages: Awaited<ReturnType<typeof getRecentMessages>
 }
 
 export async function maybeUpdateLongTermMemory(actorId: string, chatId: string, latestUserMessage: string): Promise<void> {
+  console.log("[LongTermMemoryEditor] started", { actorId, chatId });
+
   try {
     const client = getMemoryEditorClient();
     if (!client) {
+      console.log("[LongTermMemoryEditor] OpenAI client missing; skipping", { actorId, chatId });
       return;
     }
 
@@ -126,12 +129,24 @@ export async function maybeUpdateLongTermMemory(actorId: string, chatId: string,
     }
 
     const decision = parseMemoryEditorResult(rawResult);
-    if (!decision || decision.action === "no_change") {
+    if (!decision) {
+      console.log("[LongTermMemoryEditor] invalid model response; skipping", { actorId, chatId });
       return;
     }
 
+    if (decision.action === "no_change") {
+      console.log("[LongTermMemoryEditor] model returned no_change", { actorId, chatId });
+      return;
+    }
+
+    console.log("[LongTermMemoryEditor] model returned replace", { actorId, chatId });
     await setLongTermMemory(actorId, chatId, decision.updatedContent);
+    console.log("[LongTermMemoryEditor] setLongTermMemory succeeded", { actorId, chatId });
   } catch (error: unknown) {
-    console.error("[LongTermMemoryEditor] Failed to evaluate long-term memory update:", error);
+    console.error("[LongTermMemoryEditor] editor failed", {
+      actorId,
+      chatId,
+      error: error instanceof Error ? error.message : String(error)
+    });
   }
 }

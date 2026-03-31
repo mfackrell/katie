@@ -326,3 +326,43 @@ test("failure in memory-editor path does not throw", async () => {
   const saved = await store.getLongTermMemory("a1", "c1");
   assert.deepEqual(saved, { profile: { timezone: "UTC" } });
 });
+
+
+test("controlled memory update logs decision and persists revised memory", async () => {
+  const state = makeState();
+  (globalThis as any).__KATIE_SUPABASE_ADMIN_CLIENT__ = createFakeClient(state);
+  (globalThis as any).__KATIE_LONG_TERM_MEMORY_OPENAI_CLIENT__ = createMockMemoryEditorClient(
+    JSON.stringify({ action: "replace", updatedContent: { preferences: { dislikes: ["seafood"] } } })
+  );
+
+  const logs: string[] = [];
+  const originalLog = console.log;
+  console.log = (...args: unknown[]) => {
+    logs.push(args.map(String).join(" "));
+  };
+
+  try {
+    const { store, memoryEditor } = loadModules();
+
+    await store.saveActor({ id: "a1", name: "Actor", purpose: "Prompt" });
+    await store.saveChat({ id: "c1", actorId: "a1", title: "Chat", createdAt: "x", updatedAt: "x" });
+    await store.saveMessage("c1", {
+      id: "m1",
+      role: "user",
+      content: "I want you to remember that I do not like seafood."
+    });
+
+    const before = await store.getLongTermMemory("a1", "c1");
+    assert.deepEqual(before, {});
+
+    await memoryEditor.maybeUpdateLongTermMemory("a1", "c1", "I want you to remember that I do not like seafood.");
+
+    const after = await store.getLongTermMemory("a1", "c1");
+    assert.deepEqual(after, { preferences: { dislikes: ["seafood"] } });
+    assert.ok(logs.some((entry) => entry.includes("[LongTermMemoryEditor] started")));
+    assert.ok(logs.some((entry) => entry.includes("model returned replace")));
+    assert.ok(logs.some((entry) => entry.includes("setLongTermMemory succeeded")));
+  } finally {
+    console.log = originalLog;
+  }
+});
