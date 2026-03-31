@@ -81,13 +81,25 @@ function formatTranscript(messages: Awaited<ReturnType<typeof getRecentMessages>
     .join("\n");
 }
 
+function truncateForLog(value: string, maxLength: number): string {
+  if (value.length <= maxLength) {
+    return value;
+  }
+
+  return `${value.slice(0, maxLength)}...`;
+}
+
 export async function maybeUpdateLongTermMemory(actorId: string, chatId: string, latestUserMessage: string): Promise<void> {
-  console.log("[LongTermMemoryEditor] started", { actorId, chatId });
+  console.log("[LongTermMemoryEditor] Start", {
+    actorId,
+    chatId,
+    latestUserMessagePreview: truncateForLog(latestUserMessage, 120)
+  });
 
   try {
     const client = getMemoryEditorClient();
     if (!client) {
-      console.log("[LongTermMemoryEditor] OpenAI client missing; skipping", { actorId, chatId });
+      console.log("[LongTermMemoryEditor] Skip: OpenAI client unavailable", { actorId, chatId });
       return;
     }
 
@@ -96,6 +108,11 @@ export async function maybeUpdateLongTermMemory(actorId: string, chatId: string,
       getRecentMessages(chatId, MEMORY_EDITOR_HISTORY_WINDOW),
       getConversationSummary(chatId)
     ]);
+    console.log("[LongTermMemoryEditor] Context Loaded", {
+      longTermMemoryState: Object.keys(currentLongTermMemory).length === 0 ? "empty" : "non-empty",
+      recentMessageCount: recentMessages.length,
+      rollingSummaryPresent: Boolean(existingSummary)
+    });
 
     const response = await client.chat.completions.create({
       model: MEMORY_EDITOR_MODEL,
@@ -124,26 +141,35 @@ export async function maybeUpdateLongTermMemory(actorId: string, chatId: string,
     });
 
     const rawResult = response.choices?.[0]?.message?.content?.trim();
+    console.log("[LongTermMemoryEditor] Model Response Received", {
+      rawResponsePreview: truncateForLog(rawResult ?? "", 200)
+    });
+
     if (!rawResult) {
+      console.log("[LongTermMemoryEditor] No-op: empty model response", { actorId, chatId });
       return;
     }
 
     const decision = parseMemoryEditorResult(rawResult);
     if (!decision) {
-      console.log("[LongTermMemoryEditor] invalid model response; skipping", { actorId, chatId });
+      console.log("[LongTermMemoryEditor] No-op: invalid model response", { actorId, chatId });
       return;
     }
 
     if (decision.action === "no_change") {
-      console.log("[LongTermMemoryEditor] model returned no_change", { actorId, chatId });
+      console.log("[LongTermMemoryEditor] Decision: no_change", { actorId, chatId });
       return;
     }
 
-    console.log("[LongTermMemoryEditor] model returned replace", { actorId, chatId });
+    console.log("[LongTermMemoryEditor] Decision: replace", {
+      actorId,
+      chatId,
+      updatedContentState: Object.keys(decision.updatedContent).length === 0 ? "empty" : "non-empty"
+    });
     await setLongTermMemory(actorId, chatId, decision.updatedContent);
-    console.log("[LongTermMemoryEditor] setLongTermMemory succeeded", { actorId, chatId });
+    console.log("[LongTermMemoryEditor] Save Success", { actorId, chatId });
   } catch (error: unknown) {
-    console.error("[LongTermMemoryEditor] editor failed", {
+    console.error("[LongTermMemoryEditor] Failed", {
       actorId,
       chatId,
       error: error instanceof Error ? error.message : String(error)
