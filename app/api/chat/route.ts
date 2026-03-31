@@ -521,6 +521,7 @@ export async function POST(request: NextRequest) {
 
             after(async () => {
               try {
+                console.log("[Chat API] Background Long-Term Memory Update Start", { actorId, chatId });
                 await maybeUpdateLongTermMemory(actorId, chatId, message);
               } catch (error: unknown) {
                 console.error("[Chat API] Background Long-Term Memory Update Error:", error);
