@@ -1,5 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
-import { runModelPricingRefresh } from "@/lib/router/model-pricing-refresh-runner";
+import { refreshModelPricing } from "@/lib/router/model-pricing-refresh";
+
+let refreshExecutor: typeof refreshModelPricing = refreshModelPricing;
+
+export function __setRefreshExecutorForTests(executor: typeof refreshModelPricing) {
+  refreshExecutor = executor;
+}
 
 function isAuthorized(request: NextRequest): boolean {
   const secret = process.env.MODEL_PRICING_REFRESH_SECRET?.trim();
@@ -20,7 +26,7 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    const stats = await runModelPricingRefresh();
+    const stats = await refreshExecutor();
     return NextResponse.json({ ok: true, ...stats });
   } catch (error) {
     console.error("[ModelPricingRefresh] refresh failed", error);

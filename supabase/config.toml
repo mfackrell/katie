@@ -1,0 +1,7 @@
+# Minimal Supabase project config placeholder for migration workflows.
+# Adjust `project_id` after linking in your environment.
+project_id = "katie"
+
+[db]
+shadow_port = 54320
+major_version = 15

@@ -8,12 +8,6 @@ function loadRoute() {
   return require("../app/api/internal/refresh-model-pricing/route") as typeof import("../app/api/internal/refresh-model-pricing/route");
 }
 
-function loadRunner() {
-  const runnerPath = require.resolve("../lib/router/model-pricing-refresh-runner");
-  delete require.cache[runnerPath];
-  return require("../lib/router/model-pricing-refresh-runner") as typeof import("../lib/router/model-pricing-refresh-runner");
-}
-
 test("refresh-model-pricing endpoint rejects unauthorized requests", async () => {
   process.env.MODEL_PRICING_REFRESH_SECRET = "secret-123";
   const { POST } = loadRoute();
@@ -25,8 +19,7 @@ test("refresh-model-pricing endpoint rejects unauthorized requests", async () =>
 test("refresh-model-pricing endpoint returns compact stats when authorized", async () => {
   process.env.MODEL_PRICING_REFRESH_SECRET = "secret-123";
   const route = loadRoute();
-  const runner = loadRunner();
-  runner.__setRefreshExecutorForTests(async () => ({
+  route.__setRefreshExecutorForTests(async () => ({
     total_models_seen: 4,
     total_rows_upserted: 4,
     total_rows_marked_inactive: 1,
