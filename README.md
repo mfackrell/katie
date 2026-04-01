@@ -118,3 +118,9 @@ Details: [`docs/testing.md`](docs/testing.md).
 
 ## Historical note
 Earlier documentation referenced blob-based JSON storage. The current implementation is Supabase-based and docs here reflect that current state.
+
+## Automated model pricing refresh
+
+- Endpoint: `POST /api/internal/refresh-model-pricing`
+- Auth header: `x-model-pricing-refresh-secret: $MODEL_PRICING_REFRESH_SECRET` (or `Authorization: Bearer ...`)
+- Schedule this endpoint with your deployment cron to keep `model_pricing` current automatically.
