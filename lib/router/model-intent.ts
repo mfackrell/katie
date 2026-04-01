@@ -845,8 +845,10 @@ export async function buildCandidateMetadata(providerName: ProviderName, modelId
 
     // Routing should prefer persisted pricing data. If refresh marks a model inactive,
     // we still use that last known row until fresh data arrives.
-    if (pricing) {
+    if (pricing && pricing.pricing_status === "complete" && (pricing.input_cost_per_1m !== null || pricing.output_cost_per_1m !== null)) {
       costTier = deriveCostTierFromPricing(pricing.input_cost_per_1m, pricing.output_cost_per_1m);
+    } else if (pricing && pricing.pricing_status !== "complete") {
+      console.info(`[RouterPricingFallback] provider=${providerName} model=${modelId} pricing_status=${pricing.pricing_status}`);
     }
   } catch {
     // Safe fallback when pricing store is temporarily unavailable.

@@ -23,6 +23,9 @@ test("refresh-model-pricing endpoint returns compact stats when authorized", asy
     total_models_seen: 4,
     total_rows_upserted: 4,
     total_rows_marked_inactive: 1,
+    total_rows_complete: 3,
+    total_rows_metadata_only: 1,
+    total_rows_failed: 0,
     provider_errors: []
   }));
 

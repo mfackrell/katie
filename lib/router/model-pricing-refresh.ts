@@ -1,5 +1,5 @@
 import { getAvailableProviders } from "@/lib/providers";
-import { deriveCostTierFromPricing } from "@/lib/router/model-pricing/cost-tier";
+import { deriveCostTierFromPricing, hasNumericPricing } from "@/lib/router/model-pricing/cost-tier";
 import { fetchAnthropicPricing } from "@/lib/router/model-pricing/sources/anthropic";
 import { fetchGooglePricing } from "@/lib/router/model-pricing/sources/google";
 import { fetchGrokPricing } from "@/lib/router/model-pricing/sources/grok";
@@ -13,6 +13,9 @@ export type ModelPricingRefreshStats = {
   total_models_seen: number;
   total_rows_upserted: number;
   total_rows_marked_inactive: number;
+  total_rows_complete: number;
+  total_rows_metadata_only: number;
+  total_rows_failed: number;
   provider_errors: Array<{ provider: ProviderName; message: string }>;
 };
 
@@ -43,6 +46,7 @@ function mergeDiscoveredWithPricing(discoveredModels: string[], pricing: Provide
     const priced = pricingMap.get(modelId);
     const inputCost = priced?.inputCostPer1M ?? null;
     const outputCost = priced?.outputCostPer1M ?? null;
+    const hasRealPricing = hasNumericPricing(inputCost, outputCost);
 
     return {
       provider_name: pricing.providerName,
@@ -57,7 +61,8 @@ function mergeDiscoveredWithPricing(discoveredModels: string[], pricing: Provide
       supports_image_generation: priced?.supportsImageGeneration ?? null,
       reasoning_depth_tier: priced?.reasoningDepthTier ?? null,
       speed_tier: priced?.speedTier ?? null,
-      cost_tier: deriveCostTierFromPricing(inputCost, outputCost),
+      cost_tier: hasRealPricing ? deriveCostTierFromPricing(inputCost, outputCost) : null,
+      pricing_status: hasRealPricing ? "complete" : "metadata_only",
       source: pricing.source,
       source_url: pricing.sourceUrl,
       source_updated_at: pricing.sourceUpdatedAt,
@@ -65,6 +70,30 @@ function mergeDiscoveredWithPricing(discoveredModels: string[], pricing: Provide
       is_active: true
     };
   });
+}
+
+function buildFailedRows(provider: ProviderName, discoveredModels: string[], refreshedAt: string): ModelPricingUpsertRow[] {
+  return discoveredModels.map((modelId) => ({
+    provider_name: provider,
+    model_id: modelId,
+    input_cost_per_1m: null,
+    output_cost_per_1m: null,
+    cached_input_cost_per_1m: null,
+    cached_output_cost_per_1m: null,
+    supports_web_search: null,
+    supports_vision: null,
+    supports_video: null,
+    supports_image_generation: null,
+    reasoning_depth_tier: null,
+    speed_tier: null,
+    cost_tier: null,
+    pricing_status: "failed",
+    source: "adapter_error",
+    source_url: null,
+    source_updated_at: null,
+    refreshed_at: refreshedAt,
+    is_active: true
+  }));
 }
 
 type RefreshDependencies = {
@@ -88,12 +117,23 @@ export async function refreshModelPricing(deps: RefreshDependencies = {}): Promi
 
   let totalRowsUpserted = 0;
   let totalRowsMarkedInactive = 0;
+  let totalRowsComplete = 0;
+  let totalRowsMetadataOnly = 0;
+  let totalRowsFailed = 0;
 
   for (const adapter of adapters) {
     const discoveredModels = discovered[adapter.provider] ?? [];
     try {
       const pricing = await adapter.run();
+      console.info(`[ModelPricingRefresh] provider=${adapter.provider} source=${pricing.source} source_url=${pricing.sourceUrl ?? "n/a"}`);
       const mergedRows = mergeDiscoveredWithPricing(discoveredModels, pricing, refreshedAt);
+      const completeCount = mergedRows.filter((row) => row.pricing_status === "complete").length;
+      const metadataOnlyCount = mergedRows.filter((row) => row.pricing_status === "metadata_only").length;
+      console.info(
+        `[ModelPricingRefresh] provider=${adapter.provider} complete=${completeCount} metadata_only=${metadataOnlyCount} failed=0`
+      );
+      totalRowsComplete += completeCount;
+      totalRowsMetadataOnly += metadataOnlyCount;
       totalRowsUpserted += await (deps.upsert ?? upsertModelPricing)(mergedRows);
       totalRowsMarkedInactive += await (deps.markInactive ?? markInactiveModelPricing)(adapter.provider, discoveredModels);
     } catch (error) {
@@ -101,6 +141,14 @@ export async function refreshModelPricing(deps: RefreshDependencies = {}): Promi
         provider: adapter.provider,
         message: error instanceof Error ? error.message : "refresh_failed"
       });
+      const failedRows = buildFailedRows(adapter.provider, discoveredModels, refreshedAt);
+      if (failedRows.length > 0) {
+        totalRowsUpserted += await (deps.upsert ?? upsertModelPricing)(failedRows);
+        totalRowsFailed += failedRows.length;
+      }
+      console.info(
+        `[ModelPricingRefresh] provider=${adapter.provider} source=adapter_error complete=0 metadata_only=0 failed=${failedRows.length}`
+      );
 
       if (discoveredModels.length > 0) {
         totalRowsMarkedInactive += await (deps.markInactive ?? markInactiveModelPricing)(adapter.provider, discoveredModels);
@@ -112,6 +160,9 @@ export async function refreshModelPricing(deps: RefreshDependencies = {}): Promi
     total_models_seen: Object.values(discovered).reduce((sum, list) => sum + list.length, 0),
     total_rows_upserted: totalRowsUpserted,
     total_rows_marked_inactive: totalRowsMarkedInactive,
+    total_rows_complete: totalRowsComplete,
+    total_rows_metadata_only: totalRowsMetadataOnly,
+    total_rows_failed: totalRowsFailed,
     provider_errors
   };
 }

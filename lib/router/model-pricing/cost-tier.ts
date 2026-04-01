@@ -27,3 +27,7 @@ export function deriveCostTierFromPricing(inputCostPer1M: number | null, outputC
 
   return "high";
 }
+
+export function hasNumericPricing(inputCostPer1M: number | null, outputCostPer1M: number | null): boolean {
+  return toFinite(inputCostPer1M) !== null || toFinite(outputCostPer1M) !== null;
+}
