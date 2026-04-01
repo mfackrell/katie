@@ -3,6 +3,8 @@ import {
   isVisionAnalysisModel as isGoogleVisionAnalysisModel
 } from "@/lib/providers/google-model-capabilities";
 import { LlmProvider } from "@/lib/providers/types";
+import { deriveCostTierFromPricing } from "@/lib/router/model-pricing/cost-tier";
+import { getModelPricing } from "@/lib/router/model-pricing-store";
 type OpenAIClient = import("openai").default;
 
 export type ProviderName = "openai" | "google" | "grok" | "anthropic";
@@ -821,7 +823,12 @@ function detectSpecializationTags(providerName: ProviderName, modelId: string): 
   return Array.from(new Set(tags));
 }
 
-export function buildCandidateMetadata(providerName: ProviderName, modelId: string, intent: RequestIntent): CandidateMetadata {
+function heuristicCostTier(modelId: string): "low" | "medium" | "high" {
+  const normalizedModel = modelId.toLowerCase();
+  return /flash|mini|haiku/.test(normalizedModel) ? "low" : /o3|opus|pro/.test(normalizedModel) ? "high" : "medium";
+}
+
+export async function buildCandidateMetadata(providerName: ProviderName, modelId: string, intent: RequestIntent): Promise<CandidateMetadata> {
   const normalizedModel = modelId.toLowerCase();
   const prior_score = rankModelForIntent(providerName, modelId, intent);
   const supportsVision = isVisionAnalysisModel(providerName, modelId);
@@ -830,7 +837,21 @@ export function buildCandidateMetadata(providerName: ProviderName, modelId: stri
   const reasoningDepth =
     /o3|opus|sonnet|codex|pro|gpt-5/.test(normalizedModel) ? "high" : /flash|mini|haiku/.test(normalizedModel) ? "low" : "medium";
   const speedTier = /flash|mini|haiku|pulse/.test(normalizedModel) ? "fast" : /o3|opus/.test(normalizedModel) ? "slow" : "medium";
-  const costTier = /flash|mini|haiku/.test(normalizedModel) ? "low" : /o3|opus|pro/.test(normalizedModel) ? "high" : "medium";
+
+  let costTier = heuristicCostTier(modelId);
+
+  try {
+    const pricing = await getModelPricing(providerName, modelId.toLowerCase());
+
+    // Routing should prefer persisted pricing data. If refresh marks a model inactive,
+    // we still use that last known row until fresh data arrives.
+    if (pricing) {
+      costTier = deriveCostTierFromPricing(pricing.input_cost_per_1m, pricing.output_cost_per_1m);
+    }
+  } catch {
+    // Safe fallback when pricing store is temporarily unavailable.
+    costTier = heuristicCostTier(modelId);
+  }
 
   return {
     providerName,
