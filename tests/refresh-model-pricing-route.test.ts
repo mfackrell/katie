@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { NextRequest } from "next/server";
+import { __setRefreshExecutorForTests } from "../lib/router/model-pricing-refresh-runner";
 
 function loadRoute() {
   const routePath = require.resolve("../app/api/internal/refresh-model-pricing/route");
@@ -18,20 +19,20 @@ test("refresh-model-pricing endpoint rejects unauthorized requests", async () =>
 
 test("refresh-model-pricing endpoint returns compact stats when authorized", async () => {
   process.env.MODEL_PRICING_REFRESH_SECRET = "secret-123";
-  const route = loadRoute();
-  route.__setRefreshExecutorForTests(async () => ({
+  __setRefreshExecutorForTests(async () => ({
     total_models_seen: 4,
     total_rows_upserted: 4,
     total_rows_marked_inactive: 1,
     provider_errors: []
   }));
 
+  const { POST } = loadRoute();
   const request = new NextRequest("http://localhost/api/internal/refresh-model-pricing", {
     method: "POST",
     headers: { "x-model-pricing-refresh-secret": "secret-123" }
   });
 
-  const response = await route.POST(request);
+  const response = await POST(request);
   const payload = (await response.json()) as { ok: boolean; total_models_seen: number };
 
   assert.equal(response.status, 200);
