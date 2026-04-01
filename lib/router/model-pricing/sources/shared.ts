@@ -60,3 +60,60 @@ export function buildEmptyResult(providerName: ProviderName, source: string, sou
     rows: []
   };
 }
+
+export const MODEL_PRICES_CATALOG_URL =
+  "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json";
+
+type LiteLlmCatalogEntry = {
+  litellm_provider?: string;
+  input_cost_per_token?: number;
+  output_cost_per_token?: number;
+  cache_read_input_token_cost?: number;
+  cache_creation_input_token_cost?: number;
+  mode?: string;
+};
+
+export async function fetchLiteLlmCatalog(): Promise<{ data: Record<string, LiteLlmCatalogEntry>; sourceUpdatedAt: string | null }> {
+  const response = await fetch(MODEL_PRICES_CATALOG_URL, { cache: "no-store" });
+  if (!response.ok) {
+    throw new Error(`Pricing source request failed (${response.status})`);
+  }
+
+  const data = (await response.json()) as Record<string, LiteLlmCatalogEntry>;
+  return {
+    data,
+    sourceUpdatedAt: response.headers.get("last-modified")
+  };
+}
+
+function normalizeProviderName(provider: string | undefined): string {
+  return (provider ?? "").trim().toLowerCase();
+}
+
+function toCostPer1M(perToken: number | undefined): number | null {
+  if (typeof perToken !== "number" || !Number.isFinite(perToken) || perToken < 0) {
+    return null;
+  }
+  return perToken * 1_000_000;
+}
+
+export function parseLiteLlmProviderRows(
+  providerName: ProviderName,
+  catalog: Record<string, LiteLlmCatalogEntry>
+): ProviderPricingAdapterResult["rows"] {
+  return Object.entries(catalog)
+    .filter(([, entry]) => normalizeProviderName(entry.litellm_provider) === providerName)
+    .map(([modelId, entry]) => ({
+      modelId: normalizeModelId(modelId),
+      inputCostPer1M: toCostPer1M(entry.input_cost_per_token),
+      outputCostPer1M: toCostPer1M(entry.output_cost_per_token),
+      cachedInputCostPer1M: toCostPer1M(entry.cache_read_input_token_cost ?? entry.cache_creation_input_token_cost),
+      cachedOutputCostPer1M: null,
+      supportsWebSearch: null,
+      supportsVision: entry.mode === "embedding" ? false : null,
+      supportsVideo: null,
+      supportsImageGeneration: null,
+      reasoningDepthTier: null,
+      speedTier: null
+    }));
+}

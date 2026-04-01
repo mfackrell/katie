@@ -1,6 +1,7 @@
 import type { ProviderName } from "@/lib/router/model-intent";
 
 export type CostTier = "low" | "medium" | "high";
+export type PricingStatus = "complete" | "metadata_only" | "failed";
 
 export type ModelPricingRow = {
   provider_name: ProviderName;
@@ -15,7 +16,8 @@ export type ModelPricingRow = {
   supports_image_generation: boolean | null;
   reasoning_depth_tier: "low" | "medium" | "high" | null;
   speed_tier: "slow" | "medium" | "fast" | null;
-  cost_tier: CostTier;
+  cost_tier: CostTier | null;
+  pricing_status: PricingStatus;
   source: string;
   source_url: string | null;
   source_updated_at: string | null;

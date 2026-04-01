@@ -17,7 +17,8 @@ function normalizeRow(row: ModelPricingRow): ModelPricingRow {
     input_cost_per_1m: row.input_cost_per_1m === null ? null : Number(row.input_cost_per_1m),
     output_cost_per_1m: row.output_cost_per_1m === null ? null : Number(row.output_cost_per_1m),
     cached_input_cost_per_1m: row.cached_input_cost_per_1m === null ? null : Number(row.cached_input_cost_per_1m),
-    cached_output_cost_per_1m: row.cached_output_cost_per_1m === null ? null : Number(row.cached_output_cost_per_1m)
+    cached_output_cost_per_1m: row.cached_output_cost_per_1m === null ? null : Number(row.cached_output_cost_per_1m),
+    pricing_status: row.pricing_status ?? "metadata_only"
   };
 }
 
@@ -30,7 +31,7 @@ export async function getAllModelPricingRows(): Promise<ModelPricingRow[]> {
   const client = getSupabaseAdminClient();
   const { data, error } = await client
     .from("model_pricing")
-    .select("provider_name,model_id,input_cost_per_1m,output_cost_per_1m,cached_input_cost_per_1m,cached_output_cost_per_1m,supports_web_search,supports_vision,supports_video,supports_image_generation,reasoning_depth_tier,speed_tier,cost_tier,source,source_url,source_updated_at,refreshed_at,is_active")
+    .select("provider_name,model_id,input_cost_per_1m,output_cost_per_1m,cached_input_cost_per_1m,cached_output_cost_per_1m,supports_web_search,supports_vision,supports_video,supports_image_generation,reasoning_depth_tier,speed_tier,cost_tier,pricing_status,source,source_url,source_updated_at,refreshed_at,is_active")
     .returns<ModelPricingRow>();
 
   if (error) {
@@ -100,7 +101,7 @@ export async function markInactiveModelPricing(providerName: ProviderName, activ
   const activeSet = new Set(activeModelIds);
   const { data, error } = await client
     .from("model_pricing")
-    .select("provider_name,model_id,input_cost_per_1m,output_cost_per_1m,cached_input_cost_per_1m,cached_output_cost_per_1m,supports_web_search,supports_vision,supports_video,supports_image_generation,reasoning_depth_tier,speed_tier,cost_tier,source,source_url,source_updated_at,refreshed_at,is_active")
+    .select("provider_name,model_id,input_cost_per_1m,output_cost_per_1m,cached_input_cost_per_1m,cached_output_cost_per_1m,supports_web_search,supports_vision,supports_video,supports_image_generation,reasoning_depth_tier,speed_tier,cost_tier,pricing_status,source,source_url,source_updated_at,refreshed_at,is_active")
     .eq("provider_name", providerName)
     .eq("is_active", true)
     .returns<ModelPricingRow>();
