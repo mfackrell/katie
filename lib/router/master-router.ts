@@ -67,7 +67,7 @@ type RoutingTrace = {
     override_happened: boolean;
     override_reason: string | null;
     llm_preference_profile: ReturnType<typeof buildRoutingPreferenceProfile>;
-    llm_candidates: Array<ReturnType<typeof buildCandidateMetadata>>;
+    llm_candidates: Array<Awaited<ReturnType<typeof buildCandidateMetadata>>>;
   };
   policy: {
     router_version: string | null;
@@ -171,7 +171,7 @@ function buildRoutingTrace({
   llmPrimaryUsed: boolean;
   deterministicFallbackUsed: boolean;
   llmPreferenceProfile: ReturnType<typeof buildRoutingPreferenceProfile>;
-  llmCandidates: Array<ReturnType<typeof buildCandidateMetadata>>;
+  llmCandidates: Array<Awaited<ReturnType<typeof buildCandidateMetadata>>>;
 }): RoutingTrace {
   const scoredCandidates = scoreModelsForIntent(availableByProvider, intent, prompt).map(({ provider, modelId, score }) => ({
     provider: provider.name,
@@ -252,7 +252,7 @@ function buildSelectionExplainer({
   intent: Awaited<ReturnType<typeof inferRequestIntent>>;
   availableByProvider: Array<{ provider: LlmProvider; models: string[] }>;
   rankedCandidates: Array<{ provider: LlmProvider; modelId: string; score: number }>;
-  llmCandidates: Array<ReturnType<typeof buildCandidateMetadata>>;
+  llmCandidates: Array<Awaited<ReturnType<typeof buildCandidateMetadata>>>;
   selectedSource: "llm-primary" | "deterministic-fallback";
   hardRouteRule: string;
   fallbackUsed: boolean;
@@ -438,7 +438,7 @@ export async function chooseProvider(
   let llmPrimaryUsed = false;
   let deterministicFallbackUsed = false;
   let fallbackReason: string | null = null;
-  let llmCandidatesUsed: Array<ReturnType<typeof buildCandidateMetadata>> = [];
+  let llmCandidatesUsed: Array<Awaited<ReturnType<typeof buildCandidateMetadata>>> = [];
   const preferenceProfile = buildRoutingPreferenceProfile();
 
   const intent = options?.requestIntent ?? (await inferRequestIntent(prompt, {
@@ -601,20 +601,22 @@ export async function chooseProvider(
   if (!rankedCandidates.length) {
     selected = fallbackToDeterministic("no_ranked_candidates");
   } else {
-    llmCandidatesUsed = rankedCandidates.map((candidate) => {
-      const metadata = buildCandidateMetadata(candidate.provider.name, candidate.modelId, intent);
-      const breakdown = scoreModelCandidateWithBreakdown(candidate.provider.name, candidate.modelId, intent);
-      return {
-        ...metadata,
-        score_breakdown: {
-          base_score: breakdown.baseScore,
-          final_score: breakdown.finalScore,
-          excluded: breakdown.excluded,
-          exclusion_reason: breakdown.exclusionReason,
-          adjustments: breakdown.adjustments
-        }
-      };
-    });
+    llmCandidatesUsed = await Promise.all(
+      rankedCandidates.map(async (candidate) => {
+        const metadata = await buildCandidateMetadata(candidate.provider.name, candidate.modelId, intent);
+        const breakdown = scoreModelCandidateWithBreakdown(candidate.provider.name, candidate.modelId, intent);
+        return {
+          ...metadata,
+          score_breakdown: {
+            base_score: breakdown.baseScore,
+            final_score: breakdown.finalScore,
+            excluded: breakdown.excluded,
+            exclusion_reason: breakdown.exclusionReason,
+            adjustments: breakdown.adjustments
+          }
+        };
+      })
+    );
     console.info(`[LLM Router Preferences] ${JSON.stringify({ requestId: traceRequestId, intent, preferenceProfile })}`);
     console.info(
       `[LLM Router Candidates] ${JSON.stringify({ requestId: traceRequestId, count: llmCandidatesUsed.length, candidates: llmCandidatesUsed })}`

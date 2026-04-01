@@ -314,7 +314,7 @@ test("technical deterministic bonuses are lightweight and no longer overwhelming
 });
 
 test("candidate metadata exposes structured preference dimensions", async () => {
-  const metadata = buildCandidateMetadata("anthropic", "claude-4.5-sonnet", "assistant-reflection");
+  const metadata = await buildCandidateMetadata("anthropic", "claude-4.5-sonnet", "assistant-reflection");
 
   assert.equal(metadata.providerName, "anthropic");
   assert.equal(metadata.modelId, "claude-4.5-sonnet");
