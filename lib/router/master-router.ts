@@ -14,6 +14,12 @@ import {
 import { isBlockedRoutingModel } from "@/lib/router/routing-model-filters";
 import { evaluatePolicyRouting, getPolicyConfig } from "@/lib/router/policy-engine";
 import { LlmProvider } from "@/lib/providers/types";
+import {
+  getRoutingRegistryByProvider,
+  refreshModelRegistry,
+  snapshotToLookup,
+  type RegistryRoutingModel
+} from "@/lib/models/registry";
 
 export type RoutingDecision = {
   provider: LlmProvider;
@@ -78,9 +84,10 @@ type RoutingTrace = {
 function topRoutingCandidates(
   availableByProvider: Array<{ provider: LlmProvider; models: string[] }>,
   intent: Awaited<ReturnType<typeof inferRequestIntent>>,
-  prompt: string
+  prompt: string,
+  registryLookup?: Map<string, RegistryRoutingModel>
 ): string {
-  return scoreModelsForIntent(availableByProvider, intent, prompt)
+  return scoreModelsForIntent(availableByProvider, intent, prompt, { registryLookup })
     .slice(0, 3)
     .map(({ provider, modelId, score }) => `${provider.name}:${modelId}(${score})`)
     .join(", ");
@@ -91,9 +98,10 @@ function logRoutingDecision(
   availableByProvider: Array<{ provider: LlmProvider; models: string[] }>,
   prompt: string,
   selectedProviderName: string,
-  selectedModelId: string
+  selectedModelId: string,
+  registryLookup?: Map<string, RegistryRoutingModel>
 ): void {
-  const candidates = topRoutingCandidates(availableByProvider, intent, prompt) || "none";
+  const candidates = topRoutingCandidates(availableByProvider, intent, prompt, registryLookup) || "none";
   console.info(`[Router] intent=${intent} top_candidates=${candidates} selected=${selectedProviderName}:${selectedModelId}`);
 }
 
@@ -133,10 +141,11 @@ function isRoutingTraceEnabled(perRequestOverride?: boolean): boolean {
 
 function createCandidateBreakdown(
   availableByProvider: Array<{ provider: LlmProvider; models: string[] }>,
-  intent: Awaited<ReturnType<typeof inferRequestIntent>>
+  intent: Awaited<ReturnType<typeof inferRequestIntent>>,
+  registryLookup?: Map<string, RegistryRoutingModel>
 ): CandidateScoreBreakdown[] {
   return availableByProvider.flatMap(({ provider, models }) =>
-    models.map((modelId) => scoreModelCandidateWithBreakdown(provider.name, modelId, intent))
+    models.map((modelId) => scoreModelCandidateWithBreakdown(provider.name, modelId, intent, { registryLookup }))
   );
 }
 
@@ -155,7 +164,8 @@ function buildRoutingTrace({
   llmPrimaryUsed,
   deterministicFallbackUsed,
   llmPreferenceProfile,
-  llmCandidates
+  llmCandidates,
+  registryLookup
 }: {
   requestId: string;
   timestamp: string;
@@ -172,8 +182,9 @@ function buildRoutingTrace({
   deterministicFallbackUsed: boolean;
   llmPreferenceProfile: ReturnType<typeof buildRoutingPreferenceProfile>;
   llmCandidates: Array<ReturnType<typeof buildCandidateMetadata>>;
+  registryLookup?: Map<string, RegistryRoutingModel>;
 }): RoutingTrace {
-  const scoredCandidates = scoreModelsForIntent(availableByProvider, intent, prompt).map(({ provider, modelId, score }) => ({
+  const scoredCandidates = scoreModelsForIntent(availableByProvider, intent, prompt, { registryLookup }).map(({ provider, modelId, score }) => ({
     provider: provider.name,
     model_id: modelId,
     score
@@ -193,7 +204,7 @@ function buildRoutingTrace({
       has_context: Boolean(context),
       context_length: context.length
     },
-    candidates: createCandidateBreakdown(availableByProvider, intent).map((candidate) => ({
+    candidates: createCandidateBreakdown(availableByProvider, intent, registryLookup).map((candidate) => ({
       provider: candidate.providerName,
       model_id: candidate.modelId,
       base_score: candidate.baseScore,
@@ -245,7 +256,8 @@ function buildSelectionExplainer({
   fallbackReason,
   preferenceProfile,
   overrideReason,
-  summary
+  summary,
+  registryLookup
 }: {
   selectedProviderName: string;
   selectedModelId: string;
@@ -260,6 +272,7 @@ function buildSelectionExplainer({
   preferenceProfile: ReturnType<typeof buildRoutingPreferenceProfile>;
   overrideReason: string | null;
   summary: string;
+  registryLookup?: Map<string, RegistryRoutingModel>;
 }): SelectionExplainer {
   const scoredCandidates = rankedCandidates.map(({ provider, modelId, score }) => ({
     model: `${provider.name}:${modelId}`,
@@ -293,7 +306,7 @@ function buildSelectionExplainer({
       };
     });
   const selectedBreakdown =
-    createCandidateBreakdown(availableByProvider, intent).find(
+    createCandidateBreakdown(availableByProvider, intent, registryLookup).find(
       (candidate) => candidate.providerName === selectedProviderName && candidate.modelId === selectedModelId
     ) ?? null;
   const topFactors: NonNullable<SelectionExplainer["top_factors"]> =
@@ -384,13 +397,15 @@ function buildFallbackChain({
   selectedProviderName,
   selectedModelId,
   availableByProvider,
-  intent
+  intent,
+  registryLookup
 }: {
   scoredCandidates: Array<{ provider: LlmProvider; modelId: string; score: number }>;
   selectedProviderName: string;
   selectedModelId: string;
   availableByProvider: Array<{ provider: LlmProvider; models: string[] }>;
   intent: Awaited<ReturnType<typeof inferRequestIntent>>;
+  registryLookup?: Map<string, RegistryRoutingModel>;
 }): Array<{ provider: LlmProvider; modelId: string; score: number }> {
   const usedKeys = new Set<string>([`${selectedProviderName}:${selectedModelId}`]);
   const fallbackChain: Array<{ provider: LlmProvider; modelId: string; score: number }> = [];
@@ -399,7 +414,8 @@ function buildFallbackChain({
     const validated = validateRoutingDecision(
       { providerName: candidate.provider.name, modelId: candidate.modelId },
       availableByProvider,
-      intent
+      intent,
+      { registryLookup }
     );
     const key = `${validated.provider.name}:${validated.modelId}`;
 
@@ -432,6 +448,7 @@ export async function chooseProvider(
     routingTraceEnabled?: boolean;
     routingRequestId?: string;
     requestIntent?: RequestIntent;
+    modelRegistrySnapshot?: Map<LlmProvider["name"], RegistryRoutingModel[]>;
   }
 ): Promise<RoutingDecision> {
   let rankedCandidates: Array<{ provider: LlmProvider; modelId: string; score: number }> = [];
@@ -449,13 +466,38 @@ export async function chooseProvider(
   const traceRequestId = options?.routingRequestId ?? crypto.randomUUID();
   const traceTimestamp = new Date().toISOString();
   const policyConfig = getPolicyConfig();
+  let registrySnapshot = options?.modelRegistrySnapshot;
 
-  const modelEntries = await Promise.all(
-    providers.map(async (provider) => ({
-      provider,
-      models: (await provider.listModels()).filter(() => !isBlockedRoutingModel())
-    }))
-  );
+  if (!registrySnapshot) {
+    try {
+      await refreshModelRegistry(providers);
+      registrySnapshot = await getRoutingRegistryByProvider(providers);
+      console.info(`[ModelRegistry] requestId=${traceRequestId} snapshot_loaded=true`);
+    } catch (error) {
+      console.warn(`[ModelRegistry] requestId=${traceRequestId} snapshot_load_failed`, error);
+    }
+  }
+
+  const registryLookup = registrySnapshot ? snapshotToLookup(registrySnapshot) : undefined;
+
+  const modelEntries = await Promise.all(providers.map(async (provider) => {
+    if (registrySnapshot?.get(provider.name)?.length) {
+      const eligibleModels = (registrySnapshot.get(provider.name) ?? [])
+        .filter((record) => record.routing_eligibility !== "disabled" && record.routing_eligibility !== "manual_override_only")
+        .map((record) => record.model_id);
+      const restrictedForTextOnly = (registrySnapshot.get(provider.name) ?? [])
+        .filter((record) => record.routing_eligibility === "restricted")
+        .map((record) => record.model_id);
+      console.info(
+        `[ModelRegistry] requestId=${traceRequestId} provider=${provider.name} eligible=${eligibleModels.length} restricted=${restrictedForTextOnly.length}`
+      );
+      return { provider, models: eligibleModels.filter(() => !isBlockedRoutingModel()) };
+    }
+
+    const fallbackModels = (await provider.listModels()).filter(() => !isBlockedRoutingModel());
+    console.warn(`[ModelRegistry] requestId=${traceRequestId} provider=${provider.name} using_provider_fallback=true count=${fallbackModels.length}`);
+    return { provider, models: fallbackModels };
+  }));
 
   let availableByProvider = modelEntries.map(({ provider, models }) => ({
     provider,
@@ -472,13 +514,14 @@ export async function chooseProvider(
   }
 
   availableByProvider = filterCandidatesForIntent(availableByProvider, intent, {
-    hasVideoInput: Boolean(options?.hasVideoInput)
+    hasVideoInput: Boolean(options?.hasVideoInput),
+    registryLookup
   });
 
   console.info(`[Capability Filter] requestId=${traceRequestId} candidates=${availableByProvider.reduce((total, entry) => total + entry.models.length, 0)}`);
   logRoutingCandidatePool(traceRequestId, intent, availableByProvider);
 
-  rankedCandidates = scoreModelsForIntent(availableByProvider, intent, prompt);
+  rankedCandidates = scoreModelsForIntent(availableByProvider, intent, prompt, { registryLookup });
   console.info(
     `[Router Candidate Hygiene] requestId=${traceRequestId} before=${candidateCountBeforeFilter} after=${rankedCandidates.length}`
   );
@@ -489,7 +532,8 @@ export async function chooseProvider(
       selectedProviderName: selection.provider.name,
       selectedModelId: selection.modelId,
       availableByProvider,
-      intent
+      intent,
+      registryLookup
     });
 
     if (!policyConfig.enabled) {
@@ -512,7 +556,8 @@ export async function chooseProvider(
           fallbackReason,
           preferenceProfile,
           overrideReason: selection.overrideReason,
-          summary: selection.summary
+          summary: selection.summary,
+          registryLookup
         })
       };
     }
@@ -548,7 +593,8 @@ export async function chooseProvider(
           fallbackReason,
           preferenceProfile,
           overrideReason: selection.overrideReason,
-          summary: selection.summary
+          summary: selection.summary,
+          registryLookup
         })
       };
     }
@@ -573,7 +619,8 @@ export async function chooseProvider(
         fallbackReason,
         preferenceProfile,
         overrideReason: `policy_guardrail:${evaluation.trace.selection_summary}`,
-        summary: `${selection.summary} Policy guardrail enforced hard constraints.`
+        summary: `${selection.summary} Policy guardrail enforced hard constraints.`,
+        registryLookup
       })
     };
   };
@@ -584,7 +631,7 @@ export async function chooseProvider(
     const topCandidate = rankedCandidates[0];
     const provider = topCandidate?.provider ?? availableByProvider[0]?.provider ?? providers[0];
     const modelId = topCandidate?.modelId ?? pickDefaultModel(provider, availableByProvider.find((entry) => entry.provider.name === provider.name)?.models ?? []);
-    const validated = validateRoutingDecision({ providerName: provider.name, modelId }, availableByProvider, intent);
+    const validated = validateRoutingDecision({ providerName: provider.name, modelId }, availableByProvider, intent, { registryLookup });
     console.info(`[Routing Fallback] reason=${reason} selected=${validated.provider.name}:${validated.modelId}`);
     return {
       provider: validated.provider,
@@ -602,8 +649,8 @@ export async function chooseProvider(
     selected = fallbackToDeterministic("no_ranked_candidates");
   } else {
     llmCandidatesUsed = rankedCandidates.map((candidate) => {
-      const metadata = buildCandidateMetadata(candidate.provider.name, candidate.modelId, intent);
-      const breakdown = scoreModelCandidateWithBreakdown(candidate.provider.name, candidate.modelId, intent);
+      const metadata = buildCandidateMetadata(candidate.provider.name, candidate.modelId, intent, { registryLookup });
+      const breakdown = scoreModelCandidateWithBreakdown(candidate.provider.name, candidate.modelId, intent, { registryLookup });
       return {
         ...metadata,
         score_breakdown: {
@@ -658,7 +705,8 @@ export async function chooseProvider(
         const validated = validateRoutingDecision(
           { providerName: llmRouting.selected.providerName, modelId: llmRouting.selected.modelId },
           availableByProvider,
-          intent
+          intent,
+          { registryLookup }
         );
         if (validated.changed) {
           console.warn(`[Routing Validation] rejected_llm_selection=${llmRouting.selected.providerName}:${llmRouting.selected.modelId}`);
@@ -679,7 +727,7 @@ export async function chooseProvider(
   }
 
   logFullRanking(traceRequestId, intent, rankedCandidates);
-  logRoutingDecision(intent, availableByProvider, prompt, selected.provider.name, selected.modelId);
+  logRoutingDecision(intent, availableByProvider, prompt, selected.provider.name, selected.modelId, registryLookup);
   console.info(
     `[Routing Final] requestId=${traceRequestId} source=${llmPrimaryUsed ? "llm-primary" : "deterministic-fallback"} fallback_reason=${fallbackReason ?? "none"}`
   );
@@ -701,7 +749,8 @@ export async function chooseProvider(
         llmPrimaryUsed,
         deterministicFallbackUsed,
         llmPreferenceProfile: preferenceProfile,
-        llmCandidates: llmCandidatesUsed
+        llmCandidates: llmCandidatesUsed,
+        registryLookup
       })
     );
   }

@@ -43,8 +43,10 @@
     "tests/reasoning-ui-state.test.ts",
     "tests/video-ingestion.test.ts",
     "lib/router/policy-engine.ts",
+    "lib/models/registry.ts",
     "tests/policy-engine.test.ts",
     "lib/memory/long-term-editor.ts",
-    "tests/long-term-editor.test.ts"
+    "tests/long-term-editor.test.ts",
+    "tests/model-registry.test.ts"
   ]
 }
