@@ -1,18 +1,12 @@
 import { NextResponse } from "next/server";
 import { getAvailableProviders } from "@/lib/providers";
+import { getRoutingRegistryByProvider, refreshModelRegistry } from "@/lib/models/registry";
 
 export async function GET() {
   const providers = getAvailableProviders();
-  const modelEntries = await Promise.all(
-    providers.map(async (provider) => {
-      try {
-        return [provider.name, await provider.listModels()] as const;
-      } catch (error) {
-        console.error(`[Models API] Failed to list models for provider ${provider.name}:`, error);
-        return [provider.name, []] as const;
-      }
-    })
-  );
+  await refreshModelRegistry(providers);
+  const snapshot = await getRoutingRegistryByProvider(providers);
+  const modelEntries = providers.map((provider) => [provider.name, snapshot.get(provider.name) ?? []] as const);
 
   return NextResponse.json(Object.fromEntries(modelEntries), {
     headers: {

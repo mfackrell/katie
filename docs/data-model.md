@@ -47,8 +47,18 @@ Three per-(actor, chat) memory layers are persisted as JSON-like `content` paylo
 - keyed by `actor_id` + `chat_id`
 - stores longer-lived contextual memory
 
+## 7) model_registry
+Canonical model metadata + routing eligibility table populated automatically from provider discovery.
+- identity: `provider_name`, `model_id`, `normalized_model_id` (PK includes provider + normalized ID)
+- lifecycle: `first_seen_at`, `last_seen_at`, `discovered_at`, `is_active`
+- pipeline statuses: `discovery_status`, `pricing_status`, `capability_status`
+- routing controls: `routing_eligibility`, `confidence_score`, `confidence_tier`
+- enriched metadata: pricing fields, capability booleans, reasoning/speed/cost tiers
+- diagnostics/provenance: `source_metadata`, `failure_reason`, `exception_count`, verification timestamps
+
 ## Relationships and flow
 - Creating a chat provisions empty rows for all three memory tables.
 - Chat orchestration reads actor + chat + recent messages + all memory layers.
 - Assistant responses and user messages are appended to `messages`.
 - Rolling summary updates write into `intermediate_memory.summary`.
+- Model refresh jobs update `model_registry` and router consumes this table as primary model truth.
