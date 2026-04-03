@@ -59,6 +59,67 @@ export type RegistryRoutingModel = Pick<
 const LITELLM_PRICING_URL =
   "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json";
 
+async function logRegistryException(args: {
+  providerName: LlmProvider["name"];
+  modelId?: string;
+  exceptionType: string;
+  reason: string;
+  metadata?: Record<string, unknown>;
+}): Promise<void> {
+  try {
+    const client = getSupabaseAdminClient();
+    const normalized = args.modelId ? normalizeModelId(args.modelId) : "provider-scope";
+    await client.from("model_registry_exceptions").insert({
+      provider_name: args.providerName,
+      model_id: args.modelId ?? null,
+      normalized_model_id: normalized,
+      exception_type: args.exceptionType,
+      exception_reason: args.reason,
+      metadata: args.metadata ?? {}
+    });
+  } catch {
+    // no-op: exception logging must never block refresh
+  }
+}
+
+async function createRefreshRun(status: "running" | "completed" | "failed", providers: LlmProvider["name"][]): Promise<string | null> {
+  try {
+    const client = getSupabaseAdminClient();
+    const { data } = await client
+      .from("model_registry_refresh_runs")
+      .insert({
+        status,
+        providers,
+        summary: { provider_count: providers.length }
+      })
+      .select("id")
+      .single<{ id: string }>();
+    return data?.id ?? null;
+  } catch {
+    return null;
+  }
+}
+
+async function completeRefreshRun(runId: string | null, status: "completed" | "failed", summary: Record<string, unknown>): Promise<void> {
+  if (!runId) {
+    return;
+  }
+
+  try {
+    const client = getSupabaseAdminClient();
+    await client
+      .from("model_registry_refresh_runs")
+      .eq("id", runId)
+      .update({
+        status,
+        summary,
+        finished_at: new Date().toISOString()
+      });
+  } catch {
+    // no-op
+  }
+}
+
 function toConfidenceTier(score: number): ConfidenceTier {
   if (score >= 0.8) return "high";
   if (score >= 0.5) return "medium";
@@ -196,10 +257,14 @@ export async function refreshModelRegistry(providers: LlmProvider[]): Promise<vo
   const client = getSupabaseAdminClient();
   const nowIso = new Date().toISOString();
   const pricingCatalog = await fetchLiteLlmPricingCatalog();
+  const runId = await createRefreshRun("running", providers.map((provider) => provider.name));
+  let providerFailures = 0;
+  let discoveredTotal = 0;
 
   for (const provider of providers) {
     try {
       const discovered = await provider.listModels();
+      discoveredTotal += discovered.length;
       const rows = discovered.map((modelId) => enrichModelRecord(provider.name, modelId, pricingCatalog, nowIso));
 
       if (rows.length) {
@@ -240,12 +305,24 @@ export async function refreshModelRegistry(providers: LlmProvider[]): Promise<vo
         disabled_count: toDisable.length
       });
     } catch (error) {
+      providerFailures += 1;
       console.error("[ModelRegistry] provider_discovery_failed", {
         provider: provider.name,
         error: error instanceof Error ? error.message : String(error)
       });
+      await logRegistryException({
+        providerName: provider.name,
+        exceptionType: "provider_discovery_failed",
+        reason: error instanceof Error ? error.message : String(error)
+      });
     }
   }
+
+  await completeRefreshRun(runId, providerFailures > 0 ? "failed" : "completed", {
+    providers: providers.length,
+    discovered_total: discoveredTotal,
+    provider_failures: providerFailures
+  });
 }
 
 export async function getRoutingRegistryByProvider(providers: LlmProvider[]): Promise<Map<LlmProvider["name"], RegistryRoutingModel[]>> {

@@ -41,7 +41,7 @@ Providers are enabled by whichever API keys are present at runtime. `/api/models
 
 ## Canonical model registry and automated routing
 - Discovery source: provider `listModels()` for each configured provider.
-- Persistence: `model_registry` table (see `supabase/migrations/202604030001_model_registry.sql`).
+- Persistence: `model_registry` + operational audit tables (`model_registry_refresh_runs`, `model_registry_exceptions`, `model_registry_manual_overrides`) via Supabase migrations.
 - Enrichment: pricing catalog (LiteLLM dataset when available) + conservative heuristics fallback.
 - Eligibility states:
   - `verified` – strong metadata confidence and pricing/capability evidence.

@@ -56,6 +56,25 @@ Canonical model metadata + routing eligibility table populated automatically fro
 - enriched metadata: pricing fields, capability booleans, reasoning/speed/cost tiers
 - diagnostics/provenance: `source_metadata`, `failure_reason`, `exception_count`, verification timestamps
 
+## 8) model_registry_refresh_runs
+Background job audit trail for discovery/enrichment runs.
+- `status` (`running | completed | failed`)
+- `providers` and `summary` JSON payloads
+- `started_at`, `finished_at`
+
+## 9) model_registry_exceptions
+Structured exception stream for provider/model failures.
+- provider/model identifiers
+- exception type/reason
+- metadata payload
+- `occurred_at`
+
+## 10) model_registry_manual_overrides
+Optional emergency override table (not required for normal operations).
+- keyed by provider + normalized model ID
+- override eligibility value
+- notes + timestamps
+
 ## Relationships and flow
 - Creating a chat provisions empty rows for all three memory tables.
 - Chat orchestration reads actor + chat + recent messages + all memory layers.
