@@ -1,0 +1,46 @@
+name: Supabase Migrations
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "supabase/migrations/**"
+      - ".github/workflows/supabase-migrations.yml"
+      - "scripts/validate-supabase-migrations.sh"
+  workflow_dispatch:
+
+concurrency:
+  group: supabase-migrations-main
+  cancel-in-progress: false
+
+jobs:
+  apply-and-validate:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Supabase CLI
+        uses: supabase/setup-cli@v1
+        with:
+          version: latest
+
+      - name: Apply migrations to Supabase
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          if [ -z "${SUPABASE_DB_URL:-}" ]; then
+            echo "SUPABASE_DB_URL secret is required" >&2
+            exit 1
+          fi
+
+          supabase db push --db-url "$SUPABASE_DB_URL" --include-all
+
+      - name: Validate remote migration history matches repository
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: bash scripts/validate-supabase-migrations.sh
