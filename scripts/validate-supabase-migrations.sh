@@ -1,8 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [[ -z "${SUPABASE_DB_URL:-}" ]]; then
-  echo "SUPABASE_DB_URL must be set for migration validation." >&2
+if [[ -z "${SUPABASE_PROJECT_REF:-}" ]]; then
+  echo "SUPABASE_PROJECT_REF must be set for migration validation." >&2
+  exit 1
+fi
+
+if [[ -z "${SUPABASE_DB_PASSWORD:-}" ]]; then
+  echo "SUPABASE_DB_PASSWORD must be set for migration validation." >&2
   exit 1
 fi
 
@@ -22,20 +27,18 @@ if [[ ${#local_versions[@]} -eq 0 ]]; then
   exit 1
 fi
 
-mapfile -t remote_versions < <(
-  psql "$SUPABASE_DB_URL" -X -A -t -c "select version::text from supabase_migrations.schema_migrations order by version;"
-)
+migration_list_output="$(supabase migration list --linked --password "$SUPABASE_DB_PASSWORD")"
 
 missing=()
 for version in "${local_versions[@]}"; do
-  if ! printf '%s\n' "${remote_versions[@]}" | grep -qx "$version"; then
+  if ! grep -qE "(^|[^0-9])${version}([^0-9]|$)" <<<"$migration_list_output"; then
     missing+=("$version")
   fi
 done
 
 if [[ ${#missing[@]} -gt 0 ]]; then
-  echo "Remote Supabase project is missing migrations present in repo: ${missing[*]}" >&2
-  echo "Run: supabase db push --db-url \"\$SUPABASE_DB_URL\" --include-all" >&2
+  echo "Remote Supabase project ${SUPABASE_PROJECT_REF} is missing migrations present in repo: ${missing[*]}" >&2
+  echo "Run: supabase db push --include-all" >&2
   exit 1
 fi
 
