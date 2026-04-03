@@ -13,18 +13,23 @@ API routes live under `app/api`:
 - `chats/route.ts`: chat CRUD.
 - `messages/route.ts`: message retrieval for a chat.
 - `models/route.ts`: provider model discovery.
+- `internal/model-registry/refresh/route.ts`: protected registry refresh endpoint for cron/background sync.
 - `upload/route.ts`: file parsing + provider-specific upload references.
 
 ## Routing/provider selection overview
 - Provider instances are assembled in `lib/providers/index.ts` from configured API keys.
-- `lib/router/master-router.ts` selects provider/model using overrides, intent, and policy controls.
+- `lib/models/registry.ts` is the canonical model registry pipeline:
+  - discovers from provider `listModels()`,
+  - enriches metadata (pricing + capability inference + provenance),
+  - computes conservative routing eligibility and confidence.
+- `lib/router/master-router.ts` selects provider/model using registry-backed eligibility first, then intent + policy controls.
 - Optional policy mode is implemented in `lib/router/policy-engine.ts` behind env flags.
 - Video attachments are constrained by `lib/chat/video-routing.ts` to Google-compatible paths.
 
 ## Persistence/data model overview
 - Main persistence module: `lib/data/persistence-store.ts`.
 - DB access helper: `lib/data/supabase/admin.ts` (PostgREST-style client using Supabase URL + service role key).
-- Entities persisted: actors, chats, messages, and three memory layers.
+- Entities persisted: actors, chats, messages, three memory layers, and the canonical `model_registry` table.
 
 ## Upload/file handling overview
 - `/api/upload` validates multipart uploads and allowed file types.

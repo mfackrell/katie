@@ -21,6 +21,7 @@ It solves a practical orchestration problem: keep one chat UI while dynamically 
 - **Frontend:** `app/page.tsx` + `components/*` (actor/chat management and chat panel).
 - **API layer:** `app/api/*` routes for actors, chats, messages, models, uploads, and chat generation.
 - **Routing/selection:** `lib/router/*` combines heuristics and policy flags.
+- **Canonical model registry:** `lib/models/registry.ts` is the single metadata/routing source of truth populated by discovery + enrichment.
 - **Provider adapters:** `lib/providers/*` normalize OpenAI/Google/Grok/Anthropic APIs.
 - **Memory:** `lib/memory/*` assembles short/intermediate/long-term context and rolling summaries.
 - **Persistence:** `lib/data/persistence-store.ts` reads/writes Supabase tables.
@@ -36,7 +37,26 @@ See [`docs/data-model.md`](docs/data-model.md) for table/entity details.
 - xAI Grok
 - Anthropic Claude
 
-Providers are enabled by whichever API keys are present at runtime. `/api/models` queries each enabled provider for currently available models.
+Providers are enabled by whichever API keys are present at runtime. `/api/models` now returns registry-backed model metadata (not raw provider lists only).
+
+## Canonical model registry and automated routing
+- Discovery source: provider `listModels()` for each configured provider.
+- Persistence: `model_registry` + operational audit tables (`model_registry_refresh_runs`, `model_registry_exceptions`, `model_registry_manual_overrides`) via Supabase migrations.
+- Enrichment: pricing catalog (LiteLLM dataset when available) + conservative heuristics fallback.
+- Eligibility states:
+  - `verified` – strong metadata confidence and pricing/capability evidence.
+  - `restricted` – usable for lower-risk/general routing with conservative defaults.
+  - `manual_override_only` – not in automatic pool; still reachable through explicit override.
+  - `disabled` – excluded from routing.
+- Router behavior:
+  - Automatic selection consumes registry eligibility first.
+  - Missing registry snapshot falls back to provider model lists with warning logs.
+  - Unknown/weak models are not silently promoted to premium specialized routing.
+
+### Background refresh job
+- Protected endpoint: `POST /api/internal/model-registry/refresh`
+- Auth: header `x-internal-token: <INTERNAL_API_TOKEN>`
+- Designed for cron invocation to keep discovery/enrichment current.
 
 ## Local development
 ### Prerequisites

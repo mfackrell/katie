@@ -26,6 +26,8 @@ At least one of the following provider families must be configured for chat gene
   Overrides assistant display/prompt identity name; defaults to `Katie`.
 - `RETRY_ON_PROVIDER_REFUSAL` (optional)  
   Controls refusal retry behavior in router refusal handling.
+- `INTERNAL_API_TOKEN` (optional but required to call internal refresh endpoint)  
+  Shared secret for `POST /api/internal/model-registry/refresh` via `x-internal-token` header.
 
 ## Router diagnostics and policy
 - `ROUTER_TRACE_ENABLED` (optional)  

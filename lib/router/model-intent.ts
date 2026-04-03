@@ -2,10 +2,12 @@ import {
   isImageGenerationModel as isGoogleImageGenerationModel,
   isVisionAnalysisModel as isGoogleVisionAnalysisModel
 } from "@/lib/providers/google-model-capabilities";
+import { lookupRegistryModel, type RegistryRoutingModel } from "@/lib/models/registry";
 import { LlmProvider } from "@/lib/providers/types";
 type OpenAIClient = import("openai").default;
 
 export type ProviderName = "openai" | "google" | "grok" | "anthropic";
+type RegistryLookup = Map<string, RegistryRoutingModel> | undefined;
 export type RoutingChoice = { providerName: ProviderName; modelId: string };
 export type LlmRoutingChoice = { providerName: ProviderName; modelId: string; score: number };
 export type LlmRoutingResult =
@@ -573,19 +575,29 @@ export async function inferRequestIntent(
 }
 
 
-function modelSupportsIntent(providerName: ProviderName, modelId: string, intent: RequestIntent): boolean {
+function modelSupportsIntent(
+  providerName: ProviderName,
+  modelId: string,
+  intent: RequestIntent,
+  registryLookup?: RegistryLookup
+): boolean {
+  const registry = lookupRegistryModel(registryLookup, providerName, modelId);
+  const supportsImageGeneration = registry?.supports_image_generation ?? isImageGenerationModel(providerName, modelId);
+  const supportsVision = registry?.supports_vision ?? isVisionAnalysisModel(providerName, modelId);
+  const supportsWebSearchFlag = registry?.supports_web_search ?? supportsWebSearch(providerName, modelId);
+  const supportsText = registry?.supports_text ?? !supportsImageGeneration;
   const modalitySpecialized = isModalitySpecializedGenerationModel(providerName, modelId);
 
   switch (intent) {
     case "web-search":
     case "news-summary":
-      return !isImageGenerationModel(providerName, modelId) && supportsWebSearch(providerName, modelId);
+      return supportsText && supportsWebSearchFlag;
     case "image-generation":
-      return isImageGenerationModel(providerName, modelId);
+      return supportsImageGeneration;
     case "safety-sensitive-vision":
     case "vision-analysis":
     case "multimodal-reasoning":
-      return isVisionAnalysisModel(providerName, modelId) && !isImageGenerationModel(providerName, modelId);
+      return supportsVision && !supportsImageGeneration;
     case "text":
     case "general-text":
     case "rewrite":
@@ -594,7 +606,7 @@ function modelSupportsIntent(providerName: ProviderName, modelId: string, intent
     case "architecture-review":
     case "code-generation":
     case "assistant-reflection":
-      return !isImageGenerationModel(providerName, modelId) && !modalitySpecialized;
+      return supportsText && !modalitySpecialized;
   }
 }
 
@@ -792,7 +804,8 @@ function rankModelForIntent(providerName: ProviderName, modelId: string, intent:
 export function scoreModelsForIntent(
   availableByProvider: Array<{ provider: LlmProvider; models: string[] }>,
   intent: RequestIntent,
-  prompt = ""
+  prompt = "",
+  options?: { registryLookup?: RegistryLookup }
 ): Array<{ provider: LlmProvider; modelId: string; score: number }> {
   return availableByProvider
     .flatMap(({ provider, models }) =>
@@ -802,6 +815,7 @@ export function scoreModelsForIntent(
           modelId,
           score: rankModelForIntent(provider.name, modelId, intent) + userPreferredProviderBoost(prompt, provider.name)
         }))
+        .filter((candidate) => modelSupportsIntent(candidate.provider.name, candidate.modelId, intent, options?.registryLookup))
         .filter((candidate) => candidate.score >= 0)
     )
     .sort((left, right) => right.score - left.score);
@@ -821,22 +835,30 @@ function detectSpecializationTags(providerName: ProviderName, modelId: string): 
   return Array.from(new Set(tags));
 }
 
-export function buildCandidateMetadata(providerName: ProviderName, modelId: string, intent: RequestIntent): CandidateMetadata {
+export function buildCandidateMetadata(
+  providerName: ProviderName,
+  modelId: string,
+  intent: RequestIntent,
+  options?: { registryLookup?: RegistryLookup }
+): CandidateMetadata {
+  const registry = lookupRegistryModel(options?.registryLookup, providerName, modelId);
   const normalizedModel = modelId.toLowerCase();
   const prior_score = rankModelForIntent(providerName, modelId, intent);
-  const supportsVision = isVisionAnalysisModel(providerName, modelId);
-  const supportsImageGeneration = isImageGenerationModel(providerName, modelId);
-  const supportsVideo = providerName === "google" && normalizedModel.includes("gemini");
+  const supportsVision = registry?.supports_vision ?? isVisionAnalysisModel(providerName, modelId);
+  const supportsImageGeneration = registry?.supports_image_generation ?? isImageGenerationModel(providerName, modelId);
+  const supportsVideo = registry?.supports_video ?? (providerName === "google" && normalizedModel.includes("gemini"));
   const reasoningDepth =
-    /o3|opus|sonnet|codex|pro|gpt-5/.test(normalizedModel) ? "high" : /flash|mini|haiku/.test(normalizedModel) ? "low" : "medium";
-  const speedTier = /flash|mini|haiku|pulse/.test(normalizedModel) ? "fast" : /o3|opus/.test(normalizedModel) ? "slow" : "medium";
-  const costTier = /flash|mini|haiku/.test(normalizedModel) ? "low" : /o3|opus|pro/.test(normalizedModel) ? "high" : "medium";
+    registry?.reasoning_tier ??
+    (/o3|opus|sonnet|codex|pro|gpt-5/.test(normalizedModel) ? "high" : /flash|mini|haiku/.test(normalizedModel) ? "low" : "medium");
+  const speedTier =
+    registry?.speed_tier ?? (/flash|mini|haiku|pulse/.test(normalizedModel) ? "fast" : /o3|opus/.test(normalizedModel) ? "slow" : "medium");
+  const costTier = registry?.cost_tier ?? (/flash|mini|haiku/.test(normalizedModel) ? "low" : /o3|opus|pro/.test(normalizedModel) ? "high" : "medium");
 
   return {
     providerName,
     modelId,
-    supports_text: !supportsImageGeneration,
-    supports_web_search: supportsWebSearch(providerName, modelId),
+    supports_text: registry?.supports_text ?? !supportsImageGeneration,
+    supports_web_search: registry?.supports_web_search ?? supportsWebSearch(providerName, modelId),
     supports_vision: supportsVision,
     supports_video: supportsVideo,
     supports_image_generation: supportsImageGeneration,
@@ -862,7 +884,8 @@ export function buildRoutingPreferenceProfile(): RoutingPreferenceProfile {
 export function scoreModelCandidateWithBreakdown(
   providerName: ProviderName,
   modelId: string,
-  intent: RequestIntent
+  intent: RequestIntent,
+  options?: { registryLookup?: RegistryLookup }
 ): CandidateScoreBreakdown {
   const normalizedModel = modelId.toLowerCase();
   const adjustments: ScoreAdjustment[] = [];
@@ -886,7 +909,7 @@ export function scoreModelCandidateWithBreakdown(
       return finalize(baseScore, baseScore, null);
     }
     case "multimodal-reasoning": {
-      if (!modelSupportsIntent(providerName, modelId, intent)) {
+      if (!modelSupportsIntent(providerName, modelId, intent, options?.registryLookup)) {
         return finalize(null, -1, "intent_mismatch:multimodal-reasoning");
       }
       const baseScore = 1;
@@ -909,7 +932,7 @@ export function scoreModelCandidateWithBreakdown(
       return finalize(baseScore, finalScore, null);
     }
     case "vision-analysis": {
-      if (!modelSupportsIntent(providerName, modelId, intent)) {
+      if (!modelSupportsIntent(providerName, modelId, intent, options?.registryLookup)) {
         return finalize(null, -1, "intent_mismatch:vision-analysis");
       }
       const baseScore = 1;
@@ -932,7 +955,7 @@ export function scoreModelCandidateWithBreakdown(
       return finalize(baseScore, finalScore, null);
     }
     case "safety-sensitive-vision": {
-      if (!modelSupportsIntent(providerName, modelId, intent)) {
+      if (!modelSupportsIntent(providerName, modelId, intent, options?.registryLookup)) {
         return finalize(null, -1, "intent_mismatch:safety-sensitive-vision");
       }
       const baseScore = 1;
@@ -958,7 +981,7 @@ export function scoreModelCandidateWithBreakdown(
     case "emotional-analysis":
     case "news-summary":
     case "web-search": {
-      if (!modelSupportsIntent(providerName, modelId, intent)) {
+      if (!modelSupportsIntent(providerName, modelId, intent, options?.registryLookup)) {
         const reason = intent === "web-search" || intent === "news-summary" ? "missing_web_search_capability" : `intent_mismatch:${intent}`;
         return finalize(null, -1, reason);
       }
@@ -1054,7 +1077,8 @@ export function scoreModelCandidateWithBreakdown(
 export function validateRoutingDecision(
   decision: RoutingChoice,
   availableByProvider: Array<{ provider: LlmProvider; models: string[] }>,
-  intent: RequestIntent
+  intent: RequestIntent,
+  options?: { registryLookup?: RegistryLookup }
 ): { provider: LlmProvider; modelId: string; reasoning: string; changed: boolean } {
   if (["technical-debugging", "code-generation", "architecture-review", "assistant-reflection"].includes(intent)) {
     availableByProvider = availableByProvider.map(({ provider, models }) => ({
@@ -1067,7 +1091,7 @@ export function validateRoutingDecision(
 
   if (
     selectedProvider &&
-    modelSupportsIntent(decision.providerName, decision.modelId, intent) &&
+    modelSupportsIntent(decision.providerName, decision.modelId, intent, options?.registryLookup) &&
     selectedProvider.models.includes(decision.modelId)
   ) {
     return {
@@ -1078,7 +1102,7 @@ export function validateRoutingDecision(
     };
   }
 
-  const compatibleChoices = scoreModelsForIntent(availableByProvider, intent);
+  const compatibleChoices = scoreModelsForIntent(availableByProvider, intent, "", { registryLookup: options?.registryLookup });
 
   const fallback = compatibleChoices[0];
 
@@ -1105,7 +1129,7 @@ export function validateRoutingDecision(
 export function filterCandidatesForIntent(
   availableByProvider: Array<{ provider: LlmProvider; models: string[] }>,
   intent: RequestIntent,
-  options?: { hasVideoInput?: boolean }
+  options?: { hasVideoInput?: boolean; registryLookup?: RegistryLookup }
 ): Array<{ provider: LlmProvider; models: string[] }> {
   const hasVideoInput = Boolean(options?.hasVideoInput);
   return availableByProvider
@@ -1114,7 +1138,7 @@ export function filterCandidatesForIntent(
         if (hasVideoInput && provider.name !== "google") {
           return false;
         }
-        return modelSupportsIntent(provider.name, modelId, intent);
+        return modelSupportsIntent(provider.name, modelId, intent, options?.registryLookup);
       });
       return { provider, models: scopedModels };
     })
