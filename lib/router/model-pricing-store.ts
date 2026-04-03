@@ -46,10 +46,17 @@ export async function getModelPricingLookup(options?: { forceRefresh?: boolean; 
   const ttlMs = options?.ttlMs ?? 60_000;
 
   if (!options?.forceRefresh && cachedLookup && cachedLookup.expiresAt > now) {
+    console.info("[ModelPricingStore][CacheHit]", {
+      ttlMs,
+      rowCount: cachedLookup.data.size
+    });
     return cachedLookup.data;
   }
 
   if (inflightLookup) {
+    console.info("[ModelPricingStore][CacheRefresh]", {
+      reason: "inflight_reuse"
+    });
     return inflightLookup;
   }
 
@@ -60,6 +67,11 @@ export async function getModelPricingLookup(options?: { forceRefresh?: boolean; 
         map.set(pricingKey(row.provider_name, row.model_id), row);
       }
       cachedLookup = { expiresAt: now + ttlMs, data: map };
+      console.info("[ModelPricingStore][CacheRefresh]", {
+        forceRefresh: options?.forceRefresh ?? false,
+        ttlMs,
+        totalPricingRowsLoaded: rows.length
+      });
       return map;
     })
     .finally(() => {
@@ -71,7 +83,24 @@ export async function getModelPricingLookup(options?: { forceRefresh?: boolean; 
 
 export async function getModelPricing(providerName: ProviderName, modelId: string): Promise<ModelPricingRow | null> {
   const lookup = await getModelPricingLookup();
-  return lookup.get(pricingKey(providerName, modelId)) ?? lookup.get(pricingKey(providerName, modelId.toLowerCase())) ?? null;
+  const exactKey = pricingKey(providerName, modelId);
+  const normalizedKey = pricingKey(providerName, modelId.toLowerCase());
+  const match = lookup.get(exactKey) ?? lookup.get(normalizedKey) ?? null;
+
+  if (!match) {
+    console.info("[ModelPricingStore][LookupMiss]", {
+      provider: providerName,
+      modelId
+    });
+    return null;
+  }
+
+  console.info("[ModelPricingStore][LookupHit]", {
+    provider: providerName,
+    modelId,
+    pricingStatus: match.pricing_status
+  });
+  return match;
 }
 
 export async function getAllActiveModelPricing(): Promise<ModelPricingRow[]> {

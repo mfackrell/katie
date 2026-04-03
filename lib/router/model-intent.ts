@@ -839,21 +839,66 @@ export async function buildCandidateMetadata(providerName: ProviderName, modelId
   const speedTier = /flash|mini|haiku|pulse/.test(normalizedModel) ? "fast" : /o3|opus/.test(normalizedModel) ? "slow" : "medium";
 
   let costTier = heuristicCostTier(modelId);
+  let pricingRowFound = false;
+  let pricingStatus: string | null = null;
+  let hasNumericPricing = false;
+  let usedHeuristicFallback = true;
+  let costTierSource: "heuristic_fallback" | "pricing_complete" = "heuristic_fallback";
 
   try {
     const pricing = await getModelPricing(providerName, modelId.toLowerCase());
+    pricingRowFound = pricing !== null;
+    pricingStatus = pricing?.pricing_status ?? null;
+    hasNumericPricing = pricing ? pricing.input_cost_per_1m !== null || pricing.output_cost_per_1m !== null : false;
+
+    console.info("[RouterPricingLookup]", {
+      provider: providerName,
+      modelId,
+      pricingRowFound,
+      pricingStatus,
+      hasNumericPricing
+    });
 
     // Routing should prefer persisted pricing data. If refresh marks a model inactive,
     // we still use that last known row until fresh data arrives.
-    if (pricing && pricing.pricing_status === "complete" && (pricing.input_cost_per_1m !== null || pricing.output_cost_per_1m !== null)) {
+    if (pricing && pricing.pricing_status === "complete" && hasNumericPricing) {
       costTier = deriveCostTierFromPricing(pricing.input_cost_per_1m, pricing.output_cost_per_1m);
-    } else if (pricing && pricing.pricing_status !== "complete") {
-      console.info(`[RouterPricingFallback] provider=${providerName} model=${modelId} pricing_status=${pricing.pricing_status}`);
+      usedHeuristicFallback = false;
+      costTierSource = "pricing_complete";
+    } else {
+      console.info("[RouterPricingFallback]", {
+        provider: providerName,
+        modelId,
+        pricingRowFound,
+        pricingStatus,
+        hasNumericPricing,
+        reason: pricing ? "pricing_not_complete_or_non_numeric" : "pricing_row_missing"
+      });
     }
-  } catch {
+  } catch (error) {
     // Safe fallback when pricing store is temporarily unavailable.
     costTier = heuristicCostTier(modelId);
+    console.warn("[RouterPricingFallback]", {
+      provider: providerName,
+      modelId,
+      pricingRowFound,
+      pricingStatus,
+      hasNumericPricing,
+      reason: "pricing_lookup_error",
+      error: error instanceof Error ? error.message : "lookup_failed"
+    });
   }
+
+  console.info("[RouterPricingResolved]", {
+    provider: providerName,
+    modelId,
+    pricingRowFound,
+    pricingStatus,
+    hasNumericPricing,
+    usedHeuristicFallback,
+    finalCostTier: costTier,
+    costTierSource
+  });
 
   return {
     providerName,

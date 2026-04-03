@@ -123,36 +123,90 @@ export async function refreshModelPricing(deps: RefreshDependencies = {}): Promi
 
   for (const adapter of adapters) {
     const discoveredModels = discovered[adapter.provider] ?? [];
+    console.info("[ModelPricingRefresh][ProviderStart]", {
+      provider: adapter.provider,
+      discoveredModelCount: discoveredModels.length
+    });
+
     try {
       const pricing = await adapter.run();
-      console.info(`[ModelPricingRefresh] provider=${adapter.provider} source=${pricing.source} source_url=${pricing.sourceUrl ?? "n/a"}`);
+      console.info("[ModelPricingRefresh][ProviderFetchResult]", {
+        provider: adapter.provider,
+        adapterSource: pricing.source,
+        sourceUrl: pricing.sourceUrl,
+        discoveredModelCount: discoveredModels.length,
+        rawAdapterRowCount: pricing.rows.length
+      });
+
       const mergedRows = mergeDiscoveredWithPricing(discoveredModels, pricing, refreshedAt);
       const completeCount = mergedRows.filter((row) => row.pricing_status === "complete").length;
       const metadataOnlyCount = mergedRows.filter((row) => row.pricing_status === "metadata_only").length;
-      console.info(
-        `[ModelPricingRefresh] provider=${adapter.provider} complete=${completeCount} metadata_only=${metadataOnlyCount} failed=0`
-      );
+      console.info("[ModelPricingRefresh][ProviderMergeResult]", {
+        provider: adapter.provider,
+        adapterSource: pricing.source,
+        sourceUrl: pricing.sourceUrl,
+        discoveredModelCount: discoveredModels.length,
+        rawAdapterRowCount: pricing.rows.length,
+        mergedRowCount: mergedRows.length,
+        completeRowCount: completeCount,
+        metadataOnlyRowCount: metadataOnlyCount,
+        failedRowCount: 0
+      });
+
       totalRowsComplete += completeCount;
       totalRowsMetadataOnly += metadataOnlyCount;
-      totalRowsUpserted += await (deps.upsert ?? upsertModelPricing)(mergedRows);
-      totalRowsMarkedInactive += await (deps.markInactive ?? markInactiveModelPricing)(adapter.provider, discoveredModels);
+      const upsertedCount = await (deps.upsert ?? upsertModelPricing)(mergedRows);
+      totalRowsUpserted += upsertedCount;
+      const inactiveRowsMarkedCount = await (deps.markInactive ?? markInactiveModelPricing)(adapter.provider, discoveredModels);
+      totalRowsMarkedInactive += inactiveRowsMarkedCount;
+
+      console.info("[ModelPricingRefresh][ProviderPersistResult]", {
+        provider: adapter.provider,
+        adapterSource: pricing.source,
+        sourceUrl: pricing.sourceUrl,
+        discoveredModelCount: discoveredModels.length,
+        rawAdapterRowCount: pricing.rows.length,
+        mergedRowCount: mergedRows.length,
+        completeRowCount: completeCount,
+        metadataOnlyRowCount: metadataOnlyCount,
+        failedRowCount: 0,
+        upsertedRowCount: upsertedCount,
+        inactiveRowsMarkedCount
+      });
     } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : "refresh_failed";
       provider_errors.push({
         provider: adapter.provider,
-        message: error instanceof Error ? error.message : "refresh_failed"
+        message: errorMessage
       });
       const failedRows = buildFailedRows(adapter.provider, discoveredModels, refreshedAt);
+      let upsertedFailedRowCount = 0;
       if (failedRows.length > 0) {
-        totalRowsUpserted += await (deps.upsert ?? upsertModelPricing)(failedRows);
+        upsertedFailedRowCount = await (deps.upsert ?? upsertModelPricing)(failedRows);
+        totalRowsUpserted += upsertedFailedRowCount;
         totalRowsFailed += failedRows.length;
       }
-      console.info(
-        `[ModelPricingRefresh] provider=${adapter.provider} source=adapter_error complete=0 metadata_only=0 failed=${failedRows.length}`
-      );
 
+      let inactiveRowsMarkedCount = 0;
       if (discoveredModels.length > 0) {
-        totalRowsMarkedInactive += await (deps.markInactive ?? markInactiveModelPricing)(adapter.provider, discoveredModels);
+        inactiveRowsMarkedCount = await (deps.markInactive ?? markInactiveModelPricing)(adapter.provider, discoveredModels);
+        totalRowsMarkedInactive += inactiveRowsMarkedCount;
       }
+
+      console.error("[ModelPricingRefresh][ProviderError]", {
+        provider: adapter.provider,
+        adapterSource: "adapter_error",
+        sourceUrl: null,
+        discoveredModelCount: discoveredModels.length,
+        rawAdapterRowCount: 0,
+        mergedRowCount: 0,
+        completeRowCount: 0,
+        metadataOnlyRowCount: 0,
+        failedRowCount: failedRows.length,
+        inactiveRowsMarkedCount,
+        upsertedRowCount: upsertedFailedRowCount,
+        error: errorMessage
+      });
     }
   }
 

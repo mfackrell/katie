@@ -73,17 +73,80 @@ type LiteLlmCatalogEntry = {
   mode?: string;
 };
 
+type PricingRowSummary = {
+  totalRows: number;
+  numericPricingRows: number;
+  nonNumericPricingRows: number;
+};
+
+export function summarizePricingRows(
+  rows: Array<{ inputCostPer1M: number | null; outputCostPer1M: number | null }>
+): PricingRowSummary {
+  const numericPricingRows = rows.filter((row) => row.inputCostPer1M !== null || row.outputCostPer1M !== null).length;
+  return {
+    totalRows: rows.length,
+    numericPricingRows,
+    nonNumericPricingRows: rows.length - numericPricingRows
+  };
+}
+
 export async function fetchLiteLlmCatalog(): Promise<{ data: Record<string, LiteLlmCatalogEntry>; sourceUpdatedAt: string | null }> {
-  const response = await fetch(MODEL_PRICES_CATALOG_URL, { cache: "no-store" });
+  console.info("[ModelPricingSource][FetchStart]", {
+    source: "litellm-model-prices-catalog",
+    sourceUrl: MODEL_PRICES_CATALOG_URL
+  });
+
+  let response: Response;
+  try {
+    response = await fetch(MODEL_PRICES_CATALOG_URL, { cache: "no-store" });
+  } catch (error) {
+    console.error("[ModelPricingSource][FetchError]", {
+      source: "litellm-model-prices-catalog",
+      sourceUrl: MODEL_PRICES_CATALOG_URL,
+      error: error instanceof Error ? error.message : "fetch_failed"
+    });
+    throw error;
+  }
+
+  const contentType = response.headers.get("content-type");
   if (!response.ok) {
+    console.error("[ModelPricingSource][FetchError]", {
+      source: "litellm-model-prices-catalog",
+      sourceUrl: MODEL_PRICES_CATALOG_URL,
+      status: response.status,
+      contentType
+    });
     throw new Error(`Pricing source request failed (${response.status})`);
   }
 
-  const data = (await response.json()) as Record<string, LiteLlmCatalogEntry>;
-  return {
-    data,
-    sourceUpdatedAt: response.headers.get("last-modified")
-  };
+  let parsedSuccessfully = false;
+  let data: Record<string, LiteLlmCatalogEntry>;
+  try {
+    data = (await response.json()) as Record<string, LiteLlmCatalogEntry>;
+    parsedSuccessfully = true;
+  } catch (error) {
+    console.error("[ModelPricingSource][FetchError]", {
+      source: "litellm-model-prices-catalog",
+      sourceUrl: MODEL_PRICES_CATALOG_URL,
+      status: response.status,
+      contentType,
+      parsedSuccessfully,
+      error: error instanceof Error ? error.message : "json_parse_failed"
+    });
+    throw error;
+  }
+
+  const totalCatalogEntries = Object.keys(data).length;
+  console.info("[ModelPricingSource][FetchSuccess]", {
+    source: "litellm-model-prices-catalog",
+    sourceUrl: MODEL_PRICES_CATALOG_URL,
+    status: response.status,
+    contentType,
+    parsedSuccessfully,
+    totalCatalogEntries
+  });
+
+  return { data, sourceUpdatedAt: response.headers.get("last-modified") };
 }
 
 function normalizeProviderName(provider: string | undefined): string {
@@ -101,7 +164,7 @@ export function parseLiteLlmProviderRows(
   providerName: ProviderName,
   catalog: Record<string, LiteLlmCatalogEntry>
 ): ProviderPricingAdapterResult["rows"] {
-  return Object.entries(catalog)
+  const rows = Object.entries(catalog)
     .filter(([, entry]) => normalizeProviderName(entry.litellm_provider) === providerName)
     .map(([modelId, entry]) => ({
       modelId: normalizeModelId(modelId),
@@ -116,4 +179,17 @@ export function parseLiteLlmProviderRows(
       reasoningDepthTier: null,
       speedTier: null
     }));
+
+  const summary = summarizePricingRows(rows);
+  console.info("[ModelPricingSource][ParseResult]", {
+    source: "litellm-model-prices-catalog",
+    sourceUrl: MODEL_PRICES_CATALOG_URL,
+    provider: providerName,
+    totalCatalogEntries: Object.keys(catalog).length,
+    providerFilteredRowCount: rows.length,
+    numericPricingRows: summary.numericPricingRows,
+    nonNumericPricingRows: summary.nonNumericPricingRows
+  });
+
+  return rows;
 }
