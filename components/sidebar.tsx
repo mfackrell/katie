@@ -122,7 +122,7 @@ export function Sidebar({
     setRepoConnectResult(null);
 
     try {
-      const response = await fetch("/admin/repos/connect", {
+      const response = await fetch("/api/admin/repos/connect", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ repo: normalizedRepoName }),
