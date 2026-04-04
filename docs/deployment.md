@@ -52,3 +52,11 @@ For this repository's production path, `.github/workflows/migrate.yml` is the de
 - `migrate` runs `npm run db:migrate` using production `DATABASE_URL`.
 - `deploy_vercel` is blocked behind `needs: migrate`.
 - Production deployments should be triggered through this workflow (not a direct auto-deploy path that skips migrations).
+
+## Deployment authority (enforced)
+This repository uses **GitHub Actions as the single production deployment authority**.
+
+Enforcement rules:
+- Direct Git-based production auto-deploys are disabled in Vercel via `vercel.json` (`git.deploymentEnabled.main: false`).
+- The only allowed production deploy trigger is `.github/workflows/migrate.yml` after the `migrate` job succeeds.
+- Any future deploy mechanism must preserve the migration-before-deploy gate; do not add parallel production deploy triggers that bypass this workflow.
