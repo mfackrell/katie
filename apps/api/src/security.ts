@@ -1,10 +1,41 @@
-import crypto from 'crypto';
+import { createHmac, timingSafeEqual } from 'node:crypto';
 
-export const verifyGithubWebhookSignature = (payload: string, signature: string, secret: string): boolean => {
-  const digest = `sha256=${crypto.createHmac('sha256', secret).update(payload).digest('hex')}`;
-  try {
-    return crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(digest));
-  } catch {
+export type RawPayload = string | Buffer | Uint8Array;
+
+function toBuffer(payload: RawPayload): Buffer {
+  if (typeof payload === 'string') {
+    return Buffer.from(payload, 'utf8');
+  }
+
+  if (Buffer.isBuffer(payload)) {
+    return payload;
+  }
+
+  return Buffer.from(payload);
+}
+
+export function computeGithubSignature(rawPayload: RawPayload, secret: string): string {
+  const digest = createHmac('sha256', secret).update(toBuffer(rawPayload)).digest('hex');
+  return `sha256=${digest}`;
+}
+
+export function verifyGithubWebhookSignature(params: {
+  rawPayload: RawPayload;
+  signatureHeader: string | undefined;
+  secret: string;
+}): boolean {
+  const { rawPayload, signatureHeader, secret } = params;
+
+  if (!signatureHeader || !signatureHeader.startsWith('sha256=')) {
     return false;
   }
-};
+
+  const expected = Buffer.from(computeGithubSignature(rawPayload, secret), 'utf8');
+  const actual = Buffer.from(signatureHeader, 'utf8');
+
+  if (expected.length !== actual.length) {
+    return false;
+  }
+
+  return timingSafeEqual(expected, actual);
+}

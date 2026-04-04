@@ -48,7 +48,7 @@
     "lib/memory/long-term-editor.ts",
     "tests/long-term-editor.test.ts",
     "tests/model-registry.test.ts",
-    "packages/retrieval/src/service.ts",
-    "tests/retrieval-service.test.ts"
+    "apps/api/src/security.ts",
+    "tests/apps-api/security.test.ts"
   ]
 }
