@@ -8,6 +8,7 @@ It solves a practical orchestration problem: keep one chat UI while dynamically 
 1. Read [`docs/local-development.md`](docs/local-development.md) for setup.
 2. Review [`docs/environment-variables.md`](docs/environment-variables.md) for required configuration.
 3. Skim [`docs/architecture.md`](docs/architecture.md) and [`docs/data-model.md`](docs/data-model.md) for system internals.
+4. Read [`docs/deployment.md`](docs/deployment.md) for migration-first rollout guidance.
 
 ## Tech stack (actual)
 - **Framework:** Next.js 15 (App Router), React 18, TypeScript.
@@ -67,14 +68,16 @@ Providers are enabled by whichever API keys are present at runtime. `/api/models
 
 ### Setup
 ```bash
-npm install
-cp .env.example .env.local
+curl -X POST http://localhost:3000/admin/repos/connect \
+  -H 'x-api-key: dev-key' -H 'content-type: application/json' \
+  -d '{"repo":"owner/name"}'
 ```
-Populate `.env.local` (see [`docs/environment-variables.md`](docs/environment-variables.md)).
 
-### Run
+## Trigger reindex
 ```bash
-npm run dev
+curl -X POST http://localhost:3000/admin/repos/<repo_id>/reindex \
+  -H 'x-api-key: dev-key' -H 'content-type: application/json' \
+  -d '{"mode":"full","repo":"owner/name","branch":"main"}'
 ```
 App runs on `http://localhost:3000` by default.
 
@@ -103,13 +106,14 @@ Full list: [`docs/environment-variables.md`](docs/environment-variables.md).
 - `npm run smoke` – production startup smoke check against built output.
 - `npm run ci:gate` – required release gate (`test` + URL guard + build + smoke).
 
-## Testing
-Run all tests:
+### get_file
 ```bash
-npm test
+curl -X POST http://localhost:3000/mcp/tools/get_file \
+  -H 'x-api-key: dev-key' -H 'content-type: application/json' \
+  -d '{"repo":"owner/name","path":"src/app.ts","startLine":1,"endLine":200}'
 ```
 
-Additional checks:
+### get_symbol
 ```bash
 npm run typecheck
 npm run lint
@@ -117,28 +121,33 @@ npm run build
 npm run smoke
 ```
 
-Details: [`docs/testing.md`](docs/testing.md).
-
-## Deployment overview
-- Designed for standard Next.js deployment targets (including Vercel).
-- Requires Supabase environment variables and provider API keys in the deployment environment.
-- No blob storage configuration is required by current code.
-
-## Repo structure (concise)
-- `app/` – Next.js app + API routes.
-- `components/` – UI components.
-- `lib/data/` – persistence and Supabase helpers.
-- `lib/router/` – routing and policy selection logic.
-- `lib/providers/` – provider integrations.
-- `lib/memory/` – memory assembly + summarization.
-- `lib/uploads/` – upload parsing/provider reference helpers.
-- `tests/` – Node/TS test suite.
-- `docs/` – developer documentation.
-
-## Known caveats
-- Summary generation (`lib/memory/summarizer.ts`) currently depends on `OPENAI_API_KEY`; without it, summary updates are skipped.
-- Video attachments are routed to Google provider path in this chat flow.
-- Some provider API keys have backward-compatible alias env vars for legacy compatibility.
+### get_neighbors
+```bash
+curl -X POST http://localhost:3000/mcp/tools/get_neighbors \
+  -H 'x-api-key: dev-key' -H 'content-type: application/json' \
+  -d '{"repo":"owner/name","path":"src/pricing/sync.ts","chunkId":"00000000-0000-0000-0000-000000000000","radius":2}'
+```
 
 ## Historical note
 Earlier documentation referenced blob-based JSON storage. The current implementation is Supabase-based and docs here reflect that current state.
+
+## Production environment matrix
+| Variable | Required | Scope | Purpose |
+|---|---|---|---|
+| `NEXT_PUBLIC_SUPABASE_URL` | Yes | API + browser | Supabase endpoint used by app clients. |
+| `SUPABASE_SERVICE_ROLE_KEY` | Yes | API/server only | Privileged DB operations via PostgREST admin client. |
+| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Recommended | Browser | Browser-side Supabase operations. |
+| `OPENAI_API_KEY` / `GOOGLE_API_KEY` / `GROK_API_KEY` / `CLAUDE_API_KEY` | At least one | API/server only | Provider connectivity for model responses. |
+| `INTERNAL_API_TOKEN` | Required for internal refresh + worker | API + worker | Auth token for `/api/internal/model-registry/refresh`. |
+| `ROUTER_*` flags | Optional | API/server only | Router diagnostics and policy tuning. |
+
+## Secret management guidance
+- Store all non-public secrets in deployment secret stores (for example, GitHub Actions Secrets / Vercel encrypted env vars / cloud secret manager).
+- Never commit provider keys, Supabase service role keys, or `INTERNAL_API_TOKEN` into git.
+- Use different credentials per environment (dev/staging/prod) and rotate credentials after any suspected exposure.
+- Restrict access to production secrets to least privilege on-call/admin roles only.
+
+## Rollback and incident troubleshooting
+- Operational rollback and incident runbook is documented in [`docs/operations-runbook.md`](docs/operations-runbook.md).
+- Include `npm run smoke:mcp` in post-rollback validation before reopening traffic.
+- For DB-impacting incidents, restore a snapshot first, then rerun `npm run migrate:apply` only after change review.

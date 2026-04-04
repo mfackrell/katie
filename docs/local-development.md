@@ -26,7 +26,7 @@ See `docs/environment-variables.md` for full definitions.
 
 ## Run locally
 ```bash
-npm run dev
+npm run start:api
 ```
 Open `http://localhost:3000`.
 

@@ -42,3 +42,8 @@ node --test .test-dist/tests/policy-engine.test.js
 ## Obvious coverage gaps
 - No end-to-end browser test suite in-repo.
 - Provider integrations rely mostly on unit-level behavior; live provider integration tests are not present.
+
+
+## CI suites
+- `npm run test:vitest` runs the lightweight CI smoke suite for the vitest stage.
+- `npm run test:integration` runs API startup checks with Postgres + Redis env wiring and mocked GitHub base URL.

@@ -1,7 +1,11 @@
 {
-  "name": "polyglot-actor-orchestrator",
-  "version": "0.1.9",
+  "name": "katie-monorepo",
+  "version": "0.2.0",
   "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
   "scripts": {
     "dev": "node --disable-warning=DEP0169 ./node_modules/next/dist/bin/next dev",
     "build": "node --disable-warning=DEP0169 ./node_modules/next/dist/bin/next build",
@@ -16,17 +20,27 @@
     "ci:gate": "npm run test && npm run check:url && npm run build && npm run smoke"
   },
   "dependencies": {
-    "@google/genai": "^1.28.0",
+    "@fastify/rate-limit": "^10.3.0",
+    "@fastify/sensible": "^5.6.0",
+    "@fastify/swagger": "^9.5.1",
+    "@octokit/rest": "^21.1.1",
     "@supabase/supabase-js": "^2.50.0",
+    "bullmq": "^5.58.0",
+    "fastify": "^5.2.1",
+    "@google/genai": "^1.28.0",
+    "ioredis": "^5.7.0",
     "next": "15.1.11",
     "openai": "^4.85.4",
+    "pg": "^8.16.0",
+    "pino": "^9.7.0",
+    "prom-client": "^15.1.3",
     "react": "18.2.0",
     "react-dom": "18.2.0",
-    "zod": "^3.23.8",
-    "emoji-picker-react": "file:vendor/emoji-picker-react"
+    "zod": "^3.23.8"
   },
   "devDependencies": {
     "@types/node": "^22.10.1",
+    "@types/pg": "^8.15.2",
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
     "autoprefixer": "^10.4.20",
@@ -34,6 +48,7 @@
     "eslint-config-next": "15.1.8",
     "postcss": "^8.4.49",
     "tailwindcss": "^3.4.16",
-    "typescript": "^5.7.2"
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
   }
 }
