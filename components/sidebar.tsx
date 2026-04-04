@@ -122,19 +122,26 @@ export function Sidebar({
     setRepoConnectResult(null);
 
     try {
-      const response = await fetch("/api/admin/repos/connect", {
+      const response = await fetch("/admin/repos/connect", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ repo: normalizedRepoName }),
       });
 
-      const payload = (await response.json()) as {
+      let payload: {
         ok?: boolean;
         message?: string;
         error?: string;
         repo_id?: string;
         response?: Record<string, unknown>;
-      };
+      } = {};
+      const contentType = response.headers.get("content-type") ?? "";
+      if (contentType.includes("application/json")) {
+        payload = (await response.json()) as typeof payload;
+      } else {
+        const rawBody = await response.text();
+        payload = rawBody.trim() ? { error: rawBody } : {};
+      }
 
       if (!response.ok || payload.ok === false) {
         setRepoConnectError(payload.error ?? payload.message ?? "Failed to connect repository.");
