@@ -84,6 +84,10 @@ class PostgrestQuery {
             expectRepresentation: true,
           }),
       }),
+      then: (onfulfilled: (v: { data: null; error: { message: string } | null }) => unknown) =>
+        this.execute<null>("POST", payload, {
+          allowEmpty: true,
+        }).then(onfulfilled),
     };
   }
 
