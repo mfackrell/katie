@@ -106,6 +106,11 @@ Full list: [`docs/environment-variables.md`](docs/environment-variables.md).
 - `npm run smoke` – production startup smoke check against built output.
 - `npm run ci:gate` – required release gate (`test` + URL guard + build + smoke).
 
+## Production deployment migration requirement
+- Production deploys must run `npm run db:migrate` against the production `DATABASE_URL` before application rollout.
+- This repository enforces that ordering via `.github/workflows/migrate.yml` (`migrate` job runs first, `deploy_vercel` requires `needs: migrate`).
+- Ensure `PRODUCTION_DATABASE_URL` in GitHub Actions points to the live production database.
+
 ### get_file
 ```bash
 curl -X POST http://localhost:3000/mcp/tools/get_file \
