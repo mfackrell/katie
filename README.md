@@ -1,140 +1,99 @@
-# Katie (Polyglot Actor Orchestrator).
+# Repo Index MCP (Read-only MVP)
 
-Katie is a Next.js App Router application for multi-provider AI chat with actor personas, model routing, file attachments, and durable conversation memory.
+Production-minded MVP for repository indexing + retrieval for AI assistants.
 
-It solves a practical orchestration problem: keep one chat UI while dynamically selecting models/providers and preserving context across chats and actors.
+## Assumptions
+- Incremental mode currently accepts webhook payload and reindexes changed files only if file list is present; otherwise it falls back to full reindex.
+- Symbol extraction is regex fallback only (language-aware parser can replace later).
+- Vector retrieval currently uses zero-vector query unless an embedding query provider is wired for search-time embeddings.
+- This MVP is read-only with GitHub scopes limited to metadata/contents.
 
-## Start here
-1. Read [`docs/local-development.md`](docs/local-development.md) for setup.
-2. Review [`docs/environment-variables.md`](docs/environment-variables.md) for required configuration.
-3. Skim [`docs/architecture.md`](docs/architecture.md) and [`docs/data-model.md`](docs/data-model.md) for system internals.
+## Project tree
+- `apps/api` Fastify API with MCP + admin + webhook endpoints.
+- `apps/worker` BullMQ worker and dead-letter handling.
+- `packages/core` config/retry/logging/metrics.
+- `packages/db` Postgres client and idempotent upserts.
+- `packages/github` Octokit connector.
+- `packages/indexer` chunking/symbol extraction/embeddings/pipeline.
+- `packages/retrieval` keyword+vector hybrid ranking.
+- `packages/mcp-contract` Zod contracts for tools.
+- `migrations` SQL schema + pgvector.
+- `docker` Dockerfiles for API/worker.
 
-## Tech stack (actual)
-- **Framework:** Next.js 15 (App Router), React 18, TypeScript.
-- **Validation:** Zod.
-- **AI SDKs/APIs:** OpenAI, Google GenAI, xAI (OpenAI-compatible), Anthropic.
-- **Persistence:** Supabase (PostgREST access via service role key).
-- **Styling:** Tailwind CSS.
-- **Tests:** Node test runner (`node --test`) + TypeScript-compiled tests.
+## Local setup
+1. Copy env and update secrets:
+   ```bash
+   cp .env.example .env
+   ```
+2. Start stack:
+   ```bash
+   docker compose up --build
+   ```
+3. API live/ready:
+   - `GET http://localhost:3000/health/live`
+   - `GET http://localhost:3000/health/ready`
+4. Metrics:
+   - `GET http://localhost:3000/metrics`
 
-## Architecture overview
-- **Frontend:** `app/page.tsx` + `components/*` (actor/chat management and chat panel).
-- **API layer:** `app/api/*` routes for actors, chats, messages, models, uploads, and chat generation.
-- **Routing/selection:** `lib/router/*` combines heuristics and policy flags.
-- **Canonical model registry:** `lib/models/registry.ts` is the single metadata/routing source of truth populated by discovery + enrichment.
-- **Provider adapters:** `lib/providers/*` normalize OpenAI/Google/Grok/Anthropic APIs.
-- **Memory:** `lib/memory/*` assembles short/intermediate/long-term context and rolling summaries.
-- **Persistence:** `lib/data/persistence-store.ts` reads/writes Supabase tables.
+## Environment variables
+See `.env.example` for required values:
+- `PORT`, `DATABASE_URL`, `REDIS_URL`, `API_KEYS`
+- `GITHUB_AUTH_MODE`, `GITHUB_TOKEN`
+- `GITHUB_APP_ID`, `GITHUB_PRIVATE_KEY`, `GITHUB_WEBHOOK_SECRET`
+- `EMBEDDING_PROVIDER`, `OPENAI_API_KEY`, `EMBEDDING_MODEL`, `EMBEDDING_DIM`
+- `LOG_LEVEL`
 
-## Persistence and storage
-This repo uses **Supabase-backed persistence** (actors, chats, messages, and memory tables). It does **not** use blob-backed JSON persistence in current code.
-
-See [`docs/data-model.md`](docs/data-model.md) for table/entity details.
-
-## Providers supported (high level)
-- OpenAI
-- Google Gemini
-- xAI Grok
-- Anthropic Claude
-
-Providers are enabled by whichever API keys are present at runtime. `/api/models` now returns registry-backed model metadata (not raw provider lists only).
-
-## Canonical model registry and automated routing
-- Discovery source: provider `listModels()` for each configured provider.
-- Persistence: `model_registry` table (see `supabase/migrations/202604030001_model_registry.sql`).
-- Enrichment: pricing catalog (LiteLLM dataset when available) + conservative heuristics fallback.
-- Eligibility states:
-  - `verified` – strong metadata confidence and pricing/capability evidence.
-  - `restricted` – usable for lower-risk/general routing with conservative defaults.
-  - `manual_override_only` – not in automatic pool; still reachable through explicit override.
-  - `disabled` – excluded from routing.
-- Router behavior:
-  - Automatic selection consumes registry eligibility first.
-  - Missing registry snapshot falls back to provider model lists with warning logs.
-  - Unknown/weak models are not silently promoted to premium specialized routing.
-
-### Background refresh job
-- Protected endpoint: `POST /api/internal/model-registry/refresh`
-- Auth: header `x-internal-token: <INTERNAL_API_TOKEN>`
-- Designed for cron invocation to keep discovery/enrichment current.
-
-## Local development
-### Prerequisites
-- Node.js 20+
-- npm
-- Supabase project with schema expected by this app
-- At least one provider API key
-
-### Setup
+## Connect repo
 ```bash
-npm install
-cp .env.example .env.local
-```
-Populate `.env.local` (see [`docs/environment-variables.md`](docs/environment-variables.md)).
-
-### Run
-```bash
-npm run dev
-```
-App runs on `http://localhost:3000` by default.
-
-## Required environment variables
-Minimum required for app boot + persistence:
-- `NEXT_PUBLIC_SUPABASE_URL`
-- `SUPABASE_SERVICE_ROLE_KEY`
-
-Recommended for browser client config:
-- `NEXT_PUBLIC_SUPABASE_ANON_KEY`
-
-At least one provider key is required for chat generation:
-- `OPENAI_API_KEY` and/or `GOOGLE_API_KEY` and/or `GROK_API_KEY` (`XAI_API_KEY`/`grok_api_key` also supported) and/or `CLAUDE_API_KEY` (`claude_api_key` also supported).
-
-Full list: [`docs/environment-variables.md`](docs/environment-variables.md).
-
-## Scripts
-- `npm run dev` – start local dev server.
-- `npm run build` – production build.
-- `npm run start` – run production server.
-- `npm run lint` – Next.js lint.
-- `npm run typecheck` – TypeScript check.
-- `npm test` – unit/integration test suite.
-- `npm run check:url` – repo guard for legacy URL usage.
-
-## Testing
-Run all tests:
-```bash
-npm test
+curl -X POST http://localhost:3000/admin/repos/connect \
+  -H 'x-api-key: dev-key' -H 'content-type: application/json' \
+  -d '{"repo":"owner/name"}'
 ```
 
-Additional checks:
+## Trigger reindex
 ```bash
-npm run typecheck
-npm run lint
-npm run build
+curl -X POST http://localhost:3000/admin/repos/<repo_id>/reindex \
+  -H 'x-api-key: dev-key' -H 'content-type: application/json' \
+  -d '{"mode":"full","repo":"owner/name","branch":"main"}'
 ```
 
-Details: [`docs/testing.md`](docs/testing.md).
+## MCP tool examples
+### search
+```bash
+curl -X POST http://localhost:3000/mcp/tools/search \
+  -H 'x-api-key: dev-key' -H 'content-type: application/json' \
+  -d '{"repo":"owner/name","query":"syncPricing","topK":10}'
+```
 
-## Deployment overview
-- Designed for standard Next.js deployment targets (including Vercel).
-- Requires Supabase environment variables and provider API keys in the deployment environment.
-- No blob storage configuration is required by current code.
+### get_file
+```bash
+curl -X POST http://localhost:3000/mcp/tools/get_file \
+  -H 'x-api-key: dev-key' -H 'content-type: application/json' \
+  -d '{"repo":"owner/name","path":"src/app.ts","startLine":1,"endLine":200}'
+```
 
-## Repo structure (concise)
-- `app/` – Next.js app + API routes.
-- `components/` – UI components.
-- `lib/data/` – persistence and Supabase helpers.
-- `lib/router/` – routing and policy selection logic.
-- `lib/providers/` – provider integrations.
-- `lib/memory/` – memory assembly + summarization.
-- `lib/uploads/` – upload parsing/provider reference helpers.
-- `tests/` – Node/TS test suite.
-- `docs/` – developer documentation.
+### get_symbol
+```bash
+curl -X POST http://localhost:3000/mcp/tools/get_symbol \
+  -H 'x-api-key: dev-key' -H 'content-type: application/json' \
+  -d '{"repo":"owner/name","symbol":"syncPricing"}'
+```
 
-## Known caveats
-- Summary generation (`lib/memory/summarizer.ts`) currently depends on `OPENAI_API_KEY`; without it, summary updates are skipped.
-- Video attachments are routed to Google provider path in this chat flow.
-- Some provider API keys have backward-compatible alias env vars for legacy compatibility.
+### get_neighbors
+```bash
+curl -X POST http://localhost:3000/mcp/tools/get_neighbors \
+  -H 'x-api-key: dev-key' -H 'content-type: application/json' \
+  -d '{"repo":"owner/name","path":"src/pricing/sync.ts","chunkId":"00000000-0000-0000-0000-000000000000","radius":2}'
+```
 
-## Historical note
-Earlier documentation referenced blob-based JSON storage. The current implementation is Supabase-based and docs here reflect that current state.
+## Troubleshooting
+- **401 invalid api key**: confirm `x-api-key` value is listed in `API_KEYS`.
+- **Webhook signature invalid**: verify raw JSON body and `GITHUB_WEBHOOK_SECRET` match sender.
+- **No vector matches**: set `EMBEDDING_PROVIDER=openai` and configure `OPENAI_API_KEY`.
+- **Rate limiting**: increase limits in Fastify rate-limit plugin for local load tests.
+
+## Security notes
+- Keep GitHub integration read-only (`contents:read`, `metadata:read`).
+- Do not log tokens or secrets.
+- Validate all endpoint payloads with Zod.
+- Enforce API key auth + per-key rate limits.
