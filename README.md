@@ -8,6 +8,7 @@ It solves a practical orchestration problem: keep one chat UI while dynamically 
 1. Read [`docs/local-development.md`](docs/local-development.md) for setup.
 2. Review [`docs/environment-variables.md`](docs/environment-variables.md) for required configuration.
 3. Skim [`docs/architecture.md`](docs/architecture.md) and [`docs/data-model.md`](docs/data-model.md) for system internals.
+4. Use [`docs/operations-runbook.md`](docs/operations-runbook.md) for production operations, migrations, and incident response.
 
 ## Tech stack (actual)
 - **Framework:** Next.js 15 (App Router), React 18, TypeScript.
@@ -99,6 +100,12 @@ Full list: [`docs/environment-variables.md`](docs/environment-variables.md).
 - `npm run typecheck` – TypeScript check.
 - `npm test` – unit/integration test suite.
 - `npm run check:url` – repo guard for legacy URL usage.
+- `npm run migrate:apply` – apply SQL migrations with `psql` against `DATABASE_URL`.
+- `npm run start:api` – launch API server (dev or prod based on `NODE_ENV`).
+- `npm run start:worker` – launch model-registry refresh worker.
+- `npm run smoke:mcp` – run MCP endpoint smoke tests.
+- `npm run test:vitest` – CI smoke suite for vitest stage compatibility.
+- `npm run test:integration` – API + Postgres + Redis integration suite.
 
 ## Testing
 Run all tests:
@@ -138,3 +145,24 @@ Details: [`docs/testing.md`](docs/testing.md).
 
 ## Historical note
 Earlier documentation referenced blob-based JSON storage. The current implementation is Supabase-based and docs here reflect that current state.
+
+## Production environment matrix
+| Variable | Required | Scope | Purpose |
+|---|---|---|---|
+| `NEXT_PUBLIC_SUPABASE_URL` | Yes | API + browser | Supabase endpoint used by app clients. |
+| `SUPABASE_SERVICE_ROLE_KEY` | Yes | API/server only | Privileged DB operations via PostgREST admin client. |
+| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Recommended | Browser | Browser-side Supabase operations. |
+| `OPENAI_API_KEY` / `GOOGLE_API_KEY` / `GROK_API_KEY` / `CLAUDE_API_KEY` | At least one | API/server only | Provider connectivity for model responses. |
+| `INTERNAL_API_TOKEN` | Required for internal refresh + worker | API + worker | Auth token for `/api/internal/model-registry/refresh`. |
+| `ROUTER_*` flags | Optional | API/server only | Router diagnostics and policy tuning. |
+
+## Secret management guidance
+- Store all non-public secrets in deployment secret stores (for example, GitHub Actions Secrets / Vercel encrypted env vars / cloud secret manager).
+- Never commit provider keys, Supabase service role keys, or `INTERNAL_API_TOKEN` into git.
+- Use different credentials per environment (dev/staging/prod) and rotate credentials after any suspected exposure.
+- Restrict access to production secrets to least privilege on-call/admin roles only.
+
+## Rollback and incident troubleshooting
+- Operational rollback and incident runbook is documented in [`docs/operations-runbook.md`](docs/operations-runbook.md).
+- Include `npm run smoke:mcp` in post-rollback validation before reopening traffic.
+- For DB-impacting incidents, restore a snapshot first, then rerun `npm run migrate:apply` only after change review.
