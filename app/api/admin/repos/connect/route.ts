@@ -19,10 +19,13 @@ function getAdminApiKey(): string | null {
   return firstKey ?? null;
 }
 
-function resolveAdminEndpoint(request: NextRequest): string {
+function resolveAdminEndpoint(): string | null {
   const configuredBaseUrl = process.env.ADMIN_API_BASE_URL?.trim();
-  const origin = configuredBaseUrl && configuredBaseUrl.length > 0 ? configuredBaseUrl : request.nextUrl.origin;
-  return `${origin.replace(/\/$/, "")}/admin/repos/connect`;
+  if (!configuredBaseUrl) {
+    return null;
+  }
+
+  return `${configuredBaseUrl.replace(/\/$/, "")}/api/admin/repos/connect`;
 }
 
 export async function POST(request: NextRequest) {
@@ -34,9 +37,19 @@ export async function POST(request: NextRequest) {
     );
   }
 
+  const endpoint = resolveAdminEndpoint();
+  if (!endpoint) {
+    return NextResponse.json(
+      {
+        ok: false,
+        error: "Server is missing ADMIN_API_BASE_URL configuration.",
+      },
+      { status: 500 },
+    );
+  }
+
   try {
     const { repo } = connectRepoSchema.parse(await request.json());
-    const endpoint = resolveAdminEndpoint(request);
     const upstreamResponse = await fetch(endpoint, {
       method: "POST",
       headers: {
