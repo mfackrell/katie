@@ -26,9 +26,15 @@ See `docs/environment-variables.md` for full definitions.
 
 ## Run locally
 ```bash
-npm run dev
+npm run start:api
 ```
 Open `http://localhost:3000`.
+
+Optional worker loop:
+```bash
+INTERNAL_API_TOKEN=change-me npm run start:worker
+```
+
 
 ## Tests and checks
 ```bash
@@ -36,6 +42,7 @@ npm test
 npm run typecheck
 npm run lint
 npm run build
+npm run smoke:mcp
 ```
 
 ## Common troubleshooting
