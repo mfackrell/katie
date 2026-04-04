@@ -164,7 +164,7 @@ export async function listPendingRepoSyncRunFiles(runId: string): Promise<Array<
     .eq("run_id", runId)
     .eq("status", "pending")
     .order("created_at", { ascending: true })
-    .returns<Array<{ id: string; file_path: string; change_type: "changed" | "deleted" }>>();
+    .returns<{ id: string; file_path: string; change_type: "changed" | "deleted" }>();
 
   if (files.error || !files.data) {
     throw new Error(`Failed to load pending run files for run ${runId}: ${files.error?.message ?? "unknown error"}`);
