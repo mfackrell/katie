@@ -68,14 +68,16 @@ Providers are enabled by whichever API keys are present at runtime. `/api/models
 
 ### Setup
 ```bash
-npm install
-cp .env.example .env.local
+curl -X POST http://localhost:3000/admin/repos/connect \
+  -H 'x-api-key: dev-key' -H 'content-type: application/json' \
+  -d '{"repo":"owner/name"}'
 ```
-Populate `.env.local` (see [`docs/environment-variables.md`](docs/environment-variables.md)).
 
-### Run
+## Trigger reindex
 ```bash
-npm run dev
+curl -X POST http://localhost:3000/admin/repos/<repo_id>/reindex \
+  -H 'x-api-key: dev-key' -H 'content-type: application/json' \
+  -d '{"mode":"full","repo":"owner/name","branch":"main"}'
 ```
 App runs on `http://localhost:3000` by default.
 
@@ -107,41 +109,34 @@ Full list: [`docs/environment-variables.md`](docs/environment-variables.md).
 - `npm run test:vitest` – CI smoke suite for vitest stage compatibility.
 - `npm run test:integration` – API + Postgres + Redis integration suite.
 
-## Testing
-Run all tests:
+## MCP tool examples
+### search
 ```bash
-npm test
+curl -X POST http://localhost:3000/mcp/tools/search \
+  -H 'x-api-key: dev-key' -H 'content-type: application/json' \
+  -d '{"repo":"owner/name","query":"syncPricing","topK":10}'
 ```
 
-Additional checks:
+### get_file
 ```bash
-npm run typecheck
-npm run lint
-npm run build
+curl -X POST http://localhost:3000/mcp/tools/get_file \
+  -H 'x-api-key: dev-key' -H 'content-type: application/json' \
+  -d '{"repo":"owner/name","path":"src/app.ts","startLine":1,"endLine":200}'
 ```
 
-Details: [`docs/testing.md`](docs/testing.md).
+### get_symbol
+```bash
+curl -X POST http://localhost:3000/mcp/tools/get_symbol \
+  -H 'x-api-key: dev-key' -H 'content-type: application/json' \
+  -d '{"repo":"owner/name","symbol":"syncPricing"}'
+```
 
-## Deployment overview
-- Designed for standard Next.js deployment targets (including Vercel).
-- Requires Supabase environment variables and provider API keys in the deployment environment.
-- No blob storage configuration is required by current code.
-
-## Repo structure (concise)
-- `app/` – Next.js app + API routes.
-- `components/` – UI components.
-- `lib/data/` – persistence and Supabase helpers.
-- `lib/router/` – routing and policy selection logic.
-- `lib/providers/` – provider integrations.
-- `lib/memory/` – memory assembly + summarization.
-- `lib/uploads/` – upload parsing/provider reference helpers.
-- `tests/` – Node/TS test suite.
-- `docs/` – developer documentation.
-
-## Known caveats
-- Summary generation (`lib/memory/summarizer.ts`) currently depends on `OPENAI_API_KEY`; without it, summary updates are skipped.
-- Video attachments are routed to Google provider path in this chat flow.
-- Some provider API keys have backward-compatible alias env vars for legacy compatibility.
+### get_neighbors
+```bash
+curl -X POST http://localhost:3000/mcp/tools/get_neighbors \
+  -H 'x-api-key: dev-key' -H 'content-type: application/json' \
+  -d '{"repo":"owner/name","path":"src/pricing/sync.ts","chunkId":"00000000-0000-0000-0000-000000000000","radius":2}'
+```
 
 ## Historical note
 Earlier documentation referenced blob-based JSON storage. The current implementation is Supabase-based and docs here reflect that current state.
