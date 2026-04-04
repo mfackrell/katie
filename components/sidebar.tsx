@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { type FormEvent, useEffect, useState } from "react";
 import type { Actor, ChatThread } from "@/lib/types/chat";
 
 interface SidebarProps {
@@ -46,6 +46,14 @@ export function Sidebar({
   const [editingChatId, setEditingChatId] = useState("");
   const [draftChatTitle, setDraftChatTitle] = useState("");
   const [savingChatId, setSavingChatId] = useState("");
+  const [repoName, setRepoName] = useState("");
+  const [repoConnectLoading, setRepoConnectLoading] = useState(false);
+  const [repoConnectError, setRepoConnectError] = useState("");
+  const [repoConnectResult, setRepoConnectResult] = useState<{
+    message: string;
+    repoId?: string;
+    response?: Record<string, unknown>;
+  } | null>(null);
 
   useEffect(() => {
     setDraftPurpose(activeActor?.purpose ?? "");
@@ -100,6 +108,60 @@ export function Sidebar({
     }
   }
 
+  async function handleRepoConnectSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const normalizedRepoName = repoName.trim();
+    if (!normalizedRepoName) {
+      setRepoConnectError("Repository name is required.");
+      setRepoConnectResult(null);
+      return;
+    }
+
+    setRepoConnectLoading(true);
+    setRepoConnectError("");
+    setRepoConnectResult(null);
+
+    try {
+      const response = await fetch("/api/admin/repos/connect", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ repo: normalizedRepoName }),
+      });
+
+      const payload = (await response.json()) as {
+        ok?: boolean;
+        message?: string;
+        error?: string;
+        repo_id?: string;
+        response?: Record<string, unknown>;
+      };
+
+      if (!response.ok || payload.ok === false) {
+        setRepoConnectError(payload.error ?? payload.message ?? "Failed to connect repository.");
+        return;
+      }
+
+      const responseBody = payload.response ?? {};
+      const repoIdValue = payload.repo_id ?? extractRepoId(responseBody);
+
+      setRepoConnectResult({
+        message: payload.message ?? "Repository connected successfully.",
+        repoId: repoIdValue,
+        response: responseBody,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to connect repository.";
+      setRepoConnectError(message);
+    } finally {
+      setRepoConnectLoading(false);
+    }
+  }
+
+  function extractRepoId(value: Record<string, unknown>): string | undefined {
+    const candidate = value.repo_id;
+    return typeof candidate === "string" && candidate.length > 0 ? candidate : undefined;
+  }
+
   return (
     <aside className="relative flex h-full min-h-0 w-full flex-col bg-gradient-to-b from-white/[0.03] via-zinc-950/40 to-zinc-950/80 p-4 sm:p-5">
       <div className="pointer-events-none absolute inset-x-0 top-0 h-32 bg-gradient-to-b from-sky-400/10 to-transparent" />
@@ -134,6 +196,44 @@ export function Sidebar({
             </button>
           </section>
         ) : null}
+
+        <section className="mb-4 rounded-2xl border border-white/10 bg-white/[0.03] p-3">
+          <p className="text-[11px] font-semibold uppercase tracking-[0.24em] text-zinc-500">
+            GitHub Repo Connect
+          </p>
+          <form className="mt-3 space-y-2.5" onSubmit={handleRepoConnectSubmit}>
+            <input
+              className="h-10 w-full rounded-xl border border-white/10 bg-white/[0.04] px-3 text-sm text-zinc-100 outline-none transition placeholder:text-zinc-500 focus-visible:ring-2 focus-visible:ring-emerald-400"
+              type="text"
+              value={repoName}
+              onChange={(event) => setRepoName(event.target.value)}
+              placeholder="mfackrell/katie"
+              aria-label="GitHub repository full name"
+              disabled={repoConnectLoading}
+            />
+            <button
+              className="inline-flex min-h-10 w-full items-center justify-center rounded-xl border border-emerald-400/30 bg-emerald-500/10 px-3 py-2 text-sm font-semibold text-emerald-200 transition hover:border-emerald-400/50 hover:bg-emerald-500/20 hover:text-white disabled:cursor-not-allowed disabled:opacity-60"
+              type="submit"
+              disabled={repoConnectLoading}
+            >
+              {repoConnectLoading ? "Connecting..." : "Connect GitHub Repo"}
+            </button>
+          </form>
+          {repoConnectError ? (
+            <p className="mt-2 text-xs text-red-300">{repoConnectError}</p>
+          ) : null}
+          {repoConnectResult ? (
+            <div className="mt-2 rounded-lg border border-emerald-500/20 bg-emerald-500/5 p-2.5 text-xs text-emerald-100">
+              <p>{repoConnectResult.message}</p>
+              {repoConnectResult.repoId ? <p className="mt-1">repo_id: {repoConnectResult.repoId}</p> : null}
+              {repoConnectResult.response ? (
+                <pre className="mt-2 overflow-x-auto whitespace-pre-wrap break-words rounded bg-black/30 p-2 text-[11px] text-zinc-200">
+                  {JSON.stringify(repoConnectResult.response, null, 2)}
+                </pre>
+              ) : null}
+            </div>
+          ) : null}
+        </section>
 
         <nav className="min-h-0 flex-1 space-y-3 overflow-y-auto pb-4 pr-1">
           {sortedActors.map((actor) => {
