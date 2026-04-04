@@ -6,11 +6,13 @@ export type GithubWebhookRequest = FastifyRequest & {
 
 export async function installGithubWebhookRawBody(fastify: FastifyInstance): Promise<void> {
   fastify.addContentTypeParser('application/json', { parseAs: 'buffer' }, (request, body, done) => {
+    const rawBody = Buffer.isBuffer(body) ? body : Buffer.from(body, 'utf8');
+
     if (request.url.startsWith('/webhooks/github')) {
-      (request as GithubWebhookRequest).rawBody = body;
+      (request as GithubWebhookRequest).rawBody = rawBody;
 
       try {
-        done(null, JSON.parse(body.toString('utf8')));
+        done(null, JSON.parse(rawBody.toString('utf8')));
       } catch (error) {
         done(error as Error, undefined);
       }
@@ -19,7 +21,7 @@ export async function installGithubWebhookRawBody(fastify: FastifyInstance): Pro
     }
 
     try {
-      done(null, JSON.parse(body.toString('utf8')));
+      done(null, JSON.parse(rawBody.toString('utf8')));
     } catch (error) {
       done(error as Error, undefined);
     }
