@@ -12,7 +12,7 @@ jobs:
     runs-on: ubuntu-latest
     environment: production
     env:
-      DATABASE_URL: ${{ secrets.PRODUCTION_DATABASE_URL }}
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -21,18 +21,14 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 20
-          cache: npm
 
       - name: Install PostgreSQL client
         run: |
           sudo apt-get update
           sudo apt-get install -y postgresql-client
 
-      - name: Install dependencies
-        run: npm ci
-
       - name: Run database migrations
-        run: npm run db:migrate
+        run: node scripts/run-migrations.mjs
 
   deploy_vercel:
     name: Deploy production app
