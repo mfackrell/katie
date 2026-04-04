@@ -47,3 +47,8 @@ In CI/CD pipelines, use separate stages/jobs with hard ordering:
 3. `verify health`
 
 If step 1 fails, do not deploy runtime services.
+
+For this repository's production path, `.github/workflows/migrate.yml` is the deployment gate:
+- `migrate` runs `npm run db:migrate` using production `DATABASE_URL`.
+- `deploy_vercel` is blocked behind `needs: migrate`.
+- Production deployments should be triggered through this workflow (not a direct auto-deploy path that skips migrations).
