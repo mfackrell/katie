@@ -10,6 +10,17 @@ This command runs:
 2. TypeScript test compilation via `tsconfig.tests.json`.
 3. Compiled Node tests in `.test-dist/tests/*`.
 
+## Release/CI gate (required)
+```bash
+npm run ci:gate
+```
+
+This gate enforces:
+1. `npm test`
+2. `npm run check:url`
+3. `npm run build`
+4. `npm run smoke` (boots built app and validates startup response)
+
 ## Run targeted tests
 Examples:
 ```bash

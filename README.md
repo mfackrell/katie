@@ -94,11 +94,14 @@ Full list: [`docs/environment-variables.md`](docs/environment-variables.md).
 ## Scripts
 - `npm run dev` – start local dev server.
 - `npm run build` – production build.
-- `npm run start` – run production server.
+- `npm run start` / `npm run start:runtime` – run production server via explicit compiled Next.js runtime entry.
 - `npm run lint` – Next.js lint.
 - `npm run typecheck` – TypeScript check.
 - `npm test` – unit/integration test suite.
 - `npm run check:url` – repo guard for legacy URL usage.
+- `npm run db:migrate` – apply SQL migrations in deterministic order with checksum tracking (`DATABASE_URL` required).
+- `npm run smoke` – production startup smoke check against built output.
+- `npm run ci:gate` – required release gate (`test` + URL guard + build + smoke).
 
 ## Testing
 Run all tests:
@@ -111,6 +114,7 @@ Additional checks:
 npm run typecheck
 npm run lint
 npm run build
+npm run smoke
 ```
 
 Details: [`docs/testing.md`](docs/testing.md).

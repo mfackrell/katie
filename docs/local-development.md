@@ -30,12 +30,20 @@ npm run dev
 ```
 Open `http://localhost:3000`.
 
+## Apply database migrations (repeatable)
+```bash
+DATABASE_URL=postgres://... npm run db:migrate
+```
+Migrations are executed in filename order, tracked in `schema_migrations`, and checksum-verified on rerun.
+
 ## Tests and checks
 ```bash
 npm test
 npm run typecheck
 npm run lint
 npm run build
+npm run smoke
+npm run ci:gate
 ```
 
 ## Common troubleshooting
