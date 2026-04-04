@@ -1,63 +1,51 @@
-export interface SearchRequest {
-  query: string;
-}
-
-export interface RetrievalCandidate {
-  id: string;
-  keywordScore: number;
-  vectorScore: number;
-}
-
-export interface RankedCandidate extends RetrievalCandidate {
-  normalizedKeywordScore: number;
-  normalizedVectorScore: number;
-  score: number;
-}
-
 export interface EmbeddingProvider {
-  embedQuery(input: string): Promise<number[]>;
+  embed(text: string): Promise<number[]>;
 }
 
-function normalize01(values: number[]): number[] {
-  if (values.length === 0) {
-    return [];
-  }
+export interface QueryResultRow {
+  id: string;
+  content: string;
+  keyword_score: number;
+  vector_score: number;
+  hybrid_score: number;
+}
 
-  const min = Math.min(...values);
-  const max = Math.max(...values);
-
-  if (min === max) {
-    return values.map(() => (max <= 0 ? 0 : 1));
-  }
-
-  return values.map((value) => (value - min) / (max - min));
+export interface DbClient {
+  query<T>(sql: string, params: readonly unknown[]): Promise<{ rows: T[] }>;
 }
 
 export class RetrievalService {
-  constructor(private readonly embeddingProvider: EmbeddingProvider) {}
+  private readonly db: DbClient;
+  private readonly embeddingProvider: EmbeddingProvider;
 
-  async rankCandidates(search: SearchRequest, candidates: RetrievalCandidate[]): Promise<RankedCandidate[]> {
-    const queryEmbedding = await this.embeddingProvider.embedQuery(search.query);
+  constructor(db: DbClient, embeddingProvider: EmbeddingProvider) {
+    this.db = db;
+    this.embeddingProvider = embeddingProvider;
+  }
 
-    if (queryEmbedding.every((value) => value === 0)) {
-      throw new Error("query embedding must contain at least one non-zero value");
-    }
+  async search(queryText: string, limit = 10): Promise<QueryResultRow[]> {
+    const queryEmbedding = await this.embeddingProvider.embed(queryText);
 
-    const normalizedKeywordScores = normalize01(candidates.map((candidate) => candidate.keywordScore));
-    const normalizedVectorScores = normalize01(candidates.map((candidate) => candidate.vectorScore));
+    const sql = `
+      SELECT
+        id,
+        content,
+        keyword_score,
+        vector_score,
+        ((0.45 * keyword_score) + (0.55 * vector_score)) AS hybrid_score
+      FROM (
+        SELECT
+          id,
+          content,
+          ts_rank_cd(to_tsvector('english', content), plainto_tsquery('english', $1)) AS keyword_score,
+          (1 - (embedding <=> $2::vector)) AS vector_score
+        FROM documents
+      ) ranked
+      ORDER BY hybrid_score DESC
+      LIMIT $3
+    `;
 
-    return candidates
-      .map((candidate, index) => {
-        const normalizedKeywordScore = normalizedKeywordScores[index] ?? 0;
-        const normalizedVectorScore = normalizedVectorScores[index] ?? 0;
-
-        return {
-          ...candidate,
-          normalizedKeywordScore,
-          normalizedVectorScore,
-          score: 0.45 * normalizedKeywordScore + 0.55 * normalizedVectorScore
-        };
-      })
-      .sort((left, right) => right.score - left.score);
+    const result = await this.db.query<QueryResultRow>(sql, [queryText, queryEmbedding, limit]);
+    return result.rows;
   }
 }
