@@ -52,7 +52,7 @@ export async function createRepoSyncRun(input: {
   }
 
   if (input.files.length > 0) {
-    const fileInsert = await client.from("repo_sync_run_files").insert(
+    const { error: fileInsertError } = await client.from("repo_sync_run_files").insert(
       input.files.map((file) => ({
         run_id: runInsert.data.id,
         file_path: file.path,
@@ -61,8 +61,8 @@ export async function createRepoSyncRun(input: {
       }))
     );
 
-    if (fileInsert.error) {
-      throw new Error(`Failed to create repo_sync_run_files rows: ${fileInsert.error.message}`);
+    if (fileInsertError) {
+      throw new Error(`Failed to create repo_sync_run_files rows: ${fileInsertError.message}`);
     }
   }
 
