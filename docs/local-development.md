@@ -30,11 +30,11 @@ npm run start:api
 ```
 Open `http://localhost:3000`.
 
-Optional worker loop:
+## Apply database migrations (repeatable)
 ```bash
-INTERNAL_API_TOKEN=change-me npm run start:worker
+DATABASE_URL=postgres://... npm run db:migrate
 ```
-
+Migrations are executed in filename order, tracked in `schema_migrations`, and checksum-verified on rerun.
 
 ## Tests and checks
 ```bash
@@ -42,7 +42,8 @@ npm test
 npm run typecheck
 npm run lint
 npm run build
-npm run smoke:mcp
+npm run smoke
+npm run ci:gate
 ```
 
 ## Common troubleshooting

@@ -97,25 +97,14 @@ Full list: [`docs/environment-variables.md`](docs/environment-variables.md).
 ## Scripts
 - `npm run dev` – start local dev server.
 - `npm run build` – production build.
-- `npm run start` – run production server.
+- `npm run start` / `npm run start:runtime` – run production server via explicit compiled Next.js runtime entry.
 - `npm run lint` – Next.js lint.
 - `npm run typecheck` – TypeScript check.
 - `npm test` – unit/integration test suite.
 - `npm run check:url` – repo guard for legacy URL usage.
-- `npm run migrate:apply` – apply SQL migrations with `psql` against `DATABASE_URL`.
-- `npm run start:api` – launch API server (dev or prod based on `NODE_ENV`).
-- `npm run start:worker` – launch model-registry refresh worker.
-- `npm run smoke:mcp` – run MCP endpoint smoke tests.
-- `npm run test:vitest` – CI smoke suite for vitest stage compatibility.
-- `npm run test:integration` – API + Postgres + Redis integration suite.
-
-## MCP tool examples
-### search
-```bash
-curl -X POST http://localhost:3000/mcp/tools/search \
-  -H 'x-api-key: dev-key' -H 'content-type: application/json' \
-  -d '{"repo":"owner/name","query":"syncPricing","topK":10}'
-```
+- `npm run db:migrate` – apply SQL migrations in deterministic order with checksum tracking (`DATABASE_URL` required).
+- `npm run smoke` – production startup smoke check against built output.
+- `npm run ci:gate` – required release gate (`test` + URL guard + build + smoke).
 
 ### get_file
 ```bash
@@ -126,9 +115,10 @@ curl -X POST http://localhost:3000/mcp/tools/get_file \
 
 ### get_symbol
 ```bash
-curl -X POST http://localhost:3000/mcp/tools/get_symbol \
-  -H 'x-api-key: dev-key' -H 'content-type: application/json' \
-  -d '{"repo":"owner/name","symbol":"syncPricing"}'
+npm run typecheck
+npm run lint
+npm run build
+npm run smoke
 ```
 
 ### get_neighbors
