@@ -4,6 +4,7 @@ import {
   chooseRoutingWithLLM,
   CandidateScoreBreakdown,
   filterCandidatesForIntent,
+  inferRequestClassification,
   inferRequestIntent,
   LlmRoutingResult,
   RequestIntent,
@@ -84,10 +85,10 @@ type RoutingTrace = {
 function topRoutingCandidates(
   availableByProvider: Array<{ provider: LlmProvider; models: string[] }>,
   intent: Awaited<ReturnType<typeof inferRequestIntent>>,
-  prompt: string,
+  preferredProvider: "openai" | "google" | "grok" | "anthropic" | null,
   registryLookup?: Map<string, RegistryRoutingModel>
 ): string {
-  return scoreModelsForIntent(availableByProvider, intent, prompt, { registryLookup })
+  return scoreModelsForIntent(availableByProvider, intent, { registryLookup, preferredProvider })
     .slice(0, 3)
     .map(({ provider, modelId, score }) => `${provider.name}:${modelId}(${score})`)
     .join(", ");
@@ -96,12 +97,12 @@ function topRoutingCandidates(
 function logRoutingDecision(
   intent: Awaited<ReturnType<typeof inferRequestIntent>>,
   availableByProvider: Array<{ provider: LlmProvider; models: string[] }>,
-  prompt: string,
+  preferredProvider: "openai" | "google" | "grok" | "anthropic" | null,
   selectedProviderName: string,
   selectedModelId: string,
   registryLookup?: Map<string, RegistryRoutingModel>
 ): void {
-  const candidates = topRoutingCandidates(availableByProvider, intent, prompt, registryLookup) || "none";
+  const candidates = topRoutingCandidates(availableByProvider, intent, preferredProvider, registryLookup) || "none";
   console.info(`[Router] intent=${intent} top_candidates=${candidates} selected=${selectedProviderName}:${selectedModelId}`);
 }
 
@@ -154,6 +155,7 @@ function buildRoutingTrace({
   timestamp,
   intent,
   prompt,
+  preferredProvider,
   hasImages,
   hasVideoInput,
   context,
@@ -171,6 +173,7 @@ function buildRoutingTrace({
   timestamp: string;
   intent: Awaited<ReturnType<typeof inferRequestIntent>>;
   prompt: string;
+  preferredProvider: "openai" | "google" | "grok" | "anthropic" | null;
   hasImages: boolean;
   hasVideoInput: boolean;
   context: string;
@@ -184,7 +187,7 @@ function buildRoutingTrace({
   llmCandidates: Array<ReturnType<typeof buildCandidateMetadata>>;
   registryLookup?: Map<string, RegistryRoutingModel>;
 }): RoutingTrace {
-  const scoredCandidates = scoreModelsForIntent(availableByProvider, intent, prompt, { registryLookup }).map(({ provider, modelId, score }) => ({
+  const scoredCandidates = scoreModelsForIntent(availableByProvider, intent, { registryLookup, preferredProvider }).map(({ provider, modelId, score }) => ({
     provider: provider.name,
     model_id: modelId,
     score
@@ -458,10 +461,12 @@ export async function chooseProvider(
   let llmCandidatesUsed: Array<ReturnType<typeof buildCandidateMetadata>> = [];
   const preferenceProfile = buildRoutingPreferenceProfile();
 
-  const intent = options?.requestIntent ?? (await inferRequestIntent(prompt, {
+  const requestClassification = await inferRequestClassification(prompt, {
     hasImages: Boolean(options?.hasImages),
     hasVideoInput: Boolean(options?.hasVideoInput)
-  }));
+  });
+  const intent = options?.requestIntent ?? requestClassification.intent;
+  const preferredProvider = requestClassification.preferredProvider;
   const traceEnabled = isRoutingTraceEnabled(options?.routingTraceEnabled);
   const traceRequestId = options?.routingRequestId ?? crypto.randomUUID();
   const traceTimestamp = new Date().toISOString();
@@ -521,7 +526,7 @@ export async function chooseProvider(
   console.info(`[Capability Filter] requestId=${traceRequestId} candidates=${availableByProvider.reduce((total, entry) => total + entry.models.length, 0)}`);
   logRoutingCandidatePool(traceRequestId, intent, availableByProvider);
 
-  rankedCandidates = scoreModelsForIntent(availableByProvider, intent, prompt, { registryLookup });
+  rankedCandidates = scoreModelsForIntent(availableByProvider, intent, { registryLookup, preferredProvider });
   console.info(
     `[Router Candidate Hygiene] requestId=${traceRequestId} before=${candidateCountBeforeFilter} after=${rankedCandidates.length}`
   );
@@ -727,7 +732,7 @@ export async function chooseProvider(
   }
 
   logFullRanking(traceRequestId, intent, rankedCandidates);
-  logRoutingDecision(intent, availableByProvider, prompt, selected.provider.name, selected.modelId, registryLookup);
+  logRoutingDecision(intent, availableByProvider, preferredProvider, selected.provider.name, selected.modelId, registryLookup);
   console.info(
     `[Routing Final] requestId=${traceRequestId} source=${llmPrimaryUsed ? "llm-primary" : "deterministic-fallback"} fallback_reason=${fallbackReason ?? "none"}`
   );
@@ -739,6 +744,7 @@ export async function chooseProvider(
         timestamp: traceTimestamp,
         intent,
         prompt,
+        preferredProvider,
         hasImages: Boolean(options?.hasImages),
         hasVideoInput: Boolean(options?.hasVideoInput),
         context,
