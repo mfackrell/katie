@@ -64,6 +64,11 @@ type ActiveRepoContext = {
   repositoryFullName: string;
 };
 
+type RepoGenerationContext = {
+  metadataLine: string;
+  fileSummaryLine: string;
+};
+
 type ChatSessionContext = {
   activeRepo: {
     id: string;
@@ -206,6 +211,103 @@ async function loadActiveRepoContext(repoId: string): Promise<ActiveRepoContext 
   };
 }
 
+function parseRepositoryFullName(repositoryFullName: string): { owner: string; repo: string } | null {
+  const [owner, repo] = repositoryFullName.split("/");
+  if (!owner || !repo) {
+    return null;
+  }
+
+  return { owner, repo };
+}
+
+function getGithubApiHeaders(): HeadersInit {
+  const token = process.env.GITHUB_TOKEN ?? process.env.GH_TOKEN;
+
+  return {
+    Accept: "application/vnd.github+json",
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+  };
+}
+
+async function loadRepoGenerationContext(activeRepo: ActiveRepoContext): Promise<RepoGenerationContext | null> {
+  const parsedRepo = parseRepositoryFullName(activeRepo.repositoryFullName);
+
+  if (!parsedRepo) {
+    console.warn("[Chat API] Unable to parse active repo full name", {
+      repositoryFullName: activeRepo.repositoryFullName,
+    });
+    return null;
+  }
+
+  const { owner, repo } = parsedRepo;
+  const headers = getGithubApiHeaders();
+
+  const metadataResponse = await fetch(`https://api.github.com/repos/${owner}/${repo}`, { headers, cache: "no-store" });
+  if (!metadataResponse.ok) {
+    throw new Error(`Failed to load repository metadata (${metadataResponse.status})`);
+  }
+
+  const repoMetadata = await metadataResponse.json() as {
+    default_branch?: string;
+    description?: string | null;
+    language?: string | null;
+    stargazers_count?: number;
+    open_issues_count?: number;
+  };
+  const metadataLine = [
+    `default branch ${repoMetadata.default_branch ?? "unknown"}`,
+    `language ${repoMetadata.language ?? "unknown"}`,
+    `stars ${repoMetadata.stargazers_count ?? 0}`,
+    `open issues ${repoMetadata.open_issues_count ?? 0}`,
+    repoMetadata.description ? `description: ${repoMetadata.description}` : null,
+  ]
+    .filter(Boolean)
+    .join("; ");
+
+  console.log("[Chat API] Repo metadata loaded", {
+    repositoryFullName: activeRepo.repositoryFullName,
+    defaultBranch: repoMetadata.default_branch ?? null,
+    language: repoMetadata.language ?? null,
+  });
+
+  const contentsResponse = await fetch(`https://api.github.com/repos/${owner}/${repo}/contents?per_page=30`, {
+    headers,
+    cache: "no-store",
+  });
+
+  if (!contentsResponse.ok) {
+    throw new Error(`Failed to load repository file summary (${contentsResponse.status})`);
+  }
+
+  const contents = await contentsResponse.json() as Array<{ name?: string; type?: string }>;
+  const files = contents
+    .filter((entry) => entry.type === "file" && typeof entry.name === "string")
+    .map((entry) => entry.name as string)
+    .slice(0, 12);
+  const directories = contents
+    .filter((entry) => entry.type === "dir" && typeof entry.name === "string")
+    .map((entry) => `${entry.name}/`)
+    .slice(0, 8);
+
+  const fileSummaryLine = [
+    directories.length ? `root directories: ${directories.join(", ")}` : null,
+    files.length ? `root files: ${files.join(", ")}` : null,
+  ]
+    .filter(Boolean)
+    .join("; ");
+
+  console.log("[Chat API] Repo file/context loaded", {
+    repositoryFullName: activeRepo.repositoryFullName,
+    directoryCount: directories.length,
+    fileCount: files.length,
+  });
+
+  return {
+    metadataLine,
+    fileSummaryLine,
+  };
+}
+
 export async function POST(request: NextRequest) {
   try {
     const payload = await parseIncomingPayload(request);
@@ -260,12 +362,46 @@ export async function POST(request: NextRequest) {
       chatId,
       activeRepo: sessionContext.activeRepo ?? null,
     });
+    if (activeRepoContext) {
+      console.log("[Chat API] Active repo detected", {
+        repoId: activeRepoContext.id,
+        repositoryFullName: activeRepoContext.repositoryFullName,
+      });
+    }
+
     const repoContextLine = activeRepoContext
       ? `Attached repository: ${activeRepoContext.repositoryFullName} (repo_id: ${activeRepoContext.id}).`
       : "";
     const personaWithRepoContext = repoContextLine
       ? `${persona}\n\n${repoContextLine}\nUse this repository context when answering questions about code.`
       : persona;
+
+    let repoGenerationContextLine = "";
+    if (activeRepoContext) {
+      try {
+        const loadedRepoContext = await loadRepoGenerationContext(activeRepoContext);
+        if (loadedRepoContext) {
+          repoGenerationContextLine = `Repository metadata: ${loadedRepoContext.metadataLine}. Repository summary: ${loadedRepoContext.fileSummaryLine}.`;
+        }
+      } catch (error) {
+        console.error("[Chat API] Failed to load repository context", {
+          requestId,
+          repositoryFullName: activeRepoContext.repositoryFullName,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+
+    const personaForGeneration = repoGenerationContextLine
+      ? `${personaWithRepoContext}\n\n${repoGenerationContextLine}`
+      : personaWithRepoContext;
+
+    if (repoGenerationContextLine) {
+      console.log("[Chat API] Repo context attached to generation request", {
+        requestId,
+        repositoryFullName: activeRepoContext?.repositoryFullName ?? null,
+      });
+    }
     const historyForProvider = history.map(({ role, content }) => ({ role, content }));
     let provider = providers[0];
     let modelId = "";
@@ -495,7 +631,7 @@ export async function POST(request: NextRequest) {
             const createParams = (selectedModelId: string) =>
               buildGenerationParams({
                 name,
-                persona: personaWithRepoContext,
+                persona: personaForGeneration,
                 summary,
                 history: historyForProvider,
                 message,
