@@ -76,6 +76,10 @@ export type RequestIntent =
   | "vision-analysis"
   | "multimodal-reasoning"
   | "image-generation";
+export type RequestClassification = {
+  intent: RequestIntent | null;
+  preferred_provider: ProviderName | null;
+};
 export type ScoreAdjustment = { label: string; delta: number };
 export type CandidateScoreBreakdown = {
   providerName: ProviderName;
@@ -251,50 +255,38 @@ function isLikelySafetySensitiveVisionPrompt(prompt: string, hasImages: boolean)
   return SAFETY_SENSITIVE_VISION_ANCHOR_REGEX.test(normalizedPrompt) && SAFETY_SENSITIVE_VISION_EXPLICIT_REGEX.test(normalizedPrompt);
 }
 
-export function userPreferredProviderBoost(prompt: string, providerName: ProviderName): number {
-  const normalizedPrompt = prompt.toLowerCase();
-  const explicitPreferencePatterns: Array<{ providerName: ProviderName; pattern: RegExp }> = [
-    { providerName: "anthropic", pattern: /\b(use|route to|pick|choose|prefer)\s+(claude|anthropic)\b/i },
-    { providerName: "google", pattern: /\b(use|route to|pick|choose|prefer)\s+(gemini|google)\b/i },
-    { providerName: "grok", pattern: /\b(use|route to|pick|choose|prefer)\s+grok\b/i },
-    { providerName: "openai", pattern: /\b(use|route to|pick|choose|prefer)\s+(gpt|chatgpt|openai)\b/i }
-  ];
-
-  const matchedExplicitPreference = explicitPreferencePatterns.find(
-    (candidate) => candidate.providerName === providerName && candidate.pattern.test(normalizedPrompt)
-  );
-  if (matchedExplicitPreference) {
-    return 1.5;
-  }
-
-  return 0;
+export function userPreferredProviderBoost(preferredProvider: ProviderName | null, providerName: ProviderName): number {
+  return preferredProvider === providerName ? 1.5 : 0;
 }
 
-function parseIntentClassifierResponse(raw: string, intents: RequestIntent[], sourceLabel: string): RequestIntent | null {
+function parseIntentClassifierResponse(raw: string, intents: RequestIntent[], sourceLabel: string): RequestClassification {
   let classifiedIntent: string | null = null;
+  let preferredProvider: ProviderName | null = null;
 
   try {
-    const parsed = JSON.parse(raw);
-    classifiedIntent = (parsed.intent ?? "").trim().toLowerCase();
+    const classifierOutput = JSON.parse(raw);
+    const { intent, preferred_provider } = classifierOutput;
+    classifiedIntent = (intent ?? "").trim().toLowerCase();
+    preferredProvider = isProviderName(preferred_provider ?? "") ? preferred_provider : null;
   } catch (err) {
     console.error(`[Intent Classifier:${sourceLabel}] JSON parse error`, err);
-    return null;
+    return { intent: null, preferred_provider: null };
   }
 
   if (intents.includes(classifiedIntent as RequestIntent)) {
-    return classifiedIntent as RequestIntent;
+    return { intent: classifiedIntent as RequestIntent, preferred_provider: preferredProvider };
   }
 
   if (classifiedIntent === "null") {
     console.warn(`[Intent Classifier:${sourceLabel}] model returned null`);
-    return null;
+    return { intent: null, preferred_provider: preferredProvider };
   }
 
   console.warn(`[Intent Classifier:${sourceLabel}] invalid intent "${classifiedIntent}"`);
-  return null;
+  return { intent: null, preferred_provider: preferredProvider };
 }
 
-async function classifyIntentWithLLM(prompt: string, intents: RequestIntent[]): Promise<RequestIntent | null> {
+async function classifyIntentWithLLM(prompt: string, intents: RequestIntent[]): Promise<RequestClassification> {
   const openaiClientResult = await getOpenAIClient();
   if (!openaiClientResult.client) {
     if (openaiClientResult.reason === "missing_key") {
@@ -305,7 +297,7 @@ async function classifyIntentWithLLM(prompt: string, intents: RequestIntent[]): 
         "error" in openaiClientResult ? openaiClientResult.error : null
       );
     }
-    return null;
+    return { intent: null, preferred_provider: null };
   }
 
   const openai = openaiClientResult.client;
@@ -343,19 +335,29 @@ async function classifyIntentWithLLM(prompt: string, intents: RequestIntent[]): 
     { user: "Compare your last answer to best practices and critique it.", intent: "assistant-reflection" }
   ];
   const systemPrompt = `
-You are an expert intent classifier.
-First you will examine the request and if you determine there is a high likelyhood that it will trigger openai safety filter, if so immediately route the request to a grok reasoning model. if not proceed with your classification task.
-Return ONLY a JSON object like {"intent":"<one_of:${intents.join("|")}>"}.
-If unsure use {"intent":"null"}.
-No other keys.
+You are the Intent Classifier for Katie.
+Return a JSON object with an "intent" field.
+In addition, detect whether the user explicitly prefers a model provider.
+If they do, return a second field "preferred_provider" whose value is one of ["openai", "anthropic", "google", "grok"] or null.
+Treat provider preference as null when not clearly expressed.
+Never guess—only set when the user's wording is explicit or obvious.
+Return JSON only, no extra text.
+Use {"intent":"null","preferred_provider":null} when unsure.
+Intent must be one of: ${intents.join("|")}.
 ${intentGuide}
   `.trim();
   const messages = [
     { role: "system" as const, content: systemPrompt },
     ...examples.flatMap((example) => [
       { role: "user" as const, content: example.user },
-      { role: "assistant" as const, content: JSON.stringify({ intent: example.intent }) }
+      { role: "assistant" as const, content: JSON.stringify({ intent: example.intent, preferred_provider: null }) }
     ]),
+    { role: "user" as const, content: "Claude, can you look at the router code?" },
+    { role: "assistant" as const, content: JSON.stringify({ intent: "architecture-review", preferred_provider: "anthropic" }) },
+    { role: "user" as const, content: "Gemini please summarize this article." },
+    { role: "assistant" as const, content: JSON.stringify({ intent: "rewrite", preferred_provider: "google" }) },
+    { role: "user" as const, content: "Quick question about pricing tiers." },
+    { role: "assistant" as const, content: JSON.stringify({ intent: "general-text", preferred_provider: null }) },
     { role: "user" as const, content: prompt }
   ];
 
@@ -391,7 +393,7 @@ ${intentGuide}
       request_id: err?.request_id ?? null
     });
 
-    return null;
+    return { intent: null, preferred_provider: null };
   }
 }
 
@@ -466,7 +468,7 @@ export async function inferRequestIntentFromMultimodalInput(
 
     const raw = response.choices[0]?.message?.content ?? "";
     console.debug("[Intent Classifier:multimodal] raw model output:", raw);
-    return parseIntentClassifierResponse(raw, intents, "multimodal");
+    return parseIntentClassifierResponse(raw, intents, "multimodal").intent;
   } catch (error) {
     const err = error as {
       message?: string;
@@ -555,7 +557,8 @@ export async function inferRequestIntent(
     "image-generation"
   ];
 
-  const classifiedIntent = await classifyIntentWithLLM(prompt, availableIntents);
+  const classifiedOutput = await classifyIntentWithLLM(prompt, availableIntents);
+  const classifiedIntent = classifiedOutput.intent;
 
   if (classifiedIntent && availableIntents.includes(classifiedIntent)) {
     console.info(`[Intent Source] text LLM classifier -> ${classifiedIntent}`);
@@ -572,6 +575,52 @@ export async function inferRequestIntent(
 
   console.info("[Intent Source] fallback path -> general-text");
   return "general-text";
+}
+
+export async function inferRequestClassification(
+  prompt: string,
+  input: boolean | { hasImages: boolean; hasVideoInput?: boolean }
+): Promise<{ intent: RequestIntent; preferredProvider: ProviderName | null }> {
+  const hasImages = typeof input === "boolean" ? input : input.hasImages;
+  const hasVideoInput = typeof input === "boolean" ? false : Boolean(input.hasVideoInput);
+  const normalizedPrompt = prompt.toLowerCase();
+
+  if (hasDirectWebSearchHint(prompt)) return { intent: "web-search", preferredProvider: null };
+  if (hasAssistantReflectionHint(prompt)) return { intent: "assistant-reflection", preferredProvider: null };
+  if (/\b(generate|create|make)\b.*\b(image|photo|illustration|art)\b|\b(hero image|digital art)\b/i.test(normalizedPrompt)) return { intent: "image-generation", preferredProvider: null };
+  if (/\b(rewrite|rephrase|edit|polish|improve tone)\b/i.test(normalizedPrompt)) return { intent: "rewrite", preferredProvider: null };
+  if (/\b(sentiment|emotion|emotional|tone analysis|feelings)\b/i.test(normalizedPrompt)) return { intent: "emotional-analysis", preferredProvider: null };
+  if (/\b(news|headlines|current events|what happened today|today in)\b/i.test(normalizedPrompt)) return { intent: "web-search", preferredProvider: null };
+  if (/\b(debug|bug|fix|error|exception|traceback|failing)\b/i.test(normalizedPrompt)) return { intent: "technical-debugging", preferredProvider: null };
+  if (/\b(architecture|system design|kubernetes|deployment|review this repo|repo review)\b/i.test(normalizedPrompt)) return { intent: "architecture-review", preferredProvider: null };
+  if (/\b(write code|implement|patch|refactor|create function|build api)\b/i.test(normalizedPrompt)) return { intent: "code-generation", preferredProvider: null };
+  if (isLikelySafetySensitiveVisionPrompt(prompt, hasImages)) return { intent: "safety-sensitive-vision", preferredProvider: null };
+  if (hasImages && /\b(chart|trend|forecast|project|estimate)\b/i.test(normalizedPrompt)) return { intent: "multimodal-reasoning", preferredProvider: null };
+  if (hasVideoInput && /\b(chart|trend|forecast|project|estimate|timeline|sequence)\b/i.test(normalizedPrompt)) return { intent: "multimodal-reasoning", preferredProvider: null };
+
+  const availableIntents: RequestIntent[] = [
+    "web-search",
+    "news-summary",
+    "emotional-analysis",
+    "rewrite",
+    "technical-debugging",
+    "architecture-review",
+    "code-generation",
+    "assistant-reflection",
+    "safety-sensitive-vision",
+    "multimodal-reasoning",
+    "vision-analysis",
+    "image-generation"
+  ];
+
+  const classifiedOutput = await classifyIntentWithLLM(prompt, availableIntents);
+  if (classifiedOutput.intent && availableIntents.includes(classifiedOutput.intent)) {
+    return { intent: classifiedOutput.intent, preferredProvider: classifiedOutput.preferred_provider };
+  }
+
+  if (hasImages) return { intent: "vision-analysis", preferredProvider: classifiedOutput.preferred_provider };
+  if (hasVideoInput) return { intent: "vision-analysis", preferredProvider: classifiedOutput.preferred_provider };
+  return { intent: "general-text", preferredProvider: classifiedOutput.preferred_provider };
 }
 
 
@@ -804,16 +853,18 @@ function rankModelForIntent(providerName: ProviderName, modelId: string, intent:
 export function scoreModelsForIntent(
   availableByProvider: Array<{ provider: LlmProvider; models: string[] }>,
   intent: RequestIntent,
-  prompt = "",
-  options?: { registryLookup?: RegistryLookup }
+  promptOrOptions: string | { registryLookup?: RegistryLookup; preferredProvider?: ProviderName | null } = "",
+  maybeOptions?: { registryLookup?: RegistryLookup; preferredProvider?: ProviderName | null }
 ): Array<{ provider: LlmProvider; modelId: string; score: number }> {
+  const options = typeof promptOrOptions === "string" ? maybeOptions : promptOrOptions;
+
   return availableByProvider
     .flatMap(({ provider, models }) =>
       models
         .map((modelId) => ({
           provider,
           modelId,
-          score: rankModelForIntent(provider.name, modelId, intent) + userPreferredProviderBoost(prompt, provider.name)
+          score: rankModelForIntent(provider.name, modelId, intent) + userPreferredProviderBoost(options?.preferredProvider ?? null, provider.name)
         }))
         .filter((candidate) => modelSupportsIntent(candidate.provider.name, candidate.modelId, intent, options?.registryLookup))
         .filter((candidate) => candidate.score >= 0)
@@ -1102,7 +1153,7 @@ export function validateRoutingDecision(
     };
   }
 
-  const compatibleChoices = scoreModelsForIntent(availableByProvider, intent, "", { registryLookup: options?.registryLookup });
+  const compatibleChoices = scoreModelsForIntent(availableByProvider, intent, { registryLookup: options?.registryLookup });
 
   const fallback = compatibleChoices[0];
 
