@@ -25,6 +25,13 @@ import { ReasoningExplainerPanel } from "@/components/reasoning-explainer-panel"
 
 type ProviderName = "openai" | "google" | "grok" | "anthropic";
 
+type ModelRegistryOption = {
+  model_id?: unknown;
+  modelId?: unknown;
+  id?: unknown;
+};
+
+type AvailableModelsPayload = Partial<Record<ProviderName, Array<string | ModelRegistryOption>>>;
 type AvailableModels = Partial<Record<ProviderName, string[]>>;
 
 type SelectedOverride = {
@@ -90,6 +97,51 @@ function formatIntentLabel(label?: string): string {
     return "unknown";
   }
   return label.replaceAll("-", " ");
+}
+
+function normalizeModelOption(option: string | ModelRegistryOption): string | null {
+  if (typeof option === "string") {
+    const value = option.trim();
+    return value.length > 0 ? value : null;
+  }
+
+  if (!option || typeof option !== "object") {
+    return null;
+  }
+
+  const candidate =
+    typeof option.model_id === "string"
+      ? option.model_id
+      : typeof option.modelId === "string"
+        ? option.modelId
+        : typeof option.id === "string"
+          ? option.id
+          : "";
+  const value = candidate.trim();
+  return value.length > 0 ? value : null;
+}
+
+function normalizeAvailableModels(payload: unknown): AvailableModels {
+  if (!payload || typeof payload !== "object") {
+    return {};
+  }
+
+  const normalized: AvailableModels = {};
+  for (const providerName of Object.keys(payload) as ProviderName[]) {
+    const rawOptions = (payload as AvailableModelsPayload)[providerName];
+    if (!Array.isArray(rawOptions)) {
+      normalized[providerName] = [];
+      continue;
+    }
+
+    const options = rawOptions
+      .map((option) => normalizeModelOption(option))
+      .filter((option): option is string => Boolean(option));
+
+    normalized[providerName] = Array.from(new Set(options));
+  }
+
+  return normalized;
 }
 
 export function ChatPanel({ actorId, chatId, activeActorName, activeChatTitle }: ChatPanelProps) {
@@ -178,13 +230,13 @@ export function ChatPanel({ actorId, chatId, activeActorName, activeChatTitle }:
   useEffect(() => {
     async function fetchModels() {
       const response = await fetch("/api/models");
-      const data = (await response.json()) as AvailableModels;
+      const data = (await response.json()) as unknown;
 
       if (!response.ok) {
         return;
       }
 
-      setAvailableModels(data);
+      setAvailableModels(normalizeAvailableModels(data));
     }
 
     void fetchModels();
