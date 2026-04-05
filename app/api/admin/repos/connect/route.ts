@@ -1,101 +1,75 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
+import { getSupabaseAdminClient } from "@/lib/data/supabase/admin";
 
 const connectRepoSchema = z.object({
   repo: z.string().trim().min(1),
 });
 
-function getAdminApiKey(): string | null {
-  const keys = process.env.API_KEYS;
-  if (!keys) {
-    return null;
-  }
+type RepoSyncRunRow = {
+  id: string;
+};
 
-  const firstKey = keys
-    .split(",")
-    .map((value) => value.trim())
-    .find((value) => value.length > 0);
-
-  return firstKey ?? null;
-}
-
-function resolveAdminEndpoint(): string | null {
-  const configuredBaseUrl = process.env.ADMIN_API_BASE_URL?.trim();
-  if (!configuredBaseUrl) {
-    return null;
-  }
-
-  return `${configuredBaseUrl.replace(/\/$/, "")}/api/admin/repos/connect`;
-}
+const CONNECT_COMMIT_SHA = "manual-connect";
 
 export async function POST(request: NextRequest) {
-  const apiKey = getAdminApiKey();
-  if (!apiKey) {
-    return NextResponse.json(
-      { ok: false, error: "Server is missing API_KEYS configuration." },
-      { status: 500 },
-    );
-  }
-
-  const endpoint = resolveAdminEndpoint();
-  if (!endpoint) {
-    return NextResponse.json(
-      {
-        ok: false,
-        error: "Server is missing ADMIN_API_BASE_URL configuration.",
-      },
-      { status: 500 },
-    );
-  }
-
   try {
     const { repo } = connectRepoSchema.parse(await request.json());
-    const upstreamResponse = await fetch(endpoint, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-api-key": apiKey,
-      },
-      body: JSON.stringify({ repo }),
-      cache: "no-store",
-    });
+    const normalizedRepo = repo.trim();
+    const client = getSupabaseAdminClient();
 
-    let upstreamPayload: unknown = null;
-    try {
-      upstreamPayload = await upstreamResponse.json();
-    } catch {
-      upstreamPayload = null;
+    const existingRun = await client
+      .from("repo_sync_runs")
+      .select("id")
+      .eq("repository_full_name", normalizedRepo)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle<RepoSyncRunRow>();
+
+    if (existingRun.error) {
+      return NextResponse.json(
+        { ok: false, error: `Failed to load repo sync state: ${existingRun.error.message}` },
+        { status: 500 },
+      );
     }
 
-    const responseRecord =
-      typeof upstreamPayload === "object" && upstreamPayload !== null
-        ? (upstreamPayload as Record<string, unknown>)
-        : null;
+    if (existingRun.data?.id) {
+      return NextResponse.json({
+        ok: true,
+        message: "Repository connected successfully.",
+        repo_id: existingRun.data.id,
+      });
+    }
 
-    const repoId =
-      responseRecord && typeof responseRecord.repo_id === "string" ? responseRecord.repo_id : undefined;
+    const createdRun = await client
+      .from("repo_sync_runs")
+      .insert({
+        repository_full_name: normalizedRepo,
+        before_sha: CONNECT_COMMIT_SHA,
+        after_sha: CONNECT_COMMIT_SHA,
+        commit_sha: CONNECT_COMMIT_SHA,
+        commit_index: 0,
+        status: "completed",
+        changed_files_count: 0,
+        deleted_files_count: 0,
+        processed_changed_files_count: 0,
+        processed_deleted_files_count: 0,
+        failed_files_count: 0,
+      })
+      .select("id")
+      .single<RepoSyncRunRow>();
 
-    if (!upstreamResponse.ok) {
-      const upstreamError =
-        responseRecord && typeof responseRecord.error === "string"
-          ? responseRecord.error
-          : `Connect request failed with status ${upstreamResponse.status}.`;
-
+    if (createdRun.error || !createdRun.data) {
       return NextResponse.json(
-        {
-          ok: false,
-          error: upstreamError,
-          response: responseRecord,
-        },
-        { status: upstreamResponse.status },
+        { ok: false, error: `Failed to connect repository: ${createdRun.error?.message ?? "unknown error"}` },
+        { status: 500 },
       );
     }
 
     return NextResponse.json({
       ok: true,
       message: "Repository connected successfully.",
-      repo_id: repoId,
-      response: responseRecord,
+      repo_id: createdRun.data.id,
     });
   } catch (error) {
     if (error instanceof z.ZodError) {
