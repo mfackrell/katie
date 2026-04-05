@@ -359,9 +359,9 @@ test("controlled memory update logs decision and persists revised memory", async
 
     const after = await store.getLongTermMemory("a1", "c1");
     assert.deepEqual(after, { preferences: { dislikes: ["seafood"] } });
-    assert.ok(logs.some((entry) => entry.includes("[LongTermMemoryEditor] started")));
-    assert.ok(logs.some((entry) => entry.includes("model returned replace")));
-    assert.ok(logs.some((entry) => entry.includes("setLongTermMemory succeeded")));
+    assert.ok(logs.some((entry) => entry.includes("[LongTermMemoryEditor] Start")));
+    assert.ok(logs.some((entry) => entry.includes("Decision: replace")));
+    assert.ok(logs.some((entry) => entry.includes("Save Success")));
   } finally {
     console.log = originalLog;
   }
