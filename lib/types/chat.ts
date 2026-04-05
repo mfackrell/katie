@@ -36,4 +36,5 @@ export interface ChatRequest {
   chatId: string;
   message: string;
   images?: string[];
+  activeRepoId?: string;
 }
