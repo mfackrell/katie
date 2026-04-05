@@ -64,6 +64,13 @@ type ActiveRepoContext = {
   repositoryFullName: string;
 };
 
+type ChatSessionContext = {
+  activeRepo: {
+    id: string;
+    fullName: string;
+  } | null;
+};
+
 function buildGenerationParams({
   name,
   persona,
@@ -218,7 +225,9 @@ export async function POST(request: NextRequest) {
     const encoder = new TextEncoder();
     const requestId = request.headers.get("x-request-id") ?? crypto.randomUUID();
 
-    console.log(`[Chat API] Processing - Actor: ${actorId}, Chat: ${chatId}`);
+    console.log(
+      `[Chat API] Processing - Actor: ${actorId}, Chat: ${chatId}, ActiveRepoId: ${activeRepoId ?? "none"}`,
+    );
 
     const providers = getAvailableProviders();
     if (!providers.length) {
@@ -232,6 +241,25 @@ export async function POST(request: NextRequest) {
     console.log("[Chat API] Assembling context and selecting provider...");
     const { name, persona, summary, history, shortTermMemory } = await assembleContext(actorId, chatId);
     const activeRepoContext = activeRepoId ? await loadActiveRepoContext(activeRepoId) : null;
+    const sessionContext: ChatSessionContext = {
+      activeRepo: activeRepoContext
+        ? {
+            id: activeRepoContext.id,
+            fullName: activeRepoContext.repositoryFullName,
+          }
+        : null,
+    };
+    const shortTermMemoryWithSession = {
+      ...shortTermMemory,
+      sessionContext,
+    };
+    await setShortTermMemory(actorId, chatId, shortTermMemoryWithSession);
+    console.log("[Chat API] Session context", {
+      requestId,
+      actorId,
+      chatId,
+      activeRepo: sessionContext.activeRepo ?? null,
+    });
     const repoContextLine = activeRepoContext
       ? `Attached repository: ${activeRepoContext.repositoryFullName} (repo_id: ${activeRepoContext.id}).`
       : "";
@@ -350,7 +378,7 @@ export async function POST(request: NextRequest) {
 
         if (isSubstantiveIntent(requestIntent) && !isAckMessage) {
           await setShortTermMemory(actorId, chatId, {
-            ...shortTermMemory,
+            ...shortTermMemoryWithSession,
             intentSession: {
               lastSubstantiveIntent: requestIntent,
               lastIntentTimestamp: now
@@ -362,7 +390,7 @@ export async function POST(request: NextRequest) {
 
       resolvedRequestIntent = explicitIntent ?? requestIntent;
 
-      const routingContext = `\n  Persona: ${personaWithRepoContext}\n  Rolling Summary: ${summary}\n  Recent History: ${JSON.stringify(history.slice(-3))}\n  Has Attached Images: ${hasVisualInput}\n`;
+      const routingContext = `\n  Persona: ${personaWithRepoContext}\n  Rolling Summary: ${summary}\n  Recent History: ${JSON.stringify(history.slice(-3))}\n  Has Attached Images: ${hasVisualInput}\n  Active Repo: ${sessionContext.activeRepo ? `${sessionContext.activeRepo.fullName} (${sessionContext.activeRepo.id})` : "none"}\n`;
       const routingDecision = await chooseProvider(message, routingContext, providers, {
         hasImages: hasVisualInput,
         hasVideoInput,
