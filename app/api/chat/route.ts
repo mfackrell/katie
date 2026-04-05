@@ -4,6 +4,7 @@ import { assembleContext } from "@/lib/memory/assemble-context";
 import { maybeUpdateSummary } from "@/lib/memory/summarizer";
 import { maybeUpdateLongTermMemory } from "@/lib/memory/long-term-editor";
 import { saveMessage, setShortTermMemory } from "@/lib/data/persistence-store";
+import { getSupabaseAdminClient } from "@/lib/data/supabase/admin";
 import { getAvailableProviders } from "@/lib/providers";
 import { chooseProvider } from "@/lib/router/master-router";
 import {
@@ -52,10 +53,16 @@ const requestSchema = z.object({
   fileReferences: z.array(fileReferenceSchema).optional(),
   overrideProvider: z.string().min(1).optional(),
   overrideModel: z.string().min(1).optional(),
-  routingTraceEnabled: z.boolean().optional()
+  routingTraceEnabled: z.boolean().optional(),
+  activeRepoId: z.string().min(1).optional()
 });
 
 type RequestPayload = z.infer<typeof requestSchema>;
+
+type ActiveRepoContext = {
+  id: string;
+  repositoryFullName: string;
+};
 
 function buildGenerationParams({
   name,
@@ -170,10 +177,42 @@ function extractImageUrl(part: { type?: string; [key: string]: unknown }): strin
   return null;
 }
 
+async function loadActiveRepoContext(repoId: string): Promise<ActiveRepoContext | null> {
+  const client = getSupabaseAdminClient();
+  const response = await client
+    .from("repo_sync_runs")
+    .select("id, repository_full_name")
+    .eq("id", repoId)
+    .maybeSingle<{ id: string; repository_full_name: string }>();
+
+  if (response.error) {
+    throw new Error(`Failed to load active repository: ${response.error.message}`);
+  }
+
+  if (!response.data) {
+    return null;
+  }
+
+  return {
+    id: response.data.id,
+    repositoryFullName: response.data.repository_full_name,
+  };
+}
+
 export async function POST(request: NextRequest) {
   try {
     const payload = await parseIncomingPayload(request);
-    const { actorId, chatId, message, images, fileReferences, overrideProvider, overrideModel, routingTraceEnabled } = payload;
+    const {
+      actorId,
+      chatId,
+      message,
+      images,
+      fileReferences,
+      overrideProvider,
+      overrideModel,
+      routingTraceEnabled,
+      activeRepoId,
+    } = payload;
     const attachments = fileReferences;
     const hasVideoInput = Array.isArray(attachments) && attachments.some(isVideoAttachment);
     const encoder = new TextEncoder();
@@ -192,6 +231,13 @@ export async function POST(request: NextRequest) {
 
     console.log("[Chat API] Assembling context and selecting provider...");
     const { name, persona, summary, history, shortTermMemory } = await assembleContext(actorId, chatId);
+    const activeRepoContext = activeRepoId ? await loadActiveRepoContext(activeRepoId) : null;
+    const repoContextLine = activeRepoContext
+      ? `Attached repository: ${activeRepoContext.repositoryFullName} (repo_id: ${activeRepoContext.id}).`
+      : "";
+    const personaWithRepoContext = repoContextLine
+      ? `${persona}\n\n${repoContextLine}\nUse this repository context when answering questions about code.`
+      : persona;
     const historyForProvider = history.map(({ role, content }) => ({ role, content }));
     let provider = providers[0];
     let modelId = "";
@@ -316,7 +362,7 @@ export async function POST(request: NextRequest) {
 
       resolvedRequestIntent = explicitIntent ?? requestIntent;
 
-      const routingContext = `\n  Persona: ${persona}\n  Rolling Summary: ${summary}\n  Recent History: ${JSON.stringify(history.slice(-3))}\n  Has Attached Images: ${hasVisualInput}\n`;
+      const routingContext = `\n  Persona: ${personaWithRepoContext}\n  Rolling Summary: ${summary}\n  Recent History: ${JSON.stringify(history.slice(-3))}\n  Has Attached Images: ${hasVisualInput}\n`;
       const routingDecision = await chooseProvider(message, routingContext, providers, {
         hasImages: hasVisualInput,
         hasVideoInput,
@@ -377,7 +423,13 @@ export async function POST(request: NextRequest) {
               type: "metadata",
               modelId,
               provider: provider.name,
-              explainer: selectionExplainer
+              explainer: selectionExplainer,
+              activeRepo: activeRepoContext
+                ? {
+                    id: activeRepoContext.id,
+                    fullName: activeRepoContext.repositoryFullName,
+                  }
+                : null
             });
 
             const startEvent = reasoningState.start();
@@ -415,7 +467,7 @@ export async function POST(request: NextRequest) {
             const createParams = (selectedModelId: string) =>
               buildGenerationParams({
                 name,
-                persona,
+                persona: personaWithRepoContext,
                 summary,
                 history: historyForProvider,
                 message,

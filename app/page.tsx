@@ -5,7 +5,7 @@ import { ActorFormModal } from "@/components/actor-form-modal";
 import { ChatPanel } from "@/components/chat-panel";
 import { Sidebar } from "@/components/sidebar";
 import { beginInFlightRequest, endInFlightRequest } from "@/lib/chat/inflight-guards";
-import type { Actor, ChatThread } from "@/lib/types/chat";
+import type { Actor, ChatThread, ConnectedRepo } from "@/lib/types/chat";
 
 type ModalState =
   | { type: "primary" }
@@ -18,6 +18,7 @@ type ModalState =
 const ACTIVE_ACTOR_STORAGE_KEY = "katie.activeActorId";
 const ACTIVE_CHAT_STORAGE_KEY = "katie.activeChatId";
 const ACTOR_CHAT_SELECTIONS_STORAGE_KEY = "katie.actorChatSelections";
+const ACTIVE_REPO_STORAGE_KEY = "katie.activeRepoId";
 
 function pickActiveActorId(actors: Actor[], preferredActorId: string | null): string {
   if (preferredActorId && actors.some((actor) => actor.id === preferredActorId)) {
@@ -71,6 +72,8 @@ export default function HomePage() {
   const [activeActorId, setActiveActorId] = useState("");
   const [activeChatId, setActiveChatId] = useState("");
   const [actorChatSelections, setActorChatSelections] = useState<Record<string, string>>({});
+  const [connectedRepos, setConnectedRepos] = useState<ConnectedRepo[]>([]);
+  const [activeRepoId, setActiveRepoId] = useState("");
   const [modalState, setModalState] = useState<ModalState>(null);
   const [hasLoadedPersistedState, setHasLoadedPersistedState] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -82,9 +85,10 @@ export default function HomePage() {
   useEffect(() => {
     async function fetchInitialData() {
       try {
-        const [actorsResponse, chatsResponse] = await Promise.all([
+        const [actorsResponse, chatsResponse, reposResponse] = await Promise.all([
           fetch("/api/actors", { cache: "no-store" }),
           fetch("/api/chats", { cache: "no-store" }),
+          fetch("/api/admin/repos", { cache: "no-store" }),
         ]);
 
         const actorsPayload = actorsResponse.ok
@@ -93,6 +97,11 @@ export default function HomePage() {
         const chatsPayload = chatsResponse.ok
           ? ((await chatsResponse.json()) as { chats?: ChatThread[] })
           : { chats: [] };
+        const reposPayload = reposResponse.ok
+          ? ((await reposResponse.json()) as {
+              repos?: Array<{ id: string; full_name: string; created_at: string }>;
+            })
+          : { repos: [] };
 
         const persistedActors = actorsPayload.actors ?? [];
         const persistedActorIds = new Set(persistedActors.map((actor) => actor.id));
@@ -104,6 +113,7 @@ export default function HomePage() {
         const storedActorSelections = window.localStorage.getItem(
           ACTOR_CHAT_SELECTIONS_STORAGE_KEY,
         );
+        const storedRepoId = window.localStorage.getItem(ACTIVE_REPO_STORAGE_KEY);
         const nextActorChatSelections = storedActorSelections
           ? (JSON.parse(storedActorSelections) as Record<string, string>)
           : {};
@@ -124,9 +134,19 @@ export default function HomePage() {
           storedChatId,
           sanitizedActorChatSelections,
         );
+        const persistedRepos = (reposPayload.repos ?? []).map((repo) => ({
+          id: repo.id,
+          fullName: repo.full_name,
+          createdAt: repo.created_at,
+        }));
+        const nextActiveRepoId = persistedRepos.some((repo) => repo.id === storedRepoId)
+          ? (storedRepoId ?? "")
+          : persistedRepos[0]?.id ?? "";
 
         setActors(persistedActors);
         setChats(persistedChats);
+        setConnectedRepos(persistedRepos);
+        setActiveRepoId(nextActiveRepoId);
         setActorChatSelections(sanitizedActorChatSelections);
         setActiveActorId(nextActiveActorId);
         setActiveChatId(nextActiveChatId);
@@ -176,6 +196,19 @@ export default function HomePage() {
   }, [actorChatSelections, hasLoadedPersistedState]);
 
   useEffect(() => {
+    if (!hasLoadedPersistedState) {
+      return;
+    }
+
+    if (activeRepoId) {
+      window.localStorage.setItem(ACTIVE_REPO_STORAGE_KEY, activeRepoId);
+      return;
+    }
+
+    window.localStorage.removeItem(ACTIVE_REPO_STORAGE_KEY);
+  }, [activeRepoId, hasLoadedPersistedState]);
+
+  useEffect(() => {
     if (!hasLoadedPersistedState || actors.length === 0) {
       if (hasLoadedPersistedState && actors.length === 0) {
         setActorChatSelections({});
@@ -214,12 +247,18 @@ export default function HomePage() {
     if (Object.keys(sanitizedSelections).length !== Object.keys(actorChatSelections).length) {
       setActorChatSelections(sanitizedSelections);
     }
+
+    if (!connectedRepos.some((repo) => repo.id === activeRepoId)) {
+      setActiveRepoId(connectedRepos[0]?.id ?? "");
+    }
   }, [
     activeActorId,
     activeChatId,
     actorChatSelections,
+    activeRepoId,
     actors,
     chats,
+    connectedRepos,
     hasLoadedPersistedState,
   ]);
 
@@ -505,6 +544,13 @@ export default function HomePage() {
             onError={setUiError}
             onActorPurposeUpdated={updateActorPurpose}
             isCreatingChat={(actorId) => Boolean(creatingChatByActorId[actorId])}
+            connectedRepos={connectedRepos}
+            activeRepoId={activeRepoId}
+            onActiveRepoChange={setActiveRepoId}
+            onRepoConnected={(repo) => {
+              setConnectedRepos((current) => [repo, ...current.filter((item) => item.id !== repo.id)]);
+              setActiveRepoId(repo.id);
+            }}
           />
         </div>
 
@@ -514,6 +560,7 @@ export default function HomePage() {
             chatId={activeChatId}
             activeActorName={activeActor?.name ?? ""}
             activeChatTitle={activeChat?.title ?? ""}
+            activeRepoId={activeRepoId}
           />
         </div>
 
@@ -546,6 +593,13 @@ export default function HomePage() {
             onError={setUiError}
             onActorPurposeUpdated={updateActorPurpose}
             isCreatingChat={(actorId) => Boolean(creatingChatByActorId[actorId])}
+            connectedRepos={connectedRepos}
+            activeRepoId={activeRepoId}
+            onActiveRepoChange={setActiveRepoId}
+            onRepoConnected={(repo) => {
+              setConnectedRepos((current) => [repo, ...current.filter((item) => item.id !== repo.id)]);
+              setActiveRepoId(repo.id);
+            }}
           />
         </aside>
         ) : null}

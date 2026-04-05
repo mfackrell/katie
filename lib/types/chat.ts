@@ -15,6 +15,12 @@ export interface ChatThread {
   updatedAt: string;
 }
 
+export interface ConnectedRepo {
+  id: string;
+  fullName: string;
+  createdAt: string;
+}
+
 export interface Message {
   id: string;
   chatId: string;

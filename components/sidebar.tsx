@@ -1,7 +1,7 @@
 "use client";
 
 import { type FormEvent, useEffect, useState } from "react";
-import type { Actor, ChatThread } from "@/lib/types/chat";
+import type { Actor, ChatThread, ConnectedRepo } from "@/lib/types/chat";
 
 interface SidebarProps {
   actors: Actor[];
@@ -19,6 +19,10 @@ interface SidebarProps {
   onError: (message: string) => void;
   onActorPurposeUpdated: (actor: Actor) => void;
   isCreatingChat: (actorId: string) => boolean;
+  connectedRepos: ConnectedRepo[];
+  activeRepoId: string;
+  onActiveRepoChange: (repoId: string) => void;
+  onRepoConnected: (repo: ConnectedRepo) => void;
 }
 
 export function Sidebar({
@@ -37,6 +41,10 @@ export function Sidebar({
   onError,
   onActorPurposeUpdated,
   isCreatingChat,
+  connectedRepos,
+  activeRepoId,
+  onActiveRepoChange,
+  onRepoConnected,
 }: SidebarProps) {
   const sortedActors = [...actors].sort((a, b) => a.name.localeCompare(b.name));
   const activeActor = actors.find((actor) => actor.id === activeActorId) ?? null;
@@ -156,6 +164,13 @@ export function Sidebar({
         repoId: repoIdValue,
         response: responseBody,
       });
+      if (repoIdValue) {
+        onRepoConnected({
+          id: repoIdValue,
+          fullName: normalizedRepoName,
+          createdAt: new Date().toISOString(),
+        });
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : "Failed to connect repository.";
       setRepoConnectError(message);
@@ -240,6 +255,27 @@ export function Sidebar({
               ) : null}
             </div>
           ) : null}
+          <div className="mt-3 space-y-2">
+            <label
+              className="block text-[11px] font-semibold uppercase tracking-[0.2em] text-zinc-500"
+              htmlFor="active-repo-select"
+            >
+              Active repo in chat
+            </label>
+            <select
+              id="active-repo-select"
+              className="h-10 w-full rounded-xl border border-white/10 bg-white/[0.04] px-3 text-sm text-zinc-100 outline-none transition focus-visible:ring-2 focus-visible:ring-emerald-400"
+              value={activeRepoId}
+              onChange={(event) => onActiveRepoChange(event.target.value)}
+            >
+              <option value="">None</option>
+              {connectedRepos.map((repo) => (
+                <option key={repo.id} value={repo.id}>
+                  {repo.fullName}
+                </option>
+              ))}
+            </select>
+          </div>
         </section>
 
         <nav className="min-h-0 flex-1 space-y-3 overflow-y-auto pb-4 pr-1">
