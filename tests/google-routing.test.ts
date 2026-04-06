@@ -452,9 +452,9 @@ test("only explicit provider preference applies a small anthropic boost", async 
     provider("anthropic", ["claude-4.5-sonnet"]),
     provider("openai", ["gpt-5.2-mini"])
   ];
-  const unboosted = scoreModelsForIntent(candidates, "general-text", "");
-  const casualMention = scoreModelsForIntent(candidates, "general-text", "Can Claude handle this?");
-  const boosted = scoreModelsForIntent(candidates, "general-text", "Please use Claude for this.");
+  const unboosted = scoreModelsForIntent(candidates, "general-text", { preferredProvider: null });
+  const casualMention = scoreModelsForIntent(candidates, "general-text", { preferredProvider: null });
+  const boosted = scoreModelsForIntent(candidates, "general-text", { preferredProvider: "anthropic" });
   const anthropicUnboosted = unboosted.find((candidate) => candidate.provider.name === "anthropic");
   const anthropicCasualMention = casualMention.find((candidate) => candidate.provider.name === "anthropic");
   const anthropicBoosted = boosted.find((candidate) => candidate.provider.name === "anthropic");
