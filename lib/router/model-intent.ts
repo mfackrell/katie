@@ -259,12 +259,72 @@ export function userPreferredProviderBoost(preferredProvider: ProviderName | nul
   return preferredProvider === providerName ? 1.5 : 0;
 }
 
-function parseIntentClassifierResponse(raw: string, intents: RequestIntent[], sourceLabel: string): RequestClassification {
+function extractJsonObject(raw: string): string | null {
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return null;
+  }
+
+  const fencedMatch = trimmed.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
+  if (fencedMatch?.[1]) {
+    return fencedMatch[1].trim();
+  }
+
+  const start = trimmed.indexOf("{");
+  if (start === -1) {
+    return null;
+  }
+
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let i = start; i < trimmed.length; i += 1) {
+    const char = trimmed[i];
+
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (char === "\\") {
+        escaped = true;
+      } else if (char === "\"") {
+        inString = false;
+      }
+      continue;
+    }
+
+    if (char === "\"") {
+      inString = true;
+      continue;
+    }
+
+    if (char === "{") {
+      depth += 1;
+      continue;
+    }
+
+    if (char === "}") {
+      depth -= 1;
+      if (depth === 0) {
+        return trimmed.slice(start, i + 1);
+      }
+    }
+  }
+
+  return null;
+}
+
+export function parseIntentClassifierResponse(raw: string, intents: RequestIntent[], sourceLabel: string): RequestClassification {
   let classifiedIntent: string | null = null;
   let preferredProvider: ProviderName | null = null;
 
   try {
-    const classifierOutput = JSON.parse(raw);
+    const jsonPayload = extractJsonObject(raw);
+    if (!jsonPayload) {
+      console.error(`[Intent Classifier:${sourceLabel}] no JSON object found in classifier output`);
+      return { intent: null, preferred_provider: null };
+    }
+
+    const classifierOutput = JSON.parse(jsonPayload);
     const { intent, preferred_provider } = classifierOutput;
     classifiedIntent = (intent ?? "").trim().toLowerCase();
     preferredProvider = isProviderName(preferred_provider ?? "") ? preferred_provider : null;
