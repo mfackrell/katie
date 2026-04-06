@@ -524,13 +524,14 @@ export async function POST(request: NextRequest) {
         }
       }
 
-      resolvedRequestIntent = explicitIntent ?? requestIntent;
+      resolvedRequestIntent = requestIntent;
+      const routingIntentOverride = explicitIntent;
 
       const routingContext = `\n  Persona: ${personaWithRepoContext}\n  Rolling Summary: ${summary}\n  Recent History: ${JSON.stringify(history.slice(-3))}\n  Has Attached Images: ${hasVisualInput}\n  Active Repo: ${sessionContext.activeRepo ? `${sessionContext.activeRepo.fullName} (${sessionContext.activeRepo.id})` : "none"}\n`;
       const routingDecision = await chooseProvider(message, routingContext, providers, {
         hasImages: hasVisualInput,
         hasVideoInput,
-        requestIntent: resolvedRequestIntent,
+        requestIntent: routingIntentOverride,
         routingTraceEnabled,
         routingRequestId: request.headers.get("x-request-id") ?? undefined
       });

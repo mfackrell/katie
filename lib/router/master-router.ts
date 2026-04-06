@@ -466,6 +466,9 @@ export async function chooseProvider(
     hasVideoInput: Boolean(options?.hasVideoInput)
   });
   const intent = options?.requestIntent ?? requestClassification.intent;
+  console.info(
+    `[Route Intent] caller_request_intent=${options?.requestIntent ?? "none"} classifier_intent=${requestClassification.intent} effective_intent=${intent}`
+  );
   const preferredProvider = requestClassification.preferredProvider;
   const traceEnabled = isRoutingTraceEnabled(options?.routingTraceEnabled);
   const traceRequestId = options?.routingRequestId ?? crypto.randomUUID();
