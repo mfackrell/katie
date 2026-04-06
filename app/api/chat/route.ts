@@ -65,8 +65,14 @@ type ActiveRepoContext = {
 };
 
 type RepoGenerationContext = {
+  defaultBranch: string;
   metadataLine: string;
   fileSummaryLine: string;
+  sourceContextLine: string;
+  fetchedFilePaths: string[];
+  attachedSourceFileCount: number;
+  attachedCharacterCount: number;
+  attachedApproxTokenCount: number;
 };
 
 type ChatSessionContext = {
@@ -303,8 +309,149 @@ async function loadRepoGenerationContext(activeRepo: ActiveRepoContext): Promise
   });
 
   return {
+    defaultBranch: repoMetadata.default_branch ?? "HEAD",
     metadataLine,
     fileSummaryLine,
+    sourceContextLine: "",
+    fetchedFilePaths: [],
+    attachedSourceFileCount: 0,
+    attachedCharacterCount: 0,
+    attachedApproxTokenCount: 0,
+  };
+}
+
+function shouldAttachRepoSourceContext({
+  requestIntent,
+  message,
+}: {
+  requestIntent?: RequestIntent;
+  message: string;
+}): boolean {
+  if (requestIntent === "technical-debugging" || requestIntent === "architecture-review") {
+    return true;
+  }
+
+  return /\b(repo review|review this repo|code review|architecture review|technical debugging|debug)\b/i.test(message);
+}
+
+function rankRelevantPaths(paths: string[], message: string): string[] {
+  const keywords = Array.from(
+    new Set(
+      message
+        .toLowerCase()
+        .split(/[^a-z0-9]+/)
+        .filter((token) => token.length >= 3 && !["the", "and", "for", "with", "from", "this", "that"].includes(token))
+    )
+  );
+
+  if (!keywords.length) {
+    return [];
+  }
+
+  return [...paths]
+    .map((path) => {
+      const normalized = path.toLowerCase();
+      const keywordHits = keywords.reduce((count, keyword) => (normalized.includes(keyword) ? count + 1 : count), 0);
+      const directoryBoost = /^(src|app|lib|api|components)\//.test(normalized) ? 1 : 0;
+      return { path, score: keywordHits + directoryBoost };
+    })
+    .filter((entry) => entry.score > 0)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 4)
+    .map((entry) => entry.path);
+}
+
+async function loadRepoSourceContext({
+  owner,
+  repo,
+  defaultBranch,
+  message,
+  headers,
+}: {
+  owner: string;
+  repo: string;
+  defaultBranch: string;
+  message: string;
+  headers: HeadersInit;
+}): Promise<{
+  sourceContextLine: string;
+  fetchedFilePaths: string[];
+  attachedSourceFileCount: number;
+  attachedCharacterCount: number;
+  attachedApproxTokenCount: number;
+}> {
+  const treeResponse = await fetch(
+    `https://api.github.com/repos/${owner}/${repo}/git/trees/${encodeURIComponent(defaultBranch)}?recursive=1`,
+    { headers, cache: "no-store" }
+  );
+
+  if (!treeResponse.ok) {
+    throw new Error(`Failed to load repository tree (${treeResponse.status})`);
+  }
+
+  const treePayload = (await treeResponse.json()) as {
+    tree?: Array<{ path?: string; type?: string }>;
+  };
+  const allPaths = (treePayload.tree ?? [])
+    .filter((entry) => entry.type === "blob" && typeof entry.path === "string")
+    .map((entry) => entry.path as string);
+  const sourcePaths = allPaths.filter((path) =>
+    /\.(md|mdx|json|ts|tsx|js|jsx|mjs|cjs|py|go|rs|java|kt|yml|yaml)$/i.test(path)
+  );
+  const lowercasePathSet = new Set(sourcePaths.map((path) => path.toLowerCase()));
+  const mustIncludeCandidates = [
+    "README.md",
+    "README.mdx",
+    "package.json",
+    "tsconfig.json",
+    "tsconfig.base.json",
+    "next.config.js",
+    "next.config.mjs",
+    "next.config.ts",
+  ];
+  const mustInclude = mustIncludeCandidates.filter((path) => lowercasePathSet.has(path.toLowerCase()));
+  const relevant = rankRelevantPaths(sourcePaths, message);
+  const selectedPaths = Array.from(new Set([...mustInclude, ...relevant])).slice(0, 8);
+
+  const fetchedFiles: Array<{ path: string; excerpt: string }> = [];
+  for (const path of selectedPaths) {
+    const contentResponse = await fetch(
+      `https://api.github.com/repos/${owner}/${repo}/contents/${path}?ref=${encodeURIComponent(defaultBranch)}`,
+      { headers, cache: "no-store" }
+    );
+    if (!contentResponse.ok) {
+      continue;
+    }
+
+    const filePayload = (await contentResponse.json()) as {
+      content?: string;
+      encoding?: string;
+      size?: number;
+    };
+    if (filePayload.encoding !== "base64" || typeof filePayload.content !== "string") {
+      continue;
+    }
+
+    const decodedContent = Buffer.from(filePayload.content, "base64").toString("utf8");
+    const excerpt = decodedContent.slice(0, 3000);
+    fetchedFiles.push({ path, excerpt });
+  }
+
+  const sourceContextLine = fetchedFiles.length
+    ? `Repository code excerpts:\n${fetchedFiles
+        .map((file) => `--- ${file.path} ---\n${file.excerpt}`)
+        .join("\n\n")
+        .slice(0, 12000)}`
+    : "";
+  const attachedCharacterCount = sourceContextLine.length;
+  const attachedApproxTokenCount = Math.ceil(attachedCharacterCount / 4);
+
+  return {
+    sourceContextLine,
+    fetchedFilePaths: fetchedFiles.map((file) => file.path),
+    attachedSourceFileCount: fetchedFiles.length,
+    attachedCharacterCount,
+    attachedApproxTokenCount,
   };
 }
 
@@ -377,9 +524,11 @@ export async function POST(request: NextRequest) {
       : persona;
 
     let repoGenerationContextLine = "";
+    let personaForGeneration = personaWithRepoContext;
+    let loadedRepoContext: RepoGenerationContext | null = null;
     if (activeRepoContext) {
       try {
-        const loadedRepoContext = await loadRepoGenerationContext(activeRepoContext);
+        loadedRepoContext = await loadRepoGenerationContext(activeRepoContext);
         if (loadedRepoContext) {
           repoGenerationContextLine = `Repository metadata: ${loadedRepoContext.metadataLine}. Repository summary: ${loadedRepoContext.fileSummaryLine}.`;
         }
@@ -392,11 +541,8 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    const personaForGeneration = repoGenerationContextLine
-      ? `${personaWithRepoContext}\n\n${repoGenerationContextLine}`
-      : personaWithRepoContext;
-
     if (repoGenerationContextLine) {
+      personaForGeneration = `${personaWithRepoContext}\n\n${repoGenerationContextLine}`;
       console.log("[Chat API] Repo context attached to generation request", {
         requestId,
         repositoryFullName: activeRepoContext?.repositoryFullName ?? null,
@@ -548,6 +694,48 @@ export async function POST(request: NextRequest) {
       console.log(`[Chat API] Selected Provider: ${provider.name}, Model: ${modelId}`);
       console.log(`[Chat API] Routing Model For UI: ${routingDecision.routerModel}`);
       console.log(`[Chat API] Routing Reasoning: ${routingDecision.reasoning}`);
+    }
+
+    const shouldAttachSourceContext =
+      activeRepoContext !== null &&
+      loadedRepoContext !== null &&
+      shouldAttachRepoSourceContext({
+        requestIntent: resolvedRequestIntent,
+        message,
+      });
+
+    if (shouldAttachSourceContext && activeRepoContext && loadedRepoContext) {
+      const parsedRepo = parseRepositoryFullName(activeRepoContext.repositoryFullName);
+      if (parsedRepo) {
+        try {
+          const sourceContext = await loadRepoSourceContext({
+            owner: parsedRepo.owner,
+            repo: parsedRepo.repo,
+            defaultBranch: loadedRepoContext.defaultBranch,
+            message,
+            headers: getGithubApiHeaders(),
+          });
+
+          if (sourceContext.sourceContextLine) {
+            personaForGeneration = `${personaForGeneration}\n\n${sourceContext.sourceContextLine}`;
+          }
+
+          console.log("[Chat API] Repo source/context loaded", {
+            requestId,
+            repositoryFullName: activeRepoContext.repositoryFullName,
+            fetchedPaths: sourceContext.fetchedFilePaths,
+            attachedSourceFileCount: sourceContext.attachedSourceFileCount,
+            attachedCharacterCount: sourceContext.attachedCharacterCount,
+            attachedApproxTokenCount: sourceContext.attachedApproxTokenCount,
+          });
+        } catch (error) {
+          console.error("[Chat API] Failed to load repository source context", {
+            requestId,
+            repositoryFullName: activeRepoContext.repositoryFullName,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }
     }
 
     const selectedProviderSupport = getAttachmentSupportForProvider(provider.name, attachments);
