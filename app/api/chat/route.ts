@@ -82,6 +82,16 @@ type ChatSessionContext = {
   } | null;
 };
 
+type RepoSourceClassifierDecision = {
+  attach_repo_source: boolean;
+  reason: string;
+  confidence: number | null;
+};
+
+const MAX_REPO_SOURCE_FILES = 8;
+const MAX_REPO_SOURCE_CHARS = 12000;
+const REPO_SOURCE_EXCERPT_CHARS = 3000;
+
 function buildGenerationParams({
   name,
   persona,
@@ -320,18 +330,93 @@ async function loadRepoGenerationContext(activeRepo: ActiveRepoContext): Promise
   };
 }
 
-function shouldAttachRepoSourceContext({
-  requestIntent,
-  message,
-}: {
-  requestIntent?: RequestIntent;
-  message: string;
-}): boolean {
-  if (requestIntent === "technical-debugging" || requestIntent === "architecture-review") {
-    return true;
+function parseRepoSourceClassifierResponse(raw: string): RepoSourceClassifierDecision | null {
+  const jsonStart = raw.indexOf("{");
+  const jsonEnd = raw.lastIndexOf("}");
+  if (jsonStart === -1 || jsonEnd === -1 || jsonEnd <= jsonStart) {
+    return null;
   }
 
-  return /\b(repo review|review this repo|code review|architecture review|technical debugging|debug)\b/i.test(message);
+  try {
+    const parsed = JSON.parse(raw.slice(jsonStart, jsonEnd + 1)) as Partial<RepoSourceClassifierDecision>;
+    if (typeof parsed.attach_repo_source !== "boolean") {
+      return null;
+    }
+
+    const confidence =
+      typeof parsed.confidence === "number" && Number.isFinite(parsed.confidence)
+        ? Math.max(0, Math.min(1, parsed.confidence))
+        : null;
+
+    return {
+      attach_repo_source: parsed.attach_repo_source,
+      reason: typeof parsed.reason === "string" ? parsed.reason : "No reason provided",
+      confidence,
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function classifyRepoSourceAttachmentNeed({
+  provider,
+  modelId,
+  message,
+  requestIntent,
+  activeRepo,
+  repoSummary,
+}: {
+  provider: LlmProvider;
+  modelId: string;
+  message: string;
+  requestIntent?: RequestIntent;
+  activeRepo: boolean;
+  repoSummary?: string;
+}): Promise<RepoSourceClassifierDecision> {
+  try {
+    const classificationPrompt = [
+      "Decide whether the assistant should attach real repository source file excerpts for this request.",
+      "Only return strict JSON.",
+      "Use this schema exactly:",
+      '{"attach_repo_source": boolean, "reason": string, "confidence": number | null}',
+      "",
+      "Guidance:",
+      "- attach_repo_source=true for code review/debugging/inspection requests that need concrete file contents.",
+      "- attach_repo_source=false for casual chat, high-level questions, or metadata-only repo questions.",
+      "- If no active repo is attached, attach_repo_source must be false.",
+      "",
+      `User message: ${JSON.stringify(message)}`,
+      `Resolved intent: ${requestIntent ?? "unknown"}`,
+      `Active repo attached: ${activeRepo ? "yes" : "no"}`,
+      `Repo summary: ${repoSummary ?? "none"}`
+    ].join("\n");
+
+    const result = await provider.generate({
+      name: "Repo Source Classifier",
+      persona: "You are a strict JSON classifier.",
+      summary: "",
+      history: [],
+      user: classificationPrompt,
+      modelId,
+    });
+
+    const parsed = parseRepoSourceClassifierResponse(result.text ?? "");
+    if (parsed) {
+      return parsed;
+    }
+
+    return {
+      attach_repo_source: false,
+      reason: "Classifier returned invalid JSON output",
+      confidence: null,
+    };
+  } catch (error) {
+    return {
+      attach_repo_source: false,
+      reason: `Classifier failed: ${error instanceof Error ? error.message : String(error)}`,
+      confidence: null,
+    };
+  }
 }
 
 function rankRelevantPaths(paths: string[], message: string): string[] {
@@ -411,7 +496,7 @@ async function loadRepoSourceContext({
   ];
   const mustInclude = mustIncludeCandidates.filter((path) => lowercasePathSet.has(path.toLowerCase()));
   const relevant = rankRelevantPaths(sourcePaths, message);
-  const selectedPaths = Array.from(new Set([...mustInclude, ...relevant])).slice(0, 8);
+  const selectedPaths = Array.from(new Set([...mustInclude, ...relevant])).slice(0, MAX_REPO_SOURCE_FILES);
 
   const fetchedFiles: Array<{ path: string; excerpt: string }> = [];
   for (const path of selectedPaths) {
@@ -433,7 +518,7 @@ async function loadRepoSourceContext({
     }
 
     const decodedContent = Buffer.from(filePayload.content, "base64").toString("utf8");
-    const excerpt = decodedContent.slice(0, 3000);
+    const excerpt = decodedContent.slice(0, REPO_SOURCE_EXCERPT_CHARS);
     fetchedFiles.push({ path, excerpt });
   }
 
@@ -441,7 +526,7 @@ async function loadRepoSourceContext({
     ? `Repository code excerpts:\n${fetchedFiles
         .map((file) => `--- ${file.path} ---\n${file.excerpt}`)
         .join("\n\n")
-        .slice(0, 12000)}`
+        .slice(0, MAX_REPO_SOURCE_CHARS)}`
     : "";
   const attachedCharacterCount = sourceContextLine.length;
   const attachedApproxTokenCount = Math.ceil(attachedCharacterCount / 4);
@@ -696,13 +781,39 @@ export async function POST(request: NextRequest) {
       console.log(`[Chat API] Routing Reasoning: ${routingDecision.reasoning}`);
     }
 
+    let repoSourceClassifierDecision: RepoSourceClassifierDecision = {
+      attach_repo_source: false,
+      reason: "No active repository context available",
+      confidence: null,
+    };
+
+    if (activeRepoContext && loadedRepoContext) {
+      repoSourceClassifierDecision = await classifyRepoSourceAttachmentNeed({
+        provider,
+        modelId,
+        message,
+        requestIntent: resolvedRequestIntent,
+        activeRepo: true,
+        repoSummary: loadedRepoContext.fileSummaryLine,
+      });
+    }
+
     const shouldAttachSourceContext =
       activeRepoContext !== null &&
       loadedRepoContext !== null &&
-      shouldAttachRepoSourceContext({
-        requestIntent: resolvedRequestIntent,
-        message,
-      });
+      repoSourceClassifierDecision.attach_repo_source;
+
+    console.log("[Chat API] Repo source classifier result", {
+      requestId,
+      repositoryFullName: activeRepoContext?.repositoryFullName ?? null,
+      attachRepoSource: repoSourceClassifierDecision.attach_repo_source,
+      reason: repoSourceClassifierDecision.reason,
+      confidence: repoSourceClassifierDecision.confidence,
+    });
+    console.log("[Chat API] Repo source loading triggered", {
+      requestId,
+      triggered: shouldAttachSourceContext,
+    });
 
     if (shouldAttachSourceContext && activeRepoContext && loadedRepoContext) {
       const parsedRepo = parseRepositoryFullName(activeRepoContext.repositoryFullName);
