@@ -6,6 +6,7 @@ import {
   hasDirectWebSearchHint,
   inferRequestIntent,
   inferRequestIntentFromMultimodalInput,
+  parseIntentClassifierResponse,
   scoreModelsForIntent,
   scoreModelCandidateWithBreakdown,
   validateRoutingDecision
@@ -53,6 +54,36 @@ test("google model capability helpers separate generation from analysis", async 
 
 test("multimodal classifier returns null without image inputs", async () => {
   assert.equal(await inferRequestIntentFromMultimodalInput("Describe this image", []), null);
+});
+
+test("intent classifier parser accepts plain JSON payloads", async () => {
+  const parsed = parseIntentClassifierResponse(
+    JSON.stringify({ intent: "architecture-review", preferred_provider: "anthropic" }),
+    ["architecture-review", "technical-debugging"],
+    "test"
+  );
+
+  assert.deepEqual(parsed, { intent: "architecture-review", preferred_provider: "anthropic" });
+});
+
+test("intent classifier parser recovers JSON from fenced output", async () => {
+  const parsed = parseIntentClassifierResponse(
+    "Sure — here is the result:\n```json\n{\"intent\":\"technical-debugging\",\"preferred_provider\":\"openai\"}\n```",
+    ["architecture-review", "technical-debugging"],
+    "test"
+  );
+
+  assert.deepEqual(parsed, { intent: "technical-debugging", preferred_provider: "openai" });
+});
+
+test("intent classifier parser falls back to null when no JSON is present", async () => {
+  const parsed = parseIntentClassifierResponse(
+    "I think this is a coding task, but I am not certain.",
+    ["architecture-review", "technical-debugging"],
+    "test"
+  );
+
+  assert.deepEqual(parsed, { intent: null, preferred_provider: null });
 });
 
 test("attached chart analysis is classified as multimodal reasoning", async () => {
