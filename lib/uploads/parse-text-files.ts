@@ -7,6 +7,43 @@ import {
   type SourceFormat
 } from "@/lib/uploads/file-type-helpers";
 
+type MammothModule = {
+  extractRawText(input: { arrayBuffer: ArrayBuffer }): Promise<{ value: string }>;
+};
+
+type XlsxWorkbook = {
+  SheetNames: string[];
+  Sheets: Record<string, unknown>;
+};
+
+type XlsxModule = {
+  read(data: ArrayBuffer, opts: { type: "array" }): XlsxWorkbook;
+  utils: {
+    sheet_to_csv(sheet: unknown, options: { FS: string }): string;
+  };
+};
+
+type PdfPage = {
+  getTextContent(): Promise<{ items: Array<{ str?: string }> }>;
+};
+
+type PdfDocument = {
+  numPages: number;
+  getPage(pageNumber: number): Promise<PdfPage>;
+};
+
+type PdfjsModule = {
+  getDocument(input: { data: ArrayBuffer; disableWorker: boolean }): {
+    promise: Promise<PdfDocument>;
+  };
+};
+
+type DynamicImportLoaders = {
+  mammoth: () => Promise<MammothModule>;
+  xlsx: () => Promise<XlsxModule>;
+  pdfjs: () => Promise<PdfjsModule>;
+};
+
 export type ParsedAttachment = {
   name: string;
   mimeType: string;
@@ -20,15 +57,13 @@ const MAX_BINARY_FILE_SIZE_BYTES = 8 * 1024 * 1024;
 const MAX_OUTPUT_CHARS = 50_000;
 const MAX_EXCEL_SHEETS = 20;
 
-const DYNAMIC_IMPORTS: Record<string, () => Promise<any>> = {
-  mammoth: () => import("mammoth"),
-  xlsx: () => import("xlsx"),
-  pdfjs: () => import("pdfjs-dist/legacy/build/pdf.mjs")
+const DYNAMIC_IMPORTS: DynamicImportLoaders = {
+  mammoth: async () => (await import("mammoth")) as unknown as MammothModule,
+  xlsx: async () => (await import("xlsx")) as unknown as XlsxModule,
+  pdfjs: async () => (await import("pdfjs-dist/legacy/build/pdf.mjs")) as unknown as PdfjsModule
 };
 
-export function __setDynamicImportOverridesForTests(
-  overrides: Partial<Record<keyof typeof DYNAMIC_IMPORTS, () => Promise<any>>>
-): void {
+export function __setDynamicImportOverridesForTests(overrides: Partial<DynamicImportLoaders>): void {
   Object.assign(DYNAMIC_IMPORTS, overrides);
 }
 
@@ -102,7 +137,7 @@ export async function convertToPlainText(file: File): Promise<string> {
     try {
       const xlsx = await DYNAMIC_IMPORTS.xlsx();
       const workbook = xlsx.read(await file.arrayBuffer(), { type: "array" });
-      const sheetChunks = workbook.SheetNames.slice(0, MAX_EXCEL_SHEETS).map((sheetName: string) => {
+      const sheetChunks = workbook.SheetNames.slice(0, MAX_EXCEL_SHEETS).map((sheetName) => {
         const worksheet = workbook.Sheets[sheetName];
         const tsv = xlsx.utils.sheet_to_csv(worksheet, { FS: "\t" }).trim();
         return `--- sheet: ${sheetName} ---\n${tsv}`;
@@ -124,7 +159,7 @@ export async function convertToPlainText(file: File): Promise<string> {
       const page = await pdfDocument.getPage(pageNumber);
       const content = await page.getTextContent();
       const text = content.items
-        .map((item: { str?: string }) => item.str ?? "")
+        .map((item) => item.str ?? "")
         .join(" ")
         .trim();
       pageTextChunks.push(text);
