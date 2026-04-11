@@ -22,6 +22,8 @@ interface SidebarProps {
   connectedRepos: ConnectedRepo[];
   activeRepoId: string;
   onActiveRepoChange: (repoId: string) => void;
+  repoInjectionEnabled: boolean;
+  onRepoInjectionEnabledChange: (enabled: boolean) => void;
   onRepoConnected: (repo: ConnectedRepo) => void;
 }
 
@@ -44,6 +46,8 @@ export function Sidebar({
   connectedRepos,
   activeRepoId,
   onActiveRepoChange,
+  repoInjectionEnabled,
+  onRepoInjectionEnabledChange,
   onRepoConnected,
 }: SidebarProps) {
   const sortedActors = [...actors].sort((a, b) => a.name.localeCompare(b.name));
@@ -275,6 +279,26 @@ export function Sidebar({
                 </option>
               ))}
             </select>
+          </div>
+          <div className="mt-3 space-y-2 rounded-xl border border-white/10 bg-white/[0.02] p-3">
+            <label
+              className="flex items-center justify-between gap-3 text-sm text-zinc-200"
+              htmlFor="repo-injection-toggle"
+            >
+              <span>Use repo context in chat</span>
+              <input
+                id="repo-injection-toggle"
+                type="checkbox"
+                className="h-4 w-4 accent-emerald-400 disabled:cursor-not-allowed disabled:opacity-60"
+                checked={repoInjectionEnabled}
+                onChange={(event) => onRepoInjectionEnabledChange(event.target.checked)}
+                disabled={!activeRepoId}
+                aria-describedby="repo-injection-toggle-help"
+              />
+            </label>
+            <p id="repo-injection-toggle-help" className="text-xs text-zinc-400">
+              Keeps the repo selected but disables source-file injection when turned off.
+            </p>
           </div>
         </section>
 

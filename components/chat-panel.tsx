@@ -45,6 +45,7 @@ interface ChatPanelProps {
   activeActorName: string;
   activeChatTitle: string;
   activeRepoId: string;
+  repoInjectionEnabled: boolean;
 }
 
 type SelectionExplainer = {
@@ -145,7 +146,14 @@ function normalizeAvailableModels(payload: unknown): AvailableModels {
   return normalized;
 }
 
-export function ChatPanel({ actorId, chatId, activeActorName, activeChatTitle, activeRepoId }: ChatPanelProps) {
+export function ChatPanel({
+  actorId,
+  chatId,
+  activeActorName,
+  activeChatTitle,
+  activeRepoId,
+  repoInjectionEnabled,
+}: ChatPanelProps) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [messagesByChatId, setMessagesByChatId] = useState<Record<string, Message[]>>({});
   const [isHydratingMessages, setIsHydratingMessages] = useState(false);
@@ -530,6 +538,7 @@ export function ChatPanel({ actorId, chatId, activeActorName, activeChatTitle, a
           overrideProvider: selectedOverride?.providerName,
           overrideModel: selectedOverride?.modelId,
           activeRepoId: activeRepoId || undefined,
+          repoInjectionEnabled,
         }),
       });
 
