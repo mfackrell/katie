@@ -37,4 +37,5 @@ export interface ChatRequest {
   message: string;
   images?: string[];
   activeRepoId?: string;
+  repoInjectionEnabled?: boolean;
 }

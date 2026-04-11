@@ -19,6 +19,7 @@ const ACTIVE_ACTOR_STORAGE_KEY = "katie.activeActorId";
 const ACTIVE_CHAT_STORAGE_KEY = "katie.activeChatId";
 const ACTOR_CHAT_SELECTIONS_STORAGE_KEY = "katie.actorChatSelections";
 const ACTIVE_REPO_STORAGE_KEY = "katie.activeRepoId";
+const REPO_INJECTION_ENABLED_STORAGE_KEY = "katie.repoInjectionEnabled";
 
 function pickActiveActorId(actors: Actor[], preferredActorId: string | null): string {
   if (preferredActorId && actors.some((actor) => actor.id === preferredActorId)) {
@@ -74,6 +75,7 @@ export default function HomePage() {
   const [actorChatSelections, setActorChatSelections] = useState<Record<string, string>>({});
   const [connectedRepos, setConnectedRepos] = useState<ConnectedRepo[]>([]);
   const [activeRepoId, setActiveRepoId] = useState("");
+  const [repoInjectionEnabled, setRepoInjectionEnabled] = useState(true);
   const [modalState, setModalState] = useState<ModalState>(null);
   const [hasLoadedPersistedState, setHasLoadedPersistedState] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -114,6 +116,9 @@ export default function HomePage() {
           ACTOR_CHAT_SELECTIONS_STORAGE_KEY,
         );
         const storedRepoId = window.localStorage.getItem(ACTIVE_REPO_STORAGE_KEY);
+        const storedRepoInjectionEnabled = window.localStorage.getItem(
+          REPO_INJECTION_ENABLED_STORAGE_KEY,
+        );
         const nextActorChatSelections = storedActorSelections
           ? (JSON.parse(storedActorSelections) as Record<string, string>)
           : {};
@@ -142,11 +147,13 @@ export default function HomePage() {
         const nextActiveRepoId = persistedRepos.some((repo) => repo.id === storedRepoId)
           ? (storedRepoId ?? "")
           : persistedRepos[0]?.id ?? "";
+        const nextRepoInjectionEnabled = storedRepoInjectionEnabled !== "false";
 
         setActors(persistedActors);
         setChats(persistedChats);
         setConnectedRepos(persistedRepos);
         setActiveRepoId(nextActiveRepoId);
+        setRepoInjectionEnabled(nextRepoInjectionEnabled);
         setActorChatSelections(sanitizedActorChatSelections);
         setActiveActorId(nextActiveActorId);
         setActiveChatId(nextActiveChatId);
@@ -207,6 +214,17 @@ export default function HomePage() {
 
     window.localStorage.removeItem(ACTIVE_REPO_STORAGE_KEY);
   }, [activeRepoId, hasLoadedPersistedState]);
+
+  useEffect(() => {
+    if (!hasLoadedPersistedState) {
+      return;
+    }
+
+    window.localStorage.setItem(
+      REPO_INJECTION_ENABLED_STORAGE_KEY,
+      repoInjectionEnabled ? "true" : "false",
+    );
+  }, [repoInjectionEnabled, hasLoadedPersistedState]);
 
   useEffect(() => {
     if (!hasLoadedPersistedState || actors.length === 0) {
@@ -547,6 +565,8 @@ export default function HomePage() {
             connectedRepos={connectedRepos}
             activeRepoId={activeRepoId}
             onActiveRepoChange={setActiveRepoId}
+            repoInjectionEnabled={repoInjectionEnabled}
+            onRepoInjectionEnabledChange={setRepoInjectionEnabled}
             onRepoConnected={(repo) => {
               setConnectedRepos((current) => [repo, ...current.filter((item) => item.id !== repo.id)]);
               setActiveRepoId(repo.id);
@@ -561,6 +581,7 @@ export default function HomePage() {
             activeActorName={activeActor?.name ?? ""}
             activeChatTitle={activeChat?.title ?? ""}
             activeRepoId={activeRepoId}
+            repoInjectionEnabled={repoInjectionEnabled}
           />
         </div>
 
@@ -596,6 +617,8 @@ export default function HomePage() {
             connectedRepos={connectedRepos}
             activeRepoId={activeRepoId}
             onActiveRepoChange={setActiveRepoId}
+            repoInjectionEnabled={repoInjectionEnabled}
+            onRepoInjectionEnabledChange={setRepoInjectionEnabled}
             onRepoConnected={(repo) => {
               setConnectedRepos((current) => [repo, ...current.filter((item) => item.id !== repo.id)]);
               setActiveRepoId(repo.id);

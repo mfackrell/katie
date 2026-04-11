@@ -55,7 +55,8 @@ const requestSchema = z.object({
   overrideProvider: z.string().min(1).optional(),
   overrideModel: z.string().min(1).optional(),
   routingTraceEnabled: z.boolean().optional(),
-  activeRepoId: z.string().min(1).optional()
+  activeRepoId: z.string().min(1).optional(),
+  repoInjectionEnabled: z.boolean().optional(),
 });
 
 type RequestPayload = z.infer<typeof requestSchema>;
@@ -444,7 +445,9 @@ export async function POST(request: NextRequest) {
       overrideModel,
       routingTraceEnabled,
       activeRepoId,
+      repoInjectionEnabled: repoInjectionEnabledFromPayload,
     } = payload;
+    const repoInjectionEnabled = repoInjectionEnabledFromPayload !== false;
     const attachments = fileReferences;
     const hasVideoInput = Array.isArray(attachments) && attachments.some(isVideoAttachment);
     const encoder = new TextEncoder();
@@ -453,6 +456,11 @@ export async function POST(request: NextRequest) {
     console.log(
       `[Chat API] Processing - Actor: ${actorId}, Chat: ${chatId}, ActiveRepoId: ${activeRepoId ?? "none"}`,
     );
+    console.log("[Chat API] Repo injection override", {
+      requestId,
+      activeRepoId: activeRepoId ?? null,
+      repoInjectionEnabled,
+    });
 
     const providers = getAvailableProviders();
     if (!providers.length) {
@@ -695,6 +703,7 @@ export async function POST(request: NextRequest) {
     }
 
     const shouldAttachSourceContext =
+      repoInjectionEnabled &&
       activeRepoContext !== null &&
       loadedRepoContext !== null &&
       repoSourceClassifierDecision.attach_repo_source;
@@ -713,10 +722,19 @@ export async function POST(request: NextRequest) {
     console.log("[Chat API] Repo source attachment gate", {
       requestId,
       shouldAttachSourceContext,
+      repoInjectionEnabled,
       activeRepoContextPresent: activeRepoContext !== null,
       loadedRepoContextPresent: loadedRepoContext !== null,
       resolvedRequestIntent: resolvedRequestIntent ?? null,
     });
+    if (!repoInjectionEnabled && activeRepoContext) {
+      console.log("[Chat API] Repo source injection skipped by override", {
+        requestId,
+        activeRepo: activeRepoContext.repositoryFullName,
+        repoInjectionEnabled,
+        skippedByOverride: true,
+      });
+    }
 
     if (shouldAttachSourceContext && activeRepoContext && loadedRepoContext) {
       try {
