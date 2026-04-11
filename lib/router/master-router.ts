@@ -578,7 +578,8 @@ export async function chooseProvider(
       availableByProvider,
       traceId: traceRequestId,
       currentSelection: { providerName: selection.provider.name, modelId: selection.modelId },
-      resolvedIntent: intent
+      resolvedIntent: intent,
+      registryLookup
     });
 
     logPolicyTrace(evaluation.trace);
