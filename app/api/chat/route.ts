@@ -497,9 +497,11 @@ async function loadRepoSourceContext({
   const mustInclude = mustIncludeCandidates.filter((path) => lowercasePathSet.has(path.toLowerCase()));
   const relevant = rankRelevantPaths(sourcePaths, message);
   const selectedPaths = Array.from(new Set([...mustInclude, ...relevant])).slice(0, MAX_REPO_SOURCE_FILES);
+  const fallbackPaths = sourcePaths.slice(0, MAX_REPO_SOURCE_FILES);
+  const effectivePaths = selectedPaths.length > 0 ? selectedPaths : fallbackPaths;
 
   const fetchedFiles: Array<{ path: string; excerpt: string }> = [];
-  for (const path of selectedPaths) {
+  for (const path of effectivePaths) {
     const contentResponse = await fetch(
       `https://api.github.com/repos/${owner}/${repo}/contents/${path}?ref=${encodeURIComponent(defaultBranch)}`,
       { headers, cache: "no-store" }
@@ -801,7 +803,7 @@ export async function POST(request: NextRequest) {
     const shouldAttachSourceContext =
       activeRepoContext !== null &&
       loadedRepoContext !== null &&
-      repoSourceClassifierDecision.attach_repo_source;
+      (repoSourceClassifierDecision.attach_repo_source || resolvedRequestIntent === "architecture-review");
 
     console.log("[Chat API] Repo source classifier result", {
       requestId,
@@ -814,11 +816,26 @@ export async function POST(request: NextRequest) {
       requestId,
       triggered: shouldAttachSourceContext,
     });
+    console.log("[Chat API] Repo source attachment gate", {
+      requestId,
+      shouldAttachSourceContext,
+      activeRepoContextPresent: activeRepoContext !== null,
+      loadedRepoContextPresent: loadedRepoContext !== null,
+      resolvedRequestIntent: resolvedRequestIntent ?? null,
+    });
 
     if (shouldAttachSourceContext && activeRepoContext && loadedRepoContext) {
       const parsedRepo = parseRepositoryFullName(activeRepoContext.repositoryFullName);
       if (parsedRepo) {
         try {
+          console.log("[Chat API] Entering loadRepoSourceContext", {
+            requestId,
+            repositoryFullName: activeRepoContext.repositoryFullName,
+            shouldAttachSourceContext,
+            activeRepoContextPresent: true,
+            loadedRepoContextPresent: true,
+            resolvedRequestIntent: resolvedRequestIntent ?? null,
+          });
           const sourceContext = await loadRepoSourceContext({
             owner: parsedRepo.owner,
             repo: parsedRepo.repo,
@@ -829,23 +846,37 @@ export async function POST(request: NextRequest) {
 
           if (sourceContext.sourceContextLine) {
             personaForGeneration = `${personaForGeneration}\n\n${sourceContext.sourceContextLine}`;
+            console.log("[Chat API] Repo source/context loaded", {
+              requestId,
+              repositoryFullName: activeRepoContext.repositoryFullName,
+              fetchedPaths: sourceContext.fetchedFilePaths,
+              attachedSourceFileCount: sourceContext.attachedSourceFileCount,
+              attachedCharacterCount: sourceContext.attachedCharacterCount,
+              attachedApproxTokenCount: sourceContext.attachedApproxTokenCount,
+            });
+          } else {
+            console.warn("[Chat API] Repo source/context not attached", {
+              requestId,
+              repositoryFullName: activeRepoContext.repositoryFullName,
+              reason: "loadRepoSourceContext returned empty sourceContextLine",
+              fetchedPaths: sourceContext.fetchedFilePaths,
+              attachedSourceFileCount: sourceContext.attachedSourceFileCount,
+              attachedCharacterCount: sourceContext.attachedCharacterCount,
+            });
           }
-
-          console.log("[Chat API] Repo source/context loaded", {
-            requestId,
-            repositoryFullName: activeRepoContext.repositoryFullName,
-            fetchedPaths: sourceContext.fetchedFilePaths,
-            attachedSourceFileCount: sourceContext.attachedSourceFileCount,
-            attachedCharacterCount: sourceContext.attachedCharacterCount,
-            attachedApproxTokenCount: sourceContext.attachedApproxTokenCount,
-          });
         } catch (error) {
           console.error("[Chat API] Failed to load repository source context", {
             requestId,
             repositoryFullName: activeRepoContext.repositoryFullName,
-            error: error instanceof Error ? error.message : String(error),
+            reason: error instanceof Error ? error.message : String(error),
           });
         }
+      } else {
+        console.warn("[Chat API] Repo source/context not attached", {
+          requestId,
+          repositoryFullName: activeRepoContext.repositoryFullName,
+          reason: "Unable to parse repository full name for source loading",
+        });
       }
     }
 
