@@ -156,3 +156,20 @@ Earlier documentation referenced blob-based JSON storage. The current implementa
 - Operational rollback and incident runbook is documented in [`docs/operations-runbook.md`](docs/operations-runbook.md).
 - Include `npm run smoke:mcp` in post-rollback validation before reopening traffic.
 - For DB-impacting incidents, restore a snapshot first, then rerun `npm run migrate:apply` only after change review.
+
+## Repo Awareness for Katie
+Katie can now inject live repository file contents (read-only via GitHub API) into the prompt context when a request needs direct code inspection.
+
+### Triggers
+- Intent classified as `code-review` or `architecture-review`.
+- User messages like: `review file ...`, `check code ...`, `see the repo`, `debug this code`.
+
+### Behavior and limits
+- Pulls only relevant files (target: 3-5 files max).
+- Uses GitHub API content fetches against the active repo binding.
+- Redacts obvious secret-like values (`API_KEY`, `PASSWORD`, `TOKEN`, `SECRET`) before prompt injection.
+- Limits injected payload to ~20k chars with truncation notices.
+- Uses in-memory caching with a 5-minute TTL and local rate limiting (10 calls/min).
+
+### Debug route
+Use `GET /api/repo/inject?message=review%20intent%20classifier&repoId=<repo-id>` to inspect the exact injected context payload for a message/repo pair.
