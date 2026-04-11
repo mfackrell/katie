@@ -51,6 +51,9 @@
     "tests/model-registry.test.ts",
     "tests/repo/content-injector.test.ts",
     "lib/webhooks-fastify-hmac.ts",
-    "tests/fastify-webhook-hmac.test.ts"
+    "tests/fastify-webhook-hmac.test.ts",
+    "lib/uploads/file-type-helpers.ts",
+    "lib/uploads/parse-text-files.ts",
+    "tests/uploads/parse-text-files.test.ts"
   ]
 }
