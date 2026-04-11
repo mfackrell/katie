@@ -30,6 +30,7 @@ import {
   resolveVideoRoutingPolicy,
   selectGoogleModelForVideoRouting
 } from "@/lib/chat/video-routing";
+import { injectRelevantContents, registerRepoBinding } from "@/lib/repo/content-injector";
 
 const fileReferenceSchema = z.object({
   fileId: z.string().min(1),
@@ -91,6 +92,7 @@ type RepoSourceClassifierDecision = {
 const MAX_REPO_SOURCE_FILES = 8;
 const MAX_REPO_SOURCE_CHARS = 12000;
 const REPO_SOURCE_EXCERPT_CHARS = 3000;
+const REPO_INJECTION_TRIGGER_REGEX = /\b(review (?:the )?(?:repo|file)|check code|see the repo|debug (?:this )?code|inspect (?:the )?code)\b/i;
 
 function buildGenerationParams({
   name,
@@ -790,6 +792,11 @@ export async function POST(request: NextRequest) {
     };
 
     if (activeRepoContext && loadedRepoContext) {
+      registerRepoBinding(
+        activeRepoContext.id,
+        activeRepoContext.repositoryFullName,
+        loadedRepoContext.defaultBranch || "main",
+      );
       repoSourceClassifierDecision = await classifyRepoSourceAttachmentNeed({
         provider,
         modelId,
@@ -803,7 +810,12 @@ export async function POST(request: NextRequest) {
     const shouldAttachSourceContext =
       activeRepoContext !== null &&
       loadedRepoContext !== null &&
-      (repoSourceClassifierDecision.attach_repo_source || resolvedRequestIntent === "architecture-review");
+      (
+        repoSourceClassifierDecision.attach_repo_source ||
+        resolvedRequestIntent === "architecture-review" ||
+        resolvedRequestIntent === "code-review" ||
+        REPO_INJECTION_TRIGGER_REGEX.test(message)
+      );
 
     console.log("[Chat API] Repo source classifier result", {
       requestId,
@@ -825,57 +837,16 @@ export async function POST(request: NextRequest) {
     });
 
     if (shouldAttachSourceContext && activeRepoContext && loadedRepoContext) {
-      const parsedRepo = parseRepositoryFullName(activeRepoContext.repositoryFullName);
-      if (parsedRepo) {
-        try {
-          console.log("[Chat API] Entering loadRepoSourceContext", {
-            requestId,
-            repositoryFullName: activeRepoContext.repositoryFullName,
-            shouldAttachSourceContext,
-            activeRepoContextPresent: true,
-            loadedRepoContextPresent: true,
-            resolvedRequestIntent: resolvedRequestIntent ?? null,
-          });
-          const sourceContext = await loadRepoSourceContext({
-            owner: parsedRepo.owner,
-            repo: parsedRepo.repo,
-            defaultBranch: loadedRepoContext.defaultBranch,
-            message,
-            headers: getGithubApiHeaders(),
-          });
-
-          if (sourceContext.sourceContextLine) {
-            personaForGeneration = `${personaForGeneration}\n\n${sourceContext.sourceContextLine}`;
-            console.log("[Chat API] Repo source/context loaded", {
-              requestId,
-              repositoryFullName: activeRepoContext.repositoryFullName,
-              fetchedPaths: sourceContext.fetchedFilePaths,
-              attachedSourceFileCount: sourceContext.attachedSourceFileCount,
-              attachedCharacterCount: sourceContext.attachedCharacterCount,
-              attachedApproxTokenCount: sourceContext.attachedApproxTokenCount,
-            });
-          } else {
-            console.warn("[Chat API] Repo source/context not attached", {
-              requestId,
-              repositoryFullName: activeRepoContext.repositoryFullName,
-              reason: "loadRepoSourceContext returned empty sourceContextLine",
-              fetchedPaths: sourceContext.fetchedFilePaths,
-              attachedSourceFileCount: sourceContext.attachedSourceFileCount,
-              attachedCharacterCount: sourceContext.attachedCharacterCount,
-            });
-          }
-        } catch (error) {
-          console.error("[Chat API] Failed to load repository source context", {
-            requestId,
-            repositoryFullName: activeRepoContext.repositoryFullName,
-            reason: error instanceof Error ? error.message : String(error),
-          });
-        }
-      } else {
-        console.warn("[Chat API] Repo source/context not attached", {
+      try {
+        const injectedContents = await injectRelevantContents(message, activeRepoContext.id, 5);
+        personaForGeneration = `${personaForGeneration}\n\n${injectedContents}`;
+        const injectedFileCount = (injectedContents.match(/^File:/gm) ?? []).length;
+        console.info(`[info] [Repo Injector] Injected ${injectedFileCount} files for requestId=${requestId}`);
+      } catch (error) {
+        console.error("[Chat API] Failed to inject repository source context", {
           requestId,
           repositoryFullName: activeRepoContext.repositoryFullName,
-          reason: "Unable to parse repository full name for source loading",
+          reason: error instanceof Error ? error.message : String(error),
         });
       }
     }

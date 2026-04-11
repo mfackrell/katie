@@ -148,6 +148,10 @@ test("repo review prompts are classified as architecture review and cannot use i
   assert.equal(validated.changed, true);
 });
 
+test("file review prompts are classified as code-review", async () => {
+  assert.equal(await inferRequestIntent("check file lib/router/model-intent.ts and review code", false), "code-review");
+});
+
 test("bug-fix prompts are classified as technical debugging and reject image-generation models", async () => {
   assert.equal(await inferRequestIntent("fix this bug in the router", false), "technical-debugging");
 
