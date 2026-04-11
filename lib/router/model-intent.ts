@@ -18,6 +18,9 @@ export type ModelSpecializationTag =
   | "architecture"
   | "writing"
   | "emotional-nuance"
+  | "conversational"
+  | "interpersonal"
+  | "empathy"
   | "multimodal"
   | "research"
   | "reflection";
@@ -63,6 +66,7 @@ export type HardRouteContext = {
 export type RequestIntent =
   | "text"
   | "general-text"
+  | "social-emotional"
   | "rewrite"
   | "emotional-analysis"
   | "news-summary"
@@ -177,6 +181,8 @@ const intentDescriptions: Record<RequestIntent, string> = {
   text: "General text processing, base type.",
   "general-text":
     "For broad, non-specific questions or casual conversation where no other specific intent applies.",
+  "social-emotional":
+    "For socially nuanced or relational chat requiring warmth, tone awareness, empathy, and interpersonal judgment.",
   rewrite: "For rephrasing, editing, polishing, or adjusting the tone of text.",
   "emotional-analysis": "For analyzing sentiment, tone, feelings, or emotional nuance in text.",
   "news-summary": "For summarizing current events, headlines, or recent news.",
@@ -212,6 +218,13 @@ const ASSISTANT_REFLECTION_REGEX =
 
 function hasAssistantReflectionHint(prompt: string): boolean {
   return ASSISTANT_REFLECTION_REGEX.test(prompt);
+}
+
+const SOCIAL_EMOTIONAL_PROMPT_REGEX =
+  /\b(how are you feeling|how do you feel|what do you think of me|are you okay|how does (?:that|this) feel|how does (?:that|this) strike you|what(?:'s| is) your sense of this)\b/i;
+
+function hasSocialEmotionalHint(prompt: string): boolean {
+  return SOCIAL_EMOTIONAL_PROMPT_REGEX.test(prompt);
 }
 
 const SAFETY_SENSITIVE_VISION_ANCHOR_REGEX =
@@ -428,6 +441,9 @@ async function classifyIntentWithLLMProviders(
     { user: "Was your prior response accurate and complete?", intent: "assistant-reflection" },
     { user: "Audit your previous output for mistakes.", intent: "assistant-reflection" },
     { user: "Rate your last answer and explain the score.", intent: "assistant-reflection" },
+    { user: "How are you feeling?", intent: "social-emotional" },
+    { user: "What do you think of me?", intent: "social-emotional" },
+    { user: "Are you okay?", intent: "social-emotional" },
     { user: "How good was your previous reply?", intent: "assistant-reflection" },
     { user: "Find weaknesses in your last response.", intent: "assistant-reflection" },
     { user: "Re-evaluate your earlier answer.", intent: "assistant-reflection" },
@@ -492,6 +508,7 @@ export async function inferRequestIntentFromMultimodalInput(
     "news-summary",
     "code-review",
     "emotional-analysis",
+    "social-emotional",
     "rewrite",
     "technical-debugging",
     "architecture-review",
@@ -528,6 +545,10 @@ export async function inferRequestIntent(
   if (hasAssistantReflectionHint(prompt)) {
     console.info("[Intent Source] text heuristic -> assistant-reflection");
     return "assistant-reflection";
+  }
+  if (hasSocialEmotionalHint(prompt)) {
+    console.info("[Intent Source] social-emotional selected via heuristic");
+    return "social-emotional";
   }
   if (/\b(generate|create|make)\b.*\b(image|photo|illustration|art)\b|\b(hero image|digital art)\b/i.test(normalizedPrompt)) {
     return "image-generation";
@@ -570,6 +591,7 @@ export async function inferRequestIntent(
     "news-summary",
     "code-review",
     "emotional-analysis",
+    "social-emotional",
     "rewrite",
     "technical-debugging",
     "architecture-review",
@@ -585,7 +607,11 @@ export async function inferRequestIntent(
   const classifiedIntent = classifiedOutput.intent;
 
   if (classifiedIntent && availableIntents.includes(classifiedIntent)) {
-    console.info(`[Intent Source] text LLM classifier -> ${classifiedIntent}`);
+    if (classifiedIntent === "social-emotional") {
+      console.info("[Intent Source] social-emotional selected via control-plane classifier");
+    } else {
+      console.info(`[Intent Source] text LLM classifier -> ${classifiedIntent}`);
+    }
     return classifiedIntent;
   }
 
@@ -595,6 +621,10 @@ export async function inferRequestIntent(
   }
   if (hasVideoInput) {
     return "vision-analysis";
+  }
+  if (hasSocialEmotionalHint(prompt)) {
+    console.info("[Intent Source] social-emotional selected via fallback heuristic");
+    return "social-emotional";
   }
 
   console.info("[Intent Source] fallback path -> general-text");
@@ -612,6 +642,10 @@ export async function inferRequestClassification(
 
   if (hasDirectWebSearchHint(prompt)) return { intent: "web-search", preferredProvider: null };
   if (hasAssistantReflectionHint(prompt)) return { intent: "assistant-reflection", preferredProvider: null };
+  if (hasSocialEmotionalHint(prompt)) {
+    console.info("[Intent Source] social-emotional selected via heuristic");
+    return { intent: "social-emotional", preferredProvider: null };
+  }
   if (/\b(generate|create|make)\b.*\b(image|photo|illustration|art)\b|\b(hero image|digital art)\b/i.test(normalizedPrompt)) return { intent: "image-generation", preferredProvider: null };
   if (/\b(rewrite|rephrase|edit|polish|improve tone)\b/i.test(normalizedPrompt)) return { intent: "rewrite", preferredProvider: null };
   if (/\b(sentiment|emotion|emotional|tone analysis|feelings)\b/i.test(normalizedPrompt)) return { intent: "emotional-analysis", preferredProvider: null };
@@ -631,6 +665,7 @@ export async function inferRequestClassification(
     "news-summary",
     "code-review",
     "emotional-analysis",
+    "social-emotional",
     "rewrite",
     "technical-debugging",
     "architecture-review",
@@ -644,11 +679,18 @@ export async function inferRequestClassification(
 
   const classifiedOutput = await classifyIntentWithLLM(prompt, availableIntents, options);
   if (classifiedOutput.intent && availableIntents.includes(classifiedOutput.intent)) {
+    if (classifiedOutput.intent === "social-emotional") {
+      console.info("[Intent Source] social-emotional selected via control-plane classifier");
+    }
     return { intent: classifiedOutput.intent, preferredProvider: classifiedOutput.preferred_provider };
   }
 
   if (hasImages) return { intent: "vision-analysis", preferredProvider: classifiedOutput.preferred_provider };
   if (hasVideoInput) return { intent: "vision-analysis", preferredProvider: classifiedOutput.preferred_provider };
+  if (hasSocialEmotionalHint(prompt)) {
+    console.info("[Intent Source] social-emotional selected via fallback heuristic");
+    return { intent: "social-emotional", preferredProvider: classifiedOutput.preferred_provider };
+  }
   return { intent: "general-text", preferredProvider: classifiedOutput.preferred_provider };
 }
 
@@ -680,6 +722,7 @@ function modelSupportsIntent(
     case "general-text":
     case "rewrite":
     case "emotional-analysis":
+    case "social-emotional":
     case "code-review":
     case "technical-debugging":
     case "architecture-review":
@@ -806,6 +849,7 @@ function rankModelForIntent(providerName: ProviderName, modelId: string, intent:
       return 1;
     case "text":
     case "general-text":
+    case "social-emotional":
     case "rewrite":
     case "emotional-analysis":
     case "news-summary":
@@ -850,6 +894,29 @@ function rankModelForIntent(providerName: ProviderName, modelId: string, intent:
       }
       if (providerName === "google" && intent === "general-text") {
         score += 4;
+      }
+      if (intent === "social-emotional") {
+        if (providerName === "anthropic") {
+          score += 12;
+        } else if (providerName === "grok") {
+          score += 10;
+        } else if (providerName === "openai") {
+          score += 6;
+        } else if (providerName === "google") {
+          score -= 6;
+        }
+        if (normalizedModel.includes("flash") || normalizedModel.includes("lite") || normalizedModel.includes("mini")) {
+          score -= 7;
+        }
+        if (
+          normalizedModel.includes("sonnet") ||
+          normalizedModel.includes("opus") ||
+          normalizedModel.includes("grok-4") ||
+          normalizedModel.includes("gpt-5") ||
+          normalizedModel.includes("unified")
+        ) {
+          score += 4;
+        }
       }
 
       return score;
@@ -911,6 +978,9 @@ function detectSpecializationTags(providerName: ProviderName, modelId: string): 
   if (/architect|reason|opus|sonnet|pro/.test(normalizedModel)) tags.push("architecture");
   if (/claude|sonnet|haiku/.test(normalizedModel)) tags.push("writing");
   if (/claude|sonnet|haiku|gpt-5|opus/.test(normalizedModel)) tags.push("emotional-nuance");
+  if (/claude|sonnet|opus|grok-4|gpt-5|unified/.test(normalizedModel)) tags.push("conversational");
+  if (/claude|sonnet|opus|grok-4|gpt-5/.test(normalizedModel)) tags.push("interpersonal");
+  if (/claude|sonnet|opus|gpt-5/.test(normalizedModel)) tags.push("empathy");
   if (isVisionAnalysisModel(providerName, modelId)) tags.push("multimodal");
   if (supportsWebSearch(providerName, modelId)) tags.push("research");
   if (/opus|o3|codex|sonnet|pro|gpt-5/.test(normalizedModel)) tags.push("reflection");
@@ -955,7 +1025,14 @@ export function buildCandidateMetadata(
 export function buildRoutingPreferenceProfile(): RoutingPreferenceProfile {
   return {
     prioritize_best_model_for_task: true,
-    quality_over_cost_for: ["assistant-reflection", "architecture-review", "code-review", "technical-debugging", "multimodal-reasoning"],
+    quality_over_cost_for: [
+      "assistant-reflection",
+      "architecture-review",
+      "code-review",
+      "technical-debugging",
+      "multimodal-reasoning",
+      "social-emotional"
+    ],
     prefer_efficient_for: ["general-text", "text", "rewrite", "news-summary", "web-search"],
     use_specialization_when_relevant: true,
     avoid_cost_or_speed_dominance_for_depth_tasks: true,
@@ -1059,6 +1136,7 @@ export function scoreModelCandidateWithBreakdown(
     }
     case "text":
     case "general-text":
+    case "social-emotional":
     case "rewrite":
     case "emotional-analysis":
     case "news-summary":
@@ -1097,6 +1175,29 @@ export function scoreModelCandidateWithBreakdown(
       }
       if (providerName === "google" && intent === "general-text") {
         adjustments.push({ label: "gemini_general_reasoning_bonus", delta: 4 });
+      }
+      if (intent === "social-emotional") {
+        if (providerName === "anthropic") {
+          adjustments.push({ label: "social_emotional_provider_bonus_anthropic", delta: 12 });
+        } else if (providerName === "grok") {
+          adjustments.push({ label: "social_emotional_provider_bonus_grok", delta: 10 });
+        } else if (providerName === "openai") {
+          adjustments.push({ label: "social_emotional_provider_bonus_openai", delta: 6 });
+        } else if (providerName === "google") {
+          adjustments.push({ label: "social_emotional_provider_penalty_google", delta: -6 });
+        }
+        if (normalizedModel.includes("flash") || normalizedModel.includes("lite") || normalizedModel.includes("mini")) {
+          adjustments.push({ label: "social_emotional_small_fast_penalty", delta: -7 });
+        }
+        if (
+          normalizedModel.includes("sonnet") ||
+          normalizedModel.includes("opus") ||
+          normalizedModel.includes("grok-4") ||
+          normalizedModel.includes("gpt-5") ||
+          normalizedModel.includes("unified")
+        ) {
+          adjustments.push({ label: "social_emotional_nuance_model_bonus", delta: 4 });
+        }
       }
       if (intent === "web-search" && supportsWebSearch(providerName, modelId)) {
         adjustments.push({ label: "web_search_hard_requirement_met", delta: 3 });

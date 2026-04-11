@@ -139,6 +139,7 @@ function mapRouterIntentToPolicyIntent(intent: RequestIntent): PolicyIntentLabel
     case "rewrite":
       return "creative_brainstorm";
     case "emotional-analysis":
+    case "social-emotional":
       return "personal_relational";
     case "text":
     case "general-text":
