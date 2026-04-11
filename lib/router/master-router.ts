@@ -30,6 +30,11 @@ export type RoutingDecision = {
   routerModel: string;
   explainer?: SelectionExplainer;
 };
+export type ResolvedRoutingIntent = {
+  intent: RequestIntent;
+  preferredProvider: LlmProvider["name"] | null;
+  intentSource: "upstream" | "router-fallback";
+};
 export type SelectionExplainer = {
   selected_model?: string;
   selected_provider?: string;
@@ -48,7 +53,11 @@ export type SelectionExplainer = {
 type RoutingTrace = {
   request_id: string;
   timestamp: string;
-  intent: { value: Awaited<ReturnType<typeof inferRequestIntent>>; confidence: number | null };
+  intent: {
+    value: Awaited<ReturnType<typeof inferRequestIntent>>;
+    confidence: number | null;
+    source: ResolvedRoutingIntent["intentSource"];
+  };
   prompt_features: {
     prompt_length: number;
     has_images: boolean;
@@ -158,7 +167,7 @@ function buildControlPlaneDecisionProviders(
 function topRoutingCandidates(
   availableByProvider: Array<{ provider: LlmProvider; models: string[] }>,
   intent: Awaited<ReturnType<typeof inferRequestIntent>>,
-  preferredProvider: "openai" | "google" | "grok" | "anthropic" | null,
+  preferredProvider: LlmProvider["name"] | null,
   registryLookup?: Map<string, RegistryRoutingModel>
 ): string {
   return scoreModelsForIntent(availableByProvider, intent, { registryLookup, preferredProvider })
@@ -169,14 +178,15 @@ function topRoutingCandidates(
 
 function logRoutingDecision(
   intent: Awaited<ReturnType<typeof inferRequestIntent>>,
+  intentSource: ResolvedRoutingIntent["intentSource"],
   availableByProvider: Array<{ provider: LlmProvider; models: string[] }>,
-  preferredProvider: "openai" | "google" | "grok" | "anthropic" | null,
+  preferredProvider: LlmProvider["name"] | null,
   selectedProviderName: string,
   selectedModelId: string,
   registryLookup?: Map<string, RegistryRoutingModel>
 ): void {
   const candidates = topRoutingCandidates(availableByProvider, intent, preferredProvider, registryLookup) || "none";
-  console.info(`[Router] intent=${intent} top_candidates=${candidates} selected=${selectedProviderName}:${selectedModelId}`);
+  console.info(`[Router] intent=${intent} intent_source=${intentSource} top_candidates=${candidates} selected=${selectedProviderName}:${selectedModelId}`);
 }
 
 function logFullRanking(
@@ -227,6 +237,7 @@ function buildRoutingTrace({
   requestId,
   timestamp,
   intent,
+  intentSource,
   prompt,
   preferredProvider,
   hasImages,
@@ -245,6 +256,7 @@ function buildRoutingTrace({
   requestId: string;
   timestamp: string;
   intent: Awaited<ReturnType<typeof inferRequestIntent>>;
+  intentSource: ResolvedRoutingIntent["intentSource"];
   prompt: string;
   preferredProvider: "openai" | "google" | "grok" | "anthropic" | null;
   hasImages: boolean;
@@ -271,7 +283,8 @@ function buildRoutingTrace({
     timestamp,
     intent: {
       value: intent,
-      confidence: null
+      confidence: null,
+      source: intentSource
     },
     prompt_features: {
       prompt_length: prompt.length,
@@ -523,6 +536,7 @@ export async function chooseProvider(
     hasVideoInput?: boolean;
     routingTraceEnabled?: boolean;
     routingRequestId?: string;
+    resolvedIntent?: ResolvedRoutingIntent;
     requestIntent?: RequestIntent;
     modelRegistrySnapshot?: Map<LlmProvider["name"], RegistryRoutingModel[]>;
   }
@@ -573,7 +587,11 @@ export async function chooseProvider(
 
   const controlPlaneDecisionProviders = buildControlPlaneDecisionProviders(modelEntries, registryLookup);
 
-  const requestClassification = options?.requestIntent
+  const upstreamResolvedIntent = options?.resolvedIntent ?? (options?.requestIntent
+    ? { intent: options.requestIntent, preferredProvider: null, intentSource: "upstream" as const }
+    : null);
+
+  const requestClassification = upstreamResolvedIntent
     ? null
     : await inferRequestClassification(
         prompt,
@@ -586,11 +604,17 @@ export async function chooseProvider(
           registryLookup
         }
       );
-  const intent = options?.requestIntent ?? requestClassification?.intent ?? "general-text";
+  const resolvedIntent: ResolvedRoutingIntent = upstreamResolvedIntent ?? {
+    intent: requestClassification?.intent ?? "general-text",
+    preferredProvider: requestClassification?.preferredProvider ?? null,
+    intentSource: "router-fallback"
+  };
   console.info(
-    `[Route Intent] caller_request_intent=${options?.requestIntent ?? "none"} classifier_intent=${requestClassification?.intent ?? "skipped"} effective_intent=${intent}`
+    `[Route Intent] caller_request_intent=${options?.requestIntent ?? options?.resolvedIntent?.intent ?? "none"} classifier_intent=${requestClassification?.intent ?? "skipped"} effective_intent=${resolvedIntent.intent} intent_source=${resolvedIntent.intentSource}`
   );
-  const preferredProvider = requestClassification?.preferredProvider ?? null;
+  console.info(`[Route Intent Resolved] ${JSON.stringify(resolvedIntent)}`);
+  const intent = resolvedIntent.intent;
+  const preferredProvider = resolvedIntent.preferredProvider;
 
   let availableByProvider = modelEntries.map(({ provider, models }) => ({
     provider,
@@ -841,7 +865,7 @@ export async function chooseProvider(
   }
 
   logFullRanking(traceRequestId, intent, rankedCandidates);
-  logRoutingDecision(intent, availableByProvider, preferredProvider, selected.provider.name, selected.modelId, registryLookup);
+  logRoutingDecision(intent, resolvedIntent.intentSource, availableByProvider, preferredProvider, selected.provider.name, selected.modelId, registryLookup);
   console.info(
     `[Routing Final] requestId=${traceRequestId} source=${llmPrimaryUsed ? "llm-primary" : "deterministic-fallback"} fallback_reason=${fallbackReason ?? "none"}`
   );
@@ -852,6 +876,7 @@ export async function chooseProvider(
         requestId: traceRequestId,
         timestamp: traceTimestamp,
         intent,
+        intentSource: resolvedIntent.intentSource,
         prompt,
         preferredProvider,
         hasImages: Boolean(options?.hasImages),

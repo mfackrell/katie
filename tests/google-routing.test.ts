@@ -11,7 +11,7 @@ import {
   scoreModelCandidateWithBreakdown,
   validateRoutingDecision
 } from "../lib/router/model-intent";
-import { chooseProvider } from "../lib/router/master-router";
+import { chooseProvider, type ResolvedRoutingIntent } from "../lib/router/master-router";
 import { isAcknowledgment, parseIntentSessionState } from "../lib/router/intent-context";
 import { isBlockedRoutingModel } from "../lib/router/routing-model-filters";
 import {
@@ -616,7 +616,10 @@ test("router uses upstream requestIntent as authoritative and skips local classi
       "Please debug this failing test suite.",
       "",
       [provider("openai", ["gpt-5.2-mini"]).provider, provider("google", ["gemini-3.1-pro"]).provider],
-      { requestIntent: "rewrite", routingRequestId: "test-upstream-intent-authoritative" }
+      {
+        resolvedIntent: { intent: "rewrite", preferredProvider: "anthropic", intentSource: "upstream" },
+        routingRequestId: "test-upstream-intent-authoritative"
+      }
     );
   } finally {
     console.info = originalInfo;
@@ -629,6 +632,7 @@ test("router uses upstream requestIntent as authoritative and skips local classi
   assert.match(routeIntentLog ?? "", /caller_request_intent=rewrite/);
   assert.match(routeIntentLog ?? "", /classifier_intent=skipped/);
   assert.match(routeIntentLog ?? "", /effective_intent=rewrite/);
+  assert.match(routeIntentLog ?? "", /intent_source=upstream/);
   assert.match(routePolicyLog ?? "", /intent=rewrite/);
 });
 
@@ -681,6 +685,47 @@ test("router falls back to local classification only when upstream requestIntent
   assert.match(routeIntentLog ?? "", /caller_request_intent=none/);
   assert.doesNotMatch(routeIntentLog ?? "", /classifier_intent=skipped/);
   assert.match(routeIntentLog ?? "", /effective_intent=technical-debugging/);
+  assert.match(routeIntentLog ?? "", /intent_source=router-fallback/);
+});
+
+test("resolved intent contract shape is identical for upstream and router-fallback paths", async () => {
+  delete process.env.OPENAI_API_KEY;
+  const capturedLogs: string[] = [];
+  const originalInfo = console.info;
+  console.info = (...args: unknown[]) => {
+    capturedLogs.push(args.map((arg) => String(arg)).join(" "));
+  };
+
+  try {
+    await chooseProvider(
+      "Please rewrite this paragraph.",
+      "",
+      [provider("openai", ["gpt-5.2-mini"]).provider],
+      {
+        resolvedIntent: { intent: "rewrite", preferredProvider: null, intentSource: "upstream" },
+        routingRequestId: "test-resolved-intent-upstream-shape"
+      }
+    );
+    await chooseProvider(
+      "Please debug this failing test suite.",
+      "",
+      [provider("openai", ["gpt-5.2-mini"]).provider],
+      { routingRequestId: "test-resolved-intent-fallback-shape" }
+    );
+  } finally {
+    console.info = originalInfo;
+  }
+
+  const resolvedLogs = capturedLogs
+    .filter((line) => line.startsWith("[Route Intent Resolved] "))
+    .map((line) => JSON.parse(line.replace("[Route Intent Resolved] ", "")) as ResolvedRoutingIntent);
+
+  const upstream = resolvedLogs.find((entry) => entry.intentSource === "upstream");
+  const fallback = resolvedLogs.find((entry) => entry.intentSource === "router-fallback");
+  assert.ok(upstream);
+  assert.ok(fallback);
+  assert.deepEqual(Object.keys(upstream!).sort(), ["intent", "intentSource", "preferredProvider"]);
+  assert.deepEqual(Object.keys(fallback!).sort(), ["intent", "intentSource", "preferredProvider"]);
 });
 
 test("llm router logs include preferences and candidate score breakdown payload", async () => {
