@@ -341,6 +341,28 @@ test("technical debugging still prefers stronger technical models", async () => 
   assert.equal(validated.changed, true);
 });
 
+test("code-review routing prefers technical models over lightweight text models", async () => {
+  const validated = validateRoutingDecision(
+    { providerName: "openai", modelId: "non-existent-model" },
+    [provider("openai", ["gpt-5.2-mini", "gpt-5.3-codex"])],
+    "code-review"
+  );
+
+  assert.equal(validated.modelId, "gpt-5.3-codex");
+  assert.equal(validated.changed, true);
+});
+
+test("code-review scoring uses technical adjustments and avoids general-text penalties", async () => {
+  const codex = scoreModelCandidateWithBreakdown("openai", "gpt-5.3-codex", "code-review");
+  const mini = scoreModelCandidateWithBreakdown("openai", "gpt-5.2-mini", "code-review");
+
+  assert.equal(codex.baseScore, 10);
+  assert.ok(codex.adjustments.some((adjustment) => adjustment.label === "coding_reasoning_bonus"));
+  assert.ok(codex.adjustments.some((adjustment) => adjustment.label === "latest_gpt_bonus"));
+  assert.ok(codex.adjustments.every((adjustment) => adjustment.label !== "deep_reasoning_penalty"));
+  assert.ok(codex.finalScore > mini.finalScore);
+});
+
 test("technical deterministic bonuses are lightweight and no longer overwhelming", async () => {
   const o3 = scoreModelCandidateWithBreakdown("openai", "o3-pro", "technical-debugging");
   const sonnet = scoreModelCandidateWithBreakdown("anthropic", "claude-4.5-sonnet", "technical-debugging");
