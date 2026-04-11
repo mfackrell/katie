@@ -89,8 +89,6 @@ type RepoSourceClassifierDecision = {
   confidence: number | null;
 };
 
-const REPO_INJECTION_TRIGGER_REGEX = /\b(review (?:the )?(?:repo|file)|check code|see the repo|debug (?:this )?code|inspect (?:the )?code)\b/i;
-
 function buildGenerationParams({
   name,
   persona,
@@ -379,10 +377,25 @@ async function classifyRepoSourceAttachmentNeed({
       "Use this schema exactly:",
       '{"attach_repo_source": boolean, "reason": string, "confidence": number | null}',
       "",
-      "Guidance:",
-      "- attach_repo_source=true for code review/debugging/inspection requests that need concrete file contents.",
-      "- attach_repo_source=false for casual chat, high-level questions, or metadata-only repo questions.",
-      "- If no active repo is attached, attach_repo_source must be false.",
+      "Your job is to infer whether real source code or file contents from the active repository would materially improve the answer.",
+      "",
+      "Set attach_repo_source=true whenever the user’s request would benefit from seeing actual repository files, code, configuration, implementation details, project structure, or concrete source context. This includes but is not limited to:",
+      "- code review",
+      "- debugging",
+      "- architecture analysis",
+      "- implementation questions",
+      "- questions about whether the assistant can see, access, read, inspect, verify, or reason about the codebase",
+      "- requests that reference behavior, capabilities, integrations, file handling, prompts, routing, tools, or system logic that may depend on actual code",
+      "- ambiguous technical questions where source context would likely improve accuracy",
+      "",
+      "Set attach_repo_source=false only when the request is clearly answerable without repository source contents, such as:",
+      "- casual conversation",
+      "- purely conceptual discussion unrelated to this repo",
+      "- questions answered fully by high-level metadata alone",
+      "",
+      "If an active repo is attached and you are uncertain, prefer true.",
+      "",
+      "If no active repo is attached, attach_repo_source must be false.",
       "",
       `User message: ${JSON.stringify(message)}`,
       `Resolved intent: ${requestIntent ?? "unknown"}`,
@@ -684,12 +697,7 @@ export async function POST(request: NextRequest) {
     const shouldAttachSourceContext =
       activeRepoContext !== null &&
       loadedRepoContext !== null &&
-      (
-        repoSourceClassifierDecision.attach_repo_source ||
-        resolvedRequestIntent === "architecture-review" ||
-        resolvedRequestIntent === "code-review" ||
-        REPO_INJECTION_TRIGGER_REGEX.test(message)
-      );
+      repoSourceClassifierDecision.attach_repo_source;
 
     console.log("[Chat API] Repo source classifier result", {
       requestId,
