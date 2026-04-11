@@ -49,6 +49,9 @@
     "tests/long-term-editor.test.ts",
     "tests/model-registry.test.ts",
     "lib/webhooks-fastify-hmac.ts",
-    "tests/fastify-webhook-hmac.test.ts"
+    "tests/fastify-webhook-hmac.test.ts",
+    "lib/uploads/file-type-helpers.ts",
+    "lib/uploads/parse-text-files.ts",
+    "tests/uploads/parse-text-files.test.ts"
   ]
 }

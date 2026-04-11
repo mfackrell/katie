@@ -13,7 +13,7 @@
     "start:runtime": "node --disable-warning=DEP0169 ./node_modules/next/dist/bin/next start",
     "lint": "next lint",
     "typecheck": "tsc --noEmit",
-    "test": "node --test tests/url-api.test.mjs && rm -rf .test-dist && (tsc -p tsconfig.tests.json || true) && mkdir -p .test-dist/node_modules && ln -sfn .. .test-dist/node_modules/@ && test -f .test-dist/tests/google-routing.test.js && node --test .test-dist/tests/google-routing.test.js .test-dist/tests/chat-video-routing.test.js .test-dist/tests/policy-engine.test.js .test-dist/tests/persistence-store.test.js .test-dist/tests/chat-panel-guard.test.js .test-dist/tests/inflight-guards.test.js .test-dist/tests/starter-chat-idempotency.test.js .test-dist/tests/reasoning-stream.test.js .test-dist/tests/reasoning-ui-state.test.js .test-dist/tests/video-ingestion.test.js .test-dist/tests/long-term-editor.test.js .test-dist/tests/model-registry.test.js",
+    "test": "node --test tests/url-api.test.mjs && rm -rf .test-dist && (tsc -p tsconfig.tests.json || true) && mkdir -p .test-dist/node_modules && ln -sfn .. .test-dist/node_modules/@ && test -f .test-dist/tests/google-routing.test.js && node --test .test-dist/tests/google-routing.test.js .test-dist/tests/chat-video-routing.test.js .test-dist/tests/policy-engine.test.js .test-dist/tests/persistence-store.test.js .test-dist/tests/chat-panel-guard.test.js .test-dist/tests/inflight-guards.test.js .test-dist/tests/starter-chat-idempotency.test.js .test-dist/tests/reasoning-stream.test.js .test-dist/tests/reasoning-ui-state.test.js .test-dist/tests/video-ingestion.test.js .test-dist/tests/long-term-editor.test.js .test-dist/tests/model-registry.test.js .test-dist/tests/uploads/parse-text-files.test.js",
     "check:url": "node scripts/check-no-legacy-url.mjs",
     "db:migrate": "node scripts/run-migrations.mjs",
     "smoke": "node scripts/smoke-runtime.mjs",
@@ -36,7 +36,10 @@
     "prom-client": "^15.1.3",
     "react": "18.2.0",
     "react-dom": "18.2.0",
-    "zod": "^3.23.8"
+    "zod": "^3.23.8",
+    "mammoth": "^1.6.0",
+    "xlsx": "^0.18.5",
+    "pdfjs-dist": "^4.6.82"
   },
   "devDependencies": {
     "@types/node": "^22.10.1",
