@@ -572,6 +572,9 @@ export async function chooseProvider(
   }));
 
   const controlPlaneDecisionProviders = buildControlPlaneDecisionProviders(modelEntries, registryLookup);
+  console.info(
+    `[ControlPlane] decision_models=${controlPlaneDecisionProviders.map((entry) => `${entry.provider.name}:${entry.modelId}`).join(",") || "none"}`
+  );
 
   const requestClassification = options?.requestIntent
     ? null
