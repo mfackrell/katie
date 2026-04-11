@@ -461,15 +461,17 @@ export async function chooseProvider(
   let llmCandidatesUsed: Array<ReturnType<typeof buildCandidateMetadata>> = [];
   const preferenceProfile = buildRoutingPreferenceProfile();
 
-  const requestClassification = await inferRequestClassification(prompt, {
-    hasImages: Boolean(options?.hasImages),
-    hasVideoInput: Boolean(options?.hasVideoInput)
-  });
-  const intent = options?.requestIntent ?? requestClassification.intent;
+  const requestClassification = options?.requestIntent
+    ? null
+    : await inferRequestClassification(prompt, {
+        hasImages: Boolean(options?.hasImages),
+        hasVideoInput: Boolean(options?.hasVideoInput)
+      });
+  const intent = options?.requestIntent ?? requestClassification?.intent ?? "general-text";
   console.info(
-    `[Route Intent] caller_request_intent=${options?.requestIntent ?? "none"} classifier_intent=${requestClassification.intent} effective_intent=${intent}`
+    `[Route Intent] caller_request_intent=${options?.requestIntent ?? "none"} classifier_intent=${requestClassification?.intent ?? "skipped"} effective_intent=${intent}`
   );
-  const preferredProvider = requestClassification.preferredProvider;
+  const preferredProvider = requestClassification?.preferredProvider ?? null;
   const traceEnabled = isRoutingTraceEnabled(options?.routingTraceEnabled);
   const traceRequestId = options?.routingRequestId ?? crypto.randomUUID();
   const traceTimestamp = new Date().toISOString();
