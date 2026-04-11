@@ -12,9 +12,22 @@ type CachedFile = {
   fetchedAt: number;
 };
 
+type Chunk = {
+  path: string;
+  content: string;
+  size: number;
+  lineStart: number;
+  lineEnd: number;
+  score: number;
+  explicitPathHit: boolean;
+};
+
 const CACHE_TTL_MS = 5 * 60 * 1000;
 const MAX_INJECTED_CHARS = 20_000;
 const MAX_CALLS_PER_MINUTE = 10;
+const CHUNK_SIZE_LINES = 150;
+const CHUNK_OVERLAP_LINES = 25;
+const MAX_CHUNKS_PER_FILE = 4;
 
 const cache = new Map<string, CachedFile>();
 const repoBindings = new Map<string, RepoBinding>();
@@ -35,10 +48,6 @@ function redactSecrets(content: string): string {
     .replace(/(password\s*[:=]\s*["']?)[^\s"'`]+/gi, "$1[REDACTED]")
     .replace(/(token\s*[:=]\s*["']?)[^\s"'`]+/gi, "$1[REDACTED]")
     .replace(/(secret\s*[:=]\s*["']?)[^\s"'`]+/gi, "$1[REDACTED]");
-}
-
-function approxLineCount(content: string): number {
-  return content.length === 0 ? 0 : content.split("\n").length;
 }
 
 function parseHints(userMessage: string): string[] {
@@ -64,6 +73,26 @@ function parseHints(userMessage: string): string[] {
   return Array.from(hints);
 }
 
+function parseFunctionLikeHints(userMessage: string): string[] {
+  const names = new Set<string>();
+  const camelCaseMatches = userMessage.match(/\b[a-z][a-zA-Z0-9]*\b/g) ?? [];
+
+  for (const token of camelCaseMatches) {
+    if (/[A-Z]/.test(token) && token.length >= 4) {
+      names.add(token.toLowerCase());
+    }
+  }
+
+  for (const match of userMessage.match(/\b(?:function|class|method)\s+([A-Za-z_][A-Za-z0-9_]*)/gi) ?? []) {
+    const [, name = ""] = /\b(?:function|class|method)\s+([A-Za-z_][A-Za-z0-9_]*)/i.exec(match) ?? [];
+    if (name) {
+      names.add(name.toLowerCase());
+    }
+  }
+
+  return Array.from(names);
+}
+
 function keywordScore(userMessage: string, path: string, preview: string): number {
   const keywords = Array.from(
     new Set(
@@ -85,6 +114,78 @@ function keywordScore(userMessage: string, path: string, preview: string): numbe
     const previewHit = normalizedPreview.includes(keyword) ? 1 : 0;
     return score + pathHit + previewHit;
   }, 0);
+}
+
+function chunkContentByLines(path: string, content: string, size: number): Omit<Chunk, "score" | "explicitPathHit">[] {
+  const lines = content.split("\n");
+
+  if (lines.length <= CHUNK_SIZE_LINES) {
+    return [
+      {
+        path,
+        content,
+        size,
+        lineStart: 1,
+        lineEnd: lines.length,
+      },
+    ];
+  }
+
+  const chunks: Omit<Chunk, "score" | "explicitPathHit">[] = [];
+  const step = Math.max(1, CHUNK_SIZE_LINES - CHUNK_OVERLAP_LINES);
+
+  for (let start = 0; start < lines.length; start += step) {
+    const end = Math.min(lines.length, start + CHUNK_SIZE_LINES);
+    const chunkLines = lines.slice(start, end);
+
+    chunks.push({
+      path,
+      content: chunkLines.join("\n"),
+      size,
+      lineStart: start + 1,
+      lineEnd: end,
+    });
+
+    if (end >= lines.length) {
+      break;
+    }
+  }
+
+  return chunks;
+}
+
+function isExplicitPathHit(path: string, explicitHints: string[]): boolean {
+  const normalizedPath = path.toLowerCase();
+  return explicitHints.some((hint) => {
+    const normalizedHint = hint.toLowerCase();
+    return normalizedPath === normalizedHint || normalizedPath.endsWith(normalizedHint) || normalizedPath.includes(normalizedHint);
+  });
+}
+
+function scoreChunk({
+  chunk,
+  userMessage,
+  explicitPathHints,
+  functionHints,
+}: {
+  chunk: Omit<Chunk, "score" | "explicitPathHit">;
+  userMessage: string;
+  explicitPathHints: string[];
+  functionHints: string[];
+}): Chunk {
+  const explicitPathHit = isExplicitPathHit(chunk.path, explicitPathHints);
+  const baseKeywordScore = keywordScore(userMessage, chunk.path, chunk.content);
+  const normalizedContent = chunk.content.toLowerCase();
+  const functionBoost = functionHints.reduce((total, name) => (normalizedContent.includes(name) ? total + 8 : total), 0);
+  const routingTerms = ["route", "classifier", "router", "prompt", "injection", "repo"];
+  const routingBoost = routingTerms.reduce((total, term) => (normalizedContent.includes(term) ? total + 1 : total), 0);
+  const explicitBoost = explicitPathHit ? 100 : 0;
+
+  return {
+    ...chunk,
+    score: baseKeywordScore + functionBoost + routingBoost + explicitBoost,
+    explicitPathHit,
+  };
 }
 
 async function listTextPaths(binding: RepoBinding): Promise<string[]> {
@@ -165,39 +266,53 @@ export async function injectRelevantContents(userMessage: string, repoId: string
   }
 
   const hints = parseHints(userMessage);
+  const explicitPathHints = hints.filter((hint) => hint.includes("/") || /\.[a-z0-9]+$/i.test(hint));
+  const functionHints = parseFunctionLikeHints(userMessage);
   const allPaths = await listTextPaths(binding);
 
-  let candidates: string[] = [];
+  const explicitCandidates = allPaths.filter((path) => isExplicitPathHit(path, explicitPathHints));
+
+  let secondaryCandidates: string[] = [];
   if (hints.length) {
     const hintLower = hints.map((hint) => hint.toLowerCase());
-    candidates = allPaths.filter((path) => hintLower.some((hint) => path.toLowerCase().includes(hint))).slice(0, maxFiles * 3);
+    secondaryCandidates = allPaths.filter(
+      (path) => hintLower.some((hint) => path.toLowerCase().includes(hint)) && !explicitCandidates.includes(path)
+    );
   }
 
-  if (!candidates.length) {
+  if (!secondaryCandidates.length) {
     const defaults = ["lib/", "app/api/", "prompts/"];
-    candidates = allPaths.filter((path) => defaults.some((prefix) => path.startsWith(prefix))).slice(0, 3);
+    secondaryCandidates = allPaths.filter((path) => defaults.some((prefix) => path.startsWith(prefix)) && !explicitCandidates.includes(path));
   }
+
+  const maxFilesCap = Math.max(1, Math.min(maxFiles, 5));
+  const candidates = [...explicitCandidates, ...secondaryCandidates].slice(0, maxFilesCap * 4);
 
   if (candidates.length > 5) {
     console.warn("[Repo Injector] attempted more than 5 files", { repoId, attempted: candidates.length });
   }
 
-  const fetched: Array<{ path: string; size: number; content: string; score: number }> = [];
+  const chunks: Chunk[] = [];
   const issues: string[] = [];
 
   for (const path of candidates) {
-    if (fetched.length >= Math.max(1, Math.min(maxFiles, 5))) {
-      break;
-    }
-
     try {
       const startedAt = Date.now();
       const file = await getFileContent(repoId, binding, path);
-      const preview = file.content.slice(0, 500);
-      const score = keywordScore(userMessage, path, preview);
-      if (score > 0) {
-        fetched.push({ path, content: file.content, size: file.size, score });
-      }
+      const scoredChunks = chunkContentByLines(path, file.content, file.size)
+        .map((chunk) =>
+          scoreChunk({
+            chunk,
+            userMessage,
+            explicitPathHints,
+            functionHints,
+          })
+        )
+        .sort((a, b) => b.score - a.score)
+        .slice(0, MAX_CHUNKS_PER_FILE);
+
+      chunks.push(...scoredChunks);
+
       console.log("[Repo Injector] fetch_latency_ms", { repoId, path, latencyMs: Date.now() - startedAt });
     } catch (error) {
       console.error("[Repo Injector] failed to fetch path", {
@@ -209,16 +324,26 @@ export async function injectRelevantContents(userMessage: string, repoId: string
     }
   }
 
-  const selected = fetched.sort((a, b) => b.score - a.score).slice(0, Math.max(1, Math.min(maxFiles, 5)));
+  const selectedChunks = chunks
+    .sort((a, b) => {
+      if (a.explicitPathHit !== b.explicitPathHit) {
+        return a.explicitPathHit ? -1 : 1;
+      }
+
+      return b.score - a.score;
+    })
+    .slice(0, maxFilesCap * MAX_CHUNKS_PER_FILE);
+
   const header = `[REPO CONTEXT: ${binding.owner}/${binding.repo} - ${binding.defaultBranch} branch]\n`;
   let output = header;
   const truncated: string[] = [];
 
-  for (const file of selected) {
-    const block = `File: ${file.path} (Size: ${file.size} | Lines: ${approxLineCount(file.content)})\n\`\`\`\n${file.content}\n---\n\`\`\`\n`;
+  for (const chunk of selectedChunks) {
+    const lineRange = `Lines: ${chunk.lineStart}-${chunk.lineEnd}`;
+    const block = `File: ${chunk.path} (${lineRange} | Size: ${chunk.size})\n\`\`\`\n${chunk.content}\n---\n\`\`\`\n`;
 
     if ((output + block).length > MAX_INJECTED_CHARS) {
-      truncated.push(file.path);
+      truncated.push(`${chunk.path}:${chunk.lineStart}-${chunk.lineEnd}`);
       continue;
     }
 
@@ -230,10 +355,10 @@ export async function injectRelevantContents(userMessage: string, repoId: string
   }
 
   if (truncated.length) {
-    output += `${truncated.map((path) => `Truncated: ${path} omitted for brevity.`).join("\n")}\n`;
+    output += `${truncated.map((entry) => `Truncated: ${entry} omitted for brevity.`).join("\n")}\n`;
   }
 
-  if (selected.length === 0 && issues.length === 0) {
+  if (selectedChunks.length === 0 && issues.length === 0) {
     output += "[REPO ACCESS ISSUE: No relevant source files found. Paste manually?]\n";
   }
 

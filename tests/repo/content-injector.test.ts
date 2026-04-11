@@ -64,6 +64,29 @@ test("injector fetches relevant file from keyword/path hints and redacts secrets
   assert.match(injected, /API_KEY='\[REDACTED\]'/);
 });
 
+test("injector includes line-ranged chunks for explicit large file hints", async () => {
+  __resetContentInjectorForTests();
+  const longRouteFile = Array.from({ length: 500 }, (_, idx) => {
+    if (idx === 259) {
+      return "function injectRelevantContents() { return 'target'; }";
+    }
+    return `const line_${idx + 1} = ${idx + 1};`;
+  }).join("\n");
+
+  __setOctokitFactoryForTests(() =>
+    makeFakeOctokit({
+      "app/api/chat/route.ts": longRouteFile,
+      "lib/router/model-intent.ts": "export const classifier = true;",
+    }) as never,
+  );
+
+  registerRepoBinding("repo-chunks", "mfackrell/katie", "main");
+  const injected = await injectRelevantContents("please inspect app/api/chat/route.ts injectRelevantContents", "repo-chunks", 3);
+
+  assert.match(injected, /File: app\/api\/chat\/route.ts \(Lines: \d+-\d+ \| Size: /);
+  assert.match(injected, /injectRelevantContents/);
+});
+
 test("injector truncates output to 20k chars with truncation note", async () => {
   __resetContentInjectorForTests();
   __setOctokitFactoryForTests(() =>
