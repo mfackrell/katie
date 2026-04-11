@@ -68,6 +68,7 @@ export type RequestIntent =
   | "emotional-analysis"
   | "news-summary"
   | "web-search"
+  | "code-review"
   | "technical-debugging"
   | "architecture-review"
   | "code-generation"
@@ -181,6 +182,7 @@ const intentDescriptions: Record<RequestIntent, string> = {
   "emotional-analysis": "For analyzing sentiment, tone, feelings, or emotional nuance in text.",
   "news-summary": "For summarizing current events, headlines, or recent news.",
   "web-search": "For queries requiring up-to-date information, current events, or live data via a web search.",
+  "code-review": "For reviewing source files, checking repository code, and inspecting implementation details.",
   "technical-debugging": "For debugging, fixing, troubleshooting code, errors, exceptions, or system incidents.",
   "architecture-review":
     "For reviewing technical configurations, code, deployment manifests, system designs, or suggesting improvements for infrastructure.",
@@ -318,16 +320,23 @@ export function parseIntentClassifierResponse(raw: string, intents: RequestInten
   let preferredProvider: ProviderName | null = null;
 
   try {
-    const jsonPayload = extractJsonObject(raw);
-    if (!jsonPayload) {
-      console.error(`[Intent Classifier:${sourceLabel}] no JSON object found in classifier output`);
-      return { intent: null, preferred_provider: null };
+    let classifierOutput: Record<string, unknown> | null = null;
+    try {
+      classifierOutput = JSON.parse(raw.trim()) as Record<string, unknown>;
+    } catch {
+      const jsonPayload = extractJsonObject(raw);
+      if (!jsonPayload) {
+        console.error(`[Intent Classifier:${sourceLabel}] no JSON object found in classifier output`);
+        return { intent: null, preferred_provider: null };
+      }
+      classifierOutput = JSON.parse(jsonPayload) as Record<string, unknown>;
     }
 
-    const classifierOutput = JSON.parse(jsonPayload);
-    const { intent, preferred_provider } = classifierOutput;
-    classifiedIntent = (intent ?? "").trim().toLowerCase();
-    preferredProvider = isProviderName(preferred_provider ?? "") ? preferred_provider : null;
+    const intentValue = typeof classifierOutput.intent === "string" ? classifierOutput.intent : "";
+    const preferredProviderValue =
+      typeof classifierOutput.preferred_provider === "string" ? classifierOutput.preferred_provider : "";
+    classifiedIntent = intentValue.trim().toLowerCase();
+    preferredProvider = isProviderName(preferredProviderValue) ? preferredProviderValue : null;
   } catch (err) {
     console.error(`[Intent Classifier:${sourceLabel}] JSON parse error`, err);
     return { intent: null, preferred_provider: null };
@@ -366,6 +375,7 @@ async function classifyIntentWithLLM(prompt: string, intents: RequestIntent[]): 
   const examples = [
     { user: "Rewrite this paragraph in a friendly tone.", intent: "rewrite" },
     { user: "Summarise today’s NYT front page.", intent: "news-summary" },
+    { user: "Review lib/router/model-intent.ts and explain risks.", intent: "code-review" },
     { user: "Here is a Kubernetes deployment YAML. Spot the risks.", intent: "architecture-review" },
     { user: "What do you think about your last answer?", intent: "assistant-reflection" },
     { user: "Critique the assistant's previous response.", intent: "assistant-reflection" },
@@ -465,6 +475,7 @@ export async function inferRequestIntentFromMultimodalInput(
   intents: RequestIntent[] = [
     "web-search",
     "news-summary",
+    "code-review",
     "emotional-analysis",
     "rewrite",
     "technical-debugging",
@@ -584,6 +595,9 @@ export async function inferRequestIntent(
   if (/\b(debug|bug|fix|error|exception|traceback|failing)\b/i.test(normalizedPrompt)) {
     return "technical-debugging";
   }
+  if (/\b(review (?:the )?(?:repo|file|code)|check file|inspect code|see the repo)\b/i.test(normalizedPrompt)) {
+    return "code-review";
+  }
   if (/\b(architecture|system design|kubernetes|deployment|review this repo|repo review)\b/i.test(normalizedPrompt)) {
     return "architecture-review";
   }
@@ -605,6 +619,7 @@ export async function inferRequestIntent(
   const availableIntents: RequestIntent[] = [
     "web-search",
     "news-summary",
+    "code-review",
     "emotional-analysis",
     "rewrite",
     "technical-debugging",
@@ -652,6 +667,9 @@ export async function inferRequestClassification(
   if (/\b(sentiment|emotion|emotional|tone analysis|feelings)\b/i.test(normalizedPrompt)) return { intent: "emotional-analysis", preferredProvider: null };
   if (/\b(news|headlines|current events|what happened today|today in)\b/i.test(normalizedPrompt)) return { intent: "web-search", preferredProvider: null };
   if (/\b(debug|bug|fix|error|exception|traceback|failing)\b/i.test(normalizedPrompt)) return { intent: "technical-debugging", preferredProvider: null };
+  if (/\b(review (?:the )?(?:repo|file|code)|check file|inspect code|see the repo)\b/i.test(normalizedPrompt)) {
+    return { intent: "code-review", preferredProvider: null };
+  }
   if (/\b(architecture|system design|kubernetes|deployment|review this repo|repo review)\b/i.test(normalizedPrompt)) return { intent: "architecture-review", preferredProvider: null };
   if (/\b(write code|implement|patch|refactor|create function|build api)\b/i.test(normalizedPrompt)) return { intent: "code-generation", preferredProvider: null };
   if (isLikelySafetySensitiveVisionPrompt(prompt, hasImages)) return { intent: "safety-sensitive-vision", preferredProvider: null };
@@ -661,6 +679,7 @@ export async function inferRequestClassification(
   const availableIntents: RequestIntent[] = [
     "web-search",
     "news-summary",
+    "code-review",
     "emotional-analysis",
     "rewrite",
     "technical-debugging",
@@ -711,6 +730,8 @@ function modelSupportsIntent(
     case "general-text":
     case "rewrite":
     case "emotional-analysis":
+    case "code-review":
+    case "code-review":
     case "technical-debugging":
     case "architecture-review":
     case "code-generation":
@@ -838,6 +859,7 @@ function rankModelForIntent(providerName: ProviderName, modelId: string, intent:
     case "general-text":
     case "rewrite":
     case "emotional-analysis":
+    case "code-review":
     case "news-summary":
     case "web-search":
       if (!modelSupportsIntent(providerName, modelId, intent)) {
@@ -984,7 +1006,7 @@ export function buildCandidateMetadata(
 export function buildRoutingPreferenceProfile(): RoutingPreferenceProfile {
   return {
     prioritize_best_model_for_task: true,
-    quality_over_cost_for: ["assistant-reflection", "architecture-review", "technical-debugging", "multimodal-reasoning"],
+    quality_over_cost_for: ["assistant-reflection", "architecture-review", "code-review", "technical-debugging", "multimodal-reasoning"],
     prefer_efficient_for: ["general-text", "text", "rewrite", "news-summary", "web-search"],
     use_specialization_when_relevant: true,
     avoid_cost_or_speed_dominance_for_depth_tasks: true,
@@ -1090,6 +1112,7 @@ export function scoreModelCandidateWithBreakdown(
     case "general-text":
     case "rewrite":
     case "emotional-analysis":
+    case "code-review":
     case "news-summary":
     case "web-search": {
       if (!modelSupportsIntent(providerName, modelId, intent, options?.registryLookup)) {
@@ -1133,6 +1156,7 @@ export function scoreModelCandidateWithBreakdown(
       const finalScore = baseScore + adjustments.reduce((total, current) => total + current.delta, 0);
       return finalize(baseScore, finalScore, null);
     }
+    case "code-review":
     case "technical-debugging":
     case "architecture-review":
     case "code-generation": {
@@ -1191,7 +1215,7 @@ export function validateRoutingDecision(
   intent: RequestIntent,
   options?: { registryLookup?: RegistryLookup }
 ): { provider: LlmProvider; modelId: string; reasoning: string; changed: boolean } {
-  if (["technical-debugging", "code-generation", "architecture-review", "assistant-reflection"].includes(intent)) {
+  if (["technical-debugging", "code-generation", "architecture-review", "code-review", "assistant-reflection"].includes(intent)) {
     availableByProvider = availableByProvider.map(({ provider, models }) => ({
       provider,
       models: models.filter((modelId) => !isImageGenerationModel(provider.name, modelId))

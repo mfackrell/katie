@@ -69,6 +69,8 @@ function mapRouterIntentToPolicyIntent(intent: RequestIntent): PolicyIntentLabel
       return "conversation_reflection";
     case "architecture-review":
       return "architecture_design";
+    case "code-review":
+      return "debug_diagnosis";
     case "technical-debugging":
       return "debug_diagnosis";
     case "code-generation":
