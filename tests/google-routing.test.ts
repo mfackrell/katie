@@ -467,23 +467,24 @@ test("router control-plane classification works without openai when another elig
 
 test("router reranker fails over across providers before heuristic fallback", async () => {
   const attempts: string[] = [];
-  const openaiFail = provider("openai", ["gpt-5.2-mini"], async () => {
-    attempts.push("openai");
+  const googleFail = provider("google", ["gemini-3.1-pro"], async () => {
+    attempts.push("google");
     throw new Error("upstream timeout");
   }).provider;
-  const googlePass = provider("google", ["gemini-3.1-pro"], async ({ user, modelId }) => {
-    attempts.push("google");
+  const openaiPass = provider("openai", ["gpt-5.2-mini"], async ({ user, modelId }) => {
+    attempts.push("openai");
     const text = user.includes("\"candidates\"")
-      ? JSON.stringify({ selected: { provider: "google", model: "gemini-3.1-pro" } })
+      ? JSON.stringify({ selected: { provider: "openai", model: "gpt-5.2-mini" } })
       : JSON.stringify({ intent: "technical-debugging", preferred_provider: null });
-    return { text, model: modelId ?? "gemini-3.1-pro", provider: "google" };
+    return { text, model: modelId ?? "gpt-5.2-mini", provider: "openai" };
   }).provider;
 
-  const decision = await chooseProvider("Please debug this flaky architecture test suite.", "", [openaiFail, googlePass], {
+  const decision = await chooseProvider("Please debug this flaky architecture test suite.", "", [openaiPass, googleFail], {
     requestIntent: "technical-debugging",
     routingRequestId: "test-control-plane-failover"
   });
 
+  assert.deepEqual(attempts, ["google", "openai"]);
   assert.ok(attempts.includes("openai"));
   assert.ok(attempts.includes("google"));
   assert.equal(decision.explainer?.selected_source, "llm-primary");
@@ -522,6 +523,84 @@ test("control-plane capability filtering excludes non-text models from decision 
   assert.notEqual(decision.provider.name, "google");
   assert.equal(decision.explainer?.selected_source, "deterministic-fallback");
   assert.match(decision.explainer?.fallback_reason ?? "", /all_decision_providers_failed/);
+});
+
+test("control-plane selects explicit flagship models instead of first-two list ordering", async () => {
+  const attempts: string[] = [];
+  const openai = provider("openai", ["gpt-5.2-mini", "gpt-5.2-nano", "gpt-5.3-codex"], async ({ modelId }) => {
+    attempts.push(`openai:${modelId ?? "none"}`);
+    throw new Error("down");
+  }).provider;
+  const google = provider("google", ["gemini-3.1-flash", "gemini-3.1-pro"], async ({ modelId }) => {
+    attempts.push(`google:${modelId ?? "none"}`);
+    throw new Error("down");
+  }).provider;
+
+  await chooseProvider("Route generally.", "", [openai, google], {
+    requestIntent: "general-text",
+    routingRequestId: "test-control-plane-explicit-flagship-selection"
+  });
+
+  assert.ok(attempts.includes("openai:gpt-5.3-codex"));
+  assert.equal(attempts.includes("openai:gpt-5.2-mini"), false);
+  assert.ok(attempts.includes("google:gemini-3.1-pro"));
+  assert.equal(attempts.includes("google:gemini-3.1-flash"), false);
+});
+
+test("control-plane uses exactly one decision model per provider in fixed provider priority order", async () => {
+  const attempts: string[] = [];
+  const providers = [
+    provider("grok", ["grok-4-0709"], async ({ modelId }) => {
+      attempts.push(`grok:${modelId ?? "none"}`);
+      throw new Error("down");
+    }).provider,
+    provider("anthropic", ["claude-4.5-sonnet"], async ({ modelId }) => {
+      attempts.push(`anthropic:${modelId ?? "none"}`);
+      throw new Error("down");
+    }).provider,
+    provider("openai", ["gpt-5.3-codex", "gpt-5.2-mini"], async ({ modelId }) => {
+      attempts.push(`openai:${modelId ?? "none"}`);
+      throw new Error("down");
+    }).provider,
+    provider("google", ["gemini-3.1-pro", "gemini-3.1-flash"], async ({ modelId }) => {
+      attempts.push(`google:${modelId ?? "none"}`);
+      throw new Error("down");
+    }).provider
+  ];
+
+  const decision = await chooseProvider("Route generally.", "", providers, {
+    requestIntent: "general-text",
+    routingRequestId: "test-control-plane-provider-priority-order"
+  });
+
+  assert.deepEqual(attempts, [
+    "google:gemini-3.1-pro",
+    "openai:gpt-5.3-codex",
+    "anthropic:claude-4.5-sonnet",
+    "grok:grok-4-0709"
+  ]);
+  assert.equal(decision.explainer?.selected_source, "deterministic-fallback");
+  assert.match(decision.explainer?.fallback_reason ?? "", /all_decision_providers_failed/);
+});
+
+test("control-plane falls back to strongest compatible provider model when flagship is unavailable", async () => {
+  const attempts: string[] = [];
+  const openai = provider("openai", ["gpt-5.2-mini", "gpt-5.2-unified"], async ({ modelId }) => {
+    attempts.push(`openai:${modelId ?? "none"}`);
+    return {
+      text: JSON.stringify({ selected: { provider: "openai", model: "gpt-5.2-unified" } }),
+      model: modelId ?? "gpt-5.2-unified",
+      provider: "openai"
+    };
+  }).provider;
+
+  const decision = await chooseProvider("Route generally.", "", [openai], {
+    requestIntent: "general-text",
+    routingRequestId: "test-control-plane-flagship-fallback"
+  });
+
+  assert.deepEqual(attempts, ["openai:gpt-5.2-unified"]);
+  assert.equal(decision.explainer?.selected_source, "llm-primary");
 });
 
 test("router uses upstream requestIntent as authoritative and skips local classification", async () => {
