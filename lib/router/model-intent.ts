@@ -731,7 +731,6 @@ function modelSupportsIntent(
     case "rewrite":
     case "emotional-analysis":
     case "code-review":
-    case "code-review":
     case "technical-debugging":
     case "architecture-review":
     case "code-generation":
@@ -859,7 +858,6 @@ function rankModelForIntent(providerName: ProviderName, modelId: string, intent:
     case "general-text":
     case "rewrite":
     case "emotional-analysis":
-    case "code-review":
     case "news-summary":
     case "web-search":
       if (!modelSupportsIntent(providerName, modelId, intent)) {
@@ -907,6 +905,7 @@ function rankModelForIntent(providerName: ProviderName, modelId: string, intent:
       return score;
     case "technical-debugging":
     case "architecture-review":
+    case "code-review":
     case "code-generation":
       return rankTechnicalModel(providerName, modelId);
     case "assistant-reflection": {
@@ -1112,7 +1111,6 @@ export function scoreModelCandidateWithBreakdown(
     case "general-text":
     case "rewrite":
     case "emotional-analysis":
-    case "code-review":
     case "news-summary":
     case "web-search": {
       if (!modelSupportsIntent(providerName, modelId, intent, options?.registryLookup)) {
