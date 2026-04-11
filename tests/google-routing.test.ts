@@ -22,14 +22,21 @@ import {
 import type { LlmProvider, ProviderResponse } from "../lib/providers/types";
 import { isLikelyProviderRefusal, runWithRefusalFallback } from "../lib/router/refusal-detection";
 
-function provider(name: LlmProvider["name"], models: string[]): { provider: LlmProvider; models: string[] } {
+function provider(
+  name: LlmProvider["name"],
+  models: string[],
+  generateImpl?: (params: { user: string; modelId?: string }) => Promise<ProviderResponse>
+): { provider: LlmProvider; models: string[] } {
   return {
     provider: {
       name,
       async listModels() {
         return models;
       },
-      async generate() {
+      async generate(params) {
+        if (generateImpl) {
+          return generateImpl({ user: params.user, modelId: params.modelId });
+        }
         throw new Error("not used");
       }
     },
@@ -406,6 +413,85 @@ test("router falls back to deterministic selection when LLM routing is unavailab
   );
 
   assert.match(decision.reasoning, /Deterministic fallback selected/);
+});
+
+test("router control-plane classification works without openai when another eligible provider is available", async () => {
+  delete process.env.OPENAI_API_KEY;
+  const googleDecisionProvider = provider("google", ["gemini-3.1-pro"], async ({ user, modelId }) => {
+    const text = user.includes("Intent Classifier")
+      ? JSON.stringify({ intent: "rewrite", preferred_provider: "google" })
+      : JSON.stringify({ selected: { provider: "google", model: "gemini-3.1-pro" } });
+    return { text, model: modelId ?? "gemini-3.1-pro", provider: "google" };
+  }).provider;
+  const openaiUnavailable = provider("openai", ["gpt-5.2-mini"], async () => {
+    throw new Error("openai unavailable");
+  }).provider;
+
+  const decision = await chooseProvider("How should I improve this paragraph for clarity?", "", [openaiUnavailable, googleDecisionProvider], {
+    routingRequestId: "test-cross-provider-intent-classification"
+  });
+
+  assert.equal(decision.explainer?.selected_source, "llm-primary");
+  assert.equal(decision.explainer?.fallback_used, false);
+});
+
+test("router reranker fails over across providers before heuristic fallback", async () => {
+  const attempts: string[] = [];
+  const openaiFail = provider("openai", ["gpt-5.2-mini"], async () => {
+    attempts.push("openai");
+    throw new Error("upstream timeout");
+  }).provider;
+  const googlePass = provider("google", ["gemini-3.1-pro"], async ({ user, modelId }) => {
+    attempts.push("google");
+    const text = user.includes("\"candidates\"")
+      ? JSON.stringify({ selected: { provider: "google", model: "gemini-3.1-pro" } })
+      : JSON.stringify({ intent: "technical-debugging", preferred_provider: null });
+    return { text, model: modelId ?? "gemini-3.1-pro", provider: "google" };
+  }).provider;
+
+  const decision = await chooseProvider("Please debug this flaky architecture test suite.", "", [openaiFail, googlePass], {
+    requestIntent: "technical-debugging",
+    routingRequestId: "test-control-plane-failover"
+  });
+
+  assert.ok(attempts.includes("openai"));
+  assert.ok(attempts.includes("google"));
+  assert.equal(decision.explainer?.selected_source, "llm-primary");
+  assert.equal(decision.explainer?.fallback_used, false);
+});
+
+test("router uses heuristics as last resort only when all decision providers fail", async () => {
+  const openaiFail = provider("openai", ["gpt-5.2-mini"], async () => {
+    throw new Error("down");
+  }).provider;
+  const googleFail = provider("google", ["gemini-3.1-pro"], async () => {
+    throw new Error("down");
+  }).provider;
+
+  const decision = await chooseProvider("Please debug this flaky architecture test suite.", "", [openaiFail, googleFail], {
+    requestIntent: "technical-debugging",
+    routingRequestId: "test-last-resort-heuristic"
+  });
+
+  assert.equal(decision.explainer?.selected_source, "deterministic-fallback");
+  assert.equal(decision.explainer?.fallback_used, true);
+  assert.match(decision.explainer?.fallback_reason ?? "", /llm_router_rejected:all_decision_providers_failed/);
+});
+
+test("control-plane capability filtering excludes non-text models from decision provider selection", async () => {
+  const imageOnly = provider("google", ["nano-banana-pro-preview"], async () => {
+    throw new Error("should not be called");
+  }).provider;
+  const textProvider = provider("anthropic", ["claude-4.5-sonnet"]).provider;
+
+  const decision = await chooseProvider("Please rewrite this paragraph.", "", [imageOnly, textProvider], {
+    requestIntent: "rewrite",
+    routingRequestId: "test-control-plane-capability-filter"
+  });
+
+  assert.notEqual(decision.provider.name, "google");
+  assert.equal(decision.explainer?.selected_source, "deterministic-fallback");
+  assert.match(decision.explainer?.fallback_reason ?? "", /all_decision_providers_failed/);
 });
 
 test("router uses upstream requestIntent as authoritative and skips local classification", async () => {

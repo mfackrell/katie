@@ -4,7 +4,6 @@ import {
 } from "@/lib/providers/google-model-capabilities";
 import { lookupRegistryModel, type RegistryRoutingModel } from "@/lib/models/registry";
 import { LlmProvider } from "@/lib/providers/types";
-type OpenAIClient = import("openai").default;
 
 export type ProviderName = "openai" | "google" | "grok" | "anthropic";
 type RegistryLookup = Map<string, RegistryRoutingModel> | undefined;
@@ -172,7 +171,7 @@ function supportsWebSearch(providerName: ProviderName, modelId: string): boolean
 }
 
 // Request intent drives validation. The router is allowed to be creative. Validation is not.
-const INTENT_CLASSIFICATION_MODEL_ID = "gpt-4o";
+const CONTROL_PLANE_DECISION_TIMEOUT_MS = 12_000;
 
 const intentDescriptions: Record<RequestIntent, string> = {
   text: "General text processing, base type.",
@@ -197,36 +196,8 @@ const intentDescriptions: Record<RequestIntent, string> = {
   "image-generation": "For creating or generating images, photos, or digital art."
 };
 
-let openaiClient: OpenAIClient | null | undefined;
-
 function isProviderName(value: string): value is ProviderName {
   return value === "openai" || value === "google" || value === "grok" || value === "anthropic";
-}
-
-type OpenAIClientResult =
-  | { client: OpenAIClient; reason: null }
-  | { client: null; reason: "missing_key" }
-  | { client: null; reason: "init_failed"; error: unknown };
-
-async function getOpenAIClient(): Promise<OpenAIClientResult> {
-  if (openaiClient) {
-    return { client: openaiClient, reason: null };
-  }
-
-  const apiKey = process.env.OPENAI_API_KEY?.trim();
-  if (!apiKey) {
-    openaiClient = null;
-    return { client: null, reason: "missing_key" };
-  }
-
-  try {
-    const { default: OpenAI } = await import("openai");
-    openaiClient = new OpenAI({ apiKey });
-    return { client: openaiClient, reason: null };
-  } catch (error) {
-    openaiClient = null;
-    return { client: null, reason: "init_failed", error };
-  }
 }
 
 const URL_REGEX = /(https?:\/\/[^\s]+)/i;
@@ -355,21 +326,90 @@ export function parseIntentClassifierResponse(raw: string, intents: RequestInten
   return { intent: null, preferred_provider: preferredProvider };
 }
 
-async function classifyIntentWithLLM(prompt: string, intents: RequestIntent[]): Promise<RequestClassification> {
-  const openaiClientResult = await getOpenAIClient();
-  if (!openaiClientResult.client) {
-    if (openaiClientResult.reason === "missing_key") {
-      console.warn("[Intent Classifier] OPENAI_API_KEY is not configured. Falling back to heuristic defaults.");
-    } else {
-      console.warn(
-        "[Intent Classifier] OpenAI client initialization failed. Falling back to heuristic defaults.",
-        "error" in openaiClientResult ? openaiClientResult.error : null
+async function classifyIntentWithLLM(
+  prompt: string,
+  intents: RequestIntent[],
+  options?: ControlPlaneSelectionOptions
+): Promise<RequestClassification> {
+  return classifyIntentWithLLMProviders(prompt, intents, options);
+}
+
+type DecisionProviderCandidate = { provider: LlmProvider; modelId: string };
+
+type ControlPlaneSelectionOptions = {
+  decisionProviders?: DecisionProviderCandidate[];
+  registryLookup?: RegistryLookup;
+  timeoutMs?: number;
+};
+
+function isEligibleControlPlaneModel(providerName: ProviderName, modelId: string, registryLookup?: RegistryLookup): boolean {
+  const registry = lookupRegistryModel(registryLookup, providerName, modelId);
+  const routingEligibility = registry?.routing_eligibility ?? "restricted";
+  if (routingEligibility === "disabled" || routingEligibility === "manual_override_only") {
+    return false;
+  }
+  const supportsText = registry?.supports_text ?? modelSupportsIntent(providerName, modelId, "general-text", registryLookup);
+  const supportsImageGen = registry?.supports_image_generation ?? isImageGenerationModel(providerName, modelId);
+  return Boolean(supportsText) && !supportsImageGen;
+}
+
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  const timeout = new Promise<T>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`${label}_timeout_${timeoutMs}ms`)), timeoutMs);
+  });
+  return Promise.race([promise, timeout]).finally(() => {
+    if (timer) clearTimeout(timer);
+  });
+}
+
+async function executeControlPlaneJsonTask<T>(args: {
+  taskName: "intent-classification" | "routing-rerank";
+  decisionProviders: DecisionProviderCandidate[];
+  userPrompt: string;
+  parse: (raw: string, sourceLabel: string) => T | null;
+  timeoutMs: number;
+}): Promise<{ result: T; provider: ProviderName; modelId: string } | null> {
+  for (const candidate of args.decisionProviders) {
+    const sourceLabel = `${candidate.provider.name}:${candidate.modelId}`;
+    try {
+      const response = await withTimeout(
+        candidate.provider.generate({
+          name: "Katie Control Plane",
+          persona: "You are a strict JSON-only control-plane assistant for routing decisions.",
+          summary: "",
+          history: [],
+          user: args.userPrompt,
+          modelId: candidate.modelId
+        }),
+        args.timeoutMs,
+        `${args.taskName}:${sourceLabel}`
       );
+      const parsed = args.parse(response.text ?? "", sourceLabel);
+      if (parsed !== null) {
+        return { result: parsed, provider: candidate.provider.name, modelId: candidate.modelId };
+      }
+      console.warn(`[ControlPlane:${args.taskName}] rejected_response provider=${sourceLabel}`);
+    } catch (error) {
+      console.warn(`[ControlPlane:${args.taskName}] provider_failed provider=${sourceLabel}`, error);
     }
+  }
+  return null;
+}
+
+async function classifyIntentWithLLMProviders(
+  prompt: string,
+  intents: RequestIntent[],
+  options?: ControlPlaneSelectionOptions
+): Promise<RequestClassification> {
+  const eligibleDecisionProviders =
+    options?.decisionProviders?.filter((candidate) =>
+      isEligibleControlPlaneModel(candidate.provider.name, candidate.modelId, options.registryLookup)
+    ) ?? [];
+  if (!eligibleDecisionProviders.length) {
+    console.warn("[Intent Classifier] No eligible control-plane decision providers available. Falling back to heuristics.");
     return { intent: null, preferred_provider: null };
   }
-
-  const openai = openaiClientResult.client;
 
   const intentGuide = intents.map((intent) => `- ${intent}: ${intentDescriptions[intent]}`).join("\n");
   const examples = [
@@ -416,55 +456,30 @@ Use {"intent":"null","preferred_provider":null} when unsure.
 Intent must be one of: ${intents.join("|")}.
 ${intentGuide}
   `.trim();
-  const messages = [
-    { role: "system" as const, content: systemPrompt },
-    ...examples.flatMap((example) => [
-      { role: "user" as const, content: example.user },
-      { role: "assistant" as const, content: JSON.stringify({ intent: example.intent, preferred_provider: null }) }
-    ]),
-    { role: "user" as const, content: "Claude, can you look at the router code?" },
-    { role: "assistant" as const, content: JSON.stringify({ intent: "architecture-review", preferred_provider: "anthropic" }) },
-    { role: "user" as const, content: "Gemini please summarize this article." },
-    { role: "assistant" as const, content: JSON.stringify({ intent: "rewrite", preferred_provider: "google" }) },
-    { role: "user" as const, content: "Quick question about pricing tiers." },
-    { role: "assistant" as const, content: JSON.stringify({ intent: "general-text", preferred_provider: null }) },
-    { role: "user" as const, content: prompt }
-  ];
+  const fewShot = [
+    ...examples.flatMap((example) => [`USER: ${example.user}`, `ASSISTANT: ${JSON.stringify({ intent: example.intent, preferred_provider: null })}`]),
+    "USER: Claude, can you look at the router code?",
+    `ASSISTANT: ${JSON.stringify({ intent: "architecture-review", preferred_provider: "anthropic" })}`,
+    "USER: Gemini please summarize this article.",
+    `ASSISTANT: ${JSON.stringify({ intent: "rewrite", preferred_provider: "google" })}`,
+    "USER: Quick question about pricing tiers.",
+    `ASSISTANT: ${JSON.stringify({ intent: "general-text", preferred_provider: null })}`
+  ].join("\n");
 
-  try {
-    const llmResponse = await openai.chat.completions.create({
-      model: INTENT_CLASSIFICATION_MODEL_ID,
-      response_format: { type: "json_object" },
-      temperature: 0,
-      max_tokens: 100,
-      messages
-    });
+  const decisionPayload = [systemPrompt, "Few-shot examples:", fewShot, `USER: ${prompt}`].join("\n\n");
+  const result = await executeControlPlaneJsonTask({
+    taskName: "intent-classification",
+    decisionProviders: eligibleDecisionProviders,
+    userPrompt: decisionPayload,
+    parse: (raw, sourceLabel) => parseIntentClassifierResponse(raw, intents, sourceLabel),
+    timeoutMs: options?.timeoutMs ?? CONTROL_PLANE_DECISION_TIMEOUT_MS
+  });
 
-    const raw = llmResponse.choices[0]?.message?.content ?? "";
-    console.debug("[Intent Classifier] raw model output:", raw);
-
-    return parseIntentClassifierResponse(raw, intents, "text-llm");
-  } catch (error) {
-    const err = error as {
-      message?: string;
-      status?: number;
-      code?: string;
-      type?: string;
-      param?: string;
-      request_id?: string;
-    };
-
-    console.error("[Intent Classifier] Failed to classify request intent", {
-      message: err?.message ?? "Unknown error",
-      status: err?.status ?? null,
-      code: err?.code ?? null,
-      type: err?.type ?? null,
-      param: err?.param ?? null,
-      request_id: err?.request_id ?? null
-    });
-
+  if (!result) {
     return { intent: null, preferred_provider: null };
   }
+
+  return result.result;
 }
 
 
@@ -491,81 +506,15 @@ export async function inferRequestIntentFromMultimodalInput(
   if (!Array.isArray(images) || images.length === 0) {
     return null;
   }
-
-  const openaiClientResult = await getOpenAIClient();
-  if (!openaiClientResult.client) {
-    if (openaiClientResult.reason === "missing_key") {
-      console.warn("[Intent Classifier:multimodal] OPENAI_API_KEY is not configured.");
-    } else {
-      console.warn("[Intent Classifier:multimodal] OpenAI client initialization failed.", "error" in openaiClientResult ? openaiClientResult.error : null);
-    }
-
-    return null;
-  }
-
-  const openai = openaiClientResult.client;
-  const intentGuide = intents.map((intent) => `- ${intent}: ${intentDescriptions[intent]}`).join("\n");
-
-  try {
-    const response = await openai.chat.completions.create({
-      model: INTENT_CLASSIFICATION_MODEL_ID,
-      response_format: { type: "json_object" },
-      temperature: 0,
-      max_tokens: 100,
-      messages: [
-        {
-          role: "system",
-          content: [
-            "You classify request intent only.",
-            `Return strict JSON only: {\"intent\":\"<one_of:${intents.join("|")}>\"}.`,
-            'If uncertain, return {"intent":"null"}.',
-            "Never choose a provider or model.",
-            "Use image content plus user text, with special care for safety-sensitive-vision when the request seeks explicit sexual interpretation or has likely provider filtering risk.",
-            intentGuide
-          ].join("\n")
-        },
-        {
-          role: "user",
-          content: [
-            { type: "text", text: `User prompt:\n${prompt}` },
-            ...images.slice(0, 4).map((url) => ({
-              type: "image_url" as const,
-              image_url: { url }
-            }))
-          ]
-        }
-      ]
-    });
-
-    const raw = response.choices[0]?.message?.content ?? "";
-    console.debug("[Intent Classifier:multimodal] raw model output:", raw);
-    return parseIntentClassifierResponse(raw, intents, "multimodal").intent;
-  } catch (error) {
-    const err = error as {
-      message?: string;
-      status?: number;
-      code?: string;
-      type?: string;
-      param?: string;
-      request_id?: string;
-    };
-
-    console.error("[Intent Classifier:multimodal] Failed to classify request intent", {
-      message: err?.message ?? "Unknown error",
-      status: err?.status ?? null,
-      code: err?.code ?? null,
-      type: err?.type ?? null,
-      param: err?.param ?? null,
-      request_id: err?.request_id ?? null
-    });
-
-    return null;
-  }
+  const imageHint = images.slice(0, 4).map((url) => `- image: ${url}`).join("\n");
+  const withImageContext = `${prompt}\n${imageHint}`;
+  return (await classifyIntentWithLLMProviders(withImageContext, intents)).intent;
 }
 
 export async function inferRequestIntent(
   prompt: string,
   input: boolean | { hasImages: boolean; hasVideoInput?: boolean },
+  options?: ControlPlaneSelectionOptions
 ): Promise<RequestIntent> {
   const hasImages = typeof input === "boolean" ? input : input.hasImages;
   const hasVideoInput = typeof input === "boolean" ? false : Boolean(input.hasVideoInput);
@@ -632,7 +581,7 @@ export async function inferRequestIntent(
     "image-generation"
   ];
 
-  const classifiedOutput = await classifyIntentWithLLM(prompt, availableIntents);
+  const classifiedOutput = await classifyIntentWithLLM(prompt, availableIntents, options);
   const classifiedIntent = classifiedOutput.intent;
 
   if (classifiedIntent && availableIntents.includes(classifiedIntent)) {
@@ -654,7 +603,8 @@ export async function inferRequestIntent(
 
 export async function inferRequestClassification(
   prompt: string,
-  input: boolean | { hasImages: boolean; hasVideoInput?: boolean }
+  input: boolean | { hasImages: boolean; hasVideoInput?: boolean },
+  options?: ControlPlaneSelectionOptions
 ): Promise<{ intent: RequestIntent; preferredProvider: ProviderName | null }> {
   const hasImages = typeof input === "boolean" ? input : input.hasImages;
   const hasVideoInput = typeof input === "boolean" ? false : Boolean(input.hasVideoInput);
@@ -692,7 +642,7 @@ export async function inferRequestClassification(
     "image-generation"
   ];
 
-  const classifiedOutput = await classifyIntentWithLLM(prompt, availableIntents);
+  const classifiedOutput = await classifyIntentWithLLM(prompt, availableIntents, options);
   if (classifiedOutput.intent && availableIntents.includes(classifiedOutput.intent)) {
     return { intent: classifiedOutput.intent, preferredProvider: classifiedOutput.preferred_provider };
   }
@@ -1285,25 +1235,19 @@ export async function chooseRoutingWithLLM(args: {
   hardRouteContext: HardRouteContext;
   preferenceProfile: RoutingPreferenceProfile;
   candidates: CandidateMetadata[];
+  decisionProviders?: DecisionProviderCandidate[];
+  registryLookup?: RegistryLookup;
 }): Promise<LlmRoutingResult> {
-  const openaiClientResult = await getOpenAIClient();
-  if (!openaiClientResult.client) {
-    if (openaiClientResult.reason === "missing_key") {
-      console.warn("[Router LLM] OPENAI_API_KEY is not configured. Falling back to deterministic ranking.");
-    } else {
-      console.warn(
-        "[Router LLM] OpenAI client initialization failed. Falling back to deterministic ranking.",
-        "error" in openaiClientResult ? openaiClientResult.error : null
-      );
-    }
-    return { accepted: false, reason: `client_unavailable:${openaiClientResult.reason}` };
-  }
-
   if (args.candidates.length === 0) {
     return { accepted: false, reason: "no_candidates" };
   }
-
-  const openai = openaiClientResult.client;
+  const eligibleDecisionProviders =
+    args.decisionProviders?.filter((candidate) =>
+      isEligibleControlPlaneModel(candidate.provider.name, candidate.modelId, args.registryLookup)
+    ) ?? [];
+  if (!eligibleDecisionProviders.length) {
+    return { accepted: false, reason: "no_decision_provider_available" };
+  }
   const candidateKeySet = new Set(args.candidates.map((candidate) => `${candidate.providerName}:${candidate.modelId}`));
   const candidateList = args.candidates.map((candidate) => ({
     provider: candidate.providerName,
@@ -1337,73 +1281,50 @@ Rules:
 - Do not include markdown or any non-JSON text.
 `.trim();
 
-  try {
-    const response = await openai.chat.completions.create({
-      model: INTENT_CLASSIFICATION_MODEL_ID,
-      response_format: { type: "json_object" },
-      temperature: 0,
-      max_tokens: 120,
-      messages: [
-        { role: "system", content: systemPrompt },
-        {
-          role: "user",
-          content: JSON.stringify({
-            prompt: args.prompt,
-            intent: args.intent,
-            modality_flags: args.modalityFlags,
-            hard_route_context: args.hardRouteContext,
-            preference_profile: args.preferenceProfile,
-            candidates: candidateList
-          })
-        }
-      ]
-    });
-
-    const raw = response.choices[0]?.message?.content ?? "";
-    const rawPreview = raw.slice(0, 300).replace(/\s+/g, " ").trim();
-
-    if (!raw.trim()) {
-      console.warn("[Router LLM] Ignoring empty reranker response; falling back to deterministic ranking.");
-      return { accepted: false, reason: "empty_response" };
-    }
-
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(raw);
-    } catch {
-      console.warn(
-        `[Router LLM] Ignoring malformed reranker JSON; falling back to deterministic ranking. raw=${rawPreview || "<empty>"}`
-      );
-      return { accepted: false, reason: "malformed_json" };
-    }
-
-    const parsedObject = typeof parsed === "object" && parsed !== null ? (parsed as Record<string, unknown>) : null;
-    const selectedObject =
-      parsedObject && typeof parsedObject.selected === "object" && parsedObject.selected !== null
-        ? (parsedObject.selected as Record<string, unknown>)
-        : null;
-
-    const selectedProviderRaw = typeof selectedObject?.provider === "string" ? selectedObject.provider.trim().toLowerCase() : "";
-    const selectedModel = typeof selectedObject?.model === "string" ? selectedObject.model.trim() : "";
-    const selectedProvider = isProviderName(selectedProviderRaw) ? selectedProviderRaw : null;
-
-    if (!selectedProvider || !selectedModel || !candidateKeySet.has(`${selectedProvider}:${selectedModel}`)) {
-      return { accepted: false, reason: "invalid_or_out_of_pool_selection" };
-    }
-
-    const ranking = args.candidates.map((candidate) => ({
-      providerName: candidate.providerName,
-      modelId: candidate.modelId,
-      score: candidate.prior_score
-    }));
-
-    return {
-      accepted: true,
-      selected: { providerName: selectedProvider, modelId: selectedModel },
-      ranking
-    };
-  } catch {
-    console.warn("[Router LLM] Failed to get reranker override; falling back to deterministic ranking.");
-    return { accepted: false, reason: "completion_error" };
+  const result = await executeControlPlaneJsonTask({
+    taskName: "routing-rerank",
+    decisionProviders: eligibleDecisionProviders,
+    userPrompt: `${systemPrompt}\n\n${JSON.stringify({
+      prompt: args.prompt,
+      intent: args.intent,
+      modality_flags: args.modalityFlags,
+      hard_route_context: args.hardRouteContext,
+      preference_profile: args.preferenceProfile,
+      candidates: candidateList
+    })}`,
+    parse: (raw) => {
+      const trimmed = raw.trim();
+      if (!trimmed) {
+        return null;
+      }
+      const parsed = JSON.parse(extractJsonObject(trimmed) ?? trimmed) as Record<string, unknown>;
+      const selectedObject =
+        parsed && typeof parsed.selected === "object" && parsed.selected !== null
+          ? (parsed.selected as Record<string, unknown>)
+          : null;
+      const selectedProviderRaw = typeof selectedObject?.provider === "string" ? selectedObject.provider.trim().toLowerCase() : "";
+      const selectedModel = typeof selectedObject?.model === "string" ? selectedObject.model.trim() : "";
+      const selectedProvider = isProviderName(selectedProviderRaw) ? selectedProviderRaw : null;
+      if (!selectedProvider || !selectedModel || !candidateKeySet.has(`${selectedProvider}:${selectedModel}`)) {
+        return null;
+      }
+      return { selectedProvider, selectedModel };
+    },
+    timeoutMs: CONTROL_PLANE_DECISION_TIMEOUT_MS
+  });
+  if (!result) {
+    return { accepted: false, reason: "all_decision_providers_failed" };
   }
+
+  const ranking = args.candidates.map((candidate) => ({
+    providerName: candidate.providerName,
+    modelId: candidate.modelId,
+    score: candidate.prior_score
+  }));
+
+  return {
+    accepted: true,
+    selected: { providerName: result.result.selectedProvider, modelId: result.result.selectedModel },
+    ranking
+  };
 }

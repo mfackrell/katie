@@ -461,17 +461,6 @@ export async function chooseProvider(
   let llmCandidatesUsed: Array<ReturnType<typeof buildCandidateMetadata>> = [];
   const preferenceProfile = buildRoutingPreferenceProfile();
 
-  const requestClassification = options?.requestIntent
-    ? null
-    : await inferRequestClassification(prompt, {
-        hasImages: Boolean(options?.hasImages),
-        hasVideoInput: Boolean(options?.hasVideoInput)
-      });
-  const intent = options?.requestIntent ?? requestClassification?.intent ?? "general-text";
-  console.info(
-    `[Route Intent] caller_request_intent=${options?.requestIntent ?? "none"} classifier_intent=${requestClassification?.intent ?? "skipped"} effective_intent=${intent}`
-  );
-  const preferredProvider = requestClassification?.preferredProvider ?? null;
   const traceEnabled = isRoutingTraceEnabled(options?.routingTraceEnabled);
   const traceRequestId = options?.routingRequestId ?? crypto.randomUUID();
   const traceTimestamp = new Date().toISOString();
@@ -508,6 +497,29 @@ export async function chooseProvider(
     console.warn(`[ModelRegistry] requestId=${traceRequestId} provider=${provider.name} using_provider_fallback=true count=${fallbackModels.length}`);
     return { provider, models: fallbackModels };
   }));
+
+  const controlPlaneDecisionProviders = modelEntries.flatMap(({ provider, models }) =>
+    models.slice(0, 2).map((modelId) => ({ provider, modelId }))
+  );
+
+  const requestClassification = options?.requestIntent
+    ? null
+    : await inferRequestClassification(
+        prompt,
+        {
+          hasImages: Boolean(options?.hasImages),
+          hasVideoInput: Boolean(options?.hasVideoInput)
+        },
+        {
+          decisionProviders: controlPlaneDecisionProviders,
+          registryLookup
+        }
+      );
+  const intent = options?.requestIntent ?? requestClassification?.intent ?? "general-text";
+  console.info(
+    `[Route Intent] caller_request_intent=${options?.requestIntent ?? "none"} classifier_intent=${requestClassification?.intent ?? "skipped"} effective_intent=${intent}`
+  );
+  const preferredProvider = requestClassification?.preferredProvider ?? null;
 
   let availableByProvider = modelEntries.map(({ provider, models }) => ({
     provider,
@@ -689,7 +701,9 @@ export async function chooseProvider(
         rule: hardRouteRule
       },
       preferenceProfile,
-      candidates: llmCandidatesUsed
+      candidates: llmCandidatesUsed,
+      decisionProviders: controlPlaneDecisionProviders,
+      registryLookup
     });
     console.info(`[LLM Router] requestId=${traceRequestId} output_accepted=${llmRouting.accepted}`);
 
