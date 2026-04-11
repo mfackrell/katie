@@ -586,6 +586,9 @@ export async function chooseProvider(
   }));
 
   const controlPlaneDecisionProviders = buildControlPlaneDecisionProviders(modelEntries, registryLookup);
+  console.info(
+    `[ControlPlane] decision_models=${controlPlaneDecisionProviders.map((entry) => `${entry.provider.name}:${entry.modelId}`).join(",") || "none"}`
+  );
 
   const upstreamResolvedIntent = options?.resolvedIntent ?? (options?.requestIntent
     ? { intent: options.requestIntent, preferredProvider: null, intentSource: "upstream" as const }

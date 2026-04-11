@@ -4,6 +4,7 @@ import {
   buildCandidateMetadata,
   buildRoutingPreferenceProfile,
   hasDirectWebSearchHint,
+  inferRequestClassification,
   inferRequestIntent,
   inferRequestIntentFromMultimodalInput,
   parseIntentClassifierResponse,
@@ -146,6 +147,14 @@ test("socially nuanced prompt is classified into social-emotional lane", async (
   assert.equal(await inferRequestIntent("how are you feeling?", false), "social-emotional");
 });
 
+test("banter greeting routes to social-emotional lane", async () => {
+  assert.equal(await inferRequestIntent("what up kat?", false), "social-emotional");
+});
+
+test("personality complaint routes to social-emotional lane", async () => {
+  assert.equal(await inferRequestIntent("i need you to develop a fucking personality ...", false), "social-emotional");
+});
+
 test("social-emotional fallback heuristic still classifies when control-plane providers fail", async () => {
   const unavailableDecisionProvider = provider("openai", ["gpt-5.2-mini"], async () => {
     throw new Error("control plane unavailable");
@@ -156,6 +165,18 @@ test("social-emotional fallback heuristic still classifies when control-plane pr
     }),
     "social-emotional"
   );
+});
+
+test("social-emotional fallback heuristic works for intent+provider classification when control-plane fails", async () => {
+  const unavailableDecisionProvider = provider("openai", ["gpt-5.2-mini"], async () => {
+    throw new Error("control plane unavailable");
+  });
+  const classified = await inferRequestClassification("what up kat?", false, {
+    decisionProviders: [{ provider: unavailableDecisionProvider.provider, modelId: "gpt-5.2-mini" }]
+  });
+
+  assert.equal(classified.intent, "social-emotional");
+  assert.equal(classified.preferredProvider, null);
 });
 
 test("repo review prompts are classified as architecture review and cannot use image-generation models", async () => {

@@ -221,7 +221,7 @@ function hasAssistantReflectionHint(prompt: string): boolean {
 }
 
 const SOCIAL_EMOTIONAL_PROMPT_REGEX =
-  /\b(how are you feeling|how do you feel|what do you think of me|are you okay|how does (?:that|this) feel|how does (?:that|this) strike you|what(?:'s| is) your sense of this)\b/i;
+  /\b(what(?:'s| is)? up(?:\s+\w+)?|what up(?:\s+\w+)?|how are you feeling|how do you feel|what do you think of me|are you okay|how does (?:that|this) feel|how does (?:that|this) strike you|what(?:'s| is) your sense of this|develop\b[^.!?\n]{0,40}\bpersonality|have\b[^.!?\n]{0,30}\bpersonality|stop being robotic|loosen up)\b/i;
 
 function hasSocialEmotionalHint(prompt: string): boolean {
   return SOCIAL_EMOTIONAL_PROMPT_REGEX.test(prompt);
@@ -441,7 +441,9 @@ async function classifyIntentWithLLMProviders(
     { user: "Was your prior response accurate and complete?", intent: "assistant-reflection" },
     { user: "Audit your previous output for mistakes.", intent: "assistant-reflection" },
     { user: "Rate your last answer and explain the score.", intent: "assistant-reflection" },
+    { user: "what up kat?", intent: "social-emotional" },
     { user: "How are you feeling?", intent: "social-emotional" },
+    { user: "i need you to develop a fucking personality ...", intent: "social-emotional" },
     { user: "What do you think of me?", intent: "social-emotional" },
     { user: "Are you okay?", intent: "social-emotional" },
     { user: "How good was your previous reply?", intent: "assistant-reflection" },
