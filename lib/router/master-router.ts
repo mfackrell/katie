@@ -82,6 +82,79 @@ type RoutingTrace = {
   };
 };
 
+const CONTROL_PLANE_PROVIDER_PRIORITY: LlmProvider["name"][] = ["google", "openai", "anthropic", "grok"];
+
+const CONTROL_PLANE_FLAGSHIP_MODELS: Record<LlmProvider["name"], string[]> = {
+  google: ["gemini-3.1-pro", "gemini-3.1-pro-latest", "gemini-3-pro"],
+  openai: ["gpt-5.3-codex", "gpt-5.2-unified", "gpt-5.2", "o3-pro"],
+  anthropic: ["claude-4.6-opus", "claude-4.5-sonnet", "claude-4-opus"],
+  grok: ["grok-4-0709", "grok-4-reasoning-vision", "grok-4"]
+};
+
+function isEligibleControlPlaneModel(
+  providerName: LlmProvider["name"],
+  modelId: string,
+  registryLookup?: Map<string, RegistryRoutingModel>
+): boolean {
+  const metadata = buildCandidateMetadata(providerName, modelId, "general-text", { registryLookup });
+  return metadata.supports_text && !metadata.supports_image_generation;
+}
+
+function normalizeModelId(modelId: string): string {
+  return modelId.trim().toLowerCase();
+}
+
+function selectControlPlaneModelForProvider(
+  providerName: LlmProvider["name"],
+  models: string[],
+  registryLookup?: Map<string, RegistryRoutingModel>
+): string | null {
+  const eligibleModels = models.filter((modelId) => isEligibleControlPlaneModel(providerName, modelId, registryLookup));
+  if (!eligibleModels.length) {
+    return null;
+  }
+
+  const normalizedToModel = new Map(eligibleModels.map((modelId) => [normalizeModelId(modelId), modelId]));
+  for (const preferredModel of CONTROL_PLANE_FLAGSHIP_MODELS[providerName]) {
+    const selected = normalizedToModel.get(normalizeModelId(preferredModel));
+    if (selected) {
+      return selected;
+    }
+  }
+
+  const rankedFallback = eligibleModels
+    .map((modelId) => ({
+      modelId,
+      score: scoreModelCandidateWithBreakdown(providerName, modelId, "general-text", { registryLookup }).finalScore
+    }))
+    .sort((a, b) => b.score - a.score || a.modelId.localeCompare(b.modelId));
+  return rankedFallback[0]?.modelId ?? null;
+}
+
+function buildControlPlaneDecisionProviders(
+  modelEntries: Array<{ provider: LlmProvider; models: string[] }>,
+  registryLookup?: Map<string, RegistryRoutingModel>
+): Array<{ provider: LlmProvider; modelId: string }> {
+  const entriesByProvider = new Map(modelEntries.map((entry) => [entry.provider.name, entry]));
+  const selectedProviders: Array<{ provider: LlmProvider; modelId: string }> = [];
+
+  for (const providerName of CONTROL_PLANE_PROVIDER_PRIORITY) {
+    const providerEntry = entriesByProvider.get(providerName);
+    if (!providerEntry) {
+      continue;
+    }
+
+    const selectedModelId = selectControlPlaneModelForProvider(providerName, providerEntry.models, registryLookup);
+    if (!selectedModelId) {
+      continue;
+    }
+
+    selectedProviders.push({ provider: providerEntry.provider, modelId: selectedModelId });
+  }
+
+  return selectedProviders;
+}
+
 function topRoutingCandidates(
   availableByProvider: Array<{ provider: LlmProvider; models: string[] }>,
   intent: Awaited<ReturnType<typeof inferRequestIntent>>,
@@ -498,9 +571,7 @@ export async function chooseProvider(
     return { provider, models: fallbackModels };
   }));
 
-  const controlPlaneDecisionProviders = modelEntries.flatMap(({ provider, models }) =>
-    models.slice(0, 2).map((modelId) => ({ provider, modelId }))
-  );
+  const controlPlaneDecisionProviders = buildControlPlaneDecisionProviders(modelEntries, registryLookup);
 
   const requestClassification = options?.requestIntent
     ? null
