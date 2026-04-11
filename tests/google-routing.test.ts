@@ -408,6 +408,86 @@ test("router falls back to deterministic selection when LLM routing is unavailab
   assert.match(decision.reasoning, /Deterministic fallback selected/);
 });
 
+test("router uses upstream requestIntent as authoritative and skips local classification", async () => {
+  delete process.env.OPENAI_API_KEY;
+  const capturedLogs: string[] = [];
+  const originalInfo = console.info;
+  console.info = (...args: unknown[]) => {
+    capturedLogs.push(args.map((arg) => String(arg)).join(" "));
+  };
+
+  try {
+    await chooseProvider(
+      "Please debug this failing test suite.",
+      "",
+      [provider("openai", ["gpt-5.2-mini"]).provider, provider("google", ["gemini-3.1-pro"]).provider],
+      { requestIntent: "rewrite", routingRequestId: "test-upstream-intent-authoritative" }
+    );
+  } finally {
+    console.info = originalInfo;
+  }
+
+  const routeIntentLog = capturedLogs.find((line) => line.startsWith("[Route Intent] "));
+  const routePolicyLog = capturedLogs.find((line) => line.startsWith("[Route Policy] "));
+  assert.ok(routeIntentLog);
+  assert.ok(routePolicyLog);
+  assert.match(routeIntentLog ?? "", /caller_request_intent=rewrite/);
+  assert.match(routeIntentLog ?? "", /classifier_intent=skipped/);
+  assert.match(routeIntentLog ?? "", /effective_intent=rewrite/);
+  assert.match(routePolicyLog ?? "", /intent=rewrite/);
+});
+
+test("explicit upstream override intent takes precedence over prompt-derived intent", async () => {
+  delete process.env.OPENAI_API_KEY;
+  const capturedLogs: string[] = [];
+  const originalInfo = console.info;
+  console.info = (...args: unknown[]) => {
+    capturedLogs.push(args.map((arg) => String(arg)).join(" "));
+  };
+
+  try {
+    await chooseProvider(
+      "Please debug this failing test suite.",
+      "",
+      [provider("openai", ["gpt-5.2-mini"]).provider, provider("google", ["gemini-3.1-pro"]).provider],
+      { requestIntent: "web-search", routingRequestId: "test-upstream-override-precedence" }
+    );
+  } finally {
+    console.info = originalInfo;
+  }
+
+  const routeIntentLog = capturedLogs.find((line) => line.startsWith("[Route Intent] "));
+  assert.ok(routeIntentLog);
+  assert.match(routeIntentLog ?? "", /effective_intent=web-search/);
+  assert.doesNotMatch(routeIntentLog ?? "", /effective_intent=technical-debugging/);
+});
+
+test("router falls back to local classification only when upstream requestIntent is absent", async () => {
+  delete process.env.OPENAI_API_KEY;
+  const capturedLogs: string[] = [];
+  const originalInfo = console.info;
+  console.info = (...args: unknown[]) => {
+    capturedLogs.push(args.map((arg) => String(arg)).join(" "));
+  };
+
+  try {
+    await chooseProvider(
+      "Please debug this failing test suite.",
+      "",
+      [provider("openai", ["gpt-5.2-mini"]).provider, provider("google", ["gemini-3.1-pro"]).provider],
+      { routingRequestId: "test-local-classification-fallback" }
+    );
+  } finally {
+    console.info = originalInfo;
+  }
+
+  const routeIntentLog = capturedLogs.find((line) => line.startsWith("[Route Intent] "));
+  assert.ok(routeIntentLog);
+  assert.match(routeIntentLog ?? "", /caller_request_intent=none/);
+  assert.doesNotMatch(routeIntentLog ?? "", /classifier_intent=skipped/);
+  assert.match(routeIntentLog ?? "", /effective_intent=technical-debugging/);
+});
+
 test("llm router logs include preferences and candidate score breakdown payload", async () => {
   delete process.env.OPENAI_API_KEY;
   const capturedLogs: string[] = [];

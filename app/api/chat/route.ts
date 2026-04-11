@@ -656,16 +656,17 @@ export async function POST(request: NextRequest) {
 
       resolvedRequestIntent = requestIntent;
       const routingIntentOverride = explicitIntent;
-      const requestIntentDefaultedUpstream = routingIntentOverride === undefined;
+      const effectiveRequestIntent = routingIntentOverride ?? resolvedRequestIntent ?? undefined;
+      const requestIntentDefaultedUpstream = effectiveRequestIntent === undefined;
 
       const routingContext = `\n  Persona: ${personaWithRepoContext}\n  Rolling Summary: ${summary}\n  Recent History: ${JSON.stringify(history.slice(-3))}\n  Has Attached Images: ${hasVisualInput}\n  Active Repo: ${sessionContext.activeRepo ? `${sessionContext.activeRepo.fullName} (${sessionContext.activeRepo.id})` : "none"}\n`;
       console.log(
-        `[Chat API] Routing intent diagnostic callerRequestIntent=${explicitIntent ?? "none"} classifierDerivedIntent=${requestIntent} effectiveIntentPassedToRouter=${routingIntentOverride ?? "none"} requestIntentDefaultedUpstream=${requestIntentDefaultedUpstream}`
+        `[Chat API] Routing intent diagnostic callerRequestIntent=${explicitIntent ?? "none"} classifierDerivedIntent=${requestIntent} effectiveIntentPassedToRouter=${effectiveRequestIntent ?? "none"} requestIntentDefaultedUpstream=${requestIntentDefaultedUpstream}`
       );
       const routingDecision = await chooseProvider(message, routingContext, providers, {
         hasImages: hasVisualInput,
         hasVideoInput,
-        requestIntent: routingIntentOverride,
+        requestIntent: effectiveRequestIntent,
         routingTraceEnabled,
         routingRequestId: request.headers.get("x-request-id") ?? undefined
       });
