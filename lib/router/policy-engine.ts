@@ -1,3 +1,4 @@
+import { lookupRegistryModel, type RegistryRoutingModel } from "@/lib/models/registry";
 import { RequestIntent } from "@/lib/router/model-intent";
 import { LlmProvider } from "@/lib/providers/types";
 
@@ -32,6 +33,7 @@ export type PolicyTrace = {
   complexity: ComplexityLevel;
   candidates: Array<{
     model: string;
+    metadata_source: "verified_registry" | "registry_fallback" | "unknown";
     quality_score: number;
     latency_score: number;
     cost_score: number;
@@ -51,16 +53,66 @@ export type PolicyEvaluationResult = {
   metadataMissing: boolean;
 };
 
-type ModelProfile = { quality: number; latency: number; inCost: number; outCost: number };
+type PolicyCandidateMetadata = {
+  source: "verified_registry" | "registry_fallback" | "unknown";
+  quality: number | null;
+  latencyMs: number | null;
+  inCost: number | null;
+  outCost: number | null;
+  verified: { quality: boolean; latency: boolean; cost: boolean };
+};
 
-const DEFAULT_MODEL_PROFILE: ModelProfile = { quality: 3, latency: 2400, inCost: 3, outCost: 12 };
+const DEFAULT_UNKNOWN_SCORES = { quality: 0.5, latency: 0.5, cost: 0.5 } as const;
 
-function resolveModelProfile(modelId: string): ModelProfile {
-  const lower = modelId.toLowerCase();
-  if (lower.includes("flash") || lower.includes("haiku") || lower.includes("mini")) return { quality: 3, latency: 1200, inCost: 1, outCost: 3 };
-  if (lower.includes("opus") || lower.includes("o3") || lower.includes("codex")) return { quality: 5, latency: 3800, inCost: 8, outCost: 24 };
-  if (lower.includes("sonnet") || lower.includes("gpt-5") || lower.includes("gemini-3.1-pro")) return { quality: 4, latency: 2800, inCost: 4, outCost: 16 };
-  return DEFAULT_MODEL_PROFILE;
+function mapReasoningTierToQuality(tier: RegistryRoutingModel["reasoning_tier"]): number | null {
+  if (tier === "high") return 5;
+  if (tier === "medium") return 3;
+  if (tier === "low") return 2;
+  return null;
+}
+
+function mapSpeedTierToLatencyMs(tier: RegistryRoutingModel["speed_tier"]): number | null {
+  if (tier === "fast") return 1400;
+  if (tier === "medium") return 2400;
+  if (tier === "slow") return 3800;
+  return null;
+}
+
+function hasVerifiedPolicyMetadata(record: RegistryRoutingModel): boolean {
+  return record.routing_eligibility === "verified" && record.capability_status === "verified";
+}
+
+function resolvePolicyCandidateMetadata(record: RegistryRoutingModel | undefined, config: PolicyConfig): PolicyCandidateMetadata {
+  if (!record) {
+    return {
+      source: "unknown",
+      quality: null,
+      latencyMs: null,
+      inCost: null,
+      outCost: null,
+      verified: { quality: false, latency: false, cost: false }
+    };
+  }
+
+  const verified = hasVerifiedPolicyMetadata(record);
+  const allowFallback = config.fallbackOnMissingMetadata;
+  const quality = mapReasoningTierToQuality(record.reasoning_tier);
+  const latencyMs = mapSpeedTierToLatencyMs(record.speed_tier);
+  const hasCost = typeof record.pricing_input_per_1m === "number" || typeof record.pricing_output_per_1m === "number";
+  const verifiedCost = verified && record.pricing_status === "verified" && hasCost;
+
+  return {
+    source: verified ? "verified_registry" : "registry_fallback",
+    quality: allowFallback || verified ? quality : null,
+    latencyMs: allowFallback || verified ? latencyMs : null,
+    inCost: allowFallback || verifiedCost ? record.pricing_input_per_1m : null,
+    outCost: allowFallback || verifiedCost ? record.pricing_output_per_1m : null,
+    verified: {
+      quality: verified && quality !== null,
+      latency: verified && latencyMs !== null,
+      cost: verifiedCost
+    }
+  };
 }
 
 function mapRouterIntentToPolicyIntent(intent: RequestIntent): PolicyIntentLabel {
@@ -126,6 +178,7 @@ export function evaluatePolicyRouting(args: {
   userTier?: string;
   currentSelection: { providerName: string; modelId: string };
   resolvedIntent: RequestIntent;
+  registryLookup?: Map<string, RegistryRoutingModel>;
 }): PolicyEvaluationResult {
   void args.context;
   void args.userTier;
@@ -135,10 +188,13 @@ export function evaluatePolicyRouting(args: {
 
   const candidates = args.availableByProvider.flatMap(({ provider, models }) =>
     models.map((modelId) => {
-      const profile = resolveModelProfile(modelId);
+      const registryRecord = lookupRegistryModel(args.registryLookup, provider.name, modelId);
+      const metadata = resolvePolicyCandidateMetadata(registryRecord, config);
       const tokenEstimate = estimateTokens(args.prompt);
-      const estimatedCostUsd = ((profile.inCost * tokenEstimate.inTokens + profile.outCost * tokenEstimate.outTokens) / 1_000_000);
-      return { provider, modelId, profile, estimatedCostUsd };
+      const inCost = metadata.inCost ?? 0;
+      const outCost = metadata.outCost ?? 0;
+      const estimatedCostUsd = (inCost * tokenEstimate.inTokens + outCost * tokenEstimate.outTokens) / 1_000_000;
+      return { provider, modelId, metadata, estimatedCostUsd };
     })
   );
 
@@ -158,40 +214,54 @@ export function evaluatePolicyRouting(args: {
     };
   }
 
-  const cheapest = Math.max(Math.min(...candidates.map((c) => c.estimatedCostUsd)), 0.000001);
+  const verifiedCostCandidates = candidates.filter((candidate) => candidate.metadata.verified.cost);
+  const cheapestVerifiedCost = verifiedCostCandidates.length
+    ? Math.max(Math.min(...verifiedCostCandidates.map((candidate) => candidate.estimatedCostUsd)), 0.000001)
+    : null;
+  const metadataMissing = candidates.some(
+    (candidate) => !candidate.metadata.verified.cost || !candidate.metadata.verified.quality || !candidate.metadata.verified.latency
+  );
 
   const scored = candidates.map((candidate) => {
     const flags: string[] = [];
     const reasons: string[] = [];
     let eligible = true;
 
-    const costMultiplier = candidate.estimatedCostUsd / cheapest;
-    if (candidate.estimatedCostUsd > config.hard_cap_usd_per_request) {
+    const verified = candidate.metadata.verified;
+    const costMultiplier = verified.cost && cheapestVerifiedCost !== null ? candidate.estimatedCostUsd / cheapestVerifiedCost : null;
+    if (verified.cost && candidate.estimatedCostUsd > config.hard_cap_usd_per_request) {
       eligible = false;
       flags.push("blocked_hard_cap");
       reasons.push("estimated_cost_above_hard_cap");
     }
-    if (costMultiplier > config.max_cost_multiplier_vs_cheapest) {
+    if (verified.cost && costMultiplier !== null && costMultiplier > config.max_cost_multiplier_vs_cheapest) {
       eligible = false;
       flags.push("blocked_relative_cost");
       reasons.push("cost_multiplier_above_threshold");
     }
     const maxLatency = config.max_latency_ms_by_intent[intentLabel];
-    if (maxLatency && candidate.profile.latency > maxLatency) {
+    if (maxLatency && verified.latency && (candidate.metadata.latencyMs ?? 0) > maxLatency) {
       eligible = false;
       flags.push("blocked_latency_cap");
       reasons.push("latency_above_intent_threshold");
     }
     const minQuality = config.min_quality_tier_by_intent[intentLabel];
-    if (minQuality && candidate.profile.quality < minQuality) {
+    if (minQuality && verified.quality && (candidate.metadata.quality ?? 0) < minQuality) {
       eligible = false;
       flags.push("blocked_quality_floor");
       reasons.push("quality_below_intent_floor");
     }
 
-    const qualityScore = candidate.profile.quality / 5;
-    const latencyScore = 1 - Math.min(candidate.profile.latency / 5000, 1);
-    const costScore = 1 - Math.min(costMultiplier / config.max_cost_multiplier_vs_cheapest, 1);
+    if (!verified.cost) reasons.push("cost_unverified_non_authoritative");
+    if (!verified.latency) reasons.push("latency_unverified_non_authoritative");
+    if (!verified.quality) reasons.push("quality_unverified_non_authoritative");
+
+    const qualityScore = verified.quality ? Math.max(0, Math.min((candidate.metadata.quality ?? 0) / 5, 1)) : DEFAULT_UNKNOWN_SCORES.quality;
+    const latencyScore = verified.latency ? 1 - Math.min((candidate.metadata.latencyMs ?? 0) / 5000, 1) : DEFAULT_UNKNOWN_SCORES.latency;
+    const costScore =
+      verified.cost && costMultiplier !== null
+        ? 1 - Math.min(costMultiplier / config.max_cost_multiplier_vs_cheapest, 1)
+        : DEFAULT_UNKNOWN_SCORES.cost;
     const final = eligible ? qualityScore * 2 + latencyScore + costScore : -1;
 
     return { candidate, eligible, flags, reasons, qualityScore, latencyScore, costScore, final };
@@ -209,7 +279,7 @@ export function evaluatePolicyRouting(args: {
     selected: enforcedSelection
       ? { provider: enforcedSelection.candidate.provider, modelId: enforcedSelection.candidate.modelId }
       : null,
-    metadataMissing: false,
+    metadataMissing,
     trace: {
       trace_id: args.traceId,
       intent: { label: intentLabel, confidence: 1, source: "resolved-router-intent" },
@@ -218,6 +288,7 @@ export function evaluatePolicyRouting(args: {
         .sort((a, b) => b.final - a.final)
         .map((item) => ({
           model: `${item.candidate.provider.name}:${item.candidate.modelId}`,
+          metadata_source: item.candidate.metadata.source,
           quality_score: Number(item.qualityScore.toFixed(4)),
           latency_score: Number(item.latencyScore.toFixed(4)),
           cost_score: Number(item.costScore.toFixed(4)),
@@ -227,8 +298,10 @@ export function evaluatePolicyRouting(args: {
         })),
       selected_model: `${(enforcedSelection ?? selected ?? scored[0]).candidate.provider.name}:${(enforcedSelection ?? selected ?? scored[0]).candidate.modelId}`,
       selection_summary: selectedIneligible
-        ? `Current selection violated hard guardrails; enforced ${(enforcedSelection ?? scored[0]).candidate.provider.name}:${(enforcedSelection ?? scored[0]).candidate.modelId}.`
-        : "Current selection passed hard guardrails.",
+        ? `Current selection violated verified hard guardrails; enforced ${(enforcedSelection ?? scored[0]).candidate.provider.name}:${(enforcedSelection ?? scored[0]).candidate.modelId}.`
+        : metadataMissing
+          ? "Current selection passed verified hard guardrails; one or more policy dimensions were unverified."
+          : "Current selection passed hard guardrails.",
       mode: config.shadowMode ? "shadow" : "enforced",
       would_have_selected: `${(enforcedSelection ?? selected ?? scored[0]).candidate.provider.name}:${(enforcedSelection ?? selected ?? scored[0]).candidate.modelId}`
     }

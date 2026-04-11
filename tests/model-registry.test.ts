@@ -35,6 +35,10 @@ test("router consumes registry snapshot and avoids manual_override_only entries"
         {
           provider_name: "google",
           model_id: "gemini-3.1-pro",
+          pricing_status: "missing",
+          capability_status: "heuristic",
+          pricing_input_per_1m: null,
+          pricing_output_per_1m: null,
           routing_eligibility: "manual_override_only",
           confidence_tier: "low",
           confidence_score: 0.3,
@@ -50,6 +54,10 @@ test("router consumes registry snapshot and avoids manual_override_only entries"
         {
           provider_name: "google",
           model_id: "gemini-3.1-flash",
+          pricing_status: "estimated",
+          capability_status: "heuristic",
+          pricing_input_per_1m: 1,
+          pricing_output_per_1m: 3,
           routing_eligibility: "restricted",
           confidence_tier: "medium",
           confidence_score: 0.6,
