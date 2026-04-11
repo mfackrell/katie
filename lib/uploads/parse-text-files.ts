@@ -1,36 +1,139 @@
+import {
+  detectFileType,
+  getFileExtension,
+  isLegacyWordType,
+  isTextSourceFormat,
+  supportedExtensionsForError,
+  type SourceFormat
+} from "@/lib/uploads/file-type-helpers";
+
 export type ParsedAttachment = {
   name: string;
   mimeType: string;
   text: string;
+  sourceFormat: SourceFormat;
 };
 
 const MAX_FILES = 5;
-const MAX_FILE_SIZE_BYTES = 2 * 1024 * 1024;
+const MAX_TEXT_FILE_SIZE_BYTES = 2 * 1024 * 1024;
+const MAX_BINARY_FILE_SIZE_BYTES = 8 * 1024 * 1024;
+const MAX_OUTPUT_CHARS = 50_000;
+const MAX_EXCEL_SHEETS = 20;
 
-const ALLOWED_MIME_TYPES = new Set([
-  "text/plain",
-  "text/markdown",
-  "application/json",
-  "text/csv"
-]);
+const DYNAMIC_IMPORTS: Record<string, () => Promise<any>> = {
+  mammoth: () => import("mammoth"),
+  xlsx: () => import("xlsx"),
+  pdfjs: () => import("pdfjs-dist/legacy/build/pdf.mjs")
+};
 
-const ALLOWED_EXTENSIONS = new Set([".txt", ".md", ".json", ".csv"]);
-
-function getExtension(name: string): string {
-  const lastDotIndex = name.lastIndexOf(".");
-  if (lastDotIndex < 0) {
-    return "";
-  }
-
-  return name.slice(lastDotIndex).toLowerCase();
+export function __setDynamicImportOverridesForTests(
+  overrides: Partial<Record<keyof typeof DYNAMIC_IMPORTS, () => Promise<any>>>
+): void {
+  Object.assign(DYNAMIC_IMPORTS, overrides);
 }
 
-function isAllowedFileType(file: File): boolean {
-  if (ALLOWED_MIME_TYPES.has(file.type)) {
-    return true;
+function sanitizeExtractedText(text: string): string {
+  const withoutControlChars = text.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, "");
+  if (withoutControlChars.length <= MAX_OUTPUT_CHARS) {
+    return withoutControlChars;
   }
 
-  return ALLOWED_EXTENSIONS.has(getExtension(file.name));
+  return `${withoutControlChars.slice(0, MAX_OUTPUT_CHARS)}\n[truncated]`;
+}
+
+function compactWhitespace(text: string): string {
+  return text.replace(/\r\n/g, "\n").replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
+}
+
+function getFileSizeLimitBytes(sourceFormat: SourceFormat): number {
+  return isTextSourceFormat(sourceFormat) ? MAX_TEXT_FILE_SIZE_BYTES : MAX_BINARY_FILE_SIZE_BYTES;
+}
+
+export function validateFile(file: File): SourceFormat {
+  const fileType = detectFileType(file);
+
+  if (!fileType) {
+    throw new Error(
+      `Unsupported file type for "${file.name}". Supported extensions: ${supportedExtensionsForError()}.`
+    );
+  }
+
+  const sizeLimitBytes = getFileSizeLimitBytes(fileType.sourceFormat);
+
+  if (file.size > sizeLimitBytes) {
+    const limitMb = Math.floor(sizeLimitBytes / (1024 * 1024));
+    throw new Error(`File "${file.name}" is too large. Maximum file size for this type is ${limitMb}MB.`);
+  }
+
+  return fileType.sourceFormat;
+}
+
+export async function convertToPlainText(file: File): Promise<string> {
+  const fileType = detectFileType(file);
+
+  if (!fileType) {
+    throw new Error(
+      `Unsupported file type for "${file.name}". Supported extensions: ${supportedExtensionsForError()}.`
+    );
+  }
+
+  if (fileType.sourceFormat === "text") {
+    return sanitizeExtractedText(await file.text());
+  }
+
+  if (fileType.sourceFormat === "word") {
+    try {
+      const mammoth = await DYNAMIC_IMPORTS.mammoth();
+      const buffer = await file.arrayBuffer();
+      const parsed = await mammoth.extractRawText({ arrayBuffer: buffer });
+      return sanitizeExtractedText(compactWhitespace(parsed.value || ""));
+    } catch {
+      if (isLegacyWordType(fileType) || getFileExtension(file.name) === ".doc") {
+        throw new Error(
+          `Legacy .doc not supported for "${file.name}". Please convert the file to .docx and retry.`
+        );
+      }
+
+      throw new Error(`Failed to parse Word document "${file.name}".`);
+    }
+  }
+
+  if (fileType.sourceFormat === "excel") {
+    try {
+      const xlsx = await DYNAMIC_IMPORTS.xlsx();
+      const workbook = xlsx.read(await file.arrayBuffer(), { type: "array" });
+      const sheetChunks = workbook.SheetNames.slice(0, MAX_EXCEL_SHEETS).map((sheetName: string) => {
+        const worksheet = workbook.Sheets[sheetName];
+        const tsv = xlsx.utils.sheet_to_csv(worksheet, { FS: "\t" }).trim();
+        return `--- sheet: ${sheetName} ---\n${tsv}`;
+      });
+      return sanitizeExtractedText(sheetChunks.join("\n\n"));
+    } catch {
+      throw new Error(`Failed to parse Excel document "${file.name}".`);
+    }
+  }
+
+  try {
+    const pdfjs = await DYNAMIC_IMPORTS.pdfjs();
+    const rawBuffer = await file.arrayBuffer();
+    const loadingTask = pdfjs.getDocument({ data: rawBuffer, disableWorker: true });
+    const pdfDocument = await loadingTask.promise;
+    const pageTextChunks: string[] = [];
+
+    for (let pageNumber = 1; pageNumber <= pdfDocument.numPages; pageNumber += 1) {
+      const page = await pdfDocument.getPage(pageNumber);
+      const content = await page.getTextContent();
+      const text = content.items
+        .map((item: { str?: string }) => item.str ?? "")
+        .join(" ")
+        .trim();
+      pageTextChunks.push(text);
+    }
+
+    return sanitizeExtractedText(pageTextChunks.join("\n\n"));
+  } catch {
+    throw new Error(`Failed to parse PDF document "${file.name}".`);
+  }
 }
 
 export async function parseTextFiles(files: File[]): Promise<ParsedAttachment[]> {
@@ -38,25 +141,17 @@ export async function parseTextFiles(files: File[]): Promise<ParsedAttachment[]>
     throw new Error(`Too many files. Maximum allowed is ${MAX_FILES}.`);
   }
 
-  const parsedAttachments = await Promise.all(
+  return Promise.all(
     files.map(async (file) => {
-      if (!isAllowedFileType(file)) {
-        throw new Error(`Unsupported file type for "${file.name}". Allowed types: txt, md, json, csv.`);
-      }
-
-      if (file.size > MAX_FILE_SIZE_BYTES) {
-        throw new Error(`File "${file.name}" is too large. Maximum file size is 2MB.`);
-      }
-
-      const text = await file.text();
+      const sourceFormat = validateFile(file);
+      const text = await convertToPlainText(file);
 
       return {
         name: file.name,
         mimeType: file.type || "text/plain",
+        sourceFormat,
         text
       };
     })
   );
-
-  return parsedAttachments;
 }

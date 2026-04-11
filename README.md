@@ -9,6 +9,7 @@ It solves a practical orchestration problem: keep one chat UI while dynamically 
 2. Review [`docs/environment-variables.md`](docs/environment-variables.md) for required configuration.
 3. Skim [`docs/architecture.md`](docs/architecture.md) and [`docs/data-model.md`](docs/data-model.md) for system internals.
 4. Read [`docs/deployment.md`](docs/deployment.md) for migration-first rollout guidance.
+5. Review [`docs/attachments.md`](docs/attachments.md) for supported upload types and extraction caveats.
 
 ## Tech stack (actual)
 - **Framework:** Next.js 15 (App Router), React 18, TypeScript.
