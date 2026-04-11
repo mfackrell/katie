@@ -689,6 +689,24 @@ export async function chooseProvider(
     console.info(
       `[LLM Router Candidates] ${JSON.stringify({ requestId: traceRequestId, count: llmCandidatesUsed.length, candidates: llmCandidatesUsed })}`
     );
+    if (intent === "social-emotional") {
+      const geminiCandidates = llmCandidatesUsed.filter((candidate) => candidate.providerName === "google");
+      const geminiGeneralBonusesApplied = geminiCandidates.reduce(
+        (total, candidate) =>
+          total +
+          (candidate.score_breakdown?.adjustments.filter((adjustment) => adjustment.label === "gemini_general_reasoning_bonus")
+            .length ?? 0),
+        0
+      );
+      console.info(
+        `[Social Emotional Routing] ${JSON.stringify({
+          requestId: traceRequestId,
+          intent,
+          preference: "quality_over_cost",
+          gemini_general_reasoning_bonus_suppressed: geminiGeneralBonusesApplied === 0
+        })}`
+      );
+    }
 
     const llmRouting: LlmRoutingResult = await chooseRoutingWithLLM({
       prompt,

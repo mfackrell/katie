@@ -142,6 +142,22 @@ test("text-only intent does not require a vision model", async () => {
   assert.equal(await inferRequestIntent("Summarize this board memo in five bullets.", false), "general-text");
 });
 
+test("socially nuanced prompt is classified into social-emotional lane", async () => {
+  assert.equal(await inferRequestIntent("how are you feeling?", false), "social-emotional");
+});
+
+test("social-emotional fallback heuristic still classifies when control-plane providers fail", async () => {
+  const unavailableDecisionProvider = provider("openai", ["gpt-5.2-mini"], async () => {
+    throw new Error("control plane unavailable");
+  });
+  assert.equal(
+    await inferRequestIntent("what's your sense of this?", false, {
+      decisionProviders: [{ provider: unavailableDecisionProvider.provider, modelId: "gpt-5.2-mini" }]
+    }),
+    "social-emotional"
+  );
+});
+
 test("repo review prompts are classified as architecture review and cannot use image-generation models", async () => {
   assert.equal(await inferRequestIntent("review this repo and tell me what its purpose is", false), "architecture-review");
 
@@ -337,6 +353,18 @@ test("gemini remains a first-class candidate for general text", async () => {
   assert.ok(gemini.finalScore >= smallFast.finalScore);
 });
 
+test("social-emotional lane suppresses gemini general bonus and favors nuanced providers", async () => {
+  const geminiFlashLite = scoreModelCandidateWithBreakdown("google", "gemini-3.1-flash-lite-preview", "social-emotional");
+  const claudeSonnet = scoreModelCandidateWithBreakdown("anthropic", "claude-4.5-sonnet", "social-emotional");
+  const grok4 = scoreModelCandidateWithBreakdown("grok", "grok-4-0709", "social-emotional");
+  const openaiGpt5 = scoreModelCandidateWithBreakdown("openai", "gpt-5.2-unified", "social-emotional");
+
+  assert.equal(geminiFlashLite.adjustments.some((adjustment) => adjustment.label === "gemini_general_reasoning_bonus"), false);
+  assert.ok(claudeSonnet.finalScore > geminiFlashLite.finalScore);
+  assert.ok(grok4.finalScore > geminiFlashLite.finalScore);
+  assert.ok(openaiGpt5.finalScore > geminiFlashLite.finalScore);
+});
+
 test("technical debugging still prefers stronger technical models", async () => {
   const validated = validateRoutingDecision(
     { providerName: "openai", modelId: "non-existent-model" },
@@ -399,7 +427,9 @@ test("router preference profile is explicit and stable", async () => {
   assert.equal(profile.prioritize_best_model_for_task, true);
   assert.equal(profile.hard_constraints_are_non_negotiable, true);
   assert.ok(profile.quality_over_cost_for.includes("architecture-review"));
+  assert.ok(profile.quality_over_cost_for.includes("social-emotional"));
   assert.ok(profile.prefer_efficient_for.includes("general-text"));
+  assert.equal(profile.prefer_efficient_for.includes("social-emotional"), false);
 });
 
 test("router falls back to deterministic selection when LLM routing is unavailable", async () => {
