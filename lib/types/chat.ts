@@ -1,10 +1,42 @@
 export type Role = "user" | "assistant";
 
+export type ActorRoutingProvider = "openai" | "google" | "anthropic" | "grok";
+export type ActorRoutingTag =
+  | "coding"
+  | "debugging"
+  | "architecture"
+  | "writing"
+  | "emotional-nuance"
+  | "conversational"
+  | "interpersonal"
+  | "empathy"
+  | "multimodal"
+  | "research"
+  | "reflection";
+export type ActorRoutingIntent =
+  | "general"
+  | "technical-debugging"
+  | "architecture-design"
+  | "coding-implementation"
+  | "writing-editing"
+  | "research-analysis"
+  | "emotional-support";
+
+export type ActorRoutingProfile = {
+  providerBoosts: Record<ActorRoutingProvider, number>;
+  tagBoosts: Record<ActorRoutingTag, number>;
+  intentProviderBoosts: Record<ActorRoutingIntent, Record<ActorRoutingProvider, number>>;
+  summary: string;
+  generatedByModel: string | null;
+  version: string;
+};
+
 export interface Actor {
   id: string;
   name: string;
   purpose: string;
   parentId?: string;
+  routingProfile?: ActorRoutingProfile;
 }
 
 export interface ChatThread {

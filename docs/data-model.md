@@ -10,6 +10,7 @@ Represents an actor persona.
 - `name`
 - `system_prompt` (mapped to `purpose` in app types)
 - `parent_actor_id` (optional parent-child actor relationship)
+- `routing_profile` (structured actor-level routing affinity profile consumed by runtime scoring)
 - `created_at`, `updated_at`
 
 ## 2) chats

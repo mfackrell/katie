@@ -1,5 +1,6 @@
 import { getChatContextState } from "@/lib/data/persistence-store";
-import type { Message } from "@/lib/types/chat";
+import type { ActorRoutingProfile, Message } from "@/lib/types/chat";
+import { createNeutralActorRoutingProfile } from "@/lib/router/actor-routing-profile";
 
 interface AssembledContext {
   name: string;
@@ -7,6 +8,7 @@ interface AssembledContext {
   summary: string;
   history: Message[];
   shortTermMemory: Record<string, unknown>;
+  actorRoutingProfile: ActorRoutingProfile;
 }
 
 export async function assembleContext(actorId: string, chatId: string): Promise<AssembledContext> {
@@ -38,6 +40,7 @@ export async function assembleContext(actorId: string, chatId: string): Promise<
     persona: memoryHeader ? `${actor.purpose}\n\nMemory state:\n${memoryHeader}` : actor.purpose,
     summary,
     history,
-    shortTermMemory
+    shortTermMemory,
+    actorRoutingProfile: actor.routingProfile ?? createNeutralActorRoutingProfile()
   };
 }

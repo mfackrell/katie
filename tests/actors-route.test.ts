@@ -31,6 +31,11 @@ class Query {
     return new Query(this.state, this.table, "update", this.payload, this.filters);
   }
 
+  upsert(payload: Row) {
+    this.payload = payload;
+    return new Query(this.state, this.table, "update", this.payload, this.filters);
+  }
+
   eq(field: string, value: unknown) {
     this.filters.push({ field, value, op: "eq" });
     return this;
@@ -80,8 +85,10 @@ function loadPatchHandler() {
 
   const routePath = require.resolve("../app/api/actors/route");
   const storePath = require.resolve("../lib/data/persistence-store");
+  const profilePath = require.resolve("../lib/router/actor-routing-profile");
   delete require.cache[routePath];
   delete require.cache[storePath];
+  delete require.cache[profilePath];
 
   return require("../app/api/actors/route") as typeof import("../app/api/actors/route");
 }
@@ -93,6 +100,7 @@ test("PATCH /api/actors updates the actor purpose", async () => {
         id: "actor-1",
         name: "Writer",
         system_prompt: "Original prompt",
+        routing_profile: null,
         parent_actor_id: null,
         created_at: "2026-03-20T00:00:00.000Z",
         updated_at: "2026-03-20T00:00:00.000Z",
