@@ -140,7 +140,7 @@ function selectControlPlaneModelForProvider(
   return rankedFallback[0]?.modelId ?? null;
 }
 
-function buildControlPlaneDecisionProviders(
+export function buildControlPlaneDecisionProviders(
   modelEntries: Array<{ provider: LlmProvider; models: string[] }>,
   registryLookup?: Map<string, RegistryRoutingModel>
 ): Array<{ provider: LlmProvider; modelId: string }> {
