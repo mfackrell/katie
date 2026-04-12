@@ -92,6 +92,7 @@ type RoutingTrace = {
 };
 
 const CONTROL_PLANE_PROVIDER_PRIORITY: LlmProvider["name"][] = ["google", "openai", "anthropic", "grok"];
+const DEAD_CONTROL_PLANE_MODELS = new Set(["google:gemini-2.0-flash", "google:models/gemini-2.0-flash"]);
 
 const CONTROL_PLANE_FLAGSHIP_MODELS: Record<LlmProvider["name"], string[]> = {
   google: ["gemini-3.1-pro", "gemini-3.1-pro-latest", "gemini-3-pro"],
@@ -105,6 +106,10 @@ function isEligibleControlPlaneModel(
   modelId: string,
   registryLookup?: Map<string, RegistryRoutingModel>
 ): boolean {
+  const key = `${providerName}:${normalizeModelId(modelId)}`;
+  if (DEAD_CONTROL_PLANE_MODELS.has(key)) {
+    return false;
+  }
   const metadata = buildCandidateMetadata(providerName, modelId, "general-text", { registryLookup });
   return metadata.supports_text && !metadata.supports_image_generation;
 }
@@ -142,7 +147,8 @@ function selectControlPlaneModelForProvider(
 
 export function buildControlPlaneDecisionProviders(
   modelEntries: Array<{ provider: LlmProvider; models: string[] }>,
-  registryLookup?: Map<string, RegistryRoutingModel>
+  registryLookup?: Map<string, RegistryRoutingModel>,
+  traceRequestId?: string
 ): Array<{ provider: LlmProvider; modelId: string }> {
   const entriesByProvider = new Map(modelEntries.map((entry) => [entry.provider.name, entry]));
   const selectedProviders: Array<{ provider: LlmProvider; modelId: string }> = [];
@@ -153,8 +159,18 @@ export function buildControlPlaneDecisionProviders(
       continue;
     }
 
+    const skippedDeadModels = providerEntry.models.filter((modelId) =>
+      DEAD_CONTROL_PLANE_MODELS.has(`${providerName}:${normalizeModelId(modelId)}`)
+    );
+    if (skippedDeadModels.length) {
+      console.warn(
+        `[ControlPlane] requestId=${traceRequestId ?? "none"} provider=${providerName} skipped_dead_models=${skippedDeadModels.join(",")}`
+      );
+    }
+
     const selectedModelId = selectControlPlaneModelForProvider(providerName, providerEntry.models, registryLookup);
     if (!selectedModelId) {
+      console.warn(`[ControlPlane] requestId=${traceRequestId ?? "none"} provider=${providerName} no_eligible_decision_model=true`);
       continue;
     }
 
@@ -585,7 +601,7 @@ export async function chooseProvider(
     return { provider, models: fallbackModels };
   }));
 
-  const controlPlaneDecisionProviders = buildControlPlaneDecisionProviders(modelEntries, registryLookup);
+  const controlPlaneDecisionProviders = buildControlPlaneDecisionProviders(modelEntries, registryLookup, traceRequestId);
   console.info(
     `[ControlPlane] decision_models=${controlPlaneDecisionProviders.map((entry) => `${entry.provider.name}:${entry.modelId}`).join(",") || "none"}`
   );

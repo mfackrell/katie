@@ -12,7 +12,7 @@ import {
   scoreModelCandidateWithBreakdown,
   validateRoutingDecision
 } from "../lib/router/model-intent";
-import { chooseProvider, type ResolvedRoutingIntent } from "../lib/router/master-router";
+import { buildControlPlaneDecisionProviders, chooseProvider, type ResolvedRoutingIntent } from "../lib/router/master-router";
 import { isAcknowledgment, parseIntentSessionState } from "../lib/router/intent-context";
 import { isBlockedRoutingModel } from "../lib/router/routing-model-filters";
 import {
@@ -153,6 +153,20 @@ test("banter greeting routes to social-emotional lane", async () => {
 
 test("personality complaint routes to social-emotional lane", async () => {
   assert.equal(await inferRequestIntent("i need you to develop a fucking personality ...", false), "social-emotional");
+});
+
+test("conversational prompts cannot be forced into code-generation by control-plane classifier", async () => {
+  const misclassifyingDecisionProvider = provider("openai", ["gpt-5.2-mini"], async ({ modelId }) => ({
+    text: JSON.stringify({ intent: "code-generation", preferred_provider: null }),
+    model: modelId ?? "gpt-5.2-mini",
+    provider: "openai"
+  })).provider;
+
+  const classification = await inferRequestClassification("stop being robotic and develop a personality", false, {
+    decisionProviders: [{ provider: misclassifyingDecisionProvider, modelId: "gpt-5.2-mini" }]
+  });
+
+  assert.equal(classification.intent, "social-emotional");
 });
 
 test("social-emotional fallback heuristic still classifies when control-plane providers fail", async () => {
@@ -622,6 +636,13 @@ test("control-plane falls back to strongest compatible provider model when flags
 
   assert.deepEqual(attempts, ["openai:gpt-5.2-unified"]);
   assert.equal(decision.explainer?.selected_source, "llm-primary");
+});
+
+test("dead Gemini 2.0 flash control-plane model is never selected", () => {
+  const googleProvider = provider("google", ["gemini-2.0-flash", "gemini-3.1-pro"]).provider;
+  const selected = buildControlPlaneDecisionProviders([{ provider: googleProvider, models: ["gemini-2.0-flash", "gemini-3.1-pro"] }]);
+  assert.equal(selected.length, 1);
+  assert.equal(selected[0]?.modelId, "gemini-3.1-pro");
 });
 
 test("router uses upstream requestIntent as authoritative and skips local classification", async () => {

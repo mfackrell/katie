@@ -227,6 +227,34 @@ function hasSocialEmotionalHint(prompt: string): boolean {
   return SOCIAL_EMOTIONAL_PROMPT_REGEX.test(prompt);
 }
 
+const SOCIAL_CONVERSATIONAL_GUARD_REGEX =
+  /\b(personality|robotic|vibe|banter|rapport|you feeling|how are you|what do you think of me|what up|what's up)\b/i;
+const CODE_GENERATION_CUE_REGEX =
+  /\b(write code|implement|refactor|patch|create function|build api|script|code\b|endpoint|class|method)\b/i;
+
+function hasCodeGenerationCue(prompt: string): boolean {
+  return CODE_GENERATION_CUE_REGEX.test(prompt.toLowerCase());
+}
+
+function preventConversationalCodeGenerationIntent(prompt: string, classifiedIntent: RequestIntent | null): RequestIntent | null {
+  if (classifiedIntent !== "code-generation") {
+    return classifiedIntent;
+  }
+
+  const normalizedPrompt = prompt.toLowerCase();
+  if (hasCodeGenerationCue(normalizedPrompt)) {
+    return classifiedIntent;
+  }
+
+  if (hasSocialEmotionalHint(prompt) || SOCIAL_CONVERSATIONAL_GUARD_REGEX.test(normalizedPrompt)) {
+    console.info("[Intent Guard] blocked_code_generation reason=conversational_without_implementation_cues");
+    return "social-emotional";
+  }
+
+  console.info("[Intent Guard] blocked_code_generation reason=missing_implementation_cues");
+  return null;
+}
+
 const SAFETY_SENSITIVE_VISION_ANCHOR_REGEX =
   /\b(image|photo|picture|pic|frame|screenshot|scene|visual|attached|this image|this photo|what is in this)\b/i;
 const SAFETY_SENSITIVE_VISION_EXPLICIT_REGEX =
@@ -573,7 +601,7 @@ export async function inferRequestIntent(
   if (/\b(architecture|system design|kubernetes|deployment|review this repo|repo review)\b/i.test(normalizedPrompt)) {
     return "architecture-review";
   }
-  if (/\b(write code|implement|patch|refactor|create function|build api)\b/i.test(normalizedPrompt)) {
+  if (hasCodeGenerationCue(normalizedPrompt)) {
     return "code-generation";
   }
   if (isLikelySafetySensitiveVisionPrompt(prompt, hasImages)) {
@@ -608,13 +636,15 @@ export async function inferRequestIntent(
   const classifiedOutput = await classifyIntentWithLLM(prompt, availableIntents, options);
   const classifiedIntent = classifiedOutput.intent;
 
-  if (classifiedIntent && availableIntents.includes(classifiedIntent)) {
-    if (classifiedIntent === "social-emotional") {
+  const guardedClassifiedIntent = preventConversationalCodeGenerationIntent(prompt, classifiedIntent);
+
+  if (guardedClassifiedIntent && availableIntents.includes(guardedClassifiedIntent)) {
+    if (guardedClassifiedIntent === "social-emotional") {
       console.info("[Intent Source] social-emotional selected via control-plane classifier");
     } else {
-      console.info(`[Intent Source] text LLM classifier -> ${classifiedIntent}`);
+      console.info(`[Intent Source] text LLM classifier -> ${guardedClassifiedIntent}`);
     }
-    return classifiedIntent;
+    return guardedClassifiedIntent;
   }
 
   if (hasImages) {
@@ -657,7 +687,7 @@ export async function inferRequestClassification(
     return { intent: "code-review", preferredProvider: null };
   }
   if (/\b(architecture|system design|kubernetes|deployment|review this repo|repo review)\b/i.test(normalizedPrompt)) return { intent: "architecture-review", preferredProvider: null };
-  if (/\b(write code|implement|patch|refactor|create function|build api)\b/i.test(normalizedPrompt)) return { intent: "code-generation", preferredProvider: null };
+  if (hasCodeGenerationCue(normalizedPrompt)) return { intent: "code-generation", preferredProvider: null };
   if (isLikelySafetySensitiveVisionPrompt(prompt, hasImages)) return { intent: "safety-sensitive-vision", preferredProvider: null };
   if (hasImages && /\b(chart|trend|forecast|project|estimate)\b/i.test(normalizedPrompt)) return { intent: "multimodal-reasoning", preferredProvider: null };
   if (hasVideoInput && /\b(chart|trend|forecast|project|estimate|timeline|sequence)\b/i.test(normalizedPrompt)) return { intent: "multimodal-reasoning", preferredProvider: null };
@@ -680,11 +710,12 @@ export async function inferRequestClassification(
   ];
 
   const classifiedOutput = await classifyIntentWithLLM(prompt, availableIntents, options);
-  if (classifiedOutput.intent && availableIntents.includes(classifiedOutput.intent)) {
-    if (classifiedOutput.intent === "social-emotional") {
+  const guardedClassifiedIntent = preventConversationalCodeGenerationIntent(prompt, classifiedOutput.intent);
+  if (guardedClassifiedIntent && availableIntents.includes(guardedClassifiedIntent)) {
+    if (guardedClassifiedIntent === "social-emotional") {
       console.info("[Intent Source] social-emotional selected via control-plane classifier");
     }
-    return { intent: classifiedOutput.intent, preferredProvider: classifiedOutput.preferred_provider };
+    return { intent: guardedClassifiedIntent, preferredProvider: classifiedOutput.preferred_provider };
   }
 
   if (hasImages) return { intent: "vision-analysis", preferredProvider: classifiedOutput.preferred_provider };
