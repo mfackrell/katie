@@ -445,6 +445,19 @@ type ControlPlaneSelectionOptions = {
   timeoutMs?: number;
 };
 
+const CONTROL_PLANE_VERIFIED_MODEL_IDS: Record<ProviderName, string[]> = {
+  openai: ["gpt-5.3-codex", "gpt-5.2-unified", "gpt-5.2", "o3-pro"],
+  anthropic: ["claude-4.6-opus", "claude-4.5-sonnet", "claude-4-opus"],
+  grok: ["grok-4-0709", "grok-4"],
+  google: []
+};
+
+function isControlPlaneJsonInstructionCompatible(providerName: ProviderName, modelId: string): boolean {
+  const normalizedModel = modelId.trim().toLowerCase();
+  const verifiedModels = CONTROL_PLANE_VERIFIED_MODEL_IDS[providerName];
+  return verifiedModels.some((verifiedModel) => verifiedModel.trim().toLowerCase() === normalizedModel);
+}
+
 function isEligibleControlPlaneModel(providerName: ProviderName, modelId: string, registryLookup?: RegistryLookup): boolean {
   const registry = lookupRegistryModel(registryLookup, providerName, modelId);
   const routingEligibility = registry?.routing_eligibility ?? "restricted";
@@ -453,7 +466,7 @@ function isEligibleControlPlaneModel(providerName: ProviderName, modelId: string
   }
   const supportsText = registry?.supports_text ?? modelSupportsIntent(providerName, modelId, "general-text", registryLookup);
   const supportsImageGen = registry?.supports_image_generation ?? isImageGenerationModel(providerName, modelId);
-  return Boolean(supportsText) && !supportsImageGen;
+  return Boolean(supportsText) && !supportsImageGen && isControlPlaneJsonInstructionCompatible(providerName, modelId);
 }
 
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
@@ -957,7 +970,9 @@ function rankModelForIntent(providerName: ProviderName, modelId: string, intent:
 
       let score = 10;
 
-      if (normalizedModel.includes("flash") || normalizedModel.includes("haiku") || normalizedModel.includes("mini")) {
+      const isFastSmallModel =
+        normalizedModel.includes("flash") || normalizedModel.includes("haiku") || normalizedModel.includes("mini");
+      if (isFastSmallModel && intent !== "social-emotional") {
         score += 4;
       }
 
@@ -976,11 +991,15 @@ function rankModelForIntent(providerName: ProviderName, modelId: string, intent:
         normalizedModel.includes("architect") ||
         normalizedModel.includes("reason")
       ) {
-        score -= 8;
+        if (intent !== "social-emotional") {
+          score -= 8;
+        }
       }
 
       if (normalizedModel.includes("pro") && !normalizedModel.includes("gpt-5.2-unified")) {
-        score -= 4;
+        if (intent !== "social-emotional") {
+          score -= 4;
+        }
       }
 
       if (providerName === "anthropic" && (intent === "rewrite" || intent === "emotional-analysis")) {
@@ -993,6 +1012,9 @@ function rankModelForIntent(providerName: ProviderName, modelId: string, intent:
         score += 4;
       }
       if (intent === "social-emotional") {
+        if (isFastSmallModel) {
+          console.info(`[Social Emotional Routing] speed_bonus_suppressed provider=${providerName} model=${modelId}`);
+        }
         if (providerName === "anthropic") {
           score += 12;
         } else if (providerName === "grok") {
@@ -1004,6 +1026,13 @@ function rankModelForIntent(providerName: ProviderName, modelId: string, intent:
         }
         if (normalizedModel.includes("flash") || normalizedModel.includes("lite") || normalizedModel.includes("mini")) {
           score -= 7;
+        }
+        const specializationTags = detectSpecializationTags(providerName, modelId);
+        const nuanceTagBonus = specializationTags.filter((tag) =>
+          ["emotional-nuance", "conversational", "interpersonal", "empathy", "reflection", "writing"].includes(tag)
+        ).length;
+        if (nuanceTagBonus > 0) {
+          score += nuanceTagBonus * 2;
         }
         if (
           normalizedModel.includes("sonnet") ||
@@ -1262,8 +1291,13 @@ export function scoreModelCandidateWithBreakdown(
         return finalize(null, -1, reason);
       }
       const baseScore = 10;
-      if (normalizedModel.includes("flash") || normalizedModel.includes("haiku") || normalizedModel.includes("mini")) {
+      const isFastSmallModel =
+        normalizedModel.includes("flash") || normalizedModel.includes("haiku") || normalizedModel.includes("mini");
+      if (isFastSmallModel && intent !== "social-emotional") {
         adjustments.push({ label: "speed_efficiency_bonus", delta: 4 });
+      }
+      if (intent === "social-emotional" && isFastSmallModel) {
+        adjustments.push({ label: "social_emotional_speed_bonus_suppressed", delta: 0 });
       }
       if (normalizedModel.includes("gpt-5.2-unified") || normalizedModel.includes("grok-2-1212")) {
         adjustments.push({ label: "preferred_general_model_bonus", delta: 6 });
@@ -1278,10 +1312,14 @@ export function scoreModelCandidateWithBreakdown(
         normalizedModel.includes("architect") ||
         normalizedModel.includes("reason")
       ) {
-        adjustments.push({ label: "deep_reasoning_penalty", delta: -8 });
+        if (intent !== "social-emotional") {
+          adjustments.push({ label: "deep_reasoning_penalty", delta: -8 });
+        }
       }
       if (normalizedModel.includes("pro") && !normalizedModel.includes("gpt-5.2-unified")) {
-        adjustments.push({ label: "pro_model_penalty", delta: -4 });
+        if (intent !== "social-emotional") {
+          adjustments.push({ label: "pro_model_penalty", delta: -4 });
+        }
       }
       if (providerName === "anthropic" && (intent === "rewrite" || intent === "emotional-analysis")) {
         adjustments.push({ label: "claude_nuanced_writing_bonus", delta: 10 });
@@ -1304,6 +1342,12 @@ export function scoreModelCandidateWithBreakdown(
         }
         if (normalizedModel.includes("flash") || normalizedModel.includes("lite") || normalizedModel.includes("mini")) {
           adjustments.push({ label: "social_emotional_small_fast_penalty", delta: -7 });
+        }
+        const nuanceTagCount = detectSpecializationTags(providerName, modelId).filter((tag) =>
+          ["emotional-nuance", "conversational", "interpersonal", "empathy", "reflection", "writing"].includes(tag)
+        ).length;
+        if (nuanceTagCount > 0) {
+          adjustments.push({ label: "social_emotional_nuance_tag_bonus", delta: nuanceTagCount * 2 });
         }
         if (
           normalizedModel.includes("sonnet") ||

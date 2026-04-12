@@ -694,6 +694,13 @@ export async function POST(request: NextRequest) {
       modelId = routingDecision.modelId;
       fallbackChain = routingDecision.fallbackChain;
       selectionExplainer = routingDecision.explainer;
+      resolvedRequestIntent = routingDecision.resolvedIntent.intent;
+      console.log("[Chat API] Final resolved intent", {
+        requestId,
+        routerIntent: routingDecision.resolvedIntent.intent,
+        routerIntentSource: routingDecision.resolvedIntent.intentSource,
+        chatApiResolvedIntent: resolvedRequestIntent
+      });
 
       console.log(`[Chat API] Selected Provider: ${provider.name}, Model: ${modelId}`);
       console.log(`[Chat API] Routing Model For UI: ${routingDecision.routerModel}`);
