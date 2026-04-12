@@ -12,7 +12,7 @@ import {
   scoreModelCandidateWithBreakdown,
   validateRoutingDecision
 } from "../lib/router/model-intent";
-import { chooseProvider, type ResolvedRoutingIntent } from "../lib/router/master-router";
+import { chooseProvider, selectControlPlaneDecisionModels, type ResolvedRoutingIntent } from "../lib/router/master-router";
 import { createNeutralActorRoutingProfile, normalizeActorRoutingProfile } from "../lib/router/actor-routing-profile";
 import { isAcknowledgment, parseIntentSessionState } from "../lib/router/intent-context";
 import { isBlockedRoutingModel } from "../lib/router/routing-model-filters";
@@ -569,6 +569,17 @@ test("control-plane selects explicit flagship models instead of first-two list o
   assert.equal(attempts.includes("google:gemini-3.1-flash"), false);
 });
 
+test("control-plane selection skips dead blocked decision models", async () => {
+  const selected = selectControlPlaneDecisionModels([
+    {
+      provider: provider("google", ["gemini-2.0-flash", "gemini-3.1-pro"]).provider,
+      models: ["gemini-2.0-flash", "gemini-3.1-pro"]
+    }
+  ]);
+
+  assert.deepEqual(selected.map((entry) => `${entry.provider.name}:${entry.modelId}`), ["google:gemini-3.1-pro"]);
+});
+
 test("control-plane uses exactly one decision model per provider in fixed provider priority order", async () => {
   const attempts: string[] = [];
   const providers = [
@@ -603,6 +614,31 @@ test("control-plane uses exactly one decision model per provider in fixed provid
   ]);
   assert.equal(decision.explainer?.selected_source, "deterministic-fallback");
   assert.match(decision.explainer?.fallback_reason ?? "", /all_decision_providers_failed/);
+});
+
+test("dead or unsupported control-plane model failure does not break routing", async () => {
+  const attempts: string[] = [];
+  const googleMixed = provider("google", ["gemini-2.0-flash", "gemini-3.1-pro"], async ({ user, modelId }) => {
+    attempts.push(`google:${modelId ?? "none"}`);
+    if (user.includes("\"candidates\"")) {
+      throw new Error("google reranker unavailable");
+    }
+    return { text: JSON.stringify({ intent: "technical-debugging", preferred_provider: null }), model: modelId ?? "gemini-3.1-pro", provider: "google" };
+  }).provider;
+  const openaiHealthy = provider("openai", ["gpt-5.3-codex"], async ({ user, modelId }) => {
+    attempts.push(`openai:${modelId ?? "none"}`);
+    const text = user.includes("\"candidates\"")
+      ? JSON.stringify({ selected: { provider: "openai", model: "gpt-5.3-codex" } })
+      : JSON.stringify({ intent: "technical-debugging", preferred_provider: null });
+    return { text, model: modelId ?? "gpt-5.3-codex", provider: "openai" };
+  }).provider;
+
+  const decision = await chooseProvider("please fix this production exception", "", [googleMixed, openaiHealthy], {
+    routingRequestId: "test-dead-model-skip-and-failover"
+  });
+
+  assert.equal(attempts.includes("google:gemini-2.0-flash"), false);
+  assert.equal(decision.provider.name, "openai");
 });
 
 test("control-plane falls back to strongest compatible provider model when flagship is unavailable", async () => {
@@ -708,6 +744,24 @@ test("router falls back to local classification only when upstream requestIntent
   assert.doesNotMatch(routeIntentLog ?? "", /classifier_intent=skipped/);
   assert.match(routeIntentLog ?? "", /effective_intent=technical-debugging/);
   assert.match(routeIntentLog ?? "", /intent_source=router-fallback/);
+});
+
+test("control-plane misclassification to code-generation is sanitized for conversational prompts", async () => {
+  const forceBadClassifier = provider("openai", ["gpt-5.3-codex"], async ({ modelId }) => ({
+    text: JSON.stringify({ intent: "code-generation", preferred_provider: null }),
+    model: modelId ?? "gpt-5.3-codex",
+    provider: "openai"
+  })).provider;
+
+  const intent = await inferRequestIntent("develop a personality", false, {
+    decisionProviders: [{ provider: forceBadClassifier, modelId: "gpt-5.3-codex" }]
+  });
+  const classified = await inferRequestClassification("what do you think of me?", false, {
+    decisionProviders: [{ provider: forceBadClassifier, modelId: "gpt-5.3-codex" }]
+  });
+
+  assert.equal(intent, "social-emotional");
+  assert.equal(classified.intent, "social-emotional");
 });
 
 test("resolved intent contract shape is identical for upstream and router-fallback paths", async () => {
