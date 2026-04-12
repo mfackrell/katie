@@ -382,9 +382,24 @@ test("social-emotional lane suppresses gemini general bonus and favors nuanced p
   const openaiGpt5 = scoreModelCandidateWithBreakdown("openai", "gpt-5.2-unified", "social-emotional");
 
   assert.equal(geminiFlashLite.adjustments.some((adjustment) => adjustment.label === "gemini_general_reasoning_bonus"), false);
+  assert.equal(geminiFlashLite.adjustments.some((adjustment) => adjustment.label === "speed_efficiency_bonus"), false);
+  assert.ok(geminiFlashLite.adjustments.some((adjustment) => adjustment.label === "social_emotional_speed_bonus_suppressed"));
   assert.ok(claudeSonnet.finalScore > geminiFlashLite.finalScore);
   assert.ok(grok4.finalScore > geminiFlashLite.finalScore);
   assert.ok(openaiGpt5.finalScore > geminiFlashLite.finalScore);
+});
+
+test("social-emotional lane ranks depth-first conversational models above speed-first variants", async () => {
+  const haiku = scoreModelCandidateWithBreakdown("anthropic", "claude-haiku-4-5-20251001", "social-emotional");
+  const opus = scoreModelCandidateWithBreakdown("anthropic", "claude-4.6-opus", "social-emotional");
+  const grokMini = scoreModelCandidateWithBreakdown("grok", "grok-3-mini", "social-emotional");
+  const grok4 = scoreModelCandidateWithBreakdown("grok", "grok-4-0709", "social-emotional");
+  const gptMini = scoreModelCandidateWithBreakdown("openai", "gpt-5.2-mini", "social-emotional");
+  const gptUnified = scoreModelCandidateWithBreakdown("openai", "gpt-5.2-unified", "social-emotional");
+
+  assert.ok(opus.finalScore > haiku.finalScore);
+  assert.ok(grok4.finalScore > grokMini.finalScore);
+  assert.ok(gptUnified.finalScore > gptMini.finalScore);
 });
 
 test("technical debugging still prefers stronger technical models", async () => {
@@ -467,19 +482,19 @@ test("router falls back to deterministic selection when LLM routing is unavailab
   assert.match(decision.reasoning, /Deterministic fallback selected/);
 });
 
-test("router control-plane classification works without openai when another eligible provider is available", async () => {
+test("router control-plane classification works without openai when another eligible non-google provider is available", async () => {
   delete process.env.OPENAI_API_KEY;
-  const googleDecisionProvider = provider("google", ["gemini-3.1-pro"], async ({ user, modelId }) => {
+  const anthropicDecisionProvider = provider("anthropic", ["claude-4.5-sonnet"], async ({ user, modelId }) => {
     const text = user.includes("Intent Classifier")
-      ? JSON.stringify({ intent: "rewrite", preferred_provider: "google" })
-      : JSON.stringify({ selected: { provider: "google", model: "gemini-3.1-pro" } });
-    return { text, model: modelId ?? "gemini-3.1-pro", provider: "google" };
+      ? JSON.stringify({ intent: "rewrite", preferred_provider: "anthropic" })
+      : JSON.stringify({ selected: { provider: "anthropic", model: "claude-4.5-sonnet" } });
+    return { text, model: modelId ?? "claude-4.5-sonnet", provider: "anthropic" };
   }).provider;
   const openaiUnavailable = provider("openai", ["gpt-5.2-mini"], async () => {
     throw new Error("openai unavailable");
   }).provider;
 
-  const decision = await chooseProvider("How should I improve this paragraph for clarity?", "", [openaiUnavailable, googleDecisionProvider], {
+  const decision = await chooseProvider("How should I improve this paragraph for clarity?", "", [openaiUnavailable, anthropicDecisionProvider], {
     routingRequestId: "test-cross-provider-intent-classification"
   });
 
@@ -487,28 +502,28 @@ test("router control-plane classification works without openai when another elig
   assert.equal(decision.explainer?.fallback_used, false);
 });
 
-test("router reranker fails over across providers before heuristic fallback", async () => {
+test("router reranker accepts first successful compatible provider without heuristic fallback", async () => {
   const attempts: string[] = [];
-  const googleFail = provider("google", ["gemini-3.1-pro"], async () => {
-    attempts.push("google");
+  const anthropicFail = provider("anthropic", ["claude-4.5-sonnet"], async () => {
+    attempts.push("anthropic");
     throw new Error("upstream timeout");
   }).provider;
-  const openaiPass = provider("openai", ["gpt-5.2-mini"], async ({ user, modelId }) => {
+  const openaiPass = provider("openai", ["gpt-5.3-codex"], async ({ user, modelId }) => {
     attempts.push("openai");
     const text = user.includes("\"candidates\"")
-      ? JSON.stringify({ selected: { provider: "openai", model: "gpt-5.2-mini" } })
+      ? JSON.stringify({ selected: { provider: "openai", model: "gpt-5.3-codex" } })
       : JSON.stringify({ intent: "technical-debugging", preferred_provider: null });
-    return { text, model: modelId ?? "gpt-5.2-mini", provider: "openai" };
+    return { text, model: modelId ?? "gpt-5.3-codex", provider: "openai" };
   }).provider;
 
-  const decision = await chooseProvider("Please debug this flaky architecture test suite.", "", [openaiPass, googleFail], {
+  const decision = await chooseProvider("Please debug this flaky architecture test suite.", "", [openaiPass, anthropicFail], {
     requestIntent: "technical-debugging",
     routingRequestId: "test-control-plane-failover"
   });
 
-  assert.deepEqual(attempts, ["google", "openai"]);
+  assert.deepEqual(attempts, ["openai"]);
   assert.ok(attempts.includes("openai"));
-  assert.ok(attempts.includes("google"));
+  assert.equal(attempts.includes("anthropic"), false);
   assert.equal(decision.explainer?.selected_source, "llm-primary");
   assert.equal(decision.explainer?.fallback_used, false);
 });
@@ -528,7 +543,7 @@ test("router uses heuristics as last resort only when all decision providers fai
 
   assert.equal(decision.explainer?.selected_source, "deterministic-fallback");
   assert.equal(decision.explainer?.fallback_used, true);
-  assert.match(decision.explainer?.fallback_reason ?? "", /llm_router_rejected:all_decision_providers_failed/);
+  assert.match(decision.explainer?.fallback_reason ?? "", /llm_router_rejected:no_decision_provider_available/);
 });
 
 test("control-plane capability filtering excludes non-text models from decision provider selection", async () => {
@@ -565,8 +580,7 @@ test("control-plane selects explicit flagship models instead of first-two list o
 
   assert.ok(attempts.includes("openai:gpt-5.3-codex"));
   assert.equal(attempts.includes("openai:gpt-5.2-mini"), false);
-  assert.ok(attempts.includes("google:gemini-3.1-pro"));
-  assert.equal(attempts.includes("google:gemini-3.1-flash"), false);
+  assert.equal(attempts.some((attempt) => attempt.startsWith("google:")), false);
 });
 
 test("control-plane selection skips dead blocked decision models", async () => {
@@ -577,7 +591,18 @@ test("control-plane selection skips dead blocked decision models", async () => {
     }
   ]);
 
-  assert.deepEqual(selected.map((entry) => `${entry.provider.name}:${entry.modelId}`), ["google:gemini-3.1-pro"]);
+  assert.deepEqual(selected.map((entry) => `${entry.provider.name}:${entry.modelId}`), []);
+});
+
+test("control-plane excludes incompatible google decision model variants", async () => {
+  const selected = selectControlPlaneDecisionModels([
+    {
+      provider: provider("google", ["gemma-3-12b-it", "gemini-3.1-pro"]).provider,
+      models: ["gemma-3-12b-it", "gemini-3.1-pro"]
+    }
+  ]);
+
+  assert.deepEqual(selected.map((entry) => `${entry.provider.name}:${entry.modelId}`), []);
 });
 
 test("control-plane uses exactly one decision model per provider in fixed provider priority order", async () => {
@@ -607,7 +632,6 @@ test("control-plane uses exactly one decision model per provider in fixed provid
   });
 
   assert.deepEqual(attempts, [
-    "google:gemini-3.1-pro",
     "openai:gpt-5.3-codex",
     "anthropic:claude-4.5-sonnet",
     "grok:grok-4-0709"
@@ -692,6 +716,18 @@ test("router uses upstream requestIntent as authoritative and skips local classi
   assert.match(routeIntentLog ?? "", /effective_intent=rewrite/);
   assert.match(routeIntentLog ?? "", /intent_source=upstream/);
   assert.match(routePolicyLog ?? "", /intent=rewrite/);
+});
+
+test("chooseProvider returns resolved router intent for downstream propagation", async () => {
+  const decision = await chooseProvider(
+    "how are you feeling today?",
+    "",
+    [provider("openai", ["gpt-5.2-unified"]).provider],
+    { routingRequestId: "test-resolved-intent-propagation" }
+  );
+
+  assert.equal(decision.resolvedIntent.intent, "social-emotional");
+  assert.equal(decision.resolvedIntent.intentSource, "router-fallback");
 });
 
 test("explicit upstream override intent takes precedence over prompt-derived intent", async () => {

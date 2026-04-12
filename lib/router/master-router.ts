@@ -29,6 +29,7 @@ export type RoutingDecision = {
   fallbackChain: Array<{ provider: LlmProvider; modelId: string; score: number }>;
   reasoning: string;
   routerModel: string;
+  resolvedIntent: ResolvedRoutingIntent;
   explainer?: SelectionExplainer;
 };
 export type ResolvedRoutingIntent = {
@@ -117,6 +118,17 @@ const CONTROL_PLANE_BLOCKED_MODELS: Record<LlmProvider["name"], string[]> = {
   anthropic: [],
   grok: []
 };
+const CONTROL_PLANE_VERIFIED_COMPATIBLE_MODELS: Record<LlmProvider["name"], string[]> = {
+  google: [],
+  openai: ["gpt-5.3-codex", "gpt-5.2-unified", "gpt-5.2", "o3-pro"],
+  anthropic: ["claude-4.6-opus", "claude-4.5-sonnet", "claude-4-opus"],
+  grok: ["grok-4-0709", "grok-4"]
+};
+
+function isControlPlaneInstructionCompatibleModel(providerName: LlmProvider["name"], modelId: string): boolean {
+  const normalized = normalizeModelId(modelId);
+  return CONTROL_PLANE_VERIFIED_COMPATIBLE_MODELS[providerName].some((verified) => normalizeModelId(verified) === normalized);
+}
 
 function isEligibleControlPlaneModel(
   providerName: LlmProvider["name"],
@@ -124,7 +136,7 @@ function isEligibleControlPlaneModel(
   registryLookup?: Map<string, RegistryRoutingModel>
 ): boolean {
   const metadata = buildCandidateMetadata(providerName, modelId, "general-text", { registryLookup });
-  return metadata.supports_text && !metadata.supports_image_generation;
+  return metadata.supports_text && !metadata.supports_image_generation && isControlPlaneInstructionCompatibleModel(providerName, modelId);
 }
 
 function normalizeModelId(modelId: string): string {
@@ -147,6 +159,10 @@ function selectControlPlaneDecisionModelForProvider(
   for (const modelId of models) {
     if (isBlockedControlPlaneModel(providerName, modelId)) {
       skipped.push(`${providerName}:${modelId}:blocked`);
+      continue;
+    }
+    if (!isControlPlaneInstructionCompatibleModel(providerName, modelId)) {
+      skipped.push(`${providerName}:${modelId}:incompatible_instruction_mode`);
       continue;
     }
     if (!isEligibleControlPlaneModel(providerName, modelId, registryLookup)) {
@@ -199,6 +215,11 @@ export function selectControlPlaneDecisionModels(
       console.info(`[ControlPlane] requestId=${routingRequestId} skipped=${selection.skipped.join(",")}`);
     }
     if (!selection.modelId) {
+      if (providerName === "google") {
+        console.info(
+          `[ControlPlane] requestId=${routingRequestId} provider=google status=excluded reason=no_verified_control_plane_instruction_compatible_model`
+        );
+      }
       console.info(`[ControlPlane] requestId=${routingRequestId} provider=${providerName} status=no_eligible_decision_model`);
       continue;
     }
@@ -764,6 +785,7 @@ export async function chooseProvider(
         fallbackChain,
         reasoning: selection.reasoning,
         routerModel: selection.routerModel,
+        resolvedIntent,
         explainer: buildSelectionExplainer({
           selectedProviderName: selection.provider.name,
           selectedModelId: selection.modelId,
@@ -804,6 +826,7 @@ export async function chooseProvider(
         fallbackChain,
         reasoning: `${selection.reasoning} Policy guardrail did not enforce reroute.`,
         routerModel: selection.routerModel,
+        resolvedIntent,
         explainer: buildSelectionExplainer({
           selectedProviderName: selection.provider.name,
           selectedModelId: selection.modelId,
@@ -832,6 +855,7 @@ export async function chooseProvider(
       fallbackChain,
       reasoning: `${selection.reasoning} Policy guardrail enforced hard constraint selection.`,
       routerModel: selection.routerModel,
+      resolvedIntent,
       explainer: buildSelectionExplainer({
         selectedProviderName: evaluation.selected.provider.name,
         selectedModelId: evaluation.selected.modelId,
@@ -917,6 +941,20 @@ export async function chooseProvider(
           gemini_general_reasoning_bonus_suppressed: geminiGeneralBonusesApplied === 0
         })}`
       );
+      const speedFirstCandidate = rankedCandidates.find(
+        (candidate) => /mini|haiku|flash/i.test(candidate.modelId)
+      );
+      const nuancedTopCandidate = rankedCandidates[0];
+      if (
+        speedFirstCandidate &&
+        nuancedTopCandidate &&
+        `${speedFirstCandidate.provider.name}:${speedFirstCandidate.modelId}` !==
+          `${nuancedTopCandidate.provider.name}:${nuancedTopCandidate.modelId}`
+      ) {
+        console.info(
+          `[Social Emotional Routing] requestId=${traceRequestId} nuance_model_outranked_speed_first winner=${nuancedTopCandidate.provider.name}:${nuancedTopCandidate.modelId} speed_first=${speedFirstCandidate.provider.name}:${speedFirstCandidate.modelId}`
+        );
+      }
     }
 
     const llmRouting: LlmRoutingResult = await chooseRoutingWithLLM({
