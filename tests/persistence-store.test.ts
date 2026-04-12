@@ -149,6 +149,7 @@ test("creating actor/chat persists records plus memory rows", async () => {
   assert.equal(state.short_term_memory.length, 1);
   assert.equal(state.intermediate_memory.length, 1);
   assert.equal(state.long_term_memory.length, 1);
+  assert.ok(typeof state.actors[0].routing_profile === "object");
 });
 
 test("list actors and chats return persisted supabase rows", async () => {

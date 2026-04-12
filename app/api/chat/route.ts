@@ -471,7 +471,7 @@ export async function POST(request: NextRequest) {
     }
 
     console.log("[Chat API] Assembling context and selecting provider...");
-    const { name, persona, summary, history, shortTermMemory } = await assembleContext(actorId, chatId);
+    const { name, persona, summary, history, shortTermMemory, actorRoutingProfile } = await assembleContext(actorId, chatId);
     const activeRepoContext = activeRepoId ? await loadActiveRepoContext(activeRepoId) : null;
     const sessionContext: ChatSessionContext = {
       activeRepo: activeRepoContext
@@ -683,6 +683,8 @@ export async function POST(request: NextRequest) {
       const routingDecision = await chooseProvider(message, routingContext, providers, {
         hasImages: hasVisualInput,
         hasVideoInput,
+        actorId,
+        actorRoutingProfile,
         resolvedIntent: resolvedRoutingIntent,
         routingTraceEnabled,
         routingRequestId: request.headers.get("x-request-id") ?? undefined

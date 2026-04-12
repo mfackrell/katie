@@ -4,6 +4,7 @@ import {
 } from "@/lib/providers/google-model-capabilities";
 import { lookupRegistryModel, type RegistryRoutingModel } from "@/lib/models/registry";
 import { LlmProvider } from "@/lib/providers/types";
+import type { ActorRoutingIntent, ActorRoutingProfile } from "@/lib/types/chat";
 
 export type ProviderName = "openai" | "google" | "grok" | "anthropic";
 type RegistryLookup = Map<string, RegistryRoutingModel> | undefined;
@@ -243,6 +244,46 @@ function isLikelySafetySensitiveVisionPrompt(prompt: string, hasImages: boolean)
 
 export function userPreferredProviderBoost(preferredProvider: ProviderName | null, providerName: ProviderName): number {
   return preferredProvider === providerName ? 1.5 : 0;
+}
+
+function mapRequestIntentToActorRoutingIntent(intent: RequestIntent): ActorRoutingIntent {
+  switch (intent) {
+    case "technical-debugging":
+      return "technical-debugging";
+    case "architecture-review":
+      return "architecture-design";
+    case "code-generation":
+    case "code-review":
+      return "coding-implementation";
+    case "rewrite":
+      return "writing-editing";
+    case "web-search":
+    case "news-summary":
+      return "research-analysis";
+    case "social-emotional":
+    case "emotional-analysis":
+      return "emotional-support";
+    default:
+      return "general";
+  }
+}
+
+function computeActorRoutingBias(args: {
+  providerName: ProviderName;
+  modelId: string;
+  intent: RequestIntent;
+  options?: { registryLookup?: RegistryLookup; actorRoutingProfile?: ActorRoutingProfile };
+}): number {
+  const profile = args.options?.actorRoutingProfile;
+  if (!profile) {
+    return 0;
+  }
+  const metadata = buildCandidateMetadata(args.providerName, args.modelId, args.intent, { registryLookup: args.options?.registryLookup });
+  const providerBoost = profile.providerBoosts[args.providerName] ?? 0;
+  const intentBoost = profile.intentProviderBoosts[mapRequestIntentToActorRoutingIntent(args.intent)]?.[args.providerName] ?? 0;
+  const tagBoost = metadata.specialization_tags.reduce((total, tag) => total + (profile.tagBoosts[tag] ?? 0), 0);
+  const total = providerBoost + intentBoost + tagBoost;
+  return Number(total.toFixed(3));
 }
 
 function extractJsonObject(raw: string): string | null {
@@ -953,8 +994,8 @@ function rankModelForIntent(providerName: ProviderName, modelId: string, intent:
 export function scoreModelsForIntent(
   availableByProvider: Array<{ provider: LlmProvider; models: string[] }>,
   intent: RequestIntent,
-  promptOrOptions: string | { registryLookup?: RegistryLookup; preferredProvider?: ProviderName | null } = "",
-  maybeOptions?: { registryLookup?: RegistryLookup; preferredProvider?: ProviderName | null }
+  promptOrOptions: string | { registryLookup?: RegistryLookup; preferredProvider?: ProviderName | null; actorRoutingProfile?: ActorRoutingProfile } = "",
+  maybeOptions?: { registryLookup?: RegistryLookup; preferredProvider?: ProviderName | null; actorRoutingProfile?: ActorRoutingProfile }
 ): Array<{ provider: LlmProvider; modelId: string; score: number }> {
   const options = typeof promptOrOptions === "string" ? maybeOptions : promptOrOptions;
 
@@ -964,7 +1005,15 @@ export function scoreModelsForIntent(
         .map((modelId) => ({
           provider,
           modelId,
-          score: rankModelForIntent(provider.name, modelId, intent) + userPreferredProviderBoost(options?.preferredProvider ?? null, provider.name)
+          score:
+            rankModelForIntent(provider.name, modelId, intent) +
+            userPreferredProviderBoost(options?.preferredProvider ?? null, provider.name) +
+            computeActorRoutingBias({
+              providerName: provider.name,
+              modelId,
+              intent,
+              options
+            })
         }))
         .filter((candidate) => modelSupportsIntent(candidate.provider.name, candidate.modelId, intent, options?.registryLookup))
         .filter((candidate) => candidate.score >= 0)
@@ -1046,7 +1095,7 @@ export function scoreModelCandidateWithBreakdown(
   providerName: ProviderName,
   modelId: string,
   intent: RequestIntent,
-  options?: { registryLookup?: RegistryLookup }
+  options?: { registryLookup?: RegistryLookup; actorRoutingProfile?: ActorRoutingProfile }
 ): CandidateScoreBreakdown {
   const normalizedModel = modelId.toLowerCase();
   const adjustments: ScoreAdjustment[] = [];
@@ -1060,6 +1109,12 @@ export function scoreModelCandidateWithBreakdown(
     excluded: finalScore < 0,
     exclusionReason: exclusionReason ?? (finalScore < 0 ? "score_below_zero" : null)
   });
+  const applyActorRoutingBias = () => {
+    const delta = computeActorRoutingBias({ providerName, modelId, intent, options });
+    if (delta !== 0) {
+      adjustments.push({ label: "actor_routing_bias", delta });
+    }
+  };
 
   switch (intent) {
     case "image-generation": {
@@ -1067,7 +1122,9 @@ export function scoreModelCandidateWithBreakdown(
         return finalize(null, -1, "intent_mismatch:image-generation");
       }
       const baseScore = normalizedModel.includes("banana") ? 4 : 2;
-      return finalize(baseScore, baseScore, null);
+      applyActorRoutingBias();
+      const finalScore = baseScore + adjustments.reduce((total, current) => total + current.delta, 0);
+      return finalize(baseScore, finalScore, null);
     }
     case "multimodal-reasoning": {
       if (!modelSupportsIntent(providerName, modelId, intent, options?.registryLookup)) {
@@ -1089,6 +1146,7 @@ export function scoreModelCandidateWithBreakdown(
       } else if (normalizedModel.includes("flash")) {
         adjustments.push({ label: "flash_bonus", delta: 2 });
       }
+      applyActorRoutingBias();
       const finalScore = baseScore + adjustments.reduce((total, current) => total + current.delta, 0);
       return finalize(baseScore, finalScore, null);
     }
@@ -1112,6 +1170,7 @@ export function scoreModelCandidateWithBreakdown(
       } else if (normalizedModel.includes("flash")) {
         adjustments.push({ label: "flash_bonus", delta: 2 });
       }
+      applyActorRoutingBias();
       const finalScore = baseScore + adjustments.reduce((total, current) => total + current.delta, 0);
       return finalize(baseScore, finalScore, null);
     }
@@ -1133,6 +1192,7 @@ export function scoreModelCandidateWithBreakdown(
       if (providerName === "openai" || providerName === "google") {
         adjustments.push({ label: "safety_sensitive_vision_filter_risk_penalty", delta: -8 });
       }
+      applyActorRoutingBias();
       const finalScore = baseScore + adjustments.reduce((total, current) => total + current.delta, 0);
       return finalize(baseScore, finalScore, null);
     }
@@ -1204,6 +1264,7 @@ export function scoreModelCandidateWithBreakdown(
       if (intent === "web-search" && supportsWebSearch(providerName, modelId)) {
         adjustments.push({ label: "web_search_hard_requirement_met", delta: 3 });
       }
+      applyActorRoutingBias();
       const finalScore = baseScore + adjustments.reduce((total, current) => total + current.delta, 0);
       return finalize(baseScore, finalScore, null);
     }
@@ -1233,6 +1294,7 @@ export function scoreModelCandidateWithBreakdown(
       if (normalizedModel.includes("pulse")) {
         adjustments.push({ label: "realtime_model_penalty", delta: -1.5 });
       }
+      applyActorRoutingBias();
       const finalScore = baseScore + adjustments.reduce((total, current) => total + current.delta, 0);
       return finalize(baseScore, finalScore, null);
     }
@@ -1254,6 +1316,7 @@ export function scoreModelCandidateWithBreakdown(
       if (normalizedModel.includes("mini") || normalizedModel.includes("flash") || normalizedModel.includes("haiku")) {
         adjustments.push({ label: "small_model_reflection_penalty", delta: -1 });
       }
+      applyActorRoutingBias();
       const finalScore = baseScore + adjustments.reduce((total, current) => total + current.delta, 0);
       return finalize(baseScore, finalScore, null);
     }
@@ -1264,7 +1327,7 @@ export function validateRoutingDecision(
   decision: RoutingChoice,
   availableByProvider: Array<{ provider: LlmProvider; models: string[] }>,
   intent: RequestIntent,
-  options?: { registryLookup?: RegistryLookup }
+  options?: { registryLookup?: RegistryLookup; actorRoutingProfile?: ActorRoutingProfile }
 ): { provider: LlmProvider; modelId: string; reasoning: string; changed: boolean } {
   if (["technical-debugging", "code-generation", "architecture-review", "code-review", "assistant-reflection"].includes(intent)) {
     availableByProvider = availableByProvider.map(({ provider, models }) => ({
@@ -1288,7 +1351,10 @@ export function validateRoutingDecision(
     };
   }
 
-  const compatibleChoices = scoreModelsForIntent(availableByProvider, intent, { registryLookup: options?.registryLookup });
+  const compatibleChoices = scoreModelsForIntent(availableByProvider, intent, {
+    registryLookup: options?.registryLookup,
+    actorRoutingProfile: options?.actorRoutingProfile
+  });
 
   const fallback = compatibleChoices[0];
 

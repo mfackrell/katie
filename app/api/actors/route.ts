@@ -2,6 +2,9 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { deleteActorsById, getActorById, listActors, saveActor } from "@/lib/data/persistence-store";
 import { getSupabaseAdminClient } from "@/lib/data/supabase/admin";
+import { getAvailableProviders } from "@/lib/providers";
+import { buildControlPlaneDecisionProviders } from "@/lib/router/master-router";
+import { createNeutralActorRoutingProfile, generateActorRoutingProfile } from "@/lib/router/actor-routing-profile";
 import type { Actor } from "@/lib/types/chat";
 
 const createActorSchema = z.object({
@@ -23,9 +26,28 @@ type ActorDbRow = {
   name: string;
   system_prompt: string;
   parent_actor_id: string | null;
+  routing_profile: unknown;
   created_at: string;
   updated_at: string;
 };
+
+async function buildActorRoutingProfile(actor: Pick<Actor, "name" | "purpose">) {
+  const providers = getAvailableProviders();
+  if (!providers.length) {
+    return createNeutralActorRoutingProfile("Neutral profile used because no providers were configured.");
+  }
+
+  const modelEntries = await Promise.all(
+    providers.map(async (provider) => ({ provider, models: await provider.listModels() }))
+  );
+  const decisionProvider = buildControlPlaneDecisionProviders(modelEntries)[0] ?? null;
+  return generateActorRoutingProfile({
+    actorName: actor.name,
+    actorPurpose: actor.purpose,
+    actorSystemPrompt: actor.purpose,
+    decisionProvider
+  });
+}
 
 function buildActorId(): string {
   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
@@ -65,6 +87,7 @@ export async function POST(request: NextRequest) {
       id: buildActorId(),
       name: name.trim(),
       purpose,
+      routingProfile: await buildActorRoutingProfile({ name: name.trim(), purpose }),
       ...(parentId ? { parentId } : {})
     };
 
@@ -96,17 +119,19 @@ export async function PATCH(request: NextRequest) {
     }
 
     const now = new Date().toISOString();
+    const routingProfile = await buildActorRoutingProfile({ name: existingActor.name, purpose: purpose.trim() });
     const client = getSupabaseAdminClient();
     const payload = {
       id: actorId,
       system_prompt: purpose.trim(),
+      routing_profile: routingProfile,
       updated_at: now
     };
     const { data, error } = await client
       .from("actors")
       .upsert(payload, { onConflict: "id" })
       .select(
-        "id,name,system_prompt,parent_actor_id,created_at,updated_at"
+        "id,name,system_prompt,parent_actor_id,routing_profile,created_at,updated_at"
       )
       .single<ActorDbRow>();
 
@@ -119,6 +144,7 @@ export async function PATCH(request: NextRequest) {
         id: data.id,
         name: data.name,
         purpose: data.system_prompt,
+        routingProfile,
         ...(data.parent_actor_id ? { parentId: data.parent_actor_id } : {})
       }
     });

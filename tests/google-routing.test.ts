@@ -13,6 +13,7 @@ import {
   validateRoutingDecision
 } from "../lib/router/model-intent";
 import { chooseProvider, type ResolvedRoutingIntent } from "../lib/router/master-router";
+import { createNeutralActorRoutingProfile, normalizeActorRoutingProfile } from "../lib/router/actor-routing-profile";
 import { isAcknowledgment, parseIntentSessionState } from "../lib/router/intent-context";
 import { isBlockedRoutingModel } from "../lib/router/routing-model-filters";
 import {
@@ -1095,4 +1096,105 @@ test("thrown provider errors still fall back to later candidates", async () => {
   assert.deepEqual(executedProviders, ["openai", "google"]);
   assert.equal(attempt.provider, "google");
   assert.equal(result.text, "Recovered from fallback.");
+});
+
+test("actor routing profile schema normalization clamps aggressive values", async () => {
+  const normalized = normalizeActorRoutingProfile({
+    providerBoosts: { openai: 8, google: -9, anthropic: 0.2, grok: 0 },
+    tagBoosts: {
+      coding: 10,
+      debugging: -10,
+      architecture: 0,
+      writing: 0,
+      "emotional-nuance": 0,
+      conversational: 0,
+      interpersonal: 0,
+      empathy: 0,
+      multimodal: 0,
+      research: 0,
+      reflection: 0
+    },
+    intentProviderBoosts: {
+      general: { openai: 0, google: 0, anthropic: 0, grok: 0 },
+      "technical-debugging": { openai: 8, google: 0, anthropic: 0, grok: 0 },
+      "architecture-design": { openai: 0, google: 0, anthropic: 0, grok: 0 },
+      "coding-implementation": { openai: 0, google: 0, anthropic: 0, grok: 0 },
+      "writing-editing": { openai: 0, google: 0, anthropic: 0, grok: 0 },
+      "research-analysis": { openai: 0, google: 0, anthropic: 0, grok: 0 },
+      "emotional-support": { openai: 0, google: 0, anthropic: 0, grok: 0 }
+    },
+    summary: "test",
+    generatedByModel: null,
+    version: "v1"
+  });
+
+  assert.equal(normalized.providerBoosts.openai, 3);
+  assert.equal(normalized.providerBoosts.google, -3);
+  assert.equal(normalized.tagBoosts.coding, 3);
+  assert.equal(normalized.tagBoosts.debugging, -3);
+  assert.equal(normalized.intentProviderBoosts["technical-debugging"].openai, 3);
+});
+
+test("actor routing profile adds soft scoring bias for technical models", async () => {
+  const profile = createNeutralActorRoutingProfile("technical");
+  profile.providerBoosts.openai = 1.2;
+  profile.providerBoosts.anthropic = 1.1;
+  profile.providerBoosts.google = -0.8;
+  profile.tagBoosts.coding = 1;
+  profile.tagBoosts.debugging = 0.6;
+  profile.intentProviderBoosts["technical-debugging"].openai = 0.8;
+
+  const openai = scoreModelCandidateWithBreakdown("openai", "gpt-5.3-codex", "technical-debugging", { actorRoutingProfile: profile });
+  const google = scoreModelCandidateWithBreakdown("google", "gemini-3.1-pro", "technical-debugging", { actorRoutingProfile: profile });
+
+  assert.ok(openai.adjustments.some((adjustment) => adjustment.label === "actor_routing_bias"));
+  assert.ok(openai.finalScore > google.finalScore);
+});
+
+test("actor routing bias remains additive and does not bypass capability constraints", async () => {
+  const profile = createNeutralActorRoutingProfile("vision");
+  profile.providerBoosts.openai = 2.5;
+  profile.intentProviderBoosts["emotional-support"].openai = 1.5;
+
+  const excluded = scoreModelCandidateWithBreakdown("openai", "gpt-5.2-mini", "safety-sensitive-vision", { actorRoutingProfile: profile });
+  assert.equal(excluded.excluded, true);
+  assert.match(excluded.exclusionReason ?? "", /intent_mismatch|score_below_zero/);
+});
+
+test("actor routing bias is visible in provider selection explainer", async () => {
+  const profile = createNeutralActorRoutingProfile("coding actor");
+  profile.providerBoosts.openai = 1.4;
+  profile.tagBoosts.coding = 1.1;
+  profile.intentProviderBoosts["coding-implementation"].openai = 0.8;
+
+  const providers: LlmProvider[] = [
+    {
+      name: "openai",
+      async listModels() {
+        return ["gpt-5.3-codex"];
+      },
+      async generate() {
+        return { provider: "openai", model: "gpt-5.3-codex", text: "{\"selected\":{\"provider\":\"openai\",\"model\":\"gpt-5.3-codex\"}}" };
+      }
+    },
+    {
+      name: "google",
+      async listModels() {
+        return ["gemini-3.1-pro"];
+      },
+      async generate() {
+        return { provider: "google", model: "gemini-3.1-pro", text: "{\"selected\":{\"provider\":\"google\",\"model\":\"gemini-3.1-pro\"}}" };
+      }
+    }
+  ];
+
+  const decision = await chooseProvider("Patch this function", "context", providers, {
+    resolvedIntent: { intent: "code-generation", preferredProvider: null, intentSource: "upstream" as ResolvedRoutingIntent["intentSource"] },
+    actorId: "actor-test-1",
+    actorRoutingProfile: profile
+  });
+
+  assert.equal(decision.explainer?.actor_routing?.applied, true);
+  assert.equal(decision.explainer?.actor_routing?.actor_id, "actor-test-1");
+  assert.ok((decision.explainer?.actor_routing?.adjustments?.length ?? 0) > 0);
 });
