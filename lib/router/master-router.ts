@@ -105,11 +105,17 @@ type RoutingTrace = {
 
 const CONTROL_PLANE_PROVIDER_PRIORITY: LlmProvider["name"][] = ["google", "openai", "anthropic", "grok"];
 
-const CONTROL_PLANE_FLAGSHIP_MODELS: Record<LlmProvider["name"], string[]> = {
+const CONTROL_PLANE_CURATED_MODELS: Record<LlmProvider["name"], string[]> = {
   google: ["gemini-3.1-pro", "gemini-3.1-pro-latest", "gemini-3-pro"],
   openai: ["gpt-5.3-codex", "gpt-5.2-unified", "gpt-5.2", "o3-pro"],
   anthropic: ["claude-4.6-opus", "claude-4.5-sonnet", "claude-4-opus"],
-  grok: ["grok-4-0709", "grok-4-reasoning-vision", "grok-4"]
+  grok: ["grok-4-0709", "grok-4"]
+};
+const CONTROL_PLANE_BLOCKED_MODELS: Record<LlmProvider["name"], string[]> = {
+  google: ["gemini-2.0-flash"],
+  openai: [],
+  anthropic: [],
+  grok: []
 };
 
 function isEligibleControlPlaneModel(
@@ -125,36 +131,59 @@ function normalizeModelId(modelId: string): string {
   return modelId.trim().toLowerCase();
 }
 
-function selectControlPlaneModelForProvider(
+function isBlockedControlPlaneModel(providerName: LlmProvider["name"], modelId: string): boolean {
+  const normalized = normalizeModelId(modelId);
+  return CONTROL_PLANE_BLOCKED_MODELS[providerName].some((blocked) => normalizeModelId(blocked) === normalized);
+}
+
+function selectControlPlaneDecisionModelForProvider(
   providerName: LlmProvider["name"],
   models: string[],
-  registryLookup?: Map<string, RegistryRoutingModel>
-): string | null {
-  const eligibleModels = models.filter((modelId) => isEligibleControlPlaneModel(providerName, modelId, registryLookup));
-  if (!eligibleModels.length) {
-    return null;
+  registryLookup?: Map<string, RegistryRoutingModel>,
+  routingRequestId = "unknown"
+): { modelId: string | null; skipped: string[] } {
+  const skipped: string[] = [];
+  const normalizedToModel = new Map<string, string>();
+  for (const modelId of models) {
+    if (isBlockedControlPlaneModel(providerName, modelId)) {
+      skipped.push(`${providerName}:${modelId}:blocked`);
+      continue;
+    }
+    if (!isEligibleControlPlaneModel(providerName, modelId, registryLookup)) {
+      skipped.push(`${providerName}:${modelId}:ineligible`);
+      continue;
+    }
+    normalizedToModel.set(normalizeModelId(modelId), modelId);
   }
 
-  const normalizedToModel = new Map(eligibleModels.map((modelId) => [normalizeModelId(modelId), modelId]));
-  for (const preferredModel of CONTROL_PLANE_FLAGSHIP_MODELS[providerName]) {
-    const selected = normalizedToModel.get(normalizeModelId(preferredModel));
+  for (const curatedModelId of CONTROL_PLANE_CURATED_MODELS[providerName]) {
+    const selected = normalizedToModel.get(normalizeModelId(curatedModelId));
     if (selected) {
-      return selected;
+      return { modelId: selected, skipped };
     }
   }
 
-  const rankedFallback = eligibleModels
-    .map((modelId) => ({
-      modelId,
-      score: scoreModelCandidateWithBreakdown(providerName, modelId, "general-text", { registryLookup }).finalScore
-    }))
-    .sort((a, b) => b.score - a.score || a.modelId.localeCompare(b.modelId));
-  return rankedFallback[0]?.modelId ?? null;
+  if (normalizedToModel.size > 0) {
+    const rankedCuratedFallback = [...normalizedToModel.values()]
+      .map((modelId) => ({
+        modelId,
+        score: scoreModelCandidateWithBreakdown(providerName, modelId, "social-emotional", { registryLookup }).finalScore
+      }))
+      .sort((a, b) => b.score - a.score || a.modelId.localeCompare(b.modelId));
+    const selected = rankedCuratedFallback[0]?.modelId ?? null;
+    console.warn(
+      `[ControlPlane] requestId=${routingRequestId} provider=${providerName} selected_non_curated_fallback=${selected ?? "none"}`
+    );
+    return { modelId: selected, skipped };
+  }
+
+  return { modelId: null, skipped };
 }
 
-export function buildControlPlaneDecisionProviders(
+export function selectControlPlaneDecisionModels(
   modelEntries: Array<{ provider: LlmProvider; models: string[] }>,
-  registryLookup?: Map<string, RegistryRoutingModel>
+  registryLookup?: Map<string, RegistryRoutingModel>,
+  routingRequestId = "unknown"
 ): Array<{ provider: LlmProvider; modelId: string }> {
   const entriesByProvider = new Map(modelEntries.map((entry) => [entry.provider.name, entry]));
   const selectedProviders: Array<{ provider: LlmProvider; modelId: string }> = [];
@@ -165,12 +194,16 @@ export function buildControlPlaneDecisionProviders(
       continue;
     }
 
-    const selectedModelId = selectControlPlaneModelForProvider(providerName, providerEntry.models, registryLookup);
-    if (!selectedModelId) {
+    const selection = selectControlPlaneDecisionModelForProvider(providerName, providerEntry.models, registryLookup, routingRequestId);
+    if (selection.skipped.length) {
+      console.info(`[ControlPlane] requestId=${routingRequestId} skipped=${selection.skipped.join(",")}`);
+    }
+    if (!selection.modelId) {
+      console.info(`[ControlPlane] requestId=${routingRequestId} provider=${providerName} status=no_eligible_decision_model`);
       continue;
     }
 
-    selectedProviders.push({ provider: providerEntry.provider, modelId: selectedModelId });
+    selectedProviders.push({ provider: providerEntry.provider, modelId: selection.modelId });
   }
 
   return selectedProviders;
@@ -643,7 +676,7 @@ export async function chooseProvider(
     return { provider, models: fallbackModels };
   }));
 
-  const controlPlaneDecisionProviders = buildControlPlaneDecisionProviders(modelEntries, registryLookup);
+  const controlPlaneDecisionProviders = selectControlPlaneDecisionModels(modelEntries, registryLookup, traceRequestId);
   console.info(
     `[ControlPlane] decision_models=${controlPlaneDecisionProviders.map((entry) => `${entry.provider.name}:${entry.modelId}`).join(",") || "none"}`
   );
