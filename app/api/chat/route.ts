@@ -6,11 +6,10 @@ import { maybeUpdateLongTermMemory } from "@/lib/memory/long-term-editor";
 import { saveMessage, setShortTermMemory } from "@/lib/data/persistence-store";
 import { getSupabaseAdminClient } from "@/lib/data/supabase/admin";
 import { getAvailableProviders } from "@/lib/providers";
-import { chooseProvider } from "@/lib/router/master-router";
+import { buildControlPlaneDecisionProviders, chooseProvider } from "@/lib/router/master-router";
 import {
   hasDirectWebSearchHint,
-  inferRequestIntent,
-  inferRequestIntentFromMultimodalInput,
+  inferRequestClassification,
   RequestIntent,
   validateRoutingDecision
 } from "@/lib/router/model-intent";
@@ -562,7 +561,16 @@ export async function POST(request: NextRequest) {
       const hasImageAttachments =
         Array.isArray(attachments) && attachments.some((attachment) => attachment.mimeType.startsWith("image/"));
       const hasVisualInput = hasImages || hasImageAttachments;
-      const overrideIntent = await inferRequestIntent(message, { hasImages: hasVisualInput, hasVideoInput });
+      const modelEntries = await Promise.all(
+        providers.map(async (candidate) => ({ provider: candidate, models: await candidate.listModels() }))
+      );
+      const controlPlaneDecisionProviders = buildControlPlaneDecisionProviders(modelEntries);
+      const overrideClassification = await inferRequestClassification(
+        message,
+        { hasImages: hasVisualInput, hasVideoInput },
+        { decisionProviders: controlPlaneDecisionProviders }
+      );
+      const overrideIntent = overrideClassification.intent;
       const validatedOverride = validateRoutingDecision(
         { providerName: manualProvider.name, modelId: overrideModel },
         [{ provider: manualProvider, models: await manualProvider.listModels() }],
@@ -612,13 +620,29 @@ export async function POST(request: NextRequest) {
         Array.isArray(attachments) && attachments.some((attachment) => attachment.mimeType.startsWith("image/"));
       const hasVisualInput = hasImages || hasImageAttachments;
       const explicitIntent: RequestIntent | undefined = hasDirectWebSearchHint(message) ? "web-search" : undefined;
+      const assistantReflectionHint =
+        /\b(what do you think about your last answer|critique (?:the )?assistant(?:'s)? previous response|review your system message|evaluate your own output|improve (?:the )?last reply|assess the quality of (?:that|your) response|your last answer|your previous response|your own output|your system message|reflect on your answer|self-critique|critique your response)\b/i.test(
+          message
+        );
+      const socialEmotionalHint =
+        /\b(what(?:'s| is)? up(?:\s+\w+)?|what up(?:\s+\w+)?|how are you feeling|how do you feel|what do you think of me|are you okay|how does (?:that|this) feel|how does (?:that|this) strike you|what(?:'s| is) your sense of this|develop\b[^.!?\n]{0,40}\bpersonality|have\b[^.!?\n]{0,30}\bpersonality|stop being robotic|loosen up)\b/i.test(
+          message
+        );
       const now = Date.now();
       const intentSession = parseIntentSessionState(shortTermMemory);
       const isAckMessage = isAcknowledgment(message);
-      let requestIntent: RequestIntent;
+      let requestIntent: RequestIntent | undefined;
+      let isRouterIntentLocked = false;
 
       if (explicitIntent) {
         requestIntent = explicitIntent;
+        isRouterIntentLocked = true;
+      } else if (assistantReflectionHint) {
+        requestIntent = "assistant-reflection";
+        isRouterIntentLocked = true;
+      } else if (socialEmotionalHint) {
+        requestIntent = "social-emotional";
+        isRouterIntentLocked = true;
       } else if (
         isAckMessage &&
         intentSession.lastSubstantiveIntent &&
@@ -626,45 +650,35 @@ export async function POST(request: NextRequest) {
         now - intentSession.lastIntentTimestamp < ACK_CONTEXT_TTL_MS
       ) {
         requestIntent = intentSession.lastSubstantiveIntent;
+        isRouterIntentLocked = true;
         console.log(
           `[Intent Reuse] Reusing ${requestIntent} from ${new Date(intentSession.lastIntentTimestamp).toISOString()} for ack message "${message}".`
         );
-      } else {
-        const multimodalIntent =
-          hasVisualInput && Array.isArray(images) && images.length > 0
-            ? await inferRequestIntentFromMultimodalInput(message, images)
-            : null;
+      }
 
-        requestIntent =
-          multimodalIntent ??
-          (await inferRequestIntent(message, {
-            hasImages: hasVisualInput,
-            hasVideoInput
-          }));
-
-        if (isSubstantiveIntent(requestIntent) && !isAckMessage) {
-          await setShortTermMemory(actorId, chatId, {
-            ...shortTermMemoryWithSession,
-            intentSession: {
-              lastSubstantiveIntent: requestIntent,
-              lastIntentTimestamp: now
-            }
-          });
-          console.log(`[Intent Update] Stored substantive intent ${requestIntent} at ${new Date(now).toISOString()}.`);
-        }
+      if (requestIntent && isSubstantiveIntent(requestIntent) && !isAckMessage) {
+        await setShortTermMemory(actorId, chatId, {
+          ...shortTermMemoryWithSession,
+          intentSession: {
+            lastSubstantiveIntent: requestIntent,
+            lastIntentTimestamp: now
+          }
+        });
+        console.log(`[Intent Update] Stored substantive intent ${requestIntent} at ${new Date(now).toISOString()}.`);
       }
 
       resolvedRequestIntent = requestIntent;
-      const routingIntentOverride = explicitIntent;
-      const resolvedRoutingIntent: ResolvedRoutingIntent = {
-        intent: routingIntentOverride ?? resolvedRequestIntent ?? "general-text",
-        preferredProvider: null,
-        intentSource: "upstream"
-      };
+      const resolvedRoutingIntent: ResolvedRoutingIntent | undefined = isRouterIntentLocked && resolvedRequestIntent
+        ? {
+            intent: resolvedRequestIntent,
+            preferredProvider: null,
+            intentSource: "upstream"
+          }
+        : undefined;
 
       const routingContext = `\n  Persona: ${personaWithRepoContext}\n  Rolling Summary: ${summary}\n  Recent History: ${JSON.stringify(history.slice(-3))}\n  Has Attached Images: ${hasVisualInput}\n  Active Repo: ${sessionContext.activeRepo ? `${sessionContext.activeRepo.fullName} (${sessionContext.activeRepo.id})` : "none"}\n`;
       console.log(
-        `[Chat API] Routing intent diagnostic callerRequestIntent=${explicitIntent ?? "none"} classifierDerivedIntent=${requestIntent} effectiveIntentPassedToRouter=${resolvedRoutingIntent.intent} intentSource=${resolvedRoutingIntent.intentSource}`
+        `[Chat API] Routing intent diagnostic callerRequestIntent=${explicitIntent ?? "none"} heuristicIntent=${requestIntent ?? "none"} effectiveIntentPassedToRouter=${resolvedRoutingIntent?.intent ?? "none"} intentSource=${resolvedRoutingIntent?.intentSource ?? "router-fallback"}`
       );
       const routingDecision = await chooseProvider(message, routingContext, providers, {
         hasImages: hasVisualInput,
