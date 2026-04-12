@@ -6,7 +6,7 @@ import { maybeUpdateLongTermMemory } from "@/lib/memory/long-term-editor";
 import { saveMessage, setShortTermMemory } from "@/lib/data/persistence-store";
 import { getSupabaseAdminClient } from "@/lib/data/supabase/admin";
 import { getAvailableProviders } from "@/lib/providers";
-import { buildControlPlaneDecisionProviders, chooseProvider } from "@/lib/router/master-router";
+import { chooseProvider, selectControlPlaneDecisionModels } from "@/lib/router/master-router";
 import {
   hasDirectWebSearchHint,
   inferRequestClassification,
@@ -564,7 +564,7 @@ export async function POST(request: NextRequest) {
       const modelEntries = await Promise.all(
         providers.map(async (candidate) => ({ provider: candidate, models: await candidate.listModels() }))
       );
-      const controlPlaneDecisionProviders = buildControlPlaneDecisionProviders(modelEntries);
+      const controlPlaneDecisionProviders = selectControlPlaneDecisionModels(modelEntries);
       const overrideClassification = await inferRequestClassification(
         message,
         { hasImages: hasVisualInput, hasVideoInput },

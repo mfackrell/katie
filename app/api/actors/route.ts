@@ -3,7 +3,7 @@ import { z } from "zod";
 import { deleteActorsById, getActorById, listActors, saveActor } from "@/lib/data/persistence-store";
 import { getSupabaseAdminClient } from "@/lib/data/supabase/admin";
 import { getAvailableProviders } from "@/lib/providers";
-import { buildControlPlaneDecisionProviders } from "@/lib/router/master-router";
+import { selectControlPlaneDecisionModels } from "@/lib/router/master-router";
 import { createNeutralActorRoutingProfile, generateActorRoutingProfile } from "@/lib/router/actor-routing-profile";
 import type { Actor } from "@/lib/types/chat";
 
@@ -40,7 +40,7 @@ async function buildActorRoutingProfile(actor: Pick<Actor, "name" | "purpose">) 
   const modelEntries = await Promise.all(
     providers.map(async (provider) => ({ provider, models: await provider.listModels() }))
   );
-  const decisionProvider = buildControlPlaneDecisionProviders(modelEntries)[0] ?? null;
+  const decisionProvider = selectControlPlaneDecisionModels(modelEntries)[0] ?? null;
   return generateActorRoutingProfile({
     actorName: actor.name,
     actorPurpose: actor.purpose,
