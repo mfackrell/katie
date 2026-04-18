@@ -3,6 +3,8 @@ export interface FileReference {
   fileName: string;
   mimeType: string;
   preview: string;
+  extractedText?: string;
+  sourceFormat?: "text" | "word" | "excel" | "pdf" | "video";
   attachmentKind?: "image" | "video" | "text" | "file";
   providerRef?: {
     openaiFileId?: string;

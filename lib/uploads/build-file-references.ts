@@ -1,19 +1,10 @@
 import { FileReference } from "@/lib/providers/types";
+import { convertToPlainText, validateFile } from "@/lib/uploads/parse-text-files";
 
 const MAX_FILES = 5;
-const MAX_TEXT_FILE_SIZE_BYTES = 10 * 1024 * 1024;
 const MAX_VIDEO_FILE_SIZE_BYTES = 200 * 1024 * 1024;
 const PREVIEW_MAX_CHARS = 2000;
 const CSV_PREVIEW_MAX_ROWS = 50;
-
-const ALLOWED_TEXT_MIME_TYPES = new Set([
-  "text/plain",
-  "text/markdown",
-  "application/json",
-  "text/csv"
-]);
-
-const ALLOWED_TEXT_EXTENSIONS = new Set([".txt", ".md", ".json", ".csv"]);
 const ALLOWED_VIDEO_MIME_TYPES = new Set([
   "video/mp4",
   "video/quicktime",
@@ -36,11 +27,12 @@ function isAllowedTextFileType(file: File): boolean {
     return false;
   }
 
-  if (ALLOWED_TEXT_MIME_TYPES.has(file.type)) {
+  try {
+    validateFile(file);
     return true;
+  } catch {
+    return false;
   }
-
-  return ALLOWED_TEXT_EXTENSIONS.has(getExtension(file.name));
 }
 
 function isAllowedVideoFileType(file: File): boolean {
@@ -114,7 +106,7 @@ export async function buildFileReferences(files: File[]): Promise<FileReference[
     files.map(async (file) => {
       if (!isAllowedTextFileType(file) && !isAllowedVideoFileType(file)) {
         throw new Error(
-          `Unsupported file type for \"${file.name}\". Allowed types: txt, md, json, csv, mp4, mov, webm, m4v.`,
+          `Unsupported file type for \"${file.name}\". Allowed types: txt, md, json, csv, docx, doc, xlsx, xls, pdf, mp4, mov, webm, m4v.`,
         );
       }
 
@@ -123,30 +115,33 @@ export async function buildFileReferences(files: File[]): Promise<FileReference[
       }
 
       const attachmentKind = getAttachmentKind(file);
-      const sizeLimit = attachmentKind === "video" ? MAX_VIDEO_FILE_SIZE_BYTES : MAX_TEXT_FILE_SIZE_BYTES;
-
-      if (file.size > sizeLimit) {
+      if (attachmentKind === "video" && file.size > MAX_VIDEO_FILE_SIZE_BYTES) {
         const maxSizeMb = attachmentKind === "video" ? 200 : 10;
         throw new Error(`File \"${file.name}\" is too large. Maximum ${attachmentKind} file size is ${maxSizeMb}MB.`);
       }
 
       const mimeType = file.type || "text/plain";
       let preview = "";
+      let extractedText: string | undefined;
+      let sourceFormat: FileReference["sourceFormat"];
 
       if (attachmentKind === "video") {
+        sourceFormat = "video";
         preview = `[Video attachment metadata only. No transcript or frame extraction is currently available. Name: ${file.name}; MIME: ${mimeType}; Size: ${file.size} bytes.]`;
       } else {
-        let text: string;
-
         try {
-          text = await file.text();
-        } catch {
+          sourceFormat = validateFile(file);
+          const text = await convertToPlainText(file);
+          extractedText = text;
+          preview = mimeType === "text/csv" || getExtension(file.name) === ".csv"
+            ? buildCsvPreview(text)
+            : buildTextPreview(text);
+        } catch (error) {
+          if (error instanceof Error && error.message.trim().length > 0) {
+            throw error;
+          }
           throw new Error(`Failed to parse file \"${file.name}\".`);
         }
-
-        preview = mimeType === "text/csv" || getExtension(file.name) === ".csv"
-          ? buildCsvPreview(text)
-          : buildTextPreview(text);
       }
 
       const providerRef: FileReference["providerRef"] = {};
@@ -169,6 +164,8 @@ export async function buildFileReferences(files: File[]): Promise<FileReference[
         fileName: file.name,
         mimeType,
         preview,
+        extractedText,
+        sourceFormat,
         attachmentKind,
         providerRef: Object.keys(providerRef).length ? providerRef : undefined
       };
