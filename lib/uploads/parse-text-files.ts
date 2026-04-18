@@ -23,8 +23,12 @@ type XlsxModule = {
   };
 };
 
+type PdfParseResult = {
+  items: Array<{ str?: string }>;
+};
+
 type PdfPage = {
-  getTextContent(): Promise<{ items: Array<{ str?: string }> }>;
+  getTextContent(): Promise<PdfParseResult>;
 };
 
 type PdfDocument = {
@@ -33,8 +37,17 @@ type PdfDocument = {
 };
 
 type PdfjsModule = {
-  getDocument(input: { data: ArrayBuffer; disableWorker: boolean }): {
+  getDocument(input: {
+    data: Uint8Array;
+    disableWorker?: boolean;
+    useSystemFonts?: boolean;
+    isEvalSupported?: boolean;
+    stopAtErrors?: boolean;
+  }): {
     promise: Promise<PdfDocument>;
+  };
+  GlobalWorkerOptions?: {
+    workerSrc?: string;
   };
 };
 
@@ -78,6 +91,15 @@ function sanitizeExtractedText(text: string): string {
 
 function compactWhitespace(text: string): string {
   return text.replace(/\r\n/g, "\n").replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
+}
+
+function ensureNonEmptyExtraction(text: string, fileName: string, formatLabel: string): string {
+  const normalized = compactWhitespace(text);
+  if (normalized.length > 0) {
+    return normalized;
+  }
+
+  return `[No extractable ${formatLabel} text found in \"${fileName}\". The document may be scanned/image-based or encrypted.]`;
 }
 
 function getFileSizeLimitBytes(sourceFormat: SourceFormat): number {
@@ -150,24 +172,66 @@ export async function convertToPlainText(file: File): Promise<string> {
 
   try {
     const pdfjs = await DYNAMIC_IMPORTS.pdfjs();
-    const rawBuffer = await file.arrayBuffer();
-    const loadingTask = pdfjs.getDocument({ data: rawBuffer, disableWorker: true });
-    const pdfDocument = await loadingTask.promise;
-    const pageTextChunks: string[] = [];
-
-    for (let pageNumber = 1; pageNumber <= pdfDocument.numPages; pageNumber += 1) {
-      const page = await pdfDocument.getPage(pageNumber);
-      const content = await page.getTextContent();
-      const text = content.items
-        .map((item) => item.str ?? "")
-        .join(" ")
-        .trim();
-      pageTextChunks.push(text);
+    const rawBytes = new Uint8Array(await file.arrayBuffer());
+    const workerUrl = new URL("pdfjs-dist/legacy/build/pdf.worker.mjs", import.meta.url).toString();
+    if (pdfjs.GlobalWorkerOptions) {
+      pdfjs.GlobalWorkerOptions.workerSrc = workerUrl;
     }
 
-    return sanitizeExtractedText(pageTextChunks.join("\n\n"));
-  } catch {
-    throw new Error(`Failed to parse PDF document "${file.name}".`);
+    const runExtraction = async (options: {
+      disableWorker?: boolean;
+      useSystemFonts: boolean;
+      isEvalSupported: boolean;
+      stopAtErrors: boolean;
+    }) => {
+      const loadingTask = pdfjs.getDocument({
+        data: rawBytes,
+        disableWorker: options.disableWorker,
+        useSystemFonts: options.useSystemFonts,
+        isEvalSupported: options.isEvalSupported,
+        stopAtErrors: options.stopAtErrors
+      });
+      const pdfDocument = await loadingTask.promise;
+      const pageTextChunks: string[] = [];
+
+      for (let pageNumber = 1; pageNumber <= pdfDocument.numPages; pageNumber += 1) {
+        const page = await pdfDocument.getPage(pageNumber);
+        const content = await page.getTextContent();
+        const text = content.items
+          .map((item) => item.str ?? "")
+          .join(" ")
+          .trim();
+        pageTextChunks.push(text);
+      }
+
+      return pageTextChunks.join("\n\n");
+    };
+
+    let extracted = "";
+    try {
+      extracted = await runExtraction({
+        useSystemFonts: true,
+        isEvalSupported: false,
+        stopAtErrors: false,
+      });
+    } catch (primaryError) {
+      const message = primaryError instanceof Error ? primaryError.message : String(primaryError);
+      if (!message.includes("Setting up fake worker failed")) {
+        throw primaryError;
+      }
+
+      extracted = await runExtraction({
+        disableWorker: true,
+        useSystemFonts: true,
+        isEvalSupported: false,
+        stopAtErrors: false,
+      });
+    }
+
+    return sanitizeExtractedText(ensureNonEmptyExtraction(extracted, file.name, "PDF"));
+  } catch (error) {
+    const reason = error instanceof Error && error.message.trim().length > 0 ? ` Reason: ${error.message}` : "";
+    throw new Error(`Failed to parse PDF document "${file.name}".${reason}`);
   }
 }
 

@@ -1485,7 +1485,7 @@ export function ChatPanel({
             <input
               ref={fileInputRef}
               type="file"
-              accept="image/*,.txt,.md,.json,.csv,video/mp4,video/quicktime,video/webm,video/x-m4v,.mp4,.mov,.webm,.m4v"
+              accept="image/*,.txt,.md,.json,.csv,.pdf,.docx,.doc,.xlsx,.xls,video/mp4,video/quicktime,video/webm,video/x-m4v,.mp4,.mov,.webm,.m4v"
               multiple
               onChange={handleFileChange}
               className="hidden"
