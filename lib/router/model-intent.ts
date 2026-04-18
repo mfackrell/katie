@@ -2,6 +2,7 @@ import {
   isImageGenerationModel as isGoogleImageGenerationModel,
   isVisionAnalysisModel as isGoogleVisionAnalysisModel
 } from "@/lib/providers/google-model-capabilities";
+import { isControlPlaneInstructionCompatibleModel } from "@/lib/router/control-plane-compat";
 import { lookupRegistryModel, type RegistryRoutingModel } from "@/lib/models/registry";
 import { LlmProvider } from "@/lib/providers/types";
 import type { ActorRoutingIntent, ActorRoutingProfile } from "@/lib/types/chat";
@@ -292,7 +293,7 @@ function isLikelySafetySensitiveVisionPrompt(prompt: string, hasImages: boolean)
 }
 
 export function userPreferredProviderBoost(preferredProvider: ProviderName | null, providerName: ProviderName): number {
-  return preferredProvider === providerName ? 1.5 : 0;
+  return preferredProvider === providerName ? 8 : 0;
 }
 
 function mapRequestIntentToActorRoutingIntent(intent: RequestIntent): ActorRoutingIntent {
@@ -445,19 +446,6 @@ type ControlPlaneSelectionOptions = {
   timeoutMs?: number;
 };
 
-const CONTROL_PLANE_VERIFIED_MODEL_IDS: Record<ProviderName, string[]> = {
-  openai: ["gpt-5.3-codex", "gpt-5.2-unified", "gpt-5.2", "o3-pro"],
-  anthropic: ["claude-4.6-opus", "claude-4.5-sonnet", "claude-4-opus"],
-  grok: ["grok-4-0709", "grok-4"],
-  google: []
-};
-
-function isControlPlaneJsonInstructionCompatible(providerName: ProviderName, modelId: string): boolean {
-  const normalizedModel = modelId.trim().toLowerCase();
-  const verifiedModels = CONTROL_PLANE_VERIFIED_MODEL_IDS[providerName];
-  return verifiedModels.some((verifiedModel) => verifiedModel.trim().toLowerCase() === normalizedModel);
-}
-
 function isEligibleControlPlaneModel(providerName: ProviderName, modelId: string, registryLookup?: RegistryLookup): boolean {
   const registry = lookupRegistryModel(registryLookup, providerName, modelId);
   const routingEligibility = registry?.routing_eligibility ?? "restricted";
@@ -466,7 +454,7 @@ function isEligibleControlPlaneModel(providerName: ProviderName, modelId: string
   }
   const supportsText = registry?.supports_text ?? modelSupportsIntent(providerName, modelId, "general-text", registryLookup);
   const supportsImageGen = registry?.supports_image_generation ?? isImageGenerationModel(providerName, modelId);
-  return Boolean(supportsText) && !supportsImageGen && isControlPlaneJsonInstructionCompatible(providerName, modelId);
+  return Boolean(supportsText) && !supportsImageGen && isControlPlaneInstructionCompatibleModel(providerName, modelId);
 }
 
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
