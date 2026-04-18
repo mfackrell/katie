@@ -33,7 +33,13 @@ type PdfDocument = {
 };
 
 type PdfjsModule = {
-  getDocument(input: { data: ArrayBuffer; disableWorker: boolean }): {
+  getDocument(input: {
+    data: Uint8Array;
+    disableWorker: boolean;
+    useSystemFonts?: boolean;
+    isEvalSupported?: boolean;
+    stopAtErrors?: boolean;
+  }): {
     promise: Promise<PdfDocument>;
   };
 };
@@ -78,6 +84,15 @@ function sanitizeExtractedText(text: string): string {
 
 function compactWhitespace(text: string): string {
   return text.replace(/\r\n/g, "\n").replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
+}
+
+function ensureNonEmptyExtraction(text: string, fileName: string, formatLabel: string): string {
+  const normalized = compactWhitespace(text);
+  if (normalized.length > 0) {
+    return normalized;
+  }
+
+  return `[No extractable ${formatLabel} text found in \"${fileName}\". The document may be scanned/image-based or encrypted.]`;
 }
 
 function getFileSizeLimitBytes(sourceFormat: SourceFormat): number {
@@ -150,8 +165,14 @@ export async function convertToPlainText(file: File): Promise<string> {
 
   try {
     const pdfjs = await DYNAMIC_IMPORTS.pdfjs();
-    const rawBuffer = await file.arrayBuffer();
-    const loadingTask = pdfjs.getDocument({ data: rawBuffer, disableWorker: true });
+    const rawBytes = new Uint8Array(await file.arrayBuffer());
+    const loadingTask = pdfjs.getDocument({
+      data: rawBytes,
+      disableWorker: true,
+      useSystemFonts: true,
+      isEvalSupported: false,
+      stopAtErrors: false
+    });
     const pdfDocument = await loadingTask.promise;
     const pageTextChunks: string[] = [];
 
@@ -165,9 +186,10 @@ export async function convertToPlainText(file: File): Promise<string> {
       pageTextChunks.push(text);
     }
 
-    return sanitizeExtractedText(pageTextChunks.join("\n\n"));
-  } catch {
-    throw new Error(`Failed to parse PDF document "${file.name}".`);
+    return sanitizeExtractedText(ensureNonEmptyExtraction(pageTextChunks.join("\n\n"), file.name, "PDF"));
+  } catch (error) {
+    const reason = error instanceof Error && error.message.trim().length > 0 ? ` Reason: ${error.message}` : "";
+    throw new Error(`Failed to parse PDF document "${file.name}".${reason}`);
   }
 }
 
