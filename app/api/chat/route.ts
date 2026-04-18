@@ -22,6 +22,7 @@ import {
 import { LlmProvider, ProviderResponse } from "@/lib/providers/types";
 import type { ResolvedRoutingIntent, SelectionExplainer } from "@/lib/router/master-router";
 import { DEFAULT_REASONING_CATEGORIES, ReasoningStateAccumulator } from "@/lib/chat/reasoning-stream";
+import { buildGenerationFailureChunk } from "@/lib/chat/stream-events";
 import { isLikelyProviderRefusal, runWithRefusalFallback, shouldRetryOnProviderRefusal } from "@/lib/router/refusal-detection";
 import {
   getAttachmentSupportForProvider,
@@ -830,6 +831,12 @@ export async function POST(request: NextRequest) {
                   }
                 : null
             });
+            emitChunk({
+              type: "generation_status",
+              status: "provider_selected",
+              provider: provider.name,
+              modelId
+            });
 
             const startEvent = reasoningState.start();
             emitChunk(startEvent);
@@ -892,6 +899,13 @@ export async function POST(request: NextRequest) {
                     type: "metadata",
                     modelId,
                     provider: provider.name
+                  });
+                  emitChunk({
+                    type: "generation_status",
+                    status: "fallback_attempt",
+                    provider: provider.name,
+                    modelId,
+                    attemptIndex
                   });
                 }
 
@@ -995,9 +1009,18 @@ export async function POST(request: NextRequest) {
           } catch (error: unknown) {
             console.error("[Chat API] Stream Runtime Error:", error);
             const message = error instanceof Error ? error.message : "Unknown stream error";
+            emitChunk(
+              buildGenerationFailureChunk({
+                message,
+                provider: provider?.name ?? null,
+                modelId: modelId ?? null,
+                stage: "generation_after_selection",
+                recoverable: false
+              })
+            );
             emitChunk(reasoningState.error(message, true));
             console.error("[Chat API] reasoning stream error", { requestId, message });
-            controller.error(error);
+            controller.close();
           }
         })();
       },

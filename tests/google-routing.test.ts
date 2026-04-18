@@ -952,7 +952,7 @@ test("only explicit provider preference applies a small anthropic boost", async 
   assert.ok(anthropicCasualMention);
   assert.ok(anthropicBoosted);
   assert.equal((anthropicCasualMention?.score ?? 0) - (anthropicUnboosted?.score ?? 0), 0);
-  assert.equal((anthropicBoosted?.score ?? 0) - (anthropicUnboosted?.score ?? 0), 1.5);
+  assert.equal((anthropicBoosted?.score ?? 0) - (anthropicUnboosted?.score ?? 0), 8);
 });
 
 test('explicit provider request routes to anthropic model', async () => {
@@ -967,6 +967,100 @@ test('explicit provider request routes to anthropic model', async () => {
   assert.equal(decision.modelId, "claude-4.5-sonnet");
 });
 
+test("explicit Gemini preference is retained in social-emotional lane when Google final candidates exist", async () => {
+  const decision = await chooseProvider(
+    "gemini, what do you think about all of this?",
+    "",
+    [provider("google", ["gemini-3.1-pro"]).provider, provider("openai", ["gpt-5.2-mini"]).provider],
+    {
+      resolvedIntent: { intent: "social-emotional", preferredProvider: "google", intentSource: "upstream" },
+      routingRequestId: "test-gemini-explicit-social-emotional"
+    }
+  );
+
+  assert.equal(decision.resolvedIntent.preferredProvider, "google");
+  assert.equal(decision.provider.name, "google");
+});
+
+test("google can be excluded from control-plane judges while still eligible as final response provider", async () => {
+  const entries = [
+    provider("google", ["gemini-3.1-pro"]),
+    provider("openai", ["gpt-5.3-codex"])
+  ];
+  const controlPlane = selectControlPlaneDecisionModels(
+    entries.map(({ provider: instance, models }) => ({ provider: instance, models })),
+    undefined,
+    "test-google-control-plane-excluded"
+  );
+  assert.equal(controlPlane.some((candidate) => candidate.provider.name === "google"), false);
+
+  const decision = await chooseProvider(
+    "gemini, help me think this through",
+    "",
+    entries.map(({ provider: instance }) => instance),
+    {
+      resolvedIntent: { intent: "social-emotional", preferredProvider: "google", intentSource: "upstream" },
+      routingRequestId: "test-google-final-eligible"
+    }
+  );
+  assert.equal(decision.provider.name, "google");
+});
+
+test("impossible preferred provider is cleared before ranking and logs why", async () => {
+  const capturedLogs: string[] = [];
+  const originalInfo = console.info;
+  console.info = (...args: unknown[]) => {
+    capturedLogs.push(args.map((arg) => String(arg)).join(" "));
+  };
+
+  try {
+    const decision = await chooseProvider(
+      "please use gemini",
+      "",
+      [provider("openai", ["gpt-5.3-codex"]).provider],
+      {
+        resolvedIntent: { intent: "technical-debugging", preferredProvider: "google", intentSource: "upstream" },
+        routingRequestId: "test-impossible-provider-cleared"
+      }
+    );
+
+    assert.equal(decision.resolvedIntent.preferredProvider, null);
+  } finally {
+    console.info = originalInfo;
+  }
+
+  const clearLog = capturedLogs.find((line) => line.includes("[Provider Preference]") && line.includes("action=cleared"));
+  assert.ok(clearLog);
+  assert.match(clearLog ?? "", /original=google/);
+  assert.match(clearLog ?? "", /remaining_providers=openai/);
+});
+
+test("router logs do not report contradictory preferred provider after clearing", async () => {
+  const capturedLogs: string[] = [];
+  const originalInfo = console.info;
+  console.info = (...args: unknown[]) => {
+    capturedLogs.push(args.map((arg) => String(arg)).join(" "));
+  };
+
+  try {
+    await chooseProvider(
+      "use gemini for this debug request",
+      "",
+      [provider("openai", ["gpt-5.3-codex"]).provider],
+      {
+        resolvedIntent: { intent: "technical-debugging", preferredProvider: "google", intentSource: "upstream" },
+        routingRequestId: "test-no-contradictory-preference-log"
+      }
+    );
+  } finally {
+    console.info = originalInfo;
+  }
+
+  const routeDecisionLog = capturedLogs.find((line) => line.startsWith("[Router] intent="));
+  assert.ok(routeDecisionLog);
+  assert.equal((routeDecisionLog ?? "").includes("google:"), false);
+});
+
 test("assistant-reflection intent prioritizes higher-quality model over cheaper option", async () => {
   const decision = await chooseProvider(
     "Evaluate your own output.",
@@ -977,6 +1071,18 @@ test("assistant-reflection intent prioritizes higher-quality model over cheaper 
 
   assert.equal(decision.provider.name, "openai");
   assert.equal(decision.modelId, "gpt-5.3-codex");
+});
+
+test("social-emotional routing avoids cheap fast small models by default without explicit provider request", async () => {
+  const decision = await chooseProvider(
+    "what do you think about everything going on right now?",
+    "",
+    [provider("openai", ["gpt-5.2-mini"]).provider, provider("anthropic", ["claude-4.5-sonnet"]).provider],
+    { requestIntent: "social-emotional", routingRequestId: "test-social-emotional-quality-over-speed" }
+  );
+
+  assert.equal(decision.provider.name, "anthropic");
+  assert.equal(decision.modelId, "claude-4.5-sonnet");
 });
 
 test("acknowledgment detector only matches short, explicit confirmations", async () => {

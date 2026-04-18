@@ -13,6 +13,7 @@ import {
   validateRoutingDecision
 } from "@/lib/router/model-intent";
 import { isBlockedRoutingModel } from "@/lib/router/routing-model-filters";
+import { isControlPlaneInstructionCompatibleModel } from "@/lib/router/control-plane-compat";
 import { evaluatePolicyRouting, getPolicyConfig } from "@/lib/router/policy-engine";
 import { LlmProvider } from "@/lib/providers/types";
 import {
@@ -118,18 +119,6 @@ const CONTROL_PLANE_BLOCKED_MODELS: Record<LlmProvider["name"], string[]> = {
   anthropic: [],
   grok: []
 };
-const CONTROL_PLANE_VERIFIED_COMPATIBLE_MODELS: Record<LlmProvider["name"], string[]> = {
-  google: [],
-  openai: ["gpt-5.3-codex", "gpt-5.2-unified", "gpt-5.2", "o3-pro"],
-  anthropic: ["claude-4.6-opus", "claude-4.5-sonnet", "claude-4-opus"],
-  grok: ["grok-4-0709", "grok-4"]
-};
-
-function isControlPlaneInstructionCompatibleModel(providerName: LlmProvider["name"], modelId: string): boolean {
-  const normalized = normalizeModelId(modelId);
-  return CONTROL_PLANE_VERIFIED_COMPATIBLE_MODELS[providerName].some((verified) => normalizeModelId(verified) === normalized);
-}
-
 function isEligibleControlPlaneModel(
   providerName: LlmProvider["name"],
   modelId: string,
@@ -729,7 +718,7 @@ export async function chooseProvider(
   );
   console.info(`[Route Intent Resolved] ${JSON.stringify(resolvedIntent)}`);
   const intent = resolvedIntent.intent;
-  const preferredProvider = resolvedIntent.preferredProvider;
+  const requestedPreferredProvider = resolvedIntent.preferredProvider;
   const actorRoutingProfile = options?.actorRoutingProfile;
 
   let availableByProvider = modelEntries.map(({ provider, models }) => ({
@@ -751,12 +740,40 @@ export async function chooseProvider(
     registryLookup
   });
 
+  const candidateProviders = Array.from(new Set(availableByProvider.map(({ provider }) => provider.name))).sort();
+  let effectivePreferredProvider = requestedPreferredProvider;
+  if (requestedPreferredProvider) {
+    console.info(
+      `[Provider Preference] requestId=${traceRequestId} detected=true preferred_provider=${requestedPreferredProvider} source=${resolvedIntent.intentSource}`
+    );
+    if (!candidateProviders.includes(requestedPreferredProvider)) {
+      effectivePreferredProvider = null;
+      console.info(
+        `[Provider Preference] requestId=${traceRequestId} action=cleared original=${requestedPreferredProvider} reason=no_final_generation_candidates remaining_providers=${candidateProviders.join(",") || "none"}`
+      );
+    } else {
+      console.info(
+        `[Provider Preference] requestId=${traceRequestId} action=retained preferred_provider=${requestedPreferredProvider} in_final_candidate_pool=true`
+      );
+    }
+  } else {
+    console.info(`[Provider Preference] requestId=${traceRequestId} detected=false`);
+  }
+  const resolvedIntentForSelection: ResolvedRoutingIntent = {
+    ...resolvedIntent,
+    preferredProvider: effectivePreferredProvider
+  };
+
   console.info(`[Capability Filter] requestId=${traceRequestId} candidates=${availableByProvider.reduce((total, entry) => total + entry.models.length, 0)}`);
   logRoutingCandidatePool(traceRequestId, intent, availableByProvider);
 
-  rankedCandidates = scoreModelsForIntent(availableByProvider, intent, { registryLookup, preferredProvider, actorRoutingProfile });
+  rankedCandidates = scoreModelsForIntent(availableByProvider, intent, {
+    registryLookup,
+    preferredProvider: effectivePreferredProvider,
+    actorRoutingProfile
+  });
   const unbiasedTopCandidate = actorRoutingProfile
-    ? scoreModelsForIntent(availableByProvider, intent, { registryLookup, preferredProvider })[0]
+    ? scoreModelsForIntent(availableByProvider, intent, { registryLookup, preferredProvider: effectivePreferredProvider })[0]
     : null;
   if (actorRoutingProfile) {
     console.info(
@@ -785,7 +802,7 @@ export async function chooseProvider(
         fallbackChain,
         reasoning: selection.reasoning,
         routerModel: selection.routerModel,
-        resolvedIntent,
+        resolvedIntent: resolvedIntentForSelection,
         explainer: buildSelectionExplainer({
           selectedProviderName: selection.provider.name,
           selectedModelId: selection.modelId,
@@ -826,7 +843,7 @@ export async function chooseProvider(
         fallbackChain,
         reasoning: `${selection.reasoning} Policy guardrail did not enforce reroute.`,
         routerModel: selection.routerModel,
-        resolvedIntent,
+        resolvedIntent: resolvedIntentForSelection,
         explainer: buildSelectionExplainer({
           selectedProviderName: selection.provider.name,
           selectedModelId: selection.modelId,
@@ -849,13 +866,16 @@ export async function chooseProvider(
     }
 
     console.info(`[Policy Guardrail] enforced=${evaluation.selected.provider.name}:${evaluation.selected.modelId}`);
+    console.info(
+      `[Routing Final] requestId=${traceRequestId} policy_guardrail_changed_selection=true from=${selection.provider.name}:${selection.modelId} to=${evaluation.selected.provider.name}:${evaluation.selected.modelId}`
+    );
     return {
       provider: evaluation.selected.provider,
       modelId: evaluation.selected.modelId,
       fallbackChain,
       reasoning: `${selection.reasoning} Policy guardrail enforced hard constraint selection.`,
       routerModel: selection.routerModel,
-      resolvedIntent,
+      resolvedIntent: resolvedIntentForSelection,
       explainer: buildSelectionExplainer({
         selectedProviderName: evaluation.selected.provider.name,
         selectedModelId: evaluation.selected.modelId,
@@ -1018,19 +1038,42 @@ export async function chooseProvider(
     }
   }
 
+  if (effectivePreferredProvider && selected.provider.name !== effectivePreferredProvider) {
+    const preferredCandidate = rankedCandidates.find((candidate) => candidate.provider.name === effectivePreferredProvider);
+    if (preferredCandidate) {
+      const validatedPreferred = validateRoutingDecision(
+        { providerName: preferredCandidate.provider.name, modelId: preferredCandidate.modelId },
+        availableByProvider,
+        intent,
+        { registryLookup, actorRoutingProfile }
+      );
+      console.info(
+        `[Provider Preference] requestId=${traceRequestId} action=enforced preferred_provider=${effectivePreferredProvider} selected=${validatedPreferred.provider.name}:${validatedPreferred.modelId} replaced=${selected.provider.name}:${selected.modelId}`
+      );
+      selected = {
+        provider: validatedPreferred.provider,
+        modelId: validatedPreferred.modelId,
+        reasoning: `${selected.reasoning} Explicit provider preference enforced final selection.`,
+        routerModel: selected.routerModel,
+        summary: `${selected.summary} Explicit provider preference honored.`,
+        overrideReason: "explicit_provider_preference"
+      };
+    }
+  }
+
   logFullRanking(traceRequestId, intent, rankedCandidates);
   logRoutingDecision(
     intent,
     resolvedIntent.intentSource,
     availableByProvider,
-    preferredProvider,
+    effectivePreferredProvider,
     selected.provider.name,
     selected.modelId,
     registryLookup,
     actorRoutingProfile
   );
   console.info(
-    `[Routing Final] requestId=${traceRequestId} source=${llmPrimaryUsed ? "llm-primary" : "deterministic-fallback"} fallback_reason=${fallbackReason ?? "none"}`
+    `[Routing Final] requestId=${traceRequestId} selected=${selected.provider.name}:${selected.modelId} source=${llmPrimaryUsed ? "llm-primary" : "deterministic-fallback"} fallback_reason=${fallbackReason ?? "none"} post_selection_fallback=${deterministicFallbackUsed}`
   );
 
   if (traceEnabled) {
@@ -1041,7 +1084,7 @@ export async function chooseProvider(
         intent,
         intentSource: resolvedIntent.intentSource,
         prompt,
-        preferredProvider,
+        preferredProvider: effectivePreferredProvider,
         hasImages: Boolean(options?.hasImages),
         hasVideoInput: Boolean(options?.hasVideoInput),
         context,

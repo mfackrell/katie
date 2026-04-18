@@ -630,6 +630,8 @@ export function ChatPanel({
 
           const chunk = JSON.parse(line) as
             | { type: "metadata"; modelId: string; provider: string; explainer?: SelectionExplainer }
+            | { type: "generation_status"; status: string; provider?: string; modelId?: string; attemptIndex?: number }
+            | { type: "generation_failure"; message: string; provider?: string | null; modelId?: string | null; stage?: string; recoverable?: boolean }
             | { type: "delta"; text: string }
             | ReasoningStreamEvent
             | {
@@ -645,6 +647,28 @@ export function ChatPanel({
             provider = chunk.provider;
             setSelectionExplainer(chunk.explainer ?? null);
             setIsRoutingSelectionInFlight(false);
+          }
+
+          if (chunk.type === "generation_status") {
+            if (chunk.provider) {
+              provider = chunk.provider;
+            }
+            if (chunk.modelId) {
+              model = chunk.modelId;
+            }
+          }
+
+          if (chunk.type === "generation_failure") {
+            if (!textContent.trim()) {
+              textContent = chunk.message || "Generation failed before any tokens were produced.";
+            }
+            if (chunk.provider) {
+              provider = chunk.provider;
+            }
+            if (chunk.modelId) {
+              model = chunk.modelId;
+            }
+            setStatusMessage(chunk.message || "Generation failed.");
           }
 
           if (chunk.type === "delta") {
@@ -685,6 +709,8 @@ export function ChatPanel({
       if (buffered.trim()) {
         const trailingChunk = JSON.parse(buffered) as
           | { type: "metadata"; modelId: string; provider: string; explainer?: SelectionExplainer }
+          | { type: "generation_status"; status: string; provider?: string; modelId?: string; attemptIndex?: number }
+          | { type: "generation_failure"; message: string; provider?: string | null; modelId?: string | null; stage?: string; recoverable?: boolean }
           | { type: "delta"; text: string }
           | ReasoningStreamEvent
           | {
@@ -700,6 +726,28 @@ export function ChatPanel({
           provider = trailingChunk.provider;
           setSelectionExplainer(trailingChunk.explainer ?? null);
           setIsRoutingSelectionInFlight(false);
+        }
+
+        if (trailingChunk.type === "generation_status") {
+          if (trailingChunk.provider) {
+            provider = trailingChunk.provider;
+          }
+          if (trailingChunk.modelId) {
+            model = trailingChunk.modelId;
+          }
+        }
+
+        if (trailingChunk.type === "generation_failure") {
+          if (!textContent.trim()) {
+            textContent = trailingChunk.message || "Generation failed before any tokens were produced.";
+          }
+          if (trailingChunk.provider) {
+            provider = trailingChunk.provider;
+          }
+          if (trailingChunk.modelId) {
+            model = trailingChunk.modelId;
+          }
+          setStatusMessage(trailingChunk.message || "Generation failed.");
         }
 
         if (trailingChunk.type === "delta") {
@@ -737,6 +785,9 @@ export function ChatPanel({
       }
 
       abortControllerRef.current = null;
+      if (!textContent.trim()) {
+        textContent = "The assistant could not generate a response for this request.";
+      }
       setMeta({ provider, model });
       const assistantMessage: Message = {
         id: crypto.randomUUID(),
