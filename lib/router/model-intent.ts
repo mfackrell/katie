@@ -178,7 +178,12 @@ function supportsWebSearch(providerName: ProviderName, modelId: string): boolean
     return !isImageGenerationModel(providerName, modelId) && normalizedModel.includes("grok-4");
   }
   if (providerName === "openai") {
-    return normalizedModel.includes("search") || normalizedModel.includes("gpt-5") || normalizedModel.includes("gpt-4.1");
+    return (
+      normalizedModel.includes("search") ||
+      normalizedModel.includes("gpt-5") ||
+      normalizedModel.includes("gpt-4.1") ||
+      normalizedModel.includes("gpt-4o")
+    );
   }
   if (providerName === "google") {
     return normalizedModel.includes("gemini");
