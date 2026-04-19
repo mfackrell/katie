@@ -26,15 +26,8 @@ test("parseTextFiles converts docx, xlsx, and pdf through type-specific converte
         sheet_to_csv: () => "cell1\tcell2"
       }
     }),
-    pdfjs: async () => ({
-      getDocument: () => ({
-        promise: Promise.resolve({
-          numPages: 1,
-          getPage: async () => ({
-            getTextContent: async () => ({ items: [{ str: "PDF text" }] })
-          })
-        })
-      })
+    pdfParse: async () => ({
+      default: async () => ({ text: "PDF text" })
     })
   });
 
@@ -56,6 +49,21 @@ test("parseTextFiles converts docx, xlsx, and pdf through type-specific converte
   assert.equal(parsed[1].text, "--- sheet: Sheet1 ---\ncell1\tcell2");
   assert.equal(parsed[2].sourceFormat, "pdf");
   assert.equal(parsed[2].text, "PDF text");
+});
+
+test("PDF parse failures return a clear parse error", async () => {
+  __setDynamicImportOverridesForTests({
+    pdfParse: async () => ({
+      default: async () => {
+        throw new Error("invalid pdf");
+      }
+    })
+  });
+
+  await assert.rejects(
+    parseTextFiles([new File([fromBase64(PDF_BASE64)], "broken.pdf", { type: "application/pdf" })]),
+    /Failed to parse PDF document "broken\.pdf"\./
+  );
 });
 
 test("parseTextFiles rejects unsupported extensions", async () => {

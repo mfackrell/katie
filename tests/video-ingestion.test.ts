@@ -42,15 +42,8 @@ test("buildFileReferences accepts supported video types", async () => {
 
 test("buildFileReferences successfully ingests PDF files as text attachments", async () => {
   __setDynamicImportOverridesForTests({
-    pdfjs: async () => ({
-      getDocument: () => ({
-        promise: Promise.resolve({
-          numPages: 1,
-          getPage: async () => ({
-            getTextContent: async () => ({ items: [{ str: "Quarterly report" }] })
-          })
-        })
-      })
+    pdfParse: async () => ({
+      default: async () => ({ text: "Quarterly report" })
     })
   });
 

@@ -23,25 +23,14 @@ type XlsxModule = {
   };
 };
 
-type PdfPage = {
-  getTextContent(): Promise<{ items: Array<{ str?: string }> }>;
-};
-
-type PdfDocument = {
-  numPages: number;
-  getPage(pageNumber: number): Promise<PdfPage>;
-};
-
-type PdfjsModule = {
-  getDocument(input: { data: ArrayBuffer; disableWorker: boolean }): {
-    promise: Promise<PdfDocument>;
-  };
+type PdfParseModule = {
+  default(input: Uint8Array): Promise<{ text?: string }>;
 };
 
 type DynamicImportLoaders = {
   mammoth: () => Promise<MammothModule>;
   xlsx: () => Promise<XlsxModule>;
-  pdfjs: () => Promise<PdfjsModule>;
+  pdfParse: () => Promise<PdfParseModule>;
 };
 
 export type ParsedAttachment = {
@@ -60,7 +49,7 @@ const MAX_EXCEL_SHEETS = 20;
 const DYNAMIC_IMPORTS: DynamicImportLoaders = {
   mammoth: async () => (await import("mammoth")) as unknown as MammothModule,
   xlsx: async () => (await import("xlsx")) as unknown as XlsxModule,
-  pdfjs: async () => (await import("pdfjs-dist/legacy/build/pdf.mjs")) as unknown as PdfjsModule
+  pdfParse: async () => (await import("pdf-parse")) as unknown as PdfParseModule
 };
 
 export function __setDynamicImportOverridesForTests(overrides: Partial<DynamicImportLoaders>): void {
@@ -149,23 +138,10 @@ export async function convertToPlainText(file: File): Promise<string> {
   }
 
   try {
-    const pdfjs = await DYNAMIC_IMPORTS.pdfjs();
+    const pdfParse = await DYNAMIC_IMPORTS.pdfParse();
     const rawBuffer = await file.arrayBuffer();
-    const loadingTask = pdfjs.getDocument({ data: rawBuffer, disableWorker: true });
-    const pdfDocument = await loadingTask.promise;
-    const pageTextChunks: string[] = [];
-
-    for (let pageNumber = 1; pageNumber <= pdfDocument.numPages; pageNumber += 1) {
-      const page = await pdfDocument.getPage(pageNumber);
-      const content = await page.getTextContent();
-      const text = content.items
-        .map((item) => item.str ?? "")
-        .join(" ")
-        .trim();
-      pageTextChunks.push(text);
-    }
-
-    return sanitizeExtractedText(pageTextChunks.join("\n\n"));
+    const parsed = await pdfParse.default(new Uint8Array(rawBuffer));
+    return sanitizeExtractedText(compactWhitespace(parsed.text ?? ""));
   } catch {
     throw new Error(`Failed to parse PDF document "${file.name}".`);
   }
