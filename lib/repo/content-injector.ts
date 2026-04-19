@@ -1,4 +1,5 @@
 import { Octokit } from "@octokit/rest";
+import { buildLikelyCandidatePaths, resolveRepoFile } from "./retrieval-strategy";
 
 type RepoBinding = {
   owner: string;
@@ -52,7 +53,7 @@ function redactSecrets(content: string): string {
 
 function parseHints(userMessage: string): string[] {
   const hints = new Set<string>();
-  const pathPattern = /\b(?:lib|app|prompts|src|tests|packages)\/[\w./-]+\b/gi;
+  const pathPattern = /\b(?:lib|app|prompts|src|tests|packages|components|types)\/[\w./-]+\b/gi;
   const filePattern = /\b[\w.-]+\.(?:ts|tsx|js|jsx|mjs|cjs|json|md|mdx|yml|yaml)\b/gi;
 
   for (const match of userMessage.match(pathPattern) ?? []) {
@@ -99,8 +100,8 @@ function keywordScore(userMessage: string, path: string, preview: string): numbe
       userMessage
         .toLowerCase()
         .split(/[^a-z0-9]+/)
-        .filter((token) => token.length >= 3)
-    )
+        .filter((token) => token.length >= 3),
+    ),
   );
 
   if (keywords.length === 0) {
@@ -259,6 +260,11 @@ export function registerRepoBinding(repoId: string, repositoryFullName: string, 
   repoBindings.set(repoId, { owner, repo, defaultBranch });
 }
 
+function normalizeSearchMatches(paths: string[], hint: string): string[] {
+  const loweredHint = hint.toLowerCase();
+  return paths.filter((path) => path.toLowerCase().includes(loweredHint));
+}
+
 export async function injectRelevantContents(userMessage: string, repoId: string, maxFiles = 5): Promise<string> {
   const binding = repoBindings.get(repoId);
   if (!binding) {
@@ -267,60 +273,105 @@ export async function injectRelevantContents(userMessage: string, repoId: string
 
   const hints = parseHints(userMessage);
   const explicitPathHints = hints.filter((hint) => hint.includes("/") || /\.[a-z0-9]+$/i.test(hint));
+  const explicitFiles = explicitPathHints.filter((hint) => /\.[a-z0-9]+$/i.test(hint));
   const functionHints = parseFunctionLikeHints(userMessage);
-  const allPaths = await listTextPaths(binding);
-
-  const explicitCandidates = allPaths.filter((path) => isExplicitPathHit(path, explicitPathHints));
-
-  let secondaryCandidates: string[] = [];
-  if (hints.length) {
-    const hintLower = hints.map((hint) => hint.toLowerCase());
-    secondaryCandidates = allPaths.filter(
-      (path) => hintLower.some((hint) => path.toLowerCase().includes(hint)) && !explicitCandidates.includes(path)
-    );
-  }
-
-  if (!secondaryCandidates.length) {
-    const defaults = ["lib/", "app/api/", "prompts/"];
-    secondaryCandidates = allPaths.filter((path) => defaults.some((prefix) => path.startsWith(prefix)) && !explicitCandidates.includes(path));
-  }
 
   const maxFilesCap = Math.max(1, Math.min(maxFiles, 5));
-  const candidates = [...explicitCandidates, ...secondaryCandidates].slice(0, maxFilesCap * 4);
-
-  if (candidates.length > 5) {
-    console.warn("[Repo Injector] attempted more than 5 files", { repoId, attempted: candidates.length });
-  }
-
   const chunks: Chunk[] = [];
   const issues: string[] = [];
+  const attemptedPaths = new Set<string>();
 
-  for (const path of candidates) {
-    try {
-      const startedAt = Date.now();
-      const file = await getFileContent(repoId, binding, path);
-      const scoredChunks = chunkContentByLines(path, file.content, file.size)
-        .map((chunk) =>
-          scoreChunk({
-            chunk,
-            userMessage,
-            explicitPathHints,
-            functionHints,
-          })
-        )
-        .sort((a, b) => b.score - a.score)
-        .slice(0, MAX_CHUNKS_PER_FILE);
+  let allPaths: string[] | null = null;
+  let searchFailureReason: string | null = null;
 
-      chunks.push(...scoredChunks);
+  const searchPathsForQuery = async (query: string): Promise<string[]> => {
+    if (!allPaths) {
+      allPaths = await listTextPaths(binding);
+    }
+    return normalizeSearchMatches(allPaths, query);
+  };
 
-      console.log("[Repo Injector] fetch_latency_ms", { repoId, path, latencyMs: Date.now() - startedAt });
-    } catch (error) {
-      console.error("[Repo Injector] failed to fetch path", {
-        repoId,
-        path,
-        error: error instanceof Error ? error.message : String(error),
-      });
-      issues.push(`[REPO ACCESS ISSUE: Could not fetch ${path}. Paste manually?]`);
+  const targetQueries = explicitFiles.length
+    ? explicitFiles
+    : hints.length
+      ? hints
+      : userMessage
+          .toLowerCase()
+          .split(/[^a-z0-9/-]+/)
+          .filter((token) => token.length >= 4)
+          .slice(0, 5);
+
+  for (const target of targetQueries.slice(0, maxFilesCap * 2)) {
+    const knownPath = /\.[a-z0-9]+$/i.test(target) ? target : undefined;
+    const candidatePaths = buildLikelyCandidatePaths(target);
+
+    const resolution = await resolveRepoFile({
+      knownPath,
+      query: target,
+      searchPaths: knownPath
+        ? undefined
+        : async (query) => {
+            try {
+              return await searchPathsForQuery(query);
+            } catch (error) {
+              searchFailureReason = error instanceof Error ? error.message : String(error);
+              throw error;
+            }
+          },
+      candidatePaths,
+      fetchByPath: async (path) => {
+        attemptedPaths.add(path);
+        const file = await getFileContent(repoId, binding, path);
+        return file.content;
+      },
+    });
+
+    for (const attempt of resolution.attempts) {
+      const retrievalStage = attempt.method === "exact-fetch" ? "exact_fetch" : attempt.method === "candidate-fetch" ? "candidate_fetch" : "search";
+      if (!attempt.success) {
+        console.warn("[Repo Injector] retrieval attempt failed", {
+          repoId,
+          retrieval_stage: retrievalStage,
+          path: attempt.path,
+          failure_reason: attempt.reason,
+        });
+      } else {
+        console.log("[Repo Injector] retrieval attempt succeeded", {
+          repoId,
+          retrieval_stage: retrievalStage,
+          path: attempt.path,
+        });
+      }
+    }
+
+    if (!resolution.found || !resolution.path || typeof resolution.content !== "string") {
+      if (resolution.errorSummary === "repo access issue") {
+        issues.push("[REPO ACCESS ISSUE: Repository connector/auth failed during retrieval. Paste manually?]");
+      }
+      continue;
+    }
+
+    if (chunks.some((chunk) => chunk.path === resolution.path)) {
+      continue;
+    }
+
+    const resolvedSize = Buffer.byteLength(resolution.content, "utf8");
+    const scoredChunks = chunkContentByLines(resolution.path, resolution.content, resolvedSize)
+      .map((chunk) =>
+        scoreChunk({
+          chunk,
+          userMessage,
+          explicitPathHints,
+          functionHints,
+        }),
+      )
+      .sort((a, b) => b.score - a.score)
+      .slice(0, MAX_CHUNKS_PER_FILE);
+
+    chunks.push(...scoredChunks);
+
+    if (chunks.length >= maxFilesCap * MAX_CHUNKS_PER_FILE) {
+      break;
     }
   }
 
@@ -358,8 +409,17 @@ export async function injectRelevantContents(userMessage: string, repoId: string
     output += `${truncated.map((entry) => `Truncated: ${entry} omitted for brevity.`).join("\n")}\n`;
   }
 
-  if (selectedChunks.length === 0 && issues.length === 0) {
-    output += "[REPO ACCESS ISSUE: No relevant source files found. Paste manually?]\n";
+  if (selectedChunks.length === 0) {
+    if (issues.length > 0) {
+      output += "[REPO ACCESS ISSUE: Unable to inspect repository due to connector/auth failure. Paste manually?]\n";
+    } else {
+      const searchState = searchFailureReason ? "search inconclusive" : "search empty or no matching files";
+      output += `[REPO FILE NOT FOUND: File not found through available retrieval paths (${searchState}). Paste manually?]\n`;
+    }
+  }
+
+  if (selectedChunks.length > 0 && attemptedPaths.size === 0) {
+    console.warn("[Repo Injector] retrieval produced chunks without fetch attempts", { repoId });
   }
 
   return output;

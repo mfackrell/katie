@@ -104,7 +104,7 @@ test("injector truncates output to 20k chars with truncation note", async () => 
   assert.match(injected, /Truncated: .* omitted for brevity\./);
 });
 
-test("injector reports fetch issue for missing files", async () => {
+test("injector reports file-not-found (not repo access issue) for missing files", async () => {
   __resetContentInjectorForTests();
   __setOctokitFactoryForTests(() =>
     makeFakeOctokit({
@@ -115,5 +115,6 @@ test("injector reports fetch issue for missing files", async () => {
   registerRepoBinding("repo-3", "mfackrell/katie", "main");
   const injected = await injectRelevantContents("check file lib/router/classifier.ts", "repo-3", 2);
 
-  assert.match(injected, /REPO ACCESS ISSUE: Could not fetch/);
+  assert.match(injected, /REPO FILE NOT FOUND/);
+  assert.doesNotMatch(injected, /REPO ACCESS ISSUE: Could not fetch/);
 });
