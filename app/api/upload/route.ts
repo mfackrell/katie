@@ -26,7 +26,8 @@ export async function POST(request: NextRequest) {
       message.includes("Too many files") ||
       message.includes("too large") ||
       message.includes("empty") ||
-      message.includes("Failed to parse");
+      message.includes("Failed to parse") ||
+      message.includes("not supported");
 
     return NextResponse.json({ error: message }, { status: isClientError ? 400 : 500 });
   }

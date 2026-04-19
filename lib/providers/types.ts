@@ -4,12 +4,15 @@ export interface FileReference {
   mimeType: string;
   preview: string;
   extractedText?: string;
-  sourceFormat?: "text" | "word" | "excel" | "pdf" | "video";
+  sourceFormat?: "text" | "word" | "excel" | "pdf" | "video" | "powerpoint" | "email" | "image" | "html" | "xml" | "json" | "unknown";
   attachmentKind?: "image" | "video" | "text" | "file";
   providerRef?: {
     openaiFileId?: string;
     googleFileUri?: string;
   };
+  parseWarnings?: string[];
+  ingestionQuality?: "high" | "medium" | "low" | "failed";
+  structuredData?: Record<string, unknown>;
 }
 
 export interface ChatGenerateParams {

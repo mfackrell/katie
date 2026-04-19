@@ -11,20 +11,20 @@ export function formatAttachmentContext(attachments: ChatGenerateParams["attachm
     .map((attachment) => {
       const attachmentKind = attachment.attachmentKind ?? (attachment.mimeType.startsWith("video/") ? "video" : "file");
       const providerReferenceSummary = [
-        attachment.providerRef?.openaiFileId
-          ? `openaiFileId=${attachment.providerRef.openaiFileId}`
-          : null,
-        attachment.providerRef?.googleFileUri
-          ? `googleFileUri=${attachment.providerRef.googleFileUri}`
-          : null
+        attachment.providerRef?.openaiFileId ? `openaiFileId=${attachment.providerRef.openaiFileId}` : null,
+        attachment.providerRef?.googleFileUri ? `googleFileUri=${attachment.providerRef.googleFileUri}` : null
       ]
         .filter((value): value is string => Boolean(value))
         .join(", ");
 
-      const metadataLine = providerReferenceSummary
-        ? ` (${providerReferenceSummary})`
-        : "";
-      const mediaSummary = `kind=${attachmentKind}; mime=${attachment.mimeType}; fileId=${attachment.fileId}`;
+      const metadataParts = [
+        `kind=${attachmentKind}`,
+        `mime=${attachment.mimeType}`,
+        `fileId=${attachment.fileId}`,
+        attachment.ingestionQuality ? `quality=${attachment.ingestionQuality}` : null,
+        providerReferenceSummary || null
+      ].filter((item): item is string => Boolean(item));
+
       const body = attachment.extractedText?.trim() || attachment.preview;
       const previewHeader = attachmentKind === "video"
         ? "[Video metadata only. Transcript/frame extraction is not currently available.]"
@@ -32,13 +32,20 @@ export function formatAttachmentContext(attachments: ChatGenerateParams["attachm
           ? "[Extracted attachment content]"
           : PREVIEW_TRUNCATION_NOTE;
 
+      const warningLine = attachment.parseWarnings?.length
+        ? `warnings=${attachment.parseWarnings.slice(0, 3).join(" | ")}`
+        : null;
+
       return [
-        `### ATTACHED FILE: ${attachment.fileName}${metadataLine} ###`,
-        mediaSummary,
+        `### ATTACHED FILE: ${attachment.fileName} ###`,
+        metadataParts.join("; "),
+        warningLine,
         previewHeader,
         body,
         "### END OF FILE PREVIEW ###"
-      ].join("\n");
+      ]
+        .filter(Boolean)
+        .join("\n");
     })
     .join("\n\n");
 }
