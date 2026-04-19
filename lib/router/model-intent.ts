@@ -1107,10 +1107,12 @@ export function scoreModelsForIntent(
         .map((modelId) => ({
           provider,
           modelId,
-          score: scoreModelCandidateWithBreakdown(provider.name, modelId, intent, {
-            ...options,
-            capabilityProfile
-          }).finalScore
+          score: Number(
+            scoreModelCandidateWithBreakdown(provider.name, modelId, intent, {
+              ...options,
+              capabilityProfile
+            }).finalScore.toFixed(2)
+          )
         }))
         .filter((candidate) => modelSupportsIntent(candidate.provider.name, candidate.modelId, intent, options?.registryLookup))
         .filter((candidate) => candidate.score >= 0)
@@ -1249,7 +1251,7 @@ export function scoreModelCandidateWithBreakdown(
     }
     const capabilityDelta = Number(Math.max(-5, Math.min(5, capabilityBreakdown.total / 20)).toFixed(2));
     adjustments.push({ label: "capability_fit_bonus", delta: capabilityDelta });
-    return base + adjustments.reduce((total, current) => total + current.delta, 0);
+    return Number((base + adjustments.reduce((total, current) => total + current.delta, 0)).toFixed(2));
   };
 
   switch (intent) {

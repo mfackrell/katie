@@ -226,9 +226,10 @@ function topRoutingCandidates(
   intent: Awaited<ReturnType<typeof inferRequestIntent>>,
   preferredProvider: LlmProvider["name"] | null,
   registryLookup?: Map<string, RegistryRoutingModel>,
-  actorRoutingProfile?: ActorRoutingProfile
+  actorRoutingProfile?: ActorRoutingProfile,
+  capabilityProfile?: RequestCapabilityProfile
 ): string {
-  return scoreModelsForIntent(availableByProvider, intent, { registryLookup, preferredProvider, actorRoutingProfile })
+  return scoreModelsForIntent(availableByProvider, intent, { registryLookup, preferredProvider, actorRoutingProfile, capabilityProfile })
     .slice(0, 3)
     .map(({ provider, modelId, score }) => `${provider.name}:${modelId}(${score})`)
     .join(", ");
@@ -242,9 +243,10 @@ function logRoutingDecision(
   selectedProviderName: string,
   selectedModelId: string,
   registryLookup?: Map<string, RegistryRoutingModel>,
-  actorRoutingProfile?: ActorRoutingProfile
+  actorRoutingProfile?: ActorRoutingProfile,
+  capabilityProfile?: RequestCapabilityProfile
 ): void {
-  const candidates = topRoutingCandidates(availableByProvider, intent, preferredProvider, registryLookup, actorRoutingProfile) || "none";
+  const candidates = topRoutingCandidates(availableByProvider, intent, preferredProvider, registryLookup, actorRoutingProfile, capabilityProfile) || "none";
   console.info(`[Router] intent=${intent} intent_source=${intentSource} top_candidates=${candidates} selected=${selectedProviderName}:${selectedModelId}`);
 }
 
@@ -1141,7 +1143,8 @@ export async function chooseProvider(
     selected.provider.name,
     selected.modelId,
     registryLookup,
-    actorRoutingProfile
+    actorRoutingProfile,
+    capabilityProfile
   );
   console.info(
     `[Routing Final] requestId=${traceRequestId} selected=${selected.provider.name}:${selected.modelId} source=${llmPrimaryUsed ? "llm-primary" : "deterministic-fallback"} fallback_reason=${fallbackReason ?? "none"} post_selection_fallback=${deterministicFallbackUsed}`
