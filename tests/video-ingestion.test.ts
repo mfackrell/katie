@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { buildFileReferences } from "../lib/uploads/build-file-references";
+import { __setDynamicImportOverridesForTests } from "../lib/uploads/parse-text-files";
 import { inferRequestIntent } from "../lib/router/model-intent";
 
 function withUploadKeysDisabled(fn: () => Promise<void>): Promise<void> {
@@ -39,11 +40,94 @@ test("buildFileReferences accepts supported video types", async () => {
   });
 });
 
-test("buildFileReferences rejects unsupported video MIME types", async () => {
+test("buildFileReferences successfully ingests PDF files as text attachments", async () => {
+  __setDynamicImportOverridesForTests({
+    pdfjs: async () => ({
+      getDocument: () => ({
+        promise: Promise.resolve({
+          numPages: 1,
+          getPage: async () => ({
+            getTextContent: async () => ({ items: [{ str: "Quarterly report" }] })
+          })
+        })
+      })
+    })
+  });
+
+  await withUploadKeysDisabled(async () => {
+    const refs = await buildFileReferences([
+      new File([new Uint8Array([1, 2, 3])], "report.pdf", { type: "application/pdf" })
+    ]);
+
+    assert.equal(refs.length, 1);
+    assert.equal(refs[0].attachmentKind, "text");
+    assert.equal(refs[0].preview, "Quarterly report");
+  });
+});
+
+test("buildFileReferences successfully ingests XLSX files as text attachments", async () => {
+  __setDynamicImportOverridesForTests({
+    xlsx: async () => ({
+      read: () => ({ SheetNames: ["Sheet1"], Sheets: { Sheet1: {} } }),
+      utils: {
+        sheet_to_csv: () => "region\trevenue"
+      }
+    })
+  });
+
+  await withUploadKeysDisabled(async () => {
+    const refs = await buildFileReferences([
+      new File([new Uint8Array([1, 2, 3])], "metrics.xlsx", {
+        type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+      })
+    ]);
+
+    assert.equal(refs.length, 1);
+    assert.equal(refs[0].attachmentKind, "text");
+    assert.match(refs[0].preview, /sheet: Sheet1/);
+    assert.match(refs[0].preview, /region\trevenue/);
+  });
+});
+
+test("buildFileReferences successfully ingests DOCX files as text attachments", async () => {
+  __setDynamicImportOverridesForTests({
+    mammoth: async () => ({
+      extractRawText: async () => ({ value: "Proposal summary" })
+    })
+  });
+
+  await withUploadKeysDisabled(async () => {
+    const refs = await buildFileReferences([
+      new File([new Uint8Array([1, 2, 3])], "proposal.docx", {
+        type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+      })
+    ]);
+
+    assert.equal(refs.length, 1);
+    assert.equal(refs[0].attachmentKind, "text");
+    assert.equal(refs[0].preview, "Proposal summary");
+  });
+});
+
+test("buildFileReferences rejects unsupported extensions", async () => {
   await withUploadKeysDisabled(async () => {
     await assert.rejects(
+      buildFileReferences([new File(["malware"], "payload.exe", { type: "application/octet-stream" })]),
+      /Allowed types: txt, md, json, csv, docx, doc, xlsx, xls, pdf, mp4, mov, webm, m4v\./
+    );
+  });
+});
+
+test("buildFileReferences uses consistent supported-types messaging", async () => {
+  await withUploadKeysDisabled(async () => {
+    await assert.rejects(
+      buildFileReferences([new File(["oops"], "unsupported.bin", { type: "application/octet-stream" })]),
+      /Allowed types: txt, md, json, csv, docx, doc, xlsx, xls, pdf, mp4, mov, webm, m4v\./
+    );
+
+    await assert.rejects(
       buildFileReferences([new File([new Uint8Array([9])], "legacy.avi", { type: "video/avi" })]),
-      /Unsupported file type/
+      /Allowed types: txt, md, json, csv, docx, doc, xlsx, xls, pdf, mp4, mov, webm, m4v\./
     );
   });
 });
@@ -52,7 +136,7 @@ test("buildFileReferences rejects mismatched video extension", async () => {
   await withUploadKeysDisabled(async () => {
     await assert.rejects(
       buildFileReferences([new File([new Uint8Array([9])], "not-really-video.txt", { type: "video/mp4" })]),
-      /Unsupported file type/
+      /Allowed types: txt, md, json, csv, docx, doc, xlsx, xls, pdf, mp4, mov, webm, m4v\./
     );
   });
 });
