@@ -1104,7 +1104,7 @@ export function ChatPanel({
             </div>
 
             <div className="flex flex-wrap items-center gap-2 sm:justify-end">
-              <p className="inline-flex max-w-full items-center gap-2 rounded-full border border-emerald-400/30 bg-emerald-500/10 px-2.5 py-1 text-[11px] text-emerald-100">
+              <p className="inline-flex max-w-full items-center gap-2 rounded-full border border-emerald-400/30 bg-emerald-500/10 px-2.5 py-1 text-[10px] text-emerald-100 sm:text-[11px]">
                 <span className="h-1.5 w-1.5 flex-none rounded-full bg-emerald-300 shadow-[0_0_10px_rgba(110,231,183,0.8)]" />
                 <span className="truncate">
                   Active:
@@ -1119,7 +1119,7 @@ export function ChatPanel({
                 </span>
               </p>
               {meta ? (
-                <p className="inline-flex max-w-full items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-2.5 py-1 text-[11px] text-zinc-400">
+                <p className="inline-flex max-w-full items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-2.5 py-1 text-[10px] text-zinc-400 sm:text-[11px]">
                   <span className="h-1.5 w-1.5 flex-none rounded-full bg-emerald-400 shadow-[0_0_10px_rgba(52,211,153,0.7)]" />
                   <span className="truncate">Last response via <span className="text-zinc-200">{meta.provider}</span> · {meta.model}</span>
                 </p>
@@ -1168,7 +1168,7 @@ export function ChatPanel({
                       id="model-selection-explainer"
                       role="dialog"
                       aria-label="Model selection explainer details"
-                      className="absolute right-0 z-50 mt-2 w-80 rounded-2xl border border-white/10 bg-zinc-950/95 p-3 text-xs text-zinc-300 shadow-[0_18px_48px_rgba(0,0,0,0.45)] backdrop-blur"
+                      className="absolute right-0 z-50 mt-2 w-[min(20rem,calc(100vw-2.25rem))] rounded-2xl border border-white/10 bg-zinc-950/95 p-3 text-xs text-zinc-300 shadow-[0_18px_48px_rgba(0,0,0,0.45)] backdrop-blur"
                     >
                       {isRoutingSelectionInFlight || !selectionExplainer ? (
                         <div className="space-y-2">
@@ -1361,7 +1361,7 @@ export function ChatPanel({
 
       <section
         ref={messagesContainerRef}
-        className="relative min-h-0 flex-1 space-y-4 overflow-y-auto px-4 py-4 pb-24 sm:space-y-5 sm:px-6 sm:py-5 sm:pb-28"
+        className="relative min-h-0 flex-1 space-y-4 overflow-y-auto px-4 py-4 pb-28 sm:space-y-5 sm:px-6 sm:py-5 sm:pb-28"
       >
         {isHydratingMessages ? (
           <div className="max-w-2xl rounded-[28px] border border-white/10 bg-white/[0.035] p-6 shadow-[0_20px_60px_rgba(0,0,0,0.18)] backdrop-blur-sm">
@@ -1446,7 +1446,7 @@ export function ChatPanel({
             </p>
           </div>
         )}
-        <div className="pointer-events-none sticky bottom-3 z-10 ml-auto flex w-fit flex-col gap-2 pr-1 sm:bottom-4">
+        <div className="pointer-events-none sticky bottom-3 z-10 ml-auto hidden w-fit flex-col gap-2 pr-1 sm:bottom-4 sm:flex">
           <button
             type="button"
             onClick={scrollToTop}
