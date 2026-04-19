@@ -127,7 +127,7 @@ function buildGenerationParams({
   requestIntent?: RequestIntent;
   images?: string[];
   modelId: string;
-  attachments?: RequestPayload["fileReferences"];
+  attachments: NonNullable<RequestPayload["fileReferences"]>;
 }) {
   return {
     name,
@@ -466,9 +466,9 @@ export async function POST(request: NextRequest) {
       repoInjectionEnabled: repoInjectionEnabledFromPayload,
     } = payload;
     const repoInjectionEnabled = repoInjectionEnabledFromPayload !== false;
-    const attachments = fileReferences;
+    const attachments = fileReferences ?? [];
     let messageForGeneration = message;
-    const hasVideoInput = Array.isArray(attachments) && attachments.some(isVideoAttachment);
+    const hasVideoInput = attachments.some(isVideoAttachment);
     const encoder = new TextEncoder();
     const requestId = request.headers.get("x-request-id") ?? crypto.randomUUID();
 
@@ -578,8 +578,7 @@ export async function POST(request: NextRequest) {
       }
 
       const hasImages = Array.isArray(images) && images.length > 0;
-      const hasImageAttachments =
-        Array.isArray(attachments) && attachments.some((attachment) => attachment.mimeType.startsWith("image/"));
+      const hasImageAttachments = attachments.some((attachment) => attachment.mimeType.startsWith("image/"));
       const hasVisualInput = hasImages || hasImageAttachments;
       const modelEntries = await Promise.all(
         providers.map(async (candidate) => ({ provider: candidate, models: await candidate.listModels() }))
@@ -636,8 +635,7 @@ export async function POST(request: NextRequest) {
       console.log(`[Video Routing] override accepted; provider=google model=${modelId}`);
     } else {
       const hasImages = Array.isArray(images) && images.length > 0;
-      const hasImageAttachments =
-        Array.isArray(attachments) && attachments.some((attachment) => attachment.mimeType.startsWith("image/"));
+      const hasImageAttachments = attachments.some((attachment) => attachment.mimeType.startsWith("image/"));
       const hasVisualInput = hasImages || hasImageAttachments;
       const explicitIntent: RequestIntent | undefined = hasDirectWebSearchHint(message) ? "web-search" : undefined;
       const assistantReflectionHint =
