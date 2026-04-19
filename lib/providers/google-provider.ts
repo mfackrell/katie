@@ -178,7 +178,7 @@ export class GoogleProvider implements LlmProvider {
       ? parsedModel.thinkingLevelInput ?? "medium"
       : undefined;
     const isImageTask = isImageGenerationModel(selectedModel);
-    const attachmentContext = formatAttachmentContext(params.attachments);
+    const attachmentContext = formatAttachmentContext(params.attachments, { userMessage: params.user });
     const baseSystemInstruction = buildSystemInstruction(params);
     const systemInstructionBase = isImageTask
       ? `${baseSystemInstruction}\n\nIMPORTANT: You have direct image generation capabilities. If the user asks for a photo, design asset, or image, generate it directly as an image modality response.`
@@ -251,7 +251,7 @@ export class GoogleProvider implements LlmProvider {
       ? parsedModel.thinkingLevelInput ?? "medium"
       : undefined;
     const isImageTask = isImageGenerationModel(selectedModel);
-    const attachmentContext = formatAttachmentContext(params.attachments);
+    const attachmentContext = formatAttachmentContext(params.attachments, { userMessage: params.user });
     const baseSystemInstruction = buildSystemInstruction(params);
     const systemInstructionBase = isImageTask
       ? `${baseSystemInstruction}\n\nIMPORTANT: You have direct image generation capabilities. If the user asks for a photo, design asset, or image, generate it directly as an image modality response.`

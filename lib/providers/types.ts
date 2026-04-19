@@ -1,9 +1,20 @@
+export interface ExtractedTextChunkReference {
+  index: number;
+  total: number;
+  text: string;
+  hash?: string;
+}
+
 export interface FileReference {
   fileId: string;
   fileName: string;
   mimeType: string;
   preview: string;
   extractedText?: string;
+  extractedChunks?: ExtractedTextChunkReference[];
+  totalChunks?: number;
+  truncatedForContext?: boolean;
+  extractionCoverage?: "preview-only" | "partial" | "full";
   attachmentKind?: "image" | "video" | "text" | "file";
   providerRef?: {
     openaiFileId?: string;

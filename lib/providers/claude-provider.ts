@@ -54,7 +54,7 @@ export class ClaudeProvider implements LlmProvider {
     }
 
     const selectedModel = params.modelId ?? this.defaultModel;
-    const attachmentContext = formatAttachmentContext(params.attachments);
+    const attachmentContext = formatAttachmentContext(params.attachments, { userMessage: params.user });
     const systemPrompt = `${MATH_EXECUTION_PROTOCOL}\n\nCORE_PERSONA: ${params.persona}\n\nMEMORY_CONTEXT:\n${params.summary}\nEND_MEMORY_CONTEXT\n\n${`${getKatieOperationalRealityStatement()}
 
 ${getKatieReasoningExplainerStatement()}`}`;

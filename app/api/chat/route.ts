@@ -30,13 +30,27 @@ import {
   selectGoogleModelForVideoRouting
 } from "@/lib/chat/video-routing";
 import { injectRelevantContents, registerRepoBinding } from "@/lib/repo/content-injector";
+import { analyzeChunkedAttachments, shouldRunChunkedWorkflow } from "@/lib/providers/chunked-document-workflow";
 
 const fileReferenceSchema = z.object({
   fileId: z.string().min(1),
   fileName: z.string().min(1),
   mimeType: z.string().min(1),
   preview: z.string().min(1).max(2200),
-  extractedText: z.string().min(1).max(50020).optional(),
+  extractedText: z.string().min(1).max(2_500_000).optional(),
+  extractedChunks: z
+    .array(
+      z.object({
+        index: z.number().int().nonnegative(),
+        total: z.number().int().positive(),
+        text: z.string().min(1).max(15_000),
+        hash: z.string().min(1).optional()
+      })
+    )
+    .optional(),
+  totalChunks: z.number().int().positive().optional(),
+  truncatedForContext: z.boolean().optional(),
+  extractionCoverage: z.enum(["preview-only", "partial", "full"]).optional(),
   attachmentKind: z.enum(["image", "video", "text", "file"]).optional(),
   providerRef: z
     .object({
@@ -449,6 +463,7 @@ export async function POST(request: NextRequest) {
     } = payload;
     const repoInjectionEnabled = repoInjectionEnabledFromPayload !== false;
     const attachments = fileReferences;
+    let messageForGeneration = message;
     const hasVideoInput = Array.isArray(attachments) && attachments.some(isVideoAttachment);
     const encoder = new TextEncoder();
     const requestId = request.headers.get("x-request-id") ?? crypto.randomUUID();
@@ -868,12 +883,35 @@ export async function POST(request: NextRequest) {
                 persona: personaForGeneration,
                 summary,
                 history: historyForProvider,
-                message,
+                message: messageForGeneration,
                 requestIntent: resolvedRequestIntent,
                 images,
                 modelId: selectedModelId,
                 attachments
               });
+
+            if (shouldRunChunkedWorkflow(message, attachments)) {
+              const chunkWorkflowSummary = await analyzeChunkedAttachments({
+                provider,
+                modelId,
+                name,
+                persona: personaForGeneration,
+                summary,
+                userMessage: message,
+                attachments
+              });
+
+              if (chunkWorkflowSummary) {
+                messageForGeneration = `${message}
+
+${chunkWorkflowSummary}`;
+                emitChunk({
+                  type: "metadata",
+                  chunkWorkflow: "enabled",
+                  detail: "Performed server-side chunk-by-chunk pre-analysis for large attachments."
+                });
+              }
+            }
 
             let result: ProviderResponse | null = null;
             let streamedText = "";

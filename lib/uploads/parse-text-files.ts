@@ -65,7 +65,6 @@ export type ParsedAttachment = {
 const MAX_FILES = 5;
 const MAX_TEXT_FILE_SIZE_BYTES = 2 * 1024 * 1024;
 const MAX_BINARY_FILE_SIZE_BYTES = 8 * 1024 * 1024;
-const MAX_OUTPUT_CHARS = 50_000;
 const MAX_EXCEL_SHEETS = 20;
 
 const DYNAMIC_IMPORTS: DynamicImportLoaders = {
@@ -79,12 +78,7 @@ export function __setDynamicImportOverridesForTests(overrides: Partial<DynamicIm
 }
 
 function sanitizeExtractedText(text: string): string {
-  const withoutControlChars = text.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, "");
-  if (withoutControlChars.length <= MAX_OUTPUT_CHARS) {
-    return withoutControlChars;
-  }
-
-  return `${withoutControlChars.slice(0, MAX_OUTPUT_CHARS)}\n[truncated]`;
+  return text.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, "");
 }
 
 function compactWhitespace(text: string): string {

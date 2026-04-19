@@ -4,6 +4,8 @@ import { buildFileReferences } from "../lib/uploads/build-file-references";
 import { __setDynamicImportOverridesForTests } from "../lib/uploads/parse-text-files";
 import { inferRequestIntent } from "../lib/router/model-intent";
 import { formatAttachmentContext } from "../lib/providers/attachment-context";
+import { analyzeChunkedAttachments, shouldRunChunkedWorkflow } from "../lib/providers/chunked-document-workflow";
+import { LlmProvider } from "../lib/providers/types";
 
 function withUploadKeysDisabled(fn: () => Promise<void>): Promise<void> {
   const prevOpenAi = process.env.OPENAI_API_KEY;
@@ -70,9 +72,12 @@ test("buildFileReferences successfully ingests PDF files as text attachments", a
     assert.equal(refs[0].attachmentKind, "text");
     assert.equal(refs[0].preview, "Quarterly report");
     assert.equal(refs[0].extractedText, "Quarterly report");
+    assert.equal(refs[0].totalChunks, 1);
+    assert.equal(refs[0].extractedChunks?.length, 1);
 
     const attachmentContext = formatAttachmentContext(refs);
-    assert.match(attachmentContext, /Extracted attachment body available to the model/);
+    assert.match(attachmentContext, /Full extracted document is available in ordered chunks/);
+    assert.match(attachmentContext, /chunk 1\/1/);
     assert.match(attachmentContext, /Quarterly report/);
     assert.doesNotMatch(attachmentContext, /Full file body is intentionally excluded/);
   });
@@ -190,4 +195,92 @@ test("formatAttachmentContext avoids duplicate extracted body injection", () => 
 
   assert.match(context, /Duplicate extracted text omitted/);
   assert.match(context, /preview b/);
+});
+
+test("formatAttachmentContext includes ordered chunk windows and partial-context safety note", () => {
+  const context = formatAttachmentContext(
+    [
+      {
+        fileId: "chunked-file",
+        fileName: "statement.pdf",
+        mimeType: "application/pdf",
+        preview: "preview",
+        extractedChunks: [
+          { index: 0, total: 3, text: "opening balance summary" },
+          { index: 1, total: 3, text: "wire transfer details and counterparties" },
+          { index: 2, total: 3, text: "closing totals and fees" }
+        ],
+        totalChunks: 3,
+        truncatedForContext: true,
+        extractionCoverage: "full",
+        attachmentKind: "text"
+      }
+    ],
+    { userMessage: "analyze transfer counterparties", maxChunksPerAttachment: 2 }
+  );
+
+  assert.match(context, /chunkWindow=2\/3/);
+  assert.match(context, /chunk 2\/3/);
+  assert.match(context, /Only a relevant subset of chunks was injected/);
+});
+
+test("server workflow can iterate across all chunks for large-document analysis", async () => {
+  const seenChunkPrompts: string[] = [];
+  const provider: LlmProvider = {
+    name: "openai",
+    listModels: async () => ["mock-model"],
+    generate: async (params) => {
+      seenChunkPrompts.push(params.user);
+      const marker = params.user.match(/chunk (\d+)\/(\d+)/i);
+      return {
+        text: marker ? `finding-${marker[1]}-of-${marker[2]}` : "summary",
+        model: "mock-model",
+        provider: "openai"
+      };
+    }
+  };
+
+  assert.equal(
+    shouldRunChunkedWorkflow("review this attached statement", [
+      {
+        fileId: "doc",
+        fileName: "doc.pdf",
+        mimeType: "application/pdf",
+        preview: "preview",
+        extractedChunks: [
+          { index: 0, total: 2, text: "chunk a" },
+          { index: 1, total: 2, text: "chunk b" }
+        ]
+      }
+    ]),
+    true
+  );
+
+  const prepass = await analyzeChunkedAttachments({
+    provider,
+    modelId: "mock-model",
+    name: "Katie",
+    persona: "Helpful assistant",
+    summary: "",
+    userMessage: "review this attached statement",
+    attachments: [
+      {
+        fileId: "doc",
+        fileName: "doc.pdf",
+        mimeType: "application/pdf",
+        preview: "preview",
+        extractedChunks: [
+          { index: 0, total: 2, text: "chunk a" },
+          { index: 1, total: 2, text: "chunk b" }
+        ],
+        totalChunks: 2,
+        attachmentKind: "text"
+      }
+    ]
+  });
+
+  assert.equal(seenChunkPrompts.length, 2);
+  assert.match(prepass, /analyzed across 2\/2 chunks/);
+  assert.match(prepass, /finding-1-of-2/);
+  assert.match(prepass, /finding-2-of-2/);
 });
