@@ -67,6 +67,47 @@ test("candidate capability scoring preferences", () => {
   const repoStrong = scoreCandidateForCapabilityProfile({ profile: repoProfile, providerName: "openai", modelId: "gpt-5.3-codex" });
   const repoSmall = scoreCandidateForCapabilityProfile({ profile: repoProfile, providerName: "google", modelId: "gemini-3.1-flash" });
   assert.ok(repoStrong.total > repoSmall.total);
+
+  const actorRoutingProfile = {
+    providerBoosts: { openai: 0, google: 0, anthropic: 6, grok: 0 },
+    tagBoosts: {
+      coding: 0,
+      debugging: 0,
+      architecture: 0,
+      writing: 0,
+      "emotional-nuance": 0,
+      conversational: 0,
+      interpersonal: 0,
+      empathy: 0,
+      multimodal: 0,
+      research: 0,
+      reflection: 0
+    },
+    intentProviderBoosts: {
+      general: { openai: 0, google: 0, anthropic: 0, grok: 0 },
+      "technical-debugging": { openai: 0, google: 0, anthropic: 0, grok: 0 },
+      "architecture-design": { openai: 0, google: 0, anthropic: 0, grok: 0 },
+      "coding-implementation": { openai: 0, google: 0, anthropic: 0, grok: 0 },
+      "writing-editing": { openai: 0, google: 0, anthropic: 2, grok: 0 },
+      "research-analysis": { openai: 0, google: 0, anthropic: 0, grok: 0 },
+      "emotional-support": { openai: 0, google: 0, anthropic: 3, grok: 0 }
+    },
+    summary: "Test profile",
+    generatedByModel: null,
+    version: "test"
+  } as const;
+  const socialBiased = scoreCandidateForCapabilityProfile({
+    profile: socialProfile,
+    providerName: "anthropic",
+    modelId: "claude-4.5-sonnet",
+    actorRoutingProfile
+  });
+  const socialUnbiased = scoreCandidateForCapabilityProfile({
+    profile: socialProfile,
+    providerName: "anthropic",
+    modelId: "claude-4.5-sonnet"
+  });
+  assert.ok(socialBiased.total > socialUnbiased.total);
 });
 
 test("router integration keeps override/video/fallback behavior", async () => {

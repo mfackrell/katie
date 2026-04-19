@@ -283,7 +283,7 @@ export async function getRoutingRegistryByProvider(providers: LlmProvider[]): Pr
   const { data, error } = await client
     .from("model_registry")
     .select(
-      "provider_name,model_id,pricing_status,capability_status,pricing_input_per_1m,pricing_output_per_1m,routing_eligibility,confidence_tier,confidence_score,supports_text,supports_vision,supports_web_search,supports_image_generation,supports_video,reasoning_tier,speed_tier,cost_tier"
+      "provider_name,model_id,pricing_status,capability_status,pricing_input_per_1m,pricing_output_per_1m,routing_eligibility,confidence_tier,confidence_score,supports_text,supports_vision,supports_web_search,supports_image_generation,supports_video,reasoning_tier,speed_tier,cost_tier,structured_output_reliability,tool_calling_reliability,long_context_fidelity,document_understanding,spreadsheet_reasoning,code_generation,repo_refactor_ability,conversational_naturalness,determinism,throughput_suitability"
     )
     .in("provider_name", providerNames)
     .eq("is_active", true)

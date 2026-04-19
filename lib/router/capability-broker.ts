@@ -273,6 +273,34 @@ function pushFactor(factors: CapabilityScoreBreakdown["factors"], label: string,
   return delta;
 }
 
+type ActorRoutingIntentBucket =
+  | "general"
+  | "technical-debugging"
+  | "architecture-design"
+  | "coding-implementation"
+  | "writing-editing"
+  | "research-analysis"
+  | "emotional-support";
+
+function mapCapabilityProfileToActorIntentBucket(profile: RequestCapabilityProfile): ActorRoutingIntentBucket {
+  if (profile.requiresWebSearch || profile.cognitiveDemand === "research") {
+    return "research-analysis";
+  }
+  if (profile.prefersNaturalConversation) {
+    return "emotional-support";
+  }
+  if (profile.requiresRepoReasoning && profile.responseType === "planning") {
+    return "architecture-design";
+  }
+  if (profile.responseType === "code" || profile.requiresRepoReasoning) {
+    return "coding-implementation";
+  }
+  if (profile.responseType === "transformation" || profile.responseType === "document-summary") {
+    return "writing-editing";
+  }
+  return "general";
+}
+
 export function scoreCandidateForCapabilityProfile(args: {
   profile: RequestCapabilityProfile;
   providerName: ProviderName;
@@ -357,6 +385,17 @@ export function scoreCandidateForCapabilityProfile(args: {
   if (args.preferredProvider && args.preferredProvider === args.providerName) {
     factors.push({ label: "preferred_provider_boost", delta: 8 });
     capabilityFit += 8;
+  }
+
+  if (args.actorRoutingProfile) {
+    const providerBoost = args.actorRoutingProfile.providerBoosts[args.providerName] ?? 0;
+    const actorIntent = mapCapabilityProfileToActorIntentBucket(args.profile);
+    const intentBoost = args.actorRoutingProfile.intentProviderBoosts[actorIntent]?.[args.providerName] ?? 0;
+    const actorDelta = Number((providerBoost + intentBoost).toFixed(2));
+    if (actorDelta !== 0) {
+      factors.push({ label: "actor_routing_bias", delta: actorDelta, detail: `intent_bucket=${actorIntent}` });
+      capabilityFit += actorDelta;
+    }
   }
 
   const total = Number((capabilityFit + toolFit + contextFit + latencyFit + costFit + reliabilityFit - riskPenalty).toFixed(2));
