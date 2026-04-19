@@ -533,11 +533,11 @@ export default function HomePage() {
         <div className="absolute bottom-[-6rem] left-1/3 h-72 w-72 rounded-full bg-indigo-500/10 blur-3xl" />
       </div>
 
-      <div className="relative mx-auto flex min-h-[calc(100vh-2rem)] max-w-[1600px] overflow-hidden rounded-[28px] border border-white/10 bg-zinc-950/70 shadow-[0_40px_120px_rgba(0,0,0,0.55)] backdrop-blur-xl lg:h-[calc(100dvh-3rem)] lg:min-h-0">
+      <div className="relative mx-auto flex min-h-[calc(100dvh-2rem)] max-w-[1600px] overflow-hidden rounded-[24px] border border-white/10 bg-zinc-950/70 shadow-[0_40px_120px_rgba(0,0,0,0.55)] backdrop-blur-xl sm:rounded-[28px] lg:h-[calc(100dvh-3rem)] lg:min-h-0">
         <div className="pointer-events-none absolute inset-0 rounded-[28px] ring-1 ring-inset ring-white/5" />
         <button
           type="button"
-          className="absolute left-4 top-4 z-30 inline-flex min-h-10 items-center gap-2 rounded-xl border border-white/10 bg-zinc-900/75 px-3 py-2 text-sm font-medium text-zinc-100 shadow-[0_10px_30px_rgba(0,0,0,0.35)] backdrop-blur-sm transition hover:bg-zinc-900/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400 lg:hidden"
+          className="absolute left-3 top-3 z-30 inline-flex min-h-10 items-center gap-2 rounded-xl border border-white/10 bg-zinc-900/75 px-3 py-2 text-sm font-medium text-zinc-100 shadow-[0_10px_30px_rgba(0,0,0,0.35)] backdrop-blur-sm transition hover:bg-zinc-900/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400 sm:left-4 sm:top-4 lg:hidden"
           onClick={() => setSidebarOpen(true)}
           aria-label="Open sidebar"
         >
