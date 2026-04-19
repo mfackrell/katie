@@ -4,6 +4,14 @@ import {
 } from "@/lib/providers/google-model-capabilities";
 import { isControlPlaneInstructionCompatibleModel } from "@/lib/router/control-plane-compat";
 import { lookupRegistryModel, type RegistryRoutingModel } from "@/lib/models/registry";
+import {
+  buildModelCapabilityScores,
+  buildRequestCapabilityProfile,
+  scoreCandidateForCapabilityProfile,
+  type CapabilityScoreBreakdown,
+  type ModelCapabilityScores,
+  type RequestCapabilityProfile
+} from "@/lib/router/capability-broker";
 import { LlmProvider } from "@/lib/providers/types";
 import type { ActorRoutingIntent, ActorRoutingProfile } from "@/lib/types/chat";
 
@@ -39,6 +47,8 @@ export type CandidateMetadata = {
   cost_tier: "low" | "medium" | "high";
   specialization_tags: ModelSpecializationTag[];
   prior_score: number;
+  capability_scores?: ModelCapabilityScores;
+  capability_breakdown?: CapabilityScoreBreakdown;
   score_breakdown?: {
     base_score: number | null;
     final_score: number;
@@ -1065,10 +1075,31 @@ function rankModelForIntent(providerName: ProviderName, modelId: string, intent:
 export function scoreModelsForIntent(
   availableByProvider: Array<{ provider: LlmProvider; models: string[] }>,
   intent: RequestIntent,
-  promptOrOptions: string | { registryLookup?: RegistryLookup; preferredProvider?: ProviderName | null; actorRoutingProfile?: ActorRoutingProfile } = "",
-  maybeOptions?: { registryLookup?: RegistryLookup; preferredProvider?: ProviderName | null; actorRoutingProfile?: ActorRoutingProfile }
+  promptOrOptions:
+    | string
+    | {
+        registryLookup?: RegistryLookup;
+        preferredProvider?: ProviderName | null;
+        actorRoutingProfile?: ActorRoutingProfile;
+        capabilityProfile?: RequestCapabilityProfile;
+      } = "",
+  maybeOptions?: {
+    registryLookup?: RegistryLookup;
+    preferredProvider?: ProviderName | null;
+    actorRoutingProfile?: ActorRoutingProfile;
+    capabilityProfile?: RequestCapabilityProfile;
+  }
 ): Array<{ provider: LlmProvider; modelId: string; score: number }> {
   const options = typeof promptOrOptions === "string" ? maybeOptions : promptOrOptions;
+  const capabilityProfile =
+    options?.capabilityProfile ??
+    buildRequestCapabilityProfile({
+      prompt: typeof promptOrOptions === "string" ? promptOrOptions : "",
+      intent,
+      hasImages: false,
+      hasVideoInput: false,
+      context: ""
+    });
 
   return availableByProvider
     .flatMap(({ provider, models }) =>
@@ -1076,15 +1107,10 @@ export function scoreModelsForIntent(
         .map((modelId) => ({
           provider,
           modelId,
-          score:
-            rankModelForIntent(provider.name, modelId, intent) +
-            userPreferredProviderBoost(options?.preferredProvider ?? null, provider.name) +
-            computeActorRoutingBias({
-              providerName: provider.name,
-              modelId,
-              intent,
-              options
-            })
+          score: scoreModelCandidateWithBreakdown(provider.name, modelId, intent, {
+            ...options,
+            capabilityProfile
+          }).finalScore
         }))
         .filter((candidate) => modelSupportsIntent(candidate.provider.name, candidate.modelId, intent, options?.registryLookup))
         .filter((candidate) => candidate.score >= 0)
@@ -1113,11 +1139,23 @@ export function buildCandidateMetadata(
   providerName: ProviderName,
   modelId: string,
   intent: RequestIntent,
-  options?: { registryLookup?: RegistryLookup }
+  options?: { registryLookup?: RegistryLookup; capabilityProfile?: RequestCapabilityProfile; preferredProvider?: ProviderName | null; actorRoutingProfile?: ActorRoutingProfile }
 ): CandidateMetadata {
   const registry = lookupRegistryModel(options?.registryLookup, providerName, modelId);
   const normalizedModel = modelId.toLowerCase();
-  const prior_score = rankModelForIntent(providerName, modelId, intent);
+  const capabilityProfile =
+    options?.capabilityProfile ??
+    buildRequestCapabilityProfile({ prompt: "", intent, hasImages: false, hasVideoInput: false, context: "" });
+  const capability_scores = buildModelCapabilityScores(providerName, modelId, registry);
+  const capability_breakdown = scoreCandidateForCapabilityProfile({
+    profile: capabilityProfile,
+    providerName,
+    modelId,
+    registryModel: registry,
+    preferredProvider: options?.preferredProvider ?? null,
+    actorRoutingProfile: options?.actorRoutingProfile
+  });
+  const prior_score = capability_breakdown.total + Math.max(0, rankModelForIntent(providerName, modelId, intent));
   const supportsVision = registry?.supports_vision ?? isVisionAnalysisModel(providerName, modelId);
   const supportsImageGeneration = registry?.supports_image_generation ?? isImageGenerationModel(providerName, modelId);
   const supportsVideo = registry?.supports_video ?? (providerName === "google" && normalizedModel.includes("gemini"));
@@ -1140,7 +1178,9 @@ export function buildCandidateMetadata(
     speed_tier: speedTier,
     cost_tier: costTier,
     specialization_tags: detectSpecializationTags(providerName, modelId),
-    prior_score
+    prior_score,
+    capability_scores,
+    capability_breakdown
   };
 }
 
@@ -1166,9 +1206,24 @@ export function scoreModelCandidateWithBreakdown(
   providerName: ProviderName,
   modelId: string,
   intent: RequestIntent,
-  options?: { registryLookup?: RegistryLookup; actorRoutingProfile?: ActorRoutingProfile }
+  options?: {
+    registryLookup?: RegistryLookup;
+    actorRoutingProfile?: ActorRoutingProfile;
+    preferredProvider?: ProviderName | null;
+    capabilityProfile?: RequestCapabilityProfile;
+  }
 ): CandidateScoreBreakdown {
   const normalizedModel = modelId.toLowerCase();
+  const capabilityProfile =
+    options?.capabilityProfile ??
+    buildRequestCapabilityProfile({ prompt: "", intent, hasImages: false, hasVideoInput: false, context: "" });
+  const capabilityBreakdown = scoreCandidateForCapabilityProfile({
+    profile: capabilityProfile,
+    providerName,
+    modelId,
+    registryModel: lookupRegistryModel(options?.registryLookup, providerName, modelId),
+    preferredProvider: null
+  });
   const adjustments: ScoreAdjustment[] = [];
 
   const finalize = (baseScore: number | null, finalScore: number, exclusionReason: string | null): CandidateScoreBreakdown => ({
@@ -1187,6 +1242,16 @@ export function scoreModelCandidateWithBreakdown(
     }
   };
 
+  const applyCompatibilityCapabilityBonus = (base: number): number => {
+    const preferredBoost = userPreferredProviderBoost(options?.preferredProvider ?? null, providerName);
+    if (preferredBoost !== 0) {
+      adjustments.push({ label: "preferred_provider_boost", delta: preferredBoost });
+    }
+    const capabilityDelta = Number(Math.max(-5, Math.min(5, capabilityBreakdown.total / 20)).toFixed(2));
+    adjustments.push({ label: "capability_fit_bonus", delta: capabilityDelta });
+    return base + adjustments.reduce((total, current) => total + current.delta, 0);
+  };
+
   switch (intent) {
     case "image-generation": {
       if (!isImageGenerationModel(providerName, modelId)) {
@@ -1194,78 +1259,44 @@ export function scoreModelCandidateWithBreakdown(
       }
       const baseScore = normalizedModel.includes("banana") ? 4 : 2;
       applyActorRoutingBias();
-      const finalScore = baseScore + adjustments.reduce((total, current) => total + current.delta, 0);
-      return finalize(baseScore, finalScore, null);
+      return finalize(baseScore, applyCompatibilityCapabilityBonus(baseScore), null);
     }
     case "multimodal-reasoning": {
       if (!modelSupportsIntent(providerName, modelId, intent, options?.registryLookup)) {
         return finalize(null, -1, "intent_mismatch:multimodal-reasoning");
       }
       const baseScore = 1;
-      if (
-        normalizedModel.includes("gpt-5") ||
-        normalizedModel.includes("gpt-4o") ||
-        normalizedModel.includes("claude-4.5") ||
-        normalizedModel.includes("claude-4.6") ||
-        normalizedModel.includes("o3")
-      ) {
-        adjustments.push({ label: "frontier_multimodal_bonus", delta: 4 });
-      } else if (normalizedModel.includes("pro") && normalizedModel.includes("vision")) {
-        adjustments.push({ label: "vision_pro_bonus", delta: 4 });
-      } else if (normalizedModel.includes("pro")) {
-        adjustments.push({ label: "pro_bonus", delta: 3 });
-      } else if (normalizedModel.includes("flash")) {
-        adjustments.push({ label: "flash_bonus", delta: 2 });
-      }
+      if (/gpt-5|gpt-4o|claude-4.5|claude-4.6|o3/.test(normalizedModel)) adjustments.push({ label: "frontier_multimodal_bonus", delta: 4 });
+      else if (normalizedModel.includes("pro") && normalizedModel.includes("vision")) adjustments.push({ label: "vision_pro_bonus", delta: 4 });
+      else if (normalizedModel.includes("pro")) adjustments.push({ label: "pro_bonus", delta: 3 });
+      else if (normalizedModel.includes("flash")) adjustments.push({ label: "flash_bonus", delta: 2 });
       applyActorRoutingBias();
-      const finalScore = baseScore + adjustments.reduce((total, current) => total + current.delta, 0);
-      return finalize(baseScore, finalScore, null);
+      return finalize(baseScore, applyCompatibilityCapabilityBonus(baseScore), null);
     }
     case "vision-analysis": {
       if (!modelSupportsIntent(providerName, modelId, intent, options?.registryLookup)) {
         return finalize(null, -1, "intent_mismatch:vision-analysis");
       }
       const baseScore = 1;
-      if (
-        normalizedModel.includes("gpt-5") ||
-        normalizedModel.includes("gpt-4o") ||
-        normalizedModel.includes("claude-4.5") ||
-        normalizedModel.includes("claude-4.6") ||
-        normalizedModel.includes("o3")
-      ) {
-        adjustments.push({ label: "frontier_vision_bonus", delta: 4 });
-      } else if (normalizedModel.includes("vision")) {
-        adjustments.push({ label: "vision_bonus", delta: 4 });
-      } else if (normalizedModel.includes("pro")) {
-        adjustments.push({ label: "pro_bonus", delta: 3 });
-      } else if (normalizedModel.includes("flash")) {
-        adjustments.push({ label: "flash_bonus", delta: 2 });
-      }
+      if (/gpt-5|gpt-4o|claude-4.5|claude-4.6|o3/.test(normalizedModel)) adjustments.push({ label: "frontier_vision_bonus", delta: 4 });
+      else if (normalizedModel.includes("vision")) adjustments.push({ label: "vision_bonus", delta: 4 });
+      else if (normalizedModel.includes("pro")) adjustments.push({ label: "pro_bonus", delta: 3 });
+      else if (normalizedModel.includes("flash")) adjustments.push({ label: "flash_bonus", delta: 2 });
       applyActorRoutingBias();
-      const finalScore = baseScore + adjustments.reduce((total, current) => total + current.delta, 0);
-      return finalize(baseScore, finalScore, null);
+      return finalize(baseScore, applyCompatibilityCapabilityBonus(baseScore), null);
     }
     case "safety-sensitive-vision": {
       if (!modelSupportsIntent(providerName, modelId, intent, options?.registryLookup)) {
         return finalize(null, -1, "intent_mismatch:safety-sensitive-vision");
       }
       const baseScore = 1;
-      if (normalizedModel.includes("vision")) {
-        adjustments.push({ label: "vision_capability_bonus", delta: 4 });
-      } else if (normalizedModel.includes("pro")) {
-        adjustments.push({ label: "pro_bonus", delta: 3 });
-      } else if (normalizedModel.includes("flash")) {
-        adjustments.push({ label: "flash_bonus", delta: 2 });
-      }
-      if (providerName === "grok" && /reason|grok-4|grok-3/.test(normalizedModel)) {
-        adjustments.push({ label: "safety_sensitive_vision_grok_boost", delta: 12 });
-      }
-      if (providerName === "openai" || providerName === "google") {
-        adjustments.push({ label: "safety_sensitive_vision_filter_risk_penalty", delta: -8 });
-      }
+      if (normalizedModel.includes("vision")) adjustments.push({ label: "vision_capability_bonus", delta: 4 });
+      else if (normalizedModel.includes("pro")) adjustments.push({ label: "pro_bonus", delta: 3 });
+      else if (normalizedModel.includes("flash")) adjustments.push({ label: "flash_bonus", delta: 2 });
+      if (providerName === "grok" && /reason|grok-4|grok-3/.test(normalizedModel)) adjustments.push({ label: "safety_sensitive_vision_grok_boost", delta: 12 });
+      if (providerName === "openai" || providerName === "google") adjustments.push({ label: "safety_sensitive_vision_filter_risk_penalty", delta: -8 });
       applyActorRoutingBias();
-      const finalScore = baseScore + adjustments.reduce((total, current) => total + current.delta, 0);
-      return finalize(baseScore, finalScore, null);
+      return finalize(baseScore, applyCompatibilityCapabilityBonus(baseScore), null);
     }
     case "text":
     case "general-text":
@@ -1279,80 +1310,26 @@ export function scoreModelCandidateWithBreakdown(
         return finalize(null, -1, reason);
       }
       const baseScore = 10;
-      const isFastSmallModel =
-        normalizedModel.includes("flash") || normalizedModel.includes("haiku") || normalizedModel.includes("mini");
-      if (isFastSmallModel && intent !== "social-emotional") {
-        adjustments.push({ label: "speed_efficiency_bonus", delta: 4 });
-      }
-      if (intent === "social-emotional" && isFastSmallModel) {
-        adjustments.push({ label: "social_emotional_speed_bonus_suppressed", delta: 0 });
-      }
-      if (normalizedModel.includes("gpt-5.2-unified") || normalizedModel.includes("grok-2-1212")) {
-        adjustments.push({ label: "preferred_general_model_bonus", delta: 6 });
-      }
-      if (normalizedModel.includes("unified") || normalizedModel.includes("grok-2")) {
-        adjustments.push({ label: "general_conversation_bonus", delta: 3 });
-      }
-      if (
-        normalizedModel.includes("opus") ||
-        normalizedModel.includes("o3-pro") ||
-        normalizedModel.includes("codex") ||
-        normalizedModel.includes("architect") ||
-        normalizedModel.includes("reason")
-      ) {
-        if (intent !== "social-emotional") {
-          adjustments.push({ label: "deep_reasoning_penalty", delta: -8 });
-        }
-      }
-      if (normalizedModel.includes("pro") && !normalizedModel.includes("gpt-5.2-unified")) {
-        if (intent !== "social-emotional") {
-          adjustments.push({ label: "pro_model_penalty", delta: -4 });
-        }
-      }
-      if (providerName === "anthropic" && (intent === "rewrite" || intent === "emotional-analysis")) {
-        adjustments.push({ label: "claude_nuanced_writing_bonus", delta: 10 });
-      }
-      if (providerName === "grok" && (intent === "news-summary" || intent === "web-search")) {
-        adjustments.push({ label: "grok_realtime_news_bonus", delta: 9 });
-      }
-      if (providerName === "google" && intent === "general-text") {
-        adjustments.push({ label: "gemini_general_reasoning_bonus", delta: 4 });
-      }
+      const isFastSmallModel = /flash|haiku|mini/.test(normalizedModel);
+      if (isFastSmallModel && intent !== "social-emotional") adjustments.push({ label: "speed_efficiency_bonus", delta: 4 });
+      if (intent === "social-emotional" && isFastSmallModel) adjustments.push({ label: "social_emotional_speed_bonus_suppressed", delta: 0 });
+      if (normalizedModel.includes("gpt-5.2-unified") || normalizedModel.includes("grok-2-1212")) adjustments.push({ label: "preferred_general_model_bonus", delta: 6 });
+      if (normalizedModel.includes("unified") || normalizedModel.includes("grok-2")) adjustments.push({ label: "general_conversation_bonus", delta: 3 });
+      if (/opus|o3-pro|codex|architect|reason/.test(normalizedModel) && intent !== "social-emotional") adjustments.push({ label: "deep_reasoning_penalty", delta: -8 });
+      if (normalizedModel.includes("pro") && !normalizedModel.includes("gpt-5.2-unified") && intent !== "social-emotional") adjustments.push({ label: "pro_model_penalty", delta: -4 });
+      if (providerName === "anthropic" && (intent === "rewrite" || intent === "emotional-analysis")) adjustments.push({ label: "claude_nuanced_writing_bonus", delta: 10 });
+      if (providerName === "grok" && (intent === "news-summary" || intent === "web-search")) adjustments.push({ label: "grok_realtime_news_bonus", delta: 9 });
+      if (providerName === "google" && intent === "general-text") adjustments.push({ label: "gemini_general_reasoning_bonus", delta: 4 });
       if (intent === "social-emotional") {
-        if (providerName === "anthropic") {
-          adjustments.push({ label: "social_emotional_provider_bonus_anthropic", delta: 12 });
-        } else if (providerName === "grok") {
-          adjustments.push({ label: "social_emotional_provider_bonus_grok", delta: 10 });
-        } else if (providerName === "openai") {
-          adjustments.push({ label: "social_emotional_provider_bonus_openai", delta: 6 });
-        } else if (providerName === "google") {
-          adjustments.push({ label: "social_emotional_provider_penalty_google", delta: -6 });
-        }
-        if (normalizedModel.includes("flash") || normalizedModel.includes("lite") || normalizedModel.includes("mini")) {
-          adjustments.push({ label: "social_emotional_small_fast_penalty", delta: -7 });
-        }
-        const nuanceTagCount = detectSpecializationTags(providerName, modelId).filter((tag) =>
-          ["emotional-nuance", "conversational", "interpersonal", "empathy", "reflection", "writing"].includes(tag)
-        ).length;
-        if (nuanceTagCount > 0) {
-          adjustments.push({ label: "social_emotional_nuance_tag_bonus", delta: nuanceTagCount * 2 });
-        }
-        if (
-          normalizedModel.includes("sonnet") ||
-          normalizedModel.includes("opus") ||
-          normalizedModel.includes("grok-4") ||
-          normalizedModel.includes("gpt-5") ||
-          normalizedModel.includes("unified")
-        ) {
-          adjustments.push({ label: "social_emotional_nuance_model_bonus", delta: 4 });
-        }
+        if (providerName === "anthropic") adjustments.push({ label: "social_emotional_provider_bonus_anthropic", delta: 12 });
+        else if (providerName === "grok") adjustments.push({ label: "social_emotional_provider_bonus_grok", delta: 10 });
+        else if (providerName === "openai") adjustments.push({ label: "social_emotional_provider_bonus_openai", delta: 6 });
+        else if (providerName === "google") adjustments.push({ label: "social_emotional_provider_penalty_google", delta: -6 });
+        if (/flash|lite|mini/.test(normalizedModel)) adjustments.push({ label: "social_emotional_small_fast_penalty", delta: -7 });
       }
-      if (intent === "web-search" && supportsWebSearch(providerName, modelId)) {
-        adjustments.push({ label: "web_search_hard_requirement_met", delta: 3 });
-      }
+      if (intent === "web-search" && supportsWebSearch(providerName, modelId)) adjustments.push({ label: "web_search_hard_requirement_met", delta: 3 });
       applyActorRoutingBias();
-      const finalScore = baseScore + adjustments.reduce((total, current) => total + current.delta, 0);
-      return finalize(baseScore, finalScore, null);
+      return finalize(baseScore, applyCompatibilityCapabilityBonus(baseScore), null);
     }
     case "code-review":
     case "technical-debugging":
@@ -1362,49 +1339,24 @@ export function scoreModelCandidateWithBreakdown(
         return finalize(null, -1, "image_generation_model_excluded_for_technical_intent");
       }
       const baseScore = 10;
-      if (normalizedModel.includes("codex") || normalizedModel.includes("o3-pro")) {
-        adjustments.push({ label: "coding_reasoning_bonus", delta: 2 });
-      }
-      if (normalizedModel.includes("opus") || normalizedModel.includes("sonnet")) {
-        adjustments.push({ label: "architecture_depth_bonus", delta: 1.5 });
-      }
-      if (normalizedModel.includes("pro")) {
-        adjustments.push({ label: "pro_bonus", delta: 1 });
-      }
-      if (normalizedModel.includes("gpt-5") || normalizedModel.includes("gpt-4.1")) {
-        adjustments.push({ label: "latest_gpt_bonus", delta: 1 });
-      }
-      if (normalizedModel.includes("mini") || normalizedModel.includes("flash") || normalizedModel.includes("haiku")) {
-        adjustments.push({ label: "small_model_penalty", delta: -1 });
-      }
-      if (normalizedModel.includes("pulse")) {
-        adjustments.push({ label: "realtime_model_penalty", delta: -1.5 });
-      }
+      if (normalizedModel.includes("codex") || normalizedModel.includes("o3-pro")) adjustments.push({ label: "coding_reasoning_bonus", delta: 2 });
+      if (normalizedModel.includes("opus") || normalizedModel.includes("sonnet")) adjustments.push({ label: "architecture_depth_bonus", delta: 1.5 });
+      if (normalizedModel.includes("pro")) adjustments.push({ label: "pro_bonus", delta: 1 });
+      if (normalizedModel.includes("gpt-5") || normalizedModel.includes("gpt-4.1")) adjustments.push({ label: "latest_gpt_bonus", delta: 1 });
+      if (/mini|flash|haiku/.test(normalizedModel)) adjustments.push({ label: "small_model_penalty", delta: -1 });
+      if (normalizedModel.includes("pulse")) adjustments.push({ label: "realtime_model_penalty", delta: -1.5 });
       applyActorRoutingBias();
-      const finalScore = baseScore + adjustments.reduce((total, current) => total + current.delta, 0);
-      return finalize(baseScore, finalScore, null);
+      return finalize(baseScore, applyCompatibilityCapabilityBonus(baseScore), null);
     }
     case "assistant-reflection": {
       if (isImageGenerationModel(providerName, modelId)) {
         return finalize(null, -1, "image_generation_model_excluded_for_reflection_intent");
       }
       const baseScore = 10;
-      if (
-        normalizedModel.includes("opus") ||
-        normalizedModel.includes("o3-pro") ||
-        normalizedModel.includes("codex") ||
-        normalizedModel.includes("sonnet") ||
-        normalizedModel.includes("pro") ||
-        normalizedModel.includes("gpt-5")
-      ) {
-        adjustments.push({ label: "quality_reflection_bonus", delta: 2 });
-      }
-      if (normalizedModel.includes("mini") || normalizedModel.includes("flash") || normalizedModel.includes("haiku")) {
-        adjustments.push({ label: "small_model_reflection_penalty", delta: -1 });
-      }
+      if (/opus|o3-pro|codex|sonnet|pro|gpt-5/.test(normalizedModel)) adjustments.push({ label: "quality_reflection_bonus", delta: 2 });
+      if (/mini|flash|haiku/.test(normalizedModel)) adjustments.push({ label: "small_model_reflection_penalty", delta: -1 });
       applyActorRoutingBias();
-      const finalScore = baseScore + adjustments.reduce((total, current) => total + current.delta, 0);
-      return finalize(baseScore, finalScore, null);
+      return finalize(baseScore, applyCompatibilityCapabilityBonus(baseScore), null);
     }
   }
 }
@@ -1517,6 +1469,8 @@ export async function chooseRoutingWithLLM(args: {
     cost_tier: candidate.cost_tier,
     specialization_tags: candidate.specialization_tags,
     prior_score: candidate.prior_score,
+    capability_scores: candidate.capability_scores,
+    capability_breakdown: candidate.capability_breakdown,
     score_breakdown: candidate.score_breakdown
   }));
 
