@@ -12,6 +12,18 @@ declare module "xlsx" {
   };
 }
 
-declare module "pdf-parse" {
-  export default function pdfParse(input: Uint8Array): Promise<{ text?: string }>;
+declare module "pdf2json" {
+  type PdfData = {
+    Pages?: Array<{
+      Texts?: Array<{
+        R?: Array<{ T?: string }>;
+      }>;
+    }>;
+  };
+
+  export default class PDFParser {
+    on(event: "pdfParser_dataError", cb: (err: { parserError?: string }) => void): void;
+    on(event: "pdfParser_dataReady", cb: (data: PdfData) => void): void;
+    parseBuffer(buffer: Buffer): void;
+  }
 }
