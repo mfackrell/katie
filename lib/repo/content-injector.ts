@@ -278,7 +278,7 @@ export async function injectRelevantContents(userMessage: string, repoId: string
 
   const maxFilesCap = Math.max(1, Math.min(maxFiles, 5));
   const chunks: Chunk[] = [];
-  const issues: string[] = [];
+  let sawRepoAccessIssue = false;
   const attemptedPaths = new Set<string>();
 
   let allPaths: string[] | null = null;
@@ -328,12 +328,14 @@ export async function injectRelevantContents(userMessage: string, repoId: string
 
     for (const attempt of resolution.attempts) {
       const retrievalStage = attempt.method === "exact-fetch" ? "exact_fetch" : attempt.method === "candidate-fetch" ? "candidate_fetch" : "search";
+      const errorScope = attempt.repoLevelIssue ? "repo_level" : "file_level";
       if (!attempt.success) {
         console.warn("[Repo Injector] retrieval attempt failed", {
           repoId,
           retrieval_stage: retrievalStage,
           path: attempt.path,
           failure_reason: attempt.reason,
+          error_scope: errorScope,
         });
       } else {
         console.log("[Repo Injector] retrieval attempt succeeded", {
@@ -346,7 +348,7 @@ export async function injectRelevantContents(userMessage: string, repoId: string
 
     if (!resolution.found || !resolution.path || typeof resolution.content !== "string") {
       if (resolution.errorSummary === "repo access issue") {
-        issues.push("[REPO ACCESS ISSUE: Repository connector/auth failed during retrieval. Paste manually?]");
+        sawRepoAccessIssue = true;
       }
       continue;
     }
@@ -401,16 +403,12 @@ export async function injectRelevantContents(userMessage: string, repoId: string
     output += block;
   }
 
-  if (issues.length) {
-    output += `${issues.join("\n")}\n`;
-  }
-
   if (truncated.length) {
     output += `${truncated.map((entry) => `Truncated: ${entry} omitted for brevity.`).join("\n")}\n`;
   }
 
   if (selectedChunks.length === 0) {
-    if (issues.length > 0) {
+    if (sawRepoAccessIssue) {
       output += "[REPO ACCESS ISSUE: Unable to inspect repository due to connector/auth failure. Paste manually?]\n";
     } else {
       const searchState = searchFailureReason ? "search inconclusive" : "search empty or no matching files";

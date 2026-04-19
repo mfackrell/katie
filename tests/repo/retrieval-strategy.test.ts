@@ -70,6 +70,8 @@ test("exact path 404 + candidate path succeeds", async () => {
 
   assert.equal(result.found, true);
   assert.equal(result.path, "app/api/upload/route.ts");
+  assert.equal(result.attempts[0]?.reason, "path_404");
+  assert.equal(result.attempts[0]?.repoLevelIssue, false);
 });
 
 test("all methods fail => not found through retrieval paths", async () => {
@@ -107,6 +109,22 @@ test("connector/auth failure => repo access issue", async () => {
 
   assert.equal(result.found, false);
   assert.equal(result.errorSummary, "repo access issue");
+});
+
+test("search failure alone is inconclusive when candidate fetch succeeds", async () => {
+  const result = await resolveRepoFile({
+    query: "upload route",
+    searchPaths: async () => {
+      throw new Error("search timeout");
+    },
+    candidatePaths: ["app/api/upload/route.ts"],
+    fetchByPath: async () => "content",
+  });
+
+  assert.equal(result.found, true);
+  assert.equal(result.path, "app/api/upload/route.ts");
+  assert.equal(result.attempts[0]?.method, "search");
+  assert.equal(result.attempts[0]?.repoLevelIssue, false);
 });
 
 test("candidate builder includes deterministic repo inspection paths", () => {

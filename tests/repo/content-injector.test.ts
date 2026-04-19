@@ -118,3 +118,74 @@ test("injector reports file-not-found (not repo access issue) for missing files"
   assert.match(injected, /REPO FILE NOT FOUND/);
   assert.doesNotMatch(injected, /REPO ACCESS ISSUE: Could not fetch/);
 });
+
+test("injector reports repo access issue when repository binding is missing", async () => {
+  __resetContentInjectorForTests();
+
+  const injected = await injectRelevantContents("inspect upload route", "missing-repo", 2);
+
+  assert.match(injected, /REPO ACCESS ISSUE/);
+});
+
+test("search failure does not force connector/auth messaging when candidate fetch works", async () => {
+  __resetContentInjectorForTests();
+  __setOctokitFactoryForTests(
+    () =>
+      ({
+        git: {
+          async getRef() {
+            throw new Error("search timeout");
+          },
+        },
+        repos: {
+          async getContent({ path }: { path: string }) {
+            assert.equal(path, "app/api/upload/route.ts");
+            const content = "export const POST = true;";
+            return {
+              data: {
+                type: "file",
+                encoding: "base64",
+                content: Buffer.from(content, "utf8").toString("base64"),
+                size: Buffer.byteLength(content, "utf8"),
+              },
+            };
+          },
+        },
+      }) as never,
+  );
+
+  registerRepoBinding("repo-search-fail", "mfackrell/katie", "main");
+  const injected = await injectRelevantContents("inspect upload route", "repo-search-fail", 2);
+
+  assert.match(injected, /File: app\/api\/upload\/route.ts/);
+  assert.doesNotMatch(injected, /REPO ACCESS ISSUE/);
+});
+
+test("injector reports repo access issue for permission/auth failure", async () => {
+  __resetContentInjectorForTests();
+  __setOctokitFactoryForTests(
+    () =>
+      ({
+        git: {
+          async getRef() {
+            return { data: { object: { sha: "abc123" } } };
+          },
+          async getTree() {
+            return { data: { tree: [] } };
+          },
+        },
+        repos: {
+          async getContent() {
+            const error = new Error("forbidden") as Error & { status?: number };
+            error.status = 403;
+            throw error;
+          },
+        },
+      }) as never,
+  );
+
+  registerRepoBinding("repo-auth-fail", "mfackrell/katie", "main");
+  const injected = await injectRelevantContents("check app/api/upload/route.ts", "repo-auth-fail", 1);
+
+  assert.match(injected, /REPO ACCESS ISSUE/);
+});

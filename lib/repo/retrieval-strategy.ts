@@ -5,6 +5,7 @@ export type RepoFileFetchAttempt = {
   path?: string;
   success: boolean;
   reason?: string;
+  repoLevelIssue?: boolean;
 };
 
 export type RepoFileResolutionResult = {
@@ -32,19 +33,32 @@ function classifyError(error: unknown): Classification {
   const status = typeof error === "object" && error !== null && "status" in error ? (error as { status?: number }).status : undefined;
   const message = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
 
-  if (status === 401 || status === 403 || message.includes("permission") || message.includes("forbidden")) {
+  if (status === 401 || status === 403 || message.includes("permission") || message.includes("forbidden") || message.includes("unauthorized")) {
     return { reason: "permission_denied", repoAccessIssue: true };
   }
 
   if (status === 404 || message.includes("not found")) {
-    return { reason: "404", repoAccessIssue: false };
+    return { reason: "path_404", repoAccessIssue: false };
   }
 
-  if (message.includes("repo_unavailable") || message.includes("unknown active repository")) {
+  if (
+    message.includes("repo_unavailable") ||
+    message.includes("repository unavailable") ||
+    message.includes("unknown active repository")
+  ) {
     return { reason: "repository_unavailable", repoAccessIssue: true };
   }
 
-  return { reason: "connector_error", repoAccessIssue: true };
+  if (
+    message.includes("connector") ||
+    message.includes("service unavailable") ||
+    message.includes("bad gateway") ||
+    message.includes("gateway timeout")
+  ) {
+    return { reason: "connector_error", repoAccessIssue: true };
+  }
+
+  return { reason: "file_not_found", repoAccessIssue: false };
 }
 
 function pushAttempt(
@@ -53,8 +67,9 @@ function pushAttempt(
   success: boolean,
   reason?: string,
   path?: string,
+  repoLevelIssue?: boolean,
 ): void {
-  attempts.push({ method, path, success, reason });
+  attempts.push({ method, path, success, reason, repoLevelIssue });
 }
 
 export function buildLikelyCandidatePaths(input: string): string[] {
@@ -125,7 +140,7 @@ export async function resolveRepoFile(params: ResolveRepoFileParams): Promise<Re
     } catch (error) {
       const classification = classifyError(error);
       sawRepoAccessIssue = sawRepoAccessIssue || classification.repoAccessIssue;
-      pushAttempt(attempts, method, false, classification.reason, path);
+      pushAttempt(attempts, method, false, classification.reason, path, classification.repoAccessIssue);
       return null;
     }
   };
@@ -142,14 +157,14 @@ export async function resolveRepoFile(params: ResolveRepoFileParams): Promise<Re
     try {
       searchResults = await params.searchPaths(params.query);
       if (searchResults.length === 0) {
-        pushAttempt(attempts, "search", false, "empty_search");
+        pushAttempt(attempts, "search", false, "empty_search", undefined, false);
       } else {
         pushAttempt(attempts, "search", true);
       }
     } catch (error) {
       const classification = classifyError(error);
       sawRepoAccessIssue = sawRepoAccessIssue || classification.repoAccessIssue;
-      pushAttempt(attempts, "search", false, classification.reason);
+      pushAttempt(attempts, "search", false, classification.reason, undefined, classification.repoAccessIssue);
     }
 
     for (const path of searchResults) {
