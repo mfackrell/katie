@@ -78,7 +78,7 @@ function hasVideoAttachments(attachments: FileReference[] | undefined): boolean 
 }
 
 function toChatMessages(params: ChatGenerateParams): OpenAI.Chat.ChatCompletionMessageParam[] {
-  const attachmentContext = formatAttachmentContext(params.attachments);
+  const attachmentContext = formatAttachmentContext(params.attachments, { userMessage: params.user });
   const userContent: OpenAI.Chat.ChatCompletionContentPart[] = [{ type: "text", text: params.user }];
 
   if (params.images) {
@@ -113,7 +113,7 @@ function toResponsesInput(params: ChatGenerateParams): OpenAI.Responses.Response
   };
 
   const mapContent = (text: string): ResponseInputContentItem[] => [{ type: "input_text", text }];
-  const attachmentContext = formatAttachmentContext(params.attachments);
+  const attachmentContext = formatAttachmentContext(params.attachments, { userMessage: params.user });
 
   const messages: ResponseInputMessage[] = buildSystemPromptSections(params).map((content) => ({
     role: "system",

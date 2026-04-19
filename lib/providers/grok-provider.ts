@@ -198,7 +198,7 @@ ${getKatieReasoningExplainerStatement()}` }]
     }
 
     try {
-      const attachmentContext = formatAttachmentContext(params.attachments);
+      const attachmentContext = formatAttachmentContext(params.attachments, { userMessage: params.user });
       const messages: OpenAI.Chat.ChatCompletionMessageParam[] = [
         { role: "system", content: `${MATH_EXECUTION_PROTOCOL}\n\nCORE_PERSONA: ${params.persona}` },
         { role: "system", content: `MEMORY_CONTEXT:\n${params.summary}\nEND_MEMORY_CONTEXT` },

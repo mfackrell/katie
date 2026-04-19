@@ -4,6 +4,7 @@ import {
   validateFile
 } from "@/lib/uploads/parse-text-files";
 import { supportedExtensionsForError } from "@/lib/uploads/file-type-helpers";
+import { chunkExtractedText } from "@/lib/uploads/document-chunking";
 
 const MAX_FILES = 5;
 const MAX_VIDEO_FILE_SIZE_BYTES = 200 * 1024 * 1024;
@@ -161,6 +162,7 @@ export async function buildFileReferences(files: File[]): Promise<FileReference[
           fileName: file.name,
           mimeType,
           preview: `[Video attachment metadata only. No transcript or frame extraction is currently available. Name: ${file.name}; MIME: ${mimeType}; Size: ${file.size} bytes.]`,
+          extractionCoverage: "preview-only",
           attachmentKind: "video",
           providerRef
         } satisfies FileReference;
@@ -171,12 +173,18 @@ export async function buildFileReferences(files: File[]): Promise<FileReference[
         throw new Error(`Failed to parse file "${file.name}".`);
       }
 
+      const extractedChunks = chunkExtractedText(parsed.text);
+
       return {
         fileId: crypto.randomUUID(),
         fileName: file.name,
         mimeType,
         preview: buildParsedTextPreview(file.name, mimeType, parsed.text),
         extractedText: parsed.text,
+        extractedChunks,
+        totalChunks: extractedChunks.length,
+        truncatedForContext: extractedChunks.length > 1,
+        extractionCoverage: "full",
         attachmentKind: "text",
         providerRef
       } satisfies FileReference;

@@ -5,6 +5,7 @@ import {
   convertToPlainText,
   parseTextFiles
 } from "../../lib/uploads/parse-text-files";
+import { chunkExtractedText } from "../../lib/uploads/document-chunking";
 
 const DOCX_BASE64 = "UEsDBAoAAAAAA";
 const XLSX_BASE64 = "UEsDBAoAAAAAA";
@@ -121,10 +122,29 @@ test("legacy .doc fallback returns clear error when mammoth fails", async () => 
   await assert.rejects(convertToPlainText(legacyDoc), /Legacy \.doc not supported/);
 });
 
-test("extracted text is sanitized and truncated", async () => {
+test("extracted text is sanitized without truncating full extraction", async () => {
   const huge = `hello\u0000${"a".repeat(50_100)}`;
   const parsed = await parseTextFiles([new File([huge], "plain.txt", { type: "text/plain" })]);
 
   assert.equal(parsed[0].text.includes("\u0000"), false);
-  assert.equal(parsed[0].text.endsWith("[truncated]"), true);
+  assert.equal(parsed[0].text.endsWith("[truncated]"), false);
+  assert.equal(parsed[0].text.length > 50_000, true);
+});
+
+test("chunkExtractedText keeps small documents in a single chunk", () => {
+  const chunks = chunkExtractedText("hello world\n\nshort document", 1000);
+  assert.equal(chunks.length, 1);
+  assert.equal(chunks[0].index, 0);
+  assert.equal(chunks[0].total, 1);
+});
+
+test("chunkExtractedText splits large documents into deterministic ordered chunks", () => {
+  const huge = Array.from({ length: 40 }, (_, index) => `section ${index} ${"a".repeat(500)}`).join("\n\n");
+  const chunks = chunkExtractedText(huge, 1200);
+  assert.equal(chunks.length > 1, true);
+  chunks.forEach((chunk, index) => {
+    assert.equal(chunk.index, index);
+    assert.equal(chunk.total, chunks.length);
+    assert.equal(chunk.text.length <= 1200, true);
+  });
 });
