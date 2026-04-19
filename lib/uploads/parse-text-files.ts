@@ -23,14 +23,36 @@ type XlsxModule = {
   };
 };
 
-type PdfParseModule = {
-  default(input: Uint8Array): Promise<{ text?: string }>;
+type PdfTextSegment = {
+  T?: string;
+};
+
+type PdfTextRun = {
+  R?: PdfTextSegment[];
+};
+
+type PdfPage = {
+  Texts?: PdfTextRun[];
+};
+
+type PdfData = {
+  Pages?: PdfPage[];
+};
+
+type PdfParser = {
+  on(event: "pdfParser_dataError", cb: (err: { parserError?: string }) => void): void;
+  on(event: "pdfParser_dataReady", cb: (data: PdfData) => void): void;
+  parseBuffer(buffer: Buffer): void;
+};
+
+type PdfParserModule = {
+  default: new () => PdfParser;
 };
 
 type DynamicImportLoaders = {
   mammoth: () => Promise<MammothModule>;
   xlsx: () => Promise<XlsxModule>;
-  pdfParse: () => Promise<PdfParseModule>;
+  pdfParser: () => Promise<PdfParserModule>;
 };
 
 export type ParsedAttachment = {
@@ -49,7 +71,7 @@ const MAX_EXCEL_SHEETS = 20;
 const DYNAMIC_IMPORTS: DynamicImportLoaders = {
   mammoth: async () => (await import("mammoth")) as unknown as MammothModule,
   xlsx: async () => (await import("xlsx")) as unknown as XlsxModule,
-  pdfParse: async () => (await import("pdf-parse")) as unknown as PdfParseModule
+  pdfParser: async () => (await import("pdf2json")) as unknown as PdfParserModule
 };
 
 export function __setDynamicImportOverridesForTests(overrides: Partial<DynamicImportLoaders>): void {
@@ -71,6 +93,52 @@ function compactWhitespace(text: string): string {
 
 function getFileSizeLimitBytes(sourceFormat: SourceFormat): number {
   return isTextSourceFormat(sourceFormat) ? MAX_TEXT_FILE_SIZE_BYTES : MAX_BINARY_FILE_SIZE_BYTES;
+}
+
+function extractTextFromPdfData(pdfData: PdfData): string {
+  const pages = pdfData.Pages ?? [];
+  const lines: string[] = [];
+
+  for (const page of pages) {
+    const textRuns = page.Texts ?? [];
+    const pageText = textRuns
+      .map((run) =>
+        (run.R ?? [])
+          .map((segment) => {
+            if (!segment.T) {
+              return "";
+            }
+            try {
+              return decodeURIComponent(segment.T);
+            } catch {
+              return segment.T;
+            }
+          })
+          .join("")
+      )
+      .join("\n");
+    lines.push(pageText);
+  }
+
+  return lines.join("\n\n");
+}
+
+async function parsePdfToText(buffer: ArrayBuffer): Promise<string> {
+  const parserModule = await DYNAMIC_IMPORTS.pdfParser();
+  const PdfParser = parserModule.default;
+  const parser = new PdfParser();
+
+  const pdfData = await new Promise<PdfData>((resolve, reject) => {
+    parser.on("pdfParser_dataError", (err) => {
+      reject(new Error(err?.parserError || "Unknown PDF parser error"));
+    });
+    parser.on("pdfParser_dataReady", (data) => {
+      resolve(data);
+    });
+    parser.parseBuffer(Buffer.from(buffer));
+  });
+
+  return extractTextFromPdfData(pdfData);
 }
 
 export function validateFile(file: File): SourceFormat {
@@ -138,10 +206,11 @@ export async function convertToPlainText(file: File): Promise<string> {
   }
 
   try {
-    const pdfParse = await DYNAMIC_IMPORTS.pdfParse();
+    // Diagnostic log for production verification: uploads now use pdf2json, not pdfjs-dist/pdf-parse.
+    console.info(`[uploads] parsing PDF with pdf2json: ${file.name}`);
     const rawBuffer = await file.arrayBuffer();
-    const parsed = await pdfParse.default(new Uint8Array(rawBuffer));
-    return sanitizeExtractedText(compactWhitespace(parsed.text ?? ""));
+    const text = await parsePdfToText(rawBuffer);
+    return sanitizeExtractedText(compactWhitespace(text));
   } catch {
     throw new Error(`Failed to parse PDF document "${file.name}".`);
   }

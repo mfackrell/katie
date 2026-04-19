@@ -26,8 +26,20 @@ test("parseTextFiles converts docx, xlsx, and pdf through type-specific converte
         sheet_to_csv: () => "cell1\tcell2"
       }
     }),
-    pdfParse: async () => ({
-      default: async () => ({ text: "PDF text" })
+    pdfParser: async () => ({
+      default: class {
+        on(
+          event: "pdfParser_dataError" | "pdfParser_dataReady",
+          cb: ((err: { parserError?: string }) => void) | ((data: { Pages?: unknown[] }) => void)
+        ): void {
+          if (event === "pdfParser_dataReady") {
+            (cb as (data: { Pages?: unknown[] }) => void)({
+              Pages: [{ Texts: [{ R: [{ T: "PDF%20text" }] }] }]
+            });
+          }
+        }
+        parseBuffer(_buffer: Buffer): void {}
+      }
     })
   });
 
@@ -53,9 +65,17 @@ test("parseTextFiles converts docx, xlsx, and pdf through type-specific converte
 
 test("PDF parse failures return a clear parse error", async () => {
   __setDynamicImportOverridesForTests({
-    pdfParse: async () => ({
-      default: async () => {
-        throw new Error("invalid pdf");
+    pdfParser: async () => ({
+      default: class {
+        on(
+          event: "pdfParser_dataError" | "pdfParser_dataReady",
+          cb: ((err: { parserError?: string }) => void) | ((data: { Pages?: unknown[] }) => void)
+        ): void {
+          if (event === "pdfParser_dataError") {
+            (cb as (err: { parserError?: string }) => void)({ parserError: "invalid pdf" });
+          }
+        }
+        parseBuffer(_buffer: Buffer): void {}
       }
     })
   });

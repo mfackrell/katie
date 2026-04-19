@@ -42,8 +42,20 @@ test("buildFileReferences accepts supported video types", async () => {
 
 test("buildFileReferences successfully ingests PDF files as text attachments", async () => {
   __setDynamicImportOverridesForTests({
-    pdfParse: async () => ({
-      default: async () => ({ text: "Quarterly report" })
+    pdfParser: async () => ({
+      default: class {
+        on(
+          event: "pdfParser_dataError" | "pdfParser_dataReady",
+          cb: ((err: { parserError?: string }) => void) | ((data: { Pages?: unknown[] }) => void)
+        ): void {
+          if (event === "pdfParser_dataReady") {
+            (cb as (data: { Pages?: unknown[] }) => void)({
+              Pages: [{ Texts: [{ R: [{ T: "Quarterly%20report" }] }] }]
+            });
+          }
+        }
+        parseBuffer(_buffer: Buffer): void {}
+      }
     })
   });
 
