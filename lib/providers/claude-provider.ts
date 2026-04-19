@@ -55,13 +55,10 @@ export class ClaudeProvider implements LlmProvider {
 
     const selectedModel = params.modelId ?? this.defaultModel;
     const attachmentContext = formatAttachmentContext(params.attachments);
-    const attachmentSafetyNotice = attachmentContext
-      ? "\n\nIMPORTANT: Attachment previews are truncated excerpts, not full files."
-      : "";
     const systemPrompt = `${MATH_EXECUTION_PROTOCOL}\n\nCORE_PERSONA: ${params.persona}\n\nMEMORY_CONTEXT:\n${params.summary}\nEND_MEMORY_CONTEXT\n\n${`${getKatieOperationalRealityStatement()}
 
 ${getKatieReasoningExplainerStatement()}`}`;
-    const system = attachmentContext ? `${systemPrompt}\n\n${attachmentContext}${attachmentSafetyNotice}` : systemPrompt;
+    const system = attachmentContext ? `${systemPrompt}\n\n${attachmentContext}` : systemPrompt;
     const messages = [
       ...params.history.map((entry) => ({
         role: entry.role,

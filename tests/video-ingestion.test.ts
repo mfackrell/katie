@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { buildFileReferences } from "../lib/uploads/build-file-references";
 import { __setDynamicImportOverridesForTests } from "../lib/uploads/parse-text-files";
 import { inferRequestIntent } from "../lib/router/model-intent";
+import { formatAttachmentContext } from "../lib/providers/attachment-context";
 
 function withUploadKeysDisabled(fn: () => Promise<void>): Promise<void> {
   const prevOpenAi = process.env.OPENAI_API_KEY;
@@ -36,6 +37,7 @@ test("buildFileReferences accepts supported video types", async () => {
       assert.equal(ref.attachmentKind, "video");
       assert.match(ref.preview, /Video attachment metadata only/);
       assert.ok(ref.mimeType.startsWith("video/"));
+      assert.equal(ref.extractedText, undefined);
     });
   });
 });
@@ -67,6 +69,12 @@ test("buildFileReferences successfully ingests PDF files as text attachments", a
     assert.equal(refs.length, 1);
     assert.equal(refs[0].attachmentKind, "text");
     assert.equal(refs[0].preview, "Quarterly report");
+    assert.equal(refs[0].extractedText, "Quarterly report");
+
+    const attachmentContext = formatAttachmentContext(refs);
+    assert.match(attachmentContext, /Extracted attachment body available to the model/);
+    assert.match(attachmentContext, /Quarterly report/);
+    assert.doesNotMatch(attachmentContext, /Full file body is intentionally excluded/);
   });
 });
 
@@ -91,6 +99,8 @@ test("buildFileReferences successfully ingests XLSX files as text attachments", 
     assert.equal(refs[0].attachmentKind, "text");
     assert.match(refs[0].preview, /sheet: Sheet1/);
     assert.match(refs[0].preview, /region\trevenue/);
+    assert.match(refs[0].extractedText ?? "", /sheet: Sheet1/);
+    assert.match(refs[0].extractedText ?? "", /region\trevenue/);
   });
 });
 
@@ -111,6 +121,7 @@ test("buildFileReferences successfully ingests DOCX files as text attachments", 
     assert.equal(refs.length, 1);
     assert.equal(refs[0].attachmentKind, "text");
     assert.equal(refs[0].preview, "Proposal summary");
+    assert.equal(refs[0].extractedText, "Proposal summary");
   });
 });
 
@@ -155,4 +166,28 @@ test("video-bearing requests are not treated as text-only intent", async () => {
     await inferRequestIntent("Analyze this clip and project the trend over time.", { hasImages: false, hasVideoInput: true }),
     "multimodal-reasoning"
   );
+});
+
+test("formatAttachmentContext avoids duplicate extracted body injection", () => {
+  const context = formatAttachmentContext([
+    {
+      fileId: "file-a",
+      fileName: "a.pdf",
+      mimeType: "application/pdf",
+      preview: "preview a",
+      extractedText: "same extracted body",
+      attachmentKind: "text"
+    },
+    {
+      fileId: "file-b",
+      fileName: "b.pdf",
+      mimeType: "application/pdf",
+      preview: "preview b",
+      extractedText: "same   extracted\nbody",
+      attachmentKind: "text"
+    }
+  ]);
+
+  assert.match(context, /Duplicate extracted text omitted/);
+  assert.match(context, /preview b/);
 });

@@ -126,15 +126,6 @@ ${getKatieReasoningExplainerStatement()}` }]
             {
               role: "system" as const,
               content: [{ type: "input_text" as const, text: attachmentContext }]
-            },
-            {
-              role: "system" as const,
-              content: [
-                {
-                  type: "input_text" as const,
-                  text: "IMPORTANT: Attachment previews are truncated excerpts, not full files."
-                }
-              ]
             }
           ]
         : []),
@@ -219,10 +210,6 @@ ${getKatieReasoningExplainerStatement()}` }
 
       if (attachmentContext) {
         messages.push({ role: "system", content: attachmentContext });
-        messages.push({
-          role: "system",
-          content: "IMPORTANT: Attachment previews are truncated excerpts, not full files."
-        });
       }
 
       messages.push({ role: "user", content: buildChatUserContent(params) });

@@ -36,6 +36,7 @@ const fileReferenceSchema = z.object({
   fileName: z.string().min(1),
   mimeType: z.string().min(1),
   preview: z.string().min(1).max(2200),
+  extractedText: z.string().min(1).max(50020).optional(),
   attachmentKind: z.enum(["image", "video", "text", "file"]).optional(),
   providerRef: z
     .object({
