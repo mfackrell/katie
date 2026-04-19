@@ -31,6 +31,16 @@ export type ModelRegistryRecord = {
   reasoning_tier: "high" | "medium" | "low" | null;
   speed_tier: "fast" | "medium" | "slow" | null;
   cost_tier: "low" | "medium" | "high" | null;
+  structured_output_reliability?: number | null;
+  tool_calling_reliability?: number | null;
+  long_context_fidelity?: number | null;
+  document_understanding?: number | null;
+  spreadsheet_reasoning?: number | null;
+  code_generation?: number | null;
+  repo_refactor_ability?: number | null;
+  conversational_naturalness?: number | null;
+  determinism?: number | null;
+  throughput_suitability?: number | null;
   capability_verified_at: string | null;
   pricing_verified_at: string | null;
   verification_updated_at: string | null;
@@ -58,6 +68,16 @@ export type RegistryRoutingModel = Pick<
   | "reasoning_tier"
   | "speed_tier"
   | "cost_tier"
+  | "structured_output_reliability"
+  | "tool_calling_reliability"
+  | "long_context_fidelity"
+  | "document_understanding"
+  | "spreadsheet_reasoning"
+  | "code_generation"
+  | "repo_refactor_ability"
+  | "conversational_naturalness"
+  | "determinism"
+  | "throughput_suitability"
 >;
 
 const LITELLM_PRICING_URL =
