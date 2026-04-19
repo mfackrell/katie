@@ -32,6 +32,10 @@ import {
 import { injectRelevantContents, registerRepoBinding } from "@/lib/repo/content-injector";
 import { analyzeChunkedAttachments, shouldRunChunkedWorkflow } from "@/lib/providers/chunked-document-workflow";
 
+// This endpoint streams long-running responses (e.g., deep financial/workbook analysis).
+// Keep the function timeout above Vercel's default 300s ceiling to avoid truncating streamed replies.
+export const maxDuration = 800;
+
 const fileReferenceSchema = z.object({
   fileId: z.string().min(1),
   fileName: z.string().min(1),
