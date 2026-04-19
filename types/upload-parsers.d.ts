@@ -12,13 +12,6 @@ declare module "xlsx" {
   };
 }
 
-declare module "pdfjs-dist/legacy/build/pdf.mjs" {
-  export function getDocument(input: { data: ArrayBuffer; disableWorker: boolean }): {
-    promise: Promise<{
-      numPages: number;
-      getPage: (pageNumber: number) => Promise<{
-        getTextContent: () => Promise<{ items: Array<{ str?: string }> }>;
-      }>;
-    }>;
-  };
+declare module "pdf-parse" {
+  export default function pdfParse(input: Uint8Array): Promise<{ text?: string }>;
 }
