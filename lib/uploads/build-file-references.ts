@@ -176,6 +176,7 @@ export async function buildFileReferences(files: File[]): Promise<FileReference[
         fileName: file.name,
         mimeType,
         preview: buildParsedTextPreview(file.name, mimeType, parsed.text),
+        extractedText: parsed.text,
         attachmentKind: "text",
         providerRef
       } satisfies FileReference;
