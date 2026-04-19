@@ -38,14 +38,17 @@ const fileReferenceSchema = z.object({
   mimeType: z.string().min(1),
   preview: z.string().min(1).max(2200),
   extractedText: z.string().min(1).max(52000).optional(),
-  sourceFormat: z.enum(["text", "word", "excel", "pdf", "video"]).optional(),
+  sourceFormat: z.enum(["text", "word", "excel", "pdf", "video", "powerpoint", "email", "image", "html", "xml", "json", "unknown"]).optional(),
   attachmentKind: z.enum(["image", "video", "text", "file"]).optional(),
   providerRef: z
     .object({
       openaiFileId: z.string().min(1).optional(),
       googleFileUri: z.string().min(1).optional()
     })
-    .optional()
+    .optional(),
+  parseWarnings: z.array(z.string().min(1)).optional(),
+  ingestionQuality: z.enum(["high", "medium", "low", "failed"]).optional(),
+  structuredData: z.record(z.unknown()).optional()
 });
 
 const requestSchema = z.object({
