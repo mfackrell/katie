@@ -817,6 +817,8 @@ export async function chooseProvider(
       return {
         provider: selection.provider,
         modelId: selection.modelId,
+        authority: intentAuthority,
+        intentResolutionReason,
         fallbackChain,
         reasoning: selection.reasoning,
         routerModel: selection.routerModel,
@@ -858,6 +860,8 @@ export async function chooseProvider(
       return {
         provider: selection.provider,
         modelId: selection.modelId,
+        authority: intentAuthority,
+        intentResolutionReason,
         fallbackChain,
         reasoning: `${selection.reasoning} Policy guardrail did not enforce reroute.`,
         routerModel: selection.routerModel,
@@ -887,6 +891,8 @@ export async function chooseProvider(
     return {
       provider: evaluation.selected.provider,
       modelId: evaluation.selected.modelId,
+      authority: intentAuthority,
+      intentResolutionReason,
       fallbackChain,
       reasoning: `${selection.reasoning} Policy guardrail enforced hard constraint selection.`,
       routerModel: selection.routerModel,
