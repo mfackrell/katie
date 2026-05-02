@@ -31,7 +31,14 @@ import {
   selectGoogleModelForVideoRouting
 } from "@/lib/chat/video-routing";
 import { injectRelevantContents } from "@/lib/repo/content-injector";
-import { registerRepoBinding } from "@/lib/repo/repo-access";
+import {
+  getRepoFile,
+  getRepoFileRange,
+  getRepoVisibilityManifest,
+  listRepoTree,
+  registerRepoBinding,
+  searchRepo
+} from "@/lib/repo/repo-access";
 import { analyzeChunkedAttachments, shouldRunChunkedWorkflow } from "@/lib/providers/chunked-document-workflow";
 import {
   __resolveRepoSourceClassifierFailureForTests,
@@ -107,6 +114,41 @@ type ChatSessionContext = {
     fullName: string;
   } | null;
 };
+
+function shouldRunRepoAuditMode(message: string): boolean {
+  return /\b(audit|review|inspect|debug|explain)\b/i.test(message);
+}
+
+function deriveRepoSearchTerms(message: string): string[] {
+  const tokens = message
+    .toLowerCase()
+    .split(/[^a-z0-9_./-]+/g)
+    .filter((token) => token.length >= 3);
+  return Array.from(new Set(tokens)).slice(0, 8);
+}
+
+function buildRepoAuditContextBlock(params: {
+  manifest: Awaited<ReturnType<typeof getRepoVisibilityManifest>>;
+  filesInspected: string[];
+  searchTerms: string[];
+  fetchErrors: string[];
+  omitted: string[];
+  excerpts: string[];
+}): string {
+  const { manifest, filesInspected, searchTerms, fetchErrors, omitted, excerpts } = params;
+  return [
+    "REPO_AUDIT_CONTEXT_START",
+    `visibility_manifest: ${JSON.stringify(manifest)}`,
+    `files_inspected: ${JSON.stringify(filesInspected)}`,
+    `search_terms_used: ${JSON.stringify(searchTerms)}`,
+    `fetch_errors: ${JSON.stringify(fetchErrors)}`,
+    `omitted_files_or_limits: ${JSON.stringify(omitted)}`,
+    "selected_source_excerpts:",
+    ...excerpts,
+    "When repo audit context is present and active repo access is available, do not ask the user to paste files.",
+    "REPO_AUDIT_CONTEXT_END"
+  ].join("\n");
+}
 
 
 function buildGenerationParams({
@@ -837,6 +879,69 @@ export async function POST(request: NextRequest) {
         console.info(`[info] [Repo Injector] Injected ${injectedFileCount} files for requestId=${requestId}`);
       } catch (error) {
         console.error("[Chat API] Failed to inject repository source context", {
+          requestId,
+          repositoryFullName: activeRepoContext.repositoryFullName,
+          reason: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+    const shouldRunRepoAudit = shouldAttachSourceContext && shouldRunRepoAuditMode(message);
+    if (shouldRunRepoAudit && activeRepoContext && loadedRepoContext) {
+      try {
+        const visibilityManifest = await getRepoVisibilityManifest(activeRepoContext.id);
+        const repoTree = await listRepoTree(activeRepoContext.id);
+        const searchTerms = deriveRepoSearchTerms(message);
+        const fetchErrors: string[] = [];
+        const omitted: string[] = [];
+        const inspected = new Set<string>();
+        const excerpts: string[] = [];
+        const candidateFiles = repoTree.filter((node) => node.kind === "file").map((node) => node.path);
+        const prioritizedFiles = candidateFiles
+          .filter((path) => searchTerms.some((term) => path.toLowerCase().includes(term)))
+          .slice(0, 6);
+
+        for (const term of searchTerms.slice(0, 5)) {
+          const results = await searchRepo(activeRepoContext.id, term, { maxResults: 5, maxSnippetLines: 6 });
+          for (const result of results.slice(0, 2)) {
+            if (excerpts.length >= 12) break;
+            inspected.add(result.path);
+            try {
+              const range = await getRepoFileRange(activeRepoContext.id, result.path, result.lineStart, result.lineEnd + 8);
+              excerpts.push(`File: ${result.path}:${range.lineStart}-${range.lineEnd}\n${range.content}`);
+            } catch (error) {
+              fetchErrors.push(`${result.path}: ${error instanceof Error ? error.message : String(error)}`);
+            }
+          }
+        }
+
+        for (const path of prioritizedFiles) {
+          if (excerpts.length >= 12) break;
+          if (inspected.has(path)) continue;
+          inspected.add(path);
+          try {
+            const file = await getRepoFile(activeRepoContext.id, path);
+            excerpts.push(`File: ${file.path}:${file.lineStart}-${Math.min(file.lineEnd, 200)}\n${file.content.slice(0, 4000)}`);
+            if (file.truncated) omitted.push(`${path} truncated to repo file limits`);
+          } catch (error) {
+            fetchErrors.push(`${path}: ${error instanceof Error ? error.message : String(error)}`);
+          }
+        }
+
+        if (candidateFiles.length > inspected.size) {
+          omitted.push(`${candidateFiles.length - inspected.size} files omitted due to per-turn audit limits`);
+        }
+
+        const auditBlock = buildRepoAuditContextBlock({
+          manifest: visibilityManifest,
+          filesInspected: Array.from(inspected),
+          searchTerms,
+          fetchErrors,
+          omitted,
+          excerpts,
+        });
+        personaForGeneration = `${personaForGeneration}\n\n${auditBlock}`;
+      } catch (error) {
+        console.error("[Chat API] Repo audit mode failed", {
           requestId,
           repositoryFullName: activeRepoContext.repositoryFullName,
           reason: error instanceof Error ? error.message : String(error),
