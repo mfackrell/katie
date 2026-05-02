@@ -3,7 +3,8 @@ import { ChatGenerateParams, type ExtractedTextChunkReference } from "@/lib/prov
 const PREVIEW_TRUNCATION_NOTE = "[Preview-only attachment context. Full file body is intentionally excluded.]";
 const EXTRACTED_TEXT_NOTE = "[Full extracted document is available in ordered chunks.]";
 const PARTIAL_CHUNK_NOTE = "[Only a relevant subset of chunks was injected for this request.]";
-const VIDEO_METADATA_NOTE = "[Video metadata only. Transcript/frame extraction is not currently available.]";
+const VIDEO_PROVIDER_FILE_NOTE = "[Video provider file attached. This video was uploaded to Google/Gemini and is available to the model via fileData. Analyze the video content directly when answering the user's request.]";
+const VIDEO_METADATA_ONLY_NOTE = "[Video metadata only. No Google/Gemini file URI is available, so video content analysis cannot run for this attachment.]";
 const DEFAULT_MAX_CHUNKS_PER_ATTACHMENT = 6;
 
 function normalizeForDeduplication(text: string): string {
@@ -81,7 +82,7 @@ export function formatAttachmentContext(
         return [
           `### ATTACHED FILE: ${attachment.fileName}${metadataLine} ###`,
           mediaSummary,
-          VIDEO_METADATA_NOTE,
+          attachment.providerRef?.googleFileUri ? VIDEO_PROVIDER_FILE_NOTE : VIDEO_METADATA_ONLY_NOTE,
           attachment.preview,
           "### END OF FILE PREVIEW ###"
         ].join("\n");
