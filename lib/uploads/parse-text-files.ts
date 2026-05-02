@@ -8,7 +8,7 @@ import {
 } from "@/lib/uploads/file-type-helpers";
 
 type MammothModule = {
-  extractRawText(input: { arrayBuffer: ArrayBuffer }): Promise<{ value: string }>;
+  extractRawText(input: { buffer: Buffer }): Promise<{ value: string }>;
 };
 
 type XlsxWorkbook = {
@@ -170,8 +170,8 @@ export async function convertToPlainText(file: File): Promise<string> {
   if (fileType.sourceFormat === "word") {
     try {
       const mammoth = await DYNAMIC_IMPORTS.mammoth();
-      const buffer = await file.arrayBuffer();
-      const parsed = await mammoth.extractRawText({ arrayBuffer: buffer });
+      const buffer = Buffer.from(await file.arrayBuffer());
+      const parsed = await mammoth.extractRawText({ buffer });
       return sanitizeExtractedText(compactWhitespace(parsed.value || ""));
     } catch {
       if (isLegacyWordType(fileType) || getFileExtension(file.name) === ".doc") {
