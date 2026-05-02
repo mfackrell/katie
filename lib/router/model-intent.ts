@@ -717,6 +717,7 @@ export async function inferRequestIntent(
     routingSignals: {
       ...(options?.routingSignals ?? {}),
       activeRepoContextPresent,
+      repoReviewContextActive,
       containsCodePatchOrDiff: patchOrDiffSignal,
       containsRepoReviewLanguage: repoReviewSignal,
       hasDirectWebSearchHint: hasDirectWebSearchHint(prompt),
@@ -813,6 +814,7 @@ export async function inferRequestClassification(
     routingSignals: {
       ...(options?.routingSignals ?? {}),
       activeRepoContextPresent,
+      repoReviewContextActive,
       containsCodePatchOrDiff: patchOrDiffSignal,
       containsRepoReviewLanguage: repoReviewSignal,
       hasDirectWebSearchHint: hasDirectWebSearchHint(prompt),
