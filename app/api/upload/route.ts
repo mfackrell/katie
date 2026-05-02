@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { buildFileReferences } from "@/lib/uploads/build-file-references";
 
+export const runtime = "nodejs";
+
 export async function POST(request: NextRequest) {
   try {
     const contentType = request.headers.get("content-type") ?? "";
