@@ -1,3 +1,5 @@
+import { Octokit } from "@octokit/rest";
+
 export type RepoFileManifest = {
   path: string;
   size?: number;
@@ -66,8 +68,6 @@ const TEXT_FILE_PATTERN = /\.(ts|tsx|js|jsx|mjs|cjs|json|md|mdx|yml|yaml|txt|py|
 const cache = new Map<string, CachedFile>();
 const repoBindings = new Map<string, RepoBinding>();
 function createOctokit() {
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
-  const { Octokit } = require("@octokit/rest");
   return new Octokit({ auth: process.env.GITHUB_TOKEN ?? process.env.GITHUB_PAT ?? process.env.GH_TOKEN });
 }
 

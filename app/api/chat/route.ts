@@ -21,7 +21,7 @@ import {
   parseIntentSessionState
 } from "@/lib/router/intent-context";
 import { LlmProvider, ProviderResponse } from "@/lib/providers/types";
-import type { ResolvedRoutingIntent, SelectionExplainer } from "@/lib/router/master-router";
+import type { SelectionExplainer } from "@/lib/router/master-router";
 import { DEFAULT_REASONING_CATEGORIES, ReasoningStateAccumulator } from "@/lib/chat/reasoning-stream";
 import { isLikelyProviderRefusal, runWithRefusalFallback, shouldRetryOnProviderRefusal } from "@/lib/router/refusal-detection";
 import {
@@ -30,7 +30,8 @@ import {
   resolveVideoRoutingPolicy,
   selectGoogleModelForVideoRouting
 } from "@/lib/chat/video-routing";
-import { injectRelevantContents, registerRepoBinding } from "@/lib/repo/content-injector";
+import { injectRelevantContents } from "@/lib/repo/content-injector";
+import { registerRepoBinding } from "@/lib/repo/repo-access";
 import { analyzeChunkedAttachments, shouldRunChunkedWorkflow } from "@/lib/providers/chunked-document-workflow";
 import {
   __resolveRepoSourceClassifierFailureForTests,
