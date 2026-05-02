@@ -119,6 +119,9 @@ function shouldRunRepoAuditMode(message: string): boolean {
   return /\b(audit|review|inspect|debug|explain)\b/i.test(message);
 }
 
+const CODE_PATCH_OR_DIFF_ROUTING_REGEX = /\b(diff|patch|@@|\+\+\+\s|---\s|pull request|\bpr\b|\bcommit\b)\b/i;
+const REPO_REVIEW_LANGUAGE_ROUTING_REGEX = /\b(repo|repository|code|file|files|source|routing|architecture|audit|review|debug|test|tests|deployment|kubernetes|docker|ci\/?cd)\b/i;
+
 function deriveRepoSearchTerms(message: string): string[] {
   const tokens = message
     .toLowerCase()
@@ -712,7 +715,10 @@ export async function POST(request: NextRequest) {
       const hasImages = Array.isArray(images) && images.length > 0;
       const hasImageAttachments = attachments.some((attachment) => attachment.mimeType.startsWith("image/"));
       const hasVisualInput = hasImages || hasImageAttachments;
-      const explicitIntent: RequestIntent | undefined = hasDirectWebSearchHint(message) ? "web-search" : undefined;
+      const hasCodePatchOrDiff = CODE_PATCH_OR_DIFF_ROUTING_REGEX.test(message);
+      const hasRepoReviewLanguage = REPO_REVIEW_LANGUAGE_ROUTING_REGEX.test(message);
+      const repoReviewContextActive = Boolean(activeRepoContext) && (hasCodePatchOrDiff || hasRepoReviewLanguage);
+      const explicitIntent: RequestIntent | undefined = hasDirectWebSearchHint(message) && !repoReviewContextActive ? "web-search" : undefined;
       const assistantReflectionHint =
         /\b(what do you think about your last answer|critique (?:the )?assistant(?:'s)? previous response|review your system message|evaluate your own output|improve (?:the )?last reply|assess the quality of (?:that|your) response|your last answer|your previous response|your own output|your system message|reflect on your answer|self-critique|critique your response)\b/i.test(
           message
@@ -729,7 +735,7 @@ export async function POST(request: NextRequest) {
 
       if (explicitIntent) {
         requestIntent = explicitIntent;
-        routingHints.push({ hintIntent: explicitIntent, hintSource: "explicit-command", hintConfidence: 0.95, note: "direct web-search detection" });
+        routingHints.push({ hintIntent: explicitIntent, hintSource: "explicit-command", hintConfidence: repoReviewContextActive ? 0.55 : 0.95, note: repoReviewContextActive ? "direct web-search detection (weak due to active repo review context)" : "direct web-search detection" });
       }
       if (assistantReflectionHint) {
         requestIntent = requestIntent ?? "assistant-reflection";
@@ -798,6 +804,9 @@ export async function POST(request: NextRequest) {
       intentAuthority,
       intentResolutionReason,
       hasVideoInput,
+      activeRepoContextPresent: activeRepoContext !== null,
+      containsCodePatchOrDiff: CODE_PATCH_OR_DIFF_ROUTING_REGEX.test(message),
+      containsRepoReviewLanguage: REPO_REVIEW_LANGUAGE_ROUTING_REGEX.test(message),
     };
 
     if (resolvedRequestIntent && isSubstantiveIntent(resolvedRequestIntent)) {
