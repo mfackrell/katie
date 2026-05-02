@@ -32,6 +32,10 @@ import {
 } from "@/lib/chat/video-routing";
 import { injectRelevantContents, registerRepoBinding } from "@/lib/repo/content-injector";
 import { analyzeChunkedAttachments, shouldRunChunkedWorkflow } from "@/lib/providers/chunked-document-workflow";
+import {
+  __resolveRepoSourceClassifierFailureForTests,
+  type RepoSourceClassifierDecision
+} from "@/lib/chat/repo-source-classifier-fallback";
 
 // This endpoint streams long-running responses (e.g., deep financial/workbook analysis).
 // Keep the function timeout above Vercel's default 300s ceiling to avoid truncating streamed replies.
@@ -103,11 +107,6 @@ type ChatSessionContext = {
   } | null;
 };
 
-type RepoSourceClassifierDecision = {
-  attach_repo_source: boolean;
-  reason: string;
-  confidence: number | null;
-};
 
 function buildGenerationParams({
   name,
@@ -376,13 +375,6 @@ function parseRepoSourceClassifierResponse(raw: string): RepoSourceClassifierDec
 }
 
 
-export function __resolveRepoSourceClassifierFailureForTests(activeRepo: boolean, errorMessage?: string): RepoSourceClassifierDecision {
-  const fallOpenEnabled = process.env.REPO_CLASSIFIER_FALL_OPEN !== "false";
-  if (activeRepo && fallOpenEnabled) {
-    return { attach_repo_source: true, reason: "classifier_unavailable_fall_open", confidence: null };
-  }
-  return { attach_repo_source: false, reason: errorMessage ?? "Classifier returned invalid JSON output and no active repo", confidence: null };
-}
 
 async function classifyRepoSourceAttachmentNeed({
   provider,
