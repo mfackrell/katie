@@ -29,19 +29,3 @@ jobs:
 
       - name: Run database migrations
         run: node scripts/run-migrations.mjs
-
-  deploy_vercel:
-    name: Deploy production app
-    runs-on: ubuntu-latest
-    needs: migrate
-    environment: production
-    steps:
-      - name: Trigger Vercel deployment
-        env:
-          VERCEL_DEPLOY_HOOK_URL: ${{ secrets.VERCEL_DEPLOY_HOOK_URL }}
-        run: |
-          if [ -z "$VERCEL_DEPLOY_HOOK_URL" ]; then
-            echo "VERCEL_DEPLOY_HOOK_URL is required." >&2
-            exit 1
-          fi
-          curl -fsS -X POST "$VERCEL_DEPLOY_HOOK_URL"
