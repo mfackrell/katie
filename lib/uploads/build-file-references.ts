@@ -19,6 +19,12 @@ const ALLOWED_VIDEO_MIME_TYPES = new Set([
 ]);
 
 const ALLOWED_VIDEO_EXTENSIONS = new Set([".mp4", ".mov", ".webm", ".m4v"]);
+const TEXT_EXTENSION_FALLBACK_MIME_TYPES = new Map<string, string>([
+  [".md", "text/markdown"],
+  [".txt", "text/plain"],
+  [".csv", "text/csv"],
+  [".json", "application/json"]
+]);
 
 function getExtension(name: string): string {
   const lastDotIndex = name.lastIndexOf(".");
@@ -153,7 +159,8 @@ export async function buildFileReferences(files: File[]): Promise<FileReference[
 
   return Promise.all(
     files.map(async (file) => {
-      const mimeType = file.type || "text/plain";
+      const extension = getExtension(file.name);
+      const mimeType = file.type || TEXT_EXTENSION_FALLBACK_MIME_TYPES.get(extension) || "text/plain";
       const providerRef = await buildProviderRef(file);
 
       if (isAllowedVideoFileType(file)) {
@@ -173,7 +180,14 @@ export async function buildFileReferences(files: File[]): Promise<FileReference[
         throw new Error(`Failed to parse file "${file.name}".`);
       }
 
+      if (!parsed.text.trim()) {
+        throw new Error(`Failed to ingest readable text from "${file.name}". Parsed text was empty.`);
+      }
+
       const extractedChunks = chunkExtractedText(parsed.text);
+      if (extractedChunks.length === 0) {
+        throw new Error(`Failed to ingest readable text from "${file.name}". Parsed text was empty.`);
+      }
 
       return {
         fileId: crypto.randomUUID(),

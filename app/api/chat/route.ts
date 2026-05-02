@@ -467,6 +467,18 @@ export async function POST(request: NextRequest) {
     } = payload;
     const repoInjectionEnabled = repoInjectionEnabledFromPayload !== false;
     const attachments = fileReferences ?? [];
+    console.log("[Chat API] received attachments", { count: attachments.length });
+    attachments.forEach((attachment) => {
+      console.log("[Chat API] received attachment", {
+        fileName: attachment.fileName,
+        attachmentKind: attachment.attachmentKind,
+        mimeType: attachment.mimeType,
+        previewLength: attachment.preview.length,
+        extractedTextLength: attachment.extractedText?.length ?? 0,
+        extractedChunksLength: attachment.extractedChunks?.length ?? 0,
+        extractionCoverage: attachment.extractionCoverage ?? null,
+      });
+    });
     let messageForGeneration = message;
     const hasVideoInput = attachments.some(isVideoAttachment);
     const encoder = new TextEncoder();

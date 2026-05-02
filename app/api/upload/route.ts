@@ -19,6 +19,18 @@ export async function POST(request: NextRequest) {
     }
 
     const fileReferences = await buildFileReferences(files);
+    console.log("[Upload API] built file references", { count: fileReferences.length });
+    fileReferences.forEach((fileReference) => {
+      console.log("[Upload API] built file reference", {
+        fileName: fileReference.fileName,
+        mimeType: fileReference.mimeType,
+        attachmentKind: fileReference.attachmentKind,
+        previewLength: fileReference.preview.length,
+        extractedTextLength: fileReference.extractedText?.length ?? 0,
+        extractedChunksLength: fileReference.extractedChunks?.length ?? 0,
+        extractionCoverage: fileReference.extractionCoverage ?? null,
+      });
+    });
 
     return NextResponse.json({ fileReferences }, { status: 200 });
   } catch (error: unknown) {
