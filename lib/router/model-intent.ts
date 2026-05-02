@@ -443,6 +443,11 @@ type ControlPlaneSelectionOptions = {
   decisionProviders?: DecisionProviderCandidate[];
   registryLookup?: RegistryLookup;
   timeoutMs?: number;
+  hints?: RoutingHint[];
+  routingHints?: RoutingHint[];
+  attachmentSummaryForClassifier?: string;
+  activeRepoContextAttached?: boolean;
+  routingSignals?: Record<string, boolean> | Record<string, unknown>;
 };
 
 const CONTROL_PLANE_VERIFIED_MODEL_IDS: Record<ProviderName, string[]> = {
@@ -744,14 +749,14 @@ export async function inferRequestIntent(
 
 export type RoutingHint = {
   hintIntent?: RequestIntent;
-  hintSource?: "heuristic" | "short-term-memory" | "explicit-command";
-  hintConfidence?: number;
+  hintSource: "explicit-command" | "heuristic" | "short-term-memory" | "fallback" | string;
+  hintConfidence?: number | null;
   note?: string;
 };
 export async function inferRequestClassification(
   prompt: string,
   input: boolean | { hasImages: boolean; hasVideoInput?: boolean },
-  options?: ControlPlaneSelectionOptions & { hints?: RoutingHint[] }
+  options?: ControlPlaneSelectionOptions
 ): Promise<{ intent: RequestIntent; preferredProvider: ProviderName | null }> {
   const hasImages = typeof input === "boolean" ? input : input.hasImages;
   const hasVideoInput = typeof input === "boolean" ? false : Boolean(input.hasVideoInput);
