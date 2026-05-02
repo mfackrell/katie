@@ -24,9 +24,10 @@ export async function analyzeChunkedAttachments(params: {
   persona: string;
   summary: string;
   userMessage: string;
-  attachments: NonNullable<ChatGenerateParams["attachments"]>;
+  attachments: ChatGenerateParams["attachments"];
 }): Promise<string> {
-  const { provider, modelId, name, persona, summary, userMessage, attachments } = params;
+  const { provider, modelId, name, persona, summary, userMessage } = params;
+  const attachments = params.attachments ?? [];
 
   const notes: string[] = [];
   for (const attachment of attachments) {
