@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseAdminClient } from "@/lib/data/supabase/admin";
-import { injectRelevantContents, registerRepoBinding } from "@/lib/repo/content-injector";
+import { injectRelevantContents } from "@/lib/repo/content-injector";
+import { registerRepoBinding } from "@/lib/repo/repo-access";
 
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);

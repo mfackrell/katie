@@ -1,7 +1,6 @@
 import {
   getRepoFile,
   listRepoFiles,
-  registerRepoBinding,
 } from "./repo-access";
 
 type Chunk = {
