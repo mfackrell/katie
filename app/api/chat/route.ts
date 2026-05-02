@@ -710,18 +710,15 @@ export async function POST(request: NextRequest) {
       }
 
       resolvedRequestIntent = requestIntent;
-      const resolvedRoutingIntent: ResolvedRoutingIntent | undefined = undefined;
-
       const routingContext = `\n  Persona: ${personaWithRepoContext}\n  Rolling Summary: ${summary}\n  Recent History: ${JSON.stringify(history.slice(-3))}\n  Has Attached Images: ${hasVisualInput}\n  Active Repo: ${sessionContext.activeRepo ? `${sessionContext.activeRepo.fullName} (${sessionContext.activeRepo.id})` : "none"}\n`;
       console.log(
-        `[Chat API] Routing intent diagnostic callerRequestIntent=${explicitIntent ?? "none"} heuristicIntent=${requestIntent ?? "none"} effectiveIntentPassedToRouter=${resolvedRoutingIntent?.intent ?? "none"} intentSource=${resolvedRoutingIntent?.intentSource ?? "router-fallback"}`
+        `[Chat API] Routing intent diagnostic callerRequestIntent=${explicitIntent ?? "none"} heuristicIntent=${requestIntent ?? "none"} effectiveIntentPassedToRouter=none intentSource=router-fallback`
       );
       const routingDecision = await chooseProvider(message, routingContext, providers, {
         hasImages: hasVisualInput,
         hasVideoInput,
         actorId,
         actorRoutingProfile,
-        resolvedIntent: resolvedRoutingIntent,
         routingHints,
         routingTraceEnabled,
         routingRequestId: request.headers.get("x-request-id") ?? undefined
