@@ -23,3 +23,9 @@ test("URL-only summary request can route as web-search", async () => {
   const result = await inferRequestClassification("https://example.com summarize this", { hasImages: false });
   assert.equal(result.intent, "web-search");
 });
+
+test("video/url/model/log/diff hints alone should not force web-search in active repo code review context", async () => {
+  const prompt = `watch this mp4 route bug\nmodel: gpt-5\nlog: stacktrace...\n--- a/a.ts\n+++ b/a.ts`;
+  const result = await inferRequestClassification(prompt, { hasImages: false }, { activeRepoContextAttached: true });
+  assert.notEqual(result.intent, "web-search");
+});

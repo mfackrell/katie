@@ -672,43 +672,17 @@ export async function inferRequestIntent(
     console.info(`[Intent Hints] ${hintText}`);
   }
 
-  // 0. Hard rule: obvious links and video references should always route through web search.
-  if (hasDirectWebSearchHint(prompt) && !repoReviewContextActive) {
-    console.info("[Intent Source] text heuristic -> web-search");
-    return "web-search";
-  }
-  if (hasAssistantReflectionHint(prompt)) {
-    console.info("[Intent Source] text heuristic -> assistant-reflection");
-    return "assistant-reflection";
-  }
-  if (hasSocialEmotionalHint(prompt)) {
-    console.info("[Intent Source] social-emotional selected via heuristic");
-    return "social-emotional";
-  }
-  if (/\b(generate|create|make)\b.*\b(image|photo|illustration|art)\b|\b(hero image|digital art)\b/i.test(normalizedPrompt)) {
-    return "image-generation";
-  }
-  if (/\b(rewrite|rephrase|edit|polish|improve tone)\b/i.test(normalizedPrompt)) {
-    return "rewrite";
-  }
-  if (/\b(sentiment|emotion|emotional|tone analysis|feelings)\b/i.test(normalizedPrompt)) {
-    return "emotional-analysis";
-  }
-  if (/\b(news|headlines|current events|what happened today|today in)\b/i.test(normalizedPrompt)) {
-    return "web-search";
-  }
-  if (/\b(debug|bug|fix|error|exception|traceback|failing)\b/i.test(normalizedPrompt)) {
-    return "technical-debugging";
-  }
-  if (/\b(review (?:the )?(?:repo|file|code)|check file|inspect code|see the repo)\b/i.test(normalizedPrompt)) {
-    return "code-review";
-  }
-  if (/\b(architecture|system design|kubernetes|deployment|review this repo|repo review)\b/i.test(normalizedPrompt)) {
-    return "architecture-review";
-  }
-  if (hasImplementationCue(normalizedPrompt)) {
-    return sanitizeCodeGenerationIntent(prompt, "code-generation", "heuristic") ?? "general-text";
-  }
+  let bestHeuristicHint: RequestIntent | null = null;
+  if (hasAssistantReflectionHint(prompt)) bestHeuristicHint = "assistant-reflection";
+  else if (hasSocialEmotionalHint(prompt)) bestHeuristicHint = "social-emotional";
+  else if (/\b(generate|create|make)\b.*\b(image|photo|illustration|art)\b|\b(hero image|digital art)\b/i.test(normalizedPrompt)) bestHeuristicHint = "image-generation";
+  else if (/\b(rewrite|rephrase|edit|polish|improve tone)\b/i.test(normalizedPrompt)) bestHeuristicHint = "rewrite";
+  else if (/\b(sentiment|emotion|emotional|tone analysis|feelings)\b/i.test(normalizedPrompt)) bestHeuristicHint = "emotional-analysis";
+  else if (/\b(news|headlines|current events|what happened today|today in)\b/i.test(normalizedPrompt)) bestHeuristicHint = "web-search";
+  else if (/\b(debug|bug|fix|error|exception|traceback|failing)\b/i.test(normalizedPrompt)) bestHeuristicHint = "technical-debugging";
+  else if (/\b(review (?:the )?(?:repo|file|code)|check file|inspect code|see the repo)\b/i.test(normalizedPrompt)) bestHeuristicHint = "code-review";
+  else if (/\b(architecture|system design|kubernetes|deployment|review this repo|repo review)\b/i.test(normalizedPrompt)) bestHeuristicHint = "architecture-review";
+  else if (hasImplementationCue(normalizedPrompt)) bestHeuristicHint = sanitizeCodeGenerationIntent(prompt, "code-generation", "heuristic") ?? "general-text";
   if (isLikelySafetySensitiveVisionPrompt(prompt, hasImages)) {
     console.info("[Intent Source] text heuristic -> safety-sensitive-vision");
     return "safety-sensitive-vision";
@@ -744,7 +718,9 @@ export async function inferRequestIntent(
       ...(options?.routingSignals ?? {}),
       activeRepoContextPresent,
       containsCodePatchOrDiff: patchOrDiffSignal,
-      containsRepoReviewLanguage: repoReviewSignal
+      containsRepoReviewLanguage: repoReviewSignal,
+      hasDirectWebSearchHint: hasDirectWebSearchHint(prompt),
+      heuristicHintIntent: bestHeuristicHint
     }
   });
   const classifiedIntent = classifiedOutput.intent;
@@ -770,6 +746,7 @@ export async function inferRequestIntent(
     console.info("[Intent Source] social-emotional selected via fallback heuristic");
     return "social-emotional";
   }
+  if (bestHeuristicHint) return bestHeuristicHint;
 
   console.info("[Intent Source] fallback path -> general-text");
   return "general-text";
@@ -799,25 +776,17 @@ export async function inferRequestClassification(
     console.info(`[Intent Hints] ${hintText}`);
   }
 
-  if (hasDirectWebSearchHint(prompt) && !repoReviewContextActive) return { intent: "web-search", preferredProvider: null };
-  if (hasAssistantReflectionHint(prompt)) return { intent: "assistant-reflection", preferredProvider: null };
-  if (hasSocialEmotionalHint(prompt)) {
-    console.info("[Intent Source] social-emotional selected via heuristic");
-    return { intent: "social-emotional", preferredProvider: null };
-  }
-  if (/\b(generate|create|make)\b.*\b(image|photo|illustration|art)\b|\b(hero image|digital art)\b/i.test(normalizedPrompt)) return { intent: "image-generation", preferredProvider: null };
-  if (/\b(rewrite|rephrase|edit|polish|improve tone)\b/i.test(normalizedPrompt)) return { intent: "rewrite", preferredProvider: null };
-  if (/\b(sentiment|emotion|emotional|tone analysis|feelings)\b/i.test(normalizedPrompt)) return { intent: "emotional-analysis", preferredProvider: null };
-  if (/\b(news|headlines|current events|what happened today|today in)\b/i.test(normalizedPrompt)) return { intent: "web-search", preferredProvider: null };
-  if (/\b(debug|bug|fix|error|exception|traceback|failing)\b/i.test(normalizedPrompt)) return { intent: "technical-debugging", preferredProvider: null };
-  if (/\b(review (?:the )?(?:repo|file|code)|check file|inspect code|see the repo)\b/i.test(normalizedPrompt)) {
-    return { intent: "code-review", preferredProvider: null };
-  }
-  if (/\b(architecture|system design|kubernetes|deployment|review this repo|repo review)\b/i.test(normalizedPrompt)) return { intent: "architecture-review", preferredProvider: null };
-  if (hasImplementationCue(normalizedPrompt)) {
-    const sanitized = sanitizeCodeGenerationIntent(prompt, "code-generation", "heuristic") ?? "general-text";
-    return { intent: sanitized, preferredProvider: null };
-  }
+  let bestHeuristicHint: RequestIntent | null = null;
+  if (hasAssistantReflectionHint(prompt)) bestHeuristicHint = "assistant-reflection";
+  else if (hasSocialEmotionalHint(prompt)) bestHeuristicHint = "social-emotional";
+  else if (/\b(generate|create|make)\b.*\b(image|photo|illustration|art)\b|\b(hero image|digital art)\b/i.test(normalizedPrompt)) bestHeuristicHint = "image-generation";
+  else if (/\b(rewrite|rephrase|edit|polish|improve tone)\b/i.test(normalizedPrompt)) bestHeuristicHint = "rewrite";
+  else if (/\b(sentiment|emotion|emotional|tone analysis|feelings)\b/i.test(normalizedPrompt)) bestHeuristicHint = "emotional-analysis";
+  else if (/\b(news|headlines|current events|what happened today|today in)\b/i.test(normalizedPrompt)) bestHeuristicHint = "web-search";
+  else if (/\b(debug|bug|fix|error|exception|traceback|failing)\b/i.test(normalizedPrompt)) bestHeuristicHint = "technical-debugging";
+  else if (/\b(review (?:the )?(?:repo|file|code)|check file|inspect code|see the repo)\b/i.test(normalizedPrompt)) bestHeuristicHint = "code-review";
+  else if (/\b(architecture|system design|kubernetes|deployment|review this repo|repo review)\b/i.test(normalizedPrompt)) bestHeuristicHint = "architecture-review";
+  else if (hasImplementationCue(normalizedPrompt)) bestHeuristicHint = sanitizeCodeGenerationIntent(prompt, "code-generation", "heuristic") ?? "general-text";
   if (isLikelySafetySensitiveVisionPrompt(prompt, hasImages)) return { intent: "safety-sensitive-vision", preferredProvider: null };
   if (hasImages && /\b(chart|trend|forecast|project|estimate)\b/i.test(normalizedPrompt)) return { intent: "multimodal-reasoning", preferredProvider: null };
   if (hasVideoInput && /\b(chart|trend|forecast|project|estimate|timeline|sequence)\b/i.test(normalizedPrompt)) return { intent: "multimodal-reasoning", preferredProvider: null };
@@ -845,7 +814,9 @@ export async function inferRequestClassification(
       ...(options?.routingSignals ?? {}),
       activeRepoContextPresent,
       containsCodePatchOrDiff: patchOrDiffSignal,
-      containsRepoReviewLanguage: repoReviewSignal
+      containsRepoReviewLanguage: repoReviewSignal,
+      hasDirectWebSearchHint: hasDirectWebSearchHint(prompt),
+      heuristicHintIntent: bestHeuristicHint
     }
   });
   const sanitizedClassifiedIntent = sanitizeCodeGenerationIntent(prompt, classifiedOutput.intent, "control-plane");
@@ -862,6 +833,7 @@ export async function inferRequestClassification(
     console.info("[Intent Source] social-emotional selected via fallback heuristic");
     return { intent: "social-emotional", preferredProvider: classifiedOutput.preferred_provider };
   }
+  if (bestHeuristicHint) return { intent: bestHeuristicHint, preferredProvider: classifiedOutput.preferred_provider };
   return { intent: "general-text", preferredProvider: classifiedOutput.preferred_provider };
 }
 
