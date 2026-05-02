@@ -519,6 +519,15 @@ export function ChatPanel({
           ? await uploadFiles([...filesToUpload, ...videosToUpload])
           : [];
       const refsToSend = [...priorReferences, ...uploadedReferences];
+      console.log("[ChatPanel] sending file references", {
+        count: refsToSend.length,
+        fileReferences: refsToSend.map((reference) => ({
+          fileName: reference.fileName,
+          attachmentKind: reference.attachmentKind,
+          extractedTextLength: reference.extractedText?.length ?? 0,
+          extractedChunksLength: reference.extractedChunks?.length ?? 0,
+        })),
+      });
 
       const abortController = new AbortController();
       abortControllerRef.current = abortController;
