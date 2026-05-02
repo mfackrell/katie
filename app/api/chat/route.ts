@@ -116,7 +116,16 @@ type ChatSessionContext = {
 };
 
 function shouldRunRepoAuditMode(message: string): boolean {
-  return /\b(audit|review|inspect|debug|explain)\b/i.test(message);
+  const normalized = message.toLowerCase();
+  return [
+    /\brepo\s+visibility\b/,
+    /\bwhat\s+files\s+can\s+you\s+see\b/,
+    /\b(can|do)\s+you\s+access\s+(the\s+)?repo\b/,
+    /\bwhat\s+parts\s+of\s+(the\s+)?repo\s+are\s+visible\b/,
+    /\bfull\s+repo\s+review\b/,
+    /\b(repo|repository)\s+(audit|review|inspect|debug|explain)\b/,
+    /\b(architecture|design|functionality)\s+audit\b/,
+  ].some((pattern) => pattern.test(normalized));
 }
 
 function deriveRepoSearchTerms(message: string): string[] {
@@ -128,24 +137,48 @@ function deriveRepoSearchTerms(message: string): string[] {
 }
 
 function buildRepoAuditContextBlock(params: {
+  activeRepoFullName: string;
+  defaultBranch: string;
   manifest: Awaited<ReturnType<typeof getRepoVisibilityManifest>>;
+  repoTreeSummary: string;
+  totalFilesKnown: number;
+  accessibleTextFiles: number | null;
   filesInspected: string[];
   searchTerms: string[];
   fetchErrors: string[];
   omitted: string[];
   excerpts: string[];
 }): string {
-  const { manifest, filesInspected, searchTerms, fetchErrors, omitted, excerpts } = params;
+  const {
+    activeRepoFullName,
+    defaultBranch,
+    manifest,
+    repoTreeSummary,
+    totalFilesKnown,
+    accessibleTextFiles,
+    filesInspected,
+    searchTerms,
+    fetchErrors,
+    omitted,
+    excerpts
+  } = params;
   return [
     "REPO_AUDIT_CONTEXT_START",
+    `active_repo_full_name: ${activeRepoFullName}`,
+    `default_branch: ${defaultBranch}`,
     `visibility_manifest: ${JSON.stringify(manifest)}`,
+    `total_files_known: ${totalFilesKnown}`,
+    `accessible_text_files: ${accessibleTextFiles ?? "unknown"}`,
+    `repo_tree_summary: ${repoTreeSummary}`,
     `files_inspected: ${JSON.stringify(filesInspected)}`,
     `search_terms_used: ${JSON.stringify(searchTerms)}`,
     `fetch_errors: ${JSON.stringify(fetchErrors)}`,
     `omitted_files_or_limits: ${JSON.stringify(omitted)}`,
+    `visibility_summary: inspected_files=${filesInspected.length}; omitted_or_limited=${omitted.length}; confidence=${filesInspected.length > 0 ? "medium" : "low"}`,
     "selected_source_excerpts:",
     ...excerpts,
-    "When repo audit context is present and active repo access is available, do not ask the user to paste files.",
+    "When REPO_AUDIT_CONTEXT is present, do not ask the user to paste repo files. Answer from the inspected repo context. If visibility is partial, state what was inspected and what was omitted.",
+    "Do not claim full repository visibility unless the inspected files and tree coverage support that claim.",
     "REPO_AUDIT_CONTEXT_END"
   ].join("\n");
 }
@@ -588,8 +621,10 @@ export async function POST(request: NextRequest) {
     const repoContextLine = activeRepoContext
       ? `Attached repository: ${activeRepoContext.repositoryFullName} (repo_id: ${activeRepoContext.id}).`
       : "";
+    const repoAuditBehaviorInstruction =
+      "When REPO_AUDIT_CONTEXT is present, do not ask the user to paste repo files. Answer from the inspected repo context. If visibility is partial, state what was inspected and what was omitted.";
     const personaWithRepoContext = repoContextLine
-      ? `${persona}\n\n${repoContextLine}\nUse this repository context when answering questions about code.`
+      ? `${persona}\n\n${repoContextLine}\nUse this repository context when answering questions about code.\n${repoAuditBehaviorInstruction}`
       : persona;
 
     let repoGenerationContextLine = "";
@@ -885,9 +920,14 @@ export async function POST(request: NextRequest) {
         });
       }
     }
-    const shouldRunRepoAudit = shouldAttachSourceContext && shouldRunRepoAuditMode(message);
-    if (shouldRunRepoAudit && activeRepoContext && loadedRepoContext) {
+    const shouldRunRepoAudit = repoInjectionEnabled && activeRepoContext !== null && shouldRunRepoAuditMode(message);
+    if (shouldRunRepoAudit && activeRepoContext) {
       try {
+        registerRepoBinding(
+          activeRepoContext.id,
+          activeRepoContext.repositoryFullName,
+          loadedRepoContext?.defaultBranch || "main",
+        );
         const visibilityManifest = await getRepoVisibilityManifest(activeRepoContext.id);
         const repoTree = await listRepoTree(activeRepoContext.id);
         const searchTerms = deriveRepoSearchTerms(message);
@@ -896,11 +936,23 @@ export async function POST(request: NextRequest) {
         const inspected = new Set<string>();
         const excerpts: string[] = [];
         const candidateFiles = repoTree.filter((node) => node.kind === "file").map((node) => node.path);
+        const topLevelFolders = Array.from(
+          new Set(
+            candidateFiles
+              .map((path) => path.split("/")[0])
+              .filter((segment) => segment && segment !== ".")
+          )
+        ).slice(0, 12);
+        const repoTreeSummary = `files=${candidateFiles.length}; top_level=${topLevelFolders.join(", ") || "none"}`;
+        const derivedSearchTerms =
+          searchTerms.length > 0
+            ? searchTerms
+            : ["readme", "src", "lib", "app", "test", "docs", "config"];
         const prioritizedFiles = candidateFiles
-          .filter((path) => searchTerms.some((term) => path.toLowerCase().includes(term)))
+          .filter((path) => derivedSearchTerms.some((term) => path.toLowerCase().includes(term)))
           .slice(0, 6);
 
-        for (const term of searchTerms.slice(0, 5)) {
+        for (const term of derivedSearchTerms.slice(0, 5)) {
           const results = await searchRepo(activeRepoContext.id, term, { maxResults: 5, maxSnippetLines: 6 });
           for (const result of results.slice(0, 2)) {
             if (excerpts.length >= 12) break;
@@ -932,9 +984,14 @@ export async function POST(request: NextRequest) {
         }
 
         const auditBlock = buildRepoAuditContextBlock({
+          activeRepoFullName: activeRepoContext.repositoryFullName,
+          defaultBranch: loadedRepoContext?.defaultBranch || "main",
           manifest: visibilityManifest,
+          repoTreeSummary,
+          totalFilesKnown: candidateFiles.length,
+          accessibleTextFiles: typeof visibilityManifest.accessibleTextFiles === "number" ? visibilityManifest.accessibleTextFiles : null,
           filesInspected: Array.from(inspected),
-          searchTerms,
+          searchTerms: derivedSearchTerms,
           fetchErrors,
           omitted,
           excerpts,
