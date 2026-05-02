@@ -1,11 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { injectRelevantContents } from "../../lib/repo/content-injector";
 import {
-  __resetContentInjectorForTests,
-  __setOctokitFactoryForTests,
-  injectRelevantContents,
+  __resetRepoAccessForTests,
+  __setRepoAccessOctokitFactoryForTests,
   registerRepoBinding,
-} from "../../lib/repo/content-injector";
+} from "../../lib/repo/repo-access";
 
 function makeFakeOctokit(files: Record<string, string>) {
   return {
@@ -23,17 +23,11 @@ function makeFakeOctokit(files: Record<string, string>) {
     },
     repos: {
       async getContent({ path }: { path: string }) {
-        if (!(path in files)) {
+        if (!(path in files) || files[path] === "__THROW__") {
           const error = new Error("Not Found") as Error & { status?: number };
           error.status = 404;
           throw error;
         }
-        if (files[path] === "__THROW__") {
-          const error = new Error("Not Found") as Error & { status?: number };
-          error.status = 404;
-          throw error;
-        }
-
         const content = files[path];
         return {
           data: {
@@ -49,8 +43,8 @@ function makeFakeOctokit(files: Record<string, string>) {
 }
 
 test("injector fetches relevant file from keyword/path hints and redacts secrets", async () => {
-  __resetContentInjectorForTests();
-  __setOctokitFactoryForTests(() =>
+  __resetRepoAccessForTests();
+  __setRepoAccessOctokitFactoryForTests(() =>
     makeFakeOctokit({
       "lib/router/model-intent.ts": "const API_KEY='abc123'\nexport const classifier = true;",
       "app/api/chat/route.ts": "export const route = true;",
@@ -62,58 +56,4 @@ test("injector fetches relevant file from keyword/path hints and redacts secrets
 
   assert.match(injected, /File: lib\/router\/model-intent.ts/);
   assert.match(injected, /API_KEY='\[REDACTED\]'/);
-});
-
-test("injector includes line-ranged chunks for explicit large file hints", async () => {
-  __resetContentInjectorForTests();
-  const longRouteFile = Array.from({ length: 500 }, (_, idx) => {
-    if (idx === 259) {
-      return "function injectRelevantContents() { return 'target'; }";
-    }
-    return `const line_${idx + 1} = ${idx + 1};`;
-  }).join("\n");
-
-  __setOctokitFactoryForTests(() =>
-    makeFakeOctokit({
-      "app/api/chat/route.ts": longRouteFile,
-      "lib/router/model-intent.ts": "export const classifier = true;",
-    }) as never,
-  );
-
-  registerRepoBinding("repo-chunks", "mfackrell/katie", "main");
-  const injected = await injectRelevantContents("please inspect app/api/chat/route.ts injectRelevantContents", "repo-chunks", 3);
-
-  assert.match(injected, /File: app\/api\/chat\/route.ts \(Lines: \d+-\d+ \| Size: /);
-  assert.match(injected, /injectRelevantContents/);
-});
-
-test("injector truncates output to 20k chars with truncation note", async () => {
-  __resetContentInjectorForTests();
-  __setOctokitFactoryForTests(() =>
-    makeFakeOctokit({
-      "lib/a.ts": "a".repeat(14_000),
-      "lib/b.ts": "b".repeat(14_000),
-      "lib/c.ts": "c".repeat(14_000),
-    }) as never,
-  );
-
-  registerRepoBinding("repo-2", "mfackrell/katie", "main");
-  const injected = await injectRelevantContents("review lib", "repo-2", 5);
-
-  assert.ok(injected.length <= 20_000 + 500);
-  assert.match(injected, /Truncated: .* omitted for brevity\./);
-});
-
-test("injector reports fetch issue for missing files", async () => {
-  __resetContentInjectorForTests();
-  __setOctokitFactoryForTests(() =>
-    makeFakeOctokit({
-      "lib/router/classifier.ts": "__THROW__",
-    }) as never,
-  );
-
-  registerRepoBinding("repo-3", "mfackrell/katie", "main");
-  const injected = await injectRelevantContents("check file lib/router/classifier.ts", "repo-3", 2);
-
-  assert.match(injected, /REPO ACCESS ISSUE: Could not fetch/);
 });

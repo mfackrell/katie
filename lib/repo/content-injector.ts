@@ -1,16 +1,8 @@
-import { Octokit } from "@octokit/rest";
-
-type RepoBinding = {
-  owner: string;
-  repo: string;
-  defaultBranch: string;
-};
-
-type CachedFile = {
-  content: string;
-  size: number;
-  fetchedAt: number;
-};
+import {
+  getRepoFile,
+  listRepoFiles,
+  registerRepoBinding,
+} from "./repo-access";
 
 type Chunk = {
   path: string;
@@ -22,25 +14,10 @@ type Chunk = {
   explicitPathHit: boolean;
 };
 
-const CACHE_TTL_MS = 5 * 60 * 1000;
 const MAX_INJECTED_CHARS = 20_000;
-const MAX_CALLS_PER_MINUTE = 10;
 const CHUNK_SIZE_LINES = 150;
 const CHUNK_OVERLAP_LINES = 25;
 const MAX_CHUNKS_PER_FILE = 4;
-
-const cache = new Map<string, CachedFile>();
-const repoBindings = new Map<string, RepoBinding>();
-const requestTimestamps: number[] = [];
-
-let octokitFactory = () =>
-  new Octokit({
-    auth: process.env.GITHUB_TOKEN ?? process.env.GITHUB_PAT ?? process.env.GH_TOKEN,
-  });
-
-function buildCacheKey(repoId: string, path: string): string {
-  return `${repoId}:${path.toLowerCase()}`;
-}
 
 function redactSecrets(content: string): string {
   return content
@@ -188,87 +165,12 @@ function scoreChunk({
   };
 }
 
-async function listTextPaths(binding: RepoBinding): Promise<string[]> {
-  const octokit = octokitFactory();
-  const ref = await octokit.git.getRef({ owner: binding.owner, repo: binding.repo, ref: `heads/${binding.defaultBranch}` });
-  const tree = await octokit.git.getTree({
-    owner: binding.owner,
-    repo: binding.repo,
-    tree_sha: ref.data.object.sha,
-    recursive: "1",
-  });
-
-  return (tree.data.tree ?? [])
-    .filter((entry) => entry.type === "blob" && typeof entry.path === "string")
-    .map((entry) => entry.path as string)
-    .filter((path) => /\.(ts|tsx|js|jsx|mjs|cjs|json|md|mdx|yml|yaml)$/i.test(path));
-}
-
-function enforceRateLimit(): boolean {
-  const now = Date.now();
-  while (requestTimestamps.length && now - requestTimestamps[0] > 60_000) {
-    requestTimestamps.shift();
-  }
-
-  if (requestTimestamps.length >= MAX_CALLS_PER_MINUTE) {
-    return false;
-  }
-
-  requestTimestamps.push(now);
-  return true;
-}
-
-async function getFileContent(repoId: string, binding: RepoBinding, path: string): Promise<{ content: string; size: number }> {
-  const key = buildCacheKey(repoId, path);
-  const cached = cache.get(key);
-
-  if (cached && Date.now() - cached.fetchedAt < CACHE_TTL_MS) {
-    return { content: cached.content, size: cached.size };
-  }
-
-  if (!enforceRateLimit()) {
-    throw new Error("rate_limit_local");
-  }
-
-  const octokit = octokitFactory();
-  const response = await octokit.repos.getContent({
-    owner: binding.owner,
-    repo: binding.repo,
-    path,
-    ref: binding.defaultBranch,
-  });
-
-  if (Array.isArray(response.data) || response.data.type !== "file" || response.data.encoding !== "base64") {
-    throw new Error("invalid_file_payload");
-  }
-
-  const decoded = Buffer.from(response.data.content, "base64").toString("utf8");
-  const redacted = redactSecrets(decoded);
-  const size = response.data.size ?? Buffer.byteLength(redacted, "utf8");
-  cache.set(key, { content: redacted, size, fetchedAt: Date.now() });
-
-  return { content: redacted, size };
-}
-
-export function registerRepoBinding(repoId: string, repositoryFullName: string, defaultBranch = "main"): void {
-  const [owner, repo] = repositoryFullName.split("/");
-  if (!owner || !repo) {
-    return;
-  }
-
-  repoBindings.set(repoId, { owner, repo, defaultBranch });
-}
-
 export async function injectRelevantContents(userMessage: string, repoId: string, maxFiles = 5): Promise<string> {
-  const binding = repoBindings.get(repoId);
-  if (!binding) {
-    return "[REPO ACCESS ISSUE: Unknown active repository. Paste manually?]";
-  }
 
   const hints = parseHints(userMessage);
   const explicitPathHints = hints.filter((hint) => hint.includes("/") || /\.[a-z0-9]+$/i.test(hint));
   const functionHints = parseFunctionLikeHints(userMessage);
-  const allPaths = await listTextPaths(binding);
+  const allPaths = (await listRepoFiles(repoId)).filter((f) => f.kind === "file").map((f) => f.path);
 
   const explicitCandidates = allPaths.filter((path) => isExplicitPathHit(path, explicitPathHints));
 
@@ -298,8 +200,8 @@ export async function injectRelevantContents(userMessage: string, repoId: string
   for (const path of candidates) {
     try {
       const startedAt = Date.now();
-      const file = await getFileContent(repoId, binding, path);
-      const scoredChunks = chunkContentByLines(path, file.content, file.size)
+      const file = await getRepoFile(repoId, path);
+      const scoredChunks = chunkContentByLines(path, redactSecrets(file.content), file.size)
         .map((chunk) =>
           scoreChunk({
             chunk,
@@ -334,7 +236,7 @@ export async function injectRelevantContents(userMessage: string, repoId: string
     })
     .slice(0, maxFilesCap * MAX_CHUNKS_PER_FILE);
 
-  const header = `[REPO CONTEXT: ${binding.owner}/${binding.repo} - ${binding.defaultBranch} branch]\n`;
+  const header = `[REPO CONTEXT: active repo binding]\n`;
   let output = header;
   const truncated: string[] = [];
 
@@ -365,16 +267,3 @@ export async function injectRelevantContents(userMessage: string, repoId: string
   return output;
 }
 
-export function __setOctokitFactoryForTests(factory: typeof octokitFactory): void {
-  octokitFactory = factory;
-}
-
-export function __resetContentInjectorForTests(): void {
-  cache.clear();
-  repoBindings.clear();
-  requestTimestamps.length = 0;
-  octokitFactory = () =>
-    new Octokit({
-      auth: process.env.GITHUB_TOKEN ?? process.env.GITHUB_PAT ?? process.env.GH_TOKEN,
-    });
-}
