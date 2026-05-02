@@ -209,9 +209,19 @@ function isProviderName(value: string): value is ProviderName {
 
 const URL_REGEX = /(https?:\/\/[^\s]+)/i;
 const VIDEO_HINTS_REGEX = /\b(youtube|youtu\.be|vimeo|video|watch|mp4|mov)\b/i;
+const CODE_PATCH_OR_DIFF_REGEX = /\b(diff|patch|@@|\+\+\+\s|---\s|\bcommit\b|pull request|pr\b)\b/i;
+const REPO_REVIEW_LANGUAGE_REGEX = /\b(repo|repository|code|file|files|source|routing|architecture|review|audit|debug|test|tests|deployment|kubernetes|docker|ci\/?cd)\b/i;
 
 export function hasDirectWebSearchHint(prompt: string): boolean {
   return URL_REGEX.test(prompt) || VIDEO_HINTS_REGEX.test(prompt);
+}
+
+function containsCodePatchOrDiff(prompt: string): boolean {
+  return CODE_PATCH_OR_DIFF_REGEX.test(prompt);
+}
+
+function containsRepoReviewLanguage(prompt: string): boolean {
+  return REPO_REVIEW_LANGUAGE_REGEX.test(prompt);
 }
 
 const ASSISTANT_REFLECTION_REGEX =
@@ -570,6 +580,8 @@ async function classifyIntentWithLLMProviders(
     { user: "Tell me what's wrong with your previous response.", intent: "assistant-reflection" },
     { user: "Compare your last answer to best practices and critique it.", intent: "assistant-reflection" }
   ];
+  const activeRepoContextPresent = Boolean(options?.activeRepoContextAttached);
+  const routingSignalsText = JSON.stringify(options?.routingSignals ?? {});
   const systemPrompt = `
 You are the Intent Classifier for Katie.
 Return a JSON object with an "intent" field.
@@ -580,6 +592,11 @@ Never guess—only set when the user's wording is explicit or obvious.
 Return JSON only, no extra text.
 Use {"intent":"null","preferred_provider":null} when unsure.
 Intent must be one of: ${intents.join("|")}.
+Web-search is only for requests that require current/live external information.
+Do not classify as web-search merely because the prompt includes URLs, model names, repo paths, logs, or pasted code/diffs.
+When active repo context is present and the prompt discusses code, patches, routing, files, diffs, architecture, tests, or deployment, prefer architecture-review, code-review, technical-debugging, or general-text over web-search.
+Active repo context present: ${activeRepoContextPresent ? "yes" : "no"}.
+Routing signals: ${routingSignalsText}.
 ${intentGuide}
   `.trim();
   const fewShot = [
@@ -646,13 +663,17 @@ export async function inferRequestIntent(
   const hasImages = typeof input === "boolean" ? input : input.hasImages;
   const hasVideoInput = typeof input === "boolean" ? false : Boolean(input.hasVideoInput);
   const normalizedPrompt = prompt.toLowerCase();
+  const activeRepoContextPresent = Boolean(options?.activeRepoContextAttached);
+  const patchOrDiffSignal = containsCodePatchOrDiff(prompt);
+  const repoReviewSignal = containsRepoReviewLanguage(prompt);
+  const repoReviewContextActive = activeRepoContextPresent && (patchOrDiffSignal || repoReviewSignal);
   const hintText = (options?.hints ?? []).map((hint) => `${hint.hintIntent ?? "unknown"}:${hint.hintConfidence ?? "n/a"}`).join(", ");
   if (hintText) {
     console.info(`[Intent Hints] ${hintText}`);
   }
 
   // 0. Hard rule: obvious links and video references should always route through web search.
-  if (hasDirectWebSearchHint(prompt)) {
+  if (hasDirectWebSearchHint(prompt) && !repoReviewContextActive) {
     console.info("[Intent Source] text heuristic -> web-search");
     return "web-search";
   }
@@ -717,7 +738,15 @@ export async function inferRequestIntent(
     "image-generation"
   ];
 
-  const classifiedOutput = await classifyIntentWithLLM(prompt, availableIntents, options);
+  const classifiedOutput = await classifyIntentWithLLM(prompt, availableIntents, {
+    ...options,
+    routingSignals: {
+      ...(options?.routingSignals ?? {}),
+      activeRepoContextPresent,
+      containsCodePatchOrDiff: patchOrDiffSignal,
+      containsRepoReviewLanguage: repoReviewSignal
+    }
+  });
   const classifiedIntent = classifiedOutput.intent;
 
   const sanitizedClassifiedIntent = sanitizeCodeGenerationIntent(prompt, classifiedIntent, "control-plane");
@@ -761,12 +790,16 @@ export async function inferRequestClassification(
   const hasImages = typeof input === "boolean" ? input : input.hasImages;
   const hasVideoInput = typeof input === "boolean" ? false : Boolean(input.hasVideoInput);
   const normalizedPrompt = prompt.toLowerCase();
+  const activeRepoContextPresent = Boolean(options?.activeRepoContextAttached);
+  const patchOrDiffSignal = containsCodePatchOrDiff(prompt);
+  const repoReviewSignal = containsRepoReviewLanguage(prompt);
+  const repoReviewContextActive = activeRepoContextPresent && (patchOrDiffSignal || repoReviewSignal);
   const hintText = (options?.hints ?? []).map((hint) => `${hint.hintIntent ?? "unknown"}:${hint.hintConfidence ?? "n/a"}`).join(", ");
   if (hintText) {
     console.info(`[Intent Hints] ${hintText}`);
   }
 
-  if (hasDirectWebSearchHint(prompt)) return { intent: "web-search", preferredProvider: null };
+  if (hasDirectWebSearchHint(prompt) && !repoReviewContextActive) return { intent: "web-search", preferredProvider: null };
   if (hasAssistantReflectionHint(prompt)) return { intent: "assistant-reflection", preferredProvider: null };
   if (hasSocialEmotionalHint(prompt)) {
     console.info("[Intent Source] social-emotional selected via heuristic");
@@ -806,7 +839,15 @@ export async function inferRequestClassification(
     "image-generation"
   ];
 
-  const classifiedOutput = await classifyIntentWithLLM(prompt, availableIntents, options);
+  const classifiedOutput = await classifyIntentWithLLM(prompt, availableIntents, {
+    ...options,
+    routingSignals: {
+      ...(options?.routingSignals ?? {}),
+      activeRepoContextPresent,
+      containsCodePatchOrDiff: patchOrDiffSignal,
+      containsRepoReviewLanguage: repoReviewSignal
+    }
+  });
   const sanitizedClassifiedIntent = sanitizeCodeGenerationIntent(prompt, classifiedOutput.intent, "control-plane");
   if (sanitizedClassifiedIntent && availableIntents.includes(sanitizedClassifiedIntent)) {
     if (sanitizedClassifiedIntent === "social-emotional") {
