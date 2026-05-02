@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { __resolveRepoSourceClassifierFailureForTests } from '../app/api/chat/route';
+import { __resolveRepoSourceClassifierFailureForTests } from '../lib/chat/repo-source-classifier-fallback';
 
 test('repo classifier falls open when active repo and enabled', () => {
   process.env.REPO_CLASSIFIER_FALL_OPEN = 'true';
