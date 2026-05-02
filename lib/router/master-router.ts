@@ -8,6 +8,7 @@ import {
   inferRequestIntent,
   LlmRoutingResult,
   RequestIntent,
+  RoutingHint,
   scoreModelCandidateWithBreakdown,
   scoreModelsForIntent,
   validateRoutingDecision
@@ -31,11 +32,13 @@ export type RoutingDecision = {
   routerModel: string;
   resolvedIntent: ResolvedRoutingIntent;
   explainer?: SelectionExplainer;
+  authority?: "llm" | "heuristic" | "override" | "capability" | "fallback";
+  intentResolutionReason?: string;
 };
 export type ResolvedRoutingIntent = {
   intent: RequestIntent;
   preferredProvider: LlmProvider["name"] | null;
-  intentSource: "upstream" | "router-fallback";
+  intentSource: "upstream" | "router-fallback" | "llm" | "heuristic" | "fallback";
 };
 export type SelectionExplainer = {
   selected_model?: string;
@@ -651,6 +654,7 @@ export async function chooseProvider(
     modelRegistrySnapshot?: Map<LlmProvider["name"], RegistryRoutingModel[]>;
     actorId?: string;
     actorRoutingProfile?: ActorRoutingProfile;
+    routingHints?: RoutingHint[];
   }
 ): Promise<RoutingDecision> {
   let rankedCandidates: Array<{ provider: LlmProvider; modelId: string; score: number }> = [];
@@ -706,9 +710,12 @@ export async function chooseProvider(
     ? { intent: options.requestIntent, preferredProvider: null, intentSource: "upstream" as const }
     : null);
 
-  const requestClassification = upstreamResolvedIntent
-    ? null
-    : await inferRequestClassification(
+  let requestClassification: Awaited<ReturnType<typeof inferRequestClassification>> | null = null;
+  let intentAuthority: RoutingDecision["authority"] = upstreamResolvedIntent ? "override" : "llm";
+  let intentResolutionReason = upstreamResolvedIntent ? "upstream-lock" : "chosen-by-llm";
+  if (!upstreamResolvedIntent) {
+    try {
+      requestClassification = await inferRequestClassification(
         prompt,
         {
           hasImages: Boolean(options?.hasImages),
@@ -716,14 +723,40 @@ export async function chooseProvider(
         },
         {
           decisionProviders: controlPlaneDecisionProviders,
-          registryLookup
+          registryLookup,
+          hints: options?.routingHints
         }
       );
-  const resolvedIntent: ResolvedRoutingIntent = upstreamResolvedIntent ?? {
-    intent: requestClassification?.intent ?? "general-text",
-    preferredProvider: requestClassification?.preferredProvider ?? null,
-    intentSource: "router-fallback"
-  };
+    } catch (error) {
+      console.warn(`[Route Intent] classifier_failed requestId=${traceRequestId}`, error);
+      intentAuthority = "fallback";
+      intentResolutionReason = "llm-failed";
+    }
+  }
+  const bestHint = [...(options?.routingHints ?? [])]
+    .filter((hint) => Boolean(hint.hintIntent))
+    .sort((a, b) => (b.hintConfidence ?? 0) - (a.hintConfidence ?? 0))[0];
+  const resolvedIntent: ResolvedRoutingIntent = upstreamResolvedIntent ?? (requestClassification
+    ? {
+        intent: requestClassification.intent,
+        preferredProvider: requestClassification.preferredProvider ?? null,
+        intentSource: "llm"
+      }
+    : bestHint?.hintIntent
+      ? {
+          intent: bestHint.hintIntent,
+          preferredProvider: null,
+          intentSource: "heuristic"
+        }
+      : {
+          intent: "general-text",
+          preferredProvider: null,
+          intentSource: "fallback"
+        });
+  if (!upstreamResolvedIntent && !requestClassification && bestHint?.hintIntent) {
+    intentAuthority = "heuristic";
+    intentResolutionReason = "llm-failed-used-heuristic";
+  }
   console.info(
     `[Route Intent] caller_request_intent=${options?.requestIntent ?? options?.resolvedIntent?.intent ?? "none"} classifier_intent=${requestClassification?.intent ?? "skipped"} effective_intent=${resolvedIntent.intent} intent_source=${resolvedIntent.intentSource}`
   );
@@ -742,6 +775,8 @@ export async function chooseProvider(
   let hardRouteRule = "none";
 
   if (options?.hasVideoInput) {
+    intentAuthority = "capability";
+    intentResolutionReason = "forced-video-google";
     availableByProvider = availableByProvider.filter(({ provider }) => provider.name === "google");
     hardRouteRule = "video-input-google-only";
   }

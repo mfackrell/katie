@@ -641,6 +641,10 @@ export async function inferRequestIntent(
   const hasImages = typeof input === "boolean" ? input : input.hasImages;
   const hasVideoInput = typeof input === "boolean" ? false : Boolean(input.hasVideoInput);
   const normalizedPrompt = prompt.toLowerCase();
+  const hintText = (options?.hints ?? []).map((hint) => `${hint.hintIntent ?? "unknown"}:${hint.hintConfidence ?? "n/a"}`).join(", ");
+  if (hintText) {
+    console.info(`[Intent Hints] ${hintText}`);
+  }
 
   // 0. Hard rule: obvious links and video references should always route through web search.
   if (hasDirectWebSearchHint(prompt)) {
@@ -737,14 +741,25 @@ export async function inferRequestIntent(
   return "general-text";
 }
 
+
+export type RoutingHint = {
+  hintIntent?: RequestIntent;
+  hintSource?: "heuristic" | "short-term-memory" | "explicit-command";
+  hintConfidence?: number;
+  note?: string;
+};
 export async function inferRequestClassification(
   prompt: string,
   input: boolean | { hasImages: boolean; hasVideoInput?: boolean },
-  options?: ControlPlaneSelectionOptions
+  options?: ControlPlaneSelectionOptions & { hints?: RoutingHint[] }
 ): Promise<{ intent: RequestIntent; preferredProvider: ProviderName | null }> {
   const hasImages = typeof input === "boolean" ? input : input.hasImages;
   const hasVideoInput = typeof input === "boolean" ? false : Boolean(input.hasVideoInput);
   const normalizedPrompt = prompt.toLowerCase();
+  const hintText = (options?.hints ?? []).map((hint) => `${hint.hintIntent ?? "unknown"}:${hint.hintConfidence ?? "n/a"}`).join(", ");
+  if (hintText) {
+    console.info(`[Intent Hints] ${hintText}`);
+  }
 
   if (hasDirectWebSearchHint(prompt)) return { intent: "web-search", preferredProvider: null };
   if (hasAssistantReflectionHint(prompt)) return { intent: "assistant-reflection", preferredProvider: null };

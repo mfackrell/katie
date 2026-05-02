@@ -11,6 +11,7 @@ import {
   hasDirectWebSearchHint,
   inferRequestClassification,
   RequestIntent,
+  RoutingHint,
   validateRoutingDecision
 } from "@/lib/router/model-intent";
 import {
@@ -374,6 +375,15 @@ function parseRepoSourceClassifierResponse(raw: string): RepoSourceClassifierDec
   }
 }
 
+
+export function __resolveRepoSourceClassifierFailureForTests(activeRepo: boolean, errorMessage?: string): RepoSourceClassifierDecision {
+  const fallOpenEnabled = process.env.REPO_CLASSIFIER_FALL_OPEN !== "false";
+  if (activeRepo && fallOpenEnabled) {
+    return { attach_repo_source: true, reason: "classifier_unavailable_fall_open", confidence: null };
+  }
+  return { attach_repo_source: false, reason: errorMessage ?? "Classifier returned invalid JSON output and no active repo", confidence: null };
+}
+
 async function classifyRepoSourceAttachmentNeed({
   provider,
   modelId,
@@ -381,6 +391,9 @@ async function classifyRepoSourceAttachmentNeed({
   requestIntent,
   activeRepo,
   repoSummary,
+  attachmentSummaryForClassifier,
+  activeRepoContextAttached,
+  routingSignals,
 }: {
   provider: LlmProvider;
   modelId: string;
@@ -388,6 +401,9 @@ async function classifyRepoSourceAttachmentNeed({
   requestIntent?: RequestIntent;
   activeRepo: boolean;
   repoSummary?: string;
+  attachmentSummaryForClassifier?: { total: number; imageCount: number; videoCount: number; textLikeCount: number };
+  activeRepoContextAttached?: boolean;
+  routingSignals?: Record<string, unknown>;
 }): Promise<RepoSourceClassifierDecision> {
   try {
     const classificationPrompt = [
@@ -419,7 +435,10 @@ async function classifyRepoSourceAttachmentNeed({
       `User message: ${JSON.stringify(message)}`,
       `Resolved intent: ${requestIntent ?? "unknown"}`,
       `Active repo attached: ${activeRepo ? "yes" : "no"}`,
-      `Repo summary: ${repoSummary ?? "none"}`
+      `Repo summary: ${repoSummary ?? "none"}`,
+      `Attachment summary: ${JSON.stringify(attachmentSummaryForClassifier ?? { total: 0, imageCount: 0, videoCount: 0, textLikeCount: 0 })}`,
+      `Active repo context attached: ${activeRepoContextAttached ? "yes" : "no"}`,
+      `Routing signals: ${JSON.stringify(routingSignals ?? {})}`
     ].join("\n");
 
     const result = await provider.generate({
@@ -436,17 +455,17 @@ async function classifyRepoSourceAttachmentNeed({
       return parsed;
     }
 
-    return {
-      attach_repo_source: false,
-      reason: "Classifier returned invalid JSON output",
-      confidence: null,
-    };
+    const fallback = __resolveRepoSourceClassifierFailureForTests(activeRepo);
+    if (fallback.attach_repo_source) {
+      console.warn("[Chat API] Repo source classifier invalid JSON; falling open for active repo.");
+    }
+    return fallback;
   } catch (error) {
-    return {
-      attach_repo_source: false,
-      reason: `Classifier failed: ${error instanceof Error ? error.message : String(error)}`,
-      confidence: null,
-    };
+    const fallback = __resolveRepoSourceClassifierFailureForTests(activeRepo, `Classifier failed: ${error instanceof Error ? error.message : String(error)}`);
+    if (fallback.attach_repo_source) {
+      console.warn("[Chat API] Repo source classifier failed; falling open for active repo.", error);
+    }
+    return fallback;
   }
 }
 
@@ -569,6 +588,9 @@ export async function POST(request: NextRequest) {
     let fallbackChain: Array<{ provider: LlmProvider; modelId: string; score: number }> = [];
     let selectionExplainer: SelectionExplainer | undefined;
     let resolvedRequestIntent: RequestIntent | undefined;
+    let intentAuthority: "llm" | "heuristic" | "override" | "fallback" | "capability" = "fallback";
+    let intentResolutionReason = "default";
+    let routingHints: RoutingHint[] = [];
     const videoRoutingPolicy = resolveVideoRoutingPolicy(hasVideoInput, overrideProvider);
 
     if (hasVideoInput) {
@@ -618,6 +640,8 @@ export async function POST(request: NextRequest) {
 
       provider = manualProvider;
       modelId = overrideModel;
+      intentAuthority = "override";
+      intentResolutionReason = "user-override";
       console.log(`[Chat API] Override active. Provider: ${provider.name}, Model: ${modelId}`);
     } else if (videoRoutingPolicy.mode === "force-google") {
       const googleProvider = providers.find((candidate) => candidate.name === "google");
@@ -631,6 +655,8 @@ export async function POST(request: NextRequest) {
       provider = googleProvider;
       modelId = await selectGoogleModelForVideoRouting(provider);
       fallbackChain = [];
+      intentAuthority = "capability";
+      intentResolutionReason = "forced-video-google";
       console.log(`[Video Routing] detected video attachment(s); forcing provider=google model=${modelId}`);
     } else if (videoRoutingPolicy.mode === "manual-google") {
       const googleProvider = providers.find((candidate) => candidate.name === "google");
@@ -644,6 +670,8 @@ export async function POST(request: NextRequest) {
       provider = googleProvider;
       modelId = await selectGoogleModelForVideoRouting(provider, overrideModel);
       fallbackChain = [];
+      intentAuthority = "override";
+      intentResolutionReason = "manual-google-override";
       console.log(`[Video Routing] override accepted; provider=google model=${modelId}`);
     } else {
       const hasImages = Array.isArray(images) && images.length > 0;
@@ -662,49 +690,35 @@ export async function POST(request: NextRequest) {
       const intentSession = parseIntentSessionState(shortTermMemory);
       const isAckMessage = isAcknowledgment(message);
       let requestIntent: RequestIntent | undefined;
-      let isRouterIntentLocked = false;
+      routingHints = [];
 
       if (explicitIntent) {
         requestIntent = explicitIntent;
-        isRouterIntentLocked = true;
-      } else if (assistantReflectionHint) {
-        requestIntent = "assistant-reflection";
-        isRouterIntentLocked = true;
-      } else if (socialEmotionalHint) {
-        requestIntent = "social-emotional";
-        isRouterIntentLocked = true;
-      } else if (
+        routingHints.push({ hintIntent: explicitIntent, hintSource: "explicit-command", hintConfidence: 0.95, note: "direct web-search detection" });
+      }
+      if (assistantReflectionHint) {
+        requestIntent = requestIntent ?? "assistant-reflection";
+        routingHints.push({ hintIntent: "assistant-reflection", hintSource: "heuristic", hintConfidence: 0.9, note: "reflection regex matched" });
+      }
+      if (socialEmotionalHint) {
+        requestIntent = requestIntent ?? "social-emotional";
+        routingHints.push({ hintIntent: "social-emotional", hintSource: "heuristic", hintConfidence: 0.9, note: "social regex matched" });
+      }
+      if (
         isAckMessage &&
         intentSession.lastSubstantiveIntent &&
         intentSession.lastIntentTimestamp &&
         now - intentSession.lastIntentTimestamp < ACK_CONTEXT_TTL_MS
       ) {
-        requestIntent = intentSession.lastSubstantiveIntent;
-        isRouterIntentLocked = true;
+        requestIntent = requestIntent ?? intentSession.lastSubstantiveIntent;
+        routingHints.push({ hintIntent: intentSession.lastSubstantiveIntent, hintSource: "short-term-memory", hintConfidence: 0.7, note: "ack reuse" });
         console.log(
-          `[Intent Reuse] Reusing ${requestIntent} from ${new Date(intentSession.lastIntentTimestamp).toISOString()} for ack message "${message}".`
+          `[Intent Reuse] Reusing ${intentSession.lastSubstantiveIntent} from ${new Date(intentSession.lastIntentTimestamp).toISOString()} for ack message "${message}".`
         );
       }
 
-      if (requestIntent && isSubstantiveIntent(requestIntent) && !isAckMessage) {
-        await setShortTermMemory(actorId, chatId, {
-          ...shortTermMemoryWithSession,
-          intentSession: {
-            lastSubstantiveIntent: requestIntent,
-            lastIntentTimestamp: now
-          }
-        });
-        console.log(`[Intent Update] Stored substantive intent ${requestIntent} at ${new Date(now).toISOString()}.`);
-      }
-
       resolvedRequestIntent = requestIntent;
-      const resolvedRoutingIntent: ResolvedRoutingIntent | undefined = isRouterIntentLocked && resolvedRequestIntent
-        ? {
-            intent: resolvedRequestIntent,
-            preferredProvider: null,
-            intentSource: "upstream"
-          }
-        : undefined;
+      const resolvedRoutingIntent: ResolvedRoutingIntent | undefined = undefined;
 
       const routingContext = `\n  Persona: ${personaWithRepoContext}\n  Rolling Summary: ${summary}\n  Recent History: ${JSON.stringify(history.slice(-3))}\n  Has Attached Images: ${hasVisualInput}\n  Active Repo: ${sessionContext.activeRepo ? `${sessionContext.activeRepo.fullName} (${sessionContext.activeRepo.id})` : "none"}\n`;
       console.log(
@@ -716,6 +730,7 @@ export async function POST(request: NextRequest) {
         actorId,
         actorRoutingProfile,
         resolvedIntent: resolvedRoutingIntent,
+        routingHints,
         routingTraceEnabled,
         routingRequestId: request.headers.get("x-request-id") ?? undefined
       });
@@ -725,6 +740,8 @@ export async function POST(request: NextRequest) {
       fallbackChain = routingDecision.fallbackChain;
       selectionExplainer = routingDecision.explainer;
       resolvedRequestIntent = routingDecision.resolvedIntent.intent;
+      intentAuthority = routingDecision.authority ?? "fallback";
+      intentResolutionReason = routingDecision.intentResolutionReason ?? "router-default";
       console.log("[Chat API] Final resolved intent", {
         requestId,
         routerIntent: routingDecision.resolvedIntent.intent,
@@ -735,6 +752,32 @@ export async function POST(request: NextRequest) {
       console.log(`[Chat API] Selected Provider: ${provider.name}, Model: ${modelId}`);
       console.log(`[Chat API] Routing Model For UI: ${routingDecision.routerModel}`);
       console.log(`[Chat API] Routing Reasoning: ${routingDecision.reasoning}`);
+    }
+
+    const attachmentSummaryForClassifier = {
+      total: attachments.length,
+      imageCount: attachments.filter((attachment) => attachment.mimeType.startsWith("image/")).length,
+      videoCount: attachments.filter((attachment) => attachment.mimeType.startsWith("video/")).length,
+      textLikeCount: attachments.filter((attachment) => attachment.mimeType.startsWith("text/") || attachment.mimeType === "application/pdf").length,
+    };
+    const activeRepoContextAttached = Boolean(activeRepoContext && loadedRepoContext);
+    const routingSignals = {
+      routingHints,
+      intentAuthority,
+      intentResolutionReason,
+      hasVideoInput,
+    };
+
+    if (resolvedRequestIntent && isSubstantiveIntent(resolvedRequestIntent)) {
+      const now = Date.now();
+      await setShortTermMemory(actorId, chatId, {
+        ...shortTermMemoryWithSession,
+        intentSession: {
+          lastSubstantiveIntent: resolvedRequestIntent,
+          lastIntentTimestamp: now,
+        },
+      });
+      console.log(`[Intent Update] Stored final substantive intent ${resolvedRequestIntent} at ${new Date(now).toISOString()}.`);
     }
 
     let repoSourceClassifierDecision: RepoSourceClassifierDecision = {
@@ -756,6 +799,9 @@ export async function POST(request: NextRequest) {
         requestIntent: resolvedRequestIntent,
         activeRepo: true,
         repoSummary: loadedRepoContext.fileSummaryLine,
+        attachmentSummaryForClassifier,
+        activeRepoContextAttached,
+        routingSignals,
       });
     }
 
@@ -856,7 +902,19 @@ export async function POST(request: NextRequest) {
                     id: activeRepoContext.id,
                     fullName: activeRepoContext.repositoryFullName,
                   }
-                : null
+                : null,
+              intentHints: routingHints,
+              intentAuthority,
+              intentFinal: resolvedRequestIntent ?? null,
+              intentResolutionReason,
+              repoSourceAttachDecision: {
+                attach: repoSourceClassifierDecision.attach_repo_source,
+                reason: repoSourceClassifierDecision.reason,
+                classifierConfidence: repoSourceClassifierDecision.confidence,
+              },
+              attachmentSummaryForClassifier,
+              activeRepoContextAttached,
+              routingSignals,
             });
 
             const startEvent = reasoningState.start();
