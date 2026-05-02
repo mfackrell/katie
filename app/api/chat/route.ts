@@ -130,17 +130,67 @@ function deriveRepoSearchTerms(message: string): string[] {
   return Array.from(new Set(tokens)).slice(0, 8);
 }
 
+type RepoAuditDiscovery = {
+  searchTerms: string[];
+  prioritizedPaths: string[];
+  treeSummary: Record<string, number>;
+};
+
+function discoverRepoAuditTargets(message: string, filePaths: string[]): RepoAuditDiscovery {
+  const normalized = filePaths.map((path) => path.toLowerCase());
+  const byCategory: Record<string, string[]> = {
+    dependency_manifest: ["package.json", "requirements.txt", "pyproject.toml", "pom.xml", "go.mod", "cargo.toml", "gemfile"],
+    readme_docs: ["readme", "docs/", ".md"],
+    source_entry: ["src/index", "src/main", "main.", "app.", "server.", "index."],
+    api_routes: ["route.", "routes/", "api/"],
+    router_orchestration: ["router", "routing", "orchestration"],
+    repo_access_layer: ["repo-access", "repository", "github", "gitlab", "connector"],
+    providers_integrations: ["provider", "integration", "adapter", "client"],
+    memory_data: ["memory", "store", "db", "database", "persistence"],
+    tests: ["test", "spec"],
+    deployment_config: ["docker", "kubernetes", "helm", "vercel", "netlify", "terraform", ".github/workflows", "compose"]
+  };
+  const treeSummary: Record<string, number> = {};
+  const prioritized = new Set<string>();
+  for (const [category, patterns] of Object.entries(byCategory)) {
+    const hits = normalized
+      .map((path, index) => ({ path: filePaths[index], matched: patterns.some((pattern) => path.includes(pattern)) }))
+      .filter((entry) => entry.matched)
+      .slice(0, 3)
+      .map((entry) => entry.path);
+    treeSummary[category] = hits.length;
+    hits.forEach((path) => prioritized.add(path));
+  }
+
+  const searchTerms = deriveRepoSearchTerms(message);
+  for (const path of filePaths.slice(0, 60)) {
+    if (searchTerms.some((term) => path.toLowerCase().includes(term))) prioritized.add(path);
+    if (prioritized.size >= 24) break;
+  }
+  return { searchTerms, prioritizedPaths: Array.from(prioritized).slice(0, 24), treeSummary };
+}
+
 function buildRepoAuditContextBlock(params: {
   manifest: Awaited<ReturnType<typeof getRepoVisibilityManifest>>;
+  repoFullName: string;
+  defaultBranch: string;
+  totalFilesKnown: number;
+  accessibleTextFiles: number;
+  treeSummary: Record<string, number>;
   filesInspected: string[];
   searchTerms: string[];
   fetchErrors: string[];
   omitted: string[];
   excerpts: string[];
 }): string {
-  const { manifest, filesInspected, searchTerms, fetchErrors, omitted, excerpts } = params;
+  const { manifest, repoFullName, defaultBranch, totalFilesKnown, accessibleTextFiles, treeSummary, filesInspected, searchTerms, fetchErrors, omitted, excerpts } = params;
   return [
     "REPO_AUDIT_CONTEXT_START",
+    `active_repo_full_name: ${repoFullName}`,
+    `default_branch: ${defaultBranch}`,
+    `total_files_known: ${totalFilesKnown}`,
+    `accessible_text_files: ${accessibleTextFiles}`,
+    `tree_summary: ${JSON.stringify(treeSummary)}`,
     `visibility_manifest: ${JSON.stringify(manifest)}`,
     `files_inspected: ${JSON.stringify(filesInspected)}`,
     `search_terms_used: ${JSON.stringify(searchTerms)}`,
@@ -148,7 +198,11 @@ function buildRepoAuditContextBlock(params: {
     `omitted_files_or_limits: ${JSON.stringify(omitted)}`,
     "selected_source_excerpts:",
     ...excerpts,
+    `confidence_visibility_summary: ${filesInspected.length > 0 ? "partial visibility based on inspected files only" : "low visibility; no files inspected"}`,
+    "Answer from inspected files and excerpts when possible.",
     "When repo audit context is present and active repo access is available, do not ask the user to paste files.",
+    "State which files were inspected and what was omitted due to limits.",
+    "Do not claim full repository visibility unless inspected files cover the relevant scope.",
     "REPO_AUDIT_CONTEXT_END"
   ].join("\n");
 }
@@ -899,15 +953,15 @@ export async function POST(request: NextRequest) {
       try {
         const visibilityManifest = await getRepoVisibilityManifest(activeRepoContext.id);
         const repoTree = await listRepoTree(activeRepoContext.id);
-        const searchTerms = deriveRepoSearchTerms(message);
+        const candidateFiles = repoTree.filter((node) => node.kind === "file").map((node) => node.path);
+        const accessibleTextFiles = candidateFiles.filter((path) => /\.(ts|tsx|js|jsx|json|md|mjs|cjs|py|go|rs|java|yml|yaml|toml|ini|env|sh|sql)$/i.test(path)).length;
+        const discovery = discoverRepoAuditTargets(message, candidateFiles);
+        const searchTerms = discovery.searchTerms;
         const fetchErrors: string[] = [];
         const omitted: string[] = [];
         const inspected = new Set<string>();
         const excerpts: string[] = [];
-        const candidateFiles = repoTree.filter((node) => node.kind === "file").map((node) => node.path);
-        const prioritizedFiles = candidateFiles
-          .filter((path) => searchTerms.some((term) => path.toLowerCase().includes(term)))
-          .slice(0, 6);
+        const prioritizedFiles = discovery.prioritizedPaths;
 
         for (const term of searchTerms.slice(0, 5)) {
           const results = await searchRepo(activeRepoContext.id, term, { maxResults: 5, maxSnippetLines: 6 });
@@ -942,6 +996,11 @@ export async function POST(request: NextRequest) {
 
         const auditBlock = buildRepoAuditContextBlock({
           manifest: visibilityManifest,
+          repoFullName: activeRepoContext.repositoryFullName,
+          defaultBranch: loadedRepoContext.defaultBranch || "main",
+          totalFilesKnown: candidateFiles.length,
+          accessibleTextFiles,
+          treeSummary: discovery.treeSummary,
           filesInspected: Array.from(inspected),
           searchTerms,
           fetchErrors,
