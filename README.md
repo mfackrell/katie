@@ -95,6 +95,7 @@ At least one provider key is required for chat generation:
 
 Full list: [`docs/environment-variables.md`](docs/environment-variables.md).
 
+
 ## Scripts
 - `npm run dev` – start local dev server.
 - `npm run build` – production build.
