@@ -113,7 +113,8 @@ const CONTROL_PLANE_CURATED_MODELS: Record<LlmProvider["name"], string[]> = {
   google: ["gemini-3.1-pro", "gemini-3.1-pro-latest", "gemini-3-pro"],
   openai: ["gpt-5.3-codex", "gpt-5.2-unified", "gpt-5.2", "o3-pro"],
   anthropic: ["claude-4.6-opus", "claude-4.5-sonnet", "claude-4-opus"],
-  grok: ["grok-4-0709", "grok-4"]
+  // Grok is disabled for control-plane JSON routing because it has timed out on strict classifier tasks. It remains available for normal generation.
+  grok: []
 };
 const CONTROL_PLANE_BLOCKED_MODELS: Record<LlmProvider["name"], string[]> = {
   google: ["gemini-2.0-flash"],
@@ -125,7 +126,8 @@ const CONTROL_PLANE_VERIFIED_COMPATIBLE_MODELS: Record<LlmProvider["name"], stri
   google: [],
   openai: ["gpt-5.3-codex", "gpt-5.2-unified", "gpt-5.2", "o3-pro"],
   anthropic: ["claude-4.6-opus", "claude-4.5-sonnet", "claude-4-opus"],
-  grok: ["grok-4-0709", "grok-4"]
+  // Grok is disabled for control-plane JSON routing because it has timed out on strict classifier tasks. It remains available for normal generation.
+  grok: []
 };
 
 function isControlPlaneInstructionCompatibleModel(providerName: LlmProvider["name"], modelId: string): boolean {
