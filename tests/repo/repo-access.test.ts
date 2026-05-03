@@ -4,6 +4,7 @@ import {
   __resetRepoAccessForTests,
   __setRepoAccessOctokitFactoryForTests,
   getRepoFileRange,
+  getRepoFileFullContent,
   getRepoVisibilityManifest,
   listRepoFiles,
   registerRepoBinding,
@@ -46,4 +47,9 @@ test("repo access lists/searches/fetches and reports visibility", async () => {
 
   const manifest = await getRepoVisibilityManifest("r1");
   assert.equal(manifest.capabilities.canSearchRepo, true);
+
+  const full = await getRepoFileFullContent("r1", "src/main.go", { hardCapBytes: 6 });
+  assert.equal(full.isTruncated, true);
+  assert.equal(full.byteCount, 6);
+  assert.equal(full.filePath, "src/main.go");
 });

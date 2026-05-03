@@ -30,7 +30,11 @@ import {
   resolveVideoRoutingPolicy,
   selectGoogleModelForVideoRouting
 } from "@/lib/chat/video-routing";
-import { injectRelevantContents } from "@/lib/repo/content-injector";
+import {
+  buildInclusionManifest,
+  fetchFullFile,
+  selectFilesForInjection,
+} from "@/lib/repo/content-injector";
 import {
   getRepoFile,
   getRepoFileRange,
@@ -990,16 +994,45 @@ export async function POST(request: NextRequest) {
 
     if (shouldAttachSourceContext && activeRepoContext && loadedRepoContext) {
       try {
-        const injectedContents = await injectRelevantContents(message, activeRepoContext.id, 5);
-        personaForGeneration = `${personaForGeneration}\n\n${injectedContents}`;
-        const injectedFileCount = (injectedContents.match(/^File:/gm) ?? []).length;
-        console.info(`[info] [Repo Injector] Injected ${injectedFileCount} files for requestId=${requestId}`);
-      } catch (error) {
-        console.error("[Chat API] Failed to inject repository source context", {
+        const fileSelection = await selectFilesForInjection(activeRepoContext.id, message, [], "smart");
+        const settled = await Promise.allSettled(
+          fileSelection.selected.map((filePath) => fetchFullFile(activeRepoContext.id, filePath, 250_000)),
+        );
+        const fullFileResults = settled
+          .filter((result): result is PromiseFulfilledResult<Awaited<ReturnType<typeof fetchFullFile>>> => result.status === "fulfilled")
+          .map((result) => result.value);
+        const included = fullFileResults.filter((file) => !file.isTruncated);
+        const truncated = fullFileResults.filter((file) => file.isTruncated).map((file) => file.filePath);
+        const skipped = settled
+          .map((result, index) => (result.status === "rejected" ? { path: fileSelection.selected[index], reason: "fetch failed" } : null))
+          .filter((item): item is { path: string; reason: string } => item !== null);
+        const inclusionManifest = buildInclusionManifest(included, truncated, skipped);
+        const fullFileContents = included
+          .map((file) => `--- ${file.filePath} (${file.byteCount} bytes, sha256: ${file.sha256}) ---\n${file.content}`)
+          .join("\n\n");
+
+        console.info("[Chat API] Full-file injection metadata", {
           requestId,
-          repositoryFullName: activeRepoContext.repositoryFullName,
-          reason: error instanceof Error ? error.message : String(error),
+          filesRequested: fileSelection.selected.length,
+          filesIncludedFull: included.length,
+          filesTruncated: truncated.length,
+          filesSkipped: skipped.length,
+          totalBytesIncluded: fullFileResults.reduce((sum, file) => sum + file.byteCount, 0),
+          selectionReason: fileSelection.reason,
+          manifestBlock: inclusionManifest,
         });
+
+        const promptContractBlock = `You have access to the following complete files:\n${
+          included.map((file) => `- ${file.filePath} (${file.byteCount} bytes)`).join("\n") || "- none"
+        }\n\nIf a file is marked as truncated, its content was cut at the byte limit; reason may be provided.\nIf a file is marked as skipped or not included, you cannot reference its contents.\nNever claim to have seen a file that is not listed in FILES_INCLUSION_MANIFEST.\nIf a user asks you to review/fix a file not in the manifest, say so explicitly.\n\n---`;
+        const warningBlock = skipped.length
+          ? `\nWARNING: The following requested files could not be included:\n${skipped.map((item) => `- ${item.path} (${item.reason})`).join("\n")}\nAnalysis is based only on available files above.`
+          : "";
+
+        personaForGeneration = `${personaForGeneration}\n\n${inclusionManifest}\n\n${promptContractBlock}\n\n${fullFileContents}${warningBlock}`;
+      } catch (error) {
+        console.error("[Chat API] Full-file injection failed", { requestId, reason: error instanceof Error ? error.message : String(error) });
+        personaForGeneration = `${personaForGeneration}\nFull-file injection failed. Repository context may be incomplete.`;
       }
     }
     const shouldRunRepoAudit = shouldAttachSourceContext && shouldRunRepoAuditMode(message);

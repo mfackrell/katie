@@ -1,7 +1,16 @@
 import {
   getRepoFile,
+  getRepoFileFullContent,
   listRepoFiles,
 } from "./repo-access";
+
+export type FullFileResult = {
+  filePath: string;
+  content: string;
+  isTruncated: boolean;
+  byteCount: number;
+  sha256: string;
+};
 
 type Chunk = {
   path: string;
@@ -266,3 +275,77 @@ export async function injectRelevantContents(userMessage: string, repoId: string
   return output;
 }
 
+const SKIPPED_PATH_PATTERNS = [/^node_modules\//, /^dist\//, /^\.next\//, /^build\//, /^__pycache__\//];
+const BINARY_FILE_EXTENSIONS = new Set(["png", "jpg", "jpeg", "gif", "webp", "ico", "exe", "so", "wasm", "pdf", "zip", "gz", "tar"]);
+const SENSITIVE_FILE_PATTERNS = [/^\.env\.local$/i, /^\.env\..+\.local$/i, /private[_-]?key/i];
+
+function shouldSkipPath(path: string): { skip: boolean; reason?: string } {
+  const lower = path.toLowerCase();
+  if (SKIPPED_PATH_PATTERNS.some((pattern) => pattern.test(lower))) return { skip: true, reason: "build artifact or dependency" };
+  if (SENSITIVE_FILE_PATTERNS.some((pattern) => pattern.test(path))) return { skip: true, reason: "sensitive file" };
+  const extension = lower.split(".").pop() ?? "";
+  if (BINARY_FILE_EXTENSIONS.has(extension)) return { skip: true, reason: "binary file" };
+  return { skip: false };
+}
+
+export async function fetchFullFile(repoId: string, filePath: string, hardCap = 250_000): Promise<FullFileResult> {
+  const fullContent = await getRepoFileFullContent(repoId, filePath, { hardCapBytes: hardCap });
+  return fullContent;
+}
+
+export async function selectFilesForInjection(
+  repoId: string,
+  userMessage: string,
+  requestedPaths: string[],
+  mode: "full" | "smart",
+): Promise<{ selected: string[]; reason: string }> {
+  const files = await listRepoFiles(repoId);
+  const filePaths = files.filter((file) => file.kind === "file").map((file) => file.path);
+
+  if (requestedPaths.length) {
+    const selected = requestedPaths.filter((path) => filePaths.includes(path));
+    const reason = `Selected ${selected.length} explicitly requested path(s).`;
+    console.info("[Repo Injector] Full-file selection", { mode: "full", reason, selected });
+    return { selected, reason };
+  }
+
+  if (/\b(full repo|entire repository|full repository)\b/i.test(userMessage) || mode === "full") {
+    const selected = filePaths.filter((path) => !shouldSkipPath(path).skip);
+    const reason = "User requested full repository visibility; included all eligible text files.";
+    console.info("[Repo Injector] Full-file selection", { mode: "full", reason, selectedCount: selected.length });
+    return { selected, reason };
+  }
+
+  const hints = parseHints(userMessage);
+  const selected = filePaths
+    .filter((path) => !shouldSkipPath(path).skip)
+    .filter((path) => hints.length === 0 || hints.some((hint) => path.toLowerCase().includes(hint.toLowerCase())))
+    .slice(0, 12);
+  const reason = hints.length
+    ? `Smart selection inferred ${selected.length} file(s) from hints: ${hints.join(", ")}.`
+    : `Smart selection inferred ${selected.length} default source files.`;
+  console.info("[Repo Injector] Full-file selection", { mode: "smart", reason, selected });
+  return { selected, reason };
+}
+
+export function buildInclusionManifest(
+  includedFiles: FullFileResult[],
+  truncatedFiles: string[],
+  skippedFiles: Array<{ path: string; reason: string }>,
+): string {
+  const includedFull = includedFiles.map((file) => `${file.filePath} (${file.byteCount} bytes, sha256: ${file.sha256})`);
+  const totalBytesIncluded = includedFiles.reduce((sum, file) => sum + file.byteCount, 0);
+  const contextBudgetUsed = Math.min(100, Number(((totalBytesIncluded / 250_000) * 100).toFixed(2)));
+
+  const lines = ["FILES_INCLUSION_MANIFEST:"];
+  if (includedFull.length) lines.push(`- included_full: [${includedFull.join("; ")}]`);
+  if (truncatedFiles.length) {
+    lines.push(`- truncated: [${truncatedFiles.map((path) => `${path} (cut at hard cap)`).join("; ")}]`);
+  }
+  if (skippedFiles.length) {
+    lines.push(`- skipped: [${skippedFiles.map((item) => `${item.path} (${item.reason})`).join("; ")}]`);
+  }
+  lines.push(`- total_bytes_included: ${totalBytesIncluded}`);
+  lines.push(`- context_budget_used: ${contextBudgetUsed}%`);
+  return lines.join("\n");
+}
