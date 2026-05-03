@@ -161,7 +161,16 @@ function isVisionAnalysisModel(providerName: ProviderName, modelId: string): boo
   return normalizedModel.includes("vision");
 }
 
-function supportsWebSearch(providerName: ProviderName, modelId: string): boolean {
+function supportsWebSearch(providerName: ProviderName, modelId: string, registryLookup?: RegistryLookup): boolean {
+  const registry = lookupRegistryModel(registryLookup, providerName, modelId);
+  if (registry !== null && registry !== undefined && typeof registry.supports_web_search === "boolean") {
+    return registry.supports_web_search;
+  }
+
+  console.warn(
+    `[Router] supportsWebSearch: no registry entry for ${providerName}/${modelId}. Falling back to heuristic. Register this model to suppress warning.`
+  );
+
   const normalizedModel = modelId.toLowerCase();
   if (providerName === "grok") {
     return !isImageGenerationModel(providerName, modelId) && normalizedModel.includes("grok-4");
@@ -213,7 +222,40 @@ const CODE_PATCH_OR_DIFF_REGEX = /\b(diff|patch|@@|\+\+\+\s|---\s|\bcommit\b|pul
 const REPO_REVIEW_LANGUAGE_REGEX = /\b(repo|repository|code|file|files|source|routing|architecture|review|audit|debug|test|tests|deployment|kubernetes|docker|ci\/?cd)\b/i;
 
 export function hasDirectWebSearchHint(prompt: string): boolean {
-  return URL_REGEX.test(prompt) || VIDEO_HINTS_REGEX.test(prompt);
+  return detectWebSearchSignals(prompt).detected;
+}
+
+export type WebSearchSignals = {
+  detected: boolean;
+  urlPresent: boolean;
+  keywordMatch: boolean;
+  noSearchExplicit: boolean;
+  confidence: "high" | "medium" | "low";
+};
+
+const NO_BROWSE_REGEX =
+  /\b(do not browse|don'?t browse|no web search|no browsing|don'?t fetch|fetch disabled|offline only|classify from (?:my |this )?text)\b/i;
+const WEB_SEARCH_KEYWORD_REGEX =
+  /\b(what happened today|search for|find current|check the latest|latest news|live data|current events|real-time)\b/i;
+
+export function detectWebSearchSignals(prompt: string): WebSearchSignals {
+  const urlPresent = URL_REGEX.test(prompt);
+  const keywordMatch = WEB_SEARCH_KEYWORD_REGEX.test(prompt);
+  const noSearchExplicit = NO_BROWSE_REGEX.test(prompt);
+
+  let confidence: WebSearchSignals["confidence"] = "low";
+  if (!noSearchExplicit) {
+    if (urlPresent && keywordMatch) confidence = "high";
+    else if (urlPresent || keywordMatch) confidence = "medium";
+  }
+
+  return {
+    detected: (urlPresent || keywordMatch) && !noSearchExplicit,
+    urlPresent,
+    keywordMatch,
+    noSearchExplicit,
+    confidence
+  };
 }
 
 function containsCodePatchOrDiff(prompt: string): boolean {
@@ -509,19 +551,47 @@ export function buildIntentClassifierSystemPrompt(
   return `
 ${runtimeContextBlock}
 You are the Intent Classifier for Katie.
-Return a JSON object with an "intent" field.
-In addition, detect whether the user explicitly prefers a model provider.
-If they do, return a second field "preferred_provider" whose value is one of ["openai", "anthropic", "google", "grok"] or null.
-Treat provider preference as null when not clearly expressed.
-Never guess—only set when the user's wording is explicit or obvious.
-Return JSON only, no extra text.
-Use {"intent":"null","preferred_provider":null} when unsure.
-Intent must be one of: ${intents.join("|")}.
-Web-search is only for requests that require current/live external information.
-Do not classify as web-search merely because the prompt includes URLs, model names, repo paths, logs, or pasted code/diffs.
-When active repo context is present and the prompt discusses code, patches, routing, files, diffs, architecture, tests, or deployment, prefer architecture-review, code-review, technical-debugging, or general-text over web-search.
-Active repo context present: ${activeRepoContextPresent ? "yes" : "no"}.
-Routing signals: ${routingSignalsText}.
+## Output Format
+Return ONLY valid JSON. No markdown, no explanation.
+Schema: {"intent": "<intent>", "preferred_provider": "<provider>" | null}
+Use {"intent":"null","preferred_provider":null} when genuinely unsure.
+Intent must be exactly one of: ${intents.join("|")}
+
+## Core Rule
+Classify by what the user is ASKING YOU TO DO, not by what tokens appear in the prompt.
+
+## Web-Search Classification
+Web-search is ONLY for requests where live, current, or real-time external data is the point of the task.
+
+Classify as web-search when:
+- User asks what happened today / this week in news or events
+- User asks to find current/live pricing, docs, or data
+- User asks to browse or summarize a live URL as the primary task
+
+Do NOT classify as web-search when:
+- A URL appears incidentally in text being edited, analyzed, debugged, or reviewed
+- Variables, filenames, or field names contain url/link/current/latest/source/browse/today
+- User says "do not browse", "no web search", "don't fetch", "offline only", or "classify from my text"
+- The primary task is rewrite, debug, code-review, emotional-analysis, architecture-review, or similar — even if the prompt mentions URLs or time-sensitive words
+
+## Document vs Code Review
+- code-review: reviewing source code for correctness, bugs, implementation logic, API behavior, component/script/config quality
+- rewrite or general-text: reviewing prose, docs, README, markdown, or written content for clarity, tone, structure, or readability
+- "Review README.md for clarity" → rewrite or general-text
+- "Review lib/router/model-intent.ts for bugs" → code-review
+
+## Provider Preference
+Explicit preference: user says "Claude", "use Gemini", "Grok please", "via OpenAI" → set preferred_provider
+Style reference: user says "Grok-style bluntness", "Claude-like nuance", "Gemini-style explanation" → preferred_provider: null — this is a tone request, not a routing instruction
+
+## Active Repo Context
+Active repo context present: ${activeRepoContextPresent ? "yes" : "no"}
+When active repo context is present and prompt discusses code, diffs, routing, files, architecture, tests, or deployment → prefer architecture-review, code-review, or technical-debugging over web-search.
+
+## Routing Signals (advisory only — you are the authority)
+${routingSignalsText}
+
+## Intent Guide
 ${intentGuide}
   `.trim();
 }
@@ -610,53 +680,36 @@ async function classifyIntentWithLLMProviders(
   }
 
   const examples = [
+    { user: "What happened in AI news today?", intent: "web-search" },
+    { user: "Find the latest pricing for OpenAI and Anthropic models.", intent: "web-search" },
+    { user: "Check current Vercel maxDuration limits in their docs.", intent: "web-search" },
+    { user: "Summarize this live page: https://example.com/post", intent: "web-search" },
+    { user: "Search for what happened today: https://example.com", intent: "web-search" },
+    { user: 'Rewrite this sentence: "I saw this on https://example.com and it pissed me off."', intent: "rewrite" },
+    { user: "Review this architecture. Do not browse. The system stores source_url fields for audit logs.", intent: "architecture-review" },
+    { user: "Debug this API bug: my route accepts a url parameter but returns 404.", intent: "technical-debugging" },
+    { user: "Explain this code: a webhook receives currentUrl from the frontend.", intent: "general-text" },
+    { user: "I have a file named youtube-sync.ts. Review the likely design risks.", intent: "architecture-review" },
+    { user: 'This mentions "latest" but do not browse. Rewrite it: "latest invoice attached below."', intent: "rewrite" },
+    { user: "The variable is named newsSummary. Debug why the route fails.", intent: "technical-debugging" },
+    { user: "Review README.md for clarity, not code correctness.", intent: "rewrite" },
+    { user: "Review lib/router/model-intent.ts for code correctness.", intent: "code-review" },
+    { user: "Claude, give me a nuanced critique of this architecture.", intent: "architecture-review", preferred_provider: "anthropic" },
+    { user: "Use Grok-style bluntness: what is wrong with this plan?", intent: "architecture-review", preferred_provider: null },
+    { user: "Gemini please summarize this article.", intent: "rewrite", preferred_provider: "google" },
     { user: "Rewrite this paragraph in a friendly tone.", intent: "rewrite" },
-    { user: "Summarise today’s NYT front page.", intent: "news-summary" },
-    { user: "Review lib/router/model-intent.ts and explain risks.", intent: "code-review" },
-    { user: "Here is a Kubernetes deployment YAML. Spot the risks.", intent: "architecture-review" },
     { user: "What do you think about your last answer?", intent: "assistant-reflection" },
-    { user: "Critique the assistant's previous response.", intent: "assistant-reflection" },
-    { user: "Review your system message.", intent: "assistant-reflection" },
-    { user: "Evaluate your own output.", intent: "assistant-reflection" },
-    { user: "How would you improve the last reply?", intent: "assistant-reflection" },
-    { user: "Assess the quality of that response.", intent: "assistant-reflection" },
-    { user: "Reflect on your previous answer and suggest improvements.", intent: "assistant-reflection" },
-    { user: "Self-critique your last message.", intent: "assistant-reflection" },
-    { user: "Was your prior response accurate and complete?", intent: "assistant-reflection" },
-    { user: "Audit your previous output for mistakes.", intent: "assistant-reflection" },
-    { user: "Rate your last answer and explain the score.", intent: "assistant-reflection" },
     { user: "what up kat?", intent: "social-emotional" },
-    { user: "How are you feeling?", intent: "social-emotional" },
-    { user: "i need you to develop a fucking personality ...", intent: "social-emotional" },
-    { user: "What do you think of me?", intent: "social-emotional" },
-    { user: "Are you okay?", intent: "social-emotional" },
-    { user: "How good was your previous reply?", intent: "assistant-reflection" },
-    { user: "Find weaknesses in your last response.", intent: "assistant-reflection" },
-    { user: "Re-evaluate your earlier answer.", intent: "assistant-reflection" },
-    { user: "Could your previous response be improved?", intent: "assistant-reflection" },
-    { user: "Judge your own response quality.", intent: "assistant-reflection" },
-    { user: "Inspect your last output for bias.", intent: "assistant-reflection" },
-    { user: "Give a postmortem on your previous answer.", intent: "assistant-reflection" },
-    { user: "How well did you answer that?", intent: "assistant-reflection" },
-    { user: "Review and critique what you just wrote.", intent: "assistant-reflection" },
-    { user: "Evaluate whether your last answer followed instructions.", intent: "assistant-reflection" },
-    { user: "Check your previous response for hallucinations.", intent: "assistant-reflection" },
-    { user: "Analyze your own last reply for clarity.", intent: "assistant-reflection" },
-    { user: "Provide a self-review of the answer above.", intent: "assistant-reflection" },
-    { user: "Tell me what's wrong with your previous response.", intent: "assistant-reflection" },
-    { user: "Compare your last answer to best practices and critique it.", intent: "assistant-reflection" }
+    { user: "Here is a Kubernetes deployment YAML. Spot the risks.", intent: "architecture-review" }
   ];
   const activeRepoContextPresent = Boolean(options?.activeRepoContextAttached);
   const systemPrompt = buildIntentClassifierSystemPrompt(intents, activeRepoContextPresent, options?.routingSignals as Record<string, unknown> | undefined, options);
-  const fewShot = [
-    ...examples.flatMap((example) => [`USER: ${example.user}`, `ASSISTANT: ${JSON.stringify({ intent: example.intent, preferred_provider: null })}`]),
-    "USER: Claude, can you look at the router code?",
-    `ASSISTANT: ${JSON.stringify({ intent: "architecture-review", preferred_provider: "anthropic" })}`,
-    "USER: Gemini please summarize this article.",
-    `ASSISTANT: ${JSON.stringify({ intent: "rewrite", preferred_provider: "google" })}`,
-    "USER: Quick question about pricing tiers.",
-    `ASSISTANT: ${JSON.stringify({ intent: "general-text", preferred_provider: null })}`
-  ].join("\n");
+  const fewShot = examples
+    .flatMap((example) => [
+      `USER: ${example.user}`,
+      `ASSISTANT: ${JSON.stringify({ intent: example.intent, preferred_provider: example.preferred_provider ?? null })}`
+    ])
+    .join("\n");
 
   const decisionPayload = [systemPrompt, "Few-shot examples:", fewShot, `USER: ${prompt}`].join("\n\n");
   const runtimeContextBlock = buildKatieRuntimeContextBlock(options);
@@ -721,6 +774,7 @@ export async function inferRequestIntent(
   const patchOrDiffSignal = containsCodePatchOrDiff(prompt);
   const repoReviewSignal = containsRepoReviewLanguage(prompt);
   const repoReviewContextActive = activeRepoContextPresent && (patchOrDiffSignal || repoReviewSignal);
+  const webSearchSignals = detectWebSearchSignals(prompt);
   const hintText = (options?.hints ?? []).map((hint) => `${hint.hintIntent ?? "unknown"}:${hint.hintConfidence ?? "n/a"}`).join(", ");
   if (hintText) {
     console.info(`[Intent Hints] ${hintText}`);
@@ -774,7 +828,9 @@ export async function inferRequestIntent(
       repoReviewContextActive,
       containsCodePatchOrDiff: patchOrDiffSignal,
       containsRepoReviewLanguage: repoReviewSignal,
-      hasDirectWebSearchHint: hasDirectWebSearchHint(prompt),
+      webSearchHint: webSearchSignals.confidence !== "low",
+      webSearchNoSearchExplicit: webSearchSignals.noSearchExplicit,
+      webSearchSignals,
       heuristicHintIntent: bestHeuristicHint,
       routingIntent: bestHeuristicHint ?? "unknown",
       routingAuthority: bestHeuristicHint ? "heuristic" : "unknown",
@@ -782,6 +838,17 @@ export async function inferRequestIntent(
     }
   });
   const classifiedIntent = classifiedOutput.intent;
+  const resolvedIntent = classifiedIntent ?? bestHeuristicHint ?? (hasImages || hasVideoInput ? "vision-analysis" : "general-text");
+  if (webSearchSignals.urlPresent || webSearchSignals.keywordMatch) {
+    console.debug("[Intent Router] web-search-signal-audit", {
+      urlPresent: webSearchSignals.urlPresent,
+      keywordMatch: webSearchSignals.keywordMatch,
+      noSearchExplicit: webSearchSignals.noSearchExplicit,
+      confidence: webSearchSignals.confidence,
+      classifiedIntent: resolvedIntent,
+      hintHonored: resolvedIntent === "web-search"
+    });
+  }
 
   const sanitizedClassifiedIntent = sanitizeCodeGenerationIntent(prompt, classifiedIntent, "control-plane");
   if (sanitizedClassifiedIntent && availableIntents.includes(sanitizedClassifiedIntent)) {
@@ -829,6 +896,7 @@ export async function inferRequestClassification(
   const patchOrDiffSignal = containsCodePatchOrDiff(prompt);
   const repoReviewSignal = containsRepoReviewLanguage(prompt);
   const repoReviewContextActive = activeRepoContextPresent && (patchOrDiffSignal || repoReviewSignal);
+  const webSearchSignals = detectWebSearchSignals(prompt);
   const hintText = (options?.hints ?? []).map((hint) => `${hint.hintIntent ?? "unknown"}:${hint.hintConfidence ?? "n/a"}`).join(", ");
   if (hintText) {
     console.info(`[Intent Hints] ${hintText}`);
@@ -874,7 +942,9 @@ export async function inferRequestClassification(
       repoReviewContextActive,
       containsCodePatchOrDiff: patchOrDiffSignal,
       containsRepoReviewLanguage: repoReviewSignal,
-      hasDirectWebSearchHint: hasDirectWebSearchHint(prompt),
+      webSearchHint: webSearchSignals.confidence !== "low",
+      webSearchNoSearchExplicit: webSearchSignals.noSearchExplicit,
+      webSearchSignals,
       heuristicHintIntent: bestHeuristicHint,
       routingIntent: bestHeuristicHint ?? "unknown",
       routingAuthority: bestHeuristicHint ? "heuristic" : "unknown",
@@ -882,6 +952,17 @@ export async function inferRequestClassification(
     }
   });
   const sanitizedClassifiedIntent = sanitizeCodeGenerationIntent(prompt, classifiedOutput.intent, "control-plane");
+  const resolvedIntent = sanitizedClassifiedIntent ?? bestHeuristicHint ?? (hasImages || hasVideoInput ? "vision-analysis" : "general-text");
+  if (webSearchSignals.urlPresent || webSearchSignals.keywordMatch) {
+    console.debug("[Intent Router] web-search-signal-audit", {
+      urlPresent: webSearchSignals.urlPresent,
+      keywordMatch: webSearchSignals.keywordMatch,
+      noSearchExplicit: webSearchSignals.noSearchExplicit,
+      confidence: webSearchSignals.confidence,
+      classifiedIntent: resolvedIntent,
+      hintHonored: resolvedIntent === "web-search"
+    });
+  }
   if (sanitizedClassifiedIntent && availableIntents.includes(sanitizedClassifiedIntent)) {
     if (sanitizedClassifiedIntent === "social-emotional") {
       console.info("[Intent Source] social-emotional selected via control-plane classifier");
@@ -909,7 +990,7 @@ function modelSupportsIntent(
   const registry = lookupRegistryModel(registryLookup, providerName, modelId);
   const supportsImageGeneration = registry?.supports_image_generation ?? isImageGenerationModel(providerName, modelId);
   const supportsVision = registry?.supports_vision ?? isVisionAnalysisModel(providerName, modelId);
-  const supportsWebSearchFlag = registry?.supports_web_search ?? supportsWebSearch(providerName, modelId);
+  const supportsWebSearchFlag = supportsWebSearch(providerName, modelId, registryLookup);
   const supportsText = registry?.supports_text ?? !supportsImageGeneration;
   const modalitySpecialized = isModalitySpecializedGenerationModel(providerName, modelId);
 
@@ -1199,7 +1280,7 @@ export function scoreModelsForIntent(
     .sort((left, right) => right.score - left.score);
 }
 
-function detectSpecializationTags(providerName: ProviderName, modelId: string): ModelSpecializationTag[] {
+function detectSpecializationTags(providerName: ProviderName, modelId: string, registryLookup?: RegistryLookup): ModelSpecializationTag[] {
   const normalizedModel = modelId.toLowerCase();
   const tags: ModelSpecializationTag[] = [];
   if (/codex|code|o3|sonnet|opus|gpt-5/.test(normalizedModel)) tags.push("coding");
@@ -1211,7 +1292,7 @@ function detectSpecializationTags(providerName: ProviderName, modelId: string): 
   if (/claude|sonnet|opus|grok-4|gpt-5/.test(normalizedModel)) tags.push("interpersonal");
   if (/claude|sonnet|opus|gpt-5/.test(normalizedModel)) tags.push("empathy");
   if (isVisionAnalysisModel(providerName, modelId)) tags.push("multimodal");
-  if (supportsWebSearch(providerName, modelId)) tags.push("research");
+  if (supportsWebSearch(providerName, modelId, registryLookup)) tags.push("research");
   if (/opus|o3|codex|sonnet|pro|gpt-5/.test(normalizedModel)) tags.push("reflection");
   return Array.from(new Set(tags));
 }
@@ -1239,14 +1320,14 @@ export function buildCandidateMetadata(
     providerName,
     modelId,
     supports_text: registry?.supports_text ?? !supportsImageGeneration,
-    supports_web_search: registry?.supports_web_search ?? supportsWebSearch(providerName, modelId),
+    supports_web_search: supportsWebSearch(providerName, modelId, options?.registryLookup),
     supports_vision: supportsVision,
     supports_video: supportsVideo,
     supports_image_generation: supportsImageGeneration,
     reasoning_depth_tier: reasoningDepth,
     speed_tier: speedTier,
     cost_tier: costTier,
-    specialization_tags: detectSpecializationTags(providerName, modelId),
+    specialization_tags: detectSpecializationTags(providerName, modelId, options?.registryLookup),
     prior_score
   };
 }
@@ -1454,7 +1535,7 @@ export function scoreModelCandidateWithBreakdown(
           adjustments.push({ label: "social_emotional_nuance_model_bonus", delta: 4 });
         }
       }
-      if (intent === "web-search" && supportsWebSearch(providerName, modelId)) {
+      if (intent === "web-search" && supportsWebSearch(providerName, modelId, options?.registryLookup)) {
         adjustments.push({ label: "web_search_hard_requirement_met", delta: 3 });
       }
       applyActorRoutingBias();
@@ -1637,6 +1718,13 @@ Rules:
 - Hard rules and invalid candidates have already been filtered deterministically; treat them as fixed constraints.
 - Use preference_profile and candidate metadata to choose the best fit for the actual task.
 - Optimize tradeoffs among quality, reasoning depth, speed, cost, specialization, and modality fit.
+- Choose the cheapest capable model unless the task genuinely requires high-depth reasoning.
+- High-depth tasks: architecture-review, technical-debugging, code-review with complex logic, multimodal-reasoning, long-context assistant-reflection.
+- Efficient tasks: general-text, rewrite, news-summary, web-search, simple code-generation, social-emotional, persona/status questions.
+- Do not select premium models because the topic mentions architecture, repo, or routing. Match model depth to actual reasoning demand.
+- Prefer specialized coding models for implementation and debug tasks.
+- Prefer writing/conversational models for prose, README, and clarity tasks.
+- Prefer web-capable models only when intent is web-search or news-summary.
 - Use prior_score only as advisory guidance; do not blindly choose the highest prior_score.
 - If another candidate is clearly better for the task, choose it even when prior_score is lower.
 - Respect explicit provider preferences only when clearly requested.
