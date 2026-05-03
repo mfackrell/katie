@@ -115,6 +115,60 @@ type ChatSessionContext = {
   } | null;
 };
 
+
+function inferModelTier(modelId: string): "premium" | "medium" | "light" {
+  const normalized = (modelId || "").toLowerCase();
+
+  if (
+    normalized.includes("o3-pro") ||
+    normalized.includes("opus") ||
+    normalized.includes("gpt-5.5") ||
+    normalized.includes("gpt-5.3") ||
+    normalized.includes("claude-opus") ||
+    normalized.includes("grok-4") ||
+    normalized.includes("unified")
+  ) {
+    return "premium";
+  }
+
+  if (
+    normalized.includes("flash") ||
+    normalized.includes("mini") ||
+    normalized.includes("haiku") ||
+    normalized.includes("lite") ||
+    normalized.includes("pulse")
+  ) {
+    return "light";
+  }
+
+  return "medium";
+}
+
+function buildKatieRuntimeContext({
+  provider,
+  modelId,
+  modelTier,
+  classifiedIntent,
+  routingAuthority,
+  requestId
+}: {
+  provider?: string;
+  modelId?: string;
+  modelTier?: "premium" | "medium" | "light";
+  classifiedIntent?: string;
+  routingAuthority?: string;
+  requestId?: string;
+}): string {
+  return `KATIE_RUNTIME_CONTEXT:
+- current_provider: ${provider || "unknown"}
+- current_model: ${modelId || "unknown"}
+- model_tier: ${modelTier || "unknown"}
+- routing_intent: ${classifiedIntent || "unknown"}
+- routing_authority: ${routingAuthority || "unknown"}
+- request_id: ${requestId || "unknown"}
+---`;
+}
+
 function shouldRunRepoAuditMode(message: string): boolean {
   return /\b(audit|review|inspect|debug|explain)\b/i.test(message);
 }
@@ -1016,6 +1070,27 @@ export async function POST(request: NextRequest) {
         });
       }
     }
+
+    const modelTier = inferModelTier(modelId);
+    const runtimeContext = buildKatieRuntimeContext({
+      provider: provider.name,
+      modelId,
+      modelTier,
+      classifiedIntent: resolvedRequestIntent,
+      routingAuthority: intentAuthority === "llm" ? "llm-classifier" : intentAuthority === "override" ? "explicit-preference" : intentAuthority,
+      requestId,
+    });
+    personaForGeneration = `${runtimeContext}
+
+${personaForGeneration}`;
+    console.debug("[Chat API] Katie runtime context injected", {
+      requestId,
+      selectedProvider: provider.name,
+      selectedModelId: modelId,
+      modelTier,
+      classifiedIntent: resolvedRequestIntent ?? "unknown",
+      routingAuthority: intentAuthority,
+    });
 
     const selectedProviderSupport = getAttachmentSupportForProvider(provider.name, attachments);
     if (!selectedProviderSupport.supported && !overrideProvider) {
