@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { inferRequestClassification } from "@/lib/router/model-intent";
+import { detectWebSearchSignals, hasDirectWebSearchHint, inferRequestClassification } from "@/lib/router/model-intent";
 
 test("pasted diff + repo critique + active repo should not route as web-search", async () => {
   const prompt = `Please audit this repo patch and critique routing decisions:\n--- a/lib/router/model-intent.ts\n+++ b/lib/router/model-intent.ts\n@@ -10,4 +10,8 @@\n+if (hasDirectWebSearchHint(prompt)) return { intent: \"web-search\" };`;
@@ -28,4 +28,21 @@ test("video/url/model/log/diff hints alone should not force web-search in active
   const prompt = `watch this mp4 route bug\nmodel: gpt-5\nlog: stacktrace...\n--- a/a.ts\n+++ b/a.ts`;
   const result = await inferRequestClassification(prompt, { hasImages: false }, { activeRepoContextAttached: true });
   assert.notEqual(result.intent, "web-search");
+});
+
+test("detectWebSearchSignals respects explicit no-browse overrides", () => {
+  const signals = detectWebSearchSignals("Review this architecture: do not browse. source_url is an audit field.");
+  assert.equal(signals.urlPresent, false);
+  assert.equal(signals.keywordMatch, false);
+  assert.equal(signals.noSearchExplicit, true);
+  assert.equal(signals.confidence, "low");
+  assert.equal(signals.detected, false);
+});
+
+test("detectWebSearchSignals does not treat video hints as web-search cues", () => {
+  const signals = detectWebSearchSignals("Debug this route: youtube watcher url param returns 404");
+  assert.equal(signals.urlPresent, false);
+  assert.equal(signals.keywordMatch, false);
+  assert.equal(signals.detected, false);
+  assert.equal(hasDirectWebSearchHint("Debug this route: youtube watcher url param returns 404"), false);
 });
