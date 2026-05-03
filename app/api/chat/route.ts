@@ -1071,27 +1071,6 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    const modelTier = inferModelTier(modelId);
-    const runtimeContext = buildKatieRuntimeContext({
-      provider: provider.name,
-      modelId,
-      modelTier,
-      classifiedIntent: resolvedRequestIntent,
-      routingAuthority: intentAuthority === "llm" ? "llm-classifier" : intentAuthority === "override" ? "explicit-preference" : intentAuthority,
-      requestId,
-    });
-    personaForGeneration = `${runtimeContext}
-
-${personaForGeneration}`;
-    console.debug("[Chat API] Katie runtime context injected", {
-      requestId,
-      selectedProvider: provider.name,
-      selectedModelId: modelId,
-      modelTier,
-      classifiedIntent: resolvedRequestIntent ?? "unknown",
-      routingAuthority: intentAuthority,
-    });
-
     const selectedProviderSupport = getAttachmentSupportForProvider(provider.name, attachments);
     if (!selectedProviderSupport.supported && !overrideProvider) {
       const compatibleFallback = fallbackChain.find((candidate) => {
@@ -1112,6 +1091,28 @@ ${personaForGeneration}`;
         { status: 400 }
       );
     }
+
+    const modelTier = inferModelTier(modelId);
+    const runtimeContext = buildKatieRuntimeContext({
+      provider: provider.name,
+      modelId,
+      modelTier,
+      classifiedIntent: resolvedRequestIntent,
+      routingAuthority: intentAuthority === "llm" ? "llm-classifier" : intentAuthority === "override" ? "explicit-preference" : intentAuthority,
+      requestId,
+    });
+    personaForGeneration = `${runtimeContext}
+
+${personaForGeneration}`;
+    console.debug("[Chat API] Katie runtime context injected", {
+      requestId,
+      selectedProvider: provider.name,
+      selectedModelId: modelId,
+      modelTier,
+      classifiedIntent: resolvedRequestIntent ?? "unknown",
+      routingAuthority: intentAuthority,
+      included: personaForGeneration.includes("KATIE_RUNTIME_CONTEXT:")
+    });
 
     let streamCancelled = false;
     const stream = new ReadableStream<Uint8Array>({
