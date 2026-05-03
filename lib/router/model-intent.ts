@@ -458,7 +458,73 @@ type ControlPlaneSelectionOptions = {
   attachmentSummaryForClassifier?: string;
   activeRepoContextAttached?: boolean;
   routingSignals?: Record<string, boolean> | Record<string, unknown>;
+  requestId?: string;
 };
+
+function formatRuntimeContextValue(value: unknown, fallback: string): string {
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    return trimmed ? trimmed : fallback;
+  }
+  if (typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+  return fallback;
+}
+
+function buildKatieRuntimeContextBlock(options?: ControlPlaneSelectionOptions): string {
+  const signals = (options?.routingSignals ?? {}) as Record<string, unknown>;
+  const currentProvider = formatRuntimeContextValue(signals.currentProvider, "unknown");
+  const currentModel = formatRuntimeContextValue(signals.currentModel, "unknown");
+  const modelTier = formatRuntimeContextValue(signals.modelTier, "unknown");
+  const routingIntent = formatRuntimeContextValue(signals.routingIntent, "unknown");
+  const routingAuthority = formatRuntimeContextValue(signals.routingAuthority, "unknown");
+  const requestId = formatRuntimeContextValue(signals.requestId ?? options?.requestId, "N/A");
+
+  return [
+    "KATIE_RUNTIME_CONTEXT:",
+    `- current_provider: ${currentProvider}`,
+    `- current_model: ${currentModel}`,
+    `- model_tier: ${modelTier}`,
+    `- routing_intent: ${routingIntent}`,
+    `- routing_authority: ${routingAuthority}`,
+    `- request_id: ${requestId}`,
+    "---"
+  ].join("\n");
+}
+
+export function buildIntentClassifierSystemPrompt(
+  intents: RequestIntent[],
+  activeRepoContextPresent: boolean,
+  routingSignals: Record<string, unknown> | undefined,
+  options?: ControlPlaneSelectionOptions
+): string {
+  const runtimeContextBlock = buildKatieRuntimeContextBlock({
+    ...options,
+    routingSignals: routingSignals ?? options?.routingSignals
+  });
+  const routingSignalsText = JSON.stringify(routingSignals ?? {});
+  const intentGuide = intents.map((intent) => `- ${intent}: ${intentDescriptions[intent]}`).join("\n");
+
+  return `
+${runtimeContextBlock}
+You are the Intent Classifier for Katie.
+Return a JSON object with an "intent" field.
+In addition, detect whether the user explicitly prefers a model provider.
+If they do, return a second field "preferred_provider" whose value is one of ["openai", "anthropic", "google", "grok"] or null.
+Treat provider preference as null when not clearly expressed.
+Never guess—only set when the user's wording is explicit or obvious.
+Return JSON only, no extra text.
+Use {"intent":"null","preferred_provider":null} when unsure.
+Intent must be one of: ${intents.join("|")}.
+Web-search is only for requests that require current/live external information.
+Do not classify as web-search merely because the prompt includes URLs, model names, repo paths, logs, or pasted code/diffs.
+When active repo context is present and the prompt discusses code, patches, routing, files, diffs, architecture, tests, or deployment, prefer architecture-review, code-review, technical-debugging, or general-text over web-search.
+Active repo context present: ${activeRepoContextPresent ? "yes" : "no"}.
+Routing signals: ${routingSignalsText}.
+${intentGuide}
+  `.trim();
+}
 
 const CONTROL_PLANE_VERIFIED_MODEL_IDS: Record<ProviderName, string[]> = {
   openai: ["gpt-5.3-codex", "gpt-5.2-unified", "gpt-5.2", "o3-pro"],
@@ -543,7 +609,6 @@ async function classifyIntentWithLLMProviders(
     return { intent: null, preferred_provider: null };
   }
 
-  const intentGuide = intents.map((intent) => `- ${intent}: ${intentDescriptions[intent]}`).join("\n");
   const examples = [
     { user: "Rewrite this paragraph in a friendly tone.", intent: "rewrite" },
     { user: "Summarise today’s NYT front page.", intent: "news-summary" },
@@ -582,24 +647,7 @@ async function classifyIntentWithLLMProviders(
     { user: "Compare your last answer to best practices and critique it.", intent: "assistant-reflection" }
   ];
   const activeRepoContextPresent = Boolean(options?.activeRepoContextAttached);
-  const routingSignalsText = JSON.stringify(options?.routingSignals ?? {});
-  const systemPrompt = `
-You are the Intent Classifier for Katie.
-Return a JSON object with an "intent" field.
-In addition, detect whether the user explicitly prefers a model provider.
-If they do, return a second field "preferred_provider" whose value is one of ["openai", "anthropic", "google", "grok"] or null.
-Treat provider preference as null when not clearly expressed.
-Never guess—only set when the user's wording is explicit or obvious.
-Return JSON only, no extra text.
-Use {"intent":"null","preferred_provider":null} when unsure.
-Intent must be one of: ${intents.join("|")}.
-Web-search is only for requests that require current/live external information.
-Do not classify as web-search merely because the prompt includes URLs, model names, repo paths, logs, or pasted code/diffs.
-When active repo context is present and the prompt discusses code, patches, routing, files, diffs, architecture, tests, or deployment, prefer architecture-review, code-review, technical-debugging, or general-text over web-search.
-Active repo context present: ${activeRepoContextPresent ? "yes" : "no"}.
-Routing signals: ${routingSignalsText}.
-${intentGuide}
-  `.trim();
+  const systemPrompt = buildIntentClassifierSystemPrompt(intents, activeRepoContextPresent, options?.routingSignals as Record<string, unknown> | undefined, options);
   const fewShot = [
     ...examples.flatMap((example) => [`USER: ${example.user}`, `ASSISTANT: ${JSON.stringify({ intent: example.intent, preferred_provider: null })}`]),
     "USER: Claude, can you look at the router code?",
@@ -611,6 +659,11 @@ ${intentGuide}
   ].join("\n");
 
   const decisionPayload = [systemPrompt, "Few-shot examples:", fewShot, `USER: ${prompt}`].join("\n\n");
+  const runtimeContextBlock = buildKatieRuntimeContextBlock(options);
+  console.debug("[Intent Classifier] llm-request-payload-with-context", {
+    requestId: options?.requestId ?? (options?.routingSignals as Record<string, unknown> | undefined)?.requestId ?? null,
+    injectedContext: runtimeContextBlock
+  });
   const result = await executeControlPlaneJsonTask({
     taskName: "intent-classification",
     decisionProviders: eligibleDecisionProviders,
@@ -722,7 +775,10 @@ export async function inferRequestIntent(
       containsCodePatchOrDiff: patchOrDiffSignal,
       containsRepoReviewLanguage: repoReviewSignal,
       hasDirectWebSearchHint: hasDirectWebSearchHint(prompt),
-      heuristicHintIntent: bestHeuristicHint
+      heuristicHintIntent: bestHeuristicHint,
+      routingIntent: bestHeuristicHint ?? "unknown",
+      routingAuthority: bestHeuristicHint ? "heuristic" : "unknown",
+      requestId: (options?.routingSignals as Record<string, unknown> | undefined)?.requestId ?? options?.requestId
     }
   });
   const classifiedIntent = classifiedOutput.intent;
@@ -819,7 +875,10 @@ export async function inferRequestClassification(
       containsCodePatchOrDiff: patchOrDiffSignal,
       containsRepoReviewLanguage: repoReviewSignal,
       hasDirectWebSearchHint: hasDirectWebSearchHint(prompt),
-      heuristicHintIntent: bestHeuristicHint
+      heuristicHintIntent: bestHeuristicHint,
+      routingIntent: bestHeuristicHint ?? "unknown",
+      routingAuthority: bestHeuristicHint ? "heuristic" : "unknown",
+      requestId: (options?.routingSignals as Record<string, unknown> | undefined)?.requestId ?? options?.requestId
     }
   });
   const sanitizedClassifiedIntent = sanitizeCodeGenerationIntent(prompt, classifiedOutput.intent, "control-plane");
