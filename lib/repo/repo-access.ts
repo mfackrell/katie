@@ -1,4 +1,5 @@
 import { Octokit } from "@octokit/rest";
+import crypto from "node:crypto";
 
 export type RepoFileManifest = {
   path: string;
@@ -203,6 +204,26 @@ export async function getRepoFile(repoId: string, path: string): Promise<RepoFil
   const truncated = file.content.length > MAX_FILE_CHARS;
   const content = truncated ? file.content.slice(0, MAX_FILE_CHARS) : file.content;
   return { path, content, lineStart: 1, lineEnd: totalLines, totalLines, size: file.size, truncated };
+}
+
+export async function getRepoFileFullContent(
+  repoId: string,
+  filePath: string,
+  options?: { hardCapBytes?: number },
+): Promise<{ content: string; isTruncated: boolean; byteCount: number; sha256: string; filePath: string }> {
+  const hardCap = options?.hardCapBytes ?? 250_000;
+  const file = await readFile(repoId, filePath);
+  if (!file.content) {
+    throw new Error(`File not found: ${filePath}`);
+  }
+
+  const fullByteCount = Buffer.byteLength(file.content, "utf8");
+  const isTruncated = fullByteCount > hardCap;
+  const content = isTruncated ? file.content.slice(0, hardCap) : file.content;
+  const byteCount = Buffer.byteLength(content, "utf8");
+  const sha256 = crypto.createHash("sha256").update(content).digest("hex");
+
+  return { content, isTruncated, byteCount, sha256, filePath };
 }
 
 export async function getRepoFileRange(repoId: string, path: string, startLine: number, endLine: number): Promise<RepoFileContent> {
