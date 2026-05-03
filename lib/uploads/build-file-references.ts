@@ -10,6 +10,9 @@ const MAX_FILES = 5;
 const MAX_VIDEO_FILE_SIZE_BYTES = 200 * 1024 * 1024;
 const PREVIEW_MAX_CHARS = 2000;
 const CSV_PREVIEW_MAX_ROWS = 50;
+const GOOGLE_VIDEO_ACTIVE_INITIAL_DELAY_MS = 1000;
+const GOOGLE_VIDEO_ACTIVE_POLL_INTERVAL_MS = 1500;
+const GOOGLE_VIDEO_ACTIVE_TIMEOUT_MS = 45_000;
 
 const ALLOWED_VIDEO_MIME_TYPES = new Set([
   "video/mp4",
@@ -104,7 +107,95 @@ async function uploadToGoogle(file: File): Promise<string | undefined> {
       mimeType: file.type || undefined
     }
   });
-  return upload.uri ?? undefined;
+  if (!isAllowedVideoFileType(file)) {
+    return upload.uri ?? undefined;
+  }
+
+  const googleFileName = typeof upload.name === "string" ? upload.name : undefined;
+  const googleFileUri = upload.uri ?? undefined;
+  console.info(
+    `[uploads] google video uploaded name="${file.name}" googleFileName="${googleFileName ?? "unknown"}" googleFileUri="${googleFileUri ?? "missing"}"`
+  );
+
+  if (!googleFileName || !googleFileUri) {
+    return googleFileUri;
+  }
+
+  await waitForGoogleVideoFileActive({
+    apiKey,
+    fileName: file.name,
+    googleFileName,
+    googleFileUri
+  });
+  return googleFileUri;
+}
+
+function normalizeGoogleFileState(stateValue: unknown): string {
+  if (typeof stateValue === "string") {
+    const withPrefixRemoved = stateValue.startsWith("STATE_") ? stateValue.slice(6) : stateValue;
+    const namespaced = withPrefixRemoved.includes(".")
+      ? withPrefixRemoved.slice(withPrefixRemoved.lastIndexOf(".") + 1)
+      : withPrefixRemoved;
+    return namespaced.toUpperCase();
+  }
+
+  if (stateValue && typeof stateValue === "object" && "name" in stateValue) {
+    const name = (stateValue as { name?: unknown }).name;
+    return typeof name === "string" ? normalizeGoogleFileState(name) : "UNKNOWN";
+  }
+
+  return "UNKNOWN";
+}
+
+async function waitForGoogleVideoFileActive(params: {
+  apiKey: string;
+  fileName: string;
+  googleFileName: string;
+  googleFileUri: string;
+}): Promise<void> {
+  const { apiKey, fileName, googleFileName, googleFileUri } = params;
+  const fileUrl = `https://generativelanguage.googleapis.com/v1beta/${googleFileName}?key=${encodeURIComponent(apiKey)}`;
+  const startTime = Date.now();
+  let lastState = "PENDING";
+
+  await new Promise((resolve) => setTimeout(resolve, GOOGLE_VIDEO_ACTIVE_INITIAL_DELAY_MS));
+
+  while (Date.now() - startTime <= GOOGLE_VIDEO_ACTIVE_TIMEOUT_MS) {
+    const response = await fetch(fileUrl, { method: "GET" });
+    if (!response.ok) {
+      throw new Error(`Google video processing failed for "${fileName}".`);
+    }
+
+    const payload = (await response.json()) as { state?: unknown };
+    const currentState = normalizeGoogleFileState(payload.state);
+
+    if (currentState !== lastState) {
+      console.info(
+        `[uploads] google video state transition name="${fileName}" googleFileName="${googleFileName}" googleFileUri="${googleFileUri}" state="${lastState}"->"${currentState}"`
+      );
+      lastState = currentState;
+    }
+
+    if (currentState === "ACTIVE") {
+      return;
+    }
+
+    if (currentState === "FAILED") {
+      console.error(
+        `[uploads] google video processing failed name="${fileName}" googleFileName="${googleFileName}" googleFileUri="${googleFileUri}" state="${currentState}"`
+      );
+      throw new Error(`Google video processing failed for "${fileName}".`);
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, GOOGLE_VIDEO_ACTIVE_POLL_INTERVAL_MS));
+  }
+
+  console.error(
+    `[uploads] google video processing timed out name="${fileName}" googleFileName="${googleFileName}" googleFileUri="${googleFileUri}" lastState="${lastState}"`
+  );
+  throw new Error(
+    `Google video processing timed out for "${fileName}". Try again in a moment or upload a shorter video.`
+  );
 }
 
 async function buildProviderRef(file: File): Promise<FileReference["providerRef"]> {
