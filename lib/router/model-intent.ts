@@ -217,7 +217,6 @@ function isProviderName(value: string): value is ProviderName {
 }
 
 const URL_REGEX = /(https?:\/\/[^\s]+)/i;
-const VIDEO_HINTS_REGEX = /\b(youtube|youtu\.be|vimeo|video|watch|mp4|mov)\b/i;
 const CODE_PATCH_OR_DIFF_REGEX = /\b(diff|patch|@@|\+\+\+\s|---\s|\bcommit\b|pull request|pr\b)\b/i;
 const REPO_REVIEW_LANGUAGE_REGEX = /\b(repo|repository|code|file|files|source|routing|architecture|review|audit|debug|test|tests|deployment|kubernetes|docker|ci\/?cd)\b/i;
 
