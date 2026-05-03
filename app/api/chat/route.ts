@@ -1243,9 +1243,33 @@ ${chunkWorkflowSummary}`;
                   });
                 }
 
+                const candidateRuntimeContext = buildKatieRuntimeContext({
+                  provider: provider.name,
+                  modelId,
+                  modelTier: inferModelTier(modelId),
+                  classifiedIntent: resolvedRequestIntent,
+                  routingAuthority: intentAuthority === "llm" ? "llm-classifier" : intentAuthority === "override" ? "explicit-preference" : intentAuthority,
+                  requestId,
+                });
+                const baseParams = createParams(modelId);
+                const finalParams = baseParams.persona.includes("KATIE_RUNTIME_CONTEXT:")
+                  ? baseParams
+                  : {
+                      ...baseParams,
+                      persona: `${candidateRuntimeContext}\n\n${baseParams.persona}`,
+                    };
+                const finalPayloadPreview = finalParams.persona.slice(0, 120).replace(/\s+/g, " ");
+                console.log("[Chat API] FINAL provider payload contains KATIE_RUNTIME_CONTEXT?", {
+                  included: finalParams.persona.includes("KATIE_RUNTIME_CONTEXT:"),
+                  provider: provider.name,
+                  modelId,
+                  requestId,
+                  preview: finalPayloadPreview
+                });
+
                 const generation = await runGeneration({
                   provider,
-                  params: createParams(modelId),
+                  params: finalParams,
                   onTextDelta: enqueueDelta
                 });
 
