@@ -596,6 +596,41 @@ test("router control-plane classification works without openai when another elig
   assert.equal(decision.explainer?.fallback_used, false);
 });
 
+test("control plane fails over from current OpenAI router model to Claude before heuristics", async () => {
+  const attempts: string[] = [];
+  const openaiFail = provider("openai", ["gpt-5.6-sol"], async ({ modelId }) => {
+    attempts.push(`openai:${modelId ?? "none"}`);
+    throw new Error("openai control plane unavailable");
+  }).provider;
+  const anthropicPass = provider("anthropic", ["claude-sonnet-5"], async ({ user, modelId }) => {
+    attempts.push(`anthropic:${modelId ?? "none"}`);
+    const text = user.includes("Intent Classifier")
+      ? JSON.stringify({
+          intent: "social-emotional",
+          secondary_intents: [],
+          complexity: "medium",
+          provider_refusal_risk: "low",
+          preferred_provider: null
+        })
+      : JSON.stringify({ selected: { provider: "anthropic", model: "claude-sonnet-5" } });
+    return { text, model: modelId ?? "claude-sonnet-5", provider: "anthropic" };
+  }).provider;
+
+  const decision = await chooseProvider(
+    "I feel isolated and I do not know what to do about it.",
+    "Conversation summary: The user has been talking about loneliness and connection.",
+    [openaiFail, anthropicPass],
+    { routingRequestId: "test-current-control-plane-provider-failover" }
+  );
+
+  assert.ok(attempts.includes("openai:gpt-5.6-sol"));
+  assert.ok(attempts.includes("anthropic:claude-sonnet-5"));
+  assert.equal(decision.provider.name, "anthropic");
+  assert.equal(decision.modelId, "claude-sonnet-5");
+  assert.equal(decision.explainer?.selected_source, "llm-primary");
+  assert.equal(decision.explainer?.fallback_used, false);
+});
+
 test("router reranker accepts first successful compatible provider without heuristic fallback", async () => {
   const attempts: string[] = [];
   const anthropicFail = provider("anthropic", ["claude-4.5-sonnet"], async () => {
