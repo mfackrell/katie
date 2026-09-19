@@ -32,7 +32,8 @@ export function shouldRetryOnProviderRefusal(): boolean {
   return raw.toLowerCase() !== "false";
 }
 
-export function isLikelyProviderRefusal(result: ProviderResponse, _providerName?: string): boolean {
+export function isLikelyProviderRefusal(result: ProviderResponse, providerName: string): boolean {
+  void providerName;
   const normalized = normalizeText(result.text ?? "");
   if (!normalized) {
     return false;
