@@ -1,6 +1,6 @@
 import type { ProviderResponse } from "@/lib/providers/types";
 
-const REFUSAL_RETRY_PROVIDERS = new Set(["openai", "google"]);
+const REFUSAL_RETRY_PROVIDERS = new Set(["openai", "google", "anthropic", "grok"]);
 
 const STRONG_REFUSAL_PATTERNS: RegExp[] = [
   /\bi\s*(?:can(?:not|'t)|am\s+unable\s+to|won't)\s+(?:help|assist|comply)\s+with\s+that\b/i,
@@ -9,7 +9,9 @@ const STRONG_REFUSAL_PATTERNS: RegExp[] = [
   /\bi\s+can\s+still\s+help\s+in\s+a\s+safer\s+way\b/i,
   /\b(?:instead|however),?\s+i\s+can\s+offer\s+(?:a\s+)?safer\s+(?:alternative|approach|way)\b/i,
   /\bi\s*(?:can(?:not|'t)|won't)\s+provide\s+that\b/i,
-  /\bi\s+must\s+refuse\b/i
+  /\bi\s+must\s+refuse\b/i,
+  /\b(?:i(?:'m| am)\s+)?not\s+going\s+(?:there|to\s+(?:provide|describe|give|help|assist))\b/i,
+  /\bi\s+(?:will\s+not|won't)\s+(?:go\s+into|provide|describe)\b/i
 ];
 
 const SAFER_WAY_PATTERN = /\bsafer\s+way\b/i;
