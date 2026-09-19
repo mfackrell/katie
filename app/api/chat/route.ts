@@ -44,6 +44,7 @@ import {
   searchRepo
 } from "@/lib/repo/repo-access";
 import { analyzeChunkedAttachments, shouldRunChunkedWorkflow } from "@/lib/providers/chunked-document-workflow";
+import { sanitizeCalculationResponse, shouldSuppressCalculationScaffolding } from "@/lib/providers/calculation-output";
 import {
   __resolveRepoSourceClassifierFailureForTests,
   type RepoSourceClassifierDecision
@@ -1329,16 +1330,33 @@ ${chunkWorkflowSummary}`;
                   preview: finalPayloadPreview
                 });
 
+                const suppressCalculationScaffolding = shouldSuppressCalculationScaffolding(
+                  message,
+                  resolvedRequestIntent
+                );
                 const generation = await runGeneration({
                   provider,
                   params: finalParams,
-                  onTextDelta: enqueueDelta
+                  onTextDelta: suppressCalculationScaffolding ? () => {} : enqueueDelta
                 });
 
-                streamedText = generation.streamedText;
+                const rawText = generation.result.text || generation.streamedText;
+                const cleanedText = suppressCalculationScaffolding
+                  ? sanitizeCalculationResponse(rawText)
+                  : rawText;
+
+                if (suppressCalculationScaffolding && cleanedText !== rawText) {
+                  console.info("[Chat API] Removed calculation scratch scaffolding from model response.", {
+                    requestId,
+                    provider: provider.name,
+                    modelId
+                  });
+                }
+
+                streamedText = cleanedText;
                 return {
                   ...generation.result,
-                  text: generation.result.text || generation.streamedText
+                  text: cleanedText
                 };
               },
               detectRefusal: (generationResult, candidate) => isLikelyProviderRefusal(generationResult, candidate.provider.name),
