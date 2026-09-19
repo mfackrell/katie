@@ -1202,6 +1202,92 @@ test("anthropic refusal result triggers fallback to next candidate", async () =>
   assert.equal(result.text, "Fallback completed.");
 });
 
+test("provider refusal asks the AI rerouter before deterministic fallback", async () => {
+  const attempts = [
+    { provider: "anthropic", modelId: "claude-sonnet-5" },
+    { provider: "openai", modelId: "gpt-5.4-mini" }
+  ];
+  const executedProviders: string[] = [];
+  let deterministicFallbackUsed = false;
+
+  const { attempt, result } = await runWithRefusalFallback({
+    attempts,
+    shouldRetryRefusal: true,
+    runAttempt: async (candidate) => {
+      executedProviders.push(candidate.provider);
+      if (candidate.provider === "anthropic") {
+        return {
+          provider: "anthropic",
+          model: "claude-sonnet-5",
+          text: "Not going there in graphic detail — that's not a Katie conversation."
+        };
+      }
+      if (candidate.provider === "grok") {
+        return {
+          provider: "grok",
+          model: "grok-4.3",
+          text: "Direct answer from the AI-rerouted provider."
+        };
+      }
+      return {
+        provider: "openai",
+        model: "gpt-5.4-mini",
+        text: "Deterministic fallback should not run."
+      };
+    },
+    detectRefusal: (candidateResult, candidate) => isLikelyProviderRefusal(candidateResult, candidate.provider),
+    rerouteOnRefusal: async () => ({ provider: "grok", modelId: "grok-4.3" }),
+    onRefusalFallback: () => {
+      deterministicFallbackUsed = true;
+    }
+  });
+
+  assert.deepEqual(executedProviders, ["anthropic", "grok"]);
+  assert.equal(deterministicFallbackUsed, false);
+  assert.equal(attempt.provider, "grok");
+  assert.equal(result.text, "Direct answer from the AI-rerouted provider.");
+});
+
+test("deterministic refusal fallback is used only when AI rerouting fails", async () => {
+  const attempts = [
+    { provider: "anthropic", modelId: "claude-sonnet-5" },
+    { provider: "grok", modelId: "grok-4.3" }
+  ];
+  const executedProviders: string[] = [];
+  let rerouteErrorObserved = false;
+
+  const { attempt } = await runWithRefusalFallback({
+    attempts,
+    shouldRetryRefusal: true,
+    runAttempt: async (candidate) => {
+      executedProviders.push(candidate.provider);
+      if (candidate.provider === "anthropic") {
+        return {
+          provider: "anthropic",
+          model: "claude-sonnet-5",
+          text: "Not going there in graphic detail — that's not a Katie conversation."
+        };
+      }
+      return {
+        provider: "grok",
+        model: "grok-4.3",
+        text: "Fallback completed."
+      };
+    },
+    detectRefusal: (candidateResult, candidate) => isLikelyProviderRefusal(candidateResult, candidate.provider),
+    rerouteOnRefusal: async () => {
+      throw new Error("router unavailable");
+    },
+    onRerouteError: () => {
+      rerouteErrorObserved = true;
+    }
+  });
+
+  assert.equal(rerouteErrorObserved, true);
+  assert.deepEqual(executedProviders, ["anthropic", "grok"]);
+  assert.equal(attempt.provider, "grok");
+});
+
 test("non-refusal successful result is accepted without fallback", async () => {
   const attempts = [
     { provider: "openai", modelId: "gpt-5.2" },
