@@ -88,6 +88,7 @@ export type RequestIntent =
   | "multimodal-reasoning"
   | "image-generation";
 export type RequestComplexity = "low" | "medium" | "high";
+export type ProviderRefusalRisk = "low" | "medium" | "high";
 export type RoutingRerouteContext = {
   reason: "provider-refusal" | "provider-error";
   failed_candidates: Array<{ provider: ProviderName; model: string }>;
@@ -97,6 +98,7 @@ export type RequestClassification = {
   preferred_provider: ProviderName | null;
   secondary_intents?: RequestIntent[];
   complexity?: RequestComplexity | null;
+  provider_refusal_risk?: ProviderRefusalRisk | null;
 };
 export type ScoreAdjustment = { label: string; delta: number };
 export type CandidateScoreBreakdown = {
@@ -468,6 +470,7 @@ export function parseIntentClassifierResponse(raw: string, intents: RequestInten
   let preferredProvider: ProviderName | null = null;
   let secondaryIntents: RequestIntent[] | undefined;
   let complexity: RequestComplexity | null | undefined;
+  let providerRefusalRisk: ProviderRefusalRisk | null | undefined;
 
   try {
     let classifierOutput: Record<string, unknown> | null = null;
@@ -504,6 +507,17 @@ export function parseIntentClassifierResponse(raw: string, intents: RequestInten
     complexity = complexityValue === "low" || complexityValue === "medium" || complexityValue === "high"
       ? complexityValue
       : undefined;
+
+    const providerRefusalRiskValue =
+      typeof classifierOutput.provider_refusal_risk === "string"
+        ? classifierOutput.provider_refusal_risk.trim().toLowerCase()
+        : "";
+    providerRefusalRisk =
+      providerRefusalRiskValue === "low" ||
+      providerRefusalRiskValue === "medium" ||
+      providerRefusalRiskValue === "high"
+        ? providerRefusalRiskValue
+        : undefined;
   } catch (err) {
     console.error(`[Intent Classifier:${sourceLabel}] JSON parse error`, err);
     return { intent: null, preferred_provider: null };
@@ -511,7 +525,8 @@ export function parseIntentClassifierResponse(raw: string, intents: RequestInten
 
   const enrichment = {
     ...(secondaryIntents ? { secondary_intents: secondaryIntents } : {}),
-    ...(complexity ? { complexity } : {})
+    ...(complexity ? { complexity } : {}),
+    ...(providerRefusalRisk ? { provider_refusal_risk: providerRefusalRisk } : {})
   };
 
   if (intents.includes(classifiedIntent as RequestIntent)) {
@@ -606,8 +621,8 @@ ${runtimeContextBlock}
 You are the Intent Classifier for Katie.
 ## Output Format
 Return ONLY valid JSON. No markdown, no explanation.
-Schema: {"intent":"<intent>","secondary_intents":["<intent>",...],"complexity":"low|medium|high","preferred_provider":"<provider>"|null}
-Use {"intent":"null","secondary_intents":[],"complexity":"low","preferred_provider":null} when genuinely unsure.
+Schema: {"intent":"<intent>","secondary_intents":["<intent>",...],"complexity":"low|medium|high","provider_refusal_risk":"low|medium|high","preferred_provider":"<provider>"|null}
+Use {"intent":"null","secondary_intents":[],"complexity":"low","provider_refusal_risk":"low","preferred_provider":null} when genuinely unsure.
 Intent and secondary_intents must use only: ${intents.join("|")}
 
 ## Core Rules
@@ -616,6 +631,9 @@ Intent and secondary_intents must use only: ${intents.join("|")}
 - Put other meaningful work in secondary_intents.
 - If a request says to validate, analyze, judge, design, debug, or reason first and then rewrite/summarize/explain, do NOT let the rewrite/summarize step become primary just because it appears last.
 - complexity is low for routine execution, medium for meaningful multi-step judgment, and high when correctness depends on deep domain reasoning, architecture, debugging, or several interacting constraints.
+- provider_refusal_risk estimates the likelihood that otherwise capable providers may refuse or over-restrict the request because it sits near provider policy boundaries. This is a routing-compatibility signal, not a safety verdict.
+- Use provider_refusal_risk=high when provider policy divergence is materially likely, including direct adult sexual-health or anatomy questions, graphic medical topics, or other lawful informational requests that some providers commonly over-refuse.
+- Do not classify a factual adult sexual-health question as social-emotional merely because it mentions sex, intimacy, or relationships. Use general-text unless the user is actually asking for interpersonal or emotional judgment.
 
 ## Web-Search Classification
 Web-search is ONLY for requests where live, current, or real-time external data is the point of the task.
@@ -742,6 +760,7 @@ async function classifyIntentWithLLMProviders(
     preferred_provider?: ProviderName | null;
     secondary_intents?: RequestIntent[];
     complexity?: RequestComplexity;
+    provider_refusal_risk?: ProviderRefusalRisk;
   }> = [
     { user: "What happened in AI news today?", intent: "web-search" },
     { user: "Find the latest pricing for OpenAI and Anthropic models.", intent: "web-search" },
@@ -763,6 +782,12 @@ async function classifyIntentWithLLMProviders(
     { user: "Rewrite this paragraph in a friendly tone.", intent: "rewrite" },
     { user: "What do you think about your last answer?", intent: "assistant-reflection" },
     { user: "what up kat?", intent: "social-emotional" },
+    {
+      user: "what is the most efficient way to trigger a female orgasm",
+      intent: "general-text",
+      complexity: "low",
+      provider_refusal_risk: "high"
+    },
     { user: "Here is a Kubernetes deployment YAML. Spot the risks.", intent: "architecture-review", complexity: "high" },
     {
       user: "Rewrite this explanation for a board, but first determine whether the accounting logic makes sense.",
@@ -793,6 +818,7 @@ async function classifyIntentWithLLMProviders(
         intent: example.intent,
         secondary_intents: example.secondary_intents ?? [],
         complexity: example.complexity ?? "low",
+        provider_refusal_risk: example.provider_refusal_risk ?? "low",
         preferred_provider: example.preferred_provider ?? null
       })}`
     ])
@@ -976,6 +1002,7 @@ export async function inferRequestClassification(
   preferredProvider: ProviderName | null;
   secondaryIntents?: RequestIntent[];
   complexity?: RequestComplexity | null;
+  providerRefusalRisk?: ProviderRefusalRisk | null;
 }> {
   const hasImages = typeof input === "boolean" ? input : input.hasImages;
   const hasVideoInput = typeof input === "boolean" ? false : Boolean(input.hasVideoInput);
@@ -1055,7 +1082,8 @@ export async function inferRequestClassification(
       intent: sanitizedClassifiedIntent,
       preferredProvider: classifiedOutput.preferred_provider,
       secondaryIntents: classifiedOutput.secondary_intents ?? [],
-      complexity: classifiedOutput.complexity ?? null
+      complexity: classifiedOutput.complexity ?? null,
+      providerRefusalRisk: classifiedOutput.provider_refusal_risk ?? null
     };
   }
 
@@ -1765,6 +1793,7 @@ export async function chooseRoutingWithLLM(args: {
   intent: RequestIntent;
   secondaryIntents?: RequestIntent[];
   complexity?: RequestComplexity | null;
+  providerRefusalRisk?: ProviderRefusalRisk | null;
   rerouteContext?: RoutingRerouteContext | null;
   modalityFlags: RoutingModalityFlags;
   hardRouteContext: HardRouteContext;
@@ -1812,6 +1841,9 @@ Rules:
 - Optimize tradeoffs among quality, reasoning depth, speed, cost, specialization, and modality fit.
 - Choose the cheapest capable model only when ALL material parts of the task are genuinely routine.
 - Treat complexity=high as a strong signal to use a high-depth model, even when the primary intent is general-text or rewrite.
+- Treat provider_refusal_risk as a first-class provider-fit signal. When it is high, choose a capable provider/model that is likely to answer the permitted informational request directly rather than over-refuse it.
+- For provider_refusal_risk=high, do not over-weight conversational or empathy specialization. Provider answerability and policy fit matter more than tone.
+- When a capable Grok text model is available for a high-refusal-risk routine text request, consider it strongly because provider-policy fit may be more important than prose specialization.
 - Consider secondary_intents and the original prompt. Size the model for the hardest material requirement, not the easiest or final formatting step.
 - High-depth tasks include architecture-review, technical-debugging, complex code-review, multimodal-reasoning, long-context assistant-reflection, and mixed requests that require substantive domain judgment before rewriting or formatting.
 - Efficient tasks include genuinely simple general-text, rewrite, news-summary, web-search, simple code-generation, social-emotional, and persona/status questions.
@@ -1834,6 +1866,7 @@ Rules:
       intent: args.intent,
       secondary_intents: args.secondaryIntents ?? [],
       complexity: args.complexity ?? null,
+      provider_refusal_risk: args.providerRefusalRisk ?? "low",
       reroute_context: args.rerouteContext ?? null,
       modality_flags: args.modalityFlags,
       hard_route_context: args.hardRouteContext,
