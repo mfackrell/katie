@@ -917,6 +917,7 @@ export async function inferRequestIntent(
   }
 
   const availableIntents: RequestIntent[] = [
+    "general-text",
     "web-search",
     "news-summary",
     "code-review",
@@ -1033,6 +1034,7 @@ export async function inferRequestClassification(
   if (hasVideoInput && /\b(chart|trend|forecast|project|estimate|timeline|sequence)\b/i.test(normalizedPrompt)) return { intent: "multimodal-reasoning", preferredProvider: null };
 
   const availableIntents: RequestIntent[] = [
+    "general-text",
     "web-search",
     "news-summary",
     "code-review",
