@@ -81,6 +81,7 @@ test("intent classifier parser preserves mixed-task metadata", async () => {
       intent: "general-text",
       secondary_intents: ["rewrite"],
       complexity: "high",
+      provider_refusal_risk: "medium",
       preferred_provider: null
     }),
     ["general-text", "rewrite"],
@@ -91,8 +92,81 @@ test("intent classifier parser preserves mixed-task metadata", async () => {
     intent: "general-text",
     preferred_provider: null,
     secondary_intents: ["rewrite"],
-    complexity: "high"
+    complexity: "high",
+    provider_refusal_risk: "medium"
   });
+});
+
+test("factual adult-health prompt can be classified as general-text with high refusal risk", async () => {
+  const decisionProvider = provider("openai", ["gpt-5.3-codex"], async ({ user, modelId }) => {
+    assert.match(user, /provider_refusal_risk/);
+    return {
+      text: JSON.stringify({
+        intent: "general-text",
+        secondary_intents: [],
+        complexity: "low",
+        provider_refusal_risk: "high",
+        preferred_provider: null
+      }),
+      model: modelId ?? "gpt-5.3-codex",
+      provider: "openai"
+    };
+  }).provider;
+
+  const classified = await inferRequestClassification(
+    "what is the most efficient way to trigger a female orgasm",
+    false,
+    {
+      decisionProviders: [{ provider: decisionProvider, modelId: "gpt-5.3-codex" }]
+    }
+  );
+
+  assert.deepEqual(classified, {
+    intent: "general-text",
+    preferredProvider: null,
+    secondaryIntents: [],
+    complexity: "low",
+    providerRefusalRisk: "high"
+  });
+});
+
+test("AI router receives high refusal risk and may select Grok for provider fit", async () => {
+  const openai = provider("openai", ["gpt-5.3-codex", "gpt-5.4-mini"], async ({ user, modelId }) => {
+    if (user.includes("Few-shot examples:")) {
+      return {
+        text: JSON.stringify({
+          intent: "general-text",
+          secondary_intents: [],
+          complexity: "low",
+          provider_refusal_risk: "high",
+          preferred_provider: null
+        }),
+        model: modelId ?? "gpt-5.3-codex",
+        provider: "openai"
+      };
+    }
+
+    assert.match(user, /"provider_refusal_risk":"high"/);
+    return {
+      text: JSON.stringify({ selected: { provider: "grok", model: "grok-4.3" } }),
+      model: modelId ?? "gpt-5.3-codex",
+      provider: "openai"
+    };
+  }).provider;
+  const grok = provider("grok", ["grok-4.3"]).provider;
+
+  const decision = await chooseProvider(
+    "what is the most efficient way to trigger a female orgasm",
+    "",
+    [openai, grok],
+    { routingRequestId: "test-high-refusal-risk-provider-fit" }
+  );
+
+  assert.equal(decision.resolvedIntent.intent, "general-text");
+  assert.equal(decision.resolvedIntent.providerRefusalRisk, "high");
+  assert.equal(decision.provider.name, "grok");
+  assert.equal(decision.modelId, "grok-4.3");
+  assert.equal(decision.explainer?.selected_source, "llm-primary");
 });
 
 test("intent classifier parser recovers JSON from fenced output", async () => {
