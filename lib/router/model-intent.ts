@@ -11,7 +11,13 @@ type RegistryLookup = Map<string, RegistryRoutingModel> | undefined;
 export type RoutingChoice = { providerName: ProviderName; modelId: string };
 export type LlmRoutingChoice = { providerName: ProviderName; modelId: string; score: number };
 export type LlmRoutingResult =
-  | { accepted: true; selected: RoutingChoice; ranking: LlmRoutingChoice[] }
+  | {
+      accepted: true;
+      selected: RoutingChoice;
+      ranking: LlmRoutingChoice[];
+      decisionProviderName: ProviderName;
+      decisionModelId: string;
+    }
   | { accepted: false; reason: string };
 export type ModelSpecializationTag =
   | "coding"
@@ -81,9 +87,12 @@ export type RequestIntent =
   | "vision-analysis"
   | "multimodal-reasoning"
   | "image-generation";
+export type RequestComplexity = "low" | "medium" | "high";
 export type RequestClassification = {
   intent: RequestIntent | null;
   preferred_provider: ProviderName | null;
+  secondary_intents?: RequestIntent[];
+  complexity?: RequestComplexity | null;
 };
 export type ScoreAdjustment = { label: string; delta: number };
 export type CandidateScoreBreakdown = {
@@ -315,6 +324,17 @@ function sanitizeCodeGenerationIntent(
     return classifiedIntent;
   }
 
+  // A successful control-plane classification is authoritative. Heuristics may
+  // reject only an obvious conversational false positive; they do not require
+  // magic implementation keywords to validate the AI's decision.
+  if (source === "control-plane") {
+    if (isConversationalPromptWithoutImplementationCue(prompt)) {
+      console.info(`[Intent Guard] prevented_code_generation source=${source} reason=conversational_without_implementation_cue`);
+      return "social-emotional";
+    }
+    return classifiedIntent;
+  }
+
   if (hasImplementationCue(prompt)) {
     return classifiedIntent;
   }
@@ -324,7 +344,6 @@ function sanitizeCodeGenerationIntent(
     return "social-emotional";
   }
 
-  console.info(`[Intent Guard] prevented_code_generation source=${source} reason=missing_implementation_cue`);
   return "general-text";
 }
 
@@ -443,6 +462,8 @@ function extractJsonObject(raw: string): string | null {
 export function parseIntentClassifierResponse(raw: string, intents: RequestIntent[], sourceLabel: string): RequestClassification {
   let classifiedIntent: string | null = null;
   let preferredProvider: ProviderName | null = null;
+  let secondaryIntents: RequestIntent[] | undefined;
+  let complexity: RequestComplexity | null | undefined;
 
   try {
     let classifierOutput: Record<string, unknown> | null = null;
@@ -462,22 +483,44 @@ export function parseIntentClassifierResponse(raw: string, intents: RequestInten
       typeof classifierOutput.preferred_provider === "string" ? classifierOutput.preferred_provider : "";
     classifiedIntent = intentValue.trim().toLowerCase();
     preferredProvider = isProviderName(preferredProviderValue) ? preferredProviderValue : null;
+
+    if (Array.isArray(classifierOutput.secondary_intents)) {
+      secondaryIntents = Array.from(
+        new Set(
+          classifierOutput.secondary_intents
+            .filter((value): value is string => typeof value === "string")
+            .map((value) => value.trim().toLowerCase())
+            .filter((value): value is RequestIntent => intents.includes(value as RequestIntent))
+        )
+      ).filter((value) => value !== classifiedIntent);
+    }
+
+    const complexityValue =
+      typeof classifierOutput.complexity === "string" ? classifierOutput.complexity.trim().toLowerCase() : "";
+    complexity = complexityValue === "low" || complexityValue === "medium" || complexityValue === "high"
+      ? complexityValue
+      : undefined;
   } catch (err) {
     console.error(`[Intent Classifier:${sourceLabel}] JSON parse error`, err);
     return { intent: null, preferred_provider: null };
   }
 
+  const enrichment = {
+    ...(secondaryIntents ? { secondary_intents: secondaryIntents } : {}),
+    ...(complexity ? { complexity } : {})
+  };
+
   if (intents.includes(classifiedIntent as RequestIntent)) {
-    return { intent: classifiedIntent as RequestIntent, preferred_provider: preferredProvider };
+    return { intent: classifiedIntent as RequestIntent, preferred_provider: preferredProvider, ...enrichment };
   }
 
   if (classifiedIntent === "null") {
     console.warn(`[Intent Classifier:${sourceLabel}] model returned null`);
-    return { intent: null, preferred_provider: preferredProvider };
+    return { intent: null, preferred_provider: preferredProvider, ...enrichment };
   }
 
   console.warn(`[Intent Classifier:${sourceLabel}] invalid intent "${classifiedIntent}"`);
-  return { intent: null, preferred_provider: preferredProvider };
+  return { intent: null, preferred_provider: preferredProvider, ...enrichment };
 }
 
 async function classifyIntentWithLLM(
@@ -540,11 +583,18 @@ export function buildIntentClassifierSystemPrompt(
   routingSignals: Record<string, unknown> | undefined,
   options?: ControlPlaneSelectionOptions
 ): string {
+  const classifierSignals = { ...(routingSignals ?? options?.routingSignals ?? {}) } as Record<string, unknown>;
+  // Never show the classifier a heuristic's proposed answer. These fields are
+  // intentionally removed so the LLM classifies the user's request independently.
+  delete classifierSignals.routingIntent;
+  delete classifierSignals.routingAuthority;
+  delete classifierSignals.heuristicHintIntent;
+
   const runtimeContextBlock = buildKatieRuntimeContextBlock({
     ...options,
-    routingSignals: routingSignals ?? options?.routingSignals
+    routingSignals: classifierSignals
   });
-  const routingSignalsText = JSON.stringify(routingSignals ?? {});
+  const routingSignalsText = JSON.stringify(classifierSignals);
   const intentGuide = intents.map((intent) => `- ${intent}: ${intentDescriptions[intent]}`).join("\n");
 
   return `
@@ -552,12 +602,16 @@ ${runtimeContextBlock}
 You are the Intent Classifier for Katie.
 ## Output Format
 Return ONLY valid JSON. No markdown, no explanation.
-Schema: {"intent": "<intent>", "preferred_provider": "<provider>" | null}
-Use {"intent":"null","preferred_provider":null} when genuinely unsure.
-Intent must be exactly one of: ${intents.join("|")}
+Schema: {"intent":"<intent>","secondary_intents":["<intent>",...],"complexity":"low|medium|high","preferred_provider":"<provider>"|null}
+Use {"intent":"null","secondary_intents":[],"complexity":"low","preferred_provider":null} when genuinely unsure.
+Intent and secondary_intents must use only: ${intents.join("|")}
 
-## Core Rule
-Classify by what the user is ASKING YOU TO DO, not by what tokens appear in the prompt.
+## Core Rules
+- Classify by what the user is ASKING YOU TO DO, not by what tokens appear in the prompt.
+- The primary intent must represent the hardest material work required to answer correctly, not merely the final formatting step.
+- Put other meaningful work in secondary_intents.
+- If a request says to validate, analyze, judge, design, debug, or reason first and then rewrite/summarize/explain, do NOT let the rewrite/summarize step become primary just because it appears last.
+- complexity is low for routine execution, medium for meaningful multi-step judgment, and high when correctness depends on deep domain reasoning, architecture, debugging, or several interacting constraints.
 
 ## Web-Search Classification
 Web-search is ONLY for requests where live, current, or real-time external data is the point of the task.
@@ -678,7 +732,13 @@ async function classifyIntentWithLLMProviders(
     return { intent: null, preferred_provider: null };
   }
 
-  const examples = [
+  const examples: Array<{
+    user: string;
+    intent: RequestIntent;
+    preferred_provider?: ProviderName | null;
+    secondary_intents?: RequestIntent[];
+    complexity?: RequestComplexity;
+  }> = [
     { user: "What happened in AI news today?", intent: "web-search" },
     { user: "Find the latest pricing for OpenAI and Anthropic models.", intent: "web-search" },
     { user: "Check current Vercel maxDuration limits in their docs.", intent: "web-search" },
@@ -699,14 +759,38 @@ async function classifyIntentWithLLMProviders(
     { user: "Rewrite this paragraph in a friendly tone.", intent: "rewrite" },
     { user: "What do you think about your last answer?", intent: "assistant-reflection" },
     { user: "what up kat?", intent: "social-emotional" },
-    { user: "Here is a Kubernetes deployment YAML. Spot the risks.", intent: "architecture-review" }
+    { user: "Here is a Kubernetes deployment YAML. Spot the risks.", intent: "architecture-review", complexity: "high" },
+    {
+      user: "Rewrite this explanation for a board, but first determine whether the accounting logic makes sense.",
+      intent: "general-text",
+      secondary_intents: ["rewrite"],
+      complexity: "high"
+    },
+    {
+      user: "Design a database structure for invoices and payments, explain it simply, then provide the SQL schema.",
+      intent: "architecture-review",
+      secondary_intents: ["code-generation", "general-text"],
+      complexity: "high"
+    },
+    { user: "Write code for a JavaScript function that reverses a string.", intent: "code-generation", complexity: "low" },
+    {
+      user: "Write code for a fault-tolerant distributed payment system with idempotency and multi-region failover.",
+      intent: "code-generation",
+      secondary_intents: ["architecture-review"],
+      complexity: "high"
+    }
   ];
   const activeRepoContextPresent = Boolean(options?.activeRepoContextAttached);
   const systemPrompt = buildIntentClassifierSystemPrompt(intents, activeRepoContextPresent, options?.routingSignals as Record<string, unknown> | undefined, options);
   const fewShot = examples
     .flatMap((example) => [
       `USER: ${example.user}`,
-      `ASSISTANT: ${JSON.stringify({ intent: example.intent, preferred_provider: example.preferred_provider ?? null })}`
+      `ASSISTANT: ${JSON.stringify({
+        intent: example.intent,
+        secondary_intents: example.secondary_intents ?? [],
+        complexity: example.complexity ?? "low",
+        preferred_provider: example.preferred_provider ?? null
+      })}`
     ])
     .join("\n");
 
@@ -822,7 +906,6 @@ export async function inferRequestIntent(
   const classifiedOutput = await classifyIntentWithLLM(prompt, availableIntents, {
     ...options,
     routingSignals: {
-      ...(options?.routingSignals ?? {}),
       activeRepoContextPresent,
       repoReviewContextActive,
       containsCodePatchOrDiff: patchOrDiffSignal,
@@ -830,9 +913,6 @@ export async function inferRequestIntent(
       webSearchHint: webSearchSignals.confidence !== "low",
       webSearchNoSearchExplicit: webSearchSignals.noSearchExplicit,
       webSearchSignals,
-      heuristicHintIntent: bestHeuristicHint,
-      routingIntent: bestHeuristicHint ?? "unknown",
-      routingAuthority: bestHeuristicHint ? "heuristic" : "unknown",
       requestId: (options?.routingSignals as Record<string, unknown> | undefined)?.requestId ?? options?.requestId
     }
   });
@@ -936,7 +1016,6 @@ export async function inferRequestClassification(
   const classifiedOutput = await classifyIntentWithLLM(prompt, availableIntents, {
     ...options,
     routingSignals: {
-      ...(options?.routingSignals ?? {}),
       activeRepoContextPresent,
       repoReviewContextActive,
       containsCodePatchOrDiff: patchOrDiffSignal,
@@ -944,9 +1023,6 @@ export async function inferRequestClassification(
       webSearchHint: webSearchSignals.confidence !== "low",
       webSearchNoSearchExplicit: webSearchSignals.noSearchExplicit,
       webSearchSignals,
-      heuristicHintIntent: bestHeuristicHint,
-      routingIntent: bestHeuristicHint ?? "unknown",
-      routingAuthority: bestHeuristicHint ? "heuristic" : "unknown",
       requestId: (options?.routingSignals as Record<string, unknown> | undefined)?.requestId ?? options?.requestId
     }
   });
@@ -966,7 +1042,12 @@ export async function inferRequestClassification(
     if (sanitizedClassifiedIntent === "social-emotional") {
       console.info("[Intent Source] social-emotional selected via control-plane classifier");
     }
-    return { intent: sanitizedClassifiedIntent, preferredProvider: classifiedOutput.preferred_provider };
+    return {
+      intent: sanitizedClassifiedIntent,
+      preferredProvider: classifiedOutput.preferred_provider,
+      secondaryIntents: classifiedOutput.secondary_intents ?? [],
+      complexity: classifiedOutput.complexity ?? null
+    };
   }
 
   if (hasImages) return { intent: "vision-analysis", preferredProvider: classifiedOutput.preferred_provider };
@@ -1673,6 +1754,8 @@ export function filterCandidatesForIntent(
 export async function chooseRoutingWithLLM(args: {
   prompt: string;
   intent: RequestIntent;
+  secondaryIntents?: RequestIntent[];
+  complexity?: RequestComplexity | null;
   modalityFlags: RoutingModalityFlags;
   hardRouteContext: HardRouteContext;
   preferenceProfile: RoutingPreferenceProfile;
@@ -1717,9 +1800,11 @@ Rules:
 - Hard rules and invalid candidates have already been filtered deterministically; treat them as fixed constraints.
 - Use preference_profile and candidate metadata to choose the best fit for the actual task.
 - Optimize tradeoffs among quality, reasoning depth, speed, cost, specialization, and modality fit.
-- Choose the cheapest capable model unless the task genuinely requires high-depth reasoning.
-- High-depth tasks: architecture-review, technical-debugging, code-review with complex logic, multimodal-reasoning, long-context assistant-reflection.
-- Efficient tasks: general-text, rewrite, news-summary, web-search, simple code-generation, social-emotional, persona/status questions.
+- Choose the cheapest capable model only when ALL material parts of the task are genuinely routine.
+- Treat complexity=high as a strong signal to use a high-depth model, even when the primary intent is general-text or rewrite.
+- Consider secondary_intents and the original prompt. Size the model for the hardest material requirement, not the easiest or final formatting step.
+- High-depth tasks include architecture-review, technical-debugging, complex code-review, multimodal-reasoning, long-context assistant-reflection, and mixed requests that require substantive domain judgment before rewriting or formatting.
+- Efficient tasks include genuinely simple general-text, rewrite, news-summary, web-search, simple code-generation, social-emotional, and persona/status questions.
 - Do not select premium models because the topic mentions architecture, repo, or routing. Match model depth to actual reasoning demand.
 - Prefer specialized coding models for implementation and debug tasks.
 - Prefer writing/conversational models for prose, README, and clarity tasks.
@@ -1736,6 +1821,8 @@ Rules:
     userPrompt: `${systemPrompt}\n\n${JSON.stringify({
       prompt: args.prompt,
       intent: args.intent,
+      secondary_intents: args.secondaryIntents ?? [],
+      complexity: args.complexity ?? null,
       modality_flags: args.modalityFlags,
       hard_route_context: args.hardRouteContext,
       preference_profile: args.preferenceProfile,
@@ -1774,6 +1861,8 @@ Rules:
   return {
     accepted: true,
     selected: { providerName: result.result.selectedProvider, modelId: result.result.selectedModel },
-    ranking
+    ranking,
+    decisionProviderName: result.provider,
+    decisionModelId: result.modelId
   };
 }
