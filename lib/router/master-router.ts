@@ -7,6 +7,7 @@ import {
   inferRequestClassification,
   inferRequestIntent,
   LlmRoutingResult,
+  ProviderRefusalRisk,
   RequestComplexity,
   RequestIntent,
   RoutingHint,
@@ -43,6 +44,7 @@ export type ResolvedRoutingIntent = {
   intentSource: "upstream" | "router-fallback" | "llm" | "heuristic" | "fallback";
   secondaryIntents?: RequestIntent[];
   complexity?: RequestComplexity | null;
+  providerRefusalRisk?: ProviderRefusalRisk | null;
 };
 export type SelectionExplainer = {
   selected_model?: string;
@@ -750,7 +752,8 @@ export async function chooseProvider(
         preferredProvider: requestClassification.preferredProvider ?? null,
         intentSource: "llm",
         secondaryIntents: requestClassification.secondaryIntents ?? [],
-        complexity: requestClassification.complexity ?? null
+        complexity: requestClassification.complexity ?? null,
+        providerRefusalRisk: requestClassification.providerRefusalRisk ?? null
       }
     : bestHint?.hintIntent
       ? {
@@ -1070,6 +1073,7 @@ export async function chooseProvider(
       intent,
       secondaryIntents: resolvedIntent.secondaryIntents ?? [],
       complexity: resolvedIntent.complexity ?? null,
+      providerRefusalRisk: resolvedIntent.providerRefusalRisk ?? null,
       rerouteContext: options?.rerouteContext ?? null,
       modalityFlags: {
         has_images: Boolean(options?.hasImages),
