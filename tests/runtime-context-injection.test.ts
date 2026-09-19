@@ -5,7 +5,7 @@ import { buildIntentClassifierSystemPrompt, type RequestIntent } from "../lib/ro
 
 const intents: RequestIntent[] = ["general-text", "assistant-reflection", "code-review", "web-search"];
 
-test("KATIE_RUNTIME_CONTEXT is injected at the beginning with provided values", () => {
+test("intent classifier runtime context does not expose a proposed routing answer", () => {
   const systemPrompt = buildIntentClassifierSystemPrompt(
     intents,
     true,
@@ -24,8 +24,10 @@ test("KATIE_RUNTIME_CONTEXT is injected at the beginning with provided values", 
   assert.ok(systemPrompt.includes("- current_provider: anthropic"));
   assert.ok(systemPrompt.includes("- current_model: claude-sonnet-4.6"));
   assert.ok(systemPrompt.includes("- model_tier: premium"));
-  assert.ok(systemPrompt.includes("- routing_intent: assistant-reflection"));
-  assert.ok(systemPrompt.includes("- routing_authority: llm-classifier"));
+  assert.ok(systemPrompt.includes("- routing_intent: unknown"));
+  assert.ok(systemPrompt.includes("- routing_authority: unknown"));
+  assert.equal(systemPrompt.includes('"routingIntent":"assistant-reflection"'), false);
+  assert.equal(systemPrompt.includes('"routingAuthority":"llm-classifier"'), false);
   assert.ok(systemPrompt.includes("- request_id: test-req-123"));
 });
 
