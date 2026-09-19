@@ -10,6 +10,7 @@ import {
   RequestComplexity,
   RequestIntent,
   RoutingHint,
+  RoutingRerouteContext,
   scoreModelCandidateWithBreakdown,
   scoreModelsForIntent,
   validateRoutingDecision
@@ -660,6 +661,8 @@ export async function chooseProvider(
     actorId?: string;
     actorRoutingProfile?: ActorRoutingProfile;
     routingHints?: RoutingHint[];
+    excludedCandidates?: Array<{ providerName: LlmProvider["name"]; modelId: string }>;
+    rerouteContext?: RoutingRerouteContext | null;
   }
 ): Promise<RoutingDecision> {
   let rankedCandidates: Array<{ provider: LlmProvider; modelId: string; score: number }> = [];
@@ -776,6 +779,24 @@ export async function chooseProvider(
     provider,
     models: models.length ? models : [pickDefaultModel(provider, [])]
   }));
+
+  const excludedCandidateKeys = new Set(
+    (options?.excludedCandidates ?? []).map(
+      (candidate) => `${candidate.providerName}:${normalizeModelId(candidate.modelId)}`
+    )
+  );
+  if (excludedCandidateKeys.size > 0) {
+    availableByProvider = availableByProvider.map(({ provider, models }) => ({
+      provider,
+      models: models.filter(
+        (modelId) => !excludedCandidateKeys.has(`${provider.name}:${normalizeModelId(modelId)}`)
+      )
+    }));
+    console.info(
+      `[Routing Exclusions] requestId=${traceRequestId} excluded=${Array.from(excludedCandidateKeys).join(",")}`
+    );
+  }
+
   const candidateCountBeforeFilter = availableByProvider.reduce((total, entry) => total + entry.models.length, 0);
 
   console.info(`[Route Policy] requestId=${traceRequestId} intent=${intent} hasVideoInput=${Boolean(options?.hasVideoInput)}`);
@@ -1049,6 +1070,7 @@ export async function chooseProvider(
       intent,
       secondaryIntents: resolvedIntent.secondaryIntents ?? [],
       complexity: resolvedIntent.complexity ?? null,
+      rerouteContext: options?.rerouteContext ?? null,
       modalityFlags: {
         has_images: Boolean(options?.hasImages),
         has_video_input: Boolean(options?.hasVideoInput)
