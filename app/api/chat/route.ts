@@ -654,6 +654,12 @@ export async function POST(request: NextRequest) {
     const encoder = new TextEncoder();
     const requestId = request.headers.get("x-request-id") ?? crypto.randomUUID();
 
+    console.log("[Chat API] User message", {
+      requestId,
+      message,
+      messageLength: message.length,
+    });
+
     console.log(
       `[Chat API] Processing - Actor: ${actorId}, Chat: ${chatId}, ActiveRepoId: ${activeRepoId ?? "none"}`,
     );
