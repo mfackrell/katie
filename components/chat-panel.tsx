@@ -640,7 +640,7 @@ export function ChatPanel({
           }
 
           const chunk = JSON.parse(line) as
-            | { type: "metadata"; modelId: string; provider: string; explainer?: SelectionExplainer }
+            | { type: "metadata"; modelId: string; provider: string; explainer?: SelectionExplainer; resetText?: boolean }
             | { type: "delta"; text: string }
             | ReasoningStreamEvent
             | {
@@ -652,6 +652,9 @@ export function ChatPanel({
               };
 
           if (chunk.type === "metadata") {
+            if (chunk.resetText) {
+              textContent = "";
+            }
             setStreamingModel(chunk.modelId);
             provider = chunk.provider;
             setSelectionExplainer(chunk.explainer ?? null);
@@ -695,7 +698,7 @@ export function ChatPanel({
 
       if (buffered.trim()) {
         const trailingChunk = JSON.parse(buffered) as
-          | { type: "metadata"; modelId: string; provider: string; explainer?: SelectionExplainer }
+          | { type: "metadata"; modelId: string; provider: string; explainer?: SelectionExplainer; resetText?: boolean }
           | { type: "delta"; text: string }
           | ReasoningStreamEvent
           | {
@@ -707,6 +710,9 @@ export function ChatPanel({
             };
 
         if (trailingChunk.type === "metadata") {
+          if (trailingChunk.resetText) {
+            textContent = "";
+          }
           setStreamingModel(trailingChunk.modelId);
           provider = trailingChunk.provider;
           setSelectionExplainer(trailingChunk.explainer ?? null);
