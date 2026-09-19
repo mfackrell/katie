@@ -75,6 +75,26 @@ test("intent classifier parser accepts plain JSON payloads", async () => {
   assert.deepEqual(parsed, { intent: "architecture-review", preferred_provider: "anthropic" });
 });
 
+test("intent classifier parser preserves mixed-task metadata", async () => {
+  const parsed = parseIntentClassifierResponse(
+    JSON.stringify({
+      intent: "general-text",
+      secondary_intents: ["rewrite"],
+      complexity: "high",
+      preferred_provider: null
+    }),
+    ["general-text", "rewrite"],
+    "test"
+  );
+
+  assert.deepEqual(parsed, {
+    intent: "general-text",
+    preferred_provider: null,
+    secondary_intents: ["rewrite"],
+    complexity: "high"
+  });
+});
+
 test("intent classifier parser recovers JSON from fenced output", async () => {
   const parsed = parseIntentClassifierResponse(
     "Sure — here is the result:\n```json\n{\"intent\":\"technical-debugging\",\"preferred_provider\":\"openai\"}\n```",
@@ -800,6 +820,28 @@ test("control-plane misclassification to code-generation is sanitized for conver
   assert.equal(classified.intent, "social-emotional");
 });
 
+test("successful AI code-generation classification is not vetoed by keyword heuristics", async () => {
+  const classifier = provider("openai", ["gpt-5.3-codex"], async ({ modelId }) => ({
+    text: JSON.stringify({
+      intent: "code-generation",
+      secondary_intents: [],
+      complexity: "medium",
+      preferred_provider: null
+    }),
+    model: modelId ?? "gpt-5.3-codex",
+    provider: "openai"
+  })).provider;
+
+  const classified = await inferRequestClassification(
+    "Write a TypeScript function that reconciles two arrays of accounting transactions.",
+    false,
+    { decisionProviders: [{ provider: classifier, modelId: "gpt-5.3-codex" }] }
+  );
+
+  assert.equal(classified.intent, "code-generation");
+  assert.equal(classified.complexity, "medium");
+});
+
 test("resolved intent contract shape is identical for upstream and router-fallback paths", async () => {
   delete process.env.OPENAI_API_KEY;
   const capturedLogs: string[] = [];
@@ -1036,17 +1078,29 @@ test("normal successful response is not classified as refusal", async () => {
   );
 });
 
-test("refusal detector is provider-scoped and ignores other providers", async () => {
+test("refusal detector recognizes anthropic and grok refusals", async () => {
+  assert.equal(
+    isLikelyProviderRefusal(
+      {
+        provider: "anthropic",
+        model: "claude-sonnet-5",
+        text: "Not going there in graphic detail — that's not a Katie conversation."
+      },
+      "anthropic"
+    ),
+    true
+  );
+
   assert.equal(
     isLikelyProviderRefusal(
       {
         provider: "grok",
-        model: "grok-4-0709",
-        text: "I can't assist with that."
+        model: "grok-4.3",
+        text: "I can't assist with that request."
       },
       "grok"
     ),
-    false
+    true
   );
 });
 
@@ -1113,6 +1167,39 @@ test("google refusal result triggers fallback to next candidate", async () => {
 
   assert.deepEqual(executedProviders, ["google", "grok"]);
   assert.equal(attempt.provider, "grok");
+});
+
+test("anthropic refusal result triggers fallback to next candidate", async () => {
+  const attempts = [
+    { provider: "anthropic", modelId: "claude-sonnet-5" },
+    { provider: "grok", modelId: "grok-4.3" }
+  ];
+  const executedProviders: string[] = [];
+
+  const { attempt, result } = await runWithRefusalFallback({
+    attempts,
+    shouldRetryRefusal: true,
+    runAttempt: async (candidate) => {
+      executedProviders.push(candidate.provider);
+      if (candidate.provider === "anthropic") {
+        return {
+          provider: "anthropic",
+          model: "claude-sonnet-5",
+          text: "Not going there in graphic detail — that's not a Katie conversation."
+        };
+      }
+      return {
+        provider: "grok",
+        model: "grok-4.3",
+        text: "Fallback completed."
+      };
+    },
+    detectRefusal: (candidateResult, candidate) => isLikelyProviderRefusal(candidateResult, candidate.provider)
+  });
+
+  assert.deepEqual(executedProviders, ["anthropic", "grok"]);
+  assert.equal(attempt.provider, "grok");
+  assert.equal(result.text, "Fallback completed.");
 });
 
 test("non-refusal successful result is accepted without fallback", async () => {
