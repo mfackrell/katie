@@ -113,13 +113,37 @@ type RoutingTrace = {
   };
 };
 
-const CONTROL_PLANE_PROVIDER_PRIORITY: LlmProvider["name"][] = ["google", "openai", "anthropic", "grok"];
+const CONTROL_PLANE_PROVIDER_PRIORITY: LlmProvider["name"][] = ["openai", "anthropic", "google", "grok"];
 
 const CONTROL_PLANE_CURATED_MODELS: Record<LlmProvider["name"], string[]> = {
-  google: ["gemini-3.1-pro", "gemini-3.1-pro-latest", "gemini-3-pro"],
-  openai: ["gpt-5.3-codex", "gpt-5.2-unified", "gpt-5.2", "o3-pro"],
-  anthropic: ["claude-4.6-opus", "claude-4.5-sonnet", "claude-4-opus"],
-  // Grok is disabled for control-plane JSON routing because it has timed out on strict classifier tasks. It remains available for normal generation.
+  openai: [
+    "gpt-5.6-sol",
+    "gpt-5.5",
+    "gpt-5.4",
+    "gpt-5.3-codex",
+    "gpt-5.2-unified",
+    "gpt-5.2",
+    "o3-pro"
+  ],
+  anthropic: [
+    "claude-sonnet-5",
+    "claude-opus-5",
+    "claude-opus-4-8",
+    "claude-opus-4-7",
+    "claude-sonnet-4-6",
+    "claude-4.6-opus",
+    "claude-4.5-sonnet",
+    "claude-4-opus"
+  ],
+  google: [
+    "gemini-3.1-pro-preview",
+    "gemini-pro-latest",
+    "gemini-2.5-pro",
+    "gemini-3.1-pro",
+    "gemini-3.1-pro-latest",
+    "gemini-3-pro"
+  ],
+  // Grok remains available for generation, but is excluded from strict JSON control-plane work after repeated timeout behavior.
   grok: []
 };
 const CONTROL_PLANE_BLOCKED_MODELS: Record<LlmProvider["name"], string[]> = {
@@ -129,10 +153,9 @@ const CONTROL_PLANE_BLOCKED_MODELS: Record<LlmProvider["name"], string[]> = {
   grok: []
 };
 const CONTROL_PLANE_VERIFIED_COMPATIBLE_MODELS: Record<LlmProvider["name"], string[]> = {
-  google: [],
-  openai: ["gpt-5.3-codex", "gpt-5.2-unified", "gpt-5.2", "o3-pro"],
-  anthropic: ["claude-4.6-opus", "claude-4.5-sonnet", "claude-4-opus"],
-  // Grok is disabled for control-plane JSON routing because it has timed out on strict classifier tasks. It remains available for normal generation.
+  openai: CONTROL_PLANE_CURATED_MODELS.openai,
+  anthropic: CONTROL_PLANE_CURATED_MODELS.anthropic,
+  google: CONTROL_PLANE_CURATED_MODELS.google,
   grok: []
 };
 
@@ -713,7 +736,7 @@ export async function chooseProvider(
 
   const controlPlaneDecisionProviders = selectControlPlaneDecisionModels(modelEntries, registryLookup, traceRequestId);
   console.info(
-    `[ControlPlane] decision_models=${controlPlaneDecisionProviders.map((entry) => `${entry.provider.name}:${entry.modelId}`).join(",") || "none"}`
+    `[ControlPlane] decision_models=${controlPlaneDecisionProviders.map((entry) => `${entry.provider.name}:${entry.modelId}`).join(",") || "none"} context_length=${context.length}`
   );
 
   const upstreamResolvedIntent = options?.resolvedIntent ?? (options?.requestIntent
@@ -734,7 +757,9 @@ export async function chooseProvider(
         {
           decisionProviders: controlPlaneDecisionProviders,
           registryLookup,
-          hints: options?.routingHints
+          hints: options?.routingHints,
+          conversationContext: context,
+          requestId: traceRequestId
         }
       );
     } catch (error) {
@@ -1074,6 +1099,7 @@ export async function chooseProvider(
       secondaryIntents: resolvedIntent.secondaryIntents ?? [],
       complexity: resolvedIntent.complexity ?? null,
       providerRefusalRisk: resolvedIntent.providerRefusalRisk ?? null,
+      conversationContext: context,
       rerouteContext: options?.rerouteContext ?? null,
       modalityFlags: {
         has_images: Boolean(options?.hasImages),
