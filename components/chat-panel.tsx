@@ -1046,8 +1046,8 @@ export function ChatPanel({
 
   return (
     <main className="relative flex min-h-0 flex-1 flex-col overflow-hidden bg-gradient-to-b from-white/[0.02] via-transparent to-black/10">
-      <header className="shrink-0 border-b border-white/10 px-4 py-3 sm:px-6 sm:py-3.5">
-        <div className="flex flex-col gap-3">
+      <header className="shrink-0 border-b border-white/10 px-4 py-2.5 sm:px-6 sm:py-3">
+        <div className="flex flex-col gap-2.5">
           <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
             <div className="flex min-w-0 items-center gap-2.5">
               <div className="flex h-8 w-8 flex-none items-center justify-center rounded-xl border border-white/10 bg-gradient-to-br from-sky-400/15 via-white/10 to-emerald-400/10 shadow-[0_8px_24px_rgba(0,0,0,0.24)]">
@@ -1244,26 +1244,32 @@ export function ChatPanel({
             ].join(" ")}
           >
             <div className="min-h-0">
-              <div className="flex flex-col gap-2 md:flex-row md:flex-wrap">
-                <label className="flex min-h-10 items-center gap-2 rounded-2xl border border-white/10 bg-white/[0.035] px-3 py-2 text-xs text-zinc-300">
+              <div className="flex flex-col gap-2 md:flex-row md:flex-nowrap md:items-center">
+                <label
+                  className="flex min-h-9 shrink-0 items-center gap-1.5 rounded-xl border border-white/10 bg-white/[0.035] px-2.5 py-1.5 text-[11px] text-zinc-300"
+                  title="Show model selection explainer"
+                >
                   <input
                     type="checkbox"
                     checked={!modelExplainerHidden}
                     onChange={(event) => handleModelExplainerVisibility(!event.target.checked)}
-                    className="h-4 w-4 rounded border-white/15 bg-zinc-900 text-emerald-500 focus:ring-emerald-500"
+                    className="h-3.5 w-3.5 rounded border-white/15 bg-zinc-900 text-emerald-500 focus:ring-emerald-500"
                     aria-label="Show model selection explainer"
                   />
-                  <span>Show model selection explainer</span>
+                  <span>Model explainer</span>
                 </label>
-                <label className="flex min-h-10 items-center gap-2 rounded-2xl border border-white/10 bg-white/[0.035] px-3 py-2 text-xs text-zinc-300">
+                <label
+                  className="flex min-h-9 shrink-0 items-center gap-1.5 rounded-xl border border-white/10 bg-white/[0.035] px-2.5 py-1.5 text-[11px] text-zinc-300"
+                  title="Show live reasoning explainer"
+                >
                   <input
                     type="checkbox"
                     checked={showLiveReasoningExplainer}
                     onChange={(event) => handleLiveReasoningVisibility(event.target.checked)}
-                    className="h-4 w-4 rounded border-white/15 bg-zinc-900 text-emerald-500 focus:ring-emerald-500"
+                    className="h-3.5 w-3.5 rounded border-white/15 bg-zinc-900 text-emerald-500 focus:ring-emerald-500"
                     aria-label="Show live reasoning explainer"
                   />
-                  <span>Show live reasoning explainer</span>
+                  <span>Live reasoning</span>
                 </label>
                 {providerNames.map((providerName) => {
                   const options = availableModels[providerName] ?? [];
@@ -1275,9 +1281,9 @@ export function ChatPanel({
                   return (
                     <label
                       key={providerName}
-                      className="grid min-w-0 gap-1 rounded-2xl border border-white/10 bg-white/[0.035] p-2 text-[11px] text-zinc-300 md:w-[calc(50%-0.25rem)] lg:w-auto lg:min-w-[220px]"
+                      className="flex min-w-0 flex-1 items-center gap-1.5 rounded-xl border border-white/10 bg-white/[0.035] px-2 py-1.5 text-[10px] text-zinc-300"
                     >
-                      <span className="capitalize text-zinc-500">{providerName}</span>
+                      <span className="shrink-0 capitalize text-zinc-500">{providerName}</span>
                       <select
                         value={selectedValue}
                         onChange={(event) => {
@@ -1286,7 +1292,7 @@ export function ChatPanel({
                             nextModel ? { providerName, modelId: nextModel } : null,
                           );
                         }}
-                        className="min-w-0 rounded-xl border border-white/10 bg-zinc-950/90 px-2.5 py-2 text-xs text-zinc-100 outline-none ring-emerald-500 transition focus:ring"
+                        className="min-w-0 flex-1 rounded-lg border border-white/10 bg-zinc-950/90 px-2 py-1.5 text-[11px] text-zinc-100 outline-none ring-emerald-500 transition focus:ring"
                       >
                         <option value="">Master Router (Auto)</option>
                         {options.map((modelId) => (
