@@ -7,6 +7,7 @@ import {
   inferRequestClassification,
   inferRequestIntent,
   LlmRoutingResult,
+  RequestComplexity,
   RequestIntent,
   RoutingHint,
   scoreModelCandidateWithBreakdown,
@@ -39,6 +40,8 @@ export type ResolvedRoutingIntent = {
   intent: RequestIntent;
   preferredProvider: LlmProvider["name"] | null;
   intentSource: "upstream" | "router-fallback" | "llm" | "heuristic" | "fallback";
+  secondaryIntents?: RequestIntent[];
+  complexity?: RequestComplexity | null;
 };
 export type SelectionExplainer = {
   selected_model?: string;
@@ -742,7 +745,9 @@ export async function chooseProvider(
     ? {
         intent: requestClassification.intent,
         preferredProvider: requestClassification.preferredProvider ?? null,
-        intentSource: "llm"
+        intentSource: "llm",
+        secondaryIntents: requestClassification.secondaryIntents ?? [],
+        complexity: requestClassification.complexity ?? null
       }
     : bestHint?.hintIntent
       ? {
@@ -857,6 +862,45 @@ export async function chooseProvider(
     });
 
     logPolicyTrace(evaluation.trace);
+
+    // Once the routing AI has produced a valid selection, deterministic policy
+    // evaluation is advisory only. Deterministic policy may shape the fallback
+    // path when the AI router fails, but it must not overrule a successful AI decision.
+    if (llmPrimaryUsed) {
+      if (evaluation.selected && !policyConfig.shadowMode) {
+        console.info(
+          `[Policy Guardrail] advisory_only reason=llm_primary_authority proposed=${evaluation.selected.provider.name}:${evaluation.selected.modelId}`
+        );
+      }
+      return {
+        provider: selection.provider,
+        modelId: selection.modelId,
+        authority: intentAuthority,
+        intentResolutionReason,
+        fallbackChain,
+        reasoning: `${selection.reasoning} Policy evaluation was advisory because the LLM router succeeded.`,
+        routerModel: selection.routerModel,
+        resolvedIntent,
+        explainer: buildSelectionExplainer({
+          selectedProviderName: selection.provider.name,
+          selectedModelId: selection.modelId,
+          intent,
+          availableByProvider,
+          rankedCandidates,
+          llmCandidates: llmCandidatesUsed,
+          selectedSource: "llm-primary",
+          hardRouteRule,
+          fallbackUsed: deterministicFallbackUsed,
+          fallbackReason,
+          preferenceProfile,
+          overrideReason: selection.overrideReason,
+          summary: selection.summary,
+          registryLookup,
+          actorId: options?.actorId ?? null,
+          actorRoutingProfile
+        })
+      };
+    }
 
     if (!evaluation.selected || policyConfig.shadowMode) {
       return {
@@ -1003,6 +1047,8 @@ export async function chooseProvider(
     const llmRouting: LlmRoutingResult = await chooseRoutingWithLLM({
       prompt,
       intent,
+      secondaryIntents: resolvedIntent.secondaryIntents ?? [],
+      complexity: resolvedIntent.complexity ?? null,
       modalityFlags: {
         has_images: Boolean(options?.hasImages),
         has_video_input: Boolean(options?.hasVideoInput)
@@ -1051,8 +1097,8 @@ export async function chooseProvider(
           selected = {
             provider: validated.provider,
             modelId: validated.modelId,
-            reasoning: `LLM-primary routing selected ${validated.provider.name}:${validated.modelId}.`,
-            routerModel: validated.modelId,
+            reasoning: `LLM-primary routing selected ${validated.provider.name}:${validated.modelId} using ${llmRouting.decisionProviderName}:${llmRouting.decisionModelId} as the decision model.`,
+            routerModel: `${llmRouting.decisionProviderName}:${llmRouting.decisionModelId}`,
             summary: "LLM-primary routing path.",
             overrideReason: null
           };
