@@ -88,6 +88,10 @@ export type RequestIntent =
   | "multimodal-reasoning"
   | "image-generation";
 export type RequestComplexity = "low" | "medium" | "high";
+export type RoutingRerouteContext = {
+  reason: "provider-refusal" | "provider-error";
+  failed_candidates: Array<{ provider: ProviderName; model: string }>;
+};
 export type RequestClassification = {
   intent: RequestIntent | null;
   preferred_provider: ProviderName | null;
@@ -1761,6 +1765,7 @@ export async function chooseRoutingWithLLM(args: {
   intent: RequestIntent;
   secondaryIntents?: RequestIntent[];
   complexity?: RequestComplexity | null;
+  rerouteContext?: RoutingRerouteContext | null;
   modalityFlags: RoutingModalityFlags;
   hardRouteContext: HardRouteContext;
   preferenceProfile: RoutingPreferenceProfile;
@@ -1816,6 +1821,7 @@ Rules:
 - Prefer web-capable models only when intent is web-search or news-summary.
 - Use prior_score only as advisory guidance; do not blindly choose the highest prior_score.
 - If another candidate is clearly better for the task, choose it even when prior_score is lower.
+- If reroute_context is present, a previous generation attempt failed or refused. Do not choose a failed candidate again. A provider refusal may reflect provider-level policy, so prefer a different provider when another capable candidate is available.
 - Respect explicit provider preferences only when clearly requested.
 - Do not include markdown or any non-JSON text.
 `.trim();
@@ -1828,6 +1834,7 @@ Rules:
       intent: args.intent,
       secondary_intents: args.secondaryIntents ?? [],
       complexity: args.complexity ?? null,
+      reroute_context: args.rerouteContext ?? null,
       modality_flags: args.modalityFlags,
       hard_route_context: args.hardRouteContext,
       preference_profile: args.preferenceProfile,
