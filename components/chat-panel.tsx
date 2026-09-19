@@ -1446,9 +1446,10 @@ export function ChatPanel({
                       ),
                       td: ({ children }) => <td className="px-3 py-2.5 align-top leading-6">{children}</td>,
                       del: ({ children }) => <del className="text-zinc-500">{children}</del>,
-                      input: ({ node: _node, ...props }) => (
-                        <input {...props} className="mr-2 accent-emerald-500" disabled />
-                      ),
+                      input: ({ node, ...props }) => {
+                        void node;
+                        return <input {...props} className="mr-2 accent-emerald-500" disabled />;
+                      },
                     }}
                   >
                     {message.content}
