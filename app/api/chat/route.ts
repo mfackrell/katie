@@ -740,6 +740,15 @@ export async function POST(request: NextRequest) {
       });
     }
     const historyForProvider = history.map(({ role, content }) => ({ role, content }));
+    const controlPlaneConversationContext = [
+      summary ? `Conversation summary: ${summary}` : "",
+      history.length ? `Recent conversation: ${JSON.stringify(history.slice(-4))}` : "",
+      `Has attached images: ${Boolean((Array.isArray(images) && images.length > 0) || attachments.some((attachment) => attachment.mimeType.startsWith("image/")))}`,
+      `Active repo: ${sessionContext.activeRepo ? `${sessionContext.activeRepo.fullName} (${sessionContext.activeRepo.id})` : "none"}`
+    ]
+      .filter(Boolean)
+      .join("\n");
+
     let provider = providers[0];
     let modelId = "";
     let fallbackChain: Array<{ provider: LlmProvider; modelId: string; score: number }> = [];
@@ -779,7 +788,11 @@ export async function POST(request: NextRequest) {
       const overrideClassification = await inferRequestClassification(
         message,
         { hasImages: hasVisualInput, hasVideoInput },
-        { decisionProviders: controlPlaneDecisionProviders }
+        {
+          decisionProviders: controlPlaneDecisionProviders,
+          conversationContext: controlPlaneConversationContext,
+          requestId
+        }
       );
       const overrideIntent = overrideClassification.intent;
       const validatedOverride = validateRoutingDecision(
@@ -879,7 +892,7 @@ export async function POST(request: NextRequest) {
       }
 
       resolvedRequestIntent = requestIntent;
-      const routingContext = `\n  Persona: ${personaWithRepoContext}\n  Rolling Summary: ${summary}\n  Recent History: ${JSON.stringify(history.slice(-3))}\n  Has Attached Images: ${hasVisualInput}\n  Active Repo: ${sessionContext.activeRepo ? `${sessionContext.activeRepo.fullName} (${sessionContext.activeRepo.id})` : "none"}\n`;
+      const routingContext = controlPlaneConversationContext;
       console.log(
         `[Chat API] Routing intent diagnostic callerRequestIntent=${explicitIntent ?? "none"} heuristicIntent=${requestIntent ?? "none"} effectiveIntentPassedToRouter=none intentSource=router-fallback`
       );
@@ -1290,7 +1303,10 @@ ${chunkWorkflowSummary}`;
             const rerouteHasImages = Array.isArray(images) && images.length > 0;
             const rerouteHasImageAttachments = attachments.some((attachment) => attachment.mimeType.startsWith("image/"));
             const rerouteHasVisualInput = rerouteHasImages || rerouteHasImageAttachments;
-            const rerouteRoutingContext = `\n  Persona: ${personaWithRepoContext}\n  Rolling Summary: ${summary}\n  Recent History: ${JSON.stringify(history.slice(-3))}\n  Has Attached Images: ${rerouteHasVisualInput}\n  Active Repo: ${sessionContext.activeRepo ? `${sessionContext.activeRepo.fullName} (${sessionContext.activeRepo.id})` : "none"}\n`;
+            const rerouteRoutingContext = [
+              controlPlaneConversationContext,
+              `Refusal reroute has visual input: ${rerouteHasVisualInput}`
+            ].join("\n");
 
             const generationAttempt = await runWithRefusalFallback<GenerationAttempt>({
               attempts,
