@@ -1067,7 +1067,6 @@ export async function chooseProvider(
     if (!llmRouting.accepted) {
       selected = fallbackToDeterministic(`llm_router_rejected:${llmRouting.reason}`);
     } else {
-      llmPrimaryUsed = true;
       const providerLookup = new Map(availableByProvider.map(({ provider }) => [provider.name, provider]));
       rankedCandidates = llmRouting.ranking
         .map((candidate) => {
@@ -1093,6 +1092,7 @@ export async function chooseProvider(
           console.warn(`[Routing Validation] rejected_llm_selection=${llmRouting.selected.providerName}:${llmRouting.selected.modelId}`);
           selected = fallbackToDeterministic("llm_router_selection_invalid_after_validation");
         } else {
+          llmPrimaryUsed = true;
           console.info(`[LLM Router] selected=${validated.provider.name}:${validated.modelId}`);
           selected = {
             provider: validated.provider,
