@@ -1,17 +1,15 @@
 import type { ProviderResponse } from "@/lib/providers/types";
 
-const REFUSAL_RETRY_PROVIDERS = new Set(["openai", "google", "anthropic", "grok"]);
-
 const STRONG_REFUSAL_PATTERNS: RegExp[] = [
-  /\bi\s*(?:can(?:not|'t)|am\s+unable\s+to|won't)\s+(?:help|assist|comply)\s+with\s+that\b/i,
+  /\bi\s*(?:can(?:not|'t)|am\s+unable\s+to|won't)\s+(?:help|assist|comply|answer|provide)\s+(?:with\s+)?that\b/i,
   /\bi\s*(?:can(?:not|'t)|am\s+unable\s+to)\s+describe\s+explicit\s+sexual\s+content\b/i,
   /\b(?:this|that)\s+request\s+(?:violates|goes\s+against)\s+(?:our\s+)?content\s+policy\b/i,
   /\bi\s+can\s+still\s+help\s+in\s+a\s+safer\s+way\b/i,
   /\b(?:instead|however),?\s+i\s+can\s+offer\s+(?:a\s+)?safer\s+(?:alternative|approach|way)\b/i,
   /\bi\s*(?:can(?:not|'t)|won't)\s+provide\s+that\b/i,
   /\bi\s+must\s+refuse\b/i,
-  /\b(?:i(?:'m| am)\s+)?not\s+going\s+(?:there|to\s+(?:provide|describe|give|help|assist))\b/i,
-  /\bi\s+(?:will\s+not|won't)\s+(?:go\s+into|provide|describe)\b/i
+  /^\s*(?:sorry[,—:\s-]*)?(?:i(?:'m| am)\s+)?not\s+going\s+there\b/i,
+  /^\s*(?:sorry[,—:\s-]*)?i\s+won't\s+go\s+there\b/i
 ];
 
 const SAFER_WAY_PATTERN = /\bsafer\s+way\b/i;
@@ -34,11 +32,7 @@ export function shouldRetryOnProviderRefusal(): boolean {
   return raw.toLowerCase() !== "false";
 }
 
-export function isLikelyProviderRefusal(result: ProviderResponse, providerName: string): boolean {
-  if (!REFUSAL_RETRY_PROVIDERS.has(providerName)) {
-    return false;
-  }
-
+export function isLikelyProviderRefusal(result: ProviderResponse, _providerName?: string): boolean {
   const normalized = normalizeText(result.text ?? "");
   if (!normalized) {
     return false;
@@ -58,41 +52,85 @@ export async function runWithRefusalFallback<TAttempt>({
   runAttempt,
   detectRefusal,
   shouldRetryRefusal,
+  rerouteOnRefusal,
+  onRefusalReroute,
   onRefusalFallback,
+  onRerouteError,
   onError
 }: {
   attempts: TAttempt[];
   runAttempt: (attempt: TAttempt, attemptIndex: number) => Promise<ProviderResponse>;
   detectRefusal: (result: ProviderResponse, attempt: TAttempt) => boolean;
   shouldRetryRefusal: boolean;
+  rerouteOnRefusal?: (context: {
+    attempt: TAttempt;
+    attemptIndex: number;
+    attemptedAttempts: TAttempt[];
+    remainingAttempts: TAttempt[];
+  }) => Promise<TAttempt | null>;
+  onRefusalReroute?: (context: {
+    attempt: TAttempt;
+    attemptIndex: number;
+    reroutedAttempt: TAttempt;
+  }) => void;
   onRefusalFallback?: (context: { attempt: TAttempt; attemptIndex: number; nextAttempt: TAttempt }) => void;
+  onRerouteError?: (context: { attempt: TAttempt; attemptIndex: number; error: unknown }) => void;
   onError?: (context: { attempt: TAttempt; attemptIndex: number; error: unknown }) => void;
 }): Promise<{ result: ProviderResponse; attempt: TAttempt }> {
   let lastGenerationError: unknown = null;
   let lastRefusal: { result: ProviderResponse; attempt: TAttempt } | null = null;
+  const pendingAttempts = [...attempts];
+  const attemptedAttempts: TAttempt[] = [];
+  let attemptIndex = 0;
 
-  for (let attemptIndex = 0; attemptIndex < attempts.length; attemptIndex += 1) {
-    const attempt = attempts[attemptIndex];
+  while (pendingAttempts.length > 0) {
+    const attempt = pendingAttempts.shift() as TAttempt;
+    const currentAttemptIndex = attemptIndex;
+    attemptIndex += 1;
+    attemptedAttempts.push(attempt);
 
     try {
-      const result = await runAttempt(attempt, attemptIndex);
+      const result = await runAttempt(attempt, currentAttemptIndex);
 
       if (!shouldRetryRefusal || !detectRefusal(result, attempt)) {
         return { result, attempt };
       }
 
-      const hasNextAttempt = attemptIndex < attempts.length - 1;
-      if (!hasNextAttempt) {
+      lastRefusal = { result, attempt };
+
+      if (rerouteOnRefusal) {
+        try {
+          const reroutedAttempt = await rerouteOnRefusal({
+            attempt,
+            attemptIndex: currentAttemptIndex,
+            attemptedAttempts: [...attemptedAttempts],
+            remainingAttempts: [...pendingAttempts]
+          });
+
+          if (reroutedAttempt) {
+            pendingAttempts.unshift(reroutedAttempt);
+            onRefusalReroute?.({
+              attempt,
+              attemptIndex: currentAttemptIndex,
+              reroutedAttempt
+            });
+            continue;
+          }
+        } catch (error: unknown) {
+          onRerouteError?.({ attempt, attemptIndex: currentAttemptIndex, error });
+        }
+      }
+
+      const nextAttempt = pendingAttempts[0];
+      if (!nextAttempt) {
         return { result, attempt };
       }
 
-      lastRefusal = { result, attempt };
-      const nextAttempt = attempts[attemptIndex + 1];
-      onRefusalFallback?.({ attempt, attemptIndex, nextAttempt });
+      onRefusalFallback?.({ attempt, attemptIndex: currentAttemptIndex, nextAttempt });
       continue;
     } catch (error: unknown) {
       lastGenerationError = error;
-      onError?.({ attempt, attemptIndex, error });
+      onError?.({ attempt, attemptIndex: currentAttemptIndex, error });
     }
   }
 
