@@ -29,9 +29,6 @@
     "paths": {
       "@/*": [
         "./*"
-      ],
-      "emoji-picker-react": [
-        "./vendor/emoji-picker-react"
       ]
     }
   },
