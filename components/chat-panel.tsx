@@ -1420,7 +1420,7 @@ export function ChatPanel({
                         </pre>
                       ),
                       code: ({ className, children }) => {
-                        const isBlock = Boolean(className);
+                        const isBlock = Boolean(className) || String(children).includes("\n");
                         return (
                           <code
                             className={
@@ -1446,7 +1446,7 @@ export function ChatPanel({
                       ),
                       td: ({ children }) => <td className="px-3 py-2.5 align-top leading-6">{children}</td>,
                       del: ({ children }) => <del className="text-zinc-500">{children}</del>,
-                      input: (props) => (
+                      input: ({ node: _node, ...props }) => (
                         <input {...props} className="mr-2 accent-emerald-500" disabled />
                       ),
                     }}
