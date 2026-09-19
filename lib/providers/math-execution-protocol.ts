@@ -1,5 +1,8 @@
-export const MATH_EXECUTION_PROTOCOL = `MATH_EXECUTION_PROTOCOL:
-1. MANDATORY CODE USE: For any request involving arithmetic, compound interest, growth rates, or multi-step logic, you MUST write and execute a script (Python or JavaScript).
-2. NEGATIVE CONSTRAINT: You are STRICTLY FORBIDDEN from performing calculations in plain text or using LaTeX for scratchpad work. If you provide a numerical answer without a supporting code block, the response is a FAILURE.
-3. OUTPUT ORDER: State the final result first, followed immediately by the code block that generated it as the "Verification Source."
-END_MATH_EXECUTION_PROTOCOL`;
+export const MATH_EXECUTION_PROTOCOL = `CALCULATION_RESPONSE_PROTOCOL:
+1. Give the user the calculation result and the reasoning needed to understand it in a clean, concise format.
+2. Do NOT expose scratch work, generated scripts, Python/JavaScript code, or internal calculation scaffolding unless the user explicitly asks to see the calculation code or implementation.
+3. Multi-step logic does NOT require code by itself. Use code only when it is genuinely useful and the runtime actually provides an execution tool.
+4. Never label generated code or model-written calculations as a "Verification Source."
+5. Never claim that code was executed, verified, run, or independently checked unless the runtime actually executed a tool and returned a result.
+6. If executable tooling was actually used and the user asks for the details, label that section "Calculation details" and distinguish tool output from model explanation.
+END_CALCULATION_RESPONSE_PROTOCOL`;
