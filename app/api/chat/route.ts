@@ -903,7 +903,7 @@ export async function POST(request: NextRequest) {
         actorRoutingProfile,
         routingHints,
         routingTraceEnabled,
-        routingRequestId: request.headers.get("x-request-id") ?? undefined
+        routingRequestId: requestId
       });
 
       provider = routingDecision.provider;
