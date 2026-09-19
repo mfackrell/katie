@@ -637,7 +637,7 @@ test("router uses heuristics as last resort only when all decision providers fai
 
   assert.equal(decision.explainer?.selected_source, "deterministic-fallback");
   assert.equal(decision.explainer?.fallback_used, true);
-  assert.match(decision.explainer?.fallback_reason ?? "", /llm_router_rejected:no_decision_provider_available/);
+  assert.match(decision.explainer?.fallback_reason ?? "", /llm_router_rejected:all_decision_providers_failed/);
 });
 
 test("control-plane capability filtering excludes non-text models from decision provider selection", async () => {
@@ -674,7 +674,7 @@ test("control-plane selects explicit flagship models instead of first-two list o
 
   assert.ok(attempts.includes("openai:gpt-5.3-codex"));
   assert.equal(attempts.includes("openai:gpt-5.2-mini"), false);
-  assert.equal(attempts.some((attempt) => attempt.startsWith("google:")), false);
+  assert.ok(attempts.includes("google:gemini-3.1-pro"));
 });
 
 test("control-plane selection skips dead blocked decision models", async () => {
@@ -685,7 +685,7 @@ test("control-plane selection skips dead blocked decision models", async () => {
     }
   ]);
 
-  assert.deepEqual(selected.map((entry) => `${entry.provider.name}:${entry.modelId}`), []);
+  assert.deepEqual(selected.map((entry) => `${entry.provider.name}:${entry.modelId}`), ["google:gemini-3.1-pro"]);
 });
 
 test("control-plane excludes incompatible google decision model variants", async () => {
@@ -696,7 +696,7 @@ test("control-plane excludes incompatible google decision model variants", async
     }
   ]);
 
-  assert.deepEqual(selected.map((entry) => `${entry.provider.name}:${entry.modelId}`), []);
+  assert.deepEqual(selected.map((entry) => `${entry.provider.name}:${entry.modelId}`), ["google:gemini-3.1-pro"]);
 });
 
 test("control-plane uses exactly one decision model per provider in fixed provider priority order", async () => {
@@ -728,7 +728,7 @@ test("control-plane uses exactly one decision model per provider in fixed provid
   assert.deepEqual(attempts, [
     "openai:gpt-5.3-codex",
     "anthropic:claude-4.5-sonnet",
-    "grok:grok-4-0709"
+    "google:gemini-3.1-pro"
   ]);
   assert.equal(decision.explainer?.selected_source, "deterministic-fallback");
   assert.match(decision.explainer?.fallback_reason ?? "", /all_decision_providers_failed/);
@@ -874,6 +874,111 @@ test("router falls back to local classification only when upstream requestIntent
   assert.doesNotMatch(routeIntentLog ?? "", /classifier_intent=skipped/);
   assert.match(routeIntentLog ?? "", /effective_intent=technical-debugging/);
   assert.match(routeIntentLog ?? "", /intent_source=router-fallback/);
+});
+
+test("intent classifier uses recent conversation context to interpret terse emotional continuations", async () => {
+  const classifier = provider("openai", ["gpt-5.6-sol"], async ({ user, modelId }) => {
+    assert.match(user, /CONVERSATION_CONTEXT:/);
+    assert.match(user, /lonely/i);
+    assert.match(user, /CURRENT_USER_MESSAGE: i just need some pussy lips wrapped around my cock/i);
+    return {
+      text: JSON.stringify({
+        intent: "social-emotional",
+        secondary_intents: [],
+        complexity: "medium",
+        provider_refusal_risk: "medium",
+        preferred_provider: null
+      }),
+      model: modelId ?? "gpt-5.6-sol",
+      provider: "openai"
+    };
+  }).provider;
+
+  const classified = await inferRequestClassification(
+    "i just need some pussy lips wrapped around my cock",
+    false,
+    {
+      decisionProviders: [{ provider: classifier, modelId: "gpt-5.6-sol" }],
+      conversationContext:
+        "Conversation summary: The user has been discussing loneliness, three years without sex, dating frustration, and wanting connection."
+    }
+  );
+
+  assert.equal(classified.intent, "social-emotional");
+  assert.equal(classified.complexity, "medium");
+  assert.equal(classified.providerRefusalRisk, "medium");
+});
+
+test("final AI router receives conversation context and can choose Claude for an emotional continuation", async () => {
+  const openai = provider("openai", ["gpt-5.6-sol", "gpt-5.4-mini"], async ({ user, modelId }) => {
+    if (user.includes("Intent Classifier")) {
+      assert.match(user, /Conversation summary: The user has been discussing loneliness/i);
+      return {
+        text: JSON.stringify({
+          intent: "social-emotional",
+          secondary_intents: [],
+          complexity: "medium",
+          provider_refusal_risk: "medium",
+          preferred_provider: null
+        }),
+        model: modelId ?? "gpt-5.6-sol",
+        provider: "openai"
+      };
+    }
+
+    assert.match(user, /"conversation_context":/);
+    assert.match(user, /loneliness/i);
+    return {
+      text: JSON.stringify({
+        selected: { provider: "anthropic", model: "claude-sonnet-5" }
+      }),
+      model: modelId ?? "gpt-5.6-sol",
+      provider: "openai"
+    };
+  }).provider;
+  const anthropic = provider("anthropic", ["claude-sonnet-5"]).provider;
+
+  const decision = await chooseProvider(
+    "i just need some pussy lips wrapped around my cock",
+    "Conversation summary: The user has been discussing loneliness, sexual frustration, dating, and wanting connection.",
+    [openai, anthropic],
+    { routingRequestId: "test-context-aware-emotional-routing" }
+  );
+
+  assert.equal(decision.resolvedIntent.intent, "social-emotional");
+  assert.equal(decision.provider.name, "anthropic");
+  assert.equal(decision.modelId, "claude-sonnet-5");
+  assert.equal(decision.explainer?.selected_source, "llm-primary");
+});
+
+test("control plane has current redundant decision models across openai anthropic and google", async () => {
+  const selected = selectControlPlaneDecisionModels([
+    {
+      provider: provider("openai", ["gpt-5.6-sol", "gpt-5.4-mini"]).provider,
+      models: ["gpt-5.6-sol", "gpt-5.4-mini"]
+    },
+    {
+      provider: provider("anthropic", ["claude-sonnet-5", "claude-haiku-4-5-20251001"]).provider,
+      models: ["claude-sonnet-5", "claude-haiku-4-5-20251001"]
+    },
+    {
+      provider: provider("google", ["gemini-3.1-pro-preview", "gemini-3.5-flash"]).provider,
+      models: ["gemini-3.1-pro-preview", "gemini-3.5-flash"]
+    },
+    {
+      provider: provider("grok", ["grok-4.3"]).provider,
+      models: ["grok-4.3"]
+    }
+  ]);
+
+  assert.deepEqual(
+    selected.map((entry) => `${entry.provider.name}:${entry.modelId}`),
+    [
+      "openai:gpt-5.6-sol",
+      "anthropic:claude-sonnet-5",
+      "google:gemini-3.1-pro-preview"
+    ]
+  );
 });
 
 test("control-plane misclassification to code-generation is sanitized for conversational prompts", async () => {
