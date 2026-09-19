@@ -21,7 +21,7 @@ import {
   parseIntentSessionState
 } from "@/lib/router/intent-context";
 import { LlmProvider, ProviderResponse } from "@/lib/providers/types";
-import type { SelectionExplainer } from "@/lib/router/master-router";
+import type { ResolvedRoutingIntent, SelectionExplainer } from "@/lib/router/master-router";
 import { DEFAULT_REASONING_CATEGORIES, ReasoningStateAccumulator } from "@/lib/chat/reasoning-stream";
 import { isLikelyProviderRefusal, runWithRefusalFallback, shouldRetryOnProviderRefusal } from "@/lib/router/refusal-detection";
 import {
@@ -737,6 +737,7 @@ export async function POST(request: NextRequest) {
     let modelId = "";
     let fallbackChain: Array<{ provider: LlmProvider; modelId: string; score: number }> = [];
     let selectionExplainer: SelectionExplainer | undefined;
+    let resolvedRoutingIntentForReroute: ResolvedRoutingIntent | undefined;
     let resolvedRequestIntent: RequestIntent | undefined;
     let intentAuthority: "llm" | "heuristic" | "override" | "fallback" | "capability" = "fallback";
     let intentResolutionReason = "default";
@@ -889,6 +890,7 @@ export async function POST(request: NextRequest) {
       modelId = routingDecision.modelId;
       fallbackChain = routingDecision.fallbackChain;
       selectionExplainer = routingDecision.explainer;
+      resolvedRoutingIntentForReroute = routingDecision.resolvedIntent;
       resolvedRequestIntent = routingDecision.resolvedIntent.intent;
       intentAuthority = routingDecision.authority ?? "fallback";
       intentResolutionReason = routingDecision.intentResolutionReason ?? "router-default";
@@ -1259,20 +1261,47 @@ ${chunkWorkflowSummary}`;
 
             let result: ProviderResponse | null = null;
             let streamedText = "";
-            const attempts = [{ provider, modelId }, ...fallbackChain];
+            type GenerationAttempt = {
+              provider: LlmProvider;
+              modelId: string;
+              score?: number;
+              explainer?: SelectionExplainer;
+              routingSource?: "initial" | "ai-reroute" | "deterministic-fallback";
+            };
+            const attempts: GenerationAttempt[] = [
+              { provider, modelId, explainer: selectionExplainer, routingSource: "initial" },
+              ...fallbackChain.map((candidate) => ({
+                ...candidate,
+                routingSource: "deterministic-fallback" as const
+              }))
+            ];
             const retryOnProviderRefusal = shouldRetryOnProviderRefusal();
-            const generationAttempt = await runWithRefusalFallback({
+            const refusedCandidates: Array<{ providerName: LlmProvider["name"]; modelId: string }> = [];
+            const refusedCandidateKeys = new Set<string>();
+            const maxRefusalReroutes = 3;
+            let refusalRerouteCount = 0;
+            const rerouteHasImages = Array.isArray(images) && images.length > 0;
+            const rerouteHasImageAttachments = attachments.some((attachment) => attachment.mimeType.startsWith("image/"));
+            const rerouteHasVisualInput = rerouteHasImages || rerouteHasImageAttachments;
+            const rerouteRoutingContext = `\n  Persona: ${personaWithRepoContext}\n  Rolling Summary: ${summary}\n  Recent History: ${JSON.stringify(history.slice(-3))}\n  Has Attached Images: ${rerouteHasVisualInput}\n  Active Repo: ${sessionContext.activeRepo ? `${sessionContext.activeRepo.fullName} (${sessionContext.activeRepo.id})` : "none"}\n`;
+
+            const generationAttempt = await runWithRefusalFallback<GenerationAttempt>({
               attempts,
               shouldRetryRefusal: retryOnProviderRefusal,
               runAttempt: async (candidate, attemptIndex) => {
                 provider = candidate.provider;
                 modelId = candidate.modelId;
+                if (candidate.explainer) {
+                  selectionExplainer = candidate.explainer;
+                }
 
                 if (attemptIndex > 0) {
                   emitChunk({
                     type: "metadata",
                     modelId,
-                    provider: provider.name
+                    provider: provider.name,
+                    explainer: candidate.explainer,
+                    resetText: true
                   });
                 }
 
@@ -1313,13 +1342,88 @@ ${chunkWorkflowSummary}`;
                 };
               },
               detectRefusal: (generationResult, candidate) => isLikelyProviderRefusal(generationResult, candidate.provider.name),
+              rerouteOnRefusal: async ({ attempt }) => {
+                if (!resolvedRoutingIntentForReroute || refusalRerouteCount >= maxRefusalReroutes) {
+                  return null;
+                }
+
+                const failedKey = `${attempt.provider.name}:${attempt.modelId.trim().toLowerCase()}`;
+                if (!refusedCandidateKeys.has(failedKey)) {
+                  refusedCandidateKeys.add(failedKey);
+                  refusedCandidates.push({
+                    providerName: attempt.provider.name,
+                    modelId: attempt.modelId
+                  });
+                }
+
+                refusalRerouteCount += 1;
+                const rerouteDecision = await chooseProvider(message, rerouteRoutingContext, providers, {
+                  hasImages: rerouteHasVisualInput,
+                  hasVideoInput,
+                  actorId,
+                  actorRoutingProfile,
+                  routingHints,
+                  routingTraceEnabled,
+                  routingRequestId: `${requestId}:refusal-reroute-${refusalRerouteCount}`,
+                  resolvedIntent: {
+                    ...resolvedRoutingIntentForReroute,
+                    intentSource: "upstream"
+                  },
+                  excludedCandidates: refusedCandidates,
+                  rerouteContext: {
+                    reason: "provider-refusal",
+                    failed_candidates: refusedCandidates.map((candidate) => ({
+                      provider: candidate.providerName,
+                      model: candidate.modelId
+                    }))
+                  }
+                });
+
+                if (rerouteDecision.explainer?.selected_source !== "llm-primary") {
+                  console.warn("[Chat API] AI refusal reroute unavailable; deterministic fallback will be used.", {
+                    requestId,
+                    refusedCandidates,
+                    fallbackReason: rerouteDecision.explainer?.fallback_reason ?? "router-not-llm-primary"
+                  });
+                  return null;
+                }
+
+                resolvedRoutingIntentForReroute = rerouteDecision.resolvedIntent;
+                resolvedRequestIntent = rerouteDecision.resolvedIntent.intent;
+                intentAuthority = rerouteDecision.authority ?? intentAuthority;
+                intentResolutionReason = rerouteDecision.intentResolutionReason ?? intentResolutionReason;
+
+                return {
+                  provider: rerouteDecision.provider,
+                  modelId: rerouteDecision.modelId,
+                  explainer: rerouteDecision.explainer,
+                  routingSource: "ai-reroute"
+                };
+              },
+              onRefusalReroute: ({ attempt, reroutedAttempt }) => {
+                console.warn("[Chat API] Provider refusal detected. AI router selected a new candidate.", {
+                  requestId,
+                  refusedProvider: attempt.provider.name,
+                  refusedModelId: attempt.modelId,
+                  reroutedProvider: reroutedAttempt.provider.name,
+                  reroutedModelId: reroutedAttempt.modelId
+                });
+              },
               onRefusalFallback: ({ attempt, nextAttempt }) => {
-                console.warn("[Chat API] Provider refusal detected. Attempting fallback candidate.", {
+                console.warn("[Chat API] Provider refusal detected. AI reroute unavailable; attempting deterministic fallback candidate.", {
                   requestId,
                   provider: attempt.provider.name,
                   modelId: attempt.modelId,
                   nextProvider: nextAttempt.provider.name,
                   nextModelId: nextAttempt.modelId
+                });
+              },
+              onRerouteError: ({ attempt, error }) => {
+                console.warn("[Chat API] AI refusal reroute failed; deterministic fallback remains available.", {
+                  requestId,
+                  provider: attempt.provider.name,
+                  modelId: attempt.modelId,
+                  reason: error instanceof Error ? error.message : String(error)
                 });
               },
               onError: ({ attempt, error }) => {
