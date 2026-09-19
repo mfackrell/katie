@@ -967,7 +967,12 @@ export async function inferRequestClassification(
   prompt: string,
   input: boolean | { hasImages: boolean; hasVideoInput?: boolean },
   options?: ControlPlaneSelectionOptions
-): Promise<{ intent: RequestIntent; preferredProvider: ProviderName | null }> {
+): Promise<{
+  intent: RequestIntent;
+  preferredProvider: ProviderName | null;
+  secondaryIntents?: RequestIntent[];
+  complexity?: RequestComplexity | null;
+}> {
   const hasImages = typeof input === "boolean" ? input : input.hasImages;
   const hasVideoInput = typeof input === "boolean" ? false : Boolean(input.hasVideoInput);
   const normalizedPrompt = prompt.toLowerCase();
