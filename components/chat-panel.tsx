@@ -1051,26 +1051,34 @@ export function ChatPanel({
   }
 
   return (
-    <main className="relative flex min-h-0 flex-1 flex-col overflow-hidden bg-gradient-to-b from-white/[0.02] via-transparent to-black/10">
-      <header className="shrink-0 border-b border-white/10 px-4 py-2.5 sm:px-6 sm:py-3">
+    <main className="relative flex h-full min-h-0 w-full flex-1 flex-col overflow-hidden bg-gradient-to-b from-white/[0.02] via-transparent to-black/10">
+      <header className="shrink-0 border-b border-white/10 pb-2 pl-16 pr-3 pt-[calc(env(safe-area-inset-top)+0.55rem)] sm:px-6 sm:py-3">
         <div className="flex flex-col gap-2.5">
           <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
             <div className="flex min-w-0 items-center gap-2.5">
-              <div className="flex h-8 w-8 flex-none items-center justify-center rounded-xl border border-white/10 bg-gradient-to-br from-sky-400/15 via-white/10 to-emerald-400/10 shadow-[0_8px_24px_rgba(0,0,0,0.24)]">
+              <div className="hidden h-8 w-8 flex-none items-center justify-center rounded-xl border border-white/10 bg-gradient-to-br from-sky-400/15 via-white/10 to-emerald-400/10 shadow-[0_8px_24px_rgba(0,0,0,0.24)] sm:flex">
                 <span className="text-sm">✦</span>
               </div>
               <div className="min-w-0">
-                <p className="text-[10px] font-semibold uppercase tracking-[0.24em] text-zinc-500">
+                <p className="hidden text-[10px] font-semibold uppercase tracking-[0.24em] text-zinc-500 sm:block">
                   Master Router
                 </p>
-                <h2 className="truncate text-base font-semibold tracking-tight text-white sm:text-xl">
+                <div className="sm:hidden">
+                  <h2 className="truncate text-[15px] font-semibold tracking-tight text-white">
+                    {activeActorName || "Katie"}
+                  </h2>
+                  <p className="truncate text-[11px] text-zinc-500">
+                    {activeChatTitle || "New chat"}
+                  </p>
+                </div>
+                <h2 className="hidden truncate text-xl font-semibold tracking-tight text-white sm:block">
                   Katie - AI Command Center
                 </h2>
               </div>
             </div>
 
             <div className="flex flex-wrap items-center gap-2 sm:justify-end">
-              <p className="inline-flex max-w-full items-center gap-2 rounded-full border border-emerald-400/30 bg-emerald-500/10 px-2.5 py-1 text-[11px] text-emerald-100">
+              <p className="hidden max-w-full items-center gap-2 rounded-full border border-emerald-400/30 bg-emerald-500/10 px-2.5 py-1 text-[11px] text-emerald-100 sm:inline-flex">
                 <span className="h-1.5 w-1.5 flex-none rounded-full bg-emerald-300 shadow-[0_0_10px_rgba(110,231,183,0.8)]" />
                 <span className="truncate">
                   Active:
@@ -1085,7 +1093,7 @@ export function ChatPanel({
                 </span>
               </p>
               {meta ? (
-                <p className="inline-flex max-w-full items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-2.5 py-1 text-[11px] text-zinc-400">
+                <p className="hidden max-w-full items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-2.5 py-1 text-[11px] text-zinc-400 sm:inline-flex">
                   <span className="h-1.5 w-1.5 flex-none rounded-full bg-emerald-400 shadow-[0_0_10px_rgba(52,211,153,0.7)]" />
                   <span className="truncate">Last response via <span className="text-zinc-200">{meta.provider}</span> · {meta.model}</span>
                 </p>
@@ -1093,7 +1101,7 @@ export function ChatPanel({
               {showExplainer ? (
                 <div
                   ref={explainerContainerRef}
-                  className="relative"
+                  className="relative hidden sm:block"
                   onMouseEnter={() => {
                     if (typeof window !== "undefined" && window.matchMedia("(hover: hover) and (pointer: fine)").matches) {
                       setExplainerOpen(true);
@@ -1233,11 +1241,11 @@ export function ChatPanel({
               <button
                 type="button"
                 onClick={() => setShowModelControls((current) => !current)}
-                className="inline-flex min-h-10 items-center justify-center rounded-2xl border border-white/10 bg-white/[0.05] px-3 py-2 text-xs font-medium text-zinc-200 transition hover:border-white/20 hover:bg-white/[0.08] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 md:hidden"
+                className="inline-flex h-9 items-center justify-center rounded-xl border border-white/10 bg-white/[0.05] px-3 text-[11px] font-medium text-zinc-200 transition active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 md:hidden"
                 aria-expanded={showModelControls}
                 aria-controls="model-controls"
               >
-                {showModelControls ? "Hide model overrides" : "Model overrides"}
+                {showModelControls ? "Hide models" : "Models"}
               </button>
             </div>
           </div>
@@ -1250,7 +1258,7 @@ export function ChatPanel({
             ].join(" ")}
           >
             <div className="min-h-0">
-              <div className="flex flex-col gap-2 md:flex-row md:flex-nowrap md:items-center">
+              <div className="max-h-[45dvh] overflow-y-auto rounded-xl bg-black/10 p-1.5 md:flex md:max-h-none md:flex-row md:flex-nowrap md:items-center md:gap-2 md:overflow-visible md:bg-transparent md:p-0">
                 <label
                   className="flex min-h-9 shrink-0 items-center gap-1.5 rounded-xl border border-white/10 bg-white/[0.035] px-2.5 py-1.5 text-[11px] text-zinc-300"
                   title="Show model selection explainer"
@@ -1333,7 +1341,7 @@ export function ChatPanel({
 
       <section
         ref={messagesContainerRef}
-        className="relative min-h-0 flex-1 space-y-4 overflow-y-auto px-4 py-4 pb-24 sm:space-y-5 sm:px-6 sm:py-5 sm:pb-28"
+        className="relative min-h-0 flex-1 space-y-3 overflow-y-auto px-3 py-3 pb-5 overscroll-contain sm:space-y-5 sm:px-6 sm:py-5 sm:pb-28"
       >
         {isHydratingMessages ? (
           <div className="max-w-2xl rounded-[28px] border border-white/10 bg-white/[0.035] p-6 shadow-[0_20px_60px_rgba(0,0,0,0.18)] backdrop-blur-sm">
@@ -1352,13 +1360,13 @@ export function ChatPanel({
           <div
             key={message.id}
             className={[
-              "w-full max-w-4xl overflow-hidden rounded-[24px] border px-4 py-4 text-sm shadow-[0_20px_60px_rgba(0,0,0,0.18)] backdrop-blur-sm sm:px-5",
+              "max-w-4xl overflow-hidden rounded-2xl border px-3 py-3 text-[15px] shadow-[0_14px_36px_rgba(0,0,0,0.16)] backdrop-blur-sm sm:w-full sm:rounded-[24px] sm:px-5 sm:py-4 sm:text-sm sm:shadow-[0_20px_60px_rgba(0,0,0,0.18)]",
               message.role === "user"
-                ? "ml-auto border-emerald-400/20 bg-gradient-to-br from-emerald-400/14 via-emerald-500/8 to-sky-500/10"
-                : "border-white/10 bg-white/[0.035]"
+                ? "ml-auto w-[92%] border-emerald-400/20 bg-gradient-to-br from-emerald-400/14 via-emerald-500/8 to-sky-500/10 sm:w-full"
+                : "w-full border-white/10 bg-white/[0.035]"
             ].join(" ")}
           >
-            <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+            <div className="mb-2 flex items-center justify-between gap-2 sm:mb-3 sm:items-start">
               <p className="text-[11px] font-semibold uppercase tracking-[0.24em] text-zinc-400">
                 {message.role}
                 {message.role === "assistant" && message.model
@@ -1370,7 +1378,7 @@ export function ChatPanel({
                 onClick={() =>
                   void handleCopyMessage(message.id, message.content ?? "")
                 }
-                className="rounded-xl border border-white/10 bg-white/[0.03] px-2.5 py-1.5 text-[11px] font-medium text-zinc-300 transition hover:border-white/20 hover:bg-white/[0.06] hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
+                className="shrink-0 rounded-lg border border-white/10 bg-white/[0.03] px-2 py-1 text-[10px] font-medium text-zinc-400 transition hover:border-white/20 hover:bg-white/[0.06] hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 sm:rounded-xl sm:px-2.5 sm:py-1.5 sm:text-[11px]"
               >
                 {copiedMessageId === message.id ? "Copied" : "Copy"}
               </button>
@@ -1511,7 +1519,7 @@ export function ChatPanel({
             </p>
           </div>
         )}
-        <div className="pointer-events-none sticky bottom-3 z-10 ml-auto flex w-fit flex-col gap-2 pr-1 sm:bottom-4">
+        <div className="pointer-events-none sticky bottom-3 z-10 ml-auto hidden w-fit flex-col gap-2 pr-1 sm:bottom-4 sm:flex">
           <button
             type="button"
             onClick={scrollToTop}
@@ -1532,7 +1540,7 @@ export function ChatPanel({
         <div ref={messagesEndRef} />
       </section>
 
-      <form onSubmit={onSubmit} className="shrink-0 border-t border-white/10 px-4 py-3 pb-[calc(env(safe-area-inset-bottom)+0.75rem)] sm:px-6 sm:py-4">
+      <form onSubmit={onSubmit} className="shrink-0 border-t border-white/10 bg-zinc-950/92 px-2 py-2 pb-[calc(env(safe-area-inset-bottom)+0.5rem)] backdrop-blur-xl sm:bg-transparent sm:px-6 sm:py-4 sm:backdrop-blur-none">
         <p className="sr-only" role="status" aria-live="polite">
           {statusMessage}
         </p>
@@ -1596,8 +1604,8 @@ export function ChatPanel({
           </ul>
         ) : null}
 
-        <div className="rounded-[28px] border border-white/10 bg-white/[0.04] p-3 shadow-[0_20px_60px_rgba(0,0,0,0.2)] backdrop-blur-sm">
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
+        <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-2 shadow-[0_14px_36px_rgba(0,0,0,0.2)] backdrop-blur-sm sm:rounded-[28px] sm:p-3 sm:shadow-[0_20px_60px_rgba(0,0,0,0.2)]">
+          <div className="flex items-end gap-2">
             <input
               ref={fileInputRef}
               type="file"
@@ -1608,7 +1616,7 @@ export function ChatPanel({
             <button
               type="button"
               onClick={() => fileInputRef.current?.click()}
-              className="inline-flex min-h-11 items-center justify-center self-start rounded-2xl border border-white/10 bg-white/[0.05] px-3.5 py-3 text-sm text-zinc-300 transition hover:border-white/20 hover:bg-white/[0.08] hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 sm:self-auto"
+              className="inline-flex h-11 w-11 flex-none items-center justify-center rounded-xl border border-white/10 bg-white/[0.05] p-0 text-sm text-zinc-300 transition active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 sm:w-auto sm:rounded-2xl sm:px-3.5 sm:py-3"
               aria-label="Attach files"
             >
               📷
@@ -1622,9 +1630,9 @@ export function ChatPanel({
                 onKeyDown={handleKeyDown}
                 onPaste={handlePaste}
                 placeholder="Ask your actor something..."
-                className="min-h-[48px] max-h-48 w-full resize-none overflow-y-auto rounded-2xl border border-white/10 bg-zinc-950/80 px-4 py-3 pr-14 text-sm text-zinc-100 outline-none ring-emerald-500 placeholder:text-zinc-500 focus:ring"
+                className="min-h-[44px] max-h-36 w-full resize-none overflow-y-auto rounded-xl border border-white/10 bg-zinc-950/80 px-3 py-2.5 text-[16px] leading-6 text-zinc-100 outline-none ring-emerald-500 placeholder:text-zinc-500 focus:ring sm:min-h-[48px] sm:max-h-48 sm:rounded-2xl sm:px-4 sm:py-3 sm:pr-14 sm:text-sm"
               />
-              <div ref={emojiPickerRef} className="absolute bottom-2 right-2">
+              <div ref={emojiPickerRef} className="absolute bottom-2 right-2 hidden sm:block">
                 <button
                   type="button"
                   onClick={handleEmojiToggle}
@@ -1649,12 +1657,12 @@ export function ChatPanel({
                 ) : null}
               </div>
             </div>
-            <div className="flex w-full flex-wrap justify-end gap-2 sm:w-auto sm:flex-nowrap">
+            <div className="flex flex-none items-end gap-2">
               {loading ? (
                 <button
                   type="button"
                   onClick={handleCancelRequest}
-                  className="min-h-11 rounded-2xl border border-red-400/30 bg-red-500/10 px-4 py-3 text-sm font-medium text-red-100 transition hover:bg-red-500/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-400"
+                  className="h-11 rounded-xl border border-red-400/30 bg-red-500/10 px-3 text-xs font-medium text-red-100 transition active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-400 sm:rounded-2xl sm:px-4 sm:text-sm"
                 >
                   Cancel
                 </button>
@@ -1662,7 +1670,7 @@ export function ChatPanel({
               <button
                 type="submit"
                 disabled={!canSend}
-                className="min-h-11 flex-1 rounded-2xl bg-gradient-to-r from-emerald-500 to-sky-500 px-5 py-3 text-sm font-semibold text-white shadow-[0_14px_30px_rgba(16,185,129,0.25)] transition hover:brightness-110 disabled:opacity-50 sm:flex-none"
+                className="h-11 min-w-16 flex-none rounded-xl bg-gradient-to-r from-emerald-500 to-sky-500 px-4 text-sm font-semibold text-white shadow-[0_10px_24px_rgba(16,185,129,0.25)] transition active:scale-95 disabled:opacity-50 sm:rounded-2xl sm:px-5 sm:py-3"
               >
                 {loading || uploadingFiles ? "Routing..." : "Send"}
               </button>
