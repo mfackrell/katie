@@ -60,6 +60,51 @@ test("google model capability helpers separate generation from analysis", async 
   assert.equal(isVisionAnalysisModel("nano-banana-pro-preview"), false);
 });
 
+test("missing web-search capability metadata stays quiet in production and debug logs are deduplicated", async () => {
+  const originalCapabilityDebug = process.env.ROUTER_CAPABILITY_DEBUG;
+  const originalWarn = console.warn;
+  const originalDebug = console.debug;
+  const warnings: string[] = [];
+  const debugLogs: string[] = [];
+
+  console.warn = (...args: unknown[]) => {
+    warnings.push(args.map((arg) => String(arg)).join(" "));
+  };
+  console.debug = (...args: unknown[]) => {
+    debugLogs.push(args.map((arg) => String(arg)).join(" "));
+  };
+
+  try {
+    delete process.env.ROUTER_CAPABILITY_DEBUG;
+    buildCandidateMetadata("openai", "unit-test-web-capability-quiet", "general-text");
+    assert.equal(
+      warnings.some((line) => line.includes("supportsWebSearch")),
+      false
+    );
+    assert.equal(
+      debugLogs.some((line) => line.includes("unit-test-web-capability-quiet")),
+      false
+    );
+
+    process.env.ROUTER_CAPABILITY_DEBUG = "true";
+    buildCandidateMetadata("openai", "unit-test-web-capability-debug", "general-text");
+    buildCandidateMetadata("openai", "unit-test-web-capability-debug", "general-text");
+
+    const matchingDebugLogs = debugLogs.filter((line) =>
+      line.includes("unit-test-web-capability-debug")
+    );
+    assert.equal(matchingDebugLogs.length, 1);
+  } finally {
+    console.warn = originalWarn;
+    console.debug = originalDebug;
+    if (originalCapabilityDebug === undefined) {
+      delete process.env.ROUTER_CAPABILITY_DEBUG;
+    } else {
+      process.env.ROUTER_CAPABILITY_DEBUG = originalCapabilityDebug;
+    }
+  }
+});
+
 
 test("multimodal classifier returns null without image inputs", async () => {
   assert.equal(await inferRequestIntentFromMultimodalInput("Describe this image", []), null);
