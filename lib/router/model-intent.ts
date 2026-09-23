@@ -176,15 +176,27 @@ function isVisionAnalysisModel(providerName: ProviderName, modelId: string): boo
   return normalizedModel.includes("vision");
 }
 
+const loggedWebSearchCapabilityFallbacks = new Set<string>();
+
 function supportsWebSearch(providerName: ProviderName, modelId: string, registryLookup?: RegistryLookup): boolean {
   const registry = lookupRegistryModel(registryLookup, providerName, modelId);
   if (registry !== null && registry !== undefined && typeof registry.supports_web_search === "boolean") {
     return registry.supports_web_search;
   }
 
-  console.warn(
-    `[Router] supportsWebSearch: no registry entry for ${providerName}/${modelId}. Falling back to heuristic. Register this model to suppress warning.`
-  );
+  // Missing registry metadata is expected for newly discovered models and the
+  // heuristic fallback is intentional. Keep production routing logs focused on
+  // actual decisions; expose this detail only when capability debugging is enabled,
+  // and emit it at most once per provider/model for the lifetime of the process.
+  if (process.env.ROUTER_CAPABILITY_DEBUG === "true") {
+    const fallbackKey = `${providerName}:${modelId}`;
+    if (!loggedWebSearchCapabilityFallbacks.has(fallbackKey)) {
+      loggedWebSearchCapabilityFallbacks.add(fallbackKey);
+      console.debug(
+        `[Router Capability] supportsWebSearch metadata missing for ${providerName}/${modelId}; using heuristic fallback.`
+      );
+    }
+  }
 
   const normalizedModel = modelId.toLowerCase();
   if (providerName === "grok") {
