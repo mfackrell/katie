@@ -525,7 +525,7 @@ export default function HomePage() {
   }
 
   return (
-    <div className="relative min-h-dvh px-3 py-3 text-zinc-100 sm:px-5 sm:py-4 lg:h-dvh lg:overflow-hidden lg:px-6 lg:py-6">
+    <div className="relative h-dvh overflow-hidden p-0 text-zinc-100 lg:px-6 lg:py-6">
       <div className="pointer-events-none absolute inset-0 overflow-hidden">
         <div className="absolute inset-x-0 top-0 h-72 bg-gradient-to-b from-white/[0.03] to-transparent" />
         <div className="absolute left-[8%] top-20 h-56 w-56 rounded-full bg-sky-500/10 blur-3xl" />
@@ -533,16 +533,15 @@ export default function HomePage() {
         <div className="absolute bottom-[-6rem] left-1/3 h-72 w-72 rounded-full bg-indigo-500/10 blur-3xl" />
       </div>
 
-      <div className="relative mx-auto flex min-h-[calc(100vh-2rem)] max-w-[1600px] overflow-hidden rounded-[28px] border border-white/10 bg-zinc-950/70 shadow-[0_40px_120px_rgba(0,0,0,0.55)] backdrop-blur-xl lg:h-[calc(100dvh-3rem)] lg:min-h-0">
-        <div className="pointer-events-none absolute inset-0 rounded-[28px] ring-1 ring-inset ring-white/5" />
+      <div className="relative mx-auto flex h-dvh min-h-0 w-full max-w-[1600px] overflow-hidden bg-zinc-950/80 backdrop-blur-xl lg:h-[calc(100dvh-3rem)] lg:rounded-[28px] lg:border lg:border-white/10 lg:shadow-[0_40px_120px_rgba(0,0,0,0.55)]">
+        <div className="pointer-events-none absolute inset-0 hidden rounded-[28px] ring-1 ring-inset ring-white/5 lg:block" />
         <button
           type="button"
-          className="absolute left-4 top-4 z-30 inline-flex min-h-10 items-center gap-2 rounded-xl border border-white/10 bg-zinc-900/75 px-3 py-2 text-sm font-medium text-zinc-100 shadow-[0_10px_30px_rgba(0,0,0,0.35)] backdrop-blur-sm transition hover:bg-zinc-900/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400 lg:hidden"
+          className="absolute left-3 top-[calc(env(safe-area-inset-top)+0.55rem)] z-30 inline-flex h-10 w-10 items-center justify-center rounded-xl border border-white/10 bg-zinc-900/85 text-lg font-medium text-zinc-100 shadow-[0_10px_30px_rgba(0,0,0,0.35)] backdrop-blur-sm transition active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400 lg:hidden"
           onClick={() => setSidebarOpen(true)}
           aria-label="Open sidebar"
         >
           <span aria-hidden>☰</span>
-          <span>Actors</span>
         </button>
 
         <div className="hidden h-full min-h-0 w-80 min-w-[20rem] max-w-[22rem] flex-none border-r border-white/10 lg:flex">
@@ -595,7 +594,7 @@ export default function HomePage() {
         />
         {sidebarOpen ? (
         <aside
-          className="absolute inset-y-0 left-0 z-50 w-[min(22rem,86vw)] border-r border-white/10 shadow-[0_24px_80px_rgba(0,0,0,0.5)] transition-transform duration-200 ease-out lg:hidden translate-x-0"
+          className="absolute inset-y-0 left-0 z-50 w-[min(22rem,92vw)] border-r border-white/10 bg-zinc-950 shadow-[0_24px_80px_rgba(0,0,0,0.5)] transition-transform duration-200 ease-out lg:hidden translate-x-0"
           aria-hidden={false}
         >
           <Sidebar
@@ -629,7 +628,7 @@ export default function HomePage() {
       </div>
 
       {uiError ? (
-        <div className="relative mx-auto mt-3 max-w-[1600px] rounded-xl border border-red-500/40 bg-red-500/10 px-4 py-3 text-sm text-red-100">
+        <div className="fixed inset-x-3 top-3 z-[70] mx-auto max-w-[1600px] rounded-xl border border-red-500/40 bg-zinc-950/95 px-4 py-3 text-sm text-red-100 shadow-2xl lg:static lg:mt-3">
           {uiError}
         </div>
       ) : null}
