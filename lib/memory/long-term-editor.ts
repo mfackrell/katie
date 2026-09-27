@@ -3,6 +3,7 @@ import {
   getRecentMessages,
   setLongTermMemory
 } from "@/lib/data/persistence-store";
+import { filterConversationalMessages } from "@/lib/memory/short-term";
 
 const MEMORY_EDITOR_MODEL = "gpt-4o-mini";
 const MEMORY_EDITOR_HISTORY_WINDOW = 8;
@@ -278,10 +279,11 @@ export async function maybeUpdateLongTermMemory(actorId: string, chatId: string,
       return;
     }
 
-    const [currentLongTermMemory, recentMessages] = await Promise.all([
+    const [currentLongTermMemory, rawRecentMessages] = await Promise.all([
       getLongTermMemory(actorId, chatId),
-      getRecentMessages(chatId, MEMORY_EDITOR_HISTORY_WINDOW),
+      getRecentMessages(chatId, MEMORY_EDITOR_HISTORY_WINDOW + 12),
     ]);
+    const recentMessages = filterConversationalMessages(rawRecentMessages).slice(-MEMORY_EDITOR_HISTORY_WINDOW);
     const needsMigration = !isV2LongTermMemory(currentLongTermMemory);
 
     console.log("[LongTermMemoryEditor] Context Loaded", {
