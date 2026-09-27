@@ -581,7 +581,7 @@ export async function getChatContextState(actorId: string, chatId: string): Prom
     getShortTermMemory(actorId, chatId),
     getIntermediateMemory(actorId, chatId),
     getLongTermMemory(actorId, chatId),
-    getRecentMessages(chatId),
+    getRecentMessages(chatId, 64),
   ]);
 
   if (!actor) {
