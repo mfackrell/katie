@@ -121,33 +121,25 @@ export async function PATCH(request: NextRequest) {
     const now = new Date().toISOString();
     const routingProfile = await buildActorRoutingProfile({ name: existingActor.name, purpose: purpose.trim() });
     const client = getSupabaseAdminClient();
-    const payload = {
-      id: actorId,
-      system_prompt: purpose.trim(),
-      routing_profile: routingProfile,
-      updated_at: now
-    };
-    const { data, error } = await client
+    const { error } = await client
       .from("actors")
-      .upsert(payload, { onConflict: "id" })
-      .select(
-        "id,name,system_prompt,parent_actor_id,routing_profile,created_at,updated_at"
-      )
-      .single<ActorDbRow>();
+      .eq("id", actorId)
+      .update({
+        system_prompt: purpose.trim(),
+        routing_profile: routingProfile,
+        updated_at: now
+      });
 
     if (error) {
       return NextResponse.json({ error: error.message }, { status: 500 });
     }
 
-    return NextResponse.json({
-      actor: {
-        id: data.id,
-        name: data.name,
-        purpose: data.system_prompt,
-        routingProfile,
-        ...(data.parent_actor_id ? { parentId: data.parent_actor_id } : {})
-      }
-    });
+    const updatedActor = await getActorById(actorId);
+    if (!updatedActor) {
+      return NextResponse.json({ error: `Actor not found after update: ${actorId}` }, { status: 404 });
+    }
+
+    return NextResponse.json({ actor: updatedActor });
   } catch (error) {
     if (error instanceof z.ZodError) {
       return NextResponse.json({ error: "Invalid request payload" }, { status: 400 });
