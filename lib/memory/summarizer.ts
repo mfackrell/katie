@@ -45,6 +45,8 @@ async function summarizeInto(priorSummary: string, messages: Message[]): Promise
         role: "system",
         content: [
           "You maintain Katie's INTERMEDIATE MEMORY.",
+          "Katie is the assistant. The human speaker is the user. Never call the user Katie, and never attribute Katie's assistant statements, judgments, or recommendations to the user.",
+          "Refer to the human as 'the user' unless the user's name is explicitly present in the source transcript.",
           "This layer summarizes conversation that is OLDER than the 30 most recent user-assistant exchanges.",
           "Rewrite the summary as a compact historical context; do not append a chronological diary.",
           "Preserve meaningful developments, unresolved topics, decisions, goals, important context, and changes over time.",
