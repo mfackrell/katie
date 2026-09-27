@@ -69,6 +69,81 @@ type SelectionExplainer = {
 const MODEL_EXPLAINER_HIDDEN_STORAGE_KEY = "ui:modelExplainerHidden";
 const LIVE_REASONING_VISIBLE_STORAGE_KEY = "ui:liveReasoningExplainerVisible";
 const FALLBACK_REASONING_CATEGORIES = ["Architecture", "Security", "Complexity", "Cost", "Reliability"];
+const MAX_DIRECT_IMAGE_BYTES = 1_750_000;
+const MAX_IMAGE_DIMENSION = 1600;
+const IMAGE_JPEG_QUALITY = 0.82;
+
+function readBlobAsDataUrl(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(reader.error ?? new Error("Failed to read image."));
+    reader.onload = () => {
+      if (typeof reader.result === "string") {
+        resolve(reader.result);
+        return;
+      }
+      reject(new Error("Image reader returned an unexpected result."));
+    };
+    reader.readAsDataURL(blob);
+  });
+}
+
+async function normalizeImageForChat(file: File): Promise<string> {
+  const directTypes = new Set(["image/jpeg", "image/png", "image/webp"]);
+  if (directTypes.has(file.type.toLowerCase()) && file.size <= MAX_DIRECT_IMAGE_BYTES) {
+    return readBlobAsDataUrl(file);
+  }
+
+  const objectUrl = URL.createObjectURL(file);
+  try {
+    const image = await new Promise<HTMLImageElement>((resolve, reject) => {
+      const element = new window.Image();
+      element.onload = () => resolve(element);
+      element.onerror = () => reject(new Error(`Unable to decode image type ${file.type || "unknown"}.`));
+      element.src = objectUrl;
+    });
+
+    const width = image.naturalWidth || image.width;
+    const height = image.naturalHeight || image.height;
+    if (!width || !height) {
+      throw new Error("Image has invalid dimensions.");
+    }
+
+    const scale = Math.min(1, MAX_IMAGE_DIMENSION / Math.max(width, height));
+    const targetWidth = Math.max(1, Math.round(width * scale));
+    const targetHeight = Math.max(1, Math.round(height * scale));
+    const canvas = document.createElement("canvas");
+    canvas.width = targetWidth;
+    canvas.height = targetHeight;
+
+    const context = canvas.getContext("2d");
+    if (!context) {
+      throw new Error("Image conversion is unavailable in this browser.");
+    }
+
+    context.fillStyle = "#ffffff";
+    context.fillRect(0, 0, targetWidth, targetHeight);
+    context.drawImage(image, 0, 0, targetWidth, targetHeight);
+
+    const jpegBlob = await new Promise<Blob>((resolve, reject) => {
+      canvas.toBlob(
+        (blob) => {
+          if (blob) {
+            resolve(blob);
+            return;
+          }
+          reject(new Error("Image conversion failed."));
+        },
+        "image/jpeg",
+        IMAGE_JPEG_QUALITY,
+      );
+    });
+
+    return readBlobAsDataUrl(jpegBlob);
+  } finally {
+    URL.revokeObjectURL(objectUrl);
+  }
+}
 
 function hasExplainerData(explainer: SelectionExplainer | null): explainer is SelectionExplainer {
   if (!explainer) {
@@ -506,6 +581,7 @@ export function ChatPanel({
       chatId,
       role: "user",
       content,
+      assets: imagesToSend.map((url) => ({ type: "image", url })),
       createdAt: new Date().toISOString(),
     };
 
@@ -514,6 +590,8 @@ export function ChatPanel({
       setMessagesByChatId((cache) => ({ ...cache, [chatId]: nextMessages }));
       return nextMessages;
     });
+
+    let requestStage = "preparing attachments";
 
     try {
       const uploadedReferences =
@@ -534,6 +612,7 @@ export function ChatPanel({
       const abortController = new AbortController();
       abortControllerRef.current = abortController;
 
+      requestStage = "sending chat request";
       const response = await fetch("/api/chat", {
         method: "POST",
         headers: {
@@ -575,6 +654,7 @@ export function ChatPanel({
         throw new Error("Missing response stream from /api/chat.");
       }
 
+      requestStage = "reading response stream";
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
       let buffered = "";
@@ -793,8 +873,15 @@ export function ChatPanel({
         return;
       }
 
-      const message =
+      const rawMessage =
         error instanceof Error ? error.message : "Something went wrong.";
+      const message = `${rawMessage} [stage: ${requestStage}]`;
+      console.error("[ChatPanel] request failed", {
+        stage: requestStage,
+        error,
+        imageCount: imagesToSend.length,
+        imageLengths: imagesToSend.map((image) => image.length),
+      });
       const errorMessage: Message = {
         id: crypto.randomUUID(),
         chatId,
@@ -907,28 +994,25 @@ export function ChatPanel({
   }
 
   function handlePaste(event: ClipboardEvent<HTMLTextAreaElement>) {
-    const items = event.clipboardData.items;
+    const imageFiles = Array.from(event.clipboardData.items)
+      .filter((item) => item.type.startsWith("image/"))
+      .map((item) => item.getAsFile())
+      .filter((file): file is File => Boolean(file));
 
-    for (const item of items) {
-      if (!item.type.startsWith("image/")) {
-        continue;
-      }
-
-      const file = item.getAsFile();
-      if (!file) {
-        continue;
-      }
-
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        const result = reader.result;
-
-        if (typeof result === "string") {
-          setSelectedImages((current) => [...current, result]);
-        }
-      };
-      reader.readAsDataURL(file);
+    if (!imageFiles.length) {
+      return;
     }
+
+    setUploadingFiles(true);
+    void Promise.all(imageFiles.map((file) => normalizeImageForChat(file)))
+      .then((images) => {
+        setSelectedImages((current) => [...current, ...images]);
+        setStatusMessage(`${images.length} image${images.length === 1 ? "" : "s"} ready.`);
+      })
+      .catch((error: unknown) => {
+        setStatusMessage(error instanceof Error ? error.message : "Failed to prepare pasted image.");
+      })
+      .finally(() => setUploadingFiles(false));
   }
 
   function handleFileChange(event: FormEvent<HTMLInputElement>) {
@@ -938,38 +1022,69 @@ export function ChatPanel({
       return;
     }
 
+    const imageFiles = files.filter((file) => file.type.startsWith("image/"));
     const nextFiles = files.filter(
       (file) => !file.type.startsWith("image/") && !file.type.startsWith("video/"),
     );
     const nextVideos = files.filter((file) => file.type.startsWith("video/"));
+
     setSelectedVideos((current) => [...current, ...nextVideos]);
     setSelectedFiles((current) => [...current, ...nextFiles]);
-    const statusSegments = [
-      nextFiles.length > 0
-        ? `${nextFiles.length} file${nextFiles.length === 1 ? "" : "s"}`
-        : null,
-      nextVideos.length > 0
-        ? `${nextVideos.length} video${nextVideos.length === 1 ? "" : "s"}`
-        : null
-    ].filter((segment): segment is string => Boolean(segment));
-    setStatusMessage(
-      statusSegments.length > 0
-        ? `${statusSegments.join(" and ")} ready for upload.`
-        : "Attachments ready for upload.",
-    );
 
-    files
-      .filter((file) => file.type.startsWith("image/"))
-      .forEach((file) => {
-        const reader = new FileReader();
-        reader.onloadend = () => {
-          const result = reader.result;
+    if (imageFiles.length === 0) {
+      const statusSegments = [
+        nextFiles.length > 0
+          ? `${nextFiles.length} file${nextFiles.length === 1 ? "" : "s"}`
+          : null,
+        nextVideos.length > 0
+          ? `${nextVideos.length} video${nextVideos.length === 1 ? "" : "s"}`
+          : null
+      ].filter((segment): segment is string => Boolean(segment));
+      setStatusMessage(
+        statusSegments.length > 0
+          ? `${statusSegments.join(" and ")} ready for upload.`
+          : "Attachments ready for upload.",
+      );
+      return;
+    }
 
-          if (typeof result === "string") {
-            setSelectedImages((current) => [...current, result]);
-          }
-        };
-        reader.readAsDataURL(file);
+    setUploadingFiles(true);
+    setStatusMessage(`Preparing ${imageFiles.length} image${imageFiles.length === 1 ? "" : "s"}…`);
+
+    void Promise.all(
+      imageFiles.map(async (file) => {
+        const normalized = await normalizeImageForChat(file);
+        console.info("[ChatPanel] normalized image for chat", {
+          originalName: file.name,
+          originalType: file.type || "unknown",
+          originalBytes: file.size,
+          encodedChars: normalized.length,
+        });
+        return normalized;
+      }),
+    )
+      .then((images) => {
+        setSelectedImages((current) => [...current, ...images]);
+
+        const statusSegments = [
+          images.length > 0
+            ? `${images.length} image${images.length === 1 ? "" : "s"}`
+            : null,
+          nextFiles.length > 0
+            ? `${nextFiles.length} file${nextFiles.length === 1 ? "" : "s"}`
+            : null,
+          nextVideos.length > 0
+            ? `${nextVideos.length} video${nextVideos.length === 1 ? "" : "s"}`
+            : null
+        ].filter((segment): segment is string => Boolean(segment));
+
+        setStatusMessage(`${statusSegments.join(", ")} ready.`);
+      })
+      .catch((error: unknown) => {
+        setStatusMessage(error instanceof Error ? error.message : "Failed to prepare image.");
+      })
+      .finally(() => {
+        setUploadingFiles(false);
       });
   }
 
