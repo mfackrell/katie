@@ -97,6 +97,24 @@ const requestSchema = z.object({
 
 type RequestPayload = z.infer<typeof requestSchema>;
 
+function inspectImagePayloads(images: string[] | undefined): Array<{ mimeType: string; encodedChars: number }> {
+  if (!images?.length) {
+    return [];
+  }
+
+  return images.map((image, index) => {
+    const match = image.match(/^data:(image\/[a-z0-9.+-]+);base64,/i);
+    if (!match) {
+      throw new Error(`Image ${index + 1} is not a valid base64 image data URL.`);
+    }
+
+    return {
+      mimeType: match[1].toLowerCase(),
+      encodedChars: image.length,
+    };
+  });
+}
+
 type ActiveRepoContext = {
   id: string;
   repositoryFullName: string;
@@ -653,6 +671,13 @@ export async function POST(request: NextRequest) {
     const hasVideoInput = attachments.some(isVideoAttachment);
     const encoder = new TextEncoder();
     const requestId = request.headers.get("x-request-id") ?? crypto.randomUUID();
+    const imagePayloadMetadata = inspectImagePayloads(images);
+
+    console.log("[Chat API] Image payloads", {
+      requestId,
+      count: imagePayloadMetadata.length,
+      images: imagePayloadMetadata,
+    });
 
     console.log("[Chat API] User message", {
       requestId,
