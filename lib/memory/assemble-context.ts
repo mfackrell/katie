@@ -1,6 +1,6 @@
 import { getChatContextState } from "@/lib/data/persistence-store";
 import { MEMORY_ARCHITECTURE_GUIDE, SHORT_TERM_MESSAGE_LIMIT } from "@/lib/memory/memory-contract";
-import { filterConversationalMessages } from "@/lib/memory/short-term";
+import { filterConversationalMessages, messagesFromShortTermMemory } from "@/lib/memory/short-term";
 import type { ActorRoutingProfile, Message } from "@/lib/types/chat";
 import { createNeutralActorRoutingProfile } from "@/lib/router/actor-routing-profile";
 
@@ -19,7 +19,9 @@ export async function assembleContext(actorId: string, chatId: string): Promise<
     chatId
   );
 
-  const history = filterConversationalMessages(recentMessages).slice(-SHORT_TERM_MESSAGE_LIMIT);
+  const history =
+    messagesFromShortTermMemory(shortTermMemory, chatId) ??
+    filterConversationalMessages(recentMessages).slice(-SHORT_TERM_MESSAGE_LIMIT);
   const summary =
     (typeof intermediateMemory.summary === "string" && intermediateMemory.summary.trim()) ||
     "No older summarized conversation context is available yet.";
