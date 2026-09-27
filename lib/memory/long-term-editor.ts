@@ -175,6 +175,95 @@ function isV2LongTermMemory(value: JsonRecord): boolean {
   return value.version === 2 && Array.isArray(value.entries);
 }
 
+const LEGACY_TRANSIENT_PATH = /(?:^|\.)(?:recentMessages|rollingSummary|currentState|recentTravel|nextSteps|cute girls)(?:\.|$)/i;
+
+function legacyCategory(path: string): LongTermEntry["category"] {
+  const normalized = path.toLowerCase();
+  if (normalized.includes("lindsey") || normalized.includes("relationship")) return "relationship";
+  if (normalized.includes("preference")) return "preference";
+  if (normalized.includes("goal")) return "goal";
+  if (normalized.includes("decision")) return "decision";
+  if (normalized.includes("constraint")) return "constraint";
+  if (normalized.includes("selfworth") || normalized.includes("psychological") || normalized.includes("represents")) return "pattern";
+  return "fact";
+}
+
+function migrateLegacyLongTermMemory(value: JsonRecord): LongTermMemoryV2 {
+  const entries: LongTermEntry[] = [];
+  const seen = new Set<string>();
+
+  const pushEntry = (path: string, rawValue: unknown) => {
+    if (!path || LEGACY_TRANSIENT_PATH.test(path)) {
+      return;
+    }
+
+    const stringValue =
+      typeof rawValue === "string" || typeof rawValue === "number" || typeof rawValue === "boolean"
+        ? String(rawValue).trim()
+        : "";
+
+    if (!stringValue) {
+      return;
+    }
+
+    const dedupeKey = `${path.toLowerCase()}|${stringValue.toLowerCase()}`;
+    if (seen.has(dedupeKey) || entries.length >= MAX_LONG_TERM_ENTRIES) {
+      return;
+    }
+    seen.add(dedupeKey);
+
+    entries.push({
+      key: path.replace(/\[(\d+)\]/g, ".$1"),
+      category: legacyCategory(path),
+      value: stringValue,
+      // Legacy records did not reliably preserve provenance. Mark them as
+      // inference until the user explicitly confirms or corrects them.
+      source: "assistant-inference",
+      confidence: "medium",
+    });
+  };
+
+  const walk = (node: unknown, path: string) => {
+    if (LEGACY_TRANSIENT_PATH.test(path)) {
+      return;
+    }
+
+    if (Array.isArray(node)) {
+      node.forEach((item, index) => walk(item, `${path}[${index}]`));
+      return;
+    }
+
+    if (node && typeof node === "object") {
+      for (const [key, child] of Object.entries(node as Record<string, unknown>)) {
+        walk(child, path ? `${path}.${key}` : key);
+      }
+      return;
+    }
+
+    pushEntry(path, node);
+  };
+
+  walk(value, "");
+
+  return {
+    version: 2,
+    purpose:
+      "Durable memory for important facts, preferences, relationships, goals, decisions, constraints, and recurring patterns that should persist across the conversation.",
+    entries,
+  };
+}
+
+async function persistLegacyMigration(actorId: string, chatId: string, legacy: JsonRecord): Promise<LongTermMemoryV2> {
+  const migrated = migrateLegacyLongTermMemory(legacy);
+  await setLongTermMemory(actorId, chatId, migrated);
+  console.log("[LongTermMemoryEditor] Legacy migration fallback saved", {
+    actorId,
+    chatId,
+    entryCount: migrated.entries.length,
+  });
+  return migrated;
+}
+
 export async function maybeUpdateLongTermMemory(actorId: string, chatId: string, latestUserMessage: string): Promise<void> {
   console.log("[LongTermMemoryEditor] Start", {
     actorId,
@@ -260,21 +349,28 @@ export async function maybeUpdateLongTermMemory(actorId: string, chatId: string,
 
     if (!rawResult) {
       console.log("[LongTermMemoryEditor] No-op: empty model response", { actorId, chatId });
+      if (needsMigration) {
+        await persistLegacyMigration(actorId, chatId, currentLongTermMemory);
+      }
       return;
     }
 
     const decision = parseMemoryEditorResult(rawResult);
     if (!decision) {
       console.log("[LongTermMemoryEditor] No-op: invalid model response", { actorId, chatId });
+      if (needsMigration) {
+        await persistLegacyMigration(actorId, chatId, currentLongTermMemory);
+      }
       return;
     }
 
     if (decision.action === "no_change") {
       if (needsMigration) {
-        console.warn("[LongTermMemoryEditor] Migration required but model returned no_change; preserving legacy memory until next edit.", {
+        console.warn("[LongTermMemoryEditor] Migration required but model returned no_change; applying deterministic migration fallback.", {
           actorId,
           chatId,
         });
+        await persistLegacyMigration(actorId, chatId, currentLongTermMemory);
       } else {
         console.log("[LongTermMemoryEditor] Decision: no_change", { actorId, chatId });
       }
