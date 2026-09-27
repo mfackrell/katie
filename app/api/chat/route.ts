@@ -4,6 +4,7 @@ import { assembleContext } from "@/lib/memory/assemble-context";
 import { maybeUpdateSummary } from "@/lib/memory/summarizer";
 import { maybeUpdateLongTermMemory } from "@/lib/memory/long-term-editor";
 import { saveMessage, setShortTermMemory } from "@/lib/data/persistence-store";
+import { resolveLocalKatieResponse } from "@/lib/chat/local-katie";
 import { getSupabaseAdminClient } from "@/lib/data/supabase/admin";
 import { getAvailableProviders } from "@/lib/providers";
 import { chooseProvider, selectControlPlaneDecisionModels } from "@/lib/router/master-router";
@@ -693,6 +694,64 @@ export async function POST(request: NextRequest) {
       activeRepoId: activeRepoId ?? null,
       repoInjectionEnabled,
     });
+
+    const localKatieResponse = await resolveLocalKatieResponse({
+      actorId,
+      chatId,
+      message,
+    });
+
+    if (localKatieResponse) {
+      console.log("[Chat API] Local Katie response", {
+        requestId,
+        reason: localKatieResponse.reason,
+        actorId,
+        chatId,
+      });
+
+      await saveMessage(chatId, {
+        id: crypto.randomUUID(),
+        role: "user",
+        content: message,
+      });
+
+      await saveMessage(chatId, {
+        id: crypto.randomUUID(),
+        role: "assistant",
+        model: "katie-local",
+        content: localKatieResponse.text,
+      });
+
+      const localBody = [
+        JSON.stringify({
+          type: "metadata",
+          modelId: "katie-local",
+          provider: "local",
+          explainer: {
+            selected_model: "katie-local",
+            selected_provider: "local",
+            summary: `Handled directly by Katie without an external LLM (${localKatieResponse.reason}).`,
+            selected_source: "deterministic-fallback",
+            fallback_used: false,
+          },
+        }),
+        JSON.stringify({
+          type: "content",
+          text: localKatieResponse.text,
+          assets: [],
+          provider: "local",
+          model: "katie-local",
+        }),
+        "",
+      ].join("\n");
+
+      return new NextResponse(localBody, {
+        headers: {
+          "Content-Type": "application/x-ndjson; charset=utf-8",
+          "Cache-Control": "no-cache",
+        },
+      });
+    }
 
     const providers = getAvailableProviders();
     if (!providers.length) {
