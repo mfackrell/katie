@@ -81,7 +81,7 @@ export function buildRecentExchanges(messages: Message[]): ShortTermExchange[] {
 }
 
 export async function refreshShortTermMemory(actorId: string, chatId: string): Promise<void> {
-  const recentMessages = await getRecentMessages(chatId, SHORT_TERM_MESSAGE_LIMIT + 4);
+  const recentMessages = await getRecentMessages(chatId, SHORT_TERM_MESSAGE_LIMIT + 40);
   const exchanges = buildRecentExchanges(recentMessages);
 
   await setShortTermMemory(actorId, chatId, {
