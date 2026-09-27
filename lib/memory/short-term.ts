@@ -56,6 +56,58 @@ export function filterConversationalMessages(messages: Message[]): Message[] {
   return filtered;
 }
 
+export function messagesFromShortTermMemory(
+  memory: Record<string, unknown>,
+  chatId: string,
+): Message[] | null {
+  if (memory.version !== 2 || !Array.isArray(memory.exchanges)) {
+    return null;
+  }
+
+  const messages: Message[] = [];
+  for (const rawExchange of memory.exchanges) {
+    if (!rawExchange || typeof rawExchange !== "object" || Array.isArray(rawExchange)) {
+      return null;
+    }
+
+    const exchange = rawExchange as Record<string, unknown>;
+    const user = exchange.user as Record<string, unknown> | undefined;
+    const assistant = exchange.assistant as Record<string, unknown> | undefined;
+
+    if (
+      !user ||
+      !assistant ||
+      typeof user.id !== "string" ||
+      typeof user.createdAt !== "string" ||
+      typeof user.content !== "string" ||
+      typeof assistant.id !== "string" ||
+      typeof assistant.createdAt !== "string" ||
+      typeof assistant.content !== "string"
+    ) {
+      return null;
+    }
+
+    messages.push({
+      id: user.id,
+      chatId,
+      role: "user",
+      content: user.content,
+      createdAt: user.createdAt,
+    });
+
+    messages.push({
+      id: assistant.id,
+      chatId,
+      role: "assistant",
+      content: assistant.content,
+      createdAt: assistant.createdAt,
+      ...(typeof assistant.model === "string" ? { model: assistant.model } : {}),
+    });
+  }
+
+  return messages.slice(-SHORT_TERM_MESSAGE_LIMIT);
+}
+
 export function buildRecentExchanges(messages: Message[]): ShortTermExchange[] {
   const exchanges: ShortTermExchange[] = [];
   let pendingUser: Message | null = null;
