@@ -8,7 +8,7 @@ import {
   getKatieReasoningExplainerStatement,
 } from "@/lib/providers/operational-reality";
 import { MEMORY_ARCHITECTURE_GUIDE, SHORT_TERM_MESSAGE_LIMIT } from "@/lib/memory/memory-contract";
-import { filterConversationalMessages, refreshShortTermMemory } from "@/lib/memory/short-term";
+import { filterConversationalMessages, messagesFromShortTermMemory, refreshShortTermMemory } from "@/lib/memory/short-term";
 
 export type LocalKatieResponse = {
   text: string;
@@ -198,7 +198,11 @@ function asksForFullMemoryDump(message: string): boolean {
 }
 
 function buildSystemPromptResponse(state: Awaited<ReturnType<typeof getChatContextState>>): string {
-  const history = filterConversationalMessages(state.recentMessages).slice(-SHORT_TERM_MESSAGE_LIMIT).map((message) => ({
+  const canonicalHistory =
+    messagesFromShortTermMemory(state.shortTermMemory, state.actor.id) ??
+    filterConversationalMessages(state.recentMessages).slice(-SHORT_TERM_MESSAGE_LIMIT);
+
+  const history = canonicalHistory.map((message) => ({
     role: message.role,
     content: message.content,
   }));
