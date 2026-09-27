@@ -1901,7 +1901,7 @@ export function ChatPanel({
                 placeholder="Ask your actor something..."
                 className="min-h-[44px] max-h-36 w-full resize-none overflow-y-auto rounded-xl border border-white/10 bg-zinc-950/80 px-3 py-2.5 text-[16px] leading-6 text-zinc-100 outline-none ring-emerald-500 placeholder:text-zinc-500 focus:ring sm:min-h-[48px] sm:max-h-48 sm:rounded-2xl sm:px-4 sm:py-3 sm:pr-14 sm:text-sm"
               />
-              <div ref={emojiPickerRef} className="absolute bottom-2 right-2 hidden sm:block">
+              <div ref={emojiPickerRef} className="absolute bottom-2 right-2 block">
                 <button
                   type="button"
                   onClick={handleEmojiToggle}
