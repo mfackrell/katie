@@ -183,6 +183,21 @@ export async function getActorById(actorId: string): Promise<Actor | null> {
   return data ? toActor(data) : null;
 }
 
+export async function setActorSystemPrompt(actorId: string, purpose: string): Promise<void> {
+  const client = getSupabaseAdminClient();
+  const { error } = await client
+    .from("actors")
+    .eq("id", actorId)
+    .update({
+      system_prompt: purpose.trim(),
+      updated_at: new Date().toISOString(),
+    });
+
+  if (error) {
+    throw new Error(`Failed to update actor system prompt for ${actorId}: ${error.message}`);
+  }
+}
+
 export async function listActors(): Promise<Actor[]> {
   const client = getSupabaseAdminClient();
   const { data, error } = await client
