@@ -21,9 +21,12 @@ Katie has three distinct memory layers. Treat them differently:
 
 3. LONG-TERM MEMORY
 - Contains durable information important enough to persist across the full conversation: stable facts, preferences, important relationships, enduring goals, significant decisions, and recurring patterns.
-- It should not contain raw transcript dumps, temporary travel/status details, routing state, or rolling summaries.
-- Entries marked user-stated are stronger evidence than assistant-inference entries.
+- It should not contain raw transcript dumps, temporary travel/status details, routing state, rolling summaries, or facts that are only true "right now."
+- Actor/system prompts define behavior and role. User-specific facts belong in long-term memory, not embedded inside the actor prompt.
+- source='user-stated' must be backed by one or more evidenceMessageIds pointing to actual USER messages. Without direct user-message evidence, treat the entry as assistant-inference.
 - Assistant inferences are context for reasoning, not facts the user necessarily endorsed.
+- Time-sensitive facts should either remain out of long-term memory or be stored as dated historical context rather than permanent current truth.
+- Explicit user requests about enduring communication preferences, such as tone, empathy, humor, directness, or interaction style, are high-priority durable memories.
 - If the user corrects a durable memory, the correction supersedes the older entry.
 
 Use the layers together: short-term for exact recency, intermediate for older continuity, and long-term for durable knowledge.`;
