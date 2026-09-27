@@ -525,7 +525,7 @@ async function listMemoryTableForActor(
     .select("id,actor_id,chat_id,content,created_at,updated_at")
     .eq("actor_id", actorId)
     .order("updated_at", { ascending: false })
-    .returns<MemoryRow[]>();
+    .returns<MemoryRow>();
 
   if (error) {
     throw new Error(`Failed to list ${table} for actor ${actorId}: ${error.message}`);
