@@ -1,12 +1,12 @@
 import {
-  getConversationSummary,
   getLongTermMemory,
   getRecentMessages,
   setLongTermMemory
 } from "@/lib/data/persistence-store";
 
 const MEMORY_EDITOR_MODEL = "gpt-4o-mini";
-const MEMORY_EDITOR_HISTORY_WINDOW = 12;
+const MEMORY_EDITOR_HISTORY_WINDOW = 8;
+const MAX_LONG_TERM_ENTRIES = 160;
 
 type JsonRecord = Record<string, unknown>;
 
@@ -23,9 +23,91 @@ type MemoryEditorClient = {
   };
 };
 
+type LongTermEntry = {
+  key: string;
+  category: "fact" | "preference" | "relationship" | "goal" | "decision" | "constraint" | "pattern";
+  value: string;
+  source: "user-stated" | "assistant-inference";
+  confidence: "high" | "medium" | "low";
+  lastConfirmedAt?: string;
+};
+
+type LongTermMemoryV2 = {
+  version: 2;
+  purpose: string;
+  entries: LongTermEntry[];
+};
+
 type MemoryEditorAction =
   | { action: "no_change" }
-  | { action: "replace"; updatedContent: JsonRecord };
+  | { action: "replace"; updatedContent: LongTermMemoryV2 };
+
+function isLongTermEntry(value: unknown): value is LongTermEntry {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+
+  const entry = value as Record<string, unknown>;
+  return (
+    typeof entry.key === "string" &&
+    entry.key.trim().length > 0 &&
+    typeof entry.value === "string" &&
+    entry.value.trim().length > 0 &&
+    ["fact", "preference", "relationship", "goal", "decision", "constraint", "pattern"].includes(String(entry.category)) &&
+    ["user-stated", "assistant-inference"].includes(String(entry.source)) &&
+    ["high", "medium", "low"].includes(String(entry.confidence))
+  );
+}
+
+function normalizeUpdatedContent(value: unknown): LongTermMemoryV2 | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+
+  const record = value as Record<string, unknown>;
+  if (!Array.isArray(record.entries)) {
+    return null;
+  }
+
+  const seen = new Set<string>();
+  const entries: LongTermEntry[] = [];
+
+  for (const rawEntry of record.entries) {
+    if (!isLongTermEntry(rawEntry)) {
+      continue;
+    }
+
+    const entry: LongTermEntry = {
+      key: rawEntry.key.trim(),
+      category: rawEntry.category,
+      value: rawEntry.value.trim(),
+      source: rawEntry.source,
+      confidence: rawEntry.confidence,
+      ...(typeof rawEntry.lastConfirmedAt === "string" && rawEntry.lastConfirmedAt.trim()
+        ? { lastConfirmedAt: rawEntry.lastConfirmedAt.trim() }
+        : {}),
+    };
+
+    const dedupeKey = `${entry.category}|${entry.key.toLowerCase()}|${entry.value.toLowerCase()}`;
+    if (seen.has(dedupeKey)) {
+      continue;
+    }
+
+    seen.add(dedupeKey);
+    entries.push(entry);
+
+    if (entries.length >= MAX_LONG_TERM_ENTRIES) {
+      break;
+    }
+  }
+
+  return {
+    version: 2,
+    purpose:
+      "Durable memory for important facts, preferences, relationships, goals, decisions, constraints, and recurring patterns that should persist across the conversation.",
+    entries,
+  };
+}
 
 function parseMemoryEditorResult(raw: string): MemoryEditorAction | null {
   try {
@@ -38,14 +120,14 @@ function parseMemoryEditorResult(raw: string): MemoryEditorAction | null {
       return null;
     }
 
-    const updatedContent = parsed.updatedContent;
-    if (!updatedContent || typeof updatedContent !== "object" || Array.isArray(updatedContent)) {
+    const updatedContent = normalizeUpdatedContent(parsed.updatedContent);
+    if (!updatedContent) {
       return null;
     }
 
     return {
       action: "replace",
-      updatedContent: updatedContent as JsonRecord
+      updatedContent
     };
   } catch {
     return null;
@@ -76,7 +158,7 @@ function formatTranscript(messages: Awaited<ReturnType<typeof getRecentMessages>
   return messages
     .map((message, index) => {
       const timestamp = message.createdAt ? ` (${message.createdAt})` : "";
-      return `${index + 1}. ${message.role}${timestamp}: ${message.content}`;
+      return `${index + 1}. ${message.role.toUpperCase()}${timestamp}: ${message.content}`;
     })
     .join("\n");
 }
@@ -87,6 +169,10 @@ function truncateForLog(value: string, maxLength: number): string {
   }
 
   return `${value.slice(0, maxLength)}...`;
+}
+
+function isV2LongTermMemory(value: JsonRecord): boolean {
+  return value.version === 2 && Array.isArray(value.entries);
 }
 
 export async function maybeUpdateLongTermMemory(actorId: string, chatId: string, latestUserMessage: string): Promise<void> {
@@ -103,15 +189,16 @@ export async function maybeUpdateLongTermMemory(actorId: string, chatId: string,
       return;
     }
 
-    const [currentLongTermMemory, recentMessages, existingSummary] = await Promise.all([
+    const [currentLongTermMemory, recentMessages] = await Promise.all([
       getLongTermMemory(actorId, chatId),
       getRecentMessages(chatId, MEMORY_EDITOR_HISTORY_WINDOW),
-      getConversationSummary(chatId)
     ]);
+    const needsMigration = !isV2LongTermMemory(currentLongTermMemory);
+
     console.log("[LongTermMemoryEditor] Context Loaded", {
       longTermMemoryState: Object.keys(currentLongTermMemory).length === 0 ? "empty" : "non-empty",
       recentMessageCount: recentMessages.length,
-      rollingSummaryPresent: Boolean(existingSummary)
+      needsMigration,
     });
 
     const response = await client.chat.completions.create({
@@ -121,8 +208,34 @@ export async function maybeUpdateLongTermMemory(actorId: string, chatId: string,
       messages: [
         {
           role: "system",
-          content:
-            "You are a long-term memory editor for one actor+chat memory record. Decide whether the latest user message requires a durable update to the existing long_term_memory.content object. Preserve existing memory unless there is clear reason to revise or remove it. Prefer no_change for temporary, trivial, or low-value details unless the user clearly requests retention. Understand natural language requests to remember or forget details. Return strictly valid JSON with either {\"action\":\"no_change\"} or {\"action\":\"replace\",\"updatedContent\":<full revised long_term_memory.content object>}. updatedContent must be the complete revised object to store, preserving the existing shape whenever possible."
+          content: [
+            "You are Katie's LONG-TERM MEMORY editor.",
+            "Long-term memory contains only durable information important enough to remain useful across the full conversation.",
+            "Allowed categories: fact, preference, relationship, goal, decision, constraint, pattern.",
+            "",
+            "Storage rules:",
+            "- Persist stable user facts, durable preferences, important relationship context, enduring goals, significant decisions, durable constraints, and recurring patterns.",
+            "- Do NOT store raw message transcripts, recentMessages arrays, rolling summaries, routing/session state, temporary currentState fields, or routine travel/location/status updates.",
+            "- Do NOT copy intermediate-memory summaries into long-term memory.",
+            "- Do NOT store one-off jokes, banter, momentary emotions, temporary plans, or transient recommendations unless the user explicitly asks that they be remembered long-term.",
+            "- Preserve exact speaker attribution. Never store an assistant statement as something the user said.",
+            "- Use source='user-stated' only when the user explicitly stated or confirmed the information.",
+            "- Use source='assistant-inference' for a durable analytical pattern inferred from conversation. Inferences must never be represented as user-stated facts.",
+            "- confidence should reflect evidentiary strength: high, medium, or low.",
+            "- If the user corrects a memory, revise or remove the older conflicting entry.",
+            "- Deduplicate semantically equivalent entries instead of accumulating variants.",
+            "- Keep the memory compact. Prefer fewer strong entries over many weak ones.",
+            "",
+            "The required long-term format is:",
+            '{"version":2,"purpose":"...","entries":[{"key":"stable.short.identifier","category":"fact|preference|relationship|goal|decision|constraint|pattern","value":"...","source":"user-stated|assistant-inference","confidence":"high|medium|low","lastConfirmedAt":"ISO timestamp if known"}]}',
+            "",
+            "Return strict JSON only:",
+            '{"action":"no_change"}',
+            "or",
+            '{"action":"replace","updatedContent":<the complete version-2 long-term memory object>}.',
+            "",
+            "If existingLongTermMemoryContent is not already version 2, you MUST migrate only its genuinely durable content into the version-2 format and discard legacy transcript/summary/transient pollution.",
+          ].join("\n")
         },
         {
           role: "user",
@@ -131,8 +244,8 @@ export async function maybeUpdateLongTermMemory(actorId: string, chatId: string,
             `chatId: ${chatId}`,
             `latestUserMessage: ${latestUserMessage}`,
             `existingLongTermMemoryContent: ${JSON.stringify(currentLongTermMemory)}`,
-            `rollingSummary: ${existingSummary || ""}`,
-            "recentMessages:",
+            `needsVersion2Migration: ${needsMigration}`,
+            "recentRoleAttributedMessages:",
             formatTranscript(recentMessages),
             "Output JSON only."
           ].join("\n\n")
@@ -157,14 +270,21 @@ export async function maybeUpdateLongTermMemory(actorId: string, chatId: string,
     }
 
     if (decision.action === "no_change") {
-      console.log("[LongTermMemoryEditor] Decision: no_change", { actorId, chatId });
+      if (needsMigration) {
+        console.warn("[LongTermMemoryEditor] Migration required but model returned no_change; preserving legacy memory until next edit.", {
+          actorId,
+          chatId,
+        });
+      } else {
+        console.log("[LongTermMemoryEditor] Decision: no_change", { actorId, chatId });
+      }
       return;
     }
 
     console.log("[LongTermMemoryEditor] Decision: replace", {
       actorId,
       chatId,
-      updatedContentState: Object.keys(decision.updatedContent).length === 0 ? "empty" : "non-empty"
+      entryCount: decision.updatedContent.entries.length,
     });
     await setLongTermMemory(actorId, chatId, decision.updatedContent);
     console.log("[LongTermMemoryEditor] Save Success", { actorId, chatId });
