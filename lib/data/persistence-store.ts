@@ -506,6 +506,51 @@ export async function getLongTermMemory(actorId: string, chatId: string): Promis
   return getMemory("long_term_memory", actorId, chatId);
 }
 
+export type ActorMemoryRecord = {
+  layer: "short-term" | "intermediate" | "long-term";
+  actorId: string;
+  chatId: string;
+  content: JsonRecord;
+  updatedAt: string;
+};
+
+async function listMemoryTableForActor(
+  table: "short_term_memory" | "intermediate_memory" | "long_term_memory",
+  layer: ActorMemoryRecord["layer"],
+  actorId: string
+): Promise<ActorMemoryRecord[]> {
+  const client = getSupabaseAdminClient();
+  const { data, error } = await client
+    .from(table)
+    .select("id,actor_id,chat_id,content,created_at,updated_at")
+    .eq("actor_id", actorId)
+    .order("updated_at", { ascending: false })
+    .returns<MemoryRow[]>();
+
+  if (error) {
+    throw new Error(`Failed to list ${table} for actor ${actorId}: ${error.message}`);
+  }
+
+  return (data ?? []).map((row) => ({
+    layer,
+    actorId: row.actor_id,
+    chatId: row.chat_id,
+    content: toMemoryContent(row),
+    updatedAt: row.updated_at,
+  }));
+}
+
+export async function listMemoryRecordsForActor(actorId: string): Promise<ActorMemoryRecord[]> {
+  const [shortTerm, intermediate, longTerm] = await Promise.all([
+    listMemoryTableForActor("short_term_memory", "short-term", actorId),
+    listMemoryTableForActor("intermediate_memory", "intermediate", actorId),
+    listMemoryTableForActor("long_term_memory", "long-term", actorId),
+  ]);
+
+  return [...shortTerm, ...intermediate, ...longTerm];
+}
+
+
 export async function setLongTermMemory(actorId: string, chatId: string, payload: JsonRecord): Promise<void> {
   await setMemory("long_term_memory", actorId, chatId, payload);
 }
