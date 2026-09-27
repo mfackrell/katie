@@ -1894,6 +1894,10 @@ export function ChatPanel({
               <textarea
                 ref={textareaRef}
                 rows={1}
+                enterKeyHint="send"
+                autoComplete="off"
+                autoCorrect="on"
+                spellCheck
                 value={input}
                 onChange={handleInputChange}
                 onKeyDown={handleKeyDown}
