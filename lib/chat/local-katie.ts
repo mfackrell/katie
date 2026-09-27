@@ -199,7 +199,7 @@ function asksForFullMemoryDump(message: string): boolean {
 
 function buildSystemPromptResponse(state: Awaited<ReturnType<typeof getChatContextState>>): string {
   const canonicalHistory =
-    messagesFromShortTermMemory(state.shortTermMemory, state.actor.id) ??
+    messagesFromShortTermMemory(state.shortTermMemory, state.recentMessages[0]?.chatId ?? "local-inspection") ??
     filterConversationalMessages(state.recentMessages).slice(-SHORT_TERM_MESSAGE_LIMIT);
 
   const history = canonicalHistory.map((message) => ({
