@@ -1,12 +1,12 @@
 import {
   getLongTermMemory,
   getRecentMessages,
-  setLongTermMemory
+  setLongTermMemory,
 } from "@/lib/data/persistence-store";
 import { filterConversationalMessages } from "@/lib/memory/short-term";
 
 const MEMORY_EDITOR_MODEL = "gpt-4o-mini";
-const MEMORY_EDITOR_HISTORY_WINDOW = 8;
+const MEMORY_EDITOR_HISTORY_MESSAGES = 60;
 const MAX_LONG_TERM_ENTRIES = 160;
 
 type JsonRecord = Record<string, unknown>;
@@ -30,18 +30,25 @@ type LongTermEntry = {
   value: string;
   source: "user-stated" | "assistant-inference";
   confidence: "high" | "medium" | "low";
+  evidenceMessageIds?: string[];
   lastConfirmedAt?: string;
 };
 
-type LongTermMemoryV2 = {
-  version: 2;
+type LongTermMemoryV3 = {
+  version: 3;
   purpose: string;
   entries: LongTermEntry[];
 };
 
 type MemoryEditorAction =
   | { action: "no_change" }
-  | { action: "replace"; updatedContent: LongTermMemoryV2 };
+  | { action: "replace"; updatedContent: LongTermMemoryV3 };
+
+const LONG_TERM_PURPOSE =
+  "Durable memory for important facts, preferences, relationships, goals, decisions, constraints, and recurring patterns that should persist across the conversation.";
+
+const TRANSIENT_VALUE_PATTERN =
+  /\b(?:currently|current environment|right now|today|tomorrow|this week|this trip|on vacation|for the next hour)\b/i;
 
 function isLongTermEntry(value: unknown): value is LongTermEntry {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -60,7 +67,17 @@ function isLongTermEntry(value: unknown): value is LongTermEntry {
   );
 }
 
-function normalizeUpdatedContent(value: unknown): LongTermMemoryV2 | null {
+function currentEntries(value: JsonRecord): LongTermEntry[] {
+  if (!Array.isArray(value.entries)) {
+    return [];
+  }
+  return value.entries.filter(isLongTermEntry);
+}
+
+function normalizeUpdatedContent(
+  value: unknown,
+  allowedEvidenceIds: Set<string>,
+): LongTermMemoryV3 | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return null;
   }
@@ -78,12 +95,34 @@ function normalizeUpdatedContent(value: unknown): LongTermMemoryV2 | null {
       continue;
     }
 
+    if (
+      rawEntry.category !== "preference" &&
+      rawEntry.category !== "relationship" &&
+      rawEntry.category !== "goal" &&
+      TRANSIENT_VALUE_PATTERN.test(rawEntry.value)
+    ) {
+      continue;
+    }
+
+    const validEvidence = Array.isArray(rawEntry.evidenceMessageIds)
+      ? rawEntry.evidenceMessageIds.filter(
+          (id): id is string => typeof id === "string" && allowedEvidenceIds.has(id),
+        )
+      : [];
+
+    const requestedUserStated = rawEntry.source === "user-stated";
+    const hasUserEvidence = validEvidence.length > 0;
+
     const entry: LongTermEntry = {
       key: rawEntry.key.trim(),
       category: rawEntry.category,
       value: rawEntry.value.trim(),
-      source: rawEntry.source,
-      confidence: rawEntry.confidence,
+      source: requestedUserStated && hasUserEvidence ? "user-stated" : "assistant-inference",
+      confidence:
+        requestedUserStated && !hasUserEvidence && rawEntry.confidence === "high"
+          ? "medium"
+          : rawEntry.confidence,
+      ...(hasUserEvidence ? { evidenceMessageIds: validEvidence } : {}),
       ...(typeof rawEntry.lastConfirmedAt === "string" && rawEntry.lastConfirmedAt.trim()
         ? { lastConfirmedAt: rawEntry.lastConfirmedAt.trim() }
         : {}),
@@ -103,14 +142,16 @@ function normalizeUpdatedContent(value: unknown): LongTermMemoryV2 | null {
   }
 
   return {
-    version: 2,
-    purpose:
-      "Durable memory for important facts, preferences, relationships, goals, decisions, constraints, and recurring patterns that should persist across the conversation.",
+    version: 3,
+    purpose: LONG_TERM_PURPOSE,
     entries,
   };
 }
 
-function parseMemoryEditorResult(raw: string): MemoryEditorAction | null {
+function parseMemoryEditorResult(
+  raw: string,
+  allowedEvidenceIds: Set<string>,
+): MemoryEditorAction | null {
   try {
     const parsed = JSON.parse(raw) as Record<string, unknown>;
     if (parsed.action === "no_change") {
@@ -121,14 +162,14 @@ function parseMemoryEditorResult(raw: string): MemoryEditorAction | null {
       return null;
     }
 
-    const updatedContent = normalizeUpdatedContent(parsed.updatedContent);
+    const updatedContent = normalizeUpdatedContent(parsed.updatedContent, allowedEvidenceIds);
     if (!updatedContent) {
       return null;
     }
 
     return {
       action: "replace",
-      updatedContent
+      updatedContent,
     };
   } catch {
     return null;
@@ -142,7 +183,9 @@ function createDefaultClient(): MemoryEditorClient | null {
 
   try {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const { default: OpenAI } = require("openai") as { default: new (params: { apiKey: string }) => MemoryEditorClient };
+    const { default: OpenAI } = require("openai") as {
+      default: new (params: { apiKey: string }) => MemoryEditorClient;
+    };
     return new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
   } catch {
     return null;
@@ -152,124 +195,44 @@ function createDefaultClient(): MemoryEditorClient | null {
 const defaultClient = createDefaultClient();
 
 function getMemoryEditorClient(): MemoryEditorClient | null {
-  return (globalThis as { __KATIE_LONG_TERM_MEMORY_OPENAI_CLIENT__?: MemoryEditorClient | null }).__KATIE_LONG_TERM_MEMORY_OPENAI_CLIENT__ ?? defaultClient;
+  return (
+    (globalThis as { __KATIE_LONG_TERM_MEMORY_OPENAI_CLIENT__?: MemoryEditorClient | null })
+      .__KATIE_LONG_TERM_MEMORY_OPENAI_CLIENT__ ?? defaultClient
+  );
 }
 
 function formatTranscript(messages: Awaited<ReturnType<typeof getRecentMessages>>): string {
   return messages
     .map((message, index) => {
       const timestamp = message.createdAt ? ` (${message.createdAt})` : "";
-      return `${index + 1}. ${message.role.toUpperCase()}${timestamp}: ${message.content}`;
+      return `${index + 1}. ${message.role.toUpperCase()} [messageId=${message.id}]${timestamp}: ${message.content}`;
     })
     .join("\n");
 }
 
 function truncateForLog(value: string, maxLength: number): string {
-  if (value.length <= maxLength) {
-    return value;
+  return value.length <= maxLength ? value : `${value.slice(0, maxLength)}...`;
+}
+
+function existingEvidenceIds(memory: JsonRecord): Set<string> {
+  const ids = new Set<string>();
+  for (const entry of currentEntries(memory)) {
+    for (const id of entry.evidenceMessageIds ?? []) {
+      ids.add(id);
+    }
   }
-
-  return `${value.slice(0, maxLength)}...`;
+  return ids;
 }
 
-function isV2LongTermMemory(value: JsonRecord): boolean {
-  return value.version === 2 && Array.isArray(value.entries);
-}
-
-const LEGACY_TRANSIENT_PATH = /(?:^|\.)(?:recentMessages|rollingSummary|currentState|recentTravel|nextSteps|cute girls)(?:\.|$)/i;
-
-function legacyCategory(path: string): LongTermEntry["category"] {
-  const normalized = path.toLowerCase();
-  if (normalized.includes("lindsey") || normalized.includes("relationship")) return "relationship";
-  if (normalized.includes("preference")) return "preference";
-  if (normalized.includes("goal")) return "goal";
-  if (normalized.includes("decision")) return "decision";
-  if (normalized.includes("constraint")) return "constraint";
-  if (normalized.includes("selfworth") || normalized.includes("psychological") || normalized.includes("represents")) return "pattern";
-  return "fact";
-}
-
-function migrateLegacyLongTermMemory(value: JsonRecord): LongTermMemoryV2 {
-  const entries: LongTermEntry[] = [];
-  const seen = new Set<string>();
-
-  const pushEntry = (path: string, rawValue: unknown) => {
-    if (!path || LEGACY_TRANSIENT_PATH.test(path)) {
-      return;
-    }
-
-    const stringValue =
-      typeof rawValue === "string" || typeof rawValue === "number" || typeof rawValue === "boolean"
-        ? String(rawValue).trim()
-        : "";
-
-    if (!stringValue) {
-      return;
-    }
-
-    const dedupeKey = `${path.toLowerCase()}|${stringValue.toLowerCase()}`;
-    if (seen.has(dedupeKey) || entries.length >= MAX_LONG_TERM_ENTRIES) {
-      return;
-    }
-    seen.add(dedupeKey);
-
-    entries.push({
-      key: path.replace(/\[(\d+)\]/g, ".$1"),
-      category: legacyCategory(path),
-      value: stringValue,
-      // Legacy records did not reliably preserve provenance. Mark them as
-      // inference until the user explicitly confirms or corrects them.
-      source: "assistant-inference",
-      confidence: "medium",
-    });
-  };
-
-  const walk = (node: unknown, path: string) => {
-    if (LEGACY_TRANSIENT_PATH.test(path)) {
-      return;
-    }
-
-    if (Array.isArray(node)) {
-      node.forEach((item, index) => walk(item, `${path}[${index}]`));
-      return;
-    }
-
-    if (node && typeof node === "object") {
-      for (const [key, child] of Object.entries(node as Record<string, unknown>)) {
-        walk(child, path ? `${path}.${key}` : key);
-      }
-      return;
-    }
-
-    pushEntry(path, node);
-  };
-
-  walk(value, "");
-
-  return {
-    version: 2,
-    purpose:
-      "Durable memory for important facts, preferences, relationships, goals, decisions, constraints, and recurring patterns that should persist across the conversation.",
-    entries,
-  };
-}
-
-async function persistLegacyMigration(actorId: string, chatId: string, legacy: JsonRecord): Promise<LongTermMemoryV2> {
-  const migrated = migrateLegacyLongTermMemory(legacy);
-  await setLongTermMemory(actorId, chatId, migrated);
-  console.log("[LongTermMemoryEditor] Legacy migration fallback saved", {
-    actorId,
-    chatId,
-    entryCount: migrated.entries.length,
-  });
-  return migrated;
-}
-
-export async function maybeUpdateLongTermMemory(actorId: string, chatId: string, latestUserMessage: string): Promise<void> {
+export async function maybeUpdateLongTermMemory(
+  actorId: string,
+  chatId: string,
+  latestUserMessage: string,
+): Promise<void> {
   console.log("[LongTermMemoryEditor] Start", {
     actorId,
     chatId,
-    latestUserMessagePreview: truncateForLog(latestUserMessage, 120)
+    latestUserMessagePreview: truncateForLog(latestUserMessage, 120),
   });
 
   try {
@@ -281,15 +244,23 @@ export async function maybeUpdateLongTermMemory(actorId: string, chatId: string,
 
     const [currentLongTermMemory, rawRecentMessages] = await Promise.all([
       getLongTermMemory(actorId, chatId),
-      getRecentMessages(chatId, MEMORY_EDITOR_HISTORY_WINDOW + 12),
+      getRecentMessages(chatId, MEMORY_EDITOR_HISTORY_MESSAGES + 40),
     ]);
-    const recentMessages = filterConversationalMessages(rawRecentMessages).slice(-MEMORY_EDITOR_HISTORY_WINDOW);
-    const needsMigration = !isV2LongTermMemory(currentLongTermMemory);
+
+    const recentMessages = filterConversationalMessages(rawRecentMessages).slice(
+      -MEMORY_EDITOR_HISTORY_MESSAGES,
+    );
+    const recentUserIds = new Set(
+      recentMessages.filter((message) => message.role === "user").map((message) => message.id),
+    );
+    const allowedEvidenceIds = existingEvidenceIds(currentLongTermMemory);
+    recentUserIds.forEach((id) => allowedEvidenceIds.add(id));
 
     console.log("[LongTermMemoryEditor] Context Loaded", {
-      longTermMemoryState: Object.keys(currentLongTermMemory).length === 0 ? "empty" : "non-empty",
+      longTermMemoryState:
+        Object.keys(currentLongTermMemory).length === 0 ? "empty" : "non-empty",
       recentMessageCount: recentMessages.length,
-      needsMigration,
+      longTermVersion: currentLongTermMemory.version ?? null,
     });
 
     const response = await client.chat.completions.create({
@@ -305,28 +276,26 @@ export async function maybeUpdateLongTermMemory(actorId: string, chatId: string,
             "Allowed categories: fact, preference, relationship, goal, decision, constraint, pattern.",
             "",
             "Storage rules:",
-            "- Persist stable user facts, durable preferences, important relationship context, enduring goals, significant decisions, durable constraints, and recurring patterns.",
-            "- Do NOT store raw message transcripts, recentMessages arrays, rolling summaries, routing/session state, temporary currentState fields, or routine travel/location/status updates.",
-            "- Do NOT copy intermediate-memory summaries into long-term memory.",
-            "- Do NOT store one-off jokes, banter, momentary emotions, temporary plans, or transient recommendations unless the user explicitly asks that they be remembered long-term.",
+            "- Persist stable user facts, durable interaction preferences, important relationship context, enduring goals, significant decisions, durable constraints, and recurring patterns.",
+            "- Explicit user requests to remember a communication preference are high-priority durable memories.",
+            "- Do NOT store raw transcripts, rolling summaries, routing/session state, temporary status, routine travel, momentary emotions, one-off jokes, or short-lived circumstances.",
+            "- Time-sensitive facts belong in long-term memory only if they remain historically important and are phrased with dated/contextual wording rather than as permanently current truth.",
             "- Preserve exact speaker attribution. Never store an assistant statement as something the user said.",
-            "- Use source='user-stated' only when the user explicitly stated or confirmed the information.",
-            "- Use source='assistant-inference' for a durable analytical pattern inferred from conversation. Inferences must never be represented as user-stated facts.",
-            "- confidence should reflect evidentiary strength: high, medium, or low.",
-            "- If the user corrects a memory, revise or remove the older conflicting entry.",
+            "- source='user-stated' REQUIRES at least one evidenceMessageIds value from a USER message shown in recentRoleAttributedMessages, or an evidenceMessageIds value already present on that existing memory entry.",
+            "- If you cannot cite a valid USER message id, use source='assistant-inference'.",
+            "- Assistant inferences are reasoning context, not facts the user endorsed.",
+            "- If the user corrects a memory, revise or remove the conflicting older entry.",
             "- Deduplicate semantically equivalent entries instead of accumulating variants.",
-            "- Keep the memory compact. Prefer fewer strong entries over many weak ones.",
+            "- Keep memory compact. Prefer fewer strong entries over many weak ones.",
             "",
-            "The required long-term format is:",
-            '{"version":2,"purpose":"...","entries":[{"key":"stable.short.identifier","category":"fact|preference|relationship|goal|decision|constraint|pattern","value":"...","source":"user-stated|assistant-inference","confidence":"high|medium|low","lastConfirmedAt":"ISO timestamp if known"}]}',
+            "Required format:",
+            '{"version":3,"purpose":"...","entries":[{"key":"stable.short.identifier","category":"fact|preference|relationship|goal|decision|constraint|pattern","value":"...","source":"user-stated|assistant-inference","confidence":"high|medium|low","evidenceMessageIds":["USER_MESSAGE_ID"],"lastConfirmedAt":"ISO timestamp if known"}]}',
             "",
             "Return strict JSON only:",
             '{"action":"no_change"}',
             "or",
-            '{"action":"replace","updatedContent":<the complete version-2 long-term memory object>}.',
-            "",
-            "If existingLongTermMemoryContent is not already version 2, you MUST migrate only its genuinely durable content into the version-2 format and discard legacy transcript/summary/transient pollution.",
-          ].join("\n")
+            '{"action":"replace","updatedContent":<the complete version-3 long-term memory object>}.',
+          ].join("\n"),
         },
         {
           role: "user",
@@ -335,47 +304,31 @@ export async function maybeUpdateLongTermMemory(actorId: string, chatId: string,
             `chatId: ${chatId}`,
             `latestUserMessage: ${latestUserMessage}`,
             `existingLongTermMemoryContent: ${JSON.stringify(currentLongTermMemory)}`,
-            `needsVersion2Migration: ${needsMigration}`,
             "recentRoleAttributedMessages:",
             formatTranscript(recentMessages),
-            "Output JSON only."
-          ].join("\n\n")
-        }
-      ]
+            "Output JSON only.",
+          ].join("\n\n"),
+        },
+      ],
     });
 
     const rawResult = response.choices?.[0]?.message?.content?.trim();
     console.log("[LongTermMemoryEditor] Model Response Received", {
-      rawResponsePreview: truncateForLog(rawResult ?? "", 200)
+      rawResponsePreview: truncateForLog(rawResult ?? "", 200),
     });
 
     if (!rawResult) {
-      console.log("[LongTermMemoryEditor] No-op: empty model response", { actorId, chatId });
-      if (needsMigration) {
-        await persistLegacyMigration(actorId, chatId, currentLongTermMemory);
-      }
       return;
     }
 
-    const decision = parseMemoryEditorResult(rawResult);
+    const decision = parseMemoryEditorResult(rawResult, allowedEvidenceIds);
     if (!decision) {
       console.log("[LongTermMemoryEditor] No-op: invalid model response", { actorId, chatId });
-      if (needsMigration) {
-        await persistLegacyMigration(actorId, chatId, currentLongTermMemory);
-      }
       return;
     }
 
     if (decision.action === "no_change") {
-      if (needsMigration) {
-        console.warn("[LongTermMemoryEditor] Migration required but model returned no_change; applying deterministic migration fallback.", {
-          actorId,
-          chatId,
-        });
-        await persistLegacyMigration(actorId, chatId, currentLongTermMemory);
-      } else {
-        console.log("[LongTermMemoryEditor] Decision: no_change", { actorId, chatId });
-      }
+      console.log("[LongTermMemoryEditor] Decision: no_change", { actorId, chatId });
       return;
     }
 
@@ -390,7 +343,7 @@ export async function maybeUpdateLongTermMemory(actorId: string, chatId: string,
     console.error("[LongTermMemoryEditor] Failed", {
       actorId,
       chatId,
-      error: error instanceof Error ? error.message : String(error)
+      error: error instanceof Error ? error.message : String(error),
     });
   }
 }
