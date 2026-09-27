@@ -46,7 +46,12 @@ export function buildRecentExchanges(messages: Message[]): ShortTermExchange[] {
     }
 
     if (message.role === "assistant" && pendingUser) {
-      exchanges.push(toExchange(pendingUser, message));
+      // Local prompt/memory inspection responses are operational diagnostics.
+      // Keep them in the chat transcript, but do not recursively feed a full
+      // memory dump back into Katie's conversational memory.
+      if (message.model !== "katie-local") {
+        exchanges.push(toExchange(pendingUser, message));
+      }
       pendingUser = null;
     }
   }
@@ -60,7 +65,7 @@ export async function refreshShortTermMemory(actorId: string, chatId: string): P
 
   await setShortTermMemory(actorId, chatId, {
     version: 2,
-    purpose: "The 30 most recent completed user-assistant exchanges, stored verbatim.",
+    purpose: "The 30 most recent completed conversational user-assistant exchanges, stored verbatim. Local prompt/memory diagnostic dumps are excluded to prevent recursive context injection.",
     exchangeCount: exchanges.length,
     exchanges,
   });
