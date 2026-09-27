@@ -788,11 +788,16 @@ export function ChatPanel({
           serverMessage = "The image upload is still too large for the server. Katie compressed it, but the request exceeded the upload limit.";
         }
 
+        const httpCause =
+          response.status === 413
+            ? serverMessage
+            : `Server request failed (HTTP ${response.status}${response.statusText ? ` ${response.statusText}` : ""}): ${serverMessage}`;
+
         const failureMessage: Message = {
           id: crypto.randomUUID(),
           chatId,
           role: "assistant",
-          content: serverMessage,
+          content: httpCause,
           createdAt: new Date().toISOString(),
         };
         setMessages((current) => {
@@ -800,7 +805,7 @@ export function ChatPanel({
           setMessagesByChatId((cache) => ({ ...cache, [chatId]: nextMessages }));
           return nextMessages;
         });
-        setStatusMessage(serverMessage);
+        setStatusMessage(httpCause);
         return;
       }
 
@@ -1029,13 +1034,98 @@ export function ChatPanel({
 
       const rawMessage =
         error instanceof Error ? error.message : "Something went wrong.";
-      const message = `${rawMessage} [stage: ${requestStage}]`;
+      const isTransportFailure =
+        requestStage === "sending chat request" &&
+        /load failed|failed to fetch|networkerror|network request failed/i.test(rawMessage);
+
       console.error("[ChatPanel] request failed", {
         stage: requestStage,
         error,
+        browserOnline: typeof navigator !== "undefined" ? navigator.onLine : undefined,
         imageCount: imagesToSend.length,
         imageLengths: imagesToSend.map((image) => image.length),
       });
+
+      if (isTransportFailure) {
+        try {
+          // A mobile browser can lose the fetch response even after the server
+          // successfully finishes and persists the exchange. Re-read the
+          // authoritative chat before telling the user to resend anything.
+          await new Promise((resolve) => setTimeout(resolve, 500));
+          const recoveryResponse = await fetch(
+            `/api/messages?chatId=${encodeURIComponent(chatId)}`,
+            { cache: "no-store" },
+          );
+
+          if (recoveryResponse.ok) {
+            const recoveryPayload = (await recoveryResponse.json()) as {
+              messages?: Message[];
+            };
+            const serverMessages = recoveryPayload.messages ?? [];
+            const optimisticCreatedAt = Date.parse(optimisticUserMessage.createdAt);
+            const requestContent =
+              content ||
+              (hasImages
+                ? "[image]"
+                : videosToUpload.length > 0
+                  ? "[video]"
+                  : "[file]");
+
+            let matchingUserIndex = -1;
+            for (let index = serverMessages.length - 1; index >= 0; index -= 1) {
+              const candidate = serverMessages[index];
+              if (
+                candidate.role === "user" &&
+                candidate.content === requestContent &&
+                Date.parse(candidate.createdAt) >= optimisticCreatedAt - 120_000
+              ) {
+                matchingUserIndex = index;
+                break;
+              }
+            }
+
+            const recoveredAssistant =
+              matchingUserIndex >= 0
+                ? serverMessages
+                    .slice(matchingUserIndex + 1)
+                    .find((candidate) => candidate.role === "assistant")
+                : undefined;
+
+            if (recoveredAssistant) {
+              setMessages(serverMessages);
+              setMessagesByChatId((cache) => ({
+                ...cache,
+                [chatId]: serverMessages,
+              }));
+              if (recoveredAssistant.model) {
+                setMeta({
+                  provider: "recovered",
+                  model: recoveredAssistant.model,
+                });
+              }
+              setStatusMessage(
+                "Your browser lost the connection after Katie completed the request. The saved response was recovered from the server.",
+              );
+              return;
+            }
+          }
+        } catch (recoveryError: unknown) {
+          console.error("[ChatPanel] response recovery failed", {
+            stage: requestStage,
+            recoveryError,
+          });
+        }
+      }
+
+      const cause = isTransportFailure
+        ? "Network/transport error: your browser did not receive Katie's response. The request may still have reached the server, but no completed saved response could be recovered yet."
+        : requestStage === "reading response stream"
+          ? "Response-stream error: the server responded, but the browser could not finish reading or parsing the streamed response."
+          : requestStage.includes("upload")
+            ? "Attachment upload error: the message could not be sent because an attachment failed during upload or preparation."
+            : `Request error during ${requestStage}.`;
+
+      const message = `${cause}\n\nTechnical detail: ${rawMessage}\nStage: ${requestStage}`;
       const errorMessage: Message = {
         id: crypto.randomUUID(),
         chatId,
