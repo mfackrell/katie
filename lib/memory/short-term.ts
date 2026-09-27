@@ -35,6 +35,27 @@ function toExchange(user: Message, assistant: Message): ShortTermExchange {
   };
 }
 
+export function filterConversationalMessages(messages: Message[]): Message[] {
+  const filtered: Message[] = [];
+  let pendingUser: Message | null = null;
+
+  for (const message of messages) {
+    if (message.role === "user") {
+      pendingUser = message;
+      continue;
+    }
+
+    if (message.role === "assistant" && pendingUser) {
+      if (message.model !== "katie-local") {
+        filtered.push(pendingUser, message);
+      }
+      pendingUser = null;
+    }
+  }
+
+  return filtered;
+}
+
 export function buildRecentExchanges(messages: Message[]): ShortTermExchange[] {
   const exchanges: ShortTermExchange[] = [];
   let pendingUser: Message | null = null;
