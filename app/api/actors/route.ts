@@ -21,16 +21,6 @@ const updateActorSchema = z.object({
   purpose: z.string().trim().min(1)
 });
 
-type ActorDbRow = {
-  id: string;
-  name: string;
-  system_prompt: string;
-  parent_actor_id: string | null;
-  routing_profile: unknown;
-  created_at: string;
-  updated_at: string;
-};
-
 async function buildActorRoutingProfile(actor: Pick<Actor, "name" | "purpose">) {
   const providers = getAvailableProviders();
   if (!providers.length) {
