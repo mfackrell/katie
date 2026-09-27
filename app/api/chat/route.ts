@@ -3,7 +3,8 @@ import { z } from "zod";
 import { assembleContext } from "@/lib/memory/assemble-context";
 import { maybeUpdateSummary } from "@/lib/memory/summarizer";
 import { maybeUpdateLongTermMemory } from "@/lib/memory/long-term-editor";
-import { saveMessage, setShortTermMemory } from "@/lib/data/persistence-store";
+import { saveMessage } from "@/lib/data/persistence-store";
+import { refreshShortTermMemory } from "@/lib/memory/short-term";
 import { resolveLocalKatieResponse } from "@/lib/chat/local-katie";
 import { getSupabaseAdminClient } from "@/lib/data/supabase/admin";
 import { getAvailableProviders } from "@/lib/providers";
@@ -15,12 +16,7 @@ import {
   RoutingHint,
   validateRoutingDecision
 } from "@/lib/router/model-intent";
-import {
-  ACK_CONTEXT_TTL_MS,
-  isAcknowledgment,
-  isSubstantiveIntent,
-  parseIntentSessionState
-} from "@/lib/router/intent-context";
+
 import { LlmProvider, ProviderResponse } from "@/lib/providers/types";
 import type { ResolvedRoutingIntent, SelectionExplainer } from "@/lib/router/master-router";
 import { DEFAULT_REASONING_CATEGORIES, ReasoningStateAccumulator } from "@/lib/chat/reasoning-stream";
@@ -721,6 +717,14 @@ export async function POST(request: NextRequest) {
         model: "katie-local",
         content: localKatieResponse.text,
       });
+      await refreshShortTermMemory(actorId, chatId);
+      after(async () => {
+        try {
+          await maybeUpdateSummary(chatId);
+        } catch (error: unknown) {
+          console.error("[Chat API] Local response intermediate memory update failed:", error);
+        }
+      });
 
       const localBody = [
         JSON.stringify({
@@ -763,7 +767,7 @@ export async function POST(request: NextRequest) {
     }
 
     console.log("[Chat API] Assembling context and selecting provider...");
-    const { name, persona, summary, history, shortTermMemory, actorRoutingProfile } = await assembleContext(actorId, chatId);
+    const { name, persona, summary, history, actorRoutingProfile } = await assembleContext(actorId, chatId);
     const activeRepoContext = activeRepoId ? await loadActiveRepoContext(activeRepoId) : null;
     const sessionContext: ChatSessionContext = {
       activeRepo: activeRepoContext
@@ -773,11 +777,6 @@ export async function POST(request: NextRequest) {
           }
         : null,
     };
-    const shortTermMemoryWithSession = {
-      ...shortTermMemory,
-      sessionContext,
-    };
-    await setShortTermMemory(actorId, chatId, shortTermMemoryWithSession);
     console.log("[Chat API] Session context", {
       requestId,
       actorId,
@@ -944,9 +943,6 @@ export async function POST(request: NextRequest) {
         /\b(what(?:'s| is)? up(?:\s+\w+)?|what up(?:\s+\w+)?|how are you feeling|how do you feel|what do you think of me|are you okay|how does (?:that|this) feel|how does (?:that|this) strike you|what(?:'s| is) your sense of this|develop\b[^.!?\n]{0,40}\bpersonality|have\b[^.!?\n]{0,30}\bpersonality|stop being robotic|loosen up)\b/i.test(
           message
         );
-      const now = Date.now();
-      const intentSession = parseIntentSessionState(shortTermMemory);
-      const isAckMessage = isAcknowledgment(message);
       let requestIntent: RequestIntent | undefined;
       routingHints = [];
 
@@ -962,19 +958,6 @@ export async function POST(request: NextRequest) {
         requestIntent = requestIntent ?? "social-emotional";
         routingHints.push({ hintIntent: "social-emotional", hintSource: "heuristic", hintConfidence: 0.9, note: "social regex matched" });
       }
-      if (
-        isAckMessage &&
-        intentSession.lastSubstantiveIntent &&
-        intentSession.lastIntentTimestamp &&
-        now - intentSession.lastIntentTimestamp < ACK_CONTEXT_TTL_MS
-      ) {
-        requestIntent = requestIntent ?? intentSession.lastSubstantiveIntent;
-        routingHints.push({ hintIntent: intentSession.lastSubstantiveIntent, hintSource: "short-term-memory", hintConfidence: 0.7, note: "ack reuse" });
-        console.log(
-          `[Intent Reuse] Reusing ${intentSession.lastSubstantiveIntent} from ${new Date(intentSession.lastIntentTimestamp).toISOString()} for ack message "${message}".`
-        );
-      }
-
       resolvedRequestIntent = requestIntent;
       const routingContext = controlPlaneConversationContext;
       console.log(
@@ -1026,18 +1009,6 @@ export async function POST(request: NextRequest) {
       containsCodePatchOrDiff: CODE_PATCH_OR_DIFF_ROUTING_REGEX.test(message),
       containsRepoReviewLanguage: REPO_REVIEW_LANGUAGE_ROUTING_REGEX.test(message),
     };
-
-    if (resolvedRequestIntent && isSubstantiveIntent(resolvedRequestIntent)) {
-      const now = Date.now();
-      await setShortTermMemory(actorId, chatId, {
-        ...shortTermMemoryWithSession,
-        intentSession: {
-          lastSubstantiveIntent: resolvedRequestIntent,
-          lastIntentTimestamp: now,
-        },
-      });
-      console.log(`[Intent Update] Stored final substantive intent ${resolvedRequestIntent} at ${new Date(now).toISOString()}.`);
-    }
 
     let repoSourceClassifierDecision: RepoSourceClassifierDecision = {
       attach_repo_source: false,
@@ -1602,6 +1573,7 @@ ${chunkWorkflowSummary}`;
               content: assistantText,
               assets: imageAssets,
             });
+            await refreshShortTermMemory(actorId, chatId);
 
             after(async () => {
               try {
