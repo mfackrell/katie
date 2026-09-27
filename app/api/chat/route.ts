@@ -1575,20 +1575,22 @@ ${chunkWorkflowSummary}`;
             });
             await refreshShortTermMemory(actorId, chatId);
 
-            after(async () => {
-              try {
-                console.log("[Chat API] Background Long-Term Memory Update Start", { actorId, chatId });
-                await maybeUpdateLongTermMemory(actorId, chatId, message);
-              } catch (error: unknown) {
-                console.error("[Chat API] Background Long-Term Memory Update Error:", error);
-              }
-
-              try {
-                await maybeUpdateSummary(chatId);
-              } catch (error: unknown) {
-                console.error("[Chat API] Background Summary Update Error:", error);
+            console.log("[Chat API] Memory persistence start", { actorId, chatId });
+            const memoryResults = await Promise.allSettled([
+              maybeUpdateLongTermMemory(actorId, chatId, message),
+              maybeUpdateSummary(chatId),
+            ]);
+            memoryResults.forEach((memoryResult, index) => {
+              if (memoryResult.status === "rejected") {
+                console.error(
+                  index === 0
+                    ? "[Chat API] Long-Term Memory Update Error:"
+                    : "[Chat API] Intermediate Memory Update Error:",
+                  memoryResult.reason,
+                );
               }
             });
+            console.log("[Chat API] Memory persistence complete", { actorId, chatId });
             console.log("[Chat API] reasoning stream metrics", {
               requestId,
               reasoningUpdateCount,
