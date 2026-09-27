@@ -6,6 +6,7 @@ import { maybeUpdateLongTermMemory } from "@/lib/memory/long-term-editor";
 import { saveMessage } from "@/lib/data/persistence-store";
 import { refreshShortTermMemory } from "@/lib/memory/short-term";
 import { resolveLocalKatieResponse } from "@/lib/chat/local-katie";
+import { maintainMemoryArchitecture } from "@/lib/memory/hygiene";
 import { getSupabaseAdminClient } from "@/lib/data/supabase/admin";
 import { getAvailableProviders } from "@/lib/providers";
 import { chooseProvider, selectControlPlaneDecisionModels } from "@/lib/router/master-router";
@@ -690,6 +691,8 @@ export async function POST(request: NextRequest) {
       activeRepoId: activeRepoId ?? null,
       repoInjectionEnabled,
     });
+
+    await maintainMemoryArchitecture(actorId, chatId);
 
     const localKatieResponse = await resolveLocalKatieResponse({
       actorId,
