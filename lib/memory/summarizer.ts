@@ -6,6 +6,7 @@ import {
   setIntermediateMemory,
 } from "@/lib/data/persistence-store";
 import { SHORT_TERM_MESSAGE_LIMIT } from "@/lib/memory/memory-contract";
+import { filterConversationalMessages } from "@/lib/memory/short-term";
 import type { Message } from "@/lib/types/chat";
 
 const SUMMARY_MODEL = "gpt-4o-mini";
@@ -113,9 +114,10 @@ export async function maybeUpdateSummary(chatId: string): Promise<void> {
       getIntermediateMemory(chat.actorId, chatId),
     ]);
 
+    const conversationalMessages = filterConversationalMessages(allMessages);
     const olderMessages =
-      allMessages.length > SHORT_TERM_MESSAGE_LIMIT
-        ? allMessages.slice(0, allMessages.length - SHORT_TERM_MESSAGE_LIMIT)
+      conversationalMessages.length > SHORT_TERM_MESSAGE_LIMIT
+        ? conversationalMessages.slice(0, conversationalMessages.length - SHORT_TERM_MESSAGE_LIMIT)
         : [];
 
     const existing = parseV2(existingRaw);
