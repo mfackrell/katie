@@ -71,7 +71,10 @@ const LIVE_REASONING_VISIBLE_STORAGE_KEY = "ui:liveReasoningExplainerVisible";
 const FALLBACK_REASONING_CATEGORIES = ["Architecture", "Security", "Complexity", "Cost", "Reliability"];
 const MAX_DIRECT_IMAGE_BYTES = 1_750_000;
 const MAX_IMAGE_DIMENSION = 1600;
+const MIN_IMAGE_DIMENSION = 640;
 const IMAGE_JPEG_QUALITY = 0.82;
+const MAX_CHAT_REQUEST_BYTES = 3_800_000;
+const REQUEST_SIZE_SAFETY_BYTES = 150_000;
 
 function readBlobAsDataUrl(blob: Blob): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -143,6 +146,108 @@ async function normalizeImageForChat(file: File): Promise<string> {
   } finally {
     URL.revokeObjectURL(objectUrl);
   }
+}
+
+
+async function compressImageDataUrlToBudget(dataUrl: string, targetBytes: number): Promise<string> {
+  if (dataUrl.length <= targetBytes) {
+    return dataUrl;
+  }
+
+  const image = await new Promise<HTMLImageElement>((resolve, reject) => {
+    const element = new window.Image();
+    element.onload = () => resolve(element);
+    element.onerror = () => reject(new Error("Unable to decode an image while reducing request size."));
+    element.src = dataUrl;
+  });
+
+  const originalWidth = image.naturalWidth || image.width;
+  const originalHeight = image.naturalHeight || image.height;
+  if (!originalWidth || !originalHeight) {
+    throw new Error("Image has invalid dimensions.");
+  }
+
+  let maxDimension = Math.min(MAX_IMAGE_DIMENSION, Math.max(originalWidth, originalHeight));
+  let quality = IMAGE_JPEG_QUALITY;
+  let best = dataUrl;
+
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    const scale = Math.min(1, maxDimension / Math.max(originalWidth, originalHeight));
+    const targetWidth = Math.max(1, Math.round(originalWidth * scale));
+    const targetHeight = Math.max(1, Math.round(originalHeight * scale));
+    const canvas = document.createElement("canvas");
+    canvas.width = targetWidth;
+    canvas.height = targetHeight;
+
+    const context = canvas.getContext("2d");
+    if (!context) {
+      throw new Error("Image conversion is unavailable in this browser.");
+    }
+
+    context.fillStyle = "#ffffff";
+    context.fillRect(0, 0, targetWidth, targetHeight);
+    context.drawImage(image, 0, 0, targetWidth, targetHeight);
+
+    const jpegBlob = await new Promise<Blob>((resolve, reject) => {
+      canvas.toBlob(
+        (blob) => {
+          if (blob) {
+            resolve(blob);
+            return;
+          }
+          reject(new Error("Image compression failed."));
+        },
+        "image/jpeg",
+        quality,
+      );
+    });
+
+    best = await readBlobAsDataUrl(jpegBlob);
+    if (best.length <= targetBytes) {
+      return best;
+    }
+
+    if (quality > 0.58) {
+      quality = Math.max(0.58, quality - 0.08);
+    } else {
+      maxDimension = Math.max(MIN_IMAGE_DIMENSION, Math.floor(maxDimension * 0.8));
+    }
+  }
+
+  return best;
+}
+
+async function fitImagesToAggregateBudget(images: string[], targetBytes: number): Promise<string[]> {
+  if (!images.length) {
+    return images;
+  }
+
+  let next = [...images];
+  if (next.reduce((total, image) => total + image.length, 0) <= targetBytes) {
+    return next;
+  }
+
+  for (let round = 0; round < 4; round += 1) {
+    const totalBytes = next.reduce((total, image) => total + image.length, 0);
+    if (totalBytes <= targetBytes) {
+      return next;
+    }
+
+    const ratio = Math.max(0.35, Math.min(0.92, targetBytes / totalBytes));
+    const perImageTargets = next.map((image) =>
+      Math.max(120_000, Math.floor(image.length * ratio * 0.92)),
+    );
+
+    next = await Promise.all(
+      next.map((image, index) => compressImageDataUrlToBudget(image, perImageTargets[index])),
+    );
+  }
+
+  return next;
+}
+
+function serializedByteSize(value: string): number {
+  return new Blob([value]).size;
 }
 
 function hasExplainerData(explainer: SelectionExplainer | null): explainer is SelectionExplainer {
@@ -551,7 +656,7 @@ export function ChatPanel({
     }
 
     const content = input.trim();
-    const imagesToSend = [...selectedImages];
+    let imagesToSend = [...selectedImages];
     const videosToUpload = [...selectedVideos];
     const filesToUpload = [...selectedFiles];
     const priorReferences = [...fileReferences];
@@ -609,6 +714,52 @@ export function ChatPanel({
         })),
       });
 
+      const buildChatRequestBody = (requestImages: string[]) =>
+        JSON.stringify({
+          actorId,
+          chatId,
+          message: content || (hasImages ? "[image]" : videosToUpload.length > 0 ? "[video]" : "[file]"),
+          images: requestImages,
+          fileReferences: refsToSend,
+          overrideProvider: selectedOverride?.providerName,
+          overrideModel: selectedOverride?.modelId,
+          activeRepoId: activeRepoId || undefined,
+          repoInjectionEnabled,
+        });
+
+      let requestBody = buildChatRequestBody(imagesToSend);
+      let requestBytes = serializedByteSize(requestBody);
+
+      if (requestBytes > MAX_CHAT_REQUEST_BYTES && imagesToSend.length > 0) {
+        requestStage = "optimizing images for request size";
+        setStatusMessage("Optimizing images for upload…");
+
+        const bodyWithoutImages = buildChatRequestBody([]);
+        const nonImageBytes = serializedByteSize(bodyWithoutImages);
+        const imageBudget = MAX_CHAT_REQUEST_BYTES - nonImageBytes - REQUEST_SIZE_SAFETY_BYTES;
+
+        if (imageBudget <= 0) {
+          throw new Error("The non-image attachments in this message are too large to send.");
+        }
+
+        imagesToSend = await fitImagesToAggregateBudget(imagesToSend, imageBudget);
+        requestBody = buildChatRequestBody(imagesToSend);
+        requestBytes = serializedByteSize(requestBody);
+      }
+
+      console.info("[ChatPanel] chat request size", {
+        requestBytes,
+        maxRequestBytes: MAX_CHAT_REQUEST_BYTES,
+        imageCount: imagesToSend.length,
+        imageBytes: imagesToSend.reduce((total, image) => total + image.length, 0),
+      });
+
+      if (requestBytes > MAX_CHAT_REQUEST_BYTES) {
+        throw new Error(
+          `This message is still too large to send after image compression (${Math.ceil(requestBytes / 1_000_000)} MB). Remove an attachment and try again.`,
+        );
+      }
+
       const abortController = new AbortController();
       abortControllerRef.current = abortController;
 
@@ -619,26 +770,29 @@ export function ChatPanel({
           "content-type": "application/json",
         },
         signal: abortController.signal,
-        body: JSON.stringify({
-          actorId,
-          chatId,
-          message: content || (hasImages ? "[image]" : videosToUpload.length > 0 ? "[video]" : "[file]"),
-          images: imagesToSend,
-          fileReferences: refsToSend,
-          overrideProvider: selectedOverride?.providerName,
-          overrideModel: selectedOverride?.modelId,
-          activeRepoId: activeRepoId || undefined,
-          repoInjectionEnabled,
-        }),
+        body: requestBody,
       });
 
       if (!response.ok) {
-        const errorData = (await response.json()) as { error?: string };
+        const responseText = await response.text();
+        let serverMessage = responseText || `Request failed with status ${response.status}.`;
+
+        try {
+          const parsed = JSON.parse(responseText) as { error?: string };
+          serverMessage = parsed.error ?? serverMessage;
+        } catch {
+          // Vercel can reject oversized requests before Next.js executes, returning a non-JSON 413 response.
+        }
+
+        if (response.status === 413) {
+          serverMessage = "The image upload is still too large for the server. Katie compressed it, but the request exceeded the upload limit.";
+        }
+
         const failureMessage: Message = {
           id: crypto.randomUUID(),
           chatId,
           role: "assistant",
-          content: errorData.error ?? "Something went wrong.",
+          content: serverMessage,
           createdAt: new Date().toISOString(),
         };
         setMessages((current) => {
@@ -646,7 +800,7 @@ export function ChatPanel({
           setMessagesByChatId((cache) => ({ ...cache, [chatId]: nextMessages }));
           return nextMessages;
         });
-        setStatusMessage(errorData.error ?? "Message failed.");
+        setStatusMessage(serverMessage);
         return;
       }
 
