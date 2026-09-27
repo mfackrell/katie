@@ -7,6 +7,8 @@ import {
   getKatieOperationalRealityStatement,
   getKatieReasoningExplainerStatement,
 } from "@/lib/providers/operational-reality";
+import { MEMORY_ARCHITECTURE_GUIDE, SHORT_TERM_MESSAGE_LIMIT } from "@/lib/memory/memory-contract";
+import { refreshShortTermMemory } from "@/lib/memory/short-term";
 
 export type LocalKatieResponse = {
   text: string;
@@ -196,7 +198,7 @@ function asksForFullMemoryDump(message: string): boolean {
 }
 
 function buildSystemPromptResponse(state: Awaited<ReturnType<typeof getChatContextState>>): string {
-  const history = state.recentMessages.slice(-20).map((message) => ({
+  const history = state.recentMessages.slice(-SHORT_TERM_MESSAGE_LIMIT).map((message) => ({
     role: message.role,
     content: message.content,
   }));
@@ -207,6 +209,10 @@ function buildSystemPromptResponse(state: Awaited<ReturnType<typeof getChatConte
     "The exact actor-level system prompt stored for this chat is:",
     "",
     fenced("actors.system_prompt", state.actor.purpose),
+    "",
+    "Katie's memory architecture is:",
+    "",
+    fenced("memory architecture", MEMORY_ARCHITECTURE_GUIDE),
     "",
     "Katie also has the following local context available before any provider is called:",
     "",
@@ -327,6 +333,7 @@ export async function resolveLocalKatieResponse(params: {
   message: string;
 }): Promise<LocalKatieResponse | null> {
   if (isSystemPromptRequest(params.message)) {
+    await refreshShortTermMemory(params.actorId, params.chatId);
     const state = await getChatContextState(params.actorId, params.chatId);
     return {
       reason: "system-prompt",
@@ -335,6 +342,7 @@ export async function resolveLocalKatieResponse(params: {
   }
 
   if (isMemoryRequest(params.message)) {
+    await refreshShortTermMemory(params.actorId, params.chatId);
     const records = await listMemoryRecordsForActor(params.actorId);
     return {
       reason: "memory",
