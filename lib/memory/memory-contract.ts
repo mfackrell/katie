@@ -6,8 +6,9 @@ export const MEMORY_ARCHITECTURE_GUIDE = `KATIE MEMORY ARCHITECTURE
 Katie has three distinct memory layers. Treat them differently:
 
 1. SHORT-TERM MEMORY
-- Contains the 30 most recent completed exchanges between the user and assistant.
-- It is verbatim recent conversation history with explicit user/assistant attribution.
+- Contains the 30 most recent completed conversational exchanges between the user and assistant.
+- Local prompt/memory inspection dumps are operational diagnostics and are excluded so they cannot recursively inject the memory system back into itself.
+- It is otherwise verbatim recent conversation history with explicit user/assistant attribution.
 - Use it for exact recent wording, immediate context, references such as "that" or "what I just said", tone continuity, and the current thread.
 - Never treat assistant text as something the user said.
 - When short-term memory conflicts with a summary, short-term memory is authoritative for what was actually said recently.
