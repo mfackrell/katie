@@ -1,4 +1,5 @@
 import { getChatContextState } from "@/lib/data/persistence-store";
+import { MEMORY_ARCHITECTURE_GUIDE, SHORT_TERM_MESSAGE_LIMIT } from "@/lib/memory/memory-contract";
 import type { ActorRoutingProfile, Message } from "@/lib/types/chat";
 import { createNeutralActorRoutingProfile } from "@/lib/router/actor-routing-profile";
 
@@ -17,27 +18,22 @@ export async function assembleContext(actorId: string, chatId: string): Promise<
     chatId
   );
 
-  const history = recentMessages.slice(-20);
+  const history = recentMessages.slice(-SHORT_TERM_MESSAGE_LIMIT);
   const summary =
-    (typeof intermediateMemory.summary === "string" && intermediateMemory.summary) ||
-    "No summary available yet.";
+    (typeof intermediateMemory.summary === "string" && intermediateMemory.summary.trim()) ||
+    "No older summarized conversation context is available yet.";
 
-  const memoryHeader = [
-    shortTermMemory,
-    intermediateMemory,
-    longTermMemory,
-  ]
-    .map((memory, index) =>
-      Object.keys(memory).length
-        ? `${index === 0 ? "Short-term" : index === 1 ? "Intermediate" : "Long-term"}: ${JSON.stringify(memory)}`
-        : ""
-    )
-    .filter(Boolean)
-    .join("\n");
+  const longTermBlock = Object.keys(longTermMemory).length
+    ? `LONG_TERM_MEMORY:\n${JSON.stringify(longTermMemory)}\nEND_LONG_TERM_MEMORY`
+    : "LONG_TERM_MEMORY:\nNo durable long-term memory has been stored yet.\nEND_LONG_TERM_MEMORY";
 
   return {
     name: process.env.ASSISTANT_NAME || "Katie",
-    persona: memoryHeader ? `${actor.purpose}\n\nMemory state:\n${memoryHeader}` : actor.purpose,
+    persona: [
+      actor.purpose,
+      MEMORY_ARCHITECTURE_GUIDE,
+      longTermBlock,
+    ].join("\n\n"),
     summary,
     history,
     shortTermMemory,
