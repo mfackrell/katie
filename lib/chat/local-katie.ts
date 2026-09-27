@@ -24,7 +24,10 @@ const MEMORY_REQUEST_PATTERNS = [
   /\b(?:short[- ]term|intermediate|long[- ]term) memory\b/i,
   /\bwhat do you remember\b/i,
   /\bdo you remember\b/i,
-  /\bwhat do you know about me\b/i,
+  /\bwhat do you know about\b/i,
+  /\bwhat (?:did|have) i (?:tell|told|say|said) you about\b/i,
+  /\bwhat do you have (?:stored|saved) about\b/i,
+  /\bwhat(?:'s| is) (?:stored|saved) about\b/i,
   /\bwhat(?:'s| is| are) (?:in )?(?:your|katie(?:'s)?) memory\b/i,
   /\b(?:stored|saved) memory\b/i,
 ];
