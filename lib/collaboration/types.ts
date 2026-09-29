@@ -48,6 +48,7 @@ export type CollaborationTraceEvent = {
     | "helper_selected"
     | "helper_completed"
     | "helper_failed"
+    | "helper_retrying"
     | "lead_ready"
     | "final_synthesis_started"
     | "collaboration_completed"
