@@ -196,6 +196,16 @@ function buildKatieRuntimeContext({
 ---`;
 }
 
+function replaceKatieRuntimeContext(persona: string, runtimeContext: string): string {
+  const withoutExistingContext = persona
+    .replace(/^KATIE_RUNTIME_CONTEXT:\n[\s\S]*?\n---\n*/m, "")
+    .trimStart();
+
+  return withoutExistingContext
+    ? `${runtimeContext}\n\n${withoutExistingContext}`
+    : runtimeContext;
+}
+
 function shouldRunRepoAuditMode(message: string): boolean {
   return /\b(audit|review|inspect|debug|explain)\b/i.test(message);
 }
@@ -1478,12 +1488,13 @@ ${chunkWorkflowSummary}`;
                                   : intentAuthority,
                             requestId,
                           });
-                          return participantParams.persona.includes("KATIE_RUNTIME_CONTEXT:")
-                            ? participantParams
-                            : {
-                                ...participantParams,
-                                persona: `${participantRuntimeContext}\n\n${participantParams.persona}`,
-                              };
+                          return {
+                            ...participantParams,
+                            persona: replaceKatieRuntimeContext(
+                              participantParams.persona,
+                              participantRuntimeContext,
+                            ),
+                          };
                         },
                         selectHelper: async (context) => {
                           const registrySnapshot = await getCollaborationRegistrySnapshot();
