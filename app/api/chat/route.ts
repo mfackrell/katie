@@ -61,6 +61,7 @@ import { sanitizeCalculationResponse, shouldSuppressCalculationScaffolding } fro
 import { shouldUseAdaptiveCollaboration } from "@/lib/collaboration/activation";
 import { getCollaborationConfig } from "@/lib/collaboration/config";
 import { runAdaptiveCollaboration } from "@/lib/collaboration/orchestrator";
+import { runOnDemandCapabilityEscalation } from "@/lib/collaboration/capability-escalation-runner";
 import { selectCollaborationHelper } from "@/lib/collaboration/routing";
 import type { CollaborationTraceEvent } from "@/lib/collaboration/types";
 import { getRoutingRegistryByProvider, type RegistryRoutingModel } from "@/lib/models/registry";
@@ -1660,11 +1661,116 @@ ${chunkWorkflowSummary}`;
                         streamedText: collaboration.streamedText,
                       };
                     })()
-                  : await runGeneration({
-                      provider,
-                      params: finalParams,
-                      onTextDelta: suppressCalculationScaffolding ? () => {} : enqueueDelta
-                    });
+                  : await (async () => {
+                      const capabilityEscalation =
+                        await runOnDemandCapabilityEscalation({
+                          requestId,
+                          leadProvider: provider,
+                          leadModelId: modelId,
+                          params: baseParams,
+                          prepareParticipantParams: (
+                            participantParams,
+                            participantValue,
+                          ) => {
+                            const participantRuntimeContext =
+                              buildKatieRuntimeContext({
+                                provider: participantValue.provider,
+                                modelId: participantValue.modelId,
+                                modelTier: inferModelTier(
+                                  participantValue.modelId,
+                                ),
+                                classifiedIntent: resolvedRequestIntent,
+                                routingAuthority:
+                                  intentAuthority === "llm"
+                                    ? "llm-classifier"
+                                    : intentAuthority === "override"
+                                      ? "explicit-preference"
+                                      : intentAuthority,
+                                requestId,
+                              });
+                            return {
+                              ...participantParams,
+                              persona: replaceKatieRuntimeContext(
+                                participantParams.persona,
+                                participantRuntimeContext,
+                              ),
+                            };
+                          },
+                          selectHelper: async (context) => {
+                            const registrySnapshot =
+                              await getCollaborationRegistrySnapshot();
+                            const attachmentCompatibleProviders =
+                              providers.filter(
+                                (candidateProvider) =>
+                                  !failedProviderNames.has(
+                                    candidateProvider.name,
+                                  ) &&
+                                  getAttachmentSupportForProvider(
+                                    candidateProvider.name,
+                                    attachments,
+                                  ).supported,
+                              );
+
+                            return selectCollaborationHelper({
+                              requestId: context.requestId,
+                              request: context.request,
+                              requester: context.requester,
+                              providers: attachmentCompatibleProviders,
+                              usedParticipants: context.usedParticipants,
+                              modelRegistrySnapshot: registrySnapshot,
+                              actorId,
+                              actorRoutingProfile,
+                              hasImages:
+                                Array.isArray(images) && images.length > 0,
+                              hasVideoInput,
+                            });
+                          },
+                          onTrace: async (event: CollaborationTraceEvent) => {
+                            console.info(
+                              "[CapabilityEscalation] event",
+                              event,
+                            );
+                            emitChunk({
+                              type: "metadata",
+                              modelId,
+                              provider: provider.name,
+                              explainer: selectionExplainer,
+                              collaborationEvent: {
+                                type: event.type,
+                                capability: event.capability,
+                                delegationIndex: event.delegationIndex,
+                                depth: event.depth,
+                                requester: event.requester,
+                                helper: event.helper,
+                                taskPreview: event.taskPreview,
+                                detail: event.detail,
+                                durationMs: event.durationMs,
+                              },
+                            });
+                          },
+                          onFinalTextDelta: suppressCalculationScaffolding
+                            ? async () => {}
+                            : async (delta) => enqueueDelta(delta),
+                          maxEscalations: 2,
+                        });
+
+                      if (capabilityEscalation.metadata) {
+                        emitChunk({
+                          type: "metadata",
+                          modelId: capabilityEscalation.result.model,
+                          provider: capabilityEscalation.result.provider,
+                          explainer: selectionExplainer,
+                          collaboration:
+                            capabilityEscalation.metadata,
+                        });
+                      }
+
+                      return {
+                        result: capabilityEscalation.result,
+                        streamedText:
+                          capabilityEscalation.streamedText,
+                      };
+                    })();
 
                 const rawText = generation.result.text || generation.streamedText;
                 const cleanedText = suppressCalculationScaffolding
