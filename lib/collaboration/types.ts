@@ -1,0 +1,139 @@
+import type { ChatGenerateParams, LlmProvider, ProviderResponse } from "@/lib/providers/types";
+
+export type CollaborationCapability =
+  | "analysis"
+  | "verification"
+  | "critique"
+  | "coding"
+  | "debugging"
+  | "architecture"
+  | "research"
+  | "writing"
+  | "math"
+  | "vision"
+  | "other";
+
+export type CollaborationProviderName = LlmProvider["name"];
+
+export type CollaborationRequest = {
+  task: string;
+  capability: CollaborationCapability;
+  reason?: string;
+  preferredProvider?: CollaborationProviderName | null;
+  context?: string;
+};
+
+export type CollaborationParticipant = {
+  provider: CollaborationProviderName;
+  modelId: string;
+};
+
+export type CollaborationContribution = {
+  id: string;
+  depth: number;
+  requester: CollaborationParticipant;
+  helper: CollaborationParticipant;
+  task: string;
+  capability: CollaborationCapability;
+  answer: string;
+  confidence?: "high" | "medium" | "low";
+  caveats?: string[];
+  durationMs: number;
+};
+
+export type CollaborationTraceEvent = {
+  type:
+    | "collaboration_started"
+    | "delegation_requested"
+    | "helper_selected"
+    | "helper_completed"
+    | "helper_failed"
+    | "lead_ready"
+    | "final_synthesis_started"
+    | "collaboration_completed"
+    | "limit_reached";
+  requestId: string;
+  timestamp: string;
+  depth?: number;
+  delegationIndex?: number;
+  requester?: CollaborationParticipant;
+  helper?: CollaborationParticipant;
+  capability?: CollaborationCapability;
+  taskPreview?: string;
+  detail?: string;
+  durationMs?: number;
+};
+
+export type CollaborationMetadata = {
+  used: boolean;
+  delegationCount: number;
+  maxDepthReached: number;
+  contributors: CollaborationParticipant[];
+  contributions: Array<{
+    helper: CollaborationParticipant;
+    capability: CollaborationCapability;
+    task: string;
+    confidence?: "high" | "medium" | "low";
+  }>;
+};
+
+export type CollaborationSelectionContext = {
+  requestId: string;
+  request: CollaborationRequest;
+  requester: CollaborationParticipant;
+  depth: number;
+  usedParticipants: CollaborationParticipant[];
+};
+
+export type CollaborationHelperSelection = {
+  provider: LlmProvider;
+  modelId: string;
+  reasoning?: string;
+};
+
+export type CollaborationEngineOptions = {
+  requestId: string;
+  leadProvider: LlmProvider;
+  leadModelId: string;
+  providers: LlmProvider[];
+  params: ChatGenerateParams;
+  selectHelper: (
+    context: CollaborationSelectionContext,
+  ) => Promise<CollaborationHelperSelection | null>;
+  onTrace?: (event: CollaborationTraceEvent) => void | Promise<void>;
+  onFinalTextDelta?: (delta: string) => void | Promise<void>;
+  maxDelegations?: number;
+  maxDepth?: number;
+  maxContributionChars?: number;
+  maxTotalContributionChars?: number;
+  participantTimeoutMs?: number;
+};
+
+export type CollaborationEngineResult = {
+  result: ProviderResponse;
+  streamedText: string;
+  metadata: CollaborationMetadata;
+  trace: CollaborationTraceEvent[];
+};
+
+export type LeadControlDecision =
+  | {
+      action: "delegate";
+      request: CollaborationRequest;
+    }
+  | {
+      action: "ready";
+      synthesisBrief: string;
+    };
+
+export type HelperControlDecision =
+  | {
+      action: "delegate";
+      request: CollaborationRequest;
+    }
+  | {
+      action: "answer";
+      answer: string;
+      confidence?: "high" | "medium" | "low";
+      caveats?: string[];
+    };
