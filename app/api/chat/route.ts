@@ -48,6 +48,7 @@ import {
   type RepoSourceClassifierDecision
 } from "@/lib/chat/repo-source-classifier-fallback";
 import { shouldUseAdaptiveCollaboration } from "@/lib/collaboration/activation";
+import { getCollaborationConfig } from "@/lib/collaboration/config";
 import { runAdaptiveCollaboration } from "@/lib/collaboration/orchestrator";
 import { selectCollaborationHelper } from "@/lib/collaboration/routing";
 import type { CollaborationTraceEvent } from "@/lib/collaboration/types";
@@ -1210,6 +1211,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    const collaborationConfig = getCollaborationConfig();
     const collaborationEnabledForRequest = shouldUseAdaptiveCollaboration({
       message,
       intent: resolvedRequestIntent ?? null,
@@ -1509,6 +1511,11 @@ ${chunkWorkflowSummary}`;
                         onFinalTextDelta: suppressCalculationScaffolding
                           ? async () => {}
                           : async (delta) => enqueueDelta(delta),
+                        maxDelegations: collaborationConfig.maxDelegations,
+                        maxDepth: collaborationConfig.maxDepth,
+                        maxContributionChars: collaborationConfig.maxContributionChars,
+                        maxTotalContributionChars: collaborationConfig.maxTotalContributionChars,
+                        participantTimeoutMs: collaborationConfig.participantTimeoutMs,
                       });
 
                       emitChunk({
