@@ -50,6 +50,11 @@ interface ChatPanelProps {
   repoInjectionEnabled: boolean;
 }
 
+type CollaborationParticipantUi = {
+  provider: string;
+  modelId: string;
+};
+
 type CollaborationUiEvent = {
   type:
     | "collaboration_started"
@@ -57,6 +62,7 @@ type CollaborationUiEvent = {
     | "helper_selected"
     | "helper_completed"
     | "helper_failed"
+    | "helper_retrying"
     | "lead_ready"
     | "final_synthesis_started"
     | "collaboration_completed"
@@ -64,6 +70,18 @@ type CollaborationUiEvent = {
   capability?: string;
   delegationIndex?: number;
   depth?: number;
+  requester?: CollaborationParticipantUi;
+  helper?: CollaborationParticipantUi;
+  taskPreview?: string;
+  detail?: string;
+  durationMs?: number;
+};
+
+type CollaborationActivityItem = {
+  id: string;
+  type: CollaborationUiEvent["type"];
+  message: string;
+  tone: "active" | "success" | "warning" | "info";
 };
 
 type CollaborationUiMetadata = {
@@ -71,6 +89,7 @@ type CollaborationUiMetadata = {
   delegationCount: number;
   maxDepthReached: number;
   contributors?: Array<{ provider: string; modelId: string }>;
+  durationMs?: number;
 };
 
 type ChatMetadataChunk = {
@@ -83,28 +102,73 @@ type ChatMetadataChunk = {
   collaboration?: CollaborationUiMetadata;
 };
 
+function participantLabel(participant?: CollaborationParticipantUi): string {
+  return participant?.modelId?.trim() || "another model";
+}
+
+function formatDuration(durationMs?: number): string {
+  if (typeof durationMs !== "number" || durationMs < 0) {
+    return "";
+  }
+  if (durationMs < 1_000) {
+    return ` in ${durationMs} ms`;
+  }
+  return ` in ${(durationMs / 1_000).toFixed(1)}s`;
+}
+
 function collaborationStatusMessage(event: CollaborationUiEvent): string {
+  const requester = participantLabel(event.requester);
+  const helper = participantLabel(event.helper);
+  const capability = event.capability ? ` for ${event.capability}` : "";
+
   switch (event.type) {
     case "collaboration_started":
-      return "Katie is deciding whether another model would materially improve this answer…";
+      return `${requester} is leading this answer and evaluating where another model can help…`;
     case "delegation_requested":
+      return `${requester} requested another model${capability}…`;
     case "helper_selected":
-      return `Katie is consulting another model${event.capability ? ` for ${event.capability}` : ""}…`;
+      return `Katie selected ${helper}${capability}. Waiting for its findings…`;
+    case "helper_retrying":
+      return `The previous helper failed. Katie is retrying the same task with ${helper}${capability}…`;
     case "helper_completed":
-      return "A collaborator has returned its findings. Katie is evaluating them…";
+      return `${helper} returned ${event.capability ?? "its"} findings${formatDuration(event.durationMs)}. Katie is evaluating them…`;
     case "helper_failed":
-      return "A collaborator was unavailable. Katie is continuing with the remaining evidence…";
+      return event.helper
+        ? `${helper} could not complete the delegated task${event.detail ? `: ${event.detail}` : "."}`
+        : `Katie could not find a usable helper${capability}${event.detail ? `: ${event.detail}` : "."}`;
     case "lead_ready":
-      return "Katie has enough evidence and is preparing the final answer…";
+      return `${requester} has enough evidence and is preparing the final answer…`;
     case "final_synthesis_started":
-      return "Katie is synthesizing the collaborators’ findings into one answer…";
+      return `${requester} is synthesizing the collaborators’ findings into one answer…`;
     case "limit_reached":
-      return "Katie reached the collaboration budget and is finishing with the evidence already collected…";
+      return event.detail
+        ? `${event.detail} Katie is moving to final synthesis.`
+        : "Katie reached the collaboration budget and is moving to final synthesis.";
     case "collaboration_completed":
-      return "Multi-model collaboration complete.";
+      return `Multi-model collaboration complete${formatDuration(event.durationMs)}.`;
     default:
       return "Katie is collaborating across models…";
   }
+}
+
+function collaborationActivityTone(
+  event: CollaborationUiEvent,
+): CollaborationActivityItem["tone"] {
+  if (event.type === "helper_completed" || event.type === "collaboration_completed") {
+    return "success";
+  }
+  if (event.type === "helper_failed" || event.type === "limit_reached") {
+    return "warning";
+  }
+  if (
+    event.type === "delegation_requested" ||
+    event.type === "helper_selected" ||
+    event.type === "helper_retrying" ||
+    event.type === "final_synthesis_started"
+  ) {
+    return "active";
+  }
+  return "info";
 }
 
 type SelectionExplainer = {
@@ -541,6 +605,9 @@ export function ChatPanel({
   const [uploadingFiles, setUploadingFiles] = useState(false);
   const [fileReferences, setFileReferences] = useState<FileReference[]>([]);
   const [statusMessage, setStatusMessage] = useState("");
+  const [collaborationActivity, setCollaborationActivity] = useState<CollaborationActivityItem[]>([]);
+  const [collaborationActive, setCollaborationActive] = useState(false);
+  const [collaborationSummary, setCollaborationSummary] = useState<CollaborationUiMetadata | null>(null);
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
   const [emojiPickerOpen, setEmojiPickerOpen] = useState(false);
   const [showModelControls, setShowModelControls] = useState(false);
