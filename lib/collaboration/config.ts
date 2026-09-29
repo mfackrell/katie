@@ -5,6 +5,7 @@ export type CollaborationConfig = {
   maxContributionChars: number;
   maxTotalContributionChars: number;
   participantTimeoutMs: number;
+  maxTotalDurationMs: number;
 };
 
 function boundedInteger(
@@ -51,7 +52,13 @@ export function getCollaborationConfig(): CollaborationConfig {
       process.env.KATIE_COLLAB_PARTICIPANT_TIMEOUT_MS,
       120_000,
       10_000,
-      300_000,
+      240_000,
+    ),
+    maxTotalDurationMs: boundedInteger(
+      process.env.KATIE_COLLAB_MAX_TOTAL_DURATION_MS,
+      240_000,
+      30_000,
+      280_000,
     ),
   };
 }
