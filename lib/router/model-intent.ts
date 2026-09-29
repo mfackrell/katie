@@ -638,7 +638,6 @@ export function buildIntentClassifierSystemPrompt(
   const intentGuide = intents.map((intent) => `- ${intent}: ${intentDescriptions[intent]}`).join("\n");
 
   return `
-${runtimeContextBlock}
 You are the Intent Classifier for Katie.
 ## Output Format
 Return ONLY valid JSON. No markdown, no explanation.
@@ -692,6 +691,9 @@ ${routingSignalsText}
 
 ## Intent Guide
 ${intentGuide}
+
+## Per-request runtime context
+${runtimeContextBlock}
   `.trim();
 }
 
