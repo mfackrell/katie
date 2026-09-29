@@ -1541,6 +1541,7 @@ ${chunkWorkflowSummary}`;
                         maxContributionChars: collaborationConfig.maxContributionChars,
                         maxTotalContributionChars: collaborationConfig.maxTotalContributionChars,
                         participantTimeoutMs: collaborationConfig.participantTimeoutMs,
+                        maxTotalDurationMs: collaborationConfig.maxTotalDurationMs,
                       });
 
                       emitChunk({
