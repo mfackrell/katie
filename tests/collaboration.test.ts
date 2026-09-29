@@ -3,6 +3,11 @@ import assert from "node:assert/strict";
 import { shouldUseAdaptiveCollaboration } from "../lib/collaboration/activation";
 import { runAdaptiveCollaboration } from "../lib/collaboration/orchestrator";
 import {
+  CAPABILITY_REQUEST_PREFIX,
+  parseCapabilityEscalationRequest,
+} from "../lib/collaboration/capability-escalation";
+import { runOnDemandCapabilityEscalation } from "../lib/collaboration/capability-escalation-runner";
+import {
   parseHelperControlDecision,
   parseLeadControlDecision,
 } from "../lib/collaboration/protocol";
@@ -136,6 +141,111 @@ test("activation keeps simple chat fast but enables complex and explicit collabo
       hasManualOverride: true,
     }),
     false,
+  );
+});
+
+test("capability request parser defaults live research to Grok", () => {
+  const request = parseCapabilityEscalationRequest(
+    CAPABILITY_REQUEST_PREFIX +
+      ' {"task":"Check https://example.com live","capability":"research","reason":"Need current website state","preferredProvider":null}',
+  );
+
+  assert.equal(request?.capability, "research");
+  assert.equal(request?.preferredProvider, "grok");
+  assert.match(request?.task ?? "", /example\.com/);
+});
+
+test("single-model lead escalates live research to a helper and then resumes", async () => {
+  const leadCalls: ChatGenerateParams[] = [];
+  let leadPass = 0;
+  const lead: LlmProvider = {
+    name: "anthropic",
+    async listModels() {
+      return ["claude-lead"];
+    },
+    async generate(params) {
+      leadCalls.push(params);
+      return {
+        text: "",
+        provider: "anthropic",
+        model: params.modelId ?? "claude-lead",
+      };
+    },
+    async generateStream(params, handlers) {
+      leadCalls.push(params);
+      leadPass += 1;
+      const text =
+        leadPass === 1
+          ? CAPABILITY_REQUEST_PREFIX +
+            ' {"task":"Inspect https://c3execs.com/ and report the current homepage state","capability":"research","reason":"The answer benefits from current site verification","preferredProvider":"grok"}'
+          : "Final answer using the live website evidence.";
+      await handlers.onTextDelta?.(text);
+      return {
+        text,
+        provider: "anthropic",
+        model: params.modelId ?? "claude-lead",
+      };
+    },
+  };
+
+  const helperCalls: ChatGenerateParams[] = [];
+  const helper: LlmProvider = {
+    name: "grok",
+    async listModels() {
+      return ["grok-web"];
+    },
+    async generate(params) {
+      helperCalls.push(params);
+      return {
+        text: "Live check: the current homepage is updated.",
+        provider: "grok",
+        model: params.modelId ?? "grok-web",
+      };
+    },
+  };
+
+  let visibleText = "";
+  const result = await runOnDemandCapabilityEscalation({
+    requestId: "req-capability-escalation",
+    leadProvider: lead,
+    leadModelId: "claude-lead",
+    params: {
+      ...baseParams,
+      user: "What am I really building with C3?",
+      requestIntent: "social-emotional",
+      modelId: "claude-lead",
+    },
+    async selectHelper(context) {
+      assert.equal(context.request.capability, "research");
+      assert.equal(context.request.preferredProvider, "grok");
+      return {
+        provider: helper,
+        modelId: "grok-web",
+      };
+    },
+    async onFinalTextDelta(delta) {
+      visibleText += delta;
+    },
+  });
+
+  assert.equal(helperCalls.length, 1);
+  assert.equal(helperCalls[0]?.requestIntent, "web-search");
+  assert.match(helperCalls[0]?.user ?? "", /c3execs\.com/);
+  assert.equal(leadCalls.length, 2);
+  assert.match(leadCalls[1]?.user ?? "", /current homepage is updated/);
+  assert.equal(
+    visibleText,
+    "Final answer using the live website evidence.",
+  );
+  assert.equal(result.result.model, "claude-lead");
+  assert.equal(result.result.collaboration?.delegationCount, 1);
+  assert.equal(
+    result.result.collaboration?.contributors[0]?.provider,
+    "grok",
+  );
+  assert.equal(
+    result.trace.some((event) => event.type === "helper_completed"),
+    true,
   );
 });
 
