@@ -50,6 +50,8 @@ export type CollaborationTraceEvent = {
     | "helper_failed"
     | "helper_retrying"
     | "lead_ready"
+    | "lead_failed"
+    | "lead_replaced"
     | "final_synthesis_started"
     | "collaboration_completed"
     | "limit_reached";
@@ -102,6 +104,13 @@ export type CollaborationEngineOptions = {
   selectHelper: (
     context: CollaborationSelectionContext,
   ) => Promise<CollaborationHelperSelection | null>;
+  selectReplacementLead?: (context: {
+    requestId: string;
+    failedLead: CollaborationParticipant;
+    error: unknown;
+    usedParticipants: CollaborationParticipant[];
+    contributions: CollaborationContribution[];
+  }) => Promise<CollaborationHelperSelection | null>;
   onTrace?: (event: CollaborationTraceEvent) => void | Promise<void>;
   onFinalTextDelta?: (delta: string) => void | Promise<void>;
   maxDelegations?: number;
