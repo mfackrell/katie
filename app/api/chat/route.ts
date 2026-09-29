@@ -1644,7 +1644,7 @@ ${chunkWorkflowSummary}`;
                           requestId,
                           leadProvider: provider,
                           leadModelId: modelId,
-                          params: baseParams,
+                          params: finalParams,
                           prepareParticipantParams: (
                             participantParams,
                             participantValue,
