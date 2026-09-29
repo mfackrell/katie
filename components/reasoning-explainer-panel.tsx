@@ -3,6 +3,34 @@
 import { useMemo } from "react";
 import type { ReasoningUiState } from "@/lib/chat/reasoning-stream";
 
+type CollaborationActivityItem = {
+  id: string;
+  type: string;
+  message: string;
+  tone: "active" | "success" | "warning" | "info";
+};
+
+type CollaborationSummary = {
+  used: boolean;
+  delegationCount: number;
+  maxDepthReached: number;
+  contributors?: Array<{ provider: string; modelId: string }>;
+  durationMs?: number;
+};
+
+function collaborationMarker(tone: CollaborationActivityItem["tone"]): string {
+  switch (tone) {
+    case "success":
+      return "✓";
+    case "warning":
+      return "!";
+    case "active":
+      return "→";
+    default:
+      return "•";
+  }
+}
+
 function truncateSnippet(text: string, maxLength = 72): string {
   const compact = text.replace(/\s+/g, " ").trim();
   if (compact.length <= maxLength) {
@@ -37,10 +65,18 @@ function sanitizeLiveExplainer(text: string): string {
 export function ReasoningExplainerPanel({
   loading,
   state,
+  statusMessage,
+  collaborationActive = false,
+  collaborationActivity = [],
+  collaborationSummary,
   onClose
 }: {
   loading: boolean;
   state: ReasoningUiState;
+  statusMessage?: string;
+  collaborationActive?: boolean;
+  collaborationActivity?: CollaborationActivityItem[];
+  collaborationSummary?: CollaborationSummary | null;
   onClose?: () => void;
 }) {
   const isWaitingToStart = loading && !state.startedAt;
@@ -65,7 +101,15 @@ export function ReasoningExplainerPanel({
       <div className="mb-2 flex items-start justify-between gap-2">
         <div className="min-w-0">
           <h3 className="truncate text-[12px] font-medium text-zinc-100">Thinking</h3>
-          <p className="text-[11px] text-zinc-400">{loading ? "Streaming updates" : hasFinalAnswer ? "Done" : "Idle"}</p>
+          <p className="text-[11px] text-zinc-400">
+            {collaborationActive
+              ? "Multi-model collaboration"
+              : loading
+                ? "Streaming updates"
+                : hasFinalAnswer
+                  ? "Done"
+                  : "Idle"}
+          </p>
         </div>
         {onClose ? (
           <button
@@ -89,14 +133,59 @@ export function ReasoningExplainerPanel({
 
         <section>
           <p className="mb-1 text-[10px] font-medium uppercase tracking-[0.14em] text-zinc-500">Live status</p>
-          <div className="max-h-24 overflow-y-auto rounded-md bg-white/[0.03] px-2.5 py-2 text-[12px] leading-5 text-zinc-200">
-            {cleanLiveExplainer ? (
+          <div className="max-h-28 overflow-y-auto rounded-md bg-white/[0.03] px-2.5 py-2 text-[12px] leading-5 text-zinc-200">
+            {statusMessage ? (
+              <p>{statusMessage}</p>
+            ) : cleanLiveExplainer ? (
               <p>{cleanLiveExplainer}</p>
             ) : (
-              <p className="text-zinc-500">Reasoning updates will appear here.</p>
+              <p className="text-zinc-500">Waiting for Katie’s next processing update…</p>
             )}
           </div>
         </section>
+
+        {collaborationActivity.length > 0 ? (
+          <section>
+            <div className="mb-1 flex items-center justify-between gap-2">
+              <p className="text-[10px] font-medium uppercase tracking-[0.14em] text-zinc-500">
+                Collaboration
+              </p>
+              {collaborationSummary?.used ? (
+                <p className="text-[10px] text-zinc-500">
+                  {collaborationSummary.delegationCount} delegation
+                  {collaborationSummary.delegationCount === 1 ? "" : "s"}
+                  {typeof collaborationSummary.durationMs === "number"
+                    ? ` · ${(collaborationSummary.durationMs / 1000).toFixed(1)}s`
+                    : ""}
+                </p>
+              ) : null}
+            </div>
+            <div className="max-h-44 overflow-y-auto rounded-md bg-white/[0.025] px-2.5 py-2">
+              <ul className="space-y-2">
+                {collaborationActivity.map((item) => (
+                  <li key={item.id} className="flex items-start gap-2 text-[11px] leading-4 text-zinc-300">
+                    <span
+                      className={[
+                        "mt-0.5 inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-full text-[9px] font-semibold",
+                        item.tone === "success"
+                          ? "bg-emerald-500/15 text-emerald-300"
+                          : item.tone === "warning"
+                            ? "bg-amber-500/15 text-amber-200"
+                            : item.tone === "active"
+                              ? "bg-sky-500/15 text-sky-200"
+                              : "bg-white/[0.06] text-zinc-400",
+                      ].join(" ")}
+                      aria-hidden="true"
+                    >
+                      {collaborationMarker(item.tone)}
+                    </span>
+                    <span>{item.message}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          </section>
+        ) : null}
 
         {compactCategories.length > 0 ? (
           <section>
