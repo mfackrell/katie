@@ -381,7 +381,10 @@ async function runProviderErrorRerouteCheck(): Promise<boolean> {
   const failedProviders = new Set<LlmProvider["name"]>();
   const executed: string[] = [];
 
-  const { result, attempt } = await runWithRefusalFallback({
+  const { result, attempt } = await runWithRefusalFallback<{
+    provider: LlmProvider;
+    modelId: string;
+  }>({
     attempts: [
       { provider: openai, modelId: "health-openai-broken" },
       { provider: openai, modelId: "health-openai-static-fallback" },
