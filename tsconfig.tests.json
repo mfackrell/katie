@@ -21,6 +21,7 @@
     "lib/collaboration/routing.ts",
     "lib/collaboration/activation.ts",
     "lib/collaboration/protocol.ts",
+    "lib/collaboration/config.ts",
     "lib/collaboration/types.ts",
     "lib/router/model-intent.ts",
     "lib/providers/types.ts",
