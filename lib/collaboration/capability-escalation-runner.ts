@@ -1,5 +1,4 @@
 import {
-  getCapabilityEscalationInstruction,
   runCapabilityAwareGeneration,
   withCapabilityEscalationInstruction,
 } from "@/lib/collaboration/capability-escalation";
