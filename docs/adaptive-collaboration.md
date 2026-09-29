@@ -102,10 +102,12 @@ If a helper:
 
 - times out,
 - has no eligible model,
-- returns an invalid control payload,
+- returns an invalid or empty control payload,
 - hits a provider error,
 
-Katie logs the problem and returns control to the requester. The lead can continue with existing evidence or request another specialist if budget remains.
+Katie records the failure and automatically reroutes the same delegated task to another eligible model when time and candidate budget remain. The failed model is excluded from the retry. This retry occurs inside the delegation itself, so Katie does not waste an extra lead-model control pass merely asking for the same work again.
+
+If no replacement is available, or the remaining collaboration time is reserved for final synthesis, control returns to the requester and the lead continues with the evidence already collected.
 
 If the lead provider itself fails, the existing provider refusal/error fallback path remains authoritative.
 
@@ -119,15 +121,22 @@ All underlying models still operate as Katie. Provider/model identity is orchest
 
 ## User interface
 
-The UI may show user-safe progress such as:
+The UI shows user-safe collaboration progress in the Thinking panel and the main loading state. It includes:
 
-- Katie is deciding whether another model would help.
-- Katie is consulting another model for verification.
-- A collaborator returned findings.
-- Katie is synthesizing the collaborators' findings.
-- The collaboration budget was reached; Katie is finishing with existing evidence.
+- the selected lead model;
+- when the lead requests another model and the requested capability;
+- the helper model Katie selected;
+- successful helper completion and elapsed time;
+- helper failure in sanitized language;
+- automatic replacement-model retries;
+- collaboration/time-budget decisions;
+- when the lead has enough evidence;
+- when final synthesis begins;
+- final delegation count, contributors, and collaboration duration.
 
-The UI does not expose hidden chain-of-thought, control JSON, or internal private reasoning.
+The send button changes from Routing to Collaborating or Synthesizing as the request progresses, and the normal loading message shows the current collaboration status instead of a generic model-is-thinking message.
+
+The UI does not expose hidden chain-of-thought, internal control JSON, raw provider error payloads, or private reasoning.
 
 ## Observability
 
@@ -156,6 +165,7 @@ This allows one Vercel request ID to reconstruct the collaboration graph.
 - recursive helper-requested delegation;
 - helper failure recovery;
 - hard delegation limits;
+- automatic helper failure rerouting;
 - the no-helper/direct path.
 
 These tests use fake providers and make no paid API requests.
