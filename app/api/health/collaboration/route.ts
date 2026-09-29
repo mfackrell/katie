@@ -263,6 +263,103 @@ async function runHelperRetryCheck(): Promise<boolean> {
   );
 }
 
+async function runLeadFailoverCheck(): Promise<boolean> {
+  const leadCalls: ChatGenerateParams[] = [];
+  let leadControlIndex = 0;
+  const failingLead: FakeProvider = {
+    name: "openai",
+    calls: leadCalls,
+    async listModels() {
+      return ["health-failing-lead"];
+    },
+    async generate(params) {
+      leadCalls.push(params);
+      const responses = [
+        JSON.stringify({
+          action: "delegate",
+          request: {
+            task: "Review the architecture.",
+            capability: "architecture",
+          },
+        }),
+        JSON.stringify({
+          action: "ready",
+          synthesisBrief: "Use the completed helper review.",
+        }),
+      ];
+      const text = responses[leadControlIndex] ?? "";
+      leadControlIndex += 1;
+      return {
+        text,
+        provider: "openai",
+        model: params.modelId ?? "health-failing-lead",
+      };
+    },
+    async generateStream() {
+      throw new Error("429 You have no credits remaining.");
+    },
+  };
+
+  const helper = makeProvider({
+    name: "anthropic",
+    modelId: "health-preserved-helper",
+    controlResponses: [
+      JSON.stringify({
+        action: "answer",
+        answer: "Preserved health-check architecture evidence.",
+        confidence: "high",
+      }),
+    ],
+  });
+
+  const replacement = makeProvider({
+    name: "google",
+    modelId: "health-replacement-lead",
+    controlResponses: [],
+    finalText: "health-replacement-final",
+  });
+
+  let helperSelections = 0;
+  let replacementSelections = 0;
+  const result = await runAdaptiveCollaboration({
+    requestId: "health-lead-failover",
+    leadProvider: failingLead,
+    leadModelId: "health-failing-lead",
+    providers: [failingLead, helper, replacement],
+    params: {
+      ...baseParams,
+      modelId: "health-failing-lead",
+    },
+    async selectHelper() {
+      helperSelections += 1;
+      return { provider: helper, modelId: "health-preserved-helper" };
+    },
+    async selectReplacementLead(context) {
+      replacementSelections += 1;
+      if (
+        context.contributions.length !== 1 ||
+        !context.contributions[0]?.answer.includes("Preserved health-check")
+      ) {
+        return null;
+      }
+      return {
+        provider: replacement,
+        modelId: "health-replacement-lead",
+      };
+    },
+  });
+
+  return (
+    helperSelections === 1 &&
+    replacementSelections === 1 &&
+    result.result.provider === "google" &&
+    result.result.model === "health-replacement-lead" &&
+    result.result.text === "health-replacement-final" &&
+    result.trace.some((event) => event.type === "lead_failed") &&
+    result.trace.some((event) => event.type === "lead_replaced")
+  );
+}
+
 async function runBudgetCheck(): Promise<boolean> {
   const lead = makeProvider({
     name: "grok",
@@ -321,11 +418,13 @@ export async function GET() {
       basicDelegation,
       nestedDelegation,
       helperRetry,
+      leadFailover,
       boundedDelegation,
     ] = await Promise.all([
       runBasicDelegationCheck(),
       runNestedDelegationCheck(),
       runHelperRetryCheck(),
+      runLeadFailoverCheck(),
       runBudgetCheck(),
     ]);
 
@@ -333,6 +432,7 @@ export async function GET() {
       basicDelegation &&
       nestedDelegation &&
       helperRetry &&
+      leadFailover &&
       boundedDelegation;
 
     return NextResponse.json(
@@ -342,6 +442,7 @@ export async function GET() {
           basicDelegation,
           nestedDelegation,
           helperRetry,
+          leadFailover,
           boundedDelegation,
         },
         durationMs: Date.now() - startedAt,
