@@ -674,6 +674,43 @@ export function ChatPanel({
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   };
 
+  const recordCollaborationEvent = (event: CollaborationUiEvent) => {
+    const message = collaborationStatusMessage(event);
+    setStatusMessage(message);
+    setCollaborationActivity((current) => [
+      ...current,
+      {
+        id: crypto.randomUUID(),
+        type: event.type,
+        message,
+        tone: collaborationActivityTone(event),
+      },
+    ].slice(-14));
+
+    if (event.type === "collaboration_started") {
+      setCollaborationActive(true);
+    }
+    if (event.type === "collaboration_completed") {
+      setCollaborationActive(false);
+    }
+
+    if (
+      (event.type === "helper_selected" || event.type === "helper_retrying") &&
+      event.helper?.modelId
+    ) {
+      setStreamingModel(event.helper.modelId);
+    } else if (
+      (event.type === "collaboration_started" ||
+        event.type === "lead_ready" ||
+        event.type === "final_synthesis_started" ||
+        event.type === "helper_failed" ||
+        event.type === "limit_reached") &&
+      event.requester?.modelId
+    ) {
+      setStreamingModel(event.requester.modelId);
+    }
+  };
+
   useEffect(() => {
     async function fetchModels() {
       const response = await fetch("/api/models");
@@ -780,6 +817,9 @@ export function ChatPanel({
       setExplainerOpen(false);
       setStatusMessage("");
       setStreamingModel(null);
+      setCollaborationActivity([]);
+      setCollaborationActive(false);
+      setCollaborationSummary(null);
       setReasoningState(createReasoningUiState());
       setReasoningPopupVisible(false);
       setCopiedMessageId(null);
@@ -1089,6 +1129,10 @@ export function ChatPanel({
     setSelectionExplainer(null);
     setIsRoutingSelectionInFlight(true);
     setExplainerOpen(true);
+    setCollaborationActivity([]);
+    setCollaborationActive(false);
+    setCollaborationSummary(null);
+    setStatusMessage("Routing request and selecting the lead model…");
     setReasoningState(createReasoningUiState());
     if (showLiveReasoningExplainer) {
       setReasoningPopupDismissed(false);
@@ -1244,6 +1288,7 @@ export function ChatPanel({
       let assets: Array<{ type: string; url: string }> = [];
       let provider = "unknown";
       let model = "unknown";
+      let sawInitialMetadata = false;
       let sawReasoningStart = false;
       let sawFinalReasoningAnswer = false;
       let fallbackReasoningDeltaCount = 0;
@@ -1321,8 +1366,24 @@ export function ChatPanel({
             provider = chunk.provider;
             setSelectionExplainer(chunk.explainer ?? null);
             setIsRoutingSelectionInFlight(false);
+
+            if (!sawInitialMetadata && !chunk.collaborationEvent) {
+              sawInitialMetadata = true;
+              setStatusMessage(
+                chunk.modelId && chunk.modelId !== "unknown"
+                  ? `${chunk.modelId} selected as lead. Preparing the answer…`
+                  : "Lead model selected. Preparing the answer…",
+              );
+            }
+
             if (chunk.collaborationEvent) {
-              setStatusMessage(collaborationStatusMessage(chunk.collaborationEvent));
+              sawInitialMetadata = true;
+              recordCollaborationEvent(chunk.collaborationEvent);
+            }
+
+            if (chunk.collaboration) {
+              setCollaborationSummary(chunk.collaboration);
+              setCollaborationActive(false);
             }
           }
 
@@ -1382,8 +1443,24 @@ export function ChatPanel({
           provider = trailingChunk.provider;
           setSelectionExplainer(trailingChunk.explainer ?? null);
           setIsRoutingSelectionInFlight(false);
+
+          if (!sawInitialMetadata && !trailingChunk.collaborationEvent) {
+            sawInitialMetadata = true;
+            setStatusMessage(
+              trailingChunk.modelId && trailingChunk.modelId !== "unknown"
+                ? `${trailingChunk.modelId} selected as lead. Preparing the answer…`
+                : "Lead model selected. Preparing the answer…",
+            );
+          }
+
           if (trailingChunk.collaborationEvent) {
-            setStatusMessage(collaborationStatusMessage(trailingChunk.collaborationEvent));
+            sawInitialMetadata = true;
+            recordCollaborationEvent(trailingChunk.collaborationEvent);
+          }
+
+          if (trailingChunk.collaboration) {
+            setCollaborationSummary(trailingChunk.collaboration);
+            setCollaborationActive(false);
           }
         }
 
@@ -2110,6 +2187,10 @@ export function ChatPanel({
             <ReasoningExplainerPanel
               loading={loading}
               state={reasoningState}
+              statusMessage={statusMessage}
+              collaborationActive={collaborationActive}
+              collaborationActivity={collaborationActivity}
+              collaborationSummary={collaborationSummary}
               onClose={() => {
                 setReasoningPopupVisible(false);
                 setReasoningPopupDismissed(true);
@@ -2295,7 +2376,8 @@ export function ChatPanel({
             <p className="italic text-zinc-400">
               {uploadingFiles
                 ? "Uploading attachments..."
-                : `${streamingModel ?? selectedOverride?.modelId ?? "Master Router"} is thinking...`}
+                : statusMessage ||
+                  `${streamingModel ?? selectedOverride?.modelId ?? "Master Router"} is thinking...`}
             </p>
           </div>
         )}
@@ -2456,7 +2538,17 @@ export function ChatPanel({
                 disabled={!canSend}
                 className="h-11 min-w-16 flex-none rounded-xl bg-gradient-to-r from-emerald-500 to-sky-500 px-4 text-sm font-semibold text-white shadow-[0_10px_24px_rgba(16,185,129,0.25)] transition active:scale-95 disabled:opacity-50 sm:rounded-2xl sm:px-5 sm:py-3"
               >
-                {loading || uploadingFiles ? "Routing..." : "Send"}
+                {uploadingFiles
+                  ? "Uploading..."
+                  : loading
+                    ? collaborationActive
+                      ? "Collaborating..."
+                      : isRoutingSelectionInFlight
+                        ? "Routing..."
+                        : statusMessage.toLowerCase().includes("synthes")
+                          ? "Synthesizing..."
+                          : "Thinking..."
+                    : "Send"}
               </button>
             </div>
           </div>
