@@ -73,8 +73,7 @@ function extractClaudeText(content: ClaudeContentBlock[] | undefined): string {
   return (content ?? [])
     .filter((block) => block.type === "text" && typeof block.text === "string")
     .map((block) => block.text as string)
-    .join("\n")
-    .trim();
+    .join("");
 }
 
 function addTokenCount(current: number | undefined, next: number | undefined): number | undefined {
@@ -306,7 +305,9 @@ export class ClaudeProvider implements LlmProvider {
 
       if (event.type === "message_start") {
         inputTokens = addTokenCount(inputTokens, event.message?.usage?.input_tokens);
-        outputTokens = addTokenCount(outputTokens, event.message?.usage?.output_tokens);
+        if (typeof event.message?.usage?.output_tokens === "number") {
+          outputTokens = Math.max(outputTokens ?? 0, event.message.usage.output_tokens);
+        }
         return;
       }
 
@@ -338,7 +339,9 @@ export class ClaudeProvider implements LlmProvider {
         if (event.delta?.stop_reason) {
           stopReason = event.delta.stop_reason;
         }
-        outputTokens = addTokenCount(outputTokens, event.usage?.output_tokens);
+        if (typeof event.usage?.output_tokens === "number") {
+          outputTokens = Math.max(outputTokens ?? 0, event.usage.output_tokens);
+        }
       }
     };
 
@@ -357,6 +360,7 @@ export class ClaudeProvider implements LlmProvider {
       }
 
       if (done) {
+        buffer += decoder.decode();
         break;
       }
     }
