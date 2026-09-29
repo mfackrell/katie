@@ -603,63 +603,140 @@ export async function runAdaptiveCollaboration(
     }
   }
 
+  let synthesisLead = lead;
+  let synthesisProvider = options.leadProvider;
+  let synthesisModelId = options.leadModelId;
+
   await emit({
     type: "final_synthesis_started",
-    requester: lead,
+    requester: synthesisLead,
     detail: `Synthesizing with ${contributions.length} helper contribution(s).`,
   });
 
-  const finalParams = prepareParams(
-    withPersona(
-      {
-        ...options.params,
-        user: buildFinalUser(options.params, synthesisBrief, contributions),
-      },
-      options.leadModelId,
-      getFinalSynthesisInstruction(),
-    ),
-    lead,
-    "final-synthesis",
-  );
+  const runFinalSynthesisAttempt = async (
+    provider: LlmProvider,
+    modelId: string,
+    participantValue: CollaborationParticipant,
+  ): Promise<{ result: ProviderResponse; text: string }> => {
+    const remaining = remainingTotalMs();
+    if (remaining < MIN_CONTROL_TIME_MS) {
+      throw new Error("Collaboration final synthesis ran out of reserved execution time.");
+    }
 
-  let streamedText = "";
-  const finalTimeoutMs = Math.max(
-    MIN_CONTROL_TIME_MS,
-    Math.min(participantTimeoutMs * 2, remainingTotalMs()),
-  );
-  const finalResult = options.leadProvider.generateStream
-    ? await withTimeout(
-        options.leadProvider.generateStream(finalParams, {
-          async onTextDelta(delta) {
-            streamedText += delta;
-            await options.onFinalTextDelta?.(delta);
-          },
-        }),
-        finalTimeoutMs,
-        `Collaboration final synthesis ${lead.provider}:${lead.modelId}`,
-      )
-    : await withTimeout(
-        options.leadProvider.generate(finalParams),
-        finalTimeoutMs,
-        `Collaboration final synthesis ${lead.provider}:${lead.modelId}`,
+    const finalParams = prepareParams(
+      withPersona(
+        {
+          ...options.params,
+          user: buildFinalUser(options.params, synthesisBrief, contributions),
+        },
+        modelId,
+        getFinalSynthesisInstruction(),
+      ),
+      participantValue,
+      "final-synthesis",
+    );
+
+    const finalTimeoutMs = Math.max(
+      MIN_CONTROL_TIME_MS,
+      Math.min(participantTimeoutMs * 2, remaining),
+    );
+
+    let bufferedText = "";
+    const result = provider.generateStream
+      ? await withTimeout(
+          provider.generateStream(finalParams, {
+            async onTextDelta(delta) {
+              bufferedText += delta;
+            },
+          }),
+          finalTimeoutMs,
+          `Collaboration final synthesis ${participantValue.provider}:${participantValue.modelId}`,
+        )
+      : await withTimeout(
+          provider.generate(finalParams),
+          finalTimeoutMs,
+          `Collaboration final synthesis ${participantValue.provider}:${participantValue.modelId}`,
+        );
+
+    const text = result.text || bufferedText;
+    if (!text.trim()) {
+      throw new Error("Collaboration final synthesis returned an empty response.");
+    }
+
+    return { result, text };
+  };
+
+  let finalResult: ProviderResponse | null = null;
+  let finalText = "";
+  let finalSynthesisError: unknown = null;
+
+  for (let synthesisAttempt = 0; synthesisAttempt < 3; synthesisAttempt += 1) {
+    try {
+      const completed = await runFinalSynthesisAttempt(
+        synthesisProvider,
+        synthesisModelId,
+        synthesisLead,
       );
+      finalResult = completed.result;
+      finalText = completed.text;
+      break;
+    } catch (error) {
+      finalSynthesisError = error;
+      await emit({
+        type: "lead_failed",
+        requester: synthesisLead,
+        detail: error instanceof Error ? error.message : String(error),
+      });
 
-  const finalText = finalResult.text || streamedText;
-  if (!finalText.trim()) {
-    throw new Error("Collaboration final synthesis returned an empty response.");
+      if (!options.selectReplacementLead || synthesisAttempt >= 2) {
+        break;
+      }
+
+      const replacementLead = await options.selectReplacementLead({
+        requestId: options.requestId,
+        failedLead: synthesisLead,
+        error,
+        usedParticipants: [...usedParticipants.values()],
+        contributions: [...contributions],
+      });
+
+      if (!replacementLead) {
+        break;
+      }
+
+      synthesisProvider = replacementLead.provider;
+      synthesisModelId = replacementLead.modelId;
+      synthesisLead = participant(synthesisProvider, synthesisModelId);
+      usedParticipants.set(participantKey(synthesisLead), synthesisLead);
+
+      await emit({
+        type: "lead_replaced",
+        requester: synthesisLead,
+        detail:
+          replacementLead.reasoning ??
+          "Katie selected a different provider to preserve completed collaboration work and finish synthesis.",
+      });
+    }
   }
 
-  if (!streamedText && finalText) {
-    await options.onFinalTextDelta?.(finalText);
-    streamedText = finalText;
+  if (!finalResult || !finalText.trim()) {
+    throw (
+      finalSynthesisError ??
+      new Error("Collaboration final synthesis failed for all eligible lead models.")
+    );
   }
+
+  await options.onFinalTextDelta?.(finalText);
+  const streamedText = finalText;
 
   const metadata: CollaborationMetadata = {
     used: contributions.length > 0 || delegationCount > 0,
     delegationCount,
     maxDepthReached,
     contributors: [...usedParticipants.values()].filter(
-      (value) => participantKey(value) !== participantKey(lead),
+      (value) =>
+        participantKey(value) !== participantKey(lead) &&
+        participantKey(value) !== participantKey(synthesisLead),
     ),
     contributions: contributions.map((contribution) => ({
       helper: contribution.helper,
@@ -672,14 +749,16 @@ export async function runAdaptiveCollaboration(
 
   const result: ProviderResponse = {
     ...finalResult,
+    provider: synthesisProvider.name,
+    model: synthesisModelId,
     text: finalText,
     collaboration: metadata,
   };
 
   await emit({
     type: "collaboration_completed",
-    requester: lead,
-    detail: `delegations=${delegationCount}; contributions=${contributions.length}; maxDepth=${maxDepthReached}`,
+    requester: synthesisLead,
+    detail: `delegations=${delegationCount}; contributions=${contributions.length}; maxDepth=${maxDepthReached}; finalLead=${synthesisLead.provider}:${synthesisLead.modelId}`,
     durationMs: Date.now() - collaborationStartedAt,
   });
 
