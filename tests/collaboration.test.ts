@@ -286,6 +286,72 @@ test("a helper can recursively request another model before answering the lead",
   );
 });
 
+test("failed helper is automatically rerouted without another lead control pass", async () => {
+  const lead = fakeProvider({
+    name: "anthropic",
+    modelId: "lead",
+    controlResponses: [
+      JSON.stringify({
+        action: "delegate",
+        request: {
+          task: "Challenge the explanation.",
+          capability: "critique",
+        },
+      }),
+      JSON.stringify({
+        action: "ready",
+        synthesisBrief: "Use the successful replacement critique.",
+      }),
+    ],
+    finalText: "Replacement helper synthesis.",
+  });
+
+  const failedHelper = fakeProvider({
+    name: "google",
+    modelId: "failed-helper",
+    controlResponses: [""],
+  });
+
+  const replacementHelper = fakeProvider({
+    name: "openai",
+    modelId: "replacement-helper",
+    controlResponses: [
+      JSON.stringify({
+        action: "answer",
+        answer: "Independent critique completed.",
+        confidence: "high",
+      }),
+    ],
+  });
+
+  let selectionCount = 0;
+  const result = await runAdaptiveCollaboration({
+    requestId: "req-helper-reroute",
+    leadProvider: lead,
+    leadModelId: "lead",
+    providers: [lead, failedHelper, replacementHelper],
+    params: baseParams,
+    maxDelegations: 3,
+    async selectHelper() {
+      selectionCount += 1;
+      return selectionCount === 1
+        ? { provider: failedHelper, modelId: "failed-helper" }
+        : { provider: replacementHelper, modelId: "replacement-helper" };
+    },
+  });
+
+  assert.equal(selectionCount, 2);
+  assert.equal(result.metadata.delegationCount, 1);
+  assert.equal(result.metadata.contributors.length, 1);
+  assert.equal(result.metadata.contributors[0]?.modelId, "replacement-helper");
+  assert.equal(
+    result.trace.some((event) => event.type === "helper_retrying"),
+    true,
+  );
+  assert.equal(lead.calls.length, 3);
+  assert.equal(result.result.text, "Replacement helper synthesis.");
+});
+
 test("helper failure is non-fatal and lead still produces the answer", async () => {
   const lead = fakeProvider({
     name: "openai",
