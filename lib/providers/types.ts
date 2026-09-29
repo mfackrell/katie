@@ -41,6 +41,35 @@ export interface ProviderResponse {
   finishReason?: string;
   truncated?: boolean;
   continuationCount?: number;
+  collaboration?: {
+    used: boolean;
+    delegationCount: number;
+    maxDepthReached: number;
+    contributors: Array<{
+      provider: "openai" | "google" | "grok" | "anthropic";
+      modelId: string;
+    }>;
+    contributions: Array<{
+      helper: {
+        provider: "openai" | "google" | "grok" | "anthropic";
+        modelId: string;
+      };
+      capability:
+        | "analysis"
+        | "verification"
+        | "critique"
+        | "coding"
+        | "debugging"
+        | "architecture"
+        | "research"
+        | "writing"
+        | "math"
+        | "vision"
+        | "other";
+      task: string;
+      confidence?: "high" | "medium" | "low";
+    }>;
+  };
   content?: Array<{
     type: string;
     text?: string;
