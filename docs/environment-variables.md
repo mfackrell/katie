@@ -78,6 +78,8 @@ ROUTER_POLICY_ENGINE_ENABLED=false
 - `KATIE_COLLAB_MAX_TOTAL_CONTRIBUTION_CHARS` (optional, default: `48000`)  
   Maximum retained helper evidence across the whole collaborative turn.
 - `KATIE_COLLAB_PARTICIPANT_TIMEOUT_MS` (optional, default: `120000`)  
-  Per-model timeout for collaboration control/helper passes. Final synthesis receives twice this window.
+  Per-model timeout for collaboration control/helper passes.
+- `KATIE_COLLAB_MAX_TOTAL_DURATION_MS` (optional, default: `240000`, hard max: `280000`)  
+  Global wall-clock budget for one collaborative turn. Katie reserves part of this window for the final synthesis so helper work cannot consume the full serverless request lifetime.
 
 Collaboration activates automatically for high-complexity requests and selected medium-complexity technical/research intents. Users can explicitly request it with phrases such as "work together", "ask another model", "multi-model", "council", or "deep review". Manual provider/model overrides remain single-model unless the user explicitly requests collaboration.
