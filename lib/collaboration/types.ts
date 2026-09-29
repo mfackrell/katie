@@ -75,6 +75,7 @@ export type CollaborationMetadata = {
     task: string;
     confidence?: "high" | "medium" | "low";
   }>;
+  durationMs?: number;
 };
 
 export type CollaborationSelectionContext = {
@@ -107,6 +108,7 @@ export type CollaborationEngineOptions = {
   maxContributionChars?: number;
   maxTotalContributionChars?: number;
   participantTimeoutMs?: number;
+  maxTotalDurationMs?: number;
   prepareParticipantParams?: (
     params: ChatGenerateParams,
     participant: CollaborationParticipant,
