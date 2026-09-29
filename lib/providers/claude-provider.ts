@@ -102,17 +102,18 @@ function appendContinuation(base: string, continuation: string): string {
 }
 
 function buildContinuationMessages(baseMessages: ClaudeMessage[], accumulatedText: string): ClaudeMessage[] {
+  const priorAssistantOutput = accumulatedText.trimEnd();
   return [
     ...baseMessages,
     {
       role: "assistant",
-      content: accumulatedText
+      content: priorAssistantOutput
+    },
+    {
+      role: "user",
+      content: CLAUDE_CONTINUATION_INSTRUCTION
     }
   ];
-}
-
-function buildContinuationSystem(system: string): string {
-  return `${system}\n\nCONTINUATION_INSTRUCTION:\n${CLAUDE_CONTINUATION_INSTRUCTION}`;
 }
 
 function toProviderResponse(params: {
@@ -394,7 +395,7 @@ export class ClaudeProvider implements LlmProvider {
       const continuationPass = passIndex > 0;
       const pass = await this.generatePass({
         model: selectedModel,
-        system: continuationPass ? buildContinuationSystem(system) : system,
+        system,
         messages: continuationPass
           ? buildContinuationMessages(messages, accumulatedText)
           : messages
@@ -464,7 +465,7 @@ export class ClaudeProvider implements LlmProvider {
       const pass = await this.generateStreamPass(
         {
           model: selectedModel,
-          system: continuationPass ? buildContinuationSystem(system) : system,
+          system,
           messages: continuationPass
             ? buildContinuationMessages(messages, accumulatedText)
             : messages
