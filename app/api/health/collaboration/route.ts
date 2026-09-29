@@ -195,6 +195,74 @@ async function runNestedDelegationCheck(): Promise<boolean> {
   );
 }
 
+async function runHelperRetryCheck(): Promise<boolean> {
+  const lead = makeProvider({
+    name: "anthropic",
+    modelId: "retry-lead",
+    controlResponses: [
+      JSON.stringify({
+        action: "delegate",
+        request: {
+          task: "Critique the health-check explanation.",
+          capability: "critique",
+        },
+      }),
+      JSON.stringify({
+        action: "ready",
+        synthesisBrief: "Use the replacement helper critique.",
+      }),
+    ],
+    finalText: "retry-final",
+  });
+
+  const failedHelper = makeProvider({
+    name: "google",
+    modelId: "retry-helper-failed",
+    controlResponses: [""],
+  });
+
+  const replacementHelper = makeProvider({
+    name: "openai",
+    modelId: "retry-helper-replacement",
+    controlResponses: [
+      JSON.stringify({
+        action: "answer",
+        answer: "Replacement critique complete.",
+        confidence: "high",
+      }),
+    ],
+  });
+
+  let selectionCount = 0;
+  const result = await runAdaptiveCollaboration({
+    requestId: "health-helper-retry",
+    leadProvider: lead,
+    leadModelId: "retry-lead",
+    providers: [lead, failedHelper, replacementHelper],
+    params: {
+      ...baseParams,
+      modelId: "retry-lead",
+    },
+    maxDelegations: 3,
+    async selectHelper() {
+      selectionCount += 1;
+      return selectionCount === 1
+        ? { provider: failedHelper, modelId: "retry-helper-failed" }
+        : { provider: replacementHelper, modelId: "retry-helper-replacement" };
+    },
+  });
+
+  return (
+    selectionCount === 2 &&
+    result.result.text === "retry-final" &&
+    result.metadata.delegationCount === 1 &&
+    result.metadata.contributors.some(
+      (value) => value.modelId === "retry-helper-replacement",
+    ) &&
+    result.trace.some((event) => event.type === "helper_retrying")
+  );
+}
+
 async function runBudgetCheck(): Promise<boolean> {
   const lead = makeProvider({
     name: "grok",
@@ -249,14 +317,23 @@ export async function GET() {
   const startedAt = Date.now();
 
   try {
-    const [basicDelegation, nestedDelegation, boundedDelegation] =
-      await Promise.all([
-        runBasicDelegationCheck(),
-        runNestedDelegationCheck(),
-        runBudgetCheck(),
-      ]);
+    const [
+      basicDelegation,
+      nestedDelegation,
+      helperRetry,
+      boundedDelegation,
+    ] = await Promise.all([
+      runBasicDelegationCheck(),
+      runNestedDelegationCheck(),
+      runHelperRetryCheck(),
+      runBudgetCheck(),
+    ]);
 
-    const ok = basicDelegation && nestedDelegation && boundedDelegation;
+    const ok =
+      basicDelegation &&
+      nestedDelegation &&
+      helperRetry &&
+      boundedDelegation;
 
     return NextResponse.json(
       {
@@ -264,6 +341,7 @@ export async function GET() {
         checks: {
           basicDelegation,
           nestedDelegation,
+          helperRetry,
           boundedDelegation,
         },
         durationMs: Date.now() - startedAt,
