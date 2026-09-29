@@ -18,6 +18,8 @@
     "lib/providers/google-model-capabilities.ts",
     "tests/collaboration.test.ts",
     "lib/collaboration/orchestrator.ts",
+    "lib/collaboration/capability-escalation.ts",
+    "lib/collaboration/capability-escalation-runner.ts",
     "lib/collaboration/routing.ts",
     "lib/collaboration/activation.ts",
     "lib/collaboration/protocol.ts",
