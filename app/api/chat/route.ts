@@ -1530,6 +1530,11 @@ ${chunkWorkflowSummary}`;
                               capability: event.capability,
                               delegationIndex: event.delegationIndex,
                               depth: event.depth,
+                              requester: event.requester,
+                              helper: event.helper,
+                              taskPreview: event.taskPreview,
+                              detail: event.detail,
+                              durationMs: event.durationMs,
                             },
                           });
                         },
