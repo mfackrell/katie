@@ -1452,11 +1452,83 @@ ${chunkWorkflowSummary}`;
                   message,
                   resolvedRequestIntent
                 );
-                const generation = await runGeneration({
-                  provider,
-                  params: finalParams,
-                  onTextDelta: suppressCalculationScaffolding ? () => {} : enqueueDelta
-                });
+
+                const generation = collaborationEnabledForRequest
+                  ? await (async () => {
+                      const collaborationBaseParams = baseParams;
+                      const collaboration = await runAdaptiveCollaboration({
+                        requestId,
+                        leadProvider: provider,
+                        leadModelId: modelId,
+                        providers,
+                        params: collaborationBaseParams,
+                        prepareParticipantParams: (participantParams, participantValue) => {
+                          const participantRuntimeContext = buildKatieRuntimeContext({
+                            provider: participantValue.provider,
+                            modelId: participantValue.modelId,
+                            modelTier: inferModelTier(participantValue.modelId),
+                            classifiedIntent: resolvedRequestIntent,
+                            routingAuthority:
+                              intentAuthority === "llm"
+                                ? "llm-classifier"
+                                : intentAuthority === "override"
+                                  ? "explicit-preference"
+                                  : intentAuthority,
+                            requestId,
+                          });
+                          return participantParams.persona.includes("KATIE_RUNTIME_CONTEXT:")
+                            ? participantParams
+                            : {
+                                ...participantParams,
+                                persona: `${participantRuntimeContext}\n\n${participantParams.persona}`,
+                              };
+                        },
+                        selectHelper: async (context) => {
+                          const registrySnapshot = await getCollaborationRegistrySnapshot();
+                          const attachmentCompatibleProviders = providers.filter(
+                            (candidateProvider) =>
+                              getAttachmentSupportForProvider(
+                                candidateProvider.name,
+                                attachments,
+                              ).supported,
+                          );
+                          return selectCollaborationHelper({
+                            requestId: context.requestId,
+                            request: context.request,
+                            requester: context.requester,
+                            providers: attachmentCompatibleProviders,
+                            usedParticipants: context.usedParticipants,
+                            modelRegistrySnapshot: registrySnapshot,
+                            actorId,
+                            actorRoutingProfile,
+                          });
+                        },
+                        onTrace: async (event: CollaborationTraceEvent) => {
+                          console.info("[Collaboration] event", event);
+                        },
+                        onFinalTextDelta: suppressCalculationScaffolding
+                          ? async () => {}
+                          : async (delta) => enqueueDelta(delta),
+                      });
+
+                      emitChunk({
+                        type: "metadata",
+                        modelId: collaboration.result.model,
+                        provider: collaboration.result.provider,
+                        explainer: selectionExplainer,
+                        collaboration: collaboration.metadata,
+                      });
+
+                      return {
+                        result: collaboration.result,
+                        streamedText: collaboration.streamedText,
+                      };
+                    })()
+                  : await runGeneration({
+                      provider,
+                      params: finalParams,
+                      onTextDelta: suppressCalculationScaffolding ? () => {} : enqueueDelta
+                    });
 
                 const rawText = generation.result.text || generation.streamedText;
                 const cleanedText = suppressCalculationScaffolding
