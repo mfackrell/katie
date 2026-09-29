@@ -67,6 +67,8 @@ export async function selectCollaborationHelper(input: {
   modelRegistrySnapshot?: Map<LlmProvider["name"], RegistryRoutingModel[]>;
   actorId?: string;
   actorRoutingProfile?: ActorRoutingProfile;
+  hasImages?: boolean;
+  hasVideoInput?: boolean;
 }): Promise<CollaborationHelperSelection | null> {
   if (!input.providers.length) {
     return null;
@@ -122,6 +124,8 @@ export async function selectCollaborationHelper(input: {
           actorId: input.actorId,
           actorRoutingProfile: input.actorRoutingProfile,
           excludedCandidates: exclusions,
+          hasImages: Boolean(input.hasImages),
+          hasVideoInput: Boolean(input.hasVideoInput),
         },
       );
 
