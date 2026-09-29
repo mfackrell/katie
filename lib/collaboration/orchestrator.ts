@@ -212,6 +212,15 @@ export async function runAdaptiveCollaboration(
     detail: "Lead model entered adaptive collaboration control.",
   });
 
+  const prepareParams = (
+    params: ChatGenerateParams,
+    participantValue: CollaborationParticipant,
+    role: "lead-control" | "helper-control" | "final-synthesis",
+  ): ChatGenerateParams =>
+    options.prepareParticipantParams
+      ? options.prepareParticipantParams(params, participantValue, role)
+      : params;
+
   const callControl = async (
     provider: LlmProvider,
     modelId: string,
@@ -305,19 +314,23 @@ export async function runAdaptiveCollaboration(
       let decision: HelperControlDecision | null = null;
 
       for (let controlPass = 0; controlPass < MAX_HELPER_CONTROL_PASSES; controlPass += 1) {
-        const helperParams = withPersona(
-          {
-            ...options.params,
-            user: buildHelperControlUser(
-              options.params,
-              request,
-              nestedContributions,
-              helperNotes,
-              depth,
-            ),
-          },
-          selected.modelId,
-          getHelperCollaborationInstruction(),
+        const helperParams = prepareParams(
+          withPersona(
+            {
+              ...options.params,
+              user: buildHelperControlUser(
+                options.params,
+                request,
+                nestedContributions,
+                helperNotes,
+                depth,
+              ),
+            },
+            selected.modelId,
+            getHelperCollaborationInstruction(),
+          ),
+          helper,
+          "helper-control",
         );
 
         const response = await callControl(
@@ -418,19 +431,23 @@ export async function runAdaptiveCollaboration(
     "Answer the user's original request directly using your own analysis and any useful helper contributions.";
 
   for (let leadPass = 0; leadPass <= maxDelegations; leadPass += 1) {
-    const leadParams = withPersona(
-      {
-        ...options.params,
-        user: buildLeadControlUser(
-          options.params,
-          contributions,
-          leadNotes,
-          delegationCount,
-          maxDelegations,
-        ),
-      },
-      options.leadModelId,
-      getLeadCollaborationInstruction(),
+    const leadParams = prepareParams(
+      withPersona(
+        {
+          ...options.params,
+          user: buildLeadControlUser(
+            options.params,
+            contributions,
+            leadNotes,
+            delegationCount,
+            maxDelegations,
+          ),
+        },
+        options.leadModelId,
+        getLeadCollaborationInstruction(),
+      ),
+      lead,
+      "lead-control",
     );
 
     const response = await callControl(
@@ -493,13 +510,17 @@ export async function runAdaptiveCollaboration(
     detail: `Synthesizing with ${contributions.length} helper contribution(s).`,
   });
 
-  const finalParams = withPersona(
-    {
-      ...options.params,
-      user: buildFinalUser(options.params, synthesisBrief, contributions),
-    },
-    options.leadModelId,
-    getFinalSynthesisInstruction(),
+  const finalParams = prepareParams(
+    withPersona(
+      {
+        ...options.params,
+        user: buildFinalUser(options.params, synthesisBrief, contributions),
+      },
+      options.leadModelId,
+      getFinalSynthesisInstruction(),
+    ),
+    lead,
+    "final-synthesis",
   );
 
   let streamedText = "";
