@@ -64,6 +64,8 @@ type CollaborationUiEvent = {
     | "helper_failed"
     | "helper_retrying"
     | "lead_ready"
+    | "lead_failed"
+    | "lead_replaced"
     | "final_synthesis_started"
     | "collaboration_completed"
     | "limit_reached";
@@ -100,6 +102,11 @@ type ChatMetadataChunk = {
   resetText?: boolean;
   collaborationEvent?: CollaborationUiEvent;
   collaboration?: CollaborationUiMetadata;
+  providerFailover?: {
+    from: { provider: string; modelId: string };
+    to: { provider: string; modelId: string };
+    reason: string;
+  };
 };
 
 function participantLabel(participant?: CollaborationParticipantUi): string {
@@ -160,6 +167,10 @@ function collaborationStatusMessage(event: CollaborationUiEvent): string {
     }
     case "lead_ready":
       return `${requester} has enough evidence and is preparing the final answer…`;
+    case "lead_failed":
+      return `${requester} failed during final synthesis. Katie is preserving the completed collaborator work and selecting a replacement lead…`;
+    case "lead_replaced":
+      return `${requester} is taking over final synthesis with the completed collaborator evidence intact…`;
     case "final_synthesis_started":
       return `${requester} is synthesizing the collaborators’ findings into one answer…`;
     case "limit_reached": {
@@ -181,13 +192,18 @@ function collaborationActivityTone(
   if (event.type === "helper_completed" || event.type === "collaboration_completed") {
     return "success";
   }
-  if (event.type === "helper_failed" || event.type === "limit_reached") {
+  if (
+    event.type === "helper_failed" ||
+    event.type === "lead_failed" ||
+    event.type === "limit_reached"
+  ) {
     return "warning";
   }
   if (
     event.type === "delegation_requested" ||
     event.type === "helper_selected" ||
     event.type === "helper_retrying" ||
+    event.type === "lead_replaced" ||
     event.type === "final_synthesis_started"
   ) {
     return "active";
@@ -1416,6 +1432,12 @@ export function ChatPanel({
               recordCollaborationEvent(chunk.collaborationEvent);
             }
 
+            if (chunk.providerFailover) {
+              setStatusMessage(
+                `${chunk.providerFailover.from.modelId} failed (${chunk.providerFailover.reason}). Katie rerouted the request to ${chunk.providerFailover.to.modelId}…`,
+              );
+            }
+
             if (chunk.collaboration) {
               setCollaborationSummary(chunk.collaboration);
               setCollaborationActive(false);
@@ -1491,6 +1513,12 @@ export function ChatPanel({
           if (trailingChunk.collaborationEvent) {
             sawInitialMetadata = true;
             recordCollaborationEvent(trailingChunk.collaborationEvent);
+          }
+
+          if (trailingChunk.providerFailover) {
+            setStatusMessage(
+              `${trailingChunk.providerFailover.from.modelId} failed (${trailingChunk.providerFailover.reason}). Katie rerouted the request to ${trailingChunk.providerFailover.to.modelId}…`,
+            );
           }
 
           if (trailingChunk.collaboration) {
