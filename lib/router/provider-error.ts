@@ -18,6 +18,9 @@ const PROVIDER_WIDE_PATTERNS: RegExp[] = [
   /unauthorized/i,
   /organization.*(?:disabled|suspended|deactivated)/i,
   /account.*(?:disabled|suspended|deactivated)/i,
+  /rate.?limit/i,
+  /too many requests/i,
+  /\b429\b/i,
 ];
 
 export function classifyGenerationFailure(error: unknown): GenerationFailureScope {
