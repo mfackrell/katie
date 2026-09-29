@@ -38,6 +38,9 @@ export interface ProviderResponse {
   text: string;
   model: string;
   provider: "openai" | "google" | "grok" | "anthropic";
+  finishReason?: string;
+  truncated?: boolean;
+  continuationCount?: number;
   content?: Array<{
     type: string;
     text?: string;
