@@ -387,29 +387,6 @@ function buildGenerationParams({
   };
 }
 
-async function runGeneration({
-  provider,
-  params,
-  onTextDelta
-}: {
-  provider: LlmProvider;
-  params: ReturnType<typeof buildGenerationParams>;
-  onTextDelta: (delta: string) => void;
-}): Promise<{ result: ProviderResponse; streamedText: string }> {
-  let streamedText = "";
-
-  const result = provider.generateStream
-    ? await provider.generateStream(params, {
-        onTextDelta(delta) {
-          streamedText += delta;
-          onTextDelta(delta);
-        }
-      })
-    : await provider.generate(params);
-
-  return { result, streamedText };
-}
-
 async function parseIncomingPayload(request: NextRequest): Promise<RequestPayload> {
   const contentType = request.headers.get("content-type") ?? "";
 
