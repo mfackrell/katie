@@ -69,6 +69,7 @@ export interface ProviderResponse {
       task: string;
       confidence?: "high" | "medium" | "low";
     }>;
+    durationMs?: number;
   };
   content?: Array<{
     type: string;
