@@ -620,7 +620,94 @@ export async function POST(request: NextRequest) {
     let messageForGeneration = message;
     const hasVideoInput = attachments.some(isVideoAttachment);
     const encoder = new TextEncoder();
-    const requestId = request.headers.get("x-request-id") ?? crypto.randomUUID();
+    const suppliedRequestId = request.headers.get("x-request-id")?.trim();
+    const requestId =
+      suppliedRequestId && /^[A-Za-z0-9._:-]{1,128}$/.test(suppliedRequestId)
+        ? suppliedRequestId
+        : crypto.randomUUID();
+    const requestFingerprint = await fingerprintChatRequest({
+      actorId,
+      chatId,
+      message,
+      images: images ?? [],
+      fileReferences: attachments.map((attachment) => ({
+        fileId: attachment.fileId,
+        fileName: attachment.fileName,
+        mimeType: attachment.mimeType,
+      })),
+      overrideProvider: overrideProvider ?? null,
+      overrideModel: overrideModel ?? null,
+      activeRepoId: activeRepoId ?? null,
+      repoInjectionEnabled,
+    });
+    const idempotencyClaim = await claimChatRequest({
+      requestId,
+      actorId,
+      chatId,
+      requestFingerprint,
+    });
+
+    if (idempotencyClaim.mode === "conflict") {
+      return NextResponse.json(
+        { error: "Request ID was reused with different request content.", requestId },
+        { status: 409 },
+      );
+    }
+
+    if (idempotencyClaim.mode === "existing") {
+      if (idempotencyClaim.record.status === "completed") {
+        const replayBody = [
+          JSON.stringify({
+            type: "metadata",
+            modelId: idempotencyClaim.record.assistantModel ?? "unknown",
+            provider: "replay",
+            requestId,
+            replayed: true,
+          }),
+          JSON.stringify({
+            type: "content",
+            text: idempotencyClaim.record.assistantContent ?? "",
+            assets: idempotencyClaim.record.assistantAssets,
+            provider: "replay",
+            model: idempotencyClaim.record.assistantModel ?? "unknown",
+          }),
+          "",
+        ].join("\n");
+        return new NextResponse(replayBody, {
+          headers: {
+            "Content-Type": "application/x-ndjson; charset=utf-8",
+            "Cache-Control": "no-cache",
+          },
+        });
+      }
+
+      if (idempotencyClaim.record.status === "processing") {
+        return NextResponse.json(
+          { status: "processing", requestId },
+          { status: 202 },
+        );
+      }
+
+      return NextResponse.json(
+        {
+          status: "failed",
+          requestId,
+          error:
+            idempotencyClaim.record.errorMessage ??
+            "The previous attempt for this request ID failed.",
+        },
+        { status: 409 },
+      );
+    }
+
+    if (idempotencyClaim.mode === "untracked") {
+      console.warn("[Idempotency] Durable request tracking unavailable; continuing fail-open.", {
+        requestId,
+        reason: idempotencyClaim.reason,
+      });
+    }
+
+    const requestTracked = idempotencyClaim.tracked;
     const imagePayloadMetadata = inspectImagePayloads(images);
 
     console.log("[Chat API] Image payloads", {
@@ -660,18 +747,28 @@ export async function POST(request: NextRequest) {
         chatId,
       });
 
+      const localUserMessageId = crypto.randomUUID();
+      const localAssistantMessageId = crypto.randomUUID();
       await saveMessage(chatId, {
-        id: crypto.randomUUID(),
+        id: localUserMessageId,
         role: "user",
         content: message,
       });
 
       await saveMessage(chatId, {
-        id: crypto.randomUUID(),
+        id: localAssistantMessageId,
         role: "assistant",
         model: "katie-local",
         content: localKatieResponse.text,
       });
+      if (requestTracked) {
+        await completeChatRequest(requestId, {
+          assistantMessageId: localAssistantMessageId,
+          assistantModel: "katie-local",
+          assistantContent: localKatieResponse.text,
+          assistantAssets: [],
+        });
+      }
       await refreshShortTermMemory(actorId, chatId);
       after(async () => {
         try {
@@ -712,13 +809,29 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    const providers = getAvailableProviders();
-    if (!providers.length) {
+    const configuredProviders = getAvailableProviders();
+    if (!configuredProviders.length) {
       console.error("[Chat API] Error: No AI providers found in environment variables.");
+      if (requestTracked) {
+        await failChatRequest(requestId, new Error("No AI providers configured."));
+      }
       return NextResponse.json(
         { error: "No providers configured. Add OPENAI_API_KEY, GOOGLE_API_KEY, grok_api_key, and/or CLAUDE_API_KEY." },
         { status: 500 }
       );
+    }
+
+    const sharedHealth =
+      overrideProvider || hasVideoInput
+        ? { providers: configuredProviders, blocked: [], available: true }
+        : await filterProvidersBySharedHealth(configuredProviders);
+    const providers = sharedHealth.providers;
+
+    if (sharedHealth.blocked.length > 0) {
+      console.warn("[ProviderHealth] Router excluded temporarily blocked providers.", {
+        requestId,
+        blocked: sharedHealth.blocked,
+      });
     }
 
     console.log("[Chat API] Assembling context and selecting provider...");
@@ -755,28 +868,7 @@ export async function POST(request: NextRequest) {
     let repoGenerationContextLine = "";
     let personaForGeneration = personaWithRepoContext;
     let loadedRepoContext: RepoGenerationContext | null = null;
-    if (activeRepoContext) {
-      try {
-        loadedRepoContext = await loadRepoGenerationContext(activeRepoContext);
-        if (loadedRepoContext) {
-          repoGenerationContextLine = `Repository metadata: ${loadedRepoContext.metadataLine}. Repository summary: ${loadedRepoContext.fileSummaryLine}.`;
-        }
-      } catch (error) {
-        console.error("[Chat API] Failed to load repository context", {
-          requestId,
-          repositoryFullName: activeRepoContext.repositoryFullName,
-          error: error instanceof Error ? error.message : String(error),
-        });
-      }
-    }
-
-    if (repoGenerationContextLine) {
-      personaForGeneration = `${personaWithRepoContext}\n\n${repoGenerationContextLine}`;
-      console.log("[Chat API] Repo context attached to generation request", {
-        requestId,
-        repositoryFullName: activeRepoContext?.repositoryFullName ?? null,
-      });
-    }
+    let repoContextDegraded: { reason: string } | null = null;
     const historyForProvider = history.map(({ role, content }) => ({ role, content }));
     const controlPlaneConversationContext = [
       summary ? `Conversation summary: ${summary}` : "",
@@ -948,6 +1040,41 @@ export async function POST(request: NextRequest) {
       console.log(`[Chat API] Routing Reasoning: ${routingDecision.reasoning}`);
     }
 
+    const repoGate = shouldAttachRepoSourceDeterministically({
+      repoInjectionEnabled,
+      hasActiveRepo: activeRepoContext !== null,
+      requestIntent: resolvedRequestIntent,
+      message,
+    });
+
+    if (repoGate.attach && activeRepoContext) {
+      try {
+        loadedRepoContext = await loadRepoGenerationContext(activeRepoContext);
+        if (loadedRepoContext) {
+          repoGenerationContextLine = `Repository metadata: ${loadedRepoContext.metadataLine}. Repository summary: ${loadedRepoContext.fileSummaryLine}.`;
+          personaForGeneration = `${personaWithRepoContext}\n\n${repoGenerationContextLine}`;
+          registerRepoBinding(
+            activeRepoContext.id,
+            activeRepoContext.repositoryFullName,
+            loadedRepoContext.defaultBranch || "main",
+          );
+          console.log("[Chat API] Repo context attached to generation request", {
+            requestId,
+            repositoryFullName: activeRepoContext.repositoryFullName,
+          });
+        }
+      } catch (error) {
+        repoContextDegraded = {
+          reason: error instanceof Error ? error.message : String(error),
+        };
+        console.error("[Chat API] Failed to load repository context", {
+          requestId,
+          repositoryFullName: activeRepoContext.repositoryFullName,
+          error: repoContextDegraded.reason,
+        });
+      }
+    }
+
     const attachmentSummaryForClassifier = {
       total: attachments.length,
       imageCount: attachments.filter((attachment) => attachment.mimeType.startsWith("image/")).length,
@@ -965,65 +1092,27 @@ export async function POST(request: NextRequest) {
       containsRepoReviewLanguage: REPO_REVIEW_LANGUAGE_ROUTING_REGEX.test(message),
     };
 
-    let repoSourceClassifierDecision: RepoSourceClassifierDecision = {
-      attach_repo_source: false,
-      reason: "No active repository context available",
-      confidence: null,
+    const repoSourceClassifierDecision = {
+      attach_repo_source:
+        repoGate.attach &&
+        activeRepoContext !== null &&
+        loadedRepoContext !== null,
+      reason: repoContextDegraded
+        ? `Repository context degraded: ${repoContextDegraded.reason}`
+        : repoGate.reason,
+      confidence: 1,
     };
 
-    if (activeRepoContext && loadedRepoContext) {
-      registerRepoBinding(
-        activeRepoContext.id,
-        activeRepoContext.repositoryFullName,
-        loadedRepoContext.defaultBranch || "main",
-      );
-      repoSourceClassifierDecision = await classifyRepoSourceAttachmentNeed({
-        provider,
-        modelId,
-        message,
-        requestIntent: resolvedRequestIntent,
-        activeRepo: true,
-        repoSummary: loadedRepoContext.fileSummaryLine,
-        attachmentSummaryForClassifier,
-        activeRepoContextAttached,
-        routingSignals,
-      });
-    }
+    const shouldAttachSourceContext = repoSourceClassifierDecision.attach_repo_source;
 
-    const shouldAttachSourceContext =
-      repoInjectionEnabled &&
-      activeRepoContext !== null &&
-      loadedRepoContext !== null &&
-      repoSourceClassifierDecision.attach_repo_source;
-
-    console.log("[Chat API] Repo source classifier result", {
+    console.log("[Chat API] Deterministic repo source gate", {
       requestId,
       repositoryFullName: activeRepoContext?.repositoryFullName ?? null,
       attachRepoSource: repoSourceClassifierDecision.attach_repo_source,
       reason: repoSourceClassifierDecision.reason,
-      confidence: repoSourceClassifierDecision.confidence,
+      githubAccessAttempted: repoGate.attach,
+      degraded: Boolean(repoContextDegraded),
     });
-    console.log("[Chat API] Repo source loading triggered", {
-      requestId,
-      triggered: shouldAttachSourceContext,
-    });
-    console.log("[Chat API] Repo source attachment gate", {
-      requestId,
-      shouldAttachSourceContext,
-      repoInjectionEnabled,
-      activeRepoContextPresent: activeRepoContext !== null,
-      loadedRepoContextPresent: loadedRepoContext !== null,
-      resolvedRequestIntent: resolvedRequestIntent ?? null,
-    });
-    if (!repoInjectionEnabled && activeRepoContext) {
-      console.log("[Chat API] Repo source injection skipped by override", {
-        requestId,
-        activeRepo: activeRepoContext.repositoryFullName,
-        repoInjectionEnabled,
-        skippedByOverride: true,
-      });
-    }
-
     if (shouldAttachSourceContext && activeRepoContext && loadedRepoContext) {
       try {
         const fileSelection = await selectFilesForInjection(activeRepoContext.id, message, [], "smart");
@@ -1199,9 +1288,10 @@ export async function POST(request: NextRequest) {
       routingAuthority: intentAuthority === "llm" ? "llm-classifier" : intentAuthority === "override" ? "explicit-preference" : intentAuthority,
       requestId,
     });
-    personaForGeneration = `${runtimeContext}
-
-${personaForGeneration}`;
+    personaForGeneration = replaceKatieRuntimeContext(
+      personaForGeneration,
+      runtimeContext,
+    );
     console.debug("[Chat API] Katie runtime context injected", {
       requestId,
       selectedProvider: provider.name,
