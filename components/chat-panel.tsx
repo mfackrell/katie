@@ -116,6 +116,26 @@ function formatDuration(durationMs?: number): string {
   return ` in ${(durationMs / 1_000).toFixed(1)}s`;
 }
 
+function userSafeCollaborationDetail(detail?: string): string {
+  const normalized = detail?.trim() ?? "";
+  if (!normalized) {
+    return "";
+  }
+  if (/empty control response|empty response/i.test(normalized)) {
+    return "returned no usable response";
+  }
+  if (/timed out|timeout/i.test(normalized)) {
+    return "timed out";
+  }
+  if (/no eligible helper|no additional eligible helper/i.test(normalized)) {
+    return "no eligible replacement model was available";
+  }
+  if (/reserved.*final synthesis|time budget/i.test(normalized)) {
+    return "Katie is reserving the remaining time for the final answer";
+  }
+  return "the provider could not complete the delegated task";
+}
+
 function collaborationStatusMessage(event: CollaborationUiEvent): string {
   const requester = participantLabel(event.requester);
   const helper = participantLabel(event.helper);
@@ -132,18 +152,22 @@ function collaborationStatusMessage(event: CollaborationUiEvent): string {
       return `The previous helper failed. Katie is retrying the same task with ${helper}${capability}…`;
     case "helper_completed":
       return `${helper} returned ${event.capability ?? "its"} findings${formatDuration(event.durationMs)}. Katie is evaluating them…`;
-    case "helper_failed":
+    case "helper_failed": {
+      const detail = userSafeCollaborationDetail(event.detail);
       return event.helper
-        ? `${helper} could not complete the delegated task${event.detail ? `: ${event.detail}` : "."}`
-        : `Katie could not find a usable helper${capability}${event.detail ? `: ${event.detail}` : "."}`;
+        ? `${helper} could not complete the delegated task${detail ? `: ${detail}` : "."}`
+        : `Katie could not find a usable helper${capability}${detail ? `: ${detail}` : "."}`;
+    }
     case "lead_ready":
       return `${requester} has enough evidence and is preparing the final answer…`;
     case "final_synthesis_started":
       return `${requester} is synthesizing the collaborators’ findings into one answer…`;
-    case "limit_reached":
-      return event.detail
-        ? `${event.detail} Katie is moving to final synthesis.`
+    case "limit_reached": {
+      const detail = userSafeCollaborationDetail(event.detail);
+      return detail
+        ? `${detail}. Katie is moving to final synthesis.`
         : "Katie reached the collaboration budget and is moving to final synthesis.";
+    }
     case "collaboration_completed":
       return `Multi-model collaboration complete${formatDuration(event.durationMs)}.`;
     default:
