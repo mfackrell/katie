@@ -1538,6 +1538,25 @@ ${chunkWorkflowSummary}`;
               throw new Error(`AI Provider ${provider.name} returned an empty response.`);
             }
 
+            if ((result.continuationCount ?? 0) > 0 || result.truncated) {
+              console.warn("[Chat API] Provider output continuation metadata", {
+                requestId,
+                provider: result.provider,
+                model: result.model,
+                finishReason: result.finishReason ?? null,
+                continuationCount: result.continuationCount ?? 0,
+                truncated: result.truncated ?? false
+              });
+              emitChunk({
+                type: "metadata",
+                provider: result.provider,
+                modelId: result.model,
+                finishReason: result.finishReason,
+                continuationCount: result.continuationCount ?? 0,
+                truncated: result.truncated ?? false
+              });
+            }
+
             const imageAssets =
               result.content
                 ?.map((part) => {
