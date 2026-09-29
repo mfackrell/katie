@@ -47,6 +47,11 @@ import {
   __resolveRepoSourceClassifierFailureForTests,
   type RepoSourceClassifierDecision
 } from "@/lib/chat/repo-source-classifier-fallback";
+import { shouldUseAdaptiveCollaboration } from "@/lib/collaboration/activation";
+import { runAdaptiveCollaboration } from "@/lib/collaboration/orchestrator";
+import { selectCollaborationHelper } from "@/lib/collaboration/routing";
+import type { CollaborationTraceEvent } from "@/lib/collaboration/types";
+import { getRoutingRegistryByProvider, type RegistryRoutingModel } from "@/lib/models/registry";
 
 // This endpoint streams long-running responses (e.g., deep financial/workbook analysis).
 // Keep the function timeout above Vercel's default 300s ceiling to avoid truncating streamed replies.
