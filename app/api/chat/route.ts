@@ -1514,6 +1514,8 @@ ${chunkWorkflowSummary}`;
                             modelRegistrySnapshot: registrySnapshot,
                             actorId,
                             actorRoutingProfile,
+                            hasImages: Array.isArray(images) && images.length > 0,
+                            hasVideoInput,
                           });
                         },
                         onTrace: async (event: CollaborationTraceEvent) => {
