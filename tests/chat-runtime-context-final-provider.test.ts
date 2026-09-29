@@ -15,9 +15,16 @@ test("buildKatieRuntimeContext formats expected runtime block with unknown fallb
   assert.match(CHAT_ROUTE, /request_id: \$\{requestId \|\| "unknown"\}/);
 });
 
-test("final provider request prepends KATIE_RUNTIME_CONTEXT to persona used by provider.generate", () => {
+test("final provider request appends volatile KATIE_RUNTIME_CONTEXT after stable persona", () => {
   assert.match(CHAT_ROUTE, /const finalProviderSupport = getAttachmentSupportForProvider\(/);
-  assert.match(CHAT_ROUTE, /personaForGeneration = `\$\{runtimeContext\}\n\n\$\{personaForGeneration\}`;/);
+  assert.match(
+    CHAT_ROUTE,
+    /personaForGeneration = replaceKatieRuntimeContext\(\s*personaForGeneration,\s*runtimeContext,\s*\);/,
+  );
+  assert.match(
+    CHAT_ROUTE,
+    /return withoutExistingContext\s*\? `\$\{withoutExistingContext\}\\n\\n\$\{runtimeContext\}`/,
+  );
   assert.match(CHAT_ROUTE, /buildGenerationParams\({[\s\S]*persona: personaForGeneration,/);
   assert.match(CHAT_ROUTE, /Katie runtime context injected/);
   assert.match(CHAT_ROUTE, /included: personaForGeneration\.includes\("KATIE_RUNTIME_CONTEXT:"\)/);
