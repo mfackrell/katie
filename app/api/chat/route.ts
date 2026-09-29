@@ -1210,6 +1210,38 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    const collaborationEnabledForRequest = shouldUseAdaptiveCollaboration({
+      message,
+      intent: resolvedRequestIntent ?? null,
+      complexity: resolvedRoutingIntentForReroute?.complexity ?? null,
+      hasManualOverride: Boolean(overrideProvider && overrideModel),
+      hasVideoInput,
+    });
+
+    console.info("[Collaboration] activation", {
+      requestId,
+      enabled: collaborationEnabledForRequest,
+      intent: resolvedRequestIntent ?? null,
+      complexity: resolvedRoutingIntentForReroute?.complexity ?? null,
+      explicitManualOverride: Boolean(overrideProvider && overrideModel),
+    });
+
+    let collaborationRegistrySnapshotPromise:
+      | Promise<Map<LlmProvider["name"], RegistryRoutingModel[]>>
+      | null = null;
+    const getCollaborationRegistrySnapshot = async () => {
+      if (!collaborationRegistrySnapshotPromise) {
+        collaborationRegistrySnapshotPromise = getRoutingRegistryByProvider(providers).catch((error) => {
+          console.warn("[Collaboration] registry snapshot unavailable; helper router will use provider discovery fallback", {
+            requestId,
+            reason: error instanceof Error ? error.message : String(error),
+          });
+          return new Map<LlmProvider["name"], RegistryRoutingModel[]>();
+        });
+      }
+      return collaborationRegistrySnapshotPromise;
+    };
+
     const modelTier = inferModelTier(modelId);
     const runtimeContext = buildKatieRuntimeContext({
       provider: provider.name,
