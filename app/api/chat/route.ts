@@ -23,6 +23,11 @@ import type { ResolvedRoutingIntent, SelectionExplainer } from "@/lib/router/mas
 import { DEFAULT_REASONING_CATEGORIES, ReasoningStateAccumulator } from "@/lib/chat/reasoning-stream";
 import { isLikelyProviderRefusal, runWithRefusalFallback, shouldRetryOnProviderRefusal } from "@/lib/router/refusal-detection";
 import {
+  classifyGenerationFailure,
+  describeGenerationFailure,
+  filterHealthyProviders,
+} from "@/lib/router/provider-error";
+import {
   getAttachmentSupportForProvider,
   isVideoAttachment,
   resolveVideoRoutingPolicy,
@@ -1445,12 +1450,13 @@ ${chunkWorkflowSummary}`;
                   requestId,
                 });
                 const baseParams = createParams(modelId);
-                const finalParams = baseParams.persona.includes("KATIE_RUNTIME_CONTEXT:")
-                  ? baseParams
-                  : {
-                      ...baseParams,
-                      persona: `${candidateRuntimeContext}\n\n${baseParams.persona}`,
-                    };
+                const finalParams = {
+                  ...baseParams,
+                  persona: replaceKatieRuntimeContext(
+                    baseParams.persona,
+                    candidateRuntimeContext,
+                  ),
+                };
                 const finalPayloadPreview = finalParams.persona.slice(0, 120).replace(/\s+/g, " ");
                 console.log("[Chat API] FINAL provider payload contains KATIE_RUNTIME_CONTEXT?", {
                   included: finalParams.persona.includes("KATIE_RUNTIME_CONTEXT:"),
