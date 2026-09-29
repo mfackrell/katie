@@ -434,6 +434,109 @@ test("delegation budget prevents unbounded model meetings", async () => {
   assert.equal(result.trace.some((event) => event.type === "limit_reached"), true);
 });
 
+test("final synthesis fails over to a replacement lead without losing helper evidence", async () => {
+  const leadCalls: ChatGenerateParams[] = [];
+  let leadControlIndex = 0;
+  const failingLead: LlmProvider & { calls: ChatGenerateParams[] } = {
+    name: "openai",
+    calls: leadCalls,
+    async listModels() {
+      return ["failing-lead"];
+    },
+    async generate(params) {
+      leadCalls.push(params);
+      const responses = [
+        JSON.stringify({
+          action: "delegate",
+          request: {
+            task: "Independently review the architecture.",
+            capability: "architecture",
+          },
+        }),
+        JSON.stringify({
+          action: "ready",
+          synthesisBrief: "Use the architecture review.",
+        }),
+      ];
+      const text = responses[leadControlIndex] ?? "";
+      leadControlIndex += 1;
+      return {
+        text,
+        provider: "openai",
+        model: params.modelId ?? "failing-lead",
+      };
+    },
+    async generateStream() {
+      throw new Error("429 You have no credits remaining.");
+    },
+  };
+
+  const helper = fakeProvider({
+    name: "anthropic",
+    modelId: "architecture-helper",
+    controlResponses: [
+      JSON.stringify({
+        action: "answer",
+        answer: "Preserved helper evidence: split orchestration from request lifecycle.",
+        confidence: "high",
+      }),
+    ],
+  });
+
+  const replacement = fakeProvider({
+    name: "google",
+    modelId: "replacement-lead",
+    controlResponses: [],
+    finalText: "Replacement synthesis used preserved evidence.",
+  });
+
+  let helperSelectionCount = 0;
+  let replacementSelections = 0;
+
+  const result = await runAdaptiveCollaboration({
+    requestId: "req-lead-failover",
+    leadProvider: failingLead,
+    leadModelId: "failing-lead",
+    providers: [failingLead, helper, replacement],
+    params: baseParams,
+    async selectHelper() {
+      helperSelectionCount += 1;
+      return { provider: helper, modelId: "architecture-helper" };
+    },
+    async selectReplacementLead(context) {
+      replacementSelections += 1;
+      assert.equal(context.failedLead.provider, "openai");
+      assert.equal(context.contributions.length, 1);
+      assert.match(
+        context.contributions[0]?.answer ?? "",
+        /Preserved helper evidence/,
+      );
+      return {
+        provider: replacement,
+        modelId: "replacement-lead",
+        reasoning: "Cross-provider replacement after lead failure.",
+      };
+    },
+  });
+
+  assert.equal(helperSelectionCount, 1);
+  assert.equal(replacementSelections, 1);
+  assert.equal(result.result.provider, "google");
+  assert.equal(result.result.model, "replacement-lead");
+  assert.equal(result.result.text, "Replacement synthesis used preserved evidence.");
+  assert.equal(
+    result.trace.some((event) => event.type === "lead_failed"),
+    true,
+  );
+  assert.equal(
+    result.trace.some((event) => event.type === "lead_replaced"),
+    true,
+  );
+
+  const replacementFinalPrompt = replacement.calls.at(-1)?.user ?? "";
+  assert.match(replacementFinalPrompt, /Preserved helper evidence/);
+});
+
 test("lead can decide no helper is needed", async () => {
   const lead = fakeProvider({
     name: "google",
