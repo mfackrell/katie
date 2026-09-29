@@ -1,3 +1,4 @@
+import { getCollaborationConfig } from "@/lib/collaboration/config";
 import type { RequestIntent, RequestComplexity } from "@/lib/router/model-intent";
 
 const EXPLICIT_COLLABORATION_PATTERN =
@@ -19,7 +20,7 @@ export function shouldUseAdaptiveCollaboration(input: {
   hasManualOverride?: boolean;
   hasVideoInput?: boolean;
 }): boolean {
-  if (process.env.KATIE_COLLABORATION_ENABLED === "false") {
+  if (!getCollaborationConfig().enabled) {
     return false;
   }
 
