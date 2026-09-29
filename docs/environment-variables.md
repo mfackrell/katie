@@ -63,3 +63,21 @@ RETRY_ON_PROVIDER_REFUSAL=true
 ROUTER_TRACE_ENABLED=false
 ROUTER_POLICY_ENGINE_ENABLED=false
 ```
+
+
+## Adaptive multi-model collaboration
+
+- `KATIE_COLLABORATION_ENABLED` (optional, default: `true`)  
+  Set to `false` to disable model-requested collaboration globally.
+- `KATIE_COLLAB_MAX_DELEGATIONS` (optional, default: `5`, range: 1-12)  
+  Maximum total helper requests during one user turn, including nested helper requests.
+- `KATIE_COLLAB_MAX_DEPTH` (optional, default: `2`, range: 0-4)  
+  Maximum recursive helper depth. Depth 0 prevents helpers from requesting other helpers.
+- `KATIE_COLLAB_MAX_CONTRIBUTION_CHARS` (optional, default: `12000`)  
+  Maximum retained text from one helper contribution.
+- `KATIE_COLLAB_MAX_TOTAL_CONTRIBUTION_CHARS` (optional, default: `48000`)  
+  Maximum retained helper evidence across the whole collaborative turn.
+- `KATIE_COLLAB_PARTICIPANT_TIMEOUT_MS` (optional, default: `120000`)  
+  Per-model timeout for collaboration control/helper passes. Final synthesis receives twice this window.
+
+Collaboration activates automatically for high-complexity requests and selected medium-complexity technical/research intents. Users can explicitly request it with phrases such as "work together", "ask another model", "multi-model", "council", or "deep review". Manual provider/model overrides remain single-model unless the user explicitly requests collaboration.
