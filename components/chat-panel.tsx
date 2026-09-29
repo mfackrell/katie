@@ -107,6 +107,13 @@ type ChatMetadataChunk = {
     to: { provider: string; modelId: string };
     reason: string;
   };
+  degradedContext?: {
+    kind: string;
+    repository?: string | null;
+    reason: string;
+  } | null;
+  replayed?: boolean;
+  requestId?: string;
 };
 
 function participantLabel(participant?: CollaborationParticipantUi): string {
@@ -245,6 +252,7 @@ type PendingChatRequest = {
   chatId: string;
   content: string;
   startedAt: string;
+  requestId?: string;
 };
 
 function pendingChatRequestStorageKey(chatId: string): string {
@@ -275,6 +283,7 @@ function readPendingChatRequest(chatId: string): PendingChatRequest | null {
       chatId,
       content: parsed.content,
       startedAt: parsed.startedAt,
+      ...(typeof parsed.requestId === "string" ? { requestId: parsed.requestId } : {}),
     };
   } catch {
     return null;
@@ -320,6 +329,41 @@ async function pollForPersistedAssistant(
     }
 
     try {
+      let requiredAssistantMessageId: string | null = null;
+
+      if (pending.requestId) {
+        const statusResponse = await fetch(
+          `/api/chat/status?requestId=${encodeURIComponent(pending.requestId)}&chatId=${encodeURIComponent(chatId)}`,
+          { cache: "no-store" },
+        );
+
+        if (statusResponse.ok) {
+          const statusPayload = (await statusResponse.json()) as {
+            status?: "processing" | "completed" | "failed";
+            assistantMessageId?: string | null;
+            error?: string | null;
+          };
+
+          if (statusPayload.status === "failed") {
+            throw new Error(
+              statusPayload.error ?? "Katie's server-side request failed.",
+            );
+          }
+
+          if (statusPayload.status === "processing") {
+            if (Date.now() >= deadline) {
+              break;
+            }
+            await waitForRecoveryPoll();
+            continue;
+          }
+
+          if (statusPayload.status === "completed") {
+            requiredAssistantMessageId = statusPayload.assistantMessageId ?? null;
+          }
+        }
+      }
+
       const response = await fetch(
         `/api/messages?chatId=${encodeURIComponent(chatId)}`,
         { cache: "no-store" },
@@ -328,6 +372,18 @@ async function pollForPersistedAssistant(
       if (response.ok) {
         const payload = (await response.json()) as { messages?: Message[] };
         const serverMessages = payload.messages ?? [];
+
+        if (
+          requiredAssistantMessageId &&
+          serverMessages.some(
+            (candidate) =>
+              candidate.role === "assistant" &&
+              candidate.id === requiredAssistantMessageId,
+          )
+        ) {
+          return serverMessages;
+        }
+
         let matchingUserIndex = -1;
 
         for (let index = serverMessages.length - 1; index >= 0; index -= 1) {
@@ -757,6 +813,35 @@ export function ChatPanel({
     async function fetchModels() {
       const response = await fetch("/api/models");
       const data = (await response.json()) as unknown;
+
+      if (response.status === 202) {
+        setStatusMessage(
+          "Katie is already processing this request. Reconnecting to the existing server-side job…",
+        );
+        const pending =
+          readPendingChatRequest(chatId) ?? {
+            chatId,
+            content: requestContent,
+            startedAt: optimisticUserMessage.createdAt,
+            requestId: clientRequestId,
+          };
+        const recoveredMessages = await pollForPersistedAssistant(
+          chatId,
+          pending,
+          MOBILE_RECOVERY_WINDOW_MS,
+        );
+
+        if (recoveredMessages) {
+          clearPendingChatRequest(chatId);
+          setMessages(recoveredMessages);
+          setMessagesByChatId((cache) => ({
+            ...cache,
+            [chatId]: recoveredMessages,
+          }));
+          setStatusMessage("Existing Katie request completed and was restored.");
+        }
+        return;
+      }
 
       if (!response.ok) {
         return;
@@ -1208,6 +1293,7 @@ export function ChatPanel({
     });
 
     let requestStage = "preparing attachments";
+    const clientRequestId = crypto.randomUUID();
 
     try {
       const uploadedReferences =
@@ -1280,6 +1366,7 @@ export function ChatPanel({
         chatId,
         content: requestContent,
         startedAt: optimisticUserMessage.createdAt,
+        requestId: clientRequestId,
       });
 
       requestStage = "sending chat request";
@@ -1287,6 +1374,7 @@ export function ChatPanel({
         method: "POST",
         headers: {
           "content-type": "application/json",
+          "x-request-id": clientRequestId,
         },
         signal: abortController.signal,
         body: requestBody,
@@ -1437,6 +1525,12 @@ export function ChatPanel({
             if (chunk.providerFailover) {
               setStatusMessage(
                 `${chunk.providerFailover.from.modelId} failed (${chunk.providerFailover.reason}). Katie rerouted the request to ${chunk.providerFailover.to.modelId}…`,
+              );
+            }
+
+            if (chunk.degradedContext?.kind === "repository") {
+              setStatusMessage(
+                `Repository context is temporarily unavailable. Katie is continuing with the context it already has.`,
               );
             }
 
@@ -1634,6 +1728,7 @@ export function ChatPanel({
                     ? "[video]"
                     : "[file]"),
               startedAt: optimisticUserMessage.createdAt,
+              requestId: clientRequestId,
             };
 
           setStatusMessage(
