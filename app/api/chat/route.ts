@@ -589,6 +589,7 @@ async function loadRepoGenerationContext(activeRepo: ActiveRepoContext): Promise
 }
 
 export async function POST(request: NextRequest) {
+  let trackedRequestId: string | null = null;
   try {
     const payload = await parseIncomingPayload(request);
     const {
@@ -708,6 +709,9 @@ export async function POST(request: NextRequest) {
     }
 
     const requestTracked = idempotencyClaim.tracked;
+    if (requestTracked) {
+      trackedRequestId = requestId;
+    }
     const imagePayloadMetadata = inspectImagePayloads(images);
 
     console.log("[Chat API] Image payloads", {
@@ -1339,6 +1343,13 @@ export async function POST(request: NextRequest) {
                 reason: repoSourceClassifierDecision.reason,
                 classifierConfidence: repoSourceClassifierDecision.confidence,
               },
+              degradedContext: repoContextDegraded
+                ? {
+                    kind: "repository",
+                    repository: activeRepoContext?.repositoryFullName ?? null,
+                    reason: repoContextDegraded.reason,
+                  }
+                : null,
               attachmentSummaryForClassifier,
               activeRepoContextAttached,
               routingSignals,
@@ -1553,6 +1564,10 @@ ${chunkWorkflowSummary}`;
                         },
                         selectReplacementLead: async (context) => {
                           failedProviderNames.add(context.failedLead.provider);
+                          await recordSharedProviderFailure(
+                            context.failedLead.provider,
+                            context.error,
+                          );
                           const registrySnapshot = await getCollaborationRegistrySnapshot();
                           const healthyProviders = filterHealthyProviders(
                             providers.filter(
@@ -1864,6 +1879,7 @@ ${chunkWorkflowSummary}`;
                 const failureScope = classifyGenerationFailure(error);
                 if (failureScope === "provider") {
                   failedProviderNames.add(attempt.provider.name);
+                  void recordSharedProviderFailure(attempt.provider.name, error);
                 }
                 console.warn(
                   `[Chat API] Generation failed for ${attempt.provider.name}:${attempt.modelId} (${error instanceof Error ? error.message : String(error)}).`
@@ -1928,13 +1944,22 @@ ${chunkWorkflowSummary}`;
 
             console.log("[Chat API] Generation successful. Saving assistant response.");
             const assistantText = result.text || streamedText;
+            const assistantMessageId = crypto.randomUUID();
             await saveMessage(chatId, {
-              id: crypto.randomUUID(),
+              id: assistantMessageId,
               role: "assistant",
               model: result.model,
               content: assistantText,
               assets: imageAssets,
             });
+            if (requestTracked) {
+              await completeChatRequest(requestId, {
+                assistantMessageId,
+                assistantModel: result.model,
+                assistantContent: assistantText,
+                assistantAssets: imageAssets,
+              });
+            }
             await refreshShortTermMemory(actorId, chatId);
 
             console.log("[Chat API] Memory persistence start", { actorId, chatId });
@@ -1974,6 +1999,9 @@ ${chunkWorkflowSummary}`;
           } catch (error: unknown) {
             console.error("[Chat API] Stream Runtime Error:", error);
             const message = error instanceof Error ? error.message : "Unknown stream error";
+            if (requestTracked) {
+              await failChatRequest(requestId, error);
+            }
             emitChunk(reasoningState.error(message, true));
             console.error("[Chat API] reasoning stream error", { requestId, message, streamCancelled });
             if (!streamCancelled) {
@@ -1999,6 +2027,9 @@ ${chunkWorkflowSummary}`;
     });
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : "Unexpected error";
+    if (trackedRequestId) {
+      await failChatRequest(trackedRequestId, error);
+    }
 
     if (errorMessage === "Invalid request payload") {
       return NextResponse.json({ error: errorMessage }, { status: 400 });
