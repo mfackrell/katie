@@ -20,7 +20,11 @@ test("intent classifier runtime context does not expose a proposed routing answe
     { requestId: "test-req-123" }
   );
 
-  assert.ok(systemPrompt.startsWith("KATIE_RUNTIME_CONTEXT:"));
+  assert.ok(systemPrompt.startsWith("You are the Intent Classifier for Katie."));
+  assert.ok(
+    systemPrompt.indexOf("KATIE_RUNTIME_CONTEXT:") >
+      systemPrompt.indexOf("## Intent Guide"),
+  );
   assert.ok(systemPrompt.includes("- current_provider: anthropic"));
   assert.ok(systemPrompt.includes("- current_model: claude-sonnet-4.6"));
   assert.ok(systemPrompt.includes("- model_tier: premium"));
