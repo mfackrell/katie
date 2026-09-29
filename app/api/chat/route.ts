@@ -1507,6 +1507,18 @@ ${chunkWorkflowSummary}`;
                         },
                         onTrace: async (event: CollaborationTraceEvent) => {
                           console.info("[Collaboration] event", event);
+                          emitChunk({
+                            type: "metadata",
+                            modelId,
+                            provider: provider.name,
+                            explainer: selectionExplainer,
+                            collaborationEvent: {
+                              type: event.type,
+                              capability: event.capability,
+                              delegationIndex: event.delegationIndex,
+                              depth: event.depth,
+                            },
+                          });
                         },
                         onFinalTextDelta: suppressCalculationScaffolding
                           ? async () => {}
