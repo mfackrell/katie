@@ -502,6 +502,7 @@ export function ChatPanel({
   const emojiPickerRef = useRef<HTMLDivElement>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
   const recoveryPollingRef = useRef(false);
+  const buildVersionRef = useRef<string | null>(null);
   const copiedFeedbackTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(
     null,
   );
@@ -567,6 +568,76 @@ export function ChatPanel({
   useEffect(() => {
     scrollToBottom();
   }, [messages, loading]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function checkBuildVersion() {
+      if (
+        typeof window === "undefined" ||
+        typeof document === "undefined" ||
+        document.visibilityState === "hidden"
+      ) {
+        return;
+      }
+
+      try {
+        const response = await fetch("/api/version", { cache: "no-store" });
+        if (!response.ok) {
+          return;
+        }
+
+        const payload = (await response.json()) as { version?: string };
+        const version = typeof payload.version === "string" ? payload.version : "";
+        if (!version || cancelled) {
+          return;
+        }
+
+        if (!buildVersionRef.current) {
+          buildVersionRef.current = version;
+          return;
+        }
+
+        if (buildVersionRef.current === version) {
+          return;
+        }
+
+        // Do not reload while a request is actively being sent/recovered.
+        // The next foreground event will check again after that work settles.
+        if (
+          abortControllerRef.current ||
+          recoveryPollingRef.current ||
+          readPendingChatRequest(chatId)
+        ) {
+          return;
+        }
+
+        window.location.reload();
+      } catch {
+        // Version detection is best-effort and must never interrupt chat use.
+      }
+    }
+
+    function handleVisibilityChange() {
+      if (document.visibilityState === "visible") {
+        void checkBuildVersion();
+      }
+    }
+
+    function handlePageShow() {
+      void checkBuildVersion();
+    }
+
+    void checkBuildVersion();
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    window.addEventListener("pageshow", handlePageShow);
+
+    return () => {
+      cancelled = true;
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+      window.removeEventListener("pageshow", handlePageShow);
+    };
+  }, [chatId]);
 
   const messagesByChatIdRef = useRef<Record<string, Message[]>>({});
 
