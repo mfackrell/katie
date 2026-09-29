@@ -16,6 +16,12 @@
   },
   "include": [
     "lib/providers/google-model-capabilities.ts",
+    "tests/collaboration.test.ts",
+    "lib/collaboration/orchestrator.ts",
+    "lib/collaboration/routing.ts",
+    "lib/collaboration/activation.ts",
+    "lib/collaboration/protocol.ts",
+    "lib/collaboration/types.ts",
     "lib/router/model-intent.ts",
     "lib/providers/types.ts",
     "lib/uploads/build-file-references.ts",
