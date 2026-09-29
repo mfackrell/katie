@@ -4,6 +4,12 @@ import { assembleContext } from "@/lib/memory/assemble-context";
 import { maybeUpdateSummary } from "@/lib/memory/summarizer";
 import { maybeUpdateLongTermMemory } from "@/lib/memory/long-term-editor";
 import { saveMessage } from "@/lib/data/persistence-store";
+import {
+  claimChatRequest,
+  completeChatRequest,
+  failChatRequest,
+  fingerprintChatRequest,
+} from "@/lib/chat/request-idempotency";
 import { refreshShortTermMemory } from "@/lib/memory/short-term";
 import { resolveLocalKatieResponse } from "@/lib/chat/local-katie";
 import { maintainMemoryArchitecture } from "@/lib/memory/hygiene";
@@ -28,6 +34,10 @@ import {
   filterHealthyProviders,
 } from "@/lib/router/provider-error";
 import {
+  filterProvidersBySharedHealth,
+  recordSharedProviderFailure,
+} from "@/lib/router/provider-health";
+import {
   getAttachmentSupportForProvider,
   isVideoAttachment,
   resolveVideoRoutingPolicy,
@@ -48,10 +58,6 @@ import {
 } from "@/lib/repo/repo-access";
 import { analyzeChunkedAttachments, shouldRunChunkedWorkflow } from "@/lib/providers/chunked-document-workflow";
 import { sanitizeCalculationResponse, shouldSuppressCalculationScaffolding } from "@/lib/providers/calculation-output";
-import {
-  __resolveRepoSourceClassifierFailureForTests,
-  type RepoSourceClassifierDecision
-} from "@/lib/chat/repo-source-classifier-fallback";
 import { shouldUseAdaptiveCollaboration } from "@/lib/collaboration/activation";
 import { getCollaborationConfig } from "@/lib/collaboration/config";
 import { runAdaptiveCollaboration } from "@/lib/collaboration/orchestrator";
@@ -203,11 +209,11 @@ function buildKatieRuntimeContext({
 
 function replaceKatieRuntimeContext(persona: string, runtimeContext: string): string {
   const withoutExistingContext = persona
-    .replace(/^KATIE_RUNTIME_CONTEXT:\n[\s\S]*?\n---\n*/m, "")
-    .trimStart();
+    .replace(/\n*KATIE_RUNTIME_CONTEXT:\n[\s\S]*?\n---\n*/m, "")
+    .trimEnd();
 
   return withoutExistingContext
-    ? `${runtimeContext}\n\n${withoutExistingContext}`
+    ? `${withoutExistingContext}\n\n${runtimeContext}`
     : runtimeContext;
 }
 
@@ -217,6 +223,46 @@ function shouldRunRepoAuditMode(message: string): boolean {
 
 const CODE_PATCH_OR_DIFF_ROUTING_REGEX = /\b(diff|patch|@@|\+\+\+\s|---\s|pull request|\bpr\b|\bcommit\b)\b/i;
 const REPO_REVIEW_LANGUAGE_ROUTING_REGEX = /\b(repo|repository|code|file|files|source|routing|architecture|audit|review|debug|test|tests|deployment|kubernetes|docker|ci\/?cd)\b/i;
+
+const REPO_SOURCE_INTENTS = new Set<RequestIntent>([
+  "architecture-review",
+  "code-review",
+  "technical-debugging",
+  "code-generation",
+]);
+
+function shouldAttachRepoSourceDeterministically(input: {
+  repoInjectionEnabled: boolean;
+  hasActiveRepo: boolean;
+  requestIntent?: RequestIntent;
+  message: string;
+}): { attach: boolean; reason: string } {
+  if (!input.repoInjectionEnabled) {
+    return { attach: false, reason: "Repository injection disabled by user setting." };
+  }
+  if (!input.hasActiveRepo) {
+    return { attach: false, reason: "No active repository is attached." };
+  }
+  if (input.requestIntent && REPO_SOURCE_INTENTS.has(input.requestIntent)) {
+    return {
+      attach: true,
+      reason: `Resolved intent ${input.requestIntent} requires repository source context.`,
+    };
+  }
+  if (
+    CODE_PATCH_OR_DIFF_ROUTING_REGEX.test(input.message) ||
+    REPO_REVIEW_LANGUAGE_ROUTING_REGEX.test(input.message)
+  ) {
+    return {
+      attach: true,
+      reason: "Message explicitly references code, repository, architecture, debugging, review, or implementation work.",
+    };
+  }
+  return {
+    attach: false,
+    reason: "Request is not repo-dependent; skipping GitHub/source retrieval.",
+  };
+}
 
 function deriveRepoSearchTerms(message: string): string[] {
   const tokens = message
@@ -540,121 +586,6 @@ async function loadRepoGenerationContext(activeRepo: ActiveRepoContext): Promise
     attachedCharacterCount: 0,
     attachedApproxTokenCount: 0,
   };
-}
-
-function parseRepoSourceClassifierResponse(raw: string): RepoSourceClassifierDecision | null {
-  const jsonStart = raw.indexOf("{");
-  const jsonEnd = raw.lastIndexOf("}");
-  if (jsonStart === -1 || jsonEnd === -1 || jsonEnd <= jsonStart) {
-    return null;
-  }
-
-  try {
-    const parsed = JSON.parse(raw.slice(jsonStart, jsonEnd + 1)) as Partial<RepoSourceClassifierDecision>;
-    if (typeof parsed.attach_repo_source !== "boolean") {
-      return null;
-    }
-
-    const confidence =
-      typeof parsed.confidence === "number" && Number.isFinite(parsed.confidence)
-        ? Math.max(0, Math.min(1, parsed.confidence))
-        : null;
-
-    return {
-      attach_repo_source: parsed.attach_repo_source,
-      reason: typeof parsed.reason === "string" ? parsed.reason : "No reason provided",
-      confidence,
-    };
-  } catch {
-    return null;
-  }
-}
-
-
-
-async function classifyRepoSourceAttachmentNeed({
-  provider,
-  modelId,
-  message,
-  requestIntent,
-  activeRepo,
-  repoSummary,
-  attachmentSummaryForClassifier,
-  activeRepoContextAttached,
-  routingSignals,
-}: {
-  provider: LlmProvider;
-  modelId: string;
-  message: string;
-  requestIntent?: RequestIntent;
-  activeRepo: boolean;
-  repoSummary?: string;
-  attachmentSummaryForClassifier?: { total: number; imageCount: number; videoCount: number; textLikeCount: number };
-  activeRepoContextAttached?: boolean;
-  routingSignals?: Record<string, unknown>;
-}): Promise<RepoSourceClassifierDecision> {
-  try {
-    const classificationPrompt = [
-      "Decide whether the assistant should attach real repository source file excerpts for this request.",
-      "Only return strict JSON.",
-      "Use this schema exactly:",
-      '{"attach_repo_source": boolean, "reason": string, "confidence": number | null}',
-      "",
-      "Your job is to infer whether real source code or file contents from the active repository would materially improve the answer.",
-      "",
-      "Set attach_repo_source=true whenever the user’s request would benefit from seeing actual repository files, code, configuration, implementation details, project structure, or concrete source context. This includes but is not limited to:",
-      "- code review",
-      "- debugging",
-      "- architecture analysis",
-      "- implementation questions",
-      "- questions about whether the assistant can see, access, read, inspect, verify, or reason about the codebase",
-      "- requests that reference behavior, capabilities, integrations, file handling, prompts, routing, tools, or system logic that may depend on actual code",
-      "- ambiguous technical questions where source context would likely improve accuracy",
-      "",
-      "Set attach_repo_source=false only when the request is clearly answerable without repository source contents, such as:",
-      "- casual conversation",
-      "- purely conceptual discussion unrelated to this repo",
-      "- questions answered fully by high-level metadata alone",
-      "",
-      "If an active repo is attached and you are uncertain, prefer true.",
-      "",
-      "If no active repo is attached, attach_repo_source must be false.",
-      "",
-      `User message: ${JSON.stringify(message)}`,
-      `Resolved intent: ${requestIntent ?? "unknown"}`,
-      `Active repo attached: ${activeRepo ? "yes" : "no"}`,
-      `Repo summary: ${repoSummary ?? "none"}`,
-      `Attachment summary: ${JSON.stringify(attachmentSummaryForClassifier ?? { total: 0, imageCount: 0, videoCount: 0, textLikeCount: 0 })}`,
-      `Active repo context attached: ${activeRepoContextAttached ? "yes" : "no"}`,
-      `Routing signals: ${JSON.stringify(routingSignals ?? {})}`
-    ].join("\n");
-
-    const result = await provider.generate({
-      name: "Repo Source Classifier",
-      persona: "You are a strict JSON classifier.",
-      summary: "",
-      history: [],
-      user: classificationPrompt,
-      modelId,
-    });
-
-    const parsed = parseRepoSourceClassifierResponse(result.text ?? "");
-    if (parsed) {
-      return parsed;
-    }
-
-    const fallback = __resolveRepoSourceClassifierFailureForTests(activeRepo);
-    if (fallback.attach_repo_source) {
-      console.warn("[Chat API] Repo source classifier invalid JSON; falling open for active repo.");
-    }
-    return fallback;
-  } catch (error) {
-    const fallback = __resolveRepoSourceClassifierFailureForTests(activeRepo, `Classifier failed: ${error instanceof Error ? error.message : String(error)}`);
-    if (fallback.attach_repo_source) {
-      console.warn("[Chat API] Repo source classifier failed; falling open for active repo.", error);
-    }
-    return fallback;
-  }
 }
 
 export async function POST(request: NextRequest) {
