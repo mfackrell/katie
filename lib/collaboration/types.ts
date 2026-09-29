@@ -107,6 +107,11 @@ export type CollaborationEngineOptions = {
   maxContributionChars?: number;
   maxTotalContributionChars?: number;
   participantTimeoutMs?: number;
+  prepareParticipantParams?: (
+    params: ChatGenerateParams,
+    participant: CollaborationParticipant,
+    role: "lead-control" | "helper-control" | "final-synthesis",
+  ) => ChatGenerateParams;
 };
 
 export type CollaborationEngineResult = {
