@@ -75,6 +75,136 @@ const MIN_IMAGE_DIMENSION = 640;
 const IMAGE_JPEG_QUALITY = 0.82;
 const MAX_CHAT_REQUEST_BYTES = 3_800_000;
 const REQUEST_SIZE_SAFETY_BYTES = 150_000;
+const PENDING_CHAT_REQUEST_STORAGE_PREFIX = "chat:pending-request:";
+const MOBILE_RECOVERY_POLL_INTERVAL_MS = 1_500;
+const MOBILE_RECOVERY_WINDOW_MS = 4 * 60 * 1_000;
+const MOBILE_PENDING_MAX_AGE_MS = 30 * 60 * 1_000;
+
+type PendingChatRequest = {
+  chatId: string;
+  content: string;
+  startedAt: string;
+};
+
+function pendingChatRequestStorageKey(chatId: string): string {
+  return `${PENDING_CHAT_REQUEST_STORAGE_PREFIX}${chatId}`;
+}
+
+function readPendingChatRequest(chatId: string): PendingChatRequest | null {
+  if (typeof window === "undefined") {
+    return null;
+  }
+
+  try {
+    const raw = window.localStorage.getItem(pendingChatRequestStorageKey(chatId));
+    if (!raw) {
+      return null;
+    }
+
+    const parsed = JSON.parse(raw) as Partial<PendingChatRequest>;
+    if (
+      parsed.chatId !== chatId ||
+      typeof parsed.content !== "string" ||
+      typeof parsed.startedAt !== "string"
+    ) {
+      return null;
+    }
+
+    return {
+      chatId,
+      content: parsed.content,
+      startedAt: parsed.startedAt,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function writePendingChatRequest(pending: PendingChatRequest): void {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  window.localStorage.setItem(
+    pendingChatRequestStorageKey(pending.chatId),
+    JSON.stringify(pending),
+  );
+}
+
+function clearPendingChatRequest(chatId: string): void {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  window.localStorage.removeItem(pendingChatRequestStorageKey(chatId));
+}
+
+function waitForRecoveryPoll(): Promise<void> {
+  return new Promise((resolve) => {
+    window.setTimeout(resolve, MOBILE_RECOVERY_POLL_INTERVAL_MS);
+  });
+}
+
+async function pollForPersistedAssistant(
+  chatId: string,
+  pending: PendingChatRequest,
+  maxWaitMs = MOBILE_RECOVERY_WINDOW_MS,
+): Promise<Message[] | null> {
+  const startedAtMs = Date.parse(pending.startedAt);
+  const deadline = Date.now() + maxWaitMs;
+
+  while (Date.now() <= deadline) {
+    if (typeof document !== "undefined" && document.visibilityState === "hidden") {
+      return null;
+    }
+
+    try {
+      const response = await fetch(
+        `/api/messages?chatId=${encodeURIComponent(chatId)}`,
+        { cache: "no-store" },
+      );
+
+      if (response.ok) {
+        const payload = (await response.json()) as { messages?: Message[] };
+        const serverMessages = payload.messages ?? [];
+        let matchingUserIndex = -1;
+
+        for (let index = serverMessages.length - 1; index >= 0; index -= 1) {
+          const candidate = serverMessages[index];
+          const candidateCreatedAt = Date.parse(candidate.createdAt);
+          if (
+            candidate.role === "user" &&
+            candidate.content === pending.content &&
+            Number.isFinite(candidateCreatedAt) &&
+            (!Number.isFinite(startedAtMs) || candidateCreatedAt >= startedAtMs - 120_000)
+          ) {
+            matchingUserIndex = index;
+            break;
+          }
+        }
+
+        if (matchingUserIndex >= 0) {
+          const recoveredAssistant = serverMessages
+            .slice(matchingUserIndex + 1)
+            .find((candidate) => candidate.role === "assistant");
+
+          if (recoveredAssistant) {
+            return serverMessages;
+          }
+        }
+      }
+    } catch {
+      // Mobile connectivity may still be settling after the app resumes.
+    }
+
+    if (Date.now() >= deadline) {
+      break;
+    }
+    await waitForRecoveryPoll();
+  }
+
+  return null;
+}
 
 function readBlobAsDataUrl(blob: Blob): Promise<string> {
   return new Promise((resolve, reject) => {
