@@ -1275,68 +1275,55 @@ export function ChatPanel({
         imageLengths: imagesToSend.map((image) => image.length),
       });
 
-      if (isTransportFailure) {
+      const isRecoverableStreamFailure =
+        isTransportFailure || requestStage === "reading response stream";
+
+      if (isRecoverableStreamFailure) {
         try {
-          // A mobile browser can lose the fetch response even after the server
-          // successfully finishes and persists the exchange. Re-read the
-          // authoritative chat before telling the user to resend anything.
-          await new Promise((resolve) => setTimeout(resolve, 500));
-          const recoveryResponse = await fetch(
-            `/api/messages?chatId=${encodeURIComponent(chatId)}`,
-            { cache: "no-store" },
+          const pending =
+            readPendingChatRequest(chatId) ?? {
+              chatId,
+              content:
+                content ||
+                (hasImages
+                  ? "[image]"
+                  : videosToUpload.length > 0
+                    ? "[video]"
+                    : "[file]"),
+              startedAt: optimisticUserMessage.createdAt,
+            };
+
+          setStatusMessage(
+            "The mobile connection to Katie was interrupted. Waiting for the server-side response to finish…",
           );
 
-          if (recoveryResponse.ok) {
-            const recoveryPayload = (await recoveryResponse.json()) as {
-              messages?: Message[];
-            };
-            const serverMessages = recoveryPayload.messages ?? [];
-            const optimisticCreatedAt = Date.parse(optimisticUserMessage.createdAt);
-            const requestContent =
-              content ||
-              (hasImages
-                ? "[image]"
-                : videosToUpload.length > 0
-                  ? "[video]"
-                  : "[file]");
+          const recoveredMessages = await pollForPersistedAssistant(
+            chatId,
+            pending,
+            MOBILE_RECOVERY_WINDOW_MS,
+          );
 
-            let matchingUserIndex = -1;
-            for (let index = serverMessages.length - 1; index >= 0; index -= 1) {
-              const candidate = serverMessages[index];
-              if (
-                candidate.role === "user" &&
-                candidate.content === requestContent &&
-                Date.parse(candidate.createdAt) >= optimisticCreatedAt - 120_000
-              ) {
-                matchingUserIndex = index;
-                break;
-              }
+          if (recoveredMessages) {
+            clearPendingChatRequest(chatId);
+            setMessages(recoveredMessages);
+            setMessagesByChatId((cache) => ({
+              ...cache,
+              [chatId]: recoveredMessages,
+            }));
+
+            const recoveredAssistant = [...recoveredMessages]
+              .reverse()
+              .find((candidate) => candidate.role === "assistant");
+            if (recoveredAssistant?.model) {
+              setMeta({
+                provider: "recovered",
+                model: recoveredAssistant.model,
+              });
             }
-
-            const recoveredAssistant =
-              matchingUserIndex >= 0
-                ? serverMessages
-                    .slice(matchingUserIndex + 1)
-                    .find((candidate) => candidate.role === "assistant")
-                : undefined;
-
-            if (recoveredAssistant) {
-              setMessages(serverMessages);
-              setMessagesByChatId((cache) => ({
-                ...cache,
-                [chatId]: serverMessages,
-              }));
-              if (recoveredAssistant.model) {
-                setMeta({
-                  provider: "recovered",
-                  model: recoveredAssistant.model,
-                });
-              }
-              setStatusMessage(
-                "Your browser lost the connection after Katie completed the request. The saved response was recovered from the server.",
-              );
-              return;
-            }
+            setStatusMessage(
+              "The live mobile stream disconnected, but Katie finished on the server. The saved response was restored.",
+            );
+            return;
           }
         } catch (recoveryError: unknown) {
           console.error("[ChatPanel] response recovery failed", {
@@ -1346,10 +1333,14 @@ export function ChatPanel({
         }
       }
 
+      if (!isRecoverableStreamFailure) {
+        clearPendingChatRequest(chatId);
+      }
+
       const cause = isTransportFailure
-        ? "Network/transport error: your browser did not receive Katie's response. The request may still have reached the server, but no completed saved response could be recovered yet."
+        ? "Network/transport error: the mobile browser lost its live connection to Katie. Server-side generation may still be running, and Katie will retry recovery when this screen becomes active again."
         : requestStage === "reading response stream"
-          ? "Response-stream error: the server responded, but the browser could not finish reading or parsing the streamed response."
+          ? "Response-stream error: the mobile browser lost or could not finish reading the live stream. Server-side generation may still be running, and Katie will retry recovery when this screen becomes active again."
           : requestStage.includes("upload")
             ? "Attachment upload error: the message could not be sent because an attachment failed during upload or preparation."
             : `Request error during ${requestStage}.`;
