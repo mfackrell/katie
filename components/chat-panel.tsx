@@ -50,6 +50,63 @@ interface ChatPanelProps {
   repoInjectionEnabled: boolean;
 }
 
+type CollaborationUiEvent = {
+  type:
+    | "collaboration_started"
+    | "delegation_requested"
+    | "helper_selected"
+    | "helper_completed"
+    | "helper_failed"
+    | "lead_ready"
+    | "final_synthesis_started"
+    | "collaboration_completed"
+    | "limit_reached";
+  capability?: string;
+  delegationIndex?: number;
+  depth?: number;
+};
+
+type CollaborationUiMetadata = {
+  used: boolean;
+  delegationCount: number;
+  maxDepthReached: number;
+  contributors?: Array<{ provider: string; modelId: string }>;
+};
+
+type ChatMetadataChunk = {
+  type: "metadata";
+  modelId: string;
+  provider: string;
+  explainer?: SelectionExplainer;
+  resetText?: boolean;
+  collaborationEvent?: CollaborationUiEvent;
+  collaboration?: CollaborationUiMetadata;
+};
+
+function collaborationStatusMessage(event: CollaborationUiEvent): string {
+  switch (event.type) {
+    case "collaboration_started":
+      return "Katie is deciding whether another model would materially improve this answer…";
+    case "delegation_requested":
+    case "helper_selected":
+      return `Katie is consulting another model${event.capability ? ` for ${event.capability}` : ""}…`;
+    case "helper_completed":
+      return "A collaborator has returned its findings. Katie is evaluating them…";
+    case "helper_failed":
+      return "A collaborator was unavailable. Katie is continuing with the remaining evidence…";
+    case "lead_ready":
+      return "Katie has enough evidence and is preparing the final answer…";
+    case "final_synthesis_started":
+      return "Katie is synthesizing the collaborators’ findings into one answer…";
+    case "limit_reached":
+      return "Katie reached the collaboration budget and is finishing with the evidence already collected…";
+    case "collaboration_completed":
+      return "Multi-model collaboration complete.";
+    default:
+      return "Katie is collaborating across models…";
+  }
+}
+
 type SelectionExplainer = {
   selected_model?: string;
   selected_provider?: string;
@@ -1178,7 +1235,7 @@ export function ChatPanel({
           }
 
           const chunk = JSON.parse(line) as
-            | { type: "metadata"; modelId: string; provider: string; explainer?: SelectionExplainer; resetText?: boolean }
+            | ChatMetadataChunk
             | { type: "delta"; text: string }
             | ReasoningStreamEvent
             | {
@@ -1197,6 +1254,9 @@ export function ChatPanel({
             provider = chunk.provider;
             setSelectionExplainer(chunk.explainer ?? null);
             setIsRoutingSelectionInFlight(false);
+            if (chunk.collaborationEvent) {
+              setStatusMessage(collaborationStatusMessage(chunk.collaborationEvent));
+            }
           }
 
           if (chunk.type === "delta") {
@@ -1236,7 +1296,7 @@ export function ChatPanel({
 
       if (buffered.trim()) {
         const trailingChunk = JSON.parse(buffered) as
-          | { type: "metadata"; modelId: string; provider: string; explainer?: SelectionExplainer; resetText?: boolean }
+          | ChatMetadataChunk
           | { type: "delta"; text: string }
           | ReasoningStreamEvent
           | {
@@ -1255,6 +1315,9 @@ export function ChatPanel({
           provider = trailingChunk.provider;
           setSelectionExplainer(trailingChunk.explainer ?? null);
           setIsRoutingSelectionInFlight(false);
+          if (trailingChunk.collaborationEvent) {
+            setStatusMessage(collaborationStatusMessage(trailingChunk.collaborationEvent));
+          }
         }
 
         if (trailingChunk.type === "delta") {
