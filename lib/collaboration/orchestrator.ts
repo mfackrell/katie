@@ -25,6 +25,7 @@ const DEFAULT_PARTICIPANT_TIMEOUT_MS = 120_000;
 const DEFAULT_MAX_TOTAL_DURATION_MS = 240_000;
 const MIN_CONTROL_TIME_MS = 5_000;
 const MAX_HELPER_CONTROL_PASSES = 3;
+const MAX_HELPER_CANDIDATE_ATTEMPTS = 3;
 
 function nowIso(): string {
   return new Date().toISOString();
@@ -190,8 +191,8 @@ export async function runAdaptiveCollaboration(
   );
   const collaborationStartedAt = Date.now();
   const finalSynthesisReserveMs = Math.min(
-    90_000,
-    Math.max(30_000, Math.floor(maxTotalDurationMs / 3)),
+    75_000,
+    Math.max(45_000, Math.floor(maxTotalDurationMs / 4)),
   );
   const remainingTotalMs = () =>
     Math.max(0, maxTotalDurationMs - (Date.now() - collaborationStartedAt));
@@ -311,159 +312,207 @@ export async function runAdaptiveCollaboration(
       detail: request.reason,
     });
 
-    const selected = await options.selectHelper({
-      requestId: options.requestId,
-      request,
-      requester,
-      depth,
-      usedParticipants: [...usedParticipants.values()],
-    });
-
-    if (!selected) {
-      await emit({
-        type: "helper_failed",
-        depth,
-        delegationIndex,
-        requester,
-        capability: request.capability,
-        taskPreview: compactTaskPreview(request.task),
-        detail: "No eligible helper model was available.",
-      });
-      return null;
-    }
-
-    const helper = participant(selected.provider, selected.modelId);
-    usedParticipants.set(participantKey(helper), helper);
-    await emit({
-      type: "helper_selected",
-      depth,
-      delegationIndex,
-      requester,
-      helper,
-      capability: request.capability,
-      taskPreview: compactTaskPreview(request.task),
-      detail: selected.reasoning,
-    });
-
-    const startedAt = Date.now();
     const nestedContributions: CollaborationContribution[] = [];
     const helperNotes: string[] = [];
+    let lastFailureDetail = "";
 
-    try {
-      let decision: HelperControlDecision | null = null;
+    for (
+      let candidateAttempt = 1;
+      candidateAttempt <= MAX_HELPER_CANDIDATE_ATTEMPTS;
+      candidateAttempt += 1
+    ) {
+      if (remainingBeforeFinalMs() < MIN_CONTROL_TIME_MS) {
+        await emit({
+          type: "limit_reached",
+          depth,
+          delegationIndex,
+          requester,
+          capability: request.capability,
+          taskPreview: compactTaskPreview(request.task),
+          detail: "Helper retry stopped because Katie reserved the remaining time for final synthesis.",
+        });
+        return null;
+      }
 
-      for (let controlPass = 0; controlPass < MAX_HELPER_CONTROL_PASSES; controlPass += 1) {
-        const helperParams = prepareParams(
-          withPersona(
-            {
-              ...options.params,
-              user: buildHelperControlUser(
-                options.params,
-                request,
-                nestedContributions,
-                helperNotes,
-                depth,
-              ),
-            },
-            selected.modelId,
-            getHelperCollaborationInstruction(),
-          ),
+      const selected = await options.selectHelper({
+        requestId: options.requestId,
+        request,
+        requester,
+        depth,
+        usedParticipants: [...usedParticipants.values()],
+      });
+
+      if (!selected) {
+        const detail =
+          candidateAttempt === 1
+            ? "No eligible helper model was available."
+            : "No additional eligible helper model was available after a helper failure.";
+        await emit({
+          type: "helper_failed",
+          depth,
+          delegationIndex,
+          requester,
+          capability: request.capability,
+          taskPreview: compactTaskPreview(request.task),
+          detail,
+        });
+        return null;
+      }
+
+      const helper = participant(selected.provider, selected.modelId);
+      usedParticipants.set(participantKey(helper), helper);
+
+      if (candidateAttempt > 1) {
+        await emit({
+          type: "helper_retrying",
+          depth,
+          delegationIndex,
+          requester,
           helper,
-          "helper-control",
-        );
+          capability: request.capability,
+          taskPreview: compactTaskPreview(request.task),
+          detail: lastFailureDetail
+            ? `Previous helper failed: ${lastFailureDetail}. Trying another eligible model.`
+            : "Trying another eligible model for the same delegated task.",
+        });
+      }
 
-        const response = await callControl(
-          selected.provider,
-          selected.modelId,
-          helperParams,
-          `Collaboration helper ${helper.provider}:${helper.modelId}`,
-        );
+      await emit({
+        type: "helper_selected",
+        depth,
+        delegationIndex,
+        requester,
+        helper,
+        capability: request.capability,
+        taskPreview: compactTaskPreview(request.task),
+        detail: selected.reasoning,
+      });
 
-        decision = parseHelperControlDecision(response.text);
+      const startedAt = Date.now();
 
-        if (!decision) {
-          const raw = response.text.trim();
-          if (raw) {
-            decision = {
-              action: "answer",
-              answer: raw,
-              confidence: "medium",
-              caveats: ["Helper returned an unstructured response; Katie treated it as advisory."],
-            };
-          } else {
-            throw new Error("Helper returned an empty control response.");
-          }
-        }
+      try {
+        let decision: HelperControlDecision | null = null;
+        const helperSpecificNotes = [...helperNotes];
 
-        if (decision.action === "answer") {
-          break;
-        }
-
-        const nested = await resolveHelper(decision.request, helper, depth + 1);
-        if (nested) {
-          nestedContributions.push(nested);
-        } else {
-          helperNotes.push(
-            "Requested nested delegation was unavailable or exceeded the collaboration budget. Solve the assigned subproblem directly with the information available.",
+        for (let controlPass = 0; controlPass < MAX_HELPER_CONTROL_PASSES; controlPass += 1) {
+          const helperParams = prepareParams(
+            withPersona(
+              {
+                ...options.params,
+                user: buildHelperControlUser(
+                  options.params,
+                  request,
+                  nestedContributions,
+                  helperSpecificNotes,
+                  depth,
+                ),
+              },
+              selected.modelId,
+              getHelperCollaborationInstruction(),
+            ),
+            helper,
+            "helper-control",
           );
+
+          const response = await callControl(
+            selected.provider,
+            selected.modelId,
+            helperParams,
+            `Collaboration helper ${helper.provider}:${helper.modelId}`,
+          );
+
+          decision = parseHelperControlDecision(response.text);
+
+          if (!decision) {
+            const raw = response.text.trim();
+            if (raw) {
+              decision = {
+                action: "answer",
+                answer: raw,
+                confidence: "medium",
+                caveats: ["Helper returned an unstructured response; Katie treated it as advisory."],
+              };
+            } else {
+              throw new Error("Helper returned an empty control response.");
+            }
+          }
+
+          if (decision.action === "answer") {
+            break;
+          }
+
+          const nested = await resolveHelper(decision.request, helper, depth + 1);
+          if (nested) {
+            nestedContributions.push(nested);
+          } else {
+            helperSpecificNotes.push(
+              "Requested nested delegation was unavailable or exceeded the collaboration budget. Solve the assigned subproblem directly with the information available.",
+            );
+          }
+          decision = null;
         }
-        decision = null;
+
+        if (!decision || decision.action !== "answer") {
+          throw new Error("Helper did not produce an answer within its control-pass limit.");
+        }
+
+        const remainingTotalBudget = Math.max(
+          0,
+          maxTotalContributionChars - totalContributionChars,
+        );
+        const answerBudget = Math.min(maxContributionChars, remainingTotalBudget);
+        const answer =
+          answerBudget > 0
+            ? clip(decision.answer, answerBudget)
+            : "[Additional helper output omitted because the collaboration evidence budget was exhausted.]";
+        totalContributionChars += answer.length;
+
+        const contribution: CollaborationContribution = {
+          id: crypto.randomUUID(),
+          depth,
+          requester,
+          helper,
+          task: clip(request.task, 2_000),
+          capability: request.capability,
+          answer,
+          confidence: decision.confidence,
+          caveats: decision.caveats,
+          durationMs: Date.now() - startedAt,
+        };
+
+        await emit({
+          type: "helper_completed",
+          depth,
+          delegationIndex,
+          requester,
+          helper,
+          capability: request.capability,
+          taskPreview: compactTaskPreview(request.task),
+          durationMs: contribution.durationMs,
+          detail: decision.confidence ? `confidence=${decision.confidence}` : undefined,
+        });
+        return contribution;
+      } catch (error) {
+        lastFailureDetail = error instanceof Error ? error.message : String(error);
+        await emit({
+          type: "helper_failed",
+          depth,
+          delegationIndex,
+          requester,
+          helper,
+          capability: request.capability,
+          taskPreview: compactTaskPreview(request.task),
+          durationMs: Date.now() - startedAt,
+          detail: lastFailureDetail,
+        });
+
+        if (candidateAttempt >= MAX_HELPER_CANDIDATE_ATTEMPTS) {
+          return null;
+        }
       }
-
-      if (!decision || decision.action !== "answer") {
-        throw new Error("Helper did not produce an answer within its control-pass limit.");
-      }
-
-      const remainingTotalBudget = Math.max(
-        0,
-        maxTotalContributionChars - totalContributionChars,
-      );
-      const answerBudget = Math.min(maxContributionChars, remainingTotalBudget);
-      const answer =
-        answerBudget > 0
-          ? clip(decision.answer, answerBudget)
-          : "[Additional helper output omitted because the collaboration evidence budget was exhausted.]";
-      totalContributionChars += answer.length;
-
-      const contribution: CollaborationContribution = {
-        id: crypto.randomUUID(),
-        depth,
-        requester,
-        helper,
-        task: clip(request.task, 2_000),
-        capability: request.capability,
-        answer,
-        confidence: decision.confidence,
-        caveats: decision.caveats,
-        durationMs: Date.now() - startedAt,
-      };
-
-      await emit({
-        type: "helper_completed",
-        depth,
-        delegationIndex,
-        requester,
-        helper,
-        capability: request.capability,
-        taskPreview: compactTaskPreview(request.task),
-        durationMs: contribution.durationMs,
-        detail: decision.confidence ? `confidence=${decision.confidence}` : undefined,
-      });
-      return contribution;
-    } catch (error) {
-      await emit({
-        type: "helper_failed",
-        depth,
-        delegationIndex,
-        requester,
-        helper,
-        capability: request.capability,
-        taskPreview: compactTaskPreview(request.task),
-        durationMs: Date.now() - startedAt,
-        detail: error instanceof Error ? error.message : String(error),
-      });
-      return null;
     }
+
+    return null;
   };
 
   let synthesisBrief =
