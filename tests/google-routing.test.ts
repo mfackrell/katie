@@ -23,6 +23,10 @@ import {
 } from "../lib/providers/google-model-capabilities";
 import type { LlmProvider, ProviderResponse } from "../lib/providers/types";
 import { isLikelyProviderRefusal, runWithRefusalFallback } from "../lib/router/refusal-detection";
+import {
+  classifyGenerationFailure,
+  filterHealthyProviders,
+} from "../lib/router/provider-error";
 
 function provider(
   name: LlmProvider["name"],
@@ -1618,6 +1622,78 @@ test("thrown provider errors still fall back to later candidates", async () => {
   assert.deepEqual(executedProviders, ["openai", "google"]);
   assert.equal(attempt.provider, "google");
   assert.equal(result.text, "Recovered from fallback.");
+});
+
+test("provider billing failures are classified provider-wide", () => {
+  assert.equal(
+    classifyGenerationFailure(
+      new Error("429 You have no credits remaining. Add credits to continue using the API."),
+    ),
+    "provider",
+  );
+  assert.equal(
+    classifyGenerationFailure(
+      new Error("404 The model does not exist or you do not have access to it."),
+    ),
+    "model",
+  );
+});
+
+test("healthy provider filtering quarantines provider-wide failures", () => {
+  const openai = provider("openai", ["gpt-test"]).provider;
+  const google = provider("google", ["gemini-test"]).provider;
+  const anthropic = provider("anthropic", ["claude-test"]).provider;
+
+  const filtered = filterHealthyProviders(
+    [openai, google, anthropic],
+    new Set<LlmProvider["name"]>(["openai"]),
+  );
+
+  assert.deepEqual(
+    filtered.map((item) => item.name),
+    ["google", "anthropic"],
+  );
+});
+
+test("thrown provider errors can AI-reroute ahead of deterministic fallback", async () => {
+  const attempts = [
+    { provider: "openai", modelId: "gpt-broken" },
+    { provider: "openai", modelId: "gpt-static-fallback" },
+  ];
+  const executed: string[] = [];
+  let errorRerouteObserved = false;
+
+  const { attempt, result } = await runWithRefusalFallback({
+    attempts,
+    shouldRetryRefusal: true,
+    runAttempt: async (candidate) => {
+      executed.push(`${candidate.provider}:${candidate.modelId}`);
+      if (candidate.provider === "openai") {
+        throw new Error("429 You have no credits remaining.");
+      }
+      return {
+        provider: "anthropic",
+        model: "claude-replacement",
+        text: "Recovered through cross-provider error reroute.",
+      };
+    },
+    detectRefusal: () => false,
+    rerouteOnError: async () => ({
+      provider: "anthropic",
+      modelId: "claude-replacement",
+    }),
+    onErrorReroute: () => {
+      errorRerouteObserved = true;
+    },
+  });
+
+  assert.equal(errorRerouteObserved, true);
+  assert.deepEqual(executed, [
+    "openai:gpt-broken",
+    "anthropic:claude-replacement",
+  ]);
+  assert.equal(attempt.provider, "anthropic");
+  assert.equal(result.text, "Recovered through cross-provider error reroute.");
 });
 
 test("actor routing profile schema normalization clamps aggressive values", async () => {
