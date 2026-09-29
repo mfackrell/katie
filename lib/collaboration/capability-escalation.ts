@@ -53,6 +53,8 @@ export function getCapabilityEscalationInstruction(): string {
     "KATIE_CAPABILITY_ESCALATION",
     "Answer the user normally when you have the capabilities needed.",
     "If completing or materially improving the answer requires a capability you do not have in this model/session, do not merely disclaim that limitation and do not pretend you verified something you could not access.",
+    "This rule applies whether the missing capability is obvious from the user's current message or becomes necessary because of conversation history, memory, or your own reasoning.",
+    "Before saying that you cannot browse, check a live website, inspect a current page, verify current web information, or access live/current information, you MUST request a research helper.",
     "Instead, request one narrowly scoped internal capability helper.",
     "Examples: live/current website inspection or current web facts -> research; visual inspection you cannot perform -> vision; specialist code/debug review -> coding/debugging.",
     "Only use this when the missing capability is materially relevant. Do not escalate trivial work.",
