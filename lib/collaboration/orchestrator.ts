@@ -22,6 +22,8 @@ const DEFAULT_MAX_DEPTH = 2;
 const DEFAULT_MAX_CONTRIBUTION_CHARS = 12_000;
 const DEFAULT_MAX_TOTAL_CONTRIBUTION_CHARS = 48_000;
 const DEFAULT_PARTICIPANT_TIMEOUT_MS = 120_000;
+const DEFAULT_MAX_TOTAL_DURATION_MS = 240_000;
+const MIN_CONTROL_TIME_MS = 5_000;
 const MAX_HELPER_CONTROL_PASSES = 3;
 
 function nowIso(): string {
@@ -182,6 +184,19 @@ export async function runAdaptiveCollaboration(
     5_000,
     options.participantTimeoutMs ?? DEFAULT_PARTICIPANT_TIMEOUT_MS,
   );
+  const maxTotalDurationMs = Math.max(
+    30_000,
+    options.maxTotalDurationMs ?? DEFAULT_MAX_TOTAL_DURATION_MS,
+  );
+  const collaborationStartedAt = Date.now();
+  const finalSynthesisReserveMs = Math.min(
+    90_000,
+    Math.max(30_000, Math.floor(maxTotalDurationMs / 3)),
+  );
+  const remainingTotalMs = () =>
+    Math.max(0, maxTotalDurationMs - (Date.now() - collaborationStartedAt));
+  const remainingBeforeFinalMs = () =>
+    Math.max(0, remainingTotalMs() - finalSynthesisReserveMs);
 
   const lead = participant(options.leadProvider, options.leadModelId);
   const trace: CollaborationTraceEvent[] = [];
@@ -226,8 +241,20 @@ export async function runAdaptiveCollaboration(
     modelId: string,
     params: ChatGenerateParams,
     label: string,
-  ): Promise<ProviderResponse> =>
-    withTimeout(provider.generate({ ...params, modelId }), participantTimeoutMs, label);
+  ): Promise<ProviderResponse> => {
+    const remaining = remainingBeforeFinalMs();
+    if (remaining < MIN_CONTROL_TIME_MS) {
+      throw new Error(
+        `${label} skipped because Katie reserved the remaining collaboration time for final synthesis.`,
+      );
+    }
+
+    return withTimeout(
+      provider.generate({ ...params, modelId }),
+      Math.min(participantTimeoutMs, remaining),
+      label,
+    );
+  };
 
   const resolveHelper = async (
     request: CollaborationRequest,
@@ -235,6 +262,18 @@ export async function runAdaptiveCollaboration(
     depth: number,
   ): Promise<CollaborationContribution | null> => {
     maxDepthReached = Math.max(maxDepthReached, depth);
+
+    if (remainingBeforeFinalMs() < MIN_CONTROL_TIME_MS) {
+      await emit({
+        type: "limit_reached",
+        depth,
+        requester,
+        capability: request.capability,
+        taskPreview: compactTaskPreview(request.task),
+        detail: "Collaboration time budget is reserved for final synthesis.",
+      });
+      return null;
+    }
 
     if (delegationCount >= maxDelegations) {
       await emit({
@@ -431,6 +470,17 @@ export async function runAdaptiveCollaboration(
     "Answer the user's original request directly using your own analysis and any useful helper contributions.";
 
   for (let leadPass = 0; leadPass <= maxDelegations; leadPass += 1) {
+    if (remainingBeforeFinalMs() < MIN_CONTROL_TIME_MS) {
+      synthesisBrief =
+        "The collaboration time budget is nearly exhausted. Produce the strongest complete answer now using the evidence already collected.";
+      await emit({
+        type: "limit_reached",
+        requester: lead,
+        detail: "Collaboration time budget reached; forcing final synthesis.",
+      });
+      break;
+    }
+
     const leadParams = prepareParams(
       withPersona(
         {
@@ -524,6 +574,10 @@ export async function runAdaptiveCollaboration(
   );
 
   let streamedText = "";
+  const finalTimeoutMs = Math.max(
+    MIN_CONTROL_TIME_MS,
+    Math.min(participantTimeoutMs * 2, remainingTotalMs()),
+  );
   const finalResult = options.leadProvider.generateStream
     ? await withTimeout(
         options.leadProvider.generateStream(finalParams, {
@@ -532,12 +586,12 @@ export async function runAdaptiveCollaboration(
             await options.onFinalTextDelta?.(delta);
           },
         }),
-        participantTimeoutMs * 2,
+        finalTimeoutMs,
         `Collaboration final synthesis ${lead.provider}:${lead.modelId}`,
       )
     : await withTimeout(
         options.leadProvider.generate(finalParams),
-        participantTimeoutMs * 2,
+        finalTimeoutMs,
         `Collaboration final synthesis ${lead.provider}:${lead.modelId}`,
       );
 
@@ -564,6 +618,7 @@ export async function runAdaptiveCollaboration(
       task: contribution.task,
       confidence: contribution.confidence,
     })),
+    durationMs: Date.now() - collaborationStartedAt,
   };
 
   const result: ProviderResponse = {
@@ -576,6 +631,7 @@ export async function runAdaptiveCollaboration(
     type: "collaboration_completed",
     requester: lead,
     detail: `delegations=${delegationCount}; contributions=${contributions.length}; maxDepth=${maxDepthReached}`,
+    durationMs: Date.now() - collaborationStartedAt,
   });
 
   return {
