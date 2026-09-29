@@ -814,35 +814,6 @@ export function ChatPanel({
       const response = await fetch("/api/models");
       const data = (await response.json()) as unknown;
 
-      if (response.status === 202) {
-        setStatusMessage(
-          "Katie is already processing this request. Reconnecting to the existing server-side job…",
-        );
-        const pending =
-          readPendingChatRequest(chatId) ?? {
-            chatId,
-            content: requestContent,
-            startedAt: optimisticUserMessage.createdAt,
-            requestId: clientRequestId,
-          };
-        const recoveredMessages = await pollForPersistedAssistant(
-          chatId,
-          pending,
-          MOBILE_RECOVERY_WINDOW_MS,
-        );
-
-        if (recoveredMessages) {
-          clearPendingChatRequest(chatId);
-          setMessages(recoveredMessages);
-          setMessagesByChatId((cache) => ({
-            ...cache,
-            [chatId]: recoveredMessages,
-          }));
-          setStatusMessage("Existing Katie request completed and was restored.");
-        }
-        return;
-      }
-
       if (!response.ok) {
         return;
       }
@@ -1379,6 +1350,35 @@ export function ChatPanel({
         signal: abortController.signal,
         body: requestBody,
       });
+
+      if (response.status === 202) {
+        setStatusMessage(
+          "Katie is already processing this request. Reconnecting to the existing server-side job…",
+        );
+        const pending =
+          readPendingChatRequest(chatId) ?? {
+            chatId,
+            content: requestContent,
+            startedAt: optimisticUserMessage.createdAt,
+            requestId: clientRequestId,
+          };
+        const recoveredMessages = await pollForPersistedAssistant(
+          chatId,
+          pending,
+          MOBILE_RECOVERY_WINDOW_MS,
+        );
+
+        if (recoveredMessages) {
+          clearPendingChatRequest(chatId);
+          setMessages(recoveredMessages);
+          setMessagesByChatId((cache) => ({
+            ...cache,
+            [chatId]: recoveredMessages,
+          }));
+          setStatusMessage("Existing Katie request completed and was restored.");
+        }
+        return;
+      }
 
       if (!response.ok) {
         const responseText = await response.text();
