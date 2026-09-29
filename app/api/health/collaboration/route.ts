@@ -1,5 +1,10 @@
 import { NextResponse } from "next/server";
 import { runAdaptiveCollaboration } from "@/lib/collaboration/orchestrator";
+import { runWithRefusalFallback } from "@/lib/router/refusal-detection";
+import {
+  classifyGenerationFailure,
+  filterHealthyProviders,
+} from "@/lib/router/provider-error";
 import type { CollaborationHelperSelection } from "@/lib/collaboration/types";
 import type {
   ChatGenerateParams,
@@ -360,6 +365,70 @@ async function runLeadFailoverCheck(): Promise<boolean> {
   );
 }
 
+async function runProviderErrorRerouteCheck(): Promise<boolean> {
+  const openai = makeProvider({
+    name: "openai",
+    modelId: "health-openai-broken",
+    controlResponses: [],
+  });
+  const google = makeProvider({
+    name: "google",
+    modelId: "health-google-replacement",
+    controlResponses: [],
+  });
+
+  const providers: LlmProvider[] = [openai, google];
+  const failedProviders = new Set<LlmProvider["name"]>();
+  const executed: string[] = [];
+
+  const { result, attempt } = await runWithRefusalFallback({
+    attempts: [
+      { provider: openai, modelId: "health-openai-broken" },
+      { provider: openai, modelId: "health-openai-static-fallback" },
+    ],
+    shouldRetryRefusal: true,
+    async runAttempt(candidate) {
+      executed.push(`${candidate.provider.name}:${candidate.modelId}`);
+      if (candidate.provider.name === "openai") {
+        throw new Error("429 You have no credits remaining.");
+      }
+      return {
+        provider: "google",
+        model: candidate.modelId,
+        text: "provider-error-reroute-final",
+      };
+    },
+    detectRefusal() {
+      return false;
+    },
+    async rerouteOnError({ attempt: failedAttempt, error }) {
+      if (classifyGenerationFailure(error) === "provider") {
+        failedProviders.add(failedAttempt.provider.name);
+      }
+      const healthy = filterHealthyProviders(
+        providers,
+        failedProviders,
+        failedAttempt.provider.name,
+      );
+      const replacement = healthy[0];
+      return replacement
+        ? { provider: replacement, modelId: "health-google-replacement" }
+        : null;
+    },
+  });
+
+  return (
+    classifyGenerationFailure(
+      new Error("429 You have no credits remaining."),
+    ) === "provider" &&
+    failedProviders.has("openai") &&
+    executed.join(",") ===
+      "openai:health-openai-broken,google:health-google-replacement" &&
+    attempt.provider.name === "google" &&
+    result.text === "provider-error-reroute-final"
+  );
+}
+
 async function runBudgetCheck(): Promise<boolean> {
   const lead = makeProvider({
     name: "grok",
@@ -419,12 +488,14 @@ export async function GET() {
       nestedDelegation,
       helperRetry,
       leadFailover,
+      providerErrorReroute,
       boundedDelegation,
     ] = await Promise.all([
       runBasicDelegationCheck(),
       runNestedDelegationCheck(),
       runHelperRetryCheck(),
       runLeadFailoverCheck(),
+      runProviderErrorRerouteCheck(),
       runBudgetCheck(),
     ]);
 
@@ -433,6 +504,7 @@ export async function GET() {
       nestedDelegation &&
       helperRetry &&
       leadFailover &&
+      providerErrorReroute &&
       boundedDelegation;
 
     return NextResponse.json(
@@ -443,6 +515,7 @@ export async function GET() {
           nestedDelegation,
           helperRetry,
           leadFailover,
+          providerErrorReroute,
           boundedDelegation,
         },
         durationMs: Date.now() - startedAt,
