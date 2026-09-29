@@ -1411,8 +1411,13 @@ ${chunkWorkflowSummary}`;
             const retryOnProviderRefusal = shouldRetryOnProviderRefusal();
             const refusedCandidates: Array<{ providerName: LlmProvider["name"]; modelId: string }> = [];
             const refusedCandidateKeys = new Set<string>();
+            const failedGenerationCandidates: Array<{ providerName: LlmProvider["name"]; modelId: string }> = [];
+            const failedGenerationCandidateKeys = new Set<string>();
+            const failedProviderNames = new Set<LlmProvider["name"]>();
             const maxRefusalReroutes = 3;
+            const maxErrorReroutes = 4;
             let refusalRerouteCount = 0;
+            let errorRerouteCount = 0;
             const rerouteHasImages = Array.isArray(images) && images.length > 0;
             const rerouteHasImageAttachments = attachments.some((attachment) => attachment.mimeType.startsWith("image/"));
             const rerouteHasVisualInput = rerouteHasImages || rerouteHasImageAttachments;
@@ -1506,6 +1511,7 @@ ${chunkWorkflowSummary}`;
                           const registrySnapshot = await getCollaborationRegistrySnapshot();
                           const attachmentCompatibleProviders = providers.filter(
                             (candidateProvider) =>
+                              !failedProviderNames.has(candidateProvider.name) &&
                               getAttachmentSupportForProvider(
                                 candidateProvider.name,
                                 attachments,
@@ -1516,6 +1522,54 @@ ${chunkWorkflowSummary}`;
                             request: context.request,
                             requester: context.requester,
                             providers: attachmentCompatibleProviders,
+                            usedParticipants: context.usedParticipants,
+                            modelRegistrySnapshot: registrySnapshot,
+                            actorId,
+                            actorRoutingProfile,
+                            hasImages: Array.isArray(images) && images.length > 0,
+                            hasVideoInput,
+                          });
+                        },
+                        selectReplacementLead: async (context) => {
+                          failedProviderNames.add(context.failedLead.provider);
+                          const registrySnapshot = await getCollaborationRegistrySnapshot();
+                          const healthyProviders = filterHealthyProviders(
+                            providers.filter(
+                              (candidateProvider) =>
+                                getAttachmentSupportForProvider(
+                                  candidateProvider.name,
+                                  attachments,
+                                ).supported,
+                            ),
+                            failedProviderNames,
+                            context.failedLead.provider,
+                          );
+
+                          const capability =
+                            resolvedRequestIntent === "architecture-review"
+                              ? "architecture"
+                              : resolvedRequestIntent === "technical-debugging"
+                                ? "debugging"
+                                : resolvedRequestIntent === "code-review" ||
+                                    resolvedRequestIntent === "code-generation"
+                                  ? "coding"
+                                  : resolvedRequestIntent === "web-search"
+                                    ? "research"
+                                    : resolvedRequestIntent === "multimodal-reasoning" ||
+                                        resolvedRequestIntent === "vision-analysis"
+                                      ? "vision"
+                                      : "analysis";
+
+                          return selectCollaborationHelper({
+                            requestId: `${context.requestId}:replacement-lead`,
+                            request: {
+                              task: "Synthesize the final answer to the original user request using the completed collaboration evidence. Do not redo completed helper work.",
+                              capability,
+                              reason:
+                                "The previous lead failed during final synthesis. Preserve completed helper work and finish with a healthy replacement lead.",
+                            },
+                            requester: context.failedLead,
+                            providers: healthyProviders,
                             usedParticipants: context.usedParticipants,
                             modelRegistrySnapshot: registrySnapshot,
                             actorId,
@@ -1678,7 +1732,118 @@ ${chunkWorkflowSummary}`;
                   reason: error instanceof Error ? error.message : String(error)
                 });
               },
+              rerouteOnError: async ({ attempt, error }) => {
+                if (!resolvedRoutingIntentForReroute || errorRerouteCount >= maxErrorReroutes) {
+                  return null;
+                }
+
+                const failedKey = `${attempt.provider.name}:${attempt.modelId.trim().toLowerCase()}`;
+                if (!failedGenerationCandidateKeys.has(failedKey)) {
+                  failedGenerationCandidateKeys.add(failedKey);
+                  failedGenerationCandidates.push({
+                    providerName: attempt.provider.name,
+                    modelId: attempt.modelId,
+                  });
+                }
+
+                const failureScope = classifyGenerationFailure(error);
+                if (failureScope === "provider") {
+                  failedProviderNames.add(attempt.provider.name);
+                }
+
+                errorRerouteCount += 1;
+                const healthyProviders = filterHealthyProviders(
+                  providers,
+                  failedProviderNames,
+                  attempt.provider.name,
+                );
+                const excludedCandidates = [
+                  ...refusedCandidates,
+                  ...failedGenerationCandidates,
+                ];
+
+                if (healthyProviders.length === 0) {
+                  return null;
+                }
+
+                const rerouteDecision = await chooseProvider(
+                  message,
+                  [
+                    rerouteRoutingContext,
+                    `Generation failure: ${describeGenerationFailure(error)}`,
+                    `Failed provider scope: ${failureScope}`,
+                  ].join("\n"),
+                  healthyProviders,
+                  {
+                    hasImages: rerouteHasVisualInput,
+                    hasVideoInput,
+                    actorId,
+                    actorRoutingProfile,
+                    routingHints,
+                    routingTraceEnabled,
+                    routingRequestId: `${requestId}:error-reroute-${errorRerouteCount}`,
+                    resolvedIntent: {
+                      ...resolvedRoutingIntentForReroute,
+                      intentSource: "upstream",
+                    },
+                    excludedCandidates,
+                    rerouteContext: {
+                      reason: "provider-error",
+                      failed_candidates: excludedCandidates.map((candidate) => ({
+                        provider: candidate.providerName,
+                        model: candidate.modelId,
+                      })),
+                    },
+                  },
+                );
+
+                resolvedRoutingIntentForReroute = rerouteDecision.resolvedIntent;
+                resolvedRequestIntent = rerouteDecision.resolvedIntent.intent;
+                intentAuthority = rerouteDecision.authority ?? intentAuthority;
+                intentResolutionReason =
+                  rerouteDecision.intentResolutionReason ?? intentResolutionReason;
+
+                return {
+                  provider: rerouteDecision.provider,
+                  modelId: rerouteDecision.modelId,
+                  explainer: rerouteDecision.explainer,
+                  routingSource: "ai-reroute",
+                };
+              },
+              onErrorReroute: ({ attempt, reroutedAttempt, error }) => {
+                console.warn("[Chat API] Generation error rerouted to a new provider/model.", {
+                  requestId,
+                  failedProvider: attempt.provider.name,
+                  failedModelId: attempt.modelId,
+                  failureScope: classifyGenerationFailure(error),
+                  failureSummary: describeGenerationFailure(error),
+                  reroutedProvider: reroutedAttempt.provider.name,
+                  reroutedModelId: reroutedAttempt.modelId,
+                });
+                emitChunk({
+                  type: "metadata",
+                  modelId: reroutedAttempt.modelId,
+                  provider: reroutedAttempt.provider.name,
+                  explainer: reroutedAttempt.explainer,
+                  resetText: true,
+                  providerFailover: {
+                    from: {
+                      provider: attempt.provider.name,
+                      modelId: attempt.modelId,
+                    },
+                    to: {
+                      provider: reroutedAttempt.provider.name,
+                      modelId: reroutedAttempt.modelId,
+                    },
+                    reason: describeGenerationFailure(error),
+                  },
+                });
+              },
               onError: ({ attempt, error }) => {
+                const failureScope = classifyGenerationFailure(error);
+                if (failureScope === "provider") {
+                  failedProviderNames.add(attempt.provider.name);
+                }
                 console.warn(
                   `[Chat API] Generation failed for ${attempt.provider.name}:${attempt.modelId} (${error instanceof Error ? error.message : String(error)}).`
                 );
