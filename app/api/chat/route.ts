@@ -223,6 +223,8 @@ function shouldRunRepoAuditMode(message: string): boolean {
 
 const CODE_PATCH_OR_DIFF_ROUTING_REGEX = /\b(diff|patch|@@|\+\+\+\s|---\s|pull request|\bpr\b|\bcommit\b)\b/i;
 const REPO_REVIEW_LANGUAGE_ROUTING_REGEX = /\b(repo|repository|code|file|files|source|routing|architecture|audit|review|debug|test|tests|deployment|kubernetes|docker|ci\/?cd)\b/i;
+const REPO_SOURCE_EXPLICIT_MESSAGE_REGEX =
+  /\b(repo|repository|github|source code|codebase|typescript|javascript|route\.ts|\.tsx?\b|component|function|class|endpoint|api route|routing|architecture|debug|debugging|bug|deployment|kubernetes|docker|ci\/?cd)\b/i;
 
 const REPO_SOURCE_INTENTS = new Set<RequestIntent>([
   "architecture-review",
@@ -251,7 +253,7 @@ function shouldAttachRepoSourceDeterministically(input: {
   }
   if (
     CODE_PATCH_OR_DIFF_ROUTING_REGEX.test(input.message) ||
-    REPO_REVIEW_LANGUAGE_ROUTING_REGEX.test(input.message)
+    REPO_SOURCE_EXPLICIT_MESSAGE_REGEX.test(input.message)
   ) {
     return {
       attach: true,
