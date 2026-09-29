@@ -742,6 +742,8 @@ export function ChatPanel({
     } else if (
       (event.type === "collaboration_started" ||
         event.type === "lead_ready" ||
+        event.type === "lead_failed" ||
+        event.type === "lead_replaced" ||
         event.type === "final_synthesis_started" ||
         event.type === "helper_failed" ||
         event.type === "limit_reached") &&
