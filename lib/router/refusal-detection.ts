@@ -56,6 +56,8 @@ export async function runWithRefusalFallback<TAttempt>({
   rerouteOnRefusal,
   onRefusalReroute,
   onRefusalFallback,
+  rerouteOnError,
+  onErrorReroute,
   onRerouteError,
   onError
 }: {
@@ -75,6 +77,19 @@ export async function runWithRefusalFallback<TAttempt>({
     reroutedAttempt: TAttempt;
   }) => void;
   onRefusalFallback?: (context: { attempt: TAttempt; attemptIndex: number; nextAttempt: TAttempt }) => void;
+  rerouteOnError?: (context: {
+    attempt: TAttempt;
+    attemptIndex: number;
+    attemptedAttempts: TAttempt[];
+    remainingAttempts: TAttempt[];
+    error: unknown;
+  }) => Promise<TAttempt | null>;
+  onErrorReroute?: (context: {
+    attempt: TAttempt;
+    attemptIndex: number;
+    reroutedAttempt: TAttempt;
+    error: unknown;
+  }) => void;
   onRerouteError?: (context: { attempt: TAttempt; attemptIndex: number; error: unknown }) => void;
   onError?: (context: { attempt: TAttempt; attemptIndex: number; error: unknown }) => void;
 }): Promise<{ result: ProviderResponse; attempt: TAttempt }> {
@@ -132,6 +147,34 @@ export async function runWithRefusalFallback<TAttempt>({
     } catch (error: unknown) {
       lastGenerationError = error;
       onError?.({ attempt, attemptIndex: currentAttemptIndex, error });
+
+      if (rerouteOnError) {
+        try {
+          const reroutedAttempt = await rerouteOnError({
+            attempt,
+            attemptIndex: currentAttemptIndex,
+            attemptedAttempts: [...attemptedAttempts],
+            remainingAttempts: [...pendingAttempts],
+            error,
+          });
+
+          if (reroutedAttempt) {
+            pendingAttempts.unshift(reroutedAttempt);
+            onErrorReroute?.({
+              attempt,
+              attemptIndex: currentAttemptIndex,
+              reroutedAttempt,
+              error,
+            });
+          }
+        } catch (rerouteError: unknown) {
+          onRerouteError?.({
+            attempt,
+            attemptIndex: currentAttemptIndex,
+            error: rerouteError,
+          });
+        }
+      }
     }
   }
 
