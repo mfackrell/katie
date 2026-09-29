@@ -88,8 +88,9 @@ Environment-configurable limits:
 - `KATIE_COLLAB_MAX_CONTRIBUTION_CHARS` — default 12,000 characters
 - `KATIE_COLLAB_MAX_TOTAL_CONTRIBUTION_CHARS` — default 48,000 characters
 - `KATIE_COLLAB_PARTICIPANT_TIMEOUT_MS` — default 120 seconds per control/helper call
+- `KATIE_COLLAB_MAX_TOTAL_DURATION_MS` — default 240 seconds, hard max 280 seconds
 
-The final synthesis receives twice the participant timeout window.
+Katie reserves a portion of the global wall-clock budget for final synthesis. New helper work is refused once the remaining non-final budget is too small, ensuring the collaboration does not spend the entire 300-second Vercel chat-function lifetime consulting helpers and then fail before answering.
 
 The limits are global to a user turn, including nested helper requests. A helper cannot create an unbounded model-to-model loop.
 
