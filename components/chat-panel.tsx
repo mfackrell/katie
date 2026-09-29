@@ -501,6 +501,7 @@ export function ChatPanel({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const emojiPickerRef = useRef<HTMLDivElement>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
+  const recoveryPollingRef = useRef(false);
   const copiedFeedbackTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(
     null,
   );
@@ -630,6 +631,94 @@ export function ChatPanel({
 
     return () => {
       cancelled = true;
+    };
+  }, [chatId]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function recoverAfterResume() {
+      if (
+        typeof window === "undefined" ||
+        typeof document === "undefined" ||
+        document.visibilityState === "hidden" ||
+        abortControllerRef.current ||
+        recoveryPollingRef.current
+      ) {
+        return;
+      }
+
+      const pending = readPendingChatRequest(chatId);
+      if (!pending) {
+        return;
+      }
+
+      const pendingAgeMs = Date.now() - Date.parse(pending.startedAt);
+      if (Number.isFinite(pendingAgeMs) && pendingAgeMs > MOBILE_PENDING_MAX_AGE_MS) {
+        clearPendingChatRequest(chatId);
+        return;
+      }
+
+      recoveryPollingRef.current = true;
+      setLoading(true);
+      setStatusMessage("Reconnecting to Katie and checking for the completed response…");
+
+      try {
+        const recoveredMessages = await pollForPersistedAssistant(
+          chatId,
+          pending,
+          MOBILE_RECOVERY_WINDOW_MS,
+        );
+
+        if (cancelled || !recoveredMessages) {
+          return;
+        }
+
+        clearPendingChatRequest(chatId);
+        setMessages(recoveredMessages);
+        setMessagesByChatId((current) => ({
+          ...current,
+          [chatId]: recoveredMessages,
+        }));
+
+        const recoveredAssistant = [...recoveredMessages]
+          .reverse()
+          .find((message) => message.role === "assistant");
+        if (recoveredAssistant?.model) {
+          setMeta({ provider: "recovered", model: recoveredAssistant.model });
+        }
+
+        setStatusMessage(
+          "Katie finished while this screen was away. The saved response has been restored.",
+        );
+      } finally {
+        recoveryPollingRef.current = false;
+        if (!cancelled) {
+          setLoading(false);
+          setStreamingModel(null);
+          setIsRoutingSelectionInFlight(false);
+        }
+      }
+    }
+
+    function handleVisibilityChange() {
+      if (document.visibilityState === "visible") {
+        void recoverAfterResume();
+      }
+    }
+
+    function handlePageShow() {
+      void recoverAfterResume();
+    }
+
+    void recoverAfterResume();
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    window.addEventListener("pageshow", handlePageShow);
+
+    return () => {
+      cancelled = true;
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+      window.removeEventListener("pageshow", handlePageShow);
     };
   }, [chatId]);
 
