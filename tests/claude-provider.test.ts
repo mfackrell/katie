@@ -67,8 +67,10 @@ test("ClaudeProvider continues non-stream responses after max_tokens and preserv
     assert.equal(requestBodies[0].stream, undefined);
 
     const secondMessages = requestBodies[1].messages as Array<{ role: string; content: string }>;
-    assert.equal(secondMessages.at(-1)?.role, "assistant");
-    assert.equal(secondMessages.at(-1)?.content, "Part 1 ");
+    assert.equal(secondMessages.at(-2)?.role, "assistant");
+    assert.equal(secondMessages.at(-2)?.content, "Part 1");
+    assert.equal(secondMessages.at(-1)?.role, "user");
+    assert.match(secondMessages.at(-1)?.content ?? "", /Continue exactly where/);
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -139,8 +141,55 @@ test("ClaudeProvider streams continuations and returns one stitched response", a
     assert.equal(requestBodies[0].stream, true);
 
     const secondMessages = requestBodies[1].messages as Array<{ role: string; content: string }>;
-    assert.equal(secondMessages.at(-1)?.role, "assistant");
-    assert.equal(secondMessages.at(-1)?.content, "Part 1 ");
+    assert.equal(secondMessages.at(-2)?.role, "assistant");
+    assert.equal(secondMessages.at(-2)?.content, "Part 1");
+    assert.equal(secondMessages.at(-1)?.role, "user");
+    assert.match(secondMessages.at(-1)?.content ?? "", /Continue exactly where/);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+
+test("Claude continuation payload never ends with assistant prefill or trailing assistant whitespace", async () => {
+  const originalFetch = globalThis.fetch;
+  let call = 0;
+
+  globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+    call += 1;
+    const body = JSON.parse(String(init?.body ?? "{}")) as {
+      messages?: Array<{ role: string; content: string }>;
+    };
+
+    if (call === 2) {
+      const messages = body.messages ?? [];
+      assert.equal(messages.at(-1)?.role, "user");
+      assert.equal(messages.at(-2)?.role, "assistant");
+      assert.equal(messages.at(-2)?.content, "Part 1");
+      assert.equal(/\s$/.test(messages.at(-2)?.content ?? ""), false);
+    }
+
+    if (call === 1) {
+      return jsonResponse({
+        content: [{ type: "text", text: "Part 1   " }],
+        stop_reason: "max_tokens",
+        usage: { input_tokens: 10, output_tokens: 16384 },
+      });
+    }
+
+    return jsonResponse({
+      content: [{ type: "text", text: "Part 2" }],
+      stop_reason: "end_turn",
+      usage: { input_tokens: 20, output_tokens: 20 },
+    });
+  }) as typeof fetch;
+
+  try {
+    const provider = new ClaudeProvider("test-key");
+    const result = await provider.generate(baseParams);
+    assert.equal(call, 2);
+    assert.equal(result.finishReason, "end_turn");
+    assert.equal(result.truncated, false);
   } finally {
     globalThis.fetch = originalFetch;
   }
