@@ -1034,7 +1034,11 @@ export function ChatPanel({
       return;
     }
 
-    const closeDelay = reasoningState.error ? 3000 : 1500;
+    const closeDelay = reasoningState.error
+      ? 3000
+      : collaborationActivity.length > 0
+        ? 5000
+        : 1500;
     reasoningPopupTimeoutRef.current = setTimeout(() => {
       setReasoningPopupVisible(false);
     }, closeDelay);
@@ -1045,7 +1049,14 @@ export function ChatPanel({
         reasoningPopupTimeoutRef.current = null;
       }
     };
-  }, [loading, reasoningPopupDismissed, reasoningPopupVisible, reasoningState.error, showLiveReasoningExplainer]);
+  }, [
+    collaborationActivity.length,
+    loading,
+    reasoningPopupDismissed,
+    reasoningPopupVisible,
+    reasoningState.error,
+    showLiveReasoningExplainer,
+  ]);
 
   useEffect(() => {
     if (typeof window === "undefined") {
