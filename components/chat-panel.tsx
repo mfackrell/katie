@@ -933,11 +933,14 @@ export function ChatPanel({
         })),
       });
 
+      const requestContent =
+        content || (hasImages ? "[image]" : videosToUpload.length > 0 ? "[video]" : "[file]");
+
       const buildChatRequestBody = (requestImages: string[]) =>
         JSON.stringify({
           actorId,
           chatId,
-          message: content || (hasImages ? "[image]" : videosToUpload.length > 0 ? "[video]" : "[file]"),
+          message: requestContent,
           images: requestImages,
           fileReferences: refsToSend,
           overrideProvider: selectedOverride?.providerName,
@@ -981,6 +984,11 @@ export function ChatPanel({
 
       const abortController = new AbortController();
       abortControllerRef.current = abortController;
+      writePendingChatRequest({
+        chatId,
+        content: requestContent,
+        startedAt: optimisticUserMessage.createdAt,
+      });
 
       requestStage = "sending chat request";
       const response = await fetch("/api/chat", {
@@ -1024,6 +1032,7 @@ export function ChatPanel({
           setMessagesByChatId((cache) => ({ ...cache, [chatId]: nextMessages }));
           return nextMessages;
         });
+        clearPendingChatRequest(chatId);
         setStatusMessage(httpCause);
         return;
       }
@@ -1242,6 +1251,7 @@ export function ChatPanel({
           }),
         );
       }
+      clearPendingChatRequest(chatId);
       setStatusMessage("Response received.");
     } catch (error: unknown) {
       abortControllerRef.current = null;
