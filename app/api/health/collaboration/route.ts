@@ -1,5 +1,7 @@
 import { NextResponse } from "next/server";
 import { runAdaptiveCollaboration } from "@/lib/collaboration/orchestrator";
+import { runOnDemandCapabilityEscalation } from "@/lib/collaboration/capability-escalation-runner";
+import { CAPABILITY_REQUEST_PREFIX } from "@/lib/collaboration/capability-escalation";
 import { runWithRefusalFallback } from "@/lib/router/refusal-detection";
 import {
   classifyGenerationFailure,
@@ -432,6 +434,93 @@ async function runProviderErrorRerouteCheck(): Promise<boolean> {
   );
 }
 
+async function runCapabilityEscalationCheck(): Promise<boolean> {
+  const leadCalls: ChatGenerateParams[] = [];
+  let leadPass = 0;
+  const lead: FakeProvider = {
+    name: "anthropic",
+    calls: leadCalls,
+    async listModels() {
+      return ["health-capability-lead"];
+    },
+    async generate(params) {
+      leadCalls.push(params);
+      return {
+        text: "",
+        provider: "anthropic",
+        model: params.modelId ?? "health-capability-lead",
+      };
+    },
+    async generateStream(params, handlers) {
+      leadCalls.push(params);
+      leadPass += 1;
+      const text =
+        leadPass === 1
+          ? CAPABILITY_REQUEST_PREFIX +
+            ' {"task":"Inspect https://c3execs.com/ live","capability":"research","reason":"Need current website state","preferredProvider":"grok"}'
+          : "capability-escalation-final";
+      await handlers.onTextDelta?.(text);
+      return {
+        text,
+        provider: "anthropic",
+        model: params.modelId ?? "health-capability-lead",
+      };
+    },
+  };
+
+  const helper = makeProvider({
+    name: "grok",
+    modelId: "health-grok-web",
+    controlResponses: [
+      "Live website evidence: homepage is reachable and current.",
+    ],
+  });
+
+  let selectedCapability = "";
+  let selectedPreferredProvider: string | null | undefined;
+  let streamed = "";
+
+  const result = await runOnDemandCapabilityEscalation({
+    requestId: "health-capability-escalation",
+    leadProvider: lead,
+    leadModelId: "health-capability-lead",
+    params: {
+      ...baseParams,
+      user: "What am I really building with C3?",
+      requestIntent: "social-emotional",
+      modelId: "health-capability-lead",
+    },
+    async selectHelper(context) {
+      selectedCapability = context.request.capability;
+      selectedPreferredProvider = context.request.preferredProvider;
+      return {
+        provider: helper,
+        modelId: "health-grok-web",
+      };
+    },
+    async onFinalTextDelta(delta) {
+      streamed += delta;
+    },
+  });
+
+  return (
+    selectedCapability === "research" &&
+    selectedPreferredProvider === "grok" &&
+    helper.calls.length === 1 &&
+    helper.calls[0]?.requestIntent === "web-search" &&
+    leadCalls.length === 2 &&
+    (leadCalls[1]?.user ?? "").includes("homepage is reachable and current") &&
+    streamed === "capability-escalation-final" &&
+    result.result.provider === "anthropic" &&
+    result.result.model === "health-capability-lead" &&
+    result.metadata?.delegationCount === 1 &&
+    result.metadata?.contributors.some(
+      (value) =>
+        value.provider === "grok" && value.modelId === "health-grok-web",
+    ) === true
+  );
+}
+
 async function runBudgetCheck(): Promise<boolean> {
   const lead = makeProvider({
     name: "grok",
@@ -492,6 +581,7 @@ export async function GET() {
       helperRetry,
       leadFailover,
       providerErrorReroute,
+      capabilityEscalation,
       boundedDelegation,
     ] = await Promise.all([
       runBasicDelegationCheck(),
@@ -499,6 +589,7 @@ export async function GET() {
       runHelperRetryCheck(),
       runLeadFailoverCheck(),
       runProviderErrorRerouteCheck(),
+      runCapabilityEscalationCheck(),
       runBudgetCheck(),
     ]);
 
@@ -508,6 +599,7 @@ export async function GET() {
       helperRetry &&
       leadFailover &&
       providerErrorReroute &&
+      capabilityEscalation &&
       boundedDelegation;
 
     return NextResponse.json(
@@ -519,6 +611,7 @@ export async function GET() {
           helperRetry,
           leadFailover,
           providerErrorReroute,
+          capabilityEscalation,
           boundedDelegation,
         },
         durationMs: Date.now() - startedAt,
