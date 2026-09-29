@@ -1282,9 +1282,10 @@ ${personaForGeneration}`;
 
             console.log(`[Chat API] Requesting generation from ${provider.name} using model ${modelId}...`);
             const enqueueDelta = (delta: string) => {
-              if (streamCancelled) {
-                throw new Error("stream cancelled");
-              }
+              // Mobile browsers routinely suspend or drop streaming fetches when
+              // the app is backgrounded. A disconnected UI must not cancel the
+              // actual model generation: keep consuming the provider stream so
+              // the completed assistant response can still be persisted.
               emitChunk({ type: "delta", text: delta });
               const reasoningUpdate = reasoningState.addDelta(delta);
               if (reasoningUpdate) {
@@ -1620,19 +1621,34 @@ ${chunkWorkflowSummary}`;
               timeToFinalAnswerMs: Date.now() - requestStartedAtMs
             });
 
-            controller.close();
+            if (!streamCancelled) {
+              controller.close();
+            } else {
+              console.log("[Chat API] generation completed after client disconnect", {
+                requestId,
+                chatId,
+                provider: result.provider,
+                model: result.model,
+                responseLength: assistantText.length
+              });
+            }
           } catch (error: unknown) {
             console.error("[Chat API] Stream Runtime Error:", error);
             const message = error instanceof Error ? error.message : "Unknown stream error";
             emitChunk(reasoningState.error(message, true));
-            console.error("[Chat API] reasoning stream error", { requestId, message });
-            controller.error(error);
+            console.error("[Chat API] reasoning stream error", { requestId, message, streamCancelled });
+            if (!streamCancelled) {
+              controller.error(error);
+            }
           }
         })();
       },
       cancel() {
         streamCancelled = true;
-        console.log("[Chat API] stream cancelled by client", { requestId });
+        console.log("[Chat API] client stream disconnected; generation will continue for persistence", {
+          requestId,
+          chatId
+        });
       }
     });
 
