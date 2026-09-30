@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { shouldUseAdaptiveCollaboration } from "../lib/collaboration/activation";
 import { runAdaptiveCollaboration } from "../lib/collaboration/orchestrator";
+import { selectCollaborationHelper } from "../lib/collaboration/routing";
 import {
   CAPABILITY_REQUEST_PREFIX,
   getCapabilityEscalationInstruction,
@@ -527,6 +528,29 @@ test("lead-requested research still triggers the independent marketing critique"
     true,
   );
   assert.equal(result.result.text, "Final review after recovered research.");
+});
+
+test("empty helper candidate pools return null without an undefined-provider crash", async () => {
+  const onlyWebModel = fakeProvider({
+    name: "openai",
+    modelId: "gpt-5-search-api",
+    controlResponses: [],
+  });
+
+  const selected = await selectCollaborationHelper({
+    requestId: "req-empty-helper-pool",
+    request: {
+      task: "Fetch the live site.",
+      capability: "research",
+    },
+    requester: { provider: "anthropic", modelId: "claude-marketing" },
+    providers: [onlyWebModel],
+    usedParticipants: [
+      { provider: "openai", modelId: "gpt-5-search-api" },
+    ],
+  });
+
+  assert.equal(selected, null);
 });
 
 test("lead dynamically delegates to a helper and synthesizes one final answer", async () => {
