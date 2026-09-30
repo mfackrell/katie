@@ -59,6 +59,7 @@ type CollaborationUiEvent = {
   type:
     | "collaboration_started"
     | "research_evidence_collected"
+    | "research_evidence_reused"
     | "research_evidence_collection_failed"
     | "delegation_requested"
     | "helper_selected"
@@ -162,6 +163,8 @@ function collaborationStatusMessage(event: CollaborationUiEvent): string {
       return `${requester} is leading this answer and evaluating where another model can help…`;
     case "research_evidence_collected":
       return `${helper} gathered live source evidence${formatDuration(event.durationMs)}. Katie is sharing it with the other models…`;
+    case "research_evidence_reused":
+      return "Katie already has current live-source evidence and is reusing it instead of fetching the same pages again.";
     case "research_evidence_collection_failed":
       return "Katie could not complete live source retrieval. The final answer will identify what remains unverified.";
     case "delegation_requested":
@@ -205,6 +208,7 @@ function collaborationActivityTone(
   if (
     event.type === "helper_completed" ||
     event.type === "research_evidence_collected" ||
+    event.type === "research_evidence_reused" ||
     event.type === "collaboration_completed"
   ) {
     return "success";
