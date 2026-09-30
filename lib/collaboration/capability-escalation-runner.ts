@@ -15,6 +15,7 @@ import type {
   ChatGenerateParams,
   LlmProvider,
   ProviderResponse,
+  ResearchEvidenceBundle,
 } from "@/lib/providers/types";
 
 const DEFAULT_MAX_ESCALATIONS = 2;
@@ -37,6 +38,27 @@ function participantKey(value: CollaborationParticipant): string {
 
 function compactTaskPreview(value: string): string {
   return value.replace(/\s+/g, " ").trim().slice(0, 220);
+}
+
+function formatResearchEvidence(evidence: ResearchEvidenceBundle | undefined): string {
+  if (!evidence) {
+    return "";
+  }
+  const sources = evidence.sources
+    .map((source, index) =>
+      [
+        `SOURCE ${index + 1}: ${source.url}`,
+        source.title ? `Title: ${source.title}` : "",
+        source.snippet ? `Retrieved excerpt: ${source.snippet}` : "",
+      ]
+        .filter(Boolean)
+        .join("\n"),
+    )
+    .join("\n\n");
+  return [
+    `Retrieved by: ${evidence.retrievedBy.provider}:${evidence.retrievedBy.modelId}`,
+    sources || "No structured source URLs were returned.",
+  ].join("\n");
 }
 
 function buildHelperUser(
@@ -82,6 +104,9 @@ function buildResumeUser(
           contribution.helper.modelId,
         "Evidence:",
         contribution.answer,
+        ...(contribution.researchEvidence
+          ? ["Structured web sources:", formatResearchEvidence(contribution.researchEvidence)]
+          : []),
       ].join("\n"),
     ),
     "INTERNAL_KATIE_CAPABILITY_EVIDENCE_END",
@@ -428,10 +453,30 @@ export async function runOnDemandCapabilityEscalation(input: {
           capability: request.capability,
           answer: answer.slice(0, 16_000),
           confidence: "high",
+          ...(helperResult.researchEvidence
+            ? { researchEvidence: helperResult.researchEvidence }
+            : {}),
           durationMs: Date.now() - helperStartedAt,
         };
 
         contributions.push(contribution);
+
+        if (helperResult.researchEvidence) {
+          await emit({
+            type: "research_evidence_collected",
+            requester: lead,
+            helper,
+            depth: 1,
+            delegationIndex,
+            capability: request.capability,
+            taskPreview: compactTaskPreview(request.task),
+            durationMs: contribution.durationMs,
+            detail:
+              "Captured " +
+              helperResult.researchEvidence.sources.length +
+              " structured web source(s) for the lead.",
+          });
+        }
 
         await emit({
           type: "helper_completed",
