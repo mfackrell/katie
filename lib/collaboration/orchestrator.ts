@@ -23,10 +23,13 @@ const DEFAULT_MAX_DEPTH = 2;
 const DEFAULT_MAX_CONTRIBUTION_CHARS = 12_000;
 const DEFAULT_MAX_TOTAL_CONTRIBUTION_CHARS = 48_000;
 const DEFAULT_PARTICIPANT_TIMEOUT_MS = 120_000;
+const DEFAULT_RESEARCH_TIMEOUT_MS = 180_000;
 const DEFAULT_MAX_TOTAL_DURATION_MS = 240_000;
 const MIN_CONTROL_TIME_MS = 5_000;
+const MIN_RESEARCH_RETRY_TIME_MS = 45_000;
 const MAX_HELPER_CONTROL_PASSES = 3;
 const MAX_HELPER_CANDIDATE_ATTEMPTS = 3;
+const MAX_RESEARCH_CANDIDATE_ATTEMPTS = 2;
 
 function nowIso(): string {
   return new Date().toISOString();
@@ -224,6 +227,10 @@ export async function runAdaptiveCollaboration(
     5_000,
     options.participantTimeoutMs ?? DEFAULT_PARTICIPANT_TIMEOUT_MS,
   );
+  const researchTimeoutMs = Math.max(
+    30_000,
+    options.researchTimeoutMs ?? DEFAULT_RESEARCH_TIMEOUT_MS,
+  );
   const maxTotalDurationMs = Math.max(
     30_000,
     options.maxTotalDurationMs ?? DEFAULT_MAX_TOTAL_DURATION_MS,
@@ -281,6 +288,7 @@ export async function runAdaptiveCollaboration(
     modelId: string,
     params: ChatGenerateParams,
     label: string,
+    timeoutMs = participantTimeoutMs,
   ): Promise<ProviderResponse> => {
     const remaining = remainingBeforeFinalMs();
     if (remaining < MIN_CONTROL_TIME_MS) {
@@ -291,7 +299,7 @@ export async function runAdaptiveCollaboration(
 
     return withTimeout(
       provider.generate({ ...params, modelId }),
-      Math.min(participantTimeoutMs, remaining),
+      Math.min(timeoutMs, remaining),
       label,
     );
   };
@@ -355,12 +363,21 @@ export async function runAdaptiveCollaboration(
     const helperNotes: string[] = [];
     let lastFailureDetail = "";
 
+    const candidateAttemptLimit =
+      request.capability === "research"
+        ? MAX_RESEARCH_CANDIDATE_ATTEMPTS
+        : MAX_HELPER_CANDIDATE_ATTEMPTS;
+
     for (
       let candidateAttempt = 1;
-      candidateAttempt <= MAX_HELPER_CANDIDATE_ATTEMPTS;
+      candidateAttempt <= candidateAttemptLimit;
       candidateAttempt += 1
     ) {
-      if (remainingBeforeFinalMs() < MIN_CONTROL_TIME_MS) {
+      const minimumTimeNeeded =
+        request.capability === "research" && candidateAttempt > 1
+          ? MIN_RESEARCH_RETRY_TIME_MS
+          : MIN_CONTROL_TIME_MS;
+      if (remainingBeforeFinalMs() < minimumTimeNeeded) {
         await emit({
           type: "limit_reached",
           depth,
@@ -434,7 +451,9 @@ export async function runAdaptiveCollaboration(
         let helperResearchEvidence: ResearchEvidenceBundle | undefined;
         const helperSpecificNotes = [...helperNotes];
 
-        for (let controlPass = 0; controlPass < MAX_HELPER_CONTROL_PASSES; controlPass += 1) {
+        const controlPassLimit =
+          request.capability === "research" ? 1 : MAX_HELPER_CONTROL_PASSES;
+        for (let controlPass = 0; controlPass < controlPassLimit; controlPass += 1) {
           const helperParams = prepareParams(
             withPersona(
               {
@@ -461,6 +480,7 @@ export async function runAdaptiveCollaboration(
             selected.modelId,
             helperParams,
             `Collaboration helper ${helper.provider}:${helper.modelId}`,
+            request.capability === "research" ? researchTimeoutMs : participantTimeoutMs,
           );
 
           if (response.researchEvidence) {
@@ -567,7 +587,7 @@ export async function runAdaptiveCollaboration(
           detail: lastFailureDetail,
         });
 
-        if (candidateAttempt >= MAX_HELPER_CANDIDATE_ATTEMPTS) {
+        if (candidateAttempt >= candidateAttemptLimit) {
           return null;
         }
       }
