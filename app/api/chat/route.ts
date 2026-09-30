@@ -1631,6 +1631,7 @@ ${chunkWorkflowSummary}`;
                         maxContributionChars: collaborationConfig.maxContributionChars,
                         maxTotalContributionChars: collaborationConfig.maxTotalContributionChars,
                         participantTimeoutMs: collaborationConfig.participantTimeoutMs,
+                        researchTimeoutMs: collaborationConfig.researchTimeoutMs,
                         maxTotalDurationMs: collaborationConfig.maxTotalDurationMs,
                       });
 
