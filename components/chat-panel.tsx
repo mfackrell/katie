@@ -58,6 +58,8 @@ type CollaborationParticipantUi = {
 type CollaborationUiEvent = {
   type:
     | "collaboration_started"
+    | "research_evidence_collected"
+    | "research_evidence_collection_failed"
     | "delegation_requested"
     | "helper_selected"
     | "helper_completed"
@@ -158,6 +160,10 @@ function collaborationStatusMessage(event: CollaborationUiEvent): string {
   switch (event.type) {
     case "collaboration_started":
       return `${requester} is leading this answer and evaluating where another model can help…`;
+    case "research_evidence_collected":
+      return `${helper} gathered live source evidence${formatDuration(event.durationMs)}. Katie is sharing it with the other models…`;
+    case "research_evidence_collection_failed":
+      return "Katie could not complete live source retrieval. The final answer will identify what remains unverified.";
     case "delegation_requested":
       return `${requester} requested another model${capability}…`;
     case "helper_selected":
@@ -196,11 +202,16 @@ function collaborationStatusMessage(event: CollaborationUiEvent): string {
 function collaborationActivityTone(
   event: CollaborationUiEvent,
 ): CollaborationActivityItem["tone"] {
-  if (event.type === "helper_completed" || event.type === "collaboration_completed") {
+  if (
+    event.type === "helper_completed" ||
+    event.type === "research_evidence_collected" ||
+    event.type === "collaboration_completed"
+  ) {
     return "success";
   }
   if (
     event.type === "helper_failed" ||
+    event.type === "research_evidence_collection_failed" ||
     event.type === "lead_failed" ||
     event.type === "limit_reached"
   ) {
