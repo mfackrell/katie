@@ -143,12 +143,16 @@ export async function selectCollaborationHelper(input: {
         reasoning: decision.reasoning,
       } satisfies CollaborationHelperSelection;
     } catch (error) {
-      console.warn("[Collaboration] helper routing attempt failed", {
+      const reason = error instanceof Error ? error.message : String(error);
+      const noEligibleCandidates =
+        error instanceof Error && error.name === "NoEligibleRoutingCandidatesError";
+      const log = noEligibleCandidates ? console.info : console.warn;
+      log("[Collaboration] helper routing unavailable", {
         requestId: input.requestId,
         requester: input.requester,
         capability: input.request.capability,
         suffix,
-        reason: error instanceof Error ? error.message : String(error),
+        reason,
       });
       return null;
     }
