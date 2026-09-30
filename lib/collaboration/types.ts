@@ -96,6 +96,7 @@ export type CollaborationSelectionContext = {
   requester: CollaborationParticipant;
   depth: number;
   usedParticipants: CollaborationParticipant[];
+  hasImages?: boolean;
 };
 
 export type CollaborationHelperSelection = {
@@ -122,6 +123,7 @@ export type CollaborationEngineOptions = {
   }) => Promise<CollaborationHelperSelection | null>;
   onTrace?: (event: CollaborationTraceEvent) => void | Promise<void>;
   onFinalTextDelta?: (delta: string) => void | Promise<void>;
+  collectWebsiteEvidence?: typeof import("@/lib/research/website-evidence").collectWebsiteEvidence;
   maxDelegations?: number;
   maxDepth?: number;
   maxContributionChars?: number;

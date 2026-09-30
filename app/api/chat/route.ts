@@ -1547,7 +1547,7 @@ ${chunkWorkflowSummary}`;
                             modelRegistrySnapshot: registrySnapshot,
                             actorId,
                             actorRoutingProfile,
-                            hasImages: Array.isArray(images) && images.length > 0,
+                            hasImages: Boolean(context.hasImages || (Array.isArray(images) && images.length > 0)),
                             hasVideoInput,
                           });
                         },
@@ -1708,7 +1708,7 @@ ${chunkWorkflowSummary}`;
                               actorId,
                               actorRoutingProfile,
                               hasImages:
-                                Array.isArray(images) && images.length > 0,
+                                Boolean(context.hasImages || (Array.isArray(images) && images.length > 0)),
                               hasVideoInput,
                             });
                           },

@@ -1,0 +1,15 @@
+{
+  "extends": "./tsconfig.tests.json",
+  "compilerOptions": {
+    "noEmitOnError": true,
+    "outDir": ".website-test-dist",
+    "types": [
+      "node"
+    ]
+  },
+  "include": [
+    "tests/website-evidence.test.ts",
+    "tests/claude-provider.test.ts",
+    "tests/collaboration.test.ts"
+  ]
+}

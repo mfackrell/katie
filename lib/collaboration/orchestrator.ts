@@ -18,6 +18,9 @@ import type {
 import { collaborationCapabilityToIntent } from "@/lib/collaboration/routing";
 import type { ChatGenerateParams, LlmProvider, ProviderResponse, ResearchEvidenceBundle } from "@/lib/providers/types";
 
+import { collectWebsiteEvidence, websiteReviewUrls } from "@/lib/research/website-evidence";
+import { formatResearchEvidence, mergeResearchEvidence, withWebsiteImages, websiteImages, websiteEvidenceStats, WEBSITE_REVIEW_INSTRUCTION } from "@/lib/research/shared-evidence";
+
 const DEFAULT_MAX_DELEGATIONS = 5;
 const DEFAULT_MAX_DEPTH = 2;
 const DEFAULT_MAX_CONTRIBUTION_CHARS = 12_000;
@@ -54,31 +57,6 @@ function compactTaskPreview(value: string): string {
   return value.replace(/\s+/g, " ").trim().slice(0, 220);
 }
 
-function buildResearchEvidenceBlock(evidence: ResearchEvidenceBundle | undefined): string {
-  if (!evidence) {
-    return "";
-  }
-
-  const sources = evidence.sources.length
-    ? evidence.sources
-        .map((source, index) => {
-          const details = [
-            `SOURCE ${index + 1}: ${source.url}`,
-            source.title ? `Title: ${source.title}` : "",
-            source.snippet ? `Retrieved excerpt: ${source.snippet}` : "",
-          ].filter(Boolean);
-          return details.join("\n");
-        })
-        .join("\n\n")
-    : "No structured source URLs were returned by the retrieval provider.";
-
-  return [
-    "SHARED_LIVE_RESEARCH_EVIDENCE:",
-    `Retrieved by: ${evidence.retrievedBy.provider}:${evidence.retrievedBy.modelId}`,
-    `Retrieved at: ${evidence.retrievedAt}`,
-    sources,
-  ].join("\n");
-}
 
 function buildContributionBlock(contributions: CollaborationContribution[]): string {
   if (!contributions.length) {
@@ -96,9 +74,9 @@ function buildContributionBlock(contributions: CollaborationContribution[]): str
         `Capability: ${contribution.capability}`,
         `Assigned task: ${contribution.task}`,
         `Confidence: ${contribution.confidence ?? "unspecified"}`,
-        `Answer:\n${contribution.answer}${caveats}`,
+        `Answer:\n${contribution.researchEvidence ? "See complete evidence packet below." : contribution.answer}${caveats}`,
         ...(contribution.researchEvidence
-          ? ["", buildResearchEvidenceBlock(contribution.researchEvidence)]
+          ? ["", formatResearchEvidence(contribution.researchEvidence)]
           : []),
       ].join("\n");
     })
@@ -148,6 +126,7 @@ function buildHelperControlUser(
           "RESEARCH REQUIREMENTS:",
           "Use live web retrieval. Open and inspect the relevant live URL(s), not just search-result snippets.",
           "Return a source-grounded evidence packet for the other models: page URLs, visible headings, important body copy, CTA labels, offers/pricing, trust elements, and any load/access limitations.",
+          "For website reviews, include observed design evidence where your tools expose it: typography, colors, spacing, layout, imagery, navigation, visual hierarchy and responsive behavior. Do not infer rendered appearance from text or fabricate visual observations. Katie separately captures screenshots, HTML and applied CSS.",
           "Preserve exact short wording for important headings and CTAs when possible. Separate what was directly observed from inference.",
         ]
       : []),
@@ -158,7 +137,9 @@ function buildHelperControlUser(
     buildContributionBlock(nestedContributions),
     ...(notes.length ? ["", "ORCHESTRATOR_NOTES:", ...notes] : []),
     "",
-    "Return only the collaboration-control JSON required by your system instructions.",
+    request.capability === "research"
+      ? "Return the factual evidence packet directly; do not wrap it in collaboration-control JSON."
+      : "Return only the collaboration-control JSON required by your system instructions.",
   ].join("\n");
 }
 
@@ -256,6 +237,11 @@ export async function runAdaptiveCollaboration(
   let maxDepthReached = 0;
   let totalContributionChars = 0;
   let independentMarketingCritiqueAttempted = false;
+  let websiteEvidencePromise: ReturnType<typeof collectWebsiteEvidence> | undefined;
+  let sharedWebsite: ResearchEvidenceBundle["website"];
+  const collectWebsite = () => websiteEvidencePromise ??= (options.collectWebsiteEvidence ?? collectWebsiteEvidence)(options.params, {
+    timeoutMs: Math.min(45_000, Math.max(1_000, remainingBeforeFinalMs() - MIN_CONTROL_TIME_MS)),
+  }).catch((error) => ({ capturedAt: nowIso(), pages: [], limitations: ["Rendered inspection failed: " + String(error)] }));
 
   const addContribution = (contribution: CollaborationContribution): void => {
     if (!contributions.some((existing) => existing.id === contribution.id)) {
@@ -293,8 +279,8 @@ export async function runAdaptiveCollaboration(
     role: "lead-control" | "helper-control" | "final-synthesis",
   ): ChatGenerateParams =>
     options.prepareParticipantParams
-      ? options.prepareParticipantParams(params, participantValue, role)
-      : params;
+      ? options.prepareParticipantParams(withWebsiteImages(params, sharedWebsite), participantValue, role)
+      : withWebsiteImages(params, sharedWebsite);
 
   const callControl = async (
     provider: LlmProvider,
@@ -429,6 +415,7 @@ export async function runAdaptiveCollaboration(
         requester,
         depth,
         usedParticipants: [...usedParticipants.values()],
+        hasImages: Boolean(options.params.images?.length || websiteImages(sharedWebsite).length),
       });
 
       if (!selected) {
@@ -497,7 +484,7 @@ export async function runAdaptiveCollaboration(
                 user: buildHelperControlUser(
                   options.params,
                   request,
-                  nestedContributions,
+                  [...contributions.filter((entry) => entry.capability === "research"), ...nestedContributions],
                   helperSpecificNotes,
                   depth,
                 ),
@@ -507,7 +494,8 @@ export async function runAdaptiveCollaboration(
                 ? [
                     "You are Katie's live-research retrieval specialist.",
                     "Retrieve and inspect the live sources requested by the user.",
-                    "Return a factual evidence packet only: observed page text, headings, CTAs, offers, trust signals, source URLs, and access limitations.",
+                    "Return a factual evidence packet only: observed page text, headings, CTAs, offers, trust signals, source URLs, design evidence exposed by your tools, and access limitations.",
+                    WEBSITE_REVIEW_INSTRUCTION,
                     "Do not make marketing recommendations or ask other models for help. Do not wrap the response in collaboration-control JSON.",
                   ].join("\n")
                 : getHelperCollaborationInstruction(),
@@ -516,6 +504,8 @@ export async function runAdaptiveCollaboration(
             "helper-control",
           );
 
+          // Browser capture runs alongside live retrieval and is reused across retries.
+          const capture = isResearchPass ? collectWebsite() : undefined;
           const response = await callControl(
             selected.provider,
             selected.modelId,
@@ -524,8 +514,9 @@ export async function runAdaptiveCollaboration(
             request.capability === "research" ? researchTimeoutMs : participantTimeoutMs,
           );
 
-          if (response.researchEvidence) {
-            helperResearchEvidence = response.researchEvidence;
+          if (isResearchPass) {
+            sharedWebsite = await capture;
+            helperResearchEvidence = mergeResearchEvidence(response, helper, options.params.user, sharedWebsite);
           }
 
           if (isResearchPass) {
@@ -612,7 +603,7 @@ export async function runAdaptiveCollaboration(
             helper,
             capability: request.capability,
             taskPreview: compactTaskPreview(request.task),
-            detail: `Captured ${helperResearchEvidence.sources.length} structured web source(s) for shared collaboration context.`,
+            detail: `Captured ${helperResearchEvidence.sources.length} structured web source(s); complete research chars=${helperResearchEvidence.summary.length}; ${websiteEvidenceStats(helperResearchEvidence.website)}. Full packet shared without helper-answer clipping.`,
             durationMs: contribution.durationMs,
           });
         }
@@ -672,11 +663,12 @@ export async function runAdaptiveCollaboration(
     const independentReview = await resolveHelper(
       {
         task:
-          "Independently review the shared live website evidence for marketing, positioning, messaging, user experience, trust, offer clarity, and conversion implications. Challenge weak assumptions and identify the highest-impact findings.",
+          "Independently review the complete shared live website evidence and rendered screenshots for marketing, positioning, messaging, user experience, trust, offer clarity, conversion, layout, typography, colors, spacing, imagery, navigation, desktop/mobile responsiveness and visual polish. Challenge weak assumptions and identify the highest-impact findings. State any visual coverage limitations.",
         capability: "critique",
         reason:
           "Marketing review benefits from an independent analytical perspective separate from the retrieval model and the lead.",
-        context: clip(buildContributionBlock(researchContributions), 14_000),
+        // All helpers receive the full shared research through buildHelperControlUser.
+        context: "Use the complete shared research and rendered website evidence supplied below.",
       },
       lead,
       1,
@@ -697,7 +689,8 @@ export async function runAdaptiveCollaboration(
   let synthesisBrief =
     "Answer the user's original request directly using your own analysis and any useful helper contributions.";
 
-  const requiresLiveResearch = options.params.secondaryIntents?.includes("web-search") ?? false;
+  const requiresLiveResearch = (options.params.secondaryIntents?.includes("web-search") ?? false) ||
+    websiteReviewUrls(options.params).length > 0;
   if (requiresLiveResearch && delegationCount < maxDelegations) {
     const researchContribution = await resolveHelper(
       {
@@ -967,6 +960,9 @@ export async function runAdaptiveCollaboration(
     model: synthesisModelId,
     text: finalText,
     collaboration: metadata,
+    ...(contributions.find((entry) => entry.researchEvidence)?.researchEvidence
+      ? { researchEvidence: contributions.find((entry) => entry.researchEvidence)!.researchEvidence }
+      : {}),
   };
 
   await emit({
