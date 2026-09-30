@@ -95,9 +95,7 @@ test("collaboration protocol parses lead/helper control JSON", () => {
   }
 
   const helper = parseHelperControlDecision(
-    ```json
-{"action":"answer","answer":"Looks sound","confidence":"high","caveats":["Check timeout"]}
-```,
+    '```json\n{"action":"answer","answer":"Looks sound","confidence":"high","caveats":["Check timeout"]}\n```',
   );
   assert.equal(helper?.action, "answer");
   if (helper?.action === "answer") {

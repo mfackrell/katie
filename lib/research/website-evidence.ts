@@ -74,7 +74,7 @@ export async function launchWebsiteBrowser(): Promise<Browser> {
     import("playwright-core"),
   ]);
   return playwright.launch({
-    args: chromium.args,
+    args: chromium.args.filter((arg) => !["--single-process", "--disable-web-security", "--allow-running-insecure-content"].includes(arg)),
     executablePath: await chromium.executablePath(),
     headless: true,
     timeout: 15_000,

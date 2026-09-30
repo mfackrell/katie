@@ -41,7 +41,7 @@ test("browser fetch guard blocks private addresses, credentials and unsafe proto
   assert.equal(isPublicAddress("8.8.8.8"), true);
   assert.equal(isPublicAddress("2606:4700:4700::1111"), true);
   for (const url of ["http://127.0.0.1", "http://[::1]", "http://169.254.169.254", "file:///tmp/secret", "https://user:password@example.com/", "https://example.com:8080/"]) {
-    await assert.rejects(validateWebsiteUrl(url), undefined, url);
+    await assert.rejects(validateWebsiteUrl(url), (error) => error instanceof Error, url);
   }
 });
 
@@ -136,14 +136,16 @@ test("browser launch failure becomes an explicit coverage limitation", async () 
 });
 
 test("real Chromium captures applied desktop/mobile CSS, HTML and screenshots", { timeout: 60_000 }, async () => {
+  console.info("[WebsiteEvidence test] Launching real Chromium");
   const browser = await launchWebsiteBrowser();
+  console.info("[WebsiteEvidence test] Chromium launched");
   const actualNewContext = browser.newContext.bind(browser);
   browser.newContext = async (options) => {
     const context = await actualNewContext(options);
     const actualRoute = context.route.bind(context);
     // Production route validation still runs; fixture responses replace network access.
     context.route = async (_pattern, handler) => {
-      await actualRoute("**/*", async (route, request) => {
+      return actualRoute("**/*", async (route, request) => {
         const proxy = new Proxy(route, {
           get(target, key) {
             if (key === "continue") return async () => {
@@ -165,6 +167,7 @@ test("real Chromium captures applied desktop/mobile CSS, HTML and screenshots", 
   const evidence = await collectWebsiteEvidence(params, {
     launch: async () => browser, validate: async () => {}, timeoutMs: 45_000,
   });
+  console.info("[WebsiteEvidence test] Capture result", JSON.stringify(evidence?.pages.map((page) => ({ title: page.title, views: page.views.length, limitations: page.limitations }))), evidence?.limitations);
   assert.ok(evidence?.pages.length);
   const page = evidence.pages[0];
   assert.equal(page.title, "Fixture");
