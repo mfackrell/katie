@@ -152,7 +152,7 @@ test("real Chromium captures applied desktop/mobile CSS, HTML and screenshots", 
               if (request.url().endsWith("/style.css")) {
                 await target.fulfill({ contentType: "text/css", body: "body{margin:0;background:#f0f0f0} h1{font-family:Arial;font-size:48px;color:#ff0000} @media(max-width:600px){h1{font-size:24px}}" });
               } else {
-                await target.fulfill({ contentType: "text/html", body: '<!doctype html><html><head><title>Fixture</title><link rel="stylesheet" href="/style.css"></head><body><header><nav><a href="/team">Team</a></nav></header><main><h1>Rendered fixture</h1><button>Contact us</button></main></body></html>' });
+                await target.fulfill({ contentType: "text/html", body: '<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1"><title>Fixture</title><link rel="stylesheet" href="/style.css"></head><body><header><nav><a href="/team">Team</a></nav></header><main><h1>Rendered fixture</h1><button>Contact us</button></main></body></html>' });
               }
             };
             const value = Reflect.get(target, key);

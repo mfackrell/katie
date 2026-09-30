@@ -50,7 +50,7 @@ export function websiteImages(website: WebsiteEvidence | undefined): string[] {
 
 export function withWebsiteImages(params: ChatGenerateParams, website: WebsiteEvidence | undefined): ChatGenerateParams {
   const images = websiteImages(website);
-  return images.length ? { ...params, images: [...new Set([...(params.images ?? []), ...images])] } : params;
+  return images.length ? { ...params, images: [...(params.images ?? []), ...images] } : params;
 }
 
 export function mergeResearchEvidence(

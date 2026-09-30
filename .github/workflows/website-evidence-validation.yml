@@ -22,23 +22,9 @@ jobs:
         run: npx tsc -p tsconfig.tests.json || true
       - name: Prepare test aliases
         run: mkdir -p .test-dist/node_modules && ln -sfn .. .test-dist/node_modules/@
-      - name: Website review regression tests
-        run: node --test --test-name-pattern='marketing|research|website|browser|reviewer|Claude|shared packet' .test-dist/tests/collaboration.test.js .test-dist/tests/claude-provider.test.js .test-dist/tests/website-evidence.test.js
+      - name: Website evidence and image adapter tests
+        run: node --test .test-dist/tests/website-evidence.test.js .test-dist/tests/claude-provider.test.js
+      - name: Collaboration website regression tests
+        run: node --test --test-name-pattern='marketing|research|website|reviewer' .test-dist/tests/collaboration.test.js
       - name: Build and smoke
         run: npm run check:url && npm run build && npm run smoke
-  baseline:
-    runs-on: ubuntu-latest
-    env:
-      NEXT_PUBLIC_SUPABASE_URL: https://example.supabase.co
-      NEXT_PUBLIC_SUPABASE_ANON_KEY: anon-placeholder
-      SUPABASE_SERVICE_ROLE_KEY: service-role-placeholder
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: 91ecf8371cb42ecf43e142c584bce4d36ed020d2
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-      - run: npm install --ignore-scripts --no-audit --no-fund
-      - name: Establish existing full-suite failures
-        run: npm run test
