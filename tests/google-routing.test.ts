@@ -668,9 +668,35 @@ test("router preference profile is explicit and stable", async () => {
   assert.equal(profile.prioritize_best_model_for_task, true);
   assert.equal(profile.hard_constraints_are_non_negotiable, true);
   assert.ok(profile.quality_over_cost_for.includes("architecture-review"));
+  assert.ok(profile.quality_over_cost_for.includes("marketing-analysis"));
   assert.ok(profile.quality_over_cost_for.includes("social-emotional"));
   assert.ok(profile.prefer_efficient_for.includes("general-text"));
   assert.equal(profile.prefer_efficient_for.includes("social-emotional"), false);
+});
+
+test("marketing analysis with delegated web retrieval cannot choose Grok as lead", async () => {
+  const grok = provider("grok", ["grok-4.7"]).provider;
+  const anthropic = provider("anthropic", ["claude-sonnet-5-5"]).provider;
+
+  const decision = await chooseProvider(
+    "Review the live site from a marketing perspective.",
+    "",
+    [grok, anthropic],
+    {
+      resolvedIntent: {
+        intent: "marketing-analysis",
+        preferredProvider: null,
+        intentSource: "upstream",
+        secondaryIntents: ["web-search"],
+        complexity: "medium",
+      },
+      routingRequestId: "test-marketing-delegated-web-no-grok-lead",
+    },
+  );
+
+  assert.equal(decision.provider.name, "anthropic");
+  assert.equal(decision.modelId, "claude-sonnet-5-5");
+  assert.equal(decision.explainer?.hard_rule_applied, "marketing-analysis-delegates-web-retrieval");
 });
 
 test("router falls back to deterministic selection when LLM routing is unavailable", async () => {
