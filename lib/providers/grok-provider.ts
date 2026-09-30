@@ -1,5 +1,10 @@
 import OpenAI from "openai";
-import { ChatGenerateParams, LlmProvider, ProviderResponse } from "@/lib/providers/types";
+import {
+  ChatGenerateParams,
+  LlmProvider,
+  ProviderResponse,
+  ResearchEvidenceSource
+} from "@/lib/providers/types";
 import { buildMemoryContext } from "@/lib/providers/memory-context";
 import { MATH_EXECUTION_PROTOCOL } from "@/lib/providers/math-execution-protocol";
 import { formatAttachmentContext } from "@/lib/providers/attachment-context";
@@ -27,10 +32,25 @@ type GrokChatUserContentPart =
   | { type: "text"; text: string }
   | { type: "image_url"; image_url: { url: string } };
 
+type GrokWebSearchSource = {
+  url?: string;
+  link?: string;
+  title?: string;
+  snippet?: string;
+  text?: string;
+  [key: string]: unknown;
+};
+
 type GrokWebSearchResponse = {
   output_text?: string | null;
+  citations?: string[];
   output?: Array<{
+    type?: string;
     content?: Array<{ text?: string }>;
+    action?: {
+      sources?: Array<GrokWebSearchSource | string>;
+      [key: string]: unknown;
+    };
   }>;
 };
 
@@ -44,6 +64,63 @@ function extractResponseText(response: ResponseTextSource): string {
     .flatMap((part) => ("text" in part && typeof part.text === "string" ? [part.text] : []))
     .join("\n")
     .trim();
+}
+
+function clipEvidenceText(value: string | undefined, maxChars = 2_000): string | undefined {
+  const normalized = value?.replace(/\s+/g, " ").trim();
+  if (!normalized) {
+    return undefined;
+  }
+  return normalized.length <= maxChars
+    ? normalized
+    : `${normalized.slice(0, maxChars - 1)}…`;
+}
+
+function extractResearchSources(response: GrokWebSearchResponse): ResearchEvidenceSource[] {
+  const byUrl = new Map<string, ResearchEvidenceSource>();
+
+  const addSource = (source: GrokWebSearchSource | string) => {
+    const rawUrl =
+      typeof source === "string"
+        ? source
+        : typeof source.url === "string"
+          ? source.url
+          : typeof source.link === "string"
+            ? source.link
+            : "";
+    const url = rawUrl.trim();
+    if (!/^https?:\/\//i.test(url)) {
+      return;
+    }
+
+    const existing = byUrl.get(url);
+    if (typeof source === "string") {
+      if (!existing) {
+        byUrl.set(url, { url });
+      }
+      return;
+    }
+
+    const title = clipEvidenceText(source.title, 500);
+    const snippet = clipEvidenceText(
+      typeof source.snippet === "string" ? source.snippet : source.text,
+      2_000
+    );
+    byUrl.set(url, {
+      url,
+      ...(title ? { title } : existing?.title ? { title: existing.title } : {}),
+      ...(snippet ? { snippet } : existing?.snippet ? { snippet: existing.snippet } : {})
+    });
+  };
+
+  (response.citations ?? []).forEach(addSource);
+  (response.output ?? []).forEach((item) => {
+    if (item.type === "web_search_call") {
+      (item.action?.sources ?? []).forEach(addSource);
+    }
+  });
+
+  return Array.from(byUrl.values()).slice(0, 30);
 }
 
 function buildChatUserContent(params: ChatGenerateParams): string | GrokChatUserContentPart[] {
@@ -143,7 +220,8 @@ ${getKatieReasoningExplainerStatement()}` }]
       body: JSON.stringify({
         model,
         input,
-        tools: [{ type: "web_search" }]
+        tools: [{ type: "web_search" }],
+        include: ["web_search_call.action.sources"]
       })
     });
 
@@ -218,10 +296,30 @@ ${getKatieReasoningExplainerStatement()}` }
         const input = this.buildWebSearchInput(params, attachmentContext);
         const response = await this.createWebSearchResponse(selectedModel, input);
 
-        return {
-          text: extractResponseText(response),
+        const text = extractResponseText(response);
+        const sources = extractResearchSources(response);
+
+        console.log("[GrokProvider] web research evidence captured", {
           model: selectedModel,
-          provider: this.name
+          sourceCount: sources.length,
+          responseChars: text.length
+        });
+
+        return {
+          text,
+          model: selectedModel,
+          provider: this.name,
+          researchEvidence: {
+            kind: "web",
+            retrievedBy: {
+              provider: this.name,
+              modelId: selectedModel
+            },
+            query: params.user,
+            summary: text,
+            sources,
+            retrievedAt: new Date().toISOString()
+          }
         };
       }
 
