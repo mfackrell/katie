@@ -454,6 +454,7 @@ export async function runAdaptiveCollaboration(
         const controlPassLimit =
           request.capability === "research" ? 1 : MAX_HELPER_CONTROL_PASSES;
         for (let controlPass = 0; controlPass < controlPassLimit; controlPass += 1) {
+          const isResearchPass = request.capability === "research";
           const helperParams = prepareParams(
             withPersona(
               {
@@ -469,7 +470,14 @@ export async function runAdaptiveCollaboration(
                 ),
               },
               selected.modelId,
-              getHelperCollaborationInstruction(),
+              isResearchPass
+                ? [
+                    "You are Katie's live-research retrieval specialist.",
+                    "Retrieve and inspect the live sources requested by the user.",
+                    "Return a factual evidence packet only: observed page text, headings, CTAs, offers, trust signals, source URLs, and access limitations.",
+                    "Do not make marketing recommendations or ask other models for help. Do not wrap the response in collaboration-control JSON.",
+                  ].join("\n")
+                : getHelperCollaborationInstruction(),
             ),
             helper,
             "helper-control",
@@ -487,7 +495,22 @@ export async function runAdaptiveCollaboration(
             helperResearchEvidence = response.researchEvidence;
           }
 
-          decision = parseHelperControlDecision(response.text);
+          if (isResearchPass) {
+            const rawResearch = response.text.trim();
+            if (!rawResearch) {
+              throw new Error("Research helper returned an empty evidence response.");
+            }
+            decision = {
+              action: "answer",
+              answer: rawResearch,
+              confidence: helperResearchEvidence?.sources.length ? "high" : "medium",
+              caveats: helperResearchEvidence?.sources.length
+                ? undefined
+                : ["The retrieval provider returned research text but no structured source metadata."],
+            };
+          } else {
+            decision = parseHelperControlDecision(response.text);
+          }
 
           if (!decision) {
             const raw = response.text.trim();
