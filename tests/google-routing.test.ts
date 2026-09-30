@@ -16,6 +16,7 @@ import { chooseProvider, selectControlPlaneDecisionModels, type ResolvedRoutingI
 import { createNeutralActorRoutingProfile, normalizeActorRoutingProfile } from "../lib/router/actor-routing-profile";
 import { isAcknowledgment, parseIntentSessionState } from "../lib/router/intent-context";
 import { isBlockedRoutingModel } from "../lib/router/routing-model-filters";
+import { extractResearchSources } from "../lib/providers/grok-provider";
 import {
   isImageGenerationModel,
   isVisionAnalysisModel,
@@ -109,6 +110,66 @@ test("missing web-search capability metadata stays quiet in production and debug
   }
 });
 
+
+test("marketing analysis excludes retrieval-specialized models from the lead role", async () => {
+  const searchModel = scoreModelCandidateWithBreakdown(
+    "openai",
+    "gpt-5-search-api",
+    "marketing-analysis",
+  );
+  const deepResearchModel = scoreModelCandidateWithBreakdown(
+    "google",
+    "deep-research-pro-preview-12-2025",
+    "marketing-analysis",
+  );
+  const generalClaude = scoreModelCandidateWithBreakdown(
+    "anthropic",
+    "claude-sonnet-5-5",
+    "marketing-analysis",
+  );
+
+  assert.equal(searchModel.excluded, true);
+  assert.equal(
+    searchModel.exclusionReason,
+    "retrieval_specialist_excluded_from_marketing_lead",
+  );
+  assert.equal(deepResearchModel.excluded, true);
+  assert.equal(generalClaude.excluded, false);
+});
+
+test("grok evidence extraction accepts nested citations and falls back to URLs in research text", async () => {
+  const structured = extractResearchSources({
+    output: [
+      {
+        type: "message",
+        content: [
+          {
+            type: "output_text",
+            annotations: [
+              {
+                type: "url_citation",
+                url: "https://example.com/pricing",
+                title: "Pricing",
+              },
+            ],
+          },
+        ],
+      },
+    ],
+  } as never);
+
+  assert.equal(structured[0]?.url, "https://example.com/pricing");
+  assert.equal(structured[0]?.title, "Pricing");
+
+  const fromText = extractResearchSources(
+    { output: [] } as never,
+    "Observed homepage. Source: https://c3execs.com/ and https://c3execs.com/team.html.",
+  );
+  assert.deepEqual(
+    fromText.map((source) => source.url),
+    ["https://c3execs.com/", "https://c3execs.com/team.html"],
+  );
+});
 
 test("multimodal classifier returns null without image inputs", async () => {
   assert.equal(await inferRequestIntentFromMultimodalInput("Describe this image", []), null);
