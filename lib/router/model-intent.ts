@@ -1584,6 +1584,7 @@ export function buildRoutingPreferenceProfile(): RoutingPreferenceProfile {
       "architecture-review",
       "code-review",
       "technical-debugging",
+      "marketing-analysis",
       "multimodal-reasoning",
       "social-emotional"
     ],
