@@ -126,6 +126,15 @@ test("activation keeps simple chat fast but enables complex and explicit collabo
 
   assert.equal(
     shouldUseAdaptiveCollaboration({
+      message: "Review this live website from a marketing perspective",
+      intent: "marketing-analysis",
+      complexity: "medium",
+    }),
+    true,
+  );
+
+  assert.equal(
+    shouldUseAdaptiveCollaboration({
       message: "Have the models work together on this",
       intent: "general-text",
       complexity: "low",
@@ -303,6 +312,113 @@ test("single-model lead escalates live research to a helper and then resumes", a
     result.trace.some((event) => event.type === "helper_completed"),
     true,
   );
+});
+
+test("marketing analysis gathers live web evidence and shares it with an independent reviewer", async () => {
+  const lead = fakeProvider({
+    name: "anthropic",
+    modelId: "claude-marketing",
+    controlResponses: [
+      JSON.stringify({
+        action: "ready",
+        synthesisBrief: "Use the live evidence and independent critique.",
+      }),
+    ],
+    finalText: "Final marketing review.",
+  });
+
+  const research = fakeProvider({
+    name: "grok",
+    modelId: "grok-web",
+    controlResponses: [
+      JSON.stringify({
+        action: "answer",
+        answer:
+          "Observed homepage evidence: headline says Interim executives. Primary CTA says Talk to an operator.",
+        confidence: "high",
+      }),
+    ],
+  });
+  const originalResearchGenerate = research.generate.bind(research);
+  research.generate = async (params) => {
+    const response = await originalResearchGenerate(params);
+    return {
+      ...response,
+      researchEvidence: {
+        kind: "web",
+        retrievedBy: { provider: "grok", modelId: "grok-web" },
+        query: params.user,
+        summary: response.text,
+        sources: [
+          {
+            url: "https://c3execs.com/",
+            title: "C3 Executive Suite",
+            snippet: "Interim executives. Talk to an operator.",
+          },
+        ],
+        retrievedAt: "2026-09-30T00:00:00.000Z",
+      },
+    };
+  };
+
+  const reviewer = fakeProvider({
+    name: "openai",
+    modelId: "gpt-reviewer",
+    controlResponses: [
+      JSON.stringify({
+        action: "answer",
+        answer:
+          "Independent critique: the operator CTA is credible, but the headline should state the buyer outcome more explicitly.",
+        confidence: "high",
+      }),
+    ],
+  });
+
+  const selectedCapabilities: string[] = [];
+  const result = await runAdaptiveCollaboration({
+    requestId: "req-marketing-evidence",
+    leadProvider: lead,
+    leadModelId: "claude-marketing",
+    providers: [lead, research, reviewer],
+    params: {
+      ...baseParams,
+      user: "Review this site from a marketing perspective: https://c3execs.com/",
+      requestIntent: "marketing-analysis",
+      secondaryIntents: ["web-search"],
+      modelId: "claude-marketing",
+    },
+    async selectHelper(context) {
+      selectedCapabilities.push(context.request.capability);
+      if (context.request.capability === "research") {
+        return {
+          provider: research,
+          modelId: "grok-web",
+          reasoning: "Web-capable retrieval specialist.",
+        };
+      }
+      return {
+        provider: reviewer,
+        modelId: "gpt-reviewer",
+        reasoning: "Independent cross-provider marketing critique.",
+      };
+    },
+  });
+
+  assert.deepEqual(selectedCapabilities.slice(0, 2), ["research", "critique"]);
+  assert.equal(research.calls[0]?.requestIntent, "web-search");
+  assert.match(research.calls[0]?.user ?? "", /Open and inspect the relevant live URL/i);
+  assert.match(reviewer.calls[0]?.user ?? "", /https:\/\/c3execs\.com\//);
+  assert.match(reviewer.calls[0]?.user ?? "", /Interim executives/);
+  assert.match(lead.calls[0]?.user ?? "", /Observed homepage evidence/);
+  assert.match(lead.calls[0]?.user ?? "", /Independent critique/);
+  assert.equal(result.metadata.contributors.length, 2);
+  assert.equal(result.metadata.contributors[0]?.provider, "grok");
+  assert.equal(result.metadata.contributors[1]?.provider, "openai");
+  assert.equal(
+    result.trace.some((event) => event.type === "research_evidence_collected"),
+    true,
+  );
+  assert.equal(result.result.text, "Final marketing review.");
 });
 
 test("lead dynamically delegates to a helper and synthesizes one final answer", async () => {
