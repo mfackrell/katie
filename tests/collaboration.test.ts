@@ -4,6 +4,7 @@ import { shouldUseAdaptiveCollaboration } from "../lib/collaboration/activation"
 import { runAdaptiveCollaboration } from "../lib/collaboration/orchestrator";
 import {
   CAPABILITY_REQUEST_PREFIX,
+  getCapabilityEscalationInstruction,
   parseCapabilityEscalationRequest,
 } from "../lib/collaboration/capability-escalation";
 import { runOnDemandCapabilityEscalation } from "../lib/collaboration/capability-escalation-runner";
@@ -141,6 +142,61 @@ test("activation keeps simple chat fast but enables complex and explicit collabo
       hasManualOverride: true,
     }),
     false,
+  );
+});
+
+test("capability escalation forbids asking permission before useful live research", async () => {
+  const instruction = getCapabilityEscalationInstruction();
+
+  assert.match(instruction, /use it autonomously/i);
+  assert.match(instruction, /DO NOT ask whether the user wants you to search/i);
+  assert.match(instruction, /do the search now instead/i);
+
+  let receivedPersona = "";
+  const lead: LlmProvider = {
+    name: "anthropic",
+    async listModels() {
+      return ["claude-lead"];
+    },
+    async generate(params) {
+      receivedPersona = params.persona;
+      return {
+        text: "Normal answer.",
+        provider: "anthropic",
+        model: params.modelId ?? "claude-lead",
+      };
+    },
+    async generateStream(params, handlers) {
+      receivedPersona = params.persona;
+      await handlers.onTextDelta?.("Normal answer.");
+      return {
+        text: "Normal answer.",
+        provider: "anthropic",
+        model: params.modelId ?? "claude-lead",
+      };
+    },
+  };
+
+  await runOnDemandCapabilityEscalation({
+    requestId: "req-autonomous-research-instruction",
+    leadProvider: lead,
+    leadModelId: "claude-lead",
+    params: {
+      ...baseParams,
+      user: "Give me a useful answer.",
+      requestIntent: "general-text",
+      modelId: "claude-lead",
+    },
+    async selectHelper() {
+      throw new Error("helper should not be selected for a normal answer");
+    },
+    async onFinalTextDelta() {},
+  });
+
+  assert.match(receivedPersona, /use it autonomously/i);
+  assert.match(
+    receivedPersona,
+    /DO NOT ask whether the user wants you to search/i,
   );
 });
 
