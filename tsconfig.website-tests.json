@@ -2,7 +2,10 @@
   "extends": "./tsconfig.tests.json",
   "compilerOptions": {
     "noEmitOnError": true,
-    "outDir": ".website-test-dist"
+    "outDir": ".website-test-dist",
+    "types": [
+      "node"
+    ]
   },
   "include": [
     "tests/website-evidence.test.ts",
