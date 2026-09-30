@@ -1,7 +1,10 @@
 import { NextResponse } from "next/server";
 import { runAdaptiveCollaboration } from "@/lib/collaboration/orchestrator";
 import { runOnDemandCapabilityEscalation } from "@/lib/collaboration/capability-escalation-runner";
-import { CAPABILITY_REQUEST_PREFIX } from "@/lib/collaboration/capability-escalation";
+import {
+  CAPABILITY_REQUEST_PREFIX,
+  getCapabilityEscalationInstruction,
+} from "@/lib/collaboration/capability-escalation";
 import { runWithRefusalFallback } from "@/lib/router/refusal-detection";
 import {
   classifyGenerationFailure,
@@ -593,6 +596,12 @@ export async function GET() {
       runBudgetCheck(),
     ]);
 
+    const autonomousResearchPolicy =
+      /use it autonomously/i.test(getCapabilityEscalationInstruction()) &&
+      /DO NOT ask whether the user wants you to search/i.test(
+        getCapabilityEscalationInstruction(),
+      );
+
     const ok =
       basicDelegation &&
       nestedDelegation &&
@@ -600,6 +609,7 @@ export async function GET() {
       leadFailover &&
       providerErrorReroute &&
       capabilityEscalation &&
+      autonomousResearchPolicy &&
       boundedDelegation;
 
     return NextResponse.json(
@@ -612,6 +622,7 @@ export async function GET() {
           leadFailover,
           providerErrorReroute,
           capabilityEscalation,
+          autonomousResearchPolicy,
           boundedDelegation,
         },
         durationMs: Date.now() - startedAt,
