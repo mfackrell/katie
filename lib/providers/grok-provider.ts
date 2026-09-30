@@ -43,15 +43,9 @@ type GrokWebSearchSource = {
 
 type GrokWebSearchResponse = {
   output_text?: string | null;
-  citations?: string[];
-  output?: Array<{
-    type?: string;
-    content?: Array<{ text?: string }>;
-    action?: {
-      sources?: Array<GrokWebSearchSource | string>;
-      [key: string]: unknown;
-    };
-  }>;
+  citations?: unknown[];
+  output?: Array<Record<string, unknown>>;
+  [key: string]: unknown;
 };
 
 function extractResponseText(response: ResponseTextSource): string {
@@ -76,51 +70,142 @@ function clipEvidenceText(value: string | undefined, maxChars = 2_000): string |
     : `${normalized.slice(0, maxChars - 1)}…`;
 }
 
-function extractResearchSources(response: GrokWebSearchResponse): ResearchEvidenceSource[] {
-  const byUrl = new Map<string, ResearchEvidenceSource>();
+function addResearchSource(
+  byUrl: Map<string, ResearchEvidenceSource>,
+  source: GrokWebSearchSource | string,
+): void {
+  const rawUrl =
+    typeof source === "string"
+      ? source
+      : typeof source.url === "string"
+        ? source.url
+        : typeof source.link === "string"
+          ? source.link
+          : "";
+  const url = rawUrl.trim().replace(/[),.;]+$/, "");
+  if (!/^https?:\/\//i.test(url)) {
+    return;
+  }
 
-  const addSource = (source: GrokWebSearchSource | string) => {
-    const rawUrl =
-      typeof source === "string"
-        ? source
-        : typeof source.url === "string"
-          ? source.url
-          : typeof source.link === "string"
-            ? source.link
-            : "";
-    const url = rawUrl.trim();
-    if (!/^https?:\/\//i.test(url)) {
-      return;
+  const existing = byUrl.get(url);
+  if (typeof source === "string") {
+    if (!existing) {
+      byUrl.set(url, { url });
     }
+    return;
+  }
 
-    const existing = byUrl.get(url);
-    if (typeof source === "string") {
-      if (!existing) {
-        byUrl.set(url, { url });
-      }
-      return;
-    }
-
-    const title = clipEvidenceText(source.title, 500);
-    const snippet = clipEvidenceText(
-      typeof source.snippet === "string" ? source.snippet : source.text,
-      2_000
-    );
-    byUrl.set(url, {
-      url,
-      ...(title ? { title } : existing?.title ? { title: existing.title } : {}),
-      ...(snippet ? { snippet } : existing?.snippet ? { snippet: existing.snippet } : {})
-    });
-  };
-
-  (response.citations ?? []).forEach(addSource);
-  (response.output ?? []).forEach((item) => {
-    if (item.type === "web_search_call") {
-      (item.action?.sources ?? []).forEach(addSource);
-    }
+  const title = clipEvidenceText(source.title, 500);
+  const snippet = clipEvidenceText(
+    typeof source.snippet === "string" ? source.snippet : source.text,
+    2_000,
+  );
+  byUrl.set(url, {
+    url,
+    ...(title ? { title } : existing?.title ? { title: existing.title } : {}),
+    ...(snippet ? { snippet } : existing?.snippet ? { snippet: existing.snippet } : {}),
   });
+}
+
+function collectResearchSourcesFromUnknown(
+  value: unknown,
+  byUrl: Map<string, ResearchEvidenceSource>,
+  depth = 0,
+): void {
+  if (depth > 8 || value == null) {
+    return;
+  }
+
+  if (typeof value === "string") {
+    if (/^https?:\/\//i.test(value.trim())) {
+      addResearchSource(byUrl, value);
+    }
+    return;
+  }
+
+  if (Array.isArray(value)) {
+    value.forEach((item) => collectResearchSourcesFromUnknown(item, byUrl, depth + 1));
+    return;
+  }
+
+  if (typeof value !== "object") {
+    return;
+  }
+
+  const record = value as Record<string, unknown>;
+  const sourceLike: GrokWebSearchSource = {};
+  if (typeof record.url === "string") sourceLike.url = record.url;
+  if (typeof record.link === "string") sourceLike.link = record.link;
+  if (typeof record.title === "string") sourceLike.title = record.title;
+  if (typeof record.snippet === "string") sourceLike.snippet = record.snippet;
+  if (typeof record.text === "string") sourceLike.text = record.text;
+  if (sourceLike.url || sourceLike.link) {
+    addResearchSource(byUrl, sourceLike);
+  }
+
+  Object.values(record).forEach((nested) =>
+    collectResearchSourcesFromUnknown(nested, byUrl, depth + 1),
+  );
+}
+
+function extractUrlsFromResearchText(
+  text: string,
+  byUrl: Map<string, ResearchEvidenceSource>,
+): void {
+  const matches = text.match(/https?:\/\/[^\s<>"'\]]+/gi) ?? [];
+  matches.forEach((url) => addResearchSource(byUrl, url));
+}
+
+export function extractResearchSources(
+  response: GrokWebSearchResponse,
+  responseText = "",
+): ResearchEvidenceSource[] {
+  const byUrl = new Map<string, ResearchEvidenceSource>();
+  collectResearchSourcesFromUnknown(response, byUrl);
+
+  if (byUrl.size === 0 && responseText) {
+    extractUrlsFromResearchText(responseText, byUrl);
+  }
 
   return Array.from(byUrl.values()).slice(0, 30);
+}
+
+function describeWebSearchResponseShape(response: GrokWebSearchResponse): {
+  topLevelKeys: string[];
+  outputItemTypes: string[];
+  outputItemKeys: string[];
+  actionKeys: string[];
+  citationCount: number;
+} {
+  const output = Array.isArray(response.output) ? response.output : [];
+  const outputItemTypes = Array.from(
+    new Set(
+      output
+        .map((item) => (typeof item.type === "string" ? item.type : "unknown"))
+        .filter(Boolean),
+    ),
+  );
+  const outputItemKeys = Array.from(
+    new Set(output.flatMap((item) => Object.keys(item))),
+  );
+  const actionKeys = Array.from(
+    new Set(
+      output.flatMap((item) => {
+        const action = item.action;
+        return action && typeof action === "object" && !Array.isArray(action)
+          ? Object.keys(action as Record<string, unknown>)
+          : [];
+      }),
+    ),
+  );
+
+  return {
+    topLevelKeys: Object.keys(response),
+    outputItemTypes,
+    outputItemKeys,
+    actionKeys,
+    citationCount: Array.isArray(response.citations) ? response.citations.length : 0,
+  };
 }
 
 function buildChatUserContent(params: ChatGenerateParams): string | GrokChatUserContentPart[] {
@@ -236,7 +321,9 @@ ${getKatieReasoningExplainerStatement()}` }]
     if (!parsed || typeof parsed !== "object") {
       throw new Error("xAI Responses API returned a non-object JSON payload.");
     }
-    return parsed as GrokWebSearchResponse;
+    const typed = parsed as GrokWebSearchResponse;
+    console.info("[GrokProvider] web response shape", describeWebSearchResponseShape(typed));
+    return typed;
   }
 
   async listModels(): Promise<string[]> {
@@ -297,7 +384,7 @@ ${getKatieReasoningExplainerStatement()}` }
         const response = await this.createWebSearchResponse(selectedModel, input);
 
         const text = extractResponseText(response);
-        const sources = extractResearchSources(response);
+        const sources = extractResearchSources(response, text);
 
         console.log("[GrokProvider] web research evidence captured", {
           model: selectedModel,
