@@ -255,6 +255,19 @@ export async function runAdaptiveCollaboration(
   let delegationCount = 0;
   let maxDepthReached = 0;
   let totalContributionChars = 0;
+  let independentMarketingCritiqueAttempted = false;
+
+  const addContribution = (contribution: CollaborationContribution): void => {
+    if (!contributions.some((existing) => existing.id === contribution.id)) {
+      contributions.push(contribution);
+    }
+  };
+
+  const getReusableResearchContribution = (): CollaborationContribution | null =>
+    contributions.find(
+      (contribution) =>
+        contribution.capability === "research" && Boolean(contribution.answer.trim()),
+    ) ?? null;
 
   const emit = async (
     event: Omit<CollaborationTraceEvent, "requestId" | "timestamp">,
@@ -310,6 +323,26 @@ export async function runAdaptiveCollaboration(
     depth: number,
   ): Promise<CollaborationContribution | null> => {
     maxDepthReached = Math.max(maxDepthReached, depth);
+
+    if (request.capability === "research") {
+      const reusableResearch = getReusableResearchContribution();
+      if (reusableResearch) {
+        leadNotes.push(
+          "Current live research is already available. Reuse the existing evidence and do not request the same retrieval again.",
+        );
+        await emit({
+          type: "research_evidence_reused",
+          depth,
+          requester,
+          helper: reusableResearch.helper,
+          capability: "research",
+          taskPreview: compactTaskPreview(request.task),
+          detail:
+            "A successful live-research contribution already exists, so Katie reused it instead of issuing another fetch.",
+        });
+        return reusableResearch;
+      }
+    }
 
     if (remainingBeforeFinalMs() < MIN_CONTROL_TIME_MS) {
       await emit({
@@ -619,6 +652,48 @@ export async function runAdaptiveCollaboration(
     return null;
   };
 
+  const ensureIndependentMarketingCritique = async (): Promise<void> => {
+    if (
+      options.params.requestIntent !== "marketing-analysis" ||
+      independentMarketingCritiqueAttempted ||
+      contributions.some((contribution) => contribution.capability === "critique")
+    ) {
+      return;
+    }
+
+    const researchContributions = contributions.filter(
+      (contribution) => contribution.capability === "research",
+    );
+    if (!researchContributions.length || delegationCount >= maxDelegations) {
+      return;
+    }
+
+    independentMarketingCritiqueAttempted = true;
+    const independentReview = await resolveHelper(
+      {
+        task:
+          "Independently review the shared live website evidence for marketing, positioning, messaging, user experience, trust, offer clarity, and conversion implications. Challenge weak assumptions and identify the highest-impact findings.",
+        capability: "critique",
+        reason:
+          "Marketing review benefits from an independent analytical perspective separate from the retrieval model and the lead.",
+        context: clip(buildContributionBlock(researchContributions), 14_000),
+      },
+      lead,
+      1,
+    );
+
+    if (independentReview) {
+      addContribution(independentReview);
+      leadNotes.push(
+        "An independent cross-provider critique of the live research evidence is available and should be reconciled with your own judgment.",
+      );
+    } else {
+      leadNotes.push(
+        "Katie attempted an independent critique of the live research evidence, but no eligible critique helper completed. Continue using the verified research evidence without implying a second review occurred.",
+      );
+    }
+  };
+
   let synthesisBrief =
     "Answer the user's original request directly using your own analysis and any useful helper contributions.";
 
@@ -637,31 +712,11 @@ export async function runAdaptiveCollaboration(
     );
 
     if (researchContribution) {
-      contributions.push(researchContribution);
+      addContribution(researchContribution);
       leadNotes.push(
         "Live research was completed by a specialist. Treat the retrieved evidence as shared source material; independently analyze it rather than deferring to the research model's conclusions.",
       );
-
-      if (options.params.requestIntent === "marketing-analysis" && delegationCount < maxDelegations) {
-        const independentReview = await resolveHelper(
-          {
-            task:
-              "Independently review the shared live website evidence for marketing, positioning, messaging, user experience, trust, offer clarity, and conversion implications. Challenge weak assumptions and identify the highest-impact findings.",
-            capability: "critique",
-            reason:
-              "Marketing review benefits from an independent analytical perspective separate from the retrieval model and the lead.",
-            context: clip(buildContributionBlock([researchContribution]), 14_000),
-          },
-          lead,
-          1,
-        );
-        if (independentReview) {
-          contributions.push(independentReview);
-          leadNotes.push(
-            "An independent cross-provider critique of the live research evidence is available and should be reconciled with your own judgment.",
-          );
-        }
-      }
+      await ensureIndependentMarketingCritique();
     } else {
       await emit({
         type: "research_evidence_collection_failed",
@@ -742,7 +797,8 @@ export async function runAdaptiveCollaboration(
 
     const contribution = await resolveHelper(decision.request, lead, 1);
     if (contribution) {
-      contributions.push(contribution);
+      addContribution(contribution);
+      await ensureIndependentMarketingCritique();
     } else {
       leadNotes.push(
         `Delegation request could not be fulfilled: ${compactTaskPreview(decision.request.task)}. Continue without that helper or request a different specialist if budget remains.`,
