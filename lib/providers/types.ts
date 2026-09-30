@@ -1,3 +1,21 @@
+export interface ResearchEvidenceSource {
+  url: string;
+  title?: string;
+  snippet?: string;
+}
+
+export interface ResearchEvidenceBundle {
+  kind: "web";
+  retrievedBy: {
+    provider: "openai" | "google" | "grok" | "anthropic";
+    modelId: string;
+  };
+  query: string;
+  summary: string;
+  sources: ResearchEvidenceSource[];
+  retrievedAt: string;
+}
+
 export interface ExtractedTextChunkReference {
   index: number;
   total: number;
@@ -32,6 +50,7 @@ export interface ChatGenerateParams {
   modelId?: string;
   images?: string[];
   attachments?: FileReference[];
+  researchEvidence?: ResearchEvidenceBundle;
 }
 
 export interface ProviderResponse {
@@ -41,6 +60,7 @@ export interface ProviderResponse {
   finishReason?: string;
   truncated?: boolean;
   continuationCount?: number;
+  researchEvidence?: ResearchEvidenceBundle;
   collaboration?: {
     used: boolean;
     delegationCount: number;
