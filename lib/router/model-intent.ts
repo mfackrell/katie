@@ -1218,35 +1218,6 @@ function modelSupportsIntent(
     case "rewrite":
     case "emotional-analysis":
     case "social-emotional":
-    case "marketing-analysis": {
-      if (!modelSupportsIntent(providerName, modelId, intent, options?.registryLookup)) {
-        return finalize(null, -1, "intent_mismatch:marketing-analysis");
-      }
-      const baseScore = 10;
-      if (providerName === "anthropic") {
-        adjustments.push({ label: "marketing_provider_bonus_anthropic", delta: 4 });
-      } else if (providerName === "openai") {
-        adjustments.push({ label: "marketing_provider_bonus_openai", delta: 3.5 });
-      } else if (providerName === "google") {
-        adjustments.push({ label: "marketing_provider_bonus_google", delta: 2.5 });
-      } else if (providerName === "grok") {
-        adjustments.push({ label: "marketing_provider_bonus_grok", delta: 1 });
-      }
-      if (
-        normalizedModel.includes("sonnet") ||
-        normalizedModel.includes("opus") ||
-        normalizedModel.includes("gpt-5") ||
-        normalizedModel.includes("pro")
-      ) {
-        adjustments.push({ label: "marketing_depth_bonus", delta: 2 });
-      }
-      if (normalizedModel.includes("mini") || normalizedModel.includes("flash") || normalizedModel.includes("haiku")) {
-        adjustments.push({ label: "marketing_small_model_penalty", delta: -1 });
-      }
-      applyActorRoutingBias();
-      const finalScore = baseScore + adjustments.reduce((total, current) => total + current.delta, 0);
-      return finalize(baseScore, finalScore, null);
-    }
     case "code-review":
     case "technical-debugging":
     case "architecture-review":
@@ -1801,6 +1772,40 @@ export function scoreModelCandidateWithBreakdown(
       }
       applyActorRoutingBias();
       const finalScore = baseScore + adjustments.reduce((total, current) => total + current.delta, 0);
+      return finalize(baseScore, finalScore, null);
+    }
+    case "marketing-analysis": {
+      if (!modelSupportsIntent(providerName, modelId, intent, options?.registryLookup)) {
+        return finalize(null, -1, "intent_mismatch:marketing-analysis");
+      }
+      const baseScore = 10;
+      if (providerName === "anthropic") {
+        adjustments.push({ label: "marketing_provider_bonus_anthropic", delta: 4 });
+      } else if (providerName === "openai") {
+        adjustments.push({ label: "marketing_provider_bonus_openai", delta: 3.5 });
+      } else if (providerName === "google") {
+        adjustments.push({ label: "marketing_provider_bonus_google", delta: 2.5 });
+      } else if (providerName === "grok") {
+        adjustments.push({ label: "marketing_provider_bonus_grok", delta: 1 });
+      }
+      if (
+        normalizedModel.includes("sonnet") ||
+        normalizedModel.includes("opus") ||
+        normalizedModel.includes("gpt-5") ||
+        normalizedModel.includes("pro")
+      ) {
+        adjustments.push({ label: "marketing_depth_bonus", delta: 2 });
+      }
+      if (
+        normalizedModel.includes("mini") ||
+        normalizedModel.includes("flash") ||
+        normalizedModel.includes("haiku")
+      ) {
+        adjustments.push({ label: "marketing_small_model_penalty", delta: -1 });
+      }
+      applyActorRoutingBias();
+      const finalScore =
+        baseScore + adjustments.reduce((total, current) => total + current.delta, 0);
       return finalize(baseScore, finalScore, null);
     }
     case "code-review":
