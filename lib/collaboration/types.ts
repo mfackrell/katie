@@ -51,6 +51,7 @@ export type CollaborationTraceEvent = {
   type:
     | "collaboration_started"
     | "research_evidence_collected"
+    | "research_evidence_reused"
     | "research_evidence_collection_failed"
     | "delegation_requested"
     | "helper_selected"
