@@ -32,3 +32,5 @@ CI runs a real Chromium fixture test checking desktop/mobile CSS, HTML, styleshe
 GET /api/health/website probes the deployed browser against the fixed https://example.com/ page. It returns screenshot/view/style counts and coverage limitations, never image bytes or a user-controlled target.
 
 Research trace events report complete response character count plus page, view, screenshot and stylesheet counts without logging screenshot bytes.
+
+Run npm run test:website for strict compilation and the 17 focused website/provider/collaboration regression tests. The general suite has 10 unrelated existing failures, verified against the prior production commit (11 before repairing its malformed protocol fixture); these are outside this change.
