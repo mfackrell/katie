@@ -17,7 +17,7 @@ import { getSupabaseAdminClient } from "@/lib/data/supabase/admin";
 import { getAvailableProviders } from "@/lib/providers";
 import { chooseProvider, selectControlPlaneDecisionModels } from "@/lib/router/master-router";
 import {
-  hasDirectWebSearchHint,
+  detectWebSearchSignals,
   inferRequestClassification,
   RequestIntent,
   RoutingHint,
@@ -360,6 +360,7 @@ function buildGenerationParams({
   history,
   message,
   requestIntent,
+  secondaryIntents,
   images,
   modelId,
   attachments
@@ -370,6 +371,7 @@ function buildGenerationParams({
   history: { role: "user" | "assistant"; content: string }[];
   message: string;
   requestIntent?: RequestIntent;
+  secondaryIntents?: RequestIntent[];
   images?: string[];
   modelId: string;
   attachments: NonNullable<RequestPayload["fileReferences"]>;
@@ -381,6 +383,7 @@ function buildGenerationParams({
     history,
     user: message,
     requestIntent,
+    secondaryIntents,
     images,
     modelId,
     attachments
@@ -965,7 +968,11 @@ export async function POST(request: NextRequest) {
       const hasCodePatchOrDiff = CODE_PATCH_OR_DIFF_ROUTING_REGEX.test(message);
       const hasRepoReviewLanguage = REPO_REVIEW_LANGUAGE_ROUTING_REGEX.test(message);
       const repoReviewContextActive = Boolean(activeRepoContext) && (hasCodePatchOrDiff || hasRepoReviewLanguage);
-      const explicitIntent: RequestIntent | undefined = hasDirectWebSearchHint(message) && !repoReviewContextActive ? "web-search" : undefined;
+      const directWebSearchSignals = detectWebSearchSignals(message);
+      const explicitIntent: RequestIntent | undefined =
+        directWebSearchSignals.keywordMatch && !repoReviewContextActive
+          ? "web-search"
+          : undefined;
       const assistantReflectionHint =
         /\b(what do you think about your last answer|critique (?:the )?assistant(?:'s)? previous response|review your system message|evaluate your own output|improve (?:the )?last reply|assess the quality of (?:that|your) response|your last answer|your previous response|your own output|your system message|reflect on your answer|self-critique|critique your response)\b/i.test(
           message
@@ -1016,7 +1023,8 @@ export async function POST(request: NextRequest) {
         requestId,
         routerIntent: routingDecision.resolvedIntent.intent,
         routerIntentSource: routingDecision.resolvedIntent.intentSource,
-        chatApiResolvedIntent: resolvedRequestIntent
+        chatApiResolvedIntent: resolvedRequestIntent,
+        secondaryIntents: routingDecision.resolvedIntent.secondaryIntents ?? []
       });
 
       console.log(`[Chat API] Selected Provider: ${provider.name}, Model: ${modelId}`);
@@ -1376,6 +1384,7 @@ export async function POST(request: NextRequest) {
                 history: historyForProvider,
                 message: messageForGeneration,
                 requestIntent: resolvedRequestIntent,
+                secondaryIntents: resolvedRoutingIntentForReroute?.secondaryIntents ?? [],
                 images,
                 modelId: selectedModelId,
                 attachments
