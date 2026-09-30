@@ -32,7 +32,7 @@ type ClaudeMessageResponse = {
 
 type ClaudeMessage = {
   role: "user" | "assistant";
-  content: string;
+  content: string | ClaudeContentBlock[];
 };
 
 type ClaudePassResult = {
@@ -201,7 +201,24 @@ export class ClaudeProvider implements LlmProvider {
         role: entry.role,
         content: entry.content
       })),
-      { role: "user", content: params.user }
+      {
+        role: "user",
+        content: params.images?.length
+          ? [
+              ...params.images.map((image): ClaudeContentBlock => {
+                const data = image.match(/^data:(image\/(?:jpeg|png|gif|webp));base64,([\s\S]+)$/);
+                if (data) {
+                  return { type: "image", source: { type: "base64", media_type: data[1], data: data[2] } };
+                }
+                if (/^https?:\/\//i.test(image)) {
+                  return { type: "image", source: { type: "url", url: image } };
+                }
+                throw new Error("Unsupported Claude image input; use JPEG, PNG, GIF or WebP base64 data or an HTTP(S) URL.");
+              }),
+              { type: "text", text: params.user },
+            ]
+          : params.user,
+      }
     ];
 
     return { selectedModel, system, messages };

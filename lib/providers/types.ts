@@ -4,6 +4,38 @@ export interface ResearchEvidenceSource {
   snippet?: string;
 }
 
+export interface WebsiteEvidence {
+  capturedAt: string;
+  pages: WebsitePageEvidence[];
+  limitations: string[];
+}
+
+export interface WebsitePageEvidence {
+  requestedUrl: string;
+  url: string;
+  title: string;
+  status?: number;
+  html: string;
+  htmlTruncated: boolean;
+  stylesheets: Array<{ url: string; css: string; truncated: boolean }>;
+  views: Array<{
+    device: "desktop" | "mobile";
+    viewport: { width: number; height: number };
+    document: { width: number; height: number; horizontalOverflow: boolean };
+    text: string;
+    elements: Array<{
+      tag: string;
+      text: string;
+      bounds: { x: number; y: number; width: number; height: number };
+      styles: Record<string, string>;
+    }>;
+    images: Array<{ src: string; alt: string; loaded: boolean; width: number; height: number }>;
+    screenshot?: { dataUrl: string; width: number; height: number; truncated: boolean };
+    limitations: string[];
+  }>;
+  limitations: string[];
+}
+
 export interface ResearchEvidenceBundle {
   kind: "web";
   retrievedBy: {
@@ -14,6 +46,7 @@ export interface ResearchEvidenceBundle {
   summary: string;
   sources: ResearchEvidenceSource[];
   retrievedAt: string;
+  website?: WebsiteEvidence;
 }
 
 export interface ExtractedTextChunkReference {

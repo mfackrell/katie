@@ -18,6 +18,9 @@ import type {
   ResearchEvidenceBundle,
 } from "@/lib/providers/types";
 
+import { collectWebsiteEvidence } from "@/lib/research/website-evidence";
+import { formatResearchEvidence, mergeResearchEvidence, withWebsiteImages, websiteImages, websiteEvidenceStats, WEBSITE_REVIEW_INSTRUCTION } from "@/lib/research/shared-evidence";
+
 const DEFAULT_MAX_ESCALATIONS = 2;
 const DEFAULT_MAX_HELPER_ATTEMPTS = 3;
 
@@ -40,26 +43,6 @@ function compactTaskPreview(value: string): string {
   return value.replace(/\s+/g, " ").trim().slice(0, 220);
 }
 
-function formatResearchEvidence(evidence: ResearchEvidenceBundle | undefined): string {
-  if (!evidence) {
-    return "";
-  }
-  const sources = evidence.sources
-    .map((source, index) =>
-      [
-        `SOURCE ${index + 1}: ${source.url}`,
-        source.title ? `Title: ${source.title}` : "",
-        source.snippet ? `Retrieved excerpt: ${source.snippet}` : "",
-      ]
-        .filter(Boolean)
-        .join("\n"),
-    )
-    .join("\n\n");
-  return [
-    `Retrieved by: ${evidence.retrievedBy.provider}:${evidence.retrievedBy.modelId}`,
-    sources || "No structured source URLs were returned.",
-  ].join("\n");
-}
 
 function buildHelperUser(
   params: ChatGenerateParams,
@@ -78,7 +61,7 @@ function buildHelperUser(
     "",
     "Perform only this subtask. Return concise factual findings useful to the lead model.",
     request.capability === "research"
-      ? "Use live web search. Check the current source directly when a URL/site is relevant. Include source URLs or clearly named sources in your findings."
+      ? "Use live web search. Check the current source directly when a URL/site is relevant. Include source URLs, observed design evidence where available, and access limitations. " + WEBSITE_REVIEW_INSTRUCTION
       : "",
   ]
     .filter(Boolean)
@@ -103,7 +86,7 @@ function buildResumeUser(
           ":" +
           contribution.helper.modelId,
         "Evidence:",
-        contribution.answer,
+        contribution.researchEvidence ? "See complete research packet below." : contribution.answer,
         ...(contribution.researchEvidence
           ? ["Structured web sources:", formatResearchEvidence(contribution.researchEvidence)]
           : []),
@@ -162,6 +145,7 @@ export async function runOnDemandCapabilityEscalation(input: {
     request: CollaborationRequest;
     requester: CollaborationParticipant;
     usedParticipants: CollaborationParticipant[];
+    hasImages?: boolean;
   }) => Promise<CollaborationHelperSelection | null>;
   prepareParticipantParams?: (
     params: ChatGenerateParams,
@@ -170,6 +154,7 @@ export async function runOnDemandCapabilityEscalation(input: {
   ) => ChatGenerateParams;
   onTrace?: (event: CollaborationTraceEvent) => void | Promise<void>;
   onFinalTextDelta: (delta: string) => void | Promise<void>;
+  collectWebsiteEvidence?: typeof collectWebsiteEvidence;
   maxEscalations?: number;
 }): Promise<{
   result: ProviderResponse;
@@ -190,6 +175,8 @@ export async function runOnDemandCapabilityEscalation(input: {
   const trace: CollaborationTraceEvent[] = [];
   let escalationCount = 0;
   let started = false;
+  let websiteEvidencePromise: ReturnType<typeof collectWebsiteEvidence> | undefined;
+  let sharedWebsite: ResearchEvidenceBundle["website"];
 
   const emit = async (
     event: Omit<CollaborationTraceEvent, "requestId" | "timestamp">,
@@ -209,8 +196,8 @@ export async function runOnDemandCapabilityEscalation(input: {
     role: "lead" | "helper",
   ): ChatGenerateParams =>
     input.prepareParticipantParams
-      ? input.prepareParticipantParams(params, value, role)
-      : params;
+      ? input.prepareParticipantParams(withWebsiteImages(params, sharedWebsite), value, role)
+      : withWebsiteImages(params, sharedWebsite);
 
   let leadParams = prepare(
     withCapabilityEscalationInstruction(input.params),
@@ -369,6 +356,7 @@ export async function runOnDemandCapabilityEscalation(input: {
         request,
         requester: lead,
         usedParticipants: [...usedParticipants.values()],
+        hasImages: Boolean(input.params.images?.length || websiteImages(sharedWebsite).length),
       });
 
       if (!selected) {
@@ -437,7 +425,16 @@ export async function runOnDemandCapabilityEscalation(input: {
           helper,
           "helper",
         );
+        if (request.capability === "research" && !websiteEvidencePromise) {
+          websiteEvidencePromise = (input.collectWebsiteEvidence ?? collectWebsiteEvidence)({
+            ...input.params, user: input.params.user + "\n" + request.task,
+          }).catch((error) => ({ capturedAt: nowIso(), pages: [], limitations: ["Rendered inspection failed: " + String(error)] }));
+        }
         const helperResult = await selected.provider.generate(helperParams);
+        if (request.capability === "research") {
+          sharedWebsite = await websiteEvidencePromise;
+          helperResult.researchEvidence = mergeResearchEvidence(helperResult, helper, input.params.user, sharedWebsite);
+        }
         const answer = helperResult.text.trim();
 
         if (!answer) {
@@ -474,7 +471,8 @@ export async function runOnDemandCapabilityEscalation(input: {
             detail:
               "Captured " +
               helperResult.researchEvidence.sources.length +
-              " structured web source(s) for the lead.",
+              " structured web source(s); full research chars=" + helperResult.researchEvidence.summary.length +
+              "; " + websiteEvidenceStats(helperResult.researchEvidence.website) + ". Complete packet shared with the lead.",
           });
         }
 

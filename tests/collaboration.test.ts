@@ -188,6 +188,7 @@ test("capability escalation forbids asking permission before useful live researc
   };
 
   await runOnDemandCapabilityEscalation({
+    collectWebsiteEvidence: async () => undefined,
     requestId: "req-autonomous-research-instruction",
     leadProvider: lead,
     leadModelId: "claude-lead",
@@ -272,6 +273,7 @@ test("single-model lead escalates live research to a helper and then resumes", a
 
   let visibleText = "";
   const result = await runOnDemandCapabilityEscalation({
+    collectWebsiteEvidence: async () => undefined,
     requestId: "req-capability-escalation",
     leadProvider: lead,
     leadModelId: "claude-lead",
@@ -385,6 +387,7 @@ test("marketing analysis gathers live web evidence and shares it with an indepen
 
   const selectedCapabilities: string[] = [];
   const result = await runAdaptiveCollaboration({
+    collectWebsiteEvidence: async () => undefined,
     requestId: "req-marketing-evidence",
     leadProvider: lead,
     leadModelId: "claude-marketing",
@@ -492,6 +495,7 @@ test("lead-requested research still triggers the independent marketing critique"
   const selectedCapabilities: string[] = [];
   let forcedResearchAttempted = false;
   const result = await runAdaptiveCollaboration({
+    collectWebsiteEvidence: async () => undefined,
     requestId: "req-marketing-recovered-research",
     leadProvider: lead,
     leadModelId: "claude-marketing",
@@ -591,6 +595,7 @@ test("lead dynamically delegates to a helper and synthesizes one final answer", 
   let streamed = "";
 
   const result = await runAdaptiveCollaboration({
+    collectWebsiteEvidence: async () => undefined,
     requestId: "req-basic",
     leadProvider: lead,
     leadModelId: "lead-model",
@@ -674,6 +679,7 @@ test("a helper can recursively request another model before answering the lead",
   });
 
   const result = await runAdaptiveCollaboration({
+    collectWebsiteEvidence: async () => undefined,
     requestId: "req-nested",
     leadProvider: lead,
     leadModelId: "lead",
@@ -740,6 +746,7 @@ test("failed helper is automatically rerouted without another lead control pass"
 
   let selectionCount = 0;
   const result = await runAdaptiveCollaboration({
+    collectWebsiteEvidence: async () => undefined,
     requestId: "req-helper-reroute",
     leadProvider: lead,
     leadModelId: "lead",
@@ -787,6 +794,7 @@ test("helper failure is non-fatal and lead still produces the answer", async () 
   });
 
   const result = await runAdaptiveCollaboration({
+    collectWebsiteEvidence: async () => undefined,
     requestId: "req-helper-fail",
     leadProvider: lead,
     leadModelId: "lead",
@@ -832,6 +840,7 @@ test("delegation budget prevents unbounded model meetings", async () => {
   });
 
   const result = await runAdaptiveCollaboration({
+    collectWebsiteEvidence: async () => undefined,
     requestId: "req-budget",
     leadProvider: lead,
     leadModelId: "lead",
@@ -908,6 +917,7 @@ test("final synthesis fails over to a replacement lead without losing helper evi
   let replacementSelections = 0;
 
   const result = await runAdaptiveCollaboration({
+    collectWebsiteEvidence: async () => undefined,
     requestId: "req-lead-failover",
     leadProvider: failingLead,
     leadModelId: "failing-lead",
@@ -966,6 +976,7 @@ test("lead can decide no helper is needed", async () => {
 
   let helperSelections = 0;
   const result = await runAdaptiveCollaboration({
+    collectWebsiteEvidence: async () => undefined,
     requestId: "req-direct",
     leadProvider: lead,
     leadModelId: "lead",

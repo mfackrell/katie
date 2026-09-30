@@ -224,3 +224,29 @@ test("ClaudeProvider marks output truncated after exhausting continuation passes
     globalThis.fetch = originalFetch;
   }
 });
+
+test("Claude sends rendered website images on both normal and streaming requests", async () => {
+  const originalFetch = globalThis.fetch;
+  const requests: Array<Record<string, unknown>> = [];
+  globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+    const body = JSON.parse(String(init?.body ?? "{}"));
+    requests.push(body);
+    return body.stream ? sseResponse([
+      { type: "content_block_delta", delta: { type: "text_delta", text: "Visual review" } },
+      { type: "message_delta", delta: { stop_reason: "end_turn" } },
+    ]) : jsonResponse({ content: [{ type: "text", text: "Visual review" }], stop_reason: "end_turn" });
+  }) as typeof fetch;
+  try {
+    const provider = new ClaudeProvider("test-key");
+    const images = ["data:image/jpeg;base64,c2NyZWVuc2hvdA==", "https://example.com/screenshot.png"];
+    await provider.generate({ ...baseParams, images });
+    await provider.generateStream({ ...baseParams, images }, {});
+    for (const request of requests) {
+      const messages = request.messages as Array<{ content: Array<Record<string, unknown>> }>;
+      const content = messages.at(-1)!.content;
+      assert.deepEqual(content[0], { type: "image", source: { type: "base64", media_type: "image/jpeg", data: "c2NyZWVuc2hvdA==" } });
+      assert.deepEqual(content[1], { type: "image", source: { type: "url", url: images[1] } });
+      assert.deepEqual(content[2], { type: "text", text: baseParams.user });
+    }
+  } finally { globalThis.fetch = originalFetch; }
+});

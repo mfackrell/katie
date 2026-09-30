@@ -65,6 +65,9 @@
     "tests/fastify-webhook-hmac.test.ts",
     "lib/uploads/file-type-helpers.ts",
     "lib/uploads/parse-text-files.ts",
-    "tests/uploads/parse-text-files.test.ts"
+    "tests/uploads/parse-text-files.test.ts",
+    "lib/research/website-evidence.ts",
+    "lib/research/shared-evidence.ts",
+    "tests/website-evidence.test.ts"
   ]
 }
