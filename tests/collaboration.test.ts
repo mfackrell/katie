@@ -320,6 +320,14 @@ test("marketing analysis gathers live web evidence and shares it with an indepen
     modelId: "claude-marketing",
     controlResponses: [
       JSON.stringify({
+        action: "delegate",
+        request: {
+          task: "Fetch the same website again before I synthesize.",
+          capability: "research",
+          reason: "Double-check the current page.",
+        },
+      }),
+      JSON.stringify({
         action: "ready",
         synthesisBrief: "Use the live evidence and independent critique.",
       }),
@@ -404,7 +412,8 @@ test("marketing analysis gathers live web evidence and shares it with an indepen
     },
   });
 
-  assert.deepEqual(selectedCapabilities.slice(0, 2), ["research", "critique"]);
+  assert.deepEqual(selectedCapabilities, ["research", "critique"]);
+  assert.equal(research.calls.length, 1);
   assert.equal(research.calls[0]?.requestIntent, "web-search");
   assert.match(research.calls[0]?.user ?? "", /Open and inspect the relevant live URL/i);
   assert.match(reviewer.calls[0]?.user ?? "", /https:\/\/c3execs\.com\//);
@@ -418,7 +427,106 @@ test("marketing analysis gathers live web evidence and shares it with an indepen
     result.trace.some((event) => event.type === "research_evidence_collected"),
     true,
   );
+  assert.equal(
+    result.trace.some((event) => event.type === "research_evidence_reused"),
+    true,
+  );
   assert.equal(result.result.text, "Final marketing review.");
+});
+
+test("lead-requested research still triggers the independent marketing critique", async () => {
+  const lead = fakeProvider({
+    name: "anthropic",
+    modelId: "claude-marketing",
+    controlResponses: [
+      JSON.stringify({
+        action: "delegate",
+        request: {
+          task: "Retrieve the current website so I can review it.",
+          capability: "research",
+          reason: "Fresh source material is required.",
+        },
+      }),
+      JSON.stringify({
+        action: "ready",
+        synthesisBrief: "Use the retrieved evidence and critique.",
+      }),
+    ],
+    finalText: "Final review after recovered research.",
+  });
+
+  const research = fakeProvider({
+    name: "grok",
+    modelId: "grok-web",
+    controlResponses: ["Observed live homepage and CTA evidence."],
+  });
+  const originalResearchGenerate = research.generate.bind(research);
+  research.generate = async (params) => {
+    const response = await originalResearchGenerate(params);
+    return {
+      ...response,
+      researchEvidence: {
+        kind: "web",
+        retrievedBy: { provider: "grok", modelId: "grok-web" },
+        query: params.user,
+        summary: response.text,
+        sources: [{ url: "https://c3execs.com/", title: "C3 Executive Suite" }],
+        retrievedAt: "2026-09-30T00:00:00.000Z",
+      },
+    };
+  };
+
+  const reviewer = fakeProvider({
+    name: "openai",
+    modelId: "gpt-reviewer",
+    controlResponses: [
+      JSON.stringify({
+        action: "answer",
+        answer: "Independent critique completed from the live evidence.",
+        confidence: "high",
+      }),
+    ],
+  });
+
+  const selectedCapabilities: string[] = [];
+  let forcedResearchAttempted = false;
+  const result = await runAdaptiveCollaboration({
+    requestId: "req-marketing-recovered-research",
+    leadProvider: lead,
+    leadModelId: "claude-marketing",
+    providers: [lead, research, reviewer],
+    params: {
+      ...baseParams,
+      user: "Check the live site again: https://c3execs.com/",
+      requestIntent: "marketing-analysis",
+      secondaryIntents: ["web-search"],
+      modelId: "claude-marketing",
+    },
+    async selectHelper(context) {
+      selectedCapabilities.push(context.request.capability);
+      if (context.request.capability === "research" && !forcedResearchAttempted) {
+        forcedResearchAttempted = true;
+        return null;
+      }
+      if (context.request.capability === "research") {
+        return { provider: research, modelId: "grok-web" };
+      }
+      return { provider: reviewer, modelId: "gpt-reviewer" };
+    },
+  });
+
+  assert.deepEqual(selectedCapabilities, ["research", "research", "critique"]);
+  assert.equal(research.calls.length, 1);
+  assert.equal(reviewer.calls.length, 1);
+  assert.equal(
+    result.metadata.contributions.some((entry) => entry.capability === "research"),
+    true,
+  );
+  assert.equal(
+    result.metadata.contributions.some((entry) => entry.capability === "critique"),
+    true,
+  );
+  assert.equal(result.result.text, "Final review after recovered research.");
 });
 
 test("lead dynamically delegates to a helper and synthesizes one final answer", async () => {
