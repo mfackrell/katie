@@ -1,4 +1,9 @@
-import type { ChatGenerateParams, LlmProvider, ProviderResponse } from "@/lib/providers/types";
+import type {
+  ChatGenerateParams,
+  LlmProvider,
+  ProviderResponse,
+  ResearchEvidenceBundle,
+} from "@/lib/providers/types";
 
 export type CollaborationCapability =
   | "analysis"
@@ -38,6 +43,7 @@ export type CollaborationContribution = {
   answer: string;
   confidence?: "high" | "medium" | "low";
   caveats?: string[];
+  researchEvidence?: ResearchEvidenceBundle;
   durationMs: number;
 };
 
