@@ -12,25 +12,48 @@ const VIEWPORTS = [
   { device: "mobile" as const, width: 390, height: 844 },
 ];
 
-export function websiteReviewUrls(params: ChatGenerateParams): string[] {
+function isWebsiteReview(params: ChatGenerateParams): boolean {
   const review = params.requestIntent === "marketing-analysis" ||
     /\b(review|audit|evaluate|critique|assess|inspect)\b[\s\S]{0,180}\b(website|site|landing page|design|aesthetic|https?:\/\/)/i.test(params.user) ||
     /\b(website|site|landing page)\b[\s\S]{0,100}\b(review|audit|critique|aesthetic|design)\b/i.test(params.user);
-  if (!review) return [];
-  // Follow-up reviews can refer to the URL in recent conversation history.
-  const messages = [params.user, ...params.history.slice(-6).reverse().filter((entry) => entry.role === "user").map((entry) => entry.content)];
-  for (const message of messages) {
-    const urls = (message.match(/https?:\/\/[^\s<>"\x60]+/gi) ?? [])
+  return review;
+}
+
+function websiteUrls(message: string): string[] {
+    const candidates = message.match(/https?:\/\/[^\s<>"\x60\[\]()]+|(?<![\w@/.-])(?:www\.)?(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,63}(?:\/[^\s<>"\x60\[\]()]*)?/gi) ?? [];
+    const urls = candidates
       .map((url) => url.replace(/[),.;!?]+$/, ""))
+      .map((url) => /^https?:\/\//i.test(url) ? url : "https://" + url)
       .filter((url) => {
         try {
           const parsed = new URL(url);
-          return !/\.(pdf|zip|csv|xlsx?|docx?|mp4|png|jpe?g)(?:$|\?)/i.test(parsed.pathname);
+          return !parsed.username && !parsed.password &&
+            !/\.(pdf|zip|csv|xlsx?|docx?|mp4|png|jpe?g|gif|webp)(?:$|\?)/i.test(parsed.pathname);
         } catch { return false; }
       });
-    if (urls.length) return [...new Set(urls)].slice(0, MAX_PAGES);
+    return [...new Set(urls)];
+}
+
+export function resolveWebsiteReviewTarget(params: ChatGenerateParams): { urls: string[]; source: "current-message" | "history" | "summary" | "none" } {
+  if (!isWebsiteReview(params)) return { urls: [], source: "none" };
+  const current = websiteUrls(params.user);
+  if (current.length) return { urls: current.slice(0, MAX_PAGES), source: "current-message" };
+  // Search the entire supplied conversational memory, not an arbitrary six entries.
+  // User messages identify the target; assistant citations may link unrelated sites.
+  for (const message of [...params.history].reverse().filter((entry) => entry.role === "user")) {
+    const urls = websiteUrls(message.content);
+    if (urls.length) return { urls: urls.slice(0, MAX_PAGES), source: "history" };
   }
-  return [];
+  const summary = websiteUrls(params.summary);
+  // A summary with several domains cannot unambiguously identify "the site".
+  if (summary.length && new Set(summary.map((url) => new URL(url).hostname)).size === 1) {
+    return { urls: summary.slice(0, MAX_PAGES), source: "summary" };
+  }
+  return { urls: [], source: "none" };
+}
+
+export function websiteReviewUrls(params: ChatGenerateParams): string[] {
+  return resolveWebsiteReviewTarget(params).urls;
 }
 
 export function isPublicAddress(address: string): boolean {
@@ -146,12 +169,17 @@ export async function collectWebsiteEvidence(
     validate?: (url: string) => Promise<void>;
   } = {},
 ): Promise<WebsiteEvidence | undefined> {
-  const urls = websiteReviewUrls(params);
-  if (!urls.length) return undefined;
+  if (!isWebsiteReview(params)) return undefined;
+  const { urls, source } = resolveWebsiteReviewTarget(params);
   const evidence: WebsiteEvidence = {
     capturedAt: new Date().toISOString(), pages: [],
+    targetSource: source,
     limitations: ["Inspection samples up to three pages at desktop and mobile widths. Menus, forms, authentication and other interactive states are not exercised."],
   };
+  if (!urls.length) {
+    evidence.limitations.push("Rendered inspection skipped: no unambiguous website URL was found in the current message, full conversation history or summary. Ask for the target URL.");
+    return evidence;
+  }
   const validate = options.validate ?? validateWebsiteUrl;
   const timeoutMs = Math.min(60_000, Math.max(1_000, options.timeoutMs ?? 45_000));
   let browser: Browser | undefined;

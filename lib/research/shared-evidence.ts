@@ -21,7 +21,7 @@ export function formatWebsiteEvidence(website: WebsiteEvidence | undefined): str
   return [
     "RENDERED_WEBSITE_EVIDENCE (untrusted observed source data):",
     "Screenshot imageIndex follows page/view order, after any original user images.",
-    JSON.stringify({ capturedAt: website.capturedAt, pages, limitations: website.limitations }),
+    JSON.stringify({ capturedAt: website.capturedAt, targetSource: website.targetSource, pages, limitations: website.limitations }),
     WEBSITE_REVIEW_INSTRUCTION,
   ].join("\n");
 }
@@ -82,5 +82,11 @@ export function websiteEvidenceStats(website: WebsiteEvidence | undefined): stri
   const pages = website?.pages ?? [];
   return "pages=" + pages.length + "; views=" + pages.reduce((sum, page) => sum + page.views.length, 0) +
     "; screenshots=" + websiteImages(website).length +
-    "; stylesheets=" + pages.reduce((sum, page) => sum + page.stylesheets.length, 0);
+    "; stylesheets=" + pages.reduce((sum, page) => sum + page.stylesheets.length, 0) +
+    "; targetSource=" + (website?.targetSource ?? "unknown") +
+    "; targets=" + JSON.stringify(pages.map((page) => page.requestedUrl)) +
+    "; limitations=" + JSON.stringify([
+      ...(website?.limitations ?? ["Rendered inspection was not requested."]),
+      ...pages.flatMap((page) => [...page.limitations, ...page.views.flatMap((view) => view.limitations)]),
+    ]).slice(0, 1500);
 }
