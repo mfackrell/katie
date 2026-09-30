@@ -9,6 +9,7 @@ const COMPLEX_INTENTS = new Set<RequestIntent>([
   "technical-debugging",
   "architecture-review",
   "code-generation",
+  "marketing-analysis",
   "web-search",
   "multimodal-reasoning",
 ]);
