@@ -15,7 +15,8 @@ import type {
   CollaborationTraceEvent,
   HelperControlDecision,
 } from "@/lib/collaboration/types";
-import type { ChatGenerateParams, LlmProvider, ProviderResponse } from "@/lib/providers/types";
+import { collaborationCapabilityToIntent } from "@/lib/collaboration/routing";
+import type { ChatGenerateParams, LlmProvider, ProviderResponse, ResearchEvidenceBundle } from "@/lib/providers/types";
 
 const DEFAULT_MAX_DELEGATIONS = 5;
 const DEFAULT_MAX_DEPTH = 2;
@@ -50,6 +51,32 @@ function compactTaskPreview(value: string): string {
   return value.replace(/\s+/g, " ").trim().slice(0, 220);
 }
 
+function buildResearchEvidenceBlock(evidence: ResearchEvidenceBundle | undefined): string {
+  if (!evidence) {
+    return "";
+  }
+
+  const sources = evidence.sources.length
+    ? evidence.sources
+        .map((source, index) => {
+          const details = [
+            `SOURCE ${index + 1}: ${source.url}`,
+            source.title ? `Title: ${source.title}` : "",
+            source.snippet ? `Retrieved excerpt: ${source.snippet}` : "",
+          ].filter(Boolean);
+          return details.join("\n");
+        })
+        .join("\n\n")
+    : "No structured source URLs were returned by the retrieval provider.";
+
+  return [
+    "SHARED_LIVE_RESEARCH_EVIDENCE:",
+    `Retrieved by: ${evidence.retrievedBy.provider}:${evidence.retrievedBy.modelId}`,
+    `Retrieved at: ${evidence.retrievedAt}`,
+    sources,
+  ].join("\n");
+}
+
 function buildContributionBlock(contributions: CollaborationContribution[]): string {
   if (!contributions.length) {
     return "No helper contributions yet.";
@@ -67,6 +94,9 @@ function buildContributionBlock(contributions: CollaborationContribution[]): str
         `Assigned task: ${contribution.task}`,
         `Confidence: ${contribution.confidence ?? "unspecified"}`,
         `Answer:\n${contribution.answer}${caveats}`,
+        ...(contribution.researchEvidence
+          ? ["", buildResearchEvidenceBlock(contribution.researchEvidence)]
+          : []),
       ].join("\n");
     })
     .join("\n\n");
@@ -109,6 +139,15 @@ function buildHelperControlUser(
     `Requested capability: ${request.capability}`,
     ...(request.reason ? [`Why the requester wants help: ${request.reason}`] : []),
     ...(request.context ? ["Additional context:", request.context] : []),
+    ...(request.capability === "research"
+      ? [
+          "",
+          "RESEARCH REQUIREMENTS:",
+          "Use live web retrieval. Open and inspect the relevant live URL(s), not just search-result snippets.",
+          "Return a source-grounded evidence packet for the other models: page URLs, visible headings, important body copy, CTA labels, offers/pricing, trust elements, and any load/access limitations.",
+          "Preserve exact short wording for important headings and CTAs when possible. Separate what was directly observed from inference.",
+        ]
+      : []),
     "",
     `Current helper depth: ${depth}`,
     "",
@@ -392,6 +431,7 @@ export async function runAdaptiveCollaboration(
 
       try {
         let decision: HelperControlDecision | null = null;
+        let helperResearchEvidence: ResearchEvidenceBundle | undefined;
         const helperSpecificNotes = [...helperNotes];
 
         for (let controlPass = 0; controlPass < MAX_HELPER_CONTROL_PASSES; controlPass += 1) {
@@ -399,6 +439,8 @@ export async function runAdaptiveCollaboration(
             withPersona(
               {
                 ...options.params,
+                requestIntent: collaborationCapabilityToIntent(request.capability),
+                secondaryIntents: [],
                 user: buildHelperControlUser(
                   options.params,
                   request,
@@ -420,6 +462,10 @@ export async function runAdaptiveCollaboration(
             helperParams,
             `Collaboration helper ${helper.provider}:${helper.modelId}`,
           );
+
+          if (response.researchEvidence) {
+            helperResearchEvidence = response.researchEvidence;
+          }
 
           decision = parseHelperControlDecision(response.text);
 
@@ -477,8 +523,23 @@ export async function runAdaptiveCollaboration(
           answer,
           confidence: decision.confidence,
           caveats: decision.caveats,
+          ...(helperResearchEvidence ? { researchEvidence: helperResearchEvidence } : {}),
           durationMs: Date.now() - startedAt,
         };
+
+        if (helperResearchEvidence) {
+          await emit({
+            type: "research_evidence_collected",
+            depth,
+            delegationIndex,
+            requester,
+            helper,
+            capability: request.capability,
+            taskPreview: compactTaskPreview(request.task),
+            detail: `Captured ${helperResearchEvidence.sources.length} structured web source(s) for shared collaboration context.`,
+            durationMs: contribution.durationMs,
+          });
+        }
 
         await emit({
           type: "helper_completed",
@@ -517,6 +578,60 @@ export async function runAdaptiveCollaboration(
 
   let synthesisBrief =
     "Answer the user's original request directly using your own analysis and any useful helper contributions.";
+
+  const requiresLiveResearch = options.params.secondaryIntents?.includes("web-search") ?? false;
+  if (requiresLiveResearch && delegationCount < maxDelegations) {
+    const researchContribution = await resolveHelper(
+      {
+        task:
+          "Retrieve and inspect the live external source material required by the user's request. Build a factual evidence packet that another model can analyze without native web access.",
+        capability: "research",
+        reason:
+          "The primary task requires live source material, but retrieval is a supporting capability rather than the substantive analysis.",
+      },
+      lead,
+      1,
+    );
+
+    if (researchContribution) {
+      contributions.push(researchContribution);
+      leadNotes.push(
+        "Live research was completed by a specialist. Treat the retrieved evidence as shared source material; independently analyze it rather than deferring to the research model's conclusions.",
+      );
+
+      if (options.params.requestIntent === "marketing-analysis" && delegationCount < maxDelegations) {
+        const independentReview = await resolveHelper(
+          {
+            task:
+              "Independently review the shared live website evidence for marketing, positioning, messaging, user experience, trust, offer clarity, and conversion implications. Challenge weak assumptions and identify the highest-impact findings.",
+            capability: "critique",
+            reason:
+              "Marketing review benefits from an independent analytical perspective separate from the retrieval model and the lead.",
+            context: clip(buildContributionBlock([researchContribution]), 14_000),
+          },
+          lead,
+          1,
+        );
+        if (independentReview) {
+          contributions.push(independentReview);
+          leadNotes.push(
+            "An independent cross-provider critique of the live research evidence is available and should be reconciled with your own judgment.",
+          );
+        }
+      }
+    } else {
+      await emit({
+        type: "research_evidence_collection_failed",
+        requester: lead,
+        capability: "research",
+        detail:
+          "Katie could not obtain the secondary live-research evidence. Final analysis must state any resulting verification limitation.",
+      });
+      leadNotes.push(
+        "The required live-research helper could not be completed. Do not imply that live source material was verified.",
+      );
+    }
+  }
 
   for (let leadPass = 0; leadPass <= maxDelegations; leadPass += 1) {
     if (remainingBeforeFinalMs() < MIN_CONTROL_TIME_MS) {
