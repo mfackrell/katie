@@ -5,7 +5,7 @@ Website/marketing review requests with a public HTTP(S) URL now collect two form
 - A web retrieval specialist returns source-grounded text and URLs.
 - Chromium renders up to three pages at 1440×900 desktop and 390×844 mobile viewports. It captures HTML excerpts, linked stylesheet response bodies, computed styles and element positions, visible copy, image loading state, horizontal overflow and JPEG screenshots.
 
-The first page can contribute up to two same-origin navigation/service/team/pricing links. Explicit URLs take priority. Follow-up review requests can reuse URLs from recent user messages.
+The first page can contribute up to two same-origin navigation/service/team/pricing links. Explicit URLs take priority. Follow-up reviews search all supplied user history, then an unambiguous single-domain conversation summary. Bare domains are normalized to HTTPS; assistant citations do not override the user target. Missing targets are reported explicitly without launching a browser.
 
 ## Shared handoff
 
@@ -29,8 +29,8 @@ Runtime dependencies are pinned: Chromium 148.0.0 and playwright-core 1.63.0. No
 
 CI runs a real Chromium fixture test checking desktop/mobile CSS, HTML, stylesheets, screenshots and cleanup, alongside evidence-retention, model-handoff, image-adapter and URL-guard regression tests.
 
-GET /api/health/website probes the deployed browser against the fixed https://example.com/ page. It returns screenshot/view/style counts and coverage limitations, never image bytes or a user-controlled target.
+GET /api/health/website probes the deployed browser against the fixed https://example.com/ page using a follow-up request whose URL is eight history entries back. It returns target provenance, screenshot/view/style counts and coverage limitations, never image bytes or a user-controlled target.
 
-Research trace events report complete response character count plus page, view, screenshot and stylesheet counts without logging screenshot bytes.
+Research trace events report complete response character count, target provenance, requested URLs, page/view/screenshot/stylesheet counts and bounded skip/failure/coverage reasons without logging screenshot bytes.
 
-Run npm run test:website for strict compilation and the 17 focused website/provider/collaboration regression tests. The general suite has 10 unrelated existing failures, verified against the prior production commit (11 before repairing its malformed protocol fixture); these are outside this change.
+Run npm run test:website for strict compilation and focused website/provider/collaboration regression tests, including follow-up target recovery beyond six entries, summary recovery, absent-target diagnostics, real browser capture and complete evidence/image delivery. The general suite has 10 unrelated existing failures, verified against the prior production commit (11 before repairing its malformed protocol fixture); these are outside this change.

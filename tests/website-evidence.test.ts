@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { collectWebsiteEvidence, isPublicAddress, launchWebsiteBrowser, validateWebsiteUrl, websiteReviewUrls } from "../lib/research/website-evidence";
-import { formatResearchEvidence, mergeResearchEvidence, websiteImages } from "../lib/research/shared-evidence";
+import { collectWebsiteEvidence, isPublicAddress, launchWebsiteBrowser, resolveWebsiteReviewTarget, validateWebsiteUrl, websiteReviewUrls } from "../lib/research/website-evidence";
+import { formatResearchEvidence, mergeResearchEvidence, websiteEvidenceStats, websiteImages } from "../lib/research/shared-evidence";
 import { runAdaptiveCollaboration } from "../lib/collaboration/orchestrator";
 import { runOnDemandCapabilityEscalation } from "../lib/collaboration/capability-escalation-runner";
 import { CAPABILITY_REQUEST_PREFIX } from "../lib/collaboration/capability-escalation";
@@ -12,6 +12,17 @@ const params: ChatGenerateParams = {
   user: "Review this website https://example.com/", requestIntent: "marketing-analysis", secondaryIntents: ["web-search"],
 };
 const screenshot = "data:image/jpeg;base64,c2NyZWVuc2hvdA==";
+const followUpParams: ChatGenerateParams = {
+  ...params,
+  user: "Review the site again this time you should be able to see the visual layout. I want you to evaluate that in addition to the content.",
+  history: [
+    { role: "user", content: "review this site: https://example.com/" },
+    { role: "assistant", content: "Previous review with unrelated citation https://other.example/" },
+    { role: "user", content: "review the site again" }, { role: "assistant", content: "Reviewed." },
+    { role: "user", content: "Check the site again" }, { role: "assistant", content: "Reviewed." },
+    { role: "user", content: "try it again" }, { role: "assistant", content: "Text only." },
+  ],
+};
 const website: WebsiteEvidence = {
   capturedAt: "2026-09-30T19:00:00Z", limitations: [],
   pages: [{
@@ -32,6 +43,25 @@ test("website review URL detection includes follow-ups but leaves ordinary searc
   assert.deepEqual(websiteReviewUrls({ ...params, user: "Search current news https://example.com/", requestIntent: "news-summary" }), []);
   assert.deepEqual(websiteReviewUrls({ ...params, user: "Review the site again", history: [{ role: "user", content: "https://example.com/" }] }), ["https://example.com/"]);
   assert.deepEqual(websiteReviewUrls({ ...params, user: "Review https://example.com/report.pdf" }), []);
+});
+
+test("follow-up review recovers the user target outside the former six-entry cutoff", () => {
+  assert.deepEqual(resolveWebsiteReviewTarget(followUpParams), { urls: ["https://example.com/"], source: "history" });
+  assert.deepEqual(websiteReviewUrls({ ...followUpParams, user: "Review https://new.example/" }), ["https://new.example/"]);
+  assert.deepEqual(websiteReviewUrls({ ...params, user: "Review the site c3execs.com" }), ["https://c3execs.com"]);
+  assert.deepEqual(websiteReviewUrls({ ...params, user: "Review [the site](https://example.com/)" }), ["https://example.com/"]);
+});
+
+test("summary can recover a single target after history compaction without using ambiguous citations", () => {
+  assert.deepEqual(resolveWebsiteReviewTarget({ ...params, user: "Review the site again", summary: "The user is reviewing https://example.com/." }), { urls: ["https://example.com/"], source: "summary" });
+  assert.deepEqual(websiteReviewUrls({ ...params, user: "Review the site again", summary: "Compared https://first.example/ and https://second.example/" }), []);
+});
+
+test("missing target is explicitly reported without launching a browser", async () => {
+  const evidence = await collectWebsiteEvidence({ ...params, user: "Review the site again" }, { launch: async () => { throw new Error("must not launch"); } });
+  assert.equal(evidence?.targetSource, "none");
+  assert.match(websiteEvidenceStats(evidence), /Rendered inspection skipped/);
+  assert.match(formatResearchEvidence(mergeResearchEvidence({ text: "Text only" }, { provider: "grok", modelId: "web" }, params.user, evidence)), /Ask for the target URL/);
 });
 
 test("browser fetch guard blocks private addresses, credentials and unsafe protocols", async () => {
@@ -78,10 +108,14 @@ test("all reviewers and replacement synthesis receive the full research tail, CS
   const replacement = provider("google", "Final review.");
   let captures = 0;
   const result = await runAdaptiveCollaboration({
-    requestId: "full-design-evidence", params, leadProvider: lead, leadModelId: "lead",
+    requestId: "full-design-evidence", params: followUpParams, leadProvider: lead, leadModelId: "lead",
     providers: [lead, research, critique, replacement],
     maxContributionChars: 1000, maxTotalContributionChars: 2000,
-    collectWebsiteEvidence: async () => { captures++; return website; },
+    collectWebsiteEvidence: async (p) => {
+      captures++;
+      assert.deepEqual(websiteReviewUrls(p), ["https://example.com/"]);
+      return website;
+    },
     async selectHelper(context) {
       if (context.request.capability === "research") return { provider: research, modelId: "web" };
       assert.equal(context.hasImages, true);
@@ -133,6 +167,7 @@ test("browser launch failure becomes an explicit coverage limitation", async () 
   const evidence = await collectWebsiteEvidence(params, { launch: async () => { throw new Error("native browser unavailable"); } });
   assert.equal(evidence?.pages.length, 0);
   assert.match(evidence?.limitations.join("\n") ?? "", /native browser unavailable/);
+  assert.match(websiteEvidenceStats(evidence), /native browser unavailable/);
 });
 
 test("real Chromium captures applied desktop/mobile CSS, HTML and screenshots", { timeout: 60_000 }, async () => {
@@ -164,11 +199,12 @@ test("real Chromium captures applied desktop/mobile CSS, HTML and screenshots", 
     };
     return context;
   };
-  const evidence = await collectWebsiteEvidence(params, {
+  const evidence = await collectWebsiteEvidence(followUpParams, {
     launch: async () => browser, validate: async () => {}, timeoutMs: 45_000,
   });
   console.info("[WebsiteEvidence test] Capture result", JSON.stringify(evidence?.pages.map((page) => ({ title: page.title, views: page.views.length, limitations: page.limitations }))), evidence?.limitations);
   assert.ok(evidence?.pages.length);
+  assert.equal(evidence.targetSource, "history");
   const page = evidence.pages[0];
   assert.equal(page.title, "Fixture");
   assert.match(page.html, /stylesheet/);

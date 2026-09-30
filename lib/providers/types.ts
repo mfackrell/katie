@@ -6,6 +6,7 @@ export interface ResearchEvidenceSource {
 
 export interface WebsiteEvidence {
   capturedAt: string;
+  targetSource?: "current-message" | "history" | "summary" | "none";
   pages: WebsitePageEvidence[];
   limitations: string[];
 }
