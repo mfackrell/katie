@@ -808,6 +808,19 @@ export async function chooseProvider(
     models: models.length ? models : [pickDefaultModel(provider, [])]
   }));
 
+  const delegatedWebRetrievalForMarketing =
+    intent === "marketing-analysis" &&
+    (resolvedIntent.secondaryIntents ?? []).includes("web-search");
+
+  if (delegatedWebRetrievalForMarketing) {
+    availableByProvider = availableByProvider.filter(
+      ({ provider }) => provider.name !== "grok",
+    );
+    console.info(
+      `[Routing Constraint] requestId=${traceRequestId} rule=marketing-analysis-delegates-web-retrieval excluded_provider=grok`,
+    );
+  }
+
   const excludedCandidateKeys = new Set(
     (options?.excludedCandidates ?? []).map(
       (candidate) => `${candidate.providerName}:${normalizeModelId(candidate.modelId)}`
@@ -828,7 +841,9 @@ export async function chooseProvider(
   const candidateCountBeforeFilter = availableByProvider.reduce((total, entry) => total + entry.models.length, 0);
 
   console.info(`[Route Policy] requestId=${traceRequestId} intent=${intent} hasVideoInput=${Boolean(options?.hasVideoInput)}`);
-  let hardRouteRule = "none";
+  let hardRouteRule = delegatedWebRetrievalForMarketing
+    ? "marketing-analysis-delegates-web-retrieval"
+    : "none";
 
   if (options?.hasVideoInput) {
     intentAuthority = "capability";
@@ -842,8 +857,23 @@ export async function chooseProvider(
     registryLookup
   });
 
-  console.info(`[Capability Filter] requestId=${traceRequestId} candidates=${availableByProvider.reduce((total, entry) => total + entry.models.length, 0)}`);
+  const eligibleCandidateCount = availableByProvider.reduce(
+    (total, entry) => total + entry.models.length,
+    0,
+  );
+  console.info(`[Capability Filter] requestId=${traceRequestId} candidates=${eligibleCandidateCount}`);
   logRoutingCandidatePool(traceRequestId, intent, availableByProvider);
+
+  if (eligibleCandidateCount === 0) {
+    const noCandidateError = new Error(
+      `No eligible routing candidates for intent ${intent} after capability and exclusion filters.`,
+    );
+    noCandidateError.name = "NoEligibleRoutingCandidatesError";
+    console.info(
+      `[Routing Empty Pool] requestId=${traceRequestId} intent=${intent} returning_control_to_caller=true`,
+    );
+    throw noCandidateError;
+  }
 
   rankedCandidates = scoreModelsForIntent(availableByProvider, intent, { registryLookup, preferredProvider, actorRoutingProfile });
   const unbiasedTopCandidate = actorRoutingProfile
