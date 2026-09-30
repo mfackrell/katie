@@ -179,6 +179,15 @@ function isVisionAnalysisModel(providerName: ProviderName, modelId: string): boo
 
 const loggedWebSearchCapabilityFallbacks = new Set<string>();
 
+function isRetrievalSpecializedModel(modelId: string): boolean {
+  const normalizedModel = modelId.toLowerCase();
+  return (
+    normalizedModel.includes("search-preview") ||
+    normalizedModel.includes("search-api") ||
+    normalizedModel.includes("deep-research")
+  );
+}
+
 function supportsWebSearch(providerName: ProviderName, modelId: string, registryLookup?: RegistryLookup): boolean {
   const registry = lookupRegistryModel(registryLookup, providerName, modelId);
   if (registry !== null && registry !== undefined && typeof registry.supports_web_search === "boolean") {
@@ -1346,6 +1355,9 @@ function rankModelForIntent(providerName: ProviderName, modelId: string, intent:
       if (!modelSupportsIntent(providerName, modelId, intent)) {
         return -1;
       }
+      if (isRetrievalSpecializedModel(modelId)) {
+        return -1;
+      }
       {
         let score = 10;
         if (providerName === "anthropic") score += 4;
@@ -1777,6 +1789,9 @@ export function scoreModelCandidateWithBreakdown(
     case "marketing-analysis": {
       if (!modelSupportsIntent(providerName, modelId, intent, options?.registryLookup)) {
         return finalize(null, -1, "intent_mismatch:marketing-analysis");
+      }
+      if (isRetrievalSpecializedModel(modelId)) {
+        return finalize(null, -1, "retrieval_specialist_excluded_from_marketing_lead");
       }
       const baseScore = 10;
       if (providerName === "anthropic") {
