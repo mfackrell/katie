@@ -68,6 +68,7 @@
     "tests/uploads/parse-text-files.test.ts",
     "lib/research/website-evidence.ts",
     "lib/research/shared-evidence.ts",
-    "tests/website-evidence.test.ts"
+    "tests/website-evidence.test.ts",
+    "tests/grok-provider.test.ts"
   ]
 }
