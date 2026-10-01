@@ -1,3 +1,4 @@
+import { assertProviderOutput, isTerminalProviderError, ProviderResponseError } from "@/lib/providers/response-errors";
 import type { ProviderResponse } from "@/lib/providers/types";
 
 const STRONG_REFUSAL_PATTERNS: RegExp[] = [
@@ -98,6 +99,7 @@ export async function runWithRefusalFallback<TAttempt>({
   const pendingAttempts = [...attempts];
   const attemptedAttempts: TAttempt[] = [];
   let attemptIndex = 0;
+  const retriedEmpty = new Set<TAttempt>();
 
   while (pendingAttempts.length > 0) {
     const attempt = pendingAttempts.shift() as TAttempt;
@@ -107,6 +109,8 @@ export async function runWithRefusalFallback<TAttempt>({
 
     try {
       const result = await runAttempt(attempt, currentAttemptIndex);
+
+      assertProviderOutput(result);
 
       if (!shouldRetryRefusal || !detectRefusal(result, attempt)) {
         return { result, attempt };
@@ -145,6 +149,14 @@ export async function runWithRefusalFallback<TAttempt>({
       onRefusalFallback?.({ attempt, attemptIndex: currentAttemptIndex, nextAttempt });
       continue;
     } catch (error: unknown) {
+      if (isTerminalProviderError(error)) throw error;
+      if (error instanceof ProviderResponseError && error.code === "EMPTY_RESPONSE") {
+        if (retriedEmpty.has(attempt)) throw error;
+        retriedEmpty.add(attempt);
+        onError?.({ attempt, attemptIndex: currentAttemptIndex, error });
+        pendingAttempts.unshift(attempt);
+        continue;
+      }
       lastGenerationError = error;
       onError?.({ attempt, attemptIndex: currentAttemptIndex, error });
 
