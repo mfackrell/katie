@@ -99,3 +99,17 @@ test("native image and scanned-PDF context reports real source access instead of
   assert.match(formatAttachmentContext([pdf]), /inspect the PDF directly/);
   assert.equal(requiresGoogleFileSource({ ...pdf, extractedText: "OCR text", nativeInspectionRequired: true }), true);
 });
+
+test("selector failure finds the only photo across the actor catalog instead of reusing the last spreadsheet", async () => {
+  const photo = { ...doc, id: "33333333-3333-4333-8333-333333333333", fileName: "pier.png", mimeType: "image/png", observedSummary: "Red circle and the label PIER 6832" };
+  const history = [{ id: "m", chatId: "c", role: "user" as const, content: "Read the formula in forecast.xlsx", createdAt: "2026-10-01", attachments: [sheet] }];
+  const unavailable = async () => { throw new SyntaxError("truncated selector JSON"); };
+  const result = await selectStoredAttachments("In the photo, what exact identifier is printed?", [doc, sheet, photo], history, unavailable);
+  assert.equal(result.method, "fallback"); assert.equal(result.selections[0].attachment.id, photo.id); assert.equal(result.selections[0].mode, "source");
+  const ambiguous = await selectStoredAttachments("Read the photo", [photo, { ...photo, id: "other-photo", fileName: "other.png" }, sheet], history, unavailable);
+  assert.equal(ambiguous.selections.length, 0); assert.match(ambiguous.clarification!, /Which saved image/);
+  const missing = await selectStoredAttachments("Read the photo", [sheet], history, unavailable);
+  assert.equal(missing.selections.length, 0, "never substitute a different file type");
+  const general = await selectStoredAttachments("What is a spreadsheet?", [sheet], history, unavailable);
+  assert.equal(general.selections.length, 0, "a general definition question does not load a saved file");
+});
