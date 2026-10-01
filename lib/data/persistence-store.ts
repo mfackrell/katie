@@ -84,12 +84,13 @@ function toMemoryContent(row: MemoryRow | null): JsonRecord {
   return row.content;
 }
 
-function parseMessageContent(content: string): { text: string; model?: string; assets?: Array<{ type: string; url: string }> } {
+export function parseMessageContent(content: string): { text: string; model?: string; assets?: Array<{ type: string; url: string }>; attachments?: Message["attachments"] } {
   try {
-    const parsed = JSON.parse(content) as { text?: unknown; model?: unknown; assets?: unknown };
+    const parsed = JSON.parse(content) as { text?: unknown; model?: unknown; assets?: unknown; attachments?: unknown };
     if (typeof parsed.text === "string") {
       return {
         text: parsed.text,
+        ...(Array.isArray(parsed.attachments) ? { attachments: parsed.attachments.filter((item): item is NonNullable<Message["attachments"]>[number] => Boolean(item) && typeof item.id === "string" && /^[0-9a-f-]{36}$/i.test(item.id) && typeof item.fileName === "string" && typeof item.mimeType === "string") } : {}),
         ...(typeof parsed.model === "string" ? { model: parsed.model } : {}),
         ...(Array.isArray(parsed.assets)
           ? {
@@ -110,9 +111,9 @@ function parseMessageContent(content: string): { text: string; model?: string; a
   return { text: content };
 }
 
-function encodeMessageContent(message: Pick<Message, "content" | "model" | "assets">): string {
-  if (message.model || (message.assets && message.assets.length > 0)) {
-    return JSON.stringify({ text: message.content, model: message.model, assets: message.assets ?? [] });
+export function encodeMessageContent(message: Pick<Message, "content" | "model" | "assets" | "attachments">): string {
+  if (message.attachments?.length || message.model || (message.assets && message.assets.length > 0)) {
+    return JSON.stringify({ text: message.content, model: message.model, assets: message.assets ?? [], attachments: message.attachments });
   }
 
   return message.content;
@@ -245,11 +246,15 @@ export async function deleteActorsById(actorIds: string[]): Promise<void> {
   }
 
   const client = getSupabaseAdminClient();
+  const { data: chats, error: chatsError } = await client.from("chats").select("id").in("actor_id", actorIds).returns<{ id: string }>();
+  if (chatsError) throw new Error(`Failed to list actor chats: ${chatsError.message}`);
   const { error } = await client.from("actors").in("id", actorIds).delete();
 
   if (error) {
     throw new Error(`Failed to delete actors: ${error.message}`);
   }
+  const { removeConversationAttachments } = await import("@/lib/uploads/stored-uploads");
+  for (const chat of chats ?? []) await removeConversationAttachments(chat.id).catch(() => console.warn("[Attachments] Actor chat cleanup failed", { chatId: chat.id }));
 }
 
 export async function getChatById(chatId: string): Promise<ChatThread | null> {
@@ -351,6 +356,8 @@ export async function deleteChat(chatId: string): Promise<void> {
   if (error) {
     throw new Error(`Failed to delete chat ${chatId}: ${error.message}`);
   }
+  const { removeConversationAttachments } = await import("@/lib/uploads/stored-uploads");
+  await removeConversationAttachments(chatId).catch(() => console.warn("[Attachments] Chat cleanup failed", { chatId }));
 }
 
 export async function deleteChatById(chatId: string): Promise<void> {
@@ -377,6 +384,7 @@ export async function getMessages(chatId: string): Promise<Message[]> {
       content: parsed.text,
       ...(parsed.model ? { model: parsed.model } : {}),
       ...(parsed.assets ? { assets: parsed.assets } : {}),
+      ...(parsed.attachments ? { attachments: parsed.attachments } : {}),
     };
   });
 }
@@ -404,6 +412,7 @@ export async function getRecentMessages(chatId: string, limit = 20): Promise<Mes
         content: parsed.text,
         ...(parsed.model ? { model: parsed.model } : {}),
         ...(parsed.assets ? { assets: parsed.assets } : {}),
+      ...(parsed.attachments ? { attachments: parsed.attachments } : {}),
       };
     });
 }
@@ -447,6 +456,7 @@ export async function saveMessage(
     content: parsed.text,
     ...(parsed.model ? { model: parsed.model } : {}),
     ...(parsed.assets ? { assets: parsed.assets } : {}),
+      ...(parsed.attachments ? { attachments: parsed.attachments } : {}),
   };
 }
 

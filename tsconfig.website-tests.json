@@ -12,6 +12,7 @@
     "tests/claude-provider.test.ts",
     "tests/collaboration.test.ts",
     "tests/grok-provider.test.ts",
-    "tests/direct-upload.test.ts"
+    "tests/direct-upload.test.ts",
+    "tests/attachment-continuity.test.ts"
   ]
 }

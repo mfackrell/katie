@@ -1,9 +1,12 @@
+import { attachmentAccessContext, selectFollowUpAttachments, type ConversationAttachment } from "@/lib/chat/attachment-continuity";
+import { persistConversationAttachment, restoreConversationAttachment } from "@/lib/uploads/stored-uploads";
+import { describeVideoEvidence } from "@/lib/uploads/video-observations";
 import { after, NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { assembleContext } from "@/lib/memory/assemble-context";
 import { maybeUpdateSummary } from "@/lib/memory/summarizer";
 import { maybeUpdateLongTermMemory } from "@/lib/memory/long-term-editor";
-import { saveMessage } from "@/lib/data/persistence-store";
+import { getRecentMessages, saveMessage } from "@/lib/data/persistence-store";
 import {
   claimChatRequest,
   completeChatRequest,
@@ -591,6 +594,17 @@ export async function POST(request: NextRequest) {
     } = payload;
     const repoInjectionEnabled = repoInjectionEnabledFromPayload !== false;
     const attachments = await hydrateStoredAttachments(fileReferences ?? []);
+    const attachmentHistory = await getRecentMessages(chatId, 60);
+    const savedAttachments: ConversationAttachment[] = [];
+    const unavailableAttachments: string[] = [];
+    if (!attachments.length && !images?.length) {
+      for (const saved of selectFollowUpAttachments(message, attachmentHistory)) {
+        savedAttachments.push(saved);
+        try { attachments.push(await restoreConversationAttachment(chatId, saved)); }
+        catch { unavailableAttachments.push(saved.fileName); }
+      }
+    }
+    console.info("[Attachments] Follow-up source resolution", { restored: attachments.length, reused: savedAttachments.length, unavailable: unavailableAttachments });
     console.log("[Chat API] received attachments", { count: attachments.length });
     attachments.forEach((attachment) => {
       console.log("[Chat API] received attachment", {
@@ -1350,10 +1364,19 @@ export async function POST(request: NextRequest) {
             console.log("[Chat API] reasoning_start emitted", { requestId, categories: startEvent.categories });
 
             console.log("[Chat API] Saving user message...");
+            if (!savedAttachments.length && attachments.length) {
+              for (const [index, attachment] of attachments.entries()) {
+                const saved = await persistConversationAttachment(chatId, attachment, fileReferences?.[index]?.storageToken);
+                const observations = await describeVideoEvidence(attachment);
+                savedAttachments.push({ ...saved, ...observations });
+              }
+            }
+            personaForGeneration += `\n\n${attachmentAccessContext(attachmentHistory, savedAttachments, unavailableAttachments)}`;
             await saveMessage(chatId, {
               id: crypto.randomUUID(),
               role: "user",
               content: message,
+              ...(savedAttachments.length ? { attachments: savedAttachments } : {}),
             });
 
             console.log(`[Chat API] Requesting generation from ${provider.name} using model ${modelId}...`);

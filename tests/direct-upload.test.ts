@@ -17,7 +17,7 @@ function fakeStorage() {
       download: async (path: string) => { downloads.push(path); return { data: files.get(path) ?? null, error: files.has(path) ? null : { message: "Not found" } }; },
       upload: async (path: string, body: string) => { files.set(path, new Blob([body])); return { data: {}, error: null }; },
       remove: async (paths: string[]) => { paths.forEach(path => files.delete(path)); return { error: null }; },
-      list: async () => ({ data: [], error: null }),
+      list: async (prefix: string) => ({ data: prefix.startsWith("chats/") ? [...files.keys()].filter(path => path.startsWith(prefix + "/")).map(path => ({ name: path.slice(prefix.length + 1) })) : [], error: null }),
     }),
   };
   return { files, signedPaths, downloads, storage: storage as unknown as Parameters<typeof createStoredUploadService>[0], isPrivate: () => bucket?.public === false };
@@ -125,4 +125,41 @@ test("HTML and plain-text upload failures produce useful errors and stop before 
     assert.equal(calls, 2);
   }
   await assert.rejects(uploadFilesDirect([new File(["abc"], "report.txt")], () => {}, async () => Response.json(null, { status: 400 })), /HTTP 400/);
+});
+
+test("video sources survive completion, persist to the chat, and renew after temporary receipts expire", async () => {
+  const fake = fakeStorage(); let time = 1_000_000; let builds = 0;
+  const video = { ...reference, fileName: "scene.mp4", mimeType: "video/mp4", attachmentKind: "video" as const };
+  const service = createStoredUploadService(fake.storage, "secret", { now: () => time, buildReferences: async () => {
+    builds++;
+    return [{ ...video, providerRef: { googleFileUri: `https://provider.example/video-${builds}` } }];
+  } });
+  const prepared = await service.prepare({ name: video.fileName, type: video.mimeType, size: 3 });
+  fake.files.set(fake.signedPaths[0], new Blob(["mp4"]));
+  const compact = await service.complete(prepared.uploadToken);
+  assert.ok(fake.files.has(fake.signedPaths[0]), "video original retained until linked to a chat or expired");
+  const [full] = await service.hydrate([compact]);
+  const chatId = "11111111-1111-4111-8111-111111111111";
+  const saved = await service.persist(chatId, full, compact.storageToken);
+  assert.deepEqual(await service.restore(chatId, saved), full);
+  time += 25 * 60 * 60 * 1000;
+  await assert.rejects(service.hydrate([compact]), /expired/);
+  fake.files.delete(fake.signedPaths[0]);
+  const renewed = await service.restore(chatId, saved);
+  assert.equal(renewed.providerRef?.googleFileUri, "https://provider.example/video-2");
+  assert.equal(builds, 2);
+  await assert.rejects(service.restore("22222222-2222-4222-8222-222222222222", saved), /unavailable/);
+  await assert.rejects(service.restore(chatId, { ...saved, id: "../../another-chat" }), /Invalid/);
+  await service.removeConversation(chatId);
+  assert.ok(![...fake.files.keys()].some(path => path.startsWith(`chats/${chatId}/`)));
+  await assert.rejects(service.restore(chatId, saved), /unavailable/);
+});
+
+test("expired legacy videos without a retained original fail explicitly instead of supplying stale access", async () => {
+  const fake = fakeStorage(); let time = 1_000_000;
+  const service = createStoredUploadService(fake.storage, "secret", { now: () => time });
+  const chatId = "11111111-1111-4111-8111-111111111111";
+  const saved = await service.persist(chatId, { ...reference, mimeType: "video/mp4" });
+  time += 25 * 60 * 60 * 1000;
+  await assert.rejects(service.restore(chatId, saved), /expired/);
 });
