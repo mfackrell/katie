@@ -18,7 +18,7 @@
     "db:migrate": "node scripts/run-migrations.mjs",
     "smoke": "node scripts/smoke-runtime.mjs",
     "ci:gate": "npm run test && npm run check:url && npm run build && npm run smoke",
-    "test:website": "rm -rf .website-test-dist && tsc -p tsconfig.website-tests.json && mkdir -p .website-test-dist/node_modules && ln -sfn .. .website-test-dist/node_modules/@ && node --test .website-test-dist/tests/website-evidence.test.js .website-test-dist/tests/claude-provider.test.js && node --test --test-name-pattern='marketing|research|website|reviewer' .website-test-dist/tests/collaboration.test.js"
+    "test:website": "rm -rf .website-test-dist && tsc -p tsconfig.website-tests.json && mkdir -p .website-test-dist/node_modules && ln -sfn .. .website-test-dist/node_modules/@ && node --test .website-test-dist/tests/website-evidence.test.js .website-test-dist/tests/claude-provider.test.js && node --test .website-test-dist/tests/collaboration.test.js"
   },
   "dependencies": {
     "@fastify/rate-limit": "^10.3.0",

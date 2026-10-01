@@ -13,12 +13,13 @@ import {
   parseHelperControlDecision,
   parseLeadControlDecision,
 } from "../lib/collaboration/protocol";
-import type { CollaborationHelperSelection } from "../lib/collaboration/types";
+import type { CollaborationHelperSelection, CollaborationResumeState } from "../lib/collaboration/types";
 import type {
   ChatGenerateParams,
   LlmProvider,
   ProviderResponse,
   ProviderStreamHandlers,
+  WebsiteEvidence,
 } from "../lib/providers/types";
 
 type FakeProviderOptions = {
@@ -989,4 +990,164 @@ test("lead can decide no helper is needed", async () => {
   assert.equal(helperSelections, 0);
   assert.equal(result.metadata.used, false);
   assert.equal(result.result.text, "Direct final answer.");
+});
+
+const capturedWebsite: WebsiteEvidence = {
+  capturedAt: "2026-10-01T00:00:00Z", limitations: [], pages: [{
+    requestedUrl: "https://c3execs.com/", url: "https://c3execs.com/", title: "C3",
+    html: '<section id="hero"><button>Book a call</button></section>', htmlTruncated: false,
+    stylesheets: [{ url: "https://c3execs.com/style.css", css: "button {color: blue}", truncated: false }],
+    limitations: [], views: [{ device: "desktop", viewport: { width: 1440, height: 900 },
+      document: { width: 1440, height: 2000, horizontalOverflow: false }, text: "Book a call",
+      elements: [], images: [], limitations: [],
+      screenshot: { dataUrl: "data:image/png;base64,cHJlc2VydmVk", width: 1440, height: 900, truncated: false },
+    }],
+  }],
+};
+const marketingParams = { ...baseParams, user: "Review https://c3execs.com/", requestIntent: "marketing-analysis",
+  secondaryIntents: ["web-search"], summary: "C3 is a broader executive firm built around three operators." };
+
+function reviewHelpers() {
+  return {
+    research: fakeProvider({ name: "grok", modelId: "research", controlResponses: ["Verified website evidence: Book a call."] }),
+    reviewer: fakeProvider({ name: "openai", modelId: "reviewer", controlResponses: [JSON.stringify({ action: "answer", answer: "Independent critique: keep the broader executive firm positioning." })] }),
+  };
+}
+
+test("130-second research plus 30-second critique skips short lead control and retains evidence", async (t) => {
+  let clock = 0;
+  t.mock.method(Date, "now", () => clock);
+  const lead = fakeProvider({ name: "anthropic", modelId: "lead", controlResponses: [], finalText: "Review completed." });
+  const { research, reviewer } = reviewHelpers();
+  const originalResearch = research.generate.bind(research);
+  research.generate = async (params) => { clock += 130_000; return originalResearch(params); };
+  const originalReview = reviewer.generate.bind(reviewer);
+  reviewer.generate = async (params) => { clock += 30_000; return originalReview(params); };
+  let captures = 0;
+  const result = await runAdaptiveCollaboration({ requestId: "slow-review", leadProvider: lead, leadModelId: "lead",
+    providers: [lead, research, reviewer], params: marketingParams,
+    collectWebsiteEvidence: async () => { captures++; return capturedWebsite; },
+    selectHelper: async ({ request }) => request.capability === "research" ? { provider: research, modelId: "research" } : { provider: reviewer, modelId: "reviewer" },
+  });
+  assert.equal(lead.calls.length, 1, "only final synthesis runs, no doomed control pass");
+  assert.match(result.trace.find((event) => event.type === "limit_reached")?.detail ?? "", /minimum=45000ms/);
+  assert.equal(research.calls.length, 1);
+  assert.equal(reviewer.calls.length, 1);
+  assert.equal(captures, 1);
+  assert.equal(result.metadata.delegationCount, 2);
+  assert.match(lead.calls[0].user, /Verified website evidence/);
+  assert.match(lead.calls[0].user, /Independent critique/);
+  assert.match(lead.calls[0].user, /button \{color: blue\}/);
+  assert.deepEqual(lead.calls[0].images, [capturedWebsite.pages[0].views[0].screenshot!.dataUrl]);
+  assert.match(lead.calls[0].persona, /Complete conflict reconciliation before writing/);
+  assert.equal(result.result.text, "Review completed.");
+});
+
+test("lead-control timeout replaces the lead and preserves research screenshots and critique", async (t) => {
+  t.mock.timers.enable({ apis: ["Date", "setTimeout"], now: 0 });
+  const lead = fakeProvider({ name: "anthropic", modelId: "failed-lead", controlResponses: [] });
+  lead.generate = async () => {
+    queueMicrotask(() => t.mock.timers.tick(120_000));
+    return new Promise<ProviderResponse>(() => {});
+  };
+  lead.generateStream = async () => { assert.fail("failed control lead should be replaced"); };
+  const { research, reviewer } = reviewHelpers();
+  const replacement = fakeProvider({ name: "google", modelId: "replacement", controlResponses: [], finalText: "Recovered." });
+  let selections = 0;
+  const result = await runAdaptiveCollaboration({ requestId: "control-timeout", leadProvider: lead, leadModelId: "failed-lead",
+    providers: [lead, research, reviewer, replacement], params: marketingParams,
+    collectWebsiteEvidence: async () => capturedWebsite,
+    selectHelper: async ({ request }) => request.capability === "research" ? { provider: research, modelId: "research" } : { provider: reviewer, modelId: "reviewer" },
+    selectReplacementLead: async (context) => {
+      selections++;
+      assert.equal(context.contributions.length, 2);
+      assert.equal(context.hasImages, true);
+      return { provider: replacement, modelId: "replacement" };
+    },
+  });
+  assert.equal(selections, 1);
+  assert.match(result.trace.find((event) => event.type === "lead_failed")?.detail ?? "", /timed out after 120000ms/);
+  assert.equal(research.calls.length, 1);
+  assert.equal(reviewer.calls.length, 1);
+  assert.equal(result.result.provider, "google");
+  assert.match(replacement.calls[0].user, /Verified website evidence/);
+  assert.match(replacement.calls[0].user, /Independent critique/);
+  assert.deepEqual(replacement.calls[0].images, [capturedWebsite.pages[0].views[0].screenshot!.dataUrl]);
+});
+
+test("final-synthesis timeout leaves time for replacement instead of consuming all remaining budget", async (t) => {
+  t.mock.timers.enable({ apis: ["Date", "setTimeout"], now: 0 });
+  const lead = fakeProvider({ name: "anthropic", modelId: "lead", controlResponses: [JSON.stringify({ action: "ready", synthesisBrief: "Use evidence", conflicts: [] })] });
+  lead.generateStream = async () => {
+    queueMicrotask(() => t.mock.timers.tick(195_000));
+    return new Promise<ProviderResponse>(() => {});
+  };
+  const replacement = fakeProvider({ name: "google", modelId: "replacement", controlResponses: [], finalText: "Recovered after synthesis timeout." });
+  const result = await runAdaptiveCollaboration({ requestId: "synthesis-timeout", leadProvider: lead, leadModelId: "lead",
+    providers: [lead, replacement], params: baseParams, selectHelper: async () => null,
+    selectReplacementLead: async () => ({ provider: replacement, modelId: "replacement" }),
+  });
+  assert.match(result.trace.find((event) => event.type === "lead_failed")?.detail ?? "", /timed out after 195000ms/);
+  assert.equal(result.result.provider, "google");
+  assert.equal(result.metadata.durationMs, 195_000);
+});
+
+test("outer reroute resumes synthesis from checkpoint without repeating any completed work", async () => {
+  const lead = fakeProvider({ name: "anthropic", modelId: "lead", controlResponses: [JSON.stringify({ action: "ready", synthesisBrief: "Use all evidence" })] });
+  lead.generateStream = async () => { throw new Error("Provider unavailable"); };
+  const { research, reviewer } = reviewHelpers();
+  let saved: CollaborationResumeState | undefined;
+  let captures = 0;
+  const options = { requestId: "outer-reroute", leadProvider: lead, leadModelId: "lead", providers: [lead, research, reviewer], params: marketingParams,
+    onCheckpoint: (state: CollaborationResumeState) => { saved = state; },
+    collectWebsiteEvidence: async () => { captures++; return capturedWebsite; },
+    selectHelper: async ({ request }: { request: { capability: string } }) => request.capability === "research" ? { provider: research, modelId: "research" } : { provider: reviewer, modelId: "reviewer" },
+  };
+  await assert.rejects(runAdaptiveCollaboration(options), /Provider unavailable/);
+  assert.equal(saved?.contributions.length, 2);
+  const replacement = fakeProvider({ name: "google", modelId: "replacement", controlResponses: [], finalText: "Resumed answer." });
+  const result = await runAdaptiveCollaboration({ ...options, leadProvider: replacement, leadModelId: "replacement", resumeState: saved,
+    selectHelper: async () => { assert.fail("resumed turn must not select helpers"); },
+  });
+  assert.equal(captures, 1);
+  assert.equal(research.calls.length, 1);
+  assert.equal(reviewer.calls.length, 1);
+  assert.equal(replacement.calls.length, 1);
+  assert.equal(result.metadata.delegationCount, 2);
+  assert.equal(result.trace.some((event) => event.type === "collaboration_resumed"), true);
+  assert.match(replacement.calls[0].user, /Independent critique/);
+  assert.match(replacement.calls[0].user, /id=\\"hero\\"/);
+  assert.deepEqual(replacement.calls[0].images, [capturedWebsite.pages[0].views[0].screenshot!.dataUrl]);
+});
+
+test("conflict reconciliation preserves strategic objectives and classifies evidence disputes", async () => {
+  const conflicts = [{ kind: "strategic-objective", disagreement: "CFO-only headline vs three-operator firm", resolution: "Keep broad positioning; use finance proof without redefining the firm", unresolved: false },
+    { kind: "evidence-quality", disagreement: "Extracted order implies email-only hero", resolution: "DOM hero and screenshot show booking CTA", unresolved: false }];
+  const lead = fakeProvider({ name: "anthropic", modelId: "lead", controlResponses: [JSON.stringify({ action: "ready", synthesisBrief: "Preserve firm strategy", conflicts })], finalText: "Keep the broad firm positioning." });
+  const { research, reviewer } = reviewHelpers();
+  const result = await runAdaptiveCollaboration({ requestId: "strategy-conflict", leadProvider: lead, leadModelId: "lead",
+    providers: [lead, research, reviewer], params: marketingParams, collectWebsiteEvidence: async () => capturedWebsite,
+    selectHelper: async ({ request }) => request.capability === "research" ? { provider: research, modelId: "research" } : { provider: reviewer, modelId: "reviewer" },
+  });
+  assert.match(lead.calls[0].persona, /established user\/project objectives take priority/);
+  assert.match(reviewer.calls[0].persona, /Changes to target customer, core positioning/);
+  assert.match(lead.calls.at(-1)!.persona, /Extracted text order alone does not prove rendered placement/);
+  assert.equal(lead.calls.at(-1)!.summary, marketingParams.summary);
+  assert.match(lead.calls.at(-1)!.user, /"kind":"strategic-objective"/);
+  assert.match(lead.calls.at(-1)!.user, /"kind":"evidence-quality"/);
+  assert.match(result.trace.find((event) => event.type === "reconciliation_completed")?.detail ?? "", /Classified conflicts=2; unresolved=0/);
+  const parsed = parseLeadControlDecision(JSON.stringify({ action: "ready", synthesisBrief: "Need clarification", conflicts: [{ ...conflicts[0], unresolved: true }] }));
+  assert.equal(parsed?.action === "ready" && parsed.conflicts?.[0].unresolved, true);
+});
+
+test("resume checkpoints cannot leak website evidence into a different user turn", async () => {
+  const lead = fakeProvider({ name: "anthropic", modelId: "lead", controlResponses: [JSON.stringify({ action: "ready", synthesisBrief: "Answer this turn", conflicts: [] })], finalText: "Fresh answer." });
+  const foreign: CollaborationResumeState = { requestId: "other-turn", contributions: [], usedParticipants: [], completedHelpers: [],
+    delegationCount: 4, maxDepthReached: 2, totalContributionChars: 0, synthesisBrief: "Foreign strategy", notes: ["Foreign notes"], website: capturedWebsite };
+  const result = await runAdaptiveCollaboration({ requestId: "fresh-turn", resumeState: foreign,
+    leadProvider: lead, leadModelId: "lead", providers: [lead], params: baseParams, selectHelper: async () => null });
+  assert.equal(result.metadata.delegationCount, 0);
+  assert.equal(result.trace.some((event) => event.type === "collaboration_resumed"), false);
+  assert.equal(lead.calls.at(-1)?.images, undefined);
+  assert.doesNotMatch(lead.calls.at(-1)!.user, /Foreign strategy|Foreign notes|Book a call/);
 });

@@ -69,6 +69,9 @@ type CollaborationUiEvent = {
     | "lead_ready"
     | "lead_failed"
     | "lead_replaced"
+    | "collaboration_resumed"
+    | "reconciliation_started"
+    | "reconciliation_completed"
     | "final_synthesis_started"
     | "collaboration_completed"
     | "limit_reached";
@@ -184,9 +187,15 @@ function collaborationStatusMessage(event: CollaborationUiEvent): string {
     case "lead_ready":
       return `${requester} has enough evidence and is preparing the final answer…`;
     case "lead_failed":
-      return `${requester} failed during final synthesis. Katie is preserving the completed collaborator work and selecting a replacement lead…`;
+      return `${requester} could not complete its pass. Katie is preserving completed work for the final answer…`;
     case "lead_replaced":
       return `${requester} is taking over final synthesis with the completed collaborator evidence intact…`;
+    case "collaboration_resumed":
+      return "Katie is continuing with the completed research and reviews intact…";
+    case "reconciliation_started":
+      return "Katie is checking conflicting recommendations against your goals and the evidence…";
+    case "reconciliation_completed":
+      return "Katie has compared the recommendations and is preparing the final answer…";
     case "final_synthesis_started":
       return `${requester} is synthesizing the collaborators’ findings into one answer…`;
     case "limit_reached": {
@@ -798,7 +807,7 @@ export function ChatPanel({
       },
     ].slice(-14));
 
-    if (event.type === "collaboration_started") {
+    if (event.type === "collaboration_started" || event.type === "collaboration_resumed") {
       setCollaborationActive(true);
     }
     if (event.type === "collaboration_completed") {
@@ -815,6 +824,9 @@ export function ChatPanel({
         event.type === "lead_ready" ||
         event.type === "lead_failed" ||
         event.type === "lead_replaced" ||
+        event.type === "collaboration_resumed" ||
+        event.type === "reconciliation_started" ||
+        event.type === "reconciliation_completed" ||
         event.type === "final_synthesis_started" ||
         event.type === "helper_failed" ||
         event.type === "limit_reached") &&
