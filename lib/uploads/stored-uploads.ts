@@ -1,6 +1,7 @@
 import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 import { createClient } from "@supabase/supabase-js";
 import { z } from "zod";
+import type { ConversationAttachment } from "@/lib/chat/attachment-continuity";
 import type { FileReference } from "@/lib/providers/types";
 import { buildFileReferences, validateUploadFiles } from "./build-file-references";
 
@@ -79,7 +80,57 @@ export function createStoredUploadService(storage: Storage, secret: string, opti
       }
     }
   }
+  const conversationPath = (chatId: string, id: string) => {
+    if (!z.string().uuid().safeParse(chatId).success || !z.string().uuid().safeParse(id).success) throw new UploadInputError("Invalid conversation attachment.");
+    return `chats/${chatId}/${id}`;
+  };
   return {
+    async persist(chatId: string, reference: FileReference, token?: string): Promise<ConversationAttachment> {
+      await ensureBucket();
+      const id = randomUUID();
+      const path = conversationPath(chatId, id);
+      let hasSource = false;
+      if (reference.mimeType.startsWith("video/") && token) {
+        const ticket = verify(token, "reference");
+        const source = await objects.download(sourcePath(ticket));
+        if (source.data) {
+          const saved = await objects.upload(`${path}.source`, source.data, { contentType: reference.mimeType, upsert: true });
+          if (saved.error) throw new Error("Unable to retain the video for follow-up questions.");
+          hasSource = true;
+        }
+      }
+      const saved = await objects.upload(`${path}.json`, JSON.stringify({ reference, hasSource, refreshedAt: now() }), { contentType: "application/json", upsert: true });
+      if (saved.error) throw new Error("Unable to retain this attachment for follow-up questions.");
+      return { id, fileName: reference.fileName, mimeType: reference.mimeType };
+    },
+    async restore(chatId: string, attachment: ConversationAttachment): Promise<FileReference> {
+      const path = conversationPath(chatId, attachment.id);
+      const stored = await objects.download(`${path}.json`);
+      if (stored.error || !stored.data) throw new UploadInputError("The saved attachment is unavailable.");
+      const record = JSON.parse(await stored.data.text()) as { reference: FileReference; hasSource: boolean; refreshedAt: number };
+      if (record.reference.mimeType.startsWith("video/") && now() - record.refreshedAt >= RETENTION_MS) {
+        const source = record.hasSource ? await objects.download(`${path}.source`) : null;
+        if (!source?.data) throw new UploadInputError("The video reference has expired; please attach the video again.");
+        const [renewed] = await buildReferences([new File([source.data], record.reference.fileName, { type: record.reference.mimeType })]);
+        if (!renewed?.providerRef?.googleFileUri) throw new UploadInputError("Unable to restore video access.");
+        record.reference = renewed;
+        record.refreshedAt = now();
+        const updated = await objects.upload(`${path}.json`, JSON.stringify(record), { contentType: "application/json", upsert: true });
+        if (updated.error) throw new Error("Unable to save renewed video access.");
+      }
+      return record.reference;
+    },
+    async removeConversation(chatId: string) {
+      if (!z.string().uuid().safeParse(chatId).success) return;
+      const prefix = `chats/${chatId}`;
+      for (;;) {
+        const listed = await objects.list(prefix, { limit: 100 });
+        if (listed.error) throw new Error("Unable to list conversation attachments for deletion.");
+        if (!listed.data?.length) break;
+        const removed = await objects.remove(listed.data.map(item => `${prefix}/${item.name}`));
+        if (removed.error) throw new Error("Unable to delete conversation attachments.");
+      }
+    },
     async prepare(input: unknown) {
       const parsed = uploadMetadataSchema.safeParse(input);
       if (!parsed.success) throw new UploadInputError("Invalid attachment name, type, or size (maximum 200 MB).");
@@ -110,7 +161,7 @@ export function createStoredUploadService(storage: Storage, secret: string, opti
         contentType: "application/json", upsert: true,
       });
       if (stored.error) throw new Error("Unable to save the processed attachment. Please try again.");
-      const removed = await objects.remove([sourcePath(ticket)]);
+      const removed = reference.mimeType.startsWith("video/") ? { error: null } : await objects.remove([sourcePath(ticket)]);
       if (removed.error) console.warn("[Upload API] temporary source cleanup failed", { fileId: reference.fileId });
       console.info("[Upload API] direct upload processed", { fileName: ticket.name, bytes: ticket.size, attachmentKind: reference.attachmentKind });
       return compact(reference, ticket);
@@ -146,3 +197,7 @@ export const prepareStoredUpload = (input: unknown) => getUploadService().prepar
 export const completeStoredUpload = (token: string) => getUploadService().complete(token);
 export const hydrateStoredAttachments = (references: FileReference[]) =>
   references.some(reference => reference.storageToken) ? getUploadService().hydrate(references) : Promise.resolve(references);
+
+export const persistConversationAttachment = (chatId: string, reference: FileReference, token?: string) => getUploadService().persist(chatId, reference, token);
+export const restoreConversationAttachment = (chatId: string, attachment: ConversationAttachment) => getUploadService().restore(chatId, attachment);
+export const removeConversationAttachments = (chatId: string) => getUploadService().removeConversation(chatId);

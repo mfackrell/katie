@@ -1,3 +1,4 @@
+import type { ConversationAttachment } from "@/lib/chat/attachment-continuity";
 export type Role = "user" | "assistant";
 
 export type ActorRoutingProvider = "openai" | "google" | "anthropic" | "grok";
@@ -59,6 +60,7 @@ export interface Message {
   role: Role;
   model?: string;
   content: string;
+  attachments?: ConversationAttachment[];
   assets?: Array<{ type: string; url: string }>;
   createdAt: string;
 }

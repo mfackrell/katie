@@ -70,6 +70,7 @@
     "lib/research/shared-evidence.ts",
     "tests/website-evidence.test.ts",
     "tests/grok-provider.test.ts",
-    "tests/direct-upload.test.ts"
+    "tests/direct-upload.test.ts",
+    "tests/attachment-continuity.test.ts"
   ]
 }
