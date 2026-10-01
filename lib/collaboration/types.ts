@@ -61,6 +61,9 @@ export type CollaborationTraceEvent = {
     | "lead_ready"
     | "lead_failed"
     | "lead_replaced"
+    | "collaboration_resumed"
+    | "reconciliation_started"
+    | "reconciliation_completed"
     | "final_synthesis_started"
     | "collaboration_completed"
     | "limit_reached";
@@ -111,6 +114,8 @@ export type CollaborationEngineOptions = {
   leadModelId: string;
   providers: LlmProvider[];
   params: ChatGenerateParams;
+  resumeState?: CollaborationResumeState;
+  onCheckpoint?: (state: CollaborationResumeState) => void;
   selectHelper: (
     context: CollaborationSelectionContext,
   ) => Promise<CollaborationHelperSelection | null>;
@@ -120,6 +125,7 @@ export type CollaborationEngineOptions = {
     error: unknown;
     usedParticipants: CollaborationParticipant[];
     contributions: CollaborationContribution[];
+    hasImages: boolean;
   }) => Promise<CollaborationHelperSelection | null>;
   onTrace?: (event: CollaborationTraceEvent) => void | Promise<void>;
   onFinalTextDelta?: (delta: string) => void | Promise<void>;
@@ -138,6 +144,27 @@ export type CollaborationEngineOptions = {
   ) => ChatGenerateParams;
 };
 
+// Request-local only: never reuse source material across different user turns.
+export type CollaborationResumeState = {
+  requestId: string;
+  contributions: CollaborationContribution[];
+  usedParticipants: CollaborationParticipant[];
+  completedHelpers: CollaborationParticipant[];
+  delegationCount: number;
+  maxDepthReached: number;
+  totalContributionChars: number;
+  synthesisBrief: string;
+  notes: string[];
+  website?: ResearchEvidenceBundle["website"];
+};
+
+export type CollaborationConflict = {
+  kind: "factual" | "evidence-quality" | "assumption" | "strategic-objective" | "judgment";
+  disagreement: string;
+  resolution: string;
+  unresolved: boolean;
+};
+
 export type CollaborationEngineResult = {
   result: ProviderResponse;
   streamedText: string;
@@ -153,6 +180,7 @@ export type LeadControlDecision =
   | {
       action: "ready";
       synthesisBrief: string;
+      conflicts?: CollaborationConflict[];
     };
 
 export type HelperControlDecision =

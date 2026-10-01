@@ -29,6 +29,7 @@ const DEFAULT_PARTICIPANT_TIMEOUT_MS = 120_000;
 const DEFAULT_RESEARCH_TIMEOUT_MS = 180_000;
 const DEFAULT_MAX_TOTAL_DURATION_MS = 240_000;
 const MIN_CONTROL_TIME_MS = 5_000;
+const MIN_LEAD_CONTROL_TIME_MS = 45_000;
 const MIN_RESEARCH_RETRY_TIME_MS = 45_000;
 const MAX_HELPER_CONTROL_PASSES = 3;
 const MAX_HELPER_CANDIDATE_ATTEMPTS = 3;
@@ -226,19 +227,35 @@ export async function runAdaptiveCollaboration(
   const remainingBeforeFinalMs = () =>
     Math.max(0, remainingTotalMs() - finalSynthesisReserveMs);
 
+  const resumed = options.resumeState?.requestId === options.requestId ? options.resumeState : undefined;
+  const minimumLeadControlMs = Math.min(participantTimeoutMs, MIN_LEAD_CONTROL_TIME_MS);
+  const minimumFinalTimeMs = Math.min(participantTimeoutMs * 2, MIN_LEAD_CONTROL_TIME_MS, maxTotalDurationMs);
   const lead = participant(options.leadProvider, options.leadModelId);
   const trace: CollaborationTraceEvent[] = [];
-  const contributions: CollaborationContribution[] = [];
+  const contributions: CollaborationContribution[] = [...(resumed?.contributions ?? [])];
   const usedParticipants = new Map<string, CollaborationParticipant>([
     [participantKey(lead), lead],
+    ...(resumed?.usedParticipants ?? []).map((value): [string, CollaborationParticipant] => [participantKey(value), value]),
   ]);
-  const leadNotes: string[] = [];
-  let delegationCount = 0;
-  let maxDepthReached = 0;
-  let totalContributionChars = 0;
+  const leadNotes: string[] = [...(resumed?.notes ?? [])];
+  const completedHelpers = new Map<string, CollaborationParticipant>(
+    (resumed?.completedHelpers ?? []).map((value) => [participantKey(value), value]),
+  );
+  let delegationCount = resumed?.delegationCount ?? 0;
+  let maxDepthReached = resumed?.maxDepthReached ?? 0;
+  let totalContributionChars = resumed?.totalContributionChars ?? 0;
   let independentMarketingCritiqueAttempted = false;
   let websiteEvidencePromise: ReturnType<typeof collectWebsiteEvidence> | undefined;
-  let sharedWebsite: ResearchEvidenceBundle["website"];
+  let sharedWebsite: ResearchEvidenceBundle["website"] = resumed?.website;
+  let synthesisBrief = resumed?.synthesisBrief ??
+    "Answer the user's original request directly using your own analysis and any useful helper contributions.";
+  const checkpoint = (): void => options.onCheckpoint?.({
+    requestId: options.requestId,
+    contributions: [...contributions], usedParticipants: [...usedParticipants.values()],
+    completedHelpers: [...completedHelpers.values()],
+    delegationCount, maxDepthReached, totalContributionChars, synthesisBrief,
+    notes: [...leadNotes], website: sharedWebsite,
+  });
   const collectWebsite = () => websiteEvidencePromise ??= (options.collectWebsiteEvidence ?? collectWebsiteEvidence)(options.params, {
     timeoutMs: Math.min(45_000, Math.max(1_000, remainingBeforeFinalMs() - MIN_CONTROL_TIME_MS)),
   }).catch((error) => ({ capturedAt: nowIso(), pages: [], limitations: ["Rendered inspection failed: " + String(error)] }));
@@ -246,6 +263,7 @@ export async function runAdaptiveCollaboration(
   const addContribution = (contribution: CollaborationContribution): void => {
     if (!contributions.some((existing) => existing.id === contribution.id)) {
       contributions.push(contribution);
+      checkpoint();
     }
   };
 
@@ -273,6 +291,11 @@ export async function runAdaptiveCollaboration(
     detail: "Lead model entered adaptive collaboration control.",
   });
 
+  if (resumed) {
+    await emit({ type: "collaboration_resumed", requester: lead,
+      detail: `Resuming final synthesis with ${contributions.length} completed contribution(s); retrieval and critique will not be repeated.` });
+  }
+
   const prepareParams = (
     params: ChatGenerateParams,
     participantValue: CollaborationParticipant,
@@ -288,9 +311,10 @@ export async function runAdaptiveCollaboration(
     params: ChatGenerateParams,
     label: string,
     timeoutMs = participantTimeoutMs,
+    minimumTimeMs = MIN_CONTROL_TIME_MS,
   ): Promise<ProviderResponse> => {
     const remaining = remainingBeforeFinalMs();
-    if (remaining < MIN_CONTROL_TIME_MS) {
+    if (remaining < minimumTimeMs) {
       throw new Error(
         `${label} skipped because Katie reserved the remaining collaboration time for final synthesis.`,
       );
@@ -608,6 +632,7 @@ export async function runAdaptiveCollaboration(
           });
         }
 
+        completedHelpers.set(participantKey(helper), helper);
         await emit({
           type: "helper_completed",
           depth,
@@ -686,12 +711,9 @@ export async function runAdaptiveCollaboration(
     }
   };
 
-  let synthesisBrief =
-    "Answer the user's original request directly using your own analysis and any useful helper contributions.";
-
   const requiresLiveResearch = (options.params.secondaryIntents?.includes("web-search") ?? false) ||
     websiteReviewUrls(options.params).length > 0;
-  if (requiresLiveResearch && delegationCount < maxDelegations) {
+  if (!resumed && requiresLiveResearch && delegationCount < maxDelegations) {
     const researchContribution = await resolveHelper(
       {
         task:
@@ -724,14 +746,15 @@ export async function runAdaptiveCollaboration(
     }
   }
 
-  for (let leadPass = 0; leadPass <= maxDelegations; leadPass += 1) {
-    if (remainingBeforeFinalMs() < MIN_CONTROL_TIME_MS) {
+  let controlFailure: unknown;
+  for (let leadPass = 0; leadPass <= maxDelegations && !resumed; leadPass += 1) {
+    if (remainingBeforeFinalMs() < minimumLeadControlMs) {
       synthesisBrief =
         "The collaboration time budget is nearly exhausted. Produce the strongest complete answer now using the evidence already collected.";
       await emit({
         type: "limit_reached",
         requester: lead,
-        detail: "Collaboration time budget reached; forcing final synthesis.",
+        detail: `Lead control skipped: remaining=${remainingBeforeFinalMs()}ms; minimum=${minimumLeadControlMs}ms. Preserving evidence for final synthesis and conflict reconciliation.`,
       });
       break;
     }
@@ -755,12 +778,24 @@ export async function runAdaptiveCollaboration(
       "lead-control",
     );
 
-    const response = await callControl(
-      options.leadProvider,
-      options.leadModelId,
-      leadParams,
-      `Collaboration lead ${lead.provider}:${lead.modelId}`,
-    );
+    await emit({ type: "reconciliation_started", requester: lead,
+      detail: "Lead is checking disagreements, evidence quality and established objectives before synthesis." });
+    let response: ProviderResponse;
+    try {
+      response = await callControl(
+        options.leadProvider, options.leadModelId, leadParams,
+        `Collaboration lead ${lead.provider}:${lead.modelId}`,
+        participantTimeoutMs, minimumLeadControlMs,
+      );
+    } catch (error) {
+      // A failed control pass must not escape to the outer chat retry and erase helper work.
+      await emit({ type: "lead_failed", requester: lead,
+        detail: error instanceof Error ? error.message : String(error) });
+      synthesisBrief = "Lead control failed. Reconcile conflicts and finish the original request using the preserved evidence and critique.";
+      checkpoint();
+      controlFailure = error;
+      break;
+    }
 
     const decision = parseLeadControlDecision(response.text);
     if (!decision) {
@@ -780,6 +815,13 @@ export async function runAdaptiveCollaboration(
 
     if (decision.action === "ready") {
       synthesisBrief = clip(decision.synthesisBrief, 12_000);
+      if (decision.conflicts?.length) {
+        synthesisBrief += "\nConflict reconciliation conclusions (advisory; verify against user context):\n" + JSON.stringify(decision.conflicts);
+      }
+      await emit({ type: "reconciliation_completed", requester: lead,
+        detail: decision.conflicts
+          ? `Classified conflicts=${decision.conflicts.length}; unresolved=${decision.conflicts.filter((entry) => entry.unresolved).length}.`
+          : "Control omitted structured reconciliation; final synthesis must perform it." });
       await emit({
         type: "lead_ready",
         requester: lead,
@@ -814,10 +856,28 @@ export async function runAdaptiveCollaboration(
   let synthesisProvider = options.leadProvider;
   let synthesisModelId = options.leadModelId;
 
+  checkpoint();
+  if (controlFailure && options.selectReplacementLead) {
+    const replacement = await options.selectReplacementLead({
+      requestId: options.requestId, failedLead: lead, error: controlFailure,
+      usedParticipants: [...usedParticipants.values()], contributions: [...contributions],
+      hasImages: Boolean(options.params.images?.length || websiteImages(sharedWebsite).length),
+    });
+    if (replacement) {
+      synthesisProvider = replacement.provider;
+      synthesisModelId = replacement.modelId;
+      synthesisLead = participant(synthesisProvider, synthesisModelId);
+      usedParticipants.set(participantKey(synthesisLead), synthesisLead);
+      checkpoint();
+      await emit({ type: "lead_replaced", requester: synthesisLead,
+        detail: "Replacing failed control lead; completed research, screenshots and critique retained for synthesis." });
+    }
+  }
+
   await emit({
     type: "final_synthesis_started",
     requester: synthesisLead,
-    detail: `Synthesizing with ${contributions.length} helper contribution(s).`,
+    detail: `Reconciling any remaining conflicts and synthesizing with ${contributions.length} helper contribution(s).`,
   });
 
   const runFinalSynthesisAttempt = async (
@@ -826,15 +886,15 @@ export async function runAdaptiveCollaboration(
     participantValue: CollaborationParticipant,
   ): Promise<{ result: ProviderResponse; text: string }> => {
     const remaining = remainingTotalMs();
-    if (remaining < MIN_CONTROL_TIME_MS) {
-      throw new Error("Collaboration final synthesis ran out of reserved execution time.");
+    if (remaining < minimumFinalTimeMs) {
+      throw new Error(`Collaboration final synthesis has insufficient execution time: remaining=${remaining}ms; minimum=${minimumFinalTimeMs}ms. Completed work is checkpointed for reroute.`);
     }
 
     const finalParams = prepareParams(
       withPersona(
         {
           ...options.params,
-          user: buildFinalUser(options.params, synthesisBrief, contributions),
+          user: buildFinalUser(options.params, [synthesisBrief, ...leadNotes].join("\n"), contributions),
         },
         modelId,
         getFinalSynthesisInstruction(),
@@ -843,9 +903,12 @@ export async function runAdaptiveCollaboration(
       "final-synthesis",
     );
 
+    // When enough time remains, keep a meaningful synthesis window for failover.
+    const attemptBudget = options.selectReplacementLead && remaining >= MIN_LEAD_CONTROL_TIME_MS * 2
+      ? remaining - MIN_LEAD_CONTROL_TIME_MS : remaining;
     const finalTimeoutMs = Math.max(
       MIN_CONTROL_TIME_MS,
-      Math.min(participantTimeoutMs * 2, remaining),
+      Math.min(participantTimeoutMs * 2, attemptBudget),
     );
 
     let bufferedText = "";
@@ -905,6 +968,7 @@ export async function runAdaptiveCollaboration(
         error,
         usedParticipants: [...usedParticipants.values()],
         contributions: [...contributions],
+        hasImages: Boolean(options.params.images?.length || websiteImages(sharedWebsite).length),
       });
 
       if (!replacementLead) {
@@ -915,6 +979,7 @@ export async function runAdaptiveCollaboration(
       synthesisModelId = replacementLead.modelId;
       synthesisLead = participant(synthesisProvider, synthesisModelId);
       usedParticipants.set(participantKey(synthesisLead), synthesisLead);
+      checkpoint();
 
       await emit({
         type: "lead_replaced",
@@ -940,7 +1005,7 @@ export async function runAdaptiveCollaboration(
     used: contributions.length > 0 || delegationCount > 0,
     delegationCount,
     maxDepthReached,
-    contributors: [...usedParticipants.values()].filter(
+    contributors: [...completedHelpers.values()].filter(
       (value) =>
         participantKey(value) !== participantKey(lead) &&
         participantKey(value) !== participantKey(synthesisLead),

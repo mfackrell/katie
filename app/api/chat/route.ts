@@ -63,7 +63,7 @@ import { getCollaborationConfig } from "@/lib/collaboration/config";
 import { runAdaptiveCollaboration } from "@/lib/collaboration/orchestrator";
 import { runOnDemandCapabilityEscalation } from "@/lib/collaboration/capability-escalation-runner";
 import { selectCollaborationHelper } from "@/lib/collaboration/routing";
-import type { CollaborationTraceEvent } from "@/lib/collaboration/types";
+import type { CollaborationTraceEvent, CollaborationResumeState } from "@/lib/collaboration/types";
 import { getRoutingRegistryByProvider, type RegistryRoutingModel } from "@/lib/models/registry";
 
 // This endpoint streams long-running responses (e.g., deep financial/workbook analysis).
@@ -1447,6 +1447,8 @@ ${chunkWorkflowSummary}`;
               `Refusal reroute has visual input: ${rerouteHasVisualInput}`
             ].join("\n");
 
+            // Keep completed evidence through both provider errors and refusal reroutes.
+            let collaborationResumeState: CollaborationResumeState | undefined;
             const generationAttempt = await runWithRefusalFallback<GenerationAttempt>({
               attempts,
               shouldRetryRefusal: retryOnProviderRefusal,
@@ -1506,6 +1508,8 @@ ${chunkWorkflowSummary}`;
                         leadModelId: modelId,
                         providers,
                         params: collaborationBaseParams,
+                        resumeState: collaborationResumeState,
+                        onCheckpoint: (state) => { collaborationResumeState = state; },
                         prepareParticipantParams: (participantParams, participantValue) => {
                           const participantRuntimeContext = buildKatieRuntimeContext({
                             provider: participantValue.provider,
@@ -1591,7 +1595,7 @@ ${chunkWorkflowSummary}`;
                               task: "Synthesize the final answer to the original user request using the completed collaboration evidence. Do not redo completed helper work.",
                               capability,
                               reason:
-                                "The previous lead failed during final synthesis. Preserve completed helper work and finish with a healthy replacement lead.",
+                                "The previous lead failed during control or final synthesis. Preserve completed helper work and finish with a healthy replacement lead.",
                             },
                             requester: context.failedLead,
                             providers: healthyProviders,
@@ -1599,7 +1603,7 @@ ${chunkWorkflowSummary}`;
                             modelRegistrySnapshot: registrySnapshot,
                             actorId,
                             actorRoutingProfile,
-                            hasImages: Array.isArray(images) && images.length > 0,
+                            hasImages: context.hasImages,
                             hasVideoInput,
                           });
                         },
