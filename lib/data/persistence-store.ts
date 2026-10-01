@@ -246,15 +246,16 @@ export async function deleteActorsById(actorIds: string[]): Promise<void> {
   }
 
   const client = getSupabaseAdminClient();
-  const { data: chats, error: chatsError } = await client.from("chats").select("id").in("actor_id", actorIds).returns<{ id: string }>();
+  const { data: chats, error: chatsError } = await client.from("chats").select("id,actor_id").in("actor_id", actorIds).returns<{ id: string; actor_id: string }>();
   if (chatsError) throw new Error(`Failed to list actor chats: ${chatsError.message}`);
   const { error } = await client.from("actors").in("id", actorIds).delete();
 
   if (error) {
     throw new Error(`Failed to delete actors: ${error.message}`);
   }
-  const { removeConversationAttachments } = await import("@/lib/uploads/stored-uploads");
-  for (const chat of chats ?? []) await removeConversationAttachments(chat.id).catch(() => console.warn("[Attachments] Actor chat cleanup failed", { chatId: chat.id }));
+  const { removeConversationAttachments, removeActorAttachmentIndex } = await import("@/lib/uploads/stored-uploads");
+  for (const chat of chats ?? []) await removeConversationAttachments(chat.id, chat.actor_id).catch(() => console.warn("[Attachments] Actor chat cleanup failed", { chatId: chat.id }));
+  for (const actorId of actorIds) await removeActorAttachmentIndex(actorId).catch(() => console.warn("[Attachments] Actor index cleanup failed", { actorId }));
 }
 
 export async function getChatById(chatId: string): Promise<ChatThread | null> {
@@ -350,6 +351,7 @@ export async function saveChat(chat: ChatThread): Promise<ChatThread> {
 }
 
 export async function deleteChat(chatId: string): Promise<void> {
+  const chat = await getChatById(chatId);
   const client = getSupabaseAdminClient();
   const { error } = await client.from("chats").eq("id", chatId).delete();
 
@@ -357,7 +359,7 @@ export async function deleteChat(chatId: string): Promise<void> {
     throw new Error(`Failed to delete chat ${chatId}: ${error.message}`);
   }
   const { removeConversationAttachments } = await import("@/lib/uploads/stored-uploads");
-  await removeConversationAttachments(chatId).catch(() => console.warn("[Attachments] Chat cleanup failed", { chatId }));
+  await removeConversationAttachments(chatId, chat?.actorId).catch(() => console.warn("[Attachments] Chat cleanup failed", { chatId }));
 }
 
 export async function deleteChatById(chatId: string): Promise<void> {

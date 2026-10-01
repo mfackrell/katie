@@ -1,3 +1,4 @@
+import { buildImageReference, IMAGE_MIME_TYPES, MAX_IMAGE_BYTES } from "./image-reference";
 import { FileReference } from "@/lib/providers/types";
 import {
   parseTextFiles,
@@ -51,6 +52,10 @@ function supportedUploadTypesForError(): string {
 }
 
 function assertSupportedUploadType(file: File): void {
+  if (IMAGE_MIME_TYPES.has(file.type)) {
+    if (file.size > MAX_IMAGE_BYTES) throw new Error(`Image "${file.name}" is too large. Maximum is 20 MB.`);
+    return;
+  }
   if (file.type.startsWith("video/")) {
     if (isAllowedVideoFileType(file)) {
       return;
@@ -247,12 +252,13 @@ export function validateUploadFiles(files: File[]): void {
 
 export async function buildFileReferences(files: File[]): Promise<FileReference[]> {
   validateUploadFiles(files);
-  const textLikeFiles = files.filter((file) => !isAllowedVideoFileType(file));
+  const textLikeFiles = files.filter((file) => !isAllowedVideoFileType(file) && !IMAGE_MIME_TYPES.has(file.type));
   const parsedFiles = textLikeFiles.length > 0 ? await parseTextFiles(textLikeFiles) : [];
   const parsedByName = new Map(parsedFiles.map((parsed) => [parsed.name, parsed]));
 
   return Promise.all(
     files.map(async (file) => {
+      if (IMAGE_MIME_TYPES.has(file.type)) return buildImageReference(file);
       const extension = getExtension(file.name);
       const mimeType = file.type || TEXT_EXTENSION_FALLBACK_MIME_TYPES.get(extension) || "text/plain";
       const providerRef = await buildProviderRef(file);
@@ -274,6 +280,9 @@ export async function buildFileReferences(files: File[]): Promise<FileReference[
         throw new Error(`Failed to parse file "${file.name}".`);
       }
 
+      if (!parsed.text.trim() && mimeType === "application/pdf" && providerRef?.googleFileUri) {
+        return { fileId: crypto.randomUUID(), fileName: file.name, mimeType, preview: "PDF source attached for native visual inspection; no machine-readable text was extracted.", attachmentKind: "file", extractionCoverage: "preview-only", providerRef } satisfies FileReference;
+      }
       if (!parsed.text.trim()) {
         throw new Error(`Failed to ingest readable text from "${file.name}". Parsed text was empty.`);
       }

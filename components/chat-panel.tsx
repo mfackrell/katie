@@ -721,6 +721,7 @@ export function ChatPanel({
     useState<SelectedOverride>(null);
   const [streamingModel, setStreamingModel] = useState<string | null>(null);
   const [selectedImages, setSelectedImages] = useState<string[]>([]);
+  const [selectedImageFiles, setSelectedImageFiles] = useState<File[]>([]);
   const [selectedVideos, setSelectedVideos] = useState<File[]>([]);
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
   const [uploadingFiles, setUploadingFiles] = useState(false);
@@ -1226,6 +1227,7 @@ export function ChatPanel({
 
     const content = input.trim();
     let imagesToSend = [...selectedImages];
+    const imageFilesToUpload = [...selectedImageFiles];
     const videosToUpload = [...selectedVideos];
     const filesToUpload = [...selectedFiles];
     const priorReferences = [...fileReferences];
@@ -1233,6 +1235,7 @@ export function ChatPanel({
 
     setInput("");
     setSelectedImages([]);
+    setSelectedImageFiles([]);
     setSelectedVideos([]);
     setSelectedFiles([]);
     setFileReferences([]);
@@ -1274,10 +1277,12 @@ export function ChatPanel({
 
     try {
       const uploadedReferences =
-        filesToUpload.length + videosToUpload.length > 0
-          ? await uploadFiles([...filesToUpload, ...videosToUpload])
+        filesToUpload.length + videosToUpload.length + imageFilesToUpload.length > 0
+          ? await uploadFiles([...filesToUpload, ...videosToUpload, ...imageFilesToUpload])
           : [];
       const refsToSend = [...priorReferences, ...uploadedReferences];
+      // Images now travel through private direct storage, just like other files.
+      imagesToSend = [];
       console.log("[ChatPanel] sending file references", {
         count: refsToSend.length,
         fileReferences: refsToSend.map((reference) => ({
@@ -1915,6 +1920,13 @@ export function ChatPanel({
     void Promise.all(imageFiles.map((file) => normalizeImageForChat(file)))
       .then((images) => {
         setSelectedImages((current) => [...current, ...images]);
+        setSelectedImageFiles((current) => [...current, ...imageFiles.map((file, index) => {
+          if (["image/jpeg", "image/png", "image/webp", "image/gif"].includes(file.type)) return file;
+          const match = images[index].match(/^data:([^;]+);base64,(.*)$/);
+          if (!match) throw new Error("Could not prepare image for storage.");
+          const bytes = Uint8Array.from(atob(match[2]), char => char.charCodeAt(0));
+          return new File([bytes], `${file.name}.jpg`, { type: match[1] });
+        })]);
         setStatusMessage(`${images.length} image${images.length === 1 ? "" : "s"} ready.`);
       })
       .catch((error: unknown) => {
@@ -1973,6 +1985,13 @@ export function ChatPanel({
     )
       .then((images) => {
         setSelectedImages((current) => [...current, ...images]);
+        setSelectedImageFiles((current) => [...current, ...imageFiles.map((file, index) => {
+          if (["image/jpeg", "image/png", "image/webp", "image/gif"].includes(file.type)) return file;
+          const match = images[index].match(/^data:([^;]+);base64,(.*)$/);
+          if (!match) throw new Error("Could not prepare image for storage.");
+          const bytes = Uint8Array.from(atob(match[2]), char => char.charCodeAt(0));
+          return new File([bytes], `${file.name}.jpg`, { type: match[1] });
+        })]);
 
         const statusSegments = [
           images.length > 0
@@ -2506,6 +2525,15 @@ export function ChatPanel({
                 <p className="whitespace-pre-wrap break-words leading-7 text-zinc-100/95">{message.content}</p>
               )
             ) : null}
+            {message.attachments?.length ? (
+              <ul aria-label="Referenced files" className="mt-3 flex flex-wrap gap-2 text-xs text-zinc-300">
+                {message.attachments.map(file => (
+                  <li key={file.id} title={file.fileName} className="max-w-full truncate rounded-lg border border-white/10 bg-white/5 px-2 py-1">
+                    📎 {file.fileName}
+                  </li>
+                ))}
+              </ul>
+            ) : null}
             {message.assets
               ?.filter((asset) => asset.type === "image")
               .map((asset) => (
@@ -2595,13 +2623,14 @@ export function ChatPanel({
                 />
                 <button
                   type="button"
-                  onClick={() =>
+                  onClick={() => {
+                    setSelectedImageFiles((current) => current.filter((_, itemIndex) => itemIndex !== index));
                     setSelectedImages((current) =>
                       current.filter(
                         (_, currentIndex) => currentIndex !== index,
                       ),
-                    )
-                  }
+                    );
+                  }}
                   className="absolute right-1.5 top-1.5 rounded-full bg-red-500/90 px-1.5 py-0.5 text-xs text-white shadow-lg"
                 >
                   ✕

@@ -5,6 +5,8 @@ type FileReference = {
   fileName: string;
   mimeType: string;
   preview: string;
+  extractedText?: string;
+  nativeInspectionRequired?: boolean;
   attachmentKind?: "image" | "video" | "text" | "file";
   providerRef?: {
     openaiFileId?: string;
@@ -23,6 +25,10 @@ export type VideoRoutingPolicy =
 
 export function isVideoAttachment(attachment: FileReference): boolean {
   return attachment.attachmentKind === "video" || attachment.mimeType.startsWith("video/");
+}
+
+export function requiresGoogleFileSource(attachment: FileReference): boolean {
+  return isVideoAttachment(attachment) || (attachment.mimeType === "application/pdf" && (!attachment.extractedText || Boolean(attachment.nativeInspectionRequired)));
 }
 
 export function resolveVideoRoutingPolicy(hasVideoInput: boolean, overrideProvider?: string): VideoRoutingPolicy {
@@ -49,7 +55,7 @@ export function getAttachmentSupportForProvider(
     return { supported: true };
   }
 
-  const videoAttachments = attachments.filter(isVideoAttachment);
+  const videoAttachments = attachments.filter(requiresGoogleFileSource);
   if (videoAttachments.length === 0) {
     return { supported: true };
   }
@@ -67,7 +73,7 @@ export function getAttachmentSupportForProvider(
 
   return {
     supported: false,
-    reason: `Provider \"${providerName}\" does not currently support video attachments in this chat flow.`
+    reason: `Provider \"${providerName}\" does not currently support video or scanned-PDF attachments in this chat flow.`
   };
 }
 

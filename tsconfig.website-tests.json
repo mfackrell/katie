@@ -13,6 +13,7 @@
     "tests/collaboration.test.ts",
     "tests/grok-provider.test.ts",
     "tests/direct-upload.test.ts",
-    "tests/attachment-continuity.test.ts"
+    "tests/attachment-continuity.test.ts",
+    "tests/attachment-discovery.test.ts"
   ]
 }
