@@ -217,7 +217,7 @@ async function buildProviderRef(file: File): Promise<FileReference["providerRef"
   return Object.keys(providerRef).length > 0 ? providerRef : undefined;
 }
 
-export async function buildFileReferences(files: File[]): Promise<FileReference[]> {
+export function validateUploadFiles(files: File[]): void {
   if (files.length > MAX_FILES) {
     throw new Error(`Too many files. Maximum allowed is ${MAX_FILES}.`);
   }
@@ -243,7 +243,10 @@ export async function buildFileReferences(files: File[]): Promise<FileReference[
       throw new Error(`File "${file.name}" is too large. Maximum video file size is 200MB.`);
     }
   });
+}
 
+export async function buildFileReferences(files: File[]): Promise<FileReference[]> {
+  validateUploadFiles(files);
   const textLikeFiles = files.filter((file) => !isAllowedVideoFileType(file));
   const parsedFiles = textLikeFiles.length > 0 ? await parseTextFiles(textLikeFiles) : [];
   const parsedByName = new Map(parsedFiles.map((parsed) => [parsed.name, parsed]));

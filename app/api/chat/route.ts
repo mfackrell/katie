@@ -65,12 +65,14 @@ import { runOnDemandCapabilityEscalation } from "@/lib/collaboration/capability-
 import { selectCollaborationHelper } from "@/lib/collaboration/routing";
 import type { CollaborationTraceEvent, CollaborationResumeState } from "@/lib/collaboration/types";
 import { getRoutingRegistryByProvider, type RegistryRoutingModel } from "@/lib/models/registry";
+import { hydrateStoredAttachments } from "@/lib/uploads/stored-uploads";
 
 // This endpoint streams long-running responses (e.g., deep financial/workbook analysis).
 // Keep the function timeout above Vercel's default 300s ceiling to avoid truncating streamed replies.
 export const maxDuration = 800;
 
 const fileReferenceSchema = z.object({
+  storageToken: z.string().max(3000).optional(),
   fileId: z.string().min(1),
   fileName: z.string().min(1),
   mimeType: z.string().min(1),
@@ -588,7 +590,7 @@ export async function POST(request: NextRequest) {
       repoInjectionEnabled: repoInjectionEnabledFromPayload,
     } = payload;
     const repoInjectionEnabled = repoInjectionEnabledFromPayload !== false;
-    const attachments = fileReferences ?? [];
+    const attachments = await hydrateStoredAttachments(fileReferences ?? []);
     console.log("[Chat API] received attachments", { count: attachments.length });
     attachments.forEach((attachment) => {
       console.log("[Chat API] received attachment", {

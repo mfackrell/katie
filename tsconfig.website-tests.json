@@ -11,6 +11,7 @@
     "tests/website-evidence.test.ts",
     "tests/claude-provider.test.ts",
     "tests/collaboration.test.ts",
-    "tests/grok-provider.test.ts"
+    "tests/grok-provider.test.ts",
+    "tests/direct-upload.test.ts"
   ]
 }

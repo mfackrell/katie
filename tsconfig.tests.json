@@ -69,6 +69,7 @@
     "lib/research/website-evidence.ts",
     "lib/research/shared-evidence.ts",
     "tests/website-evidence.test.ts",
-    "tests/grok-provider.test.ts"
+    "tests/grok-provider.test.ts",
+    "tests/direct-upload.test.ts"
   ]
 }
