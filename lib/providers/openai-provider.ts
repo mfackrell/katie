@@ -63,6 +63,7 @@ function buildOpenAiFileInputs(attachments: FileReference[] | undefined): Array<
   }
 
   return attachments
+    .filter((attachment) => attachment.mimeType === "application/pdf")
     .map((attachment) => attachment.providerRef?.openaiFileId)
     .filter((fileId): fileId is string => Boolean(fileId))
     .map((fileId) => ({ type: "input_file", file_id: fileId }));

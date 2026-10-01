@@ -88,7 +88,7 @@ function buildGoogleFileParts(params: ChatGenerateParams): GoogleInputPart[] {
 
   return params.attachments
     .filter((attachment): attachment is typeof attachment & { providerRef: { googleFileUri: string } } =>
-      Boolean(attachment.providerRef?.googleFileUri)
+      Boolean(attachment.providerRef?.googleFileUri) && (attachment.mimeType.startsWith("video/") || attachment.mimeType === "application/pdf")
     )
     .map((attachment) => ({
       fileData: {

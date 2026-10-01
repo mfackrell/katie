@@ -65,7 +65,6 @@ export type ParsedAttachment = {
 const MAX_FILES = 5;
 const MAX_TEXT_FILE_SIZE_BYTES = 2 * 1024 * 1024;
 const MAX_BINARY_FILE_SIZE_BYTES = 8 * 1024 * 1024;
-const MAX_EXCEL_SHEETS = 20;
 
 const DYNAMIC_IMPORTS: DynamicImportLoaders = {
   mammoth: async () => (await import("mammoth")) as unknown as MammothModule,
@@ -188,10 +187,15 @@ export async function convertToPlainText(file: File): Promise<string> {
     try {
       const xlsx = await DYNAMIC_IMPORTS.xlsx();
       const workbook = xlsx.read(await file.arrayBuffer(), { type: "array" });
-      const sheetChunks = workbook.SheetNames.slice(0, MAX_EXCEL_SHEETS).map((sheetName) => {
-        const worksheet = workbook.Sheets[sheetName];
-        const tsv = xlsx.utils.sheet_to_csv(worksheet, { FS: "\t" }).trim();
-        return `--- sheet: ${sheetName} ---\n${tsv}`;
+      const sheetChunks = workbook.SheetNames.map((sheetName) => {
+        const worksheet = workbook.Sheets[sheetName] as Record<string, unknown>;
+        const tsv = xlsx.utils.sheet_to_csv(worksheet, { FS: "\t" }).trimEnd();
+        const formulas = Object.entries(worksheet).flatMap(([address, value]) => {
+          if (address.startsWith("!") || !value || typeof value !== "object") return [];
+          const cell = value as { f?: string; v?: unknown };
+          return typeof cell.f === "string" ? [`${address}: =${cell.f}; cached value: ${JSON.stringify(cell.v) ?? "unavailable"}`] : [];
+        });
+        return `--- sheet: ${sheetName} ---\nUsed range: ${typeof worksheet["!ref"] === "string" ? worksheet["!ref"] : "not specified"}\n${tsv}${formulas.length ? `\nCell formulas:\n${formulas.join("\n")}` : ""}`;
       });
       return sanitizeExtractedText(sheetChunks.join("\n\n"));
     } catch {

@@ -58,6 +58,9 @@ export interface ExtractedTextChunkReference {
 }
 
 export interface FileReference {
+  /** Server-side provider rendering; omitted from compact browser references. */
+  imageDataUrl?: string;
+  nativeInspectionRequired?: boolean;
   storageToken?: string;
   fileId: string;
   fileName: string;

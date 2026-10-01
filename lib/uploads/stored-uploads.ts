@@ -52,6 +52,7 @@ export function createStoredUploadService(storage: Storage, secret: string, opti
     const metadata = { ...reference };
     delete metadata.extractedText;
     delete metadata.extractedChunks;
+    delete metadata.imageDataUrl;
     return { ...metadata, storageToken: sign({ ...ticket, kind: "reference", expires: ticket.expires + RETENTION_MS - 2 * 60 * 60 * 1000 }) };
   };
   async function ensureBucket() {
@@ -84,35 +85,91 @@ export function createStoredUploadService(storage: Storage, secret: string, opti
     if (!z.string().uuid().safeParse(chatId).success || !z.string().uuid().safeParse(id).success) throw new UploadInputError("Invalid conversation attachment.");
     return `chats/${chatId}/${id}`;
   };
+  const catalogPrefix = (chatId: string, scope: "chat" | "actor" = "chat") => {
+    if (!z.string().uuid().safeParse(chatId).success) throw new UploadInputError("Invalid conversation.");
+    return `${scope === "actor" ? "actor-catalog" : "catalog"}/${chatId}`;
+  };
+  async function writeCatalogEntry(chatId: string, descriptor: ConversationAttachment) {
+    conversationPath(chatId, descriptor.id);
+    const saved = await objects.upload(`${catalogPrefix(chatId)}/${descriptor.id}.json`, JSON.stringify(descriptor), { contentType: "application/json", upsert: true });
+    if (saved.error) throw new Error("Unable to save the attachment discovery index.");
+    if (descriptor.actorId) {
+      const indexed = await objects.upload(`${catalogPrefix(descriptor.actorId, "actor")}/${descriptor.id}.json`, JSON.stringify(descriptor), { contentType: "application/json", upsert: true });
+      if (indexed.error) throw new Error("Unable to index attachment across actor conversations.");
+    }
+  }
   return {
-    async persist(chatId: string, reference: FileReference, token?: string): Promise<ConversationAttachment> {
+    async catalog(chatId: string, scope: "chat" | "actor" = "chat"): Promise<{ initialized: boolean; attachments: ConversationAttachment[] }> {
+      await ensureBucket();
+      const prefix = catalogPrefix(chatId, scope);
+      const result: ConversationAttachment[] = [];
+      let initialized = false;
+      for (let offset = 0; ; offset += 100) {
+        const listed = await objects.list(prefix, { limit: 100, offset, sortBy: { column: "name", order: "asc" } });
+        if (listed.error) throw new Error("Unable to read saved attachment index.");
+        const entries = listed.data ?? [];
+        initialized ||= entries.some(entry => entry.name === "initialized.json");
+        const records = entries.filter(entry => /^[0-9a-f-]{36}\.json$/i.test(entry.name));
+        for (let i = 0; i < records.length; i += 10) {
+          const loaded = await Promise.all(records.slice(i, i + 10).map(async entry => {
+            const file = await objects.download(`${prefix}/${entry.name}`);
+            if (file.error || !file.data) throw new Error("Saved attachment index entry is unavailable.");
+            const record = JSON.parse(await file.data.text()) as ConversationAttachment;
+            conversationPath(chatId, record.id);
+            return record;
+          }));
+          result.push(...loaded);
+        }
+        if (entries.length < 100) break;
+      }
+      return { initialized, attachments: result };
+    },
+    async initializeCatalog(chatId: string, attachments: ConversationAttachment[], scope: "chat" | "actor" = "chat") {
+      await ensureBucket();
+      for (const descriptor of attachments) {
+        if (scope === "actor") {
+          if (!descriptor.chatId) throw new UploadInputError("Missing source conversation.");
+          await writeCatalogEntry(descriptor.chatId, { ...descriptor, actorId: chatId });
+        } else if (!descriptor.chatId || descriptor.chatId === chatId) await writeCatalogEntry(chatId, descriptor);
+      }
+      const result = await objects.upload(`${catalogPrefix(chatId, scope)}/initialized.json`, "{}", { contentType: "application/json", upsert: true });
+      if (result.error) throw new Error("Unable to initialize attachment discovery.");
+    },
+    async persist(chatId: string, reference: FileReference, token?: string, options: { source?: Blob; description?: Partial<ConversationAttachment>; actorId?: string } = {}): Promise<ConversationAttachment> {
       await ensureBucket();
       const id = randomUUID();
       const path = conversationPath(chatId, id);
-      let hasSource = false;
-      if (reference.mimeType.startsWith("video/") && token) {
+      let source = options.source;
+      if (token) {
         const ticket = verify(token, "reference");
-        const source = await objects.download(sourcePath(ticket));
-        if (source.data) {
-          const saved = await objects.upload(`${path}.source`, source.data, { contentType: reference.mimeType, upsert: true });
-          if (saved.error) throw new Error("Unable to retain the video for follow-up questions.");
-          hasSource = true;
-        }
+        const downloaded = await objects.download(sourcePath(ticket));
+        source = downloaded.data ?? undefined;
       }
-      const saved = await objects.upload(`${path}.json`, JSON.stringify({ reference, hasSource, refreshedAt: now() }), { contentType: "application/json", upsert: true });
+      const hasSource = Boolean(source);
+      if (source) {
+        const saved = await objects.upload(`${path}.source`, source, { contentType: reference.mimeType, upsert: true });
+        if (saved.error) throw new Error("Unable to retain the original attachment for future questions.");
+      }
+      const saved = await objects.upload(`${path}.json`, JSON.stringify({ reference, hasSource, actorId: options.actorId, refreshedAt: now() }), { contentType: "application/json", upsert: true });
       if (saved.error) throw new Error("Unable to retain this attachment for follow-up questions.");
-      return { id, fileName: reference.fileName, mimeType: reference.mimeType };
+      const descriptor: ConversationAttachment = { ...options.description, id, fileName: reference.fileName, mimeType: reference.mimeType, createdAt: new Date(now()).toISOString(), hasOriginal: hasSource, chatId, actorId: options.actorId };
+      await writeCatalogEntry(chatId, descriptor);
+      return descriptor;
     },
-    async restore(chatId: string, attachment: ConversationAttachment): Promise<FileReference> {
+    async restore(chatId: string, attachment: ConversationAttachment, expectedActorId?: string): Promise<FileReference> {
       const path = conversationPath(chatId, attachment.id);
       const stored = await objects.download(`${path}.json`);
       if (stored.error || !stored.data) throw new UploadInputError("The saved attachment is unavailable.");
-      const record = JSON.parse(await stored.data.text()) as { reference: FileReference; hasSource: boolean; refreshedAt: number };
-      if (record.reference.mimeType.startsWith("video/") && now() - record.refreshedAt >= RETENTION_MS) {
+      const record = JSON.parse(await stored.data.text()) as { reference: FileReference; hasSource: boolean; refreshedAt: number; actorId?: string };
+      if (expectedActorId && record.actorId && record.actorId !== expectedActorId) throw new UploadInputError("This file belongs to a different actor.");
+      if (!record.reference.imageDataUrl && now() - record.refreshedAt >= RETENTION_MS) {
         const source = record.hasSource ? await objects.download(`${path}.source`) : null;
-        if (!source?.data) throw new UploadInputError("The video reference has expired; please attach the video again.");
+        if (!source?.data) {
+          if (record.reference.extractedText && !record.reference.mimeType.startsWith("video/")) return { ...record.reference, providerRef: undefined };
+          throw new UploadInputError("The source reference has expired; please attach the file again.");
+        }
         const [renewed] = await buildReferences([new File([source.data], record.reference.fileName, { type: record.reference.mimeType })]);
-        if (!renewed?.providerRef?.googleFileUri) throw new UploadInputError("Unable to restore video access.");
+        if (!renewed || (record.reference.mimeType.startsWith("video/") && !renewed.providerRef?.googleFileUri)) throw new UploadInputError("Unable to restore source access.");
         record.reference = renewed;
         record.refreshedAt = now();
         const updated = await objects.upload(`${path}.json`, JSON.stringify(record), { contentType: "application/json", upsert: true });
@@ -120,15 +177,34 @@ export function createStoredUploadService(storage: Storage, secret: string, opti
       }
       return record.reference;
     },
-    async removeConversation(chatId: string) {
+    async removeConversation(chatId: string, actorId?: string) {
       if (!z.string().uuid().safeParse(chatId).success) return;
-      const prefix = `chats/${chatId}`;
+      const ownFileIds: string[] = [];
+      for (const prefix of [`chats/${chatId}`, catalogPrefix(chatId)]) {
       for (;;) {
         const listed = await objects.list(prefix, { limit: 100 });
         if (listed.error) throw new Error("Unable to list conversation attachments for deletion.");
         if (!listed.data?.length) break;
+        if (prefix === catalogPrefix(chatId)) ownFileIds.push(...listed.data.filter(item => /^[0-9a-f-]{36}\.json$/i.test(item.name)).map(item => item.name));
         const removed = await objects.remove(listed.data.map(item => `${prefix}/${item.name}`));
         if (removed.error) throw new Error("Unable to delete conversation attachments.");
+      }
+      }
+      if (actorId && ownFileIds.length) {
+        for (let i = 0; i < ownFileIds.length; i += 100) {
+          const removed = await objects.remove(ownFileIds.slice(i, i + 100).map(name => `${catalogPrefix(actorId, "actor")}/${name}`));
+          if (removed.error) throw new Error("Unable to remove actor attachment index entries.");
+        }
+      }
+    },
+    async removeActorIndex(actorId: string) {
+      const prefix = catalogPrefix(actorId, "actor");
+      for (;;) {
+        const listed = await objects.list(prefix, { limit: 100 });
+        if (listed.error) throw new Error("Unable to list actor attachment index.");
+        if (!listed.data?.length) return;
+        const removed = await objects.remove(listed.data.map(item => `${prefix}/${item.name}`));
+        if (removed.error) throw new Error("Unable to delete actor attachment index.");
       }
     },
     async prepare(input: unknown) {
@@ -161,8 +237,7 @@ export function createStoredUploadService(storage: Storage, secret: string, opti
         contentType: "application/json", upsert: true,
       });
       if (stored.error) throw new Error("Unable to save the processed attachment. Please try again.");
-      const removed = reference.mimeType.startsWith("video/") ? { error: null } : await objects.remove([sourcePath(ticket)]);
-      if (removed.error) console.warn("[Upload API] temporary source cleanup failed", { fileId: reference.fileId });
+      // Keep every original until it is linked to a chat; abandoned uploads expire after 24 hours.
       console.info("[Upload API] direct upload processed", { fileName: ticket.name, bytes: ticket.size, attachmentKind: reference.attachmentKind });
       return compact(reference, ticket);
     },
@@ -198,6 +273,25 @@ export const completeStoredUpload = (token: string) => getUploadService().comple
 export const hydrateStoredAttachments = (references: FileReference[]) =>
   references.some(reference => reference.storageToken) ? getUploadService().hydrate(references) : Promise.resolve(references);
 
-export const persistConversationAttachment = (chatId: string, reference: FileReference, token?: string) => getUploadService().persist(chatId, reference, token);
-export const restoreConversationAttachment = (chatId: string, attachment: ConversationAttachment) => getUploadService().restore(chatId, attachment);
-export const removeConversationAttachments = (chatId: string) => getUploadService().removeConversation(chatId);
+export const persistConversationAttachment = (chatId: string, reference: FileReference, token?: string, options?: { source?: Blob; description?: Partial<ConversationAttachment>; actorId?: string }) => getUploadService().persist(chatId, reference, token, options);
+export const restoreConversationAttachment = (chatId: string, attachment: ConversationAttachment, actorId?: string) => getUploadService().restore(chatId, attachment, actorId);
+export const removeConversationAttachments = (chatId: string, actorId?: string) => getUploadService().removeConversation(chatId, actorId);
+export const removeActorAttachmentIndex = (actorId: string) => getUploadService().removeActorIndex(actorId);
+
+export async function loadConversationAttachmentCatalog(chatId: string, legacyLoader: () => Promise<ConversationAttachment[]>): Promise<ConversationAttachment[]> {
+  const service = getUploadService();
+  const catalog = await service.catalog(chatId);
+  if (catalog.initialized) return catalog.attachments;
+  const combined = [...new Map([...(await legacyLoader()), ...catalog.attachments].map(file => [file.id, file])).values()];
+  await service.initializeCatalog(chatId, combined);
+  return combined;
+}
+
+export async function loadActorAttachmentCatalog(actorId: string, legacyLoader: () => Promise<ConversationAttachment[]>): Promise<ConversationAttachment[]> {
+  const service = getUploadService();
+  const catalog = await service.catalog(actorId, "actor");
+  if (catalog.initialized) return catalog.attachments.filter(file => file.actorId === actorId);
+  const combined = [...new Map([...(await legacyLoader()), ...catalog.attachments].map(file => [file.id, { ...file, actorId }])).values()];
+  await service.initializeCatalog(actorId, combined, "actor");
+  return combined;
+}

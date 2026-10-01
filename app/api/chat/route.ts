@@ -1,12 +1,14 @@
-import { attachmentAccessContext, selectFollowUpAttachments, type ConversationAttachment } from "@/lib/chat/attachment-continuity";
-import { persistConversationAttachment, restoreConversationAttachment } from "@/lib/uploads/stored-uploads";
-import { describeVideoEvidence } from "@/lib/uploads/video-observations";
+import { attachmentAccessContext, type ConversationAttachment } from "@/lib/chat/attachment-continuity";
+import { persistConversationAttachment, restoreConversationAttachment, loadConversationAttachmentCatalog, loadActorAttachmentCatalog } from "@/lib/uploads/stored-uploads";
+import { describeAttachmentEvidence } from "@/lib/uploads/attachment-observations";
+import { buildImageReference, imageFileFromDataUrl } from "@/lib/uploads/image-reference";
+import { selectStoredAttachments, loadSelectedAttachmentSources } from "@/lib/chat/attachment-selection";
 import { after, NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { assembleContext } from "@/lib/memory/assemble-context";
 import { maybeUpdateSummary } from "@/lib/memory/summarizer";
 import { maybeUpdateLongTermMemory } from "@/lib/memory/long-term-editor";
-import { getRecentMessages, saveMessage } from "@/lib/data/persistence-store";
+import { getChatById, listChatsByActorId, getMessages, getRecentMessages, saveMessage } from "@/lib/data/persistence-store";
 import {
   claimChatRequest,
   completeChatRequest,
@@ -43,6 +45,7 @@ import {
 import {
   getAttachmentSupportForProvider,
   isVideoAttachment,
+  requiresGoogleFileSource,
   resolveVideoRoutingPolicy,
   selectGoogleModelForVideoRouting
 } from "@/lib/chat/video-routing";
@@ -584,7 +587,7 @@ export async function POST(request: NextRequest) {
       actorId,
       chatId,
       message,
-      images,
+      images: requestImages,
       fileReferences,
       overrideProvider,
       overrideModel,
@@ -592,19 +595,55 @@ export async function POST(request: NextRequest) {
       activeRepoId,
       repoInjectionEnabled: repoInjectionEnabledFromPayload,
     } = payload;
+    const currentChat = await getChatById(chatId);
+    if (!currentChat || currentChat.actorId !== actorId) return NextResponse.json({ error: "Chat does not belong to this actor." }, { status: 404 });
     const repoInjectionEnabled = repoInjectionEnabledFromPayload !== false;
-    const attachments = await hydrateStoredAttachments(fileReferences ?? []);
-    const attachmentHistory = await getRecentMessages(chatId, 60);
-    const savedAttachments: ConversationAttachment[] = [];
-    const unavailableAttachments: string[] = [];
-    if (!attachments.length && !images?.length) {
-      for (const saved of selectFollowUpAttachments(message, attachmentHistory)) {
-        savedAttachments.push(saved);
-        try { attachments.push(await restoreConversationAttachment(chatId, saved)); }
-        catch { unavailableAttachments.push(saved.fileName); }
-      }
+    const newAttachments = await hydrateStoredAttachments(fileReferences ?? []);
+    const legacyImageSources = new Map<string, File>();
+    for (const image of requestImages ?? []) {
+      const file = imageFileFromDataUrl(image);
+      const reference = await buildImageReference(file);
+      newAttachments.push(reference);
+      legacyImageSources.set(reference.fileId, file);
     }
-    console.info("[Attachments] Follow-up source resolution", { restored: attachments.length, reused: savedAttachments.length, unavailable: unavailableAttachments });
+    if (newAttachments.length > 5) return NextResponse.json({ error: "Attach up to five files per message." }, { status: 400 });
+    const attachmentHistory = await getRecentMessages(chatId, 60);
+    const catalog = await loadActorAttachmentCatalog(actorId, async () => {
+      const actorChats = await listChatsByActorId(actorId);
+      const ownedChatIds = new Set(actorChats.map(chat => chat.id));
+      const files: ConversationAttachment[] = [];
+      for (const chat of actorChats) {
+        const entries = await loadConversationAttachmentCatalog(chat.id, async () => {
+          const firstSeen = new Map<string, ConversationAttachment>();
+          for (const item of await getMessages(chat.id)) for (const file of item.attachments ?? []) {
+            if (!firstSeen.has(file.id)) firstSeen.set(file.id, { ...file, chatId: file.chatId ?? chat.id, actorId, createdAt: file.createdAt ?? item.createdAt });
+          }
+          return [...firstSeen.values()].filter(file => ownedChatIds.has(file.chatId!));
+        });
+        files.push(...entries.map(file => ({ ...file, chatId: file.chatId ?? chat.id, actorId })).filter(file => ownedChatIds.has(file.chatId)));
+      }
+      return files;
+    });
+    const attachmentDecision = await selectStoredAttachments(message, catalog, attachmentHistory, undefined, newAttachments.map(file => file.fileName));
+    if (newAttachments.length + attachmentDecision.selections.filter(file => file.mode === "source").length > 5) {
+      attachmentDecision.selections = [];
+      attachmentDecision.clarification = "Which files should I compare? Please choose up to five files for detailed inspection.";
+    }
+    const restored = await loadSelectedAttachmentSources(attachmentDecision, async saved => {
+      const owner = await getChatById(saved.chatId ?? chatId);
+      if (!owner || owner.actorId !== actorId) throw new Error("Source conversation is unavailable to this actor.");
+      return restoreConversationAttachment(owner.id, saved, actorId);
+    });
+    const attachments = [...newAttachments, ...restored.references].map(file =>
+      file.mimeType === "application/pdf" && /\b(signature|signed|handwrit\w*|layout|colou?r|font|stamp|scan|visual|diagram|chart|figure|formatting|photo|picture|annotation)\b/i.test(message)
+        ? { ...file, nativeInspectionRequired: true } : file
+    );
+    const images = attachments.flatMap(file => file.imageDataUrl ? [file.imageDataUrl] : []);
+    const savedAttachments: ConversationAttachment[] = attachmentDecision.selections.map(item => item.attachment);
+    const unavailableAttachments = restored.unavailable;
+    const attachmentSourceIds = restored.sourceIds;
+    const selectionContext = () => attachmentAccessContext([], savedAttachments, unavailableAttachments, attachmentSourceIds)
+      + (attachmentDecision.clarification ? `\nAsk the user this clarification before attempting an answer about a file: ${JSON.stringify(attachmentDecision.clarification)}` : "");
     console.log("[Chat API] received attachments", { count: attachments.length });
     attachments.forEach((attachment) => {
       console.log("[Chat API] received attachment", {
@@ -625,6 +664,7 @@ export async function POST(request: NextRequest) {
       suppliedRequestId && /^[A-Za-z0-9._:-]{1,128}$/.test(suppliedRequestId)
         ? suppliedRequestId
         : crypto.randomUUID();
+    console.info("[Attachments] Background selection", { requestId, newCount: newAttachments.length, catalogSize: catalog.length, method: attachmentDecision.method, selected: attachmentDecision.selections.map(item => ({ id: item.attachment.id, fileName: item.attachment.fileName, mode: item.mode })), unavailable: unavailableAttachments, clarification: Boolean(attachmentDecision.clarification) });
     const requestFingerprint = await fingerprintChatRequest({
       actorId,
       chatId,
@@ -877,6 +917,7 @@ export async function POST(request: NextRequest) {
       summary ? `Conversation summary: ${summary}` : "",
       history.length ? `Recent conversation: ${JSON.stringify(history.slice(-4))}` : "",
       `Has attached images: ${Boolean((Array.isArray(images) && images.length > 0) || attachments.some((attachment) => attachment.mimeType.startsWith("image/")))}`,
+      `Saved attachment selection: ${selectionContext()}`,
       `Active repo: ${sessionContext.activeRepo ? `${sessionContext.activeRepo.fullName} (${sessionContext.activeRepo.id})` : "none"}`
     ]
       .filter(Boolean)
@@ -891,7 +932,7 @@ export async function POST(request: NextRequest) {
     let intentAuthority: "llm" | "heuristic" | "override" | "fallback" | "capability" = "fallback";
     let intentResolutionReason = "default";
     let routingHints: RoutingHint[] = [];
-    const videoRoutingPolicy = resolveVideoRoutingPolicy(hasVideoInput, overrideProvider);
+    const videoRoutingPolicy = resolveVideoRoutingPolicy(attachments.some(requiresGoogleFileSource), overrideProvider);
 
     if (hasVideoInput) {
       console.log("[Video Routing] detected video attachment(s); forcing provider=google");
@@ -900,7 +941,7 @@ export async function POST(request: NextRequest) {
     if (videoRoutingPolicy.mode === "reject-override") {
       console.warn(`[Video Routing] rejected override provider=${videoRoutingPolicy.provider} for video input`);
       return NextResponse.json(
-        { error: "Video attachments are only supported through the Google/Gemini provider in this chat flow." },
+        { error: "Direct video or visual PDF inspection requires Google/Gemini. Choose that provider or ask about the saved summary only." },
         { status: 400 }
       );
     }
@@ -961,7 +1002,7 @@ export async function POST(request: NextRequest) {
       fallbackChain = [];
       intentAuthority = "capability";
       intentResolutionReason = "forced-video-google";
-      console.log(`[Video Routing] detected video attachment(s); forcing provider=google model=${modelId}`);
+      console.log(`[Attachment Routing] native source inspection; forcing provider=google model=${modelId}`);
     } else if (videoRoutingPolicy.mode === "manual-google") {
       const googleProvider = providers.find((candidate) => candidate.name === "google");
       if (!googleProvider) {
@@ -1364,14 +1405,13 @@ export async function POST(request: NextRequest) {
             console.log("[Chat API] reasoning_start emitted", { requestId, categories: startEvent.categories });
 
             console.log("[Chat API] Saving user message...");
-            if (!savedAttachments.length && attachments.length) {
-              for (const [index, attachment] of attachments.entries()) {
-                const saved = await persistConversationAttachment(chatId, attachment, fileReferences?.[index]?.storageToken);
-                const observations = await describeVideoEvidence(attachment);
-                savedAttachments.push({ ...saved, ...observations });
-              }
+            for (const [index, attachment] of newAttachments.entries()) {
+              const description = await describeAttachmentEvidence(attachment);
+              const saved = await persistConversationAttachment(chatId, attachment, fileReferences?.[index]?.storageToken, { description, source: legacyImageSources.get(attachment.fileId), actorId });
+              savedAttachments.push(saved);
+              attachmentSourceIds.add(saved.id);
             }
-            personaForGeneration += `\n\n${attachmentAccessContext(attachmentHistory, savedAttachments, unavailableAttachments)}`;
+            personaForGeneration += `\n\n${selectionContext()}`;
             await saveMessage(chatId, {
               id: crypto.randomUUID(),
               role: "user",

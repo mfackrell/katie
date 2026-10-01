@@ -78,6 +78,14 @@ export function formatAttachmentContext(
       const metadataLine = providerReferenceSummary ? ` (${providerReferenceSummary})` : "";
       const mediaSummary = `kind=${attachmentKind}; mime=${attachment.mimeType}; fileId=${attachment.fileId}`;
 
+      if (attachmentKind === "image") {
+        return [`### ATTACHED IMAGE: ${attachment.fileName} ###`, mediaSummary,
+          attachment.imageDataUrl ? "[Image pixels are supplied with this request. Inspect them directly; the provider rendering may be resized.]" : "[Image metadata only; no pixels are available on this turn.]",
+          attachment.preview, "### END IMAGE METADATA ###"].join("\n");
+      }
+      if (attachment.mimeType === "application/pdf" && !attachment.extractedText && attachment.providerRef?.googleFileUri) {
+        return [`### ATTACHED PDF: ${attachment.fileName} ###`, "[PDF source is supplied as a native provider file for visual inspection. Text extraction was unavailable; inspect the PDF directly.]", attachment.preview].join("\n");
+      }
       if (attachmentKind === "video") {
         return [
           `### ATTACHED FILE: ${attachment.fileName}${metadataLine} ###`,

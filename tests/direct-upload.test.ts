@@ -17,7 +17,7 @@ function fakeStorage() {
       download: async (path: string) => { downloads.push(path); return { data: files.get(path) ?? null, error: files.has(path) ? null : { message: "Not found" } }; },
       upload: async (path: string, body: string) => { files.set(path, new Blob([body])); return { data: {}, error: null }; },
       remove: async (paths: string[]) => { paths.forEach(path => files.delete(path)); return { error: null }; },
-      list: async (prefix: string) => ({ data: prefix.startsWith("chats/") ? [...files.keys()].filter(path => path.startsWith(prefix + "/")).map(path => ({ name: path.slice(prefix.length + 1) })) : [], error: null }),
+      list: async (prefix: string, options: { offset?: number; limit?: number } = {}) => ({ data: [...files.keys()].filter(path => path.startsWith(prefix + "/")).sort().slice(options.offset ?? 0, (options.offset ?? 0) + (options.limit ?? 100)).map(path => ({ name: path.slice(prefix.length + 1) })), error: null }),
     }),
   };
   return { files, signedPaths, downloads, storage: storage as unknown as Parameters<typeof createStoredUploadService>[0], isPrivate: () => bucket?.public === false };
@@ -48,7 +48,7 @@ test("large binary uploads use private signed storage and full extraction hydrat
   const compact = await service.complete(prepared.uploadToken);
   assert.ok(JSON.stringify(compact).length < 2500);
   assert.equal(compact.extractedText, undefined); assert.equal(compact.extractedChunks, undefined);
-  assert.ok(!fake.files.has(fake.signedPaths[0]), "temporary source removed after processing");
+  assert.ok(fake.files.has(fake.signedPaths[0]), "original retained until chat persistence or temporary expiration");
   assert.deepEqual(await service.hydrate([{ ...compact, preview: "forged", providerRef: { openaiFileId: "forged" } }]), [full]);
   assert.deepEqual(await service.complete(prepared.uploadToken), compact, "retry reuses the processed file");
   assert.equal(processed, 1);
@@ -162,4 +162,51 @@ test("expired legacy videos without a retained original fail explicitly instead 
   const saved = await service.persist(chatId, { ...reference, mimeType: "video/mp4" });
   time += 25 * 60 * 60 * 1000;
   await assert.rejects(service.restore(chatId, saved), /expired/);
+});
+
+test("all file types retain original bytes and a durable, paginated summary index independent of recent messages", async () => {
+  const fake = fakeStorage();
+  const service = createStoredUploadService(fake.storage, "secret", { buildReferences: async () => [reference] });
+  const chatId = "11111111-1111-4111-8111-111111111111";
+  await service.initializeCatalog(chatId, []);
+  const prepared = await service.prepare({ name: "report.docx", type: reference.mimeType, size: 8 });
+  fake.files.set(fake.signedPaths[0], new Blob(["original"]));
+  const compact = await service.complete(prepared.uploadToken);
+  const [full] = await service.hydrate([compact]);
+  const saved = await service.persist(chatId, full, compact.storageToken, { description: { observedSummary: "Quarterly accounts and receivables", summaryCoverage: "full" } });
+  assert.equal(saved.hasOriginal, true);
+  assert.equal(await fake.files.get(`chats/${chatId}/${saved.id}.source`)!.text(), "original");
+  for (let i = 0; i < 103; i++) await service.persist(chatId, { ...reference, fileName: `file-${i}.txt` }, undefined, { source: new Blob([String(i)]), description: { observedSummary: `Data ${i}` } });
+  const indexed = await service.catalog(chatId);
+  assert.equal(indexed.initialized, true);
+  assert.equal(indexed.attachments.length, 104);
+  assert.equal(indexed.attachments.find(file => file.id === saved.id)?.observedSummary, "Quarterly accounts and receivables");
+  assert.equal(indexed.attachments.some(file => "extractedText" in file), false, "index never contains full bodies");
+  assert.equal((await service.catalog("22222222-2222-4222-8222-222222222222")).attachments.length, 0);
+  await service.removeConversation(chatId);
+  assert.equal([...fake.files.keys()].filter(path => path.startsWith(`chats/${chatId}/`) || path.startsWith(`catalog/${chatId}/`)).length, 0);
+});
+
+test("actor-wide discovery shares original files across chats, isolates actors, and respects source deletion", async () => {
+  const fake = fakeStorage();
+  const service = createStoredUploadService(fake.storage, "secret");
+  const actorA = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+  const actorB = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+  const sourceChat = "11111111-1111-4111-8111-111111111111";
+  const newChat = "22222222-2222-4222-8222-222222222222";
+  await service.initializeCatalog(actorA, [], "actor");
+  const saved = await service.persist(sourceChat, reference, undefined, { actorId: actorA, source: new Blob(["original"]), description: { observedSummary: "Harbor lease proposal" } });
+  const discovery = await service.catalog(actorA, "actor");
+  assert.equal(discovery.initialized, true);
+  assert.equal(discovery.attachments[0].chatId, sourceChat);
+  assert.equal(discovery.attachments[0].actorId, actorA);
+  assert.equal((await service.restore(discovery.attachments[0].chatId!, saved, actorA)).extractedText, reference.extractedText);
+  assert.equal((await service.catalog(actorB, "actor")).attachments.length, 0);
+  await assert.rejects(service.restore(sourceChat, saved, actorB), /different actor/);
+  await service.removeConversation(newChat, actorA);
+  assert.equal((await service.catalog(actorA, "actor")).attachments.length, 1, "deleting the referring chat must not delete another chat's source");
+  await service.removeConversation(sourceChat, actorA);
+  assert.equal((await service.catalog(actorA, "actor")).attachments.length, 0);
+  await service.removeActorIndex(actorA);
+  assert.equal([...fake.files.keys()].filter(path => path.startsWith(`actor-catalog/${actorA}/`)).length, 0);
 });
