@@ -14,6 +14,35 @@ function isWebSearchIntent(requestIntent: string | undefined): boolean {
   return requestIntent === "web-search" || requestIntent === "news-summary";
 }
 
+function isImageModel(model: string): boolean {
+  return /^grok-(?:imagine-image|2-image)(?:-|$)/i.test(model);
+}
+
+function imageContentFromResponse(payload: unknown): Array<{ type: "image"; url: string }> {
+  if (!payload || typeof payload !== "object" || !Array.isArray((payload as { data?: unknown }).data)) {
+    throw new Error("xAI Images API returned no image data.");
+  }
+
+  const content = ((payload as { data: unknown[] }).data).flatMap((item): Array<{ type: "image"; url: string }> => {
+    if (!item || typeof item !== "object") return [];
+    const image = item as { b64_json?: unknown; url?: unknown; mime_type?: unknown };
+    if (typeof image.b64_json === "string" && image.b64_json.trim()) {
+      const base64 = image.b64_json.trim();
+      if (!/^[A-Za-z0-9+/]+={0,2}$/.test(base64)) return [];
+      const mime = typeof image.mime_type === "string" && /^image\/(jpeg|png|webp|gif)$/.test(image.mime_type)
+        ? image.mime_type : "image/jpeg";
+      return [{ type: "image", url: `data:${mime};base64,${base64}` }];
+    }
+    if (typeof image.url === "string" && /^https:\/\//i.test(image.url)) {
+      return [{ type: "image", url: image.url }];
+    }
+    return [];
+  });
+
+  if (!content.length) throw new Error("xAI Images API returned no usable images.");
+  return content;
+}
+
 type ResponseTextSource = {
   output_text?: string | null;
   output?: Array<{ content?: Array<{ text?: string }> }>;
@@ -250,8 +279,7 @@ export class GrokProvider implements LlmProvider {
   private apiKey: string;
   private defaultModel = "grok-2-1212";
   private aliasToModel: Record<string, string> = {
-    "grok-imagine": this.defaultModel,
-    "grok-imagine-image": this.defaultModel
+    "grok-imagine": "grok-imagine-image"
   };
 
   constructor(apiKey: string) {
@@ -261,6 +289,36 @@ export class GrokProvider implements LlmProvider {
       baseURL: "https://api.x.ai/v1",
       fetch: globalThis.fetch.bind(globalThis)
     });
+  }
+
+  private async generateImage(params: ChatGenerateParams, model: string): Promise<ProviderResponse> {
+    if (!params.user.trim()) throw new Error("Grok image generation requires a prompt.");
+    const images = params.images ?? [];
+    if (images.length > 5) throw new Error("Grok image editing supports up to five source images.");
+    const endpoint = images.length ? "edits" : "generations";
+    const imageInputs = images.map((url) => ({ type: "image_url", url }));
+    console.info("[GrokProvider] image request", { model, endpoint: `/images/${endpoint}`, sourceImageCount: images.length });
+
+    // xAI image edits require JSON; OpenAI images.edit() sends incompatible multipart data.
+    const response = await fetch(`https://api.x.ai/v1/images/${endpoint}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${this.apiKey}` },
+      signal: AbortSignal.timeout(180_000),
+      body: JSON.stringify({
+        model,
+        prompt: params.user,
+        n: 1,
+        response_format: "b64_json",
+        ...(imageInputs.length === 1 ? { image: imageInputs[0] } : imageInputs.length ? { images: imageInputs } : {}),
+      }),
+    });
+    if (!response.ok) {
+      const detail = await response.text().catch(() => "");
+      throw new Error(`xAI Images API failed (${response.status} ${response.statusText})${detail ? `: ${detail}` : ""}`);
+    }
+    const content = imageContentFromResponse(await response.json());
+    console.info("[GrokProvider] image response", { model, endpoint: `/images/${endpoint}`, imageCount: content.length });
+    return { text: "[Image Generated]", model, provider: this.name, content };
   }
 
   private buildWebSearchInput(params: ChatGenerateParams, attachmentContext: string | null): GrokResponseInputMessage[] {
@@ -350,6 +408,20 @@ ${getKatieReasoningExplainerStatement()}` }]
 
     const requestedModel = params.modelId ?? this.defaultModel;
     const aliasedModel = this.aliasToModel[requestedModel] ?? requestedModel;
+
+    // Preserve the routed image model. Never silently downgrade it to a text model.
+    if (isImageModel(aliasedModel)) {
+      try {
+        return await this.generateImage(params, aliasedModel);
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error);
+        console.error(`[GrokProvider] Image API failure for ${aliasedModel}: ${detail}`);
+        throw new Error(`Grok image request failed for model ${aliasedModel}: ${detail}`);
+      }
+    }
+    if (params.requestIntent === "image-generation") {
+      throw new Error(`Grok image generation requires an image model; received '${aliasedModel}'.`);
+    }
 
     const availableModels = await this.listModels();
     const selectedModel = availableModels.length === 0 || availableModels.includes(aliasedModel)
