@@ -15,6 +15,7 @@ import {
   useState,
 } from "react";
 import type { FileReference } from "@/lib/providers/types";
+import { uploadFilesDirect } from "@/lib/uploads/direct-upload-client";
 import type { Message } from "@/lib/types/chat";
 import { canSubmitChatRequest } from "@/lib/chat/request-guards";
 import {
@@ -1205,29 +1206,7 @@ export function ChatPanel({
     );
 
     try {
-      const formData = new FormData();
-      files.forEach((file) => {
-        formData.append("files", file);
-      });
-
-      const response = await fetch("/api/upload", {
-        method: "POST",
-        body: formData,
-      });
-
-      const payload = (await response.json()) as {
-        fileReferences?: FileReference[];
-        error?: string;
-      };
-
-      if (!response.ok || !payload.fileReferences) {
-        throw new Error(payload.error ?? "File upload failed.");
-      }
-
-      setStatusMessage(
-        `Uploaded ${payload.fileReferences.length} file${payload.fileReferences.length > 1 ? "s" : ""}.`,
-      );
-      return payload.fileReferences;
+      return await uploadFilesDirect(files, setStatusMessage);
     } finally {
       setUploadingFiles(false);
     }

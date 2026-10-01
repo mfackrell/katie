@@ -58,6 +58,7 @@ export interface ExtractedTextChunkReference {
 }
 
 export interface FileReference {
+  storageToken?: string;
   fileId: string;
   fileName: string;
   mimeType: string;
