@@ -1,3 +1,4 @@
+import { isTerminalProviderError } from "@/lib/providers/response-errors";
 import {
   getFinalSynthesisInstruction,
   getHelperCollaborationInstruction,
@@ -646,6 +647,7 @@ export async function runAdaptiveCollaboration(
         });
         return contribution;
       } catch (error) {
+        if (isTerminalProviderError(error)) throw error;
         lastFailureDetail = error instanceof Error ? error.message : String(error);
         await emit({
           type: "helper_failed",
@@ -788,6 +790,7 @@ export async function runAdaptiveCollaboration(
         participantTimeoutMs, minimumLeadControlMs,
       );
     } catch (error) {
+        if (isTerminalProviderError(error)) throw error;
       // A failed control pass must not escape to the outer chat retry and erase helper work.
       await emit({ type: "lead_failed", requester: lead,
         detail: error instanceof Error ? error.message : String(error) });
@@ -951,6 +954,7 @@ export async function runAdaptiveCollaboration(
       finalText = completed.text;
       break;
     } catch (error) {
+        if (isTerminalProviderError(error)) throw error;
       finalSynthesisError = error;
       await emit({
         type: "lead_failed",

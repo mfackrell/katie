@@ -1,3 +1,4 @@
+import { assertProviderOutput, inspectGoogleStatus } from "./response-errors";
 import { GoogleGenAI, ThinkingLevel as GoogleThinkingLevel } from "@google/genai";
 import {
   ChatGenerateParams,
@@ -200,12 +201,13 @@ export class GoogleProvider implements LlmProvider {
         }
       });
 
+      const finishReason = inspectGoogleStatus(result, selectedModel);
       const responseParts = result.candidates?.[0]?.content?.parts ?? [];
       let text = "";
       const content: Array<{ type: string; url: string }> = [];
 
       for (const part of responseParts) {
-        if (part.text) {
+        if (part.text && !part.thought) {
           text += part.text;
         } else if (part.inlineData) {
           const dataUrl = `data:${part.inlineData.mimeType};base64,${part.inlineData.data}`;
@@ -213,16 +215,19 @@ export class GoogleProvider implements LlmProvider {
         }
       }
 
-      return {
+      const output: ProviderResponse = {
+        finishReason,
         text: text || (content.length > 0 ? "[Image Generated]" : ""),
         model: selectedModel,
         provider: this.name,
         content: content.length > 0 ? content : undefined
       };
+      assertProviderOutput(output);
+      return output;
     } catch (error: unknown) {
       const detail = error instanceof Error ? error.message : String(error);
       console.error(`[GoogleProvider] Gemini error body for model ${selectedModel}: ${detail}`);
-      throw new Error(`Gemini request failed for model ${selectedModel}`);
+      throw error;
     }
   }
 
@@ -273,11 +278,13 @@ export class GoogleProvider implements LlmProvider {
         }
       });
 
+      let finishReason: string | undefined;
       let streamedText = "";
       const content: Array<{ type: string; url: string }> = [];
 
       for await (const chunk of result) {
-        const chunkText = chunk.text ?? "";
+        finishReason = inspectGoogleStatus(chunk, selectedModel) ?? finishReason;
+        const chunkText = (chunk.candidates?.[0]?.content?.parts ?? []).filter(part => !part.thought).map(part => part.text ?? "").join("");
         if (chunkText) {
           streamedText += chunkText;
           await handlers.onTextDelta?.(chunkText);
@@ -294,16 +301,19 @@ export class GoogleProvider implements LlmProvider {
         }
       }
 
-      return {
+      const output: ProviderResponse = {
+        finishReason,
         text: streamedText || (content.length > 0 ? "[Image Generated]" : ""),
         model: selectedModel,
         provider: this.name,
         content: content.length > 0 ? content : undefined
       };
+      assertProviderOutput(output);
+      return output;
     } catch (error: unknown) {
       const detail = error instanceof Error ? error.message : String(error);
       console.error(`[GoogleProvider] Gemini streaming error body for model ${selectedModel}: ${detail}`);
-      throw new Error(`Gemini streaming request failed for model ${selectedModel}`);
+      throw error;
     }
   }
 }

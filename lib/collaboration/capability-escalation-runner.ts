@@ -1,3 +1,4 @@
+import { isTerminalProviderError } from "@/lib/providers/response-errors";
 import {
   runCapabilityAwareGeneration,
   withCapabilityEscalationInstruction,
@@ -492,6 +493,7 @@ export async function runOnDemandCapabilityEscalation(input: {
         });
         break;
       } catch (error) {
+        if (isTerminalProviderError(error)) throw error;
         lastFailure =
           error instanceof Error ? error.message : String(error);
         await emit({

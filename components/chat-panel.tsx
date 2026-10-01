@@ -340,6 +340,8 @@ function waitForRecoveryPoll(): Promise<void> {
   });
 }
 
+class TerminalChatError extends Error {}
+
 async function pollForPersistedAssistant(
   chatId: string,
   pending: PendingChatRequest,
@@ -370,7 +372,7 @@ async function pollForPersistedAssistant(
           };
 
           if (statusPayload.status === "failed") {
-            throw new Error(
+            throw new TerminalChatError(
               statusPayload.error ?? "Katie's server-side request failed.",
             );
           }
@@ -435,7 +437,8 @@ async function pollForPersistedAssistant(
           }
         }
       }
-    } catch {
+    } catch (error) {
+      if (error instanceof TerminalChatError) throw error;
       // Mobile connectivity may still be settling after the app resumes.
     }
 
@@ -1053,6 +1056,13 @@ export function ChatPanel({
         setStatusMessage(
           "Katie finished while this screen was away. The saved response has been restored.",
         );
+      } catch (error) {
+        if (error instanceof TerminalChatError) {
+          clearPendingChatRequest(chatId);
+          if (!cancelled) setStatusMessage(error.message);
+        } else {
+          console.error("[ChatPanel] recovery failed", error);
+        }
       } finally {
         recoveryPollingRef.current = false;
         if (!cancelled) {
@@ -1510,6 +1520,8 @@ export function ChatPanel({
                 model?: string;
               };
 
+          if (chunk.type === "reasoning_error") throw new TerminalChatError(chunk.message);
+
           if (chunk.type === "metadata") {
             if (chunk.resetText) {
               textContent = "";
@@ -1561,8 +1573,7 @@ export function ChatPanel({
             chunk.type === "reasoning_start" ||
             chunk.type === "reasoning_update" ||
             chunk.type === "reasoning_snapshot" ||
-            chunk.type === "final_answer" ||
-            chunk.type === "reasoning_error"
+            chunk.type === "final_answer"
           ) {
             if (chunk.type === "reasoning_start") {
               sawReasoningStart = true;
@@ -1598,6 +1609,8 @@ export function ChatPanel({
               provider?: string;
               model?: string;
             };
+
+        if (trailingChunk.type === "reasoning_error") throw new TerminalChatError(trailingChunk.message);
 
         if (trailingChunk.type === "metadata") {
           if (trailingChunk.resetText) {
@@ -1644,8 +1657,7 @@ export function ChatPanel({
           trailingChunk.type === "reasoning_start" ||
           trailingChunk.type === "reasoning_update" ||
           trailingChunk.type === "reasoning_snapshot" ||
-          trailingChunk.type === "final_answer" ||
-          trailingChunk.type === "reasoning_error"
+          trailingChunk.type === "final_answer"
         ) {
           if (trailingChunk.type === "reasoning_start") {
             sawReasoningStart = true;
@@ -1709,7 +1721,7 @@ export function ChatPanel({
         return;
       }
 
-      const rawMessage =
+      let rawMessage =
         error instanceof Error ? error.message : "Something went wrong.";
       const isTransportFailure =
         requestStage === "sending chat request" &&
@@ -1723,8 +1735,9 @@ export function ChatPanel({
         imageLengths: imagesToSend.map((image) => image.length),
       });
 
+      let terminalFailure = error instanceof TerminalChatError;
       const isRecoverableStreamFailure =
-        isTransportFailure || requestStage === "reading response stream";
+        !terminalFailure && (isTransportFailure || requestStage === "reading response stream");
 
       if (isRecoverableStreamFailure) {
         try {
@@ -1775,6 +1788,10 @@ export function ChatPanel({
             return;
           }
         } catch (recoveryError: unknown) {
+          if (recoveryError instanceof TerminalChatError) {
+            terminalFailure = true;
+            rawMessage = recoveryError.message;
+          }
           console.error("[ChatPanel] response recovery failed", {
             stage: requestStage,
             recoveryError,
@@ -1782,11 +1799,11 @@ export function ChatPanel({
         }
       }
 
-      if (!isRecoverableStreamFailure) {
+      if (terminalFailure || !isRecoverableStreamFailure) {
         clearPendingChatRequest(chatId);
       }
 
-      const cause = isTransportFailure
+      const cause = terminalFailure ? "Katie could not complete this request." : isTransportFailure
         ? "Network/transport error: the mobile browser lost its live connection to Katie. Server-side generation may still be running, and Katie will retry recovery when this screen becomes active again."
         : requestStage === "reading response stream"
           ? "Response-stream error: the mobile browser lost or could not finish reading the live stream. Server-side generation may still be running, and Katie will retry recovery when this screen becomes active again."
