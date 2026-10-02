@@ -31,3 +31,9 @@ test("missing source is reported instead of manufacturing a full inspection",asy
  for(const k of f.files.keys())if(!k.endsWith('.summary.json'))f.files.delete(k);
  await assert.rejects(f.store.restore(actor,chat,"Show the screenshot",[]),/unavailable/);
 });
+
+test("text-only website research is retained with explicit visual coverage limits",async()=>{
+ const f=fixture(); await f.store.save(actor,chat,request,{...evidence,website:undefined});
+ const r=await f.store.restore(actor,chat,"What did the website say?",[]);
+ assert.match(r.context,/Acme/);assert.match(r.context,/no rendered screenshots/);assert.equal(r.images.length,0);
+});
