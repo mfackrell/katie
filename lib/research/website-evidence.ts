@@ -13,7 +13,7 @@ const VIEWPORTS = [
 ];
 
 function isWebsiteReview(params: ChatGenerateParams): boolean {
-  const review = params.requestIntent === "marketing-analysis" ||
+  const review = (params.requestIntent === "marketing-analysis" && websiteUrls(params.user).length > 0) ||
     /\b(review|audit|evaluate|critique|assess|inspect)\b[\s\S]{0,180}\b(website|site|landing page|design|aesthetic|https?:\/\/)/i.test(params.user) ||
     /\b(website|site|landing page)\b[\s\S]{0,100}\b(review|audit|critique|aesthetic|design)\b/i.test(params.user);
   return review;

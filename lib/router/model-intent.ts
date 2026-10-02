@@ -1,3 +1,4 @@
+import { isNonConversationalModel } from "@/lib/models/non-conversational";
 import {
   isImageGenerationModel as isGoogleImageGenerationModel,
   isVisionAnalysisModel as isGoogleVisionAnalysisModel
@@ -1204,6 +1205,7 @@ function modelSupportsIntent(
   intent: RequestIntent,
   registryLookup?: RegistryLookup
 ): boolean {
+  if (isNonConversationalModel(modelId)) return false;
   const registry = lookupRegistryModel(registryLookup, providerName, modelId);
   const supportsImageGeneration = registry?.supports_image_generation ?? isImageGenerationModel(providerName, modelId);
   const supportsVision = registry?.supports_vision ?? isVisionAnalysisModel(providerName, modelId);
@@ -1563,7 +1565,7 @@ export function buildCandidateMetadata(
   return {
     providerName,
     modelId,
-    supports_text: registry?.supports_text ?? !supportsImageGeneration,
+    supports_text: !isNonConversationalModel(modelId) && (registry?.supports_text ?? !supportsImageGeneration),
     supports_web_search: supportsWebSearch(providerName, modelId, options?.registryLookup),
     supports_vision: supportsVision,
     supports_video: supportsVideo,
@@ -1923,15 +1925,7 @@ export function validateRoutingDecision(
     };
   }
 
-  const firstProvider = selectedProvider ?? availableByProvider[0];
-  const modelId = selectedProvider?.models[0] ?? availableByProvider[0]?.models[0] ?? decision.modelId;
-
-  return {
-    provider: firstProvider.provider,
-    modelId,
-    reasoning: `No compatible model found for ${intent}; kept closest available ${firstProvider.provider.name}:${modelId}.`,
-    changed: true
-  };
+  throw new Error(`No compatible model available for ${intent}.`);
 }
 
 export function filterCandidatesForIntent(

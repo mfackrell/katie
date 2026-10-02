@@ -187,3 +187,11 @@ For real-provider validation, send a deliberately complex request containing an 
 `collaboration_started -> delegation_requested -> helper_selected -> helper_completed -> ... -> final_synthesis_started -> collaboration_completed`.
 
 The specific number of helpers is intentionally not predetermined. The lead model owns that decision subject to Katie's hard limits.
+
+## Follow-ups and visible failures
+
+A marketing classification alone does not trigger a website inspection from a historical URL. Package design, positioning, and copy follow-ups use saved inspection context; an explicit site review or a new current-message site target can still trigger retrieval.
+
+Known music, speech-only, transcription, embedding, moderation, and video-generation model families are excluded from conversational routing even if discovery labels them text-capable. If no compatible model remains, routing reports failure rather than choosing an incompatible model.
+
+Terminal chat failures are saved as assistant messages and linked to the failed request. The server sends the error event and closes the stream normally so queued error events are delivered. Reconnection and refresh retain the failure message; the UI uses its saved ID to avoid duplicates.

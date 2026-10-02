@@ -203,7 +203,7 @@ export async function completeChatRequest(
   }
 }
 
-export async function failChatRequest(requestId: string, errorValue: unknown): Promise<void> {
+export async function failChatRequest(requestId: string, errorValue: unknown, assistantMessageId?: string): Promise<void> {
   const client = getSupabaseAdminClient();
   const message =
     errorValue instanceof Error ? errorValue.message : String(errorValue ?? "Unknown request failure");
@@ -212,6 +212,7 @@ export async function failChatRequest(requestId: string, errorValue: unknown): P
     .eq("request_id", requestId)
     .update({
       status: "failed",
+      assistant_message_id: assistantMessageId ?? null,
       error_message: message.slice(0, 2000),
       updated_at: new Date().toISOString(),
     });

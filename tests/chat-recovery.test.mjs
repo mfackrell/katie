@@ -22,3 +22,7 @@ test('temporary network failure still recovers a completed response', async () =
  assert.equal((await poll('chat',{requestId:'req',startedAt:new Date().toISOString(),content:'test'}))[0].content,'done');
  assert.equal(calls,3);
 });
+test('recovery retains the saved failure message id so the UI does not duplicate it', async () => {
+ const poll=polling(async () => ({ok:true,json:async()=>({status:'failed',assistantMessageId:'failure-req',error:'Provider unavailable'})}));
+ await assert.rejects(poll('chat',{requestId:'req',startedAt:new Date().toISOString(),content:'test'}),error=>error.messageId==='failure-req' && error.message==='Provider unavailable');
+});
