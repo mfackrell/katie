@@ -47,6 +47,7 @@ export type FinalAnswerEvent = {
 };
 
 export type ReasoningErrorEvent = {
+  messageId?: string;
   type: "reasoning_error";
   requestId: string;
   message: string;

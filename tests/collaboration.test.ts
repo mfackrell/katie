@@ -1221,3 +1221,15 @@ test("research timeout gets a different helper with a full research window", asy
   assert.match(lead.calls[0].user, /Recovered live evidence/);
   assert.equal(result.trace.filter(event => event.type === "helper_retrying").length, 1);
 });
+
+test("package-planning follow-up reuses saved context without automatic website retrieval", async () => {
+  const lead = fakeProvider({ name: "anthropic", modelId: "lead", controlResponses: [JSON.stringify({ action: "ready", synthesisBrief: "Design bookkeeping packages", conflicts: [] })], finalText: "Three service packages." });
+  const result = await runAdaptiveCollaboration({ requestId: "package-followup", leadProvider: lead, leadModelId: "lead", providers: [lead],
+    params: { ...marketingParams, user: "Focus on bookkeeping and month end close. Create service packages for ecommerce clients.", secondaryIntents: ["rewrite"],
+      persona: "STORED_WEBSITE_INSPECTION: earlier evidence", history: [{ role: "user", content: "Review https://example.com/" }] },
+    selectHelper: async () => { assert.fail("A historical URL must not cause another inspection"); },
+    collectWebsiteEvidence: async () => { assert.fail("No new capture needed"); },
+  });
+  assert.equal(result.result.text, "Three service packages.");
+  assert.match(lead.calls[0].persona, /STORED_WEBSITE_INSPECTION/);
+});

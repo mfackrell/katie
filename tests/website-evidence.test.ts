@@ -215,3 +215,9 @@ test("real Chromium captures applied desktop/mobile CSS, HTML and screenshots", 
   assert.equal(websiteImages(evidence).length, evidence.pages.length * 2);
   assert.equal(browser.isConnected(), false);
 });
+
+test("marketing follow-ups do not imply another website inspection", () => {
+  const history = [{ role: "user" as const, content: "Review https://example.com/" }];
+  assert.deepEqual(websiteReviewUrls({ ...params, user: "Create three bookkeeping packages for service and ecommerce clients.", history, secondaryIntents: ["rewrite"] }), []);
+  assert.deepEqual(websiteReviewUrls({ ...params, user: "Review the site again", history }), ["https://example.com/"]);
+});

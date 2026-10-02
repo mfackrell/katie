@@ -1,3 +1,4 @@
+import { isNonConversationalModel } from "./non-conversational";
 import { getSupabaseAdminClient } from "@/lib/data/supabase/admin";
 import type { LlmProvider } from "@/lib/providers/types";
 
@@ -93,7 +94,7 @@ function heuristicCapabilities(providerName: LlmProvider["name"], modelId: strin
   const cost = /mini|flash|haiku|nano/.test(m) ? "low" : /o3|opus|pro|gpt-5/.test(m) ? "high" : "medium";
 
   return {
-    supports_text: !supportsImage,
+    supports_text: !supportsImage && !isNonConversationalModel(modelId),
     supports_vision: supportsVision,
     supports_web_search: supportsWebSearch,
     supports_image_generation: supportsImage,

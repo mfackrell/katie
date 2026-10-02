@@ -1,6 +1,7 @@
 "use client";
 
 import Image from "next/image";
+import { chatFailureContent } from "@/lib/chat/request-failure";
 import EmojiPicker, { Theme } from "emoji-picker-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -340,7 +341,9 @@ function waitForRecoveryPoll(): Promise<void> {
   });
 }
 
-class TerminalChatError extends Error {}
+class TerminalChatError extends Error {
+  constructor(message: string, readonly messageId?: string) { super(message); }
+}
 
 async function pollForPersistedAssistant(
   chatId: string,
@@ -374,6 +377,7 @@ async function pollForPersistedAssistant(
           if (statusPayload.status === "failed") {
             throw new TerminalChatError(
               statusPayload.error ?? "Katie's server-side request failed.",
+              statusPayload.assistantMessageId ?? undefined,
             );
           }
 
@@ -1059,7 +1063,16 @@ export function ChatPanel({
       } catch (error) {
         if (error instanceof TerminalChatError) {
           clearPendingChatRequest(chatId);
-          if (!cancelled) setStatusMessage(error.message);
+          if (!cancelled) {
+            const failure: Message = { id: error.messageId ?? pending.requestId ?? crypto.randomUUID(), chatId,
+              role: "assistant", content: chatFailureContent(error.message), createdAt: new Date().toISOString() };
+            setMessages(current => {
+              const next = [...current.filter(entry => entry.id !== failure.id), failure];
+              setMessagesByChatId(cache => ({ ...cache, [chatId]: next }));
+              return next;
+            });
+            setStatusMessage(failure.content);
+          }
         } else {
           console.error("[ChatPanel] recovery failed", error);
         }
@@ -1520,7 +1533,7 @@ export function ChatPanel({
                 model?: string;
               };
 
-          if (chunk.type === "reasoning_error") throw new TerminalChatError(chunk.message);
+          if (chunk.type === "reasoning_error") throw new TerminalChatError(chunk.message, chunk.messageId);
 
           if (chunk.type === "metadata") {
             if (chunk.resetText) {
@@ -1610,7 +1623,7 @@ export function ChatPanel({
               model?: string;
             };
 
-        if (trailingChunk.type === "reasoning_error") throw new TerminalChatError(trailingChunk.message);
+        if (trailingChunk.type === "reasoning_error") throw new TerminalChatError(trailingChunk.message, trailingChunk.messageId);
 
         if (trailingChunk.type === "metadata") {
           if (trailingChunk.resetText) {
@@ -1736,6 +1749,7 @@ export function ChatPanel({
       });
 
       let terminalFailure = error instanceof TerminalChatError;
+      let failureMessageId = error instanceof TerminalChatError ? error.messageId : undefined;
       const isRecoverableStreamFailure =
         !terminalFailure && (isTransportFailure || requestStage === "reading response stream");
 
@@ -1791,6 +1805,7 @@ export function ChatPanel({
           if (recoveryError instanceof TerminalChatError) {
             terminalFailure = true;
             rawMessage = recoveryError.message;
+            failureMessageId = recoveryError.messageId;
           }
           console.error("[ChatPanel] response recovery failed", {
             stage: requestStage,
@@ -1811,16 +1826,16 @@ export function ChatPanel({
             ? "Attachment upload error: the message could not be sent because an attachment failed during upload or preparation."
             : `Request error during ${requestStage}.`;
 
-      const message = `${cause}\n\nTechnical detail: ${rawMessage}\nStage: ${requestStage}`;
+      const message = terminalFailure ? chatFailureContent(rawMessage) : `${cause}\n\nTechnical detail: ${rawMessage}\nStage: ${requestStage}`;
       const errorMessage: Message = {
-        id: crypto.randomUUID(),
+        id: failureMessageId ?? crypto.randomUUID(),
         chatId,
         role: "assistant",
         content: message,
         createdAt: new Date().toISOString(),
       };
       setMessages((current) => {
-        const nextMessages = [...current, errorMessage];
+        const nextMessages = [...current.filter(entry => entry.id !== errorMessage.id), errorMessage];
         setMessagesByChatId((cache) => ({ ...cache, [chatId]: nextMessages }));
         return nextMessages;
       });

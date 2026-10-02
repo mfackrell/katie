@@ -1,3 +1,4 @@
+import { finishChatFailure } from "@/lib/chat/request-failure";
 import { websiteEvidenceStore } from "@/lib/research/stored-evidence";
 import { attachmentAccessContext, type ConversationAttachment } from "@/lib/chat/attachment-continuity";
 import { persistConversationAttachment, restoreConversationAttachment, loadConversationAttachmentCatalog, loadActorAttachmentCatalog } from "@/lib/uploads/stored-uploads";
@@ -2180,14 +2181,16 @@ ${chunkWorkflowSummary}`;
           } catch (error: unknown) {
             console.error("[Chat API] Stream Runtime Error:", error);
             const message = error instanceof Error ? error.message : "Unknown stream error";
-            if (requestTracked) {
-              await failChatRequest(requestId, error);
-            }
-            emitChunk(reasoningState.error(message, true));
+            await finishChatFailure({
+              requestId, chatId, message,
+              save: (failure) => saveMessage(chatId, failure),
+              markFailed: async (messageId) => {
+                if (requestTracked) await failChatRequest(requestId, error, messageId);
+              },
+              emit: (messageId) => emitChunk({ ...reasoningState.error(message, false), messageId }),
+              close: () => { if (!streamCancelled) controller.close(); },
+            });
             console.error("[Chat API] reasoning stream error", { requestId, message, streamCancelled });
-            if (!streamCancelled) {
-              controller.error(error);
-            }
           }
         })();
       },
