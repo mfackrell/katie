@@ -22,14 +22,14 @@ export function createWebsiteEvidenceStore(storage: Storage) {
   return {
     async save(actorId: string, chatId: string, requestId: string, evidence: ResearchEvidenceBundle) {
       z.string().uuid().parse(actorId); z.string().uuid().parse(requestId);
-      if (!evidence.website || (!evidence.website.pages.length && !evidence.sources.length)) return;
+      if (!evidence.summary.trim() && !evidence.sources.length) return;
       const bucket = await storage.getBucket("katie-attachments");
       if (bucket.error || !bucket.data || bucket.data.public) throw new Error("Private evidence storage unavailable");
       const base = `${prefix(chatId)}/web-${Date.parse(evidence.retrievedAt)}-${requestId}`;
       const path = `${base}.json`;
       const descriptor: Descriptor = { actorId, chatId, requestId, capturedAt: evidence.retrievedAt,
-        urls: evidence.website.pages.length ? evidence.website.pages.map(p => p.url) : evidence.sources.map(p => p.url), summary: evidence.summary.slice(0, 6000),
-        limitations: [...evidence.website.limitations, ...evidence.website.pages.flatMap(p => [...p.limitations, ...p.views.flatMap(v => v.limitations)])], path };
+        urls: evidence.website?.pages.length ? evidence.website.pages.map(p => p.url) : [...urls(evidence.query), ...evidence.sources.map(p => p.url)], summary: evidence.summary.slice(0, 6000),
+        limitations: evidence.website ? [...evidence.website.limitations, ...evidence.website.pages.flatMap(p => [...p.limitations, ...p.views.flatMap(v => v.limitations)])] : ["Text research only; no rendered screenshots were captured."], path };
       const saved = await objects.upload(path, JSON.stringify({ actorId, chatId, evidence }), { contentType: "application/json", upsert: true });
       if (saved.error) throw new Error("Could not persist website evidence");
       const indexed = await objects.upload(`${base}.summary.json`, JSON.stringify(descriptor), { contentType: "application/json", upsert: true });
