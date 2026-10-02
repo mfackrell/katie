@@ -428,7 +428,7 @@ export async function runAdaptiveCollaboration(
     const researchCapture =
       request.capability === "research" ? collectWebsite() : undefined;
 
-    const useRenderedBrowserFallback = async (
+    const getRenderedBrowserFallback = async (
       reason: string,
     ): Promise<CollaborationContribution | null> => {
       if (!researchCapture) return null;
@@ -509,7 +509,7 @@ export async function runAdaptiveCollaboration(
           detail: "Helper retry stopped because Katie reserved the remaining time for final synthesis.",
         });
         if (request.capability === "research") {
-          return useRenderedBrowserFallback(
+          return getRenderedBrowserFallback(
             "Additional external research retries were skipped to preserve final-synthesis time.",
           );
         }
@@ -540,7 +540,7 @@ export async function runAdaptiveCollaboration(
           detail,
         });
         if (request.capability === "research") {
-          return useRenderedBrowserFallback(detail);
+          return getRenderedBrowserFallback(detail);
         }
         return null;
       }
@@ -765,7 +765,7 @@ export async function runAdaptiveCollaboration(
 
         if (candidateAttempt >= candidateAttemptLimit) {
           if (request.capability === "research") {
-            return useRenderedBrowserFallback(lastFailureDetail);
+            return getRenderedBrowserFallback(lastFailureDetail);
           }
           return null;
         }
@@ -773,7 +773,7 @@ export async function runAdaptiveCollaboration(
     }
 
     if (request.capability === "research") {
-      return useRenderedBrowserFallback(
+      return getRenderedBrowserFallback(
         lastFailureDetail || "No external research helper completed.",
       );
     }
