@@ -31,6 +31,8 @@ const DEFAULT_RESEARCH_TIMEOUT_MS = 180_000;
 const DEFAULT_MAX_TOTAL_DURATION_MS = 770_000;
 const FINAL_SYNTHESIS_TIMEOUT_MS = 180_000;
 const ROUTING_RESERVE_MS = 15_000;
+const RESEARCH_LATE_RESULT_GRACE_MS = 60_000;
+const MIN_RESEARCH_RETRY_MS = 60_000;
 const MIN_CONTROL_TIME_MS = 5_000;
 const MAX_HELPER_CONTROL_PASSES = 3;
 const MAX_HELPER_CANDIDATE_ATTEMPTS = 3;
@@ -177,15 +179,47 @@ async function withTimeout<T>(
   promise: Promise<T>,
   timeoutMs: number,
   label: string,
+  lateResultGraceMs = 0,
 ): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeoutError = new Error(`${label} timed out after ${timeoutMs}ms`);
+
   try {
     return await Promise.race([
       promise,
       new Promise<T>((_resolve, reject) => {
-        timer = setTimeout(() => reject(new Error(`${label} timed out after ${timeoutMs}ms`)), timeoutMs);
+        timer = setTimeout(() => reject(timeoutError), timeoutMs);
       }),
     ]);
+  } catch (error) {
+    if (error !== timeoutError || lateResultGraceMs <= 0) {
+      throw error;
+    }
+
+    if (timer) {
+      clearTimeout(timer);
+      timer = undefined;
+    }
+
+    console.info("[Collaboration] helper exceeded nominal timeout; waiting briefly for a late usable result", {
+      label,
+      timeoutMs,
+      lateResultGraceMs,
+    });
+
+    let graceTimer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([
+        promise,
+        new Promise<T>((_resolve, reject) => {
+          graceTimer = setTimeout(() => reject(timeoutError), lateResultGraceMs);
+        }),
+      ]);
+    } finally {
+      if (graceTimer) {
+        clearTimeout(graceTimer);
+      }
+    }
   } finally {
     if (timer) {
       clearTimeout(timer);
@@ -224,7 +258,9 @@ export async function runAdaptiveCollaboration(
     collaborationStartedAt + maxTotalDurationMs,
     options.executionDeadlineMs ?? Infinity,
   );
-  const finalSynthesisReserveMs = FINAL_SYNTHESIS_TIMEOUT_MS * 2 + ROUTING_RESERVE_MS;
+  // Reserve one complete final answer, not two. A second final attempt is opportunistic.
+  // Required live research and its backup should not be starved to pre-reserve an optional retry.
+  const finalSynthesisReserveMs = FINAL_SYNTHESIS_TIMEOUT_MS + ROUTING_RESERVE_MS;
   const remainingTotalMs = () => Math.max(0, executionDeadlineMs - Date.now());
   const remainingBeforeFinalMs = () =>
     Math.max(0, remainingTotalMs() - finalSynthesisReserveMs);
@@ -314,6 +350,7 @@ export async function runAdaptiveCollaboration(
     label: string,
     timeoutMs = participantTimeoutMs,
     minimumTimeMs = timeoutMs,
+    lateResultGraceMs = 0,
   ): Promise<ProviderResponse> => {
     const remaining = remainingBeforeFinalMs();
     if (remaining < minimumTimeMs) {
@@ -322,10 +359,15 @@ export async function runAdaptiveCollaboration(
       );
     }
 
+    const effectiveTimeoutMs = Math.min(timeoutMs, remaining);
+    const availableGraceMs = Math.max(0, remaining - effectiveTimeoutMs);
+    const effectiveGraceMs = Math.min(lateResultGraceMs, availableGraceMs);
+
     return withTimeout(
       provider.generate({ ...params, modelId }),
-      Math.min(timeoutMs, remaining),
+      effectiveTimeoutMs,
       label,
+      effectiveGraceMs,
     );
   };
 
@@ -418,8 +460,13 @@ export async function runAdaptiveCollaboration(
       candidateAttempt <= candidateAttemptLimit;
       candidateAttempt += 1
     ) {
-      const minimumTimeNeeded =
-        (request.capability === "research" ? researchTimeoutMs : participantTimeoutMs) + ROUTING_RESERVE_MS;
+      const helperWindowMs =
+        request.capability === "research"
+          ? candidateAttempt > 1
+            ? MIN_RESEARCH_RETRY_MS
+            : researchTimeoutMs
+          : participantTimeoutMs;
+      const minimumTimeNeeded = helperWindowMs + ROUTING_RESERVE_MS;
       if (remainingBeforeFinalMs() < minimumTimeNeeded) {
         await emit({
           type: "limit_reached",
@@ -530,12 +577,28 @@ export async function runAdaptiveCollaboration(
 
           // Browser capture runs alongside live retrieval and is reused across retries.
           const capture = isResearchPass ? collectWebsite() : undefined;
+          const helperTimeoutMs =
+            request.capability === "research"
+              ? candidateAttempt > 1
+                ? Math.min(
+                    researchTimeoutMs,
+                    Math.max(MIN_RESEARCH_RETRY_MS, remainingBeforeFinalMs()),
+                  )
+                : researchTimeoutMs
+              : participantTimeoutMs;
+          const minimumHelperTimeMs =
+            request.capability === "research" && candidateAttempt > 1
+              ? MIN_RESEARCH_RETRY_MS
+              : helperTimeoutMs;
+
           const response = await callControl(
             selected.provider,
             selected.modelId,
             helperParams,
             `Collaboration helper ${helper.provider}:${helper.modelId}`,
-            request.capability === "research" ? researchTimeoutMs : participantTimeoutMs,
+            helperTimeoutMs,
+            minimumHelperTimeMs,
+            request.capability === "research" ? RESEARCH_LATE_RESULT_GRACE_MS : 0,
           );
 
           if (isResearchPass) {
