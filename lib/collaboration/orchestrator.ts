@@ -620,6 +620,7 @@ export async function runAdaptiveCollaboration(
         };
 
         if (helperResearchEvidence) {
+          await options.onResearchEvidence?.(helperResearchEvidence);
           await emit({
             type: "research_evidence_collected",
             depth,
