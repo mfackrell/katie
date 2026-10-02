@@ -726,10 +726,10 @@ export async function chooseProvider(
       console.info(
         `[ModelRegistry] requestId=${traceRequestId} provider=${provider.name} eligible=${eligibleModels.length} restricted=${restrictedForTextOnly.length}`
       );
-      return { provider, models: eligibleModels.filter((modelId) => !isBlockedRoutingModel(provider.name, modelId)) };
+      return { provider, models: eligibleModels };
     }
 
-    const fallbackModels = (await provider.listModels()).filter((modelId) => !isBlockedRoutingModel(provider.name, modelId));
+    const fallbackModels = await provider.listModels();
     console.warn(`[ModelRegistry] requestId=${traceRequestId} provider=${provider.name} using_provider_fallback=true count=${fallbackModels.length}`);
     return { provider, models: fallbackModels };
   }));
@@ -805,7 +805,9 @@ export async function chooseProvider(
 
   let availableByProvider = modelEntries.map(({ provider, models }) => ({
     provider,
-    models: models.length ? models : [pickDefaultModel(provider, [])]
+    models: (models.length ? models : [pickDefaultModel(provider, [])]).filter(
+      (modelId) => !isBlockedRoutingModel(provider.name, modelId),
+    )
   }));
 
   const delegatedWebRetrievalForMarketing =
