@@ -1014,7 +1014,7 @@ function reviewHelpers() {
   };
 }
 
-test("170-second research plus 110-second critique skips short lead control and retains evidence", async (t) => {
+test("170-second research plus 110-second critique retains evidence and still leaves room for lead control", async (t) => {
   let clock = 0;
   t.mock.method(Date, "now", () => clock);
   const lead = fakeProvider({ name: "anthropic", modelId: "lead", controlResponses: [], finalText: "Review completed." });
@@ -1029,17 +1029,17 @@ test("170-second research plus 110-second critique skips short lead control and 
     collectWebsiteEvidence: async () => { captures++; return capturedWebsite; },
     selectHelper: async ({ request }) => request.capability === "research" ? { provider: research, modelId: "research" } : { provider: reviewer, modelId: "reviewer" },
   });
-  assert.equal(lead.calls.length, 1, "only final synthesis runs, no doomed control pass");
-  assert.match(result.trace.find((event) => event.type === "limit_reached")?.detail ?? "", /minimum=120000ms/);
+  assert.equal(lead.calls.length, 2, "lead control and final synthesis both have enough time");
   assert.equal(research.calls.length, 1);
   assert.equal(reviewer.calls.length, 1);
   assert.equal(captures, 1);
   assert.equal(result.metadata.delegationCount, 2);
-  assert.match(lead.calls[0].user, /Verified website evidence/);
-  assert.match(lead.calls[0].user, /Independent critique/);
-  assert.match(lead.calls[0].user, /button \{color: blue\}/);
-  assert.deepEqual(lead.calls[0].images, [capturedWebsite.pages[0].views[0].screenshot!.dataUrl]);
-  assert.match(lead.calls[0].persona, /Complete conflict reconciliation before writing/);
+  const finalCall = lead.calls.at(-1)!;
+  assert.match(finalCall.user, /Verified website evidence/);
+  assert.match(finalCall.user, /Independent critique/);
+  assert.match(finalCall.user, /button \{color: blue\}/);
+  assert.deepEqual(finalCall.images, [capturedWebsite.pages[0].views[0].screenshot!.dataUrl]);
+  assert.match(finalCall.persona, /Complete conflict reconciliation before writing/);
   assert.equal(result.result.text, "Review completed.");
 });
 
@@ -1204,7 +1204,10 @@ test("research timeout gets a different helper with a full research window", asy
   const lead = fakeProvider({ name: "anthropic", modelId: "lead", controlResponses: [], finalText: "Used backup research." });
   const failed = fakeProvider({ name: "grok", modelId: "failed-research", controlResponses: [] });
   failed.generate = async () => {
-    queueMicrotask(() => t.mock.timers.tick(180_000));
+    queueMicrotask(() => {
+      t.mock.timers.tick(180_000);
+      queueMicrotask(() => t.mock.timers.tick(60_000));
+    });
     return new Promise<ProviderResponse>(() => {});
   };
   const backup = fakeProvider({ name: "openai", modelId: "backup-research", controlResponses: ["Recovered live evidence."] });
@@ -1212,14 +1215,55 @@ test("research timeout gets a different helper with a full research window", asy
   backup.generate = async (params) => { t.mock.timers.tick(163_000); return getResearch(params); };
   let selections = 0;
   const result = await runAdaptiveCollaboration({ requestId: "research-backup", leadProvider: lead, leadModelId: "lead",
-    providers: [lead, failed, backup], params: marketingParams,
+    providers: [lead, failed, backup], params: { ...marketingParams, requestIntent: "general-text" },
     collectWebsiteEvidence: async () => capturedWebsite,
     selectHelper: async () => ++selections === 1 ? { provider: failed, modelId: "failed-research" } : { provider: backup, modelId: "backup-research" },
   });
   assert.equal(selections, 2);
   assert.equal(backup.calls.length, 1);
-  assert.match(lead.calls[0].user, /Recovered live evidence/);
+  assert.match(lead.calls.at(-1)!.user, /Recovered live evidence/);
   assert.equal(result.trace.filter(event => event.type === "helper_retrying").length, 1);
+});
+
+test("research result that arrives during the late-result grace window is preserved instead of discarded", async (t) => {
+  t.mock.timers.enable({ apis: ["Date", "setTimeout"], now: 0 });
+  const lead = fakeProvider({ name: "anthropic", modelId: "lead", controlResponses: [], finalText: "Used late research." });
+  const late = fakeProvider({ name: "grok", modelId: "late-research", controlResponses: [] });
+  late.generate = async (params) => {
+    late.calls.push(params);
+    const result = new Promise<ProviderResponse>((resolve) => {
+      setTimeout(() => resolve({
+        text: "Late but valid competitor evidence.",
+        provider: "grok",
+        model: "late-research",
+      }), 218_000);
+    });
+    queueMicrotask(() => {
+      t.mock.timers.tick(180_000);
+      queueMicrotask(() => t.mock.timers.tick(38_000));
+    });
+    return result;
+  };
+
+  let selections = 0;
+  const result = await runAdaptiveCollaboration({
+    requestId: "research-late-result",
+    leadProvider: lead,
+    leadModelId: "lead",
+    providers: [lead, late],
+    params: { ...marketingParams, requestIntent: "general-text" },
+    collectWebsiteEvidence: async () => capturedWebsite,
+    selectHelper: async () => {
+      selections += 1;
+      if (selections > 1) assert.fail("late successful research must not trigger a backup");
+      return { provider: late, modelId: "late-research" };
+    },
+  });
+
+  assert.equal(selections, 1);
+  assert.equal(result.metadata.contributions.length, 1);
+  assert.match(lead.calls.at(-1)!.user, /Late but valid competitor evidence/);
+  assert.equal(result.trace.some((event) => event.type === "helper_failed"), false);
 });
 
 test("package-planning follow-up reuses saved context without automatic website retrieval", async () => {
