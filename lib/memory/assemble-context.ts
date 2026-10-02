@@ -1,3 +1,4 @@
+import { getDeliverableStandardInstruction } from "@/lib/chat/deliverable-standard";
 import { getChatContextState } from "@/lib/data/persistence-store";
 import { MEMORY_ARCHITECTURE_GUIDE, SHORT_TERM_MESSAGE_LIMIT } from "@/lib/memory/memory-contract";
 import { filterConversationalMessages, messagesFromShortTermMemory } from "@/lib/memory/short-term";
@@ -34,6 +35,7 @@ export async function assembleContext(actorId: string, chatId: string): Promise<
     name: process.env.ASSISTANT_NAME || "Katie",
     persona: [
       actor.purpose,
+      getDeliverableStandardInstruction(),
       MEMORY_ARCHITECTURE_GUIDE,
       longTermBlock,
     ].join("\n\n"),
