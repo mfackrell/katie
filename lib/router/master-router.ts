@@ -726,10 +726,10 @@ export async function chooseProvider(
       console.info(
         `[ModelRegistry] requestId=${traceRequestId} provider=${provider.name} eligible=${eligibleModels.length} restricted=${restrictedForTextOnly.length}`
       );
-      return { provider, models: eligibleModels.filter(() => !isBlockedRoutingModel()) };
+      return { provider, models: eligibleModels.filter((modelId) => !isBlockedRoutingModel(provider.name, modelId)) };
     }
 
-    const fallbackModels = (await provider.listModels()).filter(() => !isBlockedRoutingModel());
+    const fallbackModels = (await provider.listModels()).filter((modelId) => !isBlockedRoutingModel(provider.name, modelId));
     console.warn(`[ModelRegistry] requestId=${traceRequestId} provider=${provider.name} using_provider_fallback=true count=${fallbackModels.length}`);
     return { provider, models: fallbackModels };
   }));
