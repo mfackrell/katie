@@ -507,10 +507,14 @@ test("safety-sensitive vision capability gate allows grok-4 family models", asyn
   assert.ok(grok.adjustments.some((adjustment) => adjustment.label === "safety_sensitive_vision_grok_boost"));
 });
 
-test("routing does not hardcode blocked model-name deny rules", async () => {
-  assert.equal(isBlockedRoutingModel(), false);
-  assert.equal(isBlockedRoutingModel(), false);
-  assert.equal(isBlockedRoutingModel(), false);
+test("routing blocks only provider models with observed deterministic compatibility failures", async () => {
+  assert.equal(isBlockedRoutingModel("openai", "gpt-4o-mini-search-preview-2025-03-11"), true);
+  assert.equal(isBlockedRoutingModel("openai", "o4-mini-deep-research-2025-06-26"), true);
+  assert.equal(isBlockedRoutingModel("openai", "gpt-5-search-api"), true);
+  assert.equal(isBlockedRoutingModel("openai", "gpt-5-search-api-2025-10-14"), true);
+  assert.equal(isBlockedRoutingModel("openai", "gpt-4o-search-preview"), false);
+  assert.equal(isBlockedRoutingModel("openai", "o3-deep-research"), false);
+  assert.equal(isBlockedRoutingModel("grok", "grok-4.7"), false);
 });
 
 test("plain text routing prefers lightweight models when available", async () => {
