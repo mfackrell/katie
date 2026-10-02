@@ -1204,10 +1204,7 @@ test("research timeout gets a different helper with a full research window", asy
   const lead = fakeProvider({ name: "anthropic", modelId: "lead", controlResponses: [], finalText: "Used backup research." });
   const failed = fakeProvider({ name: "grok", modelId: "failed-research", controlResponses: [] });
   failed.generate = async () => {
-    queueMicrotask(() => {
-      t.mock.timers.tick(180_000);
-      queueMicrotask(() => t.mock.timers.tick(60_000));
-    });
+    queueMicrotask(() => t.mock.timers.tick(240_000));
     return new Promise<ProviderResponse>(() => {});
   };
   const backup = fakeProvider({ name: "openai", modelId: "backup-research", controlResponses: ["Recovered live evidence."] });
@@ -1238,10 +1235,7 @@ test("research result that arrives during the late-result grace window is preser
         model: "late-research",
       }), 218_000);
     });
-    queueMicrotask(() => {
-      t.mock.timers.tick(180_000);
-      queueMicrotask(() => t.mock.timers.tick(38_000));
-    });
+    queueMicrotask(() => t.mock.timers.tick(218_000));
     return result;
   };
 
