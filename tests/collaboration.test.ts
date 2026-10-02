@@ -19,6 +19,7 @@ import type {
   LlmProvider,
   ProviderResponse,
   ProviderStreamHandlers,
+  ResearchEvidenceBundle,
   WebsiteEvidence,
 } from "../lib/providers/types";
 
