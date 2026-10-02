@@ -40,7 +40,7 @@ export interface WebsitePageEvidence {
 export interface ResearchEvidenceBundle {
   kind: "web";
   retrievedBy: {
-    provider: "openai" | "google" | "grok" | "anthropic";
+    provider: "openai" | "google" | "grok" | "anthropic" | "katie";
     modelId: string;
   };
   query: string;

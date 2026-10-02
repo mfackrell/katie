@@ -85,12 +85,23 @@ export async function selectCollaborationHelper(input: {
   const crossProviderPool = input.providers.filter(
     (provider) => provider.name !== input.requester.provider,
   );
+  const previouslyUsedHelperProviders = new Set(
+    input.usedParticipants
+      .filter((value) => participantKey(value) !== requesterKey)
+      .map((value) => value.provider),
+  );
+  const diverseResearchPool =
+    input.request.capability === "research"
+      ? crossProviderPool.filter((provider) => !previouslyUsedHelperProviders.has(provider.name))
+      : crossProviderPool;
 
   const firstPool = preferredProvider
     ? [preferredProvider]
-    : crossProviderPool.length
-      ? crossProviderPool
-      : input.providers;
+    : diverseResearchPool.length
+      ? diverseResearchPool
+      : crossProviderPool.length
+        ? crossProviderPool
+        : input.providers;
 
   const excludedCandidates = input.usedParticipants.map((value) => ({
     providerName: value.provider,

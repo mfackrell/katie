@@ -19,6 +19,7 @@ import type {
   LlmProvider,
   ProviderResponse,
   ProviderStreamHandlers,
+  ResearchEvidenceBundle,
   WebsiteEvidence,
 } from "../lib/providers/types";
 
@@ -1220,6 +1221,71 @@ test("research timeout gets a different helper with a full research window", asy
   assert.equal(backup.calls.length, 1);
   assert.match(lead.calls.at(-1)!.user, /Recovered live evidence/);
   assert.equal(result.trace.filter(event => event.type === "helper_retrying").length, 1);
+});
+
+test("research keeps trying viable models after two fast provider failures", async () => {
+  const lead = fakeProvider({ name: "anthropic", modelId: "lead", controlResponses: [], finalText: "Used third research helper." });
+  const failedOne = fakeProvider({ name: "grok", modelId: "research-one", controlResponses: [] });
+  failedOne.generate = async () => { throw new Error("grok unavailable"); };
+  const failedTwo = fakeProvider({ name: "openai", modelId: "research-two", controlResponses: [] });
+  failedTwo.generate = async () => { throw new Error("openai search unavailable"); };
+  const recovered = fakeProvider({ name: "google", modelId: "research-three", controlResponses: ["Recovered research from third provider."] });
+  let selections = 0;
+
+  const result = await runAdaptiveCollaboration({
+    requestId: "research-third-provider",
+    leadProvider: lead,
+    leadModelId: "lead",
+    providers: [lead, failedOne, failedTwo, recovered],
+    params: { ...marketingParams, requestIntent: "general-text" },
+    collectWebsiteEvidence: async () => undefined,
+    selectHelper: async () => {
+      selections += 1;
+      if (selections === 1) return { provider: failedOne, modelId: "research-one" };
+      if (selections === 2) return { provider: failedTwo, modelId: "research-two" };
+      return { provider: recovered, modelId: "research-three" };
+    },
+  });
+
+  assert.equal(selections, 3);
+  assert.equal(result.trace.filter((event) => event.type === "helper_failed").length, 2);
+  assert.equal(result.trace.filter((event) => event.type === "helper_retrying").length, 2);
+  assert.match(lead.calls.at(-1)!.user, /Recovered research from third provider/);
+});
+
+test("rendered website capture survives external research failures and becomes the fallback evidence", async () => {
+  const lead = fakeProvider({ name: "anthropic", modelId: "lead", controlResponses: [], finalText: "Reviewed from browser evidence." });
+  const failedOne = fakeProvider({ name: "grok", modelId: "research-one", controlResponses: [] });
+  failedOne.generate = async () => { throw new Error("grok unavailable"); };
+  const failedTwo = fakeProvider({ name: "openai", modelId: "research-two", controlResponses: [] });
+  failedTwo.generate = async () => { throw new Error("openai unavailable"); };
+  let selections = 0;
+  let persisted: ResearchEvidenceBundle | undefined;
+
+  const result = await runAdaptiveCollaboration({
+    requestId: "browser-research-fallback",
+    leadProvider: lead,
+    leadModelId: "lead",
+    providers: [lead, failedOne, failedTwo],
+    params: { ...marketingParams, requestIntent: "general-text" },
+    collectWebsiteEvidence: async () => capturedWebsite,
+    onResearchEvidence: async (evidence) => { persisted = evidence; },
+    selectHelper: async () => {
+      selections += 1;
+      if (selections === 1) return { provider: failedOne, modelId: "research-one" };
+      if (selections === 2) return { provider: failedTwo, modelId: "research-two" };
+      return null;
+    },
+  });
+
+  assert.equal(selections, 3);
+  assert.equal(persisted?.retrievedBy.provider, "katie");
+  assert.equal(persisted?.retrievedBy.modelId, "rendered-browser-capture");
+  assert.equal(result.result.collaboration?.contributors.some((entry) => entry.modelId === "katie-rendered-browser"), true);
+  assert.equal(result.trace.some((event) => event.type === "research_evidence_collection_failed"), false);
+  assert.equal(result.trace.some((event) => event.type === "research_evidence_collected"), true);
+  assert.match(lead.calls.at(-1)!.user, /RENDERED_WEBSITE_EVIDENCE/);
+  assert.deepEqual(lead.calls.at(-1)!.images, [capturedWebsite.pages[0].views[0].screenshot!.dataUrl]);
 });
 
 test("research result that arrives during the late-result grace window is preserved instead of discarded", async (t) => {
