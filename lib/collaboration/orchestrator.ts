@@ -182,44 +182,20 @@ async function withTimeout<T>(
   lateResultGraceMs = 0,
 ): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
-  const timeoutError = new Error(`${label} timed out after ${timeoutMs}ms`);
+  const effectiveTimeoutMs = timeoutMs + lateResultGraceMs;
+  const timeoutError = new Error(
+    lateResultGraceMs > 0
+      ? `${label} timed out after ${effectiveTimeoutMs}ms (base ${timeoutMs}ms + late-result grace ${lateResultGraceMs}ms)`
+      : `${label} timed out after ${timeoutMs}ms`,
+  );
 
   try {
     return await Promise.race([
       promise,
       new Promise<T>((_resolve, reject) => {
-        timer = setTimeout(() => reject(timeoutError), timeoutMs);
+        timer = setTimeout(() => reject(timeoutError), effectiveTimeoutMs);
       }),
     ]);
-  } catch (error) {
-    if (error !== timeoutError || lateResultGraceMs <= 0) {
-      throw error;
-    }
-
-    if (timer) {
-      clearTimeout(timer);
-      timer = undefined;
-    }
-
-    console.info("[Collaboration] helper exceeded nominal timeout; waiting briefly for a late usable result", {
-      label,
-      timeoutMs,
-      lateResultGraceMs,
-    });
-
-    let graceTimer: ReturnType<typeof setTimeout> | undefined;
-    try {
-      return await Promise.race([
-        promise,
-        new Promise<T>((_resolve, reject) => {
-          graceTimer = setTimeout(() => reject(timeoutError), lateResultGraceMs);
-        }),
-      ]);
-    } finally {
-      if (graceTimer) {
-        clearTimeout(graceTimer);
-      }
-    }
   } finally {
     if (timer) {
       clearTimeout(timer);
