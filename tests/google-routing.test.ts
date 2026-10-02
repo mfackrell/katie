@@ -508,6 +508,8 @@ test("safety-sensitive vision capability gate allows grok-4 family models", asyn
 });
 
 test("routing blocks only provider models with observed deterministic compatibility failures", async () => {
+  assert.equal(isBlockedRoutingModel("openai", "gpt-4o-search-preview"), true);
+  assert.equal(isBlockedRoutingModel("openai", "gpt-4o-search-preview-2025-03-11"), true);
   assert.equal(isBlockedRoutingModel("openai", "gpt-4o-mini-search-preview-2025-03-11"), true);
   assert.equal(isBlockedRoutingModel("openai", "o4-mini-deep-research-2025-06-26"), true);
   assert.equal(isBlockedRoutingModel("openai", "gpt-5-search-api"), true);
