@@ -73,6 +73,7 @@
     "tests/direct-upload.test.ts",
     "tests/attachment-continuity.test.ts",
     "tests/attachment-discovery.test.ts",
-    "tests/provider-response-errors.test.ts"
+    "tests/provider-response-errors.test.ts",
+    "tests/stored-website-evidence.test.ts"
   ]
 }

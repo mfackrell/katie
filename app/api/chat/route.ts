@@ -1,3 +1,4 @@
+import { websiteEvidenceStore } from "@/lib/research/stored-evidence";
 import { attachmentAccessContext, type ConversationAttachment } from "@/lib/chat/attachment-continuity";
 import { persistConversationAttachment, restoreConversationAttachment, loadConversationAttachmentCatalog, loadActorAttachmentCatalog } from "@/lib/uploads/stored-uploads";
 import { describeAttachmentEvidence } from "@/lib/uploads/attachment-observations";
@@ -879,6 +880,14 @@ export async function POST(request: NextRequest) {
 
     console.log("[Chat API] Assembling context and selecting provider...");
     const { name, persona, summary, history, actorRoutingProfile } = await assembleContext(actorId, chatId);
+    let storedWebsite = { context: "", images: [] as string[], fresh: false, targetUrls: [] as string[] };
+    try { storedWebsite = await websiteEvidenceStore().restore(actorId, chatId, message, history); }
+    catch (error) {
+      console.warn("[Website evidence] Restore failed", { requestId, error: String(error) });
+      storedWebsite.context = "Website inspection storage could not be read on this turn. Do not infer that earlier inspections never occurred. Do not invent missing website facts.";
+    }
+    images.push(...storedWebsite.images);
+    if (storedWebsite.fresh) messageForGeneration += `\nRetrieve a fresh inspection of: ${storedWebsite.targetUrls.join(", ")}`;
     const activeRepoContext = activeRepoId ? await loadActiveRepoContext(activeRepoId) : null;
     const sessionContext: ChatSessionContext = {
       activeRepo: activeRepoContext
@@ -1296,7 +1305,7 @@ export async function POST(request: NextRequest) {
     }
 
     const collaborationConfig = getCollaborationConfig();
-    const collaborationEnabledForRequest = shouldUseAdaptiveCollaboration({
+    const collaborationEnabledForRequest = storedWebsite.fresh || shouldUseAdaptiveCollaboration({
       message,
       intent: resolvedRequestIntent ?? null,
       complexity: resolvedRoutingIntentForReroute?.complexity ?? null,
@@ -1444,12 +1453,12 @@ export async function POST(request: NextRequest) {
             const createParams = (selectedModelId: string) =>
               buildGenerationParams({
                 name,
-                persona: personaForGeneration,
+                persona: [personaForGeneration, storedWebsite.context].filter(Boolean).join("\n\n"),
                 summary,
                 history: historyForProvider,
                 message: messageForGeneration,
                 requestIntent: resolvedRequestIntent,
-                secondaryIntents: resolvedRoutingIntentForReroute?.secondaryIntents ?? [],
+                secondaryIntents: storedWebsite.fresh ? [...(resolvedRoutingIntentForReroute?.secondaryIntents ?? []), "web-search"] : resolvedRoutingIntentForReroute?.secondaryIntents ?? [],
                 images,
                 modelId: selectedModelId,
                 attachments
@@ -1460,7 +1469,7 @@ export async function POST(request: NextRequest) {
                 provider,
                 modelId,
                 name,
-                persona: personaForGeneration,
+                persona: [personaForGeneration, storedWebsite.context].filter(Boolean).join("\n\n"),
                 summary,
                 userMessage: message,
                 attachments
@@ -1574,6 +1583,10 @@ ${chunkWorkflowSummary}`;
                         providers,
                         params: collaborationBaseParams,
                         resumeState: collaborationResumeState,
+                        onResearchEvidence: async (evidence) => {
+                          try { await websiteEvidenceStore().save(actorId, chatId, requestId, evidence); }
+                          catch (error) { console.error("[Website evidence] Save failed", { requestId, error: String(error) }); }
+                        },
                         onCheckpoint: (state) => { collaborationResumeState = state; },
                         prepareParticipantParams: (participantParams, participantValue) => {
                           const participantRuntimeContext = buildKatieRuntimeContext({

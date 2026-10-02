@@ -115,6 +115,7 @@ export type CollaborationEngineOptions = {
   providers: LlmProvider[];
   params: ChatGenerateParams;
   resumeState?: CollaborationResumeState;
+  onResearchEvidence?: (evidence: ResearchEvidenceBundle) => Promise<void>;
   onCheckpoint?: (state: CollaborationResumeState) => void;
   selectHelper: (
     context: CollaborationSelectionContext,
