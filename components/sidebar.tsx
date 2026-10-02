@@ -320,7 +320,7 @@ export function Sidebar({
                   isSubActor ? "ml-2 sm:ml-4" : "",
                 ].join(" ")}
               >
-                <div className="flex flex-col gap-3 px-1 py-1 sm:flex-row sm:items-start sm:justify-between">
+                <div className="flex min-w-0 flex-col gap-3 px-1 py-1">
                   <button className="min-w-0 flex-1 text-left" onClick={() => onSelectActor(actor.id)}>
                     <div className="flex items-center gap-2">
                       {isSubActor ? (
@@ -336,7 +336,7 @@ export function Sidebar({
                       {actor.purpose || "Focused branch inheriting parent behavior."}
                     </p>
                   </button>
-                  <div className="grid grid-cols-3 gap-1.5 sm:flex sm:flex-col sm:items-end">
+                  <div className="grid grid-cols-3 gap-1.5">
                     <button
                       className="min-h-10 rounded-xl border border-white/10 bg-white/[0.04] px-2.5 py-1 text-[11px] font-medium text-zinc-300 transition hover:border-emerald-400/30 hover:bg-emerald-400/10 hover:text-white disabled:cursor-not-allowed disabled:opacity-55"
                       onClick={async () => {
@@ -384,16 +384,16 @@ export function Sidebar({
                         <div
                           key={chat.id}
                           className={[
-                            "flex items-center gap-2 rounded-2xl px-3 py-2 text-xs transition",
+                            "grid min-w-0 grid-cols-2 gap-2 rounded-2xl px-3 py-2 text-xs transition",
                             activeChat
                               ? "border border-white/10 bg-white/[0.08] text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.05)]"
                               : "border border-transparent text-zinc-400 hover:border-white/8 hover:bg-white/[0.04] hover:text-zinc-200",
                           ].join(" ")}
                         >
                           {isEditingTitle ? (
-                            <div className="flex flex-1 items-center gap-2">
+                            <div className="col-span-2 grid min-w-0 grid-cols-2 gap-2">
                               <input
-                                className="h-8 min-w-0 flex-1 rounded-lg border border-white/15 bg-zinc-900/80 px-2 text-xs text-white outline-none ring-emerald-400/40 placeholder:text-zinc-500 focus:ring-2"
+                                className="col-span-2 h-9 w-full min-w-0 rounded-lg border border-white/15 bg-zinc-900/80 px-2 text-xs text-white outline-none ring-emerald-400/40 placeholder:text-zinc-500 focus:ring-2"
                                 value={draftChatTitle}
                                 onChange={(event) => setDraftChatTitle(event.target.value)}
                                 onClick={(event) => event.stopPropagation()}
@@ -402,7 +402,7 @@ export function Sidebar({
                                 autoFocus
                               />
                               <button
-                                className="rounded-lg border border-emerald-500/25 bg-emerald-500/10 px-2 py-1 text-[10px] font-medium text-emerald-200 transition hover:border-emerald-400/45 hover:bg-emerald-500/15 hover:text-white disabled:cursor-not-allowed disabled:opacity-60"
+                                className="min-h-9 whitespace-nowrap rounded-lg border border-emerald-500/25 bg-emerald-500/10 px-2 py-1 text-[10px] font-medium text-emerald-200 transition hover:border-emerald-400/45 hover:bg-emerald-500/15 hover:text-white disabled:cursor-not-allowed disabled:opacity-60"
                                 disabled={isSavingTitle}
                                 onClick={async (event) => {
                                   event.stopPropagation();
@@ -429,7 +429,7 @@ export function Sidebar({
                                 Save
                               </button>
                               <button
-                                className="rounded-lg border border-white/15 bg-white/[0.04] px-2 py-1 text-[10px] font-medium text-zinc-300 transition hover:border-white/25 hover:bg-white/[0.08] hover:text-white disabled:cursor-not-allowed disabled:opacity-60"
+                                className="min-h-9 whitespace-nowrap rounded-lg border border-white/15 bg-white/[0.04] px-2 py-1 text-[10px] font-medium text-zinc-300 transition hover:border-white/25 hover:bg-white/[0.08] hover:text-white disabled:cursor-not-allowed disabled:opacity-60"
                                 disabled={isSavingTitle}
                                 onClick={(event) => {
                                   event.stopPropagation();
@@ -443,7 +443,7 @@ export function Sidebar({
                             </div>
                           ) : (
                             <button
-                              className="block flex-1 text-left"
+                              className="col-span-2 block min-w-0 py-1 text-left"
                               onClick={() => {
                                 onSelectActor(actor.id);
                                 onSelectChat(chat.id);
@@ -452,8 +452,9 @@ export function Sidebar({
                               <span className="block truncate font-medium">{chat.title}</span>
                             </button>
                           )}
+                          {!isEditingTitle && (<>
                           <button
-                            className="rounded-lg border border-white/15 bg-white/[0.04] px-2 py-1 text-[10px] font-medium text-zinc-300 transition hover:border-white/25 hover:bg-white/[0.08] hover:text-white disabled:cursor-not-allowed disabled:opacity-60"
+                            className="min-h-9 whitespace-nowrap rounded-lg border border-white/15 bg-white/[0.04] px-2 py-1 text-[10px] font-medium text-zinc-300 transition hover:border-white/25 hover:bg-white/[0.08] hover:text-white disabled:cursor-not-allowed disabled:opacity-60"
                             onClick={(event) => {
                               event.stopPropagation();
                               setEditingChatId(chat.id);
@@ -465,7 +466,7 @@ export function Sidebar({
                             Edit
                           </button>
                           <button
-                            className="rounded-lg border border-red-500/20 bg-red-500/5 px-2 py-1 text-[10px] font-medium text-red-200 transition hover:border-red-400/40 hover:bg-red-500/10 hover:text-white"
+                            className="min-h-9 whitespace-nowrap rounded-lg border border-red-500/20 bg-red-500/5 px-2 py-1 text-[10px] font-medium text-red-200 transition hover:border-red-400/40 hover:bg-red-500/10 hover:text-white"
                             onClick={(event) => {
                               event.stopPropagation();
                               void onDeleteChat(chat);
@@ -474,6 +475,7 @@ export function Sidebar({
                           >
                             Delete
                           </button>
+                          </>)}
                         </div>
                       );
                     })}
