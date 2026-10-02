@@ -53,6 +53,23 @@ export function withWebsiteImages(params: ChatGenerateParams, website: WebsiteEv
   return images.length ? { ...params, images: [...(params.images ?? []), ...images] } : params;
 }
 
+
+export function browserResearchEvidence(
+  website: WebsiteEvidence,
+  query: string,
+): ResearchEvidenceBundle {
+  return {
+    kind: "web",
+    retrievedBy: { provider: "katie", modelId: "rendered-browser-capture" },
+    query,
+    summary:
+      "Katie directly inspected the rendered website in its browser capture. No external research model contribution was required for these observations.",
+    sources: website.pages.map((page) => ({ url: page.url, title: page.title || undefined })),
+    retrievedAt: website.capturedAt,
+    website,
+  };
+}
+
 export function mergeResearchEvidence(
   response: { text: string; researchEvidence?: ResearchEvidenceBundle },
   retrievedBy: ResearchEvidenceBundle["retrievedBy"],
