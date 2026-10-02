@@ -28,10 +28,10 @@ const DEFAULT_MAX_CONTRIBUTION_CHARS = 12_000;
 const DEFAULT_MAX_TOTAL_CONTRIBUTION_CHARS = 48_000;
 const DEFAULT_PARTICIPANT_TIMEOUT_MS = 120_000;
 const DEFAULT_RESEARCH_TIMEOUT_MS = 180_000;
-const DEFAULT_MAX_TOTAL_DURATION_MS = 240_000;
+const DEFAULT_MAX_TOTAL_DURATION_MS = 770_000;
+const FINAL_SYNTHESIS_TIMEOUT_MS = 180_000;
+const ROUTING_RESERVE_MS = 15_000;
 const MIN_CONTROL_TIME_MS = 5_000;
-const MIN_LEAD_CONTROL_TIME_MS = 45_000;
-const MIN_RESEARCH_RETRY_TIME_MS = 45_000;
 const MAX_HELPER_CONTROL_PASSES = 3;
 const MAX_HELPER_CANDIDATE_ATTEMPTS = 3;
 const MAX_RESEARCH_CANDIDATE_ATTEMPTS = 2;
@@ -219,18 +219,19 @@ export async function runAdaptiveCollaboration(
     options.maxTotalDurationMs ?? DEFAULT_MAX_TOTAL_DURATION_MS,
   );
   const collaborationStartedAt = Date.now();
-  const finalSynthesisReserveMs = Math.min(
-    75_000,
-    Math.max(45_000, Math.floor(maxTotalDurationMs / 4)),
+  // Every retry shares the same request deadline; rerouting cannot reset it.
+  const executionDeadlineMs = Math.min(
+    collaborationStartedAt + maxTotalDurationMs,
+    options.executionDeadlineMs ?? Infinity,
   );
-  const remainingTotalMs = () =>
-    Math.max(0, maxTotalDurationMs - (Date.now() - collaborationStartedAt));
+  const finalSynthesisReserveMs = FINAL_SYNTHESIS_TIMEOUT_MS * 2 + ROUTING_RESERVE_MS;
+  const remainingTotalMs = () => Math.max(0, executionDeadlineMs - Date.now());
   const remainingBeforeFinalMs = () =>
     Math.max(0, remainingTotalMs() - finalSynthesisReserveMs);
 
   const resumed = options.resumeState?.requestId === options.requestId ? options.resumeState : undefined;
-  const minimumLeadControlMs = Math.min(participantTimeoutMs, MIN_LEAD_CONTROL_TIME_MS);
-  const minimumFinalTimeMs = Math.min(participantTimeoutMs * 2, MIN_LEAD_CONTROL_TIME_MS, maxTotalDurationMs);
+  const minimumLeadControlMs = participantTimeoutMs;
+  const minimumFinalTimeMs = FINAL_SYNTHESIS_TIMEOUT_MS;
   const lead = participant(options.leadProvider, options.leadModelId);
   const trace: CollaborationTraceEvent[] = [];
   const contributions: CollaborationContribution[] = [...(resumed?.contributions ?? [])];
@@ -312,7 +313,7 @@ export async function runAdaptiveCollaboration(
     params: ChatGenerateParams,
     label: string,
     timeoutMs = participantTimeoutMs,
-    minimumTimeMs = MIN_CONTROL_TIME_MS,
+    minimumTimeMs = timeoutMs,
   ): Promise<ProviderResponse> => {
     const remaining = remainingBeforeFinalMs();
     if (remaining < minimumTimeMs) {
@@ -418,9 +419,7 @@ export async function runAdaptiveCollaboration(
       candidateAttempt += 1
     ) {
       const minimumTimeNeeded =
-        request.capability === "research" && candidateAttempt > 1
-          ? MIN_RESEARCH_RETRY_TIME_MS
-          : MIN_CONTROL_TIME_MS;
+        (request.capability === "research" ? researchTimeoutMs : participantTimeoutMs) + ROUTING_RESERVE_MS;
       if (remainingBeforeFinalMs() < minimumTimeNeeded) {
         await emit({
           type: "limit_reached",
@@ -861,7 +860,7 @@ export async function runAdaptiveCollaboration(
   let synthesisModelId = options.leadModelId;
 
   checkpoint();
-  if (controlFailure && options.selectReplacementLead) {
+  if (controlFailure && options.selectReplacementLead && remainingTotalMs() >= minimumFinalTimeMs + ROUTING_RESERVE_MS) {
     const replacement = await options.selectReplacementLead({
       requestId: options.requestId, failedLead: lead, error: controlFailure,
       usedParticipants: [...usedParticipants.values()], contributions: [...contributions],
@@ -907,13 +906,7 @@ export async function runAdaptiveCollaboration(
       "final-synthesis",
     );
 
-    // When enough time remains, keep a meaningful synthesis window for failover.
-    const attemptBudget = options.selectReplacementLead && remaining >= MIN_LEAD_CONTROL_TIME_MS * 2
-      ? remaining - MIN_LEAD_CONTROL_TIME_MS : remaining;
-    const finalTimeoutMs = Math.max(
-      MIN_CONTROL_TIME_MS,
-      Math.min(participantTimeoutMs * 2, attemptBudget),
-    );
+    const finalTimeoutMs = FINAL_SYNTHESIS_TIMEOUT_MS;
 
     let bufferedText = "";
     const result = provider.generateStream
@@ -963,7 +956,8 @@ export async function runAdaptiveCollaboration(
         detail: error instanceof Error ? error.message : String(error),
       });
 
-      if (!options.selectReplacementLead || synthesisAttempt >= 2) {
+      if (!options.selectReplacementLead || synthesisAttempt >= 2 ||
+          remainingTotalMs() < minimumFinalTimeMs + ROUTING_RESERVE_MS) {
         break;
       }
 

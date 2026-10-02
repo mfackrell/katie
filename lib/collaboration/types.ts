@@ -138,6 +138,7 @@ export type CollaborationEngineOptions = {
   participantTimeoutMs?: number;
   researchTimeoutMs?: number;
   maxTotalDurationMs?: number;
+  executionDeadlineMs?: number;
   prepareParticipantParams?: (
     params: ChatGenerateParams,
     participant: CollaborationParticipant,

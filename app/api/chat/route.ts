@@ -581,6 +581,7 @@ async function loadRepoGenerationContext(activeRepo: ActiveRepoContext): Promise
 }
 
 export async function POST(request: NextRequest) {
+  const executionDeadlineMs = Date.now() + (maxDuration - 30) * 1_000;
   let trackedRequestId: string | null = null;
   try {
     const payload = await parseIncomingPayload(request);
@@ -1305,6 +1306,7 @@ export async function POST(request: NextRequest) {
     }
 
     const collaborationConfig = getCollaborationConfig();
+    const collaborationDeadlineMs = Math.min(executionDeadlineMs, Date.now() + collaborationConfig.maxTotalDurationMs);
     const collaborationEnabledForRequest = storedWebsite.fresh || shouldUseAdaptiveCollaboration({
       message,
       intent: resolvedRequestIntent ?? null,
@@ -1715,6 +1717,7 @@ ${chunkWorkflowSummary}`;
                         participantTimeoutMs: collaborationConfig.participantTimeoutMs,
                         researchTimeoutMs: collaborationConfig.researchTimeoutMs,
                         maxTotalDurationMs: collaborationConfig.maxTotalDurationMs,
+                        executionDeadlineMs: collaborationDeadlineMs,
                       });
 
                       emitChunk({
@@ -1946,7 +1949,8 @@ ${chunkWorkflowSummary}`;
                 });
               },
               rerouteOnError: async ({ attempt, error }) => {
-                if (!resolvedRoutingIntentForReroute || errorRerouteCount >= maxErrorReroutes) {
+                if ((collaborationEnabledForRequest && collaborationDeadlineMs - Date.now() < 195_000) ||
+                    !resolvedRoutingIntentForReroute || errorRerouteCount >= maxErrorReroutes) {
                   return null;
                 }
 
