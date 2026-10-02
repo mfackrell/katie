@@ -1014,15 +1014,15 @@ function reviewHelpers() {
   };
 }
 
-test("130-second research plus 30-second critique skips short lead control and retains evidence", async (t) => {
+test("170-second research plus 110-second critique skips short lead control and retains evidence", async (t) => {
   let clock = 0;
   t.mock.method(Date, "now", () => clock);
   const lead = fakeProvider({ name: "anthropic", modelId: "lead", controlResponses: [], finalText: "Review completed." });
   const { research, reviewer } = reviewHelpers();
   const originalResearch = research.generate.bind(research);
-  research.generate = async (params) => { clock += 130_000; return originalResearch(params); };
+  research.generate = async (params) => { clock += 170_000; return originalResearch(params); };
   const originalReview = reviewer.generate.bind(reviewer);
-  reviewer.generate = async (params) => { clock += 30_000; return originalReview(params); };
+  reviewer.generate = async (params) => { clock += 110_000; return originalReview(params); };
   let captures = 0;
   const result = await runAdaptiveCollaboration({ requestId: "slow-review", leadProvider: lead, leadModelId: "lead",
     providers: [lead, research, reviewer], params: marketingParams,
@@ -1030,7 +1030,7 @@ test("130-second research plus 30-second critique skips short lead control and r
     selectHelper: async ({ request }) => request.capability === "research" ? { provider: research, modelId: "research" } : { provider: reviewer, modelId: "reviewer" },
   });
   assert.equal(lead.calls.length, 1, "only final synthesis runs, no doomed control pass");
-  assert.match(result.trace.find((event) => event.type === "limit_reached")?.detail ?? "", /minimum=45000ms/);
+  assert.match(result.trace.find((event) => event.type === "limit_reached")?.detail ?? "", /minimum=120000ms/);
   assert.equal(research.calls.length, 1);
   assert.equal(reviewer.calls.length, 1);
   assert.equal(captures, 1);
@@ -1079,7 +1079,7 @@ test("final-synthesis timeout leaves time for replacement instead of consuming a
   t.mock.timers.enable({ apis: ["Date", "setTimeout"], now: 0 });
   const lead = fakeProvider({ name: "anthropic", modelId: "lead", controlResponses: [JSON.stringify({ action: "ready", synthesisBrief: "Use evidence", conflicts: [] })] });
   lead.generateStream = async () => {
-    queueMicrotask(() => t.mock.timers.tick(195_000));
+    queueMicrotask(() => t.mock.timers.tick(180_000));
     return new Promise<ProviderResponse>(() => {});
   };
   const replacement = fakeProvider({ name: "google", modelId: "replacement", controlResponses: [], finalText: "Recovered after synthesis timeout." });
@@ -1087,9 +1087,9 @@ test("final-synthesis timeout leaves time for replacement instead of consuming a
     providers: [lead, replacement], params: baseParams, selectHelper: async () => null,
     selectReplacementLead: async () => ({ provider: replacement, modelId: "replacement" }),
   });
-  assert.match(result.trace.find((event) => event.type === "lead_failed")?.detail ?? "", /timed out after 195000ms/);
+  assert.match(result.trace.find((event) => event.type === "lead_failed")?.detail ?? "", /timed out after 180000ms/);
   assert.equal(result.result.provider, "google");
-  assert.equal(result.metadata.durationMs, 195_000);
+  assert.equal(result.metadata.durationMs, 180_000);
 });
 
 test("outer reroute resumes synthesis from checkpoint without repeating any completed work", async () => {
@@ -1150,4 +1150,74 @@ test("resume checkpoints cannot leak website evidence into a different user turn
   assert.equal(result.trace.some((event) => event.type === "collaboration_resumed"), false);
   assert.equal(lead.calls.at(-1)?.images, undefined);
   assert.doesNotMatch(lead.calls.at(-1)!.user, /Foreign strategy|Foreign notes|Book a call/);
+});
+
+test("slow website review retains full critique and final backup windows", async (t) => {
+  t.mock.timers.enable({ apis: ["Date", "setTimeout"], now: 0 });
+  const { research, reviewer } = reviewHelpers();
+  const getResearch = research.generate.bind(research);
+  research.generate = async (params) => { t.mock.timers.tick(163_000); return getResearch(params); };
+  const getReview = reviewer.generate.bind(reviewer);
+  reviewer.generate = async (params) => { t.mock.timers.tick(60_000); return getReview(params); };
+  const lead = fakeProvider({ name: "anthropic", modelId: "lead", controlResponses: [JSON.stringify({ action: "ready", synthesisBrief: "Use evidence", conflicts: [] })] });
+  lead.generateStream = async () => {
+    queueMicrotask(() => t.mock.timers.tick(180_000));
+    return new Promise<ProviderResponse>(() => {});
+  };
+  const backup = fakeProvider({ name: "google", modelId: "backup", controlResponses: [], finalText: "Recovered with evidence." });
+  const finish = backup.generateStream!.bind(backup);
+  backup.generateStream = async (params, handlers) => { t.mock.timers.tick(155_000); return finish(params, handlers); };
+  const result = await runAdaptiveCollaboration({ requestId: "slow-full-backup", leadProvider: lead, leadModelId: "lead",
+    providers: [lead, research, reviewer, backup], params: marketingParams,
+    collectWebsiteEvidence: async () => capturedWebsite,
+    selectHelper: async ({ request }) => request.capability === "research" ? { provider: research, modelId: "research" } : { provider: reviewer, modelId: "reviewer" },
+    selectReplacementLead: async () => ({ provider: backup, modelId: "backup" }),
+  });
+  assert.equal(result.result.text, "Recovered with evidence.");
+  assert.equal(reviewer.calls.length, 1);
+  assert.match(backup.calls[0].user, /Independent critique/);
+  assert.deepEqual(backup.calls[0].images, [capturedWebsite.pages[0].views[0].screenshot!.dataUrl]);
+  assert.equal(result.trace.filter(event => event.type === "lead_failed").length, 1);
+  assert.equal(result.metadata.durationMs, 558_000);
+});
+
+test("exhausted request deadline never selects a doomed replacement or resets on resume", async (t) => {
+  t.mock.timers.enable({ apis: ["Date", "setTimeout"], now: 0 });
+  const lead = fakeProvider({ name: "anthropic", modelId: "lead", controlResponses: [], finalText: "unused" });
+  lead.generateStream = async () => {
+    queueMicrotask(() => t.mock.timers.tick(180_000));
+    return new Promise<ProviderResponse>(() => {});
+  };
+  let saved: CollaborationResumeState | undefined;
+  const options = { requestId: "fixed-deadline", leadProvider: lead, leadModelId: "lead", providers: [lead], params: baseParams,
+    executionDeadlineMs: 190_000,
+    selectHelper: async () => null,
+    selectReplacementLead: async () => { assert.fail("No time to run a replacement"); },
+    onCheckpoint: (state: CollaborationResumeState) => { saved = state; },
+  };
+  await assert.rejects(runAdaptiveCollaboration(options), /timed out/);
+  await assert.rejects(runAdaptiveCollaboration({ ...options, resumeState: saved }), /insufficient execution time/);
+});
+
+test("research timeout gets a different helper with a full research window", async (t) => {
+  t.mock.timers.enable({ apis: ["Date", "setTimeout"], now: 0 });
+  const lead = fakeProvider({ name: "anthropic", modelId: "lead", controlResponses: [], finalText: "Used backup research." });
+  const failed = fakeProvider({ name: "grok", modelId: "failed-research", controlResponses: [] });
+  failed.generate = async () => {
+    queueMicrotask(() => t.mock.timers.tick(180_000));
+    return new Promise<ProviderResponse>(() => {});
+  };
+  const backup = fakeProvider({ name: "openai", modelId: "backup-research", controlResponses: ["Recovered live evidence."] });
+  const getResearch = backup.generate.bind(backup);
+  backup.generate = async (params) => { t.mock.timers.tick(163_000); return getResearch(params); };
+  let selections = 0;
+  const result = await runAdaptiveCollaboration({ requestId: "research-backup", leadProvider: lead, leadModelId: "lead",
+    providers: [lead, failed, backup], params: marketingParams,
+    collectWebsiteEvidence: async () => capturedWebsite,
+    selectHelper: async () => ++selections === 1 ? { provider: failed, modelId: "failed-research" } : { provider: backup, modelId: "backup-research" },
+  });
+  assert.equal(selections, 2);
+  assert.equal(backup.calls.length, 1);
+  assert.match(lead.calls[0].user, /Recovered live evidence/);
+  assert.equal(result.trace.filter(event => event.type === "helper_retrying").length, 1);
 });

@@ -63,9 +63,9 @@ export function getCollaborationConfig(): CollaborationConfig {
     ),
     maxTotalDurationMs: boundedInteger(
       process.env.KATIE_COLLAB_MAX_TOTAL_DURATION_MS,
-      240_000,
+      770_000,
       30_000,
-      280_000,
+      770_000,
     ),
   };
 }
