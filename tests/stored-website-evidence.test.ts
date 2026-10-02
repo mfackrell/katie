@@ -12,7 +12,7 @@ function fixture() {
 test("website source survives a separate turn; summary identifies real prior inspection",async()=>{
  const f=fixture(); await f.store.save(actor,chat,request,evidence);
  const r=await f.store.restore(actor,chat,"you are too focused on the website",[]);
- assert.match(r.context,/recorded earlier inspection/); assert.match(r.context,/Acme/); assert.match(r.context,/4500/); assert.equal(r.images.length,0);
+ assert.match(r.context,/recorded earlier inspection/); assert.match(r.context,/"renderedPages":1/); assert.match(r.context,/"screenshots":1/); assert.match(r.context,/grok:grok-4.7/); assert.match(r.context,/Acme/); assert.match(r.context,/4500/); assert.equal(r.images.length,0);
  assert.equal(f.downloads.filter(p=>!p.endsWith('.summary.json')).length,0);
 });
 test("detailed follow-up reopens exact HTML and screenshot; refresh uses historical summary only",async()=>{
