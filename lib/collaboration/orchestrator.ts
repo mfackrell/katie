@@ -20,7 +20,7 @@ import { collaborationCapabilityToIntent } from "@/lib/collaboration/routing";
 import type { ChatGenerateParams, LlmProvider, ProviderResponse, ResearchEvidenceBundle } from "@/lib/providers/types";
 
 import { collectWebsiteEvidence, websiteReviewUrls } from "@/lib/research/website-evidence";
-import { formatResearchEvidence, mergeResearchEvidence, withWebsiteImages, websiteImages, websiteEvidenceStats, WEBSITE_REVIEW_INSTRUCTION } from "@/lib/research/shared-evidence";
+import { browserResearchEvidence, formatResearchEvidence, mergeResearchEvidence, withWebsiteImages, websiteImages, websiteEvidenceStats, WEBSITE_REVIEW_INSTRUCTION } from "@/lib/research/shared-evidence";
 
 const DEFAULT_MAX_DELEGATIONS = 5;
 const DEFAULT_MAX_DEPTH = 2;
@@ -36,7 +36,7 @@ const MIN_RESEARCH_RETRY_MS = 60_000;
 const MIN_CONTROL_TIME_MS = 5_000;
 const MAX_HELPER_CONTROL_PASSES = 3;
 const MAX_HELPER_CANDIDATE_ATTEMPTS = 3;
-const MAX_RESEARCH_CANDIDATE_ATTEMPTS = 2;
+const MAX_RESEARCH_CANDIDATE_ATTEMPTS = 6;
 
 function nowIso(): string {
   return new Date().toISOString();
@@ -425,6 +425,61 @@ export async function runAdaptiveCollaboration(
     const nestedContributions: CollaborationContribution[] = [];
     const helperNotes: string[] = [];
     let lastFailureDetail = "";
+    const researchCapture =
+      request.capability === "research" ? collectWebsite() : undefined;
+
+    const useRenderedBrowserFallback = async (
+      reason: string,
+    ): Promise<CollaborationContribution | null> => {
+      if (!researchCapture) return null;
+
+      const website = await researchCapture;
+      sharedWebsite = website;
+      const usable = Boolean(
+        website?.pages.some(
+          (page) => page.views.length > 0 || page.html.trim().length > 0,
+        ),
+      );
+      if (!website || !usable) return null;
+
+      const evidence = browserResearchEvidence(website, options.params.user);
+      const helper: CollaborationParticipant = {
+        provider: requester.provider,
+        modelId: "katie-rendered-browser",
+      };
+      const contribution: CollaborationContribution = {
+        id: crypto.randomUUID(),
+        depth,
+        requester,
+        helper,
+        task: clip(request.task, 2_000),
+        capability: "research",
+        answer: evidence.summary,
+        confidence: websiteImages(website).length ? "high" : "medium",
+        caveats: [
+          "External research helpers were unavailable; this evidence comes from Katie's direct rendered browser inspection.",
+          reason,
+        ],
+        researchEvidence: evidence,
+        durationMs: 0,
+      };
+
+      completedHelpers.set(participantKey(helper), helper);
+      await options.onResearchEvidence?.(evidence);
+      await emit({
+        type: "research_evidence_collected",
+        depth,
+        delegationIndex,
+        requester,
+        helper,
+        capability: "research",
+        taskPreview: compactTaskPreview(request.task),
+        detail:
+          "External research helper failed, but Katie retained its independent rendered browser capture as verified fallback evidence; " +
+          websiteEvidenceStats(website),
+      });
+      return contribution;
+    };
 
     const candidateAttemptLimit =
       request.capability === "research"
@@ -453,6 +508,11 @@ export async function runAdaptiveCollaboration(
           taskPreview: compactTaskPreview(request.task),
           detail: "Helper retry stopped because Katie reserved the remaining time for final synthesis.",
         });
+        if (request.capability === "research") {
+          return useRenderedBrowserFallback(
+            "Additional external research retries were skipped to preserve final-synthesis time.",
+          );
+        }
         return null;
       }
 
@@ -479,6 +539,9 @@ export async function runAdaptiveCollaboration(
           taskPreview: compactTaskPreview(request.task),
           detail,
         });
+        if (request.capability === "research") {
+          return useRenderedBrowserFallback(detail);
+        }
         return null;
       }
 
@@ -551,8 +614,8 @@ export async function runAdaptiveCollaboration(
             "helper-control",
           );
 
-          // Browser capture runs alongside live retrieval and is reused across retries.
-          const capture = isResearchPass ? collectWebsite() : undefined;
+          // Browser capture runs independently of provider retrieval and survives helper failures.
+          const capture = isResearchPass ? researchCapture : undefined;
           const helperTimeoutMs =
             request.capability === "research"
               ? candidateAttempt > 1
@@ -701,11 +764,19 @@ export async function runAdaptiveCollaboration(
         });
 
         if (candidateAttempt >= candidateAttemptLimit) {
+          if (request.capability === "research") {
+            return useRenderedBrowserFallback(lastFailureDetail);
+          }
           return null;
         }
       }
     }
 
+    if (request.capability === "research") {
+      return useRenderedBrowserFallback(
+        lastFailureDetail || "No external research helper completed.",
+      );
+    }
     return null;
   };
 
