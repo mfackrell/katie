@@ -195,3 +195,9 @@ A marketing classification alone does not trigger a website inspection from a hi
 Known music, speech-only, transcription, embedding, moderation, and video-generation model families are excluded from conversational routing even if discovery labels them text-capable. If no compatible model remains, routing reports failure rather than choosing an incompatible model.
 
 Terminal chat failures are saved as assistant messages and linked to the failed request. The server sends the error event and closes the stream normally so queued error events are delivered. Reconnection and refresh retain the failure message; the UI uses its saved ID to avoid duplicates.
+
+## Universal completion standard
+
+Every actor receives the same completion standard through assembled context. Collaboration helpers check the latest request, constraints, completeness, internal consistency, evidence and usability, and contribute concrete corrections or draft components. Lead control and final synthesis carry the same standard; final synthesis incorporates supported corrections and performs its own completion check even without a successful reviewer. This does not add an extra model call or require collaboration for simple requests. Pure research helpers remain focused on factual retrieval.
+
+Missing business facts are not invented. Katie finishes supported portions, distinguishes proposed terms from established facts, and identifies only material open decisions. Assessment-only and brainstorming requests keep their requested scope. This is a shared instruction standard, not a guarantee that model output is error-free.

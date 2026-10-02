@@ -690,7 +690,7 @@ export async function runAdaptiveCollaboration(
     const independentReview = await resolveHelper(
       {
         task:
-          "Independently review the complete shared live website evidence and rendered screenshots for marketing, positioning, messaging, user experience, trust, offer clarity, conversion, layout, typography, colors, spacing, imagery, navigation, desktop/mobile responsiveness and visual polish. Challenge weak assumptions and identify the highest-impact findings. State any visual coverage limitations.",
+          "Review what is needed to complete the user's current marketing deliverable using the shared website evidence and screenshots. If the user requested a website audit, assess positioning, messaging, trust, conversion, layout and desktop/mobile presentation. If they requested copy, packages or a plan, provide usable draft components and concrete corrections for that deliverable instead of another broad audit. Check completeness, scope consistency, evidence and the latest user constraints. State only material coverage limitations.",
         capability: "critique",
         reason:
           "Marketing review benefits from an independent analytical perspective separate from the retrieval model and the lead.",
