@@ -9,6 +9,7 @@ import { buildImageReference, imageFileFromDataUrl } from "../lib/uploads/image-
 import { sampleAttachmentText } from "../lib/uploads/attachment-observations";
 import { parseTextFiles } from "../lib/uploads/parse-text-files";
 import type { FileReference } from "../lib/providers/types";
+import type { Message } from "../lib/types/chat";
 
 const doc: ConversationAttachment = { id: "11111111-1111-4111-8111-111111111111", fileName: "plan.docx", mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document", observedSummary: "A warehouse relocation proposal comparing Harbor and Ridge sites, with lease costs and moving schedules.", summaryCoverage: "full", createdAt: "2020-01-01" };
 const sheet: ConversationAttachment = { ...doc, id: "22222222-2222-4222-8222-222222222222", fileName: "budget.xlsx", mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", observedSummary: "Forecast with Revenue and Expenses sheets; quarter ending September 2026." };
@@ -111,7 +112,7 @@ test("video continuity never selects stale, ambiguous, cross-chat, or unrelated 
       content: "I inspected the clip.", createdAt: "2026-10-08T22:24:30Z" },
   ];
   const emptySelector = async () => ({ selections: [] });
-  const cases = [
+  const cases: Array<[string, Message[], ConversationAttachment[], ConversationAttachment[]]> = [
     ["New topic: help me write a cover letter", history, [video], []],
     ["What time is it?", history, [video], []],
     ["Write me a note", history, [video], []],
@@ -122,7 +123,7 @@ test("video continuity never selects stale, ambiguous, cross-chat, or unrelated 
         content: "Tell me about something new", createdAt: "2026-10-08T22:25:00Z" },
       { id: "a2", chatId: "chat-a", role: "assistant" as const,
         content: "New subject.", createdAt: "2026-10-08T22:25:05Z" }], [video], []],
-  ] as const;
+  ];
   for (const [message, messages, catalog, expected] of cases) {
     const choice = await selectStoredAttachments(message, [...catalog], [...messages], emptySelector);
     assert.deepEqual(choice.selections, expected, message);
