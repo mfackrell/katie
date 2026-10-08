@@ -294,16 +294,22 @@ export async function uploadFilesDirect(
       uploadId = prepared.uploadId;
       stage = "transfer";
       if (isVideo) {
-        for (let index = 0; index < chunkCount; index++) {
-          chunkIndex = index;
-          if (completedChunks.has(index)) continue;
+        // Supabase stores each signed chunk by index, so they can arrive in any order.
+        // A bounded adaptive work queue prevents one stalled request from blocking
+        // unrelated chunks. Never launch all chunks together (up to 400 per video).
+        const missingIndexes = Array.from({ length: chunkCount }, (_, index) => index)
+          .filter(index => !completedChunks.has(index));
+        let concurrency = 3;
+        let healthyStreak = 0;
+
+        const uploadPart = async (index: number): Promise<{ healthy: boolean }> => {
           const offset = index * chunkBytes;
           const slice = file.slice(offset, Math.min(offset + chunkBytes, file.size));
-          // Encode once for this chunk, not again on each network retry.
+          // Encode once per chunk, even when one worker retries multiple times.
           const data = await withUploadDeadline(`Encoding video part ${index + 1}`, 15_000,
             async () => videoSliceAsBase64(slice));
           const uploadBody = JSON.stringify({ uploadToken: prepared.uploadToken, index, data });
-          let uploaded = false;
+          let encounteredFailure = false;
           for (let attempt = 1; attempt <= 3; attempt++) {
             const started = Date.now();
             try {
@@ -313,21 +319,26 @@ export async function uploadFilesDirect(
                   headers: { "Content-Type": "application/json" }, body: uploadBody,
                 }));
               });
+              const durationMs = Date.now() - started;
               await logChunkAttempt(fetcher, {
-                uploadId, chunkIndex: index, attempt, durationMs: Date.now() - started,
+                uploadId, chunkIndex: index, attempt, durationMs,
                 encodedBytes: data.length, transport, outcome: "success"
               });
-              uploaded = true;
-              break;
+              return { healthy: !encounteredFailure && durationMs < 8_000 };
             } catch (error) {
+              encounteredFailure = true;
+              // Back off immediately. Already-running requests finish independently;
+              // newly scheduled requests respect the reduced worker count.
+              concurrency = Math.max(2, concurrency - 1);
+              healthyStreak = 0;
               await logChunkAttempt(fetcher, {
                 uploadId, chunkIndex: index, attempt, durationMs: Date.now() - started,
                 encodedBytes: data.length, transport, outcome: attemptOutcome(error),
                 ...(error instanceof UploadHttpError ? { httpStatus: error.status } : {}),
                 detail: error instanceof Error ? error.message : "Unknown video transport error",
               });
-              // The server may have stored a chunk before the browser lost its
-              // acknowledgement. Probe after all network/timeout failures.
+              // The server might have committed the part but its acknowledgement
+              // vanished. A signed status check avoids duplicate uploads.
               const shouldCheckSaved = !(error instanceof UploadHttpError) || error.status >= 500;
               if (shouldCheckSaved) {
                 onStatus(`Video part ${index + 1} interrupted; checking saved progress…`);
@@ -335,23 +346,67 @@ export async function uploadFilesDirect(
                   const saved = await status(prepared.uploadToken);
                   if (saved.uploadId === prepared.uploadId && saved.chunkCount === chunkCount &&
                       saved.uploadedIndexes.includes(index)) {
-                    uploaded = true;
-                    break;
+                    return { healthy: false };
                   }
-                } catch { /* Bounded status check; retry the original request. */ }
+                } catch { /* Status checks are bounded; preserve the independent retry. */ }
               }
               if (attempt === 3) {
                 const detail = error instanceof Error ? error.message : String(error);
                 throw new Error(`Video upload failed at part ${index + 1}/${chunkCount}: ${detail}. Saved chunks can be resumed by selecting this file again.`);
               }
-              onStatus(`Retrying ${file.name}: part ${index + 1}/${chunkCount} (attempt ${attempt + 1}/3)…`);
+              onStatus(`Retrying ${file.name}: part ${index + 1}/${chunkCount} (attempt ${attempt + 1}/3, ${concurrency} parallel)…`);
               await new Promise(resolve => setTimeout(resolve, retryDelayMs * attempt));
             }
           }
-          if (!uploaded) throw new Error(`Video upload stopped at part ${index + 1}.`);
-          completedChunks.add(index);
-          onStatus(`Uploading ${file.name}: ${Math.round((completedChunks.size / chunkCount) * 100)}%…`);
-        }
+          throw new Error(`Video upload stopped at part ${index + 1}.`);
+        };
+
+        await new Promise<void>((resolve, reject) => {
+          let next = 0;
+          let active = 0;
+          let stopped = false;
+          let firstFailure: Error | null = null;
+
+          const dispatch = () => {
+            if (stopped) return;
+            while (!firstFailure && active < concurrency && next < missingIndexes.length) {
+              const index = missingIndexes[next++];
+              active++;
+              void uploadPart(index).then(({ healthy }) => {
+                completedChunks.add(index);
+                if (healthy) {
+                  healthyStreak++;
+                  // Increase 3 -> 4 only after sustained fast, error-free transfers.
+                  // If previously reduced to 2, recover cautiously through 3.
+                  if (healthyStreak >= 6 && concurrency < 4) {
+                    concurrency++;
+                    healthyStreak = 0;
+                    console.info("[Upload Client] video concurrency increased", { uploadId, concurrency });
+                  }
+                } else {
+                  healthyStreak = 0;
+                }
+                onStatus(`Uploading ${file.name}: ${Math.round((completedChunks.size / chunkCount) * 100)}% (${concurrency} parallel)…`);
+              }).catch(error => {
+                if (!firstFailure) {
+                  chunkIndex = index;
+                  firstFailure = error instanceof Error ? error : new Error(String(error));
+                }
+              }).finally(() => {
+                active--;
+                dispatch();
+              });
+            }
+            // On an exhausted chunk, stop scheduling new ones but let every
+            // in-flight worker settle before reporting failure or finalizing.
+            if (active === 0 && (firstFailure || next >= missingIndexes.length)) {
+              stopped = true;
+              if (firstFailure) reject(firstFailure);
+              else resolve();
+            }
+          };
+          dispatch();
+        });
       } else {
         onStatus(`Uploading ${file.name}…`);
         await readUploadResponse(await fetcher(prepared.uploadUrl, {
