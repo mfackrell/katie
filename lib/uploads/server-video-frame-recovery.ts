@@ -86,11 +86,18 @@ export async function extractFramesFromPrivateVideo(
         video.load();
       }
     }, media);
-    const frames = await Promise.race([
-      extraction,
-      new Promise<never>((_, reject) => setTimeout(() => reject(new Error("Server video extraction exceeded 55 seconds.")), DECODE_TIMEOUT_MS)),
-    ]);
-    return validateVideoFallbackFrames(frames);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const frames = await Promise.race([
+        extraction,
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new Error("Server video extraction exceeded 55 seconds.")), DECODE_TIMEOUT_MS);
+        }),
+      ]);
+      return validateVideoFallbackFrames(frames);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
   } finally {
     await browser.close().catch(() => undefined);
   }
