@@ -172,11 +172,12 @@ export async function uploadFilesDirect(
       }));
       if (!Array.isArray(payload.uploadedIndexes) || typeof payload.chunkCount !== "number" ||
           typeof payload.uploadId !== "string") throw new Error("Invalid saved upload progress.");
-      const indexes = payload.uploadedIndexes;
+      const indexes: unknown[] = payload.uploadedIndexes;
+      const chunkCount = payload.chunkCount as number;
       if (!indexes.every(value => typeof value === "number" && Number.isSafeInteger(value) &&
-        value >= 0 && value < payload.chunkCount)) throw new Error("Invalid upload progress indexes.");
+        value >= 0 && value < chunkCount)) throw new Error("Invalid upload progress indexes.");
       return { uploadId: payload.uploadId, uploadedIndexes: indexes as number[],
-        chunkCount: payload.chunkCount, complete: payload.complete === true };
+        chunkCount, complete: payload.complete === true };
     });
   };
 
