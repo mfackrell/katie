@@ -9,10 +9,13 @@ const BUCKET = "katie-attachments";
 const RETENTION_MS = 24 * 60 * 60 * 1000;
 // Below Vercel's 4.5 MB request-body limit; allows uploads without browser-to-Storage CORS.
 export const UPLOAD_RELAY_CHUNK_BYTES = 3 * 1024 * 1024;
+// New mobile transport uses small JSON requests instead of Blob request bodies.
+export const UPLOAD_JSON_CHUNK_BYTES = 2 * 1024 * 1024;
 export const uploadMetadataSchema = z.object({
   name: z.string().trim().min(1).max(255),
   type: z.string().max(128),
   size: z.number().int().positive().max(200 * 1024 * 1024),
+  transport: z.enum(["json-base64-v2"]).optional(),
 });
 const ticketSchema = uploadMetadataSchema.extend({
   id: z.string().uuid(), kind: z.enum(["upload", "reference"]), expires: z.number().int().positive(),
@@ -49,6 +52,7 @@ export function createStoredUploadService(storage: Storage, secret: string, opti
     }
   };
   const sourcePath = (ticket: Ticket) => `incoming/${ticket.id}`;
+  const chunkBytesFor = (ticket: Ticket) => ticket.transport === "json-base64-v2" ? UPLOAD_JSON_CHUNK_BYTES : UPLOAD_RELAY_CHUNK_BYTES;
   const chunkPath = (ticket: Ticket, index: number) => `chunks/${ticket.id}-${String(index).padStart(3, "0")}`;
   const referencePath = (ticket: Ticket) => `references/${ticket.id}.json`;
   const compact = (reference: FileReference, ticket: Ticket): FileReference => {
@@ -106,11 +110,12 @@ export function createStoredUploadService(storage: Storage, secret: string, opti
     // A client can only write bounded chunks to its own randomly generated incoming path.
     async uploadChunk(token: string, index: number, bytes: Uint8Array) {
       const ticket = verify(token, "upload");
-      const chunkCount = Math.ceil(ticket.size / UPLOAD_RELAY_CHUNK_BYTES);
+      const chunkBytes = chunkBytesFor(ticket);
+      const chunkCount = Math.ceil(ticket.size / chunkBytes);
       if (!Number.isSafeInteger(index) || index < 0 || index >= chunkCount) {
         throw new UploadInputError("Invalid attachment chunk index.");
       }
-      const expected = Math.min(UPLOAD_RELAY_CHUNK_BYTES, ticket.size - index * UPLOAD_RELAY_CHUNK_BYTES);
+      const expected = Math.min(chunkBytes, ticket.size - index * chunkBytes);
       if (bytes.byteLength !== expected) {
         throw new UploadInputError(`Attachment chunk ${index + 1}/${chunkCount} has the wrong size.`);
       }
@@ -120,7 +125,8 @@ export function createStoredUploadService(storage: Storage, secret: string, opti
         upsert: true, // Retry after a mobile network interruption without duplicating bytes.
       });
       if (error) throw new Error(`Unable to store attachment chunk ${index + 1}: ${error.message}`);
-      return { index, chunkCount, uploadedBytes: (index * UPLOAD_RELAY_CHUNK_BYTES) + bytes.byteLength };
+      console.info("[Upload API] stored chunk", { uploadId: ticket.id, index, chunkCount, bytes: bytes.byteLength, transport: ticket.transport ?? "binary-v1" });
+      return { index, chunkCount, uploadedBytes: (index * chunkBytes) + bytes.byteLength };
     },
     async catalog(chatId: string, scope: "chat" | "actor" = "chat"): Promise<{ initialized: boolean; attachments: ConversationAttachment[] }> {
       await ensureBucket();
@@ -241,7 +247,8 @@ export function createStoredUploadService(storage: Storage, secret: string, opti
       const ticket: Ticket = { ...metadata, id: randomUUID(), kind: "upload", expires: now() + 2 * 60 * 60 * 1000 };
       const signed = await objects.createSignedUploadUrl(sourcePath(ticket));
       if (signed.error || !signed.data) throw new Error("Unable to authorize attachment upload. Please try again.");
-      return { uploadUrl: signed.data.signedUrl, uploadToken: sign(ticket) };
+      console.info("[Upload API] prepared", { uploadId: ticket.id, bytes: ticket.size, mimeType: ticket.type, transport: ticket.transport ?? "binary-v1" });
+      return { uploadUrl: signed.data.signedUrl, uploadToken: sign(ticket), uploadId: ticket.id };
     },
     async complete(token: string): Promise<FileReference> {
       const ticket = verify(token, "upload");
@@ -252,13 +259,14 @@ export function createStoredUploadService(storage: Storage, secret: string, opti
       if (!sourceBlob) {
         // Mobile-safe relay: gather verified same-origin chunks only after all are present.
         // Keep the original intact for conversation persistence and future video replay.
-        const chunkCount = Math.ceil(ticket.size / UPLOAD_RELAY_CHUNK_BYTES);
+        const chunkBytes = chunkBytesFor(ticket);
+        const chunkCount = Math.ceil(ticket.size / chunkBytes);
         const blobs: Blob[] = [];
         const chunkPaths: string[] = [];
         for (let index = 0; index < chunkCount; index++) {
           const path = chunkPath(ticket, index);
           const part = await objects.download(path);
-          const expected = Math.min(UPLOAD_RELAY_CHUNK_BYTES, ticket.size - index * UPLOAD_RELAY_CHUNK_BYTES);
+          const expected = Math.min(chunkBytes, ticket.size - index * chunkBytes);
           if (part.error || !part.data || part.data.size !== expected) {
             if (index === 0 && !part.data) {
               throw new UploadInputError("The file upload did not finish. Please attach the file again.");

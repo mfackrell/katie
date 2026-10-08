@@ -135,18 +135,24 @@ test("iPhone video uploads stay on Katie's origin and retry failed chunks", asyn
   const fetcher: typeof fetch = async (url, init) => {
     const path = String(url);
     calls.push({ path, init });
-    if (path.endsWith("/prepare")) return Response.json({ uploadUrl: "https://storage.example/cross-origin", uploadToken: "upload-receipt" });
+    if (path.endsWith("/prepare")) {
+      assert.equal(JSON.parse(String(init?.body)).transport, "json-base64-v2");
+      return Response.json({ uploadUrl: "https://storage.example/cross-origin", uploadToken: "upload-receipt", uploadId: "11111111-1111-4111-8111-111111111111" });
+    }
     if (path.endsWith("/complete")) return Response.json({ fileReference: { ...reference, attachmentKind: "video", fileName: "clip.mov" } });
     assert.equal(path, "/api/upload/chunk", "video bytes must never go to a cross-origin signed URL");
     assert.equal(init?.method, "POST");
-    assert.equal(init?.headers && (init.headers as Record<string, string>)["x-katie-upload-token"], "upload-receipt");
-    assert.ok(init?.body instanceof Blob);
-    assert.ok((init.body as Blob).size <= 3 * 1024 * 1024);
+    assert.equal((init?.headers as Record<string, string>)["Content-Type"], "application/json");
+    const payload = JSON.parse(String(init?.body));
+    assert.equal(payload.uploadToken, "upload-receipt");
+    assert.ok([0, 1].includes(payload.index));
+    assert.ok(Buffer.from(payload.data, "base64").length <= 2 * 1024 * 1024);
+    assert.equal(Buffer.from(payload.data, "base64").toString("base64"), payload.data);
     if (transientFailure) {
       transientFailure = false;
       throw new TypeError("Network interrupted");
     }
-    return Response.json({ index: Number((init?.headers as Record<string, string>)["x-katie-chunk-index"]) });
+    return Response.json({ index: JSON.parse(String(init?.body)).index });
   };
   const refs = await uploadFilesDirect([file], message => progress.push(message), fetcher);
   assert.equal(refs[0].attachmentKind, "video");
@@ -159,7 +165,7 @@ test("iPhone video uploads stay on Katie's origin and retry failed chunks", asyn
 
 test("server verifies, reassembles, and preserves chunked videos without changing permanent attachment workflow", async () => {
   const fake = fakeStorage();
-  const size = 3 * 1024 * 1024 + 3;
+  const size = 2 * 1024 * 1024 + 3;
   let built = 0;
   const service = createStoredUploadService(fake.storage, "server-secret", {
     buildReferences: async files => {
@@ -169,8 +175,8 @@ test("server verifies, reassembles, and preserves chunked videos without changin
       return [{ ...reference, fileName: "recording.mp4", mimeType: "video/mp4", attachmentKind: "video" }];
     }
   });
-  const ticket = await service.prepare({ name: "recording.mp4", type: "video/mp4", size });
-  const first = new Uint8Array(3 * 1024 * 1024);
+  const ticket = await service.prepare({ name: "recording.mp4", type: "video/mp4", size, transport: "json-base64-v2" });
+  const first = new Uint8Array(2 * 1024 * 1024);
   first[0] = 7;
   await assert.rejects(service.uploadChunk(ticket.uploadToken, 0, new Uint8Array(1)), /wrong size/);
   await assert.rejects(service.uploadChunk(ticket.uploadToken, 2, new Uint8Array(1)), /Invalid attachment chunk index/);
@@ -186,6 +192,49 @@ test("server verifies, reassembles, and preserves chunked videos without changin
   assert.ok(![...fake.files.keys()].some(path => path.startsWith("chunks/")), "temporary chunks removed");
   assert.equal((await service.complete(ticket.uploadToken)).fileName, "recording.mp4");
   assert.equal(built, 1, "completion is idempotent");
+});
+
+test("video upload failures are diagnosed by stage without sending filenames or upload tokens", async () => {
+  const file = new File([new Uint8Array(1024)], "private-video.mov", { type: "video/quicktime" });
+  const diagnostics: Array<Record<string, unknown>> = [];
+  let attempts = 0;
+  const fetcher: typeof fetch = async (url, init) => {
+    const path = String(url);
+    if (path === "/api/upload/prepare") return Response.json({
+      uploadUrl: "https://example.storage/upload", uploadToken: "secret-ticket",
+      uploadId: "22222222-2222-4222-8222-222222222222",
+    });
+    if (path === "/api/upload/chunk") {
+      attempts++;
+      return Response.json({ error: "Transfer refused by proxy" }, { status: 403 });
+    }
+    if (path === "/api/upload/telemetry") {
+      diagnostics.push(JSON.parse(String(init?.body)));
+      return new Response(null, { status: 204 });
+    }
+    throw new Error("Unexpected request path: " + path);
+  };
+  await assert.rejects(uploadFilesDirect([file], () => {}, fetcher), /part 1\/1.*Transfer refused by proxy/);
+  assert.equal(attempts, 3);
+  assert.equal(diagnostics.length, 1);
+  assert.equal(diagnostics[0].stage, "transfer");
+  assert.equal(diagnostics[0].chunkIndex, 0);
+  assert.equal(diagnostics[0].uploadId, "22222222-2222-4222-8222-222222222222");
+  assert.ok(!JSON.stringify(diagnostics[0]).includes("private-video.mov"));
+  assert.ok(!JSON.stringify(diagnostics[0]).includes("secret-ticket"));
+});
+
+test("binary upload receipts from older tabs retain their original 3 MB chunk layout", async () => {
+  const fake = fakeStorage();
+  const size = 3 * 1024 * 1024 + 2;
+  const service = createStoredUploadService(fake.storage, "secret", {
+    buildReferences: async () => [{ ...reference, attachmentKind: "video", mimeType: "video/mp4" }]
+  });
+  const prepared = await service.prepare({ name: "old-tab.mp4", type: "video/mp4", size });
+  await service.uploadChunk(prepared.uploadToken, 0, new Uint8Array(3 * 1024 * 1024));
+  await service.uploadChunk(prepared.uploadToken, 1, new Uint8Array([1, 2]));
+  const completed = await service.complete(prepared.uploadToken);
+  assert.equal(completed.attachmentKind, "video");
 });
 
 test("video sources survive completion, persist to the chat, and renew after temporary receipts expire", async () => {
