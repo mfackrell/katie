@@ -165,10 +165,126 @@ test("iPhone video uploads stay on Katie's origin and retry failed chunks", asyn
     .map(call => call.path), ["/api/upload/prepare", ...Array(8).fill("/api/upload/chunk"), "/api/upload/complete"]);
   const uploaded = calls.filter(call => call.path === "/api/upload/chunk")
     .map(call => JSON.parse(String(call.init?.body)));
-  assert.equal(uploaded[0].data, uploaded[1].data, "retry reuses the same encoded bytes");
-  assert.deepEqual(uploaded.map(item => item.index), [0, 0, 1, 2, 3, 4, 5, 6]);
+  assert.equal(uploaded.filter(item => item.index === 0).length, 2);
+  assert.equal(uploaded.filter(item => item.index === 0)[0].data,
+    uploaded.filter(item => item.index === 0)[1].data, "retry reuses the same encoded bytes");
+  assert.deepEqual(uploaded.map(item => item.index).sort((left, right) => left - right),
+    [0, 0, 1, 2, 3, 4, 5, 6], "parallel completion does not alter chunk indexes");
   assert.ok(progress.some(message => message.includes("Retrying")));
   assert.ok(progress.some(message => message.includes("100%")));
+});
+
+
+test("video uploader starts three chunks in parallel and ramps to four after healthy transfers", async () => {
+  const chunkCount = 14;
+  const file = new File([new Uint8Array(512 * 1024 * chunkCount)], "parallel.mp4", {
+    type: "video/mp4",
+  });
+  const responses = new Map<number, () => void>();
+  const started: number[] = [];
+  const completed: number[] = [];
+  let active = 0;
+  let maxActive = 0;
+  let finalized = false;
+  const progress: string[] = [];
+  const waitUntil = async (condition: () => boolean) => {
+    for (let tries = 0; tries < 250; tries++) {
+      if (condition()) return;
+      await new Promise(resolve => setTimeout(resolve, 4));
+    }
+    assert.fail("Parallel video upload did not make expected progress.");
+  };
+  const fetcher: typeof fetch = async (url, init) => {
+    const path = String(url);
+    if (path.endsWith("/prepare")) return Response.json({
+      uploadUrl: "https://storage.example", uploadToken: "parallel-ticket",
+      uploadId: "66666666-6666-4666-8666-666666666666",
+    });
+    if (path.endsWith("/chunk")) {
+      const index = JSON.parse(String(init?.body)).index as number;
+      started.push(index);
+      active++;
+      maxActive = Math.max(active, maxActive);
+      return await new Promise<Response>(resolve => {
+        responses.set(index, () => {
+          responses.delete(index);
+          active--;
+          completed.push(index);
+          resolve(Response.json({ index }));
+        });
+      });
+    }
+    if (path.endsWith("/complete")) {
+      assert.equal(completed.length, chunkCount, "finalization must wait for every active chunk");
+      finalized = true;
+      return Response.json({ fileReference: { ...reference, attachmentKind: "video" } });
+    }
+    throw new Error("Unexpected " + path);
+  };
+  const upload = uploadFilesDirect([file], value => progress.push(value), fetcher, async () => [],
+    { resumeStorage: null });
+  await waitUntil(() => responses.size === 3);
+  assert.deepEqual(started, [0, 1, 2], "exactly three workers start without waiting for acknowledgements");
+
+  for (let done = 0; done < chunkCount; done++) {
+    await waitUntil(() => responses.size > 0);
+    const index = responses.keys().next().value as number;
+    responses.get(index)!();
+    if (done === 5) await waitUntil(() => responses.size === 4);
+  }
+  const uploaded = await upload;
+  assert.equal(uploaded.length, 1);
+  assert.equal(maxActive, 4, "healthy transfers increase concurrency to four");
+  assert.equal(finalized, true);
+  assert.deepEqual([...completed].sort((x, y) => x - y),
+    [...Array(chunkCount)].map((_, index) => index));
+  assert.ok(progress.some(value => value.includes("100%")));
+});
+
+test("a failed chunk retries independently while other chunks succeed, reducing active concurrency", async () => {
+  const chunkCount = 9;
+  const file = new File([new Uint8Array(512 * 1024 * chunkCount)], "flaky.mp4", {
+    type: "video/mp4",
+  });
+  const sent: number[] = [];
+  const succeeded = new Set<number>();
+  let badAttempts = 0;
+  const progress: string[] = [];
+  const fetcher: typeof fetch = async (url, init) => {
+    const path = String(url);
+    if (path.endsWith("/prepare")) return Response.json({
+      uploadUrl: "https://storage.example", uploadToken: "parallel-ticket",
+      uploadId: "77777777-7777-4777-8777-777777777777",
+    });
+    if (path.endsWith("/status")) return Response.json({
+      uploadId: "77777777-7777-4777-8777-777777777777",
+      chunkCount, chunkBytes: 512 * 1024, transport: "json-base64-v3",
+      uploadedIndexes: [...succeeded],
+    });
+    if (path.endsWith("/telemetry")) return new Response(null, { status: 204 });
+    if (path.endsWith("/chunk")) {
+      const index = JSON.parse(String(init?.body)).index as number;
+      sent.push(index);
+      if (index === 0 && badAttempts++ === 0) return Response.json({ error: "Transient" }, { status: 503 });
+      succeeded.add(index);
+      return Response.json({ index });
+    }
+    if (path.endsWith("/complete")) {
+      assert.equal(succeeded.size, chunkCount);
+      return Response.json({ fileReference: { ...reference, attachmentKind: "video" } });
+    }
+    throw new Error("Unexpected " + path);
+  };
+  await uploadFilesDirect([file], value => progress.push(value), fetcher, async () => [],
+    { resumeStorage: null, retryDelayMs: 40 });
+  assert.equal(badAttempts >= 2, true);
+  assert.equal(sent.filter(index => index === 0).length, 2);
+  const firstRetry = sent.lastIndexOf(0);
+  assert.ok(sent.slice(1, firstRetry).some(index => index !== 0),
+    "another chunk proceeds while chunk zero waits to retry");
+  assert.ok(progress.some(value => value.includes("2 parallel")),
+    "transport failure lowers concurrent work to two");
+  assert.equal(succeeded.size, chunkCount);
 });
 
 test("server verifies, reassembles, and preserves chunked videos without changing permanent attachment workflow", async () => {
