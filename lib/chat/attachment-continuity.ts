@@ -11,6 +11,9 @@ export interface ConversationAttachment {
   hasOriginal?: boolean;
   chatId?: string;
   actorId?: string;
+  // Origin on a saved *message* only; prevents automatically restored video
+  // context from extending its own follow-up window indefinitely.
+  conversationUsage?: "uploaded" | "explicit-reference" | "contextual";
 }
 
 export function requestedAttachmentKind(message: string): "video" | "image" | "spreadsheet" | "pdf" | "document" | null {
