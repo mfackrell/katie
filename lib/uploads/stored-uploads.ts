@@ -578,6 +578,24 @@ function getUploadService() {
 
 export const prepareStoredUpload = (input: unknown) => getUploadService().prepare(input);
 export const completeStoredUpload = (token: string, videoFrames?: unknown) => getUploadService().complete(token, videoFrames);
+export const beginStoredUploadProcessing = (token: string) => getUploadService().beginProcessing(token);
+export const getStoredUploadProcessingResult = (token: string) => getUploadService().processingResult(token);
+export const processStoredUploadInBackground = async (token: string): Promise<void> => {
+  try {
+    console.info("[Upload API] background video processing started");
+    await completeStoredUpload(token);
+    console.info("[Upload API] background video processing finished");
+  } catch (error) {
+    console.error("[Upload API] background video processing exception", {
+      message: error instanceof Error ? error.message : String(error),
+    });
+    await getUploadService().recordProcessingFailure(token, error).catch(recordError => {
+      console.error("[Upload API] unable to persist processing failure", {
+        message: recordError instanceof Error ? recordError.message : String(recordError),
+      });
+    });
+  }
+};
 export const uploadStoredChunk = (token: string, index: number, bytes: Uint8Array, subIndex?: number) => getUploadService().uploadChunk(token, index, bytes, subIndex);
 export const getStoredUploadChunkStatus = (token: string) => getUploadService().chunkStatus(token);
 export const hydrateStoredAttachments = (references: FileReference[]) =>
