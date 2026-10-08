@@ -5,6 +5,7 @@ import { persistConversationAttachment, restoreConversationAttachment, loadConve
 import { describeAttachmentEvidence } from "@/lib/uploads/attachment-observations";
 import { buildImageReference, imageFileFromDataUrl } from "@/lib/uploads/image-reference";
 import { selectStoredAttachments, loadSelectedAttachmentSources } from "@/lib/chat/attachment-selection";
+import { pruneRepeatedVideoSelections, uniqueAttachmentReferences } from "@/lib/chat/video-attachment-dedup";
 import { after, NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { assembleContext } from "@/lib/memory/assemble-context";
@@ -628,6 +629,13 @@ export async function POST(request: NextRequest) {
       return files;
     });
     const attachmentDecision = await selectStoredAttachments(message, catalog, attachmentHistory, undefined, newAttachments.map(file => file.fileName));
+    const selectedBeforePruning = attachmentDecision.selections.length;
+    attachmentDecision.selections = pruneRepeatedVideoSelections(newAttachments, attachmentDecision.selections, message);
+    if (selectedBeforePruning > attachmentDecision.selections.length) {
+      console.info("[Attachment Routing] skipped saved copy of newly attached recording", {
+        skippedCount: selectedBeforePruning - attachmentDecision.selections.length,
+      });
+    }
     if (newAttachments.length + attachmentDecision.selections.filter(file => file.mode === "source").length > 5) {
       attachmentDecision.selections = [];
       attachmentDecision.clarification = "Which files should I compare? Please choose up to five files for detailed inspection.";
@@ -649,7 +657,7 @@ export async function POST(request: NextRequest) {
       (fileReferences ?? []).filter(file => Boolean(file.storageToken))
         .map(file => [file.fileId, file.storageToken!] as const)
     );
-    const attachments = [...newAttachments, ...restored.references].map(file =>
+    const attachments = uniqueAttachmentReferences([...newAttachments, ...restored.references]).map(file =>
       file.mimeType === "application/pdf" && /\b(signature|signed|handwrit\w*|layout|colou?r|font|stamp|scan|visual|diagram|chart|figure|formatting|photo|picture|annotation)\b/i.test(message)
         ? { ...file, nativeInspectionRequired: true } : file
     );
