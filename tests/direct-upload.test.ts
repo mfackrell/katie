@@ -15,7 +15,7 @@ function fakeStorage() {
     from: () => ({
       createSignedUploadUrl: async (path: string) => { signedPaths.push(path); return { data: { signedUrl: `https://storage.example/${path}?token=scoped` }, error: null }; },
       download: async (path: string) => { downloads.push(path); return { data: files.get(path) ?? null, error: files.has(path) ? null : { message: "Not found" } }; },
-      upload: async (path: string, body: string) => { files.set(path, new Blob([body])); return { data: {}, error: null }; },
+      upload: async (path: string, body: BlobPart, options?: { contentType?: string }) => { files.set(path, new Blob([body], { type: options?.contentType || "" })); return { data: {}, error: null }; },
       remove: async (paths: string[]) => { paths.forEach(path => files.delete(path)); return { error: null }; },
       list: async (prefix: string, options: { offset?: number; limit?: number } = {}) => ({ data: [...files.keys()].filter(path => path.startsWith(prefix + "/")).sort().slice(options.offset ?? 0, (options.offset ?? 0) + (options.limit ?? 100)).map(path => ({ name: path.slice(prefix.length + 1) })), error: null }),
     }),
