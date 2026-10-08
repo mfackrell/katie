@@ -136,13 +136,13 @@ export function createStoredUploadService(storage: Storage, secret: string, opti
           throw new UploadInputError("Invalid legacy video sub-chunk.");
         }
         expectedBytes = Math.min(UPLOAD_JSON_SMALL_CHUNK_BYTES,
-          expected - subIndex * UPLOAD_JSON_SMALL_CHUNK_BYTES);
+          expected - subIndex! * UPLOAD_JSON_SMALL_CHUNK_BYTES);
       }
       if (bytes.byteLength !== expectedBytes) {
         throw new UploadInputError(`Attachment chunk ${index + 1}/${chunkCount} has the wrong size.`);
       }
       await ensureBucket();
-      const path = useSubChunk ? subChunkPath(ticket, index, subIndex) : chunkPath(ticket, index);
+      const path = useSubChunk ? subChunkPath(ticket, index, subIndex!) : chunkPath(ticket, index);
       const { error } = await objects.upload(path, bytes, {
         contentType: "application/octet-stream",
         upsert: true, // Retry after a mobile network interruption without duplicating bytes.
@@ -154,7 +154,7 @@ export function createStoredUploadService(storage: Storage, secret: string, opti
         storageWriteMs: Date.now() - startedAtMs
       });
       return { index, ...(useSubChunk ? { subIndex } : {}), chunkCount,
-        uploadedBytes: (index * chunkBytes) + (useSubChunk ? subIndex * UPLOAD_JSON_SMALL_CHUNK_BYTES : 0) + bytes.byteLength };
+        uploadedBytes: (index * chunkBytes) + (useSubChunk ? subIndex! * UPLOAD_JSON_SMALL_CHUNK_BYTES : 0) + bytes.byteLength };
     },
     // Only a valid HMAC-signed ticket can inspect this upload's chunk progress.
     async chunkStatus(token: string) {
