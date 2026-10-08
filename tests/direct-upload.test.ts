@@ -493,3 +493,80 @@ test("server chunk status authenticates the upload ticket and isolates accepted 
     "ticket must never report another upload's chunks");
   await assert.rejects(service.chunkStatus(first.uploadToken + "tampered"), /invalid or expired/);
 });
+
+
+test("legacy video with no captured frames recovers private original when Gemini fails, persists for Grok", async () => {
+  const fake = fakeStorage();
+  const actor = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+  const otherActor = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+  const chatId = "11111111-1111-4111-8111-111111111111";
+  const expectedFrames = [{
+    timestampSeconds: 1.4,
+    dataUrl: "data:image/jpeg;base64," + Buffer.from([0xff, 0xd8, 1, 2, 3, 4, 0xff, 0xd9]).toString("base64")
+  }];
+  const service = createStoredUploadService(fake.storage, "secret");
+  const video = { ...reference, fileId: "legacy-v1", mimeType: "video/mp4",
+    fileName: "original-screencast.mp4", attachmentKind: "video" as const, videoFrames: undefined };
+  const saved = await service.persist(chatId, video, undefined, {
+    source: new Blob(["actual-video-bytes"], { type: "video/mp4" }), actorId: actor
+  });
+  assert.equal(saved.hasOriginal, true);
+  assert.equal((await service.restore(chatId, saved, actor)).videoFrames, undefined);
+  let decodes = 0;
+  const extract = async (source: Blob) => {
+    decodes++;
+    assert.equal(await source.text(), "actual-video-bytes");
+    return expectedFrames;
+  };
+  await assert.rejects(service.recoverSavedVideoFrames(chatId, saved, otherActor, extract), /another actor/);
+  assert.equal(decodes, 0);
+  const recovered = await service.recoverSavedVideoFrames(chatId, saved, actor, extract);
+  assert.deepEqual(recovered.videoFrames, expectedFrames);
+  assert.equal(decodes, 1);
+  assert.deepEqual((await service.restore(chatId, saved, actor)).videoFrames, expectedFrames);
+  await service.recoverSavedVideoFrames(chatId, saved, actor, extract);
+  assert.equal(decodes, 1, "video frames are cached in the saved attachment for future Grok retries");
+  await assert.rejects(service.recoverSavedVideoFrames("22222222-2222-4222-8222-222222222222", saved, actor, extract), /another conversation/);
+  assert.equal(decodes, 1);
+});
+
+test("older video without original cannot pretend Grok inspected decoded pixels", async () => {
+  const fake = fakeStorage();
+  const actor = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+  const chatId = "11111111-1111-4111-8111-111111111111";
+  const service = createStoredUploadService(fake.storage, "secret");
+  const saved = await service.persist(chatId, { ...reference, mimeType: "video/mp4",
+    attachmentKind: "video" }, undefined, { actorId: actor });
+  await assert.rejects(service.recoverSavedVideoFrames(chatId, saved, actor,
+    async () => { throw new Error("Decoder should not start"); }), /Original video was not retained/);
+});
+
+test("newly uploaded video with lost browser previews can recover from private signed original", async () => {
+  const fake = fakeStorage();
+  const original = new Blob(["mp4"], { type: "video/mp4" });
+  const service = createStoredUploadService(fake.storage, "secret", { buildReferences: async () => [{
+    ...reference, fileId: "fresh-v1", fileName: "fresh.mp4",
+    mimeType: "video/mp4", attachmentKind: "video" as const, videoFrames: undefined,
+  }] });
+  const prepared = await service.prepare({ name: "fresh.mp4", size: original.size, type: "video/mp4" });
+  fake.files.set(fake.signedPaths[0], original);
+  const finished = await service.complete(prepared.uploadToken);
+  assert.equal(finished.videoFrames, undefined);
+  let decoded = 0;
+  const expected = [{ timestampSeconds: 0, dataUrl: "data:image/jpeg;base64," +
+    Buffer.from([0xff, 0xd8, 1, 2, 0xff, 0xd9]).toString("base64") }];
+  const recovered = await service.recoverUploadVideoFrames(finished.storageToken!, async source => {
+    decoded++;
+    assert.equal(await source.text(), "mp4");
+    return expected;
+  });
+  assert.deepEqual(recovered.videoFrames, expected);
+  assert.deepEqual((await service.hydrate([finished]))[0].videoFrames, expected);
+  await service.recoverUploadVideoFrames(finished.storageToken!, async () => {
+    decoded++;
+    return expected;
+  });
+  assert.equal(decoded, 1, "extraction runs only once per saved original");
+  await assert.rejects(service.recoverUploadVideoFrames(prepared.uploadToken, async () => expected),
+    /invalid or expired/, "upload credentials cannot impersonate completed references");
+});
