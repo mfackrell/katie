@@ -51,3 +51,17 @@ test("non-video attachments keep normal provider support behavior", () => {
   assert.equal(resolveVideoRoutingPolicy(false, undefined).mode, "normal");
   assert.deepEqual(support, { supported: true });
 });
+
+test("Grok video fallback requires actual frames rather than claiming native MP4 analysis", () => {
+  const video = {
+    fileId: "v1", fileName: "clip.mp4", mimeType: "video/mp4",
+    preview: "Video metadata only", attachmentKind: "video" as const,
+    providerRef: { googleFileUri: "https://provider.example/clip" },
+  };
+  const notReady = getAttachmentSupportForProvider("grok", [video]);
+  assert.equal(notReady.supported, false);
+  if (!notReady.supported) assert.match(notReady.reason, /no decoded frames/);
+  assert.deepEqual(getAttachmentSupportForProvider("grok", [{
+    ...video, videoFrames: [{ timestampSeconds: 1.2, dataUrl: "data:image/jpeg;base64,/9j/2Q==" }]
+  }]), { supported: true });
+});
