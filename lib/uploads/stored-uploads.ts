@@ -65,6 +65,19 @@ export function createStoredUploadService(storage: Storage, secret: string, opti
   const subChunkPath = (ticket: Ticket, index: number, subIndex: number) =>
     `${chunkPath(ticket, index)}-sub-${String(subIndex).padStart(3, "0")}`;
   const referencePath = (ticket: Ticket) => `references/${ticket.id}.json`;
+  const processingPath = (ticket: Ticket) => `processing/${ticket.id}.json`;
+  type ProcessingRecord = { status: "processing" | "failed"; startedAt: number; error?: string };
+  const processingStaleMs = 5 * 60 * 1000;
+  const readProcessingRecord = async (ticket: Ticket): Promise<ProcessingRecord | null> => {
+    const entry = await objects.download(processingPath(ticket));
+    if (!entry.data) return null;
+    try {
+      const value = JSON.parse(await entry.data.text()) as ProcessingRecord;
+      if ((value.status === "processing" || value.status === "failed") &&
+          Number.isFinite(value.startedAt)) return value;
+    } catch { /* Invalid status cannot be trusted. */ }
+    return null;
+  };
   const compact = (reference: FileReference, ticket: Ticket): FileReference => {
     const metadata = { ...reference };
     delete metadata.extractedText;
@@ -89,7 +102,7 @@ export function createStoredUploadService(storage: Storage, secret: string, opti
   }
   async function cleanExpiredObjects() {
     // Bounded, opportunistic cleanup also removes abandoned uploads.
-    for (const prefix of ["incoming", "references", "chunks"]) {
+    for (const prefix of ["incoming", "references", "chunks", "processing"]) {
       const { data, error } = await objects.list(prefix, { limit: 100, sortBy: { column: "created_at", order: "asc" } });
       if (error) { console.warn("[Upload API] cleanup listing failed", { prefix }); continue; }
       const expired = (data ?? []).filter(item => item.created_at && Date.parse(item.created_at) < now() - RETENTION_MS);
