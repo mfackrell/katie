@@ -359,3 +359,137 @@ test("video client sends sampled frame evidence with completion request", async 
   const completed = JSON.parse(String(calls.find(c => c.url.endsWith("/complete"))?.body));
   assert.deepEqual(completed.videoFrames, [{ timestampSeconds: 0.2, dataUrl: jpeg }]);
 });
+
+test("stalled upload request is aborted, checked, and retried rather than hanging", async () => {
+  const file = new File(["video data"], "clip.mp4", { type: "video/mp4" });
+  let attempts = 0;
+  let statusProbes = 0;
+  let abortedSignal: AbortSignal | undefined;
+  const progress: string[] = [];
+  const fetcher: typeof fetch = async (url, init) => {
+    const path = String(url);
+    if (path.endsWith("/prepare")) return Response.json({
+      uploadUrl: "https://storage.example/signed", uploadId: "33333333-3333-4333-8333-333333333333",
+      uploadToken: "signed-upload",
+    });
+    if (path.endsWith("/status")) {
+      statusProbes++;
+      return Response.json({ uploadId: "33333333-3333-4333-8333-333333333333",
+        chunkCount: 1, uploadedIndexes: [], complete: false });
+    }
+    if (path.endsWith("/chunk")) {
+      attempts++;
+      if (attempts === 1) {
+        abortedSignal = init?.signal ?? undefined;
+        return new Promise<Response>(() => {}); // Simulate webview fetch never resolving, even on abort.
+      }
+      return Response.json({ index: 0 });
+    }
+    if (path.endsWith("/complete")) return Response.json({ fileReference: { ...reference, attachmentKind: "video" } });
+    throw new Error("Unexpected request " + path);
+  };
+  const refs = await uploadFilesDirect([file], update => progress.push(update), fetcher,
+    async () => [], { chunkTimeoutMs: 20, statusTimeoutMs: 20, retryDelayMs: 0, resumeStorage: null });
+  assert.equal(attempts, 2);
+  assert.equal(statusProbes, 1, "probe private server state after timeout before retry");
+  assert.equal(abortedSignal?.aborted, true, "timeout aborts the stalled network request");
+  assert.equal(refs.length, 1);
+  assert.ok(progress.some(value => value.includes("stalled")));
+  assert.ok(progress.some(value => value.includes("Retrying")));
+});
+
+test("an upload acknowledgement timeout does not resend a chunk already saved by the server", async () => {
+  const file = new File(["video"], "clip.mp4", { type: "video/mp4" });
+  let chunkRequests = 0;
+  const fetcher: typeof fetch = async (url) => {
+    const path = String(url);
+    if (path.endsWith("/prepare")) return Response.json({ uploadUrl: "https://storage.example", uploadToken: "receipt",
+      uploadId: "33333333-3333-4333-8333-333333333333" });
+    if (path.endsWith("/chunk")) {
+      chunkRequests++;
+      return new Promise<Response>(() => {}); // Server wrote bytes but acknowledgement disappeared.
+    }
+    if (path.endsWith("/status")) return Response.json({ uploadId: "33333333-3333-4333-8333-333333333333",
+      chunkCount: 1, uploadedIndexes: [0], complete: false });
+    if (path.endsWith("/complete")) return Response.json({ fileReference: { ...reference, attachmentKind: "video" } });
+    throw new Error(path);
+  };
+  await uploadFilesDirect([file], () => {}, fetcher, async () => [],
+    { chunkTimeoutMs: 15, statusTimeoutMs: 15, retryDelayMs: 0, resumeStorage: null });
+  assert.equal(chunkRequests, 1, "do not resend a chunk that was committed server-side");
+});
+
+test("video retries resume previously transferred chunks after a failed upload using session storage", async () => {
+  const file = new File([new Uint8Array(2 * 1024 * 1024 + 7)], "resumable.mp4", {
+    type: "video/mp4", lastModified: 1000,
+  });
+  const values = new Map<string, string>();
+  const storage = {
+    getItem: (key: string) => values.get(key) ?? null,
+    setItem: (key: string, value: string) => { values.set(key, value); },
+    removeItem: (key: string) => { values.delete(key); },
+  };
+  const accepted = new Set<number>();
+  const posted: number[] = [];
+  let prepares = 0;
+  let allowSecond = false;
+  let telemetryCount = 0;
+  const fetcher: typeof fetch = async (url, init) => {
+    const path = String(url);
+    if (path.endsWith("/prepare")) {
+      prepares++;
+      return Response.json({
+        uploadUrl: "https://storage.example/source", uploadToken: "same-upload-ticket",
+        uploadId: "44444444-4444-4444-8444-444444444444",
+      });
+    }
+    if (path.endsWith("/status")) return Response.json({
+      uploadId: "44444444-4444-4444-8444-444444444444",
+      chunkCount: 2, uploadedIndexes: [...accepted], complete: false,
+    });
+    if (path.endsWith("/chunk")) {
+      const part = JSON.parse(String(init?.body)).index as number;
+      posted.push(part);
+      if (part === 1 && !allowSecond) return Response.json({ error: "Unavailable" }, { status: 502 });
+      accepted.add(part);
+      return Response.json({ index: part });
+    }
+    if (path.endsWith("/telemetry")) {
+      telemetryCount++;
+      return new Response(null, { status: 204 });
+    }
+    if (path.endsWith("/complete")) return Response.json({ fileReference: { ...reference, attachmentKind: "video" } });
+    throw new Error(path);
+  };
+  const args: [{ chunkTimeoutMs: number; retryDelayMs: number; resumeStorage: typeof storage }] =
+    [{ chunkTimeoutMs: 100, retryDelayMs: 0, resumeStorage: storage }];
+  await assert.rejects(uploadFilesDirect([file], () => {}, fetcher, async () => [], args[0]), /part 2\/2/);
+  assert.equal(telemetryCount, 1);
+  assert.equal(prepares, 1);
+  assert.equal(values.size, 1, "signed, expiring upload session retained until completion");
+  allowSecond = true;
+  const progress: string[] = [];
+  const completed = await uploadFilesDirect([file], value => progress.push(value), fetcher,
+    async () => [], args[0]);
+  assert.equal(completed.length, 1);
+  assert.equal(prepares, 1, "resumed rather than preparing and uploading again");
+  assert.deepEqual(posted, [0, 1, 1, 1, 1], "previously accepted chunk 0 was skipped");
+  assert.ok(progress.some(value => value.includes("Resuming")));
+  assert.equal(values.size, 0, "upload ticket cleared after success");
+});
+
+test("server chunk status authenticates the upload ticket and isolates accepted chunks", async () => {
+  const fake = fakeStorage();
+  const service = createStoredUploadService(fake.storage, "server-only-key");
+  const first = await service.prepare({ name: "clip.mp4", type: "video/mp4",
+    size: 2 * 1024 * 1024 + 3, transport: "json-base64-v2" });
+  const second = await service.prepare({ name: "second.mp4", type: "video/mp4",
+    size: 2 * 1024 * 1024 + 3, transport: "json-base64-v2" });
+  await service.uploadChunk(first.uploadToken, 0, new Uint8Array(2 * 1024 * 1024));
+  const firstStatus = await service.chunkStatus(first.uploadToken);
+  assert.deepEqual(firstStatus.uploadedIndexes, [0]);
+  assert.equal(firstStatus.chunkCount, 2);
+  assert.deepEqual((await service.chunkStatus(second.uploadToken)).uploadedIndexes, [],
+    "ticket must never report another upload's chunks");
+  await assert.rejects(service.chunkStatus(first.uploadToken + "tampered"), /invalid or expired/);
+});
