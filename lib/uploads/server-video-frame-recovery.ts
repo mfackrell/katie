@@ -2,15 +2,13 @@ import { spawn } from "node:child_process";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createRequire } from "node:module";
+import { existsSync } from "node:fs";
 import sharp from "sharp";
 import { validateVideoFallbackFrames, type VideoFallbackFrame } from "./video-fallback-frames";
 
 export const MAX_FALLBACK_SOURCE_BYTES = 200 * 1024 * 1024;
-const MAX_SAMPLE_SECONDS = 18;
 const VIDEO_PROBE_TIMEOUT_MS = 8_000;
 const FRAME_DECODE_TIMEOUT_MS = 12_000;
-const requireNode = createRequire(join(process.cwd(), "package.json"));
 
 type CommandResult = { code: number | null; stderr: string };
 type FfmpegRun = (binary: string, args: string[], timeoutMs: number) => Promise<CommandResult>;
@@ -26,10 +24,12 @@ function ffmpegBinary(): string {
     throw new Error("Native video frame extraction requires the Linux x64 server runtime.");
   }
   try {
-    return requireNode.resolve("@ffmpeg-installer/linux-x64/ffmpeg");
+    const path = join(process.cwd(), "node_modules", "@ffmpeg-installer", "linux-x64", "ffmpeg");
+    if (existsSync(path)) return path;
   } catch {
-    throw new Error("Native FFmpeg decoder is unavailable in this deployment.");
+    // A packaged binary must exist; do not invoke a system executable.
   }
+  throw new Error("Native FFmpeg decoder is unavailable in this deployment.");
 }
 
 async function runFfmpeg(binary: string, args: string[], timeoutMs: number): Promise<CommandResult> {
