@@ -7,6 +7,8 @@ import { buildFileReferences, validateUploadFiles } from "./build-file-reference
 
 const BUCKET = "katie-attachments";
 const RETENTION_MS = 24 * 60 * 60 * 1000;
+// Below Vercel's 4.5 MB request-body limit; allows uploads without browser-to-Storage CORS.
+export const UPLOAD_RELAY_CHUNK_BYTES = 3 * 1024 * 1024;
 export const uploadMetadataSchema = z.object({
   name: z.string().trim().min(1).max(255),
   type: z.string().max(128),
@@ -47,6 +49,7 @@ export function createStoredUploadService(storage: Storage, secret: string, opti
     }
   };
   const sourcePath = (ticket: Ticket) => `incoming/${ticket.id}`;
+  const chunkPath = (ticket: Ticket, index: number) => `chunks/${ticket.id}-${String(index).padStart(3, "0")}`;
   const referencePath = (ticket: Ticket) => `references/${ticket.id}.json`;
   const compact = (reference: FileReference, ticket: Ticket): FileReference => {
     const metadata = { ...reference };
@@ -71,7 +74,7 @@ export function createStoredUploadService(storage: Storage, secret: string, opti
   }
   async function cleanExpiredObjects() {
     // Bounded, opportunistic cleanup also removes abandoned uploads.
-    for (const prefix of ["incoming", "references"]) {
+    for (const prefix of ["incoming", "references", "chunks"]) {
       const { data, error } = await objects.list(prefix, { limit: 100, sortBy: { column: "created_at", order: "asc" } });
       if (error) { console.warn("[Upload API] cleanup listing failed", { prefix }); continue; }
       const expired = (data ?? []).filter(item => item.created_at && Date.parse(item.created_at) < now() - RETENTION_MS);
@@ -99,6 +102,26 @@ export function createStoredUploadService(storage: Storage, secret: string, opti
     }
   }
   return {
+    // Authenticated by the same short-lived HMAC ticket as the original signed upload.
+    // A client can only write bounded chunks to its own randomly generated incoming path.
+    async uploadChunk(token: string, index: number, bytes: Uint8Array) {
+      const ticket = verify(token, "upload");
+      const chunkCount = Math.ceil(ticket.size / UPLOAD_RELAY_CHUNK_BYTES);
+      if (!Number.isSafeInteger(index) || index < 0 || index >= chunkCount) {
+        throw new UploadInputError("Invalid attachment chunk index.");
+      }
+      const expected = Math.min(UPLOAD_RELAY_CHUNK_BYTES, ticket.size - index * UPLOAD_RELAY_CHUNK_BYTES);
+      if (bytes.byteLength !== expected) {
+        throw new UploadInputError(`Attachment chunk ${index + 1}/${chunkCount} has the wrong size.`);
+      }
+      await ensureBucket();
+      const { error } = await objects.upload(chunkPath(ticket, index), bytes, {
+        contentType: "application/octet-stream",
+        upsert: true, // Retry after a mobile network interruption without duplicating bytes.
+      });
+      if (error) throw new Error(`Unable to store attachment chunk ${index + 1}: ${error.message}`);
+      return { index, chunkCount, uploadedBytes: (index * UPLOAD_RELAY_CHUNK_BYTES) + bytes.byteLength };
+    },
     async catalog(chatId: string, scope: "chat" | "actor" = "chat"): Promise<{ initialized: boolean; attachments: ConversationAttachment[] }> {
       await ensureBucket();
       const prefix = catalogPrefix(chatId, scope);
@@ -225,12 +248,44 @@ export function createStoredUploadService(storage: Storage, secret: string, opti
       const cached = await objects.download(referencePath(ticket));
       if (cached.data) return compact(JSON.parse(await cached.data.text()) as FileReference, ticket);
       const source = await objects.download(sourcePath(ticket));
-      if (source.error || !source.data) throw new UploadInputError("The file upload did not finish. Please attach the file again.");
-      if (source.data.size !== ticket.size) {
+      let sourceBlob: Blob | null = source.data ?? null;
+      if (!sourceBlob) {
+        // Mobile-safe relay: gather verified same-origin chunks only after all are present.
+        // Keep the original intact for conversation persistence and future video replay.
+        const chunkCount = Math.ceil(ticket.size / UPLOAD_RELAY_CHUNK_BYTES);
+        const blobs: Blob[] = [];
+        const chunkPaths: string[] = [];
+        for (let index = 0; index < chunkCount; index++) {
+          const path = chunkPath(ticket, index);
+          const part = await objects.download(path);
+          const expected = Math.min(UPLOAD_RELAY_CHUNK_BYTES, ticket.size - index * UPLOAD_RELAY_CHUNK_BYTES);
+          if (part.error || !part.data || part.data.size !== expected) {
+            if (index === 0 && !part.data) {
+              throw new UploadInputError("The file upload did not finish. Please attach the file again.");
+            }
+            throw new UploadInputError(`The file upload stopped at chunk ${index + 1}/${chunkCount}. Please retry the upload.`);
+          }
+          blobs.push(part.data);
+          chunkPaths.push(path);
+        }
+        const merged = new Blob(blobs, { type: ticket.type || "application/octet-stream" });
+        if (merged.size !== ticket.size) {
+          throw new UploadInputError("The assembled attachment does not match its original size.");
+        }
+        const saved = await objects.upload(sourcePath(ticket), merged, {
+          contentType: ticket.type || "application/octet-stream",
+          upsert: true,
+        });
+        if (saved.error) throw new Error(`Unable to finalize the uploaded file: ${saved.error.message}`);
+        sourceBlob = merged;
+        const cleanup = await objects.remove(chunkPaths);
+        if (cleanup.error) console.warn("[Upload API] unable to remove finalized upload chunks", { chunkCount });
+      }
+      if (sourceBlob.size !== ticket.size) {
         await objects.remove([sourcePath(ticket)]);
         throw new UploadInputError("The uploaded file size does not match the original. Please attach the file again.");
       }
-      const file = new File([source.data], ticket.name, { type: ticket.type });
+      const file = new File([sourceBlob], ticket.name, { type: ticket.type });
       const [reference] = await buildReferences([file]);
       if (!reference) throw new Error("Attachment processing returned no file reference.");
       const stored = await objects.upload(referencePath(ticket), JSON.stringify(reference), {
@@ -270,6 +325,7 @@ function getUploadService() {
 
 export const prepareStoredUpload = (input: unknown) => getUploadService().prepare(input);
 export const completeStoredUpload = (token: string) => getUploadService().complete(token);
+export const uploadStoredChunk = (token: string, index: number, bytes: Uint8Array) => getUploadService().uploadChunk(token, index, bytes);
 export const hydrateStoredAttachments = (references: FileReference[]) =>
   references.some(reference => reference.storageToken) ? getUploadService().hydrate(references) : Promise.resolve(references);
 

@@ -15,7 +15,7 @@ function fakeStorage() {
     from: () => ({
       createSignedUploadUrl: async (path: string) => { signedPaths.push(path); return { data: { signedUrl: `https://storage.example/${path}?token=scoped` }, error: null }; },
       download: async (path: string) => { downloads.push(path); return { data: files.get(path) ?? null, error: files.has(path) ? null : { message: "Not found" } }; },
-      upload: async (path: string, body: string) => { files.set(path, new Blob([body])); return { data: {}, error: null }; },
+      upload: async (path: string, body: BlobPart, options?: { contentType?: string }) => { files.set(path, new Blob([body], { type: options?.contentType || "" })); return { data: {}, error: null }; },
       remove: async (paths: string[]) => { paths.forEach(path => files.delete(path)); return { error: null }; },
       list: async (prefix: string, options: { offset?: number; limit?: number } = {}) => ({ data: [...files.keys()].filter(path => path.startsWith(prefix + "/")).sort().slice(options.offset ?? 0, (options.offset ?? 0) + (options.limit ?? 100)).map(path => ({ name: path.slice(prefix.length + 1) })), error: null }),
     }),
@@ -125,6 +125,67 @@ test("HTML and plain-text upload failures produce useful errors and stop before 
     assert.equal(calls, 2);
   }
   await assert.rejects(uploadFilesDirect([new File(["abc"], "report.txt")], () => {}, async () => Response.json(null, { status: 400 })), /HTTP 400/);
+});
+
+test("iPhone video uploads stay on Katie's origin and retry failed chunks", async () => {
+  const file = new File([new Uint8Array(3 * 1024 * 1024 + 17)], "clip.mov", { type: "video/quicktime" });
+  const calls: Array<{ path: string; init?: RequestInit }> = [];
+  const progress: string[] = [];
+  let transientFailure = true;
+  const fetcher: typeof fetch = async (url, init) => {
+    const path = String(url);
+    calls.push({ path, init });
+    if (path.endsWith("/prepare")) return Response.json({ uploadUrl: "https://storage.example/cross-origin", uploadToken: "upload-receipt" });
+    if (path.endsWith("/complete")) return Response.json({ fileReference: { ...reference, attachmentKind: "video", fileName: "clip.mov" } });
+    assert.equal(path, "/api/upload/chunk", "video bytes must never go to a cross-origin signed URL");
+    assert.equal(init?.method, "POST");
+    assert.equal(init?.headers && (init.headers as Record<string, string>)["x-katie-upload-token"], "upload-receipt");
+    assert.ok(init?.body instanceof Blob);
+    assert.ok((init.body as Blob).size <= 3 * 1024 * 1024);
+    if (transientFailure) {
+      transientFailure = false;
+      throw new TypeError("Network interrupted");
+    }
+    return Response.json({ index: Number((init?.headers as Record<string, string>)["x-katie-chunk-index"]) });
+  };
+  const refs = await uploadFilesDirect([file], message => progress.push(message), fetcher);
+  assert.equal(refs[0].attachmentKind, "video");
+  assert.deepEqual(calls.map(call => call.path), [
+    "/api/upload/prepare", "/api/upload/chunk", "/api/upload/chunk", "/api/upload/chunk", "/api/upload/complete"
+  ]);
+  assert.ok(progress.some(message => message.includes("Retrying")));
+  assert.ok(progress.some(message => message.includes("100%")));
+});
+
+test("server verifies, reassembles, and preserves chunked videos without changing permanent attachment workflow", async () => {
+  const fake = fakeStorage();
+  const size = 3 * 1024 * 1024 + 3;
+  let built = 0;
+  const service = createStoredUploadService(fake.storage, "server-secret", {
+    buildReferences: async files => {
+      built++;
+      assert.equal(files[0].size, size);
+      assert.equal(files[0].name, "recording.mp4");
+      return [{ ...reference, fileName: "recording.mp4", mimeType: "video/mp4", attachmentKind: "video" }];
+    }
+  });
+  const ticket = await service.prepare({ name: "recording.mp4", type: "video/mp4", size });
+  const first = new Uint8Array(3 * 1024 * 1024);
+  first[0] = 7;
+  await assert.rejects(service.uploadChunk(ticket.uploadToken, 0, new Uint8Array(1)), /wrong size/);
+  await assert.rejects(service.uploadChunk(ticket.uploadToken, 2, new Uint8Array(1)), /Invalid attachment chunk index/);
+  await service.uploadChunk(ticket.uploadToken, 0, first);
+  await assert.rejects(service.complete(ticket.uploadToken), /stopped at chunk 2/);
+  await service.uploadChunk(ticket.uploadToken, 0, first); // retry is idempotent
+  await service.uploadChunk(ticket.uploadToken, 1, new Uint8Array([8, 9, 10]));
+  const completed = await service.complete(ticket.uploadToken);
+  assert.equal(completed.fileName, "recording.mp4");
+  assert.equal(built, 1);
+  assert.equal(fake.files.get(fake.signedPaths[0])?.size, size, "original video retained");
+  assert.equal(fake.files.get(fake.signedPaths[0])?.type, "video/mp4");
+  assert.ok(![...fake.files.keys()].some(path => path.startsWith("chunks/")), "temporary chunks removed");
+  assert.equal((await service.complete(ticket.uploadToken)).fileName, "recording.mp4");
+  assert.equal(built, 1, "completion is idempotent");
 });
 
 test("video sources survive completion, persist to the chat, and renew after temporary receipts expire", async () => {
