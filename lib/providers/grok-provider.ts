@@ -466,7 +466,15 @@ ${getKatieReasoningExplainerStatement()}` }
         messages.push({ role: "system", content: attachmentContext });
       }
 
-      messages.push({ role: "user", content: buildChatUserContent(params) });
+      const outgoingUserContent = buildChatUserContent(params);
+      messages.push({ role: "user", content: outgoingUserContent });
+      // Count the actual structured image parts sent to xAI, not merely frames
+      // recovered on the server. Never emit JPEG payloads or image URLs in logs.
+      const submittedImageCount = Array.isArray(outgoingUserContent)
+        ? outgoingUserContent.filter(part => part.type === "image_url").length : 0;
+      if ((params.images?.length ?? 0) !== submittedImageCount) {
+        throw new Error("Grok image evidence was lost while building the outgoing request.");
+      }
 
       if (isWebSearchIntent(params.requestIntent)) {
         const input = this.buildWebSearchInput(params, attachmentContext);
@@ -499,10 +507,25 @@ ${getKatieReasoningExplainerStatement()}` }
         };
       }
 
+      if (submittedImageCount) {
+        console.info("[GrokProvider] images included in outgoing xAI request", {
+          model: selectedModel, imageCount: submittedImageCount,
+          videoFrameCount: (params.attachments ?? []).reduce(
+            (count, file) => count + (file.videoFrames?.length ?? 0), 0
+          ),
+          endpoint: "/chat/completions",
+        });
+      }
       const completion = await this.client.chat.completions.create({
         model: selectedModel,
         messages
       });
+      if (submittedImageCount) {
+        console.info("[GrokProvider] xAI acknowledged multimodal request", {
+          model: selectedModel, imageCount: submittedImageCount,
+          responseReceived: true,
+        });
+      }
 
       return {
         text: completion.choices[0]?.message?.content ?? "",
