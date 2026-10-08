@@ -72,6 +72,8 @@ export interface FileReference {
   truncatedForContext?: boolean;
   extractionCoverage?: "preview-only" | "partial" | "full";
   attachmentKind?: "image" | "video" | "text" | "file";
+  /** Timestamped JPEG frames captured from a video for vision-only fallback. */
+  videoFrames?: Array<{ timestampSeconds: number; dataUrl: string }>;
   providerRef?: {
     openaiFileId?: string;
     googleFileUri?: string;

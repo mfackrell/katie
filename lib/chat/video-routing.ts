@@ -8,6 +8,7 @@ type FileReference = {
   extractedText?: string;
   nativeInspectionRequired?: boolean;
   attachmentKind?: "image" | "video" | "text" | "file";
+  videoFrames?: Array<{ timestampSeconds: number; dataUrl: string }>;
   providerRef?: {
     openaiFileId?: string;
     googleFileUri?: string;
@@ -58,6 +59,17 @@ export function getAttachmentSupportForProvider(
   const videoAttachments = attachments.filter(requiresGoogleFileSource);
   if (videoAttachments.length === 0) {
     return { supported: true };
+  }
+
+  // xAI's Grok Imagine VIDEO models produce/edit video, but cannot inspect an
+  // arbitrary private MP4. Grok text+vision models can inspect sampled JPEGs.
+  if (providerName === "grok") {
+    const scannedPdf = videoAttachments.find(file => !isVideoAttachment(file));
+    const missingFrames = videoAttachments.find(file => isVideoAttachment(file) && !file.videoFrames?.length);
+    if (!scannedPdf && !missingFrames) return { supported: true };
+    return { supported: false, reason: missingFrames
+      ? `Grok frame-based video fallback is unavailable for "${missingFrames.fileName}": no decoded frames were saved. Grok cannot directly inspect its MP4.`
+      : "Grok cannot inspect scanned PDF files without a visual conversion." };
   }
 
   if (providerName === "google") {

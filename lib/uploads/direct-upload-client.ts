@@ -1,4 +1,5 @@
 import type { FileReference } from "@/lib/providers/types";
+import { captureVideoFallbackFrames } from "./video-fallback-frames";
 
 const JSON_VIDEO_CHUNK_BYTES = 2 * 1024 * 1024;
 
@@ -70,6 +71,7 @@ async function reportVideoUploadError(
 
 export async function uploadFilesDirect(
   files: File[], onStatus: (message: string) => void = () => {}, fetcher: typeof fetch = fetch,
+  captureFrames: typeof captureVideoFallbackFrames = captureVideoFallbackFrames,
 ): Promise<FileReference[]> {
   if (files.length > 5) throw new Error("Too many files. Maximum allowed is 5.");
   const references: FileReference[] = [];
@@ -133,9 +135,11 @@ export async function uploadFilesDirect(
       }
       stage = "processing";
       onStatus(`Processing ${file.name}…`);
+      const videoFrames = isVideo ? await captureFrames(file).catch(() => []) : [];
+      if (isVideo) onStatus(videoFrames.length ? `Saved ${videoFrames.length} video preview frames for backup analysis…` : "Video uploaded; backup frame extraction unavailable.");
       const completed = await readUploadResponse(await fetcher("/api/upload/complete", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ uploadToken: prepared.uploadToken }),
+        body: JSON.stringify({ uploadToken: prepared.uploadToken, ...(isVideo ? { videoFrames } : {}) }),
       }));
       if (!completed.fileReference || typeof completed.fileReference !== "object") {
         throw new Error("Attachment processing returned no file reference.");

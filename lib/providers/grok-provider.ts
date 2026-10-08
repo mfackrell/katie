@@ -403,7 +403,24 @@ ${getKatieReasoningExplainerStatement()}` }]
 
   async generate(params: ChatGenerateParams): Promise<ProviderResponse> {
     if (hasVideoAttachments(params)) {
-      throw new Error("Grok provider does not support video attachments in this chat flow.");
+      const videos = (params.attachments ?? []).filter(a => a.attachmentKind === "video" || a.mimeType.startsWith("video/"));
+      const missing = videos.find(video => !video.videoFrames?.length);
+      if (missing) throw new Error(`Grok cannot inspect ${missing.fileName} because no video frames were captured.`);
+      const visualFrames = videos.flatMap(video => video.videoFrames ?? []).slice(0, 8);
+      // Be explicit about sampled visual evidence: Grok does not receive or hear the MP4.
+      const labels = videos.map(video =>
+        `${video.fileName}: ${(video.videoFrames ?? []).map(frame => `${frame.timestampSeconds}s`).join(", ")}`
+      ).join("; ");
+      params = {
+        ...params,
+        user: `${params.user}\n\nGROK VIDEO FALLBACK (vision-only): Attached images are time-sampled still frames, NOT native video. Frame time labels: ${labels}. Inspect only visible evidence in those frames; do not infer unseen motion, sounds, speech, or events between frames. If audio or fine temporal detail is needed, state that this fallback cannot assess it.`,
+        images: [...(params.images ?? []), ...visualFrames.map(frame => frame.dataUrl)],
+      };
+      console.info("[GrokProvider] fallback frame inspection", {
+        frameCount: visualFrames.length,
+        videoCount: videos.length,
+        model: params.modelId ?? "default"
+      });
     }
 
     const requestedModel = params.modelId ?? this.defaultModel;

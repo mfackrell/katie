@@ -320,3 +320,42 @@ test("actor-wide discovery shares original files across chats, isolates actors, 
   await service.removeActorIndex(actorA);
   assert.equal([...fake.files.keys()].filter(path => path.startsWith(`actor-catalog/${actorA}/`)).length, 0);
 });
+
+test("video frame previews are validated, stored privately, compacted, and restored for fallback", async () => {
+  const fake = fakeStorage();
+  const service = createStoredUploadService(fake.storage, "secret", {
+    buildReferences: async () => [{
+      ...reference, fileName: "clip.mp4", mimeType: "video/mp4",
+      attachmentKind: "video", providerRef: { googleFileUri: "https://provider.example/video" }
+    }]
+  });
+  const prepared = await service.prepare({ name: "clip.mp4", type: "video/mp4", size: 3 });
+  fake.files.set(fake.signedPaths[0], new Blob(["mp4"]));
+  const tinyJpeg = "data:image/jpeg;base64," + Buffer.from([0xff, 0xd8, 0, 0, 0, 0, 0xff, 0xd9]).toString("base64");
+  const frames = [{ timestampSeconds: 1.2, dataUrl: tinyJpeg }];
+  await assert.rejects(service.complete(prepared.uploadToken, [{ timestampSeconds: 0, dataUrl: "data:text/html;base64,abcd" }]), /Invalid video frame/);
+  const compact = await service.complete(prepared.uploadToken, frames);
+  assert.equal(compact.videoFrames, undefined, "browser receives compact reference without heavy base64 frames");
+  const [hydrated] = await service.hydrate([compact]);
+  assert.deepEqual(hydrated.videoFrames, frames);
+  const chat = "11111111-1111-4111-8111-111111111111";
+  const descriptor = await service.persist(chat, hydrated, compact.storageToken);
+  const restored = await service.restore(chat, descriptor);
+  assert.deepEqual(restored.videoFrames, frames);
+});
+
+test("video client sends sampled frame evidence with completion request", async () => {
+  const file = new File(["mp4"], "clip.mp4", { type: "video/mp4" });
+  const jpeg = "data:image/jpeg;base64," + Buffer.from([0xff, 0xd8, 0, 0, 0, 0, 0xff, 0xd9]).toString("base64");
+  const calls: Array<{ url: string; body: unknown }> = [];
+  const fetcher: typeof fetch = async (url, init) => {
+    calls.push({ url: String(url), body: init?.body });
+    if (String(url).endsWith("/prepare")) return Response.json({ uploadUrl: "https://storage.example", uploadToken: "signed" });
+    if (String(url).endsWith("/chunk")) return Response.json({ index: 0 });
+    if (String(url).endsWith("/complete")) return Response.json({ fileReference: { fileId: "v1", fileName: "clip.mp4", mimeType: "video/mp4", preview: "test", attachmentKind: "video" } });
+    throw new Error("Unexpected upload request");
+  };
+  await uploadFilesDirect([file], () => {}, fetcher, async () => [{ timestampSeconds: 0.2, dataUrl: jpeg }]);
+  const completed = JSON.parse(String(calls.find(c => c.url.endsWith("/complete"))?.body));
+  assert.deepEqual(completed.videoFrames, [{ timestampSeconds: 0.2, dataUrl: jpeg }]);
+});

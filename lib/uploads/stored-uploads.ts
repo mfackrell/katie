@@ -4,6 +4,7 @@ import { z } from "zod";
 import type { ConversationAttachment } from "@/lib/chat/attachment-continuity";
 import type { FileReference } from "@/lib/providers/types";
 import { buildFileReferences, validateUploadFiles } from "./build-file-references";
+import { validateVideoFallbackFrames } from "./video-fallback-frames";
 
 const BUCKET = "katie-attachments";
 const RETENTION_MS = 24 * 60 * 60 * 1000;
@@ -60,6 +61,7 @@ export function createStoredUploadService(storage: Storage, secret: string, opti
     delete metadata.extractedText;
     delete metadata.extractedChunks;
     delete metadata.imageDataUrl;
+    delete metadata.videoFrames; // Server hydrates sampled frames from private storage; avoid re-sending evidence as client data.
     return { ...metadata, storageToken: sign({ ...ticket, kind: "reference", expires: ticket.expires + RETENTION_MS - 2 * 60 * 60 * 1000 }) };
   };
   async function ensureBucket() {
@@ -199,7 +201,7 @@ export function createStoredUploadService(storage: Storage, secret: string, opti
         }
         const [renewed] = await buildReferences([new File([source.data], record.reference.fileName, { type: record.reference.mimeType })]);
         if (!renewed || (record.reference.mimeType.startsWith("video/") && !renewed.providerRef?.googleFileUri)) throw new UploadInputError("Unable to restore source access.");
-        record.reference = renewed;
+        record.reference = { ...renewed, videoFrames: record.reference.videoFrames };
         record.refreshedAt = now();
         const updated = await objects.upload(`${path}.json`, JSON.stringify(record), { contentType: "application/json", upsert: true });
         if (updated.error) throw new Error("Unable to save renewed video access.");
@@ -250,8 +252,9 @@ export function createStoredUploadService(storage: Storage, secret: string, opti
       console.info("[Upload API] prepared", { uploadId: ticket.id, bytes: ticket.size, mimeType: ticket.type, transport: ticket.transport ?? "binary-v1" });
       return { uploadUrl: signed.data.signedUrl, uploadToken: sign(ticket), uploadId: ticket.id };
     },
-    async complete(token: string): Promise<FileReference> {
+    async complete(token: string, rawVideoFrames?: unknown): Promise<FileReference> {
       const ticket = verify(token, "upload");
+      const videoFrames = ticket.type.startsWith("video/") ? validateVideoFallbackFrames(rawVideoFrames) : [];
       const cached = await objects.download(referencePath(ticket));
       if (cached.data) return compact(JSON.parse(await cached.data.text()) as FileReference, ticket);
       const source = await objects.download(sourcePath(ticket));
@@ -296,6 +299,8 @@ export function createStoredUploadService(storage: Storage, secret: string, opti
       const file = new File([sourceBlob], ticket.name, { type: ticket.type });
       const [reference] = await buildReferences([file]);
       if (!reference) throw new Error("Attachment processing returned no file reference.");
+      if (videoFrames.length) reference.videoFrames = videoFrames;
+      console.info("[Upload API] captured video fallback evidence", { uploadId: ticket.id, frameCount: videoFrames.length });
       const stored = await objects.upload(referencePath(ticket), JSON.stringify(reference), {
         contentType: "application/json", upsert: true,
       });
@@ -332,7 +337,7 @@ function getUploadService() {
 }
 
 export const prepareStoredUpload = (input: unknown) => getUploadService().prepare(input);
-export const completeStoredUpload = (token: string) => getUploadService().complete(token);
+export const completeStoredUpload = (token: string, videoFrames?: unknown) => getUploadService().complete(token, videoFrames);
 export const uploadStoredChunk = (token: string, index: number, bytes: Uint8Array) => getUploadService().uploadChunk(token, index, bytes);
 export const hydrateStoredAttachments = (references: FileReference[]) =>
   references.some(reference => reference.storageToken) ? getUploadService().hydrate(references) : Promise.resolve(references);

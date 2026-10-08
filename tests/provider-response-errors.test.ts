@@ -43,3 +43,34 @@ test("thought-only and output-limit responses are classified; ordinary output su
  assert.equal((await provider([ok]).run()).text, answer.text);
  assert.equal((await provider([ok], true).run()).text, answer.text);
 });
+
+test("terminal Gemini OTHER failure retries on Grok only when video retry explicitly enabled", async () => {
+ const attempts: string[] = [];
+ const fallback = await runWithRefusalFallback({
+   attempts: ["gemini", "grok"],
+   runAttempt: async (model) => {
+     attempts.push(model);
+     if (model === "gemini") throw new ProviderResponseError("Google stopped this response (OTHER)", false, "PROVIDER_STOPPED_RESPONSE");
+     return { provider: "grok", model: "grok-4.7", text: "I inspected 4 visual frames." };
+   },
+   detectRefusal: () => false, shouldRetryRefusal: true,
+   retryTerminalError: ({ attempt }) => attempt === "gemini",
+ });
+ assert.equal(fallback.attempt, "grok");
+ assert.deepEqual(attempts, ["gemini", "grok"]);
+});
+
+test("repeated Gemini empty output reaches bounded Grok frame fallback", async () => {
+ const attempts: string[] = [];
+ const fallback = await runWithRefusalFallback({
+   attempts: ["gemini", "grok"],
+   runAttempt: async (model) => {
+     attempts.push(model);
+     return { provider: model === "gemini" ? "google" : "grok", model, text: model === "gemini" ? "" : "Frames analyzed." };
+   },
+   detectRefusal: () => false, shouldRetryRefusal: true,
+   retryTerminalError: ({ attempt }) => attempt === "gemini",
+ });
+ assert.equal(fallback.attempt, "grok");
+ assert.deepEqual(attempts, ["gemini", "gemini", "grok"]);
+});

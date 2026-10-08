@@ -7,7 +7,7 @@ export async function POST(request: NextRequest) {
   try {
     const payload = await request.json();
     if (typeof payload?.uploadToken !== "string") throw new UploadInputError("Missing attachment upload reference.");
-    const fileReference = await completeStoredUpload(payload.uploadToken);
+    const fileReference = await completeStoredUpload(payload.uploadToken, payload.videoFrames);
     return NextResponse.json({ fileReference }, { headers: { "Cache-Control": "no-store" } });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unable to process attachment.";

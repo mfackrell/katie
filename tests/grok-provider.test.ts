@@ -97,3 +97,27 @@ test("Grok text chat and web research retain their existing endpoints", async (t
     t.mock.restoreAll();
   }
 });
+
+test("Grok analyzes sampled frames without pretending to receive native video", async (t) => {
+  const calls: Array<{ url: string; body: Record<string, any> }> = [];
+  t.mock.method(globalThis, "fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    calls.push({ url, body: JSON.parse(String(init?.body ?? "{}")) });
+    if (url.endsWith("/models")) return json({ data: [{ id: "grok-4.7" }] });
+    return json({ choices: [{ message: { content: "The frame shows a settings screen." } }] });
+  });
+  const image = "data:image/jpeg;base64,/9j/2Q==";
+  const result = await new GrokProvider("test-key").generate({
+    ...params, modelId: "grok-4.7", requestIntent: "general-text", user: "Inspect this recording",
+    attachments: [{
+      fileId: "v1", fileName: "screencast.mp4", mimeType: "video/mp4", preview: "metadata only",
+      attachmentKind: "video", videoFrames: [{ timestampSeconds: 2, dataUrl: image }]
+    }]
+  });
+  assert.equal(result.provider, "grok");
+  const posted = calls.find(c => c.url.endsWith("/chat/completions"))!.body;
+  const content = posted.messages.at(-1).content;
+  assert.match(content[0].text, /vision-only/);
+  assert.equal(content[1].image_url.url, image);
+  assert.match(content[0].text, /2s/);
+});
