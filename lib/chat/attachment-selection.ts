@@ -38,7 +38,7 @@ export function rankAttachmentCandidates(message: string, catalog: ConversationA
 // Saving a video in the actor catalog does NOT authorize submitting it in
 // later, unrelated messages. Treat the model selector as a candidate provider,
 // then enforce relevance deterministically before opening private source data.
-const EXPLICIT_VIDEO_REFERENCE = /\b(?:video|videos|clip|clips|recording|recordings|footage|frames?|screencast|screen.?recording|screenshots?)\b/i;
+const EXPLICIT_VIDEO_REFERENCE = /\b(?:(?:this|that|the|my|our|saved|uploaded|previous|earlier|same|original|last)\s+(?:screen\s*)?(?:video|clip|recording|footage|frames?|screencast|screenshots?)|(?:in|from|on|of)\s+(?:(?:the|this|that|my|saved|uploaded)\s+)?(?:recording|video|clip|footage)|(?:frames?|screenshots?)\s+(?:from|of)\s+(?:this|that|the|my)\s+(?:video|recording|clip))\b/i;
 const VISUAL_EVIDENCE_QUESTION = /\b(?:what (?:did|do|can) you (?:see|notice|observe)|what (?:is|was) (?:shown|visible)|(?:what|who) (?:was|is) (?:in|on) (?:it|there)|(?:look(?:ing|ed)?|inspect(?:ed)?|saw|shown|visible|timestamp|on.screen|in.the.picture))\b/i;
 const VIDEO_CONCLUSION_CHALLENGE = /\b(?:you (?:said|claimed|thought|misread|misunderstood|missed|saw|observed)|your (?:assessment|analysis|description|interpretation)|(?:that|this) (?:conclusion|interpretation|assessment)|(?:why|how) (?:did|would|could) you (?:say|think|conclude))\b/i;
 const SHORT_CORRECTION = /^(?:no[.! ,]|i disagree\b|you(?:'re| are| were| got) wrong\b|that's (?:incorrect|wrong|not true)\b|not true\b|incorrect\b|you missed\b)/i;
@@ -125,7 +125,7 @@ export function retainActiveVideoEvidence(
     ? isContextualVideoFollowup(message, history, catalog) : null;
   const kept = decision.selections.filter(item =>
     !item.attachment.mimeType.startsWith("video/") ||
-    (explicitlyRequestsVideo(message, item.attachment) && !CLEAR_TOPIC_CHANGE.test(message)) ||
+    explicitlyRequestsVideo(message, item.attachment) ||
     contextual?.id === item.attachment.id
   );
   // Filter inapplicable video selections even when the LLM confidently picks
