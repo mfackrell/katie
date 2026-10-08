@@ -92,8 +92,9 @@ function isContextualVideoFollowup(
   if (!trimmed || trimmed.length > 220 || CLEAR_TOPIC_CHANGE.test(trimmed)) return null;
   const active = activeVideoFromThisChat(history, catalog);
   if (!active) return null;
-  const historySinceAnchor = history.filter(item => item.role === "user")
-    .slice(-(active.priorUserTurns - 1));
+  const users = history.filter(item => item.role === "user");
+  const historySinceAnchor = active.priorUserTurns > 1
+    ? users.slice(-(active.priorUserTurns - 1)) : [];
   // If a user changed topics in between, never pull an older recording back.
   if (historySinceAnchor.some(item => CLEAR_TOPIC_CHANGE.test(item.content) ||
       (item.attachments ?? []).some(file => !file.mimeType.startsWith("video/")))) return null;
@@ -119,7 +120,6 @@ export function retainActiveVideoEvidence(
   history: Message[],
   newlyAttachedFiles: string[] = [],
 ): AttachmentDecision {
-  const explicitVideo = explicitlyRequestsVideo(message);
   const contextual = !newlyAttachedFiles.length && !decision.clarification &&
     !SUMMARY_ONLY_VISUAL.test(message) && !CLEAR_TOPIC_CHANGE.test(message)
     ? isContextualVideoFollowup(message, history, catalog) : null;
