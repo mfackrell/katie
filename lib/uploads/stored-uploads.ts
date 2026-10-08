@@ -130,6 +130,40 @@ export function createStoredUploadService(storage: Storage, secret: string, opti
       console.info("[Upload API] stored chunk", { uploadId: ticket.id, index, chunkCount, bytes: bytes.byteLength, transport: ticket.transport ?? "binary-v1" });
       return { index, chunkCount, uploadedBytes: (index * chunkBytes) + bytes.byteLength };
     },
+    // Only a valid HMAC-signed ticket can inspect this upload's chunk progress.
+    async chunkStatus(token: string) {
+      const ticket = verify(token, "upload");
+      await ensureBucket();
+      const chunkBytes = chunkBytesFor(ticket);
+      const chunkCount = Math.ceil(ticket.size / chunkBytes);
+      const completed = await objects.download(referencePath(ticket));
+      if (completed.data) {
+        return { uploadId: ticket.id, chunkCount, uploadedIndexes: Array.from({ length: chunkCount }, (_, index) => index), complete: true };
+      }
+      const source = await objects.download(sourcePath(ticket));
+      if (source.data?.size === ticket.size) {
+        return { uploadId: ticket.id, chunkCount, uploadedIndexes: Array.from({ length: chunkCount }, (_, index) => index), complete: false };
+      }
+      // Restrict the listing by UUID and then verify the full filename and size.
+      const listed = await objects.list("chunks", { limit: 100, search: ticket.id });
+      if (listed.error) throw new Error("Unable to check saved video upload progress.");
+      const uploadedIndexes: number[] = [];
+      for (const entry of listed.data ?? []) {
+        const expectedPrefix = ticket.id + "-";
+        if (!entry.name.startsWith(expectedPrefix)) continue;
+        const suffix = entry.name.slice(expectedPrefix.length);
+        if (!/^[0-9]{3}$/.test(suffix)) continue;
+        const index = Number(suffix);
+        if (index < 0 || index >= chunkCount) continue;
+        const expected = Math.min(chunkBytes, ticket.size - index * chunkBytes);
+        const size = entry.metadata?.size;
+        if (size != null && Number(size) !== expected) continue;
+        uploadedIndexes.push(index);
+      }
+      uploadedIndexes.sort((a, b) => a - b);
+      console.info("[Upload API] upload resume status", { uploadId: ticket.id, completedChunks: uploadedIndexes.length, chunkCount });
+      return { uploadId: ticket.id, chunkCount, uploadedIndexes, complete: false };
+    },
     async catalog(chatId: string, scope: "chat" | "actor" = "chat"): Promise<{ initialized: boolean; attachments: ConversationAttachment[] }> {
       await ensureBucket();
       const prefix = catalogPrefix(chatId, scope);
@@ -339,6 +373,7 @@ function getUploadService() {
 export const prepareStoredUpload = (input: unknown) => getUploadService().prepare(input);
 export const completeStoredUpload = (token: string, videoFrames?: unknown) => getUploadService().complete(token, videoFrames);
 export const uploadStoredChunk = (token: string, index: number, bytes: Uint8Array) => getUploadService().uploadChunk(token, index, bytes);
+export const getStoredUploadChunkStatus = (token: string) => getUploadService().chunkStatus(token);
 export const hydrateStoredAttachments = (references: FileReference[]) =>
   references.some(reference => reference.storageToken) ? getUploadService().hydrate(references) : Promise.resolve(references);
 
