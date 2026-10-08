@@ -406,6 +406,66 @@ export function createStoredUploadService(storage: Storage, secret: string, opti
       console.info("[Upload API] prepared", { uploadId: ticket.id, bytes: ticket.size, mimeType: ticket.type, transport: ticket.transport ?? "binary-v1" });
       return { uploadUrl: signed.data.signedUrl, uploadToken: sign(ticket), uploadId: ticket.id };
     },
+    async beginProcessing(token: string) {
+      const ticket = verify(token, "upload");
+      await ensureBucket();
+      const completed = await objects.download(referencePath(ticket));
+      if (completed.data) {
+        return { status: "ready" as const,
+          fileReference: compact(JSON.parse(await completed.data.text()) as FileReference, ticket),
+          scheduled: false };
+      }
+      const prior = await readProcessingRecord(ticket);
+      if (prior?.status === "processing" && now() - prior.startedAt < processingStaleMs) {
+        return { status: "processing" as const, startedAt: prior.startedAt, scheduled: false };
+      }
+      const record: ProcessingRecord = { status: "processing", startedAt: now() };
+      const reserved = await objects.upload(processingPath(ticket), JSON.stringify(record), {
+        contentType: "application/json", upsert: prior !== null,
+      });
+      if (reserved.error) {
+        const another = await readProcessingRecord(ticket);
+        if (another?.status === "processing" && now() - another.startedAt < processingStaleMs) {
+          return { status: "processing" as const, startedAt: another.startedAt, scheduled: false };
+        }
+        throw new Error("Unable to start video processing.");
+      }
+      console.info("[Upload API] scheduled detached video processing", {
+        uploadId: ticket.id, size: ticket.size, retry: prior !== null,
+      });
+      return { status: "processing" as const, startedAt: record.startedAt, scheduled: true };
+    },
+    async processingResult(token: string) {
+      const ticket = verify(token, "upload");
+      await ensureBucket();
+      const completed = await objects.download(referencePath(ticket));
+      if (completed.data) {
+        return { status: "ready" as const,
+          fileReference: compact(JSON.parse(await completed.data.text()) as FileReference, ticket) };
+      }
+      const record = await readProcessingRecord(ticket);
+      if (record?.status === "failed") {
+        return { status: "failed" as const, error: record.error || "Video processing failed." };
+      }
+      if (record?.status === "processing") {
+        return { status: "processing" as const, startedAt: record.startedAt };
+      }
+      return { status: "pending" as const };
+    },
+    async recordProcessingFailure(token: string, error: unknown) {
+      const ticket = verify(token, "upload");
+      const message = error instanceof Error ? error.message : String(error);
+      const record: ProcessingRecord = {
+        status: "failed", startedAt: now(), error: message.slice(0, 350),
+      };
+      const saved = await objects.upload(processingPath(ticket), JSON.stringify(record), {
+        contentType: "application/json", upsert: true,
+      });
+      if (saved.error) throw new Error("Unable to store video processing failure.");
+      console.error("[Upload API] detached video processing failed", {
+        uploadId: ticket.id, message: record.error,
+      });
+    },
     async complete(token: string, rawVideoFrames?: unknown): Promise<FileReference> {
       const ticket = verify(token, "upload");
       const videoFrames = ticket.type.startsWith("video/") ? validateVideoFallbackFrames(rawVideoFrames) : [];
