@@ -725,7 +725,7 @@ test("legacy v2 upload resumes eight accepted 2 MiB chunks using only 512 KiB su
   assert.ok(sizes.length > 0 && sizes.every(x => x <= 512 * 1024));
   assert.deepEqual(subIndexes.sort(([a, b], [c, d]) => a - c || b - d),
     [[8, 0], [8, 1], [8, 2], [8, 3], [9, 0], [9, 1], [9, 2], [9, 3]]);
-  assert.ok(progress.some(v => v.includes("Resuming") && v.includes("82%")));
+  assert.ok(progress.some(v => v.includes("Resuming") && v.includes("80%")));
   assert.ok(progress.some(v => v.includes("100%")));
   assert.equal(storage.size, 0);
   assert.equal((await service.chunkStatus(session.uploadToken)).complete, true);
