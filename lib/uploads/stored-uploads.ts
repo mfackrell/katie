@@ -65,6 +65,19 @@ export function createStoredUploadService(storage: Storage, secret: string, opti
   const subChunkPath = (ticket: Ticket, index: number, subIndex: number) =>
     `${chunkPath(ticket, index)}-sub-${String(subIndex).padStart(3, "0")}`;
   const referencePath = (ticket: Ticket) => `references/${ticket.id}.json`;
+  const processingPath = (ticket: Ticket) => `processing/${ticket.id}.json`;
+  type ProcessingRecord = { status: "processing" | "failed"; startedAt: number; error?: string };
+  const processingStaleMs = 5 * 60 * 1000;
+  const readProcessingRecord = async (ticket: Ticket): Promise<ProcessingRecord | null> => {
+    const entry = await objects.download(processingPath(ticket));
+    if (!entry.data) return null;
+    try {
+      const value = JSON.parse(await entry.data.text()) as ProcessingRecord;
+      if ((value.status === "processing" || value.status === "failed") &&
+          Number.isFinite(value.startedAt)) return value;
+    } catch { /* Invalid status cannot be trusted. */ }
+    return null;
+  };
   const compact = (reference: FileReference, ticket: Ticket): FileReference => {
     const metadata = { ...reference };
     delete metadata.extractedText;
@@ -89,7 +102,7 @@ export function createStoredUploadService(storage: Storage, secret: string, opti
   }
   async function cleanExpiredObjects() {
     // Bounded, opportunistic cleanup also removes abandoned uploads.
-    for (const prefix of ["incoming", "references", "chunks"]) {
+    for (const prefix of ["incoming", "references", "chunks", "processing"]) {
       const { data, error } = await objects.list(prefix, { limit: 100, sortBy: { column: "created_at", order: "asc" } });
       if (error) { console.warn("[Upload API] cleanup listing failed", { prefix }); continue; }
       const expired = (data ?? []).filter(item => item.created_at && Date.parse(item.created_at) < now() - RETENTION_MS);
@@ -393,6 +406,66 @@ export function createStoredUploadService(storage: Storage, secret: string, opti
       console.info("[Upload API] prepared", { uploadId: ticket.id, bytes: ticket.size, mimeType: ticket.type, transport: ticket.transport ?? "binary-v1" });
       return { uploadUrl: signed.data.signedUrl, uploadToken: sign(ticket), uploadId: ticket.id };
     },
+    async beginProcessing(token: string) {
+      const ticket = verify(token, "upload");
+      await ensureBucket();
+      const completed = await objects.download(referencePath(ticket));
+      if (completed.data) {
+        return { status: "ready" as const,
+          fileReference: compact(JSON.parse(await completed.data.text()) as FileReference, ticket),
+          scheduled: false };
+      }
+      const prior = await readProcessingRecord(ticket);
+      if (prior?.status === "processing" && now() - prior.startedAt < processingStaleMs) {
+        return { status: "processing" as const, startedAt: prior.startedAt, scheduled: false };
+      }
+      const record: ProcessingRecord = { status: "processing", startedAt: now() };
+      const reserved = await objects.upload(processingPath(ticket), JSON.stringify(record), {
+        contentType: "application/json", upsert: prior !== null,
+      });
+      if (reserved.error) {
+        const another = await readProcessingRecord(ticket);
+        if (another?.status === "processing" && now() - another.startedAt < processingStaleMs) {
+          return { status: "processing" as const, startedAt: another.startedAt, scheduled: false };
+        }
+        throw new Error("Unable to start video processing.");
+      }
+      console.info("[Upload API] scheduled detached video processing", {
+        uploadId: ticket.id, size: ticket.size, retry: prior !== null,
+      });
+      return { status: "processing" as const, startedAt: record.startedAt, scheduled: true };
+    },
+    async processingResult(token: string) {
+      const ticket = verify(token, "upload");
+      await ensureBucket();
+      const completed = await objects.download(referencePath(ticket));
+      if (completed.data) {
+        return { status: "ready" as const,
+          fileReference: compact(JSON.parse(await completed.data.text()) as FileReference, ticket) };
+      }
+      const record = await readProcessingRecord(ticket);
+      if (record?.status === "failed") {
+        return { status: "failed" as const, error: record.error || "Video processing failed." };
+      }
+      if (record?.status === "processing") {
+        return { status: "processing" as const, startedAt: record.startedAt };
+      }
+      return { status: "pending" as const };
+    },
+    async recordProcessingFailure(token: string, error: unknown) {
+      const ticket = verify(token, "upload");
+      const message = error instanceof Error ? error.message : String(error);
+      const record: ProcessingRecord = {
+        status: "failed", startedAt: now(), error: message.slice(0, 350),
+      };
+      const saved = await objects.upload(processingPath(ticket), JSON.stringify(record), {
+        contentType: "application/json", upsert: true,
+      });
+      if (saved.error) throw new Error("Unable to store video processing failure.");
+      console.error("[Upload API] detached video processing failed", {
+        uploadId: ticket.id, message: record.error,
+      });
+    },
     async complete(token: string, rawVideoFrames?: unknown): Promise<FileReference> {
       const ticket = verify(token, "upload");
       const videoFrames = ticket.type.startsWith("video/") ? validateVideoFallbackFrames(rawVideoFrames) : [];
@@ -505,6 +578,24 @@ function getUploadService() {
 
 export const prepareStoredUpload = (input: unknown) => getUploadService().prepare(input);
 export const completeStoredUpload = (token: string, videoFrames?: unknown) => getUploadService().complete(token, videoFrames);
+export const beginStoredUploadProcessing = (token: string) => getUploadService().beginProcessing(token);
+export const getStoredUploadProcessingResult = (token: string) => getUploadService().processingResult(token);
+export const processStoredUploadInBackground = async (token: string): Promise<void> => {
+  try {
+    console.info("[Upload API] background video processing started");
+    await completeStoredUpload(token);
+    console.info("[Upload API] background video processing finished");
+  } catch (error) {
+    console.error("[Upload API] background video processing exception", {
+      message: error instanceof Error ? error.message : String(error),
+    });
+    await getUploadService().recordProcessingFailure(token, error).catch(recordError => {
+      console.error("[Upload API] unable to persist processing failure", {
+        message: recordError instanceof Error ? recordError.message : String(recordError),
+      });
+    });
+  }
+};
 export const uploadStoredChunk = (token: string, index: number, bytes: Uint8Array, subIndex?: number) => getUploadService().uploadChunk(token, index, bytes, subIndex);
 export const getStoredUploadChunkStatus = (token: string) => getUploadService().chunkStatus(token);
 export const hydrateStoredAttachments = (references: FileReference[]) =>

@@ -461,27 +461,106 @@ export async function uploadFilesDirect(
       }
       stage = "processing";
       onStatus(`Processing ${file.name}…`);
-      const videoFrames = isVideo ? await captureFrames(file).catch(() => []) : [];
-      if (isVideo) onStatus(videoFrames.length
-        ? `Saved ${videoFrames.length} video preview frames for backup analysis…`
-        : "Video uploaded; backup frame extraction unavailable.");
-      // Completing may involve Google's video ACTIVE processing; give it a longer
-      // deadline than an individual chunk, and safely retry the idempotent request.
+      // Video frames are recovered on demand from the retained private original.
+      // Never decode the video on the phone or send a multi-megabyte finalization
+      // payload that may fail before it reaches Vercel.
+      void captureFrames;
       let completed: Record<string, unknown> | null = null;
-      for (let attempt = 1; attempt <= (isVideo ? 2 : 1); attempt++) {
-        try {
-          completed = await withUploadDeadline("Processing video", VIDEO_COMPLETION_TIMEOUT_MS, async signal =>
-            readUploadResponse(await fetcher("/api/upload/complete", {
-              method: "POST", signal,
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ uploadToken: prepared!.uploadToken, ...(isVideo ? { videoFrames } : {}) }),
-            }))
-          );
-          break;
-        } catch (error) {
-          if (attempt === (isVideo ? 2 : 1)) throw error;
-          onStatus(`Finalizing ${file.name} again without reuploading…`);
+      if (isVideo) {
+        // Start a detached server job and poll with small independent requests.
+        // Losing any mobile HTTP connection does not restart the original upload.
+        const startedAt = Date.now();
+        const maxWaitMs = 8 * 60_000;
+        let kicks = 0;
+        let nextKickAt = 0;
+        let lastServerError = "";
+        let pollsFailed = 0;
+        let lastStatus = "";
+        while (Date.now() - startedAt < maxWaitMs) {
+          if (Date.now() >= nextKickAt && kicks < 4) {
+            kicks++;
+            nextKickAt = Date.now() + 30_000;
+            try {
+              const kickoff = await withUploadDeadline("Starting video processing", 15_000, async signal =>
+                readUploadResponse(await fetcher("/api/upload/complete", {
+                  method: "POST", signal,
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ uploadToken: prepared.uploadToken, background: true }),
+                }))
+              );
+              if (kickoff.fileReference && typeof kickoff.fileReference === "object") {
+                completed = kickoff;
+                break;
+              }
+              nextKickAt = Date.now() + 5 * 60_000;
+            } catch (error) {
+              lastServerError = error instanceof Error ? error.message : String(error);
+              // The server may already have accepted the kickoff. Poll its
+              // durable state before attempting to schedule the job again.
+              nextKickAt = Date.now() + 12_000;
+              console.warn("[Upload Client] video processing kickoff connection failed", {
+                uploadId, attempt: kicks, message: lastServerError,
+              });
+            }
+          }
+          try {
+            const result = await withUploadDeadline("Checking video processing", 15_000, async signal =>
+              readUploadResponse(await fetcher("/api/upload/result", {
+                method: "POST", signal,
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ uploadToken: prepared.uploadToken }),
+              }))
+            );
+            pollsFailed = 0;
+            if (result.status === "ready" && result.fileReference &&
+                typeof result.fileReference === "object") {
+              completed = result;
+              break;
+            }
+            if (result.status === "failed") {
+              lastServerError = typeof result.error === "string" ? result.error : "Server video processing failed.";
+              if (kicks >= 4) throw new Error(lastServerError);
+              // Retry provider processing from the stored original. Nothing is
+              // uploaded from the device again.
+              nextKickAt = 0;
+              if (lastStatus !== "failed") onStatus(`Video processing interrupted; retrying from saved upload…`);
+            } else if (result.status === "pending") {
+              // The kickoff might have been lost in transit before the server
+              // accepted it. Reissue a tiny request rather than the video.
+              nextKickAt = Math.min(nextKickAt, Date.now() + 3_000);
+            } else if (result.status === "processing") {
+              // A processing job is already underway; never schedule another
+              // merely because its initial HTTP acknowledgement was lost.
+              const beganAt = typeof result.startedAt === "number" ? result.startedAt : Date.now();
+              nextKickAt = Date.now() - beganAt >= 5 * 60_000
+                ? 0 : Math.max(nextKickAt, beganAt + 5 * 60_000);
+            }
+            if (result.status !== lastStatus) {
+              lastStatus = typeof result.status === "string" ? result.status : "processing";
+              if (lastStatus === "processing") onStatus(`Processing ${file.name} securely on the server…`);
+            }
+          } catch (error) {
+            pollsFailed++;
+            const detail = error instanceof Error ? error.message : String(error);
+            if (detail === lastServerError && kicks >= 4) throw error;
+            lastServerError = detail;
+            if (pollsFailed >= 5) {
+              onStatus(`Connection interrupted while processing ${file.name}; retrying status check…`);
+            }
+          }
+          await new Promise(resolve => setTimeout(resolve, 2_000));
         }
+        if (!completed) {
+          throw new Error(`Video parts are saved, but processing did not finish: ${lastServerError || "the processing service did not complete within eight minutes"}. You can retry with the same video without uploading saved parts again.`);
+        }
+      } else {
+        completed = await withUploadDeadline("Processing attachment", VIDEO_COMPLETION_TIMEOUT_MS, async signal =>
+          readUploadResponse(await fetcher("/api/upload/complete", {
+            method: "POST", signal,
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ uploadToken: prepared.uploadToken }),
+          }))
+        );
       }
       if (!completed?.fileReference || typeof completed.fileReference !== "object")
         throw new Error("Attachment processing returned no file reference.");

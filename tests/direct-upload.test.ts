@@ -472,20 +472,100 @@ test("video frame previews are validated, stored privately, compacted, and resto
   assert.deepEqual(restored.videoFrames, frames);
 });
 
-test("video client sends sampled frame evidence with completion request", async () => {
+test("video client initiates detached processing without decoding the phone video or resending preview frames", async () => {
   const file = new File(["mp4"], "clip.mp4", { type: "video/mp4" });
-  const jpeg = "data:image/jpeg;base64," + Buffer.from([0xff, 0xd8, 0, 0, 0, 0, 0xff, 0xd9]).toString("base64");
   const calls: Array<{ url: string; body: unknown }> = [];
   const fetcher: typeof fetch = async (url, init) => {
     calls.push({ url: String(url), body: init?.body });
     if (String(url).endsWith("/prepare")) return Response.json({ uploadUrl: "https://storage.example", uploadToken: "signed" });
     if (String(url).endsWith("/chunk")) return Response.json({ index: 0 });
-    if (String(url).endsWith("/complete")) return Response.json({ fileReference: { fileId: "v1", fileName: "clip.mp4", mimeType: "video/mp4", preview: "test", attachmentKind: "video" } });
+    if (String(url).endsWith("/complete")) return Response.json({
+      fileReference: { fileId: "v1", fileName: "clip.mp4", mimeType: "video/mp4",
+        preview: "test", attachmentKind: "video" }
+    });
     throw new Error("Unexpected upload request");
   };
-  await uploadFilesDirect([file], () => {}, fetcher, async () => [{ timestampSeconds: 0.2, dataUrl: jpeg }]);
-  const completed = JSON.parse(String(calls.find(c => c.url.endsWith("/complete"))?.body));
-  assert.deepEqual(completed.videoFrames, [{ timestampSeconds: 0.2, dataUrl: jpeg }]);
+  await uploadFilesDirect([file], () => {}, fetcher, async () => {
+    throw new Error("Video decoding must not run on the mobile device.");
+  });
+  const requestBody = JSON.parse(String(calls.find(c => c.url.endsWith("/complete"))?.body));
+  assert.equal(requestBody.background, true);
+  assert.equal(requestBody.videoFrames, undefined);
+  assert.ok(JSON.stringify(requestBody).length < 1000);
+});
+
+test("mobile finalization survives lost kickoff response and recovers from polling without reuploading", async () => {
+  const file = new File(["mp4-data"], "video.mp4", { type: "video/mp4" });
+  let chunks = 0;
+  let kicks = 0;
+  let polls = 0;
+  const fetcher: typeof fetch = async (url, init) => {
+    const path = String(url);
+    if (path.endsWith("/prepare")) return Response.json({
+      uploadUrl: "https://storage.example", uploadToken: "signed", uploadId: "22222222-2222-4222-8222-222222222222"
+    });
+    if (path.endsWith("/chunk")) { chunks++; return Response.json({ index: 0 }); }
+    if (path.endsWith("/complete")) {
+      assert.deepEqual(JSON.parse(String(init?.body)), { uploadToken: "signed", background: true });
+      kicks++;
+      throw new TypeError("Load failed"); // Worker accepted the job despite lost HTTP response.
+    }
+    if (path.endsWith("/result")) {
+      polls++;
+      return Response.json(polls < 2 ? { status: "processing", startedAt: Date.now() } :
+        { status: "ready", fileReference: { ...reference, attachmentKind: "video" } });
+    }
+    throw new Error(path);
+  };
+  const status: string[] = [];
+  const completed = await uploadFilesDirect([file], message => status.push(message), fetcher, async () => [], {
+    resumeStorage: null
+  });
+  assert.equal(completed.length, 1);
+  assert.equal(chunks, 1, "the original video chunk must not transfer again");
+  assert.equal(kicks, 1, "poll existing server work instead of relaunching");
+  assert.equal(polls, 2);
+  assert.ok(status.some(x => x.includes("server")));
+});
+
+test("server processing state survives a lost browser connection and returns signed ready reference", async () => {
+  const fake = fakeStorage();
+  const service = createStoredUploadService(fake.storage, "server-only-key", {
+    buildReferences: async () => [{ ...reference, attachmentKind: "video",
+      fileName: "clip.mp4", mimeType: "video/mp4" }],
+  });
+  const prepared = await service.prepare({ name: "clip.mp4", type: "video/mp4",
+    size: 3, transport: "json-base64-v3" });
+  await service.uploadChunk(prepared.uploadToken, 0, new Uint8Array([1, 2, 3]));
+  const queued = await service.beginProcessing(prepared.uploadToken);
+  assert.equal(queued.status, "processing");
+  assert.equal(queued.scheduled, true);
+  const duplicate = await service.beginProcessing(prepared.uploadToken);
+  assert.equal(duplicate.scheduled, false, "only one job should be scheduled");
+  assert.equal((await service.processingResult(prepared.uploadToken)).status, "processing");
+  const saved = await service.complete(prepared.uploadToken);
+  const result = await service.processingResult(prepared.uploadToken);
+  assert.equal(result.status, "ready");
+  if (result.status === "ready") {
+    assert.deepEqual(result.fileReference, saved);
+    assert.ok(result.fileReference.storageToken);
+  }
+  assert.equal((await service.beginProcessing(prepared.uploadToken)).status, "ready");
+  await assert.rejects(service.processingResult(prepared.uploadToken + "tamper"), /invalid or expired/);
+});
+
+test("failed processing is reported durably and can be restarted without reuploading", async () => {
+  const fake = fakeStorage();
+  const service = createStoredUploadService(fake.storage, "server-only-key");
+  const prepared = await service.prepare({ name: "clip.mp4", type: "video/mp4",
+    size: 3, transport: "json-base64-v3" });
+  await service.uploadChunk(prepared.uploadToken, 0, new Uint8Array([1, 2, 3]));
+  assert.equal((await service.beginProcessing(prepared.uploadToken)).scheduled, true);
+  await service.recordProcessingFailure(prepared.uploadToken, new Error("Temporary provider failure"));
+  assert.deepEqual(await service.processingResult(prepared.uploadToken),
+    { status: "failed", error: "Temporary provider failure" });
+  assert.equal((await service.beginProcessing(prepared.uploadToken)).scheduled, true);
+  assert.equal((await service.processingResult(prepared.uploadToken)).status, "processing");
 });
 
 test("stalled upload request is aborted, checked, and retried rather than hanging", async () => {
