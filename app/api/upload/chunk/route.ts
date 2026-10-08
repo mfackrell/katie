@@ -70,6 +70,13 @@ export async function POST(request: NextRequest) {
         throw new UploadInputError("Invalid binary upload chunk length.");
       }
       index = Number(rawIndex);
+      const rawSubIndex = request.headers.get("x-katie-sub-index");
+      if (rawSubIndex !== null) {
+        if (!/^(0|[1-9][0-9]*)$/.test(rawSubIndex) || Number(rawSubIndex) > 3) {
+          throw new UploadInputError("Invalid binary upload subchunk.");
+        }
+        subIndex = Number(rawSubIndex);
+      }
     } else {
       throw new UploadInputError("Unsupported attachment chunk format.");
     }

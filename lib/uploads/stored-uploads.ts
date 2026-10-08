@@ -169,6 +169,62 @@ export function createStoredUploadService(storage: Storage, secret: string, opti
       return { index, ...(useSubChunk ? { subIndex } : {}), chunkCount,
         uploadedBytes: (index * chunkBytes) + (useSubChunk ? subIndex! * UPLOAD_JSON_SMALL_CHUNK_BYTES : 0) + bytes.byteLength };
     },
+    // Signed, private direct-to-Supabase multipart upload URLs avoid putting
+    // Base64 bodies through Vercel. All file paths are derived from the HMAC
+    // ticket and bounded indexes, never from client-supplied paths.
+    async signDirectChunks(token: string, entries: Array<{ index: number; subIndex?: number }>) {
+      const ticket = verify(token, "upload");
+      if (!Array.isArray(entries) || entries.length < 1 || entries.length > 50) {
+        throw new UploadInputError("Request 1 to 50 upload URLs at a time.");
+      }
+      const chunkBytes = chunkBytesFor(ticket);
+      const chunkCount = Math.ceil(ticket.size / chunkBytes);
+      const unique = new Set<string>();
+      const parsed = entries.map(entry => {
+        const index = entry?.index;
+        const subIndex = entry?.subIndex;
+        if (!Number.isSafeInteger(index) || index < 0 || index >= chunkCount) {
+          throw new UploadInputError("Invalid signed upload chunk index.");
+        }
+        const expectedSize = Math.min(chunkBytes, ticket.size - index * chunkBytes);
+        if (subIndex !== undefined && (
+          ticket.transport !== "json-base64-v2" ||
+          !Number.isSafeInteger(subIndex) || subIndex < 0 ||
+          subIndex >= Math.ceil(expectedSize / UPLOAD_JSON_SMALL_CHUNK_BYTES)
+        )) {
+          throw new UploadInputError("Invalid signed upload sub-chunk index.");
+        }
+        const key = `${index}:${subIndex ?? "whole"}`;
+        if (unique.has(key)) throw new UploadInputError("Duplicate signed upload chunk index.");
+        unique.add(key);
+        return {
+          index, ...(subIndex === undefined ? {} : { subIndex }),
+          path: subIndex === undefined ? chunkPath(ticket, index) : subChunkPath(ticket, index, subIndex),
+        };
+      });
+      await ensureBucket();
+      const urls: Array<{ index: number; subIndex?: number; signedUrl: string }> = [];
+      // Bounded parallel requests; signing is quick and never transfers bytes
+      // through Katie's functions.
+      for (let start = 0; start < parsed.length; start += 6) {
+        const signed = await Promise.all(parsed.slice(start, start + 6).map(async entry => {
+          const result = await objects.createSignedUploadUrl(entry.path, { upsert: true });
+          if (result.error || !result.data?.signedUrl) {
+            throw new Error("Unable to authorize private direct video upload.");
+          }
+          return {
+            index: entry.index,
+            ...(entry.subIndex === undefined ? {} : { subIndex: entry.subIndex }),
+            signedUrl: result.data.signedUrl,
+          };
+        }));
+        urls.push(...signed);
+      }
+      console.info("[Upload API] private direct upload URLs issued", {
+        uploadId: ticket.id, chunkCount: urls.length, transport: ticket.transport ?? "binary-v1",
+      });
+      return { uploadId: ticket.id, transport: ticket.transport ?? "binary-v1", urls };
+    },
     // Only a valid HMAC-signed ticket can inspect this upload's chunk progress.
     async chunkStatus(token: string) {
       const ticket = verify(token, "upload");
@@ -598,6 +654,7 @@ export const processStoredUploadInBackground = async (token: string): Promise<vo
 };
 export const uploadStoredChunk = (token: string, index: number, bytes: Uint8Array, subIndex?: number) => getUploadService().uploadChunk(token, index, bytes, subIndex);
 export const getStoredUploadChunkStatus = (token: string) => getUploadService().chunkStatus(token);
+export const signStoredUploadChunks = (token: string, entries: Array<{ index: number; subIndex?: number }>) => getUploadService().signDirectChunks(token, entries);
 export const hydrateStoredAttachments = (references: FileReference[]) =>
   references.some(reference => reference.storageToken) ? getUploadService().hydrate(references) : Promise.resolve(references);
 

@@ -13,7 +13,7 @@ function fakeStorage() {
     getBucket: async () => ({ data: bucket, error: bucket ? null : { message: "Not found" } }),
     createBucket: async (_name: string, options: { public: boolean }) => { bucket = options; return { data: {}, error: null }; },
     from: () => ({
-      createSignedUploadUrl: async (path: string) => { signedPaths.push(path); return { data: { signedUrl: `https://storage.example/${path}?token=scoped` }, error: null }; },
+      createSignedUploadUrl: async (path: string) => { signedPaths.push(path); return { data: { signedUrl: `https://unit.supabase.co/storage/v1/object/upload/sign/katie-attachments/${path}?token=scoped` }, error: null }; },
       download: async (path: string) => { downloads.push(path); return { data: files.get(path) ?? null, error: files.has(path) ? null : { message: "Not found" } }; },
       upload: async (path: string, body: BlobPart, options?: { contentType?: string }) => { files.set(path, new Blob([body], { type: options?.contentType || "" })); return { data: {}, error: null }; },
       remove: async (paths: string[]) => { paths.forEach(path => files.delete(path)); return { error: null }; },
@@ -22,6 +22,22 @@ function fakeStorage() {
   };
   return { files, signedPaths, downloads, storage: storage as unknown as Parameters<typeof createStoredUploadService>[0], isPrivate: () => bucket?.public === false };
 }
+async function parseReceivedChunk(init?: RequestInit): Promise<{
+  uploadToken: string; index: number; subIndex?: number; data: string;
+}> {
+  const header = (init?.headers ?? {}) as Record<string, string>;
+  if (header["Content-Type"] === "application/octet-stream") {
+    const bytes = Buffer.from(await (init?.body as Blob).arrayBuffer());
+    return {
+      uploadToken: header["x-katie-upload-token"], index: Number(header["x-katie-chunk-index"]),
+      ...(header["x-katie-sub-index"] === undefined ? {} :
+        { subIndex: Number(header["x-katie-sub-index"]) }),
+      data: bytes.toString("base64"),
+    };
+  }
+  return JSON.parse(String(init?.body));
+}
+
 const reference: FileReference = {
   fileId: "document-id", fileName: "report.docx", mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
   preview: "Quarterly report", attachmentKind: "text", extractionCoverage: "full", totalChunks: 1,
@@ -127,7 +143,7 @@ test("HTML and plain-text upload failures produce useful errors and stop before 
   await assert.rejects(uploadFilesDirect([new File(["abc"], "report.txt")], () => {}, async () => Response.json(null, { status: 400 })), /HTTP 400/);
 });
 
-test("iPhone video uploads stay on Katie's origin and retry failed chunks", async () => {
+test("iPhone fallback sends binary video pieces without Base64 and retries failed chunks", async () => {
   const file = new File([new Uint8Array(3 * 1024 * 1024 + 17)], "clip.mov", { type: "video/quicktime" });
   const calls: Array<{ path: string; init?: RequestInit }> = [];
   const progress: string[] = [];
@@ -147,8 +163,8 @@ test("iPhone video uploads stay on Katie's origin and retry failed chunks", asyn
     if (path.endsWith("/telemetry")) return new Response(null, { status: 204 });
     assert.equal(path, "/api/upload/chunk", "video bytes must never go to a cross-origin signed URL");
     assert.equal(init?.method, "POST");
-    assert.equal((init?.headers as Record<string, string>)["Content-Type"], "application/json");
-    const payload = JSON.parse(String(init?.body));
+    assert.equal((init?.headers as Record<string, string>)["Content-Type"], "application/octet-stream");
+    const payload = await parseReceivedChunk(init);
     assert.equal(payload.uploadToken, "upload-receipt");
     assert.ok(payload.index >= 0 && payload.index <= 6);
     assert.ok(Buffer.from(payload.data, "base64").length <= 512 * 1024);
@@ -157,14 +173,14 @@ test("iPhone video uploads stay on Katie's origin and retry failed chunks", asyn
       transientFailure = false;
       throw new TypeError("Network interrupted");
     }
-    return Response.json({ index: JSON.parse(String(init?.body)).index });
+    return Response.json({ index: (await parseReceivedChunk(init)).index });
   };
   const refs = await uploadFilesDirect([file], message => progress.push(message), fetcher);
   assert.equal(refs[0].attachmentKind, "video");
   assert.deepEqual(calls.filter(call => ["/api/upload/prepare", "/api/upload/chunk", "/api/upload/complete"].includes(call.path))
     .map(call => call.path), ["/api/upload/prepare", ...Array(8).fill("/api/upload/chunk"), "/api/upload/complete"]);
-  const uploaded = calls.filter(call => call.path === "/api/upload/chunk")
-    .map(call => JSON.parse(String(call.init?.body)));
+  const uploaded = await Promise.all(calls.filter(call => call.path === "/api/upload/chunk")
+    .map(call => parseReceivedChunk(call.init)));
   assert.equal(uploaded.filter(item => item.index === 0).length, 2);
   assert.equal(uploaded.filter(item => item.index === 0)[0].data,
     uploaded.filter(item => item.index === 0)[1].data, "retry reuses the same encoded bytes");
@@ -201,7 +217,7 @@ test("video uploader starts three chunks in parallel and ramps to four after hea
       uploadId: "66666666-6666-4666-8666-666666666666",
     });
     if (path.endsWith("/chunk")) {
-      const index = JSON.parse(String(init?.body)).index as number;
+      const index = (await parseReceivedChunk(init)).index as number;
       started.push(index);
       active++;
       maxActive = Math.max(active, maxActive);
@@ -263,7 +279,7 @@ test("a failed chunk retries independently while other chunks succeed, reducing 
     });
     if (path.endsWith("/telemetry")) return new Response(null, { status: 204 });
     if (path.endsWith("/chunk")) {
-      const index = JSON.parse(String(init?.body)).index as number;
+      const index = (await parseReceivedChunk(init)).index as number;
       sent.push(index);
       if (index === 0 && badAttempts++ === 0) return Response.json({ error: "Transient" }, { status: 503 });
       succeeded.add(index);
@@ -285,6 +301,139 @@ test("a failed chunk retries independently while other chunks succeed, reducing 
   assert.ok(progress.some(value => value.includes("2 parallel")),
     "transport failure lowers concurrent work to two");
   assert.equal(succeeded.size, chunkCount);
+});
+
+test("direct signed storage upload transfers 20.5 MB through multipart binary without relaying video to Vercel", async () => {
+  const fake = fakeStorage();
+  const source = new Uint8Array(20532259);
+  for (let i = 0; i < source.length; i++) source[i] = (i * 11) % 251;
+  const file = new File([source], "ScreenRecording.mp4", { type: "video/mp4", lastModified: 124 });
+  const service = createStoredUploadService(fake.storage, "test-only-secret", {
+    buildReferences: async files => {
+      assert.deepEqual(new Uint8Array(await files[0].arrayBuffer()), source,
+        "server must assemble the original video exactly");
+      return [{ ...reference, attachmentKind: "video", fileName: file.name, mimeType: "video/mp4" }];
+    }
+  });
+  const accepted = new Set<number>();
+  let directCount = 0;
+  let relayCount = 0;
+  let finalizations = 0;
+  let timedOut = false;
+  const fetcher: typeof fetch = async (rawUrl, init) => {
+    const url = String(rawUrl);
+    if (url === "/api/upload/prepare") {
+      const prepared = await service.prepare(JSON.parse(String(init?.body)));
+      return Response.json(prepared);
+    }
+    if (url === "/api/upload/direct-url") {
+      const data = JSON.parse(String(init?.body));
+      return Response.json(await service.signDirectChunks(data.uploadToken, data.entries));
+    }
+    if (url.startsWith("https://unit.supabase.co/storage/v1/object/upload/sign/")) {
+      directCount++;
+      assert.equal(init?.method, "PUT");
+      assert.ok(init?.body instanceof FormData);
+      const path = decodeURIComponent(new URL(url).pathname.split("katie-attachments/")[1]);
+      const uploadedBlob = (init!.body as FormData).get("") as Blob;
+      assert.ok(uploadedBlob instanceof Blob);
+      assert.ok(uploadedBlob.size > 0 && uploadedBlob.size <= 512 * 1024);
+      // Simulate a lost Storage acknowledgement after the server commits a
+      // chunk. Next status probe must recover without duplicating the bytes.
+      fake.files.set(path, uploadedBlob);
+      const index = Number(path.match(/-(\d{3})$/)?.[1]);
+      accepted.add(index);
+      if (!timedOut) { timedOut = true; throw new TypeError("Connection lost after Storage committed"); }
+      return Response.json({ Key: path });
+    }
+    if (url === "/api/upload/chunk") {
+      relayCount++;
+      const part = await parseReceivedChunk(init);
+      await service.uploadChunk(part.uploadToken, part.index,
+        new Uint8Array(Buffer.from(part.data, "base64")), part.subIndex);
+      return Response.json({ index: part.index });
+    }
+    if (url === "/api/upload/status") {
+      const data = JSON.parse(String(init?.body));
+      return Response.json(await service.chunkStatus(data.uploadToken));
+    }
+    if (url === "/api/upload/complete") {
+      const data = JSON.parse(String(init?.body));
+      finalizations++;
+      return Response.json({ fileReference: await service.complete(data.uploadToken) });
+    }
+    if (url === "/api/upload/telemetry") return new Response(null, { status: 204 });
+    throw new Error("Unexpected upload request " + url);
+  };
+  const result = await uploadFilesDirect([file], () => {}, fetcher, async () => [], {
+    resumeStorage: null, chunkTimeoutMs: 1_000, statusTimeoutMs: 1_000, retryDelayMs: 0,
+  });
+  assert.equal(result.length, 1);
+  assert.equal(directCount, 40, "every byte goes directly to private Storage, without an extra Vercel transfer");
+  assert.equal(relayCount, 0, "acknowledgement check prevents redundant first-party relay");
+  assert.equal(finalizations, 1);
+  assert.deepEqual(accepted.size, 40);
+});
+
+test("signed direct URL issuance is ticket-bound and validates every chunk index", async () => {
+  const fake = fakeStorage();
+  const service = createStoredUploadService(fake.storage, "secret");
+  const prepared = await service.prepare({
+    name: "clip.mp4", size: 2 * 512 * 1024, type: "video/mp4", transport: "json-base64-v3",
+  });
+  const signed = await service.signDirectChunks(prepared.uploadToken, [{ index: 0 }, { index: 1 }]);
+  assert.equal(signed.urls.length, 2);
+  assert.ok(signed.urls.every(item => item.signedUrl.includes("chunks/")));
+  await assert.rejects(service.signDirectChunks(prepared.uploadToken, [{ index: 2 }]), /Invalid signed upload chunk index/);
+  await assert.rejects(service.signDirectChunks(prepared.uploadToken, [{ index: 0 }, { index: 0 }]), /Duplicate signed upload chunk index/);
+  await assert.rejects(service.signDirectChunks(prepared.uploadToken + "tamper", [{ index: 0 }]), /invalid or expired/);
+  await assert.rejects(service.signDirectChunks(prepared.uploadToken, [{ index: 0, subIndex: 0 }]), /Invalid signed upload sub-chunk/);
+});
+
+test("failed direct upload falls back to first-party raw binary with intact original bytes", async () => {
+  const fake = fakeStorage();
+  const video = new Uint8Array(512 * 1024 + 67);
+  for (let index = 0; index < video.length; index++) video[index] = index % 191;
+  const file = new File([video], "fallback.mp4", { type: "video/mp4" });
+  let relayed = 0;
+  const service = createStoredUploadService(fake.storage, "secret", {
+    buildReferences: async files => {
+      assert.deepEqual(new Uint8Array(await files[0].arrayBuffer()), video);
+      return [{ ...reference, fileName: file.name, attachmentKind: "video", mimeType: "video/mp4" }];
+    }
+  });
+  const fetcher: typeof fetch = async (url, init) => {
+    const path = String(url);
+    if (path === "/api/upload/prepare")
+      return Response.json(await service.prepare(JSON.parse(String(init?.body))));
+    if (path === "/api/upload/direct-url") {
+      const data = JSON.parse(String(init?.body));
+      return Response.json(await service.signDirectChunks(data.uploadToken, data.entries));
+    }
+    if (path.startsWith("https://unit.supabase.co/")) throw new TypeError("Direct Storage blocked by local network");
+    if (path === "/api/upload/chunk") {
+      relayed++;
+      assert.equal((init?.headers as Record<string, string>)["Content-Type"], "application/octet-stream");
+      const data = await parseReceivedChunk(init);
+      assert.ok(Buffer.from(data.data, "base64").length <= 512 * 1024);
+      return Response.json(await service.uploadChunk(data.uploadToken, data.index,
+        new Uint8Array(Buffer.from(data.data, "base64")), data.subIndex));
+    }
+    if (path === "/api/upload/status") {
+      const data = JSON.parse(String(init?.body));
+      return Response.json(await service.chunkStatus(data.uploadToken));
+    }
+    if (path === "/api/upload/complete") return Response.json({
+      fileReference: await service.complete(JSON.parse(String(init?.body)).uploadToken)
+    });
+    if (path === "/api/upload/telemetry") return new Response(null, { status: 204 });
+    throw new Error("Unexpected " + path);
+  };
+  const files = await uploadFilesDirect([file], () => {}, fetcher, async () => [], {
+    resumeStorage: null, retryDelayMs: 0,
+  });
+  assert.equal(files.length, 1);
+  assert.equal(relayed, 2);
 });
 
 test("server verifies, reassembles, and preserves chunked videos without changing permanent attachment workflow", async () => {
@@ -345,7 +494,7 @@ test("video upload failures are diagnosed by stage without sending filenames or 
   assert.deepEqual(diagnostics.slice(0, 3).map(item => item.outcome), ["http-error", "http-error", "http-error"]);
   assert.deepEqual(diagnostics.slice(0, 3).map(item => item.httpStatus), [403, 403, 403]);
   assert.ok(diagnostics.slice(0, 3).every(item => typeof item.durationMs === "number" &&
-    item.transport === "json-base64-v3" && item.encodedBytes === 1368));
+    item.transport === "json-base64-v3" && item.encodedBytes === 1024));
   assert.equal(diagnostics[3].chunkIndex, 0);
   assert.equal(diagnostics[3].uploadId, "22222222-2222-4222-8222-222222222222");
   assert.ok(!JSON.stringify(diagnostics[0]).includes("private-video.mov"));
@@ -656,7 +805,7 @@ test("video retries resume previously transferred chunks after a failed upload u
       chunkCount: 2, uploadedIndexes: [...accepted], complete: false,
     });
     if (path.endsWith("/chunk")) {
-      const part = JSON.parse(String(init?.body)).index as number;
+      const part = (await parseReceivedChunk(init)).index as number;
       posted.push(part);
       if (part === 1 && !allowSecond) return Response.json({ error: "Unavailable" }, { status: 502 });
       accepted.add(part);
@@ -730,7 +879,7 @@ test("existing 2 MiB v2 upload receipts resume with original chunk boundaries af
       chunkBytes: 2 * 1024 * 1024, transport: "json-base64-v2", uploadedIndexes: [0],
     });
     if (path.endsWith("/chunk")) {
-      const payload = JSON.parse(String(init?.body));
+      const payload = await parseReceivedChunk(init);
       indices.push(payload.index);
       assert.equal(payload.uploadToken, "existing-v2-ticket");
       assert.equal(Buffer.from(payload.data, "base64").length, 7);
@@ -783,11 +932,11 @@ test("legacy v2 upload resumes eight accepted 2 MiB chunks using only 512 KiB su
     if (path.endsWith("/prepare")) throw new Error("Must not discard existing chunks.");
     if (path.endsWith("/status")) return Response.json(await service.chunkStatus(session.uploadToken));
     if (path.endsWith("/chunk")) {
-      const payload = JSON.parse(String(init?.body));
+      const payload = await parseReceivedChunk(init);
       const chunkBytes = Buffer.from(payload.data, "base64");
       sizes.push(chunkBytes.length);
       assert.equal(typeof payload.subIndex, "number", "no legacy 2 MiB POSTs allowed");
-      subIndexes.push([payload.index, payload.subIndex]);
+      subIndexes.push([payload.index, payload.subIndex!]);
       return Response.json(await service.uploadChunk(session.uploadToken, payload.index,
         new Uint8Array(chunkBytes), payload.subIndex));
     }
