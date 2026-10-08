@@ -512,7 +512,7 @@ test("mobile finalization survives lost kickoff response and recovers from polli
     }
     if (path.endsWith("/result")) {
       polls++;
-      return Response.json(polls < 2 ? { status: "processing", startedAt: 123 } :
+      return Response.json(polls < 2 ? { status: "processing", startedAt: Date.now() } :
         { status: "ready", fileReference: { ...reference, attachmentKind: "video" } });
     }
     throw new Error(path);
