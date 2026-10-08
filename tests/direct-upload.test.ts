@@ -669,7 +669,7 @@ test("existing 2 MiB v2 upload receipts resume with original chunk boundaries af
 
 test("legacy v2 upload resumes eight accepted 2 MiB chunks using only 512 KiB subchunk requests", async () => {
   const fake = fakeStorage();
-  const source = new Uint8Array(8 * 2 * 1024 * 1024 + 2 * 1024 * 1024 + 1234);
+  const source = new Uint8Array(20532259);
   for (let i = 0; i < source.length; i++) source[i] = (i * 7) % 253;
   const file = new File([source], "old-video.mp4", { type: "video/mp4", lastModified: 1000 });
   let builds = 0;
@@ -724,8 +724,8 @@ test("legacy v2 upload resumes eight accepted 2 MiB chunks using only 512 KiB su
   assert.equal(builds, 1);
   assert.ok(sizes.length > 0 && sizes.every(x => x <= 512 * 1024));
   assert.deepEqual(subIndexes.sort(([a, b], [c, d]) => a - c || b - d),
-    [[8, 0], [8, 1], [8, 2], [8, 3], [9, 0], [9, 1], [9, 2]]);
-  assert.ok(progress.some(v => v.includes("Resuming") && v.includes("88%")));
+    [[8, 0], [8, 1], [8, 2], [8, 3], [9, 0], [9, 1], [9, 2], [9, 3]]);
+  assert.ok(progress.some(v => v.includes("Resuming") && v.includes("82%")));
   assert.ok(progress.some(v => v.includes("100%")));
   assert.equal(storage.size, 0);
   assert.equal((await service.chunkStatus(session.uploadToken)).complete, true);
