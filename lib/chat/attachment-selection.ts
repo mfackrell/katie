@@ -5,7 +5,7 @@ import type { FileReference } from "@/lib/providers/types";
 import type { Message } from "@/lib/types/chat";
 
 export type AttachmentSelection = { attachment: ConversationAttachment; mode: "summary" | "source" };
-export type AttachmentDecision = { selections: AttachmentSelection[]; clarification?: string; method: "summary-selector" | "fallback" | "none" };
+export type AttachmentDecision = { selections: AttachmentSelection[]; clarification?: string; method: "summary-selector" | "fallback" | "continuity" | "none" };
 const decisionSchema = z.object({
   selections: z.array(z.object({ id: z.string(), mode: z.enum(["summary", "source"]) })).max(5),
   clarification: z.string().max(500).optional(),
@@ -24,6 +24,66 @@ export function rankAttachmentCandidates(message: string, catalog: ConversationA
     return { file, score, index };
   }).sort((a, b) => b.score - a.score || (b.file.createdAt ?? "").localeCompare(a.file.createdAt ?? "") || b.index - a.index);
   return scored.slice(0, 40).map(item => item.file);
+}
+
+/**
+ * A selector can omit the video when the user responds to Katie's last
+ * assessment rather than naming the recording ("Nineteen is an adult!").
+ * Preserve current-chat visual context for a short, relevant continuation,
+ * not for a new task or unrelated topic.
+ *
+ * Only IDs already present in this chat's recent user messages AND the actor's
+ * saved catalog can be reopened. Never use global "last upload" state.
+ */
+const VIDEO_CONTINUATION = /\b(?:video|videos|clip|recording|footage|frames?|screen|image|picture|what (?:else|did you see)|why|explain|it|its|that|this|those|these|he|she|they|her|his|their|you|your|actually|but|no|wrong|incorrect|saw|shown|visible|look(?:s|ed)?)\b/i;
+const CLEAR_NEW_TASK = /^\s*(?:new topic|unrelated|switch (?:topic|subjects?)|change (?:the )?subject|forget (?:that|the video)|write (?:me|an?|the)\b|draft\b|remind me\b|schedule\b|translate\b|calculate\b|find me\b|search for\b|what time\b|where (?:is|are)\b|tell me about (?!that\b|this\b|it\b|the (?:video|recording|clip)\b))/i;
+const SUMMARY_ONLY_VISUAL = /\b(?:saved summary only|summary only|don't (?:open|inspect)|do not (?:open|inspect))\b/i;
+
+export function retainActiveVideoEvidence(
+  decision: AttachmentDecision,
+  message: string,
+  catalog: ConversationAttachment[],
+  history: Message[],
+  newlyAttachedFiles: string[] = [],
+): AttachmentDecision {
+  if (newlyAttachedFiles.length || decision.clarification || SUMMARY_ONLY_VISUAL.test(message) ||
+      CLEAR_NEW_TASK.test(message) || message.length > 350) return decision;
+
+  const users = history.filter(entry => entry.role === "user");
+  let lastVideoTurn = -1;
+  for (let index = users.length - 1; index >= 0; index--) {
+    if ((users[index].attachments ?? []).some(file => file.mimeType.startsWith("video/"))) {
+      lastVideoTurn = index;
+      break;
+    }
+  }
+  if (lastVideoTurn < 0 || users.length - lastVideoTurn > 2) return decision;
+  const intervening = users.slice(lastVideoTurn + 1);
+  if (intervening.some(entry => (entry.attachments?.length ?? 0) > 0 &&
+      !(entry.attachments ?? []).some(file => file.mimeType.startsWith("video/"))) ||
+      intervening.some(entry => CLEAR_NEW_TASK.test(entry.content))) return decision;
+
+  const explicitOrReferential = VIDEO_CONTINUATION.test(message);
+  const immediateCorrection = users.length - lastVideoTurn === 1 &&
+    message.length <= 160 && (/[!?]\s*$/.test(message) ||
+      /^(?:i disagree|that's false|that's wrong|not true|you're wrong)/i.test(message));
+  if (!explicitOrReferential && !immediateCorrection) return decision;
+
+  const historicalVideos = (users[lastVideoTurn].attachments ?? []).filter(file =>
+    file.mimeType.startsWith("video/"));
+  if (historicalVideos.length !== 1) return decision; // Don't guess between several recordings.
+  const source = catalog.find(file => file.id === historicalVideos[0].id);
+  if (!source) return decision; // Missing or cross-actor source is not usable.
+  const hasOtherSource = decision.selections.some(item =>
+    item.attachment.id !== source.id);
+  if (hasOtherSource) return decision; // Respect an explicit different-file selection.
+
+  if (decision.selections.length === 1 && decision.selections[0].mode === "source") return decision;
+  return {
+    ...decision,
+    selections: [{ attachment: source, mode: "source" }],
+    method: "continuity",
+  };
 }
 
 export function validateAttachmentDecision(raw: unknown, message: string, candidates: ConversationAttachment[]): AttachmentDecision {
@@ -66,7 +126,10 @@ export async function selectStoredAttachments(
       if (response.candidates?.[0]?.finishReason === "MAX_TOKENS") throw new Error("SelectorOutputTruncated");
       return JSON.parse(response.text ?? "{}");
     });
-    return validateAttachmentDecision(await run(prompt), message, candidates);
+    return retainActiveVideoEvidence(
+      validateAttachmentDecision(await run(prompt), message, candidates),
+      message, catalog, history, newFileNames
+    );
   } catch (error) {
     console.warn("[Attachments] Selector unavailable", { errorType: error instanceof Error ? (error.message === "SelectorOutputTruncated" ? "truncated-output" : error.name) : "unknown" });
     // A failed selector must not pretend that summaries or invented files were inspected.
@@ -86,7 +149,11 @@ export async function selectStoredAttachments(
       else if (typed.length > 1) return { method: "fallback", selections: [], clarification: `Which saved ${kind} do you mean? Please name the file or describe it more specifically.` };
     }
     if (!fallback.length && !kind && !newFileNames.length) fallback = selectFollowUpAttachments(message, history);
-    return { method: "fallback", selections: fallback.map(attachment => ({ attachment, mode: SUMMARY_ONLY.test(message) && attachment.observedSummary && attachment.summaryCoverage !== "metadata" ? "summary" : "source" })) };
+    return retainActiveVideoEvidence({
+      method: "fallback",
+      selections: fallback.map(attachment => ({ attachment, mode:
+        SUMMARY_ONLY.test(message) && attachment.observedSummary && attachment.summaryCoverage !== "metadata" ? "summary" : "source" }))
+    }, message, catalog, history, newFileNames);
   }
 }
 
