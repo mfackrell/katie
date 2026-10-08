@@ -119,35 +119,6 @@ async function readUploadResponse(response: Response): Promise<Record<string, un
   return payload;
 }
 
-// v3's 512 KiB slice creates a ~700 KiB JSON body; old v2 receipts remain 2 MiB.
-// FileReader is the established iOS Blob reader; arrayBuffer is a fallback and
-// keeps Node's browser-side tests independent of browser globals.
-async function videoSliceAsBase64(slice: Blob): Promise<string> {
-  if (typeof FileReader !== "undefined") {
-    try {
-      return await new Promise<string>((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onerror = () => reject(reader.error ?? new Error("Could not read video part."));
-        reader.onload = () => {
-          const value = reader.result;
-          if (typeof value !== "string" || !value.includes(",")) {
-            reject(new Error("Could not encode video part."));
-            return;
-          }
-          resolve(value.slice(value.indexOf(",") + 1));
-        };
-        reader.readAsDataURL(slice);
-      });
-    } catch { /* Fall back to Blob.arrayBuffer for this individual part. */ }
-  }
-  const bytes = new Uint8Array(await slice.arrayBuffer());
-  const blocks: string[] = [];
-  for (let offset = 0; offset < bytes.length; offset += 8192) {
-    blocks.push(String.fromCharCode(...bytes.subarray(offset, offset + 8192)));
-  }
-  return btoa(blocks.join(""));
-}
-
 // No filename, upload bytes, signed URL, or token are sent in diagnostics.
 // This records browser-only failures previously missing from Vercel logs.
 async function reportVideoUploadError(
@@ -344,49 +315,111 @@ export async function uploadFilesDirect(
         let concurrency = 3;
         let healthyStreak = 0;
 
+        // The former JSON-to-Vercel path never reached the server on affected
+        // iOS devices. Issue short-lived, per-index Supabase Storage upload URLs.
+        // The browser sends real binary bytes directly to the private bucket.
+        // Old v2 receipts use signed 512 KiB subparts without losing progress.
+        const directUrls = new Map<string, string>();
+        const unitKey = (unit: WorkUnit) => `${unit.index}:${unit.subIndex ?? "whole"}`;
+        for (let start = 0; start < missingUnits.length; start += 40) {
+          try {
+            const batch = missingUnits.slice(start, start + 40);
+            const signed = await withUploadDeadline("Authorizing private video transfer", 35_000, async signal =>
+              readUploadResponse(await fetcher("/api/upload/direct-url", {
+                method: "POST", signal,
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  uploadToken: prepared.uploadToken,
+                  entries: batch.map(({ index, subIndex }) => ({
+                    index, ...(subIndex === undefined ? {} : { subIndex }),
+                  })),
+                }),
+              }))
+            );
+            if (signed.uploadId !== uploadId || !Array.isArray(signed.urls) ||
+                signed.urls.length !== batch.length) throw new Error("Incomplete private upload signing response.");
+            for (const item of signed.urls as Array<Record<string, unknown>>) {
+              if (typeof item?.index !== "number" ||
+                  typeof item?.signedUrl !== "string") throw new Error("Invalid private upload URL.");
+              const url = new URL(item.signedUrl);
+              // Fail closed rather than send video bytes to a mistaken provider.
+              if (url.protocol !== "https:" ||
+                  !url.hostname.endsWith(".supabase.co") ||
+                  !url.pathname.includes("/storage/v1/object/upload/sign/katie-attachments/chunks/") ||
+                  !url.searchParams.has("token")) {
+                throw new Error("Private upload destination was not authorized.");
+              }
+              const subIndex = typeof item.subIndex === "number" ? item.subIndex : undefined;
+              directUrls.set(`${item.index}:${subIndex ?? "whole"}`, item.signedUrl);
+            }
+          } catch (error) {
+            console.warn("[Upload Client] direct storage signing unavailable; using first-party binary relay", {
+              uploadId, message: error instanceof Error ? error.message : String(error),
+            });
+            // No Base64 relay: even fallback uploads remain raw 512 KiB binary.
+            directUrls.clear();
+            break;
+          }
+        }
+        if (directUrls.size === missingUnits.length) {
+          onStatus(`Uploading ${file.name} directly to private storage…`);
+        } else {
+          directUrls.clear();
+          onStatus(`Uploading ${file.name} through binary relay…`);
+        }
+
         const uploadPart = async (unit: WorkUnit): Promise<{ healthy: boolean }> => {
           const { index, subIndex, ordinal, offset } = unit;
-          const slice = file.slice(offset, offset + unit.size);
-          // Encode once per chunk, even when one worker retries multiple times.
-          const data = await withUploadDeadline(`Encoding video part ${index + 1}`, 15_000,
-            async () => videoSliceAsBase64(slice));
-          const uploadBody = JSON.stringify({
-            uploadToken: prepared.uploadToken, index,
-            ...(subIndex !== undefined ? { subIndex } : {}), data
-          });
+          const slice = file.slice(offset, offset + unit.size, "application/octet-stream");
+          let method: "direct-storage" | "binary-relay" = directUrls.has(unitKey(unit))
+            ? "direct-storage" : "binary-relay";
           let encounteredFailure = false;
           for (let attempt = 1; attempt <= 3; attempt++) {
             const started = Date.now();
             try {
               await withUploadDeadline(`Video part ${ordinal + 1}/${totalUnits}`, chunkTimeoutMs, async signal => {
-                await readUploadResponse(await fetcher("/api/upload/chunk", {
-                  method: "POST", signal,
-                  headers: { "Content-Type": "application/json" }, body: uploadBody,
-                }));
+                if (method === "direct-storage") {
+                  const form = new FormData();
+                  form.append("cacheControl", "3600");
+                  form.append("", slice);
+                  await readUploadResponse(await fetcher(directUrls.get(unitKey(unit))!, {
+                    method: "PUT", signal, body: form,
+                  }));
+                } else {
+                  await readUploadResponse(await fetcher("/api/upload/chunk", {
+                    method: "POST", signal,
+                    headers: {
+                      "Content-Type": "application/octet-stream",
+                      "x-katie-upload-token": prepared.uploadToken,
+                      "x-katie-chunk-index": String(index),
+                      ...(subIndex === undefined ? {} : { "x-katie-sub-index": String(subIndex) }),
+                    },
+                    body: slice,
+                  }));
+                }
               });
               const durationMs = Date.now() - started;
               await logChunkAttempt(fetcher, {
                 uploadId, chunkIndex: ordinal, attempt, durationMs,
-                encodedBytes: data.length, transport, outcome: "success"
+                encodedBytes: slice.size, transport, outcome: "success",
               });
               return { healthy: !encounteredFailure && durationMs < 8_000 };
             } catch (error) {
               encounteredFailure = true;
-              // Back off immediately. Already-running requests finish independently;
-              // newly scheduled requests respect the reduced worker count.
+              const failedMethod = method;
+              if (method === "direct-storage") method = "binary-relay";
+              // Leave other workers running while this unit fails over.
               concurrency = Math.max(2, concurrency - 1);
               healthyStreak = 0;
               await logChunkAttempt(fetcher, {
                 uploadId, chunkIndex: ordinal, attempt, durationMs: Date.now() - started,
-                encodedBytes: data.length, transport, outcome: attemptOutcome(error),
+                encodedBytes: slice.size, transport, outcome: attemptOutcome(error),
                 ...(error instanceof UploadHttpError ? { httpStatus: error.status } : {}),
-                detail: error instanceof Error ? error.message : "Unknown video transport error",
+                detail: `${failedMethod}: ${error instanceof Error ? error.message : "Unknown binary transport error"}`,
               });
-              // The server might have committed the part but its acknowledgement
-              // vanished. A signed status check avoids duplicate uploads.
               const shouldCheckSaved = !(error instanceof UploadHttpError) || error.status >= 500;
               if (shouldCheckSaved) {
-                onStatus(`Video part ${index + 1} interrupted; checking saved progress…`);
+                onStatus(`Video part ${ordinal + 1} interrupted; checking saved progress…`);
                 try {
                   const saved = await status(prepared.uploadToken);
                   if (saved.uploadId === prepared.uploadId && saved.chunkCount === chunkCount &&
@@ -394,11 +427,11 @@ export async function uploadFilesDirect(
                         (subIndex !== undefined && saved.uploadedSubIndexes?.includes(index * 4 + subIndex)))) {
                     return { healthy: false };
                   }
-                } catch { /* Status checks are bounded; preserve the independent retry. */ }
+                } catch { /* Retry raw binary without throwing away saved chunks. */ }
               }
               if (attempt === 3) {
                 const detail = error instanceof Error ? error.message : String(error);
-                throw new Error(`Video upload failed at part ${ordinal + 1}/${totalUnits}: ${detail}. Saved chunks can be resumed by selecting this file again.`);
+                throw new Error(`Video upload failed at part ${ordinal + 1}/${totalUnits} (${failedMethod}): ${detail}. Saved chunks can be resumed by selecting this file again.`);
               }
               onStatus(`Retrying ${file.name}: part ${ordinal + 1}/${totalUnits} (attempt ${attempt + 1}/3, ${concurrency} parallel)…`);
               await new Promise(resolve => setTimeout(resolve, retryDelayMs * attempt));
