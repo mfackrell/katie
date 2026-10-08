@@ -631,6 +631,13 @@ export async function POST(request: NextRequest) {
     const attachmentDecision = await selectStoredAttachments(message, catalog, attachmentHistory, undefined, newAttachments.map(file => file.fileName));
     const selectedBeforePruning = attachmentDecision.selections.length;
     attachmentDecision.selections = pruneRepeatedVideoSelections(newAttachments, attachmentDecision.selections, message);
+    if (attachmentDecision.method === "continuity") {
+      console.info("[Visual Continuity] previous video source selected for follow-up", {
+        chatId, selectedCount: attachmentDecision.selections.length,
+        videoCount: attachmentDecision.selections.filter(item => item.attachment.mimeType.startsWith("video/")).length,
+        sourceRequested: attachmentDecision.selections.every(item => item.mode === "source"),
+      });
+    }
     if (selectedBeforePruning > attachmentDecision.selections.length) {
       console.info("[Attachment Routing] skipped saved copy of newly attached recording", {
         skippedCount: selectedBeforePruning - attachmentDecision.selections.length,
