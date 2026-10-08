@@ -260,6 +260,9 @@ export function createStoredUploadService(storage: Storage, secret: string, opti
           const part = await objects.download(path);
           const expected = Math.min(UPLOAD_RELAY_CHUNK_BYTES, ticket.size - index * UPLOAD_RELAY_CHUNK_BYTES);
           if (part.error || !part.data || part.data.size !== expected) {
+            if (index === 0 && !part.data) {
+              throw new UploadInputError("The file upload did not finish. Please attach the file again.");
+            }
             throw new UploadInputError(`The file upload stopped at chunk ${index + 1}/${chunkCount}. Please retry the upload.`);
           }
           blobs.push(part.data);
