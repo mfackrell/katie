@@ -49,7 +49,8 @@ type VideoUploadOptions = {
   resumeStorage?: ResumeStorage | null;
 };
 type PreparedUpload = { uploadToken: string; uploadUrl: string; uploadId?: string; transport?: VideoTransport };
-type Progress = { uploadId: string; chunkCount: number; chunkBytes?: number; transport?: string; uploadedIndexes: number[]; complete: boolean };
+type Progress = { uploadId: string; chunkCount: number; chunkBytes?: number; transport?: string;
+  uploadedIndexes: number[]; uploadedSubIndexes?: number[]; complete: boolean };
 
 function browserResumeStorage(): ResumeStorage | null {
   try { return typeof window === "undefined" ? null : window.sessionStorage; }
@@ -234,8 +235,12 @@ export async function uploadFilesDirect(
       const chunkCount = payload.chunkCount as number;
       if (!indexes.every(value => typeof value === "number" && Number.isSafeInteger(value) &&
         value >= 0 && value < chunkCount)) throw new Error("Invalid upload progress indexes.");
+      const subIndexes: unknown[] = Array.isArray(payload.uploadedSubIndexes) ? payload.uploadedSubIndexes : [];
+      if (!subIndexes.every(value => typeof value === "number" && Number.isSafeInteger(value) &&
+        value >= 0 && value < chunkCount * 4)) throw new Error("Invalid saved upload subparts.");
       return { uploadId: payload.uploadId, uploadedIndexes: indexes as number[],
-        chunkCount, chunkBytes: typeof payload.chunkBytes === "number" ? payload.chunkBytes : undefined,
+        uploadedSubIndexes: subIndexes as number[], chunkCount,
+        chunkBytes: typeof payload.chunkBytes === "number" ? payload.chunkBytes : undefined,
         transport: typeof payload.transport === "string" ? payload.transport : undefined,
         complete: payload.complete === true };
     });
@@ -253,6 +258,7 @@ export async function uploadFilesDirect(
       let chunkBytes = chunkSizeFor(transport);
       let chunkCount = isVideo ? Math.ceil(file.size / chunkBytes) : 0;
       let completedChunks = new Set<number>();
+      let completedSubParts = new Set<number>();
       if (prepared) {
         try {
           onStatus(`Checking saved progress for ${file.name}…`);
@@ -262,7 +268,19 @@ export async function uploadFilesDirect(
               (saved.transport && saved.transport !== transport))
             throw new Error("Saved upload does not match this video.");
           completedChunks = new Set(saved.uploadedIndexes);
-          onStatus(`Resuming ${file.name}: ${Math.round((completedChunks.size / chunkCount) * 100)}% saved…`);
+          completedSubParts = new Set(saved.uploadedSubIndexes ?? []);
+          const savedParts = transport === "json-base64-v2"
+            ? Array.from({ length: chunkCount }, (_, index) => {
+              const size = Math.min(chunkBytes, file.size - index * chunkBytes);
+              const subCount = Math.ceil(size / JSON_VIDEO_SMALL_CHUNK_BYTES);
+              return completedChunks.has(index) ? subCount :
+                Array.from({ length: subCount }, (_, sub) => completedSubParts.has(index * 4 + sub) ? 1 : 0)
+                  .reduce<number>((a, b) => a + b, 0);
+            }).reduce((a, b) => a + b, 0)
+            : completedChunks.size;
+          const totalParts = transport === "json-base64-v2"
+            ? Math.ceil(file.size / JSON_VIDEO_SMALL_CHUNK_BYTES) : chunkCount;
+          onStatus(`Resuming ${file.name}: ${Math.round((savedParts / totalParts) * 100)}% saved…`);
         } catch {
           // Expired/tampered tickets or failed status checks cannot be trusted.
           clearResumeSession(resumeStorage, key);
@@ -297,23 +315,50 @@ export async function uploadFilesDirect(
         // Supabase stores each signed chunk by index, so they can arrive in any order.
         // A bounded adaptive work queue prevents one stalled request from blocking
         // unrelated chunks. Never launch all chunks together (up to 400 per video).
-        const missingIndexes = Array.from({ length: chunkCount }, (_, index) => index)
-          .filter(index => !completedChunks.has(index));
+        // For old v2 tickets, retain previously uploaded 2 MiB chunks but
+        // send every missing byte as a small 512 KiB signed subchunk. An old
+        // interrupted session must NEVER fall back to 2.8 MB HTTP requests.
+        const legacyV2 = transport === "json-base64-v2";
+        type WorkUnit = { index: number; subIndex?: number; offset: number; size: number; ordinal: number };
+        const missingUnits: WorkUnit[] = [];
+        let acknowledgedUnits = 0;
+        let totalUnits = 0;
+        for (let index = 0; index < chunkCount; index++) {
+          const originalStart = index * chunkBytes;
+          const originalSize = Math.min(chunkBytes, file.size - originalStart);
+          const unitSize = legacyV2 ? JSON_VIDEO_SMALL_CHUNK_BYTES : chunkBytes;
+          const subCount = Math.ceil(originalSize / unitSize);
+          for (let sub = 0; sub < subCount; sub++) {
+            const ordinal = totalUnits++;
+            const alreadyUploaded = completedChunks.has(index) ||
+              (legacyV2 && completedSubParts.has(index * 4 + sub));
+            if (alreadyUploaded) { acknowledgedUnits++; continue; }
+            missingUnits.push({
+              index, ...(legacyV2 ? { subIndex: sub } : {}),
+              offset: originalStart + sub * unitSize,
+              size: Math.min(unitSize, originalSize - sub * unitSize),
+              ordinal,
+            });
+          }
+        }
         let concurrency = 3;
         let healthyStreak = 0;
 
-        const uploadPart = async (index: number): Promise<{ healthy: boolean }> => {
-          const offset = index * chunkBytes;
-          const slice = file.slice(offset, Math.min(offset + chunkBytes, file.size));
+        const uploadPart = async (unit: WorkUnit): Promise<{ healthy: boolean }> => {
+          const { index, subIndex, ordinal, offset } = unit;
+          const slice = file.slice(offset, offset + unit.size);
           // Encode once per chunk, even when one worker retries multiple times.
           const data = await withUploadDeadline(`Encoding video part ${index + 1}`, 15_000,
             async () => videoSliceAsBase64(slice));
-          const uploadBody = JSON.stringify({ uploadToken: prepared.uploadToken, index, data });
+          const uploadBody = JSON.stringify({
+            uploadToken: prepared.uploadToken, index,
+            ...(subIndex !== undefined ? { subIndex } : {}), data
+          });
           let encounteredFailure = false;
           for (let attempt = 1; attempt <= 3; attempt++) {
             const started = Date.now();
             try {
-              await withUploadDeadline(`Video part ${index + 1}/${chunkCount}`, chunkTimeoutMs, async signal => {
+              await withUploadDeadline(`Video part ${ordinal + 1}/${totalUnits}`, chunkTimeoutMs, async signal => {
                 await readUploadResponse(await fetcher("/api/upload/chunk", {
                   method: "POST", signal,
                   headers: { "Content-Type": "application/json" }, body: uploadBody,
@@ -321,7 +366,7 @@ export async function uploadFilesDirect(
               });
               const durationMs = Date.now() - started;
               await logChunkAttempt(fetcher, {
-                uploadId, chunkIndex: index, attempt, durationMs,
+                uploadId, chunkIndex: ordinal, attempt, durationMs,
                 encodedBytes: data.length, transport, outcome: "success"
               });
               return { healthy: !encounteredFailure && durationMs < 8_000 };
@@ -332,7 +377,7 @@ export async function uploadFilesDirect(
               concurrency = Math.max(2, concurrency - 1);
               healthyStreak = 0;
               await logChunkAttempt(fetcher, {
-                uploadId, chunkIndex: index, attempt, durationMs: Date.now() - started,
+                uploadId, chunkIndex: ordinal, attempt, durationMs: Date.now() - started,
                 encodedBytes: data.length, transport, outcome: attemptOutcome(error),
                 ...(error instanceof UploadHttpError ? { httpStatus: error.status } : {}),
                 detail: error instanceof Error ? error.message : "Unknown video transport error",
@@ -345,20 +390,21 @@ export async function uploadFilesDirect(
                 try {
                   const saved = await status(prepared.uploadToken);
                   if (saved.uploadId === prepared.uploadId && saved.chunkCount === chunkCount &&
-                      saved.uploadedIndexes.includes(index)) {
+                      (saved.uploadedIndexes.includes(index) ||
+                        (subIndex !== undefined && saved.uploadedSubIndexes?.includes(index * 4 + subIndex)))) {
                     return { healthy: false };
                   }
                 } catch { /* Status checks are bounded; preserve the independent retry. */ }
               }
               if (attempt === 3) {
                 const detail = error instanceof Error ? error.message : String(error);
-                throw new Error(`Video upload failed at part ${index + 1}/${chunkCount}: ${detail}. Saved chunks can be resumed by selecting this file again.`);
+                throw new Error(`Video upload failed at part ${ordinal + 1}/${totalUnits}: ${detail}. Saved chunks can be resumed by selecting this file again.`);
               }
-              onStatus(`Retrying ${file.name}: part ${index + 1}/${chunkCount} (attempt ${attempt + 1}/3, ${concurrency} parallel)…`);
+              onStatus(`Retrying ${file.name}: part ${ordinal + 1}/${totalUnits} (attempt ${attempt + 1}/3, ${concurrency} parallel)…`);
               await new Promise(resolve => setTimeout(resolve, retryDelayMs * attempt));
             }
           }
-          throw new Error(`Video upload stopped at part ${index + 1}.`);
+          throw new Error(`Video upload stopped at part ${ordinal + 1}.`);
         };
 
         await new Promise<void>((resolve, reject) => {
@@ -369,11 +415,11 @@ export async function uploadFilesDirect(
 
           const dispatch = () => {
             if (stopped) return;
-            while (!firstFailure && active < concurrency && next < missingIndexes.length) {
-              const index = missingIndexes[next++];
+            while (!firstFailure && active < concurrency && next < missingUnits.length) {
+              const unit = missingUnits[next++];
               active++;
-              void uploadPart(index).then(({ healthy }) => {
-                completedChunks.add(index);
+              void uploadPart(unit).then(({ healthy }) => {
+                acknowledgedUnits++;
                 if (healthy) {
                   healthyStreak++;
                   // Increase 3 -> 4 only after sustained fast, error-free transfers.
@@ -386,10 +432,10 @@ export async function uploadFilesDirect(
                 } else {
                   healthyStreak = 0;
                 }
-                onStatus(`Uploading ${file.name}: ${Math.round((completedChunks.size / chunkCount) * 100)}% (${concurrency} parallel)…`);
+                onStatus(`Uploading ${file.name}: ${Math.round((acknowledgedUnits / totalUnits) * 100)}% (${concurrency} parallel)…`);
               }).catch(error => {
                 if (!firstFailure) {
-                  chunkIndex = index;
+                  chunkIndex = unit.ordinal;
                   firstFailure = error instanceof Error ? error : new Error(String(error));
                 }
               }).finally(() => {
@@ -399,7 +445,7 @@ export async function uploadFilesDirect(
             }
             // On an exhausted chunk, stop scheduling new ones but let every
             // in-flight worker settle before reporting failure or finalizing.
-            if (active === 0 && (firstFailure || next >= missingIndexes.length)) {
+            if (active === 0 && (firstFailure || next >= missingUnits.length)) {
               stopped = true;
               if (firstFailure) reject(firstFailure);
               else resolve();

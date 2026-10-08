@@ -60,6 +60,10 @@ export function createStoredUploadService(storage: Storage, secret: string, opti
     ? UPLOAD_JSON_SMALL_CHUNK_BYTES
     : ticket.transport === "json-base64-v2" ? UPLOAD_JSON_CHUNK_BYTES : UPLOAD_RELAY_CHUNK_BYTES;
   const chunkPath = (ticket: Ticket, index: number) => `chunks/${ticket.id}-${String(index).padStart(3, "0")}`;
+  // New browsers may finish old v2 receipts in 512 KiB parts without re-uploading
+  // complete 2 MiB chunks or changing the already signed session layout.
+  const subChunkPath = (ticket: Ticket, index: number, subIndex: number) =>
+    `${chunkPath(ticket, index)}-sub-${String(subIndex).padStart(3, "0")}`;
   const referencePath = (ticket: Ticket) => `references/${ticket.id}.json`;
   const compact = (reference: FileReference, ticket: Ticket): FileReference => {
     const metadata = { ...reference };
@@ -115,7 +119,7 @@ export function createStoredUploadService(storage: Storage, secret: string, opti
   return {
     // Authenticated by the same short-lived HMAC ticket as the original signed upload.
     // A client can only write bounded chunks to its own randomly generated incoming path.
-    async uploadChunk(token: string, index: number, bytes: Uint8Array) {
+    async uploadChunk(token: string, index: number, bytes: Uint8Array, subIndex?: number) {
       const startedAtMs = Date.now();
       const ticket = verify(token, "upload");
       const chunkBytes = chunkBytesFor(ticket);
@@ -124,20 +128,33 @@ export function createStoredUploadService(storage: Storage, secret: string, opti
         throw new UploadInputError("Invalid attachment chunk index.");
       }
       const expected = Math.min(chunkBytes, ticket.size - index * chunkBytes);
-      if (bytes.byteLength !== expected) {
+      const useSubChunk = subIndex !== undefined;
+      let expectedBytes = expected;
+      if (useSubChunk) {
+        if (ticket.transport !== "json-base64-v2" || !Number.isSafeInteger(subIndex) ||
+            subIndex < 0 || subIndex >= Math.ceil(expected / UPLOAD_JSON_SMALL_CHUNK_BYTES)) {
+          throw new UploadInputError("Invalid legacy video sub-chunk.");
+        }
+        expectedBytes = Math.min(UPLOAD_JSON_SMALL_CHUNK_BYTES,
+          expected - subIndex! * UPLOAD_JSON_SMALL_CHUNK_BYTES);
+      }
+      if (bytes.byteLength !== expectedBytes) {
         throw new UploadInputError(`Attachment chunk ${index + 1}/${chunkCount} has the wrong size.`);
       }
       await ensureBucket();
-      const { error } = await objects.upload(chunkPath(ticket, index), bytes, {
+      const path = useSubChunk ? subChunkPath(ticket, index, subIndex!) : chunkPath(ticket, index);
+      const { error } = await objects.upload(path, bytes, {
         contentType: "application/octet-stream",
         upsert: true, // Retry after a mobile network interruption without duplicating bytes.
       });
       if (error) throw new Error(`Unable to store attachment chunk ${index + 1}: ${error.message}`);
       console.info("[Upload API] stored chunk", {
-        uploadId: ticket.id, index, chunkCount, bytes: bytes.byteLength,
-        transport: ticket.transport ?? "binary-v1", storageWriteMs: Date.now() - startedAtMs
+        uploadId: ticket.id, index, ...(useSubChunk ? { subIndex } : {}), chunkCount,
+        bytes: bytes.byteLength, transport: ticket.transport ?? "binary-v1",
+        storageWriteMs: Date.now() - startedAtMs
       });
-      return { index, chunkCount, uploadedBytes: (index * chunkBytes) + bytes.byteLength };
+      return { index, ...(useSubChunk ? { subIndex } : {}), chunkCount,
+        uploadedBytes: (index * chunkBytes) + (useSubChunk ? subIndex! * UPLOAD_JSON_SMALL_CHUNK_BYTES : 0) + bytes.byteLength };
     },
     // Only a valid HMAC-signed ticket can inspect this upload's chunk progress.
     async chunkStatus(token: string) {
@@ -156,28 +173,46 @@ export function createStoredUploadService(storage: Storage, secret: string, opti
       // Paginate; a 200 MB v3 video can contain 400 accepted chunks.
       // Restrict to this signed ticket's UUID so uploads cannot inspect each other.
       const uploaded = new Set<number>();
-      for (let offset = 0; offset <= chunkCount; offset += 100) {
+      const uploadedSubParts = new Set<number>();
+      const potentialStoredEntries = chunkCount +
+        (ticket.transport === "json-base64-v2" ? Math.ceil(ticket.size / UPLOAD_JSON_SMALL_CHUNK_BYTES) : 0);
+      for (let offset = 0; offset <= potentialStoredEntries; offset += 100) {
         const listed = await objects.list("chunks", { limit: 100, offset, search: ticket.id });
         if (listed.error) throw new Error("Unable to check saved video upload progress.");
         for (const entry of listed.data ?? []) {
           const expectedPrefix = ticket.id + "-";
           if (!entry.name.startsWith(expectedPrefix)) continue;
           const suffix = entry.name.slice(expectedPrefix.length);
-          if (!/^[0-9]{3}$/.test(suffix)) continue;
-          const index = Number(suffix);
+          const match = /^([0-9]{3})(?:-sub-([0-9]{3}))?$/.exec(suffix);
+          if (!match) continue;
+          const index = Number(match[1]);
           if (index < 0 || index >= chunkCount) continue;
           const expected = Math.min(chunkBytes, ticket.size - index * chunkBytes);
           const size = entry.metadata?.size;
-          if (size != null && Number(size) !== expected) continue;
-          uploaded.add(index);
+          if (match[2] !== undefined) {
+            if (ticket.transport !== "json-base64-v2") continue;
+            const part = Number(match[2]);
+            if (part >= Math.ceil(expected / UPLOAD_JSON_SMALL_CHUNK_BYTES)) continue;
+            const expectedPartSize = Math.min(UPLOAD_JSON_SMALL_CHUNK_BYTES,
+              expected - part * UPLOAD_JSON_SMALL_CHUNK_BYTES);
+            if (size != null && Number(size) !== expectedPartSize) continue;
+            uploadedSubParts.add(index * 4 + part);
+          } else {
+            if (size != null && Number(size) !== expected) continue;
+            uploaded.add(index);
+          }
         }
         if ((listed.data ?? []).length < 100) break;
       }
       const uploadedIndexes = [...uploaded].sort((a, b) => a - b);
+      const uploadedSubIndexes = [...uploadedSubParts].sort((a, b) => a - b);
       console.info("[Upload API] upload resume status", {
-        uploadId: ticket.id, completedChunks: uploadedIndexes.length, chunkCount, transport: ticket.transport ?? "binary-v1"
+        uploadId: ticket.id, completedChunks: uploadedIndexes.length,
+        completedSubChunks: uploadedSubIndexes.length,
+        chunkCount, transport: ticket.transport ?? "binary-v1"
       });
-      return { uploadId: ticket.id, chunkCount, chunkBytes, transport: ticket.transport ?? "binary-v1", uploadedIndexes, complete: false };
+      return { uploadId: ticket.id, chunkCount, chunkBytes,
+        transport: ticket.transport ?? "binary-v1", uploadedIndexes, uploadedSubIndexes, complete: false };
     },
     async catalog(chatId: string, scope: "chat" | "actor" = "chat"): Promise<{ initialized: boolean; attachments: ConversationAttachment[] }> {
       await ensureBucket();
@@ -381,17 +416,34 @@ export function createStoredUploadService(storage: Storage, secret: string, opti
             const path = chunkPath(ticket, index);
             const part = await objects.download(path);
             const expected = Math.min(chunkBytes, ticket.size - index * chunkBytes);
-            if (part.error || !part.data || part.data.size !== expected) {
-              if (index === 0 && !part.data) {
-                throw new UploadInputError("The file upload did not finish. Please attach the file again.");
-              }
-              throw new UploadInputError(`The file upload stopped at chunk ${index + 1}/${chunkCount}. Please retry the upload.`);
+            if (!part.error && part.data && part.data.size === expected) {
+              return { paths: [path], blob: part.data };
             }
-            return { path, blob: part.data };
+            // If a legacy 2 MiB receipt has not got this whole chunk, it may
+            // have been completed as 512 KiB sub-chunks on a newer client.
+            if (ticket.transport === "json-base64-v2") {
+              const subCount = Math.ceil(expected / UPLOAD_JSON_SMALL_CHUNK_BYTES);
+              const recovered = await Promise.all(Array.from({ length: subCount }, async (_, subIndex) => {
+                const subPath = subChunkPath(ticket, index, subIndex);
+                const sub = await objects.download(subPath);
+                const expectedSub = Math.min(UPLOAD_JSON_SMALL_CHUNK_BYTES,
+                  expected - subIndex * UPLOAD_JSON_SMALL_CHUNK_BYTES);
+                if (sub.error || !sub.data || sub.data.size !== expectedSub) return null;
+                return { path: subPath, blob: sub.data };
+              }));
+              if (recovered.every((entry): entry is { path: string; blob: Blob } => entry !== null)) {
+                return { paths: recovered.map(entry => entry.path),
+                  blob: new Blob(recovered.map(entry => entry.blob)) };
+              }
+            }
+            if (index === 0 && !part.data) {
+              throw new UploadInputError("The file upload did not finish. Please attach the file again.");
+            }
+            throw new UploadInputError(`The file upload stopped at chunk ${index + 1}/${chunkCount}. Please retry the upload.`);
           }));
           for (const part of parts) {
             blobs.push(part.blob);
-            chunkPaths.push(part.path);
+            chunkPaths.push(...part.paths);
           }
         }
         const merged = new Blob(blobs, { type: ticket.type || "application/octet-stream" });
@@ -453,7 +505,7 @@ function getUploadService() {
 
 export const prepareStoredUpload = (input: unknown) => getUploadService().prepare(input);
 export const completeStoredUpload = (token: string, videoFrames?: unknown) => getUploadService().complete(token, videoFrames);
-export const uploadStoredChunk = (token: string, index: number, bytes: Uint8Array) => getUploadService().uploadChunk(token, index, bytes);
+export const uploadStoredChunk = (token: string, index: number, bytes: Uint8Array, subIndex?: number) => getUploadService().uploadChunk(token, index, bytes, subIndex);
 export const getStoredUploadChunkStatus = (token: string) => getUploadService().chunkStatus(token);
 export const hydrateStoredAttachments = (references: FileReference[]) =>
   references.some(reference => reference.storageToken) ? getUploadService().hydrate(references) : Promise.resolve(references);
