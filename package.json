@@ -63,5 +63,8 @@
   },
   "engines": {
     "node": "22.x"
+  },
+  "optionalDependencies": {
+    "@ffmpeg-installer/linux-x64": "4.1.0"
   }
 }
