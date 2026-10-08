@@ -11,13 +11,15 @@ const BUCKET = "katie-attachments";
 const RETENTION_MS = 24 * 60 * 60 * 1000;
 // Below Vercel's 4.5 MB request-body limit; allows uploads without browser-to-Storage CORS.
 export const UPLOAD_RELAY_CHUNK_BYTES = 3 * 1024 * 1024;
-// New mobile transport uses small JSON requests instead of Blob request bodies.
+// Preserve 2 MiB uploads prepared before the smaller v3 transport was deployed.
 export const UPLOAD_JSON_CHUNK_BYTES = 2 * 1024 * 1024;
+// v3 sends ~700 KiB JSON requests instead of ~2.8 MiB JSON requests.
+export const UPLOAD_JSON_SMALL_CHUNK_BYTES = 512 * 1024;
 export const uploadMetadataSchema = z.object({
   name: z.string().trim().min(1).max(255),
   type: z.string().max(128),
   size: z.number().int().positive().max(200 * 1024 * 1024),
-  transport: z.enum(["json-base64-v2"]).optional(),
+  transport: z.enum(["json-base64-v2", "json-base64-v3"]).optional(),
 });
 const ticketSchema = uploadMetadataSchema.extend({
   id: z.string().uuid(), kind: z.enum(["upload", "reference"]), expires: z.number().int().positive(),
@@ -54,7 +56,9 @@ export function createStoredUploadService(storage: Storage, secret: string, opti
     }
   };
   const sourcePath = (ticket: Ticket) => `incoming/${ticket.id}`;
-  const chunkBytesFor = (ticket: Ticket) => ticket.transport === "json-base64-v2" ? UPLOAD_JSON_CHUNK_BYTES : UPLOAD_RELAY_CHUNK_BYTES;
+  const chunkBytesFor = (ticket: Ticket) => ticket.transport === "json-base64-v3"
+    ? UPLOAD_JSON_SMALL_CHUNK_BYTES
+    : ticket.transport === "json-base64-v2" ? UPLOAD_JSON_CHUNK_BYTES : UPLOAD_RELAY_CHUNK_BYTES;
   const chunkPath = (ticket: Ticket, index: number) => `chunks/${ticket.id}-${String(index).padStart(3, "0")}`;
   const referencePath = (ticket: Ticket) => `references/${ticket.id}.json`;
   const compact = (reference: FileReference, ticket: Ticket): FileReference => {
@@ -112,6 +116,7 @@ export function createStoredUploadService(storage: Storage, secret: string, opti
     // Authenticated by the same short-lived HMAC ticket as the original signed upload.
     // A client can only write bounded chunks to its own randomly generated incoming path.
     async uploadChunk(token: string, index: number, bytes: Uint8Array) {
+      const startedAtMs = Date.now();
       const ticket = verify(token, "upload");
       const chunkBytes = chunkBytesFor(ticket);
       const chunkCount = Math.ceil(ticket.size / chunkBytes);
@@ -128,7 +133,10 @@ export function createStoredUploadService(storage: Storage, secret: string, opti
         upsert: true, // Retry after a mobile network interruption without duplicating bytes.
       });
       if (error) throw new Error(`Unable to store attachment chunk ${index + 1}: ${error.message}`);
-      console.info("[Upload API] stored chunk", { uploadId: ticket.id, index, chunkCount, bytes: bytes.byteLength, transport: ticket.transport ?? "binary-v1" });
+      console.info("[Upload API] stored chunk", {
+        uploadId: ticket.id, index, chunkCount, bytes: bytes.byteLength,
+        transport: ticket.transport ?? "binary-v1", storageWriteMs: Date.now() - startedAtMs
+      });
       return { index, chunkCount, uploadedBytes: (index * chunkBytes) + bytes.byteLength };
     },
     // Only a valid HMAC-signed ticket can inspect this upload's chunk progress.
@@ -139,31 +147,37 @@ export function createStoredUploadService(storage: Storage, secret: string, opti
       const chunkCount = Math.ceil(ticket.size / chunkBytes);
       const completed = await objects.download(referencePath(ticket));
       if (completed.data) {
-        return { uploadId: ticket.id, chunkCount, uploadedIndexes: Array.from({ length: chunkCount }, (_, index) => index), complete: true };
+        return { uploadId: ticket.id, chunkCount, chunkBytes, transport: ticket.transport ?? "binary-v1", uploadedIndexes: Array.from({ length: chunkCount }, (_, index) => index), complete: true };
       }
       const source = await objects.download(sourcePath(ticket));
       if (source.data?.size === ticket.size) {
-        return { uploadId: ticket.id, chunkCount, uploadedIndexes: Array.from({ length: chunkCount }, (_, index) => index), complete: false };
+        return { uploadId: ticket.id, chunkCount, chunkBytes, transport: ticket.transport ?? "binary-v1", uploadedIndexes: Array.from({ length: chunkCount }, (_, index) => index), complete: false };
       }
-      // Restrict the listing by UUID and then verify the full filename and size.
-      const listed = await objects.list("chunks", { limit: 100, search: ticket.id });
-      if (listed.error) throw new Error("Unable to check saved video upload progress.");
-      const uploadedIndexes: number[] = [];
-      for (const entry of listed.data ?? []) {
-        const expectedPrefix = ticket.id + "-";
-        if (!entry.name.startsWith(expectedPrefix)) continue;
-        const suffix = entry.name.slice(expectedPrefix.length);
-        if (!/^[0-9]{3}$/.test(suffix)) continue;
-        const index = Number(suffix);
-        if (index < 0 || index >= chunkCount) continue;
-        const expected = Math.min(chunkBytes, ticket.size - index * chunkBytes);
-        const size = entry.metadata?.size;
-        if (size != null && Number(size) !== expected) continue;
-        uploadedIndexes.push(index);
+      // Paginate; a 200 MB v3 video can contain 400 accepted chunks.
+      // Restrict to this signed ticket's UUID so uploads cannot inspect each other.
+      const uploaded = new Set<number>();
+      for (let offset = 0; offset <= chunkCount; offset += 100) {
+        const listed = await objects.list("chunks", { limit: 100, offset, search: ticket.id });
+        if (listed.error) throw new Error("Unable to check saved video upload progress.");
+        for (const entry of listed.data ?? []) {
+          const expectedPrefix = ticket.id + "-";
+          if (!entry.name.startsWith(expectedPrefix)) continue;
+          const suffix = entry.name.slice(expectedPrefix.length);
+          if (!/^[0-9]{3}$/.test(suffix)) continue;
+          const index = Number(suffix);
+          if (index < 0 || index >= chunkCount) continue;
+          const expected = Math.min(chunkBytes, ticket.size - index * chunkBytes);
+          const size = entry.metadata?.size;
+          if (size != null && Number(size) !== expected) continue;
+          uploaded.add(index);
+        }
+        if ((listed.data ?? []).length < 100) break;
       }
-      uploadedIndexes.sort((a, b) => a - b);
-      console.info("[Upload API] upload resume status", { uploadId: ticket.id, completedChunks: uploadedIndexes.length, chunkCount });
-      return { uploadId: ticket.id, chunkCount, uploadedIndexes, complete: false };
+      const uploadedIndexes = [...uploaded].sort((a, b) => a - b);
+      console.info("[Upload API] upload resume status", {
+        uploadId: ticket.id, completedChunks: uploadedIndexes.length, chunkCount, transport: ticket.transport ?? "binary-v1"
+      });
+      return { uploadId: ticket.id, chunkCount, chunkBytes, transport: ticket.transport ?? "binary-v1", uploadedIndexes, complete: false };
     },
     async catalog(chatId: string, scope: "chat" | "actor" = "chat"): Promise<{ initialized: boolean; attachments: ConversationAttachment[] }> {
       await ensureBucket();
@@ -358,18 +372,27 @@ export function createStoredUploadService(storage: Storage, secret: string, opti
         const chunkCount = Math.ceil(ticket.size / chunkBytes);
         const blobs: Blob[] = [];
         const chunkPaths: string[] = [];
-        for (let index = 0; index < chunkCount; index++) {
-          const path = chunkPath(ticket, index);
-          const part = await objects.download(path);
-          const expected = Math.min(chunkBytes, ticket.size - index * chunkBytes);
-          if (part.error || !part.data || part.data.size !== expected) {
-            if (index === 0 && !part.data) {
-              throw new UploadInputError("The file upload did not finish. Please attach the file again.");
+        // Bounded parallel reads keep 40+ small chunks from making finalization
+        // unnecessarily slow. Store parts in index order to preserve exact bytes.
+        for (let start = 0; start < chunkCount; start += 6) {
+          const end = Math.min(chunkCount, start + 6);
+          const parts = await Promise.all(Array.from({ length: end - start }, async (_, offset) => {
+            const index = start + offset;
+            const path = chunkPath(ticket, index);
+            const part = await objects.download(path);
+            const expected = Math.min(chunkBytes, ticket.size - index * chunkBytes);
+            if (part.error || !part.data || part.data.size !== expected) {
+              if (index === 0 && !part.data) {
+                throw new UploadInputError("The file upload did not finish. Please attach the file again.");
+              }
+              throw new UploadInputError(`The file upload stopped at chunk ${index + 1}/${chunkCount}. Please retry the upload.`);
             }
-            throw new UploadInputError(`The file upload stopped at chunk ${index + 1}/${chunkCount}. Please retry the upload.`);
+            return { path, blob: part.data };
+          }));
+          for (const part of parts) {
+            blobs.push(part.blob);
+            chunkPaths.push(part.path);
           }
-          blobs.push(part.data);
-          chunkPaths.push(path);
         }
         const merged = new Blob(blobs, { type: ticket.type || "application/octet-stream" });
         if (merged.size !== ticket.size) {

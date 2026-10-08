@@ -136,17 +136,22 @@ test("iPhone video uploads stay on Katie's origin and retry failed chunks", asyn
     const path = String(url);
     calls.push({ path, init });
     if (path.endsWith("/prepare")) {
-      assert.equal(JSON.parse(String(init?.body)).transport, "json-base64-v2");
+      assert.equal(JSON.parse(String(init?.body)).transport, "json-base64-v3");
       return Response.json({ uploadUrl: "https://storage.example/cross-origin", uploadToken: "upload-receipt", uploadId: "11111111-1111-4111-8111-111111111111" });
     }
     if (path.endsWith("/complete")) return Response.json({ fileReference: { ...reference, attachmentKind: "video", fileName: "clip.mov" } });
+    if (path.endsWith("/status")) return Response.json({
+      uploadId: "11111111-1111-4111-8111-111111111111",
+      chunkCount: 7, chunkBytes: 512 * 1024, transport: "json-base64-v3", uploadedIndexes: [],
+    });
+    if (path.endsWith("/telemetry")) return new Response(null, { status: 204 });
     assert.equal(path, "/api/upload/chunk", "video bytes must never go to a cross-origin signed URL");
     assert.equal(init?.method, "POST");
     assert.equal((init?.headers as Record<string, string>)["Content-Type"], "application/json");
     const payload = JSON.parse(String(init?.body));
     assert.equal(payload.uploadToken, "upload-receipt");
-    assert.ok([0, 1].includes(payload.index));
-    assert.ok(Buffer.from(payload.data, "base64").length <= 2 * 1024 * 1024);
+    assert.ok(payload.index >= 0 && payload.index <= 6);
+    assert.ok(Buffer.from(payload.data, "base64").length <= 512 * 1024);
     assert.equal(Buffer.from(payload.data, "base64").toString("base64"), payload.data);
     if (transientFailure) {
       transientFailure = false;
@@ -156,9 +161,12 @@ test("iPhone video uploads stay on Katie's origin and retry failed chunks", asyn
   };
   const refs = await uploadFilesDirect([file], message => progress.push(message), fetcher);
   assert.equal(refs[0].attachmentKind, "video");
-  assert.deepEqual(calls.map(call => call.path), [
-    "/api/upload/prepare", "/api/upload/chunk", "/api/upload/chunk", "/api/upload/chunk", "/api/upload/complete"
-  ]);
+  assert.deepEqual(calls.filter(call => ["/api/upload/prepare", "/api/upload/chunk", "/api/upload/complete"].includes(call.path))
+    .map(call => call.path), ["/api/upload/prepare", ...Array(8).fill("/api/upload/chunk"), "/api/upload/complete"]);
+  const uploaded = calls.filter(call => call.path === "/api/upload/chunk")
+    .map(call => JSON.parse(String(call.init?.body)));
+  assert.equal(uploaded[0].data, uploaded[1].data, "retry reuses the same encoded bytes");
+  assert.deepEqual(uploaded.map(item => item.index), [0, 0, 1, 2, 3, 4, 5, 6]);
   assert.ok(progress.some(message => message.includes("Retrying")));
   assert.ok(progress.some(message => message.includes("100%")));
 });
@@ -216,10 +224,14 @@ test("video upload failures are diagnosed by stage without sending filenames or 
   };
   await assert.rejects(uploadFilesDirect([file], () => {}, fetcher), /part 1\/1.*Transfer refused by proxy/);
   assert.equal(attempts, 3);
-  assert.equal(diagnostics.length, 1);
-  assert.equal(diagnostics[0].stage, "transfer");
-  assert.equal(diagnostics[0].chunkIndex, 0);
-  assert.equal(diagnostics[0].uploadId, "22222222-2222-4222-8222-222222222222");
+  assert.equal(diagnostics.length, 4, "three per-attempt logs and one final failure");
+  assert.deepEqual(diagnostics.map(item => item.stage), ["attempt", "attempt", "attempt", "transfer"]);
+  assert.deepEqual(diagnostics.slice(0, 3).map(item => item.outcome), ["http-error", "http-error", "http-error"]);
+  assert.deepEqual(diagnostics.slice(0, 3).map(item => item.httpStatus), [403, 403, 403]);
+  assert.ok(diagnostics.slice(0, 3).every(item => typeof item.durationMs === "number" &&
+    item.transport === "json-base64-v3" && item.encodedBytes === 1368));
+  assert.equal(diagnostics[3].chunkIndex, 0);
+  assert.equal(diagnostics[3].uploadId, "22222222-2222-4222-8222-222222222222");
   assert.ok(!JSON.stringify(diagnostics[0]).includes("private-video.mov"));
   assert.ok(!JSON.stringify(diagnostics[0]).includes("secret-ticket"));
 });
@@ -394,7 +406,7 @@ test("stalled upload request is aborted, checked, and retried rather than hangin
   assert.equal(statusProbes, 1, "probe private server state after timeout before retry");
   assert.equal(abortedSignal?.aborted, true, "timeout aborts the stalled network request");
   assert.equal(refs.length, 1);
-  assert.ok(progress.some(value => value.includes("stalled")));
+  assert.ok(progress.some(value => value.includes("interrupted")));
   assert.ok(progress.some(value => value.includes("Retrying")));
 });
 
@@ -420,7 +432,7 @@ test("an upload acknowledgement timeout does not resend a chunk already saved by
 });
 
 test("video retries resume previously transferred chunks after a failed upload using session storage", async () => {
-  const file = new File([new Uint8Array(2 * 1024 * 1024 + 7)], "resumable.mp4", {
+  const file = new File([new Uint8Array(512 * 1024 + 7)], "resumable.mp4", {
     type: "video/mp4", lastModified: 1000,
   });
   const values = new Map<string, string>();
@@ -464,7 +476,7 @@ test("video retries resume previously transferred chunks after a failed upload u
   const args: [{ chunkTimeoutMs: number; retryDelayMs: number; resumeStorage: typeof storage }] =
     [{ chunkTimeoutMs: 100, retryDelayMs: 0, resumeStorage: storage }];
   await assert.rejects(uploadFilesDirect([file], () => {}, fetcher, async () => [], args[0]), /part 2\/2/);
-  assert.equal(telemetryCount, 1);
+  assert.equal(telemetryCount, 4, "three failed-attempt diagnostics and one final failure");
   assert.equal(prepares, 1);
   assert.equal(values.size, 1, "signed, expiring upload session retained until completion");
   allowSecond = true;
@@ -494,6 +506,95 @@ test("server chunk status authenticates the upload ticket and isolates accepted 
   await assert.rejects(service.chunkStatus(first.uploadToken + "tampered"), /invalid or expired/);
 });
 
+
+
+test("existing 2 MiB v2 upload receipts resume with original chunk boundaries after v3 deploy", async () => {
+  const file = new File([new Uint8Array(2 * 1024 * 1024 + 7)], "older.mp4", {
+    type: "video/mp4", lastModified: 12345,
+  });
+  const values = new Map<string, string>();
+  const storage = {
+    getItem: (key: string) => values.get(key) ?? null,
+    setItem: (key: string, value: string) => { values.set(key, value); },
+    removeItem: (key: string) => { values.delete(key); },
+  };
+  const key = "katie:video-session:v1:older.mp4:video/mp4:" + file.size + ":12345";
+  values.set(key, JSON.stringify({
+    uploadToken: "existing-v2-ticket", uploadId: "55555555-5555-4555-8555-555555555555",
+    savedAt: Date.now(),
+    // v2 sessions had no transport field.
+  }));
+  let prepared = 0;
+  const indices: number[] = [];
+  const fetcher: typeof fetch = async (url, init) => {
+    const path = String(url);
+    if (path.endsWith("/prepare")) { prepared++; throw new Error("Must not prepare again"); }
+    if (path.endsWith("/status")) return Response.json({
+      uploadId: "55555555-5555-4555-8555-555555555555", chunkCount: 2,
+      chunkBytes: 2 * 1024 * 1024, transport: "json-base64-v2", uploadedIndexes: [0],
+    });
+    if (path.endsWith("/chunk")) {
+      const payload = JSON.parse(String(init?.body));
+      indices.push(payload.index);
+      assert.equal(payload.uploadToken, "existing-v2-ticket");
+      assert.equal(Buffer.from(payload.data, "base64").length, 7);
+      return Response.json({ index: payload.index });
+    }
+    if (path.endsWith("/complete")) return Response.json({ fileReference: { ...reference, attachmentKind: "video" } });
+    throw new Error("Unexpected " + path);
+  };
+  const result = await uploadFilesDirect([file], () => {}, fetcher, async () => [], { resumeStorage: storage });
+  assert.equal(result.length, 1);
+  assert.equal(prepared, 0);
+  assert.deepEqual(indices, [1]);
+  assert.equal(values.size, 0);
+});
+
+test("new v3 chunks preserve exact bytes and complete in order after concurrent assembly", async () => {
+  const fake = fakeStorage();
+  const bytes = new Uint8Array(3 * 512 * 1024 + 17);
+  for (let i = 0; i < bytes.length; i++) bytes[i] = i % 253;
+  let assembled = 0;
+  const service = createStoredUploadService(fake.storage, "secret", {
+    buildReferences: async files => {
+      assembled++;
+      assert.deepEqual(new Uint8Array(await files[0].arrayBuffer()), bytes);
+      return [{ ...reference, attachmentKind: "video", fileName: "v3.mp4", mimeType: "video/mp4" }];
+    },
+  });
+  const ticket = await service.prepare({
+    name: "v3.mp4", type: "video/mp4", size: bytes.length, transport: "json-base64-v3",
+  });
+  for (let index = 0; index < 4; index++) {
+    const start = index * 512 * 1024;
+    await service.uploadChunk(ticket.uploadToken, index, bytes.subarray(start, Math.min(start + 512 * 1024, bytes.length)));
+  }
+  const before = await service.chunkStatus(ticket.uploadToken);
+  assert.equal(before.chunkCount, 4);
+  assert.equal(before.chunkBytes, 512 * 1024);
+  assert.equal(before.transport, "json-base64-v3");
+  assert.deepEqual(before.uploadedIndexes, [0, 1, 2, 3]);
+  await service.complete(ticket.uploadToken);
+  assert.equal(assembled, 1);
+  assert.deepEqual(new Uint8Array(await fake.files.get(fake.signedPaths[0])!.arrayBuffer()), bytes);
+  assert.equal((await service.chunkStatus(ticket.uploadToken)).complete, true);
+});
+
+test("512 KiB progress lookup paginates beyond one hundred chunks", async () => {
+  const fake = fakeStorage();
+  const chunk = new Blob([new Uint8Array(512 * 1024)]);
+  const service = createStoredUploadService(fake.storage, "secret");
+  const ticket = await service.prepare({
+    name: "large.mp4", type: "video/mp4", size: 105 * 512 * 1024, transport: "json-base64-v3",
+  });
+  for (let index = 0; index < 105; index++) {
+    fake.files.set("chunks/" + ticket.uploadId + "-" + String(index).padStart(3, "0"), chunk);
+  }
+  const saved = await service.chunkStatus(ticket.uploadToken);
+  assert.equal(saved.chunkCount, 105);
+  assert.equal(saved.uploadedIndexes.length, 105);
+  assert.ok(saved.uploadedIndexes.includes(104));
+});
 
 test("legacy video with no captured frames recovers private original when Gemini fails, persists for Grok", async () => {
   const fake = fakeStorage();
