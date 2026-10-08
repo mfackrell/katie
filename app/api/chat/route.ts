@@ -1285,6 +1285,27 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    // Native video inspection stays with Gemini. If it fails for any reason,
+    // Grok 4.7 can inspect genuine timestamped frames saved with this upload.
+    // xAI's Imagine Video models generate/edit videos and are not input-video analyzers.
+    if (hasVideoInput && provider.name === "google") {
+      const grokProvider = providers.find(candidate => candidate.name === "grok");
+      const grokSupport = getAttachmentSupportForProvider("grok", attachments);
+      if (grokProvider && grokSupport.supported) {
+        const available = await grokProvider.listModels();
+        const grokVisionModel = ["grok-4.7", "grok-4.6", "grok-4.5", "grok-4.3"].find(id => available.includes(id));
+        if (grokVisionModel) {
+          fallbackChain = [{ provider: grokProvider, modelId: grokVisionModel, score: 0 }];
+          console.info("[Video Routing] Grok vision frame fallback armed", {
+            requestId, fallbackModel: grokVisionModel,
+            frameCount: attachments.reduce((count, file) => count + (file.videoFrames?.length ?? 0), 0)
+          });
+        }
+      } else if (!grokSupport.supported) {
+        console.warn("[Video Routing] Grok fallback unavailable", { requestId, reason: grokSupport.reason });
+      }
+    }
+
     const selectedProviderSupport = getAttachmentSupportForProvider(provider.name, attachments);
     if (!selectedProviderSupport.supported && !overrideProvider) {
       const compatibleFallback = fallbackChain.find((candidate) => {
@@ -1506,7 +1527,7 @@ ${chunkWorkflowSummary}`;
                 routingSource: "deterministic-fallback" as const
               }))
             ];
-            const retryOnProviderRefusal = shouldRetryOnProviderRefusal();
+            const retryOnProviderRefusal = hasVideoInput || shouldRetryOnProviderRefusal();
             const refusedCandidates: Array<{ providerName: LlmProvider["name"]; modelId: string }> = [];
             const refusedCandidateKeys = new Set<string>();
             const failedGenerationCandidates: Array<{ providerName: LlmProvider["name"]; modelId: string }> = [];
@@ -1529,6 +1550,9 @@ ${chunkWorkflowSummary}`;
             const generationAttempt = await runWithRefusalFallback<GenerationAttempt>({
               attempts,
               shouldRetryRefusal: retryOnProviderRefusal,
+              retryTerminalError: ({ attempt, remainingAttempts }) =>
+                hasVideoInput && attempt.provider.name === "google" &&
+                remainingAttempts.some(candidate => candidate.provider.name === "grok"),
               runAttempt: async (candidate, attemptIndex) => {
                 provider = candidate.provider;
                 modelId = candidate.modelId;
@@ -1866,6 +1890,7 @@ ${chunkWorkflowSummary}`;
               },
               detectRefusal: (generationResult, candidate) => isLikelyProviderRefusal(generationResult, candidate.provider.name),
               rerouteOnRefusal: async ({ attempt }) => {
+                if (hasVideoInput) return null; // Always honor deterministic Grok video-frame fallback.
                 if (!resolvedRoutingIntentForReroute || refusalRerouteCount >= maxRefusalReroutes) {
                   return null;
                 }
@@ -1950,6 +1975,7 @@ ${chunkWorkflowSummary}`;
                 });
               },
               rerouteOnError: async ({ attempt, error }) => {
+                if (hasVideoInput) return null; // Attempt Grok directly, not another Gemini routing loop.
                 if ((collaborationEnabledForRequest && collaborationDeadlineMs - Date.now() < 195_000) ||
                     !resolvedRoutingIntentForReroute || errorRerouteCount >= maxErrorReroutes) {
                   return null;
