@@ -666,6 +666,95 @@ test("existing 2 MiB v2 upload receipts resume with original chunk boundaries af
   assert.equal(values.size, 0);
 });
 
+
+test("legacy v2 upload resumes eight accepted 2 MiB chunks using only 512 KiB subchunk requests", async () => {
+  const fake = fakeStorage();
+  const source = new Uint8Array(8 * 2 * 1024 * 1024 + 2 * 1024 * 1024 + 1234);
+  for (let i = 0; i < source.length; i++) source[i] = (i * 7) % 253;
+  const file = new File([source], "old-video.mp4", { type: "video/mp4", lastModified: 1000 });
+  let builds = 0;
+  const service = createStoredUploadService(fake.storage, "server-key", {
+    buildReferences: async files => {
+      builds++;
+      assert.deepEqual(new Uint8Array(await files[0].arrayBuffer()), source,
+        "final reassembly must exactly preserve original bytes");
+      return [{ ...reference, attachmentKind: "video", mimeType: "video/mp4", fileName: file.name }];
+    }
+  });
+  const session = await service.prepare({
+    name: file.name, type: file.type, size: file.size, transport: "json-base64-v2"
+  });
+  for (let index = 0; index < 8; index++) {
+    await service.uploadChunk(session.uploadToken, index,
+      source.subarray(index * 2 * 1024 * 1024, (index + 1) * 2 * 1024 * 1024));
+  }
+  const storage = new Map<string, string>();
+  const storageAPI = {
+    getItem: (key: string) => storage.get(key) ?? null,
+    setItem: (key: string, value: string) => { storage.set(key, value); },
+    removeItem: (key: string) => { storage.delete(key); }
+  };
+  storage.set("katie:video-session:v1:old-video.mp4:video/mp4:" + file.size + ":1000",
+    JSON.stringify({ uploadToken: session.uploadToken, uploadId: session.uploadId, savedAt: Date.now() }));
+  const sizes: number[] = [];
+  const subIndexes: Array<[number, number]> = [];
+  const fetcher: typeof fetch = async (url, init) => {
+    const path = String(url);
+    if (path.endsWith("/prepare")) throw new Error("Must not discard existing chunks.");
+    if (path.endsWith("/status")) return Response.json(await service.chunkStatus(session.uploadToken));
+    if (path.endsWith("/chunk")) {
+      const payload = JSON.parse(String(init?.body));
+      const chunkBytes = Buffer.from(payload.data, "base64");
+      sizes.push(chunkBytes.length);
+      assert.equal(typeof payload.subIndex, "number", "no legacy 2 MiB POSTs allowed");
+      subIndexes.push([payload.index, payload.subIndex]);
+      return Response.json(await service.uploadChunk(session.uploadToken, payload.index,
+        new Uint8Array(chunkBytes), payload.subIndex));
+    }
+    if (path.endsWith("/complete")) return Response.json({
+      fileReference: await service.complete(session.uploadToken)
+    });
+    if (path.endsWith("/telemetry")) return new Response(null, { status: 204 });
+    throw new Error("Unexpected request " + path);
+  };
+  const progress: string[] = [];
+  const output = await uploadFilesDirect([file], v => progress.push(v), fetcher, async () => [],
+    { resumeStorage: storageAPI });
+  assert.equal(output.length, 1);
+  assert.equal(builds, 1);
+  assert.ok(sizes.length > 0 && sizes.every(x => x <= 512 * 1024));
+  assert.deepEqual(subIndexes.sort(([a, b], [c, d]) => a - c || b - d),
+    [[8, 0], [8, 1], [8, 2], [8, 3], [9, 0], [9, 1], [9, 2]]);
+  assert.ok(progress.some(v => v.includes("Resuming") && v.includes("88%")));
+  assert.ok(progress.some(v => v.includes("100%")));
+  assert.equal(storage.size, 0);
+  assert.equal((await service.chunkStatus(session.uploadToken)).complete, true);
+});
+
+test("legacy v2 subchunk recovery only retries missing subparts and rejects invalid payloads", async () => {
+  const fake = fakeStorage();
+  const service = createStoredUploadService(fake.storage, "secret");
+  const ticket = await service.prepare({
+    name: "clip.mp4", type: "video/mp4", size: 2 * 1024 * 1024 + 3,
+    transport: "json-base64-v2",
+  });
+  await assert.rejects(service.uploadChunk(ticket.uploadToken, 0, new Uint8Array(512 * 1024), 4),
+    /Invalid legacy video sub-chunk/);
+  await assert.rejects(service.uploadChunk(ticket.uploadToken, 1, new Uint8Array(512 * 1024), 0),
+    /wrong size/);
+  await service.uploadChunk(ticket.uploadToken, 0, new Uint8Array(512 * 1024), 0);
+  await service.uploadChunk(ticket.uploadToken, 1, new Uint8Array([1, 2, 3]), 0);
+  const status = await service.chunkStatus(ticket.uploadToken);
+  assert.deepEqual(status.uploadedIndexes, []);
+  assert.deepEqual(status.uploadedSubIndexes, [0, 4]);
+  assert.equal(status.chunkBytes, 2 * 1024 * 1024);
+  const v3 = await service.prepare({
+    name: "clip.mp4", type: "video/mp4", size: 512 * 1024 + 3, transport: "json-base64-v3"
+  });
+  await assert.rejects(service.uploadChunk(v3.uploadToken, 0, new Uint8Array(512 * 1024), 0),
+    /Invalid legacy video sub-chunk/);
+});
+
 test("new v3 chunks preserve exact bytes and complete in order after concurrent assembly", async () => {
   const fake = fakeStorage();
   const bytes = new Uint8Array(3 * 512 * 1024 + 17);
