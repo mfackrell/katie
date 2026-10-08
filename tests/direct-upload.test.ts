@@ -179,8 +179,8 @@ test("iPhone fallback sends binary video pieces without Base64 and retries faile
   assert.equal(refs[0].attachmentKind, "video");
   assert.deepEqual(calls.filter(call => ["/api/upload/prepare", "/api/upload/chunk", "/api/upload/complete"].includes(call.path))
     .map(call => call.path), ["/api/upload/prepare", ...Array(8).fill("/api/upload/chunk"), "/api/upload/complete"]);
-  const uploaded = calls.filter(call => call.path === "/api/upload/chunk")
-    .map(call => JSON.parse(String(call.init?.body)));
+  const uploaded = await Promise.all(calls.filter(call => call.path === "/api/upload/chunk")
+    .map(call => parseReceivedChunk(call.init)));
   assert.equal(uploaded.filter(item => item.index === 0).length, 2);
   assert.equal(uploaded.filter(item => item.index === 0)[0].data,
     uploaded.filter(item => item.index === 0)[1].data, "retry reuses the same encoded bytes");
@@ -936,7 +936,7 @@ test("legacy v2 upload resumes eight accepted 2 MiB chunks using only 512 KiB su
       const chunkBytes = Buffer.from(payload.data, "base64");
       sizes.push(chunkBytes.length);
       assert.equal(typeof payload.subIndex, "number", "no legacy 2 MiB POSTs allowed");
-      subIndexes.push([payload.index, payload.subIndex]);
+      subIndexes.push([payload.index, payload.subIndex!]);
       return Response.json(await service.uploadChunk(session.uploadToken, payload.index,
         new Uint8Array(chunkBytes), payload.subIndex));
     }
