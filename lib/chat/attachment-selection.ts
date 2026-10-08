@@ -102,8 +102,12 @@ function isContextualVideoFollowup(
     VIDEO_CONCLUSION_CHALLENGE.test(trimmed) ||
     SHORT_CORRECTION.test(trimmed) ||
     /^(?:why|how|what did you mean|what do you mean)\??$/i.test(trimmed) ||
+    // A very short emphatic factual correction may implicitly challenge the
+    // prior visual judgment ("Nineteen is an adult!"). Generic questions or
+    // applause must never pull an unrelated recording into the conversation.
     (active.priorUserTurns === 1 && trimmed.length <= 160 &&
-      /[!?]\s*$/.test(trimmed) &&
+      /\b(?:is|isn't|are|aren't|was|wasn't|does|doesn't|cannot|can't)\b/i.test(trimmed) &&
+      /!\s*$/.test(trimmed) &&
       !/^(?:excellent|great|awesome|thanks|thank you)\b/i.test(trimmed));
   return relevant ? active.attachment : null;
 }
