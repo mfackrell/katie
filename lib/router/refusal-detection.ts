@@ -159,7 +159,12 @@ export async function runWithRefusalFallback<TAttempt>({
         continue;
       }
       if (error instanceof ProviderResponseError && error.code === "EMPTY_RESPONSE") {
-        if (retriedEmpty.has(attempt)) throw error;
+        if (retriedEmpty.has(attempt)) {
+          if (!pendingAttempts.length || !retryTerminalError?.({ attempt, error, remainingAttempts: [...pendingAttempts] })) throw error;
+          lastGenerationError = error;
+          onError?.({ attempt, attemptIndex: currentAttemptIndex, error });
+          continue;
+        }
         retriedEmpty.add(attempt);
         onError?.({ attempt, attemptIndex: currentAttemptIndex, error });
         pendingAttempts.unshift(attempt);
