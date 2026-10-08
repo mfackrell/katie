@@ -103,7 +103,7 @@ export async function extractFramesFromPrivateVideo(
           "-nostdin", "-hide_banner", "-loglevel", "error",
           "-ss", String(seconds), "-i", inputPath,
           "-an", "-sn", "-dn", "-frames:v", "1",
-          "-vf", "scale=960:-2:force_original_aspect_ratio=decrease",
+          // Sharp downsizes only large frames without enlarging tiny clips.
           "-q:v", "5", "-y", output,
         ], Math.min(FRAME_DECODE_TIMEOUT_MS, Math.max(2_000, deadline - Date.now())));
         if (result.code !== 0) continue;
