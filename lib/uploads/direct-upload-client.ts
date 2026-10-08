@@ -275,7 +275,7 @@ export async function uploadFilesDirect(
               const subCount = Math.ceil(size / JSON_VIDEO_SMALL_CHUNK_BYTES);
               return completedChunks.has(index) ? subCount :
                 Array.from({ length: subCount }, (_, sub) => completedSubParts.has(index * 4 + sub) ? 1 : 0)
-                  .reduce((a, b) => a + b, 0);
+                  .reduce<number>((a, b) => a + b, 0);
             }).reduce((a, b) => a + b, 0)
             : completedChunks.size;
           const totalParts = transport === "json-base64-v2"
