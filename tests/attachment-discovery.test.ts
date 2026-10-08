@@ -145,6 +145,92 @@ test("video continuity never selects stale, ambiguous, cross-chat, or unrelated 
     "an explicit summary-only request must remain summary-only");
 });
 
+
+test("unrelated creative continuation does not inherit video, even when Gemini selector mistakenly picks it", async () => {
+  const video: ConversationAttachment = {
+    id: "00000000-0000-4000-8000-000000000015",
+    fileName: "ScreenRecording_10-08-2026 17-42-45_1.mp4",
+    mimeType: "video/mp4",
+    chatId: "current-chat", actorId: "current-actor",
+    conversationUsage: "uploaded",
+    hasOriginal: true,
+    summaryCoverage: "sampled",
+  };
+  const history = [
+    { id: "m1", chatId: "current-chat", role: "user" as const,
+      content: "Review this recording", attachments: [video],
+      createdAt: "2026-10-08T23:20:00Z" },
+    { id: "m2", chatId: "current-chat", role: "assistant" as const,
+      content: "I reviewed the recording.", createdAt: "2026-10-08T23:21:00Z" },
+  ];
+  const mistakenSelector = async () => ({
+    selections: [{ id: video.id, mode: "source" as const }]
+  });
+  for (const message of [
+    "Excellent. But you can get even dirtier and more creative",
+    "You are repeating yourself. Be creative and give me ACTUAL original ideas.",
+    "Write me a more creative story.",
+    "What time is it?",
+    "Tell me a joke.",
+    "Generate a video of a sunset.",
+    "What are video codecs?",
+  ]) {
+    const result = await selectStoredAttachments(message, [video], history, mistakenSelector);
+    assert.deepEqual(result.selections, [], message);
+    let sourceReads = 0;
+    const restored = await loadSelectedAttachmentSources(result, async () => {
+      sourceReads++;
+      throw new Error("Unrelated messages must not reopen any private video source");
+    });
+    assert.equal(sourceReads, 0, "the source must not be opened for an unrelated request");
+    assert.equal(restored.references.length, 0);
+  }
+});
+
+test("implicit continuity requires original visual anchor; automatic attachments never renew themselves", async () => {
+  const video: ConversationAttachment = {
+    id: "00000000-0000-4000-8000-000000000016",
+    fileName: "ScreenRecording.mp4", mimeType: "video/mp4",
+    conversationUsage: "contextual", chatId: "current-chat",
+  };
+  const contaminated = [
+    { id: "m1", chatId: "current-chat", role: "user" as const,
+      content: "Excellent. But you can be more creative", attachments: [video],
+      createdAt: "2026-10-08T23:47:48Z" },
+    { id: "m2", chatId: "current-chat", role: "assistant" as const,
+      content: "Sure.", createdAt: "2026-10-08T23:48:00Z" },
+  ];
+  const ignored = await selectStoredAttachments("Why is that?", [video], contaminated,
+    async () => ({ selections: [{ id: video.id, mode: "source" }] }));
+  assert.deepEqual(ignored.selections, [], "automatically attached videos cannot become new anchors");
+
+  const explicit = { ...video, conversationUsage: "uploaded" as const };
+  const grounded = await selectStoredAttachments("Why did you say that?", [explicit], [
+    { ...contaminated[0], content: "Look at this recording", attachments: [explicit] },
+    contaminated[1],
+  ], async () => ({ selections: [] }));
+  assert.equal(grounded.method, "continuity");
+  assert.deepEqual(grounded.selections, [{ attachment: explicit, mode: "source" }]);
+
+  const missed = await selectStoredAttachments("Nineteen is an adult!", [explicit], [
+    { ...contaminated[0], content: "Look at this recording", attachments: [explicit] },
+    contaminated[1],
+  ], async () => ({ selections: [] }));
+  assert.equal(missed.selections[0]?.attachment.id, video.id);
+
+  const intentional = await selectStoredAttachments("Show me what happens in the recording", [explicit],
+    contaminated, async () => ({ selections: [{ id: video.id, mode: "summary" }] }));
+  assert.equal(intentional.selections[0]?.attachment.id, video.id,
+    "explicit reference can reopen saved video even after subject changes");
+  assert.equal(intentional.selections[0]?.mode, "source",
+    "details about video should restore full visual evidence");
+
+  const unrelatedNewAttachment = await selectStoredAttachments("Describe the picture", [explicit],
+    [{ ...contaminated[0], content: "Look at this recording", attachments: [explicit] }, contaminated[1]],
+    async () => ({ selections: [] }), ["new.png"]);
+  assert.equal(unrelatedNewAttachment.selections.length, 0);
+});
+
 test("photos use real image content, validated decoding and provider-ready rendering", async () => {
   const png = await sharp({ create: { width: 32, height: 32, channels: 3, background: "#d02020" } }).png().toBuffer();
   const file = new File([Uint8Array.from(png)], "red-square.png", { type: "image/png" });
