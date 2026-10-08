@@ -10,7 +10,7 @@ export const MAX_FALLBACK_SOURCE_BYTES = 200 * 1024 * 1024;
 const MAX_SAMPLE_SECONDS = 18;
 const VIDEO_PROBE_TIMEOUT_MS = 8_000;
 const FRAME_DECODE_TIMEOUT_MS = 12_000;
-const requireNode = createRequire(import.meta.url);
+const requireNode = createRequire(join(process.cwd(), "package.json"));
 
 type CommandResult = { code: number | null; stderr: string };
 type FfmpegRun = (binary: string, args: string[], timeoutMs: number) => Promise<CommandResult>;
