@@ -1,8 +1,14 @@
 import type { FileReference } from "@/lib/providers/types";
 import { captureVideoFallbackFrames } from "./video-fallback-frames";
 
-const JSON_VIDEO_CHUNK_BYTES = 2 * 1024 * 1024;
-export const VIDEO_CHUNK_TIMEOUT_MS = 45_000;
+// v3 uses ~700 KiB JSON bodies. Existing saved v2 sessions retain their 2 MiB boundaries.
+export const JSON_VIDEO_SMALL_CHUNK_BYTES = 512 * 1024;
+export const JSON_VIDEO_LEGACY_CHUNK_BYTES = 2 * 1024 * 1024;
+type VideoTransport = "json-base64-v2" | "json-base64-v3";
+const DEFAULT_VIDEO_TRANSPORT: VideoTransport = "json-base64-v3";
+const chunkSizeFor = (transport: VideoTransport) =>
+  transport === "json-base64-v3" ? JSON_VIDEO_SMALL_CHUNK_BYTES : JSON_VIDEO_LEGACY_CHUNK_BYTES;
+export const VIDEO_CHUNK_TIMEOUT_MS = 30_000;
 const VIDEO_STATUS_TIMEOUT_MS = 12_000;
 const VIDEO_COMPLETION_TIMEOUT_MS = 180_000;
 
@@ -42,8 +48,8 @@ type VideoUploadOptions = {
   retryDelayMs?: number;
   resumeStorage?: ResumeStorage | null;
 };
-type PreparedUpload = { uploadToken: string; uploadUrl: string; uploadId?: string };
-type Progress = { uploadId: string; chunkCount: number; uploadedIndexes: number[]; complete: boolean };
+type PreparedUpload = { uploadToken: string; uploadUrl: string; uploadId?: string; transport?: VideoTransport };
+type Progress = { uploadId: string; chunkCount: number; chunkBytes?: number; transport?: string; uploadedIndexes: number[]; complete: boolean };
 
 function browserResumeStorage(): ResumeStorage | null {
   try { return typeof window === "undefined" ? null : window.sessionStorage; }
@@ -63,7 +69,11 @@ function readResumeSession(store: ResumeStorage | null, key: string): PreparedUp
       if (typeof saved.uploadToken === "string" && typeof saved.uploadId === "string" &&
         typeof saved.savedAt === "number" && Date.now() - saved.savedAt < 110 * 60 * 1000 &&
         saved.savedAt <= Date.now() + 30_000) {
-        return { uploadToken: saved.uploadToken, uploadId: saved.uploadId, uploadUrl: "resumed" };
+        return {
+          uploadToken: saved.uploadToken, uploadId: saved.uploadId, uploadUrl: "resumed",
+          // Old sessionStorage records omitted transport and always used 2 MiB chunks.
+          transport: saved.transport === "json-base64-v3" ? "json-base64-v3" : "json-base64-v2",
+        };
       }
     }
   } catch { /* Invalid browser state is discarded. */ }
@@ -74,7 +84,8 @@ function saveResumeSession(store: ResumeStorage | null, key: string, prepared: P
   if (!store || !prepared.uploadId) return;
   try {
     store.setItem(key, JSON.stringify({
-      uploadToken: prepared.uploadToken, uploadId: prepared.uploadId, savedAt: Date.now()
+      uploadToken: prepared.uploadToken, uploadId: prepared.uploadId,
+      transport: prepared.transport ?? "json-base64-v2", savedAt: Date.now()
     }));
   } catch { /* Upload continues even without session storage. */ }
 }
@@ -82,6 +93,13 @@ function clearResumeSession(store: ResumeStorage | null, key: string): void {
   try { store?.removeItem(key); } catch { /* Optional resume storage. */ }
 }
 
+
+class UploadHttpError extends Error {
+  constructor(readonly status: number, message: string) {
+    super(message);
+    this.name = "UploadHttpError";
+  }
+}
 
 async function readUploadResponse(response: Response): Promise<Record<string, unknown>> {
   const text = await response.text();
@@ -91,14 +109,16 @@ async function readUploadResponse(response: Response): Promise<Record<string, un
     if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) payload = parsed as Record<string, unknown>;
   } catch { /* Hosting errors can be HTML or plain text. */ }
   if (!response.ok) {
-    if (response.status === 413) throw new Error("The upload request exceeded the server's size limit.");
-    const message = typeof payload.error === "string" ? payload.error : typeof payload.message === "string" ? payload.message : undefined;
-    throw new Error(message ?? `Attachment upload failed (HTTP ${response.status}).`);
+    const message = response.status === 413
+      ? "The upload request exceeded the server's size limit."
+      : (typeof payload.error === "string" ? payload.error : typeof payload.message === "string" ? payload.message : undefined)
+      ?? `Attachment upload failed (HTTP ${response.status}).`;
+    throw new UploadHttpError(response.status, message);
   }
   return payload;
 }
 
-// A 2 MB slice becomes a ~2.8 MB JSON body, safely under Vercel's request limit.
+// v3's 512 KiB slice creates a ~700 KiB JSON body; old v2 receipts remain 2 MiB.
 // FileReader is the established iOS Blob reader; arrayBuffer is a fallback and
 // keeps Node's browser-side tests independent of browser globals.
 async function videoSliceAsBase64(slice: Blob): Promise<string> {
@@ -151,6 +171,44 @@ async function reportVideoUploadError(
   } catch { /* Diagnostics must never mask the original upload failure. */ }
 }
 
+type AttemptDiagnostic = {
+  uploadId?: string;
+  chunkIndex: number;
+  attempt: number;
+  durationMs: number;
+  encodedBytes: number;
+  transport: VideoTransport;
+  outcome: "success" | "timeout" | "http-error" | "network-error";
+  httpStatus?: number;
+  detail?: string;
+};
+function attemptOutcome(error: unknown): AttemptDiagnostic["outcome"] {
+  if (error instanceof UploadTimeoutError) return "timeout";
+  if (error instanceof UploadHttpError) return "http-error";
+  return "network-error";
+}
+// Every attempt is timed and reported in browser console. Failed and slow (>8s)
+// attempts are also reported to Vercel without upload bytes, filenames, or tokens.
+async function logChunkAttempt(fetcher: typeof fetch, diagnostic: AttemptDiagnostic): Promise<void> {
+  console.info("[Upload Client] video chunk attempt", diagnostic);
+  if (diagnostic.outcome === "success" && diagnostic.durationMs < 8_000) return;
+  try {
+    await withUploadDeadline("Upload attempt telemetry", 2_000, async signal => {
+      await fetcher("/api/upload/telemetry", {
+        method: "POST", signal, keepalive: true,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          stage: "attempt", uploadId: diagnostic.uploadId,
+          chunkIndex: diagnostic.chunkIndex, attempt: diagnostic.attempt,
+          durationMs: diagnostic.durationMs, encodedBytes: diagnostic.encodedBytes,
+          transport: diagnostic.transport, outcome: diagnostic.outcome,
+          httpStatus: diagnostic.httpStatus, detail: diagnostic.detail?.slice(0, 160)
+        }),
+      });
+    });
+  } catch { /* Diagnostics never block the real upload for more than 2 seconds. */ }
+}
+
 export async function uploadFilesDirect(
   files: File[], onStatus: (message: string) => void = () => {}, fetcher: typeof fetch = fetch,
   captureFrames: typeof captureVideoFallbackFrames = captureVideoFallbackFrames,
@@ -177,7 +235,9 @@ export async function uploadFilesDirect(
       if (!indexes.every(value => typeof value === "number" && Number.isSafeInteger(value) &&
         value >= 0 && value < chunkCount)) throw new Error("Invalid upload progress indexes.");
       return { uploadId: payload.uploadId, uploadedIndexes: indexes as number[],
-        chunkCount, complete: payload.complete === true };
+        chunkCount, chunkBytes: typeof payload.chunkBytes === "number" ? payload.chunkBytes : undefined,
+        transport: typeof payload.transport === "string" ? payload.transport : undefined,
+        complete: payload.complete === true };
     });
   };
 
@@ -188,14 +248,18 @@ export async function uploadFilesDirect(
     let uploadId: string | undefined;
     let chunkIndex: number | undefined;
     try {
-      const chunkCount = isVideo ? Math.ceil(file.size / JSON_VIDEO_CHUNK_BYTES) : 0;
       let prepared: PreparedUpload | null = isVideo ? readResumeSession(resumeStorage, key) : null;
+      let transport: VideoTransport = prepared?.transport ?? DEFAULT_VIDEO_TRANSPORT;
+      let chunkBytes = chunkSizeFor(transport);
+      let chunkCount = isVideo ? Math.ceil(file.size / chunkBytes) : 0;
       let completedChunks = new Set<number>();
       if (prepared) {
         try {
           onStatus(`Checking saved progress for ${file.name}…`);
           const saved = await status(prepared.uploadToken);
-          if (saved.chunkCount !== chunkCount || saved.uploadId !== prepared.uploadId)
+          if (saved.chunkCount !== chunkCount || saved.uploadId !== prepared.uploadId ||
+              (saved.chunkBytes != null && saved.chunkBytes !== chunkBytes) ||
+              (saved.transport && saved.transport !== transport))
             throw new Error("Saved upload does not match this video.");
           completedChunks = new Set(saved.uploadedIndexes);
           onStatus(`Resuming ${file.name}: ${Math.round((completedChunks.size / chunkCount) * 100)}% saved…`);
@@ -206,6 +270,9 @@ export async function uploadFilesDirect(
         }
       }
       if (!prepared) {
+        transport = DEFAULT_VIDEO_TRANSPORT;
+        chunkBytes = chunkSizeFor(transport);
+        chunkCount = isVideo ? Math.ceil(file.size / chunkBytes) : 0;
         onStatus(`Preparing ${file.name}…`);
         const payload = await withUploadDeadline("Preparing video upload", 30_000, async signal =>
           readUploadResponse(await fetcher("/api/upload/prepare", {
@@ -213,14 +280,15 @@ export async function uploadFilesDirect(
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
               name: file.name, type: file.type, size: file.size,
-              ...(isVideo ? { transport: "json-base64-v2" } : {})
+              ...(isVideo ? { transport } : {})
             }),
           }))
         );
         if (typeof payload.uploadUrl !== "string" || typeof payload.uploadToken !== "string")
           throw new Error("Unable to prepare attachment upload.");
         prepared = { uploadToken: payload.uploadToken, uploadUrl: payload.uploadUrl,
-          uploadId: typeof payload.uploadId === "string" ? payload.uploadId : undefined };
+          uploadId: typeof payload.uploadId === "string" ? payload.uploadId : undefined,
+          ...(isVideo ? { transport } : {}) };
         if (isVideo) saveResumeSession(resumeStorage, key, prepared);
       }
       uploadId = prepared.uploadId;
@@ -229,26 +297,40 @@ export async function uploadFilesDirect(
         for (let index = 0; index < chunkCount; index++) {
           chunkIndex = index;
           if (completedChunks.has(index)) continue;
-          const offset = index * JSON_VIDEO_CHUNK_BYTES;
-          const slice = file.slice(offset, Math.min(offset + JSON_VIDEO_CHUNK_BYTES, file.size));
+          const offset = index * chunkBytes;
+          const slice = file.slice(offset, Math.min(offset + chunkBytes, file.size));
+          // Encode once for this chunk, not again on each network retry.
+          const data = await withUploadDeadline(`Encoding video part ${index + 1}`, 15_000,
+            async () => videoSliceAsBase64(slice));
+          const uploadBody = JSON.stringify({ uploadToken: prepared.uploadToken, index, data });
           let uploaded = false;
           for (let attempt = 1; attempt <= 3; attempt++) {
+            const started = Date.now();
             try {
               await withUploadDeadline(`Video part ${index + 1}/${chunkCount}`, chunkTimeoutMs, async signal => {
-                const data = await videoSliceAsBase64(slice);
                 await readUploadResponse(await fetcher("/api/upload/chunk", {
                   method: "POST", signal,
-                  headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify({ uploadToken: prepared!.uploadToken, index, data })
+                  headers: { "Content-Type": "application/json" }, body: uploadBody,
                 }));
+              });
+              await logChunkAttempt(fetcher, {
+                uploadId, chunkIndex: index, attempt, durationMs: Date.now() - started,
+                encodedBytes: data.length, transport, outcome: "success"
               });
               uploaded = true;
               break;
             } catch (error) {
-              // The server might have saved a part before the browser timed out
-              // waiting for its acknowledgement. Check before sending it again.
-              if (error instanceof UploadTimeoutError) {
-                onStatus(`Video part ${index + 1} stalled; checking saved progress…`);
+              await logChunkAttempt(fetcher, {
+                uploadId, chunkIndex: index, attempt, durationMs: Date.now() - started,
+                encodedBytes: data.length, transport, outcome: attemptOutcome(error),
+                ...(error instanceof UploadHttpError ? { httpStatus: error.status } : {}),
+                detail: error instanceof Error ? error.message : "Unknown video transport error",
+              });
+              // The server may have stored a chunk before the browser lost its
+              // acknowledgement. Probe after all network/timeout failures.
+              const shouldCheckSaved = !(error instanceof UploadHttpError) || error.status >= 500;
+              if (shouldCheckSaved) {
+                onStatus(`Video part ${index + 1} interrupted; checking saved progress…`);
                 try {
                   const saved = await status(prepared.uploadToken);
                   if (saved.uploadId === prepared.uploadId && saved.chunkCount === chunkCount &&
@@ -256,7 +338,7 @@ export async function uploadFilesDirect(
                     uploaded = true;
                     break;
                   }
-                } catch { /* Retry original request if the status endpoint also times out. */ }
+                } catch { /* Bounded status check; retry the original request. */ }
               }
               if (attempt === 3) {
                 const detail = error instanceof Error ? error.message : String(error);
