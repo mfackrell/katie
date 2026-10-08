@@ -29,11 +29,49 @@ export async function uploadFilesDirect(
     if (typeof prepared.uploadUrl !== "string" || typeof prepared.uploadToken !== "string") {
       throw new Error("Unable to prepare attachment upload. Please try again.");
     }
-    onStatus(`Uploading ${file.name}…`);
-    // File bytes go straight to private storage, never through a Vercel function.
-    await readUploadResponse(await fetcher(prepared.uploadUrl, {
-      method: "PUT", headers: { "Content-Type": file.type || "application/octet-stream" }, body: file,
-    }));
+    if (file.type.startsWith("video/")) {
+      // iOS embedded browsers can complete the Storage CORS preflight but never
+      // dispatch the cross-origin PUT. Video bytes now travel in bounded,
+      // first-party requests; the server reassembles them in private Storage.
+      const chunkBytes = 3 * 1024 * 1024;
+      const chunkCount = Math.ceil(file.size / chunkBytes);
+      for (let index = 0; index < chunkCount; index++) {
+        const start = index * chunkBytes;
+        const slice = file.slice(start, Math.min(start + chunkBytes, file.size));
+        let uploaded = false;
+        for (let attempt = 1; attempt <= 3; attempt++) {
+          try {
+            const response = await fetcher("/api/upload/chunk", {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/octet-stream",
+                "x-katie-upload-token": prepared.uploadToken,
+                "x-katie-chunk-index": String(index),
+              },
+              body: slice,
+            });
+            await readUploadResponse(response);
+            uploaded = true;
+            break;
+          } catch (error) {
+            if (attempt === 3) {
+              const detail = error instanceof Error ? error.message : String(error);
+              throw new Error(`Video upload stopped at part ${index + 1}/${chunkCount}: ${detail}`);
+            }
+            onStatus(`Retrying ${file.name} at ${Math.floor((start / file.size) * 100)}%…`);
+            await new Promise(resolve => setTimeout(resolve, 400 * attempt));
+          }
+        }
+        if (!uploaded) throw new Error(`Unable to upload video part ${index + 1}.`);
+        onStatus(`Uploading ${file.name}: ${Math.round(((index + 1) / chunkCount) * 100)}%…`);
+      }
+    } else {
+      onStatus(`Uploading ${file.name}…`);
+      // Files that already work use the existing signed direct-storage path.
+      await readUploadResponse(await fetcher(prepared.uploadUrl, {
+        method: "PUT", headers: { "Content-Type": file.type || "application/octet-stream" }, body: file,
+      }));
+    }
     onStatus(`Processing ${file.name}…`);
     const completed = await readUploadResponse(await fetcher("/api/upload/complete", {
       method: "POST", headers: { "Content-Type": "application/json" },
