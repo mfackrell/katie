@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import {
   UPLOAD_JSON_CHUNK_BYTES,
+  UPLOAD_JSON_SMALL_CHUNK_BYTES,
   UPLOAD_RELAY_CHUNK_BYTES,
   UploadInputError,
   uploadStoredChunk
@@ -19,6 +20,7 @@ export async function POST(request: NextRequest) {
     const declaredLength = rawLength === null ? null : Number(rawLength);
     let token: string;
     let index: number;
+    let subIndex: number | undefined;
     let bytes: Uint8Array;
 
     if (contentType.includes("application/json")) {
@@ -38,9 +40,20 @@ export async function POST(request: NextRequest) {
       }
       token = payload.uploadToken;
       index = Number(payload.index);
+      if (Object.prototype.hasOwnProperty.call(payload, "subIndex")) {
+        if (!Number.isSafeInteger(payload.subIndex) || Number(payload.subIndex) < 0 ||
+            Number(payload.subIndex) > 3 ||
+            payload.data.length > Math.ceil(UPLOAD_JSON_SMALL_CHUNK_BYTES / 3) * 4) {
+          throw new UploadInputError("Invalid video sub-chunk.");
+        }
+        subIndex = Number(payload.subIndex);
+      }
       const decoded = Buffer.from(payload.data, "base64");
       if (!decoded.byteLength || decoded.byteLength > UPLOAD_JSON_CHUNK_BYTES || decoded.toString("base64") !== payload.data) {
         throw new UploadInputError("Video chunk encoding is invalid.");
+      }
+      if (subIndex !== undefined && decoded.byteLength > UPLOAD_JSON_SMALL_CHUNK_BYTES) {
+        throw new UploadInputError("Video sub-chunk exceeds 512 KiB.");
       }
       bytes = new Uint8Array(decoded);
     } else if (contentType.includes("application/octet-stream")) {
@@ -61,7 +74,7 @@ export async function POST(request: NextRequest) {
       throw new UploadInputError("Unsupported attachment chunk format.");
     }
 
-    const result = await uploadStoredChunk(token, index, bytes);
+    const result = await uploadStoredChunk(token, index, bytes, subIndex);
     return NextResponse.json(result, { headers: { "Cache-Control": "no-store" } });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unable to upload attachment chunk.";
