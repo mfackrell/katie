@@ -22,10 +22,17 @@ export function pruneRepeatedVideoSelections(
   if (compareVideos.test(message)) return selections;
   const fresh = new Set(newlyUploaded.filter(isVideo)
     .map(file => `${file.mimeType.toLowerCase()}:${normalizedName(file.fileName)}`));
-  if (!fresh.size) return selections;
-  return selections.filter(({ attachment }) =>
-    !isVideo(attachment) ||
-    !fresh.has(`${attachment.mimeType.toLowerCase()}:${normalizedName(attachment.fileName)}`));
+  const seenSavedVideos = new Set<string>();
+  return selections.filter(({ attachment }) => {
+    if (!isVideo(attachment)) return true;
+    const key = `${attachment.mimeType.toLowerCase()}:${normalizedName(attachment.fileName)}`;
+    // The assistant selector can return several catalog records for the same
+    // saved screen recording even when there is no fresh upload. Keep the first
+    // selected source; do not send multiple copies to Gemini/Grok.
+    if (fresh.has(key) || seenSavedVideos.has(key)) return false;
+    seenSavedVideos.add(key);
+    return true;
+  });
 }
 
 /** Deduplicate only strong identity matches, not separate similarly named videos. */
