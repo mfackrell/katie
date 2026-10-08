@@ -531,7 +531,9 @@ export async function uploadFilesDirect(
             } else if (result.status === "processing") {
               // A processing job is already underway; never schedule another
               // merely because its initial HTTP acknowledgement was lost.
-              nextKickAt = Date.now() + 5 * 60_000;
+              const beganAt = typeof result.startedAt === "number" ? result.startedAt : Date.now();
+              nextKickAt = Date.now() - beganAt >= 5 * 60_000
+                ? 0 : Math.max(nextKickAt, beganAt + 5 * 60_000);
             }
             if (result.status !== lastStatus) {
               lastStatus = typeof result.status === "string" ? result.status : "processing";
