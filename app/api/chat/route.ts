@@ -4,7 +4,7 @@ import { attachmentAccessContext, type ConversationAttachment } from "@/lib/chat
 import { persistConversationAttachment, restoreConversationAttachment, loadConversationAttachmentCatalog, loadActorAttachmentCatalog, recoverSavedVideoFrames, recoverUploadVideoFrames } from "@/lib/uploads/stored-uploads";
 import { describeAttachmentEvidence } from "@/lib/uploads/attachment-observations";
 import { buildImageReference, imageFileFromDataUrl } from "@/lib/uploads/image-reference";
-import { selectStoredAttachments, loadSelectedAttachmentSources } from "@/lib/chat/attachment-selection";
+import { selectStoredAttachments, loadSelectedAttachmentSources, explicitlyRequestsVideo } from "@/lib/chat/attachment-selection";
 import { pruneRepeatedVideoSelections, uniqueAttachmentReferences } from "@/lib/chat/video-attachment-dedup";
 import { after, NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
@@ -631,6 +631,15 @@ export async function POST(request: NextRequest) {
     const attachmentDecision = await selectStoredAttachments(message, catalog, attachmentHistory, undefined, newAttachments.map(file => file.fileName));
     const selectedBeforePruning = attachmentDecision.selections.length;
     attachmentDecision.selections = pruneRepeatedVideoSelections(newAttachments, attachmentDecision.selections, message);
+    // The selector is advisory. An unrelated current request must NEVER
+    // escalate into video routing merely because a past video is in catalog.
+    // This second independent guard runs before private sources are loaded.
+    if (selectedBeforePruning > attachmentDecision.selections.length) {
+      console.info("[Attachment Routing] old video omitted from unrelated request", {
+        omittedCount: selectedBeforePruning - attachmentDecision.selections.length,
+        remainingCount: attachmentDecision.selections.length
+      });
+    }
     if (attachmentDecision.method === "continuity") {
       console.info("[Visual Continuity] previous video source selected for follow-up", {
         chatId, selectedCount: attachmentDecision.selections.length,
@@ -669,7 +678,13 @@ export async function POST(request: NextRequest) {
         ? { ...file, nativeInspectionRequired: true } : file
     );
     const images = attachments.flatMap(file => file.imageDataUrl ? [file.imageDataUrl] : []);
-    const savedAttachments: ConversationAttachment[] = attachmentDecision.selections.map(item => item.attachment);
+    const savedAttachments: ConversationAttachment[] = attachmentDecision.selections.map(item =>
+      item.attachment.mimeType.startsWith("video/") ? {
+        ...item.attachment,
+        conversationUsage: explicitlyRequestsVideo(message, item.attachment)
+          ? "explicit-reference" as const : "contextual" as const
+      } : item.attachment
+    );
     const unavailableAttachments = restored.unavailable;
     const attachmentSourceIds = restored.sourceIds;
     const selectionContext = () => attachmentAccessContext([], savedAttachments, unavailableAttachments, attachmentSourceIds)
@@ -1478,7 +1493,9 @@ export async function POST(request: NextRequest) {
             for (const [index, attachment] of newAttachments.entries()) {
               const description = await describeAttachmentEvidence(attachment);
               const saved = await persistConversationAttachment(chatId, attachment, fileReferences?.[index]?.storageToken, { description, source: legacyImageSources.get(attachment.fileId), actorId });
-              savedAttachments.push(saved);
+              savedAttachments.push({
+                ...saved, ...(saved.mimeType.startsWith("video/") ? { conversationUsage: "uploaded" as const } : {})
+              });
               attachmentSourceIds.add(saved.id);
             }
             personaForGeneration += `\n\n${selectionContext()}`;
