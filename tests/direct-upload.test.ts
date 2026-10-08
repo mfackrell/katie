@@ -554,7 +554,7 @@ test("newly uploaded video with lost browser previews can recover from private s
   assert.equal(finished.videoFrames, undefined);
   let decoded = 0;
   const expected = [{ timestampSeconds: 0, dataUrl: "data:image/jpeg;base64," +
-    Buffer.from([0xff, 0xd8, 1, 2, 0xff, 0xd9]).toString("base64") }];
+    Buffer.from([0xff, 0xd8, 1, 2, 3, 4, 0xff, 0xd9]).toString("base64") }];
   const recovered = await service.recoverUploadVideoFrames(finished.storageToken!, async source => {
     decoded++;
     assert.equal(await source.text(), "mp4");
