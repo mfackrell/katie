@@ -35,7 +35,7 @@ export function rankAttachmentCandidates(message: string, catalog: ConversationA
  * Only IDs already present in this chat's recent user messages AND the actor's
  * saved catalog can be reopened. Never use global "last upload" state.
  */
-const VIDEO_CONTINUATION = /\b(?:video|videos|clip|recording|footage|frames?|screen|image|picture|what (?:else|did you see)|why|explain|it|its|that|this|those|these|he|she|they|her|his|their|you|your|actually|but|no|wrong|incorrect|adult|teen|saw|shown|visible|look(?:s|ed)?)\b/i;
+const VIDEO_CONTINUATION = /\b(?:video|videos|clip|recording|footage|frames?|screen|image|picture|what (?:else|did you see)|why|explain|it|its|that|this|those|these|he|she|they|her|his|their|you|your|actually|but|no|wrong|incorrect|saw|shown|visible|look(?:s|ed)?)\b/i;
 const CLEAR_NEW_TASK = /^\s*(?:new topic|unrelated|switch (?:topic|subjects?)|change (?:the )?subject|forget (?:that|the video)|write (?:me|an?|the)\b|draft\b|remind me\b|schedule\b|translate\b|calculate\b|find me\b|search for\b|what time\b|where (?:is|are)\b|tell me about (?!that\b|this\b|it\b|the (?:video|recording|clip)\b))/i;
 const SUMMARY_ONLY_VISUAL = /\b(?:saved summary only|summary only|don't (?:open|inspect)|do not (?:open|inspect))\b/i;
 
@@ -50,8 +50,13 @@ export function retainActiveVideoEvidence(
       CLEAR_NEW_TASK.test(message) || message.length > 350) return decision;
 
   const users = history.filter(entry => entry.role === "user");
-  const lastVideoTurn = users.findLastIndex(entry =>
-    (entry.attachments ?? []).some(file => file.mimeType.startsWith("video/")));
+  let lastVideoTurn = -1;
+  for (let index = users.length - 1; index >= 0; index--) {
+    if ((users[index].attachments ?? []).some(file => file.mimeType.startsWith("video/"))) {
+      lastVideoTurn = index;
+      break;
+    }
+  }
   if (lastVideoTurn < 0 || users.length - lastVideoTurn > 2) return decision;
   const intervening = users.slice(lastVideoTurn + 1);
   if (intervening.some(entry => (entry.attachments?.length ?? 0) > 0 &&
