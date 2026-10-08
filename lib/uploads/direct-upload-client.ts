@@ -65,7 +65,7 @@ function readResumeSession(store: ResumeStorage | null, key: string): PreparedUp
     if (!value) return null;
     const parsed: unknown = JSON.parse(value);
     if (parsed && typeof parsed === "object") {
-      const saved = parsed as { uploadToken?: unknown; uploadId?: unknown; savedAt?: unknown };
+      const saved = parsed as { uploadToken?: unknown; uploadId?: unknown; savedAt?: unknown; transport?: unknown };
       if (typeof saved.uploadToken === "string" && typeof saved.uploadId === "string" &&
         typeof saved.savedAt === "number" && Date.now() - saved.savedAt < 110 * 60 * 1000 &&
         saved.savedAt <= Date.now() + 30_000) {
