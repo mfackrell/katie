@@ -1,50 +1,78 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import type { Browser } from "playwright-core";
+import { execFileSync } from "node:child_process";
+import { createRequire } from "node:module";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import sharp from "sharp";
 import { extractFramesFromPrivateVideo } from "../lib/uploads/server-video-frame-recovery";
+import { pruneRepeatedVideoSelections, uniqueAttachmentReferences } from "../lib/chat/video-attachment-dedup";
 
-const jpeg = "data:image/jpeg;base64," +
-  Buffer.from([0xff, 0xd8, 0, 1, 2, 3, 0xff, 0xd9]).toString("base64");
+const requireNode = createRequire(join(process.cwd(), "package.json"));
+const ffmpeg = process.platform === "linux" && process.arch === "x64"
+  ? requireNode.resolve("@ffmpeg-installer/linux-x64/ffmpeg")
+  : null;
 
-test("server recovery decodes a saved private video through an isolated Chromium page", async () => {
-  let closed = 0;
-  let videoBytes = "";
-  let interceptedRequests = 0;
-  const browser = {
-    newPage: async () => ({
-      route: async (_pattern: string, _callback: unknown) => { interceptedRequests++; },
-      setContent: async (html: string) => { assert.match(html, /html/); },
-      evaluate: async (_callback: unknown, mediaDataUrl: string) => {
-        assert.ok(mediaDataUrl.startsWith("data:video/mp4;base64,"));
-        videoBytes = Buffer.from(mediaDataUrl.slice("data:video/mp4;base64,".length), "base64").toString();
-        return [{ timestampSeconds: 0.8, dataUrl: jpeg }];
-      }
-    }),
-    close: async () => { closed++; }
-  } as unknown as Browser;
-
-  const frames = await extractFramesFromPrivateVideo(new Blob(["original-video"], { type: "video/mp4" }),
-    { launch: async () => browser });
-  assert.equal(videoBytes, "original-video", "the decoder receives private original bytes, not Google metadata");
-  assert.deepEqual(frames, [{ timestampSeconds: 0.8, dataUrl: jpeg }]);
-  assert.equal(interceptedRequests, 1, "all external browser requests blocked");
-  assert.equal(closed, 1, "headless browser closed after extraction");
+test("real bundled FFmpeg decodes a private MP4 into verified JPEG frames", async () => {
+  if (!ffmpeg) return;
+  const dir = await mkdtemp(join(tmpdir(), "katie-ffmpeg-test-"));
+  try {
+    const videoPath = join(dir, "test.mp4");
+    // Actual generated frames exercise the packaged decoder. A browser mock
+    // would have missed the iPhone recording codec failure in production.
+    execFileSync(ffmpeg, [
+      "-hide_banner", "-loglevel", "error", "-f", "lavfi",
+      "-i", "color=c=blue:s=160x96:r=4:d=3",
+      "-c:v", "mpeg4", "-pix_fmt", "yuv420p", "-y", videoPath,
+    ], { timeout: 20_000 });
+    const video = await readFile(videoPath);
+    const frames = await extractFramesFromPrivateVideo(new Blob([new Uint8Array(video)], { type: "video/mp4" }));
+    assert.ok(frames.length >= 2 && frames.length <= 4);
+    assert.ok(frames.every(frame => frame.dataUrl.startsWith("data:image/jpeg;base64,")));
+    assert.ok(frames.every(frame => frame.timestampSeconds >= 0 && frame.timestampSeconds < 3));
+    for (const frame of frames) {
+      const pixels = Buffer.from(frame.dataUrl.slice("data:image/jpeg;base64,".length), "base64");
+      const metadata = await sharp(pixels).metadata();
+      assert.equal(metadata.format, "jpeg");
+      assert.equal(metadata.width, 160);
+      assert.equal(metadata.height, 96);
+    }
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 });
 
-test("server recovery refuses empty source and invalid pixels instead of fabricating visual evidence", async () => {
-  await assert.rejects(extractFramesFromPrivateVideo(new Blob([]), {
-    launch: async () => { throw new Error("Browser must not start"); }
-  }), /supports retained files/);
-  let closed = 0;
-  const browser = {
-    newPage: async () => ({
-      route: async () => {},
-      setContent: async () => {},
-      evaluate: async () => [{ timestampSeconds: 0.2, dataUrl: "data:image/jpeg;base64," + Buffer.from("fake").toString("base64") }]
-    }),
-    close: async () => { closed++; },
-  } as unknown as Browser;
-  await assert.rejects(extractFramesFromPrivateVideo(new Blob(["recording"], { type: "video/mp4" }),
-    { launch: async () => browser }), /Invalid JPEG video preview/);
-  assert.equal(closed, 1);
+test("invalid saved bytes must not produce synthetic images and decoder errors are clear", async () => {
+  if (!ffmpeg) return;
+  await assert.rejects(extractFramesFromPrivateVideo(new Blob([])), /missing or exceeds/);
+  await assert.rejects(extractFramesFromPrivateVideo(
+    new Blob([Buffer.from("not a real MP4")], { type: "video/mp4" })
+  ), /FFmpeg could not extract visible frames/);
+});
+
+test("a new video suppresses the same saved video even when its file ID changed", () => {
+  const fresh = [{
+    fileId: "new-id", fileName: " ScreenRecording.mp4 ", mimeType: "video/mp4",
+    preview: "new", attachmentKind: "video" as const, providerRef: { googleFileUri: "file/new" },
+  }];
+  const saved = [
+    { mode: "source" as const, attachment: { id: "saved-id", fileName: "screenrecording.mp4", mimeType: "video/mp4" } },
+    { mode: "source" as const, attachment: { id: "other", fileName: "notes.pdf", mimeType: "application/pdf" } },
+  ];
+  assert.deepEqual(pruneRepeatedVideoSelections(fresh, saved, "Look at this video"),
+    [saved[1]], "only video duplication is removed, other file selections remain");
+  assert.deepEqual(pruneRepeatedVideoSelections(fresh, saved, "Compare this recording with the earlier one"),
+    saved, "explicit comparisons must retain both original sources");
+});
+
+test("deduplication keys on exact identity or provider URI, not filenames alone", () => {
+  const video = {
+    fileId: "vid-a", fileName: "screen.mp4", mimeType: "video/mp4", preview: "a",
+    attachmentKind: "video" as const, providerRef: { googleFileUri: "files/original" },
+  };
+  const same = { ...video, fileId: "vid-b" };
+  const different = { ...video, fileId: "vid-c", providerRef: { googleFileUri: "files/different" } };
+  assert.deepEqual(uniqueAttachmentReferences([video, same, different, video]), [video, different],
+    "keep genuinely distinct recordings when they share filenames");
 });
