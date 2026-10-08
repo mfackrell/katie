@@ -279,7 +279,7 @@ test("a failed chunk retries independently while other chunks succeed, reducing 
     });
     if (path.endsWith("/telemetry")) return new Response(null, { status: 204 });
     if (path.endsWith("/chunk")) {
-      const index = JSON.parse(String(init?.body)).index as number;
+      const index = (await parseReceivedChunk(init)).index as number;
       sent.push(index);
       if (index === 0 && badAttempts++ === 0) return Response.json({ error: "Transient" }, { status: 503 });
       succeeded.add(index);
@@ -879,7 +879,7 @@ test("existing 2 MiB v2 upload receipts resume with original chunk boundaries af
       chunkBytes: 2 * 1024 * 1024, transport: "json-base64-v2", uploadedIndexes: [0],
     });
     if (path.endsWith("/chunk")) {
-      const payload = JSON.parse(String(init?.body));
+      const payload = await parseReceivedChunk(init);
       indices.push(payload.index);
       assert.equal(payload.uploadToken, "existing-v2-ticket");
       assert.equal(Buffer.from(payload.data, "base64").length, 7);
@@ -932,7 +932,7 @@ test("legacy v2 upload resumes eight accepted 2 MiB chunks using only 512 KiB su
     if (path.endsWith("/prepare")) throw new Error("Must not discard existing chunks.");
     if (path.endsWith("/status")) return Response.json(await service.chunkStatus(session.uploadToken));
     if (path.endsWith("/chunk")) {
-      const payload = JSON.parse(String(init?.body));
+      const payload = await parseReceivedChunk(init);
       const chunkBytes = Buffer.from(payload.data, "base64");
       sizes.push(chunkBytes.length);
       assert.equal(typeof payload.subIndex, "number", "no legacy 2 MiB POSTs allowed");
