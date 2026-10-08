@@ -54,6 +54,96 @@ test("discovery ranks old matching summaries ahead of recent unrelated files and
   await selectStoredAttachments("Compare with the old plan", [doc], [], async prompt => { assert.match(prompt, /revised.docx/); return { selections: [{ id: doc.id, mode: "source" }] }; }, ["revised.docx"]);
 });
 
+test("active saved video frames remain available when the next turn challenges Katie's assessment", async () => {
+  const source: ConversationAttachment = {
+    id: "88888888-8888-4888-8888-888888888888", fileName: "ScreenRecording.mp4",
+    mimeType: "video/mp4", hasOriginal: true, chatId: "chat-a", actorId: "actor-a",
+    observedSummary: "An earlier inspection of the recording.", summaryCoverage: "sampled",
+  };
+  const conversation = [
+    { id: "user-1", chatId: "chat-a", role: "user" as const, content: "Review this recording",
+      createdAt: "2026-10-08T22:24:10Z", attachments: [source] },
+    { id: "assistant-1", chatId: "chat-a", role: "assistant" as const,
+      content: "I disagree with your assessment.", createdAt: "2026-10-08T22:24:40Z" },
+  ];
+  const emptySelector = async () => ({ selections: [] });
+
+  const challenge = await selectStoredAttachments("Nineteen is an adult!", [source], conversation, emptySelector);
+  assert.equal(challenge.method, "continuity");
+  assert.deepEqual(challenge.selections, [{ attachment: source, mode: "source" }]);
+  let reads = 0;
+  const restored = await loadSelectedAttachmentSources(challenge, async selected => {
+    assert.equal(selected.id, source.id);
+    reads++;
+    return {
+      fileId: "v-unchanged", fileName: source.fileName, mimeType: source.mimeType,
+      preview: "Retained video metadata", attachmentKind: "video", videoFrames: [
+        { timestampSeconds: 1, dataUrl: "data:image/jpeg;base64,/9j/2Q==" },
+        { timestampSeconds: 3, dataUrl: "data:image/jpeg;base64,/9j/2Q==" },
+      ],
+    };
+  });
+  assert.equal(reads, 1, "follow-up must reopen private saved video source");
+  assert.equal(restored.references[0].videoFrames?.length, 2);
+  assert.ok(restored.sourceIds.has(source.id));
+
+  const stillVideo = await selectStoredAttachments("You misunderstood what was shown.", [source], [
+    ...conversation,
+    { id: "user-2", chatId: "chat-a", role: "user" as const,
+      content: "Nineteen is an adult!", createdAt: "2026-10-08T22:25:30Z" },
+    { id: "assistant-2", chatId: "chat-a", role: "assistant" as const,
+      content: "I understand.", createdAt: "2026-10-08T22:25:56Z" },
+  ], emptySelector);
+  assert.equal(stillVideo.selections[0]?.attachment.id, source.id,
+    "one intermediate correction must not discard current visual context");
+});
+
+test("video continuity never selects stale, ambiguous, cross-chat, or unrelated files", async () => {
+  const video: ConversationAttachment = {
+    id: "video-a", fileName: "review.mp4", mimeType: "video/mp4", chatId: "chat-a",
+    hasOriginal: true, summaryCoverage: "sampled", observedSummary: "Visual observation.",
+  };
+  const second = { ...video, id: "video-b", fileName: "other.mp4" };
+  const history = [
+    { id: "user-1", chatId: "chat-a", role: "user" as const,
+      content: "Inspect this clip", createdAt: "2026-10-08T22:24:00Z", attachments: [video] },
+    { id: "assistant-1", chatId: "chat-a", role: "assistant" as const,
+      content: "I inspected the clip.", createdAt: "2026-10-08T22:24:30Z" },
+  ];
+  const emptySelector = async () => ({ selections: [] });
+  const cases = [
+    ["New topic: help me write a cover letter", history, [video], []],
+    ["What time is it?", history, [video], []],
+    ["Write me a note", history, [video], []],
+    ["No, that's not what I asked!", history, [], []],
+    ["I disagree!", [{ ...history[0], attachments: [video, second] }, history[1]], [video, second], []],
+    ["I disagree!", [...history,
+      { id: "u2", chatId: "chat-a", role: "user" as const,
+        content: "Tell me about something new", createdAt: "2026-10-08T22:25:00Z" },
+      { id: "a2", chatId: "chat-a", role: "assistant" as const,
+        content: "New subject.", createdAt: "2026-10-08T22:25:05Z" }], [video], []],
+  ] as const;
+  for (const [message, messages, catalog, expected] of cases) {
+    const choice = await selectStoredAttachments(message, [...catalog], [...messages], emptySelector);
+    assert.deepEqual(choice.selections, expected, message);
+  }
+  assert.equal((await selectStoredAttachments("Why did you say that?", [video], history,
+    emptySelector, ["new-upload.png"])).selections.length, 0,
+    "a newly attached file must take precedence over the old recording");
+  assert.equal((await selectStoredAttachments("Why did you say that?", [video], history,
+    async () => ({ selections: [], clarification: "Which video?" }))).selections.length, 0,
+    "explicit clarification must not be silently overridden");
+
+  const selectedSummary = await selectStoredAttachments("Why did you say that?", [video], history,
+    async () => ({ selections: [{ id: video.id, mode: "summary" }] }));
+  assert.equal(selectedSummary.selections[0].mode, "source",
+    "a contextual question about visible evidence requires the actual source");
+  const summaryOnly = await selectStoredAttachments("From the saved summary only, describe the clip", [video], history,
+    async () => ({ selections: [{ id: video.id, mode: "summary" }] }));
+  assert.equal(summaryOnly.selections[0].mode, "summary",
+    "an explicit summary-only request must remain summary-only");
+});
+
 test("photos use real image content, validated decoding and provider-ready rendering", async () => {
   const png = await sharp({ create: { width: 32, height: 32, channels: 3, background: "#d02020" } }).png().toBuffer();
   const file = new File([Uint8Array.from(png)], "red-square.png", { type: "image/png" });
