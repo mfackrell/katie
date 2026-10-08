@@ -54,6 +54,7 @@ export async function runWithRefusalFallback<TAttempt>({
   runAttempt,
   detectRefusal,
   shouldRetryRefusal,
+  retryTerminalError,
   rerouteOnRefusal,
   onRefusalReroute,
   onRefusalFallback,
@@ -66,6 +67,8 @@ export async function runWithRefusalFallback<TAttempt>({
   runAttempt: (attempt: TAttempt, attemptIndex: number) => Promise<ProviderResponse>;
   detectRefusal: (result: ProviderResponse, attempt: TAttempt) => boolean;
   shouldRetryRefusal: boolean;
+  /** Explicit video fallback may continue to the next candidate after a provider-terminal error. */
+  retryTerminalError?: (context: { attempt: TAttempt; error: unknown; remainingAttempts: TAttempt[] }) => boolean;
   rerouteOnRefusal?: (context: {
     attempt: TAttempt;
     attemptIndex: number;
@@ -149,7 +152,12 @@ export async function runWithRefusalFallback<TAttempt>({
       onRefusalFallback?.({ attempt, attemptIndex: currentAttemptIndex, nextAttempt });
       continue;
     } catch (error: unknown) {
-      if (isTerminalProviderError(error)) throw error;
+      if (isTerminalProviderError(error)) {
+        if (!pendingAttempts.length || !retryTerminalError?.({ attempt, error, remainingAttempts: [...pendingAttempts] })) throw error;
+        lastGenerationError = error;
+        onError?.({ attempt, attemptIndex: currentAttemptIndex, error });
+        continue;
+      }
       if (error instanceof ProviderResponseError && error.code === "EMPTY_RESPONSE") {
         if (retriedEmpty.has(attempt)) throw error;
         retriedEmpty.add(attempt);
