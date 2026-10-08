@@ -65,3 +65,15 @@ test("Grok video fallback requires actual frames rather than claiming native MP4
     ...video, videoFrames: [{ timestampSeconds: 1.2, dataUrl: "data:image/jpeg;base64,/9j/2Q==" }]
   }]), { supported: true });
 });
+
+test("legacy video originals can arm a safe Grok fallback before pixels are decoded", () => {
+  const video = {
+    fileId: "older-video-id", fileName: "saved.mp4", mimeType: "video/mp4",
+    preview: "metadata", attachmentKind: "video" as const
+  };
+  assert.equal(getAttachmentSupportForProvider("grok", [video]).supported, false);
+  assert.deepEqual(getAttachmentSupportForProvider("grok", [video],
+    new Set(["older-video-id"])), { supported: true });
+  assert.equal(getAttachmentSupportForProvider("grok", [video],
+    new Set(["another-video-id"])).supported, false);
+});

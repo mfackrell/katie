@@ -1,7 +1,7 @@
 import { finishChatFailure } from "@/lib/chat/request-failure";
 import { websiteEvidenceStore } from "@/lib/research/stored-evidence";
 import { attachmentAccessContext, type ConversationAttachment } from "@/lib/chat/attachment-continuity";
-import { persistConversationAttachment, restoreConversationAttachment, loadConversationAttachmentCatalog, loadActorAttachmentCatalog } from "@/lib/uploads/stored-uploads";
+import { persistConversationAttachment, restoreConversationAttachment, loadConversationAttachmentCatalog, loadActorAttachmentCatalog, recoverSavedVideoFrames, recoverUploadVideoFrames } from "@/lib/uploads/stored-uploads";
 import { describeAttachmentEvidence } from "@/lib/uploads/attachment-observations";
 import { buildImageReference, imageFileFromDataUrl } from "@/lib/uploads/image-reference";
 import { selectStoredAttachments, loadSelectedAttachmentSources } from "@/lib/chat/attachment-selection";
@@ -637,6 +637,18 @@ export async function POST(request: NextRequest) {
       if (!owner || owner.actorId !== actorId) throw new Error("Source conversation is unavailable to this actor.");
       return restoreConversationAttachment(owner.id, saved, actorId);
     });
+    // Index the exact selected source by trusted fileId, never filename. Source
+    // selection already checked that the owning chat belongs to this actor.
+    const selectedSourceDescriptors = attachmentDecision.selections
+      .filter(item => item.mode === "source" && restored.sourceIds.has(item.attachment.id))
+      .map(item => item.attachment);
+    const savedVideoSourceByFileId = new Map(restored.references.map((file, index) =>
+      [file.fileId, selectedSourceDescriptors[index]] as const
+    ));
+    const currentUploadVideoTokensByFileId = new Map(
+      (fileReferences ?? []).filter(file => Boolean(file.storageToken))
+        .map(file => [file.fileId, file.storageToken!] as const)
+    );
     const attachments = [...newAttachments, ...restored.references].map(file =>
       file.mimeType === "application/pdf" && /\b(signature|signed|handwrit\w*|layout|colou?r|font|stamp|scan|visual|diagram|chart|figure|formatting|photo|picture|annotation)\b/i.test(message)
         ? { ...file, nativeInspectionRequired: true } : file
@@ -1290,7 +1302,14 @@ export async function POST(request: NextRequest) {
     // xAI's Imagine Video models generate/edit videos and are not input-video analyzers.
     if (hasVideoInput && provider.name === "google") {
       const grokProvider = providers.find(candidate => candidate.name === "grok");
-      const grokSupport = getAttachmentSupportForProvider("grok", attachments);
+      const recoverableVideoFileIds = new Set(
+        attachments.filter(file => isVideoAttachment(file) &&
+          (Boolean(file.videoFrames?.length) ||
+            Boolean(currentUploadVideoTokensByFileId.has(file.fileId)) ||
+            Boolean(savedVideoSourceByFileId.get(file.fileId)?.hasOriginal)))
+          .map(file => file.fileId)
+      );
+      const grokSupport = getAttachmentSupportForProvider("grok", attachments, recoverableVideoFileIds);
       if (grokProvider && grokSupport.supported) {
         const available = await grokProvider.listModels();
         const grokVisionModel = ["grok-4.7", "grok-4.6", "grok-4.5", "grok-4.3"].find(id => available.includes(id));
@@ -1298,7 +1317,10 @@ export async function POST(request: NextRequest) {
           fallbackChain = [{ provider: grokProvider, modelId: grokVisionModel, score: 0 }];
           console.info("[Video Routing] Grok vision frame fallback armed", {
             requestId, fallbackModel: grokVisionModel,
-            frameCount: attachments.reduce((count, file) => count + (file.videoFrames?.length ?? 0), 0)
+            frameCount: attachments.reduce((count, file) => count + (file.videoFrames?.length ?? 0), 0),
+            recoverableOriginalCount: attachments.filter(file =>
+              isVideoAttachment(file) && !file.videoFrames?.length &&
+              recoverableVideoFileIds.has(file.fileId)).length
           });
         }
       } else if (!grokSupport.supported) {
@@ -1554,6 +1576,41 @@ ${chunkWorkflowSummary}`;
                 hasVideoInput && attempt.provider.name === "google" &&
                 remainingAttempts.some(candidate => candidate.provider.name === "grok"),
               runAttempt: async (candidate, attemptIndex) => {
+                // Do not launch a browser or decode a large private MP4 unless
+                // Gemini actually fails and the deterministic Grok fallback runs.
+                if (candidate.provider.name === "grok" && hasVideoInput) {
+                  for (const video of attachments.filter(isVideoAttachment)) {
+                    if (video.videoFrames?.length) continue;
+                    console.info("[Video Routing] recovering saved video pixels for Grok fallback", {
+                      requestId, fileId: video.fileId,
+                      source: savedVideoSourceByFileId.has(video.fileId) ? "saved-conversation" : "signed-upload"
+                    });
+                    let recovered;
+                    const savedSource = savedVideoSourceByFileId.get(video.fileId);
+                    try {
+                      if (savedSource) {
+                        recovered = await recoverSavedVideoFrames(savedSource.chatId ?? chatId, savedSource, actorId);
+                      } else {
+                        const token = currentUploadVideoTokensByFileId.get(video.fileId);
+                        if (!token) throw new Error("Original video source could not be located for this actor.");
+                        recovered = await recoverUploadVideoFrames(token);
+                      }
+                      if (recovered.fileId !== video.fileId || !recovered.videoFrames?.length) {
+                        throw new Error("Recovered video evidence did not match the requested attachment.");
+                      }
+                      video.videoFrames = recovered.videoFrames;
+                      console.info("[Video Routing] recovered actual frames; Grok retry proceeding", {
+                        requestId, fileId: video.fileId, frameCount: video.videoFrames.length
+                      });
+                    } catch (error) {
+                      const reason = error instanceof Error ? error.message : String(error);
+                      console.error("[Video Routing] saved source extraction failed; no fake evidence passed to Grok", {
+                        requestId, fileId: video.fileId, reason
+                      });
+                      throw new Error("Gemini video analysis failed. Grok fallback cannot inspect the saved video: " + reason);
+                    }
+                  }
+                }
                 provider = candidate.provider;
                 modelId = candidate.modelId;
                 if (candidate.explainer) {

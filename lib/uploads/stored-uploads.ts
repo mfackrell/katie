@@ -5,6 +5,7 @@ import type { ConversationAttachment } from "@/lib/chat/attachment-continuity";
 import type { FileReference } from "@/lib/providers/types";
 import { buildFileReferences, validateUploadFiles } from "./build-file-references";
 import { validateVideoFallbackFrames } from "./video-fallback-frames";
+import { extractFramesFromPrivateVideo } from "./server-video-frame-recovery";
 
 const BUCKET = "katie-attachments";
 const RETENTION_MS = 24 * 60 * 60 * 1000;
@@ -242,6 +243,63 @@ export function createStoredUploadService(storage: Storage, secret: string, opti
       }
       return record.reference;
     },
+    // Recover visual evidence only after Gemini fails. This reads the original
+    // video already saved for this actor and persists extracted frames privately
+    // for every subsequent retry, without asking for another upload.
+    async recoverSavedVideoFrames(
+      chatId: string, attachment: ConversationAttachment, expectedActorId: string,
+      extract: typeof extractFramesFromPrivateVideo = extractFramesFromPrivateVideo,
+    ): Promise<FileReference> {
+      if (attachment.chatId && attachment.chatId !== chatId) throw new UploadInputError("Video attachment belongs to another conversation.");
+      if (attachment.actorId && attachment.actorId !== expectedActorId) throw new UploadInputError("Video attachment belongs to another actor.");
+      const path = conversationPath(chatId, attachment.id);
+      const stored = await objects.download(`${path}.json`);
+      if (stored.error || !stored.data) throw new UploadInputError("Previously saved video details are unavailable.");
+      const record = JSON.parse(await stored.data.text()) as {
+        reference: FileReference; hasSource: boolean; refreshedAt: number; actorId?: string
+      };
+      if (record.actorId && record.actorId !== expectedActorId) throw new UploadInputError("Video belongs to another actor.");
+      if (!record.reference.mimeType.startsWith("video/")) throw new UploadInputError("Saved attachment is not a video.");
+      if (record.reference.videoFrames?.length) return record.reference;
+      if (!record.hasSource) throw new UploadInputError("Original video was not retained; cannot extract real frames.");
+      const original = await objects.download(`${path}.source`);
+      if (original.error || !original.data) throw new UploadInputError("The original saved video is no longer available.");
+      const frames = validateVideoFallbackFrames(await extract(original.data));
+      if (!frames.length) throw new UploadInputError("Server decoded no video frames; Grok visual fallback is unavailable.");
+      record.reference.videoFrames = frames;
+      const saved = await objects.upload(`${path}.json`, JSON.stringify(record), {
+        contentType: "application/json", upsert: true
+      });
+      if (saved.error) throw new Error("Unable to persist recovered video frames.");
+      console.info("[Video Routing] saved video frames recovered", {
+        attachmentId: attachment.id, frameCount: frames.length, source: "saved-conversation"
+      });
+      return record.reference;
+    },
+    async recoverUploadVideoFrames(
+      referenceToken: string,
+      extract: typeof extractFramesFromPrivateVideo = extractFramesFromPrivateVideo,
+    ): Promise<FileReference> {
+      const ticket = verify(referenceToken, "reference");
+      if (!ticket.type.startsWith("video/")) throw new UploadInputError("Signed attachment is not a video.");
+      const stored = await objects.download(referencePath(ticket));
+      if (stored.error || !stored.data) throw new UploadInputError("Uploaded video reference is unavailable.");
+      const reference = JSON.parse(await stored.data.text()) as FileReference;
+      if (reference.videoFrames?.length) return reference;
+      const original = await objects.download(sourcePath(ticket));
+      if (original.error || !original.data) throw new UploadInputError("The uploaded original video is unavailable.");
+      const frames = validateVideoFallbackFrames(await extract(original.data));
+      if (!frames.length) throw new UploadInputError("Server decoded no video frames; Grok visual fallback is unavailable.");
+      reference.videoFrames = frames;
+      const saved = await objects.upload(referencePath(ticket), JSON.stringify(reference), {
+        contentType: "application/json", upsert: true
+      });
+      if (saved.error) throw new Error("Unable to persist recovered video frames.");
+      console.info("[Video Routing] uploaded video frames recovered", {
+        uploadId: ticket.id, frameCount: frames.length, source: "signed-upload"
+      });
+      return reference;
+    },
     async removeConversation(chatId: string, actorId?: string) {
       if (!z.string().uuid().safeParse(chatId).success) return;
       const ownFileIds: string[] = [];
@@ -379,6 +437,8 @@ export const hydrateStoredAttachments = (references: FileReference[]) =>
 
 export const persistConversationAttachment = (chatId: string, reference: FileReference, token?: string, options?: { source?: Blob; description?: Partial<ConversationAttachment>; actorId?: string }) => getUploadService().persist(chatId, reference, token, options);
 export const restoreConversationAttachment = (chatId: string, attachment: ConversationAttachment, actorId?: string) => getUploadService().restore(chatId, attachment, actorId);
+export const recoverSavedVideoFrames = (chatId: string, attachment: ConversationAttachment, actorId: string) => getUploadService().recoverSavedVideoFrames(chatId, attachment, actorId);
+export const recoverUploadVideoFrames = (referenceToken: string) => getUploadService().recoverUploadVideoFrames(referenceToken);
 export const removeConversationAttachments = (chatId: string, actorId?: string) => getUploadService().removeConversation(chatId, actorId);
 export const removeActorAttachmentIndex = (actorId: string) => getUploadService().removeActorIndex(actorId);
 

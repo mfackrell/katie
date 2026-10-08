@@ -50,7 +50,8 @@ export function resolveVideoRoutingPolicy(hasVideoInput: boolean, overrideProvid
 
 export function getAttachmentSupportForProvider(
   providerName: LlmProvider["name"],
-  attachments: FileReference[] | undefined
+  attachments: FileReference[] | undefined,
+  recoverableVideoFileIds?: ReadonlySet<string>,
 ): AttachmentSupportCheck {
   if (!attachments?.length) {
     return { supported: true };
@@ -65,7 +66,7 @@ export function getAttachmentSupportForProvider(
   // arbitrary private MP4. Grok text+vision models can inspect sampled JPEGs.
   if (providerName === "grok") {
     const scannedPdf = videoAttachments.find(file => !isVideoAttachment(file));
-    const missingFrames = videoAttachments.find(file => isVideoAttachment(file) && !file.videoFrames?.length);
+    const missingFrames = videoAttachments.find(file => isVideoAttachment(file) && !file.videoFrames?.length && !recoverableVideoFileIds?.has(file.fileId));
     if (!scannedPdf && !missingFrames) return { supported: true };
     return { supported: false, reason: missingFrames
       ? `Grok frame-based video fallback is unavailable for "${missingFrames.fileName}": no decoded frames were saved. Grok cannot directly inspect its MP4.`
