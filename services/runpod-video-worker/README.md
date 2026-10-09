@@ -24,6 +24,22 @@ The worker has **no filename-extension, provider, or video-MIME allowlist**: it 
 
 **No adult-content gate is installed:** `content_policy_confirmed` is no longer part of the request schema. Older clients may still send it, but the worker ignores it. There are no keyword filters or pornographic-content detection/denial rules in the worker. Treat this as a content-neutral processing API, not a certification that any particular video is legal, consensual, or within an account's authorization. Security controls on private signed storage URLs and bounded media processing remain.
 
+## RunPod API key configuration (standalone smoke client)
+
+The smoke client already reads `RUNPOD_API_KEY` and `RUNPOD_ENDPOINT_ID` from the environment. This repository intentionally does **not** contain a real or real-looking key, including one temporarily used as a placeholder. It is a public GitHub repository; do not commit secrets, private signed-video URLs, or local `.env` files.
+
+```bash
+cd services/runpod-video-worker
+cp .env.example .env
+# Replace REPLACE_WITH_YOUR_RUNPOD_API_KEY and REPLACE_WITH_YOUR_ENDPOINT_ID
+# in your local .env file, after the endpoint has been provisioned.
+set -a; . ./.env; set +a
+python scripts/smoke_runpod.py --health
+python scripts/smoke_runpod.py --self-test
+```
+
+The template deliberately uses `RUNPOD_API_KEY=REPLACE_WITH_YOUR_RUNPOD_API_KEY`. A placeholder cannot authenticate, provision GPUs, or run remote tests. The RunPod control-plane integration (or CLI) must be authenticated separately to create an endpoint. **Never add `RUNPOD_API_KEY` to the GPU container environment**; it is only needed by the provisioning client or smoke tester.
+
 ## Independent health / GPU smoke tests (no Katie access)
 
 The worker includes two safe, self-contained operations:
