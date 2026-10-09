@@ -133,6 +133,20 @@ The tests generate a synthetic color-pattern video and call `process_video` with
 
 RunPod API instructions: https://docs.runpod.io/serverless/quickstart and https://docs.runpod.io/serverless/endpoints/operation-reference. Qwen model info: https://huggingface.co/Qwen/Qwen2.5-VL-7B-Instruct.
 
+## Expanded synthetic-media QA (2026-10-09)
+
+The worker is validated locally with a fake analyzer, actual FFmpeg decoding, simulated private HTTPS downloads and fault injection. Checks cover modern H.264/HEVC/VP9 codecs, broken video, absent audio/video, 16 kHz audio extraction, optional transcription wiring (Whisper inference mocked), chronological sampling, concurrent temporary-file isolation, HTTP 401/403/429/500 failures, SHA-256 verification, request validation and signed-URL redaction. A reported bug that logged raw exception tracebacks (including possible signed tokens) was fixed; health now reports `unhealthy` when FFmpeg binaries are missing.
+
+Run the branch CI workflow `.github/workflows/runpod-video-worker-qa.yml` and/or run:
+```bash
+cd services/runpod-video-worker
+python -m pip install -r requirements-test.txt
+python -m pytest -q
+python -m compileall -q src scripts tests
+```
+
+**Limits:** CPU tests do not exercise Qwen GPU model weights, GPU OOM, Whisper speech recognition quality, actual signed Supabase access, RunPod cold starts or Docker build. Do not call the worker production-ready until GPU self-test and representative accuracy/latency tests pass on an actual provisioned endpoint.
+
 ## Privacy and limitations
 
 - RunPod receives a temporary URL to the original video; signed URLs are bearer credentials until expiration. Use a private bucket, short lifetimes, least-privilege service credentials on the signing side, and do not include tokens in logs.

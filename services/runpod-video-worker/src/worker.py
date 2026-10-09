@@ -10,7 +10,6 @@ and applicable law; the worker does not validate those external permissions.
 from __future__ import annotations
 
 import hashlib
-import ipaddress
 import json
 import logging
 import math
@@ -423,10 +422,13 @@ def self_test(*, analyzer: Analyzer | None = None) -> dict[str, Any]:
 
 
 def health() -> dict[str, Any]:
-    """Quick, no-model-download readiness probe for the remote endpoint."""
-    return {"schema_version": SCHEMA_VERSION, "status": "healthy",
-            "ffmpeg_available": bool(shutil.which("ffmpeg")),
-            "ffprobe_available": bool(shutil.which("ffprobe")),
+    """Quick readiness probe: never claim health when required binaries are absent."""
+    ffmpeg_available = bool(shutil.which("ffmpeg"))
+    ffprobe_available = bool(shutil.which("ffprobe"))
+    return {"schema_version": SCHEMA_VERSION,
+            "status": "healthy" if ffmpeg_available and ffprobe_available else "unhealthy",
+            "ffmpeg_available": ffmpeg_available,
+            "ffprobe_available": ffprobe_available,
             "gpu_model_configured": os.getenv("VISION_MODEL", "Qwen/Qwen2.5-VL-7B-Instruct"),
             "max_video_bytes": MAX_VIDEO_BYTES,
             "max_video_seconds": MAX_VIDEO_SECONDS_LIMIT,
@@ -435,7 +437,10 @@ def health() -> dict[str, Any]:
 
 
 def handler(event: dict[str, Any]) -> dict[str, Any]:
-    """RunPod queue-based Serverless handler; never logs signed URLs or frames."""
+    """RunPod queue-based Serverless handler; never logs signed URLs or frames.
+
+    Do not log exception tracebacks: provider errors may contain private URLs.
+    """
     try:
         payload = event.get("input") if isinstance(event, dict) else None
         if not isinstance(payload, dict):
@@ -453,7 +458,7 @@ def handler(event: dict[str, Any]) -> dict[str, Any]:
         return {"schema_version": SCHEMA_VERSION, "status": "rejected", "error": {"code": "INVALID_INPUT", "message": str(exc)}}
     except Exception as exc:
         # Worker must never echo URL/query, private paths, model inputs or raw traces.
-        LOG.exception("Video job failed (%s)", type(exc).__name__)
+        LOG.error("Video job failed (%s)", type(exc).__name__)
         return {"schema_version": SCHEMA_VERSION, "status": "failed",
                 "error": {"code": "PROCESSING_ERROR", "message": f"Worker could not complete analysis ({type(exc).__name__})"}}
 
