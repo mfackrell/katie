@@ -1,0 +1,7 @@
+# Only install non-torch dependencies. Base image includes GPU-compatible torch.
+runpod>=1.7.6,<2
+requests>=2.31,<3
+Pillow>=10.4,<12
+transformers>=4.51,<5
+accelerate>=1.2,<2
+faster-whisper>=1.1,<2

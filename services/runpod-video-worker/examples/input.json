@@ -1,0 +1,9 @@
+{
+  "input": {
+    "attachment_id": "demo-video-001",
+    "source_url": "https://YOUR_PROJECT.supabase.co/storage/v1/object/sign/katie-attachments/chats/CHAT_UUID/ATTACHMENT_UUID.source?token=SHORT_LIVED_SIGNED_TOKEN",
+    "max_duration_seconds": 300,
+    "max_frames": 32,
+    "transcribe_audio": false
+  }
+}
