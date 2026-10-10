@@ -231,7 +231,7 @@ test("new chats see actor memory but begin with clean short and intermediate lay
  const two=await store.getChatContextState("a1","c2");
  const other=await store.getChatContextState("a2","c3");
  assert.deepEqual(two.longTermMemory,one.longTermMemory);
- assert.equal(one.shortTermMemory.content,"short");
+ assert.equal(one.shortTermMemory.content,"short", JSON.stringify(state.short_term_memory));
  assert.equal(one.intermediateMemory.summary,"intermediate");
  assert.deepEqual(two.shortTermMemory,{});
  assert.deepEqual(two.intermediateMemory,{});
