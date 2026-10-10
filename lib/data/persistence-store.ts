@@ -535,6 +535,7 @@ export async function setIntermediateMemory(actorId: string, chatId: string, pay
 // Long-term memory belongs to the actor, not the chat. Keep the chatId argument
 // for compatibility with existing callers; it never scopes this lookup.
 export async function getLongTermMemory(actorId: string, _chatId: string): Promise<JsonRecord> {
+  void _chatId; // Compatibility argument; actor memory is not chat scoped.
   const client = getSupabaseAdminClient();
   const { data, error } = await client.from("actor_long_term_memory")
     .select("content").eq("actor_id", actorId).maybeSingle<{ content: JsonRecord }>();
