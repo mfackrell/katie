@@ -228,6 +228,7 @@ export async function maybeUpdateLongTermMemory(
   actorId: string,
   chatId: string,
   latestUserMessage: string,
+  options: { required?: boolean } = {},
 ): Promise<void> {
   console.log("[LongTermMemoryEditor] Start", {
     actorId,
@@ -238,6 +239,7 @@ export async function maybeUpdateLongTermMemory(
   try {
     const client = getMemoryEditorClient();
     if (!client) {
+      if (options.required) throw new Error("Memory correction unavailable: editor provider not configured");
       console.log("[LongTermMemoryEditor] Skip: OpenAI client unavailable", { actorId, chatId });
       return;
     }
@@ -286,7 +288,7 @@ export async function maybeUpdateLongTermMemory(
             "- Assistant inferences are reasoning context, not facts the user endorsed.",
             "- If the user corrects a memory, revise or remove the conflicting older entry.",
             "- Deduplicate semantically equivalent entries instead of accumulating variants.",
-            "- Keep memory compact. Prefer fewer strong entries over many weak ones.",
+            "- Preserve all existing distinct entries unless the user explicitly corrects or removes them.",\n            "- When the latest request explicitly asks to save or correct memory, update it rather than returning no_change.",\n            "- Never discard a verbatim reference-document entry simply for being long.",
             "",
             "Required format:",
             '{"version":3,"purpose":"...","entries":[{"key":"stable.short.identifier","category":"fact|preference|relationship|goal|decision|constraint|pattern","value":"...","source":"user-stated|assistant-inference","confidence":"high|medium|low","evidenceMessageIds":["USER_MESSAGE_ID"],"lastConfirmedAt":"ISO timestamp if known"}]}',
@@ -318,16 +320,19 @@ export async function maybeUpdateLongTermMemory(
     });
 
     if (!rawResult) {
+      if (options.required) throw new Error("Memory editor returned no content");
       return;
     }
 
     const decision = parseMemoryEditorResult(rawResult, allowedEvidenceIds);
     if (!decision) {
+      if (options.required) throw new Error("Memory editor returned invalid update");
       console.log("[LongTermMemoryEditor] No-op: invalid model response", { actorId, chatId });
       return;
     }
 
     if (decision.action === "no_change") {
+      if (options.required) throw new Error("Memory editor declined the requested correction");
       console.log("[LongTermMemoryEditor] Decision: no_change", { actorId, chatId });
       return;
     }
@@ -337,9 +342,21 @@ export async function maybeUpdateLongTermMemory(
       chatId,
       entryCount: decision.updatedContent.entries.length,
     });
-    await setLongTermMemory(actorId, chatId, decision.updatedContent);
+    const nextContent = options.required ? decision.updatedContent : {
+      ...decision.updatedContent,
+      entries: [
+        ...decision.updatedContent.entries,
+        ...currentEntries(currentLongTermMemory).filter(e =>
+          e.key.startsWith("explicit.") && !decision.updatedContent.entries.some(n => n.key === e.key)),
+      ],
+    };
+    if (options.required && JSON.stringify(nextContent) === JSON.stringify(currentLongTermMemory)) {
+      throw new Error("Memory correction produced no actual change");
+    }
+    await setLongTermMemory(actorId, chatId, nextContent);
     console.log("[LongTermMemoryEditor] Save Success", { actorId, chatId });
   } catch (error: unknown) {
+    if (options.required) throw error;
     console.error("[LongTermMemoryEditor] Failed", {
       actorId,
       chatId,
