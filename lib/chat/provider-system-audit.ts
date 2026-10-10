@@ -68,7 +68,7 @@ export async function latestProviderSystemAudit(actorId: string, chatId: string)
     .eq("chat_id", chatId)
     .order("created_at", { ascending: false })
     .limit(50)
-    .returns<Array<{ request_id: string; provider_system_audit: unknown }>>();
+    .returns<{ request_id: string; provider_system_audit: unknown }>();
   if (error) {
     console.warn("[Prompt Inspection] Cannot read previous provider payload", { reason: error.message });
     return null;
