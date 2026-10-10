@@ -77,6 +77,9 @@ function asEntries(memory: Record<string, unknown>): LongTermEntry[] {
 }
 
 function isTransientLongTermEntry(entry: LongTermEntry): boolean {
+  // User-requested documents and the quote-grounded facts extracted from them
+  // are durable even when their original wording describes a dated state.
+  if (entry.key.startsWith("explicit.") || entry.key.startsWith("reference.")) return false;
   if (entry.category === "preference" || entry.category === "relationship" || entry.category === "goal") {
     return false;
   }
