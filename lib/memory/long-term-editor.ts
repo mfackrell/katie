@@ -99,6 +99,8 @@ function normalizeUpdatedContent(
       rawEntry.category !== "preference" &&
       rawEntry.category !== "relationship" &&
       rawEntry.category !== "goal" &&
+      !rawEntry.key.startsWith("explicit.") &&
+      !rawEntry.key.startsWith("reference.") &&
       TRANSIENT_VALUE_PATTERN.test(rawEntry.value)
     ) {
       continue;
@@ -357,7 +359,7 @@ export async function maybeUpdateLongTermMemory(
       entries: [
         ...decision.updatedContent.entries,
         ...currentEntries(currentLongTermMemory).filter(e =>
-          e.key.startsWith("explicit.") && !decision.updatedContent.entries.some(n => n.key === e.key)),
+          (e.key.startsWith("explicit.") || e.key.startsWith("reference.")) && !decision.updatedContent.entries.some(n => n.key === e.key)),
       ],
     };
     if (options.required && JSON.stringify(nextContent) === JSON.stringify(currentLongTermMemory)) {
