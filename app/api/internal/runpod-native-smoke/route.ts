@@ -18,6 +18,15 @@ export async function GET(req:NextRequest) {
       const body=await res.json().catch(()=>({}));
       return NextResponse.json({action:mode,httpStatus:res.status,id:body.id,name:body.name,workers:body.workers,gpu:body.gpu,status:body.status,type:body.type});
     }
+    if(mode==="worker_health") {
+      const res=await fetch(`https://api.runpod.ai/v2/${ENDPOINT_ID}/health`,{
+        headers,cache:"no-store",signal:AbortSignal.timeout(25000)
+      });
+      const body=await res.json().catch(()=>({}));
+      return NextResponse.json({action:mode,httpStatus:res.status,
+        jobs:body.jobs,workers:body.workers,status:body.status,
+        errorCode:res.ok?null:"health_api_unavailable"});
+    }
     if(mode==="start") {
       const res=await fetch(`https://api.runpod.ai/v2/${ENDPOINT_ID}/run`,{
         method:"POST",headers,cache:"no-store",signal:AbortSignal.timeout(30000),
