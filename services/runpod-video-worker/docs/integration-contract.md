@@ -11,7 +11,7 @@ Nothing in this document is deployed or applied to Katie.
 
 ## Contract
 
-The independent worker accepts a signed URL to a private Supabase video, an attachment ID, and optional analysis parameters. The worker returns a `schema_version: "1.0"` result with timestamped segments and a text summary. It never handles actor prompts or chat history. It never receives a Supabase service-role key.
+The independent worker accepts a signed URL to a private Supabase video, an attachment ID, and optional analysis parameters. The active native-video entrypoint `src.native_video_worker` supplies the ORIGINAL MP4/MOV as a video item to Qwen3-VL, not a sampled JPEG array. It returns `schema_version: "2.0"`, `analysis_mode: "native_video"`, `coverage: "video_with_temporal_sampling"`, and a temporally grounded text analysis. The model's video tokenizer internally samples temporal visual tokens; this does not amount to lossless processing of every source frame. It never handles actor prompts or chat history. It never receives a Supabase service-role key.
 
 A later Katie integration would:
 
@@ -34,3 +34,7 @@ A later Katie integration would:
 - RunPod queue job may report COMPLETED even when the worker returns `status: rejected` or `failed`; check both layers.
 - Signed URL TTL must encompass queued time, cold startup and download time. Avoid unnecessarily long TTLs; rotating/revoking tokens may require storage deletion or administrative procedures.
 - Benchmark GPU RAM and throughput with authorized sample clips before estimating production cost.
+
+### RunPod readiness gate
+
+The independent native-video endpoint must pass authenticated health, Qwen3-VL GPU self-test on an actual MP4, private signed-URL retrieval of real footage, chronology/quality benchmark, and quota/cold-start checks before changing any Katie runtime routing. Grok remains the existing fallback until then.
