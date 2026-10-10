@@ -112,18 +112,18 @@ export async function GET(req:NextRequest){
    const url=API+"/serverless/"+endpoint+"/workers/"+worker+"/logs?tail=30"+
      (source==="all"?"":"&source="+source);
    const ctrl=new AbortController();
-   const timeout=setTimeout(()=>ctrl.abort(),11000);
+   const timeout=setTimeout(()=>ctrl.abort(),7000);
    try {
     const r=await fetch(url,{headers,cache:"no-store",signal:ctrl.signal});
     let raw="";
     if(r.body){
      const reader=r.body.getReader();
      const dec=new TextDecoder();
-     while(raw.length<25000){
-      const block=await reader.read();
+     while(raw.length<18000){
+      let block:ReadableStreamReadResult<Uint8Array>;
+      try {block=await reader.read();}catch{break;}
       if(block.done)break;
       raw+=dec.decode(block.value,{stream:true});
-      if(raw.length>700)break;
      }
      await reader.cancel().catch(()=>{});
     }
