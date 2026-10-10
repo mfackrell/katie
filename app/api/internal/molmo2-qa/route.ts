@@ -133,7 +133,7 @@ export async function GET(req:NextRequest){
    if(!/^[a-z0-9]{6,25}$/.test(worker))return output({error:"invalid_worker"},400);
    const source=req.nextUrl.searchParams.get("source")||"container";
    if(!["container","system","all"].includes(source))return output({error:"bad_source"},400);
-   const url=API+"/serverless/"+endpoint+"/workers/"+worker+"/logs?tail=30"+
+   const url=API+"/serverless/"+endpoint+"/workers/"+worker+"/logs?tail=140"+
      (source==="all"?"":"&source="+source);
    const ctrl=new AbortController();
    const timeout=setTimeout(()=>ctrl.abort(),7000);
@@ -143,7 +143,7 @@ export async function GET(req:NextRequest){
     if(r.body){
      const reader=r.body.getReader();
      const dec=new TextDecoder();
-     while(raw.length<18000){
+     while(raw.length<180000){
       let block:ReadableStreamReadResult<Uint8Array>;
       try {block=await reader.read();}catch{break;}
       if(block.done)break;
@@ -153,7 +153,15 @@ export async function GET(req:NextRequest){
     }
     const sanitized=raw.replace(new RegExp("https?://[^\\\\s]+","gi"),"[url]")
       .replace(new RegExp("Bearer\\\\s+\\\\S+","gi"),"Bearer [redacted]");
-    return output({worker,http:r.status,log:sanitized.slice(-12000)});
+    const entries=sanitized.split("\\n").filter(x=>x.startsWith("data: ")).map(line=>{
+      try{
+       const item=JSON.parse(line.slice(6));
+       return {ts:item.ts,source:item.source,message:String(item.line||"").slice(0,420)};
+      }catch{return null;}
+     }).filter((v):v is {ts:string;source:string;message:string}=>v!==null);
+    const highlights=entries.filter(x=>/error|fail|exception|memory|out of|killed|traceback|validate|systemerror|valueerror|runtimeerror|checkpoint|missing|loaded|download|allocat|cannot/i.test(x.message));
+    return output({worker,http:r.status,totalEvents:entries.length,
+      highlights:highlights.slice(-75),recent:entries.slice(-8)});
    }catch(e){return output({worker,error:err(e)},502);}
    finally{clearTimeout(timeout);}
 
