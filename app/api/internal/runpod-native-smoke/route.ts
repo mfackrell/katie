@@ -62,7 +62,9 @@ export async function GET(req:NextRequest) {
         delayMs:body.delayTime??null,executionMs:body.executionTime??null,
         model:output?.model??null,
         content:typeof content==="string"?content.slice(0,3500):null,
-        workerError:body.status==="FAILED"?String(body.error ?? output?.error ?? "unknown_worker_error").slice(0,300):null
+        workerError:body.status==="FAILED"?String(body.error ?? output?.error ?? "unknown_worker_error").slice(0,300):null,
+        outputKeys:output&&typeof output==="object"?Object.keys(output):[],
+        outputPreview:body.status==="COMPLETED"?JSON.stringify(output).slice(0,4500):null
       });
     }
     return NextResponse.json({error:"unsupported_action"},{status:400});
