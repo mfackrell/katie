@@ -261,3 +261,77 @@ test("mandatory correction fails rather than falsely claiming no_change",async()
  await store.saveMessage("c1",{id:"m1",role:"user",content:"Correct your memory"});
  await assert.rejects(()=>memoryEditor.maybeUpdateLongTermMemory("a1","c1","Correct your memory",{required:true}),/declined/);
 });
+
+test("explicit document chunking covers every character", async () => {
+  const { splitExplicitMemoryDocument } = require("../lib/memory/explicit-fact-extractor") as typeof import("../lib/memory/explicit-fact-extractor");
+  const source = Array.from({ length: 60 }, (_, i) => `# Section ${i}\n${"word ".repeat(180)}\n`).join("");
+  const chunks = splitExplicitMemoryDocument(source);
+  assert.ok(chunks.length > 2);
+  assert.equal(chunks.join(""), source);
+  assert.ok(chunks.every((chunk) => chunk.length <= 8500));
+});
+
+test("explicit extraction saves quote-grounded structured facts across new chats", async () => {
+  const state = makeState();
+  (globalThis as any).__KATIE_SUPABASE_ADMIN_CLIENT__ = createFakeClient(state);
+  (globalThis as any).__KATIE_EXPLICIT_FACT_OPENAI_CLIENT__ = {
+    chat: { completions: { async create() {
+      return { choices: [{ message: { content: JSON.stringify({ facts: [
+        { key: "experience.years", category: "fact", value: "Twenty-five years in finance and accounting.", evidence: "25 years in finance and accounting" },
+        { key: "engagement.revenue", category: "fact", value: "Revenue was $90M rather than $200M.", evidence: "Revenue was $90M, not $200M" },
+        { key: "fabricated", category: "fact", value: "The user went to Mars.", evidence: "flew to Mars" }
+      ] }) } }] };
+    } } }
+  };
+  clearModule("../lib/data/persistence-store");
+  clearModule("../lib/memory/explicit-fact-extractor");
+  const store = require("../lib/data/persistence-store") as typeof import("../lib/data/persistence-store");
+  const extractor = require("../lib/memory/explicit-fact-extractor") as typeof import("../lib/memory/explicit-fact-extractor");
+  await store.saveActor({ id: "a1", name: "Actor", purpose: "Prompt" });
+  await store.saveChat({ id: "c1", actorId: "a1", title: "Old", createdAt: "x", updatedAt: "x" });
+  await store.saveChat({ id: "c2", actorId: "a1", title: "New", createdAt: "x", updatedAt: "x" });
+  const message = "25 years in finance and accounting. Revenue was $90M, not $200M.";
+  const result = await extractor.extractAndSaveExplicitFacts("a1", "c1", "m123", message);
+  assert.equal(result.factsSaved, 2);
+  assert.equal(result.chunksFailed, 0);
+  const memory = await store.getLongTermMemory("a1", "c2");
+  const facts = (memory.entries as Array<{ key: string; evidenceMessageIds: string[] }>);
+  assert.equal(facts.length, 2);
+  assert.ok(facts.every((entry) => entry.key.startsWith("reference.m123.")));
+  assert.ok(facts.every((entry) => entry.evidenceMessageIds[0] === "m123"));
+});
+
+test("explicit extraction reports no_change and unsupported facts as failures, not success", async () => {
+  const state = makeState();
+  (globalThis as any).__KATIE_SUPABASE_ADMIN_CLIENT__ = createFakeClient(state);
+  (globalThis as any).__KATIE_EXPLICIT_FACT_OPENAI_CLIENT__ = createMockMemoryEditorClient(
+    JSON.stringify({ action: "no_change" })
+  );
+  clearModule("../lib/data/persistence-store");
+  clearModule("../lib/memory/explicit-fact-extractor");
+  const store = require("../lib/data/persistence-store") as typeof import("../lib/data/persistence-store");
+  const extractor = require("../lib/memory/explicit-fact-extractor") as typeof import("../lib/memory/explicit-fact-extractor");
+  await store.saveActor({ id: "a1", name: "Actor", purpose: "Prompt" });
+  await store.saveChat({ id: "c1", actorId: "a1", title: "Old", createdAt: "x", updatedAt: "x" });
+  const source = "The user worked in executive finance for 25 years.";
+  const result = await extractor.extractAndSaveExplicitFacts("a1", "c1", "m456", source);
+  assert.equal(result.factsSaved, 0);
+  assert.equal(result.chunksFailed, 1);
+  assert.deepEqual(await store.getLongTermMemory("a1", "c1"), {});
+});
+
+test("automatic editor preserves fact extraction entries when model omits them", async () => {
+  const state = makeState();
+  (globalThis as any).__KATIE_SUPABASE_ADMIN_CLIENT__ = createFakeClient(state);
+  (globalThis as any).__KATIE_LONG_TERM_MEMORY_OPENAI_CLIENT__ = createMockMemoryEditorClient(JSON.stringify({
+    action: "replace", updatedContent: memory(fact("new.fact", "A new fact"))
+  }));
+  const { store, memoryEditor } = loadModules();
+  await store.saveActor({ id: "a1", name: "Actor", purpose: "Prompt" });
+  await store.saveChat({ id: "c1", actorId: "a1", title: "Chat", createdAt: "x", updatedAt: "x" });
+  await store.setLongTermMemory("a1", "c1", memory(fact("reference.m1.0.career", "User currently manages finance operations.")));
+  await store.saveMessage("c1", { id: "m1", role: "user", content: "A new fact" });
+  await memoryEditor.maybeUpdateLongTermMemory("a1", "c1", "A new fact");
+  const current = await store.getLongTermMemory("a1", "c1");
+  assert.equal((current.entries as Array<{ key: string }>).length, 2);
+});

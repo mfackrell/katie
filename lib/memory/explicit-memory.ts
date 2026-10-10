@@ -1,6 +1,7 @@
 import { getLongTermMemory, saveActorMemoryDocument, setLongTermMemory } from "@/lib/data/persistence-store";
 import { maybeUpdateLongTermMemory } from "@/lib/memory/long-term-editor";
 import { isExplicitMemoryCorrection } from "@/lib/chat/local-katie";
+import { extractAndSaveExplicitFacts } from "@/lib/memory/explicit-fact-extractor";
 
 type Entry = {
   key: string; category: "fact"; value: string; source: "user-stated"; confidence: "high";
@@ -36,10 +37,24 @@ export async function handleExplicitMemoryMutation(
       purpose: typeof current.purpose === "string" ? current.purpose : "Actor-wide durable memory",
       entries: [...entries.filter(e => e.key !== entry.key), entry],
     });
-    // Extraction into structured facts is a best-effort enhancement; the
-    // complete user text and explicit marker are already durably committed.
-    await maybeUpdateLongTermMemory(actorId, chatId, message);
-    return "Saved and verified in this actor's long-term memory. I retained your complete wording as a durable reference document, not just a short summary. It is available in existing and new chats for this actor.";
+    // The generic editor may say no_change even when explicitly asked to retain
+    // a long source document. Dedicated extraction is mandatory to ATTEMPT and
+    // its outcome is reported separately from the already verified document.
+    try {
+      const result = await extractAndSaveExplicitFacts(actorId, chatId, messageId, message);
+      if (result.factsSaved && !result.chunksFailed) {
+        return `Saved and verified in this actor's long-term memory. I preserved your complete original document and extracted ${result.factsSaved} source-grounded, structured facts, verified in durable storage. Both are available to all chats for this actor.`;
+      }
+      if (result.factsSaved) {
+        return `Your complete original document was saved and verified in actor-wide long-term memory. I also extracted and verified ${result.factsSaved} structured facts, but ${result.chunksFailed} document section(s) could not be fully processed. Structured extraction is incomplete; the original remains intact.`;
+      }
+      return "Your complete original document was saved and verified in actor-wide long-term memory, but structured fact extraction did not complete. I am not claiming the document was fully indexed.";
+    } catch (extractionError) {
+      console.error("[ExplicitMemory] Structured extraction failed after document save", {
+        actorId, chatId, error: extractionError,
+      });
+      return "Your complete original document was saved and verified in actor-wide long-term memory, but structured fact extraction failed. The document remains intact; structured extraction is not confirmed.";
+    }
   } catch (error) {
     console.error("[ExplicitMemory] Write failure", { actorId, chatId, error });
     return "I could not verify that the requested long-term memory change was completed. I will not claim it was saved or corrected. Details: " +
