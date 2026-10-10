@@ -3,6 +3,11 @@ import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 
 export const RUNPOD_VIDEO_ENDPOINT_ID = "yafwsm98e8m9lv";
 export const RUNPOD_VIDEO_MODEL = "Qwen/Qwen3-VL-8B-Instruct";
+// Approved RunPod endpoints only. Never use an untrusted DB value as a host or URL.
+const POLLABLE_VIDEO_ENDPOINT_IDS = new Set([
+  RUNPOD_VIDEO_ENDPOINT_ID,
+  "t52dzwlfimvchg", // Molmo 2 isolated video evaluation
+]);
 export const ACTIVE_RUNPOD_STATES = ["pending", "queued", "in_progress"] as const;
 const SUPABASE_BUCKET = "katie-attachments";
 const JOB_ID_PATTERN = /^[A-Za-z0-9-]{8,150}$/;
@@ -153,16 +158,19 @@ export function parseRunpodOutput(job: RecordData) {
 }
 
 export async function refreshRunpodJob(
-  client: StorageClient, job: Pick<SavedVideoJob, "id" | "runpod_job_id" | "status">
+  client: StorageClient, job: Pick<SavedVideoJob, "id" | "runpod_job_id" | "endpoint_id" | "status">
 ) {
   if (!job.runpod_job_id || !JOB_ID_PATTERN.test(job.runpod_job_id)) {
     throw new Error("Missing or invalid RunPod job ID");
+  }
+  if (!POLLABLE_VIDEO_ENDPOINT_IDS.has(job.endpoint_id)) {
+    throw new Error("Unapproved RunPod video endpoint");
   }
   if (!ACTIVE_RUNPOD_STATES.some((x) => x === job.status)) {
     return {status: job.status, saved: true, skipped: true};
   }
   const result = await fetch(
-    "https://api.runpod.ai/v2/" + RUNPOD_VIDEO_ENDPOINT_ID + "/status/" +
+    "https://api.runpod.ai/v2/" + job.endpoint_id + "/status/" +
     encodeURIComponent(job.runpod_job_id), {
       cache: "no-store",
       headers: {Authorization: "Bearer " + requireRunpodKey()},
