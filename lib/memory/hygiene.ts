@@ -104,12 +104,10 @@ function normalizeProvenance(entries: LongTermEntry[], userMessageIds: Set<strin
         };
       }
 
-      return {
-        ...entry,
-        source: "assistant-inference" as const,
-        confidence: entry.confidence === "low" ? "low" as const : "medium" as const,
-        evidenceMessageIds: undefined,
-      };
+      // Actor-wide evidence can come from a different chat. Lack of a matching
+      // message in this chat's recent window is NOT evidence that the fact
+      // was inferred by an assistant.
+      return entry;
     });
 }
 
