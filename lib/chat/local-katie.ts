@@ -108,6 +108,8 @@ export function isExplicitMemoryCorrection(message: string): boolean {
 
 export function isExplicitMemoryMutation(message: string): boolean {
   return isExplicitMemoryCorrection(message) ||
+    /^\s*(?:please\s+)?(?:remember|memorize)\b/i.test(message) ||
+    /\b(?:i want you to|you need to|you must|please)\s+(?:remember|memorize|retain)\b/i.test(message) ||
     /\b(?:remember|memorize|retain|store|save|commit|add|put|incorporate|write)\b[^\n]{0,100}\b(?:long[- ]term memory|memory|for (?:later|future)|permanently)\b|\b(?:long[- ]term memory|memory)\b[^\n]{0,90}\b(?:remember|memorize|retain|store|save|commit|add|put|incorporate|write)\b/i.test(message);
 }
 
