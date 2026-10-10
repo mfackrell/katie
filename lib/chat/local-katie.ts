@@ -13,7 +13,7 @@ import { latestProviderSystemAudit, type StoredProviderSystemAudit } from "@/lib
 
 export type LocalKatieResponse = {
   text: string;
-  reason: "system-prompt" | "memory";
+  reason: "system-prompt" | "memory" | "memory-update";
 };
 
 const SYSTEM_PROMPT_REQUEST_PATTERNS = [
@@ -100,6 +100,15 @@ const MEMORY_SYNONYMS: Record<string, string[]> = {
 
 export function isSystemPromptRequest(message: string): boolean {
   return SYSTEM_PROMPT_REQUEST_PATTERNS.some((pattern) => pattern.test(message));
+}
+
+export function isExplicitMemoryCorrection(message: string): boolean {
+  return /\b(?:correct|change|update|revise|fix|replace|remove|delete|forget|wrong|incorrect|not true|inaccurate)\b[^\n]{0,140}\b(?:memory|remembered|stored|saved)\b|\b(?:memory|remembered|stored|saved)\b[^\n]{0,140}\b(?:correct|change|update|revise|fix|replace|remove|delete|forget|wrong|incorrect|inaccurate)\b/i.test(message);
+}
+
+export function isExplicitMemoryMutation(message: string): boolean {
+  return isExplicitMemoryCorrection(message) ||
+    /\b(?:remember|memorize|retain|store|save|commit|add|put|incorporate|write)\b[^\n]{0,100}\b(?:long[- ]term memory|memory|for (?:later|future)|permanently)\b|\b(?:long[- ]term memory|memory)\b[^\n]{0,90}\b(?:remember|memorize|retain|store|save|commit|add|put|incorporate|write)\b/i.test(message);
 }
 
 function isMemoryRequest(message: string): boolean {
@@ -276,8 +285,8 @@ function buildMemoryResponse(message: string, records: ActorMemoryRecord[], curr
   const scoped = records
     .filter((record) => !layers || layers.has(record.layer))
     .sort((a, b) => {
-      const currentA = a.chatId === currentChatId ? 1 : 0;
-      const currentB = b.chatId === currentChatId ? 1 : 0;
+      const currentA = a.chatId === currentChatId || a.chatId === "actor-wide" ? 1 : 0;
+      const currentB = b.chatId === currentChatId || b.chatId === "actor-wide" ? 1 : 0;
       if (currentA !== currentB) return currentB - currentA;
       return b.updatedAt.localeCompare(a.updatedAt);
     });
@@ -296,7 +305,7 @@ function buildMemoryResponse(message: string, records: ActorMemoryRecord[], curr
 
   const terms = normalizeQueryTerms(message);
   if (terms.length === 0) {
-    const currentRecords = scoped.filter((record) => record.chatId === currentChatId);
+    const currentRecords = scoped.filter((record) => record.chatId === currentChatId || record.chatId === "actor-wide");
     const recordsToShow = currentRecords.length ? currentRecords : scoped.slice(0, 3);
     return [
       "I checked the memory database directly. Your question did not contain a specific searchable subject, so here are the relevant memory records.",
@@ -358,6 +367,11 @@ export async function resolveLocalKatieResponse(params: {
   chatId: string;
   message: string;
 }): Promise<LocalKatieResponse | null> {
+  // Write intent must win over inspection, even when the request says "long-term memory".
+  if (isExplicitMemoryMutation(params.message)) {
+    return { reason: "memory-update", text: "" };
+  }
+
   if (isSystemPromptRequest(params.message)) {
     await refreshShortTermMemory(params.actorId, params.chatId);
     const state = await getChatContextState(params.actorId, params.chatId);
