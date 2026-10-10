@@ -15,9 +15,48 @@ export async function handleExplicitMemoryMutation(
 ): Promise<string> {
   try {
     if (isExplicitMemoryCorrection(message)) {
-      await maybeUpdateLongTermMemory(actorId, chatId, message, { required: true });
-      await saveActorMemoryDocument(actorId, messageId, "Explicit correction to actor memory", message);
-      return "I corrected the actor's long-term memory and verified the update in durable storage. The correction applies to all existing and new chats within this actor.";
+      // Deletion requests are not preserved as a new source document: doing so
+      // would recreate the very information the user asked us to forget.
+      if (/\\b(?:delete|forget|remove)\\b/i.test(message)) {
+        await maybeUpdateLongTermMemory(actorId, chatId, message, { required: true });
+        return "The requested memory edit was saved. I did not create a new source document for this deletion.";
+      }
+
+      // A correction MUST remain authoritative even when an LLM returns
+      // no_change or rewrites the old entry without applying the clarification.
+      // Store the exact instruction and a structured override synchronously.
+      const documentId = await saveActorMemoryDocument(
+        actorId, messageId, "Authoritative correction to actor memory", message,
+      );
+      const current = await getLongTermMemory(actorId, chatId);
+      const entries = Array.isArray(current.entries) ? current.entries as Entry[] : [];
+      const correctionKey = `correction.${messageId}`;
+      const correction: Entry = {
+        key: correctionKey,
+        category: "fact",
+        value: message.trim(),
+        source: "user-stated",
+        confidence: "high",
+        evidenceMessageIds: [messageId],
+        lastConfirmedAt: new Date().toISOString(),
+      };
+      await setLongTermMemory(actorId, chatId, {
+        version: 3,
+        purpose: typeof current.purpose === "string" ? current.purpose : "Actor-wide durable memory",
+        entries: [...entries.filter((entry) => entry.key !== correctionKey), correction],
+      });
+      // Verify the exact correction, provenance, and document independently.
+      const persisted = await getLongTermMemory(actorId, chatId);
+      const saved = Array.isArray(persisted.entries)
+        ? (persisted.entries as Entry[]).find(entry => entry.key === correctionKey)
+        : undefined;
+      if (!saved || saved.value !== message.trim() || !saved.evidenceMessageIds?.includes(messageId)) {
+        throw new Error("Explicit memory correction did not persist as an authoritative entry");
+      }
+      console.log("[ExplicitMemory] Authoritative correction verified", {
+        actorId, chatId, messageId, documentId, correctionKey,
+      });
+      return "Your clarification was saved and verified in this actor's long-term memory. The full wording is retained as an authoritative correction that overrides conflicting older facts and reference documents in all existing and new chats for this actor.";
     }
 
     // The complete original is retained independently of any summarization
