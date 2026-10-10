@@ -1,7 +1,7 @@
 import {NextRequest,NextResponse} from "next/server";
 export const runtime="nodejs";export const dynamic="force-dynamic";export const maxDuration=50;
 const ID="yafwsm98e8m9lv";
-const FIELDS=["id","name","workersMin","workersMax","idleTimeout","scalerType","scalerValue","flashBootType","gpuTypeIds","gpuIds","gpuCount","networkVolumeId","templateId","activeWorkers","maxWorkers","gpuType","type","locations","gpuPoolIds","scaling"];
+const FIELDS=["id","name","workersMin","workersMax","idleTimeout","scalerType","scalerValue","flashBootType","gpuTypeIds","gpuIds","gpuCount","networkVolumeId","templateId","activeWorkers","maxWorkers","gpuType","type","locations","gpuPoolIds","scaling","flashboot","workersStandby"];
 function clean(d:unknown){
  if(!d||typeof d!=="object")return null;
  const x=d as Record<string,unknown>, out:Record<string,unknown>={};
@@ -30,6 +30,16 @@ export async function GET(request:NextRequest){
  read("https://api.runpod.ai/v2/"+ID+"/health",key)
  ]);
  return NextResponse.json({action,v1,v2,health:{http:health.http,data:health.data}});
+ }
+ if(action==="tune"){
+  const patch={scalerType:"REQUEST_COUNT",scalerValue:1,idleTimeout:300,flashboot:true};
+  const r=await fetch("https://rest.runpod.io/v1/endpoints/"+ID,{
+    method:"PATCH",headers:{Authorization:"Bearer "+key,"content-type":"application/json"},
+    body:JSON.stringify(patch),signal:AbortSignal.timeout(18000)
+  });
+  const data=await r.json().catch(()=>({}));
+  return NextResponse.json({action,http:r.status,sent:patch,response:clean(data),
+    errors:Array.isArray(data?.errors)?data.errors.map((x:unknown)=>String(x).slice(0,150)):null});
  }
  if(action==="benchmark"){
  const now=Date.now();
