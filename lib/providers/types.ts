@@ -80,6 +80,14 @@ export interface FileReference {
   };
 }
 
+export interface ProviderSystemAudit {
+  provider: "openai" | "google" | "grok" | "anthropic";
+  model: string;
+  endpoint: string;
+  /** The literal system-role messages or systemInstruction field constructed by the adapter. */
+  systemMessages: string[];
+}
+
 export interface ChatGenerateParams {
   name: string;
   persona: string;
@@ -92,6 +100,8 @@ export interface ChatGenerateParams {
   images?: string[];
   attachments?: FileReference[];
   researchEvidence?: ResearchEvidenceBundle;
+  /** Inspection hook. Never supplies credentials, binary attachments, or full request headers. */
+  onProviderSystemPrepared?: (audit: ProviderSystemAudit) => Promise<void>;
 }
 
 export interface ProviderResponse {
