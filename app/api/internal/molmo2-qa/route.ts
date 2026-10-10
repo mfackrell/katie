@@ -81,7 +81,7 @@ export async function GET(req:NextRequest){
      endpoint:{id:ep.id,templateId:ep.templateId,flashboot:ep.flashboot,
        workers:ep.workers,gpu:ep.gpu,scaling:ep.scaling}});
    if(config.id!=="lwdc2qpy4l"||config.name!==NAME||
-      env.MODEL_NAME!==MODEL||ep.templateId!==config.id)
+      env.MODEL_NAME!==MODEL||ep.id!=="t52dzwlfimvchg"||(ep.templateId&&ep.templateId!==config.id))
       return output({error:"unexpected_template_or_endpoint"},409);
    const newEnv:JsonObject={...env,MAX_MODEL_LEN:"4096",MAX_NUM_SEQS:"1",
       GPU_MEMORY_UTILIZATION:"0.85",ENFORCE_EAGER:"true"};
