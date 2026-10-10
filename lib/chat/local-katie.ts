@@ -103,10 +103,12 @@ export function isSystemPromptRequest(message: string): boolean {
 }
 
 export function isExplicitMemoryCorrection(message: string): boolean {
-  // An instruction to clarify a fact already in memory is an edit, not
-  // an ordinary conversation turn. Include common natural-language verbs
-  // and nominal phrases in both word orders.
-  return /\b(?:correct|change|update|revise|fix|replace|remove|delete|forget|clarify|clarification|amend|refine|adjust|reframe|misstated|misrepresented|wrong|incorrect|not true|inaccurate)\b[^\n]{0,180}\b(?:memory|remembered|stored|saved)\b|\b(?:memory|remembered|stored|saved)\b[^\n]{0,180}\b(?:correct|change|update|revise|fix|replace|remove|delete|forget|clarify|clarification|amend|refine|adjust|reframe|wrong|incorrect|inaccurate|misstated|misrepresented)\b/i.test(message);
+  // Ordinary correction verbs require a nearby memory reference. Clarification
+  // verbs require an OWNED memory reference, so a question such as "clarify
+  // what you mean by memory architecture" is not treated as a write.
+  const explicitEdit = /\\b(?:correct|change|update|revise|fix|replace|remove|delete|forget|wrong|incorrect|not true|inaccurate)\\b[^\\n]{0,180}\\b(?:memory|remembered|stored|saved)\\b|\\b(?:memory|remembered|stored|saved)\\b[^\\n]{0,180}\\b(?:correct|change|update|revise|fix|replace|remove|delete|forget|wrong|incorrect|inaccurate)\\b/i;
+  const clarifyEdit = /\\b(?:clarify|clarification|amend|refine|adjust|reframe)\\b[^\\n]{0,180}\\b(?:(?:your|the|my|its)\\s+(?:(?:long[- ]term|saved|stored)\\s+)?memory|facts you have remembered|what you (?:remembered|stored|saved))\\b|\\b(?:your|the|my|its)\\s+(?:(?:long[- ]term|saved|stored)\\s+)?memory\\b[^\\n]{0,180}\\b(?:clarify|clarification|amend|refine|adjust|reframe)\\b/i;
+  return explicitEdit.test(message) || clarifyEdit.test(message);
 }
 
 export function isExplicitMemoryMutation(message: string): boolean {
