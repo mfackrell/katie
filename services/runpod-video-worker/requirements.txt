@@ -2,6 +2,8 @@
 runpod>=1.7.6,<2
 requests>=2.31,<3
 Pillow>=10.4,<12
-transformers>=4.51,<5
+transformers>=4.57,<5
+# Qwen3-VL native file-video decoding and temporal metadata handling.
+qwen-vl-utils[decord]>=0.0.14,<1
 accelerate>=1.2,<2
 faster-whisper>=1.1,<2
