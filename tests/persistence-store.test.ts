@@ -10,6 +10,8 @@ type DbState = {
   short_term_memory: Row[];
   intermediate_memory: Row[];
   long_term_memory: Row[];
+  actor_long_term_memory: Row[];
+  actor_memory_documents: Row[];
 };
 
 class Query {
@@ -58,6 +60,8 @@ class Query {
         const uniqueIdx = tableRows.findIndex((item) => {
           if (id && item.id === id) return true;
           if (actorId && chatId && item.actor_id === actorId && item.chat_id === chatId) return true;
+          if (this.table === "actor_long_term_memory" && actorId && item.actor_id === actorId) return true;
+          if (this.table === "actor_memory_documents" && row.source_message_id && item.source_message_id === row.source_message_id) return true;
           return false;
         });
 
@@ -130,7 +134,7 @@ function loadStore() {
 
 function makeState(): DbState {
   return {
-    actors: [], chats: [], messages: [], short_term_memory: [], intermediate_memory: [], long_term_memory: [],
+    actors: [], chats: [], messages: [], short_term_memory: [], intermediate_memory: [], long_term_memory: [], actor_long_term_memory: [], actor_memory_documents: [],
   };
 }
 
@@ -148,7 +152,7 @@ test("creating actor/chat persists records plus memory rows", async () => {
   assert.equal(state.chats.length, 1);
   assert.equal(state.short_term_memory.length, 1);
   assert.equal(state.intermediate_memory.length, 1);
-  assert.equal(state.long_term_memory.length, 1);
+  assert.equal(state.long_term_memory.length, 0);
   assert.ok(typeof state.actors[0].routing_profile === "object");
 });
 
@@ -208,4 +212,29 @@ test("chat context throws when actor or chat are missing", async () => {
   const store = loadStore();
 
   await assert.rejects(() => store.getChatContextState("missing", "chat"), /Actor not found/);
+});
+
+test("new chats see actor memory but begin with clean short and intermediate layers", async () => {
+ const state=makeState();
+ (globalThis as any).__KATIE_SUPABASE_ADMIN_CLIENT__=createFakeClient(state);
+ const store=loadStore();
+ await store.saveActor({id:"a1",name:"A",purpose:"Prompt"});
+ await store.saveActor({id:"a2",name:"B",purpose:"Prompt"});
+ await store.saveChat({id:"c1",actorId:"a1",title:"One",createdAt:"x",updatedAt:"x"});
+ await store.setLongTermMemory("a1","c1",{version:3,entries:[{key:"f",value:"durable"}]});
+ await store.setShortTermMemory("a1","c1",{content:"short"});
+ await store.setIntermediateMemory("a1","c1",{summary:"intermediate"});
+ await store.saveChat({id:"c1",actorId:"a1",title:"Renamed",createdAt:"x",updatedAt:"x"});
+ await store.saveChat({id:"c2",actorId:"a1",title:"New",createdAt:"x",updatedAt:"x"});
+ await store.saveChat({id:"c3",actorId:"a2",title:"Isolated",createdAt:"x",updatedAt:"x"});
+ const one=await store.getChatContextState("a1","c1");
+ const two=await store.getChatContextState("a1","c2");
+ const other=await store.getChatContextState("a2","c3");
+ assert.deepEqual(two.longTermMemory,one.longTermMemory);
+ assert.equal(one.shortTermMemory.content,"short");
+ assert.equal(one.intermediateMemory.summary,"intermediate");
+ assert.deepEqual(two.shortTermMemory,{});
+ assert.deepEqual(two.intermediateMemory,{});
+ assert.deepEqual(other.longTermMemory,{});
+ assert.equal(state.long_term_memory.length,0);
 });
