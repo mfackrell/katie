@@ -5,6 +5,7 @@ import {
   buildRoutingPreferenceProfile,
   hasDirectWebSearchHint,
   inferRequestClassification,
+  inferRequestClassificationWithSource,
   inferRequestIntent,
   inferRequestIntentFromMultimodalInput,
   parseIntentClassifierResponse,
@@ -986,6 +987,63 @@ test("router uses upstream requestIntent as authoritative and skips local classi
   assert.match(routeIntentLog ?? "", /effective_intent=rewrite/);
   assert.match(routeIntentLog ?? "", /intent_source=upstream/);
   assert.match(routePolicyLog ?? "", /intent=rewrite/);
+});
+
+test("classifier distinguishes an actual LLM decision from a local heuristic fallback", async () => {
+  const online = provider("openai", ["gpt-5.6-sol"], async ({ modelId }) => ({
+    text: JSON.stringify({
+      intent: "technical-debugging",
+      secondary_intents: ["code-review"],
+      complexity: "high",
+      provider_refusal_risk: "low",
+      preferred_provider: null
+    }),
+    model: modelId ?? "gpt-5.6-sol",
+    provider: "openai"
+  })).provider;
+  const offline = provider("openai", ["gpt-5.6-sol"], async () => {
+    throw new Error("simulated control-plane outage");
+  }).provider;
+
+  const llm = await inferRequestClassificationWithSource("Please debug this failing test suite", false, {
+    decisionProviders: [{ provider: online, modelId: "gpt-5.6-sol" }]
+  });
+  assert.equal(llm.source, "llm");
+  assert.equal(llm.classification.intent, "technical-debugging");
+  assert.deepEqual(llm.classification.secondaryIntents, ["code-review"]);
+  assert.equal(llm.classification.complexity, "high");
+
+  const fallback = await inferRequestClassificationWithSource("Please debug this failing test suite", false, {
+    decisionProviders: [{ provider: offline, modelId: "gpt-5.6-sol" }]
+  });
+  assert.equal(fallback.source, "router-fallback");
+  assert.equal(fallback.classification.intent, "technical-debugging");
+  assert.deepEqual(Object.keys(fallback.classification).sort(), ["intent", "preferredProvider"]);
+
+  const noModels = await inferRequestClassificationWithSource("Please debug this failing test suite", false, {
+    decisionProviders: []
+  });
+  assert.equal(noModels.source, "router-fallback");
+  assert.equal(noModels.classification.intent, "technical-debugging");
+});
+
+test("routing preserves LLM intent provenance even when model selection falls back", async () => {
+  const classified = provider("openai", ["gpt-5.6-sol"], async ({ user, modelId }) => {
+    if (user.includes("Intent Classifier")) return {
+      text: JSON.stringify({ intent: "rewrite", secondary_intents: [], complexity: "low", provider_refusal_risk: "low", preferred_provider: null }),
+      model: modelId ?? "gpt-5.6-sol", provider: "openai"
+    };
+    throw new Error("LLM reranker unavailable");
+  }).provider;
+  const decision = await chooseProvider(
+    "Please improve this text for clarity.",
+    "",
+    [classified],
+    { routingRequestId: "test-independent-classifier-vs-selection-source" }
+  );
+  assert.equal(decision.resolvedIntent.intent, "rewrite");
+  assert.equal(decision.resolvedIntent.intentSource, "llm");
+  assert.equal(decision.explainer?.selected_source, "deterministic-fallback");
 });
 
 test("chooseProvider returns resolved router intent for downstream propagation", async () => {
