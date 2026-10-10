@@ -335,3 +335,69 @@ test("automatic editor preserves fact extraction entries when model omits them",
   const current = await store.getLongTermMemory("a1", "c1");
   assert.equal((current.entries as Array<{ key: string }>).length, 2);
 });
+
+test("a clarification persists authoritatively across chats even if normal editor says no_change", async () => {
+  const state = makeState();
+  (globalThis as any).__KATIE_SUPABASE_ADMIN_CLIENT__ = createFakeClient(state);
+  (globalThis as any).__KATIE_LONG_TERM_MEMORY_OPENAI_CLIENT__ =
+    createMockMemoryEditorClient(JSON.stringify({ action: "no_change" }));
+  clearModule("../lib/data/persistence-store");
+  clearModule("../lib/memory/explicit-memory");
+  clearModule("../lib/memory/assemble-context");
+  const store = require("../lib/data/persistence-store") as typeof import("../lib/data/persistence-store");
+  const explicit = require("../lib/memory/explicit-memory") as typeof import("../lib/memory/explicit-memory");
+  const context = require("../lib/memory/assemble-context") as typeof import("../lib/memory/assemble-context");
+
+  const correction = [
+    "we need to clarify one point in your long term memory. re the global PE backed professional services engagement:",
+    "Mark led the accounting recovery through his team.",
+    "He personally performed relatively little underlying transaction-level accounting work.",
+    "The team restored the monthly close and completed the audit in ten weeks."
+  ].join("\n");
+
+  await store.saveActor({ id: "a1", name: "Actor", purpose: "Executive strategist" });
+  await store.saveChat({ id: "c1", actorId: "a1", title: "Old", createdAt: "x", updatedAt: "x" });
+  await store.saveChat({ id: "c2", actorId: "a1", title: "New", createdAt: "x", updatedAt: "x" });
+  await store.setLongTermMemory("a1", "c1", memory(fact("reference.old.0", "Personally completed the ledger reconciliations.")));
+  await store.saveMessage("c1", { id: "m999", role: "user", content: correction });
+  // The in-memory Supabase test double has no DB-generated UUID; pre-seed the
+  // same source row so its upsert returns an existing document id.
+  state.actor_memory_documents.push({
+    id: "doc-correction", actor_id: "a1", source_message_id: "m999",
+    title: "Pending correction", content: correction, created_at: "2026-10-10T19:00:00Z",
+  });
+  const result = await explicit.handleExplicitMemoryMutation("a1", "c1", "m999", correction);
+  assert.match(result, /saved and verified/i);
+  const durable = await store.getLongTermMemory("a1", "c2");
+  const entries = durable.entries as Array<{key: string;value: string;evidenceMessageIds: string[]}>;
+  assert.equal(entries.find(e => e.key === "correction.m999")?.value, correction);
+  assert.deepEqual(entries.find(e => e.key === "correction.m999")?.evidenceMessageIds, ["m999"]);
+  assert.equal(state.actor_memory_documents[0].content, correction);
+  assert.equal(state.actor_memory_documents[0].title, "Authoritative correction to actor memory");
+
+  const newChat = await context.assembleContext("a1", "c2");
+  assert.ok(newChat.persona.includes("AUTHORITATIVE ACTOR MEMORY CORRECTIONS"));
+  assert.ok(newChat.persona.includes(correction));
+  assert.ok(newChat.persona.indexOf("AUTHORITATIVE ACTOR MEMORY CORRECTIONS") <
+    newChat.persona.indexOf("LONG_TERM_MEMORY:"));
+});
+
+test("automatic memory editor cannot remove a previously verified correction", async () => {
+  const state = makeState();
+  (globalThis as any).__KATIE_SUPABASE_ADMIN_CLIENT__ = createFakeClient(state);
+  (globalThis as any).__KATIE_LONG_TERM_MEMORY_OPENAI_CLIENT__ = createMockMemoryEditorClient(JSON.stringify({
+    action: "replace", updatedContent: memory(fact("misc", "Other fact"))
+  }));
+  const { store, memoryEditor } = loadModules();
+  await store.saveActor({ id: "a1", name: "Actor", purpose: "Prompt" });
+  await store.saveChat({ id: "c1", actorId: "a1", title: "Chat", createdAt: "x", updatedAt: "x" });
+  await store.setLongTermMemory("a1", "c1", memory(
+    fact("correction.m1", "Clarification: Mark led the team rather than doing the accounting entries.")
+  ));
+  await store.saveMessage("c1", { id: "m1", role: "user", content: "Other fact" });
+  await memoryEditor.maybeUpdateLongTermMemory("a1", "c1", "Other fact");
+  const current = await store.getLongTermMemory("a1", "c1");
+  const entries = current.entries as Array<{key: string}>;
+  assert.ok(entries.some(entry => entry.key === "correction.m1"));
+  assert.ok(entries.some(entry => entry.key === "misc"));
+});

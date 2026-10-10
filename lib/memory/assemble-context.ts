@@ -37,6 +37,22 @@ export async function assembleContext(actorId: string, chatId: string): Promise<
     (typeof intermediateMemory.summary === "string" && intermediateMemory.summary.trim()) ||
     "No older summarized conversation context is available yet.";
 
+  // Authoritative corrections are an explicit memory overlay, not merely an
+  // old conversation transcript or another low-priority reference document.
+  // Give them their own high-priority block on EVERY chat in this actor.
+  const authoritativeCorrections = Array.isArray(longTermMemory.entries)
+    ? (longTermMemory.entries as Array<{key?: string;value?: string;lastConfirmedAt?: string}>)
+        .filter(entry => entry.key?.startsWith("correction.") && typeof entry.value === "string")
+        .sort((a, b) => (b.lastConfirmedAt ?? "").localeCompare(a.lastConfirmedAt ?? ""))
+    : [];
+  const correctionsBlock = [
+    "AUTHORITATIVE ACTOR MEMORY CORRECTIONS (most recent first):",
+    "These user-stated corrections OVERRIDE any conflicting earlier extracted facts,",
+    "reference documents, and generalizations. Never revive a superseded detail.",
+    ...authoritativeCorrections.map(entry => `CORRECTION ${entry.key}: ${entry.value}`),
+    "END_AUTHORITATIVE_ACTOR_MEMORY_CORRECTIONS",
+  ].join("\n");
+
   const longTermBlock = Object.keys(longTermMemory).length
     ? `LONG_TERM_MEMORY:\n${JSON.stringify(longTermMemory)}\nEND_LONG_TERM_MEMORY`
     : "LONG_TERM_MEMORY:\nNo durable long-term memory has been stored yet.\nEND_LONG_TERM_MEMORY";
@@ -47,6 +63,7 @@ export async function assembleContext(actorId: string, chatId: string): Promise<
       actor.purpose,
       getDeliverableStandardInstruction(),
       MEMORY_ARCHITECTURE_GUIDE,
+      correctionsBlock,
       longTermBlock,
       "ACTOR MEMORY REFERENCE DOCUMENTS: These are verbatim user-requested long-term records and archived historical records. The current structured long-term facts and the most recent explicit user corrections take precedence when records conflict.",
       referenceText || "(No reference documents)",
