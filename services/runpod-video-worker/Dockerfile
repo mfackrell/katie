@@ -13,5 +13,6 @@ RUN python -m pip install --no-cache-dir -r requirements.txt
 COPY services/runpod-video-worker/src ./src
 ENV PYTHONUNBUFFERED=1 \
     HF_HOME=/root/.cache/huggingface \
+    VISION_MODEL=Qwen/Qwen3-VL-8B-Instruct \
     LOG_LEVEL=INFO
-CMD ["python", "-m", "src.worker"]
+CMD ["python", "-m", "src.native_video_worker"]
