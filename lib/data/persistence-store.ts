@@ -621,7 +621,15 @@ export async function setLongTermMemory(actorId: string, _chatId: string, payloa
     .upsert({ actor_id: actorId, content: payload, updated_at: new Date().toISOString() }, { onConflict: "actor_id" });
   if (error) throw new Error(`Failed to save actor memory: ${error.message}`);
   const confirmed = await getLongTermMemory(actorId, _chatId);
-  if (JSON.stringify(confirmed) !== JSON.stringify(payload)) {
+  // Postgres jsonb normalizes property order. Compare canonical structures.
+  const canonical = (value: unknown): string => JSON.stringify(value, function (_key, item) {
+    if (item && typeof item === "object" && !Array.isArray(item)) {
+      return Object.fromEntries(Object.entries(item as Record<string, unknown>)
+        .sort(([a], [b]) => a.localeCompare(b)));
+    }
+    return item;
+  });
+  if (canonical(confirmed) !== canonical(payload)) {
     throw new Error("Long-term memory write could not be verified by read-back");
   }
 }
