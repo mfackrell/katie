@@ -94,6 +94,17 @@ export async function GET(req:NextRequest){
        .filter(([k])=>["MODEL_NAME","MAX_MODEL_LEN","MAX_NUM_SEQS","GPU_MEMORY_UTILIZATION",
        "ENFORCE_EAGER"].includes(k)))},patch.ok?200:502);
   }
+  if(action==="pause_workers"||action==="resume_workers"){
+   if(ep.id!=="t52dzwlfimvchg"||ep.name!==NAME)return output({error:"endpoint_mismatch"},409);
+   const desired=action==="pause_workers"?0:1;
+   const payload=action==="pause_workers"?{workersMax:0}:{workersMax:1,flashboot:false};
+   const u=await fetch("https://rest.runpod.io/v1/endpoints/"+endpoint,{
+    method:"PATCH",headers,body:JSON.stringify(payload),
+    signal:AbortSignal.timeout(18000)});
+   const data=obj(await u.json().catch(()=>({})));
+   return output({action,http:u.status,endpoint_id:data.id??null,
+     workersMax:data.workersMax??null,flashboot:data.flashboot??null},u.ok?200:502);
+  }
   if(action==="worker_logs"){
    const worker=req.nextUrl.searchParams.get("worker")||"";
    if(!/^[a-z0-9]{6,25}$/.test(worker))return output({error:"invalid_worker"},400);
@@ -101,11 +112,28 @@ export async function GET(req:NextRequest){
    if(!["container","system","all"].includes(source))return output({error:"bad_source"},400);
    const url=API+"/serverless/"+endpoint+"/workers/"+worker+"/logs?tail=30"+
      (source==="all"?"":"&source="+source);
-   const r=await fetch(url,{headers,cache:"no-store",signal:AbortSignal.timeout(9000)});
-   const raw=(await r.text()).slice(-18000);
-   const sanitized=raw.replace(new RegExp("https?://[^\\s]+","gi"),"[url]")
-    .replace(new RegExp("Bearer\\s+\\S+","gi"),"Bearer [redacted]");
-   return output({worker,http:r.status,log:sanitized.slice(-10000)},r.ok?200:502);
+   const ctrl=new AbortController();
+   const timeout=setTimeout(()=>ctrl.abort(),11000);
+   try {
+    const r=await fetch(url,{headers,cache:"no-store",signal:ctrl.signal});
+    let raw="";
+    if(r.body){
+     const reader=r.body.getReader();
+     const dec=new TextDecoder();
+     while(raw.length<25000){
+      const block=await reader.read();
+      if(block.done)break;
+      raw+=dec.decode(block.value,{stream:true});
+      if(raw.length>700)break;
+     }
+     await reader.cancel().catch(()=>{});
+    }
+    const sanitized=raw.replace(new RegExp("https?://[^\\\\s]+","gi"),"[url]")
+      .replace(new RegExp("Bearer\\\\s+\\\\S+","gi"),"Bearer [redacted]");
+    return output({worker,http:r.status,log:sanitized.slice(-12000)});
+   }catch(e){return output({worker,error:err(e)},502);}
+   finally{clearTimeout(timeout);}
+
   }
   if(action==="workers"){
    const r=await api("/serverless/"+endpoint+"/workers");
