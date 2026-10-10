@@ -99,7 +99,7 @@ export async function GET(req:NextRequest){
    const t=await api("/templates/lwdc2qpy4l");
    if(!t.ok||t.data.id!=="lwdc2qpy4l"||obj(t.data.env).MODEL_NAME!==MODEL)
     return output({error:"template_verification_failed"},409);
-   const env={...obj(t.data.env),TRUST_REMOTE_CODE:"true",MAX_NUM_BATCHED_TOKENS:"8192"};
+   const env:JsonObject={...obj(t.data.env),TRUST_REMOTE_CODE:"true",MAX_NUM_BATCHED_TOKENS:"8192"};
    delete env.VLLM_EXTRA_ARGS;
    const changed=await api("/templates/lwdc2qpy4l","PATCH",{env});
    if(!changed.ok)return output({error:"template_update_failed",http:changed.status},502);
