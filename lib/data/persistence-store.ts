@@ -325,6 +325,8 @@ async function ensureMemoryRows(actorId: string, chatId: string): Promise<void> 
 
 export async function saveChat(chat: ChatThread): Promise<ChatThread> {
   await requireActor(chat.actorId);
+  const existing = await getChatById(chat.id);
+  if (existing && existing.actorId !== chat.actorId) throw new Error("Chat actor may not change");
 
   const client = getSupabaseAdminClient();
   const { data, error } = await client
@@ -345,7 +347,8 @@ export async function saveChat(chat: ChatThread): Promise<ChatThread> {
     throw new Error(`Failed to save chat ${chat.id}: ${error.message}`);
   }
 
-  await ensureMemoryRows(data.actor_id, data.id);
+  // Updating chat titles must never reset either chat-scoped memory layer.
+  if (!existing) await ensureMemoryRows(data.actor_id, data.id);
 
   return toChat(data);
 }
