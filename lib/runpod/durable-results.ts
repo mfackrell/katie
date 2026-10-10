@@ -1,5 +1,5 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
-import { createClient } from "@supabase/supabase-js";
+import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 
 export const RUNPOD_VIDEO_ENDPOINT_ID = "yafwsm98e8m9lv";
 export const RUNPOD_VIDEO_MODEL = "Qwen/Qwen3-VL-8B-Instruct";
@@ -8,7 +8,46 @@ const SUPABASE_BUCKET = "katie-attachments";
 const JOB_ID_PATTERN = /^[A-Za-z0-9-]{8,150}$/;
 const CHAT_ID_PATTERN = /^[a-f0-9]{8}-[a-f0-9-]{27,40}$/i;
 
-type StorageClient = ReturnType<typeof createClient>;
+type Json = string | number | boolean | null | Json[] | {[key: string]: Json | undefined};
+type RunpodVideoRow = {
+  id: string;
+  runpod_job_id: string | null;
+  endpoint_id: string;
+  model: string;
+  chat_id: string | null;
+  attachment_path: string | null;
+  request_prompt: string | null;
+  callback_token_hash: string | null;
+  status: string;
+  analysis_text: string | null;
+  model_output: Json | null;
+  error_code: string | null;
+  queue_ms: number | null;
+  inference_ms: number | null;
+  input_tokens: number | null;
+  output_tokens: number | null;
+  last_polled_at: string | null;
+  submitted_at: string;
+  completed_at: string | null;
+  updated_at: string;
+};
+type VideoDatabase = {
+  public: {
+    Tables: {
+      video_analysis_jobs: {
+        Row: RunpodVideoRow;
+        Insert: Partial<RunpodVideoRow>;
+        Update: Partial<RunpodVideoRow>;
+        Relationships: [];
+      }
+    };
+    Views: {};
+    Functions: {};
+    Enums: {};
+    CompositeTypes: {};
+  }
+};
+type StorageClient = SupabaseClient<VideoDatabase>;
 type RecordData = Record<string, unknown>;
 
 export type SavedVideoJob = {
@@ -51,7 +90,7 @@ export function resultStore(): StorageClient {
   const url = process.env.SUPABASE_URL ?? process.env.NEXT_PUBLIC_SUPABASE_URL;
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
   if (!url || !key) throw new Error("Supabase persistence credentials unavailable");
-  return createClient(url, key, { auth: {persistSession: false, autoRefreshToken: false} });
+  return createClient<VideoDatabase>(url, key, { auth: {persistSession: false, autoRefreshToken: false} });
 }
 
 export function assertStoredVideoPath(chatId: string, path: string): void {
