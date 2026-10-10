@@ -1,6 +1,6 @@
 # Standalone RunPod video-analysis worker for Katie (future integration)
 
-**Status:** Native-video Qwen3-VL worker prepared for deployment, CPU tests available. **NOT deployed to RunPod; NOT GPU-tested; NOT connected to Katie.**
+**Status (2026-10-10): A standalone RunPod Serverless GPU endpoint running the official vLLM image and Qwen3-VL has been provisioned and has passed a real native-video analysis. The separate custom Python/Docker worker in this branch has not been deployed or GPU-tested. Neither path is integrated into Katie; production Gemini→Grok remains unchanged.**
 This standalone service lives under `services/runpod-video-worker/` on the `feature/runpod-video-worker` branch of `mfackrell/katie`. The existing Katie application code, Supabase database, and production Vercel configuration are untouched.
 
 ## What this service does
@@ -157,17 +157,60 @@ python -m compileall -q src scripts tests
 - Inference can be inaccurate; it must not be relied upon to determine identity, legal age, consent, or events not present in sampled frames.
 - The worker's generated summary is not a raw source of truth; Katie should retain the original video and only cite claims supported by actual analyzed evidence.
 - There is no webhook that can update Katie. Nothing in this service writes to `public.messages` or other Katie tables.
-- A model download and GPU verification have **not** yet been performed. Local CPU tests use a fake analyzer; the production inference path still requires an actual RunPod GPU deployment for end-to-end verification.
+- The **official RunPod vLLM Qwen3-VL endpoint** completed one authenticated native-video job on actual GPU hardware. The separate custom Python worker was not deployed or GPU-verified; its local tests use fake analyzer inputs.
 
 ## What is deliberately NOT done
 
 - New files are added only under `services/runpod-video-worker/` in the isolated `feature/runpod-video-worker` branch. No existing Katie runtime files, configurations, production branch, or connected services are modified.
 - No Supabase migrations, new buckets, or database writes.
-- No Vercel environment variable additions, routes, or deployments.
-- No RunPod infrastructure charges or endpoint creation: **this session has no connected RunPod account/credential or Docker builder, so remote provisioning and remote tests are outstanding.**
+- No production Vercel environment variables, routes or deployments. Temporary SSO-protected preview-only provisioning/test routes were used for isolated RunPod validation and should be removed after verification.
+- A separate **official RunPod vLLM GPU endpoint** was provisioned using the user's existing secure credential. Costs may accrue during GPU startup/execution; it scales to zero with `min workers = 0`. The custom Python Docker image remains unbuilt and undeployed.
 
 ## Native video implementation (2026-10-10)
 
 The active container command is `python -m src.native_video_worker`. Unlike `src.worker`, the active implementation sends the **original file URI as a video item** into Qwen3-VL's multimodal processor and requests one unified temporal explanation. It does not extract or forward JPEG frames to the model. Qwen3-VL performs its own internal frame/token processing; even a native-video model cannot honestly promise to inspect every original frame in an arbitrarily long clip. Optional speech transcription is separate from visual understanding.
 
 **Acceptance gate before changing Katie:** provision a serverless GPU endpoint; obtain an actual endpoint ID; verify remote `health`; run remote `self_test` and verify `analysis_mode=native_video` plus Qwen3-VL GPU inference; run representative original video files through signed Supabase storage; benchmark cold starts and quality. **Do not change Katie's Gemini→Grok wiring before those tests pass.**
+
+## Provisioned standalone native-video endpoint (2026-10-10, VERIFIED)
+
+This is **not** the custom Python worker above. It is a separately provisioned **RunPod Serverless queue endpoint** running the official `runpod/worker-v1-vllm:v2.27.1` Docker image hosting `Qwen/Qwen3-VL-8B-Instruct`, which accepts native OpenAI-style `video_url` multimodal inputs.
+
+- RunPod endpoint ID: `yafwsm98e8m9lv`
+- Endpoint name: `katie-qwen3vl-video-standalone-20261010`
+- RunPod template ID: `c7beihbaiv`
+- Official image: `runpod/worker-v1-vllm:v2.27.1`
+- Model: `Qwen/Qwen3-VL-8B-Instruct`
+- GPU pools: `ADA_48_PRO` and `AMPERE_80`, one GPU
+- Autoscaling: **0 minimum / 1 maximum worker**, idle timeout 60 seconds.
+- First successful GPU inference job ID: `62e81f45-e159-4060-ac27-11ee8e54d590-u2`
+- Worker health: HTTP 200, completed jobs = 1, failed jobs = 0.
+- First cold-start/queue delay: **265,985ms (~4m26s)**; first execution: **13,248ms (~13s)**.
+- Input: a **single `video_url`** referencing Qwen's public demo MP4. No extracted JPEG frames or image list were sent.
+- Output: `COMPLETED` with a native Qwen3-VL chat completion describing the chronological space station/control room/astronaut footage. The official serverless worker wraps its output in a **one-item array**; integrations must unpack `job.output[0].choices[0].message.content` and distinguish successful job status from inner error response.
+
+### API contract for this provisioned endpoint
+
+Submit to `POST https://api.runpod.ai/v2/yafwsm98e8m9lv/run` (authenticate server-side with the existing RunPod API key):
+
+```json
+{
+  "input": {
+    "route": "/v1/chat/completions",
+    "method": "POST",
+    "body": {
+      "model": "Qwen/Qwen3-VL-8B-Instruct",
+      "messages": [{
+        "role": "user",
+        "content": [
+          {"type": "video_url", "video_url": {"url": "https://SIGNED-PRIVATE-MP4-URL"}},
+          {"type": "text", "text": "Describe the video chronologically."}
+        ]
+      }],
+      "max_tokens": 512
+    }
+  }
+}
+```
+
+Poll authenticated `GET https://api.runpod.ai/v2/yafwsm98e8m9lv/status/{jobId}`. Private Supabase signed-video URL ingestion, user-video quality benchmarks, latency/cold-start tuning, audio integration, and failure/timeout handling **have not yet been verified on this endpoint**. Do not claim the custom Docker worker is running or change Katie's Gemini→Grok fallback before full acceptance testing.
