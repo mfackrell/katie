@@ -515,6 +515,15 @@ export class OpenAiProvider implements LlmProvider {
       });
 
       try {
+        if (params.onProviderSystemPrepared) {
+          const attachmentContext = formatAttachmentContext(params.attachments, { userMessage: params.user });
+          const systemMessages = classification.endpoint === "legacy-completions"
+            ? [`IDENTITY:\nYour name is ${params.name}. ${BEHAVIORAL_DIRECTIVE}\n\nCORE_PERSONA: ${params.persona}\n\n${MATH_EXECUTION_PROTOCOL}\n\nUser request:\n${params.user}`]
+            : [...buildSystemPromptSections(params), ...(attachmentContext ? [attachmentContext] : [])];
+          await params.onProviderSystemPrepared({
+            provider: "openai", model: selectedModel, endpoint: classification.endpoint, systemMessages
+          });
+        }
         return await this.generateStreamForModel(selectedModel, params, classification, handlers);
       } catch (error: unknown) {
         lastError = error;
@@ -557,6 +566,15 @@ export class OpenAiProvider implements LlmProvider {
       });
 
       try {
+        if (params.onProviderSystemPrepared) {
+          const attachmentContext = formatAttachmentContext(params.attachments, { userMessage: params.user });
+          const systemMessages = classification.endpoint === "legacy-completions"
+            ? [`IDENTITY:\nYour name is ${params.name}. ${BEHAVIORAL_DIRECTIVE}\n\nCORE_PERSONA: ${params.persona}\n\n${MATH_EXECUTION_PROTOCOL}\n\nUser request:\n${params.user}`]
+            : [...buildSystemPromptSections(params), ...(attachmentContext ? [attachmentContext] : [])];
+          await params.onProviderSystemPrepared({
+            provider: "openai", model: selectedModel, endpoint: classification.endpoint, systemMessages
+          });
+        }
         return await this.generateForModel(selectedModel, params, classification);
       } catch (error: unknown) {
         lastError = error;

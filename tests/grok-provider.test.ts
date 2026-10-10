@@ -162,3 +162,31 @@ test("Grok continuity ships all four JPEG frames as structured image inputs and 
     entry.metadata.imageCount === 4
   ), "xAI acknowledgement must be logged separately from local frame recovery");
 });
+
+test("inspected Grok system sections match exactly what was submitted to xAI", async (t) => {
+  const captured: Array<{ provider: string; model: string; endpoint: string; systemMessages: string[] }> = [];
+  let actual: Array<{ role: string; content: unknown }> = [];
+  t.mock.method(globalThis, "fetch", async (url: RequestInfo | URL, init?: RequestInit) => {
+    const target = String(url);
+    if (target.endsWith("/models")) return json({ data: [{ id: "grok-4.7" }] });
+    const body = JSON.parse(String(init?.body ?? "{}"));
+    actual = body.messages;
+    return json({ choices: [{ message: { content: "Done" } }] });
+  });
+  const result = await new GrokProvider("test-key").generate({
+    name: "Katie", persona: "Actual actor instructions", summary: "Stored actor memory",
+    history: [{ role: "user", content: "Earlier question" }],
+    user: "Current question", modelId: "grok-4.7", requestIntent: "general-text",
+    onProviderSystemPrepared: async details => { captured.push(details); },
+  });
+  assert.equal(result.text, "Done");
+  assert.equal(captured.length, 1);
+  assert.equal(captured[0].model, "grok-4.7");
+  assert.equal(captured[0].endpoint, "/v1/chat/completions");
+  assert.deepEqual(captured[0].systemMessages,
+    actual.filter(entry => entry.role === "system").map(entry => entry.content),
+    "the inspection snapshot must match the system messages in the submitted provider payload");
+  assert.equal(actual.at(-1)?.role, "user");
+  assert.ok(!captured[0].systemMessages.some(section => section.includes("Current question")),
+    "user-role content must not be misrepresented as a system message");
+});

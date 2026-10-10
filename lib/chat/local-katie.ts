@@ -9,6 +9,7 @@ import {
 } from "@/lib/providers/operational-reality";
 import { MEMORY_ARCHITECTURE_GUIDE, SHORT_TERM_MESSAGE_LIMIT } from "@/lib/memory/memory-contract";
 import { filterConversationalMessages, messagesFromShortTermMemory, refreshShortTermMemory } from "@/lib/memory/short-term";
+import { latestProviderSystemAudit, type StoredProviderSystemAudit } from "@/lib/chat/provider-system-audit";
 
 export type LocalKatieResponse = {
   text: string;
@@ -16,9 +17,12 @@ export type LocalKatieResponse = {
 };
 
 const SYSTEM_PROMPT_REQUEST_PATTERNS = [
-  /\b(?:exact|current|actual|full|show|give|display|print|reveal|what(?:'s| is))\b[^\n]{0,60}\bsystem prompt\b/i,
-  /\bsystem prompt\b[^\n]{0,60}\b(?:this|current)\s+(?:message|chat|actor)\b/i,
-  /\bwhat (?:prompt|instructions) (?:are you|is katie) (?:using|running|following)\b/i,
+  // A stored system message and a system prompt are synonyms for this command.
+  /\b(?:exact|current|actual|full|show|give|display|print|reveal|what(?:'s| is))\b[^\n]{0,75}\bsystem\s+(?:prompt|message|instructions?)\b/i,
+  /\bsystem\s+(?:prompt|message|instructions?)\b[^\n]{0,60}\b(?:this|current|latest|previous|last)\s+(?:message|chat|actor|request|turn)\b/i,
+  /\bwhat\s+(?:prompt|instructions|system\s+(?:prompt|message))\s+(?:are you|is katie)\s+(?:using|running|following|sending)\b/i,
+  /\b(?:show|display|print|give|list|reveal|what(?:'s| is| are))\b[^\n]{0,80}\b(?:sent|sending|send|provided|passing)\b[^\n]{0,60}\b(?:the\s+)?(?:system\s+)?(?:message|prompt|instructions?|llm|model|provider|grok|gemini|claude|gpt)\b/i,
+  /\b(?:show|display|print|give)\b[^\n]{0,65}\b(?:exact|full|actual)\b[^\n]{0,60}\b(?:outgoing|provider|model)\s+(?:prompt|payload|system\s+messages?)\b/i,
 ];
 
 const MEMORY_REQUEST_PATTERNS = [
@@ -94,7 +98,7 @@ const MEMORY_SYNONYMS: Record<string, string[]> = {
   condo: ["property", "real estate", "home"],
 };
 
-function isSystemPromptRequest(message: string): boolean {
+export function isSystemPromptRequest(message: string): boolean {
   return SYSTEM_PROMPT_REQUEST_PATTERNS.some((pattern) => pattern.test(message));
 }
 
@@ -197,7 +201,10 @@ function asksForFullMemoryDump(message: string): boolean {
   );
 }
 
-function buildSystemPromptResponse(state: Awaited<ReturnType<typeof getChatContextState>>): string {
+function buildSystemPromptResponse(
+  state: Awaited<ReturnType<typeof getChatContextState>>,
+  latest: { requestId: string; snapshot: StoredProviderSystemAudit } | null,
+): string {
   const canonicalHistory =
     messagesFromShortTermMemory(state.shortTermMemory, state.recentMessages[0]?.chatId ?? "local-inspection") ??
     filterConversationalMessages(state.recentMessages).slice(-SHORT_TERM_MESSAGE_LIMIT);
@@ -210,7 +217,7 @@ function buildSystemPromptResponse(state: Awaited<ReturnType<typeof getChatConte
   return [
     "Katie handled this request locally. No external LLM was called.",
     "",
-    "The exact actor-level system prompt stored for this chat is:",
+    "The actor-level system prompt stored for this chat is below. This is a stored configuration value, NOT necessarily the entire provider request:",
     "",
     fenced("actors.system_prompt", state.actor.purpose),
     "",
@@ -234,7 +241,22 @@ function buildSystemPromptResponse(state: Awaited<ReturnType<typeof getChatConte
     "",
     fenced("Katie reasoning-explainer instruction", getKatieReasoningExplainerStatement()),
     "",
-    "Provider adapters format these pieces differently, so there is not one universal provider wire-format prompt. The stored actor prompt and memory values above are the exact database-backed values for this chat.",
+    "Provider adapters format these pieces differently, so there is no single universal wire-format prompt.",
+    "",
+    ...(latest ? [
+      "**Actual last prepared generation-provider system messages (captured at the adapter immediately before its API call):**",
+      `Provider: ${latest.snapshot.provider} · Model: ${latest.snapshot.model} · Endpoint: ${latest.snapshot.endpoint}`,
+      `Captured: ${latest.snapshot.capturedAt} · Request: ${latest.requestId}`,
+      latest.snapshot.truncated
+        ? "WARNING: System text exceeded the inspection storage limit; the captured sections below are truncated."
+        : "System-role text below is verbatim. It does not include user-role messages, multimodal file bytes, routing LLM prompts, or API credentials.",
+      ...latest.snapshot.systemMessages.flatMap((content, index) => [
+        "",
+        fenced(`Actual provider system message ${index + 1}`, content),
+      ]),
+    ] : [
+      "**Last outbound provider system-message snapshot:** Not recorded yet for this chat. Earlier calls preceded this audit feature. The stored actor prompt above is not a substitute for the actual provider payload.",
+    ]),
   ].join("\n");
 }
 
@@ -341,7 +363,7 @@ export async function resolveLocalKatieResponse(params: {
     const state = await getChatContextState(params.actorId, params.chatId);
     return {
       reason: "system-prompt",
-      text: buildSystemPromptResponse(state),
+      text: buildSystemPromptResponse(state, await latestProviderSystemAudit(params.actorId, params.chatId)),
     };
   }
 

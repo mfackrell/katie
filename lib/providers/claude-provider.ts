@@ -401,6 +401,10 @@ export class ClaudeProvider implements LlmProvider {
 
   async generate(params: ChatGenerateParams): Promise<ProviderResponse> {
     const { selectedModel, system, messages } = this.buildRequestContext(params);
+    await params.onProviderSystemPrepared?.({
+      provider: "anthropic", model: selectedModel,
+      endpoint: "/v1/messages", systemMessages: [system],
+    });
 
     let accumulatedText = "";
     let inputTokens: number | undefined;
@@ -470,6 +474,10 @@ export class ClaudeProvider implements LlmProvider {
     handlers: ProviderStreamHandlers
   ): Promise<ProviderResponse> {
     const { selectedModel, system, messages } = this.buildRequestContext(params);
+    await params.onProviderSystemPrepared?.({
+      provider: "anthropic", model: selectedModel,
+      endpoint: "/v1/messages", systemMessages: [system],
+    });
 
     let accumulatedText = "";
     let inputTokens: number | undefined;

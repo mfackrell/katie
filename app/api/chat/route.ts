@@ -6,7 +6,7 @@ import { describeAttachmentEvidence } from "@/lib/uploads/attachment-observation
 import { buildImageReference, imageFileFromDataUrl } from "@/lib/uploads/image-reference";
 import { selectStoredAttachments, loadSelectedAttachmentSources, explicitlyRequestsVideo } from "@/lib/chat/attachment-selection";
 import { pruneRepeatedVideoSelections, uniqueAttachmentReferences } from "@/lib/chat/video-attachment-dedup";
-import { after, NextRequest, NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { assembleContext } from "@/lib/memory/assemble-context";
 import { maybeUpdateSummary } from "@/lib/memory/summarizer";
@@ -20,6 +20,7 @@ import {
 } from "@/lib/chat/request-idempotency";
 import { refreshShortTermMemory } from "@/lib/memory/short-term";
 import { resolveLocalKatieResponse } from "@/lib/chat/local-katie";
+import { saveProviderSystemAudit } from "@/lib/chat/provider-system-audit";
 import { maintainMemoryArchitecture } from "@/lib/memory/hygiene";
 import { getSupabaseAdminClient } from "@/lib/data/supabase/admin";
 import { getAvailableProviders } from "@/lib/providers";
@@ -374,7 +375,8 @@ function buildGenerationParams({
   secondaryIntents,
   images,
   modelId,
-  attachments
+  attachments,
+  onProviderSystemPrepared
 }: {
   name: string;
   persona: string;
@@ -386,6 +388,7 @@ function buildGenerationParams({
   images?: string[];
   modelId: string;
   attachments: NonNullable<RequestPayload["fileReferences"]>;
+  onProviderSystemPrepared?: (audit: import("@/lib/providers/types").ProviderSystemAudit) => Promise<void>;
 }) {
   return {
     name,
@@ -397,7 +400,8 @@ function buildGenerationParams({
     secondaryIntents,
     images,
     modelId,
-    attachments
+    attachments,
+    onProviderSystemPrepared
   };
 }
 
@@ -819,8 +823,8 @@ export async function POST(request: NextRequest) {
       repoInjectionEnabled,
     });
 
-    await maintainMemoryArchitecture(actorId, chatId);
-
+    // Inspect deterministic, database-owned configuration before any model,
+    // classifier, router or model-backed memory maintenance is invoked.
     const localKatieResponse = await resolveLocalKatieResponse({
       actorId,
       chatId,
@@ -858,14 +862,6 @@ export async function POST(request: NextRequest) {
         });
       }
       await refreshShortTermMemory(actorId, chatId);
-      after(async () => {
-        try {
-          await maybeUpdateSummary(chatId);
-        } catch (error: unknown) {
-          console.error("[Chat API] Local response intermediate memory update failed:", error);
-        }
-      });
-
       const localBody = [
         JSON.stringify({
           type: "metadata",
@@ -896,6 +892,8 @@ export async function POST(request: NextRequest) {
         },
       });
     }
+
+    await maintainMemoryArchitecture(actorId, chatId);
 
     const configuredProviders = getAvailableProviders();
     if (!configuredProviders.length) {
@@ -1539,7 +1537,9 @@ export async function POST(request: NextRequest) {
                 secondaryIntents: storedWebsite.fresh ? [...(resolvedRoutingIntentForReroute?.secondaryIntents ?? []), "web-search"] : resolvedRoutingIntentForReroute?.secondaryIntents ?? [],
                 images,
                 modelId: selectedModelId,
-                attachments
+                attachments,
+                onProviderSystemPrepared: audit =>
+                  saveProviderSystemAudit(actorId, chatId, requestId, audit)
               });
 
             if (shouldRunChunkedWorkflow(message, attachments)) {
