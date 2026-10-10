@@ -112,7 +112,12 @@ export function isExplicitMemoryMutation(message: string): boolean {
 }
 
 function isMemoryRequest(message: string): boolean {
-  return MEMORY_REQUEST_PATTERNS.some((pattern) => pattern.test(message));
+  const subjectIsMemory = MEMORY_REQUEST_PATTERNS.some((pattern) => pattern.test(message));
+  // Mentioning "long-term memory" is not automatically an instruction to
+  // dump it. Only route actual inspection questions through the local reader.
+  const asksToInspect = /\b(?:show|display|print|dump|list|give|reveal|inspect|check|view|what|which|where|how much|do you remember|did you remember|what do you know)\b/i.test(message) ||
+    /\b(?:is|are|have|has)\b[^\n]{0,65}\b(?:in (?:your|the) memory|stored|saved)\b/i.test(message);
+  return subjectIsMemory && asksToInspect;
 }
 
 function pretty(value: unknown): string {
