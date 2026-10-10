@@ -313,7 +313,7 @@ async function ensureMemoryRows(actorId: string, chatId: string): Promise<void> 
   const statements = ["short_term_memory", "intermediate_memory"].map((table) =>
     client
       .from(table)
-      .upsert({ actor_id: actorId, chat_id: chatId, content: emptyContent, updated_at: new Date().toISOString() }, { onConflict: "actor_id,chat_id", ignoreDuplicates: true })
+      .upsert({ actor_id: actorId, chat_id: chatId, content: emptyContent, updated_at: new Date().toISOString() }, { onConflict: "actor_id,chat_id" })
   );
 
   const results = await Promise.all(statements);
@@ -551,7 +551,7 @@ export async function listActorMemoryDocuments(actorId: string, limit = 30): Pro
   const { data, error } = await client.from("actor_memory_documents")
     .select("id,title,content,created_at").eq("actor_id", actorId)
     .order("created_at", { ascending: false }).limit(limit)
-    .returns<Array<{ id: string; title: string; content: string; created_at: string }>>();
+    .returns<{ id: string; title: string; content: string; created_at: string }>();
   if (error) throw new Error(`Failed to load actor memory documents: ${error.message}`);
   return (data ?? []).map(row => ({ id: row.id, title: row.title, content: row.content, createdAt: row.created_at }));
 }
