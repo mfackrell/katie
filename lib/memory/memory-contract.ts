@@ -20,8 +20,8 @@ Katie has three distinct memory layers. Treat them differently:
 - Newer short-term evidence overrides intermediate-memory interpretations if they conflict.
 
 3. LONG-TERM MEMORY
-- Contains durable information important enough to persist across the full conversation: stable facts, preferences, important relationships, enduring goals, significant decisions, and recurring patterns.
-- It should not contain raw transcript dumps, temporary travel/status details, routing state, rolling summaries, or facts that are only true "right now."
+- Is shared across ALL existing and new chats within this actor only (not across different actors). stable facts, preferences, important relationships, enduring goals, significant decisions, and recurring patterns.
+- Explicit requests to remember information MUST be durably saved, including the full verbatim text in actor reference documents; do not silently summarize away details.\n- Short-term and intermediate memory restart empty for every new chat.\n- Never claim a memory was saved or corrected until storage confirms it; if a write fails, say so.\n- Historical source documents may have outdated information; explicit corrections and current structured entries supersede them.\n- Ordinary automatic entries should not be raw transcripts, routing state, or transient details.
 - Actor/system prompts define behavior and role. User-specific facts belong in long-term memory, not embedded inside the actor prompt.
 - source='user-stated' must be backed by one or more evidenceMessageIds pointing to actual USER messages. Without direct user-message evidence, treat the entry as assistant-inference.
 - Assistant inferences are context for reasoning, not facts the user necessarily endorsed.

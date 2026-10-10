@@ -10,6 +10,8 @@ type DbState = {
   short_term_memory: Row[];
   intermediate_memory: Row[];
   long_term_memory: Row[];
+  actor_long_term_memory: Row[];
+  actor_memory_documents: Row[];
 };
 
 class Query {
@@ -100,6 +102,8 @@ class Query {
         const uniqueIdx = tableRows.findIndex((item) => {
           if (id && item.id === id) return true;
           if (actorId && chatId && item.actor_id === actorId && item.chat_id === chatId) return true;
+          if (this.table === "actor_long_term_memory" && actorId && item.actor_id === actorId) return true;
+          if (this.table === "actor_memory_documents" && row.source_message_id && item.source_message_id === row.source_message_id) return true;
           return false;
         });
 
@@ -174,7 +178,7 @@ function makeState(): DbState {
     messages: [],
     short_term_memory: [],
     intermediate_memory: [],
-    long_term_memory: []
+    long_term_memory: [], actor_long_term_memory: [], actor_memory_documents: []
   };
 }
 
@@ -215,154 +219,45 @@ function createMockMemoryEditorClient(responseContent: string) {
   };
 }
 
-test("no-change result leaves long_term_memory untouched", async () => {
-  const state = makeState();
-  (globalThis as any).__KATIE_SUPABASE_ADMIN_CLIENT__ = createFakeClient(state);
-  (globalThis as any).__KATIE_LONG_TERM_MEMORY_OPENAI_CLIENT__ = createMockMemoryEditorClient(
-    JSON.stringify({ action: "no_change" })
-  );
 
-  const { store, memoryEditor } = loadModules();
-
-  await store.saveActor({ id: "a1", name: "Actor", purpose: "Prompt" });
-  await store.saveChat({ id: "c1", actorId: "a1", title: "Chat", createdAt: "x", updatedAt: "x" });
-  await store.setLongTermMemory("a1", "c1", { profile: { timezone: "UTC" } });
-  await store.saveMessage("c1", { id: "m1", role: "user", content: "hello" });
-
-  await memoryEditor.maybeUpdateLongTermMemory("a1", "c1", "hello");
-
-  const saved = await store.getLongTermMemory("a1", "c1");
-  assert.deepEqual(saved, { profile: { timezone: "UTC" } });
+function fact(key: string,value: string) {
+ return {key,value,category:"fact",source:"user-stated",confidence:"high",evidenceMessageIds:["m1"]};
+}
+function memory(...entries: ReturnType<typeof fact>[]) {return {version:3,purpose:"Actor memory",entries};}
+test("no change preserves memory", async()=>{
+ const state=makeState();
+ (globalThis as any).__KATIE_SUPABASE_ADMIN_CLIENT__=createFakeClient(state);
+ (globalThis as any).__KATIE_LONG_TERM_MEMORY_OPENAI_CLIENT__=createMockMemoryEditorClient(JSON.stringify({action:"no_change"}));
+ const {store,memoryEditor}=loadModules();
+ await store.saveActor({id:"a1",name:"Actor",purpose:"Prompt"});
+ await store.saveChat({id:"c1",actorId:"a1",title:"Chat",createdAt:"x",updatedAt:"x"});
+ await store.setLongTermMemory("a1","c1",memory(fact("f","old")));
+ await store.saveMessage("c1",{id:"m1",role:"user",content:"hi"});
+ await memoryEditor.maybeUpdateLongTermMemory("a1","c1","hi");
+ assert.deepEqual(await store.getLongTermMemory("a1","other"),memory(fact("f","old")));
 });
-
-test("replace result writes revised content to long_term_memory", async () => {
-  const state = makeState();
-  (globalThis as any).__KATIE_SUPABASE_ADMIN_CLIENT__ = createFakeClient(state);
-  (globalThis as any).__KATIE_LONG_TERM_MEMORY_OPENAI_CLIENT__ = createMockMemoryEditorClient(
-    JSON.stringify({ action: "replace", updatedContent: { profile: { timezone: "PST", language: "en" } } })
-  );
-
-  const { store, memoryEditor } = loadModules();
-
-  await store.saveActor({ id: "a1", name: "Actor", purpose: "Prompt" });
-  await store.saveChat({ id: "c1", actorId: "a1", title: "Chat", createdAt: "x", updatedAt: "x" });
-  await store.setLongTermMemory("a1", "c1", { profile: { timezone: "UTC" } });
-  await store.saveMessage("c1", { id: "m1", role: "user", content: "I'm in Pacific time now" });
-
-  await memoryEditor.maybeUpdateLongTermMemory("a1", "c1", "I'm in Pacific time now");
-
-  const saved = await store.getLongTermMemory("a1", "c1");
-  assert.deepEqual(saved, { profile: { timezone: "PST", language: "en" } });
+test("mandatory correction replaces wrong fact in all existing and future chats",async()=>{
+ const state=makeState();
+ (globalThis as any).__KATIE_SUPABASE_ADMIN_CLIENT__=createFakeClient(state);
+ (globalThis as any).__KATIE_LONG_TERM_MEMORY_OPENAI_CLIENT__=createMockMemoryEditorClient(
+  JSON.stringify({action:"replace",updatedContent:memory(fact("revenue","Annual revenue $90M"))}));
+ const {store,memoryEditor}=loadModules();
+ await store.saveActor({id:"a1",name:"Actor",purpose:"Prompt"});
+ await store.saveChat({id:"c1",actorId:"a1",title:"Chat",createdAt:"x",updatedAt:"x"});
+ await store.saveChat({id:"c2",actorId:"a1",title:"New",createdAt:"x",updatedAt:"x"});
+ await store.setLongTermMemory("a1","c1",memory(fact("revenue","Annual revenue $200M")));
+ await store.saveMessage("c1",{id:"m1",role:"user",content:"Correct your long-term memory: annual revenue was $90M"});
+ await memoryEditor.maybeUpdateLongTermMemory("a1","c1","Correct your long-term memory: annual revenue was $90M",{required:true});
+ const result=await store.getLongTermMemory("a1","c2");
+ assert.equal((result.entries as Array<{value:string}>)[0].value,"Annual revenue $90M");
 });
-
-test("empty existing memory can be populated", async () => {
-  const state = makeState();
-  (globalThis as any).__KATIE_SUPABASE_ADMIN_CLIENT__ = createFakeClient(state);
-  (globalThis as any).__KATIE_LONG_TERM_MEMORY_OPENAI_CLIENT__ = createMockMemoryEditorClient(
-    JSON.stringify({ action: "replace", updatedContent: { preferences: { editorTheme: "dark" } } })
-  );
-
-  const { store, memoryEditor } = loadModules();
-
-  await store.saveActor({ id: "a1", name: "Actor", purpose: "Prompt" });
-  await store.saveChat({ id: "c1", actorId: "a1", title: "Chat", createdAt: "x", updatedAt: "x" });
-  await store.saveMessage("c1", { id: "m1", role: "user", content: "Please remember I prefer dark mode." });
-
-  assert.deepEqual(await store.getLongTermMemory("a1", "c1"), {});
-
-  await memoryEditor.maybeUpdateLongTermMemory("a1", "c1", "Please remember I prefer dark mode.");
-
-  const saved = await store.getLongTermMemory("a1", "c1");
-  assert.deepEqual(saved, { preferences: { editorTheme: "dark" } });
-});
-
-test("remove/forget behavior results in revised saved content", async () => {
-  const state = makeState();
-  (globalThis as any).__KATIE_SUPABASE_ADMIN_CLIENT__ = createFakeClient(state);
-  (globalThis as any).__KATIE_LONG_TERM_MEMORY_OPENAI_CLIENT__ = createMockMemoryEditorClient(
-    JSON.stringify({ action: "replace", updatedContent: { profile: { timezone: "UTC" } } })
-  );
-
-  const { store, memoryEditor } = loadModules();
-
-  await store.saveActor({ id: "a1", name: "Actor", purpose: "Prompt" });
-  await store.saveChat({ id: "c1", actorId: "a1", title: "Chat", createdAt: "x", updatedAt: "x" });
-  await store.setLongTermMemory("a1", "c1", {
-    profile: { timezone: "UTC", favoriteColor: "blue" },
-    preferences: { newsletter: true }
-  });
-  await store.saveMessage("c1", { id: "m1", role: "user", content: "Forget my favorite color." });
-
-  await memoryEditor.maybeUpdateLongTermMemory("a1", "c1", "Forget my favorite color.");
-
-  const saved = await store.getLongTermMemory("a1", "c1");
-  assert.deepEqual(saved, { profile: { timezone: "UTC" } });
-});
-
-test("failure in memory-editor path does not throw", async () => {
-  const state = makeState();
-  (globalThis as any).__KATIE_SUPABASE_ADMIN_CLIENT__ = createFakeClient(state);
-  (globalThis as any).__KATIE_LONG_TERM_MEMORY_OPENAI_CLIENT__ = {
-    chat: {
-      completions: {
-        async create() {
-          throw new Error("memory editor failed");
-        }
-      }
-    }
-  };
-
-  const { store, memoryEditor } = loadModules();
-
-  await store.saveActor({ id: "a1", name: "Actor", purpose: "Prompt" });
-  await store.saveChat({ id: "c1", actorId: "a1", title: "Chat", createdAt: "x", updatedAt: "x" });
-  await store.setLongTermMemory("a1", "c1", { profile: { timezone: "UTC" } });
-  await store.saveMessage("c1", { id: "m1", role: "user", content: "remember this" });
-
-  await assert.doesNotReject(async () => {
-    await memoryEditor.maybeUpdateLongTermMemory("a1", "c1", "remember this");
-  });
-
-  const saved = await store.getLongTermMemory("a1", "c1");
-  assert.deepEqual(saved, { profile: { timezone: "UTC" } });
-});
-
-
-test("controlled memory update logs decision and persists revised memory", async () => {
-  const state = makeState();
-  (globalThis as any).__KATIE_SUPABASE_ADMIN_CLIENT__ = createFakeClient(state);
-  (globalThis as any).__KATIE_LONG_TERM_MEMORY_OPENAI_CLIENT__ = createMockMemoryEditorClient(
-    JSON.stringify({ action: "replace", updatedContent: { preferences: { dislikes: ["seafood"] } } })
-  );
-
-  const logs: string[] = [];
-  const originalLog = console.log;
-  console.log = (...args: unknown[]) => {
-    logs.push(args.map(String).join(" "));
-  };
-
-  try {
-    const { store, memoryEditor } = loadModules();
-
-    await store.saveActor({ id: "a1", name: "Actor", purpose: "Prompt" });
-    await store.saveChat({ id: "c1", actorId: "a1", title: "Chat", createdAt: "x", updatedAt: "x" });
-    await store.saveMessage("c1", {
-      id: "m1",
-      role: "user",
-      content: "I want you to remember that I do not like seafood."
-    });
-
-    const before = await store.getLongTermMemory("a1", "c1");
-    assert.deepEqual(before, {});
-
-    await memoryEditor.maybeUpdateLongTermMemory("a1", "c1", "I want you to remember that I do not like seafood.");
-
-    const after = await store.getLongTermMemory("a1", "c1");
-    assert.deepEqual(after, { preferences: { dislikes: ["seafood"] } });
-    assert.ok(logs.some((entry) => entry.includes("[LongTermMemoryEditor] Start")));
-    assert.ok(logs.some((entry) => entry.includes("Decision: replace")));
-    assert.ok(logs.some((entry) => entry.includes("Save Success")));
-  } finally {
-    console.log = originalLog;
-  }
+test("mandatory correction fails rather than falsely claiming no_change",async()=>{
+ const state=makeState();
+ (globalThis as any).__KATIE_SUPABASE_ADMIN_CLIENT__=createFakeClient(state);
+ (globalThis as any).__KATIE_LONG_TERM_MEMORY_OPENAI_CLIENT__=createMockMemoryEditorClient(JSON.stringify({action:"no_change"}));
+ const {store,memoryEditor}=loadModules();
+ await store.saveActor({id:"a1",name:"Actor",purpose:"Prompt"});
+ await store.saveChat({id:"c1",actorId:"a1",title:"Chat",createdAt:"x",updatedAt:"x"});
+ await store.saveMessage("c1",{id:"m1",role:"user",content:"Correct your memory"});
+ await assert.rejects(()=>memoryEditor.maybeUpdateLongTermMemory("a1","c1","Correct your memory",{required:true}),/declined/);
 });

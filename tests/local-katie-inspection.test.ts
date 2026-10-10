@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { isSystemPromptRequest } from "../lib/chat/local-katie";
+import { isSystemPromptRequest, isExplicitMemoryMutation, isExplicitMemoryCorrection } from "../lib/chat/local-katie";
 import { boundProviderSystemAudit } from "../lib/chat/provider-system-audit";
 
 test("exact system message and prompt queries stay on the local inspection path", () => {
@@ -58,4 +58,16 @@ test("provider audit stores literal system strings only and truthfully marks tru
   });
   assert.equal(long.truncated, true);
   assert.ok(long.systemMessages.join("").length <= 240_000);
+});
+
+test("explicit memory write and correction requests are never mistaken for inspection",()=>{
+ for(const message of [
+ "you need to incorporate this information into your long term memory: my experience",
+ "Please save all of this in your long-term memory",
+ "Remember my preferences for later",
+ "Correct the incorrect value in your long term memory",
+ "Your long-term memory is incorrect. Change the figure."
+ ]) assert.equal(isExplicitMemoryMutation(message),true,message);
+ assert.equal(isExplicitMemoryCorrection("Correct the incorrect value in your long term memory"),true);
+ assert.equal(isExplicitMemoryMutation("Show me your long-term memory"),false);
 });

@@ -1,5 +1,5 @@
 import { getDeliverableStandardInstruction } from "@/lib/chat/deliverable-standard";
-import { getChatContextState } from "@/lib/data/persistence-store";
+import { getChatContextState, listActorMemoryDocuments } from "@/lib/data/persistence-store";
 import { MEMORY_ARCHITECTURE_GUIDE, SHORT_TERM_MESSAGE_LIMIT } from "@/lib/memory/memory-contract";
 import { filterConversationalMessages, messagesFromShortTermMemory } from "@/lib/memory/short-term";
 import type { ActorRoutingProfile, Message } from "@/lib/types/chat";
@@ -20,6 +20,16 @@ export async function assembleContext(actorId: string, chatId: string): Promise<
     chatId
   );
 
+  const referenceDocuments = await listActorMemoryDocuments(actorId, 20);
+  let documentCharacters = 0;
+  const referenceText = referenceDocuments
+    .filter((doc) => {
+      if (documentCharacters + doc.content.length > 100_000) return false;
+      documentCharacters += doc.content.length;
+      return true;
+    })
+    .map((doc) => `DOCUMENT ${doc.id} (${doc.title}; ${doc.createdAt}):\n${doc.content}`)
+    .join("\n\n");
   const history =
     messagesFromShortTermMemory(shortTermMemory, chatId) ??
     filterConversationalMessages(recentMessages).slice(-SHORT_TERM_MESSAGE_LIMIT);
@@ -38,6 +48,9 @@ export async function assembleContext(actorId: string, chatId: string): Promise<
       getDeliverableStandardInstruction(),
       MEMORY_ARCHITECTURE_GUIDE,
       longTermBlock,
+      "ACTOR MEMORY REFERENCE DOCUMENTS: These are verbatim user-requested long-term records and archived historical records. The current structured long-term facts and the most recent explicit user corrections take precedence when records conflict.",
+      referenceText || "(No reference documents)",
+      "END_ACTOR_MEMORY_REFERENCE_DOCUMENTS",
     ].join("\n\n"),
     summary,
     history,

@@ -310,7 +310,7 @@ async function ensureMemoryRows(actorId: string, chatId: string): Promise<void> 
   const client = getSupabaseAdminClient();
   const emptyContent: JsonRecord = {};
 
-  const statements = ["short_term_memory", "intermediate_memory", "long_term_memory"].map((table) =>
+  const statements = ["short_term_memory", "intermediate_memory"].map((table) =>
     client
       .from(table)
       .upsert({ actor_id: actorId, chat_id: chatId, content: emptyContent, updated_at: new Date().toISOString() }, { onConflict: "actor_id,chat_id" })
@@ -325,6 +325,8 @@ async function ensureMemoryRows(actorId: string, chatId: string): Promise<void> 
 
 export async function saveChat(chat: ChatThread): Promise<ChatThread> {
   await requireActor(chat.actorId);
+  const existing = await getChatById(chat.id);
+  if (existing && existing.actorId !== chat.actorId) throw new Error("Chat actor may not change");
 
   const client = getSupabaseAdminClient();
   const { data, error } = await client
@@ -345,7 +347,8 @@ export async function saveChat(chat: ChatThread): Promise<ChatThread> {
     throw new Error(`Failed to save chat ${chat.id}: ${error.message}`);
   }
 
-  await ensureMemoryRows(data.actor_id, data.id);
+  // Updating chat titles must never reset either chat-scoped memory layer.
+  if (!existing) await ensureMemoryRows(data.actor_id, data.id);
 
   return toChat(data);
 }
@@ -529,8 +532,38 @@ export async function setIntermediateMemory(actorId: string, chatId: string, pay
   await setMemory("intermediate_memory", actorId, chatId, payload);
 }
 
-export async function getLongTermMemory(actorId: string, chatId: string): Promise<JsonRecord> {
-  return getMemory("long_term_memory", actorId, chatId);
+// Long-term memory belongs to the actor, not the chat. Keep the chatId argument
+// for compatibility with existing callers; it never scopes this lookup.
+export async function getLongTermMemory(actorId: string, _chatId: string): Promise<JsonRecord> {
+  void _chatId; // Compatibility argument; actor memory is not chat scoped.
+  const client = getSupabaseAdminClient();
+  const { data, error } = await client.from("actor_long_term_memory")
+    .select("content").eq("actor_id", actorId).maybeSingle<{ content: JsonRecord }>();
+  if (error) throw new Error(`Failed to load actor memory: ${error.message}`);
+  return data?.content ?? {};
+}
+
+export type ActorMemoryDocument = {
+  id: string; title: string; content: string; createdAt: string;
+};
+
+export async function listActorMemoryDocuments(actorId: string, limit = 30): Promise<ActorMemoryDocument[]> {
+  const client = getSupabaseAdminClient();
+  const { data, error } = await client.from("actor_memory_documents")
+    .select("id,title,content,created_at").eq("actor_id", actorId)
+    .order("created_at", { ascending: false }).limit(limit)
+    .returns<{ id: string; title: string; content: string; created_at: string }>();
+  if (error) throw new Error(`Failed to load actor memory documents: ${error.message}`);
+  return (data ?? []).map(row => ({ id: row.id, title: row.title, content: row.content, createdAt: row.created_at }));
+}
+
+export async function saveActorMemoryDocument(actorId: string, messageId: string, title: string, content: string): Promise<string> {
+  const client = getSupabaseAdminClient();
+  const { data, error } = await client.from("actor_memory_documents")
+    .upsert({ actor_id: actorId, source_message_id: messageId, title, content }, { onConflict: "source_message_id" })
+    .select("id,content").single<{ id: string; content: string }>();
+  if (error || !data || data.content !== content) throw new Error(`Actor memory document verification failed: ${error?.message ?? "content mismatch"}`);
+  return data.id;
 }
 
 export type ActorMemoryRecord = {
@@ -568,18 +601,38 @@ async function listMemoryTableForActor(
 }
 
 export async function listMemoryRecordsForActor(actorId: string): Promise<ActorMemoryRecord[]> {
-  const [shortTerm, intermediate, longTerm] = await Promise.all([
+  const [shortTerm, intermediate, longTerm, documents] = await Promise.all([
     listMemoryTableForActor("short_term_memory", "short-term", actorId),
     listMemoryTableForActor("intermediate_memory", "intermediate", actorId),
-    listMemoryTableForActor("long_term_memory", "long-term", actorId),
+    getLongTermMemory(actorId, "actor-wide"),
+    listActorMemoryDocuments(actorId),
   ]);
 
-  return [...shortTerm, ...intermediate, ...longTerm];
+  return [...shortTerm, ...intermediate, {
+    layer: "long-term" as const, actorId, chatId: "actor-wide",
+    content: { ...longTerm, referenceDocuments: documents },
+    updatedAt: new Date().toISOString()
+  }];
 }
 
 
-export async function setLongTermMemory(actorId: string, chatId: string, payload: JsonRecord): Promise<void> {
-  await setMemory("long_term_memory", actorId, chatId, payload);
+export async function setLongTermMemory(actorId: string, _chatId: string, payload: JsonRecord): Promise<void> {
+  const client = getSupabaseAdminClient();
+  const { error } = await client.from("actor_long_term_memory")
+    .upsert({ actor_id: actorId, content: payload, updated_at: new Date().toISOString() }, { onConflict: "actor_id" });
+  if (error) throw new Error(`Failed to save actor memory: ${error.message}`);
+  const confirmed = await getLongTermMemory(actorId, _chatId);
+  // Postgres jsonb normalizes property order. Compare canonical structures.
+  const canonical = (value: unknown): string => JSON.stringify(value, function (_key, item) {
+    if (item && typeof item === "object" && !Array.isArray(item)) {
+      return Object.fromEntries(Object.entries(item as Record<string, unknown>)
+        .sort(([a], [b]) => a.localeCompare(b)));
+    }
+    return item;
+  });
+  if (canonical(confirmed) !== canonical(payload)) {
+    throw new Error("Long-term memory write could not be verified by read-back");
+  }
 }
 
 export async function getConversationSummary(chatId: string): Promise<string> {
