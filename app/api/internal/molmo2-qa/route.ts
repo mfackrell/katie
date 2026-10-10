@@ -70,11 +70,38 @@ export async function GET(req:NextRequest){
   const {ep}=await discover();
   if(typeof ep?.id!=="string")return output({error:"endpoint_not_provisioned"},409);
   const endpoint=ep.id;
+  if(action==="details"||action==="fix_boot"){
+   const tmpl=await api("/templates/lwdc2qpy4l");
+   if(!tmpl.ok)return output({error:"template_lookup_failed",http:tmpl.status},502);
+   const config=tmpl.data, env=obj(config.env);
+   if(action==="details")return output({template:{id:config.id,name:config.name,image:config.image,
+     disk:config.disk,env:Object.fromEntries(Object.entries(env).filter(([k])=>
+       ["MODEL_NAME","MAX_MODEL_LEN","MAX_NUM_SEQS","GPU_MEMORY_UTILIZATION",
+         "SAFETENSORS_LOAD_STRATEGY","ENFORCE_EAGER"].includes(k)))},
+     endpoint:{id:ep.id,templateId:ep.templateId,flashboot:ep.flashboot,
+       workers:ep.workers,gpu:ep.gpu,scaling:ep.scaling}});
+   if(config.id!=="lwdc2qpy4l"||config.name!==NAME||
+      env.MODEL_NAME!==MODEL||ep.templateId!==config.id)
+      return output({error:"unexpected_template_or_endpoint"},409);
+   const newEnv={...env,MAX_MODEL_LEN:"4096",MAX_NUM_SEQS:"1",
+      GPU_MEMORY_UTILIZATION:"0.85",ENFORCE_EAGER:"true"};
+   delete newEnv.SAFETENSORS_LOAD_STRATEGY;
+   const patch=await api("/templates/lwdc2qpy4l","PATCH",
+      {disk:100,env:newEnv});
+   const saved=obj(patch.data);
+   return output({http:patch.status,updated:patch.ok,template_id:saved.id??null,
+     disk:saved.disk??null,env:Object.fromEntries(Object.entries(obj(saved.env))
+       .filter(([k])=>["MODEL_NAME","MAX_MODEL_LEN","MAX_NUM_SEQS","GPU_MEMORY_UTILIZATION",
+       "ENFORCE_EAGER"].includes(k)))},patch.ok?200:502);
+  }
   if(action==="worker_logs"){
    const worker=req.nextUrl.searchParams.get("worker")||"";
    if(!/^[a-z0-9]{6,25}$/.test(worker))return output({error:"invalid_worker"},400);
-   const url=API+"/serverless/"+endpoint+"/workers/"+worker+"/logs?source=system&tail=50";
-   const r=await fetch(url,{headers,cache:"no-store",signal:AbortSignal.timeout(18000)});
+   const source=req.nextUrl.searchParams.get("source")||"container";
+   if(!["container","system","all"].includes(source))return output({error:"bad_source"},400);
+   const url=API+"/serverless/"+endpoint+"/workers/"+worker+"/logs?tail=30"+
+     (source==="all"?"":"&source="+source);
+   const r=await fetch(url,{headers,cache:"no-store",signal:AbortSignal.timeout(9000)});
    const raw=(await r.text()).slice(-18000);
    const sanitized=raw.replace(new RegExp("https?://[^\\s]+","gi"),"[url]")
     .replace(new RegExp("Bearer\\s+\\S+","gi"),"Bearer [redacted]");
