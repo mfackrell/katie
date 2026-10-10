@@ -103,7 +103,10 @@ export function isSystemPromptRequest(message: string): boolean {
 }
 
 export function isExplicitMemoryCorrection(message: string): boolean {
-  return /\b(?:correct|change|update|revise|fix|replace|remove|delete|forget|wrong|incorrect|not true|inaccurate)\b[^\n]{0,140}\b(?:memory|remembered|stored|saved)\b|\b(?:memory|remembered|stored|saved)\b[^\n]{0,140}\b(?:correct|change|update|revise|fix|replace|remove|delete|forget|wrong|incorrect|inaccurate)\b/i.test(message);
+  // An instruction to clarify a fact already in memory is an edit, not
+  // an ordinary conversation turn. Include common natural-language verbs
+  // and nominal phrases in both word orders.
+  return /\b(?:correct|change|update|revise|fix|replace|remove|delete|forget|clarify|clarification|amend|refine|adjust|reframe|misstated|misrepresented|wrong|incorrect|not true|inaccurate)\b[^\n]{0,180}\b(?:memory|remembered|stored|saved)\b|\b(?:memory|remembered|stored|saved)\b[^\n]{0,180}\b(?:correct|change|update|revise|fix|replace|remove|delete|forget|clarify|clarification|amend|refine|adjust|reframe|wrong|incorrect|inaccurate|misstated|misrepresented)\b/i.test(message);
 }
 
 export function isExplicitMemoryMutation(message: string): boolean {
