@@ -189,6 +189,10 @@ export class GoogleProvider implements LlmProvider {
       : systemInstructionBase;
 
     try {
+      await params.onProviderSystemPrepared?.({
+        provider: "google", model: selectedModel,
+        endpoint: "generateContent", systemMessages: [systemInstruction],
+      });
       const result = await this.client.models.generateContent({
         model: selectedModel,
         contents,
@@ -266,6 +270,10 @@ export class GoogleProvider implements LlmProvider {
       : systemInstructionBase;
 
     try {
+      await params.onProviderSystemPrepared?.({
+        provider: "google", model: selectedModel,
+        endpoint: "generateContentStream", systemMessages: [systemInstruction],
+      });
       const result = await this.client.models.generateContentStream({
         model: selectedModel,
         contents,
