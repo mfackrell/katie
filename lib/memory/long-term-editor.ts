@@ -249,9 +249,17 @@ export async function maybeUpdateLongTermMemory(
       getRecentMessages(chatId, MEMORY_EDITOR_HISTORY_MESSAGES + 40),
     ]);
 
-    const recentMessages = filterConversationalMessages(rawRecentMessages).slice(
-      -MEMORY_EDITOR_HISTORY_MESSAGES,
-    );
+    const completedMessages = filterConversationalMessages(rawRecentMessages);
+    // A synchronous explicit save/correction runs after the USER message is
+    // stored but before Katie responds. Include this unpaired user turn so
+    // edits are grounded in the exact user instruction and its message id.
+    const latestRaw = rawRecentMessages[rawRecentMessages.length - 1];
+    const pendingUser = latestRaw?.role === "user" && latestRaw.content === latestUserMessage &&
+      !completedMessages.some(m => m.id === latestRaw.id) ? latestRaw : null;
+    const recentMessages = [
+      ...completedMessages.slice(-(MEMORY_EDITOR_HISTORY_MESSAGES - (pendingUser ? 1 : 0))),
+      ...(pendingUser ? [pendingUser] : []),
+    ];
     const recentUserIds = new Set(
       recentMessages.filter((message) => message.role === "user").map((message) => message.id),
     );
