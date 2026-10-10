@@ -32,11 +32,11 @@ export async function GET(request:NextRequest){
  return NextResponse.json({action,v1,v2,health:{http:health.http,data:health.data}});
  }
  if(action==="template"){
-  const url="https://rest.runpod.io/v1/templates/ykwdli9yfb";
+  const url="https://api.runpod.io/v2/templates/ykwdli9yfb";
   const r=await fetch(url,{headers:{Authorization:"Bearer "+key},cache:"no-store",signal:AbortSignal.timeout(14000)});
   const d=await r.json().catch(()=>({}));
   const env=(d?.env&&typeof d.env==="object")?d.env:{};
-  return NextResponse.json({action,http:r.status,id:d.id??null,name:d.name??null,imageName:d.imageName??null,
+  return NextResponse.json({action,http:r.status,id:d.id??null,name:d.name??null,imageName:d.imageName??d.image??null,templateKeys:d&&typeof d==="object"?Object.keys(d).filter(k=>!/token|secret|key|env/i.test(k)):[],args:d.args??null,
    envNames:Object.keys(env),safeEnv:Object.fromEntries(Object.entries(env).filter(([k])=>
     ["MODEL_NAME","MODEL_ID","MAX_NUM_SEQS","COMPILATION_CONFIG","SAFETENSORS_LOAD_STRATEGY","VLLM_CACHE_ROOT",
       "GPU_MEMORY_UTILIZATION","TENSOR_PARALLEL_SIZE","MAX_MODEL_LEN","HF_HUB_OFFLINE"].includes(k))),
