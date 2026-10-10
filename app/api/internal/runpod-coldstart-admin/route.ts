@@ -31,6 +31,23 @@ export async function GET(request:NextRequest){
  ]);
  return NextResponse.json({action,v1,v2,health:{http:health.http,data:health.data}});
  }
+ if(action==="template_tune"){
+  const url="https://api.runpod.io/v2/templates/ykwdli9yfb";
+  const r=await fetch(url,{headers:{Authorization:"Bearer "+key},cache:"no-store",signal:AbortSignal.timeout(12000)});
+  if(!r.ok)return NextResponse.json({error:"template_read_failed",code:r.status},{status:502});
+  const d=await r.json();const env=d?.env&&typeof d.env==="object"?d.env:{};
+  if(env["MODEL_NAME"]!=="Qwen/Qwen3-VL-8B-Instruct"||env["MAX_NUM_SEQS"]!=="1")
+    return NextResponse.json({error:"unexpected_existing_template"},{status:409});
+  const next={...env,SAFETENSORS_LOAD_STRATEGY:"prefetch"};
+  const patch=await fetch(url,{method:"PATCH",headers:{Authorization:"Bearer "+key,"content-type":"application/json"},
+   body:JSON.stringify({env:next}),signal:AbortSignal.timeout(16000)});
+  const result=await patch.json().catch(()=>({}));
+  const safe=result.env&&typeof result.env==="object"?Object.fromEntries(Object.entries(result.env)
+   .filter(([k])=>["SAFETENSORS_LOAD_STRATEGY","MAX_NUM_SEQS","MAX_MODEL_LEN","MODEL_NAME"].includes(k))):null;
+  return NextResponse.json({action,http:patch.status,requestedEnvNames:Object.keys(next),
+   confirmedEnv:safe,errorMessage:typeof result.message==="string"?result.message.slice(0,180):null},
+    {status:patch.ok?200:502});
+ }
  if(action==="workers"){
   const r=await fetch("https://api.runpod.io/v2/serverless/"+ID+"/workers",{
    headers:{Authorization:"Bearer "+key},cache:"no-store",signal:AbortSignal.timeout(15000)
