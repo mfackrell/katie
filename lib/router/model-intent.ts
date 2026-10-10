@@ -1088,17 +1088,29 @@ export type RoutingHint = {
   hintConfidence?: number | null;
   note?: string;
 };
-export async function inferRequestClassification(
-  prompt: string,
-  input: boolean | { hasImages: boolean; hasVideoInput?: boolean },
-  options?: ControlPlaneSelectionOptions
-): Promise<{
+type InferredRequestClassification = {
   intent: RequestIntent;
   preferredProvider: ProviderName | null;
   secondaryIntents?: RequestIntent[];
   complexity?: RequestComplexity | null;
   providerRefusalRisk?: ProviderRefusalRisk | null;
-}> {
+};
+
+export type ClassifiedIntentWithSource = {
+  classification: InferredRequestClassification;
+  source: "llm" | "router-fallback";
+};
+
+// Keep both the chosen intent and its *actual origin*. A failed or unavailable
+// decision model does not become "llm" merely because the fallback happened
+// inside an asynchronous classifier.
+export async function inferRequestClassificationWithSource(
+  prompt: string,
+  input: boolean | { hasImages: boolean; hasVideoInput?: boolean },
+  options?: ControlPlaneSelectionOptions
+): Promise<ClassifiedIntentWithSource> {
+  const resolved = (classification: InferredRequestClassification, source: ClassifiedIntentWithSource["source"]): ClassifiedIntentWithSource =>
+    ({ classification, source });
   const hasImages = typeof input === "boolean" ? input : input.hasImages;
   const hasVideoInput = typeof input === "boolean" ? false : Boolean(input.hasVideoInput);
   const normalizedPrompt = prompt.toLowerCase();
@@ -1127,9 +1139,9 @@ export async function inferRequestClassification(
   else if (/\b(review (?:the )?(?:repo|file|code)|check file|inspect code|see the repo)\b/i.test(normalizedPrompt)) bestHeuristicHint = "code-review";
   else if (/\b(architecture|system design|kubernetes|deployment|review this repo|repo review)\b/i.test(normalizedPrompt)) bestHeuristicHint = "architecture-review";
   else if (hasImplementationCue(normalizedPrompt)) bestHeuristicHint = sanitizeCodeGenerationIntent(prompt, "code-generation", "heuristic") ?? "general-text";
-  if (isLikelySafetySensitiveVisionPrompt(prompt, hasImages)) return { intent: "safety-sensitive-vision", preferredProvider: null };
-  if (hasImages && /\b(chart|trend|forecast|project|estimate)\b/i.test(normalizedPrompt)) return { intent: "multimodal-reasoning", preferredProvider: null };
-  if (hasVideoInput && /\b(chart|trend|forecast|project|estimate|timeline|sequence)\b/i.test(normalizedPrompt)) return { intent: "multimodal-reasoning", preferredProvider: null };
+  if (isLikelySafetySensitiveVisionPrompt(prompt, hasImages)) return resolved({ intent: "safety-sensitive-vision", preferredProvider: null }, "router-fallback");
+  if (hasImages && /\b(chart|trend|forecast|project|estimate)\b/i.test(normalizedPrompt)) return resolved({ intent: "multimodal-reasoning", preferredProvider: null }, "router-fallback");
+  if (hasVideoInput && /\b(chart|trend|forecast|project|estimate|timeline|sequence)\b/i.test(normalizedPrompt)) return resolved({ intent: "multimodal-reasoning", preferredProvider: null }, "router-fallback");
 
   const availableIntents: RequestIntent[] = [
     "general-text",
@@ -1179,25 +1191,35 @@ export async function inferRequestClassification(
     if (sanitizedClassifiedIntent === "social-emotional") {
       console.info("[Intent Source] social-emotional selected via control-plane classifier");
     }
-    return {
+    return resolved({
       intent: sanitizedClassifiedIntent,
       preferredProvider: classifiedOutput.preferred_provider,
       secondaryIntents: classifiedOutput.secondary_intents ?? [],
       complexity: classifiedOutput.complexity ?? null,
       providerRefusalRisk: classifiedOutput.provider_refusal_risk ?? null
-    };
+    }, "llm");
   }
 
-  if (hasImages) return { intent: "vision-analysis", preferredProvider: classifiedOutput.preferred_provider };
-  if (hasVideoInput) return { intent: "vision-analysis", preferredProvider: classifiedOutput.preferred_provider };
+  if (hasImages) return resolved({ intent: "vision-analysis", preferredProvider: classifiedOutput.preferred_provider }, "router-fallback");
+  if (hasVideoInput) return resolved({ intent: "vision-analysis", preferredProvider: classifiedOutput.preferred_provider }, "router-fallback");
   if (hasSocialEmotionalHint(prompt)) {
     console.info("[Intent Source] social-emotional selected via fallback heuristic");
-    return { intent: "social-emotional", preferredProvider: classifiedOutput.preferred_provider };
+    return resolved({ intent: "social-emotional", preferredProvider: classifiedOutput.preferred_provider }, "router-fallback");
   }
-  if (bestHeuristicHint) return { intent: bestHeuristicHint, preferredProvider: classifiedOutput.preferred_provider };
-  return { intent: "general-text", preferredProvider: classifiedOutput.preferred_provider };
+  if (bestHeuristicHint) return resolved({ intent: bestHeuristicHint, preferredProvider: classifiedOutput.preferred_provider }, "router-fallback");
+  return resolved({ intent: "general-text", preferredProvider: classifiedOutput.preferred_provider }, "router-fallback");
 }
 
+
+// Preserve the original API's result shape for callers that need only the
+// classification; the master router uses the source-aware variant.
+export async function inferRequestClassification(
+  prompt: string,
+  input: boolean | { hasImages: boolean; hasVideoInput?: boolean },
+  options?: ControlPlaneSelectionOptions
+): Promise<InferredRequestClassification> {
+  return (await inferRequestClassificationWithSource(prompt, input, options)).classification;
+}
 
 function modelSupportsIntent(
   providerName: ProviderName,
