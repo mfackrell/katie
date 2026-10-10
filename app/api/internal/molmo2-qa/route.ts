@@ -70,6 +70,17 @@ export async function GET(req:NextRequest){
   const {ep}=await discover();
   if(typeof ep?.id!=="string")return output({error:"endpoint_not_provisioned"},409);
   const endpoint=ep.id;
+  if(action==="worker_logs"){
+   const worker=req.nextUrl.searchParams.get("worker")||"";
+   if(!/^[a-z0-9]{6,25}$/.test(worker))return output({error:"invalid_worker"},400);
+   const url=API+"/serverless/"+endpoint+"/workers/"+worker+"/logs?source=system&tail=50";
+   const r=await fetch(url,{headers,cache:"no-store",signal:AbortSignal.timeout(18000)});
+   const raw=(await r.text()).slice(-18000);
+   const sanitized=raw.replace(/https?:\\/\\/[^\\s"'<>]+/gi,"[url]")
+    .replace(/Bearer\\s+[a-z0-9_-]+/gi,"Bearer [redacted]")
+    .replace(/token[=:][a-zA-Z0-9_-]{10,}/gi,"token=[redacted]");
+   return output({worker,http:r.status,log:sanitized.slice(-10000)},r.ok?200:502);
+  }
   if(action==="workers"){
    const r=await api("/serverless/"+endpoint+"/workers");
    const items=arr(r.data.workers).map(w=>({
