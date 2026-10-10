@@ -87,6 +87,17 @@ class Query {
     }
 
     let rows = this.state[this.table].filter((row) => this.matches(row));
+    // Supabase .upsert(...).select() returns only rows affected by that
+    // operation, not the first unrelated row in the entire table.
+    if (this.mode === "upsert" || this.mode === "insert") {
+      const submitted = Array.isArray(this.payload) ? this.payload : [this.payload ?? {}];
+      rows = rows.filter((row) => submitted.some((source) => {
+        if (source.id) return row.id === source.id;
+        if (source.actor_id && source.chat_id) return row.actor_id === source.actor_id && row.chat_id === source.chat_id;
+        if (source.actor_id) return row.actor_id === source.actor_id;
+        return false;
+      }));
+    }
 
     if (this.sort) {
       rows = [...rows].sort((a, b) => {
@@ -231,7 +242,7 @@ test("new chats see actor memory but begin with clean short and intermediate lay
  const two=await store.getChatContextState("a1","c2");
  const other=await store.getChatContextState("a2","c3");
  assert.deepEqual(two.longTermMemory,one.longTermMemory);
- assert.equal(one.shortTermMemory.content,"short", JSON.stringify(state.short_term_memory));
+ assert.equal(one.shortTermMemory.content,"short");
  assert.equal(one.intermediateMemory.summary,"intermediate");
  assert.deepEqual(two.shortTermMemory,{});
  assert.deepEqual(two.intermediateMemory,{});
