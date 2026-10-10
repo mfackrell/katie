@@ -94,6 +94,19 @@ export async function GET(req:NextRequest){
        .filter(([k])=>["MODEL_NAME","MAX_MODEL_LEN","MAX_NUM_SEQS","GPU_MEMORY_UTILIZATION",
        "ENFORCE_EAGER","TRUST_REMOTE_CODE"].includes(k)))},patch.ok?200:502);
   }
+  if(action==="force_trust"){
+   if(ep.id!=="t52dzwlfimvchg"||ep.name!==NAME)return output({error:"endpoint_mismatch"},409);
+   const t=await api("/templates/lwdc2qpy4l");
+   if(!t.ok||t.data.id!=="lwdc2qpy4l"||obj(t.data.env).MODEL_NAME!==MODEL)
+    return output({error:"template_verification_failed"},409);
+   const env={...obj(t.data.env),TRUST_REMOTE_CODE:"true",VLLM_EXTRA_ARGS:"--trust-remote-code"};
+   const changed=await api("/templates/lwdc2qpy4l","PATCH",{env});
+   if(!changed.ok)return output({error:"template_update_failed",http:changed.status},502);
+   const released=await api("/serverless/"+endpoint,"PATCH",{templateId:"lwdc2qpy4l"});
+   return output({action,templateUpdated:changed.ok,endpointUpdated:released.ok,
+    endpointHttp:released.status,trustRemoteCode:obj(changed.data.env).TRUST_REMOTE_CODE=== "true",
+    explicitCliFlag:obj(changed.data.env).VLLM_EXTRA_ARGS=== "--trust-remote-code"},released.ok?200:502);
+  }
   if(action==="apply_release"){
    if(ep.id!=="t52dzwlfimvchg"||ep.name!==NAME)return output({error:"endpoint_mismatch"},409);
    const t=await api("/templates/lwdc2qpy4l");
