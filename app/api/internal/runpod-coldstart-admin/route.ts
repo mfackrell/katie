@@ -31,6 +31,18 @@ export async function GET(request:NextRequest){
  ]);
  return NextResponse.json({action,v1,v2,health:{http:health.http,data:health.data}});
  }
+ if(action==="template"){
+  const url="https://rest.runpod.io/v1/templates/ykwdli9yfb";
+  const r=await fetch(url,{headers:{Authorization:"Bearer "+key},cache:"no-store",signal:AbortSignal.timeout(14000)});
+  const d=await r.json().catch(()=>({}));
+  const env=(d?.env&&typeof d.env==="object")?d.env:{};
+  return NextResponse.json({action,http:r.status,id:d.id??null,name:d.name??null,imageName:d.imageName??null,
+   envNames:Object.keys(env),safeEnv:Object.fromEntries(Object.entries(env).filter(([k])=>
+    ["MODEL_NAME","MODEL_ID","MAX_NUM_SEQS","COMPILATION_CONFIG","SAFETENSORS_LOAD_STRATEGY","VLLM_CACHE_ROOT",
+      "GPU_MEMORY_UTILIZATION","TENSOR_PARALLEL_SIZE","MAX_MODEL_LEN","HF_HUB_OFFLINE"].includes(k))),
+   containerDiskInGb:d.containerDiskInGb??null,volumeInGb:d.volumeInGb??null
+  });
+ }
  if(action==="tune"){
   const patch={scalerType:"REQUEST_COUNT",scalerValue:1,idleTimeout:300,flashboot:true};
   const r=await fetch("https://rest.runpod.io/v1/endpoints/"+ID,{
