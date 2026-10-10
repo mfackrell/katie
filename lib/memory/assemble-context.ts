@@ -51,7 +51,7 @@ export async function assembleContext(actorId: string, chatId: string): Promise<
     "reference documents, and generalizations. Never revive a superseded detail.",
     ...authoritativeCorrections.map(entry => `CORRECTION ${entry.key}: ${entry.value}`),
     "END_AUTHORITATIVE_ACTOR_MEMORY_CORRECTIONS",
-  ].join("\\n");
+  ].join("\n");
 
   const longTermBlock = Object.keys(longTermMemory).length
     ? `LONG_TERM_MEMORY:\n${JSON.stringify(longTermMemory)}\nEND_LONG_TERM_MEMORY`
