@@ -4,7 +4,7 @@ import {
   chooseRoutingWithLLM,
   CandidateScoreBreakdown,
   filterCandidatesForIntent,
-  inferRequestClassification,
+  inferRequestClassificationWithSource,
   inferRequestIntent,
   LlmRoutingResult,
   ProviderRefusalRisk,
@@ -743,12 +743,13 @@ export async function chooseProvider(
     ? { intent: options.requestIntent, preferredProvider: null, intentSource: "upstream" as const }
     : null);
 
-  let requestClassification: Awaited<ReturnType<typeof inferRequestClassification>> | null = null;
+  let requestClassification: Awaited<ReturnType<typeof inferRequestClassificationWithSource>>["classification"] | null = null;
+  let classificationSource: "llm" | "router-fallback" | null = null;
   let intentAuthority: RoutingDecision["authority"] = upstreamResolvedIntent ? "override" : "llm";
   let intentResolutionReason = upstreamResolvedIntent ? "upstream-lock" : "chosen-by-llm";
   if (!upstreamResolvedIntent) {
     try {
-      requestClassification = await inferRequestClassification(
+      const classified = await inferRequestClassificationWithSource(
         prompt,
         {
           hasImages: Boolean(options?.hasImages),
@@ -762,6 +763,12 @@ export async function chooseProvider(
           requestId: traceRequestId
         }
       );
+      requestClassification = classified.classification;
+      classificationSource = classified.source;
+      if (classificationSource === "router-fallback") {
+        intentAuthority = "heuristic";
+        intentResolutionReason = "control-plane-unavailable-used-local-classifier";
+      }
     } catch (error) {
       console.warn(`[Route Intent] classifier_failed requestId=${traceRequestId}`, error);
       intentAuthority = "fallback";
@@ -772,14 +779,22 @@ export async function chooseProvider(
     .filter((hint) => Boolean(hint.hintIntent))
     .sort((a, b) => (b.hintConfidence ?? 0) - (a.hintConfidence ?? 0))[0];
   const resolvedIntent: ResolvedRoutingIntent = upstreamResolvedIntent ?? (requestClassification
-    ? {
-        intent: requestClassification.intent,
-        preferredProvider: requestClassification.preferredProvider ?? null,
-        intentSource: "llm",
-        secondaryIntents: requestClassification.secondaryIntents ?? [],
-        complexity: requestClassification.complexity ?? null,
-        providerRefusalRisk: requestClassification.providerRefusalRisk ?? null
-      }
+    ? classificationSource === "llm"
+      ? {
+          intent: requestClassification.intent,
+          preferredProvider: requestClassification.preferredProvider ?? null,
+          intentSource: "llm",
+          secondaryIntents: requestClassification.secondaryIntents ?? [],
+          complexity: requestClassification.complexity ?? null,
+          providerRefusalRisk: requestClassification.providerRefusalRisk ?? null
+        }
+      : {
+          // Local classification is a deliberate router fallback, never an
+          // LLM decision. Keep the same minimal contract as upstream intents.
+          intent: requestClassification.intent,
+          preferredProvider: requestClassification.preferredProvider ?? null,
+          intentSource: "router-fallback"
+        }
     : bestHint?.hintIntent
       ? {
           intent: bestHint.hintIntent,
