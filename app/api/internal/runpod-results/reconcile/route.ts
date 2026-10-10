@@ -18,7 +18,7 @@ export async function GET(request:NextRequest){
       .in("status",[...ACTIVE_RUNPOD_STATES])
       .order("submitted_at",{ascending:true}).limit(30);
     if(error)throw new Error("reconciliation database read failed");
-    const rows=data ?? [];
+    const rows=(data ?? []) as Array<{id:string;runpod_job_id:string|null;status:string;submitted_at:string}>;
     let checked=0,saved=0,failed=0;
     for(const row of rows){
       if(!row.runpod_job_id){
