@@ -481,7 +481,7 @@ ${getKatieReasoningExplainerStatement()}` }
         await params.onProviderSystemPrepared?.({
           provider: "grok", model: selectedModel, endpoint: "/v1/responses",
           systemMessages: input.filter(entry => entry.role === "system")
-            .map(entry => entry.content.map(part => part.text ?? "").join("")),
+            .map(entry => entry.content.map(part => part.type === "input_text" ? part.text : "").join("")),
         });
         const response = await this.createWebSearchResponse(selectedModel, input);
 
