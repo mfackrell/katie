@@ -24,9 +24,9 @@ export async function GET() {
   return NextResponse.json({
     templateStatus:templates.code,
     templateCount:models.length,
-    templates:models.slice(0,15).map((x:Record<string,any>)=>({id:x.id,name:x.name,image:x.image,serverless:x.serverless})),
+    templates:models.slice(0,15).map((x:Record<string,unknown>)=>({id:x.id,name:x.name,image:x.image,serverless:x.serverless})),
     gpuStatus:gpus.code,
     gpuCount:inventory.length,
-    gpuTypes:inventory.filter((x:Record<string,any>)=>/A6000|A40|L40|A100|H100|4090|5090|RTX 6000/i.test(String(x.name||x.displayName||x.id||""))).slice(0,25).map((x:Record<string,any>)=>({id:x.id,name:x.name||x.displayName,memory:x.memoryInGb||x.memoryInGB||x.memoryGb}))
+    gpuTypes:inventory.filter((x:Record<string,unknown>)=>/A6000|A40|L40|A100|H100|4090|5090|RTX 6000/i.test(String(x.name||x.displayName||x.id||""))).slice(0,25).map((x:Record<string,unknown>)=>({id:x.id,name:x.name||x.displayName,memory:x.memoryInGb||x.memoryInGB||x.memoryGb}))
   });
 }
