@@ -100,11 +100,11 @@ The tests generate a synthetic color-pattern video and call `process_video` with
 ## How to deploy *after* access to RunPod is available
 
 1. **Confirm your RunPod account's written authorization covers the intended deployment and media.** The worker does not check those authorization documents.
-2. Use the existing `mfackrell/katie` repository branch `feature/runpod-video-worker`. RunPod must build with **context `services/runpod-video-worker`**, not the Next.js repository root. Do not put RunPod credentials in GitHub source.
-3. Build an `linux/amd64` Docker image from the worker subdirectory and push it to a container registry. GitHub-origin builds are suitable only when the RunPod integration can select that subdirectory as the build context. From the **Katie repository root**, run:
+2. Use the existing `mfackrell/katie` repository branch `feature/runpod-video-worker`. The Dockerfile at `services/runpod-video-worker/Dockerfile` uses `COPY services/runpod-video-worker/...`, so the Docker **build context must be the repository root (`.`)**, not `services/runpod-video-worker`. Set the Dockerfile path separately. Do not put RunPod credentials in GitHub source.
+3. Build an `linux/amd64` Docker image with the **Katie repository root as Docker build context** and the worker Dockerfile path, then push to a container registry. GitHub-origin builds must support selecting a Dockerfile in a subdirectory while using the repository root as build context. From the **Katie repository root**, run:
 
    ```bash
-   docker build --platform linux/amd64 -f services/runpod-video-worker/Dockerfile -t YOUR_REGISTRY/katie-video-worker:v0.1.0 services/runpod-video-worker
+   docker build --platform linux/amd64 -f services/runpod-video-worker/Dockerfile -t YOUR_REGISTRY/katie-video-worker:v0.1.0 .
    docker push YOUR_REGISTRY/katie-video-worker:v0.1.0
    ```
 
