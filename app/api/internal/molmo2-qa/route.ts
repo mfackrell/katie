@@ -83,7 +83,7 @@ export async function GET(req:NextRequest){
    if(config.id!=="lwdc2qpy4l"||config.name!==NAME||
       env.MODEL_NAME!==MODEL||ep.templateId!==config.id)
       return output({error:"unexpected_template_or_endpoint"},409);
-   const newEnv={...env,MAX_MODEL_LEN:"4096",MAX_NUM_SEQS:"1",
+   const newEnv:JsonObject={...env,MAX_MODEL_LEN:"4096",MAX_NUM_SEQS:"1",
       GPU_MEMORY_UTILIZATION:"0.85",ENFORCE_EAGER:"true"};
    delete newEnv.SAFETENSORS_LOAD_STRATEGY;
    const patch=await api("/templates/lwdc2qpy4l","PATCH",
