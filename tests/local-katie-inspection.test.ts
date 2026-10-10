@@ -71,3 +71,24 @@ test("explicit memory write and correction requests are never mistaken for inspe
  assert.equal(isExplicitMemoryCorrection("Correct the incorrect value in your long term memory"),true);
  assert.equal(isExplicitMemoryMutation("Show me your long-term memory"),false);
 });
+
+test("natural clarification commands are routed to guaranteed memory writes", () => {
+  const exactUserMessage = `we need to clarify one point in your long term memory. re the global PE backed professional services engagement:
+  Mark led the accounting recovery through the accounting team. He personally performed relatively little underlying transaction-level work.`;
+  for (const message of [
+    exactUserMessage,
+    "Please clarify this information in your long term memory.",
+    "I need to amend something in your saved memory",
+    "Refine the facts you have remembered about my former role",
+    "I want to reframe a statement in your memory",
+    "Update what you remember: I led the recovery, not the entries",
+  ]) {
+    assert.equal(isExplicitMemoryCorrection(message), true, message);
+    assert.equal(isExplicitMemoryMutation(message), true, message);
+  }
+  for (const message of [
+    "What is your memory?",
+    "Show me the long term memory component",
+    "Please clarify what you mean by memory architecture",
+  ]) assert.equal(isExplicitMemoryCorrection(message), false, message);
+});
