@@ -76,9 +76,8 @@ export async function GET(req:NextRequest){
    const url=API+"/serverless/"+endpoint+"/workers/"+worker+"/logs?source=system&tail=50";
    const r=await fetch(url,{headers,cache:"no-store",signal:AbortSignal.timeout(18000)});
    const raw=(await r.text()).slice(-18000);
-   const sanitized=raw.replace(/https?:\\/\\/[^\\s"'<>]+/gi,"[url]")
-    .replace(/Bearer\\s+[a-z0-9_-]+/gi,"Bearer [redacted]")
-    .replace(/token[=:][a-zA-Z0-9_-]{10,}/gi,"token=[redacted]");
+   const sanitized=raw.replace(new RegExp("https?://[^\\s]+","gi"),"[url]")
+    .replace(new RegExp("Bearer\\s+\\S+","gi"),"Bearer [redacted]");
    return output({worker,http:r.status,log:sanitized.slice(-10000)},r.ok?200:502);
   }
   if(action==="workers"){
