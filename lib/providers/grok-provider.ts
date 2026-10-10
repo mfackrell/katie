@@ -478,6 +478,11 @@ ${getKatieReasoningExplainerStatement()}` }
 
       if (isWebSearchIntent(params.requestIntent)) {
         const input = this.buildWebSearchInput(params, attachmentContext);
+        await params.onProviderSystemPrepared?.({
+          provider: "grok", model: selectedModel, endpoint: "/v1/responses",
+          systemMessages: input.filter(entry => entry.role === "system")
+            .map(entry => entry.content.map(part => part.text ?? "").join("")),
+        });
         const response = await this.createWebSearchResponse(selectedModel, input);
 
         const text = extractResponseText(response);
@@ -516,6 +521,11 @@ ${getKatieReasoningExplainerStatement()}` }
           endpoint: "/chat/completions",
         });
       }
+      await params.onProviderSystemPrepared?.({
+        provider: "grok", model: selectedModel, endpoint: "/v1/chat/completions",
+        systemMessages: messages.filter(entry => entry.role === "system")
+          .map(entry => typeof entry.content === "string" ? entry.content : JSON.stringify(entry.content)),
+      });
       const completion = await this.client.chat.completions.create({
         model: selectedModel,
         messages
