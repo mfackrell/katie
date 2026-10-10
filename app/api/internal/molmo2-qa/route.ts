@@ -70,6 +70,15 @@ export async function GET(req:NextRequest){
   const {ep}=await discover();
   if(typeof ep?.id!=="string")return output({error:"endpoint_not_provisioned"},409);
   const endpoint=ep.id;
+  if(action==="workers"){
+   const r=await api("/serverless/"+endpoint+"/workers");
+   const items=arr(r.data.workers).map(w=>({
+      id:w.id??null,status:w.status??null,version:w.version??null,
+      startedAt:w.startedAt??null,uptimeSeconds:w.uptimeSeconds??null,
+      errorCode:w.errorCode??null
+   }));
+   return output({http:r.status,endpoint,count:items.length,summary:r.data.summary??null,workers:items},r.ok?200:502);
+  }
   if(action==="submit"){
    const payload={input:{route:"/v1/chat/completions",method:"POST",body:{
     model:MODEL,temperature:0,max_tokens:450,messages:[{role:"user",content:[
