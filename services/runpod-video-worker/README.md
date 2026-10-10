@@ -1,17 +1,18 @@
 # Standalone RunPod video-analysis worker for Katie (future integration)
 
-**Status:** Standalone worker; local test suite available. **NOT deployed to RunPod; NOT GPU-tested; NOT connected to Katie.**
+**Status:** Native-video Qwen3-VL worker prepared for deployment, CPU tests available. **NOT deployed to RunPod; NOT GPU-tested; NOT connected to Katie.**
 This standalone service lives under `services/runpod-video-worker/` on the `feature/runpod-video-worker` branch of `mfackrell/katie`. The existing Katie application code, Supabase database, and production Vercel configuration are untouched.
 
 ## What this service does
 
-A queue-based RunPod Serverless Python worker accepts a private video by a short-lived signed URL, checks file and duration limits, samples up to 48 timestamped frames from any FFmpeg-decodable video container (including MP4, MOV, MKV, AVI, TS and WebM), runs Qwen2.5-VL-7B-Instruct to describe segments and summarize them, optionally transcribes speech with `faster-whisper` (CPU), and returns a structured JSON result. Video bytes, private frames, and signed tokens are not included in the response. The worker never writes to Katie's database or storage.
+A queue-based RunPod Serverless Python worker accepts the ORIGINAL private video by a short-lived signed URL, validates it with FFprobe, and submits it as a single native `type: "video"` content item to Qwen3-VL-8B-Instruct for temporal video understanding. It does **not** extract JPEG frames or send a frame-by-frame image list to an LLM. Qwen's video processor internally selects visual tokens at a bounded temporal rate; it does not guarantee literal interpretation of every original video frame. Optional CPU speech transcription uses `faster-whisper`. The worker returns a structured JSON result. Video bytes, private frames, and signed tokens are not included in the response. The worker never writes to Katie's database or storage.
 
 **Adult-content handling:** The worker has **no adult-content-specific input restriction, attestation requirement, or classification block**. It can analyze lawful adult videos to the extent the deployed model is capable. You have stated that your RunPod account has written permission for this use; ensure the specific deployment and activity fall within that written authorization before submitting any material. The worker does not verify account-level permission or independently determine age, consent, ownership, or legality. It does not bypass any restrictions applied by the vision model itself.
 
 ## What is built
 
-- `src/worker.py`: working RunPod SDK handler, private-source download guard, FFmpeg video probing/decoding, frame sampling, Qwen2.5-VL model inference, optional Whisper audio, and structured JSON.
+- `src/native_video_worker.py`: **active RunPod entrypoint**, which validates signed private videos, passes the original source directly into Qwen3-VL's native video processor, and returns temporally grounded analysis; no JPEG extraction or image-list forwarding.
+- `src/worker.py`: pre-existing helpers for signed URL validation, bounded streaming download, FFprobe and optional Whisper audio. The previous JPEG-sampling analyzer remains for regression reference but is **not invoked by the production Docker entrypoint**.
 - `Dockerfile`: NVIDIA-compatible PyTorch/CUDA base with system FFmpeg.
 - `tests/`: unit and end-to-end CPU tests using synthetic non-sensitive videos and a fake inference model; no GPU/download needed.
 - `examples/input.json`: standalone request contract (values are placeholders).
@@ -20,7 +21,7 @@ A queue-based RunPod Serverless Python worker accepts a private video by a short
 
 ## Format acceptance and adult-content configuration
 
-The worker has **no filename-extension, provider, or video-MIME allowlist**: it detects and analyzes video based on its actual decodable streams. MP4, MOV, MKV, AVI, MPEG-TS and WebM were verified by local tests. Other formats should work when their codec is supported by the deployed FFmpeg; this is not a claim that every possible container/codec on Earth is supported. File size is limited to 200 MiB, video duration to 600 seconds, and analysis to 48 frames.
+The worker has **no filename-extension, provider, or video-MIME allowlist**: it detects and analyzes video based on its actual decodable streams. MP4, MOV, MKV, AVI, MPEG-TS and WebM were verified by local tests. Other formats should work when their codec is supported by the deployed FFmpeg; this is not a claim that every possible container/codec on Earth is supported. File size is limited to 200 MiB and video duration to 600 seconds. Qwen3-VL internally selects video tokens over the **full original file** at a dynamic rate, at most 2 frames per second and approximately 192 visual samples over the video timeline. This is native video input, not lossless every-frame perception.
 
 **No adult-content gate is installed:** `content_policy_confirmed` is no longer part of the request schema. Older clients may still send it, but the worker ignores it. There are no keyword filters or pornographic-content detection/denial rules in the worker. Treat this as a content-neutral processing API, not a certification that any particular video is legal, consensual, or within an account's authorization. Security controls on private signed storage URLs and bounded media processing remain.
 
@@ -45,7 +46,7 @@ The template deliberately uses `RUNPOD_API_KEY=REPLACE_WITH_YOUR_RUNPOD_API_KEY`
 The worker includes two safe, self-contained operations:
 
 - `{"input":{"operation":"health"}}` checks FFmpeg and FFprobe availability and reports limits without loading the GPU model.
-- `{"input":{"operation":"self_test"}}` generates a harmless 3-second test-pattern video inside the worker and runs it through actual FFmpeg decoding and **real GPU vision inference**. This operation does not require any video upload or Supabase account access, so it should be the first remote end-to-end test.
+- `{"input":{"operation":"self_test"}}` generates a harmless test-pattern video inside the worker and supplies the original MP4 as a **video content item** for real Qwen3-VL GPU video inference. This operation does not require any video upload or Supabase account access, so it should be the first remote end-to-end test.
 
 Submit either operation to the RunPod `/run` endpoint or use the smoke client:
 
@@ -70,7 +71,7 @@ When deployed as a RunPod **queue-based** Serverless endpoint, submit `POST /run
     "attachment_id": "example-123",
     "source_url": "https://YOUR_PROJECT.supabase.co/storage/v1/object/sign/katie-attachments/chats/CHAT_ID/FILE_ID.source?token=SIGNED_TOKEN",
     "max_duration_seconds": 300,
-    "max_frames": 32,
+    "question": "Explain the events in the video in chronological order.",
     "transcribe_audio": false,
     "expected_sha256": "OPTIONAL_64_CHAR_LOWERCASE_HEX_SHA256"
   }
@@ -79,7 +80,7 @@ When deployed as a RunPod **queue-based** Serverless endpoint, submit `POST /run
 
 Delete `expected_sha256` entirely if unknown. URLs **must** be HTTPS, include a valid Supabase signed token, and reside in the configured `katie-attachments` private bucket. The worker does not accept URLs from arbitrary domains, public buckets, redirect targets, or credentials in URLs. Do not log the signed URL.
 
-A completed response returns `status`, `schema_version`, `attachment_id`, `sha256`, `model`, `duration_seconds`, `dimensions`, `frames_sampled`, `frame_timestamps_seconds`, `coverage: "sampled"`, `summary`, `segments`, `audio`, `limitations`, and `processing_seconds`.
+A completed native-video response returns `status`, `schema_version: "2.0"`, `attachment_id`, `sha256`, `model`, `analysis_mode: "native_video"`, `duration_seconds`, `dimensions`, `coverage: "video_with_temporal_sampling"`, `internal_video_processing_fps`, `analysis`, `summary`, `audio`, `limitations`, and `processing_seconds`. It does NOT return JPEG frame lists or per-frame captions.
 
 Errors return `status: "rejected" | "failed"` with a fixed error code. Integration code must check `output.status` **even when RunPod reports its job as COMPLETED**.
 
@@ -113,7 +114,7 @@ The tests generate a synthetic color-pattern video and call `process_video` with
 
    ```text
    ALLOWED_STORAGE_HOST=YOUR_PROJECT.supabase.co
-   VISION_MODEL=Qwen/Qwen2.5-VL-7B-Instruct
+   VISION_MODEL=Qwen/Qwen3-VL-8B-Instruct
    WHISPER_MODEL=small
    LOG_LEVEL=INFO
    ```
@@ -135,7 +136,7 @@ RunPod API instructions: https://docs.runpod.io/serverless/quickstart and https:
 
 ## Expanded synthetic-media QA (2026-10-09)
 
-The worker is validated locally with a fake analyzer, actual FFmpeg decoding, simulated private HTTPS downloads and fault injection. Checks cover modern H.264/HEVC/VP9 codecs, broken video, absent audio/video, 16 kHz audio extraction, optional transcription wiring (Whisper inference mocked), chronological sampling, concurrent temporary-file isolation, HTTP 401/403/429/500 failures, SHA-256 verification, request validation and signed-URL redaction. A reported bug that logged raw exception tracebacks (including possible signed tokens) was fixed; health now reports `unhealthy` when FFmpeg binaries are missing.
+The original frame-based pipeline was validated locally with a fake analyzer, actual FFmpeg decoding, simulated private HTTPS downloads and fault injection. The new native-video entrypoint has a separate isolated CPU contract suite; **it is not GPU-tested yet**. Checks cover modern H.264/HEVC/VP9 codecs, broken video, absent audio/video, 16 kHz audio extraction, optional transcription wiring (Whisper inference mocked), chronological sampling, concurrent temporary-file isolation, HTTP 401/403/429/500 failures, SHA-256 verification, request validation and signed-URL redaction. A reported bug that logged raw exception tracebacks (including possible signed tokens) was fixed; health now reports `unhealthy` when FFmpeg binaries are missing.
 
 Run the branch CI workflow `.github/workflows/runpod-video-worker-qa.yml` and/or run:
 ```bash
@@ -152,7 +153,7 @@ python -m compileall -q src scripts tests
 - RunPod receives a temporary URL to the original video; signed URLs are bearer credentials until expiration. Use a private bucket, short lifetimes, least-privilege service credentials on the signing side, and do not include tokens in logs.
 - Queue payloads may be retained in provider control planes according to their policies; do not assume they are private solely because the storage bucket is private.
 - FFmpeg processes video only in a temporary worker directory that is deleted after every job.
-- Sampling does **not** provide continuous tracking of every video frame. Results explicitly say sampled and list the timestamps used.
+- The native video-aware model sees an MP4 as video input with video timestamps. Its internal tokenizer still performs temporal sampling and cannot guarantee continuous tracking of every original frame. It must not be described as literal exhaustive every-frame observation.
 - Inference can be inaccurate; it must not be relied upon to determine identity, legal age, consent, or events not present in sampled frames.
 - The worker's generated summary is not a raw source of truth; Katie should retain the original video and only cite claims supported by actual analyzed evidence.
 - There is no webhook that can update Katie. Nothing in this service writes to `public.messages` or other Katie tables.
@@ -164,3 +165,9 @@ python -m compileall -q src scripts tests
 - No Supabase migrations, new buckets, or database writes.
 - No Vercel environment variable additions, routes, or deployments.
 - No RunPod infrastructure charges or endpoint creation: **this session has no connected RunPod account/credential or Docker builder, so remote provisioning and remote tests are outstanding.**
+
+## Native video implementation (2026-10-10)
+
+The active container command is `python -m src.native_video_worker`. Unlike `src.worker`, the active implementation sends the **original file URI as a video item** into Qwen3-VL's multimodal processor and requests one unified temporal explanation. It does not extract or forward JPEG frames to the model. Qwen3-VL performs its own internal frame/token processing; even a native-video model cannot honestly promise to inspect every original frame in an arbitrarily long clip. Optional speech transcription is separate from visual understanding.
+
+**Acceptance gate before changing Katie:** provision a serverless GPU endpoint; obtain an actual endpoint ID; verify remote `health`; run remote `self_test` and verify `analysis_mode=native_video` plus Qwen3-VL GPU inference; run representative original video files through signed Supabase storage; benchmark cold starts and quality. **Do not change Katie's Gemini→Grok wiring before those tests pass.**
