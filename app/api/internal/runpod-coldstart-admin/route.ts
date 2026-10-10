@@ -31,6 +31,18 @@ export async function GET(request:NextRequest){
  ]);
  return NextResponse.json({action,v1,v2,health:{http:health.http,data:health.data}});
  }
+ if(action==="workers"){
+  const r=await fetch("https://api.runpod.io/v2/serverless/"+ID+"/workers",{
+   headers:{Authorization:"Bearer "+key},cache:"no-store",signal:AbortSignal.timeout(15000)
+  });
+  const d=await r.json().catch(()=>({}));const list=Array.isArray(d?.workers)?d.workers:[];
+  const cleaned=list.map((w:Record<string,unknown>)=>{
+   const o:Record<string,unknown>={};for(const k of ["id","workerId","status","desiredStatus","createdAt",
+   "startedAt","updatedAt","uptimeSeconds","workerState","exitCode","errorCode","isReady","version"])
+     if(w[k]!==undefined)o[k]=w[k];return o;
+  });
+  return NextResponse.json({action,http:r.status,summary:d?.summary??null,count:cleaned.length,workers:cleaned});
+ }
  if(action==="template"){
   const url="https://api.runpod.io/v2/templates/ykwdli9yfb";
   const r=await fetch(url,{headers:{Authorization:"Bearer "+key},cache:"no-store",signal:AbortSignal.timeout(14000)});
