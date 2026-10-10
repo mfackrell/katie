@@ -72,6 +72,16 @@ export async function GET(request:NextRequest){
    containerDiskInGb:d.containerDiskInGb??null,volumeInGb:d.volumeInGb??null
   });
  }
+ if(action==="idle_test"||action==="idle_normal"){
+ const timeout=action==="idle_test"?15:300;
+ const r=await fetch("https://rest.runpod.io/v1/endpoints/"+ID,{
+  method:"PATCH",headers:{Authorization:"Bearer "+key,"content-type":"application/json"},
+  body:JSON.stringify({idleTimeout:timeout}),signal:AbortSignal.timeout(15000)
+ });
+ const d=await r.json().catch(()=>({}));
+ return NextResponse.json({action,http:r.status,timeoutConfirmed:d.id===ID?d.idleTimeout:null,
+  workerMin:d.workersMin??null,flashboot:d.flashboot??null},{status:r.ok?200:502});
+ }
  if(action==="tune"){
   const patch={scalerType:"REQUEST_COUNT",scalerValue:1,idleTimeout:300,flashboot:true};
   const r=await fetch("https://rest.runpod.io/v1/endpoints/"+ID,{
