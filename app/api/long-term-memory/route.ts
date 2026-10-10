@@ -1,35 +1,39 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { getLongTermMemory } from "@/lib/data/persistence-store";
+import { getActorById, getLongTermMemory, setLongTermMemory, listActorMemoryDocuments } from "@/lib/data/persistence-store";
 
-const paramsSchema = z.object({
-  actorId: z.string().min(1),
-  chatId: z.string().min(1)
+const paramsSchema = z.object({ actorId: z.string().uuid(), chatId: z.string().uuid().optional() });
+const editSchema = z.object({
+  actorId: z.string().uuid(),
+  content: z.object({ version: z.literal(3), purpose: z.string(), entries: z.array(z.object({
+    key: z.string().min(1), category: z.enum(["fact","preference","relationship","goal","decision","constraint","pattern"]),
+    value: z.string().min(1), source: z.enum(["user-stated","assistant-inference"]),
+    confidence: z.enum(["high","medium","low"]), evidenceMessageIds: z.array(z.string()).optional(),
+    lastConfirmedAt: z.string().optional()
+  })) })
 });
-
 export async function GET(request: NextRequest) {
   try {
-    const { actorId, chatId } = paramsSchema.parse({
+    const { actorId } = paramsSchema.parse({
       actorId: request.nextUrl.searchParams.get("actorId"),
-      chatId: request.nextUrl.searchParams.get("chatId")
+      chatId: request.nextUrl.searchParams.get("chatId") ?? undefined,
     });
-
-    const content = await getLongTermMemory(actorId, chatId);
-
-    return NextResponse.json(
-      {
-        actorId,
-        chatId,
-        content
-      },
-      { headers: { "Cache-Control": "no-cache" } }
-    );
-  } catch (error: unknown) {
-    if (error instanceof z.ZodError) {
-      return NextResponse.json({ error: "Invalid actorId/chatId" }, { status: 400 });
-    }
-
-    const message = error instanceof Error ? error.message : "Unknown persistence error";
-    return NextResponse.json({ error: message }, { status: 500 });
+    if (!await getActorById(actorId)) return NextResponse.json({ error: "Actor not found" }, { status: 404 });
+    const [content, documents] = await Promise.all([getLongTermMemory(actorId, ""), listActorMemoryDocuments(actorId)]);
+    return NextResponse.json({ actorId, scope: "actor", content, documents },
+      { headers: { "Cache-Control": "no-store" } });
+  } catch (error) {
+    return NextResponse.json({ error: error instanceof z.ZodError ? "Invalid request" : String(error) }, { status: 400 });
+  }
+}
+export async function PATCH(request: NextRequest) {
+  try {
+    const { actorId, content } = editSchema.parse(await request.json());
+    if (!await getActorById(actorId)) return NextResponse.json({ error: "Actor not found" }, { status: 404 });
+    await setLongTermMemory(actorId, "", content);
+    return NextResponse.json({ actorId, saved: true, content: await getLongTermMemory(actorId, "") });
+  } catch (error) {
+    return NextResponse.json({ saved: false, error: error instanceof Error ? error.message : "Unknown error" },
+      { status: error instanceof z.ZodError ? 400 : 500 });
   }
 }
