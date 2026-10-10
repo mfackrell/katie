@@ -1,0 +1,56 @@
+import {NextRequest,NextResponse} from "next/server";
+export const runtime="nodejs";export const dynamic="force-dynamic";export const maxDuration=50;
+const ID="yafwsm98e8m9lv";
+const FIELDS=["id","name","workersMin","workersMax","idleTimeout","scalerType","scalerValue","flashBootType","gpuTypeIds","gpuIds","gpuCount","networkVolumeId","templateId","activeWorkers","maxWorkers","gpuType","type","locations","gpuPoolIds","scaling"];
+function clean(d:unknown){
+ if(!d||typeof d!=="object")return null;
+ const x=d as Record<string,unknown>, out:Record<string,unknown>={};
+ for(const k of FIELDS)if(k in x)out[k]=x[k];
+ for(const k of ["workers","gpu","flashboot","networkVolume","endpoint"])if(x[k]&&typeof x[k]==="object"){
+ const v=x[k] as Record<string,unknown>, small:Record<string,unknown>={};
+ for(const s of ["min","max","idleTimeout","count","pools","excludedTypes","type","queueDelay","requestCount","id","size","flashboot"])if(s in v)small[s]=v[s];
+ out[k]=small;
+ }
+ return out;
+}
+async function read(url:string,key:string){
+ const r=await fetch(url,{headers:{Authorization:"Bearer "+key},cache:"no-store",signal:AbortSignal.timeout(12000)});
+ const d=await r.json().catch(()=>({}));
+ return {http:r.status,data:clean(d),topLevelKeys:d&&typeof d==="object"?Object.keys(d).filter(k=>!/env|secret|key|token/i.test(k)).slice(0,35):[]};
+}
+export async function GET(request:NextRequest){
+ if(process.env.VERCEL_ENV!=="preview")return NextResponse.json({error:"preview_only"},{status:403});
+ const key=process.env.RUNPOD_API_KEY;if(!key)return NextResponse.json({error:"key_unavailable"},{status:503});
+ const action=request.nextUrl.searchParams.get("action")||"inspect";
+ try{
+ if(action==="inspect"){
+ const [v1,v2,health]=await Promise.all([
+ read("https://rest.runpod.io/v1/endpoints/"+ID,key),
+ read("https://api.runpod.io/v2/serverless/"+ID,key),
+ read("https://api.runpod.ai/v2/"+ID+"/health",key)
+ ]);
+ return NextResponse.json({action,v1,v2,health:{http:health.http,data:health.data}});
+ }
+ if(action==="benchmark"){
+ const now=Date.now();
+ const body={input:{route:"/v1/chat/completions",method:"POST",body:{
+ model:"Qwen/Qwen3-VL-8B-Instruct",max_tokens:32,temperature:0,
+ messages:[{role:"user",content:"Reply with exactly: warm worker validation"}]
+ }}};
+ const r=await fetch("https://api.runpod.ai/v2/"+ID+"/run",{
+ method:"POST",headers:{"Authorization":"Bearer "+key,"content-type":"application/json"},
+ body:JSON.stringify(body),signal:AbortSignal.timeout(18000)
+ });
+ const data=await r.json().catch(()=>({}));
+ return NextResponse.json({action,http:r.status,id:data.id||null,status:data.status||null,submittedAt:now});
+ }
+ if(action==="job"){
+ const id=request.nextUrl.searchParams.get("id")||"";
+ if(!/^[a-zA-Z0-9-]{10,150}$/.test(id))return NextResponse.json({error:"bad_job"}, {status:400});
+ const r=await fetch("https://api.runpod.ai/v2/"+ID+"/status/"+id,{headers:{Authorization:"Bearer "+key},cache:"no-store",signal:AbortSignal.timeout(15000)});
+ const d=await r.json().catch(()=>({}));
+ return NextResponse.json({http:r.status,id:d.id??null,status:d.status??null,delayTime:d.delayTime??null,executionTime:d.executionTime??null,outputPresent:Boolean(d.output),errorCode:d.error?.code??null});
+ }
+ return NextResponse.json({error:"unknown_action"},{status:400});
+ }catch(e){return NextResponse.json({error:e instanceof Error?e.name:"unexpected"},{status:502});}
+}
