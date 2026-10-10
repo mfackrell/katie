@@ -77,14 +77,14 @@ export async function GET(req:NextRequest){
    if(action==="details")return output({template:{id:config.id,name:config.name,image:config.image,
      disk:config.disk,env:Object.fromEntries(Object.entries(env).filter(([k])=>
        ["MODEL_NAME","MAX_MODEL_LEN","MAX_NUM_SEQS","GPU_MEMORY_UTILIZATION",
-         "SAFETENSORS_LOAD_STRATEGY","ENFORCE_EAGER"].includes(k)))},
+         "SAFETENSORS_LOAD_STRATEGY","ENFORCE_EAGER","TRUST_REMOTE_CODE"].includes(k)))},
      endpoint:{id:ep.id,templateId:ep.templateId,flashboot:ep.flashboot,
        workers:ep.workers,gpu:ep.gpu,scaling:ep.scaling}});
    if(config.id!=="lwdc2qpy4l"||config.name!==NAME||
       env.MODEL_NAME!==MODEL||ep.id!=="t52dzwlfimvchg"||(ep.templateId&&ep.templateId!==config.id))
       return output({error:"unexpected_template_or_endpoint"},409);
    const newEnv:JsonObject={...env,MAX_MODEL_LEN:"4096",MAX_NUM_SEQS:"1",
-      GPU_MEMORY_UTILIZATION:"0.85",ENFORCE_EAGER:"true"};
+      GPU_MEMORY_UTILIZATION:"0.85",ENFORCE_EAGER:"true",TRUST_REMOTE_CODE:"true"};
    delete newEnv.SAFETENSORS_LOAD_STRATEGY;
    const patch=await api("/templates/lwdc2qpy4l","PATCH",
       {disk:100,env:newEnv});
@@ -92,7 +92,7 @@ export async function GET(req:NextRequest){
    return output({http:patch.status,updated:patch.ok,template_id:saved.id??null,
      disk:saved.disk??null,env:Object.fromEntries(Object.entries(obj(saved.env))
        .filter(([k])=>["MODEL_NAME","MAX_MODEL_LEN","MAX_NUM_SEQS","GPU_MEMORY_UTILIZATION",
-       "ENFORCE_EAGER"].includes(k)))},patch.ok?200:502);
+       "ENFORCE_EAGER","TRUST_REMOTE_CODE"].includes(k)))},patch.ok?200:502);
   }
   if(action==="pause_workers"||action==="resume_workers"){
    if(ep.id!=="t52dzwlfimvchg"||ep.name!==NAME)return output({error:"endpoint_mismatch"},409);
