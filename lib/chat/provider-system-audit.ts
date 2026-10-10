@@ -40,6 +40,7 @@ export async function saveProviderSystemAudit(
   audit: ProviderSystemAudit,
 ): Promise<void> {
   const bounded = boundProviderSystemAudit(audit);
+  try {
   const { error } = await getSupabaseAdminClient().from("chat_requests")
     .eq("request_id", requestId)
     .eq("actor_id", actorId)
@@ -55,6 +56,13 @@ export async function saveProviderSystemAudit(
       requestId, provider: audit.provider, model: audit.model,
       endpoint: audit.endpoint, count: bounded.systemMessages.length,
       truncated: bounded.truncated,
+    });
+  }
+  } catch (error) {
+    // Transparency is diagnostic and must never block an otherwise valid
+    // user request or trigger a provider reroute on database timeouts.
+    console.warn("[Prompt Inspection] audit write unavailable", {
+      requestId, reason: error instanceof Error ? error.message : String(error),
     });
   }
 }
