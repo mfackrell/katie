@@ -20,6 +20,7 @@ import {
 } from "@/lib/chat/request-idempotency";
 import { refreshShortTermMemory } from "@/lib/memory/short-term";
 import { resolveLocalKatieResponse } from "@/lib/chat/local-katie";
+import { handleExplicitMemoryMutation } from "@/lib/memory/explicit-memory";
 import { saveProviderSystemAudit } from "@/lib/chat/provider-system-audit";
 import { maintainMemoryArchitecture } from "@/lib/memory/hygiene";
 import { getSupabaseAdminClient } from "@/lib/data/supabase/admin";
@@ -847,17 +848,20 @@ export async function POST(request: NextRequest) {
         content: message,
       });
 
+      const localResponseText = localKatieResponse.reason === "memory-update"
+        ? await handleExplicitMemoryMutation(actorId, chatId, localUserMessageId, message)
+        : localKatieResponse.text;
       await saveMessage(chatId, {
         id: localAssistantMessageId,
         role: "assistant",
         model: "katie-local",
-        content: localKatieResponse.text,
+        content: localResponseText,
       });
       if (requestTracked) {
         await completeChatRequest(requestId, {
           assistantMessageId: localAssistantMessageId,
           assistantModel: "katie-local",
-          assistantContent: localKatieResponse.text,
+          assistantContent: localResponseText,
           assistantAssets: [],
         });
       }
@@ -877,7 +881,7 @@ export async function POST(request: NextRequest) {
         }),
         JSON.stringify({
           type: "content",
-          text: localKatieResponse.text,
+          text: localResponseText,
           assets: [],
           provider: "local",
           model: "katie-local",
