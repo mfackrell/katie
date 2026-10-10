@@ -96,7 +96,6 @@ export async function GET(req:NextRequest){
   }
   if(action==="pause_workers"||action==="resume_workers"){
    if(ep.id!=="t52dzwlfimvchg"||ep.name!==NAME)return output({error:"endpoint_mismatch"},409);
-   const desired=action==="pause_workers"?0:1;
    const payload=action==="pause_workers"?{workersMax:0}:{workersMax:1,flashboot:false};
    const u=await fetch("https://rest.runpod.io/v1/endpoints/"+endpoint,{
     method:"PATCH",headers,body:JSON.stringify(payload),
