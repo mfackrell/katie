@@ -94,6 +94,16 @@ export async function GET(req:NextRequest){
        .filter(([k])=>["MODEL_NAME","MAX_MODEL_LEN","MAX_NUM_SEQS","GPU_MEMORY_UTILIZATION",
        "ENFORCE_EAGER","TRUST_REMOTE_CODE"].includes(k)))},patch.ok?200:502);
   }
+  if(action==="apply_release"){
+   if(ep.id!=="t52dzwlfimvchg"||ep.name!==NAME)return output({error:"endpoint_mismatch"},409);
+   const t=await api("/templates/lwdc2qpy4l");
+   if(!t.ok||obj(t.data.env).TRUST_REMOTE_CODE!=="true")
+    return output({error:"trust_remote_code_not_configured"},409);
+   const r=await api("/serverless/"+endpoint,"PATCH",{templateId:"lwdc2qpy4l"});
+   return output({action,http:r.status,endpoint_id:r.data.id??null,
+    template_id:r.data.templateId??obj(r.data.template).id??null,
+    version:r.data.version??null,workers:r.data.workers??null},r.ok?200:502);
+  }
   if(action==="pause_workers"||action==="resume_workers"){
    if(ep.id!=="t52dzwlfimvchg"||ep.name!==NAME)return output({error:"endpoint_mismatch"},409);
    const payload=action==="pause_workers"?{workersMax:0}:{workersMax:1,flashboot:false};
