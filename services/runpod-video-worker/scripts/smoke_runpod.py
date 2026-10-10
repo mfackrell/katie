@@ -71,11 +71,12 @@ def main() -> int:
             print("Worker status:", output.get("status"))
             print("Schema:", output.get("schema_version"))
             print("Model:", output.get("model") or output.get("gpu_model_configured"))
-            print("Frames sampled:", output.get("frames_sampled", 0))
+            print("Analysis mode:", output.get("analysis_mode"))
+            print("Coverage:", output.get("coverage"))
             print("Processing seconds:", output.get("processing_seconds"))
             if args.health:
                 return 0 if output.get("status") == "healthy" and output.get("ffmpeg_available") else 1
-            return 0 if output.get("status") == "completed" and output.get("frames_sampled", 0) > 0 else 1
+            return 0 if output.get("status") == "completed" and output.get("analysis_mode") == "native_video" and bool(output.get("summary")) else 1
         if status in {"FAILED", "CANCELLED", "TIMED_OUT"}:
             print("Remote execution did not complete successfully")
             return 1
