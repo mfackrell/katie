@@ -78,7 +78,7 @@ type VideoDatabase = {
           video_reply_provider: string | null; video_reply_model: string | null;
           video_synthesis_state: string | null; video_synthesis_started_at: string | null;
           video_synthesis_text: string | null; video_synthesis_model: string | null;
-          video_synthesis_error: string | null;
+          video_synthesis_error: string | null; review_audit: unknown;
         };
         Insert: Record<string, unknown>;
         Update: Partial<{ status: string; assistant_message_id: string | null;
@@ -87,7 +87,7 @@ type VideoDatabase = {
           video_reply_provider: string | null; video_reply_model: string | null;
           video_synthesis_state: string | null; video_synthesis_started_at: string | null;
           video_synthesis_text: string | null; video_synthesis_model: string | null;
-          video_synthesis_error: string | null }>;
+          video_synthesis_error: string | null; review_audit: unknown }>;
         Relationships: [];
       },
       chats: {

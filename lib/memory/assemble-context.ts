@@ -12,6 +12,7 @@ interface AssembledContext {
   history: Message[];
   shortTermMemory: Record<string, unknown>;
   actorRoutingProfile: ActorRoutingProfile;
+  reviewMode: import("@/lib/collaboration/review-mode").ReviewMode;
 }
 
 export async function assembleContext(actorId: string, chatId: string): Promise<AssembledContext> {
@@ -58,6 +59,7 @@ export async function assembleContext(actorId: string, chatId: string): Promise<
     : "LONG_TERM_MEMORY:\nNo durable long-term memory has been stored yet.\nEND_LONG_TERM_MEMORY";
 
   return {
+    reviewMode: actor.reviewMode ?? "adaptive",
     name: process.env.ASSISTANT_NAME || "Katie",
     persona: [
       actor.purpose,

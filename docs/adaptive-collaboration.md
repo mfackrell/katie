@@ -201,3 +201,20 @@ Terminal chat failures are saved as assistant messages and linked to the failed 
 Every actor receives the same completion standard through assembled context. Collaboration helpers check the latest request, constraints, completeness, internal consistency, evidence and usability, and contribute concrete corrections or draft components. Lead control and final synthesis carry the same standard; final synthesis incorporates supported corrections and performs its own completion check even without a successful reviewer. This does not add an extra model call or require collaboration for simple requests. Pure research helpers remain focused on factual retrieval.
 
 Missing business facts are not invented. Katie finishes supported portions, distinguishes proposed terms from established facts, and identifies only material open decisions. Assessment-only and brainstorming requests keep their requested scope. This is a shared instruction standard, not a guarantee that model output is error-free.
+
+
+## Actor review policy
+
+Each actor has `review_mode`: `adaptive` (default), `always`, or `off`. Creation and the actor editor expose this setting. Subactors inherit their parent's mode at creation; later settings are independent. Updating only the mode preserves the system prompt and routing profile.
+
+- Adaptive preserves the existing eligibility and lead-controlled helper process.
+- Always enables collaboration and additionally reviews the completed draft with a different model, even when the lead requested no helpers or the user selected a model manually. Draft text is held until review finishes. The reviewer receives the same actor instructions, conversation, evidence and original request. The lead reconciles supported corrections and produces the final answer. A sound approved draft is delivered unchanged.
+- Off disables optional automatic collaboration. Required task tools and video evidence processing remain available.
+
+The review is a required attempt, not a claim of guaranteed correctness. Invalid, unavailable or timed-out reviewers are retried with different eligible models within the request budget. If review or revision cannot complete, the delivered draft explicitly discloses that state. `chat_requests.review_audit` records reviewer identity, verdict, findings, attempts, draft and final hashes, and the original draft. It is diagnostic metadata, not public model reasoning.
+
+Always also applies to the final conversational reply following durable video analysis. Pending-job notices, deterministic status/inspection replies and replay of an already completed request do not start a new model review. Raw media assets are not independently regenerated; the review evaluates the generated answer with available evidence.
+
+Apply `supabase/migrations/202610110001_actor_review_mode.sql` before releasing the application. Existing actors default to Adaptive. The chat function's Vercel duration matches its existing 800-second route budget, reserving up to 240 seconds for review. The background reconciliation function has a 300-second budget to accommodate review within its existing synthesis lease.
+
+Run `npm run test:review` for review modes, independent model enforcement, full-draft evidence, approval/revision, malformed output and timeouts, explicit failure disclosure, actor-setting persistence, and existing collaboration regressions.

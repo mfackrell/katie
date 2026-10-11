@@ -1,3 +1,5 @@
+import { runRequiredDraftReview, REQUIRED_REVIEW_RESERVE_MS } from "@/lib/collaboration/required-review";
+import { shouldEnableActorCollaboration } from "@/lib/collaboration/review-mode";
 import { finishChatFailure } from "@/lib/chat/request-failure";
 import { websiteEvidenceStore } from "@/lib/research/stored-evidence";
 import { attachmentAccessContext, type ConversationAttachment } from "@/lib/chat/attachment-continuity";
@@ -961,7 +963,7 @@ export async function POST(request: NextRequest) {
     }
 
     console.log("[Chat API] Assembling context and selecting provider...");
-    const { name, persona, summary, history, actorRoutingProfile } = await assembleContext(actorId, chatId);
+    const { name, persona, summary, history, actorRoutingProfile, reviewMode } = await assembleContext(actorId, chatId);
     let storedWebsite = { context: "", images: [] as string[], fresh: false, targetUrls: [] as string[] };
     try { storedWebsite = await websiteEvidenceStore().restore(actorId, chatId, message, history); }
     catch (error) {
@@ -1512,14 +1514,14 @@ export async function POST(request: NextRequest) {
     }
 
     const collaborationConfig = getCollaborationConfig();
-    const collaborationDeadlineMs = Math.min(executionDeadlineMs, Date.now() + collaborationConfig.maxTotalDurationMs);
-    const collaborationEnabledForRequest = storedWebsite.fresh || shouldUseAdaptiveCollaboration({
+    const collaborationDeadlineMs = Math.min(executionDeadlineMs - (reviewMode === "always" ? REQUIRED_REVIEW_RESERVE_MS : 0), Date.now() + collaborationConfig.maxTotalDurationMs);
+    const collaborationEnabledForRequest = shouldEnableActorCollaboration(reviewMode, storedWebsite.fresh || shouldUseAdaptiveCollaboration({
       message,
       intent: resolvedRequestIntent ?? null,
       complexity: resolvedRoutingIntentForReroute?.complexity ?? null,
       hasManualOverride: Boolean(overrideProvider && overrideModel),
       hasVideoInput,
-    });
+    }));
 
     console.info("[Collaboration] activation", {
       requestId,
@@ -1644,6 +1646,7 @@ export async function POST(request: NextRequest) {
 
             console.log(`[Chat API] Requesting generation from ${provider.name} using model ${modelId}...`);
             const enqueueDelta = (delta: string) => {
+              if (reviewMode === "always") return; // Hold every draft until independent review finishes.
               // Mobile browsers routinely suspend or drop streaming fetches when
               // the app is backgrounded. A disconnected UI must not cancel the
               // actual model generation: keep consuming the provider stream so
@@ -1665,6 +1668,7 @@ export async function POST(request: NextRequest) {
             };
 
             let pendingVideoAssistantMessageId: string | null = null;
+            let reviewSourceParams: import("@/lib/providers/types").ChatGenerateParams | undefined;
             const createParams = (selectedModelId: string) =>
               buildGenerationParams({
                 name,
@@ -1915,7 +1919,8 @@ ${chunkWorkflowSummary}`;
                           catch (error) { console.error("[Website evidence] Save failed", { requestId, error: String(error) }); }
                         },
                         onCheckpoint: (state) => { collaborationResumeState = state; },
-                        prepareParticipantParams: (participantParams, participantValue) => {
+                        prepareParticipantParams: (participantParams, participantValue, phase) => {
+                          if (phase === "final-synthesis") reviewSourceParams = participantParams;
                           const participantRuntimeContext = buildKatieRuntimeContext({
                             provider: participantValue.provider,
                             modelId: participantValue.modelId,
@@ -2463,6 +2468,54 @@ ${chunkWorkflowSummary}`;
 
             if (!result || (!result.text && !(result.content?.length) && !streamedText)) {
               throw new Error(`AI Provider ${provider.name} returned an empty response.`);
+            }
+
+            if (reviewMode === "always" && !pendingVideoAssistantMessageId) {
+              const draftProvider = providers.find(item => item.name === result!.provider) ?? provider;
+              const reviewed = await runRequiredDraftReview({
+                requestId,
+                draft: { ...result, text: result.text || streamedText },
+                params: {
+                  ...(reviewSourceParams ?? createParams(result.model)),
+                  ...(result.researchEvidence ? { researchEvidence: result.researchEvidence } : {}),
+                },
+                leadProvider: draftProvider,
+                deadlineMs: executionDeadlineMs,
+                prepareParams: (params, participant) => ({
+                  ...params,
+                  persona: replaceKatieRuntimeContext(params.persona, buildKatieRuntimeContext({
+                    provider: participant.provider, modelId: participant.modelId,
+                    modelTier: inferModelTier(participant.modelId), classifiedIntent: resolvedRequestIntent,
+                    routingAuthority: "explicit-preference", requestId,
+                  })),
+                }),
+                selectHelper: async context => selectCollaborationHelper({
+                  requestId: context.requestId, request: context.request, requester: context.requester,
+                  providers: providers.filter(candidate => !failedProviderNames.has(candidate.name) &&
+                    getAttachmentSupportForProvider(candidate.name, attachments).supported),
+                  usedParticipants: context.usedParticipants,
+                  modelRegistrySnapshot: await getCollaborationRegistrySnapshot(),
+                  actorId, actorRoutingProfile, hasImages: context.hasImages, hasVideoInput,
+                }),
+                onProgress: detail => {
+                  console.info("[RequiredReview] progress", { requestId, detail });
+                  emitChunk({ type: "metadata", review: { mode: "always", status: "in_progress", detail } });
+                },
+              });
+              result = reviewed.result;
+              streamedText = result.text;
+              try {
+                const { error } = await getSupabaseAdminClient().from("chat_requests")
+                  .eq("request_id", requestId).eq("actor_id", actorId).eq("chat_id", chatId)
+                  .update({ review_audit: reviewed.audit });
+                if (error) throw error;
+              } catch (error) {
+                console.error("[RequiredReview] audit save failed", { requestId, error });
+              }
+              console.info("[RequiredReview] completed", { requestId, status: reviewed.audit.status, reviewer: reviewed.audit.reviewer });
+              emitChunk({ type: "metadata", review: {
+                mode: "always", status: reviewed.audit.status, reviewer: reviewed.audit.reviewer,
+              } });
             }
 
             if ((result.continuationCount ?? 0) > 0 || result.truncated) {

@@ -9,6 +9,7 @@ import type { Actor } from "@/lib/types/chat";
 
 const createActorSchema = z.object({
   name: z.string().min(1),
+  reviewMode: z.enum(["adaptive", "always", "off"]).optional(),
   purpose: z.string().optional(),
   parentId: z.string().min(1).optional()
 });
@@ -18,8 +19,9 @@ const actorIdParamSchema = z.object({
 });
 
 const updateActorSchema = z.object({
-  purpose: z.string().trim().min(1)
-});
+  purpose: z.string().trim().min(1).optional(),
+  reviewMode: z.enum(["adaptive", "always", "off"]).optional(),
+}).refine(value => value.purpose !== undefined || value.reviewMode !== undefined);
 
 async function buildActorRoutingProfile(actor: Pick<Actor, "name" | "purpose">) {
   const providers = getAvailableProviders();
@@ -59,6 +61,7 @@ export async function POST(request: NextRequest) {
     const { name, parentId } = payload;
 
     let purpose = payload.purpose?.trim();
+    let reviewMode = payload.reviewMode ?? "adaptive";
 
     if (parentId) {
       const parent = await getActorById(parentId);
@@ -67,6 +70,7 @@ export async function POST(request: NextRequest) {
       }
 
       purpose = parent.purpose;
+      reviewMode = payload.reviewMode ?? parent.reviewMode ?? "adaptive";
     }
 
     if (!purpose) {
@@ -77,6 +81,7 @@ export async function POST(request: NextRequest) {
       id: buildActorId(),
       name: name.trim(),
       purpose,
+      reviewMode,
       routingProfile: await buildActorRoutingProfile({ name: name.trim(), purpose }),
       ...(parentId ? { parentId } : {})
     };
@@ -101,7 +106,7 @@ export async function PATCH(request: NextRequest) {
 
   try {
     const { id: actorId } = actorIdParamSchema.parse({ id: url.searchParams.get("id") });
-    const { purpose } = updateActorSchema.parse(await request.json());
+    const { purpose, reviewMode } = updateActorSchema.parse(await request.json());
 
     const existingActor = await getActorById(actorId);
     if (!existingActor) {
@@ -109,16 +114,17 @@ export async function PATCH(request: NextRequest) {
     }
 
     const now = new Date().toISOString();
-    const routingProfile = await buildActorRoutingProfile({ name: existingActor.name, purpose: purpose.trim() });
+    const updates: Record<string, unknown> = { updated_at: now };
+    if (purpose !== undefined && purpose !== existingActor.purpose) {
+      updates.system_prompt = purpose;
+      updates.routing_profile = await buildActorRoutingProfile({ name: existingActor.name, purpose });
+    }
+    if (reviewMode !== undefined) updates.review_mode = reviewMode;
     const client = getSupabaseAdminClient();
     const { error } = await client
       .from("actors")
       .eq("id", actorId)
-      .update({
-        system_prompt: purpose.trim(),
-        routing_profile: routingProfile,
-        updated_at: now
-      });
+      .update(updates);
 
     if (error) {
       return NextResponse.json({ error: error.message }, { status: 500 });

@@ -45,6 +45,10 @@ class Query {
     return this.resolve<T>();
   }
 
+  then(resolve: (value: unknown) => unknown, reject?: (error: unknown) => unknown) {
+    return this.resolve().then(resolve, reject);
+  }
+
   private async resolve<T>(): Promise<{ data: T; error: null }> {
     const tableRows = this.state[this.table];
 
@@ -130,4 +134,21 @@ test("PATCH /api/actors updates the actor purpose", async () => {
   assert.equal(payload.actor?.id, "actor-1");
   assert.equal(payload.actor?.purpose, "Updated system prompt");
   assert.equal(state.actors[0].system_prompt, "Updated system prompt");
+});
+
+
+test("review-only PATCH persists mode without changing prompt or routing; invalid modes are rejected", async () => {
+  const state: DbState = { actors: [{ id: "actor-mode", name: "Writer", system_prompt: "Keep prompt", routing_profile: { preserved: true }, review_mode: "adaptive", parent_actor_id: null }], chats: [], messages: [], short_term_memory: [], intermediate_memory: [], long_term_memory: [] };
+  (globalThis as any).__KATIE_SUPABASE_ADMIN_CLIENT__ = createFakeClient(state);
+  const { PATCH } = loadPatchHandler();
+  const patch = (reviewMode: string) => PATCH(new NextRequest("http://localhost/api/actors?id=actor-mode", { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ reviewMode }) }));
+  const response = await patch("always");
+  assert.equal(response.status, 200);
+  assert.equal((await response.json()).actor.reviewMode, "always");
+  assert.equal(state.actors[0].system_prompt, "Keep prompt");
+  assert.deepEqual(state.actors[0].routing_profile, { preserved: true });
+  assert.equal((await patch("typo")).status, 400);
+  assert.equal(state.actors[0].review_mode, "always");
+  assert.equal((await patch("off")).status, 200);
+  assert.equal(state.actors[0].review_mode, "off");
 });

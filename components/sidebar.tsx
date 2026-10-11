@@ -54,6 +54,7 @@ export function Sidebar({
   const activeActor = actors.find((actor) => actor.id === activeActorId) ?? null;
   const [editing, setEditing] = useState(false);
   const [draftPurpose, setDraftPurpose] = useState(activeActor?.purpose ?? "");
+  const [draftReviewMode, setDraftReviewMode] = useState<"adaptive" | "always" | "off">(activeActor?.reviewMode ?? "adaptive");
   const [saving, setSaving] = useState(false);
   const [editingChatId, setEditingChatId] = useState("");
   const [draftChatTitle, setDraftChatTitle] = useState("");
@@ -69,9 +70,10 @@ export function Sidebar({
 
   useEffect(() => {
     setDraftPurpose(activeActor?.purpose ?? "");
+    setDraftReviewMode(activeActor?.reviewMode ?? "adaptive");
     setEditing(false);
     setSaving(false);
-  }, [activeActorId, activeActor?.purpose]);
+  }, [activeActorId, activeActor?.purpose, activeActor?.reviewMode]);
 
   useEffect(() => {
     if (!editingChatId) {
@@ -90,13 +92,13 @@ export function Sidebar({
     }
 
     setSaving(true);
-    onActorPurposeUpdated({ ...activeActor, purpose: draftPurpose.trim() });
+
 
     try {
       const response = await fetch(`/api/actors?id=${encodeURIComponent(activeActor.id)}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ purpose: draftPurpose.trim() }),
+        body: JSON.stringify({ purpose: draftPurpose.trim(), reviewMode: draftReviewMode }),
       });
 
       if (response.ok) {
@@ -504,6 +506,7 @@ export function Sidebar({
                 onClick={() => {
                   setEditing(false);
                   setDraftPurpose(activeActor.purpose);
+                  setDraftReviewMode(activeActor.reviewMode ?? "adaptive");
                 }}
                 aria-label="Close editor"
               >
@@ -512,6 +515,17 @@ export function Sidebar({
             </div>
 
             <div className="relative flex min-h-0 flex-1 flex-col px-5 py-5 sm:px-7">
+              <label className="mb-4 block text-sm text-zinc-200">
+                Independent review
+                <select aria-label="Independent review" value={draftReviewMode}
+                  onChange={event => setDraftReviewMode(event.target.value as "adaptive" | "always" | "off")}
+                  disabled={saving} className="ml-3 rounded-lg border border-white/20 bg-zinc-900 px-3 py-2">
+                  <option value="adaptive">Adaptive</option>
+                  <option value="always">Always</option>
+                  <option value="off">Off</option>
+                </select>
+                <span className="mt-2 block text-xs text-zinc-400">Always checks every generated answer with a different model before delivery. It takes longer and uses additional model calls. Adaptive uses review when needed. Off disables automatic collaboration; required tools remain available.</span>
+              </label>
               <label className="mb-3 block text-xs font-semibold uppercase tracking-[0.24em] text-zinc-500">Purpose / System Prompt</label>
               <textarea
                 className="min-h-0 flex-1 resize-none rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-3 text-sm leading-7 text-zinc-100 outline-none focus-visible:ring-2 focus-visible:ring-emerald-400"
@@ -528,6 +542,7 @@ export function Sidebar({
                 onClick={() => {
                   setEditing(false);
                   setDraftPurpose(activeActor.purpose);
+                  setDraftReviewMode(activeActor.reviewMode ?? "adaptive");
                 }}
                 aria-label="Cancel"
               >

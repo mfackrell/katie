@@ -7,18 +7,20 @@ interface ActorFormModalProps {
   mode: "primary" | "sub";
   parentActor?: Actor;
   onClose: () => void;
-  onCreate: (input: { name: string; purpose?: string; parentId?: string }) => Promise<void>;
+  onCreate: (input: { name: string; purpose?: string; parentId?: string; reviewMode?: "adaptive" | "always" | "off" }) => Promise<void>;
 }
 
 export function ActorFormModal({ mode, parentActor, onClose, onCreate }: ActorFormModalProps) {
   const [name, setName] = useState("");
   const [purpose, setPurpose] = useState("");
+  const [reviewMode, setReviewMode] = useState<"adaptive" | "always" | "off">("adaptive");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (mode === "sub" && parentActor) {
       setPurpose(parentActor.purpose);
+      setReviewMode(parentActor.reviewMode ?? "adaptive");
     }
   }, [mode, parentActor]);
 
@@ -41,6 +43,7 @@ export function ActorFormModal({ mode, parentActor, onClose, onCreate }: ActorFo
     try {
       await onCreate({
         name: name.trim(),
+        reviewMode,
         purpose: mode === "primary" ? purpose.trim() : undefined,
         parentId: mode === "sub" ? parentActor?.id : undefined
       });
@@ -97,6 +100,18 @@ export function ActorFormModal({ mode, parentActor, onClose, onCreate }: ActorFo
                 readOnly={mode === "sub"}
                 placeholder="Describe this actor's persona and goals."
               />
+            </label>
+
+            <label className="block text-sm text-zinc-200">
+              Independent review
+              <select aria-label="Independent review" value={reviewMode}
+                onChange={event => setReviewMode(event.target.value as "adaptive" | "always" | "off")}
+                className="ml-3 rounded-lg border border-white/20 bg-zinc-900 px-3 py-2">
+                <option value="adaptive">Adaptive</option>
+                <option value="always">Always</option>
+                <option value="off">Off</option>
+              </select>
+              <span className="mt-2 block text-xs text-zinc-400">Always checks every generated answer with a different model before delivery, using additional time and model calls.</span>
             </label>
 
             {mode === "sub" ? (

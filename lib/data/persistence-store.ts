@@ -1,3 +1,4 @@
+import { normalizeReviewMode } from "@/lib/collaboration/review-mode";
 import { getSupabaseAdminClient } from "@/lib/data/supabase/admin";
 import type { Actor, ChatThread, Message } from "@/lib/types/chat";
 import { createNeutralActorRoutingProfile, normalizeActorRoutingProfile } from "@/lib/router/actor-routing-profile";
@@ -10,6 +11,7 @@ type ActorRow = {
   system_prompt: string;
   parent_actor_id: string | null;
   routing_profile: unknown;
+  review_mode?: string;
   created_at: string;
   updated_at: string;
 };
@@ -45,6 +47,7 @@ function toActor(row: ActorRow): Actor {
     id: row.id,
     name: row.name,
     purpose: row.system_prompt,
+    reviewMode: normalizeReviewMode(row.review_mode),
     routingProfile: (() => {
       try {
         return normalizeActorRoutingProfile(row.routing_profile);
@@ -123,7 +126,7 @@ async function requireActor(actorId: string): Promise<ActorRow> {
   const client = getSupabaseAdminClient();
   const { data, error } = await client
     .from("actors")
-    .select("id,name,system_prompt,parent_actor_id,routing_profile,created_at,updated_at")
+    .select("id,name,system_prompt,parent_actor_id,routing_profile,review_mode,created_at,updated_at")
     .eq("id", actorId)
     .maybeSingle<ActorRow>();
 
@@ -173,7 +176,7 @@ export async function getActorById(actorId: string): Promise<Actor | null> {
   const client = getSupabaseAdminClient();
   const { data, error } = await client
     .from("actors")
-    .select("id,name,system_prompt,parent_actor_id,routing_profile,created_at,updated_at")
+    .select("id,name,system_prompt,parent_actor_id,routing_profile,review_mode,created_at,updated_at")
     .eq("id", actorId)
     .maybeSingle<ActorRow>();
 
@@ -203,7 +206,7 @@ export async function listActors(): Promise<Actor[]> {
   const client = getSupabaseAdminClient();
   const { data, error } = await client
     .from("actors")
-    .select("id,name,system_prompt,parent_actor_id,routing_profile,created_at,updated_at")
+    .select("id,name,system_prompt,parent_actor_id,routing_profile,review_mode,created_at,updated_at")
     .order("name", { ascending: true })
     .order("created_at", { ascending: true })
     .returns<ActorRow>();
@@ -224,13 +227,14 @@ export async function saveActor(actor: Actor): Promise<Actor> {
     system_prompt: actor.purpose,
     parent_actor_id: actor.parentId ?? null,
     routing_profile: actor.routingProfile ?? createNeutralActorRoutingProfile(),
+    ...(actor.reviewMode !== undefined ? { review_mode: normalizeReviewMode(actor.reviewMode) } : {}),
     updated_at: now,
   };
 
   const { data, error } = await client
     .from("actors")
     .upsert(payload, { onConflict: "id" })
-    .select("id,name,system_prompt,parent_actor_id,routing_profile,created_at,updated_at")
+    .select("id,name,system_prompt,parent_actor_id,routing_profile,review_mode,created_at,updated_at")
     .single<ActorRow>();
 
   if (error) {
