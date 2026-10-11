@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createStoredUploadService } from "../lib/uploads/stored-uploads";
-import { uploadFilesDirect } from "../lib/uploads/direct-upload-client";
+import { acknowledgeVideoUploads, uploadFilesDirect } from "../lib/uploads/direct-upload-client";
 import type { FileReference } from "../lib/providers/types";
 
 function fakeStorage() {
@@ -832,7 +832,80 @@ test("video retries resume previously transferred chunks after a failed upload u
   assert.equal(prepares, 1, "resumed rather than preparing and uploading again");
   assert.deepEqual(posted, [0, 1, 1, 1, 1], "previously accepted chunk 0 was skipped");
   assert.ok(progress.some(value => value.includes("Resuming")));
-  assert.equal(values.size, 0, "upload ticket cleared after success");
+  assert.equal(values.size, 1, "retain upload ticket until the chat request is accepted");
+  acknowledgeVideoUploads([file], storage);
+  assert.equal(values.size, 0, "chat acknowledgement clears upload ticket");
+});
+
+test("retry recovers a completed large video from the saved server reference without any reupload", async () => {
+  const file = new File([new Uint8Array(1024 * 1024 + 3)], "big-video.mp4", {
+    type: "video/mp4", lastModified: 8000,
+  });
+  const stored = new Map<string, string>();
+  const storage = {
+    getItem: (key: string) => stored.get(key) ?? null,
+    setItem: (key: string, value: string) => { stored.set(key, value); },
+    removeItem: (key: string) => { stored.delete(key); },
+  };
+  const key = `katie:video-session:v1:big-video.mp4:video/mp4:${file.size}:8000`;
+  stored.set(key, JSON.stringify({
+    uploadToken: "completed-receipt", uploadId: "88888888-8888-4888-8888-888888888888",
+    transport: "json-base64-v3", savedAt: Date.now(),
+  }));
+  const completedReference: FileReference = {
+    ...reference, fileId: "completed-video", fileName: file.name, mimeType: file.type,
+    attachmentKind: "video",
+  };
+  const calls: string[] = [];
+  const fetcher: typeof fetch = async (url) => {
+    const path = String(url);
+    calls.push(path);
+    if (path === "/api/upload/result") return Response.json({
+      status: "ready", fileReference: completedReference,
+    });
+    throw new Error(`Must not transfer or prepare any video data: ${path}`);
+  };
+  const progress: string[] = [];
+  const recovered = await uploadFilesDirect([file], item => progress.push(item), fetcher,
+    async () => [], { resumeStorage: storage });
+  assert.deepEqual(recovered, [completedReference]);
+  assert.deepEqual(calls, ["/api/upload/result"], "only the reference lookup is necessary");
+  assert.ok(progress.some(value => value.includes("Recovered previously uploaded")));
+  assert.equal(stored.size, 1, "keep the receipt until the chat API acknowledges it");
+  acknowledgeVideoUploads([file], storage);
+  assert.equal(stored.size, 0);
+});
+
+test("transient resume-status failures preserve the stored upload instead of starting over", async () => {
+  const file = new File([new Uint8Array(512 * 1024 + 1)], "interrupted.mp4", {
+    type: "video/mp4", lastModified: 9000,
+  });
+  const store = new Map<string, string>();
+  const storage = {
+    getItem: (key: string) => store.get(key) ?? null,
+    setItem: (key: string, value: string) => { store.set(key, value); },
+    removeItem: (key: string) => { store.delete(key); },
+  };
+  const key = `katie:video-session:v1:interrupted.mp4:video/mp4:${file.size}:9000`;
+  store.set(key, JSON.stringify({
+    uploadToken: "in-progress-receipt", uploadId: "99999999-9999-4999-8999-999999999999",
+    transport: "json-base64-v3", savedAt: Date.now(),
+  }));
+  const calls: string[] = [];
+  const fetcher: typeof fetch = async (url) => {
+    const path = String(url);
+    calls.push(path);
+    if (path === "/api/upload/result") throw new TypeError("Temporary connection lost");
+    if (path === "/api/upload/status") throw new TypeError("Temporary connection lost");
+    throw new Error("Should not reprepare or transfer");
+  };
+  await assert.rejects(
+    uploadFilesDirect([file], () => {}, fetcher, async () => [], { resumeStorage: storage }),
+    /Its upload session was retained for recovery/,
+  );
+  assert.deepEqual(calls.filter(path => path !== "/api/upload/telemetry"),
+    ["/api/upload/result", "/api/upload/status"]);
+  assert.ok(store.has(key), "transient network errors cannot destroy the saved upload");
 });
 
 test("server chunk status authenticates the upload ticket and isolates accepted chunks", async () => {
