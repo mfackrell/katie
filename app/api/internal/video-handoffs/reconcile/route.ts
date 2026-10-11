@@ -143,6 +143,7 @@ export async function GET(request: NextRequest) {
       if (outcome === "dispatched" || outcome === "already_submitted") counts.dispatched++;
       if (outcome === "retry") counts.retried++;
     }
+    console.info("[Video Handoff] reconciliation complete", counts);
     return NextResponse.json(counts, { headers: { "Cache-Control": "no-store" } });
   } catch (error) {
     console.error("[Video Handoff] reconciliation failed", {
