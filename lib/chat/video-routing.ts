@@ -22,7 +22,7 @@ export type VideoRoutingPolicy =
   | { mode: "normal" }
   | { mode: "force-google" }
   | { mode: "manual-google" }
-  | { mode: "reject-override"; provider: string };
+  | { mode: "handoff-google"; conversationalProvider: string };
 
 export function isVideoAttachment(attachment: FileReference): boolean {
   return attachment.attachmentKind === "video" || attachment.mimeType.startsWith("video/");
@@ -42,7 +42,7 @@ export function resolveVideoRoutingPolicy(hasVideoInput: boolean, overrideProvid
   }
 
   if (overrideProvider !== "google") {
-    return { mode: "reject-override", provider: overrideProvider };
+    return { mode: "handoff-google", conversationalProvider: overrideProvider };
   }
 
   return { mode: "manual-google" };
