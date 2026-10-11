@@ -3,7 +3,7 @@ import { websiteEvidenceStore } from "@/lib/research/stored-evidence";
 import { attachmentAccessContext, type ConversationAttachment } from "@/lib/chat/attachment-continuity";
 import { persistConversationAttachment, restoreConversationAttachment, loadConversationAttachmentCatalog, loadActorAttachmentCatalog, recoverSavedVideoFrames, recoverUploadVideoFrames } from "@/lib/uploads/stored-uploads";
 import { describeAttachmentEvidence } from "@/lib/uploads/attachment-observations";
-import { submitSavedVideo } from "@/lib/runpod/durable-results";
+import { submitSavedVideo, resultStore } from "@/lib/runpod/durable-results";
 import { pendingVideoMessage } from "@/lib/runpod/video-orchestration";
 import { RUNPOD_VIDEO_MODEL } from "@/lib/runpod/durable-results";
 import { buildImageReference, imageFileFromDataUrl } from "@/lib/uploads/image-reference";
@@ -1661,6 +1661,25 @@ ${chunkWorkflowSummary}`;
                   ));
                   const rejected = submissions.filter(item => item.status === "rejected");
                   if (rejected.length) {
+                    // Some jobs may already have been accepted. Remove their
+                    // correlation before falling through to synchronous Grok:
+                    // there will be no durable assistant placeholder to update.
+                    try {
+                      const orphanStore = resultStore();
+                      const { error: unlinkError } = await orphanStore
+                        .from("video_analysis_jobs").update({
+                          chat_request_id: null, target_chat_id: null,
+                          actor_id: null, assistant_message_id: null,
+                          fallback_state: null, updated_at: new Date().toISOString(),
+                        }).eq("chat_request_id", requestId)
+                          .eq("assistant_message_id", assistantMessageId);
+                      if (unlinkError) throw unlinkError;
+                    } catch (unlinkError) {
+                      console.error("[Video Routing] accepted partial submissions could not be unlinked", {
+                        requestId,
+                        reason: unlinkError instanceof Error ? unlinkError.message : String(unlinkError),
+                      });
+                    }
                     console.error("[Video Routing] asynchronous RunPod submissions incomplete; using Grok immediately", {
                       requestId, failedCount: rejected.length, total: sources.length,
                     });
