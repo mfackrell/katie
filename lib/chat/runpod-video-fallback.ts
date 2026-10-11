@@ -35,7 +35,9 @@ type Dependencies = {
   timeoutMs?: number;
 };
 
-const DEFAULT_TIMEOUT_MS = 295_000;
+// The chat route permits 800s; reserve at least 150s for Grok and cleanup.
+// A full 15-minute budget requires moving orchestration outside the chat request.
+const DEFAULT_TIMEOUT_MS = 600_000;
 const POLL_MS = 4_500;
 const sleepDefault = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
 
