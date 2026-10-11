@@ -2,12 +2,16 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "functions": {
     "app/api/chat/route.ts": {
-      "maxDuration": 800
+      "maxDuration": 300
     }
   },
   "crons": [
     {
       "path": "/api/internal/runpod-results/reconcile",
+      "schedule": "* * * * *"
+    },
+    {
+      "path": "/api/internal/runpod-results/grok-fallback",
       "schedule": "* * * * *"
     }
   ]

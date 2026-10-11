@@ -1,5 +1,6 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
+import { getSupabaseAdminClient } from "@/lib/data/supabase/admin";
 
 export const RUNPOD_VIDEO_ENDPOINT_ID = "yafwsm98e8m9lv";
 export const RUNPOD_VIDEO_MODEL = "Qwen/Qwen3-VL-8B-Instruct";
@@ -20,6 +21,21 @@ type RunpodVideoRow = {
   endpoint_id: string;
   model: string;
   chat_id: string | null;
+  chat_request_id: string | null;
+  target_chat_id: string | null;
+  actor_id: string | null;
+  assistant_message_id: string | null;
+  video_index: number | null;
+  video_total: number | null;
+  source_filename: string | null;
+  fallback_state: string | null;
+  fallback_attempts: number;
+  fallback_text: string | null;
+  fallback_model: string | null;
+  fallback_started_at: string | null;
+  fallback_completed_at: string | null;
+  fallback_error_code: string | null;
+  response_delivered_at: string | null;
   attachment_path: string | null;
   request_prompt: string | null;
   callback_token_hash: string | null;
@@ -43,6 +59,31 @@ type VideoDatabase = {
         Row: RunpodVideoRow;
         Insert: Partial<RunpodVideoRow>;
         Update: Partial<RunpodVideoRow>;
+        Relationships: [];
+      },
+      messages: {
+        Row: { id: string; actor_id: string; chat_id: string; role: string;
+          content: string; created_at: string };
+        Insert: { id?: string; actor_id?: string; chat_id?: string; role?: string;
+          content?: string; created_at?: string };
+        Update: { content?: string; created_at?: string };
+        Relationships: [];
+      },
+      chat_requests: {
+        Row: { request_id: string; actor_id: string; chat_id: string;
+          status: string; assistant_message_id: string | null;
+          assistant_content: string | null; assistant_model: string | null;
+          updated_at: string; completed_at: string | null; error_message: string | null };
+        Insert: Record<string, unknown>;
+        Update: Partial<{ status: string; assistant_message_id: string | null;
+          assistant_content: string | null; assistant_model: string | null;
+          updated_at: string; completed_at: string | null; error_message: string | null }>;
+        Relationships: [];
+      },
+      chats: {
+        Row: { id: string; actor_id: string };
+        Insert: { id?: string; actor_id?: string };
+        Update: { actor_id?: string };
         Relationships: [];
       }
     };
@@ -214,8 +255,31 @@ export async function refreshRunpodJob(
 
 export async function submitSavedVideo(params: {
   chatId: string; attachmentPath: string; question: string;
+  requestId?: string; targetChatId?: string; actorId?: string;
+  assistantMessageId?: string; videoIndex?: number; videoTotal?: number;
+  sourceFilename?: string;
 }) {
   assertStoredVideoPath(params.chatId, params.attachmentPath);
+  if (params.requestId) {
+    if (!/^[A-Za-z0-9._:-]{1,128}$/.test(params.requestId) ||
+        !params.targetChatId || !params.actorId || !params.assistantMessageId ||
+        !CHAT_ID_PATTERN.test(params.targetChatId) || !CHAT_ID_PATTERN.test(params.actorId) ||
+        !CHAT_ID_PATTERN.test(params.assistantMessageId) ||
+        !Number.isInteger(params.videoIndex) || !Number.isInteger(params.videoTotal) ||
+        (params.videoIndex ?? -1) < 0 || (params.videoTotal ?? 0) < 1 ||
+        (params.videoTotal ?? 0) > 5 || (params.videoIndex ?? 0) >= (params.videoTotal ?? 0)) {
+      throw new Error("Invalid durable chat video correlation");
+    }
+    const {data: chats, error: ownershipError} = await getSupabaseAdminClient()
+      .from("chats").select("id,actor_id")
+      .in("id", [params.chatId, params.targetChatId]);
+    const ownedChats = (chats ?? []) as Array<{ id: string; actor_id: string }>;
+    if (ownershipError ||
+        ![params.chatId, params.targetChatId].every(id =>
+          ownedChats.some(chat => chat.id === id && chat.actor_id === params.actorId))) {
+      throw new Error("Video source or destination does not belong to this actor");
+    }
+  }
   if (!params.question || params.question.length > 2000) {
     throw new Error("Video question must be 1 to 2000 characters");
   }
@@ -225,6 +289,16 @@ export async function submitSavedVideo(params: {
   const {data: record, error: insertError} = await client.from("video_analysis_jobs")
     .insert({
       chat_id: params.chatId,
+      ...(params.requestId ? {
+        chat_request_id: params.requestId,
+        target_chat_id: params.targetChatId!,
+        actor_id: params.actorId!,
+        assistant_message_id: params.assistantMessageId!,
+        video_index: params.videoIndex!,
+        video_total: params.videoTotal!,
+        source_filename: params.sourceFilename?.slice(0,255) ?? "Video",
+        fallback_state: "pending",
+      } : {}),
       attachment_path: params.attachmentPath,
       request_prompt: params.question,
       status: "pending",

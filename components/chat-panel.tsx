@@ -1003,6 +1003,57 @@ export function ChatPanel({
     };
   }, [chatId]);
 
+  // The RunPod/Grok work is durable and finishes after the chat stream closes.
+  // Re-fetch only while a video placeholder exists, including after mobile
+  // backgrounding. No persistent browser connection is required.
+  const pendingVideoMessageIds = useMemo(() =>
+    messages.filter(message => message.role === "assistant" &&
+      message.content.startsWith("[Katie video analysis pending:"))
+      .map(message => message.id).sort().join("|"), [messages]);
+
+  useEffect(() => {
+    if (!chatId || !pendingVideoMessageIds || loading) return;
+    let cancelled = false;
+    let inFlight = false;
+    async function refreshCompletedVideos() {
+      if (cancelled || inFlight ||
+          (typeof document !== "undefined" && document.visibilityState === "hidden")) return;
+      inFlight = true;
+      try {
+        const response = await fetch("/api/messages?chatId=" + encodeURIComponent(chatId), {
+          cache: "no-store",
+        });
+        if (!response.ok) return;
+        const payload = await response.json() as { messages?: Message[] };
+        if (cancelled || !Array.isArray(payload.messages)) return;
+        const nextMessages = payload.messages;
+        setMessages(current => {
+          const unchanged = current.length === nextMessages.length &&
+            current.every((message, index) =>
+              message.id === nextMessages[index].id &&
+              message.content === nextMessages[index].content);
+          return unchanged ? current : nextMessages;
+        });
+        setMessagesByChatId(current => ({ ...current, [chatId]: nextMessages }));
+      } catch (error) {
+        console.warn("[Video Delivery] chat refresh will retry", error);
+      } finally {
+        inFlight = false;
+      }
+    }
+    const interval = window.setInterval(() => { void refreshCompletedVideos(); }, 7_000);
+    const onResume = () => { void refreshCompletedVideos(); };
+    window.addEventListener("focus", onResume);
+    document.addEventListener("visibilitychange", onResume);
+    void refreshCompletedVideos();
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+      window.removeEventListener("focus", onResume);
+      document.removeEventListener("visibilitychange", onResume);
+    };
+  }, [chatId, pendingVideoMessageIds, loading]);
+
   useEffect(() => {
     let cancelled = false;
 

@@ -8,7 +8,9 @@ type VideoTransport = "json-base64-v2" | "json-base64-v3";
 const DEFAULT_VIDEO_TRANSPORT: VideoTransport = "json-base64-v3";
 const chunkSizeFor = (transport: VideoTransport) =>
   transport === "json-base64-v3" ? JSON_VIDEO_SMALL_CHUNK_BYTES : JSON_VIDEO_LEGACY_CHUNK_BYTES;
-export const VIDEO_CHUNK_TIMEOUT_MS = 30_000;
+// Give private Storage PUTs time to complete over high-latency mobile links;
+// first failure still switches promptly to the working first-party relay.
+export const VIDEO_CHUNK_TIMEOUT_MS = 45_000;
 const VIDEO_STATUS_TIMEOUT_MS = 12_000;
 const VIDEO_COMPLETION_TIMEOUT_MS = 180_000;
 
