@@ -124,7 +124,7 @@ test("a specific follow-up without the word video identifies the prior same-chat
   assert.match(result!.context, /Saved Grok visual observations/);
   assert.match(result!.context, /Saved RunPod visual observations/);
   assert.match(result!.context, /NOT CONFIRMED BY THE SAVED OBSERVATIONS/);
-  assert.match(result!.context, /do not.*ask which video/i);
+  assert.match(result!.context, /do not\s+ask which video/i);
   assert.match(result!.context, /do not reanalyze now/i);
 });
 
