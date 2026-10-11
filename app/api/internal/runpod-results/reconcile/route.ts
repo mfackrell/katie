@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import {
   ACTIVE_RUNPOD_STATES, assertCronAuth, refreshRunpodJob, resultStore,
 } from "@/lib/runpod/durable-results";
-import { publishVideoChat, usableVideoAnalysis } from "@/lib/runpod/video-orchestration";
+import { publishVideoChat } from "@/lib/runpod/video-orchestration";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -72,23 +72,10 @@ export async function GET(request: NextRequest) {
       }));
     }
 
-    // A provider refusing to analyze a video is not a successful analysis,
-    // even if RunPod's job itself exited with COMPLETED.
-    const { data: possibleRefusals, error: refusalError } = await client
-      .from("video_analysis_jobs").select("id,analysis_text")
-      .eq("status", "completed").eq("fallback_state", "pending")
-      .not("chat_request_id", "is", null).is("response_delivered_at", null)
-      .order("submitted_at", { ascending: false }).limit(50);
-    if (refusalError) throw new Error("Cannot inspect Qwen completion quality");
-    let refusals = 0;
-    for (const job of possibleRefusals ?? []) {
-      if (usableVideoAnalysis(job.analysis_text)) continue;
-      const { error: rejectError } = await client.from("video_analysis_jobs")
-        .update({ status: "failed", error_code: "QWEN_NO_USABLE_ANALYSIS",
-          updated_at: new Date().toISOString() })
-        .eq("id", job.id).eq("status", "completed");
-      if (!rejectError) refusals++;
-    }
+    // Every terminal RunPod result is handed to Grok for final review.
+    // The independent Grok worker processes completed and failed RunPod jobs;
+    // do not publish the preliminary RunPod text as a final answer.
+    const refusals = 0;
 
     // The webhook may complete a job at any time. Publish only when every
     // video in the originating request has a terminal outcome (including Grok).
