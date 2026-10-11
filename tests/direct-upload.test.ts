@@ -965,6 +965,8 @@ test("existing 2 MiB v2 upload receipts resume with original chunk boundaries af
   assert.equal(result.length, 1);
   assert.equal(prepared, 0);
   assert.deepEqual(indices, [1]);
+  assert.equal(values.size, 1, "resume receipt remains until the chat accepts the attachment");
+  acknowledgeVideoUploads([file], storage);
   assert.equal(values.size, 0);
 });
 
@@ -1029,6 +1031,8 @@ test("legacy v2 upload resumes eight accepted 2 MiB chunks using only 512 KiB su
     [[8, 0], [8, 1], [8, 2], [8, 3], [9, 0], [9, 1], [9, 2], [9, 3]]);
   assert.ok(progress.some(v => v.includes("Resuming") && v.includes("80%")));
   assert.ok(progress.some(v => v.includes("100%")));
+  assert.equal(storage.size, 1);
+  acknowledgeVideoUploads([file], storageAPI);
   assert.equal(storage.size, 0);
   assert.equal((await service.chunkStatus(session.uploadToken)).complete, true);
 });
