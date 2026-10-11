@@ -15,12 +15,14 @@ const ffmpeg = process.platform === "linux" && process.arch === "x64"
   ? requireNode.resolve("@ffmpeg-installer/linux-x64/ffmpeg")
   : null;
 
-test("ten frame timestamps are evenly distributed across video duration", () => {
+test("ten frame timestamps cover the whole recording, including late scene transitions", () => {
   assert.equal(MAX_VIDEO_FALLBACK_FRAMES, 10);
   assert.equal(VIDEO_FRAME_SAMPLE_FRACTIONS.length, 10);
-  assert.deepEqual(evenVideoSampleTimestamps(120), [10.909,21.818,32.727,43.636,54.545,65.455,76.364,87.273,98.182,109.091]);
-  assert.deepEqual(evenVideoSampleTimestamps(1), [0.091,0.182,0.273,0.364,0.455,0.545,0.636,0.727,0.818,0.909]);
+  assert.deepEqual(evenVideoSampleTimestamps(120), [8.4,24,39.6,55.2,70.8,86.4,100.8,110.4,116.4,119.4]);
+  assert.deepEqual(evenVideoSampleTimestamps(1), [0.07,0.2,0.33,0.46,0.59,0.72,0.84,0.92,0.95]);
   assert.deepEqual(evenVideoSampleTimestamps(null), [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
+  assert.ok(evenVideoSampleTimestamps(120).at(-1)! > 119,
+    "the final sample must be taken within the last 1% of a full recording");
 });
 
 test("real bundled FFmpeg decodes a private MP4 into verified JPEG frames", async () => {
@@ -38,8 +40,12 @@ test("real bundled FFmpeg decodes a private MP4 into verified JPEG frames", asyn
     const video = await readFile(videoPath);
     const frames = await extractFramesFromPrivateVideo(new Blob([new Uint8Array(video)], { type: "video/mp4" }));
     assert.equal(frames.length, 10, "a decodable three-second video must yield all ten samples");
-    assert.deepEqual(frames.map(frame => frame.timestampSeconds),
-      evenVideoSampleTimestamps(3).map(value => Math.round(value * 10) / 10));
+    const requested = evenVideoSampleTimestamps(3);
+    frames.forEach((frame, index) => {
+      // Low-FPS clips may require backward seeking to obtain a real last frame.
+      assert.ok(frame.timestampSeconds <= Math.round(requested[index] * 10) / 10 + 0.1);
+      assert.ok(frame.timestampSeconds >= Math.round(requested[index] * 10) / 10 - 0.75);
+    });
     assert.ok(frames.every(frame => frame.dataUrl.startsWith("data:image/jpeg;base64,")));
     assert.ok(frames.every(frame => frame.timestampSeconds >= 0 && frame.timestampSeconds < 3));
     for (const frame of frames) {
@@ -49,6 +55,38 @@ test("real bundled FFmpeg decodes a private MP4 into verified JPEG frames", asyn
       assert.equal(metadata.width, 160);
       assert.equal(metadata.height, 96);
     }
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("FFmpeg captures a genuine scene change confined to the final 4% of a clip", async () => {
+  if (!ffmpeg) return;
+  const dir = await mkdtemp(join(tmpdir(), "katie-video-tail-test-"));
+  try {
+    const videoPath = join(dir, "tail-transition.mp4");
+    // Blue dominates 96% of this recording. Only the closing 200ms are red.
+    // The old uniform 10-frame sampler stopped at 90.9%, missing the cut.
+    execFileSync(ffmpeg, [
+      "-hide_banner", "-loglevel", "error",
+      "-f", "lavfi", "-i", "color=c=blue:s=160x96:r=10:d=4.8",
+      "-f", "lavfi", "-i", "color=c=red:s=160x96:r=10:d=0.2",
+      "-filter_complex", "[0:v][1:v]concat=n=2:v=1:a=0[v]",
+      "-map", "[v]", "-c:v", "mpeg4", "-pix_fmt", "yuv420p",
+      "-y", videoPath,
+    ], { timeout: 20_000 });
+    const original = await readFile(videoPath);
+    const frames = await extractFramesFromPrivateVideo(
+      new Blob([new Uint8Array(original)], { type: "video/mp4" }),
+    );
+    assert.equal(frames.length, 10);
+    const firstFrame = Buffer.from(frames[0].dataUrl.slice("data:image/jpeg;base64,".length), "base64");
+    const lastFrame = Buffer.from(frames.at(-1)!.dataUrl.slice("data:image/jpeg;base64,".length), "base64");
+    const beginningPixel = await sharp(firstFrame).raw().toBuffer();
+    const finalPixel = await sharp(lastFrame).raw().toBuffer();
+    assert.ok(beginningPixel[2] > beginningPixel[0] * 2, "first scene should be blue");
+    assert.ok(finalPixel[0] > finalPixel[2] * 2, "last sampled scene must be red");
+    assert.ok(frames.at(-1)!.timestampSeconds >= 4.8, "late sampling must reach the short ending");
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
