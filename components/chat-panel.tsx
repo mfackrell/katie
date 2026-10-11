@@ -1006,6 +1006,10 @@ export function ChatPanel({
   // The RunPod/Grok work is durable and finishes after the chat stream closes.
   // Re-fetch only while a video placeholder exists, including after mobile
   // backgrounding. No persistent browser connection is required.
+  const [videoProgress, setVideoProgress] = useState<Record<string, {
+    stage: string; submittedAt: string; elapsedSeconds: number;
+    videoCount: number; completedCount: number; failedCount: number;
+  }>>({});
   const pendingVideoMessageIds = useMemo(() =>
     messages.filter(message => message.role === "assistant" &&
       message.content.startsWith("[Katie video analysis pending:"))
@@ -1024,7 +1028,12 @@ export function ChatPanel({
           cache: "no-store",
         });
         if (!response.ok) return;
-        const payload = await response.json() as { messages?: Message[] };
+        const payload = await response.json() as {
+          messages?: Message[];
+          videoProgress?: Record<string, { stage: string; submittedAt: string;
+            elapsedSeconds: number; videoCount: number; completedCount: number; failedCount: number }>;
+        };
+        if (!cancelled) setVideoProgress(payload.videoProgress ?? {});
         if (cancelled || !Array.isArray(payload.messages)) return;
         const nextMessages = payload.messages;
         setMessages(current => {
@@ -2512,6 +2521,31 @@ export function ChatPanel({
                 {copiedMessageId === message.id ? "Copied" : "Copy"}
               </button>
             </div>
+            {message.role === "assistant" &&
+            message.content.startsWith("[Katie video analysis pending:") ? (() => {
+              const id = message.content.match(/pending: ([a-f0-9-]{36})/i)?.[1];
+              const job = id ? videoProgress[id] : undefined;
+              const label = job?.stage === "qwen_queued" ? "Qwen is waiting for a RunPod worker." :
+                job?.stage === "qwen_analyzing" ? "Qwen is analyzing the video." :
+                job?.stage === "grok_queued" ? "Grok fallback is queued." :
+                job?.stage === "grok_analyzing" ? "Grok is analyzing recovered frames." :
+                job?.stage === "delivering" ? "Analysis finished; saving your answer." :
+                "Checking the video processing queue.";
+              return <div role="status" aria-live="polite"
+                className="mb-4 rounded-xl border border-sky-400/25 bg-sky-400/10 p-3 text-sm text-sky-100">
+                <div className="flex items-center gap-2 font-semibold">
+                  <span aria-hidden="true" className="h-2.5 w-2.5 animate-pulse rounded-full bg-sky-400" />
+                  Katie is still working on your video
+                </div>
+                <p className="mt-1">{label}</p>
+                <p className="mt-1 text-xs text-sky-100/70">
+                  {job ? "Elapsed: " + Math.floor(job.elapsedSeconds / 60) + " min · " +
+                    job.completedCount + "/" + job.videoCount + " Qwen analyses completed" :
+                    "Waiting for live status"}
+                  {" · Checking every 7 seconds"}
+                </p>
+              </div>;
+            })() : null}
             {message.content ? (
               message.role === "assistant" ? (
                 <div className="break-words text-zinc-100/95">
