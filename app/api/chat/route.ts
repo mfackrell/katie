@@ -38,8 +38,7 @@ import {
   detectWebSearchSignals,
   inferRequestClassification,
   RequestIntent,
-  RoutingHint,
-  validateRoutingDecision
+  RoutingHint
 } from "@/lib/router/model-intent";
 
 import { LlmProvider, ProviderResponse } from "@/lib/providers/types";
