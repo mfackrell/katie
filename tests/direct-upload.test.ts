@@ -1065,7 +1065,7 @@ test("legacy video with no captured frames recovers private original when Gemini
   assert.equal(decodes, 1);
 });
 
-test("older four-frame cache is upgraded to ten evenly spaced frames from the retained original", async () => {
+test("older four-frame cache is upgraded to ten ending-aware frames from the retained original", async () => {
   const fake = fakeStorage();
   const actor = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
   const chatId = "11111111-1111-4111-8111-111111111111";
@@ -1093,6 +1093,31 @@ test("older four-frame cache is upgraded to ten evenly spaced frames from the re
   const cached = await service.recoverSavedVideoFrames(chatId, saved, actor, extract);
   assert.equal(cached.videoFrames?.length, 10);
   assert.equal(decodes, 1, "ten-frame cache prevents repeated decoding");
+});
+
+test("previous ten-frame cache is refreshed to cover the ending of a saved video", async () => {
+  const fake = fakeStorage();
+  const actor = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+  const chatId = "11111111-1111-4111-8111-111111111111";
+  const jpeg = "data:image/jpeg;base64," +
+    Buffer.from([0xff, 0xd8, 1, 2, 3, 4, 0xff, 0xd9]).toString("base64");
+  const uniform = Array.from({ length: 10 }, (_, index) => ({
+    timestampSeconds: (index + 1) * 3, dataUrl: jpeg,
+  }));
+  const endingAware = uniform.map((frame, index) =>
+    index === 9 ? { ...frame, timestampSeconds: 32.5 } : frame);
+  const service = createStoredUploadService(fake.storage, "secret");
+  const saved = await service.persist(chatId, {
+    ...reference, fileId: "cached-old-ten", mimeType: "video/mp4",
+    fileName: "video.mp4", attachmentKind: "video", videoFrames: uniform,
+  }, undefined, { source: new Blob(["saved-mp4"], { type: "video/mp4" }), actorId: actor });
+  let calls = 0;
+  const extractor = async () => { calls++; return endingAware; };
+  const recovered = await service.recoverSavedVideoFrames(chatId, saved, actor, extractor);
+  assert.equal(recovered.videoFrames?.at(-1)?.timestampSeconds, 32.5,
+    "cached old 10-frame sampling cannot hide the end of the original recording");
+  await service.recoverSavedVideoFrames(chatId, saved, actor, extractor);
+  assert.equal(calls, 1, "new ending-aware sample cache is reused after upgrade");
 });
 
 test("older video without original cannot pretend Grok inspected decoded pixels", async () => {
