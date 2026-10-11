@@ -77,15 +77,18 @@ export async function publishVideoChat(requestId: string): Promise<{ status: str
   for (const job of jobs) {
     const label = job.source_filename || "Video";
     let text: string;
-    if (job.status === "completed" && usableVideoAnalysis(job.analysis_text)) {
-      text = job.analysis_text.trim();
-    } else if (job.fallback_state === "completed" && usableVideoAnalysis(job.fallback_text)) {
+    if (job.fallback_state === "completed" && usableVideoAnalysis(job.fallback_text)) {
       text = job.fallback_text!.trim();
       anyGrok = true;
       text += "\n\n[Analysis used recovered video frames; audio and activity between sampled frames were not directly inspected.]";
     } else if (job.fallback_state === "failed") {
-      text = "I could not analyze this video. Qwen did not produce a usable result and Grok also failed (" +
-        (job.fallback_error_code || job.status) + "). The original video remains saved.";
+      if (job.status === "completed" && usableVideoAnalysis(job.analysis_text)) {
+        text = job.analysis_text.trim() + "\n\n[Grok final review was unavailable: " +
+          (job.fallback_error_code || "unknown error") + ". This is the preliminary RunPod analysis.]";
+      } else {
+        text = "I could not analyze this video. RunPod did not produce a usable result and Grok also failed (" +
+          (job.fallback_error_code || job.status) + "). The original video remains saved.";
+      }
     } else {
       return { status: "awaiting_grok" };
     }
@@ -153,7 +156,7 @@ export async function processNextGrokVideo(): Promise<{ status: string; requestI
     .gte("fallback_attempts", 3);
 
   const { data, error } = await db.from("video_analysis_jobs").select(VIDEO_COLUMNS)
-    .in("status", ["failed", "cancelled", "timed_out", "expired", "rejected"])
+    .in("status", ["completed", "failed", "cancelled", "timed_out", "expired", "rejected"])
     .eq("fallback_state", "pending").not("chat_request_id", "is", null)
     .is("response_delivered_at", null).order("submitted_at", { ascending: true })
     .limit(5);
@@ -184,12 +187,16 @@ export async function processNextGrokVideo(): Promise<{ status: string; requestI
       const available = await provider.listModels();
       const model = ["grok-4.7", "grok-4.6", "grok-4.5", "grok-4.3"].find(name => available.includes(name));
       if (!model) throw new Error("No configured Grok vision model is available");
+      const preliminary = usableVideoAnalysis(row.analysis_text) ? row.analysis_text!.trim() : null;
       const generated = await provider.generate({
         name: "Katie",
-        persona: "You are Katie. Report only observations grounded in the video frames. " +
-          "Answer the user's question and distinguish visible evidence from uncertainty.",
-        summary: "", history: [], user: row.request_prompt?.trim() ||
-          "Provide a detailed and specific description of the video.",
+        persona: "You are Katie. Complete RunPod's preliminary video analysis. " +
+          "Verify all observations against the recovered original-video frames, correct unsupported " +
+          "details, and distinguish visible evidence from uncertainty and unavailable audio.",
+        summary: "", history: [], user: (row.request_prompt?.trim() ||
+          "Provide a detailed and specific description of the video.") +
+          (preliminary ? "\n\nPreliminary RunPod analysis (verify and complete):\n" +
+            preliminary.slice(0, 16000) : "\n\nRunPod returned no usable preliminary analysis."),
         modelId: model, attachments: [frames],
       });
       if (!usableVideoAnalysis(generated.text)) throw new Error("Grok returned no usable video analysis");
