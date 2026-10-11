@@ -7,6 +7,18 @@ import { resultStore } from "@/lib/runpod/durable-results";
 type Answer = { status: "ready"; text: string; model: string } | { status: "pending" };
 const LEASE_MS = 240000;
 
+async function withDeadline<T>(job: Promise<T>): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([job, new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error("Video conversational reply timed out")), 65000);
+    })]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+
 export async function finalizeContextualVideoReply(input: {
   requestId: string; actorId: string; chatId: string;
   assistantMessageId: string; question: string; observations: string;
@@ -69,10 +81,10 @@ export async function finalizeContextualVideoReply(input: {
     const provider = providers.find(item => item.name === target.provider);
     if (!provider) throw new Error("Conversational provider unavailable");
     const context = await assembleContext(input.actorId, input.chatId);
-    const reply = await generateContextualVideoReply({
+    const reply = await withDeadline(generateContextualVideoReply({
       provider, model: target.model, persona: context.persona, summary: context.summary,
       history, userQuestion: input.question, observations: input.observations,
-    });
+    }));
     const finished = new Date().toISOString();
     const { error: saveError } = await db.from("chat_requests").update({
       video_synthesis_state: "completed", video_synthesis_text: reply.text,
