@@ -16,7 +16,7 @@ import {
   useState,
 } from "react";
 import type { FileReference } from "@/lib/providers/types";
-import { uploadFilesDirect } from "@/lib/uploads/direct-upload-client";
+import { acknowledgeVideoUploads, uploadFilesDirect } from "@/lib/uploads/direct-upload-client";
 import type { Message } from "@/lib/types/chat";
 import { canSubmitChatRequest } from "@/lib/chat/request-guards";
 import {
@@ -1356,6 +1356,7 @@ export function ChatPanel({
     });
 
     let requestStage = "preparing attachments";
+    let uploadedReferencesForRetry: FileReference[] | null = null;
     const clientRequestId = crypto.randomUUID();
 
     try {
@@ -1364,6 +1365,7 @@ export function ChatPanel({
           ? await uploadFiles([...filesToUpload, ...videosToUpload, ...imageFilesToUpload])
           : [];
       const refsToSend = [...priorReferences, ...uploadedReferences];
+      uploadedReferencesForRetry = refsToSend;
       // Images now travel through private direct storage, just like other files.
       imagesToSend = [];
       console.log("[ChatPanel] sending file references", {
@@ -1445,6 +1447,11 @@ export function ChatPanel({
         body: requestBody,
       });
 
+      if (response.ok) {
+        // Only discard resumable receipts after the server accepts the chat.
+        acknowledgeVideoUploads(videosToUpload);
+      }
+
       if (response.status === 202) {
         setStatusMessage(
           "Katie is already processing this request. Reconnecting to the existing server-side job…",
@@ -1507,6 +1514,10 @@ export function ChatPanel({
           return nextMessages;
         });
         clearPendingChatRequest(chatId);
+        // Video data has already been saved; preserve its compact reference
+        // for the next send rather than uploading the file a second time.
+        if (uploadedReferencesForRetry) setFileReferences(uploadedReferencesForRetry);
+        setInput(content);
         setStatusMessage(httpCause);
         return;
       }
@@ -1788,6 +1799,27 @@ export function ChatPanel({
       setStatusMessage("Response received.");
     } catch (error: unknown) {
       abortControllerRef.current = null;
+
+      if (requestStage === "preparing attachments") {
+        // The optimistic message never reached /api/chat. Restore its draft
+        // and the original browser File objects so a retry can consult the
+        // durable /api/upload/result instead of uploading video bytes again.
+        setInput(content);
+        setSelectedFiles(filesToUpload);
+        setSelectedVideos(videosToUpload);
+        setSelectedImageFiles(imageFilesToUpload);
+        setSelectedImages(selectedImages);
+        setFileReferences(priorReferences);
+        setMessages((current) => {
+          const withoutOptimistic = current.filter((message) => message.id !== optimisticUserMessage.id);
+          setMessagesByChatId((cache) => ({ ...cache, [chatId]: withoutOptimistic }));
+          return withoutOptimistic;
+        });
+      } else if (requestStage === "sending chat request" && uploadedReferencesForRetry) {
+        // Server acceptance may be uncertain, but no bytes need transferring
+        // if the user chooses to retry after the existing-request recovery.
+        setFileReferences(uploadedReferencesForRetry);
+      }
 
       if (error instanceof DOMException && error.name === "AbortError") {
         setStatusMessage("Request canceled.");

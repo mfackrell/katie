@@ -96,6 +96,14 @@ function clearResumeSession(store: ResumeStorage | null, key: string): void {
   try { store?.removeItem(key); } catch { /* Optional resume storage. */ }
 }
 
+/** Clear an upload receipt only after the chat API acknowledges the message. */
+export function acknowledgeVideoUploads(files: File[], storage?: ResumeStorage | null): void {
+  const store = storage === undefined ? browserResumeStorage() : storage;
+  for (const file of files) {
+    if (file.type.startsWith("video/")) clearResumeSession(store, resumeKey(file));
+  }
+}
+
 
 class UploadHttpError extends Error {
   constructor(readonly status: number, message: string) {
@@ -233,31 +241,73 @@ export async function uploadFilesDirect(
       let completedChunks = new Set<number>();
       let completedSubParts = new Set<number>();
       if (prepared) {
+        onStatus(`Checking whether ${file.name} already finished uploading…`);
+        // A detached server worker can finish after the browser loses its connection.
+        // Read the durable completed reference BEFORE inspecting/transferring chunks.
+        // A transient status failure must never discard a valid saved upload ticket.
+        let recovered: Record<string, unknown> | null = null;
+        try {
+          recovered = await withUploadDeadline("Recovering completed video", statusTimeoutMs, async signal =>
+            readUploadResponse(await fetcher("/api/upload/result", {
+              method: "POST", signal,
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ uploadToken: prepared!.uploadToken }),
+            }))
+          );
+        } catch {
+          // Older servers or temporary network failures may not answer /result.
+          // Verify the existing chunks below; do not create a fresh upload.
+        }
+        if (recovered?.status === "ready" && recovered.fileReference &&
+            typeof recovered.fileReference === "object") {
+          const reference = recovered.fileReference as FileReference;
+          if (reference.fileName !== file.name || reference.attachmentKind !== "video") {
+            throw new Error("Saved video reference does not match the selected file.");
+          }
+          references.push(reference);
+          // Retain the signed receipt until /api/chat acknowledges the attachment.
+          onStatus(`Recovered previously uploaded ${file.name}; no video data was transferred again.`);
+          continue;
+        }
         try {
           onStatus(`Checking saved progress for ${file.name}…`);
           const saved = await status(prepared.uploadToken);
           if (saved.chunkCount !== chunkCount || saved.uploadId !== prepared.uploadId ||
               (saved.chunkBytes != null && saved.chunkBytes !== chunkBytes) ||
-              (saved.transport && saved.transport !== transport))
-            throw new Error("Saved upload does not match this video.");
-          completedChunks = new Set(saved.uploadedIndexes);
-          completedSubParts = new Set(saved.uploadedSubIndexes ?? []);
-          const savedParts = transport === "json-base64-v2"
-            ? Array.from({ length: chunkCount }, (_, index) => {
-              const size = Math.min(chunkBytes, file.size - index * chunkBytes);
-              const subCount = Math.ceil(size / JSON_VIDEO_SMALL_CHUNK_BYTES);
-              return completedChunks.has(index) ? subCount :
-                Array.from({ length: subCount }, (_, sub) => completedSubParts.has(index * 4 + sub) ? 1 : 0)
-                  .reduce<number>((a, b) => a + b, 0);
-            }).reduce((a, b) => a + b, 0)
-            : completedChunks.size;
-          const totalParts = transport === "json-base64-v2"
-            ? Math.ceil(file.size / JSON_VIDEO_SMALL_CHUNK_BYTES) : chunkCount;
-          onStatus(`Resuming ${file.name}: ${Math.round((savedParts / totalParts) * 100)}% saved…`);
-        } catch {
-          // Expired/tampered tickets or failed status checks cannot be trusted.
-          clearResumeSession(resumeStorage, key);
-          prepared = null;
+              (saved.transport && saved.transport !== transport)) {
+            // A different or expired upload cannot be reused for this file.
+            clearResumeSession(resumeStorage, key);
+            prepared = null;
+          } else {
+            if (saved.complete) {
+              // If the completed reference exists, the server will return it.
+              // Do not transfer video bytes again while its reference is resolving.
+              throw new Error("Video is already saved on the server, but its reference is temporarily unavailable. Retry to recover it.");
+            }
+            completedChunks = new Set(saved.uploadedIndexes);
+            completedSubParts = new Set(saved.uploadedSubIndexes ?? []);
+            const savedParts = transport === "json-base64-v2"
+              ? Array.from({ length: chunkCount }, (_, index) => {
+                const size = Math.min(chunkBytes, file.size - index * chunkBytes);
+                const subCount = Math.ceil(size / JSON_VIDEO_SMALL_CHUNK_BYTES);
+                return completedChunks.has(index) ? subCount :
+                  Array.from({ length: subCount }, (_, sub) => completedSubParts.has(index * 4 + sub) ? 1 : 0)
+                    .reduce<number>((a, b) => a + b, 0);
+              }).reduce((a, b) => a + b, 0)
+              : completedChunks.size;
+            const totalParts = transport === "json-base64-v2"
+              ? Math.ceil(file.size / JSON_VIDEO_SMALL_CHUNK_BYTES) : chunkCount;
+            onStatus(`Resuming ${file.name}: ${Math.round((savedParts / totalParts) * 100)}% saved…`);
+          }
+        } catch (error) {
+          if (error instanceof UploadHttpError && [400, 401, 403, 410].includes(error.status)) {
+            // Only definite invalid/expired receipts authorize starting over.
+            clearResumeSession(resumeStorage, key);
+            prepared = null;
+          } else {
+            const reason = error instanceof Error ? error.message : String(error);
+            throw new Error(`Could not verify the saved video: ${reason}. Its upload session was retained for recovery.`);
+          }
         }
       }
       if (!prepared) {
@@ -600,7 +650,8 @@ export async function uploadFilesDirect(
       if (!completed?.fileReference || typeof completed.fileReference !== "object")
         throw new Error("Attachment processing returned no file reference.");
       references.push(completed.fileReference as FileReference);
-      if (isVideo) clearResumeSession(resumeStorage, key);
+      // Keep the small receipt until the caller confirms the chat accepted it.
+      // If a mobile tab disconnects now, a retry recovers /result without transfer.
     } catch (error) {
       if (isVideo) {
         await reportVideoUploadError(fetcher, {
