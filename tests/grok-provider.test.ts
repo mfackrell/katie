@@ -117,13 +117,13 @@ test("Grok analyzes sampled frames without pretending to receive native video", 
   assert.equal(result.provider, "grok");
   const posted = calls.find(c => c.url.endsWith("/chat/completions"))!.body;
   const content = posted.messages.at(-1).content;
-  assert.match(content[0].text, /vision-only/);
+  assert.match(content[0].text, /GROK VIDEO EVIDENCE/);
   assert.equal(content[1].image_url.url, image);
   assert.match(content[0].text, /2s/);
 });
 
 
-test("Grok continuity ships all four JPEG frames as structured image inputs and confirms API acknowledgement", async (t) => {
+test("Grok continuity ships ten JPEG frames as structured image inputs and confirms API acknowledgement", async (t) => {
   const requests: Array<{ path: string; body: Record<string, any> }> = [];
   const notices: Array<{ message: string; metadata: Record<string, unknown> }> = [];
   t.mock.method(console, "info", (message: string, metadata: Record<string, unknown> = {}) => {
@@ -135,7 +135,7 @@ test("Grok continuity ships all four JPEG frames as structured image inputs and 
     if (path.endsWith("/models")) return json({ data: [{ id: "grok-4.7" }] });
     return json({ choices: [{ message: { content: "The frames show the same screen throughout." } }] });
   });
-  const frameUrls = ["a", "b", "c", "d"].map(value => "data:image/jpeg;base64,/9j/" + value);
+  const frameUrls = Array.from({ length: 10 }, (_, index) => "data:image/jpeg;base64,/9j/" + index);
   const result = await new GrokProvider("test-key").generate({
     ...params, modelId: "grok-4.7", requestIntent: "general-text",
     user: "Why did you say that about the recording?",
@@ -151,15 +151,15 @@ test("Grok continuity ships all four JPEG frames as structured image inputs and 
   const outbound = requests.find(request => request.path.endsWith("/chat/completions"));
   assert.ok(outbound, "Grok request must reach actual chat API interface");
   const content = outbound.body.messages.at(-1).content;
-  assert.equal(content.filter((part: { type: string }) => part.type === "image_url").length, 4);
+  assert.equal(content.filter((part: { type: string }) => part.type === "image_url").length, 10);
   assert.deepEqual(content.slice(1).map((part: { image_url: { url: string } }) => part.image_url.url), frameUrls);
   assert.ok(notices.some(entry =>
     entry.message === "[GrokProvider] images included in outgoing xAI request" &&
-    entry.metadata.imageCount === 4 && entry.metadata.videoFrameCount === 4
+    entry.metadata.imageCount === 10 && entry.metadata.videoFrameCount === 10
   ), "logs must reflect images actually serialized into outbound request");
   assert.ok(notices.some(entry =>
     entry.message === "[GrokProvider] xAI acknowledged multimodal request" &&
-    entry.metadata.imageCount === 4
+    entry.metadata.imageCount === 10
   ), "xAI acknowledgement must be logged separately from local frame recovery");
 });
 

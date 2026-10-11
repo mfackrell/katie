@@ -5,7 +5,7 @@ import { join, dirname } from "node:path";
 import { createRequire } from "node:module";
 import { existsSync } from "node:fs";
 import sharp from "sharp";
-import { validateVideoFallbackFrames, type VideoFallbackFrame } from "./video-fallback-frames";
+import { validateVideoFallbackFrames, VIDEO_FRAME_SAMPLE_FRACTIONS, type VideoFallbackFrame } from "./video-fallback-frames";
 
 export const MAX_FALLBACK_SOURCE_BYTES = 200 * 1024 * 1024;
 const VIDEO_PROBE_TIMEOUT_MS = 8_000;
@@ -28,7 +28,8 @@ function ffmpegBinary(): string {
   // not necessarily retain node_modules below process.cwd().
   const candidates: string[] = [];
   try {
-    const require = createRequire(import.meta.url);
+    // Works in Next.js server functions and the CommonJS test runner.
+    const require = createRequire(join(process.cwd(), "package.json"));
     candidates.push(join(dirname(require.resolve("@ffmpeg-installer/linux-x64/package.json")), "ffmpeg"));
   } catch {
     // Resolution may be unavailable with externalized optional packages.
@@ -75,10 +76,14 @@ function videoDuration(stderr: string): number | null {
   return Number.isFinite(seconds) && seconds > 0 ? seconds : null;
 }
 
-function samples(duration: number | null): number[] {
-  if (duration === null) return [0, 1, 3, 6];
-  const maxSeek = Math.max(0, duration - 0.08);
-  return [...new Set([0.08, 0.33, 0.62, 0.88].map(fraction =>
+export function evenVideoSampleTimestamps(duration: number | null): number[] {
+  // If FFmpeg cannot determine duration, probe ten successive seconds rather
+  // than assuming a short clip. Invalid timestamps are simply skipped.
+  if (duration === null || !Number.isFinite(duration) || duration <= 0) {
+    return VIDEO_FRAME_SAMPLE_FRACTIONS.map((_, index) => index);
+  }
+  const maxSeek = Math.max(0, duration - 0.05);
+  return [...new Set(VIDEO_FRAME_SAMPLE_FRACTIONS.map(fraction =>
     Math.min(maxSeek, Math.max(0, duration * fraction)).toFixed(3)))].map(Number);
 }
 
@@ -99,10 +104,10 @@ export async function extractFramesFromPrivateVideo(
     const probe = await run(binary, ["-hide_banner", "-nostdin", "-i", inputPath], VIDEO_PROBE_TIMEOUT_MS);
     const duration = videoDuration(probe.stderr);
     const frames: VideoFallbackFrame[] = [];
-    const timestamps = samples(duration);
-    // Decode only four snapshots and limit CPU to avoid starving the chat handler.
+    const timestamps = evenVideoSampleTimestamps(duration);
+    // Decode ten snapshots at evenly spaced midpoints without monopolizing the worker.
     // An unreadable timestamp should not prevent inspection of other positions.
-    const deadline = Date.now() + 65_000;
+    const deadline = Date.now() + 125_000;
     for (let index = 0; index < timestamps.length && Date.now() < deadline; index++) {
       const seconds = timestamps[index];
       const output = join(workspace, `frame-${index}.jpg`);

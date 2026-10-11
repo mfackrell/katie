@@ -6,13 +6,22 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import sharp from "sharp";
-import { extractFramesFromPrivateVideo } from "../lib/uploads/server-video-frame-recovery";
+import { extractFramesFromPrivateVideo, evenVideoSampleTimestamps } from "../lib/uploads/server-video-frame-recovery";
+import { MAX_VIDEO_FALLBACK_FRAMES, VIDEO_FRAME_SAMPLE_FRACTIONS } from "../lib/uploads/video-fallback-frames";
 import { pruneRepeatedVideoSelections, uniqueAttachmentReferences } from "../lib/chat/video-attachment-dedup";
 
 const requireNode = createRequire(join(process.cwd(), "package.json"));
 const ffmpeg = process.platform === "linux" && process.arch === "x64"
   ? requireNode.resolve("@ffmpeg-installer/linux-x64/ffmpeg")
   : null;
+
+test("ten frame timestamps are evenly distributed across video duration", () => {
+  assert.equal(MAX_VIDEO_FALLBACK_FRAMES, 10);
+  assert.equal(VIDEO_FRAME_SAMPLE_FRACTIONS.length, 10);
+  assert.deepEqual(evenVideoSampleTimestamps(120), [10.909,21.818,32.727,43.636,54.545,65.455,76.364,87.273,98.182,109.091]);
+  assert.deepEqual(evenVideoSampleTimestamps(1), [0.091,0.182,0.273,0.364,0.455,0.545,0.636,0.727,0.818,0.909]);
+  assert.deepEqual(evenVideoSampleTimestamps(null), [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
+});
 
 test("real bundled FFmpeg decodes a private MP4 into verified JPEG frames", async () => {
   if (!ffmpeg) return;
@@ -28,7 +37,9 @@ test("real bundled FFmpeg decodes a private MP4 into verified JPEG frames", asyn
     ], { timeout: 20_000 });
     const video = await readFile(videoPath);
     const frames = await extractFramesFromPrivateVideo(new Blob([new Uint8Array(video)], { type: "video/mp4" }));
-    assert.ok(frames.length >= 2 && frames.length <= 4);
+    assert.equal(frames.length, 10, "a decodable three-second video must yield all ten samples");
+    assert.deepEqual(frames.map(frame => frame.timestampSeconds),
+      evenVideoSampleTimestamps(3).map(value => Math.round(value * 10) / 10));
     assert.ok(frames.every(frame => frame.dataUrl.startsWith("data:image/jpeg;base64,")));
     assert.ok(frames.every(frame => frame.timestampSeconds >= 0 && frame.timestampSeconds < 3));
     for (const frame of frames) {
