@@ -18,8 +18,8 @@ const ffmpeg = process.platform === "linux" && process.arch === "x64"
 test("ten frame timestamps are evenly distributed across video duration", () => {
   assert.equal(MAX_VIDEO_FALLBACK_FRAMES, 10);
   assert.equal(VIDEO_FRAME_SAMPLE_FRACTIONS.length, 10);
-  assert.deepEqual(evenVideoSampleTimestamps(120), [6, 18, 30, 42, 54, 66, 78, 90, 102, 114]);
-  assert.deepEqual(evenVideoSampleTimestamps(1), [0.05, 0.15, 0.25, 0.35, 0.45, 0.55, 0.65, 0.75, 0.85, 0.95]);
+  assert.deepEqual(evenVideoSampleTimestamps(120), [10.909,21.818,32.727,43.636,54.545,65.455,76.364,87.273,98.182,109.091]);
+  assert.deepEqual(evenVideoSampleTimestamps(1), [0.091,0.182,0.273,0.364,0.455,0.545,0.636,0.727,0.818,0.909]);
   assert.deepEqual(evenVideoSampleTimestamps(null), [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
 });
 
