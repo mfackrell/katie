@@ -17,6 +17,15 @@ export type VideoHandoff = {
 
 const db = () => getSupabaseAdminClient();
 const now = () => new Date().toISOString();
+function stableJson(value: unknown): string {
+  if (Array.isArray(value)) return "[" + value.map(stableJson).join(",") + "]";
+  if (value && typeof value === "object") {
+    const row = value as Record<string, unknown>;
+    return "{" + Object.keys(row).sort()
+      .map(key => JSON.stringify(key) + ":" + stableJson(row[key])).join(",") + "}";
+  }
+  return JSON.stringify(value);
+}
 
 export async function registerVideoHandoff(input: {
   requestId: string; actorId: string; chatId: string; message: string;
@@ -47,7 +56,7 @@ export async function registerVideoHandoff(input: {
     const { data: prior, error: readError } = await db().from("video_upload_handoffs")
       .select("actor_id,chat_id,request_payload").eq("request_id", input.requestId).single();
     if (readError || !prior || prior.actor_id !== input.actorId || prior.chat_id !== input.chatId ||
-        JSON.stringify(prior.request_payload) !== JSON.stringify(payload)) {
+        stableJson(prior.request_payload) !== stableJson(payload)) {
       // Avoid reusing a request ID to submit different content.
       throw new Error("Video handoff request ID already belongs to another message.");
     }
