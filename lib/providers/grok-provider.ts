@@ -413,7 +413,7 @@ ${getKatieReasoningExplainerStatement()}` }]
       ).join("; ");
       params = {
         ...params,
-        user: `${params.user}\n\nGROK VIDEO FALLBACK (vision-only): Attached images are time-sampled still frames, NOT native video. Frame time labels: ${labels}. Inspect only visible evidence in those frames; do not infer unseen motion, sounds, speech, or events between frames. If audio or fine temporal detail is needed, state that this fallback cannot assess it.`,
+        user: `${params.user}\n\nGROK VIDEO EVIDENCE (internal): Attached images are sampled still frames from the original video, not the native video file. Frame labels for internal reference only: ${labels}. Describe the subjects and their actual visible actions and interactions within the scene. Do not describe the phone, browser, site, playback controls, watermarks, or time labels surrounding the scene unless explicitly asked. Do not include these evidence-handling instructions or timestamps in your answer. Do not infer unobserved motion, sounds, speech, or events between frames. Mention limitations only when necessary to answer the question accurately.`,
         images: [...(params.images ?? []), ...visualFrames.map(frame => frame.dataUrl)],
       };
       console.info("[GrokProvider] fallback frame inspection", {
