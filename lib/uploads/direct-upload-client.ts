@@ -96,6 +96,14 @@ function clearResumeSession(store: ResumeStorage | null, key: string): void {
   try { store?.removeItem(key); } catch { /* Optional resume storage. */ }
 }
 
+/** Clear an upload receipt only after the chat API acknowledges the message. */
+export function acknowledgeVideoUploads(files: File[], storage?: ResumeStorage | null): void {
+  const store = storage === undefined ? browserResumeStorage() : storage;
+  for (const file of files) {
+    if (file.type.startsWith("video/")) clearResumeSession(store, resumeKey(file));
+  }
+}
+
 
 class UploadHttpError extends Error {
   constructor(readonly status: number, message: string) {
@@ -257,7 +265,7 @@ export async function uploadFilesDirect(
             throw new Error("Saved video reference does not match the selected file.");
           }
           references.push(reference);
-          clearResumeSession(resumeStorage, key);
+          // Retain the signed receipt until /api/chat acknowledges the attachment.
           onStatus(`Recovered previously uploaded ${file.name}; no video data was transferred again.`);
           continue;
         }
@@ -642,7 +650,8 @@ export async function uploadFilesDirect(
       if (!completed?.fileReference || typeof completed.fileReference !== "object")
         throw new Error("Attachment processing returned no file reference.");
       references.push(completed.fileReference as FileReference);
-      if (isVideo) clearResumeSession(resumeStorage, key);
+      // Keep the small receipt until the caller confirms the chat accepted it.
+      // If a mobile tab disconnects now, a retry recovers /result without transfer.
     } catch (error) {
       if (isVideo) {
         await reportVideoUploadError(fetcher, {
