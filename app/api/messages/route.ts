@@ -2,7 +2,7 @@ import { NextRequest, NextResponse, after } from "next/server";
 import { z } from "zod";
 import { getMessages } from "@/lib/data/persistence-store";
 import { resultStore } from "@/lib/runpod/durable-results";
-import { publishVideoChat, processNextGrokVideo, usableVideoAnalysis } from "@/lib/runpod/video-orchestration";
+import { publishVideoChat, processNextGrokVideo } from "@/lib/runpod/video-orchestration";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -53,15 +53,7 @@ export async function GET(request: NextRequest) {
                 .is("response_delivered_at", null);
               if (lookupError) throw lookupError;
               for (const row of rows ?? []) {
-                if (row.status === "completed" && !usableVideoAnalysis(row.analysis_text)) {
-                  const { error: markError } = await db.from("video_analysis_jobs")
-                    .update({ status: "failed", error_code: "QWEN_NO_USABLE_ANALYSIS",
-                      updated_at: new Date().toISOString() })
-                    .eq("id", row.id).eq("status", "completed");
-                  if (markError) throw markError;
-                  needGrok = true;
-                }
-                if (["rejected","failed","timed_out","expired","cancelled"].includes(row.status)
+                if (["completed","rejected","failed","timed_out","expired","cancelled"].includes(row.status)
                     && row.fallback_state === "pending") needGrok = true;
               }
               const delivery = await publishVideoChat(requestId);
@@ -81,7 +73,7 @@ export async function GET(request: NextRequest) {
           const completedCount = jobs.filter(job => job.status === "completed").length;
           const failedCount = jobs.filter(job => ["failed", "cancelled", "timed_out", "expired", "rejected"].includes(job.status)).length;
           const grokRunning = jobs.some(job => job.fallback_state === "processing");
-          const grokPending = jobs.some(job => failedCount > 0 && job.fallback_state === "pending");
+          const grokPending = jobs.some(job => (job.status === "completed" || failedCount > 0) && job.fallback_state === "pending");
           const grokDone = jobs.some(job => job.fallback_state === "completed");
           const stage = grokRunning ? "grok_analyzing" :
             grokPending ? "grok_queued" :
