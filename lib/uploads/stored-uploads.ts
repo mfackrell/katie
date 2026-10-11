@@ -238,7 +238,7 @@ export function createStoredUploadService(storage: Storage, secret: string, opti
       }
       const source = await objects.download(sourcePath(ticket));
       if (source.data?.size === ticket.size) {
-        return { uploadId: ticket.id, chunkCount, chunkBytes, transport: ticket.transport ?? "binary-v1", uploadedIndexes: Array.from({ length: chunkCount }, (_, index) => index), complete: false };
+        return { uploadId: ticket.id, chunkCount, chunkBytes, transport: ticket.transport ?? "binary-v1", uploadedIndexes: Array.from({ length: chunkCount }, (_, index) => index), complete: true };
       }
       // Paginate; a 200 MB v3 video can contain 400 accepted chunks.
       // Restrict to this signed ticket's UUID so uploads cannot inspect each other.
@@ -282,7 +282,14 @@ export function createStoredUploadService(storage: Storage, secret: string, opti
         chunkCount, transport: ticket.transport ?? "binary-v1"
       });
       return { uploadId: ticket.id, chunkCount, chunkBytes,
-        transport: ticket.transport ?? "binary-v1", uploadedIndexes, uploadedSubIndexes, complete: false };
+        transport: ticket.transport ?? "binary-v1", uploadedIndexes, uploadedSubIndexes,
+        complete: Array.from({ length: chunkCount }, (_, index) => {
+          if (uploaded.has(index)) return true;
+          if (ticket.transport !== "json-base64-v2") return false;
+          const expected = Math.min(chunkBytes, ticket.size - index * chunkBytes);
+          return Array.from({ length: Math.ceil(expected / UPLOAD_JSON_SMALL_CHUNK_BYTES) },
+            (_, sub) => uploadedSubParts.has(index * 4 + sub)).every(Boolean);
+        }).every(Boolean) };
     },
     async catalog(chatId: string, scope: "chat" | "actor" = "chat"): Promise<{ initialized: boolean; attachments: ConversationAttachment[] }> {
       await ensureBucket();
