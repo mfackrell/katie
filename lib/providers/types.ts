@@ -1,3 +1,4 @@
+import type { VisualReview, VisualComparison } from "@/lib/research/visual-review";
 export interface ResearchEvidenceSource {
   url: string;
   title?: string;
@@ -5,6 +6,8 @@ export interface ResearchEvidenceSource {
 }
 
 export interface WebsiteEvidence {
+  objective?: string;
+  comparisons?: VisualComparison[];
   capturedAt: string;
   targetSource?: "current-message" | "history" | "summary" | "none";
   pages: WebsitePageEvidence[];
@@ -31,6 +34,7 @@ export interface WebsitePageEvidence {
       styles: Record<string, string>;
     }>;
     images: Array<{ src: string; alt: string; loaded: boolean; width: number; height: number }>;
+    visualReview?: VisualReview;
     screenshot?: { dataUrl: string; width: number; height: number; truncated: boolean };
     limitations: string[];
   }>;
@@ -89,6 +93,8 @@ export interface ProviderSystemAudit {
 }
 
 export interface ChatGenerateParams {
+  /** Server-restored historical evidence; never accepted directly from the browser request. */
+  previousWebsiteEvidence?: WebsiteEvidence;
   name: string;
   persona: string;
   summary: string;

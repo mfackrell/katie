@@ -964,7 +964,7 @@ export async function POST(request: NextRequest) {
 
     console.log("[Chat API] Assembling context and selecting provider...");
     const { name, persona, summary, history, actorRoutingProfile, reviewMode } = await assembleContext(actorId, chatId);
-    let storedWebsite = { context: "", images: [] as string[], fresh: false, targetUrls: [] as string[] };
+    let storedWebsite: Awaited<ReturnType<ReturnType<typeof websiteEvidenceStore>["restore"]>> = { context: "", images: [] as string[], fresh: false, targetUrls: [] as string[] };
     try { storedWebsite = await websiteEvidenceStore().restore(actorId, chatId, message, history); }
     catch (error) {
       console.warn("[Website evidence] Restore failed", { requestId, error: String(error) });
@@ -1682,7 +1682,7 @@ export async function POST(request: NextRequest) {
             let pendingVideoAssistantMessageId: string | null = null;
             let reviewSourceParams: import("@/lib/providers/types").ChatGenerateParams | undefined;
             const createParams = (selectedModelId: string) =>
-              buildGenerationParams({
+              ({ ...buildGenerationParams({
                 name,
                 persona: [personaForGeneration, storedWebsite.context, ...(creativeNarrativeRequest ? [CREATIVE_CONTINUITY_INSTRUCTIONS] : [])].filter(Boolean).join("\n\n"),
                 summary,
@@ -1695,7 +1695,7 @@ export async function POST(request: NextRequest) {
                 attachments,
                 onProviderSystemPrepared: audit =>
                   saveProviderSystemAudit(actorId, chatId, requestId, audit)
-              });
+              }), previousWebsiteEvidence: storedWebsite.previousWebsiteEvidence });
 
             if (shouldRunChunkedWorkflow(message, attachments)) {
               const chunkWorkflowSummary = await analyzeChunkedAttachments({
