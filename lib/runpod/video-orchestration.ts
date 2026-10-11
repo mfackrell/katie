@@ -101,7 +101,8 @@ export async function publishVideoChat(requestId: string): Promise<{ status: str
     .eq("role", "assistant").maybeSingle();
   if (readError) throw new Error("Failed to load assistant video placeholder");
   if (!message) return { status: "awaiting_assistant_message" };
-  const oldText = parseMessageContent(message.content).text;
+  const savedPlaceholder = message as { id: string; content: string };
+  const oldText = parseMessageContent(savedPlaceholder.content).text;
   if (!oldText.startsWith(PENDING_VIDEO_PREFIX + " " + requestId + "]")) {
     // Another actor/user edit or prior delivery must not be overwritten.
     return { status: "message_changed" };
@@ -110,7 +111,7 @@ export async function publishVideoChat(requestId: string): Promise<{ status: str
   const { data: updated, error: writeError } = await chatDb.from("messages")
     .update({ content: encodeMessageContent({ content: answer, model }) })
     .eq("id", source.assistant_message_id).eq("chat_id", source.target_chat_id)
-    .eq("actor_id", source.actor_id).eq("content", message.content)
+    .eq("actor_id", source.actor_id).eq("content", savedPlaceholder.content)
     .select("id").maybeSingle();
   if (writeError) throw new Error("Failed to deliver video analysis");
   if (!updated) return { status: "concurrent_delivery" };
