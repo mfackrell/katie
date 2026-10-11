@@ -281,10 +281,10 @@ export async function uploadFilesDirect(
             clearResumeSession(resumeStorage, key);
             prepared = null;
           } else {
+            // Complete chunks are still safe to resume: finalize the server
+            // reference instead of throwing or transferring bytes again.
             if (saved.complete) {
-              // If the completed reference exists, the server will return it.
-              // Do not transfer video bytes again while its reference is resolving.
-              throw new Error("Video is already saved on the server, but its reference is temporarily unavailable. Retry to recover it.");
+              onStatus(`All bytes for ${file.name} are saved; finishing the server reference…`);
             }
             completedChunks = new Set(saved.uploadedIndexes);
             completedSubParts = new Set(saved.uploadedSubIndexes ?? []);
