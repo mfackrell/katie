@@ -26,7 +26,7 @@ Pressure cases included below-fold defects, deletion and replacement masqueradin
 | Built Next.js page | Pass | HTTP 200, 17,310 HTML characters via a local `next start -H 127.0.0.1`. |
 | Built website health route, native workspace networking | Environment-limited | HTTP 503 correctly reports `getaddrinfo EAI_AGAIN example.com`; the workspace requires proxy networking. No fabricated success. |
 | Built website health route, test-only proxy adapter | Pass | Real https://example.com/: HTTP 200, healthy true, target recovered from history, two views, three images. The adapter supplies public DNS-over-HTTPS and TLS-validated proxy transport; Katie's capture/rendering path is unchanged. Adapter is outside the repo and is not deployed. |
-| General CI gate | Existing failures reproduced | The routing test `url and video prompt hints force web-search classification` and policy test `policy only enforces when current selection violates verified hard guardrails` both fail on the untouched baseline as well. They keep the full gate red; no test or guard was disabled. |
+| General CI gate | Blockers repaired | URL/live-search signals now feed the fallback classifier without overriding substantive review, attached media, explicit offline instructions or active repo context. The old video-without-a-URL expectation was corrected. The policy fixture has verified metadata and now correctly expects metadataMissing=false; a separate missing-dimension case asserts true. All tests remain enabled. |
 | General project typecheck | Pre-existing failures | `npm run typecheck` reports 24 errors; an untouched baseline worktree reports the exact same 24 errors. Focused strict compilation and Next build succeed. |
 | Legacy URL check | Pass | `npm run check:url`. |
 
