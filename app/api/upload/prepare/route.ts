@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { prepareStoredUpload, getStoredUploadProcessingResult, UploadInputError } from "@/lib/uploads/stored-uploads";
+import { prepareStoredUpload, getStoredUploadProcessingResult, inspectStoredUploadTicket, UploadInputError } from "@/lib/uploads/stored-uploads";
 import { authorizeHandoffUpload } from "@/lib/uploads/video-handoffs";
 
 export const runtime = "nodejs";
@@ -19,6 +19,20 @@ export async function POST(request: NextRequest) {
       if (prior) {
         const completed = await getStoredUploadProcessingResult(prior.uploadToken);
         result = completed.status === "ready" ? { ...prior, fileReference: completed.fileReference } : prior;
+      } else if (typeof input.existingUploadToken === "string") {
+        // A browser may have recovered a receipt from an earlier interrupted
+        // send. Prove possession of that HMAC-signed receipt, then bind it to
+        // the new durable message before allowing processing to resume.
+        const existing = inspectStoredUploadTicket(input.existingUploadToken);
+        if (existing.name !== meta.name || existing.type !== meta.type || existing.size !== meta.size) {
+          throw new UploadInputError("Existing video receipt does not match this video.");
+        }
+        const bound = await authorizeHandoffUpload(meta, {
+          uploadToken: input.existingUploadToken,
+          uploadId: existing.uploadId, uploadUrl: "resumed",
+        });
+        const completed = await getStoredUploadProcessingResult(bound!.uploadToken);
+        result = completed.status === "ready" ? { ...bound, fileReference: completed.fileReference } : bound;
       } else {
         const fresh = await prepareStoredUpload(input);
         result = await authorizeHandoffUpload(meta, fresh);
