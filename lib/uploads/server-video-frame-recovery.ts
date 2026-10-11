@@ -105,35 +105,46 @@ export async function extractFramesFromPrivateVideo(
     const duration = videoDuration(probe.stderr);
     const frames: VideoFallbackFrame[] = [];
     const timestamps = evenVideoSampleTimestamps(duration);
-    // Decode ten snapshots at evenly spaced midpoints without monopolizing the worker.
-    // An unreadable timestamp should not prevent inspection of other positions.
+    // Decode ten snapshots covering the timeline, with extra attention to
+    // the last visible scene. Near-end seeks can run beyond the last decodable
+    // frame on low-FPS clips; retry slightly earlier rather than silently
+    // dropping the crucial end frames. Never fabricate an image.
     const deadline = Date.now() + 125_000;
     for (let index = 0; index < timestamps.length && Date.now() < deadline; index++) {
       const seconds = timestamps[index];
       const output = join(workspace, `frame-${index}.jpg`);
-      try {
-        const result = await run(binary, [
-          "-nostdin", "-hide_banner", "-loglevel", "error",
-          "-ss", String(seconds), "-i", inputPath,
-          "-an", "-sn", "-dn", "-frames:v", "1",
-          // Sharp downsizes only large frames without enlarging tiny clips.
-          "-q:v", "5", "-y", output,
-        ], Math.min(FRAME_DECODE_TIMEOUT_MS, Math.max(2_000, deadline - Date.now())));
-        if (result.code !== 0) continue;
-        const decoded = await readFile(output);
-        // Sharp enforces the same tight evidence size cap as browser previews.
-        const jpg = await sharp(decoded)
-          .rotate()
-          .resize({ width: 960, withoutEnlargement: true })
-          .jpeg({ quality: 57, mozjpeg: true })
-          .toBuffer();
-        if (jpg.length > 350_000) continue;
-        frames.push({
-          timestampSeconds: Math.round(seconds * 10) / 10,
-          dataUrl: "data:image/jpeg;base64," + jpg.toString("base64"),
-        });
-      } catch {
-        // Try the next actual timestamp; never invent a frame.
+      const nearEnd = index >= timestamps.length - 3;
+      const attempts = nearEnd
+        ? [...new Set([seconds, seconds - 0.15, seconds - 0.35, seconds - 0.65]
+            .map(value => Math.max(0, Number(value.toFixed(3)))))]
+        : [seconds];
+      for (const seekSeconds of attempts) {
+        if (Date.now() >= deadline) break;
+        try {
+          const result = await run(binary, [
+            "-nostdin", "-hide_banner", "-loglevel", "error",
+            "-ss", String(seekSeconds), "-i", inputPath,
+            "-an", "-sn", "-dn", "-frames:v", "1",
+            // Sharp downsizes only large frames without enlarging tiny clips.
+            "-q:v", "5", "-y", output,
+          ], Math.min(FRAME_DECODE_TIMEOUT_MS, Math.max(2_000, deadline - Date.now())));
+          if (result.code !== 0) continue;
+          const decoded = await readFile(output);
+          // Sharp enforces the same tight evidence size cap as browser previews.
+          const jpg = await sharp(decoded)
+            .rotate()
+            .resize({ width: 960, withoutEnlargement: true })
+            .jpeg({ quality: 57, mozjpeg: true })
+            .toBuffer();
+          if (jpg.length > 350_000) continue;
+          frames.push({
+            timestampSeconds: Math.round(seekSeconds * 10) / 10,
+            dataUrl: "data:image/jpeg;base64," + jpg.toString("base64"),
+          });
+          break;
+        } catch {
+          // Retry a late sample at an earlier decodable time; other samples proceed.
+        }
       }
     }
     if (!frames.length) {
