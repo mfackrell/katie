@@ -21,6 +21,12 @@ export async function GET(request:NextRequest){
     const rows=(data ?? []) as Array<{id:string;runpod_job_id:string|null;endpoint_id:string;status:string;submitted_at:string}>;
     let checked=0,saved=0,failed=0;
     for(const row of rows){
+      if(row.endpoint_id === "yafwsm98e8m9lv" && Date.now()-Date.parse(row.submitted_at)>900000){
+        const now=new Date().toISOString();
+        const {error:timeoutError}=await client.from("video_analysis_jobs").update({status:"timed_out",error_code:"QWEN_DEADLINE",completed_at:now,updated_at:now}).eq("id",row.id).in("status",[...ACTIVE_RUNPOD_STATES]);
+        if(timeoutError)failed++;else saved++;
+        continue;
+      }
       if(!row.runpod_job_id){
         if(Date.now()-new Date(row.submitted_at).getTime()>120000){
           const {error:staleError}=await client.from("video_analysis_jobs").update({
