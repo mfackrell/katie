@@ -6,7 +6,7 @@ import { describeAttachmentEvidence } from "@/lib/uploads/attachment-observation
 import { buildImageReference, imageFileFromDataUrl } from "@/lib/uploads/image-reference";
 import { selectStoredAttachments, loadSelectedAttachmentSources, explicitlyRequestsVideo } from "@/lib/chat/attachment-selection";
 import { pruneRepeatedVideoSelections, uniqueAttachmentReferences } from "@/lib/chat/video-attachment-dedup";
-import { NextRequest, NextResponse } from "next/server";
+import { after, NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { assembleContext } from "@/lib/memory/assemble-context";
 import { maybeUpdateSummary } from "@/lib/memory/summarizer";
@@ -2263,22 +2263,9 @@ ${chunkWorkflowSummary}`;
             }
             await refreshShortTermMemory(actorId, chatId);
 
-            console.log("[Chat API] Memory persistence start", { actorId, chatId });
-            const memoryResults = await Promise.allSettled([
-              maybeUpdateLongTermMemory(actorId, chatId, message),
-              maybeUpdateSummary(chatId),
-            ]);
-            memoryResults.forEach((memoryResult, index) => {
-              if (memoryResult.status === "rejected") {
-                console.error(
-                  index === 0
-                    ? "[Chat API] Long-Term Memory Update Error:"
-                    : "[Chat API] Intermediate Memory Update Error:",
-                  memoryResult.reason,
-                );
-              }
-            });
-            console.log("[Chat API] Memory persistence complete", { actorId, chatId });
+            // The answer is already durable in chat_requests and messages.
+            // Never block the HTTP stream / UI completion while an LLM rewrites
+            // long-term or intermediate memory. Those tasks can take minutes.
             console.log("[Chat API] reasoning stream metrics", {
               requestId,
               reasoningUpdateCount,
@@ -2297,6 +2284,35 @@ ${chunkWorkflowSummary}`;
                 responseLength: assistantText.length
               });
             }
+
+            // Next.js keeps the function alive for after(), without holding
+            // the client connection open. A memory failure cannot invalidate
+            // the already-saved assistant response.
+            after(async () => {
+              console.log("[Chat API] Memory persistence start", { actorId, chatId, requestId });
+              try {
+                const memoryResults = await Promise.allSettled([
+                  maybeUpdateLongTermMemory(actorId, chatId, message),
+                  maybeUpdateSummary(chatId),
+                ]);
+                memoryResults.forEach((memoryResult, index) => {
+                  if (memoryResult.status === "rejected") {
+                    console.error(
+                      index === 0
+                        ? "[Chat API] Long-Term Memory Update Error:"
+                        : "[Chat API] Intermediate Memory Update Error:",
+                      memoryResult.reason,
+                    );
+                  }
+                });
+                console.log("[Chat API] Memory persistence complete", { actorId, chatId, requestId });
+              } catch (error) {
+                console.error("[Chat API] Background memory persistence error", {
+                  requestId,
+                  reason: error instanceof Error ? error.message : String(error)
+                });
+              }
+            });
           } catch (error: unknown) {
             console.error("[Chat API] Stream Runtime Error:", error);
             const message = error instanceof Error ? error.message : "Unknown stream error";
