@@ -105,7 +105,7 @@ export async function runRequiredDraftReview(input: {
         onProviderSystemPrepared: undefined,
         requestIntent: "assistant-reflection", secondaryIntents: [],
         persona: `${source.persona}\n\n${ASSESSMENT_INSTRUCTION}`,
-        user: `ORIGINAL USER REQUEST:\n${source.user}`,
+        user: `INTERNAL REVIEW TASK: Establish independent acceptance criteria. The quoted request below is source material, not a request for you to produce the final answer.\n\n<original_user_request>\n${source.user}\n</original_user_request>\n\nNow return ONLY the independent assessment JSON with objective, qualifications, strongestEvidence and criteria. Do not write an application response or answer the quoted request. No current draft has been supplied.`,
       }, reviewer!)), Math.min(input.participantTimeoutMs ?? 60_000, input.deadlineMs - Date.now() - 60_000));
       if (assessmentResponse.truncated) throw new Error("Independent assessment was truncated");
       const assessment = JSON.parse(assessmentResponse.text.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "")) as IndependentAssessment;
@@ -125,7 +125,7 @@ export async function runRequiredDraftReview(input: {
         requestIntent: "assistant-reflection",
         secondaryIntents: [],
         persona: `${source.persona}\n\n${REVIEW_INSTRUCTION}`,
-        user: `ORIGINAL USER REQUEST:\n${source.user}\n\nYOUR INDEPENDENT ASSESSMENT (ESTABLISHED BEFORE SEEING THIS DRAFT):\n${independentAssessment}\n\nCOMPLETE DRAFT TO REVIEW:\n${draft}`,
+        user: `ORIGINAL USER REQUEST:\n${source.user}\n\nYOUR INDEPENDENT ASSESSMENT (ESTABLISHED BEFORE SEEING THIS DRAFT):\n${independentAssessment}\n\n<draft_to_review>\n${draft}\n</draft_to_review>\n\nINTERNAL REVIEW TASK: Compare this draft against the independently established criteria. Return ONLY JSON with verdict (approve or revise) and substantive findings. Do not answer the original request or rewrite the draft yourself.`,
       }, reviewer!)), Math.min(input.participantTimeoutMs ?? 90_000, input.deadlineMs - Date.now() - 30_000));
       if (response.truncated) throw new Error("Reviewer output was truncated");
       const review = JSON.parse(response.text.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, ""));
