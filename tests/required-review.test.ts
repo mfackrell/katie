@@ -128,6 +128,8 @@ test("assessment is a separate draft-blind call and comparison uses its fixed cr
         assert.ok(p.persona.includes(source.persona));
         assert.equal(p.summary, source.summary);
         assert.ok(p.user.includes(source.user));
+        assert.ok(p.user.includes("not a request for you to produce the final answer"));
+        assert.ok(p.user.endsWith("No current draft has been supplied."));
         return { provider: "anthropic", model: "reviewer", text: JSON.stringify(assessment) };
       }
       phases.push("comparison");
