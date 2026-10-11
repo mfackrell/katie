@@ -17,9 +17,9 @@ export async function finalizeContextualVideoReply(input: {
     .eq("request_id", input.requestId).eq("actor_id", input.actorId)
     .eq("chat_id", input.chatId).maybeSingle();
   if (readError || !state) throw new Error("Video synthesis state is unavailable");
-  if (state.status !== "processing") return { status: "pending" };
   if (state.video_synthesis_state === "completed" && state.video_synthesis_text && state.video_synthesis_model)
     return { status: "ready", text: state.video_synthesis_text, model: state.video_synthesis_model };
+  if (state.status !== "processing") return { status: "pending" };
   if (state.video_synthesis_state === "failed")
     return { status: "ready", model: "katie-video-delivery",
       text: "I inspected the video, but couldn't finish the conversational reply. The observations remain saved. Please ask me to try again." };
