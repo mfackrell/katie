@@ -8,6 +8,7 @@ import {
 import { buildMemoryContext } from "@/lib/providers/memory-context";
 import { MATH_EXECUTION_PROTOCOL } from "@/lib/providers/math-execution-protocol";
 import { formatAttachmentContext } from "@/lib/providers/attachment-context";
+import { MAX_VIDEO_FALLBACK_FRAMES } from "@/lib/uploads/video-fallback-frames";
 import { getKatieOperationalRealityStatement, getKatieReasoningExplainerStatement } from "@/lib/providers/operational-reality";
 
 function isWebSearchIntent(requestIntent: string | undefined): boolean {
@@ -406,7 +407,7 @@ ${getKatieReasoningExplainerStatement()}` }]
       const videos = (params.attachments ?? []).filter(a => a.attachmentKind === "video" || a.mimeType.startsWith("video/"));
       const missing = videos.find(video => !video.videoFrames?.length);
       if (missing) throw new Error(`Grok cannot inspect ${missing.fileName} because no video frames were captured.`);
-      const visualFrames = videos.flatMap(video => video.videoFrames ?? []).slice(0, 8);
+      const visualFrames = videos.flatMap(video => video.videoFrames ?? []).slice(0, MAX_VIDEO_FALLBACK_FRAMES);
       // Be explicit about sampled visual evidence: Grok does not receive or hear the MP4.
       const labels = videos.map(video =>
         `${video.fileName}: ${(video.videoFrames ?? []).map(frame => `${frame.timestampSeconds}s`).join(", ")}`
