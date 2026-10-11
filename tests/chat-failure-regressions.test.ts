@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { finishChatFailure, chatFailureContent } from "../lib/chat/request-failure";
+import { validateManualOverrideWithRecovery } from "../lib/chat/manual-override-recovery";
 import { filterCandidatesForIntent, buildCandidateMetadata, validateRoutingDecision } from "../lib/router/model-intent";
 import type { LlmProvider } from "../lib/providers/types";
 
@@ -48,4 +49,67 @@ test("storage outage does not prevent delivering and closing a terminal error", 
     emit: id => { assert.equal(id, undefined); emitted = true; }, close: () => { closed = true; },
   });
   assert.equal(emitted && closed, true);
+});
+
+const claude: LlmProvider = {
+  name: "anthropic",
+  listModels: async () => ["claude-fable-5-1"],
+  generate: async () => ({ text: "ok", model: "claude-fable-5-1", provider: "anthropic" }),
+};
+
+test("text-only manual override recovers from mistaken safety-sensitive-vision classification", () => {
+  // Reproduces the October 11 production failure without modifying the
+  // classifier or broadening Fable's heuristic vision capability flags.
+  assert.throws(() => validateRoutingDecision(
+    { providerName: "anthropic", modelId: "claude-fable-5-1" },
+    [{ provider: claude, models: ["claude-fable-5-1"] }],
+    "safety-sensitive-vision",
+  ), /No compatible model available for safety-sensitive-vision/);
+
+  for (const intent of ["safety-sensitive-vision", "vision-analysis", "multimodal-reasoning"] as const) {
+    const recovered = validateManualOverrideWithRecovery({
+      provider: claude, modelId: "claude-fable-5-1",
+      availableModels: ["claude-fable-5-1"], intent,
+      hasVisualInput: false, hasVideoInput: false,
+    });
+    assert.equal(recovered.decision.changed, false);
+    assert.equal(recovered.decision.modelId, "claude-fable-5-1");
+    assert.equal(recovered.recoveredIntent, "general-text");
+  }
+});
+
+test("manual override recovery never downgrades real images, videos or unrelated intent failures", () => {
+  for (const inputs of [
+    { hasVisualInput: true, hasVideoInput: false, intent: "safety-sensitive-vision" as const },
+    { hasVisualInput: false, hasVideoInput: true, intent: "safety-sensitive-vision" as const },
+    { hasVisualInput: false, hasVideoInput: false, intent: "image-generation" as const },
+  ]) {
+    assert.throws(() => validateManualOverrideWithRecovery({
+      provider: claude, modelId: "claude-fable-5-1",
+      availableModels: ["claude-fable-5-1"], ...inputs,
+    }), /No compatible model available for/);
+  }
+  const normal = validateManualOverrideWithRecovery({
+    provider: claude, modelId: "claude-fable-5-1",
+    availableModels: ["claude-fable-5-1"], intent: "general-text",
+    hasVisualInput: false, hasVideoInput: false,
+  });
+  assert.equal(normal.recoveredIntent, null);
+  assert.equal(normal.decision.changed, false);
+});
+
+test("manual override recovery does not accept a model that cannot handle text", () => {
+  assert.throws(() => validateManualOverrideWithRecovery({
+    provider: claude, modelId: "claude-fable-5-1",
+    availableModels: ["claude-sonnet-4-6"], intent: "safety-sensitive-vision",
+    hasVisualInput: false, hasVideoInput: false,
+  }), /No compatible model available for general-text/);
+});
+
+test("chat route uses targeted manual override recovery without changing classification", async () => {
+  const { readFileSync } = await import("node:fs");
+  const route = readFileSync("app/api/chat/route.ts", "utf8");
+  assert.match(route, /validateManualOverrideWithRecovery\\(\\{/);
+  assert.match(route, /const overrideClassification = await inferRequestClassification\\(/);
+  assert.match(route, /resolvedRequestIntent = recoveredIntent/);
 });
