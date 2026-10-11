@@ -290,3 +290,20 @@ test("selector failure finds the only photo across the actor catalog instead of 
   const general = await selectStoredAttachments("What is a spreadsheet?", [sheet], history, unavailable);
   assert.equal(general.selections.length, 0, "a general definition question does not load a saved file");
 });
+
+test("a new attached clip avoids an unnecessary remote saved-file selector", async () => {
+  const oldClip = { ...doc, id: "33333333-3333-4333-8333-333333333333",
+    fileName: "older.mp4", mimeType: "video/mp4" };
+  let calls = 0;
+  const selected = await selectStoredAttachments("Like this", [oldClip], [],
+    async () => { calls++; return { selections: [{ id: oldClip.id, mode: "source" }] }; },
+    ["current.mp4"]);
+  assert.equal(calls, 0);
+  assert.deepEqual(selected.selections, []);
+  assert.equal(selected.method, "none");
+  const explicit = await selectStoredAttachments("Compare the previous video", [oldClip], [],
+    async () => { calls++; return { selections: [{ id: oldClip.id, mode: "source" }] }; },
+    ["current.mp4"]);
+  assert.equal(calls, 1);
+  assert.equal(explicit.selections[0].attachment.id, oldClip.id);
+});
