@@ -60,6 +60,31 @@ type VideoDatabase = {
         Insert: Partial<RunpodVideoRow>;
         Update: Partial<RunpodVideoRow>;
         Relationships: [];
+      },
+      messages: {
+        Row: { id: string; actor_id: string; chat_id: string; role: string;
+          content: string; created_at: string };
+        Insert: { id?: string; actor_id?: string; chat_id?: string; role?: string;
+          content?: string; created_at?: string };
+        Update: { content?: string; created_at?: string };
+        Relationships: [];
+      },
+      chat_requests: {
+        Row: { request_id: string; actor_id: string; chat_id: string;
+          status: string; assistant_message_id: string | null;
+          assistant_content: string | null; assistant_model: string | null;
+          updated_at: string; completed_at: string | null; error_message: string | null };
+        Insert: Record<string, unknown>;
+        Update: Partial<{ status: string; assistant_message_id: string | null;
+          assistant_content: string | null; assistant_model: string | null;
+          updated_at: string; completed_at: string | null; error_message: string | null }>;
+        Relationships: [];
+      },
+      chats: {
+        Row: { id: string; actor_id: string };
+        Insert: { id?: string; actor_id?: string };
+        Update: { actor_id?: string };
+        Relationships: [];
       }
     };
     Views: Record<string, never>;
