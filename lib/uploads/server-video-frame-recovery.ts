@@ -28,7 +28,8 @@ function ffmpegBinary(): string {
   // not necessarily retain node_modules below process.cwd().
   const candidates: string[] = [];
   try {
-    const require = createRequire(import.meta.url);
+    // Works in Next.js server functions and the CommonJS test runner.
+    const require = createRequire(join(process.cwd(), "package.json"));
     candidates.push(join(dirname(require.resolve("@ffmpeg-installer/linux-x64/package.json")), "ffmpeg"));
   } catch {
     // Resolution may be unavailable with externalized optional packages.
