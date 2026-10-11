@@ -28,6 +28,7 @@ import { saveProviderSystemAudit } from "@/lib/chat/provider-system-audit";
 import { maintainMemoryArchitecture } from "@/lib/memory/hygiene";
 import { getSupabaseAdminClient } from "@/lib/data/supabase/admin";
 import { getAvailableProviders } from "@/lib/providers";
+import { selectVideoReplyTarget, generateContextualVideoReply } from "@/lib/chat/video-response";
 import { chooseProvider, selectControlPlaneDecisionModels } from "@/lib/router/master-router";
 import {
   detectWebSearchSignals,
@@ -809,6 +810,11 @@ export async function POST(request: NextRequest) {
     }
 
     const requestTracked = idempotencyClaim.tracked;
+    const rejectTracked = async (reason: string, status = 400) => {
+      if (requestTracked) await failChatRequest(requestId, new Error(reason));
+      return NextResponse.json({ error: reason }, { status });
+    };
+
     if (requestTracked) {
       trackedRequestId = requestId;
     }
@@ -979,6 +985,16 @@ export async function POST(request: NextRequest) {
     let loadedRepoContext: RepoGenerationContext | null = null;
     let repoContextDegraded: { reason: string } | null = null;
     const historyForProvider = history.map(({ role, content }) => ({ role, content }));
+    const videoReplyTarget = hasVideoInput
+      ? await selectVideoReplyTarget(
+          providers, { provider: overrideProvider, model: overrideModel },
+          [...history].reverse().find(entry => entry.role === "assistant" && entry.model)?.model ?? null,
+        )
+      : null;
+    if (hasVideoInput && !videoReplyTarget) {
+      return await rejectTracked("No conversational model is available to answer after video analysis.");
+    }
+
     const creativeNarrativeRequest = isCreativeNarrativeTurn(message, historyForProvider, {
       hasVisualInput: Boolean(images.length || attachments.some(file => file.mimeType.startsWith("image/"))),
       hasVideoInput,
@@ -1010,18 +1026,28 @@ export async function POST(request: NextRequest) {
       console.log("[Video Routing] detected video attachment(s); forcing provider=google");
     }
 
-    if (videoRoutingPolicy.mode === "reject-override") {
-      console.warn(`[Video Routing] rejected override provider=${videoRoutingPolicy.provider} for video input`);
-      return NextResponse.json(
-        { error: "Direct video or visual PDF inspection requires Google/Gemini. Choose that provider or ask about the saved summary only." },
-        { status: 400 }
-      );
+    if (videoRoutingPolicy.mode === "handoff-google" && !hasVideoInput) {
+      return await rejectTracked("Scanned PDF inspection requires Google/Gemini. Select Google or supply searchable text.");
     }
 
-    if (overrideProvider && overrideModel) {
+    // Manual model selection is a preference for the conversational reply, not
+    // a demand that a text-only model decode an MP4.
+    if (videoRoutingPolicy.mode === "handoff-google") {
+      const googleProvider = providers.find(candidate => candidate.name === "google");
+      if (!googleProvider) return await rejectTracked("Google/Gemini is required for initial video inspection.");
+      provider = googleProvider;
+      modelId = await selectGoogleModelForVideoRouting(provider);
+      fallbackChain = [];
+      intentAuthority = "capability";
+      intentResolutionReason = "video-inspection-conversational-handoff";
+      console.info("[Video Routing] video inspection delegated; selected conversational model preserved", {
+        requestId, inspectionModel: modelId, conversationProvider: videoReplyTarget?.provider,
+        conversationModel: videoReplyTarget?.model,
+      });
+    } else if (overrideProvider && overrideModel) {
       const manualProvider = providers.find((candidate) => candidate.name === overrideProvider);
       if (!manualProvider) {
-        return NextResponse.json({ error: `Unknown override provider: ${overrideProvider}` }, { status: 400 });
+        return await rejectTracked(`Unknown override provider: ${overrideProvider}`);
       }
 
       const hasImages = Array.isArray(images) && images.length > 0;
@@ -1047,12 +1073,7 @@ export async function POST(request: NextRequest) {
         overrideIntent
       );
       if (validatedOverride.changed) {
-        return NextResponse.json(
-          {
-            error: `Override ${manualProvider.name}:${overrideModel} is incompatible with intent=${overrideIntent} or capabilities.`
-          },
-          { status: 400 }
-        );
+        return await rejectTracked(`Override ${manualProvider.name}:${overrideModel} is incompatible with intent=${overrideIntent} or capabilities.`);
       }
 
       provider = manualProvider;
@@ -1063,10 +1084,7 @@ export async function POST(request: NextRequest) {
     } else if (videoRoutingPolicy.mode === "force-google") {
       const googleProvider = providers.find((candidate) => candidate.name === "google");
       if (!googleProvider) {
-        return NextResponse.json(
-          { error: "Video attachments require the Google/Gemini provider, but it is not configured." },
-          { status: 400 }
-        );
+        return await rejectTracked("Video attachments require Google/Gemini for initial inspection.");
       }
 
       provider = googleProvider;
@@ -1078,10 +1096,7 @@ export async function POST(request: NextRequest) {
     } else if (videoRoutingPolicy.mode === "manual-google") {
       const googleProvider = providers.find((candidate) => candidate.name === "google");
       if (!googleProvider) {
-        return NextResponse.json(
-          { error: "Video attachments require the Google/Gemini provider, but it is not configured." },
-          { status: 400 }
-        );
+        return await rejectTracked("Video attachments require Google/Gemini for initial inspection.");
       }
 
       provider = googleProvider;
@@ -1463,10 +1478,18 @@ export async function POST(request: NextRequest) {
     const canRecoverOriginalWithQwen =
       hasVideoInput && provider.name === "google" && Boolean(process.env.RUNPOD_API_KEY);
     if (!finalProviderSupport.supported && !canRecoverOriginalWithQwen) {
-      return NextResponse.json(
-        { error: finalProviderSupport.reason },
-        { status: 400 }
-      );
+      return await rejectTracked(finalProviderSupport.reason);
+    }
+
+    if (hasVideoInput && videoReplyTarget && requestTracked) {
+      const { error: metadataError } = await getSupabaseAdminClient().from("chat_requests")
+        .eq("request_id", requestId).eq("chat_id", chatId).eq("actor_id", actorId)
+        .eq("status", "processing").update({
+          video_reply_provider: videoReplyTarget.provider,
+          video_reply_model: videoReplyTarget.model,
+          updated_at: new Date().toISOString(),
+        });
+      if (metadataError) throw new Error("Could not persist the selected conversational model for video synthesis.");
     }
 
     const collaborationConfig = getCollaborationConfig();
@@ -1987,7 +2010,7 @@ ${chunkWorkflowSummary}`;
                             },
                           });
                         },
-                        onFinalTextDelta: suppressCalculationScaffolding || creativeNarrativeRequest
+                        onFinalTextDelta: suppressCalculationScaffolding || creativeNarrativeRequest || hasVideoInput
                           ? async () => {}
                           : async (delta) => enqueueDelta(delta),
                         maxDelegations: collaborationConfig.maxDelegations,
@@ -2100,7 +2123,7 @@ ${chunkWorkflowSummary}`;
                               },
                             });
                           },
-                          onFinalTextDelta: suppressCalculationScaffolding || creativeNarrativeRequest
+                          onFinalTextDelta: suppressCalculationScaffolding || creativeNarrativeRequest || hasVideoInput
                             ? async () => {}
                             : async (delta) => enqueueDelta(delta),
                           maxEscalations: 2,
@@ -2166,13 +2189,45 @@ ${chunkWorkflowSummary}`;
                   });
                 }
 
+                let conversationalResult: ProviderResponse | null = null;
+                if (hasVideoInput && !candidate.runpodVideoFallback &&
+                    candidate.provider.name === "google" && videoReplyTarget && cleanedText) {
+                  const conversational = providers.find(item => item.name === videoReplyTarget.provider);
+                  if (!conversational) throw new Error("Selected conversational provider is no longer configured.");
+                  conversationalResult = await generateContextualVideoReply({
+                    provider: conversational,
+                    model: videoReplyTarget.model,
+                    persona: personaForGeneration,
+                    summary,
+                    history: historyForProvider,
+                    userQuestion: message,
+                    observations: cleanedText,
+                  });
+                  cleanedText = conversationalResult.text;
+                  emitChunk({
+                    type: "metadata", provider: conversationalResult.provider,
+                    modelId: conversationalResult.model, videoSynthesis: "contextual",
+                    resetText: true,
+                  });
+                  console.info("[Video Routing] contextual conversational reply generated", {
+                    requestId, observationModel: candidate.modelId,
+                    conversationalModel: conversationalResult.model,
+                    observationCharacters: rawText.length,
+                  });
+                }
+
                 streamedText = cleanedText;
                 return {
-                  ...generation.result,
+                  ...(conversationalResult ?? generation.result),
                   text: cleanedText
                 };
               },
-              detectRefusal: (generationResult, candidate) => isLikelyProviderRefusal(generationResult, candidate.provider.name),
+              detectRefusal: (generationResult, candidate) =>
+                hasVideoInput && videoReplyTarget &&
+                generationResult.provider === videoReplyTarget.provider &&
+                generationResult.model === videoReplyTarget.model
+                  ? false // A conversational-model refusal is final; do not bypass it with another visual model.
+                  : isLikelyProviderRefusal(generationResult, candidate.provider.name),
               rerouteOnRefusal: async ({ attempt }) => {
                 if (hasVideoInput) return null; // Always honor deterministic Grok video-frame fallback.
                 if (!resolvedRoutingIntentForReroute || refusalRerouteCount >= maxRefusalReroutes) {

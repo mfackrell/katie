@@ -74,11 +74,20 @@ type VideoDatabase = {
         Row: { request_id: string; actor_id: string; chat_id: string;
           status: string; assistant_message_id: string | null;
           assistant_content: string | null; assistant_model: string | null;
-          updated_at: string; completed_at: string | null; error_message: string | null };
+          updated_at: string; completed_at: string | null; error_message: string | null;
+          video_reply_provider: string | null; video_reply_model: string | null;
+          video_synthesis_state: string | null; video_synthesis_started_at: string | null;
+          video_synthesis_text: string | null; video_synthesis_model: string | null;
+          video_synthesis_error: string | null;
+        };
         Insert: Record<string, unknown>;
         Update: Partial<{ status: string; assistant_message_id: string | null;
           assistant_content: string | null; assistant_model: string | null;
-          updated_at: string; completed_at: string | null; error_message: string | null }>;
+          updated_at: string; completed_at: string | null; error_message: string | null;
+          video_reply_provider: string | null; video_reply_model: string | null;
+          video_synthesis_state: string | null; video_synthesis_started_at: string | null;
+          video_synthesis_text: string | null; video_synthesis_model: string | null;
+          video_synthesis_error: string | null }>;
         Relationships: [];
       },
       chats: {

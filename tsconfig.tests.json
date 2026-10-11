@@ -45,6 +45,8 @@
     "lib/chat/video-routing.ts",
     "tests/google-routing.test.ts",
     "tests/chat-video-routing.test.ts",
+    "tests/clip-routing.test.ts",
+    "lib/chat/video-response.ts",
     "tests/persistence-store.test.ts",
     "tests/chat-panel-guard.test.ts",
     "tests/inflight-guards.test.ts",
