@@ -12,12 +12,16 @@ test("video attachment with overrideProvider=google is allowed", () => {
   assert.equal(policy.mode, "manual-google");
 });
 
-test("video attachment with overrideProvider=openai is rejected", () => {
+test("video attachment with non-Google conversation provider is handed off for visual inspection", () => {
   const policy = resolveVideoRoutingPolicy(true, "openai");
-  assert.equal(policy.mode, "reject-override");
-  if (policy.mode === "reject-override") {
-    assert.equal(policy.provider, "openai");
+  assert.equal(policy.mode, "handoff-google");
+  if (policy.mode === "handoff-google") {
+    assert.equal(policy.conversationalProvider, "openai");
   }
+});
+
+test("Claude manual selection keeps the video in the visual inspection pipeline", () => {
+  assert.deepEqual(resolveVideoRoutingPolicy(true, "anthropic"), { mode: "handoff-google", conversationalProvider: "anthropic" });
 });
 
 test("video attachment missing googleFileUri fails with clear error", () => {
