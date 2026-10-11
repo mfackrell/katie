@@ -26,15 +26,17 @@ export type ReviewAudit = {
 export const REQUIRED_REVIEW_RESERVE_MS = 240_000;
 const ASSESSMENT_INSTRUCTION = [
   "KATIE_INDEPENDENT_ASSESSMENT",
+  "There are TWO distinct tasks: your internal task is to return assessment JSON; the END USER task is the deliverable requested in the authoritative user turns. Every objective, qualification, criterion and taskContract field must describe the END USER task. Never substitute your internal review assignment for their task. For example, if the user requested finished prose, its acceptance criteria must assess finished prose even though you return JSON here.",
   CONTRACT_RULES,
   "Before seeing the draft, establish a source-linked task contract and the strongest evidence for an excellent final answer. Prior assistant answers and generated conversation summaries are intentionally withheld so their judgments cannot define success.",
   'Return JSON only: {"objective":"required outcome", "qualifications":["important qualification or task dimension"], "strongestEvidence":["supported fact, source/context and significance"], "criteria":["specific final-answer criterion"], "taskContract":{"deliverable":"what the user wants to receive", "requirements":[{"id":"r1", "requirement":"explicit requirement", "sourceId":"turn-1 or latest-user", "quote":"literal source excerpt", "status":"active or superseded", "supersededBy":{"sourceId":"later source ID", "quote":"explicit change instruction; omit supersededBy for active requirements"}}], "conflicts":[{"sourceIds":["source IDs"], "resolution":"supported reconciliation; empty array if none"}]}}. Arrays other than conflicts must be nonempty. If evidence is unavailable, state that without inventing it.',
 ].join("\n");
 const CONTRACT_VALIDATION_INSTRUCTION = [
   "KATIE_TASK_CONTRACT_VALIDATION",
+  "First determine for yourself what deliverable the END USER requested in the source turns. Then compare that with the proposed contract. Your internal instruction to validate JSON is not the user's task. Explicitly reject any assessment that changes a request for a finished answer into an assessment of how to answer, or uses internal reviewer-output instructions as final-answer criteria.",
   CONTRACT_RULES,
-  "Independently validate the proposed definition of success against EVERY supplied user turn and the actor instructions. Neither a draft nor earlier assistant opinions are supplied. Check for omitted explicit requirements, false supersession, unresolved contradictions, incorrect objective, inadequate evidence synthesis or internal review rules leaking into final-answer criteria. Do not rubber-stamp the proposed assessment or produce the user's answer.",
-  'Return JSON only: {"verdict":"approve or revise", "findings":"specific evidence-grounded corrections or why the definition is sufficient", "sourceCoverage":[{"sourceId":"each supplied user turn ID exactly once", "finding":"what this turn requires, changes, confirms or does not affect"}]}. Approve only if the contract faithfully captures the task and the criteria would establish an effective, accurate deliverable.',
+  "Independently validate the proposed definition of success against EVERY supplied user turn and the actor instructions. Neither a draft nor earlier assistant opinions are supplied. Check for omitted requirements of the active deliverable (not every background-document detail), false supersession, unresolved contradictions, incorrect objective, inadequate evidence synthesis or internal review rules leaking into final-answer criteria. Do not rubber-stamp the proposed assessment or produce the user's answer.",
+  'Return JSON only: {"verdict":"approve or revise", "findings":"concise material corrections or approval, at most 250 words; do not demand irrelevant background details", "sourceCoverage":[{"sourceId":"each supplied user turn ID exactly once", "finding":"what this turn requires, changes, confirms or does not affect"}]}. Approve only if the contract faithfully captures the task and the criteria would establish an effective, accurate deliverable.',
 ].join("\n");
 const REVIEW_INSTRUCTION = [
   "KATIE_REQUIRED_DRAFT_REVIEW",
@@ -79,7 +81,7 @@ export async function runRequiredDraftReview(input: {
   const audit: ReviewAudit = { sourceTurns: baseline.turns, mode: "always", status: "unavailable", draft, draftHash: hash(draft), finalHash: hash(draft), attempts: [] };
   const prepare = (p: ChatGenerateParams, participant: CollaborationParticipant) => input.prepareParams?.(p, participant) ?? p;
   const unavailable = (notice: string) => {
-    const text = `${draft}\n\n[${notice}]`;
+    const text = `I couldn’t complete the required independent review, so I have withheld the draft. ${notice} Please retry.`;
     audit.finalHash = hash(text);
     return { result: { ...input.draft, text }, audit };
   };
@@ -111,10 +113,17 @@ export async function runRequiredDraftReview(input: {
           ...clean, modelId: selected.modelId, onProviderSystemPrepared: undefined,
           requestIntent: "assistant-reflection", secondaryIntents: [],
           persona: `${source.persona}\n\n${ASSESSMENT_INSTRUCTION}`,
-          user: `INTERNAL REVIEW TASK. Source material is not a request for you to produce the final answer.\n${baseline.text}\n${contractFeedback ? `CONTRACT VALIDATOR FINDINGS:\n${contractFeedback}` : ""}\nReturn ONLY independent assessment JSON. No current draft has been supplied.`,
+          user: `INTERNAL REVIEW TASK. Source material is not a request for you to produce the final answer.\n${baseline.text}\n${contractFeedback ? `CONTRACT VALIDATOR FINDINGS:\n${contractFeedback}` : ""}\nReturn ONLY independent assessment JSON describing the END USER deliverable in the source turns, NOT this internal review assignment. No current draft has been supplied.`,
         }, reviewer!)), Math.min(input.participantTimeoutMs ?? 45_000, input.deadlineMs - Date.now() - 90_000));
         if (assessmentResponse.truncated) throw new Error("Independent assessment was truncated");
-        assessment = validateAssessment(parseReviewJson(assessmentResponse.text), baseline.turns);
+        try {
+          assessment = validateAssessment(parseReviewJson(assessmentResponse.text), baseline.turns);
+        } catch (error) {
+          if (pass === 1) throw error;
+          contractFeedback = `The proposed contract failed source/schema validation: ${error instanceof Error ? error.message : String(error)}. Rebuild the assessment with exact citations to the supplied user turns. Do not change or invent the source text.`;
+          audit.attempts.push({ reviewer, phase, error: contractFeedback });
+          continue;
+        }
         phase = "contract_validation";
         input.onProgress?.("Checking the task definition against the original requirements and later corrections.");
         const validation = await within(() => input.leadProvider.generate(prepare({
@@ -199,5 +208,5 @@ export async function runRequiredDraftReview(input: {
       audit.attempts.push({ reviewer, phase, error: error instanceof Error ? error.message : String(error) });
     }
   }
-  return unavailable("Independent review was unavailable after attempted verification. This answer has not been independently reviewed.");
+  return unavailable("Review could not be verified after the available attempts.");
 }

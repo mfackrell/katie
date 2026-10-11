@@ -24,8 +24,8 @@ export type IndependentAssessment = {
 // Assistant conclusions and generated summaries are not firsthand task evidence.
 // Preserve turn IDs so contract citations can be checked against literal user text.
 export function reviewBaseline(source: ChatGenerateParams) {
-  const turns: SourceTurn[] = source.history.flatMap((turn, index) => turn.role === "user"
-    ? [{ id: `turn-${index + 1}`, text: turn.content }] : []);
+  const turns: SourceTurn[] = source.history.filter(turn => turn.role === "user")
+    .map((turn, index) => ({ id: `turn-${index + 1}`, text: turn.content }));
   turns.push({ id: "latest-user", text: source.user });
   return {
     turns,
@@ -36,8 +36,8 @@ export function reviewBaseline(source: ChatGenerateParams) {
 
 export const CONTRACT_RULES = [
   "Recover the active task from ALL authoritative user turns. The latest turn is not automatically the original request. Distinguish the requested deliverable from a broader assessment and from this internal review procedure.",
-  "Establish the intended audience, outcome and explicit requirements before selecting evidence. An application answer should establish the strongest defensible relevant qualifications; a qualification assessment evaluates strengths AND material limitations. For other tasks, derive the corresponding success standard from the user's purpose.",
-  "Trace each explicit deliverable requirement to a literal user-source quote. Include original requirements that later turns dispute, with active or superseded status. Supersession requires a cited explicit instruction changing the deliverable; a later claim about what an earlier question says is an interpretation, not automatic cancellation. Reconcile it against the quoted question. Factual corrections update facts, not unrelated requirements. Explicitly requested changes do supersede earlier instructions. Record material conflicts and their source IDs and resolution. Do not invent missing values to satisfy a requirement; explain a genuinely unresolved conflict or use supported information as appropriate to the deliverable.",
+  "Establish the intended audience, outcome and explicit requirements before selecting evidence. Background documents provide context, not a checklist of everything the current answer must discuss. Distinguish requirements of the opportunity or subject from requirements of this particular response. Considering every source turn does not mean including every source detail. For example, logistics in a job description do not become required content in an answer about professional experience unless the question calls for them. An application answer should establish the strongest defensible relevant qualifications; a qualification assessment evaluates strengths AND material limitations. For other tasks, derive the corresponding success standard from the user's purpose.",
+  "Trace each explicit deliverable requirement to a literal user-source quote. Copy sourceId and quote exactly from the supplied user turns, preserving spelling (including typos); do not paraphrase quotes. Only explicit user requirements belong in taskContract.requirements; derived quality standards or memory-supported capabilities belong in criteria, qualifications and strongestEvidence, not fabricated user citations. Include original requirements that later turns dispute, with active or superseded status. Supersession requires a cited explicit instruction changing the deliverable; a later claim about what an earlier question says is an interpretation, not automatic cancellation. Reconcile it against the quoted question. Factual corrections update facts, not unrelated requirements. Explicitly requested changes do supersede earlier instructions. Record material conflicts and their source IDs and resolution. Do not invent missing values to satisfy a requirement; explain a genuinely unresolved conflict or use supported information as appropriate to the deliverable.",
   "Synthesize the complete relevant evidence before choosing examples: foundational expertise, recurring capabilities, breadth, depth, chronology and actual responsibility. Select examples to substantiate the collective conclusion. Requirements determine relevance, never the characterization of experience. Explain transferability without equating different situations.",
   "Assess accuracy AND effectiveness. A directly requested limitation may require a concise truthful answer; do not let an earlier gap assessment dictate the structure or crowd out demonstrated strengths. Never infer lack of experience from missing records. Allocate attention by marginal value to the audience, not technical detail density.",
   "Criteria describe the final deliverable the USER requested. Internal instructions about JSON, assessment stages or not answering the user are NOT acceptance criteria for that deliverable.",
@@ -55,13 +55,14 @@ export function validateAssessment(value: unknown, turns: SourceTurn[]): Indepen
       !a.taskContract || !nonempty(a.taskContract.deliverable) || !Array.isArray(a.taskContract.requirements) ||
       !a.taskContract.requirements.length || !a.taskContract.requirements.some(r => r?.status === "active") || !Array.isArray(a.taskContract.conflicts)) throw new Error("Invalid independent task contract");
   const sources = new Map(turns.map(turn => [turn.id, turn.text]));
+  const normalize = (text: string) => text.replace(/\s+/g, " ").trim();
   const cites = (citation: { sourceId: string; quote: string }) => nonempty(citation?.quote) &&
-    Boolean(sources.get(citation?.sourceId)?.includes(citation.quote));
+    Boolean(sources.has(citation?.sourceId) && normalize(sources.get(citation.sourceId)!).includes(normalize(citation.quote)));
   const ids = new Set<string>();
   for (const r of a.taskContract.requirements) {
     if (!r || !nonempty(r.id) || ids.has(r.id) || !nonempty(r.requirement) || !cites(r) ||
         !["active", "superseded"].includes(r.status) || (r.status === "superseded" && (!r.supersededBy || !cites(r.supersededBy)))) {
-      throw new Error("Task requirement lacks a unique ID or verifiable user-source citation");
+      throw new Error(`Invalid requirement citation: id=${String(r?.id)}, sourceId=${String(r?.sourceId)}, quote=${JSON.stringify(r?.quote)?.slice(0, 240)}. Use a unique requirement ID and an exact excerpt from the named supplied user turn; do not cite memory as a user turn. Superseded requirements also need an exact explicit change instruction.`);
     }
     ids.add(r.id);
   }
