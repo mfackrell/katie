@@ -31,7 +31,7 @@ export async function finalizeContextualVideoReply(input: {
   if (readError || !state) throw new Error("Video synthesis state is unavailable");
   if (state.video_synthesis_state === "completed" && state.video_synthesis_text && state.video_synthesis_model)
     return { status: "ready", text: state.video_synthesis_text, model: state.video_synthesis_model };
-  if (state.status !== "processing") return { status: "pending" };
+  if (state.status !== "processing" && state.status !== "completed") return { status: "pending" };
   if (state.video_synthesis_state === "failed")
     return { status: "ready", model: "katie-video-delivery",
       text: "I inspected the video, but couldn't finish the conversational reply. The observations remain saved. Please ask me to try again." };
@@ -48,7 +48,7 @@ export async function finalizeContextualVideoReply(input: {
   const { data: claimed, error: claimError } = await db.from("chat_requests").update({
     video_synthesis_state: "processing", video_synthesis_started_at: claimedAt,
   }).eq("request_id", input.requestId).eq("actor_id", input.actorId)
-    .eq("chat_id", input.chatId).eq("status", "processing")
+    .eq("chat_id", input.chatId).in("status", ["processing", "completed"])
     .is("video_synthesis_state", null).select("request_id").maybeSingle();
   if (claimError) throw new Error("Could not claim video synthesis");
   if (!claimed) return { status: "pending" };
