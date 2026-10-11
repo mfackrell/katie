@@ -84,7 +84,7 @@ export async function GET(request: NextRequest) {
     for (const job of possibleRefusals ?? []) {
       if (usableVideoAnalysis(job.analysis_text)) continue;
       const { error: rejectError } = await client.from("video_analysis_jobs")
-        .update({ status: "rejected", error_code: "QWEN_NO_USABLE_ANALYSIS",
+        .update({ status: "failed", error_code: "QWEN_NO_USABLE_ANALYSIS",
           updated_at: new Date().toISOString() })
         .eq("id", job.id).eq("status", "completed");
       if (!rejectError) refusals++;
