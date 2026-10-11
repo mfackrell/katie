@@ -107,4 +107,6 @@ test("chat route wires creative routing, continuity context, and originality che
   assert.match(chatRoute, /CREATIVE_CONTINUITY_INSTRUCTIONS/);
   assert.match(chatRoute, /improveCreativeOriginality\(/);
   assert.match(chatRoute, /CREATIVE_REWRITE_INSTRUCTIONS/);
+  assert.match(chatRoute, /Grok secondary fallback retained/);
+  assert.match(chatRoute, /fallbackChain\.push\(\{ provider: grok, modelId: grokModel/);
 });
