@@ -1,4 +1,3 @@
-import { getSupabaseAdminClient } from "@/lib/data/supabase/admin";
 import { encodeMessageContent, parseMessageContent } from "@/lib/data/persistence-store";
 import { GrokProvider } from "@/lib/providers/grok-provider";
 import { recoverSavedVideoFrames } from "@/lib/uploads/stored-uploads";
@@ -94,7 +93,7 @@ export async function publishVideoChat(requestId: string): Promise<{ status: str
   }
   const answer = sections.join("\n\n");
   const model = anyGrok ? (jobs.find(j => j.fallback_model)?.fallback_model || "grok") : RUNPOD_VIDEO_MODEL;
-  const chatDb = getSupabaseAdminClient();
+  const chatDb = db;
   const { data: message, error: readError } = await chatDb.from("messages")
     .select("id,content").eq("id", source.assistant_message_id)
     .eq("chat_id", source.target_chat_id).eq("actor_id", source.actor_id)
@@ -103,18 +102,21 @@ export async function publishVideoChat(requestId: string): Promise<{ status: str
   if (!message) return { status: "awaiting_assistant_message" };
   const savedPlaceholder = message as { id: string; content: string };
   const oldText = parseMessageContent(savedPlaceholder.content).text;
-  if (!oldText.startsWith(PENDING_VIDEO_PREFIX + " " + requestId + "]")) {
-    // Another actor/user edit or prior delivery must not be overwritten.
+  const alreadyUpdated = oldText === answer;
+  if (!alreadyUpdated && !oldText.startsWith(PENDING_VIDEO_PREFIX + " " + requestId + "]")) {
+    // Another actor/user edit must not be overwritten.
     return { status: "message_changed" };
   }
 
-  const { data: updated, error: writeError } = await chatDb.from("messages")
-    .update({ content: encodeMessageContent({ content: answer, model }) })
-    .eq("id", source.assistant_message_id).eq("chat_id", source.target_chat_id)
-    .eq("actor_id", source.actor_id).eq("content", savedPlaceholder.content)
-    .select("id").maybeSingle();
-  if (writeError) throw new Error("Failed to deliver video analysis");
-  if (!updated) return { status: "concurrent_delivery" };
+  if (!alreadyUpdated) {
+    const { data: updated, error: writeError } = await chatDb.from("messages")
+      .update({ content: encodeMessageContent({ content: answer, model }) })
+      .eq("id", source.assistant_message_id).eq("chat_id", source.target_chat_id)
+      .eq("actor_id", source.actor_id).eq("content", savedPlaceholder.content)
+      .select("id").maybeSingle();
+    if (writeError) throw new Error("Failed to deliver video analysis");
+    if (!updated) return { status: "concurrent_delivery" };
+  }
 
   const now = new Date().toISOString();
   const { error: requestError } = await chatDb.from("chat_requests").update({
@@ -145,6 +147,12 @@ export async function processNextGrokVideo(): Promise<{ status: string; requestI
   await db.from("video_analysis_jobs").update({ fallback_state: "pending", updated_at: now })
     .eq("fallback_state", "processing").lt("fallback_started_at", staleCutoff)
     .lt("fallback_attempts", 3);
+  // A third attempt killed by the runtime must terminate instead of hanging forever.
+  await db.from("video_analysis_jobs").update({
+    fallback_state: "failed", fallback_error_code: "GROK_WORKER_EXPIRED",
+    fallback_completed_at: now, updated_at: now,
+  }).eq("fallback_state", "processing").lt("fallback_started_at", staleCutoff)
+    .gte("fallback_attempts", 3);
 
   const { data, error } = await db.from("video_analysis_jobs").select(VIDEO_COLUMNS)
     .in("status", ["failed", "cancelled", "timed_out", "expired", "rejected"])
