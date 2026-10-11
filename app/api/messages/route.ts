@@ -16,7 +16,7 @@ export async function GET(request: NextRequest) {
 
     const pendingRequests = [...new Set(messages
       .filter(message => message.role === "assistant")
-      .map(message => /^\\[Katie video analysis pending: ([a-f0-9-]{36})\\]/i.exec(message.content)?.[1])
+      .map(message => message.content.startsWith("[Katie video analysis pending: ") ? message.content.slice(31, 67) : undefined)
       .filter((id): id is string => Boolean(id)))];
     let videoProgress: Record<string, {
       stage: string; submittedAt: string; elapsedSeconds: number;
