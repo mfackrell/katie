@@ -1006,6 +1006,10 @@ export function ChatPanel({
   // The RunPod/Grok work is durable and finishes after the chat stream closes.
   // Re-fetch only while a video placeholder exists, including after mobile
   // backgrounding. No persistent browser connection is required.
+  const [videoProgress, setVideoProgress] = useState<Record<string, {
+    stage: string; submittedAt: string; elapsedSeconds: number;
+    videoCount: number; completedCount: number; failedCount: number;
+  }>>({});
   const pendingVideoMessageIds = useMemo(() =>
     messages.filter(message => message.role === "assistant" &&
       message.content.startsWith("[Katie video analysis pending:"))
@@ -1024,7 +1028,12 @@ export function ChatPanel({
           cache: "no-store",
         });
         if (!response.ok) return;
-        const payload = await response.json() as { messages?: Message[] };
+        const payload = await response.json() as {
+          messages?: Message[];
+          videoProgress?: Record<string, { stage: string; submittedAt: string;
+            elapsedSeconds: number; videoCount: number; completedCount: number; failedCount: number }>;
+        };
+        if (!cancelled) setVideoProgress(payload.videoProgress ?? {});
         if (cancelled || !Array.isArray(payload.messages)) return;
         const nextMessages = payload.messages;
         setMessages(current => {
