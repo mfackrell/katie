@@ -131,6 +131,11 @@ export function createStoredUploadService(storage: Storage, secret: string, opti
     }
   }
   return {
+    inspectUpload(token: string) {
+      const ticket = verify(token, "upload");
+      return { uploadId: ticket.id, name: ticket.name,
+        type: ticket.type, size: ticket.size };
+    },
     // Authenticated by the same short-lived HMAC ticket as the original signed upload.
     // A client can only write bounded chunks to its own randomly generated incoming path.
     async uploadChunk(token: string, index: number, bytes: Uint8Array, subIndex?: number) {
@@ -679,6 +684,7 @@ function getUploadService() {
 }
 
 export const prepareStoredUpload = (input: unknown) => getUploadService().prepare(input);
+export const inspectStoredUploadTicket = (token: string) => getUploadService().inspectUpload(token);
 export const completeStoredUpload = async (token: string, videoFrames?: unknown) => {
   // First commit the complete original and reference. The browser may vanish at
   // any moment afterward; the durable handoff ledger makes the chat resumable.
