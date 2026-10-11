@@ -98,12 +98,19 @@ test("manual override recovery never downgrades real images, videos or unrelated
   assert.equal(normal.decision.changed, false);
 });
 
-test("manual override recovery does not accept a model that cannot handle text", () => {
+test("manual override recovery preserves rejection of an unavailable or non-text selected model", () => {
   assert.throws(() => validateManualOverrideWithRecovery({
+    provider: claude, modelId: "claude-fable-5-1",
+    availableModels: [], intent: "safety-sensitive-vision",
+    hasVisualInput: false, hasVideoInput: false,
+  }), /No compatible model available for general-text/);
+  const alternative = validateManualOverrideWithRecovery({
     provider: claude, modelId: "claude-fable-5-1",
     availableModels: ["claude-sonnet-4-6"], intent: "safety-sensitive-vision",
     hasVisualInput: false, hasVideoInput: false,
-  }), /No compatible model available for general-text/);
+  });
+  assert.equal(alternative.recoveredIntent, "general-text");
+  assert.equal(alternative.decision.changed, true, "caller must still reject a changed manual override");
 });
 
 test("chat route uses targeted manual override recovery without changing classification", async () => {
