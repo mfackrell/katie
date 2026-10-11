@@ -1,6 +1,7 @@
 import { encodeMessageContent, parseMessageContent } from "@/lib/data/persistence-store";
 import { GrokProvider } from "@/lib/providers/grok-provider";
 import { recoverSavedVideoFrames } from "@/lib/uploads/stored-uploads";
+import { buildGrokVideoScenePrompt, GROK_SCENE_RESPONSE_PERSONA } from "@/lib/chat/video-scene-prompts";
 import { RUNPOD_VIDEO_MODEL, resultStore } from "@/lib/runpod/durable-results";
 
 export const PENDING_VIDEO_PREFIX = "[Katie video analysis pending:";
@@ -80,7 +81,7 @@ export async function publishVideoChat(requestId: string): Promise<{ status: str
     if (job.fallback_state === "completed" && usableVideoAnalysis(job.fallback_text)) {
       text = job.fallback_text!.trim();
       anyGrok = true;
-      text += "\n\n[Analysis used recovered video frames; audio and activity between sampled frames were not directly inspected.]";
+      // Return only the scene description; frame limitations are handled in the prompt.
     } else if (job.fallback_state === "failed") {
       if (job.status === "completed" && usableVideoAnalysis(job.analysis_text)) {
         text = job.analysis_text.trim() + "\n\n[Grok final review was unavailable: " +
@@ -190,13 +191,9 @@ export async function processNextGrokVideo(): Promise<{ status: string; requestI
       const preliminary = usableVideoAnalysis(row.analysis_text) ? row.analysis_text!.trim() : null;
       const generated = await provider.generate({
         name: "Katie",
-        persona: "You are Katie. Complete RunPod's preliminary video analysis. " +
-          "Verify all observations against the recovered original-video frames, correct unsupported " +
-          "details, and distinguish visible evidence from uncertainty and unavailable audio.",
-        summary: "", history: [], user: (row.request_prompt?.trim() ||
-          "Provide a detailed and specific description of the video.") +
-          (preliminary ? "\n\nPreliminary RunPod analysis (verify and complete):\n" +
-            preliminary.slice(0, 16000) : "\n\nRunPod returned no usable preliminary analysis."),
+        persona: GROK_SCENE_RESPONSE_PERSONA,
+        summary: "", history: [],
+        user: buildGrokVideoScenePrompt(row.request_prompt || "", preliminary),
         modelId: model, attachments: [frames],
       });
       if (!usableVideoAnalysis(generated.text)) throw new Error("Grok returned no usable video analysis");

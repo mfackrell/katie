@@ -1,6 +1,7 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { getSupabaseAdminClient } from "@/lib/data/supabase/admin";
+import { buildRunpodVideoScenePrompt } from "@/lib/chat/video-scene-prompts";
 
 export const RUNPOD_VIDEO_ENDPOINT_ID = "yafwsm98e8m9lv";
 export const RUNPOD_VIDEO_MODEL = "Qwen/Qwen3-VL-8B-Instruct";
@@ -325,7 +326,7 @@ export async function submitSavedVideo(params: {
             model: RUNPOD_VIDEO_MODEL, temperature: 0, max_tokens: 1400,
             messages: [{role: "user", content: [
               {type: "video_url", video_url: {url: signed.signedUrl}},
-              {type: "text", text: params.question},
+              {type: "text", text: buildRunpodVideoScenePrompt(params.question)},
             ]}],
           },
         },
