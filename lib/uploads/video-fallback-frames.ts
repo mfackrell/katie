@@ -1,7 +1,12 @@
 import type { FileReference } from "@/lib/providers/types";
 
 export type VideoFallbackFrame = NonNullable<FileReference["videoFrames"]>[number];
-export const MAX_VIDEO_FALLBACK_FRAMES = 4;
+export const MAX_VIDEO_FALLBACK_FRAMES = 10;
+// Midpoints of ten equal spans distribute visual evidence across the entire recording.
+export const VIDEO_FRAME_SAMPLE_FRACTIONS = Array.from(
+  { length: MAX_VIDEO_FALLBACK_FRAMES }, (_, index) =>
+    (index + 0.5) / MAX_VIDEO_FALLBACK_FRAMES,
+);
 const MAX_FRAME_BYTES = 350_000;
 
 export function validateVideoFallbackFrames(value: unknown): VideoFallbackFrame[] {
@@ -70,7 +75,7 @@ export async function captureVideoFallbackFrames(file: File): Promise<VideoFallb
     const context = canvas.getContext("2d");
     if (!context) return [];
     const frames: VideoFallbackFrame[] = [];
-    for (const fraction of [0.08, 0.33, 0.62, 0.88]) {
+    for (const fraction of VIDEO_FRAME_SAMPLE_FRACTIONS) {
       const second = Math.max(0, Math.min(video.duration - 0.05, video.duration * fraction));
       try {
         if (Math.abs(video.currentTime - second) > 0.03) {
