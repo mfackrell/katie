@@ -87,7 +87,7 @@ export async function GET(request: NextRequest) {
     const ids = [...new Set((undelivered ?? []).map(row => row.chat_request_id)
       .filter((id): id is string => typeof id === "string"))];
     let published = 0;
-    for (const id of ids.slice(0, 30)) {
+    for (const id of ids.slice(0, 1)) {
       try {
         const result = await publishVideoChat(id);
         if (result.status === "delivered") published++;
