@@ -40,6 +40,13 @@ import {
 import { LlmProvider, ProviderResponse } from "@/lib/providers/types";
 import type { ResolvedRoutingIntent, SelectionExplainer } from "@/lib/router/master-router";
 import { DEFAULT_REASONING_CATEGORIES, ReasoningStateAccumulator } from "@/lib/chat/reasoning-stream";
+import {
+  isCreativeNarrativeTurn,
+  preferredClaudeCreativeModel,
+  CREATIVE_CONTINUITY_INSTRUCTIONS,
+  CREATIVE_REWRITE_INSTRUCTIONS,
+  improveCreativeOriginality,
+} from "@/lib/chat/creative-continuity";
 import { isLikelyProviderRefusal, runWithRefusalFallback, shouldRetryOnProviderRefusal } from "@/lib/router/refusal-detection";
 import {
   classifyGenerationFailure,
@@ -972,6 +979,12 @@ export async function POST(request: NextRequest) {
     let loadedRepoContext: RepoGenerationContext | null = null;
     let repoContextDegraded: { reason: string } | null = null;
     const historyForProvider = history.map(({ role, content }) => ({ role, content }));
+    const creativeNarrativeRequest = isCreativeNarrativeTurn(message, historyForProvider, {
+      hasVisualInput: Boolean(images.length || attachments.some(file => file.mimeType.startsWith("image/"))),
+      hasVideoInput,
+      hasRepoContext: Boolean(activeRepoContext),
+      hasManualOverride: Boolean(overrideProvider || overrideModel),
+    });
     const controlPlaneConversationContext = [
       summary ? `Conversation summary: ${summary}` : "",
       history.length ? `Recent conversation: ${JSON.stringify(history.slice(-4))}` : "",
@@ -1146,6 +1159,51 @@ export async function POST(request: NextRequest) {
       console.log(`[Chat API] Selected Provider: ${provider.name}, Model: ${modelId}`);
       console.log(`[Chat API] Routing Model For UI: ${routingDecision.routerModel}`);
       console.log(`[Chat API] Routing Reasoning: ${routingDecision.reasoning}`);
+    }
+
+    // A scene-writing specialist preference applies only to automatically routed
+    // text fiction. Explicit model selections, visual inputs, repository work,
+    // and unrelated factual questions retain the router's original decision.
+    if (creativeNarrativeRequest && !storedWebsite.fresh) {
+      const claude = providers.find(candidate => candidate.name === "anthropic");
+      if (claude) {
+        try {
+          const available = await claude.listModels();
+          const preferredModel = preferredClaudeCreativeModel(available);
+          if (preferredModel && !(provider.name === "anthropic" && modelId === preferredModel)) {
+            const previousChoice = { provider, modelId, score: 0 };
+            const fallbackCandidates = [previousChoice, ...fallbackChain];
+            const unique = new Set<string>();
+            fallbackChain = fallbackCandidates.filter(candidate => {
+              const key = candidate.provider.name + ":" + candidate.modelId.toLowerCase();
+              if (candidate.provider.name === "anthropic" && candidate.modelId === preferredModel) return false;
+              if (unique.has(key)) return false;
+              unique.add(key);
+              return true;
+            });
+            provider = claude;
+            modelId = preferredModel;
+            intentAuthority = "heuristic";
+            intentResolutionReason = "creative-narrative-claude-preference";
+            selectionExplainer = {
+              ...selectionExplainer,
+              selected_model: modelId,
+              selected_provider: provider.name,
+              summary: "Claude writing specialist preferred for an ongoing fictional scene. Other models remain available on failure.",
+              selected_source: "deterministic-fallback",
+              fallback_used: false,
+            };
+            console.info("[CreativeRouting] Claude specialist selected", {
+              requestId, selectedModel: modelId, fallbackCount: fallbackChain.length,
+            });
+          }
+        } catch (error) {
+          // Discovery failure cannot prevent the ordinary router from answering.
+          console.warn("[CreativeRouting] Claude model discovery unavailable", {
+            requestId, reason: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }
     }
 
     const repoGate = shouldAttachRepoSourceDeterministically({
@@ -1544,7 +1602,7 @@ export async function POST(request: NextRequest) {
             const createParams = (selectedModelId: string) =>
               buildGenerationParams({
                 name,
-                persona: [personaForGeneration, storedWebsite.context].filter(Boolean).join("\n\n"),
+                persona: [personaForGeneration, storedWebsite.context, ...(creativeNarrativeRequest ? [CREATIVE_CONTINUITY_INSTRUCTIONS] : [])].filter(Boolean).join("\n\n"),
                 summary,
                 history: historyForProvider,
                 message: messageForGeneration,
@@ -1908,7 +1966,7 @@ ${chunkWorkflowSummary}`;
                             },
                           });
                         },
-                        onFinalTextDelta: suppressCalculationScaffolding
+                        onFinalTextDelta: suppressCalculationScaffolding || creativeNarrativeRequest
                           ? async () => {}
                           : async (delta) => enqueueDelta(delta),
                         maxDelegations: collaborationConfig.maxDelegations,
@@ -2021,7 +2079,7 @@ ${chunkWorkflowSummary}`;
                               },
                             });
                           },
-                          onFinalTextDelta: suppressCalculationScaffolding
+                          onFinalTextDelta: suppressCalculationScaffolding || creativeNarrativeRequest
                             ? async () => {}
                             : async (delta) => enqueueDelta(delta),
                           maxEscalations: 2,
@@ -2046,9 +2104,38 @@ ${chunkWorkflowSummary}`;
                     })();
 
                 const rawText = generation.result.text || generation.streamedText;
-                const cleanedText = suppressCalculationScaffolding
+                let cleanedText = suppressCalculationScaffolding
                   ? sanitizeCalculationResponse(rawText)
                   : rawText;
+
+                // Inspect the complete draft *before* streaming or saving it.
+                // If it substantially duplicates recent narrative text, request
+                // at most one original continuation from the same model.
+                if (creativeNarrativeRequest && cleanedText && !collaborationEnabledForRequest &&
+                    generation.result.provider === provider.name &&
+                    generation.result.model === modelId &&
+                    Date.now() + 45_000 < executionDeadlineMs) {
+                  const novelty = await improveCreativeOriginality({
+                    text: cleanedText,
+                    priorAssistantTexts: historyForProvider
+                      .filter(turn => turn.role === "assistant").map(turn => turn.content),
+                    rewrite: async () => {
+                      const revision = await provider.generate({
+                        ...finalParams,
+                        persona: finalParams.persona + "\n\n" + CREATIVE_REWRITE_INSTRUCTIONS,
+                      });
+                      return isLikelyProviderRefusal(revision, provider.name) ? null : revision.text;
+                    },
+                  });
+                  if (novelty.originalOverlap >= 0.38) {
+                    console.info("[CreativeQuality] prose repetition reviewed", {
+                      requestId, provider: provider.name, model: modelId,
+                      rewritten: novelty.revised,
+                      originalOverlap: novelty.originalOverlap, finalOverlap: novelty.finalOverlap,
+                    });
+                  }
+                  cleanedText = novelty.text;
+                }
 
                 if (suppressCalculationScaffolding && cleanedText !== rawText) {
                   console.info("[Chat API] Removed calculation scratch scaffolding from model response.", {

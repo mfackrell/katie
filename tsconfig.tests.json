@@ -53,6 +53,8 @@
     "tests/reasoning-ui-state.test.ts",
     "tests/video-ingestion.test.ts",
     "tests/claude-provider.test.ts",
+    "tests/creative-continuity.test.ts",
+    "lib/chat/creative-continuity.ts",
     "lib/router/policy-engine.ts",
     "lib/models/registry.ts",
     "lib/repo/content-injector.ts",
