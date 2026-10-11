@@ -29,6 +29,7 @@ type RunpodVideoRow = {
   video_total: number | null;
   source_filename: string | null;
   fallback_state: string | null;
+  fallback_attempts: number;
   fallback_text: string | null;
   fallback_model: string | null;
   fallback_started_at: string | null;
