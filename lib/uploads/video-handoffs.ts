@@ -16,30 +16,37 @@ export type VideoHandoff = {
 };
 
 type HandoffDatabase = {
-  public: { Tables: {
-    video_upload_handoffs: {
-      Row: VideoHandoff;
-      Insert: Partial<VideoHandoff>;
-      Update: Partial<VideoHandoff>;
-      Relationships: [];
-    };
-    video_upload_handoff_files: {
-      Row: HandoffFile;
-      Insert: Partial<HandoffFile>;
-      Update: Partial<HandoffFile>;
-      Relationships: [];
-    };
-    chat_requests: {
-      Row: {request_id: string; status: string; updated_at: string};
-      Insert: {request_id?: string; status?: string; updated_at?: string};
-      Update: {status?: string; updated_at?: string};
-      Relationships: [];
+  public: {
+    Tables: {
+      video_upload_handoffs: {
+        Row: { request_id: string; actor_id: string; chat_id: string;
+          request_payload: Record<string, unknown>; status: string; attempts: number;
+          last_error: string | null; claimed_at: string | null;
+          created_at: string; updated_at: string };
+        Insert: Record<string, unknown>;
+        Update: Record<string, unknown>;
+        Relationships: [];
+      };
+      video_upload_handoff_files: {
+        Row: { request_id: string; ordinal: number; file_name: string;
+          mime_type: string; bytes: number; upload_id: string | null;
+          upload_token: string | null; file_reference: Record<string, unknown> | null };
+        Insert: Record<string, unknown>;
+        Update: Record<string, unknown>;
+        Relationships: [];
+      };
+      chat_requests: {
+        Row: { request_id: string; status: string; updated_at: string };
+        Insert: Record<string, unknown>;
+        Update: Record<string, unknown>;
+        Relationships: [];
+      };
     };
     Views: Record<string, never>;
     Functions: Record<string, never>;
     Enums: Record<string, never>;
     CompositeTypes: Record<string, never>;
-  } };
+  }
 };
 
 // The legacy admin REST helper is read-oriented and does not support
