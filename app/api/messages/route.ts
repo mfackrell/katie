@@ -55,7 +55,7 @@ export async function GET(request: NextRequest) {
               for (const row of rows ?? []) {
                 if (row.status === "completed" && !usableVideoAnalysis(row.analysis_text)) {
                   const { error: markError } = await db.from("video_analysis_jobs")
-                    .update({ status: "rejected", error_code: "QWEN_NO_USABLE_ANALYSIS",
+                    .update({ status: "failed", error_code: "QWEN_NO_USABLE_ANALYSIS",
                       updated_at: new Date().toISOString() })
                     .eq("id", row.id).eq("status", "completed");
                   if (markError) throw markError;
