@@ -2491,6 +2491,10 @@ ${chunkWorkflowSummary}`;
                   ...(reviewSourceParams ?? createParams(result.model)),
                   ...(result.researchEvidence ? { researchEvidence: result.researchEvidence } : {}),
                 },
+                assessmentParams: {
+                  ...createParams(result.model),
+                  ...(result.researchEvidence ? { researchEvidence: result.researchEvidence } : {}),
+                },
                 leadProvider: draftProvider,
                 deadlineMs: executionDeadlineMs,
                 prepareParams: (params, participant) => ({

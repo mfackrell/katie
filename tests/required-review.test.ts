@@ -10,11 +10,14 @@ const params: ChatGenerateParams = {
   history: [{ role: "user", content: "I have ten years of comparable industry experience." }],
 };
 const draft: ProviderResponse = { provider: "openai", model: "lead", text: "Original complete draft." };
+const assessment = { objective: "Establish depth of experience", qualifications: ["Accounting leadership"], strongestEvidence: ["Current user: eight years of system experience"], criteria: ["Represent career breadth and supported duration"] };
 function provider(name: LlmProvider["name"], generate: LlmProvider["generate"]): LlmProvider {
-  return { name, generate, listModels: async () => [] } as unknown as LlmProvider;
+  return { name, generate: async (p: ChatGenerateParams) => p.persona.includes("KATIE_INDEPENDENT_ASSESSMENT")
+    ? { provider: name, model: p.modelId!, text: JSON.stringify(assessment) }
+    : generate(p), listModels: async () => [] } as unknown as LlmProvider;
 }
 const lead = provider("openai", async () => ({ ...draft, text: "Corrected final answer." }));
-const deadline = () => Date.now() + 60_000;
+const deadline = () => Date.now() + 180_000;
 
 test("actor mode is isolated and preserves Adaptive defaults", () => {
   assert.equal(normalizeReviewMode(undefined), "adaptive");
@@ -107,4 +110,60 @@ test("exhausted budget discloses unavailable review without starting calls", asy
     selectHelper: async () => { throw new Error("Must not call after deadline"); } });
   assert.equal(result.audit.status, "unavailable");
   assert.equal(result.audit.attempts.length, 0);
+});
+
+
+test("assessment is a separate draft-blind call and comparison uses its fixed criteria", async () => {
+  const phases: string[] = [];
+  const source = { ...params, history: [...params.history, { role: "user" as const, content: "JOB DESCRIPTION: multi-service-line accounting leadership" }] };
+  const collaboratorParams = { ...params, user: "SYNTHESIS CONTAMINATION", history: [{ role: "assistant" as const, content: draft.text }] };
+  const reviewer = {
+    name: "anthropic", listModels: async () => ["reviewer"],
+    generate: async (p: ChatGenerateParams) => {
+      if (p.persona.includes("KATIE_INDEPENDENT_ASSESSMENT")) {
+        phases.push("assessment");
+        assert.ok(!JSON.stringify(p).includes(draft.text));
+        assert.ok(!JSON.stringify(p).includes("SYNTHESIS CONTAMINATION"));
+        assert.deepEqual(p.history, source.history);
+        assert.ok(p.persona.includes(source.persona));
+        assert.equal(p.summary, source.summary);
+        assert.ok(p.user.includes(source.user));
+        return { provider: "anthropic", model: "reviewer", text: JSON.stringify(assessment) };
+      }
+      phases.push("comparison");
+      assert.deepEqual(phases, ["assessment", "comparison"]);
+      assert.ok(p.user.includes(JSON.stringify(assessment)));
+      assert.ok(p.user.includes(draft.text));
+      return { provider: "anthropic", model: "reviewer", text: JSON.stringify({ verdict: "revise", findings: "Establish the recurring career pattern before the recent example." }) };
+    },
+  } as LlmProvider;
+  const revision = provider("openai", async p => {
+    phases.push("revision");
+    assert.ok(p.user.includes(JSON.stringify(assessment)));
+    assert.ok(p.user.includes("Establish the recurring career pattern"));
+    return { ...draft, text: "Career-level answer with representative evidence." };
+  });
+  const result = await runRequiredDraftReview({ requestId: "blind", draft, params: collaboratorParams,
+    assessmentParams: source, leadProvider: revision, deadlineMs: deadline(),
+    selectHelper: async () => ({ provider: reviewer, modelId: "reviewer" }) });
+  assert.deepEqual(phases, ["assessment", "comparison", "revision"]);
+  assert.deepEqual(result.audit.independentAssessment, assessment);
+  assert.equal(result.audit.status, "revised");
+});
+
+test("an invalid independent assessment cannot proceed to draft comparison", async () => {
+  let firstCalls = 0;
+  const invalid = { name: "google", listModels: async () => ["invalid"], generate: async (p: ChatGenerateParams) => {
+    firstCalls++;
+    assert.ok(!p.user.includes(draft.text));
+    return { provider: "google", model: "invalid", text: '{"objective":"Invented","criteria":[]}' };
+  } } as LlmProvider;
+  const valid = provider("anthropic", async () => ({ provider: "anthropic", model: "valid", text: '{"verdict":"approve","findings":"Meets independent criteria."}' }));
+  let selections = 0;
+  const result = await runRequiredDraftReview({ requestId: "invalid-assessment", draft, params, leadProvider: lead, deadlineMs: deadline(),
+    selectHelper: async () => selections++ === 0 ? { provider: invalid, modelId: "invalid" } : { provider: valid, modelId: "valid" } });
+  assert.equal(firstCalls, 1);
+  assert.equal(result.audit.attempts[0].phase, "assessment");
+  assert.equal(result.audit.status, "approved");
+  assert.deepEqual(result.audit.independentAssessment, assessment);
 });
