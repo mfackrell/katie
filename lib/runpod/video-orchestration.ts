@@ -3,6 +3,7 @@ import { GrokProvider } from "@/lib/providers/grok-provider";
 import { recoverSavedVideoFrames } from "@/lib/uploads/stored-uploads";
 import { finalizeContextualVideoReply } from "@/lib/runpod/video-conversation";
 import { buildGrokVideoScenePrompt, GROK_SCENE_RESPONSE_PERSONA } from "@/lib/chat/video-scene-prompts";
+import { buildVideoConversationEvidence } from "@/lib/chat/video-evidence";
 import { RUNPOD_VIDEO_MODEL, resultStore } from "@/lib/runpod/durable-results";
 
 export const PENDING_VIDEO_PREFIX = "[Katie video analysis pending:";
@@ -79,17 +80,27 @@ export async function publishVideoChat(requestId: string): Promise<{ status: str
   let anyVisualEvidence = false;
   for (const job of jobs) {
     const label = job.source_filename || "Video";
+    // Keep the entire saved original-video description even when Grok succeeds.
+    // Grok only sees sampled stills; a shorter second report is additional
+    // evidence, not permission to discard the richer first report.
+    const runpodText = job.status === "completed" && usableVideoAnalysis(job.analysis_text)
+      ? job.analysis_text!.trim() : null;
     let text: string;
     if (job.fallback_state === "completed" && usableVideoAnalysis(job.fallback_text)) {
-      text = job.fallback_text!.trim();
+      text = buildVideoConversationEvidence({
+        runpodText,
+        grokText: job.fallback_text!.trim(),
+        runpodModel: job.model,
+        grokModel: job.fallback_model,
+      });
       anyGrok = true;
       anyVisualEvidence = true;
-      // Return only the scene description; frame limitations are handled in the prompt.
     } else if (job.fallback_state === "failed") {
-      if (job.status === "completed" && usableVideoAnalysis(job.analysis_text)) {
+      if (runpodText) {
         anyVisualEvidence = true;
-        text = job.analysis_text.trim() + "\n\n[Grok final review was unavailable: " +
-          (job.fallback_error_code || "unknown error") + ". This is the preliminary RunPod analysis.]";
+        text = buildVideoConversationEvidence({ runpodText, runpodModel: job.model }) +
+          "\n\n[Grok frame review was unavailable: " +
+          (job.fallback_error_code || "unknown error") + ".]";
       } else {
         text = "I could not analyze this video. RunPod did not produce a usable result and Grok also failed (" +
           (job.fallback_error_code || job.status) + "). The original video remains saved.";
@@ -103,6 +114,11 @@ export async function publishVideoChat(requestId: string): Promise<{ status: str
   let model = anyGrok ? (jobs.find(j => j.fallback_model)?.fallback_model || "grok") : RUNPOD_VIDEO_MODEL;
 
   if (anyVisualEvidence) {
+    console.info("[Video Evidence] Full independent descriptions forwarded to conversational model", {
+      requestId, videoCount: jobs.length, observationCharacters: answer.length,
+      runpodCharacters: jobs.reduce((sum, job) => sum + (job.analysis_text?.length ?? 0), 0),
+      grokCharacters: jobs.reduce((sum, job) => sum + (job.fallback_text?.length ?? 0), 0),
+    });
     const contextual = await finalizeContextualVideoReply({
       requestId, actorId: source.actor_id, chatId: source.target_chat_id,
       assistantMessageId: source.assistant_message_id,
@@ -205,11 +221,17 @@ export async function processNextGrokVideo(): Promise<{ status: string; requestI
       const model = ["grok-4.7", "grok-4.6", "grok-4.5", "grok-4.3"].find(name => available.includes(name));
       if (!model) throw new Error("No configured Grok vision model is available");
       const preliminary = usableVideoAnalysis(row.analysis_text) ? row.analysis_text!.trim() : null;
+      // Supply Grok the complete saved RunPod report, not a condensed rewrite.
+      const grokPrompt = buildGrokVideoScenePrompt(row.request_prompt || "", preliminary);
+      console.info("[Video Evidence] Full RunPod description forwarded to Grok", {
+        jobId: row.id, runpodCharacters: preliminary?.length ?? 0,
+        grokPromptCharacters: grokPrompt.length, frameCount: frames.videoFrames.length,
+      });
       const generated = await provider.generate({
         name: "Katie",
         persona: GROK_SCENE_RESPONSE_PERSONA,
         summary: "", history: [],
-        user: buildGrokVideoScenePrompt(row.request_prompt || "", preliminary),
+        user: grokPrompt,
         modelId: model, attachments: [frames],
       });
       if (!usableVideoAnalysis(generated.text)) throw new Error("Grok returned no usable video analysis");
