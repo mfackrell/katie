@@ -1213,7 +1213,7 @@ export async function POST(request: NextRequest) {
             const grokModels = await grok.listModels();
             const grokModel = ["grok-4.7", "grok-4.6", "grok-4.5", "grok-4.3"]
               .find(model => grokModels.includes(model)) ??
-              grokModels.find(model => /^grok-4(?:\\.|-|$)/i.test(model));
+              grokModels.find(model => /^grok-4(?:\.|-|$)/i.test(model));
             if (grokModel) {
               fallbackChain.push({ provider: grok, modelId: grokModel, score: 0 });
               console.info("[CreativeRouting] Grok secondary fallback retained", { requestId, model: grokModel });
