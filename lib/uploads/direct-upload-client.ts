@@ -243,6 +243,31 @@ export async function uploadFilesDirect(
       let completedChunks = new Set<number>();
       let completedSubParts = new Set<number>();
       if (prepared) {
+        if (options.handoffRequestId && isVideo) {
+          const linked = await withUploadDeadline("Linking existing video to conversation", 30_000,
+            async signal => readUploadResponse(await fetcher("/api/upload/prepare", {
+              method: "POST", signal,
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                name: file.name, type: file.type, size: file.size,
+                transport, existingUploadToken: prepared!.uploadToken,
+                handoffRequestId: options.handoffRequestId,
+                handoffIndex: fileIndex + (options.handoffIndexOffset ?? 0),
+              }),
+            })));
+          if (linked.uploadToken !== prepared.uploadToken ||
+              linked.uploadId !== prepared.uploadId) {
+            throw new Error("Registered video handoff returned a different signed upload.");
+          }
+          if (linked.fileReference && typeof linked.fileReference === "object") {
+            const recovered = linked.fileReference as FileReference;
+            if (recovered.fileName !== file.name || recovered.attachmentKind !== "video")
+              throw new Error("Recovered video reference does not match its original.");
+            references.push(recovered);
+            onStatus(`Recovered previously uploaded ${file.name}; no video was transferred.`);
+            continue;
+          }
+        }
         onStatus(`Checking whether ${file.name} already finished uploading…`);
         // A detached server worker can finish after the browser loses its connection.
         // Read the durable completed reference BEFORE inspecting/transferring chunks.
