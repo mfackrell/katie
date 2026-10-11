@@ -1,7 +1,8 @@
 import { spawn } from "node:child_process";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, dirname } from "node:path";
+import { createRequire } from "node:module";
 import { existsSync } from "node:fs";
 import sharp from "sharp";
 import { validateVideoFallbackFrames, type VideoFallbackFrame } from "./video-fallback-frames";
@@ -23,11 +24,18 @@ function ffmpegBinary(): string {
   if (process.platform !== "linux" || process.arch !== "x64") {
     throw new Error("Native video frame extraction requires the Linux x64 server runtime.");
   }
+  // Resolve against the module location first: a Vercel function bundle does
+  // not necessarily retain node_modules below process.cwd().
+  const candidates: string[] = [];
   try {
-    const path = join(process.cwd(), "node_modules", "@ffmpeg-installer", "linux-x64", "ffmpeg");
-    if (existsSync(path)) return path;
+    const require = createRequire(import.meta.url);
+    candidates.push(join(dirname(require.resolve("@ffmpeg-installer/linux-x64/package.json")), "ffmpeg"));
   } catch {
-    // A packaged binary must exist; do not invoke a system executable.
+    // Resolution may be unavailable with externalized optional packages.
+  }
+  candidates.push(join(process.cwd(), "node_modules", "@ffmpeg-installer", "linux-x64", "ffmpeg"));
+  for (const candidate of candidates) {
+    if (existsSync(candidate)) return candidate;
   }
   throw new Error("Native FFmpeg decoder is unavailable in this deployment.");
 }
