@@ -136,6 +136,32 @@ export function createStoredUploadService(storage: Storage, secret: string, opti
       return { uploadId: ticket.id, name: ticket.name,
         type: ticket.type, size: ticket.size };
     },
+    /** Operator-only restoration for uploads made before durable registration existed.
+     *  Never expose this function to a public route: old uploads have no actor owner.
+     */
+    async recoverUnlinkedVideo(uploadId: string): Promise<FileReference> {
+      if (!z.string().uuid().safeParse(uploadId).success) {
+        throw new UploadInputError("Invalid legacy upload ID.");
+      }
+      const stored = await objects.download(`references/${uploadId}.json`);
+      if (stored.error || !stored.data) throw new UploadInputError("Legacy video reference is unavailable.");
+      const reference = JSON.parse(await stored.data.text()) as FileReference;
+      if (reference.attachmentKind !== "video" || !reference.mimeType?.startsWith("video/")) {
+        throw new UploadInputError("Legacy source was not a video.");
+      }
+      const source = await objects.download(`incoming/${uploadId}`);
+      if (source.error || !source.data || source.data.size < 1 || source.data.size > 200 * 1024 * 1024) {
+        throw new UploadInputError("Original legacy video is unavailable.");
+      }
+      const ticket: Ticket = {
+        id: uploadId, kind: "upload", name: reference.fileName,
+        type: reference.mimeType, size: source.data.size,
+        expires: now() + 2 * 60 * 60 * 1000,
+      };
+      // HMAC reference proves to /api/chat that it may persist the privately
+      // retained original into the operator-specified actor's conversation.
+      return compact(reference, ticket);
+    },
     // Authenticated by the same short-lived HMAC ticket as the original signed upload.
     // A client can only write bounded chunks to its own randomly generated incoming path.
     async uploadChunk(token: string, index: number, bytes: Uint8Array, subIndex?: number) {
@@ -685,6 +711,7 @@ function getUploadService() {
 
 export const prepareStoredUpload = (input: unknown) => getUploadService().prepare(input);
 export const inspectStoredUploadTicket = (token: string) => getUploadService().inspectUpload(token);
+export const recoverUnlinkedVideoReference = (uploadId: string) => getUploadService().recoverUnlinkedVideo(uploadId);
 export const completeStoredUpload = async (token: string, videoFrames?: unknown) => {
   // First commit the complete original and reference. The browser may vanish at
   // any moment afterward; the durable handoff ledger makes the chat resumable.
