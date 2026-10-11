@@ -65,3 +65,108 @@ test('a pending video with an already-completed chat placeholder remains synthes
   const code = readFileSync('lib/runpod/video-conversation.ts', 'utf8');
   assert.match(code, /state.status !== "processing" && state.status !== "completed"/);
 });
+
+import { savedVideoFollowUpAnchor, loadSavedVideoFollowUp, formatSavedVideoFollowUp } from "../lib/chat/saved-video-observations";
+import type { Message } from "../lib/types/chat";
+
+const originalChat = "b7527887-cab2-4cc7-aa97-5dd947c3546c";
+const originalActor = "f94eeb41-9bcd-4eb8-9896-bb92e5e3b5c0";
+const originalFile = "ca927ecb-340b-4273-ae87-05d09f4d2959";
+const originalPath = `chats/${originalChat}/${originalFile}.source`;
+const originalTurn: Message[] = [
+  {
+    id: "4aaf75f1-f372-48fd-8181-44cf049b14a7",
+    chatId: originalChat, role: "user",
+    content: "Is this video what we discussed?",
+    createdAt: "2026-10-11T16:39:34.786Z",
+    attachments: [{
+      id: originalFile, chatId: originalChat,
+      fileName: "sample-recording.mp4", mimeType: "video/mp4",
+      conversationUsage: "explicit-reference",
+    }],
+  },
+  {
+    id: "ee39b8f8-8136-4bf7-b581-48f02443f77b",
+    chatId: originalChat, role: "assistant",
+    content: "Yes, it looks similar to what you described.",
+    createdAt: "2026-10-11T16:40:12.667Z",
+  },
+];
+const completedEvidence = {
+  chat_request_id: "sample-prior-video-request",
+  attachment_path: originalPath, source_filename: "sample-recording.mp4",
+  analysis_text: "The recording contains a person and a dog moving together in a garden.",
+  fallback_text: "The footage shows a person and a dog on a path beside flowers.",
+  model: "Qwen/Qwen3-VL-8B-Instruct", fallback_model: "grok-4.7",
+  submitted_at: "2026-10-11T16:39:36.513Z", video_index: 0,
+};
+
+test("a specific follow-up without the word video identifies the prior same-chat recording", async () => {
+  const anchor = savedVideoFollowUpAnchor(
+    "Does it include the ending scene?", originalTurn, 0,
+  );
+  assert.deepEqual(anchor?.attachmentPaths, [originalPath]);
+  let readerCalls = 0;
+  const result = await loadSavedVideoFollowUp({
+    actorId: originalActor, chatId: originalChat,
+    message: "Does it include the ending scene?",
+    history: originalTurn, freshAttachmentCount: 0,
+  }, async ({ actorId, chatId, attachmentPaths }) => {
+    readerCalls++;
+    assert.equal(actorId, originalActor);
+    assert.equal(chatId, originalChat);
+    assert.deepEqual(attachmentPaths, [originalPath]);
+    return [completedEvidence];
+  });
+  assert.equal(readerCalls, 1);
+  assert.ok(result?.hasObservations);
+  assert.equal(result?.sourceCount, 1);
+  assert.match(result!.context, /Saved Grok visual observations/);
+  assert.match(result!.context, /Saved RunPod visual observations/);
+  assert.match(result!.context, /NOT CONFIRMED BY THE SAVED OBSERVATIONS/);
+  assert.match(result!.context, /do not.*ask which video/i);
+  assert.match(result!.context, /do not reanalyze now/i);
+});
+
+test("saved-video follow-up does not silently reopen old media after a topic change", async () => {
+  const newTopic: Message[] = [...originalTurn, {
+    id: "fbb954e4-08b9-4fee-9277-32999df579c0",
+    chatId: originalChat, role: "user", content: "New topic: write a recipe for soup",
+    createdAt: "2026-10-11T16:41:00Z",
+  }];
+  assert.equal(savedVideoFollowUpAnchor("Does it include onions?", newTopic, 0), null);
+  assert.equal(savedVideoFollowUpAnchor("Write a proposal", originalTurn, 0), null);
+  assert.equal(savedVideoFollowUpAnchor("Does it include something?", originalTurn, 1), null);
+  assert.equal(savedVideoFollowUpAnchor("How many appointments do I have tomorrow?", originalTurn, 0), null);
+});
+
+test("saved-video evidence retrieval refuses a different clip and stale pre-upload analysis", async () => {
+  const different = await loadSavedVideoFollowUp({
+    actorId: originalActor, chatId: originalChat,
+    message: "Does it show the ending?", history: originalTurn, freshAttachmentCount: 0,
+  }, async () => [{ ...completedEvidence, attachment_path: "chats/other/unknown.source" }]);
+  assert.equal(different, null);
+  const stale = await loadSavedVideoFollowUp({
+    actorId: originalActor, chatId: originalChat,
+    message: "Does it show the ending?", history: originalTurn, freshAttachmentCount: 0,
+  }, async () => [{ ...completedEvidence, submitted_at: "2026-10-11T16:20:00Z" }]);
+  assert.equal(stale, null);
+});
+
+test("saved descriptions do not invent negative conclusions from an absent detail", () => {
+  const result = formatSavedVideoFollowUp([completedEvidence]);
+  assert.ok(result);
+  assert.match(result!.context, /A detail omitted from an analysis is NOT evidence that it did not happen/);
+  assert.match(result!.context, /do not guess/i);
+});
+
+test("saved video evidence is loaded before the general saved-file selector", () => {
+  const source = readFileSync("app/api/chat/route.ts", "utf8");
+  assert.ok(source.indexOf("const savedVideoFollowUp = await loadSavedVideoFollowUp(") <
+    source.indexOf("const attachmentDecision: AttachmentDecision = savedVideoFollowUp"));
+  assert.match(source, /personaForGeneration \+= "\\n\\n" \+ savedVideoFollowUp\.context/);
+  const loader = readFileSync("lib/chat/saved-video-observations.ts", "utf8");
+  assert.match(loader, /\.eq\("actor_id", params.actorId\)/);
+  assert.match(loader, /\.eq\("target_chat_id", params.chatId\)/);
+  assert.match(loader, /\.in\("attachment_path", params.attachmentPaths\)/);
+});
