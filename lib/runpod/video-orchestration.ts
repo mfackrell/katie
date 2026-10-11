@@ -1,6 +1,7 @@
 import { encodeMessageContent, parseMessageContent } from "@/lib/data/persistence-store";
 import { GrokProvider } from "@/lib/providers/grok-provider";
 import { recoverSavedVideoFrames } from "@/lib/uploads/stored-uploads";
+import { finalizeContextualVideoReply } from "@/lib/runpod/video-conversation";
 import { buildGrokVideoScenePrompt, GROK_SCENE_RESPONSE_PERSONA } from "@/lib/chat/video-scene-prompts";
 import { RUNPOD_VIDEO_MODEL, resultStore } from "@/lib/runpod/durable-results";
 
@@ -75,15 +76,18 @@ export async function publishVideoChat(requestId: string): Promise<{ status: str
 
   const sections: string[] = [];
   let anyGrok = false;
+  let anyVisualEvidence = false;
   for (const job of jobs) {
     const label = job.source_filename || "Video";
     let text: string;
     if (job.fallback_state === "completed" && usableVideoAnalysis(job.fallback_text)) {
       text = job.fallback_text!.trim();
       anyGrok = true;
+      anyVisualEvidence = true;
       // Return only the scene description; frame limitations are handled in the prompt.
     } else if (job.fallback_state === "failed") {
       if (job.status === "completed" && usableVideoAnalysis(job.analysis_text)) {
+        anyVisualEvidence = true;
         text = job.analysis_text.trim() + "\n\n[Grok final review was unavailable: " +
           (job.fallback_error_code || "unknown error") + ". This is the preliminary RunPod analysis.]";
       } else {
@@ -95,8 +99,20 @@ export async function publishVideoChat(requestId: string): Promise<{ status: str
     }
     sections.push(jobs.length > 1 ? "Video \"" + label + "\":\n" + text : text);
   }
-  const answer = sections.join("\n\n");
-  const model = anyGrok ? (jobs.find(j => j.fallback_model)?.fallback_model || "grok") : RUNPOD_VIDEO_MODEL;
+  let answer = sections.join("\n\n");
+  let model = anyGrok ? (jobs.find(j => j.fallback_model)?.fallback_model || "grok") : RUNPOD_VIDEO_MODEL;
+
+  if (anyVisualEvidence) {
+    const contextual = await finalizeContextualVideoReply({
+      requestId, actorId: source.actor_id, chatId: source.target_chat_id,
+      assistantMessageId: source.assistant_message_id,
+      question: source.request_prompt || "Describe what is happening.",
+      observations: answer,
+    });
+    if (contextual.status !== "ready") return { status: "synthesizing" };
+    answer = contextual.text;
+    model = contextual.model;
+  }
   const chatDb = db;
   const { data: message, error: readError } = await chatDb.from("messages")
     .select("id,content").eq("id", source.assistant_message_id)
