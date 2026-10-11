@@ -122,6 +122,11 @@ test("RunPod instructions focus on what occurs inside a screen-recorded video", 
   assert.match(prompt, /watermarks/i);
   assert.match(prompt, /progress bars/i);
   assert.match(prompt, /vague/i);
+  assert.match(prompt, /beginning/i);
+  assert.match(prompt, /FINAL portion/i);
+  assert.match(prompt, /last seconds/i);
+  assert.match(prompt, /transition/i);
+  assert.match(prompt, /ending is not visible/i);
   assert.doesNotMatch(prompt, /anysex\.com/i);
 });
 
@@ -134,6 +139,8 @@ test("Grok receives preliminary RunPod observations but must answer about actual
   assert.match(prompt, /time remaining/i);
   assert.match(GROK_SCENE_RESPONSE_PERSONA, /Start with the content itself/i);
   assert.match(GROK_SCENE_RESPONSE_PERSONA, /independently check/i);
+  assert.match(GROK_SCENE_RESPONSE_PERSONA, /latest-timestamp/i);
+  assert.match(prompt, /last timestamped frames/i);
   assert.match(GROK_SCENE_RESPONSE_PERSONA, /not 'Yes'/i);
   assert.match(buildGrokVideoScenePrompt("", null), /analyze the provided frames directly/i);
 });

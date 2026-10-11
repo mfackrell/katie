@@ -2,12 +2,15 @@ import type { FileReference } from "@/lib/providers/types";
 
 export type VideoFallbackFrame = NonNullable<FileReference["videoFrames"]>[number];
 export const MAX_VIDEO_FALLBACK_FRAMES = 10;
-// Ten equally spaced interior positions cover the full recording without
-// seeking beyond the last decodable frame on low-frame-rate video.
-export const VIDEO_FRAME_SAMPLE_FRACTIONS = Array.from(
-  { length: MAX_VIDEO_FALLBACK_FRAMES }, (_, index) =>
-    (index + 1) / (MAX_VIDEO_FALLBACK_FRAMES + 1),
-);
+// Cache schema for tail-weighted frame samples. Bump when sampling positions change.
+export const VIDEO_FRAME_SAMPLE_VERSION = 2;
+// Cover the opening, middle and END of a recording. The final three samples
+// deliberately cluster near the ending, where short scene cuts were previously
+// missed by ten equally spaced interior frames (last frame only at 90.9%).
+// Callers clamp and, when needed, seek backward to a decodable terminal frame.
+export const VIDEO_FRAME_SAMPLE_FRACTIONS = [
+  0.07, 0.20, 0.33, 0.46, 0.59, 0.72, 0.84, 0.92, 0.97, 0.995,
+] as const;
 const MAX_FRAME_BYTES = 350_000;
 
 export function validateVideoFallbackFrames(value: unknown): VideoFallbackFrame[] {
