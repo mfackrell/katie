@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { analyzeSavedVideosWithQwen } from "../lib/chat/runpod-video-fallback";
 import { runWithRefusalFallback } from "../lib/router/refusal-detection";
+import { buildRunpodVideoScenePrompt, buildGrokVideoScenePrompt, GROK_SCENE_RESPONSE_PERSONA } from "../lib/chat/video-scene-prompts";
 
 const saved = [{ chatId: "b7527887-cab2-4cc7-aa97-5dd947c3546c",
   attachmentId: "62b54efa-eecd-4d31-bf46-ac364655ee73", fileName: "clip.mp4" }];
@@ -108,4 +109,40 @@ test("Qwen rejects a mismatched result identity", async () => {
     status: async () => ({ ...completed, id: "another-job" }),
     persist: async () => undefined,
   }), /did not match/);
+});
+
+test("RunPod instructions focus on what occurs inside a screen-recorded video", () => {
+  const prompt = buildRunpodVideoScenePrompt("Like this?");
+  assert.match(prompt, /Like this\?/);
+  assert.match(prompt, /underlying video/i);
+  assert.match(prompt, /visibly doing/i);
+  assert.match(prompt, /interact/i);
+  assert.match(prompt, /website names/i);
+  assert.match(prompt, /watermarks/i);
+  assert.match(prompt, /progress bars/i);
+  assert.match(prompt, /vague/i);
+  assert.doesNotMatch(prompt, /anysex\.com/i);
+});
+
+test("Grok receives preliminary RunPod observations but must answer about actual scene", () => {
+  const prompt = buildGrokVideoScenePrompt("Like this?", "Screen recording of a site with two people shown.");
+  assert.match(prompt, /Like this\?/);
+  assert.match(prompt, /PRELIMINARY RUNPOD OBSERVATIONS \(UNVERIFIED/);
+  assert.match(prompt, /Screen recording of a site/);
+  assert.match(prompt, /actually happening in the scene/i);
+  assert.match(prompt, /time remaining/i);
+  assert.match(GROK_SCENE_RESPONSE_PERSONA, /Start with the content itself/i);
+  assert.match(GROK_SCENE_RESPONSE_PERSONA, /independently check/i);
+  assert.match(GROK_SCENE_RESPONSE_PERSONA, /not 'Yes'/i);
+  assert.match(buildGrokVideoScenePrompt("", null), /analyze the provided frames directly/i);
+});
+
+test("RunPod and Grok production code use the scene-focused prompt builders", () => {
+  const fs = require("node:fs") as typeof import("node:fs");
+  const runpodSource = fs.readFileSync("lib/runpod/durable-results.ts", "utf8");
+  const grokSource = fs.readFileSync("lib/runpod/video-orchestration.ts", "utf8");
+  assert.match(runpodSource, /text: buildRunpodVideoScenePrompt\(params\.question\)/);
+  assert.match(grokSource, /persona: GROK_SCENE_RESPONSE_PERSONA/);
+  assert.match(grokSource, /user: buildGrokVideoScenePrompt\(row\.request_prompt \|\| "", preliminary\)/);
+  assert.doesNotMatch(grokSource, /text \+= .*Analysis used recovered video frames/);
 });
