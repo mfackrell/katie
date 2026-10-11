@@ -75,7 +75,7 @@ export function buildContextualVideoReplyPrompt(userQuestion: string, observedVi
     "Your task is to respond to the ongoing conversation, NOT to give a standalone",
     "video description or review unless the user explicitly asks for one.",
     "",
-    "The preceding conversation is the primary context. Use it to determine",
+    "The preceding conversation history is the PRIMARY context. Use it to determine",
     "what you and the user are discussing, the shared tone and dynamic, and",
     "what the user means by the video. Treat their message and the attached",
     "video as ONE conversational turn. In particular, interpret short messages",
