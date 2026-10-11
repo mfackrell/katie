@@ -126,9 +126,7 @@ export async function publishVideoChat(requestId: string): Promise<{ status: str
   }).eq("request_id", requestId).eq("chat_id", source.target_chat_id)
     .eq("actor_id", source.actor_id);
   if (requestError) {
-    console.error("[Video Delivery] chat request update failed", { requestId, error: requestError.message });
-    // The chat message itself is already persisted. Cron will reconcile the request
-    // separately rather than retrying and overwriting the final message.
+    throw new Error("Cannot update recovered chat request: " + requestError.message);
   }
 
   const { error: jobError } = await db.from("video_analysis_jobs")
