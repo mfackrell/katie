@@ -1377,7 +1377,12 @@ export async function POST(request: NextRequest) {
     }
 
     const finalProviderSupport = getAttachmentSupportForProvider(provider.name, attachments);
-    if (!finalProviderSupport.supported) {
+    // A failed or missing Gemini file URI must not preempt fallback access
+    // to the original privately saved MP4. Let Gemini report its error,
+    // then try Qwen and finally the existing Grok frame recovery.
+    const canRecoverOriginalWithQwen =
+      hasVideoInput && provider.name === "google" && Boolean(process.env.RUNPOD_API_KEY);
+    if (!finalProviderSupport.supported && !canRecoverOriginalWithQwen) {
       return NextResponse.json(
         { error: finalProviderSupport.reason },
         { status: 400 }
