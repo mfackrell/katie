@@ -2011,7 +2011,7 @@ ${chunkWorkflowSummary}`;
                             },
                           });
                         },
-                        onFinalTextDelta: suppressCalculationScaffolding || creativeNarrativeRequest
+                        onFinalTextDelta: suppressCalculationScaffolding || creativeNarrativeRequest || hasVideoInput
                           ? async () => {}
                           : async (delta) => enqueueDelta(delta),
                         maxDelegations: collaborationConfig.maxDelegations,
@@ -2124,7 +2124,7 @@ ${chunkWorkflowSummary}`;
                               },
                             });
                           },
-                          onFinalTextDelta: suppressCalculationScaffolding || creativeNarrativeRequest
+                          onFinalTextDelta: suppressCalculationScaffolding || creativeNarrativeRequest || hasVideoInput
                             ? async () => {}
                             : async (delta) => enqueueDelta(delta),
                           maxEscalations: 2,
@@ -2190,13 +2190,45 @@ ${chunkWorkflowSummary}`;
                   });
                 }
 
+                let conversationalResult: ProviderResponse | null = null;
+                if (hasVideoInput && !candidate.runpodVideoFallback &&
+                    candidate.provider.name === "google" && videoReplyTarget && cleanedText) {
+                  const conversational = providers.find(item => item.name === videoReplyTarget.provider);
+                  if (!conversational) throw new Error("Selected conversational provider is no longer configured.");
+                  conversationalResult = await generateContextualVideoReply({
+                    provider: conversational,
+                    model: videoReplyTarget.model,
+                    persona: personaForGeneration,
+                    summary,
+                    history: historyForProvider,
+                    userQuestion: message,
+                    observations: cleanedText,
+                  });
+                  cleanedText = conversationalResult.text;
+                  emitChunk({
+                    type: "metadata", provider: conversationalResult.provider,
+                    modelId: conversationalResult.model, videoSynthesis: "contextual",
+                    resetText: true,
+                  });
+                  console.info("[Video Routing] contextual conversational reply generated", {
+                    requestId, observationModel: candidate.modelId,
+                    conversationalModel: conversationalResult.model,
+                    observationCharacters: rawText.length,
+                  });
+                }
+
                 streamedText = cleanedText;
                 return {
-                  ...generation.result,
+                  ...(conversationalResult ?? generation.result),
                   text: cleanedText
                 };
               },
-              detectRefusal: (generationResult, candidate) => isLikelyProviderRefusal(generationResult, candidate.provider.name),
+              detectRefusal: (generationResult, candidate) =>
+                hasVideoInput && videoReplyTarget &&
+                generationResult.provider === videoReplyTarget.provider &&
+                generationResult.model === videoReplyTarget.model
+                  ? false // A conversational-model refusal is final; do not bypass it with another visual model.
+                  : isLikelyProviderRefusal(generationResult, candidate.provider.name),
               rerouteOnRefusal: async ({ attempt }) => {
                 if (hasVideoInput) return null; // Always honor deterministic Grok video-frame fallback.
                 if (!resolvedRoutingIntentForReroute || refusalRerouteCount >= maxRefusalReroutes) {
