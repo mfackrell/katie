@@ -3,7 +3,8 @@ import { websiteEvidenceStore } from "@/lib/research/stored-evidence";
 import { attachmentAccessContext, type ConversationAttachment } from "@/lib/chat/attachment-continuity";
 import { persistConversationAttachment, restoreConversationAttachment, loadConversationAttachmentCatalog, loadActorAttachmentCatalog, recoverSavedVideoFrames, recoverUploadVideoFrames } from "@/lib/uploads/stored-uploads";
 import { describeAttachmentEvidence } from "@/lib/uploads/attachment-observations";
-import { analyzeSavedVideosWithQwen } from "@/lib/chat/runpod-video-fallback";
+import { submitSavedVideo } from "@/lib/runpod/durable-results";
+import { pendingVideoMessage } from "@/lib/runpod/video-orchestration";
 import { RUNPOD_VIDEO_MODEL } from "@/lib/runpod/durable-results";
 import { buildImageReference, imageFileFromDataUrl } from "@/lib/uploads/image-reference";
 import { selectStoredAttachments, loadSelectedAttachmentSources, explicitlyRequestsVideo } from "@/lib/chat/attachment-selection";
@@ -1539,6 +1540,7 @@ export async function POST(request: NextRequest) {
               }
             };
 
+            let pendingVideoAssistantMessageId: string | null = null;
             const createParams = (selectedModelId: string) =>
               buildGenerationParams({
                 name,
@@ -1639,13 +1641,39 @@ ${chunkWorkflowSummary}`;
                   console.info("[Video Routing] Gemini failed; attempting original-video Qwen", {
                     requestId, videoCount: sources.length,
                   });
-                  const qwen = await analyzeSavedVideosWithQwen(sources, messageForGeneration);
-                  modelId = qwen.model;
-                  emitChunk({ type: "metadata", provider: "runpod", modelId: qwen.model,
-                    resetText: true, videoFallback: "qwen-original-video",
-                    queueMs: qwen.queueMs, inferenceMs: qwen.inferenceMs });
-                  streamedText = qwen.text;
-                  return { text: qwen.text, model: qwen.model,
+                  if (!sources.length || sources.length > 5) {
+                    throw new Error("Qwen requires 1 to 5 retained original videos.");
+                  }
+                  const assistantMessageId = crypto.randomUUID();
+                  // Submit all originals durably, then release the HTTP stream.
+                  // The independent RunPod reconciliation and Grok cron own
+                  // completion; no Qwen polling occurs within this chat request.
+                  const submissions = await Promise.allSettled(sources.map((source, index) =>
+                    submitSavedVideo({
+                      chatId: source.chatId,
+                      attachmentPath: "chats/" + source.chatId + "/" + source.attachmentId + ".source",
+                      question: messageForGeneration.trim().slice(0, 1900) ||
+                        "Provide a detailed and specific description of the video.",
+                      requestId, targetChatId: chatId, actorId,
+                      assistantMessageId, videoIndex: index,
+                      videoTotal: sources.length, sourceFilename: source.fileName,
+                    })
+                  ));
+                  const rejected = submissions.filter(item => item.status === "rejected");
+                  if (rejected.length) {
+                    console.error("[Video Routing] asynchronous RunPod submissions incomplete; using Grok immediately", {
+                      requestId, failedCount: rejected.length, total: sources.length,
+                    });
+                    throw new Error("Qwen video submission failed; using Grok's saved-frame fallback.");
+                  }
+                  pendingVideoAssistantMessageId = assistantMessageId;
+                  modelId = RUNPOD_VIDEO_MODEL;
+                  const notice = pendingVideoMessage(requestId, sources.length);
+                  emitChunk({ type: "metadata", provider: "runpod", modelId: RUNPOD_VIDEO_MODEL,
+                    resetText: true, videoFallback: "qwen-durable-background",
+                    videoAnalysisPending: true });
+                  streamedText = notice;
+                  return { text: notice, model: RUNPOD_VIDEO_MODEL,
                     provider: "runpod" as ProviderResponse["provider"] };
                 }
                 // Do not launch a browser or decode a large private MP4 unless
@@ -2283,7 +2311,7 @@ ${chunkWorkflowSummary}`;
 
             console.log("[Chat API] Generation successful. Saving assistant response.");
             const assistantText = result.text || streamedText;
-            const assistantMessageId = crypto.randomUUID();
+            const assistantMessageId = pendingVideoAssistantMessageId ?? crypto.randomUUID();
             await saveMessage(chatId, {
               id: assistantMessageId,
               role: "assistant",
