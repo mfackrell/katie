@@ -76,6 +76,7 @@
     "tests/provider-response-errors.test.ts",
     "tests/stored-website-evidence.test.ts",
     "tests/chat-failure-regressions.test.ts",
-    "tests/server-video-frame-recovery.test.ts"
+    "tests/server-video-frame-recovery.test.ts",
+    "tests/runpod-video-fallback.test.ts"
   ]
 }
