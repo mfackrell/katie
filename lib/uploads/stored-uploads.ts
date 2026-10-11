@@ -4,7 +4,7 @@ import { z } from "zod";
 import type { ConversationAttachment } from "@/lib/chat/attachment-continuity";
 import type { FileReference } from "@/lib/providers/types";
 import { buildFileReferences, validateUploadFiles } from "./build-file-references";
-import { validateVideoFallbackFrames } from "./video-fallback-frames";
+import { MAX_VIDEO_FALLBACK_FRAMES, validateVideoFallbackFrames, type VideoFallbackFrame } from "./video-fallback-frames";
 import { extractFramesFromPrivateVideo } from "./server-video-frame-recovery";
 
 const BUCKET = "katie-attachments";
@@ -374,23 +374,42 @@ export function createStoredUploadService(storage: Storage, secret: string, opti
       const stored = await objects.download(`${path}.json`);
       if (stored.error || !stored.data) throw new UploadInputError("Previously saved video details are unavailable.");
       const record = JSON.parse(await stored.data.text()) as {
-        reference: FileReference; hasSource: boolean; refreshedAt: number; actorId?: string
+        reference: FileReference; hasSource: boolean; refreshedAt: number;
+        actorId?: string; frameSampleTarget?: number;
       };
       if (record.actorId && record.actorId !== expectedActorId) throw new UploadInputError("Video belongs to another actor.");
       if (!record.reference.mimeType.startsWith("video/")) throw new UploadInputError("Saved attachment is not a video.");
-      if (record.reference.videoFrames?.length) return record.reference;
+      const existing = record.reference.videoFrames;
+      // Older videos may have four cached frames. Resample the retained original
+      // once to upgrade them to ten; avoid repeatedly decoding short/corrupt clips.
+      if (existing?.length && (record.frameSampleTarget === MAX_VIDEO_FALLBACK_FRAMES || !record.hasSource)) {
+        return record.reference;
+      }
       if (!record.hasSource) throw new UploadInputError("Original video was not retained; cannot extract real frames.");
       const original = await objects.download(`${path}.source`);
-      if (original.error || !original.data) throw new UploadInputError("The original saved video is no longer available.");
-      const frames = validateVideoFallbackFrames(await extract(original.data));
-      if (!frames.length) throw new UploadInputError("Server decoded no video frames; Grok visual fallback is unavailable.");
-      record.reference.videoFrames = frames;
+      if (original.error || !original.data) {
+        if (existing?.length) return record.reference;
+        throw new UploadInputError("The original saved video is no longer available.");
+      }
+      let frames: VideoFallbackFrame[];
+      try {
+        frames = validateVideoFallbackFrames(await extract(original.data));
+      } catch (error) {
+        if (!existing?.length) throw error;
+        console.warn("[Video Routing] ten-frame upgrade failed; retaining existing frames", {
+          attachmentId: attachment.id, previousCount: existing.length,
+        });
+        return record.reference;
+      }
+      if (!frames.length && !existing?.length) throw new UploadInputError("Server decoded no video frames; Grok visual fallback is unavailable.");
+      record.reference.videoFrames = existing && existing.length > frames.length ? existing : frames;
+      record.frameSampleTarget = MAX_VIDEO_FALLBACK_FRAMES;
       const saved = await objects.upload(`${path}.json`, JSON.stringify(record), {
         contentType: "application/json", upsert: true
       });
       if (saved.error) throw new Error("Unable to persist recovered video frames.");
       console.info("[Video Routing] saved video frames recovered", {
-        attachmentId: attachment.id, frameCount: frames.length, source: "saved-conversation"
+        attachmentId: attachment.id, frameCount: record.reference.videoFrames.length, source: "saved-conversation"
       });
       return record.reference;
     },
@@ -402,19 +421,33 @@ export function createStoredUploadService(storage: Storage, secret: string, opti
       if (!ticket.type.startsWith("video/")) throw new UploadInputError("Signed attachment is not a video.");
       const stored = await objects.download(referencePath(ticket));
       if (stored.error || !stored.data) throw new UploadInputError("Uploaded video reference is unavailable.");
-      const reference = JSON.parse(await stored.data.text()) as FileReference;
-      if (reference.videoFrames?.length) return reference;
+      const reference = JSON.parse(await stored.data.text()) as FileReference & { frameSampleTarget?: number };
+      const existing = reference.videoFrames;
+      if (existing?.length && reference.frameSampleTarget === MAX_VIDEO_FALLBACK_FRAMES) return reference;
       const original = await objects.download(sourcePath(ticket));
-      if (original.error || !original.data) throw new UploadInputError("The uploaded original video is unavailable.");
-      const frames = validateVideoFallbackFrames(await extract(original.data));
-      if (!frames.length) throw new UploadInputError("Server decoded no video frames; Grok visual fallback is unavailable.");
-      reference.videoFrames = frames;
+      if (original.error || !original.data) {
+        if (existing?.length) return reference;
+        throw new UploadInputError("The uploaded original video is unavailable.");
+      }
+      let frames: VideoFallbackFrame[];
+      try {
+        frames = validateVideoFallbackFrames(await extract(original.data));
+      } catch (error) {
+        if (!existing?.length) throw error;
+        console.warn("[Video Routing] upload ten-frame upgrade failed; retaining existing frames", {
+          uploadId: ticket.id, previousCount: existing.length,
+        });
+        return reference;
+      }
+      if (!frames.length && !existing?.length) throw new UploadInputError("Server decoded no video frames; Grok visual fallback is unavailable.");
+      reference.videoFrames = existing && existing.length > frames.length ? existing : frames;
+      reference.frameSampleTarget = MAX_VIDEO_FALLBACK_FRAMES;
       const saved = await objects.upload(referencePath(ticket), JSON.stringify(reference), {
         contentType: "application/json", upsert: true
       });
       if (saved.error) throw new Error("Unable to persist recovered video frames.");
       console.info("[Video Routing] uploaded video frames recovered", {
-        uploadId: ticket.id, frameCount: frames.length, source: "signed-upload"
+        uploadId: ticket.id, frameCount: reference.videoFrames.length, source: "signed-upload"
       });
       return reference;
     },
