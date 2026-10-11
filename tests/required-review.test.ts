@@ -23,6 +23,11 @@ const assessment: IndependentAssessment = {
   qualifications: ["Executive finance leadership, manufacturing and global experience distinctly, audit remediation"],
   strongestEvidence: ["Verified memory: $90M global professional services leadership; manufacturing experience separately"],
   criteria: ["Lead with supported executive qualifications; concise directly responsive limitation; no unsupported equivalence", "Deliver application-ready text without internal commentary or unnecessary follow-up questions"],
+  synthesis: {
+    conclusion: "Experienced executive with manufacturing leadership and separate global audit remediation capability",
+    dimensions: [{ dimension: "Finance leadership", supportedScope: "Career-level capability across manufacturing and global businesses", evidence: ["Verified career memory and direct user clarifications"] }],
+    emphasis: "Establish breadth and responsibility; use representative outcomes. Valuation figures do not add value to requested revenue sizes.",
+  },
   taskContract: {
     deliverable: "An application response, not a qualification-gap assessment",
     requirements: [
@@ -241,4 +246,18 @@ test("unavailable review never releases the unverified draft", async () => {
   assert.equal(result.audit.status, "unavailable");
   assert.match(result.result.text, /withheld the draft/);
   assert.ok(!result.result.text.includes(draft.text));
+});
+
+test("a generated rubric cannot omit the synthesis and economy acceptance gates", () => {
+  const reduced = structuredClone(assessment);
+  reduced.criteria = ["Accurate facts"];
+  const ids = acceptanceIds(reduced);
+  assert.ok(ids.includes("scope-and-sufficiency"));
+  assert.ok(ids.includes("evidence-economy"));
+  assert.ok(ids.includes("metric-meaning"));
+  const rubberStamp = verdict("approve", reduced);
+  rubberStamp.checks = rubberStamp.checks.filter(c => c.id !== "evidence-economy");
+  assert.throws(() => validateAnswerReview(rubberStamp, reduced), /every requirement/);
+  const noSynthesis = { ...reduced, synthesis: undefined };
+  assert.throws(() => validateAssessment(noSynthesis, reviewBaseline(params).turns), /Invalid independent task contract/);
 });
