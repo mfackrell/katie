@@ -1,5 +1,6 @@
 import { after, NextRequest, NextResponse } from "next/server";
 import { assertCronAuth } from "@/lib/runpod/durable-results";
+import { POST as submitChatInsideServer } from "@/app/api/chat/route";
 import {
   beginStoredUploadProcessing, getStoredUploadChunkStatus,
   getStoredUploadProcessingResult, processStoredUploadInBackground,
@@ -73,16 +74,19 @@ async function dispatchHandoff(row: VideoHandoff, origin: string): Promise<strin
       ...row.request_payload,
       fileReferences: files.map(file => file.file_reference),
     };
-    const response = await fetch(new URL("/api/chat", origin), {
+    // Calling a protected deployment through public HTTP returns a 401
+    // Vercel Authentication challenge. This is already an authenticated cron
+    // invocation, so invoke Katie's own chat handler in the same server process.
+    // The handler still checks chat ownership and enforces x-request-id replay.
+    const internalRequest = new NextRequest(new URL("/api/chat", origin), {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         "x-request-id": row.request_id,
       },
       body: JSON.stringify(payload),
-      signal: AbortSignal.timeout(230_000),
-      cache: "no-store",
     });
+    const response = await submitChatInsideServer(internalRequest);
     // Do not abort a streamed Gemini/RunPod handoff as soon as headers arrive.
     // Wait for the server to persist the resulting chat request and placeholder.
     const text = await response.text();
