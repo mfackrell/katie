@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { selectVideoReplyTarget, generateContextualVideoReply, buildContextualVideoReplyPrompt } from "../lib/chat/video-response";
+import { buildVideoConversationEvidence } from "../lib/chat/video-evidence";
 import type { LlmProvider } from "../lib/providers/types";
 
 const claude: LlmProvider = {
@@ -169,4 +170,68 @@ test("saved video evidence is loaded before the general saved-file selector", ()
   assert.match(loader, /\.eq\("actor_id", params.actorId\)/);
   assert.match(loader, /\.eq\("target_chat_id", params.chatId\)/);
   assert.match(loader, /\.in\("attachment_path", params.attachmentPaths\)/);
+});
+
+test("Claude sees both entire video reports even if Grok's frame review is shorter", async () => {
+  const distinctiveEnding = "UNIQUE_ENDING_RECORDED_ONLY_BY_RUNPOD";
+  const runpodText = "The recording begins with a person walking through a garden. " +
+    "The wind changes the direction of the nearby leaves. ".repeat(550) +
+    distinctiveEnding;
+  const grokText = "The person and the path are visible in the ten sampled frames.";
+  const observations = buildVideoConversationEvidence({
+    runpodText, grokText, runpodModel: "Qwen", grokModel: "grok-4.7",
+  });
+  assert.ok(runpodText.length > 22000, "guard against accidental Claude truncation");
+  assert.ok(observations.includes(runpodText));
+  assert.ok(observations.includes(grokText));
+  assert.ok(observations.includes(distinctiveEnding));
+  assert.ok(observations.indexOf("FULL RUNPOD VIDEO DESCRIPTION") <
+    observations.indexOf("GROK INDEPENDENT FRAME REVIEW"));
+
+  let prompt = "";
+  const provider: LlmProvider = { name: "anthropic", listModels: async () => ["claude-fable-5-1"],
+    generate: async params => {
+      prompt = params.user;
+      assert.deepEqual(params.attachments, []);
+      assert.deepEqual(params.images, []);
+      assert.deepEqual(params.history, [{ role: "assistant", content: "We were discussing garden paths." }]);
+      return { provider: "anthropic", model: "claude-fable-5-1", text: "The leaves turned, just like you said." };
+    },
+  };
+  await generateContextualVideoReply({
+    provider, model: "claude-fable-5-1",
+    persona: "Katie", summary: "Talking about gardens",
+    history: [{ role: "assistant", content: "We were discussing garden paths." }],
+    userQuestion: "[video]", observations,
+  });
+  assert.ok(prompt.includes(runpodText), "Claude must receive the complete original-video report");
+  assert.ok(prompt.includes(grokText), "Claude must also receive the independent review");
+  assert.ok(prompt.includes(distinctiveEnding), "distinctive ending survives final handoff");
+  assert.match(prompt, /VISUAL SPECIFICITY ARE COMPLEMENTARY/);
+  assert.match(prompt, /two or three most relevant concrete/i);
+  assert.match(prompt, /not disposable background/i);
+  assert.match(prompt, /video shared without text/i);
+});
+
+test("publisher retains RunPod when Grok succeeds, with separate source labels", () => {
+  const publisher = readFileSync("lib/runpod/video-orchestration.ts", "utf8");
+  assert.match(publisher, /buildVideoConversationEvidence\(\{/);
+  assert.match(publisher, /runpodText,/);
+  assert.match(publisher, /grokText: job\.fallback_text!\.trim\(\)/);
+  assert.doesNotMatch(publisher, /text = job\.fallback_text!\.trim\(\)/);
+  assert.match(publisher, /observationCharacters: answer\.length/);
+});
+
+test("missing or conflicting visual reports remain identifiable as separate evidence", () => {
+  const onlyRunpod = buildVideoConversationEvidence({ runpodText: "A red truck turns right." });
+  assert.match(onlyRunpod, /A red truck turns right/);
+  assert.doesNotMatch(onlyRunpod, /GROK INDEPENDENT FRAME REVIEW/);
+  const conflicting = buildVideoConversationEvidence({
+    runpodText: "A red truck turns right.",
+    grokText: "A blue truck goes straight.",
+  });
+  assert.match(conflicting, /A red truck turns right/);
+  assert.match(conflicting, /A blue truck goes straight/);
+  assert.match(conflicting, /If reports conflict/);
+  assert.equal(buildVideoConversationEvidence({}), "");
 });

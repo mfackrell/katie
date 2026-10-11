@@ -133,7 +133,7 @@ test("RunPod instructions focus on what occurs inside a screen-recorded video", 
 test("Grok receives preliminary RunPod observations but must answer about actual scene", () => {
   const prompt = buildGrokVideoScenePrompt("Like this?", "Screen recording of a site with two people shown.");
   assert.match(prompt, /Like this\?/);
-  assert.match(prompt, /PRELIMINARY RUNPOD OBSERVATIONS \(UNVERIFIED/);
+  assert.match(prompt, /COMPLETE VERBATIM RUNPOD DESCRIPTION \(UNVERIFIED OBSERVATIONS/);
   assert.match(prompt, /Screen recording of a site/);
   assert.match(prompt, /actually happening in the scene/i);
   assert.match(prompt, /time remaining/i);
@@ -150,6 +150,20 @@ test("RunPod and Grok production code use the scene-focused prompt builders", ()
   const grokSource = readFileSync("lib/runpod/video-orchestration.ts", "utf8");
   assert.match(runpodSource, /text: buildRunpodVideoScenePrompt\(params\.question\)/);
   assert.match(grokSource, /persona: GROK_SCENE_RESPONSE_PERSONA/);
-  assert.match(grokSource, /user: buildGrokVideoScenePrompt\(row\.request_prompt \|\| "", preliminary\)/);
+  assert.match(grokSource, /const grokPrompt = buildGrokVideoScenePrompt\(row\.request_prompt \|\| "", preliminary\)/);
+  assert.match(grokSource, /user: grokPrompt/);
+  assert.match(grokSource, /const preliminary = usableVideoAnalysis\(row\.analysis_text\)/);
   assert.doesNotMatch(grokSource, /text \+= .*Analysis used recovered video frames/);
+});
+
+test("Grok receives every character of long RunPod output, including late details", () => {
+  const sentinel = "UNIQUE_FINAL_SCENE_AT_23800_CHARS";
+  const complete = "The scene begins in a workshop. " + "Specific visual observation. ".repeat(850) + sentinel;
+  assert.ok(complete.length > 16000);
+  const prompt = buildGrokVideoScenePrompt("What changes near the end?", complete);
+  assert.ok(prompt.includes(complete), "full RunPod text must be present verbatim, not summarized or cropped");
+  assert.ok(prompt.includes(sentinel), "late details must survive the handoff to Grok");
+  assert.match(prompt, /Read the COMPLETE verbatim RunPod description/i);
+  assert.match(GROK_SCENE_RESPONSE_PERSONA, /not replace/i);
+  assert.doesNotMatch(readFileSync("lib/chat/video-scene-prompts.ts", "utf8"), /preliminary\\.trim\\(\\)\\.slice/);
 });
