@@ -2,6 +2,8 @@ import type { FileReference } from "@/lib/providers/types";
 
 export type VideoFallbackFrame = NonNullable<FileReference["videoFrames"]>[number];
 export const MAX_VIDEO_FALLBACK_FRAMES = 10;
+// Cache schema for tail-weighted frame samples. Bump when sampling positions change.
+export const VIDEO_FRAME_SAMPLE_VERSION = 2;
 // Cover the opening, middle and END of a recording. The final three samples
 // deliberately cluster near the ending, where short scene cuts were previously
 // missed by ten equally spaced interior frames (last frame only at 90.9%).
