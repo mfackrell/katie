@@ -3,6 +3,7 @@ import { assertCronAuth } from "@/lib/runpod/durable-results";
 import {
   beginStoredUploadProcessing, getStoredUploadChunkStatus,
   getStoredUploadProcessingResult, processStoredUploadInBackground,
+  recoverUnlinkedVideoReference,
 } from "@/lib/uploads/stored-uploads";
 import {
   claimVideoHandoff, findChatRequest, listVideoHandoffs, readHandoffFiles,
@@ -18,6 +19,17 @@ async function recoverUpload(row: VideoHandoff): Promise<number> {
   let scheduled = 0;
   for (const file of files) {
     if (file.file_reference || !file.upload_token || !file.upload_id) continue;
+    if (file.upload_token === "orphan-recovery") {
+      // Only a service-role database operator can create this private marker.
+      // An old original predates actor attribution, so an operator must select
+      // and verify the destination instead of guessing from timestamps.
+      const restored = await recoverUnlinkedVideoReference(file.upload_id);
+      if (restored.fileName !== file.file_name || restored.mimeType !== file.mime_type) {
+        throw new Error("Legacy video metadata does not match the authorized recovery request.");
+      }
+      await recordCompletedHandoffUpload(file.upload_id, restored);
+      continue;
+    }
     const result = await getStoredUploadProcessingResult(file.upload_token);
     if (result.status === "ready") {
       await recordCompletedHandoffUpload(file.upload_id, result.fileReference);
@@ -131,6 +143,7 @@ export async function GET(request: NextRequest) {
       if (outcome === "dispatched" || outcome === "already_submitted") counts.dispatched++;
       if (outcome === "retry") counts.retried++;
     }
+    console.info("[Video Handoff] reconciliation complete", counts);
     return NextResponse.json(counts, { headers: { "Cache-Control": "no-store" } });
   } catch (error) {
     console.error("[Video Handoff] reconciliation failed", {
