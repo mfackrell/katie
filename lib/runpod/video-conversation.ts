@@ -41,7 +41,7 @@ export async function finalizeContextualVideoReply(input: {
     await db.from("chat_requests").update({
       video_synthesis_state: null, video_synthesis_started_at: null,
     }).eq("request_id", input.requestId).eq("video_synthesis_state", "processing")
-      .eq("video_synthesis_started_at", state.video_synthesis_started_at);
+      .eq("video_synthesis_started_at", state.video_synthesis_started_at ?? "");
   }
 
   const claimedAt = new Date().toISOString();
