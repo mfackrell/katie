@@ -1,4 +1,4 @@
-import { getSupabaseAdminClient } from "@/lib/data/supabase/admin";
+import { resultStore } from "@/lib/runpod/durable-results";
 import type { Message } from "@/lib/types/chat";
 
 /**
@@ -120,7 +120,7 @@ async function readScopedEvidence(params: {
   chatId: string;
   attachmentPaths: string[];
 }): Promise<EvidenceRow[]> {
-  const { data, error } = await getSupabaseAdminClient()
+  const { data, error } = await resultStore()
     .from("video_analysis_jobs")
     .select("chat_request_id,attachment_path,source_filename,analysis_text,fallback_text,model,fallback_model,submitted_at,video_index")
     .eq("actor_id", params.actorId)
