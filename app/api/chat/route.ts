@@ -1204,6 +1204,27 @@ export async function POST(request: NextRequest) {
           });
         }
       }
+      // Preserve a real Grok fallback even if the ordinary top-five routing
+      // list happened not to contain a Grok model.
+      if (provider.name === "anthropic" && !fallbackChain.some(candidate => candidate.provider.name === "grok")) {
+        const grok = providers.find(candidate => candidate.name === "grok");
+        if (grok) {
+          try {
+            const grokModels = await grok.listModels();
+            const grokModel = ["grok-4.7", "grok-4.6", "grok-4.5", "grok-4.3"]
+              .find(model => grokModels.includes(model)) ??
+              grokModels.find(model => /^grok-4(?:\.|-|$)/i.test(model));
+            if (grokModel) {
+              fallbackChain.push({ provider: grok, modelId: grokModel, score: 0 });
+              console.info("[CreativeRouting] Grok secondary fallback retained", { requestId, model: grokModel });
+            }
+          } catch (error) {
+            console.warn("[CreativeRouting] Grok fallback discovery unavailable", {
+              requestId, reason: error instanceof Error ? error.message : String(error),
+            });
+          }
+        }
+      }
     }
 
     const repoGate = shouldAttachRepoSourceDeterministically({
