@@ -1,4 +1,4 @@
-import { createClient } from "@supabase/supabase-js";
+import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { getChatById } from "@/lib/data/persistence-store";
 import type { FileReference } from "@/lib/providers/types";
 
@@ -15,15 +15,38 @@ export type VideoHandoff = {
   claimed_at: string | null; created_at: string; updated_at: string;
 };
 
+type HandoffDatabase = {
+  public: { Tables: {
+    video_upload_handoffs: {
+      Row: VideoHandoff;
+      Insert: Partial<VideoHandoff>;
+      Update: Partial<VideoHandoff>;
+      Relationships: [];
+    };
+    video_upload_handoff_files: {
+      Row: HandoffFile;
+      Insert: Partial<HandoffFile>;
+      Update: Partial<HandoffFile>;
+      Relationships: [];
+    };
+    chat_requests: {
+      Row: {request_id: string; status: string; updated_at: string};
+      Insert: {request_id?: string; status?: string; updated_at?: string};
+      Update: {status?: string; updated_at?: string};
+      Relationships: [];
+    };
+  } };
+};
+
 // The legacy admin REST helper is read-oriented and does not support
 // chained filters on writes. Use the official server-only Supabase client.
-let admin: ReturnType<typeof createClient> | null = null;
+let admin: SupabaseClient<HandoffDatabase> | null = null;
 const db = () => {
   if (!admin) {
     const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
     const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
     if (!url || !key) throw new Error("Private video handoff database is unavailable.");
-    admin = createClient(url, key, {
+    admin = createClient<HandoffDatabase>(url, key, {
       auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
     });
   }
