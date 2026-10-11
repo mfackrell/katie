@@ -4,7 +4,7 @@ import { z } from "zod";
 import type { ConversationAttachment } from "@/lib/chat/attachment-continuity";
 import type { FileReference } from "@/lib/providers/types";
 import { buildFileReferences, validateUploadFiles } from "./build-file-references";
-import { MAX_VIDEO_FALLBACK_FRAMES, validateVideoFallbackFrames, type VideoFallbackFrame } from "./video-fallback-frames";
+import { MAX_VIDEO_FALLBACK_FRAMES, VIDEO_FRAME_SAMPLE_VERSION, validateVideoFallbackFrames, type VideoFallbackFrame } from "./video-fallback-frames";
 import { extractFramesFromPrivateVideo } from "./server-video-frame-recovery";
 
 const BUCKET = "katie-attachments";
@@ -375,14 +375,14 @@ export function createStoredUploadService(storage: Storage, secret: string, opti
       if (stored.error || !stored.data) throw new UploadInputError("Previously saved video details are unavailable.");
       const record = JSON.parse(await stored.data.text()) as {
         reference: FileReference; hasSource: boolean; refreshedAt: number;
-        actorId?: string; frameSampleTarget?: number;
+        actorId?: string; frameSampleTarget?: number; frameSampleVersion?: number;
       };
       if (record.actorId && record.actorId !== expectedActorId) throw new UploadInputError("Video belongs to another actor.");
       if (!record.reference.mimeType.startsWith("video/")) throw new UploadInputError("Saved attachment is not a video.");
       const existing = record.reference.videoFrames;
       // Older videos may have four cached frames. Resample the retained original
       // once to upgrade them to ten; avoid repeatedly decoding short/corrupt clips.
-      if (existing?.length && (record.frameSampleTarget === MAX_VIDEO_FALLBACK_FRAMES || !record.hasSource)) {
+      if (existing?.length && ((record.frameSampleTarget === MAX_VIDEO_FALLBACK_FRAMES && record.frameSampleVersion === VIDEO_FRAME_SAMPLE_VERSION) || !record.hasSource)) {
         return record.reference;
       }
       if (!record.hasSource) throw new UploadInputError("Original video was not retained; cannot extract real frames.");
@@ -402,8 +402,10 @@ export function createStoredUploadService(storage: Storage, secret: string, opti
         return record.reference;
       }
       if (!frames.length && !existing?.length) throw new UploadInputError("Server decoded no video frames; Grok visual fallback is unavailable.");
-      record.reference.videoFrames = existing && existing.length > frames.length ? existing : frames;
+      const upgraded = frames.length >= 7 || !existing?.length;
+      record.reference.videoFrames = upgraded ? frames : existing!;
       record.frameSampleTarget = MAX_VIDEO_FALLBACK_FRAMES;
+      record.frameSampleVersion = upgraded ? VIDEO_FRAME_SAMPLE_VERSION : undefined;
       const saved = await objects.upload(`${path}.json`, JSON.stringify(record), {
         contentType: "application/json", upsert: true
       });
@@ -421,9 +423,10 @@ export function createStoredUploadService(storage: Storage, secret: string, opti
       if (!ticket.type.startsWith("video/")) throw new UploadInputError("Signed attachment is not a video.");
       const stored = await objects.download(referencePath(ticket));
       if (stored.error || !stored.data) throw new UploadInputError("Uploaded video reference is unavailable.");
-      const reference = JSON.parse(await stored.data.text()) as FileReference & { frameSampleTarget?: number };
+      const reference = JSON.parse(await stored.data.text()) as FileReference & { frameSampleTarget?: number; frameSampleVersion?: number };
       const existing = reference.videoFrames;
-      if (existing?.length && reference.frameSampleTarget === MAX_VIDEO_FALLBACK_FRAMES) return reference;
+      if (existing?.length && reference.frameSampleTarget === MAX_VIDEO_FALLBACK_FRAMES &&
+          reference.frameSampleVersion === VIDEO_FRAME_SAMPLE_VERSION) return reference;
       const original = await objects.download(sourcePath(ticket));
       if (original.error || !original.data) {
         if (existing?.length) return reference;
@@ -440,8 +443,10 @@ export function createStoredUploadService(storage: Storage, secret: string, opti
         return reference;
       }
       if (!frames.length && !existing?.length) throw new UploadInputError("Server decoded no video frames; Grok visual fallback is unavailable.");
-      reference.videoFrames = existing && existing.length > frames.length ? existing : frames;
+      const upgraded = frames.length >= 7 || !existing?.length;
+      reference.videoFrames = upgraded ? frames : existing!;
       reference.frameSampleTarget = MAX_VIDEO_FALLBACK_FRAMES;
+      reference.frameSampleVersion = upgraded ? VIDEO_FRAME_SAMPLE_VERSION : undefined;
       const saved = await objects.upload(referencePath(ticket), JSON.stringify(reference), {
         contentType: "application/json", upsert: true
       });
