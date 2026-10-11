@@ -6,6 +6,7 @@ import type { FileReference } from "@/lib/providers/types";
 import { buildFileReferences, validateUploadFiles } from "./build-file-references";
 import { MAX_VIDEO_FALLBACK_FRAMES, VIDEO_FRAME_SAMPLE_VERSION, validateVideoFallbackFrames, type VideoFallbackFrame } from "./video-fallback-frames";
 import { extractFramesFromPrivateVideo } from "./server-video-frame-recovery";
+import { recordCompletedHandoffUpload } from "./video-handoffs";
 
 const BUCKET = "katie-attachments";
 const RETENTION_MS = 24 * 60 * 60 * 1000;
@@ -671,7 +672,17 @@ function getUploadService() {
 }
 
 export const prepareStoredUpload = (input: unknown) => getUploadService().prepare(input);
-export const completeStoredUpload = (token: string, videoFrames?: unknown) => getUploadService().complete(token, videoFrames);
+export const completeStoredUpload = async (token: string, videoFrames?: unknown) => {
+  // First commit the complete original and reference. The browser may vanish at
+  // any moment afterward; the durable handoff ledger makes the chat resumable.
+  const reference = await getUploadService().complete(token, videoFrames);
+  if (reference.attachmentKind === "video") {
+    // complete() verified the signed upload ticket before returning.
+    const signed = ticketSchema.parse(JSON.parse(Buffer.from(token.split(".")[0], "base64url").toString()));
+    await recordCompletedHandoffUpload(signed.id, reference);
+  }
+  return reference;
+};
 export const beginStoredUploadProcessing = (token: string) => getUploadService().beginProcessing(token);
 export const getStoredUploadProcessingResult = (token: string) => getUploadService().processingResult(token);
 export const processStoredUploadInBackground = async (token: string): Promise<void> => {
