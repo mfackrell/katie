@@ -116,7 +116,7 @@ test("manual override recovery preserves rejection of an unavailable or non-text
 test("chat route uses targeted manual override recovery without changing classification", async () => {
   const { readFileSync } = await import("node:fs");
   const route = readFileSync("app/api/chat/route.ts", "utf8");
-  assert.match(route, /validateManualOverrideWithRecovery\\(\\{/);
-  assert.match(route, /const overrideClassification = await inferRequestClassification\\(/);
+  assert.match(route, /validateManualOverrideWithRecovery\(\{/);
+  assert.match(route, /const overrideClassification = await inferRequestClassification\(/);
   assert.match(route, /resolvedRequestIntent = recoveredIntent/);
 });
