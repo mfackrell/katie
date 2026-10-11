@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { analyzeSavedVideosWithQwen } from "../lib/chat/runpod-video-fallback";
 import { runWithRefusalFallback } from "../lib/router/refusal-detection";
 import { buildRunpodVideoScenePrompt, buildGrokVideoScenePrompt, GROK_SCENE_RESPONSE_PERSONA } from "../lib/chat/video-scene-prompts";
@@ -138,9 +139,8 @@ test("Grok receives preliminary RunPod observations but must answer about actual
 });
 
 test("RunPod and Grok production code use the scene-focused prompt builders", () => {
-  const fs = require("node:fs") as typeof import("node:fs");
-  const runpodSource = fs.readFileSync("lib/runpod/durable-results.ts", "utf8");
-  const grokSource = fs.readFileSync("lib/runpod/video-orchestration.ts", "utf8");
+  const runpodSource = readFileSync("lib/runpod/durable-results.ts", "utf8");
+  const grokSource = readFileSync("lib/runpod/video-orchestration.ts", "utf8");
   assert.match(runpodSource, /text: buildRunpodVideoScenePrompt\(params\.question\)/);
   assert.match(grokSource, /persona: GROK_SCENE_RESPONSE_PERSONA/);
   assert.match(grokSource, /user: buildGrokVideoScenePrompt\(row\.request_prompt \|\| "", preliminary\)/);
