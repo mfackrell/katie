@@ -1065,6 +1065,36 @@ test("legacy video with no captured frames recovers private original when Gemini
   assert.equal(decodes, 1);
 });
 
+test("older four-frame cache is upgraded to ten evenly spaced frames from the retained original", async () => {
+  const fake = fakeStorage();
+  const actor = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+  const chatId = "11111111-1111-4111-8111-111111111111";
+  const frame = "data:image/jpeg;base64," +
+    Buffer.from([0xff, 0xd8, 1, 2, 3, 4, 0xff, 0xd9]).toString("base64");
+  const previous = [1, 3, 5, 7].map(timestampSeconds => ({ timestampSeconds, dataUrl: frame }));
+  const expected = Array.from({ length: 10 }, (_, index) => ({
+    timestampSeconds: index * 2 + 1, dataUrl: frame,
+  }));
+  const service = createStoredUploadService(fake.storage, "secret");
+  const saved = await service.persist(chatId, {
+    ...reference, fileId: "older-four-frame-video", mimeType: "video/mp4",
+    fileName: "clip.mp4", attachmentKind: "video", videoFrames: previous,
+  }, undefined, { source: new Blob(["retained source"], { type: "video/mp4" }), actorId: actor });
+  assert.equal((await service.restore(chatId, saved, actor)).videoFrames?.length, 4);
+  let decodes = 0;
+  const extract = async (source: Blob) => {
+    assert.equal(await source.text(), "retained source");
+    decodes++;
+    return expected;
+  };
+  const upgraded = await service.recoverSavedVideoFrames(chatId, saved, actor, extract);
+  assert.deepEqual(upgraded.videoFrames, expected);
+  assert.equal((await service.restore(chatId, saved, actor)).videoFrames?.length, 10);
+  const cached = await service.recoverSavedVideoFrames(chatId, saved, actor, extract);
+  assert.equal(cached.videoFrames?.length, 10);
+  assert.equal(decodes, 1, "ten-frame cache prevents repeated decoding");
+});
+
 test("older video without original cannot pretend Grok inspected decoded pixels", async () => {
   const fake = fakeStorage();
   const actor = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
