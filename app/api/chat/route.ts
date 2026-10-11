@@ -7,7 +7,8 @@ import { submitSavedVideo, resultStore } from "@/lib/runpod/durable-results";
 import { pendingVideoMessage } from "@/lib/runpod/video-orchestration";
 import { RUNPOD_VIDEO_MODEL } from "@/lib/runpod/durable-results";
 import { buildImageReference, imageFileFromDataUrl } from "@/lib/uploads/image-reference";
-import { selectStoredAttachments, loadSelectedAttachmentSources, explicitlyRequestsVideo } from "@/lib/chat/attachment-selection";
+import { selectStoredAttachments, loadSelectedAttachmentSources, explicitlyRequestsVideo, type AttachmentDecision } from "@/lib/chat/attachment-selection";
+import { loadSavedVideoFollowUp } from "@/lib/chat/saved-video-observations";
 import { pruneRepeatedVideoSelections, uniqueAttachmentReferences } from "@/lib/chat/video-attachment-dedup";
 import { after, NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
@@ -644,7 +645,21 @@ export async function POST(request: NextRequest) {
       }
       return files;
     });
-    const attachmentDecision = await selectStoredAttachments(message, catalog, attachmentHistory, undefined, newAttachments.map(file => file.fileName));
+    // A question about the video from the preceding conversation should use
+    // the authoritative, already-saved RunPod/Grok observations in Supabase.
+    // Do not reattach/redecode an MP4, ask which video, or consult the LLM
+    // attachment selector until the contextual evidence lookup has run.
+    const savedVideoFollowUp = await loadSavedVideoFollowUp({
+      actorId, chatId, message,
+      history: attachmentHistory,
+      freshAttachmentCount: newAttachments.length,
+    });
+    const attachmentDecision: AttachmentDecision = savedVideoFollowUp
+      ? { method: "none", selections: [] }
+      : await selectStoredAttachments(
+          message, catalog, attachmentHistory, undefined,
+          newAttachments.map(file => file.fileName),
+        );
     const selectedBeforePruning = attachmentDecision.selections.length;
     attachmentDecision.selections = pruneRepeatedVideoSelections(newAttachments, attachmentDecision.selections, message);
     // The selector is advisory. An unrelated current request must NEVER
@@ -727,6 +742,10 @@ export async function POST(request: NextRequest) {
         ? suppliedRequestId
         : crypto.randomUUID();
     console.info("[Attachments] Background selection", { requestId, newCount: newAttachments.length, catalogSize: catalog.length, method: attachmentDecision.method, selected: attachmentDecision.selections.map(item => ({ id: item.attachment.id, fileName: item.attachment.fileName, mode: item.mode })), unavailable: unavailableAttachments, clarification: Boolean(attachmentDecision.clarification) });
+    if (savedVideoFollowUp) console.info("[Saved Video Follow-up] loaded prior observations", {
+      requestId, actorId, chatId, sourceCount: savedVideoFollowUp.sourceCount,
+      hasObservations: savedVideoFollowUp.hasObservations, freshVideoInspection: false,
+    });
     const requestFingerprint = await fingerprintChatRequest({
       actorId,
       chatId,
@@ -1613,6 +1632,9 @@ export async function POST(request: NextRequest) {
               attachmentSourceIds.add(saved.id);
             }
             personaForGeneration += `\n\n${selectionContext()}`;
+            if (savedVideoFollowUp) {
+              personaForGeneration += "\n\n" + savedVideoFollowUp.context;
+            }
             await saveMessage(chatId, {
               id: crypto.randomUUID(),
               role: "user",
