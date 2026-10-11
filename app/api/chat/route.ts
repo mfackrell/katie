@@ -3,6 +3,8 @@ import { websiteEvidenceStore } from "@/lib/research/stored-evidence";
 import { attachmentAccessContext, type ConversationAttachment } from "@/lib/chat/attachment-continuity";
 import { persistConversationAttachment, restoreConversationAttachment, loadConversationAttachmentCatalog, loadActorAttachmentCatalog, recoverSavedVideoFrames, recoverUploadVideoFrames } from "@/lib/uploads/stored-uploads";
 import { describeAttachmentEvidence } from "@/lib/uploads/attachment-observations";
+import { analyzeSavedVideosWithQwen } from "@/lib/chat/runpod-video-fallback";
+import { RUNPOD_VIDEO_MODEL } from "@/lib/runpod/durable-results";
 import { buildImageReference, imageFileFromDataUrl } from "@/lib/uploads/image-reference";
 import { selectStoredAttachments, loadSelectedAttachmentSources, explicitlyRequestsVideo } from "@/lib/chat/attachment-selection";
 import { pruneRepeatedVideoSelections, uniqueAttachmentReferences } from "@/lib/chat/video-attachment-dedup";
@@ -674,6 +676,7 @@ export async function POST(request: NextRequest) {
     const savedVideoSourceByFileId = new Map(restored.references.map((file, index) =>
       [file.fileId, selectedSourceDescriptors[index]] as const
     ));
+    const persistedVideoSourceByFileId = new Map<string, ConversationAttachment>();
     const currentUploadVideoTokensByFileId = new Map(
       (fileReferences ?? []).filter(file => Boolean(file.storageToken))
         .map(file => [file.fileId, file.storageToken!] as const)
@@ -1329,8 +1332,8 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // Native video inspection stays with Gemini. If it fails for any reason,
-    // Grok 4.7 can inspect genuine timestamped frames saved with this upload.
+    // Native video inspection stays with Gemini. On failure, try original-video
+    // RunPod Qwen3-VL first; only then decode genuine frames for Grok 4.7.
     // xAI's Imagine Video models generate/edit videos and are not input-video analyzers.
     if (hasVideoInput && provider.name === "google") {
       const grokProvider = providers.find(candidate => candidate.name === "grok");
@@ -1374,7 +1377,12 @@ export async function POST(request: NextRequest) {
     }
 
     const finalProviderSupport = getAttachmentSupportForProvider(provider.name, attachments);
-    if (!finalProviderSupport.supported) {
+    // A failed or missing Gemini file URI must not preempt fallback access
+    // to the original privately saved MP4. Let Gemini report its error,
+    // then try Qwen and finally the existing Grok frame recovery.
+    const canRecoverOriginalWithQwen =
+      hasVideoInput && provider.name === "google" && Boolean(process.env.RUNPOD_API_KEY);
+    if (!finalProviderSupport.supported && !canRecoverOriginalWithQwen) {
       return NextResponse.json(
         { error: finalProviderSupport.reason },
         { status: 400 }
@@ -1498,6 +1506,7 @@ export async function POST(request: NextRequest) {
               savedAttachments.push({
                 ...saved, ...(saved.mimeType.startsWith("video/") ? { conversationUsage: "uploaded" as const } : {})
               });
+              if (isVideoAttachment(attachment)) persistedVideoSourceByFileId.set(attachment.fileId, saved);
               attachmentSourceIds.add(saved.id);
             }
             personaForGeneration += `\n\n${selectionContext()}`;
@@ -1577,9 +1586,14 @@ ${chunkWorkflowSummary}`;
               score?: number;
               explainer?: SelectionExplainer;
               routingSource?: "initial" | "ai-reroute" | "deterministic-fallback";
+              runpodVideoFallback?: boolean;
             };
             const attempts: GenerationAttempt[] = [
               { provider, modelId, explainer: selectionExplainer, routingSource: "initial" },
+              ...(hasVideoInput && provider.name === "google" && process.env.RUNPOD_API_KEY
+                ? [{ provider, modelId: RUNPOD_VIDEO_MODEL, runpodVideoFallback: true,
+                     routingSource: "deterministic-fallback" as const }]
+                : []),
               ...fallbackChain.map((candidate) => ({
                 ...candidate,
                 routingSource: "deterministic-fallback" as const
@@ -1609,9 +1623,31 @@ ${chunkWorkflowSummary}`;
               attempts,
               shouldRetryRefusal: retryOnProviderRefusal,
               retryTerminalError: ({ attempt, remainingAttempts }) =>
-                hasVideoInput && attempt.provider.name === "google" &&
-                remainingAttempts.some(candidate => candidate.provider.name === "grok"),
+                hasVideoInput && attempt.provider.name === "google" && remainingAttempts.length > 0,
               runAttempt: async (candidate, attemptIndex) => {
+                if (candidate.runpodVideoFallback) {
+                  // Only the authorized original attachment goes to Qwen. A
+                  // failed or overdue RunPod job falls through to Grok frames.
+                  const sources = attachments.filter(isVideoAttachment).map(video => {
+                    const saved = persistedVideoSourceByFileId.get(video.fileId) ??
+                      savedVideoSourceByFileId.get(video.fileId);
+                    if (!saved?.hasOriginal || !saved.chatId) {
+                      throw new Error("Qwen cannot access the original saved video.");
+                    }
+                    return { chatId: saved.chatId, attachmentId: saved.id, fileName: video.fileName };
+                  });
+                  console.info("[Video Routing] Gemini failed; attempting original-video Qwen", {
+                    requestId, videoCount: sources.length,
+                  });
+                  const qwen = await analyzeSavedVideosWithQwen(sources, messageForGeneration);
+                  modelId = qwen.model;
+                  emitChunk({ type: "metadata", provider: "runpod", modelId: qwen.model,
+                    resetText: true, videoFallback: "qwen-original-video",
+                    queueMs: qwen.queueMs, inferenceMs: qwen.inferenceMs });
+                  streamedText = qwen.text;
+                  return { text: qwen.text, model: qwen.model,
+                    provider: "runpod" as ProviderResponse["provider"] };
+                }
                 // Do not launch a browser or decode a large private MP4 unless
                 // Gemini actually fails and the deterministic Grok fallback runs.
                 if (candidate.provider.name === "grok" && hasVideoInput) {
@@ -1643,7 +1679,7 @@ ${chunkWorkflowSummary}`;
                       console.error("[Video Routing] saved source extraction failed; no fake evidence passed to Grok", {
                         requestId, fileId: video.fileId, reason
                       });
-                      throw new Error("Gemini video analysis failed. Grok fallback cannot inspect the saved video: " + reason);
+                      throw new Error("Gemini and Qwen video analysis failed. Grok cannot inspect the saved video: " + reason);
                     }
                   }
                 }
@@ -2178,12 +2214,14 @@ ${chunkWorkflowSummary}`;
               },
               onError: ({ attempt, error }) => {
                 const failureScope = classifyGenerationFailure(error);
-                if (failureScope === "provider") {
+                // RunPod is an independent video provider; its failures must
+                // never mark Gemini unhealthy in the shared provider registry.
+                if (failureScope === "provider" && !attempt.runpodVideoFallback) {
                   failedProviderNames.add(attempt.provider.name);
                   void recordSharedProviderFailure(attempt.provider.name, error);
                 }
                 console.warn(
-                  `[Chat API] Generation failed for ${attempt.provider.name}:${attempt.modelId} (${error instanceof Error ? error.message : String(error)}).`
+                  `[Chat API] Generation failed for ${attempt.runpodVideoFallback ? "runpod" : attempt.provider.name}:${attempt.modelId} (${error instanceof Error ? error.message : String(error)}).`
                 );
               }
             });
