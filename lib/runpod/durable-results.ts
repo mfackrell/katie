@@ -248,9 +248,10 @@ export async function submitSavedVideo(params: {
     const {data: chats, error: ownershipError} = await getSupabaseAdminClient()
       .from("chats").select("id,actor_id")
       .in("id", [params.chatId, params.targetChatId]);
-    if (ownershipError || !chats || 
+    const ownedChats = (chats ?? []) as Array<{ id: string; actor_id: string }>;
+    if (ownershipError ||
         ![params.chatId, params.targetChatId].every(id =>
-          chats.some(chat => chat.id === id && chat.actor_id === params.actorId))) {
+          ownedChats.some(chat => chat.id === id && chat.actor_id === params.actorId))) {
       throw new Error("Video source or destination does not belong to this actor");
     }
   }
