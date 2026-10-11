@@ -12,7 +12,7 @@ Story: a website review in Katie collects rendered tiles, gives the same evidenc
 4. Connect fresh reviews to owned historical evidence. Require matching URL/view/state, unchanged target identity, complete captures and intact image hashes before marking a measured issue resolved.
 5. Run real Chromium scenarios, Katie's existing provider/collaboration/storage regressions, build and local production HTTP probes. Do not deploy.
 
-Pressure cases included below-fold defects, deletion and replacement masquerading as repairs, partial/missing views, corrupted screenshot hashes, fixed headers, fractional page-bottom coordinates, blank pages, missing assets, disclosure-state isolation, forbidden writes/forms, and a model reporting no issues despite a measured defect. The fractional-pixel test exposed a real boundary problem; a one-CSS-pixel tolerance fixed it.
+Pressure cases included below-fold defects, deletion and replacement masquerading as repairs, partial/missing views, corrupted screenshot hashes, fixed headers, fractional page-bottom coordinates, blank pages, missing assets, disclosure-state isolation, forbidden writes/forms, and a model reporting no issues despite a measured defect. The fractional-pixel test exposed a real boundary problem; a one-CSS-pixel tolerance fixed it. The first cold GitHub runner also exposed concurrent Chromium extraction (`ETXTBSY`): the test command now prepares Chromium before starting separate test processes, and production launch shares an in-process extraction promise.
 
 ## Results
 
@@ -26,6 +26,7 @@ Pressure cases included below-fold defects, deletion and replacement masqueradin
 | Built Next.js page | Pass | HTTP 200, 17,310 HTML characters via a local `next start -H 127.0.0.1`. |
 | Built website health route, native workspace networking | Environment-limited | HTTP 503 correctly reports `getaddrinfo EAI_AGAIN example.com`; the workspace requires proxy networking. No fabricated success. |
 | Built website health route, test-only proxy adapter | Pass | Real https://example.com/: HTTP 200, healthy true, target recovered from history, two views, three images. The adapter supplies public DNS-over-HTTPS and TLS-validated proxy transport; Katie's capture/rendering path is unchanged. Adapter is outside the repo and is not deployed. |
+| General CI gate | Existing failures reproduced | The routing test `url and video prompt hints force web-search classification` and policy test `policy only enforces when current selection violates verified hard guardrails` both fail on the untouched baseline as well. They keep the full gate red; no test or guard was disabled. |
 | General project typecheck | Pre-existing failures | `npm run typecheck` reports 24 errors; an untouched baseline worktree reports the exact same 24 errors. Focused strict compilation and Next build succeed. |
 | Legacy URL check | Pass | `npm run check:url`. |
 

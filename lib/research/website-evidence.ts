@@ -93,6 +93,8 @@ export async function validateWebsiteUrl(raw: string): Promise<void> {
   }
 }
 
+let browserExecutable: Promise<string> | undefined;
+
 export async function launchWebsiteBrowser(): Promise<Browser> {
   const [{ default: chromium }, { chromium: playwright }] = await Promise.all([
     import("@sparticuz/chromium"),
@@ -100,7 +102,7 @@ export async function launchWebsiteBrowser(): Promise<Browser> {
   ]);
   return playwright.launch({
     args: chromium.args.filter((arg) => !["--single-process", "--disable-web-security", "--allow-running-insecure-content"].includes(arg)),
-    executablePath: await chromium.executablePath(),
+    executablePath: await (browserExecutable ??= chromium.executablePath().catch(error => { browserExecutable = undefined; throw error; })),
     headless: true,
     timeout: 15_000,
   });
