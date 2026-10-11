@@ -1483,13 +1483,12 @@ export async function POST(request: NextRequest) {
 
     if (hasVideoInput && videoReplyTarget && requestTracked) {
       const { error: metadataError } = await getSupabaseAdminClient().from("chat_requests")
-        .update({
+        .eq("request_id", requestId).eq("chat_id", chatId).eq("actor_id", actorId)
+        .eq("status", "processing").update({
           video_reply_provider: videoReplyTarget.provider,
           video_reply_model: videoReplyTarget.model,
           updated_at: new Date().toISOString(),
-        })
-        .eq("request_id", requestId).eq("chat_id", chatId).eq("actor_id", actorId)
-        .eq("status", "processing");
+        });
       if (metadataError) throw new Error("Could not persist the selected conversational model for video synthesis.");
     }
 
