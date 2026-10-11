@@ -1,4 +1,4 @@
-import { getSupabaseAdminClient } from "@/lib/data/supabase/admin";
+import { createClient } from "@supabase/supabase-js";
 import { getChatById } from "@/lib/data/persistence-store";
 import type { FileReference } from "@/lib/providers/types";
 
@@ -15,7 +15,20 @@ export type VideoHandoff = {
   claimed_at: string | null; created_at: string; updated_at: string;
 };
 
-const db = () => getSupabaseAdminClient();
+// The legacy admin REST helper is read-oriented and does not support
+// chained filters on writes. Use the official server-only Supabase client.
+let admin: ReturnType<typeof createClient> | null = null;
+const db = () => {
+  if (!admin) {
+    const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+    const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+    if (!url || !key) throw new Error("Private video handoff database is unavailable.");
+    admin = createClient(url, key, {
+      auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
+    });
+  }
+  return admin;
+};
 const now = () => new Date().toISOString();
 function stableJson(value: unknown): string {
   if (Array.isArray(value)) return "[" + value.map(stableJson).join(",") + "]";
@@ -24,7 +37,7 @@ function stableJson(value: unknown): string {
     return "{" + Object.keys(row).sort()
       .map(key => JSON.stringify(key) + ":" + stableJson(row[key])).join(",") + "}";
   }
-  return JSON.stringify(value);
+  return JSON.stringify(value) ?? "null";
 }
 
 export async function registerVideoHandoff(input: {
