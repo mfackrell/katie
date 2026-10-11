@@ -166,6 +166,7 @@ export async function selectStoredAttachments(
   newFileNames: string[] = [],
 ): Promise<AttachmentDecision> {
   if (!catalog.length) return { selections: [], method: "none" };
+  if (newFileNames.length && !/\b(?:compare|versus|previous|earlier|saved|last video|other clip)\b/i.test(message)) return { selections: [], method: "none" };
   const candidates = rankAttachmentCandidates(message, catalog, history);
   const prompt = JSON.stringify({
     request: message,
