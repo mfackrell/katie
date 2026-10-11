@@ -60,3 +60,8 @@ test("chat routing and independent background worker use contextual synthesis", 
   assert.match(publisher, /finalizeContextualVideoReply\(/);
   assert.match(synthesis, /\.lt\("created_at", placeholder.created_at\)/);
 });
+
+test('a pending video with an already-completed chat placeholder remains synthesizable', () => {
+  const code = readFileSync('lib/runpod/video-conversation.ts', 'utf8');
+  assert.match(code, /state.status !== "processing" && state.status !== "completed"/);
+});
