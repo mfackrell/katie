@@ -261,3 +261,11 @@ test("a generated rubric cannot omit the synthesis and economy acceptance gates"
   const noSynthesis = { ...reduced, synthesis: undefined };
   assert.throws(() => validateAssessment(noSynthesis, reviewBaseline(params).turns), /Invalid independent task contract/);
 });
+
+test("source references preserve provenance without requiring models to recopy user text", () => {
+  const referenced = structuredClone(assessment);
+  for (const requirement of referenced.taskContract.requirements) delete requirement.quote;
+  validateAssessment(referenced, reviewBaseline(params).turns);
+  referenced.taskContract.requirements[0].sourceId = "validator-feedback";
+  assert.throws(() => validateAssessment(referenced, reviewBaseline(params).turns), /citation/);
+});
