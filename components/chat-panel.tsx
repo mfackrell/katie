@@ -1279,7 +1279,7 @@ export function ChatPanel({
     };
   }, []);
 
-  async function uploadFiles(files: File[]): Promise<FileReference[]> {
+  async function uploadFiles(files: File[], handoffRequestId?: string): Promise<FileReference[]> {
     if (files.length === 0) {
       return [];
     }
@@ -1290,7 +1290,8 @@ export function ChatPanel({
     );
 
     try {
-      return await uploadFilesDirect(files, setStatusMessage);
+      return await uploadFilesDirect(files, setStatusMessage, undefined, undefined,
+        handoffRequestId ? { handoffRequestId } : {});
     } finally {
       setUploadingFiles(false);
     }
@@ -1360,9 +1361,38 @@ export function ChatPanel({
     const clientRequestId = crypto.randomUUID();
 
     try {
+      // Register an actor/chat-scoped server-side obligation BEFORE transferring
+      // video bytes. A mobile disconnect no longer strands a completed upload.
+      // Mixed messages retain their established chat path until their full
+      // attachment manifest can be persisted and replayed identically.
+      const durableVideo = videosToUpload.length > 0 &&
+        filesToUpload.length === 0 && imageFilesToUpload.length === 0 &&
+        priorReferences.length === 0 && imagesToSend.length === 0;
+      if (durableVideo) {
+        requestStage = "registering durable video request";
+        setStatusMessage("Saving video request so Katie can finish if this device disconnects…");
+        const registered = await fetch("/api/video-handoffs", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            requestId: clientRequestId, actorId, chatId,
+            message: content || "[video]",
+            files: videosToUpload.map(file => ({
+              name: file.name, type: file.type, size: file.size,
+            })),
+            overrideProvider: selectedOverride?.providerName,
+            overrideModel: selectedOverride?.modelId,
+            activeRepoId: activeRepoId || undefined, repoInjectionEnabled,
+          }),
+        });
+        if (!registered.ok) {
+          const failure = await registered.json().catch(() => ({})) as {error?: string};
+          throw new Error(failure.error || "Cannot save the video recovery record.");
+        }
+      }
       const uploadedReferences =
         filesToUpload.length + videosToUpload.length + imageFilesToUpload.length > 0
-          ? await uploadFiles([...filesToUpload, ...videosToUpload, ...imageFilesToUpload])
+          ? await uploadFiles([...filesToUpload, ...videosToUpload, ...imageFilesToUpload],
+              durableVideo ? clientRequestId : undefined)
           : [];
       const refsToSend = [...priorReferences, ...uploadedReferences];
       uploadedReferencesForRetry = refsToSend;

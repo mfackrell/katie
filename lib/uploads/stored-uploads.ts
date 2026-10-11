@@ -6,6 +6,7 @@ import type { FileReference } from "@/lib/providers/types";
 import { buildFileReferences, validateUploadFiles } from "./build-file-references";
 import { MAX_VIDEO_FALLBACK_FRAMES, VIDEO_FRAME_SAMPLE_VERSION, validateVideoFallbackFrames, type VideoFallbackFrame } from "./video-fallback-frames";
 import { extractFramesFromPrivateVideo } from "./server-video-frame-recovery";
+import { recordCompletedHandoffUpload } from "./video-handoffs";
 
 const BUCKET = "katie-attachments";
 const RETENTION_MS = 24 * 60 * 60 * 1000;
@@ -130,6 +131,11 @@ export function createStoredUploadService(storage: Storage, secret: string, opti
     }
   }
   return {
+    inspectUpload(token: string) {
+      const ticket = verify(token, "upload");
+      return { uploadId: ticket.id, name: ticket.name,
+        type: ticket.type, size: ticket.size };
+    },
     // Authenticated by the same short-lived HMAC ticket as the original signed upload.
     // A client can only write bounded chunks to its own randomly generated incoming path.
     async uploadChunk(token: string, index: number, bytes: Uint8Array, subIndex?: number) {
@@ -237,7 +243,7 @@ export function createStoredUploadService(storage: Storage, secret: string, opti
       }
       const source = await objects.download(sourcePath(ticket));
       if (source.data?.size === ticket.size) {
-        return { uploadId: ticket.id, chunkCount, chunkBytes, transport: ticket.transport ?? "binary-v1", uploadedIndexes: Array.from({ length: chunkCount }, (_, index) => index), complete: false };
+        return { uploadId: ticket.id, chunkCount, chunkBytes, transport: ticket.transport ?? "binary-v1", uploadedIndexes: Array.from({ length: chunkCount }, (_, index) => index), complete: true };
       }
       // Paginate; a 200 MB v3 video can contain 400 accepted chunks.
       // Restrict to this signed ticket's UUID so uploads cannot inspect each other.
@@ -281,7 +287,14 @@ export function createStoredUploadService(storage: Storage, secret: string, opti
         chunkCount, transport: ticket.transport ?? "binary-v1"
       });
       return { uploadId: ticket.id, chunkCount, chunkBytes,
-        transport: ticket.transport ?? "binary-v1", uploadedIndexes, uploadedSubIndexes, complete: false };
+        transport: ticket.transport ?? "binary-v1", uploadedIndexes, uploadedSubIndexes,
+        complete: Array.from({ length: chunkCount }, (_, index) => {
+          if (uploaded.has(index)) return true;
+          if (ticket.transport !== "json-base64-v2") return false;
+          const expected = Math.min(chunkBytes, ticket.size - index * chunkBytes);
+          return Array.from({ length: Math.ceil(expected / UPLOAD_JSON_SMALL_CHUNK_BYTES) },
+            (_, sub) => uploadedSubParts.has(index * 4 + sub)).every(Boolean);
+        }).every(Boolean) };
     },
     async catalog(chatId: string, scope: "chat" | "actor" = "chat"): Promise<{ initialized: boolean; attachments: ConversationAttachment[] }> {
       await ensureBucket();
@@ -671,7 +684,18 @@ function getUploadService() {
 }
 
 export const prepareStoredUpload = (input: unknown) => getUploadService().prepare(input);
-export const completeStoredUpload = (token: string, videoFrames?: unknown) => getUploadService().complete(token, videoFrames);
+export const inspectStoredUploadTicket = (token: string) => getUploadService().inspectUpload(token);
+export const completeStoredUpload = async (token: string, videoFrames?: unknown) => {
+  // First commit the complete original and reference. The browser may vanish at
+  // any moment afterward; the durable handoff ledger makes the chat resumable.
+  const reference = await getUploadService().complete(token, videoFrames);
+  if (reference.attachmentKind === "video") {
+    // complete() verified the signed upload ticket before returning.
+    const signed = ticketSchema.parse(JSON.parse(Buffer.from(token.split(".")[0], "base64url").toString()));
+    await recordCompletedHandoffUpload(signed.id, reference);
+  }
+  return reference;
+};
 export const beginStoredUploadProcessing = (token: string) => getUploadService().beginProcessing(token);
 export const getStoredUploadProcessingResult = (token: string) => getUploadService().processingResult(token);
 export const processStoredUploadInBackground = async (token: string): Promise<void> => {

@@ -49,6 +49,8 @@ type VideoUploadOptions = {
   statusTimeoutMs?: number;
   retryDelayMs?: number;
   resumeStorage?: ResumeStorage | null;
+  handoffRequestId?: string;
+  handoffIndexOffset?: number;
 };
 type PreparedUpload = { uploadToken: string; uploadUrl: string; uploadId?: string; transport?: VideoTransport };
 type Progress = { uploadId: string; chunkCount: number; chunkBytes?: number; transport?: string;
@@ -227,7 +229,7 @@ export async function uploadFilesDirect(
     });
   };
 
-  for (const file of files) {
+  for (const [fileIndex, file] of files.entries()) {
     const isVideo = file.type.startsWith("video/");
     const key = isVideo ? resumeKey(file) : "";
     let stage = "prepare";
@@ -241,6 +243,31 @@ export async function uploadFilesDirect(
       let completedChunks = new Set<number>();
       let completedSubParts = new Set<number>();
       if (prepared) {
+        if (options.handoffRequestId && isVideo) {
+          const linked = await withUploadDeadline("Linking existing video to conversation", 30_000,
+            async signal => readUploadResponse(await fetcher("/api/upload/prepare", {
+              method: "POST", signal,
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                name: file.name, type: file.type, size: file.size,
+                transport, existingUploadToken: prepared!.uploadToken,
+                handoffRequestId: options.handoffRequestId,
+                handoffIndex: fileIndex + (options.handoffIndexOffset ?? 0),
+              }),
+            })));
+          if (linked.uploadToken !== prepared.uploadToken ||
+              linked.uploadId !== prepared.uploadId) {
+            throw new Error("Registered video handoff returned a different signed upload.");
+          }
+          if (linked.fileReference && typeof linked.fileReference === "object") {
+            const recovered = linked.fileReference as FileReference;
+            if (recovered.fileName !== file.name || recovered.attachmentKind !== "video")
+              throw new Error("Recovered video reference does not match its original.");
+            references.push(recovered);
+            onStatus(`Recovered previously uploaded ${file.name}; no video was transferred.`);
+            continue;
+          }
+        }
         onStatus(`Checking whether ${file.name} already finished uploading…`);
         // A detached server worker can finish after the browser loses its connection.
         // Read the durable completed reference BEFORE inspecting/transferring chunks.
@@ -279,10 +306,10 @@ export async function uploadFilesDirect(
             clearResumeSession(resumeStorage, key);
             prepared = null;
           } else {
+            // Complete chunks are still safe to resume: finalize the server
+            // reference instead of throwing or transferring bytes again.
             if (saved.complete) {
-              // If the completed reference exists, the server will return it.
-              // Do not transfer video bytes again while its reference is resolving.
-              throw new Error("Video is already saved on the server, but its reference is temporarily unavailable. Retry to recover it.");
+              onStatus(`All bytes for ${file.name} are saved; finishing the server reference…`);
             }
             completedChunks = new Set(saved.uploadedIndexes);
             completedSubParts = new Set(saved.uploadedSubIndexes ?? []);
@@ -321,16 +348,38 @@ export async function uploadFilesDirect(
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
               name: file.name, type: file.type, size: file.size,
-              ...(isVideo ? { transport } : {})
+              ...(isVideo ? { transport } : {}),
+              ...(isVideo && options.handoffRequestId ? {
+                handoffRequestId: options.handoffRequestId,
+                handoffIndex: fileIndex + (options.handoffIndexOffset ?? 0),
+              } : {}),
             }),
           }))
         );
+        if (payload.fileReference && typeof payload.fileReference === "object" && isVideo) {
+          const ready = payload.fileReference as FileReference;
+          if (ready.fileName !== file.name || ready.attachmentKind !== "video")
+            throw new Error("Durable video receipt did not match selected file.");
+          references.push(ready);
+          onStatus(`Recovered finished video ${file.name} from the server.`);
+          continue;
+        }
         if (typeof payload.uploadUrl !== "string" || typeof payload.uploadToken !== "string")
           throw new Error("Unable to prepare attachment upload.");
         prepared = { uploadToken: payload.uploadToken, uploadUrl: payload.uploadUrl,
           uploadId: typeof payload.uploadId === "string" ? payload.uploadId : undefined,
           ...(isVideo ? { transport } : {}) };
         if (isVideo) saveResumeSession(resumeStorage, key, prepared);
+        if (isVideo && payload.uploadUrl === "resumed") {
+          // This can happen after a new browser session: the server has the
+          // original signed receipt even when sessionStorage has vanished.
+          const saved = await status(prepared.uploadToken);
+          if (saved.uploadId !== prepared.uploadId || saved.chunkCount !== chunkCount)
+            throw new Error("Saved server-side upload does not match selected video.");
+          completedChunks = new Set(saved.uploadedIndexes);
+          completedSubParts = new Set(saved.uploadedSubIndexes ?? []);
+          onStatus(`Recovered existing server-side upload for ${file.name}.`);
+        }
       }
       uploadId = prepared.uploadId;
       stage = "transfer";
