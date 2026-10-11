@@ -1280,3 +1280,22 @@ test("registered video reuses a ready server-side reference without sending byte
   assert.equal(calls[0].payload?.handoffRequestId, "22222222-2222-4222-8222-222222222222");
   assert.equal(calls[0].payload?.handoffIndex, 0);
 });
+
+test("operator can recover a legacy unlinked original with a scoped signed reference", async () => {
+  const fake = fakeStorage();
+  const id = "27c11c7b-b9d8-4510-a7e3-e7e97b0a76d5";
+  const old = {
+    ...reference, fileName: "legacy.mp4", mimeType: "video/mp4",
+    attachmentKind: "video" as const,
+  };
+  fake.files.set(`incoming/${id}`, new Blob([new Uint8Array(1024)], { type: "video/mp4" }));
+  fake.files.set(`references/${id}.json`, new Blob([JSON.stringify(old)], { type: "application/json" }));
+  const service = createStoredUploadService(fake.storage, "private-key", {});
+  const recovered = await service.recoverUnlinkedVideo(id);
+  assert.equal(recovered.fileName, "legacy.mp4");
+  assert.equal(recovered.attachmentKind, "video");
+  assert.ok(recovered.storageToken);
+  assert.deepEqual(await service.hydrate([recovered]), [old]);
+  await assert.rejects(service.recoverUnlinkedVideo("../invalid"), /Invalid legacy upload/);
+  await assert.rejects(service.recoverUnlinkedVideo("b8a660fa-8f06-4593-95b7-7156174c45f7"), /unavailable/);
+});
