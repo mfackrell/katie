@@ -354,7 +354,7 @@ export default function HomePage() {
     }
   }
 
-  async function createActor(input: { name: string; purpose?: string; parentId?: string }) {
+  async function createActor(input: { name: string; purpose?: string; parentId?: string; reviewMode?: "adaptive" | "always" | "off" }) {
     if (creatingActorRef.current) {
       return;
     }

@@ -1,7 +1,9 @@
+import { runRequiredDraftReview } from "@/lib/collaboration/required-review";
+import { selectCollaborationHelper } from "@/lib/collaboration/routing";
 import { assembleContext } from "@/lib/memory/assemble-context";
 import { parseMessageContent } from "@/lib/data/persistence-store";
 import { getAvailableProviders } from "@/lib/providers";
-import { canSynthesizeVideoReply, generateContextualVideoReply, selectVideoReplyTarget } from "@/lib/chat/video-response";
+import { buildContextualVideoReplyPrompt, canSynthesizeVideoReply, generateContextualVideoReply, selectVideoReplyTarget } from "@/lib/chat/video-response";
 import { resultStore } from "@/lib/runpod/durable-results";
 
 type Answer = { status: "ready"; text: string; model: string } | { status: "pending" };
@@ -81,14 +83,33 @@ export async function finalizeContextualVideoReply(input: {
     const provider = providers.find(item => item.name === target.provider);
     if (!provider) throw new Error("Conversational provider unavailable");
     const context = await assembleContext(input.actorId, input.chatId);
-    const reply = await withDeadline(generateContextualVideoReply({
+    let reply = await withDeadline(generateContextualVideoReply({
       provider, model: target.model, persona: context.persona, summary: context.summary,
       history, userQuestion: input.question, observations: input.observations,
     }));
+    let reviewAudit: import("@/lib/collaboration/required-review").ReviewAudit | undefined;
+    if (context.reviewMode === "always") {
+      const reviewed = await runRequiredDraftReview({
+        requestId: input.requestId, draft: reply, leadProvider: provider,
+        // Remain within the existing synthesis lease and reserve time for saving.
+        deadlineMs: Date.parse(claimedAt) + LEASE_MS - 15_000,
+        params: { name: "Katie", persona: context.persona, summary: context.summary,
+          history, user: buildContextualVideoReplyPrompt(input.question, input.observations),
+          modelId: reply.model, attachments: [], images: [] },
+        selectHelper: selection => selectCollaborationHelper({
+          requestId: selection.requestId, request: selection.request,
+          requester: selection.requester, usedParticipants: selection.usedParticipants,
+          providers, actorId: input.actorId,
+        }),
+      });
+      reply = reviewed.result;
+      reviewAudit = reviewed.audit;
+    }
     const finished = new Date().toISOString();
     const { error: saveError } = await db.from("chat_requests").update({
       video_synthesis_state: "completed", video_synthesis_text: reply.text,
       video_synthesis_model: reply.model, updated_at: finished,
+      ...(reviewAudit ? { review_audit: reviewAudit } : {}),
     }).eq("request_id", input.requestId).eq("video_synthesis_state", "processing")
       .eq("video_synthesis_started_at", claimedAt);
     if (saveError) throw new Error("Failed to save conversational video reply");

@@ -6,7 +6,7 @@ import { publishVideoChat } from "@/lib/runpod/video-orchestration";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-export const maxDuration = 120;
+export const maxDuration = 300;
 
 // Runs independently of chat HTTP requests. Qwen gets 15 minutes of queue +
 // inference time. The webhook is a fast path; this cron is the durable recovery.
