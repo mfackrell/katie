@@ -32,6 +32,7 @@ import { maintainMemoryArchitecture } from "@/lib/memory/hygiene";
 import { getSupabaseAdminClient } from "@/lib/data/supabase/admin";
 import { getAvailableProviders } from "@/lib/providers";
 import { selectVideoReplyTarget, generateContextualVideoReply } from "@/lib/chat/video-response";
+import { validateManualOverrideWithRecovery } from "@/lib/chat/manual-override-recovery";
 import { chooseProvider, selectControlPlaneDecisionModels } from "@/lib/router/master-router";
 import {
   detectWebSearchSignals,
@@ -1088,19 +1089,31 @@ export async function POST(request: NextRequest) {
         }
       );
       const overrideIntent = overrideClassification.intent;
-      const validatedOverride = validateRoutingDecision(
-        { providerName: manualProvider.name, modelId: overrideModel },
-        [{ provider: manualProvider, models: await manualProvider.listModels() }],
-        overrideIntent
-      );
+      const { decision: validatedOverride, recoveredIntent } = validateManualOverrideWithRecovery({
+        provider: manualProvider,
+        modelId: overrideModel,
+        availableModels: await manualProvider.listModels(),
+        intent: overrideIntent,
+        hasVisualInput,
+        hasVideoInput,
+      });
       if (validatedOverride.changed) {
         return await rejectTracked(`Override ${manualProvider.name}:${overrideModel} is incompatible with intent=${overrideIntent} or capabilities.`);
+      }
+      if (recoveredIntent) {
+        // Recovery only: the request contains no visual input, so retrying its
+        // incompatible vision classification as text is safe and non-fatal.
+        resolvedRequestIntent = recoveredIntent;
+        console.warn("[Chat API] Recovered incompatible vision classification for text-only override", {
+          requestId, originalIntent: overrideIntent, recoveredIntent,
+          provider: manualProvider.name, modelId: overrideModel,
+        });
       }
 
       provider = manualProvider;
       modelId = overrideModel;
       intentAuthority = "override";
-      intentResolutionReason = "user-override";
+      intentResolutionReason = recoveredIntent ? "user-override-recovered-text-intent" : "user-override";
       console.log(`[Chat API] Override active. Provider: ${provider.name}, Model: ${modelId}`);
     } else if (videoRoutingPolicy.mode === "force-google") {
       const googleProvider = providers.find((candidate) => candidate.name === "google");
