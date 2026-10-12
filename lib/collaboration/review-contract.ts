@@ -114,7 +114,9 @@ export function validateAnswerReview(value: unknown, assessment: IndependentAsse
       r.checks.some(c => !c || !expected.includes(c.id) || typeof c.passed !== "boolean" || !nonempty(c.evidence))) {
     throw new Error("Review must check every requirement, criterion, objective, factual support and prior finding");
   }
-  if (r.clarification !== undefined && (!r.clarification || !nonempty(r.clarification.question) || !nonempty(r.clarification.missingFact) || typeof r.clarification.essential !== "boolean")) throw new Error("Invalid reviewer clarification");
+  // Model JSON often spells an absent optional object as null.
+  if (r.clarification === null) delete r.clarification;
+  if (r.clarification !== undefined && (!nonempty(r.clarification.question) || !nonempty(r.clarification.missingFact) || typeof r.clarification.essential !== "boolean")) throw new Error("Invalid reviewer clarification");
   if (r.verdict === "approve" && r.checks.some(c => !c.passed)) throw new Error("Approval contradicts failed acceptance checks");
   return r;
 }
