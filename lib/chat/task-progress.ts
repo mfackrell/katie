@@ -50,7 +50,7 @@ export function extractAssistantQuestions(content: string, assistantMessageId: s
 }
 
 export function splitNumberedAnswers(input: string): Map<number, string> {
-  const matches = [...input.matchAll(/(?:^|\s)([1-8])\s*[-.)]\s*/g)];
+  const matches = [...input.matchAll(/(?:^|\s)([1-8])\s*(?:[.)]\s*|-\s*(?!\d))/g)];
   const answers = new Map<number, string>();
   for (let i = 0; i < matches.length; i++) {
     const match = matches[i];
