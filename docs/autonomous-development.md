@@ -14,7 +14,7 @@ This is an **approval-gated** development orchestrator. You open one GitHub issu
 ## One-time setup and activation
 
 - Merge this orchestration PR into `main` **after human review**. Until then, the GitHub Actions issue trigger is not active.
-- Set repository Actions secret `OPENAI_API_KEY` to a project-scoped OpenAI Platform API key. **ChatGPT/Codex subscription usage does not substitute for Platform API billing.** Set an appropriate project spend limit.
+- Set repository Actions secret `OPENAI_API_KEY` to a project-scoped OpenAI Platform API key. A Vercel variable of the same name does **not** reach GitHub Actions. **ChatGPT/Codex subscription usage does not substitute for Platform API billing.** Set an appropriate project spend limit.
 - Ensure GitHub repository Actions settings allow the `GITHUB_TOKEN` read/write access **and** permit Actions to create pull requests. If either is disallowed, the workflow must stop rather than requesting broad new secrets.
 - Do **not** add production Supabase, Vercel or RunPod secrets to this workflow.
 - Create an owner-authored GitHub issue with title prefix `[agent]` and a clear acceptance target, or dispatch the workflow for an existing owner-authored issue using `issue_number`.
@@ -32,3 +32,5 @@ This is an **approval-gated** development orchestrator. You open one GitHub issu
 ## First controlled test
 
 Start with a small, safe request such as `[agent] Add regression coverage for existing retrieval behavior`. Verify automatic creation of a branch and draft PR, test output, independent review, and the issue comment. Then separately test a controlled review failure to verify the repair cycle. Do not treat a static YAML review as a successful live run.
+
+The workflow fails immediately when that GitHub Actions secret is absent and posts a **BLOCKED** report to the owner-authored issue even if implementation never starts. It never prints the secret or requires it in the issue body.
