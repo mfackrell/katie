@@ -97,7 +97,7 @@ export async function runRequiredDraftReview(input: {
     audit.status = "needs_user_input";
     audit.pendingClarification = {
       question, reason: notice, deliverable: "the original requested answer",
-      candidate: draft, requirementIds: [], createdAt: new Date().toISOString(),
+      candidate: draft, requirementIds: [], sourceTurns: baseline.turns, createdAt: new Date().toISOString(),
     };
     audit.finalHash = hash(question);
     return { result: { ...input.draft, text: question }, audit };
@@ -223,6 +223,7 @@ export async function runRequiredDraftReview(input: {
           assessment: assessment!,
           review,
           candidate: candidate.text,
+          sourceTurns: baseline.turns,
         });
         audit.status = "needs_user_input";
         audit.pendingClarification = pending;
