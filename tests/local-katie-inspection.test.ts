@@ -110,3 +110,10 @@ test("saved assistant replies close their stream before slow LLM-backed memory u
   assert.match(route.slice(defer, summary + 150), /Promise\.allSettled/,
     "background maintenance should handle partial failures independently");
 });
+
+test("a website reinspection compares saved evidence without rewriting memory", () => {
+  const message = "Review the website again now: https://example.com/. Compare a fresh desktop and mobile inspection against your saved inspection. Report only verified changes; do not claim a fix without evidence.";
+  assert.equal(isExplicitMemoryCorrection(message), false);
+  assert.equal(isExplicitMemoryMutation(message), false);
+  assert.equal(isExplicitMemoryCorrection("Please correct the saved website address in your memory."), true);
+});

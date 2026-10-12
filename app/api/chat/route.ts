@@ -982,7 +982,7 @@ export async function POST(request: NextRequest) {
         requestId, originalRequestId: pendingReviewClarification.requestId, actorId, chatId,
       });
     }
-    let storedWebsite = { context: "", images: [] as string[], fresh: false, targetUrls: [] as string[] };
+    let storedWebsite: Awaited<ReturnType<ReturnType<typeof websiteEvidenceStore>["restore"]>> = { context: "", images: [] as string[], fresh: false, targetUrls: [] as string[] };
     try { storedWebsite = await websiteEvidenceStore().restore(actorId, chatId, message, history); }
     catch (error) {
       console.warn("[Website evidence] Restore failed", { requestId, error: String(error) });
@@ -1701,7 +1701,7 @@ export async function POST(request: NextRequest) {
             let pendingVideoAssistantMessageId: string | null = null;
             let reviewSourceParams: import("@/lib/providers/types").ChatGenerateParams | undefined;
             const createParams = (selectedModelId: string) =>
-              buildGenerationParams({
+              ({ ...buildGenerationParams({
                 name,
                 persona: [personaForGeneration, taskProgressContext, storedWebsite.context, ...(creativeNarrativeRequest ? [CREATIVE_CONTINUITY_INSTRUCTIONS] : [])].filter(Boolean).join("\n\n"),
                 summary,
@@ -1714,7 +1714,7 @@ export async function POST(request: NextRequest) {
                 attachments,
                 onProviderSystemPrepared: audit =>
                   saveProviderSystemAudit(actorId, chatId, requestId, audit)
-              });
+              }), previousWebsiteEvidence: storedWebsite.previousWebsiteEvidence });
 
             if (shouldRunChunkedWorkflow(message, attachments)) {
               const chunkWorkflowSummary = await analyzeChunkedAttachments({
@@ -1740,6 +1740,7 @@ ${chunkWorkflowSummary}`;
             }
 
             let result: ProviderResponse | null = null;
+            let savedWebsiteEvidence: ProviderResponse["researchEvidence"];
             let streamedText = "";
             type GenerationAttempt = {
               provider: LlmProvider;
@@ -1946,7 +1947,10 @@ ${chunkWorkflowSummary}`;
                         params: collaborationBaseParams,
                         resumeState: collaborationResumeState,
                         onResearchEvidence: async (evidence) => {
-                          try { await websiteEvidenceStore().save(actorId, chatId, requestId, evidence); }
+                          try {
+                            await websiteEvidenceStore().save(actorId, chatId, requestId, evidence);
+                            savedWebsiteEvidence = evidence;
+                          }
                           catch (error) { console.error("[Website evidence] Save failed", { requestId, error: String(error) }); }
                         },
                         onCheckpoint: (state) => { collaborationResumeState = state; },
@@ -2501,6 +2505,17 @@ ${chunkWorkflowSummary}`;
               throw new Error(`AI Provider ${provider.name} returned an empty response.`);
             }
 
+            // On-demand capability escalation also returns live evidence. Save
+            // it before review so Adaptive and Off can restore a real baseline.
+            if (result.researchEvidence && result.researchEvidence !== savedWebsiteEvidence) {
+              try {
+                await websiteEvidenceStore().save(actorId, chatId, requestId, result.researchEvidence);
+                savedWebsiteEvidence = result.researchEvidence;
+              } catch (error) {
+                console.error("[Website evidence] Save failed", { requestId, error: String(error) });
+              }
+            }
+
             if (reviewMode === "always" && !pendingVideoAssistantMessageId) {
               const draftProvider = providers.find(item => item.name === result!.provider) ?? provider;
               const reviewed = await runRequiredDraftReview({
@@ -2735,3 +2750,5 @@ ${chunkWorkflowSummary}`;
     return NextResponse.json({ error: errorMessage }, { status: 500 });
   }
 }
+
+

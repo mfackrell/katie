@@ -18,5 +18,10 @@
       "path": "/api/internal/video-handoffs/reconcile",
       "schedule": "* * * * *"
     }
-  ]
+  ],
+  "git": {
+    "deploymentEnabled": {
+      "codex/visual-review-integration": false
+    }
+  }
 }

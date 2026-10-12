@@ -24,3 +24,5 @@ export function getReviewerCompletionInstruction(): string {
     "If no draft has been provided, assess the available inputs and supply usable components and acceptance criteria for the requested deliverable. Do not claim to have reviewed a final draft you have not seen. Separate genuine blocking questions from issues you can resolve now. Return concise conclusions and corrections in the required helper response format, not private reasoning. A useful draft with explicitly bounded open decisions is preferable to an unfinished outline padded with caveats.",
   ].join("\n");
 }
+
+

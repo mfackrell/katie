@@ -37,3 +37,18 @@ test("text-only website research is retained with explicit visual coverage limit
  const r=await f.store.restore(actor,chat,"What did the website say?",[]);
  assert.match(r.context,/Acme/);assert.match(r.context,/no rendered screenshots/);assert.equal(r.images.length,0);
 });
+
+test("fresh comparison supplies omitted historical page facts without attaching old screenshot bytes", async () => {
+ const f=fixture(); const prior=structuredClone(evidence);
+ prior.summary="A short summary that omits the icon and translations.";
+ prior.website!.pages[0].html='<svg id="book-icon"></svg><h1>Acme</h1><p lang="fr">Texte français existant</p>';
+ await f.store.save(actor,chat,request,prior);
+ const fresh=await f.store.restore(actor,chat,"Review the website again and compare changes",[]);
+ assert.match(fresh.context,/HISTORICAL_WEBSITE_COMPARISON_BASELINE/);
+ assert.match(fresh.context,/book-icon/);
+ assert.match(fresh.context,/Texte français existant/);
+ assert.match(fresh.context,/cannot be called newly added/);
+ assert.equal(fresh.context.includes("data:image/png;base64,AAA"),false);
+ assert.deepEqual(fresh.images,[]);
+ assert.deepEqual(fresh.previousWebsiteEvidence,prior.website);
+});

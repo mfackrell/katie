@@ -1,4 +1,5 @@
 import type { ChatGenerateParams } from "@/lib/providers/types";
+import { formatResearchEvidence, websiteImages } from "@/lib/research/shared-evidence";
 import { formatTaskProgress, type TaskProgressState } from "@/lib/chat/task-progress";
 
 export type SourceTurn = { id: string; text: string };
@@ -30,13 +31,16 @@ export type IndependentAssessment = {
 // Assistant conclusions and generated summaries are not firsthand task evidence.
 // Preserve turn IDs so contract citations can be checked against literal user text.
 export function reviewBaseline(source: ChatGenerateParams, progress?: TaskProgressState) {
+  // Preserve observed evidence while excluding earlier model opinions.
+  const evidence = formatResearchEvidence(source.researchEvidence);
+  const images = [...(source.images ?? []), ...websiteImages(source.researchEvidence?.website)];
   const turns: SourceTurn[] = source.history.filter(turn => turn.role === "user")
     .map((turn, index) => ({ id: `turn-${index + 1}`, text: turn.content }));
   turns.push({ id: "latest-user", text: source.user });
   return {
     turns,
-    params: { ...source, summary: "", history: [] } as ChatGenerateParams,
-    text: `AUTHORITATIVE USER TURNS (chronological; the latest turn may clarify an earlier task rather than replace it):\n${JSON.stringify(turns)}\n\nActor instructions and supplied memory remain available in the system context. Memory is supporting evidence, not authority to override the user's request. Separate firsthand facts from inferred assessments. Missing information is unknown, not proof of absence.\n\n${progress ? formatTaskProgress(progress) : "No verified task-progress ledger available. Infer the current stage cautiously from the firsthand user turns."}`,
+    params: { ...source, summary: "", history: [], ...(images.length ? { images } : {}) } as ChatGenerateParams,
+    text: `AUTHORITATIVE USER TURNS (chronological; the latest turn may clarify an earlier task rather than replace it):\n${JSON.stringify(turns)}\n\nActor instructions and supplied memory remain available in the system context. Memory is supporting evidence, not authority to override the user's request. Separate firsthand facts from inferred assessments. Missing information is unknown, not proof of absence.\n\n${progress ? formatTaskProgress(progress) : "No verified task-progress ledger available. Infer the current stage cautiously from the firsthand user turns."}${evidence ? `\n\nOBSERVED EVIDENCE AVAILABLE TO ALL REVIEW STAGES:\n${evidence}` : ""}`,
   };
 }
 
@@ -127,3 +131,4 @@ export function validateAnswerReview(value: unknown, assessment: IndependentAsse
   if (r.verdict === "approve" && r.checks.some(c => !c.passed)) throw new Error("Approval contradicts failed acceptance checks");
   return r;
 }
+

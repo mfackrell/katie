@@ -181,3 +181,4 @@ export function formatTaskProgress(progress: TaskProgressState): string {
     "END_KATIE_DURABLE_TASK_PROGRESS",
   ].join("\n");
 }
+

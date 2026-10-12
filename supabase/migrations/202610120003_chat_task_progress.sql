@@ -11,3 +11,4 @@ create table if not exists public.chat_task_progress (
 alter table public.chat_task_progress enable row level security;
 revoke all on public.chat_task_progress from anon, authenticated;
 grant select, insert, update, delete on public.chat_task_progress to service_role;
+

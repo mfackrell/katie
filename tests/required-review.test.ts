@@ -404,3 +404,36 @@ test("editorial standards apply beyond applications and do not impose marketing 
   assert.ok(checks.includes("contextual-content-selection"));
   assert.ok(checks.includes("audience-appropriate-expression"));
 });
+
+
+test("live website evidence reaches assessment, validation, revision and final review as text and image inputs", async () => {
+  const image = "data:image/jpeg;base64,bGl2ZS1ldmlkZW5jZQ==";
+  const researchEvidence: NonNullable<ChatGenerateParams["researchEvidence"]> = {
+    kind: "web", retrievedBy: { provider: "katie", modelId: "browser" },
+    query: "Review website", summary: "LIVE_CAPTURE_MARKER", sources: [{ url: "https://example.com/" }], retrievedAt: "2026-10-12T00:00:00Z",
+    website: { capturedAt: "2026-10-12T00:00:00Z", limitations: [], pages: [{
+      requestedUrl: "https://example.com/", url: "https://example.com/", title: "Example", html: "<h1>Example</h1>", htmlTruncated: false, stylesheets: [], limitations: [],
+      views: [{ device: "desktop", viewport: { width: 1440, height: 900 }, document: { width: 1440, height: 900, horizontalOverflow: false }, text: "Example", elements: [], images: [], limitations: [], screenshot: { dataUrl: image, width: 1440, height: 900, truncated: false } }],
+    }] },
+  };
+  // Identical frames still occupy separate evidence image indices.
+  researchEvidence.website!.pages[0].views.push({ ...researchEvidence.website!.pages[0].views[0], device: "mobile" });
+  const s = setup({ reviews: [verdict("revise"), verdict("approve")] });
+  const result = await runRequiredDraftReview({ requestId: "live-evidence", draft,
+    params: { ...params, researchEvidence }, assessmentParams: { ...params, researchEvidence },
+    leadProvider: s.lead, deadlineMs: deadline(), selectHelper: async c => {
+      assert.equal(c.hasImages, true);
+      return { provider: s.reviewer, modelId: "reviewer" };
+    },
+  });
+  assert.equal(result.audit.status, "revised");
+  assert.deepEqual(s.phases, ["assessment", "contract", "review", "revision", "review"]);
+  for (const call of s.calls) {
+    assert.ok(call.user.includes("LIVE_CAPTURE_MARKER"));
+    assert.ok(call.user.includes("RENDERED_WEBSITE_EVIDENCE"));
+    assert.deepEqual(call.images, [image, image]);
+    assert.ok(!call.user.includes(image), "image bytes belong in image inputs, not text");
+    assert.ok(!call.user.includes("CONTAMINATED"));
+  }
+});
+

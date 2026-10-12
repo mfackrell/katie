@@ -103,6 +103,11 @@ export function isSystemPromptRequest(message: string): boolean {
 }
 
 export function isExplicitMemoryCorrection(message: string): boolean {
+  // A request to compare a website with a saved inspection is a live review,
+  // not a request to rewrite actor memory. Explicit memory edits still win.
+  if (/^\s*(?:please\s+)?(?:review|inspect|audit|evaluate|critique|assess)\b/i.test(message) &&
+      /\b(?:website|site|landing page)\b|https?:\/\//i.test(message) &&
+      !/\b(?:memory|remember(?:ed)?)\b/i.test(message)) return false;
   // Ordinary correction verbs require a nearby memory reference. Clarification
   // verbs require an OWNED memory reference, so a question such as "clarify
   // what you mean by memory architecture" is not treated as a write.

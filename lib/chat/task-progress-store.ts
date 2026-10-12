@@ -46,3 +46,4 @@ export async function saveTaskProgress(
 export function resetInvalidTaskProgress(): TaskProgressState {
   return emptyTaskProgress();
 }
+
