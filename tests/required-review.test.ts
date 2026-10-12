@@ -1,7 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { runRequiredDraftReview } from "../lib/collaboration/required-review";
-import { acceptanceIds, reviewBaseline, validateAssessment, validateAnswerReview, type IndependentAssessment } from "../lib/collaboration/review-contract";
+import { createReviewClarification, buildReviewResumptionContext } from "../lib/collaboration/review-completion";
+import { acceptanceIds, reviewBaseline, validateAssessment, validateAnswerReview, type AnswerReview, type IndependentAssessment } from "../lib/collaboration/review-contract";
 import { normalizeReviewMode, shouldEnableActorCollaboration } from "../lib/collaboration/review-mode";
 import type { ChatGenerateParams, LlmProvider, ProviderResponse } from "../lib/providers/types";
 
@@ -145,8 +146,8 @@ test("a persistently invalid task definition cannot approve an answer", async ()
   const s = setup({ contractAlwaysReject: true });
   const result = await s.run();
   assert.ok(!s.phases.includes("review"));
-  assert.equal(result.audit.status, "unavailable");
-  assert.match(result.result.text, /withheld the draft/);
+  assert.equal(result.audit.status, "needs_user_input");
+  assert.match(result.result.text, /retry verification/i);
   assert.ok(!result.result.text.includes(draft.text));
 });
 
@@ -172,12 +173,17 @@ test("regression: a revision retaining meta commentary and follow-up requests ge
   assert.equal(result.audit.reviews?.length, 3);
 });
 
-test("known failing revisions are withheld and never marked revised", async () => {
-  const s = setup({ reviews: [verdict("revise"), verdict("revise"), verdict("revise")] });
+test("exhausted nonessential review returns the draft with transparent review notes, never a fabricated question", async () => {
+  const s = setup({
+    reviews: [verdict("revise"), verdict("revise"), verdict("revise"), verdict("revise")],
+    revisions: ["Improved application draft 1.", "Improved application draft 2.", "Improved application draft 3."],
+  });
   const result = await s.run();
-  assert.equal(result.audit.status, "revision_failed");
-  assert.match(result.result.text, /draft was withheld/);
-  assert.ok(!result.result.text.includes(draft.text));
+  assert.equal(result.audit.status, "completed_with_review_notes");
+  assert.equal(result.audit.pendingClarification, undefined);
+  assert.match(result.result.text, /Improved application draft 3/);
+  assert.match(result.result.text, /Review note \(not part of the deliverable\)/);
+  assert.doesNotMatch(result.result.text, /can you clarify this outstanding requirement/i);
   assert.equal(result.audit.reviews?.at(-1)?.review.verdict, "revise");
 });
 
@@ -206,10 +212,10 @@ test("malformed reviewer retries an unused model without falsely reporting appro
 test("same-model reviewer and expired budgets cannot claim independent review", async () => {
   const s = setup();
   const same = await runRequiredDraftReview({ requestId: "same", draft, params, leadProvider: s.lead, deadlineMs: deadline(), selectHelper: async () => ({ provider: s.lead, modelId: "lead" }) });
-  assert.equal(same.audit.status, "unavailable");
+  assert.equal(same.audit.status, "needs_user_input");
   const expired = await runRequiredDraftReview({ requestId: "expired", draft, params, leadProvider: s.lead, deadlineMs: Date.now() - 1, selectHelper: async () => { throw new Error("Must not call"); } });
   assert.equal(expired.audit.attempts.length, 0);
-  assert.equal(expired.audit.status, "unavailable");
+  assert.equal(expired.audit.status, "needs_user_input");
 });
 
 test("a malformed source citation is repaired with precise feedback before comparison", async () => {
@@ -240,11 +246,12 @@ test("citation validation tolerates formatting whitespace but never paraphrased 
   assert.throws(() => validateAssessment(spaced, reviewBaseline(params).turns), /citation/);
 });
 
-test("unavailable review never releases the unverified draft", async () => {
+test("unavailable reviewer requests a retry without leaking the unverified draft", async () => {
   const s = setup();
   const result = await runRequiredDraftReview({ requestId: "no-reviewer", draft, params, leadProvider: s.lead, deadlineMs: deadline(), selectHelper: async () => null });
-  assert.equal(result.audit.status, "unavailable");
-  assert.match(result.result.text, /withheld the draft/);
+  assert.equal(result.audit.status, "needs_user_input");
+  assert.match(result.result.text, /retry verification/i);
+  assert.equal(result.audit.pendingClarification?.candidate, draft.text);
   assert.ok(!result.result.text.includes(draft.text));
 });
 
@@ -255,6 +262,8 @@ test("a generated rubric cannot omit the synthesis and economy acceptance gates"
   assert.ok(ids.includes("scope-and-sufficiency"));
   assert.ok(ids.includes("evidence-economy"));
   assert.ok(ids.includes("metric-meaning"));
+  assert.ok(ids.includes("contextual-content-selection"));
+  assert.ok(ids.includes("audience-appropriate-expression"));
   const rubberStamp = verdict("approve", reduced);
   rubberStamp.checks = rubberStamp.checks.filter(c => c.id !== "evidence-economy");
   assert.throws(() => validateAnswerReview(rubberStamp, reduced), /every requirement/);
@@ -269,6 +278,133 @@ test("source references preserve provenance without requiring models to recopy u
   referenced.taskContract.requirements[0].sourceId = "validator-feedback";
   assert.throws(() => validateAssessment(referenced, reviewBaseline(params).turns), /citation/);
 });
+
+test("essential missing evidence produces a resumable question rather than losing the draft", async () => {
+  const final: AnswerReview = verdict("revise");
+  final.clarification = { question: "Do you know the annual revenue figures for your earlier manufacturing employers? If not, say unknown.", missingFact: "Earlier manufacturing employer revenue figures", essential: true };
+  const s = setup({ reviews: [verdict("revise"), verdict("revise"), final], revisions: ["Improved application draft 1.", "Improved application draft 2."] });
+  const result = await s.run();
+  assert.equal(result.audit.status, "needs_user_input");
+  assert.equal(result.result.text, final.clarification.question);
+  assert.equal(result.audit.pendingClarification?.candidate, "Improved application draft 2.");
+  assert.deepEqual(result.audit.pendingClarification?.requirementIds, assessment.taskContract.requirements.map(r => r.id));
+  const resumed = buildReviewResumptionContext(result.audit.pendingClarification!, "Unknown. Use the verified revenues.");
+  assert.ok(resumed.includes("Improved application draft 2."));
+  assert.ok(resumed.includes("Unknown. Use the verified revenues."));
+  assert.match(resumed, /Return the complete finished deliverable/);
+});
+
+test("nonessential reviewer suggestions are never treated as user-owned blockers", () => {
+  const optional: AnswerReview = verdict("revise");
+  optional.clarification = { question: "Can you give an optional number?", missingFact: "Optional detail", essential: false };
+  const pending = createReviewClarification({ assessment, review: optional, candidate: "Saved draft", now: "2026-10-12T00:00:00Z" });
+  assert.equal(pending, null);
+});
+
+test("production regression: a review saying no clarification required cannot ask the user for revenue figures", async () => {
+  const nonblocking = verdict("revise", assessment,
+    "The answer is strong. Earlier manufacturing revenues are unverified. Change failed ERP to problematic ERP. No clarification from the user is required.");
+  assert.equal(createReviewClarification({ assessment, review: nonblocking, candidate: "Supported application answer." }), null);
+  const s = setup({
+    reviews: [nonblocking, nonblocking, nonblocking, verdict("approve")],
+    revisions: [
+      "The finance recovery was led through the team and revenue was approximately $90M.",
+      "The global company had a problematic ERP implementation; annual revenue was approximately $90M.",
+      "I led the recovery in a global $90M company despite a problematic ERP implementation.",
+    ],
+  });
+  const result = await s.run();
+  assert.equal(result.audit.status, "revised");
+  assert.equal(result.audit.pendingClarification, undefined);
+  assert.match(result.result.text, /problematic ERP/);
+  assert.equal(result.audit.reviews?.length, 4);
+  assert.doesNotMatch(result.result.text, /can you clarify/i);
+});
+
+
+test("context and expression checks cannot be silently omitted or approved by a factual-only rubric", () => {
+  const weak = structuredClone(assessment);
+  weak.criteria = ["All factual claims accurate."];
+  const ids = acceptanceIds(weak);
+  assert.ok(ids.includes("contextual-content-selection"));
+  assert.ok(ids.includes("audience-appropriate-expression"));
+  const factualOnly = verdict("approve", weak);
+  factualOnly.checks = factualOnly.checks.filter(c => c.id !== "contextual-content-selection");
+  assert.throws(() => validateAnswerReview(factualOnly, weak), /every requirement/);
+  const failedContent = verdict("approve", weak);
+  failedContent.checks.find(c => c.id === "contextual-content-selection")!.passed = false;
+  assert.throws(() => validateAnswerReview(failedContent, weak), /contradicts/);
+  const failedLanguage = verdict("approve", weak);
+  failedLanguage.checks.find(c => c.id === "audience-appropriate-expression")!.passed = false;
+  assert.throws(() => validateAnswerReview(failedLanguage, weak), /contradicts/);
+});
+
+test("editorial regression: accurate but peripheral restructuring example is removed rather than reworded", async () => {
+  const relevantDraft = {
+    ...draft,
+    text: "I led audit recovery for a global $90M business and worked through a Chapter 11 restructuring. I have manufacturing experience.",
+  };
+  const improved = "I led audit remediation for a global $90M company, restoring financial reporting and completing the audit in ten weeks. My manufacturing finance background includes international sales and marketing responsibilities. I have not personally done transfer pricing work.";
+  const calls: ChatGenerateParams[] = [];
+  const reviewer = makeProvider("anthropic", async p => {
+    calls.push(p);
+    if (p.persona.includes("KATIE_INDEPENDENT_ASSESSMENT")) {
+      assert.match(p.persona, /PRIMARY task is independent content\/context selection/);
+      assert.ok(!p.user.includes(relevantDraft.text), "Assessment must remain draft blind");
+      return response("anthropic", "reviewer", assessment);
+    }
+    assert.match(p.persona, /true but peripheral anecdote must be REMOVED/);
+    assert.match(p.user, /contextual-content-selection/);
+    const match = p.user.match(/<answer_to_review>\n([\s\S]*?)\n<\/answer_to_review>/);
+    assert.ok(match, "Review must receive the exact draft");
+    if (match[1].includes("Chapter 11")) {
+      const bad: AnswerReview = verdict("revise");
+      bad.findings = "REMOVE the true but tangential Chapter 11 example. Preserve the manufacturing background and global audit evidence. Improve opening and phrasing. Do not volunteer unavailable early-company revenues.";
+      bad.checks.find(c => c.id === "contextual-content-selection")!.evidence = "The Chapter 11 example adds little to this global manufacturing finance screening answer; delete it, not just rephrase it.";
+      bad.checks.find(c => c.id === "audience-appropriate-expression")!.evidence = "Weak chronology and opening bury the strongest audit recovery proof.";
+      return response("anthropic", "reviewer", bad);
+    }
+    assert.ok(match[1].includes("international sales and marketing"));
+    assert.ok(!match[1].includes("unavailable"), "No defensive unknown-revenue disclosure");
+    return response("anthropic", "reviewer", verdict("approve"));
+  });
+  const lead = makeProvider("openai", async p => {
+    calls.push(p);
+    if (p.persona.includes("KATIE_TASK_CONTRACT_VALIDATION")) return contractApproval(p);
+    assert.match(p.persona, /Remove peripheral examples/);
+    assert.match(p.user, /Chapter 11/);
+    return response("openai", "lead", improved);
+  });
+  const result = await runRequiredDraftReview({
+    requestId: "editorial-chapter11-relevance",
+    draft: relevantDraft,
+    params, leadProvider: lead, deadlineMs: deadline(),
+    selectHelper: async () => ({ provider: reviewer, modelId: "reviewer" }),
+  });
+  assert.equal(result.audit.status, "revised");
+  assert.equal(result.result.text, improved);
+  assert.ok(!result.result.text.includes("Chapter 11"));
+  assert.ok(result.result.text.includes("international sales and marketing"));
+  assert.equal(result.audit.reviews?.[0].review.checks.find(c => c.id === "contextual-content-selection")?.passed, false);
+  assert.equal(result.audit.reviews?.at(-1)?.review.verdict, "approve");
+});
+
+test("editorial standards apply beyond applications and do not impose marketing copy on reports", () => {
+  const source = {
+    ...params,
+    persona: "Internal risk reporting actor",
+    history: [{ role: "user" as const, content: "Prepare a neutral incident report about the payment outage. Include the timeline, impact and mitigation." }],
+    user: "Use a factual executive summary; exclude the team's fundraising story.",
+  };
+  const baseline = reviewBaseline(source);
+  assert.equal(baseline.turns.length, 2);
+  assert.ok(baseline.text.includes("neutral incident report"));
+  assert.ok(baseline.text.includes("exclude the team's fundraising story"));
+  const checks = acceptanceIds(assessment);
+  assert.ok(checks.includes("contextual-content-selection"));
+  assert.ok(checks.includes("audience-appropriate-expression"));
+});
+
 
 test("live website evidence reaches assessment, validation, revision and final review as text and image inputs", async () => {
   const image = "data:image/jpeg;base64,bGl2ZS1ldmlkZW5jZQ==";
@@ -298,3 +434,4 @@ test("live website evidence reaches assessment, validation, revision and final r
     assert.ok(!call.user.includes("CONTAMINATED"));
   }
 });
+

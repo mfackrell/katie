@@ -42,6 +42,8 @@ import {
 } from "@/lib/router/model-intent";
 
 import { LlmProvider, ProviderResponse } from "@/lib/providers/types";
+import { buildReviewResumptionContext } from "@/lib/collaboration/review-completion";
+import { getPendingReviewClarification, resolvePendingReviewClarification } from "@/lib/chat/review-continuity";
 import type { ResolvedRoutingIntent, SelectionExplainer } from "@/lib/router/master-router";
 import { DEFAULT_REASONING_CATEGORIES, ReasoningStateAccumulator } from "@/lib/chat/reasoning-stream";
 import {
@@ -964,6 +966,13 @@ export async function POST(request: NextRequest) {
 
     console.log("[Chat API] Assembling context and selecting provider...");
     const { name, persona, summary, history, actorRoutingProfile, reviewMode } = await assembleContext(actorId, chatId);
+    const pendingReviewClarification = await getPendingReviewClarification(actorId, chatId);
+    if (pendingReviewClarification) {
+      messageForGeneration = `${message}\n\n${buildReviewResumptionContext(pendingReviewClarification.pending, message)}`;
+      console.info("[ReviewContinuity] Resuming saved work after user input", {
+        requestId, originalRequestId: pendingReviewClarification.requestId, actorId, chatId,
+      });
+    }
     let storedWebsite: Awaited<ReturnType<ReturnType<typeof websiteEvidenceStore>["restore"]>> = { context: "", images: [] as string[], fresh: false, targetUrls: [] as string[] };
     try { storedWebsite = await websiteEvidenceStore().restore(actorId, chatId, message, history); }
     catch (error) {
@@ -2493,6 +2502,9 @@ ${chunkWorkflowSummary}`;
                 },
                 assessmentParams: {
                   ...createParams(result.model),
+                  // Only the lead receives the saved draft. The independent assessor
+                  // sees the original user turns and latest actual reply, not the draft.
+                  ...(pendingReviewClarification ? { user: `This turn answers a previous clarification about the still-active deliverable. Original user turns: ${JSON.stringify(pendingReviewClarification.pending.sourceTurns ?? [])}\nKatie asked: ${pendingReviewClarification.pending.question}\nThe user replied: ${message}\nContinue the original task with only facts the user has provided; if they say the missing information is unknown, do not demand it again.` } : {}),
                   ...(result.researchEvidence ? { researchEvidence: result.researchEvidence } : {}),
                 },
                 leadProvider: draftProvider,
@@ -2600,6 +2612,11 @@ ${chunkWorkflowSummary}`;
                 assistantAssets: imageAssets,
               });
             }
+            if (pendingReviewClarification) {
+              await resolvePendingReviewClarification({
+                requestId: pendingReviewClarification.requestId, actorId, chatId, resumedByRequestId: requestId,
+              });
+            }
             await refreshShortTermMemory(actorId, chatId);
 
             // The answer is already durable in chat_requests and messages.
@@ -2705,3 +2722,4 @@ ${chunkWorkflowSummary}`;
     return NextResponse.json({ error: errorMessage }, { status: 500 });
   }
 }
+
