@@ -1,0 +1,38 @@
+{
+  "generatedAt": "2026-10-12T17:15:35.226Z",
+  "model": "claude-sonnet-5-5",
+  "method": "One same-model primary generation per prompt variant and fixture. No reviewer workflow or statistical quality claim. Baseline prompts from checked-out production-source commit; revised prompts from local branch.",
+  "dataScope": "Wholly fictional inputs; no BTG or real career facts",
+  "cases": [
+    {
+      "name": "fictional CFO application",
+      "task": "Write an application response to a hiring team filling an interim industrial CFO role during a finance leadership transition. The company needs to finish overdue audits and stabilize controls after an ERP migration. Their question asks about manufacturing, multinational finance, audits and transfer pricing. Include verified revenue sizes. Use only these fictional facts.",
+      "facts": "Fictional candidate: 16 years finance and operations leadership. CFO of a domestic manufacturer with $72M annual revenue; international distributor negotiation responsibilities. Interim CFO of a multinational software company with $48M annual revenue and $150M enterprise valuation. Completed audit remediation in eight months; led ERP migration and supported an acquisition. No direct international transfer pricing experience. Never CFO of a multinational manufacturer. A prior hospitality side business is irrelevant.",
+      "outcome": "Truthful executive value, separate engagements and metrics, concise required limitation.",
+      "outputs": [
+        {
+          "variant": "baseline",
+          "promptCharacters": 3593,
+          "text": "**Application Response: Interim CFO**\n\nI bring 16 years of finance and operations leadership, and the strongest match for this role is in audit completion and post-ERP control stabilization. Below is how my experience maps to each area you asked about.\n\n**Manufacturing**\nI served as CFO of a domestic manufacturer with $72M in annual revenue. That role gave me direct responsibility for the finance function of a manufacturing business, including negotiating with international distributors.\n\n**Multinational finance**\nI served as Interim CFO of a multinational software company with $48M in annual revenue. I understand how to step into a finance organization mid-stream, stabilize it, and keep it moving. I have not been CFO of a multinational manufacturer. My manufacturing and multinational experience comes from two separate roles, and I am not presenting them as one.\n\n**Audits and controls**\n- I completed an audit remediation in eight months.\n- I led an ERP migration, so I know where controls typically break during and after a cutover: reconciliations, access and approvals, and the period-end close.\n- I supported an acquisition, which adds experience with integration-related accounting and reporting demands.\n\nFor your situation, I would prioritize clearing the overdue audits first, then stabilizing post-migration controls so the same gaps do not recur.\n\n**Transfer pricing**\nI have no direct international transfer pricing experience. If the role requires it, I would work with qualified external tax specialists on policy and documentation. Meanwhile, I would keep the audit and control priorities on schedule, supported by my distributor negotiation and multinational finance experience.\n\n**Summary**\nI am a strong fit for the core mandate of finishing overdue audits and restoring control discipline after an ERP migration. I am transparent about the two gaps: transfer pricing and multinational manufacturing CFO experience. I am ready to discuss how I would structure the first 30, 60, and 90 days.",
+          "truncated": false,
+          "usage": {
+            "inputTokens": 2086,
+            "outputTokens": 1209,
+            "totalTokens": 3295
+          }
+        },
+        {
+          "variant": "revised",
+          "promptCharacters": 5819,
+          "text": "**Response**\n\nI bring 16 years of finance and operations leadership, and my record maps closely to your two priorities: closing overdue audits and stabilizing controls after an ERP migration.\n\n**Audits and controls:** I completed an audit remediation in eight months. I have also led an ERP migration, so I understand how system changes create control gaps and how to close them.\n\n**Manufacturing:** I served as CFO of a domestic manufacturer with $72M in annual revenue. That role included negotiating with international distributors, so I am familiar with the commercial and financial demands of a manufacturing business that sells across borders.\n\n**Multinational finance:** I served as interim CFO of a multinational software company with $48M in annual revenue. I stepped into a leadership transition, supported an acquisition, and ran finance across a multinational structure. I know how to establish stability quickly in an interim role.\n\n**Transfer pricing:** I have no direct international transfer pricing experience. I have not been CFO of a multinational manufacturer. If transfer pricing is a significant part of this role, I would work with your tax advisors and keep it from delaying the audit and controls work. My focus would be on getting the audits finished and the controls stable.\n\nI would bring a manufacturing CFO's operating discipline, a record of audit remediation, ERP migration experience, and interim leadership experience in a multinational setting.",
+          "truncated": false,
+          "usage": {
+            "inputTokens": 2757,
+            "outputTokens": 1011,
+            "totalTokens": 3768
+          }
+        }
+      ]
+    }
+  ]
+}
