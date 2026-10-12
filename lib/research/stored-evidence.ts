@@ -1,7 +1,7 @@
 import { createClient } from "@supabase/supabase-js";
 import { z } from "zod";
 import type { ResearchEvidenceBundle, WebsiteEvidence } from "@/lib/providers/types";
-import { formatResearchEvidence, websiteImages } from "./shared-evidence";
+import { formatHistoricalWebsiteEvidence, formatResearchEvidence, websiteImages } from "./shared-evidence";
 
 // Flat chat-owned objects are removed by the existing conversation cleanup.
 type Storage = ReturnType<typeof createClient>["storage"];
@@ -59,7 +59,10 @@ export function createWebsiteEvidenceStore(storage: Storage) {
         if (r.error) throw new Error("Stored website inspection is unavailable");
         const saved = JSON.parse(await r.data.text());
         if (saved.actorId !== actorId || saved.chatId !== chatId) throw new Error("Website evidence ownership mismatch");
-        if (fresh) previousWebsiteEvidence = saved.evidence.website;
+        if (fresh) {
+          previousWebsiteEvidence = saved.evidence.website;
+          context += "\n" + formatHistoricalWebsiteEvidence(previousWebsiteEvidence);
+        }
         if (detailed) {
           context += "\nFULL STORED SNAPSHOT (captured earlier):\n" + formatResearchEvidence(saved.evidence);
           images = websiteImages(saved.evidence.website);
