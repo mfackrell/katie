@@ -456,6 +456,8 @@ test("objective-first standard reaches independent assessment, comparison, revis
       return response("anthropic", "reviewer", verdict("approve"));
     }
     assert.match(p.persona, /DRAFT COMPARISON: Compare the draft with the independently established ideal approach/);
+    assert.match(p.persona, /identify the specific requested answer that cannot be completed truthfully/);
+    assert.match(p.persona, /editorial uncertainty or another fit assessment is not a completion blocker/);
     return response("anthropic", "reviewer", verdict("revise"));
   });
   const lead = makeProvider("openai", async p => {
