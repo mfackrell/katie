@@ -20,6 +20,7 @@ export type TaskProgressState = {
   version: 1;
   objective: { text: string; userMessageId: string } | null;
   stage: "working" | "awaiting_user_answer" | "answers_received";
+  nextAction: "continue_original_goal" | "await_user_answers" | "advance_after_answers";
   pending: TaskQuestion[];
   answered: AnsweredTaskQuestion[];
   lastAssistantMessageId: string | null;
@@ -67,7 +68,7 @@ function newTaskRequested(message: string): boolean {
 }
 
 export function emptyTaskProgress(): TaskProgressState {
-  return { version: 1, objective: null, stage: "working", pending: [], answered: [], lastAssistantMessageId: null, lastUserMessageId: null };
+  return { version: 1, objective: null, stage: "working", nextAction: "continue_original_goal", pending: [], answered: [], lastAssistantMessageId: null, lastUserMessageId: null };
 }
 
 export function applyUserToTaskProgress(
@@ -86,6 +87,7 @@ export function applyUserToTaskProgress(
       ...(newTaskRequested(text) || !previous.objective ? { objective: { text: text.slice(0, 2000), userMessageId: input.messageId } } : {}),
       pending: newTaskRequested(text) ? [] : previous.pending,
       stage: "working",
+      nextAction: "continue_original_goal",
       lastUserMessageId: input.messageId,
     };
   }
@@ -109,6 +111,7 @@ export function applyUserToTaskProgress(
     pending: remaining,
     answered: [...previous.answered, ...answered].slice(-MAX_ANSWERED),
     stage: "answers_received",
+    nextAction: "advance_after_answers",
     lastUserMessageId: input.messageId,
   };
 }
@@ -119,7 +122,7 @@ export function applyAssistantToTaskProgress(
 ): TaskProgressState {
   if (previous.lastAssistantMessageId === input.messageId) return previous;
   const pending = extractAssistantQuestions(input.text, input.messageId);
-  return { ...previous, pending, stage: pending.length ? "awaiting_user_answer" : "working", lastAssistantMessageId: input.messageId };
+  return { ...previous, pending, stage: pending.length ? "awaiting_user_answer" : "working", nextAction: pending.length ? "await_user_answers" : "continue_original_goal", lastAssistantMessageId: input.messageId };
 }
 
 /** Reconstruct a partial ledger from durable chat messages if the cache was absent. */
@@ -171,6 +174,7 @@ export function formatTaskProgress(progress: TaskProgressState): string {
     "Do not treat this record as a permanent instruction. A user's explicit new request overrides old progress; a cached objective is provisional.",
     "Provisional original objective: " + JSON.stringify(progress.objective),
     "Current stage: " + progress.stage,
+    "Next appropriate action: " + progress.nextAction,
     "Answered questions with source IDs: " + JSON.stringify(completed),
     "Still unanswered questions: " + JSON.stringify(progress.pending),
     "If a material unknown remains, ask only one targeted question that is genuinely needed; otherwise move the task forward.",
