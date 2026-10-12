@@ -9,6 +9,7 @@ npm run test:website
 npm run test:review
 npm run test:video-fallback
 npm run test:vitest
+npm run test:integration
 ```
 
 `npm test` discovers test files under `tests/` and `packages/`. TypeScript tests
@@ -34,18 +35,15 @@ They use local test fixtures and must pass rather than being skipped when their
 native dependencies are unavailable. Provider and persistence tests use mocks;
 live production resources are not needed.
 
-The separate legacy `tests/integration/api-stack.test.mjs` is explicitly excluded
-from the offline gate and printed as excluded. It requires `DATABASE_URL`,
-`REDIS_URL`, a local GitHub API mock at `http://127.0.0.1:9090`, and a local
-Supabase setup capable of serving the application endpoints. Run it only with
-that local stack configured:
-
-```bash
-node tests/integration/api-stack.test.mjs
-```
-
-This integration test is not covered by an existing CI service-stack job. Its
-requirements must not be replaced with production credentials.
+`tests/integration/api-stack.test.mjs` is included in the full gate. It starts
+a real local Next.js development server and a mock persistence HTTP server on
+ephemeral localhost ports, verifies HTTP 200 and response bodies for models,
+actors and chats, and confirms actor/chat requests traverse the persistence
+adapter. It uses dummy credentials, disables provider keys, and shuts down its
+server process group. The earlier external-stack environment requirements did
+not exercise Postgres, Redis or GitHub; they have been replaced with the actual
+application API contract. This test does not validate live database behavior,
+pgvector, migrations, RLS or provider integrations.
 
 ```bash
 npm run ci:gate
@@ -62,5 +60,4 @@ Storage probe when invoked in a production Vercel environment. The localhost
 smoke check does not deploy the application.
 
 See [Work Package 1 results](work-package-1-testing-baseline.md) for the baseline
-failures, contract evidence, corrections, exact completed checks and remaining
-verification limitation.
+failures, contract evidence, corrections and exact verification results.

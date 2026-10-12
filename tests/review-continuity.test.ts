@@ -76,3 +76,4 @@ test("pending work is resolved only after the resumed request is durably complet
     assert.equal((await getPendingReviewClarification("other","chat-1")),null);
   } finally { db.restore(); }
 });
+

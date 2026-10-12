@@ -3,10 +3,12 @@ import { isIP } from "node:net";
 import type { Browser, Page } from "playwright-core";
 import type { ChatGenerateParams, WebsiteEvidence, WebsitePageEvidence } from "@/lib/providers/types";
 
+import { captureVisualReview, compareWebsiteReviews, type VisualBudget } from "./visual-review";
+
 const MAX_PAGES = 3;
 const MAX_HTML = 12_000;
 const MAX_CSS = 8_000;
-const MAX_SCREENSHOT_BYTES = 900_000;
+
 const VIEWPORTS = [
   { device: "desktop" as const, width: 1440, height: 900 },
   { device: "mobile" as const, width: 390, height: 844 },
@@ -91,6 +93,8 @@ export async function validateWebsiteUrl(raw: string): Promise<void> {
   }
 }
 
+let browserExecutable: Promise<string> | undefined;
+
 export async function launchWebsiteBrowser(): Promise<Browser> {
   const [{ default: chromium }, { chromium: playwright }] = await Promise.all([
     import("@sparticuz/chromium"),
@@ -98,7 +102,7 @@ export async function launchWebsiteBrowser(): Promise<Browser> {
   ]);
   return playwright.launch({
     args: chromium.args.filter((arg) => !["--single-process", "--disable-web-security", "--allow-running-insecure-content"].includes(arg)),
-    executablePath: await chromium.executablePath(),
+    executablePath: await (browserExecutable ??= chromium.executablePath().catch(error => { browserExecutable = undefined; throw error; })),
     headless: true,
     timeout: 15_000,
   });
@@ -108,7 +112,7 @@ function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-async function inspectView(page: Page, device: "desktop" | "mobile", viewport: { width: number; height: number }): Promise<WebsitePageEvidence["views"][number]> {
+async function inspectView(page: Page, device: "desktop" | "mobile", viewport: { width: number; height: number }, budget: VisualBudget, state: string): Promise<WebsitePageEvidence["views"][number]> {
   const observed = await page.evaluate(() => {
     const visible = (el: Element) => {
       const rect = el.getBoundingClientRect();
@@ -144,21 +148,9 @@ async function inspectView(page: Page, device: "desktop" | "mobile", viewport: {
     };
   });
   const limitations: string[] = [];
-  let screenshot: WebsitePageEvidence["views"][number]["screenshot"];
-  try {
-    const height = Math.min(4500, observed.document.height);
-    const buffer = await page.screenshot({
-      type: "jpeg", quality: 65, animations: "disabled",
-      clip: { x: 0, y: 0, width: viewport.width, height }, timeout: 8_000,
-    });
-    if (buffer.length <= MAX_SCREENSHOT_BYTES) {
-      screenshot = { dataUrl: "data:image/jpeg;base64," + buffer.toString("base64"), width: viewport.width, height, truncated: height < observed.document.height };
-      if (screenshot.truncated) limitations.push("Screenshot covers the first 4500 CSS pixels; lower content is not pictured.");
-    } else {
-      limitations.push("Screenshot exceeded the image byte limit; computed styles and DOM observations are available.");
-    }
-  } catch (error) { limitations.push("Screenshot failed: " + errorText(error)); }
-  return { device, viewport, ...observed, ...(screenshot ? { screenshot } : {}), limitations };
+  const visualReview = await captureVisualReview(page, budget, state);
+  limitations.push(...visualReview.limitations);
+  return { device, viewport, ...observed, visualReview, limitations };
 }
 
 export async function collectWebsiteEvidence(
@@ -167,14 +159,18 @@ export async function collectWebsiteEvidence(
     timeoutMs?: number;
     launch?: () => Promise<Browser>;
     validate?: (url: string) => Promise<void>;
+    /** Explicitly requested non-form disclosure states; never inferred from page text. */
+    states?: Array<{ name: string; selector: string; expectVisible?: string }>;
   } = {},
 ): Promise<WebsiteEvidence | undefined> {
   if (!isWebsiteReview(params)) return undefined;
+  const states = options.states ?? [];
+  if (states.length > 3 || states.some(s => !s.name || s.name === "default" || !s.selector) || new Set(states.map(s => s.name)).size !== states.length) throw new Error("Invalid disclosure states");
   const { urls, source } = resolveWebsiteReviewTarget(params);
   const evidence: WebsiteEvidence = {
-    capturedAt: new Date().toISOString(), pages: [],
+    capturedAt: new Date().toISOString(), objective: params.user, pages: [],
     targetSource: source,
-    limitations: ["Inspection samples up to three pages at desktop and mobile widths. Menus, forms, authentication and other interactive states are not exercised."],
+    limitations: ["Inspection samples up to three pages at desktop and mobile widths. Only explicitly requested non-form disclosure states are exercised; forms and authentication are excluded. Measured findings are independent of model opinions."],
   };
   if (!urls.length) {
     evidence.limitations.push("Rendered inspection skipped: no unambiguous website URL was found in the current message, full conversation history or summary. Ask for the target URL.");
@@ -182,6 +178,7 @@ export async function collectWebsiteEvidence(
   }
   const validate = options.validate ?? validateWebsiteUrl;
   const timeoutMs = Math.min(60_000, Math.max(1_000, options.timeoutMs ?? 45_000));
+  const budget: VisualBudget = { frames: 60, bytes: 6_000_000 };
   let browser: Browser | undefined;
   let stopped = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -199,7 +196,7 @@ export async function collectWebsiteEvidence(
       evidence.pages.push(result);
       try {
         await validate(requestedUrl);
-        for (const viewport of VIEWPORTS) {
+        for (const viewport of VIEWPORTS.flatMap(v => [{ ...v, state: { name: "default", selector: "", expectVisible: "" } }, ...states.map(state => ({ ...v, state }))])) {
           if (stopped) break;
           const context = await launched.newContext({
             viewport: { width: viewport.width, height: viewport.height },
@@ -207,19 +204,26 @@ export async function collectWebsiteEvidence(
             serviceWorkers: "block", acceptDownloads: false,
           });
           try {
+            const failures: string[] = [];
+            let requests = 0, navigationLocked = false;
             // Validate redirects and every subresource, including CSS and images.
             await context.route("**/*", async (route) => {
               try {
-                if (!["GET", "HEAD"].includes(route.request().method())) { await route.abort(); return; }
+                if (++requests > 200) throw new Error("Request budget exceeded");
+                if (navigationLocked && route.request().isNavigationRequest()) throw new Error("State navigation blocked");
+                if (!["GET", "HEAD"].includes(route.request().method())) throw new Error("Write request blocked");
                 const raw = route.request().url();
                 if (raw.startsWith("data:") || raw.startsWith("blob:")) { await route.continue(); return; }
                 await validate(raw);
                 if (stopped) await route.abort(); else await route.continue();
-              } catch { await route.abort(); }
+              } catch { if (failures.length < 20) failures.push("A request was blocked by capture policy."); await route.abort().catch(() => {}); }
             });
             await context.routeWebSocket("**/*", (socket) => socket.close());
             const page = await context.newPage();
             page.setDefaultTimeout(8_000);
+            context.on("page", popup => { if (popup !== page) void popup.close(); });
+            page.on("requestfailed", req => { if (["document", "stylesheet", "script", "image", "font"].includes(req.resourceType()) && failures.length < 20) failures.push("Required asset failed: " + req.resourceType()); });
+            page.on("response", res => { if (res.status() >= 400 && ["document", "stylesheet", "script", "image", "font"].includes(res.request().resourceType()) && failures.length < 20) failures.push("Asset HTTP " + res.status()); });
             const cssBodies: Promise<void>[] = [];
             let cssBytes = 0;
             let htmlCaptured = false;
@@ -249,18 +253,19 @@ export async function collectWebsiteEvidence(
               }
             });
             const response = await page.goto(requestedUrl, { waitUntil: "domcontentloaded", timeout: 12_000 });
-            if (response) result.status = response.status();
-            try { await page.waitForLoadState("networkidle", { timeout: 3_000 }); }
-            catch { result.limitations.push(viewport.device + ": network did not become idle; late assets may be missing."); }
-            await page.evaluate(async () => {
-              await Promise.race([document.fonts.ready, new Promise((resolve) => setTimeout(resolve, 1500))]);
-              // Trigger lazy images within the captured region without interacting with controls.
-              for (let y = 0; y < Math.min(document.documentElement.scrollHeight, 4500); y += innerHeight) {
-                scrollTo(0, y);
-                await new Promise((resolve) => setTimeout(resolve, 80));
-              }
-              scrollTo(0, 0);
-            });
+            if (!response || response.status() >= 400) throw new Error("Page returned unsuccessful HTTP status: " + response?.status());
+            result.status = response.status();
+            try { await page.waitForLoadState("load", { timeout: 5_000 }); }
+            catch { failures.push("Page load did not settle."); }
+            try { await page.waitForFunction(() => document.fonts.status === "loaded", undefined, { timeout: 5_000 }); }
+            catch { failures.push("Fonts did not settle."); }
+            if (viewport.state.selector) {
+              const target = page.locator(viewport.state.selector);
+              if (await target.count() !== 1 || !await target.evaluate(e => e.tagName === "BUTTON" && !e.closest("form") && (e.hasAttribute("aria-expanded") || e.hasAttribute("aria-controls")))) throw new Error("State requires one non-form disclosure button");
+              navigationLocked = true;
+              await target.click();
+              if (viewport.state.expectVisible) await page.locator(viewport.state.expectVisible).waitFor({ state: "visible" });
+            }
             result.url = page.url();
             result.title = await page.title();
             if (!result.html) {
@@ -269,9 +274,15 @@ export async function collectWebsiteEvidence(
               result.htmlTruncated = html.length > MAX_HTML;
               result.limitations.push("HTML excerpt is the rendered DOM, not the initial HTTP body.");
             }
-            result.views.push(await inspectView(page, viewport.device, { width: viewport.width, height: viewport.height }));
+            const view = await inspectView(page, viewport.device, { width: viewport.width, height: viewport.height }, budget, viewport.state.name);
+            if (failures.length && view.visualReview) {
+              view.visualReview.status = "partial";
+              view.visualReview.limitations.push(...failures);
+              view.limitations.push(...failures);
+            }
+            if (!stopped) result.views.push(view);
             await Promise.race([Promise.allSettled(cssBodies), new Promise((resolve) => setTimeout(resolve, 1500))]);
-            if (viewport.device === "desktop" && index === 0 && queue.length < MAX_PAGES) {
+            if (viewport.device === "desktop" && viewport.state.name === "default" && index === 0 && queue.length < MAX_PAGES) {
               const links = await page.locator("nav a[href], header a[href], main a[href]").evaluateAll((nodes) =>
                 nodes.map((node) => ({ url: (node as HTMLAnchorElement).href, text: node.textContent ?? "" })),
               );
@@ -310,5 +321,6 @@ export async function collectWebsiteEvidence(
     if (timer) clearTimeout(timer);
     if (browser) await browser.close().catch(() => {});
   }
+  if (params.previousWebsiteEvidence) evidence.comparisons = compareWebsiteReviews(params.previousWebsiteEvidence, evidence);
   return evidence;
 }

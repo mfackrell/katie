@@ -22,7 +22,8 @@
     "postbuild": "node scripts/video-upload-production-smoke.mjs",
     "test:video-fallback": "node scripts/run-tests.mjs video-fallback",
     "test:review": "node scripts/run-tests.mjs review",
-    "test:vitest": "node scripts/run-tests.mjs vitest"
+    "test:vitest": "node scripts/run-tests.mjs vitest",
+    "test:integration": "node scripts/run-tests.mjs integration"
   },
   "dependencies": {
     "@fastify/rate-limit": "^10.3.0",

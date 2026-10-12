@@ -21,8 +21,10 @@
     "tests/server-video-frame-recovery.test.ts",
     "tests/local-katie-inspection.test.ts",
     "tests/required-review.test.ts",
+    "tests/actors-route.test.ts",
+    "tests/visual-review.test.ts",
+    "tests/objective-first-prompts.test.ts",
     "tests/review-continuity.test.ts",
-    "tests/task-progress.test.ts",
-    "tests/actors-route.test.ts"
+    "tests/task-progress.test.ts"
   ]
 }

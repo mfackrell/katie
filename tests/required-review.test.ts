@@ -404,3 +404,71 @@ test("editorial standards apply beyond applications and do not impose marketing 
   assert.ok(checks.includes("contextual-content-selection"));
   assert.ok(checks.includes("audience-appropriate-expression"));
 });
+
+
+test("live website evidence reaches assessment, validation, revision and final review as text and image inputs", async () => {
+  const image = "data:image/jpeg;base64,bGl2ZS1ldmlkZW5jZQ==";
+  const researchEvidence: NonNullable<ChatGenerateParams["researchEvidence"]> = {
+    kind: "web", retrievedBy: { provider: "katie", modelId: "browser" },
+    query: "Review website", summary: "LIVE_CAPTURE_MARKER", sources: [{ url: "https://example.com/" }], retrievedAt: "2026-10-12T00:00:00Z",
+    website: { capturedAt: "2026-10-12T00:00:00Z", limitations: [], pages: [{
+      requestedUrl: "https://example.com/", url: "https://example.com/", title: "Example", html: "<h1>Example</h1>", htmlTruncated: false, stylesheets: [], limitations: [],
+      views: [{ device: "desktop", viewport: { width: 1440, height: 900 }, document: { width: 1440, height: 900, horizontalOverflow: false }, text: "Example", elements: [], images: [], limitations: [], screenshot: { dataUrl: image, width: 1440, height: 900, truncated: false } }],
+    }] },
+  };
+  // Identical frames still occupy separate evidence image indices.
+  researchEvidence.website!.pages[0].views.push({ ...researchEvidence.website!.pages[0].views[0], device: "mobile" });
+  const s = setup({ reviews: [verdict("revise"), verdict("approve")] });
+  const result = await runRequiredDraftReview({ requestId: "live-evidence", draft,
+    params: { ...params, researchEvidence }, assessmentParams: { ...params, researchEvidence },
+    leadProvider: s.lead, deadlineMs: deadline(), selectHelper: async c => {
+      assert.equal(c.hasImages, true);
+      return { provider: s.reviewer, modelId: "reviewer" };
+    },
+  });
+  assert.equal(result.audit.status, "revised");
+  assert.deepEqual(s.phases, ["assessment", "contract", "review", "revision", "review"]);
+  for (const call of s.calls) {
+    assert.ok(call.user.includes("LIVE_CAPTURE_MARKER"));
+    assert.ok(call.user.includes("RENDERED_WEBSITE_EVIDENCE"));
+    assert.deepEqual(call.images, [image, image]);
+    assert.ok(!call.user.includes(image), "image bytes belong in image inputs, not text");
+    assert.ok(!call.user.includes("CONTAMINATED"));
+  }
+});
+
+test("objective-first standard reaches independent assessment, comparison, revision and final verification without new stages", async () => {
+  const calls: ChatGenerateParams[] = [];
+  const rebuilt = "I have 25 years of finance and accounting leadership across manufacturing and global businesses. I led audit remediation for a $90M global professional services company. My manufacturing and multinational experience are separate; I have not performed international transfer pricing work.";
+  const reviewer = makeProvider("anthropic", async p => {
+    calls.push(p);
+    assert.match(p.persona, /KATIE_OBJECTIVE_FIRST_STANDARD/);
+    if (p.persona.includes("KATIE_INDEPENDENT_ASSESSMENT")) {
+      assert.match(p.persona, /Define an excellent response independently BEFORE seeing the draft/);
+      assert.ok(!p.user.includes(draft.text));
+      return response("anthropic", "reviewer", assessment);
+    }
+    if (p.user.includes(rebuilt)) {
+      assert.match(p.persona, /FINAL VERIFICATION: Reassess the complete revised response/);
+      assert.match(p.persona, /not merely that earlier requested edits were applied/);
+      assert.match(p.persona, /Do not fail any check merely because suggested wording/);
+      assert.match(p.persona, /strongest effective response is not a mandate for endless stylistic optimization/);
+      return response("anthropic", "reviewer", verdict("approve"));
+    }
+    assert.match(p.persona, /DRAFT COMPARISON: Compare the draft with the independently established ideal approach/);
+    return response("anthropic", "reviewer", verdict("revise"));
+  });
+  const lead = makeProvider("openai", async p => {
+    calls.push(p);
+    assert.match(p.persona, /KATIE_OBJECTIVE_FIRST_STANDARD/);
+    if (p.persona.includes("KATIE_TASK_CONTRACT_VALIDATION")) return contractApproval(p);
+    assert.match(p.persona, /Rebuild the argument when its strategy is wrong/);
+    return response("openai", "lead", rebuilt);
+  });
+  const result = await runRequiredDraftReview({ requestId: "objective-first-transport", draft,
+    params, leadProvider: lead, deadlineMs: deadline(),
+    selectHelper: async () => ({ provider: reviewer, modelId: "reviewer" }) });
+  assert.equal(result.audit.status, "revised");
+  assert.equal(result.result.text, rebuilt);
+  assert.equal(calls.length, 5, "Existing assessment, contract validation, comparison, revision and verification only");
+});

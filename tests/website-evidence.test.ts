@@ -152,12 +152,14 @@ test("on-demand research preserves full evidence and screenshot delivery to the 
     name: "grok", async listModels() { return ["web"]; },
     async generate() { return { provider: "grok", model: "web", text: "x".repeat(28_000) + tail }; },
   };
-  await runOnDemandCapabilityEscalation({
+  const result = await runOnDemandCapabilityEscalation({
     requestId: "on-demand-design", params, leadProvider: lead, leadModelId: "lead",
     collectWebsiteEvidence: async () => website,
     async selectHelper() { return { provider: helper, modelId: "web" }; },
     onFinalTextDelta() {},
   });
+  assert.equal(result.result.researchEvidence?.website, website);
+  assert.ok(result.result.researchEvidence?.summary.endsWith(tail));
   assert.ok(final?.user.includes(tail));
   assert.match(final?.user ?? "", /style.css/);
   assert.deepEqual(final?.images, [screenshot]);

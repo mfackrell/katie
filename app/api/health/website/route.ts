@@ -19,7 +19,7 @@ export async function GET() {
       { role: "user", content: "Try again" }, { role: "assistant", content: "Previous review." },
     ],
   }, { timeoutMs: 40_000 });
-  const healthy = Boolean(evidence?.pages[0]?.views.length === 2 && websiteImages(evidence).length >= 2);
+  const healthy = Boolean(evidence?.pages[0]?.views.length === 2 && evidence.pages[0].views.every(view => view.visualReview?.status === "complete") && websiteImages(evidence).length >= 2);
   return NextResponse.json({
     healthy,
     targetSource: evidence?.targetSource,

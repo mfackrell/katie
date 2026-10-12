@@ -33,10 +33,10 @@ test("AI news today routes as web-search", async () => {
   assert.equal(result.intent, "web-search");
 });
 
-test("URL-only summary is a search signal but does not force fallback classification", async () => {
+test("URL-only summary uses the current web-search fallback when the classifier is unavailable", async () => {
   const result = await inferRequestClassification("https://example.com summarize this", { hasImages: false });
   assert.equal(detectWebSearchSignals("https://example.com summarize this").urlPresent, true);
-  assert.equal(result.intent, "general-text");
+  assert.equal(result.intent, "web-search");
 });
 
 test("video/url/model/log/diff hints alone should not force web-search in active repo code review context", async () => {

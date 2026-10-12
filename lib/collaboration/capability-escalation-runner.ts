@@ -173,6 +173,10 @@ export async function runOnDemandCapabilityEscalation(input: {
     [participantKey(lead), lead],
   ]);
   const contributions: CollaborationContribution[] = [];
+  const retainResearchEvidence = (result: ProviderResponse): ProviderResponse => {
+    const evidence = contributions.find(item => item.researchEvidence)?.researchEvidence;
+    return evidence ? { ...result, researchEvidence: evidence } : result;
+  };
   const trace: CollaborationTraceEvent[] = [];
   let escalationCount = 0;
   let started = false;
@@ -232,11 +236,11 @@ export async function runOnDemandCapabilityEscalation(input: {
           }
         : null;
 
-      const result: ProviderResponse = {
+      const result: ProviderResponse = retainResearchEvidence({
         ...generation.result,
         text: generation.result.text || generation.streamedText,
         ...(metadata ? { collaboration: metadata } : {}),
-      };
+      });
 
       if (started) {
         await emit({
@@ -320,11 +324,11 @@ export async function runOnDemandCapabilityEscalation(input: {
       });
 
       return {
-        result: {
+        result: retainResearchEvidence({
           ...finalGeneration.result,
           text: finalGeneration.result.text || finalGeneration.streamedText,
           collaboration: metadata,
-        },
+        }),
         streamedText: finalGeneration.streamedText,
         metadata,
         trace,
@@ -557,11 +561,11 @@ export async function runOnDemandCapabilityEscalation(input: {
       });
 
       return {
-        result: {
+        result: retainResearchEvidence({
           ...finalGeneration.result,
           text: finalGeneration.result.text || finalGeneration.streamedText,
           collaboration: metadata,
-        },
+        }),
         streamedText: finalGeneration.streamedText,
         metadata,
         trace,

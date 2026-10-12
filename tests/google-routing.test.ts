@@ -543,11 +543,37 @@ test("news and current-events prompts are classified as web search", async () =>
   assert.equal(await inferRequestIntent("What happened in AI news today?", false), "web-search");
 });
 
-test("URL signals and video words do not force fallback web-search classification", async () => {
-  assert.equal(hasDirectWebSearchHint("Please summarize https://example.com/post"), true);
-  assert.equal(hasDirectWebSearchHint("Can you watch this youtube clip and recap it?"), false);
-  assert.equal(await inferRequestIntent("Can you summarize this link: https://example.com/post", false), "general-text");
-  assert.equal(await inferRequestIntent("watch this mp4 and summarize it", false), "general-text");
+test("URL retrieval falls back to web search when the classifier is unavailable", async () => {
+  const unavailable = provider("openai", ["gpt-5.2-mini"], async () => { throw new Error("classifier unavailable"); });
+  const options = { decisionProviders: [{ provider: unavailable.provider, modelId: "gpt-5.2-mini" }] };
+  for (const prompt of ["Summarize this link: https://example.com/post", "Find current pricing for this service"]) {
+    assert.equal(hasDirectWebSearchHint(prompt), true);
+    assert.equal(await inferRequestIntent(prompt, false, options), "web-search");
+    assert.equal((await inferRequestClassification(prompt, false, options)).intent, "web-search");
+  }
+});
+
+test("video mentions alone never invent a web source or replace attached-video routing", async () => {
+  for (const prompt of ["Can you watch this youtube clip and recap it?", "watch this mp4 and summarize it"]) {
+    assert.equal(hasDirectWebSearchHint(prompt), false);
+    assert.equal(await inferRequestIntent(prompt, false), "general-text");
+    assert.equal((await inferRequestClassification(prompt, false)).intent, "general-text");
+    assert.equal(await inferRequestIntent(prompt, { hasImages: false, hasVideoInput: true }), "vision-analysis");
+    assert.equal((await inferRequestClassification(prompt, { hasImages: false, hasVideoInput: true })).intent, "vision-analysis");
+  }
+});
+
+test("web fallback respects offline instructions, substantive reviews and repo context", async () => {
+  for (const [prompt, expected] of [
+    ["Summarize https://example.com/post, offline only", "general-text"],
+    ["Review the website https://example.com/", "marketing-analysis"],
+  ]) {
+    assert.equal(await inferRequestIntent(prompt, false), expected);
+    assert.equal((await inferRequestClassification(prompt, false)).intent, expected);
+  }
+  const prompt = "Explain this repo diff: https://github.com/example/repo";
+  assert.equal(await inferRequestIntent(prompt, false, { activeRepoContextAttached: true }), "general-text");
+  assert.equal((await inferRequestClassification(prompt, false, { activeRepoContextAttached: true })).intent, "general-text");
 });
 
 test("web-search intent excludes models without web-search capability", async () => {

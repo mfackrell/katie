@@ -997,6 +997,7 @@ export async function inferRequestIntent(
   else if (/\b(review (?:the )?(?:repo|file|code)|check file|inspect code|see the repo)\b/i.test(normalizedPrompt)) bestHeuristicHint = "code-review";
   else if (/\b(architecture|system design|kubernetes|deployment|review this repo|repo review)\b/i.test(normalizedPrompt)) bestHeuristicHint = "architecture-review";
   else if (hasImplementationCue(normalizedPrompt)) bestHeuristicHint = sanitizeCodeGenerationIntent(prompt, "code-generation", "heuristic") ?? "general-text";
+  else if (webSearchSignals.detected && !repoReviewContextActive) bestHeuristicHint = "web-search";
   if (isLikelySafetySensitiveVisionPrompt(prompt, hasImages)) {
     console.info("[Intent Source] text heuristic -> safety-sensitive-vision");
     return "safety-sensitive-vision";
@@ -1139,6 +1140,7 @@ export async function inferRequestClassificationWithSource(
   else if (/\b(review (?:the )?(?:repo|file|code)|check file|inspect code|see the repo)\b/i.test(normalizedPrompt)) bestHeuristicHint = "code-review";
   else if (/\b(architecture|system design|kubernetes|deployment|review this repo|repo review)\b/i.test(normalizedPrompt)) bestHeuristicHint = "architecture-review";
   else if (hasImplementationCue(normalizedPrompt)) bestHeuristicHint = sanitizeCodeGenerationIntent(prompt, "code-generation", "heuristic") ?? "general-text";
+  else if (webSearchSignals.detected && !repoReviewContextActive) bestHeuristicHint = "web-search";
   if (isLikelySafetySensitiveVisionPrompt(prompt, hasImages)) return resolved({ intent: "safety-sensitive-vision", preferredProvider: null }, "router-fallback");
   if (hasImages && /\b(chart|trend|forecast|project|estimate)\b/i.test(normalizedPrompt)) return resolved({ intent: "multimodal-reasoning", preferredProvider: null }, "router-fallback");
   if (hasVideoInput && /\b(chart|trend|forecast|project|estimate|timeline|sequence)\b/i.test(normalizedPrompt)) return resolved({ intent: "multimodal-reasoning", preferredProvider: null }, "router-fallback");

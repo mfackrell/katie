@@ -115,7 +115,7 @@ test("heuristic model names without registry metadata are non-authoritative", ()
   }
 });
 
-test("policy only enforces when current selection violates verified hard guardrails", () => {
+test("verified passing selection remains unchanged and reports complete metadata", () => {
   const passing = evaluatePolicyRouting({
     prompt: "quick summary",
     context: "",
@@ -134,8 +134,8 @@ test("policy only enforces when current selection violates verified hard guardra
 
   assert.equal(passing.selected, null);
   assert.match(passing.trace.selection_summary, /passed hard guardrails/i);
-  // This fixture verifies pricing, capability, reasoning and latency metadata.
   assert.equal(passing.metadataMissing, false);
+  assert.ok(passing.trace.candidates.every(candidate => candidate.policy.eligible && candidate.policy.flags.length === 0));
 });
 
 test("restricted registry metadata remains fallback-only and cannot drive hard reroute", () => {
@@ -173,4 +173,18 @@ test("restricted registry metadata remains fallback-only and cannot drive hard r
   assert.equal(result.metadataMissing, true);
   assert.match(result.trace.selection_summary, /unverified/i);
   delete process.env.ROUTER_POLICY_HARD_CAP_USD_PER_REQUEST;
+});
+
+
+test("a genuinely missing policy dimension is reported without inventing a violation", () => {
+  const result = evaluatePolicyRouting({
+    prompt: "quick summary", context: "", traceId: "missing-quality", resolvedIntent: "general-text",
+    registryLookup: lookup([modelRecord("google", "gemini-3.1-flash", { reasoning_tier: null })]),
+    availableByProvider: [provider("google", ["gemini-3.1-flash"])],
+    currentSelection: { providerName: "google", modelId: "gemini-3.1-flash" }
+  });
+  assert.equal(result.metadataMissing, true);
+  assert.equal(result.selected, null);
+  assert.deepEqual(result.trace.candidates[0].policy.flags, []);
+  assert.ok(result.trace.candidates[0].policy.reasons.includes("quality_unverified_non_authoritative"));
 });

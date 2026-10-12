@@ -1,0 +1,582 @@
+{
+  "dataScope": "Wholly fictional inputs; no BTG or real career facts",
+  "leadModel": "claude-sonnet-5-5",
+  "reviewerModel": "claude-opus-5-5",
+  "cases": [
+    {
+      "variant": "revised",
+      "result": {
+        "text": "Dear Hiring Team,\n\nI bring 16 years of finance and operations leadership to this industrial CFO role. I have been CFO of a domestic manufacturer with $72M in annual revenue and interim CFO of a multinational software company with $48M in annual revenue and a $150M enterprise valuation. The two roles map to the areas your role covers.\n\n**Manufacturing**\nAs CFO of a $72M domestic manufacturer, I led finance for an industrial business. The role included international distributor negotiation responsibilities, so my work reached beyond the domestic finance function into commercial relationships across borders.\n\n**Multinational finance**\nAs interim CFO of a multinational software company with $48M in annual revenue and a $150M enterprise valuation, I led finance for a multinational business. Paired with my manufacturing CFO experience, this gives me industrial finance leadership and multinational finance leadership, built in separate roles.\n\n**Audits**\nI completed an audit remediation in eight months. I have also led an ERP migration and supported an acquisition, experience directly relevant to the systems, controls and reporting a growing industrial business relies on.\n\n**Transfer pricing**\nDirect international transfer pricing ownership has not been part of my roles to date. Relevant to it, I have negotiated with international distributors and led finance at a multinational company. In an industrial setting I would work closely with tax and legal specialists on transfer pricing, drawing on that cross-border commercial and financial background.\n\nI would welcome the chance to discuss how my manufacturing finance leadership, multinational experience, completed audit remediation and ERP leadership can support your organization.\n\nSincerely,\n\n[Your name]",
+        "provider": "anthropic",
+        "model": "claude-sonnet-5-5",
+        "finishReason": "end_turn",
+        "truncated": false,
+        "continuationCount": 0,
+        "content": [
+          {
+            "type": "text",
+            "text": "Dear Hiring Team,\n\nI bring 16 years of finance and operations leadership to this industrial CFO role. I have been CFO of a domestic manufacturer with $72M in annual revenue and interim CFO of a multinational software company with $48M in annual revenue and a $150M enterprise valuation. The two roles map to the areas your role covers.\n\n**Manufacturing**\nAs CFO of a $72M domestic manufacturer, I led finance for an industrial business. The role included international distributor negotiation responsibilities, so my work reached beyond the domestic finance function into commercial relationships across borders.\n\n**Multinational finance**\nAs interim CFO of a multinational software company with $48M in annual revenue and a $150M enterprise valuation, I led finance for a multinational business. Paired with my manufacturing CFO experience, this gives me industrial finance leadership and multinational finance leadership, built in separate roles.\n\n**Audits**\nI completed an audit remediation in eight months. I have also led an ERP migration and supported an acquisition, experience directly relevant to the systems, controls and reporting a growing industrial business relies on.\n\n**Transfer pricing**\nDirect international transfer pricing ownership has not been part of my roles to date. Relevant to it, I have negotiated with international distributors and led finance at a multinational company. In an industrial setting I would work closely with tax and legal specialists on transfer pricing, drawing on that cross-border commercial and financial background.\n\nI would welcome the chance to discuss how my manufacturing finance leadership, multinational experience, completed audit remediation and ERP leadership can support your organization.\n\nSincerely,\n\n[Your name]"
+          }
+        ],
+        "usage": {
+          "inputTokens": 9521,
+          "outputTokens": 740,
+          "totalTokens": 10261
+        }
+      },
+      "audit": {
+        "sourceTurns": [
+          {
+            "id": "latest-user",
+            "text": "Write an application response for an industrial CFO role asking about manufacturing, multinational finance, audits and transfer pricing. Include verified revenue sizes. Use only these fictional facts."
+          }
+        ],
+        "mode": "always",
+        "status": "revised",
+        "draft": "I have no international transfer-pricing experience and have never been CFO of a multinational manufacturer. I have 16 years of finance and operations experience: CFO of a domestic manufacturer with $72M annual revenue and interim CFO of a multinational software company with $48M annual revenue. I completed audit remediation in eight months, led an ERP migration and supported an acquisition. I also operated a hospitality side business.",
+        "draftHash": "1aacbeb2f817c855c321cf427292c012d58fa7a72ef157e3ae2698913eab48b1",
+        "finalHash": "882af28b159e7747a1ac5db70e873f19e4d10213d397c5017b29d158656eac92",
+        "attempts": [
+          {
+            "reviewer": {
+              "provider": "anthropic",
+              "modelId": "claude-opus-5-5"
+            },
+            "phase": "comparison"
+          }
+        ],
+        "contractFindings": [
+          {
+            "validator": {
+              "provider": "anthropic",
+              "modelId": "claude-sonnet-5-5"
+            },
+            "verdict": "approve",
+            "findings": "The contract correctly identifies the active deliverable: a finished application response for an industrial CFO role, not advice on how to write one. Requirements r1-r4 are all supported by the latest-user turn. No requirement is superseded and no unsupported requirement is added. The conflict handling is sound. The role asks about transfer pricing, the verified facts state no direct international transfer pricing experience, and the contract resolves this by addressing it honestly through adjacent exposure without claiming the experience or letting the gap dominate. The synthesis uses the full evidence set: 16 years of leadership, CFO of a $72M domestic manufacturer, interim CFO of a $48M multinational software company with a $150M valuation, the eight-month audit remediation, and the ERP migration and acquisition support. It preserves the key boundaries: never CFO of a multinational manufacturer, no employer attribution for the audit, ERP and acquisition work, no claim that the interim role is current, and exclusion of the hospitality business. The criteria measure the user's actual objective (persuasive, truthful, accurately attributed, well organized) and do not leak internal review or JSON rules. The criteria stay proportionate and do not prescribe wording. Approved."
+          }
+        ],
+        "contractValidation": {
+          "verdict": "approve",
+          "findings": "The contract correctly identifies the active deliverable: a finished application response for an industrial CFO role, not advice on how to write one. Requirements r1-r4 are all supported by the latest-user turn. No requirement is superseded and no unsupported requirement is added. The conflict handling is sound. The role asks about transfer pricing, the verified facts state no direct international transfer pricing experience, and the contract resolves this by addressing it honestly through adjacent exposure without claiming the experience or letting the gap dominate. The synthesis uses the full evidence set: 16 years of leadership, CFO of a $72M domestic manufacturer, interim CFO of a $48M multinational software company with a $150M valuation, the eight-month audit remediation, and the ERP migration and acquisition support. It preserves the key boundaries: never CFO of a multinational manufacturer, no employer attribution for the audit, ERP and acquisition work, no claim that the interim role is current, and exclusion of the hospitality business. The criteria measure the user's actual objective (persuasive, truthful, accurately attributed, well organized) and do not leak internal review or JSON rules. The criteria stay proportionate and do not prescribe wording. Approved.",
+          "validator": {
+            "provider": "anthropic",
+            "modelId": "claude-sonnet-5-5"
+          },
+          "sourceCoverage": [
+            {
+              "sourceId": "latest-user",
+              "finding": "Requests a finished application response for an industrial CFO role covering manufacturing, multinational finance, audits and transfer pricing, including verified revenue sizes and using only the supplied fictional facts. The contract captures all four requirements as active, handles the transfer pricing gap truthfully, and builds criteria around the supported evidence."
+            }
+          ]
+        },
+        "independentAssessment": {
+          "objective": "Produce a finished, truthful application response for an industrial CFO role. It should advocate the candidate's strongest supported value across manufacturing, multinational finance, audits and transfer pricing, use only the supplied fictional facts, and include the verified revenue figures.",
+          "taskContract": {
+            "deliverable": "Ready-to-submit application response prose addressed to the hiring reader for an industrial CFO position.",
+            "requirements": [
+              {
+                "id": "r1",
+                "requirement": "Write an application response for an industrial CFO role.",
+                "sourceId": "latest-user",
+                "status": "active"
+              },
+              {
+                "id": "r2",
+                "requirement": "Address the role's questions on manufacturing, multinational finance, audits and transfer pricing.",
+                "sourceId": "latest-user",
+                "status": "active"
+              },
+              {
+                "id": "r3",
+                "requirement": "Include verified revenue sizes.",
+                "sourceId": "latest-user",
+                "status": "active"
+              },
+              {
+                "id": "r4",
+                "requirement": "Use only the supplied fictional facts.",
+                "sourceId": "latest-user",
+                "status": "active"
+              }
+            ],
+            "conflicts": [
+              {
+                "sourceIds": [
+                  "latest-user"
+                ],
+                "resolution": "The role asks about transfer pricing, but the verified facts state the candidate has no direct international transfer pricing experience. Address the topic honestly. Do not claim the experience. Frame the adjacent supported exposure as relevant context: international distributor negotiation responsibilities and interim CFO leadership at a multinational company. Keep the gap statement brief so it does not dominate."
+              }
+            ]
+          },
+          "synthesis": {
+            "conclusion": "The candidate is a seasoned finance and operations leader with 16 years of experience. They have held CFO-level responsibility at a $72M domestic manufacturer and served as interim CFO of a $48M multinational software company valued at $150M. They also bring a record of audit remediation, ERP migration and acquisition support. This makes a credible industrial CFO candidate whose manufacturing depth and multinational exposure come from separate roles, with transfer pricing as an adjacent rather than direct capability.",
+            "dimensions": [
+              {
+                "dimension": "Manufacturing finance leadership",
+                "supportedScope": "CFO of a domestic manufacturer with $72M annual revenue. This is the most directly relevant industrial credential.",
+                "evidence": [
+                  "CFO, domestic manufacturer, $72M annual revenue"
+                ]
+              },
+              {
+                "dimension": "Multinational finance",
+                "supportedScope": "Interim CFO of a multinational software company with $48M revenue and a $150M enterprise valuation. At the manufacturer, the candidate held international distributor negotiation responsibilities. The candidate was never CFO of a multinational manufacturer, so the two roles must not be merged.",
+                "evidence": [
+                  "Interim CFO, multinational software company, $48M revenue, $150M valuation",
+                  "International distributor negotiation responsibilities as CFO of the domestic manufacturer"
+                ]
+              },
+              {
+                "dimension": "Audit",
+                "supportedScope": "Completed an audit remediation in eight months. The facts do not specify which employer, so the response must not attribute it to one.",
+                "evidence": [
+                  "Audit remediation completed in eight months"
+                ]
+              },
+              {
+                "dimension": "Transfer pricing",
+                "supportedScope": "No direct international transfer pricing experience. The only relevant adjacent exposure is the international distributor negotiations and the multinational interim CFO role.",
+                "evidence": [
+                  "Verified: no direct international transfer pricing experience"
+                ]
+              },
+              {
+                "dimension": "Systems and transactions",
+                "supportedScope": "Led an ERP migration and supported (did not lead) an acquisition. Neither is attributed to a specific employer.",
+                "evidence": [
+                  "Led ERP migration",
+                  "Supported an acquisition"
+                ]
+              }
+            ],
+            "emphasis": "Lead with the strongest truthful value: CFO leadership at a $72M manufacturer, combined with multinational interim CFO experience at $48M revenue and a $150M valuation. Follow with the eight-month audit remediation as concrete evidence of control and reporting rigor. Use ERP migration and acquisition support as supporting proof of transformation capability. Handle transfer pricing in one honest, forward-looking framing tied to adjacent exposure. Exclude the hospitality side business. Do not organize the response as a career chronology or a gap inventory."
+          },
+          "qualifications": [
+            "Industrial and manufacturing CFO experience",
+            "Multinational finance leadership",
+            "Audit and controls effectiveness",
+            "Transfer pricing knowledge",
+            "Finance transformation (ERP, M&A)"
+          ],
+          "strongestEvidence": [
+            "CFO of a $72M domestic manufacturer: direct industrial CFO credential and a verified revenue size",
+            "Interim CFO of a $48M multinational software company valued at $150M: multinational finance leadership with verified revenue and valuation",
+            "Audit remediation completed in eight months: a concrete, time-bound audit outcome",
+            "International distributor negotiation responsibilities: cross-border commercial exposure relevant to multinational and transfer pricing contexts",
+            "Led ERP migration and supported an acquisition: transformation and transaction capability",
+            "16 years in finance and operations leadership: breadth and seniority"
+          ],
+          "criteria": [
+            "Reads as a finished, persuasive application response to the hiring reader, not as an assessment or advice",
+            "Opens with the candidate's strongest relevant value for an industrial CFO role",
+            "States $72M (manufacturer) and $48M revenue with the $150M valuation (software), each attributed to the correct company",
+            "Never states or implies CFO experience at a multinational manufacturer, and keeps manufacturing and multinational roles distinct",
+            "Does not claim direct transfer pricing experience; addresses it briefly and honestly via adjacent exposure without letting the gap dominate",
+            "Describes audit remediation, ERP migration and acquisition with accurate verbs (completed, led, supported) and without attributing them to an unspecified employer",
+            "Does not describe the interim CFO role as current employment",
+            "Excludes the hospitality side business and any invented metrics, processes, tools, outcomes, dates or sender details",
+            "Organized around the role's four topics as value themes, with a concise, confident, professional tone"
+          ]
+        },
+        "reviewer": {
+          "provider": "anthropic",
+          "modelId": "claude-opus-5-5"
+        },
+        "reviews": [
+          {
+            "phase": "comparison",
+            "answerHash": "1aacbeb2f817c855c321cf427292c012d58fa7a72ef157e3ae2698913eab48b1",
+            "review": {
+              "verdict": "revise",
+              "findings": "The draft takes the wrong approach and needs to be rebuilt, not edited line by line. It reads as a gap disclosure followed by a résumé summary, not an application response that advocates for the candidate.\n\n1. Opening: the first sentence states two limitations, so the hiring reader meets the weakest points before any strength. Open instead with the strongest truthful value: 16 years of finance and operations leadership, CFO of a $72M domestic manufacturer, and interim CFO of a $48M multinational software company valued at $150M.\n\n2. Missing evidence: two verified facts that directly answer the role's questions are absent.\n   - The $150M enterprise valuation is omitted, which weakens the multinational scope.\n   - The international distributor negotiation responsibilities at the manufacturer are omitted. This is the candidate's only cross-border commercial exposure and the natural bridge to both multinational finance and transfer pricing.\n\n3. Transfer pricing:\n   - The draft says 'no international transfer-pricing experience', but the verified fact is 'no direct' experience. The draft overstates the gap.\n   - Address the topic in one brief, forward-looking sentence. State honestly that direct transfer pricing ownership has not been part of the candidate's roles. Then connect it to the distributor negotiations and the multinational interim CFO leadership as relevant context, without claiming the experience.\n\n4. Hospitality side business: delete it entirely. It is irrelevant, the source facts call it irrelevant, and it dilutes executive credibility.\n\n5. Multinational manufacturer disclaimer: delete the opening statement. Accuracy is preserved simply by describing the two roles separately and correctly. Volunteering the negative adds no value for the reader.\n\n6. Structure: organize around the four requested themes as value statements, not a chronology.\n   - Manufacturing: $72M CFO role and distributor negotiations.\n   - Multinational finance: interim CFO at the $48M software company valued at $150M.\n   - Audits: remediation completed in eight months, presented as evidence of control and reporting rigor.\n   - Transfer pricing: the brief adjacent framing described above.\n   ERP migration (led) and acquisition support (supported) can appear as supporting proof of transformation capability.\n\n7. Accuracy to keep: retain the verbs completed, led and supported. Do not assign the audit, ERP migration or acquisition to a specific employer. Do not present the interim role as current. Restore 'leadership' in the 16-year description.\n\n8. Tone: use a confident, professional, first-person tone suitable for direct submission. No invented metrics, tools, dates or sender details.",
+              "checks": [
+                {
+                  "id": "requirement:r1",
+                  "passed": false,
+                  "evidence": "Reads as a gap disclosure plus résumé list, not an application response written to persuade an industrial CFO hiring reader."
+                },
+                {
+                  "id": "requirement:r2",
+                  "passed": false,
+                  "evidence": "The four topics are only touched in passing. Transfer pricing appears only as a stated absence, and multinational finance gets one clause. None is developed as a value theme answering the role's questions."
+                },
+                {
+                  "id": "requirement:r3",
+                  "passed": true,
+                  "evidence": "States $72M annual revenue (domestic manufacturer) and $48M annual revenue (multinational software company), both correctly attributed."
+                },
+                {
+                  "id": "requirement:r4",
+                  "passed": true,
+                  "evidence": "No invented facts. All content comes from the supplied fictional facts, though one included fact (hospitality) is irrelevant."
+                },
+                {
+                  "id": "criterion:1",
+                  "passed": false,
+                  "evidence": "Opening with 'I have no international transfer-pricing experience and have never been CFO…' undercuts the persuasive purpose. The draft reads as self-assessment."
+                },
+                {
+                  "id": "criterion:2",
+                  "passed": false,
+                  "evidence": "Opens with two limitations instead of the $72M manufacturing CFO credential and the multinational interim CFO role."
+                },
+                {
+                  "id": "criterion:3",
+                  "passed": false,
+                  "evidence": "Both revenue figures are present and correctly attributed, but the verified $150M enterprise valuation of the software company is omitted."
+                },
+                {
+                  "id": "criterion:4",
+                  "passed": true,
+                  "evidence": "Does not imply multinational manufacturer CFO experience. The two roles are kept distinct, though the explicit disclaimer is unnecessary."
+                },
+                {
+                  "id": "criterion:5",
+                  "passed": false,
+                  "evidence": "The gap leads the response and dominates it. It is stated more broadly than the verified 'no direct' experience, and there is no adjacent framing via distributor negotiations or multinational leadership."
+                },
+                {
+                  "id": "criterion:6",
+                  "passed": true,
+                  "evidence": "'completed audit remediation', 'led an ERP migration', 'supported an acquisition': accurate verbs, with no employer attribution."
+                },
+                {
+                  "id": "criterion:7",
+                  "passed": true,
+                  "evidence": "The interim CFO role is not described as current employment."
+                },
+                {
+                  "id": "criterion:8",
+                  "passed": false,
+                  "evidence": "'I also operated a hospitality side business' is irrelevant, excluded by the source facts, and must be removed."
+                },
+                {
+                  "id": "criterion:9",
+                  "passed": false,
+                  "evidence": "Organized as a disclaimer followed by a chronological list, not around the four topics as value themes. The tone is flat and defensive."
+                },
+                {
+                  "id": "overall-objective",
+                  "passed": false,
+                  "evidence": "Fails to produce a finished, persuasive, truthful application response. The central approach is wrong and requires a rebuild."
+                },
+                {
+                  "id": "factual-support",
+                  "passed": false,
+                  "evidence": "'no international transfer-pricing experience' drops the verified qualifier 'direct', overstating the gap. 'finance and operations experience' understates the verified 'leadership'."
+                },
+                {
+                  "id": "prior-findings",
+                  "passed": true,
+                  "evidence": "No prior findings to verify."
+                },
+                {
+                  "id": "purpose-and-positioning",
+                  "passed": false,
+                  "evidence": "Functions as a condensed gap assessment rather than establishing the strongest defensible qualifications for an industrial CFO role."
+                },
+                {
+                  "id": "conversation-progression",
+                  "passed": true,
+                  "evidence": "Single-turn request. The draft attempts the requested deliverable without restarting or adding questions."
+                },
+                {
+                  "id": "scope-and-sufficiency",
+                  "passed": false,
+                  "evidence": "Omits the international distributor negotiation responsibilities and the $150M valuation, both scope-establishing for the multinational and transfer pricing topics. Also drops 'leadership' from the 16-year description."
+                },
+                {
+                  "id": "evidence-economy",
+                  "passed": false,
+                  "evidence": "Spends space on an irrelevant hospitality business and on a volunteered negative about multinational manufacturer CFO experience, while omitting high-value evidence."
+                },
+                {
+                  "id": "contextual-content-selection",
+                  "passed": false,
+                  "evidence": "Selects a peripheral anecdote (hospitality) and defensive disclaimers over the stronger distributor negotiation and valuation facts that answer the role's questions."
+                },
+                {
+                  "id": "audience-appropriate-expression",
+                  "passed": false,
+                  "evidence": "Buried strengths, a defensive opening and a list-like sequence. Needs a decisive value-led opening, thematic sections and a confident executive tone."
+                },
+                {
+                  "id": "metric-meaning",
+                  "passed": true,
+                  "evidence": "The figures stated ($72M and $48M annual revenue) are correctly labeled as revenue and attributed to the right companies. The valuation omission is captured under criterion:3."
+                },
+                {
+                  "id": "responsibility-and-chronology",
+                  "passed": false,
+                  "evidence": "Reduces '16 years finance and operations leadership' to 'experience' and omits the CFO-level distributor negotiation responsibility. This understates executive accountability."
+                }
+              ]
+            }
+          },
+          {
+            "phase": "final_validation",
+            "answerHash": "77aea117d9570e8ea7eaec8f43174b2dbce4506cdd073c985ada3a95901fccfd",
+            "review": {
+              "verdict": "revise",
+              "findings": "The rebuild works: it opens with the candidate's strongest value, covers the four themes as value statements, includes the $72M, $48M and $150M figures with correct attribution, keeps the two roles separate, excludes the hospitality business and handles transfer pricing briefly and honestly. No restructuring is needed. Four narrow corrections remain, three of them factual:\n\n1. Acquisition attribution. 'I also supported an acquisition' sits inside the Multinational finance paragraph, directly after the interim CFO sentence. This implies the acquisition happened at the software company, which the facts do not establish. Move it out of that paragraph, for example: 'I have also led an ERP migration and supported an acquisition.' Place it in the Audits section or a short closing line on transformation.\n\n2. Unsupported ERP outcome and completion.\n   - 'which strengthened the systems that financial reporting and controls depend on' adds an unrecorded result. Delete it, or reframe it as relevance, for example: 'experience directly relevant to the systems that reporting and controls rely on.'\n   - The closing phrase 'record of completing audit and systems initiatives' implies the ERP migration was completed, which the facts do not say. Use 'completing an audit remediation and leading an ERP migration' instead.\n\n3. Overstated scope. 'I carried full finance leadership' asserts full functional ownership that a CFO title alone does not establish. Use 'I led finance for an industrial business.'\n\n4. Minor wording.\n   - The sentence 'I treat audit readiness as a core part...' is generic philosophy. It can be trimmed so the eight-month result carries the paragraph. This is optional and not a blocker.\n   - The signature placeholder is acceptable because inventing a sender name is prohibited.",
+              "checks": [
+                {
+                  "id": "requirement:r1",
+                  "passed": true,
+                  "evidence": "The draft is a complete application letter addressed to the hiring team for an industrial CFO role."
+                },
+                {
+                  "id": "requirement:r2",
+                  "passed": true,
+                  "evidence": "It has dedicated Manufacturing, Multinational finance, Audits and Transfer pricing sections."
+                },
+                {
+                  "id": "requirement:r3",
+                  "passed": true,
+                  "evidence": "$72M (manufacturer), and $48M revenue with a $150M valuation (software company) are stated and correctly attributed."
+                },
+                {
+                  "id": "requirement:r4",
+                  "passed": false,
+                  "evidence": "Three claims go beyond the facts: 'strengthened the systems...' (an invented ERP outcome), 'completing... systems initiatives' (implies completion) and 'full finance leadership' (implies full ownership)."
+                },
+                {
+                  "id": "criterion:1",
+                  "passed": true,
+                  "evidence": "It reads as a persuasive submission, not an assessment."
+                },
+                {
+                  "id": "criterion:2",
+                  "passed": true,
+                  "evidence": "The opening paragraph leads with 16 years of experience, the $72M manufacturer CFO role and the multinational interim CFO role."
+                },
+                {
+                  "id": "criterion:3",
+                  "passed": true,
+                  "evidence": "Each figure is attributed to the correct company in both the opening and the body."
+                },
+                {
+                  "id": "criterion:4",
+                  "passed": true,
+                  "evidence": "The roles are described separately. 'Together, these roles...' combines capabilities without merging the roles."
+                },
+                {
+                  "id": "criterion:5",
+                  "passed": true,
+                  "evidence": "The transfer pricing paragraph states that direct ownership has not been part of the candidate's roles, then gives adjacent exposure and a future approach. It is brief."
+                },
+                {
+                  "id": "criterion:6",
+                  "passed": false,
+                  "evidence": "The verbs completed, led and supported are correct. However, placing the acquisition inside the multinational paragraph implies the software employer, and 'strengthened' adds an ERP outcome."
+                },
+                {
+                  "id": "criterion:7",
+                  "passed": true,
+                  "evidence": "'I have served as... interim CFO' does not imply the role is current."
+                },
+                {
+                  "id": "criterion:8",
+                  "passed": false,
+                  "evidence": "The hospitality business is excluded and no metrics are invented, but the ERP outcome and implied completion are unsupported."
+                },
+                {
+                  "id": "criterion:9",
+                  "passed": true,
+                  "evidence": "It is organized around the four themes in a confident, concise tone."
+                },
+                {
+                  "id": "overall-objective",
+                  "passed": false,
+                  "evidence": "The strategy succeeds, but the narrow factual overreaches above must be fixed before the letter is ready to submit."
+                },
+                {
+                  "id": "factual-support",
+                  "passed": false,
+                  "evidence": "'full finance leadership', 'strengthened the systems' and 'completing... systems initiatives' are not supported by the facts."
+                },
+                {
+                  "id": "prior-findings",
+                  "passed": true,
+                  "evidence": "All earlier strategic findings are resolved: the strengths-first opening, the valuation and distributor negotiations, the 'direct' wording, deletion of the hospitality business and the manufacturer disclaimer, the thematic structure, the 'leadership' wording and the non-current interim role."
+                },
+                {
+                  "id": "purpose-and-positioning",
+                  "passed": true,
+                  "evidence": "It advocates the strongest truthful value and the gap does not dominate."
+                },
+                {
+                  "id": "conversation-progression",
+                  "passed": true,
+                  "evidence": "This is a single-turn task, and the draft delivers the requested artifact without unnecessary questions."
+                },
+                {
+                  "id": "scope-and-sufficiency",
+                  "passed": true,
+                  "evidence": "It covers 16 years of seniority, both CFO roles, audit, ERP, the acquisition and the distributor negotiations."
+                },
+                {
+                  "id": "evidence-economy",
+                  "passed": true,
+                  "evidence": "It is mostly economical. The audit-philosophy sentence is generic but not materially harmful."
+                },
+                {
+                  "id": "contextual-content-selection",
+                  "passed": true,
+                  "evidence": "The strongest relevant facts are selected and the irrelevant side business is excluded."
+                },
+                {
+                  "id": "audience-appropriate-expression",
+                  "passed": true,
+                  "evidence": "It has a decisive opening, clear headers and a professional first-person voice. Trimming generic filler is optional."
+                },
+                {
+                  "id": "metric-meaning",
+                  "passed": true,
+                  "evidence": "Revenue and enterprise valuation are labeled distinctly with the correct units and companies."
+                },
+                {
+                  "id": "responsibility-and-chronology",
+                  "passed": false,
+                  "evidence": "The acquisition is implicitly tied to the software company, and 'full finance leadership' overstates scope. Both need correction."
+                }
+              ]
+            }
+          },
+          {
+            "phase": "final_validation",
+            "answerHash": "882af28b159e7747a1ac5db70e873f19e4d10213d397c5017b29d158656eac92",
+            "review": {
+              "verdict": "approve",
+              "findings": "The rebuilt response works as a truthful application response and resolves every material earlier finding. It opens with the strongest value: 16 years of finance and operations leadership, CFO of a $72M domestic manufacturer, and interim CFO of a $48M multinational software company valued at $150M. It is organized around the four requested themes as value statements, not a chronology. Each figure is attributed to the correct company, and the two roles stay explicitly separate.\n\nPrior corrections are all applied:\n- The acquisition now sits in the Audits section rather than the multinational paragraph, so it no longer implies the software company.\n- The unsupported ERP outcome has been reframed as relevance.\n- The closing says 'ERP leadership', not completion.\n- 'Full finance leadership' is now 'led finance'.\n- The hospitality business is excluded.\n\nTransfer pricing is handled in a short paragraph. It states that direct ownership has not been part of the candidate's roles and bridges to the distributor negotiations and multinational leadership. The tax and legal collaboration is framed as a forward-looking approach, not past experience.\n\nRemaining points are cosmetic and do not block approval:\n- The revenue figures repeat between the opening and the section bodies.\n- 'The two roles map to the areas your role covers' is somewhat generic.\n- 'Growing industrial business' is a mild descriptive assumption about the employer.\n\nNone of these misstates the candidate's experience or weakens the argument materially.",
+              "checks": [
+                {
+                  "id": "requirement:r1",
+                  "passed": true,
+                  "evidence": "Addressed to the hiring team, written in the first person, ready to submit for an industrial CFO role."
+                },
+                {
+                  "id": "requirement:r2",
+                  "passed": true,
+                  "evidence": "Dedicated Manufacturing, Multinational finance, Audits and Transfer pricing sections each answer the role's topics."
+                },
+                {
+                  "id": "requirement:r3",
+                  "passed": true,
+                  "evidence": "States $72M annual revenue (manufacturer), and $48M annual revenue plus $150M enterprise valuation (software company)."
+                },
+                {
+                  "id": "requirement:r4",
+                  "passed": true,
+                  "evidence": "All claims trace to the supplied facts. The tax and legal collaboration is framed as 'would', not as past experience. No invented metrics, dates or names; the signature placeholder is kept."
+                },
+                {
+                  "id": "criterion:1",
+                  "passed": true,
+                  "evidence": "Persuasive application prose throughout, with no assessment or advice framing."
+                },
+                {
+                  "id": "criterion:2",
+                  "passed": true,
+                  "evidence": "The first paragraph leads with 16 years of leadership and both CFO roles with their scale."
+                },
+                {
+                  "id": "criterion:3",
+                  "passed": true,
+                  "evidence": "$72M is tied to the domestic manufacturer; $48M and $150M are tied to the multinational software company."
+                },
+                {
+                  "id": "criterion:4",
+                  "passed": true,
+                  "evidence": "'Industrial finance leadership and multinational finance leadership, built in separate roles' keeps the two roles distinct and implies no multinational manufacturer."
+                },
+                {
+                  "id": "criterion:5",
+                  "passed": true,
+                  "evidence": "Transfer pricing is a single brief paragraph: no direct ownership, then the adjacent distributor and multinational exposure. The gap does not dominate."
+                },
+                {
+                  "id": "criterion:6",
+                  "passed": true,
+                  "evidence": "Uses 'completed an audit remediation', 'led an ERP migration' and 'supported an acquisition', none tied to a specific employer."
+                },
+                {
+                  "id": "criterion:7",
+                  "passed": true,
+                  "evidence": "'I have been... interim CFO' presents the role as past experience, not current employment."
+                },
+                {
+                  "id": "criterion:8",
+                  "passed": true,
+                  "evidence": "The hospitality business is absent, and no invented outcomes or tools appear."
+                },
+                {
+                  "id": "criterion:9",
+                  "passed": true,
+                  "evidence": "Four themed sections in a concise, confident, professional tone."
+                },
+                {
+                  "id": "overall-objective",
+                  "passed": true,
+                  "evidence": "Delivers a finished, truthful application response that advocates the candidate's strongest supported value."
+                },
+                {
+                  "id": "factual-support",
+                  "passed": true,
+                  "evidence": "'Negotiated with international distributors' reflects the distributor negotiation responsibilities. 'Led finance' is supported by the CFO titles. No unsupported outcomes remain."
+                },
+                {
+                  "id": "prior-findings",
+                  "passed": true,
+                  "evidence": "Acquisition attribution, the ERP outcome and completion wording, 'full finance leadership', and the opening gap disclosure are all resolved. The optional audit-philosophy line was removed."
+                },
+                {
+                  "id": "purpose-and-positioning",
+                  "passed": true,
+                  "evidence": "Leads with strengths and treats the transfer pricing gap as a bridged, forward-looking point, not a gap inventory."
+                },
+                {
+                  "id": "conversation-progression",
+                  "passed": true,
+                  "evidence": "This is a single-turn task; the response delivers the requested artifact directly without asking further questions."
+                },
+                {
+                  "id": "scope-and-sufficiency",
+                  "passed": true,
+                  "evidence": "Covers seniority (16 years), manufacturing CFO scale, multinational scale and valuation, the audit outcome, ERP and M&A, and cross-border commercial exposure."
+                },
+                {
+                  "id": "evidence-economy",
+                  "passed": true,
+                  "evidence": "Each section carries a distinct point. The figures repeat between the opening and the sections, but this is minor and not materially harmful."
+                },
+                {
+                  "id": "contextual-content-selection",
+                  "passed": true,
+                  "evidence": "Selects the highest-value facts for an industrial CFO reader and excludes the irrelevant side business."
+                },
+                {
+                  "id": "audience-appropriate-expression",
+                  "passed": true,
+                  "evidence": "Decisive opening, clear headings and a confident tone. 'The two roles map to the areas your role covers' is slightly generic but not a blocker."
+                },
+                {
+                  "id": "metric-meaning",
+                  "passed": true,
+                  "evidence": "Revenue and enterprise valuation are labeled correctly and not conflated."
+                },
+                {
+                  "id": "responsibility-and-chronology",
+                  "passed": true,
+                  "evidence": "Interim status is preserved, the led versus supported distinction is kept, and no employer is assigned to the audit, ERP or acquisition."
+                }
+              ]
+            }
+          }
+        ],
+        "verdict": "approve",
+        "findings": "The rebuilt response works as a truthful application response and resolves every material earlier finding. It opens with the strongest value: 16 years of finance and operations leadership, CFO of a $72M domestic manufacturer, and interim CFO of a $48M multinational software company valued at $150M. It is organized around the four requested themes as value statements, not a chronology. Each figure is attributed to the correct company, and the two roles stay explicitly separate.\n\nPrior corrections are all applied:\n- The acquisition now sits in the Audits section rather than the multinational paragraph, so it no longer implies the software company.\n- The unsupported ERP outcome has been reframed as relevance.\n- The closing says 'ERP leadership', not completion.\n- 'Full finance leadership' is now 'led finance'.\n- The hospitality business is excluded.\n\nTransfer pricing is handled in a short paragraph. It states that direct ownership has not been part of the candidate's roles and bridges to the distributor negotiations and multinational leadership. The tax and legal collaboration is framed as a forward-looking approach, not past experience.\n\nRemaining points are cosmetic and do not block approval:\n- The revenue figures repeat between the opening and the section bodies.\n- 'The two roles map to the areas your role covers' is somewhat generic.\n- 'Growing industrial business' is a mild descriptive assumption about the employer.\n\nNone of these misstates the candidate's experience or weakens the argument materially."
+      }
+    }
+  ]
+}

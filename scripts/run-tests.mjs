@@ -23,11 +23,12 @@ function discover(directory) {
 }
 
 const focused = {
-  website: ["local-katie-inspection", "website-evidence", "claude-provider", "grok-provider", "direct-upload",
+  website: ["visual-review", "local-katie-inspection", "website-evidence", "claude-provider", "grok-provider", "direct-upload",
     "server-video-frame-recovery", "attachment-continuity", "attachment-discovery", "collaboration",
     "provider-response-errors", "chat-recovery", "stored-website-evidence", "chat-failure-regressions"],
-  review: ["required-review", "review-continuity", "task-progress", "actors-route", "collaboration"],
+  review: ["required-review", "objective-first-prompts", "review-continuity", "task-progress", "actors-route", "collaboration"],
   "video-fallback": ["runpod-video-fallback"],
+  integration: ["api-stack"],
 };
 
 function execute(args, options = {}) {
@@ -79,13 +80,9 @@ function main() {
   const suite = process.argv[2] ?? "all";
   if (!["all", "vitest", ...Object.keys(focused)].includes(suite)) throw new Error(`Unknown suite: ${suite}`);
   const inventory = [...discover(join(root, "tests")), ...discover(join(root, "packages"))];
-  // This separate legacy integration test requires a running local data stack.
-  // It is deliberately outside the offline unit gate, and never silently selected.
-  const integration = "tests/integration/api-stack.test.mjs";
-  const unitFiles = inventory.filter(file => file !== integration);
   const vitestFiles = [];
   const nodeFiles = [];
-  for (const file of unitFiles) {
+  for (const file of inventory) {
     const source = readFileSync(file, "utf8");
     if (/from\s+["']vitest["']/.test(source)) vitestFiles.push(file);
     else if (/from\s+["']node:test["']/.test(source)) nodeFiles.push(file);
@@ -105,6 +102,10 @@ function main() {
     mkdirSync(join(output, "node_modules"), { recursive: true });
     symlinkSync("..", join(output, "node_modules", "@"));
   }
+  if (selected.some(file => /\/(visual-review|website-evidence)\.test\.ts$/.test(file))) {
+    const prepared = execute(["scripts/prepare-website-browser.mjs"], { stdio: "inherit" });
+    if (prepared.error || prepared.signal || prepared.status !== 0) throw new Error("Website browser preparation failed");
+  }
   const reports = mkdtempSync(join(tmpdir(), "katie-tests-"));
   let failures = 0;
   const total = { tests: 0, passed: 0, failed: 0, cancelled: 0, skipped: 0, todo: 0 };
@@ -123,7 +124,6 @@ function main() {
       catch (error) { console.error(error); failures += 1; }
     }
     console.log(`\nNode totals for successful files: ${JSON.stringify(total)}; ${failures} failed files/suites.`);
-    if (suite === "all") console.log(`Separate integration test excluded from offline gate: ${integration} (requires local data stack).`);
     if (failures) process.exitCode = 1;
   } finally { rmSync(reports, { recursive: true, force: true }); }
 }
