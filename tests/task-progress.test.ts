@@ -8,6 +8,9 @@ import {
 import { reviewBaseline, acceptanceIds } from "../lib/collaboration/review-contract";
 import type { ChatGenerateParams } from "../lib/providers/types";
 import { loadTaskProgress, saveTaskProgress } from "../lib/chat/task-progress-store";
+import { selectQualityFirstReviewer } from "../lib/collaboration/routing";
+import type { LlmProvider } from "../lib/providers/types";
+import type { RegistryRoutingModel } from "../lib/models/registry";
 
 const originalTask = "Interim CFO for Global Industrial Client: PE-backed global finance transition, audit, transfer pricing, manufacturing experience. Assess my fit.";
 const questions = [
@@ -141,4 +144,27 @@ test("persistent task progress is actor/chat scoped and can be loaded after a ne
     assert.equal(await loadTaskProgress("actor-B","chat-A"),null);
     assert.equal(await loadTaskProgress("actor-A","chat-B"),null);
   } finally {global.__KATIE_SUPABASE_ADMIN_CLIENT__=old;}
+});
+
+test("required-review quality-first selection prefers verified high reasoning over a cheap generic critic", () => {
+  const provider=(name:LlmProvider["name"])=>({name} as LlmProvider);
+  const lead=provider("anthropic"), strong=provider("openai"), cheap=provider("google");
+  const model=(name:string,reasoning:"high"|"low",confidence:number) => ({
+    model_id:name, routing_eligibility:"verified", reasoning_tier:reasoning, confidence_score:confidence,
+    confidence_tier:"high", supports_text:true,
+  } as RegistryRoutingModel);
+  const snapshot = new Map<LlmProvider["name"], RegistryRoutingModel[]>([
+    ["openai",[model("reasoning-reviewer","high",0.94)]],
+    ["google",[model("fast-mini","low",0.99)]],
+    ["anthropic",[model("lead","high",1)]],
+  ]);
+  const input={requester:{provider:"anthropic" as const,modelId:"lead"},providers:[lead,strong,cheap],
+    usedParticipants:[{provider:"anthropic" as const,modelId:"lead"}],snapshot};
+  const selected=selectQualityFirstReviewer(input);
+  assert.equal(selected?.modelId,"reasoning-reviewer");
+  assert.equal(selected?.provider.name,"openai");
+  const alreadyUsed=selectQualityFirstReviewer({...input,usedParticipants:[
+    ...input.usedParticipants,{provider:"openai" as const,modelId:"reasoning-reviewer"}
+  ]});
+  assert.equal(alreadyUsed,null);
 });
