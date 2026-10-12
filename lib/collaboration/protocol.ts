@@ -204,7 +204,7 @@ export function getFinalSynthesisInstruction(): string {
     "ADAPTIVE_MULTI_MODEL_FINAL_SYNTHESIS",
     "This is the user-facing final response pass.",
     getDeliverableStandardInstruction(),
-    "Incorporate supported reviewer corrections into the actual deliverable before answering. Do not simply relay a list of reviewer criticisms or ask the user to apply them. Perform the completion check yourself even when no reviewer participated or a reviewer failed.",
+    "Investigate reviewer observations rather than mechanically executing corrections. Compare preserving the original, a targeted improvement and a different approach; adopt only changes that improve the strongest supported whole result while fixing real factual or requirements failures. Do not relay a criticism list or ask the user to make editorial decisions. Perform the whole-result challenge even when no reviewer participated or a reviewer failed.",
     "Use the collaboration contributions as advisory evidence, not authority.",
     "Resolve disagreements using the user's request, available evidence, the actor persona, and your own judgment.",
     getConflictReconciliationInstruction(),

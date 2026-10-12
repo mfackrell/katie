@@ -1,3 +1,4 @@
+import { getFinalSynthesisInstruction } from "../lib/collaboration/protocol";
 import { objectiveFirstCases } from "./fixtures/objective-first-cases";
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -35,7 +36,7 @@ test("task-specific stances retain factual boundaries and existing acceptance ga
   assert.match(prompt, /FINANCIAL REPORT presents neutral analysis/);
   assert.match(prompt, /TECHNICAL WORK prioritizes diagnosis, causal evidence, reproducible verification/);
   assert.match(prompt, /Do not inflate experience, manufacture facts, hide material risks/);
-  assert.match(prompt, /If the central approach is wrong, rebuild the response/);
+  assert.match(prompt, /If not, reconsider the approach rather than apply another superficial correction/);
   assert.ok(acceptanceIds({ objective: "Task", qualifications: ["Task"], strongestEvidence: ["Fact"], criteria: ["Achieve objective"],
     synthesis: { conclusion: "Conclusion", dimensions: [{ dimension: "Task", supportedScope: "Scope", evidence: ["Fact"] }], emphasis: "Task" },
     taskContract: { deliverable: "Task", requirements: [{ id: "r1", requirement: "Task", sourceId: "latest-user", status: "active" }], conflicts: [] } }).includes("purpose-and-positioning"));
@@ -52,4 +53,24 @@ test("application completion uses verified information rather than reopening ass
   assert.ok(getDeliverableStandardInstruction().includes(standard));
   assert.ok(CONTRACT_RULES.includes(standard));
   assert.ok(getReviewerCompletionInstruction().includes(standard));
+});
+
+
+test("comparative judgment evaluates consequences before choosing and keeps deliberation internal", () => {
+  const standard = getObjectiveFirstInstruction();
+  const stages = ["OUTCOME:", "ALTERNATIVES:", "CONSEQUENCES:", "DECISION:", "WHOLE-RESULT CHALLENGE:"];
+  const positions = stages.map(stage => standard.indexOf(stage));
+  assert.ok(positions.every(position => position >= 0));
+  assert.ok(positions.every((position, index) => index === 0 || position > positions[index - 1]));
+  assert.match(standard, /what it sacrifices and what becomes less effective/);
+  assert.match(standard, /leaving good work unchanged/);
+  assert.match(standard, /Fix material factual errors and explicit-requirement failures/);
+  assert.match(standard, /Keep the comparison and deliberation internal/);
+  assert.ok(getDeliverableStandardInstruction().includes(standard));
+  assert.ok(CONTRACT_RULES.includes(standard));
+  assert.ok(getReviewerCompletionInstruction().includes(standard));
+  const synthesis = getFinalSynthesisInstruction();
+  assert.match(synthesis, /Investigate reviewer observations rather than mechanically executing corrections/);
+  assert.match(synthesis, /preserving the original, a targeted improvement and a different approach/);
+  assert.ok(!synthesis.includes("Incorporate supported reviewer corrections into the actual deliverable"));
 });
