@@ -93,7 +93,7 @@ export async function runRequiredDraftReview(input: {
   const prepare = (p: ChatGenerateParams, participant: CollaborationParticipant) => input.prepareParams?.(p, participant) ?? p;
   const unavailable = (notice: string) => {
     // Preserve the work and offer a resumable choice, not a dead-end "retry".
-    const question = `I saved the work, but the independent review could not be completed (${notice}). Should I retry verification with the saved draft, or proceed with a clearly labeled unverified result?`;
+    const question = `I saved the work, but the independent review could not be completed (${notice}). Should I retry verification with the saved draft?`;
     audit.status = "needs_user_input";
     audit.pendingClarification = {
       question, reason: notice, deliverable: "the original requested answer",
