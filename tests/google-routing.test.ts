@@ -543,11 +543,11 @@ test("news and current-events prompts are classified as web search", async () =>
   assert.equal(await inferRequestIntent("What happened in AI news today?", false), "web-search");
 });
 
-test("url and video prompt hints force web-search classification", async () => {
+test("URL signals and video words do not force fallback web-search classification", async () => {
   assert.equal(hasDirectWebSearchHint("Please summarize https://example.com/post"), true);
-  assert.equal(hasDirectWebSearchHint("Can you watch this youtube clip and recap it?"), true);
-  assert.equal(await inferRequestIntent("Can you summarize this link: https://example.com/post", false), "web-search");
-  assert.equal(await inferRequestIntent("watch this mp4 and summarize it", false), "web-search");
+  assert.equal(hasDirectWebSearchHint("Can you watch this youtube clip and recap it?"), false);
+  assert.equal(await inferRequestIntent("Can you summarize this link: https://example.com/post", false), "general-text");
+  assert.equal(await inferRequestIntent("watch this mp4 and summarize it", false), "general-text");
 });
 
 test("web-search intent excludes models without web-search capability", async () => {

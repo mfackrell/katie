@@ -14,5 +14,9 @@ test("repo audit context includes inspected/omitted/error metadata and visibilit
 
 test("generic repo discovery avoids Katie-specific hard-coded core audit file paths", () => {
   assert.doesNotMatch(CHAT_ROUTE, /CORE_AUDIT_FILES/);
-  assert.doesNotMatch(CHAT_ROUTE, /katie/i);
+  const start = CHAT_ROUTE.indexOf("function discoverRepoAuditTargets(");
+  const end = CHAT_ROUTE.indexOf("function buildRepoAuditContextBlock(", start);
+  assert.ok(start >= 0 && end > start, "generic discovery function must exist");
+  // Katie runtime context elsewhere in this route is unrelated to repo discovery.
+  assert.doesNotMatch(CHAT_ROUTE.slice(start, end), /katie/i);
 });

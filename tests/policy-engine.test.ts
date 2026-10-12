@@ -134,7 +134,8 @@ test("policy only enforces when current selection violates verified hard guardra
 
   assert.equal(passing.selected, null);
   assert.match(passing.trace.selection_summary, /passed hard guardrails/i);
-  assert.equal(passing.metadataMissing, true);
+  // This fixture verifies pricing, capability, reasoning and latency metadata.
+  assert.equal(passing.metadataMissing, false);
 });
 
 test("restricted registry metadata remains fallback-only and cannot drive hard reroute", () => {

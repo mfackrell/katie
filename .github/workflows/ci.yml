@@ -9,6 +9,7 @@ on:
 jobs:
   gate:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     env:
       NEXT_PUBLIC_SUPABASE_URL: https://example.supabase.co
       NEXT_PUBLIC_SUPABASE_ANON_KEY: anon-placeholder
@@ -26,11 +27,12 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Run CI gate (tests + smoke)
+      - name: Run strict CI gate (typecheck + all offline tests + build + smoke)
         run: npm run ci:gate
 
   review-completion:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     env:
       NEXT_PUBLIC_SUPABASE_URL: https://example.supabase.co
       NEXT_PUBLIC_SUPABASE_ANON_KEY: anon-placeholder
@@ -50,6 +52,7 @@ jobs:
 
   video-fallback:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: Checkout
         uses: actions/checkout@v4
