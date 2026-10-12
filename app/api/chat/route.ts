@@ -1740,6 +1740,7 @@ ${chunkWorkflowSummary}`;
             }
 
             let result: ProviderResponse | null = null;
+            let savedWebsiteEvidence: ProviderResponse["researchEvidence"];
             let streamedText = "";
             type GenerationAttempt = {
               provider: LlmProvider;
@@ -1946,7 +1947,10 @@ ${chunkWorkflowSummary}`;
                         params: collaborationBaseParams,
                         resumeState: collaborationResumeState,
                         onResearchEvidence: async (evidence) => {
-                          try { await websiteEvidenceStore().save(actorId, chatId, requestId, evidence); }
+                          try {
+                            await websiteEvidenceStore().save(actorId, chatId, requestId, evidence);
+                            savedWebsiteEvidence = evidence;
+                          }
                           catch (error) { console.error("[Website evidence] Save failed", { requestId, error: String(error) }); }
                         },
                         onCheckpoint: (state) => { collaborationResumeState = state; },
@@ -2499,6 +2503,17 @@ ${chunkWorkflowSummary}`;
 
             if (!result || (!result.text && !(result.content?.length) && !streamedText)) {
               throw new Error(`AI Provider ${provider.name} returned an empty response.`);
+            }
+
+            // On-demand capability escalation also returns live evidence. Save
+            // it before review so Adaptive and Off can restore a real baseline.
+            if (result.researchEvidence && result.researchEvidence !== savedWebsiteEvidence) {
+              try {
+                await websiteEvidenceStore().save(actorId, chatId, requestId, result.researchEvidence);
+                savedWebsiteEvidence = result.researchEvidence;
+              } catch (error) {
+                console.error("[Website evidence] Save failed", { requestId, error: String(error) });
+              }
             }
 
             if (reviewMode === "always" && !pendingVideoAssistantMessageId) {
