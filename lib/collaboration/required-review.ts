@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { getReviewerCompletionInstruction } from "@/lib/chat/deliverable-standard";
+import type { TaskProgressState } from "@/lib/chat/task-progress";
 import { createReviewClarification, type PendingReviewClarification } from "@/lib/collaboration/review-completion";
 import { getConflictReconciliationInstruction } from "@/lib/collaboration/protocol";
 import type { CollaborationHelperSelection, CollaborationParticipant, CollaborationSelectionContext } from "@/lib/collaboration/types";
@@ -35,6 +36,7 @@ const ASSESSMENT_INSTRUCTION = [
   CONTRACT_RULES,
   "First synthesize what the complete evidence establishes about the relevant qualifications or task dimensions. State concise supported conclusions about scope and strength, not a reasoning transcript. Then choose representative evidence and allocate attention. A list of examples or factual limitations is not this synthesis. Complete the synthesis field before selecting strongestEvidence and criteria.",
   "Your PRIMARY task is independent content/context selection, not fact-checking a list or improving sentences in isolation. Before seeing the draft, identify the exact decision, reader and situational need; what the best supported message should be; which examples are essential versus optional, redundant or distracting; and what strong evidence must not be overlooked. Make the intended evidence choices and exclusions explicit in synthesis.emphasis and criteria. If source facts are accurate but irrelevant, exclude them from the ideal answer.",
+  "Assess the chronological conversation STAGE too. The verified task-progress ledger pairs prior assistant QUESTIONS with literal user ANSWERS. These links are allowed context, but earlier assistant opinions remain excluded. If the user just answered three screening questions, the best answer should incorporate them and advance to the next useful task stage, not produce another full screening assessment. Do not treat a previous assistant question as a user assertion.",
   "Your SECOND task is to set audience-appropriate effectiveness standards for phrasing and structure. Define what strong opening, ordering, specificity and tone would accomplish for this particular deliverable. Do not force persuasive sales copy onto neutral reports, technical work or other formats requiring a different voice.",
   "Before seeing the draft, establish a source-linked task contract and the strongest evidence for an excellent final answer. Prior assistant answers and generated conversation summaries are intentionally withheld so their judgments cannot define success.",
   'Return JSON only: {"objective": "required outcome", "taskContract": {"deliverable": "what the user wants to receive", "requirements": [{"id": "r1", "requirement": "explicit requirement", "sourceId": "turn-1 or latest-user", "status": "active or superseded", "supersededBy": {"sourceId": "source ID of an explicit change instruction; omit supersededBy for active requirements"}}], "conflicts": [{"sourceIds": ["source IDs"], "resolution": "supported reconciliation; empty array if none"}]}, "synthesis": {"conclusion": "strongest defensible conclusion the complete evidence establishes for the user outcome", "dimensions": [{"dimension": "material qualification or task dimension", "supportedScope": "what the complete evidence establishes about its relevant depth, breadth, duration or effectiveness", "evidence": ["source-grounded support for that scope"]}], "emphasis": "which supported conclusions deserve attention and which details have low marginal value"}, "qualifications": ["important qualification or task dimension"], "strongestEvidence": ["supported fact, source/context and significance"], "criteria": ["specific final-answer criterion"]}. Keep fields concise; do not reproduce source passages. Arrays other than conflicts must be nonempty. If evidence is unavailable, state that without inventing it.',
@@ -55,6 +57,7 @@ const REVIEW_INSTRUCTION = [
   CONTRACT_RULES,
   getReviewerCompletionInstruction(),
   "EDITORIAL REVIEW ORDER: FIRST judge whether this is the RIGHT content in this specific context: central conclusion, relevance of every substantial example, missing high-value evidence, misleading emphasis and proportion. SECOND judge whether it is expressed effectively for the audience: opening, organization, sequencing, tone and precise phrasing. THIRD independently enforce the factual/explicit-requirement constraints throughout. Report material content-selection failures even when wording is already accurate and polished.",
+  "PROGRESSION REVIEW: If a user follows up on your earlier questions, use the explicit question/answer evidence links and source IDs to identify the completed step. Reject a response that restarts the previous assessment, repeats earlier unanswered questions as though no response was given, or defers instead of taking the next authorized action. Do not force an application draft or action the user has not requested; the point is to advance their actual task.",
   "RED-PEN TEST: For each substantial background example, ask what distinct decision-relevant point it proves and whether the response would be stronger without it. A true but peripheral anecdote must be REMOVED, not merely fact-corrected. If a reviewer previously recommended narrowing a tangential claim, revisit whether the entire example belongs. A more precise version of an irrelevant example is still irrelevant. Conversely, preserve high-value details when they demonstrate a distinct requirement or competitive strength.",
   "Do not force caveats about missing optional historic information into a response simply to signal diligence. Verify the requested metric using confirmed values, then weigh every optional disclosure by its actual contribution to the audience.",
   "For every mandatory judgment check, compare the actual answer with the strongest supported synthesis. Give concrete evidence, including a material omission or unnecessary detail where present. Accuracy alone does not establish sufficiency, persuasive strength or economy. Do not approve merely because requested edits were made. Unsupported praise is not validation.",
@@ -84,6 +87,7 @@ export async function runRequiredDraftReview(input: {
   params: ChatGenerateParams;
   /** Original source context, without this turn's draft or collaboration synthesis. */
   assessmentParams?: ChatGenerateParams;
+  taskProgress?: TaskProgressState;
   leadProvider: LlmProvider;
   deadlineMs: number;
   selectHelper: (context: CollaborationSelectionContext) => Promise<CollaborationHelperSelection | null>;
@@ -95,7 +99,7 @@ export async function runRequiredDraftReview(input: {
   const lead = { provider: input.draft.provider, modelId: input.draft.model };
   const used = [lead];
   const source = input.assessmentParams ?? input.params;
-  const baseline = reviewBaseline(source);
+  const baseline = reviewBaseline(source, input.taskProgress);
   const clean = baseline.params;
   const audit: ReviewAudit = { sourceTurns: baseline.turns, mode: "always", status: "unavailable", draft, draftHash: hash(draft), finalHash: hash(draft), attempts: [] };
   const prepare = (p: ChatGenerateParams, participant: CollaborationParticipant) => input.prepareParams?.(p, participant) ?? p;

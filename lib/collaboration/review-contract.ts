@@ -1,4 +1,5 @@
 import type { ChatGenerateParams } from "@/lib/providers/types";
+import { formatTaskProgress, type TaskProgressState } from "@/lib/chat/task-progress";
 
 export type SourceTurn = { id: string; text: string };
 export type TaskRequirement = {
@@ -28,14 +29,14 @@ export type IndependentAssessment = {
 
 // Assistant conclusions and generated summaries are not firsthand task evidence.
 // Preserve turn IDs so contract citations can be checked against literal user text.
-export function reviewBaseline(source: ChatGenerateParams) {
+export function reviewBaseline(source: ChatGenerateParams, progress?: TaskProgressState) {
   const turns: SourceTurn[] = source.history.filter(turn => turn.role === "user")
     .map((turn, index) => ({ id: `turn-${index + 1}`, text: turn.content }));
   turns.push({ id: "latest-user", text: source.user });
   return {
     turns,
     params: { ...source, summary: "", history: [] } as ChatGenerateParams,
-    text: `AUTHORITATIVE USER TURNS (chronological; the latest turn may clarify an earlier task rather than replace it):\n${JSON.stringify(turns)}\n\nActor instructions and supplied memory remain available in the system context. Memory is supporting evidence, not authority to override the user's request. Separate firsthand facts from inferred assessments. Missing information is unknown, not proof of absence.`,
+    text: `AUTHORITATIVE USER TURNS (chronological; the latest turn may clarify an earlier task rather than replace it):\n${JSON.stringify(turns)}\n\nActor instructions and supplied memory remain available in the system context. Memory is supporting evidence, not authority to override the user's request. Separate firsthand facts from inferred assessments. Missing information is unknown, not proof of absence.\n\n${progress ? formatTaskProgress(progress) : "No verified task-progress ledger available. Infer the current stage cautiously from the firsthand user turns."}`,
   };
 }
 
@@ -48,6 +49,7 @@ export const CONTRACT_RULES = [
   "SECOND EDITORIAL PRIORITY: Effective expression. Choose an opening, structure, emphasis, vocabulary, and level of detail suited to the specific audience and deliverable. Favor direct, confident, precise phrasing for professional advocacy; use neutral language for objective analysis, restraint for sensitive topics, and the appropriate voice for technical or creative work. Correct awkward transitions, defensive caveats, generic filler and unnecessary repetition, but not at the expense of factual support or needed nuance.",
   "Assess accuracy AND effectiveness. A directly requested limitation may require a concise truthful answer; do not let an earlier gap assessment dictate the structure or crowd out demonstrated strengths. Never infer lack of experience from missing records. Allocate attention by marginal value to the audience, not technical detail density.",
   "When the user has explicitly said requested supplementary facts are unknown or unavailable, finish using verified information whenever a truthful response is possible. Do not require manufactured numbers or repeatedly ask for facts the user has already said are unavailable. Preserve the spirit of the original request proportionately.",
+  "CONVERSATION PROGRESSION: Treat the user's answers to earlier assistant questions as advancement of the existing task, not a request to start another complete assessment. Use the source-linked question/answer ledger to identify which decisions and facts are already settled and which remain open; prior assistant questions are context, not authoritative claims. Determine the next useful stage based on the user's original objective and latest explicit instructions. If the user answers questions, incorporate those answers and move forward. Repeating an earlier full assessment, asking answered questions again or inventing new requirements is a substantive failure unless the user explicitly requests reassessment.",
   "Criteria describe the final deliverable the USER requested. Internal instructions about JSON, assessment stages or not answering the user are NOT acceptance criteria for that deliverable.",
 ].join("\n");
 
@@ -96,6 +98,7 @@ export type AnswerReview = {
 // They evaluate judgment across tasks; they do not prescribe facts or sentence templates.
 export const JUDGMENT_CHECKS = {
   "purpose-and-positioning": "Does the overall answer achieve the user's practical purpose, rather than merely contain accurate statements? For an application, establish the strongest defensible relevant qualifications; do not turn it into a condensed gap assessment. For other tasks, judge effectiveness against their actual purpose.",
+  "conversation-progression": "Did this response correctly recognize the current stage of the user's ongoing task? If the latest message answers preceding assistant questions, identify those exact source-linked answers, preserve resolved constraints and materially advance the user toward the original deliverable. Reject unnecessary repetition of previous assessments, re-asking settled questions, or substituting another list of follow-ups for progress. A concise acknowledgment is fine when it leads to the next appropriate action; do not force drafting or applying when the user has not provided the required application questions or authorization.",
   "scope-and-sufficiency": "Compare the answer with the full-body synthesis. Does it establish the relevant depth, breadth, duration, repeated capability and outcomes supported by the complete evidence? A strong isolated example or scattered resume entries must not substitute for a materially broader supported qualification. Identify any important scope-establishing evidence lost through selection or emphasis; approve only if its omission does not weaken the argument.",
   "evidence-economy": "Evaluate marginal contribution and attention, not just relevance or correctness. Does each major detail resolve an important uncertainty or substantiate a distinct capability? Do examples support the collective conclusion rather than dominate it? Consider technical catalogs, impressive statistics, titles/reporting lines, disclaimers about who did underlying work and generic conclusions: include them only when their contribution to this audience's decision justifies the space. Remove detail that is merely accurate or impressive; correcting its wording does NOT make an unnecessary example worth retaining.",
   "contextual-content-selection": "Treat content/context as the primary editorial decision. Does the response select the strongest source-supported facts for this specific audience, situation, user objective and explicit question? For each substantial example, test its unique contribution against plausible stronger alternatives or omission. Reject tangential or distracting examples even if factually accurate and elegantly phrased. Preserve distinct high-value evidence even if less dramatic. Do not demand extra examples merely to satisfy a fixed quota.",
