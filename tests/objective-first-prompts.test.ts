@@ -40,3 +40,16 @@ test("task-specific stances retain factual boundaries and existing acceptance ga
     synthesis: { conclusion: "Conclusion", dimensions: [{ dimension: "Task", supportedScope: "Scope", evidence: ["Fact"] }], emphasis: "Task" },
     taskContract: { deliverable: "Task", requirements: [{ id: "r1", requirement: "Task", sourceId: "latest-user", status: "active" }], conflicts: [] } }).includes("purpose-and-positioning"));
 });
+
+
+test("application completion uses verified information rather than reopening assessment or optional intake", () => {
+  const standard = getObjectiveFirstInstruction();
+  assert.match(standard, /When the active task is completing an application/);
+  assert.match(standard, /Do not reopen qualification assessments, request optional background information/);
+  assert.match(standard, /genuinely prevents completing that answer truthfully/);
+  assert.match(standard, /make the editorial decisions independently and move the application forward/);
+  assert.match(standard, /An explicit request for a qualification assessment is a different task/);
+  assert.ok(getDeliverableStandardInstruction().includes(standard));
+  assert.ok(CONTRACT_RULES.includes(standard));
+  assert.ok(getReviewerCompletionInstruction().includes(standard));
+});
