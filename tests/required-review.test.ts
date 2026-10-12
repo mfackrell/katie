@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { runRequiredDraftReview } from "../lib/collaboration/required-review";
 import { createReviewClarification, buildReviewResumptionContext } from "../lib/collaboration/review-completion";
-import { acceptanceIds, reviewBaseline, validateAssessment, validateAnswerReview, type IndependentAssessment } from "../lib/collaboration/review-contract";
+import { acceptanceIds, reviewBaseline, validateAssessment, validateAnswerReview, type AnswerReview, type IndependentAssessment } from "../lib/collaboration/review-contract";
 import { normalizeReviewMode, shouldEnableActorCollaboration } from "../lib/collaboration/review-mode";
 import type { ChatGenerateParams, LlmProvider, ProviderResponse } from "../lib/providers/types";
 
@@ -275,7 +275,7 @@ test("source references preserve provenance without requiring models to recopy u
 });
 
 test("essential missing evidence produces a resumable question rather than losing the draft", async () => {
-  const final = verdict("revise");
+  const final: AnswerReview = verdict("revise");
   final.clarification = { question: "Do you know the annual revenue figures for your earlier manufacturing employers? If not, say unknown.", missingFact: "Earlier manufacturing employer revenue figures", essential: true };
   const s = setup({ reviews: [verdict("revise"), verdict("revise"), final], revisions: ["Improved application draft 1.", "Improved application draft 2."] });
   const result = await s.run();
@@ -290,7 +290,7 @@ test("essential missing evidence produces a resumable question rather than losin
 });
 
 test("nonessential reviewer suggestions are never treated as user-owned blockers", () => {
-  const optional = verdict("revise");
+  const optional: AnswerReview = verdict("revise");
   optional.clarification = { question: "Can you give an optional number?", missingFact: "Optional detail", essential: false };
   const pending = createReviewClarification({ assessment, review: optional, candidate: "Saved draft", now: "2026-10-12T00:00:00Z" });
   assert.notEqual(pending.question, optional.clarification.question);
