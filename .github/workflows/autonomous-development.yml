@@ -1,0 +1,327 @@
+name: Katie autonomous development
+
+on:
+  issues:
+    types: [opened, reopened]
+  workflow_dispatch:
+    inputs:
+      issue_number:
+        description: Owner-authored issue to build
+        type: number
+        required: true
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+concurrency:
+  group: katie-agent-${{ github.event.issue.number || inputs.issue_number }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    if: ${{ github.event_name == 'workflow_dispatch' || (startsWith(github.event.issue.title, '[agent]') && github.event.issue.user.login == github.repository_owner) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    outputs:
+      branch: ${{ steps.task.outputs.branch }}
+      issue: ${{ steps.task.outputs.issue }}
+      pr: ${{ steps.publish.outputs.pr }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - name: Create isolated branch and task
+        id: task
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE: ${{ github.event.issue.number || inputs.issue_number }}
+        run: |
+          set -euo pipefail
+          author="$(gh issue view "$ISSUE" --repo "$GITHUB_REPOSITORY" --json author --jq '.author.login')"
+          test "$author" = "$GITHUB_REPOSITORY_OWNER" || { echo 'Only owner-authored issues are authorized'; exit 1; }
+          branch="agent/issue-$ISSUE-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          git switch -c "$branch"
+          echo "issue=$ISSUE" >> "$GITHUB_OUTPUT"
+          echo "branch=$branch" >> "$GITHUB_OUTPUT"
+          gh issue view "$ISSUE" --repo "$GITHUB_REPOSITORY" --json title,body --jq '.title + "\n\n" + (.body // "")' > AGENT_REQUEST.md
+      - name: Autonomous developer
+        uses: openai/codex-action@v1
+        with:
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          permission-profile: ':workspace'
+          prompt: |
+            You are Katie's implementation agent. Read AGENT_REQUEST.md and
+            deliver the requested working code and regression tests. Investigate
+            the existing architecture before editing. Run relevant tests and
+            fix failures autonomously. Preserve production behavior and actor
+            isolation. Do not deploy, merge, push, access production resources,
+            or rewrite this orchestration workflow. The workflow will commit
+            changes, independently test, review, and repair them.
+      - name: Create draft pull request
+        id: publish
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE: ${{ steps.task.outputs.issue }}
+          BRANCH: ${{ steps.task.outputs.branch }}
+        run: |
+          set -euo pipefail
+          rm -f AGENT_REQUEST.md
+          test -z "$(git status --porcelain -- .github/workflows/autonomous-development.yml)" || { echo 'Protected workflow edited'; exit 1; }
+          git add -A
+          git diff --cached --quiet && { echo 'No implementation produced'; exit 1; }
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m "agent: implement issue #$ISSUE"
+          gh auth setup-git
+          git push origin "HEAD:refs/heads/$BRANCH"
+          pr="$(gh pr create --repo "$GITHUB_REPOSITORY" --draft --base main --head "$BRANCH" --title "[agent] Implementation for issue #$ISSUE" --body "Automated development for #$ISSUE. No merge or production deployment authorized. Test and independent review results follow.")"
+          echo "pr=$pr" >> "$GITHUB_OUTPUT"
+
+  test:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    outputs:
+      passed: ${{ steps.check.outputs.passed }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.build.outputs.branch }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - name: Independent verification
+        id: check
+        shell: bash
+        env:
+          CI: 'true'
+          VERCEL_ENV: development
+          NEXT_PUBLIC_SUPABASE_URL: https://example.supabase.co
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: anon-placeholder
+          SUPABASE_SERVICE_ROLE_KEY: service-role-placeholder
+        run: |
+          set +e
+          { npm run typecheck && npm run ci:gate; } > agent-test.log 2>&1
+          rc=$?
+          cat agent-test.log
+          if [ "$rc" -eq 0 ]; then echo 'passed=true' >> "$GITHUB_OUTPUT"; else echo 'passed=false' >> "$GITHUB_OUTPUT"; fi
+          exit 0
+      - uses: actions/upload-artifact@v4
+        with:
+          name: agent-test
+          path: agent-test.log
+
+  review:
+    needs: [build, test]
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    outputs:
+      verdict: ${{ steps.verdict.outputs.verdict }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.build.outputs.branch }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Load original objective
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE: ${{ needs.build.outputs.issue }}
+        run: |
+          git fetch origin main
+          gh issue view "$ISSUE" --repo "$GITHUB_REPOSITORY" --json title,body --jq '.title + "\n\n" + (.body // "")' > AGENT_REQUEST.md
+      - uses: actions/download-artifact@v4
+        with:
+          name: agent-test
+      - name: Independent read-only reviewer
+        uses: openai/codex-action@v1
+        with:
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          permission-profile: ':read-only'
+          output-schema: '{"type":"object","properties":{"verdict":{"type":"string","enum":["pass","changes_requested"]},"summary":{"type":"string"},"blocking_findings":{"type":"array","items":{"type":"string"}}},"required":["verdict","summary","blocking_findings"],"additionalProperties":false}'
+          output-file: agent-review.json
+          prompt: |
+            You are a NEW independent reviewer. Do not change files.
+            Read AGENT_REQUEST.md, agent-test.log, and
+            git diff origin/main...HEAD. Evaluate whether the change
+            satisfies the user's actual goal, preserves behavior,
+            contains appropriate tests, and introduces no security risks
+            or CI bypasses. Return structured JSON. Request changes for
+            any blocking findings with actionable file-specific detail.
+      - name: Verify review output
+        id: verdict
+        run: |
+          set -euo pipefail
+          jq -e '.verdict == "pass" or .verdict == "changes_requested"' agent-review.json >/dev/null
+          echo "verdict=$(jq -r .verdict agent-review.json)" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: agent-review
+          path: agent-review.json
+
+  repair:
+    needs: [build, test, review]
+    if: ${{ needs.review.result == 'success' && (needs.test.outputs.passed != 'true' || needs.review.outputs.verdict != 'pass') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    outputs:
+      passed: ${{ steps.retest.outputs.passed }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.build.outputs.branch }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - uses: actions/download-artifact@v4
+        with:
+          name: agent-test
+      - uses: actions/download-artifact@v4
+        with:
+          name: agent-review
+      - name: Independent repair agent
+        uses: openai/codex-action@v1
+        with:
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          permission-profile: ':workspace'
+          prompt: |
+            You are the repair agent in a fresh context. Read
+            agent-test.log and agent-review.json. Independently diagnose
+            failures and blocking review findings. Fix them, add tests,
+            and verify locally. Do not weaken tests, rewrite the agent
+            workflow, access production, or merge or deploy.
+      - name: Push repairs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BRANCH: ${{ needs.build.outputs.branch }}
+        run: |
+          set -euo pipefail
+          test -z "$(git status --porcelain -- .github/workflows/autonomous-development.yml)" || { echo 'Protected workflow edited'; exit 1; }
+          rm -f agent-test.log agent-review.json
+          git add -A
+          git diff --cached --quiet && { echo 'No repair produced'; exit 1; }
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'agent: repair test and review failures'
+          gh auth setup-git
+          git push origin "HEAD:refs/heads/$BRANCH"
+      - name: Reverify repaired tree
+        id: retest
+        shell: bash
+        env:
+          CI: 'true'
+          VERCEL_ENV: development
+          NEXT_PUBLIC_SUPABASE_URL: https://example.supabase.co
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: anon-placeholder
+          SUPABASE_SERVICE_ROLE_KEY: service-role-placeholder
+        run: |
+          set +e
+          { npm run typecheck && npm run ci:gate; } > agent-retest.log 2>&1
+          rc=$?
+          cat agent-retest.log
+          if [ "$rc" -eq 0 ]; then echo 'passed=true' >> "$GITHUB_OUTPUT"; else echo 'passed=false' >> "$GITHUB_OUTPUT"; fi
+          exit 0
+      - uses: actions/upload-artifact@v4
+        with:
+          name: agent-retest
+          path: agent-retest.log
+
+  final-review:
+    needs: [build, repair]
+    if: needs.repair.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    outputs:
+      verdict: ${{ steps.verdict.outputs.verdict }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.build.outputs.branch }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Original objective
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE: ${{ needs.build.outputs.issue }}
+        run: |
+          git fetch origin main
+          gh issue view "$ISSUE" --repo "$GITHUB_REPOSITORY" --json title,body --jq '.title + "\n\n" + (.body // "")' > AGENT_REQUEST.md
+      - uses: actions/download-artifact@v4
+        with:
+          name: agent-retest
+      - name: Independent final review
+        uses: openai/codex-action@v1
+        with:
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          permission-profile: ':read-only'
+          output-schema: '{"type":"object","properties":{"verdict":{"type":"string","enum":["pass","changes_requested"]},"summary":{"type":"string"},"blocking_findings":{"type":"array","items":{"type":"string"}}},"required":["verdict","summary","blocking_findings"],"additionalProperties":false}'
+          output-file: agent-final-review.json
+          prompt: |
+            Independently review the entire git diff origin/main...HEAD
+            against AGENT_REQUEST.md and agent-retest.log. No changes.
+            Return pass only if both tests and requirements are satisfied,
+            with no blocking correctness or security concerns. Return
+            structured JSON and actionable findings otherwise.
+      - name: Validate result
+        id: verdict
+        run: |
+          set -euo pipefail
+          jq -e '.verdict == "pass" or .verdict == "changes_requested"' agent-final-review.json >/dev/null
+          echo "verdict=$(jq -r .verdict agent-final-review.json)" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: agent-final-review
+          path: agent-final-review.json
+
+  report:
+    needs: [build, test, review, repair, final-review]
+    if: always() && needs.build.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Report to issue and draft PR
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE: ${{ needs.build.outputs.issue }}
+          PR: ${{ needs.build.outputs.pr }}
+          TEST: ${{ needs.test.outputs.passed }}
+          REVIEW: ${{ needs.review.outputs.verdict }}
+          REPAIR: ${{ needs.repair.result }}
+          RETEST: ${{ needs.repair.outputs.passed }}
+          FINAL: ${{ needs.final-review.outputs.verdict }}
+        run: |
+          set -euo pipefail
+          outcome='BLOCKED — review or tests require further work'
+          if [[ "$REPAIR" == 'skipped' && "$TEST" == 'true' && "$REVIEW" == 'pass' ]]; then
+            outcome='READY — awaiting owner approval'
+          elif [[ "$REPAIR" == 'success' && "$RETEST" == 'true' && "$FINAL" == 'pass' ]]; then
+            outcome='READY — awaiting owner approval'
+          fi
+          {
+            echo "### Autonomous result: $outcome"
+            echo
+            echo "- Initial tests: $TEST; independent review: $REVIEW"
+            echo "- Automated repair: $REPAIR; final tests: $RETEST; final review: $FINAL"
+            echo "- [Run logs and review artifacts]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID)"
+            echo
+            echo 'No merge or deployment occurred. This PR remains draft pending approval.'
+          } > "$RUNNER_TEMP/agent-report.md"
+          gh pr comment "$PR" --repo "$GITHUB_REPOSITORY" --body-file "$RUNNER_TEMP/agent-report.md"
+          gh issue comment "$ISSUE" --repo "$GITHUB_REPOSITORY" --body-file "$RUNNER_TEMP/agent-report.md"
