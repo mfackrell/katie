@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { runRequiredDraftReview } from "../lib/collaboration/required-review";
+import { createReviewClarification, buildReviewResumptionContext } from "../lib/collaboration/review-completion";
 import { acceptanceIds, reviewBaseline, validateAssessment, validateAnswerReview, type IndependentAssessment } from "../lib/collaboration/review-contract";
 import { normalizeReviewMode, shouldEnableActorCollaboration } from "../lib/collaboration/review-mode";
 import type { ChatGenerateParams, LlmProvider, ProviderResponse } from "../lib/providers/types";
@@ -145,8 +146,8 @@ test("a persistently invalid task definition cannot approve an answer", async ()
   const s = setup({ contractAlwaysReject: true });
   const result = await s.run();
   assert.ok(!s.phases.includes("review"));
-  assert.equal(result.audit.status, "unavailable");
-  assert.match(result.result.text, /withheld the draft/);
+  assert.equal(result.audit.status, "needs_user_input");
+  assert.match(result.result.text, /retry verification/i);
   assert.ok(!result.result.text.includes(draft.text));
 });
 
@@ -172,11 +173,13 @@ test("regression: a revision retaining meta commentary and follow-up requests ge
   assert.equal(result.audit.reviews?.length, 3);
 });
 
-test("known failing revisions are withheld and never marked revised", async () => {
+test("known failing revisions request clarification and preserve the final candidate", async () => {
   const s = setup({ reviews: [verdict("revise"), verdict("revise"), verdict("revise")] });
   const result = await s.run();
-  assert.equal(result.audit.status, "revision_failed");
-  assert.match(result.result.text, /draft was withheld/);
+  assert.equal(result.audit.status, "needs_user_input");
+  assert.match(result.result.text, /clarif|unknown/i);
+  assert.ok(result.audit.pendingClarification?.candidate);
+  assert.ok(result.audit.pendingClarification?.reason);
   assert.ok(!result.result.text.includes(draft.text));
   assert.equal(result.audit.reviews?.at(-1)?.review.verdict, "revise");
 });
@@ -206,10 +209,10 @@ test("malformed reviewer retries an unused model without falsely reporting appro
 test("same-model reviewer and expired budgets cannot claim independent review", async () => {
   const s = setup();
   const same = await runRequiredDraftReview({ requestId: "same", draft, params, leadProvider: s.lead, deadlineMs: deadline(), selectHelper: async () => ({ provider: s.lead, modelId: "lead" }) });
-  assert.equal(same.audit.status, "unavailable");
+  assert.equal(same.audit.status, "needs_user_input");
   const expired = await runRequiredDraftReview({ requestId: "expired", draft, params, leadProvider: s.lead, deadlineMs: Date.now() - 1, selectHelper: async () => { throw new Error("Must not call"); } });
   assert.equal(expired.audit.attempts.length, 0);
-  assert.equal(expired.audit.status, "unavailable");
+  assert.equal(expired.audit.status, "needs_user_input");
 });
 
 test("a malformed source citation is repaired with precise feedback before comparison", async () => {
@@ -240,11 +243,12 @@ test("citation validation tolerates formatting whitespace but never paraphrased 
   assert.throws(() => validateAssessment(spaced, reviewBaseline(params).turns), /citation/);
 });
 
-test("unavailable review never releases the unverified draft", async () => {
+test("unavailable reviewer requests a retry without leaking the unverified draft", async () => {
   const s = setup();
   const result = await runRequiredDraftReview({ requestId: "no-reviewer", draft, params, leadProvider: s.lead, deadlineMs: deadline(), selectHelper: async () => null });
-  assert.equal(result.audit.status, "unavailable");
-  assert.match(result.result.text, /withheld the draft/);
+  assert.equal(result.audit.status, "needs_user_input");
+  assert.match(result.result.text, /retry verification/i);
+  assert.equal(result.audit.pendingClarification?.candidate, draft.text);
   assert.ok(!result.result.text.includes(draft.text));
 });
 
@@ -268,4 +272,28 @@ test("source references preserve provenance without requiring models to recopy u
   validateAssessment(referenced, reviewBaseline(params).turns);
   referenced.taskContract.requirements[0].sourceId = "validator-feedback";
   assert.throws(() => validateAssessment(referenced, reviewBaseline(params).turns), /citation/);
+});
+
+test("essential missing evidence produces a resumable question rather than losing the draft", async () => {
+  const final = verdict("revise");
+  final.clarification = { question: "Do you know the annual revenue figures for your earlier manufacturing employers? If not, say unknown.", missingFact: "Earlier manufacturing employer revenue figures", essential: true };
+  const s = setup({ reviews: [verdict("revise"), verdict("revise"), final], revisions: ["Improved application draft 1.", "Improved application draft 2."] });
+  const result = await s.run();
+  assert.equal(result.audit.status, "needs_user_input");
+  assert.equal(result.result.text, final.clarification.question);
+  assert.equal(result.audit.pendingClarification?.candidate, "Improved application draft 2.");
+  assert.deepEqual(result.audit.pendingClarification?.requirementIds, assessment.taskContract.requirements.map(r => r.id));
+  const resumed = buildReviewResumptionContext(result.audit.pendingClarification!, "Unknown. Use the verified revenues.");
+  assert.ok(resumed.includes("Improved application draft 2."));
+  assert.ok(resumed.includes("Unknown. Use the verified revenues."));
+  assert.match(resumed, /Return the complete finished deliverable/);
+});
+
+test("nonessential reviewer suggestions are never treated as user-owned blockers", () => {
+  const optional = verdict("revise");
+  optional.clarification = { question: "Can you give an optional number?", missingFact: "Optional detail", essential: false };
+  const pending = createReviewClarification({ assessment, review: optional, candidate: "Saved draft", now: "2026-10-12T00:00:00Z" });
+  assert.notEqual(pending.question, optional.clarification.question);
+  assert.ok(pending.question.includes("verified information"));
+  assert.equal(pending.createdAt, "2026-10-12T00:00:00Z");
 });
