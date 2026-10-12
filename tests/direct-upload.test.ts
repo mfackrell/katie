@@ -1237,3 +1237,65 @@ test("newly uploaded video with lost browser previews can recover from private s
   await assert.rejects(service.recoverUploadVideoFrames(prepared.uploadToken, async () => expected),
     /invalid or expired/, "upload credentials cannot impersonate completed references");
 });
+
+test("server detects fully transferred video chunks even when the browser never finalizes", async () => {
+  const fake = fakeStorage();
+  const bytes = new Uint8Array(1024 * 1024 + 9);
+  const service = createStoredUploadService(fake.storage, "durable-test-secret", {
+    buildReferences: async () => [{ ...reference, fileName: "unattended.mp4", attachmentKind: "video", mimeType: "video/mp4" }],
+  });
+  const prepared = await service.prepare({
+    name: "unattended.mp4", type: "video/mp4", size: bytes.length,
+    transport: "json-base64-v3",
+  });
+  assert.equal((await service.chunkStatus(prepared.uploadToken)).complete, false);
+  for (let index = 0; index < 3; index++) {
+    const chunk = bytes.slice(index * 512 * 1024, Math.min((index + 1) * 512 * 1024, bytes.length));
+    await service.uploadChunk(prepared.uploadToken, index, chunk);
+  }
+  const status = await service.chunkStatus(prepared.uploadToken);
+  assert.equal(status.complete, true, "server can start detached processing without the phone");
+  assert.equal(status.uploadedIndexes.length, 3);
+  const saved = await service.complete(prepared.uploadToken);
+  assert.equal(saved.attachmentKind, "video");
+  assert.equal((await service.chunkStatus(prepared.uploadToken)).complete, true);
+});
+
+test("registered video reuses a ready server-side reference without sending bytes", async () => {
+  const video = new File([new Uint8Array(1024)], "recovered.mp4", { type: "video/mp4" });
+  const calls: Array<{ path: string; payload?: Record<string, unknown> }> = [];
+  const existing = { ...reference, fileName: video.name, attachmentKind: "video" as const };
+  const result = await uploadFilesDirect([video], () => {}, async (url, init) => {
+    const payload = init?.body ? JSON.parse(String(init.body)) : {};
+    calls.push({ path: String(url), payload });
+    return Response.json({
+      uploadUrl: "resumed", uploadToken: "signed-token",
+      uploadId: "11111111-1111-4111-8111-111111111111",
+      fileReference: existing,
+    });
+  }, undefined, { handoffRequestId: "22222222-2222-4222-8222-222222222222", resumeStorage: null });
+  assert.equal(result.length, 1);
+  assert.equal(result[0].fileName, "recovered.mp4");
+  assert.deepEqual(calls.map(call => call.path), ["/api/upload/prepare"]);
+  assert.equal(calls[0].payload?.handoffRequestId, "22222222-2222-4222-8222-222222222222");
+  assert.equal(calls[0].payload?.handoffIndex, 0);
+});
+
+test("operator can recover a legacy unlinked original with a scoped signed reference", async () => {
+  const fake = fakeStorage();
+  const id = "27c11c7b-b9d8-4510-a7e3-e7e97b0a76d5";
+  const old = {
+    ...reference, fileName: "legacy.mp4", mimeType: "video/mp4",
+    attachmentKind: "video" as const,
+  };
+  fake.files.set(`incoming/${id}`, new Blob([new Uint8Array(1024)], { type: "video/mp4" }));
+  fake.files.set(`references/${id}.json`, new Blob([JSON.stringify(old)], { type: "application/json" }));
+  const service = createStoredUploadService(fake.storage, "private-key", {});
+  const recovered = await service.recoverUnlinkedVideo(id);
+  assert.equal(recovered.fileName, "legacy.mp4");
+  assert.equal(recovered.attachmentKind, "video");
+  assert.ok(recovered.storageToken);
+  assert.deepEqual(await service.hydrate([recovered]), [old]);
+  await assert.rejects(service.recoverUnlinkedVideo("../invalid"), /Invalid legacy upload/);
+  await assert.rejects(service.recoverUnlinkedVideo("b8a660fa-8f06-4593-95b7-7156174c45f7"), /unavailable/);
+});
