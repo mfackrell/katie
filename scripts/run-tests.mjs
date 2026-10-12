@@ -42,7 +42,10 @@ function execute(args, options = {}) {
 
 export function runNodeFile(file, reportPath, options = {}) {
   rmSync(reportPath, { force: true });
-  const result = execute(["--test-reporter=./scripts/test-reporter.mjs", file], {
+  // Each test file already runs in a separate Node process. Disable the test
+  // runner's additional child-process isolation so timeout fixtures cannot
+  // leave orphan test workers holding stdout/stderr pipes open indefinitely.
+  const result = execute(["--experimental-test-isolation=none", "--test-reporter=./scripts/test-reporter.mjs", file], {
     ...options,
     env: { ...process.env, NODE_TEST_CONTEXT: undefined, KATIE_TEST_REPORT_PATH: reportPath },
   });
