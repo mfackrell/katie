@@ -74,6 +74,24 @@ jobs:
             isolation. Do not deploy, merge, push, access production resources,
             or rewrite this orchestration workflow. The workflow will commit
             changes, independently test, review, and repair them.
+      - name: Controlled failing regression for repair-pipeline smoke test
+        if: ${{ github.event_name == 'issues' && contains(github.event.issue.title, '[repair-smoke]') }}
+        shell: bash
+        run: |
+          # Owner-authored opt-in pilot only. Inject a deliberately incorrect
+          # expectation on an isolated branch, never on main.
+          cat > tests/agent-repair-smoke.test.mjs <<'SMOKE'
+          import test from "node:test";
+          import assert from "node:assert/strict";
+          import { readFileSync } from "node:fs";
+
+          test("root workspace is private", () => {
+            const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
+            // Fault injection: the true expected value is true, not false.
+            // Repair the expectation while retaining this regression test.
+            assert.equal(pkg.private, false);
+          });
+          SMOKE
       - name: Create draft pull request
         id: publish
         shell: bash
@@ -215,6 +233,9 @@ jobs:
             failures and blocking review findings. Fix them, add tests,
             and verify locally. Do not weaken tests, rewrite the agent
             workflow, access production, or merge or deploy.
+            For a [repair-smoke] pilot, retain tests/agent-repair-smoke.test.mjs
+            and correct its intentionally wrong expectation (the package is
+            private: true). Do not delete or skip the regression test.
       - name: Push repairs
         env:
           GH_TOKEN: ${{ github.token }}
