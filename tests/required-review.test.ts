@@ -416,6 +416,8 @@ test("live website evidence reaches assessment, validation, revision and final r
       views: [{ device: "desktop", viewport: { width: 1440, height: 900 }, document: { width: 1440, height: 900, horizontalOverflow: false }, text: "Example", elements: [], images: [], limitations: [], screenshot: { dataUrl: image, width: 1440, height: 900, truncated: false } }],
     }] },
   };
+  // Identical frames still occupy separate evidence image indices.
+  researchEvidence.website!.pages[0].views.push({ ...researchEvidence.website!.pages[0].views[0], device: "mobile" });
   const s = setup({ reviews: [verdict("revise"), verdict("approve")] });
   const result = await runRequiredDraftReview({ requestId: "live-evidence", draft,
     params: { ...params, researchEvidence }, assessmentParams: { ...params, researchEvidence },
@@ -429,7 +431,7 @@ test("live website evidence reaches assessment, validation, revision and final r
   for (const call of s.calls) {
     assert.ok(call.user.includes("LIVE_CAPTURE_MARKER"));
     assert.ok(call.user.includes("RENDERED_WEBSITE_EVIDENCE"));
-    assert.deepEqual(call.images, [image]);
+    assert.deepEqual(call.images, [image, image]);
     assert.ok(!call.user.includes(image), "image bytes belong in image inputs, not text");
     assert.ok(!call.user.includes("CONTAMINATED"));
   }

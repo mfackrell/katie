@@ -33,7 +33,7 @@ export function reviewBaseline(source: ChatGenerateParams) {
   // Providers consume prompt text and image inputs, not the server-only evidence
   // property. Preserve observed evidence while excluding earlier model opinions.
   const evidence = formatResearchEvidence(source.researchEvidence);
-  const images = [...new Set([...(source.images ?? []), ...websiteImages(source.researchEvidence?.website)])];
+  const images = [...(source.images ?? []), ...websiteImages(source.researchEvidence?.website)];
   const turns: SourceTurn[] = source.history.filter(turn => turn.role === "user")
     .map((turn, index) => ({ id: `turn-${index + 1}`, text: turn.content }));
   turns.push({ id: "latest-user", text: source.user });
