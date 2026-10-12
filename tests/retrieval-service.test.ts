@@ -40,6 +40,26 @@ test("retrieval delegates weighted ranking to SQL and preserves database rows an
   assert.strictEqual(await service.search("rank candidates", 2), rows);
 });
 
+test("retrieval binds a positive limit of seven and returns database rows unmodified", async () => {
+  const vector = [0.3, 0.1, 0.2];
+  const rows: QueryResultRow[] = [
+    { id: "doc-b", content: "B", keyword_score: 0.2, vector_score: 0.8, hybrid_score: 0.53 },
+    { id: "doc-a", content: "A", keyword_score: 0.9, vector_score: 0.1, hybrid_score: 0.46 },
+  ];
+  const expectedRows = rows.map(row => ({ ...row }));
+  const db: DbClient = {
+    async query<T>(sql: string, params: readonly unknown[]) {
+      assert.match(sql, /LIMIT \$3/);
+      assert.deepEqual(params, ["seven candidates", vector, 7]);
+      // Generic DB adapters trust the caller's row type; this fixture does the same.
+      return { rows: rows as T[] };
+    },
+  };
+  const service = new RetrievalService(db, { async embed() { return vector; } });
+  assert.strictEqual(await service.search("seven candidates", 7), rows);
+  assert.deepEqual(rows, expectedRows);
+});
+
 test("retrieval propagates embedding failures without querying the database", async () => {
   const failure = new Error("embedding unavailable");
   const service = new RetrievalService({
