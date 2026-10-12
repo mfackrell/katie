@@ -44,6 +44,8 @@ import {
 import { LlmProvider, ProviderResponse } from "@/lib/providers/types";
 import { buildReviewResumptionContext } from "@/lib/collaboration/review-completion";
 import { getPendingReviewClarification, resolvePendingReviewClarification } from "@/lib/chat/review-continuity";
+import { applyAssistantToTaskProgress, applyUserToTaskProgress, formatTaskProgress, syncTaskProgress } from "@/lib/chat/task-progress";
+import { loadTaskProgress, saveTaskProgress } from "@/lib/chat/task-progress-store";
 import type { ResolvedRoutingIntent, SelectionExplainer } from "@/lib/router/master-router";
 import { DEFAULT_REASONING_CATEGORIES, ReasoningStateAccumulator } from "@/lib/chat/reasoning-stream";
 import {
@@ -966,6 +968,13 @@ export async function POST(request: NextRequest) {
 
     console.log("[Chat API] Assembling context and selecting provider...");
     const { name, persona, summary, history, actorRoutingProfile, reviewMode } = await assembleContext(actorId, chatId);
+    const persistedTaskProgress = await loadTaskProgress(actorId, chatId);
+    const taskProgressUserMessageId = crypto.randomUUID();
+    let taskProgress = applyUserToTaskProgress(
+      syncTaskProgress(persistedTaskProgress, history),
+      { messageId: taskProgressUserMessageId, text: message },
+    );
+    const taskProgressContext = formatTaskProgress(taskProgress);
     const pendingReviewClarification = await getPendingReviewClarification(actorId, chatId);
     if (pendingReviewClarification) {
       messageForGeneration = `${message}\n\n${buildReviewResumptionContext(pendingReviewClarification.pending, message)}`;
@@ -1659,12 +1668,13 @@ export async function POST(request: NextRequest) {
               personaForGeneration += "\n\n" + savedVideoFollowUp.context;
             }
             await saveMessage(chatId, {
-              id: crypto.randomUUID(),
+              id: taskProgressUserMessageId,
               role: "user",
               content: message,
               ...(savedAttachments.length ? { attachments: savedAttachments } : {}),
             });
 
+            await saveTaskProgress(actorId, chatId, taskProgress);
             console.log(`[Chat API] Requesting generation from ${provider.name} using model ${modelId}...`);
             const enqueueDelta = (delta: string) => {
               if (reviewMode === "always") return; // Hold every draft until independent review finishes.
@@ -1693,7 +1703,7 @@ export async function POST(request: NextRequest) {
             const createParams = (selectedModelId: string) =>
               buildGenerationParams({
                 name,
-                persona: [personaForGeneration, storedWebsite.context, ...(creativeNarrativeRequest ? [CREATIVE_CONTINUITY_INSTRUCTIONS] : [])].filter(Boolean).join("\n\n"),
+                persona: [personaForGeneration, taskProgressContext, storedWebsite.context, ...(creativeNarrativeRequest ? [CREATIVE_CONTINUITY_INSTRUCTIONS] : [])].filter(Boolean).join("\n\n"),
                 summary,
                 history: historyForProvider,
                 message: messageForGeneration,
@@ -2509,6 +2519,7 @@ ${chunkWorkflowSummary}`;
                 },
                 leadProvider: draftProvider,
                 deadlineMs: executionDeadlineMs,
+                taskProgress,
                 prepareParams: (params, participant) => ({
                   ...params,
                   persona: replaceKatieRuntimeContext(params.persona, buildKatieRuntimeContext({
@@ -2612,6 +2623,8 @@ ${chunkWorkflowSummary}`;
                 assistantAssets: imageAssets,
               });
             }
+            taskProgress = applyAssistantToTaskProgress(taskProgress, { messageId: assistantMessageId, text: assistantText });
+            await saveTaskProgress(actorId, chatId, taskProgress);
             if (pendingReviewClarification) {
               await resolvePendingReviewClarification({
                 requestId: pendingReviewClarification.requestId, actorId, chatId, resumedByRequestId: requestId,
