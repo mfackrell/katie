@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { buildIntentClassifierSystemPrompt, type RequestIntent } from "../lib/router/model-intent.ts";
+import { buildIntentClassifierSystemPrompt, type RequestIntent } from "../lib/router/model-intent";
 
 const intents: RequestIntent[] = ["general-text", "assistant-reflection", "code-review", "web-search"];
 

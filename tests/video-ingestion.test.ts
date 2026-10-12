@@ -1,3 +1,5 @@
+import type PDFParser from "pdf2json";
+type PdfData = Parameters<Parameters<PDFParser["on"]>[1]>[0];
 import test from "node:test";
 import assert from "node:assert/strict";
 import { buildFileReferences } from "../lib/uploads/build-file-references";
@@ -48,12 +50,14 @@ test("buildFileReferences successfully ingests PDF files as text attachments", a
   __setDynamicImportOverridesForTests({
     pdfParser: async () => ({
       default: class {
+        on(event: "pdfParser_dataError", cb: (err: { parserError?: string }) => void): void;
+        on(event: "pdfParser_dataReady", cb: (data: PdfData) => void): void;
         on(
           event: "pdfParser_dataError" | "pdfParser_dataReady",
-          cb: ((err: { parserError?: string }) => void) | ((data: { Pages?: unknown[] }) => void)
+          cb: ((err: { parserError?: string }) => void) | ((data: PdfData) => void)
         ): void {
           if (event === "pdfParser_dataReady") {
-            (cb as (data: { Pages?: unknown[] }) => void)({
+            (cb as (data: PdfData) => void)({
               Pages: [{ Texts: [{ R: [{ T: "Quarterly%20report" }] }] }]
             });
           }

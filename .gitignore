@@ -7,5 +7,6 @@ npm-debug.log*
 .vercel
 tsconfig.tsbuildinfo
 
-.website-test-dist/
 .test-dist/
+.website-test-dist/
+work/

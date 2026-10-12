@@ -1,3 +1,5 @@
+import type PDFParser from "pdf2json";
+type PdfData = Parameters<Parameters<PDFParser["on"]>[1]>[0];
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
@@ -29,12 +31,14 @@ test("parseTextFiles converts docx, xlsx, and pdf through type-specific converte
     }),
     pdfParser: async () => ({
       default: class {
+        on(event: "pdfParser_dataError", cb: (err: { parserError?: string }) => void): void;
+        on(event: "pdfParser_dataReady", cb: (data: PdfData) => void): void;
         on(
           event: "pdfParser_dataError" | "pdfParser_dataReady",
-          cb: ((err: { parserError?: string }) => void) | ((data: { Pages?: unknown[] }) => void)
+          cb: ((err: { parserError?: string }) => void) | ((data: PdfData) => void)
         ): void {
           if (event === "pdfParser_dataReady") {
-            (cb as (data: { Pages?: unknown[] }) => void)({
+            (cb as (data: PdfData) => void)({
               Pages: [{ Texts: [{ R: [{ T: "PDF%20text" }] }] }]
             });
           }
@@ -59,7 +63,7 @@ test("parseTextFiles converts docx, xlsx, and pdf through type-specific converte
   assert.equal(parsed[0].sourceFormat, "word");
   assert.equal(parsed[0].text, "Docx   content\n\nWith spacing");
   assert.equal(parsed[1].sourceFormat, "excel");
-  assert.equal(parsed[1].text, "--- sheet: Sheet1 ---\ncell1\tcell2");
+  assert.equal(parsed[1].text, "--- sheet: Sheet1 ---\nUsed range: not specified\ncell1\tcell2");
   assert.equal(parsed[2].sourceFormat, "pdf");
   assert.equal(parsed[2].text, "PDF text");
 });
@@ -68,9 +72,11 @@ test("PDF parse failures return a clear parse error", async () => {
   __setDynamicImportOverridesForTests({
     pdfParser: async () => ({
       default: class {
+        on(event: "pdfParser_dataError", cb: (err: { parserError?: string }) => void): void;
+        on(event: "pdfParser_dataReady", cb: (data: PdfData) => void): void;
         on(
           event: "pdfParser_dataError" | "pdfParser_dataReady",
-          cb: ((err: { parserError?: string }) => void) | ((data: { Pages?: unknown[] }) => void)
+          cb: ((err: { parserError?: string }) => void) | ((data: PdfData) => void)
         ): void {
           if (event === "pdfParser_dataError") {
             (cb as (err: { parserError?: string }) => void)({ parserError: "invalid pdf" });

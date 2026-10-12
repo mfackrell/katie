@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { RetrievalService, type DbClient } from "./service.ts";
+import { RetrievalService, type DbClient } from "./service";
 
 type DocumentRow = {
   id: string;
@@ -51,7 +51,7 @@ test("search keeps hybrid ranking formula at 0.45 keyword + 0.55 vector", async 
   ];
 
   const db: DbClient = {
-    async query(_sql, params) {
+    async query<T>(_sql: string, params: readonly unknown[]) {
       const embedding = params[1] as number[];
       const rows = docs
         .map((doc) => {
@@ -66,7 +66,8 @@ test("search keeps hybrid ranking formula at 0.45 keyword + 0.55 vector", async 
           };
         })
         .sort((a, b) => b.hybrid_score - a.hybrid_score);
-      return { rows };
+      // The fixture rows model the requested database row type at this mock boundary.
+      return { rows: rows as T[] };
     }
   };
 
