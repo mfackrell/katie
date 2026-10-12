@@ -22,7 +22,6 @@ export async function getPendingReviewClarification(actorId: string, chatId: str
   const { data, error } = await getSupabaseAdminClient().from("chat_requests")
     .select("request_id,review_audit,updated_at")
     .eq("actor_id", actorId).eq("chat_id", chatId)
-    .not("review_audit", "is", null)
     .order("created_at", { ascending: false }).limit(20);
   if (error) {
     console.warn("[ReviewContinuity] Unable to look up pending clarification", { chatId, reason: error.message });
@@ -62,14 +61,22 @@ export async function resolvePendingReviewClarification(input: {
       resumedByRequestId: input.resumedByRequestId,
     },
   };
-  const { data: updated, error: updateError } = await client.from("chat_requests")
-    .update({ review_audit: changed })
+  const { error: updateError } = await client.from("chat_requests")
     .eq("request_id", input.requestId).eq("actor_id", input.actorId)
     .eq("chat_id", input.chatId).eq("updated_at", data.updated_at)
-    .select("request_id").maybeSingle();
-  if (updateError || !updated) {
-    console.warn("[ReviewContinuity] Clarification resolution was not confirmed", {
-      requestId: input.requestId, reason: updateError?.message ?? "Concurrent update",
+    .update({ review_audit: changed });
+  if (updateError) {
+    console.warn("[ReviewContinuity] Clarification resolution failed", {
+      requestId: input.requestId, reason: updateError.message,
     });
+    return;
+  }
+  // The minimal Supabase admin wrapper has no affected-row count for UPDATE.
+  // Read back to avoid reporting success when an optimistic filter matched zero rows.
+  const { data: verified } = await client.from("chat_requests").select("review_audit")
+    .eq("request_id", input.requestId).eq("actor_id", input.actorId)
+    .eq("chat_id", input.chatId).maybeSingle<{ review_audit: AuditRow["review_audit"] }>();
+  if (verified?.review_audit?.pendingClarification?.resumedByRequestId !== input.resumedByRequestId) {
+    console.warn("[ReviewContinuity] Clarification update was not confirmed", { requestId: input.requestId });
   }
 }
