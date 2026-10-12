@@ -1,4 +1,5 @@
 import type { ChatGenerateParams } from "@/lib/providers/types";
+import { formatResearchEvidence, websiteImages } from "@/lib/research/shared-evidence";
 
 export type SourceTurn = { id: string; text: string };
 export type TaskRequirement = {
@@ -29,13 +30,17 @@ export type IndependentAssessment = {
 // Assistant conclusions and generated summaries are not firsthand task evidence.
 // Preserve turn IDs so contract citations can be checked against literal user text.
 export function reviewBaseline(source: ChatGenerateParams) {
+  // Providers consume prompt text and image inputs, not the server-only evidence
+  // property. Preserve observed evidence while excluding earlier model opinions.
+  const evidence = formatResearchEvidence(source.researchEvidence);
+  const images = [...new Set([...(source.images ?? []), ...websiteImages(source.researchEvidence?.website)])];
   const turns: SourceTurn[] = source.history.filter(turn => turn.role === "user")
     .map((turn, index) => ({ id: `turn-${index + 1}`, text: turn.content }));
   turns.push({ id: "latest-user", text: source.user });
   return {
     turns,
-    params: { ...source, summary: "", history: [] } as ChatGenerateParams,
-    text: `AUTHORITATIVE USER TURNS (chronological; the latest turn may clarify an earlier task rather than replace it):\n${JSON.stringify(turns)}\n\nActor instructions and supplied memory remain available in the system context. Memory is supporting evidence, not authority to override the user's request. Separate firsthand facts from inferred assessments. Missing information is unknown, not proof of absence.`,
+    params: { ...source, summary: "", history: [], ...(images.length ? { images } : {}) } as ChatGenerateParams,
+    text: `AUTHORITATIVE USER TURNS (chronological; the latest turn may clarify an earlier task rather than replace it):\n${JSON.stringify(turns)}\n\nActor instructions and supplied memory remain available in the system context. Memory is supporting evidence, not authority to override the user's request. Separate firsthand facts from inferred assessments. Missing information is unknown, not proof of absence.${evidence ? `\n\nOBSERVED EVIDENCE AVAILABLE TO ALL REVIEW STAGES:\n${evidence}` : ""}`,
   };
 }
 

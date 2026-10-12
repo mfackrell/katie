@@ -105,7 +105,7 @@ export async function runRequiredDraftReview(input: {
         requestId: `${input.requestId}:required-review:${attempt + 1}`,
         request: { capability: "critique", task: "Independently review a completed response against the original request, actor instructions and supplied evidence.", reason: "This actor requires independent review of every generated answer." },
         requester: lead, depth: 1, usedParticipants: used,
-        hasImages: Boolean(source.images?.length),
+        hasImages: Boolean(clean.images?.length),
       }), Math.min(30_000, input.deadlineMs - Date.now() - 10_000));
       if (!selected) break;
       reviewer = { provider: selected.provider.name, modelId: selected.modelId };
