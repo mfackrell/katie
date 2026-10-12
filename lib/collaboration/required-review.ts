@@ -213,6 +213,13 @@ export async function runRequiredDraftReview(input: {
             audit.finalHash = hash(candidate.text);
             return { result: candidate, audit };
           }
+          // At this point two bounded repairs have failed. If the independent
+          // reviewer specifically identified an essential user-owned missing
+          // fact, ask rather than wasting another model revision.
+          if (pass === 1 && createReviewClarification({
+            assessment: assessment!, review, candidate: candidate.text,
+            sourceTurns: baseline.turns,
+          })) throw new Error("Essential user-owned information is needed to finish the task");
         }
         throw new Error("Finished answer still fails acceptance criteria after bounded revision");
       } catch (error) {
