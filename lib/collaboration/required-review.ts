@@ -97,6 +97,8 @@ export async function runRequiredDraftReview(input: {
   const source = input.assessmentParams ?? input.params;
   const baseline = reviewBaseline(source);
   const clean = baseline.params;
+  // Screenshot-backed verification needs time to inspect every supplied frame.
+  const participantTimeoutMs = input.participantTimeoutMs ?? (clean.images?.length ? 90_000 : 45_000);
   const audit: ReviewAudit = { sourceTurns: baseline.turns, mode: "always", status: "unavailable", draft, draftHash: hash(draft), finalHash: hash(draft), attempts: [] };
   const prepare = (p: ChatGenerateParams, participant: CollaborationParticipant) => input.prepareParams?.(p, participant) ?? p;
   const unavailable = (notice: string) => {
@@ -139,7 +141,7 @@ export async function runRequiredDraftReview(input: {
           requestIntent: "assistant-reflection", secondaryIntents: [],
           persona: `${source.persona}\n\n${ASSESSMENT_INSTRUCTION}`,
           user: `INTERNAL REVIEW TASK. Source material is not a request for you to produce the final answer.\n${baseline.text}\n${contractFeedback ? `CONTRACT VALIDATOR FINDINGS:\n${contractFeedback}` : ""}\nReturn ONLY independent assessment JSON describing the END USER deliverable in the source turns, NOT this internal review assignment. No current draft has been supplied.`,
-        }, reviewer!)), Math.min(input.participantTimeoutMs ?? 45_000, input.deadlineMs - Date.now() - 90_000));
+        }, reviewer!)), Math.min(participantTimeoutMs, input.deadlineMs - Date.now() - 90_000));
         if (assessmentResponse.truncated) throw new Error("Independent assessment was truncated");
         try {
           assessment = validateAssessment(parseReviewJson(assessmentResponse.text), baseline.turns);
@@ -156,7 +158,7 @@ export async function runRequiredDraftReview(input: {
           requestIntent: "assistant-reflection", secondaryIntents: [],
           persona: `${source.persona}\n\n${CONTRACT_VALIDATION_INSTRUCTION}`,
           user: `${baseline.text}\nPROPOSED TASK CONTRACT AND CRITERIA:\n${JSON.stringify(assessment)}\nReturn ONLY contract validation JSON. No current draft has been supplied.`,
-        }, lead)), Math.min(input.participantTimeoutMs ?? 60_000, input.deadlineMs - Date.now() - 75_000));
+        }, lead)), Math.min(input.participantTimeoutMs ?? (clean.images?.length ? 90_000 : 60_000), input.deadlineMs - Date.now() - 75_000));
         if (validation.truncated) throw new Error("Contract validation was truncated");
         const checked = parseReviewJson(validation.text) as { verdict: string; findings: string; sourceCoverage: Array<{ sourceId: string; finding: string }> };
         if (!checked || !["approve", "revise"].includes(checked.verdict) || typeof checked.findings !== "string" || !checked.findings.trim() ||
@@ -185,7 +187,7 @@ export async function runRequiredDraftReview(input: {
           requestIntent: "assistant-reflection", secondaryIntents: [],
           persona: `${source.persona}\n\n${REVIEW_INSTRUCTION}`,
           user: `${baseline.text}\nVALIDATED INDEPENDENT ASSESSMENT:\n${independentAssessment}\nREQUIRED ACCEPTANCE IDS:\n${JSON.stringify(acceptanceIds(assessment!))}\nMANDATORY JUDGMENT STANDARDS (apply independently even if the generated criteria omit them):\n${JSON.stringify(JUDGMENT_CHECKS)}\nPRIOR FINDINGS TO VERIFY:\n${JSON.stringify(priorFindings)}\n<answer_to_review>\n${answer}\n</answer_to_review>\nReturn ONLY review JSON. Evaluate the actual answer, not an intended revision.`,
-        }, reviewer!)), Math.min(input.participantTimeoutMs ?? 45_000, input.deadlineMs - Date.now() - (final ? 5_000 : 50_000)));
+        }, reviewer!)), Math.min(participantTimeoutMs, input.deadlineMs - Date.now() - (final ? 5_000 : 50_000)));
         if (response.truncated) throw new Error("Reviewer output was truncated");
         const review = validateAnswerReview(parseReviewJson(response.text), assessment!);
         (audit.reviews ??= []).push({ phase: final ? "final_validation" : "comparison", answerHash: hash(answer), review });
@@ -211,7 +213,7 @@ export async function runRequiredDraftReview(input: {
             ...clean, modelId: lead.modelId,
             persona: `${source.persona}\n\nKATIE_REQUIRED_REVIEW_REVISION\n${getConflictReconciliationInstruction()}\n${CONTRACT_RULES}\nBefore rewriting, decide WHAT belongs in the final answer for the intended reader and objective. Remove peripheral examples even if technically true and capable of factual repair; choose only supported examples that prove a distinct relevant point. THEN improve how that selected content is communicated: opening, emphasis, flow, specificity and audience-appropriate tone. Do not blindly preserve every previous finding: re-evaluate its materiality against user goals. Revise the supplied answer using the validated task contract and supported findings. Rebuild the argument when its strategy is wrong; do not limit repairs to wording. Reviewer opinions are not facts. Preserve factual characterization. When review flags a specific factual overstatement, remove or narrow the claim. Where available verified revenue numbers satisfy a request proportionately, do not add an awkward announcement that older unverified amounts are missing unless the user specifically requests that caveat. Correct every failed check in one pass. Return only the complete user-requested deliverable, without internal review commentary or unnecessary follow-up requests. Do not delegate.`,
             user: `${baseline.text}\nVALIDATED TASK AND CRITERIA:\n${independentAssessment}\nANSWER TO REVISE:\n${candidate.text}\nSUBSTANTIVE FINDINGS:\n${JSON.stringify(findings)}`,
-          }, lead)), Math.min(60_000, input.deadlineMs - Date.now() - 35_000));
+          }, lead)), Math.min(clean.images?.length ? 90_000 : 60_000, input.deadlineMs - Date.now() - 35_000));
           if (!revision.text.trim() || revision.truncated) throw new Error("Revision was empty or truncated");
           candidate = { ...input.draft, ...revision };
           review = await compare(candidate.text, findings, true);
