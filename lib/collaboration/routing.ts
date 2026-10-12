@@ -58,6 +58,41 @@ function buildResolvedIntent(
   };
 }
 
+/**
+ * Quality-first selection only for the required independent reviewer.
+ * Use verified high-reasoning models as an eligibility proxy, not a claim
+ * about measured editorial accuracy. Fallback to the ordinary router if none.
+ */
+export function selectQualityFirstReviewer(input: {
+  requester: CollaborationParticipant;
+  providers: LlmProvider[];
+  usedParticipants: CollaborationParticipant[];
+  snapshot?: Map<LlmProvider["name"], RegistryRoutingModel[]>;
+}): CollaborationHelperSelection | null {
+  if (!input.snapshot) return null;
+  const used = new Set(input.usedParticipants.map(participantKey));
+  used.add(participantKey(input.requester));
+  const eligible: Array<{ provider: LlmProvider; model: RegistryRoutingModel }> = [];
+  for (const provider of input.providers) {
+    if (provider.name === input.requester.provider) continue;
+    for (const model of input.snapshot.get(provider.name) ?? []) {
+      if (model.routing_eligibility !== "verified" || model.reasoning_tier !== "high" ||
+          model.supports_text === false || used.has(provider.name + ":" + model.model_id.trim().toLowerCase())) continue;
+      eligible.push({ provider, model });
+    }
+  }
+  eligible.sort((a,b) =>
+    (Number(b.model.confidence_score ?? 0) - Number(a.model.confidence_score ?? 0)) ||
+    ((b.model.confidence_tier === "high" ? 1 : 0) - (a.model.confidence_tier === "high" ? 1 : 0)) ||
+    a.provider.name.localeCompare(b.provider.name) || a.model.model_id.localeCompare(b.model.model_id));
+  const picked = eligible[0];
+  return picked ? {
+    provider: picked.provider,
+    modelId: picked.model.model_id,
+    reasoning: "Required review quality-first: verified, high-reasoning, text-capable model from another provider; ranked by registry confidence. Actual editorial quality is not assumed measured.",
+  } : null;
+}
+
 export async function selectCollaborationHelper(input: {
   requestId: string;
   request: CollaborationRequest;
@@ -72,6 +107,22 @@ export async function selectCollaborationHelper(input: {
 }): Promise<CollaborationHelperSelection | null> {
   if (!input.providers.length) {
     return null;
+  }
+
+  const requiredReviewer = input.request.capability === "critique" &&
+    input.request.task.startsWith("Independently review a completed response");
+  if (requiredReviewer) {
+    const qualityReviewer = selectQualityFirstReviewer({
+      requester: input.requester,
+      providers: input.providers,
+      usedParticipants: input.usedParticipants,
+      snapshot: input.modelRegistrySnapshot,
+    });
+    if (qualityReviewer) {
+      console.info("[RequiredReview] selected quality-first reviewer", { requestId: input.requestId,
+        provider: qualityReviewer.provider.name, model: qualityReviewer.modelId });
+      return qualityReviewer;
+    }
   }
 
   const usedKeys = new Set(input.usedParticipants.map(participantKey));
