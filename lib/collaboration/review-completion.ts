@@ -1,4 +1,4 @@
-import type { AnswerReview, IndependentAssessment } from "@/lib/collaboration/review-contract";
+import type { AnswerReview, IndependentAssessment, SourceTurn } from "@/lib/collaboration/review-contract";
 
 /** Persisted in the original chat_requests.review_audit row, scoped to its actor and chat. */
 export type PendingReviewClarification = {
@@ -7,6 +7,7 @@ export type PendingReviewClarification = {
   deliverable: string;
   candidate: string;
   requirementIds: string[];
+  sourceTurns?: SourceTurn[];
   createdAt: string;
   resolvedAt?: string;
   resumedByRequestId?: string;
@@ -16,6 +17,7 @@ export function createReviewClarification(input: {
   assessment: IndependentAssessment;
   review: AnswerReview;
   candidate: string;
+  sourceTurns?: SourceTurn[];
   now?: string;
 }): PendingReviewClarification {
   const requirements = input.assessment.taskContract.requirements;
@@ -32,6 +34,7 @@ export function createReviewClarification(input: {
     reason: input.review.findings,
     deliverable: input.assessment.taskContract.deliverable,
     candidate: input.candidate,
+    sourceTurns: input.sourceTurns,
     requirementIds,
     createdAt: input.now ?? new Date().toISOString(),
   };
@@ -46,6 +49,7 @@ export function buildReviewResumptionContext(pending: PendingReviewClarification
     "If the latest message explicitly starts a different task or cancels the old one, honor that instead. Never fabricate the missing values.",
     "Do not include requests to the user or review commentary inside the final deliverable.",
     `ORIGINAL DELIVERABLE: ${pending.deliverable}`,
+    `ORIGINAL AUTHORITATIVE USER TURNS: ${JSON.stringify(pending.sourceTurns ?? [])}`,
     `QUESTION ASKED: ${pending.question}`,
     `LAST REVIEW FINDINGS: ${pending.reason}`,
     `SAVED WORKING DRAFT (not automatically approved; correct it as needed):\n${pending.candidate}`,
