@@ -236,6 +236,10 @@ jobs:
             For a [repair-smoke] pilot, retain tests/agent-repair-smoke.test.mjs
             and correct its intentionally wrong expectation (the package is
             private: true). Do not delete or skip the regression test.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
       - name: Push repairs
         env:
           GH_TOKEN: ${{ github.token }}
