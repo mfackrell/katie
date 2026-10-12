@@ -19,19 +19,24 @@ export function createReviewClarification(input: {
   candidate: string;
   sourceTurns?: SourceTurn[];
   now?: string;
-}): PendingReviewClarification {
+}): PendingReviewClarification | null {
+  // The reviewer must explicitly establish that a user-owned fact is essential.
+  // A failed requirement is NOT permission to invent a clarification question.
+  if (input.review.clarification?.essential !== true) return null;
+  const question = input.review.clarification.question.trim();
+  const missingFact = input.review.clarification.missingFact.trim();
+  if (!question || !missingFact || !question.includes("?")) return null;
   const requirements = input.assessment.taskContract.requirements;
   const failed = input.review.checks.filter(check => !check.passed);
   const blocked = failed.filter(check => check.id.startsWith("requirement:"));
   const requirementIds = blocked.map(check => check.id.slice("requirement:".length));
-  const requirement = requirements.find(item => item.status === "active" && requirementIds.includes(item.id));
-  const explicitQuestion = input.review.clarification?.essential ? input.review.clarification.question.trim() : undefined;
-  const question = explicitQuestion || (requirement
-    ? `Before I finalize ${input.assessment.taskContract.deliverable}, can you clarify this outstanding requirement: ${requirement.requirement}? If those details aren't available, say "unknown" and I'll finish using only verified information.`
-    : `I have saved your draft, but the final review still has an unresolved issue. ${input.review.findings.slice(0, 480)} Can you clarify how to handle this, or tell me to proceed using only the facts already verified?`);
+  // Do not copy the task-contract requirement back to the user as a question.
+  // The reviewer must supply a precise, evidence-based request for a missing fact.
+  const normalized = (value: string) => value.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+  if (requirements.some(r => normalized(question).replace(/^(can you clarify|please clarify|could you clarify) /, "") === normalized(r.requirement))) return null;
   return {
     question,
-    reason: input.review.findings,
+    reason: `Missing essential user fact: ${missingFact}. ${input.review.findings}`,
     deliverable: input.assessment.taskContract.deliverable,
     candidate: input.candidate,
     sourceTurns: input.sourceTurns,

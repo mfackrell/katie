@@ -173,14 +173,17 @@ test("regression: a revision retaining meta commentary and follow-up requests ge
   assert.equal(result.audit.reviews?.length, 3);
 });
 
-test("known failing revisions request clarification and preserve the final candidate", async () => {
-  const s = setup({ reviews: [verdict("revise"), verdict("revise"), verdict("revise")] });
+test("exhausted nonessential review returns the draft with transparent review notes, never a fabricated question", async () => {
+  const s = setup({
+    reviews: [verdict("revise"), verdict("revise"), verdict("revise"), verdict("revise")],
+    revisions: ["Improved application draft 1.", "Improved application draft 2.", "Improved application draft 3."],
+  });
   const result = await s.run();
-  assert.equal(result.audit.status, "needs_user_input");
-  assert.match(result.result.text, /clarif|unknown/i);
-  assert.ok(result.audit.pendingClarification?.candidate);
-  assert.ok(result.audit.pendingClarification?.reason);
-  assert.ok(!result.result.text.includes(draft.text));
+  assert.equal(result.audit.status, "completed_with_review_notes");
+  assert.equal(result.audit.pendingClarification, undefined);
+  assert.match(result.result.text, /Improved application draft 3/);
+  assert.match(result.result.text, /Review note \(not part of the deliverable\)/);
+  assert.doesNotMatch(result.result.text, /can you clarify this outstanding requirement/i);
   assert.equal(result.audit.reviews?.at(-1)?.review.verdict, "revise");
 });
 
@@ -293,7 +296,25 @@ test("nonessential reviewer suggestions are never treated as user-owned blockers
   const optional: AnswerReview = verdict("revise");
   optional.clarification = { question: "Can you give an optional number?", missingFact: "Optional detail", essential: false };
   const pending = createReviewClarification({ assessment, review: optional, candidate: "Saved draft", now: "2026-10-12T00:00:00Z" });
-  assert.notEqual(pending.question, optional.clarification.question);
-  assert.ok(pending.question.includes("verified information"));
-  assert.equal(pending.createdAt, "2026-10-12T00:00:00Z");
+  assert.equal(pending, null);
+});
+
+test("production regression: a review saying no clarification required cannot ask the user for revenue figures", async () => {
+  const nonblocking = verdict("revise", assessment,
+    "The answer is strong. Earlier manufacturing revenues are unverified. Change failed ERP to problematic ERP. No clarification from the user is required.");
+  assert.equal(createReviewClarification({ assessment, review: nonblocking, candidate: "Supported application answer." }), null);
+  const s = setup({
+    reviews: [nonblocking, nonblocking, nonblocking, verdict("approve")],
+    revisions: [
+      "The finance recovery was led through the team and revenue was approximately $90M.",
+      "The global company had a problematic ERP implementation; annual revenue was approximately $90M.",
+      "I led the recovery in a global $90M company despite a problematic ERP implementation.",
+    ],
+  });
+  const result = await s.run();
+  assert.equal(result.audit.status, "revised");
+  assert.equal(result.audit.pendingClarification, undefined);
+  assert.match(result.result.text, /problematic ERP/);
+  assert.equal(result.audit.reviews?.length, 4);
+  assert.doesNotMatch(result.result.text, /can you clarify/i);
 });
