@@ -86,6 +86,8 @@ export type AnswerReview = {
   verdict: "approve" | "revise";
   findings: string;
   checks: Array<{ id: string; passed: boolean; evidence: string }>;
+  /** Only when a user-owned fact is genuinely necessary to finish; never for optional enrichment. */
+  clarification?: { question: string; missingFact: string; essential: boolean };
 };
 // These acceptance dimensions cannot disappear when a model generates a weak rubric.
 // They evaluate judgment across tasks; they do not prescribe facts or sentence templates.
@@ -111,6 +113,7 @@ export function validateAnswerReview(value: unknown, assessment: IndependentAsse
       r.checks.some(c => !c || !expected.includes(c.id) || typeof c.passed !== "boolean" || !nonempty(c.evidence))) {
     throw new Error("Review must check every requirement, criterion, objective, factual support and prior finding");
   }
+  if (r.clarification !== undefined && (!r.clarification || !nonempty(r.clarification.question) || !nonempty(r.clarification.missingFact) || typeof r.clarification.essential !== "boolean")) throw new Error("Invalid reviewer clarification");
   if (r.verdict === "approve" && r.checks.some(c => !c.passed)) throw new Error("Approval contradicts failed acceptance checks");
   return r;
 }
