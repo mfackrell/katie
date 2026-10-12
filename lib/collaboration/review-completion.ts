@@ -23,7 +23,7 @@ export function createReviewClarification(input: {
   const blocked = failed.filter(check => check.id.startsWith("requirement:"));
   const requirementIds = blocked.map(check => check.id.slice("requirement:".length));
   const requirement = requirements.find(item => item.status === "active" && requirementIds.includes(item.id));
-  const explicitQuestion = input.review.clarification?.question?.trim();
+  const explicitQuestion = input.review.clarification?.essential ? input.review.clarification.question.trim() : undefined;
   const question = explicitQuestion || (requirement
     ? `Before I finalize ${input.assessment.taskContract.deliverable}, can you clarify this outstanding requirement: ${requirement.requirement}? If those details aren't available, say "unknown" and I'll finish using only verified information.`
     : `I have saved your draft, but the final review still has an unresolved issue. ${input.review.findings.slice(0, 480)} Can you clarify how to handle this, or tell me to proceed using only the facts already verified?`);
