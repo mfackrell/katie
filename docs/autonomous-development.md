@@ -34,3 +34,19 @@ This is an **approval-gated** development orchestrator. You open one GitHub issu
 Start with a small, safe request such as `[agent] Add regression coverage for existing retrieval behavior`. Verify automatic creation of a branch and draft PR, test output, independent review, and the issue comment. Then separately test a controlled review failure to verify the repair cycle. Do not treat a static YAML review as a successful live run.
 
 The workflow fails immediately when that GitHub Actions secret is absent and posts a **BLOCKED** report to the owner-authored issue even if implementation never starts. It never prints the secret or requires it in the issue body.
+
+## Controlled automatic-repair acceptance test
+
+To validate the previously untested error-recovery path, open an **owner-authored**
+issue with both `[agent]` and `[repair-smoke]` in its title. The normal
+development agent implements the request. Only after development, the workflow
+adds a deliberately failing, otherwise legitimate regression test in that
+**isolated development branch** asserting that `package.json.private` is
+`false` (its real value is `true`). The independent test gate must fail; the
+reviewer should request changes; the repair agent must correct the assertion
+while keeping the test; then the independent gate and reviewer must pass.
+
+This test is explicitly opt-in, is restricted to issue events authored by the
+repository owner, never runs on production `main`, and never authorizes a
+merge. The resulting draft PR is a disposable acceptance-test artifact, not a
+feature proposed for production. Do not use the flag for ordinary work.
