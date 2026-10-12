@@ -132,6 +132,30 @@ export function rebuildTaskProgress(history: ProgressMessage[]): TaskProgressSta
   return state;
 }
 
+/** Recover unrecorded turns after an interrupted request or a second device. */
+export function syncTaskProgress(previous: TaskProgressState | null, history: ProgressMessage[]): TaskProgressState {
+  if (!previous) return rebuildTaskProgress(history);
+  const userCursor = history.findIndex(item => item.id === previous.lastUserMessageId);
+  const assistantCursor = history.findIndex(item => item.id === previous.lastAssistantMessageId);
+  const cursor = Math.max(userCursor, assistantCursor);
+  if (cursor < 0) {
+    const recent = rebuildTaskProgress(history);
+    return {
+      ...recent,
+      objective: recent.objective ?? previous.objective,
+      answered: [...previous.answered, ...recent.answered]
+        .filter((item, index, array) => array.findIndex(other => other.id === item.id && other.userMessageId === item.userMessageId) === index)
+        .slice(-MAX_ANSWERED),
+    };
+  }
+  let state = previous;
+  for (const entry of history.slice(cursor + 1)) {
+    if (entry.role === "user") state = applyUserToTaskProgress(state, { messageId: entry.id, text: entry.content });
+    else if (entry.role === "assistant") state = applyAssistantToTaskProgress(state, { messageId: entry.id, text: entry.content });
+  }
+  return state;
+}
+
 export function formatTaskProgress(progress: TaskProgressState): string {
   const completed = progress.answered.slice(-10).map(item => ({
     assistantQuestionSource: item.assistantMessageId,
