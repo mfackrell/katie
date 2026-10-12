@@ -45,6 +45,7 @@ export const CONTRACT_RULES = [
   "Trace each explicit deliverable requirement to an ID in the supplied user turns. Reference source IDs directly instead of reproducing their text. The original text remains available verbatim in the baseline and audit. Do not treat validator feedback as a new user source or as established fact; its suggestions must be checked against the original sources and actor instructions. Only explicit user requirements belong in taskContract.requirements; derived quality standards or memory-supported capabilities belong in criteria, qualifications and strongestEvidence, not fabricated user citations. Include original requirements that later turns dispute, with active or superseded status. Supersession requires a referenced explicit instruction changing the deliverable; a later claim about what an earlier question says is an interpretation, not automatic cancellation. Reconcile it against the quoted question. Factual corrections update facts, not unrelated requirements. Explicitly requested changes do supersede earlier instructions. Record material conflicts and their source IDs and resolution. Do not invent missing values to satisfy a requirement; explain a genuinely unresolved conflict or use supported information as appropriate to the deliverable.",
   "Synthesize the complete relevant evidence before choosing examples: foundational expertise, recurring capabilities, breadth, depth, chronology and actual responsibility. Select examples to substantiate the collective conclusion. Requirements determine relevance, never the characterization of experience. Explain transferability without equating different situations.",
   "Assess accuracy AND effectiveness. A directly requested limitation may require a concise truthful answer; do not let an earlier gap assessment dictate the structure or crowd out demonstrated strengths. Never infer lack of experience from missing records. Allocate attention by marginal value to the audience, not technical detail density.",
+  "When the user has explicitly said requested supplementary facts are unknown or unavailable, finish using verified information whenever a truthful response is possible. Do not require manufactured numbers or repeatedly ask for facts the user has already said are unavailable. Preserve the spirit of the original request proportionately.",
   "Criteria describe the final deliverable the USER requested. Internal instructions about JSON, assessment stages or not answering the user are NOT acceptance criteria for that deliverable.",
 ].join("\n");
 
@@ -86,6 +87,8 @@ export type AnswerReview = {
   verdict: "approve" | "revise";
   findings: string;
   checks: Array<{ id: string; passed: boolean; evidence: string }>;
+  /** Only when a user-owned fact is genuinely necessary to finish; never for optional enrichment. */
+  clarification?: { question: string; missingFact: string; essential: boolean };
 };
 // These acceptance dimensions cannot disappear when a model generates a weak rubric.
 // They evaluate judgment across tasks; they do not prescribe facts or sentence templates.
@@ -111,6 +114,9 @@ export function validateAnswerReview(value: unknown, assessment: IndependentAsse
       r.checks.some(c => !c || !expected.includes(c.id) || typeof c.passed !== "boolean" || !nonempty(c.evidence))) {
     throw new Error("Review must check every requirement, criterion, objective, factual support and prior finding");
   }
+  // Model JSON often spells an absent optional object as null.
+  if (r.clarification === null) delete r.clarification;
+  if (r.clarification !== undefined && (!nonempty(r.clarification.question) || !nonempty(r.clarification.missingFact) || typeof r.clarification.essential !== "boolean")) throw new Error("Invalid reviewer clarification");
   if (r.verdict === "approve" && r.checks.some(c => !c.passed)) throw new Error("Approval contradicts failed acceptance checks");
   return r;
 }
