@@ -262,6 +262,8 @@ test("a generated rubric cannot omit the synthesis and economy acceptance gates"
   assert.ok(ids.includes("scope-and-sufficiency"));
   assert.ok(ids.includes("evidence-economy"));
   assert.ok(ids.includes("metric-meaning"));
+  assert.ok(ids.includes("contextual-content-selection"));
+  assert.ok(ids.includes("audience-appropriate-expression"));
   const rubberStamp = verdict("approve", reduced);
   rubberStamp.checks = rubberStamp.checks.filter(c => c.id !== "evidence-economy");
   assert.throws(() => validateAnswerReview(rubberStamp, reduced), /every requirement/);
@@ -317,4 +319,88 @@ test("production regression: a review saying no clarification required cannot as
   assert.match(result.result.text, /problematic ERP/);
   assert.equal(result.audit.reviews?.length, 4);
   assert.doesNotMatch(result.result.text, /can you clarify/i);
+});
+
+
+test("context and expression checks cannot be silently omitted or approved by a factual-only rubric", () => {
+  const weak = structuredClone(assessment);
+  weak.criteria = ["All factual claims accurate."];
+  const ids = acceptanceIds(weak);
+  assert.ok(ids.includes("contextual-content-selection"));
+  assert.ok(ids.includes("audience-appropriate-expression"));
+  const factualOnly = verdict("approve", weak);
+  factualOnly.checks = factualOnly.checks.filter(c => c.id !== "contextual-content-selection");
+  assert.throws(() => validateAnswerReview(factualOnly, weak), /every requirement/);
+  const failedContent = verdict("approve", weak);
+  failedContent.checks.find(c => c.id === "contextual-content-selection")!.passed = false;
+  assert.throws(() => validateAnswerReview(failedContent, weak), /contradicts/);
+  const failedLanguage = verdict("approve", weak);
+  failedLanguage.checks.find(c => c.id === "audience-appropriate-expression")!.passed = false;
+  assert.throws(() => validateAnswerReview(failedLanguage, weak), /contradicts/);
+});
+
+test("editorial regression: accurate but peripheral restructuring example is removed rather than reworded", async () => {
+  const relevantDraft = {
+    ...draft,
+    text: "I led audit recovery for a global $90M business and worked through a Chapter 11 restructuring. I have manufacturing experience.",
+  };
+  const improved = "I led audit remediation for a global $90M company, restoring financial reporting and completing the audit in ten weeks. My manufacturing finance background includes international sales and marketing responsibilities. I have not personally done transfer pricing work.";
+  const calls: ChatGenerateParams[] = [];
+  const reviewer = makeProvider("anthropic", async p => {
+    calls.push(p);
+    if (p.persona.includes("KATIE_INDEPENDENT_ASSESSMENT")) {
+      assert.match(p.persona, /PRIMARY task is independent content\/context selection/);
+      assert.ok(!p.user.includes(relevantDraft.text), "Assessment must remain draft blind");
+      return response("anthropic", "reviewer", assessment);
+    }
+    assert.match(p.persona, /true but peripheral anecdote must be REMOVED/);
+    assert.match(p.user, /contextual-content-selection/);
+    const match = p.user.match(/<answer_to_review>\n([\s\S]*?)\n<\/answer_to_review>/);
+    assert.ok(match, "Review must receive the exact draft");
+    if (match[1].includes("Chapter 11")) {
+      const bad: AnswerReview = verdict("revise");
+      bad.findings = "REMOVE the true but tangential Chapter 11 example. Preserve the manufacturing background and global audit evidence. Improve opening and phrasing. Do not volunteer unavailable early-company revenues.";
+      bad.checks.find(c => c.id === "contextual-content-selection")!.evidence = "The Chapter 11 example adds little to this global manufacturing finance screening answer; delete it, not just rephrase it.";
+      bad.checks.find(c => c.id === "audience-appropriate-expression")!.evidence = "Weak chronology and opening bury the strongest audit recovery proof.";
+      return response("anthropic", "reviewer", bad);
+    }
+    assert.ok(match[1].includes("international sales and marketing"));
+    assert.ok(!match[1].includes("unavailable"), "No defensive unknown-revenue disclosure");
+    return response("anthropic", "reviewer", verdict("approve"));
+  });
+  const lead = makeProvider("openai", async p => {
+    calls.push(p);
+    if (p.persona.includes("KATIE_TASK_CONTRACT_VALIDATION")) return contractApproval(p);
+    assert.match(p.persona, /Remove peripheral examples/);
+    assert.match(p.user, /Chapter 11/);
+    return response("openai", "lead", improved);
+  });
+  const result = await runRequiredDraftReview({
+    requestId: "editorial-chapter11-relevance",
+    draft: relevantDraft,
+    params, leadProvider: lead, deadlineMs: deadline(),
+    selectHelper: async () => ({ provider: reviewer, modelId: "reviewer" }),
+  });
+  assert.equal(result.audit.status, "revised");
+  assert.equal(result.result.text, improved);
+  assert.ok(!result.result.text.includes("Chapter 11"));
+  assert.ok(result.result.text.includes("international sales and marketing"));
+  assert.equal(result.audit.reviews?.[0].review.checks.find(c => c.id === "contextual-content-selection")?.passed, false);
+  assert.equal(result.audit.reviews?.at(-1)?.review.verdict, "approve");
+});
+
+test("editorial standards apply beyond applications and do not impose marketing copy on reports", () => {
+  const source = {
+    ...params,
+    persona: "Internal risk reporting actor",
+    history: [{ role: "user" as const, content: "Prepare a neutral incident report about the payment outage. Include the timeline, impact and mitigation." }],
+    user: "Use a factual executive summary; exclude the team's fundraising story.",
+  };
+  const baseline = reviewBaseline(source);
+  assert.equal(baseline.turns.length, 2);
+  assert.ok(baseline.text.includes("neutral incident report"));
+  assert.ok(baseline.text.includes("exclude the team's fundraising story"));
+  const checks = acceptanceIds(assessment);
+  assert.ok(checks.includes("contextual-content-selection"));
+  assert.ok(checks.includes("audience-appropriate-expression"));
 });
