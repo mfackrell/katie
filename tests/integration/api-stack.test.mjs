@@ -1,79 +1,89 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import { once } from "node:events";
+import { createServer } from "node:http";
+import { createServer as createPortReservation } from "node:net";
 
-const API_PORT = process.env.INTEGRATION_API_PORT ?? "3100";
-const baseUrl = `http://127.0.0.1:${API_PORT}`;
-
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+async function listen(server) {
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  return server.address().port;
 }
 
-async function waitForApiReady(timeoutMs = 60000) {
-  const startedAt = Date.now();
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
-  while (Date.now() - startedAt < timeoutMs) {
-    try {
-      const response = await fetch(`${baseUrl}/api/models`);
-      if (response.status < 500) {
-        return;
-      }
-    } catch {
-      // keep polling until startup completes
+test("integration: API starts with local mock persistence and serves core application endpoints", async t => {
+  const tablesRead = [];
+  const persistence = createServer((request, response) => {
+    const path = new URL(request.url, "http://localhost").pathname;
+    const table = path.replace("/rest/v1/", "");
+    response.setHeader("content-type", "application/json");
+    if (request.method !== "GET" || !["actors", "chats"].includes(table)) {
+      response.writeHead(404).end(JSON.stringify({ message: "Unexpected mock persistence request" }));
+      return;
     }
+    tablesRead.push(table);
+    response.end("[]");
+  });
+  const persistencePort = await listen(persistence);
+  t.after(() => new Promise((resolve, reject) => persistence.close(error => error ? reject(error) : resolve())));
 
+  const reservation = createPortReservation();
+  const apiPort = await listen(reservation);
+  await new Promise(resolve => reservation.close(resolve));
+  const baseUrl = `http://127.0.0.1:${apiPort}`;
+  const server = spawn(process.execPath, ["node_modules/next/dist/bin/next", "dev", "-p", String(apiPort)], {
+    detached: process.platform !== "win32",
+    stdio: ["ignore", "pipe", "pipe"],
+    env: {
+      ...process.env,
+      NODE_ENV: "development",
+      VERCEL_ENV: "development",
+      NEXT_TELEMETRY_DISABLED: "1",
+      NEXT_PUBLIC_SUPABASE_URL: `http://127.0.0.1:${persistencePort}`,
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: "integration-anon-placeholder",
+      SUPABASE_SERVICE_ROLE_KEY: "integration-service-placeholder",
+      OPENAI_API_KEY: "", GOOGLE_API_KEY: "", GROK_API_KEY: "", XAI_API_KEY: "", grok_api_key: "",
+      CLAUDE_API_KEY: "", claude_api_key: "",
+    },
+  });
+  let output = "";
+  server.stdout.on("data", chunk => { output += chunk.toString(); });
+  server.stderr.on("data", chunk => { output += chunk.toString(); });
+  const exited = once(server, "exit");
+  t.after(async () => {
+    if (server.exitCode !== null || server.signalCode !== null) return;
+    const kill = signal => process.platform === "win32" ? server.kill(signal) : process.kill(-server.pid, signal);
+    kill("SIGTERM");
+    let timer;
+    try {
+      await Promise.race([
+        exited,
+        new Promise((_, reject) => { timer = setTimeout(() => {
+          kill("SIGKILL");
+          reject(new Error("Integration server did not shut down completely"));
+        }, 10_000); }),
+      ]);
+    } finally { clearTimeout(timer); }
+  });
+
+  let ready = false;
+  for (let attempt = 0; attempt < 60; attempt += 1) {
+    assert.equal(server.exitCode, null, `API exited during startup:\n${output}`);
+    try {
+      const response = await fetch(`${baseUrl}/api/models`, { signal: AbortSignal.timeout(5000) });
+      if (response.status === 200) { ready = true; break; }
+    } catch { /* The development server is still compiling its first route. */ }
     await sleep(1000);
   }
+  assert.ok(ready, `API did not become ready:\n${output}`);
 
-  throw new Error(`API did not become ready within ${timeoutMs}ms`);
-}
-
-test("integration: API boots with Postgres + Redis env and serves core MCP endpoints", async (t) => {
-  assert.ok(process.env.DATABASE_URL, "DATABASE_URL must be set for integration test");
-  assert.ok(process.env.REDIS_URL, "REDIS_URL must be set for integration test");
-  assert.equal(process.env.GITHUB_API_BASE_URL, "http://127.0.0.1:9090", "GitHub API must be mocked in CI");
-
-  const env = {
-    ...process.env,
-    PORT: API_PORT,
-    NODE_ENV: "test",
-    NEXT_PUBLIC_SUPABASE_URL: process.env.NEXT_PUBLIC_SUPABASE_URL ?? "http://127.0.0.1:54321",
-    SUPABASE_SERVICE_ROLE_KEY: process.env.SUPABASE_SERVICE_ROLE_KEY ?? "integration-service-role-key",
-    NEXT_PUBLIC_SUPABASE_ANON_KEY: process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? "integration-anon-key"
-  };
-
-  const server = spawn("npm", ["run", "dev", "--", "-p", API_PORT], {
-    env,
-    stdio: ["ignore", "pipe", "pipe"]
-  });
-
-  let stdout = "";
-  let stderr = "";
-  server.stdout.on("data", (chunk) => {
-    stdout += chunk.toString();
-  });
-  server.stderr.on("data", (chunk) => {
-    stderr += chunk.toString();
-  });
-
-  t.after(() => {
-    if (!server.killed) {
-      server.kill("SIGTERM");
-    }
-  });
-
-  await waitForApiReady();
-
-  const modelsRes = await fetch(`${baseUrl}/api/models`);
-  assert.ok(modelsRes.status < 500, `models endpoint should not 5xx, got ${modelsRes.status}`);
-
-  const actorsRes = await fetch(`${baseUrl}/api/actors`);
-  assert.ok(actorsRes.status < 500, `actors endpoint should not 5xx, got ${actorsRes.status}`);
-
-  const chatsRes = await fetch(`${baseUrl}/api/chats`);
-  assert.ok(chatsRes.status < 500, `chats endpoint should not 5xx, got ${chatsRes.status}`);
-
-  if (modelsRes.status >= 500 || actorsRes.status >= 500 || chatsRes.status >= 500) {
-    throw new Error(`Server output:\nSTDOUT:\n${stdout}\nSTDERR:\n${stderr}`);
+  for (const [path, expected] of [["models", {}], ["actors", { actors: [] }], ["chats", { chats: [] }]]) {
+    const response = await fetch(`${baseUrl}/api/${path}`, { signal: AbortSignal.timeout(30_000) });
+    assert.equal(response.status, 200, `${path} endpoint failed:\n${output}`);
+    assert.deepEqual(await response.json(), expected);
   }
+  assert.ok(tablesRead.includes("actors"), "actor response must traverse the persistence adapter");
+  assert.ok(tablesRead.includes("chats"), "chat response must traverse the persistence adapter");
 });

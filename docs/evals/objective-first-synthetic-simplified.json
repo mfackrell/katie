@@ -1,0 +1,103 @@
+{
+  "generatedAt": "2026-10-12T17:17:05.229Z",
+  "model": "claude-sonnet-5-5",
+  "method": "One same-model primary generation per prompt variant and fixture. No reviewer workflow or statistical quality claim. Baseline prompts from checked-out production-source commit; revised prompts from local branch.",
+  "dataScope": "Wholly fictional inputs; no BTG or real career facts",
+  "cases": [
+    {
+      "name": "fictional CFO application",
+      "task": "Write an application response to a hiring team filling an interim industrial CFO role during a finance leadership transition. The company needs to finish overdue audits and stabilize controls after an ERP migration. Their question asks about manufacturing, multinational finance, audits and transfer pricing. Include verified revenue sizes. Use only these fictional facts.",
+      "facts": "Fictional candidate: 16 years finance and operations leadership. CFO of a domestic manufacturer with $72M annual revenue; international distributor negotiation responsibilities. Interim CFO of a multinational software company with $48M annual revenue and $150M enterprise valuation. Completed audit remediation in eight months; led ERP migration and supported an acquisition. No direct international transfer pricing experience. Never CFO of a multinational manufacturer. A prior hospitality side business is irrelevant.",
+      "outcome": "Truthful executive value, separate engagements and metrics, concise required limitation.",
+      "outputs": [
+        {
+          "variant": "revised",
+          "promptCharacters": 4611,
+          "text": "**Dear Hiring Team,**\n\nI bring 16 years of finance and operations leadership, including audit remediation, an ERP migration, and CFO experience in both manufacturing and multinational settings. That combination fits a transition where overdue audits and post-migration controls are the priority.\n\n**Audits and controls.** I completed an audit remediation in eight months. I have also led an ERP migration, so I understand how system changes create control gaps and where to look for them. For this role, that means getting the audits closed and the controls stable.\n\n**Manufacturing.** I served as CFO of a domestic manufacturer with $72M in annual revenue. That role included responsibility for negotiating with international distributors, which gave me direct exposure to the commercial and financial terms of cross-border sales.\n\n**Multinational finance.** I served as interim CFO of a multinational software company with $48M in annual revenue. I have stepped into a leadership gap, taken ownership quickly, and delivered in a multinational environment. I also supported an acquisition.\n\n**Transfer pricing.** I have no direct international transfer pricing experience. I have not been CFO of a multinational manufacturer, so I would not present that as my background. What I offer is manufacturing finance leadership, multinational interim leadership, and a record of closing audit and control issues. If transfer pricing is central to the engagement, I would expect to work alongside your tax advisors on it.\n\nI would welcome the chance to discuss how I can help your team finish the audits and stabilize controls.\n\nSincerely,",
+          "truncated": false,
+          "usage": {
+            "inputTokens": 2431,
+            "outputTokens": 1095,
+            "totalTokens": 3526
+          }
+        }
+      ]
+    },
+    {
+      "name": "fictional fit assessment",
+      "task": "Assess this fictional candidate for a cloud migration lead role. Balance strengths and gaps; do not write an application.",
+      "facts": "Candidate led three on-premise database migrations and managed teams of six. No production Kubernetes experience. The role requires production Kubernetes ownership.",
+      "outcome": "Balanced fit judgment with an explicit relevant gap; no unsupported equivalence.",
+      "outputs": [
+        {
+          "variant": "revised",
+          "promptCharacters": 4611,
+          "text": "**Assessment: partial fit. Not a match for the role as written because of the Kubernetes requirement.**\n\n**Strengths**\n- **Migration leadership:** The candidate led three on-premise database migrations, which is direct, repeated experience owning migration delivery.\n- **People management:** They have managed teams of six, which shows they can lead a team of meaningful size.\n\n**Gaps**\n- **Production Kubernetes ownership:** The role requires it and the candidate has none. This is a core requirement, not a nice-to-have, and it is the deciding factor.\n- **Cloud-specific evidence:** The supplied facts describe on-premise database migrations. Nothing shows whether any targeted a cloud environment, so cloud migration experience can't be assumed.\n- **Scope of the migrations:** The facts don't establish migration scale, outcomes, or whether the candidate's work extended beyond databases to applications or infrastructure.\n\n**Practical implication**\nIf the role expects the lead to personally own production Kubernetes, this candidate would be a risky hire and would likely need significant ramp-up on the platform that matters most. The risk is lower if the requirement can be met by a separate platform owner on the team, or if the role is mainly migration program leadership.\n\n**Recommendation**\nTreat the candidate as a conditional fit. Before proceeding, confirm:\n1. Whether the Kubernetes requirement is firm or can be met by a platform counterpart.\n2. Whether any of the three migrations moved workloads to a cloud environment.\n3. Whether the candidate has any non-production Kubernetes exposure. None is established, so it should not be assumed.\n\nIf the Kubernetes requirement is firm, the candidate does not qualify.",
+          "truncated": false,
+          "usage": {
+            "inputTokens": 2243,
+            "outputTokens": 866,
+            "totalTokens": 3109
+          }
+        }
+      ]
+    },
+    {
+      "name": "fictional cash analysis",
+      "task": "Analyze the projected cash position, highlight the most important supported conclusion, and distinguish facts from options. Do not assume new financing.",
+      "facts": "Opening cash $80000; receipts $35000; payments $140000; no approved financing or deferred payments.",
+      "outcome": "Projected $25000 shortfall, clear implication and labeled options without invented financing.",
+      "outputs": [
+        {
+          "variant": "revised",
+          "promptCharacters": 4611,
+          "text": "## Projected cash position\n\n**Ending cash: -$25,000** (a shortfall)\n\n| Item | Amount |\n|---|---|\n| Opening cash | $80,000 |\n| Receipts | +$35,000 |\n| Payments | -$140,000 |\n| **Projected ending cash** | **-$25,000** |\n\n## Most important supported conclusion\n\nUnder the current plan, cash runs out. Payments exceed opening cash plus receipts by $25,000, and no approved financing or deferred payments are available to cover the gap. Net outflow is $105,000 against $80,000 of opening cash.\n\n## Facts\n\n- Opening cash is $80,000.\n- Receipts are $35,000.\n- Payments are $140,000.\n- No financing is approved, and no payments are deferred.\n- The projected shortfall is $25,000.\n\n## Options (not facts, and none assumed in the projection)\n\nTo reach break-even, at least one of these would have to happen:\n\n- **Reduce payments** by $25,000 or more, to $115,000 or less.\n- **Increase or accelerate receipts** by $25,000 or more, to $60,000 or more.\n- **Combine both**, so the total improvement is at least $25,000.\n- **Negotiate deferrals.** None are approved, so this is only a possibility.\n- **Secure financing.** None is approved, so this is excluded from the projection.\n\nBreak-even leaves zero cash. Any buffer would require a larger improvement.\n\n## Limits of this analysis\n\nThe inputs don't say which payments are committed versus discretionary, when in the period they fall, or how certain the receipts are. Those details determine which options are realistic and whether cash goes negative before the period ends.",
+          "truncated": false,
+          "usage": {
+            "inputTokens": 2234,
+            "outputTokens": 760,
+            "totalTokens": 2994
+          }
+        }
+      ]
+    },
+    {
+      "name": "fictional technical diagnosis",
+      "task": "Diagnose this fictional checkout failure. Use the evidence; change nothing.",
+      "facts": "After a discount patch, invoice subtotal is 100, discount is 10, tax rate is 10 percent, stored tax is 10 and displayed total is 100. Tax should apply to discounted subtotal. No deployment or fix has been made.",
+      "outcome": "Tax applied before discount, expected total 99, precise diagnosis without false completion.",
+      "outputs": [
+        {
+          "variant": "revised",
+          "promptCharacters": 4611,
+          "text": "## Diagnosis\n\n**Most likely cause:** after the discount patch, tax is still calculated on the pre-discount subtotal instead of the discounted subtotal.\n\n| Item | Observed | Expected |\n|---|---|---|\n| Subtotal | 100 | 100 |\n| Discount | 10 | 10 |\n| Tax base | 100 (implied) | 90 |\n| Tax (10%) | 10 | 9 |\n| Total | 100 | 99 |\n\n**Reasoning**\n- The stored tax of 10 equals 10% of 100, the undiscounted subtotal. Tax on the discounted subtotal would be 9.\n- The displayed total of 100 equals 100 − 10 + 10, so the display is consistent with the stored tax. The display is not the faulty step. It is passing along an overstated tax value.\n- The customer is overcharged by 1 (tax 1 too high, total 1 too high).\n\n**Confidence and limits**\n- The numbers point to the tax base as the fault, but I have no code or logs. I can't say whether tax is computed before the discount is applied, or whether the discount just never reaches the tax calculation.\n- No fix or deployment has been made, and nothing has been changed.\n\n**Next check (read-only):** compare where tax is calculated relative to where the discount is applied. Then confirm with a second case, such as a different discount amount, to see if stored tax always equals the rate times the full subtotal.",
+          "truncated": false,
+          "usage": {
+            "inputTokens": 2262,
+            "outputTokens": 825,
+            "totalTokens": 3087
+          }
+        }
+      ]
+    },
+    {
+      "name": "fictional vendor communication",
+      "task": "Draft a short message to a fictional vendor about an overdue invoice. Promise an update Monday, not payment Monday. Avoid invented assurances.",
+      "facts": "Invoice is overdue. Payment timing and funding are unconfirmed. An update Monday is authorized; no payment date is authorized.",
+      "outcome": "Respectful useful communication without promising payment.",
+      "outputs": [
+        {
+          "variant": "revised",
+          "promptCharacters": 4611,
+          "text": "**Subject:** Overdue invoice: update Monday\n\nHello,\n\nWe're aware your invoice is overdue and apologize for the delay. We don't have a confirmed payment date, so we can't commit to one yet.\n\nWe'll send you an update on Monday.\n\nThank you for your patience.",
+          "truncated": false,
+          "usage": {
+            "inputTokens": 2250,
+            "outputTokens": 461,
+            "totalTokens": 2711
+          }
+        }
+      ]
+    }
+  ]
+}

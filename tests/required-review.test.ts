@@ -437,3 +437,38 @@ test("live website evidence reaches assessment, validation, revision and final r
   }
 });
 
+test("objective-first standard reaches independent assessment, comparison, revision and final verification without new stages", async () => {
+  const calls: ChatGenerateParams[] = [];
+  const rebuilt = "I have 25 years of finance and accounting leadership across manufacturing and global businesses. I led audit remediation for a $90M global professional services company. My manufacturing and multinational experience are separate; I have not performed international transfer pricing work.";
+  const reviewer = makeProvider("anthropic", async p => {
+    calls.push(p);
+    assert.match(p.persona, /KATIE_OBJECTIVE_FIRST_STANDARD/);
+    if (p.persona.includes("KATIE_INDEPENDENT_ASSESSMENT")) {
+      assert.match(p.persona, /Define an excellent response independently BEFORE seeing the draft/);
+      assert.ok(!p.user.includes(draft.text));
+      return response("anthropic", "reviewer", assessment);
+    }
+    if (p.user.includes(rebuilt)) {
+      assert.match(p.persona, /FINAL VERIFICATION: Reassess the complete revised response/);
+      assert.match(p.persona, /not merely that earlier requested edits were applied/);
+      assert.match(p.persona, /Do not fail any check merely because suggested wording/);
+      assert.match(p.persona, /strongest effective response is not a mandate for endless stylistic optimization/);
+      return response("anthropic", "reviewer", verdict("approve"));
+    }
+    assert.match(p.persona, /DRAFT COMPARISON: Compare the draft with the independently established ideal approach/);
+    return response("anthropic", "reviewer", verdict("revise"));
+  });
+  const lead = makeProvider("openai", async p => {
+    calls.push(p);
+    assert.match(p.persona, /KATIE_OBJECTIVE_FIRST_STANDARD/);
+    if (p.persona.includes("KATIE_TASK_CONTRACT_VALIDATION")) return contractApproval(p);
+    assert.match(p.persona, /Rebuild the argument when its strategy is wrong/);
+    return response("openai", "lead", rebuilt);
+  });
+  const result = await runRequiredDraftReview({ requestId: "objective-first-transport", draft,
+    params, leadProvider: lead, deadlineMs: deadline(),
+    selectHelper: async () => ({ provider: reviewer, modelId: "reviewer" }) });
+  assert.equal(result.audit.status, "revised");
+  assert.equal(result.result.text, rebuilt);
+  assert.equal(calls.length, 5, "Existing assessment, contract validation, comparison, revision and verification only");
+});

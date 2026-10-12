@@ -1,0 +1,158 @@
+{
+  "generatedAt": "2026-10-12T17:10:28.299Z",
+  "model": "claude-sonnet-5-5",
+  "method": "One same-model primary generation per prompt variant and fixture. No reviewer workflow or statistical quality claim. Baseline prompts from checked-out production-source commit; revised prompts from local branch.",
+  "dataScope": "Wholly fictional inputs; no BTG or real career facts",
+  "cases": [
+    {
+      "name": "fictional CFO application",
+      "task": "Write an application response for an industrial CFO role asking about manufacturing, multinational finance, audits and transfer pricing. Include verified revenue sizes. Use only these fictional facts.",
+      "facts": "Fictional candidate: 16 years finance and operations leadership. CFO of a domestic manufacturer with $72M annual revenue; international distributor negotiation responsibilities. Interim CFO of a multinational software company with $48M annual revenue and $150M enterprise valuation. Completed audit remediation in eight months; led ERP migration and supported an acquisition. No direct international transfer pricing experience. Never CFO of a multinational manufacturer. A prior hospitality side business is irrelevant.",
+      "outcome": "Truthful executive value, separate engagements and metrics, concise required limitation.",
+      "outputs": [
+        {
+          "variant": "baseline",
+          "promptCharacters": 3593,
+          "text": "**Application Response: Chief Financial Officer, Industrial Company**\n\nI bring 16 years of finance and operations leadership, including CFO experience in manufacturing and interim CFO experience in a multinational setting.\n\n**Manufacturing**\nAs CFO of a domestic manufacturer with $72M in annual revenue, I led finance for a production business and carried responsibility for negotiations with international distributors. That work gave me direct experience linking operational performance, commercial terms and financial results in a manufacturing environment.\n\n**Multinational Finance**\nI served as interim CFO of a multinational software company with $48M in annual revenue. In that role I led finance across a multinational structure and supported an acquisition. I have not been CFO of a multinational manufacturer. What I offer is manufacturing CFO experience combined with multinational finance leadership.\n\n**Audits**\nI completed an audit remediation in eight months. That work required prioritizing findings, establishing clear ownership and building controls that held up under review. I also led an ERP migration, which strengthened process discipline and the reliability of financial reporting.\n\n**Transfer Pricing**\nI have no direct international transfer pricing experience. My nearest relevant background is negotiating with international distributors, leading finance in a multinational company, and strengthening controls and systems through audit remediation and ERP work. I would use that foundation to build transfer pricing competence quickly.\n\n**Why I Fit**\nI offer proven manufacturing finance leadership at $72M in revenue, multinational finance leadership at $48M in revenue, and a record of fixing control weaknesses, modernizing systems and supporting growth transactions. I would bring that operating discipline to your finance organization.",
+          "truncated": false,
+          "usage": {
+            "inputTokens": 2037,
+            "outputTokens": 1221,
+            "totalTokens": 3258
+          }
+        },
+        {
+          "variant": "revised",
+          "promptCharacters": 4994,
+          "text": "**Application Response: Chief Financial Officer, Industrial Manufacturer**\n\nI bring 16 years of finance and operations leadership. That includes CFO responsibility at a domestic manufacturer and interim CFO leadership at a multinational software company. Here is how that experience maps to your four focus areas.\n\n**Manufacturing**\nI am currently CFO of a domestic manufacturer with $72M in annual revenue. I own the full finance function there and have negotiated with international distributors, so I understand how channel terms affect margin, working capital and cash flow in a manufacturing business.\n\n**Multinational finance**\nI served as interim CFO of a multinational software company with $48M in annual revenue, where I was accountable for finance in a business operating across borders. I have also led an ERP migration and supported an acquisition, both directly relevant to scaling and integrating a multinational finance organization. I have not been CFO of a multinational manufacturer. My multinational experience comes from the software company, and my manufacturing experience comes from the domestic manufacturer. I would bring both to this role.\n\n**Audits**\nI completed an audit remediation in eight months. That work required clear ownership, disciplined process fixes and sustained follow-through to get the finance function to a defensible, audit-ready position. I would apply the same approach to controls and reporting here.\n\n**Transfer pricing**\nI do not have direct international transfer pricing experience. What I offer is adjacent: international distributor negotiations, multinational finance leadership, and ERP and acquisition work that depend on the same underlying discipline of structure, documentation and control. I would expect to work closely with specialist tax advisors on transfer pricing policy while contributing the commercial and operational judgment to pressure-test it.\n\n**Summary**\nI offer proven CFO leadership at $72M in revenue, multinational finance leadership at $48M in revenue, and a record of delivering audit remediation, ERP migration and acquisition support. The one area where I would be building depth rather than drawing on direct experience is transfer pricing, and I have addressed it openly above.",
+          "truncated": false,
+          "usage": {
+            "inputTokens": 2485,
+            "outputTokens": 1340,
+            "totalTokens": 3825
+          }
+        }
+      ]
+    },
+    {
+      "name": "fictional fit assessment",
+      "task": "Assess this fictional candidate for a cloud migration lead role. Balance strengths and gaps; do not write an application.",
+      "facts": "Candidate led three on-premise database migrations and managed teams of six. No production Kubernetes experience. The role requires production Kubernetes ownership.",
+      "outcome": "Balanced fit judgment with an explicit relevant gap; no unsupported equivalence.",
+      "outputs": [
+        {
+          "variant": "baseline",
+          "promptCharacters": 3593,
+          "text": "## Assessment: Cloud Migration Lead\n\n**Verdict:** Partial fit. Strong on migration delivery and people leadership, but the candidate does not meet the role's core requirement of production Kubernetes ownership. As specified, I would not advance them for this role.\n\n### Strengths\n- **Migration delivery:** Led three on-premise database migrations, which shows end-to-end ownership of data movement, cutover planning, and risk management.\n- **Team leadership:** Managed teams of six, a credible span for a lead-level role.\n- **Repeatability:** Three migrations suggest a practiced approach rather than a one-off success.\n\n### Gaps\n- **No production Kubernetes experience (critical):** The role requires owning production Kubernetes. This is a hard requirement, not a preference, and it can't be closed quickly. Production ownership means operating under real reliability, scaling, security, and incident pressure, which is different from lab or course exposure.\n- **Unconfirmed cloud depth:** The facts show on-premise database migrations. They don't establish whether any targeted a cloud platform, or whether the candidate has designed cloud-native architecture.\n- **Scope limited to databases:** Application, networking, and platform migration experience is not evidenced.\n\n### Risk if hired as-is\nThe candidate would likely lead the migration program competently but depend heavily on others for the container platform. For a role that requires owning that platform, that is a structural weakness.\n\n### What would change the assessment\n1. Whether the Kubernetes requirement is firm or could be covered by a senior platform engineer on the team.\n2. Whether any of the three migrations moved workloads to a public cloud.\n3. Whether the candidate has non-production Kubernetes or adjacent container experience, which would shorten the ramp but not remove the gap.\n\n### Recommendation\nDo not advance for this role as defined. Consider the candidate for a migration program manager or database migration lead role, or revisit if the Kubernetes requirement can be relaxed or backed by a dedicated platform owner.",
+          "truncated": false,
+          "usage": {
+            "inputTokens": 1898,
+            "outputTokens": 925,
+            "totalTokens": 2823
+          }
+        },
+        {
+          "variant": "revised",
+          "promptCharacters": 4994,
+          "text": "## Verdict\n**Partial fit, not ready for the role as stated.** The candidate has relevant migration and leadership experience, but the role requires production Kubernetes ownership, and they have none. Unless that requirement is flexible, this is a material gap.\n\n## Strengths\n- **Migration delivery:** They led three on-premise database migrations, which is direct experience running migration programs end to end.\n- **People leadership:** They managed teams of six, enough to lead a migration workstream or a small program team.\n\n## Gaps\n- **No production Kubernetes experience.** The role requires owning it, so the gap is in a core requirement, not a nice-to-have. Production ownership means more than familiarity: it covers operations, incident response, upgrades, scaling, and reliability. Courses or lab work would not close it.\n- **Scope of the migrations is unclear.** Database migrations are one part of a cloud migration. The facts don't show whether the destinations were cloud environments, or whether the candidate handled application, networking, security, or platform work.\n\n## Practical implications\n- **If Kubernetes is truly central to the role:** the candidate would be learning the core of the job while leading others, which is a real delivery risk.\n- **If the role is mainly program leadership and Kubernetes ownership can sit with a strong platform engineer:** the candidate becomes viable, with the gap covered by team structure.\n\n## What would change the assessment\n1. Whether the three migrations targeted cloud platforms, and which workloads they covered beyond databases.\n2. Whether the role allows a platform or SRE counterpart to own Kubernetes operations.\n3. Whether the candidate has any adjacent container or orchestration exposure, which would narrow the gap but not eliminate it.\n\n## Recommendation\nDon't advance for the role as written. Consider it only if the Kubernetes requirement can be restructured, or if confirmation of cloud-target migrations plus a credible ramp plan makes the risk acceptable.",
+          "truncated": false,
+          "usage": {
+            "inputTokens": 2346,
+            "outputTokens": 903,
+            "totalTokens": 3249
+          }
+        }
+      ]
+    },
+    {
+      "name": "fictional cash analysis",
+      "task": "Analyze the projected cash position, highlight the most important supported conclusion, and distinguish facts from options. Do not assume new financing.",
+      "facts": "Opening cash $80000; receipts $35000; payments $140000; no approved financing or deferred payments.",
+      "outcome": "Projected $25000 shortfall, clear implication and labeled options without invented financing.",
+      "outputs": [
+        {
+          "variant": "baseline",
+          "promptCharacters": 3593,
+          "text": "## Projected cash position\n\n| Item | Amount |\n|---|---|\n| Opening cash | $80,000 |\n| Receipts | +$35,000 |\n| Payments | −$140,000 |\n| **Projected ending cash** | **−$25,000** |\n\n## Most important conclusion\n**On the verified figures, the plan runs a $25,000 cash shortfall.** Opening cash plus receipts ($115,000) covers about 82% of planned payments ($140,000). With no approved financing and no deferred payments, nothing in the current facts closes the gap.\n\n## Facts (supported)\n- Opening cash is $80,000, receipts are $35,000, and payments are $140,000.\n- The ending position is −$25,000.\n- No financing is approved, and no payments are deferred.\n- Payments are 4x receipts, so the gap is driven mainly by outflows far exceeding inflows, not by a thin opening balance alone.\n\n## Options (not facts, none currently in place)\nTo reach break-even, one or a combination of these would be needed:\n- **Reduce or eliminate payments** by at least $25,000, about 18% of planned payments.\n- **Increase receipts** by at least $25,000, about a 71% increase over the $35,000 projected.\n- **Negotiate deferrals** of at least $25,000 in payments. This is not approved and would only move the shortfall to a later period.\n\nA cushion beyond break-even would require a larger adjustment.\n\n## Limits of this analysis\nThe figures give only the period-end position. If large payments fall before receipts arrive, cash could go negative earlier than the ending balance suggests. Payment and receipt timing would be needed to confirm that.",
+          "truncated": false,
+          "usage": {
+            "inputTokens": 1889,
+            "outputTokens": 820,
+            "totalTokens": 2709
+          }
+        },
+        {
+          "variant": "revised",
+          "promptCharacters": 4994,
+          "text": "## Projected cash position\n\n| Item | Amount |\n|---|---|\n| Opening cash | $80,000 |\n| Receipts | +$35,000 |\n| Payments | −$140,000 |\n| **Projected ending cash** | **−$25,000** |\n\n## Key conclusion\n\nOn the verified figures, the plan runs out of cash. Opening cash plus receipts total $115,000 against $140,000 of payments, leaving a **$25,000 shortfall**. With no approved financing or deferred payments, nothing on record covers it.\n\nReceipts cover only 25% of payments, so the plan relies mostly on opening cash, which is exhausted before the period ends. The ending figure is also before any minimum cash buffer, so the real gap is at least $25,000.\n\n## Facts\n\n- Opening cash is $80,000.\n- Receipts are $35,000.\n- Payments are $140,000.\n- No financing is approved, and no payments are deferred.\n- The resulting shortfall is $25,000.\n\n## Options (none approved or assumed)\n\nTo close the gap, one or a combination of these would be needed:\n\n- **Reduce payments** by at least $25,000, about 18% of the total.\n- **Increase or accelerate receipts** by at least $25,000, which would mean receipts rising about 71%.\n- **Defer or renegotiate payments.** This would need agreement, and none exists today.\n- **Obtain financing.** This is excluded from the analysis because none is approved.\n\nA combination is more realistic than relying on receipts alone. Without a payment schedule, I can't say which payments are discretionary or when the cash runs out within the period. That timing is the next thing to establish.",
+          "truncated": false,
+          "usage": {
+            "inputTokens": 2337,
+            "outputTokens": 791,
+            "totalTokens": 3128
+          }
+        }
+      ]
+    },
+    {
+      "name": "fictional technical diagnosis",
+      "task": "Diagnose this fictional checkout failure. Use the evidence; change nothing.",
+      "facts": "After a discount patch, invoice subtotal is 100, discount is 10, tax rate is 10 percent, stored tax is 10 and displayed total is 100. Tax should apply to discounted subtotal. No deployment or fix has been made.",
+      "outcome": "Tax applied before discount, expected total 99, precise diagnosis without false completion.",
+      "outputs": [
+        {
+          "variant": "baseline",
+          "promptCharacters": 3593,
+          "text": "**Diagnosis: tax is being calculated on the pre-discount subtotal.**\n\n**Evidence**\n- Subtotal 100, discount 10, so the discounted subtotal is 90.\n- Expected tax is 10% of 90 = **9**, and the expected total is 90 + 9 = **99**.\n- Observed stored tax is **10**, which is 10% of 100. That matches the undiscounted subtotal.\n- Observed displayed total is **100**, which is 100 − 10 + 10. The discount is applied to the total, but the tax was never reduced to match.\n\n**Impact**\n- Tax is overstated by 1 and the total by 1 (100 vs. 99).\n- The discount is only partly reflected: it lowers the total but not the tax.\n\n**Likely cause**\nThe discount patch applies the discount to the total but doesn't feed the discounted amount into the tax calculation. Either tax is computed before the discount is applied, or the stored tax value isn't recalculated afterward. The evidence points to the tax's input, not the rate or the total arithmetic.\n\n**Not established**\nThe fixture shows the numbers, not the code path, so I can't say which step is out of order or whether already-stored invoices are affected beyond this one.\n\n**Status**\nNo fix has been made and nothing has been deployed. This is a diagnosis only.",
+          "truncated": false,
+          "usage": {
+            "inputTokens": 1917,
+            "outputTokens": 729,
+            "totalTokens": 2646
+          }
+        },
+        {
+          "variant": "revised",
+          "promptCharacters": 4994,
+          "text": "## Diagnosis\n\n**The tax is calculated on the pre-discount subtotal, so the customer is overcharged by 1.**\n\n| Item | Expected | Observed |\n|---|---|---|\n| Subtotal | 100 | 100 |\n| Discount | 10 | 10 |\n| Taxable base | 90 (discounted subtotal) | 100 (implied) |\n| Tax at 10% | 9 | 10 |\n| Total | 99 | 100 |\n\n**Reasoning:** The stored tax of 10 is exactly 10% of 100, not 10% of 90, so the tax step is not seeing the discount. The displayed total of 100 equals 100 − 10 + 10. The discount is applied to the total, but the tax was never reduced to match.\n\n**Likely cause:** Either the tax is computed before the discount in the order of operations, or it reads the original subtotal instead of the discounted one. A third possibility is that the tax was stored earlier and is not recalculated when the discount patch applies. The evidence supports the symptom and the wrong tax base, but it can't tell these three apart.\n\n**To confirm:** Check where the tax is calculated relative to the discount in the checkout flow, which value feeds the tax calculation, and whether tax is recalculated after a discount is applied.\n\n**Status:** This is a diagnosis from the fixture numbers only. No fix has been made, nothing has been deployed, and the code path has not been inspected.",
+          "truncated": false,
+          "usage": {
+            "inputTokens": 2365,
+            "outputTokens": 919,
+            "totalTokens": 3284
+          }
+        }
+      ]
+    },
+    {
+      "name": "fictional vendor communication",
+      "task": "Draft a short message to a fictional vendor about an overdue invoice. Promise an update Monday, not payment Monday. Avoid invented assurances.",
+      "facts": "Invoice is overdue. Payment timing and funding are unconfirmed. An update Monday is authorized; no payment date is authorized.",
+      "outcome": "Respectful useful communication without promising payment.",
+      "outputs": [
+        {
+          "variant": "baseline",
+          "promptCharacters": 3593,
+          "text": "**Subject:** Overdue invoice: update Monday\n\nHi,\n\nI know your invoice is overdue, and I apologize for the delay. I don't have confirmed payment timing yet, so I won't give you a date I can't stand behind.\n\nI will send you an update on Monday on where things stand.\n\nThank you for your patience.",
+          "truncated": false,
+          "usage": {
+            "inputTokens": 1905,
+            "outputTokens": 440,
+            "totalTokens": 2345
+          }
+        },
+        {
+          "variant": "revised",
+          "promptCharacters": 4994,
+          "text": "**Subject: Overdue invoice, update Monday**\n\nHi,\n\nI'm writing about the overdue invoice. We know it's past due, and we apologize for the delay.\n\nWe can't confirm a payment date yet, as timing and funding are still being finalized. We will send you an update on Monday on where things stand.\n\nIf you need anything from us in the meantime, such as a copy of the invoice or updated remittance details, let me know.\n\nThank you for your patience.\n\nKatie",
+          "truncated": false,
+          "usage": {
+            "inputTokens": 2353,
+            "outputTokens": 278,
+            "totalTokens": 2631
+          }
+        }
+      ]
+    }
+  ]
+}

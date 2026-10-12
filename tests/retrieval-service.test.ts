@@ -1,66 +1,66 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { RetrievalService, type EmbeddingProvider, type RetrievalCandidate } from "../packages/retrieval/src/service";
+import { RetrievalService, type DbClient, type QueryResultRow } from "../packages/retrieval/src/service";
 
-class StubEmbeddingProvider implements EmbeddingProvider {
-  public calls: string[] = [];
-
-  constructor(private readonly embedding: number[]) {}
-
-  async embedQuery(input: string): Promise<number[]> {
-    this.calls.push(input);
-    return this.embedding;
-  }
-}
-
-test("retrieval service requests query embedding from provider", async () => {
-  const provider = new StubEmbeddingProvider([0.12, 0.9, 0.4]);
-  const service = new RetrievalService(provider);
-
-  await service.rankCandidates({ query: "neural search" }, []);
-
-  assert.deepEqual(provider.calls, ["neural search"]);
+test("retrieval embeds the query and binds the vector and default limit", async () => {
+  const vector = [0.12, 0.9, 0.4];
+  const calls: string[] = [];
+  const db: DbClient = {
+    async query(sql, params) {
+      assert.match(sql, /embedding <=> \$2::vector/);
+      assert.deepEqual(params, ["neural search", vector, 10]);
+      return { rows: [] };
+    },
+  };
+  const service = new RetrievalService(db, {
+    async embed(query) { calls.push(query); return vector; },
+  });
+  assert.deepEqual(await service.search("neural search"), []);
+  assert.deepEqual(calls, ["neural search"]);
 });
 
-test("retrieval service normalizes scores and ranks with weighted merge", async () => {
-  const provider = new StubEmbeddingProvider([0.3, 0.1, 0.2]);
-  const service = new RetrievalService(provider);
-  const candidates: RetrievalCandidate[] = [
-    { id: "doc-a", keywordScore: 10, vectorScore: 0.2 },
-    { id: "doc-b", keywordScore: 30, vectorScore: 0.8 },
-    { id: "doc-c", keywordScore: 20, vectorScore: 0.5 }
+test("retrieval delegates weighted ranking to SQL and preserves database rows and scores", async () => {
+  const rows: QueryResultRow[] = [
+    { id: "doc-b", content: "B", keyword_score: 0.2, vector_score: 0.8, hybrid_score: 0.53 },
+    { id: "doc-a", content: "A", keyword_score: 0.9, vector_score: 0.1, hybrid_score: 0.46 },
   ];
-
-  const ranked = await service.rankCandidates({ query: "rank candidates" }, candidates);
-
-  assert.deepEqual(
-    ranked.map((candidate) => candidate.id),
-    ["doc-b", "doc-c", "doc-a"]
-  );
-
-  const docB = ranked.find((candidate) => candidate.id === "doc-b");
-  const docC = ranked.find((candidate) => candidate.id === "doc-c");
-  const docA = ranked.find((candidate) => candidate.id === "doc-a");
-
-  assert.equal(docB?.normalizedKeywordScore, 1);
-  assert.equal(docB?.normalizedVectorScore, 1);
-  assert.equal(docB?.score, 1);
-
-  assert.equal(docC?.normalizedKeywordScore, 0.5);
-  assert.ok(Math.abs((docC?.normalizedVectorScore ?? 0) - 0.5) < 1e-12);
-  assert.ok(Math.abs((docC?.score ?? 0) - 0.5) < 1e-12);
-
-  assert.equal(docA?.normalizedKeywordScore, 0);
-  assert.equal(docA?.normalizedVectorScore, 0);
-  assert.equal(docA?.score, 0);
+  const db: DbClient = {
+    async query<T>(sql: string, params: readonly unknown[]) {
+      assert.match(sql, /0\.45 \* keyword_score/);
+      assert.match(sql, /0\.55 \* vector_score/);
+      assert.match(sql, /ts_rank_cd/);
+      assert.match(sql, /ORDER BY hybrid_score DESC/);
+      assert.match(sql, /LIMIT \$3/);
+      assert.equal(params[2], 2);
+      // Generic DB adapters trust the caller's row type; this fixture does the same.
+      return { rows: rows as T[] };
+    },
+  };
+  const service = new RetrievalService(db, { async embed() { return [0.3, 0.1, 0.2]; } });
+  assert.strictEqual(await service.search("rank candidates", 2), rows);
 });
 
-test("retrieval service rejects zero query embedding", async () => {
-  const provider = new StubEmbeddingProvider([0, 0, 0]);
-  const service = new RetrievalService(provider);
+test("retrieval propagates embedding failures without querying the database", async () => {
+  const failure = new Error("embedding unavailable");
+  const service = new RetrievalService({
+    async query() { assert.fail("database must not be queried after embedding failure"); },
+  }, { async embed() { throw failure; } });
+  await assert.rejects(service.search("bad embedding"), error => error === failure);
+});
 
-  await assert.rejects(
-    () => service.rankCandidates({ query: "bad embedding" }, []),
-    /query embedding must contain at least one non-zero value/
-  );
+test("retrieval passes zero vectors to the database without adding application validation", async () => {
+  let queried = false;
+  const service = new RetrievalService({
+    async query(_sql, params) { queried = true; assert.deepEqual(params[1], [0, 0, 0]); return { rows: [] }; },
+  }, { async embed() { return [0, 0, 0]; } });
+  assert.deepEqual(await service.search("zero embedding"), []);
+  assert.equal(queried, true);
+});
+
+test("retrieval propagates database failures", async () => {
+  const failure = new Error("database unavailable");
+  const service = new RetrievalService({ async query() { throw failure; } }, {
+    async embed() { return [1]; },
+  });
+  await assert.rejects(service.search("query"), error => error === failure);
 });

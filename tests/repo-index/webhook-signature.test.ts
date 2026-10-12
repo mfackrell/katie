@@ -7,7 +7,7 @@ describe('webhook signature', () => {
     const secret = 'secret';
     const body = JSON.stringify({ hello: 'world' });
     const sig = `sha256=${crypto.createHmac('sha256', secret).update(body).digest('hex')}`;
-    expect(verifyGithubWebhookSignature(body, sig, secret)).toBe(true);
-    expect(verifyGithubWebhookSignature(body, sig, 'wrong')).toBe(false);
+    expect(verifyGithubWebhookSignature({ rawPayload: body, signatureHeader: sig, secret })).toBe(true);
+    expect(verifyGithubWebhookSignature({ rawPayload: body, signatureHeader: sig, secret: 'wrong' })).toBe(false);
   });
 });

@@ -13,15 +13,17 @@
     "start:runtime": "next start",
     "lint": "next lint",
     "typecheck": "tsc --noEmit",
-    "test": "node --test tests/url-api.test.mjs && rm -rf .test-dist && (tsc -p tsconfig.tests.json || true) && mkdir -p .test-dist/node_modules && ln -sfn .. .test-dist/node_modules/@ && test -f .test-dist/tests/google-routing.test.js && node --test .test-dist/tests/local-katie-inspection.test.js .test-dist/tests/google-routing.test.js .test-dist/tests/chat-video-routing.test.js .test-dist/tests/clip-routing.test.js .test-dist/tests/policy-engine.test.js .test-dist/tests/persistence-store.test.js .test-dist/tests/chat-panel-guard.test.js .test-dist/tests/inflight-guards.test.js .test-dist/tests/starter-chat-idempotency.test.js .test-dist/tests/reasoning-stream.test.js .test-dist/tests/reasoning-ui-state.test.js .test-dist/tests/video-ingestion.test.js .test-dist/tests/collaboration.test.js .test-dist/tests/claude-provider.test.js .test-dist/tests/creative-continuity.test.js .test-dist/tests/grok-provider.test.js .test-dist/tests/direct-upload.test.js .test-dist/tests/server-video-frame-recovery.test.js .test-dist/tests/attachment-continuity.test.js .test-dist/tests/attachment-discovery.test.js .test-dist/tests/long-term-editor.test.js .test-dist/tests/model-registry.test.js .test-dist/tests/repo/content-injector.test.js .test-dist/tests/website-evidence.test.js && node --test .test-dist/tests/provider-response-errors.test.js .test-dist/tests/runpod-video-fallback.test.js && node --test tests/chat-recovery.test.mjs && node --test .test-dist/tests/stored-website-evidence.test.js && node --test .test-dist/tests/chat-failure-regressions.test.js",
+    "test": "node scripts/run-tests.mjs",
     "check:url": "node scripts/check-no-legacy-url.mjs",
     "db:migrate": "node scripts/run-migrations.mjs",
     "smoke": "node scripts/smoke-runtime.mjs",
-    "ci:gate": "npm run test && npm run test:review && npm run check:url && npm run build && npm run smoke",
-    "test:website": "rm -rf .website-test-dist && tsc -p tsconfig.website-tests.json && mkdir -p .website-test-dist/node_modules && ln -sfn .. .website-test-dist/node_modules/@ && node scripts/prepare-website-browser.mjs && node --test .website-test-dist/tests/visual-review.test.js .website-test-dist/tests/local-katie-inspection.test.js .website-test-dist/tests/website-evidence.test.js .website-test-dist/tests/claude-provider.test.js .website-test-dist/tests/grok-provider.test.js .website-test-dist/tests/direct-upload.test.js .website-test-dist/tests/server-video-frame-recovery.test.js .website-test-dist/tests/attachment-continuity.test.js .website-test-dist/tests/attachment-discovery.test.js && node --test .website-test-dist/tests/collaboration.test.js && node --test .website-test-dist/tests/provider-response-errors.test.js && node --test tests/chat-recovery.test.mjs && node --test .website-test-dist/tests/stored-website-evidence.test.js && node --test .website-test-dist/tests/chat-failure-regressions.test.js",
+    "ci:gate": "npm run typecheck && npm test && npm run check:url && npm run build && npm run smoke",
+    "test:website": "node scripts/run-tests.mjs website",
     "postbuild": "node scripts/video-upload-production-smoke.mjs",
-    "test:video-fallback": "rm -rf .test-dist && (tsc -p tsconfig.tests.json || true) && mkdir -p .test-dist/node_modules && ln -sfn .. .test-dist/node_modules/@ && node --test .test-dist/tests/runpod-video-fallback.test.js",
-    "test:review": "tsc -p tsconfig.website-tests.json && mkdir -p .website-test-dist/node_modules && ln -sfn .. .website-test-dist/node_modules/@ && node --test .website-test-dist/tests/required-review.test.js .website-test-dist/tests/review-continuity.test.js .website-test-dist/tests/task-progress.test.js .website-test-dist/tests/actors-route.test.js .website-test-dist/tests/collaboration.test.js"
+    "test:video-fallback": "node scripts/run-tests.mjs video-fallback",
+    "test:review": "node scripts/run-tests.mjs review",
+    "test:vitest": "node scripts/run-tests.mjs vitest",
+    "test:integration": "node scripts/run-tests.mjs integration"
   },
   "dependencies": {
     "@fastify/rate-limit": "^10.3.0",
@@ -71,4 +73,3 @@
     "@ffmpeg-installer/linux-x64": "4.1.0"
   }
 }
-
