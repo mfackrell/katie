@@ -37,6 +37,14 @@ jobs:
         with:
           node-version: '22'
           cache: npm
+      - name: Verify GitHub Actions has a Codex API key
+        env:
+          CODEX_KEY_CONFIGURED: ${{ secrets.OPENAI_API_KEY != '' }}
+        run: |
+          if [ "$CODEX_KEY_CONFIGURED" != "true" ]; then
+            echo "::error::OPENAI_API_KEY is missing from this repository's GitHub Actions secrets. Vercel variables are not automatically shared with GitHub Actions."
+            exit 1
+          fi
       - run: npm ci
       - name: Create isolated branch and task
         id: task
@@ -292,15 +300,16 @@ jobs:
 
   report:
     needs: [build, test, review, repair, final-review]
-    if: always() && needs.build.result == 'success'
+    if: ${{ always() && (github.event_name == 'workflow_dispatch' || (startsWith(github.event.issue.title, '[agent]') && github.event.issue.user.login == github.repository_owner)) }}
     runs-on: ubuntu-latest
     steps:
-      - name: Report to issue and draft PR
+      - name: Report success or failure to the owner issue
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-          ISSUE: ${{ needs.build.outputs.issue }}
+          ISSUE: ${{ needs.build.outputs.issue || github.event.issue.number || inputs.issue_number }}
           PR: ${{ needs.build.outputs.pr }}
+          BUILD: ${{ needs.build.result }}
           TEST: ${{ needs.test.outputs.passed }}
           REVIEW: ${{ needs.review.outputs.verdict }}
           REPAIR: ${{ needs.repair.result }}
@@ -317,11 +326,12 @@ jobs:
           {
             echo "### Autonomous result: $outcome"
             echo
-            echo "- Initial tests: $TEST; independent review: $REVIEW"
+            echo "- Build: $BUILD; initial tests: $TEST; independent review: $REVIEW"
             echo "- Automated repair: $REPAIR; final tests: $RETEST; final review: $FINAL"
             echo "- [Run logs and review artifacts]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID)"
             echo
-            echo 'No merge or deployment occurred. This PR remains draft pending approval.'
+            echo 'No merge or deployment occurred.'
+            if [[ -n "$PR" ]]; then echo 'The PR remains a draft pending approval.'; else echo 'No draft PR was produced; inspect the failed workflow before retrying.'; fi
           } > "$RUNNER_TEMP/agent-report.md"
-          gh pr comment "$PR" --repo "$GITHUB_REPOSITORY" --body-file "$RUNNER_TEMP/agent-report.md"
+          if [[ -n "$PR" ]]; then gh pr comment "$PR" --repo "$GITHUB_REPOSITORY" --body-file "$RUNNER_TEMP/agent-report.md"; fi
           gh issue comment "$ISSUE" --repo "$GITHUB_REPOSITORY" --body-file "$RUNNER_TEMP/agent-report.md"
