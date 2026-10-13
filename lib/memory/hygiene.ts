@@ -4,7 +4,7 @@ import {
   getMessages,
   getRecentMessages,
   setActorSystemPrompt,
-  setLongTermMemory,
+  mergeActorLongTermMemoryEntries,
 } from "@/lib/data/persistence-store";
 import { filterConversationalMessages } from "@/lib/memory/short-term";
 import type { Message } from "@/lib/types/chat";
@@ -218,23 +218,20 @@ export async function maintainMemoryArchitecture(actorId: string, chatId: string
     ? filterConversationalMessages(recentRaw)
     : filterConversationalMessages(await getMessages(chatId));
 
-  const userMessageIds = evidenceIdsForUserMessages(sourceMessages);
-  const entries = normalizeProvenance(asEntries(currentLongTerm), userMessageIds);
-  addExplicitInteractionPreferences(entries, sourceMessages);
-
-  const nextMemory: LongTermMemoryV3 = {
-    version: 3,
-    purpose: LONG_TERM_PURPOSE,
-    entries: stableSort(entries),
-  };
-
-  if (serialize(nextMemory) !== serialize(currentLongTerm as LongTermMemoryV3)) {
-    await setLongTermMemory(actorId, chatId, nextMemory);
-    console.log("[MemoryHygiene] Long-term memory normalized", {
-      actorId,
-      chatId,
-      entryCount: nextMemory.entries.length,
-      upgradedFromVersion: currentLongTerm.version ?? null,
+  // Hygiene can contribute deterministic interaction preferences, but must
+  // never replace a stale actor-wide memory snapshot or discard other entries.
+  const suggestions: LongTermEntry[] = [];
+  addExplicitInteractionPreferences(suggestions, sourceMessages);
+  const existingByKey = new Map(asEntries(currentLongTerm).map(entry => [entry.key, entry]));
+  const changes = suggestions.filter(entry => {
+    const previous = existingByKey.get(entry.key);
+    return !previous || previous.value !== entry.value ||
+      JSON.stringify(previous.evidenceMessageIds) !== JSON.stringify(entry.evidenceMessageIds);
+  });
+  if (changes.length) {
+    await mergeActorLongTermMemoryEntries(actorId, changes);
+    console.log("[MemoryHygiene] Interaction preferences merged", {
+      actorId, chatId, entryCount: changes.length,
     });
   }
 }
