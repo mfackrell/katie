@@ -1,4 +1,4 @@
-import { getLongTermMemory, setLongTermMemory } from "@/lib/data/persistence-store";
+import { getLongTermMemory, mergeActorLongTermMemoryEntries } from "@/lib/data/persistence-store";
 
 // Explicit saves are not routed through the ordinary memory editor. That editor
 // may legitimately return no_change for everyday conversation, but an explicit
@@ -219,15 +219,9 @@ export async function extractAndSaveExplicitFacts(
     });
   }
   if (additions.length) {
-    const current = await getLongTermMemory(actorId, chatId);
-    const entries = existingEntries(current);
+    // Add extracted facts atomically. Parallel chats cannot overwrite learning.
+    await mergeActorLongTermMemoryEntries(actorId, additions);
     const prefix = "reference." + messageId + ".";
-    const nextEntries = entries.filter(entry => !entry.key.startsWith(prefix)).concat(additions);
-    await setLongTermMemory(actorId, chatId, {
-      version: 3,
-      purpose: typeof current.purpose === "string" ? current.purpose : "Actor-wide durable memory",
-      entries: nextEntries,
-    });
     const persisted = await getLongTermMemory(actorId, chatId);
     const confirmed = existingEntries(persisted).filter(e => e.key.startsWith(prefix));
     if (confirmed.length !== additions.length) throw new Error("Structured fact write verification failed");

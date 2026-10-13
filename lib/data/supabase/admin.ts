@@ -225,6 +225,33 @@ class PostgrestClient {
   from(table: string) {
     return new PostgrestQuery(this.config, table);
   }
+
+  async rpc<T = unknown>(name: string, args: Record<string, unknown>): QueryResult<T> {
+    try {
+      const response = await fetch(
+        `${this.config.url}/rest/v1/rpc/${encodeURIComponent(name)}`,
+        {
+          method: "POST",
+          headers: {
+            apikey: this.config.key,
+            Authorization: `Bearer ${this.config.key}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(args),
+          cache: "no-store",
+        },
+      );
+      if (!response.ok) {
+        return { data: null as T, error: { message: await response.text() || response.statusText } };
+      }
+      return { data: await response.json() as T, error: null };
+    } catch (error) {
+      return {
+        data: null as T,
+        error: { message: error instanceof Error ? error.message : "Supabase RPC request failed" },
+      };
+    }
+  }
 }
 
 declare global {
