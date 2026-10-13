@@ -324,6 +324,89 @@ test("bounded validation falls back before comparing after two material rejectio
   assert.equal(result.audit.pendingClarification,undefined);
 });
 
+test("full BTG context: old carve-out-only contract cannot overwrite broad relevant-experience question", async()=>{
+  const project = "Interim CFO for Global Industrial Client. A PE-backed industrial business needs senior finance leadership during transition, multi-entity and multinational oversight, audits and controls, manufacturing operating finance, business-separation reporting and systems/data transition.";
+  const original="Please share 3 to 5 examples of your relevant experience.";
+  const correction="no. answer this question: "+original;
+  const history=[
+    {role:"user" as const,content:project},
+    {role:"user" as const,content:"Please share examples of carve-outs or business separations. Include revenue sizes."},
+    {role:"user" as const,content:"The four separation examples should be Conscious Discipline, Komodo Cloud, Vitamin Health and Inovus; do not use audit recovery for that specific carve-out question."},
+    {role:"user" as const,content:original},
+    {role:"assistant" as const,content:"Previous answer focused only on carve-outs."},
+  ];
+  const parent={text:project,userMessageId:"job"};
+  const progress={
+    version:1 as const,objective:{text:original,userMessageId:"correction"},
+    projectContext:parent,stage:"working" as const,nextAction:"continue_original_goal" as const,
+    pending:[],answered:[],lastAssistantMessageId:null,lastUserMessageId:"correction",
+    lastUserIntent:"new_task" as const,
+  };
+  const input:ChatGenerateParams={
+    name:"Katie",modelId:"lead",
+    persona:getDeliverableStandardInstruction()+"\nVerified: $90M multinational accounting recovery, PE sale and interim CFO for education company, industrial CFO/operating leadership, solar business leadership, business-line carve-outs.",
+    summary:"",history,user:correction,
+  };
+  const originalDraft="1. PE multinational accounting recovery and ten-week audit. 2. Industrial manufacturing CFO and operations. 3. PE sale and year of Interim CFO responsibility. 4. Solar operating leadership. 5. Financial business-line separation.";
+  const broad=structuredClone(assessment);
+  broad.objective="Provide 3-5 representative examples demonstrating the whole PE-backed industrial Interim CFO mandate.";
+  broad.taskContract.deliverable="Examples covering the full project rather than only carve-outs";
+  broad.taskContract.requirements=[{id:"examples",requirement:"Provide 3 to 5 examples of relevant experience.",sourceId:"latest-user",quote:original,status:"active"}];
+  broad.taskContract.conflicts=[];
+  broad.synthesis={
+    conclusion:"Broad interim CFO capability across multinational close recovery, manufacturing, cross-functional operating leadership, PE transactions, and business-line separations.",
+    dimensions:[
+      {dimension:"multinational recovery",supportedScope:"PE-backed $90M recovery",evidence:["Job history"]},
+      {dimension:"industrial leadership",supportedScope:"Manufacturing CFO roles",evidence:["Career record"]},
+      {dimension:"operating and ownership transition",supportedScope:"Interim CFO and solar operations",evidence:["Career record"]},
+      {dimension:"separation",supportedScope:"Segment economics",evidence:["User-stated examples"]},
+    ],
+    emphasis:"Choose distinct examples representing all major project requirements.",
+  };
+  const bad=structuredClone(broad);
+  bad.objective="Four carve-out examples only; audit recovery and industrial leadership are irrelevant.";
+  bad.taskContract.requirements=[
+    {id:"old",requirement:"Use only the four named carve-out examples",sourceId:"turn-3",status:"active"},
+    {id:"examples",requirement:"Give 3 to 5 examples",sourceId:"latest-user",quote:original,status:"active"},
+  ];
+  const baseline=reviewBaseline(input,progress);
+  assert.equal(baseline.activeNewTask,true);
+  assert.equal(baseline.broadProjectQuestion,true);
+  assert.match(baseline.text,/BROAD RELEVANCE CHECK/);
+  assert.throws(()=>validateAssessment(bad,baseline.turns,{activeNewTask:true}),/completed earlier questions/);
+  assert.doesNotThrow(()=>validateAssessment(broad,baseline.turns,{activeNewTask:true}));
+  let attempts=0;
+  const reviewer=makeProvider("anthropic",async p=>{
+    if(p.persona.includes("KATIE_INDEPENDENT_ASSESSMENT")){
+      assert.match(p.user,/BROAD RELEVANCE CHECK/);
+      assert.match(p.user,/global industrial/i);
+      assert.ok(!p.user.includes(originalDraft),"Assessment must remain draft-blind");
+      return response("anthropic","reviewer",attempts++===0?bad:broad);
+    }
+    assert.match(p.user,/BROAD RELEVANCE CHECK/);
+    assert.match(p.user,/multinational recovery/);
+    const check={
+      verdict:"approve",findings:"The distinct examples cover the entire industrial Interim CFO engagement.",
+      checks:acceptanceIds(broad).map(id=>({id,passed:true,evidence:"The draft covers distinct project capabilities and factual examples."})),
+    };
+    return response("anthropic","reviewer",check);
+  });
+  const lead=makeProvider("openai",async p=>{
+    if(!p.persona.includes("KATIE_TASK_CONTRACT_VALIDATION"))throw new Error("Unexpected revision");
+    return contractApproval(p);
+  });
+  const result=await runRequiredDraftReview({
+    requestId:"btg-whole-project",draft:{provider:"openai",model:"lead",text:originalDraft},
+    params:input,taskProgress:progress,leadProvider:lead,deadlineMs:deadline(),
+    selectHelper:async()=>({provider:reviewer,modelId:"reviewer"}),
+  });
+  assert.equal(attempts,2);
+  assert.equal(result.audit.status,"approved");
+  assert.equal(result.result.text,originalDraft);
+  assert.match(result.audit.attempts[0].error??"",/completed earlier questions/);
+  assert.equal(result.audit.independentAssessment?.objective,broad.objective);
+});
+
 test("a generated rubric cannot omit the synthesis and economy acceptance gates", () => {
   const reduced = structuredClone(assessment);
   reduced.criteria = ["Accurate facts"];

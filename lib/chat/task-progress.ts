@@ -21,6 +21,8 @@ export type UserTurnIntent = "new_task" | "revision" | "feedback" | "answer" | "
 export type TaskProgressState = {
   version: 1;
   objective: { text: string; userMessageId: string } | null;
+  /** Firsthand overarching project/context, separate from the active question. */
+  projectContext?: { text: string; userMessageId: string } | null;
   stage: "working" | "awaiting_user_answer" | "answers_received";
   nextAction: "continue_original_goal" | "await_user_answers" | "advance_after_answers";
   pending: TaskQuestion[];
@@ -71,8 +73,17 @@ export function splitNumberedAnswers(input: string): Map<number, string> {
  * quoted inside a long assessment. This is an advisory continuity signal,
  * never a replacement for the actual user message.
  */
+/** Pull an explicit current question out of a corrective turn, without
+ * discarding the user's full message from the actual conversation evidence.
+ * Unlike ordinary "no" replies, "no, answer this question: ..." is a new task.
+ */
+export function explicitCurrentQuestion(message: string): string | null {
+  const match = message.trim().match(/^(?:no[.,!]\s*|instead[,:]?\s*|please\s+)?(?:answer|respond to|address)\s+(?:this|the following)\s+question\s*:\s*([\s\S]+)$/i);
+  return match?.[1]?.trim() || null;
+}
+
 export function classifyUserTurn(message: string): Exclude<UserTurnIntent, "answer"> {
-  const text = message.trim().replace(/^#{1,6}\s*/, "");
+  const text = (explicitCurrentQuestion(message) ?? message).trim().replace(/^#{1,6}\s*/, "");
   const opening = text.slice(0, 600);
 
   // An explicit "feedback only" boundary must not become another draft request.
@@ -92,7 +103,7 @@ export function classifyUserTurn(message: string): Exclude<UserTurnIntent, "answ
 
   // New standalone requests use leading imperatives, including common
   // application screening questions such as "Please describe your experience".
-  if (/^(?:new (?:task|topic|question)\b|(?:please\s+)?(?:write|draft|build|create|find|investigate|analy[sz]e|review|implement|compare|summari[sz]e|research|design|fix|describe|explain|provide|prepare|evaluate|assess|share|list|outline)\b)/i.test(text) &&
+  if (/^(?:new (?:task|topic|question|project|engagement)\b|(?:please\s+)?(?:write|draft|build|create|find|investigate|analy[sz]e|review|implement|compare|summari[sz]e|research|design|fix|describe|explain|provide|prepare|evaluate|assess|share|list|outline)\b)/i.test(text) &&
       !/^(?:try again|continue|go ahead|ok|yes|no)\b/i.test(text)) {
     return "new_task";
   }
@@ -127,6 +138,14 @@ export function applyUserToTaskProgress(
   if (previous.lastUserMessageId === input.messageId) return previous;
   const text = input.text.trim();
   if (!text) return previous;
+  const currentQuestion = explicitCurrentQuestion(text) ?? text;
+  // Keep the overarching user-supplied project distinct from a changing
+  // sequence of narrower questions. A wholly different project may supersede
+  // this context, but ordinary subquestions do not erase it.
+  const startsNewProject = /^(?:new|different|switch(?:ing)?\s+to\s+(?:a\s+)?)(?:\s+project|\s+engagement)\b/i.test(text);
+  const projectContext = startsNewProject
+    ? {text: currentQuestion.slice(0, 4000), userMessageId: input.messageId}
+    : (previous.projectContext ?? previous.objective ?? {text: currentQuestion.slice(0, 4000), userMessageId: input.messageId});
   const pending = previous.pending;
   const numbered = splitNumberedAnswers(text);
   const intent = classifyUserTurn(text);
@@ -134,7 +153,8 @@ export function applyUserToTaskProgress(
   if (!isAnswer) {
     return {
       ...previous,
-      ...(intent === "new_task" || !previous.objective ? { objective: { text: text.slice(0, 2000), userMessageId: input.messageId } } : {}),
+      projectContext,
+      ...(intent === "new_task" || !previous.objective ? { objective: { text: currentQuestion.slice(0, 2000), userMessageId: input.messageId } } : {}),
       pending: intent === "new_task" || intent === "revision" ? [] : previous.pending,
       answered: intent === "new_task" ? [] : previous.answered,
       stage: "working",
@@ -160,6 +180,7 @@ export function applyUserToTaskProgress(
   }
   return {
     ...previous,
+    projectContext,
     pending: remaining,
     answered: [...previous.answered, ...answered].slice(-MAX_ANSWERED),
     stage: "answers_received",
@@ -199,6 +220,7 @@ export function syncTaskProgress(previous: TaskProgressState | null, history: Pr
     return {
       ...recent,
       objective: recent.objective ?? previous.objective,
+      projectContext: previous.projectContext ?? previous.objective ?? recent.projectContext,
       answered: [...previous.answered, ...recent.answered]
         .filter((item, index, array) => array.findIndex(other => other.id === item.id && other.userMessageId === item.userMessageId) === index)
         .slice(-MAX_ANSWERED),
@@ -225,7 +247,9 @@ export function formatTaskProgress(progress: TaskProgressState): string {
     "This record links prior assistant QUESTIONS to subsequent user ANSWERS. The user's answers are authoritative. Assistant questions only explain what was being answered: do NOT adopt other assistant statements as facts or constraints.",
     "A follow-up answer advances an existing task. Do not restart the original assessment, re-ask answered questions, or turn confirmations into another generic summary. Complete the next useful step for the user's goal, subject to explicit new instructions.",
     "Do not treat this record as a permanent instruction. A user's explicit new request overrides old progress; a cached objective is provisional.",
-    "Provisional original objective: " + JSON.stringify(progress.objective),
+    "PARENT PROJECT CONTEXT (firsthand, advisory; only applicable if the current question refers to the same project): " + JSON.stringify(progress.projectContext ?? null),
+    "CURRENT QUESTION OR DELIVERABLE (authoritative for this turn, distinct from the parent project): " + JSON.stringify(progress.objective),
+    "Interpret generic requests for relevant experience or examples against the full applicable parent project, not against a narrower question asked earlier. Prior question-specific evidence priorities, exclusions and example sets expire with their original deliverable; factual corrections remain valid.",
     "Latest user turn type (advisory; verify against literal user request): " + (progress.lastUserIntent ?? "unspecified"),
     "When the user provides feedback/evaluation without requesting a revised artifact, engage with the feedback and do not silently generate another draft. Remember lessons appropriately without treating quoted criticism as a new instruction.",
     "When the user expressly asks for revision, revise the existing work. A new application question such as 'Please describe...' is a separate requested deliverable. User text takes precedence over this heuristic.",
