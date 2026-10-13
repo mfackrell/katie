@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { runRequiredDraftReview } from "../lib/collaboration/required-review";
+import { getDeliverableStandardInstruction } from "../lib/chat/deliverable-standard";
 import { createReviewClarification, buildReviewResumptionContext } from "../lib/collaboration/review-completion";
 import { acceptanceIds, reviewBaseline, validateAssessment, validateAnswerReview, type AnswerReview, type IndependentAssessment } from "../lib/collaboration/review-contract";
 import { normalizeReviewMode, shouldEnableActorCollaboration } from "../lib/collaboration/review-mode";
@@ -491,4 +492,138 @@ test("comparative review can preserve a sound original without requiring correct
   assert.ok(reviewCall);
   assert.match(reviewCall.persona, /do not mistake isolated compliance for improvement/);
   assert.match(reviewCall.persona, /implementing feedback is not itself evidence of improvement/);
+});
+
+
+/**
+ * These model-double regressions verify that the existing draft-blind reviewer
+ * receives capability-inference instructions, fails materially under/overstated
+ * conclusions, and validates a corrected answer. They do not substitute for
+ * live-model inference quality evaluations.
+ */
+const inferenceScenarios = [
+  {
+    name: "financial carve-out analysis without a project bearing that label",
+    question: "Describe my experience with financial carve-out analysis.",
+    evidence: "The user segregated revenue by business line, traced direct expenses, allocated shared costs with drivers, assessed stand-alone economics, prepared business-line reporting, and supported sell-side diligence. No verified legal-entity separation execution.",
+    wrong: "I have never done carve-out analysis because no engagement was formally titled a carve-out.",
+    correct: "I have performed substantive financial carve-out analysis within wider finance and transaction engagements, including revenue separation, cost attribution, shared-cost allocation, and stand-alone reporting. These facts do not establish that I executed an entire legal or operational separation.",
+  },
+  {
+    name: "prevent overclaim of complete operational separation",
+    question: "What scope of business separation work can I support?",
+    evidence: "The user separated reporting by unit, allocated shared costs and modeled independent profitability. The record contains no execution of corporate legal separation or operational disentanglement.",
+    wrong: "I led complete legal-entity carve-outs and disentangled all operations.",
+    correct: "My demonstrated work supports financial separation analysis and stand-alone reporting. A complete legal-entity separation or operational disentanglement is not established by these facts.",
+  },
+  {
+    name: "cross-domain technical capability without its industry shorthand",
+    question: "Assess whether this engineer has data pipeline integration experience.",
+    evidence: "The engineer built scheduled jobs extracting sales files from an API, validated and standardized fields, joined them with database records, and loaded the results into an analytics warehouse. The project never used the label ETL.",
+    wrong: "The engineer has no ETL experience because their history never says ETL.",
+    correct: "The engineer has substantively demonstrated extract-transform-load integration experience by implementing extraction, transformation and warehouse loading, even though the project never used the label ETL.",
+  },
+  {
+    name: "related accounting is not proof of a specialized transfer-pricing process",
+    question: "Assess whether the user's multinational finance experience establishes direct transfer-pricing execution.",
+    evidence: "The user managed multi-entity accounting, intercompany reconciliation, foreign-currency consolidation, and advisor coordination. The user explicitly states they have not directly performed international transfer-pricing work.",
+    wrong: "Managing intercompany reconciliations proves I personally executed international transfer-pricing studies.",
+    correct: "The user demonstrates transferable multinational accounting and advisor-coordination capability, but those activities do not establish direct execution of transfer-pricing studies; the explicit clarification rules out that claim.",
+  },
+] as const;
+
+for (const scenario of inferenceScenarios) {
+  test("capability-inference regression: " + scenario.name, async () => {
+    const source: ChatGenerateParams = {
+      name: "Katie", modelId: "lead",
+      persona: getDeliverableStandardInstruction() + "\nVerified evidence: " + scenario.evidence,
+      summary: "", user: "Answer the question using the established evidence.",
+      history: [{ role: "user", content: scenario.question }],
+    };
+    const initial: ProviderResponse = { provider: "openai", model: "lead", text: scenario.wrong };
+    const scenarioAssessment: IndependentAssessment = {
+      objective: "Answer accurately based on the substantive work described in the evidence.",
+      qualifications: ["Work establishes capabilities within demonstrated boundaries."],
+      strongestEvidence: [scenario.evidence],
+      criteria: ["Represent the substantive capability without understating or inventing experience."],
+      synthesis: {
+        conclusion: "Identify the demonstrated work and distinguish adjacent work from unsupported full-process claims.",
+        dimensions: [{
+          dimension: "Scope of actual capability",
+          supportedScope: scenario.evidence,
+          evidence: [scenario.evidence],
+        }],
+        emphasis: "Reason from activities rather than project labels while preserving limits.",
+      },
+      taskContract: {
+        deliverable: "Direct, evidence-grounded answer to the user's question.",
+        requirements: [{
+          id: "capability",
+          requirement: "Evaluate the user-provided evidence substantively.",
+          sourceId: "turn-1",
+          quote: scenario.question,
+          status: "active",
+        }],
+        conflicts: [],
+      },
+    };
+    const phases: string[] = [];
+    const reviewer = makeProvider("anthropic", async p => {
+      if (p.persona.includes("KATIE_INDEPENDENT_ASSESSMENT")) {
+        phases.push("assessment");
+        assert.match(p.persona, /INDEPENDENT CAPABILITY INFERENCE/);
+        assert.match(p.persona, /Distinguish direct performance, substantively demonstrated components/);
+        assert.ok(!p.user.includes(scenario.wrong), "Capability interpretation is draft-blind");
+        assert.ok(p.persona.includes(scenario.evidence));
+        return response("anthropic", "reviewer", scenarioAssessment);
+      }
+      phases.push("comparison");
+      assert.match(p.persona, /EVIDENCE-BASED CAPABILITY REASONING/);
+      assert.match(p.user, /evidence-to-conclusion-reasoning/);
+      const textToCheck = p.user.match(/<answer_to_review>\n([\s\S]*?)\n<\/answer_to_review>/)?.[1];
+      assert.ok(textToCheck);
+      const check = verdict("approve", scenarioAssessment);
+      if (textToCheck === scenario.wrong) {
+        check.verdict = "revise";
+        check.findings = "This answer incorrectly infers the scope from a label or overstates work not established. Re-evaluate the underlying components and factual boundaries.";
+        const inferenceCheck = check.checks.find(x => x.id === "evidence-to-conclusion-reasoning");
+        assert.ok(inferenceCheck);
+        inferenceCheck.passed = false;
+        inferenceCheck.evidence = "The draft materially misrepresents the demonstrated scope of experience.";
+      } else {
+        assert.equal(textToCheck, scenario.correct);
+        check.findings = "Corrected: the conclusion represents underlying activities without claiming unperformed work.";
+      }
+      return response("anthropic", "reviewer", check);
+    });
+    const lead = makeProvider("openai", async p => {
+      if (p.persona.includes("KATIE_TASK_CONTRACT_VALIDATION")) {
+        phases.push("contract");
+        return contractApproval(p);
+      }
+      phases.push("revision");
+      assert.match(p.user, /evidence-to-conclusion|materially misrepresents|incorrectly infers/);
+      return response("openai", "lead", scenario.correct);
+    });
+    const result = await runRequiredDraftReview({
+      requestId: "capability-" + scenario.name,
+      draft: initial, params: source, leadProvider: lead,
+      deadlineMs: deadline(),
+      selectHelper: async () => ({ provider: reviewer, modelId: "reviewer" }),
+    });
+    assert.equal(result.audit.status, "revised");
+    assert.equal(result.result.text, scenario.correct);
+    assert.deepEqual(phases, ["assessment", "contract", "comparison", "revision", "comparison"]);
+    assert.equal(result.audit.reviews?.[0].review.checks.find(c => c.id === "evidence-to-conclusion-reasoning")?.passed, false);
+    assert.equal(result.audit.reviews?.at(-1)?.review.checks.find(c => c.id === "evidence-to-conclusion-reasoning")?.passed, true);
+  });
+}
+
+test("capability-inference gate cannot approve an explicitly failed reasoning check", () => {
+  const invalid = verdict("approve");
+  const index = invalid.checks.findIndex(c => c.id === "evidence-to-conclusion-reasoning");
+  assert.ok(index >= 0);
+  invalid.checks[index].passed = false;
+  invalid.checks[index].evidence = "The answer wrongly concludes no capability from an absent label.";
+  assert.throws(() => validateAnswerReview(invalid, assessment), /Approval contradicts failed acceptance checks/);
 });

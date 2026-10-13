@@ -74,3 +74,41 @@ test("comparative judgment evaluates consequences before choosing and keeps deli
   assert.match(synthesis, /preserving the original, a targeted improvement and a different approach/);
   assert.ok(!synthesis.includes("Incorporate supported reviewer corrections into the actual deliverable"));
 });
+
+
+test("foundational capability inference is shared by all actors without inventing activities", () => {
+  const standard = getObjectiveFirstInstruction();
+  const complete = getDeliverableStandardInstruction();
+  assert.match(standard, /EVIDENCE-BASED CAPABILITY REASONING/);
+  assert.match(standard, /substantively demonstrate an activity even if no source uses its exact label/);
+  assert.match(standard, /Missing documentation is not evidence an activity was never performed/);
+  assert.match(standard, /related work does not establish completion of every component/);
+  assert.match(standard, /any domain/);
+  assert.match(standard, /rather than as a mandatory checklist/);
+  assert.match(complete, /Reason about what those facts individually and collectively demonstrate/);
+  assert.match(complete, /Reasonable inference is not fabrication/);
+  assert.match(complete, /plausible professional practices alone do not prove/);
+  assert.doesNotMatch(complete, /Use supplied facts literally/);
+  for (const actorPrompt of [
+    "You are an application-writing specialist.",
+    "You are a technical development specialist.",
+    "You are a neutral business analyst.",
+  ]) {
+    const assembled = actorPrompt + "\n\n" + complete;
+    assert.match(assembled, /EVIDENCE-BASED CAPABILITY REASONING/);
+  }
+});
+
+test("capability review check is independently required for all domains", () => {
+  const a = {
+    objective: "Assess the actual demonstrated scope", qualifications: ["Supported capability"],
+    strongestEvidence: ["Work descriptions"], criteria: ["Conclusions match the evidence"],
+    synthesis: { conclusion: "Supported scope", dimensions: [{dimension:"Core work",supportedScope:"Verified",evidence:["Source facts"]}], emphasis:"No unverified leaps" },
+    taskContract: { deliverable: "A factual response", requirements: [{id:"r1",requirement:"Answer",sourceId:"latest-user",status:"active" as const}], conflicts:[] },
+  };
+  const ids = acceptanceIds(a);
+  assert.equal(ids.filter(id => id === "evidence-to-conclusion-reasoning").length, 1);
+  assert.ok(CONTRACT_RULES.includes(getObjectiveFirstInstruction()));
+  assert.match(getReviewerCompletionInstruction(), /EVIDENCE-BASED CAPABILITY REASONING/);
+  assert.ok(getFinalSynthesisInstruction().includes("EVIDENCE-BASED CAPABILITY REASONING"));
+});
