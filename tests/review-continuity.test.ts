@@ -109,12 +109,12 @@ test("historical saved draft retry recovers last new application question, not p
   const newTask = applyUserToTaskProgress(emptyTaskProgress(),{messageId:"resumed",text:actualQuestion});
   const params: ChatGenerateParams = {
     name:"Katie",modelId:"lead",persona:"BTG application specialist",summary:"",
-    history:saved.sourceTurns!.slice(0,-1).map(turn=>({role:"user",content:turn.text})),
+    history:saved.sourceTurns!.slice(0,-1).map(turn=>({role:"user" as const,content:turn.text})),
     user:actualQuestion,
   };
   const baseline=reviewBaseline(params,newTask);
   assert.equal(baseline.activeNewTask,true);
-  assert.match(baseline.text,/ACTIVE DELIVERABLE.*Please share 3 to 5 examples/);
+  assert.match(baseline.text,/ACTIVE DELIVERABLE[\s\S]*?Please share 3 to 5 examples/);
   const oldTaskContract={
     objective:"Answer carve-outs only",
     qualifications:["Carve-outs"],
