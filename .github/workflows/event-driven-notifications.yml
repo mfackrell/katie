@@ -16,7 +16,7 @@ permissions:
   pull-requests: read
 
 concurrency:
-  group: katie-event-${{ github.event.workflow_run.name }}-${{ github.event.workflow_run.id }}
+  group: katie-event-${{ github.event.workflow_run.name == 'Katie autonomous development' && github.event.workflow_run.id || github.event.workflow_run.head_sha }}
   cancel-in-progress: false
 
 jobs:
