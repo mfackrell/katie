@@ -1,0 +1,2 @@
+[functions.katie-runpod-result-webhook]
+verify_jwt = false
