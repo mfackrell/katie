@@ -30,6 +30,7 @@ export type ReviewAudit = {
 
 // Leave room for contract repair and validation of the actual final answer.
 export const REQUIRED_REVIEW_RESERVE_MS = 360_000;
+const MAX_CONTRACT_REJECTIONS = 2;
 const ASSESSMENT_INSTRUCTION = [
   "KATIE_INDEPENDENT_ASSESSMENT",
   "There are TWO distinct tasks: your internal task is to return assessment JSON; the END USER task is the deliverable requested in the authoritative user turns. Every objective, qualification, criterion and taskContract field must describe the END USER task. Never substitute your internal review assignment for their task. For example, if the user requested finished prose, its acceptance criteria must assess finished prose even though you return JSON here.",
@@ -102,6 +103,7 @@ export async function runRequiredDraftReview(input: {
   const source = input.assessmentParams ?? input.params;
   const baseline = reviewBaseline(source, input.taskProgress);
   const clean = baseline.params;
+  let contractRejections = 0;
   // Screenshot-backed verification needs time to inspect every supplied frame.
   const participantTimeoutMs = input.participantTimeoutMs ?? (clean.images?.length ? 90_000 : 45_000);
   const audit: ReviewAudit = { sourceTurns: baseline.turns, mode: "always", status: "unavailable", draft, draftHash: hash(draft), finalHash: hash(draft), attempts: [] };
@@ -139,7 +141,7 @@ export async function runRequiredDraftReview(input: {
       // A different model validates the task definition while both calls remain draft-blind.
       let assessment: IndependentAssessment | undefined;
       let contractFeedback = "";
-      for (let pass = 0; pass < 3; pass++) {
+      for (let pass = 0; pass < MAX_CONTRACT_REJECTIONS; pass++) {
         phase = "assessment";
         const assessmentResponse = await within(() => selected.provider.generate(prepare({
           ...clean, modelId: selected.modelId, onProviderSystemPrepared: undefined,
@@ -149,9 +151,9 @@ export async function runRequiredDraftReview(input: {
         }, reviewer!)), Math.min(participantTimeoutMs, input.deadlineMs - Date.now() - 90_000));
         if (assessmentResponse.truncated) throw new Error("Independent assessment was truncated");
         try {
-          assessment = validateAssessment(parseReviewJson(assessmentResponse.text), baseline.turns);
+          assessment = validateAssessment(parseReviewJson(assessmentResponse.text), baseline.turns, { activeNewTask: baseline.activeNewTask });
         } catch (error) {
-          if (pass === 2) throw error;
+          if (pass === MAX_CONTRACT_REJECTIONS - 1) throw error;
           contractFeedback = `The proposed contract failed source/schema validation: ${error instanceof Error ? error.message : String(error)}. Rebuild the assessment with valid references to the supplied user turns. Do not change or invent the source text.`;
           audit.attempts.push({ reviewer, phase, error: contractFeedback });
           continue;
@@ -165,7 +167,7 @@ export async function runRequiredDraftReview(input: {
           user: `${baseline.text}\nPROPOSED TASK CONTRACT AND CRITERIA:\n${JSON.stringify(assessment)}\nReturn ONLY contract validation JSON. No current draft has been supplied.`,
         }, lead)), Math.min(input.participantTimeoutMs ?? (clean.images?.length ? 90_000 : 60_000), input.deadlineMs - Date.now() - 75_000));
         if (validation.truncated) throw new Error("Contract validation was truncated");
-        const checked = parseReviewJson(validation.text) as { verdict: string; findings: string; sourceCoverage: Array<{ sourceId: string; finding: string }> };
+        const checked = parseReviewJson(validation.text) as { verdict: string; findings: string; issueType?: string; sourceCoverage: Array<{ sourceId: string; finding: string }> };
         if (!checked || !["approve", "revise"].includes(checked.verdict) || typeof checked.findings !== "string" || !checked.findings.trim() ||
             !Array.isArray(checked.sourceCoverage) || checked.sourceCoverage.length !== baseline.turns.length ||
             new Set(checked.sourceCoverage.map(c => c?.sourceId)).size !== baseline.turns.length ||
@@ -173,12 +175,16 @@ export async function runRequiredDraftReview(input: {
           throw new Error("Invalid contract validation or incomplete source coverage");
         }
         (audit.contractFindings ??= []).push({ validator: lead, verdict: checked.verdict, findings: checked.findings });
-        if (checked.verdict === "approve") {
+        // Optional refinements are not material acceptance blockers.
+        const materialRejection = checked.verdict === "revise" && checked.issueType !== "optional_improvement";
+        if (!materialRejection) {
           audit.contractValidation = { verdict: "approve", findings: checked.findings, validator: lead, sourceCoverage: checked.sourceCoverage };
           break;
         }
+        contractRejections += 1;
         contractFeedback = checked.findings;
         assessment = undefined;
+        if (contractRejections >= MAX_CONTRACT_REJECTIONS) throw new Error("Task contract rejected after bounded validation attempts");
       }
       if (!assessment) throw new Error("Task contract failed independent validation");
       audit.independentAssessment = assessment;
@@ -268,6 +274,7 @@ export async function runRequiredDraftReview(input: {
       }
     } catch (error) {
       audit.attempts.push({ reviewer, phase, error: error instanceof Error ? error.message : String(error) });
+      if (contractRejections >= MAX_CONTRACT_REJECTIONS) return unavailable("Task-contract disagreements exceeded the bounded validation limit");
     }
   }
   return unavailable("Review could not be verified after the available attempts.");
