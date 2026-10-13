@@ -35,10 +35,10 @@ function harness(fault = '', syntheticValidation = false) {
       return q;
     },
   };
-  const exports = {};
+  const exports = {}, logs = [];
   vm.runInNewContext(ts.transpileModule(readFileSync('lib/runpod/durable-results.ts','utf8'), {compilerOptions: {module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022}}).outputText, {
     exports, Buffer, process: {env: {SUPABASE_URL: 'https://db.invalid', SUPABASE_SERVICE_ROLE_KEY: 'mock', RUNPOD_API_KEY: 'mock'}}, AbortSignal, Date,
-    console: {warn(){}}, require: name => name === 'node:crypto' ? crypto : name === '@supabase/supabase-js' ? {createClient: () => client} : name.includes('video-scene-prompts') ? {buildRunpodVideoScenePrompt: x => x} : {},
+    console: {warn: (...args) => logs.push(args), info: (...args) => logs.push(args)}, require: name => name === 'node:crypto' ? crypto : name === '@supabase/supabase-js' ? {createClient: () => client} : name.includes('video-scene-prompts') ? {buildRunpodVideoScenePrompt: x => x} : {},
     fetch: async (url, init) => {
       if (url.includes("/status/")) {
         if (fault === "pollrace") Object.assign(row, {status: "completed", analysis_text: "webhook evidence"});
@@ -53,7 +53,7 @@ function harness(fault = '', syntheticValidation = false) {
       return Response.json(fault === 'unknown' ? {} : {id: 'provider-123'});
     },
   });
-  return {refresh: () => exports.refreshRunpodJob(client, {id: chatId, runpod_job_id: "provider-123", endpoint_id: "yafwsm98e8m9lv", status: "queued"}), submit: () => exports.submitSavedVideo({...params,...(syntheticValidation ? {syntheticValidation:true} : {})}), get row(){return row;}, get posts(){return posts;}, get policy(){return policy;}};
+  return {logs, refresh: () => exports.refreshRunpodJob(client, {id: chatId, runpod_job_id: "provider-123", endpoint_id: "yafwsm98e8m9lv", status: "queued"}), submit: () => exports.submitSavedVideo({...params,...(syntheticValidation ? {syntheticValidation:true} : {})}), get row(){return row;}, get posts(){return posts;}, get policy(){return policy;}};
 }
 test('synthetic workload policy is bounded while normal submissions retain existing policy', async()=>{
   const normal=harness();await normal.submit();assert.equal(normal.policy,undefined);
@@ -94,4 +94,37 @@ test('concurrent local retries claim only one provider submission', async () => 
 test('stale poll observes concurrent callback completion without replacing evidence', async () => {
   const h = harness('pollrace'); await h.submit(); const result = await h.refresh();
   assert.equal(result.status, 'completed'); assert.equal(h.row.analysis_text, 'webhook evidence');
+});
+
+test('synthetic cron captures sanitized logs from actual submission failure recovery', async () => {
+  for (const fault of ['before', 'rejected', 'timeout', 'server', 'unknown', 'registration']) {
+    const h = harness(fault, true), route = {};
+    let submitted = false;
+    vm.runInNewContext(ts.transpileModule(readFileSync('app/api/internal/runpod-results/synthetic-cron/route.ts', 'utf8'),
+      {compilerOptions: {module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022}}).outputText, {
+      exports: route, process: {env: {RUNPOD_SYNTHETIC_VALIDATION_ENABLED: 'true'}},
+      console: {info: (...args) => h.logs.push(args), warn: (...args) => h.logs.push(args)},
+      require: name => {
+        if (name === 'next/server') return {NextResponse: {json: (body, init) => Response.json(body, init)}};
+        if (name.endsWith('/durable-results')) return {assertCronAuth: () => true};
+        if (name.endsWith('/synthetic-validation')) return {
+          startSyntheticValidation: async () => { await h.submit(); submitted = true; },
+          syntheticStatus: async () => submitted ? {status: 'pending', providerStatus: h.row.status, receiptId: h.row.id, livePass: false} : {status: 'not_started'},
+          cleanupSyntheticValidation: async () => { throw Error('unexpected cleanup'); },
+        };
+        throw Error(name);
+      },
+    });
+    const response = await route.GET({});
+    assert.equal(response.status, 200);
+    assert.equal(h.logs.length, 2);
+    assert.equal(h.logs[0][0], '[RunPod Synthetic Submission] receipt retained');
+    assert.ok(['pre_post_failure', 'rejected', 'acceptance_uncertain'].includes(h.logs[0][1].outcome));
+    assert.equal(Object.keys(h.logs[0][1]).length, 1);
+    assert.equal(h.logs[1][0], '[WP4 synthetic observation]');
+    assert.doesNotMatch(JSON.stringify([h.logs, await response.json()]), /12345678|provider-123|secret|private.invalid|Describe it/);
+    const normal = harness(fault); await normal.submit();
+    assert.equal(normal.logs[0][1].receiptId, chatId);
+    assert.equal(normal.logs[0][1].status, normal.row.status);
+  }
 });
