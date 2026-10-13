@@ -11,7 +11,7 @@ export function validateReceipt(payload, { repository, runId }) {
       payload.run_id !== runId || !Number.isSafeInteger(payload.issue_number) ||
       payload.issue_number < 1 || !['READY', 'BLOCKED'].includes(payload.outcome) ||
       (payload.pr_url !== null && (typeof payload.pr_url !== 'string' ||
-        !new RegExp('^https://github[.]com/' + repository + '/pull/[1-9][0-9]*))) {
+        !new RegExp('^https://github[.]com/' + repository + '/pull/[1-9][0-9]*$').test(payload.pr_url)))) {
     throw new Error('Invalid or untrusted autonomous completion receipt');
   }
   return payload;
