@@ -626,7 +626,7 @@ export async function listMemoryRecordsForActor(actorId: string): Promise<ActorM
  */
 export async function mergeActorLongTermMemoryEntries(
   actorId: string,
-  entries: Array<Record<string, unknown>>,
+  entries: Array<{ key: string; value: string }>,
 ): Promise<JsonRecord> {
   if (!entries.length) return getLongTermMemory(actorId, "actor-wide");
   const { data, error } = await getSupabaseAdminClient().rpc(
