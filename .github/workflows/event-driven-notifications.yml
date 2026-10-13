@@ -1,0 +1,40 @@
+name: Katie event-driven notifications
+
+on:
+  workflow_run:
+    workflows:
+      - Katie autonomous development
+      - ci
+      - migrate-and-deploy
+    types: [completed]
+
+# Status notifications never execute an untrusted PR checkout or deploy code.
+permissions:
+  actions: read
+  contents: read
+  issues: write
+  pull-requests: read
+
+concurrency:
+  group: katie-event-${{ github.event.workflow_run.name }}-${{ github.event.workflow_run.id }}
+  cancel-in-progress: false
+
+jobs:
+  notify:
+    if: ${{ github.event.workflow_run.head_repository.full_name == github.repository }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Deliver event-driven GitHub notifications and follow-up handoffs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          KATIE_NOTIFICATION_OWNER: ${{ github.repository_owner }}
+          KATIE_STATUS_ISSUE: '427'
+        run: node scripts/katie-event-notifier.mjs
