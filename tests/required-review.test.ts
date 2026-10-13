@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { runRequiredDraftReview } from "../lib/collaboration/required-review";
+import { getDeliverableStandardInstruction } from "../lib/chat/deliverable-standard";
 import { createReviewClarification, buildReviewResumptionContext } from "../lib/collaboration/review-completion";
 import { acceptanceIds, reviewBaseline, validateAssessment, validateAnswerReview, type AnswerReview, type IndependentAssessment } from "../lib/collaboration/review-contract";
 import { normalizeReviewMode, shouldEnableActorCollaboration } from "../lib/collaboration/review-mode";
@@ -535,7 +536,7 @@ for (const scenario of inferenceScenarios) {
   test("capability-inference regression: " + scenario.name, async () => {
     const source: ChatGenerateParams = {
       name: "Katie", modelId: "lead",
-      persona: "Shared standards plus verified evidence: " + scenario.evidence,
+      persona: getDeliverableStandardInstruction() + "\nVerified evidence: " + scenario.evidence,
       summary: "", user: "Answer the question using the established evidence.",
       history: [{ role: "user", content: scenario.question }],
     };
