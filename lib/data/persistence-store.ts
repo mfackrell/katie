@@ -620,6 +620,33 @@ export async function listMemoryRecordsForActor(actorId: string): Promise<ActorM
 }
 
 
+/** Add or replace only validated actor memory keys, atomically under a row lock.
+ * An automatic writer must never replace the entire actor memory snapshot.
+ * Server-only database function: not accessible to anon/authenticated roles.
+ */
+export async function mergeActorLongTermMemoryEntries(
+  actorId: string,
+  entries: Array<Record<string, unknown>>,
+): Promise<JsonRecord> {
+  if (!entries.length) return getLongTermMemory(actorId, "actor-wide");
+  const { data, error } = await getSupabaseAdminClient().rpc(
+    "merge_actor_long_term_memory_entries",
+    { p_actor_id: actorId, p_entries: entries },
+  );
+  if (error) throw new Error(`Failed to merge actor memory: ${error.message}`);
+  if (!data || typeof data !== "object" || !Array.isArray(data.entries)) {
+    throw new Error("Actor memory merge returned invalid content");
+  }
+  for (const entry of entries) {
+    const saved = (data.entries as Array<Record<string, unknown>>)
+      .find(item => item.key === entry.key);
+    if (!saved || saved.value !== entry.value) {
+      throw new Error(`Actor memory patch could not be verified: ${String(entry.key)}`);
+    }
+  }
+  return data as JsonRecord;
+}
+
 export async function setLongTermMemory(actorId: string, _chatId: string, payload: JsonRecord): Promise<void> {
   const client = getSupabaseAdminClient();
   const { error } = await client.from("actor_long_term_memory")
