@@ -107,7 +107,7 @@ function handleAgent({ event, repo, owner, dashboard }) {
   }
   receipt = validateReceipt(receipt, { repository: repo, runId: run.id });
   const info = JSON.parse(gh('issue', 'view', String(receipt.issue_number), '--repo', repo, '--json', 'author,title'));
-  if (info.author?.login !== owner || !info.title?.startsWith('[agent]')) throw new Error('Receipt did not identify an owner-authorized issue');
+  if (info.author?.login !== owner || (run.event === 'issues' && !info.title?.startsWith('[agent]'))) throw new Error('Receipt did not identify an owner-authorized issue');
   const result = classifyAgentResult(receipt, run.conclusion);
   if (receipt.pr_url) {
     const pr = JSON.parse(gh('pr', 'view', receipt.pr_url, '--repo', repo, '--json', 'headRefName'));
