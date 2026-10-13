@@ -3,6 +3,7 @@ import {
   ACTIVE_RUNPOD_STATES, assertCronAuth, refreshRunpodJob, resultStore,
 } from "@/lib/runpod/durable-results";
 import { publishVideoChat } from "@/lib/runpod/video-orchestration";
+import { reconcileVideoDeliveries } from "@/lib/runpod/video-delivery-reconciliation";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -79,28 +80,11 @@ export async function GET(request: NextRequest) {
 
     // The webhook may complete a job at any time. Publish only when every
     // video in the originating request has a terminal outcome (including Grok).
-    const { data: undelivered, error: deliveryError } = await client
-      .from("video_analysis_jobs").select("chat_request_id")
-      .not("chat_request_id", "is", null).is("response_delivered_at", null)
-      .order("submitted_at", { ascending: false }).limit(100);
-    if (deliveryError) throw new Error("Cannot inspect pending video deliveries");
-    const ids = [...new Set((undelivered ?? []).map(row => row.chat_request_id)
-      .filter((id): id is string => typeof id === "string"))];
-    let published = 0;
-    for (const id of ids.slice(0, 1)) {
-      try {
-        const result = await publishVideoChat(id);
-        if (result.status === "delivered") published++;
-      } catch (caught) {
-        console.error("[Video Reconcile] Chat delivery will retry", {
-          requestId: id, error: caught instanceof Error ? caught.message : String(caught),
-        });
-        failed++;
-      }
-    }
+    const deliveries = await reconcileVideoDeliveries(client, publishVideoChat);
+    failed += deliveries.deliveryFailed;
     return NextResponse.json({
-      checked, saved, failed, timedOut, refusals, published,
-      pendingJobs: rows.length, pendingConversations: ids.length,
+      checked, saved, failed, timedOut, refusals, ...deliveries,
+      pendingJobs: rows.length,
     }, { headers: { "cache-control": "no-store" } });
   } catch (caught) {
     console.error("[Video Reconcile] Unhandled", caught);
