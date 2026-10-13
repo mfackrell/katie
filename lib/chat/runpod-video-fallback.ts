@@ -94,6 +94,7 @@ export async function analyzeSavedVideosWithQwen(
     const attachmentPath = `chats/${source.chatId}/${source.attachmentId}.source`;
     const prompt = question.trim().slice(0, 1900) || "Provide a detailed and specific description of the video.";
     const receipt = await submit({ chatId: source.chatId, attachmentPath, question: prompt });
+    if (!receipt.jobId) throw new Error("Qwen submission receipt retained; provider acceptance unresolved.");
     console.info("[Video Routing] RunPod Qwen fallback accepted", {
       receiptId: receipt.id, jobId: receipt.jobId, sourceId: source.attachmentId,
     });

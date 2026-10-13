@@ -22,9 +22,13 @@ function harness(options = {}) {
       calls.push({ url, init });
       if (init.method !== 'PATCH') return Response.json(options.lookup ?? [row], { status: options.lookupStatus ?? 200 });
       const patch = JSON.parse(init.body); patches.push(patch);
-      assert.equal(new URL(url).searchParams.get('status'), 'in.(pending,queued,in_progress)');
+      const filters = new URL(url).searchParams;
       assert.equal(new URL(url).searchParams.get('id'), 'eq.' + receipt);
-      if (options.race) return Response.json([]);
+      options.beforePatch?.(row, patches.length);
+      const matches = filters.get('status') === 'eq.' + row.status &&
+        filters.get('runpod_job_id') === (row.runpod_job_id ? 'eq.' + row.runpod_job_id : 'is.null') &&
+        (!filters.has('error_code') || filters.get('error_code') === 'eq.' + row.error_code);
+      if (!matches || options.race) return Response.json([]);
       Object.assign(row, patch);
       return Response.json([row], { status: options.saveStatus ?? 200 });
     },
@@ -68,7 +72,9 @@ test('valid replay acknowledges terminal state without rewriting; invalid replay
   assert.equal(h.patches.length, 1);
 });
 test('conditional patch handles concurrent terminal completion and fast callback before registration', async () => {
-  assert.deepEqual((await harness({ race: true }).send()).body, { status: 'already_terminal', saved: true });
+  const terminal = harness({ beforePatch: row => { row.status = 'completed'; } });
+  assert.deepEqual((await terminal.send()).body, { status: 'completed', saved: true, already_terminal: true });
+  assert.equal(terminal.patches.length, 1);
   const h = harness({ row: { runpod_job_id: null, status: 'pending' } });
   assert.equal((await h.send()).status, 200); assert.equal(h.row.runpod_job_id, 'provider-123');
 });
@@ -93,4 +99,54 @@ test('invalid payload, size, unavailable storage and persistence failures fail c
 });
 test('function configuration explicitly disables JWT only for proof-authenticated callback', () => {
   assert.match(readFileSync('supabase/config.toml', 'utf8'), /\[functions\.katie-runpod-result-webhook\]\s+verify_jwt = false/);
+});
+
+test('late authenticated callback can replace a local deadline, but not a provider timeout', async () => {
+  for (const error_code of ['SUBMISSION_ACCEPTANCE_UNRESOLVED_DEADLINE', 'QWEN_FIFTEEN_MINUTE_DEADLINE', 'QWEN_DEADLINE_POLL_UNAVAILABLE']) {
+    const h = harness({row: {status: 'timed_out', error_code, runpod_job_id: null}});
+    assert.equal((await h.send()).body.status, 'completed');
+    assert.equal(new URL(h.calls[1].url).searchParams.get('error_code'), 'eq.' + error_code);
+  }
+  const h = harness({row: {status: 'timed_out', error_code: 'RUNPOD_TIMED_OUT'}});
+  assert.equal((await h.send()).body.already_terminal, true);
+  assert.equal(h.patches.length, 0);
+});
+
+test('callback can recover a local 404 expiration without overwriting provider-terminal failure', async () => {
+  const h = harness({row: {status: 'expired', error_code: 'RUNPOD_RESULT_EXPIRED_OR_NOT_FOUND'}});
+  assert.equal((await h.send()).body.status, 'completed');
+  assert.equal(new URL(h.calls[1].url).searchParams.get('error_code'), 'eq.RUNPOD_RESULT_EXPIRED_OR_NOT_FOUND');
+});
+
+test('callback retries registration and unresolved deadline transitions without losing analysis', async () => {
+  for (const transition of [
+    { status: 'queued', runpod_job_id: 'provider-123' },
+    { status: 'timed_out', error_code: 'SUBMISSION_ACCEPTANCE_UNRESOLVED_DEADLINE' },
+  ]) {
+    const h = harness({ row: { status: 'pending', runpod_job_id: null },
+      beforePatch: (row, attempt) => { if (attempt === 1) Object.assign(row, transition); } });
+    assert.deepEqual((await h.send()).body, { status: 'completed', saved: true });
+    assert.equal(h.patches.length, 2);
+    assert.equal(h.row.analysis_text, 'Analysis');
+    assert.equal(h.row.runpod_job_id, 'provider-123');
+  }
+});
+
+test('conflicts are bounded and never falsely acknowledged', async () => {
+  const h = harness({ race: true });
+  const result = await h.send();
+  assert.equal(result.status, 503);
+  assert.deepEqual(result.body, { error: 'persistence_conflict' });
+  assert.equal(h.patches.length, 3);
+});
+
+test('retry revalidates provider identity and callback proof', async () => {
+  for (const [transition, status] of [
+    [{ runpod_job_id: 'different-job', status: 'completed' }, 409],
+    [{ callback_token_hash: 'b'.repeat(64), status: 'completed' }, 401],
+  ]) {
+    const h = harness({ beforePatch: row => Object.assign(row, transition) });
+    assert.equal((await h.send()).status, status);
+    assert.equal(h.patches.length, 1);
+  }
 });

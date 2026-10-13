@@ -178,15 +178,17 @@ export async function processNextGrokVideo(): Promise<{ status: string; requestI
   const now = new Date().toISOString();
   // Recover abandoned leases, for example when Vercel killed a previous attempt.
   const staleCutoff = new Date(Date.now() - 5 * 60_000).toISOString();
-  await db.from("video_analysis_jobs").update({ fallback_state: "pending", updated_at: now })
+  const {error: leaseError} = await db.from("video_analysis_jobs").update({ fallback_state: "pending", updated_at: now })
     .eq("fallback_state", "processing").lt("fallback_started_at", staleCutoff)
     .lt("fallback_attempts", 3);
+  if (leaseError) throw new Error("Cannot recover abandoned Grok leases");
   // A third attempt killed by the runtime must terminate instead of hanging forever.
-  await db.from("video_analysis_jobs").update({
+  const {error: expiredLeaseError} = await db.from("video_analysis_jobs").update({
     fallback_state: "failed", fallback_error_code: "GROK_WORKER_EXPIRED",
     fallback_completed_at: now, updated_at: now,
   }).eq("fallback_state", "processing").lt("fallback_started_at", staleCutoff)
     .gte("fallback_attempts", 3);
+  if (expiredLeaseError) throw new Error("Cannot persist expired Grok leases");
 
   const { data, error } = await db.from("video_analysis_jobs").select(VIDEO_COLUMNS)
     .in("status", ["completed", "failed", "cancelled", "timed_out", "expired", "rejected"])
