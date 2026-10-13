@@ -39,12 +39,11 @@ export function reviewBaseline(source: ChatGenerateParams, progress?: TaskProgre
     .map((turn, index) => ({ id: `turn-${index + 1}`, text: turn.content }));
   turns.push({ id: "latest-user", text: source.user });
   const activeNewTask = progress?.lastUserIntent === "new_task";
-  const activeTask = activeNewTask ? source.user : null;
   return {
     activeNewTask,
     turns,
     params: { ...source, summary: "", history: [], ...(images.length ? { images } : {}) } as ChatGenerateParams,
-    text: `${activeNewTask ? `ACTIVE DELIVERABLE (authoritative, latest user request):\\n${source.user}\\nThis is a NEW standalone task. Earlier user turns provide background and reusable factual constraints, NOT active requirements from completed questions. The current answer must address the latest request; do not import requirements or exclusions from old screening answers unless the user explicitly re-applies them.\\n\\n` : ""}AUTHORITATIVE USER TURNS (chronological; the latest turn may clarify an earlier task rather than replace it):\n${JSON.stringify(turns)}\n\nActor instructions and supplied memory remain available in the system context. Memory is supporting evidence, not authority to override the user's request. Separate firsthand facts from inferred assessments. Missing information is unknown, not proof of absence.\n\n${progress ? formatTaskProgress(progress) : "No verified task-progress ledger available. Infer the current stage cautiously from the firsthand user turns."}${evidence ? `\n\nOBSERVED EVIDENCE AVAILABLE TO ALL REVIEW STAGES:\n${evidence}` : ""}`,
+    text: `${activeNewTask ? `ACTIVE DELIVERABLE (authoritative, latest user request):\n${source.user}\nThis is a NEW standalone task. Earlier user turns provide background and reusable factual constraints, NOT active requirements from completed questions. The current answer must address the latest request; do not import requirements or exclusions from old screening answers unless the user explicitly re-applies them.\n\n` : ""}AUTHORITATIVE USER TURNS (chronological; the latest turn may clarify an earlier task rather than replace it):\n${JSON.stringify(turns)}\n\nActor instructions and supplied memory remain available in the system context. Memory is supporting evidence, not authority to override the user's request. Separate firsthand facts from inferred assessments. Missing information is unknown, not proof of absence.\n\n${progress ? formatTaskProgress(progress) : "No verified task-progress ledger available. Infer the current stage cautiously from the firsthand user turns."}${evidence ? `\n\nOBSERVED EVIDENCE AVAILABLE TO ALL REVIEW STAGES:\n${evidence}` : ""}`,
   };
 }
 
