@@ -634,17 +634,18 @@ export async function mergeActorLongTermMemoryEntries(
     { p_actor_id: actorId, p_entries: entries },
   );
   if (error) throw new Error(`Failed to merge actor memory: ${error.message}`);
-  if (!data || typeof data !== "object" || !Array.isArray(data.entries)) {
+  const content = data as JsonRecord | null;
+  if (!content || !Array.isArray(content.entries)) {
     throw new Error("Actor memory merge returned invalid content");
   }
   for (const entry of entries) {
-    const saved = (data.entries as Array<Record<string, unknown>>)
+    const saved = (content.entries as Array<Record<string, unknown>>)
       .find(item => item.key === entry.key);
     if (!saved || saved.value !== entry.value) {
       throw new Error(`Actor memory patch could not be verified: ${String(entry.key)}`);
     }
   }
-  return data as JsonRecord;
+  return content;
 }
 
 export async function setLongTermMemory(actorId: string, _chatId: string, payload: JsonRecord): Promise<void> {
