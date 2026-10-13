@@ -61,6 +61,16 @@ export function isSavedDraftVerificationRetry(pending: PendingReviewClarificatio
  * user turns. Old audit rows can end with a synthetic "This turn answers..."
  * wrapper: that wrapper is not itself the requested deliverable.
  */
+export function candidateForVerification(
+  pending: PendingReviewClarification | null,
+  reply: string,
+  generated: string,
+): string {
+  return pending && isSavedDraftVerificationRetry(pending, reply)
+    ? pending.candidate
+    : generated;
+}
+
 export function savedDraftReviewTask(pending: PendingReviewClarification): string | null {
   for (const turn of [...(pending.sourceTurns ?? [])].reverse()) {
     const text = turn.text.trim();
