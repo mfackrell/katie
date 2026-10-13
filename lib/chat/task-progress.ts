@@ -16,6 +16,8 @@ export type AnsweredTaskQuestion = TaskQuestion & {
   answer: string;
   exactNumberedMatch: boolean;
 };
+export type UserTurnIntent = "new_task" | "revision" | "feedback" | "answer" | "continuation";
+
 export type TaskProgressState = {
   version: 1;
   objective: { text: string; userMessageId: string } | null;
@@ -25,6 +27,8 @@ export type TaskProgressState = {
   answered: AnsweredTaskQuestion[];
   lastAssistantMessageId: string | null;
   lastUserMessageId: string | null;
+  /** Advisory classification of the latest user turn; user text remains authoritative. */
+  lastUserIntent?: UserTurnIntent;
 };
 
 type ProgressMessage = Pick<Message, "id" | "role" | "content">;
@@ -62,9 +66,45 @@ export function splitNumberedAnswers(input: string): Map<number, string> {
   return answers;
 }
 
-function newTaskRequested(message: string): boolean {
-  return /(?:^|\n)\s*(?:new (?:task|topic|question)\b|(?:please\s+)?(?:write|draft|build|create|find|investigate|analy[sz]e|review|implement|compare|summari[sz]e|research|design|fix)\b)/i.test(message) &&
-    !/^\s*(?:try again|continue|go ahead|ok|yes|no)\b/i.test(message);
+/**
+ * Distinguish instruction from feedback using the user's request, not verbs
+ * quoted inside a long assessment. This is an advisory continuity signal,
+ * never a replacement for the actual user message.
+ */
+export function classifyUserTurn(message: string): Exclude<UserTurnIntent, "answer"> {
+  const text = message.trim().replace(/^#{1,6}\s*/, "");
+  const opening = text.slice(0, 600);
+
+  // An explicit "feedback only" boundary must not become another draft request.
+  if (/^(?:this is |just |only )?(?:feedback only|only feedback|feedback,? not (?:a )?(?:rewrite|revision)|for feedback only)\b/i.test(opening) ||
+      /^\s*(?:my |this is my )?(?:evaluation|assessment|feedback) of\b[\s\S]{0,160}\b(?:do not|don't)\s+(?:rewrite|revise|redraft)\b/i.test(opening) ||
+      /^(?:this is feedback|feedback only)\b[\s\S]{0,140}\b(?:do not|don't)\s+(?:rewrite|revise|redraft)\b/i.test(opening)) {
+    return "feedback";
+  }
+
+  // A direct instruction to revise is distinct from criticism or analysis of
+  // past revisions. Only imperative lines count, not quoted examples.
+  const explicitRevision = /(?:^|\n)\s*(?:#{1,4}\s*)?(?:(?:please|now|go ahead and|can you|could you|would you|i want you to|i need you to)\s+)?(?:rewrite|revise|redraft|polish|edit|rework)\b/i;
+  if (explicitRevision.test(text.slice(0, 1400)) ||
+      /^(?:please\s+)?(?:make|produce|give me)\s+(?:another|a new|a revised|a better)\s+(?:draft|version|answer|response)\b/i.test(text)) {
+    return "revision";
+  }
+
+  // New standalone requests use leading imperatives, including common
+  // application screening questions such as "Please describe your experience".
+  if (/^(?:new (?:task|topic|question)\b|(?:please\s+)?(?:write|draft|build|create|find|investigate|analy[sz]e|review|implement|compare|summari[sz]e|research|design|fix|describe|explain|provide|prepare|evaluate|assess)\b)/i.test(text) &&
+      !/^(?:try again|continue|go ahead|ok|yes|no)\b/i.test(text)) {
+    return "new_task";
+  }
+
+  // A report about an answer is not an instruction to rewrite that answer.
+  if (/^(?:(?:my|our)\s+)?(?:evaluation|assessment|feedback|critique)\b/i.test(text) ||
+      /^\d+(?:\.\d+)?\s*\/\s*10\b/i.test(text) ||
+      /^(?:this is|here is|here's)\s+(?:my\s+)?(?:feedback|evaluation|assessment)\b/i.test(text) ||
+      /^what(?:'s| is)\s+(?:improved|better|worse|wrong|working|still missing)\b/i.test(text)) {
+    return "feedback";
+  }
+  return "continuation";
 }
 
 export function emptyTaskProgress(): TaskProgressState {
@@ -80,15 +120,18 @@ export function applyUserToTaskProgress(
   if (!text) return previous;
   const pending = previous.pending;
   const numbered = splitNumberedAnswers(text);
-  const isAnswer = pending.length > 0 && !newTaskRequested(text);
+  const intent = classifyUserTurn(text);
+  const isAnswer = pending.length > 0 && intent === "continuation";
   if (!isAnswer) {
     return {
       ...previous,
-      ...(newTaskRequested(text) || !previous.objective ? { objective: { text: text.slice(0, 2000), userMessageId: input.messageId } } : {}),
-      pending: newTaskRequested(text) ? [] : previous.pending,
+      ...(intent === "new_task" || !previous.objective ? { objective: { text: text.slice(0, 2000), userMessageId: input.messageId } } : {}),
+      pending: intent === "new_task" || intent === "revision" ? [] : previous.pending,
+      answered: intent === "new_task" ? [] : previous.answered,
       stage: "working",
       nextAction: "continue_original_goal",
       lastUserMessageId: input.messageId,
+      lastUserIntent: intent,
     };
   }
   const answered: AnsweredTaskQuestion[] = [];
@@ -113,6 +156,7 @@ export function applyUserToTaskProgress(
     stage: "answers_received",
     nextAction: "advance_after_answers",
     lastUserMessageId: input.messageId,
+    lastUserIntent: "answer",
   };
 }
 
@@ -173,6 +217,9 @@ export function formatTaskProgress(progress: TaskProgressState): string {
     "A follow-up answer advances an existing task. Do not restart the original assessment, re-ask answered questions, or turn confirmations into another generic summary. Complete the next useful step for the user's goal, subject to explicit new instructions.",
     "Do not treat this record as a permanent instruction. A user's explicit new request overrides old progress; a cached objective is provisional.",
     "Provisional original objective: " + JSON.stringify(progress.objective),
+    "Latest user turn type (advisory; verify against literal user request): " + (progress.lastUserIntent ?? "unspecified"),
+    "When the user provides feedback/evaluation without requesting a revised artifact, engage with the feedback and do not silently generate another draft. Remember lessons appropriately without treating quoted criticism as a new instruction.",
+    "When the user expressly asks for revision, revise the existing work. A new application question such as 'Please describe...' is a separate requested deliverable. User text takes precedence over this heuristic.",
     "Current stage: " + progress.stage,
     "Next appropriate action: " + progress.nextAction,
     "Answered questions with source IDs: " + JSON.stringify(completed),
