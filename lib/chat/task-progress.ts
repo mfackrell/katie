@@ -100,7 +100,7 @@ export function classifyUserTurn(message: string): Exclude<UserTurnIntent, "answ
   // Screening prompts frequently request examples without beginning with a
   // traditional drafting verb. Treat them as their own deliverables, not as
   // replies to unrelated previous questions.
-  if (/^(?:please\\s+)?(?:give\\s+me|tell\\s+me\\s+about)\\s+(?:(?:\\d+\\s*(?:to|-|–)\\s*\\d+|several|some|a few)\\s+)?(?:examples?|instances?|cases?|relevant\\s+experience|your\\s+experience|my\\s+experience)\\b/i.test(text)) {
+  if (/^(?:please\s+)?(?:give\s+me|tell\s+me\s+about)\s+(?:(?:\d+\s*(?:to|-|–)\s*\d+|one|two|three|four|five|six|seven|eight|nine|ten|several|some|a\s+few)\s+)?(?:examples?|instances?|cases?|relevant\s+experience|your\s+experience|my\s+experience)\b/i.test(text)) {
     return "new_task";
   }
 
