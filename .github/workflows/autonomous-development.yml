@@ -358,5 +358,28 @@ jobs:
             echo 'No merge or deployment occurred.'
             if [[ -n "$PR" ]]; then echo 'The PR remains a draft pending approval.'; else echo 'No draft PR was produced; inspect the failed workflow before retrying.'; fi
           } > "$RUNNER_TEMP/agent-report.md"
+          # The workflow_run notification listener consumes a trusted completion
+          # receipt rather than guessing a READY status from job conclusion.
+          event_outcome='BLOCKED'
+          if [[ "$outcome" == READY* ]]; then event_outcome='READY'; fi
+          jq -n --arg repo "$GITHUB_REPOSITORY" --arg run "$GITHUB_RUN_ID" \
+            --arg issue "$ISSUE" --arg pr "$PR" --arg result "$event_outcome" \
+            --arg build "$BUILD" --arg test "$TEST" --arg review "$REVIEW" \
+            --arg repair "$REPAIR" --arg retest "$RETEST" --arg final "$FINAL" \
+            '{
+              version: 1, repository: $repo, run_id: ($run | tonumber),
+              issue_number: ($issue | tonumber),
+              pr_url: (if $pr == "" then null else $pr end),
+              outcome: $result,
+              checks: { build: $build, test: $test, review: $review,
+                        repair: $repair, retest: $retest, final_review: $final }
+            }' > "$RUNNER_TEMP/agent-result.json"
           if [[ -n "$PR" ]]; then gh pr comment "$PR" --repo "$GITHUB_REPOSITORY" --body-file "$RUNNER_TEMP/agent-report.md"; fi
           gh issue comment "$ISSUE" --repo "$GITHUB_REPOSITORY" --body-file "$RUNNER_TEMP/agent-report.md"
+      - name: Upload machine-readable agent completion event
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-completion
+          path: ${{ runner.temp }}/agent-result.json
+          if-no-files-found: ignore
