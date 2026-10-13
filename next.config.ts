@@ -3,6 +3,7 @@ import type { NextConfig } from "next";
 const nextConfig: NextConfig = {
   serverExternalPackages: ["@sparticuz/chromium", "playwright-core", "@ffmpeg-installer/linux-x64"],
   outputFileTracingIncludes: {
+    "/api/internal/runpod-results/synthetic": ["./fixtures/runpod/synthetic-red-blue.mp4"],
     "/api/chat": [
       "./node_modules/@sparticuz/chromium/bin/**",
       "./node_modules/@ffmpeg-installer/linux-x64/ffmpeg",

@@ -20,6 +20,16 @@ function harness(options = {}) {
     Deno: { env: { get: name => env[name] }, serve: fn => { handler = fn; } },
     fetch: async (url, init) => {
       calls.push({ url, init });
+      if(url.includes('/runpod_synthetic_validation?')) {
+        const filters=new URL(url).searchParams;
+        assert.equal(filters.get('slot'),'eq.wp4');
+        assert.equal(filters.get('actor_id'),'eq.'+receipt);
+        assert.equal(filters.get('cleaned_at'),'is.null');
+        const marker=JSON.parse(init.body);
+        assert.equal(marker.callback_receipt_id,receipt);
+        assert.equal(marker.callback_provider_id,'provider-123');
+        return Response.json(options.markerFailure ? [] : [marker]);
+      }
       if (init.method !== 'PATCH') return Response.json(options.lookup ?? [row], { status: options.lookupStatus ?? 200 });
       const patch = JSON.parse(init.body); patches.push(patch);
       const filters = new URL(url).searchParams;
@@ -149,4 +159,19 @@ test('retry revalidates provider identity and callback proof', async () => {
     assert.equal((await h.send()).status, status);
     assert.equal(h.patches.length, 1);
   }
+});
+test('synthetic callback provenance requires valid proof and matching identity, including poll-first races',async()=>{
+  for(const status of ['queued','completed']) {
+    const h=harness({row:{chat_request_id:'synthetic-wp4',actor_id:receipt,status}});
+    assert.equal((await h.send()).status,200);
+    assert.equal(h.calls.filter(c=>c.url.includes('/runpod_synthetic_validation?')).length,1);
+  }
+  for(const payload of [{id:'different-job'},{}]) {
+    const h=harness({row:{chat_request_id:'synthetic-wp4',actor_id:receipt}});
+    await h.send(payload,payload.id ? undefined : `receipt=${receipt}&proof=${'b'.repeat(64)}`);
+    assert.equal(h.calls.filter(c=>c.url.includes('/runpod_synthetic_validation?')).length,0);
+  }
+  const h=harness({markerFailure:true,row:{chat_request_id:'synthetic-wp4',actor_id:receipt}});
+  assert.equal((await h.send()).status,503);
+  assert.equal(h.row.status,'completed'); // delivery result is retained for a callback retry
 });

@@ -118,6 +118,38 @@ test('standalone disposable Postgres reproduces schema, permissions, constraints
         BEGIN INSERT INTO public.video_analysis_jobs(submission_key) VALUES ('local-claim'); RAISE EXCEPTION 'Duplicate claim accepted'; EXCEPTION WHEN unique_violation THEN NULL; END;
         INSERT INTO public.video_analysis_jobs(submission_key) VALUES (NULL),(NULL);
       END $test$;`,
+      // Disposable WP4 prerequisites mirror the production columns used by setup.
+      `ALTER TABLE public.actors ADD COLUMN name text, ADD COLUMN system_prompt text, ADD COLUMN review_mode text;
+       ALTER TABLE public.chats ADD COLUMN actor_id uuid REFERENCES public.actors(id), ADD COLUMN title text;
+       CREATE TABLE public.messages(id uuid primary key,actor_id uuid,chat_id uuid,role text,content text);
+       CREATE TABLE public.chat_requests(request_id text primary key,actor_id text,chat_id text,request_fingerprint text,status text,assistant_message_id text);
+       INSERT INTO public.actors(id,name) VALUES ('12345678-1234-1234-1234-123456789abc','existing user');
+       INSERT INTO public.chats(id,actor_id) VALUES ('12345678-1234-1234-1234-123456789abc','12345678-1234-1234-1234-123456789abc');`,
+      readFileSync('supabase/migrations/202610130005_runpod_synthetic_validation.sql','utf8'),
+      `SET ROLE anon; DO $test$ BEGIN
+         BEGIN PERFORM public.claim_runpod_synthetic_validation(); RAISE EXCEPTION 'public trigger allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+         BEGIN PERFORM public.cleanup_runpod_synthetic_validation(); RAISE EXCEPTION 'public cleanup allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+       END $test$; RESET ROLE;
+       SET ROLE service_role; DO $test$ DECLARE first jsonb; BEGIN
+         first := public.claim_runpod_synthetic_validation();
+         IF first IS NULL THEN RAISE EXCEPTION 'Claim failed'; END IF;
+         IF public.claim_runpod_synthetic_validation() IS NOT NULL THEN RAISE EXCEPTION 'Repeat claim succeeded'; END IF;
+       END $test$; RESET ROLE;
+       DO $test$ DECLARE r public.runpod_synthetic_validation; BEGIN
+         SELECT * INTO r FROM public.runpod_synthetic_validation;
+         INSERT INTO public.video_analysis_jobs(chat_request_id,actor_id,chat_id,target_chat_id,assistant_message_id)
+           VALUES ('synthetic-wp4',r.actor_id,r.chat_id,r.chat_id,r.assistant_id);
+         BEGIN PERFORM public.cleanup_runpod_synthetic_validation(); RAISE EXCEPTION 'Active cleanup allowed';
+           EXCEPTION WHEN raise_exception THEN IF SQLERRM <> 'Validation is still active' THEN RAISE; END IF; END;
+         UPDATE public.runpod_synthetic_validation SET deadline_at=now()-interval '1 minute';
+         PERFORM public.cleanup_runpod_synthetic_validation();
+         PERFORM public.cleanup_runpod_synthetic_validation();
+         IF public.claim_runpod_synthetic_validation() IS NOT NULL THEN RAISE EXCEPTION 'Cleanup reset claim'; END IF;
+         IF EXISTS(SELECT 1 FROM public.chats WHERE id=r.chat_id) OR EXISTS(SELECT 1 FROM public.messages WHERE actor_id=r.actor_id)
+           OR EXISTS(SELECT 1 FROM public.video_analysis_jobs WHERE actor_id=r.actor_id) THEN RAISE EXCEPTION 'Artifacts retained'; END IF;
+         IF NOT EXISTS(SELECT 1 FROM public.actors WHERE name='existing user') THEN RAISE EXCEPTION 'Existing actor removed'; END IF;
+         IF NOT EXISTS(SELECT 1 FROM public.chats WHERE id='12345678-1234-1234-1234-123456789abc') THEN RAISE EXCEPTION 'Existing chat removed'; END IF;
+       END $test$;`,
     ];
     // Remove interior empty lines: -j treats each blank line as a complete command batch.
     const input = blocks.map(b => b.replace(/\n\s*\n/g, '\n').trim()).join('\n\n') + '\n\n';

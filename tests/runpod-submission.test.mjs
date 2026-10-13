@@ -6,8 +6,8 @@ import ts from 'typescript';
 import * as crypto from 'node:crypto';
 const chatId = '12345678-1234-1234-1234-123456789abc';
 const params = {chatId, attachmentPath: `chats/${chatId}/${chatId}.source`, question: 'Describe it'};
-function harness(fault = '') {
-  let row, posts = 0, writes = 0;
+function harness(fault = '', syntheticValidation = false) {
+  let row, posts = 0, writes = 0, policy;
   const client = {
     storage: {from: () => ({createSignedUrl: async () => fault === 'before' ? {error: true} : {data: {signedUrl: 'https://private.invalid/?secret'}}})},
     from: () => {
@@ -39,12 +39,13 @@ function harness(fault = '') {
   vm.runInNewContext(ts.transpileModule(readFileSync('lib/runpod/durable-results.ts','utf8'), {compilerOptions: {module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022}}).outputText, {
     exports, Buffer, process: {env: {SUPABASE_URL: 'https://db.invalid', SUPABASE_SERVICE_ROLE_KEY: 'mock', RUNPOD_API_KEY: 'mock'}}, AbortSignal, Date,
     console: {warn(){}}, require: name => name === 'node:crypto' ? crypto : name === '@supabase/supabase-js' ? {createClient: () => client} : name.includes('video-scene-prompts') ? {buildRunpodVideoScenePrompt: x => x} : {},
-    fetch: async (url) => {
+    fetch: async (url, init) => {
       if (url.includes("/status/")) {
         if (fault === "pollrace") Object.assign(row, {status: "completed", analysis_text: "webhook evidence"});
         return Response.json({id: "provider-123", status: "IN_PROGRESS"});
       }
       posts++;
+      policy = JSON.parse(init.body).policy;
       if (fault === 'timeout') throw new Error('timeout');
       if (fault === 'webhook') Object.assign(row, {status: 'completed', runpod_job_id: 'provider-123', analysis_text: 'callback result'});
       if (fault === 'rejected') return new Response('', {status: 400});
@@ -52,8 +53,13 @@ function harness(fault = '') {
       return Response.json(fault === 'unknown' ? {} : {id: 'provider-123'});
     },
   });
-  return {refresh: () => exports.refreshRunpodJob(client, {id: chatId, runpod_job_id: "provider-123", endpoint_id: "yafwsm98e8m9lv", status: "queued"}), submit: () => exports.submitSavedVideo(params), get row(){return row;}, get posts(){return posts;}};
+  return {refresh: () => exports.refreshRunpodJob(client, {id: chatId, runpod_job_id: "provider-123", endpoint_id: "yafwsm98e8m9lv", status: "queued"}), submit: () => exports.submitSavedVideo({...params,...(syntheticValidation ? {syntheticValidation:true} : {})}), get row(){return row;}, get posts(){return posts;}, get policy(){return policy;}};
 }
+test('synthetic workload policy is bounded while normal submissions retain existing policy', async()=>{
+  const normal=harness();await normal.submit();assert.equal(normal.policy,undefined);
+  const synthetic=harness('',true);await synthetic.submit();await synthetic.submit();
+  assert.equal(synthetic.policy.executionTimeout,60000);assert.equal(synthetic.policy.ttl,120000);assert.equal(synthetic.posts,1);
+});
 test('pre-POST failure and explicit rejection remain distinct, durable and non-repeating', async () => {
   for (const [fault,code,posts] of [['before','SUBMISSION_PRE_POST_FAILED',0],['rejected','SUBMISSION_REJECTED',1]]) {
     const h = harness(fault); await h.submit(); await h.submit();
