@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { getPendingReviewClarification, resolvePendingReviewClarification } from "../lib/chat/review-continuity";
-import { isSavedDraftVerificationRetry, savedDraftReviewTask, type PendingReviewClarification } from "../lib/collaboration/review-completion";
+import { candidateForVerification, isSavedDraftVerificationRetry, savedDraftReviewTask, type PendingReviewClarification } from "../lib/collaboration/review-completion";
 import { applyUserToTaskProgress, emptyTaskProgress } from "../lib/chat/task-progress";
 import { reviewBaseline, validateAssessment } from "../lib/collaboration/review-contract";
 import type { ChatGenerateParams } from "../lib/providers/types";
@@ -103,6 +103,9 @@ test("historical saved draft retry recovers last new application question, not p
   assert.equal(isSavedDraftVerificationRetry(saved,"go ahead"),true);
   assert.equal(isSavedDraftVerificationRetry(saved,"Please share another example"),false);
   assert.equal(savedDraftReviewTask(saved),actualQuestion);
+  assert.equal(candidateForVerification(saved,"yes","Wrong regenerated carve-out-only draft"),
+    saved.candidate, "Retry verification must preserve original broad-examples draft");
+  assert.equal(candidateForVerification(saved,"A separate new request","Fresh answer"),"Fresh answer");
   const newTask = applyUserToTaskProgress(emptyTaskProgress(),{messageId:"resumed",text:actualQuestion});
   const params: ChatGenerateParams = {
     name:"Katie",modelId:"lead",persona:"BTG application specialist",summary:"",
