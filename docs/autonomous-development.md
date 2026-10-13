@@ -50,3 +50,16 @@ This test is explicitly opt-in, is restricted to issue events authored by the
 repository owner, never runs on production `main`, and never authorizes a
 merge. The resulting draft PR is a disposable acceptance-test artifact, not a
 feature proposed for production. Do not use the flag for ordinary work.
+
+## Event-driven notifications and follow-up triage
+
+[Issue #427](https://github.com/mfackrell/katie/issues/427) is the owner-assigned notification feed. The **Katie event-driven notifications** workflow listens for GitHub `workflow_run.completed` events from Katie's autonomous development, `ci` and `migrate-and-deploy`. **No hourly polling or ChatGPT automation is involved.**
+
+- The protected agent workflow publishes a versioned `agent-completion` artifact with the owner-authored issue, draft PR, independent test/review outcome and run ID. The event listener validates the receipt, marks the original issue `agent-ready` or `agent-blocked`, and posts one linked, @mentioned status update to #427. Missing/invalid completion information never implies success.
+- A BLOCKED result also automatically creates a linked, owner-assigned `[agent-followup]` review work item, including the independent review's blocking findings. This is **triage, not another automatic coding pass**. Owner-only agent authorization remains in force; no notification job merges code or deploys.
+- For main-branch pushes, it waits for the same commit's CI and migration workflows to both finish and posts one combined **release-checks** notice. This is **not** proof Vercel is READY; that must be verified separately. Pull-request checks are excluded.
+- Status alerts have durable per-run or per-SHA deduplication markers. Listener jobs use read-only `main` code, narrow token permissions and no production secrets. Artifacts and reviewer findings are treated as data, not executable instructions.
+
+**Delivery:** GitHub's normal issue notifications (web/mobile/email) apply if #427 is subscribed and notifications are enabled in GitHub. GitHub cannot deliver a new message directly into an inactive ChatGPT chat, and this workflow does not promise that. A self-mention alone may not generate a separate mobile push. The workflow does not auto-approve or auto-merge draft PRs.
+
+Test the pure event/receipt classification with `node --test tests/katie-event-notifier.test.mjs`. A live `workflow_run` and a new comment on #427 must be verified after merging the handler into `main`.
