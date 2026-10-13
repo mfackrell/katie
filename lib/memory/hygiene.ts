@@ -19,20 +19,8 @@ type LongTermEntry = {
   lastConfirmedAt?: string;
 };
 
-type LongTermMemoryV3 = {
-  version: 3;
-  purpose: string;
-  entries: LongTermEntry[];
-};
-
-const LONG_TERM_PURPOSE =
-  "Durable memory for important facts, preferences, relationships, goals, decisions, constraints, and recurring patterns that should persist across the conversation.";
-
 const EMBEDDED_MEMORY_SECTION =
   /\nContext About [^\n]+ \(Persist This\)[\s\S]*?\nUse this context when analyzing ongoing thoughts or behaviors\.\n?/gi;
-
-const TRANSIENT_VALUE_PATTERN =
-  /\b(?:currently|current environment|right now|today|tomorrow|this week|this trip|on vacation|recent travel|going back to|for the next hour)\b/i;
 
 function cleanActorPrompt(prompt: string): string {
   return prompt
@@ -74,44 +62,6 @@ function asEntries(memory: Record<string, unknown>): LongTermEntry[] {
         : {}),
       ...(typeof entry.lastConfirmedAt === "string" ? { lastConfirmedAt: entry.lastConfirmedAt } : {}),
     }));
-}
-
-function isTransientLongTermEntry(entry: LongTermEntry): boolean {
-  // User-requested documents and the quote-grounded facts extracted from them
-  // are durable even when their original wording describes a dated state.
-  if (entry.key.startsWith("explicit.") || entry.key.startsWith("reference.") || entry.key.startsWith("correction.")) return false;
-  if (entry.category === "preference" || entry.category === "relationship" || entry.category === "goal") {
-    return false;
-  }
-
-  return TRANSIENT_VALUE_PATTERN.test(entry.value);
-}
-
-function evidenceIdsForUserMessages(messages: Message[]): Set<string> {
-  return new Set(messages.filter((message) => message.role === "user").map((message) => message.id));
-}
-
-function normalizeProvenance(entries: LongTermEntry[], userMessageIds: Set<string>): LongTermEntry[] {
-  return entries
-    .filter((entry) => !isTransientLongTermEntry(entry))
-    .map((entry) => {
-      if (entry.source !== "user-stated") {
-        return entry;
-      }
-
-      const validEvidence = (entry.evidenceMessageIds ?? []).filter((id) => userMessageIds.has(id));
-      if (validEvidence.length > 0) {
-        return {
-          ...entry,
-          evidenceMessageIds: validEvidence,
-        };
-      }
-
-      // Actor-wide evidence can come from a different chat. Lack of a matching
-      // message in this chat's recent window is NOT evidence that the fact
-      // was inferred by an assistant.
-      return entry;
-    });
 }
 
 function upsertEntry(entries: LongTermEntry[], entry: LongTermEntry): void {
@@ -183,14 +133,6 @@ function addExplicitInteractionPreferences(entries: LongTermEntry[], messages: M
       lastConfirmedAt: directness.createdAt,
     });
   }
-}
-
-function stableSort(entries: LongTermEntry[]): LongTermEntry[] {
-  return [...entries].sort((a, b) => a.key.localeCompare(b.key));
-}
-
-function serialize(memory: LongTermMemoryV3): string {
-  return JSON.stringify(memory);
 }
 
 export async function maintainMemoryArchitecture(actorId: string, chatId: string): Promise<void> {
