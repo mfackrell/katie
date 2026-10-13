@@ -42,7 +42,7 @@ import {
 } from "@/lib/router/model-intent";
 
 import { LlmProvider, ProviderResponse } from "@/lib/providers/types";
-import { buildReviewResumptionContext, isSavedDraftVerificationRetry, savedDraftReviewTask } from "@/lib/collaboration/review-completion";
+import { buildReviewResumptionContext, candidateForVerification, isSavedDraftVerificationRetry, savedDraftReviewTask } from "@/lib/collaboration/review-completion";
 import { getPendingReviewClarification, resolvePendingReviewClarification } from "@/lib/chat/review-continuity";
 import { applyAssistantToTaskProgress, applyUserToTaskProgress, formatTaskProgress, syncTaskProgress } from "@/lib/chat/task-progress";
 import { loadTaskProgress, saveTaskProgress } from "@/lib/chat/task-progress-store";
@@ -2546,9 +2546,11 @@ ${chunkWorkflowSummary}`;
                 requestId,
                 // "Retry verification" means verify the original saved draft,
                 // not a newly generated answer to the user's "yes".
-                draft: { ...result, text: verifyingSavedDraft && pendingReviewClarification
-                  ? pendingReviewClarification.pending.candidate
-                  : (result.text || streamedText) },
+                draft: { ...result, text: candidateForVerification(
+                  pendingReviewClarification?.pending ?? null,
+                  message,
+                  result.text || streamedText,
+                ) },
                 params: {
                   ...(reviewSourceParams ?? createParams(result.model)),
                   ...(result.researchEvidence ? { researchEvidence: result.researchEvidence } : {}),
