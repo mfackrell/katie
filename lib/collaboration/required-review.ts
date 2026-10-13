@@ -110,15 +110,21 @@ export async function runRequiredDraftReview(input: {
   const audit: ReviewAudit = { sourceTurns: baseline.turns, mode: "always", status: "unavailable", draft, draftHash: hash(draft), finalHash: hash(draft), attempts: [] };
   const prepare = (p: ChatGenerateParams, participant: CollaborationParticipant) => input.prepareParams?.(p, participant) ?? p;
   const unavailable = (notice: string) => {
-    // Preserve the work and offer a resumable choice, not a dead-end "retry".
-    const question = `I saved the work, but the independent review could not be completed (${notice}). Should I retry verification with the saved draft?`;
+    // Preserve the requested work without implying that verification succeeded.
+    // A verifier failure is not a missing user fact and should not prompt an
+    // endless retry/clarification cycle.
+    if (draft.trim()) {
+      const note = `Independent review could not be completed (${notice}). This draft has not been approved; verify its claims before submitting.`;
+      const text = `Unverified draft (independent review incomplete):\n\n${draft.trim()}\n\n---\nReview note (not part of the deliverable): ${note}`;
+      audit.status = "completed_with_review_notes";
+      audit.completionNote = note;
+      audit.finalHash = hash(text);
+      return { result: { ...input.draft, text }, audit };
+    }
+    const text = `The draft is empty and independent review could not be completed (${notice}). Please retry the original task.`;
     audit.status = "needs_user_input";
-    audit.pendingClarification = {
-      question, reason: notice, deliverable: "the original requested answer",
-      candidate: draft, requirementIds: [], sourceTurns: baseline.turns, createdAt: new Date().toISOString(),
-    };
-    audit.finalHash = hash(question);
-    return { result: { ...input.draft, text: question }, audit };
+    audit.finalHash = hash(text);
+    return { result: { ...input.draft, text }, audit };
   };
   input.onProgress?.("Establishing independent evidence and quality criteria before revealing the draft.");
   if (!draft.trim()) return unavailable("Independent review unavailable: no text draft was produced.");
