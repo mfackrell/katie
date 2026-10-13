@@ -1,6 +1,7 @@
 import {
   getLongTermMemory,
   getRecentMessages,
+  mergeActorLongTermMemoryEntries,
   setLongTermMemory,
 } from "@/lib/data/persistence-store";
 import { filterConversationalMessages } from "@/lib/memory/short-term";
@@ -31,6 +32,7 @@ type LongTermEntry = {
   source: "user-stated" | "assistant-inference";
   confidence: "high" | "medium" | "low";
   evidenceMessageIds?: string[];
+  evidenceQuotes?: Array<{ messageId: string; quote: string }>;
   lastConfirmedAt?: string;
 };
 
@@ -126,6 +128,7 @@ function normalizeUpdatedContent(
           ? "medium"
           : rawEntry.confidence,
       ...(hasUserEvidence ? { evidenceMessageIds: validEvidence } : {}),
+      ...(Array.isArray(rawEntry.evidenceQuotes) ? { evidenceQuotes: rawEntry.evidenceQuotes } : {}),
       ...(typeof rawEntry.lastConfirmedAt === "string" && rawEntry.lastConfirmedAt.trim()
         ? { lastConfirmedAt: rawEntry.lastConfirmedAt.trim() }
         : {}),
@@ -177,6 +180,50 @@ function parseMemoryEditorResult(
   } catch {
     return null;
   }
+}
+
+/**
+ * Ordinary automatic learning only emits source-verified per-key updates.
+ * A valid ID without an excerpt of that actual user's text is not provenance.
+ */
+function verifiedAutomaticPatches(
+  proposed: LongTermEntry[],
+  current: LongTermEntry[],
+  recentMessages: Awaited<ReturnType<typeof getRecentMessages>>,
+): LongTermEntry[] {
+  const oldByKey = new Map(current.map(entry => [entry.key, entry]));
+  const userById = new Map(recentMessages.filter(m => m.role === "user").map(m => [m.id, m]));
+  const patches: LongTermEntry[] = [];
+  for (const entry of proposed) {
+    const old = oldByKey.get(entry.key);
+    if (old?.value === entry.value && old.category === entry.category) continue;
+    if (/^(?:reference|explicit|correction)\./.test(entry.key)) continue;
+
+    const claimed = entry.evidenceQuotes;
+    if (!claimed?.length || !entry.evidenceMessageIds?.length) continue;
+    if (claimed.some(item =>
+      !item || typeof item.messageId !== "string" || typeof item.quote !== "string" ||
+      item.quote.trim().length < 20 || !userById.get(item.messageId)?.content.includes(item.quote.trim())
+    )) continue;
+    const evidenceIds = [...new Set(claimed.map(item => item.messageId))];
+    if (evidenceIds.length !== entry.evidenceMessageIds.length ||
+        evidenceIds.some(id => !entry.evidenceMessageIds?.includes(id))) continue;
+
+    const directPreference = entry.category === "preference" &&
+      claimed.some(item => /\b(?:I (?:prefer|want|need)|my preference|please (?:always|never)|from now on)\b/i.test(item.quote));
+    const source = entry.category === "pattern" || !directPreference
+      ? "assistant-inference" : entry.source;
+    patches.push({
+      ...entry,
+      source,
+      confidence: source === "assistant-inference" && entry.confidence === "high"
+        ? "medium" : entry.confidence,
+      evidenceMessageIds: evidenceIds,
+      evidenceQuotes: claimed.map(item => ({ messageId: item.messageId, quote: item.quote.trim() })),
+      lastConfirmedAt: userById.get(evidenceIds[0])?.createdAt ?? entry.lastConfirmedAt,
+    });
+  }
+  return patches;
 }
 
 function createDefaultClient(): MemoryEditorClient | null {
@@ -295,6 +342,9 @@ export async function maybeUpdateLongTermMemory(
             "- Distinguish task-specific corrections from broadly applicable lessons. When feedback has lasting relevance, preserve the underlying lesson rather than memorizing the wording of an individual correction.",
             "- Pay particular attention to repeated feedback, explicit explanations of why an approach was ineffective, and corrections that reveal how the user evaluates quality.",
             "- Store durable lessons using the existing preference or pattern categories, appropriate evidenceMessageIds and confidence. A lesson inferred from multiple user messages may cite those messages; never attribute an assistant's interpretation to the user as a direct statement.",
+            "- In ordinary automatic updates, return only NEW or CHANGED memories, not a complete memory snapshot. The database preserves omitted existing memories.",
+            "- Every new or changed automatic memory requires evidenceQuotes: [{messageId,quote}], containing an exact meaningful excerpt of at least 20 characters from the cited USER message in recentRoleAttributedMessages. The evidenceMessageIds must be those same message IDs. Unrelated job postings and valid but irrelevant message IDs are not evidence.",
+            "- Generalized lessons inferred from feedback are assistant-inference with calibrated confidence, not user-stated facts. Reserve user-stated for directly expressed preferences.",
             "- Do not turn isolated feedback, quoted third-party criticism, or tentative interpretations into permanent user preferences. A one-off writing edit is usually task-local; use no_change when there is no durable lesson.",
             "- Allow learned preferences to evolve when the user provides new information or changes their expectations. Respect explicit corrections and preserve otherwise distinct existing memories.",
             "- Do NOT store raw transcripts, rolling summaries, routing/session state, temporary status, routine travel, momentary emotions, one-off jokes, or short-lived circumstances.",
@@ -310,7 +360,7 @@ export async function maybeUpdateLongTermMemory(
             "- Never discard a verbatim reference-document entry simply for being long.",
             "",
             "Required format:",
-            '{"version":3,"purpose":"...","entries":[{"key":"stable.short.identifier","category":"fact|preference|relationship|goal|decision|constraint|pattern","value":"...","source":"user-stated|assistant-inference","confidence":"high|medium|low","evidenceMessageIds":["USER_MESSAGE_ID"],"lastConfirmedAt":"ISO timestamp if known"}]}',
+            '{"version":3,"purpose":"...","entries":[{"key":"stable.short.identifier","category":"fact|preference|relationship|goal|decision|constraint|pattern","value":"...","source":"user-stated|assistant-inference","confidence":"high|medium|low","evidenceMessageIds":["USER_MESSAGE_ID"],"evidenceQuotes":[{"messageId":"USER_MESSAGE_ID","quote":"exact supporting user excerpt"}],"lastConfirmedAt":"ISO timestamp if known"}]}',
             "",
             "Return strict JSON only:",
             '{"action":"no_change"}',
@@ -361,18 +411,22 @@ export async function maybeUpdateLongTermMemory(
       chatId,
       entryCount: decision.updatedContent.entries.length,
     });
-    const nextContent = options.required ? decision.updatedContent : {
-      ...decision.updatedContent,
-      entries: [
-        ...decision.updatedContent.entries,
-        ...currentEntries(currentLongTermMemory).filter(e =>
-          (e.key.startsWith("explicit.") || e.key.startsWith("reference.") || e.key.startsWith("correction.")) && !decision.updatedContent.entries.some(n => n.key === e.key)),
-      ],
-    };
-    if (options.required && JSON.stringify(nextContent) === JSON.stringify(currentLongTermMemory)) {
-      throw new Error("Memory correction produced no actual change");
+    if (options.required) {
+      // Explicit edits preserve the existing correction/deletion pathway.
+      if (JSON.stringify(decision.updatedContent) === JSON.stringify(currentLongTermMemory)) {
+        throw new Error("Memory correction produced no actual change");
+      }
+      await setLongTermMemory(actorId, chatId, decision.updatedContent);
+    } else {
+      const changes = verifiedAutomaticPatches(
+        decision.updatedContent.entries, currentEntries(currentLongTermMemory), recentMessages,
+      );
+      if (!changes.length) {
+        console.log("[LongTermMemoryEditor] No-op: no source-verified durable changes", { actorId, chatId });
+        return;
+      }
+      await mergeActorLongTermMemoryEntries(actorId, changes);
     }
-    await setLongTermMemory(actorId, chatId, nextContent);
     console.log("[LongTermMemoryEditor] Save Success", { actorId, chatId });
   } catch (error: unknown) {
     if (options.required) throw error;
