@@ -167,6 +167,23 @@ function createFakeClient(state: DbState) {
   return {
     from(table: keyof DbState) {
       return new Query(state, table);
+    },
+    async rpc(name: string, args: { p_actor_id: string; p_entries: Row[] }) {
+      assert.equal(name, "merge_actor_long_term_memory_entries");
+      let row = state.actor_long_term_memory.find(item => item.actor_id === args.p_actor_id);
+      if (!row) {
+        row = { actor_id: args.p_actor_id, content: { version: 3, purpose: "Actor-wide durable memory", entries: [] } };
+        state.actor_long_term_memory.push(row);
+      }
+      const current = row.content as { version: number; purpose: string; entries: Row[] };
+      const entries = [...current.entries];
+      for (const patch of args.p_entries) {
+        const index = entries.findIndex(item => item.key === patch.key);
+        if (index < 0) entries.push(patch);
+        else entries[index] = patch;
+      }
+      row.content = { ...current, entries };
+      return { data: row.content, error: null };
     }
   };
 }
@@ -224,6 +241,11 @@ function fact(key: string,value: string) {
  return {key,value,category:"fact",source:"user-stated",confidence:"high",evidenceMessageIds:["m1"]};
 }
 function memory(...entries: ReturnType<typeof fact>[]) {return {version:3,purpose:"Actor memory",entries};}
+function learned(key: string, value: string, quote: string, messageId = "m1") {
+  return { ...fact(key, value), category: "pattern", evidenceMessageIds: [messageId],
+    evidenceQuotes: [{ messageId, quote }] };
+}
+
 test("no change preserves memory", async()=>{
  const state=makeState();
  (globalThis as any).__KATIE_SUPABASE_ADMIN_CLIENT__=createFakeClient(state);
@@ -324,14 +346,14 @@ test("automatic editor preserves fact extraction entries when model omits them",
   const state = makeState();
   (globalThis as any).__KATIE_SUPABASE_ADMIN_CLIENT__ = createFakeClient(state);
   (globalThis as any).__KATIE_LONG_TERM_MEMORY_OPENAI_CLIENT__ = createMockMemoryEditorClient(JSON.stringify({
-    action: "replace", updatedContent: memory(fact("new.fact", "A new fact"))
+    action: "replace", updatedContent: memory(learned("new.fact", "The user prefers executive synthesis over role catalogs.", "Please emphasize executive synthesis instead of listing individual roles."))
   }));
   const { store, memoryEditor } = loadModules();
   await store.saveActor({ id: "a1", name: "Actor", purpose: "Prompt" });
   await store.saveChat({ id: "c1", actorId: "a1", title: "Chat", createdAt: "x", updatedAt: "x" });
   await store.setLongTermMemory("a1", "c1", memory(fact("reference.m1.0.career", "User currently manages finance operations.")));
-  await store.saveMessage("c1", { id: "m1", role: "user", content: "A new fact" });
-  await memoryEditor.maybeUpdateLongTermMemory("a1", "c1", "A new fact");
+  await store.saveMessage("c1", { id: "m1", role: "user", content: "Please emphasize executive synthesis instead of listing individual roles." });
+  await memoryEditor.maybeUpdateLongTermMemory("a1", "c1", "Please emphasize executive synthesis instead of listing individual roles.");
   const current = await store.getLongTermMemory("a1", "c1");
   assert.equal((current.entries as Array<{ key: string }>).length, 2);
 });
@@ -386,7 +408,7 @@ test("automatic memory editor cannot remove a previously verified correction", a
   const state = makeState();
   (globalThis as any).__KATIE_SUPABASE_ADMIN_CLIENT__ = createFakeClient(state);
   (globalThis as any).__KATIE_LONG_TERM_MEMORY_OPENAI_CLIENT__ = createMockMemoryEditorClient(JSON.stringify({
-    action: "replace", updatedContent: memory(fact("misc", "Other fact"))
+    action: "replace", updatedContent: memory(learned("misc", "The user values substantial evidence.", "Show me the substantive evidence behind your conclusions."))
   }));
   const { store, memoryEditor } = loadModules();
   await store.saveActor({ id: "a1", name: "Actor", purpose: "Prompt" });
@@ -394,10 +416,67 @@ test("automatic memory editor cannot remove a previously verified correction", a
   await store.setLongTermMemory("a1", "c1", memory(
     fact("correction.m1", "Clarification: Mark led the team rather than doing the accounting entries.")
   ));
-  await store.saveMessage("c1", { id: "m1", role: "user", content: "Other fact" });
-  await memoryEditor.maybeUpdateLongTermMemory("a1", "c1", "Other fact");
+  await store.saveMessage("c1", { id: "m1", role: "user", content: "Show me the substantive evidence behind your conclusions." });
+  await memoryEditor.maybeUpdateLongTermMemory("a1", "c1", "Show me the substantive evidence behind your conclusions.");
   const current = await store.getLongTermMemory("a1", "c1");
   const entries = current.entries as Array<{key: string}>;
   assert.ok(entries.some(entry => entry.key === "correction.m1"));
   assert.ok(entries.some(entry => entry.key === "misc"));
+});
+
+test("automatic update preserves unrelated existing preferences, and downgrades inferred patterns", async () => {
+  const state = makeState();
+  (globalThis as any).__KATIE_SUPABASE_ADMIN_CLIENT__ = createFakeClient(state);
+  const quote = "I want executive-level synthesis instead of a resume of accounting duties.";
+  (globalThis as any).__KATIE_LONG_TERM_MEMORY_OPENAI_CLIENT__ = createMockMemoryEditorClient(JSON.stringify({
+    action: "replace", updatedContent: memory(learned("preference.executive", "Use executive-level synthesis for applications.", quote))
+  }));
+  const {store,memoryEditor} = loadModules();
+  await store.saveActor({id:"a1",name:"Actor",purpose:"Prompt"});
+  await store.saveChat({id:"c1",actorId:"a1",title:"Chat",createdAt:"x",updatedAt:"x"});
+  await store.setLongTermMemory("a1","c1",memory(fact("interaction.directness","User prefers direct plain communication.")));
+  await store.saveMessage("c1",{id:"m1",role:"user",content:quote});
+  await memoryEditor.maybeUpdateLongTermMemory("a1","c1",quote);
+  const entries=(await store.getLongTermMemory("a1","c2")).entries as Array<Record<string,any>>;
+  assert.equal(entries.length,2);
+  assert.ok(entries.some(e=>e.key==="interaction.directness"));
+  const learnedEntry=entries.find(e=>e.key==="preference.executive")!;
+  assert.equal(learnedEntry.source,"assistant-inference");
+  assert.equal(learnedEntry.confidence,"medium");
+  assert.deepEqual(learnedEntry.evidenceMessageIds,["m1"]);
+  assert.deepEqual(learnedEntry.evidenceQuotes,[{messageId:"m1",quote}]);
+});
+
+test("automatic memory ignores unsupported provenance even when cited user message exists", async () => {
+  const state = makeState();
+  (globalThis as any).__KATIE_SUPABASE_ADMIN_CLIENT__ = createFakeClient(state);
+  const quote="Your argument needs to explain why these experiences work together.";
+  (globalThis as any).__KATIE_LONG_TERM_MEMORY_OPENAI_CLIENT__ = createMockMemoryEditorClient(JSON.stringify({
+    action:"replace",updatedContent:memory(learned("bad.pattern","User values integrated reasoning.",quote,"m1"))
+  }));
+  const {store,memoryEditor}=loadModules();
+  await store.saveActor({id:"a1",name:"Actor",purpose:"Prompt"});
+  await store.saveChat({id:"c1",actorId:"a1",title:"Chat",createdAt:"x",updatedAt:"x"});
+  await store.setLongTermMemory("a1","c1",memory(fact("existing","Keep me.")));
+  await store.saveMessage("c1",{id:"m1",role:"user",content:"Interim CFO for Global Industrial Client and audit remediation."});
+  await store.saveMessage("c1",{id:"m2",role:"assistant",content:"Initial draft."});
+  await store.saveMessage("c1",{id:"m3",role:"user",content:quote});
+  await store.saveMessage("c1",{id:"m4",role:"assistant",content:"Acknowledged."});
+  await memoryEditor.maybeUpdateLongTermMemory("a1","c1",quote);
+  const entries=(await store.getLongTermMemory("a1","c1")).entries as Array<{key:string}>;
+  assert.deepEqual(entries.map(e=>e.key),["existing"]);
+});
+
+test("concurrent updates from different chats merge without losing entries", async () => {
+  const state=makeState();
+  (globalThis as any).__KATIE_SUPABASE_ADMIN_CLIENT__=createFakeClient(state);
+  const {store}=loadModules();
+  await store.saveActor({id:"a1",name:"Actor",purpose:"Prompt"});
+  await Promise.all([
+    store.mergeActorLongTermMemoryEntries("a1",[fact("from.chat.one","First durable lesson.")]),
+    store.mergeActorLongTermMemoryEntries("a1",[fact("from.chat.two","Second durable lesson.")]),
+  ]);
+  const result=await store.getLongTermMemory("a1","any");
+  const keys=(result.entries as Array<{key:string}>).map(e=>e.key).sort();
+  assert.deepEqual(keys,["from.chat.one","from.chat.two"]);
 });
