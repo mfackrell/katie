@@ -27,7 +27,7 @@ Deno.serve(async(request:Request)=>{
   if(!url||!key)return response({error:"storage_not_configured"},503);
   const h={"apikey":key,Authorization:"Bearer "+key,"content-type":"application/json"};
   const q=await fetch(url+"/rest/v1/video_analysis_jobs?id=eq."+encodeURIComponent(receipt)+
-    "&select=id,runpod_job_id,status,error_code,callback_token_hash",{
+    "&select=id,runpod_job_id,status,error_code,callback_token_hash,chat_request_id,actor_id",{
     headers:h,signal:AbortSignal.timeout(12000)
   });
   if(!q.ok)return response({error:"job_lookup_failed"},503);
@@ -53,6 +53,20 @@ Deno.serve(async(request:Request)=>{
    usage:output.usage??null
   }:null;
   const now=new Date().toISOString();
+  // Isolated validation provenance only; normal jobs keep their existing flow.
+  async function recordSyntheticCallback(){
+   if(job.chat_request_id!=="synthetic-wp4")return true;
+   if(!job.actor_id||!UUID.test(job.actor_id))return false;
+   const marked=await fetch(url+"/rest/v1/runpod_synthetic_validation?slot=eq.wp4&actor_id=eq."+
+    encodeURIComponent(job.actor_id)+"&cleaned_at=is.null",{
+    method:"PATCH",headers:{...h,Prefer:"return=representation"},
+    body:JSON.stringify({callback_receipt_id:receipt,callback_provider_id:body.id,callback_received_at:now}),
+    signal:AbortSignal.timeout(12000)
+   });
+   if(!marked.ok)return false;
+   const confirmed=await marked.json();
+   return Array.isArray(confirmed)&&confirmed.length===1;
+  }
   const patch={
    runpod_job_id:body.id,status:saveStatus,analysis_text:analysis,model_output:safeOutput,
    error_code:saveStatus==="failed"?(state==="COMPLETED"?"COMPLETED_WITHOUT_ANALYSIS":"RUNPOD_"+state):null,
@@ -70,7 +84,12 @@ Deno.serve(async(request:Request)=>{
    if(job.runpod_job_id && job.runpod_job_id!==body.id)return response({error:"job_mismatch"},409);
    const localDeadline=(job.status==="timed_out" && ["SUBMISSION_ACCEPTANCE_UNRESOLVED_DEADLINE","QWEN_FIFTEEN_MINUTE_DEADLINE","QWEN_DEADLINE_POLL_UNAVAILABLE"].includes(job.error_code)) ||
      (job.status==="expired" && job.error_code==="RUNPOD_RESULT_EXPIRED_OR_NOT_FOUND");
-   if(!localDeadline && !["pending","queued","in_progress"].includes(job.status))return response({status:job.status,saved:true,already_terminal:true});
+   if(!localDeadline && !["pending","queued","in_progress"].includes(job.status)){
+    if(!["COMPLETED","FAILED","CANCELLED","TIMED_OUT"].includes(state) && job.chat_request_id==="synthetic-wp4")
+      return response({error:"not_terminal"},409);
+    if(!await recordSyntheticCallback())return response({error:"validation_capture_failed"},503);
+    return response({status:job.status,saved:true,already_terminal:true});
+   }
    if(!["COMPLETED","FAILED","CANCELLED","TIMED_OUT"].includes(state))
      return response({error:"not_terminal"},409);
    const saved=await fetch(url+"/rest/v1/video_analysis_jobs?id=eq."+encodeURIComponent(receipt)+"&status=eq."+encodeURIComponent(job.status)+
@@ -82,10 +101,13 @@ Deno.serve(async(request:Request)=>{
    if(!saved.ok)return response({error:"persistence_failed"},503);
    const confirm=await saved.json();
    if(!Array.isArray(confirm))return response({error:"missing_save_confirmation"},503);
-   if(confirm.length===1)return response({status:saveStatus,saved:true});
+   if(confirm.length===1){
+    if(!await recordSyntheticCallback())return response({error:"validation_capture_failed"},503);
+    return response({status:saveStatus,saved:true});
+   }
    if(confirm.length!==0)return response({error:"missing_save_confirmation"},503);
    const refreshed=await fetch(url+"/rest/v1/video_analysis_jobs?id=eq."+encodeURIComponent(receipt)+
-     "&select=id,runpod_job_id,status,error_code,callback_token_hash",{
+     "&select=id,runpod_job_id,status,error_code,callback_token_hash,chat_request_id,actor_id",{
      headers:h,signal:AbortSignal.timeout(12000)
    });
    if(!refreshed.ok)return response({error:"job_lookup_failed"},503);

@@ -278,6 +278,7 @@ export async function submitSavedVideo(params: {
   requestId?: string; targetChatId?: string; actorId?: string;
   assistantMessageId?: string; videoIndex?: number; videoTotal?: number;
   sourceFilename?: string;
+  syntheticValidation?: true;
 }) {
   assertStoredVideoPath(params.chatId, params.attachmentPath);
   if (params.requestId) {
@@ -361,6 +362,7 @@ export async function submitSavedVideo(params: {
       },
       signal: AbortSignal.timeout(20000),
       body: JSON.stringify({
+        ...(params.syntheticValidation ? {policy: {executionTimeout: 60000, ttl: 120000}} : {}),
         input: {
           route: "/v1/chat/completions", method: "POST",
           body: {
