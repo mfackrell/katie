@@ -108,7 +108,7 @@ test("capability review check is independently required for all domains", () => 
   };
   const ids = acceptanceIds(a);
   assert.equal(ids.filter(id => id === "evidence-to-conclusion-reasoning").length, 1);
-  assert.match(CONTRACT_RULES, /strongest defensible conclusion/);
+  assert.ok(CONTRACT_RULES.includes(getObjectiveFirstInstruction()));
   assert.match(getReviewerCompletionInstruction(), /EVIDENCE-BASED CAPABILITY REASONING/);
   assert.ok(getFinalSynthesisInstruction().includes("EVIDENCE-BASED CAPABILITY REASONING"));
 });
