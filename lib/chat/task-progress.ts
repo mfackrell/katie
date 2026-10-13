@@ -101,7 +101,9 @@ export function classifyUserTurn(message: string): Exclude<UserTurnIntent, "answ
   if (/^(?:(?:my|our)\s+)?(?:evaluation|assessment|feedback|critique)\b/i.test(text) ||
       /^\d+(?:\.\d+)?\s*\/\s*10\b/i.test(text) ||
       /^(?:this is|here is|here's)\s+(?:my\s+)?(?:feedback|evaluation|assessment)\b/i.test(text) ||
-      /^what(?:'s| is)\s+(?:improved|better|worse|wrong|working|still missing)\b/i.test(text)) {
+      /^what(?:'s| is)\s+(?:improved|better|worse|wrong|working|still missing)\b/i.test(text) ||
+      /^(?:one phrase is|(?:that|this|your|the) (?:paragraph|sentence|phrase|wording|draft|response|answer) (?:is|was|seems|reads))\b/i.test(text) ||
+      /^where (?:her|his|your|Katie's) (?:thinking|writing|reasoning)\b/i.test(text)) {
     return "feedback";
   }
   return "continuation";
