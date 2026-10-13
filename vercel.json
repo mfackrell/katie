@@ -17,6 +17,10 @@
     {
       "path": "/api/internal/video-handoffs/reconcile",
       "schedule": "* * * * *"
+    },
+    {
+      "path": "/api/internal/runpod-results/synthetic-cron",
+      "schedule": "* * * * *"
     }
   ],
   "git": {

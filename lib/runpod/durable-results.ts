@@ -427,8 +427,13 @@ export async function submitSavedVideo(params: {
       if (readError || !data) throw new Error("Cannot confirm video submission recovery", {cause: error});
       current = data;
     }
-    console.warn("[RunPod Submission] receipt retained", {receiptId: record.id, status: current.status,
-      outcome: uncertain ? "acceptance_uncertain" : confirmedRejection ? "rejected" : "pre_post_failure"});
+    const outcome = uncertain ? "acceptance_uncertain" : confirmedRejection ? "rejected" : "pre_post_failure";
+    if (params.syntheticValidation) {
+      // Synthetic cron logs must exclude identifiers and untrusted database values.
+      console.warn("[RunPod Synthetic Submission] receipt retained", {outcome});
+    } else {
+      console.warn("[RunPod Submission] receipt retained", {receiptId: record.id, status: current.status, outcome});
+    }
     // Durable batches continue to background recovery; synchronous callers require a provider ID.
     return {id: record.id, jobId: current.runpod_job_id ?? "", status: current.status};
   }
