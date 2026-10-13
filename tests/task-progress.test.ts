@@ -136,6 +136,29 @@ test("Please describe creates a new task and never answers pending unrelated que
   assert.equal(result.stage,"working");
 });
 
+test("latest BTG screening prompt is a NEW task rather than an answer to an old question", () => {
+  const previous = rebuildTaskProgress(history);
+  const prompt = "Please share 3 to 5 examples of your relevant experience.";
+  assert.equal(classifyUserTurn(prompt), "new_task");
+  assert.equal(classifyUserTurn("List three examples of relevant experience."), "new_task");
+  assert.equal(classifyUserTurn("Give me three examples of your work."), "new_task");
+  const progress = applyUserToTaskProgress(previous, { messageId: "new-screening-question", text: prompt });
+  assert.equal(progress.lastUserIntent, "new_task");
+  assert.equal(progress.objective?.text, prompt);
+  assert.equal(progress.objective?.userMessageId, "new-screening-question");
+  assert.deepEqual(progress.pending, []);
+  assert.deepEqual(progress.answered, []);
+  const baseline = reviewBaseline({
+    name: "Katie", modelId: "lead", persona: "Actor instructions", summary: "",
+    history: [{role:"user",content:originalTask}, {role:"user",content:"Previous question: discuss carve-outs."}],
+    user:prompt,
+  },progress);
+  assert.equal(baseline.activeNewTask,true);
+  assert.match(baseline.text,/ACTIVE DELIVERABLE \(authoritative, latest user request\)/);
+  assert.match(baseline.text,/not import requirements or exclusions from old screening answers/);
+  assert.ok(baseline.text.indexOf("ACTIVE DELIVERABLE") < baseline.text.indexOf("AUTHORITATIVE USER TURNS"));
+});
+
 test("unnumbered reply to many questions never fabricates specific numbered correspondence", () => {
   const previous = rebuildTaskProgress(history);
   const progress = applyUserToTaskProgress(previous,{messageId:"reply",text:"The other issues are settled, but I haven't decided on travel."});
