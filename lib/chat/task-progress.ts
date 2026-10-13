@@ -103,7 +103,7 @@ export function classifyUserTurn(message: string): Exclude<UserTurnIntent, "answ
 
   // New standalone requests use leading imperatives, including common
   // application screening questions such as "Please describe your experience".
-  if (/^(?:new (?:task|topic|question)\b|(?:please\s+)?(?:write|draft|build|create|find|investigate|analy[sz]e|review|implement|compare|summari[sz]e|research|design|fix|describe|explain|provide|prepare|evaluate|assess|share|list|outline)\b)/i.test(text) &&
+  if (/^(?:new (?:task|topic|question|project|engagement)\b|(?:please\s+)?(?:write|draft|build|create|find|investigate|analy[sz]e|review|implement|compare|summari[sz]e|research|design|fix|describe|explain|provide|prepare|evaluate|assess|share|list|outline)\b)/i.test(text) &&
       !/^(?:try again|continue|go ahead|ok|yes|no)\b/i.test(text)) {
     return "new_task";
   }
