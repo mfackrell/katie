@@ -58,7 +58,7 @@ function harness(fault = '', syntheticValidation = false) {
 test('synthetic workload policy is bounded while normal submissions retain existing policy', async()=>{
   const normal=harness();await normal.submit();assert.equal(normal.policy,undefined);
   const synthetic=harness('',true);await synthetic.submit();await synthetic.submit();
-  assert.equal(synthetic.policy.executionTimeout,60000);assert.equal(synthetic.policy.ttl,120000);assert.equal(synthetic.posts,1);
+  assert.equal(synthetic.policy.executionTimeout,60000);assert.equal(synthetic.policy.ttl,900000);assert.equal(synthetic.posts,1);
 });
 test('pre-POST failure and explicit rejection remain distinct, durable and non-repeating', async () => {
   for (const [fault,code,posts] of [['before','SUBMISSION_PRE_POST_FAILED',0],['rejected','SUBMISSION_REJECTED',1]]) {

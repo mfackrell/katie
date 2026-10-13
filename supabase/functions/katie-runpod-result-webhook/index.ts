@@ -53,11 +53,13 @@ Deno.serve(async(request:Request)=>{
    usage:output.usage??null
   }:null;
   const now=new Date().toISOString();
+  const syntheticSlot = job.chat_request_id === "synthetic-wp4" ? "wp4" :
+    job.chat_request_id === "synthetic-wp4-retest" ? "wp4-retest" : null;
   // Isolated validation provenance only; normal jobs keep their existing flow.
   async function recordSyntheticCallback(){
-   if(job.chat_request_id!=="synthetic-wp4")return true;
+   if(!syntheticSlot)return true;
    if(!job.actor_id||!UUID.test(job.actor_id))return false;
-   const marked=await fetch(url+"/rest/v1/runpod_synthetic_validation?slot=eq.wp4&actor_id=eq."+
+   const marked=await fetch(url+"/rest/v1/runpod_synthetic_validation?slot=eq."+syntheticSlot+"&actor_id=eq."+
     encodeURIComponent(job.actor_id)+"&cleaned_at=is.null",{
     method:"PATCH",headers:{...h,Prefer:"return=representation"},
     body:JSON.stringify({callback_receipt_id:receipt,callback_provider_id:body.id,callback_received_at:now}),
@@ -85,7 +87,7 @@ Deno.serve(async(request:Request)=>{
    const localDeadline=(job.status==="timed_out" && ["SUBMISSION_ACCEPTANCE_UNRESOLVED_DEADLINE","QWEN_FIFTEEN_MINUTE_DEADLINE","QWEN_DEADLINE_POLL_UNAVAILABLE"].includes(job.error_code)) ||
      (job.status==="expired" && job.error_code==="RUNPOD_RESULT_EXPIRED_OR_NOT_FOUND");
    if(!localDeadline && !["pending","queued","in_progress"].includes(job.status)){
-    if(!["COMPLETED","FAILED","CANCELLED","TIMED_OUT"].includes(state) && job.chat_request_id==="synthetic-wp4")
+    if(!["COMPLETED","FAILED","CANCELLED","TIMED_OUT"].includes(state) && syntheticSlot)
       return response({error:"not_terminal"},409);
     if(!await recordSyntheticCallback())return response({error:"validation_capture_failed"},503);
     return response({status:job.status,saved:true,already_terminal:true});

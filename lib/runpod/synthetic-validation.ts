@@ -4,7 +4,12 @@ import { createHash } from 'node:crypto';
 import { createClient } from '@supabase/supabase-js';
 import { assertRunpodAdmin, submitSavedVideo } from './durable-results';
 
-const REQUEST = 'synthetic-wp4';
+// Server-only allowlist: HTTP payloads never select an identity or cost policy.
+function identity() {
+  const slot = process.env.RUNPOD_SYNTHETIC_VALIDATION_SLOT || 'wp4';
+  if (slot !== 'wp4' && slot !== 'wp4-retest') throw new Error('invalid_slot');
+  return {slot, request: `synthetic-${slot}`, suffix: slot === 'wp4' ? '' : '_retest'};
+}
 const QUESTION = 'This is a synthetic test clip, with no people. Describe the colors, central shape, and scene order.';
 type Claim = {actor_id: string; chat_id: string; assistant_id: string; attachment_id: string;
   started_at: string; deadline_at: string; cleaned_at: string | null;
@@ -21,7 +26,7 @@ function store() {
 }
 function path(r: Claim) {return `chats/${r.chat_id}/${r.attachment_id}.source`;}
 async function claimRecord(db: ReturnType<typeof store>): Promise<Claim | null> {
-  const {data, error} = await db.from('runpod_synthetic_validation').select('*').eq('slot','wp4').maybeSingle();
+  const {data, error} = await db.from('runpod_synthetic_validation').select('*').eq('slot',identity().slot).maybeSingle();
   if (error) throw new Error('unavailable');
   return data as Claim | null;
 }
@@ -30,7 +35,7 @@ export async function startSyntheticValidation() {
   // Read and verify bundled bytes before reserving the irreversible one-shot claim.
   const bytes = await readFile(join(process.cwd(),'fixtures/runpod/synthetic-red-blue.mp4'));
   if (createHash('sha256').update(bytes).digest('hex') !== FIXTURE_SHA256) throw new Error('fixture_invalid');
-  const {data, error} = await db.rpc('claim_runpod_synthetic_validation');
+  const {data, error} = await db.rpc(`claim_runpod_synthetic_validation${identity().suffix}`);
   if (error) throw new Error('unavailable');
   if (!data) return {status: 'already_claimed'};
   const r = data as Claim;
@@ -41,9 +46,10 @@ export async function startSyntheticValidation() {
     JSON.stringify({reference:{fileName:'SYNTHETIC-TEST-red-blue.mp4',mimeType:'video/mp4'},
       hasSource:true,actorId:r.actor_id,refreshedAt:Date.now()}),{contentType:'application/json',upsert:false});
   if (metadata.error) throw new Error('fixture_upload_failed');
-  if (Date.now() >= Date.parse(r.deadline_at)) throw new Error('deadline_exceeded');
+  // Leave the full queue TTL and three minutes for downstream recovery/cleanup.
+  if (Date.now() + 900_000 + 180_000 >= Date.parse(r.deadline_at)) throw new Error('deadline_exceeded');
   const receipt = await submitSavedVideo({chatId:r.chat_id, targetChatId:r.chat_id, actorId:r.actor_id,
-    requestId:REQUEST, assistantMessageId:r.assistant_id, videoIndex:0,videoTotal:1,
+    requestId:identity().request, assistantMessageId:r.assistant_id, videoIndex:0,videoTotal:1,
     attachmentPath:path(r), question:QUESTION,sourceFilename:'SYNTHETIC-TEST-red-blue.mp4', syntheticValidation:true});
   return {status:'submitted', receiptId:receipt.id, providerStatus:receipt.status};
 }
@@ -77,7 +83,7 @@ export async function syntheticStatus() {
   const db = store(), r = await claimRecord(db);
   if (!r) return {status:'not_started', livePass:false};
   const [jobs, messages, original] = await Promise.all([
-    db.from('video_analysis_jobs').select('id,runpod_job_id,status,actor_id,chat_id,target_chat_id,assistant_message_id,attachment_path,analysis_text,fallback_text,fallback_state,error_code,fallback_error_code,response_delivered_at').eq('chat_request_id',REQUEST),
+    db.from('video_analysis_jobs').select('id,runpod_job_id,status,actor_id,chat_id,target_chat_id,assistant_message_id,attachment_path,analysis_text,fallback_text,fallback_state,error_code,fallback_error_code,response_delivered_at').eq('chat_request_id',identity().request).eq('actor_id',r.actor_id),
     db.from('messages').select('id,actor_id,chat_id,content').eq('chat_id',r.chat_id),
     r.cleaned_at ? Promise.resolve({data:null,error:null}) : db.storage.from('katie-attachments').download(path(r)),
   ]);
@@ -92,7 +98,7 @@ export async function cleanupSyntheticValidation() {
   if (Date.now() < Date.parse(r.deadline_at)) throw new Error('still_active');
   const removed = await db.storage.from('katie-attachments').remove([path(r),path(r).replace(/\.source$/,'.json')]);
   if (removed.error) throw new Error('cleanup_failed');
-  const result = await db.rpc('cleanup_runpod_synthetic_validation');
+  const result = await db.rpc(`cleanup_runpod_synthetic_validation${identity().suffix}`);
   if (result.error) throw new Error('cleanup_failed');
   return {status:'cleaned'};
 }

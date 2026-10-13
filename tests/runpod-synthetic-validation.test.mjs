@@ -5,14 +5,20 @@ import {readFileSync} from 'node:fs';
 import crypto from 'node:crypto';
 import ts from 'typescript';
 const r={actor_id:'actor',chat_id:'chat',assistant_id:'assistant',attachment_id:'clip',started_at:'2026-10-13T00:00:00Z',deadline_at:'2099-10-13T00:20:00Z',cleaned_at:null};
-function harness(fault='') {
+function harness(fault='', slot='wp4') {
   let claimed=false, submissions=0, uploads=0;
-  const env={RUNPOD_INTERNAL_TOKEN:'a'.repeat(32),SUPABASE_URL:'https://mock.invalid',SUPABASE_SERVICE_ROLE_KEY:'mock'};
+  const removals=[];
+  const record=fault==='cleanup'?{...r,deadline_at:new Date(Date.now()-60_000).toISOString()}:r;
+  const env={RUNPOD_SYNTHETIC_VALIDATION_SLOT:slot,RUNPOD_INTERNAL_TOKEN:'a'.repeat(32),SUPABASE_URL:'https://mock.invalid',SUPABASE_SERVICE_ROLE_KEY:'mock'};
   const db={rpc:async name=>{
-    assert.equal(name,'claim_runpod_synthetic_validation');
+    if(name==='cleanup_runpod_synthetic_validation'+(slot==='wp4-retest'?'_retest':'')) return {};
+    assert.equal(name,'claim_runpod_synthetic_validation'+(slot==='wp4-retest'?'_retest':''));
     if (claimed) return {data:null};
-    claimed=true; return {data:r};
-  },storage:{from:()=>({upload:async()=>{uploads++;return fault==='upload'?{error:true}:{};}})}};
+    claimed=true; return {data:fault==='slow_setup'?{...r,deadline_at:new Date(Date.now()+17*60_000).toISOString()}:r};
+  },from:table=>{
+    assert.equal(table,'runpod_synthetic_validation');
+    const q={select:()=>q,eq:(key,value)=>{assert.equal(key,'slot');assert.equal(value,slot);return q;},maybeSingle:async()=>({data:record})};return q;
+  },storage:{from:()=>({remove:async paths=>{removals.push(...paths);return {};},upload:async()=>{uploads++;return fault==='upload'?{error:true}:{};}})}};
   const exports={};
   vm.runInNewContext(ts.transpileModule(readFileSync('lib/runpod/synthetic-validation.ts','utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText,{
     exports,process:{env,cwd:()=>'.'},Buffer,Date,require:name=>{
@@ -21,11 +27,11 @@ function harness(fault='') {
       if(name==='node:fs/promises') return {readFile:async()=>fault==='fixture'?Buffer.from('bad'):readFileSync('fixtures/runpod/synthetic-red-blue.mp4')};
       if(name==='@supabase/supabase-js') return {createClient:()=>db};
       if(name==='./durable-results') return {assertRunpodAdmin:req=>req.headers.get('x-runpod-admin-token')===env.RUNPOD_INTERNAL_TOKEN,
-        submitSavedVideo:async p=>{submissions++;assert.equal(p.syntheticValidation,true);assert.equal(p.videoTotal,1);assert.equal(p.actorId,r.actor_id);
+        submitSavedVideo:async p=>{submissions++;assert.equal(p.requestId,`synthetic-${slot}`);assert.equal(p.syntheticValidation,true);assert.equal(p.videoTotal,1);assert.equal(p.actorId,r.actor_id);
           if(fault==='submit') throw new Error('secret');return {id:'receipt',status:fault==='uncertain'?'pending':'queued'};}};
       throw new Error(name);
     }});
-  return {exports,env,get submissions(){return submissions;},get uploads(){return uploads;}};
+  return {exports,env,removals,get submissions(){return submissions;},get uploads(){return uploads;}};
 }
 test('synthetic harness is off by default and authenticates every action',()=>{
   const h=harness();const authorized=new Request('https://mock.invalid',{headers:{'x-runpod-admin-token':'a'.repeat(32)}});
@@ -85,4 +91,32 @@ test('GET POST DELETE routes reject unauthorized/default-off calls and redact fa
     assert.equal(response.headers.get('cache-control'),'no-store');assert.ok(!(await response.text()).includes('secret'));
   }
   assert.equal(calls,3);
+});
+
+test('allowlisted retest uses a new permanent claim and correlation; unknown server slots fail closed',async()=>{
+  for(const fault of ['', 'uncertain','submit','upload']) {
+    const h=harness(fault,'wp4-retest');
+    await Promise.allSettled([h.exports.startSyntheticValidation(),h.exports.startSyntheticValidation()]);
+    assert.equal((await h.exports.startSyntheticValidation()).status,'already_claimed');
+    assert.equal(h.submissions,fault==='upload'?0:1);
+  }
+  const h=harness('','arbitrary');
+  await assert.rejects(h.exports.startSyntheticValidation(),/invalid_slot/);
+  assert.equal(h.submissions,0);assert.equal(h.uploads,0);
+});
+
+test('slow setup consumes the new claim without POST rather than losing delivery margin',async()=>{
+  const h=harness('slow_setup','wp4-retest');
+  await assert.rejects(h.exports.startSyntheticValidation(),/deadline_exceeded/);
+  assert.equal(h.submissions,0);assert.equal((await h.exports.startSyntheticValidation()).status,'already_claimed');
+});
+
+test('retest cleanup deletes only its private source and metadata and refuses early cleanup',async()=>{
+  const active=harness('','wp4-retest');
+  await assert.rejects(active.exports.cleanupSyntheticValidation(),/still_active/);
+  assert.equal(active.removals.length,0);
+  const h=harness('cleanup','wp4-retest');
+  assert.equal((await h.exports.cleanupSyntheticValidation()).status,'cleaned');
+  assert.deepEqual(h.removals,['chats/chat/clip.source','chats/chat/clip.json']);
+  assert.equal(h.submissions,0);
 });
