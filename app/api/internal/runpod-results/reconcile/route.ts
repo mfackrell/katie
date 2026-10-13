@@ -31,12 +31,13 @@ export async function GET(request: NextRequest) {
       await Promise.all(rows.slice(offset, offset + 6).map(async row => {
         const now = new Date().toISOString();
         if (!row.runpod_job_id) {
-          if (Date.now() - Date.parse(row.submitted_at) > 120_000) {
-            const { error: staleError } = await client.from("video_analysis_jobs").update({
-              status: "failed", error_code: "UNREGISTERED_SUBMISSION_TIMED_OUT",
+          if (Date.now() - Date.parse(row.submitted_at) >= 900_000) {
+            const { data: changed, error: staleError } = await client.from("video_analysis_jobs").update({
+              status: "timed_out", error_code: "SUBMISSION_ACCEPTANCE_UNRESOLVED_DEADLINE",
               completed_at: now, updated_at: now,
-            }).eq("id", row.id).eq("status", "pending");
-            if (staleError) failed++; else saved++;
+            }).eq("id", row.id).eq("status", "pending").is("runpod_job_id", null)
+              .select("id").maybeSingle();
+            if (staleError) failed++; else if (changed) saved++;
           }
           return;
         }
@@ -49,11 +50,12 @@ export async function GET(request: NextRequest) {
               Date.now() - Date.parse(row.submitted_at) >= 900_000 &&
               ACTIVE_RUNPOD_STATES.some(state => state === refreshed.status)) {
             const deadline = new Date().toISOString();
-            const { error: overdueError } = await client.from("video_analysis_jobs").update({
+            const { data: overdue, error: overdueError } = await client.from("video_analysis_jobs").update({
               status: "timed_out", error_code: "QWEN_FIFTEEN_MINUTE_DEADLINE",
               completed_at: deadline, updated_at: deadline,
-            }).eq("id", row.id).in("status", [...ACTIVE_RUNPOD_STATES]);
-            if (overdueError) failed++; else timedOut++;
+            }).eq("id", row.id).in("status", [...ACTIVE_RUNPOD_STATES])
+              .select("id").maybeSingle();
+            if (overdueError) failed++; else if (overdue) timedOut++;
           }
         } catch (caught) {
           failed++;
@@ -64,10 +66,11 @@ export async function GET(request: NextRequest) {
               Date.now() - Date.parse(row.submitted_at) >= 900_000) {
             // Bounded completion even when RunPod polling itself is unavailable.
             const deadline = new Date().toISOString();
-            await client.from("video_analysis_jobs").update({
+            const {error: deadlineError} = await client.from("video_analysis_jobs").update({
               status: "timed_out", error_code: "QWEN_DEADLINE_POLL_UNAVAILABLE",
               completed_at: deadline, updated_at: deadline,
             }).eq("id", row.id).in("status", [...ACTIVE_RUNPOD_STATES]);
+            if (deadlineError) throw new Error("Cannot persist unavailable-poll deadline");
           }
         }
       }));
