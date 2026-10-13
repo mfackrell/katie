@@ -1,0 +1,286 @@
+{
+  "columns": [
+    {
+      "column_name": "id",
+      "data_type": "uuid",
+      "is_nullable": "NO",
+      "column_default": "gen_random_uuid()"
+    },
+    {
+      "column_name": "runpod_job_id",
+      "data_type": "text",
+      "is_nullable": "YES",
+      "column_default": null
+    },
+    {
+      "column_name": "endpoint_id",
+      "data_type": "text",
+      "is_nullable": "NO",
+      "column_default": "'yafwsm98e8m9lv'::text"
+    },
+    {
+      "column_name": "model",
+      "data_type": "text",
+      "is_nullable": "NO",
+      "column_default": "'Qwen/Qwen3-VL-8B-Instruct'::text"
+    },
+    {
+      "column_name": "chat_id",
+      "data_type": "uuid",
+      "is_nullable": "YES",
+      "column_default": null
+    },
+    {
+      "column_name": "attachment_path",
+      "data_type": "text",
+      "is_nullable": "YES",
+      "column_default": null
+    },
+    {
+      "column_name": "request_prompt",
+      "data_type": "text",
+      "is_nullable": "YES",
+      "column_default": null
+    },
+    {
+      "column_name": "callback_token_hash",
+      "data_type": "text",
+      "is_nullable": "YES",
+      "column_default": null
+    },
+    {
+      "column_name": "status",
+      "data_type": "text",
+      "is_nullable": "NO",
+      "column_default": "'pending'::text"
+    },
+    {
+      "column_name": "analysis_text",
+      "data_type": "text",
+      "is_nullable": "YES",
+      "column_default": null
+    },
+    {
+      "column_name": "model_output",
+      "data_type": "jsonb",
+      "is_nullable": "YES",
+      "column_default": null
+    },
+    {
+      "column_name": "error_code",
+      "data_type": "text",
+      "is_nullable": "YES",
+      "column_default": null
+    },
+    {
+      "column_name": "queue_ms",
+      "data_type": "bigint",
+      "is_nullable": "YES",
+      "column_default": null
+    },
+    {
+      "column_name": "inference_ms",
+      "data_type": "bigint",
+      "is_nullable": "YES",
+      "column_default": null
+    },
+    {
+      "column_name": "input_tokens",
+      "data_type": "integer",
+      "is_nullable": "YES",
+      "column_default": null
+    },
+    {
+      "column_name": "output_tokens",
+      "data_type": "integer",
+      "is_nullable": "YES",
+      "column_default": null
+    },
+    {
+      "column_name": "last_polled_at",
+      "data_type": "timestamp with time zone",
+      "is_nullable": "YES",
+      "column_default": null
+    },
+    {
+      "column_name": "submitted_at",
+      "data_type": "timestamp with time zone",
+      "is_nullable": "NO",
+      "column_default": "now()"
+    },
+    {
+      "column_name": "completed_at",
+      "data_type": "timestamp with time zone",
+      "is_nullable": "YES",
+      "column_default": null
+    },
+    {
+      "column_name": "updated_at",
+      "data_type": "timestamp with time zone",
+      "is_nullable": "NO",
+      "column_default": "now()"
+    },
+    {
+      "column_name": "chat_request_id",
+      "data_type": "text",
+      "is_nullable": "YES",
+      "column_default": null
+    },
+    {
+      "column_name": "target_chat_id",
+      "data_type": "uuid",
+      "is_nullable": "YES",
+      "column_default": null
+    },
+    {
+      "column_name": "actor_id",
+      "data_type": "uuid",
+      "is_nullable": "YES",
+      "column_default": null
+    },
+    {
+      "column_name": "assistant_message_id",
+      "data_type": "uuid",
+      "is_nullable": "YES",
+      "column_default": null
+    },
+    {
+      "column_name": "video_index",
+      "data_type": "integer",
+      "is_nullable": "YES",
+      "column_default": null
+    },
+    {
+      "column_name": "video_total",
+      "data_type": "integer",
+      "is_nullable": "YES",
+      "column_default": null
+    },
+    {
+      "column_name": "source_filename",
+      "data_type": "text",
+      "is_nullable": "YES",
+      "column_default": null
+    },
+    {
+      "column_name": "fallback_state",
+      "data_type": "text",
+      "is_nullable": "YES",
+      "column_default": null
+    },
+    {
+      "column_name": "fallback_text",
+      "data_type": "text",
+      "is_nullable": "YES",
+      "column_default": null
+    },
+    {
+      "column_name": "fallback_model",
+      "data_type": "text",
+      "is_nullable": "YES",
+      "column_default": null
+    },
+    {
+      "column_name": "fallback_started_at",
+      "data_type": "timestamp with time zone",
+      "is_nullable": "YES",
+      "column_default": null
+    },
+    {
+      "column_name": "fallback_completed_at",
+      "data_type": "timestamp with time zone",
+      "is_nullable": "YES",
+      "column_default": null
+    },
+    {
+      "column_name": "fallback_error_code",
+      "data_type": "text",
+      "is_nullable": "YES",
+      "column_default": null
+    },
+    {
+      "column_name": "response_delivered_at",
+      "data_type": "timestamp with time zone",
+      "is_nullable": "YES",
+      "column_default": null
+    },
+    {
+      "column_name": "fallback_attempts",
+      "data_type": "integer",
+      "is_nullable": "NO",
+      "column_default": "0"
+    }
+  ],
+  "constraints": [
+    {
+      "name": "video_analysis_jobs_actor_id_fkey",
+      "definition": "FOREIGN KEY (actor_id) REFERENCES actors(id) ON DELETE SET NULL"
+    },
+    {
+      "name": "video_analysis_jobs_chat_id_fkey",
+      "definition": "FOREIGN KEY (chat_id) REFERENCES chats(id) ON DELETE SET NULL"
+    },
+    {
+      "name": "video_analysis_jobs_content_limit",
+      "definition": "CHECK ((char_length(COALESCE(analysis_text, ''::text)) <= 250000))"
+    },
+    {
+      "name": "video_analysis_jobs_id_limit",
+      "definition": "CHECK ((char_length(COALESCE(runpod_job_id, ''::text)) <= 150))"
+    },
+    {
+      "name": "video_analysis_jobs_no_signed_source",
+      "definition": "CHECK (((attachment_path IS NULL) OR ((attachment_path !~~ '%?%'::text) AND (attachment_path !~~ '%://%'::text))))"
+    },
+    {
+      "name": "video_analysis_jobs_pkey",
+      "definition": "PRIMARY KEY (id)"
+    },
+    {
+      "name": "video_analysis_jobs_runpod_job_id_key",
+      "definition": "UNIQUE (runpod_job_id)"
+    },
+    {
+      "name": "video_analysis_jobs_status_check",
+      "definition": "CHECK ((status = ANY (ARRAY['pending'::text, 'queued'::text, 'in_progress'::text, 'completed'::text, 'failed'::text, 'cancelled'::text, 'timed_out'::text, 'expired'::text])))"
+    },
+    {
+      "name": "video_analysis_jobs_target_chat_id_fkey",
+      "definition": "FOREIGN KEY (target_chat_id) REFERENCES chats(id) ON DELETE SET NULL"
+    }
+  ],
+  "indexes": [
+    {
+      "indexname": "video_analysis_jobs_pkey",
+      "indexdef": "CREATE UNIQUE INDEX video_analysis_jobs_pkey ON public.video_analysis_jobs USING btree (id)"
+    },
+    {
+      "indexname": "video_analysis_jobs_runpod_job_id_key",
+      "indexdef": "CREATE UNIQUE INDEX video_analysis_jobs_runpod_job_id_key ON public.video_analysis_jobs USING btree (runpod_job_id)"
+    },
+    {
+      "indexname": "video_analysis_jobs_active_idx",
+      "indexdef": "CREATE INDEX video_analysis_jobs_active_idx ON public.video_analysis_jobs USING btree (submitted_at) WHERE (status = ANY (ARRAY['pending'::text, 'queued'::text, 'in_progress'::text]))"
+    },
+    {
+      "indexname": "video_analysis_jobs_chat_idx",
+      "indexdef": "CREATE INDEX video_analysis_jobs_chat_idx ON public.video_analysis_jobs USING btree (chat_id, submitted_at DESC)"
+    },
+    {
+      "indexname": "video_analysis_jobs_chat_delivery_idx",
+      "indexdef": "CREATE INDEX video_analysis_jobs_chat_delivery_idx ON public.video_analysis_jobs USING btree (chat_request_id, video_index) WHERE (chat_request_id IS NOT NULL)"
+    },
+    {
+      "indexname": "video_analysis_jobs_pending_fallback_idx",
+      "indexdef": "CREATE INDEX video_analysis_jobs_pending_fallback_idx ON public.video_analysis_jobs USING btree (submitted_at) WHERE (fallback_state = 'pending'::text)"
+    }
+  ],
+  "security": {
+    "rls": [
+      {
+        "rls_enabled": true
+      }
+    ],
+    "policies": []
+  }
+}
