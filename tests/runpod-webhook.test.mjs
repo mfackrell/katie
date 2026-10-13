@@ -22,7 +22,7 @@ function harness(options = {}) {
       calls.push({ url, init });
       if (init.method !== 'PATCH') return Response.json(options.lookup ?? [row], { status: options.lookupStatus ?? 200 });
       const patch = JSON.parse(init.body); patches.push(patch);
-      assert.equal(new URL(url).searchParams.get('status'), 'in.(pending,queued,in_progress)');
+      assert.equal(new URL(url).searchParams.get('status'), 'eq.' + row.status);
       assert.equal(new URL(url).searchParams.get('id'), 'eq.' + receipt);
       if (options.race) return Response.json([]);
       Object.assign(row, patch);
@@ -93,4 +93,21 @@ test('invalid payload, size, unavailable storage and persistence failures fail c
 });
 test('function configuration explicitly disables JWT only for proof-authenticated callback', () => {
   assert.match(readFileSync('supabase/config.toml', 'utf8'), /\[functions\.katie-runpod-result-webhook\]\s+verify_jwt = false/);
+});
+
+test('late authenticated callback can replace a local deadline, but not a provider timeout', async () => {
+  for (const error_code of ['SUBMISSION_ACCEPTANCE_UNRESOLVED_DEADLINE', 'QWEN_FIFTEEN_MINUTE_DEADLINE', 'QWEN_DEADLINE_POLL_UNAVAILABLE']) {
+    const h = harness({row: {status: 'timed_out', error_code, runpod_job_id: null}});
+    assert.equal((await h.send()).body.status, 'completed');
+    assert.equal(new URL(h.calls[1].url).searchParams.get('error_code'), 'eq.' + error_code);
+  }
+  const h = harness({row: {status: 'timed_out', error_code: 'RUNPOD_TIMED_OUT'}});
+  assert.equal((await h.send()).body.already_terminal, true);
+  assert.equal(h.patches.length, 0);
+});
+
+test('callback can recover a local 404 expiration without overwriting provider-terminal failure', async () => {
+  const h = harness({row: {status: 'expired', error_code: 'RUNPOD_RESULT_EXPIRED_OR_NOT_FOUND'}});
+  assert.equal((await h.send()).body.status, 'completed');
+  assert.equal(new URL(h.calls[1].url).searchParams.get('error_code'), 'eq.RUNPOD_RESULT_EXPIRED_OR_NOT_FOUND');
 });

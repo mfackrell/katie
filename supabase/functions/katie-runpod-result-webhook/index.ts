@@ -27,7 +27,7 @@ Deno.serve(async(request:Request)=>{
   if(!url||!key)return response({error:"storage_not_configured"},503);
   const h={"apikey":key,Authorization:"Bearer "+key,"content-type":"application/json"};
   const q=await fetch(url+"/rest/v1/video_analysis_jobs?id=eq."+encodeURIComponent(receipt)+
-    "&select=id,runpod_job_id,status,callback_token_hash",{
+    "&select=id,runpod_job_id,status,error_code,callback_token_hash",{
     headers:h,signal:AbortSignal.timeout(12000)
   });
   if(!q.ok)return response({error:"job_lookup_failed"},503);
@@ -38,7 +38,9 @@ Deno.serve(async(request:Request)=>{
   if(!job.callback_token_hash||proofHash!==job.callback_token_hash)
     return response({error:"unauthorized"},401);
   if(job.runpod_job_id && job.runpod_job_id!==body.id)return response({error:"job_mismatch"},409);
-  if(!["pending","queued","in_progress"].includes(job.status))return response({status:job.status,saved:true,already_terminal:true});
+  const localDeadline=(job.status==="timed_out" && ["SUBMISSION_ACCEPTANCE_UNRESOLVED_DEADLINE","QWEN_FIFTEEN_MINUTE_DEADLINE","QWEN_DEADLINE_POLL_UNAVAILABLE"].includes(job.error_code)) ||
+    (job.status==="expired" && job.error_code==="RUNPOD_RESULT_EXPIRED_OR_NOT_FOUND");
+  if(!localDeadline && !["pending","queued","in_progress"].includes(job.status))return response({status:job.status,saved:true,already_terminal:true});
   const state=String(body.status||"");
   if(!["COMPLETED","FAILED","CANCELLED","TIMED_OUT"].includes(state))
     return response({error:"not_terminal"},409);
@@ -68,7 +70,9 @@ Deno.serve(async(request:Request)=>{
    output_tokens:Number.isFinite(output?.usage?.completion_tokens)?output.usage.completion_tokens:null,
    completed_at:now,updated_at:now,last_polled_at:now,
   };
-  const saved=await fetch(url+"/rest/v1/video_analysis_jobs?id=eq."+encodeURIComponent(receipt)+"&status=in.(pending,queued,in_progress)",{
+  const saved=await fetch(url+"/rest/v1/video_analysis_jobs?id=eq."+encodeURIComponent(receipt)+"&status=eq."+encodeURIComponent(job.status)+
+    (localDeadline?"&error_code=eq."+encodeURIComponent(job.error_code):"")+
+    (job.runpod_job_id?"&runpod_job_id=eq."+encodeURIComponent(job.runpod_job_id):"&runpod_job_id=is.null"),{
    method:"PATCH",headers:{...h,Prefer:"return=representation"},
    body:JSON.stringify(patch),signal:AbortSignal.timeout(12000)
   });

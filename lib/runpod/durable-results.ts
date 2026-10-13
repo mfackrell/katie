@@ -17,6 +17,7 @@ const CHAT_ID_PATTERN = /^[a-f0-9]{8}-[a-f0-9-]{27,40}$/i;
 
 type Json = string | number | boolean | null | Json[] | {[key: string]: Json | undefined};
 type RunpodVideoRow = {
+  submission_key: string | null;
   id: string;
   runpod_job_id: string | null;
   endpoint_id: string;
@@ -208,6 +209,13 @@ export function parseRunpodOutput(job: RecordData) {
   };
 }
 
+async function readCurrentRunpodState(client: StorageClient, id: string) {
+  const {data, error} = await client.from("video_analysis_jobs")
+    .select("status,analysis_text").eq("id", id).single();
+  if (error || !data) throw new Error("Cannot confirm concurrent RunPod result");
+  return {status: data.status, saved: true, hasAnalysis: Boolean(data.analysis_text)};
+}
+
 export async function refreshRunpodJob(
   client: StorageClient, job: Pick<SavedVideoJob, "id" | "runpod_job_id" | "endpoint_id" | "status">
 ) {
@@ -234,9 +242,10 @@ export async function refreshRunpodJob(
       status: "expired", error_code: "RUNPOD_RESULT_EXPIRED_OR_NOT_FOUND",
       last_polled_at: new Date().toISOString(), updated_at: new Date().toISOString(),
     };
-    const {error} = await client.from("video_analysis_jobs").update(patch).eq("id", job.id)
-      .in("status", [...ACTIVE_RUNPOD_STATES]);
+    const {data: changed, error} = await client.from("video_analysis_jobs").update(patch).eq("id", job.id)
+      .in("status", [...ACTIVE_RUNPOD_STATES]).select("status").maybeSingle();
     if (error) throw new Error("Failed to save job expiration");
+    if (!changed) return readCurrentRunpodState(client, job.id);
     return {status: "expired", saved: true};
   }
   if (!result.ok) throw new Error("RunPod status fetch failed with HTTP " + result.status);
@@ -257,9 +266,10 @@ export async function refreshRunpodJob(
     });
   }
   // Guard against overwriting a webhook-confirmed completion with an older poll.
-  const {error} = await client.from("video_analysis_jobs").update(patch).eq("id", job.id)
-    .in("status", [...ACTIVE_RUNPOD_STATES]);
+  const {data: changed, error} = await client.from("video_analysis_jobs").update(patch).eq("id", job.id)
+    .in("status", [...ACTIVE_RUNPOD_STATES]).select("status").maybeSingle();
   if (error) throw new Error("Failed to persist RunPod job result");
+  if (!changed) return readCurrentRunpodState(client, job.id);
   return {status: parsed.status, saved: true, hasAnalysis: Boolean(parsed.analysis_text)};
 }
 
@@ -294,10 +304,14 @@ export async function submitSavedVideo(params: {
     throw new Error("Video question must be 1 to 2000 characters");
   }
   const client = resultStore();
+  const submissionKey = hashCallbackProof(JSON.stringify(params.requestId
+    ? [params.actorId, params.requestId, params.videoIndex]
+    : [params.chatId, params.attachmentPath, params.question]));
   const callbackProof = randomBytes(32).toString("hex");
   // Row exists before job submission so a fast webhook can never be orphaned.
   const {data: record, error: insertError} = await client.from("video_analysis_jobs")
     .insert({
+      submission_key: submissionKey,
       chat_id: params.chatId,
       ...(params.requestId ? {
         chat_request_id: params.requestId,
@@ -316,16 +330,33 @@ export async function submitSavedVideo(params: {
       model: RUNPOD_VIDEO_MODEL,
       callback_token_hash: hashCallbackProof(callbackProof),
     }).select("id").single();
+  if (insertError?.code === "23505") {
+    const {data: existing, error} = await client.from("video_analysis_jobs")
+      .select("id,runpod_job_id,status,attachment_path,request_prompt,actor_id,target_chat_id,assistant_message_id")
+      .eq("submission_key", submissionKey).single();
+    if (error || !existing) throw new Error("Cannot read existing durable video receipt");
+    if (existing.attachment_path !== params.attachmentPath || existing.request_prompt !== params.question ||
+        (params.requestId && (existing.actor_id !== params.actorId ||
+          existing.target_chat_id !== params.targetChatId || existing.assistant_message_id !== params.assistantMessageId))) {
+      throw new Error("Existing video receipt correlation differs; submission was not repeated");
+    }
+    return {id: existing.id, jobId: existing.runpod_job_id ?? "", status: existing.status};
+  }
   if (insertError || !record) throw new Error("Cannot register durable video job");
+  let postStarted = false;
+  let confirmedRejection = false;
+  let providerId: string | null = null;
 
   try {
     const {data: signed, error: signError} = await client.storage
       .from(SUPABASE_BUCKET).createSignedUrl(params.attachmentPath, 3600);
     if (signError || !signed?.signedUrl) throw new Error("Cannot sign the private video URL");
+    const key = requireRunpodKey();
+    postStarted = true;
     const provider = await fetch("https://api.runpod.ai/v2/" + RUNPOD_VIDEO_ENDPOINT_ID + "/run",{
       method: "POST",
       headers: {
-        Authorization: "Bearer " + requireRunpodKey(), "content-type": "application/json"
+        Authorization: "Bearer " + key, "content-type": "application/json"
       },
       signal: AbortSignal.timeout(20000),
       body: JSON.stringify({
@@ -345,27 +376,57 @@ export async function submitSavedVideo(params: {
           "?receipt=" + encodeURIComponent(record.id) + "&proof=" + callbackProof,
       }),
     });
-    if (!provider.ok) throw new Error("RunPod rejected video submission: HTTP " + provider.status);
+    if (!provider.ok) {
+      // Only explicit client rejection is conclusive. Server failures may follow acceptance.
+      confirmedRejection = [400, 401, 403, 404, 422, 429].includes(provider.status);
+      throw new Error("RunPod submission HTTP " + provider.status);
+    }
     const body: unknown = await provider.json();
-    const providerId = body && typeof body === "object"
+    const returnedId = body && typeof body === "object"
       ? (body as RecordData).id : null;
-    if (typeof providerId !== "string" || !JOB_ID_PATTERN.test(providerId)) {
+    if (typeof returnedId !== "string" || !JOB_ID_PATTERN.test(returnedId)) {
       throw new Error("RunPod did not issue a valid job identifier");
     }
-    const {error: updateError} = await client.from("video_analysis_jobs").update({
+    providerId = returnedId;
+    const {data: registered, error: updateError} = await client.from("video_analysis_jobs").update({
       runpod_job_id: providerId,
       status: "queued",
       updated_at: new Date().toISOString(),
-    }).eq("id", record.id).eq("status", "pending");
+    }).eq("id", record.id).eq("status", "pending").select("id,status,runpod_job_id").maybeSingle();
     // If the webhook already completed the job, this update matches 0 rows,
     // which is safe. An actual persistence failure must be reported.
     if (updateError) throw new Error("RunPod job accepted but registration update failed");
-    return {id: record.id, jobId: providerId, status: "queued"};
+    if (!registered) {
+      const {data: current, error} = await client.from("video_analysis_jobs")
+        .select("status,runpod_job_id").eq("id", record.id).single();
+      if (error || !current || current.runpod_job_id !== providerId) {
+        throw new Error("Cannot confirm accepted RunPod registration");
+      }
+      return {id: record.id, jobId: providerId, status: current.status};
+    }
+    return {id: record.id, jobId: providerId, status: registered.status};
   } catch (error) {
-    await client.from("video_analysis_jobs").update({
-      status: "failed", error_code: "SUBMISSION_FAILED",
-      completed_at: new Date().toISOString(), updated_at: new Date().toISOString(),
-    }).eq("id", record.id).eq("status", "pending");
-    throw error;
+    const uncertain = postStarted && !confirmedRejection;
+    const now = new Date().toISOString();
+    const {data: recovered, error: cleanupError} = await client.from("video_analysis_jobs").update({
+      ...(providerId ? {runpod_job_id: providerId, status: "queued"} :
+        {status: uncertain ? "pending" : "failed"}),
+      error_code: uncertain ? (providerId ? "SUBMISSION_REGISTRATION_RECOVERED" : "SUBMISSION_ACCEPTANCE_UNKNOWN")
+        : confirmedRejection ? "SUBMISSION_REJECTED" : "SUBMISSION_PRE_POST_FAILED",
+      ...(uncertain ? {} : {completed_at: now}), updated_at: now,
+    }).eq("id", record.id).eq("status", "pending")
+      .select("id,status,runpod_job_id").maybeSingle();
+    if (cleanupError) throw new Error("Video submission recovery write failed; receipt retained", {cause: error});
+    let current = recovered;
+    if (!current) {
+      const {data, error: readError} = await client.from("video_analysis_jobs")
+        .select("id,status,runpod_job_id").eq("id", record.id).single();
+      if (readError || !data) throw new Error("Cannot confirm video submission recovery", {cause: error});
+      current = data;
+    }
+    console.warn("[RunPod Submission] receipt retained", {receiptId: record.id, status: current.status,
+      outcome: uncertain ? "acceptance_uncertain" : confirmedRejection ? "rejected" : "pre_post_failure"});
+    // Durable batches continue to background recovery; synchronous callers require a provider ID.
+    return {id: record.id, jobId: current.runpod_job_id ?? "", status: current.status};
   }
 }
