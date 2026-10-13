@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  applyAssistantToTaskProgress, applyUserToTaskProgress, emptyTaskProgress,
+  applyAssistantToTaskProgress, applyUserToTaskProgress, classifyUserTurn, emptyTaskProgress,
   extractAssistantQuestions, formatTaskProgress, rebuildTaskProgress, splitNumberedAnswers,
   syncTaskProgress,
 } from "../lib/chat/task-progress";
@@ -74,6 +74,66 @@ test("new explicit request supersedes the previous task rather than creating fal
   assert.equal(progress.pending.length,0);
   assert.equal(progress.stage,"working");
   assert.equal(progress.answered.length,0);
+});
+
+test("an evaluation is feedback, not a request to rewrite the previous deliverable", () => {
+  const previous = rebuildTaskProgress(history);
+  const evaluation = [
+    "## My evaluation of Katie's final response",
+    "# 8.8/10",
+    "The answer is submission-ready, but the manufacturing paragraph reads like a resume.",
+    "Katie keeps revising sentences without improving the whole argument.",
+    "I think she should learn to distinguish criticism from improvement.",
+  ].join("\n");
+  assert.equal(classifyUserTurn(evaluation), "feedback");
+  const result = applyUserToTaskProgress(previous,{messageId:"evaluation",text:evaluation});
+  assert.equal(result.lastUserIntent, "feedback");
+  assert.equal(result.objective?.text, originalTask);
+  assert.deepEqual(result.pending, previous.pending);
+  assert.equal(result.answered.length,0, "feedback must not be misattributed as an answer to prior questions");
+  assert.match(formatTaskProgress(result),/do not silently generate another draft/);
+  const baseline = reviewBaseline({
+    name:"Katie",modelId:"lead",persona:"Application writer",summary:"",
+    history:history.map(({role,content})=>({role,content})),
+    user:evaluation,
+  },result);
+  assert.match(baseline.text,/Latest user turn type.*feedback/);
+  assert.match(baseline.text,/do not silently generate another draft/);
+});
+
+test("explicit feedback-only instruction is not mistaken for embedded rewrite commands",()=>{
+  const feedback = [
+    "this is feedback only. do not rewrite another version:",
+    "For 25 years, including more than 15 as CFO...",
+    "Earlier I said: Rewrite my application answer.",
+    "This time I am simply evaluating how you handled the critique."
+  ].join("\n");
+  assert.equal(classifyUserTurn(feedback),"feedback");
+  assert.equal(classifyUserTurn("9.4/10. This is Katie's strongest version so far."),"feedback");
+  assert.equal(classifyUserTurn("One phrase is awkward: 'I carried production costs'."),"feedback");
+});
+
+test("an express revision request remains a revision rather than new or feedback-only task",()=>{
+  const previous=applyUserToTaskProgress(rebuildTaskProgress(history),{messageId:"a1",text:answers});
+  const command="Please rewrite the application answer using the new feedback without adding irrelevant details.";
+  assert.equal(classifyUserTurn(command),"revision");
+  assert.equal(classifyUserTurn("My evaluation: the argument is weak.\nPlease revise the application answer accordingly."),"revision");
+  const next=applyUserToTaskProgress(previous,{messageId:"revise",text:command});
+  assert.equal(next.lastUserIntent,"revision");
+  assert.equal(next.objective?.text,originalTask);
+  assert.equal(next.answered.length,3, "previous settled answers stay established during revision");
+});
+
+test("Please describe creates a new task and never answers pending unrelated questions",()=>{
+  const previous=rebuildTaskProgress(history);
+  const question="Please describe your experience leading finance for a global industrial/manufacturing business, including audit remediation and transfer pricing. Include company revenue sizes.";
+  assert.equal(classifyUserTurn(question),"new_task");
+  const result=applyUserToTaskProgress(previous,{messageId:"application-question",text:question});
+  assert.equal(result.lastUserIntent,"new_task");
+  assert.equal(result.objective?.text,question);
+  assert.equal(result.pending.length,0);
+  assert.equal(result.answered.length,0);
+  assert.equal(result.stage,"working");
 });
 
 test("unnumbered reply to many questions never fabricates specific numbered correspondence", () => {
