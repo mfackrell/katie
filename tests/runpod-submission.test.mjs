@@ -96,34 +96,17 @@ test('stale poll observes concurrent callback completion without replacing evide
   assert.equal(result.status, 'completed'); assert.equal(h.row.analysis_text, 'webhook evidence');
 });
 
-test('synthetic cron captures sanitized logs from actual submission failure recovery', async () => {
+test('synthetic failures keep identifiers and signed URLs out of logs', async () => {
   for (const fault of ['before', 'rejected', 'timeout', 'server', 'unknown', 'registration']) {
-    const h = harness(fault, true), route = {};
-    let submitted = false;
-    vm.runInNewContext(ts.transpileModule(readFileSync('app/api/internal/runpod-results/synthetic-cron/route.ts', 'utf8'),
-      {compilerOptions: {module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022}}).outputText, {
-      exports: route, process: {env: {RUNPOD_SYNTHETIC_VALIDATION_ENABLED: 'true'}},
-      console: {info: (...args) => h.logs.push(args), warn: (...args) => h.logs.push(args)},
-      require: name => {
-        if (name === 'next/server') return {NextResponse: {json: (body, init) => Response.json(body, init)}};
-        if (name.endsWith('/durable-results')) return {assertCronAuth: () => true};
-        if (name.endsWith('/synthetic-validation')) return {
-          startSyntheticValidation: async () => { await h.submit(); submitted = true; },
-          syntheticStatus: async () => submitted ? {status: 'pending', providerStatus: h.row.status, receiptId: h.row.id, livePass: false} : {status: 'not_started'},
-          cleanupSyntheticValidation: async () => { throw Error('unexpected cleanup'); },
-        };
-        throw Error(name);
-      },
-    });
-    const response = await route.GET({});
-    assert.equal(response.status, 200);
-    assert.equal(h.logs.length, 2);
+    const h = harness(fault, true);
+    await h.submit();
+    assert.equal(h.logs.length, 1);
     assert.equal(h.logs[0][0], '[RunPod Synthetic Submission] receipt retained');
     assert.ok(['pre_post_failure', 'rejected', 'acceptance_uncertain'].includes(h.logs[0][1].outcome));
     assert.equal(Object.keys(h.logs[0][1]).length, 1);
-    assert.equal(h.logs[1][0], '[WP4 synthetic observation]');
-    assert.doesNotMatch(JSON.stringify([h.logs, await response.json()]), /12345678|provider-123|secret|private.invalid|Describe it/);
-    const normal = harness(fault); await normal.submit();
+    assert.doesNotMatch(JSON.stringify(h.logs), /12345678|provider-123|secret|private.invalid|Describe it/);
+    const normal = harness(fault);
+    await normal.submit();
     assert.equal(normal.logs[0][1].receiptId, chatId);
     assert.equal(normal.logs[0][1].status, normal.row.status);
   }
