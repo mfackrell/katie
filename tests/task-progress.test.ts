@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  applyAssistantToTaskProgress, applyUserToTaskProgress, classifyUserTurn, emptyTaskProgress,
+  applyAssistantToTaskProgress, applyUserToTaskProgress, classifyUserTurn, emptyTaskProgress, explicitCurrentQuestion,
   extractAssistantQuestions, formatTaskProgress, rebuildTaskProgress, splitNumberedAnswers,
   syncTaskProgress,
 } from "../lib/chat/task-progress";
@@ -157,6 +157,49 @@ test("latest BTG screening prompt is a NEW task rather than an answer to an old 
   assert.match(baseline.text,/ACTIVE DELIVERABLE \(authoritative, latest user request\)/);
   assert.match(baseline.text,/not import requirements or exclusions from old screening answers/);
   assert.ok(baseline.text.indexOf("ACTIVE DELIVERABLE") < baseline.text.indexOf("AUTHORITATIVE USER TURNS"));
+});
+
+
+test("BTG regression: correction restores the broad screening question and keeps the parent engagement", () => {
+  const parent = "Interim CFO for Global Industrial Client. Private equity backed multinational industrial business. Needs transitional executive oversight, global audit recovery, financial controls, industrial finance, business separation, and systems/data transition.";
+  const earlier = [
+    {role:"user" as const,id:"job",content:parent},
+    {role:"assistant" as const,id:"previous",content:"What additional details do you have?"},
+    {role:"user" as const,id:"specific",content:"Please share examples of carve-outs or business separations. Include revenue sizes."},
+    {role:"assistant" as const,id:"specialized-answer",content:"Here are only carve-out examples."},
+    {role:"user" as const,id:"broad",content:"Please share 3 to 5 examples of your relevant experience."},
+    {role:"assistant" as const,id:"bad-answer",content:"Four carve-out examples."},
+  ];
+  const corrected="no. answer this question: Please share 3 to 5 examples of your relevant experience.";
+  assert.equal(explicitCurrentQuestion(corrected),"Please share 3 to 5 examples of your relevant experience.");
+  assert.equal(classifyUserTurn(corrected),"new_task");
+  const state=applyUserToTaskProgress(rebuildTaskProgress(earlier),{messageId:"corrected",text:corrected});
+  assert.equal(state.objective?.text,"Please share 3 to 5 examples of your relevant experience.");
+  assert.equal(state.projectContext?.text,parent);
+  assert.equal(state.projectContext?.userMessageId,"job");
+  assert.equal(state.lastUserIntent,"new_task");
+  const baseline=reviewBaseline({
+    name:"Katie",modelId:"lead",persona:"Application specialist",summary:"",
+    history:earlier.map(turn=>({role:turn.role,content:turn.content})),
+    user:corrected,
+  },state);
+  assert.equal(baseline.activeNewTask,true);
+  assert.equal(baseline.activeQuestion,"Please share 3 to 5 examples of your relevant experience.");
+  assert.equal(baseline.parentProject,parent);
+  assert.equal(baseline.broadProjectQuestion,true);
+  assert.match(baseline.text,/BROAD RELEVANCE CHECK/);
+  assert.match(baseline.text,/PARENT PROJECT OR ENGAGEMENT/);
+  assert.match(baseline.text,/the major needs of the PARENT PROJECT as a whole/);
+});
+
+test("new project context supersedes prior project, not every follow-up question",()=>{
+  const state = rebuildTaskProgress([
+    {id:"p1",role:"user",content:"Prepare a marketing launch with channels, budget, and staffing."},
+    {id:"p2",role:"user",content:"Please share three launch examples."},
+    {id:"p3",role:"user",content:"New project: Analyze Q3 inventory performance."},
+  ]);
+  assert.match(state.projectContext?.text ?? "",/Analyze Q3 inventory/);
+  assert.equal(state.objective?.text,"New project: Analyze Q3 inventory performance.");
 });
 
 test("unnumbered reply to many questions never fabricates specific numbered correspondence", () => {
