@@ -84,7 +84,7 @@ test("foundational capability inference is shared by all actors without inventin
   assert.match(standard, /Missing documentation is not evidence an activity was never performed/);
   assert.match(standard, /related work does not establish completion of every component/);
   assert.match(standard, /any domain/);
-  assert.match(standard, /not.*mandatory checklist/);
+  assert.match(standard, /rather than as a mandatory checklist/);
   assert.match(complete, /Reason about what those facts individually and collectively demonstrate/);
   assert.match(complete, /Reasonable inference is not fabrication/);
   assert.match(complete, /plausible professional practices alone do not prove/);
