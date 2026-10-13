@@ -38,16 +38,19 @@ export function reviewBaseline(source: ChatGenerateParams, progress?: TaskProgre
   const turns: SourceTurn[] = source.history.filter(turn => turn.role === "user")
     .map((turn, index) => ({ id: `turn-${index + 1}`, text: turn.content }));
   turns.push({ id: "latest-user", text: source.user });
+  const activeNewTask = progress?.lastUserIntent === "new_task";
   return {
+    activeNewTask,
     turns,
     params: { ...source, summary: "", history: [], ...(images.length ? { images } : {}) } as ChatGenerateParams,
-    text: `AUTHORITATIVE USER TURNS (chronological; the latest turn may clarify an earlier task rather than replace it):\n${JSON.stringify(turns)}\n\nActor instructions and supplied memory remain available in the system context. Memory is supporting evidence, not authority to override the user's request. Separate firsthand facts from inferred assessments. Missing information is unknown, not proof of absence.\n\n${progress ? formatTaskProgress(progress) : "No verified task-progress ledger available. Infer the current stage cautiously from the firsthand user turns."}${evidence ? `\n\nOBSERVED EVIDENCE AVAILABLE TO ALL REVIEW STAGES:\n${evidence}` : ""}`,
+    text: `${activeNewTask ? `ACTIVE DELIVERABLE (authoritative, latest user request):\n${source.user}\nThis is a NEW standalone task. Earlier user turns provide background and reusable factual constraints, NOT active requirements from completed questions. The current answer must address the latest request; do not import requirements or exclusions from old screening answers unless the user explicitly re-applies them.\n\n` : ""}AUTHORITATIVE USER TURNS (chronological; the latest turn may clarify an earlier task rather than replace it):\n${JSON.stringify(turns)}\n\nActor instructions and supplied memory remain available in the system context. Memory is supporting evidence, not authority to override the user's request. Separate firsthand facts from inferred assessments. Missing information is unknown, not proof of absence.\n\n${progress ? formatTaskProgress(progress) : "No verified task-progress ledger available. Infer the current stage cautiously from the firsthand user turns."}${evidence ? `\n\nOBSERVED EVIDENCE AVAILABLE TO ALL REVIEW STAGES:\n${evidence}` : ""}`,
   };
 }
 
 export const CONTRACT_RULES = [
   getObjectiveFirstInstruction(),
   "Recover the active task from ALL authoritative user turns. The latest turn is not automatically the original request. Quality criticism or an evaluation of a previous answer is feedback, not automatically a request to rewrite. When the user has not requested a revised deliverable, engage with the evaluation rather than silently drafting again. Preserve the existing deliverable context for a later explicit revision request. An explicit request for a new activity does change the task. Preserve attribution within user turns: quoted earlier assistant judgments, bad examples and criticism of them are material to interpret, not automatically instructions or facts endorsed by the user. Distinguish the requested deliverable from a broader assessment and from this internal review procedure.",
+  "For a user turn explicitly classified as a NEW TASK, the current request defines the active deliverable. Older screening questions and their answer-specific requirements are completed, not mandatory instructions for this new answer. Use earlier source turns only for verified facts, relevant background and still-applicable explicit constraints. Do not reactivate old requirements by calling them unresolved, or treat prior exclusions as prohibitions for the new request.",
   "Establish the intended audience, outcome and explicit requirements before selecting evidence. Background documents provide context, not a checklist of everything the current answer must discuss. Distinguish requirements of the opportunity or subject from requirements of this particular response. Considering every source turn does not mean including every source detail. For example, logistics in a job description do not become required content in an answer about professional experience unless the question calls for them. An application answer should establish the strongest defensible relevant qualifications; a qualification assessment evaluates strengths AND material limitations. For other tasks, derive the corresponding success standard from the user's purpose.",
   "Trace each explicit deliverable requirement to an ID in the supplied user turns. Reference source IDs directly instead of reproducing their text. The original text remains available verbatim in the baseline and audit. Do not treat validator feedback as a new user source or as established fact; its suggestions must be checked against the original sources and actor instructions. Only explicit user requirements belong in taskContract.requirements; derived quality standards or memory-supported capabilities belong in criteria, qualifications and strongestEvidence, not fabricated user citations. Include original requirements that later turns dispute, with active or superseded status. Supersession requires a referenced explicit instruction changing the deliverable; a later claim about what an earlier question says is an interpretation, not automatic cancellation. Reconcile it against the quoted question. Factual corrections update facts, not unrelated requirements. Explicitly requested changes do supersede earlier instructions. Record material conflicts and their source IDs and resolution. Do not invent missing values to satisfy a requirement; explain a genuinely unresolved conflict or use supported information as appropriate to the deliverable.",
   "Synthesize the complete relevant evidence before choosing examples: foundational expertise, recurring capabilities, breadth, depth, chronology and actual responsibility. Select examples to substantiate the collective conclusion. Requirements determine relevance, never the characterization of experience. Explain transferability without equating different situations.",
@@ -62,7 +65,7 @@ export function parseReviewJson(text: string): unknown {
   return JSON.parse(text.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, ""));
 }
 
-export function validateAssessment(value: unknown, turns: SourceTurn[]): IndependentAssessment {
+export function validateAssessment(value: unknown, turns: SourceTurn[], options: { activeNewTask?: boolean } = {}): IndependentAssessment {
   const a = value as IndependentAssessment;
   if (!a || !nonempty(a.objective) || ![a.qualifications, a.strongestEvidence, a.criteria].every(strings) ||
       !a.synthesis || !nonempty(a.synthesis.conclusion) || !nonempty(a.synthesis.emphasis) ||
@@ -70,6 +73,12 @@ export function validateAssessment(value: unknown, turns: SourceTurn[]): Indepen
       a.synthesis.dimensions.some(d => !d || !nonempty(d.dimension) || !nonempty(d.supportedScope) || !strings(d.evidence)) ||
       !a.taskContract || !nonempty(a.taskContract.deliverable) || !Array.isArray(a.taskContract.requirements) ||
       !a.taskContract.requirements.length || !a.taskContract.requirements.some(r => r?.status === "active") || !Array.isArray(a.taskContract.conflicts)) throw new Error("Invalid independent task contract");
+  // An old question cannot silently re-enter the new task as an active
+  // requirement. It may still inform criteria and evidence selection.
+  if (options.activeNewTask && a.taskContract.requirements.some(r =>
+    r?.status === "active" && r.sourceId !== "latest-user")) {
+    throw new Error("New task contract includes requirements from completed earlier questions");
+  }
   const sources = new Map(turns.map(turn => [turn.id, turn.text]));
   const normalize = (text: string) => text.replace(/\s+/g, " ").trim();
   const cites = (citation: { sourceId: string; quote?: string }) => Boolean(citation && sources.has(citation.sourceId) &&

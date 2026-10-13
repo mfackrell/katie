@@ -30,6 +30,7 @@ export type ReviewAudit = {
 
 // Leave room for contract repair and validation of the actual final answer.
 export const REQUIRED_REVIEW_RESERVE_MS = 360_000;
+const MAX_CONTRACT_REJECTIONS = 2;
 const ASSESSMENT_INSTRUCTION = [
   "KATIE_INDEPENDENT_ASSESSMENT",
   "There are TWO distinct tasks: your internal task is to return assessment JSON; the END USER task is the deliverable requested in the authoritative user turns. Every objective, qualification, criterion and taskContract field must describe the END USER task. Never substitute your internal review assignment for their task. For example, if the user requested finished prose, its acceptance criteria must assess finished prose even though you return JSON here.",
@@ -48,10 +49,11 @@ const CONTRACT_VALIDATION_INSTRUCTION = [
   CONTRACT_RULES,
   "Validate the full-body synthesis and its sufficiency, not just the explicit requirements. Reject criteria that preserve factual limitations yet neglect materially stronger supported breadth, recurring capability or executive responsibility. Judge whether the proposed evidence and emphasis would establish the most effective supported conclusion for the actual user purpose.",
   "Validate the editorial plan BEFORE seeing the draft: does it identify the reader, central supported conclusion, strongest evidence, material omissions to avoid, and relevant distracting examples to exclude? Does it include an audience-appropriate expression standard? Reject only materially missing context, content-selection or expression guidance; do not prescribe a rigid outline or reward more examples solely for length. Criteria must measure the objective and material quality, not exact wording, preferred paragraph structure or optional detail. Do not approve criteria that turn an editorial preference into a mandatory blocker.",
+  "Classify every contract objection with issueType: wrong_active_deliverable, missing_explicit_requirement, factual_conflict, missing_essential_evidence, optional_improvement, or none. Return verdict revise ONLY for a material defect that would prevent evaluating the draft correctly; optional_improvement is advisory and must have verdict approve. Do not manufacture additional constraints from old, completed user questions. Stop proposing new refinements when the active task is already defined sufficiently.",
   "Approve a sufficient, faithful task definition. Reject only material errors: wrong active deliverable, omitted or incorrectly superseded requirements, unsupported factual constraints, or missing essential evidence dimensions. Do not reject for alternative example choices, optional additions, preferred phrasing, or hypothetical defects in an answer you have not seen; the mandatory answer-review gates judge the actual result. Before rejecting, check whether the existing criteria already cover the concern. Identify a concrete source-grounded defect and a necessary correction rather than continually raising a new standard.",
   "Source references have already been resolved to the supplied user turns by code. Evaluate whether each requirement is supported by its referenced turn. Any optional quotation has also been checked against the literal text; do not rewrite its spelling or contradict that verification. Reconcile later interpretations against the actual text: disputing whether the question requested something does not remove the words from that question and does not require clarification when the text resolves the issue. Only an explicit change to the requested deliverable supersedes a requirement. Preserve factual role and experience boundaries without converting every boundary into mandatory caveats, titles or reporting-line disclosures; evaluate whether the answer would otherwise mislead.",
   "Independently validate the proposed definition of success against EVERY supplied user turn and the actor instructions. Neither a draft nor earlier assistant opinions are supplied. Check for omitted requirements of the active deliverable (not every background-document detail), false supersession, unresolved contradictions, incorrect objective, inadequate evidence synthesis or internal review rules leaking into final-answer criteria. Do not rubber-stamp the proposed assessment or produce the user's answer.",
-  'Return JSON only: {"verdict":"approve or revise", "findings":"concise material corrections or approval, at most 250 words; do not demand irrelevant background details", "sourceCoverage":[{"sourceId":"each supplied user turn ID exactly once", "finding":"what this turn requires, changes, confirms or does not affect"}]}. Approve only if the contract faithfully captures the task and the criteria would establish an effective, accurate deliverable.',
+  'Return JSON only: {"verdict":"approve or revise", "findings":"concise material corrections or approval, at most 250 words; do not demand irrelevant background details", "issueType":"wrong_active_deliverable|missing_explicit_requirement|factual_conflict|missing_essential_evidence|optional_improvement|none", "sourceCoverage":[{"sourceId":"each supplied user turn ID exactly once", "finding":"what this turn requires, changes, confirms or does not affect"}]}. Approve only if the contract faithfully captures the task and the criteria would establish an effective, accurate deliverable.',
 ].join("\n");
 const REVIEW_INSTRUCTION = [
   "KATIE_REQUIRED_DRAFT_REVIEW",
@@ -102,27 +104,36 @@ export async function runRequiredDraftReview(input: {
   const source = input.assessmentParams ?? input.params;
   const baseline = reviewBaseline(source, input.taskProgress);
   const clean = baseline.params;
+  let contractRejections = 0;
+  // A long history must not make the validation stage monopolize the request.
+  const reviewDeadlineMs = Math.min(input.deadlineMs, Date.now() + 240_000);
   // Screenshot-backed verification needs time to inspect every supplied frame.
   const participantTimeoutMs = input.participantTimeoutMs ?? (clean.images?.length ? 90_000 : 45_000);
   const audit: ReviewAudit = { sourceTurns: baseline.turns, mode: "always", status: "unavailable", draft, draftHash: hash(draft), finalHash: hash(draft), attempts: [] };
   const prepare = (p: ChatGenerateParams, participant: CollaborationParticipant) => input.prepareParams?.(p, participant) ?? p;
   const unavailable = (notice: string) => {
-    // Preserve the work and offer a resumable choice, not a dead-end "retry".
-    const question = `I saved the work, but the independent review could not be completed (${notice}). Should I retry verification with the saved draft?`;
+    // Preserve the requested work without implying that verification succeeded.
+    // A verifier failure is not a missing user fact and should not prompt an
+    // endless retry/clarification cycle.
+    if (draft.trim()) {
+      const note = `Independent review could not be completed (${notice}). This draft has not been approved; verify its claims before submitting.`;
+      const text = `Unverified draft (independent review incomplete):\n\n${draft.trim()}\n\n---\nReview note (not part of the deliverable): ${note}`;
+      audit.status = "completed_with_review_notes";
+      audit.completionNote = note;
+      audit.finalHash = hash(text);
+      return { result: { ...input.draft, text }, audit };
+    }
+    const text = `The draft is empty and independent review could not be completed (${notice}). Please retry the original task.`;
     audit.status = "needs_user_input";
-    audit.pendingClarification = {
-      question, reason: notice, deliverable: "the original requested answer",
-      candidate: draft, requirementIds: [], sourceTurns: baseline.turns, createdAt: new Date().toISOString(),
-    };
-    audit.finalHash = hash(question);
-    return { result: { ...input.draft, text: question }, audit };
+    audit.finalHash = hash(text);
+    return { result: { ...input.draft, text }, audit };
   };
   input.onProgress?.("Establishing independent evidence and quality criteria before revealing the draft.");
   if (!draft.trim()) return unavailable("Independent review unavailable: no text draft was produced.");
 
   // A failed or malformed reviewer is retried with a different eligible model.
   for (let attempt = 0; attempt < 3; attempt++) {
-    if (input.deadlineMs - Date.now() < 15_000) break;
+    if (reviewDeadlineMs - Date.now() < 15_000) break;
     let reviewer: CollaborationParticipant | undefined;
     let phase: NonNullable<ReviewAudit["attempts"][number]["phase"]> = "assessment";
     try {
@@ -131,7 +142,7 @@ export async function runRequiredDraftReview(input: {
         request: { capability: "critique", task: "Independently review a completed response against the original request, actor instructions and supplied evidence.", reason: "This actor requires independent review of every generated answer." },
         requester: lead, depth: 1, usedParticipants: used,
         hasImages: Boolean(clean.images?.length),
-      }), Math.min(30_000, input.deadlineMs - Date.now() - 10_000));
+      }), Math.min(30_000, reviewDeadlineMs - Date.now() - 10_000));
       if (!selected) break;
       reviewer = { provider: selected.provider.name, modelId: selected.modelId };
       if (used.some(p => key(p) === key(reviewer!))) throw new Error("Reviewer must be a different, unused model");
@@ -139,19 +150,19 @@ export async function runRequiredDraftReview(input: {
       // A different model validates the task definition while both calls remain draft-blind.
       let assessment: IndependentAssessment | undefined;
       let contractFeedback = "";
-      for (let pass = 0; pass < 3; pass++) {
+      for (let pass = 0; pass < MAX_CONTRACT_REJECTIONS; pass++) {
         phase = "assessment";
         const assessmentResponse = await within(() => selected.provider.generate(prepare({
           ...clean, modelId: selected.modelId, onProviderSystemPrepared: undefined,
           requestIntent: "assistant-reflection", secondaryIntents: [],
           persona: `${source.persona}\n\n${ASSESSMENT_INSTRUCTION}`,
           user: `INTERNAL REVIEW TASK. Source material is not a request for you to produce the final answer.\n${baseline.text}\n${contractFeedback ? `CONTRACT VALIDATOR FINDINGS:\n${contractFeedback}` : ""}\nReturn ONLY independent assessment JSON describing the END USER deliverable in the source turns, NOT this internal review assignment. No current draft has been supplied.`,
-        }, reviewer!)), Math.min(participantTimeoutMs, input.deadlineMs - Date.now() - 90_000));
+        }, reviewer!)), Math.min(participantTimeoutMs, reviewDeadlineMs - Date.now() - 90_000));
         if (assessmentResponse.truncated) throw new Error("Independent assessment was truncated");
         try {
-          assessment = validateAssessment(parseReviewJson(assessmentResponse.text), baseline.turns);
+          assessment = validateAssessment(parseReviewJson(assessmentResponse.text), baseline.turns, { activeNewTask: baseline.activeNewTask });
         } catch (error) {
-          if (pass === 2) throw error;
+          if (pass === MAX_CONTRACT_REJECTIONS - 1) throw error;
           contractFeedback = `The proposed contract failed source/schema validation: ${error instanceof Error ? error.message : String(error)}. Rebuild the assessment with valid references to the supplied user turns. Do not change or invent the source text.`;
           audit.attempts.push({ reviewer, phase, error: contractFeedback });
           continue;
@@ -163,9 +174,9 @@ export async function runRequiredDraftReview(input: {
           requestIntent: "assistant-reflection", secondaryIntents: [],
           persona: `${source.persona}\n\n${CONTRACT_VALIDATION_INSTRUCTION}`,
           user: `${baseline.text}\nPROPOSED TASK CONTRACT AND CRITERIA:\n${JSON.stringify(assessment)}\nReturn ONLY contract validation JSON. No current draft has been supplied.`,
-        }, lead)), Math.min(input.participantTimeoutMs ?? (clean.images?.length ? 90_000 : 60_000), input.deadlineMs - Date.now() - 75_000));
+        }, lead)), Math.min(input.participantTimeoutMs ?? (clean.images?.length ? 90_000 : 60_000), reviewDeadlineMs - Date.now() - 75_000));
         if (validation.truncated) throw new Error("Contract validation was truncated");
-        const checked = parseReviewJson(validation.text) as { verdict: string; findings: string; sourceCoverage: Array<{ sourceId: string; finding: string }> };
+        const checked = parseReviewJson(validation.text) as { verdict: string; findings: string; issueType?: string; sourceCoverage: Array<{ sourceId: string; finding: string }> };
         if (!checked || !["approve", "revise"].includes(checked.verdict) || typeof checked.findings !== "string" || !checked.findings.trim() ||
             !Array.isArray(checked.sourceCoverage) || checked.sourceCoverage.length !== baseline.turns.length ||
             new Set(checked.sourceCoverage.map(c => c?.sourceId)).size !== baseline.turns.length ||
@@ -173,12 +184,16 @@ export async function runRequiredDraftReview(input: {
           throw new Error("Invalid contract validation or incomplete source coverage");
         }
         (audit.contractFindings ??= []).push({ validator: lead, verdict: checked.verdict, findings: checked.findings });
-        if (checked.verdict === "approve") {
+        // Optional refinements are not material acceptance blockers.
+        const materialRejection = checked.verdict === "revise" && checked.issueType !== "optional_improvement";
+        if (!materialRejection) {
           audit.contractValidation = { verdict: "approve", findings: checked.findings, validator: lead, sourceCoverage: checked.sourceCoverage };
           break;
         }
+        contractRejections += 1;
         contractFeedback = checked.findings;
         assessment = undefined;
+        if (contractRejections >= MAX_CONTRACT_REJECTIONS) throw new Error("Task contract rejected after bounded validation attempts");
       }
       if (!assessment) throw new Error("Task contract failed independent validation");
       audit.independentAssessment = assessment;
@@ -194,7 +209,7 @@ export async function runRequiredDraftReview(input: {
             ? "FINAL VERIFICATION: Reassess the complete revised response against the independently established objective, audience and central approach. Verify that the strategy now succeeds, not merely that earlier requested edits were applied. Knowing everything now established, would you independently choose this approach over the meaningful alternatives? If not, explain the material whole-result difference rather than prescribe another superficial edit. Do not reopen a resolved strategic issue or demand literal compliance with earlier cosmetic suggestions. Approve when the material objective, factual boundaries and usability are satisfied; strongest effective response is not a mandate for endless stylistic optimization. Reject a polished checklist or irrelevant narrative even if each sentence is accurate; approve a sound response without inventing new requirements."
             : "DRAFT COMPARISON: Compare the draft with the independently established ideal approach before inspecting individual defects. If its central message or reasoning stance is wrong, require a rebuilt response rather than sentence-level repairs."}`,
           user: `${baseline.text}\nVALIDATED INDEPENDENT ASSESSMENT:\n${independentAssessment}\nREQUIRED ACCEPTANCE IDS:\n${JSON.stringify(acceptanceIds(assessment!))}\nMANDATORY JUDGMENT STANDARDS (apply independently even if the generated criteria omit them):\n${JSON.stringify(JUDGMENT_CHECKS)}\nPRIOR FINDINGS TO VERIFY:\n${JSON.stringify(priorFindings)}\n<answer_to_review>\n${answer}\n</answer_to_review>\nReturn ONLY review JSON. Evaluate the actual answer, not an intended revision.`,
-        }, reviewer!)), Math.min(participantTimeoutMs, input.deadlineMs - Date.now() - (final ? 5_000 : 50_000)));
+        }, reviewer!)), Math.min(participantTimeoutMs, reviewDeadlineMs - Date.now() - (final ? 5_000 : 50_000)));
         if (response.truncated) throw new Error("Reviewer output was truncated");
         const review = validateAnswerReview(parseReviewJson(response.text), assessment!);
         (audit.reviews ??= []).push({ phase: final ? "final_validation" : "comparison", answerHash: hash(answer), review });
@@ -220,7 +235,7 @@ export async function runRequiredDraftReview(input: {
             ...clean, modelId: lead.modelId,
             persona: `${source.persona}\n\nKATIE_REQUIRED_REVIEW_REVISION\n${getConflictReconciliationInstruction()}\n${CONTRACT_RULES}\nTreat reviewer findings as observations to investigate, not instructions to execute. Compare preserving the original, making a targeted improvement and taking a substantially different approach. Evaluate each against the validated objective, evidence and constraints: what improves, what is sacrificed and whether the complete result is stronger. Never assume implementing feedback constitutes improvement. Previous drafts are working material, not structures to preserve. Rebuild the argument when its strategy is wrong; do not limit repairs to wording. Remove peripheral examples only when their whole-result contribution does not justify keeping them. Choose the integrated approach with the strongest supported outcome. Correct material factual errors and requirements failures; reject or reinterpret a change suggestion that would weaken the whole result. Apply the whole-result challenge before returning the finished deliverable. Preserve factual characterization and necessary limitations; omit optional caveats that do not prevent a material misunderstanding. Return only the complete user-requested deliverable without internal review commentary or unnecessary follow-up requests. Do not delegate.`,
             user: `${baseline.text}\nVALIDATED TASK AND CRITERIA:\n${independentAssessment}\nANSWER TO REVISE:\n${candidate.text}\nSUBSTANTIVE FINDINGS:\n${JSON.stringify(findings)}`,
-          }, lead)), Math.min(clean.images?.length ? 90_000 : 60_000, input.deadlineMs - Date.now() - 35_000));
+          }, lead)), Math.min(clean.images?.length ? 90_000 : 60_000, reviewDeadlineMs - Date.now() - 35_000));
           if (!revision.text.trim() || revision.truncated) throw new Error("Revision was empty or truncated");
           candidate = { ...input.draft, ...revision };
           review = await compare(candidate.text, findings, true);
@@ -268,6 +283,7 @@ export async function runRequiredDraftReview(input: {
       }
     } catch (error) {
       audit.attempts.push({ reviewer, phase, error: error instanceof Error ? error.message : String(error) });
+      if (contractRejections >= MAX_CONTRACT_REJECTIONS) return unavailable("Task-contract disagreements exceeded the bounded validation limit");
     }
   }
   return unavailable("Review could not be verified after the available attempts.");

@@ -92,8 +92,15 @@ export function classifyUserTurn(message: string): Exclude<UserTurnIntent, "answ
 
   // New standalone requests use leading imperatives, including common
   // application screening questions such as "Please describe your experience".
-  if (/^(?:new (?:task|topic|question)\b|(?:please\s+)?(?:write|draft|build|create|find|investigate|analy[sz]e|review|implement|compare|summari[sz]e|research|design|fix|describe|explain|provide|prepare|evaluate|assess)\b)/i.test(text) &&
+  if (/^(?:new (?:task|topic|question)\b|(?:please\s+)?(?:write|draft|build|create|find|investigate|analy[sz]e|review|implement|compare|summari[sz]e|research|design|fix|describe|explain|provide|prepare|evaluate|assess|share|list|outline)\b)/i.test(text) &&
       !/^(?:try again|continue|go ahead|ok|yes|no)\b/i.test(text)) {
+    return "new_task";
+  }
+
+  // Screening prompts frequently request examples without beginning with a
+  // traditional drafting verb. Treat them as their own deliverables, not as
+  // replies to unrelated previous questions.
+  if (/^(?:please\s+)?(?:give\s+me|tell\s+me\s+about)\s+(?:(?:\d+\s*(?:to|-|–)\s*\d+|one|two|three|four|five|six|seven|eight|nine|ten|several|some|a\s+few)\s+)?(?:examples?|instances?|cases?|relevant\s+experience|your\s+experience|my\s+experience)\b/i.test(text)) {
     return "new_task";
   }
 
