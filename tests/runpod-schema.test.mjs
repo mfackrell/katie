@@ -109,6 +109,15 @@ test('standalone disposable Postgres reproduces schema, permissions, constraints
       migration,
       `DO $test$ BEGIN IF NOT EXISTS(SELECT 1 FROM information_schema.columns WHERE table_name='video_analysis_jobs' AND column_name='existing_marker') THEN RAISE EXCEPTION 'Existing divergent table changed'; END IF; END $test$;
        SELECT 'KATIE_RUNPOD_CONTRACT_OK';`,
+      readFileSync('supabase/migrations/202610130002_video_submission_key.sql', 'utf8'),
+      readFileSync('supabase/migrations/202610130002_video_submission_key.sql', 'utf8'),
+      `DO $test$ BEGIN
+        IF EXISTS(SELECT 1 FROM public.video_analysis_jobs WHERE submission_key IS NOT NULL) THEN RAISE EXCEPTION 'Historical rows changed'; END IF;
+        IF EXISTS(SELECT 1 FROM before_acl b,pg_class c WHERE c.oid='public.video_analysis_jobs'::regclass AND (b.relacl IS DISTINCT FROM c.relacl OR b.relrowsecurity IS DISTINCT FROM c.relrowsecurity)) THEN RAISE EXCEPTION 'Security drift'; END IF;
+        INSERT INTO public.video_analysis_jobs(submission_key) VALUES ('local-claim');
+        BEGIN INSERT INTO public.video_analysis_jobs(submission_key) VALUES ('local-claim'); RAISE EXCEPTION 'Duplicate claim accepted'; EXCEPTION WHEN unique_violation THEN NULL; END;
+        INSERT INTO public.video_analysis_jobs(submission_key) VALUES (NULL),(NULL);
+      END $test$;`,
     ];
     // Remove interior empty lines: -j treats each blank line as a complete command batch.
     const input = blocks.map(b => b.replace(/\n\s*\n/g, '\n').trim()).join('\n\n') + '\n\n';
