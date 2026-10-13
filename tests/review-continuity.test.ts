@@ -1,7 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { getPendingReviewClarification, resolvePendingReviewClarification } from "../lib/chat/review-continuity";
-import type { PendingReviewClarification } from "../lib/collaboration/review-completion";
+import { isSavedDraftVerificationRetry, savedDraftReviewTask, type PendingReviewClarification } from "../lib/collaboration/review-completion";
+import { applyUserToTaskProgress, emptyTaskProgress } from "../lib/chat/task-progress";
+import { reviewBaseline, validateAssessment } from "../lib/collaboration/review-contract";
+import type { ChatGenerateParams } from "../lib/providers/types";
 
 type Row = { request_id: string; actor_id: string; chat_id: string; created_at: string; updated_at: string; review_audit: { status: string; pendingClarification: PendingReviewClarification } | null };
 const question = "Can you provide the missing manufacturing revenue, or should I use the verified figures?";
@@ -77,3 +80,60 @@ test("pending work is resolved only after the resumed request is durably complet
   } finally { db.restore(); }
 });
 
+
+
+test("historical saved draft retry recovers last new application question, not prior carve-out contract", () => {
+  const actualQuestion = "Please share 3 to 5 examples of your relevant experience.";
+  const saved: PendingReviewClarification = {
+    question:"I saved the work, but the independent review could not be completed (Review could not be verified after the available attempts.). Should I retry verification with the saved draft?",
+    reason:"Review could not be verified after the available attempts.",
+    deliverable:"the original requested answer",
+    candidate:"1. Global PE finance recovery.\n2. Manufacturing CFO.\n3. Business-line separation.\n4. Solar operating leadership.",
+    requirementIds:[],
+    createdAt:"2026-10-13T19:53:24Z",
+    sourceTurns:[
+      {id:"turn-1",text:"Interim CFO for global industrial client. Include audits and business separation."},
+      {id:"turn-13",text:"Please share examples of carve-outs or business separations."},
+      {id:"turn-15",text:"rewrite the answer"},
+      {id:"turn-16",text:actualQuestion},
+      {id:"latest-user",text:'This turn answers a previous clarification about the still-active deliverable. Original user turns: [...]. The user replied: yes. Continue the original task.'},
+    ],
+  };
+  assert.equal(isSavedDraftVerificationRetry(saved,"yes"),true);
+  assert.equal(isSavedDraftVerificationRetry(saved,"go ahead"),true);
+  assert.equal(isSavedDraftVerificationRetry(saved,"Please share another example"),false);
+  assert.equal(savedDraftReviewTask(saved),actualQuestion);
+  const newTask = applyUserToTaskProgress(emptyTaskProgress(),{messageId:"resumed",text:actualQuestion});
+  const params: ChatGenerateParams = {
+    name:"Katie",modelId:"lead",persona:"BTG application specialist",summary:"",
+    history:saved.sourceTurns!.slice(0,-1).map(turn=>({role:"user",content:turn.text})),
+    user:actualQuestion,
+  };
+  const baseline=reviewBaseline(params,newTask);
+  assert.equal(baseline.activeNewTask,true);
+  assert.match(baseline.text,/ACTIVE DELIVERABLE.*Please share 3 to 5 examples/);
+  const oldTaskContract={
+    objective:"Answer carve-outs only",
+    qualifications:["Carve-outs"],
+    strongestEvidence:["Cloud and consumer segment splitting"],
+    criteria:["Give only carve-out examples"],
+    synthesis:{
+      conclusion:"Only discuss carve-outs",emphasis:"Exclude multinational recovery.",
+      dimensions:[{dimension:"Carve-outs",supportedScope:"Segment splitting",evidence:["User feedback"]}],
+    },
+    taskContract:{
+      deliverable:"Carve-out answer",
+      requirements:[
+        {id:"r1",status:"active",sourceId:"turn-13",requirement:"Provide carve-out examples."},
+        {id:"r2",status:"active",sourceId:"latest-user",requirement:"Give three to five examples."},
+      ],
+      conflicts:[],
+    },
+  };
+  assert.throws(()=>validateAssessment(oldTaskContract,baseline.turns,{activeNewTask:true}),/completed earlier questions/);
+});
+
+test("a genuine missing-fact clarification remains distinct from a saved verification retry", () => {
+  assert.equal(isSavedDraftVerificationRetry(pending,"yes"),false);
+  assert.equal(savedDraftReviewTask(pending),null);
+});
