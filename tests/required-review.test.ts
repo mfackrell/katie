@@ -147,9 +147,11 @@ test("a persistently invalid task definition cannot approve an answer", async ()
   const s = setup({ contractAlwaysReject: true });
   const result = await s.run();
   assert.ok(!s.phases.includes("review"));
-  assert.equal(result.audit.status, "needs_user_input");
-  assert.match(result.result.text, /retry verification/i);
-  assert.ok(!result.result.text.includes(draft.text));
+  assert.equal(result.audit.status, "completed_with_review_notes");
+  assert.match(result.result.text, /Unverified draft/);
+  assert.ok(result.result.text.includes(draft.text));
+  assert.equal(result.audit.pendingClarification, undefined);
+  assert.equal(s.phases.filter(p => p === "contract").length, 2);
 });
 
 test("revision must pass final acceptance and the audit binds approval to the delivered text", async () => {
@@ -213,10 +215,11 @@ test("malformed reviewer retries an unused model without falsely reporting appro
 test("same-model reviewer and expired budgets cannot claim independent review", async () => {
   const s = setup();
   const same = await runRequiredDraftReview({ requestId: "same", draft, params, leadProvider: s.lead, deadlineMs: deadline(), selectHelper: async () => ({ provider: s.lead, modelId: "lead" }) });
-  assert.equal(same.audit.status, "needs_user_input");
+  assert.equal(same.audit.status, "completed_with_review_notes");
+  assert.match(same.result.text, /Unverified draft/);
   const expired = await runRequiredDraftReview({ requestId: "expired", draft, params, leadProvider: s.lead, deadlineMs: Date.now() - 1, selectHelper: async () => { throw new Error("Must not call"); } });
   assert.equal(expired.audit.attempts.length, 0);
-  assert.equal(expired.audit.status, "needs_user_input");
+  assert.equal(expired.audit.status, "completed_with_review_notes");
 });
 
 test("a malformed source citation is repaired with precise feedback before comparison", async () => {
@@ -247,13 +250,78 @@ test("citation validation tolerates formatting whitespace but never paraphrased 
   assert.throws(() => validateAssessment(spaced, reviewBaseline(params).turns), /citation/);
 });
 
-test("unavailable reviewer requests a retry without leaking the unverified draft", async () => {
+test("unavailable reviewer returns transparently unverified draft without asking for retry", async () => {
   const s = setup();
   const result = await runRequiredDraftReview({ requestId: "no-reviewer", draft, params, leadProvider: s.lead, deadlineMs: deadline(), selectHelper: async () => null });
-  assert.equal(result.audit.status, "needs_user_input");
-  assert.match(result.result.text, /retry verification/i);
-  assert.equal(result.audit.pendingClarification?.candidate, draft.text);
-  assert.ok(!result.result.text.includes(draft.text));
+  assert.equal(result.audit.status, "completed_with_review_notes");
+  assert.match(result.result.text, /Unverified draft/);
+  assert.ok(result.result.text.includes(draft.text));
+  assert.equal(result.audit.pendingClarification, undefined);
+  assert.match(result.audit.completionNote ?? "", /not been approved/);
+});
+
+
+test("latest standalone application request cannot inherit old screening requirements", () => {
+  const latest = "Please share 3 to 5 examples of your relevant experience.";
+  const newParams: ChatGenerateParams = {
+    ...params, user:latest,
+    history:[
+      {role:"user",content:"Interim CFO for global industrial business; prior questions concern audits and carve-outs."},
+      {role:"user",content:"Please describe your experience with business carve-outs, including revenue sizes."}
+    ],
+  };
+  const progress = {version:1 as const,objective:{text:latest,userMessageId:"new"},
+    stage:"working" as const,nextAction:"continue_original_goal" as const,
+    pending:[],answered:[],lastAssistantMessageId:null,lastUserMessageId:"new",
+    lastUserIntent:"new_task" as const};
+  const baseline=reviewBaseline(newParams,progress);
+  assert.equal(baseline.activeNewTask,true);
+  const oldRequired=structuredClone(assessment);
+  oldRequired.taskContract.requirements=[{id:"old",sourceId:"turn-2",
+    requirement:"Only discuss carve-outs and revenue sizes.",status:"active"}];
+  assert.throws(()=>validateAssessment(oldRequired,baseline.turns,{activeNewTask:true}),/completed earlier questions/);
+  const newRequired=structuredClone(assessment);
+  newRequired.taskContract.requirements=[{id:"examples",sourceId:"latest-user",
+    quote:latest,requirement:"Give 3-5 relevant experience examples.",status:"active"}];
+  newRequired.taskContract.conflicts=[];
+  assert.doesNotThrow(()=>validateAssessment(newRequired,baseline.turns,{activeNewTask:true}));
+});
+
+test("optional contract suggestions cannot stop draft verification",async()=>{
+  const s=setup();
+  const reviewer=makeProvider("anthropic",async p=>{
+    if(p.persona.includes("KATIE_INDEPENDENT_ASSESSMENT"))return response("anthropic","reviewer",assessment);
+    return response("anthropic","reviewer",verdict("approve"));
+  });
+  const lead=makeProvider("openai",async p=>{
+    if(p.persona.includes("KATIE_TASK_CONTRACT_VALIDATION")){
+      return response("openai","lead",{
+        verdict:"revise",issueType:"optional_improvement",
+        findings:"A shorter opening might be stylistically nicer, but the task is valid.",
+        sourceCoverage:[...new Set([...p.user.matchAll(/"id":"(turn-\d+|latest-user)"/g)].map(x=>x[1]))]
+          .map(sourceId=>({sourceId,finding:"Checked."})),
+      });
+    }
+    throw new Error("No revision necessary");
+  });
+  const result=await runRequiredDraftReview({requestId:"optional-contract",
+    draft,params,leadProvider:lead,deadlineMs:deadline(),
+    selectHelper:async()=>({provider:reviewer,modelId:"reviewer"})});
+  assert.equal(result.audit.status,"approved");
+  assert.equal(result.audit.contractFindings?.[0].verdict,"revise");
+  assert.equal(result.result.text,draft.text);
+});
+
+test("bounded validation falls back before comparing after two material rejections",async()=>{
+  const s=setup({contractAlwaysReject:true});
+  const result=await s.run();
+  assert.deepEqual(s.phases,["assessment","contract","assessment","contract"]);
+  assert.equal(result.audit.status,"completed_with_review_notes");
+  assert.equal(result.audit.contractFindings?.length,2);
+  assert.equal(result.audit.reviews,undefined);
+  assert.match(result.result.text,/Unverified draft/);
+  assert.ok(result.result.text.includes(draft.text));
+  assert.equal(result.audit.pendingClarification,undefined);
 });
 
 test("a generated rubric cannot omit the synthesis and economy acceptance gates", () => {
