@@ -1,4 +1,5 @@
 import type { AnswerReview, IndependentAssessment, SourceTurn } from "@/lib/collaboration/review-contract";
+import { classifyUserTurn } from "@/lib/chat/task-progress";
 
 /** Persisted in the original chat_requests.review_audit row, scoped to its actor and chat. */
 export type PendingReviewClarification = {
@@ -46,6 +47,39 @@ export function createReviewClarification(input: {
 }
 
 /** This context is for the lead model ONLY. Do not pass the prior draft to the independent assessor. */
+/**
+ * An affirmative response to a failed-verification prompt authorizes reviewing
+ * the SAVED candidate, not writing a new answer or reviving the previous task.
+ */
+export function isSavedDraftVerificationRetry(pending: PendingReviewClarification, reply: string): boolean {
+  if (!/retry verification with the saved draft/i.test(pending.question)) return false;
+  return /^(?:yes|y|yes please|please do|please retry|retry|retry verification|go ahead|go ahead and retry|do it|sure|ok|okay)[.! ]*$/i.test(reply.trim());
+}
+
+/**
+ * Recover the most recent original new-task request from the saved firsthand
+ * user turns. Old audit rows can end with a synthetic "This turn answers..."
+ * wrapper: that wrapper is not itself the requested deliverable.
+ */
+export function candidateForVerification(
+  pending: PendingReviewClarification | null,
+  reply: string,
+  generated: string,
+): string {
+  return pending && isSavedDraftVerificationRetry(pending, reply)
+    ? pending.candidate
+    : generated;
+}
+
+export function savedDraftReviewTask(pending: PendingReviewClarification): string | null {
+  for (const turn of [...(pending.sourceTurns ?? [])].reverse()) {
+    const text = turn.text.trim();
+    if (/^(?:this turn answers|internal review task|the user replied:)/i.test(text)) continue;
+    if (classifyUserTurn(text) === "new_task") return text;
+  }
+  return null;
+}
+
 export function buildReviewResumptionContext(pending: PendingReviewClarification, latestUserReply: string): string {
   return [
     "KATIE_RESUME_PENDING_COMPLETION",

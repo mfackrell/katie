@@ -42,7 +42,7 @@ import {
 } from "@/lib/router/model-intent";
 
 import { LlmProvider, ProviderResponse } from "@/lib/providers/types";
-import { buildReviewResumptionContext } from "@/lib/collaboration/review-completion";
+import { buildReviewResumptionContext, candidateForVerification, isSavedDraftVerificationRetry, savedDraftReviewTask } from "@/lib/collaboration/review-completion";
 import { getPendingReviewClarification, resolvePendingReviewClarification } from "@/lib/chat/review-continuity";
 import { applyAssistantToTaskProgress, applyUserToTaskProgress, formatTaskProgress, syncTaskProgress } from "@/lib/chat/task-progress";
 import { loadTaskProgress, saveTaskProgress } from "@/lib/chat/task-progress-store";
@@ -974,8 +974,32 @@ export async function POST(request: NextRequest) {
       syncTaskProgress(persistedTaskProgress, history),
       { messageId: taskProgressUserMessageId, text: message },
     );
-    const taskProgressContext = formatTaskProgress(taskProgress);
     const pendingReviewClarification = await getPendingReviewClarification(actorId, chatId);
+    const verifyingSavedDraft = Boolean(
+      pendingReviewClarification &&
+      isSavedDraftVerificationRetry(pendingReviewClarification.pending, message)
+    );
+    const savedDraftOriginalTask = verifyingSavedDraft && pendingReviewClarification
+      ? savedDraftReviewTask(pendingReviewClarification.pending)
+      : null;
+    const reviewTaskProgress = savedDraftOriginalTask
+      ? {
+          ...taskProgress,
+          lastUserIntent: "new_task" as const,
+          objective: {
+            text: savedDraftOriginalTask,
+            userMessageId: pendingReviewClarification!.requestId,
+          },
+          pending: [],
+        }
+      : taskProgress;
+    const taskProgressContext = formatTaskProgress(reviewTaskProgress);
+    if (verifyingSavedDraft) {
+      console.info("[ReviewContinuity] Saved-draft verification retry", {
+        requestId, originalRequestId: pendingReviewClarification!.requestId,
+        originalTaskRecovered: Boolean(savedDraftOriginalTask),
+      });
+    }
     if (pendingReviewClarification) {
       messageForGeneration = `${message}\n\n${buildReviewResumptionContext(pendingReviewClarification.pending, message)}`;
       console.info("[ReviewContinuity] Resuming saved work after user input", {
@@ -2520,7 +2544,13 @@ ${chunkWorkflowSummary}`;
               const draftProvider = providers.find(item => item.name === result!.provider) ?? provider;
               const reviewed = await runRequiredDraftReview({
                 requestId,
-                draft: { ...result, text: result.text || streamedText },
+                // "Retry verification" means verify the original saved draft,
+                // not a newly generated answer to the user's "yes".
+                draft: { ...result, text: candidateForVerification(
+                  pendingReviewClarification?.pending ?? null,
+                  message,
+                  result.text || streamedText,
+                ) },
                 params: {
                   ...(reviewSourceParams ?? createParams(result.model)),
                   ...(result.researchEvidence ? { researchEvidence: result.researchEvidence } : {}),
@@ -2529,12 +2559,12 @@ ${chunkWorkflowSummary}`;
                   ...createParams(result.model),
                   // Only the lead receives the saved draft. The independent assessor
                   // sees the original user turns and latest actual reply, not the draft.
-                  ...(pendingReviewClarification ? { user: `This turn answers a previous clarification about the still-active deliverable. Original user turns: ${JSON.stringify(pendingReviewClarification.pending.sourceTurns ?? [])}\nKatie asked: ${pendingReviewClarification.pending.question}\nThe user replied: ${message}\nContinue the original task with only facts the user has provided; if they say the missing information is unknown, do not demand it again.` } : {}),
+                  ...(savedDraftOriginalTask ? { user: savedDraftOriginalTask } : pendingReviewClarification ? { user: `This turn answers a previous clarification about the still-active deliverable. Original user turns: ${JSON.stringify(pendingReviewClarification.pending.sourceTurns ?? [])}\nKatie asked: ${pendingReviewClarification.pending.question}\nThe user replied: ${message}\nContinue the original task with only facts the user has provided; if they say the missing information is unknown, do not demand it again.` } : {}),
                   ...(result.researchEvidence ? { researchEvidence: result.researchEvidence } : {}),
                 },
                 leadProvider: draftProvider,
                 deadlineMs: executionDeadlineMs,
-                taskProgress,
+                taskProgress: reviewTaskProgress,
                 prepareParams: (params, participant) => ({
                   ...params,
                   persona: replaceKatieRuntimeContext(params.persona, buildKatieRuntimeContext({
