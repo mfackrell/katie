@@ -244,7 +244,16 @@ class PostgrestClient {
       if (!response.ok) {
         return { data: null as T, error: { message: await response.text() || response.statusText } };
       }
-      return { data: await response.json() as T, error: null };
+      // PostgREST returns 204 for void functions. A successful empty response
+      // must not abort subsequent evidence writes by being parsed as JSON.
+      if (response.status === 204) return { data: null as T, error: null };
+      const rawBody = await response.text();
+      if (!rawBody.trim()) return { data: null as T, error: null };
+      try {
+        return { data: JSON.parse(rawBody) as T, error: null };
+      } catch {
+        return { data: null as T, error: { message: "Supabase RPC returned a non-JSON response body." } };
+      }
     } catch (error) {
       return {
         data: null as T,
