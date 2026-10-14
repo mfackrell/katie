@@ -9,7 +9,9 @@ const actor = uuid(1), source = uuid(2), target = uuid(3), assistant = uuid(4);
 const requestId = 'linked-recovery';
 const params = {chatId: source, targetChatId: target, actorId: actor, assistantMessageId: assistant,
   requestId, videoIndex: 0, videoTotal: 2, attachmentPath: `chats/${source}/${uuid(5)}.source`, question: 'Compare these videos', sourceFilename: 'first.mp4'};
-function harness(faults = []) {
+function harness(faults = [], synthetic = false) {
+  const requestId = synthetic ? 'synthetic-wp4-retest' : 'linked-recovery';
+  const localParams = {...params, requestId, ...(synthetic ? {videoTotal:1,syntheticValidation:true} : {})};
   const tables = {chats: [{id: source, actor_id: actor}, {id: target, actor_id: actor}], video_analysis_jobs: [],
     messages: [{id: assistant, chat_id: target, actor_id: actor, role: 'assistant', content: `[Katie video analysis pending: ${requestId}] waiting`},
       {id: uuid(8), chat_id: target, actor_id: uuid(9), role: 'assistant', content: 'other actor'}],
@@ -58,6 +60,7 @@ function harness(faults = []) {
   const durable = load('lib/runpod/durable-results.ts', {'node:crypto': crypto, '@supabase/supabase-js': {createClient: () => client},
     '@/lib/data/supabase/admin': {getSupabaseAdminClient: () => client}, '@/lib/chat/video-scene-prompts': {buildRunpodVideoScenePrompt: x => x}},
     {fetch: async (url,init) => {
+      if(url.includes('/status/')) return Response.json({}, {status:404});
       assert.ok(url.endsWith('/run')); const index = posts++; callbacks.push(JSON.parse(init.body).webhook);
       if (faults[index] === 'cleanup') {failCleanup = true; throw Error('unknown acceptance');}
       if (faults[index] === 'unknown') throw Error('unknown acceptance');
@@ -80,12 +83,14 @@ function harness(faults = []) {
   load('supabase/functions/katie-runpod-result-webhook/index.ts', {}, {Request, Response, URL, TextEncoder, crypto: crypto.webcrypto,
     Deno: {env: {get: k => ({SUPABASE_URL:'https://db.invalid',SUPABASE_SERVICE_ROLE_KEY:'mock'})[k]}, serve: fn => {webhook = fn;}},
     fetch: async (url,init) => {
+      if(url.includes('/runpod_synthetic_validation?')) return Response.json([JSON.parse(init.body)]);
       const query = new URL(url).searchParams;
       const rows = tables.video_analysis_jobs.filter(r => ['id','status','runpod_job_id','error_code'].every(k => !query.has(k) || query.get(k) === (r[k] == null ? 'is.null' : 'eq.' + r[k])));
       if (init.method === 'PATCH') rows.forEach(r => Object.assign(r,JSON.parse(init.body)));
       return Response.json(rows);
     }});
-  return {tables, recovered, submit: p => durable.submitSavedVideo(p ?? params), publish: () => orchestration.publishVideoChat(requestId),
+  return {tables, recovered, submit: p => durable.submitSavedVideo(p ?? localParams), publish: () => orchestration.publishVideoChat(requestId),
+    expire: () => durable.refreshRunpodJob(client,tables.video_analysis_jobs[0]),
     grok: () => orchestration.processNextGrokVideo(), deadline: () => reconcile.GET({}),
     callback: async (index,body = {}, wrongProof = false) => webhook(new Request(wrongProof ? callbacks[index].replace(/proof=[a-f0-9]+/, 'proof=' + 'b'.repeat(64)) : callbacks[index], {method:'POST', body: JSON.stringify({id:`provider-${index}`,status:'COMPLETED',output:{choices:[{message:{content:'Late original-video analysis with full visual evidence.'}}]},...body})})),
     get posts(){return posts;}, get messageWrites(){return messageWrites;}};
@@ -134,4 +139,20 @@ test('linked partial submission and cleanup failures recover a complete batch on
     assert.equal(h.messageWrites,1); assert.equal(h.tables.messages[0].content,answer);
     assert.equal(h.posts,faults[1] === 'before' ? 1 : 2);
   }
+});
+
+test('retest queue 404 safely recovers one final answer; late callback and retries never repeat delivery or POST',async()=>{
+  const h=harness([],true);await Promise.all([h.submit(),h.submit()]);
+  assert.equal(h.posts,1);
+  await h.expire();const row=h.tables.video_analysis_jobs[0];
+  assert.equal(row.status,'expired');assert.equal(row.error_code,'RUNPOD_RESULT_EXPIRED_OR_NOT_FOUND');
+  await h.grok();await h.publish();assert.equal(h.messageWrites,1);
+  const answer=h.tables.messages[0].content;
+  assert.match(answer,/independent frame analysis/);
+  assert.equal(h.tables.messages[1].content,'other actor');
+  assert.equal(h.tables.chat_requests[0].status,'completed');
+  assert.equal((await h.callback(0,{},true)).status,401);
+  assert.equal((await h.callback(0)).status,200);assert.equal(row.status,'completed');
+  await h.grok();await h.publish();await h.submit();
+  assert.equal(h.posts,1);assert.equal(h.messageWrites,1);assert.equal(h.tables.messages[0].content,answer);
 });

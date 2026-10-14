@@ -1,0 +1,18 @@
+# WP4 second one-shot validation (draft PR and rollout notes)
+
+Fix synthetic queue expiry and add one isolated post-cleanup retest. The original WP4 attempt expired with a 120-second TTL while queued; historical queues reached 482 seconds. Synthetic policy now allows 900 seconds of total provider lifetime, including queue wait, while retaining the 60-second GPU execution timeout and single POST cap. Normal user submissions retain their existing policy.
+
+The only new slot is `wp4-retest`, with stable request key `synthetic-wp4-retest`. All actor, chat, assistant and attachment IDs are freshly generated in the database. The new claim function locks and requires a cleaned original `wp4` ledger before creating the permanent retest tombstone. Neither cleanup nor retry resets either claim. No HTTP parameters select identities, media, endpoints or cost settings. The fixture remains the bundled red/blue clip with a white square.
+
+Coordinator rollout:
+
+1. Keep `RUNPOD_SYNTHETIC_VALIDATION_ENABLED` absent or false. Complete original cleanup using the original server slot (`wp4`, the default). Verify its permanent ledger has `cleaned_at`; never delete/reset it or resubmit an existing receipt.
+2. Stage migration `202610130006_runpod_synthetic_retest.sql` after the original ledger migration. It expands the slot allowlist and adds separate retest claim/cleanup functions; it does not change original functions or rows. Independently run the disposable PostgreSQL and callback regressions and review this draft.
+3. Deploy the backward-compatible webhook before enabling the app test. It supports both request keys with the existing receipt proof hash and provider-ID checks. Never disable proof auth when using JWT-free provider callbacks. No secrets in CI.
+4. Deploy the app default-off. Set server-only `RUNPOD_SYNTHETIC_VALIDATION_SLOT=wp4-retest` and, only in the authorized window, enable the existing authenticated temporary synthetic cron. HTTP callers cannot override this slot. Existing internal operator endpoints also use the server slot.
+5. Observe the new receipt through existing RunPod reconciliation, Grok recovery and contextual final delivery. Capture `livePass:true` before cleanup: this requires authenticated matching callback, completed Qwen and Grok evidence, fixture hash, correct description and exactly one isolated final message. A 404 expiry can safely fall back to Grok but is not a Qwen live pass.
+6. The existing 20-minute ledger deadline triggers cleanup of only the new slot's artifacts. Setup consumes the claim even on failure; submission refuses if less than 18 minutes remain, reserving 15 minutes of provider TTL plus three minutes of delivery margin. Disable the flag and remove the temporary cron through the coordinator workflow after cleanup. Keep both tombstones forever.
+
+Offline regressions cover old-cleanup gating, separate immutable claims, distinct identities, service-only permissions, concurrent/retried submission, actual queue 404 recovery, actor isolation, one complete final answer, authenticated late callbacks and cleanup. No live provider execution or production access was performed. Live Qwen PASS remains unverified. The orchestration workflow owns committing, remote draft PR creation, independent review and release; this agent does not push or deploy.
+
+Verification in the implementation sandbox: typecheck and production build passed; 47 focused tests passed with no skips, including real disposable PostgreSQL. `ci:gate` was attempted but its test runner reported `spawnSync ... EPERM`; the separate URL check also failed with `/bin/sh EPERM`, and runtime smoke exited before the server became available. The coordinator must rerun the full gate in independent CI. `git diff --check` passed.

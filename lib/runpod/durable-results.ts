@@ -362,7 +362,8 @@ export async function submitSavedVideo(params: {
       },
       signal: AbortSignal.timeout(20000),
       body: JSON.stringify({
-        ...(params.syntheticValidation ? {policy: {executionTimeout: 60000, ttl: 120000}} : {}),
+        // TTL includes queue waiting; only executionTimeout bounds GPU execution.
+        ...(params.syntheticValidation ? {policy: {executionTimeout: 60000, ttl: 900000}} : {}),
         input: {
           route: "/v1/chat/completions", method: "POST",
           body: {

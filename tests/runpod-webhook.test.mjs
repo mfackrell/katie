@@ -22,7 +22,7 @@ function harness(options = {}) {
       calls.push({ url, init });
       if(url.includes('/runpod_synthetic_validation?')) {
         const filters=new URL(url).searchParams;
-        assert.equal(filters.get('slot'),'eq.wp4');
+        assert.equal(filters.get('slot'),options.row?.chat_request_id==='synthetic-wp4-retest'?'eq.wp4-retest':'eq.wp4');
         assert.equal(filters.get('actor_id'),'eq.'+receipt);
         assert.equal(filters.get('cleaned_at'),'is.null');
         const marker=JSON.parse(init.body);
@@ -174,4 +174,14 @@ test('synthetic callback provenance requires valid proof and matching identity, 
   const h=harness({markerFailure:true,row:{chat_request_id:'synthetic-wp4',actor_id:receipt}});
   assert.equal((await h.send()).status,503);
   assert.equal(h.row.status,'completed'); // delivery result is retained for a callback retry
+});
+
+test('retest late expiry callback requires proof and binds only the new slot and actor',async()=>{
+  const row={chat_request_id:'synthetic-wp4-retest',actor_id:receipt,status:'expired',error_code:'RUNPOD_RESULT_EXPIRED_OR_NOT_FOUND'};
+  const h=harness({row});assert.equal((await h.send()).status,200);
+  assert.equal(h.row.status,'completed');
+  assert.equal(h.calls.filter(c=>c.url.includes('/runpod_synthetic_validation?')).length,1);
+  const wrong=harness({row:{...row,callback_token_hash:'b'.repeat(64)}});
+  assert.equal((await wrong.send()).status,401);assert.equal(wrong.patches.length,0);
+  const cleaned=harness({row,markerFailure:true});assert.equal((await cleaned.send()).status,503);
 });
