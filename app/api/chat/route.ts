@@ -1,4 +1,5 @@
-import { registerVideoTiming, getVideoTiming, formatVideoTiming } from "@/lib/uploads/video-timing";
+import { buildVideoTimingEvidence, appendVideoEvidenceToUser, buildVideoAssessmentUser } from "@/lib/chat/video-evidence";
+import { registerVideoTiming, getVideoTiming } from "@/lib/uploads/video-timing";
 import { runRequiredDraftReview, REQUIRED_REVIEW_RESERVE_MS } from "@/lib/collaboration/required-review";
 import { shouldEnableActorCollaboration } from "@/lib/collaboration/review-mode";
 import { finishChatFailure } from "@/lib/chat/request-failure";
@@ -2282,7 +2283,7 @@ ${chunkWorkflowSummary}`;
                     candidate.provider.name === "google" && videoReplyTarget && cleanedText) {
                   const conversational = providers.find(item => item.name === videoReplyTarget.provider);
                   if (!conversational) throw new Error("Selected conversational provider is no longer configured.");
-                  const observations = cleanedText + "\n" + attachments.filter(isVideoAttachment).map(video => formatVideoTiming(getVideoTiming(video))).join("\n");
+                  const observations = cleanedText + "\n" + buildVideoTimingEvidence(attachments.filter(isVideoAttachment));
                   reviewSourceParams = { ...createParams(videoReplyTarget.model),
                     user: buildContextualVideoReplyPrompt(message, observations), attachments: [], images: [] };
                   conversationalResult = await generateContextualVideoReply({
@@ -2558,15 +2559,17 @@ ${chunkWorkflowSummary}`;
                 ) },
                 params: {
                   ...(reviewSourceParams ?? createParams(result.model)),
-                  ...(hasVideoInput ? { user: (reviewSourceParams ?? createParams(result.model)).user + "\n" + attachments.filter(isVideoAttachment).map(video => formatVideoTiming(getVideoTiming(video))).join("\n") } : {}),
+                  ...(hasVideoInput ? { user: appendVideoEvidenceToUser((reviewSourceParams ?? createParams(result.model)).user, buildVideoTimingEvidence(attachments.filter(isVideoAttachment))) } : {}),
                   ...(result.researchEvidence ? { researchEvidence: result.researchEvidence } : {}),
                 },
                 assessmentParams: {
                   ...createParams(result.model),
-                  ...(hasVideoInput ? { user: message + "\n" + attachments.filter(isVideoAttachment).map(video => formatVideoTiming(getVideoTiming(video))).join("\n") } : {}),
-                  // Only the lead receives the saved draft. The independent assessor
-                  // sees the original user turns and latest actual reply, not the draft.
-                  ...(savedDraftOriginalTask ? { user: savedDraftOriginalTask } : pendingReviewClarification ? { user: `This turn answers a previous clarification about the still-active deliverable. Original user turns: ${JSON.stringify(pendingReviewClarification.pending.sourceTurns ?? [])}\nKatie asked: ${pendingReviewClarification.pending.question}\nThe user replied: ${message}\nContinue the original task with only facts the user has provided; if they say the missing information is unknown, do not demand it again.` } : {}),
+                  // Choose the independent task before appending evidence; never include the candidate draft.
+                  user: buildVideoAssessmentUser({
+                    baseUser: createParams(result.model).user, savedDraftOriginalTask,
+                    pendingClarification: pendingReviewClarification?.pending,
+                    latestMessage: message, videos: hasVideoInput ? attachments.filter(isVideoAttachment) : [],
+                  }),
                   ...(result.researchEvidence ? { researchEvidence: result.researchEvidence } : {}),
                 },
                 leadProvider: draftProvider,

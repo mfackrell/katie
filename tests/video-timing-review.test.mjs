@@ -60,3 +60,35 @@ test('stale synthesis lease sends measured evidence to generator and required re
   assert.match(reviewed[0], /white square/);
   assert.equal(state.video_synthesis_state, 'completed');
 });
+
+test('actual route assessment preserves attachments and source context after every task choice', () => {
+  const timing = load('lib/uploads/video-timing.ts', {});
+  const evidence = load('lib/chat/video-evidence.ts', {'@/lib/uploads/video-timing': timing});
+  const route = readFileSync('app/api/chat/route.ts', 'utf8');
+  const start = route.indexOf('assessmentParams: {');
+  const end = route.indexOf('\n                leadProvider:', start);
+  const attachments = [{fileName: 'same.mp4', fileId: 'one'}, {fileName: 'same.mp4', fileId: 'two'}];
+  timing.registerVideoTiming(attachments[0], {version: 1, durationSeconds: 2, sampleSeconds: [0.5]});
+  const original = {user: 'Ordinary createParams context\nOriginal task', attachments, images: ['original image']};
+  for (const video of [true, false]) for (const choice of ['ordinary', 'saved', 'clarification']) {
+    const pending = choice === 'clarification' ? {pending: {sourceTurns: ['Original request'], question: 'Which detail?'}} : null;
+    const assessment = vm.runInNewContext('({' + route.slice(start, end) + '})', {
+      ...evidence, createParams: () => original, result: {model: 'offline'},
+      hasVideoInput: video, attachments, isVideoAttachment: () => true,
+      savedDraftOriginalTask: choice === 'saved' ? 'Saved original task' : null,
+      pendingReviewClarification: pending, message: 'Unknown',
+      reviewSourceParams: {user: 'Candidate draft and prior assistant framing'},
+    }).assessmentParams;
+    assert.equal(assessment.attachments, attachments);
+    assert.equal(assessment.images, original.images);
+    const chosen = choice === 'ordinary' ? original.user : choice === 'saved' ? 'Saved original task'
+      : 'This turn answers a previous clarification about the still-active deliverable. Original user turns: ["Original request"]\nKatie asked: Which detail?\nThe user replied: Unknown\nContinue the original task with only facts the user has provided; if they say the missing information is unknown, do not demand it again.';
+    if (video) {
+      assert.ok(assessment.user.startsWith(chosen + '\nVideo 1'));
+      assert.match(assessment.user, /measured duration: 2s/);
+      assert.match(assessment.user, /Video 2 .*two[\s\S]*No server-verified timing/);
+    } else assert.equal(assessment.user, chosen);
+    assert.ok(!assessment.user.includes('Candidate draft'));
+    assert.ok(!assessment.user.includes('prior assistant framing'));
+  }
+});
