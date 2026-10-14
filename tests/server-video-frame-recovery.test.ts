@@ -1,6 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+const execFileAsync = promisify(execFile);
 import { createRequire } from "node:module";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -32,7 +34,7 @@ test("real bundled FFmpeg decodes a private MP4 into verified JPEG frames", asyn
     const videoPath = join(dir, "test.mp4");
     // Actual generated frames exercise the packaged decoder. A browser mock
     // would have missed the iPhone recording codec failure in production.
-    execFileSync(ffmpeg, [
+    await execFileAsync(ffmpeg, [
       "-hide_banner", "-loglevel", "error", "-f", "lavfi",
       "-i", "color=c=blue:s=160x96:r=4:d=3",
       "-c:v", "mpeg4", "-pix_fmt", "yuv420p", "-y", videoPath,
@@ -40,11 +42,9 @@ test("real bundled FFmpeg decodes a private MP4 into verified JPEG frames", asyn
     const video = await readFile(videoPath);
     const frames = await extractFramesFromPrivateVideo(new Blob([new Uint8Array(video)], { type: "video/mp4" }));
     assert.equal(frames.length, 10, "a decodable three-second video must yield all ten samples");
-    const requested = evenVideoSampleTimestamps(3);
     frames.forEach((frame, index) => {
-      // Low-FPS clips may require backward seeking to obtain a real last frame.
-      assert.ok(frame.timestampSeconds <= Math.round(requested[index] * 10) / 10 + 0.1);
-      assert.ok(frame.timestampSeconds >= Math.round(requested[index] * 10) / 10 - 0.75);
+      assert.ok(Number.isInteger(frame.timestampSeconds * 4), "actual PTS must land on the 4 fps decoder grid");
+      if (index) assert.ok(frame.timestampSeconds >= frames[index - 1].timestampSeconds);
     });
     assert.ok(frames.every(frame => frame.dataUrl.startsWith("data:image/jpeg;base64,")));
     assert.ok(frames.every(frame => frame.timestampSeconds >= 0 && frame.timestampSeconds < 3));
@@ -67,7 +67,7 @@ test("FFmpeg captures a genuine scene change confined to the final 4% of a clip"
     const videoPath = join(dir, "tail-transition.mp4");
     // Blue dominates 96% of this recording. Only the closing 200ms are red.
     // The old uniform 10-frame sampler stopped at 90.9%, missing the cut.
-    execFileSync(ffmpeg, [
+    await execFileAsync(ffmpeg, [
       "-hide_banner", "-loglevel", "error",
       "-f", "lavfi", "-i", "color=c=blue:s=160x96:r=10:d=4.8",
       "-f", "lavfi", "-i", "color=c=red:s=160x96:r=10:d=0.2",

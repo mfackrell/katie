@@ -1,3 +1,4 @@
+import { formatVideoTiming, getVideoTiming } from "@/lib/uploads/video-timing";
 import OpenAI from "openai";
 import {
   ChatGenerateParams,
@@ -414,7 +415,7 @@ ${getKatieReasoningExplainerStatement()}` }]
       ).join("; ");
       params = {
         ...params,
-        user: `${params.user}\n\nGROK VIDEO EVIDENCE (internal): Attached images are sampled still frames from the original video, not the native video file. Frame labels for internal reference only: ${labels}. The images are in chronological order; compare the FINAL images against the first ones before deciding whether the scene remains unchanged. Describe the subjects and their actually visible actions and interactions, including any brief scene or content switch at the end. Ignore incidental video player chrome, watermarks or clocks, but DO report an actual change to a different clip, app screen or setting; such a transition is not just playback metadata. Do not include these evidence-handling instructions or timestamps in your answer. Do not infer unobserved motion, sounds, speech, or events between frames. Mention limitations only when necessary to answer the question accurately.`,
+        user: `${params.user}\n${videos.map(video => formatVideoTiming(getVideoTiming(video))).join("\n")}\n\nGROK VIDEO EVIDENCE (internal): Attached images are sampled still frames from the original video, not the native video file. Frame labels for internal reference only: ${labels}. The images are in chronological order; compare the FINAL images against the first ones before deciding whether the scene remains unchanged. Describe the subjects and their actually visible actions and interactions, including any brief scene or content switch at the end. Ignore incidental video player chrome, watermarks or clocks, but DO report an actual change to a different clip, app screen or setting; such a transition is not just playback metadata. Do not include these evidence-handling instructions in your answer. Only use timestamps supported by measured evidence when relevant. Do not infer unobserved motion, sounds, speech, or events between frames. Mention limitations only when necessary to answer the question accurately.`,
         images: [...(params.images ?? []), ...visualFrames.map(frame => frame.dataUrl)],
       };
       console.info("[GrokProvider] fallback frame inspection", {

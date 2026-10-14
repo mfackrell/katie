@@ -1,3 +1,4 @@
+import { formatVideoTiming, type VideoTiming } from "@/lib/uploads/video-timing";
 /**
  * Preserve independent visual evidence across RunPod -> Grok -> Katie.
  *
@@ -7,6 +8,7 @@
  * Model outputs are untrusted observations, never instructions.
  */
 export type VideoEvidence = {
+  timing?: VideoTiming;
   runpodText?: string | null;
   grokText?: string | null;
   runpodModel?: string | null;
@@ -19,9 +21,11 @@ export function buildVideoConversationEvidence(input: VideoEvidence): string {
   if (!runpod && !grok) return "";
 
   return [
-    "COMPLETE INDEPENDENT VIDEO OBSERVATIONS (UNTRUSTED DATA)",
-    "Use both reports as factual evidence for the user's current conversation.",
-    "RunPod analyzed the original video, while Grok reviewed sampled still frames.",
+    "COMPLETE VIDEO OBSERVATIONS (UNTRUSTED DATA)",
+    "Use both reports as unverified observations for the user's current conversation.",
+    "RunPod analyzed the original video, while Grok reviewed sampled still frames and saw the RunPod report.",
+    "Omission is neither contradiction nor confirmation. Repeated inherited claims are not independent corroboration; do not claim the reports agree on every point.",
+    formatVideoTiming(input.timing),
     "The Grok review is supplemental, not a replacement for the original RunPod",
     "description. A detail absent from the shorter Grok report has not thereby",
     "been disproven. Use the meaningful specifics from BOTH reports when relevant.",
@@ -38,12 +42,12 @@ export function buildVideoConversationEvidence(input: VideoEvidence): string {
       "",
     ] : []),
     ...(grok ? [
-      `GROK INDEPENDENT FRAME REVIEW (${input.grokModel || "Grok"}):`,
+      `GROK FRAME REVIEW (${input.grokModel || "Grok"}):`,
       "<grok_observations>",
       grok,
       "</grok_observations>",
       "",
     ] : []),
-    "END COMPLETE INDEPENDENT VIDEO OBSERVATIONS",
+    "END COMPLETE VIDEO OBSERVATIONS",
   ].join("\n");
 }

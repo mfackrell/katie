@@ -1,6 +1,7 @@
+import { formatVideoTiming, getVideoTiming } from "@/lib/uploads/video-timing";
 import { encodeMessageContent, parseMessageContent } from "@/lib/data/persistence-store";
 import { GrokProvider } from "@/lib/providers/grok-provider";
-import { recoverSavedVideoFrames } from "@/lib/uploads/stored-uploads";
+import { recoverSavedVideoFrames, readSavedVideoTiming } from "@/lib/uploads/stored-uploads";
 import { finalizeContextualVideoReply } from "@/lib/runpod/video-conversation";
 import { buildGrokVideoScenePrompt, GROK_SCENE_RESPONSE_PERSONA } from "@/lib/chat/video-scene-prompts";
 import { buildVideoConversationEvidence } from "@/lib/chat/video-evidence";
@@ -85,10 +86,13 @@ export async function publishVideoChat(requestId: string): Promise<{ status: str
     // evidence, not permission to discard the richer first report.
     const runpodText = job.status === "completed" && usableVideoAnalysis(job.analysis_text)
       ? job.analysis_text!.trim() : null;
+    const timingPath = job.attachment_path ? ID_FROM_PATH.exec(job.attachment_path) : null;
+    const timing = timingPath && job.chat_id === timingPath[1] && job.actor_id
+      ? await readSavedVideoTiming(job.chat_id, timingPath[2], job.actor_id) : undefined;
     let text: string;
     if (job.fallback_state === "completed" && usableVideoAnalysis(job.fallback_text)) {
       text = buildVideoConversationEvidence({
-        runpodText,
+        runpodText, timing,
         grokText: job.fallback_text!.trim(),
         runpodModel: job.model,
         grokModel: job.fallback_model,
@@ -98,7 +102,7 @@ export async function publishVideoChat(requestId: string): Promise<{ status: str
     } else if (job.fallback_state === "failed") {
       if (runpodText) {
         anyVisualEvidence = true;
-        text = buildVideoConversationEvidence({ runpodText, runpodModel: job.model }) +
+        text = buildVideoConversationEvidence({ runpodText, timing, runpodModel: job.model }) +
           "\n\n[Grok frame review was unavailable: " +
           (job.fallback_error_code || "unknown error") + ".]";
       } else {
@@ -224,7 +228,7 @@ export async function processNextGrokVideo(): Promise<{ status: string; requestI
       if (!model) throw new Error("No configured Grok vision model is available");
       const preliminary = usableVideoAnalysis(row.analysis_text) ? row.analysis_text!.trim() : null;
       // Supply Grok the complete saved RunPod report, not a condensed rewrite.
-      const grokPrompt = buildGrokVideoScenePrompt(row.request_prompt || "", preliminary);
+      const grokPrompt = buildGrokVideoScenePrompt(row.request_prompt || "", preliminary) + "\n\n" + formatVideoTiming(getVideoTiming(frames));
       console.info("[Video Evidence] Full RunPod description forwarded to Grok", {
         jobId: row.id, runpodCharacters: preliminary?.length ?? 0,
         grokPromptCharacters: grokPrompt.length, frameCount: frames.videoFrames.length,

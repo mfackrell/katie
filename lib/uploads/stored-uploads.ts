@@ -1,3 +1,4 @@
+import { getVideoTiming, registerVideoTiming, type VideoTiming } from "./video-timing";
 import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 import { createClient } from "@supabase/supabase-js";
 import { z } from "zod";
@@ -84,6 +85,7 @@ export function createStoredUploadService(storage: Storage, secret: string, opti
     delete metadata.extractedText;
     delete metadata.extractedChunks;
     delete metadata.imageDataUrl;
+    delete (metadata as FileReference & { decoderTiming?: unknown }).decoderTiming;
     delete metadata.videoFrames; // Server hydrates sampled frames from private storage; avoid re-sending evidence as client data.
     return { ...metadata, storageToken: sign({ ...ticket, kind: "reference", expires: ticket.expires + RETENTION_MS - 2 * 60 * 60 * 1000 }) };
   };
@@ -373,17 +375,30 @@ export function createStoredUploadService(storage: Storage, secret: string, opti
         const saved = await objects.upload(`${path}.source`, source, { contentType: reference.mimeType, upsert: true });
         if (saved.error) throw new Error("Unable to retain the original attachment for future questions.");
       }
-      const saved = await objects.upload(`${path}.json`, JSON.stringify({ reference, hasSource, actorId: options.actorId, refreshedAt: now() }), { contentType: "application/json", upsert: true });
+      const safeReference = { ...reference };
+      delete (safeReference as FileReference & { decoderTiming?: unknown }).decoderTiming;
+      const decoderTiming = getVideoTiming(reference);
+      const saved = await objects.upload(`${path}.json`, JSON.stringify({ reference: safeReference, decoderTiming, hasSource, actorId: options.actorId, refreshedAt: now() }), { contentType: "application/json", upsert: true });
       if (saved.error) throw new Error("Unable to retain this attachment for follow-up questions.");
       const descriptor: ConversationAttachment = { ...options.description, id, fileName: reference.fileName, mimeType: reference.mimeType, createdAt: new Date(now()).toISOString(), hasOriginal: hasSource, chatId, actorId: options.actorId };
       await writeCatalogEntry(chatId, descriptor);
       return descriptor;
     },
+    async readVideoTiming(chatId: string, id: string, actorId: string): Promise<VideoTiming | undefined> {
+      const stored = await objects.download(`${conversationPath(chatId, id)}.json`);
+      if (stored.error || !stored.data) return;
+      let record: { actorId?: string; decoderTiming?: unknown; reference?: FileReference };
+      try { record = JSON.parse(await stored.data.text()); } catch { return; }
+      if (!record || record.actorId !== actorId || typeof record.reference?.mimeType !== "string" ||
+          !record.reference.mimeType.startsWith("video/")) return;
+      registerVideoTiming(record.reference, record.decoderTiming);
+      return getVideoTiming(record.reference);
+    },
     async restore(chatId: string, attachment: ConversationAttachment, expectedActorId?: string): Promise<FileReference> {
       const path = conversationPath(chatId, attachment.id);
       const stored = await objects.download(`${path}.json`);
       if (stored.error || !stored.data) throw new UploadInputError("The saved attachment is unavailable.");
-      const record = JSON.parse(await stored.data.text()) as { reference: FileReference; hasSource: boolean; refreshedAt: number; actorId?: string };
+      const record = JSON.parse(await stored.data.text()) as { reference: FileReference; hasSource: boolean; refreshedAt: number; actorId?: string; decoderTiming?: VideoTiming };
       if (expectedActorId && record.actorId && record.actorId !== expectedActorId) throw new UploadInputError("This file belongs to a different actor.");
       if (!record.reference.imageDataUrl && now() - record.refreshedAt >= RETENTION_MS) {
         const source = record.hasSource ? await objects.download(`${path}.source`) : null;
@@ -398,6 +413,7 @@ export function createStoredUploadService(storage: Storage, secret: string, opti
         const updated = await objects.upload(`${path}.json`, JSON.stringify(record), { contentType: "application/json", upsert: true });
         if (updated.error) throw new Error("Unable to save renewed video access.");
       }
+      if (expectedActorId && record.actorId === expectedActorId) registerVideoTiming(record.reference, record.decoderTiming);
       return record.reference;
     },
     // Recover visual evidence only after Gemini fails. This reads the original
@@ -414,7 +430,7 @@ export function createStoredUploadService(storage: Storage, secret: string, opti
       if (stored.error || !stored.data) throw new UploadInputError("Previously saved video details are unavailable.");
       const record = JSON.parse(await stored.data.text()) as {
         reference: FileReference; hasSource: boolean; refreshedAt: number;
-        actorId?: string; frameSampleTarget?: number; frameSampleVersion?: number;
+        decoderTiming?: VideoTiming; actorId?: string; frameSampleTarget?: number; frameSampleVersion?: number;
       };
       if (record.actorId && record.actorId !== expectedActorId) throw new UploadInputError("Video belongs to another actor.");
       if (!record.reference.mimeType.startsWith("video/")) throw new UploadInputError("Saved attachment is not a video.");
@@ -422,27 +438,35 @@ export function createStoredUploadService(storage: Storage, secret: string, opti
       // Older videos may have four cached frames. Resample the retained original
       // once to upgrade them to ten; avoid repeatedly decoding short/corrupt clips.
       if (existing?.length && ((record.frameSampleTarget === MAX_VIDEO_FALLBACK_FRAMES && record.frameSampleVersion === VIDEO_FRAME_SAMPLE_VERSION) || !record.hasSource)) {
+        if (expectedActorId && record.actorId === expectedActorId) registerVideoTiming(record.reference, record.decoderTiming);
         return record.reference;
       }
       if (!record.hasSource) throw new UploadInputError("Original video was not retained; cannot extract real frames.");
       const original = await objects.download(`${path}.source`);
       if (original.error || !original.data) {
-        if (existing?.length) return record.reference;
+        if (existing?.length) {
+          if (expectedActorId && record.actorId === expectedActorId) registerVideoTiming(record.reference, record.decoderTiming);
+          return record.reference;
+        }
         throw new UploadInputError("The original saved video is no longer available.");
       }
       let frames: VideoFallbackFrame[];
       try {
-        frames = validateVideoFallbackFrames(await extract(original.data));
+        const decoded = await extract(original.data);
+        frames = validateVideoFallbackFrames(decoded);
+        registerVideoTiming(frames, getVideoTiming(decoded));
       } catch (error) {
         if (!existing?.length) throw error;
         console.warn("[Video Routing] ten-frame upgrade failed; retaining existing frames", {
           attachmentId: attachment.id, previousCount: existing.length,
         });
+        if (expectedActorId && record.actorId === expectedActorId) registerVideoTiming(record.reference, record.decoderTiming);
         return record.reference;
       }
       if (!frames.length && !existing?.length) throw new UploadInputError("Server decoded no video frames; Grok visual fallback is unavailable.");
       const upgraded = frames.length >= 7 || !existing?.length;
       record.reference.videoFrames = upgraded ? frames : existing!;
+      if (upgraded) record.decoderTiming = getVideoTiming(frames);
       record.frameSampleTarget = MAX_VIDEO_FALLBACK_FRAMES;
       record.frameSampleVersion = upgraded ? VIDEO_FRAME_SAMPLE_VERSION : undefined;
       const saved = await objects.upload(`${path}.json`, JSON.stringify(record), {
@@ -452,6 +476,7 @@ export function createStoredUploadService(storage: Storage, secret: string, opti
       console.info("[Video Routing] saved video frames recovered", {
         attachmentId: attachment.id, frameCount: record.reference.videoFrames.length, source: "saved-conversation"
       });
+      if (expectedActorId && record.actorId === expectedActorId) registerVideoTiming(record.reference, record.decoderTiming);
       return record.reference;
     },
     async recoverUploadVideoFrames(
@@ -462,10 +487,13 @@ export function createStoredUploadService(storage: Storage, secret: string, opti
       if (!ticket.type.startsWith("video/")) throw new UploadInputError("Signed attachment is not a video.");
       const stored = await objects.download(referencePath(ticket));
       if (stored.error || !stored.data) throw new UploadInputError("Uploaded video reference is unavailable.");
-      const reference = JSON.parse(await stored.data.text()) as FileReference & { frameSampleTarget?: number; frameSampleVersion?: number };
+      const reference = JSON.parse(await stored.data.text()) as FileReference & { decoderTiming?: VideoTiming; frameSampleTarget?: number; frameSampleVersion?: number };
       const existing = reference.videoFrames;
       if (existing?.length && reference.frameSampleTarget === MAX_VIDEO_FALLBACK_FRAMES &&
-          reference.frameSampleVersion === VIDEO_FRAME_SAMPLE_VERSION) return reference;
+          reference.frameSampleVersion === VIDEO_FRAME_SAMPLE_VERSION) {
+        registerVideoTiming(reference, reference.decoderTiming);
+        return reference;
+      }
       const original = await objects.download(sourcePath(ticket));
       if (original.error || !original.data) {
         if (existing?.length) return reference;
@@ -473,7 +501,9 @@ export function createStoredUploadService(storage: Storage, secret: string, opti
       }
       let frames: VideoFallbackFrame[];
       try {
-        frames = validateVideoFallbackFrames(await extract(original.data));
+        const decoded = await extract(original.data);
+        frames = validateVideoFallbackFrames(decoded);
+        registerVideoTiming(frames, getVideoTiming(decoded));
       } catch (error) {
         if (!existing?.length) throw error;
         console.warn("[Video Routing] upload ten-frame upgrade failed; retaining existing frames", {
@@ -484,6 +514,7 @@ export function createStoredUploadService(storage: Storage, secret: string, opti
       if (!frames.length && !existing?.length) throw new UploadInputError("Server decoded no video frames; Grok visual fallback is unavailable.");
       const upgraded = frames.length >= 7 || !existing?.length;
       reference.videoFrames = upgraded ? frames : existing!;
+      if (upgraded) reference.decoderTiming = getVideoTiming(frames);
       reference.frameSampleTarget = MAX_VIDEO_FALLBACK_FRAMES;
       reference.frameSampleVersion = upgraded ? VIDEO_FRAME_SAMPLE_VERSION : undefined;
       const saved = await objects.upload(referencePath(ticket), JSON.stringify(reference), {
@@ -493,6 +524,7 @@ export function createStoredUploadService(storage: Storage, secret: string, opti
       console.info("[Video Routing] uploaded video frames recovered", {
         uploadId: ticket.id, frameCount: reference.videoFrames.length, source: "signed-upload"
       });
+      registerVideoTiming(reference, reference.decoderTiming);
       return reference;
     },
     async removeConversation(chatId: string, actorId?: string) {
@@ -691,7 +723,9 @@ export function createStoredUploadService(storage: Storage, secret: string, opti
         const stored = await objects.download(referencePath(ticket));
         if (stored.error || !stored.data) throw new UploadInputError("The stored attachment is unavailable. Please attach the file again.");
         // Only the server-written reference is trusted, never client-supplied provider IDs or text.
-        hydrated.push(JSON.parse(await stored.data.text()) as FileReference);
+        const privateReference = JSON.parse(await stored.data.text()) as FileReference & { decoderTiming?: VideoTiming };
+        registerVideoTiming(privateReference, privateReference.decoderTiming);
+        hydrated.push(privateReference);
       }
       return hydrated;
     },
@@ -771,3 +805,5 @@ export async function loadActorAttachmentCatalog(actorId: string, legacyLoader: 
   await service.initializeCatalog(actorId, combined, "actor");
   return combined;
 }
+
+export const readSavedVideoTiming = (chatId: string, id: string, actorId: string) => getUploadService().readVideoTiming(chatId, id, actorId);

@@ -17,7 +17,8 @@ function harness(faults = [], synthetic = false) {
       {id: uuid(8), chat_id: target, actor_id: uuid(9), role: 'assistant', content: 'other actor'}],
     chat_requests: [{request_id: requestId, chat_id: target, actor_id: actor}]};
   let posts = 0, messageWrites = 0, failCleanup = false, failRegistration = false, webhook;
-  const callbacks = [], recovered = [];
+  const callbacks = [], recovered = [], timingReads = [], synthesisEvidence = [];
+  const timing = {version: 1, durationSeconds: 2, sampleSeconds: [0.166667, 1.25]};
   const client = {storage: {from: () => ({createSignedUrl: async path => faults[path === params.attachmentPath ? 0 : 1] === 'before' ? {error: true} : {data: {signedUrl: 'https://private.invalid/?secret'}}})},
     from: table => {
       let mode = 'read', patch, filters = [], sort, cap;
@@ -70,11 +71,12 @@ function harness(faults = [], synthetic = false) {
   const orchestration = load('lib/runpod/video-orchestration.ts', {
     '@/lib/runpod/durable-results': durable,
     '@/lib/data/persistence-store': {parseMessageContent: content => ({text: content}), encodeMessageContent: x => x.content},
-    '@/lib/uploads/stored-uploads': {recoverSavedVideoFrames: async (chat, attachment, owner) => {assert.equal(chat,source); assert.equal(owner,actor); recovered.push(attachment.id); return {videoFrames: ['pixels']};}},
-    '@/lib/providers/grok-provider': {GrokProvider: class {async listModels(){return ['grok-4.7'];} async generate(){return {text: 'A detailed independent frame analysis with real visual evidence.', model: 'grok-4.7'};}}},
+    '@/lib/uploads/video-timing': {formatVideoTiming: () => 'Measured duration: 2s', getVideoTiming: () => timing},
+    '@/lib/uploads/stored-uploads': {readSavedVideoTiming: async (chat, id, owner) => {assert.equal(chat,source); assert.equal(owner,actor); timingReads.push(id); return timing;}, recoverSavedVideoFrames: async (chat, attachment, owner) => {assert.equal(chat,source); assert.equal(owner,actor); recovered.push(attachment.id); return {videoFrames: ['pixels']};}},
+    '@/lib/providers/grok-provider': {GrokProvider: class {async listModels(){return ['grok-4.7'];} async generate(input){assert.match(input.user, /Measured duration: 2s/); return {text: 'A detailed independent frame analysis with real visual evidence.', model: 'grok-4.7'};}}},
     '@/lib/chat/video-scene-prompts': {buildGrokVideoScenePrompt: x => x},
-    '@/lib/chat/video-evidence': {buildVideoConversationEvidence: x => [x.runpodText,x.grokText].filter(Boolean).join('\n')},
-    '@/lib/runpod/video-conversation': {finalizeContextualVideoReply: async x => {assert.equal(x.actorId,actor); assert.equal(x.chatId,target); assert.equal(x.assistantMessageId,assistant); return {status: 'ready',text: x.observations, model: 'conversation'};}},
+    '@/lib/chat/video-evidence': {buildVideoConversationEvidence: x => {assert.equal(x.timing, timing); return [x.runpodText,x.grokText,'Measured duration: 2s'].filter(Boolean).join('\n');}},
+    '@/lib/runpod/video-conversation': {finalizeContextualVideoReply: async x => {assert.match(x.observations, /Measured duration: 2s/); synthesisEvidence.push(x.observations); assert.equal(x.actorId,actor); assert.equal(x.chatId,target); assert.equal(x.assistantMessageId,assistant); return {status: 'ready',text: x.observations, model: 'conversation'};}},
   });
   const reconcile = load('app/api/internal/runpod-results/reconcile/route.ts', {
     'next/server': {NextResponse: {json: Response.json}}, '@/lib/runpod/durable-results': {...durable, assertCronAuth: () => true},
@@ -89,7 +91,7 @@ function harness(faults = [], synthetic = false) {
       if (init.method === 'PATCH') rows.forEach(r => Object.assign(r,JSON.parse(init.body)));
       return Response.json(rows);
     }});
-  return {tables, recovered, submit: p => durable.submitSavedVideo(p ?? localParams), publish: () => orchestration.publishVideoChat(requestId),
+  return {tables, recovered, timingReads, synthesisEvidence, submit: p => durable.submitSavedVideo(p ?? localParams), publish: () => orchestration.publishVideoChat(requestId),
     expire: () => durable.refreshRunpodJob(client,tables.video_analysis_jobs[0]),
     grok: () => orchestration.processNextGrokVideo(), deadline: () => reconcile.GET({}),
     callback: async (index,body = {}, wrongProof = false) => webhook(new Request(wrongProof ? callbacks[index].replace(/proof=[a-f0-9]+/, 'proof=' + 'b'.repeat(64)) : callbacks[index], {method:'POST', body: JSON.stringify({id:`provider-${index}`,status:'COMPLETED',output:{choices:[{message:{content:'Late original-video analysis with full visual evidence.'}}]},...body})})),
@@ -155,4 +157,24 @@ test('retest queue 404 safely recovers one final answer; late callback and retri
   assert.equal((await h.callback(0)).status,200);assert.equal(row.status,'completed');
   await h.grok();await h.publish();await h.submit();
   assert.equal(h.posts,1);assert.equal(h.messageWrites,1);assert.equal(h.tables.messages[0].content,answer);
+});
+
+test('delayed publish retries and Grok failure keep owner-checked measured timing without decoding', async () => {
+  const h = harness([], true);
+  await h.submit();
+  const row = h.tables.video_analysis_jobs[0];
+  Object.assign(row, {status:'completed', analysis_text:'The red background changes to blue around 0.3 seconds. A white square remains centered.', fallback_state:'failed', fallback_error_code:'OFFLINE_TEST'});
+  // Delay final publication until the original placeholder is restored.
+  const placeholder = h.tables.messages.shift();
+  assert.equal((await h.publish()).status, 'awaiting_assistant_message');
+  assert.equal(h.recovered.length, 0);
+  h.tables.messages.unshift(placeholder);
+  assert.equal((await h.publish()).status, 'delivered');
+  assert.equal(h.timingReads.length, 2);
+  assert.equal(h.synthesisEvidence.length, 2);
+  for (const evidence of h.synthesisEvidence) {
+    assert.match(evidence, /Measured duration: 2s/);
+    assert.match(evidence, /white square/);
+  }
+  assert.equal(h.recovered.length, 0);
 });

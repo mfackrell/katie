@@ -5,6 +5,7 @@ import { join, dirname } from "node:path";
 import { createRequire } from "node:module";
 import { existsSync } from "node:fs";
 import sharp from "sharp";
+import { registerVideoTiming } from "./video-timing";
 import { validateVideoFallbackFrames, VIDEO_FRAME_SAMPLE_FRACTIONS, type VideoFallbackFrame } from "./video-fallback-frames";
 
 export const MAX_FALLBACK_SOURCE_BYTES = 200 * 1024 * 1024;
@@ -104,7 +105,14 @@ export async function extractFramesFromPrivateVideo(
     const probe = await run(binary, ["-hide_banner", "-nostdin", "-i", inputPath], VIDEO_PROBE_TIMEOUT_MS);
     const duration = videoDuration(probe.stderr);
     const frames: VideoFallbackFrame[] = [];
-    const timestamps = evenVideoSampleTimestamps(duration);
+    const measured: number[] = [];
+    const originMatch = /start:\s*(-?\d+(?:\.\d+)?)/.exec(probe.stderr);
+    const origin = originMatch ? Number(originMatch[1]) : null;
+    // Some containers include a positive origin in their reported duration.
+    // Subtraction is a seek-coverage heuristic only, never verified clip duration.
+    const samplingDuration = origin !== null && origin > 0 && duration !== null && duration > origin
+      ? duration - origin : duration;
+    const timestamps = evenVideoSampleTimestamps(samplingDuration);
     // Decode ten snapshots covering the timeline, with extra attention to
     // the last visible scene. Near-end seeks can run beyond the last decodable
     // frame on low-FPS clips; retry slightly earlier rather than silently
@@ -122,9 +130,10 @@ export async function extractFramesFromPrivateVideo(
         if (Date.now() >= deadline) break;
         try {
           const result = await run(binary, [
-            "-nostdin", "-hide_banner", "-loglevel", "error",
+            "-nostdin", "-hide_banner", "-loglevel", "info",
+            "-copyts",
             "-ss", String(seekSeconds), "-i", inputPath,
-            "-an", "-sn", "-dn", "-frames:v", "1",
+            "-an", "-sn", "-dn", "-vf", "showinfo", "-vsync", "0", "-frames:v", "1",
             // Sharp downsizes only large frames without enlarging tiny clips.
             "-q:v", "5", "-y", output,
           ], Math.min(FRAME_DECODE_TIMEOUT_MS, Math.max(2_000, deadline - Date.now())));
@@ -137,8 +146,12 @@ export async function extractFramesFromPrivateVideo(
             .jpeg({ quality: 57, mozjpeg: true })
             .toBuffer();
           if (jpg.length > 350_000) continue;
+          const ptsMatch = /\bn:\s*0\s+pts:.*?pts_time:\s*(-?\d+(?:\.\d+)?)/.exec(result.stderr);
+          const pts = ptsMatch && origin !== null ? Number(ptsMatch[1]) - origin : null;
+          const validPts = pts !== null && Number.isFinite(pts) && pts >= 0 && (duration === null || pts <= duration);
+          if (validPts) measured.push(pts!);
           frames.push({
-            timestampSeconds: Math.round(seekSeconds * 10) / 10,
+            timestampSeconds: validPts ? pts! : seekSeconds,
             dataUrl: "data:image/jpeg;base64," + jpg.toString("base64"),
           });
           break;
@@ -157,7 +170,11 @@ export async function extractFramesFromPrivateVideo(
     console.info("[Video Routing] FFmpeg decoded retained recording", {
       frameCount: frames.length, durationSeconds: duration, videoBytes: source.size,
     });
-    return validateVideoFallbackFrames(frames);
+    frames.sort((a, b) => a.timestampSeconds - b.timestampSeconds);
+    measured.sort((a, b) => a - b);
+    const validated = validateVideoFallbackFrames(frames);
+    if (measured.length === validated.length) registerVideoTiming(validated, { version: 1, durationSeconds: origin === 0 ? duration : null, sampleSeconds: measured });
+    return validated;
   } finally {
     await rm(workspace, { recursive: true, force: true }).catch(() => undefined);
   }
