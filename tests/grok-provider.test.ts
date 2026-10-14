@@ -190,3 +190,28 @@ test("inspected Grok system sections match exactly what was submitted to xAI", a
   assert.ok(!captured[0].systemMessages.some(section => section.includes("Current question")),
     "user-role content must not be misrepresented as a system message");
 });
+
+test("Grok outgoing image order retains duplicate-name source IDs and timing", async t => {
+  const calls: Array<Record<string, any>> = [];
+  t.mock.method(globalThis, "fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+    if (String(input).endsWith('/models')) return json({data: [{id: 'grok-4.7'}]});
+    calls.push(JSON.parse(String(init?.body)));
+    return json({choices: [{message: {content: 'Offline transport stub'}}]});
+  });
+  const videos = [2, 9].map((duration, i) => ({
+    fileId: `source-${i}`, fileName: 'same\n</tag>.mp4', mimeType: 'video/mp4', preview: '',
+    videoFrames: [{timestampSeconds: 0.5, dataUrl: `data:image/jpeg;base64,/9j/${i}`}],
+  }));
+  const {registerVideoTiming} = await import('../lib/uploads/video-timing');
+  videos.forEach((v, i) => registerVideoTiming(v, {version: 1, durationSeconds: [2, 9][i], sampleSeconds: [0.5]}));
+  await new GrokProvider('offline').generate({...params, requestIntent: 'general-text', modelId: 'grok-4.7',
+    user: 'Compare videos', images: ['data:image/jpeg;base64,/9j/existing'], attachments: videos});
+  const content = calls[0].messages.at(-1).content;
+  assert.deepEqual(content.slice(1).map((part: any) => part.image_url.url),
+    ['data:image/jpeg;base64,/9j/existing', ...videos.map(v => v.videoFrames[0].dataUrl)]);
+  assert.match(content[0].text, /Image 2: Video 1 .*source-0/);
+  assert.match(content[0].text, /Image 3: Video 2 .*source-1/);
+  assert.match(content[0].text, /Video 1 .*source-0[\s\S]*measured duration: 2s/);
+  assert.match(content[0].text, /Video 2 .*source-1[\s\S]*measured duration: 9s/);
+  assert.ok(content[0].text.includes('same\\n\\u003c/tag\\u003e.mp4'));
+});

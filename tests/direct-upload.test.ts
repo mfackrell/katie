@@ -1299,3 +1299,38 @@ test("operator can recover a legacy unlinked original with a scoped signed refer
   await assert.rejects(service.recoverUnlinkedVideo("../invalid"), /Invalid legacy upload/);
   await assert.rejects(service.recoverUnlinkedVideo("b8a660fa-8f06-4593-95b7-7156174c45f7"), /unavailable/);
 });
+
+import { getVideoTiming, registerVideoTiming } from "../lib/uploads/video-timing";
+test("decoder timing survives private cache retries and owner reads, forged fields do not", async () => {
+  const fake = fakeStorage();
+  const service = createStoredUploadService(fake.storage, "secret");
+  const actor = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+  const chat = "11111111-1111-4111-8111-111111111111";
+  const timing = { version: 1 as const, durationSeconds: 2, sampleSeconds: [0.166667] };
+  const forged = { ...reference, mimeType: "video/mp4", decoderTiming: timing };
+  const saved = await service.persist(chat, forged, undefined, { actorId: actor, source: new Blob(["video"]) });
+  assert.equal(await service.readVideoTiming(chat, saved.id, actor), undefined);
+  const jpeg = "data:image/jpeg;base64," + Buffer.from([255,216,1,2,3,4,255,217]).toString("base64");
+  let calls = 0;
+  const extract = async () => {
+    calls++;
+    const frames = [{ timestampSeconds: 0.166667, dataUrl: jpeg }];
+    registerVideoTiming(frames, timing);
+    return frames;
+  };
+  const recovered = await service.recoverSavedVideoFrames(chat, saved, actor, extract);
+  assert.deepEqual(getVideoTiming(recovered), timing);
+  assert.deepEqual(await service.readVideoTiming(chat, saved.id, actor), timing);
+  assert.equal(await service.readVideoTiming(chat, saved.id, "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"), undefined);
+  assert.equal(await service.readVideoTiming("22222222-2222-4222-8222-222222222222", saved.id, actor), undefined);
+  const freshService = createStoredUploadService(fake.storage, "secret");
+  assert.deepEqual(getVideoTiming(await freshService.restore(chat, saved, actor)), timing);
+  assert.deepEqual(getVideoTiming(await freshService.recoverSavedVideoFrames(chat, saved, actor, extract)), timing);
+  assert.equal(calls, 1);
+  assert.equal(fake.downloads.filter(path => path.endsWith(".source")).length, 1);
+  const cachePath = `chats/${chat}/${saved.id}.json`;
+  fake.files.set(cachePath, new Blob(["malformed JSON"]));
+  assert.equal(await service.readVideoTiming(chat, saved.id, actor), undefined);
+  fake.files.set(cachePath, new Blob([JSON.stringify({ actorId: actor, reference: { mimeType: 123 }, decoderTiming: timing })]));
+  assert.equal(await service.readVideoTiming(chat, saved.id, actor), undefined);
+});
