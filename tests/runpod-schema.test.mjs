@@ -126,12 +126,17 @@ test('standalone disposable Postgres reproduces schema, permissions, constraints
        INSERT INTO public.actors(id,name) VALUES ('12345678-1234-1234-1234-123456789abc','existing user');
        INSERT INTO public.chats(id,actor_id) VALUES ('12345678-1234-1234-1234-123456789abc','12345678-1234-1234-1234-123456789abc');`,
       readFileSync('supabase/migrations/202610130005_runpod_synthetic_validation.sql','utf8'),
+      readFileSync('supabase/migrations/202610130006_runpod_synthetic_retest.sql','utf8'),
       `SET ROLE anon; DO $test$ BEGIN
          BEGIN PERFORM public.claim_runpod_synthetic_validation(); RAISE EXCEPTION 'public trigger allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
          BEGIN PERFORM public.cleanup_runpod_synthetic_validation(); RAISE EXCEPTION 'public cleanup allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
        END $test$; RESET ROLE;
        SET ROLE service_role; DO $test$ DECLARE first jsonb; BEGIN
+         BEGIN PERFORM public.claim_runpod_synthetic_validation_retest(); RAISE EXCEPTION 'Missing old cleanup allowed';
+           EXCEPTION WHEN raise_exception THEN IF SQLERRM <> 'Original validation must be cleaned' THEN RAISE; END IF; END;
          first := public.claim_runpod_synthetic_validation();
+         BEGIN PERFORM public.claim_runpod_synthetic_validation_retest(); RAISE EXCEPTION 'Unclean old claim allowed';
+           EXCEPTION WHEN raise_exception THEN IF SQLERRM <> 'Original validation must be cleaned' THEN RAISE; END IF; END;
          IF first IS NULL THEN RAISE EXCEPTION 'Claim failed'; END IF;
          IF public.claim_runpod_synthetic_validation() IS NOT NULL THEN RAISE EXCEPTION 'Repeat claim succeeded'; END IF;
        END $test$; RESET ROLE;
@@ -149,6 +154,31 @@ test('standalone disposable Postgres reproduces schema, permissions, constraints
            OR EXISTS(SELECT 1 FROM public.video_analysis_jobs WHERE actor_id=r.actor_id) THEN RAISE EXCEPTION 'Artifacts retained'; END IF;
          IF NOT EXISTS(SELECT 1 FROM public.actors WHERE name='existing user') THEN RAISE EXCEPTION 'Existing actor removed'; END IF;
          IF NOT EXISTS(SELECT 1 FROM public.chats WHERE id='12345678-1234-1234-1234-123456789abc') THEN RAISE EXCEPTION 'Existing chat removed'; END IF;
+       END $test$;`,
+      `SET ROLE authenticated; DO $test$ BEGIN
+         BEGIN PERFORM public.claim_runpod_synthetic_validation_retest(); RAISE EXCEPTION 'Client retest allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+         BEGIN PERFORM public.cleanup_runpod_synthetic_validation_retest(); RAISE EXCEPTION 'Client cleanup allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+       END $test$; RESET ROLE;
+       GRANT SELECT ON public.chat_requests,public.actors,public.messages TO service_role;
+       CREATE TEMP TABLE original_ledger AS SELECT * FROM public.runpod_synthetic_validation WHERE slot='wp4';
+       SET ROLE service_role;
+       DO $test$ DECLARE r public.runpod_synthetic_validation; BEGIN
+         IF public.claim_runpod_synthetic_validation_retest() IS NULL THEN RAISE EXCEPTION 'Retest claim failed'; END IF;
+         IF public.claim_runpod_synthetic_validation_retest() IS NOT NULL THEN RAISE EXCEPTION 'Second retest claim allowed'; END IF;
+         SELECT * INTO r FROM public.runpod_synthetic_validation WHERE slot='wp4-retest';
+         IF EXISTS(SELECT 1 FROM public.runpod_synthetic_validation WHERE slot='wp4' AND (actor_id=r.actor_id OR chat_id=r.chat_id OR assistant_id=r.assistant_id OR attachment_id=r.attachment_id)) THEN RAISE EXCEPTION 'Identity reused'; END IF;
+         IF NOT EXISTS(SELECT 1 FROM public.chat_requests WHERE request_id='synthetic-wp4-retest' AND actor_id=r.actor_id::text) THEN RAISE EXCEPTION 'Correlation missing'; END IF;
+         BEGIN PERFORM public.cleanup_runpod_synthetic_validation_retest(); RAISE EXCEPTION 'Early cleanup allowed';
+           EXCEPTION WHEN raise_exception THEN IF SQLERRM <> 'Validation is still active' THEN RAISE; END IF; END;
+         UPDATE public.runpod_synthetic_validation SET deadline_at=now()-interval '1 minute' WHERE slot='wp4-retest';
+         PERFORM public.cleanup_runpod_synthetic_validation_retest();
+         PERFORM public.cleanup_runpod_synthetic_validation_retest();
+         IF public.claim_runpod_synthetic_validation_retest() IS NOT NULL OR public.claim_runpod_synthetic_validation() IS NOT NULL THEN RAISE EXCEPTION 'Ledger reset'; END IF;
+         IF EXISTS(SELECT 1 FROM public.actors WHERE id=r.actor_id) OR EXISTS(SELECT 1 FROM public.messages WHERE chat_id=r.chat_id) OR EXISTS(SELECT 1 FROM public.chat_requests WHERE request_id='synthetic-wp4-retest') THEN RAISE EXCEPTION 'Retest artifacts retained'; END IF;
+       END $test$; RESET ROLE;
+       DO $test$ BEGIN
+         IF (SELECT to_jsonb(r) FROM public.runpod_synthetic_validation r WHERE slot='wp4') IS DISTINCT FROM (SELECT to_jsonb(r) FROM original_ledger r) THEN RAISE EXCEPTION 'Old ledger mutated'; END IF;
+         IF NOT EXISTS(SELECT 1 FROM public.actors WHERE name='existing user') THEN RAISE EXCEPTION 'User actor removed'; END IF;
        END $test$;`,
     ];
     // Remove interior empty lines: -j treats each blank line as a complete command batch.
