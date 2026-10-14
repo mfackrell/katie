@@ -186,7 +186,7 @@ test("Claude sees both entire video reports even if Grok's frame review is short
   assert.ok(observations.includes(grokText));
   assert.ok(observations.includes(distinctiveEnding));
   assert.ok(observations.indexOf("FULL RUNPOD VIDEO DESCRIPTION") <
-    observations.indexOf("GROK INDEPENDENT FRAME REVIEW"));
+    observations.indexOf("GROK FRAME REVIEW"));
 
   let prompt = "";
   const provider: LlmProvider = { name: "anthropic", listModels: async () => ["claude-fable-5-1"],
@@ -205,7 +205,7 @@ test("Claude sees both entire video reports even if Grok's frame review is short
     userQuestion: "[video]", observations,
   });
   assert.ok(prompt.includes(runpodText), "Claude must receive the complete original-video report");
-  assert.ok(prompt.includes(grokText), "Claude must also receive the independent review");
+  assert.ok(prompt.includes(grokText), "Claude must also receive the supplemental review");
   assert.ok(prompt.includes(distinctiveEnding), "distinctive ending survives final handoff");
   assert.match(prompt, /VISUAL SPECIFICITY ARE COMPLEMENTARY/);
   assert.match(prompt, /two or three most relevant concrete/i);
@@ -225,7 +225,7 @@ test("publisher retains RunPod when Grok succeeds, with separate source labels",
 test("missing or conflicting visual reports remain identifiable as separate evidence", () => {
   const onlyRunpod = buildVideoConversationEvidence({ runpodText: "A red truck turns right." });
   assert.match(onlyRunpod, /A red truck turns right/);
-  assert.doesNotMatch(onlyRunpod, /GROK INDEPENDENT FRAME REVIEW/);
+  assert.doesNotMatch(onlyRunpod, /GROK FRAME REVIEW/);
   const conflicting = buildVideoConversationEvidence({
     runpodText: "A red truck turns right.",
     grokText: "A blue truck goes straight.",

@@ -1,3 +1,4 @@
+import { buildVideoTimingEvidence, buildGrokVideoFrames } from "@/lib/chat/video-evidence";
 import OpenAI from "openai";
 import {
   ChatGenerateParams,
@@ -402,23 +403,20 @@ ${getKatieReasoningExplainerStatement()}` }]
     }
   }
 
-  async generate(params: ChatGenerateParams): Promise<ProviderResponse> {
+  async generate(params: ChatGenerateParams, videoOrdinal = 1): Promise<ProviderResponse> {
     if (hasVideoAttachments(params)) {
       const videos = (params.attachments ?? []).filter(a => a.attachmentKind === "video" || a.mimeType.startsWith("video/"));
       const missing = videos.find(video => !video.videoFrames?.length);
       if (missing) throw new Error(`Grok cannot inspect ${missing.fileName} because no video frames were captured.`);
-      const visualFrames = videos.flatMap(video => video.videoFrames ?? []).slice(0, MAX_VIDEO_FALLBACK_FRAMES);
-      // Be explicit about sampled visual evidence: Grok does not receive or hear the MP4.
-      const labels = videos.map(video =>
-        `${video.fileName}: ${(video.videoFrames ?? []).map(frame => `${frame.timestampSeconds}s`).join(", ")}`
-      ).join("; ");
+      const frames = buildGrokVideoFrames(videos, MAX_VIDEO_FALLBACK_FRAMES, params.images?.length ?? 0, videoOrdinal);
+      const labels = frames.labels;
       params = {
         ...params,
-        user: `${params.user}\n\nGROK VIDEO EVIDENCE (internal): Attached images are sampled still frames from the original video, not the native video file. Frame labels for internal reference only: ${labels}. The images are in chronological order; compare the FINAL images against the first ones before deciding whether the scene remains unchanged. Describe the subjects and their actually visible actions and interactions, including any brief scene or content switch at the end. Ignore incidental video player chrome, watermarks or clocks, but DO report an actual change to a different clip, app screen or setting; such a transition is not just playback metadata. Do not include these evidence-handling instructions or timestamps in your answer. Do not infer unobserved motion, sounds, speech, or events between frames. Mention limitations only when necessary to answer the question accurately.`,
-        images: [...(params.images ?? []), ...visualFrames.map(frame => frame.dataUrl)],
+        user: `${params.user}\n${buildVideoTimingEvidence(videos, videoOrdinal)}\n\nGROK VIDEO EVIDENCE (internal): Attached images are sampled still frames from the original video, not the native video file. Frame labels for internal reference only: ${labels}. The images are grouped by source and chronological within each source; compare the FINAL images against the first ones before deciding whether the scene remains unchanged. Describe the subjects and their actually visible actions and interactions, including any brief scene or content switch at the end. Ignore incidental video player chrome, watermarks or clocks, but DO report an actual change to a different clip, app screen or setting; such a transition is not just playback metadata. Do not include these evidence-handling instructions in your answer. Only use timestamps supported by measured evidence when relevant. Do not infer unobserved motion, sounds, speech, or events between frames. Mention limitations only when necessary to answer the question accurately.`,
+        images: [...(params.images ?? []), ...frames.images],
       };
       console.info("[GrokProvider] fallback frame inspection", {
-        frameCount: visualFrames.length,
+        frameCount: frames.images.length,
         videoCount: videos.length,
         model: params.modelId ?? "default"
       });
