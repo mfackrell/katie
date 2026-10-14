@@ -35,9 +35,20 @@ Passed locally:
 - SQL contract executes migration, GIN ranking/search and offset RPCs, late full-text detail behind 50 irrelevant newer entries, idempotent chunks, service/client role behavior, live/current owner checks, stale-owner filtering, deletion cascade, delayed writes after deletion, and already-delivered video recovery with unchanged model descriptions.
 - Direct offline runs: attachment discovery 14; direct uploads 44; video fallback 10; required review 36; review continuity 4; collaboration 28; attachment continuity 4; video source evidence 5; video delivery reconciliation 6; linked RunPod recovery 5; objective-first prompts 10; stored website evidence 6; chat failure regressions 7; timing cache binding 6; timing cache restoration 4; timing reviewer construction 2.
 
-Sandbox restrictions, separately from code failures:
+Repair diagnosis:
 
-- `npm run ci:gate`, `test:review`, `test:website`, and `test:video-fallback` were attempted through the unchanged repository runner. Child Node execution fails with `spawnSync .../node EPERM`; the full gate is not green. The first completed full run reports 67 failed files/suites due to runner restrictions. Direct focused execution above does not replace independent full CI.
+- The supplied `agent-test.log` records one real failing suite: `tests/clip-routing.test.ts` expected the old unconditional lookup source syntax. It is not an EPERM failure. The ordering assertion now checks the conditional lookup before selection, and production-construction regression cases verify saved current-chat observations bypass memory search, the advisory selector, and source restoration for ordinary “from,” “before,” and “after” questions.
+- Historical detection now requires saved/upload references or date references instead of treating those three prepositions alone as historical. The `[repair-smoke]` regression asserts the package is `private: true`.
+
+Repair verification in this sandbox:
+
+- Passed `npm run typecheck`, `npm run build` (including its non-production postbuild), and `git diff --check`.
+- Passed direct Node execution with `--experimental-test-isolation=none`: clip routing 13 tests, media-memory route construction 2 tests (12 historical match/outage combinations plus four ordinary anchored questions), media-memory 8 tests, and repair smoke 1 test. None were skipped.
+- Reattempted the unchanged full CI gate; child-process EPERM errors prevent a green result. Separately reattempted the URL check and runtime smoke: shell spawning is denied for the former; direct runtime diagnosis confirms `listen EPERM 0.0.0.0:3100` for the latter.
+
+Earlier sandbox restrictions (these do not describe the supplied log's assertion failure):
+
+- `npm run ci:gate`, `test:review`, `test:website`, and `test:video-fallback` were attempted through the unchanged repository runner. Child Node execution fails with `spawnSync .../node EPERM`; the full gate is not green. An earlier restricted run reported 67 failed files/suites due to runner restrictions; the supplied log instead completed 553 tests successfully and reported the single assertion failure above. Direct focused execution above does not replace independent full CI.
 - `npm run check:url` is also blocked by `spawnSync /bin/sh EPERM` while invoking `git ls-files`.
 - `npm run smoke` cannot start Next.js. Direct diagnosis confirms `listen EPERM 0.0.0.0:3100`.
 - PostgreSQL socket startup was blocked, so SQL tests use the repository's existing disposable standalone backend approach (`postgres --single -j`), without network or credentials. SQL migration and functions actually executed; SQL is not mocked.

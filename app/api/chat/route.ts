@@ -664,7 +664,8 @@ export async function POST(request: NextRequest) {
     await getSupabaseAdminClient().rpc("reconcile_media_video", {p_actor: actorId, p_current_chat: chatId})
       .catch(() => console.warn("[Media memory] video recovery unavailable"));
     const memoryMode = memoryIntent(message);
-    const historicalReference = /\b(?:saved|earlier|previous|last week|yesterday|from|before|after)\b/i.test(message);
+    // Event order within a clip ("after checkout") is not an upload-date reference.
+    const historicalReference = /\b(?:saved|uploaded)\b|\b(?:previous|earlier)\s+(?:(?:uploaded|saved)\s+)?(?:video|clip|recording|upload|attachment|file)\b|\b(?:last week|yesterday)\b|\b(?:from|before|after|since|on)\s+(?:\d{4}-\d{2}-\d{2}|last\s+(?:week|month|year)|this\s+(?:week|month|year)|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i.test(message);
     const savedVideoFollowUp = memoryMode === "inspect" || memoryMode === "locate" || historicalReference
       ? null : await loadSavedVideoFollowUp({
           actorId, chatId, message,
