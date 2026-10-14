@@ -108,11 +108,10 @@ export async function extractFramesFromPrivateVideo(
     const measured: number[] = [];
     const originMatch = /start:\s*(-?\d+(?:\.\d+)?)/.exec(probe.stderr);
     const origin = originMatch ? Number(originMatch[1]) : null;
-    // Some containers include a positive origin in their reported duration.
-    // Subtraction is a seek-coverage heuristic only, never verified clip duration.
-    const samplingDuration = origin !== null && origin > 0 && duration !== null && duration > origin
-      ? duration - origin : duration;
-    const timestamps = evenVideoSampleTimestamps(samplingDuration);
+    // Container duration may be elapsed length (e.g. MPEG-TS) or include the
+    // origin. Preserve full tail coverage when those semantics are unknown;
+    // the late-seek retries below handle seeks beyond the last visible frame.
+    const timestamps = evenVideoSampleTimestamps(duration);
     // Decode ten snapshots covering the timeline, with extra attention to
     // the last visible scene. Near-end seeks can run beyond the last decodable
     // frame on low-FPS clips; retry slightly earlier rather than silently
@@ -146,8 +145,10 @@ export async function extractFramesFromPrivateVideo(
             .jpeg({ quality: 57, mozjpeg: true })
             .toBuffer();
           if (jpg.length > 350_000) continue;
-          const ptsMatch = /\bn:\s*0\s+pts:.*?pts_time:\s*(-?\d+(?:\.\d+)?)/.exec(result.stderr);
-          const pts = ptsMatch && origin !== null ? Number(ptsMatch[1]) - origin : null;
+          const ptsMatch = /\bn:\s*0\s+pts:.*?pts_time:\s*(\S+)/.exec(result.stderr);
+          const numericPts = ptsMatch && /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/.test(ptsMatch[1])
+            ? Number(ptsMatch[1]) : null;
+          const pts = numericPts !== null && origin !== null ? numericPts - origin : null;
           const validPts = pts !== null && Number.isFinite(pts) && pts >= 0 && (duration === null || pts <= duration);
           if (validPts) measured.push(pts!);
           frames.push({

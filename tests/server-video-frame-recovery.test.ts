@@ -4,13 +4,15 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 const execFileAsync = promisify(execFile);
 import { createRequire } from "node:module";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import sharp from "sharp";
 import { extractFramesFromPrivateVideo, evenVideoSampleTimestamps } from "../lib/uploads/server-video-frame-recovery";
 import { MAX_VIDEO_FALLBACK_FRAMES, VIDEO_FRAME_SAMPLE_FRACTIONS } from "../lib/uploads/video-fallback-frames";
 import { pruneRepeatedVideoSelections, uniqueAttachmentReferences } from "../lib/chat/video-attachment-dedup";
+
+import { getVideoTiming } from "../lib/uploads/video-timing";
 
 const requireNode = createRequire(join(process.cwd(), "package.json"));
 const ffmpeg = process.platform === "linux" && process.arch === "x64"
@@ -124,4 +126,48 @@ test("deduplication keys on exact identity or provider URI, not filenames alone"
   const different = { ...video, fileId: "vid-c", providerRef: { googleFileUri: "files/different" } };
   assert.deepEqual(uniqueAttachmentReferences([video, same, different, video]), [video, different],
     "keep genuinely distinct recordings when they share filenames");
+});
+
+test("nonzero-origin transport stream retains the closing scene", async () => {
+  assert.ok(ffmpeg, "real bundled decoder is required");
+  const dir = await mkdtemp(join(tmpdir(), "katie-ts-tail-"));
+  try {
+    const path = join(dir, "tail.ts");
+    await execFileAsync(ffmpeg!, [
+      "-hide_banner", "-loglevel", "error",
+      "-f", "lavfi", "-i", "color=c=blue:s=160x96:r=10:d=3.8",
+      "-f", "lavfi", "-i", "color=c=red:s=160x96:r=10:d=0.2",
+      "-filter_complex", "[0:v][1:v]concat=n=2:v=1:a=0[v]",
+      "-map", "[v]", "-c:v", "mpeg2video", "-bf", "0",
+      "-muxdelay", "0.65", "-f", "mpegts", "-y", path,
+    ], { timeout: 20_000 });
+    const probe = await execFileAsync(ffmpeg!, ["-hide_banner", "-i", path]).catch(error => error);
+    assert.match(probe.stderr, /start: 1\.400000/);
+    assert.match(probe.stderr, /Duration: 00:00:04\.00/);
+    const video = await readFile(path);
+    const frames = await extractFramesFromPrivateVideo(new Blob([new Uint8Array(video)]));
+    assert.equal(frames.length, 10);
+    const pixel = await sharp(Buffer.from(frames.at(-1)!.dataUrl.split(",")[1], "base64")).raw().toBuffer();
+    assert.ok(pixel[0] > pixel[2] * 2, "closing red scene must be sampled");
+    assert.ok(frames.at(-1)!.timestampSeconds >= 3.8);
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
+test("decoder parses complete scientific PTS tokens and rejects malformed tokens", async () => {
+  const jpeg = await sharp({ create: { width: 16, height: 16, channels: 3, background: "blue" } }).jpeg().toBuffer();
+  for (const [token, expected] of [["1e-05", 0.00001], ["2E+0", 2], ["+5.0e-1", 0.5], ["1e-05junk", null], ["1e", null], ["NaN", null], ["Infinity", null]] as const) {
+    const frames = await extractFramesFromPrivateVideo(new Blob(["fixture"]), {
+      binary: "mock",
+      run: async (_binary, args) => {
+        if (!args.includes("-ss")) return { code: 1, stderr: "Duration: 00:00:03.00, start: 0.000000" };
+        await writeFile(args.at(-1)!, jpeg);
+        return { code: 0, stderr: `n: 0 pts: 1 pts_time:${token} pos: 0` };
+      },
+    });
+    if (expected === null) assert.equal(getVideoTiming(frames), undefined, token);
+    else {
+      assert.ok(frames.every(frame => frame.timestampSeconds === expected), token);
+      assert.deepEqual(getVideoTiming(frames)?.sampleSeconds, frames.map(() => expected), token);
+    }
+  }
 });
