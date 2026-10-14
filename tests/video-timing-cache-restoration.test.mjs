@@ -21,6 +21,9 @@ function harness(record) {
     if(modules.has(path))return modules.get(path);
     const exports={};modules.set(path,exports);
     const require=name=>{
+      if(name==='@/lib/media-memory/evidence')return {indexEvidence:async()=>{throw Error('unexpected indexing');},indexReference:async()=>{throw Error('unexpected indexing');}};
+      if(name==='@/lib/chat/video-evidence')return load('lib/chat/video-evidence.ts');
+      if(name==='@/lib/uploads/video-timing')return load('lib/uploads/video-timing.ts');
       if(name==='./video-timing')return load('lib/uploads/video-timing.ts');
       if(name==='./video-fallback-frames')return load('lib/uploads/video-fallback-frames.ts');
       if(name==='./server-video-frame-recovery')return {extractFramesFromPrivateVideo:async()=>{throw Error('unexpected decode');}};

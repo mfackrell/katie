@@ -1,3 +1,5 @@
+import { memoryIntent, retrieveSavedEvidence } from "@/lib/media-memory/evidence";
+import { retrySavedEvidence, savedOriginalExists } from "@/lib/uploads/stored-uploads";
 import { buildVideoTimingEvidence, appendVideoEvidenceToUser, buildVideoAssessmentUser } from "@/lib/chat/video-evidence";
 import { registerVideoTiming, getVideoTiming } from "@/lib/uploads/video-timing";
 import { runRequiredDraftReview, REQUIRED_REVIEW_RESERVE_MS } from "@/lib/collaboration/required-review";
@@ -657,13 +659,26 @@ export async function POST(request: NextRequest) {
     // the authoritative, already-saved RunPod/Grok observations in Supabase.
     // Do not reattach/redecode an MP4, ask which video, or consult the LLM
     // attachment selector until the contextual evidence lookup has run.
-    const savedVideoFollowUp = await loadSavedVideoFollowUp({
-      actorId, chatId, message,
-      history: attachmentHistory,
-      freshAttachmentCount: newAttachments.length,
+    await retrySavedEvidence(actorId, async id => (await getChatById(id))?.actorId === actorId, catalog)
+      .catch(() => console.warn("[Media memory] retry unavailable"));
+    await getSupabaseAdminClient().rpc("reconcile_media_video", {p_actor: actorId, p_current_chat: chatId})
+      .catch(() => console.warn("[Media memory] video recovery unavailable"));
+    const memoryMode = memoryIntent(message);
+    const historicalReference = /\b(?:saved|earlier|previous|last week|yesterday|from|before|after)\b/i.test(message);
+    const savedVideoFollowUp = memoryMode === "inspect" || memoryMode === "locate" || historicalReference
+      ? null : await loadSavedVideoFollowUp({
+          actorId, chatId, message,
+          history: attachmentHistory,
+          freshAttachmentCount: newAttachments.length,
+        });
+    const mediaMemory = savedVideoFollowUp ? null : await retrieveSavedEvidence({ actorId, chatId, message, freshAttachmentCount: newAttachments.length,
+      checkOriginal: async hit => {
+        if((await getChatById(hit.source_chat_id))?.actorId!==actorId) return null;
+        return savedOriginalExists(hit.source_chat_id,hit.attachment_id,actorId);
+      },
     });
-    const attachmentDecision: AttachmentDecision = savedVideoFollowUp
-      ? { method: "none", selections: [] }
+    const attachmentDecision: AttachmentDecision = (mediaMemory || savedVideoFollowUp)
+      ? mediaMemory?.decision ?? { method: "none", selections: [] }
       : await selectStoredAttachments(
           message, catalog, attachmentHistory, undefined,
           newAttachments.map(file => file.fileName),
@@ -727,7 +742,7 @@ export async function POST(request: NextRequest) {
     );
     const unavailableAttachments = restored.unavailable;
     const attachmentSourceIds = restored.sourceIds;
-    const selectionContext = () => attachmentAccessContext([], savedAttachments, unavailableAttachments, attachmentSourceIds)
+    const selectionContext = () => (mediaMemory?.context ?? "") + "\n" + attachmentAccessContext([], savedAttachments, unavailableAttachments, attachmentSourceIds)
       + (attachmentDecision.clarification ? `\nAsk the user this clarification before attempting an answer about a file: ${JSON.stringify(attachmentDecision.clarification)}` : "");
     console.log("[Chat API] received attachments", { count: attachments.length });
     attachments.forEach((attachment) => {
@@ -2565,11 +2580,11 @@ ${chunkWorkflowSummary}`;
                 assessmentParams: {
                   ...createParams(result.model),
                   // Choose the independent task before appending evidence; never include the candidate draft.
-                  user: buildVideoAssessmentUser({
+                  user: appendVideoEvidenceToUser(buildVideoAssessmentUser({
                     baseUser: createParams(result.model).user, savedDraftOriginalTask,
                     pendingClarification: pendingReviewClarification?.pending,
                     latestMessage: message, videos: hasVideoInput ? attachments.filter(isVideoAttachment) : [],
-                  }),
+                  }), mediaMemory?.context ?? ""),
                   ...(result.researchEvidence ? { researchEvidence: result.researchEvidence } : {}),
                 },
                 leadProvider: draftProvider,

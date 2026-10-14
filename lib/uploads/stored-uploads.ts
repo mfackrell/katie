@@ -1,3 +1,5 @@
+import { formatVideoTimingForSource } from "@/lib/chat/video-evidence";
+import { indexEvidence, indexReference } from "@/lib/media-memory/evidence";
 import { getVideoTiming, registerVideoTiming, type VideoTiming } from "./video-timing";
 import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 import { createClient } from "@supabase/supabase-js";
@@ -34,9 +36,11 @@ export class UploadInputError extends Error {}
 export function createStoredUploadService(storage: Storage, secret: string, options: {
   now?: () => number;
   buildReferences?: typeof buildFileReferences;
+  indexSaved?: typeof indexReference;
 } = {}) {
   const now = options.now ?? Date.now;
   const buildReferences = options.buildReferences ?? buildFileReferences;
+  const indexSaved = options.indexSaved;
   const objects = storage.from(BUCKET);
   const sign = (ticket: Ticket): string => {
     const body = Buffer.from(JSON.stringify(ticket)).toString("base64url");
@@ -375,14 +379,95 @@ export function createStoredUploadService(storage: Storage, secret: string, opti
         const saved = await objects.upload(`${path}.source`, source, { contentType: reference.mimeType, upsert: true });
         if (saved.error) throw new Error("Unable to retain the original attachment for future questions.");
       }
-      const safeReference = { ...reference };
+      // HMAC-bearing uploads use the private server-written canonical reference.
+      const privateEntry = token ? await objects.download(referencePath(verify(token, "reference"))) : null;
+      if (token && !privateEntry?.data) throw new UploadInputError("Stored evidence is unavailable.");
+      const safeReference: FileReference = privateEntry?.data ? JSON.parse(await privateEntry.data.text()) : { ...reference };
       delete (safeReference as FileReference & { decoderTiming?: unknown }).decoderTiming;
       const decoderTiming = getVideoTiming(reference);
-      const saved = await objects.upload(`${path}.json`, JSON.stringify({ reference: safeReference, decoderTiming, hasSource, actorId: options.actorId, refreshedAt: now() }), { contentType: "application/json", upsert: true });
-      if (saved.error) throw new Error("Unable to retain this attachment for follow-up questions.");
       const descriptor: ConversationAttachment = { ...options.description, id, fileName: reference.fileName, mimeType: reference.mimeType, createdAt: new Date(now()).toISOString(), hasOriginal: hasSource, chatId, actorId: options.actorId };
+      const canonical = { reference: safeReference, decoderTiming, hasSource, actorId: options.actorId, refreshedAt: now(), evidenceDescriptor: descriptor, evidenceIndexPending: Boolean(indexSaved && options.actorId && (token || options.source)) };
+      const saved = await objects.upload(`${path}.json`, JSON.stringify(canonical), { contentType: "application/json", upsert: true });
+      if (saved.error) throw new Error("Unable to retain this attachment for follow-up questions.");
       await writeCatalogEntry(chatId, descriptor);
+      // Durable retry marker is canonical private storage, not a process-local queue.
+      if (indexSaved && options.actorId && (token || options.source)) {
+        try {
+          const queued = await objects.upload(`evidence-pending/${options.actorId}/${id}.json`, JSON.stringify(descriptor), { contentType: "application/json", upsert: true });
+          if (queued.error) console.warn("[Media memory] durable retry registration unavailable");
+          await indexSaved(descriptor, safeReference);
+          if (decoderTiming) await indexEvidence(descriptor, "timing", "server-timing-v1", formatVideoTimingForSource(decoderTiming, {fileName:descriptor.fileName,fileId:id,ordinal:1}), "server measured");
+          const acknowledged = await objects.upload(`${path}.json`, JSON.stringify({...canonical,evidenceIndexPending:false}), {contentType:"application/json",upsert:true});
+          if (acknowledged.error) throw new Error("Evidence acknowledgment deferred");
+          await objects.remove([`evidence-pending/${options.actorId}/${id}.json`]);
+        } catch { console.warn("[Media memory] indexing deferred"); }
+      }
       return descriptor;
+    },
+    async retryEvidence(actorId: string, owns: (chatId: string) => Promise<boolean>, catalog: ConversationAttachment[] = []) {
+      if (!indexSaved) return;
+      const prefix = catalogPrefix(actorId, "actor").replace("actor-catalog/", "evidence-pending/");
+      // One rotating canonical check also repairs a failed pending-marker write.
+      // Only future records with an explicit durable pending bit are eligible.
+      const statePath=`evidence-repair-state/${actorId}.json`;
+      const state=await objects.download(statePath);
+      let cursor="";
+      try { if(state.data) cursor=JSON.parse(await state.data.text()).cursor ?? ""; } catch { /* Restart at first eligible key. */ }
+      const candidates=catalog.filter(file=>file.actorId===actorId && file.chatId).sort((a,b)=>`${a.chatId}/${a.id}`.localeCompare(`${b.chatId}/${b.id}`));
+      const candidate=candidates.find(file=>`${file.chatId}/${file.id}`>cursor) ?? candidates[0];
+      if(candidate && await owns(candidate.chatId!)) {
+        const record=await objects.download(`${conversationPath(candidate.chatId!,candidate.id)}.json`);
+        if(record.data) {
+          try {
+            const canonical=JSON.parse(await record.data.text());
+            if(canonical.actorId===actorId && canonical.evidenceIndexPending && canonical.evidenceDescriptor?.id===candidate.id && canonical.evidenceDescriptor?.chatId===candidate.chatId) {
+              await objects.upload(`${prefix}/${candidate.id}.json`,JSON.stringify(canonical.evidenceDescriptor),{contentType:"application/json",upsert:true});
+            }
+          } catch { console.warn("[Media memory] canonical repair deferred"); }
+        }
+        await objects.upload(statePath,JSON.stringify({cursor:`${candidate.chatId}/${candidate.id}`}),{contentType:"application/json",upsert:true});
+      }
+      const pending = await objects.list(prefix, { limit: 3, sortBy: { column: "updated_at", order: "asc" } });
+      for (const entry of pending.data ?? []) {
+        const path = `${prefix}/${entry.name}`;
+        const stored = await objects.download(path);
+        if (!stored.data) continue;
+        try {
+          const file = JSON.parse(await stored.data.text()) as ConversationAttachment;
+          if (file.actorId !== actorId || !file.chatId || !await owns(file.chatId)) {
+            await objects.remove([path]); continue;
+          }
+          const canonical = await objects.download(`${conversationPath(file.chatId, file.id)}.json`);
+          if (!canonical.data) throw new Error("Saved evidence temporarily unavailable");
+          const record = JSON.parse(await canonical.data.text());
+          if (record.actorId !== actorId) continue;
+          await indexSaved(file, record.reference);
+          if (record.decoderTiming) {
+            registerVideoTiming(record.reference, record.decoderTiming);
+            const timing=getVideoTiming(record.reference);
+            if(timing) await indexEvidence(file,"timing","server-timing-v1",formatVideoTimingForSource(timing,{fileName:file.fileName,fileId:file.id,ordinal:1}),"server measured");
+          }
+          const acknowledged=await objects.upload(`${conversationPath(file.chatId,file.id)}.json`,JSON.stringify({...record,evidenceIndexPending:false}),{contentType:"application/json",upsert:true});
+          if(acknowledged.error) throw new Error("Evidence acknowledgment deferred");
+          await objects.remove([path]);
+        } catch {
+          // Rotate failed work so one bad item cannot starve older pending files.
+          await objects.upload(path, await stored.data.text(), {contentType:"application/json",upsert:true});
+          console.warn("[Media memory] retry deferred");
+        }
+      }
+    },
+    async originalExists(chatId: string, id: string, actorId: string): Promise<boolean | null> {
+      const path=conversationPath(chatId,id);
+      const stored=await objects.download(`${path}.json`);
+      if(!stored.data) return null;
+      const record=JSON.parse(await stored.data.text());
+      if(record.actorId!==actorId) return null;
+      if(!record.hasSource) return false;
+      // HEAD only: never restore provider access, read source bytes, or decode media.
+      const result=await objects.exists(`${path}.source`);
+      const status=Number((result.error as {status?:unknown} | null)?.status);
+      return status===404 ? false : result.error ? null : result.data;
     },
     async readVideoTiming(chatId: string, id: string, actorId: string): Promise<VideoTiming | undefined> {
       const stored = await objects.download(`${conversationPath(chatId, id)}.json`);
@@ -740,7 +825,7 @@ function getUploadService() {
     auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
     global: { fetch: (input, init) => fetch(input, { ...init, signal: AbortSignal.timeout(180_000) }) },
   });
-  return createStoredUploadService(client.storage, key);
+  return createStoredUploadService(client.storage, key, { indexSaved: indexReference });
 }
 
 export const prepareStoredUpload = (input: unknown) => getUploadService().prepare(input);
@@ -807,3 +892,7 @@ export async function loadActorAttachmentCatalog(actorId: string, legacyLoader: 
 }
 
 export const readSavedVideoTiming = (chatId: string, id: string, actorId: string) => getUploadService().readVideoTiming(chatId, id, actorId);
+
+export const retrySavedEvidence = (actorId: string, owns: (chatId: string) => Promise<boolean>, catalog: ConversationAttachment[] = []) => getUploadService().retryEvidence(actorId, owns, catalog);
+
+export const savedOriginalExists = (chatId: string, id: string, actorId: string) => getUploadService().originalExists(chatId,id,actorId);
