@@ -9,7 +9,15 @@ const time = (value: string): number => {
       parts.slice(0, -1).some(n => !Number.isInteger(n))) return NaN;
   return parts.reduce((a, b) => a * 60 + b, 0);
 };
-export function timelineIntent(message: string): TimelineIntent | null {
+// Source identity is removed only after resolution, and only from the event query.
+function withoutResolvedFilename(message: string, filename?: string): string {
+  if (!filename) return message;
+  const literal = filename.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return message
+    .replace(new RegExp(`(^|\\s)(["'])${literal}\\2(?=$|[\\s?,.!;:)])`, "gi"), "$1 ")
+    .replace(new RegExp(`(^|[\\s"'])${literal}(?=$|[\\s"'?,.!;:)])`, "gi"), "$1 ");
+}
+export function timelineIntent(message: string, resolvedFilename?: string): TimelineIntent | null {
   if (/\b(?:project|business|roadmap|schedule|deadline)\b|\bupload(?:ed)?\s+(?:in|within|last|from|on|at|before|after|between|today|yesterday|\d)/i.test(message)) return null;
   if (/^\s*(?:find|locate|search|recall)\b/i.test(message)) return null;
   // A historical anchor is not evidence that an arbitrary numeric question is about media.
@@ -23,7 +31,7 @@ export function timelineIntent(message: string): TimelineIntent | null {
   if (/\bbetween\b/i.test(message) && (!rangeQuestion || /\b(?:dollars?|euros?|pounds?|percent|years?)\b|[$€£%]/i.test(message))) return null;
   const page = Math.min(10000, Math.max(1, Number(/\bpage\s+(\d+)\b/i.exec(message)?.[1] ?? 1)));
   const range = /\bbetween\s*([\d:.+-]+)\s*(?:seconds?\s*)?and\s*([\d:.+-]+)/i.exec(message);
-  const query = first ? message.replace(range?.[0] ?? /$^/, " ").replace(/\b(?:when|did|does|the|a|an|first|appear(?:ed)?|show|up|occur|was|observed|in|this|that|video|clip|recording|footage|seconds?)\b|[?.,]/gi," ").trim().replace(/\s+/g," ").slice(0,200) : undefined;
+  const query = first ? withoutResolvedFilename(message, resolvedFilename).replace(range?.[0] ?? /$^/, " ").replace(/\b(?:when|did|does|the|a|an|first|appear(?:ed)?|show|up|occur|was|observed|in|this|that|video|clip|recording|footage|seconds?)\b|[?.,]/gi," ").trim().replace(/\s+/g," ").slice(0,200) : undefined;
   if (range) {
     const intent = first ? {kind:"first" as const, query} : {kind:"range" as const};
     const start = time(range[1]), end = time(range[2]);

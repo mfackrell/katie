@@ -1733,7 +1733,7 @@ export async function POST(request: NextRequest) {
                 : timelineSelection.source;
               if (timelineSource) {
                 if (!savedAttachments.some(file => file.id === timelineSource.id)) savedAttachments.push({ ...timelineSource, conversationUsage: "explicit-reference" });
-                timelineContext = await runVideoTimeline({ actorId, chatId, source: timelineSource, intent: temporalIntent, providers });
+                timelineContext = await runVideoTimeline({ actorId, chatId, source: timelineSource, intent: timelineIntent(message, timelineSource.fileName) ?? temporalIntent, providers });
               } else timelineContext = timelineSelection.clarification ?? "Several new videos were attached. Ask which recording should receive the timestamped timeline; no detailed media analysis was performed.";
             }
             if (!timelineActive && pendingReviewClarification) {
@@ -1743,7 +1743,7 @@ export async function POST(request: NextRequest) {
                 const anchor = [...attachmentHistory].reverse().find(turn => turn.role === "user" && turn.attachments?.some(file => file.mimeType.startsWith("video/") && file.conversationUsage !== "contextual"));
                 const resolved = resolveTimelineSource(originalTask!, [], catalog, anchor ? [anchor] : []);
                 timelineContext = resolved.source
-                  ? await runVideoTimeline({ actorId, chatId, source: resolved.source, intent: originalIntent, providers, cachedOnly: true })
+                  ? await runVideoTimeline({ actorId, chatId, source: resolved.source, intent: timelineIntent(originalTask!, resolved.source.fileName) ?? originalIntent, providers, cachedOnly: true })
                   : resolved.clarification ?? "No source-grounded timeline evidence could be resolved for this review. Do not treat the prior draft as measured evidence.";
               }
             }
