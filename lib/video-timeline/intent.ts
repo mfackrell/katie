@@ -13,9 +13,12 @@ const time = (value: string): number => {
 function withoutResolvedFilename(message: string, filename?: string): string {
   if (!filename) return message;
   const literal = filename.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  // The resolver's extension matcher ends at an ASCII word boundary, not an
+  // ASCII-only punctuation list. Consume adjacent punctuation, not quoted text.
+  const boundary = "(?![a-z0-9_])(?:(?![\"'])\\p{P})*";
   return message
-    .replace(new RegExp(`(^|\\s)(["'])${literal}\\2(?=$|[\\s?,.!;:)])`, "gi"), "$1 ")
-    .replace(new RegExp(`(^|[\\s"'])${literal}(?=$|[\\s"'?,.!;:)])`, "gi"), "$1 ");
+    .replace(new RegExp(`(^|\\s)(["'])${literal}\\2${boundary}`, "giu"), "$1 ")
+    .replace(new RegExp(`(^|[\\s"'])${literal}${boundary}`, "giu"), "$1 ");
 }
 export function timelineIntent(message: string, resolvedFilename?: string): TimelineIntent | null {
   if (/\b(?:project|business|roadmap|schedule|deadline)\b|\bupload(?:ed)?\s+(?:in|within|last|from|on|at|before|after|between|today|yesterday|\d)/i.test(message)) return null;
@@ -31,7 +34,10 @@ export function timelineIntent(message: string, resolvedFilename?: string): Time
   if (/\bbetween\b/i.test(message) && (!rangeQuestion || /\b(?:dollars?|euros?|pounds?|percent|years?)\b|[$€£%]/i.test(message))) return null;
   const page = Math.min(10000, Math.max(1, Number(/\bpage\s+(\d+)\b/i.exec(message)?.[1] ?? 1)));
   const range = /\bbetween\s*([\d:.+-]+)\s*(?:seconds?\s*)?and\s*([\d:.+-]+)/i.exec(message);
-  const query = first ? withoutResolvedFilename(message, resolvedFilename).replace(range?.[0] ?? /$^/, " ").replace(/\b(?:when|did|does|the|a|an|first|appear(?:ed)?|show|up|occur|was|observed|in|this|that|video|clip|recording|footage|seconds?)\b|[?.,]/gi," ").trim().replace(/\s+/g," ").slice(0,200) : undefined;
+  const queryText = first ? withoutResolvedFilename(message, resolvedFilename).replace(range?.[0] ?? /$^/, " ") : "";
+  // A trailing request courtesy is not an event term; quoted "please" remains evidence.
+  const eventText = /\bwhen\b/i.test(message) ? queryText.replace(/(?:^|\s)please(?:(?!["'])\p{P}|\s)*$/iu, " ") : queryText;
+  const query = first ? eventText.replace(/\b(?:when|did|does|the|a|an|first|appear(?:ed)?|show|up|occur|was|observed|in|this|that|video|clip|recording|footage|seconds?)\b|[?.,]/gi," ").trim().replace(/\s+/g," ").slice(0,200) : undefined;
   if (range) {
     const intent = first ? {kind:"first" as const, query} : {kind:"range" as const};
     const start = time(range[1]), end = time(range[2]);
@@ -54,7 +60,7 @@ export function timelineIntent(message: string, resolvedFilename?: string): Time
 export function resolveTimelineSource(message: string, fresh: ConversationAttachment[], catalog: ConversationAttachment[], history: Message[]): {source?: ConversationAttachment; clarification?: string} {
   const videos = (files: ConversationAttachment[]) => files.filter(f => f.mimeType.startsWith("video/"));
   const unique = (files: ConversationAttachment[]) => [...new Map(files.map(f => [`${f.chatId}/${f.id}`, f])).values()];
-  const names = (text: string) => text.match(/[^\s"'<>/]+\.(?:mp4|mov|webm|mkv|avi|m4v|mpeg|mpg)[a-z0-9]*\b/gi) ?? [];
+  const names = (text: string) => text.match(/[^\s"'<>/]+\.(?:mp4|mov|webm|mkv|avi|m4v|mpeg|mpg)[a-z0-9_]*\b/gi) ?? [];
   const namedResult = (text: string) => {
     const available = unique(videos(fresh.length ? fresh : catalog));
     const knownNames = [...new Set(available.map(f => f.fileName))].sort((a,b) => b.length-a.length);
