@@ -1,7 +1,7 @@
 import { formatVideoTimingForSource } from "@/lib/chat/video-evidence";
 import { indexEvidence, indexReference } from "@/lib/media-memory/evidence";
 import { getVideoTiming, registerVideoTiming, type VideoTiming } from "./video-timing";
-import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
+import { createHash, createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 import { createClient } from "@supabase/supabase-js";
 import { z } from "zod";
 import type { ConversationAttachment } from "@/lib/chat/attachment-continuity";
@@ -386,7 +386,8 @@ export function createStoredUploadService(storage: Storage, secret: string, opti
       delete (safeReference as FileReference & { decoderTiming?: unknown }).decoderTiming;
       const decoderTiming = getVideoTiming(reference);
       const descriptor: ConversationAttachment = { ...options.description, id, fileName: reference.fileName, mimeType: reference.mimeType, createdAt: new Date(now()).toISOString(), hasOriginal: hasSource, chatId, actorId: options.actorId };
-      const canonical = { reference: safeReference, decoderTiming, hasSource, actorId: options.actorId, refreshedAt: now(), evidenceDescriptor: descriptor, evidenceIndexPending: Boolean(indexSaved && options.actorId && (token || options.source)) };
+      const sourceFingerprint = source && reference.mimeType.startsWith("video/") ? createHash("sha256").update(Buffer.from(await source.arrayBuffer())).digest("hex") : undefined;
+      const canonical = { sourceFingerprint, reference: safeReference, decoderTiming, hasSource, actorId: options.actorId, refreshedAt: now(), evidenceDescriptor: descriptor, evidenceIndexPending: Boolean(indexSaved && options.actorId && (token || options.source)) };
       const saved = await objects.upload(`${path}.json`, JSON.stringify(canonical), { contentType: "application/json", upsert: true });
       if (saved.error) throw new Error("Unable to retain this attachment for follow-up questions.");
       await writeCatalogEntry(chatId, descriptor);
@@ -480,6 +481,27 @@ export function createStoredUploadService(storage: Storage, secret: string, opti
       const result=await objects.exists(`${path}.source`);
       const status=Number((result.error as {status?:unknown} | null)?.status);
       return status===404 ? false : result.error ? null : result.data;
+    },
+    // Only trusted canonical metadata is used; no URL or client provenance is accepted.
+    async timelineSource(chatId: string, id: string, actorId: string): Promise<{ fingerprint: string; source?: Blob }> {
+      const path = conversationPath(chatId, id);
+      const stored = await objects.download(`${path}.json`);
+      if (!stored.data) throw new UploadInputError("Timeline source metadata is unavailable.");
+      const record = JSON.parse(await stored.data.text());
+      if (record.actorId !== actorId || !record.hasSource || !record.reference?.mimeType?.startsWith("video/"))
+        throw new UploadInputError("Verified retained video required.");
+      const exists = await objects.exists(`${path}.source`);
+      if (exists.error || !exists.data) throw new UploadInputError("Retained original is unavailable.");
+      // Hash retained bytes even on cache recall: metadata alone cannot detect
+      // replacement at the same private path. No decoding or inference runs here.
+      const original = await objects.download(`${path}.source`);
+      if (!original.data || !original.data.size || original.data.size > 200 * 1024 * 1024)
+        throw new UploadInputError("Timeline original unavailable or too large.");
+      const source = original.data;
+      const fingerprint = createHash("sha256").update(Buffer.from(await source.arrayBuffer())).digest("hex");
+      if (record.sourceFingerprint && fingerprint !== record.sourceFingerprint)
+        throw new UploadInputError("Retained source fingerprint changed.");
+      return { fingerprint, source };
     },
     async readVideoTiming(chatId: string, id: string, actorId: string): Promise<VideoTiming | undefined> {
       const stored = await objects.download(`${conversationPath(chatId, id)}.json`);
@@ -908,3 +930,5 @@ export const readSavedVideoTiming = (chatId: string, id: string, actorId: string
 export const retrySavedEvidence = (actorId: string, owns: (chatId: string) => Promise<boolean>, catalog: ConversationAttachment[] = []) => getUploadService().retryEvidence(actorId, owns, catalog);
 
 export const savedOriginalExists = (chatId: string, id: string, actorId: string) => getUploadService().originalExists(chatId,id,actorId);
+
+export const readTimelineSource = (chatId: string, id: string, actorId: string) => getUploadService().timelineSource(chatId, id, actorId);

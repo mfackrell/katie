@@ -75,7 +75,7 @@ test('actual route assessment preserves attachments and source context after eve
     const assessment = vm.runInNewContext('({' + route.slice(start, end) + '})', {
       ...evidence, createParams: () => original, result: {model: 'offline'},
       mediaMemory: memoryEnabled ? {context: 'SAVED_MEDIA_EVIDENCE source_chat_id=source attachment_id=attachment version=Qwen/full-model-v2 start_offset=24000 coverage=partial neon checkout'} : null,
-      hasVideoInput: video, attachments, isVideoAttachment: () => true,
+      timelineContext: "", hasVideoInput: video, attachments, isVideoAttachment: () => true,
       savedDraftOriginalTask: choice === 'saved' ? 'Saved original task' : null,
       pendingReviewClarification: pending, message: 'Unknown',
       reviewSourceParams: {user: 'Candidate draft and prior assistant framing'},

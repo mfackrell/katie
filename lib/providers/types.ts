@@ -93,6 +93,8 @@ export interface ProviderSystemAudit {
 }
 
 export interface ChatGenerateParams {
+  /** Internal opt-in: bounded structured frame observations, no SDK inference retries. */
+  boundedFrameObservations?: true;
   /** Server-restored historical evidence; never accepted directly from the browser request. */
   previousWebsiteEvidence?: WebsiteEvidence;
   name: string;
