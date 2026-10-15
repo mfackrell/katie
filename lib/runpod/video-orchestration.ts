@@ -1,3 +1,4 @@
+import { getSupabaseAdminClient } from "@/lib/data/supabase/admin";
 import { getVideoTiming } from "@/lib/uploads/video-timing";
 import { encodeMessageContent, parseMessageContent } from "@/lib/data/persistence-store";
 import { GrokProvider } from "@/lib/providers/grok-provider";
@@ -73,6 +74,11 @@ export async function publishVideoChat(requestId: string): Promise<{ status: str
         job.assistant_message_id !== source.assistant_message_id)) {
     throw new Error("Video delivery correlation did not match the originating conversation");
   }
+  // Recovery must precede the delivered early return; failures never resubmit media.
+  try {
+    const indexed = await getSupabaseAdminClient().rpc("reconcile_media_video", {p_actor: source.actor_id, p_current_chat: source.target_chat_id});
+    if (indexed.error) console.warn("[Media memory] video indexing deferred");
+  } catch { console.warn("[Media memory] video indexing deferred"); }
   if (jobs.every(j => Boolean(j.response_delivered_at))) return { status: "delivered", count: jobs.length };
   if (jobs.some(j => !FINISHED_STATES.has(j.status))) return { status: "analyzing" };
 

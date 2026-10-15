@@ -70,10 +70,11 @@ test('actual route assessment preserves attachments and source context after eve
   const attachments = [{fileName: 'same.mp4', fileId: 'one'}, {fileName: 'same.mp4', fileId: 'two'}];
   timing.registerVideoTiming(attachments[0], {version: 1, durationSeconds: 2, sampleSeconds: [0.5]});
   const original = {user: 'Ordinary createParams context\nOriginal task', attachments, images: ['original image']};
-  for (const video of [true, false]) for (const choice of ['ordinary', 'saved', 'clarification']) {
+  for (const memoryEnabled of [false, true]) for (const video of [true, false]) for (const choice of ['ordinary', 'saved', 'clarification']) {
     const pending = choice === 'clarification' ? {pending: {sourceTurns: ['Original request'], question: 'Which detail?'}} : null;
     const assessment = vm.runInNewContext('({' + route.slice(start, end) + '})', {
       ...evidence, createParams: () => original, result: {model: 'offline'},
+      mediaMemory: memoryEnabled ? {context: 'SAVED_MEDIA_EVIDENCE source_chat_id=source attachment_id=attachment version=Qwen/full-model-v2 start_offset=24000 coverage=partial neon checkout'} : null,
       hasVideoInput: video, attachments, isVideoAttachment: () => true,
       savedDraftOriginalTask: choice === 'saved' ? 'Saved original task' : null,
       pendingReviewClarification: pending, message: 'Unknown',
@@ -87,7 +88,8 @@ test('actual route assessment preserves attachments and source context after eve
       assert.ok(assessment.user.startsWith(chosen + '\nVideo 1'));
       assert.match(assessment.user, /measured duration: 2s/);
       assert.match(assessment.user, /Video 2 .*two[\s\S]*No server-verified timing/);
-    } else assert.equal(assessment.user, chosen);
+    } else assert.equal(assessment.user, chosen + (memoryEnabled ? '\nSAVED_MEDIA_EVIDENCE source_chat_id=source attachment_id=attachment version=Qwen/full-model-v2 start_offset=24000 coverage=partial neon checkout' : ''));
+    if (memoryEnabled) assert.match(assessment.user, /source_chat_id=source attachment_id=attachment version=Qwen\/full-model-v2 start_offset=24000 coverage=partial neon checkout/);
     assert.ok(!assessment.user.includes('Candidate draft'));
     assert.ok(!assessment.user.includes('prior assistant framing'));
   }
