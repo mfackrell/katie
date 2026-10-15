@@ -444,6 +444,7 @@ ${getKatieReasoningExplainerStatement()}` }]
       ? aliasedModel
       : this.defaultModel;
 
+    if (params.boundedFrameObservations && selectedModel !== aliasedModel) throw new Error("Configured frame observation model is unavailable.");
     if (selectedModel !== requestedModel) {
       console.warn(
         `[GrokProvider] Requested model '${requestedModel}' is not available. Falling back to '${selectedModel}'.`
@@ -527,8 +528,9 @@ ${getKatieReasoningExplainerStatement()}` }
       });
       const completion = await this.client.chat.completions.create({
         model: selectedModel,
-        messages
-      });
+        messages,
+        ...(params.boundedFrameObservations ? { max_tokens: 6000 } : {}),
+      }, params.boundedFrameObservations ? { maxRetries: 0, timeout: 180_000 } : undefined);
       if (submittedImageCount) {
         console.info("[GrokProvider] xAI acknowledged multimodal request", {
           model: selectedModel, imageCount: submittedImageCount,
@@ -538,10 +540,15 @@ ${getKatieReasoningExplainerStatement()}` }
 
       return {
         text: completion.choices[0]?.message?.content ?? "",
+        ...(params.boundedFrameObservations ? { truncated: completion.choices[0]?.finish_reason === "length" } : {}),
         model: selectedModel,
         provider: this.name
       };
     } catch (error: unknown) {
+      if (params.boundedFrameObservations) {
+        console.warn("[GrokProvider] bounded frame observation failed", { model: selectedModel });
+        throw new Error("Structured frame observation outcome unavailable; no automatic retry.");
+      }
       const detail = error instanceof Error ? error.message : String(error);
       console.error(`[GrokProvider] API failure for ${selectedModel}: ${detail}`);
       throw new Error(`Grok request failed for model ${selectedModel}: ${detail}`);
