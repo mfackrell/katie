@@ -14,24 +14,24 @@ export function timelineIntent(message: string): TimelineIntent | null {
   if (/^\s*(?:find|locate|search|recall)\b/i.test(message)) return null;
   // A historical anchor is not evidence that an arbitrary numeric question is about media.
   const media = /\b(?:video|clip|recording|footage)\b/i.test(message);
-  const rangeQuestion = /^\s*between\s*[-+\d]|\bwhat happened\b/i.test(message) || media;
+  const first = /\bwhen\b.*\bfirst (?:appear|show|occur)|\bfirst observed\b/i.test(message);
+  const rangeQuestion = /^\s*between\s*[-+\d]|\bwhat happened\b/i.test(message) || media || first;
   if (/\bbetween\b/i.test(message) && (!rangeQuestion || /\b(?:dollars?|euros?|pounds?|percent|years?)\b|[$€£%]/i.test(message))) return null;
   const page = Math.min(10000, Math.max(1, Number(/\bpage\s+(\d+)\b/i.exec(message)?.[1] ?? 1)));
   const range = /\bbetween\s*([\d:.+-]+)\s*(?:seconds?\s*)?and\s*([\d:.+-]+)/i.exec(message);
+  const query = first ? message.replace(range?.[0] ?? /$^/, " ").replace(/\b(?:when|did|does|the|a|an|first|appear(?:ed)?|show|up|occur|was|observed|in|this|that|video|clip|recording|footage|seconds?)\b|[?.,]/gi," ").trim().replace(/\s+/g," ").slice(0,200) : undefined;
   if (range) {
+    const intent = first ? {kind:"first" as const, query} : {kind:"range" as const};
     const start = time(range[1]), end = time(range[2]);
     const suffix = message.slice(range.index + range[0].length);
     const suffixWord = /^\s*([a-z]+)/i.exec(suffix)?.[1];
-    if ((suffixWord && !/^(?:seconds?|in|of|on|from|for|please|page)$/i.test(suffixWord)) || /\b(?:minutes?|hours?|milliseconds?)\b/i.test(message)) return {kind:"range",error:"Please specify the video interval using seconds or MM:SS / HH:MM:SS."};
-    return { kind: "range", start, end, ...(page > 1 ? {page} : {}), ...(!Number.isFinite(start) || !Number.isFinite(end) || start < 0 || end <= start || end > 86400 ? { error: "Please give an increasing video interval using seconds or MM:SS / HH:MM:SS." } : {}) };
+    if ((suffixWord && !/^(?:seconds?|in|of|on|from|for|please|page)$/i.test(suffixWord)) || /\b(?:minutes?|hours?|milliseconds?)\b/i.test(message)) return {...intent,error:"Please specify the video interval using seconds or MM:SS / HH:MM:SS."};
+    return { ...intent, start, end, ...(page > 1 ? {page} : {}), ...(!Number.isFinite(start) || !Number.isFinite(end) || start < 0 || end <= start || end > 86400 ? { error: "Please give an increasing video interval using seconds or MM:SS / HH:MM:SS." } : {}) };
   }
   const tail = /\blast\s*(\d+(?:\.\d+)?)\s*seconds?\b/i.exec(message);
   if (tail && /\b(?:minutes?|hours?|milliseconds?)\b/i.test(message)) return {kind:"tail",error:"Please specify the video interval using seconds or MM:SS / HH:MM:SS."};
   if (tail && (/\bwhat happened\b/i.test(message) || media || /^\s*(?:in the )?last/i.test(message))) return { kind: "tail", tail: Number(tail[1]), ...(page > 1 ? {page} : {}), ...(Number(tail[1]) <= 0 || Number(tail[1]) > 86400 ? {error:"Please specify a positive video interval of at most 24 hours."} : {}) };
-  if (/\bwhen\b.*\bfirst (?:appear|show|occur)|\bfirst observed\b/i.test(message)) {
-    const query = message.replace(/\b(?:when|did|does|the|a|an|first|appear(?:ed)?|show|up|occur|was|observed|in|this|that|video|clip|recording)\b|[?.,]/gi," ").trim().slice(0,200);
-    return {kind:"first",query};
-  }
+  if (first) return {kind:"first",query};
   const unrelatedSubject = /\btimeline\s+(?:of|for|about)\s+/i.test(message)
     && !media && !/\.[a-z0-9]{2,5}\b/i.test(message);
   if (!unrelatedSubject && (media || /\b(?:timestamped|detailed|continue|resume)\b/i.test(message)) && /\b(?:build|create|generate|detailed|timestamped|continue|resume)\b.*\btimeline\b|\btimeline\b.*\b(?:timestamped|detailed)\b/i.test(message))
