@@ -49,7 +49,7 @@ test('ordinary anchored video questions use saved reports before memory search o
   let reads = 0, selectors = 0, searches = 0, restores = 0;
   const result = await vm.runInNewContext(ts.transpileModule(`(async()=>{${route.slice(start,end)} return {attachmentDecision,savedVideoFollowUp};})()`,
    {compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText, {
-   memoryIntent:memory.memoryIntent, message, actorId:'actor',chatId:'current',newAttachments:[],attachmentHistory:history,catalog:[],
+   ...memory, message, actorId:'actor',chatId:'current',newAttachments:[],attachmentHistory:history,catalog:[],
    loadSavedVideoFollowUp:params=>video.loadSavedVideoFollowUp(params,async scoped=>{
     reads++; assert.equal(scoped.actorId,'actor'); assert.equal(scoped.chatId,'current');
     assert.equal(scoped.attachmentPaths[0],'chats/current/clip.source');
@@ -61,5 +61,30 @@ test('ordinary anchored video questions use saved reports before memory search o
   const sources = await selection.loadSelectedAttachmentSources(result.attachmentDecision,async()=>{restores++;throw Error('unexpected source restoration');});
   assert.equal(reads,1,message); assert.equal(searches,0,message); assert.equal(selectors,0,message); assert.equal(restores,0,message);
   assert.equal(sources.references.length,0); assert.match(result.savedVideoFollowUp.context,/Checkout opens the receipt page/);
+ }
+});
+
+
+test('unsupported and mixed upload dates stop actual routing before SQL, recent evidence, selector, or media restoration',async()=>{
+ const route=readFileSync('app/api/chat/route.ts','utf8');
+ const start=route.indexOf('    const memoryMode =');
+ const end=route.indexOf('    const selectedBeforePruning =',start);
+ const memory=load('lib/media-memory/evidence.ts',{'@/lib/data/supabase/admin':{getSupabaseAdminClient:()=>{throw Error('date must not broaden into a query');}}});
+ for(const message of [
+  'find my recording from two weeks ago showing checkout',
+  'recall the video from three months ago about checkout',
+  'find my saved file from the past 20 days',
+  'find my saved file from last week and before 2026-01-01',
+  'find my video from yesterday or last week',
+  'find my file from 2026-10-01 to 2026-10-02 and two months ago',
+ ]) {
+  const result=await vm.runInNewContext(ts.transpileModule(`(async()=>{${route.slice(start,end)} return {attachmentDecision,mediaMemory};})()`,{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText,{
+   ...memory,message,actorId:'actor',chatId:'chat',newAttachments:[],attachmentHistory:[],catalog:[],
+   loadSavedVideoFollowUp:async()=>{throw Error('must not substitute recent recording');},
+   selectStoredAttachments:async()=>{throw Error('must not restore media for clarification');},
+  });
+  assert.match(result.attachmentDecision.clarification,/upload date range/);
+  assert.equal(result.attachmentDecision.selections.length,0);
+  assert.equal(result.mediaMemory.hits.length,0);
  }
 });

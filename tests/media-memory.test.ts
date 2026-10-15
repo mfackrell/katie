@@ -87,3 +87,30 @@ test("unrelated code/media discussions and unsupported dates do not broaden priv
  assert.ok(prepareMemoryQuery("find my recording from 2026-02-30 to 2026-03-02").clarification);
  assert.equal(prepareMemoryQuery('find saved file checkout OR " DROP TABLE --').query?.includes('"or"'),true);
 });
+
+
+test("durable part cursors survive service restart and canonical repair without acknowledging incomplete evidence",async()=>{
+ const {createStoredUploadService}=await import("../lib/uploads/stored-uploads");
+ const files=new Map<string,Blob>(); const sequence:number[]=[];
+ const storage={getBucket:async()=>({data:{public:false}}),from:()=>({
+  upload:async(path:string,body:BlobPart)=>{files.set(path,new Blob([body]));return {error:null};},
+  download:async(path:string)=>({data:files.get(path),error:null}),
+  remove:async(paths:string[])=>{paths.forEach(path=>files.delete(path));return {error:null};},
+  list:async(prefix:string)=>({data:[...files.keys()].filter(path=>path.startsWith(prefix+"/")).map(path=>({name:path.slice(prefix.length+1)})),error:null}),
+ })} as unknown as Parameters<typeof createStoredUploadService>[0];
+ const options={indexSaved:async(_file:unknown,_reference:unknown,start=0)=>{sequence.push(start);return {nextPart:start+4,complete:start>=8};},buildReferences:async()=>{throw Error("must not infer");}};
+ const actorId="11111111-1111-4111-8111-111111111111",chatId="22222222-2222-4222-8222-222222222222";
+ const reference={fileId:"reference",fileName:"report.txt",mimeType:"text/plain",preview:"saved summary",extractedText:"canonical full saved evidence"};
+ const descriptor=await createStoredUploadService(storage,"secret",options).persist(chatId,reference,undefined,{source:new Blob(["original"]),actorId});
+ const canonical=`chats/${chatId}/${descriptor.id}.json`, marker=`evidence-pending/${actorId}/${descriptor.id}.json`;
+ assert.equal(JSON.parse(await files.get(canonical)!.text()).evidenceIndexPending,true);
+ assert.equal(JSON.parse(await files.get(marker)!.text()).evidenceNextPart,4);
+ await createStoredUploadService(storage,"secret",options).retryEvidence(actorId,async id=>id===chatId,[descriptor]);
+ assert.equal(JSON.parse(await files.get(marker)!.text()).evidenceNextPart,8);
+ assert.equal(JSON.parse(await files.get(canonical)!.text()).evidenceIndexPending,true);
+ await createStoredUploadService(storage,"secret",options).retryEvidence(actorId,async id=>id===chatId,[descriptor]);
+ assert.deepEqual(sequence,[0,4,8]);
+ assert.equal(JSON.parse(await files.get(canonical)!.text()).evidenceIndexPending,false);
+ assert.equal(files.has(marker),false);
+ assert.equal(JSON.parse(await files.get(canonical)!.text()).reference.extractedText,reference.extractedText);
+});

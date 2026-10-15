@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
+import * as crypto from 'node:crypto';
 import ts from 'typescript';
 
 function loadModule(path, values = {}) {
@@ -65,6 +66,7 @@ test('actual media indexer continues from discovery through complete text and al
   const evidence = loadModule('lib/media-memory/evidence.ts', {
     require: name => {
       if (name === '@/lib/data/supabase/admin') return h.admin;
+      if (name === 'node:crypto') return crypto;
       throw new Error(`Unexpected runtime dependency: ${name}`);
     },
   });

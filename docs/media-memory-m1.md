@@ -54,3 +54,22 @@ Earlier sandbox restrictions (these do not describe the supplied log's assertion
 - PostgreSQL socket startup was blocked, so SQL tests use the repository's existing disposable standalone backend approach (`postgres --single -j`), without network or credentials. SQL migration and functions actually executed; SQL is not mocked.
 
 Remaining independent gates: full CI including browser/runtime checks in a permitted environment; true concurrent two-session deletion/indexing stress (standalone SQL verifies guards and post-deletion behavior, not concurrent scheduling); and coordinator review of the actual diff before any database/application release. No deployment claim or production backfill is made.
+
+
+## Coordinator repair, October 15, 2026
+
+This section supersedes the earlier candidate's size/retry limits and single-session test limitation. It does not approve release.
+
+- The additive migration `20261015142626_media_memory_incremental.sql` was generated with Supabase CLI 2.121.0. No existing migration or operational video constraint was changed.
+- Large canonical text uses immutable content-hashed versions, batches of at most 230,800 Unicode characters (64 chunks plus overlap), and transactionally committed database progress. Each upload/retry processes at most four canonical parts, stopping after an incomplete large part. The private pending marker retains the next part; canonical-marker repair no longer overwrites an existing cursor. A lost response can resume from committed progress after a process restart. Further source-offset reads no longer have the artificial 10-million-character ceiling. The old bounded whole-part RPC remains for small parts.
+- Completed video reports retain original request/model identifiers and text. Reconciliation distinguishes partial indexing from completion and advances bounded work before already-delivered early returns. Existing Qwen operational storage still limits a report to 250,000 characters; this change neither raises nor conceals that separate limit.
+- Unsupported or conflicting upload-date expressions produce a real attachment clarification and bypass SQL search, recent-video substitution, advisory selection, and media restoration. Supported UTC yesterday/calendar-week/ISO-range semantics are unchanged. Ordinary event ordering within a clip remains on the current-chat path.
+- Actual PostgreSQL 16.14 tests used a fresh UTF-8 cluster with private Unix sockets, no TCP listener, and no production connection. Tests execute overlapping sessions in both deletion/indexing orders, including three writer-first repetitions, plus deletion concurrent with delayed completion. They also execute least-privilege denials, full-text recovery past 10 million characters, exact canonical Unicode-text reconstruction, lost acknowledgment/restart recovery, idempotence, and already-delivered multi-batch video recovery. These are not mocked SQL or sequential substitutes for race tests.
+
+### Access boundary: confirmed outstanding release blocker
+
+On October 15, an ephemeral sandbox with no injected credentials sent anonymous root requests and invalid empty POSTs (`{}`) to `/api/chat`. The primary alias `katie-mu.vercel.app` returned 200 at the root and application validation status 400 at `/api/chat`. The project and main-branch aliases redirected the root to Vercel SSO and returned 401 on the same API probe. No actor/chat IDs, valid messages, cookies, private data queries, or inference calls were supplied.
+
+The existing Vercel setting is `all_except_custom_domains`; actor/chat equality inside the application is not caller authentication. Thus upstream protection is not consistent across entrypoints. No login, protection setting, account system, bypass token, or production route was changed. The PR must remain draft until the owner approves and verifies the access boundary, including owner access and required callback/cron behavior. Do not treat green CI as auth approval. A new `media-memory-access-check.mjs` provides repeatable negative probes, but intentionally does not claim that an anonymous denial proves principal authorization.
+
+The earlier independent review still requires a fresh review of these repairs. Test results must be tied to the published exact head, not an older passing commit.

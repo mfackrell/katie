@@ -395,7 +395,12 @@ export function createStoredUploadService(storage: Storage, secret: string, opti
         try {
           const queued = await objects.upload(`evidence-pending/${options.actorId}/${id}.json`, JSON.stringify(descriptor), { contentType: "application/json", upsert: true });
           if (queued.error) console.warn("[Media memory] durable retry registration unavailable");
-          await indexSaved(descriptor, safeReference);
+          const progress = await indexSaved(descriptor, safeReference);
+          if (progress && !progress.complete) {
+            const advanced = await objects.upload(`evidence-pending/${options.actorId}/${id}.json`, JSON.stringify({...descriptor,evidenceNextPart:progress.nextPart}), {contentType:"application/json",upsert:true});
+            if (advanced.error) throw new Error("Evidence progress deferred");
+            return descriptor;
+          }
           if (decoderTiming) await indexEvidence(descriptor, "timing", "server-timing-v1", formatVideoTimingForSource(decoderTiming, {fileName:descriptor.fileName,fileId:id,ordinal:1}), "server measured");
           const acknowledged = await objects.upload(`${path}.json`, JSON.stringify({...canonical,evidenceIndexPending:false}), {contentType:"application/json",upsert:true});
           if (acknowledged.error) throw new Error("Evidence acknowledgment deferred");
@@ -421,7 +426,9 @@ export function createStoredUploadService(storage: Storage, secret: string, opti
           try {
             const canonical=JSON.parse(await record.data.text());
             if(canonical.actorId===actorId && canonical.evidenceIndexPending && canonical.evidenceDescriptor?.id===candidate.id && canonical.evidenceDescriptor?.chatId===candidate.chatId) {
-              await objects.upload(`${prefix}/${candidate.id}.json`,JSON.stringify(canonical.evidenceDescriptor),{contentType:"application/json",upsert:true});
+              // Repair only a missing marker; never reset a live upload's part cursor.
+              const marker = await objects.download(`${prefix}/${candidate.id}.json`);
+              if (!marker.data) await objects.upload(`${prefix}/${candidate.id}.json`,JSON.stringify(canonical.evidenceDescriptor),{contentType:"application/json",upsert:true});
             }
           } catch { console.warn("[Media memory] canonical repair deferred"); }
         }
@@ -433,7 +440,7 @@ export function createStoredUploadService(storage: Storage, secret: string, opti
         const stored = await objects.download(path);
         if (!stored.data) continue;
         try {
-          const file = JSON.parse(await stored.data.text()) as ConversationAttachment;
+          const file = JSON.parse(await stored.data.text()) as ConversationAttachment & {evidenceNextPart?:number};
           if (file.actorId !== actorId || !file.chatId || !await owns(file.chatId)) {
             await objects.remove([path]); continue;
           }
@@ -441,7 +448,12 @@ export function createStoredUploadService(storage: Storage, secret: string, opti
           if (!canonical.data) throw new Error("Saved evidence temporarily unavailable");
           const record = JSON.parse(await canonical.data.text());
           if (record.actorId !== actorId) continue;
-          await indexSaved(file, record.reference);
+          const progress = await indexSaved(file, record.reference, file.evidenceNextPart ?? 0);
+          if (progress && !progress.complete) {
+            const advanced = await objects.upload(path,JSON.stringify({...file,evidenceNextPart:progress.nextPart}),{contentType:"application/json",upsert:true});
+            if (advanced.error) throw new Error("Evidence progress deferred");
+            continue;
+          }
           if (record.decoderTiming) {
             registerVideoTiming(record.reference, record.decoderTiming);
             const timing=getVideoTiming(record.reference);
