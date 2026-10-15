@@ -63,9 +63,10 @@ export async function runVideoTimeline(input: {
             ["complete", "partial", "failed"].includes(w.status)) start = w.requested_end;
       }
     }
-    const end = Math.min(requestedEnd,start+30);
-    // Whole-timeline progression is capped at four 30-second windows. Targeted ranges remain independent.
-    const mayAnalyze = !input.cachedOnly && intent.kind !== "first" && start < end && (intent.kind !== "build" || start < 120);
+    let end = Math.min(requestedEnd,start+30,intent.kind === "build" ? 120 : 86400);
+    // A build continuation does not advance past an unresolved provider receipt.
+    const awaitingReceipt = intent.kind === "build" && intent.resume && windows.some(w =>
+      ["processing", "pending"].includes(w.status) && w.requested_start <= start && w.requested_end > start);
     // Receipts cover work already attempted, not continuous visual evidence.
     // Include partial/failed/processing receipts to avoid replaying ambiguous work.
     let coveredUntil = start;
@@ -74,6 +75,13 @@ export async function runVideoTimeline(input: {
       coveredUntil = Math.max(coveredUntil, w.requested_end);
     }
     const cached = coveredUntil >= end;
+    if (!cached) {
+      // Analyze only the first uncovered gap, never a cached prefix or suffix.
+      // Keep the original turn's endpoint so skipping a prefix cannot grow its budget.
+      start = coveredUntil;
+      for (const w of windows) if (w.requested_start > start) end = Math.min(end,w.requested_start);
+    }
+    const mayAnalyze = !input.cachedOnly && intent.kind !== "first" && !awaitingReceipt && start < end;
     if (mayAnalyze && !cached) {
       const provider = input.providers.find(p => p.name === "grok");
       if (!provider) return "Detailed timelines require the configured Grok vision adapter, which is unavailable.";
