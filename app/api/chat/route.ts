@@ -1,3 +1,5 @@
+import { timelineIntent, resolveTimelineSource } from "@/lib/video-timeline/intent";
+import { runVideoTimeline } from "@/lib/video-timeline/service";
 import { hasUploadDateReference, memoryIntent, retrieveSavedEvidence } from "@/lib/media-memory/evidence";
 import { retrySavedEvidence, savedOriginalExists } from "@/lib/uploads/stored-uploads";
 import { buildVideoTimingEvidence, appendVideoEvidenceToUser, buildVideoAssessmentUser } from "@/lib/chat/video-evidence";
@@ -655,6 +657,12 @@ export async function POST(request: NextRequest) {
       }
       return files;
     });
+    const temporalIntent = timelineIntent(message);
+    const freshVideoReferences = newAttachments.filter(file => file.mimeType.startsWith("video/"));
+    const timelineSelection = temporalIntent && !newAttachments.length
+      ? resolveTimelineSource(message, [], catalog, attachmentHistory) : {};
+    const timelineActive = Boolean(temporalIntent && (freshVideoReferences.length || timelineSelection.source || timelineSelection.clarification));
+    let timelineContext = "";
     // A question about the video from the preceding conversation should use
     // the authoritative, already-saved RunPod/Grok observations in Supabase.
     // Do not reattach/redecode an MP4, ask which video, or consult the LLM
@@ -668,19 +676,21 @@ export async function POST(request: NextRequest) {
     const memoryMode = memoryIntent(message);
     // Event order within a clip ("after checkout") is not an upload-date reference.
     const historicalReference = hasUploadDateReference(message) || /\b(?:saved|uploaded)\b|\b(?:previous|earlier)\s+(?:(?:uploaded|saved)\s+)?(?:video|clip|recording|upload|attachment|file)\b/i.test(message);
-    const savedVideoFollowUp = memoryMode === "inspect" || memoryMode === "locate" || historicalReference
+    const savedVideoFollowUp = timelineActive || memoryMode === "inspect" || memoryMode === "locate" || historicalReference
       ? null : await loadSavedVideoFollowUp({
           actorId, chatId, message,
           history: attachmentHistory,
           freshAttachmentCount: newAttachments.length,
         });
-    const mediaMemory = savedVideoFollowUp ? null : await retrieveSavedEvidence({ actorId, chatId, message, freshAttachmentCount: newAttachments.length,
+    const mediaMemory = timelineActive || savedVideoFollowUp ? null : await retrieveSavedEvidence({ actorId, chatId, message, freshAttachmentCount: newAttachments.length,
       checkOriginal: async hit => {
         if((await getChatById(hit.source_chat_id))?.actorId!==actorId) return null;
         return savedOriginalExists(hit.source_chat_id,hit.attachment_id,actorId);
       },
     });
-    const attachmentDecision: AttachmentDecision = (mediaMemory || savedVideoFollowUp)
+    const attachmentDecision: AttachmentDecision = timelineActive
+      ? { method: "none", selections: [], ...(timelineSelection.clarification ? { clarification: timelineSelection.clarification } : {}) }
+      : (mediaMemory || savedVideoFollowUp)
       ? mediaMemory?.decision ?? { method: "none", selections: [] }
       : await selectStoredAttachments(
           message, catalog, attachmentHistory, undefined,
@@ -731,7 +741,7 @@ export async function POST(request: NextRequest) {
       (fileReferences ?? []).filter(file => Boolean(file.storageToken))
         .map(file => [file.fileId, file.storageToken!] as const)
     );
-    const attachments = uniqueAttachmentReferences([...newAttachments, ...restored.references]).map(file =>
+    const attachments = uniqueAttachmentReferences([...newAttachments, ...restored.references]).filter(file => !timelineActive || !file.mimeType.startsWith("video/")).map(file =>
       file.mimeType === "application/pdf" && /\b(signature|signed|handwrit\w*|layout|colou?r|font|stamp|scan|visual|diagram|chart|figure|formatting|photo|picture|annotation)\b/i.test(message)
         ? { ...file, nativeInspectionRequired: true } : file
     );
@@ -745,7 +755,7 @@ export async function POST(request: NextRequest) {
     );
     const unavailableAttachments = restored.unavailable;
     const attachmentSourceIds = restored.sourceIds;
-    const selectionContext = () => (mediaMemory?.context ?? "") + "\n" + attachmentAccessContext([], savedAttachments, unavailableAttachments, attachmentSourceIds)
+    const selectionContext = () => timelineContext + "\n" + (mediaMemory?.context ?? "") + "\n" + attachmentAccessContext([], savedAttachments, unavailableAttachments, attachmentSourceIds)
       + (attachmentDecision.clarification ? `\nAsk the user this clarification before attempting an answer about a file: ${JSON.stringify(attachmentDecision.clarification)}` : "");
     console.log("[Chat API] received attachments", { count: attachments.length });
     attachments.forEach((attachment) => {
@@ -1699,13 +1709,35 @@ export async function POST(request: NextRequest) {
 
             console.log("[Chat API] Saving user message...");
             for (const [index, attachment] of newAttachments.entries()) {
-              const description = await describeAttachmentEvidence(attachment);
+              const description = timelineActive && isVideoAttachment(attachment)
+                ? { observedSummary: "Explicit sampled timeline requested; see measured event evidence.", summaryModel: "timeline-pending", summaryCoverage: "metadata" as const }
+                : await describeAttachmentEvidence(attachment);
               const saved = await persistConversationAttachment(chatId, attachment, fileReferences?.[index]?.storageToken, { description, source: legacyImageSources.get(attachment.fileId), actorId });
               savedAttachments.push({
                 ...saved, ...(saved.mimeType.startsWith("video/") ? { conversationUsage: "uploaded" as const } : {})
               });
               if (isVideoAttachment(attachment)) persistedVideoSourceByFileId.set(attachment.fileId, saved);
               attachmentSourceIds.add(saved.id);
+            }
+            if (timelineActive && temporalIntent) {
+              const timelineSource = freshVideoReferences.length === 1
+                ? persistedVideoSourceByFileId.get(freshVideoReferences[0].fileId)
+                : freshVideoReferences.length > 1 ? undefined : timelineSelection.source;
+              if (timelineSource) {
+                if (!savedAttachments.some(file => file.id === timelineSource.id)) savedAttachments.push({ ...timelineSource, conversationUsage: "explicit-reference" });
+                timelineContext = await runVideoTimeline({ actorId, chatId, source: timelineSource, intent: temporalIntent, providers });
+              } else timelineContext = timelineSelection.clarification ?? "Several new videos were attached. Ask which recording should receive the timestamped timeline; no detailed media analysis was performed.";
+            }
+            if (!timelineActive && pendingReviewClarification) {
+              const originalTask = savedDraftOriginalTask ?? savedDraftReviewTask(pendingReviewClarification.pending);
+              const originalIntent = originalTask ? timelineIntent(originalTask) : null;
+              if (originalIntent) {
+                const anchor = [...attachmentHistory].reverse().find(turn => turn.role === "user" && turn.attachments?.some(file => file.mimeType.startsWith("video/") && file.conversationUsage !== "contextual"));
+                const resolved = resolveTimelineSource(originalTask!, [], catalog, anchor ? [anchor] : []);
+                timelineContext = resolved.source
+                  ? await runVideoTimeline({ actorId, chatId, source: resolved.source, intent: originalIntent, providers, cachedOnly: true })
+                  : resolved.clarification ?? "No source-grounded timeline evidence could be resolved for this review. Do not treat the prior draft as measured evidence.";
+              }
             }
             personaForGeneration += `\n\n${selectionContext()}`;
             if (savedVideoFollowUp) {
@@ -2587,7 +2619,7 @@ ${chunkWorkflowSummary}`;
                     baseUser: createParams(result.model).user, savedDraftOriginalTask,
                     pendingClarification: pendingReviewClarification?.pending,
                     latestMessage: message, videos: hasVideoInput ? attachments.filter(isVideoAttachment) : [],
-                  }), mediaMemory?.context ?? ""),
+                  }), (mediaMemory?.context ?? "") + (timelineContext ? "\n" + timelineContext : "")),
                   ...(result.researchEvidence ? { researchEvidence: result.researchEvidence } : {}),
                 },
                 leadProvider: draftProvider,
