@@ -32,11 +32,28 @@ export function resolveTimelineSource(message: string, fresh: ConversationAttach
   if (!fresh.length) {
     candidates = unique(videos(catalog).filter(f => message.toLowerCase().includes(f.fileName.toLowerCase())));
     if (!candidates.length) {
-      const last = history.filter(m => m.role === "user").at(-1);
-      candidates = unique(videos(last?.attachments ?? []).filter(f => f.conversationUsage !== "contextual"));
+      // Ordinary attachment-free turns do not discard the active recording.
+      // Stop at the newest explicit source change, including a non-video upload,
+      // and retain multiple matches so ambiguous anchors require clarification.
+      for (const turn of [...history].reverse()) {
+        if (turn.role !== "user") continue;
+        const attached = (turn.attachments ?? []).filter(f => f.conversationUsage !== "contextual");
+        if (attached.length) {
+          candidates = unique(videos(attached));
+          return sourceResult(candidates);
+        }
+        const named = unique(catalog.filter(f => turn.content?.toLowerCase().includes(f.fileName.toLowerCase())));
+        if (named.length) {
+          candidates = videos(named);
+          return sourceResult(candidates);
+        }
+      }
       if (!candidates.length && /\b(?:saved|uploaded|video|clip|recording)\b/i.test(message)) candidates = unique(videos(catalog));
     }
   }
+  return sourceResult(candidates);
+}
+function sourceResult(candidates: ConversationAttachment[]) {
   return candidates.length === 1 ? { source: candidates[0] } : candidates.length > 1
     ? { clarification: `Which recording do you mean: ${candidates.slice(0,5).map(f => `${JSON.stringify(f.fileName)} (${f.createdAt ?? "date unknown"}, source chat ${f.chatId})`).join("; ")}?` }
     : {};

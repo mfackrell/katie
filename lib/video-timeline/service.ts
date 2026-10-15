@@ -56,7 +56,12 @@ export async function runVideoTimeline(input: {
     windows = await read(requestedStart,requestedEnd);
     let start = requestedStart;
     if (intent.kind === "build" && intent.resume) {
-      for (const w of windows) if (w.requested_start <= start && w.status === "complete") start = Math.max(start,w.requested_end);
+      // Terminal receipts advance the cursor even when their evidence has gaps.
+      // Processing receipts still block advancement and are never resubmitted.
+      for (const w of [...windows].sort((a,b) => a.requested_start-b.requested_start)) {
+        if (w.requested_start <= start && w.requested_end > start &&
+            ["complete", "partial", "failed"].includes(w.status)) start = w.requested_end;
+      }
     }
     const end = Math.min(requestedEnd,start+30);
     // Whole-timeline progression is capped at four 30-second windows. Targeted ranges remain independent.

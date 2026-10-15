@@ -31,12 +31,21 @@ test('actual chat route resolves fresh/saved/current video timeline turns before
  const chooseStart=route.indexOf('    const attachmentDecision: AttachmentDecision ='),chooseEnd=route.indexOf('    const selectedBeforePruning',chooseStart);
  const choice=ts.transpileModule('async function choose(){'+route.slice(chooseStart,chooseEnd)+';return attachmentDecision;}; exports.choose=choose;', {compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS}}).outputText;
  const file={id:'saved',chatId:'source',fileName:'same.mp4',mimeType:'video/mp4'};
+ const other={...file,id:'new',fileName:'other.mp4'};
+ const uploaded=[{role:'user',content:'build a timestamped timeline',attachments:[file]},
+  {role:'assistant',content:'Timeline ready'}, {role:'user',content:'What is a checksum?'},
+  {role:'assistant',content:'A checksum detects changes.'}];
  const cases=[
   {message:'build a timestamped timeline',newAttachments:[{...file,fileId:'fresh'}],catalog:[file],attachmentHistory:[],active:true},
   {message:'build a timestamped timeline of my saved video',newAttachments:[],catalog:[file],attachmentHistory:[],active:true},
   {message:'When did the error first appear?',newAttachments:[],catalog:[file],attachmentHistory:[{role:'user',attachments:[file]}],active:true},
   {message:'What happened in the last30seconds?',newAttachments:[],catalog:[file],attachmentHistory:[{role:'user',attachments:[file]}],active:true},
   {message:'build a timestamped timeline of same.mp4',newAttachments:[],catalog:[file,{...file,id:'duplicate'}],attachmentHistory:[],active:true,clarify:true},
+  {message:'What happened in the last 30 seconds?',newAttachments:[],catalog:[file,other],attachmentHistory:uploaded,active:true,source:'saved'},
+  {message:'What happened in the last 30 seconds?',newAttachments:[],catalog:[file,other],attachmentHistory:[...uploaded,{role:'user',content:'Inspect other.mp4'},{role:'user',content:'What is a checksum?'}],active:true,source:'new'},
+  {message:'What happened in the last 30 seconds?',newAttachments:[],catalog:[file,other],attachmentHistory:[...uploaded,{role:'user',attachments:[other]},{role:'user',content:'What is a checksum?'}],active:true,source:'new'},
+  {message:'What happened in the last 30 seconds?',newAttachments:[],catalog:[file,other],attachmentHistory:[...uploaded,{role:'user',attachments:[file,other]},{role:'user',content:'What is a checksum?'}],active:true,clarify:true},
+  {message:'What happened in the last 30 seconds?',newAttachments:[],catalog:[file],attachmentHistory:[...uploaded,{role:'user',attachments:[{...other,mimeType:'text/plain'}]}],active:false},
   {message:'build a project timeline',newAttachments:[],catalog:[file],attachmentHistory:[],active:false},
   {message:'When did the error first appear?',newAttachments:[],catalog:[],attachmentHistory:[{role:'user',attachments:[{...file,mimeType:'text/plain'}]}],active:false},
  ];
@@ -44,6 +53,7 @@ test('actual chat route resolves fresh/saved/current video timeline turns before
   const context={...intent,...fixture,exports:{},console};vm.createContext(context);
   const resolved=vm.runInContext('(function(){'+route.slice(start,end)+';return {timelineActive,timelineSelection};})()',context);
   assert.equal(resolved.timelineActive,fixture.active,fixture.message);
+  if(fixture.source)assert.equal(resolved.timelineSelection.source.id,fixture.source);
   if(fixture.clarify)assert.ok(resolved.timelineSelection.clarification);
   if(resolved.timelineActive){
    let selectionCalls=0;Object.assign(context,resolved,{mediaMemory:null,savedVideoFollowUp:null,selectStoredAttachments:()=>{selectionCalls++;throw Error('ordinary media routing');}});

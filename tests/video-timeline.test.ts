@@ -128,6 +128,47 @@ test("runtime provider inference is receipt-first, bounded, and failed accepted 
   assert.match(cached,/"status":"failed"/);assert.equal(calls,1);assert.equal(decodes,1);
 });
 
+test("whole-timeline continuation advances past partial and failed receipts without replaying them",async()=>{
+  const windows: Array<Record<string,unknown>> = [];
+  const claims: number[] = [], decoded: number[] = [];
+  let calls=0;
+  const client={rpc:async(name:string,args:Record<string,unknown>)=>{
+    if(name==="read_video_timeline") return {data:[...windows].reverse(),error:null};
+    if(name==="search_video_timeline_events") return {data:[],error:null};
+    if(name==="claim_video_timeline") {
+      claims.push(Number(args.p_start));
+      windows.push({requested_start:args.p_start,requested_end:args.p_end,duration:150,status:"processing",receipt:args.p_receipt});
+      return {data:true,error:null};
+    }
+    if(name==="finish_video_timeline") {
+      Object.assign(windows.find(w=>w.receipt===args.p_receipt)!,{status:args.p_failure?"failed":args.p_partial?"partial":"complete",failure:args.p_failure,frames:args.p_frames,events:args.p_events});
+      return {data:true,error:null};
+    }
+    throw Error(name);
+  }};
+  const provider={name:"grok",listModels:async()=>["grok-4-configured"],generate:async(params:{user:string})=>{
+    calls++;
+    if(calls===2) throw Error("lost provider response");
+    return {text:JSON.stringify({observations:[{description:"A visible scene",frame_ids:[params.user.split(": ")[1].split(", ")[0]]}],partial:false}),model:"grok-4-configured"};
+  }} as unknown as Parameters<typeof runVideoTimeline>[0]["providers"][0];
+  const deps={client:()=>client,source:async()=>({fingerprint:"a".repeat(64),source:new Blob(["private"])}),probe:async()=>150,
+    decode:async(_source:Blob,options:{window:{start:number;end:number}})=>{
+      const {start,end}=options.window;decoded.push(start);
+      const frames=[{timestampSeconds:start,dataUrl:"first"},{timestampSeconds:end-1,dataUrl:"last"}];
+      registerVideoTiming(frames,{version:1,durationSeconds:150,sampleSeconds:[start,end-1]});return frames;
+    }} as unknown as NonNullable<Parameters<typeof runVideoTimeline>[1]>;
+  const input={actorId:"actor",chatId:"current",source:video,intent:{kind:"build" as const,resume:true},providers:[provider]};
+  for(let i=0;i<4;i++) await runVideoTimeline(input,deps);
+  const result=await runVideoTimeline(input,deps);
+  assert.deepEqual(claims,[0,30,60,90]);assert.deepEqual(decoded,claims);assert.equal(calls,4);
+  assert.deepEqual(windows.map(w=>w.status),["partial","failed","partial","partial"]);
+  assert.match(result,/"status":"failed"/);assert.match(result,/All unsampled positions/);
+  // An unresolved receipt blocks the cursor, even if its lease expired.
+  windows[0].status="processing";windows[0].lease_until="2000-01-01T00:00:00Z";
+  await runVideoTimeline(input,deps);
+  assert.equal(calls,4);assert.equal(claims.length,4);
+});
+
 test("canonical retained source rejects forged actors, missing originals and changed fingerprints without a provider",async()=>{
   const {createStoredUploadService}=await import("../lib/uploads/stored-uploads");
   const {createHash}=await import("node:crypto");
