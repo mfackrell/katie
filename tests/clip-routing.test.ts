@@ -163,8 +163,11 @@ test("saved descriptions do not invent negative conclusions from an absent detai
 
 test("saved video evidence is loaded before the general saved-file selector", () => {
   const source = readFileSync("app/api/chat/route.ts", "utf8");
-  assert.ok(source.indexOf("const savedVideoFollowUp = await loadSavedVideoFollowUp(") <
-    source.indexOf("const attachmentDecision: AttachmentDecision = savedVideoFollowUp"));
+  const lookup = source.indexOf("await loadSavedVideoFollowUp({");
+  const decision = source.indexOf("const attachmentDecision: AttachmentDecision = (mediaMemory || savedVideoFollowUp)");
+  const selector = source.indexOf("await selectStoredAttachments(", decision);
+  assert.ok(lookup >= 0 && decision > lookup && selector > decision);
+  assert.match(source.slice(decision, selector), /mediaMemory\?\.decision \?\? \{ method: "none", selections: \[\] \}/);
   assert.match(source, /personaForGeneration \+= "\\n\\n" \+ savedVideoFollowUp\.context/);
   const loader = readFileSync("lib/chat/saved-video-observations.ts", "utf8");
   assert.match(loader, /\.eq\("actor_id", params.actorId\)/);
