@@ -66,7 +66,14 @@ export async function runVideoTimeline(input: {
     const end = Math.min(requestedEnd,start+30);
     // Whole-timeline progression is capped at four 30-second windows. Targeted ranges remain independent.
     const mayAnalyze = !input.cachedOnly && intent.kind !== "first" && start < end && (intent.kind !== "build" || start < 120);
-    const cached = windows.some(w => w.requested_start <= start && w.requested_end >= end);
+    // Receipts cover work already attempted, not continuous visual evidence.
+    // Include partial/failed/processing receipts to avoid replaying ambiguous work.
+    let coveredUntil = start;
+    for (const w of [...windows].sort((a,b) => a.requested_start-b.requested_start)) {
+      if (w.requested_start > coveredUntil) break;
+      coveredUntil = Math.max(coveredUntil, w.requested_end);
+    }
+    const cached = coveredUntil >= end;
     if (mayAnalyze && !cached) {
       const provider = input.providers.find(p => p.name === "grok");
       if (!provider) return "Detailed timelines require the configured Grok vision adapter, which is unavailable.";

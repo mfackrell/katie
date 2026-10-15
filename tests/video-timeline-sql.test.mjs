@@ -68,6 +68,21 @@ test('timeline real private PostgreSQL: ownership, roles, atomic claims, validat
    assert.equal((await db.query('select * from read_video_timeline($1,$2,$3,$4,$5,$6)',identity)).rows.length,1);
    assert.equal((await db.query('select * from read_video_timeline($1,$2,$3,$4,$5,$6)',[...identity.slice(0,4),'b'.repeat(64),version])).rows.length,0);
   });
+  await t.test('bounded first occurrence selects earliest positive matching sample, not enclosing event time',async()=>{
+   const laterReceipt=randomUUID();
+   assert.equal((await claim(db,laterReceipt,30,60)).rows[0].claimed,true);
+   const samples=[{id:'before',seconds:31,sha256:'c'.repeat(64)},{id:'match',seconds:40,sha256:'d'.repeat(64)},{id:'outside',seconds:55,sha256:'e'.repeat(64)}];
+   const observations=[{description:'error visible later',frame_ids:['before','match','outside'],observed_start:31,observed_end:55},{description:'unrelated scene',frame_ids:['before'],observed_start:31,observed_end:31}];
+   await db.query('select finish_video_timeline($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,true,null,$12)',[...identity,laterReceipt,'configured-model',JSON.stringify(samples),JSON.stringify(observations),'structured original report','same.mp4']);
+   const result=await db.query('select * from search_video_timeline_events($1,$2,$3,$4,$5,$6,20,45,$7,0)',[...identity,'error']);
+   assert.deepEqual(result.rows.map(r=>({description:r.description,start:r.observed_start,end:r.observed_end,ids:r.frame_ids})),[
+    {description:'error appears on screen',start:29,end:29,ids:['f1']},
+    {description:'error visible later',start:31,end:40,ids:['before','match']},
+   ]);
+   const clipped=await db.query('select * from search_video_timeline_events($1,$2,$3,$4,$5,$6,35,45,$7,0)',[...identity,'error']);
+   assert.equal(clipped.rows[0].observed_start,40);
+   assert.deepEqual(clipped.rows[0].frame_ids,['match']);
+  });
   await t.test('source deletion waits for active owner lock then cascades; late completion never resurrects',async()=>{
    const writer=await connect(),deleter=await connect();
    await writer.query('begin');await writer.query('set local role service_role');

@@ -659,8 +659,8 @@ export async function POST(request: NextRequest) {
     });
     const temporalIntent = timelineIntent(message);
     const freshVideoReferences = newAttachments.filter(file => file.mimeType.startsWith("video/"));
-    const timelineSelection = temporalIntent && !newAttachments.length
-      ? resolveTimelineSource(message, [], catalog, attachmentHistory) : {};
+    const timelineSelection = temporalIntent
+      ? resolveTimelineSource(message, newAttachments.map(file => ({id: file.fileId, fileName: file.fileName, mimeType: file.mimeType, chatId})), catalog, attachmentHistory) : {};
     const timelineActive = Boolean(temporalIntent && (freshVideoReferences.length || timelineSelection.source || timelineSelection.clarification));
     let timelineContext = "";
     // A question about the video from the preceding conversation should use
@@ -792,6 +792,14 @@ export async function POST(request: NextRequest) {
         fileName: attachment.fileName,
         mimeType: attachment.mimeType,
       })),
+      ...(timelineActive ? {
+        timelineSources: (freshVideoReferences.length ? freshVideoReferences.map(file => ({...file, id: file.fileId, chatId})) : timelineSelection.source ? [timelineSelection.source] : []).map(file => ({
+          id: file.id,
+          chatId: file.chatId,
+          fileName: file.fileName,
+          mimeType: file.mimeType,
+        })),
+      } : {}),
       overrideProvider: overrideProvider ?? null,
       overrideModel: overrideModel ?? null,
       activeRepoId: activeRepoId ?? null,
@@ -1720,9 +1728,9 @@ export async function POST(request: NextRequest) {
               attachmentSourceIds.add(saved.id);
             }
             if (timelineActive && temporalIntent) {
-              const timelineSource = freshVideoReferences.length === 1
-                ? persistedVideoSourceByFileId.get(freshVideoReferences[0].fileId)
-                : freshVideoReferences.length > 1 ? undefined : timelineSelection.source;
+              const timelineSource = timelineSelection.clarification ? undefined : freshVideoReferences.length
+                ? (timelineSelection.source ? persistedVideoSourceByFileId.get(timelineSelection.source.id) : undefined)
+                : timelineSelection.source;
               if (timelineSource) {
                 if (!savedAttachments.some(file => file.id === timelineSource.id)) savedAttachments.push({ ...timelineSource, conversationUsage: "explicit-reference" });
                 timelineContext = await runVideoTimeline({ actorId, chatId, source: timelineSource, intent: temporalIntent, providers });

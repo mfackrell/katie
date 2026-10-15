@@ -190,3 +190,53 @@ test("canonical retained source rejects forged actors, missing originals and cha
   record.hasSource=false;
   await assert.rejects(service.timelineSource(chat,id,actor),/Verified retained video/);
 });
+
+test("unsupported or malformed intervals clarify before any detailed media dependency",async()=>{
+  let calls=0;
+  const forbidden=()=>{calls++;throw Error("No detailed media operation is authorized");};
+  const deps={client:forbidden,source:forbidden,decode:forbidden,probe:forbidden} as unknown as NonNullable<Parameters<typeof runVideoTimeline>[1]>;
+  for(const message of ["What happened between 1 and 10 minutes?","between 1.5:20 and 2:30","between 1 seconds and 2 minutes"]){
+    const intent=timelineIntent(message)!;
+    assert.ok(intent.error);
+    assert.match(await runVideoTimeline({actorId:"actor",chatId:"current",source:video,intent,providers:[]},deps),/seconds|interval/);
+  }
+  assert.equal(calls,0);
+});
+
+test("combined cached receipt coverage reuses adjacent and overlapping windows without inference",async()=>{
+  for (const secondStart of [30,25]) for (const status of ["complete","partial","failed","processing"]) {
+    const makeWindow=(start:number,end:number,seconds:number,state:string)=>({requested_start:start,requested_end:end,duration:60,status:state,events:[{description:"error visible",frame_ids:[`f${seconds}`],observed_start:seconds,observed_end:seconds}],frames:[{id:`f${seconds}`,seconds,sha256:"a".repeat(64)}],failure:state==="failed"?"ambiguous":null,model:"cached-model",lease_until:"2000-01-01T00:00:00Z"});
+    const windows=[makeWindow(secondStart,60,40,status),makeWindow(0,30,22,"complete")];
+    const forbidden=async()=>{assert.fail("cached coverage must not decode, probe or call a provider");};
+    let searches=0;
+    const deps={client:()=>({rpc:async(name:string,args:Record<string,unknown>)=>{
+      assert.ok(["read_video_timeline","search_video_timeline_events"].includes(name),name);
+      if(name==="search_video_timeline_events") {searches++;return {data:selectTimelineEvents(windows,Number(args.p_start),Number(args.p_end),String(args.p_query)),error:null};}
+      return {data:windows,error:null};
+    }}),source:async()=>({fingerprint:"a".repeat(64)}),decode:forbidden,probe:forbidden} as unknown as NonNullable<Parameters<typeof runVideoTimeline>[1]>;
+    const provider={name:"grok",listModels:forbidden,generate:forbidden} as unknown as Parameters<typeof runVideoTimeline>[0]["providers"][0];
+    for(const message of ["What happened between 00:20 and 00:45?","When did the error first appear between 00:20 and 00:45?","When did the error first appear between 00:20 and 00:45 in the video?"]) {
+      const intent=timelineIntent(message)!;
+      if(message.startsWith("When")) assert.deepEqual(intent,{kind:"first",query:"error",start:20,end:45});
+      const result=await runVideoTimeline({actorId:"actor",chatId:"current",source:video,intent,providers:[provider]},deps);
+      const data=JSON.parse(result.split("\n")[1]);
+      const expected=[{description:"error visible",frame_ids:["f22"],observed_start:22,observed_end:22,model:"cached-model",window_status:"complete"}];
+      if(status==="complete" || status==="partial") expected.push({description:"error visible",frame_ids:["f40"],observed_start:40,observed_end:40,model:"cached-model",window_status:status});
+      assert.deepEqual(data.observations,intent.kind==="first"?expected.slice(0,1):expected);
+      assert.equal(data.windows[0].status,status);
+      assert.deepEqual(data.requested_interval,[20,45]);
+    }
+    assert.equal(searches,3);
+  }
+});
+
+test("bounded first occurrence remains read-only with no cached windows",async()=>{
+  const forbidden=async()=>{assert.fail("first occurrence must remain read-only");};
+  const deps={client:()=>({rpc:async(name:string,args:Record<string,unknown>)=>{
+    assert.ok(["read_video_timeline","search_video_timeline_events"].includes(name));
+    if(name==="search_video_timeline_events") {assert.equal(args.p_start,20);assert.equal(args.p_end,45);assert.equal(args.p_query,"error");assert.equal(args.p_offset,0);}
+    return {data:[],error:null};
+  }}),source:async()=>({fingerprint:"a".repeat(64)}),decode:forbidden,probe:forbidden} as unknown as NonNullable<Parameters<typeof runVideoTimeline>[1]>;
+  const result=await runVideoTimeline({actorId:"actor",chatId:"current",source:video,intent:timelineIntent("When did the error first appear between 00:20 and 00:45?")!,providers:[]},deps);
+  assert.deepEqual(JSON.parse(result.split("\n")[1]).observations,[]);
+});

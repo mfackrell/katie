@@ -38,7 +38,7 @@ Only zero-origin recordings with a trustworthy finite duration (at most 24 hours
 
 An exhaustive whole-recording pass beyond 120 seconds, automatic recovery of ambiguous calls, provider idempotency, deeper analysis versions, audio, and autonomous scheduling are deferred. Metadata/status reads return at most 100 windows; the context flags possible truncation. Event search orders across all matching windows in SQL and is separately paginated, so this window-metadata bound does not turn first occurrence into a text-ranked guess. Broad first-occurrence questions only establish the earliest **stored** matching sample and always retain unprocessed-window/gap caveats.
 
-## Verification in this checkout
+## Verification carried from the repaired PR source
 
 All fixtures are synthetic/local and all inference is mocked. No paid provider, GPU, RunPod, live video replay or production database was used.
 
@@ -51,3 +51,14 @@ All fixtures are synthetic/local and all inference is mocked. No paid provider, 
 - `npm run build`: passed, including lint/type validation and the existing postbuild check (which explicitly skips real Storage verification outside production). `npm run smoke`: blocked because the local Next server cannot listen; direct local startup confirms `listen EPERM: operation not permitted 0.0.0.0:3102`.
 
 The Supabase CLI is unavailable (`supabase --version` and migration help: command not found), so the migration is additive handwritten SQL. Fetching the upstream Supabase changelog via normal HTTPS failed DNS resolution in the restricted environment. No version-specific external API was introduced. This is not live-model semantic acceptance. The coordinator owns independent verification, draft publication and release through the existing workflow.
+
+
+## Request intent and identity repair
+
+Detailed timeline opt-in now separates media intervals from unrelated chronology, numeric comparisons and upload-age locators, even with an older recording in history. Minutes/hours and conflicting units require a seconds or MM:SS / HH:MM:SS clarification; clock hours/minutes must be integral and subordinate components below 60. Explicit unresolved filenames clarify instead of reusing an unrelated recording, including on subsequent continuation turns and fresh-upload dispatch. Exact filenames (including spaces), duplicate-source clarification and current-video follow-ups remain supported.
+
+Timeline fingerprints retain fresh upload identity and selected saved source chat/attachment identity while ordinary inference still excludes timeline videos. Renewed previews do not change identity; different videos under the same request ID conflict rather than replay. Ordinary non-timeline fingerprint payloads are unchanged. Removed the excluded automatic agent-repair smoke test. Runtime windows, provider budgets, actor checks, SQL and workflows are unchanged from the carried PR source.
+
+Current local repair verification: typecheck, test compilation and diff whitespace checks passed. Direct execution passed **80 tests** across timeline/real bundled decoder (8), production route/intent/fingerprint/claim construction (6), media-memory routing (3), clip routing (13), Grok adapter (12), required review (36), and measured timing review (2). The new intent and fingerprint regressions failed before the repair. An initial decoder cleanup assertion encountered another test process's temporary directory; the isolated rerun passed with all timing and cleanup assertions intact.
+
+The unchanged full `npm run ci:gate` and standard review/video-fallback/website suites were run and failed under sandbox `spawnSync ... EPERM` restrictions. The disposable PostgreSQL test remains enabled and fails locally because Unix socket binding is denied. Independent `npm run build` passed, including its existing nonproduction postbuild check. URL checking also hits subprocess EPERM; runtime smoke cannot start its local server (listen EPERM). These are not passing full-gate or SQL results; normal independent GitHub verification remains required without skips. All provider responses were mocked and decoder footage synthetic; no live semantic acceptance, production access or paid media calls occurred.
