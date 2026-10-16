@@ -178,7 +178,7 @@ export function isPdfContentRequest(message: string, sourceNames: string[] = [])
 export function isPdfNativeInspectionProhibited(message: string, sourceNames: string[] = []): boolean {
   return message.split(/\b(?:but|then|however)\b|[;!?\n]/i).some(clause => {
     const masked = maskPdfSourceNames(clause,sourceNames);
-    const ban = /\b(?:do not|don['’]t|never|without)\s+(?:ocr|transcribe|scan|inspect|process)\b/i.exec(masked);
+    const ban = /\b(?:do not|don['’]t|never|without)\s+(?:(?:us(?:e|ing)|perform(?:ing)?|run(?:ning)?|do(?:ing)?|rely(?:ing)?\s+on)\s+)?(?:(?:any|the|native|visual|automated)\s+)*(?:ocr|transcri(?:be|bing|ption)|scan(?:ning)?|inspect(?:ing|ion)?|process(?:ing)?)\b/i.exec(masked);
     if (!ban) return false;
     const target = masked.slice(ban.index + ban[0].length);
     // A named prohibition belongs to that source; an unqualified prohibition

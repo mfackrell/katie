@@ -80,3 +80,13 @@ test('derived per-source page tasks retain request-wide native restrictions',()=
  const unrestricted=exports.pdfPageTaskForSource('Read a.pdf page 1 and b.pdf page 2','a.pdf',names);
  assert.equal(exports.isPdfNativeInspectionProhibited(unrestricted,['a.pdf']),false);
 });
+
+test('indirect and inflected native prohibitions remain binding',()=>{
+ for(const ban of ['without using OCR',"don't use OCR",'without performing native inspection','without relying on OCR','without scanning','without transcribing','without using any automated OCR']){
+  const message=`Read report.pdf ${ban}`;
+  assert.equal(exports.isPdfNativeInspectionProhibited(message,['report.pdf']),true,message);
+  const scoped=exports.pdfPageTaskForSource(`Read a.pdf page 1 and report.pdf page 2 ${ban}`,'a.pdf',['a.pdf','report.pdf']);
+  assert.equal(exports.isPdfNativeInspectionProhibited(scoped,['a.pdf']),true,scoped);
+ }
+ assert.equal(exports.isPdfNativeInspectionProhibited('Read a.pdf without using OCR on b.pdf',['a.pdf']),false);
+});
