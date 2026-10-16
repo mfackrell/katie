@@ -37,11 +37,6 @@ export function resolvePdfNames(message: string, files: NamedPdf[]): PdfNames {
       names.add(name.toLowerCase());spans.push({start:match.index!,end:match.index!+match[0].length});
     }
   }
-  // Exclusion wording needs scope resolution before any named source is used.
-  // Mask quoted filenames so words inside a literal name are not instructions.
-  const instructions = [...spans].sort((a,b)=>b.start-a.start).reduce((text, span)=>text.slice(0,span.start)+" __PDF_SOURCE__ "+text.slice(span.end), message);
-  if (/\b(?:except|excluding|exclude|ignore|not|without)\s+(?:(?:only|the|my|this|that|these|those|both|any|all|other|attached|uploaded|saved)\s+)*(?:__PDF_SOURCE__|pdfs?|files?|documents?)\b/i.test(instructions))
-    return {names:new Set(),explicit,clarification:"The PDF selection includes excluded sources. Specify only the full filenames to inspect."};
   let precedingEnd = 0;
   for (const extension of message.matchAll(/\.pdf\b/gi)) {
     const end = extension.index! + extension[0].length;
@@ -55,6 +50,10 @@ export function resolvePdfNames(message: string, files: NamedPdf[]): PdfNames {
     names.add(name.toLowerCase());spans.push({start:end-name.length,end});precedingEnd=end;
   }
   const scopeText = [...spans].sort((a,b)=>b.start-a.start).reduce((text,span)=>text.slice(0,span.start)+" __PDF_SOURCE__ "+text.slice(span.end),message);
+  // All validated filenames, including unquoted names, are data. Apply
+  // source exclusions only after masking their complete spans.
+  if (/\b(?:except|excluding|exclude|ignore|not|without)\s+(?:(?:only|the|my|this|that|these|those|both|any|all|other|attached|uploaded|saved)\s+)*(?:__PDF_SOURCE__|pdfs?|files?|documents?)\b/i.test(scopeText))
+    return {names:new Set(),explicit,clarification:"The PDF selection includes excluded sources. Specify only the full filenames to inspect."};
   return {names,explicit,scopeText};
 }
 
@@ -73,8 +72,10 @@ export function selectFreshPdfSources(message: string, fresh: FileReference[], t
   // ask about or analyze neighboring PDFs in the same upload batch.
   const namesNonPdf = fresh.some(file=>file.mimeType !== "application/pdf" && message.toLowerCase().includes(file.fileName.toLowerCase()));
   const targetsNonPdfKind = /\b(?:videos?|clips?|recordings?|audio|sounds?|images?|photos?|pictures?|screenshots?|spreadsheets?|workbooks?|csv|text\s+files?|notes)\b/i.test(message);
-  const targetsPdfKind = /\b(?:pdfs?|documents?|invoices?|statements?)\b/i.test(message);
-  if (!literal.explicit && !wholeSet && !targetsPdfKind && (namesNonPdf || targetsNonPdfKind || timelineActive)) return none();
+  // Content nouns such as "statements" in a video are not PDF source targets.
+  const targetsPdfKind = /\bpdfs?\b/i.test(scopeText);
+  const allUploadedSources = /\b(?:all|both|each|every)\s+(?:(?:of\s+)?(?:the|these)\s+)*(?:attached|uploaded)\s+(?:files?|documents?|attachments?)\b|\b(?:all|both)\s+(?:files|attachments)\b/i.test(scopeText);
+  if (!literal.explicit && !targetsPdfKind && !allUploadedSources && (namesNonPdf || targetsNonPdfKind || timelineActive)) return none();
   if (wholeSet && /\b(?:only|except|excluding|exclude)\b/i.test(scopeText)) return none("The PDF selection includes conflicting or excluded sources. Specify the full filenames to inspect.");
   const chosen = literal.explicit && !wholeSet ? pdfs.filter(file=>literal.names.has(file.fileName.toLowerCase())) : pdfs;
   if (chosen.some(file=>chosen.some(other=>other.fileId !== file.fileId && other.fileName.toLowerCase() === file.fileName.toLowerCase())))
