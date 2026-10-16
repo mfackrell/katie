@@ -105,3 +105,10 @@ test('comparison rendering supplies only each sources own qualified page',()=>{
  assert.match(left,/CHUNK_PAGE_2/);assert.doesNotMatch(left,/CHUNK_PAGE_5/);
  assert.match(right,/CHUNK_PAGE_5/);assert.doesNotMatch(right,/CHUNK_PAGE_2/);
 });
+
+test('a terse review retry cannot reopen text after a failed original page scope',()=>{
+ const file=fixture(6,[2]);
+ file.pdfEvidence.state='failure';delete file.pdfEvidence.contextPages;
+ const output=rendered(file,'yes');onlyPages(output,[],6);
+ assert.doesNotMatch(output,/CHUNK_PAGE_|VISUAL_PAGE_|LAYOUT_PAGE_/);
+});

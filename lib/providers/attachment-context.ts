@@ -55,6 +55,10 @@ type PdfPageScope = { requested: number[]; contextPages: number[] };
 function pdfPageScope(attachment: FileReference, message: string, sourceNames: string[]): PdfPageScope | null {
   const inventory = attachment.mimeType === "application/pdf" ? attachment.pdfInventory : undefined;
   if (!inventory) return null;
+  // A failed scope/provenance check has no authorized pages. A terse retry
+  // message must not reopen the first pages through the text fallback.
+  if (attachment.pdfEvidence?.state === "failure" && !attachment.pdfEvidence.contextPages)
+    return { requested: [], contextPages: [] };
   let requested: number[];
   try { requested = requestedPdfPages(pdfPageTaskForSource(message, attachment.fileName, sourceNames), inventory.pageCount, sourceNames); }
   catch { return { requested: [], contextPages: [] }; }
