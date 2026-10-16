@@ -157,7 +157,8 @@ export function isPdfContentRequest(message: string, sourceNames: string[] = [])
   if (!message.trim() || isPdfLocatorRequest(message)) return false;
   message = maskPdfSourceNames(message, sourceNames);
   const attachmentPronoun = sourceNames.length>0 && /\b(?:it|them)\b/i.test(message) && /\b(?:say|says|show|shows|contain|contains|mean|means|cover|covers|mention|mentions|reveal|read|extract|analy[sz]e|inspect|review|summari[sz]e|compare|explain|interpret|calculate|reconcile|ocr|transcribe|scan|check|examine|describe|audit|process|look)\b|\b(?:in|inside|within|from)\s+(?:it|them)\b/i.test(message);
-  const sourceReference = attachmentPronoun || /\b(?:pdfs?|documents?|attachments?|files?|pages?|statements?|reports?|sources?|this|these|those)\b|\.pdf\b/i.test(message);
+  const attachmentQualified = sourceNames.length>0 && /\b(?:attached|uploaded)\s+(?:[a-z-]+\s+){0,3}(?:contracts?|agreements?|invoices?|receipts?|resumes?|forms?|papers?|manuals?|books?|letters?)\b/i.test(message);
+  const sourceReference = attachmentQualified || attachmentPronoun || /\b(?:pdfs?|documents?|attachments?|files?|pages?|statements?|reports?|sources?|this|these|those)\b|\.pdf\b/i.test(message);
   const contentReference = /\b(?:transactions?|charges?|amounts?|values?|totals?|rows?|columns?|charts?|tables?|figures?|scans?|extracted text|parsed text)\b/i.test(message);
   const explicit = ((sourceReference || contentReference) && /\b(?:read|extract|analy[sz]e|inspect|review|summari[sz]e|compare|explain|interpret|calculate|reconcile)\b/i.test(message))
     || (sourceReference && /\b(?:ocr|transcribe|scan|check|examine|describe|audit|process|look\s+(?:at|through|over))\b/i.test(message));

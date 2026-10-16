@@ -558,18 +558,18 @@ export function createStoredUploadService(storage: Storage, secret: string, opti
       let previousPages:number[]|undefined;
       let previousNativeProhibited=true;
       let previousAnalysisTask:string|undefined;
-      let previousParsedPages:number[]=[];
+      let previousContextPages:number[]=[];
       if(storedScope.data) {
         try {
           const scope=JSON.parse(await storedScope.data.text());
           if(scope.version==="pdf-scope-v1" && scope.actorId===actorId && scope.sourceChatId===chatId && scope.currentChat===currentChat && scope.attachmentId===attachment.id && scope.fingerprint===fingerprint &&
             Array.isArray(scope.pages) && scope.pages.length>0 && scope.pages.length<=10000 && scope.pages.every((page:unknown)=>Number.isSafeInteger(page) && (page as number)>0 && (page as number)<=reference.pdfInventory!.pageCount) && new Set(scope.pages).size===scope.pages.length)
             { previousPages=scope.pages; previousNativeProhibited=scope.nativeInspectionProhibited!==false; previousAnalysisTask=typeof scope.analysisTask==="string" && scope.analysisTask.length<=4000 ? scope.analysisTask : undefined;
-              if(Array.isArray(scope.parsedPagesProvided) && scope.parsedPagesProvided.length<=scope.pages.length && scope.parsedPagesProvided.every((page:unknown)=>scope.pages.includes(page)) && new Set(scope.parsedPagesProvided).size===scope.parsedPagesProvided.length) previousParsedPages=scope.parsedPagesProvided; }
+              if(Array.isArray(scope.contextPagesProvided) && scope.contextPagesProvided.length<=scope.pages.length && scope.contextPagesProvided.every((page:unknown)=>scope.pages.includes(page)) && new Set(scope.contextPagesProvided).size===scope.contextPagesProvided.length) previousContextPages=scope.contextPagesProvided; }
         } catch { /* Missing or corrupt scope cannot widen a continuation. */ }
       }
-      if(cached) cached={...cached,requestedPages:previousPages,analysisTask:previousAnalysisTask,parsedPagesProvided:previousParsedPages,nativeInspectionProhibited:previousNativeProhibited};
-      else if(previousPages) cached={version:"pdf-visual-v1",fingerprint,extractionVersion:"pdf-pages-v1",provider:"google",model:"gemini-2.5-flash",pages:[],rawReports:[],requestedPages:previousPages,analysisTask:previousAnalysisTask,parsedPagesProvided:previousParsedPages,nativeInspectionProhibited:previousNativeProhibited,state:"partial",notice:""};
+      if(cached) cached={...cached,requestedPages:previousPages,analysisTask:previousAnalysisTask,contextPagesProvided:previousContextPages,nativeInspectionProhibited:previousNativeProhibited};
+      else if(previousPages) cached={version:"pdf-visual-v1",capturePolicy:"reusable-page-v1",fingerprint,extractionVersion:"pdf-pages-v1",provider:"google",model:"gemini-2.5-flash",pages:[],rawReports:[],requestedPages:previousPages,analysisTask:previousAnalysisTask,contextPagesProvided:previousContextPages,nativeInspectionProhibited:previousNativeProhibited,state:"partial",notice:""};
       const evidence=await inspectPdf(reference,message,original.data,cached,async pages=>{
         const acquired:number[]=[];
         for(const physicalPage of pages) {
@@ -588,9 +588,9 @@ export function createStoredUploadService(storage: Storage, secret: string, opti
         }
         if(!await live()) throw new UploadInputError("PDF source was deleted.");
         return acquired;
-      },async (pages,nativeInspectionProhibited,analysisTask,parsedPagesProvided)=>{
+      },async (pages,nativeInspectionProhibited,analysisTask,contextPagesProvided)=>{
         if(!await live()) throw new UploadInputError("PDF source was deleted.");
-        const saved=await objects.upload(scopePath,JSON.stringify({version:"pdf-scope-v1",actorId,sourceChatId:chatId,currentChat,attachmentId:attachment.id,fingerprint,pages,nativeInspectionProhibited,analysisTask,parsedPagesProvided}),{contentType:"application/json",upsert:true});
+        const saved=await objects.upload(scopePath,JSON.stringify({version:"pdf-scope-v1",actorId,sourceChatId:chatId,currentChat,attachmentId:attachment.id,fingerprint,pages,nativeInspectionProhibited,analysisTask,contextPagesProvided}),{contentType:"application/json",upsert:true});
         if(saved.error) throw new Error("PDF page scope persistence unavailable; no inference started.");
       },analysisMessage);
       evidence.source={actorId,sourceChatId:chatId,attachmentId:attachment.id};
@@ -630,7 +630,7 @@ export function createStoredUploadService(storage: Storage, secret: string, opti
             const e=envelope.evidence as PdfEvidence;
             // Full native batches stay in private receipts; searchable page
             // identities include only validated fields and opaque report hashes.
-            const canonical=JSON.stringify({version:e.version,extractionVersion:e.extractionVersion,
+            const canonical=JSON.stringify({version:e.version,capturePolicy:e.capturePolicy,extractionVersion:e.extractionVersion,
               source:{actorId,sourceChatId:chatId,attachmentId:attachment.id},fingerprint,
               provider:e.provider,model:e.model,page,rawReportHashes:[...new Set(e.rawReports.map(raw=>createHash("sha256").update(raw).digest("hex")))].sort()});
             const digest=createHash("sha256").update(canonical).digest("hex");

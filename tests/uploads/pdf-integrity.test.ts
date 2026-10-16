@@ -69,7 +69,7 @@ test("page provenance rejects fabricated, duplicate, unrequested and malformed r
 });
 test("cache follow-up uses no inference; missing new page is visible; locate skips analysis", async () => {
     const [ref] = await buildFileReferences([file(["", ""])]);
-    const cached = { version: "pdf-visual-v1" as const, extractionVersion: "pdf-pages-v1" as const, fingerprint: ref.sourceFingerprint!, provider: "google" as const, model: "gemini-2.5-flash", pages: [{ physicalPage: 1, status: "uncertain" as const, observations: "unreadable", rows: [[null]] }], rawReports: ["original"], state: "partial" as const, notice: "" };
+    const cached = { version: "pdf-visual-v1" as const, capturePolicy:"reusable-page-v1" as const, extractionVersion: "pdf-pages-v1" as const, fingerprint: ref.sourceFingerprint!, provider: "google" as const, model: "gemini-2.5-flash", pages: [{ physicalPage: 1, status: "uncertain" as const, observations: "unreadable", rows: [[null]] }], rawReports: ["original"], state: "partial" as const, notice: "" };
     const original = globalThis.fetch;
     globalThis.fetch = async () => { throw new Error("unexpected network"); };
     try {
@@ -549,7 +549,7 @@ test("positive reading can use parsed text while explicit OCR prohibition preven
   assert.equal(textOnly.nativeInspectionProhibited,true);assert.equal(calls,0);assert.deepEqual(textOnly.contextPages,[1]);
   const context=formatAttachmentContext([{...ref,pdfEvidence:result}],{userMessage:"Read this PDF but don't OCR it"});
   assert.match(context,/known parsed text/);
-  const cached:NonNullable<Parameters<typeof inspectPdf>[3]>={version:"pdf-visual-v1",fingerprint:ref.sourceFingerprint!,extractionVersion:"pdf-pages-v1",provider:"google",model:"gemini-2.5-flash",state:"partial",notice:"",pages:[{physicalPage:1,status:"readable",observations:"PRIVATE-CACHED-VISUAL",rows:[]}],rawReports:["PRIVATE-CACHED-REPORT"]};
+  const cached:NonNullable<Parameters<typeof inspectPdf>[3]>={version:"pdf-visual-v1",capturePolicy:"reusable-page-v1",fingerprint:ref.sourceFingerprint!,extractionVersion:"pdf-pages-v1",provider:"google",model:"gemini-2.5-flash",state:"partial",notice:"",pages:[{physicalPage:1,status:"readable",observations:"PRIVATE-CACHED-VISUAL",rows:[]}],rawReports:["PRIVATE-CACHED-REPORT"]};
   const constrained=await inspectPdf(ref,"Read page 1 but don't OCR or inspect it",new Blob(),cached);
   assert.equal(calls,0);assert.equal(constrained.pages.length,0);assert.equal(constrained.rawReports.length,0);
   assert.equal(cached.pages.length,1);
@@ -647,4 +647,27 @@ test("cross-chat PDF continuation scope is removed with the consuming conversati
  assert.ok(scope.startsWith(`chats/${current}/`));assert.match(await files.get(scope)!.text(),/PRIVATE-CURRENT-TASK/);
  await service.removeConversation(current,actor);assert.equal(files.has(scope),false);
  assert.equal(files.has(`chats/${source}/${saved.id}.source`),true);
+});
+
+test("reusable page capture supports new questions and expanded context includes cached requested pages",async()=>{
+ const [ref]=await buildFileReferences([file(Array.from({length:5},()=>''))]);
+ const oldFetch=globalThis.fetch,oldKey=process.env.GOOGLE_API_KEY;const calls:number[][]=[];
+ process.env.GOOGLE_API_KEY='offline-test-key';
+ globalThis.fetch=async(_input,init)=>{
+  const prompt=JSON.parse(String(init?.body)).contents[0].parts[0].text;
+  assert.match(prompt,/reusable page evidence independent of the current question/);
+  assert.match(prompt,/every transaction and table row; describe charts/);
+  const pages=/physical PDF pages ([\d,]+)/.exec(prompt)![1].split(',').map(Number);calls.push(pages);
+  return Response.json({candidates:[{finishReason:'STOP',content:{parts:[{text:JSON.stringify({fingerprint:ref.sourceFingerprint,pages:pages.map(physicalPage=>({physicalPage,status:'readable',observations:'Transaction 12.34. Chart titled Revenue: rising line, January 10 and February 20.',rows:[['transaction','12.34']]}))})}]}}]});
+ };
+ try{
+  const first=await inspectPdf(ref,'Extract transactions from page 1',new Blob());
+  const chart=await inspectPdf(ref,'Describe the chart on page 1',new Blob(),first);
+  assert.equal(calls.length,1);assert.match(chart.pages[0].observations,/Chart titled Revenue/);
+  const expanded=await inspectPdf(ref,'Compare pages 1-5',new Blob(),chart);
+  assert.deepEqual(expanded.contextPages,[1,2,3,4]);assert.deepEqual(calls,[[1],[2,3,4]]);
+  const next=await inspectPdf(ref,'continue',new Blob(),expanded);
+  assert.deepEqual(next.contextPages,[5]);assert.deepEqual(calls,[[1],[2,3,4],[5]]);
+  const done=await inspectPdf(ref,'continue',new Blob(),next);assert.deepEqual(done.contextPages,[]);assert.equal(calls.length,3);
+ }finally{globalThis.fetch=oldFetch;if(oldKey)process.env.GOOGLE_API_KEY=oldKey;else delete process.env.GOOGLE_API_KEY;}
 });

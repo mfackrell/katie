@@ -291,3 +291,9 @@ test('generic unrelated actions do not authorize a PDF merely because it is atta
   const result=await run(message,[pdf('a','a.pdf')]);assert.deepEqual(result.inspected,['a'],message);
  }
 });
+
+test('attachment-qualified document nouns authorize the selected uploaded PDF',async()=>{
+ for(const message of ['Summarize the attached contract','Review the uploaded invoice','Analyze the attached rental agreement']){
+  const result=await run(message,[pdf('a','a.pdf')]);assert.deepEqual(result.inspected,['a'],message);
+ }
+});
