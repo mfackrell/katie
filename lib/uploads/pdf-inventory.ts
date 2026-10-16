@@ -58,14 +58,19 @@ export function requestedPdfPages(message: string, count: number): number[] {
     for (const match of message.matchAll(/\bpages?\s+/gi)) {
         const tail = message.slice(match.index! + match[0].length);
         if (/^[-+−]/.test(tail) || numberWord.test(tail)) throw invalid();
-        if (!/^\d/.test(tail)) continue;
+        if (!/^\d/.test(tail)) {
+            // Unscoped prose may describe pages, but unknown labels must never
+            // turn an explicit selector into permission to inspect all pages.
+            if (!/^[.!?]?\s*$/.test(tail) && !/^(?:of|in|for|with|without|from|is|are|has|have|contains?|shows?|carefully|thoroughly|individually)\b/i.test(tail)) throw invalid();
+            continue;
+        }
         const selector = /^(\d+(?:\s*(?:[-–—]|to\b|through\b)\s*\d+)?(?:\s*(?:,|and\b)\s*\d+(?:\s*(?:[-–—]|to\b|through\b)\s*\d+)?)*)/i.exec(tail)!;
         const rest = tail.slice(selector[0].length);
         // Do not accept a valid-looking prefix of a fractional, signed, exponent,
         // malformed-range, or partly unsupported page list.
-        if (/^[\w/]|^\.(?:\d|\.)|^\s*(?:[-–—]|to\b|through\b)/i.test(rest)) throw invalid();
+        if (/^\s*(?:[&+]|;\s*\d|or\b)|^[\w/]|^\.(?:\d|\.)|^\s*(?:[-–—]|to\b|through\b)/i.test(rest)) throw invalid();
         const continuation = /^\s*(?:,|and\b)\s*(.*)/i.exec(rest)?.[1];
-        if (continuation !== undefined && (/^[-+−\d]/.test(continuation) || numberWord.test(continuation))) throw invalid();
+        if (continuation !== undefined && (/^[-+−\d]/.test(continuation) || numberWord.test(continuation) || /^[a-z]\s*(?:$|[,;.!?&–—-])/i.test(continuation))) throw invalid();
         for (const part of selector[0].split(/\s*(?:,|and\b)\s*/i)) {
             const range = /^(\d+)(?:\s*(?:[-–—]|to\b|through\b)\s*(\d+))?$/i.exec(part)!;
             const start = Number(range[1]), end = Number(range[2] ?? range[1]);

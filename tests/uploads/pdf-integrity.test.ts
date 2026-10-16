@@ -366,7 +366,7 @@ test("large multi-page corpus indexes immutable page versions and recovers acros
   calls++;
   const prompt=JSON.parse(String(init?.body)).contents[0].parts[0].text;
   const physicalPage=Number(/physical PDF pages ([0-9]+)/.exec(prompt)![1]);
-  const raw=JSON.stringify({fingerprint:ref.sourceFingerprint,pages:[{physicalPage,status:"readable",observations:"x".repeat(11000),rows:[Array(20).fill("y".repeat(500))]}]});
+  const raw=JSON.stringify({fingerprint:ref.sourceFingerprint,pages:[{physicalPage,status:"readable",observations:"x".repeat(11000),rows:Array.from({length:3},()=>Array(20).fill("y".repeat(500)))}]});
   return Response.json({candidates:[{finishReason:"STOP",content:{parts:[{text:raw}]}}]});
  };
  try {
@@ -433,4 +433,56 @@ test("content intent distinguishes file discovery, in-document questions and unr
   assert.equal(evidence.state,"not-requested");assert.equal(evidence.pages.length,0);
  }
  for(const request of ["Extract every transaction","Read the scanned page","Compare pages 1 and 2","Continue","Which quarter has the highest collections?"])assert.equal(isPdfContentRequest(request),true,request);
+});
+
+test("multi-page batch indexes only validated page fields and stable raw-report hashes across retries", async () => {
+ const {service,storage,files}=storageFixture();
+ const [upload]=await service.ingestPdfUploads([file(["",""])]);
+ const [ref]=await service.hydrate([upload]);
+ const chatId="00000000-0000-4000-8000-000000000001",actorId="00000000-0000-4000-8000-000000000002";
+ const saved=await service.persist(chatId,ref,upload.storageToken,{actorId});
+ const oldFetch=globalThis.fetch,oldAdmin=globalThis.__KATIE_SUPABASE_ADMIN_CLIENT__;
+ const pages=[1,2].map(physicalPage=>({physicalPage,status:"readable",observations:`UNIQUE-OBSERVATION-${physicalPage}`,rows:[[ `UNIQUE-CELL-${physicalPage}` ]]}));
+ const raw=JSON.stringify({fingerprint:ref.sourceFingerprint,pages});
+ const attempted=new Map<string,string[]>();
+ let calls=0,failIndex=true;
+ process.env.GOOGLE_API_KEY="offline-test-key";
+ globalThis.fetch=async()=>{
+  calls++;
+  return Response.json({candidates:[{finishReason:"STOP",content:{parts:[{text:raw}]}}]});
+ };
+ globalThis.__KATIE_SUPABASE_ADMIN_CLIENT__={rpc:async(name:string,args:Record<string,unknown>)=>{
+  assert.equal(name,"save_media_evidence");
+  const key=String(args.p_version),payload=String(args.p_text);
+  attempted.set(key,[...(attempted.get(key)??[]),payload]);
+  return {data:null,error:failIndex?{message:"index temporarily unavailable"}:null};
+ }} as unknown as NonNullable<typeof globalThis.__KATIE_SUPABASE_ADMIN_CLIENT__>;
+ try {
+  for(const request of ["Read page A","Read pages 1 & 2"]) {
+   const rejected=await service.pdfEvidence(chatId,saved,actorId,request,async()=>true);
+   assert.equal(rejected.state,"failure"); assert.equal(calls,0); assert.equal(attempted.size,0);
+   assert.ok(![...files.keys()].some(path=>path.includes(".pdf-attempt-")));
+  }
+  const first=await service.pdfEvidence(chatId,saved,actorId,"read pages 1 and 2",async()=>true);
+  assert.equal(calls,1); assert.equal(attempted.size,2);
+  const receipts=[...files.entries()].filter(([path])=>/\.pdf-page-\d+\.json$/.test(path));
+  assert.equal(receipts.length,2);
+  for(const [,blob] of receipts)assert.deepEqual(JSON.parse(await blob.text()).evidence.rawReports,[raw]);
+  failIndex=false;
+  const restarted=createStoredUploadService(storage,"offline-secret");
+  const cached=await restarted.pdfEvidence(chatId,saved,actorId,"compare pages 1 and 2",async()=>true);
+  assert.deepEqual(cached.pages,first.pages); assert.deepEqual(cached.rawReports,[raw]); assert.equal(calls,1);
+  for(const payloads of attempted.values()) {
+   assert.equal(payloads.length,2); assert.equal(payloads[0],payloads[1]);
+   const canonical=JSON.parse(payloads[0]),page=canonical.page.physicalPage,other=page===1?2:1;
+   assert.deepEqual(canonical.page,pages[page-1]);
+   assert.equal(canonical.rawReports,undefined);
+   assert.deepEqual(canonical.rawReportHashes,[createHash("sha256").update(raw).digest("hex")]);
+   assert.match(payloads[0],new RegExp(`UNIQUE-OBSERVATION-${page}`));
+   assert.doesNotMatch(payloads[0],new RegExp(`UNIQUE-(?:OBSERVATION|CELL)-${other}`));
+  }
+  await restarted.pdfEvidence(chatId,saved,actorId,"read page 2",async()=>true);
+  assert.equal(calls,1); for(const payloads of attempted.values())assert.equal(payloads.length,2);
+  for(const [path,blob] of receipts)assert.equal(await files.get(path)!.text(),await blob.text());
+ } finally {globalThis.fetch=oldFetch;globalThis.__KATIE_SUPABASE_ADMIN_CLIENT__=oldAdmin;delete process.env.GOOGLE_API_KEY;}
 });
