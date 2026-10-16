@@ -26,8 +26,13 @@ export function selectPdfEvidenceSource(message: string, catalog: ConversationAt
   let unnamed = message;
   for (const file of [...allPdfs].sort((a,b)=>b.fileName.length-a.fileName.length)) unnamed = unnamed.replace(mentions(file.fileName), "$1 ");
   if (/[^\s"'<>]+\.pdf\b/i.test(unnamed)) return {method:"none",selections:[],clarification:"I could not resolve the explicitly named PDF. Select or upload that source."};
+  const literalNames = new Set(allPdfs.filter(file => mentions(file.fileName).test(message)).map(file => file.fileName.toLowerCase()));
   const named = pdfs.filter(file => mentions(file.fileName).test(message));
-  let matched = named.length ? named : pdfs.filter(file => hits.some(hit => hit.attachment_id === file.id && hit.source_chat_id === file.chatId));
+  // A date constraint can disambiguate duplicate names, but cannot substitute
+  // another filename or silently drop one of several explicitly named sources.
+  if ([...literalNames].some(name => !named.some(file => file.fileName.toLowerCase() === name)))
+    return {method:"none",selections:[],clarification:"The explicitly named PDF does not match that upload-date range. Select the intended source or give a different date range."};
+  let matched = literalNames.size ? named : pdfs.filter(file => hits.some(hit => hit.attachment_id === file.id && hit.source_chat_id === file.chatId));
   if (!matched.length && /\b(?:saved|uploaded|my|the|that|this)\s+pdf\b/i.test(message)) matched = pdfs;
   if (!matched.length) return dateScoped ? {method:"none",selections:[],clarification:"No saved PDF matches that upload-date range. Select the intended source or give a different date range."} : null;
   if (matched.length > 1) return { method: "none", selections: [], clarification: `Which PDF source do you mean? ${matched.slice(0, 5).map(file => `${file.fileName} (chat ${file.chatId}, attachment ${file.id})`).join("; ")}` };
