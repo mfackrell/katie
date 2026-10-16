@@ -717,6 +717,20 @@ export async function POST(request: NextRequest) {
       if (sources.length === 1) pdfMemoryDecision = { method: "none", selections: [{ attachment: sources[0], mode: "source" }] };
       else if (sources.length > 1) pdfMemoryDecision = { method: "none", selections: [], clarification: "Which saved PDF source should this review use?" };
     }
+    // A PDF-specific decision must not discard other explicitly requested
+    // saved comparison sources. Keep generic selection bounded to those names.
+    if (pdfMemoryDecision?.selections.length && !pdfMemoryDecision.clarification) {
+      const namedNonPdfs = catalog.filter(file => file.mimeType !== "application/pdf" &&
+        message.toLowerCase().includes(file.fileName.toLowerCase()));
+      if (namedNonPdfs.length) {
+        const otherDecision = await selectStoredAttachments(message, namedNonPdfs, attachmentHistory, undefined,
+          newAttachments.map(file => file.fileName));
+        pdfMemoryDecision = otherDecision.clarification
+          ? { method: "none", selections: [], clarification: otherDecision.clarification }
+          : { ...pdfMemoryDecision, selections: [...pdfMemoryDecision.selections,
+              ...otherDecision.selections.filter(item => namedNonPdfs.some(file => file.id === item.attachment.id && file.chatId === item.attachment.chatId))] };
+      }
+    }
     if (pdfMemoryDecision) mediaMemory = null;
     const attachmentDecision: AttachmentDecision = pdfMemoryDecision ?? (timelineActive
       ? { method: "none", selections: [], ...(timelineSelection.clarification ? { clarification: timelineSelection.clarification } : {}) }

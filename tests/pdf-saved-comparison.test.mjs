@@ -74,3 +74,13 @@ test('a same-name saved source remains eligible for an explicitly dated comparis
  const ambiguous=scope.selectPdfEvidenceSource('Compare report.pdf with the saved PDF', [...saved,{...saved[0],id:'second',chatId:'second-chat'}],[],1,new Date('2026-10-16T12:00:00Z'),fresh);
  assert.ok(ambiguous.clarification);assert.equal(ambiguous.selections.length,0);
 });
+
+test('PDF selection retains an explicitly named saved chart alongside saved and fresh PDFs',async()=>{
+ const chart={id:'chart',fileId:'chart',chatId:'old-chat',fileName:'saved-chart.png',mimeType:'image/png',preview:'CHART'};
+ for(const fresh of [[],[pdf('new','new.pdf')]]){
+  const message=fresh.length?'Compare new.pdf with old.pdf and saved-chart.png':'Compare old.pdf with saved-chart.png';
+  const result=await run(message,fresh,[pdf('old','old.pdf'),chart],['chart']);
+  assert.equal(result.attachmentDecision.clarification,undefined);
+  assert.deepEqual(Array.from(result.attachments,f=>f.fileId),[...(fresh.length?['new']:[]),'old','chart']);
+ }
+});
