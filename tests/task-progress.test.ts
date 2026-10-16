@@ -156,7 +156,7 @@ test("latest BTG screening prompt is a NEW task rather than an answer to an old 
   assert.equal(baseline.activeNewTask,true);
   assert.match(baseline.text,/ACTIVE DELIVERABLE \(authoritative question, not an old subtask\)/);
   assert.match(baseline.text,/Earlier question-specific requirements, exclusions and example priorities must NOT constrain/);
-  assert.ok(baseline.text.indexOf("ACTIVE DELIVERABLE") < baseline.text.indexOf("AUTHORITATIVE USER TURNS"));
+  assert.ok(baseline.text.indexOf("ACTIVE DELIVERABLE") < baseline.text.indexOf("ACTIVE CONTRACT SOURCES"));
 });
 
 
