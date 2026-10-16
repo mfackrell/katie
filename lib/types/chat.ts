@@ -33,6 +33,7 @@ export type ActorRoutingProfile = {
 };
 
 export interface Actor {
+  managedAgentId?: string;
   reviewMode?: import("@/lib/collaboration/review-mode").ReviewMode;
   id: string;
   name: string;

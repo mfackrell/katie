@@ -1,5 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { runAdaptiveCollaboration } from "../lib/collaboration/orchestrator";
+import { runAgentTask, type AgentTask } from "../lib/agents/policy";
 import { runRequiredDraftReview } from "../lib/collaboration/required-review";
 import { getDeliverableStandardInstruction } from "../lib/chat/deliverable-standard";
 import { createReviewClarification, buildReviewResumptionContext } from "../lib/collaboration/review-completion";
@@ -868,4 +870,38 @@ test("new explicit application question isolates contract negotiation from compl
   assert.deepEqual(phases, ["assessment", "contract", "review"]);
   assert.equal(result.audit.contractValidation?.sourceCoverage.length, 1);
   assert.equal(result.audit.contractValidation?.sourceCoverage[0].sourceId, "latest-user");
+});
+
+
+test("research-disabled writing completes real collaboration and independent required review", async () => {
+  const task: AgentTask = {
+    id: "task", agent_id: "agent", actor_id: "actor", chat_id: "chat", definition_version: 1,
+    kind: "general", initial_input: correction, input: correction, request_id: "disabled-research",
+    repository_id: null, repository_full_name: null, status: "running", details: null, external: {},
+    snapshot: { name: "Writer", instructions: "Write accurately", research: false, attachments: false,
+      development: false, reviewMode: "always", maxActiveTasks: 1, maxInputChars: 8000 },
+  };
+  await runAgentTask(task, async () => {
+    const s = setup();
+    const generationLead: LlmProvider = {
+      name: "openai", listModels: async () => ["lead"],
+      generate: async () => response("openai", "lead", { action: "ready", synthesisBrief: "Write the requested application response." }),
+      generateStream: async (_p, handlers) => { await handlers.onTextDelta?.(draft.text); return draft; },
+    };
+    const generated = await runAdaptiveCollaboration({
+      requestId: task.request_id, leadProvider: generationLead, leadModelId: "lead",
+      providers: [generationLead, s.reviewer], params,
+      selectHelper: async () => { throw new Error("No research helper is needed for this writing task"); },
+      onFinalTextDelta: async () => {},
+    });
+    assert.equal(generated.result.text, draft.text);
+    const reviewed = await runRequiredDraftReview({ requestId: task.request_id, draft: generated.result,
+      params, leadProvider: s.lead, deadlineMs: deadline(),
+      selectHelper: async c => c.usedParticipants.length === 1 ? { provider: s.reviewer, modelId: "reviewer" } : null,
+    });
+    assert.equal(reviewed.audit.status, "approved");
+    assert.ok(s.phases.includes("assessment"));
+    assert.ok(s.phases.includes("review"));
+    assert.equal(reviewed.audit.reviewer?.provider, "anthropic");
+  });
 });

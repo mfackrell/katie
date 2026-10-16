@@ -1,3 +1,4 @@
+import { managedActor } from "@/lib/agents/store";
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { deleteActorsById, getActorById, listActors, saveActor } from "@/lib/data/persistence-store";
@@ -52,7 +53,10 @@ function buildActorId(): string {
 export async function GET() {
   const actors = await listActors();
 
-  return NextResponse.json({ actors }, { headers: { "Cache-Control": "no-cache" } });
+  const { data: managed, error } = await getSupabaseAdminClient().from("managed_agents").select("id,actor_id").returns<{ id: string; actor_id: string }>();
+  if (error) return NextResponse.json({ error: "Agent identities unavailable" }, { status: 503 });
+  const identities = new Map((managed ?? []).map(a => [a.actor_id, a.id]));
+  return NextResponse.json({ actors: actors.map(a => ({ ...a, ...(identities.has(a.id) ? { managedAgentId: identities.get(a.id) } : {}) })) }, { headers: { "Cache-Control": "no-cache" } });
 }
 
 export async function POST(request: NextRequest) {
@@ -108,6 +112,7 @@ export async function PATCH(request: NextRequest) {
     const { id: actorId } = actorIdParamSchema.parse({ id: url.searchParams.get("id") });
     const { purpose, reviewMode } = updateActorSchema.parse(await request.json());
 
+    if (await managedActor(actorId)) return NextResponse.json({ error: "Edit managed agents in Agents management." }, { status: 409 });
     const existingActor = await getActorById(actorId);
     if (!existingActor) {
       return NextResponse.json({ error: `Actor not found: ${actorId}` }, { status: 404 });
@@ -151,6 +156,7 @@ export async function DELETE(request: NextRequest) {
 
   try {
     const { id: actorId } = actorIdParamSchema.parse({ id: url.searchParams.get("id") });
+    if (await managedActor(actorId)) return NextResponse.json({ error: "Archive managed agents in Agents management to preserve history." }, { status: 409 });
     const actors = await listActors();
 
     const target = actors.find((actor) => actor.id === actorId);

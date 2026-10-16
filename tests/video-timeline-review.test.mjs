@@ -90,7 +90,7 @@ test('actual route fingerprint preserves fresh and saved timeline source identit
   insert:async row=>{if(receipt)return {error:{message:'duplicate'}};receipt=row;return {error:null};},
   select:()=>({eq:()=>({maybeSingle:async()=>({data:receipt,error:null})})}),
  })};
- const exports={};vm.runInNewContext(ts.transpileModule(readFileSync('lib/chat/request-idempotency.ts','utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText,{exports,require:()=>({getSupabaseAdminClient:()=>client}),TextEncoder,crypto:webcrypto});
+ const exports={};vm.runInNewContext(ts.transpileModule(readFileSync('lib/chat/request-idempotency.ts','utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText,{exports,require:name=>name==='@/lib/agents/policy'?{currentAgentTask:()=>undefined}:{getSupabaseAdminClient:()=>client},TextEncoder,crypto:webcrypto});
  const route=readFileSync('app/api/chat/route.ts','utf8');
  const start=route.indexOf('    const requestFingerprint ='),end=route.indexOf('    const idempotencyClaim =',start);
  const fingerprint=async({fresh=[],saved,timelineActive=true}={})=>{

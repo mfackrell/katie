@@ -1,9 +1,12 @@
 import { pdfPageTaskForSource } from "@/lib/uploads/pdf-inventory";
 import { pdfSourceOccurrence, selectFreshPdfSources, selectPdfEvidenceSource } from "@/lib/chat/pdf-source-selection";
 import { inspectSavedPdf } from "@/lib/uploads/stored-uploads";
+import { agentRpc, refreshTask } from "@/lib/agents/store";
+import { authorizeManagedChat } from "@/lib/agents/runtime";
+import { runAgentTask, currentAgentTask } from "@/lib/agents/policy";
 import { timelineIntent, resolveTimelineSource } from "@/lib/video-timeline/intent";
 import { runVideoTimeline } from "@/lib/video-timeline/service";
-import { hasUploadDateReference, memoryIntent, retrieveSavedEvidence } from "@/lib/media-memory/evidence";
+import { hasUploadDateReference, memoryIntent } from "@/lib/media-memory/evidence";
 import { retrySavedEvidence, savedOriginalExists } from "@/lib/uploads/stored-uploads";
 import { buildVideoTimingEvidence, appendVideoEvidenceToUser, buildVideoAssessmentUser } from "@/lib/chat/video-evidence";
 import { registerVideoTiming, getVideoTiming } from "@/lib/uploads/video-timing";
@@ -19,7 +22,7 @@ import { pendingVideoMessage } from "@/lib/runpod/video-orchestration";
 import { RUNPOD_VIDEO_MODEL } from "@/lib/runpod/durable-results";
 import { buildImageReference, imageFileFromDataUrl } from "@/lib/uploads/image-reference";
 import { selectStoredAttachments, loadSelectedAttachmentSources, explicitlyRequestsVideo, type AttachmentDecision } from "@/lib/chat/attachment-selection";
-import { loadSavedVideoFollowUp } from "@/lib/chat/saved-video-observations";
+import { loadSavedVideoFollowUp, retrieveSavedEvidence } from "@/lib/agents/media";
 import { pruneRepeatedVideoSelections, uniqueAttachmentReferences } from "@/lib/chat/video-attachment-dedup";
 import { after, NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
@@ -436,7 +439,7 @@ function buildGenerationParams({
   };
 }
 
-async function parseIncomingPayload(request: NextRequest): Promise<RequestPayload> {
+async function parseIncomingPayload(request: Request): Promise<RequestPayload> {
   const contentType = request.headers.get("content-type") ?? "";
 
   if (!contentType.includes("application/json")) {
@@ -618,6 +621,30 @@ async function loadRepoGenerationContext(activeRepo: ActiveRepoContext): Promise
 }
 
 export async function POST(request: NextRequest) {
+  try {
+    let payload: RequestPayload;
+    try { payload = await parseIncomingPayload(request.clone()); }
+    catch { return executeChat(request); }
+    const task = await authorizeManagedChat(request, payload);
+    if (task) {
+      const claimed = await agentRpc<boolean>("claim_agent_execution", { p_id: task.id, p_request: task.request_id });
+      if (!claimed) {
+        const saved = await refreshTask(task.id);
+        return NextResponse.json({ task: saved, status: saved.status, requestId: task.request_id }, { status: 202 });
+      }
+    }
+    const response = await runAgentTask(task, () => executeChat(request));
+    if (task && !response.ok) {
+      const { error } = await getSupabaseAdminClient().from("agent_tasks").eq("id", task.id).eq("request_id", task.request_id).update({ status: "failed", details: "Execution was rejected before streaming. Continue the saved task to retry.", updated_at: new Date().toISOString() });
+      if (error) throw new Error("Task failure status could not be persisted");
+    }
+    return response;
+  } catch {
+    return NextResponse.json({ error: "Task configuration or permissions denied. Check the saved task and request ID." }, { status: 403 });
+  }
+}
+
+async function executeChat(request: NextRequest) {
   const executionDeadlineMs = Date.now() + (maxDuration - 30) * 1_000;
   let trackedRequestId: string | null = null;
   try {
@@ -636,7 +663,7 @@ export async function POST(request: NextRequest) {
     } = payload;
     const currentChat = await getChatById(chatId);
     if (!currentChat || currentChat.actorId !== actorId) return NextResponse.json({ error: "Chat does not belong to this actor." }, { status: 404 });
-    const repoInjectionEnabled = repoInjectionEnabledFromPayload !== false;
+    const repoInjectionEnabled = currentAgentTask() ? false : repoInjectionEnabledFromPayload !== false;
     const newAttachments = await hydrateStoredAttachments(fileReferences ?? []);
     const legacyImageSources = new Map<string, File>();
     for (const image of requestImages ?? []) {
@@ -647,7 +674,7 @@ export async function POST(request: NextRequest) {
     }
     if (newAttachments.length > 5) return NextResponse.json({ error: "Attach up to five files per message." }, { status: 400 });
     const attachmentHistory = await getRecentMessages(chatId, 60);
-    const catalog = await loadActorAttachmentCatalog(actorId, async () => {
+    const catalog = currentAgentTask()?.snapshot.attachments === false ? [] : await loadActorAttachmentCatalog(actorId, async () => {
       const actorChats = await listChatsByActorId(actorId);
       const ownedChatIds = new Set(actorChats.map(chat => chat.id));
       const files: ConversationAttachment[] = [];
@@ -673,10 +700,10 @@ export async function POST(request: NextRequest) {
     // the authoritative, already-saved RunPod/Grok observations in Supabase.
     // Do not reattach/redecode an MP4, ask which video, or consult the LLM
     // attachment selector until the contextual evidence lookup has run.
-    await retrySavedEvidence(actorId, async id => (await getChatById(id))?.actorId === actorId, catalog)
+    if (!currentAgentTask()) await retrySavedEvidence(actorId, async id => (await getChatById(id))?.actorId === actorId, catalog)
       .catch(() => console.warn("[Media memory] retry unavailable"));
     try {
-      const recovered = await getSupabaseAdminClient().rpc("reconcile_media_video", {p_actor: actorId, p_current_chat: chatId});
+      const recovered = currentAgentTask() ? { error: null } : await getSupabaseAdminClient().rpc("reconcile_media_video", {p_actor: actorId, p_current_chat: chatId});
       if (recovered.error) console.warn("[Media memory] video recovery unavailable");
     } catch { console.warn("[Media memory] video recovery unavailable"); }
     // Source restoration precedes model classification. Require the same
@@ -862,6 +889,9 @@ export async function POST(request: NextRequest) {
       requestFingerprint,
     });
 
+    if (currentAgentTask() && idempotencyClaim.mode === "untracked") {
+      return NextResponse.json({ error: "Durable request tracking is required for managed tasks." }, { status: 503 });
+    }
     if (idempotencyClaim.mode === "conflict") {
       return NextResponse.json(
         { error: "Request ID was reused with different request content.", requestId },
@@ -2814,6 +2844,7 @@ ${chunkWorkflowSummary}`;
                 if (error) throw error;
               } catch (error) {
                 console.error("[RequiredReview] audit save failed", { requestId, error });
+                if (currentAgentTask()) throw new Error("Independent review audit could not be saved");
               }
               console.info("[RequiredReview] completed", { requestId, status: reviewed.audit.status, reviewer: reviewed.audit.reviewer });
               emitChunk({ type: "metadata", review: {
@@ -2879,7 +2910,7 @@ ${chunkWorkflowSummary}`;
               content: assistantText,
               assets: imageAssets,
             });
-            if (requestTracked) {
+            if (requestTracked && !currentAgentTask()) {
               await completeChatRequest(requestId, {
                 assistantMessageId,
                 assistantModel: result.model,
@@ -2891,6 +2922,13 @@ ${chunkWorkflowSummary}`;
               messageId: assistantMessageId, text: assistantText, responsePurpose: responsePolicy.purpose,
             });
             const taskProgressSaved = await saveTaskProgress(actorId, chatId, taskProgress);
+            if (currentAgentTask()) {
+              if (!taskProgressSaved) throw new Error("Managed task progress could not be saved");
+              await completeChatRequest(requestId, {
+                assistantMessageId, assistantModel: result.model,
+                assistantContent: assistantText, assistantAssets: imageAssets,
+              });
+            }
             if (pendingReviewClarification) {
               await resolvePendingReviewClarification({
                 requestId: pendingReviewClarification.requestId, actorId, chatId, resumedByRequestId: requestId,

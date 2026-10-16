@@ -1,3 +1,4 @@
+import { currentAgentTask } from "@/lib/agents/policy";
 import { getSupabaseAdminClient } from "@/lib/data/supabase/admin";
 
 export type ChatRequestStatus = "processing" | "completed" | "failed";
@@ -146,7 +147,7 @@ export async function claimChatRequest(input: {
     return { mode: "conflict", tracked: true, record: existing };
   }
 
-  if (existing.status === "processing") {
+  if (existing.status === "processing" && !currentAgentTask()) {
     const updatedAt = Date.parse(existing.updatedAt);
     if (
       Number.isFinite(updatedAt) &&
