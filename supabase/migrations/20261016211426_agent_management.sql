@@ -47,6 +47,19 @@ create table public.agent_tasks (
 );
 create index agent_tasks_agent_status on public.agent_tasks(agent_id,status);
 create index agent_tasks_actor on public.agent_tasks(actor_id);
+-- Immutable admission receipts make continuation retries safe across response loss.
+create table public.agent_task_continuations (
+ task_id uuid not null references public.agent_tasks(id) on delete restrict,
+ turn_id uuid not null,
+ input text not null check(length(trim(input)) between 1 and 16000),
+ base_request_id text not null check(length(base_request_id) between 1 and 128),
+ request_id text not null unique check(length(request_id) between 1 and 128),
+ created_at timestamptz not null default now(),
+ primary key(task_id,turn_id)
+);
+alter table public.agent_task_continuations enable row level security;
+revoke all on public.agent_task_continuations from public,anon,authenticated;
+grant select,insert on public.agent_task_continuations to service_role;
 alter table public.managed_agents enable row level security;
 alter table public.agent_tasks enable row level security;
 revoke all on public.managed_agents,public.agent_tasks from public,anon,authenticated;
@@ -100,9 +113,9 @@ begin
 end $$;
 
 -- All start/continuation/dispatch transitions serialize on the definition row.
-create function public.transition_agent_task(p_id uuid,p_action text,p_message text default null)
+create function public.transition_agent_task(p_id uuid,p_action text,p_message text default null,p_turn uuid default null,p_expected_request text default null)
 returns jsonb language plpgsql security invoker set search_path=public as $$
-declare a managed_agents; t agent_tasks; n integer;
+declare a managed_agents; t agent_tasks; n integer; receipt agent_task_continuations;
 begin
  select a0.* into a from managed_agents a0 join agent_tasks t0 on t0.agent_id=a0.id where t0.id=p_id for update of a0;
  if not found then raise exception 'Task missing'; end if;
@@ -113,14 +126,26 @@ begin
   if a.archived then raise exception 'Agent archived'; end if;
   if t.status<>'draft' then return to_jsonb(t); end if;
  elsif p_action='continue' then
+  if p_turn is null or p_expected_request is null or length(p_expected_request) not between 1 and 128 then raise exception 'Continuation identity required'; end if;
+  select * into receipt from agent_task_continuations where task_id=p_id and turn_id=p_turn;
+  if found then
+   if receipt.input is distinct from p_message or receipt.base_request_id is distinct from p_expected_request then raise exception 'Continuation id conflict'; end if;
+   -- Return the original receipt even after completion or later turns. Never admit it twice.
+   return to_jsonb(t)||jsonb_build_object('continuation_receipt',to_jsonb(receipt));
+  end if;
+  if t.request_id<>p_expected_request then raise exception 'Task advanced; refresh before submitting a new continuation'; end if;
   if a.archived or t.kind<>'general' or t.status not in ('completed','pending','failed') then raise exception 'Task cannot continue'; end if;
   if length(trim(p_message))<1 or length(p_message)>(t.snapshot->>'maxInputChars')::integer then raise exception 'Invalid continuation'; end if;
   t.input:=p_message; t.request_id:='agent:'||gen_random_uuid()::text;
  else raise exception 'Invalid transition'; end if;
  select count(*) into n from agent_tasks where agent_id=a.id and id<>t.id and status in ('running','pending','dispatching','submitted');
  if n>=least((a.config->>'maxActiveTasks')::integer,(t.snapshot->>'maxActiveTasks')::integer) then raise exception 'Active task limit reached'; end if;
+ if p_action='continue' then
+  insert into agent_task_continuations(task_id,turn_id,input,base_request_id,request_id)
+  values(t.id,p_turn,p_message,p_expected_request,t.request_id) returning * into receipt;
+ end if;
  update agent_tasks set input=t.input,request_id=t.request_id,execution_claimed_at=null,execution_request_id=null,status=case when kind='development' then 'dispatching' else 'running' end,details=case when kind='development' then 'Approved; verifying owner credentials before submission.' else 'Execution admitted; waiting for durable runtime status.' end,updated_at=now() where id=t.id returning * into t;
- return to_jsonb(t);
+ return to_jsonb(t)||case when p_action='continue' then jsonb_build_object('continuation_receipt',to_jsonb(receipt)) else '{}'::jsonb end;
 end $$;
 
 create function public.check_agent_chat(p_actor uuid,p_chat uuid,p_request text)
@@ -136,8 +161,8 @@ begin
  return to_jsonb(t);
 end $$;
 
-revoke all on function public.save_managed_agent(uuid,jsonb,boolean),public.create_agent_task(uuid,uuid,text,text,uuid),public.transition_agent_task(uuid,text,text),public.check_agent_chat(uuid,uuid,text) from public,anon,authenticated;
-grant execute on function public.save_managed_agent(uuid,jsonb,boolean),public.create_agent_task(uuid,uuid,text,text,uuid),public.transition_agent_task(uuid,text,text),public.check_agent_chat(uuid,uuid,text) to service_role;
+revoke all on function public.save_managed_agent(uuid,jsonb,boolean),public.create_agent_task(uuid,uuid,text,text,uuid),public.transition_agent_task(uuid,text,text,uuid,text),public.check_agent_chat(uuid,uuid,text) from public,anon,authenticated;
+grant execute on function public.save_managed_agent(uuid,jsonb,boolean),public.create_agent_task(uuid,uuid,text,text,uuid),public.transition_agent_task(uuid,text,text,uuid,text),public.check_agent_chat(uuid,uuid,text) to service_role;
 
 create function public.claim_agent_dispatch(p_id uuid) returns boolean
 language plpgsql security invoker set search_path=public as $$
