@@ -241,15 +241,19 @@ test("continuation supplies newly inspected pages instead of irrelevant earlier 
   const source = file(["", "", "", "", "", ""]);
   const first = await inspectPdf(ref, "find every transaction", source);
   assert.deepEqual(first.contextPages,[1,2,3,4]);assert.equal(first.pages.length,4);
+  const repeated = await inspectPdf(ref, "find every transaction", source, first);
+  assert.deepEqual(repeated.contextPages,[5,6]);assert.equal(repeated.pages.length,6);assert.equal(calls,2);
+  const repeatedContext = formatAttachmentContext([{...ref,pdfEvidence:repeated}],{userMessage:"find every transaction"});
+  assert.match(repeatedContext,/OBSERVATION-PAGE-5/);assert.doesNotMatch(repeatedContext,/OBSERVATION-PAGE-1/);
   const next = await inspectPdf(ref, "continue", source, first);
-  assert.deepEqual(next.contextPages,[5,6]);assert.equal(next.pages.length,6);assert.equal(calls,2);
+  assert.deepEqual(next.contextPages,[5,6]);assert.equal(next.pages.length,6);assert.equal(calls,3);
   const context = formatAttachmentContext([{...ref,pdfEvidence:next}],{userMessage:"continue"});
   assert.match(context,/OBSERVATION-PAGE-5/);assert.doesNotMatch(context,/OBSERVATION-PAGE-1/);
-  await inspectPdf(ref,"read page 5",source,next);assert.equal(calls,2);
+  await inspectPdf(ref,"read page 5",source,next);assert.equal(calls,3);
   truncated=true;
   const rejected=await inspectPdf(ref,"read page 6",source,first);
   assert.equal(rejected.state,"failure");assert.equal(rejected.pages.length,4);assert.equal(rejected.rawReports.length,1);
-  const invalid=await inspectPdf(ref,"read page 99",source,next);assert.equal(invalid.state,"failure");assert.equal(calls,3);
+  const invalid=await inspectPdf(ref,"read page 99",source,next);assert.equal(invalid.state,"failure");assert.equal(calls,4);
  } finally {globalThis.fetch=previousFetch;delete process.env.GOOGLE_API_KEY;}
 });
 

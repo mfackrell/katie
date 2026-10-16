@@ -14,6 +14,12 @@ function filenamePrefix(prefix: string): boolean {
   const clause = prefix.split(/[\n;!?]/).at(-1)!.trim().replace(/^[,\s([{]+/, "");
   if (!clause) return true;
   const request = clause.replace(/^(?:(?:please|can you|could you|would you|i need you to|i want you to)\s+)+/i, "");
+  // Page qualifiers between exact filenames are task syntax, not filename
+  // prefixes. Physical-page validity is checked after identity selection.
+  const pages = String.raw`(?:physical\s+)?pages?\s+\d+(?:\s*(?:[-–—]|to\b|through\b)\s*\d+)?(?:\s*(?:,\s*(?:and\b)?|and\b)\s*\d+(?:\s*(?:[-–—]|to\b|through\b)\s*\d+)?)*`;
+  const connector = String.raw`(?:with|and|versus|vs\.?|against)`;
+  if (new RegExp(String.raw`^(?:on\s+)?${pages}\s+${connector}(?:\s+(?:the|my|this|that|attached|uploaded|saved|original|pdf|file|document|named|called))*\s*$`, "i").test(request) ||
+      new RegExp(String.raw`^${connector}\s+${pages}\s+(?:of|in|from)\s*$`, "i").test(request)) return true;
   // Direct-object references may have task syntax before the full name, but
   // unknown filename modifiers (e.g. "quarterly") must not be discarded.
   if (/^(?:read|review|inspect|analy[sz]e|summari[sz]e|compare|open|use|check|examine|describe|audit|look at|look through|look over|process|and|with|versus|vs\.?|against|then)(?:\s+(?:only|also|both|the|my|this|that|attached|uploaded|saved|original|pdf|file|document|named|called))*\s*$/i.test(request)) return true;

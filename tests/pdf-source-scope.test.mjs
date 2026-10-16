@@ -199,3 +199,11 @@ test('late ambiguous page association reaches the actual generation persona befo
  assert.match(result.params.persona,/Ask the user this clarification/);
  assert.match(result.params.persona,/associate the page selectors with their sources/);
 });
+
+for(const message of ['Compare a.pdf page 2 with b.pdf page 5','Compare page 2 of a.pdf with page 5 of b.pdf']) test(`unquoted per-source page qualifiers reach native scope: ${message}`,async()=>{
+ const result=await run(message,[pdf('one','a.pdf'),pdf('two','b.pdf')]);
+ assert.equal(result.clarification,undefined);assert.deepEqual(result.inspected,['one','two']);
+ const {requestedPdfPages}=load('lib/uploads/pdf-inventory.ts');
+ assert.deepEqual(Array.from(requestedPdfPages(result.inspectedTasks[0],3)),[2]);
+ assert.deepEqual(Array.from(requestedPdfPages(result.inspectedTasks[1],6)),[5]);
+});
