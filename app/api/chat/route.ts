@@ -1872,6 +1872,7 @@ export async function POST(request: NextRequest) {
               pdf.nativeInspectionRequired=false;
             }
             for (const pdf of attachments.filter(file=>file.mimeType==="application/pdf" && file.pdfInventory)) {
+              if (attachmentDecision.clarification) continue;
               const source=pdfSources.get(pdf.fileId);
               if (!source) { pdf.preview+=" PDF evidence unavailable: no retained source identity."; continue; }
               try { pdf.pdfEvidence=await inspectSavedPdf(chatId,source,actorId,pdfPageTaskForSource(pdfSourceTask, pdf.fileName, attachments.filter(file => file.mimeType === "application/pdf").map(file => file.fileName)),async id=>(await getChatById(id))?.actorId===actorId); }

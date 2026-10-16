@@ -19,7 +19,7 @@ async function run(message,timelineActive=false){
  const fresh=[pdf('named','report.pdf'),pdf('other','other.pdf'),{fileId:'video',fileName:'clip.mp4',mimeType:'video/mp4'}];
  const decision=selectFreshPdfSources(message,fresh,timelineActive),calls=[];
  const actual=await vm.runInNewContext(compile(`(async()=>{${filter}\n${inspect}\nreturn attachments;})()`),{
-  requestId:'same-request',freshPdfSelection:decision,newAttachments:fresh,restored:{references:[]},timelineActive,message,
+  requestId:'same-request',attachmentDecision:{},freshPdfSelection:decision,newAttachments:fresh,restored:{references:[]},timelineActive,message,
   uniqueAttachmentReferences:files=>files,pdfSources:new Map(fresh.map(file=>[file.fileId,file])),
   actorId:'actor',chatId:'chat',pdfSourceTask:message,resolvePdfNames,...load('lib/uploads/pdf-inventory.ts'),getChatById:async()=>({actorId:'actor'}),
   inspectSavedPdf:async(_chat,source)=>{calls.push(source.fileId);return {state:'inspected',pages:[{physicalPage:1,observations:`PAGE-${source.fileId}`}]};},

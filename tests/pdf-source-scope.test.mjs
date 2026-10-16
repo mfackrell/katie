@@ -31,10 +31,10 @@ for(const message of ['Read annual report.pdf','Read “annual report.pdf”','R
  assert.equal(result.selections.length,1);assert.equal(result.selections[0].attachment.id,'long');
 });
 
-async function run(message,fresh,timelineActive=false,timelineClarification){
+async function run(message,fresh,timelineActive=false,timelineClarification,saved=[]){
  const inspected=[],inspectedTasks=[],retained=[],sources=new Map();
  const fixture={...scope,Error,...load('lib/uploads/pdf-inventory.ts'),newAttachments:fresh,message,pdfSourceTask:message,pdfTaskContext:null,timelineActive,timelineSelection:{clarification:timelineClarification},mediaMemory:null,savedVideoFollowUp:null,
-  catalog:[],attachmentHistory:[],restored:{references:[],unavailable:[],sourceIds:new Set()},timelineContext:'',
+  catalog:catalog(saved),attachmentHistory:[],restored:{references:[],unavailable:[],sourceIds:new Set()},timelineContext:'',
   ...load('lib/chat/video-attachment-dedup.ts'),...load('lib/chat/attachment-continuity.ts'),
   fingerprintChatRequest:load('lib/chat/request-idempotency.ts').fingerprintChatRequest,
   fingerprintTimelineSource:load('lib/chat/video-attachment-dedup.ts').fingerprintTimelineSource,
@@ -210,4 +210,11 @@ for(const message of ['Compare a.pdf page 2 with b.pdf page 5','Compare page 2 o
 
 for(const message of ['OCR report.pdf','Transcribe report.pdf','Scan report.pdf','Find report.pdf for errors']) test(`PDF content command is not discarded as a locator: ${message}`,async()=>{
  const result=await run(message,[pdf('one','report.pdf')]);assert.equal(result.clarification,undefined);assert.deepEqual(result.inspected,['one']);
+});
+
+test('unresolved saved identities stop fresh PDF inspection before any native call',async()=>{
+ const result=await run('Compare new.pdf with old.pdf',[pdf('new','new.pdf')],false,undefined,[pdf('one','old.pdf'),pdf('two','old.pdf')]);
+ assert.match(result.clarification,/Which PDF source/);assert.equal(result.inspected.length,0);
+ assert.ok(result.attachments.every(file=>file.providerRef===undefined));
+ assert.match(result.params.persona,/Ask the user this clarification/);
 });
