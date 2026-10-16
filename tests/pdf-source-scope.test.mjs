@@ -195,6 +195,7 @@ for(const message of ['Check report.pdf for errors','Examine report.pdf','Descri
 test('late ambiguous page association reaches the actual generation persona before any inspection',async()=>{
  const result=await run('Compare "a.pdf" page 2 with page 5 of "b.pdf"',[pdf('one','a.pdf'),pdf('two','b.pdf')]);
  assert.equal(result.inspected.length,0);assert.match(result.clarification,/Please specify/);
+ assert.ok(result.attachments.every(file=>file.providerRef===undefined));
  assert.match(result.params.persona,/Ask the user this clarification/);
  assert.match(result.params.persona,/associate the page selectors with their sources/);
 });

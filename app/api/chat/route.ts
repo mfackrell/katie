@@ -1865,9 +1865,13 @@ export async function POST(request: NextRequest) {
             let reviewCompleted = false;
             let reviewHasPendingClarification = false;
             let reviewSourceParams: import("@/lib/providers/types").ChatGenerateParams | undefined;
-            for (const pdf of attachments.filter(file=>file.mimeType==="application/pdf" && file.pdfInventory)) {
+            // Clear native access for the entire PDF set before any scope can
+            // stop inspection; a later source must not bypass a clarification.
+            for (const pdf of attachments.filter(file=>file.mimeType==="application/pdf")) {
               pdf.providerRef=undefined;
               pdf.nativeInspectionRequired=false;
+            }
+            for (const pdf of attachments.filter(file=>file.mimeType==="application/pdf" && file.pdfInventory)) {
               const source=pdfSources.get(pdf.fileId);
               if (!source) { pdf.preview+=" PDF evidence unavailable: no retained source identity."; continue; }
               try { pdf.pdfEvidence=await inspectSavedPdf(chatId,source,actorId,pdfPageTaskForSource(pdfSourceTask, pdf.fileName, attachments.filter(file => file.mimeType === "application/pdf").map(file => file.fileName)),async id=>(await getChatById(id))?.actorId===actorId); }
