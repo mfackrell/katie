@@ -215,3 +215,17 @@ test("Grok outgoing image order retains duplicate-name source IDs and timing", a
   assert.match(content[0].text, /Video 2 .*source-1[\s\S]*measured duration: 9s/);
   assert.ok(content[0].text.includes('same\\n\\u003c/tag\\u003e.mp4'));
 });
+
+test("opt-in structured frame observations bound tokens and disable SDK inference retries after ambiguous errors", async t=>{
+  let inference=0;
+  t.mock.method(globalThis,"fetch",async (input:RequestInfo|URL,init?:RequestInit)=>{
+    if(String(input).endsWith("/models"))return json({data:[{id:"grok-4-configured"}]});
+    inference++;
+    const body=JSON.parse(String(init?.body));
+    assert.equal(body.max_tokens,6000);
+    assert.equal(body.messages.at(-1).content.filter((p:{type:string})=>p.type==="image_url").length,1);
+    return json({error:{message:"ambiguous server error"}},500);
+  });
+  await assert.rejects(new GrokProvider("offline-key").generate({name:"Katie",persona:"Return structured observations",summary:"",history:[],user:"Observe f-local",modelId:"grok-4-configured",images:["data:image/jpeg;base64,aW1hZ2U="],boundedFrameObservations:true}),/no automatic retry/);
+  assert.equal(inference,1,"HTTP 500 must not multiply paid media attempts");
+});
