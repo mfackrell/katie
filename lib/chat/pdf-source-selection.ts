@@ -59,12 +59,12 @@ export function resolvePdfNames(message: string, files: NamedPdf[]): PdfNames {
 
 export type FreshPdfSelection = { fileIds: Set<string>; clarification?: string };
 /** Select once before restoration, classifiers, native analysis, and synthesis. */
-export function selectFreshPdfSources(message: string, fresh: FileReference[], timelineActive = false): FreshPdfSelection | null {
+export function selectFreshPdfSources(message: string, fresh: FileReference[], timelineActive = false, saved: NamedPdf[] = []): FreshPdfSelection | null {
   const pdfs = fresh.filter(file=>file.mimeType === "application/pdf");
   if (!pdfs.length) return null;
   const none = (clarification?:string):FreshPdfSelection => ({fileIds:new Set(),...(clarification?{clarification}:{})});
   if (!isPdfContentRequest(message)) return none();
-  const literal = resolvePdfNames(message,pdfs);
+  const literal = resolvePdfNames(message,[...pdfs,...saved]);
   if (literal.clarification) return none(literal.clarification);
   const scopeText = literal.scopeText ?? message;
   // A set qualified by another source ("documents in the video") is not
@@ -96,9 +96,12 @@ export function selectFreshPdfSources(message: string, fresh: FileReference[], t
 }
 
 /** Resolve exact saved identities before generic excerpt recall can hide a new page request. */
-export function selectPdfEvidenceSource(message: string, catalog: ConversationAttachment[], hits: EvidenceHit[], freshCount: number, now = new Date()): AttachmentDecision | null {
-  if (freshCount || !isPdfContentRequest(message) || /\b(repository|codebase|function|codec)\b/i.test(message)) return null;
-  const allPdfs = catalog.filter(file => file.mimeType === "application/pdf");
+export function selectPdfEvidenceSource(message: string, catalog: ConversationAttachment[], hits: EvidenceHit[], freshCount: number, now = new Date(), fresh: FileReference[] = []): AttachmentDecision | null {
+  if ((freshCount && !fresh.length) || !isPdfContentRequest(message) || /\b(repository|codebase|function|codec)\b/i.test(message)) return null;
+  const freshPdfs = fresh.filter(file => file.mimeType === "application/pdf");
+  const freshNames = new Set(freshPdfs.map(file=>file.fileName.toLowerCase()));
+  const allPdfs = [...new Map(catalog.filter(file => file.mimeType === "application/pdf" && !freshNames.has(file.fileName.toLowerCase()))
+    .map(file=>[`${file.chatId}/${file.id}`,file])).values()];
   const relevant = /\bpdf\b|\.pdf\b/i.test(message) || allPdfs.some(file => message.toLowerCase().includes(file.fileName.toLowerCase()) || hits.some(hit => hit.attachment_id === file.id && hit.source_chat_id === file.chatId));
   if (!relevant) return null;
   const dateScoped = hasUploadDateReference(message);
@@ -109,9 +112,12 @@ export function selectPdfEvidenceSource(message: string, catalog: ConversationAt
     const created = Date.parse(file.createdAt ?? "");
     return Number.isFinite(created) && (!date?.after || created >= Date.parse(date.after)) && (!date?.before || created < Date.parse(date.before));
   });
-  const literal = resolvePdfNames(message,allPdfs);
+  const literal = resolvePdfNames(message,[...allPdfs,...freshPdfs]);
   if (literal.clarification) return {method:"none",selections:[],clarification:literal.clarification};
-  const literalNames = literal.names;
+  const literalNames = new Set([...literal.names].filter(name=>!freshNames.has(name)));
+  // A fresh upload is not permission to restore arbitrary old PDFs. Explicit
+  // saved names still join the comparison alongside independently scoped uploads.
+  if (freshCount && !literalNames.size) return null;
   const named = pdfs.filter(file => literalNames.has(file.fileName.toLowerCase()));
   // A date constraint can disambiguate duplicate names, but cannot substitute
   // another filename or silently drop one of several explicitly named sources.
@@ -120,6 +126,7 @@ export function selectPdfEvidenceSource(message: string, catalog: ConversationAt
   let matched = literalNames.size ? named : pdfs.filter(file => hits.some(hit => hit.attachment_id === file.id && hit.source_chat_id === file.chatId));
   if (!matched.length && /\b(?:saved|uploaded|my|the|that|this)\s+pdf\b/i.test(message)) matched = pdfs;
   if (!matched.length) return dateScoped ? {method:"none",selections:[],clarification:"No saved PDF matches that upload-date range. Select the intended source or give a different date range."} : null;
-  if (matched.length > 1) return { method: "none", selections: [], clarification: `Which PDF source do you mean? ${matched.slice(0, 5).map(file => `${file.fileName} (chat ${file.chatId}, attachment ${file.id})`).join("; ")}` };
-  return { method: "none", selections: [{ attachment: matched[0], mode: "source" }] };
+  const duplicateIdentity = matched.some(file=>matched.some(other=>other!==file && other.fileName.toLowerCase()===file.fileName.toLowerCase()));
+  if (matched.length > 1 && (!literalNames.size || duplicateIdentity)) return { method: "none", selections: [], clarification: `Which PDF source do you mean? ${matched.slice(0, 5).map(file => `${file.fileName} (chat ${file.chatId}, attachment ${file.id})`).join("; ")}` };
+  return { method: "none", selections: matched.map(attachment=>({ attachment, mode: "source" })) };
 }

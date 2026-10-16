@@ -700,11 +700,11 @@ export async function POST(request: NextRequest) {
         return savedOriginalExists(hit.source_chat_id,hit.attachment_id,actorId);
       },
     });
-    const freshPdfSelection = selectFreshPdfSources(pdfSourceTask,newAttachments,timelineActive);
-    let pdfMemoryDecision: AttachmentDecision | null = freshPdfSelection
+    const freshPdfSelection = selectFreshPdfSources(pdfSourceTask,newAttachments,timelineActive,catalog);
+    let pdfMemoryDecision: AttachmentDecision | null = freshPdfSelection?.clarification
       ? {method:"none",selections:[],...((freshPdfSelection.clarification || (timelineActive && timelineSelection.clarification)) ? {clarification:freshPdfSelection.clarification || timelineSelection.clarification} : {})}
       : !timelineActive && !savedVideoFollowUp
-      ? selectPdfEvidenceSource(pdfSourceTask, catalog, mediaMemory?.hits ?? [], newAttachments.length) : null;
+      ? selectPdfEvidenceSource(pdfSourceTask, catalog, mediaMemory?.hits ?? [], newAttachments.length, undefined, newAttachments) : null;
     if (!pdfMemoryDecision && pdfTaskContext && !newAttachments.length && !timelineActive) {
       const anchor = [...attachmentHistory].reverse().find(turn => turn.role === "user" && turn.attachments?.length);
       const sources = catalog.filter(file => file.mimeType === "application/pdf" && (pdfTaskContext.includes(anchor?.content ?? "\u0000") || /\b(pdf|pages?\s+\d|scan\w*|transaction\w*|statement|chart|table)\b/i.test(pdfTaskContext)) && anchor?.attachments?.some(saved => saved.id === file.id && (!saved.chatId || saved.chatId === file.chatId)));
@@ -769,7 +769,7 @@ export async function POST(request: NextRequest) {
     // Preserve all inputs for idempotency and storage, but only selected PDFs
     // may supply evidence to classifiers, drafting, native inspection or review.
     const requestAttachments = uniqueAttachmentReferences([...newAttachments, ...restored.references]).filter(file => !timelineActive || !file.mimeType.startsWith("video/"));
-    const attachments = requestAttachments.filter(file => !freshPdfSelection || file.mimeType !== "application/pdf" || freshPdfSelection.fileIds.has(file.fileId)).map(file =>
+    const attachments = requestAttachments.filter(file => !freshPdfSelection || file.mimeType !== "application/pdf" || !newAttachments.some(fresh=>fresh.fileId===file.fileId) || freshPdfSelection.fileIds.has(file.fileId)).map(file =>
       file.mimeType === "application/pdf" && /\b(signature|signed|handwrit\w*|layout|colou?r|font|stamp|scan|visual|diagram|chart|figure|formatting|photo|picture|annotation)\b/i.test(message)
         ? { ...file, nativeInspectionRequired: true } : file
     );
