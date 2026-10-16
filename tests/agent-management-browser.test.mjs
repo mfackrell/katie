@@ -13,7 +13,7 @@ test('Agents UI: create/edit/archive, saved approval, durable pending status, re
  try {
   const page=await browser.newPage({viewport:{width:390,height:844}});
   const errors=[];page.on('pageerror',e=>errors.push(e.message));
-  const agents=[],tasks=[];let executionCount=0,fail=false;
+  const agents=[],tasks=[];let executionCount=0,fail=false,loseContinuation=true;const turns=new Map(),submissions=[];
   const code=ts.transpileModule(readFileSync('app/agents/page.tsx','utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022,jsx:ts.JsxEmit.ReactJSX,esModuleInterop:true}}).outputText;
   const scripts=[readFileSync('node_modules/react/umd/react.production.min.js','utf8'),readFileSync('node_modules/react-dom/umd/react-dom.production.min.js','utf8')];
   const html=`<!doctype html><html><body><div id="root"></div><script>${scripts.join('\n')}</script><script>
@@ -40,7 +40,15 @@ test('Agents UI: create/edit/archive, saved approval, durable pending status, re
      const agent=agents.find(a=>a.id===body.agentId);
      const task={id:body.id,agent_id:agent.id,actor_id:agent.actor_id,chat_id:randomUUID(),snapshot:structuredClone(agent.config),definition_version:agent.version,kind:body.kind,initial_input:body.input,input:body.input,request_id:'agent:'+body.id,status:'draft',repository_full_name:null,external:{}};tasks.push(task);return reply({task});
     }
-    const task=tasks.find(t=>t.id===body.id);if(body.action==='start')task.status='running';return reply({task});
+    const task=tasks.find(t=>t.id===body.id);
+    if(body.action==='continue'){
+     submissions.push(body);
+     let receipt=turns.get(body.turnId);
+     if(!receipt){assert.equal(body.expectedRequestId,task.request_id);receipt={turn_id:body.turnId,request_id:'agent:'+randomUUID(),input:body.message,base_request_id:body.expectedRequestId};turns.set(body.turnId,receipt);Object.assign(task,{request_id:receipt.request_id,input:body.message,status:'running'});}
+     if(loseContinuation){loseContinuation=false;return route.abort('failed');}
+     return reply({task,continuation:receipt});
+    }
+    if(body.action==='start')task.status='running';return reply({task});
    }
    if(url.pathname==='/api/chat'){executionCount++;tasks[0].status='pending';tasks[0].output='Saved reviewed draft';tasks[0].details='Independent review needs clarification';return route.fulfill({contentType:'application/x-ndjson',body:'{"type":"content","text":"draft"}\n'});}
    return reply({error:'Unknown fixture route'},404);
@@ -63,6 +71,17 @@ test('Agents UI: create/edit/archive, saved approval, durable pending status, re
   await page.getByRole('heading',{name:'Saved task · pending'}).waitFor();assert.equal(executionCount,1);
   await page.reload();await page.getByText('Saved reviewed draft',{exact:true}).waitFor();
   assert.equal(executionCount,1);assert.equal(await page.getByRole('button',{name:'Start saved task'}).count(),0);
+  await page.getByLabel('Continue in this task’s conversation').fill('Include the requested clarification');
+  await page.getByRole('button',{name:'Send continuation'}).click();
+  await page.getByRole('button',{name:'Retry saved continuation'}).waitFor();
+  await page.reload();await page.getByRole('button',{name:'Retry saved continuation'}).waitFor();
+  assert.equal(executionCount,1);assert.equal(turns.size,1);
+  await page.getByRole('button',{name:'Retry saved continuation'}).click();
+  await page.getByRole('heading',{name:'Saved task · pending'}).waitFor();
+  assert.equal(executionCount,2);assert.equal(turns.size,1);assert.equal(submissions.length,2);
+  assert.deepEqual(submissions[0],submissions[1]);
+  await page.reload();await page.getByText('Saved reviewed draft',{exact:true}).waitFor();assert.equal(executionCount,2);
+  assert.equal(await page.getByRole('button',{name:'Retry saved continuation'}).count(),0);
   await page.getByRole('button',{name:'Archive Writer'}).click();await page.getByText('Writer (archived)',{exact:true}).waitFor();
   fail=true;await page.getByRole('button',{name:'Refresh status'}).click();await page.getByRole('alert').waitFor();assert.match(await page.getByRole('alert').innerText(),/unavailable/);
   assert.deepEqual(errors,[]);
