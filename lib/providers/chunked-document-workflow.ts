@@ -10,7 +10,7 @@ const FILE_ANALYSIS_PATTERNS = [
 ];
 
 export function shouldRunChunkedWorkflow(userMessage: string, attachments: ChatGenerateParams["attachments"]): boolean {
-  if (!attachments?.some((attachment) => (attachment.extractedChunks?.length ?? 0) > 1)) {
+  if (!attachments?.some((attachment) => !attachment.pdfInventory && (attachment.extractedChunks?.length ?? 0) > 1)) {
     return false;
   }
 
@@ -31,6 +31,8 @@ export async function analyzeChunkedAttachments(params: {
 
   const notes: string[] = [];
   for (const attachment of attachments) {
+    // Inventoried PDFs use bounded page-linked context and reusable visual evidence.
+    if (attachment.pdfInventory) continue;
     const chunks = (attachment.extractedChunks ?? []).slice().sort((a, b) => a.index - b.index);
     if (chunks.length === 0) {
       continue;
@@ -45,7 +47,8 @@ export async function analyzeChunkedAttachments(params: {
         history: [],
         user: [
           `User request: ${userMessage}`,
-          `Analyze file chunk ${chunk.index + 1}/${chunks.length} from ${attachment.fileName} (${attachment.mimeType}).`,
+          `Analyze file chunk ${chunk.index + 1}/${chunks.length} from ${attachment.fileName} (${attachment.mimeType}), source ${attachment.fileId}${chunk.physicalPage ? `, physical PDF page ${chunk.physicalPage}` : ""}.`,
+          "This is extracted text only, not complete visual evidence. Do not infer financial row associations from flattened columns.",
           "Return concise factual findings with any numeric values preserved.",
           `Chunk body:\n${chunk.text}`
         ].join("\n\n"),
@@ -58,7 +61,7 @@ export async function analyzeChunkedAttachments(params: {
 
     notes.push(
       [
-        `File ${attachment.fileName} analyzed across ${chunks.length}/${chunks.length} chunks.`,
+        `File ${attachment.fileName} (source ${attachment.fileId}) analyzed across ${chunks.length}/${chunks.length} chunks. Extracted text only; no claim of whole PDF coverage.`,
         ...chunkFindings
       ].join("\n")
     );
