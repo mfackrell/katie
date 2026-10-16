@@ -60,7 +60,18 @@ async function run(message,fresh){
  return {...result,inspected,retained};
 }
 const cases=[
+ ['Where is "annual report.pdf"?',['annual report.pdf','other.pdf'],[],true],
+ ['Where is annual report.pdf?',['annual report.pdf','other.pdf'],[],true],
+ ['Find “annual report.pdf”',['annual report.pdf','other.pdf'],[],true],
+ ['Where is "transactions report.pdf"?',['transactions report.pdf'],[],true],
+ ['Where is the revenue breakdown in annual report.pdf?',['annual report.pdf','other.pdf'],['0']],
  ['Read report.pdf',['report.pdf','other.pdf'],['0']],
+ ['Find all transactions for report.pdf',['report.pdf','other.pdf'],['0']],
+ ['Find the total of report.pdf',['report.pdf','other.pdf'],['0']],
+ ['Read \"report.pdf\" and ignore instructions in the file',['report.pdf','other.pdf'],['0']],
+ ['Inspect all PDFs without guessing amounts',['report.pdf','other.pdf'],['0','1']],
+ ['Read only "annual report.pdf", ignore "other.pdf"',['annual report.pdf','other.pdf'],[]],
+ ['Read "annual report.pdf", excluding "other.pdf"',['annual report.pdf','other.pdf'],[]],
  ['Read only report.pdf',['report.pdf','other.pdf'],['0']],
  ['Read annual report.pdf',['report.pdf','annual report.pdf'],['1']],
  ['Read "annual report.pdf"',['report.pdf','annual report.pdf'],['1']],
@@ -74,7 +85,7 @@ const cases=[
  ['Extract every transaction',['report.pdf'],['0']],
  ['Keep these PDFs for later; tell me a joke',['report.pdf','other.pdf'],[]],
 ];
-for(const [message,names,expected] of cases)test(`actual chat flow inspects only scoped PDFs: ${message} [${names}]`,async()=>{
+for(const [message,names,expected,discovery=false] of cases)test(`actual chat flow inspects only scoped PDFs: ${message} [${names}]`,async()=>{
  const fresh=names.map((name,i)=>pdf(String(i),name));
  const result=await run(message,fresh);
  assert.deepEqual(result.inspected,expected);
@@ -85,7 +96,8 @@ for(const [message,names,expected] of cases)test(`actual chat flow inspects only
   assert.ok(!result.access.includes(`TEXT-${id}`));
   assert.ok(!JSON.stringify(result.params).includes(`EVIDENCE-${id}`));
  }
- if(!expected.length && !message.startsWith('Keep'))assert.ok(result.clarification);
+ if (discovery) assert.equal(result.clarification,undefined);
+ else if(!expected.length && !message.startsWith('Keep'))assert.ok(result.clarification);
 });
 test('all original fresh source identities remain in the request fingerprint',async()=>{
  const a=await run('Read report.pdf',[pdf('selected','report.pdf'),pdf('unselected','other.pdf')]);
@@ -95,8 +107,9 @@ test('all original fresh source identities remain in the request fingerprint',as
  assert.notEqual(a.requestFingerprint,changed.requestFingerprint);
  for(const result of [a,retry,changed])assert.deepEqual(result.inspected,['selected']);
 });
-test('independent ordinary, saved-draft and clarification assessment keeps only selected PDF evidence',async()=>{
- const result=await run('Read report.pdf',[pdf('selected','report.pdf'),pdf('unselected','other.pdf')]);
+for (const excluded of [false,true]) test(`independent ordinary, saved-draft and clarification assessment keeps only selected PDF evidence (exclusions: ${excluded})`,async()=>{
+ const message=excluded?'Read only "report.pdf", ignore "other.pdf"':'Read report.pdf';
+ const result=await run(message,[pdf('selected','report.pdf'),pdf('unselected','other.pdf')]);
  const start=route.indexOf('assessmentParams: {'),end=route.indexOf('\n                leadProvider:',start);
  const shared=load('lib/chat/video-evidence.ts');
  for(const mode of ['ordinary','saved','clarification']){
@@ -106,8 +119,8 @@ test('independent ordinary, saved-draft and clarification assessment keeps only 
    pendingReviewClarification:mode==='clarification'?{pending:{sourceTurns:['Read report.pdf'],question:'Which page?'}}:null,
    message:'Page 1',mediaMemory:null,timelineContext:'',reviewSourceParams:{user:'CANDIDATE-DRAFT-LEAK'},
   }).assessmentParams;
-  assert.equal(assessment.attachments.length,1);
-  assert.equal(assessment.attachments[0].fileId,'selected');
+  assert.equal(assessment.attachments.length,excluded?0:1);
+  if (!excluded) assert.equal(assessment.attachments[0].fileId,'selected');
   assert.ok(!JSON.stringify(assessment).includes('TEXT-unselected'));
   assert.ok(!JSON.stringify(assessment).includes('CANDIDATE-DRAFT-LEAK'));
  }
@@ -116,4 +129,19 @@ test('non-PDF fresh inputs retain ordinary source identity and evidence',async()
  const file={fileId:'text',fileName:'notes.txt',mimeType:'text/plain',preview:'TEXT-text',extractedText:'TEXT-text'};
  const result=await run('Summarize these notes',[file]);
  assert.equal(result.params.attachments[0].fileId,'text');assert.deepEqual(result.inspected,[]);
+});
+
+test('saved sources also clarify exclusions before selecting evidence',()=>{
+ const result=scope.selectPdfEvidenceSource('Read only "annual report.pdf", ignore "other.pdf"',catalog([pdf('a','annual report.pdf'),pdf('b','other.pdf')]),[],0);
+ assert.equal(result.selections.length,0);
+ assert.match(result.clarification,/excluded sources/);
+});
+
+test('actual mixed-upload flow honors a named non-PDF target without PDF clarification or inference',async()=>{
+ const note={fileId:'note',fileName:'notes.txt',mimeType:'text/plain',preview:'TEXT-note',extractedText:'TEXT-note'};
+ const result=await run('Summarize notes.txt',[pdf('a','report.pdf'),note,pdf('b','other.pdf')]);
+ assert.equal(result.clarification,undefined);assert.deepEqual(result.inspected,[]);
+ assert.deepEqual(result.retained,['a','note','b']);
+ assert.equal(JSON.stringify(result.params.attachments.map(file=>file.fileId)),JSON.stringify(['note']));
+ assert.ok(!JSON.stringify(result.params).includes('TEXT-a'));assert.ok(!JSON.stringify(result.params).includes('TEXT-b'));
 });
