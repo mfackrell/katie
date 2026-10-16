@@ -15,9 +15,11 @@ test('Agents UI: create/edit/archive, saved approval, durable pending status, re
   const errors=[];page.on('pageerror',e=>errors.push(e.message));
   const agents=[],tasks=[];let executionCount=0,fail=false,loseContinuation=true;const turns=new Map(),submissions=[];
   const code=ts.transpileModule(readFileSync('app/agents/page.tsx','utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022,jsx:ts.JsxEmit.ReactJSX,esModuleInterop:true}}).outputText;
+  const missionCode=ts.transpileModule(readFileSync('components/missions-panel.tsx','utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022,jsx:ts.JsxEmit.ReactJSX,esModuleInterop:true}}).outputText;
   const scripts=[readFileSync('node_modules/react/umd/react.production.min.js','utf8'),readFileSync('node_modules/react-dom/umd/react-dom.production.min.js','utf8')];
   const html=`<!doctype html><html><body><div id="root"></div><script>${scripts.join('\n')}</script><script>
-  const exports={}; const require=name=>name==='react'?React:name==='react/jsx-runtime'?{Fragment:React.Fragment,jsx:(type,p,key)=>React.createElement(type,{...p,key}),jsxs:(type,p,key)=>React.createElement(type,{...p,key})}:name==='next/link'?{__esModule:true,default:p=>React.createElement('a',p)}:{};
+  const exports={},missionExports={}; const require=name=>name==='react'?React:name==='react/jsx-runtime'?{Fragment:React.Fragment,jsx:(type,p,key)=>React.createElement(type,{...p,key}),jsxs:(type,p,key)=>React.createElement(type,{...p,key})}:name==='next/link'?{__esModule:true,default:p=>React.createElement('a',p)}:name==='@/components/missions-panel'?missionExports:name==='react-markdown'?{__esModule:true,default:p=>React.createElement('div',null,p.children)}:name==='remark-gfm'?{__esModule:true,default:()=>{}}:{};
+  (function(exports){${missionCode}})(missionExports);
   ${code}
   ReactDOM.createRoot(document.getElementById('root')).render(React.createElement(exports.default));</script></body></html>`;
   await page.route('http://localhost/**',async route=>{
@@ -33,6 +35,7 @@ test('Agents UI: create/edit/archive, saved approval, durable pending status, re
      return reply({agent:a});
     }return reply({agents});
    }
+   if(url.pathname==='/api/missions')return reply({missions:[]});
    if(url.pathname==='/api/admin/repos')return reply({repos:[]});
    if(url.pathname==='/api/agent-tasks'){
     if(request.method()==='GET')return reply(url.searchParams.has('id')?{task:tasks.find(t=>t.id===url.searchParams.get('id'))}:{tasks});
