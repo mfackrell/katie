@@ -11,7 +11,7 @@ const create = z.object({ action: z.literal("create"), id: z.string().uuid(), ag
 const action = z.discriminatedUnion("action", [
   z.object({ action: z.literal("start"), id: z.string().uuid() }).strict(),
   z.object({ action: z.literal("refresh"), id: z.string().uuid() }).strict(),
-  z.object({ action: z.literal("continue"), id: z.string().uuid(), message: z.string().trim().min(1).max(16000) }).strict(),
+  z.object({ action: z.literal("continue"), id: z.string().uuid(), turnId: z.string().uuid(), expectedRequestId: z.string().min(1).max(128), message: z.string().trim().min(1).max(16000) }).strict(),
 ]);
 export async function GET(request: NextRequest) {
   try {
@@ -40,8 +40,13 @@ export async function POST(request: NextRequest) {
     const body = action.parse(raw);
     const saved = await readTask(body.id);
     if (body.action === "refresh") return NextResponse.json({ task: saved.kind === "development" ? await reconcileDevelopment(saved) : await refreshTask(saved.id) });
-    const task = await agentRpc<AgentTask>("transition_agent_task", { p_id: body.id, p_action: body.action, p_message: body.action === "continue" ? body.message : null });
-    // Start is the explicit approval of the displayed immutable development snapshot.
-    return NextResponse.json({ task: task.kind === "development" ? await dispatchDevelopment(task) : task });
+    const transition = await agentRpc<AgentTask & { continuation_receipt?: { turn_id: string; request_id: string; input: string; base_request_id: string } }>("transition_agent_task", {
+      p_id: body.id, p_action: body.action, p_message: body.action === "continue" ? body.message : null,
+      p_turn: body.action === "continue" ? body.turnId : null,
+      p_expected_request: body.action === "continue" ? body.expectedRequestId : null,
+    });
+    const { continuation_receipt: continuation, ...task } = transition;
+    // Start approves the saved development snapshot; continuation receipts never dispatch development work.
+    return NextResponse.json({ task: task.kind === "development" ? await dispatchDevelopment(task) : task, ...(continuation ? { continuation } : {}) });
   } catch (error) { return NextResponse.json({ error: error instanceof z.ZodError ? "Invalid task request" : error instanceof Error ? error.message.slice(0, 400) : "Task operation failed" }, { status: 409 }); }
 }
