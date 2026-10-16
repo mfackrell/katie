@@ -48,7 +48,17 @@ export function inventoryPdf(pages: Array<{
             return { physicalPage: index + 1, text, textCoverage: text.trim() ? "present" : "none", visualCoverage: "not-inspected", runs: keptRuns, lines, layoutTruncated: runs.length > runLimit || rawLines.length > lineLimit };
         }) };
 }
-export function requestedPdfPages(message: string, count: number): number[] {
+/** Source names are data, including any page-like words inside them. */
+export function maskPdfSourceNames(message: string, sourceNames: string[]): string {
+    for (const name of [...new Set(sourceNames)].sort((a, b) => b.length - a.length)) {
+        if (!name) continue;
+        const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        message = message.replace(new RegExp(escaped, "gi"), "PDF source");
+    }
+    return message;
+}
+export function requestedPdfPages(message: string, count: number, sourceNames: string[] = []): number[] {
+    message = maskPdfSourceNames(message, sourceNames);
     const invalid = () => new Error("Please use physical PDF page numbers, for example pages 2-4, within the source inventory.");
     if (!Number.isSafeInteger(count) || count < 1 || count > 10000) throw invalid();
     const explicit: number[] = [];
@@ -103,5 +113,6 @@ export function isPdfContentRequest(message: string): boolean {
   if (/\b(?:do not|don't|without)\s+(?:read|analy[sz]e|inspect|process)\b/i.test(message)) return false;
   if (/\b(?:tell me a joke|write (?:me )?a (?:joke|poem)|weather|codebase|repository)\b/i.test(message) && !explicit) return false;
   return explicit || /^\s*(?:continue|go on|proceed|next(?: pages?)?)\s*[.!?]?\s*$/i.test(message)
-    || /\b(?:what|where|which|how|why|when|is|are|does|did|list|identify|find)\b/i.test(message);
+    || (/\b(?:what|where|which|how|why|when|is|are|does|did|list|identify|find)\b/i.test(message)
+      && /\b(?:pdfs?|documents?|attachments?|files?|pages?|statements?|reports?|tables?|charts?|figures?|scans?|this|these|those)\b|\.pdf\b|__PDF_SOURCE__/i.test(message));
 }

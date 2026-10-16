@@ -32,7 +32,7 @@ for(const message of ['Read annual report.pdf','Read “annual report.pdf”','R
 });
 
 async function run(message,fresh,timelineActive=false,timelineClarification){
- const inspected=[],retained=[],sources=new Map();
+ const inspected=[],inspectedTasks=[],retained=[],sources=new Map();
  const fixture={...scope,newAttachments:fresh,message,pdfSourceTask:message,pdfTaskContext:null,timelineActive,timelineSelection:{clarification:timelineClarification},mediaMemory:null,savedVideoFollowUp:null,
   catalog:[],attachmentHistory:[],restored:{references:[],unavailable:[],sourceIds:new Set()},timelineContext:'',
   ...load('lib/chat/video-attachment-dedup.ts'),...load('lib/chat/attachment-continuity.ts'),
@@ -45,7 +45,7 @@ async function run(message,fresh,timelineActive=false,timelineClarification){
   fileReferences:fresh,legacyImageSources:new Map(),pdfSources:sources,persistedVideoSourceByFileId:new Map(),isVideoAttachment:file=>file.mimeType.startsWith('video/'),
   describeAttachmentEvidence:async file=>({observedSummary:`TEXT-${file.fileId}`,summaryModel:'offline',summaryCoverage:'partial'}),
   persistConversationAttachment:async(_chat,file,_token,{description})=>{retained.push(file.fileId);return {...file,id:'saved-'+file.fileId,...description};},
-  inspectSavedPdf:async(_chat,source)=>{inspected.push(source.fileId);return {version:'test',pages:[{physicalPage:1,observations:`EVIDENCE-${source.fileId}`} ]};},
+  inspectSavedPdf:async(_chat,source,_actor,task)=>{inspected.push(source.fileId);inspectedTasks.push(task);return {version:'test',pages:[{physicalPage:1,observations:`EVIDENCE-${source.fileId}`} ]};},
   getChatById:async()=>({actorId:'actor'}),
   name:'Katie',personaForGeneration:'Base',resumptionContext:'',responsePolicy:{generationInstruction:null},taskProgressContext:'',storedWebsite:{context:'',fresh:false},creativeNarrativeRequest:false,summary:'',historyForProvider:[],messageForGeneration:message,resolvedRequestIntent:'analysis',resolvedRoutingIntentForReroute:null,
   saveProviderSystemAudit:async()=>{},requestId:'same',console,
@@ -60,7 +60,7 @@ async function run(message,fresh,timelineActive=false,timelineClarification){
  ${part('            for (const pdf of attachments.filter', '            if (!verifyingSavedDraft && shouldRunChunkedWorkflow(')}
  return {params:createParams('offline'),attachments,requestFingerprint,clarification:attachmentDecision.clarification,access:selectionContext()};
 })()`),fixture);
- return {...result,inspected,retained};
+ return {...result,inspected,inspectedTasks,retained};
 }
 const cases=[
  ['Where is "annual report.pdf"?',['annual report.pdf','other.pdf'],[],true],
@@ -169,4 +169,14 @@ test('fresh PDF filtering preserves timeline source clarification and explicit m
  assert.equal(clarified.clarification,'Which recording?');assert.deepEqual(clarified.inspected,[]);
  const mixed=await run('Compare report.pdf with the last 30 seconds of the video',[pdf('a','report.pdf'),video],true);
  assert.deepEqual(mixed.inspected,['a']);assert.equal(mixed.params.attachments[0].fileId,'a');
+});
+
+for (const message of ['What time is it?', 'How are you?', 'Why is the sky blue?']) test(`unrelated question performs no PDF inspection: ${message}`, async()=>{
+ const result=await run(message,[pdf('one','report.pdf')]);
+ assert.equal(result.inspected.length,0);assert.equal(result.attachments.length,0);
+});
+test('native inspection receives source-masked page scope for every selected filename',async()=>{
+ const result=await run('Compare "report page 2.pdf" and "other page 9.pdf" on page 1',[pdf('one','report page 2.pdf'),pdf('two','other page 9.pdf')]);
+ assert.deepEqual(result.inspected,['one','two']);
+ for (const task of result.inspectedTasks) {assert.ok(!task.includes('page 2'));assert.ok(!task.includes('page 9'));assert.ok(task.includes('page 1'));}
 });

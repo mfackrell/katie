@@ -52,11 +52,11 @@ function selectRelevantChunks(
 
 type PdfPageScope = { requested: number[]; contextPages: number[] };
 
-function pdfPageScope(attachment: FileReference, message: string): PdfPageScope | null {
+function pdfPageScope(attachment: FileReference, message: string, sourceNames: string[]): PdfPageScope | null {
   const inventory = attachment.mimeType === "application/pdf" ? attachment.pdfInventory : undefined;
   if (!inventory) return null;
   let requested: number[];
-  try { requested = requestedPdfPages(message, inventory.pageCount); }
+  try { requested = requestedPdfPages(message, inventory.pageCount, sourceNames); }
   catch { return { requested: [], contextPages: [] }; }
   const allowed = new Set(requested);
   const inventoried = new Set(inventory.pages.map(page => page.physicalPage));
@@ -116,7 +116,7 @@ export function formatAttachmentContext(
         .join(", ");
 
       const metadataLine = providerReferenceSummary ? ` (${providerReferenceSummary})` : "";
-      const pageScope = pdfPageScope(attachment, userMessage);
+      const pageScope = pdfPageScope(attachment, userMessage, attachments.filter(file => file.mimeType === "application/pdf").map(file => file.fileName));
       const mediaSummary = `${pdfContext(attachment, pageScope)}kind=${attachmentKind}; mime=${attachment.mimeType}; fileId=${attachment.fileId}`;
 
       if (attachmentKind === "image") {

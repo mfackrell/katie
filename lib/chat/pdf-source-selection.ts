@@ -100,7 +100,7 @@ export function selectPdfEvidenceSource(message: string, catalog: ConversationAt
   if ((freshCount && !fresh.length) || !isPdfContentRequest(message) || /\b(repository|codebase|function|codec)\b/i.test(message)) return null;
   const freshPdfs = fresh.filter(file => file.mimeType === "application/pdf");
   const freshNames = new Set(freshPdfs.map(file=>file.fileName.toLowerCase()));
-  const allPdfs = [...new Map(catalog.filter(file => file.mimeType === "application/pdf" && !freshNames.has(file.fileName.toLowerCase()))
+  const allPdfs = [...new Map(catalog.filter(file => file.mimeType === "application/pdf")
     .map(file=>[`${file.chatId}/${file.id}`,file])).values()];
   const relevant = /\bpdf\b|\.pdf\b/i.test(message) || allPdfs.some(file => message.toLowerCase().includes(file.fileName.toLowerCase()) || hits.some(hit => hit.attachment_id === file.id && hit.source_chat_id === file.chatId));
   if (!relevant) return null;
@@ -117,7 +117,8 @@ export function selectPdfEvidenceSource(message: string, catalog: ConversationAt
   const literalNames = new Set([...literal.names].filter(name=>!freshNames.has(name)));
   // A fresh upload is not permission to restore arbitrary old PDFs. Explicit
   // saved names still join the comparison alongside independently scoped uploads.
-  if (freshCount && !literalNames.size) return null;
+  const requestsSavedSource = /\b(?:saved|previous|earlier|older|historical)\s+(?:pdf|file|document)\b/i.test(message) || dateScoped;
+  if (freshCount && !literalNames.size && !requestsSavedSource) return null;
   const named = pdfs.filter(file => literalNames.has(file.fileName.toLowerCase()));
   // A date constraint can disambiguate duplicate names, but cannot substitute
   // another filename or silently drop one of several explicitly named sources.

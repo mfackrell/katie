@@ -89,3 +89,11 @@ for(const message of ['Which pages mention revenue?','Summarize the pages about 
  assert.match(out,/CHUNK_PAGE_1/);assert.match(out,/LAYOUT_PAGE_1/);
  assert.doesNotMatch(out,/GLOBAL_(?:PREVIEW|FLAT|REPORT)_PAGE/);
 });
+
+test('source filenames stay data in extracted, layout and visual page scope',()=>{
+ const a={...fixture(1,[1]),fileName:'report page 2.pdf'};
+ assert.match(rendered(a,'Read report page 2.pdf'),/CHUNK_PAGE_1/);
+ const b={...fixture(3,[3]),fileId:'other',fileName:'other page 9.pdf'};
+ const output=formatAttachmentContext([{...a,...fixture(3,[3]),fileName:a.fileName},b],{userMessage:'Compare "report page 2.pdf" and "other page 9.pdf" on page 3'});
+ assert.match(output,/CHUNK_PAGE_3/);onlyPages(output,[3],3);
+});

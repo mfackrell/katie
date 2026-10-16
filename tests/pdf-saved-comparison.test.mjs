@@ -65,3 +65,12 @@ test('non-PDF requests preserve the ordinary stored-source decision',async()=>{
  const result=await run('Read saved-chart.png',[],[chart],['chart']);
  assert.equal(result.selectorCalls,1);assert.deepEqual(Array.from(result.attachments,f=>f.fileId),['chart']);
 });
+
+test('a same-name saved source remains eligible for an explicitly dated comparison',()=>{
+ const fresh=[pdf('new','report.pdf')],saved=[{...pdf('old','report.pdf'),createdAt:'2026-10-15T12:00:00Z'}];
+ const message='Compare report.pdf with the saved PDF from yesterday';
+ const decision=scope.selectPdfEvidenceSource(message,saved,[],1,new Date('2026-10-16T12:00:00Z'),fresh);
+ assert.equal(decision.clarification,undefined);assert.equal(decision.selections[0].attachment.id,'old');
+ const ambiguous=scope.selectPdfEvidenceSource('Compare report.pdf with the saved PDF', [...saved,{...saved[0],id:'second',chatId:'second-chat'}],[],1,new Date('2026-10-16T12:00:00Z'),fresh);
+ assert.ok(ambiguous.clarification);assert.equal(ambiguous.selections.length,0);
+});
