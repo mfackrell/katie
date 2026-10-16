@@ -104,16 +104,22 @@ export function selectPdfEvidenceSource(message: string, catalog: ConversationAt
     .map(file=>[`${file.chatId}/${file.id}`,file])).values()];
   const relevant = /\bpdf\b|\.pdf\b/i.test(message) || allPdfs.some(file => message.toLowerCase().includes(file.fileName.toLowerCase()) || hits.some(hit => hit.attachment_id === file.id && hit.source_chat_id === file.chatId));
   if (!relevant) return null;
-  const dateScoped = hasUploadDateReference(message);
-  const date = dateScoped ? prepareMemoryQuery(message, now) : null;
+  const literal = resolvePdfNames(message,[...allPdfs,...freshPdfs]);
+  if (literal.clarification) return {method:"none",selections:[],clarification:literal.clarification};
+  // Dates inside the document question do not qualify its upload identity.
+  // Parse only a date clause attached to a source or an upload verb.
+  const scopeText = literal.scopeText ?? message;
+  const dateAnchor = /(?:__PDF_SOURCE__|\b(?:pdf|file|document))\s+(?:(?:(?:that|which)\s+(?:I\s+)?)?(?:uploaded|saved|attached)\s+|(?:from|on|during|in)\s+)|\b(?:uploaded|saved|attached)\s+(?!pdf\b|file\b|document\b)/i.exec(scopeText);
+  const dateText = dateAnchor ? scopeText.slice(dateAnchor.index + dateAnchor[0].length)
+    .split(/\b(?:and|but|then|about|showing|containing|with)\b|[;?!\n]/i)[0] : "";
+  const dateScoped = hasUploadDateReference(`from ${dateText}`);
+  const date = dateScoped ? prepareMemoryQuery(`from ${dateText}`, now) : null;
   if (date?.clarification) return {method:"none",selections:[],clarification:date.clarification};
   const pdfs = allPdfs.filter(file => {
     if (!dateScoped) return true;
     const created = Date.parse(file.createdAt ?? "");
     return Number.isFinite(created) && (!date?.after || created >= Date.parse(date.after)) && (!date?.before || created < Date.parse(date.before));
   });
-  const literal = resolvePdfNames(message,[...allPdfs,...freshPdfs]);
-  if (literal.clarification) return {method:"none",selections:[],clarification:literal.clarification};
   const literalNames = new Set([...literal.names].filter(name=>!freshNames.has(name)));
   // A fresh upload is not permission to restore arbitrary old PDFs. Explicit
   // saved names still join the comparison alongside independently scoped uploads.

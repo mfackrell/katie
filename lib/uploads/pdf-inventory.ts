@@ -112,7 +112,7 @@ export function isPdfContentRequest(message: string): boolean {
   if (storedForLater && !explicit) return false;
   if (/\b(?:do not|don't|without)\s+(?:read|analy[sz]e|inspect|process)\b/i.test(message)) return false;
   if (/\b(?:tell me a joke|write (?:me )?a (?:joke|poem)|weather|codebase|repository)\b/i.test(message) && !explicit) return false;
-  return explicit || /^\s*(?:continue|go on|proceed|next(?: pages?)?)\s*[.!?]?\s*$/i.test(message)
+  return explicit || /\b(?:find|list|identify)\b.{0,80}\b(?:transactions?|rows?|values?|amounts?|totals?|pages?|charts?|tables?)\b/i.test(message) || /^\s*(?:continue|go on|proceed|next(?: pages?)?)\s*[.!?]?\s*$/i.test(message)
     || (/\b(?:what|where|which|how|why|when|is|are|does|did|list|identify|find)\b/i.test(message)
       && /\b(?:pdfs?|documents?|attachments?|files?|pages?|statements?|reports?|tables?|charts?|figures?|scans?|this|these|those)\b|\.pdf\b|__PDF_SOURCE__/i.test(message));
 }

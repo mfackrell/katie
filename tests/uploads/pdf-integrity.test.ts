@@ -426,13 +426,15 @@ test("content intent distinguishes file discovery, in-document questions and unr
  const {isPdfContentRequest,isPdfLocatorRequest}=await import("../../lib/uploads/pdf-inventory");
  assert.equal(isPdfLocatorRequest("Where is the revenue breakdown in report.pdf?"),false);
  assert.equal(isPdfContentRequest("Where is the revenue breakdown in report.pdf?"),true);
+ assert.equal(isPdfContentRequest("What time is it?"),false);
+ assert.equal(isPdfContentRequest("Which quarter has the highest collections?"),false);
  for(const request of ["Keep this PDF for later; tell me a joke","Store this PDF for reference","Locate my saved PDF","Where is report.pdf?","Do not inspect this PDF"]){
   assert.equal(isPdfContentRequest(request),false,request);
   const [ref]=await buildFileReferences([file([text("cover"),""])]);
   const evidence=await inspectPdf(ref,request,file([text("cover"),""]));
   assert.equal(evidence.state,"not-requested");assert.equal(evidence.pages.length,0);
  }
- for(const request of ["Extract every transaction","Read the scanned page","Compare pages 1 and 2","Continue","Which quarter has the highest collections?"])assert.equal(isPdfContentRequest(request),true,request);
+ for(const request of ["Extract every transaction","Read the scanned page","Compare pages 1 and 2","Continue","Which quarter in this PDF has the highest collections?"])assert.equal(isPdfContentRequest(request),true,request);
 });
 
 test("multi-page batch indexes only validated page fields and stable raw-report hashes across retries", async () => {

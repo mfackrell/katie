@@ -49,3 +49,13 @@ test('literal identity without a date and generic dated lookup keep their respec
  assert.equal(select('Read my PDF uploaded yesterday',[old,other],[otherHit],0,now).selections[0].attachment.id,other.id);
  assert.equal(select('Read report.pdf uploaded yesterday',[old,other],[otherHit],1,now),null);
 });
+
+test('document dates do not become upload-date filters for named saved or fresh sources',()=>{
+ const select=selector();
+ for(const message of ['What was revenue in 2024 in report.pdf?','Read report.pdf and explain revenue in 2024','What happened yesterday in report.pdf?']) {
+  const saved=select(message,[old],[],0,now);assert.equal(saved.clarification,undefined);assert.equal(saved.selections[0].attachment.id,'old');
+  assert.equal(select(message,[old],[],1,now,[{...old,fileId:'new'}]),null);
+ }
+ const dated=select('Read report.pdf uploaded yesterday and explain revenue in 2024',[{...old,createdAt:'2026-10-15T12:00:00Z'}],[],0,now);
+ assert.equal(dated.clarification,undefined);assert.equal(dated.selections[0].attachment.id,'old');
+});
