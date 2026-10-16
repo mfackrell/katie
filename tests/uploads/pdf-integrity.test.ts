@@ -543,5 +543,11 @@ test("positive reading can use parsed text while explicit OCR prohibition preven
   assert.equal(calls,0);assert.equal(result.state,"not-requested");assert.deepEqual(result.contextPages,[1]);
   const context=formatAttachmentContext([{...ref,pdfEvidence:result}],{userMessage:"Read this PDF but don't OCR it"});
   assert.match(context,/known parsed text/);
+  const cached:NonNullable<Parameters<typeof inspectPdf>[3]>={version:"pdf-visual-v1",fingerprint:ref.sourceFingerprint!,extractionVersion:"pdf-pages-v1",provider:"google",model:"gemini-2.5-flash",state:"partial",notice:"",pages:[{physicalPage:1,status:"readable",observations:"PRIVATE-CACHED-VISUAL",rows:[]}],rawReports:["PRIVATE-CACHED-REPORT"]};
+  const constrained=await inspectPdf(ref,"Read page 1 but don't OCR or inspect it",new Blob(),cached);
+  assert.equal(calls,0);assert.equal(constrained.pages.length,0);assert.equal(constrained.rawReports.length,0);
+  assert.equal(cached.pages.length,1);
+  const constrainedContext=formatAttachmentContext([{...ref,pdfEvidence:constrained}],{userMessage:"Read page 1 but don't OCR or inspect it"});
+  assert.match(constrainedContext,/known parsed text/);assert.doesNotMatch(constrainedContext,/PRIVATE-CACHED/);
  } finally {globalThis.fetch=oldFetch;if(oldKey)process.env.GOOGLE_API_KEY=oldKey;else delete process.env.GOOGLE_API_KEY;}
 });

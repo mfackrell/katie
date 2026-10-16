@@ -59,6 +59,10 @@ export async function inspectPdf(reference: FileReference, message: string, sour
         return result;
     }
     if (nativeProhibited) {
+        // Preserve durable receipts, but expose no prior model observations on
+        // this parsed-text-only request.
+        result.pages = [];
+        result.rawReports = [];
         result.contextPages = requested.slice(0,4);
         result.notice += " Native PDF inspection was explicitly prohibited; use available parsed text only.";
         return result;
