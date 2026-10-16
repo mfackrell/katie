@@ -59,9 +59,9 @@ export function requestedPdfPages(message: string, count: number): number[] {
         const tail = message.slice(match.index! + match[0].length);
         if (/^[-+−]/.test(tail) || numberWord.test(tail)) throw invalid();
         if (!/^\d/.test(tail)) {
-            // Unscoped prose may describe pages, but unknown labels must never
-            // turn an explicit selector into permission to inspect all pages.
-            if (!/^[.!?]?\s*$/.test(tail) && !/^(?:of|in|for|with|without|from|is|are|has|have|contains?|shows?|carefully|thoroughly|individually)\b/i.test(tail)) throw invalid();
+            // Nonnumeric task prose ("pages mention revenue") is not a selector.
+            // Reject recognizable unsupported labels, not an allowlist of verbs.
+            if (/^(?:[a-z](?:\d+)?|[a-z]+\d+)(?=\s|$|[-–—,;.!?&+/])|^["'“‘«`[(]/i.test(tail)) throw invalid();
             continue;
         }
         const selector = /^(\d+(?:\s*(?:[-–—]|to\b|through\b)\s*\d+)?(?:\s*(?:,|and\b)\s*\d+(?:\s*(?:[-–—]|to\b|through\b)\s*\d+)?)*)/i.exec(tail)!;

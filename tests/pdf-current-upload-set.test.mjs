@@ -34,6 +34,12 @@ const positive=[
  'Compare the video with all documents in this upload',
  'Compare the video with all files from this upload',
  'Compare report.pdf with all other PDFs',
+ 'Compare report.pdf with all PDFs from this upload to find differences',
+ 'Compare report.pdf with all PDFs from this upload for a summary',
+ 'Compare report.pdf with all PDFs from this upload that contain revenue',
+ 'Compare report.pdf with all PDFs from this upload which mention costs',
+ 'Compare report.pdf with all PDFs from this upload using the figures shown',
+
  'Compare report.pdf with all PDFs from this upload, please.',
  'Compare report.pdf with all PDFs from this upload and summarize differences',
 ];

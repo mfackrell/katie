@@ -82,3 +82,10 @@ test('actual independent-assessment construction retains task context and the id
   assert.match(context,/CHUNK_PAGE_2/);onlyPages(context,[2],3);
  }
 });
+
+for(const message of ['Which pages mention revenue?','Summarize the pages about revenue','What do the pages say about revenue?','Find pages containing revenue','Read the pages describing cash flows','Review pages showing revenue'])test(`ordinary page prose retains bounded source evidence: ${message}`,()=>{
+ const file=fixture(3);
+ const out=rendered(file,message);
+ assert.match(out,/CHUNK_PAGE_1/);assert.match(out,/LAYOUT_PAGE_1/);
+ assert.doesNotMatch(out,/GLOBAL_(?:PREVIEW|FLAT|REPORT)_PAGE/);
+});
