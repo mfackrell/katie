@@ -94,7 +94,7 @@ test('actual route fingerprint preserves fresh and saved timeline source identit
  const route=readFileSync('app/api/chat/route.ts','utf8');
  const start=route.indexOf('    const requestFingerprint ='),end=route.indexOf('    const idempotencyClaim =',start);
  const fingerprint=async({fresh=[],saved,timelineActive=true}={})=>{
-  const context={fingerprintChatRequest:exports.fingerprintChatRequest,actorId:'actor',chatId:'chat',message:'same',images:[],attachments:[],freshVideoReferences:fresh,timelineSelection:saved?{source:saved}:{},timelineActive,overrideProvider:null,overrideModel:null,activeRepoId:null,repoInjectionEnabled:false};
+  const context={fingerprintChatRequest:exports.fingerprintChatRequest,actorId:'actor',chatId:'chat',message:'same',images:[],attachments:[],requestAttachments:[],freshVideoReferences:fresh,timelineSelection:saved?{source:saved}:{},timelineActive,overrideProvider:null,overrideModel:null,activeRepoId:null,repoInjectionEnabled:false};
   return vm.runInNewContext('(async()=>{'+route.slice(start,end)+'return requestFingerprint;})()',context);
  };
  const a={id:'a',fileId:'a',chatId:'chat',fileName:'same.mp4',mimeType:'video/mp4'}, b={...a,id:'b',fileId:'b'};

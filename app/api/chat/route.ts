@@ -1,4 +1,4 @@
-import { selectPdfEvidenceSource } from "@/lib/chat/pdf-source-selection";
+import { selectFreshPdfSources, selectPdfEvidenceSource } from "@/lib/chat/pdf-source-selection";
 import { inspectSavedPdf } from "@/lib/uploads/stored-uploads";
 import { timelineIntent, resolveTimelineSource } from "@/lib/video-timeline/intent";
 import { runVideoTimeline } from "@/lib/video-timeline/service";
@@ -700,7 +700,10 @@ export async function POST(request: NextRequest) {
         return savedOriginalExists(hit.source_chat_id,hit.attachment_id,actorId);
       },
     });
-    let pdfMemoryDecision = !timelineActive && !savedVideoFollowUp
+    const freshPdfSelection = !timelineActive ? selectFreshPdfSources(pdfSourceTask,newAttachments) : null;
+    let pdfMemoryDecision: AttachmentDecision | null = freshPdfSelection
+      ? {method:"none",selections:[],...(freshPdfSelection.clarification ? {clarification:freshPdfSelection.clarification} : {})}
+      : !timelineActive && !savedVideoFollowUp
       ? selectPdfEvidenceSource(pdfSourceTask, catalog, mediaMemory?.hits ?? [], newAttachments.length) : null;
     if (!pdfMemoryDecision && pdfTaskContext && !newAttachments.length && !timelineActive) {
       const anchor = [...attachmentHistory].reverse().find(turn => turn.role === "user" && turn.attachments?.length);
@@ -763,7 +766,10 @@ export async function POST(request: NextRequest) {
       (fileReferences ?? []).filter(file => Boolean(file.storageToken))
         .map(file => [file.fileId, file.storageToken!] as const)
     );
-    const attachments = uniqueAttachmentReferences([...newAttachments, ...restored.references]).filter(file => !timelineActive || !file.mimeType.startsWith("video/")).map(file =>
+    // Preserve all inputs for idempotency and storage, but only selected PDFs
+    // may supply evidence to classifiers, drafting, native inspection or review.
+    const requestAttachments = uniqueAttachmentReferences([...newAttachments, ...restored.references]).filter(file => !timelineActive || !file.mimeType.startsWith("video/"));
+    const attachments = requestAttachments.filter(file => !freshPdfSelection || file.mimeType !== "application/pdf" || freshPdfSelection.fileIds.has(file.fileId)).map(file =>
       file.mimeType === "application/pdf" && /\b(signature|signed|handwrit\w*|layout|colou?r|font|stamp|scan|visual|diagram|chart|figure|formatting|photo|picture|annotation)\b/i.test(message)
         ? { ...file, nativeInspectionRequired: true } : file
     );
@@ -777,7 +783,8 @@ export async function POST(request: NextRequest) {
     );
     const unavailableAttachments = restored.unavailable;
     const attachmentSourceIds = restored.sourceIds;
-    const selectionContext = () => timelineContext + "\n" + (mediaMemory?.context ?? "") + "\n" + attachmentAccessContext([], savedAttachments, unavailableAttachments, attachmentSourceIds)
+    const excludedPdfSourceIds = new Set<string>();
+    const selectionContext = () => timelineContext + "\n" + (mediaMemory?.context ?? "") + "\n" + attachmentAccessContext([], savedAttachments.filter(file=>!excludedPdfSourceIds.has(file.id)), unavailableAttachments, attachmentSourceIds)
       + (attachmentDecision.clarification ? `\nAsk the user this clarification before attempting an answer about a file: ${JSON.stringify(attachmentDecision.clarification)}` : "");
     console.log("[Chat API] received attachments", { count: attachments.length });
     attachments.forEach((attachment) => {
@@ -809,7 +816,7 @@ export async function POST(request: NextRequest) {
       chatId,
       message,
       images: images ?? [],
-      fileReferences: attachments.map((attachment) => ({
+      fileReferences: requestAttachments.map((attachment) => ({
         fileId: attachment.fileId,
         fileName: attachment.fileName,
         mimeType: attachment.mimeType,
@@ -1740,7 +1747,8 @@ export async function POST(request: NextRequest) {
                 ...saved, ...(saved.mimeType.startsWith("video/") ? { conversationUsage: "uploaded" as const } : {})
               });
               if (isVideoAttachment(attachment)) persistedVideoSourceByFileId.set(attachment.fileId, saved);
-              attachmentSourceIds.add(saved.id);
+              if (freshPdfSelection && attachment.mimeType === "application/pdf" && !freshPdfSelection.fileIds.has(attachment.fileId)) excludedPdfSourceIds.add(saved.id);
+              else attachmentSourceIds.add(saved.id);
             }
             if (timelineActive && temporalIntent) {
               const timelineSource = timelineSelection.clarification ? undefined : freshVideoReferences.length

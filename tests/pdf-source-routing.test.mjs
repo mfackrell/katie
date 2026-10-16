@@ -24,12 +24,12 @@ const old={id:'old',chatId:'source',fileName:'report.pdf',mimeType:'application/
 const recent={...old,id:'recent',chatId:'newer',createdAt:'2026-10-15T12:00:00Z'};
 test('source dates constrain the actual production routing block rather than falling back to an old PDF',async()=>{
  const source=readFileSync('app/api/chat/route.ts','utf8');
- const start=source.indexOf('    let pdfMemoryDecision ='),end=source.indexOf('    const selectedBeforePruning =',start);
+ const start=source.indexOf('    const freshPdfSelection ='),end=source.indexOf('    const selectedBeforePruning =',start);
  assert.ok(start>0&&end>start);
  const load=modules(),select=load('lib/chat/pdf-source-selection.ts').selectPdfEvidenceSource;
  for(const message of ['Read my PDF uploaded yesterday','Read my PDF from two weeks ago']) {
   const result=await vm.runInNewContext(ts.transpileModule(`(async()=>{${source.slice(start,end)}return attachmentDecision;})()`,{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText,{
-   selectPdfEvidenceSource:select,pdfSourceTask:message,pdfTaskContext:null,timelineActive:false,savedVideoFollowUp:null,
+   selectFreshPdfSources:load('lib/chat/pdf-source-selection.ts').selectFreshPdfSources,selectPdfEvidenceSource:select,pdfSourceTask:message,pdfTaskContext:null,timelineActive:false,savedVideoFollowUp:null,
    catalog:[old],mediaMemory:{hits:[{attachment_id:'old',source_chat_id:'source'}]},newAttachments:[],attachmentHistory:[],timelineSelection:{},
    selectStoredAttachments:()=>{throw Error('Must not discard date restriction through fallback');},message,
   });

@@ -53,3 +53,12 @@ The former aggregate large-report test now verifies a corpus exceeding230,800 ch
 
 
 Local verification of the coordinator candidate: typecheck passed; all PDF integrity and page/date-routing tests passed in direct executions. The unchanged full ci:gate was attempted in the Node24 Amazon Linux sandbox:645 Node tests passed in successful files and seven Vitest passed, but the two Chromium website suites failed and the unchanged test-runner self-test timed out. These are not a green gate. The required standard GitHub runner must verify the final source; no test, timeout or browser assertion was weakened. The post-gate addition tests literal filename metacharacters and concurrent different-page index preservation.
+
+
+### Complete filenames and fresh-upload scope repair
+
+Stored and fresh PDF selection now share one complete-span filename resolver. A request for an unknown `quarterly report.pdf` cannot select `report.pdf`; a known `annual report.pdf` is not ambiguous with its shorter suffix. Quoted names are matched whole, and ambiguous unquoted syntax asks for the full filename rather than guessing. Date constraints still bind every named saved source.
+
+Fresh uploads are scoped before attachment restoration, classifiers, native page analysis, drafting and independent review. Explicit names select only those fresh PDFs; explicit all/compare requests can select the full set; duplicate or unresolved names clarify without PDF analysis. All uploaded originals remain retained. Excluded PDF summaries are omitted from current evidence, while all original upload identities remain in request fingerprints so changed inputs cannot replay an earlier request.
+
+Focused regression coverage executes the actual chat construction, original retention loop, native-inspection dispatch, generation parameters and ordinary/saved-draft/clarification assessment construction with isolated dependencies. It asserts selected-file call counts, no unselected evidence leakage and unchanged idempotency/video behavior. These tests are not live Gemini accuracy tests. No migrations, dependencies, authentication settings, provider limits or retention policies changed in this repair.
