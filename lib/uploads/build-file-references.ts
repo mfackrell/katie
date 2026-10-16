@@ -254,14 +254,15 @@ export async function buildFileReferences(files: File[]): Promise<FileReference[
   validateUploadFiles(files);
   const textLikeFiles = files.filter((file) => !isAllowedVideoFileType(file) && !IMAGE_MIME_TYPES.has(file.type));
   const parsedFiles = textLikeFiles.length > 0 ? await parseTextFiles(textLikeFiles) : [];
-  const parsedByName = new Map(parsedFiles.map((parsed) => [parsed.name, parsed]));
+  const parsedByFile = new Map(textLikeFiles.map((file, index) => [file, parsedFiles[index]]));
 
   return Promise.all(
     files.map(async (file) => {
       if (IMAGE_MIME_TYPES.has(file.type)) return buildImageReference(file);
       const extension = getExtension(file.name);
-      const mimeType = file.type || TEXT_EXTENSION_FALLBACK_MIME_TYPES.get(extension) || "text/plain";
-      const providerRef = await buildProviderRef(file);
+      const parsed = parsedByFile.get(file);
+      const mimeType = parsed?.mimeType || file.type || TEXT_EXTENSION_FALLBACK_MIME_TYPES.get(extension) || "text/plain";
+      const providerRef = await buildProviderRef(file.type === mimeType ? file : new File([file], file.name, { type: mimeType }));
 
       if (isAllowedVideoFileType(file)) {
         return {
@@ -275,19 +276,19 @@ export async function buildFileReferences(files: File[]): Promise<FileReference[
         } satisfies FileReference;
       }
 
-      const parsed = parsedByName.get(file.name);
       if (!parsed) {
         throw new Error(`Failed to parse file "${file.name}".`);
       }
 
-      if (!parsed.text.trim() && mimeType === "application/pdf" && providerRef?.googleFileUri) {
-        return { fileId: crypto.randomUUID(), fileName: file.name, mimeType, preview: "PDF source attached for native visual inspection; no machine-readable text was extracted.", attachmentKind: "file", extractionCoverage: "preview-only", providerRef } satisfies FileReference;
+      if (!parsed.text.trim() && mimeType === "application/pdf") {
+        return { fileId: crypto.randomUUID(), fileName: file.name, mimeType, preview: "PDF source attached for native visual inspection; no machine-readable text was extracted.", attachmentKind: "file", extractionCoverage: "preview-only", sourceFingerprint: parsed.sourceFingerprint, pdfInventory: parsed.pdfInventory, providerRef } satisfies FileReference;
       }
       if (!parsed.text.trim()) {
         throw new Error(`Failed to ingest readable text from "${file.name}". Parsed text was empty.`);
       }
 
-      const extractedChunks = chunkExtractedText(parsed.text);
+      const pageChunks = parsed.pdfInventory?.pages.flatMap(page => chunkExtractedText(page.text).map(chunk => ({ ...chunk, physicalPage: page.physicalPage })));
+      const extractedChunks = pageChunks ? pageChunks.map((chunk, index) => ({...chunk, index, total: pageChunks.length})) : chunkExtractedText(parsed.text);
       if (extractedChunks.length === 0) {
         throw new Error(`Failed to ingest readable text from "${file.name}". Parsed text was empty.`);
       }
@@ -301,7 +302,9 @@ export async function buildFileReferences(files: File[]): Promise<FileReference[
         extractedChunks,
         totalChunks: extractedChunks.length,
         truncatedForContext: extractedChunks.length > 1,
-        extractionCoverage: "full",
+        extractionCoverage: parsed.pdfInventory ? "partial" : "full",
+        sourceFingerprint: parsed.sourceFingerprint,
+        pdfInventory: parsed.pdfInventory,
         attachmentKind: "text",
         providerRef
       } satisfies FileReference;

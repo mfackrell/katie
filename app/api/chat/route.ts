@@ -1,3 +1,5 @@
+import { selectPdfEvidenceSource } from "@/lib/chat/pdf-source-selection";
+import { inspectSavedPdf } from "@/lib/uploads/stored-uploads";
 import { timelineIntent, resolveTimelineSource } from "@/lib/video-timeline/intent";
 import { runVideoTimeline } from "@/lib/video-timeline/service";
 import { hasUploadDateReference, memoryIntent, retrieveSavedEvidence } from "@/lib/media-memory/evidence";
@@ -50,7 +52,7 @@ import {
 import { LlmProvider, ProviderResponse } from "@/lib/providers/types";
 import { buildReviewResumptionContext, candidateForVerification, isSavedDraftVerificationRetry, savedDraftReviewTask } from "@/lib/collaboration/review-completion";
 import { getPendingReviewClarification, resolvePendingReviewClarification } from "@/lib/chat/review-continuity";
-import { applyAssistantToTaskProgress, applyUserToTaskProgress, formatTaskProgress, syncTaskProgress } from "@/lib/chat/task-progress";
+import { classifyUserTurn, applyAssistantToTaskProgress, applyUserToTaskProgress, formatTaskProgress, syncTaskProgress } from "@/lib/chat/task-progress";
 import { loadTaskProgress, saveTaskProgress } from "@/lib/chat/task-progress-store";
 import type { ResolvedRoutingIntent, SelectionExplainer } from "@/lib/router/master-router";
 import { DEFAULT_REASONING_CATEGORIES, ReasoningStateAccumulator } from "@/lib/chat/reasoning-stream";
@@ -673,6 +675,16 @@ export async function POST(request: NextRequest) {
       const recovered = await getSupabaseAdminClient().rpc("reconcile_media_video", {p_actor: actorId, p_current_chat: chatId});
       if (recovered.error) console.warn("[Media memory] video recovery unavailable");
     } catch { console.warn("[Media memory] video recovery unavailable"); }
+    const pendingReviewClarification = await getPendingReviewClarification(actorId, chatId);
+    const verifyingSavedDraft = Boolean(
+      pendingReviewClarification &&
+      isSavedDraftVerificationRetry(pendingReviewClarification.pending, message)
+    );
+    const savedDraftOriginalTask = verifyingSavedDraft && pendingReviewClarification
+      ? savedDraftReviewTask(pendingReviewClarification.pending)
+      : null;
+    const pdfTaskContext = savedDraftOriginalTask ?? (pendingReviewClarification && classifyUserTurn(message) === "continuation" ? savedDraftReviewTask(pendingReviewClarification.pending) : null);
+    const pdfSourceTask = pdfTaskContext ? `${pdfTaskContext}\nCurrent clarification: ${message}` : message;
     const memoryMode = memoryIntent(message);
     // Event order within a clip ("after checkout") is not an upload-date reference.
     const historicalReference = hasUploadDateReference(message) || /\b(?:saved|uploaded)\b|\b(?:previous|earlier)\s+(?:(?:uploaded|saved)\s+)?(?:video|clip|recording|upload|attachment|file)\b/i.test(message);
@@ -682,20 +694,29 @@ export async function POST(request: NextRequest) {
           history: attachmentHistory,
           freshAttachmentCount: newAttachments.length,
         });
-    const mediaMemory = timelineActive || savedVideoFollowUp ? null : await retrieveSavedEvidence({ actorId, chatId, message, freshAttachmentCount: newAttachments.length,
+    let mediaMemory = timelineActive || savedVideoFollowUp ? null : await retrieveSavedEvidence({ actorId, chatId, message, freshAttachmentCount: newAttachments.length,
       checkOriginal: async hit => {
         if((await getChatById(hit.source_chat_id))?.actorId!==actorId) return null;
         return savedOriginalExists(hit.source_chat_id,hit.attachment_id,actorId);
       },
     });
-    const attachmentDecision: AttachmentDecision = timelineActive
+    let pdfMemoryDecision = !timelineActive && !savedVideoFollowUp
+      ? selectPdfEvidenceSource(pdfSourceTask, catalog, mediaMemory?.hits ?? [], newAttachments.length) : null;
+    if (!pdfMemoryDecision && pdfTaskContext && !newAttachments.length && !timelineActive) {
+      const anchor = [...attachmentHistory].reverse().find(turn => turn.role === "user" && turn.attachments?.length);
+      const sources = catalog.filter(file => file.mimeType === "application/pdf" && (pdfTaskContext.includes(anchor?.content ?? "\u0000") || /\b(pdf|pages?\s+\d|scan\w*|transaction\w*|statement|chart|table)\b/i.test(pdfTaskContext)) && anchor?.attachments?.some(saved => saved.id === file.id && (!saved.chatId || saved.chatId === file.chatId)));
+      if (sources.length === 1) pdfMemoryDecision = { method: "none", selections: [{ attachment: sources[0], mode: "source" }] };
+      else if (sources.length > 1) pdfMemoryDecision = { method: "none", selections: [], clarification: "Which saved PDF source should this review use?" };
+    }
+    if (pdfMemoryDecision) mediaMemory = null;
+    const attachmentDecision: AttachmentDecision = pdfMemoryDecision ?? (timelineActive
       ? { method: "none", selections: [], ...(timelineSelection.clarification ? { clarification: timelineSelection.clarification } : {}) }
       : (mediaMemory || savedVideoFollowUp)
       ? mediaMemory?.decision ?? { method: "none", selections: [] }
       : await selectStoredAttachments(
           message, catalog, attachmentHistory, undefined,
           newAttachments.map(file => file.fileName),
-        );
+        ));
     const selectedBeforePruning = attachmentDecision.selections.length;
     attachmentDecision.selections = pruneRepeatedVideoSelections(newAttachments, attachmentDecision.selections, message);
     // The selector is advisory. An unrelated current request must NEVER
@@ -736,6 +757,7 @@ export async function POST(request: NextRequest) {
     const savedVideoSourceByFileId = new Map(restored.references.map((file, index) =>
       [file.fileId, selectedSourceDescriptors[index]] as const
     ));
+    const pdfSources = new Map(savedVideoSourceByFileId);
     const persistedVideoSourceByFileId = new Map<string, ConversationAttachment>();
     const currentUploadVideoTokensByFileId = new Map(
       (fileReferences ?? []).filter(file => Boolean(file.storageToken))
@@ -1012,14 +1034,6 @@ export async function POST(request: NextRequest) {
       syncTaskProgress(persistedTaskProgress, history),
       { messageId: taskProgressUserMessageId, text: message },
     );
-    const pendingReviewClarification = await getPendingReviewClarification(actorId, chatId);
-    const verifyingSavedDraft = Boolean(
-      pendingReviewClarification &&
-      isSavedDraftVerificationRetry(pendingReviewClarification.pending, message)
-    );
-    const savedDraftOriginalTask = verifyingSavedDraft && pendingReviewClarification
-      ? savedDraftReviewTask(pendingReviewClarification.pending)
-      : null;
     const reviewTaskProgress = savedDraftOriginalTask
       ? {
           ...taskProgress,
@@ -1721,6 +1735,7 @@ export async function POST(request: NextRequest) {
                 ? { observedSummary: "Explicit sampled timeline requested; see measured event evidence.", summaryModel: "timeline-pending", summaryCoverage: "metadata" as const }
                 : await describeAttachmentEvidence(attachment);
               const saved = await persistConversationAttachment(chatId, attachment, fileReferences?.[index]?.storageToken, { description, source: legacyImageSources.get(attachment.fileId), actorId });
+              pdfSources.set(attachment.fileId, saved);
               savedAttachments.push({
                 ...saved, ...(saved.mimeType.startsWith("video/") ? { conversationUsage: "uploaded" as const } : {})
               });
@@ -1784,6 +1799,17 @@ export async function POST(request: NextRequest) {
 
             let pendingVideoAssistantMessageId: string | null = null;
             let reviewSourceParams: import("@/lib/providers/types").ChatGenerateParams | undefined;
+            for (const pdf of attachments.filter(file=>file.mimeType==="application/pdf" && file.pdfInventory)) {
+              pdf.providerRef=undefined;
+              pdf.nativeInspectionRequired=false;
+              const source=pdfSources.get(pdf.fileId);
+              if (!source) { pdf.preview+=" PDF evidence unavailable: no retained source identity."; continue; }
+              try { pdf.pdfEvidence=await inspectSavedPdf(chatId,source,actorId,pdfSourceTask,async id=>(await getChatById(id))?.actorId===actorId); }
+              catch (error) {
+                const reason=error instanceof Error && /original unavailable|source changed|source chat|metadata unavailable|inventory unavailable/i.test(error.message) ? error.message.slice(0,250) : "Inspection or private evidence access failed.";
+                pdf.preview+=` PDF visual evidence unavailable: ${reason} Do not claim complete document review.`;
+              }
+            }
             const createParams = (selectedModelId: string) =>
               ({ ...buildGenerationParams({
                 name,

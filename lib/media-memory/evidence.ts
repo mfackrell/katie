@@ -49,6 +49,7 @@ export async function indexEvidence(file: ConversationAttachment, kind: string, 
 }
 export async function indexReference(file: ConversationAttachment, reference: FileReference, startPart = 0): Promise<EvidenceIndexProgress | void> {
   const chunks = reference.extractedChunks ?? [];
+  const coverage = reference.mimeType === "application/pdf" ? "partial; machine-readable text only; visual coverage unknown" : reference.extractionCoverage;
   const total = 2 + chunks.length;
   let part = Number.isSafeInteger(startPart) && startPart >= 0 && startPart <= total ? startPart : 0;
   const end = Math.min(part + 4, total);
@@ -56,8 +57,8 @@ export async function indexReference(file: ConversationAttachment, reference: Fi
     const complete = part === 0
       ? await indexEvidence(file,"discovery",file.summaryModel ?? "discovery-v1",file.observedSummary ?? "",file.summaryCoverage)
       : part === 1
-        ? await indexEvidence(file,"extracted","text-v1",reference.extractedText ?? "",reference.extractionCoverage)
-        : await indexEvidence(file,"extracted",`chunk-v1:${chunks[part-2].index}`,chunks[part-2].text,reference.extractionCoverage);
+        ? await indexEvidence(file,"extracted",reference.pdfInventory ? `pdf-pages-v1:${reference.sourceFingerprint}` : "text-v1",reference.pdfInventory ? reference.pdfInventory.pages.map(page=>`Physical PDF page ${page.physicalPage} (text ${page.textCoverage}; visual not inspected)\n${page.text}`).join("\n\n") : reference.extractedText ?? "",coverage)
+        : await indexEvidence(file,"extracted",`chunk-v1:${chunks[part-2].index}${chunks[part-2].physicalPage ? `:pdf-page:${chunks[part-2].physicalPage}:${reference.sourceFingerprint ?? "legacy"}` : ""}`,`${chunks[part-2].physicalPage ? `Physical PDF page ${chunks[part-2].physicalPage}\n` : ""}${chunks[part-2].text}`,coverage);
     if (!complete) return {complete:false,nextPart:part};
   }
   return {complete:part === total,nextPart:part};
@@ -133,6 +134,7 @@ export async function retrieveSavedEvidence(input: { actorId: string; chatId: st
       else { hits=result.data ?? []; status=hits.length ? "matched" : "no-match"; }
     } catch { status="search-unavailable"; }
   }
+  for (const hit of hits) if (/\.pdf$/i.test(hit.filename) && hit.coverage === "full") hit.coverage="legacy PDF coverage unverified; not proof of full page or visual inspection";
   const availability=new Map<string,boolean|null>();
   for(const hit of hits) {
     const key=`${hit.source_chat_id}/${hit.attachment_id}`;
