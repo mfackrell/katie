@@ -197,9 +197,19 @@ export function isPdfNativeInspectionProhibited(message: string, sourceNames: st
       const bound=references.filter(reference=>reference.index!<textOnly.index).at(-1) ?? references.find(reference=>reference.index!>=textOnly.index+textOnly[0].length);
       return !bound || /^PDF source$/i.test(bound[0]);
     }
-    const target = masked.slice(ban.index + ban[0].length);
-    // A named prohibition belongs to that source; an unqualified prohibition
-    // still applies to the current source, including pronouns such as "it".
-    return /\bPDF source\b/i.test(target) || !/\.pdf\b/i.test(target);
+    const tail = masked.slice(ban.index + ban[0].length);
+    if(/^\s*(?:either|both|all|any)(?:\s+(?:of\s+)?(?:them|these|those|pdfs?|files?|documents?))?\s*[,.!?]*\s*$/i.test(tail)) return true;
+    const before=masked.slice(0,ban.index);
+    const previous=[...before.matchAll(/PDF source|\.pdf\b/gi)].at(-1);
+    // A leading restriction on the whole comparison applies to each source.
+    if(!previous && /^\s*(?:compare|contrast|read|review|analy[sz]e|summari[sz]e)\b/i.test(tail)) return true;
+    // Comparison connectors end a direct native-action target. An initial
+    // "and" is a connector; an interior "and" may join prohibited targets.
+    const boundary=/^\s*and\b|\b(?:with|versus|vs\.?|against|to)\b|\band\s+(?=(?:read|review|analy[sz]e|summari[sz]e|compare|describe)\b)/i.test(tail);
+    const target=/^\s*(?:and|with|versus|vs\.?|against|to)\b/i.test(tail) ? "" :
+      tail.split(/\b(?:with|versus|vs\.?|against|to)\b|\band\s+(?=(?:read|review|analy[sz]e|summari[sz]e|compare|describe)\b)/i)[0];
+    const targets=[...target.matchAll(/PDF source|\.pdf\b/gi)];
+    if(targets.length) return targets.some(reference=>/^PDF source$/i.test(reference[0]));
+    return !boundary || !previous || /^PDF source$/i.test(previous[0]);
   });
 }

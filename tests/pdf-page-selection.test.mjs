@@ -106,3 +106,15 @@ test('per-source text-only exclusivity leaves the other PDF eligible for visual 
  const global='Compare both a.pdf and b.pdf using extracted text only';
  for(const source of ['a.pdf','b.pdf'])assert.equal(exports.isPdfNativeInspectionProhibited(global,[source]),true);
 });
+
+test('postfix bans stop at comparison connectors and bind to the preceding PDF',()=>{
+ for(const connector of ['with','and','versus','against','to']){
+  const message=`Compare a.pdf without OCR ${connector} b.pdf visually`;
+  assert.equal(exports.isPdfNativeInspectionProhibited(message,['a.pdf']),true,message);
+  assert.equal(exports.isPdfNativeInspectionProhibited(message,['b.pdf']),false,message);
+ }
+ const prefix="Read b.pdf but don't OCR a.pdf";
+ assert.equal(exports.isPdfNativeInspectionProhibited(prefix,['a.pdf']),true);
+ assert.equal(exports.isPdfNativeInspectionProhibited(prefix,['b.pdf']),false);
+ for(const source of ['a.pdf','b.pdf'])assert.equal(exports.isPdfNativeInspectionProhibited("Read a.pdf and b.pdf but don't OCR either",[source]),true);
+});
