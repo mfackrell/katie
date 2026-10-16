@@ -21,7 +21,7 @@ test('agent management: real SQL snapshots, grants, associations, concurrent adm
    create table actors(id uuid primary key,name text,system_prompt text,review_mode text);
    create table chats(id uuid primary key,actor_id uuid references actors,title text,created_at timestamptz,updated_at timestamptz);
    create table chat_requests(request_id text primary key,actor_id text,chat_id text,status text,error_message text,updated_at timestamptz);grant select,update on chat_requests to service_role;create table repo_sync_runs(id uuid primary key,repository_full_name text);
-   grant usage on schema public to service_role;grant select,insert,update on actors,chats,repo_sync_runs to service_role;`);
+   grant usage on schema public to service_role;grant select,insert,update on actors,chats,repo_sync_runs to service_role;alter default privileges in schema public grant all on tables to anon,authenticated,service_role;`);
   await db.query(readFileSync('supabase/migrations/20261016211426_agent_management.sql','utf8'));
   const cfg={name:'Researcher',instructions:'Analyze carefully',research:false,attachments:false,development:true,maxActiveTasks:1,maxInputChars:1000,reviewMode:'always'};
   const make=async(config=cfg)=>(await db.query('select save_managed_agent(null,$1,false) result',[config])).rows[0].result;
@@ -38,6 +38,7 @@ test('agent management: real SQL snapshots, grants, associations, concurrent adm
     await assert.rejects(c.query('select save_managed_agent(null,$1,false)',[cfg]),/permission denied/);
     await c.query('reset role');
    }
+   for(const privilege of ['UPDATE','DELETE','TRUNCATE'])assert.equal((await db.query('select has_table_privilege($1,$2,$3) allowed',['service_role','agent_task_continuations',privilege])).rows[0].allowed,false);
    const rows=(await db.query("select relrowsecurity from pg_class where oid in ('managed_agents'::regclass,'agent_tasks'::regclass)")).rows;
    assert.ok(rows.every(r=>r.relrowsecurity));
    assert.ok((await db.query("select prosecdef from pg_proc where proname in ('save_managed_agent','create_agent_task','transition_agent_task','check_agent_chat','claim_agent_dispatch','claim_agent_execution')")).rows.every(r=>!r.prosecdef));
