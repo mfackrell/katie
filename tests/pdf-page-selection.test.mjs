@@ -43,3 +43,20 @@ test('complete locator forms remain distinct from trailing content tasks',()=>{
   assert.equal(exports.isPdfLocatorRequest(message),false,message);assert.equal(exports.isPdfContentRequest(message),true,message);
  }
 });
+
+test('joint first and last selectors retain both endpoints and source association',()=>{
+ for(const message of ['Read first and last pages of report.pdf','Read report.pdf first and last pages'])
+  assert.deepEqual(Array.from(pages(message,12,['report.pdf'])),[1,12]);
+ const message='Compare first and last pages of "a.pdf" with page 3 of "b.pdf"';
+ assert.deepEqual(Array.from(pages(exports.pdfPageTaskForSource(message,'a.pdf',['a.pdf','b.pdf']),12)),[1,12]);
+ assert.deepEqual(Array.from(pages(exports.pdfPageTaskForSource(message,'b.pdf',['a.pdf','b.pdf']),7)),[3]);
+ assert.deepEqual(Array.from(pages('Read first and last pages',1)),[1]);
+});
+test('native prohibitions target named documents while generic bans remain binding',()=>{
+ for(const verb of ['OCR','transcribe','scan','inspect','process']){
+  const message=`Read a.pdf but don't ${verb} "b.pdf"`;
+  assert.equal(exports.isPdfNativeInspectionProhibited(message,['a.pdf']),false);
+  assert.equal(exports.isPdfNativeInspectionProhibited(message,['b.pdf']),true);
+  assert.equal(exports.isPdfNativeInspectionProhibited(`Read a.pdf but don't ${verb} it`,['a.pdf']),true);
+ }
+});

@@ -60,7 +60,7 @@ export function maskPdfSourceNames(message: string, sourceNames: string[]): stri
 /** Resolve leading or trailing source-specific selectors before page validation. */
 export function pdfPageTaskForSource(message: string, sourceName: string, sourceNames: string[], sourceOccurrence?: number): string {
     const names = [...new Set(sourceNames)].sort((a, b) => b.length - a.length);
-    const pageMentions = maskPdfSourceNames(message, names).match(/\b(?:pages?\s+[-+−\d]|(?:first|last)\s+page\b)/gi) ?? [];
+    const pageMentions = maskPdfSourceNames(message, names).match(/\b(?:pages?\s+[-+−\d]|(?:first|last)(?:\s+and\s+(?:first|last))?\s+pages?\b)/gi) ?? [];
     if (names.length < 2 && !(sourceNames.length>1 && sourceOccurrence!==undefined)) {
         if (sourceNames.length > 1 && pageMentions.length > 1 && !/\b(?:both|all|each)\b/i.test(message))
             throw new Error("Please specify the physical pages for each PDF separately; I could not associate the page selectors with their sources.");
@@ -79,7 +79,7 @@ export function pdfPageTaskForSource(message: string, sourceName: string, source
     }
     const segments = [marked.slice(0, spans[0].index!), ...spans.map((span, index) =>
         marked.slice(span.index! + span[0].length, spans[index + 1]?.index ?? marked.length))];
-    const pageLike = (text: string) => /\b(?:pages?\s+(?:[-+−\d]|zero\b|one\b|two\b|three\b|four\b|five\b|six\b|seven\b|eight\b|nine\b|ten\b|[a-z](?:\d+)?\b)|(?:first|last)\s+page\b)/i.test(text);
+    const pageLike = (text: string) => /\b(?:pages?\s+(?:[-+−\d]|zero\b|one\b|two\b|three\b|four\b|five\b|six\b|seven\b|eight\b|nine\b|ten\b|[a-z](?:\d+)?\b)|(?:first|last)(?:\s+and\s+(?:first|last))?\s+pages?\b)/i.test(text);
     const scoped = segments.map(pageLike);
     if (!scoped.some(Boolean)) return maskPdfSourceNames(message, names);
     // A single leading selector, or an explicit final "on page", qualifies the set.
@@ -105,6 +105,7 @@ export function requestedPdfPages(message: string, count: number, sourceNames: s
     const invalid = () => new Error("Please use physical PDF page numbers, for example pages 2-4, within the source inventory.");
     if (!Number.isSafeInteger(count) || count < 1 || count > 10000) throw invalid();
     const explicit: number[] = [];
+    message = message.replace(/\b(first|last)\s+and\s+(first|last)\s+pages?\b/gi, "$1 page and $2 page");
     const numberWord = /^(?:zero|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|hundred|thousand|NaN|Infinity|[ivxlcdm]+)\b/i;
     if (/\bpages?\b/i.test(message) && /\b(?:except|excluding)\b|\b(?:first|last)\s+(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten)\s+pages?\b/i.test(message)) throw invalid();
     for (const match of message.matchAll(/\b(first|last)\s+page\b/gi)) explicit.push(match[1].toLowerCase() === "first" ? 1 : count);
@@ -175,5 +176,13 @@ export function isPdfContentRequest(message: string, sourceNames: string[] = [])
 
 /** Output constraints do not cancel reading; explicit native/OCR bans still do. */
 export function isPdfNativeInspectionProhibited(message: string, sourceNames: string[] = []): boolean {
-  return /\b(?:do not|don['’]t|never|without)\s+(?:ocr|transcribe|scan|inspect|process)\b/i.test(maskPdfSourceNames(message, sourceNames));
+  return message.split(/\b(?:but|then|however)\b|[;!?\n]/i).some(clause => {
+    const masked = maskPdfSourceNames(clause,sourceNames);
+    const ban = /\b(?:do not|don['’]t|never|without)\s+(?:ocr|transcribe|scan|inspect|process)\b/i.exec(masked);
+    if (!ban) return false;
+    const target = masked.slice(ban.index + ban[0].length);
+    // A named prohibition belongs to that source; an unqualified prohibition
+    // still applies to the current source, including pronouns such as "it".
+    return /\bPDF source\b/i.test(target) || !/\.pdf\b/i.test(target);
+  });
 }

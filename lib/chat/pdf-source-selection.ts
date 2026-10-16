@@ -86,7 +86,7 @@ function pdfNameRoles(message:string,literal:PdfNames) {
     if (!literal.names.has(span.name)) continue;
     const before=message.slice(index ? spans[index-1].end : 0,span.start);
     const after=message.slice(span.end,spans[index+1]?.start ?? message.length).split(/\b(?:and|with|but|versus|against)\b|[;?!\n]/i)[0];
-    const savedQualifier=/\b(?:saved|previous|earlier|older|historical)(?:\s+(?:pdfs?|files?|documents?|copy|version))?(?:\s+of)?\s*$/i.test(before);
+    const savedQualifier=/\b(?:saved|original|previous|earlier|older|historical)(?:\s+(?:pdfs?|files?|documents?|copy|version))?(?:\s+of)?\s*$/i.test(before);
     const datedQualifier=/^\s+(?:(?:(?:(?:that|which)\s+)?I\s+|(?:that|which)\s+)?(?:uploaded|saved|attached)\s+|from\s+(?=(?:yesterday|last\s+week|(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten)\s+(?:days?|weeks?|months?|years?)\s+ago)\b))/i.test(after) && hasUploadDateReference(after);
     if(index===spans.length-1) finalDateQualifier=datedQualifier;
     const role=savedQualifier || datedQualifier ? "saved" : "fresh";
@@ -143,7 +143,7 @@ export function selectFreshPdfSources(message: string, fresh: FileReference[], t
   if (wholeSet && /\b(?:only|except|excluding|exclude)\b/i.test(scopeText)) return none("The PDF selection includes conflicting or excluded sources. Specify the full filenames to inspect.");
   const freshNamed = pdfNameRoles(message,literal).freshNames;
   const genericHistoricalDate=/\b(?:pdfs?|files?|documents?)\s+(?:(?:(?:(?:that|which)\s+)?I\s+|(?:that|which)\s+)?(?:uploaded|saved|attached)\s+|from\s+(?=(?:yesterday|last\s+week|(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten)\s+(?:days?|weeks?|months?|years?)\s+ago)\b))/i.test(scopeText) && hasUploadDateReference(scopeText);
-  if (!literal.explicit && ((!wholeSet && /\b(?:saved|previous|earlier|older|historical)\s+(?:pdfs?|files?|documents?)\b/i.test(scopeText)) || genericHistoricalDate) &&
+  if (!literal.explicit && ((!wholeSet && /\b(?:saved|original|previous|earlier|older|historical)\s+(?:pdfs?|files?|documents?)\b/i.test(scopeText)) || genericHistoricalDate) &&
       !/\b(?:new|current|fresh|attached|this)\s+(?:pdfs?|files?|documents?|upload)\b/i.test(scopeText)) return none();
   const excludedNames = new Set((literal.sourceSpans ?? []).filter(span=>!literal.names.has(span.name)).map(span=>span.name));
   const chosen = (literal.explicit && !wholeSet ? pdfs.filter(file=>literal.names.has(file.fileName.toLowerCase()) && freshNamed.has(file.fileName.toLowerCase())) : pdfs).filter(file=>!excludedNames.has(file.fileName.toLowerCase()));
@@ -193,7 +193,7 @@ export function selectPdfEvidenceSource(message: string, catalog: ConversationAt
   const requestedSavedNames = new Set([...literalNames,...(freshCount ? pdfNameRoles(message,literal).savedNames : [])]);
   // A fresh upload is not permission to restore arbitrary old PDFs. Explicit
   // saved names still join the comparison alongside independently scoped uploads.
-  const requestsSavedSource = /\b(?:saved|previous|earlier|older|historical)\s+(?:__PDF_SOURCE__|pdfs?|files?|documents?)\b/i.test(scopeText) || dateScoped;
+  const requestsSavedSource = /\b(?:saved|original|previous|earlier|older|historical)\s+(?:__PDF_SOURCE__|pdfs?|files?|documents?)\b/i.test(scopeText) || dateScoped;
   if (freshCount && !requestedSavedNames.size && !requestsSavedSource) return null;
   const named = pdfs.filter(file => requestedSavedNames.has(file.fileName.toLowerCase()));
   // A date constraint can disambiguate duplicate names, but cannot substitute

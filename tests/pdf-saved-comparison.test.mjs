@@ -169,3 +169,11 @@ test('negative actions select only permitted named PDFs across fresh and saved s
   assert.deepEqual(Array.from(result.attachments,x=>x.fileId),['a']);
  }
 });
+
+test('original same-name source joins the new version in a comparison',async()=>{
+ const result=await run('Compare new report.pdf with original report.pdf',[pdf('new','report.pdf')],[pdf('old','report.pdf')]);
+ assert.equal(result.attachmentDecision.clarification,undefined);
+ assert.deepEqual(Array.from(result.attachments,x=>x.fileId),['new','old']);
+ assert.equal(scope.pdfSourceOccurrence('Compare new report.pdf with original report.pdf','report.pdf',[pdf('new','report.pdf')],'fresh'),0);
+ assert.equal(scope.pdfSourceOccurrence('Compare new report.pdf with original report.pdf','report.pdf',[pdf('old','report.pdf')],'saved'),1);
+});

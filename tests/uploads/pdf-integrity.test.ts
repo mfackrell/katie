@@ -551,3 +551,14 @@ test("positive reading can use parsed text while explicit OCR prohibition preven
   assert.match(constrainedContext,/known parsed text/);assert.doesNotMatch(constrainedContext,/PRIVATE-CACHED/);
  } finally {globalThis.fetch=oldFetch;if(oldKey)process.env.GOOGLE_API_KEY=oldKey;else delete process.env.GOOGLE_API_KEY;}
 });
+
+test("a named ban on another PDF does not suppress native inspection of a scanned source",async()=>{
+ const [ref]=await buildFileReferences([file([""])]);ref.fileName="a.pdf";
+ const oldFetch=globalThis.fetch,oldKey=process.env.GOOGLE_API_KEY;let calls=0;
+ process.env.GOOGLE_API_KEY="offline-test-key";
+ globalThis.fetch=async()=>{calls++;return Response.json({candidates:[{finishReason:"STOP",content:{parts:[{text:JSON.stringify({fingerprint:ref.sourceFingerprint,pages:[{physicalPage:1,status:"readable",observations:"A-SCAN",rows:[]}]})}]}}]});};
+ try {
+  const result=await inspectPdf(ref,'Read a.pdf but don\'t OCR "b.pdf"',new Blob([new Uint8Array([1,2,3])]));
+  assert.equal(calls,1);assert.equal(result.pages[0].observations,"A-SCAN");
+ } finally {globalThis.fetch=oldFetch;if(oldKey)process.env.GOOGLE_API_KEY=oldKey;else delete process.env.GOOGLE_API_KEY;}
+});
