@@ -135,11 +135,12 @@ test("installed Gemini SDK produces validated cached evidence with one request a
 });
 function storageFixture() {
     const files = new Map<string, Blob>();
+    const timestamps = new Map<string,number>();
     let refreshes = 0;
-    const objects = { download: async (path: string) => ({ data: files.get(path) ?? null, error: null }), upload: async (path: string, body: BlobPart, options?: {upsert?:boolean}) => { if(options?.upsert===false && files.has(path)) return {error:{message:"Asset Already Exists",statusCode:"400"}}; files.set(path, new Blob([body])); return { error: null }; }, remove: async (paths: string[]) => { paths.forEach(path => files.delete(path)); return { error: null }; }, list: async (prefix: string) => ({ data: [...files.keys()].filter(path => path.startsWith(prefix + "/")).map(path => ({ name: path.slice(prefix.length + 1) })), error: null }) };
+    const objects = { download: async (path: string) => ({ data: files.get(path) ?? null, error: null }), upload: async (path: string, body: BlobPart, options?: {upsert?:boolean}) => { if(options?.upsert===false && files.has(path)) return {error:{message:"Asset Already Exists",statusCode:"400"}}; files.set(path, new Blob([body])); return { error: null }; }, remove: async (paths: string[]) => { paths.forEach(path => files.delete(path)); return { error: null }; }, list: async (prefix: string) => ({ data: [...files.keys()].filter(path => path.startsWith(prefix + "/")).map(path => ({ name: path.slice(prefix.length + 1), created_at: new Date(timestamps.get(path) ?? Date.now()).toISOString() })), error: null }) };
     const storage = { from: () => objects, getBucket: async () => ({ data: { public: false }, error: null }) } as unknown as Parameters<typeof createStoredUploadService>[0];
     const service = createStoredUploadService(storage, "offline-secret", { buildReferences: async (files) => { refreshes++; return buildFileReferences(files); } });
-    return { files, service, storage, refreshes: () => refreshes };
+    return { files, timestamps, objects, service, storage, refreshes: () => refreshes };
 }
 test("private PDF ingestion/hydration/restore rejects forged metadata and honors live ownership and deletion", async () => {
     const { service, files, refreshes } = storageFixture();
@@ -561,4 +562,41 @@ test("a named ban on another PDF does not suppress native inspection of a scanne
   const result=await inspectPdf(ref,'Read a.pdf but don\'t OCR "b.pdf"',new Blob([new Uint8Array([1,2,3])]));
   assert.equal(calls,1);assert.equal(result.pages[0].observations,"A-SCAN");
  } finally {globalThis.fetch=oldFetch;if(oldKey)process.env.GOOGLE_API_KEY=oldKey;else delete process.env.GOOGLE_API_KEY;}
+});
+
+test("ordinary PDF ingestion cleans expired staging objects without touching recent or retained sources",async()=>{
+ const {files,timestamps,service}=storageFixture();
+ for(const path of ['incoming/old','references/old.json','chunks/old','processing/old.json','incoming/recent','chats/retained.source']){
+  files.set(path,new Blob(['kept']));timestamps.set(path,path.includes('recent')?Date.now():Date.now()-25*60*60*1000);
+ }
+ await service.ingestPdfUploads([file([''])]);
+ for(const path of ['incoming/old','references/old.json','chunks/old','processing/old.json'])assert.equal(files.has(path),false,path);
+ assert.equal(files.has('incoming/recent'),true);assert.equal(files.has('chats/retained.source'),true);
+});
+test("page receipt storage retries recover transient errors and lost acknowledgments without repeating inference",async()=>{
+ for(const ambiguous of [false,true]){
+  const {service,storage,objects}=storageFixture();
+  const [upload]=await service.ingestPdfUploads([file(['',''])]);const [ref]=await service.hydrate([upload]);
+  const chat='00000000-0000-4000-8000-000000000001',actor='00000000-0000-4000-8000-000000000002';
+  const saved=await service.persist(chat,ref,upload.storageToken,{actorId:actor});
+  const originalUpload=objects.upload,failed=new Set<string>();let calls=0;
+  objects.upload=async(path,body,options)=>{
+   if(path.includes('.pdf-page-') && !failed.has(path)){
+    failed.add(path);if(ambiguous)await originalUpload(path,body,options);
+    return {error:{message:'transient storage acknowledgment failure',statusCode:'503'}};
+   }
+   return originalUpload(path,body,options);
+  };
+  const oldFetch=globalThis.fetch,oldKey=process.env.GOOGLE_API_KEY,oldAdmin=globalThis.__KATIE_SUPABASE_ADMIN_CLIENT__;
+  process.env.GOOGLE_API_KEY='offline-test-key';
+  globalThis.__KATIE_SUPABASE_ADMIN_CLIENT__={rpc:async()=>({error:null,data:null})} as unknown as NonNullable<typeof globalThis.__KATIE_SUPABASE_ADMIN_CLIENT__>;
+  globalThis.fetch=async()=>{calls++;return Response.json({candidates:[{finishReason:'STOP',content:{parts:[{text:JSON.stringify({fingerprint:ref.sourceFingerprint,pages:[1,2].map(physicalPage=>({physicalPage,status:'readable',observations:`PAGE-${physicalPage}`,rows:[]}))})}]}}]});};
+  try {
+   const first=await service.pdfEvidence(chat,saved,actor,'Read every page',async()=>true);
+   assert.equal(first.pages.length,2);assert.equal(failed.size,2);assert.equal(calls,1);
+   const restarted=createStoredUploadService(storage,'offline-secret');
+   const recalled=await restarted.pdfEvidence(chat,saved,actor,'Read every page',async()=>true);
+   assert.equal(recalled.pages.length,2);assert.equal(calls,1);
+  }finally{globalThis.fetch=oldFetch;globalThis.__KATIE_SUPABASE_ADMIN_CLIENT__=oldAdmin;if(oldKey)process.env.GOOGLE_API_KEY=oldKey;else delete process.env.GOOGLE_API_KEY;}
+ }
 });

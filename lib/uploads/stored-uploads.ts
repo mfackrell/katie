@@ -142,6 +142,10 @@ export function createStoredUploadService(storage: Storage, secret: string, opti
   return {
     async ingestPdfUploads(files:File[]):Promise<FileReference[]> {
       const references=await buildReferences(files);
+      if(references.some(reference=>reference.mimeType==="application/pdf")) {
+        await ensureBucket();
+        await cleanExpiredObjects();
+      }
       return Promise.all(references.map(async (reference,index)=>{
         if(reference.mimeType!=="application/pdf") return reference;
         await ensureBucket();
@@ -591,8 +595,23 @@ export function createStoredUploadService(storage: Storage, secret: string, opti
       for(const page of evidence.pages.filter(page=>!known.has(page.physicalPage))) {
         if(!await live()) throw new UploadInputError("PDF source was deleted.");
         const receipt={actorId,chatId,attachmentId:attachment.id,evidence:{...evidence,pages:[page],rawReports:evidence.rawReports.slice(-1)}};
-        const persisted=await objects.upload(`${path}.pdf-page-${String(page.physicalPage).padStart(6,"0")}.json`,JSON.stringify(receipt),{contentType:"application/json",upsert:false});
-        if(persisted.error) throw new Error("PDF evidence persistence unavailable; attempt retained, no automatic inference retry.");
+        const receiptPath=`${path}.pdf-page-${String(page.physicalPage).padStart(6,"0")}.json`;
+        const serialized=JSON.stringify(receipt);
+        let persisted=false;
+        // Retry only deterministic private storage writes, never paid inference.
+        // A lost acknowledgment is successful only when the exact receipt exists.
+        for(let attempt=0;attempt<3 && !persisted;attempt++) {
+          if(!await live()) throw new UploadInputError("PDF source was deleted.");
+          try {
+            const saved=await objects.upload(receiptPath,serialized,{contentType:"application/json",upsert:false});
+            if(!saved.error) { persisted=true; break; }
+          } catch { /* Reconcile an ambiguous storage acknowledgment below. */ }
+          try {
+            const existing=await objects.download(receiptPath);
+            if(existing.data && JSON.stringify(JSON.parse(await existing.data.text()))===serialized) persisted=true;
+          } catch { /* A bounded retry may recover a transient storage failure. */ }
+        }
+        if(!persisted) throw new Error("PDF evidence persistence unavailable after three writes; attempt retained, no automatic inference retry.");
         matching.push(receipt);
       }
       if(evidence.pages.length && await live()) {
