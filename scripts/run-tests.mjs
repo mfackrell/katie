@@ -26,7 +26,7 @@ const focused = {
   website: ["visual-review", "local-katie-inspection", "website-evidence", "claude-provider", "grok-provider", "direct-upload",
     "server-video-frame-recovery", "attachment-continuity", "attachment-discovery", "collaboration",
     "provider-response-errors", "chat-recovery", "stored-website-evidence", "chat-failure-regressions"],
-  review: ["required-review", "objective-first-prompts", "review-continuity", "task-progress", "actors-route", "collaboration"],
+  review: ["required-review", "objective-first-prompts", "review-continuity", "task-progress", "response-policy", "review-sources", "supabase-admin", "chat-clarification-routing", "actors-route", "collaboration"],
   "video-fallback": ["runpod-video-fallback"],
   integration: ["api-stack"],
 };

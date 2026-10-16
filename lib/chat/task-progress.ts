@@ -10,13 +10,18 @@ export type TaskQuestion = {
   assistantMessageId: string;
   index: number;
   text: string;
+  /** Stable user-message IDs; absent only on ledgers written before binding. */
+  projectId?: string;
+  taskId?: string;
 };
 export type AnsweredTaskQuestion = TaskQuestion & {
   userMessageId: string;
   answer: string;
   exactNumberedMatch: boolean;
+  /** A literal partial fact does not close the question it relates to. */
+  partial?: boolean;
 };
-export type UserTurnIntent = "new_task" | "revision" | "feedback" | "answer" | "continuation";
+export type UserTurnIntent = "new_task" | "revision" | "feedback" | "answer" | "clarification" | "conversation" | "continuation";
 
 export type TaskProgressState = {
   version: 1;
@@ -33,9 +38,54 @@ export type TaskProgressState = {
   lastUserIntent?: UserTurnIntent;
 };
 
-type ProgressMessage = Pick<Message, "id" | "role" | "content">;
+export type ProgressMessage = Pick<Message, "id" | "role" | "content">;
 const MAX_ANSWERED = 18;
 const MAX_QUESTIONS = 8;
+
+function explicitlyStartsProject(text: string): boolean {
+  return /^(?:(?:new|different)\s+(?:project|engagement)|switch(?:ing)?\s+to\s+(?:a\s+)?(?:new\s+|different\s+)?(?:project|engagement))\b/i.test(text.trim().replace(/^#{1,6}\s*/, ""));
+}
+
+/** A pasted role brief is a project boundary even without the words "new project". */
+export function isProjectBrief(message: string): boolean {
+  const text = message.trim().replace(/^#{1,6}\s*/, "");
+  if (explicitlyStartsProject(text)) return true;
+  const heading = text.split(/\n/).find(line => line.trim())?.replace(/^[#*\s]+|[*\s]+$/g, "").slice(0, 240) ?? "";
+  // A screening prompt mentioning a job title still belongs to its parent project.
+  if (/^(?:please\b|(?:can|could|would)\s+you\b|i\b|we\b|my\b|your\b|what\b|how\b|why\b|(?:write|draft|describe|share|give|list|explain|rewrite|revise|compare)\b)/i.test(heading)) return false;
+  const role = /\b(?:cfo|ceo|coo|cto|chief\s+\w+\s+officer|controller|advisor|consultant|director|manager|engineer|designer|analyst|specialist|head\s+of)\b/i.test(heading);
+  const employer = /\b(?:for\s+(?:a|an|the)|pe[- ]backed|private[ -]equity|company|business|client|position|engagement)\b/i.test(heading);
+  const structuredBody = text.length > 200 && /(?:^|\n)\s*(?:#{1,6}\s*)?(?:project\s+(?:overview|description|details)|(?:role|job)\s+(?:overview|description)|responsibilities|requirements|qualifications|location|duration|our\s+client)\b/im.test(text);
+  return role && (employer || structuredBody);
+}
+
+/** Unfamiliar terminology is not an assertion that the underlying fact is absent. */
+export function isTerminologyClarification(message: string): boolean {
+  const text = message.trim().replace(/[‘’]/g, "'");
+  const definitionPhrase = (phrase: string) => phrase.trim().split(/\s+/).length <= 10 &&
+    !/\b(?:wrong|best|risks?|next|recommend\w*|strateg(?:y|ies)|plans?|should|happening|happened|going|fails?|failed|failing|broken|cost|status|why|how|whether|my|our|this|your)\b/i.test(phrase);
+  const plainDefinition = text.match(/(?:^|[.!?]\s+)(?:(?:can|could|would)\s+you\s+(?:please\s+)?explain\s+)?what(?:'s|\s+is|\s+are)\s+([^.!?\n]{1,120})\?/i);
+  const unfamiliar = text.match(/\b(?:do\s*not|don'?t)\s+(?:know|understand)\s+what\s+([^.!?\n]{1,100})\s+(?:is|are|means?)\b/i);
+  const directUnknown = text.match(/\b(?:do\s*not|don'?t)\s+understand\s+([^.!?\n]{1,100})(?:[.!?]|$)/i);
+  return Boolean(unfamiliar && definitionPhrase(unfamiliar[1])) ||
+    /\b(?:do\s*not|don'?t)\s+(?:know|understand)\s+(?:the\s+)?(?:term|word|phrase|concept)\b/i.test(text) ||
+    Boolean(directUnknown && definitionPhrase(directUnknown[1])) ||
+    /\b(?:not\s+familiar|unfamiliar)\s+with\b/i.test(text) ||
+    /\bwhat\s+(?:do|did)\s+you\s+mean\b/i.test(text) ||
+    /\bwhat\s+(?:does|do)\s+[^.!?\n]{1,100}\s+mean\b/i.test(text) ||
+    Boolean(plainDefinition && definitionPhrase(plainDefinition[1])) ||
+    /^(?:(?:can|could|would)\s+you\s+)?(?:please\s+)?(?:define\b|explain\s+(?:(?:the\s+)?(?:term|word|phrase|concept)\b|what\s+you\s+mean\b))/i.test(text);
+}
+
+function explicitDeliverableInstruction(text: string): boolean {
+  return /(?:^|\n|[.!?]\s+|\b(?:and|then|but)\s+)(?:(?:please|now|go ahead and|can you|could you|would you)\s+)?(?:write|draft|build|create|prepare|produce|rewrite|revise|redraft|implement)\b/i.test(text);
+}
+
+function partialFactsFromClarification(text: string): string {
+  return text.split(/(?<=[.!?])\s+|,\s*(?=(?:i|we)\s+(?:do\s*not|don'?t)\s+(?:know|understand))|\s+(?:but|and)\s+(?=(?:i|we|what)\b)/i)
+    .filter(clause => !isTerminologyClarification(clause) && /(?:\b(?:i|we)\s+(?:(?:do\s*not|don'?t)\s+have|have|had|led|did|never|am|are)\b|^no\b[^.!?]{0,120}\bexperience\b)/i.test(clause))
+    .join(" ").trim();
+}
 
 export function extractAssistantQuestions(content: string, assistantMessageId: string): TaskQuestion[] {
   const lines = content.slice(-3500).split(/\n/).map(s => s.trim()).filter(Boolean);
@@ -86,6 +136,10 @@ export function classifyUserTurn(message: string): Exclude<UserTurnIntent, "answ
   const text = (explicitCurrentQuestion(message) ?? message).trim().replace(/^#{1,6}\s*/, "");
   const opening = text.slice(0, 600);
 
+  // Bare yes/no can answer a factual question. Social acknowledgments cannot.
+  if (/^(?:(?:great|perfect|okay|ok|yes|sure)[,.!]?\s+)?(?:thanks(?: a lot)?|thank you(?: very much)?|got it|understood|that makes sense|makes sense)[.!\s]*$/i.test(text) ||
+    /^(?:hi|hello|hey|good (?:morning|afternoon|evening)|how are you|what'?s up)(?:[ ,]+(?:katie|kat))?[?!.\s]*$/i.test(text)) return "conversation";
+
   // An explicit "feedback only" boundary must not become another draft request.
   if (/^(?:this is |just |only )?(?:feedback only|only feedback|feedback,? not (?:a )?(?:rewrite|revision)|for feedback only)\b/i.test(opening) ||
       /^\s*(?:my |this is my )?(?:evaluation|assessment|feedback) of\b[\s\S]{0,160}\b(?:do not|don't)\s+(?:rewrite|revise|redraft)\b/i.test(opening) ||
@@ -100,6 +154,11 @@ export function classifyUserTurn(message: string): Exclude<UserTurnIntent, "answ
       /^(?:please\s+)?(?:make|produce|give me)\s+(?:another|a new|a revised|a better)\s+(?:draft|version|answer|response)\b/i.test(text)) {
     return "revision";
   }
+
+  // A definition detour keeps the current question open. A combined request
+  // such as "explain it, then draft the application" can still request work.
+  if (isTerminologyClarification(text) && !explicitDeliverableInstruction(text)) return "clarification";
+  if (isProjectBrief(text)) return "new_task";
 
   // New standalone requests use leading imperatives, including common
   // application screening questions such as "Please describe your experience".
@@ -133,7 +192,7 @@ export function emptyTaskProgress(): TaskProgressState {
 
 export function applyUserToTaskProgress(
   previous: TaskProgressState,
-  input: { messageId: string; text: string },
+  input: { messageId: string; text: string; projectRelation?: "new_project" | "same_project" },
 ): TaskProgressState {
   if (previous.lastUserMessageId === input.messageId) return previous;
   const text = input.text.trim();
@@ -142,13 +201,37 @@ export function applyUserToTaskProgress(
   // Keep the overarching user-supplied project distinct from a changing
   // sequence of narrower questions. A wholly different project may supersede
   // this context, but ordinary subquestions do not erase it.
-  const startsNewProject = /^(?:new|different|switch(?:ing)?\s+to\s+(?:a\s+)?)(?:\s+project|\s+engagement)\b/i.test(text);
+  const startsNewProject = input.projectRelation === "new_project" || explicitlyStartsProject(text) ||
+    (input.projectRelation !== "same_project" && isProjectBrief(text) &&
+      currentQuestion !== (previous.projectContext ?? previous.objective)?.text);
   const projectContext = startsNewProject
     ? {text: currentQuestion.slice(0, 4000), userMessageId: input.messageId}
     : (previous.projectContext ?? previous.objective ?? {text: currentQuestion.slice(0, 4000), userMessageId: input.messageId});
   const pending = previous.pending;
   const numbered = splitNumberedAnswers(text);
-  const intent = classifyUserTurn(text);
+  const intent = startsNewProject ? "new_task" : classifyUserTurn(text);
+  if (intent === "clarification" && pending.length) {
+    const answered: AnsweredTaskQuestion[] = [];
+    const remaining: TaskQuestion[] = [];
+    for (const question of pending) {
+      const specific = numbered.get(question.index);
+      if (specific && !isTerminologyClarification(specific)) {
+        answered.push({ ...question, userMessageId: input.messageId, answer: specific.slice(0, 1300), exactNumberedMatch: true });
+        continue;
+      }
+      // Keep compound questions open. Preserve any explicit partial fact as a
+      // literal statement, never infer "no experience" from "what does it mean".
+      const partial = partialFactsFromClarification(specific ?? (numbered.size === 0 && pending.length === 1 ? text : ""));
+      if (partial) answered.push({ ...question, userMessageId: input.messageId, answer: partial.slice(0, 1300), exactNumberedMatch: Boolean(specific), partial: true });
+      remaining.push(question);
+    }
+    return {
+      ...previous, projectContext, pending: remaining,
+      answered: [...previous.answered, ...answered].slice(-MAX_ANSWERED),
+      stage: "awaiting_user_answer", nextAction: "await_user_answers",
+      lastUserMessageId: input.messageId, lastUserIntent: "clarification",
+    };
+  }
   const isAnswer = pending.length > 0 && intent === "continuation";
   if (!isAnswer) {
     return {
@@ -157,8 +240,8 @@ export function applyUserToTaskProgress(
       ...(intent === "new_task" || !previous.objective ? { objective: { text: currentQuestion.slice(0, 2000), userMessageId: input.messageId } } : {}),
       pending: intent === "new_task" || intent === "revision" ? [] : previous.pending,
       answered: intent === "new_task" ? [] : previous.answered,
-      stage: "working",
-      nextAction: "continue_original_goal",
+      stage: intent === "conversation" && previous.pending.length ? "awaiting_user_answer" : "working",
+      nextAction: intent === "conversation" && previous.pending.length ? "await_user_answers" : "continue_original_goal",
       lastUserMessageId: input.messageId,
       lastUserIntent: intent,
     };
@@ -192,10 +275,24 @@ export function applyUserToTaskProgress(
 
 export function applyAssistantToTaskProgress(
   previous: TaskProgressState,
-  input: { messageId: string; text: string },
+  input: { messageId: string; text: string; responsePurpose?: "conversation" | "deliverable" },
 ): TaskProgressState {
   if (previous.lastAssistantMessageId === input.messageId) return previous;
-  const pending = extractAssistantQuestions(input.text, input.messageId);
+  const questions = extractAssistantQuestions(input.text, input.messageId).map(question => ({
+    ...question,
+    ...(previous.objective ? {
+      projectId: (previous.projectContext ?? previous.objective).userMessageId,
+      taskId: previous.objective.userMessageId,
+    } : {}),
+  }));
+  const preserveQuestions = input.responsePurpose === "conversation" ||
+    (input.responsePurpose === undefined && (previous.lastUserIntent === "clarification" || previous.lastUserIntent === "conversation"));
+  const normalized = (text: string) => text.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+  const pending = preserveQuestions
+    ? [...previous.pending, ...questions]
+      .filter((question, index, items) => items.findIndex(other => normalized(other.text) === normalized(question.text)) === index)
+      .slice(0, MAX_QUESTIONS)
+    : questions;
   return { ...previous, pending, stage: pending.length ? "awaiting_user_answer" : "working", nextAction: pending.length ? "await_user_answers" : "continue_original_goal", lastAssistantMessageId: input.messageId };
 }
 
@@ -217,11 +314,21 @@ export function syncTaskProgress(previous: TaskProgressState | null, history: Pr
   const cursor = Math.max(userCursor, assistantCursor);
   if (cursor < 0) {
     const recent = rebuildTaskProgress(history);
+    // A recent role brief supersedes an old cached project. A window that
+    // starts at a screening subquestion must retain the established project.
+    const recentProjectIsExplicit = recent.projectContext && isProjectBrief(recent.projectContext.text);
+    const changedProject = recentProjectIsExplicit && recent.projectContext?.userMessageId !== previous.projectContext?.userMessageId;
+    const projectContext = recentProjectIsExplicit ? recent.projectContext : previous.projectContext ?? previous.objective ?? recent.projectContext;
+    const recoverProjectBinding = <T extends TaskQuestion>(question: T): T =>
+      projectContext && (!question.projectId || question.projectId === recent.projectContext?.userMessageId)
+        ? { ...question, projectId: projectContext.userMessageId }
+        : question;
     return {
       ...recent,
       objective: recent.objective ?? previous.objective,
-      projectContext: previous.projectContext ?? previous.objective ?? recent.projectContext,
-      answered: [...previous.answered, ...recent.answered]
+      projectContext,
+      pending: recent.pending.map(recoverProjectBinding),
+      answered: [...(changedProject ? [] : previous.answered), ...recent.answered.map(recoverProjectBinding)]
         .filter((item, index, array) => array.findIndex(other => other.id === item.id && other.userMessageId === item.userMessageId) === index)
         .slice(-MAX_ANSWERED),
     };
@@ -241,6 +348,7 @@ export function formatTaskProgress(progress: TaskProgressState): string {
     question: item.text,
     answer: item.answer,
     exactNumberedMatch: item.exactNumberedMatch,
+    ...(item.partial ? { partial: true } : {}),
   }));
   return [
     "KATIE_DURABLE_TASK_PROGRESS (scoped to this actor and chat)",
@@ -253,6 +361,7 @@ export function formatTaskProgress(progress: TaskProgressState): string {
     "Latest user turn type (advisory; verify against literal user request): " + (progress.lastUserIntent ?? "unspecified"),
     "When the user provides feedback/evaluation without requesting a revised artifact, engage with the feedback and do not silently generate another draft. Remember lessons appropriately without treating quoted criticism as a new instruction.",
     "When the user expressly asks for revision, revise the existing work. A new application question such as 'Please describe...' is a separate requested deliverable. User text takes precedence over this heuristic.",
+    "A terminology question is a conversational detour: explain the term and preserve the underlying unanswered question. A partial answer records only its literal facts; unfamiliarity with a term does not establish that experience is absent or authorize a finished deliverable.",
     "Current stage: " + progress.stage,
     "Next appropriate action: " + progress.nextAction,
     "Answered questions with source IDs: " + JSON.stringify(completed),

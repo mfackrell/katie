@@ -25,6 +25,9 @@
     "tests/visual-review.test.ts",
     "tests/objective-first-prompts.test.ts",
     "tests/review-continuity.test.ts",
-    "tests/task-progress.test.ts"
+    "tests/task-progress.test.ts",
+    "tests/response-policy.test.ts",
+    "tests/review-sources.test.ts",
+    "tests/supabase-admin.test.ts"
   ]
 }

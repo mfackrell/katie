@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import {
   applyAssistantToTaskProgress, applyUserToTaskProgress, classifyUserTurn, emptyTaskProgress, explicitCurrentQuestion,
   extractAssistantQuestions, formatTaskProgress, rebuildTaskProgress, splitNumberedAnswers,
-  syncTaskProgress,
+  isProjectBrief, isTerminologyClarification, syncTaskProgress,
 } from "../lib/chat/task-progress";
 import { reviewBaseline, acceptanceIds } from "../lib/collaboration/review-contract";
 import type { ChatGenerateParams } from "../lib/providers/types";
@@ -200,6 +200,117 @@ test("new project context supersedes prior project, not every follow-up question
   ]);
   assert.match(state.projectContext?.text ?? "",/Analyze Q3 inventory/);
   assert.equal(state.objective?.text,"New project: Analyze Q3 inventory performance.");
+});
+
+const distributionPosting = "FP&A/P&L Advisor for PE-Backed Distribution Company (U.S. only; Hybrid)\nSouthern California 11/02/2026 - 05/02/2027\nOur client, an approximately $100M food distribution company, is seeking an FP&A/P&L Advisor to partner closely with a newly appointed President and support a broader performance improvement effort.";
+const distributionQuestion = "**One question:** Do you have any distribution, wholesale, or sponsor-reporting experience that isn’t in your record? If not, I’ll position the application on the adjacent evidence above.";
+const mixedDistributionReply = "i do not have specific distribution, wholesale experience, i dont know what sporsor reporting is.";
+
+test("a newly pasted role replaces the old project without requiring an explicit new-project command",()=>{
+  const old=applyUserToTaskProgress(rebuildTaskProgress(history),{messageId:"old-facts",text:answers});
+  assert.equal(isProjectBrief(distributionPosting),true);
+  const current=applyUserToTaskProgress(old,{messageId:"distribution-project",text:distributionPosting});
+  assert.equal(current.projectContext?.userMessageId,"distribution-project");
+  assert.equal(current.objective?.userMessageId,"distribution-project");
+  assert.equal(current.lastUserIntent,"new_task");
+  assert.deepEqual(current.answered,[]);
+  assert.deepEqual(current.pending,[]);
+  const narrower=applyUserToTaskProgress(current,{messageId:"distribution-screening",text:"Please share three relevant examples for the FP&A advisor role.",projectRelation:"same_project"});
+  assert.equal(isProjectBrief(narrower.objective!.text),false);
+  assert.equal(narrower.projectContext?.userMessageId,"distribution-project");
+  assert.equal(narrower.objective?.userMessageId,"distribution-screening");
+  const asked=applyAssistantToTaskProgress(narrower,{messageId:"current-question",text:distributionQuestion});
+  assert.equal(asked.pending[0]?.projectId,"distribution-project");
+  assert.equal(asked.pending[0]?.taskId,"distribution-screening");
+});
+
+test("the existing classifier can establish a different project for a brief without a recognizable title",()=>{
+  const old=rebuildTaskProgress(history);
+  const current=applyUserToTaskProgress(old,{messageId:"new-client",text:"We need a three-month turnaround for a regional distributor.",projectRelation:"new_project"});
+  assert.equal(current.projectContext?.userMessageId,"new-client");
+  assert.equal(current.objective?.userMessageId,"new-client");
+  assert.deepEqual(current.pending,[]);
+  const same=applyUserToTaskProgress(old,{messageId:"same-role",text:distributionPosting,projectRelation:"same_project"});
+  assert.equal(same.projectContext?.userMessageId,"user-job","same-project classification keeps the established project identity");
+});
+
+test("the actual mixed reply records the negative industry fact and keeps the unfamiliar sponsor question open",()=>{
+  const original=rebuildTaskProgress([
+    {id:"distribution-project",role:"user",content:distributionPosting},
+    {id:"sponsor-question",role:"assistant",content:distributionQuestion},
+  ]);
+  const current=applyUserToTaskProgress(original,{messageId:"mixed-reply",text:mixedDistributionReply});
+  assert.equal(current.lastUserIntent,"clarification");
+  assert.equal(current.objective?.userMessageId,"distribution-project");
+  assert.equal(current.pending[0]?.id,"sponsor-question:1");
+  assert.equal(current.stage,"awaiting_user_answer");
+  assert.equal(current.answered.length,1);
+  assert.equal(current.answered[0].answer,"i do not have specific distribution, wholesale experience");
+  assert.equal(current.answered[0].partial,true);
+  assert.ok(!current.answered[0].answer.includes("sporsor"),"term uncertainty must not become a negative experience fact");
+  assert.match(formatTaskProgress(current),/unfamiliarity with a term does not establish that experience is absent/);
+
+  const explained=applyAssistantToTaskProgress(current,{messageId:"definition",text:"Sponsor reporting means financial reporting to a private equity owner, including board packs and cash-flow reports.",responsePurpose:"conversation"});
+  assert.equal(explained.pending[0]?.id,"sponsor-question:1");
+  const thanks=applyUserToTaskProgress(explained,{messageId:"thanks",text:"Thanks"});
+  assert.equal(thanks.lastUserIntent,"conversation");
+  assert.deepEqual(thanks.pending,explained.pending);
+  assert.deepEqual(thanks.answered,explained.answered);
+  const acknowledged=applyAssistantToTaskProgress(thanks,{messageId:"welcome",text:"You're welcome."});
+  const completed=applyUserToTaskProgress(acknowledged,{messageId:"sponsor-fact",text:"Yes, I prepared monthly board packs for private equity owners."});
+  assert.equal(completed.lastUserIntent,"answer");
+  assert.equal(completed.pending.length,0);
+  assert.equal(completed.answered.at(-1)?.assistantMessageId,"sponsor-question");
+  assert.equal(completed.answered.at(-1)?.partial,undefined);
+});
+
+test("terminology detection distinguishes definitions from substantive diagnostics and unavailable facts",()=>{
+  for (const text of [
+    "What is sponsor reporting?", "What does accrual mean?", "Could you explain what you mean by reconciliation?",
+    "I don't understand what idempotency means.", mixedDistributionReply,
+  ]) assert.equal(isTerminologyClarification(text),true,text);
+  for (const text of [
+    "I don't know.", "I don't have sponsor-reporting experience.", "What is wrong with this code?",
+    "What is the best allocation strategy?", "What are the risks in this contract?", "I don't understand why the API fails.",
+  ]) assert.equal(isTerminologyClarification(text),false,text);
+  const pending=applyAssistantToTaskProgress(applyUserToTaskProgress(emptyTaskProgress(),{messageId:"task",text:"Draft the report."}),{messageId:"question",text:"What revenue figure should I include?"});
+  assert.equal(applyUserToTaskProgress(pending,{messageId:"unavailable",text:"I don't know."}).pending.length,0);
+  assert.equal(applyUserToTaskProgress(pending,{messageId:"go",text:"Yes, draft it."}).lastUserIntent,"answer","a short instruction can still advance the pending deliverable");
+});
+
+test("a numbered reply can answer one question while asking for the meaning of another",()=>{
+  const previous=rebuildTaskProgress([
+    {id:"task",role:"user",content:"Prepare the application."},
+    {id:"questions",role:"assistant",content:"1. Are you available on November 2?\n2. Do you have sponsor-reporting experience?"},
+  ]);
+  const current=applyUserToTaskProgress(previous,{messageId:"partial",text:"1. Yes, November 2 works. 2. What does sponsor reporting mean?"});
+  assert.equal(current.answered.length,1);
+  assert.equal(current.answered[0].index,1);
+  assert.equal(current.answered[0].exactNumberedMatch,true);
+  assert.equal(current.pending.length,1);
+  assert.equal(current.pending[0].index,2);
+  const explained=applyAssistantToTaskProgress(current,{messageId:"explain",text:"Sponsor reporting is reporting to the private equity owner."});
+  assert.equal(explained.pending[0].id,"questions:2","replay without response-purpose metadata must also keep the question");
+});
+
+test("partial-history recovery replaces a stale project when a new posting is present",()=>{
+  const old=applyUserToTaskProgress(rebuildTaskProgress(history),{messageId:"old-facts",text:answers});
+  const recovered=syncTaskProgress(old,[
+    {id:"distribution-project",role:"user",content:distributionPosting},
+    {id:"new-question",role:"assistant",content:distributionQuestion},
+  ]);
+  assert.equal(recovered.projectContext?.userMessageId,"distribution-project");
+  assert.equal(recovered.answered.length,0);
+  assert.equal(recovered.pending[0].projectId,"distribution-project");
+
+  const narrowWindow=syncTaskProgress(old,[
+    {id:"screening",role:"user",content:"Please share three relevant examples."},
+    {id:"narrow-question",role:"assistant",content:"What revenue figure should I use?"},
+  ]);
+  assert.equal(narrowWindow.projectContext?.userMessageId,"user-job");
+  assert.equal(narrowWindow.objective?.userMessageId,"screening");
+  assert.equal(narrowWindow.pending[0].projectId,"user-job");
+  assert.equal(narrowWindow.pending[0].taskId,"screening");
 });
 
 test("unnumbered reply to many questions never fabricates specific numbered correspondence", () => {

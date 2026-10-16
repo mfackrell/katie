@@ -524,7 +524,7 @@ export function Sidebar({
                   <option value="always">Always</option>
                   <option value="off">Off</option>
                 </select>
-                <span className="mt-2 block text-xs text-zinc-400">Always checks every generated answer with a different model before delivery. It takes longer and uses additional model calls. Adaptive uses review when needed. Off disables automatic collaboration; required tools remain available.</span>
+                <span className="mt-2 block text-xs text-zinc-400">Always checks substantive answers and drafts with a different model before delivery. Brief explanations and clarifications use a direct response. Adaptive uses review when needed. Off disables automatic collaboration; required tools remain available.</span>
               </label>
               <label className="mb-3 block text-xs font-semibold uppercase tracking-[0.24em] text-zinc-500">Purpose / System Prompt</label>
               <textarea

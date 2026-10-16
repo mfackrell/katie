@@ -113,7 +113,9 @@ class PostgrestQuery {
 
     for (const filter of this.filters) {
       if (filter.type === "eq") {
-        url.searchParams.set(filter.field, `eq.${encodeURIComponent(String(filter.value))}`);
+        // URLSearchParams encodes once; pre-encoding leaves escaped timestamps
+        // and other literal values in the filter received by PostgREST.
+        url.searchParams.set(filter.field, `eq.${String(filter.value)}`);
       } else {
         const encodedValues = (filter.value as unknown[]).map((value) => `"${String(value)}"`).join(",");
         url.searchParams.set(filter.field, `in.(${encodedValues})`);
