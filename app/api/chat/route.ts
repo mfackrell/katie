@@ -1910,7 +1910,7 @@ async function executeChat(request: NextRequest) {
               if (attachmentDecision.clarification) continue;
               const source=pdfSources.get(pdf.fileId);
               if (!source) { pdf.preview+=" PDF evidence unavailable: no retained source identity."; continue; }
-              try { pdf.pdfEvidence=await inspectSavedPdf(chatId,source,actorId,pdfPageTaskForSource(pdfSourceTask, pdf.fileName, attachments.filter(file => file.mimeType === "application/pdf").map(file => file.fileName),pdf.pdfSourceOccurrence),async id=>(await getChatById(id))?.actorId===actorId); }
+              try { pdf.pdfEvidence=await inspectSavedPdf(chatId,source,actorId,pdfPageTaskForSource(pdfSourceTask, pdf.fileName, attachments.filter(file => file.mimeType === "application/pdf").map(file => file.fileName),pdf.pdfSourceOccurrence),async id=>(await getChatById(id))?.actorId===actorId,pdfSourceTask); }
               catch (error) {
                 if (error instanceof Error && /Please specify.*PDF/.test(error.message)) {
                   attachmentDecision.clarification = error.message;

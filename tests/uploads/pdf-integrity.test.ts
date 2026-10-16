@@ -515,12 +515,13 @@ test("explicit page-range continuation survives restart without widening or cros
  process.env.GOOGLE_API_KEY="offline-test-key";
  globalThis.fetch=async(_input,init)=>{
   const prompt=JSON.parse(String(init?.body)).contents[0].parts[0].text as string;
+  assert.match(prompt,/Extract every transaction/);
   const pages=/physical PDF pages ([\d,]+)/.exec(prompt)![1].split(',').map(Number);calls.push(pages);
   const fingerprint=/Source fingerprint: ([a-f0-9]+)/.exec(prompt)![1];
   return Response.json({candidates:[{finishReason:"STOP",content:{parts:[{text:JSON.stringify({fingerprint,pages:pages.map(physicalPage=>({physicalPage,status:"readable",observations:`PAGE-${physicalPage}`,rows:[]}))})}]}}]});
  };
  try {
-  const first=await service.pdfEvidence(current,saved,actor,"Read pages 10-15",async()=>true);
+  const first=await service.pdfEvidence(current,saved,actor,"Extract every transaction from pages 10-15",async()=>true);
   assert.deepEqual(first.contextPages,[10,11,12,13]);
   const restart=createStoredUploadService(storage,"offline-secret",{buildReferences:async()=>{throw Error("No reparse");}});
   const second=await restart.pdfEvidence(current,saved,actor,"continue",async()=>true);
@@ -528,7 +529,7 @@ test("explicit page-range continuation survives restart without widening or cros
   assert.deepEqual(calls,[[10,11,12,13],[14,15]]);
   const foreign=await restart.pdfEvidence(otherChat,saved,actor,"continue",async()=>true);
   assert.equal(foreign.state,"failure");assert.equal(calls.length,2);
-  const reset=await restart.pdfEvidence(current,saved,actor,"Read page 1",async()=>true);
+  const reset=await restart.pdfEvidence(current,saved,actor,"Extract every transaction from page 1",async()=>true);
   assert.deepEqual(reset.requestedPages,[1]);
   const continued=await restart.pdfEvidence(current,saved,actor,"continue",async()=>true);
   assert.deepEqual(continued.contextPages,[1]);assert.equal(calls.length,3);
@@ -614,5 +615,20 @@ test("native-inspection prohibition survives scoped continuation and service res
   const next=await restart.pdfEvidence(chat,saved,actor,'continue',async()=>true);
   assert.equal(next.nativeInspectionProhibited,true);assert.equal(next.state,'not-requested');assert.equal(calls,0);
   assert.deepEqual(next.requestedPages,[1,2,3,4,5,6,7,8]);
+ }finally{globalThis.fetch=oldFetch;if(oldKey)process.env.GOOGLE_API_KEY=oldKey;else delete process.env.GOOGLE_API_KEY;}
+});
+
+test("native inspection receives the shared extraction task while retaining the selected source page",async()=>{
+ const [ref]=await buildFileReferences([file(['','',''],'a.pdf')]);
+ const oldFetch=globalThis.fetch,oldKey=process.env.GOOGLE_API_KEY;let prompt='';
+ process.env.GOOGLE_API_KEY='offline-test-key';
+ globalThis.fetch=async(_input,init)=>{
+  prompt=JSON.parse(String(init?.body)).contents[0].parts[0].text;
+  return Response.json({candidates:[{finishReason:'STOP',content:{parts:[{text:JSON.stringify({fingerprint:ref.sourceFingerprint,pages:[{physicalPage:2,status:'readable',observations:'Every visible transaction transcribed',rows:[['2026-01-01','12.34']]}]})}]}}]});
+ };
+ try{
+  const result=await inspectPdf(ref,'Read this PDF. page 2',file(['','',''],'a.pdf'),undefined,undefined,undefined,'Extract every transaction from a.pdf page 2 and b.pdf page 3');
+  assert.deepEqual(result.requestedPages,[2]);assert.equal(result.pages[0].physicalPage,2);
+  assert.match(prompt,/Inspect only physical PDF pages 2\./);assert.match(prompt,/Extract every transaction/);assert.match(prompt,/Current source filename: "a.pdf"/);
  }finally{globalThis.fetch=oldFetch;if(oldKey)process.env.GOOGLE_API_KEY=oldKey;else delete process.env.GOOGLE_API_KEY;}
 });

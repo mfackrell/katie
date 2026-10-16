@@ -32,7 +32,7 @@ for(const message of ['Read annual report.pdf','Read “annual report.pdf”','R
 });
 
 async function run(message,fresh,timelineActive=false,timelineClarification,saved=[]){
- const inspected=[],inspectedTasks=[],retained=[],sources=new Map();
+ const inspected=[],inspectedTasks=[],analysisTasks=[],retained=[],sources=new Map();
  const fixture={...scope,Error,...load('lib/uploads/pdf-inventory.ts'),newAttachments:fresh,message,pdfSourceTask:message,pdfTaskContext:null,timelineActive,timelineSelection:{clarification:timelineClarification},mediaMemory:null,savedVideoFollowUp:null,
   catalog:catalog(saved),attachmentHistory:[],restored:{references:[],unavailable:[],sourceIds:new Set()},timelineContext:'',
   ...load('lib/chat/video-attachment-dedup.ts'),...load('lib/chat/attachment-continuity.ts'),
@@ -45,7 +45,7 @@ async function run(message,fresh,timelineActive=false,timelineClarification,save
   fileReferences:fresh,legacyImageSources:new Map(),pdfSources:sources,persistedVideoSourceByFileId:new Map(),isVideoAttachment:file=>file.mimeType.startsWith('video/'),
   describeAttachmentEvidence:async file=>({observedSummary:`TEXT-${file.fileId}`,summaryModel:'offline',summaryCoverage:'partial'}),
   persistConversationAttachment:async(_chat,file,_token,{description})=>{retained.push(file.fileId);return {...file,id:'saved-'+file.fileId,...description};},
-  inspectSavedPdf:async(_chat,source,_actor,task)=>{inspected.push(source.fileId);inspectedTasks.push(task);return {version:'test',pages:[{physicalPage:1,observations:`EVIDENCE-${source.fileId}`} ]};},
+  inspectSavedPdf:async(_chat,source,_actor,task,_owns,analysisTask)=>{inspected.push(source.fileId);inspectedTasks.push(task);analysisTasks.push(analysisTask);return {version:'test',pages:[{physicalPage:1,observations:`EVIDENCE-${source.fileId}`} ]};},
   getChatById:async()=>({actorId:'actor'}),
   name:'Katie',personaForGeneration:'Base',resumptionContext:'',responsePolicy:{generationInstruction:null},taskProgressContext:'',storedWebsite:{context:'',fresh:false},creativeNarrativeRequest:false,summary:'',historyForProvider:[],messageForGeneration:message,resolvedRequestIntent:'analysis',resolvedRoutingIntentForReroute:null,
   saveProviderSystemAudit:async()=>{},requestId:'same',console,
@@ -63,7 +63,7 @@ async function run(message,fresh,timelineActive=false,timelineClarification,save
  ${part('            for (const pdf of attachments.filter', '            if (!verifyingSavedDraft && shouldRunChunkedWorkflow(')}
  return {params:createParams('offline'),attachments,requestFingerprint,clarification:attachmentDecision.clarification,access:selectionContext()};
 })()`),fixture);
- return {...result,inspected,inspectedTasks,retained};
+ return {...result,inspected,inspectedTasks,analysisTasks,retained};
 }
 const cases=[
  ['Where is "annual report.pdf"?',['annual report.pdf','other.pdf'],[],true],
@@ -247,4 +247,13 @@ for(const [message,expected] of [
  const {requestedPdfPages}=load('lib/uploads/pdf-inventory.ts');
  assert.deepEqual(result.inspectedTasks.map(task=>Array.from(requestedPdfPages(task,6))[0]),expected);
  assert.deepEqual(Array.from(result.attachments,file=>file.pdfSourceOccurrence),expected[0]===2?[0,1]:[1,0]);
+});
+
+test('per-source page scopes retain the full shared analysis instruction separately',async()=>{
+ const message='Extract every transaction from a.pdf page 2 and b.pdf page 3';
+ const result=await run(message,[pdf('a','a.pdf'),pdf('b','b.pdf')]);
+ assert.deepEqual(result.inspected,['a','b']);
+ assert.deepEqual(result.analysisTasks,[message,message]);
+ const {requestedPdfPages}=load('lib/uploads/pdf-inventory.ts');
+ assert.deepEqual(result.inspectedTasks.map(task=>Array.from(requestedPdfPages(task,4))),[[2],[3]]);
 });

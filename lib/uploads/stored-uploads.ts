@@ -524,7 +524,7 @@ export function createStoredUploadService(storage: Storage, secret: string, opti
         throw new UploadInputError("Retained source fingerprint changed.");
       return { fingerprint, source };
     },
-    async pdfEvidence(currentChat: string, attachment: ConversationAttachment, actorId: string, message: string, owns: (id:string)=>Promise<boolean>): Promise<PdfEvidence> {
+    async pdfEvidence(currentChat: string, attachment: ConversationAttachment, actorId: string, message: string, owns: (id:string)=>Promise<boolean>, analysisMessage = message): Promise<PdfEvidence> {
       const chatId=attachment.chatId ?? currentChat;
       const live=async()=>await owns(currentChat) && await owns(chatId);
       if (!await live()) throw new UploadInputError("PDF source chat unavailable.");
@@ -557,16 +557,17 @@ export function createStoredUploadService(storage: Storage, secret: string, opti
       const storedScope=await objects.download(scopePath);
       let previousPages:number[]|undefined;
       let previousNativeProhibited=true;
+      let previousAnalysisTask:string|undefined;
       if(storedScope.data) {
         try {
           const scope=JSON.parse(await storedScope.data.text());
           if(scope.version==="pdf-scope-v1" && scope.actorId===actorId && scope.sourceChatId===chatId && scope.currentChat===currentChat && scope.attachmentId===attachment.id && scope.fingerprint===fingerprint &&
             Array.isArray(scope.pages) && scope.pages.length>0 && scope.pages.length<=10000 && scope.pages.every((page:unknown)=>Number.isSafeInteger(page) && (page as number)>0 && (page as number)<=reference.pdfInventory!.pageCount) && new Set(scope.pages).size===scope.pages.length)
-            { previousPages=scope.pages; previousNativeProhibited=scope.nativeInspectionProhibited!==false; }
+            { previousPages=scope.pages; previousNativeProhibited=scope.nativeInspectionProhibited!==false; previousAnalysisTask=typeof scope.analysisTask==="string" && scope.analysisTask.length<=4000 ? scope.analysisTask : undefined; }
         } catch { /* Missing or corrupt scope cannot widen a continuation. */ }
       }
-      if(cached) cached={...cached,requestedPages:previousPages,nativeInspectionProhibited:previousNativeProhibited};
-      else if(previousPages) cached={version:"pdf-visual-v1",fingerprint,extractionVersion:"pdf-pages-v1",provider:"google",model:"gemini-2.5-flash",pages:[],rawReports:[],requestedPages:previousPages,nativeInspectionProhibited:previousNativeProhibited,state:"partial",notice:""};
+      if(cached) cached={...cached,requestedPages:previousPages,analysisTask:previousAnalysisTask,nativeInspectionProhibited:previousNativeProhibited};
+      else if(previousPages) cached={version:"pdf-visual-v1",fingerprint,extractionVersion:"pdf-pages-v1",provider:"google",model:"gemini-2.5-flash",pages:[],rawReports:[],requestedPages:previousPages,analysisTask:previousAnalysisTask,nativeInspectionProhibited:previousNativeProhibited,state:"partial",notice:""};
       const evidence=await inspectPdf(reference,message,original.data,cached,async pages=>{
         const acquired:number[]=[];
         for(const physicalPage of pages) {
@@ -585,11 +586,11 @@ export function createStoredUploadService(storage: Storage, secret: string, opti
         }
         if(!await live()) throw new UploadInputError("PDF source was deleted.");
         return acquired;
-      },async (pages,nativeInspectionProhibited)=>{
+      },async (pages,nativeInspectionProhibited,analysisTask)=>{
         if(!await live()) throw new UploadInputError("PDF source was deleted.");
-        const saved=await objects.upload(scopePath,JSON.stringify({version:"pdf-scope-v1",actorId,sourceChatId:chatId,currentChat,attachmentId:attachment.id,fingerprint,pages,nativeInspectionProhibited}),{contentType:"application/json",upsert:true});
+        const saved=await objects.upload(scopePath,JSON.stringify({version:"pdf-scope-v1",actorId,sourceChatId:chatId,currentChat,attachmentId:attachment.id,fingerprint,pages,nativeInspectionProhibited,analysisTask}),{contentType:"application/json",upsert:true});
         if(saved.error) throw new Error("PDF page scope persistence unavailable; no inference started.");
-      });
+      },analysisMessage);
       evidence.source={actorId,sourceChatId:chatId,attachmentId:attachment.id};
       if(!await live()) throw new UploadInputError("PDF source was deleted.");
       const known=new Set(cached?.pages.map(page=>page.physicalPage) ?? []);
@@ -1087,6 +1088,6 @@ export const savedOriginalExists = (chatId: string, id: string, actorId: string)
 
 export const readTimelineSource = (chatId: string, id: string, actorId: string) => getUploadService().timelineSource(chatId, id, actorId);
 
-export const inspectSavedPdf = (currentChat:string,attachment:ConversationAttachment,actorId:string,message:string,owns:(id:string)=>Promise<boolean>) => getUploadService().pdfEvidence(currentChat,attachment,actorId,message,owns);
+export const inspectSavedPdf = (currentChat:string,attachment:ConversationAttachment,actorId:string,message:string,owns:(id:string)=>Promise<boolean>,analysisMessage=message) => getUploadService().pdfEvidence(currentChat,attachment,actorId,message,owns,analysisMessage);
 
 export const ingestPdfUploads = (files:File[]) => getUploadService().ingestPdfUploads(files);
