@@ -13,7 +13,7 @@ function modules(){
   file=resolve(root,file);if(cache.has(file))return cache.get(file);
   const exports={};cache.set(file,exports);
   const require=name=>name==='@/lib/data/supabase/admin'?{getSupabaseAdminClient:()=>{throw Error('No database or paid provider in this test');}}:name.startsWith('@/')?load(name.slice(2)+'.ts'):name.startsWith('.')?load(resolve(dirname(file),name+'.ts')):native(name);
-  vm.runInNewContext(ts.transpileModule(readFileSync(file,'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText,{exports,require,Date,TextEncoder,crypto:webcrypto,console,process:{env:{}}});return exports;
+  vm.runInNewContext(ts.transpileModule(readFileSync(file,'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText,{exports,require,Error,Date,TextEncoder,crypto:webcrypto,console,process:{env:{}}});return exports;
  };return load;
 }
 const load=modules(),scope=load('lib/chat/pdf-source-selection.ts');
@@ -33,7 +33,7 @@ for(const message of ['Read annual report.pdf','Read “annual report.pdf”','R
 
 async function run(message,fresh,timelineActive=false,timelineClarification){
  const inspected=[],inspectedTasks=[],retained=[],sources=new Map();
- const fixture={...scope,...load('lib/uploads/pdf-inventory.ts'),newAttachments:fresh,message,pdfSourceTask:message,pdfTaskContext:null,timelineActive,timelineSelection:{clarification:timelineClarification},mediaMemory:null,savedVideoFollowUp:null,
+ const fixture={...scope,Error,...load('lib/uploads/pdf-inventory.ts'),newAttachments:fresh,message,pdfSourceTask:message,pdfTaskContext:null,timelineActive,timelineSelection:{clarification:timelineClarification},mediaMemory:null,savedVideoFollowUp:null,
   catalog:[],attachmentHistory:[],restored:{references:[],unavailable:[],sourceIds:new Set()},timelineContext:'',
   ...load('lib/chat/video-attachment-dedup.ts'),...load('lib/chat/attachment-continuity.ts'),
   fingerprintChatRequest:load('lib/chat/request-idempotency.ts').fingerprintChatRequest,
