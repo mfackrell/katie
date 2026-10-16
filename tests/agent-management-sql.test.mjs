@@ -84,12 +84,40 @@ test('agent management: real SQL snapshots, grants, associations, concurrent adm
     assert.equal(results.filter(r=>r.rows[0].recovered).length,1);
     assert.equal((await db.query('select claim_agent_execution($1,$2) won',[turn.id,turn.request_id])).rows[0].won,false,'old request is never replayed');
     if(during)assert.equal((await db.query('select status from chat_requests where request_id=$1',[turn.request_id])).rows[0].status,'failed');
-    const next=(await db.query("select transition_agent_task($1,'continue','Retry the saved task') task",[turn.id])).rows[0].task;
+    const next=(await db.query("select transition_agent_task($1,'continue','Retry the saved task',$2,$3) task",[turn.id,randomUUID(),turn.request_id])).rows[0].task;
     assert.equal(next.chat_id,turn.chat_id);assert.deepEqual(next.snapshot,turn.snapshot);assert.notEqual(next.request_id,turn.request_id);
     assert.equal((await c1.query('select recover_agent_execution($1,$2) recovered',[turn.id,next.request_id])).rows[0].recovered,false);
     const claims=await Promise.all([c1,c2].map(c=>c.query('select claim_agent_execution($1,$2) won',[turn.id,next.request_id])));
     assert.equal(claims.filter(r=>r.rows[0].won).length,1);
    }
+  });
+  await t.test('continuation retries have immutable receipts during execution, after completion and after later turns',async()=>{
+   const b=await make(),turn=await task(b),key=randomUUID();
+   const c1=await connect(),c2=await connect();
+   await c1.query('set role service_role');await c2.query('set role service_role');
+   await db.query("update agent_tasks set status='completed' where id=$1",[turn.id]);
+   const submit=(client,id=key,base=turn.request_id,message='Next turn')=>client.query("select transition_agent_task($1,'continue',$2,$3,$4) task",[turn.id,message,id,base]).then(r=>r.rows[0].task);
+   await c1.query('begin');const first=await submit(c1);
+   const retry=submit(c2);await c1.query('commit');
+   const duplicate=await retry;
+   assert.equal(duplicate.request_id,first.request_id);assert.equal(duplicate.continuation_receipt.request_id,first.request_id);
+   const claims=await Promise.all([c1,c2].map(c=>c.query('select claim_agent_execution($1,$2) won',[turn.id,first.request_id])));
+   assert.equal(claims.filter(r=>r.rows[0].won).length,1);
+   assert.equal((await submit(c1)).request_id,first.request_id,'retry during execution');
+   await db.query("update agent_tasks set status='completed' where id=$1",[turn.id]);
+   assert.equal((await submit(c1)).request_id,first.request_id,'retry after completion');
+   await assert.rejects(submit(c1,key,turn.request_id,'Changed'),/conflict/);
+   await assert.rejects(submit(c1,key,first.request_id),/conflict/);
+   const later=await submit(c1,randomUUID(),first.request_id,'Later turn');
+   const old=await submit(c2);
+   assert.equal(old.request_id,later.request_id);assert.equal(old.continuation_receipt.request_id,first.request_id);
+   assert.notEqual(old.request_id,old.continuation_receipt.request_id,'old receipt cannot authorize the later turn');
+   await assert.rejects(submit(c2,randomUUID(),first.request_id,'Competing later turn'),/advanced/);
+   assert.equal((await db.query('select count(*)::int n from agent_task_continuations where task_id=$1',[turn.id])).rows[0].n,2);
+   await c1.query('reset role');await c1.query('set role anon');
+   await assert.rejects(c1.query('select * from agent_task_continuations'),/permission denied/);
+   await c1.query('reset role');await c1.query('set role authenticated');
+   await assert.rejects(c1.query('select * from agent_task_continuations'),/permission denied/);
   });
   await t.test('overlapping definition edits and archive serialize with task starts without changing snapshots',async()=>{
    const c1=await connect(),c2=await connect();
