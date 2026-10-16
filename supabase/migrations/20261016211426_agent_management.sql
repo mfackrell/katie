@@ -119,7 +119,7 @@ begin
  else raise exception 'Invalid transition'; end if;
  select count(*) into n from agent_tasks where agent_id=a.id and id<>t.id and status in ('running','pending','dispatching','submitted');
  if n>=least((a.config->>'maxActiveTasks')::integer,(t.snapshot->>'maxActiveTasks')::integer) then raise exception 'Active task limit reached'; end if;
- update agent_tasks set input=t.input,request_id=t.request_id,status=case when kind='development' then 'dispatching' else 'running' end,details=case when kind='development' then 'Approved; verifying owner credentials before submission.' else 'Execution admitted; waiting for durable runtime status.' end,updated_at=now() where id=t.id returning * into t;
+ update agent_tasks set input=t.input,request_id=t.request_id,execution_claimed_at=null,execution_request_id=null,status=case when kind='development' then 'dispatching' else 'running' end,details=case when kind='development' then 'Approved; verifying owner credentials before submission.' else 'Execution admitted; waiting for durable runtime status.' end,updated_at=now() where id=t.id returning * into t;
  return to_jsonb(t);
 end $$;
 
@@ -153,7 +153,8 @@ end $$;
 revoke all on function public.claim_agent_dispatch(uuid) from public,anon,authenticated;
 grant execute on function public.claim_agent_dispatch(uuid) to service_role;
 
-alter table public.agent_tasks add column execution_request_id text;
+alter table public.agent_tasks add column execution_request_id text,
+ add column execution_claimed_at timestamptz;
 create function public.claim_agent_execution(p_id uuid,p_request text) returns boolean
 language plpgsql security invoker set search_path=public as $$
 declare t agent_tasks;
@@ -163,8 +164,32 @@ begin
  perform 1 from chats c join managed_agents a on a.id=t.agent_id where c.id=t.chat_id and c.actor_id=t.actor_id and a.actor_id=t.actor_id;
  if not found then raise exception 'Task association invalid'; end if;
  if t.execution_request_id=p_request then return false; end if;
- update agent_tasks set execution_request_id=p_request,updated_at=now() where id=p_id;
+ update agent_tasks set execution_request_id=p_request,execution_claimed_at=now(),updated_at=now() where id=p_id;
  return true;
 end $$;
 revoke all on function public.claim_agent_execution(uuid,text) from public,anon,authenticated;
 grant execute on function public.claim_agent_execution(uuid,text) to service_role;
+
+-- Never replay an abandoned turn automatically. Twenty minutes exceeds the
+-- chat route's hard 800-second request lifetime, including its stream.
+-- A user can then explicitly continue in the same chat with a new request ID.
+create function public.recover_agent_execution(p_id uuid,p_request text) returns boolean
+language plpgsql security invoker set search_path=public as $$
+declare t agent_tasks; r public.chat_requests;
+begin
+ select * into t from agent_tasks where id=p_id for update;
+ if not found or t.kind<>'general' or t.status<>'running' or t.request_id<>p_request then return false; end if;
+ perform 1 from chats c join managed_agents a on a.id=t.agent_id where c.id=t.chat_id and c.actor_id=t.actor_id and a.actor_id=t.actor_id;
+ if not found then raise exception 'Task association invalid'; end if;
+ if coalesce(t.execution_claimed_at,t.updated_at)>now()-interval '20 minutes' then return false; end if;
+ select * into r from chat_requests where request_id=p_request for update;
+ if found then
+  if r.actor_id<>t.actor_id::text or r.chat_id<>t.chat_id::text then raise exception 'Request association invalid'; end if;
+  if r.status<>'processing' then return false; end if;
+  update chat_requests set status='failed',error_message='Execution interrupted; explicitly continue the saved conversation to retry.',updated_at=now() where request_id=p_request;
+ end if;
+ update agent_tasks set status='failed',details='Execution interrupted. No automatic replay was attempted. Continue this saved conversation to retry.',updated_at=now() where id=p_id;
+ return true;
+end $$;
+revoke all on function public.recover_agent_execution(uuid,text) from public,anon,authenticated;
+grant execute on function public.recover_agent_execution(uuid,text) to service_role;

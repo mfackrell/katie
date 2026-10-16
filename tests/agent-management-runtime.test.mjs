@@ -32,12 +32,13 @@ function zipJSON(name,body) {
 const config={name:'Writer',instructions:'Original immutable purpose',research:false,attachments:false,development:true,reviewMode:'always',maxActiveTasks:1,maxInputChars:1000};
 const baseTask=()=>({id:randomUUID(),agent_id:randomUUID(),actor_id:randomUUID(),chat_id:randomUUID(),snapshot:{...config},definition_version:1,kind:'general',initial_input:'Saved task',input:'Saved task',request_id:'agent:request',status:'running',details:null,repository_full_name:null,external:{}});
 function fixture(task=baseTask()){
- let fail=false,savedSources=[],claims=0;const rows=[];const requestRecords=new Map();
+ let fail=false,recover=false,savedSources=[],claims=0;const rows=[];const requestRecords=new Map();
  const admin={rpc:async(name,args)=>{
   if(name==='check_agent_chat')return {data:!fail&&args.p_actor===task.actor_id&&args.p_chat===task.chat_id&&args.p_request===task.request_id?task:null,error:fail||args.p_actor!==task.actor_id||args.p_chat!==task.chat_id||args.p_request!==task.request_id?{message:'Denied'}:null};
+  if(name==='recover_agent_execution'){if(recover){task.status='failed';task.details='Execution interrupted. Continue this saved conversation to retry.';}return {data:recover,error:null};}
   if(name==='claim_agent_execution')return {data:++claims===1,error:null};
   return {data:null,error:null};
- },from(table){let filters=[];const q={select:()=>q,eq:(k,v)=>{filters.push([k,v]);return q;},order:()=>q,limit:()=>q,update:async()=>({error:null}),maybeSingle:async()=>({data:table==='managed_agents'?{id:task.agent_id,actor_id:task.actor_id,config:task.snapshot}:table==='agent_tasks'?task:table==='chat_requests'?{review_audit:{status:'needs_user_input'}}:{state:{pending:[]}},error:null})};return q;}};
+ },from(table){let filters=[];const q={select:()=>q,eq:(k,v)=>{filters.push([k,v]);return q;},order:()=>q,limit:()=>q,update:async patch=>{if(table==='agent_tasks'&&filters.every(([k,v])=>task[k]===v))Object.assign(task,patch);return{error:null};},maybeSingle:async()=>({data:table==='managed_agents'?{id:task.agent_id,actor_id:task.actor_id,config:task.snapshot}:table==='agent_tasks'?task:table==='chat_requests'?{review_audit:{status:'needs_user_input'}}:{state:{pending:[]}},error:null})};return q;}};
  const load=modules({
   '@/lib/data/supabase/admin':{getSupabaseAdminClient:()=>admin},
   '@/lib/data/persistence-store':{listChatsByActorId:async()=>[{id:task.chat_id,actorId:task.actor_id}],getMessages:async()=>[],getRecentMessages:async()=>[],getChatById:async id=>id===task.chat_id?{id,actorId:task.actor_id}:null,saveMessage:async(_,m)=>rows.push(m)},
@@ -46,7 +47,7 @@ function fixture(task=baseTask()){
   '@/lib/chat/local-katie':{resolveLocalKatieResponse:async()=>({reason:'system-prompt',text:'Actual deterministic engine output'})},
   '@/lib/memory/short-term':{refreshShortTermMemory:async()=>{}},
  });
- return {load,task,rows,requestRecords,setFail:v=>fail=v,setSources:v=>savedSources=v};
+ return {load,task,rows,requestRecords,setFail:v=>fail=v,setRecover:v=>recover=v,setSources:v=>savedSources=v};
 }
 test('actual managed runtime guard rejects forged actor/chat/config/model/repo/new and saved source payloads',async()=>{
  const f=fixture(),runtime=f.load('@/lib/agents/runtime');
@@ -67,6 +68,17 @@ test('actual POST reuses the chat engine, persists output, and repeated starts d
  assert.equal(f.requestRecords.get(f.task.request_id).status,'completed');
  const replay=await route.POST(request());assert.equal(replay.status,202);assert.equal(f.rows.length,2);
  assert.equal((await replay.json()).task.status,'pending','HTTP 200 completed text cannot hide pending independent review');
+});
+test('actual task refresh exposes durable interrupted failure without launching another execution',async()=>{
+ const f=fixture();f.setRecover(true);
+ const route=f.load('@/app/api/agent-tasks/route');
+ const request=new (native('next/server').NextRequest)('http://local/api/agent-tasks?id='+f.task.id);
+ const result=await route.GET(request);
+ assert.equal(result.status,200);
+ const saved=(await result.json()).task;
+ assert.equal(saved.status,'failed');assert.match(saved.details,/interrupted/);
+ assert.equal(saved.chat_id,f.task.chat_id);assert.equal(saved.request_id,f.task.request_id);
+ assert.equal(f.rows.length,0);assert.equal(f.requestRecords.size,0);
 });
 test('async policy isolation blocks the real web adapter and browser collector before external work',async()=>{
  const load=modules(),{runAgentTask,requireAgentResearch,currentAgentTask}=load('@/lib/agents/policy');

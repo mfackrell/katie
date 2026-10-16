@@ -17,7 +17,7 @@ test('Agents UI: create/edit/archive, saved approval, durable pending status, re
   const code=ts.transpileModule(readFileSync('app/agents/page.tsx','utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022,jsx:ts.JsxEmit.ReactJSX,esModuleInterop:true}}).outputText;
   const scripts=[readFileSync('node_modules/react/umd/react.production.min.js','utf8'),readFileSync('node_modules/react-dom/umd/react-dom.production.min.js','utf8')];
   const html=`<!doctype html><html><body><div id="root"></div><script>${scripts.join('\n')}</script><script>
-  const exports={}; const require=name=>name==='react'?React:name==='react/jsx-runtime'?{jsx:(type,p,key)=>React.createElement(type,{...p,key}),jsxs:(type,p,key)=>React.createElement(type,{...p,key})}:name==='next/link'?{__esModule:true,default:p=>React.createElement('a',p)}:{};
+  const exports={}; const require=name=>name==='react'?React:name==='react/jsx-runtime'?{Fragment:React.Fragment,jsx:(type,p,key)=>React.createElement(type,{...p,key}),jsxs:(type,p,key)=>React.createElement(type,{...p,key})}:name==='next/link'?{__esModule:true,default:p=>React.createElement('a',p)}:{};
   ${code}
   ReactDOM.createRoot(document.getElementById('root')).render(React.createElement(exports.default));</script></body></html>`;
   await page.route('http://localhost/**',async route=>{

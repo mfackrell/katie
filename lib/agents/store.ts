@@ -25,6 +25,7 @@ export async function readTask(id: string): Promise<AgentTask> {
 export async function refreshTask(id: string) {
   const task = await readTask(id);
   if (task.kind !== "general") return task;
+  if (task.status === "running" && await agentRpc<boolean>("recover_agent_execution", { p_id: task.id, p_request: task.request_id })) return readTask(id);
   const record = await getChatRequest(task.request_id);
   if (!record) return task;
   if (record.actorId !== task.actor_id || record.chatId !== task.chat_id) throw new Error("Request association invalid");
@@ -35,9 +36,10 @@ export async function refreshTask(id: string) {
   if (progressError) throw new Error("Task progress unavailable");
   const pending = Boolean(progress?.state?.pending?.length) || Boolean(audit?.pendingClarification && !audit.pendingClarification.resolvedAt) || Boolean(audit && !["approved", "revised"].includes(audit.status ?? ""));
   const status = record.status === "completed" ? (pending ? "pending" : "completed") : record.status === "failed" ? "failed" : "running";
-  const { error: updateError } = await getSupabaseAdminClient().from("agent_tasks").eq("id", id).eq("request_id", task.request_id).update({ status, details: record.errorMessage ?? (pending ? "Review or pending conversation questions need continuation in this chat." : null), updated_at: new Date().toISOString() });
+  const { error: updateError } = await getSupabaseAdminClient().from("agent_tasks").eq("id", id).eq("request_id", task.request_id).eq("status", task.status).update({ status, details: record.errorMessage ?? (pending ? "Review or pending conversation questions need continuation in this chat." : null), updated_at: new Date().toISOString() });
   if (updateError) throw new Error("Task status could not be saved");
   const verified = await readTask(id);
   if (verified.request_id !== task.request_id) return { ...verified, details: "Task advanced to another saved turn. Refresh its status." };
+  if (verified.status !== status) return verified;
   return { ...verified, status, review: audit ?? null, progress: progress?.state ?? null, output: record.assistantContent ?? null, details: record.errorMessage ?? (pending ? "Review or conversation pending" : null) };
 }

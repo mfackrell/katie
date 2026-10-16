@@ -19,7 +19,7 @@ test("integration: API starts with local mock persistence and serves core applic
     const path = new URL(request.url, "http://localhost").pathname;
     const table = path.replace("/rest/v1/", "");
     response.setHeader("content-type", "application/json");
-    if (request.method !== "GET" || !["actors", "chats"].includes(table)) {
+    if (request.method !== "GET" || !["actors", "chats", "managed_agents"].includes(table)) {
       response.writeHead(404).end(JSON.stringify({ message: "Unexpected mock persistence request" }));
       return;
     }
@@ -85,5 +85,6 @@ test("integration: API starts with local mock persistence and serves core applic
     assert.deepEqual(await response.json(), expected);
   }
   assert.ok(tablesRead.includes("actors"), "actor response must traverse the persistence adapter");
+  assert.ok(tablesRead.includes("managed_agents"), "actor identities must include managed agent metadata");
   assert.ok(tablesRead.includes("chats"), "chat response must traverse the persistence adapter");
 });

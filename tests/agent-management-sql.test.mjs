@@ -20,7 +20,7 @@ test('agent management: real SQL snapshots, grants, associations, concurrent adm
   await db.query(`create role anon;create role authenticated;create role service_role bypassrls;
    create table actors(id uuid primary key,name text,system_prompt text,review_mode text);
    create table chats(id uuid primary key,actor_id uuid references actors,title text,created_at timestamptz,updated_at timestamptz);
-   create table repo_sync_runs(id uuid primary key,repository_full_name text);
+   create table chat_requests(request_id text primary key,actor_id text,chat_id text,status text,error_message text,updated_at timestamptz);grant select,update on chat_requests to service_role;create table repo_sync_runs(id uuid primary key,repository_full_name text);
    grant usage on schema public to service_role;grant select,insert,update on actors,chats,repo_sync_runs to service_role;`);
   await db.query(readFileSync('supabase/migrations/20261016211426_agent_management.sql','utf8'));
   const cfg={name:'Researcher',instructions:'Analyze carefully',research:false,attachments:false,development:true,maxActiveTasks:1,maxInputChars:1000,reviewMode:'always'};
@@ -66,6 +66,30 @@ test('agent management: real SQL snapshots, grants, associations, concurrent adm
    await assert.rejects(c1.query('select check_agent_chat($1,$2,$3)',[a.actor_id,two.chat_id,one.request_id]),/admitted/);
    const authorized=(await c1.query('select check_agent_chat($1,$2,$3) task',[a.actor_id,one.chat_id,one.request_id])).rows[0].task;
    assert.equal(authorized.snapshot.instructions,cfg.instructions);
+  });
+  await t.test('abandoned turns recover once after the hard execution lifetime, with no automatic replay',async()=>{
+   const c1=await connect(),c2=await connect();
+   await c1.query('set role service_role');await c2.query('set role service_role');
+   await db.query("set role anon");
+   await assert.rejects(db.query("select recover_agent_execution($1,$2)",[one.id,one.request_id]),/permission denied/);
+   await db.query('reset role');
+   for(const during of [false,true]){
+    const b=await make(),turn=await task(b);
+    await db.query("select transition_agent_task($1,'start',null)",[turn.id]);
+    await db.query('select claim_agent_execution($1,$2)',[turn.id,turn.request_id]);
+    if(during)await db.query("insert into chat_requests values($1,$2,$3,'processing',null,now())",[turn.request_id,turn.actor_id,turn.chat_id]);
+    assert.equal((await c1.query('select recover_agent_execution($1,$2) recovered',[turn.id,turn.request_id])).rows[0].recovered,false,'live work cannot be recovered');
+    await db.query("update agent_tasks set execution_claimed_at=now()-interval '21 minutes' where id=$1",[turn.id]);
+    const results=await Promise.all([c1,c2].map(c=>c.query('select recover_agent_execution($1,$2) recovered',[turn.id,turn.request_id])));
+    assert.equal(results.filter(r=>r.rows[0].recovered).length,1);
+    assert.equal((await db.query('select claim_agent_execution($1,$2) won',[turn.id,turn.request_id])).rows[0].won,false,'old request is never replayed');
+    if(during)assert.equal((await db.query('select status from chat_requests where request_id=$1',[turn.request_id])).rows[0].status,'failed');
+    const next=(await db.query("select transition_agent_task($1,'continue','Retry the saved task') task",[turn.id])).rows[0].task;
+    assert.equal(next.chat_id,turn.chat_id);assert.deepEqual(next.snapshot,turn.snapshot);assert.notEqual(next.request_id,turn.request_id);
+    assert.equal((await c1.query('select recover_agent_execution($1,$2) recovered',[turn.id,next.request_id])).rows[0].recovered,false);
+    const claims=await Promise.all([c1,c2].map(c=>c.query('select claim_agent_execution($1,$2) won',[turn.id,next.request_id])));
+    assert.equal(claims.filter(r=>r.rows[0].won).length,1);
+   }
   });
   await t.test('overlapping definition edits and archive serialize with task starts without changing snapshots',async()=>{
    const c1=await connect(),c2=await connect();
