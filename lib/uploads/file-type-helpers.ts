@@ -69,6 +69,8 @@ export function getFileExtension(fileName: string): string {
 
 export function detectFileType(file: File): FileTypeDefinition | undefined {
   const mimeType = file.type.trim().toLowerCase();
+  const extension = getFileExtension(file.name);
+  if (mimeType && mimeType !== "application/octet-stream" && ((extension === ".pdf" && mimeType !== "application/pdf") || (mimeType === "application/pdf" && extension !== ".pdf"))) return undefined;
   if (mimeType) {
     const mimeMatch = MIME_TO_TYPE.get(mimeType);
     if (mimeMatch) {
