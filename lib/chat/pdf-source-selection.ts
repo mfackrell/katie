@@ -69,15 +69,22 @@ export function selectFreshPdfSources(message: string, fresh: FileReference[], t
   const scopeText = literal.scopeText ?? message;
   // A set qualified by another source ("documents in the video") is not
   // the uploaded set. Only unqualified or explicitly upload-scoped sets widen it.
-  const wholeSet = [...scopeText.matchAll(/\b(?:all|both|each|every)\s+(?:(?:of\s+)?(?:the|these|attached|uploaded|other)\s+)*(?:pdfs?|files?|documents?|attachments?)\b/gi)].some(match =>
-    !/^\s+(?:in|inside|within|from|of|shown|visible|depicted|displayed|mentioned|discussed|contained|appearing|stored|that|which)\b/i.test(scopeText.slice(match.index! + match[0].length)));
+  const setScopes = [...scopeText.matchAll(/\b(?:all|both|each|every)\s+(?:(?:of\s+)?(?:the|these|attached|uploaded|other)\s+)*(?:pdfs?|files?|documents?|attachments?)\b/gi)].map(match => {
+    const suffix = scopeText.slice(match.index! + match[0].length);
+    // Post-nominal current-upload qualifiers refer to these inputs, not another
+    // source. Keep this fact for mixed media as well as explicitly named PDFs.
+    const currentUpload = /^\s+(?:in|inside|within|from|of)\s+(?:(?:this|(?:the |my )?current)\s+(?:upload(?:\s+batch)?|attachment\s+(?:batch|set))|(?:these|the current)\s+attachments?)\b/i.test(suffix);
+    const external = /^\s+(?:in|inside|within|from|of|shown|visible|depicted|displayed|mentioned|discussed|contained|appearing|stored|that|which)\b/i.test(suffix);
+    return {whole:currentUpload || !external, uploaded:currentUpload || /\b(?:attached|uploaded)\b|\b(?:all|both)\s+(?:files|attachments)\b/i.test(match[0])};
+  });
+  const wholeSet = setScopes.some(scope=>scope.whole);
   // A named non-PDF input is already a source choice, not an invitation to
   // ask about or analyze neighboring PDFs in the same upload batch.
   const namesNonPdf = fresh.some(file=>file.mimeType !== "application/pdf" && message.toLowerCase().includes(file.fileName.toLowerCase()));
   const targetsNonPdfKind = /\b(?:videos?|clips?|recordings?|audio|sounds?|images?|photos?|pictures?|screenshots?|spreadsheets?|workbooks?|csv|text\s+files?|notes)\b/i.test(message);
   // Content nouns such as "statements" in a video are not PDF source targets.
   const targetsPdfKind = /\bpdfs?\b/i.test(scopeText);
-  const allUploadedSources = wholeSet && /\b(?:all|both|each|every)\s+(?:(?:of\s+)?(?:the|these)\s+)*(?:attached|uploaded)\s+(?:files?|documents?|attachments?)\b|\b(?:all|both)\s+(?:files|attachments)\b/i.test(scopeText);
+  const allUploadedSources = setScopes.some(scope=>scope.whole && scope.uploaded);
   if (!literal.explicit && !targetsPdfKind && !allUploadedSources && (namesNonPdf || targetsNonPdfKind || timelineActive)) return none();
   if (wholeSet && /\b(?:only|except|excluding|exclude)\b/i.test(scopeText)) return none("The PDF selection includes conflicting or excluded sources. Specify the full filenames to inspect.");
   const chosen = literal.explicit && !wholeSet ? pdfs.filter(file=>literal.names.has(file.fileName.toLowerCase())) : pdfs;
