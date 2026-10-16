@@ -1,3 +1,4 @@
+import { requireAgentResearch } from "@/lib/agents/policy";
 import { buildVideoTimingEvidence, buildGrokVideoFrames } from "@/lib/chat/video-evidence";
 import OpenAI from "openai";
 import {
@@ -356,6 +357,7 @@ ${getKatieReasoningExplainerStatement()}` }]
   }
 
   private async createWebSearchResponse(model: string, input: GrokResponseInputMessage[]): Promise<GrokWebSearchResponse> {
+    requireAgentResearch();
     const response = await fetch("https://api.x.ai/v1/responses", {
       method: "POST",
       headers: {

@@ -1,3 +1,4 @@
+import { managedActor } from "@/lib/agents/store";
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { deleteChatById, getActorById, getChatById, listChats, listChatsByActorId, saveChat } from "@/lib/data/persistence-store";
@@ -30,6 +31,7 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
   try {
     const payload = createChatSchema.parse(await request.json());
+    if (await managedActor(payload.actorId)) return NextResponse.json({ error: "Create managed conversations by assigning a task in Agents management." }, { status: 409 });
     const actor = await getActorById(payload.actorId);
 
     if (!actor) {

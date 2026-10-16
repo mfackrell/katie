@@ -1,3 +1,4 @@
+import { managedActor } from "@/lib/agents/store";
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { registerVideoHandoff, readVideoHandoff, readHandoffFiles } from "@/lib/uploads/video-handoffs";
@@ -18,6 +19,7 @@ const schema = z.object({
 export async function POST(request: NextRequest) {
   try {
     const input = schema.parse(await request.json());
+    if (await managedActor(input.actorId)) return NextResponse.json({ error: "Attachment/video handoffs are unavailable for managed agents." }, { status: 403 });
     await registerVideoHandoff(input);
     return NextResponse.json({ status: "registered", requestId: input.requestId },
       { headers: { "cache-control": "no-store" } });

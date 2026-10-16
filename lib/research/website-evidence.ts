@@ -1,3 +1,4 @@
+import { requireAgentResearch } from "@/lib/agents/policy";
 import { lookup } from "node:dns/promises";
 import { isIP } from "node:net";
 import type { Browser, Page } from "playwright-core";
@@ -164,6 +165,7 @@ export async function collectWebsiteEvidence(
   } = {},
 ): Promise<WebsiteEvidence | undefined> {
   if (!isWebsiteReview(params)) return undefined;
+  requireAgentResearch();
   const states = options.states ?? [];
   if (states.length > 3 || states.some(s => !s.name || s.name === "default" || !s.selector) || new Set(states.map(s => s.name)).size !== states.length) throw new Error("Invalid disclosure states");
   const { urls, source } = resolveWebsiteReviewTarget(params);
