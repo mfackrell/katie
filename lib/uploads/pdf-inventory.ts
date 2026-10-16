@@ -84,6 +84,11 @@ export function requestedPdfPages(message: string, count: number): number[] {
 /** File discovery differs from locating a value or extracting all rows inside it. */
 export function isPdfLocatorRequest(message: string): boolean {
   const request = message.trim().replace(/^(?:please|can you|could you|would you)\s+/i, "");
+  // A complete filename is a discovery target, including spaces and words
+  // such as "transactions" that would otherwise signal a content question.
+  const target = /^(?:find|locate|show(?:\s+me)?|where\s+(?:is|are|can\s+I\s+find))\s+(?:(?:my|the|a|an|that|this|saved|uploaded|original)\s+)*(.*?)[?!.]*$/i.exec(request)?.[1];
+  if (target && /^(?:"[^"\n]+\.pdf"|“[^”\n]+\.pdf”|'[^'\n]+\.pdf'|‘[^’\n]+\.pdf’|`[^`\n]+\.pdf`|«[^»\n]+\.pdf»|[^\n"“”'‘’`«»?;]+\.pdf)$/i.test(target)
+      && !/\b(?:in|inside|within|from)\s+/i.test(target.replace(/^(?:"|“|'|‘|`|«)[\s\S]*$/, ""))) return true;
   // Locating a file is not the same task as locating a value or section IN a file.
   if (/\b(?:pages?\s+\d|every|transactions?|charges?|amounts?|values?|totals?|rows?|columns?|read|extract|analy[sz]e|inside|within|scan\w*|charts?|tables?|breakdown)\b/i.test(request)) return false;
   return /^(?:find|locate|show(?:\s+me)?|where\s+(?:is|are|can\s+I\s+find))\s+(?:(?:my|the|a|an|that|this|saved|uploaded|original)\s+)*(?:pdf\b|file\b|document\b|["'“‘]?[^\s?;]+\.pdf\b)/i.test(request);

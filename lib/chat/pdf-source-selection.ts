@@ -37,6 +37,11 @@ export function resolvePdfNames(message: string, files: NamedPdf[]): PdfNames {
       names.add(name.toLowerCase());spans.push({start:match.index!,end:match.index!+match[0].length});
     }
   }
+  // Exclusion wording needs scope resolution before any named source is used.
+  // Mask quoted filenames so words inside a literal name are not instructions.
+  const instructions = [...spans].sort((a,b)=>b.start-a.start).reduce((text, span)=>text.slice(0,span.start)+" "+text.slice(span.end), message);
+  if (/\b(?:except|excluding|exclude|ignore|not|without)\b|\bdon['’]t\b/i.test(instructions))
+    return {names:new Set(),explicit,clarification:"The PDF selection includes excluded sources. Specify only the full filenames to inspect."};
   let precedingEnd = 0;
   for (const extension of message.matchAll(/\.pdf\b/gi)) {
     const end = extension.index! + extension[0].length;
