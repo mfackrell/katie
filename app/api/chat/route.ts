@@ -700,9 +700,9 @@ export async function POST(request: NextRequest) {
         return savedOriginalExists(hit.source_chat_id,hit.attachment_id,actorId);
       },
     });
-    const freshPdfSelection = !timelineActive ? selectFreshPdfSources(pdfSourceTask,newAttachments) : null;
+    const freshPdfSelection = selectFreshPdfSources(pdfSourceTask,newAttachments,timelineActive);
     let pdfMemoryDecision: AttachmentDecision | null = freshPdfSelection
-      ? {method:"none",selections:[],...(freshPdfSelection.clarification ? {clarification:freshPdfSelection.clarification} : {})}
+      ? {method:"none",selections:[],...((freshPdfSelection.clarification || (timelineActive && timelineSelection.clarification)) ? {clarification:freshPdfSelection.clarification || timelineSelection.clarification} : {})}
       : !timelineActive && !savedVideoFollowUp
       ? selectPdfEvidenceSource(pdfSourceTask, catalog, mediaMemory?.hits ?? [], newAttachments.length) : null;
     if (!pdfMemoryDecision && pdfTaskContext && !newAttachments.length && !timelineActive) {

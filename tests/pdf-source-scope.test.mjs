@@ -31,12 +31,15 @@ for(const message of ['Read annual report.pdf','Read “annual report.pdf”','R
  assert.equal(result.selections.length,1);assert.equal(result.selections[0].attachment.id,'long');
 });
 
-async function run(message,fresh){
+async function run(message,fresh,timelineActive=false,timelineClarification){
  const inspected=[],retained=[],sources=new Map();
- const fixture={...scope,newAttachments:fresh,message,pdfSourceTask:message,pdfTaskContext:null,timelineActive:false,timelineSelection:{},mediaMemory:null,savedVideoFollowUp:null,
+ const fixture={...scope,newAttachments:fresh,message,pdfSourceTask:message,pdfTaskContext:null,timelineActive,timelineSelection:{clarification:timelineClarification},mediaMemory:null,savedVideoFollowUp:null,
   catalog:[],attachmentHistory:[],restored:{references:[],unavailable:[],sourceIds:new Set()},timelineContext:'',
   ...load('lib/chat/video-attachment-dedup.ts'),...load('lib/chat/attachment-continuity.ts'),
   fingerprintChatRequest:load('lib/chat/request-idempotency.ts').fingerprintChatRequest,
+  fingerprintTimelineSource:load('lib/chat/video-attachment-dedup.ts').fingerprintTimelineSource,
+  freshVideoReferences:fresh.filter(file=>file.mimeType.startsWith('video/')),
+  temporalIntent:timelineActive?{kind:'tail',tail:30}:null,
   selectStoredAttachments:async()=>({method:'none',selections:[]}),
   actorId:'actor',chatId:'chat',overrideProvider:null,overrideModel:null,activeRepoId:null,repoInjectionEnabled:false,
   fileReferences:fresh,legacyImageSources:new Map(),pdfSources:sources,persistedVideoSourceByFileId:new Map(),isVideoAttachment:file=>file.mimeType.startsWith('video/'),
@@ -144,4 +147,26 @@ test('actual mixed-upload flow honors a named non-PDF target without PDF clarifi
  assert.deepEqual(result.retained,['a','note','b']);
  assert.equal(JSON.stringify(result.params.attachments.map(file=>file.fileId)),JSON.stringify(['note']));
  assert.ok(!JSON.stringify(result.params).includes('TEXT-a'));assert.ok(!JSON.stringify(result.params).includes('TEXT-b'));
+});
+
+for(const [message,mime] of [['Summarize the video','video/mp4'],['Describe the screenshot','image/png'],['Analyze the spreadsheet','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'],['Summarize the audio','audio/mpeg'],['Summarize the text file','text/plain']])test(`actual mixed-upload kind target excludes neighboring PDFs: ${message}`,async()=>{
+ const target={fileId:'target',fileName:'media',mimeType:mime,preview:'TARGET'};
+ const result=await run(message,[pdf('a','report.pdf'),target,pdf('b','other.pdf')]);
+ assert.equal(result.clarification,undefined);assert.deepEqual(result.inspected,[]);
+ assert.equal(JSON.stringify(result.params.attachments.map(file=>file.fileId)),JSON.stringify(['target']));
+ assert.ok(!JSON.stringify(result.params).includes('TEXT-a'));assert.ok(!JSON.stringify(result.params).includes('TEXT-b'));
+});
+for(const message of ['What happened in the last 30 seconds of the video?','When did the error first appear?'])test(`actual timeline route excludes unrelated fresh PDF evidence: ${message}`,async()=>{
+ const video={fileId:'video',fileName:'clip.mp4',mimeType:'video/mp4',preview:'VIDEO'};
+ const result=await run(message,[pdf('a','report.pdf'),video],true);
+ assert.equal(result.clarification,undefined);assert.deepEqual(result.inspected,[]);
+ assert.equal(result.params.attachments.length,0);assert.ok(!result.access.includes('TEXT-a'));
+ assert.deepEqual(result.retained,['a','video']);
+});
+test('fresh PDF filtering preserves timeline source clarification and explicit mixed-source selection',async()=>{
+ const video={fileId:'video',fileName:'clip.mp4',mimeType:'video/mp4',preview:'VIDEO'};
+ const clarified=await run('What happened in the last 30 seconds?',[pdf('a','report.pdf'),video],true,'Which recording?');
+ assert.equal(clarified.clarification,'Which recording?');assert.deepEqual(clarified.inspected,[]);
+ const mixed=await run('Compare report.pdf with the last 30 seconds of the video',[pdf('a','report.pdf'),video],true);
+ assert.deepEqual(mixed.inspected,['a']);assert.equal(mixed.params.attachments[0].fileId,'a');
 });

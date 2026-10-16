@@ -6,7 +6,7 @@ import type { FileReference } from "@/lib/providers/types";
 import type { AttachmentDecision } from "./attachment-selection";
 
 type NamedPdf = { fileName: string; mimeType: string };
-type PdfNames = { names: Set<string>; explicit: boolean; clarification?: string };
+type PdfNames = { names: Set<string>; explicit: boolean; clarification?: string; scopeText?: string };
 const sourceClarification = "I could not resolve the complete PDF filename. Quote the full filename or select the intended source.";
 
 /** A space is legal inside a filename; it is not itself a source boundary. */
@@ -52,26 +52,30 @@ export function resolvePdfNames(message: string, files: NamedPdf[]): PdfNames {
     const suffix = message.slice(end);
     if (!name || !/^(?:$|[\s,;:!?)}\]]|\.(?:\s|$)|['’]s\b)/u.test(suffix)
       || !filenamePrefix(message.slice(precedingEnd,end-name.length))) return {names,explicit,clarification:sourceClarification};
-    names.add(name.toLowerCase());precedingEnd=end;
+    names.add(name.toLowerCase());spans.push({start:end-name.length,end});precedingEnd=end;
   }
-  return {names,explicit};
+  const scopeText = [...spans].sort((a,b)=>b.start-a.start).reduce((text,span)=>text.slice(0,span.start)+" __PDF_SOURCE__ "+text.slice(span.end),message);
+  return {names,explicit,scopeText};
 }
 
 export type FreshPdfSelection = { fileIds: Set<string>; clarification?: string };
 /** Select once before restoration, classifiers, native analysis, and synthesis. */
-export function selectFreshPdfSources(message: string, fresh: FileReference[]): FreshPdfSelection | null {
+export function selectFreshPdfSources(message: string, fresh: FileReference[], timelineActive = false): FreshPdfSelection | null {
   const pdfs = fresh.filter(file=>file.mimeType === "application/pdf");
   if (!pdfs.length) return null;
   const none = (clarification?:string):FreshPdfSelection => ({fileIds:new Set(),...(clarification?{clarification}:{})});
   if (!isPdfContentRequest(message)) return none();
   const literal = resolvePdfNames(message,pdfs);
   if (literal.clarification) return none(literal.clarification);
-  const wholeSet = /\b(?:all|both|each|every)\s+(?:(?:of\s+)?(?:the|these|attached|uploaded|other)\s+)*(?:pdfs?|files?|documents?|attachments?)\b/i.test(message);
+  const scopeText = literal.scopeText ?? message;
+  const wholeSet = /\b(?:all|both|each|every)\s+(?:(?:of\s+)?(?:the|these|attached|uploaded|other)\s+)*(?:pdfs?|files?|documents?|attachments?)\b/i.test(scopeText);
   // A named non-PDF input is already a source choice, not an invitation to
   // ask about or analyze neighboring PDFs in the same upload batch.
   const namesNonPdf = fresh.some(file=>file.mimeType !== "application/pdf" && message.toLowerCase().includes(file.fileName.toLowerCase()));
-  if (!literal.explicit && !wholeSet && !/\bpdfs?\b/i.test(message) && namesNonPdf) return none();
-  if (wholeSet && /\b(?:only|except|excluding|exclude)\b/i.test(message)) return none("The PDF selection includes conflicting or excluded sources. Specify the full filenames to inspect.");
+  const targetsNonPdfKind = /\b(?:videos?|clips?|recordings?|audio|sounds?|images?|photos?|pictures?|screenshots?|spreadsheets?|workbooks?|csv|text\s+files?|notes)\b/i.test(message);
+  const targetsPdfKind = /\b(?:pdfs?|documents?|invoices?|statements?)\b/i.test(message);
+  if (!literal.explicit && !wholeSet && !targetsPdfKind && (namesNonPdf || targetsNonPdfKind || timelineActive)) return none();
+  if (wholeSet && /\b(?:only|except|excluding|exclude)\b/i.test(scopeText)) return none("The PDF selection includes conflicting or excluded sources. Specify the full filenames to inspect.");
   const chosen = literal.explicit && !wholeSet ? pdfs.filter(file=>literal.names.has(file.fileName.toLowerCase())) : pdfs;
   if (chosen.some(file=>chosen.some(other=>other.fileId !== file.fileId && other.fileName.toLowerCase() === file.fileName.toLowerCase())))
     return none("Several uploaded PDFs have the same filename. Select the intended source before I inspect it.");
