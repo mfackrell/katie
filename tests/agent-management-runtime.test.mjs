@@ -1,0 +1,188 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { readFileSync, existsSync } from 'node:fs';
+import { createRequire } from 'node:module';
+import { resolve, dirname } from 'node:path';
+import vm from 'node:vm';
+import ts from 'typescript';
+import { randomUUID, webcrypto } from 'node:crypto';
+const native=createRequire(import.meta.url);
+function modules(overrides={}){
+ const cache=new Map();
+ const load=name=>{
+  if(name in overrides)return overrides[name];
+  if(!name.startsWith('@/')&&!name.startsWith('/')&&!name.startsWith('.'))return native(name);
+  let path=name.startsWith('@/')?resolve(name.slice(2)):resolve(name);
+  if(!path.endsWith('.ts'))path=existsSync(path+'.ts')?path+'.ts':resolve(path,'index.ts');
+  if(cache.has(path))return cache.get(path);
+  const exports={};cache.set(path,exports);
+  const code=ts.transpileModule(readFileSync(path,'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022,esModuleInterop:true}}).outputText;
+  vm.runInNewContext(code,{exports,require:n=>n.startsWith('.')?load(resolve(dirname(path),n)):load(n),process,Buffer,Date,console,Set,Map,URL,URLSearchParams,TextEncoder,TextDecoder,Request,Response,Headers,ReadableStream,AbortController,AbortSignal,File,Blob,fetch,crypto:webcrypto,setTimeout,clearTimeout,setInterval,clearInterval},{filename:path});
+  return exports;
+ };
+ return load;
+}
+function zipJSON(name,body) {
+  const file=Buffer.from(name),content=Buffer.from(JSON.stringify(body));
+  const local=Buffer.alloc(30);local.writeUInt32LE(0x04034b50);local.writeUInt32LE(content.length,18);local.writeUInt32LE(content.length,22);local.writeUInt16LE(file.length,26);
+  const central=Buffer.alloc(46);central.writeUInt32LE(0x02014b50);central.writeUInt32LE(content.length,20);central.writeUInt32LE(content.length,24);central.writeUInt16LE(file.length,28);
+  const end=Buffer.alloc(22);end.writeUInt32LE(0x06054b50);end.writeUInt16LE(1,10);end.writeUInt32LE(central.length+file.length,12);end.writeUInt32LE(local.length+file.length+content.length,16);
+  return Buffer.concat([local,file,content,central,file,end]);
+}
+const config={name:'Writer',instructions:'Original immutable purpose',research:false,attachments:false,development:true,reviewMode:'always',maxActiveTasks:1,maxInputChars:1000};
+const baseTask=()=>({id:randomUUID(),agent_id:randomUUID(),actor_id:randomUUID(),chat_id:randomUUID(),snapshot:{...config},definition_version:1,kind:'general',initial_input:'Saved task',input:'Saved task',request_id:'agent:request',status:'running',details:null,repository_full_name:null,external:{}});
+function fixture(task=baseTask()){
+ let fail=false,savedSources=[],claims=0;const rows=[];const requestRecords=new Map();
+ const admin={rpc:async(name,args)=>{
+  if(name==='check_agent_chat')return {data:!fail&&args.p_actor===task.actor_id&&args.p_chat===task.chat_id&&args.p_request===task.request_id?task:null,error:fail||args.p_actor!==task.actor_id||args.p_chat!==task.chat_id||args.p_request!==task.request_id?{message:'Denied'}:null};
+  if(name==='claim_agent_execution')return {data:++claims===1,error:null};
+  return {data:null,error:null};
+ },from(table){let filters=[];const q={select:()=>q,eq:(k,v)=>{filters.push([k,v]);return q;},order:()=>q,limit:()=>q,update:async()=>({error:null}),maybeSingle:async()=>({data:table==='managed_agents'?{id:task.agent_id,actor_id:task.actor_id,config:task.snapshot}:table==='agent_tasks'?task:table==='chat_requests'?{review_audit:{status:'needs_user_input'}}:{state:{pending:[]}},error:null})};return q;}};
+ const load=modules({
+  '@/lib/data/supabase/admin':{getSupabaseAdminClient:()=>admin},
+  '@/lib/data/persistence-store':{listChatsByActorId:async()=>[{id:task.chat_id,actorId:task.actor_id}],getMessages:async()=>[],getRecentMessages:async()=>[],getChatById:async id=>id===task.chat_id?{id,actorId:task.actor_id}:null,saveMessage:async(_,m)=>rows.push(m)},
+  '@/lib/uploads/stored-uploads':{loadConversationAttachmentCatalog:async()=>savedSources,loadActorAttachmentCatalog:async()=>[],hydrateStoredAttachments:async()=>[],retrySavedEvidence:async()=>{}},
+  '@/lib/chat/request-idempotency':{fingerprintChatRequest:async()=> 'fingerprint',claimChatRequest:async input=>{requestRecords.set(input.requestId,{...input,status:'processing'});return{mode:'claimed',tracked:true};},completeChatRequest:async(id,output)=>requestRecords.set(id,{...requestRecords.get(id),...output,status:'completed'}),getChatRequest:async id=>requestRecords.get(id)??null},
+  '@/lib/chat/local-katie':{resolveLocalKatieResponse:async()=>({reason:'system-prompt',text:'Actual deterministic engine output'})},
+  '@/lib/memory/short-term':{refreshShortTermMemory:async()=>{}},
+ });
+ return {load,task,rows,requestRecords,setFail:v=>fail=v,setSources:v=>savedSources=v};
+}
+test('actual managed runtime guard rejects forged actor/chat/config/model/repo/new and saved source payloads',async()=>{
+ const f=fixture(),runtime=f.load('@/lib/agents/runtime');
+ const invoke=extra=>{const payload={actorId:f.task.actor_id,chatId:f.task.chat_id,message:f.task.input,...extra};return runtime.authorizeManagedChat(new Request('http://local/api/chat',{method:'POST',headers:{'content-type':'application/json','x-request-id':f.task.request_id},body:JSON.stringify(payload)}),payload);};
+ assert.equal((await invoke({})).snapshot.instructions,config.instructions);
+ for(const forged of [{actorId:randomUUID()},{chatId:randomUUID()},{message:'Changed'},{snapshot:{research:true}},{overrideProvider:'grok'},{activeRepoId:'repo',repoInjectionEnabled:true},{images:['data:image/png;base64,YQ==']},{fileReferences:[{fileId:'other-actor'}]}])await assert.rejects(invoke(forged));
+ f.setSources([{id:'saved'}]);await assert.rejects(invoke({}),/Saved attachment/);
+ f.setSources([]);f.setFail(true);await assert.rejects(invoke({}),/authorization/);
+});
+test('actual POST reuses the chat engine, persists output, and repeated starts do not rerun work',async()=>{
+ const f=fixture(),route=f.load('@/app/api/chat/route');
+ const request=(extra={})=>new (native('next/server').NextRequest)('http://local/api/chat',{method:'POST',headers:{'content-type':'application/json','x-request-id':f.task.request_id},body:JSON.stringify({actorId:f.task.actor_id,chatId:f.task.chat_id,message:f.task.input,repoInjectionEnabled:false,...extra})});
+ for(const forged of [{actorId:randomUUID()},{chatId:randomUUID()},{overrideModel:"gpt"},{snapshot:{research:true}},{activeRepoId:"repo",repoInjectionEnabled:true},{message:"Changed input"}]){assert.equal((await route.POST(request(forged))).status,403);assert.equal(f.rows.length,0);}
+ const first=await route.POST(request());
+ assert.equal(first.status,200,await first.clone().text());
+ assert.match(await first.text(),/Actual deterministic engine output/);
+ assert.equal(f.rows.length,2);
+ assert.equal(f.requestRecords.get(f.task.request_id).status,'completed');
+ const replay=await route.POST(request());assert.equal(replay.status,202);assert.equal(f.rows.length,2);
+ assert.equal((await replay.json()).task.status,'pending','HTTP 200 completed text cannot hide pending independent review');
+});
+test('async policy isolation blocks the real web adapter and browser collector before external work',async()=>{
+ const load=modules(),{runAgentTask,requireAgentResearch,currentAgentTask}=load('@/lib/agents/policy');
+ const denied=baseTask(),allowed={...baseTask(),snapshot:{...config,research:true}};
+ await Promise.all([runAgentTask(denied,async()=>{await Promise.resolve();assert.equal(currentAgentTask().id,denied.id);assert.throws(requireAgentResearch,/disabled/);
+  const {collectWebsiteEvidence}=load('@/lib/research/website-evidence');let launches=0;
+  await assert.rejects(collectWebsiteEvidence({user:'Review https://example.com',history:[],persona:'',summary:'',name:'Katie',requestIntent:'web-search'},{launch:async()=>{launches++;throw Error('must not launch');}}),/disabled/);assert.equal(launches,0);
+  const {GrokProvider}=load('@/lib/providers/grok-provider');await assert.rejects(new GrokProvider('fake').createWebSearchResponse('grok',[]),/disabled/);
+ }),runAgentTask(allowed,async()=>{await Promise.resolve();assert.equal(currentAgentTask().id,allowed.id);requireAgentResearch();})]);
+ assert.equal(currentAgentTask(),undefined);requireAgentResearch();
+});
+test('trusted workflow receipt parsing requires exact associations, real successful tests/review and a PR',()=>{
+ const {parseCompletionReceipt}=modules()('@/lib/agents/development');
+ const receipt={version:1,repository:'owner/repo',run_id:1,issue_number:2,pr_url:'https://github.com/owner/repo/pull/3',outcome:'READY',checks:{build:'success',test:'true',review:'pass',repair:'skipped',retest:'',final_review:''}};
+ assert.equal(parseCompletionReceipt(receipt,'owner/repo',2,1,'success').outcome,'READY');
+ for(const changed of [{outcome:'BLOCKED'},{pr_url:null},{checks:{...receipt.checks,test:'false'}},{checks:{...receipt.checks,review:'fail'}},{checks:{...receipt.checks,repair:'failure'}},{checks:{...receipt.checks,final_review:'fail'}}])assert.equal(parseCompletionReceipt({...receipt,...changed},'owner/repo',2,1,'success').outcome,'BLOCKED');
+ assert.equal(parseCompletionReceipt(receipt,'owner/repo',2,1,'failure').outcome,'BLOCKED');
+ assert.throws(()=>parseCompletionReceipt(receipt,'other/repo',2,1,'success'),/association/);
+ assert.throws(()=>parseCompletionReceipt({...receipt,pr_url:'https://evil.example/pull/3'},'owner/repo',2,1,'success'),/Invalid receipt PR/);
+});
+
+test('actual development dispatch rejects non-owner/app credentials and reconciles ambiguous acceptance without another write',async()=>{
+ for(const identity of [{login:'bot',type:'Bot'},{login:'collaborator',type:'User'},{login:'owner',type:'User'},{login:'owner',type:'User',workflowMissing:true}]){
+  const task={...baseTask(),kind:'development',status:'dispatching',repository_id:randomUUID(),repository_full_name:'owner/repo'};
+  let claimed=false,writes=0,issue=null;
+  const db={rpc:async()=>({data:!claimed&&(claimed=true),error:null}),from(table){let q={select:()=>q,eq:()=>q,maybeSingle:async()=>({data:table==='repo_sync_runs'?{repository_full_name:'owner/repo'}:table==='managed_agents'?{id:task.agent_id,actor_id:task.actor_id,config:task.snapshot}:task,error:null}),update:async patch=>{Object.assign(task,patch);return{error:null};}};return q;}};
+  class GitHub {
+   users={getAuthenticated:async()=>({data:identity})};
+   repos={get:async()=>({data:{owner:{login:'owner',type:'User'}}})};
+   issues={create:async payload=>{writes++;assert.match(payload.body,/Original immutable purpose/);assert.match(payload.body,new RegExp(task.id));issue={number:7,html_url:'https://github.com/owner/repo/issues/7',title:payload.title,body:payload.body,user:{login:'owner'}};throw Error('lost acknowledgement after acceptance');},listForRepo:async()=>({data:issue?[issue]:[]})};
+   actions={getWorkflow:async()=>{if(identity.workflowMissing)throw Error('missing workflow');return{data:{path:'.github/workflows/autonomous-development.yml',state:'active'}};},listWorkflowRuns:async()=>({data:{workflow_runs:[]}})};
+  }
+  const old=process.env.GITHUB_TOKEN;process.env.GITHUB_TOKEN='fixture-only';
+  try {
+   const development=modules({'@octokit/rest':{Octokit:GitHub},'@/lib/data/supabase/admin':{getSupabaseAdminClient:()=>db},'@/lib/data/persistence-store':{getChatById:async()=>({actorId:task.actor_id})}})('@/lib/agents/development');
+   const started=await development.dispatchDevelopment({...task});
+   if(identity.login!=='owner'||identity.workflowMissing) {assert.equal(started.status,'blocked');assert.match(started.details,identity.workflowMissing?/workflow is unavailable/:/human owner/);assert.equal(writes,0);}
+   else {
+    assert.equal(started.status,'dispatching');assert.equal(writes,1);
+    await development.dispatchDevelopment(started);assert.equal(writes,1);
+    const reconciled=await development.reconcileDevelopment(started);assert.equal(reconciled.status,'submitted');assert.equal(reconciled.external.issueNumber,7);assert.equal(writes,1);
+   }
+  }finally{if(old===undefined)delete process.env.GITHUB_TOKEN;else process.env.GITHUB_TOKEN=old;}
+ }
+});
+test('actual context assembly uses the admitted instructions/review preference after actor edits',async()=>{
+ const load=modules({'@/lib/data/persistence-store':{
+  getChatContextState:async()=>({actor:{purpose:'Edited after admission',reviewMode:'off'},recentMessages:[],shortTermMemory:{},intermediateMemory:{},longTermMemory:{}}),
+  listActorMemoryDocuments:async()=>[],
+ }});
+ const {runAgentTask}=load('@/lib/agents/policy'),{assembleContext}=load('@/lib/memory/assemble-context');
+ const task=baseTask();
+ const context=await runAgentTask(task,()=>assembleContext(task.actor_id,task.chat_id));
+ assert.match(context.persona,/Original immutable purpose/);assert.doesNotMatch(context.persona,/Edited after admission/);assert.equal(context.reviewMode,'always');
+ const ordinary=await assembleContext(task.actor_id,task.chat_id);assert.match(ordinary.persona,/Edited after admission/);assert.equal(ordinary.reviewMode,'off');
+});
+test('denied managed tasks cannot inspect saved video or evidence bodies through the production media entry points',async()=>{
+ let reads=0;
+ const load=modules({'@/lib/media-memory/evidence':{retrieveSavedEvidence:async()=>{reads++;return{};}},'@/lib/chat/saved-video-observations':{loadSavedVideoFollowUp:async()=>{reads++;return{};}}});
+ const {runAgentTask}=load('@/lib/agents/policy'),media=load('@/lib/agents/media');
+ await runAgentTask(baseTask(),async()=>{assert.equal(await media.retrieveSavedEvidence({}),null);assert.equal(await media.loadSavedVideoFollowUp({}),null);});assert.equal(reads,0);
+ await media.retrieveSavedEvidence({});await media.loadSavedVideoFollowUp({});assert.equal(reads,2);
+});
+test('actual definition/task APIs create, reload, edit, archive and reject client snapshot/hidden execution options',async()=>{
+ const tables={managed_agents:[],agent_tasks:[]},chats=new Map();
+ const db={from(table){let filters=[];const found=()=>tables[table].filter(row=>filters.every(([k,v])=>row[k]===v));const q={select:()=>q,order:()=>q,limit:()=>q,eq:(k,v)=>{filters.push([k,v]);return q;},then:(resolve,reject)=>Promise.resolve({data:structuredClone(found()),error:null}).then(resolve,reject),maybeSingle:async()=>({data:structuredClone(found()[0]??null),error:null})};return q;},rpc:async(name,args)=>{
+  if(name==='save_managed_agent'){
+   let a=tables.managed_agents.find(a=>a.id===args.p_id);
+   if(a)Object.assign(a,{config:structuredClone(args.p_config),archived:args.p_archive,version:a.version+1});
+   else {a={id:randomUUID(),actor_id:randomUUID(),config:structuredClone(args.p_config),archived:false,version:1};tables.managed_agents.push(a);}
+   return{data:structuredClone(a),error:null};
+  }
+  if(name==='create_agent_task'){
+   const a=tables.managed_agents.find(a=>a.id===args.p_agent);
+   const task={...baseTask(),id:args.p_id,agent_id:a.id,actor_id:a.actor_id,snapshot:structuredClone(a.config),initial_input:args.p_input,input:args.p_input,status:'draft'};
+   tables.agent_tasks.push(task);chats.set(task.chat_id,{actorId:task.actor_id});return{data:structuredClone(task),error:null};
+  }
+  throw Error('Unexpected RPC '+name);
+ }};
+ const load=modules({'@/lib/data/supabase/admin':{getSupabaseAdminClient:()=>db},'@/lib/data/persistence-store':{getChatById:async id=>chats.get(id)??null},'@/lib/chat/request-idempotency':{getChatRequest:async()=>null}});
+ const {NextRequest}=native('next/server'),agents=load('@/app/api/agents/route'),tasks=load('@/app/api/agent-tasks/route');
+ const req=(path,body)=>new NextRequest('http://local'+path,{method:body?'POST':'GET',headers:{'content-type':'application/json'},...(body?{body:JSON.stringify(body)}:{})});
+ const saved=await agents.POST(req('/api/agents',{config}));assert.equal(saved.status,200);const agent=(await saved.json()).agent;
+ assert.equal((await (await agents.GET()).json()).agents[0].config.instructions,config.instructions);
+ const id=randomUUID();const created=await tasks.POST(req('/api/agent-tasks',{action:'create',id,agentId:agent.id,input:'Write a brief',kind:'general'}));assert.equal(created.status,200);
+ const edited=await agents.POST(req('/api/agents',{id:agent.id,config:{...config,instructions:'Edited later'}}));assert.equal(edited.status,200);
+ const read=await tasks.GET(req('/api/agent-tasks?id='+id));assert.equal(read.status,200);assert.equal((await read.json()).task.snapshot.instructions,config.instructions);
+ for(const forged of [{action:'create',id:randomUUID(),agentId:agent.id,input:'x',kind:'general',snapshot:{research:true}},{action:'start',id,overrideModel:'unbounded'},{action:'start',id,actorId:randomUUID()},{action:'start',id,message:'Replace approved input'}])assert.equal((await tasks.POST(req('/api/agent-tasks',forged))).status,409);
+ assert.equal((await agents.POST(req('/api/agents',{id:agent.id,config,archive:true}))).status,200);
+ assert.equal((await (await agents.GET()).json()).agents[0].archived,true);
+ assert.equal((await agents.POST(req('/api/agents',{config:{...config,attachments:true}}))).status,400);
+});
+test('direct durable video registration cannot bypass unavailable managed attachment permissions',async()=>{
+ const f=fixture(),route=f.load('@/app/api/video-handoffs/route');
+ const {NextRequest}=native('next/server');
+ const response=await route.POST(new NextRequest('http://local/api/video-handoffs',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({requestId:randomUUID(),actorId:f.task.actor_id,chatId:f.task.chat_id,message:'Inspect this video',files:[{name:'private.mp4',type:'video/mp4',size:100}]})}));
+ assert.equal(response.status,403);assert.match((await response.json()).error,/unavailable/);
+});
+test('actual artifact parser reads only the fixed bounded receipt and rejects oversized or unrelated files',()=>{
+ const {completionJson}=modules()('@/lib/agents/development');
+ const archive=zipJSON;
+ assert.equal(completionJson(archive('agent-result.json',{version:1})).version,1);
+ assert.throws(()=>completionJson(archive('../agent-result.json',{version:1})),/missing/);
+ assert.throws(()=>completionJson(Buffer.alloc(1000001)),/too large/);
+ assert.throws(()=>completionJson(archive('agent-result.json',{text:'x'.repeat(66000)})),/bounds/);
+});
+test('actual workflow reconciliation persists exact READY/BLOCKED receipts and links without dispatching new work',async()=>{
+ const prior=process.env.GITHUB_TOKEN;process.env.GITHUB_TOKEN='fixture-only';
+ try{
+  for(const [outcome,conclusion,tests,expected] of [['READY','success','true','ready'],['READY','success','false','blocked'],['BLOCKED','success','true','blocked'],['READY','failure','true','blocked']]){
+   const task={...baseTask(),kind:'development',status:'submitted',repository_id:randomUUID(),repository_full_name:'owner/repo',external:{attempted:true,issueNumber:7,issueUrl:'https://github.com/owner/repo/issues/7'}};
+   const receipt={version:1,repository:'owner/repo',run_id:99,issue_number:7,pr_url:'https://github.com/owner/repo/pull/8',outcome,checks:{build:'success',test:tests,review:'pass',repair:'skipped',retest:'',final_review:''}};
+   const db={from(){let q={select:()=>q,eq:()=>q,maybeSingle:async()=>({data:{repository_full_name:'owner/repo'},error:null}),update:async patch=>{Object.assign(task,patch);return{error:null};}};return q;}};
+   class GitHub {actions={listWorkflowRuns:async()=>({data:{workflow_runs:[{id:99,status:'completed',conclusion,event:'issues',repository:{full_name:'owner/repo'},head_repository:{full_name:'owner/repo'},head_branch:'main',path:'.github/workflows/autonomous-development.yml',html_url:'https://github.com/owner/repo/actions/runs/99'}]}}),listWorkflowRunArtifacts:async()=>({data:{artifacts:[{name:'agent-completion',id:10,expired:false,size_in_bytes:500}]}}),downloadArtifact:async()=>({data:zipJSON('agent-result.json',receipt)})};}
+   const {reconcileDevelopment}=modules({'@octokit/rest':{Octokit:GitHub},'@/lib/data/supabase/admin':{getSupabaseAdminClient:()=>db}})('@/lib/agents/development');
+   const actual=await reconcileDevelopment(task);assert.equal(actual.status,expected);assert.equal(task.status,expected);assert.equal(actual.external.runUrl,'https://github.com/owner/repo/actions/runs/99');assert.equal(actual.external.prUrl,receipt.pr_url);assert.equal(actual.external.receipt.outcome,expected==='ready'?'READY':'BLOCKED');
+  }
+ }finally{if(prior===undefined)delete process.env.GITHUB_TOKEN;else process.env.GITHUB_TOKEN=prior;}
+});

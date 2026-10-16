@@ -192,6 +192,7 @@ export function Sidebar({
 
   return (
     <aside className="relative flex h-full min-h-0 w-full flex-col bg-gradient-to-b from-white/[0.03] via-zinc-950/40 to-zinc-950/80 p-4 sm:p-5">
+      <a href="/agents" className="m-3 block rounded-xl border border-white/10 px-4 py-3 text-sm text-zinc-200 hover:bg-white/10">Manage agents and tasks</a>
       <div className="pointer-events-none absolute inset-x-0 top-0 h-32 bg-gradient-to-b from-sky-400/10 to-transparent" />
       <div className="relative flex min-h-0 flex-1 flex-col overflow-y-auto">
         <div className="mb-5 rounded-3xl border border-white/10 bg-white/[0.035] p-4 shadow-[0_18px_50px_rgba(0,0,0,0.25)] backdrop-blur-sm">
@@ -213,7 +214,7 @@ export function Sidebar({
           </button>
         </div>
 
-        {activeActor ? (
+        {activeActor && !activeActor.managedAgentId ? (
           <section className="mb-4 rounded-2xl border border-white/10 bg-white/[0.03] p-3">
             <button
               className="w-full rounded-lg border border-white/10 bg-white/[0.04] px-3 py-2 text-left text-xs font-medium text-zinc-300 transition hover:border-emerald-400/30 hover:bg-emerald-400/10 hover:text-white"
@@ -331,7 +332,7 @@ export function Sidebar({
                         <span className="h-2 w-2 rounded-full bg-sky-400/80 shadow-[0_0_16px_rgba(56,189,248,0.55)]" />
                       )}
                       <span className={`break-words text-sm font-semibold tracking-tight ${activeActor ? "text-white" : "text-zinc-200"}`}>
-                        {actor.name}
+                        {actor.name}{actor.managedAgentId ? " · managed agent" : ""}
                       </span>
                     </div>
                     <p className="mt-2 line-clamp-2 break-words text-xs leading-5 text-zinc-500">
@@ -351,13 +352,14 @@ export function Sidebar({
                         }
                       }}
                       title={`New chat for ${actor.name}`}
-                      disabled={creatingChat}
+                      disabled={creatingChat || Boolean(actor.managedAgentId)}
                     >
                       {creatingChat ? "Creating..." : "New Chat"}
                     </button>
                     <button
                       className="min-h-10 rounded-xl border border-white/10 bg-white/[0.04] px-2.5 py-1 text-[11px] font-medium text-zinc-300 transition hover:border-emerald-400/30 hover:bg-emerald-400/10 hover:text-white"
                       onClick={() => onOpenCreateSubActor(actor)}
+                      disabled={Boolean(actor.managedAgentId)}
                       title={`Branch from ${actor.name}`}
                     >
                       Branch
@@ -365,6 +367,7 @@ export function Sidebar({
                     <button
                       className="min-h-10 rounded-xl border border-red-500/20 bg-red-500/5 px-2.5 py-1 text-[11px] font-medium text-red-200 transition hover:border-red-400/40 hover:bg-red-500/10 hover:text-white"
                       onClick={() => onDeleteActor(actor)}
+                      disabled={Boolean(actor.managedAgentId)}
                       title={`Delete ${actor.name}`}
                     >
                       Delete
@@ -473,6 +476,7 @@ export function Sidebar({
                               event.stopPropagation();
                               void onDeleteChat(chat);
                             }}
+                            disabled={Boolean(actor.managedAgentId)}
                             title={`Delete ${chat.title}`}
                           >
                             Delete

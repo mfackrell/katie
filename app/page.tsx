@@ -577,6 +577,7 @@ export default function HomePage() {
           <ChatPanel
             actorId={activeActorId}
             chatId={activeChatId}
+            managedAgentId={activeActor?.managedAgentId}
             activeActorName={activeActor?.name ?? ""}
             activeChatTitle={activeChat?.title ?? ""}
             activeRepoId={activeRepoId}

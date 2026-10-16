@@ -1,3 +1,4 @@
+import { requireAgentResearch } from "@/lib/agents/policy";
 import { isTerminalProviderError } from "@/lib/providers/response-errors";
 import {
   getFinalSynthesisInstruction,
@@ -585,6 +586,7 @@ export async function runAdaptiveCollaboration(
           request.capability === "research" ? 1 : MAX_HELPER_CONTROL_PASSES;
         for (let controlPass = 0; controlPass < controlPassLimit; controlPass += 1) {
           const isResearchPass = request.capability === "research";
+          if (isResearchPass) requireAgentResearch();
           const helperParams = prepareParams(
             withPersona(
               {

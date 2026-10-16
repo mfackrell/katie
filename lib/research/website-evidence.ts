@@ -1,3 +1,4 @@
+import { requireAgentResearch } from "@/lib/agents/policy";
 import { lookup } from "node:dns/promises";
 import { isIP } from "node:net";
 import type { Browser, Page } from "playwright-core";
@@ -37,6 +38,7 @@ function websiteUrls(message: string): string[] {
 }
 
 export function resolveWebsiteReviewTarget(params: ChatGenerateParams): { urls: string[]; source: "current-message" | "history" | "summary" | "none" } {
+  requireAgentResearch();
   if (!isWebsiteReview(params)) return { urls: [], source: "none" };
   const current = websiteUrls(params.user);
   if (current.length) return { urls: current.slice(0, MAX_PAGES), source: "current-message" };
@@ -163,6 +165,7 @@ export async function collectWebsiteEvidence(
     states?: Array<{ name: string; selector: string; expectVisible?: string }>;
   } = {},
 ): Promise<WebsiteEvidence | undefined> {
+  requireAgentResearch();
   if (!isWebsiteReview(params)) return undefined;
   const states = options.states ?? [];
   if (states.length > 3 || states.some(s => !s.name || s.name === "default" || !s.selector) || new Set(states.map(s => s.name)).size !== states.length) throw new Error("Invalid disclosure states");

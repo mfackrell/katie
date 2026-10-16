@@ -1,3 +1,4 @@
+import { currentAgentTask } from "@/lib/agents/policy";
 import { getDeliverableStandardInstruction } from "@/lib/chat/deliverable-standard";
 import { getChatContextState, listActorMemoryDocuments } from "@/lib/data/persistence-store";
 import { MEMORY_ARCHITECTURE_GUIDE, SHORT_TERM_MESSAGE_LIMIT } from "@/lib/memory/memory-contract";
@@ -59,10 +60,10 @@ export async function assembleContext(actorId: string, chatId: string): Promise<
     : "LONG_TERM_MEMORY:\nNo durable long-term memory has been stored yet.\nEND_LONG_TERM_MEMORY";
 
   return {
-    reviewMode: actor.reviewMode ?? "adaptive",
+    reviewMode: currentAgentTask()?.snapshot.reviewMode ?? actor.reviewMode ?? "adaptive",
     name: process.env.ASSISTANT_NAME || "Katie",
     persona: [
-      actor.purpose,
+      currentAgentTask()?.snapshot.instructions ?? actor.purpose,
       getDeliverableStandardInstruction(),
       MEMORY_ARCHITECTURE_GUIDE,
       correctionsBlock,
