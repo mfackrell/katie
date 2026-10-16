@@ -27,6 +27,7 @@ jobs:
       branch: ${{ steps.task.outputs.branch }}
       issue: ${{ steps.task.outputs.issue }}
       pr: ${{ steps.publish.outputs.pr }}
+      repair_smoke: ${{ steps.task.outputs.repair_smoke }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -52,6 +53,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           ISSUE: ${{ github.event.issue.number || inputs.issue_number }}
+          REPAIR_SMOKE: ${{ github.event_name == 'issues' && contains(github.event.issue.title, '[repair-smoke]') }}
         run: |
           set -euo pipefail
           author="$(gh issue view "$ISSUE" --repo "$GITHUB_REPOSITORY" --json author --jq '.author.login')"
@@ -61,6 +63,15 @@ jobs:
           echo "issue=$ISSUE" >> "$GITHUB_OUTPUT"
           echo "branch=$branch" >> "$GITHUB_OUTPUT"
           gh issue view "$ISSUE" --repo "$GITHUB_REPOSITORY" --json title,body --jq '.title + "\n\n" + (.body // "")' > AGENT_REQUEST.md
+          echo "repair_smoke=$REPAIR_SMOKE" >> "$GITHUB_OUTPUT"
+          mkdir -p "$RUNNER_TEMP/agent-task"
+          cp AGENT_REQUEST.md "$RUNNER_TEMP/agent-task/AGENT_REQUEST.md"
+      - name: Preserve original task before implementation
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-task
+          path: ${{ runner.temp }}/agent-task/AGENT_REQUEST.md
+          if-no-files-found: error
       - name: Autonomous developer
         uses: openai/codex-action@v1
         with:
@@ -75,7 +86,7 @@ jobs:
             or rewrite this orchestration workflow. The workflow will commit
             changes, independently test, review, and repair them.
       - name: Controlled failing regression for repair-pipeline smoke test
-        if: ${{ github.event_name == 'issues' && contains(github.event.issue.title, '[repair-smoke]') }}
+        if: ${{ steps.task.outputs.repair_smoke == 'true' }}
         shell: bash
         run: |
           # Owner-authored opt-in pilot only. Inject a deliberately incorrect
@@ -92,6 +103,20 @@ jobs:
             assert.equal(pkg.private, false);
           });
           SMOKE
+      - name: Reject smoke artifacts in ordinary tasks
+        env:
+          REPAIR_SMOKE: ${{ steps.task.outputs.repair_smoke }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "$REPAIR_SMOKE" in
+            true) ;;
+            false)
+              test ! -e tests/agent-repair-smoke.test.mjs && test ! -L tests/agent-repair-smoke.test.mjs || {
+                echo 'Smoke-test artifact is forbidden in an ordinary task'; exit 1;
+              } ;;
+            *) echo 'Missing or invalid repair-smoke mode'; exit 1 ;;
+          esac
       - name: Create draft pull request
         id: publish
         shell: bash
@@ -162,13 +187,10 @@ jobs:
           ref: ${{ needs.build.outputs.branch }}
           fetch-depth: 0
           persist-credentials: false
-      - name: Load original objective
-        env:
-          GH_TOKEN: ${{ github.token }}
-          ISSUE: ${{ needs.build.outputs.issue }}
-        run: |
-          git fetch origin main
-          gh issue view "$ISSUE" --repo "$GITHUB_REPOSITORY" --json title,body --jq '.title + "\n\n" + (.body // "")' > AGENT_REQUEST.md
+      - name: Load preserved original objective
+        uses: actions/download-artifact@v4
+        with:
+          name: agent-task
       - uses: actions/download-artifact@v4
         with:
           name: agent-test
@@ -222,24 +244,68 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: agent-review
+      - name: Load preserved task for repair
+        uses: actions/download-artifact@v4
+        with:
+          name: agent-task
+          path: ${{ runner.temp }}/agent-task
+      - name: Prepare task-specific repair instructions
+        env:
+          REPAIR_SMOKE: ${{ needs.build.outputs.repair_smoke }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp "$RUNNER_TEMP/agent-task/AGENT_REQUEST.md" AGENT_REQUEST.md
+          case "$REPAIR_SMOKE" in
+            true)
+              cat > AGENT_REPAIR_CONTEXT.md <<'CONTEXT'
+          This is an owner-authorized repair-smoke run. The workflow deliberately
+          injected tests/agent-repair-smoke.test.mjs after implementation.
+          Retain that regression and correct its intentionally wrong expectation
+          to private: true. Preserve the original task's remaining boundaries.
+          CONTEXT
+              ;;
+            false)
+              cat > AGENT_REPAIR_CONTEXT.md <<'CONTEXT'
+          This is an ordinary task. Do not create or reintroduce
+          tests/agent-repair-smoke.test.mjs. It belongs only to controlled pilots.
+          Follow the original task's scope, prohibitions, and acceptance criteria.
+          CONTEXT
+              ;;
+            *) echo 'Missing or invalid repair-smoke mode'; exit 1 ;;
+          esac
       - name: Independent repair agent
         uses: openai/codex-action@v1
         with:
           openai-api-key: ${{ secrets.OPENAI_API_KEY }}
           permission-profile: ':workspace'
           prompt: |
-            You are the repair agent in a fresh context. Read
-            agent-test.log and agent-review.json. Independently diagnose
-            failures and blocking review findings. Fix them, add tests,
-            and verify locally. Do not weaken tests, rewrite the agent
-            workflow, access production, or merge or deploy.
-            For a [repair-smoke] pilot, retain tests/agent-repair-smoke.test.mjs
-            and correct its intentionally wrong expectation (the package is
-            private: true). Do not delete or skip the regression test.
+            You are the repair agent in a fresh context. First read
+            AGENT_REQUEST.md and AGENT_REPAIR_CONTEXT.md, then agent-test.log
+            and agent-review.json. Diagnose failures and blocking findings
+            against the original task. Fix them within its scope and verify
+            locally. Reviewer suggestions do not authorize scope expansion.
+            Do not weaken tests, rewrite the agent workflow, access production,
+            push, merge, or deploy. Leave an unresolved requirement blocked
+            rather than substituting a different result.
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
           cache: npm
+      - name: Reject smoke artifacts in ordinary tasks
+        env:
+          REPAIR_SMOKE: ${{ needs.build.outputs.repair_smoke }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "$REPAIR_SMOKE" in
+            true) ;;
+            false)
+              test ! -e tests/agent-repair-smoke.test.mjs && test ! -L tests/agent-repair-smoke.test.mjs || {
+                echo 'Smoke-test artifact is forbidden in an ordinary task'; exit 1;
+              } ;;
+            *) echo 'Missing or invalid repair-smoke mode'; exit 1 ;;
+          esac
       - name: Push repairs
         env:
           GH_TOKEN: ${{ github.token }}
@@ -247,7 +313,7 @@ jobs:
         run: |
           set -euo pipefail
           test -z "$(git status --porcelain -- .github/workflows/autonomous-development.yml)" || { echo 'Protected workflow edited'; exit 1; }
-          rm -f agent-test.log agent-review.json
+          rm -f AGENT_REQUEST.md AGENT_REPAIR_CONTEXT.md agent-test.log agent-review.json
           git add -A
           git diff --cached --quiet && { echo 'No repair produced'; exit 1; }
           git config user.name 'github-actions[bot]'
@@ -289,13 +355,10 @@ jobs:
           ref: ${{ needs.build.outputs.branch }}
           fetch-depth: 0
           persist-credentials: false
-      - name: Original objective
-        env:
-          GH_TOKEN: ${{ github.token }}
-          ISSUE: ${{ needs.build.outputs.issue }}
-        run: |
-          git fetch origin main
-          gh issue view "$ISSUE" --repo "$GITHUB_REPOSITORY" --json title,body --jq '.title + "\n\n" + (.body // "")' > AGENT_REQUEST.md
+      - name: Load preserved original objective
+        uses: actions/download-artifact@v4
+        with:
+          name: agent-task
       - uses: actions/download-artifact@v4
         with:
           name: agent-retest

@@ -26,6 +26,9 @@ This is an **approval-gated** development orchestrator. You open one GitHub issu
 - The workflow rejects modifications to itself by coding agents.
 - Every Codex invocation uses the scoped `:workspace` or `:read-only` permission profile. No production service credentials or deployment permissions are provided.
 - A single automatic repair pass is allowed. More failures are reported as **BLOCKED**, never represented as successful.
+- The owner-validated original task is captured before implementation in a run-scoped `agent-task` artifact. Initial review, repair and final review all receive that same snapshot; editing the issue later does not change the running task. Missing task artifacts stop the dependent job.
+- Repair receives the task's scope and prohibitions alongside test logs and review findings. Review suggestions do not authorize broader changes. Temporary task and repair-context files are removed before repair publication.
+- Smoke-test repair guidance is supplied only when the same issue-event flag enabled fault injection. Ordinary implementation and repair jobs refuse to publish `tests/agent-repair-smoke.test.mjs`, including a dangling symlink. Manual dispatch does not inject a smoke failure or enable smoke repair guidance, even for a pilot-titled issue.
 - GitHub workflows created with `GITHUB_TOKEN` may not trigger ordinary `pull_request` workflows. The orchestration runs explicit independent gates; manually review all checks prior to merging.
 - Katie's existing test baseline still contains previously identified compiler-suppression problems. The workflow adds a hard-failing `npm run typecheck`, but Work Package 1 must still be reconciled to make the complete suite trustworthy.
 
@@ -63,3 +66,13 @@ feature proposed for production. Do not use the flag for ordinary work.
 **Delivery:** GitHub's normal issue notifications (web/mobile/email) apply if #427 is subscribed and notifications are enabled in GitHub. GitHub cannot deliver a new message directly into an inactive ChatGPT chat, and this workflow does not promise that. A self-mention alone may not generate a separate mobile push. The workflow does not auto-approve or auto-merge draft PRs.
 
 Test the pure event/receipt classification with `node --test tests/katie-event-notifier.test.mjs`. A live `workflow_run` and a new comment on #427 must be verified after merging the handler into `main`.
+
+## Repair handoff verification
+
+`node --test tests/autonomous-repair-handoff.test.mjs` parses the actual workflow
+and executes its task capture, repair preparation, publishing guards and cleanup
+shell steps in disposable local directories. It covers ordinary/pilot modes,
+missing inputs, invalid modes, non-owner rejection, literal task text and stray
+smoke artifacts. GitHub artifact transport and live model behavior still require
+a controlled post-merge workflow run; passing offline checks does not establish
+that a new live repair succeeded.
