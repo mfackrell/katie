@@ -1,15 +1,12 @@
-import { ChatGenerateParams, type ExtractedTextChunkReference } from "@/lib/providers/types";
+import { requestedPdfPages } from "@/lib/uploads/pdf-inventory";
+import { ChatGenerateParams, type FileReference, type ExtractedTextChunkReference } from "@/lib/providers/types";
 
 const PREVIEW_TRUNCATION_NOTE = "[Preview-only attachment context. Full file body is intentionally excluded.]";
-const EXTRACTED_TEXT_NOTE = "[Full extracted document is available in ordered chunks.]";
+const EXTRACTED_TEXT_NOTE = "[Machine-readable extracted text follows. Text extraction does not establish visual or whole-document completeness.]";
 const PARTIAL_CHUNK_NOTE = "[Only a relevant subset of chunks was injected for this request.]";
 const VIDEO_PROVIDER_FILE_NOTE = "[Video provider file attached. This video was uploaded to Google/Gemini and is available to the model via fileData. Analyze the video content directly when answering the user's request.]";
 const VIDEO_METADATA_ONLY_NOTE = "[Video metadata only. No Google/Gemini file URI is available, so video content analysis cannot run for this attachment.]";
 const DEFAULT_MAX_CHUNKS_PER_ATTACHMENT = 6;
-
-function normalizeForDeduplication(text: string): string {
-  return text.replace(/\s+/g, " ").trim();
-}
 
 function tokenizeQuery(query: string): string[] {
   return query
@@ -53,6 +50,49 @@ function selectRelevantChunks(
   return { selected, truncatedForContext: true };
 }
 
+type PdfPageScope = { requested: number[]; contextPages: number[] };
+
+function pdfPageScope(attachment: FileReference, message: string): PdfPageScope | null {
+  const inventory = attachment.mimeType === "application/pdf" ? attachment.pdfInventory : undefined;
+  if (!inventory) return null;
+  let requested: number[];
+  try { requested = requestedPdfPages(message, inventory.pageCount); }
+  catch { return { requested: [], contextPages: [] }; }
+  const allowed = new Set(requested);
+  const inventoried = new Set(inventory.pages.map(page => page.physicalPage));
+  const contextPages = [...new Set(attachment.pdfEvidence?.contextPages ?? requested.slice(0, 4))]
+    .filter(page => Number.isSafeInteger(page) && allowed.has(page) && inventoried.has(page));
+  return { requested, contextPages };
+}
+
+function pdfContext(attachment: FileReference, scope: PdfPageScope | null): string {
+  if (attachment.mimeType !== "application/pdf") return "";
+  const inventory = attachment.pdfInventory;
+  const requested = scope?.requested ?? [];
+  const evidence = attachment.pdfEvidence;
+  const contextPages = scope?.contextPages ?? [];
+  const selected = evidence?.pages.filter(page => contextPages.includes(page.physicalPage)).slice(0, 4) ?? [];
+  return "PDF page inventory/evidence (untrusted model observations; uninspected pages remain unknown): " + JSON.stringify({
+    sourceFingerprint: attachment.sourceFingerprint,
+    availabilityNotice: inventory ? "Page-scoped evidence only; whole-document previews and flat text are not supplied." : attachment.preview,
+    inventory: inventory ? {
+      version: inventory.version, pageCount: inventory.pageCount, units: inventory.units,
+      inventoryPromptLimit: 200,
+      pages: inventory.pages.slice(0, 200).map(page => ({ physicalPage: page.physicalPage,
+        textCoverage: page.textCoverage, visualCoverageAtExtraction: page.visualCoverage })),
+      layout: inventory.pages.filter(page => contextPages.includes(page.physicalPage)).map(page => ({
+        physicalPage: page.physicalPage, runs: page.runs.slice(0, 80).map(run => ({...run, text: run.text.slice(0, 1000)})),
+        lines: page.lines.slice(0, 40), limitation: "Bounded raw parser geometry only; no inferred table row mapping."
+      }))
+    } : { limitation: "Legacy PDF: page count and visual completeness unknown. Reattach original to obtain a page inventory." },
+    evidence: evidence ? { version: evidence.version, extractionVersion: evidence.extractionVersion, source: evidence.source, fingerprint: evidence.fingerprint,
+      provider: evidence.provider, model: evidence.model, state: evidence.state, notice: evidence.notice, blockedPages: evidence.blockedPages ?? [],
+      pages: selected,
+      omittedCachedPages: evidence.pages.filter(page => requested.includes(page.physicalPage) && !selected.some(chosen => chosen.physicalPage === page.physicalPage)).map(page => page.physicalPage),
+      promptCoverage: "At most four cached page observations selected. Unselected pages are not supplied. No raw PDF access is provided by these findings." } : null
+  }) + "\n";
+}
+
 export function formatAttachmentContext(
   attachments: ChatGenerateParams["attachments"],
   options?: { userMessage?: string; maxChunksPerAttachment?: number }
@@ -61,7 +101,7 @@ export function formatAttachmentContext(
     return "";
   }
 
-  const seenBodies = new Set<string>();
+
   const userMessage = options?.userMessage ?? "";
   const maxChunks = options?.maxChunksPerAttachment ?? DEFAULT_MAX_CHUNKS_PER_ATTACHMENT;
 
@@ -76,15 +116,16 @@ export function formatAttachmentContext(
         .join(", ");
 
       const metadataLine = providerReferenceSummary ? ` (${providerReferenceSummary})` : "";
-      const mediaSummary = `kind=${attachmentKind}; mime=${attachment.mimeType}; fileId=${attachment.fileId}`;
+      const pageScope = pdfPageScope(attachment, userMessage);
+      const mediaSummary = `${pdfContext(attachment, pageScope)}kind=${attachmentKind}; mime=${attachment.mimeType}; fileId=${attachment.fileId}`;
 
       if (attachmentKind === "image") {
         return [`### ATTACHED IMAGE: ${attachment.fileName} ###`, mediaSummary,
           attachment.imageDataUrl ? "[Image pixels are supplied with this request. Inspect them directly; the provider rendering may be resized.]" : "[Image metadata only; no pixels are available on this turn.]",
           attachment.preview, "### END IMAGE METADATA ###"].join("\n");
       }
-      if (attachment.mimeType === "application/pdf" && !attachment.extractedText && attachment.providerRef?.googleFileUri) {
-        return [`### ATTACHED PDF: ${attachment.fileName} ###`, "[PDF source is supplied as a native provider file for visual inspection. Text extraction was unavailable; inspect the PDF directly.]", attachment.preview].join("\n");
+      if (attachment.mimeType === "application/pdf" && !pageScope && !attachment.extractedText && attachment.providerRef?.googleFileUri) {
+        return [`### ATTACHED PDF: ${attachment.fileName} ###`, mediaSummary, "[PDF source is supplied as a native provider file for visual inspection. Text extraction was unavailable; inspect the PDF directly.]", attachment.preview].join("\n");
       }
       if (attachmentKind === "video") {
         return [
@@ -97,21 +138,17 @@ export function formatAttachmentContext(
       }
 
       const chunks = attachment.extractedChunks ?? [];
-      if (chunks.length > 0) {
-        const dedupedChunks = sortChunks(chunks).filter((chunk) => {
-          const normalizedBody = normalizeForDeduplication(chunk.text);
-          if (!normalizedBody || seenBodies.has(normalizedBody)) {
-            return false;
-          }
-          seenBodies.add(normalizedBody);
-          return true;
-        });
+      if (chunks.length > 0 || pageScope) {
+        // Apply the same validated physical-page scope as visual/layout evidence
+        // before ranking. Never fall through to unscoped extractedText/preview.
+        const dedupedChunks = sortChunks(chunks).filter(chunk => chunk.text.trim() &&
+          (!pageScope || (chunk.physicalPage !== undefined && pageScope.contextPages.includes(chunk.physicalPage))));
 
         const { selected, truncatedForContext } = selectRelevantChunks(dedupedChunks, userMessage, maxChunks);
         const totalChunks = attachment.totalChunks ?? dedupedChunks[0]?.total ?? dedupedChunks.length;
         const chunkBlocks = selected.map((chunk) =>
           [
-            `--- chunk ${chunk.index + 1}/${totalChunks} ---`,
+            `--- chunk ${chunk.index + 1}/${totalChunks}${chunk.physicalPage ? `; physical PDF page ${chunk.physicalPage}` : ""} ---`,
             chunk.text
           ].join("\n")
         );
@@ -120,7 +157,11 @@ export function formatAttachmentContext(
           `### ATTACHED FILE: ${attachment.fileName}${metadataLine} ###`,
           mediaSummary,
           EXTRACTED_TEXT_NOTE,
-          truncatedForContext || attachment.truncatedForContext ? PARTIAL_CHUNK_NOTE : "[All chunks were injected for this request.]",
+          pageScope ? `[Physical PDF text scope: ${pageScope.contextPages.join(", ") || "none"}. Unmapped and other-page chunks are excluded.]` : "",
+          !selected.length && pageScope ? "[No page-mapped extracted chunks are available in this scope; do not infer missing page content.]" :
+            truncatedForContext || attachment.truncatedForContext ? PARTIAL_CHUNK_NOTE :
+              pageScope ? "[All available text chunks in the selected page scope were injected; this is not whole-document coverage.]" :
+                "[All extracted text chunks were injected; this is not proof that all PDF content was read.]",
           `chunkWindow=${selected.length}/${totalChunks}`,
           ...chunkBlocks,
           "### END OF EXTRACTED FILE CHUNKS ###"
@@ -128,20 +169,9 @@ export function formatAttachmentContext(
       }
 
       const extractedText = attachment.extractedText?.trim();
-      const normalizedBody = extractedText ? normalizeForDeduplication(extractedText) : "";
-      const isDuplicateBody = Boolean(normalizedBody) && seenBodies.has(normalizedBody);
-
-      if (normalizedBody) {
-        seenBodies.add(normalizedBody);
-      }
-
-      const shouldUseExtractedText = Boolean(extractedText) && !isDuplicateBody;
+      const shouldUseExtractedText = Boolean(extractedText);
       const contextHeader = shouldUseExtractedText ? "[Extracted attachment body available to the model.]" : PREVIEW_TRUNCATION_NOTE;
-      const contextBody = shouldUseExtractedText
-        ? extractedText
-        : isDuplicateBody
-          ? `[Duplicate extracted text omitted to reduce repeated context. Preview follows.]\n${attachment.preview}`
-          : attachment.preview;
+      const contextBody = extractedText || attachment.preview;
       const endMarker = shouldUseExtractedText ? "### END OF EXTRACTED FILE BODY ###" : "### END OF FILE PREVIEW ###";
 
       return [

@@ -69,7 +69,7 @@ test("buildFileReferences successfully ingests PDF files as text attachments", a
 
   await withUploadKeysDisabled(async () => {
     const refs = await buildFileReferences([
-      new File([new Uint8Array([1, 2, 3])], "report.pdf", { type: "application/pdf" })
+      new File(["%PDF-1.4\n"], "report.pdf", { type: "application/pdf" })
     ]);
 
     assert.equal(refs.length, 1);
@@ -80,7 +80,7 @@ test("buildFileReferences successfully ingests PDF files as text attachments", a
     assert.equal(refs[0].extractedChunks?.length, 1);
 
     const attachmentContext = formatAttachmentContext(refs);
-    assert.match(attachmentContext, /Full extracted document is available in ordered chunks/);
+    assert.match(attachmentContext, /Machine-readable extracted text follows/);
     assert.match(attachmentContext, /chunk 1\/1/);
     assert.match(attachmentContext, /Quarterly report/);
     assert.doesNotMatch(attachmentContext, /Full file body is intentionally excluded/);
@@ -177,7 +177,7 @@ test("video-bearing requests are not treated as text-only intent", async () => {
   );
 });
 
-test("formatAttachmentContext avoids duplicate extracted body injection", () => {
+test("formatAttachmentContext preserves identical body attribution across distinct sources", () => {
   const context = formatAttachmentContext([
     {
       fileId: "file-a",
@@ -197,8 +197,11 @@ test("formatAttachmentContext avoids duplicate extracted body injection", () => 
     }
   ]);
 
-  assert.match(context, /Duplicate extracted text omitted/);
-  assert.match(context, /preview b/);
+  assert.doesNotMatch(context, /Duplicate extracted text omitted/);
+  assert.match(context, /same extracted body/);
+  assert.match(context, /same   extracted\nbody/);
+  assert.match(context, /a.pdf/);
+  assert.match(context, /b.pdf/);
 });
 
 test("formatAttachmentContext includes ordered chunk windows and partial-context safety note", () => {

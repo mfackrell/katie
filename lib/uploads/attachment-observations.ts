@@ -7,7 +7,7 @@ type Description = Pick<ConversationAttachment, "observedSummary" | "summaryMode
 export function sampleAttachmentText(reference: FileReference): { text: string; coverage: "full" | "sampled" | "metadata" } {
   const text = reference.extractedText ?? reference.extractedChunks?.map(chunk => chunk.text).join("\n") ?? "";
   if (!text) return { text: reference.preview, coverage: "metadata" };
-  if (text.length <= 40_000) return { text, coverage: "full" };
+  if (text.length <= 40_000) return { text, coverage: reference.mimeType === "application/pdf" ? "sampled" : "full" };
   const spans = Array.from({ length: 20 }, (_, index) => {
     const start = Math.floor(index * (text.length - 1800) / 19);
     return `[Excerpt at character ${start}]\n${text.slice(start, start + 1800)}`;
@@ -32,7 +32,7 @@ export async function describeAttachmentEvidence(reference: FileReference): Prom
     observedSummary: `File: ${reference.fileName}. ${sample.coverage === "metadata" ? "No content summary is available. " : "Uninterpreted source excerpt (incomplete): "}${sample.text.slice(0, 2000)}`,
     summaryModel: "source-excerpt", summaryCoverage: "metadata",
   };
-  if (!process.env.GOOGLE_API_KEY) return fallback;
+  if (reference.mimeType === "application/pdf" || !process.env.GOOGLE_API_KEY) return fallback;
   try {
     const client = new GoogleGenAI({ apiKey: process.env.GOOGLE_API_KEY, httpOptions: { timeout: 25_000 } });
     const response = await client.models.generateContent({

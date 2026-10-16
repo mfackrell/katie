@@ -1,3 +1,6 @@
+import { createHash } from "node:crypto";
+import type { PdfInventory } from "./pdf-inventory";
+import { inventoryPdf } from "./pdf-inventory";
 import {
   detectFileType,
   getFileExtension,
@@ -28,10 +31,12 @@ type PdfTextSegment = {
 };
 
 type PdfTextRun = {
+  [key: string]: unknown;
   R?: PdfTextSegment[];
 };
 
 type PdfPage = {
+  [key: string]: unknown;
   Texts?: PdfTextRun[];
 };
 
@@ -60,6 +65,8 @@ export type ParsedAttachment = {
   mimeType: string;
   text: string;
   sourceFormat: SourceFormat;
+  sourceFingerprint: string;
+  pdfInventory?: PdfInventory;
 };
 
 const MAX_FILES = 5;
@@ -88,50 +95,26 @@ function getFileSizeLimitBytes(sourceFormat: SourceFormat): number {
   return isTextSourceFormat(sourceFormat) ? MAX_TEXT_FILE_SIZE_BYTES : MAX_BINARY_FILE_SIZE_BYTES;
 }
 
-function extractTextFromPdfData(pdfData: PdfData): string {
-  const pages = pdfData.Pages ?? [];
-  const lines: string[] = [];
-
-  for (const page of pages) {
-    const textRuns = page.Texts ?? [];
-    const pageText = textRuns
-      .map((run) =>
-        (run.R ?? [])
-          .map((segment) => {
-            if (!segment.T) {
-              return "";
-            }
-            try {
-              return decodeURIComponent(segment.T);
-            } catch {
-              return segment.T;
-            }
-          })
-          .join("")
-      )
-      .join("\n");
-    lines.push(pageText);
-  }
-
-  return lines.join("\n\n");
-}
-
-async function parsePdfToText(buffer: ArrayBuffer): Promise<string> {
+async function parsePdfInventory(buffer: ArrayBuffer): Promise<PdfInventory> {
   const parserModule = await DYNAMIC_IMPORTS.pdfParser();
   const PdfParser = parserModule.default;
   const parser = new PdfParser();
 
   const pdfData = await new Promise<PdfData>((resolve, reject) => {
+    const timeout = setTimeout(() => reject(new Error("PDF parser timed out; page count unknown")), 30_000);
     parser.on("pdfParser_dataError", (err) => {
+      clearTimeout(timeout);
       reject(new Error(err?.parserError || "Unknown PDF parser error"));
     });
     parser.on("pdfParser_dataReady", (data) => {
+      clearTimeout(timeout);
       resolve(data);
     });
-    parser.parseBuffer(Buffer.from(buffer));
+    try { parser.parseBuffer(Buffer.from(buffer)); } catch (error) { clearTimeout(timeout); reject(error); }
   });
 
-  return extractTextFromPdfData(pdfData);
+  if (!pdfData.Pages?.length) throw new Error("PDF page inventory unavailable");
+  return inventoryPdf(pdfData.Pages);
 }
 
 export function validateFile(file: File): SourceFormat {
@@ -207,7 +190,7 @@ export async function convertToPlainText(file: File): Promise<string> {
     // Diagnostic log for production verification: uploads now use pdf2json, not pdfjs-dist/pdf-parse.
     console.info(`[uploads] parsing PDF with pdf2json: ${file.name}`);
     const rawBuffer = await file.arrayBuffer();
-    const text = await parsePdfToText(rawBuffer);
+    const text = (await parsePdfInventory(rawBuffer)).pages.map(page => page.text).join("\n\n");
     return sanitizeExtractedText(compactWhitespace(text));
   } catch {
     throw new Error(`Failed to parse PDF document "${file.name}".`);
@@ -222,11 +205,20 @@ export async function parseTextFiles(files: File[]): Promise<ParsedAttachment[]>
   return Promise.all(
     files.map(async (file) => {
       const sourceFormat = validateFile(file);
-      const text = await convertToPlainText(file);
+      const bytes = Buffer.from(await file.arrayBuffer());
+      let pdfInventory: PdfInventory | undefined;
+      if (sourceFormat === "pdf") {
+        if (!bytes.subarray(0, 1024).toString("latin1").includes("%PDF-")) throw new Error(`Invalid PDF signature for "${file.name}".`);
+        try { pdfInventory = await parsePdfInventory(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer); }
+        catch (error) { throw new Error(`Failed to parse PDF document "${file.name}". ${error instanceof Error ? error.message.slice(0, 300) : "Page count and coverage unknown."}`); }
+      }
+      const text = pdfInventory ? pdfInventory.pages.map(page => page.text).join("\n\n") : await convertToPlainText(file);
 
       return {
         name: file.name,
-        mimeType: file.type || "text/plain",
+        mimeType: sourceFormat === "pdf" ? "application/pdf" : file.type || ({".md":"text/markdown",".txt":"text/plain",".csv":"text/csv",".json":"application/json"} as Record<string,string>)[getFileExtension(file.name)] || detectFileType(file)?.mimeTypes[0] || "text/plain",
+        sourceFingerprint: createHash("sha256").update(bytes).digest("hex"),
+        pdfInventory,
         sourceFormat,
         text
       };
