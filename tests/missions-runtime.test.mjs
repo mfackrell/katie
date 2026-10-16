@@ -54,7 +54,7 @@ test('actual coordinator persists bounded assignments, draft-blind review and a 
  await executeClaim({mission:m,job:jobs[0]},model);assert.equal(jobs.length,5);
  for(const key of ['economics','market','compose','review']){const j=jobs.find(x=>x.job_key===key);j.status='running';await executeClaim({mission:m,job:j},model);}
  assert.equal(m.status,'completed');assert.equal(m.result,'Supported final recommendation');
- const review=calls.filter(x=>x.key==='review');assert.equal(review.length,2);assert.doesNotMatch(review[0].input,/Supported final recommendation/);assert.match(review[1].input,/Supported final recommendation/);
+ const review=calls.filter(x=>x.key==='review');assert.equal(review.length,2);assert.doesNotMatch(review[0].input,/Supported final recommendation/);assert.doesNotMatch(review[0].input,/A supported recommendation/,'Planner framing must not define independent criteria');assert.match(review[1].input,/Supported final recommendation/);
  assert.equal(calls.find(x=>x.key==='market').tools,'research');assert.equal(calls.find(x=>x.key==='economics').tools,'calculate');
 });
 test('a second unsuccessful review blocks instead of creating an endless repair loop',async()=>{

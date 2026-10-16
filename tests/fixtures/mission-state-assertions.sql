@@ -16,6 +16,7 @@ begin
  assert not reserve_mission_call((j->>'id')::uuid,(j->>'lease')::uuid,callid,'fixture',100),'Call identity cannot be reused';
  perform finish_mission_call(callid,12);perform finish_mission_call(callid,12);
  assert (select actual_tokens from agent_missions where id=mid)=12;
+ assert (select reserved_tokens from agent_missions where id=mid)=12,'Known usage settles a reservation exactly once; unused headroom is released';
  assert commit_mission_work((j->>'id')::uuid,(j->>'lease')::uuid,'{}',jsonb_build_array(
   jsonb_build_object('key','analysis','role','work','agent_id',a->>'id','instruction','Analyze economics','dependencies','[]'::jsonb),
   jsonb_build_object('key','research','role','work','agent_id',b->>'id','instruction','Research comparable offers','dependencies','[]'::jsonb),

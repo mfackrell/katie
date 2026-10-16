@@ -139,7 +139,7 @@ begin
  if p_tokens is null then update mission_calls set status='uncertain' where id=p_call;return; end if;
  if p_tokens<0 then raise exception 'Invalid usage'; end if;
  update mission_calls set actual_tokens=p_tokens,status='completed' where id=p_call;
- update agent_missions set actual_tokens=actual_tokens+p_tokens where id=(select mission_id from mission_assignments where id=c.job_id);
+ update agent_missions set actual_tokens=actual_tokens+p_tokens,reserved_tokens=reserved_tokens-c.reserved_tokens+p_tokens where id=(select mission_id from mission_assignments where id=c.job_id);
 end $$;
 
 create function public.commit_mission_work(p_id uuid,p_lease uuid,p_result jsonb,p_children jsonb default '[]',p_status text default 'completed',p_mission_status text default null,p_final text default null) returns boolean

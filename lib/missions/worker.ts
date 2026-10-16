@@ -47,7 +47,7 @@ export async function executeClaim(claim:Claim,model=missionModel){
  if(job.role==='review'){
   // First pass is draft-blind: objective and acceptance contract only.
   const turns=[{id:'latest-user',text:mission.objective}];
-  const blind=await model(claim,BASE+'\n'+ASSESSMENT_INSTRUCTION,'AUTHORITATIVE_USER_TURNS:\n'+JSON.stringify(turns)+'\nDeliverable requirements: '+(saved.jobs.find(x=>x.job_key==='compose')?.instruction??''));
+  const blind=await model(claim,BASE+'\n'+ASSESSMENT_INSTRUCTION,'AUTHORITATIVE_USER_TURNS:\n'+JSON.stringify(turns));
   const assessment=validateAssessment(parseJSON(blind.text),turns);
   const target=completed.find(x=>x.job_key===(job.job_key==='review_again'?'revision':'compose'));
   if(!target?.result)throw Error('Review candidate missing');

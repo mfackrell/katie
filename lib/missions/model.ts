@@ -4,7 +4,7 @@ import { rpc } from './store';
 import { calculate,type Claim } from './types';
 const WORKER_MODEL='gpt-5-mini';
 const REVIEW_MODEL='gpt-5.4';
-const OUTPUT_TOKENS=3000;
+
 const calculator={type:'function',name:'calculate',description:'Execute a deterministic arithmetic calculation. Numbers must come from supplied evidence or explicitly labeled assumptions.',strict:true,parameters:{type:'object',properties:{operation:{type:'string',enum:['add','subtract','multiply','divide','power']},values:{type:'array',items:{type:'number'},minItems:2,maxItems:12}},required:['operation','values'],additionalProperties:false}};
 export type ModelResult={text:string;sources:Array<{url:string;title:string}>;calculations:unknown[];model:string};
 // A bounded execution adapter uses the existing OpenAI credential/SDK. Ordinary
@@ -16,6 +16,7 @@ export async function missionModel(claim:Claim,instruction:string,input:string,t
  if(tools==='research'&&!agent.config.research)throw Error('Research permission denied');
  if(!process.env.OPENAI_API_KEY)throw Error('Existing OpenAI connection unavailable');
  const selectedModel=claim.job.role==='review'?REVIEW_MODEL:WORKER_MODEL;
+ const outputTokens=claim.job.role==='review'?5000:3000;
  const client=new OpenAI({apiKey:process.env.OPENAI_API_KEY,maxRetries:0,timeout:90_000,fetch:globalThis.fetch.bind(globalThis)});
  const sources:ModelResult['sources']=[],calculations:unknown[]=[];
  if(input.length>48000)throw Error('Mission evidence exceeds bounded context. Narrow the objective or deliverable.');
@@ -23,12 +24,12 @@ export async function missionModel(claim:Claim,instruction:string,input:string,t
  let text='';
  for(let turn=0;turn<(tools==='calculate'?2:1);turn++){
   const callId=randomUUID();
-  const request={model:selectedModel,reasoning:{effort:'low'},instructions:instruction,input:context,max_output_tokens:OUTPUT_TOKENS,store:false,
+  const request={model:selectedModel,reasoning:{effort:'low'},instructions:instruction,input:context,max_output_tokens:outputTokens,store:false,
    ...(tools==='research'?{tools:[{type:'web_search',search_context_size:'low'}],tool_choice:'required',max_tool_calls:1}:tools==='calculate'&&turn===0?{tools:[calculator]}:{}),
   };
   // UTF-8 bytes conservatively reserve visible input tokens. Native search has
   // additional metering; reserve headroom and expose actual usage separately.
-  const reserve=Buffer.byteLength(JSON.stringify(request),'utf8')+OUTPUT_TOKENS+(tools==='research'?8000:0);
+  const reserve=Buffer.byteLength(JSON.stringify(request),'utf8')+outputTokens+(tools==='research'?8000:0);
   if(!await rpc<boolean>('reserve_mission_call',{p_id:claim.job.id,p_lease:claim.job.lease,p_call:callId,p_model:selectedModel,p_tokens:reserve}))throw Error('Worker no longer authorized or mission allowance exhausted');
   try{
    const response=await client.responses.create(request as unknown as OpenAI.Responses.ResponseCreateParamsNonStreaming);
