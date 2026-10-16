@@ -36,7 +36,7 @@ export function inventoryPdf(pages: Array<{
                 }
                 catch {
                     return segment.T ?? "";
-                } }).join(""), x: number(run.x), y: number(run.y), w: number(run.w) }));
+                } }).join("").replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, ""), x: number(run.x), y: number(run.y), w: number(run.w) }));
             const rawLines = [page.HLines, page.VLines].flatMap(value => Array.isArray(value) ? value : []);
             const lineLimit = Math.min(4000, lineBudget);
             const runLimit = Math.min(10000, runBudget);

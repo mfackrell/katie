@@ -60,3 +60,10 @@ test('native prohibitions target named documents while generic bans remain bindi
   assert.equal(exports.isPdfNativeInspectionProhibited(`Read a.pdf but don't ${verb} it`,['a.pdf']),true);
  }
 });
+
+test('decoded PDF run and page text remove database-invalid controls while preserving literal content',()=>{
+ const inventory=exports.inventoryPdf([{Texts:[{R:[{T:'Amount%00%01%08%0B%0C%0E%1F%7F%09%0A%0D%20%28123.45%29'}]}]}]);
+ const expected='Amount\t\n\r (123.45)';
+ assert.equal(inventory.pages[0].text,expected);assert.equal(inventory.pages[0].runs[0].text,expected);
+ assert.doesNotMatch(JSON.stringify(inventory),/\\u0000|\\u0001/);
+});

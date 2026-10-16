@@ -15,6 +15,7 @@ const route=readFileSync('app/api/chat/route.ts','utf8');
 function section(a,b){const start=route.indexOf(a),end=route.indexOf(b,start);assert.ok(start>=0&&end>start);return route.slice(start,end);}
 const selection=section('    const freshPdfSelection =','    const selectedBeforePruning =');
 const filtering=section('    const requestAttachments =','    const images =');
+const quota=section('    const retainedFreshAttachments =','    const restored =');
 const pdf=(id,name)=>({id,fileId:id,chatId:'old-chat',fileName:name,mimeType:'application/pdf',preview:'SOURCE-'+id,pdfInventory:{version:'pdf-pages-v1',pageCount:1,pages:[]},createdAt:'2026-10-15T12:00:00Z'});
 async function run(message,fresh,saved,genericIds=[]){
  let selectorCalls=0;
@@ -22,6 +23,7 @@ async function run(message,fresh,saved,genericIds=[]){
   ...scope,message,pdfSourceTask:message,pdfTaskContext:null,newAttachments:fresh,catalog:saved,attachmentHistory:[],timelineActive:false,timelineSelection:{},savedVideoFollowUp:null,mediaMemory:null,
   selectStoredAttachments:async()=>{selectorCalls++;return {method:'none',selections:saved.filter(f=>genericIds.includes(f.id)).map(attachment=>({attachment,mode:'source'}))};},
  });
+ vm.runInNewContext(code(quota),{newAttachments:fresh,timelineActive:false,...decision});
  const restored={references:decision.attachmentDecision.selections.map(s=>s.attachment)};
  const attachments=vm.runInNewContext(code(`(()=>{${filtering}return attachments;})()`),{
   message,newAttachments:fresh,restored,freshPdfSelection:decision.freshPdfSelection,timelineActive:false,uniqueAttachmentReferences:files=>files,
@@ -176,4 +178,15 @@ test('original same-name source joins the new version in a comparison',async()=>
  assert.deepEqual(Array.from(result.attachments,x=>x.fileId),['new','old']);
  assert.equal(scope.pdfSourceOccurrence('Compare new report.pdf with original report.pdf','report.pdf',[pdf('new','report.pdf')],'fresh'),0);
  assert.equal(scope.pdfSourceOccurrence('Compare new report.pdf with original report.pdf','report.pdf',[pdf('old','report.pdf')],'saved'),1);
+});
+
+test('detailed-source quota counts retained fresh PDFs rather than excluded upload neighbors',async()=>{
+ const fresh=[pdf('chosen','chosen.pdf'),...Array.from({length:4},(_,i)=>pdf(`unused-${i}`,`unused-${i}.pdf`))];
+ const saved=[pdf('saved','saved.pdf')];
+ const selected=await run('Compare chosen.pdf with saved.pdf',fresh,saved);
+ assert.equal(selected.attachmentDecision.clarification,undefined);
+ assert.deepEqual(Array.from(selected.attachments,x=>x.fileId),['chosen','saved']);
+ const tooMany=await run('Compare all PDFs from this upload with "saved.pdf"',fresh,saved);
+ assert.match(tooMany.attachmentDecision.clarification,/up to five/);
+ assert.equal(tooMany.attachmentDecision.selections.length,0);
 });

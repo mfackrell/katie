@@ -791,7 +791,9 @@ async function executeChat(request: NextRequest) {
         skippedCount: selectedBeforePruning - attachmentDecision.selections.length,
       });
     }
-    if (newAttachments.length + attachmentDecision.selections.filter(file => file.mode === "source").length > 5) {
+    const retainedFreshAttachments = newAttachments.filter(file => (!timelineActive || !file.mimeType.startsWith("video/")) &&
+      (!freshPdfSelection || file.mimeType !== "application/pdf" || freshPdfSelection.fileIds.has(file.fileId)));
+    if (retainedFreshAttachments.length + attachmentDecision.selections.filter(file => file.mode === "source").length > 5) {
       attachmentDecision.selections = [];
       attachmentDecision.clarification = "Which files should I compare? Please choose up to five files for detailed inspection.";
     }
