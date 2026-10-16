@@ -9,7 +9,7 @@ function load(file,imports={}){
  vm.runInNewContext(compile(readFileSync(file,'utf8')),{exports,require:name=>imports[name]??{},Date});
  return exports;
 }
-const {pdfSourceOccurrence,resolvePdfNames,selectFreshPdfSources}=load('lib/chat/pdf-source-selection.ts',{'@/lib/uploads/pdf-inventory':load('lib/uploads/pdf-inventory.ts')});
+const {pdfSourceOccurrence,resolvePdfNames,selectFreshPdfSources}=load('lib/chat/pdf-source-selection.ts',{'@/lib/uploads/pdf-inventory':load('lib/uploads/pdf-inventory.ts'),'@/lib/media-memory/evidence':load('lib/media-memory/evidence.ts')});
 const route=readFileSync('app/api/chat/route.ts','utf8');
 function section(start,end){const a=route.indexOf(start),b=route.indexOf(end,a);assert.ok(a>=0&&b>a);return route.slice(a,b);}
 const filter=section('    const requestAttachments =','    const images =');
