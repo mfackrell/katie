@@ -82,7 +82,7 @@ export async function inspectPdf(reference: FileReference, message: string, sour
     }
     const remaining = requested.filter(p => !result.pages.some(done => done.physicalPage === p));
     let selected = remaining.slice(0, 4);
-    result.contextPages = remaining.length && (/\bcontinue\b/i.test(message) || requested.length > 4)
+    result.contextPages = continuation || (remaining.length && requested.length > 4)
         ? selected : requested.slice(0, 4);
     result.state = "partial";
     result.notice += ` Requested physical pages: ${pdfPageList(requested)}. Uninspected: ${pdfPageList(remaining)}. Native inspection, when run, receives full PDF bytes; no physical page/token isolation. No totals or row arithmetic verified.`;

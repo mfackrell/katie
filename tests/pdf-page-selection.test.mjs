@@ -98,3 +98,11 @@ test('text-only exclusivity prevents native inspection without requiring a negat
  assert.equal(exports.isPdfNativeInspectionProhibited('Summarize b.pdf using extracted text only',['a.pdf']),false);
  assert.equal(exports.isPdfNativeInspectionProhibited('Summarize report.pdf using extracted text',['report.pdf']),false);
 });
+
+test('per-source text-only exclusivity leaves the other PDF eligible for visual inspection',()=>{
+ const message='Compare a.pdf visually with b.pdf using extracted text only';
+ assert.equal(exports.isPdfNativeInspectionProhibited(message,['a.pdf']),false);
+ assert.equal(exports.isPdfNativeInspectionProhibited(message,['b.pdf']),true);
+ const global='Compare both a.pdf and b.pdf using extracted text only';
+ for(const source of ['a.pdf','b.pdf'])assert.equal(exports.isPdfNativeInspectionProhibited(global,[source]),true);
+});

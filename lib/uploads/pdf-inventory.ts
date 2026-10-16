@@ -189,8 +189,12 @@ export function isPdfNativeInspectionProhibited(message: string, sourceNames: st
     const masked = maskPdfSourceNames(clause,sourceNames);
     const ban = /\b(?:do not|don['’]t|never|without)\s+(?:(?:us(?:e|ing)|perform(?:ing)?|run(?:ning)?|do(?:ing)?|rely(?:ing)?\s+on)\s+)?(?:(?:any|the|native|visual|automated)\s+)*(?:ocr|transcri(?:be|bing|ption)|scan(?:ning)?|inspect(?:ing|ion)?|process(?:ing)?)\b/i.exec(masked);
     if (!ban) {
-      const textOnly=/\bonly\s+(?:the\s+)?(?:(?:parsed|extracted|machine[- ]readable)\s+)?text\b|\b(?:(?:parsed|extracted|machine[- ]readable)\s+)?text\s+only\b/i.test(masked);
-      return textOnly && (/\bPDF source\b/i.test(masked) || !/\.pdf\b/i.test(masked));
+      const textOnly=/\bonly\s+(?:the\s+)?(?:(?:parsed|extracted|machine[- ]readable)\s+)?text\b|\b(?:(?:parsed|extracted|machine[- ]readable)\s+)?text\s+only\b/i.exec(masked);
+      if(!textOnly) return false;
+      if(/\b(?:compare|read|inspect|review)\s+(?:both|all|each|either)\b|\bfor\s+(?:both|all|each|either)\b/i.test(masked)) return true;
+      const references=[...masked.matchAll(/PDF source|\.pdf\b/gi)];
+      const bound=references.filter(reference=>reference.index!<textOnly.index).at(-1) ?? references.find(reference=>reference.index!>=textOnly.index+textOnly[0].length);
+      return !bound || /^PDF source$/i.test(bound[0]);
     }
     const target = masked.slice(ban.index + ban[0].length);
     // A named prohibition belongs to that source; an unqualified prohibition

@@ -527,12 +527,14 @@ test("explicit page-range continuation survives restart without widening or cros
   const second=await restart.pdfEvidence(current,saved,actor,"continue",async()=>true);
   assert.deepEqual(second.contextPages,[14,15]);assert.deepEqual(second.requestedPages,[10,11,12,13,14,15]);
   assert.deepEqual(calls,[[10,11,12,13],[14,15]]);
+  const exhausted=await restart.pdfEvidence(current,saved,actor,"continue",async()=>true);
+  assert.deepEqual(exhausted.contextPages,[]);assert.equal(calls.length,2);
   const foreign=await restart.pdfEvidence(otherChat,saved,actor,"continue",async()=>true);
   assert.equal(foreign.state,"failure");assert.equal(calls.length,2);
   const reset=await restart.pdfEvidence(current,saved,actor,"Extract every transaction from page 1",async()=>true);
   assert.deepEqual(reset.requestedPages,[1]);
   const continued=await restart.pdfEvidence(current,saved,actor,"continue",async()=>true);
-  assert.deepEqual(continued.contextPages,[1]);assert.equal(calls.length,3);
+  assert.deepEqual(continued.contextPages,[]);assert.equal(calls.length,3);
  } finally {globalThis.fetch=oldFetch;globalThis.__KATIE_SUPABASE_ADMIN_CLIENT__=oldAdmin;if(oldKey)process.env.GOOGLE_API_KEY=oldKey;else delete process.env.GOOGLE_API_KEY;}
 });
 
