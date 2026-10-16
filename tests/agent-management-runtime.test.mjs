@@ -198,3 +198,16 @@ test('actual workflow reconciliation persists exact READY/BLOCKED receipts and l
   }
  }finally{if(prior===undefined)delete process.env.GITHUB_TOKEN;else process.env.GITHUB_TOKEN=prior;}
 });
+
+test('continuation API requires client identity and returns the immutable accepted receipt separately from current task',async()=>{
+ const task=baseTask(),turnId=randomUUID(),args=[],receipt={turn_id:turnId,request_id:'agent:old',input:'Continue',base_request_id:'agent:base'};
+ const load=modules({'@/lib/agents/store':{readTask:async()=>task,agentRpc:async(name,input)=>{args.push({name,input});return{...task,continuation_receipt:receipt};}}});
+ const {NextRequest}=native('next/server'),route=load('@/app/api/agent-tasks/route');
+ const send=body=>route.POST(new NextRequest('http://local/api/agent-tasks',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)}));
+ const body={action:'continue',id:task.id,message:'Continue',turnId,expectedRequestId:'agent:base'};
+ for(const invalid of [{...body,turnId:undefined},{...body,expectedRequestId:undefined},{...body,turnId:'invalid'},{...body,snapshot:{research:true}}])assert.equal((await send(invalid)).status,409);
+ assert.equal(args.length,0);
+ const response=await send(body);assert.equal(response.status,200);const result=await response.json();
+ assert.deepEqual(result.continuation,receipt);assert.equal(result.task.request_id,task.request_id);assert.equal(result.task.continuation_receipt,undefined);
+ assert.deepEqual(JSON.parse(JSON.stringify(args[0])),{name:'transition_agent_task',input:{p_id:task.id,p_action:'continue',p_message:'Continue',p_turn:turnId,p_expected_request:'agent:base'}});
+});
