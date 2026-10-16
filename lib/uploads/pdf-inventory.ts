@@ -156,7 +156,8 @@ export function isPdfLocatorRequest(message: string): boolean {
 export function isPdfContentRequest(message: string, sourceNames: string[] = []): boolean {
   if (!message.trim() || isPdfLocatorRequest(message)) return false;
   message = maskPdfSourceNames(message, sourceNames);
-  const sourceReference = /\b(?:pdfs?|documents?|attachments?|files?|pages?|statements?|reports?|sources?|this|these|those)\b|\.pdf\b/i.test(message);
+  const attachmentPronoun = sourceNames.length>0 && /\b(?:it|them)\b/i.test(message) && /\b(?:say|says|show|shows|contain|contains|mean|means|cover|covers|mention|mentions|reveal|ocr|transcribe|scan|check|examine|describe|audit|process|look)\b|\b(?:in|inside|within|from)\s+(?:it|them)\b/i.test(message);
+  const sourceReference = attachmentPronoun || /\b(?:pdfs?|documents?|attachments?|files?|pages?|statements?|reports?|sources?|this|these|those)\b|\.pdf\b/i.test(message);
   const explicit = /\b(?:read|extract|analy[sz]e|inspect|review|summari[sz]e|compare|explain|interpret|calculate|reconcile)\b/i.test(message)
     || (sourceReference && /\b(?:ocr|transcribe|scan|check|examine|describe|audit|process|look\s+(?:at|through|over))\b/i.test(message));
   const storedForLater = /\b(?:keep|save|store|retain|upload|attach)\b.{0,100}\b(?:later|reference|storage|only|do not|don't)\b/i.test(message);
@@ -169,7 +170,7 @@ export function isPdfContentRequest(message: string, sourceNames: string[] = [])
     if (!positive.trim() || !isPdfContentRequest(positiveTask)) return false;
   }
   if (/\b(?:tell me a joke|write (?:me )?a (?:joke|poem)|weather|codebase|repository)\b/i.test(message) && !explicit) return false;
-  return explicit || /\b(?:find|list|identify)\b.{0,80}\b(?:transactions?|rows?|values?|amounts?|totals?|pages?|charts?|tables?)\b/i.test(message) || /^\s*(?:continue|go on|proceed|next(?: pages?)?)\s*[.!?]?\s*$/i.test(message)
+  return (attachmentPronoun && /\b(?:what|where|which|how|why|is|are|does|did|can)\b/i.test(message)) || explicit || /\b(?:find|list|identify)\b.{0,80}\b(?:transactions?|rows?|values?|amounts?|totals?|pages?|charts?|tables?)\b/i.test(message) || /^\s*(?:continue|go on|proceed|next(?: pages?)?)\s*[.!?]?\s*$/i.test(message)
     || (/\b(?:what|where|which|how|why|when|is|are|does|did|list|identify|find)\b/i.test(message)
       && /\b(?:pdfs?|documents?|attachments?|files?|pages?|statements?|reports?|tables?|charts?|figures?|scans?|this|these|those)\b|\.pdf\b|__PDF_SOURCE__/i.test(message));
 }

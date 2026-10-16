@@ -610,11 +610,12 @@ test("native-inspection prohibition survives scoped continuation and service res
  process.env.GOOGLE_API_KEY='offline-test-key';globalThis.fetch=async()=>{calls++;throw Error('Native calls prohibited');};
  try {
   const first=await service.pdfEvidence(chat,saved,actor,"Read pages 1-8 but don't OCR or inspect it",async()=>true);
-  assert.equal(first.nativeInspectionProhibited,true);assert.equal(calls,0);
+  assert.equal(first.nativeInspectionProhibited,true);assert.equal(calls,0);assert.deepEqual(first.contextPages,[1,2,3,4]);
   const restart=createStoredUploadService(storage,'offline-secret');
   const next=await restart.pdfEvidence(chat,saved,actor,'continue',async()=>true);
   assert.equal(next.nativeInspectionProhibited,true);assert.equal(next.state,'not-requested');assert.equal(calls,0);
-  assert.deepEqual(next.requestedPages,[1,2,3,4,5,6,7,8]);
+  assert.deepEqual(next.requestedPages,[1,2,3,4,5,6,7,8]);assert.deepEqual(next.contextPages,[5,6,7,8]);
+  const complete=await restart.pdfEvidence(chat,saved,actor,'continue',async()=>true);assert.deepEqual(complete.contextPages,[]);assert.equal(calls,0);
  }finally{globalThis.fetch=oldFetch;if(oldKey)process.env.GOOGLE_API_KEY=oldKey;else delete process.env.GOOGLE_API_KEY;}
 });
 

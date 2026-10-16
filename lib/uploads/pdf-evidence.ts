@@ -17,6 +17,7 @@ export type PdfEvidence = {
     requestedPages?: number[];
     nativeInspectionProhibited?: boolean;
     analysisTask?: string;
+    parsedPagesProvided?: number[];
     contextPages?: number[];
     blockedPages?: number[];
     state: "not-requested" | "failure" | "partial";
@@ -31,7 +32,7 @@ export function validatePdfReport(raw: string, fingerprint: string, requested: n
 export function pdfPageList(pages: number[]): string {
     return pages.length ? pages.slice(0, 16).join(",") + (pages.length > 16 ? ` … (${pages.length} pages total)` : "") : "none";
 }
-export async function inspectPdf(reference: FileReference, message: string, source: Blob, cached?: PdfEvidence, claimPages?: (pages: number[]) => Promise<number[]>, rememberScope?: (pages: number[], nativeInspectionProhibited: boolean, analysisTask: string) => Promise<void>, analysisMessage = message): Promise<PdfEvidence> {
+export async function inspectPdf(reference: FileReference, message: string, source: Blob, cached?: PdfEvidence, claimPages?: (pages: number[]) => Promise<number[]>, rememberScope?: (pages: number[], nativeInspectionProhibited: boolean, analysisTask: string, parsedPagesProvided: number[]) => Promise<void>, analysisMessage = message): Promise<PdfEvidence> {
     const fingerprint = reference.sourceFingerprint!, inventory = reference.pdfInventory!;
     const validCache = cached?.fingerprint === fingerprint && cached.version === "pdf-visual-v1" && cached.extractionVersion === inventory.version && cached.provider === "google" && cached.model === "gemini-2.5-flash" && Array.isArray(cached.pages) && cached.pages.every(page => pageSchema.safeParse(page).success && page.physicalPage <= inventory.pageCount) && new Set(cached.pages.map(page => page.physicalPage)).size === cached.pages.length;
     const prior = validCache ? cached : undefined;
@@ -56,7 +57,13 @@ export async function inspectPdf(reference: FileReference, message: string, sour
                 throw new Error("Previous page scope unavailable");
             requested = [...scope];
         } else requested = requestedPdfPages(message, inventory.pageCount, [reference.fileName]);
-        if (rememberScope) await rememberScope(requested,nativeProhibited,analysisTask);
+        if(nativeProhibited) {
+            const provided=continuation ? prior?.parsedPagesProvided ?? [] : [];
+            if(provided.some(page=>!Number.isSafeInteger(page) || !requested.includes(page)) || new Set(provided).size!==provided.length) throw new Error("Invalid parsed-text progress");
+            result.contextPages=requested.filter(page=>!provided.includes(page)).slice(0,4);
+            result.parsedPagesProvided=[...provided,...result.contextPages];
+        }
+        if (rememberScope) await rememberScope(requested,nativeProhibited,analysisTask,result.parsedPagesProvided ?? []);
         result.requestedPages = requested;
     }
     catch {
@@ -69,7 +76,7 @@ export async function inspectPdf(reference: FileReference, message: string, sour
         // this parsed-text-only request.
         result.pages = [];
         result.rawReports = [];
-        result.contextPages = requested.slice(0,4);
+        result.notice += ` Parsed-text pages this turn: ${pdfPageList(result.contextPages ?? [])}. Remaining parsed-text pages: ${pdfPageList(requested.filter(page=>!result.parsedPagesProvided?.includes(page)))}.`;
         result.notice += " Native PDF inspection was explicitly prohibited; use available parsed text only.";
         return result;
     }

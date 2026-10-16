@@ -257,3 +257,10 @@ test('per-source page scopes retain the full shared analysis instruction separat
  const {requestedPdfPages}=load('lib/uploads/pdf-inventory.ts');
  assert.deepEqual(result.inspectedTasks.map(task=>Array.from(requestedPdfPages(task,4))),[[2],[3]]);
 });
+
+test('attachment pronouns authorize the sole fresh PDF while plural sources still clarify',async()=>{
+ for(const message of ['What does it say?','What is in it?']){
+  const one=await run(message,[pdf('a','a.pdf')]);assert.deepEqual(one.inspected,['a']);
+  const many=await run(message,[pdf('a','a.pdf'),pdf('b','b.pdf')]);assert.ok(many.clarification);assert.equal(many.inspected.length,0);
+ }
+});
