@@ -141,9 +141,13 @@ export function isPdfLocatorRequest(message: string): boolean {
   const target = /^(?:find|locate|show(?:\s+me)?|where\s+(?:is|are|can\s+I\s+find))\s+(?:(?:my|the|a|an|that|this|saved|uploaded|original)\s+)*(.*?)[?!.]*$/i.exec(request)?.[1];
   if (target && /^(?:"[^"\n]+\.pdf"|“[^”\n]+\.pdf”|'[^'\n]+\.pdf'|‘[^’\n]+\.pdf’|`[^`\n]+\.pdf`|«[^»\n]+\.pdf»|[^\n"“”'‘’`«»?;]+\.pdf)$/i.test(target)
       && !/\b(?:in|inside|within|from|for|of|about)\s+/i.test(target.replace(/^(?:"|“|'|‘|`|«)[\s\S]*$/, ""))) return true;
+  if (target && /\.pdf\b/i.test(target)) {
+    const tail = target.slice(target.toLowerCase().lastIndexOf(".pdf") + 4).replace(/^["'”’»`]/, "").trim();
+    return /^(?:(?:that|which)\s+(?:I\s+)?)?(?:uploaded|saved|attached|from|on|during|in)\b[^;?!]*$/i.test(tail);
+  }
   // Locating a file is not the same task as locating a value or section IN a file.
   if (/\b(?:pages?\s+\d|every|transactions?|charges?|amounts?|values?|totals?|rows?|columns?|read|extract|analy[sz]e|inside|within|scan\w*|charts?|tables?|breakdown)\b/i.test(request)) return false;
-  return /^(?:find|locate|show(?:\s+me)?|where\s+(?:is|are|can\s+I\s+find))\s+(?:(?:my|the|a|an|that|this|saved|uploaded|original)\s+)*(?:pdf\b|file\b|document\b|["'“‘]?[^\s?;]+\.pdf\b)/i.test(request);
+  return /^(?:find|locate|show(?:\s+me)?|where\s+(?:is|are|can\s+I\s+find))\s+(?:(?:my|the|a|an|that|this|saved|uploaded|original)\s+)*(?:pdf|file|document)(?:\s+(?:(?:that|which)\s+(?:I\s+)?)?(?:uploaded|saved|attached|from|on|during|in|about|named|called)\b[^;?!]*)?[?!.]*$/i.test(request);
 }
 
 /** Called only after source selection. An attachment is not permission to analyze unrelated tasks. */
@@ -151,7 +155,7 @@ export function isPdfContentRequest(message: string): boolean {
   if (!message.trim() || isPdfLocatorRequest(message)) return false;
   const sourceReference = /\b(?:pdfs?|documents?|attachments?|files?|pages?|statements?|reports?|sources?|this|these|those)\b|\.pdf\b/i.test(message);
   const explicit = /\b(?:read|extract|analy[sz]e|inspect|review|summari[sz]e|compare|explain|interpret|calculate|reconcile)\b/i.test(message)
-    || (sourceReference && /\b(?:check|examine|describe|audit|process|look\s+(?:at|through|over))\b/i.test(message));
+    || (sourceReference && /\b(?:ocr|transcribe|scan|check|examine|describe|audit|process|look\s+(?:at|through|over))\b/i.test(message));
   const storedForLater = /\b(?:keep|save|store|retain|upload|attach)\b.{0,100}\b(?:later|reference|storage|only|do not|don't)\b/i.test(message);
   if (storedForLater && !explicit) return false;
   if (/\b(?:do not|don't|without)\s+(?:read|analy[sz]e|inspect|process)\b/i.test(message)) return false;

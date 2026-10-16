@@ -59,3 +59,11 @@ test('document dates do not become upload-date filters for named saved or fresh 
  const dated=select('Read report.pdf uploaded yesterday and explain revenue in 2024',[{...old,createdAt:'2026-10-15T12:00:00Z'}],[],0,now);
  assert.equal(dated.clarification,undefined);assert.equal(dated.selections[0].attachment.id,'old');
 });
+
+test('trailing document years remain content scope for fresh and saved named PDFs',()=>{
+ const select=selector();
+ for(const message of ['What was revenue in report.pdf in 2024?','Read report.pdf for revenue in 2024','What changed in report.pdf during 2024?']) {
+  assert.equal(select(message,[old],[],0,now).selections[0].attachment.id,'old');
+  assert.equal(select(message,[old],[],1,now,[{...old,fileId:'new'}]),null);
+ }
+});

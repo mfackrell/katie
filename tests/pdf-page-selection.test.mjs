@@ -36,3 +36,10 @@ test('Oxford-comma lists retain every requested physical page',()=>{
   assert.equal(JSON.stringify(pages(message,10)),message.includes('2-3')?'[2,3,5,7,8]':'[2,4,6]');
  for(const message of ['Read pages 2, 4, and','Read pages 2,,4','Read pages 2, or 4','Read pages 2,4, and six'])assert.throws(()=>pages(message,10));
 });
+
+test('complete locator forms remain distinct from trailing content tasks',()=>{
+ for(const message of ['Find report.pdf','Find "report.pdf"','Find report.pdf uploaded yesterday','Locate my saved PDF','Find my PDF from two weeks ago'])assert.equal(exports.isPdfLocatorRequest(message),true,message);
+ for(const message of ['Find report.pdf for errors','Find "report.pdf" for errors','Find the PDF for errors','Find report.pdf to extract the transactions']){
+  assert.equal(exports.isPdfLocatorRequest(message),false,message);assert.equal(exports.isPdfContentRequest(message),true,message);
+ }
+});

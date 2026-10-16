@@ -207,3 +207,7 @@ for(const message of ['Compare a.pdf page 2 with b.pdf page 5','Compare page 2 o
  assert.deepEqual(Array.from(requestedPdfPages(result.inspectedTasks[0],3)),[2]);
  assert.deepEqual(Array.from(requestedPdfPages(result.inspectedTasks[1],6)),[5]);
 });
+
+for(const message of ['OCR report.pdf','Transcribe report.pdf','Scan report.pdf','Find report.pdf for errors']) test(`PDF content command is not discarded as a locator: ${message}`,async()=>{
+ const result=await run(message,[pdf('one','report.pdf')]);assert.equal(result.clarification,undefined);assert.deepEqual(result.inspected,['one']);
+});

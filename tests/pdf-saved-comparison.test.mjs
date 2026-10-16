@@ -84,3 +84,9 @@ test('PDF selection retains an explicitly named saved chart alongside saved and 
   assert.deepEqual(Array.from(result.attachments,f=>f.fileId),[...(fresh.length?['new']:[]),'old','chart']);
  }
 });
+
+test('saved qualifier before the complete same-name filename retains the historical source',async()=>{
+ const result=await run('Compare report.pdf with the saved report.pdf',[pdf('new','report.pdf')],[pdf('old','report.pdf'),pdf('unrelated','other.pdf')]);
+ assert.equal(result.attachmentDecision.clarification,undefined);
+ assert.deepEqual(Array.from(result.attachments,f=>f.fileId),['new','old']);
+});

@@ -63,3 +63,8 @@ for(const message of ['Check report.pdf for errors','Examine report.pdf','Descri
  const select=modules()('lib/chat/pdf-source-selection.ts').selectPdfEvidenceSource;
  assert.equal(select(message,[old],[],0).selections[0].attachment.id,'old');
 });
+
+for(const message of ['OCR report.pdf','Transcribe report.pdf','Find report.pdf for errors']) test(`saved PDF content command selects its source: ${message}`,()=>{
+ const select=modules()('lib/chat/pdf-source-selection.ts').selectPdfEvidenceSource;
+ assert.equal(select(message,[old],[],0).selections[0].attachment.id,'old');
+});
