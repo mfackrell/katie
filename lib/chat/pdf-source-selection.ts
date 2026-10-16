@@ -149,7 +149,7 @@ export function selectFreshPdfSources(message: string, fresh: FileReference[], t
   const chosen = (literal.explicit && !wholeSet ? pdfs.filter(file=>literal.names.has(file.fileName.toLowerCase()) && freshNamed.has(file.fileName.toLowerCase())) : pdfs).filter(file=>!excludedNames.has(file.fileName.toLowerCase()));
   if (chosen.some(file=>chosen.some(other=>other.fileId !== file.fileId && other.fileName.toLowerCase() === file.fileName.toLowerCase())))
     return none("Several uploaded PDFs have the same filename. Select the intended source before I inspect it.");
-  const all = /\b(?:compare|both|all|each)\b|\bevery\s+(?:attached\s+)?(?:pdfs?|files?|documents?)\b/i.test(message);
+  const all = wholeSet || /\b(?:these|those|the\s+(?:attached|uploaded|current))\s+(?:pdfs|files|documents|attachments)\b|\bcompare\s+(?:(?:both|all)\s+)?them\b/i.test(scopeText);
   if (!literal.explicit && chosen.length > 1 && !all) return none("Which uploaded PDF should I inspect? Name one source, or ask to inspect all of them.");
   return {fileIds:new Set(chosen.map(file=>file.fileId))};
 }

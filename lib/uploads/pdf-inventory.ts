@@ -161,7 +161,13 @@ export function isPdfContentRequest(message: string, sourceNames: string[] = [])
   const explicit = /\b(?:read|extract|analy[sz]e|inspect|review|summari[sz]e|compare|explain|interpret|calculate|reconcile)\b/i.test(message)
     || (sourceReference && /\b(?:ocr|transcribe|scan|check|examine|describe|audit|process|look\s+(?:at|through|over))\b/i.test(message));
   const storedForLater = /\b(?:keep|save|store|retain|upload|attach)\b.{0,100}\b(?:later|reference|storage|only|do not|don't)\b/i.test(message);
-  if (storedForLater && !explicit) return false;
+  if (storedForLater) {
+    const authorized=message.split(/[;!?\n]|\b(?:but|then|and)\b/i).some(clause=>
+      !/\b(?:keep|save|store|retain|upload|attach)\b.{0,100}\b(?:later|reference|storage|only|do not|don't)\b/i.test(clause) &&
+      /\b(?:pdfs?|documents?|attachments?|files?|pages?|reports?|statements?|it|them|this|these|those)\b|\.pdf\b|__PDF_SOURCE__/i.test(clause) &&
+      isPdfContentRequest(clause,sourceNames));
+    if(!authorized) return false;
+  }
   if (/\b(?:do not|don['’]t|never|without)\s+(?:read|extract|analy[sz]e|inspect|review|summari[sz]e|compare|explain|interpret|calculate|reconcile|ocr|transcribe|scan|check|examine|describe|audit|process|look\s+(?:at|through|over)|find|list|identify)\b/i.test(message)) {
     const positive = message.split(/[;!?\n]|\b(?:but|then|instead|however)\b/i)
       .map(clause => clause.split(/\b(?:do not|don['’]t|never|without)\b/i)[0]).join(" ");

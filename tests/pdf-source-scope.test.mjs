@@ -264,3 +264,21 @@ test('attachment pronouns authorize the sole fresh PDF while plural sources stil
   const many=await run(message,[pdf('a','a.pdf'),pdf('b','b.pdf')]);assert.ok(many.clarification);assert.equal(many.inspected.length,0);
  }
 });
+
+test('content quantifiers and comparisons do not select an ambiguous singular PDF',async()=>{
+ for(const message of ['Extract all transactions from this PDF','Compare page 1 to page 2 in this PDF']){
+  const result=await run(message,[pdf('a','a.pdf'),pdf('b','b.pdf')]);
+  assert.ok(result.clarification,message);assert.equal(result.inspected.length,0,message);
+ }
+ for(const message of ['Extract all transactions from both PDFs','Compare these PDFs','Compare them']){
+  const result=await run(message,[pdf('a','a.pdf'),pdf('b','b.pdf')]);assert.deepEqual(result.inspected,['a','b'],message);
+ }
+});
+test('storage clauses do not authorize unrelated content actions',async()=>{
+ for(const message of ['Store this PDF for reference; calculate 2+2','Save this PDF for later; summarize photosynthesis','Store this PDF for reference and explain gravity']){
+  const result=await run(message,[pdf('a','a.pdf')]);assert.equal(result.inspected.length,0,message);
+ }
+ for(const message of ['Store this PDF for reference; read it','Save this PDF for later; extract page 2 of this PDF']){
+  const result=await run(message,[pdf('a','a.pdf')]);assert.deepEqual(result.inspected,['a'],message);
+ }
+});
