@@ -25,6 +25,9 @@ export function validatePdfReport(raw: string, fingerprint: string, requested: n
         throw new Error("PDF provenance mismatch");
     return report;
 }
+export function pdfPageList(pages: number[]): string {
+    return pages.length ? pages.slice(0, 16).join(",") + (pages.length > 16 ? ` … (${pages.length} pages total)` : "") : "none";
+}
 export async function inspectPdf(reference: FileReference, message: string, source: Blob, cached?: PdfEvidence, claimPages?: (pages: number[]) => Promise<number[]>): Promise<PdfEvidence> {
     const fingerprint = reference.sourceFingerprint!, inventory = reference.pdfInventory!;
     const validCache = cached?.fingerprint === fingerprint && cached.version === "pdf-visual-v1" && cached.extractionVersion === inventory.version && cached.provider === "google" && cached.model === "gemini-2.5-flash" && Array.isArray(cached.pages) && cached.pages.every(page => pageSchema.safeParse(page).success && page.physicalPage <= inventory.pageCount) && new Set(cached.pages.map(page => page.physicalPage)).size === cached.pages.length;
@@ -51,7 +54,7 @@ export async function inspectPdf(reference: FileReference, message: string, sour
     let selected = remaining.slice(0, 4);
     result.contextPages = /\bcontinue\b/i.test(message) && remaining.length ? selected : requested.slice(0, 4);
     result.state = "partial";
-    result.notice += ` Requested physical pages: ${requested.join(",")}. Uninspected: ${remaining.join(",") || "none"}. Native inspection, when run, receives full PDF bytes; no physical page/token isolation. No totals or row arithmetic verified.`;
+    result.notice += ` Requested physical pages: ${pdfPageList(requested)}. Uninspected: ${pdfPageList(remaining)}. Native inspection, when run, receives full PDF bytes; no physical page/token isolation. No totals or row arithmetic verified.`;
     if (!selected.length)
         return result;
     if (result.pages.length + selected.length > 128) {
@@ -81,7 +84,7 @@ export async function inspectPdf(reference: FileReference, message: string, sour
         const validated = validatePdfReport(response.text, fingerprint, selected, inventory.pageCount);
         result.pages = [...result.pages, ...validated.pages];
         result.rawReports = [...result.rawReports, response.text];
-        result.notice = `Model-derived visual evidence; not user facts or verified arithmetic. Inspected physical pages: ${result.pages.map(p => p.physicalPage).join(",")}. Remaining requested pages: ${requested.filter(p => !result.pages.some(done => done.physicalPage === p)).join(",") || "none"}. ${result.blockedPages?.length ? `Existing/uncertain attempts ${result.blockedPages.join(",")} are not resubmitted. ` : ""}Ask to continue unattempted pages. Gemini inspection received the full PDF; synthesis receives saved findings only, with no page/token isolation.`;
+        result.notice = `Model-derived visual evidence; not user facts or verified arithmetic. Inspected physical pages: ${pdfPageList(result.pages.map(p => p.physicalPage))}. Remaining requested pages: ${pdfPageList(requested.filter(p => !result.pages.some(done => done.physicalPage === p)))}. ${result.blockedPages?.length ? `Existing/uncertain attempts ${result.blockedPages.join(",")} are not resubmitted. ` : ""}Ask to continue unattempted pages. Gemini inspection received the full PDF; synthesis receives saved findings only, with no page/token isolation.`;
     }
     catch {
         result.state = "failure";

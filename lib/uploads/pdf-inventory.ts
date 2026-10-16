@@ -57,6 +57,48 @@ export function maskPdfSourceNames(message: string, sourceNames: string[]): stri
     }
     return message;
 }
+/** Resolve leading or trailing source-specific selectors before page validation. */
+export function pdfPageTaskForSource(message: string, sourceName: string, sourceNames: string[]): string {
+    const names = [...new Set(sourceNames)].sort((a, b) => b.length - a.length);
+    const pageMentions = maskPdfSourceNames(message, names).match(/\b(?:pages?\s+[-+−\d]|(?:first|last)\s+page\b)/gi) ?? [];
+    if (names.length < 2) {
+        if (sourceNames.length > 1 && pageMentions.length > 1 && !/\b(?:both|all|each)\b/i.test(message))
+            throw new Error("Please specify the physical pages for each PDF separately; I could not associate the page selectors with their sources.");
+        return maskPdfSourceNames(message, names);
+    }
+    let marked = message;
+    names.forEach((name, index) => {
+        const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        marked = marked.replace(new RegExp(escaped, "gi"), `PDF_SOURCE_${index}`);
+    });
+    const spans = [...marked.matchAll(/PDF_SOURCE_(\d+)/g)];
+    if (spans.length < 2) {
+        if (pageMentions.length > 1 && !/\b(?:both|all|each)\b/i.test(message))
+            throw new Error("Please specify the physical pages for each PDF separately; I could not associate the page selectors with their sources.");
+        return maskPdfSourceNames(message, names);
+    }
+    const segments = [marked.slice(0, spans[0].index!), ...spans.map((span, index) =>
+        marked.slice(span.index! + span[0].length, spans[index + 1]?.index ?? marked.length))];
+    const pageLike = (text: string) => /\b(?:pages?\s+(?:[-+−\d]|zero\b|one\b|two\b|three\b|four\b|five\b|six\b|seven\b|eight\b|nine\b|ten\b|[a-z](?:\d+)?\b)|(?:first|last)\s+page\b)/i.test(text);
+    const scoped = segments.map(pageLike);
+    if (!scoped.some(Boolean)) return maskPdfSourceNames(message, names);
+    // A single leading selector, or an explicit final "on page", qualifies the set.
+    if (scoped[0] && scoped.slice(1).every(value => !value) && /\b(?:both|all|each)\b/i.test(marked) ||
+        scoped.at(-1) && scoped.slice(0, -1).every(value => !value) && /^\s*["'”’»`]?\s+on\s+(?:physical\s+)?pages?\s/i.test(segments.at(-1)!))
+        return maskPdfSourceNames(message, names);
+    const prefixStyle = scoped[0];
+    if (prefixStyle) {
+        if (scoped.at(-1) || segments.slice(0, -1).some((text, i) => scoped[i] && !/\b(?:of|in|from)\s*["'“‘«`]?\s*$/i.test(text)))
+            throw new Error("Please specify the physical pages for each PDF separately; I could not associate the page selectors with their sources.");
+    } else if (segments.slice(1, -1).some((text, i) => scoped[i + 1] && /\b(?:of|in|from)\s*["'“‘«`]?\s*$/i.test(text))) {
+        throw new Error("Please specify the physical pages for each PDF separately; I could not associate the page selectors with their sources.");
+    }
+    const indices = spans.map((span, index) => Number(span[1]) === names.indexOf(sourceName) ? index : -1).filter(index => index >= 0);
+    if (indices.length !== 1) throw new Error("Please specify one page scope for each PDF source.");
+    const segment = segments[indices[0] + (prefixStyle ? 0 : 1)];
+    return `Read this PDF. ${pageLike(segment) ? segment : ""}`;
+}
+
 export function requestedPdfPages(message: string, count: number, sourceNames: string[] = []): number[] {
     message = maskPdfSourceNames(message, sourceNames);
     const invalid = () => new Error("Please use physical PDF page numbers, for example pages 2-4, within the source inventory.");

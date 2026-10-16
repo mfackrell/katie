@@ -97,3 +97,11 @@ test('source filenames stay data in extracted, layout and visual page scope',()=
  const output=formatAttachmentContext([{...a,...fixture(3,[3]),fileName:a.fileName},b],{userMessage:'Compare "report page 2.pdf" and "other page 9.pdf" on page 3'});
  assert.match(output,/CHUNK_PAGE_3/);onlyPages(output,[3],3);
 });
+
+test('comparison rendering supplies only each sources own qualified page',()=>{
+ const a={...fixture(3,[2]),fileName:'a.pdf'},b={...fixture(6,[5]),fileName:'b.pdf',fileId:'other'};
+ const text=formatAttachmentContext([a,b],{userMessage:'Compare "a.pdf" page 2 with "b.pdf" page 5'});
+ const [left,right]=text.split('### ATTACHED FILE: b.pdf');
+ assert.match(left,/CHUNK_PAGE_2/);assert.doesNotMatch(left,/CHUNK_PAGE_5/);
+ assert.match(right,/CHUNK_PAGE_5/);assert.doesNotMatch(right,/CHUNK_PAGE_2/);
+});

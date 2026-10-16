@@ -1,4 +1,4 @@
-import { requestedPdfPages } from "@/lib/uploads/pdf-inventory";
+import { pdfPageTaskForSource, requestedPdfPages } from "@/lib/uploads/pdf-inventory";
 import { ChatGenerateParams, type FileReference, type ExtractedTextChunkReference } from "@/lib/providers/types";
 
 const PREVIEW_TRUNCATION_NOTE = "[Preview-only attachment context. Full file body is intentionally excluded.]";
@@ -56,7 +56,7 @@ function pdfPageScope(attachment: FileReference, message: string, sourceNames: s
   const inventory = attachment.mimeType === "application/pdf" ? attachment.pdfInventory : undefined;
   if (!inventory) return null;
   let requested: number[];
-  try { requested = requestedPdfPages(message, inventory.pageCount, sourceNames); }
+  try { requested = requestedPdfPages(pdfPageTaskForSource(message, attachment.fileName, sourceNames), inventory.pageCount, sourceNames); }
   catch { return { requested: [], contextPages: [] }; }
   const allowed = new Set(requested);
   const inventoried = new Set(inventory.pages.map(page => page.physicalPage));

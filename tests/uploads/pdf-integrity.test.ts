@@ -183,7 +183,7 @@ test("production generation and independent review use the same attachment evide
     const assembled = route.indexOf("const createParams =", inspected);
     assert.ok(inspected > 0 && assembled > inspected);
     assert.match(route.slice(assembled, assembled + 1600), /attachments,/);
-    assert.match(route, /inspectSavedPdf\(chatId,source,actorId,resolvePdfNames\(pdfSourceTask, attachments\)/);
+    assert.match(route, /inspectSavedPdf\(chatId,source,actorId,pdfPageTaskForSource\(pdfSourceTask, pdf.fileName/);
     assert.match(route, /const pdfTaskContext = pdfReviewContinuation/);
     const assessment = route.slice(route.indexOf("assessmentParams:"));
     assert.match(assessment, /\.\.\.createParams\(result.model, true\)/);
@@ -487,4 +487,14 @@ test("multi-page batch indexes only validated page fields and stable raw-report 
   assert.equal(calls,1); for(const payloads of attempted.values())assert.equal(payloads.length,2);
   for(const [path,blob] of receipts)assert.equal(await files.get(path)!.text(),await blob.text());
  } finally {globalThis.fetch=oldFetch;globalThis.__KATIE_SUPABASE_ADMIN_CLIENT__=oldAdmin;delete process.env.GOOGLE_API_KEY;}
+});
+
+test("large page inventories keep evidence notices bounded",async()=>{
+ const [ref]=await buildFileReferences([file([text("cover")])]);
+ ref.pdfInventory={...ref.pdfInventory!,pageCount:10000};
+ const previous=process.env.GOOGLE_API_KEY;delete process.env.GOOGLE_API_KEY;
+ try {
+  const result=await inspectPdf(ref,"Read this PDF",new Blob());
+  assert.ok(result.notice.length<1000);assert.match(result.notice,/10000 pages total/);
+ } finally {if(previous)process.env.GOOGLE_API_KEY=previous;}
 });

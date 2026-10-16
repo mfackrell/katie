@@ -21,7 +21,7 @@ async function run(message,timelineActive=false){
  const actual=await vm.runInNewContext(compile(`(async()=>{${filter}\n${inspect}\nreturn attachments;})()`),{
   requestId:'same-request',freshPdfSelection:decision,newAttachments:fresh,restored:{references:[]},timelineActive,message,
   uniqueAttachmentReferences:files=>files,pdfSources:new Map(fresh.map(file=>[file.fileId,file])),
-  actorId:'actor',chatId:'chat',pdfSourceTask:message,resolvePdfNames,getChatById:async()=>({actorId:'actor'}),
+  actorId:'actor',chatId:'chat',pdfSourceTask:message,resolvePdfNames,...load('lib/uploads/pdf-inventory.ts'),getChatById:async()=>({actorId:'actor'}),
   inspectSavedPdf:async(_chat,source)=>{calls.push(source.fileId);return {state:'inspected',pages:[{physicalPage:1,observations:`PAGE-${source.fileId}`}]};},
  });
  return {decision,calls,actual};

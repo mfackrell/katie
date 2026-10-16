@@ -16,3 +16,13 @@ test('ordinary interrogatives require a source reference before PDF inspection',
  for(const message of ['What time is it?','How are you?','Why is the sky blue?']) assert.equal(exports.isPdfContentRequest(message),false);
  for(const message of ['What does this PDF say?','Which pages mention revenue?','What is in report.pdf?','Analyze the attachment']) assert.equal(exports.isPdfContentRequest(message),true);
 });
+
+test('distinct sources keep trailing and leading page qualifiers separate',()=>{
+ const scope=exports.pdfPageTaskForSource,names=['a.pdf','b.pdf'];
+ for(const message of ['Compare "a.pdf" page 2 with "b.pdf" page 5','Compare page 2 of "a.pdf" with page 5 of "b.pdf"']) {
+  assert.equal(JSON.stringify(pages(scope(message,'a.pdf',names),3)),'[2]');
+  assert.equal(JSON.stringify(pages(scope(message,'b.pdf',names),6)),'[5]');
+ }
+ assert.throws(()=>scope('Compare a.pdf page 2 with the saved PDF page 5','a.pdf',names),/Please specify/);
+ assert.throws(()=>scope('Compare report.pdf page 2 with saved report.pdf page 5','report.pdf',['report.pdf','report.pdf']),/Please specify/);
+});

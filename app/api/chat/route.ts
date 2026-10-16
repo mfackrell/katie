@@ -1,4 +1,5 @@
-import { resolvePdfNames, selectFreshPdfSources, selectPdfEvidenceSource } from "@/lib/chat/pdf-source-selection";
+import { pdfPageTaskForSource } from "@/lib/uploads/pdf-inventory";
+import { selectFreshPdfSources, selectPdfEvidenceSource } from "@/lib/chat/pdf-source-selection";
 import { inspectSavedPdf } from "@/lib/uploads/stored-uploads";
 import { timelineIntent, resolveTimelineSource } from "@/lib/video-timeline/intent";
 import { runVideoTimeline } from "@/lib/video-timeline/service";
@@ -1869,8 +1870,12 @@ export async function POST(request: NextRequest) {
               pdf.nativeInspectionRequired=false;
               const source=pdfSources.get(pdf.fileId);
               if (!source) { pdf.preview+=" PDF evidence unavailable: no retained source identity."; continue; }
-              try { pdf.pdfEvidence=await inspectSavedPdf(chatId,source,actorId,resolvePdfNames(pdfSourceTask, attachments).scopeText ?? pdfSourceTask,async id=>(await getChatById(id))?.actorId===actorId); }
+              try { pdf.pdfEvidence=await inspectSavedPdf(chatId,source,actorId,pdfPageTaskForSource(pdfSourceTask, pdf.fileName, attachments.filter(file => file.mimeType === "application/pdf").map(file => file.fileName)),async id=>(await getChatById(id))?.actorId===actorId); }
               catch (error) {
+                if (error instanceof Error && /Please specify.*PDF/.test(error.message)) {
+                  attachmentDecision.clarification = error.message;
+                  break;
+                }
                 const reason=error instanceof Error && /original unavailable|source changed|source chat|metadata unavailable|inventory unavailable/i.test(error.message) ? error.message.slice(0,250) : "Inspection or private evidence access failed.";
                 pdf.preview+=` PDF visual evidence unavailable: ${reason} Do not claim complete document review.`;
               }

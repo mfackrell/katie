@@ -33,7 +33,7 @@ for(const message of ['Read annual report.pdf','Read “annual report.pdf”','R
 
 async function run(message,fresh,timelineActive=false,timelineClarification){
  const inspected=[],inspectedTasks=[],retained=[],sources=new Map();
- const fixture={...scope,newAttachments:fresh,message,pdfSourceTask:message,pdfTaskContext:null,timelineActive,timelineSelection:{clarification:timelineClarification},mediaMemory:null,savedVideoFollowUp:null,
+ const fixture={...scope,...load('lib/uploads/pdf-inventory.ts'),newAttachments:fresh,message,pdfSourceTask:message,pdfTaskContext:null,timelineActive,timelineSelection:{clarification:timelineClarification},mediaMemory:null,savedVideoFollowUp:null,
   catalog:[],attachmentHistory:[],restored:{references:[],unavailable:[],sourceIds:new Set()},timelineContext:'',
   ...load('lib/chat/video-attachment-dedup.ts'),...load('lib/chat/attachment-continuity.ts'),
   fingerprintChatRequest:load('lib/chat/request-idempotency.ts').fingerprintChatRequest,
@@ -179,4 +179,12 @@ test('native inspection receives source-masked page scope for every selected fil
  const result=await run('Compare "report page 2.pdf" and "other page 9.pdf" on page 1',[pdf('one','report page 2.pdf'),pdf('two','other page 9.pdf')]);
  assert.deepEqual(result.inspected,['one','two']);
  for (const task of result.inspectedTasks) {assert.ok(!task.includes('page 2'));assert.ok(!task.includes('page 9'));assert.ok(task.includes('page 1'));}
+});
+
+test('native inspection scopes differing physical pages to their own PDF source',async()=>{
+ const result=await run('Compare "a.pdf" page 2 with "b.pdf" page 5',[pdf('one','a.pdf'),pdf('two','b.pdf')]);
+ const {requestedPdfPages}=load('lib/uploads/pdf-inventory.ts');
+ assert.deepEqual(result.inspected,['one','two']);
+ assert.deepEqual(Array.from(requestedPdfPages(result.inspectedTasks[0],3)),[2]);
+ assert.deepEqual(Array.from(requestedPdfPages(result.inspectedTasks[1],6)),[5]);
 });
