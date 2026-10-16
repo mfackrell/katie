@@ -1,3 +1,4 @@
+import { inspectPdf, type PdfEvidence } from "./pdf-evidence";
 import { formatVideoTimingForSource } from "@/lib/chat/video-evidence";
 import { indexEvidence, indexReference } from "@/lib/media-memory/evidence";
 import { getVideoTiming, registerVideoTiming, type VideoTiming } from "./video-timing";
@@ -86,6 +87,8 @@ export function createStoredUploadService(storage: Storage, secret: string, opti
   };
   const compact = (reference: FileReference, ticket: Ticket): FileReference => {
     const metadata = { ...reference };
+    delete metadata.pdfInventory;
+    delete metadata.pdfEvidence;
     delete metadata.extractedText;
     delete metadata.extractedChunks;
     delete metadata.imageDataUrl;
@@ -137,6 +140,24 @@ export function createStoredUploadService(storage: Storage, secret: string, opti
     }
   }
   return {
+    async ingestPdfUploads(files:File[]):Promise<FileReference[]> {
+      const references=await buildReferences(files);
+      if(references.some(reference=>reference.mimeType==="application/pdf")) {
+        await ensureBucket();
+        await cleanExpiredObjects();
+      }
+      return Promise.all(references.map(async (reference,index)=>{
+        if(reference.mimeType!=="application/pdf") return reference;
+        await ensureBucket();
+        const file=files[index];
+        const ticket:Ticket={id:randomUUID(),kind:"upload",name:file.name,type:reference.mimeType,size:file.size,expires:now()+2*60*60*1000};
+        const source=await objects.upload(sourcePath(ticket),file,{contentType:reference.mimeType,upsert:false});
+        if(source.error) throw new Error("Unable to retain PDF original.");
+        const saved=await objects.upload(referencePath(ticket),JSON.stringify(reference),{contentType:"application/json",upsert:false});
+        if(saved.error) throw new Error("Unable to retain PDF reference.");
+        return compact(reference,ticket);
+      }));
+    },
     inspectUpload(token: string) {
       const ticket = verify(token, "upload");
       return { uploadId: ticket.id, name: ticket.name,
@@ -503,6 +524,134 @@ export function createStoredUploadService(storage: Storage, secret: string, opti
         throw new UploadInputError("Retained source fingerprint changed.");
       return { fingerprint, source };
     },
+    async pdfEvidence(currentChat: string, attachment: ConversationAttachment, actorId: string, message: string, owns: (id:string)=>Promise<boolean>, analysisMessage = message): Promise<PdfEvidence> {
+      const chatId=attachment.chatId ?? currentChat;
+      const live=async()=>await owns(currentChat) && await owns(chatId);
+      if (!await live()) throw new UploadInputError("PDF source chat unavailable.");
+      const path=conversationPath(chatId,attachment.id);
+      const stored=await objects.download(`${path}.json`);
+      if (!stored.data) throw new UploadInputError("PDF source metadata unavailable.");
+      const record=JSON.parse(await stored.data.text());
+      const reference=record.reference as FileReference;
+      if(record.actorId!==actorId || reference.mimeType!=="application/pdf" || !reference.pdfInventory || !reference.sourceFingerprint) throw new UploadInputError("Verified PDF inventory unavailable; reattach legacy source.");
+      const original=await objects.download(`${path}.source`);
+      if(!original.data) throw new UploadInputError("PDF original unavailable; saved findings may still exist in search.");
+      if(original.data.size>8*1024*1024) throw new UploadInputError("Retained PDF exceeds the 8MB limit.");
+      const fingerprint=createHash("sha256").update(Buffer.from(await original.data.arrayBuffer())).digest("hex");
+      if(fingerprint!==reference.sourceFingerprint) throw new UploadInputError("PDF source changed.");
+      // Immutable page receipts avoid lost completed pages when follow-ups race.
+      const pagePrefix=`chats/${chatId}`;
+      const pageNamePrefix=`${attachment.id}.pdf-page-`;
+      const listing=await objects.list(pagePrefix,{limit:128,search:pageNamePrefix});
+      if(listing.error) throw new Error("PDF page receipt listing unavailable.");
+      const receipts=await Promise.all((listing.data ?? []).filter(entry=>entry.name.startsWith(pageNamePrefix) && /^\d{6}\.json$/.test(entry.name.slice(pageNamePrefix.length))).map(async entry=>{
+        const saved=await objects.download(`${pagePrefix}/${entry.name}`);
+        return saved.data ? JSON.parse(await saved.data.text()) : null;
+      }));
+      const matching=receipts.filter(envelope=>envelope?.actorId===actorId && envelope?.chatId===chatId && envelope?.attachmentId===attachment.id && envelope?.evidence?.fingerprint===fingerprint);
+      let cached:PdfEvidence|undefined=matching.length ? {...matching[0].evidence,pages:matching.flatMap(envelope=>envelope.evidence.pages),rawReports:[...new Set<string>(matching.flatMap(envelope=>envelope.evidence.rawReports))]} : undefined;
+      // Page scope belongs to this conversation and retained source, not the
+      // first immutable receipt or whichever other chat last inspected it.
+      conversationPath(currentChat,attachment.id);
+      const scopePath=`${conversationPath(currentChat,attachment.id)}.pdf-scope-${chatId}.json`;
+      const storedScope=await objects.download(scopePath);
+      let previousPages:number[]|undefined;
+      let previousNativeProhibited=true;
+      let previousAnalysisTask:string|undefined;
+      let previousContextPages:number[]=[];
+      if(storedScope.data) {
+        try {
+          const scope=JSON.parse(await storedScope.data.text());
+          if(scope.version==="pdf-scope-v1" && scope.actorId===actorId && scope.sourceChatId===chatId && scope.currentChat===currentChat && scope.attachmentId===attachment.id && scope.fingerprint===fingerprint &&
+            Array.isArray(scope.pages) && scope.pages.length>0 && scope.pages.length<=10000 && scope.pages.every((page:unknown)=>Number.isSafeInteger(page) && (page as number)>0 && (page as number)<=reference.pdfInventory!.pageCount) && new Set(scope.pages).size===scope.pages.length)
+            { previousPages=scope.pages; previousNativeProhibited=scope.nativeInspectionProhibited!==false; previousAnalysisTask=typeof scope.analysisTask==="string" && scope.analysisTask.length<=4000 ? scope.analysisTask : undefined;
+              if(Array.isArray(scope.contextPagesProvided) && scope.contextPagesProvided.length<=scope.pages.length && scope.contextPagesProvided.every((page:unknown)=>scope.pages.includes(page)) && new Set(scope.contextPagesProvided).size===scope.contextPagesProvided.length) previousContextPages=scope.contextPagesProvided; }
+        } catch { /* Missing or corrupt scope cannot widen a continuation. */ }
+      }
+      if(cached) cached={...cached,requestedPages:previousPages,analysisTask:previousAnalysisTask,contextPagesProvided:previousContextPages,nativeInspectionProhibited:previousNativeProhibited};
+      else if(previousPages) cached={version:"pdf-visual-v1",capturePolicy:"reusable-page-v1",fingerprint,extractionVersion:"pdf-pages-v1",provider:"google",model:"gemini-2.5-flash",pages:[],rawReports:[],requestedPages:previousPages,analysisTask:previousAnalysisTask,contextPagesProvided:previousContextPages,nativeInspectionProhibited:previousNativeProhibited,state:"partial",notice:""};
+      const evidence=await inspectPdf(reference,message,original.data,cached,async pages=>{
+        const acquired:number[]=[];
+        for(const physicalPage of pages) {
+          if(!await live()) throw new UploadInputError("PDF source was deleted.");
+          const attemptPath=`${path}.pdf-attempt-${fingerprint}-${String(physicalPage).padStart(6,"0")}-v1.json`;
+          const attempt={version:"pdf-attempt-v1",actorId,chatId,attachmentId:attachment.id,fingerprint,physicalPage,model:"gemini-2.5-flash",id:randomUUID(),state:"pending-or-uncertain"};
+          // Storage create-only uploads have one winner across processes. Never
+          // reset an attempt after ambiguous acknowledgment or model acceptance.
+          const claim=await objects.upload(attemptPath,JSON.stringify(attempt),{contentType:"application/json",upsert:false});
+          if(!claim.error) { acquired.push(physicalPage); continue; }
+          const existing=await objects.download(attemptPath);
+          if(!existing.data) throw new Error("PDF attempt unavailable; no inference started.");
+          const previous=JSON.parse(await existing.data.text());
+          if(previous.actorId!==actorId || previous.chatId!==chatId || previous.attachmentId!==attachment.id || previous.fingerprint!==fingerprint || previous.physicalPage!==physicalPage || previous.version!==attempt.version)
+            throw new Error("PDF attempt identity mismatch; no inference started.");
+        }
+        if(!await live()) throw new UploadInputError("PDF source was deleted.");
+        return acquired;
+      },async (pages,nativeInspectionProhibited,analysisTask,contextPagesProvided)=>{
+        if(!await live()) throw new UploadInputError("PDF source was deleted.");
+        const saved=await objects.upload(scopePath,JSON.stringify({version:"pdf-scope-v1",actorId,sourceChatId:chatId,currentChat,attachmentId:attachment.id,fingerprint,pages,nativeInspectionProhibited,analysisTask,contextPagesProvided}),{contentType:"application/json",upsert:true});
+        if(saved.error) throw new Error("PDF page scope persistence unavailable; no inference started.");
+      },analysisMessage);
+      evidence.source={actorId,sourceChatId:chatId,attachmentId:attachment.id};
+      if(!await live()) throw new UploadInputError("PDF source was deleted.");
+      const known=new Set(cached?.pages.map(page=>page.physicalPage) ?? []);
+      for(const page of evidence.pages.filter(page=>!known.has(page.physicalPage))) {
+        if(!await live()) throw new UploadInputError("PDF source was deleted.");
+        const receipt={actorId,chatId,attachmentId:attachment.id,evidence:{...evidence,pages:[page],rawReports:evidence.rawReports.slice(-1)}};
+        const receiptPath=`${path}.pdf-page-${String(page.physicalPage).padStart(6,"0")}.json`;
+        const serialized=JSON.stringify(receipt);
+        let persisted=false;
+        // Retry only deterministic private storage writes, never paid inference.
+        // A lost acknowledgment is successful only when the exact receipt exists.
+        for(let attempt=0;attempt<3 && !persisted;attempt++) {
+          if(!await live()) throw new UploadInputError("PDF source was deleted.");
+          try {
+            const saved=await objects.upload(receiptPath,serialized,{contentType:"application/json",upsert:false});
+            if(!saved.error) { persisted=true; break; }
+          } catch { /* Reconcile an ambiguous storage acknowledgment below. */ }
+          try {
+            const existing=await objects.download(receiptPath);
+            if(existing.data && JSON.stringify(JSON.parse(await existing.data.text()))===serialized) persisted=true;
+          } catch { /* A bounded retry may recover a transient storage failure. */ }
+        }
+        if(!persisted) throw new Error("PDF evidence persistence unavailable after three writes; attempt retained, no automatic inference retry.");
+        matching.push(receipt);
+      }
+      if(evidence.pages.length && await live()) {
+        // Each immutable page has its own canonical index/version. Concurrent
+        // page completions cannot replace another page's searchable findings.
+        const markerPrefix=`${attachment.id}.pdf-index-`;
+        const indexed=await objects.list(pagePrefix,{limit:128,search:markerPrefix});
+        if(indexed.error) evidence.notice+=" Saved page indexing status unavailable; revisit this source without reinspection.";
+        else {
+          const completed=new Set((indexed.data ?? []).map(item=>item.name));
+          const pending=matching.flatMap(envelope=>envelope.evidence.pages.map((page:PdfEvidence["pages"][number])=>{
+            const e=envelope.evidence as PdfEvidence;
+            // Full native batches stay in private receipts; searchable page
+            // identities include only validated fields and opaque report hashes.
+            const canonical=JSON.stringify({version:e.version,capturePolicy:e.capturePolicy,extractionVersion:e.extractionVersion,
+              source:{actorId,sourceChatId:chatId,attachmentId:attachment.id},fingerprint,
+              provider:e.provider,model:e.model,page,rawReportHashes:[...new Set(e.rawReports.map(raw=>createHash("sha256").update(raw).digest("hex")))].sort()});
+            const digest=createHash("sha256").update(canonical).digest("hex");
+            return {page:page.physicalPage,canonical,version:`pdf-visual-v1:${fingerprint}:page:${page.physicalPage}:${e.model}`,marker:`${markerPrefix}${String(page.physicalPage).padStart(6,"0")}-${digest}.json`};
+          })).filter(item=>!completed.has(item.marker)).sort((a,b)=>a.page-b.page);
+          for(const item of pending.slice(0,4)) {
+            if(!await live()) throw new UploadInputError("PDF source was deleted.");
+            try {
+              const done=await indexEvidence({...attachment,actorId,chatId},"analysis",item.version,item.canonical,"partial; model-derived physical page observations");
+              if(done) {
+                const marked=await objects.upload(`${pagePrefix}/${item.marker}`,JSON.stringify({version:item.version,source:{actorId,chatId,attachmentId:attachment.id},complete:true}),{contentType:"application/json",upsert:true});
+                if(!marked.error) completed.add(item.marker);
+              }
+            } catch { /* Immutable page receipts remain available for bounded recovery. */ }
+          }
+          if(pending.some(item=>!completed.has(item.marker))) evidence.notice+=" Saved evidence indexing unavailable or incomplete; revisit this source to resume without inference.";
+        }
+      }
+      if(!await live()) throw new UploadInputError("PDF source was deleted.");
+      return evidence;
+    },
     async readVideoTiming(chatId: string, id: string, actorId: string): Promise<VideoTiming | undefined> {
       const stored = await objects.download(`${conversationPath(chatId, id)}.json`);
       if (stored.error || !stored.data) return;
@@ -519,7 +668,8 @@ export function createStoredUploadService(storage: Storage, secret: string, opti
       if (stored.error || !stored.data) throw new UploadInputError("The saved attachment is unavailable.");
       const record = JSON.parse(await stored.data.text()) as { reference: FileReference; hasSource: boolean; refreshedAt: number; actorId?: string; decoderTiming?: VideoTiming };
       if (expectedActorId && record.actorId && record.actorId !== expectedActorId) throw new UploadInputError("This file belongs to a different actor.");
-      if (!record.reference.imageDataUrl && now() - record.refreshedAt >= RETENTION_MS) {
+      if (record.reference.mimeType === "application/pdf") record.reference.extractionCoverage = "partial";
+      if (!record.reference.imageDataUrl && !record.reference.pdfInventory && now() - record.refreshedAt >= RETENTION_MS) {
         const source = record.hasSource ? await objects.download(`${path}.source`) : null;
         if (!source?.data) {
           if (record.reference.extractedText && !record.reference.mimeType.startsWith("video/")) return { ...record.reference, providerRef: undefined };
@@ -916,13 +1066,20 @@ export async function loadConversationAttachmentCatalog(chatId: string, legacyLo
   return combined;
 }
 
+function honestPdfSummary(file: ConversationAttachment): ConversationAttachment {
+  return file.mimeType === "application/pdf" ? { ...file,
+    summaryCoverage: file.summaryCoverage === "full" ? "sampled" : file.summaryCoverage,
+    observedSummary: `[PDF discovery summary; page/visual completeness unverified.] ${file.observedSummary ?? ""}`,
+  } : file;
+}
+
 export async function loadActorAttachmentCatalog(actorId: string, legacyLoader: () => Promise<ConversationAttachment[]>): Promise<ConversationAttachment[]> {
   const service = getUploadService();
   const catalog = await service.catalog(actorId, "actor");
-  if (catalog.initialized) return catalog.attachments.filter(file => file.actorId === actorId);
+  if (catalog.initialized) return catalog.attachments.filter(file => file.actorId === actorId).map(honestPdfSummary);
   const combined = [...new Map([...(await legacyLoader()), ...catalog.attachments].map(file => [file.id, { ...file, actorId }])).values()];
   await service.initializeCatalog(actorId, combined, "actor");
-  return combined;
+  return combined.map(honestPdfSummary);
 }
 
 export const readSavedVideoTiming = (chatId: string, id: string, actorId: string) => getUploadService().readVideoTiming(chatId, id, actorId);
@@ -932,3 +1089,7 @@ export const retrySavedEvidence = (actorId: string, owns: (chatId: string) => Pr
 export const savedOriginalExists = (chatId: string, id: string, actorId: string) => getUploadService().originalExists(chatId,id,actorId);
 
 export const readTimelineSource = (chatId: string, id: string, actorId: string) => getUploadService().timelineSource(chatId, id, actorId);
+
+export const inspectSavedPdf = (currentChat:string,attachment:ConversationAttachment,actorId:string,message:string,owns:(id:string)=>Promise<boolean>,analysisMessage=message) => getUploadService().pdfEvidence(currentChat,attachment,actorId,message,owns,analysisMessage);
+
+export const ingestPdfUploads = (files:File[]) => getUploadService().ingestPdfUploads(files);

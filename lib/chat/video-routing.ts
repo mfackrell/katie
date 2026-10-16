@@ -7,6 +7,7 @@ type FileReference = {
   preview: string;
   extractedText?: string;
   nativeInspectionRequired?: boolean;
+  pdfInventory?: unknown;
   attachmentKind?: "image" | "video" | "text" | "file";
   videoFrames?: Array<{ timestampSeconds: number; dataUrl: string }>;
   providerRef?: {
@@ -29,7 +30,7 @@ export function isVideoAttachment(attachment: FileReference): boolean {
 }
 
 export function requiresGoogleFileSource(attachment: FileReference): boolean {
-  return isVideoAttachment(attachment) || (attachment.mimeType === "application/pdf" && (!attachment.extractedText || Boolean(attachment.nativeInspectionRequired)));
+  return isVideoAttachment(attachment) || (attachment.mimeType === "application/pdf" && !attachment.pdfInventory && (!attachment.extractedText || Boolean(attachment.nativeInspectionRequired)));
 }
 
 export function resolveVideoRoutingPolicy(hasVideoInput: boolean, overrideProvider?: string): VideoRoutingPolicy {
