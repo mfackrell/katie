@@ -533,3 +533,15 @@ test("explicit page-range continuation survives restart without widening or cros
   assert.deepEqual(continued.contextPages,[1]);assert.equal(calls.length,3);
  } finally {globalThis.fetch=oldFetch;globalThis.__KATIE_SUPABASE_ADMIN_CLIENT__=oldAdmin;if(oldKey)process.env.GOOGLE_API_KEY=oldKey;else delete process.env.GOOGLE_API_KEY;}
 });
+
+test("positive reading can use parsed text while explicit OCR prohibition prevents native calls",async()=>{
+ const [ref]=await buildFileReferences([file([text("known parsed text")])]);
+ const oldFetch=globalThis.fetch,oldKey=process.env.GOOGLE_API_KEY;let calls=0;
+ globalThis.fetch=async()=>{calls++;throw Error("No native call authorized");};process.env.GOOGLE_API_KEY="offline-test-key";
+ try {
+  const result=await inspectPdf(ref,"Read this PDF but don't OCR it",new Blob());
+  assert.equal(calls,0);assert.equal(result.state,"not-requested");assert.deepEqual(result.contextPages,[1]);
+  const context=formatAttachmentContext([{...ref,pdfEvidence:result}],{userMessage:"Read this PDF but don't OCR it"});
+  assert.match(context,/known parsed text/);
+ } finally {globalThis.fetch=oldFetch;if(oldKey)process.env.GOOGLE_API_KEY=oldKey;else delete process.env.GOOGLE_API_KEY;}
+});

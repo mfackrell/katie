@@ -97,3 +97,17 @@ test('relative source date after a complete same-name filename retains the saved
  const decision=scope.selectPdfEvidenceSource(message,saved,[],1,new Date('2026-10-16T12:00:00Z'),fresh);
  assert.equal(decision.clarification,undefined);assert.equal(decision.selections[0].attachment.id,'old');
 });
+
+test('a singular saved-source request excludes a newly uploaded same-name copy',async()=>{
+ const result=await run('Read the saved report.pdf',[pdf('new','report.pdf')],[pdf('old','report.pdf')]);
+ assert.equal(result.attachmentDecision.clarification,undefined);
+ assert.deepEqual(Array.from(result.attachments,f=>f.fileId),['old']);
+ const generic=await run('Read my saved PDF',[pdf('new','new.pdf')],[pdf('old','report.pdf')]);
+ assert.deepEqual(Array.from(generic.attachments,f=>f.fileId),['old']);
+});
+test('a singular dated source excludes the fresh same-name copy while comparisons keep both roles',()=>{
+ const fresh=[pdf('new','report.pdf')],saved=[{...pdf('old','report.pdf'),createdAt:'2026-10-15T12:00:00Z'}],message='Read report.pdf uploaded yesterday';
+ assert.equal(scope.selectFreshPdfSources(message,fresh,false,saved).fileIds.size,0);
+ const selected=scope.selectPdfEvidenceSource(message,saved,[],1,new Date('2026-10-16T12:00:00Z'),fresh);
+ assert.equal(selected.selections[0].attachment.id,'old');
+});

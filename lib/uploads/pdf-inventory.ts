@@ -151,16 +151,28 @@ export function isPdfLocatorRequest(message: string): boolean {
 }
 
 /** Called only after source selection. An attachment is not permission to analyze unrelated tasks. */
-export function isPdfContentRequest(message: string): boolean {
+export function isPdfContentRequest(message: string, sourceNames: string[] = []): boolean {
   if (!message.trim() || isPdfLocatorRequest(message)) return false;
+  message = maskPdfSourceNames(message, sourceNames);
   const sourceReference = /\b(?:pdfs?|documents?|attachments?|files?|pages?|statements?|reports?|sources?|this|these|those)\b|\.pdf\b/i.test(message);
   const explicit = /\b(?:read|extract|analy[sz]e|inspect|review|summari[sz]e|compare|explain|interpret|calculate|reconcile)\b/i.test(message)
     || (sourceReference && /\b(?:ocr|transcribe|scan|check|examine|describe|audit|process|look\s+(?:at|through|over))\b/i.test(message));
   const storedForLater = /\b(?:keep|save|store|retain|upload|attach)\b.{0,100}\b(?:later|reference|storage|only|do not|don't)\b/i.test(message);
   if (storedForLater && !explicit) return false;
-  if (/\b(?:do not|don['’]t|never|without)\s+(?:read|extract|analy[sz]e|inspect|review|summari[sz]e|compare|explain|interpret|calculate|reconcile|ocr|transcribe|scan|check|examine|describe|audit|process|look\s+(?:at|through|over)|find|list|identify)\b/i.test(message)) return false;
+  if (/\b(?:do not|don['’]t|never|without)\s+(?:read|extract|analy[sz]e|inspect|review|summari[sz]e|compare|explain|interpret|calculate|reconcile|ocr|transcribe|scan|check|examine|describe|audit|process|look\s+(?:at|through|over)|find|list|identify)\b/i.test(message)) {
+    const positive = message.split(/[;!?\n]|\b(?:but|then|instead|however)\b/i)
+      .map(clause => clause.split(/\b(?:do not|don['’]t|never|without)\b/i)[0]).join(" ");
+    const positiveTask = sourceReference && /\b(?:check|examine|describe|audit|process|look\s+(?:at|through|over))\b/i.test(positive)
+      ? positive + " PDF source" : positive;
+    if (!positive.trim() || !isPdfContentRequest(positiveTask)) return false;
+  }
   if (/\b(?:tell me a joke|write (?:me )?a (?:joke|poem)|weather|codebase|repository)\b/i.test(message) && !explicit) return false;
   return explicit || /\b(?:find|list|identify)\b.{0,80}\b(?:transactions?|rows?|values?|amounts?|totals?|pages?|charts?|tables?)\b/i.test(message) || /^\s*(?:continue|go on|proceed|next(?: pages?)?)\s*[.!?]?\s*$/i.test(message)
     || (/\b(?:what|where|which|how|why|when|is|are|does|did|list|identify|find)\b/i.test(message)
       && /\b(?:pdfs?|documents?|attachments?|files?|pages?|statements?|reports?|tables?|charts?|figures?|scans?|this|these|those)\b|\.pdf\b|__PDF_SOURCE__/i.test(message));
+}
+
+/** Output constraints do not cancel reading; explicit native/OCR bans still do. */
+export function isPdfNativeInspectionProhibited(message: string, sourceNames: string[] = []): boolean {
+  return /\b(?:do not|don['’]t|never|without)\s+(?:ocr|transcribe|scan|inspect|process)\b/i.test(maskPdfSourceNames(message, sourceNames));
 }

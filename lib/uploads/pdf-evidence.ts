@@ -1,4 +1,4 @@
-import { isPdfContentRequest, requestedPdfPages } from "./pdf-inventory";
+import { isPdfContentRequest, isPdfNativeInspectionProhibited, requestedPdfPages } from "./pdf-inventory";
 export { requestedPdfPages } from "./pdf-inventory";
 import { z } from "zod";
 import { GoogleGenAI } from "@google/genai";
@@ -34,12 +34,12 @@ export async function inspectPdf(reference: FileReference, message: string, sour
     const validCache = cached?.fingerprint === fingerprint && cached.version === "pdf-visual-v1" && cached.extractionVersion === inventory.version && cached.provider === "google" && cached.model === "gemini-2.5-flash" && Array.isArray(cached.pages) && cached.pages.every(page => pageSchema.safeParse(page).success && page.physicalPage <= inventory.pageCount) && new Set(cached.pages.map(page => page.physicalPage)).size === cached.pages.length;
     const prior = validCache ? cached : undefined;
     const result: PdfEvidence = { version: "pdf-visual-v1", extractionVersion: inventory.version, fingerprint, provider: "google", model: "gemini-2.5-flash", pages: prior?.pages ?? [], rawReports: prior?.rawReports ?? [], state: "not-requested", notice: "Visual findings are model-derived and unverified. Parsed text is not visual inspection." };
-    if (!isPdfContentRequest(message))
-        return result;
+    if (!isPdfContentRequest(message,[reference.fileName])) return result;
+    const nativeProhibited = isPdfNativeInspectionProhibited(message,[reference.fileName]);
     // pdf2json cannot prove that text-bearing pages contain no image/chart evidence.
     // This function runs only for a selected source, never for catalog discovery.
     if (cached && !validCache) { result.state = "failure"; result.notice += " Saved page evidence is invalid; no new inspection was attempted."; return result; }
-    const needs = isPdfContentRequest(message);
+    const needs = isPdfContentRequest(message,[reference.fileName]);
     if (!needs)
         return result;
     let requested: number[];
@@ -56,6 +56,11 @@ export async function inspectPdf(reference: FileReference, message: string, sour
     catch {
         result.state = "failure";
         result.notice += " Invalid or unavailable physical page scope; specify the requested pages before continuing. No analysis performed.";
+        return result;
+    }
+    if (nativeProhibited) {
+        result.contextPages = requested.slice(0,4);
+        result.notice += " Native PDF inspection was explicitly prohibited; use available parsed text only.";
         return result;
     }
     const remaining = requested.filter(p => !result.pages.some(done => done.physicalPage === p));

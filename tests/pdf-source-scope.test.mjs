@@ -227,3 +227,10 @@ test('save with a negated OCR command retains the original without inspection',a
  const result=await run("Save this PDF but don't OCR it",[pdf('one','report.pdf')]);
  assert.equal(result.inspected.length,0);assert.deepEqual(result.retained,['one']);
 });
+
+for(const message of ["Read report.pdf but don't calculate totals","Don't summarize report.pdf; extract every transaction","Do not summarize this PDF; describe it"]) test(`positive content actions survive a separate output constraint: ${message}`,async()=>{
+ const result=await run(message,[pdf('one','report.pdf')]);assert.deepEqual(result.inspected,['one']);
+});
+test('analysis words inside a saved-for-later filename do not authorize inspection',async()=>{
+ const result=await run('Save review.pdf for later',[pdf('one','review.pdf')]);assert.equal(result.inspected.length,0);assert.equal(result.attachments.length,0);
+});
