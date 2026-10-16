@@ -79,16 +79,8 @@ export function chunkExtractedText(text: string, maxChars = DEFAULT_CHUNK_MAX_CH
     chunks.push(current);
   }
 
-  const deduped: string[] = [];
-  const seen = new Set<string>();
-  for (const chunk of chunks) {
-    const normalized = normalizeForHash(chunk);
-    if (!normalized || seen.has(normalized)) {
-      continue;
-    }
-    seen.add(normalized);
-    deduped.push(chunk);
-  }
+  // Repeated source text can represent distinct pages or repeated financial rows.
+  const deduped = chunks;
 
   const total = deduped.length;
   return deduped.map((chunk, idx) => ({

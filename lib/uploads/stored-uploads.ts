@@ -1,3 +1,4 @@
+import { inspectPdf, type PdfEvidence } from "./pdf-evidence";
 import { formatVideoTimingForSource } from "@/lib/chat/video-evidence";
 import { indexEvidence, indexReference } from "@/lib/media-memory/evidence";
 import { getVideoTiming, registerVideoTiming, type VideoTiming } from "./video-timing";
@@ -86,6 +87,8 @@ export function createStoredUploadService(storage: Storage, secret: string, opti
   };
   const compact = (reference: FileReference, ticket: Ticket): FileReference => {
     const metadata = { ...reference };
+    delete metadata.pdfInventory;
+    delete metadata.pdfEvidence;
     delete metadata.extractedText;
     delete metadata.extractedChunks;
     delete metadata.imageDataUrl;
@@ -137,6 +140,20 @@ export function createStoredUploadService(storage: Storage, secret: string, opti
     }
   }
   return {
+    async ingestPdfUploads(files:File[]):Promise<FileReference[]> {
+      const references=await buildReferences(files);
+      return Promise.all(references.map(async (reference,index)=>{
+        if(reference.mimeType!=="application/pdf") return reference;
+        await ensureBucket();
+        const file=files[index];
+        const ticket:Ticket={id:randomUUID(),kind:"upload",name:file.name,type:reference.mimeType,size:file.size,expires:now()+2*60*60*1000};
+        const source=await objects.upload(sourcePath(ticket),file,{contentType:reference.mimeType,upsert:false});
+        if(source.error) throw new Error("Unable to retain PDF original.");
+        const saved=await objects.upload(referencePath(ticket),JSON.stringify(reference),{contentType:"application/json",upsert:false});
+        if(saved.error) throw new Error("Unable to retain PDF reference.");
+        return compact(reference,ticket);
+      }));
+    },
     inspectUpload(token: string) {
       const ticket = verify(token, "upload");
       return { uploadId: ticket.id, name: ticket.name,
@@ -503,6 +520,50 @@ export function createStoredUploadService(storage: Storage, secret: string, opti
         throw new UploadInputError("Retained source fingerprint changed.");
       return { fingerprint, source };
     },
+    async pdfEvidence(currentChat: string, attachment: ConversationAttachment, actorId: string, message: string, owns: (id:string)=>Promise<boolean>): Promise<PdfEvidence> {
+      const chatId=attachment.chatId ?? currentChat;
+      const live=async()=>await owns(currentChat) && await owns(chatId);
+      if (!await live()) throw new UploadInputError("PDF source chat unavailable.");
+      const path=conversationPath(chatId,attachment.id);
+      const stored=await objects.download(`${path}.json`);
+      if (!stored.data) throw new UploadInputError("PDF source metadata unavailable.");
+      const record=JSON.parse(await stored.data.text());
+      const reference=record.reference as FileReference;
+      if(record.actorId!==actorId || reference.mimeType!=="application/pdf" || !reference.pdfInventory || !reference.sourceFingerprint) throw new UploadInputError("Verified PDF inventory unavailable; reattach legacy source.");
+      const original=await objects.download(`${path}.source`);
+      if(!original.data) throw new UploadInputError("PDF original unavailable; saved findings may still exist in search.");
+      if(original.data.size>8*1024*1024) throw new UploadInputError("Retained PDF exceeds the 8MB limit.");
+      const fingerprint=createHash("sha256").update(Buffer.from(await original.data.arrayBuffer())).digest("hex");
+      if(fingerprint!==reference.sourceFingerprint) throw new UploadInputError("PDF source changed.");
+      // Immutable page receipts avoid lost completed pages when follow-ups race.
+      const pagePrefix=`chats/${chatId}`;
+      const pageNamePrefix=`${attachment.id}.pdf-page-`;
+      const listing=await objects.list(pagePrefix,{limit:128,search:pageNamePrefix});
+      if(listing.error) throw new Error("PDF page receipt listing unavailable.");
+      const receipts=await Promise.all((listing.data ?? []).filter(entry=>entry.name.startsWith(pageNamePrefix) && /^\d{6}\.json$/.test(entry.name.slice(pageNamePrefix.length))).map(async entry=>{
+        const saved=await objects.download(`${pagePrefix}/${entry.name}`);
+        return saved.data ? JSON.parse(await saved.data.text()) : null;
+      }));
+      const matching=receipts.filter(envelope=>envelope?.actorId===actorId && envelope?.chatId===chatId && envelope?.attachmentId===attachment.id && envelope?.evidence?.fingerprint===fingerprint);
+      const cached:PdfEvidence|undefined=matching.length ? {...matching[0].evidence,pages:matching.flatMap(envelope=>envelope.evidence.pages),rawReports:[...new Set<string>(matching.flatMap(envelope=>envelope.evidence.rawReports))]} : undefined;
+      const evidence=await inspectPdf(reference,message,original.data,cached);
+      evidence.source={actorId,sourceChatId:chatId,attachmentId:attachment.id};
+      if(!await live()) throw new UploadInputError("PDF source was deleted.");
+      const known=new Set(cached?.pages.map(page=>page.physicalPage) ?? []);
+      for(const page of evidence.pages.filter(page=>!known.has(page.physicalPage))) {
+        if(!await live()) throw new UploadInputError("PDF source was deleted.");
+        const receipt={actorId,chatId,attachmentId:attachment.id,evidence:{...evidence,pages:[page],rawReports:evidence.rawReports.slice(-1)}};
+        const persisted=await objects.upload(`${path}.pdf-page-${String(page.physicalPage).padStart(6,"0")}.json`,JSON.stringify(receipt),{contentType:"application/json",upsert:false});
+        if(persisted.error) throw new Error("PDF evidence persistence unavailable; no automatic inference retry.");
+      }
+      if(evidence.pages.length && await live()) {
+        try { const complete=await indexEvidence({...attachment,actorId,chatId},"analysis",`pdf-visual-v1:${fingerprint}`,JSON.stringify(evidence),"partial; model-derived physical page observations");
+          if(!complete) evidence.notice+=" Saved evidence indexing is incomplete; revisit this source to continue indexing without inference."; }
+        catch { evidence.notice+=" Saved evidence search indexing unavailable; revisit this source to retry indexing without inference."; }
+      }
+      if(!await live()) throw new UploadInputError("PDF source was deleted.");
+      return evidence;
+    },
     async readVideoTiming(chatId: string, id: string, actorId: string): Promise<VideoTiming | undefined> {
       const stored = await objects.download(`${conversationPath(chatId, id)}.json`);
       if (stored.error || !stored.data) return;
@@ -519,7 +580,8 @@ export function createStoredUploadService(storage: Storage, secret: string, opti
       if (stored.error || !stored.data) throw new UploadInputError("The saved attachment is unavailable.");
       const record = JSON.parse(await stored.data.text()) as { reference: FileReference; hasSource: boolean; refreshedAt: number; actorId?: string; decoderTiming?: VideoTiming };
       if (expectedActorId && record.actorId && record.actorId !== expectedActorId) throw new UploadInputError("This file belongs to a different actor.");
-      if (!record.reference.imageDataUrl && now() - record.refreshedAt >= RETENTION_MS) {
+      if (record.reference.mimeType === "application/pdf") record.reference.extractionCoverage = "partial";
+      if (!record.reference.imageDataUrl && !record.reference.pdfInventory && now() - record.refreshedAt >= RETENTION_MS) {
         const source = record.hasSource ? await objects.download(`${path}.source`) : null;
         if (!source?.data) {
           if (record.reference.extractedText && !record.reference.mimeType.startsWith("video/")) return { ...record.reference, providerRef: undefined };
@@ -916,13 +978,20 @@ export async function loadConversationAttachmentCatalog(chatId: string, legacyLo
   return combined;
 }
 
+function honestPdfSummary(file: ConversationAttachment): ConversationAttachment {
+  return file.mimeType === "application/pdf" ? { ...file,
+    summaryCoverage: file.summaryCoverage === "full" ? "sampled" : file.summaryCoverage,
+    observedSummary: `[PDF discovery summary; page/visual completeness unverified.] ${file.observedSummary ?? ""}`,
+  } : file;
+}
+
 export async function loadActorAttachmentCatalog(actorId: string, legacyLoader: () => Promise<ConversationAttachment[]>): Promise<ConversationAttachment[]> {
   const service = getUploadService();
   const catalog = await service.catalog(actorId, "actor");
-  if (catalog.initialized) return catalog.attachments.filter(file => file.actorId === actorId);
+  if (catalog.initialized) return catalog.attachments.filter(file => file.actorId === actorId).map(honestPdfSummary);
   const combined = [...new Map([...(await legacyLoader()), ...catalog.attachments].map(file => [file.id, { ...file, actorId }])).values()];
   await service.initializeCatalog(actorId, combined, "actor");
-  return combined;
+  return combined.map(honestPdfSummary);
 }
 
 export const readSavedVideoTiming = (chatId: string, id: string, actorId: string) => getUploadService().readVideoTiming(chatId, id, actorId);
@@ -932,3 +1001,7 @@ export const retrySavedEvidence = (actorId: string, owns: (chatId: string) => Pr
 export const savedOriginalExists = (chatId: string, id: string, actorId: string) => getUploadService().originalExists(chatId,id,actorId);
 
 export const readTimelineSource = (chatId: string, id: string, actorId: string) => getUploadService().timelineSource(chatId, id, actorId);
+
+export const inspectSavedPdf = (currentChat:string,attachment:ConversationAttachment,actorId:string,message:string,owns:(id:string)=>Promise<boolean>) => getUploadService().pdfEvidence(currentChat,attachment,actorId,message,owns);
+
+export const ingestPdfUploads = (files:File[]) => getUploadService().ingestPdfUploads(files);
