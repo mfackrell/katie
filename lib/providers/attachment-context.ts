@@ -72,7 +72,7 @@ function pdfContext(attachment: FileReference, message: string): string {
       }))
     } : { limitation: "Legacy PDF: page count and visual completeness unknown. Reattach original to obtain a page inventory." },
     evidence: evidence ? { version: evidence.version, extractionVersion: evidence.extractionVersion, source: evidence.source, fingerprint: evidence.fingerprint,
-      provider: evidence.provider, model: evidence.model, state: evidence.state, notice: evidence.notice,
+      provider: evidence.provider, model: evidence.model, state: evidence.state, notice: evidence.notice, blockedPages: evidence.blockedPages ?? [],
       pages: selected,
       omittedCachedPages: evidence.pages.filter(page => requested.includes(page.physicalPage) && !selected.some(chosen => chosen.physicalPage === page.physicalPage)).map(page => page.physicalPage),
       promptCoverage: "At most four cached page observations selected. Unselected pages are not supplied. No raw PDF access is provided by these findings." } : null

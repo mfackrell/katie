@@ -136,7 +136,7 @@ test("installed Gemini SDK produces validated cached evidence with one request a
 function storageFixture() {
     const files = new Map<string, Blob>();
     let refreshes = 0;
-    const objects = { download: async (path: string) => ({ data: files.get(path) ?? null, error: null }), upload: async (path: string, body: BlobPart) => { files.set(path, new Blob([body])); return { error: null }; }, remove: async (paths: string[]) => { paths.forEach(path => files.delete(path)); return { error: null }; }, list: async (prefix: string) => ({ data: [...files.keys()].filter(path => path.startsWith(prefix + "/")).map(path => ({ name: path.slice(prefix.length + 1) })), error: null }) };
+    const objects = { download: async (path: string) => ({ data: files.get(path) ?? null, error: null }), upload: async (path: string, body: BlobPart, options?: {upsert?:boolean}) => { if(options?.upsert===false && files.has(path)) return {error:{message:"Asset Already Exists",statusCode:"400"}}; files.set(path, new Blob([body])); return { error: null }; }, remove: async (paths: string[]) => { paths.forEach(path => files.delete(path)); return { error: null }; }, list: async (prefix: string) => ({ data: [...files.keys()].filter(path => path.startsWith(prefix + "/")).map(path => ({ name: path.slice(prefix.length + 1) })), error: null }) };
     const storage = { from: () => objects, getBucket: async () => ({ data: { public: false }, error: null }) } as unknown as Parameters<typeof createStoredUploadService>[0];
     const service = createStoredUploadService(storage, "offline-secret", { buildReferences: async (files) => { refreshes++; return buildFileReferences(files); } });
     return { files, service, storage, refreshes: () => refreshes };
@@ -294,6 +294,8 @@ test("private page receipts survive service restart, separate same-name sources 
   assert.equal([...files.keys()].filter(path=>path.includes(".pdf-page-")).length,2);
   const restarted=createStoredUploadService(storage,"offline-secret",{buildReferences:async()=>{throw new Error("cache recall must not upload or parse again");}});
   const restored=await restarted.restore(chatId,savedA,actorId);
+  // Simulate lost index acknowledgment: canonical evidence remains, proof marker is missing.
+  for(const path of files.keys()) if(path.includes(`${savedA.id}.pdf-index-`)) files.delete(path);
   indexFailure=true;
   const recalled=await restarted.pdfEvidence(chatId,savedA,actorId,"read page 1",async()=>true);
   assert.match(recalled.notice,/indexing unavailable/);assert.equal(calls,2);
@@ -343,23 +345,21 @@ test("mixed cached/new comparisons supply both observations and disclose omitted
  } finally {globalThis.fetch=previousFetch;delete process.env.GOOGLE_API_KEY;}
 });
 
-test("multi-batch PDF indexing resumes canonical evidence after restart and different questions without inference", async () => {
+test("large multi-page corpus indexes immutable page versions and recovers across different questions without inference", async () => {
  const {service,storage}=storageFixture();
  const [uploaded]=await service.ingestPdfUploads([file(["","","","","",""])]);
  const [ref]=await service.hydrate([uploaded]);
  const chatId="00000000-0000-4000-8000-000000000001",actorId="00000000-0000-4000-8000-000000000002";
  const saved=await service.persist(chatId,ref,uploaded.storageToken,{actorId});
- const previousFetch=globalThis.fetch, previousAdmin=globalThis.__KATIE_SUPABASE_ADMIN_CLIENT__;
- let calls=0;
- const progress=new Map<string,number>(), batches:Record<string,unknown>[]=[];
+ const previousFetch=globalThis.fetch,previousAdmin=globalThis.__KATIE_SUPABASE_ADMIN_CLIENT__;
+ let calls=0,failLast=true;
+ const indexed=new Map<string,string>(),failed:string[]=[];
  globalThis.__KATIE_SUPABASE_ADMIN_CLIENT__={rpc:async(name:string,args:Record<string,unknown>)=>{
-  if(name==="begin_media_evidence_ingestion")return {data:progress.get(String(args.p_hash)) ?? 0,error:null};
-  if(name==="append_media_evidence_batch") {
-   batches.push(args);
-   const next=Number(args.p_offset)+Array.from(String(args.p_text)).length;
-   progress.set(String(args.p_hash),next); return {data:next,error:null};
-  }
-  return {data:null,error:null};
+  assert.equal(name,"save_media_evidence");
+  const payload=String(args.p_text),key=String(args.p_version);
+  assert.ok(payload.length<230800,"Each canonical page is independently bounded");
+  if(key.includes(":page:6:") && failLast){failed.push(payload);return {data:null,error:{message:"index acknowledgment lost"}};}
+  indexed.set(key,payload);return {data:null,error:null};
  }} as unknown as NonNullable<typeof globalThis.__KATIE_SUPABASE_ADMIN_CLIENT__>;
  process.env.GOOGLE_API_KEY="offline-test-key";
  globalThis.fetch=async(_input,init)=>{
@@ -371,17 +371,66 @@ test("multi-batch PDF indexing resumes canonical evidence after restart and diff
  };
  try {
   for(let page=1;page<=6;page++)await service.pdfEvidence(chatId,saved,actorId,`read page ${page}`,async()=>true);
-  assert.equal(calls,6);
-  const last=batches.at(-1)!;
-  assert.equal(last.p_offset,0);
+  assert.equal(calls,6);assert.equal(indexed.size,5);assert.ok(failed.length);
+  failLast=false;
   const restarted=createStoredUploadService(storage,"offline-secret",{buildReferences:async()=>{throw Error("unexpected inference");}});
   const recovered=await restarted.pdfEvidence(chatId,saved,actorId,"compare pages 1 and 2",async()=>true);
-  assert.equal(calls,6);
-  assert.equal(batches.at(-1)!.p_hash,last.p_hash);
-  assert.ok(Number(batches.at(-1)!.p_offset)>0);
-  assert.doesNotMatch(recovered.notice,/indexing is incomplete/);
-  const count=batches.length;
+  assert.equal(calls,6);assert.equal(indexed.size,6);
+  assert.equal(indexed.get(`pdf-visual-v1:${ref.sourceFingerprint}:page:6:gemini-2.5-flash`),failed[0]);
+  assert.ok([...indexed.values()].reduce((n,text)=>n+text.length,0)>230800,"Full saved corpus exceeds the old batch boundary without aggregate rehashing");
+  assert.doesNotMatch(recovered.notice,/indexing unavailable or incomplete/);
+  for(const value of indexed.values())assert.doesNotMatch(value,/contextPages|notice|not-requested/);
+  const count=indexed.size;
   await restarted.pdfEvidence(chatId,saved,actorId,"read page 6",async()=>true);
-  assert.equal(batches.length,count);assert.equal(calls,6);
+  assert.equal(indexed.size,count);assert.equal(calls,6);
  } finally {globalThis.fetch=previousFetch;globalThis.__KATIE_SUPABASE_ADMIN_CLIENT__=previousAdmin;delete process.env.GOOGLE_API_KEY;}
+});
+
+test("durable same-page attempts prevent concurrent and ambiguous-response repeat inference across service restart", async()=>{
+ const {service,storage,files}=storageFixture();
+ const [upload]=await service.ingestPdfUploads([file(["","","",""])]);
+ const [ref]=await service.hydrate([upload]);
+ const chatId="00000000-0000-4000-8000-000000000001",actorId="00000000-0000-4000-8000-000000000002";
+ const saved=await service.persist(chatId,ref,upload.storageToken,{actorId});
+ const oldFetch=globalThis.fetch,oldAdmin=globalThis.__KATIE_SUPABASE_ADMIN_CLIENT__;
+ let calls=0,fail=false;
+ const indexed=new Map<string,string>();
+ globalThis.__KATIE_SUPABASE_ADMIN_CLIENT__={rpc:async(_name:string,args:Record<string,unknown>)=>{indexed.set(String(args.p_version),String(args.p_text));return {data:null,error:null};}} as unknown as NonNullable<typeof globalThis.__KATIE_SUPABASE_ADMIN_CLIENT__>;
+ process.env.GOOGLE_API_KEY="offline-test-key";
+ globalThis.fetch=async(_input,init)=>{
+  calls++;await new Promise(resolve=>setTimeout(resolve,10));
+  if(fail)throw Error("lost provider response");
+  const prompt=JSON.parse(String(init?.body)).contents[0].parts[0].text;
+  const requested=/physical PDF pages ([0-9,]+)/.exec(prompt)![1].split(",").map(Number);
+  return Response.json({candidates:[{finishReason:"STOP",content:{parts:[{text:JSON.stringify({fingerprint:ref.sourceFingerprint,pages:requested.map(physicalPage=>({physicalPage,status:"readable",observations:`VISIBLE-PAGE-${physicalPage}`,rows:[]}))})}]}}]});
+ };
+ try {
+  const requests=await Promise.all([service.pdfEvidence(chatId,saved,actorId,"read page 1",async()=>true),service.pdfEvidence(chatId,saved,actorId,"read page 1",async()=>true)]);
+  assert.equal(calls,1);assert.ok(requests.some(result=>result.pages.some(page=>page.physicalPage===1)));
+  assert.ok(requests.some(result=>result.blockedPages?.includes(1)));
+  assert.equal([...files.keys()].filter(path=>path.includes(".pdf-attempt-")).length,1);
+  await Promise.all([service.pdfEvidence(chatId,saved,actorId,"read page 2",async()=>true),service.pdfEvidence(chatId,saved,actorId,"read page 3",async()=>true)]);
+  assert.equal(calls,3);assert.equal(indexed.size,3);
+  for(const physicalPage of [1,2,3])assert.ok([...indexed.values()].some(value=>value.includes(`VISIBLE-PAGE-${physicalPage}`)));
+  fail=true;const first=await service.pdfEvidence(chatId,saved,actorId,"read page 4",async()=>true);
+  assert.equal(first.state,"failure");assert.equal(calls,4);
+  const restarted=createStoredUploadService(storage,"offline-secret",{buildReferences:async()=>{throw Error("cache must not reupload");}});
+  const second=await restarted.pdfEvidence(chatId,saved,actorId,"read page 4",async()=>true);
+  assert.equal(calls,4);assert.ok(second.blockedPages?.includes(4));assert.match(second.notice,/no automatic resubmission/);
+  assert.equal([...files.keys()].filter(path=>path.includes(".pdf-attempt-")).length,4);
+  assert.equal(indexed.size,3);assert.ok([...indexed.values()][0].includes("VISIBLE-PAGE-1"));
+ } finally {globalThis.fetch=oldFetch;globalThis.__KATIE_SUPABASE_ADMIN_CLIENT__=oldAdmin;delete process.env.GOOGLE_API_KEY;}
+});
+
+test("content intent distinguishes file discovery, in-document questions and unrelated attached-file tasks",async()=>{
+ const {isPdfContentRequest,isPdfLocatorRequest}=await import("../../lib/uploads/pdf-inventory");
+ assert.equal(isPdfLocatorRequest("Where is the revenue breakdown in report.pdf?"),false);
+ assert.equal(isPdfContentRequest("Where is the revenue breakdown in report.pdf?"),true);
+ for(const request of ["Keep this PDF for later; tell me a joke","Store this PDF for reference","Locate my saved PDF","Where is report.pdf?","Do not inspect this PDF"]){
+  assert.equal(isPdfContentRequest(request),false,request);
+  const [ref]=await buildFileReferences([file([text("cover"),""])]);
+  const evidence=await inspectPdf(ref,request,file([text("cover"),""]));
+  assert.equal(evidence.state,"not-requested");assert.equal(evidence.pages.length,0);
+ }
+ for(const request of ["Extract every transaction","Read the scanned page","Compare pages 1 and 2","Continue","Which quarter has the highest collections?"])assert.equal(isPdfContentRequest(request),true,request);
 });

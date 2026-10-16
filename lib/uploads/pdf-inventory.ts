@@ -49,13 +49,27 @@ export function inventoryPdf(pages: Array<{
         }) };
 }
 export function requestedPdfPages(message: string, count: number): number[] {
+    const invalid = () => new Error("Please use physical PDF page numbers, for example pages 2-4, within the source inventory.");
+    if (!Number.isSafeInteger(count) || count < 1 || count > 10000) throw invalid();
     const explicit: number[] = [];
-    for (const match of message.matchAll(/\bpages?\s+([0-9]+(?:\s*(?:[-–]|to)\s*[0-9]+)?(?:\s*(?:,|and)\s*[0-9]+(?:\s*(?:[-–]|to)\s*[0-9]+)?)*)/gi)) {
-        for (const part of match[1].split(/\s*(?:,|and)\s*/i)) {
-            const range = /^(\d+)(?:\s*(?:[-–]|to)\s*(\d+))?$/.exec(part)!;
+    const numberWord = /^(?:zero|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|hundred|thousand|NaN|Infinity|[ivxlcdm]+)\b/i;
+    if (/\bpages?\b/i.test(message) && /\b(?:except|excluding)\b|\b(?:first|last)\s+(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten)\s+pages?\b/i.test(message)) throw invalid();
+    for (const match of message.matchAll(/\b(first|last)\s+page\b/gi)) explicit.push(match[1].toLowerCase() === "first" ? 1 : count);
+    for (const match of message.matchAll(/\bpages?\s+/gi)) {
+        const tail = message.slice(match.index! + match[0].length);
+        if (/^[-+−]/.test(tail) || numberWord.test(tail)) throw invalid();
+        if (!/^\d/.test(tail)) continue;
+        const selector = /^(\d+(?:\s*(?:[-–—]|to\b|through\b)\s*\d+)?(?:\s*(?:,|and\b)\s*\d+(?:\s*(?:[-–—]|to\b|through\b)\s*\d+)?)*)/i.exec(tail)!;
+        const rest = tail.slice(selector[0].length);
+        // Do not accept a valid-looking prefix of a fractional, signed, exponent,
+        // malformed-range, or partly unsupported page list.
+        if (/^[\w/]|^\.(?:\d|\.)|^\s*(?:[-–—]|to\b|through\b)/i.test(rest)) throw invalid();
+        const continuation = /^\s*(?:,|and\b)\s*(.*)/i.exec(rest)?.[1];
+        if (continuation !== undefined && (/^[-+−\d]/.test(continuation) || numberWord.test(continuation))) throw invalid();
+        for (const part of selector[0].split(/\s*(?:,|and\b)\s*/i)) {
+            const range = /^(\d+)(?:\s*(?:[-–—]|to\b|through\b)\s*(\d+))?$/i.exec(part)!;
             const start = Number(range[1]), end = Number(range[2] ?? range[1]);
-            if (start < 1 || end < start || end > count)
-                throw new Error("Requested physical PDF page is outside the source inventory");
+            if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start < 1 || end < start || end > count) throw invalid();
             for (let page = start; page <= end; page++) explicit.push(page);
         }
     }
@@ -64,6 +78,20 @@ export function requestedPdfPages(message: string, count: number): number[] {
 
 /** File discovery differs from locating a value or extracting all rows inside it. */
 export function isPdfLocatorRequest(message: string): boolean {
-  return /\b(find|locate|where)\b/i.test(message) &&
-    !/\b(pages?\s+\d|every|all|transactions?|charges?|amounts?|values?|totals?|rows?|columns?|read|extract|analy[sz]e|inside|within|scan\w*|charts?|tables?)\b/i.test(message);
+  const request = message.trim().replace(/^(?:please|can you|could you|would you)\s+/i, "");
+  // Locating a file is not the same task as locating a value or section IN a file.
+  if (/\b(?:pages?\s+\d|every|transactions?|charges?|amounts?|values?|totals?|rows?|columns?|read|extract|analy[sz]e|inside|within|scan\w*|charts?|tables?|breakdown)\b/i.test(request)) return false;
+  return /^(?:find|locate|show(?:\s+me)?|where\s+(?:is|are|can\s+I\s+find))\s+(?:(?:my|the|a|an|that|this|saved|uploaded|original)\s+)*(?:pdf\b|file\b|document\b|["'“‘]?[^\s?;]+\.pdf\b)/i.test(request);
+}
+
+/** Called only after source selection. An attachment is not permission to analyze unrelated tasks. */
+export function isPdfContentRequest(message: string): boolean {
+  if (!message.trim() || isPdfLocatorRequest(message)) return false;
+  const explicit = /\b(?:read|extract|analy[sz]e|inspect|review|summari[sz]e|compare|explain|interpret|calculate|reconcile)\b/i.test(message);
+  const storedForLater = /\b(?:keep|save|store|retain|upload|attach)\b.{0,100}\b(?:later|reference|storage|only|do not|don't)\b/i.test(message);
+  if (storedForLater && !explicit) return false;
+  if (/\b(?:do not|don't|without)\s+(?:read|analy[sz]e|inspect|process)\b/i.test(message)) return false;
+  if (/\b(?:tell me a joke|write (?:me )?a (?:joke|poem)|weather|codebase|repository)\b/i.test(message) && !explicit) return false;
+  return explicit || /^\s*(?:continue|go on|proceed|next(?: pages?)?)\s*[.!?]?\s*$/i.test(message)
+    || /\b(?:what|where|which|how|why|when|is|are|does|did|list|identify|find)\b/i.test(message);
 }

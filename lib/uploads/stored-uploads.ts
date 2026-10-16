@@ -546,7 +546,25 @@ export function createStoredUploadService(storage: Storage, secret: string, opti
       }));
       const matching=receipts.filter(envelope=>envelope?.actorId===actorId && envelope?.chatId===chatId && envelope?.attachmentId===attachment.id && envelope?.evidence?.fingerprint===fingerprint);
       const cached:PdfEvidence|undefined=matching.length ? {...matching[0].evidence,pages:matching.flatMap(envelope=>envelope.evidence.pages),rawReports:[...new Set<string>(matching.flatMap(envelope=>envelope.evidence.rawReports))]} : undefined;
-      const evidence=await inspectPdf(reference,message,original.data,cached);
+      const evidence=await inspectPdf(reference,message,original.data,cached,async pages=>{
+        const acquired:number[]=[];
+        for(const physicalPage of pages) {
+          if(!await live()) throw new UploadInputError("PDF source was deleted.");
+          const attemptPath=`${path}.pdf-attempt-${fingerprint}-${String(physicalPage).padStart(6,"0")}-v1.json`;
+          const attempt={version:"pdf-attempt-v1",actorId,chatId,attachmentId:attachment.id,fingerprint,physicalPage,model:"gemini-2.5-flash",id:randomUUID(),state:"pending-or-uncertain"};
+          // Storage create-only uploads have one winner across processes. Never
+          // reset an attempt after ambiguous acknowledgment or model acceptance.
+          const claim=await objects.upload(attemptPath,JSON.stringify(attempt),{contentType:"application/json",upsert:false});
+          if(!claim.error) { acquired.push(physicalPage); continue; }
+          const existing=await objects.download(attemptPath);
+          if(!existing.data) throw new Error("PDF attempt unavailable; no inference started.");
+          const previous=JSON.parse(await existing.data.text());
+          if(previous.actorId!==actorId || previous.chatId!==chatId || previous.attachmentId!==attachment.id || previous.fingerprint!==fingerprint || previous.physicalPage!==physicalPage || previous.version!==attempt.version)
+            throw new Error("PDF attempt identity mismatch; no inference started.");
+        }
+        if(!await live()) throw new UploadInputError("PDF source was deleted.");
+        return acquired;
+      });
       evidence.source={actorId,sourceChatId:chatId,attachmentId:attachment.id};
       if(!await live()) throw new UploadInputError("PDF source was deleted.");
       const known=new Set(cached?.pages.map(page=>page.physicalPage) ?? []);
@@ -554,21 +572,37 @@ export function createStoredUploadService(storage: Storage, secret: string, opti
         if(!await live()) throw new UploadInputError("PDF source was deleted.");
         const receipt={actorId,chatId,attachmentId:attachment.id,evidence:{...evidence,pages:[page],rawReports:evidence.rawReports.slice(-1)}};
         const persisted=await objects.upload(`${path}.pdf-page-${String(page.physicalPage).padStart(6,"0")}.json`,JSON.stringify(receipt),{contentType:"application/json",upsert:false});
-        if(persisted.error) throw new Error("PDF evidence persistence unavailable; no automatic inference retry.");
+        if(persisted.error) throw new Error("PDF evidence persistence unavailable; attempt retained, no automatic inference retry.");
+        matching.push(receipt);
       }
       if(evidence.pages.length && await live()) {
-        // Index immutable observations, not per-request prompt selection or notices.
-        // Stable ordering lets indexEvidence resume the same hash after a restart.
-        const canonical = JSON.stringify({
-          version: evidence.version, extractionVersion: evidence.extractionVersion,
-          source: evidence.source, fingerprint: evidence.fingerprint,
-          provider: evidence.provider, model: evidence.model,
-          pages: [...evidence.pages].sort((a,b)=>a.physicalPage-b.physicalPage),
-          rawReports: [...evidence.rawReports].sort(),
-        });
-        try { const complete=await indexEvidence({...attachment,actorId,chatId},"analysis",`pdf-visual-v1:${fingerprint}`,canonical,"partial; model-derived physical page observations");
-          if(!complete) evidence.notice+=" Saved evidence indexing is incomplete; revisit this source to continue indexing without inference."; }
-        catch { evidence.notice+=" Saved evidence search indexing unavailable; revisit this source to retry indexing without inference."; }
+        // Each immutable page has its own canonical index/version. Concurrent
+        // page completions cannot replace another page's searchable findings.
+        const markerPrefix=`${attachment.id}.pdf-index-`;
+        const indexed=await objects.list(pagePrefix,{limit:128,search:markerPrefix});
+        if(indexed.error) evidence.notice+=" Saved page indexing status unavailable; revisit this source without reinspection.";
+        else {
+          const completed=new Set((indexed.data ?? []).map(item=>item.name));
+          const pending=matching.flatMap(envelope=>envelope.evidence.pages.map((page:PdfEvidence["pages"][number])=>{
+            const e=envelope.evidence as PdfEvidence;
+            const canonical=JSON.stringify({version:e.version,extractionVersion:e.extractionVersion,
+              source:{actorId,sourceChatId:chatId,attachmentId:attachment.id},fingerprint,
+              provider:e.provider,model:e.model,page,rawReports:[...e.rawReports].sort()});
+            const digest=createHash("sha256").update(canonical).digest("hex");
+            return {page:page.physicalPage,canonical,version:`pdf-visual-v1:${fingerprint}:page:${page.physicalPage}:${e.model}`,marker:`${markerPrefix}${String(page.physicalPage).padStart(6,"0")}-${digest}.json`};
+          })).filter(item=>!completed.has(item.marker)).sort((a,b)=>a.page-b.page);
+          for(const item of pending.slice(0,4)) {
+            if(!await live()) throw new UploadInputError("PDF source was deleted.");
+            try {
+              const done=await indexEvidence({...attachment,actorId,chatId},"analysis",item.version,item.canonical,"partial; model-derived physical page observations");
+              if(done) {
+                const marked=await objects.upload(`${pagePrefix}/${item.marker}`,JSON.stringify({version:item.version,source:{actorId,chatId,attachmentId:attachment.id},complete:true}),{contentType:"application/json",upsert:true});
+                if(!marked.error) completed.add(item.marker);
+              }
+            } catch { /* Immutable page receipts remain available for bounded recovery. */ }
+          }
+          if(pending.some(item=>!completed.has(item.marker))) evidence.notice+=" Saved evidence indexing unavailable or incomplete; revisit this source to resume without inference.";
+        }
       }
       if(!await live()) throw new UploadInputError("PDF source was deleted.");
       return evidence;

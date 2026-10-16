@@ -1,0 +1,7 @@
+import test from 'node:test';import assert from 'node:assert/strict';import fs from 'node:fs';import vm from 'node:vm';import {createRequire} from 'node:module';
+const require=createRequire(import.meta.url),ts=require('typescript'),exports={};
+vm.runInNewContext(ts.transpileModule(fs.readFileSync('lib/uploads/pdf-inventory.ts','utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText,{exports});
+const pages=exports.requestedPdfPages;
+for(const message of ['Read page -1','Read page +1','Read page 1.5','Read page two','Read pages 2 to four','Read pages 2-4-6','Read pages 2/4','Read page 1e2','Read pages 2-','Read all pages except 3','Read the first two pages','Read page IV'])test(`rejects unsupported page scope: ${message}`,()=>assert.throws(()=>pages(message,10)));
+for(const [message,expected] of [['Read page 2',[2]],['Read pages 2-4',[2,3,4]],['Read pages 2 through 4',[2,3,4]],['Read pages 2–4, 6 and 8',[2,3,4,6,8]],['Read page 2 and explain the table',[2]],['Read page 2 and page 4',[2,4]],['Read the last page',[10]],['Read the first page',[1]],['Extract every transaction',Array.from({length:10},(_,i)=>i+1)]])test(`retains exact scope: ${message}`,()=>assert.equal(JSON.stringify(pages(message,10)),JSON.stringify(expected)));
+test('source bounds and invalid inventory fail closed',()=>{for(const count of [-1,0,1.5,Infinity,10001])assert.throws(()=>pages('Read every page',count));assert.throws(()=>pages('Read page 11',10));assert.throws(()=>pages('Read pages 4-2',10));});
