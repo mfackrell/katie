@@ -131,7 +131,7 @@ function fixture() {
     modules.set(path, exports);
     vm.runInNewContext(compile(readFileSync(path, 'utf8')), {
       ...globals, exports,
-      require: name => name.startsWith('node:') ? nativeRequire(name)
+      require: name => name.startsWith('node:') || name === 'zod' ? nativeRequire(name)
         : load(name.startsWith('@/') ? name.slice(2) : resolve(dirname(path), name)),
     }, { filename: path });
     return exports;
@@ -139,7 +139,7 @@ function fixture() {
   const helpers = Object.assign({}, ...[
     'lib/chat/task-progress', 'lib/chat/response-policy', 'lib/chat/review-continuity',
     'lib/chat/review-sources', 'lib/chat/video-evidence', 'lib/collaboration/review-completion',
-    'lib/collaboration/activation', 'lib/collaboration/review-mode', 'lib/data/supabase/admin',
+    'lib/collaboration/activation', 'lib/collaboration/review-mode', 'lib/data/supabase/admin', 'lib/agents/policy',
   ].map(load));
   const history = [
     { id: 'old-task', role: 'user', content: OLD_TASK },

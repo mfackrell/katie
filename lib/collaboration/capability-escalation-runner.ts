@@ -1,3 +1,4 @@
+import { requireAgentResearch } from "@/lib/agents/policy";
 import { isTerminalProviderError } from "@/lib/providers/response-errors";
 import {
   runCapabilityAwareGeneration,
@@ -435,6 +436,7 @@ export async function runOnDemandCapabilityEscalation(input: {
             ...input.params, user: input.params.user + "\n" + request.task,
           }).catch((error) => ({ capturedAt: nowIso(), pages: [], limitations: ["Rendered inspection failed: " + String(error)] }));
         }
+        if (request.capability === "research") requireAgentResearch();
         const helperResult = await selected.provider.generate(helperParams);
         if (request.capability === "research") {
           sharedWebsite = await websiteEvidencePromise;

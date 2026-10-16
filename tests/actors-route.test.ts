@@ -6,6 +6,7 @@ type Row = Record<string, unknown>;
 
 type DbState = {
   actors: Row[];
+  managed_agents: Row[];
   chats: Row[];
   messages: Row[];
   short_term_memory: Row[];
@@ -98,7 +99,7 @@ function loadPatchHandler() {
 }
 
 test("PATCH /api/actors updates the actor purpose", async () => {
-  const state: DbState = {
+  const state: DbState = { managed_agents: [],
     actors: [
       {
         id: "actor-1",
@@ -138,7 +139,7 @@ test("PATCH /api/actors updates the actor purpose", async () => {
 
 
 test("review-only PATCH persists mode without changing prompt or routing; invalid modes are rejected", async () => {
-  const state: DbState = { actors: [{ id: "actor-mode", name: "Writer", system_prompt: "Keep prompt", routing_profile: { preserved: true }, review_mode: "adaptive", parent_actor_id: null }], chats: [], messages: [], short_term_memory: [], intermediate_memory: [], long_term_memory: [] };
+  const state: DbState = { managed_agents: [], actors: [{ id: "actor-mode", name: "Writer", system_prompt: "Keep prompt", routing_profile: { preserved: true }, review_mode: "adaptive", parent_actor_id: null }], chats: [], messages: [], short_term_memory: [], intermediate_memory: [], long_term_memory: [] };
   (globalThis as any).__KATIE_SUPABASE_ADMIN_CLIENT__ = createFakeClient(state);
   const { PATCH } = loadPatchHandler();
   const patch = (reviewMode: string) => PATCH(new NextRequest("http://localhost/api/actors?id=actor-mode", { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ reviewMode }) }));
