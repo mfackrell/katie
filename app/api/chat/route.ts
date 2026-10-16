@@ -52,8 +52,11 @@ import {
 import { LlmProvider, ProviderResponse } from "@/lib/providers/types";
 import { buildReviewResumptionContext, candidateForVerification, isSavedDraftVerificationRetry, savedDraftReviewTask } from "@/lib/collaboration/review-completion";
 import { getPendingReviewClarification, resolvePendingReviewClarification } from "@/lib/chat/review-continuity";
+import { bindPendingReviewClarification } from "@/lib/chat/review-continuity";
 import { classifyUserTurn, applyAssistantToTaskProgress, applyUserToTaskProgress, formatTaskProgress, syncTaskProgress } from "@/lib/chat/task-progress";
 import { loadTaskProgress, saveTaskProgress } from "@/lib/chat/task-progress-store";
+import { buildReviewSourceTurns } from "@/lib/chat/review-sources";
+import { decideResponsePolicy, shouldEscalateConversationResponse } from "@/lib/chat/response-policy";
 import type { ResolvedRoutingIntent, SelectionExplainer } from "@/lib/router/master-router";
 import { DEFAULT_REASONING_CATEGORIES, ReasoningStateAccumulator } from "@/lib/chat/reasoning-stream";
 import {
@@ -675,15 +678,18 @@ export async function POST(request: NextRequest) {
       const recovered = await getSupabaseAdminClient().rpc("reconcile_media_video", {p_actor: actorId, p_current_chat: chatId});
       if (recovered.error) console.warn("[Media memory] video recovery unavailable");
     } catch { console.warn("[Media memory] video recovery unavailable"); }
-    const pendingReviewClarification = await getPendingReviewClarification(actorId, chatId);
-    const verifyingSavedDraft = Boolean(
-      pendingReviewClarification &&
-      isSavedDraftVerificationRetry(pendingReviewClarification.pending, message)
+    // Source restoration precedes model classification. Require the same
+    // durable task/question binding as review resumption before borrowing scope.
+    const pdfProgress = applyUserToTaskProgress(
+      syncTaskProgress(await loadTaskProgress(actorId, chatId), attachmentHistory),
+      { messageId: crypto.randomUUID(), text: message },
     );
-    const savedDraftOriginalTask = verifyingSavedDraft && pendingReviewClarification
-      ? savedDraftReviewTask(pendingReviewClarification.pending)
-      : null;
-    const pdfTaskContext = savedDraftOriginalTask ?? (pendingReviewClarification && classifyUserTurn(message) === "continuation" ? savedDraftReviewTask(pendingReviewClarification.pending) : null);
+    const pdfReviewContinuation = await getPendingReviewClarification(actorId, chatId, {
+      message, progress: pdfProgress, history: attachmentHistory,
+    });
+    const pdfTaskContext = pdfReviewContinuation &&
+      (pdfProgress.lastUserIntent === "answer" || classifyUserTurn(message) === "continuation")
+      ? savedDraftReviewTask(pdfReviewContinuation.pending) : null;
     const pdfSourceTask = pdfTaskContext ? `${pdfTaskContext}\nCurrent clarification: ${message}` : message;
     const memoryMode = memoryIntent(message);
     // Event order within a clip ("after checkout") is not an upload-date reference.
@@ -1037,34 +1043,13 @@ export async function POST(request: NextRequest) {
     const { name, persona, summary, history, actorRoutingProfile, reviewMode } = await assembleContext(actorId, chatId);
     const persistedTaskProgress = await loadTaskProgress(actorId, chatId);
     const taskProgressUserMessageId = crypto.randomUUID();
+    const taskProgressAssistantMessageId = crypto.randomUUID();
+    const priorTaskProgress = syncTaskProgress(persistedTaskProgress, history);
     let taskProgress = applyUserToTaskProgress(
-      syncTaskProgress(persistedTaskProgress, history),
+      priorTaskProgress,
       { messageId: taskProgressUserMessageId, text: message },
     );
-    const reviewTaskProgress = savedDraftOriginalTask
-      ? {
-          ...taskProgress,
-          lastUserIntent: "new_task" as const,
-          objective: {
-            text: savedDraftOriginalTask,
-            userMessageId: pendingReviewClarification!.requestId,
-          },
-          pending: [],
-        }
-      : taskProgress;
-    const taskProgressContext = formatTaskProgress(reviewTaskProgress);
-    if (verifyingSavedDraft) {
-      console.info("[ReviewContinuity] Saved-draft verification retry", {
-        requestId, originalRequestId: pendingReviewClarification!.requestId,
-        originalTaskRecovered: Boolean(savedDraftOriginalTask),
-      });
-    }
-    if (pendingReviewClarification) {
-      messageForGeneration = `${message}\n\n${buildReviewResumptionContext(pendingReviewClarification.pending, message)}`;
-      console.info("[ReviewContinuity] Resuming saved work after user input", {
-        requestId, originalRequestId: pendingReviewClarification.requestId, actorId, chatId,
-      });
-    }
+
     let storedWebsite: Awaited<ReturnType<ReturnType<typeof websiteEvidenceStore>["restore"]>> = { context: "", images: [] as string[], fresh: false, targetUrls: [] as string[] };
     try { storedWebsite = await websiteEvidenceStore().restore(actorId, chatId, message, history); }
     catch (error) {
@@ -1126,6 +1111,9 @@ export async function POST(request: NextRequest) {
     const controlPlaneConversationContext = [
       summary ? `Conversation summary: ${summary}` : "",
       history.length ? `Recent conversation: ${JSON.stringify(history.slice(-4))}` : "",
+      `Active project (advisory): ${JSON.stringify(priorTaskProgress.projectContext?.text.slice(0, 1800) ?? null)}`,
+      `Current requested deliverable (advisory): ${JSON.stringify(priorTaskProgress.objective?.text ?? null)}`,
+      `Outstanding questions: ${JSON.stringify(priorTaskProgress.pending.slice(-4).map(question => ({ id: question.id, text: question.text })))}`,
       `Has attached images: ${Boolean((Array.isArray(images) && images.length > 0) || attachments.some((attachment) => attachment.mimeType.startsWith("image/")))}`,
       `Saved attachment selection: ${selectionContext()}`,
       `Active repo: ${sessionContext.activeRepo ? `${sessionContext.activeRepo.fullName} (${sessionContext.activeRepo.id})` : "none"}`
@@ -1141,6 +1129,8 @@ export async function POST(request: NextRequest) {
     let resolvedRequestIntent: RequestIntent | undefined;
     let intentAuthority: "llm" | "heuristic" | "override" | "fallback" | "capability" = "fallback";
     let intentResolutionReason = "default";
+    let responsePurposeHint: "conversation" | "deliverable" | undefined;
+    let projectRelationHint: "new_project" | "same_project" | undefined;
     let routingHints: RoutingHint[] = [];
     const videoRoutingPolicy = resolveVideoRoutingPolicy(attachments.some(requiresGoogleFileSource), overrideProvider);
 
@@ -1189,6 +1179,8 @@ export async function POST(request: NextRequest) {
         }
       );
       const overrideIntent = overrideClassification.intent;
+      responsePurposeHint = overrideClassification.responsePurpose;
+      projectRelationHint = overrideClassification.projectRelation;
       const { decision: validatedOverride, recoveredIntent } = validateManualOverrideWithRecovery({
         provider: manualProvider,
         modelId: overrideModel,
@@ -1295,6 +1287,8 @@ export async function POST(request: NextRequest) {
       selectionExplainer = routingDecision.explainer;
       resolvedRoutingIntentForReroute = routingDecision.resolvedIntent;
       resolvedRequestIntent = routingDecision.resolvedIntent.intent;
+      responsePurposeHint = routingDecision.resolvedIntent.responsePurpose;
+      projectRelationHint = routingDecision.resolvedIntent.projectRelation;
       intentAuthority = routingDecision.authority ?? "fallback";
       intentResolutionReason = routingDecision.intentResolutionReason ?? "router-default";
       console.log("[Chat API] Final resolved intent", {
@@ -1309,6 +1303,51 @@ export async function POST(request: NextRequest) {
       console.log(`[Chat API] Routing Model For UI: ${routingDecision.routerModel}`);
       console.log(`[Chat API] Routing Reasoning: ${routingDecision.reasoning}`);
     }
+
+    // Select continuity only after classifying the literal current turn. The
+    // existence of an unresolved audit in this chat is never enough to resume it.
+    taskProgress = applyUserToTaskProgress(priorTaskProgress, {
+      messageId: taskProgressUserMessageId, text: message, projectRelation: projectRelationHint,
+    });
+    const pendingReviewClarification = await getPendingReviewClarification(actorId, chatId, {
+      message, progress: taskProgress, history, projectRelation: projectRelationHint,
+    });
+    const verifyingSavedDraft = Boolean(pendingReviewClarification &&
+      isSavedDraftVerificationRetry(pendingReviewClarification.pending, message));
+    const savedDraftOriginalTask = verifyingSavedDraft && pendingReviewClarification
+      ? savedDraftReviewTask(pendingReviewClarification.pending) : null;
+    const reviewTaskProgress = savedDraftOriginalTask ? {
+      ...taskProgress,
+      lastUserIntent: "continuation" as const,
+      objective: { text: savedDraftOriginalTask, userMessageId: pendingReviewClarification!.pending.binding?.taskId ?? pendingReviewClarification!.requestId },
+      pending: [],
+    } : taskProgress;
+    const taskProgressContext = formatTaskProgress(reviewTaskProgress);
+    if (pendingReviewClarification) {
+      console.info("[ReviewContinuity] Matched current task and question", {
+        requestId, originalRequestId: pendingReviewClarification.requestId,
+        questionMessageId: pendingReviewClarification.questionMessageId,
+        verificationRetry: verifyingSavedDraft, actorId, chatId,
+      });
+    }
+    const responsePolicy = decideResponsePolicy({
+      message, responsePurpose: responsePurposeHint, intent: resolvedRequestIntent,
+      hasAttachments: attachments.length > 0 || images.length > 0,
+      requiresTools: storedWebsite.fresh || timelineActive || Boolean(mediaMemory),
+      hasPendingDeliverable: Boolean(taskProgress.objective &&
+        (taskProgress.lastUserIntent === "answer" || pendingReviewClarification)),
+      explicitReviewRetry: verifyingSavedDraft,
+    });
+    const resumptionContext = pendingReviewClarification && responsePolicy.requiresSubstantiveProcessing
+      ? buildReviewResumptionContext(pendingReviewClarification.pending, message) : "";
+    const requiredReviewForRequest = verifyingSavedDraft ||
+      (reviewMode === "always" && responsePolicy.requiresSubstantiveProcessing);
+    console.info("[ResponsePolicy] selected", {
+      requestId, purpose: responsePolicy.purpose, reason: responsePolicy.reason,
+      reviewMode, requiredReview: requiredReviewForRequest,
+      projectId: taskProgress.projectContext?.userMessageId,
+      taskId: taskProgress.objective?.userMessageId,
+    });
 
     // A scene-writing specialist preference applies only to automatically routed
     // text fiction. Explicit model selections, visual inputs, repository work,
@@ -1627,8 +1666,8 @@ export async function POST(request: NextRequest) {
     }
 
     const collaborationConfig = getCollaborationConfig();
-    const collaborationDeadlineMs = Math.min(executionDeadlineMs - (reviewMode === "always" ? REQUIRED_REVIEW_RESERVE_MS : 0), Date.now() + collaborationConfig.maxTotalDurationMs);
-    const collaborationEnabledForRequest = shouldEnableActorCollaboration(reviewMode, storedWebsite.fresh || shouldUseAdaptiveCollaboration({
+    const collaborationDeadlineMs = Math.min(executionDeadlineMs - (requiredReviewForRequest ? REQUIRED_REVIEW_RESERVE_MS : 0), Date.now() + collaborationConfig.maxTotalDurationMs);
+    const collaborationEnabledForRequest = responsePolicy.requiresSubstantiveProcessing && !verifyingSavedDraft && shouldEnableActorCollaboration(reviewMode, storedWebsite.fresh || shouldUseAdaptiveCollaboration({
       message,
       intent: resolvedRequestIntent ?? null,
       complexity: resolvedRoutingIntentForReroute?.complexity ?? null,
@@ -1784,7 +1823,9 @@ export async function POST(request: NextRequest) {
             await saveTaskProgress(actorId, chatId, taskProgress);
             console.log(`[Chat API] Requesting generation from ${provider.name} using model ${modelId}...`);
             const enqueueDelta = (delta: string) => {
-              if (reviewMode === "always") return; // Hold every draft until independent review finishes.
+              // Always-mode responses remain buffered until the output guard
+              // confirms a brief reply or independent review finishes.
+              if (reviewMode === "always") return;
               // Mobile browsers routinely suspend or drop streaming fetches when
               // the app is backgrounded. A disconnected UI must not cancel the
               // actual model generation: keep consuming the provider stream so
@@ -1806,6 +1847,8 @@ export async function POST(request: NextRequest) {
             };
 
             let pendingVideoAssistantMessageId: string | null = null;
+            let reviewCompleted = false;
+            let reviewHasPendingClarification = false;
             let reviewSourceParams: import("@/lib/providers/types").ChatGenerateParams | undefined;
             for (const pdf of attachments.filter(file=>file.mimeType==="application/pdf" && file.pdfInventory)) {
               pdf.providerRef=undefined;
@@ -1818,13 +1861,15 @@ export async function POST(request: NextRequest) {
                 pdf.preview+=` PDF visual evidence unavailable: ${reason} Do not claim complete document review.`;
               }
             }
-            const createParams = (selectedModelId: string) =>
+            const createParams = (selectedModelId: string, forReview = false) =>
               ({ ...buildGenerationParams({
                 name,
-                persona: [personaForGeneration, taskProgressContext, storedWebsite.context, ...(creativeNarrativeRequest ? [CREATIVE_CONTINUITY_INSTRUCTIONS] : [])].filter(Boolean).join("\n\n"),
+                persona: [personaForGeneration, taskProgressContext, storedWebsite.context,
+                  ...(!forReview ? [resumptionContext, responsePolicy.generationInstruction] : []),
+                  ...(creativeNarrativeRequest ? [CREATIVE_CONTINUITY_INSTRUCTIONS] : [])].filter(Boolean).join("\n\n"),
                 summary,
                 history: historyForProvider,
-                message: messageForGeneration,
+                message: forReview ? message : messageForGeneration,
                 requestIntent: resolvedRequestIntent,
                 secondaryIntents: storedWebsite.fresh ? [...(resolvedRoutingIntentForReroute?.secondaryIntents ?? []), "web-search"] : resolvedRoutingIntentForReroute?.secondaryIntents ?? [],
                 images,
@@ -1834,7 +1879,7 @@ export async function POST(request: NextRequest) {
                   saveProviderSystemAudit(actorId, chatId, requestId, audit)
               }), previousWebsiteEvidence: storedWebsite.previousWebsiteEvidence });
 
-            if (shouldRunChunkedWorkflow(message, attachments)) {
+            if (!verifyingSavedDraft && shouldRunChunkedWorkflow(message, attachments)) {
               const chunkWorkflowSummary = await analyzeChunkedAttachments({
                 provider,
                 modelId,
@@ -1905,6 +1950,12 @@ ${chunkWorkflowSummary}`;
               retryTerminalError: ({ attempt, remainingAttempts }) =>
                 hasVideoInput && attempt.provider.name === "google" && remainingAttempts.length > 0,
               runAttempt: async (candidate, attemptIndex) => {
+                if (verifyingSavedDraft && pendingReviewClarification) {
+                  // Verification retries review the saved candidate verbatim;
+                  // they must not draft a replacement answer to a short "yes".
+                  return { text: pendingReviewClarification.pending.candidate,
+                    provider: candidate.provider.name, model: candidate.modelId };
+                }
                 if (candidate.runpodVideoFallback) {
                   // Only the authorized original attachment goes to Qwen. A
                   // failed or overdue RunPod job falls through to Grok frames.
@@ -2217,6 +2268,17 @@ ${chunkWorkflowSummary}`;
                         streamedText: collaboration.streamedText,
                       };
                     })()
+                  : responsePolicy.purpose === "conversation"
+                    ? await (async () => {
+                        // A clarification is a single conversational response,
+                        // not an opportunity to launch helper orchestration.
+                        const direct = provider.generateStream
+                          ? await provider.generateStream(finalParams, {
+                              onTextDelta: async delta => enqueueDelta(delta),
+                            })
+                          : await provider.generate(finalParams);
+                        return { result: direct, streamedText: direct.text };
+                      })()
                   : await (async () => {
                       const capabilityEscalation =
                         await runOnDemandCapabilityEscalation({
@@ -2638,7 +2700,14 @@ ${chunkWorkflowSummary}`;
               }
             }
 
-            if (reviewMode === "always" && !pendingVideoAssistantMessageId) {
+            const escalatedConversation = shouldEscalateConversationResponse({
+              policy: responsePolicy, responseText: result.text || streamedText,
+              usedTools: Boolean(result.researchEvidence || result.collaboration?.used),
+            });
+            if (escalatedConversation) {
+              console.warn("[ResponsePolicy] Unexpected substantive output requires review", { requestId });
+            }
+            if ((requiredReviewForRequest || (reviewMode === "always" && escalatedConversation)) && !pendingVideoAssistantMessageId) {
               const draftProvider = providers.find(item => item.name === result!.provider) ?? provider;
               const reviewed = await runRequiredDraftReview({
                 requestId,
@@ -2655,10 +2724,10 @@ ${chunkWorkflowSummary}`;
                   ...(result.researchEvidence ? { researchEvidence: result.researchEvidence } : {}),
                 },
                 assessmentParams: {
-                  ...createParams(result.model),
+                  ...createParams(result.model, true),
                   // Choose the independent task before appending evidence; never include the candidate draft.
                   user: appendVideoEvidenceToUser(buildVideoAssessmentUser({
-                    baseUser: createParams(result.model).user, savedDraftOriginalTask,
+                    baseUser: createParams(result.model, true).user, savedDraftOriginalTask,
                     pendingClarification: pendingReviewClarification?.pending,
                     latestMessage: message, videos: hasVideoInput ? attachments.filter(isVideoAttachment) : [],
                   }), (mediaMemory?.context ?? "") + (timelineContext ? "\n" + timelineContext : "")),
@@ -2667,6 +2736,14 @@ ${chunkWorkflowSummary}`;
                 leadProvider: draftProvider,
                 deadlineMs: executionDeadlineMs,
                 taskProgress: reviewTaskProgress,
+                sourceTurns: buildReviewSourceTurns({
+                  history: historyForProvider, latestMessage: message, progress: reviewTaskProgress,
+                  savedSourceTurns: pendingReviewClarification?.pending.sourceTurns,
+                }),
+                observedEvidence: [
+                  hasVideoInput ? buildVideoTimingEvidence(attachments.filter(isVideoAttachment)) : "",
+                  mediaMemory?.context ?? "", timelineContext ?? "",
+                ].filter(Boolean).join("\n\n"),
                 prepareParams: (params, participant) => ({
                   ...params,
                   persona: replaceKatieRuntimeContext(params.persona, buildKatieRuntimeContext({
@@ -2690,6 +2767,13 @@ ${chunkWorkflowSummary}`;
               });
               result = reviewed.result;
               streamedText = result.text;
+              reviewCompleted = reviewed.audit.status === "approved" || reviewed.audit.status === "revised";
+              reviewHasPendingClarification = Boolean(reviewed.audit.pendingClarification);
+              if (reviewed.audit.pendingClarification) {
+                reviewed.audit.pendingClarification = bindPendingReviewClarification(
+                  reviewed.audit.pendingClarification, reviewTaskProgress, taskProgressAssistantMessageId,
+                );
+              }
               try {
                 const { error } = await getSupabaseAdminClient().from("chat_requests")
                   .eq("request_id", requestId).eq("actor_id", actorId).eq("chat_id", chatId)
@@ -2754,7 +2838,7 @@ ${chunkWorkflowSummary}`;
 
             console.log("[Chat API] Generation successful. Saving assistant response.");
             const assistantText = result.text || streamedText;
-            const assistantMessageId = pendingVideoAssistantMessageId ?? crypto.randomUUID();
+            const assistantMessageId = pendingVideoAssistantMessageId ?? taskProgressAssistantMessageId;
             await saveMessage(chatId, {
               id: assistantMessageId,
               role: "assistant",
@@ -2770,11 +2854,16 @@ ${chunkWorkflowSummary}`;
                 assistantAssets: imageAssets,
               });
             }
-            taskProgress = applyAssistantToTaskProgress(taskProgress, { messageId: assistantMessageId, text: assistantText });
-            await saveTaskProgress(actorId, chatId, taskProgress);
+            taskProgress = applyAssistantToTaskProgress(taskProgress, {
+              messageId: assistantMessageId, text: assistantText, responsePurpose: responsePolicy.purpose,
+            });
+            const taskProgressSaved = await saveTaskProgress(actorId, chatId, taskProgress);
             if (pendingReviewClarification) {
               await resolvePendingReviewClarification({
                 requestId: pendingReviewClarification.requestId, actorId, chatId, resumedByRequestId: requestId,
+                completed: taskProgressSaved && responsePolicy.requiresSubstantiveProcessing &&
+                  !pendingVideoAssistantMessageId && !reviewHasPendingClarification &&
+                  taskProgress.pending.length === 0 && (!requiredReviewForRequest || reviewCompleted),
               });
             }
             await refreshShortTermMemory(actorId, chatId);

@@ -6,7 +6,7 @@ import { getConflictReconciliationInstruction } from "@/lib/collaboration/protoc
 import type { CollaborationHelperSelection, CollaborationParticipant, CollaborationSelectionContext } from "@/lib/collaboration/types";
 import type { ChatGenerateParams, LlmProvider, ProviderResponse } from "@/lib/providers/types";
 
-import { acceptanceIds, CONTRACT_RULES, JUDGMENT_CHECKS, parseReviewJson, reviewBaseline, validateAnswerReview, validateAssessment, type AnswerReview, type IndependentAssessment } from "@/lib/collaboration/review-contract";
+import { acceptanceIds, CONTRACT_RULES, JUDGMENT_CHECKS, parseReviewJson, reviewBaseline, validateAnswerReview, validateAssessment, type AnswerReview, type IndependentAssessment, type SourceTurn } from "@/lib/collaboration/review-contract";
 export type { IndependentAssessment } from "@/lib/collaboration/review-contract";
 
 export type ReviewAudit = {
@@ -90,6 +90,10 @@ export async function runRequiredDraftReview(input: {
   params: ChatGenerateParams;
   /** Original source context, without this turn's draft or collaboration synthesis. */
   assessmentParams?: ChatGenerateParams;
+  /** Literal user sources, separate from generation instructions and evidence. */
+  sourceTurns?: SourceTurn[];
+  /** Measured/source-grounded observations only; never a draft or resume prompt. */
+  observedEvidence?: string;
   taskProgress?: TaskProgressState;
   leadProvider: LlmProvider;
   deadlineMs: number;
@@ -102,7 +106,7 @@ export async function runRequiredDraftReview(input: {
   const lead = { provider: input.draft.provider, modelId: input.draft.model };
   const used = [lead];
   const source = input.assessmentParams ?? input.params;
-  const baseline = reviewBaseline(source, input.taskProgress);
+  const baseline = reviewBaseline(source, input.taskProgress, input.sourceTurns, input.observedEvidence);
   const clean = baseline.params;
   let contractRejections = 0;
   // A long history must not make the validation stage monopolize the request.
@@ -139,7 +143,7 @@ export async function runRequiredDraftReview(input: {
     try {
       const selected = await within(() => input.selectHelper({
         requestId: `${input.requestId}:required-review:${attempt + 1}`,
-        request: { capability: "critique", task: "Independently review a completed response against the original request, actor instructions and supplied evidence.", reason: "This actor requires independent review of every generated answer." },
+        request: { capability: "critique", task: "Independently review a completed response against the original request, actor instructions and supplied evidence.", reason: "This actor requires independent review of substantive deliverables." },
         requester: lead, depth: 1, usedParticipants: used,
         hasImages: Boolean(clean.images?.length),
       }), Math.min(30_000, reviewDeadlineMs - Date.now() - 10_000));

@@ -9,6 +9,8 @@ export type PendingReviewClarification = {
   candidate: string;
   requirementIds: string[];
   sourceTurns?: SourceTurn[];
+  /** Message IDs bind saved work to one project, deliverable and visible question. */
+  binding?: { projectId: string; taskId: string; questionMessageId: string };
   createdAt: string;
   resolvedAt?: string;
   resumedByRequestId?: string;
@@ -53,7 +55,7 @@ export function createReviewClarification(input: {
  */
 export function isSavedDraftVerificationRetry(pending: PendingReviewClarification, reply: string): boolean {
   if (!/retry verification with the saved draft/i.test(pending.question)) return false;
-  return /^(?:yes|y|yes please|please do|please retry|retry|retry verification|go ahead|go ahead and retry|do it|sure|ok|okay)[.! ]*$/i.test(reply.trim());
+  return /^(?:yes|y|yes please|please do|please retry|retry|(?:please )?retry verification(?: with (?:the )?saved draft)?|go ahead|go ahead and retry|do it|sure|ok|okay)[.! ]*$/i.test(reply.trim());
 }
 
 /**
@@ -83,8 +85,9 @@ export function savedDraftReviewTask(pending: PendingReviewClarification): strin
 export function buildReviewResumptionContext(pending: PendingReviewClarification, latestUserReply: string): string {
   return [
     "KATIE_RESUME_PENDING_COMPLETION",
-    "The user is responding to a clarification that interrupted an existing task. You own the original deliverable; resume it rather than replying with a standalone acknowledgment.",
-    "Preserve verified facts and all prior work. Treat a reply of 'unknown', 'I don't know', or 'use what you have' as permission to finish with only verified information, not as a reason to ask for the same facts again.",
+    "This saved clarification has been matched to the current project, task and assistant question. Continue only as far as the user's literal reply permits.",
+    "Preserve verified facts and prior work. If the user explicitly says the requested fact is unavailable, record only that limitation; do not ask for the same fact again. Explicit permission such as 'use what you have' allows completion with verified information when no essential question remains.",
+    "'I don't know what this term means' asks for an explanation. It does not establish absence of experience, answer the underlying factual question, or authorize completion. Explain unfamiliar terminology and keep the underlying question open; retain literal partial facts from mixed replies.",
     "If the latest message explicitly starts a different task or cancels the old one, honor that instead. Never fabricate the missing values.",
     "Do not include requests to the user or review commentary inside the final deliverable.",
     `ORIGINAL DELIVERABLE: ${pending.deliverable}`,

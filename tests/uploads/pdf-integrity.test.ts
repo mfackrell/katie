@@ -184,9 +184,9 @@ test("production generation and independent review use the same attachment evide
     assert.ok(inspected > 0 && assembled > inspected);
     assert.match(route.slice(assembled, assembled + 1600), /attachments,/);
     assert.match(route, /inspectSavedPdf\(chatId,source,actorId,pdfSourceTask/);
-    assert.match(route, /const pdfTaskContext = savedDraftOriginalTask/);
+    assert.match(route, /const pdfTaskContext = pdfReviewContinuation/);
     const assessment = route.slice(route.indexOf("assessmentParams:"));
-    assert.match(assessment, /\.\.\.createParams\(result.model\)/);
+    assert.match(assessment, /\.\.\.createParams\(result.model, true\)/);
     assert.match(assessment, /savedDraftOriginalTask/);
     assert.match(assessment, /pendingClarification/);
     assert.doesNotMatch(assessment.slice(0, assessment.indexOf("leadProvider:")), /candidateForVerification/);

@@ -111,7 +111,7 @@ export function ActorFormModal({ mode, parentActor, onClose, onCreate }: ActorFo
                 <option value="always">Always</option>
                 <option value="off">Off</option>
               </select>
-              <span className="mt-2 block text-xs text-zinc-400">Always checks every generated answer with a different model before delivery, using additional time and model calls.</span>
+              <span className="mt-2 block text-xs text-zinc-400">Always checks substantive answers and drafts with a different model before delivery. Brief explanations and clarifications use a direct response.</span>
             </label>
 
             {mode === "sub" ? (
