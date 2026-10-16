@@ -1,0 +1,40 @@
+name: RunPod video worker - CPU QA
+on:
+  push:
+    branches: [feature/runpod-video-worker]
+    paths:
+      - 'services/runpod-video-worker/**'
+      - '.github/workflows/runpod-video-worker-qa.yml'
+  pull_request:
+    paths:
+      - 'services/runpod-video-worker/**'
+      - '.github/workflows/runpod-video-worker-qa.yml'
+  workflow_dispatch:
+
+jobs:
+  cpu-integration:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/runpod-video-worker
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install FFmpeg and CPU test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+          python -m pip install -r requirements-test.txt
+      - name: Run tests and verify syntax
+        run: |
+          python -m pytest -q
+          python -m compileall -q src scripts tests
+      - name: Verify standalone worker only
+        run: |
+          test -f Dockerfile
+          test -f src/worker.py
+          test -f scripts/smoke_runpod.py
+          test -f .env.example
+          test ! -f .env
