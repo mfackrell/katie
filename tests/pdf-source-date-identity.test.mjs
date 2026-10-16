@@ -67,3 +67,13 @@ test('trailing document years remain content scope for fresh and saved named PDF
   assert.equal(select(message,[old],[],1,now,[{...old,fileId:'new'}]),null);
  }
 });
+
+test('multiple source-specific upload-date scopes clarify rather than selecting the first date for all files',()=>{
+ const select=selector(),today='2026-10-16T01:00:00Z',yesterday='2026-10-15T12:00:00Z';
+ const sources=['a.pdf','b.pdf'].flatMap(fileName=>[yesterday,today].map((createdAt,index)=>({...old,id:fileName+index,chatId:fileName+index,fileName,createdAt})));
+ const result=select('Compare "a.pdf" uploaded yesterday with "b.pdf" uploaded today',sources,[],0,now);
+ assert.equal(result.selections.length,0);assert.match(result.clarification,/multiple source-specific upload dates/);
+ const shared=select('Compare "a.pdf" and "b.pdf" uploaded yesterday',sources,[],0,now);
+ assert.equal(shared.clarification,undefined);assert.equal(shared.selections.length,2);
+ assert.ok(shared.selections.every(item=>item.attachment.createdAt===yesterday));
+});
