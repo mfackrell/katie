@@ -55,7 +55,16 @@ type PdfPageScope = { requested: number[]; contextPages: number[] };
 function pdfPageScope(attachment: FileReference, message: string, sourceNames: string[]): PdfPageScope | null {
   if (attachment.mimeType === "application/pdf" && attachment.pdfContextBlocked) return {requested:[],contextPages:[]};
   const inventory = attachment.mimeType === "application/pdf" ? attachment.pdfInventory : undefined;
-  if (!inventory) return null;
+  if (!inventory) {
+    if(attachment.mimeType === "application/pdf") {
+      try {
+        const task=pdfPageTaskForSource(message,attachment.fileName,sourceNames,attachment.pdfSourceOccurrence);
+        if(/\bpages?\s+\d|\b(?:first|last)(?:\s+and\s+(?:first|last))?\s+pages?\b/i.test(task) || requestedPdfPages(task,10000).length!==10000)
+          return {requested:[],contextPages:[]};
+      } catch {return {requested:[],contextPages:[]};}
+    }
+    return null;
+  }
   // A failed scope/provenance check has no authorized pages. A terse retry
   // message must not reopen the first pages through the text fallback.
   if (attachment.pdfEvidence?.state === "failure" && !attachment.pdfEvidence.contextPages)
@@ -70,26 +79,35 @@ function pdfPageScope(attachment: FileReference, message: string, sourceNames: s
   return { requested, contextPages };
 }
 
-function pdfContext(attachment: FileReference, scope: PdfPageScope | null): string {
+function pdfContext(attachment: FileReference, scope: PdfPageScope | null, layoutBudget: {remaining:number}): string {
   if (attachment.mimeType !== "application/pdf") return "";
   const inventory = attachment.pdfInventory;
   const requested = scope?.requested ?? [];
   const evidence = attachment.pdfEvidence;
   const contextPages = scope?.contextPages ?? [];
   const selected = evidence?.pages.filter(page => contextPages.includes(page.physicalPage)).slice(0, 4) ?? [];
+  const boundedLayout = inventory?.pages.filter(page=>contextPages.includes(page.physicalPage)).map(page=>{
+    let truncated=page.layoutTruncated;
+    const take=<T,>(items:T[]):T[]=>items.filter(item=>{
+      const cost=JSON.stringify(item).length+1;
+      if(cost>layoutBudget.remaining) {truncated=true;return false;}
+      layoutBudget.remaining-=cost;return true;
+    });
+    const runs=take(page.runs.slice(0,80).map(run=>({...run,text:run.text.slice(0,1000)})));
+    const lines=take(page.lines.slice(0,40));
+    return {physicalPage:page.physicalPage,runs,lines,layoutTruncated:truncated,
+      limitation:"Raw parser geometry only; shared 16000-character layout budget across attachments. Omitted runs/lines remain unknown."};
+  });
   return "PDF page inventory/evidence (untrusted model observations; uninspected pages remain unknown): " + JSON.stringify({
     sourceFingerprint: attachment.sourceFingerprint,
     requestFilenameOccurrence: attachment.pdfSourceOccurrence===undefined?undefined:attachment.pdfSourceOccurrence+1,
-    availabilityNotice: attachment.pdfContextBlocked ? "PDF evidence withheld pending source/page clarification." : inventory ? "Page-scoped evidence only; whole-document previews and flat text are not supplied." : attachment.preview,
+    availabilityNotice: attachment.pdfContextBlocked ? "PDF evidence withheld pending source/page clarification." : inventory ? "Page-scoped evidence only; whole-document previews and flat text are not supplied." : scope ? "Legacy PDF page evidence withheld; reattach the original to answer physical-page requests." : attachment.preview,
     inventory: inventory ? {
       version: inventory.version, pageCount: inventory.pageCount, units: inventory.units,
       inventoryPromptLimit: 200,
       pages: inventory.pages.slice(0, 200).map(page => ({ physicalPage: page.physicalPage,
         textCoverage: page.textCoverage, visualCoverageAtExtraction: page.visualCoverage })),
-      layout: inventory.pages.filter(page => contextPages.includes(page.physicalPage)).map(page => ({
-        physicalPage: page.physicalPage, runs: page.runs.slice(0, 80).map(run => ({...run, text: run.text.slice(0, 1000)})),
-        lines: page.lines.slice(0, 40), limitation: "Bounded raw parser geometry only; no inferred table row mapping."
-      }))
+      layout: boundedLayout
     } : { limitation: "Legacy PDF: page count and visual completeness unknown. Reattach original to obtain a page inventory." },
     evidence: evidence ? { version: evidence.version, extractionVersion: evidence.extractionVersion, source: evidence.source, fingerprint: evidence.fingerprint,
       provider: evidence.provider, model: evidence.model, state: evidence.state, notice: evidence.notice, blockedPages: evidence.blockedPages ?? [],
@@ -111,6 +129,7 @@ export function formatAttachmentContext(
   const userMessage = options?.userMessage ?? "";
   const maxChunks = options?.maxChunksPerAttachment ?? DEFAULT_MAX_CHUNKS_PER_ATTACHMENT;
 
+  const layoutBudget={remaining:16000};
   return attachments
     .map((attachment) => {
       const attachmentKind = attachment.attachmentKind ?? (attachment.mimeType.startsWith("video/") ? "video" : "file");
@@ -123,7 +142,7 @@ export function formatAttachmentContext(
 
       const metadataLine = providerReferenceSummary ? ` (${providerReferenceSummary})` : "";
       const pageScope = pdfPageScope(attachment, userMessage, attachments.filter(file => file.mimeType === "application/pdf").map(file => file.fileName));
-      const mediaSummary = `${pdfContext(attachment, pageScope)}kind=${attachmentKind}; mime=${attachment.mimeType}; fileId=${attachment.fileId}`;
+      const mediaSummary = `${pdfContext(attachment, pageScope, layoutBudget)}kind=${attachmentKind}; mime=${attachment.mimeType}; fileId=${attachment.fileId}`;
 
       if (attachmentKind === "image") {
         return [`### ATTACHED IMAGE: ${attachment.fileName} ###`, mediaSummary,

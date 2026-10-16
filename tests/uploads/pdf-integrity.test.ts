@@ -600,3 +600,19 @@ test("page receipt storage retries recover transient errors and lost acknowledgm
   }finally{globalThis.fetch=oldFetch;globalThis.__KATIE_SUPABASE_ADMIN_CLIENT__=oldAdmin;if(oldKey)process.env.GOOGLE_API_KEY=oldKey;else delete process.env.GOOGLE_API_KEY;}
  }
 });
+
+test("native-inspection prohibition survives scoped continuation and service restart",async()=>{
+ const {service,storage}=storageFixture();const [upload]=await service.ingestPdfUploads([file(Array.from({length:8},()=>''))]);const [ref]=await service.hydrate([upload]);
+ const chat='00000000-0000-4000-8000-000000000001',actor='00000000-0000-4000-8000-000000000002';
+ const saved=await service.persist(chat,ref,upload.storageToken,{actorId:actor});
+ const oldFetch=globalThis.fetch,oldKey=process.env.GOOGLE_API_KEY;let calls=0;
+ process.env.GOOGLE_API_KEY='offline-test-key';globalThis.fetch=async()=>{calls++;throw Error('Native calls prohibited');};
+ try {
+  const first=await service.pdfEvidence(chat,saved,actor,"Read pages 1-8 but don't OCR or inspect it",async()=>true);
+  assert.equal(first.nativeInspectionProhibited,true);assert.equal(calls,0);
+  const restart=createStoredUploadService(storage,'offline-secret');
+  const next=await restart.pdfEvidence(chat,saved,actor,'continue',async()=>true);
+  assert.equal(next.nativeInspectionProhibited,true);assert.equal(next.state,'not-requested');assert.equal(calls,0);
+  assert.deepEqual(next.requestedPages,[1,2,3,4,5,6,7,8]);
+ }finally{globalThis.fetch=oldFetch;if(oldKey)process.env.GOOGLE_API_KEY=oldKey;else delete process.env.GOOGLE_API_KEY;}
+});

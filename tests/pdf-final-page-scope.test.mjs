@@ -135,3 +135,26 @@ test('pending source clarification withholds parsed, layout and cached visual co
  onlyPages(text,[],6);assert.doesNotMatch(text,/CHUNK_PAGE_|VISUAL_PAGE_|LAYOUT_PAGE_/);
  assert.match(text,/withheld pending source\/page clarification/);
 });
+
+test('legacy physical-page requests withhold every unscoped fallback',()=>{
+ const file=fixture();delete file.pdfInventory;file.extractedChunks=file.extractedChunks.map(({physicalPage,...chunk})=>chunk);
+ for(const message of ['What is on page 5 of report.pdf?','Read first and last pages of report.pdf','Read page A of report.pdf']){
+  const context=formatAttachmentContext([file],{userMessage:message});
+  assert.doesNotMatch(context,/CHUNK_PAGE_|GLOBAL_PREVIEW|GLOBAL_FLAT/);
+  assert.match(context,/Legacy PDF page evidence withheld/);
+ }
+ assert.match(formatAttachmentContext([file],{userMessage:'Read report.pdf'}),/CHUNK_PAGE_1/);
+});
+test('dense layouts share one aggregate prompt budget across all selected PDFs',()=>{
+ const files=Array.from({length:5},(_,i)=>{
+  const f=fixture(4);f.fileName=`dense-${i}.pdf`;
+  for(const p of f.pdfInventory.pages){p.runs=Array.from({length:80},()=>({text:'D'.repeat(1000),x:1,y:2,w:3}));p.lines=Array.from({length:40},()=>({x:1,y:2,l:3}));}
+  return f;
+ });
+ const context=formatAttachmentContext(files,{userMessage:'Read all PDFs'});
+ const entries=context.split('\n').filter(line=>line.startsWith('PDF page inventory/evidence')).map(line=>JSON.parse(line.slice(line.indexOf('{'))));
+ const layoutCost=entries.flatMap(e=>e.inventory.layout).flatMap(p=>[...p.runs,...p.lines]).reduce((sum,item)=>sum+JSON.stringify(item).length+1,0);
+ assert.ok(layoutCost<=16000,layoutCost);assert.ok(layoutCost>1000);
+ assert.ok(entries.some(e=>e.inventory.layout.some(p=>p.layoutTruncated)));
+ assert.ok(context.length<30000,context.length);
+});
