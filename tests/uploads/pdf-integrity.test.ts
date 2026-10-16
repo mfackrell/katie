@@ -312,3 +312,76 @@ test("private page receipts survive service restart, separate same-name sources 
   await assert.rejects(restarted.pdfEvidence(chatId,savedA,actorId,"read page 1",async()=>true),/metadata unavailable/);
  } finally {globalThis.fetch=previousFetch;globalThis.__KATIE_SUPABASE_ADMIN_CLIENT__=previousAdmin;delete process.env.GOOGLE_API_KEY;}
 });
+
+test("mixed cached/new comparisons supply both observations and disclose omitted cached pages", async () => {
+ const [ref] = await buildFileReferences([file(["","","","",""])]);
+ const previousFetch = globalThis.fetch;
+ process.env.GOOGLE_API_KEY = "offline-test-key";
+ let calls = 0;
+ globalThis.fetch = async (_input, init) => {
+  calls++;
+  const prompt = JSON.parse(String(init?.body)).contents[0].parts[0].text;
+  const pages = /physical PDF pages ([0-9,]+)/.exec(prompt)![1].split(",").map(Number);
+  return Response.json({candidates:[{finishReason:"STOP",content:{parts:[{text:JSON.stringify({fingerprint:ref.sourceFingerprint,pages:pages.map(physicalPage=>({physicalPage,status:"readable",observations:`FINDING-${physicalPage}`,rows:[]}))})}]}}]});
+ };
+ try {
+  const source = file(["","","","",""]);
+  const cached = await inspectPdf(ref,"read page 1",source);
+  const mixed = await inspectPdf(ref,"compare pages 1 and 2",source,cached);
+  assert.equal(calls,2);
+  assert.deepEqual(mixed.contextPages,[1,2]);
+  // The route shares these attachment parameters with generation and independent review.
+  for (const task of ["compare pages 1 and 2", "independently review pages 1 and 2"]) {
+   const context = formatAttachmentContext([{...ref,pdfEvidence:mixed}],{userMessage:task});
+   assert.match(context,/FINDING-1/); assert.match(context,/FINDING-2/);
+  }
+  const more = await inspectPdf(ref,"read pages 3-5",source,mixed);
+  const bounded = await inspectPdf(ref,"compare pages 1-5",source,more);
+  const context = formatAttachmentContext([{...ref,pdfEvidence:bounded}],{userMessage:"compare pages 1-5"});
+  assert.match(context,/"omittedCachedPages":\[5\]/);
+  assert.equal(calls,3);
+ } finally {globalThis.fetch=previousFetch;delete process.env.GOOGLE_API_KEY;}
+});
+
+test("multi-batch PDF indexing resumes canonical evidence after restart and different questions without inference", async () => {
+ const {service,storage}=storageFixture();
+ const [uploaded]=await service.ingestPdfUploads([file(["","","","","",""])]);
+ const [ref]=await service.hydrate([uploaded]);
+ const chatId="00000000-0000-4000-8000-000000000001",actorId="00000000-0000-4000-8000-000000000002";
+ const saved=await service.persist(chatId,ref,uploaded.storageToken,{actorId});
+ const previousFetch=globalThis.fetch, previousAdmin=globalThis.__KATIE_SUPABASE_ADMIN_CLIENT__;
+ let calls=0;
+ const progress=new Map<string,number>(), batches:Record<string,unknown>[]=[];
+ globalThis.__KATIE_SUPABASE_ADMIN_CLIENT__={rpc:async(name:string,args:Record<string,unknown>)=>{
+  if(name==="begin_media_evidence_ingestion")return {data:progress.get(String(args.p_hash)) ?? 0,error:null};
+  if(name==="append_media_evidence_batch") {
+   batches.push(args);
+   const next=Number(args.p_offset)+Array.from(String(args.p_text)).length;
+   progress.set(String(args.p_hash),next); return {data:next,error:null};
+  }
+  return {data:null,error:null};
+ }} as unknown as NonNullable<typeof globalThis.__KATIE_SUPABASE_ADMIN_CLIENT__>;
+ process.env.GOOGLE_API_KEY="offline-test-key";
+ globalThis.fetch=async(_input,init)=>{
+  calls++;
+  const prompt=JSON.parse(String(init?.body)).contents[0].parts[0].text;
+  const physicalPage=Number(/physical PDF pages ([0-9]+)/.exec(prompt)![1]);
+  const raw=JSON.stringify({fingerprint:ref.sourceFingerprint,pages:[{physicalPage,status:"readable",observations:"x".repeat(11000),rows:[Array(20).fill("y".repeat(500))]}]});
+  return Response.json({candidates:[{finishReason:"STOP",content:{parts:[{text:raw}]}}]});
+ };
+ try {
+  for(let page=1;page<=6;page++)await service.pdfEvidence(chatId,saved,actorId,`read page ${page}`,async()=>true);
+  assert.equal(calls,6);
+  const last=batches.at(-1)!;
+  assert.equal(last.p_offset,0);
+  const restarted=createStoredUploadService(storage,"offline-secret",{buildReferences:async()=>{throw Error("unexpected inference");}});
+  const recovered=await restarted.pdfEvidence(chatId,saved,actorId,"compare pages 1 and 2",async()=>true);
+  assert.equal(calls,6);
+  assert.equal(batches.at(-1)!.p_hash,last.p_hash);
+  assert.ok(Number(batches.at(-1)!.p_offset)>0);
+  assert.doesNotMatch(recovered.notice,/indexing is incomplete/);
+  const count=batches.length;
+  await restarted.pdfEvidence(chatId,saved,actorId,"read page 6",async()=>true);
+  assert.equal(batches.length,count);assert.equal(calls,6);
+ } finally {globalThis.fetch=previousFetch;globalThis.__KATIE_SUPABASE_ADMIN_CLIENT__=previousAdmin;delete process.env.GOOGLE_API_KEY;}
+});

@@ -557,7 +557,16 @@ export function createStoredUploadService(storage: Storage, secret: string, opti
         if(persisted.error) throw new Error("PDF evidence persistence unavailable; no automatic inference retry.");
       }
       if(evidence.pages.length && await live()) {
-        try { const complete=await indexEvidence({...attachment,actorId,chatId},"analysis",`pdf-visual-v1:${fingerprint}`,JSON.stringify(evidence),"partial; model-derived physical page observations");
+        // Index immutable observations, not per-request prompt selection or notices.
+        // Stable ordering lets indexEvidence resume the same hash after a restart.
+        const canonical = JSON.stringify({
+          version: evidence.version, extractionVersion: evidence.extractionVersion,
+          source: evidence.source, fingerprint: evidence.fingerprint,
+          provider: evidence.provider, model: evidence.model,
+          pages: [...evidence.pages].sort((a,b)=>a.physicalPage-b.physicalPage),
+          rawReports: [...evidence.rawReports].sort(),
+        });
+        try { const complete=await indexEvidence({...attachment,actorId,chatId},"analysis",`pdf-visual-v1:${fingerprint}`,canonical,"partial; model-derived physical page observations");
           if(!complete) evidence.notice+=" Saved evidence indexing is incomplete; revisit this source to continue indexing without inference."; }
         catch { evidence.notice+=" Saved evidence search indexing unavailable; revisit this source to retry indexing without inference."; }
       }
