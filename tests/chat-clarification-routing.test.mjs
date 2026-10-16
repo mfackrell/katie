@@ -346,3 +346,30 @@ test('actual saved-verification retry reviews the matched candidate without gene
   assert.equal(current.review_audit.pendingClarification.resumedByRequestId, 'current-request');
   assert.equal(f.rows[0].review_audit.pendingClarification.resolvedAt, undefined);
 });
+
+test('PDF source preselection borrows only the bound active review task', async () => {
+  const f = fixture();
+  const replay = await replayPosting(f);
+  const question = 'Would you like me to retry verification with the saved draft?';
+  const progress = f.helpers.applyAssistantToTaskProgress(replay.progress, { messageId: 'pdf-retry-question', text: question });
+  const history = [...replay.history, { id: 'pdf-retry-question', role: 'assistant', content: question }];
+  const current = addCurrentPending(f, progress, 'pdf-retry-question', question);
+  current.review_audit.pendingClarification.deliverable = 'Analyze report.pdf page 2';
+  current.review_audit.pendingClarification.sourceTurns = [{ id: 'latest-user', text: 'Analyze report.pdf page 2' }];
+  const start = routeSource.indexOf('    const pdfProgress =');
+  const end = routeSource.indexOf('    const memoryMode =', start);
+  assert.ok(start > 0 && end > start);
+  const run = message => vm.runInNewContext(compile(`(async()=>{${routeSource.slice(start, end)}return {pdfTaskContext,pdfSourceTask};})()`), {
+    ...f.globals, ...f.helpers, message, actorId: ACTOR_ID, chatId: CHAT_ID,
+    attachmentHistory: history, loadTaskProgress: async () => progress,
+    crypto: { randomUUID: () => 'source-selection-turn' },
+  });
+  assert.equal((await run('yes')).pdfTaskContext, 'Analyze report.pdf page 2');
+  for (const message of [SHORT_REPLY, 'New project: analyze my other business.', 'Read other.pdf page 3']) {
+    const result = await run(message);
+    assert.equal(result.pdfTaskContext, null, message);
+    assert.equal(result.pdfSourceTask, message);
+  }
+  current.review_audit.pendingClarification.binding.taskId = 'unrelated-task';
+  assert.equal((await run('yes')).pdfTaskContext, null);
+});
