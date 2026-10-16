@@ -96,8 +96,8 @@ export function pdfPageTaskForSource(message: string, sourceName: string, source
     const indices = spans.map((span, index) => Number(span[1]) === names.indexOf(sourceName) ? index : -1).filter(index => index >= 0);
     const chosen=sourceOccurrence===undefined ? indices.length===1?indices[0]:undefined : indices[sourceOccurrence];
     if (chosen===undefined) throw new Error("Please specify one page scope for each PDF source.");
-    const segment = segments[chosen + (prefixStyle ? 0 : 1)];
-    return `Read this PDF. ${pageLike(segment) ? segment : ""}`;
+    const segment = segments[chosen + (prefixStyle ? 0 : 1)].replace(/\b(?:and|with|to|versus|vs\.?|against)(?:\s+(?:the|my|this|that|new|fresh|current|saved|original|previous|earlier|older|historical|pdfs?|files?|documents?|copy|version|of))*\s*["'“‘«`]?\s*$/i, "");
+    return `Read this PDF. ${pageLike(segment) ? segment : ""}${isPdfNativeInspectionProhibited(message,[sourceName]) ? " Do not OCR or inspect this PDF." : ""}`;
 }
 
 export function requestedPdfPages(message: string, count: number, sourceNames: string[] = []): number[] {

@@ -202,3 +202,16 @@ test('unquoted to comparisons select both exact fresh and saved filenames',async
  const names=scope.resolvePdfNames('Compare a.pdf page 2 to b.pdf page 5',[pdf('a','a.pdf'),pdf('b','b.pdf')]);
  assert.equal(names.clarification,undefined);assert.deepEqual([...names.names],['a.pdf','b.pdf']);
 });
+
+test('same-name occurrence ordinals exclude intervening differently named sources',()=>{
+ const files=[pdf('new','report.pdf'),pdf('other','other.pdf'),pdf('old','report.pdf')];
+ const message='Compare new report.pdf page 1 and other.pdf page 2 with saved report.pdf page 3';
+ assert.equal(scope.pdfSourceOccurrence(message,'report.pdf',files,'fresh'),0);
+ assert.equal(scope.pdfSourceOccurrence(message,'report.pdf',files,'saved'),1);
+ assert.equal(scope.pdfSourceOccurrence(message,'other.pdf',files,'fresh'),0);
+ const inventory=load('lib/uploads/pdf-inventory.ts');
+ for(const [name,role,page] of [['report.pdf','fresh',1],['other.pdf','fresh',2],['report.pdf','saved',3]]){
+  const task=inventory.pdfPageTaskForSource(message,name,files.map(f=>f.fileName),scope.pdfSourceOccurrence(message,name,files,role));
+  assert.deepEqual(Array.from(inventory.requestedPdfPages(task,4)),[page]);
+ }
+});

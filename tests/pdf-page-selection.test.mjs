@@ -67,3 +67,16 @@ test('decoded PDF run and page text remove database-invalid controls while prese
  assert.equal(inventory.pages[0].text,expected);assert.equal(inventory.pages[0].runs[0].text,expected);
  assert.doesNotMatch(JSON.stringify(inventory),/\\u0000|\\u0001/);
 });
+
+test('derived per-source page tasks retain request-wide native restrictions',()=>{
+ const names=['a.pdf','b.pdf'];
+ for(const message of ["Read a.pdf page 1 and b.pdf page 2 but don't OCR either","Read page 1 of a.pdf and page 2 of b.pdf; do not inspect any PDF"]){
+  for(const [name,page] of [['a.pdf',1],['b.pdf',2]]){
+   const task=exports.pdfPageTaskForSource(message,name,names);
+   assert.deepEqual(Array.from(pages(task,3)),[page]);
+   assert.equal(exports.isPdfNativeInspectionProhibited(task,[name]),true,task);
+  }
+ }
+ const unrestricted=exports.pdfPageTaskForSource('Read a.pdf page 1 and b.pdf page 2','a.pdf',names);
+ assert.equal(exports.isPdfNativeInspectionProhibited(unrestricted,['a.pdf']),false);
+});
