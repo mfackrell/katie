@@ -11,7 +11,7 @@ const sourceClarification = "I could not resolve the complete PDF filename. Quot
 
 /** A space is legal inside a filename; it is not itself a source boundary. */
 function filenamePrefix(prefix: string): boolean {
-  const clause = prefix.split(/[\n;!?]/).at(-1)!.trim().replace(/^[,\s([{]+/, "");
+  const clause = prefix.split(/\bbut\b|[\n;!?]/i).at(-1)!.trim().replace(/^[,\s([{]+/, "");
   if (!clause) return true;
   const request = clause.replace(/^(?:(?:please|can you|could you|would you|i need you to|i want you to)\s+)+/i, "")
     .replace(/^(?:do not|don['’]t|never)\s+/i, "");
@@ -56,6 +56,19 @@ export function resolvePdfNames(message: string, files: NamedPdf[]): PdfNames {
       || !filenamePrefix(message.slice(precedingEnd,end-name.length))) return {names,explicit,clarification:sourceClarification};
     names.add(name.toLowerCase());spans.push({start:end-name.length,end,name:name.toLowerCase()});precedingEnd=end;
   }
+  const orderedSpans = [...spans].sort((a,b)=>a.start-b.start);
+  const prohibited = new Set<string>(), permitted = new Set<string>();
+  for (const [index,span] of orderedSpans.entries()) {
+    const before = message.slice(index ? orderedSpans[index-1].end : 0,span.start)
+      .split(/\b(?:but|and|then)\b|[;!?\n]/i).at(-1)!;
+    const negative = /\b(?:do\s+not|don['’]t|never)\s+(?:read|review|inspect|ocr|transcribe|scan|analy[sz]e|summari[sz]e|compare|open|use|check|examine|describe|audit|process)(?:\s+(?:the|my|this|that|attached|uploaded|saved|new|fresh|current|previous|earlier|older|historical|version|copy|of|pdf|file|document))*\s*$/i.test(before);
+    const outputConstraint = new Set(orderedSpans.map(item=>item.name)).size===1 &&
+      /\b(?:do\s+not|don['’]t|never)\s+summari[sz]e\b/i.test(before) && isPdfContentRequest(message,available);
+    (negative && !outputConstraint ? prohibited : permitted).add(span.name);
+  }
+  if ([...prohibited].some(name=>permitted.has(name)))
+    return {names:new Set(),explicit,clarification:"The same PDF is both requested and prohibited. Specify only the sources to inspect."};
+  for (const name of prohibited) names.delete(name);
   const scopeText = [...spans].sort((a,b)=>b.start-a.start).reduce((text,span)=>text.slice(0,span.start)+" __PDF_SOURCE__ "+text.slice(span.end),message);
   // All validated filenames, including unquoted names, are data. Apply
   // source exclusions only after masking their complete spans.
@@ -70,10 +83,11 @@ function pdfNameRoles(message:string,literal:PdfNames) {
   let finalDateQualifier=false;
   const spans=literal.sourceSpans ?? [];
   for(const [index,span] of spans.entries()) {
+    if (!literal.names.has(span.name)) continue;
     const before=message.slice(index ? spans[index-1].end : 0,span.start);
     const after=message.slice(span.end,spans[index+1]?.start ?? message.length).split(/\b(?:and|with|but|versus|against)\b|[;?!\n]/i)[0];
     const savedQualifier=/\b(?:saved|previous|earlier|older|historical)(?:\s+(?:pdfs?|files?|documents?|copy|version))?(?:\s+of)?\s*$/i.test(before);
-    const datedQualifier=/^\s+(?:(?:uploaded|saved|attached)\s+|from\s+(?=(?:yesterday|last\s+week|(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten)\s+(?:days?|weeks?|months?|years?)\s+ago)\b))/i.test(after) && hasUploadDateReference(after);
+    const datedQualifier=/^\s+(?:(?:(?:(?:that|which)\s+)?I\s+|(?:that|which)\s+)?(?:uploaded|saved|attached)\s+|from\s+(?=(?:yesterday|last\s+week|(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten)\s+(?:days?|weeks?|months?|years?)\s+ago)\b))/i.test(after) && hasUploadDateReference(after);
     if(index===spans.length-1) finalDateQualifier=datedQualifier;
     const role=savedQualifier || datedQualifier ? "saved" : "fresh";
     mentions.push({name:span.name,role});
@@ -128,10 +142,11 @@ export function selectFreshPdfSources(message: string, fresh: FileReference[], t
   if (!literal.explicit && !targetsPdfKind && !allUploadedSources && (namesNonPdf || targetsNonPdfKind || timelineActive)) return none();
   if (wholeSet && /\b(?:only|except|excluding|exclude)\b/i.test(scopeText)) return none("The PDF selection includes conflicting or excluded sources. Specify the full filenames to inspect.");
   const freshNamed = pdfNameRoles(message,literal).freshNames;
-  const genericHistoricalDate=/\b(?:pdfs?|files?|documents?)\s+(?:(?:uploaded|saved|attached)\s+|from\s+(?=(?:yesterday|last\s+week|(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten)\s+(?:days?|weeks?|months?|years?)\s+ago)\b))/i.test(scopeText) && hasUploadDateReference(scopeText);
+  const genericHistoricalDate=/\b(?:pdfs?|files?|documents?)\s+(?:(?:(?:(?:that|which)\s+)?I\s+|(?:that|which)\s+)?(?:uploaded|saved|attached)\s+|from\s+(?=(?:yesterday|last\s+week|(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten)\s+(?:days?|weeks?|months?|years?)\s+ago)\b))/i.test(scopeText) && hasUploadDateReference(scopeText);
   if (!literal.explicit && ((!wholeSet && /\b(?:saved|previous|earlier|older|historical)\s+(?:pdfs?|files?|documents?)\b/i.test(scopeText)) || genericHistoricalDate) &&
       !/\b(?:new|current|fresh|attached|this)\s+(?:pdfs?|files?|documents?|upload)\b/i.test(scopeText)) return none();
-  const chosen = literal.explicit && !wholeSet ? pdfs.filter(file=>literal.names.has(file.fileName.toLowerCase()) && freshNamed.has(file.fileName.toLowerCase())) : pdfs;
+  const excludedNames = new Set((literal.sourceSpans ?? []).filter(span=>!literal.names.has(span.name)).map(span=>span.name));
+  const chosen = (literal.explicit && !wholeSet ? pdfs.filter(file=>literal.names.has(file.fileName.toLowerCase()) && freshNamed.has(file.fileName.toLowerCase())) : pdfs).filter(file=>!excludedNames.has(file.fileName.toLowerCase()));
   if (chosen.some(file=>chosen.some(other=>other.fileId !== file.fileId && other.fileName.toLowerCase() === file.fileName.toLowerCase())))
     return none("Several uploaded PDFs have the same filename. Select the intended source before I inspect it.");
   const all = /\b(?:compare|both|all|each)\b|\bevery\s+(?:attached\s+)?(?:pdfs?|files?|documents?)\b/i.test(message);
@@ -154,7 +169,7 @@ export function selectPdfEvidenceSource(message: string, catalog: ConversationAt
   // Dates inside the document question do not qualify its upload identity.
   // Parse only a date clause attached to a source or an upload verb.
   const scopeText = literal.scopeText ?? message;
-  const dateAnchors = [...scopeText.matchAll(/(?:__PDF_SOURCE__|\b(?:pdfs?|files?|documents?))\s+(?:(?:that|which)\s+(?:I\s+)?)?(?:uploaded|saved|attached)\s+|\b(?:uploaded|saved|attached)\s+(?:(?:the|my|this|that)\s+)?(?:__PDF_SOURCE__|pdfs?|files?|documents?)\s+(?:(?:from|on|during|in)\s+)?|\b(?:uploaded|saved|attached)\s+(?!__PDF_SOURCE__|pdfs?\b|files?\b|documents?\b)|(?:__PDF_SOURCE__|\b(?:pdfs?|files?|documents?))\s+from\s+(?=(?:yesterday|last\s+week|(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten)\s+(?:days?|weeks?|months?|years?)\s+ago)\b)/gi)];
+  const dateAnchors = [...scopeText.matchAll(/(?:__PDF_SOURCE__|\b(?:pdfs?|files?|documents?))\s+(?:(?:(?:that|which)\s+)?I\s+|(?:that|which)\s+)?(?:uploaded|saved|attached)\s+|\b(?:uploaded|saved|attached)\s+(?:(?:the|my|this|that)\s+)?(?:__PDF_SOURCE__|pdfs?|files?|documents?)\s+(?:(?:from|on|during|in)\s+)?|\b(?:uploaded|saved|attached)\s+(?!__PDF_SOURCE__|pdfs?\b|files?\b|documents?\b)|(?:__PDF_SOURCE__|\b(?:pdfs?|files?|documents?))\s+from\s+(?=(?:yesterday|last\s+week|(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten)\s+(?:days?|weeks?|months?|years?)\s+ago)\b)/gi)];
   if (dateAnchors.length > 1) return {method:"none",selections:[],clarification:"This comparison gives multiple source-specific upload dates. Select each PDF version separately, or specify one shared upload-date range before comparing them."};
   const dateAnchor = dateAnchors[0];
   const dateText = dateAnchor ? scopeText.slice(dateAnchor.index + dateAnchor[0].length)
@@ -167,7 +182,9 @@ export function selectPdfEvidenceSource(message: string, catalog: ConversationAt
   const sharedDate = qualifiedToken === sourceTokens.length - 1 && /\b(?:both|all|each)\s+__PDF_SOURCE__/i.test(scopeText);
   const datedName = qualifiedToken >= 0 && !sharedDate
     ? literal.sourceSpans?.[qualifiedToken]?.name : undefined;
+  const excludedNames = new Set((literal.sourceSpans ?? []).filter(span=>!literal.names.has(span.name)).map(span=>span.name));
   const pdfs = allPdfs.filter(file => {
+    if (excludedNames.has(file.fileName.toLowerCase())) return false;
     if (!dateScoped || (datedName && file.fileName.toLowerCase() !== datedName)) return true;
     const created = Date.parse(file.createdAt ?? "");
     return Number.isFinite(created) && (!date?.after || created >= Date.parse(date.after)) && (!date?.before || created < Date.parse(date.before));

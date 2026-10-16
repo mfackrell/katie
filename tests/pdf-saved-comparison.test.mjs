@@ -149,3 +149,23 @@ test('relative historical PDF sets without a saved adjective also exclude curren
  const selected=scope.selectPdfEvidenceSource(message,saved,[],1,new Date('2026-10-16T12:00:00Z'),fresh);
  assert.equal(selected.clarification,undefined);assert.equal(selected.selections.length,2);
 });
+
+test('first-person dated source qualifiers exclude current uploads',()=>{
+ const fresh=[pdf('new','report.pdf')],saved=[{...pdf('old','report.pdf'),createdAt:'2026-10-15T12:00:00Z'}];
+ for(const subject of ['the PDF','report.pdf','"report.pdf"'])for(const relative of ['I','that I','which I'])for(const verb of ['uploaded','saved','attached']){
+  const message=`Analyze ${subject} ${relative} ${verb} yesterday`;
+  assert.equal(scope.selectFreshPdfSources(message,fresh,false,saved).fileIds.size,0,message);
+  const decision=scope.selectPdfEvidenceSource(message,saved,[],1,new Date('2026-10-16T12:00:00Z'),fresh);
+  assert.equal(decision.clarification,undefined,message);
+  assert.deepEqual(Array.from(decision.selections,x=>x.attachment.id),['old'],message);
+ }
+});
+test('negative actions select only permitted named PDFs across fresh and saved sources',async()=>{
+ for(const fresh of [[pdf('a','a.pdf'),pdf('b','b.pdf')],[]])for(const quoted of [true,false])for(const negative of ["don't",'do not','never']){
+  const name=x=>quoted?`"${x}.pdf"`:`${x}.pdf`;
+  const result=await run(`Read ${name('a')} but ${negative} read ${name('b')}`,fresh,fresh.length?[]:[pdf('a','a.pdf'),pdf('b','b.pdf')]);
+  assert.equal(result.attachmentDecision.clarification,undefined);
+  assert.equal(result.freshPdfSelection?.clarification,undefined);
+  assert.deepEqual(Array.from(result.attachments,x=>x.fileId),['a']);
+ }
+});
