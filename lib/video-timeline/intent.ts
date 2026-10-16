@@ -15,7 +15,7 @@ function withoutResolvedFilename(message: string, filename?: string): string {
   const literal = filename.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   // The resolver's extension matcher ends at an ASCII word boundary, not an
   // ASCII-only punctuation list. Consume adjacent punctuation, not quoted text.
-  const boundary = "(?![a-z0-9_])(?:(?![\"'])\\p{P})*";
+  const boundary = "(?![a-z0-9_])(?:(?!\\p{Quotation_Mark})\\p{P})*";
   return message
     .replace(new RegExp(`(^|\\s)(["'])${literal}\\2${boundary}`, "giu"), "$1 ")
     .replace(new RegExp(`(^|[\\s"'])${literal}${boundary}`, "giu"), "$1 ");
@@ -36,7 +36,7 @@ export function timelineIntent(message: string, resolvedFilename?: string): Time
   const range = /\bbetween\s*([\d:.+-]+)\s*(?:seconds?\s*)?and\s*([\d:.+-]+)/i.exec(message);
   const queryText = first ? withoutResolvedFilename(message, resolvedFilename).replace(range?.[0] ?? /$^/, " ") : "";
   // A trailing request courtesy is not an event term; quoted "please" remains evidence.
-  const eventText = /\bwhen\b/i.test(message) ? queryText.replace(/(?:^|\s)please(?:(?!["'])\p{P}|\s)*$/iu, " ") : queryText;
+  const eventText = /\bwhen\b/i.test(message) ? queryText.replace(/(?:^|\s)please(?:(?!\p{Quotation_Mark})\p{P}|\s)*$/iu, " ") : queryText;
   const query = first ? eventText.replace(/\b(?:when|did|does|the|a|an|first|appear(?:ed)?|show|up|occur|was|observed|in|this|that|video|clip|recording|footage|seconds?)\b|[?.,]/gi," ").trim().replace(/\s+/g," ").slice(0,200) : undefined;
   if (range) {
     const intent = first ? {kind:"first" as const, query} : {kind:"range" as const};
