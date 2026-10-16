@@ -55,6 +55,7 @@ export interface ResearchEvidenceBundle {
 }
 
 export interface ExtractedTextChunkReference {
+  physicalPage?: number;
   index: number;
   total: number;
   text: string;
@@ -66,6 +67,9 @@ export interface FileReference {
   imageDataUrl?: string;
   nativeInspectionRequired?: boolean;
   storageToken?: string;
+  sourceFingerprint?: string;
+  pdfInventory?: import("@/lib/uploads/pdf-inventory").PdfInventory;
+  pdfEvidence?: import("@/lib/uploads/pdf-evidence").PdfEvidence;
   fileId: string;
   fileName: string;
   mimeType: string;

@@ -1,3 +1,4 @@
+import { ingestPdfUploads } from "@/lib/uploads/stored-uploads";
 import { NextRequest, NextResponse } from "next/server";
 import { buildFileReferences } from "@/lib/uploads/build-file-references";
 
@@ -18,7 +19,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "No files were uploaded." }, { status: 400 });
     }
 
-    const fileReferences = await buildFileReferences(files);
+    const fileReferences = await (files.some(file=>file.type === "application/pdf" || /\.pdf$/i.test(file.name)) ? ingestPdfUploads(files) : buildFileReferences(files));
     console.log("[Upload API] built file references", { count: fileReferences.length });
     fileReferences.forEach((fileReference) => {
       console.log("[Upload API] built file reference", {
@@ -40,7 +41,7 @@ export async function POST(request: NextRequest) {
       message.includes("Too many files") ||
       message.includes("too large") ||
       message.includes("empty") ||
-      message.includes("Failed to parse");
+      message.includes("Failed to parse") || message.includes("Invalid PDF");
 
     return NextResponse.json({ error: message }, { status: isClientError ? 400 : 500 });
   }
