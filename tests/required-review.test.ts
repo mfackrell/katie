@@ -778,3 +778,94 @@ test("capability-inference gate cannot approve an explicitly failed reasoning ch
   invalid.checks[index].evidence = "The answer wrongly concludes no capability from an absent label.";
   assert.throws(() => validateAnswerReview(invalid, assessment), /Approval contradicts failed acceptance checks/);
 });
+
+
+test("new explicit application question isolates contract negotiation from completed earlier questions", async () => {
+  const parent = "FP&A/P&L Advisor for a PE-backed distribution company. The role needs executive financial partnering, P&L insight, PE ownership experience, and broader industrial experience.";
+  const priorQuestion = "Please share a relevant example of owning FP&A or P&L responsibilities in a PE-backed industrial company.";
+  const priorCorrection = "Use the education engagement as the primary example and keep the industrial experience separate.";
+  const latest = "Please share 3 to 5 examples of your relevant experience.";
+  const progress = {
+    version: 1 as const,
+    objective: { text: latest, userMessageId: "latest" },
+    projectContext: { text: parent, userMessageId: "job" },
+    stage: "working" as const,
+    nextAction: "continue_original_goal" as const,
+    pending: [],
+    answered: [],
+    lastAssistantMessageId: null,
+    lastUserMessageId: "latest",
+    lastUserIntent: "new_task" as const,
+  };
+  const source: ChatGenerateParams = {
+    name: "Katie",
+    modelId: "lead",
+    persona: "Executive application advisor. Verified career evidence is available in memory.",
+    summary: "",
+    history: [
+      { role: "user", content: parent },
+      { role: "user", content: priorQuestion },
+      { role: "user", content: priorCorrection },
+    ],
+    user: latest,
+  };
+  const baseline = reviewBaseline(source, progress);
+  assert.deepEqual(baseline.contractTurns, [{ id: "latest-user", text: latest }]);
+  assert.match(baseline.text, /ACTIVE CONTRACT SOURCES/);
+  assert.match(baseline.text, /BACKGROUND USER EVIDENCE/);
+  assert.match(baseline.text, /PE-backed industrial company/);
+  assert.ok(!baseline.text.includes('"id":"turn-1"'), "Completed earlier turns must not retain contract source IDs.");
+
+  const a: IndependentAssessment = {
+    objective: "Provide 3 to 5 representative examples of the user's relevant experience for the current opportunity.",
+    qualifications: ["Executive financial partnership, P&L analysis, PE-backed leadership, and industrial finance."],
+    strongestEvidence: ["Use the strongest distinct examples supported by the career record."],
+    criteria: ["Select 3 to 5 distinct examples that collectively demonstrate the opportunity's major needs."],
+    synthesis: {
+      conclusion: "Show broad, representative fit rather than repeating one earlier subtopic.",
+      dimensions: [{ dimension: "Relevant breadth", supportedScope: "PE-backed leadership plus industrial and operating finance", evidence: ["Verified career evidence"] }],
+      emphasis: "Each example should add a distinct capability.",
+    },
+    taskContract: {
+      deliverable: "Three to five examples of relevant experience.",
+      requirements: [{ id: "examples", requirement: "Provide 3 to 5 examples of relevant experience.", sourceId: "latest-user", quote: latest, status: "active" }],
+      conflicts: [],
+    },
+  };
+  const draftText = "1. PE-backed interim CFO leadership. 2. Industrial P&L ownership. 3. Multinational finance recovery. 4. Operating leadership in a growing products company.";
+  const candidate: ProviderResponse = { provider: "anthropic", model: "lead", text: draftText };
+  const phases: string[] = [];
+  const reviewer = makeProvider("openai", async p => {
+    if (p.persona.includes("KATIE_INDEPENDENT_ASSESSMENT")) {
+      phases.push("assessment");
+      assert.ok(!p.user.includes('"id":"turn-1"'));
+      assert.match(p.user, /BACKGROUND USER EVIDENCE/);
+      return response("openai", "reviewer", a);
+    }
+    phases.push("review");
+    return response("openai", "reviewer", verdict("approve", a));
+  });
+  const lead = makeProvider("anthropic", async p => {
+    if (!p.persona.includes("KATIE_TASK_CONTRACT_VALIDATION")) throw new Error("Unexpected revision");
+    phases.push("contract");
+    return response("anthropic", "lead", {
+      verdict: "approve",
+      findings: "The contract faithfully captures the active broad examples question.",
+      issueType: "none",
+      sourceCoverage: [{ sourceId: "latest-user", finding: "This is the sole active contract source for the new deliverable." }],
+    });
+  });
+  const result = await runRequiredDraftReview({
+    requestId: "active-contract-isolation",
+    draft: candidate,
+    params: source,
+    taskProgress: progress,
+    leadProvider: lead,
+    deadlineMs: deadline(),
+    selectHelper: async () => ({ provider: reviewer, modelId: "reviewer" }),
+  });
+  assert.equal(result.audit.status, "approved");
+  assert.deepEqual(phases, ["assessment", "contract", "review"]);
+  assert.equal(result.audit.contractValidation?.sourceCoverage.length, 1);
+  assert.equal(result.audit.contractValidation?.sourceCoverage[0].sourceId, "latest-user");
+});
