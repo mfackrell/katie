@@ -90,3 +90,11 @@ test('indirect and inflected native prohibitions remain binding',()=>{
  }
  assert.equal(exports.isPdfNativeInspectionProhibited('Read a.pdf without using OCR on b.pdf',['a.pdf']),false);
 });
+
+test('text-only exclusivity prevents native inspection without requiring a negative verb',()=>{
+ for(const instruction of ['using extracted text only','using only the parsed text','use only machine-readable text','use text only']){
+  assert.equal(exports.isPdfNativeInspectionProhibited(`Summarize report.pdf ${instruction}`,['report.pdf']),true);
+ }
+ assert.equal(exports.isPdfNativeInspectionProhibited('Summarize b.pdf using extracted text only',['a.pdf']),false);
+ assert.equal(exports.isPdfNativeInspectionProhibited('Summarize report.pdf using extracted text',['report.pdf']),false);
+});

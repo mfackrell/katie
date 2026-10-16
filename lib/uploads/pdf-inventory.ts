@@ -156,10 +156,12 @@ export function isPdfLocatorRequest(message: string): boolean {
 export function isPdfContentRequest(message: string, sourceNames: string[] = []): boolean {
   if (!message.trim() || isPdfLocatorRequest(message)) return false;
   message = maskPdfSourceNames(message, sourceNames);
-  const attachmentPronoun = sourceNames.length>0 && /\b(?:it|them)\b/i.test(message) && /\b(?:say|says|show|shows|contain|contains|mean|means|cover|covers|mention|mentions|reveal|ocr|transcribe|scan|check|examine|describe|audit|process|look)\b|\b(?:in|inside|within|from)\s+(?:it|them)\b/i.test(message);
+  const attachmentPronoun = sourceNames.length>0 && /\b(?:it|them)\b/i.test(message) && /\b(?:say|says|show|shows|contain|contains|mean|means|cover|covers|mention|mentions|reveal|read|extract|analy[sz]e|inspect|review|summari[sz]e|compare|explain|interpret|calculate|reconcile|ocr|transcribe|scan|check|examine|describe|audit|process|look)\b|\b(?:in|inside|within|from)\s+(?:it|them)\b/i.test(message);
   const sourceReference = attachmentPronoun || /\b(?:pdfs?|documents?|attachments?|files?|pages?|statements?|reports?|sources?|this|these|those)\b|\.pdf\b/i.test(message);
-  const explicit = /\b(?:read|extract|analy[sz]e|inspect|review|summari[sz]e|compare|explain|interpret|calculate|reconcile)\b/i.test(message)
+  const contentReference = /\b(?:transactions?|charges?|amounts?|values?|totals?|rows?|columns?|charts?|tables?|figures?|scans?|extracted text|parsed text)\b/i.test(message);
+  const explicit = ((sourceReference || contentReference) && /\b(?:read|extract|analy[sz]e|inspect|review|summari[sz]e|compare|explain|interpret|calculate|reconcile)\b/i.test(message))
     || (sourceReference && /\b(?:ocr|transcribe|scan|check|examine|describe|audit|process|look\s+(?:at|through|over))\b/i.test(message));
+  if(sourceNames.length>0 && /^(?:please\s+)?(?:read|review|inspect|analy[sz]e|summari[sz]e|ocr|transcribe|scan)[.!?\s]*$/i.test(message)) return true;
   const storedForLater = /\b(?:keep|save|store|retain|upload|attach)\b.{0,100}\b(?:later|reference|storage|only|do not|don't)\b/i.test(message);
   if (storedForLater) {
     const authorized=message.split(/[;!?\n]|\b(?:but|then|and)\b/i).some(clause=>
@@ -173,7 +175,7 @@ export function isPdfContentRequest(message: string, sourceNames: string[] = [])
       .map(clause => clause.split(/\b(?:do not|don['’]t|never|without)\b/i)[0]).join(" ");
     const positiveTask = sourceReference && /\b(?:check|examine|describe|audit|process|look\s+(?:at|through|over))\b/i.test(positive)
       ? positive + " PDF source" : positive;
-    if (!positive.trim() || !isPdfContentRequest(positiveTask)) return false;
+    if (!positive.trim() || !isPdfContentRequest(positiveTask,sourceNames)) return false;
   }
   if (/\b(?:tell me a joke|write (?:me )?a (?:joke|poem)|weather|codebase|repository)\b/i.test(message) && !explicit) return false;
   return (attachmentPronoun && /\b(?:what|where|which|how|why|is|are|does|did|can)\b/i.test(message)) || explicit || /\b(?:find|list|identify)\b.{0,80}\b(?:transactions?|rows?|values?|amounts?|totals?|pages?|charts?|tables?)\b/i.test(message) || /^\s*(?:continue|go on|proceed|next(?: pages?)?)\s*[.!?]?\s*$/i.test(message)
@@ -186,7 +188,10 @@ export function isPdfNativeInspectionProhibited(message: string, sourceNames: st
   return message.split(/\b(?:but|then|however)\b|[;!?\n]/i).some(clause => {
     const masked = maskPdfSourceNames(clause,sourceNames);
     const ban = /\b(?:do not|don['’]t|never|without)\s+(?:(?:us(?:e|ing)|perform(?:ing)?|run(?:ning)?|do(?:ing)?|rely(?:ing)?\s+on)\s+)?(?:(?:any|the|native|visual|automated)\s+)*(?:ocr|transcri(?:be|bing|ption)|scan(?:ning)?|inspect(?:ing|ion)?|process(?:ing)?)\b/i.exec(masked);
-    if (!ban) return false;
+    if (!ban) {
+      const textOnly=/\bonly\s+(?:the\s+)?(?:(?:parsed|extracted|machine[- ]readable)\s+)?text\b|\b(?:(?:parsed|extracted|machine[- ]readable)\s+)?text\s+only\b/i.test(masked);
+      return textOnly && (/\bPDF source\b/i.test(masked) || !/\.pdf\b/i.test(masked));
+    }
     const target = masked.slice(ban.index + ban[0].length);
     // A named prohibition belongs to that source; an unqualified prohibition
     // still applies to the current source, including pronouns such as "it".

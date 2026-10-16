@@ -282,3 +282,12 @@ test('storage clauses do not authorize unrelated content actions',async()=>{
   const result=await run(message,[pdf('a','a.pdf')]);assert.deepEqual(result.inspected,['a'],message);
  }
 });
+
+test('generic unrelated actions do not authorize a PDF merely because it is attached',async()=>{
+ for(const message of ['Calculate 2+2','Explain quantum mechanics','Summarize photosynthesis','Analyze the following equation: x+2=4']){
+  const result=await run(message,[pdf('a','a.pdf')]);assert.equal(result.inspected.length,0,message);
+ }
+ for(const message of ['Extract every transaction','Read','Explain this PDF','Summarize it']){
+  const result=await run(message,[pdf('a','a.pdf')]);assert.deepEqual(result.inspected,['a'],message);
+ }
+});

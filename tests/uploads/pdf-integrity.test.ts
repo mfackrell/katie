@@ -543,6 +543,8 @@ test("positive reading can use parsed text while explicit OCR prohibition preven
  try {
   const result=await inspectPdf(ref,"Read this PDF but don't OCR it",new Blob());
   assert.equal(calls,0);assert.equal(result.state,"not-requested");assert.deepEqual(result.contextPages,[1]);
+  const textOnly=await inspectPdf(ref,"Summarize this PDF using extracted text only",new Blob());
+  assert.equal(textOnly.nativeInspectionProhibited,true);assert.equal(calls,0);assert.deepEqual(textOnly.contextPages,[1]);
   const context=formatAttachmentContext([{...ref,pdfEvidence:result}],{userMessage:"Read this PDF but don't OCR it"});
   assert.match(context,/known parsed text/);
   const cached:NonNullable<Parameters<typeof inspectPdf>[3]>={version:"pdf-visual-v1",fingerprint:ref.sourceFingerprint!,extractionVersion:"pdf-pages-v1",provider:"google",model:"gemini-2.5-flash",state:"partial",notice:"",pages:[{physicalPage:1,status:"readable",observations:"PRIVATE-CACHED-VISUAL",rows:[]}],rawReports:["PRIVATE-CACHED-REPORT"]};
