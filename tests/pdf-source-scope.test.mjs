@@ -47,7 +47,7 @@ async function run(message,fresh,timelineActive=false,timelineClarification){
   persistConversationAttachment:async(_chat,file,_token,{description})=>{retained.push(file.fileId);return {...file,id:'saved-'+file.fileId,...description};},
   inspectSavedPdf:async(_chat,source)=>{inspected.push(source.fileId);return {version:'test',pages:[{physicalPage:1,observations:`EVIDENCE-${source.fileId}`} ]};},
   getChatById:async()=>({actorId:'actor'}),
-  name:'Katie',personaForGeneration:'Base',taskProgressContext:'',storedWebsite:{context:'',fresh:false},creativeNarrativeRequest:false,summary:'',historyForProvider:[],messageForGeneration:message,resolvedRequestIntent:'analysis',resolvedRoutingIntentForReroute:null,
+  name:'Katie',personaForGeneration:'Base',resumptionContext:'',responsePolicy:{generationInstruction:null},taskProgressContext:'',storedWebsite:{context:'',fresh:false},creativeNarrativeRequest:false,summary:'',historyForProvider:[],messageForGeneration:message,resolvedRequestIntent:'analysis',resolvedRoutingIntentForReroute:null,
   saveProviderSystemAudit:async()=>{},requestId:'same',console,
  };
  const result=await vm.runInNewContext(code(`(async()=>{
@@ -57,7 +57,7 @@ async function run(message,fresh,timelineActive=false,timelineClarification){
  ${part('    const requestFingerprint =','    const idempotencyClaim =')}
  ${part('            for (const [index, attachment] of newAttachments.entries()) {','            if (timelineActive && temporalIntent) {')}
  ${part('            personaForGeneration += `\\n\\n${selectionContext()}`;', '            await saveMessage(chatId, {')}
- ${part('            for (const pdf of attachments.filter', '            if (shouldRunChunkedWorkflow(')}
+ ${part('            for (const pdf of attachments.filter', '            if (!verifyingSavedDraft && shouldRunChunkedWorkflow(')}
  return {params:createParams('offline'),attachments,requestFingerprint,clarification:attachmentDecision.clarification,access:selectionContext()};
 })()`),fixture);
  return {...result,inspected,retained};
