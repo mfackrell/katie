@@ -226,3 +226,14 @@ test('PDF comparisons retain unique saved media kinds and clarify missing or amb
   assert.ok(unresolved.attachmentDecision.clarification);assert.equal(unresolved.attachmentDecision.selections.length,0);
  }
 });
+
+test('fresh non-PDF inputs deterministically retain generically requested saved PDFs in both orders',async()=>{
+ const image={id:'fresh',fileId:'fresh',fileName:'fresh.png',mimeType:'image/png'},oldImage={...image,id:'old-image',fileId:'old-image',fileName:'old.png',chatId:'old-chat'};
+ for(const message of ['Compare this image with my PDF','Compare this image with the PDF','Compare my PDF with this image']){
+  const result=await run(message,[image],[pdf('old','report.pdf'),oldImage]);
+  assert.equal(result.attachmentDecision.clarification,undefined,message);assert.equal(result.selectorCalls,0,message);
+  assert.deepEqual(Array.from(result.attachments,x=>x.fileId),['fresh','old'],message);
+ }
+ const ambiguous=await run('Compare this image with my PDF',[image],[pdf('a','a.pdf'),pdf('b','b.pdf')]);
+ assert.ok(ambiguous.attachmentDecision.clarification);assert.equal(ambiguous.attachmentDecision.selections.length,0);
+});

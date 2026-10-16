@@ -751,15 +751,18 @@ async function executeChat(request: NextRequest) {
       const namedNonPdfs = catalog.filter(file => file.mimeType !== "application/pdf" &&
         message.toLowerCase().includes(file.fileName.toLowerCase()));
       const kindScope=maskPdfSourceNames(message,[...catalog,...newAttachments].map(file=>file.fileName));
-      const kinds=/\b(?:compare|contrast)\b/i.test(kindScope) ? [...kindScope.matchAll(/(?:\b(?:with|versus|vs\.?|against|to|and)\s+(?:(?:my|the|a|an|this|that|saved|uploaded|previous|earlier|original)\s+)*|\b(?:saved|uploaded|previous|earlier|original)\s+)(videos?|clips?|recordings?|audio|images?|photos?|pictures?|screenshots?|charts?|spreadsheets?|workbooks?|csv|text\s+files?|notes)\b/gi)].map(match=>match[1].toLowerCase()) : [];
-      const genericGroups=kinds.map(kind=>({kind,files:catalog.filter(file=>{
+      const kinds=/\b(?:compare|contrast)\b/i.test(kindScope) ? [...kindScope.matchAll(/(?:\b(?:with|versus|vs\.?|against|to|and)\s+(?:(?:my|the|a|an|this|that|saved|uploaded|previous|earlier|original)\s+)*|\b(?:saved|uploaded|previous|earlier|original)\s+)(videos?|clips?|recordings?|audio|images?|photos?|pictures?|screenshots?|charts?|spreadsheets?|workbooks?|csv|text\s+files?|notes)\b/gi)].map(match=>({kind:match[1].toLowerCase(),saved:/\b(?:saved|previous|earlier|original)\b/i.test(match[0])})) : [];
+      const matchesKind=(file:{mimeType:string},kind:string)=>{
         if(/^(?:video|clip|recording)/.test(kind)) return file.mimeType.startsWith("video/") || (kind.startsWith("recording") && file.mimeType.startsWith("audio/"));
         if(kind==="audio") return file.mimeType.startsWith("audio/");
         if(/^(?:image|photo|picture|screenshot|chart)/.test(kind)) return file.mimeType.startsWith("image/");
         if(/^(?:spreadsheet|workbook|csv)/.test(kind)) return /spreadsheet|excel|csv/.test(file.mimeType);
         return file.mimeType.startsWith("text/");
-      })}));
-      const unresolved=genericGroups.find(group=>group.files.length!==1);
+      };
+      const genericGroups=kinds.map(({kind,saved})=>({kind,
+        freshMatches:saved?0:newAttachments.filter(file=>matchesKind(file,kind)).length,
+        files:catalog.filter(file=>matchesKind(file,kind))}));
+      const unresolved=genericGroups.find(group=>(group.freshMatches || group.files.length)!==1);
       if(unresolved) pdfMemoryDecision={method:"none",selections:[],clarification:`Select the saved ${unresolved.kind} to compare with this PDF; I could not resolve exactly one source.`};
       else {
         const otherDecision = namedNonPdfs.length ? await selectStoredAttachments(message, namedNonPdfs, attachmentHistory, undefined,
@@ -767,7 +770,7 @@ async function executeChat(request: NextRequest) {
         pdfMemoryDecision = otherDecision.clarification
           ? { method: "none", selections: [], clarification: otherDecision.clarification }
           : { ...pdfMemoryDecision, selections: [...new Map([...pdfMemoryDecision.selections,
-              ...genericGroups.map(group=>({attachment:group.files[0],mode:"source" as const})),
+              ...genericGroups.filter(group=>!group.freshMatches).map(group=>({attachment:group.files[0],mode:"source" as const})),
               ...otherDecision.selections.filter(item => namedNonPdfs.some(file => file.id === item.attachment.id && file.chatId === item.attachment.chatId))]
               .map(item=>[`${item.attachment.chatId}/${item.attachment.id}`,item] as const)).values()] };
       }

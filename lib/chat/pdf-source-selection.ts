@@ -193,7 +193,8 @@ export function selectPdfEvidenceSource(message: string, catalog: ConversationAt
   const requestedSavedNames = new Set([...literalNames,...(freshCount ? pdfNameRoles(message,literal).savedNames : [])]);
   // A fresh upload is not permission to restore arbitrary old PDFs. Explicit
   // saved names still join the comparison alongside independently scoped uploads.
-  const requestsSavedSource = /\b(?:saved|original|previous|earlier|older|historical)\s+(?:__PDF_SOURCE__|pdfs?|files?|documents?)\b/i.test(scopeText) || dateScoped;
+  const genericMixedPdf = freshCount>0 && !freshPdfs.length && /\b(?:my|the|that|this)\s+pdfs?\b/i.test(scopeText);
+  const requestsSavedSource = genericMixedPdf || /\b(?:saved|original|previous|earlier|older|historical)\s+(?:__PDF_SOURCE__|pdfs?|files?|documents?)\b/i.test(scopeText) || dateScoped;
   if (freshCount && !requestedSavedNames.size && !requestsSavedSource) return null;
   const named = pdfs.filter(file => requestedSavedNames.has(file.fileName.toLowerCase()));
   // A date constraint can disambiguate duplicate names, but cannot substitute
