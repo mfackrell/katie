@@ -31,17 +31,25 @@ export type IndependentAssessment = {
 
 // Assistant conclusions and generated summaries are not firsthand task evidence.
 // Preserve turn IDs so contract citations can be checked against literal user text.
-export function reviewBaseline(source: ChatGenerateParams, progress?: TaskProgressState) {
+export function reviewBaseline(
+  source: ChatGenerateParams,
+  progress?: TaskProgressState,
+  authoritativeTurns?: SourceTurn[],
+  observedEvidence?: string,
+) {
   // Preserve observed evidence while excluding earlier model opinions.
-  const evidence = formatResearchEvidence(source.researchEvidence);
+  const evidence = [formatResearchEvidence(source.researchEvidence), observedEvidence?.trim()].filter(Boolean).join("\n\n");
   const images = [...(source.images ?? []), ...websiteImages(source.researchEvidence?.website)];
-  const turns: SourceTurn[] = source.history.filter(turn => turn.role === "user")
-    .map((turn, index) => ({ id: `turn-${index + 1}`, text: turn.content }));
-  turns.push({ id: "latest-user", text: source.user });
+  const turns: SourceTurn[] = authoritativeTurns
+    ? authoritativeTurns.map(turn => ({ ...turn }))
+    : [...source.history.filter(turn => turn.role === "user")
+      .map((turn, index) => ({ id: `turn-${index + 1}`, text: turn.content })),
+      { id: "latest-user", text: source.user }];
+  const latestUser = turns.find(turn => turn.id === "latest-user")?.text ?? source.user;
   const activeNewTask = progress?.lastUserIntent === "new_task";
   const activeQuestion = activeNewTask
-    ? (progress?.objective?.text ?? explicitCurrentQuestion(source.user) ?? source.user)
-    : source.user;
+    ? (progress?.objective?.text ?? explicitCurrentQuestion(latestUser) ?? latestUser)
+    : latestUser;
   const parentProject = progress?.projectContext?.text;
   const broadProjectQuestion = activeNewTask &&
     /\b(?:examples?|experience|qualifications?)\b/i.test(activeQuestion) &&
@@ -76,7 +84,7 @@ export const CONTRACT_RULES = [
   "Establish the intended audience, outcome and explicit requirements before selecting evidence. Background documents provide context, not a checklist of everything the current answer must discuss. Distinguish requirements of the opportunity or subject from requirements of this particular response. Considering every source turn does not mean including every source detail. For example, logistics in a job description do not become required content in an answer about professional experience unless the question calls for them. An application answer should establish the strongest defensible relevant qualifications; a qualification assessment evaluates strengths AND material limitations. For other tasks, derive the corresponding success standard from the user's purpose.",
   "Trace each explicit deliverable requirement to an ID in the supplied user turns. Reference source IDs directly instead of reproducing their text. The original text remains available verbatim in the baseline and audit. Do not treat validator feedback as a new user source or as established fact; its suggestions must be checked against the original sources and actor instructions. Only explicit user requirements belong in taskContract.requirements; derived quality standards or memory-supported capabilities belong in criteria, qualifications and strongestEvidence, not fabricated user citations. Include original requirements that later turns dispute, with active or superseded status. Supersession requires a referenced explicit instruction changing the deliverable; a later claim about what an earlier question says is an interpretation, not automatic cancellation. Reconcile it against the quoted question. Factual corrections update facts, not unrelated requirements. Explicitly requested changes do supersede earlier instructions. Record material conflicts and their source IDs and resolution. Do not invent missing values to satisfy a requirement; explain a genuinely unresolved conflict or use supported information as appropriate to the deliverable.",
   "Synthesize the complete relevant evidence before choosing examples: foundational expertise, recurring capabilities, breadth, depth, chronology and actual responsibility. Select examples to substantiate the collective conclusion. Requirements determine relevance, never the characterization of experience. Explain transferability without equating different situations.",
-  "When the user has explicitly said requested supplementary facts are unknown or unavailable, finish using verified information whenever a truthful response is possible. Do not require manufactured numbers or repeatedly ask for facts the user has already said are unavailable. Preserve the spirit of the original request proportionately.",
+  "When the user has explicitly said requested supplementary facts are unknown or unavailable, finish using verified information whenever a truthful response is possible. Do not require manufactured numbers or repeatedly ask for facts the user has already said are unavailable. Not understanding a term is a request for explanation, not a statement that the underlying experience or fact is absent and not authorization to finish a different task. Preserve unanswered parts of a mixed clarification. Preserve the spirit of the original request proportionately.",
   "CONVERSATION PROGRESSION: Treat the user's answers to earlier assistant questions as advancement of the existing task, not a request to start another complete assessment. Use the source-linked question/answer ledger to identify which decisions and facts are already settled and which remain open; prior assistant questions are context, not authoritative claims. Determine the next useful stage based on the user's original objective and latest explicit instructions. If the user answers questions, incorporate those answers and move forward. Repeating an earlier full assessment, asking answered questions again or inventing new requirements is a substantive failure unless the user explicitly requests reassessment.",
   "Criteria describe the final deliverable the USER requested. Internal instructions about JSON, assessment stages or not answering the user are NOT acceptance criteria for that deliverable.",
 ].join("\n");

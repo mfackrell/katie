@@ -8,8 +8,10 @@ import {
   inferRequestIntent,
   LlmRoutingResult,
   ProviderRefusalRisk,
+  ProjectRelation,
   RequestComplexity,
   RequestIntent,
+  ResponsePurpose,
   RoutingHint,
   RoutingRerouteContext,
   scoreModelCandidateWithBreakdown,
@@ -45,6 +47,8 @@ export type ResolvedRoutingIntent = {
   secondaryIntents?: RequestIntent[];
   complexity?: RequestComplexity | null;
   providerRefusalRisk?: ProviderRefusalRisk | null;
+  responsePurpose?: ResponsePurpose;
+  projectRelation?: ProjectRelation;
 };
 export type SelectionExplainer = {
   selected_model?: string;
@@ -786,7 +790,9 @@ export async function chooseProvider(
           intentSource: "llm",
           secondaryIntents: requestClassification.secondaryIntents ?? [],
           complexity: requestClassification.complexity ?? null,
-          providerRefusalRisk: requestClassification.providerRefusalRisk ?? null
+          providerRefusalRisk: requestClassification.providerRefusalRisk ?? null,
+          ...(requestClassification.responsePurpose ? { responsePurpose: requestClassification.responsePurpose } : {}),
+          ...(requestClassification.projectRelation ? { projectRelation: requestClassification.projectRelation } : {})
         }
       : {
           // Local classification is a deliberate router fallback, never an
