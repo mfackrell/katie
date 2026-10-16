@@ -58,3 +58,8 @@ test('literal filename metacharacters stay data rather than regular-expression s
   assert.equal(selection?.selections[0]?.attachment.id,'old',fileName);
  }
 });
+
+for(const message of ['Check report.pdf for errors','Examine report.pdf','Describe report.pdf','Look at report.pdf']) test(`saved source resolves for a common PDF imperative: ${message}`,()=>{
+ const select=modules()('lib/chat/pdf-source-selection.ts').selectPdfEvidenceSource;
+ assert.equal(select(message,[old],[],0).selections[0].attachment.id,'old');
+});

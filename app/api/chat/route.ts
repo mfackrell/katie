@@ -1874,6 +1874,9 @@ export async function POST(request: NextRequest) {
               catch (error) {
                 if (error instanceof Error && /Please specify.*PDF/.test(error.message)) {
                   attachmentDecision.clarification = error.message;
+                  // Initial selection context was assembled before native scope
+                  // validation; publish this new question to drafting and review.
+                  personaForGeneration += `\n\n${selectionContext()}`;
                   break;
                 }
                 const reason=error instanceof Error && /original unavailable|source changed|source chat|metadata unavailable|inventory unavailable/i.test(error.message) ? error.message.slice(0,250) : "Inspection or private evidence access failed.";

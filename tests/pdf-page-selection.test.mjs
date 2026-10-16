@@ -26,3 +26,7 @@ test('distinct sources keep trailing and leading page qualifiers separate',()=>{
  assert.throws(()=>scope('Compare a.pdf page 2 with the saved PDF page 5','a.pdf',names),/Please specify/);
  assert.throws(()=>scope('Compare report.pdf page 2 with saved report.pdf page 5','report.pdf',['report.pdf','report.pdf']),/Please specify/);
 });
+
+test('generic checks without a PDF reference do not authorize inspection',()=>{
+ for(const message of ['Check the weather','Describe a beach','Look at the sky'])assert.equal(exports.isPdfContentRequest(message),false);
+});

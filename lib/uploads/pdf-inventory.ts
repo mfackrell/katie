@@ -149,7 +149,9 @@ export function isPdfLocatorRequest(message: string): boolean {
 /** Called only after source selection. An attachment is not permission to analyze unrelated tasks. */
 export function isPdfContentRequest(message: string): boolean {
   if (!message.trim() || isPdfLocatorRequest(message)) return false;
-  const explicit = /\b(?:read|extract|analy[sz]e|inspect|review|summari[sz]e|compare|explain|interpret|calculate|reconcile)\b/i.test(message);
+  const sourceReference = /\b(?:pdfs?|documents?|attachments?|files?|pages?|statements?|reports?|sources?|this|these|those)\b|\.pdf\b/i.test(message);
+  const explicit = /\b(?:read|extract|analy[sz]e|inspect|review|summari[sz]e|compare|explain|interpret|calculate|reconcile)\b/i.test(message)
+    || (sourceReference && /\b(?:check|examine|describe|audit|process|look\s+(?:at|through|over))\b/i.test(message));
   const storedForLater = /\b(?:keep|save|store|retain|upload|attach)\b.{0,100}\b(?:later|reference|storage|only|do not|don't)\b/i.test(message);
   if (storedForLater && !explicit) return false;
   if (/\b(?:do not|don't|without)\s+(?:read|analy[sz]e|inspect|process)\b/i.test(message)) return false;

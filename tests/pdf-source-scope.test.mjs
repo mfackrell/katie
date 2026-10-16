@@ -188,3 +188,13 @@ test('native inspection scopes differing physical pages to their own PDF source'
  assert.deepEqual(Array.from(requestedPdfPages(result.inspectedTasks[0],3)),[2]);
  assert.deepEqual(Array.from(requestedPdfPages(result.inspectedTasks[1],6)),[5]);
 });
+
+for(const message of ['Check report.pdf for errors','Examine report.pdf','Describe report.pdf','Look at report.pdf']) test(`common PDF imperative reaches native inspection: ${message}`,async()=>{
+ const result=await run(message,[pdf('one','report.pdf')]);assert.deepEqual(result.inspected,['one']);
+});
+test('late ambiguous page association reaches the actual generation persona before any inspection',async()=>{
+ const result=await run('Compare "a.pdf" page 2 with page 5 of "b.pdf"',[pdf('one','a.pdf'),pdf('two','b.pdf')]);
+ assert.equal(result.inspected.length,0);assert.match(result.clarification,/Please specify/);
+ assert.match(result.params.persona,/Ask the user this clarification/);
+ assert.match(result.params.persona,/associate the page selectors with their sources/);
+});
