@@ -48,9 +48,16 @@ export function inventoryPdf(pages: Array<{
             return { physicalPage: index + 1, text, textCoverage: text.trim() ? "present" : "none", visualCoverage: "not-inspected", runs: keptRuns, lines, layoutTruncated: runs.length > runLimit || rawLines.length > lineLimit };
         }) };
 }
-export function requestedPdfPages(message: string, count: number): number[] {
+export function requestedPdfPages(message: string, count: number, fileNames: string[] = []): number[] {
     const invalid = () => new Error("Please use physical PDF page numbers, for example pages 2-4, within the source inventory.");
     if (!Number.isSafeInteger(count) || count < 1 || count > 10000) throw invalid();
+    // Quoted filenames are data; known selected names may also be unquoted.
+    // Mask the complete span before interpreting any page words inside it.
+    for (const name of [...fileNames].sort((a, b) => b.length - a.length)) {
+        const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        message = message.replace(new RegExp(`(?<![\\w.-])${escaped}(?![\\w.-])`, "gi"), " __PDF_SOURCE__ ");
+    }
+    message = message.replace(/"[^"\n]+\.pdf"|“[^”\n]+\.pdf”|'[^'\n]+\.pdf'|‘[^’\n]+\.pdf’|`[^`\n]+\.pdf`|«[^»\n]+\.pdf»/gi, " __PDF_SOURCE__ ");
     const explicit: number[] = [];
     const numberWord = /^(?:zero|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|hundred|thousand|NaN|Infinity|[ivxlcdm]+)\b/i;
     if (/\bpages?\b/i.test(message) && /\b(?:except|excluding)\b|\b(?:first|last)\s+(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten)\s+pages?\b/i.test(message)) throw invalid();

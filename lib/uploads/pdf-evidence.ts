@@ -40,7 +40,7 @@ export async function inspectPdf(reference: FileReference, message: string, sour
         return result;
     let requested: number[];
     try {
-        requested = requestedPdfPages(message, inventory.pageCount);
+        requested = requestedPdfPages(message, inventory.pageCount, [reference.fileName]);
     }
     catch {
         result.state = "failure";

@@ -65,3 +65,24 @@ test('non-PDF requests preserve the ordinary stored-source decision',async()=>{
  const result=await run('Read saved-chart.png',[],[chart],['chart']);
  assert.equal(result.selectorCalls,1);assert.deepEqual(Array.from(result.attachments,f=>f.fileId),['chart']);
 });
+for (const fresh of [[], [pdf('new','new.pdf')]]) test(`saved PDF and chart survive route selection with ${fresh.length} fresh sources`,async()=>{
+ const chart={id:'chart',fileId:'chart',chatId:'old-chat',fileName:'chart.png',mimeType:'image/png'};
+ const result=await run(`Compare "report.pdf" with "chart.png"${fresh.length?' and "new.pdf"':''}`,fresh,[pdf('report','report.pdf'),chart,pdf('unused','unused.pdf')]);
+ assert.equal(result.attachmentDecision.clarification,undefined);
+ assert.deepEqual(Array.from(result.attachments,f=>f.fileId),[...fresh.map(f=>f.fileId),'report','chart']);
+});
+test('ambiguous companion identity clarifies before any source is restored',async()=>{
+ const chart={id:'chart',fileName:'chart.png',mimeType:'image/png',chatId:'old-chat'};
+ const result=await run('Compare "report.pdf" with "chart.png"',[],[pdf('report','report.pdf'),chart,{...chart,id:'other',chatId:'other-chat'}]);
+ assert.ok(result.attachmentDecision.clarification);assert.equal(result.attachments.length,0);
+});
+test('a companion filename suffix is not an explicit source reference',async()=>{
+ const chart={id:'chart',fileId:'chart',chatId:'old-chat',fileName:'chart.png',mimeType:'image/png'};
+ const result=await run('Compare "report.pdf" with "other-chart.png"',[],[pdf('report','report.pdf'),chart]);
+ assert.deepEqual(Array.from(result.attachments,f=>f.fileId),['report']);
+});
+test('excluded companion sources cause clarification rather than inspection',async()=>{
+ const chart={id:'chart',fileId:'chart',chatId:'old-chat',fileName:'chart.png',mimeType:'image/png'};
+ const result=await run('Read "report.pdf" without "chart.png"',[],[pdf('report','report.pdf'),chart]);
+ assert.ok(result.attachmentDecision.clarification);assert.equal(result.attachments.length,0);
+});

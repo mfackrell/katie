@@ -56,7 +56,7 @@ function pdfPageScope(attachment: FileReference, message: string): PdfPageScope 
   const inventory = attachment.mimeType === "application/pdf" ? attachment.pdfInventory : undefined;
   if (!inventory) return null;
   let requested: number[];
-  try { requested = requestedPdfPages(message, inventory.pageCount); }
+  try { requested = requestedPdfPages(message, inventory.pageCount, [attachment.fileName]); }
   catch { return { requested: [], contextPages: [] }; }
   const allowed = new Set(requested);
   const inventoried = new Set(inventory.pages.map(page => page.physicalPage));

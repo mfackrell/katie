@@ -89,3 +89,20 @@ for(const message of ['Which pages mention revenue?','Summarize the pages about 
  assert.match(out,/CHUNK_PAGE_1/);assert.match(out,/LAYOUT_PAGE_1/);
  assert.doesNotMatch(out,/GLOBAL_(?:PREVIEW|FLAT|REPORT)_PAGE/);
 });
+for(const name of ['page 2.pdf','pages 99.pdf','last page.pdf']) for(const quoted of [true,false]) test(`filename page words remain data in synthesis: ${name}, quoted=${quoted}`,()=>{
+ const file=fixture(3);file.fileName=name;
+ const target=quoted?`"${name}"`:name;
+ const all=rendered(file,`Read ${target}`);
+ for(const n of [1,2,3])assert.match(all,new RegExp(`CHUNK_PAGE_${n}`));
+ const selected=rendered(file,`Read page 3 of ${target}`);
+ assert.match(selected,/CHUNK_PAGE_3/);onlyPages(selected,[3],3);
+});
+const {inspectPdf}=load('lib/uploads/pdf-evidence.ts');
+for(const name of ['page 2.pdf','pages 99.pdf']) test(`native inspection agrees with synthesis for filename ${name}`,async()=>{
+ const file=fixture(3,[1,2,3]);file.fileName=name;file.pdfEvidence.model='gemini-2.5-flash';
+ // A complete validated cache avoids all provider calls while exercising scope.
+ const whole=await inspectPdf(file,`Read "${name}"`,{},file.pdfEvidence);
+ assert.deepEqual(Array.from(whole.contextPages),[1,2,3]);
+ const selected=await inspectPdf(file,`Read page 3 of "${name}"`,{},file.pdfEvidence);
+ assert.deepEqual(Array.from(selected.contextPages),[3]);
+});

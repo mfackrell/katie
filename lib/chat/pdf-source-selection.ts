@@ -128,5 +128,14 @@ export function selectPdfEvidenceSource(message: string, catalog: ConversationAt
   if (!matched.length) return dateScoped ? {method:"none",selections:[],clarification:"No saved PDF matches that upload-date range. Select the intended source or give a different date range."} : null;
   const duplicateIdentity = matched.some(file=>matched.some(other=>other!==file && other.fileName.toLowerCase()===file.fileName.toLowerCase()));
   if (matched.length > 1 && (!literalNames.size || duplicateIdentity)) return { method: "none", selections: [], clarification: `Which PDF source do you mean? ${matched.slice(0, 5).map(file => `${file.fileName} (chat ${file.chatId}, attachment ${file.id})`).join("; ")}` };
-  return { method: "none", selections: matched.map(attachment=>({ attachment, mode: "source" })) };
+  // The PDF decision replaces generic recall in the route. Preserve explicitly
+  // named companion sources from the same actor-scoped catalog as well.
+  const companions = catalog.filter(file => file.mimeType !== "application/pdf"
+    && !fresh.some(upload => upload.fileName.toLowerCase() === file.fileName.toLowerCase())
+    && new RegExp(`(?<![\\w.-])${file.fileName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![\\w.-])`, "i").test(message));
+  if (companions.some(file => companions.some(other => other !== file && other.fileName.toLowerCase() === file.fileName.toLowerCase())))
+    return { method: "none", selections: [], clarification: "Several saved sources have the same filename. Select the intended source before I inspect it." };
+  if (companions.length && /\b(?:except|excluding|exclude|ignore|not|without)\b/i.test(literal.scopeText ?? message))
+    return { method: "none", selections: [], clarification: "Specify only the full filenames to inspect, without excluded sources." };
+  return { method: "none", selections: [...matched, ...companions].map(attachment=>({ attachment, mode: "source" })) };
 }
