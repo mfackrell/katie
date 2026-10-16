@@ -1,4 +1,4 @@
-import { pdfPageTaskForSource } from "@/lib/uploads/pdf-inventory";
+import { maskPdfSourceNames, pdfPageTaskForSource } from "@/lib/uploads/pdf-inventory";
 import { pdfSourceOccurrence, selectFreshPdfSources, selectPdfEvidenceSource } from "@/lib/chat/pdf-source-selection";
 import { inspectSavedPdf } from "@/lib/uploads/stored-uploads";
 import { agentRpc, refreshTask } from "@/lib/agents/store";
@@ -746,17 +746,30 @@ async function executeChat(request: NextRequest) {
       else if (sources.length > 1) pdfMemoryDecision = { method: "none", selections: [], clarification: "Which saved PDF source should this review use?" };
     }
     // A PDF-specific decision must not discard other explicitly requested
-    // saved comparison sources. Keep generic selection bounded to those names.
+    // saved comparison sources. Bound generic kinds to one exact catalog identity.
     if (pdfMemoryDecision?.selections.length && !pdfMemoryDecision.clarification) {
       const namedNonPdfs = catalog.filter(file => file.mimeType !== "application/pdf" &&
         message.toLowerCase().includes(file.fileName.toLowerCase()));
-      if (namedNonPdfs.length) {
-        const otherDecision = await selectStoredAttachments(message, namedNonPdfs, attachmentHistory, undefined,
-          newAttachments.map(file => file.fileName));
+      const kindScope=maskPdfSourceNames(message,[...catalog,...newAttachments].map(file=>file.fileName));
+      const kinds=/\b(?:compare|contrast)\b/i.test(kindScope) ? [...kindScope.matchAll(/(?:\b(?:with|versus|vs\.?|against|to|and)\s+(?:(?:my|the|a|an|this|that|saved|uploaded|previous|earlier|original)\s+)*|\b(?:saved|uploaded|previous|earlier|original)\s+)(videos?|clips?|recordings?|audio|images?|photos?|pictures?|screenshots?|charts?|spreadsheets?|workbooks?|csv|text\s+files?|notes)\b/gi)].map(match=>match[1].toLowerCase()) : [];
+      const genericGroups=kinds.map(kind=>({kind,files:catalog.filter(file=>{
+        if(/^(?:video|clip|recording)/.test(kind)) return file.mimeType.startsWith("video/") || (kind.startsWith("recording") && file.mimeType.startsWith("audio/"));
+        if(kind==="audio") return file.mimeType.startsWith("audio/");
+        if(/^(?:image|photo|picture|screenshot|chart)/.test(kind)) return file.mimeType.startsWith("image/");
+        if(/^(?:spreadsheet|workbook|csv)/.test(kind)) return /spreadsheet|excel|csv/.test(file.mimeType);
+        return file.mimeType.startsWith("text/");
+      })}));
+      const unresolved=genericGroups.find(group=>group.files.length!==1);
+      if(unresolved) pdfMemoryDecision={method:"none",selections:[],clarification:`Select the saved ${unresolved.kind} to compare with this PDF; I could not resolve exactly one source.`};
+      else {
+        const otherDecision = namedNonPdfs.length ? await selectStoredAttachments(message, namedNonPdfs, attachmentHistory, undefined,
+          newAttachments.map(file => file.fileName)) : {method:"none" as const,selections:[]};
         pdfMemoryDecision = otherDecision.clarification
           ? { method: "none", selections: [], clarification: otherDecision.clarification }
-          : { ...pdfMemoryDecision, selections: [...pdfMemoryDecision.selections,
-              ...otherDecision.selections.filter(item => namedNonPdfs.some(file => file.id === item.attachment.id && file.chatId === item.attachment.chatId))] };
+          : { ...pdfMemoryDecision, selections: [...new Map([...pdfMemoryDecision.selections,
+              ...genericGroups.map(group=>({attachment:group.files[0],mode:"source" as const})),
+              ...otherDecision.selections.filter(item => namedNonPdfs.some(file => file.id === item.attachment.id && file.chatId === item.attachment.chatId))]
+              .map(item=>[`${item.attachment.chatId}/${item.attachment.id}`,item] as const)).values()] };
       }
     }
     if (pdfMemoryDecision) mediaMemory = null;

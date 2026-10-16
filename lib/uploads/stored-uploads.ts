@@ -553,7 +553,7 @@ export function createStoredUploadService(storage: Storage, secret: string, opti
       // Page scope belongs to this conversation and retained source, not the
       // first immutable receipt or whichever other chat last inspected it.
       conversationPath(currentChat,attachment.id);
-      const scopePath=`${path}.pdf-scope-${currentChat}.json`;
+      const scopePath=`${conversationPath(currentChat,attachment.id)}.pdf-scope-${chatId}.json`;
       const storedScope=await objects.download(scopePath);
       let previousPages:number[]|undefined;
       let previousNativeProhibited=true;

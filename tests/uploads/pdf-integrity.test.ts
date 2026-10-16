@@ -635,3 +635,14 @@ test("native inspection receives the shared extraction task while retaining the 
   assert.match(prompt,/Inspect only physical PDF pages 2\./);assert.match(prompt,/Extract every transaction/);assert.match(prompt,/Current source filename: "a.pdf"/);
  }finally{globalThis.fetch=oldFetch;if(oldKey)process.env.GOOGLE_API_KEY=oldKey;else delete process.env.GOOGLE_API_KEY;}
 });
+
+test("cross-chat PDF continuation scope is removed with the consuming conversation",async()=>{
+ const {service,files}=storageFixture();const [upload]=await service.ingestPdfUploads([file([text('literal')])]);const [ref]=await service.hydrate([upload]);
+ const source='00000000-0000-4000-8000-000000000001',current='00000000-0000-4000-8000-000000000004',actor='00000000-0000-4000-8000-000000000002';
+ const saved=await service.persist(source,ref,upload.storageToken,{actorId:actor});
+ await service.pdfEvidence(current,saved,actor,'Read page 1 without OCR; PRIVATE-CURRENT-TASK',async()=>true);
+ const scope=[...files.keys()].find(path=>path.includes('.pdf-scope-'))!;
+ assert.ok(scope.startsWith(`chats/${current}/`));assert.match(await files.get(scope)!.text(),/PRIVATE-CURRENT-TASK/);
+ await service.removeConversation(current,actor);assert.equal(files.has(scope),false);
+ assert.equal(files.has(`chats/${source}/${saved.id}.source`),true);
+});

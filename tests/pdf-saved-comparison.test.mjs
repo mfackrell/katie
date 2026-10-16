@@ -20,7 +20,7 @@ const pdf=(id,name)=>({id,fileId:id,chatId:'old-chat',fileName:name,mimeType:'ap
 async function run(message,fresh,saved,genericIds=[]){
  let selectorCalls=0;
  const decision=await vm.runInNewContext(code(`(async()=>{${selection}return {attachmentDecision,freshPdfSelection};})()`),{
-  ...scope,message,pdfSourceTask:message,pdfTaskContext:null,newAttachments:fresh,catalog:saved,attachmentHistory:[],timelineActive:false,timelineSelection:{},savedVideoFollowUp:null,mediaMemory:null,
+  ...scope,...load('lib/uploads/pdf-inventory.ts'),message,pdfSourceTask:message,pdfTaskContext:null,newAttachments:fresh,catalog:saved,attachmentHistory:[],timelineActive:false,timelineSelection:{},savedVideoFollowUp:null,mediaMemory:null,
   selectStoredAttachments:async()=>{selectorCalls++;return {method:'none',selections:saved.filter(f=>genericIds.includes(f.id)).map(attachment=>({attachment,mode:'source'}))};},
  });
  vm.runInNewContext(code(quota),{newAttachments:fresh,timelineActive:false,...decision});
@@ -213,5 +213,16 @@ test('same-name occurrence ordinals exclude intervening differently named source
  for(const [name,role,page] of [['report.pdf','fresh',1],['other.pdf','fresh',2],['report.pdf','saved',3]]){
   const task=inventory.pdfPageTaskForSource(message,name,files.map(f=>f.fileName),scope.pdfSourceOccurrence(message,name,files,role));
   assert.deepEqual(Array.from(inventory.requestedPdfPages(task,4)),[page]);
+ }
+});
+
+test('PDF comparisons retain unique saved media kinds and clarify missing or ambiguous kinds',async()=>{
+ const video={id:'video',fileId:'video',chatId:'old-chat',fileName:'old-clip.mp4',mimeType:'video/mp4'};
+ const result=await run('Compare report.pdf with my saved video',[],[pdf('report','report.pdf'),video]);
+ assert.equal(result.attachmentDecision.clarification,undefined);
+ assert.deepEqual(Array.from(result.attachments,x=>x.fileId),['report','video']);
+ for(const media of [[],[video,{...video,id:'second',fileId:'second',fileName:'second.mp4'}]]){
+  const unresolved=await run('Compare report.pdf with my saved video',[],[pdf('report','report.pdf'),...media]);
+  assert.ok(unresolved.attachmentDecision.clarification);assert.equal(unresolved.attachmentDecision.selections.length,0);
  }
 });
