@@ -585,9 +585,11 @@ export function createStoredUploadService(storage: Storage, secret: string, opti
           const completed=new Set((indexed.data ?? []).map(item=>item.name));
           const pending=matching.flatMap(envelope=>envelope.evidence.pages.map((page:PdfEvidence["pages"][number])=>{
             const e=envelope.evidence as PdfEvidence;
+            // Full native batches stay in private receipts; searchable page
+            // identities include only validated fields and opaque report hashes.
             const canonical=JSON.stringify({version:e.version,extractionVersion:e.extractionVersion,
               source:{actorId,sourceChatId:chatId,attachmentId:attachment.id},fingerprint,
-              provider:e.provider,model:e.model,page,rawReports:[...e.rawReports].sort()});
+              provider:e.provider,model:e.model,page,rawReportHashes:[...new Set(e.rawReports.map(raw=>createHash("sha256").update(raw).digest("hex")))].sort()});
             const digest=createHash("sha256").update(canonical).digest("hex");
             return {page:page.physicalPage,canonical,version:`pdf-visual-v1:${fingerprint}:page:${page.physicalPage}:${e.model}`,marker:`${markerPrefix}${String(page.physicalPage).padStart(6,"0")}-${digest}.json`};
           })).filter(item=>!completed.has(item.marker)).sort((a,b)=>a.page-b.page);
