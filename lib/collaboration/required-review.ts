@@ -164,7 +164,7 @@ export async function runRequiredDraftReview(input: {
         }, reviewer!)), Math.min(participantTimeoutMs, reviewDeadlineMs - Date.now() - 90_000));
         if (assessmentResponse.truncated) throw new Error("Independent assessment was truncated");
         try {
-          assessment = validateAssessment(parseReviewJson(assessmentResponse.text), baseline.turns, { activeNewTask: baseline.activeNewTask });
+          assessment = validateAssessment(parseReviewJson(assessmentResponse.text), baseline.contractTurns, { activeNewTask: baseline.activeNewTask });
         } catch (error) {
           if (pass === MAX_CONTRACT_REJECTIONS - 1) throw error;
           contractFeedback = `The proposed contract failed source/schema validation: ${error instanceof Error ? error.message : String(error)}. Rebuild the assessment with valid references to the supplied user turns. Do not change or invent the source text.`;
@@ -182,9 +182,9 @@ export async function runRequiredDraftReview(input: {
         if (validation.truncated) throw new Error("Contract validation was truncated");
         const checked = parseReviewJson(validation.text) as { verdict: string; findings: string; issueType?: string; sourceCoverage: Array<{ sourceId: string; finding: string }> };
         if (!checked || !["approve", "revise"].includes(checked.verdict) || typeof checked.findings !== "string" || !checked.findings.trim() ||
-            !Array.isArray(checked.sourceCoverage) || checked.sourceCoverage.length !== baseline.turns.length ||
-            new Set(checked.sourceCoverage.map(c => c?.sourceId)).size !== baseline.turns.length ||
-            checked.sourceCoverage.some(c => !c || !baseline.turns.some(t => t.id === c.sourceId) || typeof c.finding !== "string" || !c.finding.trim())) {
+            !Array.isArray(checked.sourceCoverage) || checked.sourceCoverage.length !== baseline.contractTurns.length ||
+            new Set(checked.sourceCoverage.map(c => c?.sourceId)).size !== baseline.contractTurns.length ||
+            checked.sourceCoverage.some(c => !c || !baseline.contractTurns.some(t => t.id === c.sourceId) || typeof c.finding !== "string" || !c.finding.trim())) {
           throw new Error("Invalid contract validation or incomplete source coverage");
         }
         (audit.contractFindings ??= []).push({ validator: lead, verdict: checked.verdict, findings: checked.findings });
