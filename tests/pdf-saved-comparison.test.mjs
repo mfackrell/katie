@@ -90,3 +90,10 @@ test('saved qualifier before the complete same-name filename retains the histori
  assert.equal(result.attachmentDecision.clarification,undefined);
  assert.deepEqual(Array.from(result.attachments,f=>f.fileId),['new','old']);
 });
+
+test('relative source date after a complete same-name filename retains the saved version',()=>{
+ const message='Compare report.pdf with the PDF report.pdf from yesterday';
+ const fresh=[pdf('new','report.pdf')],saved=[{...pdf('old','report.pdf'),createdAt:'2026-10-15T12:00:00Z'}];
+ const decision=scope.selectPdfEvidenceSource(message,saved,[],1,new Date('2026-10-16T12:00:00Z'),fresh);
+ assert.equal(decision.clarification,undefined);assert.equal(decision.selections[0].attachment.id,'old');
+});

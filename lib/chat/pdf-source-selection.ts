@@ -115,7 +115,7 @@ export function selectPdfEvidenceSource(message: string, catalog: ConversationAt
   // Dates inside the document question do not qualify its upload identity.
   // Parse only a date clause attached to a source or an upload verb.
   const scopeText = literal.scopeText ?? message;
-  const dateAnchor = /(?:__PDF_SOURCE__|\b(?:pdf|file|document))\s+(?:(?:that|which)\s+(?:I\s+)?)?(?:uploaded|saved|attached)\s+|\b(?:uploaded|saved|attached)\s+(?:(?:the|my|this|that)\s+)?(?:__PDF_SOURCE__|pdf|file|document)\s+(?:(?:from|on|during|in)\s+)?|\b(?:uploaded|saved|attached)\s+(?!__PDF_SOURCE__|pdf\b|file\b|document\b)|\b(?:pdf|file|document)\s+from\s+(?=(?:yesterday|last\s+week|(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten)\s+(?:days?|weeks?|months?|years?)\s+ago)\b)/i.exec(scopeText);
+  const dateAnchor = /(?:__PDF_SOURCE__|\b(?:pdf|file|document))\s+(?:(?:that|which)\s+(?:I\s+)?)?(?:uploaded|saved|attached)\s+|\b(?:uploaded|saved|attached)\s+(?:(?:the|my|this|that)\s+)?(?:__PDF_SOURCE__|pdf|file|document)\s+(?:(?:from|on|during|in)\s+)?|\b(?:uploaded|saved|attached)\s+(?!__PDF_SOURCE__|pdf\b|file\b|document\b)|(?:__PDF_SOURCE__|\b(?:pdf|file|document))\s+from\s+(?=(?:yesterday|last\s+week|(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten)\s+(?:days?|weeks?|months?|years?)\s+ago)\b)/i.exec(scopeText);
   const dateText = dateAnchor ? scopeText.slice(dateAnchor.index + dateAnchor[0].length)
     .split(/\b(?:and|but|then|about|showing|containing|with)\b|[;?!\n]/i)[0] : "";
   const dateScoped = hasUploadDateReference(`from ${dateText}`);
