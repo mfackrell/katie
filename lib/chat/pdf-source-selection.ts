@@ -73,7 +73,7 @@ export function selectFreshPdfSources(message: string, fresh: FileReference[], t
     const suffix = scopeText.slice(match.index! + match[0].length);
     // Post-nominal current-upload qualifiers refer to these inputs, not another
     // source. Keep this fact for mixed media as well as explicitly named PDFs.
-    const currentUpload = /^\s+(?:in|inside|within|from|of)\s+(?:(?:this|(?:the |my )?current)\s+(?:upload(?:\s+batch)?|attachment\s+(?:batch|set))|(?:these|the current)\s+attachments?)\b/i.test(suffix);
+    const currentUpload = /^\s+(?:in|inside|within|from|of)\s+(?:(?:this|(?:the |my )?current)\s+(?:upload(?:\s+batch)?|attachment\s+(?:batch|set))|(?:these|the current)\s+attachments?)\b(?=\s*(?:$|[,;.!?)]|(?:and|then)\b))/i.test(suffix);
     const external = /^\s+(?:in|inside|within|from|of|shown|visible|depicted|displayed|mentioned|discussed|contained|appearing|stored|that|which)\b/i.test(suffix);
     return {whole:currentUpload || !external, uploaded:currentUpload || /\b(?:attached|uploaded)\b|\b(?:all|both)\s+(?:files|attachments)\b/i.test(match[0])};
   });

@@ -34,6 +34,8 @@ const positive=[
  'Compare the video with all documents in this upload',
  'Compare the video with all files from this upload',
  'Compare report.pdf with all other PDFs',
+ 'Compare report.pdf with all PDFs from this upload, please.',
+ 'Compare report.pdf with all PDFs from this upload and summarize differences',
 ];
 for(const message of positive)test(`current-upload scope reaches every selected PDF: ${message}`,async()=>{
  const {decision,calls,actual}=await run(message);
@@ -42,7 +44,7 @@ for(const message of positive)test(`current-upload scope reaches every selected 
  assert.deepEqual(calls,['named','other']);
  assert.deepEqual(Array.from(actual.filter(file=>file.mimeType==='application/pdf'),file=>file.pdfEvidence.pages[0].observations),['PAGE-named','PAGE-other']);
 });
-for(const qualifier of ['in the video','from last week','from another upload','from a previous upload','in the screenshot from this upload','shown in this upload video'])test(`external source qualifier does not expand named input: ${qualifier}`,async()=>{
+for(const qualifier of ['in the video','from last week','from another upload','from a previous upload','in the screenshot from this upload','shown in this upload video',"in this upload's video",'in this upload’s video','in this upload video','from this upload batch video',"within the current upload's screenshot",'in these attachments video','in this upload of the video'])test(`external source qualifier does not expand named input: ${qualifier}`,async()=>{
  const {decision,calls}=await run(`Compare report.pdf with all documents ${qualifier}`);
  assert.equal(decision.clarification,undefined);
  assert.deepEqual([...decision.fileIds],['named']);assert.deepEqual(calls,['named']);

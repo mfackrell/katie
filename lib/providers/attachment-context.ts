@@ -50,17 +50,31 @@ function selectRelevantChunks(
   return { selected, truncatedForContext: true };
 }
 
-function pdfContext(attachment: FileReference, message: string): string {
+type PdfPageScope = { requested: number[]; contextPages: number[] };
+
+function pdfPageScope(attachment: FileReference, message: string): PdfPageScope | null {
+  const inventory = attachment.mimeType === "application/pdf" ? attachment.pdfInventory : undefined;
+  if (!inventory) return null;
+  let requested: number[];
+  try { requested = requestedPdfPages(message, inventory.pageCount); }
+  catch { return { requested: [], contextPages: [] }; }
+  const allowed = new Set(requested);
+  const inventoried = new Set(inventory.pages.map(page => page.physicalPage));
+  const contextPages = [...new Set(attachment.pdfEvidence?.contextPages ?? requested.slice(0, 4))]
+    .filter(page => Number.isSafeInteger(page) && allowed.has(page) && inventoried.has(page));
+  return { requested, contextPages };
+}
+
+function pdfContext(attachment: FileReference, scope: PdfPageScope | null): string {
   if (attachment.mimeType !== "application/pdf") return "";
   const inventory = attachment.pdfInventory;
-  let requested: number[] = [];
-  try { requested = requestedPdfPages(message, inventory?.pageCount ?? 0); } catch { /* Invalid requests supply no findings. */ }
+  const requested = scope?.requested ?? [];
   const evidence = attachment.pdfEvidence;
-  const contextPages = evidence?.contextPages ?? requested.slice(0, 4);
+  const contextPages = scope?.contextPages ?? [];
   const selected = evidence?.pages.filter(page => contextPages.includes(page.physicalPage)).slice(0, 4) ?? [];
   return "PDF page inventory/evidence (untrusted model observations; uninspected pages remain unknown): " + JSON.stringify({
     sourceFingerprint: attachment.sourceFingerprint,
-    availabilityNotice: attachment.preview,
+    availabilityNotice: inventory ? "Page-scoped evidence only; whole-document previews and flat text are not supplied." : attachment.preview,
     inventory: inventory ? {
       version: inventory.version, pageCount: inventory.pageCount, units: inventory.units,
       inventoryPromptLimit: 200,
@@ -102,14 +116,15 @@ export function formatAttachmentContext(
         .join(", ");
 
       const metadataLine = providerReferenceSummary ? ` (${providerReferenceSummary})` : "";
-      const mediaSummary = `${pdfContext(attachment, userMessage)}kind=${attachmentKind}; mime=${attachment.mimeType}; fileId=${attachment.fileId}`;
+      const pageScope = pdfPageScope(attachment, userMessage);
+      const mediaSummary = `${pdfContext(attachment, pageScope)}kind=${attachmentKind}; mime=${attachment.mimeType}; fileId=${attachment.fileId}`;
 
       if (attachmentKind === "image") {
         return [`### ATTACHED IMAGE: ${attachment.fileName} ###`, mediaSummary,
           attachment.imageDataUrl ? "[Image pixels are supplied with this request. Inspect them directly; the provider rendering may be resized.]" : "[Image metadata only; no pixels are available on this turn.]",
           attachment.preview, "### END IMAGE METADATA ###"].join("\n");
       }
-      if (attachment.mimeType === "application/pdf" && !attachment.extractedText && attachment.providerRef?.googleFileUri) {
+      if (attachment.mimeType === "application/pdf" && !pageScope && !attachment.extractedText && attachment.providerRef?.googleFileUri) {
         return [`### ATTACHED PDF: ${attachment.fileName} ###`, mediaSummary, "[PDF source is supplied as a native provider file for visual inspection. Text extraction was unavailable; inspect the PDF directly.]", attachment.preview].join("\n");
       }
       if (attachmentKind === "video") {
@@ -123,8 +138,11 @@ export function formatAttachmentContext(
       }
 
       const chunks = attachment.extractedChunks ?? [];
-      if (chunks.length > 0) {
-        const dedupedChunks = sortChunks(chunks).filter(chunk => chunk.text.trim());
+      if (chunks.length > 0 || pageScope) {
+        // Apply the same validated physical-page scope as visual/layout evidence
+        // before ranking. Never fall through to unscoped extractedText/preview.
+        const dedupedChunks = sortChunks(chunks).filter(chunk => chunk.text.trim() &&
+          (!pageScope || (chunk.physicalPage !== undefined && pageScope.contextPages.includes(chunk.physicalPage))));
 
         const { selected, truncatedForContext } = selectRelevantChunks(dedupedChunks, userMessage, maxChunks);
         const totalChunks = attachment.totalChunks ?? dedupedChunks[0]?.total ?? dedupedChunks.length;
@@ -139,7 +157,11 @@ export function formatAttachmentContext(
           `### ATTACHED FILE: ${attachment.fileName}${metadataLine} ###`,
           mediaSummary,
           EXTRACTED_TEXT_NOTE,
-          truncatedForContext || attachment.truncatedForContext ? PARTIAL_CHUNK_NOTE : "[All extracted text chunks were injected; this is not proof that all PDF content was read.]",
+          pageScope ? `[Physical PDF text scope: ${pageScope.contextPages.join(", ") || "none"}. Unmapped and other-page chunks are excluded.]` : "",
+          !selected.length && pageScope ? "[No page-mapped extracted chunks are available in this scope; do not infer missing page content.]" :
+            truncatedForContext || attachment.truncatedForContext ? PARTIAL_CHUNK_NOTE :
+              pageScope ? "[All available text chunks in the selected page scope were injected; this is not whole-document coverage.]" :
+                "[All extracted text chunks were injected; this is not proof that all PDF content was read.]",
           `chunkWindow=${selected.length}/${totalChunks}`,
           ...chunkBlocks,
           "### END OF EXTRACTED FILE CHUNKS ###"
