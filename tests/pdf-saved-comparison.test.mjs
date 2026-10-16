@@ -134,3 +134,18 @@ test('an explicitly shared historical date selects saved versions of both names'
  const result=scope.selectPdfEvidenceSource(message,saved,[],2,new Date('2026-10-16T12:00:00Z'),fresh);
  assert.equal(result.clarification,undefined);assert.equal(result.selections.length,2);
 });
+
+test('plural historical PDF requests exclude current uploads and select the saved source set',()=>{
+ const message='Analyze all saved PDFs from yesterday';
+ const fresh=[pdf('new','current.pdf')],saved=[{...pdf('a-old','a.pdf'),createdAt:'2026-10-15T12:00:00Z'},{...pdf('b-old','b.pdf'),createdAt:'2026-10-15T12:00:00Z'}];
+ assert.equal(scope.selectFreshPdfSources(message,fresh,false,saved).fileIds.size,0);
+ const selected=scope.selectPdfEvidenceSource(message,saved,[],1,new Date('2026-10-16T12:00:00Z'),fresh);
+ assert.equal(selected.clarification,undefined);assert.deepEqual(Array.from(selected.selections,item=>item.attachment.id),['a-old','b-old']);
+});
+
+test('relative historical PDF sets without a saved adjective also exclude current uploads',()=>{
+ const message='Analyze both PDFs from yesterday',fresh=[pdf('new','current.pdf')],saved=[{...pdf('a-old','a.pdf'),createdAt:'2026-10-15T12:00:00Z'},{...pdf('b-old','b.pdf'),createdAt:'2026-10-15T12:00:00Z'}];
+ assert.equal(scope.selectFreshPdfSources(message,fresh,false,saved).fileIds.size,0);
+ const selected=scope.selectPdfEvidenceSource(message,saved,[],1,new Date('2026-10-16T12:00:00Z'),fresh);
+ assert.equal(selected.clarification,undefined);assert.equal(selected.selections.length,2);
+});

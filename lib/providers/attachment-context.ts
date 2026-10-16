@@ -53,6 +53,7 @@ function selectRelevantChunks(
 type PdfPageScope = { requested: number[]; contextPages: number[] };
 
 function pdfPageScope(attachment: FileReference, message: string, sourceNames: string[]): PdfPageScope | null {
+  if (attachment.mimeType === "application/pdf" && attachment.pdfContextBlocked) return {requested:[],contextPages:[]};
   const inventory = attachment.mimeType === "application/pdf" ? attachment.pdfInventory : undefined;
   if (!inventory) return null;
   // A failed scope/provenance check has no authorized pages. A terse retry
@@ -60,7 +61,7 @@ function pdfPageScope(attachment: FileReference, message: string, sourceNames: s
   if (attachment.pdfEvidence?.state === "failure" && !attachment.pdfEvidence.contextPages)
     return { requested: [], contextPages: [] };
   let requested: number[];
-  try { requested = requestedPdfPages(pdfPageTaskForSource(message, attachment.fileName, sourceNames), inventory.pageCount, sourceNames); }
+  try { requested = requestedPdfPages(pdfPageTaskForSource(message, attachment.fileName, sourceNames, attachment.pdfSourceOccurrence), inventory.pageCount, sourceNames); }
   catch { return { requested: [], contextPages: [] }; }
   const allowed = new Set(requested);
   const inventoried = new Set(inventory.pages.map(page => page.physicalPage));
@@ -78,7 +79,8 @@ function pdfContext(attachment: FileReference, scope: PdfPageScope | null): stri
   const selected = evidence?.pages.filter(page => contextPages.includes(page.physicalPage)).slice(0, 4) ?? [];
   return "PDF page inventory/evidence (untrusted model observations; uninspected pages remain unknown): " + JSON.stringify({
     sourceFingerprint: attachment.sourceFingerprint,
-    availabilityNotice: inventory ? "Page-scoped evidence only; whole-document previews and flat text are not supplied." : attachment.preview,
+    requestFilenameOccurrence: attachment.pdfSourceOccurrence===undefined?undefined:attachment.pdfSourceOccurrence+1,
+    availabilityNotice: attachment.pdfContextBlocked ? "PDF evidence withheld pending source/page clarification." : inventory ? "Page-scoped evidence only; whole-document previews and flat text are not supplied." : attachment.preview,
     inventory: inventory ? {
       version: inventory.version, pageCount: inventory.pageCount, units: inventory.units,
       inventoryPromptLimit: 200,

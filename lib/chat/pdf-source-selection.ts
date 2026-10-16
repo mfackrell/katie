@@ -19,14 +19,14 @@ function filenamePrefix(prefix: string): boolean {
   // prefixes. Physical-page validity is checked after identity selection.
   const pages = String.raw`(?:physical\s+)?pages?\s+\d+(?:\s*(?:[-–—]|to\b|through\b)\s*\d+)?(?:\s*(?:,\s*(?:and\b)?|and\b)\s*\d+(?:\s*(?:[-–—]|to\b|through\b)\s*\d+)?)*`;
   const connector = String.raw`(?:with|and|versus|vs\.?|against)`;
-  if (new RegExp(String.raw`^(?:on\s+)?${pages}\s+${connector}(?:\s+(?:the|my|this|that|attached|uploaded|saved|original|new|fresh|current|previous|earlier|older|historical|version|copy|of|pdf|file|document|named|called))*\s*$`, "i").test(request) ||
+  if (new RegExp(String.raw`^(?:on\s+)?${pages}\s+${connector}(?:\s+(?:the|my|this|that|attached|uploaded|saved|original|new|fresh|current|previous|earlier|older|historical|version|copy|of|pdfs?|files?|documents?|named|called))*\s*$`, "i").test(request) ||
       new RegExp(String.raw`^${connector}\s+${pages}\s+(?:of|in|from)\s*$`, "i").test(request)) return true;
   // Direct-object references may have task syntax before the full name, but
   // unknown filename modifiers (e.g. "quarterly") must not be discarded.
-  if (/^(?:read|review|inspect|ocr|transcribe|scan|find|locate|show|analy[sz]e|summari[sz]e|compare|open|use|check|examine|describe|audit|look at|look through|look over|process|and|with|versus|vs\.?|against|then)(?:\s+(?:only|also|both|the|my|this|that|attached|uploaded|saved|original|new|fresh|current|previous|earlier|older|historical|version|copy|of|pdf|file|document|named|called))*\s*$/i.test(request)) return true;
+  if (/^(?:read|review|inspect|ocr|transcribe|scan|find|locate|show|analy[sz]e|summari[sz]e|compare|open|use|check|examine|describe|audit|look at|look through|look over|process|and|with|versus|vs\.?|against|then)(?:\s+(?:only|also|both|the|my|this|that|attached|uploaded|saved|original|new|fresh|current|previous|earlier|older|historical|version|copy|of|pdfs?|files?|documents?|named|called))*\s*$/i.test(request)) return true;
   // In a content question, the preposition introduces the source, not a
   // suffix of a direct-object filename. Ambiguous other wording clarifies.
-  return /^(?:what|where|which|how|why|when|does|did|is|are|tell me|find|locate|calculate|sum|total|summari[sz]e|extract|explain|interpret|reconcile|analy[sz]e|review|inspect|read|compare)\b[\s\S]*\b(?:in|inside|within|from|of|for|about)\s+(?:(?:the|my|this|that|attached|uploaded|saved|pdf|file|document)\s+)*$/i.test(request + " ");
+  return /^(?:what|where|which|how|why|when|does|did|is|are|tell me|find|locate|calculate|sum|total|summari[sz]e|extract|explain|interpret|reconcile|analy[sz]e|review|inspect|read|compare)\b[\s\S]*\b(?:in|inside|within|from|of|for|about)\s+(?:(?:the|my|this|that|attached|uploaded|saved|pdfs?|files?|documents?)\s+)*$/i.test(request + " ");
 }
 
 /** Shared exact-span resolver for stored sources and fresh-upload scope. */
@@ -66,22 +66,35 @@ export function resolvePdfNames(message: string, files: NamedPdf[]): PdfNames {
 
 function pdfNameRoles(message:string,literal:PdfNames) {
   const freshNames = new Set<string>(), savedNames = new Set<string>();
+  const mentions:Array<{name:string;role:"fresh"|"saved"}>=[];
   let finalDateQualifier=false;
   const spans=literal.sourceSpans ?? [];
   for(const [index,span] of spans.entries()) {
     const before=message.slice(index ? spans[index-1].end : 0,span.start);
     const after=message.slice(span.end,spans[index+1]?.start ?? message.length).split(/\b(?:and|with|but|versus|against)\b|[;?!\n]/i)[0];
-    const savedQualifier=/\b(?:saved|previous|earlier|older|historical)(?:\s+(?:pdf|file|document|copy|version))?(?:\s+of)?\s*$/i.test(before);
+    const savedQualifier=/\b(?:saved|previous|earlier|older|historical)(?:\s+(?:pdfs?|files?|documents?|copy|version))?(?:\s+of)?\s*$/i.test(before);
     const datedQualifier=/^\s+(?:(?:uploaded|saved|attached)\s+|from\s+(?=(?:yesterday|last\s+week|(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten)\s+(?:days?|weeks?|months?|years?)\s+ago)\b))/i.test(after) && hasUploadDateReference(after);
     if(index===spans.length-1) finalDateQualifier=datedQualifier;
-    if(savedQualifier || datedQualifier) savedNames.add(span.name);
+    const role=savedQualifier || datedQualifier ? "saved" : "fresh";
+    mentions.push({name:span.name,role});
+    if(role==="saved") savedNames.add(span.name);
     else freshNames.add(span.name);
   }
   if(finalDateQualifier && /\b(?:both|all|each)\s+__PDF_SOURCE__/i.test(literal.scopeText ?? "")) {
     for(const name of literal.names) savedNames.add(name);
     freshNames.clear();
+    for(const mention of mentions) mention.role="saved";
   }
-  return {freshNames,savedNames};
+  return {freshNames,savedNames,mentions};
+}
+
+/** Trusted route metadata binds a retained identity to its filename occurrence. */
+export function pdfSourceOccurrence(message:string,name:string,files:NamedPdf[],role:"fresh"|"saved"):number|undefined {
+  const literal=resolvePdfNames(message,files);
+  if(literal.clarification) return undefined;
+  const mentions=pdfNameRoles(message,literal).mentions.filter(item=>item.name===name.toLowerCase());
+  const matches=mentions.flatMap((item,index)=>item.role===role?[index]:[]);
+  return matches.length===1?matches[0]:undefined;
 }
 
 export type FreshPdfSelection = { fileIds: Set<string>; clarification?: string };
@@ -115,12 +128,13 @@ export function selectFreshPdfSources(message: string, fresh: FileReference[], t
   if (!literal.explicit && !targetsPdfKind && !allUploadedSources && (namesNonPdf || targetsNonPdfKind || timelineActive)) return none();
   if (wholeSet && /\b(?:only|except|excluding|exclude)\b/i.test(scopeText)) return none("The PDF selection includes conflicting or excluded sources. Specify the full filenames to inspect.");
   const freshNamed = pdfNameRoles(message,literal).freshNames;
-  if (!literal.explicit && !wholeSet && /\b(?:saved|previous|earlier|older|historical)\s+(?:pdf|file|document)\b/i.test(scopeText) &&
-      !/\b(?:new|current|fresh|attached|this)\s+(?:pdf|file|document|upload)\b/i.test(scopeText)) return none();
+  const genericHistoricalDate=/\b(?:pdfs?|files?|documents?)\s+(?:(?:uploaded|saved|attached)\s+|from\s+(?=(?:yesterday|last\s+week|(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten)\s+(?:days?|weeks?|months?|years?)\s+ago)\b))/i.test(scopeText) && hasUploadDateReference(scopeText);
+  if (!literal.explicit && ((!wholeSet && /\b(?:saved|previous|earlier|older|historical)\s+(?:pdfs?|files?|documents?)\b/i.test(scopeText)) || genericHistoricalDate) &&
+      !/\b(?:new|current|fresh|attached|this)\s+(?:pdfs?|files?|documents?|upload)\b/i.test(scopeText)) return none();
   const chosen = literal.explicit && !wholeSet ? pdfs.filter(file=>literal.names.has(file.fileName.toLowerCase()) && freshNamed.has(file.fileName.toLowerCase())) : pdfs;
   if (chosen.some(file=>chosen.some(other=>other.fileId !== file.fileId && other.fileName.toLowerCase() === file.fileName.toLowerCase())))
     return none("Several uploaded PDFs have the same filename. Select the intended source before I inspect it.");
-  const all = /\b(?:compare|both|all|each)\b|\bevery\s+(?:attached\s+)?(?:pdf|file|document)\b/i.test(message);
+  const all = /\b(?:compare|both|all|each)\b|\bevery\s+(?:attached\s+)?(?:pdfs?|files?|documents?)\b/i.test(message);
   if (!literal.explicit && chosen.length > 1 && !all) return none("Which uploaded PDF should I inspect? Name one source, or ask to inspect all of them.");
   return {fileIds:new Set(chosen.map(file=>file.fileId))};
 }
@@ -133,14 +147,14 @@ export function selectPdfEvidenceSource(message: string, catalog: ConversationAt
   const freshNames = new Set(freshPdfs.map(file=>file.fileName.toLowerCase()));
   const allPdfs = [...new Map(catalog.filter(file => file.mimeType === "application/pdf")
     .map(file=>[`${file.chatId}/${file.id}`,file])).values()];
-  const relevant = /\bpdf\b|\.pdf\b/i.test(message) || allPdfs.some(file => message.toLowerCase().includes(file.fileName.toLowerCase()) || hits.some(hit => hit.attachment_id === file.id && hit.source_chat_id === file.chatId));
+  const relevant = /\bpdfs?\b|\.pdf\b/i.test(message) || allPdfs.some(file => message.toLowerCase().includes(file.fileName.toLowerCase()) || hits.some(hit => hit.attachment_id === file.id && hit.source_chat_id === file.chatId));
   if (!relevant) return null;
   const literal = resolvePdfNames(message,[...allPdfs,...freshPdfs]);
   if (literal.clarification) return {method:"none",selections:[],clarification:literal.clarification};
   // Dates inside the document question do not qualify its upload identity.
   // Parse only a date clause attached to a source or an upload verb.
   const scopeText = literal.scopeText ?? message;
-  const dateAnchors = [...scopeText.matchAll(/(?:__PDF_SOURCE__|\b(?:pdf|file|document))\s+(?:(?:that|which)\s+(?:I\s+)?)?(?:uploaded|saved|attached)\s+|\b(?:uploaded|saved|attached)\s+(?:(?:the|my|this|that)\s+)?(?:__PDF_SOURCE__|pdf|file|document)\s+(?:(?:from|on|during|in)\s+)?|\b(?:uploaded|saved|attached)\s+(?!__PDF_SOURCE__|pdf\b|file\b|document\b)|(?:__PDF_SOURCE__|\b(?:pdf|file|document))\s+from\s+(?=(?:yesterday|last\s+week|(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten)\s+(?:days?|weeks?|months?|years?)\s+ago)\b)/gi)];
+  const dateAnchors = [...scopeText.matchAll(/(?:__PDF_SOURCE__|\b(?:pdfs?|files?|documents?))\s+(?:(?:that|which)\s+(?:I\s+)?)?(?:uploaded|saved|attached)\s+|\b(?:uploaded|saved|attached)\s+(?:(?:the|my|this|that)\s+)?(?:__PDF_SOURCE__|pdfs?|files?|documents?)\s+(?:(?:from|on|during|in)\s+)?|\b(?:uploaded|saved|attached)\s+(?!__PDF_SOURCE__|pdfs?\b|files?\b|documents?\b)|(?:__PDF_SOURCE__|\b(?:pdfs?|files?|documents?))\s+from\s+(?=(?:yesterday|last\s+week|(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten)\s+(?:days?|weeks?|months?|years?)\s+ago)\b)/gi)];
   if (dateAnchors.length > 1) return {method:"none",selections:[],clarification:"This comparison gives multiple source-specific upload dates. Select each PDF version separately, or specify one shared upload-date range before comparing them."};
   const dateAnchor = dateAnchors[0];
   const dateText = dateAnchor ? scopeText.slice(dateAnchor.index + dateAnchor[0].length)
@@ -162,7 +176,7 @@ export function selectPdfEvidenceSource(message: string, catalog: ConversationAt
   const requestedSavedNames = new Set([...literalNames,...(freshCount ? pdfNameRoles(message,literal).savedNames : [])]);
   // A fresh upload is not permission to restore arbitrary old PDFs. Explicit
   // saved names still join the comparison alongside independently scoped uploads.
-  const requestsSavedSource = /\b(?:saved|previous|earlier|older|historical)\s+(?:__PDF_SOURCE__|pdf|file|document)\b/i.test(scopeText) || dateScoped;
+  const requestsSavedSource = /\b(?:saved|previous|earlier|older|historical)\s+(?:__PDF_SOURCE__|pdfs?|files?|documents?)\b/i.test(scopeText) || dateScoped;
   if (freshCount && !requestedSavedNames.size && !requestsSavedSource) return null;
   const named = pdfs.filter(file => requestedSavedNames.has(file.fileName.toLowerCase()));
   // A date constraint can disambiguate duplicate names, but cannot substitute
@@ -171,9 +185,11 @@ export function selectPdfEvidenceSource(message: string, catalog: ConversationAt
     return {method:"none",selections:[],clarification:"The explicitly named PDF does not match that upload-date range. Select the intended source or give a different date range."};
   let matched = requestedSavedNames.size ? named
     : pdfs.filter(file => hits.some(hit => hit.attachment_id === file.id && hit.source_chat_id === file.chatId));
-  if (!matched.length && (requestsSavedSource || /\b(?:saved|uploaded|my|the|that|this)\s+pdf\b/i.test(message))) matched = pdfs;
+  if (!matched.length && (requestsSavedSource || /\b(?:saved|uploaded|my|the|that|this)\s+pdfs?\b/i.test(message))) matched = pdfs;
   if (!matched.length) return requestsSavedSource || dateScoped ? {method:"none",selections:[],clarification:"No saved PDF matches that upload-date range. Select the intended source or give a different date range."} : null;
   const duplicateIdentity = matched.some(file=>matched.some(other=>other!==file && other.fileName.toLowerCase()===file.fileName.toLowerCase()));
-  if (matched.length > 1 && (!requestedSavedNames.size || duplicateIdentity)) return { method: "none", selections: [], clarification: `Which PDF source do you mean? ${matched.slice(0, 5).map(file => `${file.fileName} (chat ${file.chatId}, attachment ${file.id})`).join("; ")}` };
+  const allSavedSources=/\b(?:all|both|each|every)\s+(?:(?:the|my|saved|uploaded|previous|earlier|older|historical)\s+)*(?:pdfs|files|documents)\b/i.test(scopeText);
+  if(allSavedSources && matched.length>5) return {method:"none",selections:[],clarification:"Select up to five saved PDFs for this comparison, then continue with the remaining sources."};
+  if (matched.length > 1 && !allSavedSources && (!requestedSavedNames.size || duplicateIdentity)) return { method: "none", selections: [], clarification: `Which PDF source do you mean? ${matched.slice(0, 5).map(file => `${file.fileName} (chat ${file.chatId}, attachment ${file.id})`).join("; ")}` };
   return { method: "none", selections: matched.map(attachment=>({ attachment, mode: "source" })) };
 }

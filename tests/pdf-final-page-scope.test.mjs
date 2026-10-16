@@ -118,3 +118,20 @@ test('Oxford-comma extraction scope retains the final requested page',()=>{
  for(const page of [2,4,6])assert.match(text,new RegExp(`CHUNK_PAGE_${page}`));
  onlyPages(text,[2,4,6],8);
 });
+
+test('same-name version occurrences remain distinct in parsed and visual comparison context',()=>{
+ const a={...fixture(6,[2]),fileName:'report.pdf',pdfSourceOccurrence:0};
+ const b={...fixture(6,[5]),fileId:'other',fileName:'report.pdf',pdfSourceOccurrence:1};
+ const text=formatAttachmentContext([a,b],{userMessage:'Compare new report.pdf page 2 with saved report.pdf page 5'});
+ const sections=text.split('### ATTACHED FILE: report.pdf');assert.equal(sections.length,3);
+ assert.match(sections[1],/CHUNK_PAGE_2/);assert.doesNotMatch(sections[1],/CHUNK_PAGE_5/);
+ assert.match(sections[2],/CHUNK_PAGE_5/);assert.doesNotMatch(sections[2],/CHUNK_PAGE_2/);
+ assert.match(sections[1],/"requestFilenameOccurrence":1/);assert.match(sections[2],/"requestFilenameOccurrence":2/);
+});
+
+test('pending source clarification withholds parsed, layout and cached visual context together',()=>{
+ const file={...fixture(6,[1,2]),pdfContextBlocked:true};
+ const text=rendered(file,'Compare the saved and new PDFs');
+ onlyPages(text,[],6);assert.doesNotMatch(text,/CHUNK_PAGE_|VISUAL_PAGE_|LAYOUT_PAGE_/);
+ assert.match(text,/withheld pending source\/page clarification/);
+});

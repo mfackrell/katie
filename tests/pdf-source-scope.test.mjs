@@ -53,6 +53,9 @@ async function run(message,fresh,timelineActive=false,timelineClarification,save
  const result=await vm.runInNewContext(code(`(async()=>{
  ${part('function buildGenerationParams(', 'async function parseIncomingPayload')}
  ${part('    const freshPdfSelection =', '    const selectedBeforePruning =')}
+ for (const item of attachmentDecision.selections) if(item.mode==='source') {
+   restored.references.push(item.attachment);restored.sourceIds.add(item.attachment.id);pdfSources.set(item.attachment.fileId,item.attachment);
+ }
  ${part('    const requestAttachments =', '    console.log("[Chat API] received attachments"')}
  ${part('    const requestFingerprint =','    const idempotencyClaim =')}
  ${part('            for (const [index, attachment] of newAttachments.entries()) {','            if (timelineActive && temporalIntent) {')}
@@ -195,7 +198,7 @@ for(const message of ['Check report.pdf for errors','Examine report.pdf','Descri
 test('late ambiguous page association reaches the actual generation persona before any inspection',async()=>{
  const result=await run('Compare "a.pdf" page 2 with page 5 of "b.pdf"',[pdf('one','a.pdf'),pdf('two','b.pdf')]);
  assert.equal(result.inspected.length,0);assert.match(result.clarification,/Please specify/);
- assert.ok(result.attachments.every(file=>file.providerRef===undefined));
+ assert.ok(result.attachments.every(file=>file.providerRef===undefined && file.pdfContextBlocked===true));
  assert.match(result.params.persona,/Ask the user this clarification/);
  assert.match(result.params.persona,/associate the page selectors with their sources/);
 });
@@ -215,7 +218,7 @@ for(const message of ['OCR report.pdf','Transcribe report.pdf','Scan report.pdf'
 test('unresolved saved identities stop fresh PDF inspection before any native call',async()=>{
  const result=await run('Compare new.pdf with old.pdf',[pdf('new','new.pdf')],false,undefined,[pdf('one','old.pdf'),pdf('two','old.pdf')]);
  assert.match(result.clarification,/Which PDF source/);assert.equal(result.inspected.length,0);
- assert.ok(result.attachments.every(file=>file.providerRef===undefined));
+ assert.ok(result.attachments.every(file=>file.providerRef===undefined && file.pdfContextBlocked===true));
  assert.match(result.params.persona,/Ask the user this clarification/);
 });
 
@@ -233,4 +236,15 @@ for(const message of ["Read report.pdf but don't calculate totals","Don't summar
 });
 test('analysis words inside a saved-for-later filename do not authorize inspection',async()=>{
  const result=await run('Save review.pdf for later',[pdf('one','review.pdf')]);assert.equal(result.inspected.length,0);assert.equal(result.attachments.length,0);
+});
+
+for(const [message,expected] of [
+ ['Compare new report.pdf page 2 with saved report.pdf page 5',[2,5]],
+ ['Compare saved report.pdf page 2 with new report.pdf page 5',[5,2]],
+]) test(`same-name version identity controls each native page scope: ${message}`,async()=>{
+ const result=await run(message,[pdf('new','report.pdf')],false,undefined,[pdf('old','report.pdf')]);
+ assert.equal(result.clarification,undefined);assert.deepEqual(result.inspected,['new','old']);
+ const {requestedPdfPages}=load('lib/uploads/pdf-inventory.ts');
+ assert.deepEqual(result.inspectedTasks.map(task=>Array.from(requestedPdfPages(task,6))[0]),expected);
+ assert.deepEqual(Array.from(result.attachments,file=>file.pdfSourceOccurrence),expected[0]===2?[0,1]:[1,0]);
 });

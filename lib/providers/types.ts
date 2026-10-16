@@ -69,6 +69,8 @@ export interface FileReference {
   storageToken?: string;
   sourceFingerprint?: string;
   pdfInventory?: import("@/lib/uploads/pdf-inventory").PdfInventory;
+  pdfSourceOccurrence?: number;
+  pdfContextBlocked?: boolean;
   pdfEvidence?: import("@/lib/uploads/pdf-evidence").PdfEvidence;
   fileId: string;
   fileName: string;
