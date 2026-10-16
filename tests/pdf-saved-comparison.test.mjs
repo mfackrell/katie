@@ -190,3 +190,15 @@ test('detailed-source quota counts retained fresh PDFs rather than excluded uplo
  assert.match(tooMany.attachmentDecision.clarification,/up to five/);
  assert.equal(tooMany.attachmentDecision.selections.length,0);
 });
+
+test('unquoted to comparisons select both exact fresh and saved filenames',async()=>{
+ for(const fresh of [[pdf('a','a.pdf'),pdf('b','b.pdf')],[pdf('a','a.pdf')],[]]){
+  const saved=[pdf('a','a.pdf'),pdf('b','b.pdf')].filter(p=>!fresh.some(f=>f.id===p.id));
+  const result=await run('Compare a.pdf to b.pdf',fresh,saved);
+  assert.equal(result.attachmentDecision.clarification,undefined);
+  assert.equal(result.freshPdfSelection?.clarification,undefined);
+  assert.deepEqual(Array.from(result.attachments,x=>x.fileId),['a','b']);
+ }
+ const names=scope.resolvePdfNames('Compare a.pdf page 2 to b.pdf page 5',[pdf('a','a.pdf'),pdf('b','b.pdf')]);
+ assert.equal(names.clarification,undefined);assert.deepEqual([...names.names],['a.pdf','b.pdf']);
+});

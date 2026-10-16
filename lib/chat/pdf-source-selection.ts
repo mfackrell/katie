@@ -18,12 +18,12 @@ function filenamePrefix(prefix: string): boolean {
   // Page qualifiers between exact filenames are task syntax, not filename
   // prefixes. Physical-page validity is checked after identity selection.
   const pages = String.raw`(?:physical\s+)?pages?\s+\d+(?:\s*(?:[-–—]|to\b|through\b)\s*\d+)?(?:\s*(?:,\s*(?:and\b)?|and\b)\s*\d+(?:\s*(?:[-–—]|to\b|through\b)\s*\d+)?)*`;
-  const connector = String.raw`(?:with|and|versus|vs\.?|against)`;
+  const connector = String.raw`(?:with|to|and|versus|vs\.?|against)`;
   if (new RegExp(String.raw`^(?:on\s+)?${pages}\s+${connector}(?:\s+(?:the|my|this|that|attached|uploaded|saved|original|new|fresh|current|previous|earlier|older|historical|version|copy|of|pdfs?|files?|documents?|named|called))*\s*$`, "i").test(request) ||
       new RegExp(String.raw`^${connector}\s+${pages}\s+(?:of|in|from)\s*$`, "i").test(request)) return true;
   // Direct-object references may have task syntax before the full name, but
   // unknown filename modifiers (e.g. "quarterly") must not be discarded.
-  if (/^(?:read|review|inspect|ocr|transcribe|scan|find|locate|show|analy[sz]e|summari[sz]e|compare|open|use|check|examine|describe|audit|look at|look through|look over|process|and|with|versus|vs\.?|against|then)(?:\s+(?:only|also|both|the|my|this|that|attached|uploaded|saved|original|new|fresh|current|previous|earlier|older|historical|version|copy|of|pdfs?|files?|documents?|named|called))*\s*$/i.test(request)) return true;
+  if (/^(?:read|review|inspect|ocr|transcribe|scan|find|locate|show|analy[sz]e|summari[sz]e|compare|open|use|check|examine|describe|audit|look at|look through|look over|process|and|with|to|versus|vs\.?|against|then)(?:\s+(?:only|also|both|the|my|this|that|attached|uploaded|saved|original|new|fresh|current|previous|earlier|older|historical|version|copy|of|pdfs?|files?|documents?|named|called))*\s*$/i.test(request)) return true;
   // In a content question, the preposition introduces the source, not a
   // suffix of a direct-object filename. Ambiguous other wording clarifies.
   return /^(?:what|where|which|how|why|when|does|did|is|are|tell me|find|locate|calculate|sum|total|summari[sz]e|extract|explain|interpret|reconcile|analy[sz]e|review|inspect|read|compare)\b[\s\S]*\b(?:in|inside|within|from|of|for|about)\s+(?:(?:the|my|this|that|attached|uploaded|saved|pdfs?|files?|documents?)\s+)*$/i.test(request + " ");
