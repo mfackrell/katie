@@ -30,3 +30,9 @@ test('distinct sources keep trailing and leading page qualifiers separate',()=>{
 test('generic checks without a PDF reference do not authorize inspection',()=>{
  for(const message of ['Check the weather','Describe a beach','Look at the sky'])assert.equal(exports.isPdfContentRequest(message),false);
 });
+
+test('Oxford-comma lists retain every requested physical page',()=>{
+ for(const message of ['Read pages 2, 4, and 6','Read pages 2-3, 5, and 7-8','Read pages 2,4,and 6'])
+  assert.equal(JSON.stringify(pages(message,10)),message.includes('2-3')?'[2,3,5,7,8]':'[2,4,6]');
+ for(const message of ['Read pages 2, 4, and','Read pages 2,,4','Read pages 2, or 4','Read pages 2,4, and six'])assert.throws(()=>pages(message,10));
+});

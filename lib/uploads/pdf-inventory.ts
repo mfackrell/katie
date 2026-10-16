@@ -116,14 +116,14 @@ export function requestedPdfPages(message: string, count: number, sourceNames: s
             if (/^(?:[a-z](?:\d+)?|[a-z]+\d+)(?=\s|$|[-–—,;.!?&+/])|^["'“‘«`[(]/i.test(tail)) throw invalid();
             continue;
         }
-        const selector = /^(\d+(?:\s*(?:[-–—]|to\b|through\b)\s*\d+)?(?:\s*(?:,|and\b)\s*\d+(?:\s*(?:[-–—]|to\b|through\b)\s*\d+)?)*)/i.exec(tail)!;
+        const selector = /^(\d+(?:\s*(?:[-–—]|to\b|through\b)\s*\d+)?(?:\s*(?:,\s*(?:and\b)?|and\b)\s*\d+(?:\s*(?:[-–—]|to\b|through\b)\s*\d+)?)*)/i.exec(tail)!;
         const rest = tail.slice(selector[0].length);
         // Do not accept a valid-looking prefix of a fractional, signed, exponent,
         // malformed-range, or partly unsupported page list.
         if (/^\s*(?:[&+]|;\s*\d|or\b)|^[\w/]|^\.(?:\d|\.)|^\s*(?:[-–—]|to\b|through\b)/i.test(rest)) throw invalid();
-        const continuation = /^\s*(?:,|and\b)\s*(.*)/i.exec(rest)?.[1];
-        if (continuation !== undefined && (/^[-+−\d]/.test(continuation) || numberWord.test(continuation) || /^[a-z]\s*(?:$|[,;.!?&–—-])/i.test(continuation))) throw invalid();
-        for (const part of selector[0].split(/\s*(?:,|and\b)\s*/i)) {
+        const continuation = /^\s*(?:,\s*(?:and\b)?|and\b)\s*(.*)/i.exec(rest)?.[1];
+        if (continuation !== undefined && (!continuation.trim() || /^(?:[,&+]|or\b)/i.test(continuation) || /^[-+−\d]/.test(continuation) || numberWord.test(continuation) || /^[a-z]\s*(?:$|[,;.!?&–—-])/i.test(continuation))) throw invalid();
+        for (const part of selector[0].split(/\s*(?:,\s*(?:and\b)?|and\b)\s*/i)) {
             const range = /^(\d+)(?:\s*(?:[-–—]|to\b|through\b)\s*(\d+))?$/i.exec(part)!;
             const start = Number(range[1]), end = Number(range[2] ?? range[1]);
             if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start < 1 || end < start || end > count) throw invalid();

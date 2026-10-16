@@ -112,3 +112,9 @@ test('a terse review retry cannot reopen text after a failed original page scope
  const output=rendered(file,'yes');onlyPages(output,[],6);
  assert.doesNotMatch(output,/CHUNK_PAGE_|VISUAL_PAGE_|LAYOUT_PAGE_/);
 });
+
+test('Oxford-comma extraction scope retains the final requested page',()=>{
+ const text=rendered(fixture(8,[2,4,6]),'Read pages 2, 4, and 6');
+ for(const page of [2,4,6])assert.match(text,new RegExp(`CHUNK_PAGE_${page}`));
+ onlyPages(text,[2,4,6],8);
+});
