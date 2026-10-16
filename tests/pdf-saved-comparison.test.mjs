@@ -111,3 +111,26 @@ test('a singular dated source excludes the fresh same-name copy while comparison
  const selected=scope.selectPdfEvidenceSource(message,saved,[],1,new Date('2026-10-16T12:00:00Z'),fresh);
  assert.equal(selected.selections[0].attachment.id,'old');
 });
+
+for(const [message,fresh,saved,expected] of [
+ ['Compare a.pdf with saved b.pdf',[pdf('a-new','a.pdf'),pdf('b-new','b.pdf')],[pdf('a-old','a.pdf'),pdf('b-old','b.pdf')],['a-new','b-old']],
+ ['Compare saved a.pdf with b.pdf',[pdf('a-new','a.pdf'),pdf('b-new','b.pdf')],[pdf('a-old','a.pdf'),pdf('b-old','b.pdf')],['b-new','a-old']],
+ ['Compare saved a.pdf with b.pdf',[pdf('a-new','a.pdf')],[pdf('a-old','a.pdf'),pdf('b-old','b.pdf')],['a-old','b-old']],
+]) test(`saved qualifiers bind only their named source: ${message} (${fresh.length} fresh)`,async()=>{
+ const result=await run(message,fresh,saved);
+ assert.equal(result.attachmentDecision.clarification,undefined);
+ assert.deepEqual(Array.from(result.attachments,f=>f.fileId),expected);
+});
+
+test('explicit new and saved role qualifiers select exactly their respective versions',async()=>{
+ const result=await run('Compare new a.pdf with saved b.pdf',[pdf('a-new','a.pdf'),pdf('b-new','b.pdf')],[pdf('a-old','a.pdf'),pdf('b-old','b.pdf')]);
+ assert.equal(result.attachmentDecision.clarification,undefined);
+ assert.deepEqual(Array.from(result.attachments,f=>f.fileId),['a-new','b-old']);
+});
+test('an explicitly shared historical date selects saved versions of both names',()=>{
+ const message='Compare both "a.pdf" and "b.pdf" uploaded yesterday';
+ const fresh=[pdf('a-new','a.pdf'),pdf('b-new','b.pdf')],saved=[{...pdf('a-old','a.pdf'),createdAt:'2026-10-15T12:00:00Z'},{...pdf('b-old','b.pdf'),createdAt:'2026-10-15T12:00:00Z'}];
+ assert.equal(scope.selectFreshPdfSources(message,fresh,false,saved).fileIds.size,0);
+ const result=scope.selectPdfEvidenceSource(message,saved,[],2,new Date('2026-10-16T12:00:00Z'),fresh);
+ assert.equal(result.clarification,undefined);assert.equal(result.selections.length,2);
+});
