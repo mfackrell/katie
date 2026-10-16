@@ -14,7 +14,7 @@ test('real standalone PostgreSQL validates management RPCs, immutable snapshots,
   const setup=`create role anon;create role authenticated;create role service_role bypassrls;create table actors(id uuid primary key,name text,system_prompt text,review_mode text);create table chats(id uuid primary key,actor_id uuid references actors,title text,created_at timestamptz,updated_at timestamptz);create table chat_requests(request_id text primary key,actor_id text,chat_id text,status text,error_message text,updated_at timestamptz);grant select,update on chat_requests to service_role;create table repo_sync_runs(id uuid primary key,repository_full_name text);grant usage on schema public to service_role;grant select,insert,update on actors,chats,repo_sync_runs to service_role;`;
   const migration=readFileSync('supabase/migrations/20261016211426_agent_management.sql','utf8').split('\n').filter(l=>!l.trimStart().startsWith('--')).join(' ');
   const checks=`do $test$
-  declare cfg jsonb:='{"name":"Writer","instructions":"Original","research":false,"attachments":false,"development":true,"reviewMode":"always","maxActiveTasks":1,"maxInputChars":1000}'; a jsonb;t jsonb;other jsonb; tid uuid:=gen_random_uuid(); rid uuid:=gen_random_uuid();
+  declare cfg jsonb:='{"name":"Writer","instructions":"Original","research":false,"attachments":false,"development":true,"reviewMode":"always","maxActiveTasks":1,"maxInputChars":1000}'; a jsonb;t jsonb;other jsonb; tid uuid:=gen_random_uuid(); rid uuid:=gen_random_uuid(); turn uuid:=gen_random_uuid(); replay jsonb; accepted jsonb;
   begin
    assert not has_table_privilege('anon','managed_agents','SELECT');
    assert not has_table_privilege('authenticated','agent_tasks','INSERT');
@@ -43,11 +43,23 @@ test('real standalone PostgreSQL validates management RPCs, immutable snapshots,
    update agent_tasks set execution_claimed_at=now()-interval '21 minutes' where id=tid;
    assert recover_agent_execution(tid,t->>'request_id');assert not recover_agent_execution(tid,t->>'request_id');
    assert (select status from agent_tasks where id=tid)='failed';assert not claim_agent_execution(tid,t->>'request_id');
-   other:=transition_agent_task(tid,'continue','Explicit retry');assert other->>'request_id'<>t->>'request_id';assert other->>'chat_id'=t->>'chat_id';assert other->'snapshot'=t->'snapshot';
+   other:=transition_agent_task(tid,'continue','Explicit retry',gen_random_uuid(),t->>'request_id');assert other->>'request_id'<>t->>'request_id';assert other->>'chat_id'=t->>'chat_id';assert other->'snapshot'=t->'snapshot';
    assert not recover_agent_execution(tid,other->>'request_id');assert claim_agent_execution(tid,other->>'request_id');
    insert into chat_requests values(other->>'request_id',other->>'actor_id',other->>'chat_id','processing',null,now());
    update agent_tasks set execution_claimed_at=now()-interval '21 minutes' where id=tid;
    assert recover_agent_execution(tid,other->>'request_id');assert (select status from chat_requests where request_id=other->>'request_id')='failed';
+   a:=save_managed_agent(null,cfg,false);t:=create_agent_task(gen_random_uuid(),(a->>'id')::uuid,'Continuation','general',null);tid:=(t->>'id')::uuid;
+   update agent_tasks set status='completed' where id=tid;
+   accepted:=transition_agent_task(tid,'continue','Next',turn,t->>'request_id');
+   replay:=transition_agent_task(tid,'continue','Next',turn,t->>'request_id');assert replay->>'request_id'=accepted->>'request_id';
+   assert claim_agent_execution(tid,accepted->>'request_id');assert not claim_agent_execution(tid,accepted->>'request_id');
+   update agent_tasks set status='completed' where id=tid;
+   replay:=transition_agent_task(tid,'continue','Next',turn,t->>'request_id');assert replay->>'request_id'=accepted->>'request_id';
+   other:=transition_agent_task(tid,'continue','Later',gen_random_uuid(),accepted->>'request_id');
+   replay:=transition_agent_task(tid,'continue','Next',turn,t->>'request_id');
+   assert replay->>'request_id'=other->>'request_id';assert replay->'continuation_receipt'->>'request_id'=accepted->>'request_id';
+   assert (select count(*) from agent_task_continuations where task_id=tid)=2;
+   assert not has_table_privilege('anon','agent_task_continuations','SELECT');assert not has_table_privilege('authenticated','agent_task_continuations','INSERT');
    a:=save_managed_agent(null,cfg,false);insert into repo_sync_runs values(rid,'owner/repo');t:=create_agent_task(gen_random_uuid(),(a->>'id')::uuid,'Develop','development',rid);
    perform transition_agent_task((t->>'id')::uuid,'start',null);assert claim_agent_dispatch((t->>'id')::uuid);assert not claim_agent_dispatch((t->>'id')::uuid);
   end $test$;`.replace(/\n/g,' ');
