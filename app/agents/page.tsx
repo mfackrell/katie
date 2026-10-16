@@ -4,6 +4,19 @@ import Link from "next/link";
 import type { AgentConfig, AgentTask, ManagedAgent } from "@/lib/agents/policy";
 
 type TaskView = AgentTask & { output?: string | null; review?: unknown; progress?: unknown };
+type PendingReply = { taskId: string; turnId: string; expectedRequestId: string; message: string };
+const replyKey = (taskId: string) => `katie.agentReply.v1.${taskId}`;
+function savedReply(taskId: string): PendingReply | null {
+  try {
+    const raw = window.localStorage.getItem(replyKey(taskId));
+    if (!raw) return null;
+    const value = JSON.parse(raw) as Partial<PendingReply>;
+    if (value.taskId !== taskId || typeof value.turnId !== "string" || !/^[0-9a-f-]{36}$/i.test(value.turnId) ||
+        typeof value.expectedRequestId !== "string" || value.expectedRequestId.length < 1 || value.expectedRequestId.length > 128 ||
+        typeof value.message !== "string" || !value.message.trim() || value.message.length > 16000) return null;
+    return value as PendingReply;
+  } catch { return null; }
+}
 const defaults: AgentConfig = { name: "", instructions: "", research: false, attachments: false, development: false, maxActiveTasks: 1, maxInputChars: 8000, reviewMode: "always" };
 const field = "w-full rounded-lg border border-white/20 bg-zinc-900 p-3 text-white";
 const button = "rounded-lg border border-white/20 px-4 py-2 hover:bg-white/10 disabled:opacity-40";
@@ -25,6 +38,7 @@ export default function AgentsPage() {
   const [repoId, setRepoId] = useState("");
   const [selected, setSelected] = useState<TaskView | null>(null);
   const [continuation, setContinuation] = useState("");
+  const [pendingReply, setPendingReply] = useState<PendingReply | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const busyRef = useRef(false);
@@ -44,8 +58,8 @@ export default function AgentsPage() {
         const params = new URLSearchParams(window.location.search);
         const id = params.get("task");
         const chat = params.get("chat");
-        if (!id && chat) { const result = await api(`/api/agent-tasks?chatId=${encodeURIComponent(chat)}`); if (active) setSelected(result.task); }
-        if (id) { const result = await api(`/api/agent-tasks?id=${encodeURIComponent(id)}`); if (active) setSelected(result.task); }
+        if (!id && chat) { const result = await api(`/api/agent-tasks?chatId=${encodeURIComponent(chat)}`); if (active) select(result.task); }
+        if (id) { const result = await api(`/api/agent-tasks?id=${encodeURIComponent(id)}`); if (active) select(result.task); }
       } catch (e) { if (active) setError(e instanceof Error ? e.message : "Unable to load agents"); }
       finally { if (active) setLoading(false); }
     })();
@@ -58,7 +72,8 @@ export default function AgentsPage() {
     try { await action(); } catch (e) { setError(e instanceof Error ? e.message : "Operation failed"); } finally { busyRef.current = false; setBusy(false); }
   }
   function select(task: TaskView) {
-    setSelected(task); setContinuation("");
+    const pending = savedReply(task.id);
+    setSelected(task); setContinuation(pending?.message ?? ""); setPendingReply(pending);
     window.history.replaceState(null, "", `/agents?task=${encodeURIComponent(task.id)}`);
   }
   async function inspect(id: string) {
@@ -78,8 +93,21 @@ export default function AgentsPage() {
   }
   async function start(action: "start" | "continue") {
     if (!selected) return;
-    const result = await api("/api/agent-tasks", { action, id: selected.id, ...(action === "continue" ? { message: continuation } : {}) });
-    select(result.task); await execute(result.task); await load();
+    let reply: PendingReply | null = null;
+    if (action === "continue") {
+      const message = continuation.trim();
+      const prior = savedReply(selected.id);
+      reply = prior?.message === message ? prior : { taskId: selected.id, turnId: crypto.randomUUID(), expectedRequestId: selected.request_id, message };
+      // Persist before submission, so a reload after response loss retries this same turn.
+      window.localStorage.setItem(replyKey(selected.id), JSON.stringify(reply));
+      setPendingReply(reply);
+    }
+    const result = await api("/api/agent-tasks", { action, id: selected.id, ...(reply ? { message: reply.message, turnId: reply.turnId, expectedRequestId: reply.expectedRequestId } : {}) });
+    if (reply && savedReply(selected.id)?.turnId === reply.turnId) window.localStorage.removeItem(replyKey(selected.id));
+    select(result.task);
+    // An old receipt may be replayed after a later turn. Never execute that later turn by accident.
+    if (!result.continuation || result.continuation.request_id === result.task.request_id) await execute(result.task);
+    await load();
   }
   return <main className="min-h-screen bg-zinc-950 px-4 py-6 text-zinc-100 sm:px-8">
     <div className="mx-auto max-w-6xl space-y-6">
@@ -96,7 +124,7 @@ export default function AgentsPage() {
               <label className="block">Purpose, instructions and responsibilities<textarea className={field} rows={5} value={config.instructions} required maxLength={12000} onChange={e => setConfig({ ...config, instructions: e.target.value })} /></label>
               {([['research', 'Live web research'], ['development', 'Approved development submission']] as const).map(([key, label]) => <label key={key} className="flex items-center gap-2"><input type="checkbox" checked={config[key]} onChange={e => setConfig({ ...config, [key]: e.target.checked })} />{label}</label>)}
               <p className="text-sm text-zinc-400">Repository reads and attachment/media access: unavailable for managed tasks. Development runs in the existing GitHub workflow.</p>
-              <label className="block">Independent review preference<select className={field} value={config.reviewMode} onChange={e => setConfig({ ...config, reviewMode: e.target.value as AgentConfig["reviewMode"] })}><option value="always">Always (default)</option><option value="adaptive">Adaptive</option></select></label>
+              <label className="block">Independent review preference<select aria-label="Independent review preference" className={field} value={config.reviewMode} onChange={e => setConfig({ ...config, reviewMode: e.target.value as AgentConfig["reviewMode"] })}><option value="always">Always (default)</option><option value="adaptive">Adaptive</option></select></label>
               <label className="block">Maximum active tasks (1–4)<input className={field} type="number" min={1} max={4} required value={config.maxActiveTasks} onChange={e => setConfig({ ...config, maxActiveTasks: Number(e.target.value) })} /></label>
               <label className="block">Maximum input characters (100–16000)<input className={field} type="number" min={100} max={16000} required value={config.maxInputChars} onChange={e => setConfig({ ...config, maxInputChars: Number(e.target.value) })} /></label>
               <p className="text-xs text-zinc-400">These bound admission and each user turn. Existing runtime deadlines and bounded collaboration apply. No hard dollar or token budget is offered.</p>
@@ -105,9 +133,9 @@ export default function AgentsPage() {
           </section>
           <section className="space-y-4 rounded-xl border border-white/10 p-4" aria-labelledby="task-title"><h2 id="task-title" className="text-lg">Assign a task</h2>
             <form className="space-y-3" onSubmit={event => { event.preventDefault(); void work(async () => { const id = creationId.current ??= crypto.randomUUID(); const result = await api("/api/agent-tasks", { action: "create", id, agentId, input, kind, ...(kind === "development" ? { repositoryId: repoId } : {}) }); select(result.task); creationId.current = null; setInput(""); await load(); }); }}>
-              <label className="block">Agent<select className={field} value={agentId} required onChange={e => setAgentId(e.target.value)}><option value="">Choose an agent</option>{agents.filter(a => !a.archived).map(a => <option key={a.id} value={a.id}>{a.config.name}</option>)}</select></label>
-              <label className="block">Task type<select className={field} value={kind} onChange={e => setKind(e.target.value as typeof kind)}><option value="general">Research, analysis, finance, writing or code assistance</option><option value="development">Autonomous software development</option></select></label>
-              {kind === "development" && <label className="block">Connected repository<select className={field} value={repoId} required onChange={e => setRepoId(e.target.value)}><option value="">Choose repository</option>{repos.map(r => <option key={r.id} value={r.id}>{r.full_name}</option>)}</select></label>}
+              <label className="block">Agent<select aria-label="Agent" className={field} value={agentId} required onChange={e => setAgentId(e.target.value)}><option value="">Choose an agent</option>{agents.filter(a => !a.archived).map(a => <option key={a.id} value={a.id}>{a.config.name}</option>)}</select></label>
+              <label className="block">Task type<select aria-label="Task type" className={field} value={kind} onChange={e => setKind(e.target.value as typeof kind)}><option value="general">Research, analysis, finance, writing or code assistance</option><option value="development">Autonomous software development</option></select></label>
+              {kind === "development" && <label className="block">Connected repository<select aria-label="Connected repository" className={field} value={repoId} required onChange={e => setRepoId(e.target.value)}><option value="">Choose repository</option>{repos.map(r => <option key={r.id} value={r.id}>{r.full_name}</option>)}</select></label>}
               <label className="block">Task instructions<textarea className={field} value={input} rows={5} required maxLength={agents.find(a => a.id === agentId)?.config.maxInputChars ?? 16000} onChange={e => setInput(e.target.value)} /></label>
               <button className={button} disabled={busy}>Save task for approval</button>
             </form>
@@ -122,6 +150,7 @@ export default function AgentsPage() {
           {selected.details && <p role="status">{selected.details}</p>}
           <div className="flex flex-wrap gap-2">
             {selected.status === "draft" && <button className={button} disabled={busy} onClick={() => void work(() => start("start"))}>{selected.kind === "development" ? "Approve exact saved task and submit to GitHub" : "Start saved task"}</button>}
+            {pendingReply?.taskId === selected.id && <button className={button} disabled={busy} onClick={() => void work(() => start("continue"))}>Retry saved continuation</button>}
             {selected.status === "running" && <button className={button} disabled={busy} onClick={() => void work(() => execute(selected))}>Resume saved request</button>}
             <button className={button} disabled={busy} onClick={() => void work(async () => { const result = await api("/api/agent-tasks", { action: "refresh", id: selected.id }); select(result.task); await load(); })}>Refresh status</button>
             <button className={button} disabled={busy} onClick={() => { localStorage.setItem("katie.activeActorId", selected.actor_id); localStorage.setItem("katie.activeChatId", selected.chat_id); window.location.assign("/"); }}>Open existing workspace</button>
