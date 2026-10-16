@@ -58,11 +58,11 @@ create table public.agent_task_continuations (
  primary key(task_id,turn_id)
 );
 alter table public.agent_task_continuations enable row level security;
-revoke all on public.agent_task_continuations from public,anon,authenticated;
+revoke all on public.agent_task_continuations from public,anon,authenticated,service_role;
 grant select,insert on public.agent_task_continuations to service_role;
 alter table public.managed_agents enable row level security;
 alter table public.agent_tasks enable row level security;
-revoke all on public.managed_agents,public.agent_tasks from public,anon,authenticated;
+revoke all on public.managed_agents,public.agent_tasks from public,anon,authenticated,service_role;
 grant select,insert,update on public.managed_agents,public.agent_tasks to service_role;
 
 create function public.save_managed_agent(p_id uuid,p_config jsonb,p_archive boolean default false)
