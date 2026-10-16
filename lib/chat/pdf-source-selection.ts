@@ -6,7 +6,7 @@ import type { FileReference } from "@/lib/providers/types";
 import type { AttachmentDecision } from "./attachment-selection";
 
 type NamedPdf = { fileName: string; mimeType: string };
-type PdfNames = { names: Set<string>; explicit: boolean; clarification?: string; scopeText?: string };
+type PdfNames = { names: Set<string>; explicit: boolean; clarification?: string; scopeText?: string; sourceSpans?: Array<{start:number;end:number;name:string}> };
 const sourceClarification = "I could not resolve the complete PDF filename. Quote the full filename or select the intended source.";
 
 /** A space is legal inside a filename; it is not itself a source boundary. */
@@ -32,7 +32,7 @@ function filenamePrefix(prefix: string): boolean {
 export function resolvePdfNames(message: string, files: NamedPdf[]): PdfNames {
   const available = [...new Set(files.filter(file=>file.mimeType === "application/pdf").map(file=>file.fileName))].sort((a,b)=>b.length-a.length);
   const names = new Set<string>();
-  const spans: Array<{start:number;end:number}> = [];
+  const spans: Array<{start:number;end:number;name:string}> = [];
   let explicit = false;
   for (const pattern of [/"([^"\n]+\.pdf)"/gi, /“([^”\n]+\.pdf)”/gi, /'([^'\n]+\.pdf)'/gi, /‘([^’\n]+\.pdf)’/gi, /`([^`\n]+\.pdf)`/gi, /«([^»\n]+\.pdf)»/gi]) {
     for (const match of message.matchAll(pattern)) {
@@ -40,7 +40,7 @@ export function resolvePdfNames(message: string, files: NamedPdf[]): PdfNames {
       explicit = true;
       const name = available.find(value=>value.toLowerCase() === match[1].toLowerCase());
       if (!name) return {names,explicit,clarification:sourceClarification};
-      names.add(name.toLowerCase());spans.push({start:match.index!,end:match.index!+match[0].length});
+      names.add(name.toLowerCase());spans.push({start:match.index!,end:match.index!+match[0].length,name:name.toLowerCase()});
     }
   }
   let precedingEnd = 0;
@@ -53,14 +53,14 @@ export function resolvePdfNames(message: string, files: NamedPdf[]): PdfNames {
     const suffix = message.slice(end);
     if (!name || !/^(?:$|[\s,;:!?)}\]]|\.(?:\s|$)|['’]s\b)/u.test(suffix)
       || !filenamePrefix(message.slice(precedingEnd,end-name.length))) return {names,explicit,clarification:sourceClarification};
-    names.add(name.toLowerCase());spans.push({start:end-name.length,end});precedingEnd=end;
+    names.add(name.toLowerCase());spans.push({start:end-name.length,end,name:name.toLowerCase()});precedingEnd=end;
   }
   const scopeText = [...spans].sort((a,b)=>b.start-a.start).reduce((text,span)=>text.slice(0,span.start)+" __PDF_SOURCE__ "+text.slice(span.end),message);
   // All validated filenames, including unquoted names, are data. Apply
   // source exclusions only after masking their complete spans.
   if (/\b(?:except|excluding|exclude|ignore|not|without)\s+(?:(?:only|the|my|this|that|these|those|both|any|all|other|attached|uploaded|saved)\s+)*(?:__PDF_SOURCE__|pdfs?|files?|documents?)\b/i.test(scopeText))
     return {names:new Set(),explicit,clarification:"The PDF selection includes excluded sources. Specify only the full filenames to inspect."};
-  return {names,explicit,scopeText};
+  return {names,explicit,scopeText,sourceSpans:[...spans].sort((a,b)=>a.start-b.start)};
 }
 
 export type FreshPdfSelection = { fileIds: Set<string>; clarification?: string };
@@ -123,8 +123,13 @@ export function selectPdfEvidenceSource(message: string, catalog: ConversationAt
   const dateScoped = hasUploadDateReference(`from ${dateText}`);
   const date = dateScoped ? prepareMemoryQuery(`from ${dateText}`, now) : null;
   if (date?.clarification) return {method:"none",selections:[],clarification:date.clarification};
+  const sourceTokens = [...scopeText.matchAll(/__PDF_SOURCE__/g)];
+  const qualifiedToken = dateAnchor ? sourceTokens.findIndex(token => token.index >= dateAnchor.index && token.index < dateAnchor.index + dateAnchor[0].length) : -1;
+  const sharedDate = qualifiedToken === sourceTokens.length - 1 && /\b(?:both|all|each)\s+__PDF_SOURCE__/i.test(scopeText);
+  const datedName = qualifiedToken >= 0 && !sharedDate
+    ? literal.sourceSpans?.[qualifiedToken]?.name : undefined;
   const pdfs = allPdfs.filter(file => {
-    if (!dateScoped) return true;
+    if (!dateScoped || (datedName && file.fileName.toLowerCase() !== datedName)) return true;
     const created = Date.parse(file.createdAt ?? "");
     return Number.isFinite(created) && (!date?.after || created >= Date.parse(date.after)) && (!date?.before || created < Date.parse(date.before));
   });

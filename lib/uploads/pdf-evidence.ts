@@ -14,6 +14,7 @@ export type PdfEvidence = {
     model: string;
     pages: z.infer<typeof pageSchema>[];
     rawReports: string[];
+    requestedPages?: number[];
     contextPages?: number[];
     blockedPages?: number[];
     state: "not-requested" | "failure" | "partial";
@@ -28,7 +29,7 @@ export function validatePdfReport(raw: string, fingerprint: string, requested: n
 export function pdfPageList(pages: number[]): string {
     return pages.length ? pages.slice(0, 16).join(",") + (pages.length > 16 ? ` … (${pages.length} pages total)` : "") : "none";
 }
-export async function inspectPdf(reference: FileReference, message: string, source: Blob, cached?: PdfEvidence, claimPages?: (pages: number[]) => Promise<number[]>): Promise<PdfEvidence> {
+export async function inspectPdf(reference: FileReference, message: string, source: Blob, cached?: PdfEvidence, claimPages?: (pages: number[]) => Promise<number[]>, rememberScope?: (pages: number[]) => Promise<void>): Promise<PdfEvidence> {
     const fingerprint = reference.sourceFingerprint!, inventory = reference.pdfInventory!;
     const validCache = cached?.fingerprint === fingerprint && cached.version === "pdf-visual-v1" && cached.extractionVersion === inventory.version && cached.provider === "google" && cached.model === "gemini-2.5-flash" && Array.isArray(cached.pages) && cached.pages.every(page => pageSchema.safeParse(page).success && page.physicalPage <= inventory.pageCount) && new Set(cached.pages.map(page => page.physicalPage)).size === cached.pages.length;
     const prior = validCache ? cached : undefined;
@@ -43,11 +44,18 @@ export async function inspectPdf(reference: FileReference, message: string, sour
         return result;
     let requested: number[];
     try {
-        requested = requestedPdfPages(message, inventory.pageCount, [reference.fileName]);
+        if (/^(?:please\s+)?(?:continue|go on|proceed|next(?:\s+pages?)?)[.!?\s]*$/i.test(message.trim())) {
+            const scope = prior?.requestedPages;
+            if (!scope?.length || scope.length > 10000 || scope.some(page => !Number.isSafeInteger(page) || page < 1 || page > inventory.pageCount) || new Set(scope).size !== scope.length)
+                throw new Error("Previous page scope unavailable");
+            requested = [...scope];
+        } else requested = requestedPdfPages(message, inventory.pageCount, [reference.fileName]);
+        if (rememberScope) await rememberScope(requested);
+        result.requestedPages = requested;
     }
     catch {
         result.state = "failure";
-        result.notice += " Invalid physical page request; no analysis performed.";
+        result.notice += " Invalid or unavailable physical page scope; specify the requested pages before continuing. No analysis performed.";
         return result;
     }
     const remaining = requested.filter(p => !result.pages.some(done => done.physicalPage === p));

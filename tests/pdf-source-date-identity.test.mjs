@@ -27,7 +27,7 @@ const otherHit={attachment_id:other.id,source_chat_id:other.chatId};
 for(const message of [
  'Read report.pdf uploaded yesterday',
  'Read my PDF report.pdf uploaded yesterday',
- 'Read report.pdf and other.pdf uploaded yesterday',
+ 'Read both report.pdf and other.pdf uploaded yesterday',
  'Read “report.pdf” uploaded yesterday',
  'Read report.pdf uploaded from 2026-10-15 to 2026-10-15',
 ])test(`literal source and date remain binding: ${message}`,()=>{
@@ -73,7 +73,15 @@ test('multiple source-specific upload-date scopes clarify rather than selecting 
  const sources=['a.pdf','b.pdf'].flatMap(fileName=>[yesterday,today].map((createdAt,index)=>({...old,id:fileName+index,chatId:fileName+index,fileName,createdAt})));
  const result=select('Compare "a.pdf" uploaded yesterday with "b.pdf" uploaded today',sources,[],0,now);
  assert.equal(result.selections.length,0);assert.match(result.clarification,/multiple source-specific upload dates/);
- const shared=select('Compare "a.pdf" and "b.pdf" uploaded yesterday',sources,[],0,now);
+ const shared=select('Compare both "a.pdf" and "b.pdf" uploaded yesterday',sources,[],0,now);
  assert.equal(shared.clarification,undefined);assert.equal(shared.selections.length,2);
  assert.ok(shared.selections.every(item=>item.attachment.createdAt===yesterday));
+});
+
+test('a date on one named PDF does not restrict a different unqualified source',()=>{
+ const select=selector(),a={...old,id:'a-old',fileName:'a.pdf',createdAt:'2026-10-15T12:00:00Z'},b={...other,id:'b-current',fileName:'b.pdf',createdAt:'2026-10-16T03:00:00Z'};
+ for(const message of ['Compare "a.pdf" uploaded yesterday with "b.pdf"','Compare both "a.pdf" uploaded yesterday and "b.pdf"']) {
+  const result=select(message,[a,b],[],0,now);
+  assert.equal(result.clarification,undefined);assert.deepEqual(Array.from(result.selections,item=>item.attachment.id),['a-old','b-current']);
+ }
 });

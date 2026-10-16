@@ -545,7 +545,23 @@ export function createStoredUploadService(storage: Storage, secret: string, opti
         return saved.data ? JSON.parse(await saved.data.text()) : null;
       }));
       const matching=receipts.filter(envelope=>envelope?.actorId===actorId && envelope?.chatId===chatId && envelope?.attachmentId===attachment.id && envelope?.evidence?.fingerprint===fingerprint);
-      const cached:PdfEvidence|undefined=matching.length ? {...matching[0].evidence,pages:matching.flatMap(envelope=>envelope.evidence.pages),rawReports:[...new Set<string>(matching.flatMap(envelope=>envelope.evidence.rawReports))]} : undefined;
+      let cached:PdfEvidence|undefined=matching.length ? {...matching[0].evidence,pages:matching.flatMap(envelope=>envelope.evidence.pages),rawReports:[...new Set<string>(matching.flatMap(envelope=>envelope.evidence.rawReports))]} : undefined;
+      // Page scope belongs to this conversation and retained source, not the
+      // first immutable receipt or whichever other chat last inspected it.
+      conversationPath(currentChat,attachment.id);
+      const scopePath=`${path}.pdf-scope-${currentChat}.json`;
+      const storedScope=await objects.download(scopePath);
+      let previousPages:number[]|undefined;
+      if(storedScope.data) {
+        try {
+          const scope=JSON.parse(await storedScope.data.text());
+          if(scope.version==="pdf-scope-v1" && scope.actorId===actorId && scope.sourceChatId===chatId && scope.currentChat===currentChat && scope.attachmentId===attachment.id && scope.fingerprint===fingerprint &&
+            Array.isArray(scope.pages) && scope.pages.length>0 && scope.pages.length<=10000 && scope.pages.every((page:unknown)=>Number.isSafeInteger(page) && (page as number)>0 && (page as number)<=reference.pdfInventory!.pageCount) && new Set(scope.pages).size===scope.pages.length)
+            previousPages=scope.pages;
+        } catch { /* Missing or corrupt scope cannot widen a continuation. */ }
+      }
+      if(cached) cached={...cached,requestedPages:previousPages};
+      else if(previousPages) cached={version:"pdf-visual-v1",fingerprint,extractionVersion:"pdf-pages-v1",provider:"google",model:"gemini-2.5-flash",pages:[],rawReports:[],requestedPages:previousPages,state:"partial",notice:""};
       const evidence=await inspectPdf(reference,message,original.data,cached,async pages=>{
         const acquired:number[]=[];
         for(const physicalPage of pages) {
@@ -564,6 +580,10 @@ export function createStoredUploadService(storage: Storage, secret: string, opti
         }
         if(!await live()) throw new UploadInputError("PDF source was deleted.");
         return acquired;
+      },async pages=>{
+        if(!await live()) throw new UploadInputError("PDF source was deleted.");
+        const saved=await objects.upload(scopePath,JSON.stringify({version:"pdf-scope-v1",actorId,sourceChatId:chatId,currentChat,attachmentId:attachment.id,fingerprint,pages}),{contentType:"application/json",upsert:true});
+        if(saved.error) throw new Error("PDF page scope persistence unavailable; no inference started.");
       });
       evidence.source={actorId,sourceChatId:chatId,attachmentId:attachment.id};
       if(!await live()) throw new UploadInputError("PDF source was deleted.");

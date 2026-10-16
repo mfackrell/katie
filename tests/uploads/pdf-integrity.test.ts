@@ -502,3 +502,34 @@ test("large page inventories keep evidence notices bounded",async()=>{
   assert.ok(result.notice.length<1000);assert.match(result.notice,/10000 pages total/);
  } finally {if(previous)process.env.GOOGLE_API_KEY=previous;}
 });
+
+test("explicit page-range continuation survives restart without widening or crossing chats",async()=>{
+ const {service,storage}=storageFixture();
+ const [upload]=await service.ingestPdfUploads([file(Array.from({length:16},()=>""))]);
+ const [ref]=await service.hydrate([upload]);
+ const sourceChat="00000000-0000-4000-8000-000000000001",actor="00000000-0000-4000-8000-000000000002",current="00000000-0000-4000-8000-000000000004",otherChat="00000000-0000-4000-8000-000000000005";
+ const saved=await service.persist(sourceChat,ref,upload.storageToken,{actorId:actor});
+ const oldFetch=globalThis.fetch,oldAdmin=globalThis.__KATIE_SUPABASE_ADMIN_CLIENT__,oldKey=process.env.GOOGLE_API_KEY,calls:number[][]=[];
+ globalThis.__KATIE_SUPABASE_ADMIN_CLIENT__={rpc:async()=>({error:null,data:null})} as unknown as NonNullable<typeof globalThis.__KATIE_SUPABASE_ADMIN_CLIENT__>;
+ process.env.GOOGLE_API_KEY="offline-test-key";
+ globalThis.fetch=async(_input,init)=>{
+  const prompt=JSON.parse(String(init?.body)).contents[0].parts[0].text as string;
+  const pages=/physical PDF pages ([\d,]+)/.exec(prompt)![1].split(',').map(Number);calls.push(pages);
+  const fingerprint=/Source fingerprint: ([a-f0-9]+)/.exec(prompt)![1];
+  return Response.json({candidates:[{finishReason:"STOP",content:{parts:[{text:JSON.stringify({fingerprint,pages:pages.map(physicalPage=>({physicalPage,status:"readable",observations:`PAGE-${physicalPage}`,rows:[]}))})}]}}]});
+ };
+ try {
+  const first=await service.pdfEvidence(current,saved,actor,"Read pages 10-15",async()=>true);
+  assert.deepEqual(first.contextPages,[10,11,12,13]);
+  const restart=createStoredUploadService(storage,"offline-secret",{buildReferences:async()=>{throw Error("No reparse");}});
+  const second=await restart.pdfEvidence(current,saved,actor,"continue",async()=>true);
+  assert.deepEqual(second.contextPages,[14,15]);assert.deepEqual(second.requestedPages,[10,11,12,13,14,15]);
+  assert.deepEqual(calls,[[10,11,12,13],[14,15]]);
+  const foreign=await restart.pdfEvidence(otherChat,saved,actor,"continue",async()=>true);
+  assert.equal(foreign.state,"failure");assert.equal(calls.length,2);
+  const reset=await restart.pdfEvidence(current,saved,actor,"Read page 1",async()=>true);
+  assert.deepEqual(reset.requestedPages,[1]);
+  const continued=await restart.pdfEvidence(current,saved,actor,"continue",async()=>true);
+  assert.deepEqual(continued.contextPages,[1]);assert.equal(calls.length,3);
+ } finally {globalThis.fetch=oldFetch;globalThis.__KATIE_SUPABASE_ADMIN_CLIENT__=oldAdmin;if(oldKey)process.env.GOOGLE_API_KEY=oldKey;else delete process.env.GOOGLE_API_KEY;}
+});

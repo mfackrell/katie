@@ -218,3 +218,12 @@ test('unresolved saved identities stop fresh PDF inspection before any native ca
  assert.ok(result.attachments.every(file=>file.providerRef===undefined));
  assert.match(result.params.persona,/Ask the user this clarification/);
 });
+
+for(const verb of ['summarize','extract','compare','explain','calculate','reconcile','OCR','transcribe','scan','check','examine','describe','audit','look at']) test(`negated analysis does not authorize native inspection: ${verb}`,async()=>{
+ const result=await run(`Do not ${verb} this PDF`,[pdf('one','report.pdf')]);
+ assert.equal(result.inspected.length,0);assert.equal(result.attachments.length,0);
+});
+test('save with a negated OCR command retains the original without inspection',async()=>{
+ const result=await run("Save this PDF but don't OCR it",[pdf('one','report.pdf')]);
+ assert.equal(result.inspected.length,0);assert.deepEqual(result.retained,['one']);
+});
