@@ -16,7 +16,7 @@ export async function missionModel(claim:Claim,instruction:string,input:string,t
  if(!agent)throw Error('Saved worker unavailable');
  if(tools==='research'&&!agent.config.research)throw Error('Research permission denied');
  if(!process.env.OPENAI_API_KEY)throw Error('Existing OpenAI connection unavailable');
- const selectedModel=claim.job.role==='review'?REVIEW_MODEL:WORKER_MODEL;
+ const selectedModel=claim.job.role==='review'||claim.job.role==='compose'||claim.job.role==='revise'||tools==='calculate'?REVIEW_MODEL:WORKER_MODEL;
  const outputTokens=claim.job.role==='review'?5000:3000;
  const client=new OpenAI({apiKey:process.env.OPENAI_API_KEY,maxRetries:0,timeout:90_000,fetch:globalThis.fetch.bind(globalThis)});
  const sources:ModelResult['sources']=[],calculations:unknown[]=[];
@@ -28,7 +28,7 @@ export async function missionModel(claim:Claim,instruction:string,input:string,t
   const calculatorPhase=tools!=='calculate'?'':turn===0?'\nThe calculator is available for this turn only. Request all useful independent calculations together, at most eight tool calls, then finish the entire assignment using their results.':'\nThe calculator phase is finished. Return the COMPLETE assigned analysis as explanatory prose and tables using the tool results. No tools remain. Do not emit tool arguments or a request for another calculation as your answer.';
   const request={model:selectedModel,reasoning:{effort:'low'},instructions:instruction+calculatorPhase,input:context,max_output_tokens:outputTokens,store:false,
    ...(claim.job.role==='plan'?{text:{format:zodTextFormat(planSchema,'mission_plan')}}:{}),
-   ...(tools==='research'?{tools:[{type:'web_search',search_context_size:'low'}],tool_choice:'required',max_tool_calls:1}:tools==='calculate'&&turn===0?{tools:[calculator]}:{}),
+   ...(tools==='research'?{tools:[{type:'web_search',search_context_size:'low'}],tool_choice:'required',max_tool_calls:1}:tools==='calculate'&&turn===0?{tools:[calculator],tool_choice:'required'}:{}),
   };
   // Count the complete input, including tools and review schemas, without an
   // inference. Keep a conservative byte fallback if counting is unavailable.
@@ -54,6 +54,7 @@ export async function missionModel(claim:Claim,instruction:string,input:string,t
    }
    if(!text)throw Error('Empty model result');
    if(tools==='calculate'){
+    if(text.length<500&&/"operation"\s*:/.test(text)&&/"values"\s*:/.test(text))throw Error('Calculation returned tool arguments instead of the assigned analysis');
     let value:unknown;try{value=JSON.parse(text);}catch{/* Prose is the expected final analysis. */}
     if(value&&typeof value==='object'&&'operation' in value&&'values' in value)throw Error('Calculation returned tool arguments instead of the assigned analysis');
    }
