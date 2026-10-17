@@ -55,9 +55,10 @@ export async function executeClaim(claim:Claim,model=missionModel){
   if(!target?.result)throw Error('Review candidate missing');
   const checked=await model(claim,BASE+'\n'+REVIEW_INSTRUCTION,'Independent assessment:\n'+JSON.stringify(assessment)+'\nRequired acceptance IDs:\n'+JSON.stringify(acceptanceIds(assessment))+'\nEvidence and candidate:\n'+JSON.stringify({objective:mission.objective,candidate:{key:target.job_key,result:target.result},evidence:completed.filter(x=>x.role==='work'||x.role==='development').map(x=>({key:x.job_key,result:x.result})),priorFindings:priorReviews}));
   const evaluated=validateAnswerReview(parseJSON(checked.text),assessment);
-  // Recognize only explicit global limits or a simple whole-deliverable
-  // request. Section-specific and ambiguous constraints stay with review.
-  const wordLimitMatch=mission.objective.match(/(?:^|[.!?]\s+)(?:(?:the\s+)?(?:entire|whole|complete)\s+(?:response|deliverable|answer|report)\s+(?:(?:must|should)\s+be\s+|is\s+|in\s+)?|(?:write|give|provide|produce)\s+(?:a|an|the)\s+(?:report|recommendation|response|answer|deliverable)\s+in\s+)?(?:no more than|at most|maximum(?: of)?|max(?: of)?)\s+(\d{1,5})\s+words?(?=\s*(?:[.!?](?:\s|$)|$))/i);
+  // Only a directly bounded primary deliverable is unambiguous. A limit on
+  // an executive summary or another section remains the reviewer's concern.
+  const mainDeliverable=mission.objective.match(/(?:^|[.!?]\s+)(?:deliver|return|write|produce|give|provide)\s+(?:a |an |the )?(?:(?:final|complete|whole|entire) )?(?:recommendation|response|answer|report|memo|brief|analysis|deliverable|plan)\b([\s\S]*)/i);
+  const wordLimitMatch=mainDeliverable?.[1].match(/^\s+(?:(?:of|in|with)\s+)?(?:no more than|at most|maximum(?: of)?|max(?: of)?)\s+(\d{1,5})\s+words?\b/i);
   const wordLimit=wordLimitMatch?Number(wordLimitMatch[1]):null;
   const wordCount=String(target.result.text??target.result.output??'').trim().split(/\s+/u).filter(Boolean).length;
   const tooLong=wordLimit!==null&&wordCount>wordLimit;

@@ -98,6 +98,8 @@ test('trusted workflow receipt parsing requires exact associations, real success
  assert.equal(parseCompletionReceipt(receipt,'owner/repo',2,1,'failure').outcome,'BLOCKED');
  assert.throws(()=>parseCompletionReceipt(receipt,'other/repo',2,1,'success'),/association/);
  assert.throws(()=>parseCompletionReceipt({...receipt,pr_url:'https://evil.example/pull/3'},'owner/repo',2,1,'success'),/Invalid receipt PR/);
+ const sha='a'.repeat(40);assert.equal(parseCompletionReceipt({...receipt,tested_head_sha:sha,reviewed_head_sha:sha},'owner/repo',2,1,'success').outcome,'READY');
+ for(const heads of [{tested_head_sha:sha,reviewed_head_sha:'b'.repeat(40)},{tested_head_sha:sha,reviewed_head_sha:null},{tested_head_sha:null,reviewed_head_sha:null}])assert.equal(parseCompletionReceipt({...receipt,...heads},'owner/repo',2,1,'success').outcome,'BLOCKED');
 });
 
 test('actual development dispatch rejects non-owner/app credentials and reconciles ambiguous acceptance without another write',async()=>{
