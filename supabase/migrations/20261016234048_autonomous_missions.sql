@@ -98,7 +98,11 @@ begin
  if (select count(*) from mission_assignments a join agent_missions b on b.id=a.mission_id where a.status='running' and a.lease_until>now() and b.status='running')>=3 then return null; end if;
  select a.* into j from mission_assignments a join agent_missions b on b.id=a.mission_id
  where b.status='running' and a.status in ('queued','waiting_external') and a.available_at<=now()
- and (select count(*) from mission_assignments active where active.agent_id=a.agent_id and active.status='running' and active.lease_until>now()) + (select count(*) from agent_tasks active where active.agent_id=a.agent_id and active.status in ('running','pending','dispatching','submitted')) < least((select (v->'config'->>'maxActiveTasks')::integer from jsonb_array_elements(b.team) v where v->>'id'=a.agent_id::text),(select (config->>'maxActiveTasks')::integer from managed_agents where id=a.agent_id))
+ -- A linked development task and its worker occupy one agent slot. Reclaiming
+ -- that worker reconciles the existing task rather than admitting another one.
+ and (select count(*) from mission_assignments active where active.agent_id=a.agent_id and active.status='running' and active.lease_until>now()
+      and not exists(select 1 from agent_tasks t where t.id=active.id and t.agent_id=active.agent_id and t.status in ('running','pending','dispatching','submitted')))
+   + (select count(*) from agent_tasks active where active.agent_id=a.agent_id and active.id<>a.id and active.status in ('running','pending','dispatching','submitted')) < least((select (v->'config'->>'maxActiveTasks')::integer from jsonb_array_elements(b.team) v where v->>'id'=a.agent_id::text),(select (config->>'maxActiveTasks')::integer from managed_agents where id=a.agent_id))
  and not exists(select 1 from unnest(a.dependencies) dep where not exists(select 1 from mission_assignments d where d.mission_id=a.mission_id and d.job_key=dep and d.status='completed'))
  order by a.created_at,a.job_key limit 1 for update of a skip locked;
  if not found then return null; end if;
@@ -200,3 +204,46 @@ begin
 end $$;
 revoke all on function public.mission_development_task(uuid,uuid) from public,anon,authenticated;
 grant execute on function public.mission_development_task(uuid,uuid) to service_role;
+
+-- Extend existing task admission after mission tables exist. Existing grants
+-- and task behavior are preserved by CREATE OR REPLACE.
+create or replace function public.transition_agent_task(p_id uuid,p_action text,p_message text default null,p_turn uuid default null,p_expected_request text default null)
+returns jsonb language plpgsql security invoker set search_path=public as $$
+declare a managed_agents; t agent_tasks; n integer; receipt agent_task_continuations;
+begin
+ -- Match mission admission lock ordering: shared state lock before agent row.
+ perform pg_advisory_xact_lock(hashtextextended('katie.mission.state',0));
+ select a0.* into a from managed_agents a0 join agent_tasks t0 on t0.agent_id=a0.id where t0.id=p_id for update of a0;
+ if not found then raise exception 'Task missing'; end if;
+ select * into t from agent_tasks where id=p_id for update;
+ perform 1 from chats where id=t.chat_id and actor_id=t.actor_id for key share;
+ if not found or a.actor_id<>t.actor_id then raise exception 'Task association invalid'; end if;
+ if p_action='start' then
+  if a.archived then raise exception 'Agent archived'; end if;
+  if t.status<>'draft' then return to_jsonb(t); end if;
+ elsif p_action='continue' then
+  if p_turn is null or p_expected_request is null or length(p_expected_request) not between 1 and 128 then raise exception 'Continuation identity required'; end if;
+  select * into receipt from agent_task_continuations where task_id=p_id and turn_id=p_turn;
+  if found then
+   if receipt.input is distinct from p_message or receipt.base_request_id is distinct from p_expected_request then raise exception 'Continuation id conflict'; end if;
+   -- Return the original receipt even after completion or later turns. Never admit it twice.
+   return to_jsonb(t)||jsonb_build_object('continuation_receipt',to_jsonb(receipt));
+  end if;
+  if t.request_id<>p_expected_request then raise exception 'Task advanced; refresh before submitting a new continuation'; end if;
+  if a.archived or t.kind<>'general' or t.status not in ('completed','pending','failed') then raise exception 'Task cannot continue'; end if;
+  if length(trim(p_message))<1 or length(p_message)>(t.snapshot->>'maxInputChars')::integer then raise exception 'Invalid continuation'; end if;
+  t.input:=p_message; t.request_id:='agent:'||gen_random_uuid()::text;
+ else raise exception 'Invalid transition'; end if;
+ select count(*) into n from agent_tasks where agent_id=a.id and id<>t.id and status in ('running','pending','dispatching','submitted');
+ -- Exclude this task's own assignment when bridging approved development;
+ -- other linked active tasks were already counted above.
+ n:=n+(select count(*) from mission_assignments j where j.agent_id=a.id and j.id<>t.id and j.status='running' and j.lease_until>now()
+       and not exists(select 1 from agent_tasks linked where linked.id=j.id and linked.agent_id=j.agent_id and linked.status in ('running','pending','dispatching','submitted')));
+ if n>=least((a.config->>'maxActiveTasks')::integer,(t.snapshot->>'maxActiveTasks')::integer) then raise exception 'Active task limit reached'; end if;
+ if p_action='continue' then
+  insert into agent_task_continuations(task_id,turn_id,input,base_request_id,request_id)
+  values(t.id,p_turn,p_message,p_expected_request,t.request_id) returning * into receipt;
+ end if;
+ update agent_tasks set input=t.input,request_id=t.request_id,execution_claimed_at=null,execution_request_id=null,status=case when kind='development' then 'dispatching' else 'running' end,details=case when kind='development' then 'Approved; verifying owner credentials before submission.' else 'Execution admitted; waiting for durable runtime status.' end,updated_at=now() where id=t.id returning * into t;
+ return to_jsonb(t)||case when p_action='continue' then jsonb_build_object('continuation_receipt',to_jsonb(receipt)) else '{}'::jsonb end;
+end $$;
