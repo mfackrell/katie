@@ -55,7 +55,10 @@ export async function executeClaim(claim:Claim,model=missionModel){
   if(!target?.result)throw Error('Review candidate missing');
   const checked=await model(claim,BASE+'\n'+REVIEW_INSTRUCTION,'Independent assessment:\n'+JSON.stringify(assessment)+'\nRequired acceptance IDs:\n'+JSON.stringify(acceptanceIds(assessment))+'\nEvidence and candidate:\n'+JSON.stringify({objective:mission.objective,candidate:{key:target.job_key,result:target.result},evidence:completed.filter(x=>x.role==='work'||x.role==='development').map(x=>({key:x.job_key,result:x.result})),priorFindings:priorReviews}));
   const evaluated=validateAnswerReview(parseJSON(checked.text),assessment);
-  const wordLimitMatch=mission.objective.match(/\b(?:no more than|at most|maximum(?: of)?|max(?: of)?)\s+(\d{1,5})\s+words?\b/i);
+  // Only a directly bounded primary deliverable is unambiguous. A limit on
+  // an executive summary or another section remains the reviewer's concern.
+  const mainDeliverable=mission.objective.match(/(?:^|[.!?]\s+)(?:deliver|return|write|produce|give|provide)\s+(?:a |an |the )?(?:(?:final|complete|whole|entire) )?(?:recommendation|response|answer|report|memo|brief|analysis|deliverable|plan)\b([\s\S]*)/i);
+  const wordLimitMatch=mainDeliverable?.[1].match(/^\s+(?:(?:of|in|with)\s+)?(?:no more than|at most|maximum(?: of)?|max(?: of)?)\s+(\d{1,5})\s+words?\b/i);
   const wordLimit=wordLimitMatch?Number(wordLimitMatch[1]):null;
   const wordCount=String(target.result.text??target.result.output??'').trim().split(/\s+/u).filter(Boolean).length;
   const tooLong=wordLimit!==null&&wordCount>wordLimit;
@@ -71,7 +74,7 @@ export async function executeClaim(claim:Claim,model=missionModel){
  }
  const capability=job.payload.capability;
  const tools=job.role==='work'&&capability==='research'?'research':job.role==='work'&&capability==='analysis'?'calculate':'none';
- const result=await model(claim,persona+'\n'+(finalWork?'Return only the final deliverable addressing the entire objective and saved review findings. Apply every requested length limit to the ENTIRE response, including evidence, tables and source links. Do not add a separate package, duplicated calculations, process commentary, or an offer of future work outside that limit.':'Return only the assigned evidence or analysis, with explicit sources, calculations, and findings, in at most 600 words unless this assignment explicitly requires more.'),context()+(job.role==='revise'?'\nReview findings: '+JSON.stringify(priorReviews):''),tools);
+ const result=await model(claim,persona+'\n'+(finalWork?'Return only the final deliverable addressing the entire objective and saved review findings. Apply whole-deliverable length limits to the ENTIRE response, including evidence, tables and source links. Apply section-specific length limits only to their named sections. Do not add a separate package, duplicated calculations, process commentary, or an offer of future work outside that limit.':'Return only the assigned evidence or analysis, with explicit sources, calculations, and findings, in at most 600 words unless this assignment explicitly requires more.'),context()+(job.role==='revise'?'\nReview findings: '+JSON.stringify(priorReviews):''),tools);
  await commit(result);
 }
 export async function runMissionBatch(model=missionModel){

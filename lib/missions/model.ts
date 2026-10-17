@@ -28,10 +28,10 @@ export async function missionModel(claim:Claim,instruction:string,input:string,t
   if(tools==='calculate'&&Date.now()>calculationDeadline-10_000)throw Error('Calculation execution time allowance exhausted');
   const callId=randomUUID();
   const calculatorAvailable=tools==='calculate'&&turn<3&&calculations.length<8;
-  const calculatorPhase=tools!=='calculate'?'':'\nReturn the COMPLETE assigned analysis as explanatory prose and tables when ready. Do not emit tool arguments as your final answer. '+(calculatorAvailable?`Request useful independent calculations together. At most ${8-calculations.length} additional calculator calls are available across ${3-turn} remaining tool turns; finish as soon as you have the needed results.`:'The calculator phase is finished. No tools remain; finish using the returned results and state any remaining limitation.');
+  const calculatorPhase=tools!=='calculate'?'':'\nUse the calculator whenever the assignment needs arithmetic; for qualitative analysis without arithmetic, return the complete analysis directly without a tool call. Return the COMPLETE assigned analysis as explanatory prose and tables when ready. Do not emit tool arguments as your final answer. '+(calculatorAvailable?`Request useful independent calculations together. At most ${8-calculations.length} additional calculator calls are available across ${3-turn} remaining tool turns; finish as soon as you have the needed results.`:'The calculator phase is finished. No tools remain; finish using the returned results and state any remaining limitation.');
   const request={model:selectedModel,reasoning:{effort:'low'},instructions:instruction+calculatorPhase,input:context,max_output_tokens:outputTokens,store:false,
    ...(claim.job.role==='plan'?{text:{format:zodTextFormat(planSchema,'mission_plan')}}:{}),
-   ...(tools==='research'?{tools:[{type:'web_search',search_context_size:'low'}],tool_choice:'required',max_tool_calls:1}:calculatorAvailable?{tools:[calculator],tool_choice:turn===0?'required':'auto'}:{}),
+   ...(tools==='research'?{tools:[{type:'web_search',search_context_size:'low'}],tool_choice:'required',max_tool_calls:1}:calculatorAvailable?{tools:[calculator],tool_choice:'auto'}:{}),
   };
   // Count the complete input, including tools and review schemas, without an
   // inference. Keep a conservative byte fallback if counting is unavailable.
