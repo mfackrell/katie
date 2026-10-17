@@ -70,6 +70,18 @@ export async function handleProjectChat(input: {
             const selected=await repository(undefined,text);
             if(selected){if(!tracked)throw Error('Durable tracking is required for repository selection');const simple=/^(?:please )?(?:(?:use|connect|target)(?: the)?(?: repository| repo)? )?([-\w.]+\/[-\w.]+)[.!\s]*$/i.exec(text);const n=await mutate('answer',{p_repository:selected,p_text:simple?.[1]??text});return reply(n,'I saved the connected target repository and will prepare the current scope for approval.');}
         }
+        // The pending question is persisted in detail and published atomically.
+        // Bind short choices only to that exact most-recent prompt; an interrupted
+        // conversation needs an explicit project-answer prefix or project reference.
+        const explicitAnswer=/^(?:answer (?:for|to) (?:the |this )?project|project answer)\s*:\s*(.+)$/is.exec(text);
+        const choice=text.replace(/[.!]+$/,'').trim().replace(/^(?:use|choose|select|I (?:prefer|choose|want))(?: the)?\s+/i,'').replace(/^the\s+/i,'');
+        const shortChoice=choice.length<=100&&(/^(?:\d{1,4}(?: version| edition)?|locally|local|online|offline|both|either|yes|no|original(?: one| version| edition)?)$/i.test(choice)||choice.length>0&&choice.split(/\s+/).every(w=>w.length>2&&p.detail?.toLowerCase().includes(w.toLowerCase())));
+        const pendingQuestion=p.status==='awaiting_input'&&!p.approved_hash&&!!p.detail;
+        const directlyBound=pendingQuestion&&latestAssistant?.content===projectMessage(p.id,p.status,p.detail!)&&shortChoice;
+        if(pendingQuestion&&(explicitAnswer||directlyBound)){
+            if(!tracked)throw Error('Durable tracking is required for a project answer');
+            const n=await mutate('answer',{p_text:explicitAnswer?.[1]??text});return reply(n,'I saved your answer to the project question and will continue planning with that decision.');
+        }
         const topicWords=new Set((p.objective+' '+p.clarifications+' '+(p.spec?.requirements.join(' ')??'')).toLowerCase().match(/[a-z]{5,}/g)??[]);for(const common of ['build','browser','project','create','application','working','original','return','result','preview','complete','required','should','would','could','please','there','their','which','about','after','before'])topicWords.delete(common);
         const related=(text.toLowerCase().match(/[a-z]{5,}/g)??[]).some(w=>topicWords.has(w));
         const projectReference=related||/\b(?:the|this|my) (?:game|app|website|project)\b|\b(?:edition|requirement|keyboard|multiplayer|undo|button|controls?|localStorage|reload|persistence|interface|screen|layout|component|accessibility|opponent|rules?|turns?|pieces?|dark mode)\b|^(?:please )?(?:make|change|update|keep|retain|preserve|fix) (?:it|this|that)\b/i.test(actionText(text));
