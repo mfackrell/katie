@@ -1,5 +1,6 @@
 import { assertProviderOutput, isTerminalProviderError, ProviderResponseError } from "@/lib/providers/response-errors";
 import type { ProviderResponse } from "@/lib/providers/types";
+import { isExplicitContentRefusal } from "@/lib/router/provider-error";
 
 const STRONG_REFUSAL_PATTERNS: RegExp[] = [
   /\bi\s*(?:can(?:not|'t)|am\s+unable\s+to|won't)\s+(?:help|assist|comply|answer|provide)\s+(?:with\s+)?that\b/i,
@@ -152,6 +153,35 @@ export async function runWithRefusalFallback<TAttempt>({
       onRefusalFallback?.({ attempt, attemptIndex: currentAttemptIndex, nextAttempt });
       continue;
     } catch (error: unknown) {
+      if (isExplicitContentRefusal(error)) {
+        // An upstream content refusal is not a transport error or broken model.
+        // Apply the same opt-in/out policy as a refusal returned as regular text.
+        const declined = new ProviderResponseError(
+          "The selected model declined this request.", false, "PROVIDER_REFUSAL",
+        );
+        if (!shouldRetryRefusal) throw declined;
+        if (rerouteOnRefusal) {
+          try {
+            const reroutedAttempt = await rerouteOnRefusal({
+              attempt,
+              attemptIndex: currentAttemptIndex,
+              attemptedAttempts: [...attemptedAttempts],
+              remainingAttempts: [...pendingAttempts],
+            });
+            if (reroutedAttempt) {
+              pendingAttempts.unshift(reroutedAttempt);
+              onRefusalReroute?.({ attempt, attemptIndex: currentAttemptIndex, reroutedAttempt });
+              continue;
+            }
+          } catch (rerouteError: unknown) {
+            onRerouteError?.({ attempt, attemptIndex: currentAttemptIndex, error: rerouteError });
+          }
+        }
+        const nextAttempt = pendingAttempts[0];
+        if (!nextAttempt) throw declined;
+        onRefusalFallback?.({ attempt, attemptIndex: currentAttemptIndex, nextAttempt });
+        continue;
+      }
       if (isTerminalProviderError(error)) {
         if (!pendingAttempts.length || !retryTerminalError?.({ attempt, error, remainingAttempts: [...pendingAttempts] })) throw error;
         lastGenerationError = error;

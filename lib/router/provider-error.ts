@@ -1,9 +1,18 @@
 import type { LlmProvider } from "@/lib/providers/types";
 
-export type GenerationFailureScope = "provider" | "model";
+export type GenerationFailureScope = "provider" | "model" | "refusal";
 
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error ?? "");
+}
+
+// A content refusal requires both a 403 status and an explicit refusal statement.
+// A bare 403 can also mean that the API key lacks access to a model.
+export function isExplicitContentRefusal(error: unknown): boolean {
+  const message = errorText(error).replace(/[\u2018\u2019]/g, "'");
+  return /\b403\b/.test(message) &&
+    (/\bi\s+(?:can't|cannot|won't|will not)\s+(?:help|comply|assist)\s+with\s+(?:that|this|your)\s+request\b/i.test(message) ||
+     /\b(?:request|content)\s+(?:violates|is blocked by|goes against)\s+(?:our\s+)?(?:content\s+)?policy\b/i.test(message));
 }
 
 const PROVIDER_WIDE_PATTERNS: RegExp[] = [
@@ -25,6 +34,7 @@ const PROVIDER_WIDE_PATTERNS: RegExp[] = [
 
 export function classifyGenerationFailure(error: unknown): GenerationFailureScope {
   const text = errorText(error);
+  if (isExplicitContentRefusal(error)) return "refusal";
   return PROVIDER_WIDE_PATTERNS.some((pattern) => pattern.test(text))
     ? "provider"
     : "model";
@@ -32,6 +42,7 @@ export function classifyGenerationFailure(error: unknown): GenerationFailureScop
 
 export function describeGenerationFailure(error: unknown): string {
   const text = errorText(error);
+  if (isExplicitContentRefusal(error)) return "the model declined the request";
 
   if (/no credits remaining|insufficient[_ -]?quota|billing|payment required|credit balance/i.test(text)) {
     return "provider billing or quota is unavailable";
