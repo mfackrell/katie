@@ -368,6 +368,19 @@ async function pollForPersistedAssistant(
           { cache: "no-store" },
         );
 
+        // The POST may never have reached the server during an outage.
+        // Once the request is old enough, a verified 404 is terminal: do not
+        // leave the composer disabled while polling a nonexistent request.
+        if (
+          statusResponse.status === 404 &&
+          Number.isFinite(startedAtMs) &&
+          Date.now() - startedAtMs >= 30_000
+        ) {
+          throw new TerminalChatError(
+            "Katie did not receive this request. Your message has been restored as a draft; resend it when ready.",
+          );
+        }
+
         if (statusResponse.ok) {
           const statusPayload = (await statusResponse.json()) as {
             status?: "processing" | "completed" | "failed";
@@ -1127,6 +1140,7 @@ export function ChatPanel({
         if (error instanceof TerminalChatError) {
           clearPendingChatRequest(chatId);
           if (!cancelled) {
+            setInput(pending.content);
             const failure: Message = { id: error.messageId ?? pending.requestId ?? crypto.randomUUID(), chatId,
               role: "assistant", content: chatFailureContent(error.message), createdAt: new Date().toISOString() };
             setMessages(current => {
@@ -1933,6 +1947,8 @@ export function ChatPanel({
         } catch (recoveryError: unknown) {
           if (recoveryError instanceof TerminalChatError) {
             terminalFailure = true;
+            clearPendingChatRequest(chatId);
+            setInput(content);
             rawMessage = recoveryError.message;
             failureMessageId = recoveryError.messageId;
           }
