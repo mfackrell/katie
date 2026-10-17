@@ -161,3 +161,11 @@ test('an approval carrying essential missing input stays blocked and preserves t
  assert.equal(committed.p_mission_status,'blocked');assert.equal(committed.p_final,null);assert.equal(committed.p_children.length,0);
  assert.equal(committed.p_result.verdict,'blocked');assert.equal(committed.p_result.clarification.essential,true);assert.equal(committed.p_result.detail,clarification.question);
 });
+test('research requires native URL citations and uses a capable model without relaxing its budget',async()=>{
+ const prior=process.env.OPENAI_API_KEY;process.env.OPENAI_API_KEY='fixture-only';try{
+  const m=mission(),j=job(m);j.agent_id=m.team[1].id;
+  const cited=response('Primary provider finding',{output:[{type:'web_search_call'},{type:'message',content:[{type:'output_text',annotations:[{type:'url_citation',url:'https://provider.example/diagnostic',title:'Provider diagnostic'}]}]}]});
+  const f=modelFixture([cited]);const result=await f.call({mission:m,job:j},'Research','Find comparable providers','research');assert.equal(f.ledger[0].model,'gpt-5.4');assert.equal(f.ledger[0].max_tool_calls,1);assert.equal(result.sources[0].url,'https://provider.example/diagnostic');assert.equal(f.reservations[0].p_tokens,12+256+3000+8000);
+  const uncited=modelFixture([response('Remembered URL https://provider.example',{output:[{type:'web_search_call'},{type:'message'}]})]);await assert.rejects(uncited.call({mission:m,job:j},'Research','Find providers','research'),/no cited live sources \(output items: web_search_call, message\)/);
+ }finally{if(prior===undefined)delete process.env.OPENAI_API_KEY;else process.env.OPENAI_API_KEY=prior;}
+});
