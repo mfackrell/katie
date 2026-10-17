@@ -6,7 +6,7 @@ import { developmentPreview, projectAcceptanceSchema, reconcileDevelopment } fro
 import { parseJSON } from '@/lib/missions/types';
 import { validateProjectPlan } from './contract';
 import { projectRpc, projectRuns, milestoneEvidence, acceptanceBinding, getDevelopmentProjectContext, type Project } from './store';
-async function baseline(p: Project) { if (!p.repository_id)
+export async function baseline(p: Project) { if (!p.repository_id)
     return null; const { data: r, error } = await getSupabaseAdminClient().from('repo_sync_runs').select('repository_full_name').eq('id', p.repository_id).maybeSingle<{
     repository_full_name: string;
 }>(); if (error || !r || !/^[-\w.]+\/[-\w.]+$/.test(r.repository_full_name))
@@ -14,7 +14,7 @@ async function baseline(p: Project) { if (!p.repository_id)
     throw Error('The connected project target must use the existing main-branch autonomous workflow'); const user = await gh.users.getAuthenticated(); if (user.data.type !== 'User' || m.data.owner.type !== 'User' || user.data.login.toLowerCase() !== owner.toLowerCase())
     throw Error('The project target must be owned by the existing authenticated human GitHub owner'); const workflow = await gh.repos.getContent({ owner, repo, path: '.github/workflows/autonomous-development.yml', ref: 'main' }); if (Array.isArray(workflow.data) || !('content' in workflow.data))
     throw Error('Target project workflow is unavailable'); const source = Buffer.from(workflow.data.content, 'base64').toString('utf8'); if (!source.includes('project-browser-check.mjs') || !source.includes('projectAcceptance'))
-    throw Error('The target repository needs the versioned project execution integration before coding can be approved'); const b = await gh.repos.getBranch({ owner, repo, branch: 'main' }); return b.data.commit.sha; }
+    throw Error('The target repository needs the versioned project execution integration before coding can be approved'); if(p.verified_sha&&p.baseline_sha)return p.baseline_sha; const b = await gh.repos.getBranch({ owner, repo, branch: 'main' }); return b.data.commit.sha; }
 function bounded(text: string) { if (text.length > 12000)
     throw Error('Project milestone context exceeds its bounded input. Narrow the specification; original requirements have not been truncated.'); return text; }
 function compact(e: Record<string, unknown>) { const v = e.verification as Record<string, unknown> | undefined; return v ? { head: e.head, taskId: e.taskId, verification: { ...v, changedFiles: (v.changedFiles as Array<Record<string, unknown>>).map(f => ({ path: f.path, status: f.status })), validation: v.validation }, summary: e.summary } : e; }

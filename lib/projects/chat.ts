@@ -12,9 +12,9 @@ const actionText = (text:string) => text.trim().replace(/^(?:actually|no|okay|ok
 const amendmentIntent = (text:string) => /^(?:add|change|amend|revise|update|include|remove|support|enable|use|make|retain|keep|preserve|ensure|require|avoid|prevent|fix|allow|stop)\b|^(?:also|actually|instead|one more thing|I (?:want|need|would like|would prefer))\b|^(?:what|how) about\b/i.test(actionText(text));
 function projectControl(text:string):'pause'|'stop'|'resume'|null {
  const t=actionText(text);if(/^(?:do not|don't) (?:continue|proceed|keep working|keep going|do (?:any )?more work|do (?:it|that|this))\b|^(?:hold off|hold on|wait)(?:\b|$)/i.test(t))return 'pause';const match=/^(pause|stop|cancel|halt|abort|quit|resume|continue)\b\s*(.*)$/i.exec(t);if(!match)return null;
- const tail=match[2].replace(/[.!?]+$/,'').trim();
- const directed=!tail||/^(?:(?:working|work)(?: on)?\s+)?(?:(?:this|the|my)\s+)?(?:project|work|jobs?|tasks?|agents?)\b/i.test(tail)||/^(?:now|right now|for now|please|immediately|it|this|that)(?:\b|$)/i.test(tail);
- if(!/resume|continue/i.test(match[1])){if(/stop/i.test(match[1])&&/^(?:the|this|my) (?:game|app|website)\b.*\bfrom\b/i.test(tail))return null;return /pause/i.test(match[1])?'pause':'stop';}
+ const tail=match[2].replace(/[.!?]+$/,'').trim().replace(/^(?:all|any|any more|all of the)\s+/i,'');
+ const directed=!tail||/^(?:(?:working|work)(?: on)?\s+)?(?:(?:this|the|my)\s+)?(?:project|work|working|coding|building|development|execution|research|investigating|jobs?|tasks?|agents?)\b/i.test(tail)||/^(?:now|right now|for now|please|immediately|it|this|that)(?:\b|$)/i.test(tail);
+ if(!/resume|continue/i.test(match[1])){if(!directed)return null;return /pause/i.test(match[1])?'pause':'stop';}
  return directed?'resume':null;
 }
 const marker = /<!-- katie-project-status:[a-f0-9-]+:([^ ]+) -->/;
@@ -48,6 +48,7 @@ export async function handleProjectChat(input: {
             return reply(n, 'Approved. I will manage the saved milestones and permitted repairs, verify the integrated result, and return it here. You can close this page.');
         }
         if (/^(?:yes[,\s]*)?(?:approve|go ahead|do (?:it|that|this)|proceed)\b/i.test(text)) return reply(p,'Please include the current approval digest shown with the exact project proposal, or reply directly after that still-current proposal. No scope was approved.');
+        if(/^(?:explain|tell me|show me how|describe|compare|teach me|help me understand)\b/i.test(actionText(text)))return null;
         const projectReference=/\b(?:the|this|my) (?:game|app|website|project)\b|\b(?:edition|requirement|keyboard|multiplayer)\b/i.test(text);
         if (amendmentIntent(text) || projectReference && !/^\s*(?:what|why|how|can|would|could|is|are)\b/i.test(text)) {
             if(!tracked)throw Error('Durable tracking is required for a project clarification');

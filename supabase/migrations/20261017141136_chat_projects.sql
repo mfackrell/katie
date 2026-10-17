@@ -57,7 +57,7 @@ create function public.control_work_project(p_id uuid,p_actor uuid,p_chat uuid,p
    perform control_mission(p.active_mission_id,'stop');
    update project_runs set outcome=jsonb_build_object('superseded',true,'reason','Explicit user clarification requires revised scope approval') where mission_id=p.active_mission_id and outcome is null;
   end if;
-  update work_projects set clarifications=clarifications||E'\nUSER AMENDMENT: '||p_text,approved_hash=null,approval_hash=null,spec=null,phase='research',status='running',active_mission_id=null,lease=null,lease_until=null,milestone_index=0,detail='Your project clarification is saved. I will revise research/specification and request a new scope approval; prior work and charges are preserved.',updated_at=now() where id=p.id;
+  update work_projects set clarifications=clarifications||E'\nUSER AMENDMENT: '||p_text,approved_hash=null,approval_hash=null,spec=null,phase='research',status=case when p.status='paused' then 'paused' else 'running' end,active_mission_id=null,lease=null,lease_until=null,milestone_index=0,detail='Your project clarification is saved. I will revise research/specification and request a new scope approval; prior work and charges are preserved.'||case when p.status='paused' then ' The project remains paused until you explicitly resume it.' else '' end,updated_at=now() where id=p.id;
  elsif p_action in ('pause','stop') and p.status not in ('completed','stopped') then
   update work_projects set status=case when p_action='pause' then 'paused' else 'stopped' end,lease=null,lease_until=null,detail='Project '||p_action||'d. An already admitted external dispatch may still finish; no new work will be authorized.',updated_at=now() where id=p.id;
   update mission_assignments set status=case when role='development' and exists(select 1 from agent_tasks where id=mission_assignments.id) then 'waiting_external' else 'queued' end,lease=null,lease_until=null where mission_id=p.active_mission_id and status='running';
@@ -105,6 +105,7 @@ create function public.finish_work_project(p_id uuid,p_lease uuid,p_action text,
    update work_projects set active_mission_id=mid,detail='Working on '||kind||' milestone.',updated_at=now() where id=p.id;
   end if;
  elsif p_action='spec' then
+  if p.verified_sha is not null and p_data->>'baseline' is distinct from p.baseline_sha then raise exception 'Verified cumulative project baseline cannot be replaced by current main';end if;
   if p.phase<>'approval' and not exists(select 1 from agent_missions where id=p.active_mission_id and status='completed') then raise exception 'Reviewed specification required';end if;
   if p.approved_hash is not null then raise exception 'Approved specification is immutable';end if;
   update project_runs set outcome=jsonb_build_object('specification_reviewed',true) where mission_id=p.active_mission_id and outcome is null;

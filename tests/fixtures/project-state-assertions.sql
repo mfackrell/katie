@@ -52,7 +52,10 @@ DO $$ declare p jsonb;q jsonb;c jsonb;m uuid;j uuid;l uuid;ph text;h text;ok boo
  -- A rolled-back amendment fixture checks preservation without disturbing the reservation race below.
  begin
   update work_projects set verified_sha=repeat('c',40) where id=(p->>'id')::uuid;
+  perform control_work_project((p->>'id')::uuid,'11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222','pause');
   q:=control_work_project((p->>'id')::uuid,'11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222','amend','The game also requires keyboard movement.');
+  if q->>'status'<>'paused' or claim_work_project() is not null or claim_mission_work() is not null or reserve_mission_call(j,l,gen_random_uuid(),'fixture',1) then raise exception 'Paused clarification resumed background work';end if;
+  if q->>'baseline_sha'<>repeat('a',40) then raise exception 'Amendment discarded cumulative baseline';end if;
   if q->>'objective'<>'Build a working browser game.' or q->>'clarifications' not like '%keyboard movement%' or q->>'phase'<>'research' or q->>'approved_hash' is not null or q->>'spec' is not null or q->>'verified_sha'<>repeat('c',40) or (q->>'cycles')::int<>1 then raise exception 'Amendment lost scope, work or allowance';end if;
   if commit_mission_work(j,l,'{"text":"STALE_AMENDMENT"}') then raise exception 'Superseded worker committed';end if;
   if (select sum(reserved_tokens) from agent_missions)<>30000 then raise exception 'Amendment reset prior usage';end if;
