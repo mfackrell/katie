@@ -1,10 +1,11 @@
 import test from 'node:test';
+import { spawn } from 'node:child_process';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { mkdtempSync, writeFileSync, existsSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { localRequestAllowed, runScenarios, checkProject } from '../scripts/project-browser-check.mjs';
+import { localRequestAllowed, runScenarios, checkProject, networkBootstrap } from '../scripts/project-browser-check.mjs';
 
 test('acceptance executes actual browser interaction and fails a wrong rendered expectation', { timeout: 60000 }, async () => {
   const server = createServer((req, res) => { res.setHeader('Content-Type', 'text/html'); res.end('<!doctype html><button id="move" onclick="document.querySelector(\'#state\').textContent=\'Moved\'">Move</button><p id="state">Waiting</p>'); });
@@ -43,4 +44,45 @@ test('ordinary tasks emit no acceptance artifact and local request policy reject
     for (const url of ['https://production.test/api', 'http://127.0.0.1:3110/', 'http://user:pass@127.0.0.1:3109/', 'file:///tmp/file', 'data:text/html,yes', 'http://localhost:3109/']) assert.equal(localRequestAllowed(url, 'http://127.0.0.1:3109'), false, url);
     assert.equal(localRequestAllowed('http://127.0.0.1:3109/api/test', 'http://127.0.0.1:3109', 'POST'), true);
   } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('isolated application route cannot contact a host-network service', { timeout: 15000 }, async () => {
+  let escaped = 0;
+  const external = createServer((_req, res) => { escaped++; res.end('host service'); });
+  await new Promise(done => external.listen(0, '127.0.0.1', done));
+  let child;
+  try {
+    const target = 'http://127.0.0.1:' + external.address().port;
+    // This is real server-side application I/O, beyond browser interception.
+    const code = `
+      import { createServer } from 'node:http';
+      const server = createServer(async (_req, res) => {
+        try {
+          await fetch(${JSON.stringify(target)}, { signal: AbortSignal.timeout(1000) });
+          res.end('ESCAPED');
+        } catch { res.end('BLOCKED'); }
+      });
+      do {
+        if (server.listening) await new Promise(done => server.close(done));
+        await new Promise(done => server.listen(0, '127.0.0.1', done));
+      } while (server.address().port === ${external.address().port});
+      const response = await fetch('http://127.0.0.1:' + server.address().port);
+      console.log(await response.text());
+      await new Promise(done => server.close(done));
+    `;
+    child = spawn('unshare', ['--user', '--map-root-user', '--net', '--pid', '--fork', '--kill-child=SIGKILL', 'python3', '-c', networkBootstrap,
+      process.execPath, '--input-type=module', '-e', code], {
+      env: { PATH: process.env.PATH, HOME: '/tmp' }, stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let stdout = '', stderr = '';
+    child.stdout.on('data', chunk => { stdout += chunk; });
+    child.stderr.on('data', chunk => { stderr += chunk; });
+    const status = await new Promise((done, reject) => { child.once('error', reject); child.once('exit', done); });
+    assert.equal(status, 0, stderr);
+    assert.equal(stdout.trim(), 'BLOCKED');
+    assert.equal(escaped, 0);
+  } finally {
+    child?.kill('SIGKILL');
+    await new Promise(done => external.close(done));
+  }
 });

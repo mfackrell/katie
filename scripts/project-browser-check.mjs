@@ -31,7 +31,23 @@ export async function runScenarios(contract, origin, { executablePath, timeout =
       if (!localRequestAllowed(request.url(), origin, request.method())) {
         denied.push('External or unsupported request blocked');
         await route.abort('blockedbyclient');
-      } else await route.continue();
+      } else {
+        // continue() lets Chromium follow redirects without another route hook.
+        // Fetch one hop in Playwright, then fulfill it so the browser's next
+        // request is independently checked before any bytes leave the process.
+        try {
+          const response = await route.fetch({ maxRedirects: 0, timeout: Math.max(1, Math.min(10_000, deadline - Date.now())) });
+          const location = response.headers().location;
+          if (location && response.status() >= 300 && response.status() < 400 &&
+              !localRequestAllowed(new URL(location, request.url()).href, origin, request.method())) {
+            denied.push('External redirect blocked');
+            await route.abort('blockedbyclient');
+          } else await route.fulfill({ response });
+        } catch {
+          denied.push('Local request failed');
+          await route.abort('failed').catch(() => {});
+        }
+      }
     });
     // WebSockets are unnecessary for acceptance and could bypass HTTP routing.
     await context.routeWebSocket('**/*', socket => { denied.push('WebSocket blocked'); socket.close(); });
@@ -80,7 +96,7 @@ async function assertPortFree(port) {
   await new Promise((done, reject) => { server.once('error', reject); server.listen(port, '127.0.0.1', done); });
   await new Promise(done => server.close(done));
 }
-export async function checkProject({ request, port, output }) {
+export async function runIsolatedProjectCheck({ request, port, output }) {
   if (resolve(request) === resolve(output)) throw Error('Acceptance output must not overwrite the original request');
   const original = readFileSync(request, 'utf8');
   rmSync(output, { force: true }); // Never leave a previous run's passing artifact.
@@ -106,10 +122,10 @@ export async function checkProject({ request, port, output }) {
       NEXT_PUBLIC_SUPABASE_URL: `http://127.0.0.1:${port}`, SUPABASE_URL: `http://127.0.0.1:${port}`,
       NEXT_PUBLIC_SUPABASE_ANON_KEY: 'local-acceptance-placeholder',
     };
-    server = spawn(process.execPath, [resolve('node_modules/next/dist/bin/next'), 'start', '--hostname', '127.0.0.1', '--port', String(port)], { env, stdio: ['ignore', 'pipe', 'pipe'], detached: true });
+    server = spawn(process.execPath, [resolve('node_modules/next/dist/bin/next'), 'start', '--hostname', '127.0.0.1', '--port', String(port)], { env, stdio: ['ignore', 'pipe', 'pipe'], detached: false });
     server.on('error', error => { logs = String(error.message).slice(0, 2000); });
     for (const stream of [server.stdout, server.stderr]) stream.on('data', chunk => { logs = (logs + chunk.toString()).slice(-4000); });
-    const kill = () => { try { process.kill(-server.pid, 'SIGKILL'); } catch {} };
+    const kill = () => { try { server.kill('SIGKILL'); } catch {} };
     timer = setTimeout(() => { expired = true; kill(); }, TOTAL_MS);
     const origin = `http://127.0.0.1:${port}`;
     let ready = false;
@@ -124,10 +140,54 @@ export async function checkProject({ request, port, output }) {
   } catch (error) { report.checks.push({ name: 'browser runner', passed: false, detail: String(error.message).slice(0, 600) }); }
   finally {
     clearTimeout(timer);
-    if (server?.pid) { try { process.kill(-server.pid, 'SIGKILL'); } catch {} await new Promise(done => { if (server.exitCode !== null || server.signalCode) done(); else server.once('exit', done); }); }
+    if (server?.pid) { try { server.kill('SIGKILL'); } catch {} await new Promise(done => { if (server.exitCode !== null || server.signalCode) done(); else server.once('exit', done); }); }
     writeFileSync(output, JSON.stringify(report, null, 2) + '\n');
   }
   return report;
+}
+// A fresh Linux network namespace has only loopback and no route to any host
+// network (including host localhost). Never fall back to unsandboxed execution.
+export const networkBootstrap = `import os, socket, fcntl, struct, sys
+s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+fcntl.ioctl(s, 0x8914, struct.pack("16sH14s", b"lo", 0x49, b""))
+s.close()
+os.execv(sys.argv[1], sys.argv[1:])
+`;
+export async function checkProject({ request, port, output }) {
+  if (resolve(request) === resolve(output)) throw Error('Acceptance output must not overwrite the original request');
+  const metadata = parseProjectContext(readFileSync(request, 'utf8'));
+  rmSync(output, { force: true });
+  if (!metadata) return null;
+  const headSha = execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8', timeout: 5000 }).trim();
+  const report = { version: 1, projectId: metadata.projectId, contractHash: metadata.contractHash, headSha, passed: false, checks: [] };
+  let child, timer, logs = '';
+  try {
+    const moduleUrl = import.meta.url;
+    const code = `import { runIsolatedProjectCheck } from ${JSON.stringify(moduleUrl)}; const r = await runIsolatedProjectCheck(JSON.parse(process.argv[1])); if (!r.passed) process.exitCode = 1;`;
+    child = spawn('unshare', ['--user', '--map-root-user', '--net', '--pid', '--fork', '--kill-child=SIGKILL', 'python3', '-c', networkBootstrap,
+      process.execPath, '--input-type=module', '-e', code, JSON.stringify({ request: resolve(request), port, output: resolve(output) })], {
+      detached: true, stdio: ['ignore', 'pipe', 'pipe'],
+      env: { PATH: process.env.PATH, HOME: '/tmp', TMPDIR: '/tmp', NODE_ENV: 'production', NEXT_TELEMETRY_DISABLED: '1' },
+    });
+    const kill = () => { try { process.kill(-child.pid, 'SIGKILL'); } catch {} };
+    timer = setTimeout(kill, TOTAL_MS + 10_000);
+    for (const stream of [child.stdout, child.stderr]) stream.on('data', chunk => { logs = (logs + chunk.toString()).slice(-2000); });
+    const status = await new Promise((done, reject) => { child.once('error', reject); child.once('exit', done); });
+    if (status !== 0 || !existsSync(output)) throw Error('Isolated acceptance failed: ' + logs);
+    return JSON.parse(readFileSync(output, 'utf8'));
+  } catch (error) {
+    // Preserve actual failed assertions when the isolated runner reached them.
+    if (existsSync(output)) {
+      const result = JSON.parse(readFileSync(output, 'utf8'));
+      if (result.passed === false) return result;
+    }
+    report.checks.push({ name: 'network isolation', passed: false, detail: String(error.message).slice(0, 600) });
+    writeFileSync(output, JSON.stringify(report, null, 2) + '\n');
+    return report;
+  } finally {
+    clearTimeout(timer);
+    if (child?.pid) { try { process.kill(-child.pid, 'SIGKILL'); } catch {} }
+  }
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
   try {
