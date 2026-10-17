@@ -97,7 +97,7 @@ async function advance(p: Project) {
             if (!live || live.headSha !== p.verified_sha) { await finish('wait', { detail: 'Final preview evidence is not currently verified; completion is withheld.' }); return; }
             const url = new URL(p.spec!.finalContract.path, live.url).href;
             if(!p.preview?.browserAcceptance?.passed)throw Error('Actual deployed browser evidence is required before completion');
-            if(live.deploymentId!==p.preview.deploymentId||url!==p.preview.url){await finish('preview',{...live,url});return;}
+            if(live.deploymentId!==p.preview.deploymentId||live.statusId!==p.preview.statusId||url!==p.preview.url){await finish('preview',{...live,url});return;}
             await finish('complete', { result: m.result + '\n\nVerified playable preview: ' + url, preview: { ...live, url }, verified_head: p.verified_sha });
             return;
         }
