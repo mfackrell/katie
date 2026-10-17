@@ -96,7 +96,7 @@ test('mission API rejects forged runtime fields and never runs background work i
  assert.equal(invoked,0);assert.equal((await send({action:'start',id})).status,200);assert.equal(invoked,1);
 });
 test('a calculator continuation cannot masquerade as a completed analysis',async()=>{
- const prior=process.env.OPENAI_API_KEY;process.env.OPENAI_API_KEY='fixture-only';try{for(const output of ['{"operation":"add","values":[2100,150]}','Next calculation.{"operation":"add","values":[2100,150]}','```json\n{"operation":"add","values":[2100,150]}\n```']){const m=mission(),j=job(m),f=modelFixture([response('',{output:[{type:'function_call',name:'calculate',call_id:'one',arguments:'{"operation":"multiply","values":[12,175]}'}]}),response(output)]);await assert.rejects(f.call({mission:m,job:j},'Analyze','Economics','calculate'),/tool arguments instead/);assert.equal(f.count(),2);assert.equal(f.ledger[0].tool_choice,'required');assert.equal(f.ledger[0].model,'gpt-5.4');}}finally{if(prior===undefined)delete process.env.OPENAI_API_KEY;else process.env.OPENAI_API_KEY=prior;}
+ const prior=process.env.OPENAI_API_KEY;process.env.OPENAI_API_KEY='fixture-only';try{for(const output of ['{"operation":"add","values":[2100,150]}','Next calculation.{"operation":"add","values":[2100,150]}','```json\n{"operation":"add","values":[2100,150]}\n```']){const m=mission(),j=job(m),f=modelFixture([response('',{output:[{type:'function_call',name:'calculate',call_id:'one',arguments:'{"operation":"multiply","values":[12,175]}'}]}),response(output)]);await assert.rejects(f.call({mission:m,job:j},'Analyze','Economics','calculate'),/tool arguments instead/);assert.equal(f.count(),2);assert.equal(f.ledger[0].tool_choice,'auto');assert.equal(f.ledger[0].model,'gpt-5.4');}}finally{if(prior===undefined)delete process.env.OPENAI_API_KEY;else process.env.OPENAI_API_KEY=prior;}
 });
 
 test('an approving model cannot bypass an explicit whole-response word limit',async()=>{
@@ -151,4 +151,28 @@ test('an approval carrying essential missing input stays blocked and preserves t
  await executeClaim({mission:m,job:j},async(_,instruction)=>({text:instruction.includes('KATIE_REQUIRED_DRAFT_REVIEW')?JSON.stringify({...verdict(),clarification}):JSON.stringify(assessment),sources:[],calculations:[],model:'fixture'}));
  assert.equal(committed.p_mission_status,'blocked');assert.equal(committed.p_final,null);assert.equal(committed.p_children.length,0);
  assert.equal(committed.p_result.verdict,'blocked');assert.equal(committed.p_result.clarification.essential,true);assert.equal(committed.p_result.detail,clarification.question);
+});
+
+
+test('section-specific word limits do not reject an otherwise approved full report',async()=>{
+ for(const objective of ['Write a report with an executive summary of at most 50 words.', 'Write a report. The executive summary must be at most 50 words.', 'Write a report. At most 50 words for the executive summary.']){
+  const m=mission();m.objective=objective;
+  const text='Executive summary: Proceed cautiously.\nFull report: '+('Supporting evidence and discussion. '.repeat(30));
+  const compose={...job(m,'compose','compose'),status:'completed',result:{text}},review=job(m,'review','review');let committed;
+  const {executeClaim}=modules({'@/lib/missions/store':{readMission:async()=>({mission:m,jobs:[compose,review]}),rpc:async(_,args)=>{committed=args;return true;}}})('@/lib/missions/worker');
+  await executeClaim({mission:m,job:review},async(_,instruction)=>({text:instruction.includes('KATIE_REQUIRED_DRAFT_REVIEW')?JSON.stringify(verdict()):JSON.stringify(assessment),sources:[],calculations:[],model:'fixture'}));
+  assert.ok(committed.p_result.wordCount>50);assert.equal(committed.p_result.wordLimit,null);assert.equal(committed.p_result.verdict,'pass');assert.equal(committed.p_final,text);
+ }
+});
+
+test('qualitative analysis completes without inventing a calculator call',async()=>{
+ const prior=process.env.OPENAI_API_KEY;process.env.OPENAI_API_KEY='fixture-only';
+ try{
+  const m=mission(),j=job(m);j.instruction='Compare the strengths and risks of the supplied proposals qualitatively.';
+  const text='The first proposal offers clearer ownership; the second provides more flexibility but leaves responsibility unclear.';
+  const f=modelFixture([response(text)]);
+  const {executeClaim}=modules({'@/lib/missions/store':{readMission:async()=>({mission:m,jobs:[j]}),rpc:async(_,args)=>{assert.equal(args.p_result.text,text);assert.equal(args.p_result.calculations.length,0);return true;}}})('@/lib/missions/worker');
+  await executeClaim({mission:m,job:j},f.call);
+  assert.equal(f.count(),1);assert.equal(f.ledger[0].tool_choice,'auto');assert.match(f.ledger[0].instructions,/whenever the assignment needs arithmetic/);assert.match(f.ledger[0].instructions,/qualitative analysis without arithmetic/);
+ }finally{if(prior===undefined)delete process.env.OPENAI_API_KEY;else process.env.OPENAI_API_KEY=prior;}
 });

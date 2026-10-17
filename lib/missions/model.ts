@@ -25,10 +25,10 @@ export async function missionModel(claim:Claim,instruction:string,input:string,t
  let text='';
  for(let turn=0;turn<(tools==='calculate'?2:1);turn++){
   const callId=randomUUID();
-  const calculatorPhase=tools!=='calculate'?'':turn===0?'\nThe calculator is available for this turn only. Request all useful independent calculations together, at most eight tool calls, then finish the entire assignment using their results.':'\nThe calculator phase is finished. Return the COMPLETE assigned analysis as explanatory prose and tables using the tool results. No tools remain. Do not emit tool arguments or a request for another calculation as your answer.';
+  const calculatorPhase=tools!=='calculate'?'':turn===0?'\nThe calculator is available for this turn only. Use it whenever the assignment needs arithmetic; for qualitative analysis without arithmetic, return the complete analysis directly without a tool call. Request all useful independent calculations together, at most eight tool calls, then finish the entire assignment using their results.':'\nThe calculator phase is finished. Return the COMPLETE assigned analysis as explanatory prose and tables using the tool results. No tools remain. Do not emit tool arguments or a request for another calculation as your answer.';
   const request={model:selectedModel,reasoning:{effort:'low'},instructions:instruction+calculatorPhase,input:context,max_output_tokens:outputTokens,store:false,
    ...(claim.job.role==='plan'?{text:{format:zodTextFormat(planSchema,'mission_plan')}}:{}),
-   ...(tools==='research'?{tools:[{type:'web_search',search_context_size:'low'}],tool_choice:'required',max_tool_calls:1}:tools==='calculate'&&turn===0?{tools:[calculator],tool_choice:'required'}:{}),
+   ...(tools==='research'?{tools:[{type:'web_search',search_context_size:'low'}],tool_choice:'required',max_tool_calls:1}:tools==='calculate'&&turn===0?{tools:[calculator],tool_choice:'auto'}:{}),
   };
   // Count the complete input, including tools and review schemas, without an
   // inference. Keep a conservative byte fallback if counting is unavailable.
