@@ -2615,6 +2615,19 @@ ${chunkWorkflowSummary}`;
                 };
               },
               onRefusalReroute: ({ attempt, reroutedAttempt }) => {
+                emitChunk({
+                  type: "metadata",
+                  modelId: reroutedAttempt.modelId,
+                  provider: reroutedAttempt.provider.name,
+                  explainer: reroutedAttempt.explainer,
+                  resetText: true,
+                  providerFailover: {
+                    kind: "refusal",
+                    from: { provider: attempt.provider.name, modelId: attempt.modelId },
+                    to: { provider: reroutedAttempt.provider.name, modelId: reroutedAttempt.modelId },
+                    reason: "the model declined the request",
+                  },
+                });
                 console.warn("[Chat API] Provider refusal detected. AI router selected a new candidate.", {
                   requestId,
                   refusedProvider: attempt.provider.name,
@@ -2624,6 +2637,18 @@ ${chunkWorkflowSummary}`;
                 });
               },
               onRefusalFallback: ({ attempt, nextAttempt }) => {
+                emitChunk({
+                  type: "metadata",
+                  modelId: nextAttempt.modelId,
+                  provider: nextAttempt.provider.name,
+                  resetText: true,
+                  providerFailover: {
+                    kind: "refusal",
+                    from: { provider: attempt.provider.name, modelId: attempt.modelId },
+                    to: { provider: nextAttempt.provider.name, modelId: nextAttempt.modelId },
+                    reason: "the model declined the request",
+                  },
+                });
                 console.warn("[Chat API] Provider refusal detected. AI reroute unavailable; attempting deterministic fallback candidate.", {
                   requestId,
                   provider: attempt.provider.name,
@@ -2737,6 +2762,7 @@ ${chunkWorkflowSummary}`;
                   explainer: reroutedAttempt.explainer,
                   resetText: true,
                   providerFailover: {
+                    kind: "error",
                     from: {
                       provider: attempt.provider.name,
                       modelId: attempt.modelId,
