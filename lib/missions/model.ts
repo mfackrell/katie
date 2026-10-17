@@ -16,7 +16,7 @@ export async function missionModel(claim:Claim,instruction:string,input:string,t
  if(!agent)throw Error('Saved worker unavailable');
  if(tools==='research'&&!agent.config.research)throw Error('Research permission denied');
  if(!process.env.OPENAI_API_KEY)throw Error('Existing OpenAI connection unavailable');
- const selectedModel=claim.job.role==='review'||claim.job.role==='compose'||claim.job.role==='revise'||tools==='calculate'?REVIEW_MODEL:WORKER_MODEL;
+ const selectedModel=claim.job.role==='plan'||tools==='research'||claim.job.role==='review'||claim.job.role==='compose'||claim.job.role==='revise'||tools==='calculate'?REVIEW_MODEL:WORKER_MODEL;
  const outputTokens=claim.job.role==='review'?5000:3000;
  const client=new OpenAI({apiKey:process.env.OPENAI_API_KEY,maxRetries:0,timeout:90_000,fetch:globalThis.fetch.bind(globalThis)});
  const sources:ModelResult['sources']=[],calculations:unknown[]=[];
@@ -29,7 +29,7 @@ export async function missionModel(claim:Claim,instruction:string,input:string,t
   const callId=randomUUID();
   const calculatorAvailable=tools==='calculate'&&turn<3&&calculations.length<8;
   const calculatorPhase=tools!=='calculate'?'':'\nUse the calculator whenever the assignment needs arithmetic; for qualitative analysis without arithmetic, return the complete analysis directly without a tool call. Return the COMPLETE assigned analysis as explanatory prose and tables when ready. Do not emit tool arguments as your final answer. '+(calculatorAvailable?`Request useful independent calculations together. At most ${8-calculations.length} additional calculator calls are available across ${3-turn} remaining tool turns; finish as soon as you have the needed results.`:'The calculator phase is finished. No tools remain; finish using the returned results and state any remaining limitation.');
-  const request={model:selectedModel,reasoning:{effort:'low'},instructions:instruction+calculatorPhase,input:context,max_output_tokens:outputTokens,store:false,
+  const request={model:selectedModel,reasoning:{effort:'low'},instructions:instruction+calculatorPhase+(tools==='research'?'\nUse live web search for this assignment and cite consulted primary pages with native inline URL citations. Return source-supported findings and explicitly identify gaps; do not substitute remembered URLs or claim uncited research.':''),input:context,max_output_tokens:outputTokens,store:false,
    ...(claim.job.role==='plan'?{text:{format:zodTextFormat(planSchema,'mission_plan')}}:{}),
    ...(tools==='research'?{tools:[{type:'web_search',search_context_size:'low'}],tool_choice:'required',max_tool_calls:1}:calculatorAvailable?{tools:[calculator],tool_choice:'auto'}:{}),
   };
@@ -63,7 +63,7 @@ export async function missionModel(claim:Claim,instruction:string,input:string,t
     let value:unknown;try{value=JSON.parse(text);}catch{/* Prose is the expected final analysis. */}
     if(value&&typeof value==='object'&&'operation' in value&&'values' in value)throw Error('Calculation returned tool arguments instead of the assigned analysis');
    }
-   if(tools==='research'&&!sources.length)throw Error('Research returned no cited live sources');
+   if(tools==='research'&&!sources.length)throw Error('Research returned no cited live sources (output items: '+output.map(item=>String(item.type)).join(', ')+')');
    return{text,sources,calculations,model:selectedModel};
   }catch(error){await rpc('finish_mission_call',{p_call:callId,p_tokens:null}).catch(()=>{});throw error;}
  }
