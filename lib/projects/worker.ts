@@ -2,10 +2,10 @@ import { Octokit } from '@octokit/rest';
 import { getSupabaseAdminClient } from '@/lib/data/supabase/admin';
 import { readMission } from '@/lib/missions/store';
 import { readTask } from '@/lib/agents/store';
-import { developmentPreview, projectAcceptanceSchema } from '@/lib/agents/development';
+import { developmentPreview, projectAcceptanceSchema, reconcileDevelopment } from '@/lib/agents/development';
 import { parseJSON } from '@/lib/missions/types';
 import { validateProjectPlan } from './contract';
-import { projectRpc, projectRuns, milestoneEvidence, acceptanceBinding, type Project, type Run } from './store';
+import { projectRpc, projectRuns, milestoneEvidence, acceptanceBinding, getDevelopmentProjectContext, type Project, type Run } from './store';
 async function baseline(p: Project) { if (!p.repository_id)
     return null; const { data: r, error } = await getSupabaseAdminClient().from('repo_sync_runs').select('repository_full_name').eq('id', p.repository_id).maybeSingle<{
     repository_full_name: string;
@@ -17,7 +17,6 @@ async function baseline(p: Project) { if (!p.repository_id)
     throw Error('The target repository needs the versioned project execution integration before coding can be approved'); const b = await gh.repos.getBranch({ owner, repo, branch: 'main' }); return b.data.commit.sha; }
 function bounded(text: string) { if (text.length > 12000)
     throw Error('Project milestone context exceeds its bounded input. Narrow the specification; original requirements have not been truncated.'); return text; }
-export function proposal(p: Project) { const s = p.spec!; return `<!-- katie-project-approval:${p.approval_hash} -->\n\nI have researched your request and prepared the project scope.\n\n**${s.name}**\n${s.summary}\n\nOriginal outcome: ${p.objective}\n${p.clarifications}\n\n**Acceptance requirements**\n${s.requirements.map(x => '- ' + x).join('\n')}\n\n**Successive coding milestones**\n${s.milestones.map((m, i) => `${i + 1}. ${m.title}\n${m.instruction}\nBrowser checks: ${m.contract.scenarios.map(s => s.name).join('; ')}`).join('\n\n')}\n\n**Exact approved browser contracts**\n\`\`\`json\n${JSON.stringify(s.milestones.map(m => ({ title: m.title, contract: m.contract })), null, 2)}\n\`\`\`\n\nAllowed paths: ${s.allowedPaths.join(', ')}. Repository snapshot: ${p.baseline_sha ?? 'No connected target repository selected'}.\n\nLimits: ${p.max_cycles} coding jobs, ${p.max_missions} milestones, ${p.token_allowance.toLocaleString()} project-model tokens; deadline ${p.deadline}. GitHub coding uses additional model usage under its existing per-job time and repair limits. This approves isolated draft changes and the target's existing private preview delivery; it does not approve a production merge, secrets, new services, or purchases.\n\n${p.repository_id ? 'Reply **approve project ' + p.approval_hash!.slice(0, 12) + '** to authorize this saved scope once.' : 'Which connected repository should I use? You can name it here.'}`; }
 function compact(e: Record<string, unknown>) { const v = e.verification as Record<string, unknown> | undefined; return v ? { head: e.head, taskId: e.taskId, verification: { ...v, changedFiles: (v.changedFiles as Array<Record<string, unknown>>).map(f => ({ path: f.path, status: f.status })), validation: v.validation }, summary: e.summary } : e; }
 async function advance(p: Project) {
     const finish = (action: string, data: Record<string, unknown> = {}) => projectRpc<boolean>('finish_work_project', { p_id: p.id, p_lease: p.lease, p_action: action, p_data: data });
@@ -46,7 +45,7 @@ async function advance(p: Project) {
                 return;
             }
             const notes = current.jobs.filter(j => j.role === 'review').map(j => j.result?.summary ?? j.detail).filter(Boolean).join('\n');
-            if (p.approved_hash && ['development', 'assessment'].includes(p.phase) && p.cycles < p.max_cycles) {
+            if (p.approved_hash && ['development', 'assessment'].includes(p.phase) && p.cycles < p.max_cycles && runs.filter(r=>r.kind==='development'&&r.milestone_index===Math.min(p.milestone_index,p.spec!.milestones.length-1)).length<2) {
                 await finish('retry', { detail: 'Repair the original unmet requirements. ' + (notes || m.detail), failed_mission: m.id });
                 return;
             }
@@ -91,7 +90,12 @@ async function advance(p: Project) {
             return;
         }
         if (p.phase === 'assessment') {
-            await finish('complete', { result: m.result, preview: p.preview, verified_head: p.verified_sha });
+            const finalRun = [...runs].reverse().find(r => r.kind === 'development' && r.outcome?.head === p.verified_sha);
+            if (!finalRun?.binding || typeof finalRun.outcome?.taskId !== 'string') throw Error('Final verified task binding is missing');
+            const live = await developmentPreview(await readTask(finalRun.outcome.taskId), acceptanceBinding(finalRun.binding));
+            if (!live || live.headSha !== p.verified_sha) { await finish('wait', { detail: 'Final preview evidence is not currently verified; completion is withheld.' }); return; }
+            const url = new URL(p.spec!.finalContract.path, live.url).href;
+            await finish('complete', { result: m.result + '\n\nVerified playable preview: ' + url, preview: { ...live, url }, verified_head: p.verified_sha });
             return;
         }
     }
@@ -128,19 +132,29 @@ async function advance(p: Project) {
     }
     else if (p.phase === 'assessment') {
         const final = [...evidence].reverse().find(e => e.phase === 'development');
-        projectEvidence = { milestones: runs.map(r => ({ phase: r.kind, index: r.milestone_index, reviewed: Boolean(r.outcome), head: r.outcome?.head })), finalIntegratedEvidence: final ? compact(final.evidence ?? {}) : null, preview: p.preview };
+        projectEvidence = { milestones: evidence.map(e => ({ phase: e.phase, index: e.index, status:e.missionStatus, head:e.evidence?.head })), finalIntegratedEvidence: final ? compact(final.evidence ?? {}) : null, preview: p.preview };
         objective = bounded(`${source}\n\nFINAL WHOLE-PROJECT DELIVERY: Independently check the ENTIRE original user outcome against all approved requirements and actual integrated evidence. A partial phase report, architecture document or loading page is not sufficient. Do not waive AI, human play, rules fidelity, persistence or backend requirements. Missing material evidence must remain blocked; do not invent test outcomes. If the complete outcome is supported, deliver the usable preview link, concise instructions, actual verified checks and any limitations.\nAPPROVED REQUIREMENTS:${JSON.stringify(p.spec!.requirements)}\nVERIFIED PREVIEW:${JSON.stringify(p.preview)}\nActual head-bound milestone and final browser evidence are provided in projectEvidence.`);
     }
     else
         throw Error('Unknown project phase');
     await finish('child', { kind: p.phase, objective, evidence: projectEvidence });
 }
-export async function runProjectBatch() { const p = await projectRpc<Project | null>('claim_work_project'); if (!p)
+async function reconcileParkedDispatch() {
+    const {data,error}=await getSupabaseAdminClient().from('agent_tasks').select('id,external').in('status',['submitted','dispatching']).order('updated_at',{ascending:true}).limit(20);
+    if(error)throw Error('Project dispatch recovery unavailable');
+    for(const row of (data??[]) as Array<{id:string;external:Record<string,unknown>}>){
+        if(typeof row.external?.projectId!=='string')continue;
+        const c=await getDevelopmentProjectContext(row.id);if(!c)continue;
+        const {data:p,error:pe}=await getSupabaseAdminClient().from('work_projects').select('*').eq('id',c.projectId).maybeSingle<Project>();
+        if(pe||!p)continue;
+        if(p.status==='running'&&p.approved_hash===c.scopeHash)continue;
+        await reconcileDevelopment(await readTask(row.id),acceptanceBinding(c));return true;
+    }
+    return false;
+}
+export async function runProjectBatch() { if(await reconcileParkedDispatch())return {claimed:0,maintenance:true};const p = await projectRpc<Project | null>('claim_work_project'); if (!p)
     return { claimed: 0 }; try {
     await advance(p);
-    const latest = await getSupabaseAdminClient().from('work_projects').select('*').eq('id', p.id).maybeSingle<Project>();
-    if (latest.data?.status === 'awaiting_approval' && latest.data.spec)
-        await projectRpc('publish_project_proposal', { p_id: p.id, p_hash: latest.data.approval_hash, p_text: proposal(latest.data) });
     return { claimed: 1, status: 'processed' };
 }
 catch (error) {

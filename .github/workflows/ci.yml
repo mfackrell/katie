@@ -27,6 +27,9 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Install filesystem isolation
+        run: command -v bwrap >/dev/null || (sudo apt-get update && sudo apt-get install -y bubblewrap)
+
       - name: Run strict CI gate (typecheck + all offline tests + build + smoke)
         run: npm run ci:gate
 

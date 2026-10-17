@@ -12,7 +12,7 @@ export async function handleProjectChat(input: {
     activeRepoId?: string;
 }, requestId: string, history: Message[], tracked: boolean): Promise<string | null> {
     const text = input.message.trim(), pending = history.some(m => m.role === 'assistant' && marker.test(m.content) && !['completed', 'stopped'].includes(m.content.match(marker)![1]));
-    const start = startProjectIntent(text), follow = followupProjectIntent(text), control = /\b(?:project|progress|status|pause|stop|resume|continue|approve)\b|^go ahead|how.{0,12}going/i.test(text);
+    const start = startProjectIntent(text), follow = followupProjectIntent(text), control = /\b(?:project|progress|status|pause|stop|resume|continue|approve|game|edition|requirement|keyboard|multiplayer)\b|^go ahead|how.{0,12}going/i.test(text);
     if (!pending && !start && !follow && !control)
         return null;
     const p = await projectForChat(input.actorId, input.chatId);
@@ -29,10 +29,10 @@ export async function handleProjectChat(input: {
             return reply(n, n.detail!);
         }
         if (/\b(?:status|progress)\b|how.{0,12}going|is (?:the project|it) (?:done|finished)/i.test(text))
-            return reply(p, p.result ?? `${p.detail ?? p.status}\nCurrent phase: ${p.phase}. Coding jobs used: ${p.cycles}/${p.max_cycles}. I have not marked this project complete.`);
+            return reply(p, p.status === 'awaiting_approval' ? await projectRpc<string>('project_scope_proposal', {p_id:p.id}) : p.result ?? `${p.detail ?? p.status}\nCurrent phase: ${p.phase}. Coding jobs used: ${p.cycles}/${p.max_cycles}. I have not marked this project complete.`);
         const latestAssistant = [...history].reverse().find(m => m.role === 'assistant');
-        const explicit = /^approve(?: this| the)? project(?:\s+([a-f0-9]{12,64}))?[.!\s]*$/i.exec(text);
-        const contextual = /^(?:yes[,\s]*)?(?:approve|go ahead|do it|proceed)[.!\s]*$/i.test(text) && latestAssistant?.content.includes(p.approval_hash ?? 'NO_APPROVAL') && p.status === 'awaiting_approval';
+        const explicit = /^approve(?: this| the)? project\s+([a-f0-9]{12,64})[.!\s]*$/i.exec(text);
+        const contextual = /^(?:yes[,\s]*)?(?:approve(?: (?:this |the )?project)?|go ahead|do it|proceed)[.!\s]*$/i.test(text) && latestAssistant?.content.includes(p.approval_hash ?? 'NO_APPROVAL') && p.status === 'awaiting_approval';
         if (explicit || contextual) {
             if (p.status !== 'awaiting_approval' || !p.approval_hash || explicit?.[1] && !p.approval_hash.startsWith(explicit[1]))
                 return reply(p, 'That approval does not match a pending saved scope. Ask for project status to inspect the current proposal.');
@@ -40,6 +40,11 @@ export async function handleProjectChat(input: {
                 throw Error('Durable chat request tracking is required for project approval');
             const n = await mutate('approve', { p_hash: p.approval_hash });
             return reply(n, 'Approved. I will manage the saved milestones and permitted repairs, verify the integrated result, and return it here. You can close this page.');
+        }
+        if (/^(?:yes[,\s]*)?(?:approve|go ahead|do it|proceed)\b/i.test(text)) return reply(p,'Please include the current approval digest shown with the exact project proposal, or reply directly after that still-current proposal. No scope was approved.');
+        if (['running','paused','blocked'].includes(p.status) && !/^\s*(?:what|why|how|can|would|could|is|are)\b/i.test(text) && /\b(?:the|this|my) (?:game|app|website|project)\b|\b(?:edition|requirement|keyboard|multiplayer)\b|^(?:please )?(?:change|amend|revise|update) (?:the |this )?project/i.test(text)) {
+            if(!tracked)throw Error('Durable tracking is required for a project clarification');
+            const n=await mutate('amend',{p_text:text});return reply(n,n.detail!);
         }
         if (['awaiting_input', 'awaiting_approval'].includes(p.status) && !/^\s*(?:what|why|how|can|would|could|is|are)\b/i.test(text)) {
             const repo = await repository(input.activeRepoId, text);

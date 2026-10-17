@@ -5,6 +5,7 @@ import { pathToFileURL } from 'node:url';
 import { createServer } from 'node:net';
 import { chromium as playwright } from 'playwright-core';
 import chromium from '@sparticuz/chromium';
+import {sandboxArgs} from './project-sandbox.mjs';
 import { parseProjectContext, validateContract } from './project-context.mjs';
 
 const TOTAL_MS = 150_000;
@@ -96,7 +97,7 @@ async function assertPortFree(port) {
   await new Promise((done, reject) => { server.once('error', reject); server.listen(port, '127.0.0.1', done); });
   await new Promise(done => server.close(done));
 }
-export async function runIsolatedProjectCheck({ request, port, output }) {
+export async function runIsolatedProjectCheck({ request, port, output, dependencies }) {
   if (resolve(request) === resolve(output)) throw Error('Acceptance output must not overwrite the original request');
   const original = readFileSync(request, 'utf8');
   rmSync(output, { force: true }); // Never leave a previous run's passing artifact.
@@ -122,7 +123,7 @@ export async function runIsolatedProjectCheck({ request, port, output }) {
       NEXT_PUBLIC_SUPABASE_URL: `http://127.0.0.1:${port}`, SUPABASE_URL: `http://127.0.0.1:${port}`,
       NEXT_PUBLIC_SUPABASE_ANON_KEY: 'local-acceptance-placeholder',
     };
-    server = spawn(process.execPath, [resolve('node_modules/next/dist/bin/next'), 'start', '--hostname', '127.0.0.1', '--port', String(port)], { env, stdio: ['ignore', 'pipe', 'pipe'], detached: false });
+    server = spawn('bwrap', [...sandboxArgs(process.cwd(),{dependencies,network:true}), '--setenv','NODE_ENV','production','--setenv','NEXT_TELEMETRY_DISABLED','1','--setenv','OPENAI_API_KEY',env.OPENAI_API_KEY,'--setenv','SUPABASE_SERVICE_ROLE_KEY',env.SUPABASE_SERVICE_ROLE_KEY,'--setenv','NEXT_PUBLIC_SUPABASE_URL',env.NEXT_PUBLIC_SUPABASE_URL,'--setenv','NEXT_PUBLIC_SUPABASE_ANON_KEY',env.NEXT_PUBLIC_SUPABASE_ANON_KEY,process.execPath,'/app/node_modules/next/dist/bin/next','start','--hostname','127.0.0.1','--port',String(port)],{env,stdio:['ignore','pipe','pipe'],detached:false});
     server.on('error', error => { logs = String(error.message).slice(0, 2000); });
     for (const stream of [server.stdout, server.stderr]) stream.on('data', chunk => { logs = (logs + chunk.toString()).slice(-4000); });
     const kill = () => { try { server.kill('SIGKILL'); } catch {} };
@@ -153,7 +154,7 @@ fcntl.ioctl(s, 0x8914, struct.pack("16sH14s", b"lo", 0x49, b""))
 s.close()
 os.execv(sys.argv[1], sys.argv[1:])
 `;
-export async function checkProject({ request, port, output }) {
+export async function checkProject({ request, port, output, dependencies }) {
   if (resolve(request) === resolve(output)) throw Error('Acceptance output must not overwrite the original request');
   const metadata = parseProjectContext(readFileSync(request, 'utf8'));
   rmSync(output, { force: true });
@@ -165,7 +166,7 @@ export async function checkProject({ request, port, output }) {
     const moduleUrl = import.meta.url;
     const code = `import { runIsolatedProjectCheck } from ${JSON.stringify(moduleUrl)}; const r = await runIsolatedProjectCheck(JSON.parse(process.argv[1])); if (!r.passed) process.exitCode = 1;`;
     child = spawn('unshare', ['--user', '--map-root-user', '--net', '--pid', '--fork', '--kill-child=SIGKILL', 'python3', '-c', networkBootstrap,
-      process.execPath, '--input-type=module', '-e', code, JSON.stringify({ request: resolve(request), port, output: resolve(output) })], {
+      process.execPath, '--input-type=module', '-e', code, JSON.stringify({ request: resolve(request), port, output: resolve(output), dependencies })], {
       detached: true, stdio: ['ignore', 'pipe', 'pipe'],
       env: { PATH: process.env.PATH, HOME: '/tmp', TMPDIR: '/tmp', NODE_ENV: 'production', NEXT_TELEMETRY_DISABLED: '1' },
     });

@@ -98,7 +98,7 @@ async function save(task: AgentTask, status: string, details: string | null, ext
   return { ...task, status, details, external };
 }
 const marker = (task: AgentTask) => `<!-- katie-managed-task:${task.id} -->`;
-export async function dispatchDevelopment(task: AgentTask, project?: Context) {
+export async function dispatchDevelopment(task: AgentTask, project?: Context, assignmentLease?:string) {
   if (task.status !== "dispatching") return task;
   // Project metadata must eventually be appended by a DB-bound project
   // dispatcher. Ordinary/model-authored assignments cannot mint this authority.
@@ -112,7 +112,7 @@ export async function dispatchDevelopment(task: AgentTask, project?: Context) {
     const {version,projectId,baseSha,contractHash,contract}=project;
     projectHeader='<!-- katie-project: '+Buffer.from(JSON.stringify({version,projectId,baseSha,contractHash,contract})).toString('base64url')+' -->\n\n';
   }
-  const claimed = await agentRpc<boolean>("claim_agent_dispatch", { p_id: task.id });
+  const claimed = project ? await agentRpc<boolean>("claim_project_dispatch", {p_id:task.id,p_lease:assignmentLease??null,p_hash:project.scopeHash}) : await agentRpc<boolean>("claim_agent_dispatch", { p_id: task.id });
   if (!claimed) return readTask(task.id);
   task = { ...task, external: { attempted: true, ...(project?{projectId:project.projectId}:{}) } };
   let client: Octokit, binding: Awaited<ReturnType<typeof repository>>;
@@ -238,7 +238,9 @@ export async function developmentPreview(task: AgentTask, project: ProjectAccept
   const { data: pr } = await client.pulls.get({ owner: binding.owner, repo: binding.repo, pull_number: Number(receipt.pr_url!.split('/').pop()) });
   if (pr.state !== 'open' || !pr.draft || pr.merged || pr.head.sha !== receipt.tested_head_sha || pr.head.repo?.full_name !== binding.fullName || pr.base.repo.full_name !== binding.fullName) throw Error('Preview draft no longer matches verified project head');
   const deployments = await client.repos.listDeployments({ owner: binding.owner, repo: binding.repo, sha: receipt.tested_head_sha, per_page: 20 });
+  const previewDeadline=Date.now()+45000;
   for (const deployment of deployments.data) {
+    if(Date.now()>=previewDeadline)break;
     if (deployment.sha !== receipt.tested_head_sha || deployment.production_environment !== false || !/^preview(?:\s|$|[-_/])/i.test(deployment.environment)) continue;
     const statuses = await client.repos.listDeploymentStatuses({ owner: binding.owner, repo: binding.repo, deployment_id: deployment.id, per_page: 1 });
     const status = statuses.data[0];

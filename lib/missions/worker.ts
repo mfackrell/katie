@@ -43,7 +43,7 @@ export async function executeClaim(claim:Claim,model=missionModel){
   if(!prior)throw Error('Saved development binding unavailable');
   task=prior;
   if(task.status==='draft')task=await agentRpc<AgentTask>('transition_agent_task',{p_id:task.id,p_action:'start',p_message:null});
-  if(task.status==='dispatching'&&!task.external.attempted)task=await dispatchDevelopment(task,project??undefined);
+  if(task.status==='dispatching'&&!task.external.attempted)task=await dispatchDevelopment(task,project??undefined,job.lease);
   if(['submitted','dispatching'].includes(task.status))task=await reconcileDevelopment(task,binding);
   if(task.status==='ready'){await commit({output:task.details,external:task.external,verification:await developmentEvidence(task,binding)});return;}
   if(['blocked','failed'].includes(task.status)){await commit({detail:task.details,external:task.external},[],'failed');return;}

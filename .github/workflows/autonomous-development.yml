@@ -67,7 +67,7 @@ jobs:
           # These tools are captured from the trusted workflow/main checkout,
           # before switching to a prior project commit or running generated code.
           mkdir -p "$RUNNER_TEMP/project-tools" "$RUNNER_TEMP/agent-task"
-          cp scripts/project-context.mjs scripts/project-browser-check.mjs "$RUNNER_TEMP/project-tools/"
+          cp scripts/project-context.mjs scripts/project-browser-check.mjs scripts/project-sandbox.mjs scripts/project-ci.mjs "$RUNNER_TEMP/project-tools/"
           node scripts/project-context.mjs prepare "$RUNNER_TEMP/original-agent-request.md" > "$RUNNER_TEMP/project-context.json"
           project="$(jq -r 'if . == null then "false" else "true" end' "$RUNNER_TEMP/project-context.json")"
           echo "project=$project" >> "$GITHUB_OUTPUT"
@@ -181,7 +181,8 @@ jobs:
         with:
           node-version: '22'
           cache: npm
-      - run: npm ci
+      - if: needs.build.outputs.project != 'true'
+        run: npm ci
       - uses: actions/download-artifact@v4
         with:
           name: agent-task
@@ -190,10 +191,13 @@ jobs:
         with:
           name: project-tools
           path: ${{ runner.temp }}/project-tools
+      - name: Ensure project filesystem isolation is available
+        run: command -v bwrap >/dev/null || (sudo apt-get update && sudo apt-get install -y bubblewrap)
       - name: Independent verification
         id: check
         shell: bash
         env:
+          PROJECT: ${{ needs.build.outputs.project }}
           CI: 'true'
           VERCEL_ENV: development
           NEXT_PUBLIC_SUPABASE_URL: https://example.supabase.co
@@ -201,9 +205,11 @@ jobs:
           SUPABASE_SERVICE_ROLE_KEY: service-role-placeholder
         run: |
           set +e
-          { npm run typecheck && npm run ci:gate && \
-            ln -sfn "$GITHUB_WORKSPACE/node_modules" "$RUNNER_TEMP/project-tools/node_modules" && \
-            node "$RUNNER_TEMP/project-tools/project-browser-check.mjs" --request "$RUNNER_TEMP/agent-task/AGENT_REQUEST.md" --port 3109 --output "$RUNNER_TEMP/project-acceptance.json"; } > agent-test.log 2>&1
+          if [[ "${PROJECT:-false}" == true ]]; then
+            node "$RUNNER_TEMP/project-tools/project-ci.mjs" --request "$RUNNER_TEMP/agent-task/AGENT_REQUEST.md" --output "$RUNNER_TEMP/project-acceptance.json" > agent-test.log 2>&1
+          else
+            { npm run typecheck && npm run ci:gate; } > agent-test.log 2>&1
+          fi
           rc=$?
           cat agent-test.log
           echo "head_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
@@ -286,7 +292,8 @@ jobs:
         with:
           node-version: '22'
           cache: npm
-      - run: npm ci
+      - if: needs.build.outputs.project != 'true'
+        run: npm ci
       - uses: actions/download-artifact@v4
         with:
           name: agent-test
@@ -374,10 +381,13 @@ jobs:
           git commit -m 'agent: repair test and review failures'
           gh auth setup-git
           git push origin "HEAD:refs/heads/$BRANCH"
+      - name: Ensure project filesystem isolation is available
+        run: command -v bwrap >/dev/null || (sudo apt-get update && sudo apt-get install -y bubblewrap)
       - name: Reverify repaired tree
         id: retest
         shell: bash
         env:
+          PROJECT: ${{ needs.build.outputs.project }}
           CI: 'true'
           VERCEL_ENV: development
           NEXT_PUBLIC_SUPABASE_URL: https://example.supabase.co
@@ -385,9 +395,11 @@ jobs:
           SUPABASE_SERVICE_ROLE_KEY: service-role-placeholder
         run: |
           set +e
-          { npm run typecheck && npm run ci:gate && \
-            ln -sfn "$GITHUB_WORKSPACE/node_modules" "$RUNNER_TEMP/project-tools/node_modules" && \
-            node "$RUNNER_TEMP/project-tools/project-browser-check.mjs" --request "$RUNNER_TEMP/agent-task/AGENT_REQUEST.md" --port 3109 --output "$RUNNER_TEMP/project-acceptance.json"; } > agent-retest.log 2>&1
+          if [[ "${PROJECT:-false}" == true ]]; then
+            node "$RUNNER_TEMP/project-tools/project-ci.mjs" --request "$RUNNER_TEMP/agent-task/AGENT_REQUEST.md" --output "$RUNNER_TEMP/project-acceptance.json" > agent-retest.log 2>&1
+          else
+            { npm run typecheck && npm run ci:gate; } > agent-retest.log 2>&1
+          fi
           rc=$?
           cat agent-retest.log
           echo "head_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"

@@ -51,8 +51,15 @@ end $$;
 create function public.control_work_project(p_id uuid,p_actor uuid,p_chat uuid,p_action text,p_text text default '',p_hash text default null,p_repository uuid default null) returns jsonb language plpgsql security invoker set search_path=public as $$ declare p work_projects;begin
  perform pg_advisory_xact_lock(hashtextextended('katie.mission.state',0));select * into strict p from work_projects where id=p_id and actor_id=p_actor and chat_id=p_chat for update;
  if p_action='status' then return to_jsonb(p);end if;
- if p_action in ('pause','stop') and p.status not in ('completed','stopped') then
-  update work_projects set status=case when p_action='pause' then 'paused' else 'stopped' end,lease=null,lease_until=null,detail='Project '||p_action||'d. An already accepted external job may still finish; no new work will be authorized.',updated_at=now() where id=p.id;
+ if p_action='amend' and p.status not in ('completed','stopped') then
+  if length(trim(p_text)) not between 1 and 4000 or length(p.clarifications)+length(p_text)>8000 then raise exception 'Clarification exceeds project context limit';end if;
+  if p.active_mission_id is not null then
+   perform control_mission(p.active_mission_id,'stop');
+   update project_runs set outcome=jsonb_build_object('superseded',true,'reason','Explicit user clarification requires revised scope approval') where mission_id=p.active_mission_id and outcome is null;
+  end if;
+  update work_projects set clarifications=clarifications||E'\nUSER AMENDMENT: '||p_text,approved_hash=null,approval_hash=null,spec=null,phase='research',status='running',active_mission_id=null,lease=null,lease_until=null,milestone_index=0,detail='Your project clarification is saved. I will revise research/specification and request a new scope approval; prior work and charges are preserved.',updated_at=now() where id=p.id;
+ elsif p_action in ('pause','stop') and p.status not in ('completed','stopped') then
+  update work_projects set status=case when p_action='pause' then 'paused' else 'stopped' end,lease=null,lease_until=null,detail='Project '||p_action||'d. An already admitted external dispatch may still finish; no new work will be authorized.',updated_at=now() where id=p.id;
   update mission_assignments set status=case when role='development' and exists(select 1 from agent_tasks where id=mission_assignments.id) then 'waiting_external' else 'queued' end,lease=null,lease_until=null where mission_id=p.active_mission_id and status='running';
  elsif p_action='resume' and p.status in ('paused','blocked') and p.deadline>now() then
   if p.active_mission_id is not null and exists(select 1 from agent_missions where id=p.active_mission_id and (status in ('blocked','stopped') or deadline<=now())) then raise exception 'This milestone is blocked or expired. Explain the blocker before asking for a revised project scope; budgets are not reset by resume';end if;
@@ -139,7 +146,7 @@ create function public.finish_work_project(p_id uuid,p_lease uuid,p_action text,
  insert into project_events(project_id,event,data) values(p.id,p_action,p_data);
  update work_projects set lease=null,lease_until=null,failures=case when p_action='error' then failures else 0 end,updated_at=now() where id=p.id;
  select * into strict p from work_projects where id=p.id;
- if p_action<>'wait' or p.status<>'running' then perform project_publish(p.id,coalesce(p.result,p.detail,p.status));end if;
+ if p.status='awaiting_approval' and p.spec is not null then perform project_publish(p.id,project_scope_proposal(p.id));elsif p_action<>'wait' or p.status<>'running' then perform project_publish(p.id,coalesce(p.result,p.detail,p.status));end if;
  return true;
 end $$;
 revoke all on function project_canonical(jsonb),project_publish(uuid,text),create_work_project(uuid,text,uuid,uuid,text,uuid),control_work_project(uuid,uuid,uuid,text,text,text,uuid),claim_work_project(),finish_work_project(uuid,uuid,text,jsonb) from public,anon,authenticated;
@@ -224,10 +231,40 @@ begin
  return true;
 end $$;
 
-create function public.publish_project_proposal(p_id uuid,p_hash text,p_text text) returns boolean language plpgsql security invoker set search_path=public as $$ begin
- perform pg_advisory_xact_lock(hashtextextended('katie.mission.state',0));
- if not exists(select 1 from work_projects where id=p_id and status='awaiting_approval' and approval_hash=p_hash) then return false;end if;
- perform project_publish(p_id,p_text);return true;
+-- The full proposal is delivered in the same transaction as the approval state.
+-- A crash between specification commit and UI publication cannot strand a scope.
+create function public.project_scope_proposal(p_id uuid) returns text language plpgsql security invoker set search_path=public as $$ declare p work_projects;begin
+ select * into strict p from work_projects where id=p_id;
+ return '<!-- katie-project-approval:'||p.approval_hash||' -->'||E'\n\n**'||(p.spec->>'name')||E'**\n'||(p.spec->>'summary')||E'\n\nOriginal outcome: '||p.objective||E'\n'||p.clarifications||E'\n\n**Exact project specification and browser contracts**\n```json\n'||jsonb_pretty(p.spec)||E'\n```\n\nRepository snapshot: '||coalesce(p.baseline_sha,'No target selected')||E'\nLimits: '||p.max_cycles||' coding jobs; '||p.max_missions||' milestones; '||p.token_allowance||' aggregate project-model tokens; deadline '||p.deadline||E'.\nGitHub coding usage is additional under its existing per-job time and repair limits. Approval permits scoped isolated draft changes and existing private Preview delivery. No production merge, purchases, new services, credentials, or dependency/deployment configuration changes are authorized.\n\nReply **approve project '||left(p.approval_hash,12)||'** to authorize this saved scope once.';
 end $$;
-revoke all on function publish_project_proposal(uuid,text,text) from public,anon,authenticated;
-grant execute on function publish_project_proposal(uuid,text,text) to service_role;
+revoke all on function project_scope_proposal(uuid) from public,anon,authenticated;
+grant execute on function project_scope_proposal(uuid) to service_role;
+
+-- Linearize project dispatch admission with stop/pause, scope and lease checks.
+-- Once admitted, an in-flight request can finish; no stale worker can admit one.
+create function public.claim_project_dispatch(p_id uuid,p_lease uuid,p_hash text) returns boolean language plpgsql security invoker set search_path=public as $$ declare j mission_assignments;m agent_missions;p work_projects;t agent_tasks;r project_runs;begin
+ perform pg_advisory_xact_lock(hashtextextended('katie.mission.state',0));
+ select * into j from mission_assignments where id=p_id for update;if not found then return false;end if;
+ select * into m from agent_missions where id=j.mission_id;select * into p from work_projects where id=m.project_id for update;select * into r from project_runs where mission_id=m.id;
+ if p.id is null or p.status<>'running' or p.active_mission_id<>m.id or p.deadline<=now() or m.status<>'running' or m.deadline<=now() or j.role<>'development' or j.status<>'running' or j.lease is distinct from p_lease or j.lease_until<=now() or p.approved_hash is null or p.approved_hash is distinct from p.approval_hash or p.approved_hash is distinct from p_hash or r.binding->>'scopeHash' is distinct from p_hash then return false;end if;
+ select * into t from agent_tasks where id=p_id for update;
+ if not found or t.kind<>'development' or t.status<>'dispatching' or t.external ? 'attempted' then return false;end if;
+ if not exists(select 1 from managed_agents a where a.id=t.agent_id and not archived and (a.config->>'development')::boolean) then return false;end if;
+ update agent_tasks set external=jsonb_build_object('attempted',true,'projectId',p.id),updated_at=now() where id=p_id;
+ insert into project_events(project_id,event,data) values(p.id,'dispatch_admitted',jsonb_build_object('task',p_id,'lease',p_lease,'scope',p_hash));return true;
+end $$;
+revoke all on function claim_project_dispatch(uuid,uuid,text) from public,anon,authenticated;
+grant execute on function claim_project_dispatch(uuid,uuid,text) to service_role;
+
+create or replace function public.claim_agent_dispatch(p_id uuid) returns boolean
+language plpgsql security invoker set search_path=public as $$
+declare t agent_tasks;
+begin
+ if exists(select 1 from mission_assignments j join project_runs r on r.mission_id=j.mission_id where j.id=p_id) then return false;end if;
+ select * into t from agent_tasks where id=p_id for update;
+ if not found or t.kind<>'development' or t.status<>'dispatching' or t.external ? 'attempted' then return false; end if;
+ perform 1 from chats c join managed_agents a on a.id=t.agent_id where c.id=t.chat_id and c.actor_id=t.actor_id and a.actor_id=t.actor_id;
+ if not found then raise exception 'Task association invalid'; end if;
+ update agent_tasks set external=jsonb_build_object('attempted',true),updated_at=now() where id=p_id;
+ return true;
+end $$;
