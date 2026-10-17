@@ -87,7 +87,8 @@ begin
  elsif p_action='stop' and m.status in ('draft','running','awaiting_approval') then
   update agent_missions set status='stopped',detail='Stopped. No new work will be dispatched. An in-flight provider or accepted GitHub job may still finish.',updated_at=now() where id=p_id returning * into m;
   update mission_assignments set status='stopped',lease=null,lease_until=null,updated_at=now() where mission_id=p_id and status<>'completed';
- elsif p_action='approve' and m.status='awaiting_approval' and m.deadline>now() then
+ elsif p_action='approve' and m.status in ('running','awaiting_approval') and m.deadline>now() then
+  if exists(select 1 from mission_assignments where id=p_job and mission_id=p_id and role='development' and payload->>'approved'='true') then return to_jsonb(m); end if;
   update mission_assignments set status='queued',payload=payload||'{"approved":true}'::jsonb,available_at=now(),attempts=0,updated_at=now() where id=p_job and mission_id=p_id and role='development' and status='awaiting_approval';
   if not found then raise exception 'Approval target unavailable'; end if;
   update agent_missions set status='running',detail='Saved development assignment approved for draft PR only.',updated_at=now() where id=p_id returning * into m;

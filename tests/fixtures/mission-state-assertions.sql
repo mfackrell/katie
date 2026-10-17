@@ -117,3 +117,30 @@ begin
  update agent_tasks set status='completed' where id=tid;
  perform control_mission(mid,'stop');
 end $admission$;
+
+-- Separate approvals remain valid after the first one resumes a mission.
+do $parallel_approval$
+declare cfg jsonb:='{"name":"Coding worker","instructions":"Draft-only coding.","research":false,"attachments":false,"development":true,"reviewMode":"always","maxActiveTasks":1,"maxInputChars":8000}';a jsonb;b jsonb;mid uuid:=gen_random_uuid();repo uuid:=gen_random_uuid();j jsonb;x jsonb;y jsonb;t jsonb;
+begin
+ a:=save_managed_agent(null,cfg,false);b:=save_managed_agent(null,cfg,false);insert into repo_sync_runs values(repo,'owner/repo');
+ perform create_mission(mid,'Two independent draft changes',array[(a->>'id')::uuid,(b->>'id')::uuid],120,repo);perform control_mission(mid,'start');j:=claim_mission_work()->'job';
+ assert commit_mission_work((j->>'id')::uuid,(j->>'lease')::uuid,'{}',jsonb_build_array(
+ jsonb_build_object('key','coding_a','role','development','agent_id',a->>'id','instruction','Draft change A','dependencies','[]'::jsonb),
+ jsonb_build_object('key','coding_b','role','development','agent_id',b->>'id','instruction','Draft change B','dependencies','[]'::jsonb),
+ jsonb_build_object('key','compose','role','compose','agent_id',a->>'id','instruction','Deliver both links','dependencies','["coding_a","coding_b"]'::jsonb),
+ jsonb_build_object('key','review','role','review','agent_id',b->>'id','instruction','Verify both links','dependencies','["compose"]'::jsonb)));
+ x:=claim_mission_work()->'job';y:=claim_mission_work()->'job';assert x is not null and y is not null;
+ assert commit_mission_work((x->>'id')::uuid,(x->>'lease')::uuid,'{}','[]','awaiting_approval');
+ assert commit_mission_work((y->>'id')::uuid,(y->>'lease')::uuid,'{}','[]','awaiting_approval');
+ perform control_mission(mid,'approve',(x->>'id')::uuid);assert (select status from agent_missions where id=mid)='running';
+ perform control_mission(mid,'approve',(y->>'id')::uuid);perform control_mission(mid,'approve',(x->>'id')::uuid);
+ assert (select count(*) from mission_assignments where mission_id=mid and role='development' and status='queued' and payload->>'approved'='true')=2;
+ for i in 1..2 loop
+  j:=claim_mission_work()->'job';assert j->>'role'='development';t:=mission_development_task((j->>'id')::uuid,(j->>'lease')::uuid);perform transition_agent_task((t->>'id')::uuid,'start');
+  update agent_tasks set status='ready' where id=(t->>'id')::uuid;
+  assert commit_mission_work((j->>'id')::uuid,(j->>'lease')::uuid,'{"output":"Verified draft link"}');
+ end loop;
+ j:=claim_mission_work()->'job';assert j->>'role'='compose';assert commit_mission_work((j->>'id')::uuid,(j->>'lease')::uuid,'{"text":"Both draft links delivered"}');
+ j:=claim_mission_work()->'job';assert j->>'role'='review';assert commit_mission_work((j->>'id')::uuid,(j->>'lease')::uuid,'{"verdict":"pass"}','[]','completed','completed','Both draft links delivered');
+ assert (select status from agent_missions where id=mid)='completed';
+end $parallel_approval$;
