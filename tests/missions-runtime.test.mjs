@@ -81,3 +81,39 @@ test('mission API rejects forged runtime fields and never runs background work i
  for(const b of [{action:'start',id,model:'unbounded'},{action:'create',id,objective:'x',agents:[team[0].id],minutes:20,maxCalls:999},{action:'approve',id,payload:{approved:true}}])assert.equal((await send(b)).status,409);
  assert.equal(invoked,0);assert.equal((await send({action:'start',id})).status,200);assert.equal(invoked,1);
 });
+
+test('approved development waits externally, then reclaimed work completes only after a verified draft receipt',async()=>{
+ const prior=process.env.GITHUB_TOKEN;process.env.GITHUB_TOKEN='fixture-only';
+ try{
+  const m=mission();m.repository_id=randomUUID();m.team[0].config.development=true;m.team[0].config.maxActiveTasks=1;
+  const j=job(m,'development','coding');j.payload={};
+  const task={id:j.id,agent_id:j.agent_id,kind:'development',status:'draft',request_id:'agent:'+j.id,input:j.instruction,snapshot:m.team[0].config,definition_version:1,repository_id:m.repository_id,repository_full_name:'owner/repo',external:{}};
+  let writes=0,finished=false,committed;
+  const receipt={version:1,repository:'owner/repo',run_id:99,issue_number:7,pr_url:'https://github.com/owner/repo/pull/8',outcome:'READY',checks:{build:'success',test:'true',review:'pass',repair:'skipped',retest:'',final_review:''}};
+  const artifact=()=>{
+   const file=Buffer.from('agent-result.json'),content=Buffer.from(JSON.stringify(receipt));
+   const local=Buffer.alloc(30);local.writeUInt32LE(0x04034b50);local.writeUInt32LE(content.length,18);local.writeUInt32LE(content.length,22);local.writeUInt16LE(file.length,26);
+   const central=Buffer.alloc(46);central.writeUInt32LE(0x02014b50);central.writeUInt32LE(content.length,20);central.writeUInt32LE(content.length,24);central.writeUInt16LE(file.length,28);
+   const end=Buffer.alloc(22);end.writeUInt32LE(0x06054b50);end.writeUInt16LE(1,10);end.writeUInt32LE(central.length+file.length,12);end.writeUInt32LE(local.length+file.length+content.length,16);
+   return Buffer.concat([local,file,content,central,file,end]);
+  };
+  class GitHub{
+   users={getAuthenticated:async()=>({data:{type:'User',login:'owner'}})};
+   repos={get:async()=>({data:{owner:{type:'User',login:'owner'}}})};
+   issues={create:async()=>{writes++;return{data:{number:7,html_url:'https://github.com/owner/repo/issues/7'}};}};
+   actions={getWorkflow:async()=>({data:{path:'.github/workflows/autonomous-development.yml',state:'active'}}),listWorkflowRuns:async()=>({data:{workflow_runs:finished?[{id:99,status:'completed',conclusion:'success',event:'issues',repository:{full_name:'owner/repo'},head_repository:{full_name:'owner/repo'},head_branch:'main',path:'.github/workflows/autonomous-development.yml',html_url:'https://github.com/owner/repo/actions/runs/99'}]:[]}}),listWorkflowRunArtifacts:async()=>({data:{artifacts:[{name:'agent-completion',id:10,expired:false,size_in_bytes:500}]}}),downloadArtifact:async()=>({data:artifact()})};
+  }
+  const db={from(){const q={select:()=>q,eq:()=>q,maybeSingle:async()=>({data:{repository_full_name:'owner/repo'},error:null}),update:async patch=>{Object.assign(task,patch);return{error:null};}};return q;}};
+  const {executeClaim}=modules({
+   '@octokit/rest':{Octokit:GitHub},'@/lib/data/supabase/admin':{getSupabaseAdminClient:()=>db},
+   '@/lib/agents/store':{agentRpc:async(name)=>{if(name==='transition_agent_task'){task.status='dispatching';return task;}assert.equal(name,'claim_agent_dispatch');assert.equal(task.external.attempted,undefined);task.external={attempted:true};return true;}},
+   '@/lib/missions/store':{readMission:async()=>({mission:m,jobs:[j]}),rpc:async(name,args)=>{if(name==='mission_development_task')return task;assert.equal(name,'commit_mission_work');committed=args;return true;}},
+  })('@/lib/missions/worker');
+  const execute=()=>executeClaim({mission:m,job:j},()=>assert.fail('Development must not invoke models'));
+  await execute();assert.equal(committed.p_status,'awaiting_approval');assert.equal(writes,0);
+  j.payload.approved=true;await execute();assert.equal(committed.p_status,'waiting_external');assert.equal(task.status,'submitted');assert.equal(writes,1);
+  // Reclaimed assignment uses the durable submitted task and verifies its receipt.
+  j.lease=randomUUID();finished=true;await execute();
+  assert.equal(committed.p_status,'completed');assert.equal(task.status,'ready');assert.equal(committed.p_result.external.receipt.outcome,'READY');assert.equal(committed.p_result.external.prUrl,receipt.pr_url);assert.equal(writes,1);
+ }finally{if(prior===undefined)delete process.env.GITHUB_TOKEN;else process.env.GITHUB_TOKEN=prior;}
+});

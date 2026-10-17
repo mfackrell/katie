@@ -15,6 +15,41 @@ test('missions: real PostgreSQL fencing, handoffs, permissions, budgets, approva
   const db=await connect();await db.query(`create role anon;create role authenticated;create role service_role bypassrls;create table actors(id uuid primary key,name text,system_prompt text,review_mode text);create table chats(id uuid primary key,actor_id uuid references actors,title text,created_at timestamptz,updated_at timestamptz);create table chat_requests(request_id text primary key,actor_id text,chat_id text,status text,error_message text,updated_at timestamptz);grant select,update on chat_requests to service_role;create table repo_sync_runs(id uuid primary key,repository_full_name text);grant usage on schema public to service_role;grant select,insert,update on actors,chats,repo_sync_runs to service_role;alter default privileges in schema public grant all on tables to anon,authenticated,service_role;`);
   for(const file of ['20261016211426_agent_management.sql','20261016234048_autonomous_missions.sql'])await db.query(readFileSync('supabase/migrations/'+file,'utf8'));
   await db.query('set role service_role');await db.query(readFileSync('tests/fixtures/mission-state-assertions.sql','utf8'));
+  // Hold the winner's transaction open so the competing admission must wait
+  // on the shared lock, then observe the committed capacity in either order.
+  const rivals=await Promise.all([connect(),connect()]);
+  for(const c of rivals)await c.query('set role service_role');
+  for(const missionFirst of [true,false]){
+   const config={name:'Shared admission',instructions:'Test shared capacity.',research:false,attachments:false,development:false,reviewMode:'always',maxActiveTasks:1,maxInputChars:8000};
+   const agent=(await db.query('select save_managed_agent(null,$1,false) agent',[config])).rows[0].agent;
+   const mid=randomUUID(),tid=randomUUID();
+   await db.query('select create_mission($1,$2,$3)',[mid,'Competing admission',[agent.id]]);
+   await db.query("select control_mission($1,'start')",[mid]);
+   await db.query("select create_agent_task($1,$2,'Ordinary task','general')",[tid,agent.id]);
+   const [winner,loser]=rivals;
+   const missionClaim=c=>c.query('select claim_mission_work() claim');
+   const taskStart=c=>c.query("select transition_agent_task($1,'start') task",[tid]);
+   await winner.query('begin');
+   const first=await (missionFirst?missionClaim(winner):taskStart(winner));
+   if(missionFirst)assert.equal(first.rows[0].claim.job.mission_id,mid);
+   else assert.equal(first.rows[0].task.status,'running');
+   const pending=(missionFirst?taskStart(loser):missionClaim(loser)).then(value=>({value}),error=>({error}));
+   let blocked=false;
+   try{
+    const until=Date.now()+5000;
+    while(Date.now()<until){
+     const state=await db.query('select cardinality(pg_blocking_pids($1))>0 blocked',[loser.processID]);
+     if(state.rows[0].blocked){blocked=true;break;}
+     await new Promise(resolve=>setTimeout(resolve,10));
+    }
+    assert.ok(blocked,'the competing session waits for admission to commit');
+   }finally{await winner.query('commit');}
+   const second=await pending;
+   if(missionFirst)assert.match(second.error?.message??'',/Active task limit/);
+   else {assert.ifError(second.error);assert.equal(second.value.rows[0].claim,null);}
+   await db.query("select control_mission($1,'stop')",[mid]);
+   await db.query("update agent_tasks set status='completed' where id=$1",[tid]);
+  }
   const cfg={name:'Concurrent worker',instructions:'Test durable admission.',research:false,attachments:false,development:false,reviewMode:'always',maxActiveTasks:4,maxInputChars:8000};
   const a=(await db.query('select save_managed_agent(null,$1,false) agent',[cfg])).rows[0].agent;
   const ids=Array.from({length:4},()=>randomUUID());
@@ -25,24 +60,6 @@ test('missions: real PostgreSQL fencing, handoffs, permissions, budgets, approva
   const j=claims[0].job,call=randomUUID();
   const reservations=await Promise.all(workers.slice(0,2).map(c=>c.query('select reserve_mission_call($1,$2,$3,$4,$5) accepted',[j.id,j.lease,call,'fixture',100])));
   assert.equal(reservations.filter(r=>r.rows[0].accepted).length,1,'duplicate call identity reserves exactly once');
-  for(const id of ids)await db.query("select control_mission($1,'stop')",[id]);
-  const limitOne=(await db.query('select save_managed_agent(null,$1,false) agent',[{...cfg,maxActiveTasks:1}])).rows[0].agent;
-  const ordinary=(await db.query('select create_agent_task($1,$2,$3,$4,null) task',[randomUUID(),limitOne.id,'Ordinary task','general'])).rows[0].task;
-  const firstMission=randomUUID();await db.query('select create_mission($1,$2,$3)',[firstMission,'Shared admission',[limitOne.id]]);await db.query("select control_mission($1,'start')",[firstMission]);
-  const c1=await connect(),c2=await connect();await c1.query('set role service_role');await c2.query('set role service_role');
-  const waitForLock=async(query)=>{for(let i=0;i<100;i++){const r=await db.query("select count(*)::int n from pg_stat_activity where wait_event_type='Lock' and query like $1",[query+'%']);if(r.rows[0].n)return;await new Promise(r=>setTimeout(r,10));}assert.fail('Expected a real shared-admission lock wait');};
-  await c1.query('begin');await c1.query("select transition_agent_task($1,'start')",[ordinary.id]);
-  const missionAfterTask=c2.query('select claim_mission_work() claim');await waitForLock('select claim_mission_work');await c1.query('commit');
-  assert.equal((await missionAfterTask).rows[0].claim,null,'Mission cannot overtake an ordinary task admitted first');
-  await db.query("update agent_tasks set status='completed' where id=$1",[ordinary.id]);
-  const admitted=(await c1.query('select claim_mission_work() claim')).rows[0].claim;assert.equal(admitted.mission.id,firstMission);
-  const secondTask=(await db.query('select create_agent_task($1,$2,$3,$4,null) task',[randomUUID(),limitOne.id,'Second ordinary task','general'])).rows[0].task;
-  await assert.rejects(c2.query("select transition_agent_task($1,'start')",[secondTask.id]),/Active task limit/);
-  await db.query("select control_mission($1,'stop')",[firstMission]);
-  const secondMission=randomUUID();await db.query('select create_mission($1,$2,$3)',[secondMission,'Mission first',[limitOne.id]]);await db.query("select control_mission($1,'start')",[secondMission]);
-  await c1.query('begin');const claimed=(await c1.query('select claim_mission_work() claim')).rows[0].claim;assert.equal(claimed.mission.id,secondMission);
-  const taskAfterMission=c2.query("select transition_agent_task($1,'start')",[secondTask.id]).then(()=>null,e=>e);
-  await waitForLock('select transition_agent_task');await c1.query('commit');assert.match((await taskAfterMission).message,/Active task limit/);
   for(const c of workers.slice(0,2)){await c.query('reset role');await c.query('set role anon');await assert.rejects(c.query('select * from agent_missions'),/permission denied/);await assert.rejects(c.query('select claim_mission_work()'),/permission denied/);}
  }finally{await Promise.allSettled(clients.map(c=>c.end()));if(started)run('pg_ctl',['-D',data,'-m','immediate','-w','stop']);rmSync(root,{recursive:true,force:true});}
 });

@@ -71,3 +71,49 @@ begin
  j:=claim_mission_work()->'job';assert j->>'role'='review';assert commit_mission_work((j->>'id')::uuid,(j->>'lease')::uuid,'{"verdict":"pass"}','[]','completed','completed','Draft link');
  assert (select status from agent_missions where id=mid)='completed','Limit-one coding mission must finish after reconciliation';
 end $test$;
+
+-- Ordinary tasks and missions share one capacity unit at a limit of one.
+do $admission$
+declare cfg jsonb:='{"name":"Single worker","instructions":"Use saved evidence.","research":false,"attachments":false,"development":true,"reviewMode":"always","maxActiveTasks":1,"maxInputChars":8000}';
+ a jsonb; mid uuid; tid uuid; repo uuid:=gen_random_uuid(); j jsonb; t jsonb;
+begin
+ a:=save_managed_agent(null,cfg,false);mid:=gen_random_uuid();tid:=gen_random_uuid();
+ perform create_mission(mid,'Shared capacity',array[(a->>'id')::uuid]);perform control_mission(mid,'start');
+ perform create_agent_task(tid,(a->>'id')::uuid,'Ordinary task','general');
+ j:=claim_mission_work()->'job';assert j->>'mission_id'=mid::text;
+ begin perform transition_agent_task(tid,'start');raise exception 'Unexpected admission';exception when others then if sqlerrm not like '%Active task limit%' then raise;end if;end;
+ perform control_mission(mid,'stop');
+ perform transition_agent_task(tid,'start');
+ mid:=gen_random_uuid();perform create_mission(mid,'Task first',array[(a->>'id')::uuid]);perform control_mission(mid,'start');
+ assert claim_mission_work() is null,'An ordinary task blocks mission admission';
+ update agent_tasks set status='completed' where id=tid;
+ j:=claim_mission_work()->'job';assert j->>'mission_id'=mid::text;
+ begin perform transition_agent_task(tid,'continue','Another turn',gen_random_uuid(),'agent:'||tid::text);raise exception 'Unexpected continuation';exception when others then if sqlerrm not like '%Active task limit%' then raise;end if;end;
+ perform control_mission(mid,'stop');
+ -- Approved coding dispatch and its reconciliation worker count as one slot.
+ insert into repo_sync_runs(id,repository_full_name) values(repo,'owner/repo');
+ mid:=gen_random_uuid();perform create_mission(mid,'Coding at limit one',array[(a->>'id')::uuid],20,repo);perform control_mission(mid,'start');j:=claim_mission_work()->'job';
+ assert commit_mission_work((j->>'id')::uuid,(j->>'lease')::uuid,'{}',jsonb_build_array(jsonb_build_object('key','coding','role','development','agent_id',a->>'id','instruction','Draft a documentation fix','dependencies','[]'::jsonb)));
+ j:=claim_mission_work()->'job';assert j->>'role'='development';
+ assert commit_mission_work((j->>'id')::uuid,(j->>'lease')::uuid,'{}','[]','awaiting_approval');
+ perform control_mission(mid,'approve',(j->>'id')::uuid);j:=claim_mission_work()->'job';
+ t:=mission_development_task((j->>'id')::uuid,(j->>'lease')::uuid);
+ t:=transition_agent_task((t->>'id')::uuid,'start');assert t->>'status'='dispatching';
+ assert claim_agent_dispatch((t->>'id')::uuid);
+ assert not claim_agent_dispatch((t->>'id')::uuid),'External dispatch remains at most once';
+ assert commit_mission_work((j->>'id')::uuid,(j->>'lease')::uuid,'{}','[]','waiting_external');
+ update mission_assignments set available_at=now() where id=(j->>'id')::uuid;
+ j:=claim_mission_work()->'job';assert j->>'id'=t->>'id','Uncertain dispatch can be reconciled at capacity';
+ update agent_tasks set status='submitted' where id=(t->>'id')::uuid;
+ assert commit_mission_work((j->>'id')::uuid,(j->>'lease')::uuid,'{}','[]','waiting_external');
+ update mission_assignments set available_at=now() where id=(j->>'id')::uuid;
+ j:=claim_mission_work()->'job';assert j->>'id'=t->>'id','Submitted task can be reconciled at capacity';
+ begin perform transition_agent_task(tid,'continue','Another turn',gen_random_uuid(),'agent:'||tid::text);raise exception 'Unexpected continuation';exception when others then if sqlerrm not like '%Active task limit%' then raise;end if;end;
+ -- Simulate the ready status persisted by verified receipt reconciliation.
+ update agent_tasks set status='ready' where id=(t->>'id')::uuid;
+ assert commit_mission_work((j->>'id')::uuid,(j->>'lease')::uuid,'{"output":"Verified draft ready"}');
+ assert (select status from mission_assignments where id=(t->>'id')::uuid)='completed';
+ perform transition_agent_task(tid,'continue','Capacity released',gen_random_uuid(),'agent:'||tid::text);
+ update agent_tasks set status='completed' where id=tid;
+ perform control_mission(mid,'stop');
+end $admission$;

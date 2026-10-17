@@ -220,6 +220,7 @@ create or replace function public.transition_agent_task(p_id uuid,p_action text,
 returns jsonb language plpgsql security invoker set search_path=public as $$
 declare a managed_agents; t agent_tasks; n integer; receipt agent_task_continuations;
 begin
+ perform pg_advisory_xact_lock(hashtextextended('katie.mission.state',0));
  select a0.* into a from managed_agents a0 join agent_tasks t0 on t0.agent_id=a0.id where t0.id=p_id for update of a0;
  if not found then raise exception 'Task missing'; end if;
  select * into t from agent_tasks where id=p_id for update;
