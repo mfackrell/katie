@@ -61,6 +61,19 @@ DO $$ declare p jsonb;q jsonb;c jsonb;m uuid;j uuid;l uuid;ph text;h text;ok boo
   if (select sum(reserved_tokens) from agent_missions)<>30000 then raise exception 'Amendment reset prior usage';end if;
   raise exception 'ROLLBACK_AMENDMENT_FIXTURE';
  exception when others then if SQLERRM<>'ROLLBACK_AMENDMENT_FIXTURE' then raise;end if;end;
+ -- Essential-input blocking and a completed child can race a user answer.
+ foreach ph in array array['blocked','completed','stopped'] loop
+  begin
+   select mission_id into m from project_runs where project_id=(p->>'id')::uuid and kind='research' order by ordinal limit 1;
+   update agent_missions set status=ph where id=m;
+   update work_projects set status='awaiting_input',phase='research',active_mission_id=m,verified_sha=repeat('c',40) where id=(p->>'id')::uuid;
+   q:=control_work_project((p->>'id')::uuid,'11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222','amend','Use the original edition.');
+   if q->>'clarifications' not like '%original edition%' or q->>'phase'<>'research' or q->>'active_mission_id' is not null or q->>'approved_hash' is not null or q->>'verified_sha'<>repeat('c',40) or q->>'baseline_sha'<>repeat('a',40) then raise exception 'Terminal-child clarification lost requirements or verified work';end if;
+   if (select status from agent_missions where id=m)<>ph or not exists(select 1 from project_runs where mission_id=m and outcome->>'superseded'='true') then raise exception 'Terminal child was not retained and superseded';end if;
+   if (select sum(reserved_tokens) from agent_missions)<>30000 or reserve_mission_call(j,l,gen_random_uuid(),'fixture',1) or commit_mission_work(j,l,'{"text":"STALE_TERMINAL_AMENDMENT"}') then raise exception 'Clarification reset charges or admitted stale work';end if;
+   raise exception 'ROLLBACK_TERMINAL_AMENDMENT';
+  exception when others then if SQLERRM<>'ROLLBACK_TERMINAL_AMENDMENT' then raise;end if;end;
+ end loop;
  -- Browser evidence is private trusted output, bound to the actual deployment,
  -- approved contract and immutable code; deployment status alone is insufficient.
  begin

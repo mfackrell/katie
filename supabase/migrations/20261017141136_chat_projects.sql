@@ -54,8 +54,8 @@ create function public.control_work_project(p_id uuid,p_actor uuid,p_chat uuid,p
  if p_action='amend' and p.status not in ('completed','stopped') then
   if length(trim(p_text)) not between 1 and 4000 or length(p.clarifications)+length(p_text)>8000 then raise exception 'Clarification exceeds project context limit';end if;
   if p.active_mission_id is not null then
-   perform control_mission(p.active_mission_id,'stop');
-   update project_runs set outcome=jsonb_build_object('superseded',true,'reason','Explicit user clarification requires revised scope approval') where mission_id=p.active_mission_id and outcome is null;
+   if exists(select 1 from agent_missions where id=p.active_mission_id and status in ('draft','running','awaiting_approval')) then perform control_mission(p.active_mission_id,'stop');end if;
+   update project_runs set outcome=coalesce(outcome,'{}'::jsonb)||jsonb_build_object('superseded',true,'reason','Explicit user clarification requires revised scope approval') where mission_id=p.active_mission_id;
   end if;
   update work_projects set clarifications=clarifications||E'\nUSER AMENDMENT: '||p_text,approved_hash=null,approval_hash=null,spec=null,phase='research',status=case when p.status='paused' then 'paused' else 'running' end,active_mission_id=null,lease=null,lease_until=null,milestone_index=0,detail='Your project clarification is saved. I will revise research/specification and request a new scope approval; prior work and charges are preserved.'||case when p.status='paused' then ' The project remains paused until you explicitly resume it.' else '' end,updated_at=now() where id=p.id;
  elsif p_action in ('pause','stop') and p.status not in ('completed','stopped') then
