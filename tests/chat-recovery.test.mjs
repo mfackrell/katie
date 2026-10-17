@@ -52,5 +52,5 @@ test('temporary not-found during server admission does not abort recovery', asyn
   });
   const result = await poll('chat',{requestId:'pending',startedAt:new Date().toISOString(),content:'test'});
   assert.equal(result[0].content,'done');
-  assert.equal(calls,3);
+  assert.equal(calls,4);
 });
