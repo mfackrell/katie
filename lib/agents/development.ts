@@ -138,3 +138,34 @@ export async function reconcileDevelopment(task: AgentTask) {
   }
   return save(task, task.status, "No verified completion receipt among the latest 20 workflow runs. Refresh manually after workflow completion.");
 }
+
+// Supply the coordinator with observed repository evidence after its trusted
+// completion receipt passes. This is bounded, read-only verification; the
+// workflow remains responsible for implementation, testing and code review.
+export async function developmentEvidence(task: AgentTask) {
+  if(task.status!=="ready")throw new Error("Verified development receipt required");
+  const client=github(),binding=await repository(task);
+  const receipt=parseCompletionReceipt(task.external.receipt,binding.fullName,Number(task.external.issueNumber),Number((task.external.receipt as Record<string,unknown>)?.run_id),"success");
+  if(receipt.outcome!=="READY"||receipt.pr_url!==task.external.prUrl)throw new Error("Draft receipt association invalid");
+  const number=Number(receipt.pr_url!.split('/').pop());
+  const {data:pr}=await client.pulls.get({owner:binding.owner,repo:binding.repo,pull_number:number});
+  if(!pr.draft||pr.state!=="open"||pr.merged||pr.head.repo?.full_name!==binding.fullName||pr.base.repo.full_name!==binding.fullName||pr.changed_files>30)throw new Error("Draft evidence unavailable or exceeds the thirty-file verification limit");
+  const [files,jobs]=await Promise.all([
+    client.pulls.listFiles({owner:binding.owner,repo:binding.repo,pull_number:number,per_page:100}),
+    client.actions.listJobsForWorkflowRun({owner:binding.owner,repo:binding.repo,run_id:receipt.run_id,per_page:20}),
+  ]);
+  if(files.data.length!==pr.changed_files)throw new Error("Incomplete changed-file evidence");
+  const build=jobs.data.jobs.find(j=>j.name==="build"&&j.conclusion==="success");
+  if(!build)throw new Error("Verified build job evidence unavailable");
+  const log=await client.actions.downloadJobLogsForWorkflowRun({owner:binding.owner,repo:binding.repo,job_id:build.id});
+  const raw=typeof log.data==="string"?log.data:Buffer.from(log.data as ArrayBuffer).toString("utf8");
+  const excerpts=raw.split(/\r?\n/).filter(line=>/\bPASS:|Validation passed:|focused.{0,100}(?:passed|success)/i.test(line)&&!/console\.log|assert\./.test(line)).slice(0,8).map(line=>line.slice(0,500));
+  let patchBytes=0;
+  const changedFiles=files.data.map(file=>{
+    const patch=file.patch;const size=patch?Buffer.byteLength(patch,"utf8"):0;
+    const include=Boolean(patch)&&patchBytes+size<=12000;if(include)patchBytes+=size;
+    return{path:file.filename,status:file.status,additions:file.additions,deletions:file.deletions,...(include?{patch}:{patchUnavailable:true})};
+  });
+  return{pullRequest:pr.html_url,draft:pr.draft,branch:pr.head.ref,observedHeadSha:pr.head.sha,baseSha:pr.base.sha,changedFiles,
+    validation:{buildJob:build.html_url,conclusion:build.conclusion,excerpts,note:"Selected build-log excerpts, not the full log. Patches exceeding the 12 KB evidence allowance are explicitly omitted; the complete changed-file list is retained."}};
+}

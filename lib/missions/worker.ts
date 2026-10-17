@@ -1,5 +1,5 @@
 import { agentRpc } from '@/lib/agents/store';
-import { dispatchDevelopment,reconcileDevelopment } from '@/lib/agents/development';
+import { dispatchDevelopment,reconcileDevelopment,developmentEvidence } from '@/lib/agents/development';
 import type { AgentTask } from '@/lib/agents/policy';
 import { missionModel } from './model';
 import { rpc,readMission } from './store';
@@ -42,7 +42,7 @@ export async function executeClaim(claim:Claim,model=missionModel){
   if(task.status==='draft')task=await agentRpc<AgentTask>('transition_agent_task',{p_id:task.id,p_action:'start',p_message:null});
   if(task.status==='dispatching'&&!task.external.attempted)task=await dispatchDevelopment(task);
   if(['submitted','dispatching'].includes(task.status))task=await reconcileDevelopment(task);
-  if(task.status==='ready'){await commit({output:task.details,external:task.external});return;}
+  if(task.status==='ready'){await commit({output:task.details,external:task.external,verification:await developmentEvidence(task)});return;}
   if(['blocked','failed'].includes(task.status)){await commit({detail:task.details,external:task.external},[],'failed');return;}
   await commit({detail:task.details,external:task.external},[],'waiting_external');return;
  }
@@ -55,7 +55,12 @@ export async function executeClaim(claim:Claim,model=missionModel){
   if(!target?.result)throw Error('Review candidate missing');
   const checked=await model(claim,BASE+'\n'+REVIEW_INSTRUCTION,'Independent assessment:\n'+JSON.stringify(assessment)+'\nRequired acceptance IDs:\n'+JSON.stringify(acceptanceIds(assessment))+'\nEvidence and candidate:\n'+JSON.stringify({objective:mission.objective,candidate:{key:target.job_key,result:target.result},evidence:completed.filter(x=>x.role==='work'||x.role==='development').map(x=>({key:x.job_key,result:x.result})),priorFindings:priorReviews}));
   const evaluated=validateAnswerReview(parseJSON(checked.text),assessment);
-  const review={verdict:evaluated.clarification?.essential?'blocked':evaluated.verdict==='approve'?'pass':'changes_requested',findings:[evaluated.findings],summary:evaluated.findings,checks:evaluated.checks,clarification:evaluated.clarification??null};
+  const wordLimitMatch=mission.objective.match(/\b(?:no more than|at most|maximum(?: of)?|max(?: of)?)\s+(\d{1,5})\s+words?\b/i);
+  const wordLimit=wordLimitMatch?Number(wordLimitMatch[1]):null;
+  const wordCount=String(target.result.text??target.result.output??'').trim().split(/\s+/u).filter(Boolean).length;
+  const tooLong=wordLimit!==null&&wordCount>wordLimit;
+  const lengthFinding=tooLong?`The entire deliverable contains ${wordCount} whitespace-separated words; the original objective permits at most ${wordLimit}. Return only a complete deliverable within that limit, including tables and source links.`:null;
+  const review={verdict:evaluated.clarification?.essential?'blocked':tooLong?'changes_requested':evaluated.verdict==='approve'?'pass':'changes_requested',findings:[evaluated.findings,...(lengthFinding?[lengthFinding]:[])],summary:[evaluated.findings,lengthFinding].filter(Boolean).join('\n'),checks:evaluated.checks,clarification:evaluated.clarification??null,wordCount,wordLimit};
   if(review.verdict==='pass'){const final=String(target.result.text??target.result.output??'');await commit({...review,blindCriteria:blind.text,model:checked.model,detail:'Independent review approved the completed deliverable.'},[],'completed','completed',final);return;}
   if(review.verdict==='blocked'||job.job_key==='review_again'){await commit({...review,blindCriteria:blind.text,detail:review.clarification?.essential?review.clarification.question:'Independent review did not approve the result. Inspect findings and partial work.'},[],'completed','blocked');return;}
   const composer=saved.jobs.find(x=>x.job_key==='compose')!;
