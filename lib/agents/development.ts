@@ -1,3 +1,5 @@
+import {getDevelopmentProjectContext,acceptanceBinding,type Context} from '@/lib/projects/store';
+import {digest} from '@/lib/projects/contract';
 import { Octokit } from "@octokit/rest";
 import { inflateRawSync } from "node:zlib";
 import { z } from "zod";
@@ -5,21 +7,34 @@ import { getSupabaseAdminClient } from "@/lib/data/supabase/admin";
 import { agentRpc, readTask } from "./store";
 import type { AgentTask } from "./policy";
 
+export const projectAcceptanceSchema = z.object({
+  version: z.literal(1), projectId: z.string().uuid(), contractHash: z.string().regex(/^[a-f0-9]{64}$/),
+  headSha: z.string().regex(/^[a-f0-9]{40}$/), passed: z.boolean(),
+  checks: z.array(z.object({ name: z.string().trim().min(1).max(200), passed: z.boolean(), detail: z.string().trim().min(1).max(2000) }).strict()).min(1).max(20),
+}).strict();
+export type ProjectAcceptanceBinding = { projectId: string; contractHash: string; scenarioNames: string[] };
 const receiptSchema = z.object({
   version: z.literal(1), repository: z.string().max(200), run_id: z.number().int().positive(),
   issue_number: z.number().int().positive(), pr_url: z.string().max(500).nullable(), outcome: z.enum(["READY", "BLOCKED"]),
   checks: z.object({ build: z.string(), test: z.string(), review: z.string(), repair: z.string(), retest: z.string(), final_review: z.string() }).strict(),
   tested_head_sha:z.string().regex(/^[a-f0-9]{40}$/).nullable().optional(),
   reviewed_head_sha:z.string().regex(/^[a-f0-9]{40}$/).nullable().optional(),
+  projectAcceptance: projectAcceptanceSchema.optional(),
 }).strict();
-export function parseCompletionReceipt(value: unknown, repo: string, issue: number, runId: number, conclusion: string | null) {
+export function parseCompletionReceipt(value: unknown, repo: string, issue: number, runId: number, conclusion: string | null, project?: ProjectAcceptanceBinding) {
   const receipt = receiptSchema.parse(value);
   if (receipt.repository !== repo || receipt.issue_number !== issue || receipt.run_id !== runId) throw new Error("Receipt association invalid");
   if (receipt.pr_url && !new RegExp(`^https://github\\.com/${repo.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}/pull/[1-9][0-9]*$`).test(receipt.pr_url)) throw new Error("Invalid receipt PR");
   const c = receipt.checks;
   const passed = c.build === "success" && ((c.repair === "skipped" && c.test === "true" && c.review === "pass" && ["", "skipped"].includes(c.retest) && ["", "skipped"].includes(c.final_review)) || (c.repair === "success" && c.retest === "true" && c.final_review === "pass"));
   const boundHeads=receipt.tested_head_sha===undefined&&receipt.reviewed_head_sha===undefined||typeof receipt.tested_head_sha==='string'&&receipt.tested_head_sha===receipt.reviewed_head_sha;
-  return { ...receipt, outcome: conclusion === "success" && receipt.outcome === "READY" && receipt.pr_url && passed && boundHeads ? "READY" as const : "BLOCKED" as const };
+  const acceptance = receipt.projectAcceptance;
+  const browserPassed = !acceptance ? !project : Boolean(project) && acceptance.passed && acceptance.checks.every(check => check.passed)
+    && acceptance.headSha === receipt.tested_head_sha && acceptance.headSha === receipt.reviewed_head_sha
+    && new Set(acceptance.checks.map(check => check.name)).size === acceptance.checks.length
+    && (!project || acceptance.projectId === project.projectId && acceptance.contractHash === project.contractHash
+      && project.scenarioNames.length === acceptance.checks.length && project.scenarioNames.every((name, index) => name === acceptance.checks[index].name));
+  return { ...receipt, outcome: conclusion === "success" && receipt.outcome === "READY" && receipt.pr_url && passed && boundHeads && browserPassed ? "READY" as const : "BLOCKED" as const };
 }
 // Read one fixed JSON file in a bounded GitHub artifact. No filesystem extraction or shell.
 export function completionJson(zip: Buffer): unknown {
@@ -83,11 +98,23 @@ async function save(task: AgentTask, status: string, details: string | null, ext
   return { ...task, status, details, external };
 }
 const marker = (task: AgentTask) => `<!-- katie-managed-task:${task.id} -->`;
-export async function dispatchDevelopment(task: AgentTask) {
+export async function dispatchDevelopment(task: AgentTask, project?: Context) {
   if (task.status !== "dispatching") return task;
+  // Project metadata must eventually be appended by a DB-bound project
+  // dispatcher. Ordinary/model-authored assignments cannot mint this authority.
+  if (/<!--\s*katie-project\b/.test(task.input + '\n' + task.snapshot.instructions)) {
+    return save(task, "blocked", "Project metadata is not permitted in ordinary coding input. A DB-bound approved project dispatcher is required.");
+  }
+  let projectHeader='';
+  if(project){
+    const saved=await getDevelopmentProjectContext(task.id,true);
+    if(!saved||JSON.stringify(saved)!==JSON.stringify(project)||digest(project.contract)!==project.contractHash)throw Error('Project dispatch does not match approved DB binding');
+    const {version,projectId,baseSha,contractHash,contract}=project;
+    projectHeader='<!-- katie-project: '+Buffer.from(JSON.stringify({version,projectId,baseSha,contractHash,contract})).toString('base64url')+' -->\n\n';
+  }
   const claimed = await agentRpc<boolean>("claim_agent_dispatch", { p_id: task.id });
   if (!claimed) return readTask(task.id);
-  task = { ...task, external: { attempted: true } };
+  task = { ...task, external: { attempted: true, ...(project?{projectId:project.projectId}:{}) } };
   let client: Octokit, binding: Awaited<ReturnType<typeof repository>>;
   try {
     client = github(); binding = await repository(task);
@@ -104,14 +131,15 @@ export async function dispatchDevelopment(task: AgentTask) {
   try {
     const issue = await client.issues.create({ owner: binding.owner, repo: binding.repo,
       title: `[agent] ${task.input.split("\n")[0].slice(0, 180)}`,
-      body: `${marker(task)}\n\n${task.input}\n\n## Saved agent responsibilities\n${task.snapshot.instructions}\n\nDefinition version: ${task.definition_version}. Approved managed task: ${task.id}.\nUse the existing owner-only implementation, independent tests, review, bounded repair and draft PR workflow. No deployment or automatic merge.`,
+      body: `${marker(task)}\n\n${projectHeader}${task.input}\n\n## Saved agent responsibilities\n${task.snapshot.instructions}\n\nDefinition version: ${task.definition_version}. Approved managed task: ${task.id}.\nUse the existing owner-only implementation, independent tests, review, bounded repair and draft PR workflow. No deployment or automatic merge.`,
     });
-    return save(task, "submitted", "Owner-authored issue accepted. Workflow completion has not yet been verified.", { attempted: true, issueNumber: issue.data.number, issueUrl: issue.data.html_url, repository: binding.fullName });
+    return save(task, "submitted", "Owner-authored issue accepted. Workflow completion has not yet been verified.", { ...task.external,attempted: true, issueNumber: issue.data.number, issueUrl: issue.data.html_url, repository: binding.fullName });
   } catch {
     return save(task, "dispatching", "External acceptance is uncertain. Refresh to reconcile the durable marker; this task will not automatically submit another issue.");
   }
 }
-export async function reconcileDevelopment(task: AgentTask) {
+export async function reconcileDevelopment(task: AgentTask, project?: ProjectAcceptanceBinding) {
+  if(!project&&typeof task.external.projectId==='string'){const binding=await getDevelopmentProjectContext(task.id);if(!binding||binding.projectId!==task.external.projectId)throw Error('Saved project binding unavailable');project=acceptanceBinding(binding);}
   const deadline = Date.now() + 60_000;
   if (!["submitted", "dispatching", "ready", "blocked"].includes(task.status)) return task;
   const client = github(), binding = await repository(task);
@@ -136,7 +164,7 @@ export async function reconcileDevelopment(task: AgentTask) {
     const raw = completionJson(Buffer.from(download.data as ArrayBuffer));
     const parsed = receiptSchema.safeParse(raw);
     if (!parsed.success || parsed.data.issue_number !== issueNumber) continue;
-    const receipt = parseCompletionReceipt(raw, binding.fullName, issueNumber, run.id, run.conclusion);
+    const receipt = parseCompletionReceipt(raw, binding.fullName, issueNumber, run.id, run.conclusion, project);
     return save(task, receipt.outcome === "READY" ? "ready" : "blocked", receipt.outcome === "READY" ? "Draft ready for owner approval. No merge or deployment." : "Independent workflow tests or review blocked completion.", { ...task.external, runUrl: run.html_url, prUrl: receipt.pr_url, receipt });
   }
   return save(task, task.status, "No verified completion receipt among the latest 20 workflow runs. Refresh manually after workflow completion.");
@@ -145,14 +173,15 @@ export async function reconcileDevelopment(task: AgentTask) {
 // Supply the coordinator with observed repository evidence after its trusted
 // completion receipt passes. This is bounded, read-only verification; the
 // workflow remains responsible for implementation, testing and code review.
-export async function developmentEvidence(task: AgentTask) {
+export async function developmentEvidence(task: AgentTask, project?: ProjectAcceptanceBinding) {
+  if(!project&&typeof task.external.projectId==='string'){const binding=await getDevelopmentProjectContext(task.id);if(!binding||binding.projectId!==task.external.projectId)throw Error('Saved project binding unavailable');project=acceptanceBinding(binding);}
   if(task.status!=="ready")throw new Error("Verified development receipt required");
   const client=github(),binding=await repository(task);
-  const receipt=parseCompletionReceipt(task.external.receipt,binding.fullName,Number(task.external.issueNumber),Number((task.external.receipt as Record<string,unknown>)?.run_id),"success");
+  const receipt=parseCompletionReceipt(task.external.receipt,binding.fullName,Number(task.external.issueNumber),Number((task.external.receipt as Record<string,unknown>)?.run_id),"success",project);
   if(receipt.outcome!=="READY"||receipt.pr_url!==task.external.prUrl)throw new Error("Draft receipt association invalid");
   const number=Number(receipt.pr_url!.split('/').pop());
   const {data:pr}=await client.pulls.get({owner:binding.owner,repo:binding.repo,pull_number:number});
-  if(!pr.draft||pr.state!=="open"||pr.merged||pr.head.repo?.full_name!==binding.fullName||pr.base.repo.full_name!==binding.fullName||pr.changed_files>30)throw new Error("Draft evidence unavailable or exceeds the thirty-file verification limit");
+  if(!pr.draft||pr.state!=="open"||pr.merged||pr.head.repo?.full_name!==binding.fullName||pr.base.repo.full_name!==binding.fullName||pr.changed_files>(project?100:30))throw new Error("Draft evidence unavailable or exceeds the configured changed-file verification limit");
   const jobs=await client.actions.listJobsForWorkflowRun({owner:binding.owner,repo:binding.repo,run_id:receipt.run_id,per_page:20});
   const build=jobs.data.jobs.find(j=>j.name==="build"&&j.conclusion==="success");
   if(!build)throw new Error("Verified build job evidence unavailable");
@@ -182,6 +211,43 @@ export async function developmentEvidence(task: AgentTask) {
   });
   const {data:after}=await client.pulls.get({owner:binding.owner,repo:binding.repo,pull_number:number});
   if(!after.draft||after.state!=='open'||after.merged||after.head.sha!==testedHead||after.base.sha!==pr.base.sha||after.head.repo?.full_name!==binding.fullName||after.base.repo.full_name!==binding.fullName)throw new Error('Draft changed while collecting immutable verification evidence');
-  return{pullRequest:pr.html_url,draft:pr.draft,branch:pr.head.ref,observedHeadSha:pr.head.sha,testedHeadSha:testedHead,reviewedHeadSha:reviewedHead,baseSha:pr.base.sha,changedFiles,
+  return{pullRequest:pr.html_url,draft:pr.draft,branch:pr.head.ref,observedHeadSha:pr.head.sha,testedHeadSha:testedHead,reviewedHeadSha:reviewedHead,baseSha:pr.base.sha,changedFiles,...(project?{projectAcceptance:receipt.projectAcceptance}:{}),
     validation:{buildJob:build.html_url,conclusion:build.conclusion,excerpts,note:"Selected build-log excerpts, not the full log. Patches exceeding the 12 KB evidence allowance are explicitly omitted; the complete changed-file list is retained."}};
+}
+
+// Delivery is evidence from GitHub's deployment/status APIs, never a URL
+// invented by a model or a successful local browser check.
+export function verifiedPreviewUrl(raw: unknown, approvedOrigins: readonly string[] = []): string | null {
+  if (typeof raw !== 'string' || raw.length > 2000) return null;
+  try {
+    const url = new URL(raw);
+    if (url.protocol !== 'https:' || url.username || url.password || url.port || url.hash) return null;
+    const vercel = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.vercel\.app$/i.test(url.hostname);
+    const configured = approvedOrigins.some(origin => {
+      try { const allowed = new URL(origin); return allowed.protocol === 'https:' && allowed.origin === origin && !allowed.username && !allowed.password && url.origin === allowed.origin; }
+      catch { return false; }
+    });
+    return vercel || configured ? url.href : null;
+  } catch { return null; }
+}
+export async function developmentPreview(task: AgentTask, project: ProjectAcceptanceBinding, approvedOrigins: readonly string[] = []) {
+  const receipt = parseCompletionReceipt(task.external.receipt, task.repository_full_name ?? '', Number(task.external.issueNumber), Number((task.external.receipt as Record<string, unknown>)?.run_id), 'success', project);
+  if (task.status !== 'ready' || receipt.outcome !== 'READY' || !receipt.tested_head_sha) throw Error('Head-bound project acceptance required before preview delivery');
+  const client = github(), binding = await repository(task);
+  // Recheck live PR identity/head; an old READY receipt cannot bless a changed PR.
+  const { data: pr } = await client.pulls.get({ owner: binding.owner, repo: binding.repo, pull_number: Number(receipt.pr_url!.split('/').pop()) });
+  if (pr.state !== 'open' || !pr.draft || pr.merged || pr.head.sha !== receipt.tested_head_sha || pr.head.repo?.full_name !== binding.fullName || pr.base.repo.full_name !== binding.fullName) throw Error('Preview draft no longer matches verified project head');
+  const deployments = await client.repos.listDeployments({ owner: binding.owner, repo: binding.repo, sha: receipt.tested_head_sha, per_page: 20 });
+  for (const deployment of deployments.data) {
+    if (deployment.sha !== receipt.tested_head_sha || deployment.production_environment !== false || !/^preview(?:\s|$|[-_/])/i.test(deployment.environment)) continue;
+    const statuses = await client.repos.listDeploymentStatuses({ owner: binding.owner, repo: binding.repo, deployment_id: deployment.id, per_page: 1 });
+    const status = statuses.data[0];
+    const url = status?.state === 'success' ? verifiedPreviewUrl(status.environment_url, approvedOrigins) : null;
+    if (url && (!status.environment || status.environment === deployment.environment)) {
+      const { data: after } = await client.pulls.get({ owner: binding.owner, repo: binding.repo, pull_number: pr.number ?? Number(receipt.pr_url!.split('/').pop()) });
+      if (after.state !== 'open' || !after.draft || after.merged || after.head.sha !== receipt.tested_head_sha || after.head.repo?.full_name !== binding.fullName || after.base.repo.full_name !== binding.fullName) throw Error('Preview draft changed during delivery verification');
+      return { url, headSha: deployment.sha, deploymentId: deployment.id, statusId: status.id };
+    }
+  }
+  return null;
 }

@@ -1,0 +1,151 @@
+import { Octokit } from '@octokit/rest';
+import { getSupabaseAdminClient } from '@/lib/data/supabase/admin';
+import { readMission } from '@/lib/missions/store';
+import { readTask } from '@/lib/agents/store';
+import { developmentPreview, projectAcceptanceSchema } from '@/lib/agents/development';
+import { parseJSON } from '@/lib/missions/types';
+import { validateProjectPlan } from './contract';
+import { projectRpc, projectRuns, milestoneEvidence, acceptanceBinding, type Project, type Run } from './store';
+async function baseline(p: Project) { if (!p.repository_id)
+    return null; const { data: r, error } = await getSupabaseAdminClient().from('repo_sync_runs').select('repository_full_name').eq('id', p.repository_id).maybeSingle<{
+    repository_full_name: string;
+}>(); if (error || !r || !/^[-\w.]+\/[-\w.]+$/.test(r.repository_full_name))
+    throw Error('Connected target repository unavailable'); const [owner, repo] = r.repository_full_name.split('/'); const gh = new Octokit({ auth: process.env.GITHUB_TOKEN ?? process.env.GITHUB_PAT ?? process.env.GH_TOKEN, request: { timeout: 15000 } }); const m = await gh.repos.get({ owner, repo }); if (m.data.default_branch !== 'main')
+    throw Error('The connected project target must use the existing main-branch autonomous workflow'); const user = await gh.users.getAuthenticated(); if (user.data.type !== 'User' || m.data.owner.type !== 'User' || user.data.login.toLowerCase() !== owner.toLowerCase())
+    throw Error('The project target must be owned by the existing authenticated human GitHub owner'); const workflow = await gh.repos.getContent({ owner, repo, path: '.github/workflows/autonomous-development.yml', ref: 'main' }); if (Array.isArray(workflow.data) || !('content' in workflow.data))
+    throw Error('Target project workflow is unavailable'); const source = Buffer.from(workflow.data.content, 'base64').toString('utf8'); if (!source.includes('project-browser-check.mjs') || !source.includes('projectAcceptance'))
+    throw Error('The target repository needs the versioned project execution integration before coding can be approved'); const b = await gh.repos.getBranch({ owner, repo, branch: 'main' }); return b.data.commit.sha; }
+function bounded(text: string) { if (text.length > 12000)
+    throw Error('Project milestone context exceeds its bounded input. Narrow the specification; original requirements have not been truncated.'); return text; }
+export function proposal(p: Project) { const s = p.spec!; return `<!-- katie-project-approval:${p.approval_hash} -->\n\nI have researched your request and prepared the project scope.\n\n**${s.name}**\n${s.summary}\n\nOriginal outcome: ${p.objective}\n${p.clarifications}\n\n**Acceptance requirements**\n${s.requirements.map(x => '- ' + x).join('\n')}\n\n**Successive coding milestones**\n${s.milestones.map((m, i) => `${i + 1}. ${m.title}\n${m.instruction}\nBrowser checks: ${m.contract.scenarios.map(s => s.name).join('; ')}`).join('\n\n')}\n\n**Exact approved browser contracts**\n\`\`\`json\n${JSON.stringify(s.milestones.map(m => ({ title: m.title, contract: m.contract })), null, 2)}\n\`\`\`\n\nAllowed paths: ${s.allowedPaths.join(', ')}. Repository snapshot: ${p.baseline_sha ?? 'No connected target repository selected'}.\n\nLimits: ${p.max_cycles} coding jobs, ${p.max_missions} milestones, ${p.token_allowance.toLocaleString()} project-model tokens; deadline ${p.deadline}. GitHub coding uses additional model usage under its existing per-job time and repair limits. This approves isolated draft changes and the target's existing private preview delivery; it does not approve a production merge, secrets, new services, or purchases.\n\n${p.repository_id ? 'Reply **approve project ' + p.approval_hash!.slice(0, 12) + '** to authorize this saved scope once.' : 'Which connected repository should I use? You can name it here.'}`; }
+function compact(e: Record<string, unknown>) { const v = e.verification as Record<string, unknown> | undefined; return v ? { head: e.head, taskId: e.taskId, verification: { ...v, changedFiles: (v.changedFiles as Array<Record<string, unknown>>).map(f => ({ path: f.path, status: f.status })), validation: v.validation }, summary: e.summary } : e; }
+async function advance(p: Project) {
+    const finish = (action: string, data: Record<string, unknown> = {}) => projectRpc<boolean>('finish_work_project', { p_id: p.id, p_lease: p.lease, p_action: action, p_data: data });
+    const runs = await projectRuns(p.id);
+    const source = `ORIGINAL USER OUTCOME (must remain authoritative):\n${p.objective}\n${p.clarifications}`;
+    if (p.active_mission_id) {
+        const current = await readMission(p.active_mission_id);
+        const m = current.mission;
+        if (m.status === 'awaiting_approval') {
+            const r = runs.find(r => r.mission_id === m.id);
+            if (!r?.binding || p.approved_hash !== p.approval_hash)
+                throw Error('Coding requires the exact approved project scope');
+            for (const j of current.jobs.filter(j => j.status === 'awaiting_approval'))
+                await projectRpc('control_mission', { p_id: m.id, p_action: 'approve', p_job: j.id });
+            await finish('wait', { detail: 'Approved milestone handed to the existing independent GitHub workflow.' });
+            return;
+        }
+        if (m.status === 'blocked' || m.status === 'stopped') {
+            const essential = current.jobs.map(j => j.result?.clarification).find(c => c && typeof c === 'object' && (c as {
+                essential?: boolean;
+            }).essential) as {
+                question?: string;
+            } | undefined;
+            if (essential && !p.approved_hash) {
+                await finish('input', { detail: essential.question ?? 'A concrete project decision is required before continuing.' });
+                return;
+            }
+            const notes = current.jobs.filter(j => j.role === 'review').map(j => j.result?.summary ?? j.detail).filter(Boolean).join('\n');
+            if (p.approved_hash && ['development', 'assessment'].includes(p.phase) && p.cycles < p.max_cycles) {
+                await finish('retry', { detail: 'Repair the original unmet requirements. ' + (notes || m.detail), failed_mission: m.id });
+                return;
+            }
+            await finish('block', { detail: 'A project milestone is blocked: ' + (notes || m.detail || m.status) });
+            return;
+        }
+        if (m.status !== 'completed') {
+            await finish('wait');
+            return;
+        }
+        if (p.phase === 'research') {
+            await finish('advance', { result: m.result });
+            return;
+        }
+        if (p.phase === 'specification') {
+            const spec = validateProjectPlan(parseJSON(m.result ?? ''));
+            const base = await baseline(p);
+            await finish('spec', { spec, baseline: base, detail: 'Specification reviewed. ' + (p.repository_id ? 'Preparing your exact coding-scope approval.' : 'Name a connected target repository before coding can begin.') });
+            return;
+        }
+        if (p.phase === 'development') {
+            const r = runs.find(r => r.mission_id === m.id)!;
+            const job = current.jobs.find(j => j.role === 'development');
+            const v = job?.result?.verification as {
+                observedHeadSha: string;
+                testedHeadSha: string;
+                reviewedHeadSha: string;
+                changedFiles: Array<{
+                    path: string;
+                }>;
+                projectAcceptance?: unknown;
+            } | undefined;
+            if (!r.binding || !v || v.observedHeadSha !== v.testedHeadSha || v.testedHeadSha !== v.reviewedHeadSha || !v.changedFiles.length)
+                throw Error('Immutable reviewed project increment evidence missing');
+            const acceptance = projectAcceptanceSchema.parse(v.projectAcceptance), bound = acceptanceBinding(r.binding);
+            if (!acceptance.passed || acceptance.headSha !== v.testedHeadSha || acceptance.projectId !== bound.projectId || acceptance.contractHash !== bound.contractHash || acceptance.checks.length !== bound.scenarioNames.length || acceptance.checks.some((c, i) => !c.passed || c.name !== bound.scenarioNames[i]))
+                throw Error('Original approved browser acceptance has not passed for this increment');
+            for (const f of v.changedFiles)
+                if (!p.spec!.allowedPaths.some(prefix => f.path === prefix || prefix.endsWith('/') && f.path.startsWith(prefix)))
+                    throw Error('Coding diff escaped the approved project paths: ' + f.path);
+            await finish('advance', { head: v.testedHeadSha, taskId: job!.id, verification: v, summary: m.result });
+            return;
+        }
+        if (p.phase === 'assessment') {
+            await finish('complete', { result: m.result, preview: p.preview, verified_head: p.verified_sha });
+            return;
+        }
+    }
+    if (p.phase === 'approval' && p.spec) {
+        await finish('spec', { spec: p.spec, baseline: await baseline(p), detail: 'Specification and repository are ready for scope approval.' });
+        return;
+    }
+    if (p.phase === 'delivery') {
+        const r = [...runs].reverse().find(r => r.kind === 'development' && r.outcome?.head === p.verified_sha);
+        if (!r?.binding || typeof r.outcome?.taskId !== 'string')
+            throw Error('Final project receipt unavailable');
+        const preview = await developmentPreview(await readTask(r.outcome.taskId), acceptanceBinding(r.binding));
+        if (!preview) {
+            await finish('wait', { detail: 'Waiting for the target repository’s successful same-commit private Preview deployment. Local browser success is not deployed completion.' });
+            return;
+        }
+        await finish('preview', { ...preview, url: new URL(p.spec!.finalContract.path, preview.url).href });
+        return;
+    }
+    const evidence = await milestoneEvidence(runs);
+    let objective: string;
+    let projectEvidence: unknown;
+    if (p.phase === 'research')
+        objective = bounded(`${source}\n\nPHASE: Research only; this is not project completion. Find primary-source rules, APIs and constraints needed for this exact outcome. Do not invent requirements. Identify edition/version ambiguities or missing material decisions as essential clarification. Give concise source-supported findings in at most 700 words. Do not implement or change repositories.`);
+    else if (p.phase === 'specification')
+        objective = bounded(`${source}\n\nREVIEWED RESEARCH:\n${JSON.stringify(evidence)}\n\nProduce ONLY the requested project specification JSON, not code. Preserve every original requirement. Plan one to six cumulative coding milestones. Each milestone needs a phase-specific real browser contract for that increment; the final milestone contract MUST equal finalContract and cover the entire integrated original goal, including all required AI, human play, persistence and backend behavior. Earlier contracts may test partial milestones; they never replace the final requirements. Use isolated app/source/test paths, no dependencies/secrets/production resources. Include concrete DOM selectors and expected exact rendered states, interaction sequences, invalid-action boundaries and reload behavior as appropriate. Each scenario must assert actual application state. Output {name,summary,requirements,allowedPaths,milestones:[{title,instruction,contract:{path,scenarios:[{name,steps:[{action,selector?,value?,path?}]}]}}],finalContract}. Actions: goto(path), click(selector), fill(selector,value), expectVisible(selector), expectText(selector,value). At most 100 steps per contract, 20 scenarios, each scenario at least one assertion. All navigation local paths only. allowedPaths must be narrow filenames or isolated directory prefixes ending in /. Do not scope the entire Katie application. Return a complete specification satisfying the original user outcome; ambiguities require clarification rather than guessed gameplay.`);
+    else if (p.phase === 'development') {
+        if (!p.spec || !p.approved_hash || p.approved_hash !== p.approval_hash)
+            throw Error('Project scope not approved');
+        const stage = p.spec.milestones[p.milestone_index];
+        if (!stage)
+            throw Error('Approved milestone missing');
+        objective = bounded(`${source}\n\nAPPROVED SPECIFICATION:\n${JSON.stringify({ summary: p.spec.summary, requirements: p.spec.requirements, allowedPaths: p.spec.allowedPaths })}\n\nCURRENT CODING MILESTONE ${p.milestone_index + 1}/${p.spec.milestones.length}:\n${stage.title}\n${stage.instruction}\n\nAPPROVED BROWSER CONTRACT:\n${JSON.stringify(stage.contract)}\n\nPREVIOUS VERIFIED HEAD: ${p.verified_sha ?? p.baseline_sha}. The server supplies the exact immutable starting commit. Preserve previous increments and implement this stage completely.\n\nUnresolved findings: ${p.detail ?? 'None.'}\nDo not merge, publish production, change dependencies/secrets/services, or touch files outside the approved paths. Deliver a draft PR through the existing independent test/review/browser pipeline. This is milestone completion, not a claim that later stages are done.`);
+    }
+    else if (p.phase === 'assessment') {
+        const final = [...evidence].reverse().find(e => e.phase === 'development');
+        projectEvidence = { milestones: runs.map(r => ({ phase: r.kind, index: r.milestone_index, reviewed: Boolean(r.outcome), head: r.outcome?.head })), finalIntegratedEvidence: final ? compact(final.evidence ?? {}) : null, preview: p.preview };
+        objective = bounded(`${source}\n\nFINAL WHOLE-PROJECT DELIVERY: Independently check the ENTIRE original user outcome against all approved requirements and actual integrated evidence. A partial phase report, architecture document or loading page is not sufficient. Do not waive AI, human play, rules fidelity, persistence or backend requirements. Missing material evidence must remain blocked; do not invent test outcomes. If the complete outcome is supported, deliver the usable preview link, concise instructions, actual verified checks and any limitations.\nAPPROVED REQUIREMENTS:${JSON.stringify(p.spec!.requirements)}\nVERIFIED PREVIEW:${JSON.stringify(p.preview)}\nActual head-bound milestone and final browser evidence are provided in projectEvidence.`);
+    }
+    else
+        throw Error('Unknown project phase');
+    await finish('child', { kind: p.phase, objective, evidence: projectEvidence });
+}
+export async function runProjectBatch() { const p = await projectRpc<Project | null>('claim_work_project'); if (!p)
+    return { claimed: 0 }; try {
+    await advance(p);
+    const latest = await getSupabaseAdminClient().from('work_projects').select('*').eq('id', p.id).maybeSingle<Project>();
+    if (latest.data?.status === 'awaiting_approval' && latest.data.spec)
+        await projectRpc('publish_project_proposal', { p_id: p.id, p_hash: latest.data.approval_hash, p_text: proposal(latest.data) });
+    return { claimed: 1, status: 'processed' };
+}
+catch (error) {
+    const detail = error instanceof Error ? error.message.slice(0, 800) : 'Project coordination failed';
+    console.error('[Projects]', { project: p.id, detail });
+    await projectRpc('finish_work_project', { p_id: p.id, p_lease: p.lease, p_action: 'error', p_data: { detail } });
+    return { claimed: 1, status: 'blocked' };
+} }

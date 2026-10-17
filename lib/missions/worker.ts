@@ -1,3 +1,4 @@
+import {getDevelopmentProjectContext,acceptanceBinding} from '@/lib/projects/store';
 import { agentRpc } from '@/lib/agents/store';
 import { dispatchDevelopment,reconcileDevelopment,developmentEvidence } from '@/lib/agents/development';
 import type { AgentTask } from '@/lib/agents/policy';
@@ -17,7 +18,7 @@ export async function executeClaim(claim:Claim,model=missionModel){
  if(!['running','awaiting_approval'].includes(saved.mission.status))return;
  const completed=saved.jobs.filter(j=>j.status==='completed');
  const priorReviews=completed.filter(j=>j.role==='review').map(j=>({key:j.job_key,verdict:j.result?.verdict,findings:j.result?.findings,checks:j.result?.checks,clarification:j.result?.clarification}));
- const context=()=>JSON.stringify({objective:mission.objective,assignment:job.instruction,evidence:completed.filter(j=>j.role!=='plan'&&j.role!=='review').map(j=>({key:j.job_key,instruction:j.instruction,result:j.result}))});
+ const context=()=>JSON.stringify({objective:mission.objective,projectEvidence:mission.project_evidence,assignment:job.instruction,evidence:completed.filter(j=>j.role!=='plan'&&j.role!=='review').map(j=>({key:j.job_key,instruction:j.instruction,result:j.result}))});
  const finalWork=job.role==='compose'||job.role==='revise';
  const persona=BASE+'\nSaved responsibilities: '+agent.config.instructions+'\n'+(finalWork?getObjectiveFirstInstruction():'Complete only input.assignment. The full objective is context for that assignment, not a request to perform the other workers’ assignments or compose the whole deliverable. Do not delegate, write a new plan, repeat unassigned calculations or recommendations, or offer future work.');
  const commit=(result:Record<string,unknown>,children:Child[]=[],status='completed',missionStatus:string|null=null,final:string|null=null)=>rpc<boolean>('commit_mission_work',{p_id:job.id,p_lease:job.lease,p_result:result,p_children:children,p_status:status,p_mission_status:missionStatus,p_final:final});
@@ -35,14 +36,16 @@ export async function executeClaim(claim:Claim,model=missionModel){
   if(job.payload.approved!==true){await commit({detail:'Approve this exact saved coding assignment to submit an owner-authored GitHub issue. No merge or deployment is authorized.'},[],'awaiting_approval');return;}
   // Existing task IDs and durable dispatch markers protect the external write,
   // including recovery after a worker dies following possible acceptance.
+  const project=mission.project_id?await getDevelopmentProjectContext(job.id,true):null;
+  const binding=project?acceptanceBinding(project):undefined;
   let task:AgentTask;
   const prior=await rpc<AgentTask|null>('mission_development_task',{p_job:job.id,p_lease:job.lease});
   if(!prior)throw Error('Saved development binding unavailable');
   task=prior;
   if(task.status==='draft')task=await agentRpc<AgentTask>('transition_agent_task',{p_id:task.id,p_action:'start',p_message:null});
-  if(task.status==='dispatching'&&!task.external.attempted)task=await dispatchDevelopment(task);
-  if(['submitted','dispatching'].includes(task.status))task=await reconcileDevelopment(task);
-  if(task.status==='ready'){await commit({output:task.details,external:task.external,verification:await developmentEvidence(task)});return;}
+  if(task.status==='dispatching'&&!task.external.attempted)task=await dispatchDevelopment(task,project??undefined);
+  if(['submitted','dispatching'].includes(task.status))task=await reconcileDevelopment(task,binding);
+  if(task.status==='ready'){await commit({output:task.details,external:task.external,verification:await developmentEvidence(task,binding)});return;}
   if(['blocked','failed'].includes(task.status)){await commit({detail:task.details,external:task.external},[],'failed');return;}
   await commit({detail:task.details,external:task.external},[],'waiting_external');return;
  }
@@ -53,7 +56,7 @@ export async function executeClaim(claim:Claim,model=missionModel){
   const assessment=validateAssessment(parseJSON(blind.text),turns);
   const target=completed.find(x=>x.job_key===(job.job_key==='review_again'?'revision':'compose'));
   if(!target?.result)throw Error('Review candidate missing');
-  const checked=await model(claim,BASE+'\n'+REVIEW_INSTRUCTION,'Independent assessment:\n'+JSON.stringify(assessment)+'\nRequired acceptance IDs:\n'+JSON.stringify(acceptanceIds(assessment))+'\nEvidence and candidate:\n'+JSON.stringify({objective:mission.objective,candidate:{key:target.job_key,result:target.result},evidence:completed.filter(x=>x.role==='work'||x.role==='development').map(x=>({key:x.job_key,result:x.result})),priorFindings:priorReviews}));
+  const checked=await model(claim,BASE+'\n'+REVIEW_INSTRUCTION,'Independent assessment:\n'+JSON.stringify(assessment)+'\nRequired acceptance IDs:\n'+JSON.stringify(acceptanceIds(assessment))+'\nEvidence and candidate:\n'+JSON.stringify({objective:mission.objective,projectEvidence:mission.project_evidence,candidate:{key:target.job_key,result:target.result},evidence:completed.filter(x=>x.role==='work'||x.role==='development').map(x=>({key:x.job_key,result:x.result})),priorFindings:priorReviews}));
   const evaluated=validateAnswerReview(parseJSON(checked.text),assessment);
   // Only a directly bounded primary deliverable is unambiguous. A limit on
   // an executive summary or another section remains the reviewer's concern.

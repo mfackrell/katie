@@ -2,9 +2,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync, symlinkSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, copyFileSync, rmSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { createHash } from 'node:crypto';
 
 // js-yaml is already installed by the locked ESLint toolchain.
 const { load } = createRequire(import.meta.url)('js-yaml');
@@ -23,15 +24,20 @@ function fixture(t) {
   writeFileSync(join(root, 'temp', 'agent-task', 'AGENT_REQUEST.md'), task);
   return { root, task };
 }
+function trustedTools(root){
+  mkdirSync(join(root, 'scripts'));
+  mkdirSync(join(root, 'temp', 'project-tools'), {recursive:true});
+  for(const name of ['project-context.mjs','project-browser-check.mjs']){const source=new URL('../scripts/'+name,import.meta.url);copyFileSync(source,join(root,'scripts',name));copyFileSync(source,join(root,'temp','project-tools',name));}
+}
 function shell(script, root, mode, extra = {}) {
   return spawnSync('bash', ['-e', '-o', 'pipefail', '-c', script], {
     cwd: root, encoding: 'utf8', timeout: 10000,
-    env: { ...process.env, RUNNER_TEMP: join(root, 'temp'), REPAIR_SMOKE: mode, ...extra },
+    env: { ...process.env,GITHUB_WORKSPACE:process.cwd(), RUNNER_TEMP: join(root, 'temp'), REPAIR_SMOKE: mode, ...extra },
   });
 }
 
 test('the owner-validated task is preserved before the implementation agent runs', t => {
-  const { root, task } = fixture(t);
+  const { root, task } = fixture(t);trustedTools(root);
   mkdirSync(join(root, 'bin'));
   writeFileSync(join(root, 'original-task'), task);
   writeFileSync(join(root, 'bin', 'gh'), '#!/bin/bash\nif [[ "$*" == *".author.login"* ]]; then echo owner; else cat original-task; fi\n', { mode: 0o755 });
@@ -160,7 +166,7 @@ if [[ "$1" == diff ]]; then exit 1; fi
 });
 
 test('native test and review steps record the immutable checkout they evaluated',t=>{
- const {root}=fixture(t);mkdirSync(join(root,'bin'));
+ const {root}=fixture(t);trustedTools(root);mkdirSync(join(root,'bin'));
  writeFileSync(join(root,'bin','npm'),'#!/bin/bash\necho "fixture gate passed"\n',{mode:0o755});
  execFileSync('git',['init','-q'],{cwd:root});execFileSync('git',['-c','user.name=Fixture','-c','user.email=fixture@example.com','commit','--allow-empty','-qm','fixture'],{cwd:root});
  const sha=execFileSync('git',['rev-parse','HEAD'],{cwd:root,encoding:'utf8'}).trim();
@@ -177,4 +183,33 @@ test('actual report never publishes READY for mismatched or missing tested/revie
  for(const [extra,expected] of [[{},'READY'],[{REVIEW_HEAD:b},'BLOCKED'],[{TEST_HEAD:'',REVIEW_HEAD:''},'BLOCKED'],[{TEST:'false',REVIEW:'changes_requested',REPAIR:'success',RETEST:'true',FINAL:'pass',RETEST_HEAD:b,FINAL_HEAD:b},'READY'],[{REPAIR:'success',RETEST:'true',FINAL:'pass',RETEST_HEAD:a,FINAL_HEAD:b},'BLOCKED']]){
   const result=shell(report.run,root,'false',{...base,...extra});assert.equal(result.status,0,result.stderr);const receipt=JSON.parse(readFileSync(join(root,'temp','agent-result.json'),'utf8'));assert.equal(receipt.outcome,expected);if(expected==='READY')assert.equal(receipt.tested_head_sha,receipt.reviewed_head_sha);
  }
+});
+
+
+test('project report requires the exact approved contract, head and all scenario results, including repaired checks',t=>{
+ const {root}=fixture(t);mkdirSync(join(root,'bin'));writeFileSync(join(root,'bin','gh'),'#!/bin/bash\nexit 0\n',{mode:0o755});
+ const head='a'.repeat(40),contract='b'.repeat(64),project='11111111-1111-4111-8111-111111111111';
+ const env={PATH:`${join(root,'bin')}:${process.env.PATH}`,BUILD:'success',TEST:'true',REVIEW:'pass',REPAIR:'skipped',RETEST:'',FINAL:'',TEST_HEAD:head,REVIEW_HEAD:head,RETEST_HEAD:'',FINAL_HEAD:'',ISSUE:'23',PR:'https://github.com/owner/repo/pull/24',GITHUB_REPOSITORY:'owner/repo',GITHUB_SERVER_URL:'https://github.com',GITHUB_RUN_ID:'55',PROJECT:'true',PROJECT_ID:project,CONTRACT_HASH:contract,SCENARIO_COUNT:'2'};
+ const correct={version:1,projectId:project,contractHash:contract,headSha:head,passed:true,checks:[{name:'move',passed:true,detail:'Piece moved'},{name:'save',passed:true,detail:'State persisted'}]};
+ const dir=join(root,'temp','project-browser','project-browser-test');mkdirSync(dir,{recursive:true});
+ for(const [change,ready] of [[{},true],[{headSha:'c'.repeat(40)},false],[{contractHash:'d'.repeat(64)},false],[{projectId:'22222222-2222-4222-8222-222222222222'},false],[{passed:false},false],[{checks:[]},false],[{checks:[correct.checks[0]]},false],[{checks:[correct.checks[0],{...correct.checks[1],passed:false}]},false]]){
+  writeFileSync(join(dir,'project-acceptance.json'),JSON.stringify({...correct,...change}));const r=shell(step('report','Report success or failure to the owner issue').run,root,'false',env);assert.equal(r.status,0,r.stderr);const receipt=JSON.parse(readFileSync(join(root,'temp','agent-result.json'),'utf8'));assert.equal(receipt.outcome,ready?'READY':'BLOCKED');if(ready)assert.equal(receipt.projectAcceptance.contractHash,contract);
+ }
+ // A repaired result cannot reuse a passing pre-repair artifact.
+ writeFileSync(join(dir,'project-acceptance.json'),JSON.stringify(correct));
+ const repaired={...env,REPAIR:'success',RETEST:'true',FINAL:'pass',RETEST_HEAD:head,FINAL_HEAD:head};let r=shell(step('report','Report success or failure to the owner issue').run,root,'false',repaired);assert.equal(r.status,0,r.stderr);assert.equal(JSON.parse(readFileSync(join(root,'temp','agent-result.json'),'utf8')).outcome,'BLOCKED');
+ const repairDir=join(root,'temp','project-browser','project-browser-retest');mkdirSync(repairDir,{recursive:true});writeFileSync(join(repairDir,'project-acceptance.json'),JSON.stringify(correct));r=shell(step('report','Report success or failure to the owner issue').run,root,'false',repaired);assert.equal(r.status,0,r.stderr);assert.equal(JSON.parse(readFileSync(join(root,'temp','agent-result.json'),'utf8')).outcome,'READY');
+});
+
+
+test('cumulative project work starts at the approved immutable base and preserves trusted main acceptance tools',t=>{
+ const {root}=fixture(t);trustedTools(root);mkdirSync(join(root,'bin'));
+ const git=(...args)=>execFileSync('git',args,{cwd:root,encoding:'utf8'}).trim();
+ git('init','-q');git('config','user.name','Fixture');git('config','user.email','fixture@example.com');git('add','scripts');git('commit','-qm','trusted main tools');const main=git('branch','--show-current'),mainHead=git('rev-parse','HEAD');
+ git('switch','-qc','prior-project-increment');writeFileSync(join(root,'prior-increment.txt'),'Verified prior project work');writeFileSync(join(root,'scripts','project-context.mjs'),'throw Error("Never execute a tool inherited from generated project code");');git('add','prior-increment.txt','scripts/project-context.mjs');git('commit','-qm','prior reviewed implementation');const base=git('rev-parse','HEAD');git('switch','-q',main);git('remote','add','origin',root);
+ const contract={path:'/pilot',scenarios:[{name:'interaction',steps:[{action:'goto',path:'/pilot'},{action:'click',selector:'#move'},{action:'expectText',selector:'#state',value:'Moved'}]}]};
+ const marker={version:1,projectId:'11111111-1111-4111-8111-111111111111',baseSha:base,contractHash:createHash('sha256').update(JSON.stringify(contract)).digest('hex'),contract};
+ writeFileSync(join(root,'original-task'),'[agent] Continue verified project\n<!-- katie-project: '+Buffer.from(JSON.stringify(marker)).toString('base64url')+' -->\nPreserve prior work.');
+ writeFileSync(join(root,'bin','gh'),'#!/bin/bash\nif [[ "$*" == *".author.login"* ]]; then echo owner; elif [[ "$1" == issue ]]; then cat original-task; fi\n',{mode:0o755});
+ const result=shell(step('build','Create isolated branch and task').run,root,'false',{PATH:`${join(root,'bin')}:${process.env.PATH}`,GITHUB_OUTPUT:join(root,'outputs'),GITHUB_REPOSITORY_OWNER:'owner',GITHUB_REPOSITORY:'owner/repo',ISSUE:'23',GITHUB_RUN_ID:'55',GITHUB_RUN_ATTEMPT:'1'});assert.equal(result.status,0,result.stderr);assert.equal(git('rev-parse','HEAD'),base);assert.equal(git('rev-parse',main),mainHead);assert.equal(readFileSync(join(root,'prior-increment.txt'),'utf8'),'Verified prior project work');assert.match(readFileSync(join(root,'outputs'),'utf8'),/project=true/);assert.equal(readFileSync(join(root,'temp','project-tools','project-context.mjs'),'utf8'),readFileSync(new URL('../scripts/project-context.mjs',import.meta.url),'utf8'));
 });
