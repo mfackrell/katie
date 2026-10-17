@@ -9,6 +9,8 @@ const receiptSchema = z.object({
   version: z.literal(1), repository: z.string().max(200), run_id: z.number().int().positive(),
   issue_number: z.number().int().positive(), pr_url: z.string().max(500).nullable(), outcome: z.enum(["READY", "BLOCKED"]),
   checks: z.object({ build: z.string(), test: z.string(), review: z.string(), repair: z.string(), retest: z.string(), final_review: z.string() }).strict(),
+  tested_head_sha:z.string().regex(/^[a-f0-9]{40}$/).nullable().optional(),
+  reviewed_head_sha:z.string().regex(/^[a-f0-9]{40}$/).nullable().optional(),
 }).strict();
 export function parseCompletionReceipt(value: unknown, repo: string, issue: number, runId: number, conclusion: string | null) {
   const receipt = receiptSchema.parse(value);
@@ -16,7 +18,8 @@ export function parseCompletionReceipt(value: unknown, repo: string, issue: numb
   if (receipt.pr_url && !new RegExp(`^https://github\\.com/${repo.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}/pull/[1-9][0-9]*$`).test(receipt.pr_url)) throw new Error("Invalid receipt PR");
   const c = receipt.checks;
   const passed = c.build === "success" && ((c.repair === "skipped" && c.test === "true" && c.review === "pass" && ["", "skipped"].includes(c.retest) && ["", "skipped"].includes(c.final_review)) || (c.repair === "success" && c.retest === "true" && c.final_review === "pass"));
-  return { ...receipt, outcome: conclusion === "success" && receipt.outcome === "READY" && receipt.pr_url && passed ? "READY" as const : "BLOCKED" as const };
+  const boundHeads=receipt.tested_head_sha===undefined&&receipt.reviewed_head_sha===undefined||typeof receipt.tested_head_sha==='string'&&receipt.tested_head_sha===receipt.reviewed_head_sha;
+  return { ...receipt, outcome: conclusion === "success" && receipt.outcome === "READY" && receipt.pr_url && passed && boundHeads ? "READY" as const : "BLOCKED" as const };
 }
 // Read one fixed JSON file in a bounded GitHub artifact. No filesystem extraction or shell.
 export function completionJson(zip: Buffer): unknown {
@@ -137,4 +140,48 @@ export async function reconcileDevelopment(task: AgentTask) {
     return save(task, receipt.outcome === "READY" ? "ready" : "blocked", receipt.outcome === "READY" ? "Draft ready for owner approval. No merge or deployment." : "Independent workflow tests or review blocked completion.", { ...task.external, runUrl: run.html_url, prUrl: receipt.pr_url, receipt });
   }
   return save(task, task.status, "No verified completion receipt among the latest 20 workflow runs. Refresh manually after workflow completion.");
+}
+
+// Supply the coordinator with observed repository evidence after its trusted
+// completion receipt passes. This is bounded, read-only verification; the
+// workflow remains responsible for implementation, testing and code review.
+export async function developmentEvidence(task: AgentTask) {
+  if(task.status!=="ready")throw new Error("Verified development receipt required");
+  const client=github(),binding=await repository(task);
+  const receipt=parseCompletionReceipt(task.external.receipt,binding.fullName,Number(task.external.issueNumber),Number((task.external.receipt as Record<string,unknown>)?.run_id),"success");
+  if(receipt.outcome!=="READY"||receipt.pr_url!==task.external.prUrl)throw new Error("Draft receipt association invalid");
+  const number=Number(receipt.pr_url!.split('/').pop());
+  const {data:pr}=await client.pulls.get({owner:binding.owner,repo:binding.repo,pull_number:number});
+  if(!pr.draft||pr.state!=="open"||pr.merged||pr.head.repo?.full_name!==binding.fullName||pr.base.repo.full_name!==binding.fullName||pr.changed_files>30)throw new Error("Draft evidence unavailable or exceeds the thirty-file verification limit");
+  const jobs=await client.actions.listJobsForWorkflowRun({owner:binding.owner,repo:binding.repo,run_id:receipt.run_id,per_page:20});
+  const build=jobs.data.jobs.find(j=>j.name==="build"&&j.conclusion==="success");
+  if(!build)throw new Error("Verified build job evidence unavailable");
+  const jobLog=async(id:number)=>{const log=await client.actions.downloadJobLogsForWorkflowRun({owner:binding.owner,repo:binding.repo,job_id:id});return typeof log.data==='string'?log.data:Buffer.from(log.data as ArrayBuffer).toString('utf8');};
+  let testedHead=receipt.tested_head_sha,reviewedHead=receipt.reviewed_head_sha;
+  if(testedHead===undefined&&reviewedHead===undefined){
+    // Legacy unrepaired runs record their immutable checkout in both native
+    // job logs. Repaired legacy runs lack a trustworthy retest SHA.
+    if(receipt.checks.repair!=='skipped')throw new Error('Legacy repaired receipt lacks an immutable tested head; revalidate with the updated workflow');
+    const test=jobs.data.jobs.find(j=>j.name==='test'&&j.conclusion==='success'),review=jobs.data.jobs.find(j=>j.name==='review'&&j.conclusion==='success');
+    if(!test||!review)throw new Error('Immutable test/review evidence unavailable');
+    const checkoutHead=(log:string)=>{const lines=log.split(/\r?\n/),at=lines.findIndex(line=>/\[command\].*\bgit log -1 --format=%H\s*$/.test(line));const sha=at>=0?lines[at+1]?.match(/\b([a-f0-9]{40})\s*$/)?.[1]:null;if(!sha)throw new Error('Immutable checkout SHA unavailable');return sha;};
+    const [testLog,reviewLog]=await Promise.all([jobLog(test.id),jobLog(review.id)]);
+    testedHead=checkoutHead(testLog);reviewedHead=checkoutHead(reviewLog);
+  }
+  if(!testedHead||testedHead!==reviewedHead||pr.head.sha!==testedHead)throw new Error('Draft head does not match the immutable tested and reviewed commit');
+  const [files,raw]=await Promise.all([
+    client.repos.compareCommitsWithBasehead({owner:binding.owner,repo:binding.repo,basehead:pr.base.sha+'...'+testedHead,per_page:100}),jobLog(build.id),
+  ]);
+  if(files.data.files?.length!==pr.changed_files)throw new Error('Incomplete changed-file evidence');
+  const excerpts=raw.split(/\r?\n/).filter(line=>/\bPASS:|Validation passed:|focused.{0,100}(?:passed|success)/i.test(line)&&!/console\.log|assert\./.test(line)).slice(0,8).map(line=>line.slice(0,500));
+  let patchBytes=0;
+  const changedFiles=files.data.files.map(file=>{
+    const patch=file.patch;const size=patch?Buffer.byteLength(patch,"utf8"):0;
+    const include=Boolean(patch)&&patchBytes+size<=12000;if(include)patchBytes+=size;
+    return{path:file.filename,status:file.status,additions:file.additions,deletions:file.deletions,...(include?{patch}:{patchUnavailable:true})};
+  });
+  const {data:after}=await client.pulls.get({owner:binding.owner,repo:binding.repo,pull_number:number});
+  if(!after.draft||after.state!=='open'||after.merged||after.head.sha!==testedHead||after.base.sha!==pr.base.sha||after.head.repo?.full_name!==binding.fullName||after.base.repo.full_name!==binding.fullName)throw new Error('Draft changed while collecting immutable verification evidence');
+  return{pullRequest:pr.html_url,draft:pr.draft,branch:pr.head.ref,observedHeadSha:pr.head.sha,testedHeadSha:testedHead,reviewedHeadSha:reviewedHead,baseSha:pr.base.sha,changedFiles,
+    validation:{buildJob:build.html_url,conclusion:build.conclusion,excerpts,note:"Selected build-log excerpts, not the full log. Patches exceeding the 12 KB evidence allowance are explicitly omitted; the complete changed-file list is retained."}};
 }

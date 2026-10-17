@@ -158,3 +158,23 @@ if [[ "$1" == diff ]]; then exit 1; fi
   assert.equal(result.status, 0, result.stderr);
   assert.equal(readFileSync(join(root, 'staged-clean'), 'utf8'), '');
 });
+
+test('native test and review steps record the immutable checkout they evaluated',t=>{
+ const {root}=fixture(t);mkdirSync(join(root,'bin'));
+ writeFileSync(join(root,'bin','npm'),'#!/bin/bash\necho "fixture gate passed"\n',{mode:0o755});
+ execFileSync('git',['init','-q'],{cwd:root});execFileSync('git',['-c','user.name=Fixture','-c','user.email=fixture@example.com','commit','--allow-empty','-qm','fixture'],{cwd:root});
+ const sha=execFileSync('git',['rev-parse','HEAD'],{cwd:root,encoding:'utf8'}).trim();
+ writeFileSync(join(root,'agent-review.json'),'{"verdict":"pass"}');writeFileSync(join(root,'agent-final-review.json'),'{"verdict":"pass"}');
+ for(const [job,name,output] of [['test','Independent verification','check'],['repair','Reverify repaired tree','retest'],['review','Verify review output','verdict'],['final-review','Validate result','verdict']]){
+  const out=join(root,'outputs-'+job),result=shell(step(job,name).run,root,'false',{PATH:`${join(root,'bin')}:${process.env.PATH}`,GITHUB_OUTPUT:out});assert.equal(result.status,0,result.stderr);assert.match(readFileSync(out,'utf8'),new RegExp('head_sha='+sha));assert.equal(workflow.jobs[job].outputs.head_sha,'${{ steps.'+output+'.outputs.head_sha }}');
+ }
+});
+
+test('actual report never publishes READY for mismatched or missing tested/reviewed commits',t=>{
+ const {root}=fixture(t);mkdirSync(join(root,'bin'));writeFileSync(join(root,'bin','gh'),'#!/bin/bash\nexit 0\n',{mode:0o755});
+ const a='a'.repeat(40),b='b'.repeat(40),base={PATH:`${join(root,'bin')}:${process.env.PATH}`,BUILD:'success',TEST:'true',REVIEW:'pass',REPAIR:'skipped',RETEST:'',FINAL:'',TEST_HEAD:a,REVIEW_HEAD:a,RETEST_HEAD:'',FINAL_HEAD:'',ISSUE:'23',PR:'https://github.com/owner/repo/pull/24',GITHUB_REPOSITORY:'owner/repo',GITHUB_SERVER_URL:'https://github.com',GITHUB_RUN_ID:'55'};
+ const report=step('report','Report success or failure to the owner issue');
+ for(const [extra,expected] of [[{},'READY'],[{REVIEW_HEAD:b},'BLOCKED'],[{TEST_HEAD:'',REVIEW_HEAD:''},'BLOCKED'],[{TEST:'false',REVIEW:'changes_requested',REPAIR:'success',RETEST:'true',FINAL:'pass',RETEST_HEAD:b,FINAL_HEAD:b},'READY'],[{REPAIR:'success',RETEST:'true',FINAL:'pass',RETEST_HEAD:a,FINAL_HEAD:b},'BLOCKED']]){
+  const result=shell(report.run,root,'false',{...base,...extra});assert.equal(result.status,0,result.stderr);const receipt=JSON.parse(readFileSync(join(root,'temp','agent-result.json'),'utf8'));assert.equal(receipt.outcome,expected);if(expected==='READY')assert.equal(receipt.tested_head_sha,receipt.reviewed_head_sha);
+ }
+});
