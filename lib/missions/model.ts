@@ -25,7 +25,8 @@ export async function missionModel(claim:Claim,instruction:string,input:string,t
  let text='';
  for(let turn=0;turn<(tools==='calculate'?2:1);turn++){
   const callId=randomUUID();
-  const request={model:selectedModel,reasoning:{effort:'low'},instructions:instruction,input:context,max_output_tokens:outputTokens,store:false,
+  const calculatorPhase=tools!=='calculate'?'':turn===0?'\nThe calculator is available for this turn only. Request all useful independent calculations together, at most eight tool calls, then finish the entire assignment using their results.':'\nThe calculator phase is finished. Return the COMPLETE assigned analysis as explanatory prose and tables using the tool results. No tools remain. Do not emit tool arguments or a request for another calculation as your answer.';
+  const request={model:selectedModel,reasoning:{effort:'low'},instructions:instruction+calculatorPhase,input:context,max_output_tokens:outputTokens,store:false,
    ...(claim.job.role==='plan'?{text:{format:zodTextFormat(planSchema,'mission_plan')}}:{}),
    ...(tools==='research'?{tools:[{type:'web_search',search_context_size:'low'}],tool_choice:'required',max_tool_calls:1}:tools==='calculate'&&turn===0?{tools:[calculator]}:{}),
   };
@@ -47,6 +48,10 @@ export async function missionModel(claim:Claim,instruction:string,input:string,t
     context=[...context,...output,...answers];continue;
    }
    if(!text)throw Error('Empty model result');
+   if(tools==='calculate'){
+    let value:unknown;try{value=JSON.parse(text);}catch{/* Prose is the expected final analysis. */}
+    if(value&&typeof value==='object'&&'operation' in value&&'values' in value)throw Error('Calculation returned tool arguments instead of the assigned analysis');
+   }
    if(tools==='research'&&!sources.length)throw Error('Research returned no cited live sources');
    return{text,sources,calculations,model:selectedModel};
   }catch(error){await rpc('finish_mission_call',{p_call:callId,p_tokens:null}).catch(()=>{});throw error;}
