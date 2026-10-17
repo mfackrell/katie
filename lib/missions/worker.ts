@@ -1,7 +1,7 @@
 import { agentRpc } from '@/lib/agents/store';
 import { dispatchDevelopment,reconcileDevelopment,developmentEvidence } from '@/lib/agents/development';
 import type { AgentTask } from '@/lib/agents/policy';
-import { missionModel } from './model';
+import { missionModel,MissionModelFailure } from './model';
 import { rpc,readMission } from './store';
 import { ASSESSMENT_INSTRUCTION,REVIEW_INSTRUCTION } from '@/lib/collaboration/required-review';
 import { validateAssessment,validateAnswerReview,acceptanceIds } from '@/lib/collaboration/review-contract';
@@ -84,7 +84,7 @@ export async function runMissionBatch(model=missionModel){
   try{await executeClaim(claim,model);return {jobId:claim.job.id,status:'processed'};}
   catch(error){const detail=error instanceof Error?error.message.slice(0,600):'Assignment execution failed';console.error('[Missions] Assignment failed',{jobId:claim.job.id,detail});
    const retry=claim.job.attempts<2&&/timeout|timed out|connection|fetch failed|429|rate limit|500|502|503|504/i.test(detail);
-   await rpc('commit_mission_work',{p_id:claim.job.id,p_lease:claim.job.lease,p_result:{detail},p_children:[],p_status:retry?'queued':'failed',p_mission_status:retry?null:'blocked',p_final:null});
+   await rpc('commit_mission_work',{p_id:claim.job.id,p_lease:claim.job.lease,p_result:{...(error instanceof MissionModelFailure?error.partial:{}),detail},p_children:[],p_status:retry?'queued':'failed',p_mission_status:retry?null:'blocked',p_final:null});
    return {jobId:claim.job.id,status:'blocked'};}
  }));
  return{claimed:claims.length,outcomes};
