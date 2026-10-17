@@ -25,6 +25,24 @@ test('missions: real PostgreSQL fencing, handoffs, permissions, budgets, approva
   const j=claims[0].job,call=randomUUID();
   const reservations=await Promise.all(workers.slice(0,2).map(c=>c.query('select reserve_mission_call($1,$2,$3,$4,$5) accepted',[j.id,j.lease,call,'fixture',100])));
   assert.equal(reservations.filter(r=>r.rows[0].accepted).length,1,'duplicate call identity reserves exactly once');
+  for(const id of ids)await db.query("select control_mission($1,'stop')",[id]);
+  const limitOne=(await db.query('select save_managed_agent(null,$1,false) agent',[{...cfg,maxActiveTasks:1}])).rows[0].agent;
+  const ordinary=(await db.query('select create_agent_task($1,$2,$3,$4,null) task',[randomUUID(),limitOne.id,'Ordinary task','general'])).rows[0].task;
+  const firstMission=randomUUID();await db.query('select create_mission($1,$2,$3)',[firstMission,'Shared admission',[limitOne.id]]);await db.query("select control_mission($1,'start')",[firstMission]);
+  const c1=await connect(),c2=await connect();await c1.query('set role service_role');await c2.query('set role service_role');
+  const waitForLock=async(query)=>{for(let i=0;i<100;i++){const r=await db.query("select count(*)::int n from pg_stat_activity where wait_event_type='Lock' and query like $1",[query+'%']);if(r.rows[0].n)return;await new Promise(r=>setTimeout(r,10));}assert.fail('Expected a real shared-admission lock wait');};
+  await c1.query('begin');await c1.query("select transition_agent_task($1,'start')",[ordinary.id]);
+  const missionAfterTask=c2.query('select claim_mission_work() claim');await waitForLock('select claim_mission_work');await c1.query('commit');
+  assert.equal((await missionAfterTask).rows[0].claim,null,'Mission cannot overtake an ordinary task admitted first');
+  await db.query("update agent_tasks set status='completed' where id=$1",[ordinary.id]);
+  const admitted=(await c1.query('select claim_mission_work() claim')).rows[0].claim;assert.equal(admitted.mission.id,firstMission);
+  const secondTask=(await db.query('select create_agent_task($1,$2,$3,$4,null) task',[randomUUID(),limitOne.id,'Second ordinary task','general'])).rows[0].task;
+  await assert.rejects(c2.query("select transition_agent_task($1,'start')",[secondTask.id]),/Active task limit/);
+  await db.query("select control_mission($1,'stop')",[firstMission]);
+  const secondMission=randomUUID();await db.query('select create_mission($1,$2,$3)',[secondMission,'Mission first',[limitOne.id]]);await db.query("select control_mission($1,'start')",[secondMission]);
+  await c1.query('begin');const claimed=(await c1.query('select claim_mission_work() claim')).rows[0].claim;assert.equal(claimed.mission.id,secondMission);
+  const taskAfterMission=c2.query("select transition_agent_task($1,'start')",[secondTask.id]).then(()=>null,e=>e);
+  await waitForLock('select transition_agent_task');await c1.query('commit');assert.match((await taskAfterMission).message,/Active task limit/);
   for(const c of workers.slice(0,2)){await c.query('reset role');await c.query('set role anon');await assert.rejects(c.query('select * from agent_missions'),/permission denied/);await assert.rejects(c.query('select claim_mission_work()'),/permission denied/);}
  }finally{await Promise.allSettled(clients.map(c=>c.end()));if(started)run('pg_ctl',['-D',data,'-m','immediate','-w','stop']);rmSync(root,{recursive:true,force:true});}
 });
