@@ -8,13 +8,14 @@ export function startProjectIntent(text: string) {
  return (direct||desire) && /\b(?:project|browser|website|web app|application|app|game|dashboard|portal)\b/i.test(text) && !/^.{0,80}\b(?:do not|don't|never|not asking you to)\s+(?:want to |you to )?(?:build|create|develop|make|implement|start)\b/i.test(text);
 }
 export const followupProjectIntent = (text: string) => /^(?:please\s+)?(?:build|make|create|implement|do|start)(?:\s+(?:that|it|this|the project))?[.!\s]*$/i.test(text.trim());
-const actionText = (text:string) => text.trim().replace(/^please\s+/i,'').replace(/^(?:can|could|would|will) (?:you|we)\s+(?:please\s+)?/i,'');
+const actionText = (text:string) => text.trim().replace(/^(?:actually|no|okay|ok)[,:]?\s+/i,'').replace(/^please\s+/i,'').replace(/^(?:can|could|would|will) (?:you|we)\s+(?:please\s+)?/i,'');
 const amendmentIntent = (text:string) => /^(?:add|change|amend|revise|update|include|remove|support|enable|use|make|retain|keep|preserve|ensure|require|avoid|prevent|fix|allow|stop)\b|^(?:also|actually|instead|one more thing|I (?:want|need|would like|would prefer))\b|^(?:what|how) about\b/i.test(actionText(text));
 function projectControl(text:string):'pause'|'stop'|'resume'|null {
- const t=actionText(text),match=/^(pause|stop|cancel|halt|abort|resume|continue)\b\s*(.*)$/i.exec(t);if(!match)return null;
+ const t=actionText(text);if(/^(?:do not|don't) (?:continue|proceed|keep working|keep going|do (?:any )?more work|do (?:it|that|this))\b|^(?:hold off|hold on|wait)(?:\b|$)/i.test(t))return 'pause';const match=/^(pause|stop|cancel|halt|abort|quit|resume|continue)\b\s*(.*)$/i.exec(t);if(!match)return null;
  const tail=match[2].replace(/[.!?]+$/,'').trim();
  const directed=!tail||/^(?:(?:working|work)(?: on)?\s+)?(?:(?:this|the|my)\s+)?(?:project|work|jobs?|tasks?|agents?)\b/i.test(tail)||/^(?:now|right now|for now|please|immediately|it|this|that)(?:\b|$)/i.test(tail);
- if(!directed)return null;return /resume|continue/i.test(match[1])?'resume':/pause/i.test(match[1])?'pause':'stop';
+ if(!/resume|continue/i.test(match[1])){if(/stop/i.test(match[1])&&/^(?:the|this|my) (?:game|app|website)\b.*\bfrom\b/i.test(tail))return null;return /pause/i.test(match[1])?'pause':'stop';}
+ return directed?'resume':null;
 }
 const marker = /<!-- katie-project-status:[a-f0-9-]+:([^ ]+) -->/;
 export async function handleProjectChat(input: {

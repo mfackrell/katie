@@ -68,6 +68,6 @@ test('unresolved parked project maintenance does not starve ordinary cron missio
 
 test('conversational stop and pause commands never become new project work',async()=>{
  const calls=[];const {handleProjectChat}=modules({'@/lib/projects/store':{projectForChat:async()=>owner,projectRpc:async(n,a)=>{calls.push(a);return {...owner,status:a.p_action==='pause'?'paused':'stopped',detail:'Stopped or paused; new work is fenced.'};}}})('@/lib/projects/chat');
- for(const [message,expected] of [['Stop the project now','stop'],['Please pause this project for now','pause'],['Can you stop working on this project please?','stop'],['Cancel it immediately','stop'],['Pause for now','pause']]){await handleProjectChat({actorId:actor,chatId:chat,message},'control',[],true);assert.equal(calls.at(-1).p_action,expected,message);}
+ for(const [message,expected] of [['Stop the project now','stop'],['Please pause this project for now','pause'],['Can you stop working on this project please?','stop'],['Cancel it immediately','stop'],['Pause for now','pause'],['Stop all coding','stop'],['Actually, stop immediately','stop'],["Don't continue",'pause'],['Hold off for now','pause']]){await handleProjectChat({actorId:actor,chatId:chat,message},'control',[],true);assert.equal(calls.at(-1).p_action,expected,message);}
  await handleProjectChat({actorId:actor,chatId:chat,message:'Stop the game from accepting diagonal moves'},'feature',[],true);assert.equal(calls.at(-1).p_action,'amend');
 });
