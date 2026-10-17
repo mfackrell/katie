@@ -27,6 +27,13 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Install filesystem isolation
+        run: |
+          command -v bwrap >/dev/null || (sudo apt-get update && sudo apt-get install -y bubblewrap)
+          # This disposable job VM must permit the verifier's user namespaces.
+          # Network/filesystem isolation remains mandatory; no unsandboxed fallback.
+          if test -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns; then sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0; fi
+
       - name: Run strict CI gate (typecheck + all offline tests + build + smoke)
         run: npm run ci:gate
 

@@ -1,3 +1,4 @@
+import {handleProjectChat} from '@/lib/projects/chat';
 import { maskPdfSourceNames, pdfPageTaskForSource } from "@/lib/uploads/pdf-inventory";
 import { pdfSourceOccurrence, selectFreshPdfSources, selectPdfEvidenceSource } from "@/lib/chat/pdf-source-selection";
 import { inspectSavedPdf } from "@/lib/uploads/stored-uploads";
@@ -1004,7 +1005,9 @@ async function executeChat(request: NextRequest) {
 
     // Inspect deterministic, database-owned configuration before any model,
     // classifier, router or model-backed memory maintenance is invoked.
-    const localKatieResponse = await resolveLocalKatieResponse({
+    const projectReply = !currentAgentTask() && !newAttachments.length && !requestImages?.length
+      ? await handleProjectChat({actorId,chatId,message,activeRepoId},requestId,attachmentHistory,requestTracked) : null;
+    const localKatieResponse = projectReply ? {reason: "project" as const,text:projectReply} : await resolveLocalKatieResponse({
       actorId,
       chatId,
       message,
