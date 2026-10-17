@@ -65,10 +65,10 @@ export async function missionModel(claim:Claim,instruction:string,input:string,t
     if(value&&typeof value==='object'&&'operation' in value&&'values' in value)throw Error('Calculation returned tool arguments instead of the assigned analysis');
    }
    if(tools==='research'){
-    // Some Responses-compatible transports return explicit Markdown links but
+    // Some Responses-compatible transports return explicit links but
     // omit inline annotations. Accept those only when the native search output
     // independently records the same URL as consulted, never from text alone.
-    const linked=new Set(Array.from(text.matchAll(/\]\((https?:\/\/[^\s)]+)\)/g),m=>m[1]));
+    const linked=new Set(Array.from(text.matchAll(/https?:\/\/[^\s<>()\[\]]+/g),m=>m[0].replace(/[.,;:!?*_`]+$/g,''))); 
     const consulted=new Set<string>();
     for(const item of output){if(item.type!=='web_search_call'||!item.action||typeof item.action!=='object')continue;const action=item.action as Record<string,unknown>;
      if((action.type==='open_page'||action.type==='find_in_page')&&typeof action.url==='string')consulted.add(action.url);
