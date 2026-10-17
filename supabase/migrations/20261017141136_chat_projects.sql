@@ -3,7 +3,7 @@ create table public.work_projects (
  id uuid primary key, request_id text not null unique, actor_id uuid not null references actors(id),chat_id uuid not null references chats(id),
  objective text not null check(length(objective) between 1 and 8000),clarifications text not null default '',repository_id uuid references repo_sync_runs(id),
  team uuid[] not null, status text not null default 'running' check(status in ('running','awaiting_input','awaiting_approval','paused','blocked','stopped','completed')),
- phase text not null default 'research',spec jsonb,approval_hash text,approved_hash text,baseline_sha text,verified_sha text,preview jsonb,
+ phase text not null default 'research',repository_full_name text,spec jsonb,approval_hash text,approved_hash text,baseline_sha text,verified_sha text,preview jsonb,
  milestone_index integer not null default 0,cycles integer not null default 0,max_cycles integer not null default 8 check(max_cycles between 1 and 8),
  max_missions integer not null default 12 check(max_missions between 1 and 16),token_allowance integer not null default 600000 check(token_allowance between 60000 and 600000),
  active_mission_id uuid references agent_missions(id),lease uuid,lease_until timestamptz,failures integer not null default 0,
@@ -26,7 +26,7 @@ create function public.project_canonical(v jsonb) returns text language plpgsql 
  if jsonb_typeof(v)='object' then select '{'||coalesce(string_agg(to_jsonb(key)::text||':'||project_canonical(value),',' order by key),'')||'}' into t from jsonb_each(v);return t;
  elsif jsonb_typeof(v)='array' then select '['||coalesce(string_agg(project_canonical(value),',' order by n),'')||']' into t from jsonb_array_elements(v) with ordinality e(value,n);return t;end if;return v::text;end $$;
 create function public.project_publish(p_id uuid,p_text text) returns void language plpgsql security invoker set search_path=public as $$ declare p work_projects;mid uuid;begin
- select * into strict p from work_projects where id=p_id;mid:=md5(p.id::text||':project-progress')::uuid;
+ select * into strict p from work_projects where id=p_id;mid:=md5(p.id::text||case when p_text like '<!-- katie-project-approval:%' then ':project-scope:'||p.approval_hash else ':project-progress' end)::uuid;
  insert into messages(id,actor_id,chat_id,role,content,created_at) values(mid,p.actor_id,p.chat_id,'assistant','<!-- katie-project-status:'||p.id||':'||p.status||' -->'||E'\n\n'||p_text,now())
  on conflict(id) do update set content=excluded.content,created_at=excluded.created_at;
  update chats set updated_at=now() where id=p.chat_id;
@@ -94,7 +94,7 @@ create function public.finish_work_project(p_id uuid,p_lease uuid,p_action text,
    update agent_missions set project_id=p.id,project_kind=kind,project_evidence=p_data->'evidence' where id=mid;perform control_mission(mid,'start');
    if kind='development' then
     contract:=p.spec->'milestones'->p.milestone_index->'contract';if contract is null then raise exception 'Approved milestone contract missing';end if;
-    binding:=jsonb_build_object('version',1,'projectId',p.id,'baseSha',coalesce(p.verified_sha,p.baseline_sha),'contractHash',encode(sha256(convert_to(project_canonical(contract),'UTF8')),'hex'),'contract',contract,'scopeHash',p.approved_hash);
+    binding:=jsonb_build_object('version',1,'projectId',p.id,'baseSha',coalesce(p.verified_sha,p.baseline_sha),'baselineSha',p.baseline_sha,'allowedPaths',p.spec->'allowedPaths','contractHash',encode(sha256(convert_to(project_canonical(contract),'UTF8')),'hex'),'contract',contract,'scopeHash',p.approved_hash);
     update agent_missions set deadline=p.deadline where id=mid;
     update mission_assignments set status='completed',result='{"output":"Server-owned approved project milestone; no planning inference was claimed."}' where mission_id=mid and job_key='plan';
     lead:=p.team[1];reviewer:=p.team[2];dev:=p.team[3];
@@ -108,8 +108,8 @@ create function public.finish_work_project(p_id uuid,p_lease uuid,p_action text,
   if p.phase<>'approval' and not exists(select 1 from agent_missions where id=p.active_mission_id and status='completed') then raise exception 'Reviewed specification required';end if;
   if p.approved_hash is not null then raise exception 'Approved specification is immutable';end if;
   update project_runs set outcome=jsonb_build_object('specification_reviewed',true) where mission_id=p.active_mission_id and outcome is null;
-  scope_data:=jsonb_build_object('objective',p.objective,'clarifications',p.clarifications,'spec',p_data->'spec','repository',p.repository_id,'baseline',p_data->>'baseline','max_cycles',p.max_cycles,'max_missions',p.max_missions,'token_allowance',p.token_allowance,'deadline',p.deadline);
-  update work_projects set spec=p_data->'spec',baseline_sha=p_data->>'baseline',approval_hash=encode(sha256(convert_to(project_canonical(scope_data),'UTF8')),'hex'),active_mission_id=null,status=case when repository_id is null then 'awaiting_input' else 'awaiting_approval' end,phase='approval',detail=p_data->>'detail' where id=p.id;
+  scope_data:=jsonb_build_object('objective',p.objective,'clarifications',p.clarifications,'spec',p_data->'spec','repository',p.repository_id,'repository_name',(select repository_full_name from repo_sync_runs where id=p.repository_id),'baseline',p_data->>'baseline','max_cycles',p.max_cycles,'max_missions',p.max_missions,'token_allowance',p.token_allowance,'deadline',p.deadline);
+  update work_projects set spec=p_data->'spec',repository_full_name=(select repository_full_name from repo_sync_runs where id=p.repository_id),baseline_sha=p_data->>'baseline',approval_hash=encode(sha256(convert_to(project_canonical(scope_data),'UTF8')),'hex'),active_mission_id=null,status=case when repository_id is null then 'awaiting_input' else 'awaiting_approval' end,phase='approval',detail=p_data->>'detail' where id=p.id;
  elsif p_action='advance' then
   if not exists(select 1 from agent_missions where id=p.active_mission_id and status='completed') then raise exception 'Reviewed milestone completion required';end if;
   update project_runs set outcome=p_data where mission_id=p.active_mission_id and outcome is null;
@@ -235,7 +235,7 @@ end $$;
 -- A crash between specification commit and UI publication cannot strand a scope.
 create function public.project_scope_proposal(p_id uuid) returns text language plpgsql security invoker set search_path=public as $$ declare p work_projects;begin
  select * into strict p from work_projects where id=p_id;
- return '<!-- katie-project-approval:'||p.approval_hash||' -->'||E'\n\n**'||(p.spec->>'name')||E'**\n'||(p.spec->>'summary')||E'\n\nOriginal outcome: '||p.objective||E'\n'||p.clarifications||E'\n\n**Exact project specification and browser contracts**\n```json\n'||jsonb_pretty(p.spec)||E'\n```\n\nRepository snapshot: '||coalesce(p.baseline_sha,'No target selected')||E'\nLimits: '||p.max_cycles||' coding jobs; '||p.max_missions||' milestones; '||p.token_allowance||' aggregate project-model tokens; deadline '||p.deadline||E'.\nGitHub coding usage is additional under its existing per-job time and repair limits. Approval permits scoped isolated draft changes and existing private Preview delivery. No production merge, purchases, new services, credentials, or dependency/deployment configuration changes are authorized.\n\nReply **approve project '||left(p.approval_hash,12)||'** to authorize this saved scope once.';
+ return '<!-- katie-project-approval:'||p.approval_hash||' -->'||E'\n\n**'||(p.spec->>'name')||E'**\n'||(p.spec->>'summary')||E'\n\nOriginal outcome: '||p.objective||E'\n'||p.clarifications||E'\n\n**Exact project specification and browser contracts**\n```json\n'||jsonb_pretty(p.spec)||E'\n```\n\nRepository: '||coalesce(p.repository_full_name,'No target selected')||E'\nRepository snapshot: '||coalesce(p.baseline_sha,'No target selected')||E'\nLimits: '||p.max_cycles||' coding jobs; '||p.max_missions||' milestones; '||p.token_allowance||' aggregate project-model tokens; deadline '||p.deadline||E'.\nGitHub coding usage is additional under its existing per-job time and repair limits. Approval permits scoped isolated draft changes and existing private Preview delivery. No production merge, purchases, new services, credentials, or dependency/deployment configuration changes are authorized.\n\nReply **approve project '||left(p.approval_hash,12)||'** to authorize this saved scope once.';
 end $$;
 revoke all on function project_scope_proposal(uuid) from public,anon,authenticated;
 grant execute on function project_scope_proposal(uuid) to service_role;
@@ -248,7 +248,7 @@ create function public.claim_project_dispatch(p_id uuid,p_lease uuid,p_hash text
  select * into m from agent_missions where id=j.mission_id;select * into p from work_projects where id=m.project_id for update;select * into r from project_runs where mission_id=m.id;
  if p.id is null or p.status<>'running' or p.active_mission_id<>m.id or p.deadline<=now() or m.status<>'running' or m.deadline<=now() or j.role<>'development' or j.status<>'running' or j.lease is distinct from p_lease or j.lease_until<=now() or p.approved_hash is null or p.approved_hash is distinct from p.approval_hash or p.approved_hash is distinct from p_hash or r.binding->>'scopeHash' is distinct from p_hash then return false;end if;
  select * into t from agent_tasks where id=p_id for update;
- if not found or t.kind<>'development' or t.status<>'dispatching' or t.external ? 'attempted' then return false;end if;
+ if not found or t.kind<>'development' or t.status<>'dispatching' or t.external ? 'attempted' or t.repository_id is distinct from p.repository_id or t.repository_full_name is distinct from p.repository_full_name then return false;end if;
  if not exists(select 1 from managed_agents a where a.id=t.agent_id and not archived and (a.config->>'development')::boolean) then return false;end if;
  update agent_tasks set external=jsonb_build_object('attempted',true,'projectId',p.id),updated_at=now() where id=p_id;
  insert into project_events(project_id,event,data) values(p.id,'dispatch_admitted',jsonb_build_object('task',p_id,'lease',p_lease,'scope',p_hash));return true;

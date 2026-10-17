@@ -6,6 +6,8 @@ export type Context = {
     version: 1;
     projectId: string;
     baseSha: string;
+    baselineSha: string;
+    allowedPaths: string[];
     contractHash: string;
     contract: BrowserContract;
     scopeHash: string;

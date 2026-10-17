@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { canonicalJSON, contractHash, parseProjectContext, projectMarker, validateContract } from '../scripts/project-context.mjs';
 const contract = () => ({ path: '/', scenarios: [{ name: 'Change game state', steps: [{ action: 'click', selector: '#move' }, { action: 'expectText', selector: '#state', value: 'Moved' }] }] });
-const metadata = () => { const c = contract(); return { version: 1, projectId: randomUUID(), baseSha: 'a'.repeat(40), contractHash: contractHash(c), contract: c }; };
+const metadata = () => { const c = contract(); return { version: 1, projectId: randomUUID(), baseSha: 'a'.repeat(40), baselineSha:'a'.repeat(40),allowedPaths:['app/pilot/'], contractHash: contractHash(c), contract: c }; };
 test('ordinary requests stay ordinary and exact marker round trips with stable canonical digest', () => {
   assert.equal(parseProjectContext('Build a game; baseSha: ' + 'b'.repeat(40)), null);
   const m = metadata(); assert.deepEqual(parseProjectContext('Objective\n' + projectMarker(m)), m);

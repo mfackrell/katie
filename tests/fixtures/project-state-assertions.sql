@@ -26,6 +26,7 @@ DO $$ declare p jsonb;q jsonb;c jsonb;m uuid;j uuid;l uuid;ph text;h text;ok boo
  if not exists(select 1 from messages where chat_id='22222222-2222-4222-8222-222222222222' and created_at>=now() and content like '%approve project '||left(h,12)||'%') then raise exception 'Scope proposal was not delivered atomically';end if;
  begin perform control_work_project((p->>'id')::uuid,'11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222','approve','',repeat('b',64));raise exception 'Expected stale approval rejection';exception when others then if SQLERRM='Expected stale approval rejection' then raise;end if;end;
  perform control_work_project((p->>'id')::uuid,'11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222','approve','',h);
+ if not exists(select 1 from messages where content like '%katie-project-approval:'||h||'%') then raise exception 'Accepted scope disappeared from chat history';end if;
  p:=claim_work_project();perform finish_work_project((p->>'id')::uuid,(p->>'lease')::uuid,'child','{"kind":"development","objective":"Build the approved token game."}');
  select active_mission_id into m from work_projects where id=(p->>'id')::uuid;
  if not exists(select 1 from project_runs where mission_id=m and binding->>'baseSha'=repeat('a',40) and binding->>'scopeHash'=h) then raise exception 'Coding lineage or scope binding missing';end if;

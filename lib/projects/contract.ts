@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
-const path = z.string().min(2).max(300).refine(s => s.startsWith('/') && !s.startsWith('//') && !/[\\\s#%]/.test(s) && !s.split('/').some(p => p === '.' || p === '..'), 'Internal application route required');
+const path = z.string().min(1).max(300).refine(s => s.startsWith('/') && !s.startsWith('//') && !/[\\\s#%]/.test(s) && !s.split('/').some(p => p === '.' || p === '..'), 'Internal application route required');
 const step = z.discriminatedUnion('action', [
     z.object({ action: z.literal('goto'), path }).strict(), z.object({ action: z.literal('click'), selector: z.string().min(1).max(500) }).strict(), z.object({ action: z.literal('fill'), selector: z.string().min(1).max(500), value: z.string().min(1).max(2000) }).strict(), z.object({ action: z.literal('expectVisible'), selector: z.string().min(1).max(500) }).strict(), z.object({ action: z.literal('expectText'), selector: z.string().min(1).max(500), value: z.string().min(1).max(2000) }).strict(),
 ]);

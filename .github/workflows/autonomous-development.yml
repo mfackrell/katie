@@ -67,7 +67,7 @@ jobs:
           # These tools are captured from the trusted workflow/main checkout,
           # before switching to a prior project commit or running generated code.
           mkdir -p "$RUNNER_TEMP/project-tools" "$RUNNER_TEMP/agent-task"
-          cp scripts/project-context.mjs scripts/project-browser-check.mjs scripts/project-sandbox.mjs scripts/project-ci.mjs "$RUNNER_TEMP/project-tools/"
+          cp scripts/project-context.mjs scripts/project-browser-check.mjs scripts/project-sandbox.mjs scripts/project-ci.mjs scripts/project-scope.mjs "$RUNNER_TEMP/project-tools/"
           node scripts/project-context.mjs prepare "$RUNNER_TEMP/original-agent-request.md" > "$RUNNER_TEMP/project-context.json"
           project="$(jq -r 'if . == null then "false" else "true" end' "$RUNNER_TEMP/project-context.json")"
           echo "project=$project" >> "$GITHUB_OUTPUT"
@@ -157,6 +157,7 @@ jobs:
           test -z "$(git status --porcelain -- .github/workflows/autonomous-development.yml)" || { echo 'Protected workflow edited'; exit 1; }
           git add -A
           git diff --cached --quiet && { echo 'No implementation produced'; exit 1; }
+          node "$RUNNER_TEMP/project-tools/project-scope.mjs" "$RUNNER_TEMP/agent-task/AGENT_REQUEST.md"
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git commit -m "agent: implement issue #$ISSUE"
@@ -381,6 +382,7 @@ jobs:
           rm -f AGENT_REQUEST.md AGENT_REPAIR_CONTEXT.md agent-test.log agent-review.json
           git add -A
           git diff --cached --quiet && { echo 'No repair produced'; exit 1; }
+          node "$RUNNER_TEMP/project-tools/project-scope.mjs" "$RUNNER_TEMP/agent-task/AGENT_REQUEST.md"
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git commit -m 'agent: repair test and review failures'
