@@ -64,12 +64,15 @@ test('a second unsuccessful review blocks instead of creating an endless repair 
  await executeClaim({mission:m,job:review},async(_,instruction)=>({text:instruction.includes('KATIE_REQUIRED_DRAFT_REVIEW')?JSON.stringify(verdict('revise')):JSON.stringify(assessment),sources:[],calculations:[],model:'fixture'}));
  assert.equal(committed.p_mission_status,'blocked');assert.equal(committed.p_children.length,0);assert.equal(committed.p_final,null);
 });
-function modelFixture(responses,reserve=true){let dispatches=0;const ledger=[];
- class Client{responses={create:async request=>{dispatches++;ledger.push(request);return responses.shift();}};}
- const load=modules({'openai':{__esModule:true,default:Client},'@/lib/missions/store':{rpc:async(name,args)=>{if(name==='reserve_mission_call')return reserve;return true;}}});
- return{call:load('@/lib/missions/model').missionModel,ledger,count:()=>dispatches};
+function modelFixture(responses,reserve=true,inputCount=12){let dispatches=0;const ledger=[],counts=[],reservations=[];
+ class Client{post=async(path,options)=>{counts.push({path,...options});if(inputCount instanceof Error)throw inputCount;return{input_tokens:inputCount};};responses={create:async request=>{dispatches++;ledger.push(request);return responses.shift();}};}
+ const load=modules({'openai':{__esModule:true,default:Client},'@/lib/missions/store':{rpc:async(name,args)=>{if(name==='reserve_mission_call'){reservations.push(args);return reserve;}return true;}}});
+ return{call:load('@/lib/missions/model').missionModel,ledger,counts,reservations,count:()=>dispatches};
 }
 const response=(text,extra={})=>({status:'completed',output_text:text,output:[],usage:{total_tokens:12},...extra});
+test('budget uses counted input with output headroom and conservatively falls back when unavailable',async()=>{
+ const prior=process.env.OPENAI_API_KEY;process.env.OPENAI_API_KEY='fixture-only';try{const m=mission(),j=job(m),input='Long evidence '.repeat(2000),f=modelFixture([response('Analysis')],true,4000);await f.call({mission:m,job:j},'Analyze',input);assert.equal(f.reservations[0].p_tokens,4000+256+3000);assert.equal(f.counts[0].path,'/responses/input_tokens');assert.equal(f.counts[0].body.input[0].content,input);assert.equal(f.counts[0].body.max_output_tokens,undefined);assert.equal(f.counts[0].timeout,15000);const fallback=modelFixture([response('Analysis')],true,Error('Counting unavailable'));await fallback.call({mission:m,job:j},'Analyze',input);assert.ok(fallback.reservations[0].p_tokens>Buffer.byteLength(input)+3000);}finally{if(prior===undefined)delete process.env.OPENAI_API_KEY;else process.env.OPENAI_API_KEY=prior;}
+});
 test('planner dispatch constrains assignment keys with the actual strict output schema',async()=>{
  const prior=process.env.OPENAI_API_KEY;process.env.OPENAI_API_KEY='fixture-only';try{const m=mission(),j=job(m,'plan','plan'),f=modelFixture([response('{}')]);await f.call({mission:m,job:j},'Plan','Objective');const format=f.ledger[0].text.format;assert.equal(format.type,'json_schema');assert.equal(format.strict,true);const assignments=format.schema.properties.assignments;assert.equal(assignments.maxItems,2);assert.equal(assignments.items.additionalProperties,false);assert.equal(assignments.items.properties.key.pattern,'^[a-z][a-z0-9_]{0,24}$');assert.equal(assignments.items.properties.agentId.format,'uuid');assert.equal(assignments.items.properties.instruction.maxLength,5000);const other=modelFixture([response('Analysis')]);await other.call({mission:m,job:job(m)},'Analyze','Input');assert.equal(other.ledger[0].text,undefined);}finally{if(prior===undefined)delete process.env.OPENAI_API_KEY;else process.env.OPENAI_API_KEY=prior;}
 });
