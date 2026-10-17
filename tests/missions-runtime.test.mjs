@@ -87,7 +87,7 @@ test('approved development waits externally, then reclaimed work completes only 
  try{
   const m=mission();m.repository_id=randomUUID();m.team[0].config.development=true;m.team[0].config.maxActiveTasks=1;
   const j=job(m,'development','coding');j.payload={};
-  const task={id:j.id,agent_id:j.agent_id,kind:'development',status:'draft',request_id:'agent:'+j.id,input:j.instruction,snapshot:m.team[0].config,definition_version:1,repository_id:m.repository_id,repository_full_name:'owner/repo',external:{}};
+  const task={id:j.id,agent_id:j.agent_id,kind:'development',status:'draft',request_id:'agent:'+j.id,input:'MISSION OBJECTIVE: Build from the preceding research. ASSIGNMENT: '+j.instruction+' DEPENDENCY EVIDENCE: handoff-sentinel research result https://example.com/source',snapshot:m.team[0].config,definition_version:1,repository_id:m.repository_id,repository_full_name:'owner/repo',external:{}};
   let writes=0,finished=false,committed;
   const receipt={version:1,repository:'owner/repo',run_id:99,issue_number:7,pr_url:'https://github.com/owner/repo/pull/8',outcome:'READY',checks:{build:'success',test:'true',review:'pass',repair:'skipped',retest:'',final_review:''}};
   const artifact=()=>{
@@ -100,7 +100,7 @@ test('approved development waits externally, then reclaimed work completes only 
   class GitHub{
    users={getAuthenticated:async()=>({data:{type:'User',login:'owner'}})};
    repos={get:async()=>({data:{owner:{type:'User',login:'owner'}}})};
-   issues={create:async()=>{writes++;return{data:{number:7,html_url:'https://github.com/owner/repo/issues/7'}};}};
+   issues={create:async payload=>{assert.ok(payload.body.includes(task.input),'Dispatch uses the exact approved evidence package');assert.match(payload.body,/handoff-sentinel/);assert.match(payload.body,/Build from the preceding research/);writes++;return{data:{number:7,html_url:'https://github.com/owner/repo/issues/7'}};}};
    actions={getWorkflow:async()=>({data:{path:'.github/workflows/autonomous-development.yml',state:'active'}}),listWorkflowRuns:async()=>({data:{workflow_runs:finished?[{id:99,status:'completed',conclusion:'success',event:'issues',repository:{full_name:'owner/repo'},head_repository:{full_name:'owner/repo'},head_branch:'main',path:'.github/workflows/autonomous-development.yml',html_url:'https://github.com/owner/repo/actions/runs/99'}]:[]}}),listWorkflowRunArtifacts:async()=>({data:{artifacts:[{name:'agent-completion',id:10,expired:false,size_in_bytes:500}]}}),downloadArtifact:async()=>({data:artifact()})};
   }
   const db={from(){const q={select:()=>q,eq:()=>q,maybeSingle:async()=>({data:{repository_full_name:'owner/repo'},error:null}),update:async patch=>{Object.assign(task,patch);return{error:null};}};return q;}};

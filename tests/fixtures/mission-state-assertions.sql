@@ -56,7 +56,7 @@ begin
  assert commit_mission_work((x->>'id')::uuid,(x->>'lease')::uuid,'{"text":"Independent analysis complete"}');
  assert (select status from agent_missions where id=mid)='awaiting_approval';assert claim_mission_work() is null;
  perform control_mission(mid,'approve',(j->>'id')::uuid);j:=claim_mission_work()->'job';
- t:=mission_development_task((j->>'id')::uuid,(j->>'lease')::uuid);assert t->>'status'='draft';assert t->'snapshot'=cfg;assert t->>'initial_input'='Make a draft-only documentation change';
+ t:=mission_development_task((j->>'id')::uuid,(j->>'lease')::uuid);assert t->>'status'='draft';assert t->'snapshot'=cfg;assert position('Make a draft-only documentation change' in (t->>'initial_input'))>0;assert position('Development probe' in (t->>'initial_input'))>0;
  assert (mission_development_task((j->>'id')::uuid,(j->>'lease')::uuid)->>'id')=t->>'id';
  perform transition_agent_task((t->>'id')::uuid,'start');
  assert active_managed_work((a->>'id')::uuid,null)=1,'External coding job and mission assignment count once';
@@ -144,3 +144,29 @@ begin
  j:=claim_mission_work()->'job';assert j->>'role'='review';assert commit_mission_work((j->>'id')::uuid,(j->>'lease')::uuid,'{"verdict":"pass"}','[]','completed','completed','Both draft links delivered');
  assert (select status from agent_missions where id=mid)='completed';
 end $parallel_approval$;
+
+-- Dependency results are frozen before approval and forwarded without mutation.
+do $coding_handoff$
+declare cfg jsonb:='{"name":"Handoff worker","instructions":"Draft only from approved evidence.","research":false,"attachments":false,"development":true,"reviewMode":"always","maxActiveTasks":1,"maxInputChars":8000}';a jsonb;b jsonb;mid uuid:=gen_random_uuid();repo uuid:=gen_random_uuid();j jsonb;t jsonb;approved_input text;
+begin
+ a:=save_managed_agent(null,cfg,false);b:=save_managed_agent(null,cfg,false);insert into repo_sync_runs values(repo,'owner/repo');
+ perform create_mission(mid,'Implement the original source-grounded objective',array[(a->>'id')::uuid,(b->>'id')::uuid],120,repo);perform control_mission(mid,'start');j:=claim_mission_work()->'job';
+ assert commit_mission_work((j->>'id')::uuid,(j->>'lease')::uuid,'{}',jsonb_build_array(
+ jsonb_build_object('key','research','role','work','agent_id',b->>'id','instruction','Collect implementation evidence','dependencies','[]'::jsonb),
+ jsonb_build_object('key','coding','role','development','agent_id',a->>'id','instruction','Implement using the collected evidence','dependencies','["research"]'::jsonb)));
+ j:=claim_mission_work()->'job';assert j->>'job_key'='research';
+ assert commit_mission_work((j->>'id')::uuid,(j->>'lease')::uuid,'{"text":"handoff-sentinel: preserve this preceding finding","sources":[{"url":"https://example.com/verified-source"}]}');
+ j:=claim_mission_work()->'job';assert j->>'job_key'='coding';
+ assert commit_mission_work((j->>'id')::uuid,(j->>'lease')::uuid,'{}','[]','awaiting_approval');
+ select payload->>'development_input' into approved_input from mission_assignments where id=(j->>'id')::uuid;
+ assert position('original source-grounded objective' in approved_input)>0;assert position('handoff-sentinel' in approved_input)>0;assert position('https://example.com/verified-source' in approved_input)>0;
+ perform control_mission(mid,'approve',(j->>'id')::uuid);j:=claim_mission_work()->'job';
+ -- An unrelated pending approval does not revoke this already approved claim.
+ update agent_missions set status='awaiting_approval' where id=mid;
+ t:=mission_development_task((j->>'id')::uuid,(j->>'lease')::uuid);
+ assert t->>'initial_input'=approved_input;assert t->>'input'=approved_input;
+ update mission_assignments set result='{"text":"Changed after approval"}' where mission_id=mid and job_key='research';
+ assert prepare_mission_development((j->>'id')::uuid,(j->>'lease')::uuid)=approved_input,'Frozen bytes are not rebuilt after approval';
+ assert (mission_development_task((j->>'id')::uuid,(j->>'lease')::uuid)->>'input')=approved_input;
+ perform control_mission(mid,'stop');
+end $coding_handoff$;
