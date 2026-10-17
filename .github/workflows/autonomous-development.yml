@@ -192,7 +192,11 @@ jobs:
           name: project-tools
           path: ${{ runner.temp }}/project-tools
       - name: Ensure project filesystem isolation is available
-        run: command -v bwrap >/dev/null || (sudo apt-get update && sudo apt-get install -y bubblewrap)
+        run: |
+          command -v bwrap >/dev/null || (sudo apt-get update && sudo apt-get install -y bubblewrap)
+          # This disposable job VM must permit the verifier's user namespaces.
+          # Network/filesystem isolation remains mandatory; no unsandboxed fallback.
+          if test -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns; then sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0; fi
       - name: Independent verification
         id: check
         shell: bash
@@ -382,7 +386,11 @@ jobs:
           gh auth setup-git
           git push origin "HEAD:refs/heads/$BRANCH"
       - name: Ensure project filesystem isolation is available
-        run: command -v bwrap >/dev/null || (sudo apt-get update && sudo apt-get install -y bubblewrap)
+        run: |
+          command -v bwrap >/dev/null || (sudo apt-get update && sudo apt-get install -y bubblewrap)
+          # This disposable job VM must permit the verifier's user namespaces.
+          # Network/filesystem isolation remains mandatory; no unsandboxed fallback.
+          if test -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns; then sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0; fi
       - name: Reverify repaired tree
         id: retest
         shell: bash

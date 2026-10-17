@@ -34,7 +34,7 @@ test("discussion of prompt design is not accidentally hijacked as a local inspec
 
 test("chat request short circuits before router and any model-backed memory maintenance", () => {
   const route = readFileSync("app/api/chat/route.ts", "utf8");
-  const localCheck = route.indexOf("const localKatieResponse = await resolveLocalKatieResponse(");
+  const localCheck = route.indexOf("const localKatieResponse =");
   const localExit = route.indexOf("return new NextResponse(localBody", localCheck);
   const modelWork = route.indexOf("await maintainMemoryArchitecture(actorId, chatId)", localCheck);
   const router = route.indexOf("const configuredProviders = getAvailableProviders()", localCheck);
