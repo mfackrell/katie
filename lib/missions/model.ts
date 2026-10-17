@@ -32,7 +32,8 @@ export async function missionModel(claim:Claim,instruction:string,input:string,t
   };
   // Count the complete input, including tools and review schemas, without an
   // inference. Keep a conservative byte fallback if counting is unavailable.
-  const {max_output_tokens:_output,store:_store,max_tool_calls:_toolLimit,...countInput}=request as typeof request & {max_tool_calls?:number};
+  const countInput:Record<string,unknown>={...request};
+  delete countInput.max_output_tokens;delete countInput.store;delete countInput.max_tool_calls;
   const counted=await client.post<unknown,{input_tokens:number}>('/responses/input_tokens',{body:countInput,timeout:15_000}).catch(()=>null);
   const inputTokens=counted&&Number.isSafeInteger(counted.input_tokens)&&counted.input_tokens>=0?counted.input_tokens+256:Buffer.byteLength(JSON.stringify(request),'utf8');
   // Output includes reasoning; native search requires additional headroom.
