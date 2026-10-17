@@ -17,7 +17,7 @@ export async function baseline(p: Project) { if (!p.repository_id)
     throw Error('The target repository needs the versioned project execution integration before coding can be approved'); if(p.verified_sha&&p.baseline_sha)return p.baseline_sha; const b = await gh.repos.getBranch({ owner, repo, branch: 'main' }); return b.data.commit.sha; }
 function bounded(text: string) { if (text.length > 12000)
     throw Error('Project milestone context exceeds its bounded input. Narrow the specification; original requirements have not been truncated.'); return text; }
-function compact(e: Record<string, unknown>) { const v = e.verification as Record<string, unknown> | undefined; return v ? { head: e.head, taskId: e.taskId, verification: { ...v, changedFiles: (v.changedFiles as Array<Record<string, unknown>>).map(f => ({ path: f.path, status: f.status })), validation: v.validation }, summary: e.summary } : e; }
+
 async function advance(p: Project) {
     const finish = (action: string, data: Record<string, unknown> = {}) => projectRpc<boolean>('finish_work_project', { p_id: p.id, p_lease: p.lease, p_action: action, p_data: data });
     const runs = await projectRuns(p.id);
@@ -132,7 +132,7 @@ async function advance(p: Project) {
     }
     else if (p.phase === 'assessment') {
         const final = [...evidence].reverse().find(e => e.phase === 'development');
-        projectEvidence = { milestones: evidence.map(e => ({ phase: e.phase, index: e.index, status:e.missionStatus, head:e.evidence?.head })), finalIntegratedEvidence: final ? compact(final.evidence ?? {}) : null, preview: p.preview };
+        projectEvidence = { milestones: evidence.map(e => ({ phase: e.phase, index: e.index, status:e.missionStatus, head:e.evidence?.head })), approvedFinalContract:p.spec!.finalContract,approvedScopeHash:p.approved_hash,finalIntegratedEvidence: final?.evidence ?? null, preview: p.preview };
         objective = bounded(`${source}\n\nFINAL WHOLE-PROJECT DELIVERY: Independently check the ENTIRE original user outcome against all approved requirements and actual integrated evidence. A partial phase report, architecture document or loading page is not sufficient. Do not waive AI, human play, rules fidelity, persistence or backend requirements. Missing material evidence must remain blocked; do not invent test outcomes. If the complete outcome is supported, deliver the usable preview link, concise instructions, actual verified checks and any limitations.\nAPPROVED REQUIREMENTS:${JSON.stringify(p.spec!.requirements)}\nVERIFIED PREVIEW:${JSON.stringify(p.preview)}\nActual head-bound milestone and final browser evidence are provided in projectEvidence.`);
     }
     else

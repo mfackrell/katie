@@ -5,7 +5,8 @@ import { projectId, projectMessage } from './contract';
 export function startProjectIntent(text: string) {
  const direct=/^\s*(?:please\s+)?(?:(?:can|could|would|will) you\s+(?:please\s+)?)?(?:build|create|develop|recreate|re-create|make|implement|launch|start)\b/i.test(text);
  const desire=/^\s*I (?:want|need|would like)\b/i.test(text) && !/^.{0,100}\b(?:explain|understand|learn|discuss|describe|whether|capable|how to)\b/i.test(text.split(/[.!?]\s/)[0]);
- return (direct||desire) && /\b(?:project|browser|website|web app|application|app|game|dashboard|portal)\b/i.test(text) && !/^.{0,80}\b(?:do not|don't|never|not asking you to)\s+(?:want to |you to )?(?:build|create|develop|make|implement|start)\b/i.test(text);
+ const artifact=/^(?:please\s+)?(?:(?:can|could|would|will) you\s+)?(?:I (?:want|need|would like)(?: you to)?|create|make|develop|prepare|write|give|provide)\s+(?:me\s+)?(?:(?:a|an|the|project|technical|design|status)\s+)*(?:summary|report|explanation|overview|proposal|plan|architecture|tutorial|guide|analysis)\b/i.test(text);
+ return !artifact && (direct||desire) && /\b(?:browser|website|web app|application|app|game|dashboard|portal|software|program|API)\b/i.test(text) && !/^.{0,80}\b(?:do not|don't|never|not asking you to)\s+(?:want to |you to )?(?:build|create|develop|make|implement|start)\b/i.test(text);
 }
 export const followupProjectIntent = (text: string) => /^(?:please\s+)?(?:build|make|create|implement|do|start)(?:\s+(?:that|it|this|the project))?[.!\s]*$/i.test(text.trim());
 const actionText = (text:string) => text.trim().replace(/^(?:actually|no|okay|ok)[,:]?\s+/i,'').replace(/^please\s+/i,'').replace(/^(?:can|could|would|will) (?:you|we)\s+(?:please\s+)?/i,'');
@@ -49,6 +50,10 @@ export async function handleProjectChat(input: {
         }
         if (/^(?:yes[,\s]*)?(?:approve|go ahead|do (?:it|that|this)|proceed)\b/i.test(text)) return reply(p,'Please include the current approval digest shown with the exact project proposal, or reply directly after that still-current proposal. No scope was approved.');
         if(/^(?:explain|tell me|show me how|describe|compare|teach me|help me understand)\b/i.test(actionText(text)))return null;
+        if(['awaiting_input','awaiting_approval'].includes(p.status)&&!p.approved_hash&&/\b[-\w.]+\/[-\w.]+\b/.test(text)){
+            const selected=await repository(undefined,text);
+            if(selected){if(!tracked)throw Error('Durable tracking is required for repository selection');const simple=/^(?:please )?(?:(?:use|connect|target)(?: the)?(?: repository| repo)? )?([-\w.]+\/[-\w.]+)[.!\s]*$/i.exec(text);const n=await mutate('answer',{p_repository:selected,p_text:simple?.[1]??text});return reply(n,'I saved the connected target repository and will prepare the current scope for approval.');}
+        }
         const projectReference=/\b(?:the|this|my) (?:game|app|website|project)\b|\b(?:edition|requirement|keyboard|multiplayer)\b/i.test(text);
         if (amendmentIntent(text) || projectReference && !/^\s*(?:what|why|how|can|would|could|is|are)\b/i.test(text)) {
             if(!tracked)throw Error('Durable tracking is required for a project clarification');
