@@ -14,7 +14,7 @@ export async function executeClaim(claim:Claim,model=missionModel){
  const saved=await readMission(mission.id);
  const agent=mission.team.find(a=>a.id===job.agent_id);
  if(!agent)throw Error('Saved worker definition missing');
- if(saved.mission.status!=='running')return;
+ if(!['running','awaiting_approval'].includes(saved.mission.status))return;
  const completed=saved.jobs.filter(j=>j.status==='completed');
  const context=()=>JSON.stringify({objective:mission.objective,assignment:job.instruction,evidence:completed.filter(j=>j.role!=='plan'&&j.role!=='review').map(j=>({key:j.job_key,instruction:j.instruction,result:j.result}))});
  const persona=BASE+'\n'+getObjectiveFirstInstruction()+'\nSaved responsibilities: '+agent.config.instructions;
@@ -46,7 +46,7 @@ export async function executeClaim(claim:Claim,model=missionModel){
  }
  if(job.role==='review'){
   // First pass is draft-blind: objective and acceptance contract only.
-  const turns=[{id:'latest-user',text:mission.objective}];
+  const turns=[{id:'turn-1',text:'Saved lead responsibilities: '+mission.team[0].config.instructions},{id:'latest-user',text:mission.objective}];
   const blind=await model(claim,BASE+'\n'+ASSESSMENT_INSTRUCTION,'AUTHORITATIVE_USER_TURNS:\n'+JSON.stringify(turns));
   const assessment=validateAssessment(parseJSON(blind.text),turns);
   const target=completed.find(x=>x.job_key===(job.job_key==='review_again'?'revision':'compose'));

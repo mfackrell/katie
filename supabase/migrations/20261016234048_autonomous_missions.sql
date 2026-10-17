@@ -39,6 +39,18 @@ alter table public.mission_calls enable row level security;
 revoke all on public.agent_missions,public.mission_assignments,public.mission_calls from public,anon,authenticated,service_role;
 grant select,insert,update on public.agent_missions,public.mission_assignments,public.mission_calls to service_role;
 
+
+-- Count a mission's external coding task once, and serialize admission with the
+-- pre-existing managed-task RPC on the same managed-agent row lock.
+create function public.active_managed_work(p_agent uuid,p_exclude uuid default null) returns bigint
+language sql stable security invoker set search_path=public as $$
+ select (select count(*) from agent_tasks t where t.agent_id=p_agent and t.id is distinct from p_exclude and t.status in ('running','pending','dispatching','submitted'))
+ + (select count(*) from mission_assignments j join agent_missions m on m.id=j.mission_id where j.agent_id=p_agent and j.id is distinct from p_exclude and j.status='running' and j.lease_until>now() and m.status in ('running','awaiting_approval')
+ and not exists(select 1 from agent_tasks t where t.id=j.id and t.status in ('running','pending','dispatching','submitted')));
+$$;
+revoke all on function public.active_managed_work(uuid,uuid) from public,anon,authenticated;
+grant execute on function public.active_managed_work(uuid,uuid) to service_role;
+
 create function public.create_mission(p_id uuid,p_objective text,p_agents uuid[],p_minutes integer default 20,p_repository uuid default null) returns jsonb
 language plpgsql security invoker set search_path=public as $$
 declare m agent_missions; team_data jsonb; n integer;
@@ -95,19 +107,17 @@ begin
  update mission_assignments j0 set status=case when attempts<2 then 'queued' else 'failed' end,lease=null,lease_until=null,detail='Worker lease expired; prior model-call reservation remains charged.',updated_at=now()
  where j0.status='running' and lease_until<=now();
  update agent_missions m0 set status='blocked',detail='An assignment exhausted recovery attempts.',updated_at=now() where m0.status='running' and exists(select 1 from mission_assignments a where a.mission_id=m0.id and a.status='failed');
- if (select count(*) from mission_assignments a join agent_missions b on b.id=a.mission_id where a.status='running' and a.lease_until>now() and b.status='running')>=3 then return null; end if;
+ if (select count(*) from mission_assignments a join agent_missions b on b.id=a.mission_id where a.status='running' and a.lease_until>now() and b.status in ('running','awaiting_approval'))>=3 then return null; end if;
  select a.* into j from mission_assignments a join agent_missions b on b.id=a.mission_id
  where b.status='running' and a.status in ('queued','waiting_external') and a.available_at<=now()
- -- A linked development task and its worker occupy one agent slot. Reclaiming
- -- that worker reconciles the existing task rather than admitting another one.
- and (select count(*) from mission_assignments active where active.agent_id=a.agent_id and active.status='running' and active.lease_until>now()
-      and not exists(select 1 from agent_tasks t where t.id=active.id and t.agent_id=active.agent_id and t.status in ('running','pending','dispatching','submitted')))
-   + (select count(*) from agent_tasks active where active.agent_id=a.agent_id and active.id<>a.id and active.status in ('running','pending','dispatching','submitted')) < least((select (v->'config'->>'maxActiveTasks')::integer from jsonb_array_elements(b.team) v where v->>'id'=a.agent_id::text),(select (config->>'maxActiveTasks')::integer from managed_agents where id=a.agent_id))
+ and active_managed_work(a.agent_id,a.id) < least((select (v->'config'->>'maxActiveTasks')::integer from jsonb_array_elements(b.team) v where v->>'id'=a.agent_id::text),(select (config->>'maxActiveTasks')::integer from managed_agents where id=a.agent_id))
  and not exists(select 1 from unnest(a.dependencies) dep where not exists(select 1 from mission_assignments d where d.mission_id=a.mission_id and d.job_key=dep and d.status='completed'))
  order by a.created_at,a.job_key limit 1 for update of a skip locked;
  if not found then return null; end if;
  select * into m from agent_missions where id=j.mission_id for update;
  if m.status<>'running' or m.deadline<=now() then return null; end if;
+ perform 1 from managed_agents where id=j.agent_id for update;
+ if active_managed_work(j.agent_id,j.id)>=least((select (v->'config'->>'maxActiveTasks')::integer from jsonb_array_elements(m.team) v where v->>'id'=j.agent_id::text),(select (config->>'maxActiveTasks')::integer from managed_agents where id=j.agent_id)) then return null; end if;
  update mission_assignments set status='running',attempts=case when status='waiting_external' then attempts else attempts+1 end,lease=gen_random_uuid(),lease_until=now()+interval '6 minutes',heartbeat_at=now(),updated_at=now() where id=j.id returning * into j;
  return jsonb_build_object('job',to_jsonb(j),'mission',to_jsonb(m));
 end $$;
@@ -121,7 +131,7 @@ begin
  if not found then return false; end if;
  select * into m from agent_missions where id=j.mission_id for update;
  select * into j from mission_assignments where id=p_id for update;
- if m.status<>'running' or m.deadline<=now() or j.status<>'running' or j.lease is distinct from p_lease or j.lease_until<=now() then return false; end if;
+ if m.status not in ('running','awaiting_approval') or m.deadline<=now() or j.status<>'running' or j.lease is distinct from p_lease or j.lease_until<=now() then return false; end if;
  if p_tokens not between 1 and 120000 or exists(select 1 from mission_calls where id=p_call) then return false; end if;
  if m.calls>=m.max_calls or greatest(m.reserved_tokens,m.actual_tokens)+p_tokens>m.token_allowance then
   update agent_missions set status='blocked',detail='Model-call or reserved token allowance exhausted. Inspect partial results.',updated_at=now() where id=m.id;
@@ -205,13 +215,11 @@ end $$;
 revoke all on function public.mission_development_task(uuid,uuid) from public,anon,authenticated;
 grant execute on function public.mission_development_task(uuid,uuid) to service_role;
 
--- Extend existing task admission after mission tables exist. Existing grants
--- and task behavior are preserved by CREATE OR REPLACE.
+-- Preserve the existing transition contract; extend only admission accounting.
 create or replace function public.transition_agent_task(p_id uuid,p_action text,p_message text default null,p_turn uuid default null,p_expected_request text default null)
 returns jsonb language plpgsql security invoker set search_path=public as $$
 declare a managed_agents; t agent_tasks; n integer; receipt agent_task_continuations;
 begin
- -- Match mission admission lock ordering: shared state lock before agent row.
  perform pg_advisory_xact_lock(hashtextextended('katie.mission.state',0));
  select a0.* into a from managed_agents a0 join agent_tasks t0 on t0.agent_id=a0.id where t0.id=p_id for update of a0;
  if not found then raise exception 'Task missing'; end if;
@@ -234,11 +242,7 @@ begin
   if length(trim(p_message))<1 or length(p_message)>(t.snapshot->>'maxInputChars')::integer then raise exception 'Invalid continuation'; end if;
   t.input:=p_message; t.request_id:='agent:'||gen_random_uuid()::text;
  else raise exception 'Invalid transition'; end if;
- select count(*) into n from agent_tasks where agent_id=a.id and id<>t.id and status in ('running','pending','dispatching','submitted');
- -- Exclude this task's own assignment when bridging approved development;
- -- other linked active tasks were already counted above.
- n:=n+(select count(*) from mission_assignments j where j.agent_id=a.id and j.id<>t.id and j.status='running' and j.lease_until>now()
-       and not exists(select 1 from agent_tasks linked where linked.id=j.id and linked.agent_id=j.agent_id and linked.status in ('running','pending','dispatching','submitted')));
+ select public.active_managed_work(a.id,t.id) into n;
  if n>=least((a.config->>'maxActiveTasks')::integer,(t.snapshot->>'maxActiveTasks')::integer) then raise exception 'Active task limit reached'; end if;
  if p_action='continue' then
   insert into agent_task_continuations(task_id,turn_id,input,base_request_id,request_id)
