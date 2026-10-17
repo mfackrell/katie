@@ -174,7 +174,7 @@ test('research accepts explicit links only when independently present in native 
  const prior=process.env.OPENAI_API_KEY;process.env.OPENAI_API_KEY='fixture-only';try{
   const m=mission(),j=job(m);j.agent_id=m.team[1].id;const url='https://provider.example/diagnostic';
   const f=modelFixture([response('Offering [primary source]('+url+')',{output:[{type:'web_search_call',action:{type:'search',sources:[{type:'url',url}]}}]})]);
-  const r=await f.call({mission:m,job:j},'Research','Find providers','research');assert.equal(r.sources[0].url,url);assert.deepEqual(Array.from(f.ledger[0].include),['web_search_call.action.sources']);
+  const r=await f.call({mission:m,job:j},'Research','Find providers','research');assert.equal(r.sources[0].url,url);const bare=modelFixture([response('Provider page: '+url+'.',{output:[{type:'web_search_call',action:{type:'search',sources:[{type:'url',url}]}}]})]);const b=await bare.call({mission:m,job:j},'Research','Find providers','research');assert.equal(b.sources[0].url,url);assert.deepEqual(Array.from(f.ledger[0].include),['web_search_call.action.sources']);
   for(const text of ['Unsupported [source](https://invented.example/)','No citation in this answer']){
    const bad=modelFixture([response(text,{output:[{type:'web_search_call',action:{type:'search',sources:[{type:'url',url}]}}]})]);
    await assert.rejects(bad.call({mission:m,job:j},'Research','Find providers','research'),error=>{assert.match(error.message,/no cited live sources/);assert.equal(error.partial.text,text);assert.equal(error.partial.consultedSources[0],url);return true;});
