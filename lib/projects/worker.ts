@@ -5,7 +5,7 @@ import { readTask } from '@/lib/agents/store';
 import { developmentPreview, projectAcceptanceSchema, reconcileDevelopment } from '@/lib/agents/development';
 import { parseJSON } from '@/lib/missions/types';
 import { validateProjectPlan } from './contract';
-import { projectRpc, projectRuns, milestoneEvidence, acceptanceBinding, getDevelopmentProjectContext, type Project, type Run } from './store';
+import { projectRpc, projectRuns, milestoneEvidence, acceptanceBinding, getDevelopmentProjectContext, type Project } from './store';
 async function baseline(p: Project) { if (!p.repository_id)
     return null; const { data: r, error } = await getSupabaseAdminClient().from('repo_sync_runs').select('repository_full_name').eq('id', p.repository_id).maybeSingle<{
     repository_full_name: string;
@@ -140,19 +140,19 @@ async function advance(p: Project) {
     await finish('child', { kind: p.phase, objective, evidence: projectEvidence });
 }
 async function reconcileParkedDispatch() {
-    const {data,error}=await getSupabaseAdminClient().from('agent_tasks').select('id,external').in('status',['submitted','dispatching']).order('updated_at',{ascending:true}).limit(20);
-    if(error)throw Error('Project dispatch recovery unavailable');
+    const data=await projectRpc<Array<{id:string;external:Record<string,unknown>}>>('project_dispatch_recovery_candidates');
     for(const row of (data??[]) as Array<{id:string;external:Record<string,unknown>}>){
         if(typeof row.external?.projectId!=='string')continue;
         const c=await getDevelopmentProjectContext(row.id);if(!c)continue;
         const {data:p,error:pe}=await getSupabaseAdminClient().from('work_projects').select('*').eq('id',c.projectId).maybeSingle<Project>();
         if(pe||!p)continue;
-        if(p.status==='running'&&p.approved_hash===c.scopeHash)continue;
+        const {data:j}=await getSupabaseAdminClient().from('mission_assignments').select('mission_id').eq('id',row.id).maybeSingle<{mission_id:string}>();
+        if(p.status==='running'&&p.approved_hash===c.scopeHash&&p.active_mission_id===j?.mission_id)continue;
         await reconcileDevelopment(await readTask(row.id),acceptanceBinding(c));return true;
     }
     return false;
 }
-export async function runProjectBatch() { if(await reconcileParkedDispatch())return {claimed:0,maintenance:true};const p = await projectRpc<Project | null>('claim_work_project'); if (!p)
+export async function runProjectBatch() { const maintenance=reconcileParkedDispatch().catch(error=>{console.error('[Projects] Parked dispatch recovery failed',error instanceof Error?error.message:'Unknown failure');});try { const p = await projectRpc<Project | null>('claim_work_project'); if (!p)
     return { claimed: 0 }; try {
     await advance(p);
     return { claimed: 1, status: 'processed' };
@@ -162,4 +162,4 @@ catch (error) {
     console.error('[Projects]', { project: p.id, detail });
     await projectRpc('finish_work_project', { p_id: p.id, p_lease: p.lease, p_action: 'error', p_data: { detail } });
     return { claimed: 1, status: 'blocked' };
-} }
+} } finally {await maintenance;} }

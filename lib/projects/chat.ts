@@ -2,7 +2,11 @@ import { getSupabaseAdminClient } from '@/lib/data/supabase/admin';
 import type { Message } from '@/lib/types/chat';
 import { projectForChat, projectRpc, type Project } from './store';
 import { projectId, projectMessage } from './contract';
-export function startProjectIntent(text: string) { return !/^\s*(?:how\b|what\b|why\b|is\b|are\b|would\b|could she\b|can she\b|do you think\b)/i.test(text) && /\b(?:build|create|develop|recreate|re-create|make|implement|launch|start|want)\b/i.test(text) && /\b(?:project|browser|website|web app|application|app|game|dashboard|portal)\b/i.test(text); }
+export function startProjectIntent(text: string) {
+ const direct=/^\s*(?:please\s+)?(?:(?:can|could|would|will) you\s+(?:please\s+)?)?(?:build|create|develop|recreate|re-create|make|implement|launch|start)\b/i.test(text);
+ const desire=/^\s*I (?:want|need|would like)\b/i.test(text) && !/^.{0,100}\b(?:explain|understand|learn|discuss|describe|whether|capable|how to)\b/i.test(text.split(/[.!?]\s/)[0]);
+ return (direct||desire) && /\b(?:project|browser|website|web app|application|app|game|dashboard|portal)\b/i.test(text) && !/^.{0,80}\b(?:do not|don't|never|not asking you to)\s+(?:want to |you to )?(?:build|create|develop|make|implement|start)\b/i.test(text);
+}
 export const followupProjectIntent = (text: string) => /^(?:please\s+)?(?:build|make|create|implement|do|start)(?:\s+(?:that|it|this|the project))?[.!\s]*$/i.test(text.trim());
 const marker = /<!-- katie-project-status:[a-f0-9-]+:([^ ]+) -->/;
 export async function handleProjectChat(input: {

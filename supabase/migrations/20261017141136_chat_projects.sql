@@ -268,3 +268,10 @@ begin
  update agent_tasks set external=jsonb_build_object('attempted',true),updated_at=now() where id=p_id;
  return true;
 end $$;
+
+-- Read-only bounded recovery cannot preempt ordinary mission scheduling.
+create function public.project_dispatch_recovery_candidates() returns jsonb language sql stable security invoker set search_path=public as $$
+ select coalesce(jsonb_agg(to_jsonb(t)),'[]'::jsonb) from (select id,external from agent_tasks where status in ('submitted','dispatching') and external ? 'projectId' order by updated_at limit 20) t;
+$$;
+revoke all on function project_dispatch_recovery_candidates() from public,anon,authenticated;
+grant execute on function project_dispatch_recovery_candidates() to service_role;
