@@ -53,9 +53,9 @@ export async function executeClaim(claim:Claim,model=missionModel){
   if(!target?.result)throw Error('Review candidate missing');
   const checked=await model(claim,BASE+'\n'+REVIEW_INSTRUCTION,'Independent assessment:\n'+JSON.stringify(assessment)+'\nRequired acceptance IDs:\n'+JSON.stringify(acceptanceIds(assessment))+'\nEvidence and candidate:\n'+JSON.stringify({objective:mission.objective,candidate:{key:target.job_key,result:target.result},evidence:completed.filter(x=>x.role==='work'||x.role==='development').map(x=>({key:x.job_key,result:x.result})),priorFindings:completed.filter(x=>x.role==='review').map(x=>x.result)}));
   const evaluated=validateAnswerReview(parseJSON(checked.text),assessment);
-  const review={verdict:evaluated.verdict==='approve'?'pass':evaluated.clarification?.essential?'blocked':'changes_requested',findings:[evaluated.findings],summary:evaluated.findings,checks:evaluated.checks};
+  const review={verdict:evaluated.clarification?.essential?'blocked':evaluated.verdict==='approve'?'pass':'changes_requested',findings:[evaluated.findings],summary:evaluated.findings,checks:evaluated.checks,clarification:evaluated.clarification??null};
   if(review.verdict==='pass'){const final=String(target.result.text??target.result.output??'');await commit({...review,blindCriteria:blind.text,model:checked.model},[],'completed','completed',final);return;}
-  if(review.verdict==='blocked'||job.job_key==='review_again'){await commit({...review,blindCriteria:blind.text,detail:'Independent review did not approve the result. Inspect findings and partial work.'},[],'completed','blocked');return;}
+  if(review.verdict==='blocked'||job.job_key==='review_again'){await commit({...review,blindCriteria:blind.text,detail:review.clarification?.essential?review.clarification.question:'Independent review did not approve the result. Inspect findings and partial work.'},[],'completed','blocked');return;}
   const composer=saved.jobs.find(x=>x.job_key==='compose')!;
   await commit({...review,blindCriteria:blind.text},[
    {key:'revision',role:'revise',agent_id:composer.agent_id,instruction:'Resolve these substantive independent findings: '+review.findings.join('\n'),dependencies:['review']},

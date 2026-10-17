@@ -117,3 +117,12 @@ test('approved development waits externally, then reclaimed work completes only 
   assert.equal(committed.p_status,'completed');assert.equal(task.status,'ready');assert.equal(committed.p_result.external.receipt.outcome,'READY');assert.equal(committed.p_result.external.prUrl,receipt.pr_url);assert.equal(writes,1);
  }finally{if(prior===undefined)delete process.env.GITHUB_TOKEN;else process.env.GITHUB_TOKEN=prior;}
 });
+
+test('an approval carrying essential missing input stays blocked and preserves the actual question',async()=>{
+ const m=mission(),compose={...job(m,'compose','compose'),status:'completed',result:{text:'A plausible candidate'}},j=job(m,'review','review');let committed;
+ const {executeClaim}=modules({'@/lib/missions/store':{readMission:async()=>({mission:m,jobs:[compose,j]}),rpc:async(_,args)=>{committed=args;return true;}}})('@/lib/missions/worker');
+ const clarification={question:'What delivery cost should this analysis use?',missingFact:'Delivery cost',essential:true};
+ await executeClaim({mission:m,job:j},async(_,instruction)=>({text:instruction.includes('KATIE_REQUIRED_DRAFT_REVIEW')?JSON.stringify({...verdict(),clarification}):JSON.stringify(assessment),sources:[],calculations:[],model:'fixture'}));
+ assert.equal(committed.p_mission_status,'blocked');assert.equal(committed.p_final,null);assert.equal(committed.p_children.length,0);
+ assert.equal(committed.p_result.verdict,'blocked');assert.equal(committed.p_result.clarification.essential,true);assert.equal(committed.p_result.detail,clarification.question);
+});
