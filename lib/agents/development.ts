@@ -230,6 +230,13 @@ export function verifiedPreviewUrl(raw: unknown, approvedOrigins: readonly strin
     return vercel || configured ? url.href : null;
   } catch { return null; }
 }
+// A Vercel deployment URL has a provider-assigned nine-character nonce.
+// The owner config fixes project/team names and captures that nonce; branch,
+// project and custom aliases are not delivery evidence even if they are HTTPS.
+export function immutablePreviewUrl(raw:unknown,approvedOrigins:readonly string[]=[]):string|null{
+ const safe=verifiedPreviewUrl(raw,approvedOrigins),rule=process.env.PROJECT_PREVIEW_HOST_PATTERN;if(!safe||!rule||!rule.startsWith('^')||!rule.endsWith('$'))return null;
+ try{const u=new URL(safe),nonce=new RegExp(rule).exec(u.hostname)?.[1];return u.hostname.endsWith('.vercel.app')&&!u.hostname.includes('-git-')&&typeof nonce==='string'&&/^[a-z0-9]{9}$/.test(nonce)?safe:null;}catch{return null;}
+}
 export async function developmentPreview(task: AgentTask, project: ProjectAcceptanceBinding, approvedOrigins: readonly string[] = []) {
   const receipt = parseCompletionReceipt(task.external.receipt, task.repository_full_name ?? '', Number(task.external.issueNumber), Number((task.external.receipt as Record<string, unknown>)?.run_id), 'success', project);
   if (task.status !== 'ready' || receipt.outcome !== 'READY' || !receipt.tested_head_sha) throw Error('Head-bound project acceptance required before preview delivery');
@@ -241,14 +248,14 @@ export async function developmentPreview(task: AgentTask, project: ProjectAccept
   const previewDeadline=Date.now()+45000;
   for (const deployment of deployments.data) {
     if(Date.now()>=previewDeadline)break;
-    if (deployment.sha !== receipt.tested_head_sha || deployment.production_environment !== false || !/^preview(?:\s|$|[-_/])/i.test(deployment.environment)) continue;
+    if (deployment.creator?.login?.toLowerCase()!=='vercel[bot]' || deployment.sha !== receipt.tested_head_sha || deployment.production_environment !== false || !/^preview(?:\s|$|[-_/])/i.test(deployment.environment)) continue;
     const statuses = await client.repos.listDeploymentStatuses({ owner: binding.owner, repo: binding.repo, deployment_id: deployment.id, per_page: 1 });
     const status = statuses.data[0];
-    const url = status?.state === 'success' ? verifiedPreviewUrl(status.environment_url, approvedOrigins) : null;
+    const url = status?.state === 'success' && status.creator?.login?.toLowerCase()==='vercel[bot]' ? immutablePreviewUrl(status.environment_url, approvedOrigins) : null;
     if (url && (!status.environment || status.environment === deployment.environment)) {
       const { data: after } = await client.pulls.get({ owner: binding.owner, repo: binding.repo, pull_number: pr.number ?? Number(receipt.pr_url!.split('/').pop()) });
       if (after.state !== 'open' || !after.draft || after.merged || after.head.sha !== receipt.tested_head_sha || after.head.repo?.full_name !== binding.fullName || after.base.repo.full_name !== binding.fullName) throw Error('Preview draft changed during delivery verification');
-      return { url, headSha: deployment.sha, deploymentId: deployment.id, statusId: status.id };
+      return { url, headSha: deployment.sha, deploymentId: deployment.id, statusId: status.id, provider:'vercel',immutable:true };
     }
   }
   return null;

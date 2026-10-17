@@ -64,7 +64,7 @@ DO $$ declare p jsonb;q jsonb;c jsonb;m uuid;j uuid;l uuid;ph text;h text;ok boo
  -- Browser evidence is private trusted output, bound to the actual deployment,
  -- approved contract and immutable code; deployment status alone is insufficient.
  begin
-  update work_projects set verified_sha=repeat('c',40),phase='browser_check',active_mission_id=null,lease=null,lease_until=null,preview=jsonb_build_object('url','https://pilot.vercel.app/pilot','headSha',repeat('c',40),'deploymentId',1,'statusId',2) where id=(p->>'id')::uuid;
+  update work_projects set verified_sha=repeat('c',40),phase='browser_check',active_mission_id=null,lease=null,lease_until=null,preview=jsonb_build_object('immutable',true,'url','https://pilot.vercel.app/pilot','headSha',repeat('c',40),'deploymentId',1,'statusId',2) where id=(p->>'id')::uuid;
   p:=claim_work_project();
   c:=jsonb_build_object('version',1,'projectId',p->>'id','headSha',repeat('c',40),'deploymentId',1,'statusId',2,'url','https://pilot.vercel.app/pilot','passed',true,'contractHash',encode(sha256(convert_to(project_canonical(p->'spec'->'finalContract'),'UTF8')),'hex'),'checks',jsonb_build_array(jsonb_build_object('name','move','passed',true,'detail','Rendered application state fixture')));
   foreach q in array array[c||'{"passed":false}'::jsonb,c||jsonb_build_object('headSha',repeat('d',40)),c||'{"deploymentId":9}'::jsonb,c||'{"url":"https://wrong.vercel.app/pilot"}'::jsonb,c||'{"checks":[]}'::jsonb] loop

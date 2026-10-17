@@ -50,7 +50,12 @@ export async function handleProjectChat(input: {
             return reply(p, p.status === 'awaiting_approval' ? await projectRpc<string>('project_scope_proposal', {p_id:p.id}) : p.result ?? `${p.detail ?? p.status}\nCurrent phase: ${p.phase}. Coding jobs used: ${p.cycles}/${p.max_cycles}. I have not marked this project complete.`);
         const latestAssistant = [...history].reverse().find(m => m.role === 'assistant');
         const explicit = /^approve(?: this| the)? project\s+([a-f0-9]{12,64})[.!\s]*$/i.exec(text);
-        const contextual = /^(?:yes[,\s]*)?(?:approve(?: (?:this |the )?project)?|go ahead|do (?:it|that|this)|proceed)[.!\s]*$/i.test(text) && latestAssistant?.content.includes(p.approval_hash ?? 'NO_APPROVAL') && p.status === 'awaiting_approval';
+        const bareApproval=/^(?:yes[,\s]*)?(?:approve(?: (?:this |the )?project)?|go ahead|do (?:it|that|this)|proceed)[.!\s]*$/i.test(text);
+        let contextual=false;
+        if(bareApproval&&p.status==='awaiting_approval'&&p.approval_hash&&latestAssistant?.content.includes('<!-- katie-project-approval:'+p.approval_hash+' -->')){
+            const saved=await projectRpc<string>('project_scope_proposal',{p_id:p.id});
+            contextual=latestAssistant.content===projectMessage(p.id,p.status,saved);
+        }
         if (explicit || contextual) {
             if (p.status !== 'awaiting_approval' || !p.approval_hash || explicit?.[1] && !p.approval_hash.startsWith(explicit[1]))
                 return reply(p, 'That approval does not match a pending saved scope. Ask for project status to inspect the current proposal.');
