@@ -1,7 +1,8 @@
 import OpenAI from 'openai';
+import { zodTextFormat } from 'openai/helpers/zod';
 import { randomUUID } from 'node:crypto';
 import { rpc } from './store';
-import { calculate,type Claim } from './types';
+import { calculate,planSchema,type Claim } from './types';
 const WORKER_MODEL='gpt-5-mini';
 const REVIEW_MODEL='gpt-5.4';
 
@@ -24,12 +25,19 @@ export async function missionModel(claim:Claim,instruction:string,input:string,t
  let text='';
  for(let turn=0;turn<(tools==='calculate'?2:1);turn++){
   const callId=randomUUID();
-  const request={model:selectedModel,reasoning:{effort:'low'},instructions:instruction,input:context,max_output_tokens:outputTokens,store:false,
+  const calculatorPhase=tools!=='calculate'?'':turn===0?'\nThe calculator is available for this turn only. Request all useful independent calculations together, at most eight tool calls, then finish the entire assignment using their results.':'\nThe calculator phase is finished. Return the COMPLETE assigned analysis as explanatory prose and tables using the tool results. No tools remain. Do not emit tool arguments or a request for another calculation as your answer.';
+  const request={model:selectedModel,reasoning:{effort:'low'},instructions:instruction+calculatorPhase,input:context,max_output_tokens:outputTokens,store:false,
+   ...(claim.job.role==='plan'?{text:{format:zodTextFormat(planSchema,'mission_plan')}}:{}),
    ...(tools==='research'?{tools:[{type:'web_search',search_context_size:'low'}],tool_choice:'required',max_tool_calls:1}:tools==='calculate'&&turn===0?{tools:[calculator]}:{}),
   };
-  // UTF-8 bytes conservatively reserve visible input tokens. Native search has
-  // additional metering; reserve headroom and expose actual usage separately.
-  const reserve=Buffer.byteLength(JSON.stringify(request),'utf8')+outputTokens+(tools==='research'?8000:0);
+  // Count the complete input, including tools and review schemas, without an
+  // inference. Keep a conservative byte fallback if counting is unavailable.
+  const countInput:Record<string,unknown>={...request};
+  delete countInput.max_output_tokens;delete countInput.store;delete countInput.max_tool_calls;
+  const counted=await client.post<unknown,{input_tokens:number}>('/responses/input_tokens',{body:countInput,timeout:15_000}).catch(()=>null);
+  const inputTokens=counted&&Number.isSafeInteger(counted.input_tokens)&&counted.input_tokens>=0?counted.input_tokens+256:Buffer.byteLength(JSON.stringify(request),'utf8');
+  // Output includes reasoning; native search requires additional headroom.
+  const reserve=inputTokens+outputTokens+(tools==='research'?8000:0);
   if(!await rpc<boolean>('reserve_mission_call',{p_id:claim.job.id,p_lease:claim.job.lease,p_call:callId,p_model:selectedModel,p_tokens:reserve}))throw Error('Worker no longer authorized or mission allowance exhausted');
   try{
    const response=await client.responses.create(request as unknown as OpenAI.Responses.ResponseCreateParamsNonStreaming);
@@ -45,6 +53,10 @@ export async function missionModel(claim:Claim,instruction:string,input:string,t
     context=[...context,...output,...answers];continue;
    }
    if(!text)throw Error('Empty model result');
+   if(tools==='calculate'){
+    let value:unknown;try{value=JSON.parse(text);}catch{/* Prose is the expected final analysis. */}
+    if(value&&typeof value==='object'&&'operation' in value&&'values' in value)throw Error('Calculation returned tool arguments instead of the assigned analysis');
+   }
    if(tools==='research'&&!sources.length)throw Error('Research returned no cited live sources');
    return{text,sources,calculations,model:selectedModel};
   }catch(error){await rpc('finish_mission_call',{p_call:callId,p_tokens:null}).catch(()=>{});throw error;}
