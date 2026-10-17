@@ -77,13 +77,6 @@ export async function handleProjectChat(input: {
             if(!tracked)throw Error('Durable tracking is required for a project clarification');
             const n=await mutate('amend',{p_text:text});return reply(n,n.detail!);
         }
-        if (['awaiting_input', 'awaiting_approval'].includes(p.status) && !/^\s*(?:what|why|how|can|would|could|is|are)\b/i.test(text)) {
-            const repo = await repository(input.activeRepoId, text);
-            if (!tracked)
-                throw Error('Durable chat request tracking is required for project decisions');
-            const n = await mutate('answer', { p_text: text, p_repository: repo });
-            return reply(n, 'I saved that clarification and will update the project scope before coding.');
-        }
         if (start || follow)
             return reply(p, 'I am already managing a project in this chat. Ask for its status, pause or stop it, or start a separate chat for a different project.');
         return null;
