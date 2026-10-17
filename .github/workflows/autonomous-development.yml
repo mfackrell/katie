@@ -144,6 +144,7 @@ jobs:
     timeout-minutes: 35
     outputs:
       passed: ${{ steps.check.outputs.passed }}
+      head_sha: ${{ steps.check.outputs.head_sha }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -168,6 +169,7 @@ jobs:
           { npm run typecheck && npm run ci:gate; } > agent-test.log 2>&1
           rc=$?
           cat agent-test.log
+          echo "head_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
           if [ "$rc" -eq 0 ]; then echo 'passed=true' >> "$GITHUB_OUTPUT"; else echo 'passed=false' >> "$GITHUB_OUTPUT"; fi
           exit 0
       - uses: actions/upload-artifact@v4
@@ -181,6 +183,7 @@ jobs:
     timeout-minutes: 35
     outputs:
       verdict: ${{ steps.verdict.outputs.verdict }}
+      head_sha: ${{ steps.verdict.outputs.head_sha }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -215,6 +218,7 @@ jobs:
           set -euo pipefail
           jq -e '.verdict == "pass" or .verdict == "changes_requested"' agent-review.json >/dev/null
           echo "verdict=$(jq -r .verdict agent-review.json)" >> "$GITHUB_OUTPUT"
+          echo "head_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@v4
         with:
           name: agent-review
@@ -227,6 +231,7 @@ jobs:
     timeout-minutes: 60
     outputs:
       passed: ${{ steps.retest.outputs.passed }}
+      head_sha: ${{ steps.retest.outputs.head_sha }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -335,6 +340,7 @@ jobs:
           { npm run typecheck && npm run ci:gate; } > agent-retest.log 2>&1
           rc=$?
           cat agent-retest.log
+          echo "head_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
           if [ "$rc" -eq 0 ]; then echo 'passed=true' >> "$GITHUB_OUTPUT"; else echo 'passed=false' >> "$GITHUB_OUTPUT"; fi
           exit 0
       - uses: actions/upload-artifact@v4
@@ -349,6 +355,7 @@ jobs:
     timeout-minutes: 35
     outputs:
       verdict: ${{ steps.verdict.outputs.verdict }}
+      head_sha: ${{ steps.verdict.outputs.head_sha }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -381,6 +388,7 @@ jobs:
           set -euo pipefail
           jq -e '.verdict == "pass" or .verdict == "changes_requested"' agent-final-review.json >/dev/null
           echo "verdict=$(jq -r .verdict agent-final-review.json)" >> "$GITHUB_OUTPUT"
+          echo "head_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@v4
         with:
           name: agent-final-review
@@ -403,6 +411,10 @@ jobs:
           REPAIR: ${{ needs.repair.result }}
           RETEST: ${{ needs.repair.outputs.passed }}
           FINAL: ${{ needs.final-review.outputs.verdict }}
+          TEST_HEAD: ${{ needs.test.outputs.head_sha }}
+          REVIEW_HEAD: ${{ needs.review.outputs.head_sha }}
+          RETEST_HEAD: ${{ needs.repair.outputs.head_sha }}
+          FINAL_HEAD: ${{ needs.final-review.outputs.head_sha }}
         run: |
           set -euo pipefail
           outcome='BLOCKED — review or tests require further work'
@@ -410,6 +422,11 @@ jobs:
             outcome='READY — awaiting owner approval'
           elif [[ "$REPAIR" == 'success' && "$RETEST" == 'true' && "$FINAL" == 'pass' ]]; then
             outcome='READY — awaiting owner approval'
+          fi
+          tested_head="$TEST_HEAD"; reviewed_head="$REVIEW_HEAD"
+          if [[ "$REPAIR" == 'success' ]]; then tested_head="$RETEST_HEAD"; reviewed_head="$FINAL_HEAD"; fi
+          if [[ "$outcome" == READY* ]] && { [[ ! "$tested_head" =~ ^[a-f0-9]{40}$ ]] || [[ "$tested_head" != "$reviewed_head" ]]; }; then
+            outcome='BLOCKED — tested and reviewed commits differ or are unavailable'
           fi
           {
             echo "### Autonomous result: $outcome"
@@ -429,11 +446,14 @@ jobs:
             --arg issue "$ISSUE" --arg pr "$PR" --arg result "$event_outcome" \
             --arg build "$BUILD" --arg test "$TEST" --arg review "$REVIEW" \
             --arg repair "$REPAIR" --arg retest "$RETEST" --arg final "$FINAL" \
+            --arg tested_head "$tested_head" --arg reviewed_head "$reviewed_head" \
             '{
               version: 1, repository: $repo, run_id: ($run | tonumber),
               issue_number: ($issue | tonumber),
               pr_url: (if $pr == "" then null else $pr end),
               outcome: $result,
+              tested_head_sha: (if ($tested_head | test("^[a-f0-9]{40}$")) then $tested_head else null end),
+              reviewed_head_sha: (if ($reviewed_head | test("^[a-f0-9]{40}$")) then $reviewed_head else null end),
               checks: { build: $build, test: $test, review: $review,
                         repair: $repair, retest: $retest, final_review: $final }
             }' > "$RUNNER_TEMP/agent-result.json"
