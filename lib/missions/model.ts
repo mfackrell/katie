@@ -30,9 +30,13 @@ export async function missionModel(claim:Claim,instruction:string,input:string,t
    ...(claim.job.role==='plan'?{text:{format:zodTextFormat(planSchema,'mission_plan')}}:{}),
    ...(tools==='research'?{tools:[{type:'web_search',search_context_size:'low'}],tool_choice:'required',max_tool_calls:1}:tools==='calculate'&&turn===0?{tools:[calculator]}:{}),
   };
-  // UTF-8 bytes conservatively reserve visible input tokens. Native search has
-  // additional metering; reserve headroom and expose actual usage separately.
-  const reserve=Buffer.byteLength(JSON.stringify(request),'utf8')+outputTokens+(tools==='research'?8000:0);
+  // Count the complete input, including tools and review schemas, without an
+  // inference. Keep a conservative byte fallback if counting is unavailable.
+  const {max_output_tokens:_output,store:_store,max_tool_calls:_toolLimit,...countInput}=request as typeof request & {max_tool_calls?:number};
+  const counted=await client.post<unknown,{input_tokens:number}>('/responses/input_tokens',{body:countInput,timeout:15_000}).catch(()=>null);
+  const inputTokens=counted&&Number.isSafeInteger(counted.input_tokens)&&counted.input_tokens>=0?counted.input_tokens+256:Buffer.byteLength(JSON.stringify(request),'utf8');
+  // Output includes reasoning; native search requires additional headroom.
+  const reserve=inputTokens+outputTokens+(tools==='research'?8000:0);
   if(!await rpc<boolean>('reserve_mission_call',{p_id:claim.job.id,p_lease:claim.job.lease,p_call:callId,p_model:selectedModel,p_tokens:reserve}))throw Error('Worker no longer authorized or mission allowance exhausted');
   try{
    const response=await client.responses.create(request as unknown as OpenAI.Responses.ResponseCreateParamsNonStreaming);
