@@ -29,6 +29,9 @@ export type Project = {
     preview: {
         url: string;
         headSha: string;
+        deploymentId:number;
+        statusId:number;
+        browserAcceptance?:{passed:boolean;headSha:string;deploymentId:number;contractHash:string;url:string};
     } | null;
     milestone_index: number;
     cycles: number;

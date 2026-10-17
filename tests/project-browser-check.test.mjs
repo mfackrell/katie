@@ -86,3 +86,7 @@ test('isolated application route cannot contact a host-network service', { timeo
     await new Promise(done => external.close(done));
   }
 });
+
+test('only the exact injected Vercel toolbar script is excluded from deployed application failures, and is still aborted',async()=>{
+ const {platformToolbar}=await import('../scripts/project-browser-engine.mjs');const url='https://vercel.live/_next-live/feedback/feedback.js';assert.equal(platformToolbar(url,'script',true),true);for(const [u,t,d] of [[url,'script',false],[url,'fetch',true],['https://evil.test/_next-live/feedback/feedback.js','script',true],['https://vercel.live/other.js','script',true]])assert.equal(platformToolbar(u,t,d),false);
+});

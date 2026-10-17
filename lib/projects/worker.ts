@@ -1,3 +1,4 @@
+import {verifyDeployedPreview,PreviewAccessUnavailable} from '@/lib/projects/preview';
 import { Octokit } from '@octokit/rest';
 import { getSupabaseAdminClient } from '@/lib/data/supabase/admin';
 import { readMission } from '@/lib/missions/store';
@@ -95,6 +96,8 @@ async function advance(p: Project) {
             const live = await developmentPreview(await readTask(finalRun.outcome.taskId), acceptanceBinding(finalRun.binding));
             if (!live || live.headSha !== p.verified_sha) { await finish('wait', { detail: 'Final preview evidence is not currently verified; completion is withheld.' }); return; }
             const url = new URL(p.spec!.finalContract.path, live.url).href;
+            if(!p.preview?.browserAcceptance?.passed)throw Error('Actual deployed browser evidence is required before completion');
+            if(live.deploymentId!==p.preview.deploymentId||url!==p.preview.url){await finish('preview',{...live,url});return;}
             await finish('complete', { result: m.result + '\n\nVerified playable preview: ' + url, preview: { ...live, url }, verified_head: p.verified_sha });
             return;
         }
@@ -113,6 +116,17 @@ async function advance(p: Project) {
             return;
         }
         await finish('preview', { ...preview, url: new URL(p.spec!.finalContract.path, preview.url).href });
+        return;
+    }
+    if(p.phase==='browser_check'){
+        if(!p.preview||p.preview.headSha!==p.verified_sha)throw Error('Head-bound Preview candidate unavailable');
+        try{
+            const result=await verifyDeployedPreview(p.preview,p.spec!.finalContract,p.id);
+            if(result.passed){await finish('browser',result);return;}
+            const failures=result.checks.filter(c=>!c.passed).map(c=>c.name+': '+c.detail).join('\n');
+            const attempts=runs.filter(r=>r.kind==='development'&&r.milestone_index===p.spec!.milestones.length-1).length;
+            await finish(p.cycles<p.max_cycles&&attempts<2?'retry':'block',{detail:'Actual deployed browser acceptance failed. Repair the unmet original requirements: '+failures});
+        }catch(error){if(error instanceof PreviewAccessUnavailable){await finish('block',{detail:error.message});return;}throw error;}
         return;
     }
     const evidence = await milestoneEvidence(runs);

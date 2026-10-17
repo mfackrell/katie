@@ -9,8 +9,8 @@ export function startProjectIntent(text: string) {
  return !artifact && (direct||desire) && /\b(?:browser|website|web app|application|app|game|dashboard|portal|software|program|API)\b/i.test(text) && !/^.{0,80}\b(?:do not|don't|never|not asking you to)\s+(?:want to |you to )?(?:build|create|develop|make|implement|start)\b/i.test(text);
 }
 export const followupProjectIntent = (text: string) => /^(?:please\s+)?(?:build|make|create|implement|do|start)(?:\s+(?:that|it|this|the project))?[.!\s]*$/i.test(text.trim());
-const actionText = (text:string) => text.trim().replace(/^(?:actually|no|okay|ok)[,:]?\s+/i,'').replace(/^please\s+/i,'').replace(/^(?:can|could|would|will) (?:you|we)\s+(?:please\s+)?/i,'');
-const amendmentIntent = (text:string) => /^(?:add|change|amend|revise|update|include|remove|support|enable|use|make|retain|keep|preserve|ensure|require|avoid|prevent|fix|allow|stop)\b|^(?:also|actually|instead|one more thing|I (?:want|need|would like|would prefer))\b|^(?:what|how) about\b/i.test(actionText(text));
+const actionText = (text:string) => text.trim().replace(/^(?:actually|also|no|okay|ok)[,:]?\s+/i,'').replace(/^please\s+/i,'').replace(/^(?:can|could|would|will) (?:you|we)\s+(?:please\s+)?/i,'');
+const amendmentIntent = (text:string) => /^(?:add|change|amend|revise|update|include|remove|support|enable|use|make|retain|keep|preserve|ensure|require|avoid|prevent|fix|allow|stop)\b|^(?:also|actually|instead|one more thing|I (?:want|need|would like|would prefer))\b/i.test(actionText(text));
 function projectControl(text:string):'pause'|'stop'|'resume'|null {
  const t=actionText(text);if(/^(?:do not|don't) (?:continue|proceed|keep working|keep going|do (?:any )?more work|do (?:it|that|this))\b|^(?:hold off|hold on|wait)(?:\b|$)/i.test(t))return 'pause';const match=/^(pause|stop|cancel|halt|abort|quit|resume|continue)\b\s*(.*)$/i.exec(t);if(!match)return null;
  const tail=match[2].replace(/[.!?]+$/,'').trim().replace(/^(?:all|any|any more|all of the)\s+/i,'');
@@ -54,8 +54,10 @@ export async function handleProjectChat(input: {
             const selected=await repository(undefined,text);
             if(selected){if(!tracked)throw Error('Durable tracking is required for repository selection');const simple=/^(?:please )?(?:(?:use|connect|target)(?: the)?(?: repository| repo)? )?([-\w.]+\/[-\w.]+)[.!\s]*$/i.exec(text);const n=await mutate('answer',{p_repository:selected,p_text:simple?.[1]??text});return reply(n,'I saved the connected target repository and will prepare the current scope for approval.');}
         }
-        const projectReference=/\b(?:the|this|my) (?:game|app|website|project)\b|\b(?:edition|requirement|keyboard|multiplayer)\b/i.test(text);
-        if (amendmentIntent(text) || projectReference && !/^\s*(?:what|why|how|can|would|could|is|are)\b/i.test(text)) {
+        const topicWords=new Set((p.objective+' '+p.clarifications+' '+(p.spec?.requirements.join(' ')??'')).toLowerCase().match(/[a-z]{5,}/g)??[]);for(const common of ['build','browser','project','create','application','working','original','return','result','preview','complete','required','should','would','could','please','there','their','which','about','after','before'])topicWords.delete(common);
+        const related=(text.toLowerCase().match(/[a-z]{5,}/g)??[]).some(w=>topicWords.has(w));
+        const projectReference=related||/\b(?:the|this|my) (?:game|app|website|project)\b|\b(?:edition|requirement|keyboard|multiplayer|undo|button|controls?|localStorage|reload|persistence|interface|screen|layout|component|accessibility|opponent|rules?|turns?|pieces?|dark mode)\b|^(?:please )?(?:make|change|update|keep|retain|preserve|fix) (?:it|this|that)\b/i.test(actionText(text));
+        if (projectReference && (amendmentIntent(text) || /^(?:what|how) about\b/i.test(text) || !/^\s*(?:what|why|how|can|would|could|is|are)\b/i.test(text))) {
             if(!tracked)throw Error('Durable tracking is required for a project clarification');
             const n=await mutate('amend',{p_text:text});return reply(n,n.detail!);
         }

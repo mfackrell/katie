@@ -61,6 +61,20 @@ DO $$ declare p jsonb;q jsonb;c jsonb;m uuid;j uuid;l uuid;ph text;h text;ok boo
   if (select sum(reserved_tokens) from agent_missions)<>30000 then raise exception 'Amendment reset prior usage';end if;
   raise exception 'ROLLBACK_AMENDMENT_FIXTURE';
  exception when others then if SQLERRM<>'ROLLBACK_AMENDMENT_FIXTURE' then raise;end if;end;
+ -- Browser evidence is private trusted output, bound to the actual deployment,
+ -- approved contract and immutable code; deployment status alone is insufficient.
+ begin
+  update work_projects set verified_sha=repeat('c',40),phase='browser_check',active_mission_id=null,lease=null,lease_until=null,preview=jsonb_build_object('url','https://pilot.vercel.app/pilot','headSha',repeat('c',40),'deploymentId',1,'statusId',2) where id=(p->>'id')::uuid;
+  p:=claim_work_project();
+  c:=jsonb_build_object('version',1,'projectId',p->>'id','headSha',repeat('c',40),'deploymentId',1,'statusId',2,'url','https://pilot.vercel.app/pilot','passed',true,'contractHash',encode(sha256(convert_to(project_canonical(p->'spec'->'finalContract'),'UTF8')),'hex'),'checks',jsonb_build_array(jsonb_build_object('name','move','passed',true,'detail','Rendered application state fixture')));
+  foreach q in array array[c||'{"passed":false}'::jsonb,c||jsonb_build_object('headSha',repeat('d',40)),c||'{"deploymentId":9}'::jsonb,c||'{"url":"https://wrong.vercel.app/pilot"}'::jsonb,c||'{"checks":[]}'::jsonb] loop
+   begin perform finish_work_project((p->>'id')::uuid,(p->>'lease')::uuid,'browser',q);raise exception 'Expected deployment evidence rejection';exception when others then if SQLERRM='Expected deployment evidence rejection' then raise;end if;end;
+  end loop;
+  ok:=finish_work_project((p->>'id')::uuid,(p->>'lease')::uuid,'browser',c);
+  if not ok or (select phase from work_projects where id=(p->>'id')::uuid)<>'assessment' then raise exception 'Valid deployment-bound browser result was not retained';end if;
+  p:=claim_work_project();begin perform finish_work_project((p->>'id')::uuid,(p->>'lease')::uuid,'complete','{"result":"Unassessed browser result"}');raise exception 'Expected independent assessment rejection';exception when others then if SQLERRM='Expected independent assessment rejection' then raise;end if;end;
+  raise exception 'ROLLBACK_BROWSER_FIXTURE';
+ exception when others then if SQLERRM<>'ROLLBACK_BROWSER_FIXTURE' then raise;end if;end;
  -- The coding claim is retained for concurrent reservations in the host test.
  if j is null then raise exception 'Coding assignment not claimed';end if;
 end $$;

@@ -3,95 +3,12 @@ import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { createServer } from 'node:net';
-import { chromium as playwright } from 'playwright-core';
-import chromium from '@sparticuz/chromium';
+import {runScenarios} from './project-browser-engine.mjs';
+export {localRequestAllowed,runScenarios} from './project-browser-engine.mjs';
 import {sandboxArgs} from './project-sandbox.mjs';
-import { parseProjectContext, validateContract } from './project-context.mjs';
+import { parseProjectContext } from './project-context.mjs';
 
 const TOTAL_MS = 150_000;
-export function localRequestAllowed(raw, origin, method = 'GET') {
-  try {
-    const url = new URL(raw);
-    return url.origin === origin && !url.username && !url.password && ['http:'].includes(url.protocol) && ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'].includes(method);
-  } catch { return false; }
-}
-export async function runScenarios(contract, origin, { executablePath, timeout = TOTAL_MS - 15_000 } = {}) {
-  validateContract(contract);
-  const parsed = new URL(origin);
-  if (parsed.hostname !== '127.0.0.1' || parsed.protocol !== 'http:' || parsed.pathname !== '/' || parsed.search || parsed.hash || parsed.username || parsed.password) throw Error('Local browser origin required');
-  let browser, timer;
-  const checks = [];
-  const deadline = Date.now() + timeout;
-  try {
-    browser = await playwright.launch({ executablePath: executablePath ?? await chromium.executablePath(), args: chromium.args, headless: true, timeout: Math.min(20_000, timeout) });
-    timer = setTimeout(() => { void browser.close().catch(() => {}); }, Math.max(1, deadline - Date.now()));
-    const context = await browser.newContext({ serviceWorkers: 'block', acceptDownloads: false });
-    let denied = [];
-    await context.route('**/*', async route => {
-      const request = route.request();
-      if (!localRequestAllowed(request.url(), origin, request.method())) {
-        denied.push('External or unsupported request blocked');
-        await route.abort('blockedbyclient');
-      } else {
-        // continue() lets Chromium follow redirects without another route hook.
-        // Fetch one hop in Playwright, then fulfill it so the browser's next
-        // request is independently checked before any bytes leave the process.
-        try {
-          const response = await route.fetch({ maxRedirects: 0, timeout: Math.max(1, Math.min(10_000, deadline - Date.now())) });
-          const location = response.headers().location;
-          if (location && response.status() >= 300 && response.status() < 400 &&
-              !localRequestAllowed(new URL(location, request.url()).href, origin, request.method())) {
-            denied.push('External redirect blocked');
-            await route.abort('blockedbyclient');
-          } else await route.fulfill({ response });
-        } catch {
-          denied.push('Local request failed');
-          await route.abort('failed').catch(() => {});
-        }
-      }
-    });
-    // WebSockets are unnecessary for acceptance and could bypass HTTP routing.
-    await context.routeWebSocket('**/*', socket => { denied.push('WebSocket blocked'); socket.close(); });
-    for (const scenario of contract.scenarios) {
-      denied = [];
-      const page = await context.newPage();
-      page.on('popup', popup => { denied.push('Unexpected popup blocked'); void popup.close(); });
-      page.on('download', download => { denied.push('Unexpected download blocked'); void download.cancel(); });
-      const stepTimeout = () => Math.max(1, Math.min(10_000, deadline - Date.now()));
-      let assertions = 0;
-      try {
-        await page.goto(origin + contract.path, { waitUntil: 'domcontentloaded', timeout: stepTimeout() });
-        for (const step of scenario.steps) {
-          if (Date.now() >= deadline) throw Error('Total browser deadline exceeded');
-          if (step.action === 'goto') await page.goto(origin + step.path, { waitUntil: 'domcontentloaded', timeout: stepTimeout() });
-          else {
-            const target = page.locator(step.selector);
-            if (step.action === 'click') await target.click({ timeout: stepTimeout() });
-            if (step.action === 'fill') await target.fill(step.value, { timeout: stepTimeout() });
-            if (step.action === 'expectVisible' || step.action === 'expectText') {
-              await target.waitFor({ state: 'visible', timeout: stepTimeout() });
-              if (step.action === 'expectText') {
-                // Retry actual rendered text without executing model-supplied JS.
-                const until = Date.now() + stepTimeout();
-                while ((await target.innerText({ timeout: stepTimeout() })).trim() !== step.value && Date.now() < until) await new Promise(r => setTimeout(r, 50));
-                if ((await target.innerText({ timeout: stepTimeout() })).trim() !== step.value) throw Error('Rendered text does not equal approved expected value');
-              }
-              assertions++;
-            }
-          }
-          if (!localRequestAllowed(page.url(), origin)) throw Error('Navigation escaped local origin');
-        }
-        if (!assertions || denied.length) throw Error(denied[0] ?? 'No assertions executed');
-        checks.push({ name: scenario.name, passed: true, detail: `${assertions} rendered application assertion(s) passed` });
-      } catch (error) { checks.push({ name: scenario.name, passed: false, detail: String(error.message).slice(0, 600) }); }
-      finally { await page.close().catch(() => {}); }
-    }
-  } finally {
-    clearTimeout(timer);
-    await browser?.close().catch(() => {});
-  }
-  return checks;
-}
 async function assertPortFree(port) {
   const server = createServer();
   await new Promise((done, reject) => { server.once('error', reject); server.listen(port, '127.0.0.1', done); });
