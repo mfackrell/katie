@@ -1,6 +1,7 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
+import { MissionsPanel } from "@/components/missions-panel";
 import type { AgentConfig, AgentTask, ManagedAgent } from "@/lib/agents/policy";
 
 type TaskView = AgentTask & { output?: string | null; review?: unknown; progress?: unknown };
@@ -114,7 +115,8 @@ export default function AgentsPage() {
       <header className="flex flex-wrap items-center justify-between gap-3"><div><h1 className="text-2xl font-semibold">Agents</h1><p className="text-sm text-zinc-400">Reusable isolated identities, saved task instructions, and reviewed results.</p></div><Link className={button} href="/">Chat workspace</Link></header>
       {error && <p role="alert" className="rounded-lg border border-red-400/40 p-3 text-red-200">{error}</p>}
       {loading ? <p role="status">Loading agents and tasks…</p> : <>
-        <div className="grid gap-6 lg:grid-cols-2">
+        <MissionsPanel agents={agents} repos={repos} />
+      <div className="grid gap-6 lg:grid-cols-2">
           <section className="space-y-4 rounded-xl border border-white/10 p-4" aria-labelledby="definitions-title"><h2 id="definitions-title" className="text-lg">Saved agents</h2>
             {!agents.length && <p>No managed agents yet. Existing actors remain in the chat workspace.</p>}
             <ul className="space-y-2">{agents.map(agent => <li key={agent.id} className="flex flex-wrap items-center gap-2"><span className="mr-auto">{agent.config.name} {agent.archived ? "(archived)" : `· version ${agent.version}`}</span><button className={button} disabled={busy || agent.archived} onClick={() => { setEditing(agent.id); setConfig(agent.config); }}>Edit {agent.config.name}</button><button className={button} disabled={busy || agent.archived} onClick={() => void work(async () => { await api("/api/agents", { id: agent.id, config: agent.config, archive: true }); await load(); })}>Archive {agent.config.name}</button></li>)}</ul>

@@ -31,7 +31,7 @@ export type ReviewAudit = {
 // Leave room for contract repair and validation of the actual final answer.
 export const REQUIRED_REVIEW_RESERVE_MS = 360_000;
 const MAX_CONTRACT_REJECTIONS = 2;
-const ASSESSMENT_INSTRUCTION = [
+export const ASSESSMENT_INSTRUCTION = [
   "KATIE_INDEPENDENT_ASSESSMENT",
   "There are TWO distinct tasks: your internal task is to return assessment JSON; the END USER task is the deliverable requested in the authoritative user turns. Every objective, qualification, criterion and taskContract field must describe the END USER task. Never substitute your internal review assignment for their task. For example, if the user requested finished prose, its acceptance criteria must assess finished prose even though you return JSON here.",
   CONTRACT_RULES,
@@ -55,7 +55,7 @@ const CONTRACT_VALIDATION_INSTRUCTION = [
   "Independently validate the proposed definition of success against EVERY supplied user turn and the actor instructions. Neither a draft nor earlier assistant opinions are supplied. Check for omitted requirements of the active deliverable (not every background-document detail), false supersession, unresolved contradictions, incorrect objective, inadequate evidence synthesis or internal review rules leaking into final-answer criteria. Do not rubber-stamp the proposed assessment or produce the user's answer.",
   'Return JSON only: {"verdict":"approve or revise", "findings":"concise material corrections or approval, at most 250 words; do not demand irrelevant background details", "issueType":"wrong_active_deliverable|missing_explicit_requirement|factual_conflict|missing_essential_evidence|optional_improvement|none", "sourceCoverage":[{"sourceId":"each supplied user turn ID exactly once", "finding":"what this turn requires, changes, confirms or does not affect"}]}. Approve only if the contract faithfully captures the task and the criteria would establish an effective, accurate deliverable.',
 ].join("\n");
-const REVIEW_INSTRUCTION = [
+export const REVIEW_INSTRUCTION = [
   "KATIE_REQUIRED_DRAFT_REVIEW",
   CONTRACT_RULES,
   getReviewerCompletionInstruction(false),
