@@ -1,7 +1,8 @@
 import OpenAI from 'openai';
+import { zodTextFormat } from 'openai/helpers/zod';
 import { randomUUID } from 'node:crypto';
 import { rpc } from './store';
-import { calculate,type Claim } from './types';
+import { calculate,planSchema,type Claim } from './types';
 const WORKER_MODEL='gpt-5-mini';
 const REVIEW_MODEL='gpt-5.4';
 
@@ -25,6 +26,7 @@ export async function missionModel(claim:Claim,instruction:string,input:string,t
  for(let turn=0;turn<(tools==='calculate'?2:1);turn++){
   const callId=randomUUID();
   const request={model:selectedModel,reasoning:{effort:'low'},instructions:instruction,input:context,max_output_tokens:outputTokens,store:false,
+   ...(claim.job.role==='plan'?{text:{format:zodTextFormat(planSchema,'mission_plan')}}:{}),
    ...(tools==='research'?{tools:[{type:'web_search',search_context_size:'low'}],tool_choice:'required',max_tool_calls:1}:tools==='calculate'&&turn===0?{tools:[calculator]}:{}),
   };
   // UTF-8 bytes conservatively reserve visible input tokens. Native search has
