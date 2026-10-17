@@ -30,9 +30,9 @@ export async function missionModel(claim:Claim,instruction:string,input:string,t
   const callId=randomUUID();
   const calculatorAvailable=tools==='calculate'&&turn<3&&calculations.length<8;
   const calculatorPhase=tools!=='calculate'?'':'\nUse the calculator whenever the assignment needs arithmetic; for qualitative analysis without arithmetic, return the complete analysis directly without a tool call. Return the COMPLETE assigned analysis as explanatory prose and tables when ready. Do not emit tool arguments as your final answer. '+(calculatorAvailable?`Request useful independent calculations together. At most ${8-calculations.length} additional calculator calls are available across ${3-turn} remaining tool turns; finish as soon as you have the needed results.`:'The calculator phase is finished. No tools remain; finish using the returned results and state any remaining limitation.');
-  const request={model:selectedModel,reasoning:{effort:'low'},instructions:instruction+calculatorPhase+(tools==='research'?'\nUse live web search for this assignment and cite consulted primary pages with native inline URL citations. Return source-supported findings and explicitly identify gaps; do not substitute remembered URLs or claim uncited research.':''),input:context,max_output_tokens:outputTokens,store:false,
+  const request={model:selectedModel,reasoning:{effort:'low'},instructions:instruction+calculatorPhase+(tools==='research'?'\nUse live web search for this assignment and cite consulted primary pages with native inline URL citations. Use at most four native web calls. If the first query returns no results, broaden the query before concluding that research is unavailable. Return source-supported findings and explicitly identify gaps; do not substitute remembered URLs or claim uncited research.':''),input:context,max_output_tokens:outputTokens,store:false,
    ...(claim.job.role==='plan'?{text:{format:zodTextFormat(planSchema,'mission_plan')}}:{}),
-   ...(tools==='research'?{tools:[{type:'web_search',search_context_size:'low'}],include:['web_search_call.action.sources'],tool_choice:'required',max_tool_calls:1}:calculatorAvailable?{tools:[calculator],tool_choice:'auto'}:{}),
+   ...(tools==='research'?{tools:[{type:'web_search',search_context_size:'low'}],include:['web_search_call.action.sources'],tool_choice:'required',max_tool_calls:4}:calculatorAvailable?{tools:[calculator],tool_choice:'auto'}:{}),
   };
   // Count the complete input, including tools and review schemas, without an
   // inference. Keep a conservative byte fallback if counting is unavailable.
@@ -41,7 +41,7 @@ export async function missionModel(claim:Claim,instruction:string,input:string,t
   const counted=await client.post<unknown,{input_tokens:number}>('/responses/input_tokens',{body:countInput,timeout:15_000}).catch(()=>null);
   const inputTokens=counted&&Number.isSafeInteger(counted.input_tokens)&&counted.input_tokens>=0?counted.input_tokens+256:Buffer.byteLength(JSON.stringify(request),'utf8');
   // Output includes reasoning; native search requires additional headroom.
-  const reserve=inputTokens+outputTokens+(tools==='research'?8000:0);
+  const reserve=inputTokens+outputTokens+(tools==='research'?32000:0);
   const inferenceTimeout=tools==='calculate'?Math.min(90_000,calculationDeadline-Date.now()-5000):90_000;
   if(inferenceTimeout<1000)throw Error('Calculation execution time allowance exhausted');
   if(!await rpc<boolean>('reserve_mission_call',{p_id:claim.job.id,p_lease:claim.job.lease,p_call:callId,p_model:selectedModel,p_tokens:reserve}))throw Error('Worker no longer authorized or mission allowance exhausted');
