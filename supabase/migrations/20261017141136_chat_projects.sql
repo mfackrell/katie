@@ -28,7 +28,7 @@ create function public.project_canonical(v jsonb) returns text language plpgsql 
 create function public.project_publish(p_id uuid,p_text text) returns void language plpgsql security invoker set search_path=public as $$ declare p work_projects;mid uuid;begin
  select * into strict p from work_projects where id=p_id;mid:=md5(p.id::text||':project-progress')::uuid;
  insert into messages(id,actor_id,chat_id,role,content,created_at) values(mid,p.actor_id,p.chat_id,'assistant','<!-- katie-project-status:'||p.id||':'||p.status||' -->'||E'\n\n'||p_text,now())
- on conflict(id) do update set content=excluded.content;
+ on conflict(id) do update set content=excluded.content,created_at=excluded.created_at;
  update chats set updated_at=now() where id=p.chat_id;
 end $$;
 create function public.create_work_project(p_id uuid,p_request text,p_actor uuid,p_chat uuid,p_objective text,p_repository uuid default null) returns jsonb language plpgsql security invoker set search_path=public as $$ declare p work_projects;role_name text;config jsonb;a jsonb;ids uuid[]:='{}';aid uuid;begin
