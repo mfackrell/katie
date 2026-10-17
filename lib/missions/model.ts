@@ -7,6 +7,7 @@ const WORKER_MODEL='gpt-5-mini';
 const REVIEW_MODEL='gpt-5.4';
 
 const calculator={type:'function',name:'calculate',description:'Execute a deterministic arithmetic calculation. Numbers must come from supplied evidence or explicitly labeled assumptions.',strict:true,parameters:{type:'object',properties:{operation:{type:'string',enum:['add','subtract','multiply','divide','power']},values:{type:'array',items:{type:'number'},minItems:2,maxItems:12}},required:['operation','values'],additionalProperties:false}};
+export class MissionModelFailure extends Error { constructor(message:string,readonly partial:Record<string,unknown>){super(message);this.name='MissionModelFailure';} }
 export type ModelResult={text:string;sources:Array<{url:string;title:string}>;calculations:unknown[];model:string};
 // A bounded execution adapter uses the existing OpenAI credential/SDK. Ordinary
 // chat adapters remain unchanged; their unbounded continuation defaults cannot
@@ -31,7 +32,7 @@ export async function missionModel(claim:Claim,instruction:string,input:string,t
   const calculatorPhase=tools!=='calculate'?'':'\nUse the calculator whenever the assignment needs arithmetic; for qualitative analysis without arithmetic, return the complete analysis directly without a tool call. Return the COMPLETE assigned analysis as explanatory prose and tables when ready. Do not emit tool arguments as your final answer. '+(calculatorAvailable?`Request useful independent calculations together. At most ${8-calculations.length} additional calculator calls are available across ${3-turn} remaining tool turns; finish as soon as you have the needed results.`:'The calculator phase is finished. No tools remain; finish using the returned results and state any remaining limitation.');
   const request={model:selectedModel,reasoning:{effort:'low'},instructions:instruction+calculatorPhase+(tools==='research'?'\nUse live web search for this assignment and cite consulted primary pages with native inline URL citations. Return source-supported findings and explicitly identify gaps; do not substitute remembered URLs or claim uncited research.':''),input:context,max_output_tokens:outputTokens,store:false,
    ...(claim.job.role==='plan'?{text:{format:zodTextFormat(planSchema,'mission_plan')}}:{}),
-   ...(tools==='research'?{tools:[{type:'web_search',search_context_size:'low'}],tool_choice:'required',max_tool_calls:1}:calculatorAvailable?{tools:[calculator],tool_choice:'auto'}:{}),
+   ...(tools==='research'?{tools:[{type:'web_search',search_context_size:'low'}],include:['web_search_call.action.sources'],tool_choice:'required',max_tool_calls:1}:calculatorAvailable?{tools:[calculator],tool_choice:'auto'}:{}),
   };
   // Count the complete input, including tools and review schemas, without an
   // inference. Keep a conservative byte fallback if counting is unavailable.
@@ -63,7 +64,19 @@ export async function missionModel(claim:Claim,instruction:string,input:string,t
     let value:unknown;try{value=JSON.parse(text);}catch{/* Prose is the expected final analysis. */}
     if(value&&typeof value==='object'&&'operation' in value&&'values' in value)throw Error('Calculation returned tool arguments instead of the assigned analysis');
    }
-   if(tools==='research'&&!sources.length)throw Error('Research returned no cited live sources (output items: '+output.map(item=>String(item.type)).join(', ')+')');
+   if(tools==='research'){
+    // Some Responses-compatible transports return explicit Markdown links but
+    // omit inline annotations. Accept those only when the native search output
+    // independently records the same URL as consulted, never from text alone.
+    const linked=new Set(Array.from(text.matchAll(/\]\((https?:\/\/[^\s)]+)\)/g),m=>m[1]));
+    const consulted=new Set<string>();
+    for(const item of output){if(item.type!=='web_search_call'||!item.action||typeof item.action!=='object')continue;const action=item.action as Record<string,unknown>;
+     if((action.type==='open_page'||action.type==='find_in_page')&&typeof action.url==='string')consulted.add(action.url);
+     for(const source of (Array.isArray(action.sources)?action.sources:[]) as Array<Record<string,unknown>>)if(source.type==='url'&&typeof source.url==='string')consulted.add(source.url);
+    }
+    for(const url of linked)if(consulted.has(url)&&!sources.some(s=>s.url===url))sources.push({url,title:''});
+    if(!sources.length)throw new MissionModelFailure('Research returned no cited live sources',{text,sources,calculations,model:selectedModel,consultedSources:[...consulted],outputTypes:output.map(item=>String(item.type))});
+   }
    return{text,sources,calculations,model:selectedModel};
   }catch(error){await rpc('finish_mission_call',{p_call:callId,p_tokens:null}).catch(()=>{});throw error;}
  }
