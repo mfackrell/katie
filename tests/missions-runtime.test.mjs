@@ -54,6 +54,7 @@ test('actual coordinator persists bounded assignments, draft-blind review and a 
  await executeClaim({mission:m,job:jobs[0]},model);assert.equal(jobs.length,5);
  for(const key of ['economics','market','compose','review']){const j=jobs.find(x=>x.job_key===key);j.status='running';await executeClaim({mission:m,job:j},model);}
  assert.equal(m.status,'completed');assert.equal(m.result,'Supported final recommendation');
+ assert.equal(jobs.find(x=>x.job_key==='review').result.detail,'Independent review approved the completed deliverable.');
  const review=calls.filter(x=>x.key==='review');assert.equal(review.length,2);assert.doesNotMatch(review[0].input,/Supported final recommendation/);assert.doesNotMatch(review[0].input,/A supported recommendation/,'Planner framing must not define independent criteria');assert.match(review[1].input,/Supported final recommendation/);
  assert.equal(calls.find(x=>x.key==='market').tools,'research');assert.equal(calls.find(x=>x.key==='economics').tools,'calculate');
  assert.doesNotMatch(calls.find(x=>x.key==='market').instruction,/KATIE_OBJECTIVE_FIRST_STANDARD/);assert.match(calls.find(x=>x.key==='market').instruction,/Complete only input.assignment/);assert.match(calls.find(x=>x.key==='compose').instruction,/KATIE_OBJECTIVE_FIRST_STANDARD/);assert.match(calls.find(x=>x.key==='compose').instruction,/ENTIRE response/);
