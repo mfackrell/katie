@@ -18,6 +18,17 @@ function projectControl(text:string):'pause'|'stop'|'resume'|null {
  if(!/resume|continue/i.test(match[1])){if(!directed)return null;return /pause/i.test(match[1])?'pause':'stop';}
  return directed?'resume':null;
 }
+export function referencedProjectBrief(history:Message[]):string|null {
+ const turns=history.map((m,index)=>({m,index})).filter(({m})=>m.role==='user'&&!followupProjectIntent(m.content)&&!projectControl(m.content)&&!/^(?:yes|no|ok(?:ay)?|thanks|thank you|proceed|go ahead|approved?)[.!\s]*$/i.test(m.content.trim()));
+ const anchors=turns.filter(({m})=>m.content.trim().length>0&&/\b(?:browser|website|web app|application|app|game|software|portal)\b/i.test(m.content)&&(startProjectIntent(m.content)||/\bI (?:want|need|would like)\b/i.test(m.content)&&!/^\s*I (?:want|need|would like)\s+(?:(?:a|an|the|project|technical|status)\s+)*(?:summary|report|explanation|overview|plan|tutorial|guide)\b/i.test(m.content)));
+ if(!anchors.length)return null;
+ const anchor=anchors[0];
+ for(const next of anchors.slice(1))if(!/^(?:for (?:the |this )?(?:browser )?(?:game|app|project|website)|also|and|one more thing)\b|\b(?:also|in addition|for (?:the|this|that) (?:game|app|project|website))\b|\b(?:the|this|that) (?:game|app|project|website)\s+(?:should|must|needs?|requires?)\b/i.test(next.m.content))return null;
+ const followups=turns.filter(t=>t.index>anchor.index);
+ if(!followups.length)return anchor.m.content;
+ const identity=(t:{m:Message;index:number})=>t.m.id??'user-turn-'+(t.index+1);
+ return 'ORIGINAL USER BRIEF ['+identity(anchor)+']:\n'+anchor.m.content+'\n\nSAVED USER FOLLOW-UPS (in conversation order; questions are context, not permission to expand this project):\n'+followups.map(t=>'USER MESSAGE ['+identity(t)+']:\n'+t.m.content).join('\n\n');
+}
 const marker = /<!-- katie-project-status:[a-f0-9-]+:([^ ]+) -->/;
 export async function handleProjectChat(input: {
     actorId: string;
@@ -81,10 +92,9 @@ export async function handleProjectChat(input: {
         throw Error('Durable chat request tracking is required before launching background projects');
     let objective = text;
     if (follow) {
-        const prior = [...history].reverse().find(m => m.role === 'user' && m.content.trim().length > 40 && /\b(?:browser|website|web app|app|application|game|project|portal)\b/i.test(m.content));
-        if (!prior)
-            return 'What outcome should I build? Describe the app or project you want delivered; I do not have an unambiguous saved user request to act on.';
-        objective = prior.content;
+        const brief=referencedProjectBrief(history);
+        if(!brief)return 'Which software project should I build? Describe or identify the original brief; multiple requests or missing requirements make “that” ambiguous. No background project was started.';
+        objective=brief;
     }
     if (objective.length > 8000)
         return 'Please narrow the project brief to 8,000 characters. I will not silently truncate its requirements.';
