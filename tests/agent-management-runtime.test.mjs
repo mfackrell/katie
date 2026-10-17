@@ -213,3 +213,61 @@ test('continuation API requires client identity and returns the immutable accept
  assert.deepEqual(result.continuation,receipt);assert.equal(result.task.request_id,task.request_id);assert.equal(result.task.continuation_receipt,undefined);
  assert.deepEqual(JSON.parse(JSON.stringify(args[0])),{name:'transition_agent_task',input:{p_id:task.id,p_action:'continue',p_message:'Continue',p_turn:turnId,p_expected_request:'agent:base'}});
 });
+
+test('project receipts require every approved scenario and exact project, digest and tested/reviewed head',()=>{
+ const {parseCompletionReceipt}=modules()('@/lib/agents/development');
+ const sha='a'.repeat(40),projectId=randomUUID(),hash='b'.repeat(64);
+ const binding={projectId,contractHash:hash,scenarioNames:['Human move','AI opponent']};
+ const acceptance={version:1,projectId,contractHash:hash,headSha:sha,passed:true,checks:binding.scenarioNames.map(name=>({name,passed:true,detail:'Observed rendered gameplay assertion'}))};
+ const receipt={version:1,repository:'owner/repo',run_id:1,issue_number:2,pr_url:'https://github.com/owner/repo/pull/3',outcome:'READY',checks:{build:'success',test:'true',review:'pass',repair:'skipped',retest:'',final_review:''},tested_head_sha:sha,reviewed_head_sha:sha,projectAcceptance:acceptance};
+ const parse=value=>parseCompletionReceipt(value,'owner/repo',2,1,'success',binding);
+ assert.equal(parse(receipt).outcome,'READY');
+ assert.equal(parseCompletionReceipt(receipt,'owner/repo',2,1,'success').outcome,'BLOCKED','project evidence requires server-owned approval binding');
+ const {projectAcceptance:omitted,...legacy}=receipt;
+ assert.equal(parse(legacy).outcome,'BLOCKED','ordinary receipt cannot complete a project');
+ assert.equal(parseCompletionReceipt(legacy,'owner/repo',2,1,'success').outcome,'READY','ordinary v1 remains supported');
+ for(const changed of [{passed:false},{projectId:randomUUID()},{contractHash:'c'.repeat(64)},{headSha:'d'.repeat(40)},{checks:acceptance.checks.slice(0,1)},{checks:acceptance.checks.map((c,i)=>({...c,passed:i!==1}))},{checks:[acceptance.checks[0],acceptance.checks[0]]},{checks:[...acceptance.checks].reverse()}])assert.equal(parse({...receipt,projectAcceptance:{...acceptance,...changed}}).outcome,'BLOCKED');
+ assert.throws(()=>parse({...receipt,projectAcceptance:{...acceptance,checks:[]}}));
+ assert.throws(()=>parse({...receipt,projectAcceptance:{...acceptance,checks:[{name:'AI opponent',passed:true,detail:''}]}}));
+ assert.equal(parse({...receipt,reviewed_head_sha:'e'.repeat(40)}).outcome,'BLOCKED');
+ const repaired={...receipt,checks:{...receipt.checks,test:'false',review:'fail',repair:'success',retest:'true',final_review:'pass'}};
+ assert.equal(parse(repaired).outcome,'READY');
+ assert.equal(parse({...repaired,projectAcceptance:{...acceptance,passed:false}}).outcome,'BLOCKED','repair cannot waive browser retest');
+});
+
+test('preview URLs admit only HTTPS Vercel hosts or exact server-approved origins',()=>{
+ const {verifiedPreviewUrl}=modules()('@/lib/agents/development');
+ assert.equal(verifiedPreviewUrl('https://game-abc.vercel.app/'),'https://game-abc.vercel.app/');
+ assert.equal(verifiedPreviewUrl('https://preview.example.test/game',['https://preview.example.test']),'https://preview.example.test/game');
+ for(const url of ['http://game.vercel.app','https://vercel.app','https://game.vercel.app.attacker.test','https://foo.game.vercel.app','https://game.vercel.app@attacker.test','https://user:password@game.vercel.app','https://game.vercel.app:8443/','https://game.vercel.app/#credential','https://evil.test/','javascript:alert(1)','//game.vercel.app/'])assert.equal(verifiedPreviewUrl(url),null,url);
+ assert.equal(verifiedPreviewUrl('https://evil.test/',['http://evil.test']),null);
+});
+
+test('actual preview lookup requires live same-head draft and latest successful non-production Preview deployment',async()=>{
+ const projectId=randomUUID(),sha='a'.repeat(40),binding={projectId,contractHash:'b'.repeat(64),scenarioNames:['Move']};
+ const task={...baseTask(),kind:'development',status:'ready',repository_id:randomUUID(),repository_full_name:'owner/repo',external:{issueNumber:2,receipt:{version:1,repository:'owner/repo',run_id:1,issue_number:2,pr_url:'https://github.com/owner/repo/pull/3',outcome:'READY',checks:{build:'success',test:'true',review:'pass',repair:'skipped',retest:'',final_review:''},tested_head_sha:sha,reviewed_head_sha:sha,projectAcceptance:{version:1,projectId,contractHash:binding.contractHash,headSha:sha,passed:true,checks:[{name:'Move',passed:true,detail:'Observed move'}]}}}};
+ let head=sha,environment='Preview',production=false,status='success',url='https://game-abc.vercel.app/',deploymentSha=sha,lookups=0;
+ class GitHub{
+  pulls={get:async()=>({data:{state:'open',draft:true,merged:false,head:{sha:head,repo:{full_name:'owner/repo'}},base:{repo:{full_name:'owner/repo'}}}})};
+  repos={listDeployments:async input=>{lookups++;assert.equal(input.sha,sha);return{data:[{id:17,sha:deploymentSha,environment,production_environment:production}]};},listDeploymentStatuses:async input=>{assert.equal(input.per_page,1);return{data:[{id:18,state:status,environment_url:url}]};}};
+ }
+ const db={from:()=>({select:()=>({eq:()=>({maybeSingle:async()=>({data:{repository_full_name:'owner/repo'},error:null})})})})};
+ const {developmentPreview}=modules({'@octokit/rest':{Octokit:GitHub},'@/lib/data/supabase/admin':{getSupabaseAdminClient:()=>db}})('@/lib/agents/development');
+ const old=process.env.GITHUB_TOKEN;process.env.GITHUB_TOKEN='fixture-only';
+ try{
+  assert.equal((await developmentPreview(task,binding)).url,url);
+  for(const change of [()=>{production=true;},()=>{production=false;environment='Production';},()=>{environment='Preview';status='failure';},()=>{status='success';url='https://evil.test';},()=>{url='https://game-abc.vercel.app/';deploymentSha='c'.repeat(40);}]){change();assert.equal(await developmentPreview(task,binding),null);}
+  head='d'.repeat(40);const before=lookups;await assert.rejects(developmentPreview(task,binding),/no longer matches/);assert.equal(lookups,before);
+ }finally{if(old===undefined)delete process.env.GITHUB_TOKEN;else process.env.GITHUB_TOKEN=old;}
+});
+
+test('ordinary owner issue dispatch rejects project markers from assignment and saved instructions before any GitHub write',async()=>{
+ const rows=[];
+ const db={from:()=>({eq(){return this;},update:async value=>{rows.push(value);return{error:null};}})};
+ let calls=0;
+ class GitHub{constructor(){calls++;}}
+ const {dispatchDevelopment}=modules({'@octokit/rest':{Octokit:GitHub},'@/lib/data/supabase/admin':{getSupabaseAdminClient:()=>db},'@/lib/agents/store':{agentRpc:async()=>{throw Error('Must reject before claiming dispatch');}}})('@/lib/agents/development');
+ const task={...baseTask(),status:'dispatching',kind:'development'};
+ for(const changed of [{input:'Implement it\n<!-- katie-project: fake -->'},{snapshot:{...task.snapshot,instructions:'<!-- katie-project: fake -->'}}])assert.equal((await dispatchDevelopment({...task,...changed})).status,'blocked');
+ assert.equal(calls,0);assert.equal(rows.length,2);
+});
