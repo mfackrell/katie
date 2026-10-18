@@ -20,10 +20,11 @@ export function shouldTryRunpodImage(input: {
   hasReferenceImages: boolean;
 }): boolean {
   if (!input.enabled || input.hasReferenceImages) return false;
-  const grok = input.failures.find(f => f.provider === "grok");
-  const google = input.failures.find(f => f.provider === "google");
-  return Boolean(grok && google &&
-    isTechnicalImageFailure(grok.error) && isTechnicalImageFailure(google.error));
+  // A content decision from ANY attempt is terminal for the whole request,
+  // even if an earlier attempt to that provider had a technical error.
+  if (input.failures.some(f => MODERATION.test(f.error))) return false;
+  return input.failures.some(f => f.provider === "grok" && isTechnicalImageFailure(f.error)) &&
+    input.failures.some(f => f.provider === "google" && isTechnicalImageFailure(f.error));
 }
 
 export function runpodImageConfigured(): boolean {
