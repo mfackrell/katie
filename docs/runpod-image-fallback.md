@@ -1,40 +1,31 @@
-# RunPod image-generation fallback (dual provider failures)
+# RunPod public image fallback
 
-Status: integration code is feature-gated. It cannot run until a **separate image-generation RunPod endpoint** is provisioned and verified. The existing RunPod Qwen video-analysis endpoint is NOT an image generator and must not be reused.
+## Status
+Integration uses RunPod's pre-deployed Public Endpoint for **FLUX.1 Schnell**. No additional GPU worker, custom Docker image, or `RUNPOD_IMAGE_ENDPOINT_ID` is required. Existing production `RUNPOD_API_KEY` enables the endpoint when the account has sufficient RunPod credits and permission to access Public Endpoints.
+
+Official contract: https://docs.runpod.io/public-endpoints/models/flux-schnell
 
 ## Routing
+Grok and Gemini remain primary image generators. Only after **both fail** does Katie attempt one RunPod image generation. The gate includes technical errors, invalid or empty generation results, and other non-policy failures. A success by Grok/Gemini stops fallback. Explicit content moderation or safety rejections are terminal, not rerouted. Requests requiring saved visual-identity references are excluded until the third model can reproduce those reference images.
 
-Katie uses Grok Imagine and Gemini for images as before. RunPod is selected **only if both have attempted the same request and both failed to generate** (timeouts, rate limiting, 5xx, invalid generation output and other non-policy errors). A success from either stops the chain. Any safety refusal, content moderation outcome, blocked request, or unsupported output is **never** eligible for RunPod rerouting. Image requests containing established face-reference images are currently excluded: dropping their identity bytes is not acceptable.
+Existing Qwen RunPod video analysis is separate and unchanged.
 
-## Endpoint contract
-
-A separately provisioned RunPod Serverless image worker must accept:
-
+## Public endpoint contract
+`POST https://api.runpod.ai/v2/black-forest-labs-flux-1-schnell/runsync`
 ```json
-{"input":{"prompt":"a non-sensitive image description"}}
+{"input":{"prompt":"A lighthouse on a rocky beach","width":1024,"height":1024}}
 ```
+RunPod replies `{"status":"COMPLETED","output":{"image_url":"https://image.runpod.ai/...","cost":...}}` on success.
 
-and return its full image directly, matching RunPod's synchronous `/runsync` wrapper:
+The returned URL expires in seven days. Katie downloads the bytes immediately **only** from the HTTPS host `image.runpod.ai`, refuses redirects, limits downloaded bytes to 12 MiB, checks PNG/JPEG/WebP signatures, and persists a private inline image asset for future conversation use.
 
-```json
-{"status":"COMPLETED","output":{"images":[{"type":"base64","data":"<base64 PNG/JPEG/WebP>"}]}}
-```
+This endpoint is usage-billed; the documented estimate for 1024×1024 FLUX Schnell is approximately $0.0025 per successful image as of October 2026. An account with insufficient credits or restricted API key access will receive a bounded error.
 
-The client validates the returned image signature and max size (12 MiB), allows no remote image URLs or arbitrary hosts, and aborts on non-COMPLETED jobs. This is a specific worker contract, NOT a universal contract for every RunPod model. Default ComfyUI serverless workers often require an explicit workflow instead of a bare prompt; do not point this adapter at an unmodified ComfyUI endpoint without validating the input contract.
-
-## Activation
-
-- Existing secret `RUNPOD_API_KEY`: already used for video analysis; do not expose or duplicate its value.
-- New production setting `RUNPOD_IMAGE_ENDPOINT_ID`: ID of the **tested image-generation worker**, not the Qwen video-analysis endpoint.
-
-Do not activate without an image worker that actually implements this request and response contract and a live non-sensitive image smoke test. Do not merge based on mock tests alone. If the endpoint can accept visual identity references in the future, add an explicit separately tested image-reference contract before enabling those requests.
-
-## Verification required
-
-1. Grok success -> no Gemini/RunPod.
-2. Grok technical failure + Gemini success -> no RunPod.
-3. Grok generation failure + Gemini generation failure -> one RunPod attempt, including non-policy terminal errors.
-4. Either provider safety/content refusal -> no RunPod attempt.
-5. No configured endpoint -> preexisting routing only.
-6. Endpoint errors/incorrect output return a bounded error; no untrusted URL fetch.
-7. Production smoke with actual deployed image worker and release build, before enabling.
+## Release checks
+- RunPod is attempted only after Grok and Gemini both fail to generate.
+- Explicit policy and content rejections never reroute.
+- RunPod image response is validated and persisted (not a seven-day remote link).
+- No SSRF via arbitrary image URLs and no RunPod key sent with CDN downloads.
+- Current environment must have `RUNPOD_API_KEY`.
+- Typecheck, test suite, production build, and preview deployment must be green.
+- A live, non-sensitive fallback smoke is required to claim confirmed provider success.
