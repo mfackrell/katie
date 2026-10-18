@@ -109,3 +109,20 @@ test('short clarification choices bind to the persisted current question without
 test('resume recovers only an eligible saved review and otherwise retains the existing blocked-child rule',async()=>{for(const eligible of [true,false]){const calls=[],p={...owner,status:'blocked'};const {handleProjectChat}=modules({'@/lib/projects/store':{projectForChat:async()=>p,projectRpc:async(n,a)=>{calls.push({n,a});if(n==='retry_project_review')return eligible?{...p,status:'running',detail:'Strict review retry; prior charges retained.'}:null;throw Error('Blocked child still requires a revised scope');}}})('@/lib/projects/chat');if(eligible){assert.match(await handleProjectChat({actorId:actor,chatId:chat,message:'Resume the project'},'review-resume',[],true),/prior charges retained/);assert.equal(calls.length,1);assert.equal(calls[0].n,'retry_project_review');assert.equal(calls[0].a.p_actor,actor);assert.equal(calls[0].a.p_chat,chat);assert.equal(calls[0].a.p_id,id);}else{await assert.rejects(handleProjectChat({actorId:actor,chatId:chat,message:'Resume the project'},'substantive-block',[],true),/Blocked child/);assert.equal(calls[1].n,'control_work_project');assert.equal(calls[1].a.p_action,'resume');}}});
 
 test('failed assessment coordination cannot silently spend another native coding cycle',async()=>{for(const role of ['compose','review']){const f=coordinator(),mid=randomUUID();f.p.phase='assessment';f.p.active_mission_id=mid;f.runs.push({mission_id:mid,kind:'assessment',ordinal:1,milestone_index:1,binding:null,outcome:null});f.missions.set(mid,{mission:{id:mid,status:'blocked',detail:'Invalid review contract'},jobs:[{role,status:'failed',result:{detail:'Invalid task conflict provenance'}}]});await f.tick();assert.equal(f.p.status,'blocked');assert.equal(f.calls.at(-1).p_action,'block');assert.match(f.calls.at(-1).p_data.detail,/not evidence that the implementation needs another coding job/);assert.equal(f.p.cycles,0);}});
+
+
+test('explicit non-scope note preserves the active project and does not issue an amendment',async()=>{
+ const calls=[];
+ const live={...owner,status:'running',phase:'research',active_mission_id:randomUUID()};
+ const {handleProjectChat}=modules({'@/lib/projects/store':{
+  projectForChat:async()=>live,
+  projectRpc:async(name,args)=>{calls.push({name,args});return live;}
+ }})('@/lib/projects/chat');
+ const history=[{role:'assistant',content:'<!-- katie-project-status:'+live.id+':running -->\\nResearching the existing project.'}];
+ const reply=await handleProjectChat({actorId:actor,chatId:chat,message:'project note: Please update me after the next milestone'},'note-request',history,true);
+ assert.match(reply,/Existing requirements, approved work and active execution are unchanged/);
+ assert.equal(calls.length,1);
+ assert.equal(calls[0].name,'control_work_project');
+ assert.equal(calls[0].args.p_action,'note');
+ assert.equal(calls[0].args.p_text,'Please update me after the next milestone');
+});
