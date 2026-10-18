@@ -2,9 +2,11 @@
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { MissionsPanel } from "@/components/missions-panel";
+import { ProjectApprovalCard, type ProjectApproval } from "@/components/project-approval-card";
 import type { AgentConfig, AgentTask, ManagedAgent } from "@/lib/agents/policy";
 
 type TaskView = AgentTask & { output?: string | null; review?: unknown; progress?: unknown };
+type ProjectSummary = { id:string; actorId:string; chatId:string; chatTitle:string; name:string; status:string; phase:string; detail:string|null; milestoneIndex:number; milestoneCount:number; cycles:number; maxCycles:number; updatedAt:string; deadline:string };
 type PendingReply = { taskId: string; turnId: string; expectedRequestId: string; message: string };
 const replyKey = (taskId: string) => `katie.agentReply.v1.${taskId}`;
 function savedReply(taskId: string): PendingReply | null {
@@ -29,6 +31,10 @@ async function api(path: string, body?: unknown) {
 }
 export default function AgentsPage() {
   const [agents, setAgents] = useState<ManagedAgent[]>([]);
+  const [projects, setProjects] = useState<ProjectSummary[]>([]);
+  const [approval, setApproval] = useState<{chatId:string;actorId:string;scope:ProjectApproval}|null>(null);
+  const [approvalBusy,setApprovalBusy] = useState(false);
+  const [projectsError,setProjectsError] = useState("");
   const [tasks, setTasks] = useState<TaskView[]>([]);
   const [config, setConfig] = useState<AgentConfig>(defaults);
   const [editing, setEditing] = useState<string | null>(null);
@@ -45,6 +51,45 @@ export default function AgentsPage() {
   const busyRef = useRef(false);
   const creationId = useRef<string | null>(null);
   const [error, setError] = useState("");
+  async function loadProjects() {
+    try {
+      const result = await api("/api/projects/overview") as {projects:ProjectSummary[]};
+      setProjects(result.projects ?? []);setProjectsError("");
+    } catch(e) {setProjectsError(e instanceof Error?e.message:"Project overview unavailable");}
+  }
+  useEffect(()=>{
+    let cancelled=false;
+    const refresh=async()=>{
+      if(cancelled||document.visibilityState==="hidden")return;
+      try {
+        const result=await api("/api/projects/overview") as {projects:ProjectSummary[]};
+        if(!cancelled){setProjects(result.projects??[]);setProjectsError("");}
+      } catch(e) {if(!cancelled)setProjectsError(e instanceof Error?e.message:"Project overview unavailable");}
+    };
+    const timer=window.setInterval(()=>void refresh(),15000);
+    window.addEventListener("focus",refresh);
+    void refresh();
+    return()=>{cancelled=true;window.clearInterval(timer);window.removeEventListener("focus",refresh);};
+  },[]);
+  async function reviewProject(project:ProjectSummary){
+    const result=await api("/api/projects?actorId="+encodeURIComponent(project.actorId)+"&chatId="+encodeURIComponent(project.chatId)) as {approval?:ProjectApproval|null};
+    if(!result.approval)throw Error("Project approval is no longer pending. Refresh status.");
+    setApproval({actorId:project.actorId,chatId:project.chatId,scope:result.approval});
+  }
+  async function approveProject(hash:string){
+    if(!approval||approvalBusy)return;
+    setApprovalBusy(true);setError("");
+    try{
+      await api("/api/projects",{actorId:approval.actorId,chatId:approval.chatId,approvalHash:hash});
+      setApproval(null);await loadProjects();
+    } catch(e){setError(e instanceof Error?e.message:"Project approval failed");}
+    finally{setApprovalBusy(false);}
+  }
+  function openProject(project:ProjectSummary){
+    window.localStorage.setItem("katie.activeActorId",project.actorId);
+    window.localStorage.setItem("katie.activeChatId",project.chatId);
+    window.location.assign("/");
+  }
   async function load() {
     const [a, t, r] = await Promise.all([api("/api/agents"), api("/api/agent-tasks"), api("/api/admin/repos")]);
     setAgents(a.agents); setTasks(t.tasks); setRepos(r.repos ?? []);
@@ -115,6 +160,30 @@ export default function AgentsPage() {
       <header className="flex flex-wrap items-center justify-between gap-3"><div><h1 className="text-2xl font-semibold">Agents</h1><p className="text-sm text-zinc-400">Reusable isolated identities, saved task instructions, and reviewed results.</p></div><Link className={button} href="/">Chat workspace</Link></header>
       {error && <p role="alert" className="rounded-lg border border-red-400/40 p-3 text-red-200">{error}</p>}
       {loading ? <p role="status">Loading agents and tasks…</p> : <>
+        <section aria-label="Autonomous projects" className="space-y-3 rounded-xl border border-amber-400/25 bg-white/[0.03] p-4">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h2 className="text-xl font-semibold">Autonomous projects</h2>
+            <button type="button" className={button} onClick={()=>void loadProjects()}>Refresh projects</button>
+          </div>
+          <p className="text-sm text-zinc-400">Live project progress and approvals, separate from individual agent tasks.</p>
+          {projectsError&&<p role="alert" className="text-sm text-red-200">{projectsError}</p>}
+          {!projects.length&&!projectsError&&<p className="text-sm text-zinc-400">No autonomous projects found.</p>}
+          <ul className="space-y-2">{projects.map(project=><li key={project.id} className="rounded-xl border border-white/10 bg-zinc-900/70 p-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <h3 className="font-semibold">{project.name}</h3>
+              <span className={`rounded-full px-3 py-1 text-xs font-semibold ${project.status==="awaiting_approval"?"bg-amber-400 text-zinc-950":project.status==="blocked"?"bg-red-500/20 text-red-200":project.status==="completed"?"bg-emerald-500/20 text-emerald-200":"bg-sky-500/20 text-sky-200"}`}>{project.status.replaceAll("_"," ")}</span>
+            </div>
+            <p className="mt-1 text-sm text-zinc-300">{project.detail??"No recent details"}</p>
+            <p className="mt-1 text-xs text-zinc-500">Phase: {project.phase} · Verified milestones: {project.milestoneIndex}/{project.milestoneCount} · Coding cycles: {project.cycles}/{project.maxCycles}</p>
+            <div className="mt-3 flex flex-wrap gap-2">
+              {project.status==="awaiting_approval"&&<button className="min-h-10 rounded-lg bg-amber-400 px-3 font-semibold text-zinc-950" onClick={()=>void work(()=>reviewProject(project))}>Review & approve</button>}
+              <button className={button} onClick={()=>openProject(project)}>Open project chat</button>
+            </div>
+          </li>)}</ul>
+          {approval&&<ProjectApprovalCard approval={approval.scope} pending={approvalBusy} error={error||null}
+            onApprove={hash=>{void approveProject(hash);}}
+            onRequestChanges={()=>{const project=projects.find(p=>p.chatId===approval.chatId);if(project)openProject(project);}}/>}
+        </section>
         <MissionsPanel agents={agents} repos={repos} />
       <div className="grid gap-6 lg:grid-cols-2">
           <section className="space-y-4 rounded-xl border border-white/10 p-4" aria-labelledby="definitions-title"><h2 id="definitions-title" className="text-lg">Saved agents</h2>
