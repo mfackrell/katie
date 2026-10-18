@@ -2814,13 +2814,13 @@ ${chunkWorkflowSummary}`;
                   failedModelId: attempt.modelId,
                   failureScope: classifyGenerationFailure(error),
                   failureSummary: describeGenerationFailure(error),
-                  reroutedProvider: reroutedAttempt.provider.name,
+                  reroutedProvider: reroutedAttempt.runpodImageFallback ? "runpod" : reroutedAttempt.provider.name,
                   reroutedModelId: reroutedAttempt.modelId,
                 });
                 emitChunk({
                   type: "metadata",
                   modelId: reroutedAttempt.modelId,
-                  provider: reroutedAttempt.provider.name,
+                  provider: reroutedAttempt.runpodImageFallback ? "runpod" : reroutedAttempt.provider.name,
                   explainer: reroutedAttempt.explainer,
                   resetText: true,
                   providerFailover: {
@@ -2830,7 +2830,7 @@ ${chunkWorkflowSummary}`;
                       modelId: attempt.modelId,
                     },
                     to: {
-                      provider: reroutedAttempt.provider.name,
+                      provider: reroutedAttempt.runpodImageFallback ? "runpod" : reroutedAttempt.provider.name,
                       modelId: reroutedAttempt.modelId,
                     },
                     reason: describeGenerationFailure(error),
