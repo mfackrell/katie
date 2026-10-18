@@ -16,6 +16,7 @@ const nextConfig: NextConfig = {
     "/api/messages": [
       "./node_modules/@ffmpeg-installer/linux-x64/ffmpeg",
     ],
+    "/api/internal/missions/run": ["./node_modules/@sparticuz/chromium/bin/**"],
     "/api/health/website": ["./node_modules/@sparticuz/chromium/bin/**"],
   },
 };

@@ -1016,6 +1016,16 @@ export function ChatPanel({
     };
   }, [chatId]);
 
+  const projectProgressSignature = useMemo(() => messages.filter(m=>m.role==='assistant'&&m.content.includes('<!-- katie-project-status:')).map(m=>m.id+':'+m.content.match(/<!-- katie-project-status:[a-f0-9-]+:([^ ]+) -->/)?.[1]).join('|'),[messages]);
+  useEffect(()=>{
+    if(!chatId||!projectProgressSignature||loading)return;
+    let cancelled=false,inFlight=false,done=false;
+    const refresh=async()=>{if(cancelled||inFlight||done||document.visibilityState==='hidden')return;inFlight=true;try{
+      const r=await fetch('/api/projects?chatId='+encodeURIComponent(chatId)+'&actorId='+encodeURIComponent(actorId),{cache:'no-store'});if(!r.ok)return;const p=await r.json() as {active:boolean;messages:Message[]};if(cancelled||!Array.isArray(p.messages))return;done=!p.active;setMessages(current=>current.length===p.messages.length&&current.every((m,i)=>m.id===p.messages[i].id&&m.content===p.messages[i].content)?current:p.messages);setMessagesByChatId(current=>({...current,[chatId]:p.messages}));
+    }catch{ /* Persisted progress remains available; retry on the next tick. */ }finally{inFlight=false;}};
+    const timer=window.setInterval(()=>{void refresh();},15000);const resume=()=>{done=false;void refresh();};window.addEventListener('focus',resume);document.addEventListener('visibilitychange',resume);void refresh();return()=>{cancelled=true;window.clearInterval(timer);window.removeEventListener('focus',resume);document.removeEventListener('visibilitychange',resume);};
+  },[actorId,chatId,loading,projectProgressSignature]);
+
   // The RunPod/Grok work is durable and finishes after the chat stream closes.
   // Re-fetch only while a video placeholder exists, including after mobile
   // backgrounding. No persistent browser connection is required.

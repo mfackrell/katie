@@ -1,0 +1,62 @@
+name: project-integration-review
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+permissions:
+  contents: read
+concurrency:
+  group: project-integration-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+jobs:
+  independent-project-review:
+    if: github.head_ref == 'codex/chat-project-delivery' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login == github.repository_owner
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Independent project-system review
+        uses: openai/codex-action@v1
+        with:
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          permission-profile: ':read-only'
+          output-schema: '{"type":"object","properties":{"verdict":{"type":"string","enum":["pass","changes_requested"]},"summary":{"type":"string"},"blocking_findings":{"type":"array","items":{"type":"string"}}},"required":["verdict","summary","blocking_findings"],"additionalProperties":false}'
+          output-file: project-integration-review.json
+          prompt: |
+            Independently review git diff origin/main...HEAD. Do not change files.
+            Original user outcome: Katie must accept a software project in normal
+            conversation, research and retain its specification, manage successive
+            cumulative coding increments, verify the integrated interactive result,
+            continue bounded repair as needed, and return a verified playable
+            preview in the original chat. A mission launcher or acceptance helper
+            alone is insufficient. Read docs/chat-projects.md for the implemented
+            contract and tests, then inspect actual runtime and SQL, not just docs.
+            New additive orchestration workflow changes are expressly authorized
+            integration work. Existing ordinary tasks, actor isolation, native
+            independent tests/review/repair and production-merge boundaries must
+            remain intact. Challenge false completion, stale approval or lease
+            admission, dropped requirements, budget/race/stop bugs, broken normal
+            chat and deployment evidence not tied to the tested commit.
+            Browser acceptance tools must be preserved from trusted main and
+            cannot be weakened by generated code. Original whole-project goals
+            survive phase-specific tests. No new services/credentials/purchases
+            are authorized by model prose. Return pass only if no material
+            correctness/security blockers remain. Give file-specific actionable
+            findings. Do not invent CI results or claim to test unavailable services.
+      - name: Record exact reviewed commit and enforce verdict
+        if: always()
+        shell: bash
+        run: |
+          git rev-parse HEAD > project-integration-reviewed-head.txt
+          jq -e '.verdict == "pass"' project-integration-review.json
+      - name: Preserve independent findings
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: project-integration-review
+          path: |
+            project-integration-review.json
+            project-integration-reviewed-head.txt
