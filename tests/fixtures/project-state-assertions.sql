@@ -10,6 +10,7 @@ DO $$ declare p jsonb;q jsonb;c jsonb;m uuid;j uuid;l uuid;ph text;h text;ok boo
  ok:=finish_work_project((p->>'id')::uuid,(p->>'lease')::uuid,'child','{"kind":"research","objective":"Research the original rules and cite sources."}');if not ok then raise exception 'Child creation failed';end if;
  if finish_work_project((p->>'id')::uuid,(p->>'lease')::uuid,'child','{"kind":"research","objective":"Duplicate"}') then raise exception 'Late controller committed twice';end if;
  select active_mission_id into m from work_projects where id=(p->>'id')::uuid;
+ if (select token_allowance from agent_missions where id=m)<>120000 then raise exception 'Project research phase lacks bounded search/review headroom';end if;
  c:=claim_mission_work();if c->'mission'->>'id'<>m::text then raise exception 'Project work was not claimable';end if;j:=(c->'job'->>'id')::uuid;l:=(c->'job'->>'lease')::uuid;
  if not reserve_mission_call(j,l,'55555555-5555-4555-8555-555555555555','fixture',30000) then raise exception 'Reservation failed';end if;
  perform control_work_project((p->>'id')::uuid,'11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222','pause');
