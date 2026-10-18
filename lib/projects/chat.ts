@@ -44,6 +44,20 @@ export async function handleProjectChat(input: {
     const reply = (p: Project, body: string) => projectMessage(p.id, p.status, body);
     const mutate = async (action: string, opts: Record<string, unknown> = {}) => projectRpc<Project>('control_work_project', { p_id: p!.id, p_actor: input.actorId, p_chat: input.chatId, p_action: action, ...opts });
     if (p && !['completed', 'stopped'].includes(p.status)) {
+        // Explicit non-scope progress notes must never cancel reviewed research,
+        // invalidate a saved approval, or restart a development milestone.
+        const note=/^(?:project note|progress note)\s*:\s*(.+)$/is.exec(text);
+        if(note){
+            if(!tracked)throw Error('Durable tracking is required for a project note');
+            await mutate('note',{p_text:note[1]});
+            return reply(p,'Saved as a project note. Existing requirements, approved work and active execution are unchanged.');
+        }
+        const factualContext=/^(?:project context|verified project context)\s*:\s*(.+)$/is.exec(text);
+        if(factualContext){
+            if(!tracked)throw Error('Durable tracking is required for project context');
+            const revised=await mutate('context',{p_text:factualContext[1]});
+            return reply(revised,revised.detail ?? 'Reviewed research retained; specification and approval will be refreshed.');
+        }
         const command=projectControl(text);
         if(command){if(command==='resume'&&p.status==='blocked'){const recovered=await projectRpc<Project|null>('retry_project_review',{p_id:p.id,p_actor:input.actorId,p_chat:input.chatId});if(recovered)return reply(recovered,recovered.detail!);}const n=await mutate(command);return reply(n,n.detail!);}
         if (/^(?:(?:what(?:'s| is)|show(?: me)?|check|give me|tell me)(?: the)?\s+)?(?:(?:my|the|this)\s+)?(?:project\s+)?(?:status|progress)(?: of (?:the |this |my )?project)?[?!.\s]*$/i.test(text) || /^how.{0,20}(?:going|progressing)[?!.\s]*$/i.test(text) || /^is (?:the project|it) (?:done|finished)[?!.\s]*$/i.test(text))

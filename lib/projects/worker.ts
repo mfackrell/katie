@@ -47,9 +47,30 @@ async function advance(p: Project) {
             }
             const failedCoordinator=current.jobs.find(j=>j.status==='failed'&&j.role!=='development');
             if(failedCoordinator){await finish('block',{detail:'The '+p.phase+' worker failed before its result could be verified: '+String(failedCoordinator.result?.detail??failedCoordinator.detail??'Unknown coordinator failure')+'. Prior work and charges remain saved; this is not evidence that the implementation needs another coding job.'});return;}
-            const notes = current.jobs.filter(j => j.role === 'review').map(j => j.result?.summary ?? j.detail).filter(Boolean).join('\n');
-            if (p.approved_hash && ['development', 'assessment'].includes(p.phase) && p.cycles < p.max_cycles && runs.filter(r=>r.kind==='development'&&r.milestone_index===Math.min(p.milestone_index,p.spec!.milestones.length-1)).length<2) {
-                await finish('retry', { detail: 'Repair the original unmet requirements. ' + (notes || m.detail), failed_mission: m.id });
+            const reviews = current.jobs.filter(j => j.role === 'review');
+            const findings = reviews.flatMap(j => {
+                const r = j.result as Record<string, unknown> | null | undefined;
+                const structured = r?.findings;
+                if (Array.isArray(structured)) return structured.map(f => typeof f === 'string' ? f : (f && typeof f === 'object' && typeof (f as Record<string,unknown>).detail === 'string' ? (f as Record<string,unknown>).detail as string : '')).filter(Boolean);
+                // Independent reviewer receipts store failed acceptance checks,
+                // not necessarily a single summary. Give repairs the exact failed
+                // evidence rather than asking the implementer to re-research.
+                if (Array.isArray(r?.checks)) {
+                    const failed = r.checks.filter(c => c && typeof c === 'object' && (c as Record<string,unknown>).passed === false)
+                        .map(c => String((c as Record<string,unknown>).id ?? 'check') + ': ' + String((c as Record<string,unknown>).evidence ?? 'Failed acceptance check'));
+                    if (failed.length) return failed;
+                }
+                return typeof r?.summary === 'string' ? [r.summary] : j.detail ? [j.detail] : [];
+            }).map(s => s.trim()).filter(Boolean);
+            const notes = findings.join('\n');
+            const currentStage = p.spec?.milestones[Math.min(p.milestone_index, (p.spec?.milestones.length ?? 1)-1)];
+            const attempts = runs.filter(r => r.kind === 'development' && r.milestone_index === p.milestone_index).length;
+            // Never turn a blocked research/specification/review coordination failure
+            // into another coding job. Only a failed development deliverable with
+            // actionable reviewer findings is eligible for one targeted repair.
+            if (p.phase === 'development' && p.approved_hash && currentStage && findings.length &&
+                p.cycles < p.max_cycles && attempts < 2 && current.jobs.some(j => j.role === 'development' && j.status === 'completed')) {
+                await finish('retry', { detail: 'TARGETED REPAIR ONLY. Preserve approved scope and verified prior milestones. Fix these reviewer findings: ' + notes, findings, failed_mission: m.id });
                 return;
             }
             await finish('block', { detail: 'A project milestone is blocked: ' + (notes || m.detail || m.status) });
@@ -60,7 +81,13 @@ async function advance(p: Project) {
             return;
         }
         if (p.phase === 'research') {
-            await finish('advance', { result: m.result });
+            // The database's reviewed-mission completion gate is necessary but
+            // research also needs a substantive saved result before progression.
+            if (typeof m.result !== 'string' || !m.result.trim()) {
+                await finish('block', { detail: 'Research mission reported completion without a reviewed research artifact. No new research job was scheduled; inspect its review evidence.' });
+                return;
+            }
+            await finish('advance', { result: m.result, reviewedMissionId: m.id });
             return;
         }
         if (p.phase === 'specification') {
@@ -129,6 +156,28 @@ async function advance(p: Project) {
             const attempts=runs.filter(r=>r.kind==='development'&&r.milestone_index===p.spec!.milestones.length-1).length;
             await finish(p.cycles<p.max_cycles&&attempts<2?'retry':'block',{detail:'Actual deployed browser acceptance failed. Repair the unmet original requirements: '+failures});
         }catch(error){if(error instanceof PreviewAccessUnavailable){await finish('block',{detail:error.message});return;}throw error;}
+        return;
+    }
+    // A finite project needs a progress watchdog before authorizing another
+    // expensive child mission. Superseded scope revisions are not failed work.
+    const attempts = runs.filter(r => r.kind === p.phase && r.milestone_index === p.milestone_index &&
+        !r.outcome?.superseded);
+    if (attempts.length >= 3 && !p.active_mission_id) {
+        const states = await Promise.all(attempts.slice(-3).map(async r => (await readMission(r.mission_id)).mission.status));
+        if (states.every(status => status === 'blocked' || status === 'stopped')) {
+            await finish('block', { detail: 'Progress watchdog: three consecutive failed '+p.phase+' attempts at the same milestone. Completed evidence and consumed budgets are preserved; an explicit diagnosis or revised scope is required before any further work.' });
+            return;
+        }
+    }
+    // Do not spawn more research or planning jobs when cumulative spend has
+    // consumed the aggregate budget. SQL reservations remain authoritative.
+    const { data: spend, error: spendError } = await getSupabaseAdminClient().from('agent_missions')
+        .select('actual_tokens,reserved_tokens').eq('project_id',p.id);
+    if (spendError) throw Error('Cannot verify cumulative project budget');
+    const charged = ((spend ?? []) as Array<{actual_tokens: number | null;reserved_tokens:number | null}>).reduce((total: number, m) => total +
+        Math.max(0, Number(m.actual_tokens ?? 0)) + Math.max(0, Number(m.reserved_tokens ?? 0)), 0);
+    if (p.token_allowance - charged < 8000) {
+        await finish('block', { detail: 'Aggregate project token budget has fewer than 8,000 uncommitted tokens. Previous work is retained; a new mission is not authorized.' });
         return;
     }
     const evidence = await milestoneEvidence(runs);
