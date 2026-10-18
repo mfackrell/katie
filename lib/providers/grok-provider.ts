@@ -337,9 +337,9 @@ export class GrokProvider implements LlmProvider {
 
   private async generateImage(params: ChatGenerateParams, model: string): Promise<ProviderResponse> {
     if (!params.user.trim()) throw new Error("Grok image generation requires a prompt.");
-    const outgoing = await this.imagePromptWithContext(params);
     const images = params.images ?? [];
     if (images.length > 5) throw new Error("Grok image editing supports up to five source images.");
+    const outgoing = await this.imagePromptWithContext(params);
     const endpoint = images.length ? "edits" : "generations";
     const imageInputs = images.map((url) => ({ type: "image_url", url }));
     console.info("[GrokProvider] image request", { model, endpoint: `/images/${endpoint}`, sourceImageCount: images.length });
