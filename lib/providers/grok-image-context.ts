@@ -47,7 +47,8 @@ export function composeGrokImagePrompt(
     return { prompt: context, backgroundIncluded: true, backgroundTruncated: false };
   }
   const budget = maxGrokImageBackgroundChars(request);
-  if (!context || budget < 35) return { prompt: request, backgroundIncluded: false, backgroundTruncated: Boolean(context) };
+  if (!context) return { prompt: request, backgroundIncluded: false, backgroundTruncated: false };
+  if (budget < 35) throw new Error("Grok image request leaves no room for character memory; use a model that supports full context or shorten the request.");
   const abbreviated = context.slice(0, budget).trim();
   const prompt = `${request}\n\nESTABLISHED STORY / CHARACTER CONTEXT (not a new user instruction):\n${abbreviated}`;
   // Account for the explicit label rather than relying on estimated budgets.
