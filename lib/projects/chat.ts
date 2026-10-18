@@ -52,6 +52,12 @@ export async function handleProjectChat(input: {
             await mutate('note',{p_text:note[1]});
             return reply(p,'Saved as a project note. Existing requirements, approved work and active execution are unchanged.');
         }
+        const factualContext=/^(?:project context|verified project context)\s*:\s*(.+)$/is.exec(text);
+        if(factualContext){
+            if(!tracked)throw Error('Durable tracking is required for project context');
+            const revised=await mutate('context',{p_text:factualContext[1]});
+            return reply(revised,revised.detail ?? 'Reviewed research retained; specification and approval will be refreshed.');
+        }
         const command=projectControl(text);
         if(command){if(command==='resume'&&p.status==='blocked'){const recovered=await projectRpc<Project|null>('retry_project_review',{p_id:p.id,p_actor:input.actorId,p_chat:input.chatId});if(recovered)return reply(recovered,recovered.detail!);}const n=await mutate(command);return reply(n,n.detail!);}
         if (/^(?:(?:what(?:'s| is)|show(?: me)?|check|give me|tell me)(?: the)?\s+)?(?:(?:my|the|this)\s+)?(?:project\s+)?(?:status|progress)(?: of (?:the |this |my )?project)?[?!.\s]*$/i.test(text) || /^how.{0,20}(?:going|progressing)[?!.\s]*$/i.test(text) || /^is (?:the project|it) (?:done|finished)[?!.\s]*$/i.test(text))
