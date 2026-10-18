@@ -183,9 +183,33 @@ export async function runWithRefusalFallback<TAttempt>({
         continue;
       }
       if (isTerminalProviderError(error)) {
-        if (!pendingAttempts.length || !retryTerminalError?.({ attempt, error, remainingAttempts: [...pendingAttempts] })) throw error;
+        // Only explicitly authorized terminal errors may be retried. Safety and
+        // content blocks remain terminal; caller's retryTerminalError must deny.
+        if (!retryTerminalError?.({ attempt, error, remainingAttempts: [...pendingAttempts] })) throw error;
         lastGenerationError = error;
         onError?.({ attempt, attemptIndex: currentAttemptIndex, error });
+        // A last-chance candidate can be selected after an eligible terminal
+        // error, including when the initial deterministic chain is exhausted.
+        if (rerouteOnError) {
+          try {
+            const reroutedAttempt = await rerouteOnError({
+              attempt,
+              attemptIndex: currentAttemptIndex,
+              attemptedAttempts: [...attemptedAttempts],
+              remainingAttempts: [...pendingAttempts],
+              error,
+            });
+            if (reroutedAttempt) {
+              pendingAttempts.unshift(reroutedAttempt);
+              onErrorReroute?.({
+                attempt, attemptIndex: currentAttemptIndex, reroutedAttempt, error,
+              });
+            }
+          } catch (rerouteError: unknown) {
+            onRerouteError?.({ attempt, attemptIndex: currentAttemptIndex, error: rerouteError });
+          }
+        }
+        if (!pendingAttempts.length) throw error;
         continue;
       }
       if (error instanceof ProviderResponseError && error.code === "EMPTY_RESPONSE") {
