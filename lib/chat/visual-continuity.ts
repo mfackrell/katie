@@ -76,17 +76,23 @@ export function chooseVisualSubjects(
  * untrusted URL. It survives conversation summarization and is shared across
  * the actor's chats. The pointer is checked for ownership when pixels are read.
  */
-export async function describeActorVisualLongTermMemory(actorId: string): Promise<string> {
+export type VisualReferencePointer = Pick<ReferenceRow,
+  "subject_key" | "label" | "source_chat_id" | "source_message_id" |
+  "asset_index" | "approved" | "updated_at">;
+
+export async function listActorVisualReferencePointers(actorId: string): Promise<VisualReferencePointer[]> {
   const { data, error } = await getSupabaseAdminClient().from("visual_references")
     .select("subject_key,label,source_chat_id,source_message_id,asset_index,approved,updated_at")
     .eq("actor_id", actorId)
     .order("updated_at", { ascending: false })
     .limit(80)
-    .returns<Pick<ReferenceRow,
-      "subject_key" | "label" | "source_chat_id" | "source_message_id" |
-      "asset_index" | "approved" | "updated_at">[]>();
+    .returns<VisualReferencePointer[]>();
   if (error) throw new Error(`Visual long-term memory index unavailable: ${error.message}`);
-  const rows = data ?? [];
+  return data ?? [];
+}
+
+export async function describeActorVisualLongTermMemory(actorId: string): Promise<string> {
+  const rows = await listActorVisualReferencePointers(actorId);
   return [
     "VISUAL_LONG_TERM_MEMORY (actor-wide durable, database-backed image identities):",
     "Each record is a canonical identity reference to a privately saved image in messages.content.assets.",
