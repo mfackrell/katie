@@ -2,7 +2,7 @@ declare const process: { env: Record<string, string | undefined> };
 
 type QueryResult<T> = Promise<{ data: T; error: { message: string } | null }>;
 
-type Filter = { type: "eq" | "in"; field: string; value: unknown };
+type Filter = { type: "eq" | "in" | "lt"; field: string; value: unknown };
 type Sort = { field: string; ascending: boolean };
 
 class PostgrestQuery {
@@ -25,6 +25,11 @@ class PostgrestQuery {
 
   in(field: string, values: unknown[]) {
     this.filters.push({ type: "in", field, value: values });
+    return this;
+  }
+
+  lt(field: string, value: unknown) {
+    this.filters.push({ type: "lt", field, value });
     return this;
   }
 
@@ -112,10 +117,10 @@ class PostgrestQuery {
     url.searchParams.set("select", selectOverride ?? this.selectedColumns);
 
     for (const filter of this.filters) {
-      if (filter.type === "eq") {
+      if (filter.type === "eq" || filter.type === "lt") {
         // URLSearchParams encodes once; pre-encoding leaves escaped timestamps
         // and other literal values in the filter received by PostgREST.
-        url.searchParams.set(filter.field, `eq.${String(filter.value)}`);
+        url.searchParams.set(filter.field, `${filter.type}.${String(filter.value)}`);
       } else {
         const encodedValues = (filter.value as unknown[]).map((value) => `"${String(value)}"`).join(",");
         url.searchParams.set(filter.field, `in.(${encodedValues})`);
