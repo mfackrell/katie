@@ -73,7 +73,13 @@ async function advance(p: Project) {
             return;
         }
         if (p.phase === 'research') {
-            await finish('advance', { result: m.result });
+            // The database's reviewed-mission completion gate is necessary but
+            // research also needs a substantive saved result before progression.
+            if (typeof m.result !== 'string' || !m.result.trim()) {
+                await finish('block', { detail: 'Research mission reported completion without a reviewed research artifact. No new research job was scheduled; inspect its review evidence.' });
+                return;
+            }
+            await finish('advance', { result: m.result, reviewedMissionId: m.id });
             return;
         }
         if (p.phase === 'specification') {
