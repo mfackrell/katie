@@ -1,10 +1,10 @@
-# RunPod image-generation fallback (technical failures only)
+# RunPod image-generation fallback (dual provider failures)
 
 Status: integration code is feature-gated. It cannot run until a **separate image-generation RunPod endpoint** is provisioned and verified. The existing RunPod Qwen video-analysis endpoint is NOT an image generator and must not be reused.
 
 ## Routing
 
-Katie uses Grok Imagine and Gemini for images as before. RunPod is selected **only if both have attempted the same request and both produced technical failures** (transport timeout, rate limiting, 5xx). A success from either stops the chain. Any safety refusal, content moderation outcome, blocked request, or unsupported output is **never** eligible for RunPod rerouting. Image requests containing established face-reference images are currently excluded: dropping their identity bytes is not acceptable.
+Katie uses Grok Imagine and Gemini for images as before. RunPod is selected **only if both have attempted the same request and both failed to generate** (timeouts, rate limiting, 5xx, invalid generation output and other non-policy errors). A success from either stops the chain. Any safety refusal, content moderation outcome, blocked request, or unsupported output is **never** eligible for RunPod rerouting. Image requests containing established face-reference images are currently excluded: dropping their identity bytes is not acceptable.
 
 ## Endpoint contract
 
@@ -33,7 +33,7 @@ Do not activate without an image worker that actually implements this request an
 
 1. Grok success -> no Gemini/RunPod.
 2. Grok technical failure + Gemini success -> no RunPod.
-3. Grok technical failure + Gemini technical failure -> one RunPod attempt.
+3. Grok generation failure + Gemini generation failure -> one RunPod attempt, including non-policy terminal errors.
 4. Either provider safety/content refusal -> no RunPod attempt.
 5. No configured endpoint -> preexisting routing only.
 6. Endpoint errors/incorrect output return a bounded error; no untrusted URL fetch.
