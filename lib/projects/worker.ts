@@ -166,7 +166,7 @@ async function advance(p: Project) {
     const { data: spend, error: spendError } = await getSupabaseAdminClient().from('agent_missions')
         .select('actual_tokens,reserved_tokens').eq('project_id',p.id);
     if (spendError) throw Error('Cannot verify cumulative project budget');
-    const charged = (spend ?? []).reduce((total, m) => total +
+    const charged = ((spend ?? []) as Array<{actual_tokens: number | null;reserved_tokens:number | null}>).reduce((total: number, m) => total +
         Math.max(0, Number(m.actual_tokens ?? 0)) + Math.max(0, Number(m.reserved_tokens ?? 0)), 0);
     if (p.token_allowance - charged < 8000) {
         await finish('block', { detail: 'Aggregate project token budget has fewer than 8,000 uncommitted tokens. Previous work is retained; a new mission is not authorized.' });
