@@ -52,6 +52,14 @@ async function advance(p: Project) {
                 const r = j.result as Record<string, unknown> | null | undefined;
                 const structured = r?.findings;
                 if (Array.isArray(structured)) return structured.map(f => typeof f === 'string' ? f : (f && typeof f === 'object' && typeof (f as Record<string,unknown>).detail === 'string' ? (f as Record<string,unknown>).detail as string : '')).filter(Boolean);
+                // Independent reviewer receipts store failed acceptance checks,
+                // not necessarily a single summary. Give repairs the exact failed
+                // evidence rather than asking the implementer to re-research.
+                if (Array.isArray(r?.checks)) {
+                    const failed = r.checks.filter(c => c && typeof c === 'object' && (c as Record<string,unknown>).passed === false)
+                        .map(c => String((c as Record<string,unknown>).id ?? 'check') + ': ' + String((c as Record<string,unknown>).evidence ?? 'Failed acceptance check'));
+                    if (failed.length) return failed;
+                }
                 return typeof r?.summary === 'string' ? [r.summary] : j.detail ? [j.detail] : [];
             }).map(s => s.trim()).filter(Boolean);
             const notes = findings.join('\n');
