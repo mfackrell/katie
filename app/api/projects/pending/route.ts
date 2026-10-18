@@ -16,7 +16,7 @@ export async function GET() {
       .select('actor_id,chat_id,status,spec,updated_at')
       .eq('status', 'awaiting_approval').order('updated_at', { ascending: false }).limit(50);
     if (error) throw Error('Project approval records unavailable');
-    const approvals = (data ?? []).flatMap(project => {
+    const approvals = ((data ?? []) as Array<{ actor_id: string; chat_id: string; spec: unknown }>).flatMap(project => {
       const chat = visible.get(project.chat_id);
       if (!chat || chat.actorId !== project.actor_id) return [];
       const spec = project.spec as { name?: unknown } | null;
