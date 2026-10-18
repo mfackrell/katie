@@ -27,6 +27,7 @@ import {
 } from "@/lib/chat/reasoning-stream";
 import { ReasoningExplainerPanel } from "@/components/reasoning-explainer-panel";
 import { RememberFaceControl } from "@/components/remember-face-control";
+import { ProjectApprovalCard, type ProjectApproval } from "@/components/project-approval-card";
 
 type ProviderName = "openai" | "google" | "grok" | "anthropic";
 
@@ -727,6 +728,9 @@ export function ChatPanel({
   repoInjectionEnabled,
 }: ChatPanelProps) {
   const [messages, setMessages] = useState<Message[]>([]);
+  const [projectApproval, setProjectApproval] = useState<{chatId:string;approval:ProjectApproval}|null>(null);
+  const [projectApprovalPending, setProjectApprovalPending] = useState(false);
+  const [projectApprovalError, setProjectApprovalError] = useState<string|null>(null);
   const [messagesByChatId, setMessagesByChatId] = useState<Record<string, Message[]>>({});
   const [isHydratingMessages, setIsHydratingMessages] = useState(false);
   const [input, setInput] = useState("");
@@ -1019,13 +1023,60 @@ export function ChatPanel({
 
   const projectProgressSignature = useMemo(() => messages.filter(m=>m.role==='assistant'&&m.content.includes('<!-- katie-project-status:')).map(m=>m.id+':'+m.content.match(/<!-- katie-project-status:[a-f0-9-]+:([^ ]+) -->/)?.[1]).join('|'),[messages]);
   useEffect(()=>{
-    if(!chatId||!projectProgressSignature||loading)return;
+    if(!chatId||!actorId||loading)return;
     let cancelled=false,inFlight=false,done=false;
-    const refresh=async()=>{if(cancelled||inFlight||done||document.visibilityState==='hidden')return;inFlight=true;try{
-      const r=await fetch('/api/projects?chatId='+encodeURIComponent(chatId)+'&actorId='+encodeURIComponent(actorId),{cache:'no-store'});if(!r.ok)return;const p=await r.json() as {active:boolean;messages:Message[]};if(cancelled||!Array.isArray(p.messages))return;done=!p.active;setMessages(current=>current.length===p.messages.length&&current.every((m,i)=>m.id===p.messages[i].id&&m.content===p.messages[i].content)?current:p.messages);setMessagesByChatId(current=>({...current,[chatId]:p.messages}));
-    }catch{ /* Persisted progress remains available; retry on the next tick. */ }finally{inFlight=false;}};
-    const timer=window.setInterval(()=>{void refresh();},15000);const resume=()=>{done=false;void refresh();};window.addEventListener('focus',resume);document.addEventListener('visibilitychange',resume);void refresh();return()=>{cancelled=true;window.clearInterval(timer);window.removeEventListener('focus',resume);document.removeEventListener('visibilitychange',resume);};
+    setProjectApproval(null);
+    setProjectApprovalError(null);
+    const refresh=async()=>{
+      if(cancelled||inFlight||done||document.visibilityState==='hidden')return;
+      inFlight=true;
+      try {
+        const r=await fetch('/api/projects?chatId='+encodeURIComponent(chatId)+'&actorId='+encodeURIComponent(actorId),{cache:'no-store'});
+        if(!r.ok)return;
+        const p=await r.json() as {active:boolean;status:string|null;approval:ProjectApproval|null;messages:Message[]};
+        if(cancelled)return;
+        setProjectApproval(p.approval?{chatId,approval:p.approval}:null);
+        done=!p.status||['completed','stopped'].includes(p.status);
+        if(!Array.isArray(p.messages))return;
+        setMessages(current=>current.length===p.messages.length&&current.every((m,i)=>m.id===p.messages[i].id&&m.content===p.messages[i].content)?current:p.messages);
+        setMessagesByChatId(current=>({...current,[chatId]:p.messages}));
+      } catch { /* Persisted progress remains available; retry on the next tick. */ }
+      finally {inFlight=false;}
+    };
+    const timer=window.setInterval(()=>{void refresh();},15000);
+    const resume=()=>{done=false;void refresh();};
+    window.addEventListener('focus',resume);
+    document.addEventListener('visibilitychange',resume);
+    void refresh();
+    return()=>{cancelled=true;window.clearInterval(timer);window.removeEventListener('focus',resume);document.removeEventListener('visibilitychange',resume);};
   },[actorId,chatId,loading,projectProgressSignature]);
+
+  async function approveProject(hash:string) {
+    if(!chatId||!actorId||projectApprovalPending||loading)return;
+    setProjectApprovalPending(true);
+    setProjectApprovalError(null);
+    try {
+      const response=await fetch('/api/projects',{
+        method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({actorId,chatId,approvalHash:hash}),
+      });
+      const result=await response.json() as {error?:string;status?:string;messages?:Message[]};
+      if(!response.ok)throw Error(result.error??'Could not approve project.');
+      setProjectApproval(null);
+      if(Array.isArray(result.messages)){
+        setMessages(result.messages);
+        setMessagesByChatId(current=>({...current,[chatId]:result.messages!}));
+      }
+      setStatusMessage('Project approved. Katie can now begin approved coding milestones.');
+    }catch(error){
+      setProjectApprovalError(error instanceof Error?error.message:'Approval failed. Refresh the project scope.');
+    }finally {setProjectApprovalPending(false);}
+  }
+
+  function requestProjectChanges() {
+    setInput("Change this project's scope: ");
+    requestAnimationFrame(()=>textareaRef.current?.focus());
+  }
 
   // The RunPod/Grok work is durable and finishes after the chat stream closes.
   // Re-fetch only while a video placeholder exists, including after mobile
@@ -2548,6 +2599,16 @@ export function ChatPanel({
           </div>
         </div>
       </header>
+
+      {projectApproval?.chatId===chatId && !managedAgentId ? (
+        <ProjectApprovalCard
+          approval={projectApproval.approval}
+          pending={projectApprovalPending || loading}
+          error={projectApprovalError}
+          onApprove={(hash)=>{void approveProject(hash);}}
+          onRequestChanges={requestProjectChanges}
+        />
+      ) : null}
 
       {showLiveReasoningExplainer && reasoningPopupVisible ? (
         <div className="pointer-events-none absolute inset-x-[5%] bottom-24 z-40 sm:bottom-28">
