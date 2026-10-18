@@ -51,7 +51,8 @@ export function chooseVisualSubjects(
   const keys = group
     ? [...new Set([...known, ...(wholeCast ? cast : [])])].slice(0, MAX_REFERENCES)
     : [...new Set(known.length > 1 ? known : candidate && rows.some(r => r.subject_key === candidate) ? [candidate] : known)].slice(0, MAX_REFERENCES);
-  const correction = /^(?:\s*(?:no[,!.]?|actually[,!.]?|she(?:'s| is)|he(?:'s| is)|they(?:'re| are)|make|change|correct|fix|keep|same|but|not)\b)/i.test(prompt);
+  const normalized = prompt.replace(/[\u2018\u2019]/g, "\'");
+  const correction = /^(?:\s*(?:no[,!.]?|actually[,!.]?|she(?:'s| is)|he(?:'s| is)|they(?:'re| are)|make|change|correct|fix|keep|same|but|not)\b)/i.test(normalized);
   const pronounCorrection = !group && !candidate && !known.length && correction &&
     /\b(?:she|her|he|his|they|their|it|its)\b/i.test(prompt);
   // A short correction after a portrait refers to the last same-chat single-subject anchor.
