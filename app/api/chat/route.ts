@@ -73,7 +73,7 @@ import {
   improveCreativeOriginality,
 } from "@/lib/chat/creative-continuity";
 import { isLikelyProviderRefusal, runWithRefusalFallback, shouldRetryOnProviderRefusal } from "@/lib/router/refusal-detection";
-import { generateRunpodImage, runpodImageConfigured, shouldTryRunpodImage, type ImageProviderFailure } from "@/lib/chat/runpod-image-fallback";
+import { generateRunpodImage, runpodImageConfigured, shouldTryRunpodImage, isModerationImageFailure, type ImageProviderFailure } from "@/lib/chat/runpod-image-fallback";
 import {
   classifyGenerationFailure,
   describeGenerationFailure,
@@ -2049,8 +2049,13 @@ ${chunkWorkflowSummary}`;
             const generationAttempt = await runWithRefusalFallback<GenerationAttempt>({
               attempts,
               shouldRetryRefusal: retryOnProviderRefusal,
-              retryTerminalError: ({ attempt, remainingAttempts }) =>
-                hasVideoInput && attempt.provider.name === "google" && remainingAttempts.length > 0,
+              retryTerminalError: ({ attempt, error, remainingAttempts }) =>
+                (hasVideoInput && attempt.provider.name === "google" && remainingAttempts.length > 0) ||
+                (resolvedRequestIntent === "image-generation" &&
+                 !attempt.runpodImageFallback &&
+                 (attempt.provider.name === "grok" || attempt.provider.name === "google") &&
+                 !isModerationImageFailure(error) &&
+                 !resolvedRoutingIntentForReroute?.secondaryIntents?.includes("safety-sensitive-vision")),
               runAttempt: async (candidate, attemptIndex) => {
                 if (verifyingSavedDraft && pendingReviewClarification) {
                   // Verification retries review the saved candidate verbatim;
@@ -2069,7 +2074,7 @@ ${chunkWorkflowSummary}`;
                     hasReferenceImages: Boolean(visualContinuity?.references.length ||
                       rerouteHasVisualInput),
                   })) throw new Error("RunPod image fallback is not eligible for this request.");
-                  console.info("[Image Routing] RunPod technical fallback accepted after Grok and Gemini failures", {
+                  console.info("[Image Routing] RunPod fallback accepted after Grok and Gemini failures", {
                     requestId,
                     endpointConfigured: true,
                   });
@@ -2706,8 +2711,8 @@ ${chunkWorkflowSummary}`;
               rerouteOnError: async ({ attempt, error }) => {
                 if (hasVideoInput) return null; // Attempt Grok directly, not another Gemini routing loop.
                 if (attempt.runpodImageFallback) return null;
-                // Third provider is optional and strictly for TWO technical
-                // failures, never a provider's content/safety decision.
+                // Third provider is optional after failures from both image models,
+                // never a workaround for their content/safety decisions.
                 if (resolvedRequestIntent === "image-generation" &&
                     shouldTryRunpodImage({
                       failures: imageProviderFailures,
@@ -2716,7 +2721,7 @@ ${chunkWorkflowSummary}`;
                       hasReferenceImages: Boolean(visualContinuity?.references.length ||
                         rerouteHasVisualInput),
                     })) {
-                  console.info("[Image Routing] Both image providers failed technically; selecting RunPod", { requestId });
+                  console.info("[Image Routing] Both image providers failed; selecting RunPod image fallback", { requestId });
                   return {
                     provider: attempt.provider,
                     modelId: "runpod-image",
