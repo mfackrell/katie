@@ -24,7 +24,13 @@ export async function assembleContext(actorId: string, chatId: string): Promise<
   );
 
   const [referenceDocuments, visualLongTermMemory] = await Promise.all([
-    listActorMemoryDocuments(actorId, 20), describeActorVisualLongTermMemory(actorId),
+    listActorMemoryDocuments(actorId, 20),
+    describeActorVisualLongTermMemory(actorId).catch(error => {
+      console.warn("[VisualLongTermMemory] actor index unavailable; ordinary text chat continues", {
+        reason: error instanceof Error ? error.message : String(error),
+      });
+      return "VISUAL_LONG_TERM_MEMORY: unavailable (not evidence that there are no saved references).";
+    }),
   ]);
   let documentCharacters = 0;
   const referenceText = referenceDocuments
