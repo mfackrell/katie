@@ -1,4 +1,5 @@
 import { currentAgentTask } from "@/lib/agents/policy";
+import { describeActorVisualLongTermMemory } from "@/lib/chat/visual-continuity";
 import { getDeliverableStandardInstruction } from "@/lib/chat/deliverable-standard";
 import { getChatContextState, listActorMemoryDocuments } from "@/lib/data/persistence-store";
 import { MEMORY_ARCHITECTURE_GUIDE, SHORT_TERM_MESSAGE_LIMIT } from "@/lib/memory/memory-contract";
@@ -22,7 +23,9 @@ export async function assembleContext(actorId: string, chatId: string): Promise<
     chatId
   );
 
-  const referenceDocuments = await listActorMemoryDocuments(actorId, 20);
+  const [referenceDocuments, visualLongTermMemory] = await Promise.all([
+    listActorMemoryDocuments(actorId, 20), describeActorVisualLongTermMemory(actorId),
+  ]);
   let documentCharacters = 0;
   const referenceText = referenceDocuments
     .filter((doc) => {
@@ -68,6 +71,7 @@ export async function assembleContext(actorId: string, chatId: string): Promise<
       MEMORY_ARCHITECTURE_GUIDE,
       correctionsBlock,
       longTermBlock,
+      visualLongTermMemory,
       "ACTOR MEMORY REFERENCE DOCUMENTS: These are verbatim user-requested long-term records and archived historical records. The current structured long-term facts and the most recent explicit user corrections take precedence when records conflict.",
       referenceText || "(No reference documents)",
       "END_ACTOR_MEMORY_REFERENCE_DOCUMENTS",
