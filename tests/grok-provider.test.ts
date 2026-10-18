@@ -73,7 +73,7 @@ test("Grok synthesizes the same STM, ITM, and LTM inputs Gemini sees into its bo
   assert.equal(audit[0].imagePrompt, prompt);
   assert.equal((audit[0].contextSynthesis as { sourceHistoryTurns: number }).sourceHistoryTurns, 2);
   assert.equal(audit[0].endpoint, "images/generations");
-  assert.equal(audit[0].systemMessages?.length, 0);
+  assert.equal((audit[0].systemMessages as unknown[]).length, 0);
 });
 
 test("Grok never silently loses established image character memory on condenser failure", async (t) => {
