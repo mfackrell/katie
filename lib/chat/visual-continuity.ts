@@ -137,9 +137,13 @@ export async function verifyVisualContinuity(input: {
   const vision = input.providers.find(provider => provider.name === "google");
   if (!vision) return { status: "unavailable" };
   try {
+    const available = await vision.listModels();
+    const reviewModel = ["gemini-3.8-flash", "gemini-3.1-pro", "gemini-3-pro"]
+      .find(model => available.includes(model));
+    if (!reviewModel) return { status: "unavailable" };
     const inspection = await vision.generate({
       name: "Visual continuity reviewer", persona: "Verify visible identities independently.",
-      summary: "", history: [], modelId: "gemini-3.1-pro", requestIntent: "vision-analysis",
+      summary: "", history: [], modelId: reviewModel, requestIntent: "vision-analysis",
       user: `Images 1 through ${input.references.length} are established reference people, in order: ${input.references.map(ref => ref.label).join(", ")}. Last image is the newly generated scene. Compare each reference person's distinguishing visible facial features to the corresponding person in the LAST image. Do not invent matches: if a person is absent or significantly different, report failure. Evaluate image identity only, not beauty, clothing or setting. Return strictly JSON: {"consistent":true|false,"issue":"short specific explanation"}.`,
       images: [...input.references.map(ref => ref.image), candidate],
     });
