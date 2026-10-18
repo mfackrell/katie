@@ -37,6 +37,12 @@ test("Content refusals never qualify as failures eligible for another image prov
   assert.equal(isTechnicalImageFailure(new Error("upstream 429 rate limit")), true);
   assert.equal(isTechnicalImageFailure("provider permission denied"), false);
   assert.equal(isTechnicalImageFailure("model returned an empty image"), false);
+  // Non-policy generation failures are eligible even if they are not transport failures.
+  assert.equal(shouldTryRunpodImage({
+    failures: [{ provider: "grok", error: "model returned an empty image" },
+      { provider: "google", error: "output limit exceeded" }],
+    enabled: true, hasReferenceImages: false,
+  }), true);
 });
 
 test("RunPod image API returns a verified inline image, using only fixed RunPod host", async () => {
