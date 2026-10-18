@@ -65,8 +65,11 @@ export async function executeClaim(claim:Claim,model=missionModel){
  if(job.role==='review'){
   // First pass is draft-blind: objective and acceptance contract only.
   const turns=[{id:'turn-1',text:'Saved lead responsibilities: '+mission.team[0].config.instructions},{id:'latest-user',text:mission.objective}];
-  const blind=await model(claim,frame+'\n'+ASSESSMENT_INSTRUCTION,'AUTHORITATIVE_USER_TURNS:\n'+JSON.stringify(turns));
-  const assessment=validateAssessment(parseJSON(blind.text),turns);
+  const feedback=typeof job.result?.reviewContractFeedback==='string'?job.result.reviewContractFeedback.slice(0,600):null;
+  const blind=await model(claim,frame+'\n'+ASSESSMENT_INSTRUCTION+'\nOnly the supplied source-turn IDs may appear in taskContract requirement or conflict citations. Use an empty conflicts array when no explicit source conflict exists. Validator feedback is formatting/provenance feedback, not a new user requirement or fact.', 'AUTHORITATIVE_USER_TURNS:\n'+JSON.stringify(turns)+(feedback?'\nCONTRACT_VALIDATOR_FEEDBACK (rebuild from the original sources; no draft has been supplied):\n'+JSON.stringify({error:feedback,allowedSourceIds:turns.map(t=>t.id)}):''));
+  let assessment:ReturnType<typeof validateAssessment>;
+  try{assessment=validateAssessment(parseJSON(blind.text),turns);}
+  catch(error){const detail=error&&typeof error==='object'&&'message' in error&&typeof error.message==='string'?error.message:'Invalid independent assessment';throw new MissionModelFailure('Independent assessment contract validation failed: '+detail,{reviewPhase:'assessment',reviewContractFeedback:detail.slice(0,600)});}
   const target=completed.find(x=>x.job_key===(job.job_key==='review_again'?'revision':'compose'));
   if(!target?.result)throw Error('Review candidate missing');
   const checked=await model(claim,frame+'\n'+REVIEW_INSTRUCTION,'Independent assessment:\n'+JSON.stringify(assessment)+'\nRequired acceptance IDs:\n'+JSON.stringify(acceptanceIds(assessment))+'\nEvidence and candidate:\n'+JSON.stringify({objective:mission.objective,projectEvidence:mission.project_evidence,candidate:{key:target.job_key,result:target.result},evidence:completed.filter(x=>x.role==='work'||x.role==='development').map(x=>({key:x.job_key,result:x.result})),priorFindings:priorReviews}));
@@ -99,9 +102,10 @@ export async function runMissionBatch(model=missionModel){
  const outcomes=await Promise.all(claims.map(async claim=>{
   try{await executeClaim(claim,model);return {jobId:claim.job.id,status:'processed'};}
   catch(error){const detail=error instanceof Error?error.message.slice(0,600):'Assignment execution failed';console.error('[Missions] Assignment failed',{jobId:claim.job.id,detail});
-   const retry=claim.job.attempts<2&&/timeout|timed out|connection|fetch failed|429|rate limit|500|502|503|504/i.test(detail);
+   const invalidContract=error instanceof MissionModelFailure&&error.partial.reviewPhase==='assessment';
+   const retry=claim.job.attempts<2&&(invalidContract||/timeout|timed out|connection|fetch failed|429|rate limit|500|502|503|504/i.test(detail));
    await rpc('commit_mission_work',{p_id:claim.job.id,p_lease:claim.job.lease,p_result:{...(error instanceof MissionModelFailure?error.partial:{}),detail},p_children:[],p_status:retry?'queued':'failed',p_mission_status:retry?null:'blocked',p_final:null});
-   return {jobId:claim.job.id,status:'blocked'};}
+   return {jobId:claim.job.id,status:retry?'retrying':'blocked'};}
  }));
  return{claimed:claims.length,outcomes};
 }

@@ -45,7 +45,7 @@ export async function handleProjectChat(input: {
     const mutate = async (action: string, opts: Record<string, unknown> = {}) => projectRpc<Project>('control_work_project', { p_id: p!.id, p_actor: input.actorId, p_chat: input.chatId, p_action: action, ...opts });
     if (p && !['completed', 'stopped'].includes(p.status)) {
         const command=projectControl(text);
-        if(command){const n=await mutate(command);return reply(n,n.detail!);}
+        if(command){if(command==='resume'&&p.status==='blocked'){const recovered=await projectRpc<Project|null>('retry_project_review',{p_id:p.id,p_actor:input.actorId,p_chat:input.chatId});if(recovered)return reply(recovered,recovered.detail!);}const n=await mutate(command);return reply(n,n.detail!);}
         if (/^(?:(?:what(?:'s| is)|show(?: me)?|check|give me|tell me)(?: the)?\s+)?(?:(?:my|the|this)\s+)?(?:project\s+)?(?:status|progress)(?: of (?:the |this |my )?project)?[?!.\s]*$/i.test(text) || /^how.{0,20}(?:going|progressing)[?!.\s]*$/i.test(text) || /^is (?:the project|it) (?:done|finished)[?!.\s]*$/i.test(text))
             return reply(p, p.status === 'awaiting_approval' ? await projectRpc<string>('project_scope_proposal', {p_id:p.id}) : p.result ?? `${p.detail ?? p.status}\nCurrent phase: ${p.phase}. Coding jobs used: ${p.cycles}/${p.max_cycles}. I have not marked this project complete.`);
         const latestAssistant = [...history].reverse().find(m => m.role === 'assistant');
