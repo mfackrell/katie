@@ -144,6 +144,28 @@ async function advance(p: Project) {
         }catch(error){if(error instanceof PreviewAccessUnavailable){await finish('block',{detail:error.message});return;}throw error;}
         return;
     }
+    // A finite project needs a progress watchdog before authorizing another
+    // expensive child mission. Superseded scope revisions are not failed work.
+    const attempts = runs.filter(r => r.kind === p.phase && r.milestone_index === p.milestone_index &&
+        !r.outcome?.superseded);
+    if (attempts.length >= 3 && !p.active_mission_id) {
+        const states = await Promise.all(attempts.slice(-3).map(async r => (await readMission(r.mission_id)).mission.status));
+        if (states.every(status => status === 'blocked' || status === 'stopped')) {
+            await finish('block', { detail: 'Progress watchdog: three consecutive failed '+p.phase+' attempts at the same milestone. Completed evidence and consumed budgets are preserved; an explicit diagnosis or revised scope is required before any further work.' });
+            return;
+        }
+    }
+    // Do not spawn more research or planning jobs when cumulative spend has
+    // consumed the aggregate budget. SQL reservations remain authoritative.
+    const { data: spend, error: spendError } = await getSupabaseAdminClient().from('agent_missions')
+        .select('actual_tokens,reserved_tokens').eq('project_id',p.id);
+    if (spendError) throw Error('Cannot verify cumulative project budget');
+    const charged = (spend ?? []).reduce((total, m) => total +
+        Math.max(0, Number(m.actual_tokens ?? 0)) + Math.max(0, Number(m.reserved_tokens ?? 0)), 0);
+    if (p.token_allowance - charged < 8000) {
+        await finish('block', { detail: 'Aggregate project token budget has fewer than 8,000 uncommitted tokens. Previous work is retained; a new mission is not authorized.' });
+        return;
+    }
     const evidence = await milestoneEvidence(runs);
     let objective: string;
     let projectEvidence: unknown;
