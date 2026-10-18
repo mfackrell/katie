@@ -86,7 +86,7 @@ export async function listActorVisualReferencePointers(actorId: string): Promise
     .eq("actor_id", actorId)
     .order("updated_at", { ascending: false })
     .limit(80)
-    .returns<VisualReferencePointer[]>();
+    .returns<VisualReferencePointer>();
   if (error) throw new Error(`Visual long-term memory index unavailable: ${error.message}`);
   return data ?? [];
 }
