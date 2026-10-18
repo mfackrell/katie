@@ -2745,6 +2745,35 @@ export function ChatPanel({
                       unoptimized
                     />
                   </div>
+                  {message.role === "assistant" ? (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const label = window.prompt("Whose face should Katie remember from this portrait?");
+                        if (!label?.trim()) return;
+                        void (async () => {
+                          try {
+                            const response = await fetch("/api/visual-references", {
+                              method: "POST",
+                              headers: { "Content-Type": "application/json" },
+                              body: JSON.stringify({
+                                actorId, chatId: message.chatId, messageId: message.id,
+                                label: label.trim(), assetIndex: message.assets?.indexOf(asset) ?? 0,
+                              }),
+                            });
+                            const body = await response.json().catch(() => ({})) as { error?: string };
+                            if (!response.ok) throw new Error(body.error || "Could not save visual reference");
+                            window.alert(`Saved ${label.trim()} as a visual reference for future pictures.`);
+                          } catch (error) {
+                            window.alert(error instanceof Error ? error.message : "Reference save failed");
+                          }
+                        })();
+                      }}
+                      className="absolute bottom-3 right-3 rounded-xl border border-white/10 bg-zinc-950/80 px-3 py-1.5 text-xs font-medium text-white opacity-0 transition-opacity hover:bg-zinc-900 focus-visible:opacity-100 group-hover:opacity-100"
+                    >
+                      Remember this face
+                    </button>
+                  ) : null}
                   <button
                     type="button"
                     onClick={() =>
