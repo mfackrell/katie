@@ -86,7 +86,7 @@ export async function loadVisualContinuity(input: {
   const references: VisualContinuity["references"] = [];
   for (const row of chosen) {
     const { data: message, error: loadError } = await db.from("messages")
-      .select("actor_id,chat_id,content").eq("id", row.source_message_id).eq("actor_id", input.actorId).maybeSingle();
+      .select("actor_id,chat_id,content").eq("id", row.source_message_id).eq("actor_id", input.actorId).maybeSingle<{ chat_id: string; content: string }>();
     if (loadError || !message || message.chat_id !== row.source_chat_id) {
       throw new Error(`The saved visual reference for ${row.label} is unavailable; an unrelated face must not be substituted.`);
     }
@@ -114,7 +114,7 @@ export async function storeVisualAnchor(input: {
   if (!input.context.anchor || input.imageCount !== 1) return;
   const db = getSupabaseAdminClient();
   const { data: existing, error: readError } = await db.from("visual_references")
-    .select("approved").eq("actor_id", input.actorId).eq("subject_key", input.context.anchor.key).maybeSingle();
+    .select("approved").eq("actor_id", input.actorId).eq("subject_key", input.context.anchor.key).maybeSingle<{ approved: boolean }>();
   if (readError) throw new Error(`Visual anchor check failed: ${readError.message}`);
   // Preserve identity across new scenes. Only an explicit correction replaces an existing anchor.
   if (existing && !input.context.anchor.replace) return;
