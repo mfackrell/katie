@@ -1,8 +1,9 @@
 import type { ProviderResponse } from "@/lib/providers/types";
 
 /**
- * RunPod is a technical-resilience fallback, never a content-refusal bypass.
+ * RunPod is the last-resort image backend for provider-generation failures.
  * Caller must have observed failures from BOTH Grok and Google in this request.
+ * Explicit moderation/safety rejections are not eligible for circumvention.
  */
 export type ImageProviderFailure = { provider: "grok" | "google"; error: string };
 
@@ -23,8 +24,8 @@ export function shouldTryRunpodImage(input: {
   // A content decision from ANY attempt is terminal for the whole request,
   // even if an earlier attempt to that provider had a technical error.
   if (input.failures.some(f => MODERATION.test(f.error))) return false;
-  return input.failures.some(f => f.provider === "grok" && isTechnicalImageFailure(f.error)) &&
-    input.failures.some(f => f.provider === "google" && isTechnicalImageFailure(f.error));
+  return input.failures.some(f => f.provider === "grok" && Boolean(f.error.trim())) &&
+    input.failures.some(f => f.provider === "google" && Boolean(f.error.trim()));
 }
 
 export function runpodImageConfigured(): boolean {
