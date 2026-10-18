@@ -1,5 +1,4 @@
 import { normalizeReviewMode } from "@/lib/collaboration/review-mode";
-import { listActorVisualReferencePointers } from "@/lib/chat/visual-continuity";
 import { getSupabaseAdminClient } from "@/lib/data/supabase/admin";
 import type { Actor, ChatThread, Message } from "@/lib/types/chat";
 import { createNeutralActorRoutingProfile, normalizeActorRoutingProfile } from "@/lib/router/actor-routing-profile";
@@ -606,17 +605,16 @@ async function listMemoryTableForActor(
 }
 
 export async function listMemoryRecordsForActor(actorId: string): Promise<ActorMemoryRecord[]> {
-  const [shortTerm, intermediate, longTerm, documents, visualReferences] = await Promise.all([
+  const [shortTerm, intermediate, longTerm, documents] = await Promise.all([
     listMemoryTableForActor("short_term_memory", "short-term", actorId),
     listMemoryTableForActor("intermediate_memory", "intermediate", actorId),
     getLongTermMemory(actorId, "actor-wide"),
     listActorMemoryDocuments(actorId),
-    listActorVisualReferencePointers(actorId),
   ]);
 
   return [...shortTerm, ...intermediate, {
     layer: "long-term" as const, actorId, chatId: "actor-wide",
-    content: { ...longTerm, referenceDocuments: documents, visualReferenceIndex: visualReferences },
+    content: { ...longTerm, referenceDocuments: documents },
     updatedAt: new Date().toISOString()
   }];
 }
