@@ -33,35 +33,73 @@ export function shouldTryRunpodImage(input: {
     input.failures.some(f => f.provider === "google" && Boolean(f.error.trim()));
 }
 
+
+/** Public RunPod endpoint: already deployed by RunPod, so no private GPU worker is needed. */
+export const RUNPOD_IMAGE_MODEL_ID = "black-forest-labs-flux-1-schnell";
+const IMAGE_URL_HOST = "image.runpod.ai";
+const MAX_IMAGE_BYTES = 12 * 1024 * 1024;
+
 export function runpodImageConfigured(): boolean {
-  return Boolean(process.env.RUNPOD_API_KEY && /^[a-zA-Z0-9_-]{3,80}$/.test(process.env.RUNPOD_IMAGE_ENDPOINT_ID ?? ""));
+  return Boolean(process.env.RUNPOD_API_KEY);
 }
 
-const MAX_IMAGE_BYTES = 12 * 1024 * 1024;
-const ENDPOINT_RE = /^[a-zA-Z0-9_-]{3,80}$/;
+function mimeFromImage(image: Buffer): string {
+  if (image.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))) return "image/png";
+  if (image[0] === 0xff && image[1] === 0xd8 && image[2] === 0xff) return "image/jpeg";
+  if (image.toString("ascii", 0, 4) === "RIFF" && image.toString("ascii", 8, 12) === "WEBP") return "image/webp";
+  throw new Error("RunPod returned an unsupported image format.");
+}
+
+function checkedImageUrl(value: unknown): string {
+  if (typeof value !== "string") throw new Error("RunPod image URL missing.");
+  let u: URL;
+  try { u = new URL(value); } catch { throw new Error("Invalid RunPod image URL."); }
+  if (u.protocol !== "https:" || u.hostname !== IMAGE_URL_HOST || u.port ||
+      u.username || u.password || !u.pathname.startsWith("/")) {
+    throw new Error("RunPod returned an untrusted image URL.");
+  }
+  return u.href;
+}
+
+async function collectImageBytes(response: Response): Promise<Buffer> {
+  if (!response.ok) throw new Error(`RunPod image download failed (HTTP ${response.status}).`);
+  const declared = Number(response.headers.get("content-length") ?? 0);
+  if (declared > MAX_IMAGE_BYTES) throw new Error("RunPod image exceeds size limit.");
+  if (!response.body) throw new Error("RunPod image response is empty.");
+  const reader = response.body.getReader();
+  let total = 0;
+  const chunks: Buffer[] = [];
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > MAX_IMAGE_BYTES) {
+        await reader.cancel();
+        throw new Error("RunPod image exceeds size limit.");
+      }
+      chunks.push(Buffer.from(value));
+    }
+  } finally { reader.releaseLock(); }
+  if (total < 16) throw new Error("RunPod image is empty or truncated.");
+  return Buffer.concat(chunks, total);
+}
 
 /**
- * The configured RunPod image worker must accept {"input":{"prompt":...}}
- * and return the ComfyUI-style {"status":"COMPLETED","output":{"images":
- * [{"type":"base64","data":"..."}]}} response. No untrusted URL downloads.
- * This requires a separately provisioned image-generation worker.
+ * Public FLUX.1 Schnell model: POST prompt -> COMPLETED output.image_url
+ * (expiring after seven days). Download immediately from the fixed
+ * image.runpod.ai host and store the image itself as a private inline asset.
  */
 export async function generateRunpodImage(prompt: string, deps: {
   fetchFn?: typeof fetch;
-  endpointId?: string;
   apiKey?: string;
 } = {}): Promise<ProviderResponse> {
-  const endpointId = deps.endpointId ?? process.env.RUNPOD_IMAGE_ENDPOINT_ID ?? "";
   const apiKey = deps.apiKey ?? process.env.RUNPOD_API_KEY ?? "";
-  if (!ENDPOINT_RE.test(endpointId) || !apiKey) {
-    throw new Error("RunPod image endpoint is not configured.");
-  }
-  if (!prompt.trim() || prompt.length > 10000) {
-    throw new Error("Invalid RunPod image prompt.");
-  }
-
-  const response = await (deps.fetchFn ?? fetch)(
-    `https://api.runpod.ai/v2/${endpointId}/runsync?wait=120000`,
+  if (!apiKey) throw new Error("RunPod API key is not configured.");
+  if (!prompt.trim() || prompt.length > 10000) throw new Error("Invalid RunPod image prompt.");
+  const fetchFn = deps.fetchFn ?? fetch;
+  const response = await fetchFn(
+    `https://api.runpod.ai/v2/${RUNPOD_IMAGE_MODEL_ID}/runsync`,
     {
       method: "POST",
       headers: {
@@ -69,38 +107,30 @@ export async function generateRunpodImage(prompt: string, deps: {
         "Content-Type": "application/json",
         Accept: "application/json",
       },
-      body: JSON.stringify({ input: { prompt } }),
+      body: JSON.stringify({ input: { prompt, width: 1024, height: 1024 } }),
       signal: AbortSignal.timeout(135000),
       cache: "no-store",
+      redirect: "error",
     },
   );
-  if (!response.ok) throw new Error(`RunPod image endpoint failed (HTTP ${response.status}).`);
+  if (!response.ok) throw new Error(`RunPod public image endpoint failed (HTTP ${response.status}).`);
   const payload: unknown = await response.json();
   if (!payload || typeof payload !== "object") throw new Error("Invalid RunPod image response.");
-  const body = payload as { status?: unknown; output?: { images?: Array<{ type?: unknown; data?: unknown }> } };
-  if (body.status !== "COMPLETED") throw new Error("RunPod image generation did not complete.");
+  const result = payload as { status?: unknown; output?: { image_url?: unknown } };
+  if (result.status !== "COMPLETED") throw new Error("RunPod public image generation did not complete.");
 
-  const first = body.output?.images?.[0];
-  if (first?.type !== "base64" || typeof first.data !== "string" ||
-      !/^[A-Za-z0-9+/]+={0,2}$/.test(first.data) || first.data.length > MAX_IMAGE_BYTES * 4 / 3 + 4) {
-    throw new Error("RunPod image output is missing or unsupported.");
-  }
-  const decoded = Buffer.from(first.data, "base64");
-  if (decoded.length < 16 || decoded.length > MAX_IMAGE_BYTES) {
-    throw new Error("Invalid RunPod image size.");
-  }
-  const mime = decoded.subarray(0, 8).equals(Buffer.from([137,80,78,71,13,10,26,10]))
-    ? "image/png"
-    : decoded[0] === 0xff && decoded[1] === 0xd8 && decoded[2] === 0xff
-      ? "image/jpeg"
-      : decoded.toString("ascii", 0, 4) === "RIFF" && decoded.toString("ascii", 8, 12) === "WEBP"
-        ? "image/webp" : "";
-  if (!mime) throw new Error("RunPod returned an unsupported image format.");
-
+  // Fetch the expiring CDN image with no auth headers, credentials or redirects.
+  const safeUrl = checkedImageUrl(result.output?.image_url);
+  const imageResponse = await fetchFn(safeUrl, {
+    method: "GET", redirect: "error", cache: "no-store",
+    signal: AbortSignal.timeout(20000),
+  });
+  const image = await collectImageBytes(imageResponse);
+  const mime = mimeFromImage(image);
   return {
     text: "[Image Generated]",
     provider: "runpod" as ProviderResponse["provider"],
-    model: `runpod-image:${endpointId}`,
-    content: [{ type: "image", url: `data:${mime};base64,${first.data}` }],
+    model: RUNPOD_IMAGE_MODEL_ID,
+    content: [{ type: "image", url: `data:${mime};base64,${image.toString("base64")}` }],
   };
 }
