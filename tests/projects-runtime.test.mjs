@@ -165,3 +165,42 @@ test('aggregate project budget stops further missions while preserving prior spe
  await runProjectBatch();assert.equal(calls.length,1);assert.equal(calls[0].args.p_action,'block');
  assert.match(calls[0].args.p_data.detail,/Aggregate project token budget/);
 });
+
+
+test('pending approval is shown as an actionable scope card and a stale approval cannot start work',async()=>{
+ const digest='e'.repeat(64), calls=[];
+ const pending={...owner,status:'awaiting_approval',phase:'approval',approved_hash:null,approval_hash:digest,repository_full_name:'mfackrell/katie'};
+ const getChatById=async()=>({id:chat,actorId:actor});
+ const getMessages=async()=>[{id:'saved',chatId:chat,role:'assistant',content:'Scope proposal'}];
+ const {GET,POST}=modules({
+  'next/server':{NextResponse:{json:(value,options)=>Response.json(value,options)}},
+  '@/lib/data/persistence-store':{getChatById,getMessages},
+  '@/lib/projects/store':{
+   projectForChat:async()=>pending,
+   projectRpc:async(name,args)=>{calls.push({name,args});return {...pending,status:'running',phase:'development'};}
+  }
+ })('@/app/api/projects/route');
+ const read=await GET({nextUrl:new URL('https://katie.local/api/projects?actorId='+actor+'&chatId='+chat)});
+ assert.equal(read.status,200);
+ const current=await read.json();
+ assert.equal(current.approval.hash,digest);
+ assert.equal(current.approval.name,plan.name);
+ assert.equal(current.approval.milestones.length,2);
+ const post=hash=>POST(new Request('https://katie.local/api/projects',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({actorId:actor,chatId:chat,approvalHash:hash})}));
+ const stale=await post('f'.repeat(64));assert.equal(stale.status,409);assert.equal(calls.length,0);
+ const ok=await post(digest);assert.equal(ok.status,200);
+ assert.equal((await ok.json()).status,'running');
+ assert.equal(calls[0].name,'control_work_project');
+ assert.equal(calls[0].args.p_action,'approve');
+ assert.equal(calls[0].args.p_hash,digest);
+ assert.equal(calls[0].args.p_chat,chat);
+});
+test('project approval endpoint refuses requests from a different actor',async()=>{
+ const {POST}=modules({
+  'next/server':{NextResponse:{json:(value,options)=>Response.json(value,options)}},
+  '@/lib/data/persistence-store':{getChatById:async()=>({actorId:actor}),getMessages:async()=>[]},
+  '@/lib/projects/store':{projectForChat:async()=>{throw Error('No foreign project lookup permitted');}}
+ })('@/app/api/projects/route');
+ const r=await POST(new Request('https://katie.local/api/projects',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({actorId:randomUUID(),chatId:chat,approvalHash:'a'.repeat(64)})}));
+ assert.equal(r.status,404);
+});
