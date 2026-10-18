@@ -204,3 +204,23 @@ test('project approval endpoint refuses requests from a different actor',async()
  const r=await POST(new Request('https://katie.local/api/projects',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({actorId:randomUUID(),chatId:chat,approvalHash:'a'.repeat(64)})}));
  assert.equal(r.status,404);
 });
+
+
+test('global project approval discovery only exposes pending approvals belonging to visible chats',async()=>{
+ const otherChat=randomUUID(),anotherActor=randomUUID(),pendingId=randomUUID();
+ const visible=[{id:chat,actorId:actor,title:'Chat 10/18/2026, 10:25:23 AM'}];
+ const rows=[
+  {actor_id:actor,chat_id:chat,status:'awaiting_approval',spec:{name:'Token board'},updated_at:'2026-10-18T19:29:41Z'},
+  {actor_id:anotherActor,chat_id:otherChat,status:'awaiting_approval',spec:{name:'Invisible project'}},
+  {actor_id:anotherActor,chat_id:chat,status:'awaiting_approval',spec:{name:'Wrong actor'}}
+ ];
+ const db={from:()=>({select(){return this;},eq(){return this;},order(){return this;},limit:async()=>({data:rows,error:null})})};
+ const {GET}=modules({'next/server':{NextResponse:{json:(value,options)=>Response.json(value,options)}},
+  '@/lib/data/supabase/admin':{getSupabaseAdminClient:()=>db},
+  '@/lib/data/persistence-store':{listChats:async()=>visible}
+ })('@/app/api/projects/pending/route');
+ const response=await GET();assert.equal(response.status,200);
+ const data=await response.json();
+ assert.deepEqual(JSON.parse(JSON.stringify(data.approvals)),[{actorId:actor,chatId:chat,chatTitle:visible[0].title,projectName:'Token board'}]);
+ assert.equal(JSON.stringify(data).includes('approvalHash'),false);
+});
