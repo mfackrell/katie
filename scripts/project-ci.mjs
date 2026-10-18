@@ -16,9 +16,26 @@ export async function verifyProject({request,output,workspace=process.cwd()}){
  // scripts, hide host files, and allow network only for this npm download stage.
  const archive=spawnSync('git',['archive',context.baseSha],{cwd:root,maxBuffer:128*1024*1024,timeout:30000});if(archive.status)throw Error('Unable to read verified baseline dependencies');
  const extracted=spawnSync('tar',['-xf','-','--no-same-owner','-C',deps],{input:archive.stdout,timeout:30000});if(extracted.status)throw Error('Baseline extraction failed');
- const install=spawnSync('bwrap',[...sandboxArgs(deps,{writable:true,network:true}),resolve(dirname(process.execPath),'npm'),'ci','--ignore-scripts','--no-audit','--no-fund'],{stdio:'inherit',timeout:300000});
- // npm is supplied by setup-node; use its own CLI path, not a distro guess.
- if(install.status!==0)throw Error('Isolated baseline npm installation failed');
+ // The package tree is extracted from the immutable, verified base commit,
+ // and the candidate's dependency manifests were compared byte-for-byte above.
+ // Fetch dependency tarballs in this trusted preparation stage, with scripts
+ // disabled. The nested bwrap npm installer could not resolve registry packages
+ // on GitHub's ephemeral runner ("Exit handler never called"), despite the
+ // repository's regular npm ci succeeding. No generated application code runs
+ // here, and no provider credentials are passed to the installer.
+ const install=spawnSync('npm',['ci','--ignore-scripts','--no-audit','--no-fund','--no-progress'],{
+  cwd:deps,stdio:'inherit',timeout:300000,
+  env:{
+   PATH:process.env.PATH??'/usr/bin:/bin',
+   HOME:process.env.RUNNER_TEMP??'/tmp',
+   TMPDIR:process.env.RUNNER_TEMP??'/tmp',
+   CI:'true',
+   npm_config_ignore_scripts:'true',
+   npm_config_audit:'false',
+   npm_config_fund:'false',
+  },
+ });
+ if(install.status!==0)throw Error('Trusted baseline dependency preparation failed; candidate tests were not run');
  const dependencies=resolve(deps,'node_modules');mkdirSync(resolve(root,'node_modules'),{recursive:true});
  const script="const {spawnSync}=require('node:child_process');for(const task of ['typecheck','ci:gate']){const r=spawnSync('npm',['run',task],{stdio:'inherit'});if(r.status!==0)process.exit(r.status||1);} ";
  const checkArgs=[...sandboxArgs(root,{dependencies,writable:true}), '--setenv','CI','true','--setenv','VERCEL_ENV','development','--setenv','NEXT_PUBLIC_SUPABASE_URL','https://example.supabase.co','--setenv','NEXT_PUBLIC_SUPABASE_ANON_KEY','anon-placeholder','--setenv','SUPABASE_SERVICE_ROLE_KEY','service-role-placeholder',process.execPath,'-e',script];
