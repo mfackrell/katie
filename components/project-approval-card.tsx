@@ -23,7 +23,7 @@ type Props = {
 
 export function ProjectApprovalCard({ approval, pending, error, onApprove, onRequestChanges }: Props) {
   return (
-    <aside aria-label="Project approval required" className="mx-3 my-2 shrink-0 rounded-2xl border-2 border-amber-400/70 bg-amber-950/90 p-3 text-amber-50 shadow-[0_12px_40px_rgba(0,0,0,0.35)] sm:mx-6 sm:p-4">
+    <aside aria-label="Project approval required" className="mx-3 my-2 max-h-[55dvh] shrink-0 overflow-y-auto rounded-2xl border-2 border-amber-400/70 bg-amber-950/90 p-3 text-amber-50 shadow-[0_12px_40px_rgba(0,0,0,0.35)] sm:mx-6 sm:p-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <span className="rounded-full bg-amber-400 px-3 py-1 text-xs font-bold uppercase tracking-wide text-zinc-950">
           Action required · Project approval
@@ -58,7 +58,7 @@ export function ProjectApprovalCard({ approval, pending, error, onApprove, onReq
         Approval authorizes work only within this scope. It does not authorize production merging, purchases, new services, or credential changes.
       </p>
       {error && <p role="alert" className="mt-3 rounded-lg bg-red-800/40 p-2 text-sm text-red-100">{error}</p>}
-      <div className="mt-3 flex flex-wrap gap-2">
+      <div className="sticky bottom-0 mt-3 flex flex-wrap gap-2 rounded-xl bg-amber-950/95 py-2">
         <button type="button" disabled={pending} onClick={()=>onApprove(approval.hash)}
           className="min-h-11 flex-1 rounded-xl bg-emerald-400 px-4 py-2 text-sm font-bold text-zinc-950 transition hover:bg-emerald-300 disabled:opacity-60">
           {pending ? "Saving approval…" : "Approve & Start"}
