@@ -28,6 +28,7 @@ import { pruneRepeatedVideoSelections, uniqueAttachmentReferences } from "@/lib/
 import { after, NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { assembleContext } from "@/lib/memory/assemble-context";
+import { loadVisualContinuity, storeVisualAnchor, verifyVisualContinuity } from "@/lib/chat/visual-continuity";
 import { maybeUpdateSummary } from "@/lib/memory/summarizer";
 import { maybeUpdateLongTermMemory } from "@/lib/memory/long-term-editor";
 import { getChatById, listChatsByActorId, getMessages, getRecentMessages, saveMessage } from "@/lib/data/persistence-store";
@@ -1788,6 +1789,18 @@ async function executeChat(request: NextRequest) {
       included: personaForGeneration.includes("KATIE_RUNTIME_CONTEXT:")
     });
 
+    // Restore actor-owned identity anchors before image generation. History text alone
+    // cannot preserve a face. Non-image requests never load image bytes.
+    const visualContinuity = resolvedRequestIntent === "image-generation" && !currentAgentTask()
+      ? await loadVisualContinuity({
+          actorId, chatId, prompt: message, actorName: name, existingImageCount: images.length,
+        })
+      : null;
+    console.info("[VisualContinuity] image reference preflight", {
+      requestId, count: visualContinuity?.references.length ?? 0,
+      subjects: visualContinuity?.references.map(item => item.key) ?? [],
+    });
+
     let streamCancelled = false;
     const stream = new ReadableStream<Uint8Array>({
       start(controller) {
@@ -1953,10 +1966,12 @@ async function executeChat(request: NextRequest) {
                   ...(creativeNarrativeRequest ? [CREATIVE_CONTINUITY_INSTRUCTIONS] : [])].filter(Boolean).join("\n\n"),
                 summary,
                 history: historyForProvider,
-                message: forReview ? message : messageForGeneration,
+                message: forReview ? message : visualContinuity
+                  ? (messageForGeneration === message ? visualContinuity.prompt : visualContinuity.prompt + "\n\nADDITIONAL REQUEST CONTEXT:\n" + messageForGeneration)
+                  : messageForGeneration,
                 requestIntent: resolvedRequestIntent,
                 secondaryIntents: storedWebsite.fresh ? [...(resolvedRoutingIntentForReroute?.secondaryIntents ?? []), "web-search"] : resolvedRoutingIntentForReroute?.secondaryIntents ?? [],
-                images,
+                images: visualContinuity ? [...visualContinuity.references.map(ref => ref.image), ...images] : images,
                 modelId: selectedModelId,
                 attachments,
                 onProviderSystemPrepared: audit =>
@@ -2618,6 +2633,19 @@ ${chunkWorkflowSummary}`;
                 };
               },
               onRefusalReroute: ({ attempt, reroutedAttempt }) => {
+                emitChunk({
+                  type: "metadata",
+                  modelId: reroutedAttempt.modelId,
+                  provider: reroutedAttempt.provider.name,
+                  explainer: reroutedAttempt.explainer,
+                  resetText: true,
+                  providerFailover: {
+                    kind: "refusal",
+                    from: { provider: attempt.provider.name, modelId: attempt.modelId },
+                    to: { provider: reroutedAttempt.provider.name, modelId: reroutedAttempt.modelId },
+                    reason: "the model declined the request",
+                  },
+                });
                 console.warn("[Chat API] Provider refusal detected. AI router selected a new candidate.", {
                   requestId,
                   refusedProvider: attempt.provider.name,
@@ -2627,6 +2655,18 @@ ${chunkWorkflowSummary}`;
                 });
               },
               onRefusalFallback: ({ attempt, nextAttempt }) => {
+                emitChunk({
+                  type: "metadata",
+                  modelId: nextAttempt.modelId,
+                  provider: nextAttempt.provider.name,
+                  resetText: true,
+                  providerFailover: {
+                    kind: "refusal",
+                    from: { provider: attempt.provider.name, modelId: attempt.modelId },
+                    to: { provider: nextAttempt.provider.name, modelId: nextAttempt.modelId },
+                    reason: "the model declined the request",
+                  },
+                });
                 console.warn("[Chat API] Provider refusal detected. AI reroute unavailable; attempting deterministic fallback candidate.", {
                   requestId,
                   provider: attempt.provider.name,
@@ -2740,6 +2780,7 @@ ${chunkWorkflowSummary}`;
                   explainer: reroutedAttempt.explainer,
                   resetText: true,
                   providerFailover: {
+                    kind: "error",
                     from: {
                       provider: attempt.provider.name,
                       modelId: attempt.modelId,
@@ -2892,6 +2933,40 @@ ${chunkWorkflowSummary}`;
               });
             }
 
+            if (visualContinuity?.references.length && resolvedRequestIntent === "image-generation") {
+              let inspection = await verifyVisualContinuity({ references: visualContinuity.references, result: result!, providers });
+              if (inspection.status === "fail") {
+                console.warn("[VisualContinuity] initial identity mismatch", {
+                  requestId, issue: inspection.issue ?? "unknown",
+                });
+                const repairingProvider = providers.find(candidate => candidate.name === result!.provider);
+                if (repairingProvider) {
+                  const retryParams = createParams(result.model);
+                  const repaired = await repairingProvider.generate({
+                    ...retryParams,
+                    user: retryParams.user + "\n\nIDENTITY CORRECTION: The previous image did not match the provided face references. " +
+                      (inspection.issue ?? "") +
+                      " Keep every named person's identity faithful to their numbered reference image. Regenerate the requested scene.",
+                  });
+                  const secondInspection = await verifyVisualContinuity({
+                    references: visualContinuity.references, result: repaired, providers,
+                  });
+                  if (secondInspection.status === "pass") {
+                    result = repaired;
+                    inspection = secondInspection;
+                  } else {
+                    throw new Error("Generated image did not preserve established visual identities; no mismatched image was published.");
+                  }
+                } else {
+                  throw new Error("Visual continuity verification failed and the image provider was unavailable to retry.");
+                }
+              }
+              emitChunk({ type: "metadata", visualContinuity: {
+                status: inspection.status,
+                subjects: visualContinuity.references.map(ref => ref.key),
+              } });
+            }
+
             const imageAssets =
               result.content
                 ?.map((part) => {
@@ -2931,6 +3006,20 @@ ${chunkWorkflowSummary}`;
               content: assistantText,
               assets: imageAssets,
             });
+            if (visualContinuity && imageAssets.length) {
+              // Group images never become identity anchors; an explicit portrait correction may replace one.
+              try {
+                await storeVisualAnchor({
+                  actorId, chatId, messageId: assistantMessageId,
+                  context: visualContinuity, imageCount: imageAssets.length,
+                });
+              } catch (error) {
+                console.error("[VisualContinuity] generated image was saved but visual anchor was not", {
+                  requestId, reason: error instanceof Error ? error.message : String(error),
+                });
+                emitChunk({ type: "metadata", visualContinuity: { status: "anchor-save-failed" } });
+              }
+            }
             if (requestTracked && !currentAgentTask()) {
               await completeChatRequest(requestId, {
                 assistantMessageId,

@@ -27,6 +27,8 @@ import type { LlmProvider, ProviderResponse } from "../lib/providers/types";
 import { isLikelyProviderRefusal, runWithRefusalFallback } from "../lib/router/refusal-detection";
 import {
   classifyGenerationFailure,
+  describeGenerationFailure,
+  isExplicitContentRefusal,
   filterHealthyProviders,
 } from "../lib/router/provider-error";
 
@@ -1971,4 +1973,61 @@ test("actor routing bias is visible in provider selection explainer", async () =
   assert.equal(decision.explainer?.actor_routing?.applied, true);
   assert.equal(decision.explainer?.actor_routing?.actor_id, "actor-test-1");
   assert.ok((decision.explainer?.actor_routing?.adjustments?.length ?? 0) > 0);
+});
+
+test("Grok's explicit 403 content refusal is distinct from operational failure", () => {
+  const refusal = new Error("Grok request failed for model grok-4.7: 403 \"I'm sorry, I can't help with that request.\"");
+  assert.equal(isExplicitContentRefusal(refusal), true);
+  assert.equal(classifyGenerationFailure(refusal), "refusal");
+  assert.equal(describeGenerationFailure(refusal), "the model declined the request");
+  for (const error of [
+    "403 Forbidden: model access denied",
+    "401 Unauthorized: invalid api key",
+    "429 Too many requests",
+    "500 upstream error",
+  ]) {
+    assert.equal(isExplicitContentRefusal(new Error(error)), false);
+    assert.notEqual(classifyGenerationFailure(new Error(error)), "refusal");
+  }
+});
+
+test("HTTP content refusal uses refusal reroute, not error reroute", async () => {
+  const requests: string[] = [];
+  let errorReroutes = 0;
+  let refusalReroutes = 0;
+  const result = await runWithRefusalFallback({
+    attempts: [{ provider: "grok", modelId: "grok-4.7" }],
+    shouldRetryRefusal: true,
+    runAttempt: async (attempt) => {
+      requests.push(attempt.provider);
+      if (attempt.provider === "grok") throw new Error(
+        "Grok request failed for model grok-4.7: 403 \"I'm sorry, I can't help with that request.\"",
+      );
+      return { text: "A response from the alternative model.", provider: "google", model: "gemini-3.8-flash" };
+    },
+    detectRefusal: (response, attempt) => isLikelyProviderRefusal(response, attempt.provider),
+    rerouteOnRefusal: async () => {
+      refusalReroutes++;
+      return { provider: "google", modelId: "gemini-3.8-flash" };
+    },
+    rerouteOnError: async () => { errorReroutes++; return null; },
+  });
+  assert.deepEqual(requests, ["grok", "google"]);
+  assert.equal(refusalReroutes, 1);
+  assert.equal(errorReroutes, 0);
+  assert.equal(result.attempt.provider, "google");
+});
+
+test("explicit 403 refusal is terminal when retry on refusal is disabled", async () => {
+  const requests: string[] = [];
+  await assert.rejects(runWithRefusalFallback({
+    attempts: [{ provider: "grok", modelId: "grok-4.7" }, { provider: "google", modelId: "gemini-3.8-flash" }],
+    shouldRetryRefusal: false,
+    runAttempt: async (attempt) => {
+      requests.push(attempt.provider);
+      throw new Error("403 I'm sorry, I can't help with that request.");
+    },
+    detectRefusal: () => false,
+  }), /selected model declined this request/i);
+  assert.deepEqual(requests, ["grok"]);
 });

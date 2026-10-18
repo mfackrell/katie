@@ -8,6 +8,10 @@ import {
   ResearchEvidenceSource
 } from "@/lib/providers/types";
 import { buildMemoryContext } from "@/lib/providers/memory-context";
+import {
+  buildGrokImageContextSource, composeGrokImagePrompt, grokImageCondensationInstructions,
+  needsGrokImageContext, GROK_IMAGE_CONTEXT_MODEL
+} from "@/lib/providers/grok-image-context";
 import { MATH_EXECUTION_PROTOCOL } from "@/lib/providers/math-execution-protocol";
 import { formatAttachmentContext } from "@/lib/providers/attachment-context";
 import { MAX_VIDEO_FALLBACK_FRAMES } from "@/lib/uploads/video-fallback-frames";
@@ -294,13 +298,63 @@ export class GrokProvider implements LlmProvider {
     });
   }
 
+  private async imagePromptWithContext(params: ChatGenerateParams): Promise<{
+    prompt: string; mode: "direct" | "condensed"; sourceHistoryTurns: number; truncated: boolean;
+  }> {
+    if (!needsGrokImageContext(params)) {
+      return { prompt: params.user, mode: "direct", sourceHistoryTurns: 0, truncated: false };
+    }
+    // The Imagine API accepts a single bounded prompt, not system messages.
+    // First give Grok's TEXT model the same persona, STM, ITM and LTM that Gemini gets.
+    // It extracts relevant scene facts rather than discarding older conversation context.
+    const response = await fetch("https://api.x.ai/v1/responses", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${this.apiKey}` },
+      signal: AbortSignal.timeout(35_000),
+      body: JSON.stringify({
+        model: GROK_IMAGE_CONTEXT_MODEL,
+        input: [
+          { role: "system", content: [{ type: "input_text", text: grokImageCondensationInstructions(params.user) }] },
+          { role: "user", content: [{ type: "input_text", text: buildGrokImageContextSource(params) }] },
+        ],
+      }),
+    });
+    if (!response.ok) {
+      throw new Error(`Image context condensation failed (${response.status}); refusing to silently generate without established character history.`);
+    }
+    const parsed: unknown = await response.json();
+    const text = parsed && typeof parsed === "object" ? extractResponseText(parsed as ResponseTextSource).trim() : "";
+    if (!text) throw new Error("Grok returned no usable image context from conversational memory.");
+    const composed = composeGrokImagePrompt(params.user, text === "NONE" ? "" : text);
+    if (composed.backgroundTruncated) {
+      console.warn("[GrokProvider] image background context exceeded provider prompt budget", {
+        sourceHistoryTurns: params.history.length,
+        maxChars: 1024,
+      });
+    }
+    return { prompt: composed.prompt, mode: "condensed", sourceHistoryTurns: params.history.length, truncated: composed.backgroundTruncated };
+  }
+
   private async generateImage(params: ChatGenerateParams, model: string): Promise<ProviderResponse> {
     if (!params.user.trim()) throw new Error("Grok image generation requires a prompt.");
     const images = params.images ?? [];
     if (images.length > 5) throw new Error("Grok image editing supports up to five source images.");
+    const outgoing = await this.imagePromptWithContext(params);
     const endpoint = images.length ? "edits" : "generations";
     const imageInputs = images.map((url) => ({ type: "image_url", url }));
     console.info("[GrokProvider] image request", { model, endpoint: `/images/${endpoint}`, sourceImageCount: images.length });
+
+    // The provider system audit supports direct inspection of the literal final image
+    // prompt. No base64 reference images or credentials are recorded in this audit.
+    await params.onProviderSystemPrepared?.({
+      provider: "grok", model, endpoint: `images/${endpoint}`, systemMessages: [],
+      imagePrompt: outgoing.prompt,
+      contextSynthesis: {
+        mode: outgoing.mode, sourceHistoryTurns: outgoing.sourceHistoryTurns,
+        sourceSummaryChars: params.summary.length, sourcePersonaChars: params.persona.length,
+        truncated: outgoing.truncated,
+      },
+    });
 
     // xAI image edits require JSON; OpenAI images.edit() sends incompatible multipart data.
     const response = await fetch(`https://api.x.ai/v1/images/${endpoint}`, {
@@ -309,7 +363,7 @@ export class GrokProvider implements LlmProvider {
       signal: AbortSignal.timeout(180_000),
       body: JSON.stringify({
         model,
-        prompt: params.user,
+        prompt: outgoing.prompt,
         n: 1,
         response_format: "b64_json",
         ...(imageInputs.length === 1 ? { image: imageInputs[0] } : imageInputs.length ? { images: imageInputs } : {}),

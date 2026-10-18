@@ -96,6 +96,12 @@ export interface ProviderSystemAudit {
   endpoint: string;
   /** The literal system-role messages or systemInstruction field constructed by the adapter. */
   systemMessages: string[];
+  /** xAI Imagine has no system role: this is the literal bounded body.prompt. */
+  imagePrompt?: string;
+  contextSynthesis?: {
+    mode: "direct" | "condensed"; sourceHistoryTurns: number;
+    sourceSummaryChars: number; sourcePersonaChars: number; truncated: boolean;
+  };
 }
 
 export interface ChatGenerateParams {

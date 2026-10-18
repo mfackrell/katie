@@ -210,6 +210,7 @@ async function runPipeline(f, selection, { message = SHORT_REPLY, history, outpu
   };
   const state = await vm.runInNewContext(compile(`(async () => {
     ${generationParams}
+    const visualContinuity = null; // The fixture exercises non-image review routing.
     ${createParams}
     ${enqueueDelta}
     const execute = ${runAttempt};

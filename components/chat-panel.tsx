@@ -112,6 +112,7 @@ type ChatMetadataChunk = {
   collaborationEvent?: CollaborationUiEvent;
   collaboration?: CollaborationUiMetadata;
   providerFailover?: {
+    kind?: "error" | "refusal";
     from: { provider: string; modelId: string };
     to: { provider: string; modelId: string };
     reason: string;
@@ -124,6 +125,13 @@ type ChatMetadataChunk = {
   replayed?: boolean;
   requestId?: string;
 };
+
+function describeProviderFailover(failover: NonNullable<ChatMetadataChunk["providerFailover"]>): string {
+  if (failover.kind === "refusal") {
+    return `${failover.from.modelId} declined this request. Katie switched to ${failover.to.modelId}.`;
+  }
+  return `${failover.from.modelId} failed (${failover.reason}). Katie switched to ${failover.to.modelId}.`;
+}
 
 function participantLabel(participant?: CollaborationParticipantUi): string {
   return participant?.modelId?.trim() || "another model";
@@ -736,6 +744,7 @@ export function ChatPanel({
   const [uploadingFiles, setUploadingFiles] = useState(false);
   const [fileReferences, setFileReferences] = useState<FileReference[]>([]);
   const [statusMessage, setStatusMessage] = useState("");
+  const [failoverNotice, setFailoverNotice] = useState("");
   const [collaborationActivity, setCollaborationActivity] = useState<CollaborationActivityItem[]>([]);
   const [collaborationActive, setCollaborationActive] = useState(false);
   const [collaborationSummary, setCollaborationSummary] = useState<CollaborationUiMetadata | null>(null);
@@ -953,6 +962,7 @@ export function ChatPanel({
       setIsRoutingSelectionInFlight(false);
       setExplainerOpen(false);
       setStatusMessage("");
+      setFailoverNotice("");
       setStreamingModel(null);
       setCollaborationActivity([]);
       setCollaborationActive(false);
@@ -1352,6 +1362,7 @@ export function ChatPanel({
     setCollaborationActive(false);
     setCollaborationSummary(null);
     setStatusMessage("Routing request and selecting the lead model…");
+    setFailoverNotice("");
     setReasoningState(createReasoningUiState());
     if (showLiveReasoningExplainer) {
       setReasoningPopupDismissed(false);
@@ -1677,9 +1688,9 @@ export function ChatPanel({
             }
 
             if (chunk.providerFailover) {
-              setStatusMessage(
-                `${chunk.providerFailover.from.modelId} failed (${chunk.providerFailover.reason}). Katie rerouted the request to ${chunk.providerFailover.to.modelId}…`,
-              );
+              const notice = describeProviderFailover(chunk.providerFailover);
+              setFailoverNotice(notice);
+              setStatusMessage(notice);
             }
 
             if (chunk.degradedContext?.kind === "repository") {
@@ -1767,9 +1778,9 @@ export function ChatPanel({
           }
 
           if (trailingChunk.providerFailover) {
-            setStatusMessage(
-              `${trailingChunk.providerFailover.from.modelId} failed (${trailingChunk.providerFailover.reason}). Katie rerouted the request to ${trailingChunk.providerFailover.to.modelId}…`,
-            );
+            const notice = describeProviderFailover(trailingChunk.providerFailover);
+            setFailoverNotice(notice);
+            setStatusMessage(notice);
           }
 
           if (trailingChunk.collaboration) {
@@ -2744,6 +2755,35 @@ export function ChatPanel({
                       unoptimized
                     />
                   </div>
+                  {message.role === "assistant" ? (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const label = window.prompt("Whose face should Katie remember from this portrait?");
+                        if (!label?.trim()) return;
+                        void (async () => {
+                          try {
+                            const response = await fetch("/api/visual-references", {
+                              method: "POST",
+                              headers: { "Content-Type": "application/json" },
+                              body: JSON.stringify({
+                                actorId, chatId: message.chatId, messageId: message.id,
+                                label: label.trim(), assetIndex: message.assets?.indexOf(asset) ?? 0,
+                              }),
+                            });
+                            const body = await response.json().catch(() => ({})) as { error?: string };
+                            if (!response.ok) throw new Error(body.error || "Could not save visual reference");
+                            window.alert(`Saved ${label.trim()} as a visual reference for future pictures.`);
+                          } catch (error) {
+                            window.alert(error instanceof Error ? error.message : "Reference save failed");
+                          }
+                        })();
+                      }}
+                      className="absolute bottom-3 right-3 rounded-xl border border-white/10 bg-zinc-950/80 px-3 py-1.5 text-xs font-medium text-white opacity-100 transition-opacity hover:bg-zinc-900 focus-visible:opacity-100 sm:opacity-0 sm:group-hover:opacity-100"
+                    >
+                      Remember this face
+                    </button>
+                  ) : null}
                   <button
                     type="button"
                     onClick={() =>
@@ -2792,6 +2832,11 @@ export function ChatPanel({
         <div ref={messagesEndRef} />
       </section>
 
+      {failoverNotice && (
+        <p role="status" className="mx-3 mb-2 rounded-xl border border-amber-400/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-100 sm:mx-6">
+          {failoverNotice}
+        </p>
+      )}
       {managedAgentId && <p className="border-t border-white/10 px-4 py-3 text-sm text-zinc-300">This is a managed agent workspace. <a href={`/agents?chat=${encodeURIComponent(chatId)}`} className="underline">Open Agents management to continue the saved task.</a></p>}
       <form hidden={Boolean(managedAgentId)} onSubmit={onSubmit} className="shrink-0 border-t border-white/10 bg-zinc-950/92 px-2 py-2 pb-[calc(env(safe-area-inset-bottom)+0.5rem)] backdrop-blur-xl sm:bg-transparent sm:px-6 sm:py-4 sm:backdrop-blur-none">
         <p className="sr-only" role="status" aria-live="polite">
