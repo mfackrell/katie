@@ -7,6 +7,8 @@ import { Sidebar } from "@/components/sidebar";
 import { beginInFlightRequest, endInFlightRequest } from "@/lib/chat/inflight-guards";
 import type { Actor, ChatThread, ConnectedRepo } from "@/lib/types/chat";
 
+type PendingProjectApproval = { actorId: string; chatId: string; chatTitle: string; projectName: string };
+
 type ModalState =
   | { type: "primary" }
   | {
@@ -70,6 +72,8 @@ function pickNextActiveChatAfterDeletion(
 export default function HomePage() {
   const [actors, setActors] = useState<Actor[]>([]);
   const [chats, setChats] = useState<ChatThread[]>([]);
+  const [pendingProjectApprovals, setPendingProjectApprovals] = useState<PendingProjectApproval[]>([]);
+  const [approvalDiscoveryError, setApprovalDiscoveryError] = useState(false);
   const [activeActorId, setActiveActorId] = useState("");
   const [activeChatId, setActiveChatId] = useState("");
   const [actorChatSelections, setActorChatSelections] = useState<Record<string, string>>({});
@@ -164,6 +168,38 @@ export default function HomePage() {
 
     void fetchInitialData();
   }, []);
+
+  useEffect(() => {
+    if (!hasLoadedPersistedState) return;
+    let cancelled = false;
+    let busy = false;
+    const refresh = async () => {
+      if (busy || cancelled || document.visibilityState === "hidden") return;
+      busy = true;
+      try {
+        const response = await fetch("/api/projects/pending", { cache: "no-store" });
+        if (!response.ok) throw Error("Pending approval lookup failed");
+        const payload = await response.json() as { approvals?: PendingProjectApproval[] };
+        if (!cancelled) {
+          setPendingProjectApprovals(payload.approvals ?? []);
+          setApprovalDiscoveryError(false);
+        }
+      } catch {
+        if (!cancelled) setApprovalDiscoveryError(true);
+      } finally { busy = false; }
+    };
+    const timer = window.setInterval(() => { void refresh(); }, 15000);
+    const focused = () => { void refresh(); };
+    window.addEventListener("focus", focused);
+    document.addEventListener("visibilitychange", focused);
+    void refresh();
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+      window.removeEventListener("focus", focused);
+      document.removeEventListener("visibilitychange", focused);
+    };
+  }, [hasLoadedPersistedState]);
 
   useEffect(() => {
     if (!hasLoadedPersistedState) {
@@ -573,7 +609,21 @@ export default function HomePage() {
           />
         </div>
 
-        <div className="flex min-h-0 min-w-0 flex-1 overflow-hidden">
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+          {pendingProjectApprovals.filter(p => chats.some(c=>c.id===p.chatId&&c.actorId===p.actorId)).map(p => (
+            <button key={p.chatId} type="button" onClick={() => handleSelectChat(p.chatId)}
+              className="mx-3 mt-2 shrink-0 rounded-xl border-2 border-amber-400 bg-amber-950 px-4 py-3 text-left text-sm font-semibold text-amber-50 shadow-lg sm:mx-6"
+              aria-label={`Open approval required for ${p.projectName}`}>
+              <span className="block text-xs font-bold uppercase tracking-wider text-amber-300">Action required · Katie is awaiting your approval</span>
+              <span className="mt-1 block truncate">{p.projectName} · {p.chatTitle}</span>
+              <span className="mt-1 block text-xs text-amber-200">Open this project to review scope and approve →</span>
+            </button>
+          ))}
+          {approvalDiscoveryError && (
+            <p role="alert" className="mx-3 mt-2 rounded-xl border border-red-400/40 bg-red-950/80 px-3 py-2 text-xs text-red-100 sm:mx-6">
+              Could not load project approvals. Check your connection or reload Katie.
+            </p>
+          )}
           <ChatPanel
             actorId={activeActorId}
             chatId={activeChatId}
