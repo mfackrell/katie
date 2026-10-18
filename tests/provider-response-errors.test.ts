@@ -74,3 +74,39 @@ test("repeated Gemini empty output reaches bounded Grok frame fallback", async (
  assert.equal(fallback.attempt, "grok");
  assert.deepEqual(attempts, ["gemini", "gemini", "grok"]);
 });
+
+
+test("explicitly eligible terminal generation errors can reroute without another queued candidate", async () => {
+ const executed: string[] = [];
+ const response = await runWithRefusalFallback({
+   attempts: ["grok", "google"],
+   runAttempt: async (candidate) => {
+     executed.push(candidate);
+     if (candidate === "grok") throw new ProviderResponseError("Temporary upstream 503", false, "PROVIDER_STOPPED_RESPONSE");
+     if (candidate === "google") throw new ProviderResponseError("Provider returned output limit", false, "OUTPUT_LIMIT");
+     return {provider:"google", model:"runpod-image",text:"[Image Generated]",content:[{type:"image",url:"data:image/png;base64,YWJj"}]};
+   },
+   detectRefusal: () => false,
+   shouldRetryRefusal: true,
+   retryTerminalError: ({error}) => !/prohibited|safety/i.test(String(error)),
+   rerouteOnError: async ({attempt}) => attempt === "google" ? "runpod" : null,
+ });
+ assert.deepEqual(executed, ["grok", "google", "runpod"]);
+ assert.equal(response.attempt, "runpod");
+});
+
+test("terminal content denial cannot reroute even when a caller supplied a fallback", async () => {
+ const executed: string[] = [];
+ await assert.rejects(runWithRefusalFallback({
+   attempts: ["google", "runpod"],
+   runAttempt: async (candidate) => {
+     executed.push(candidate);
+     throw new ProviderResponseError("PROHIBITED_CONTENT", false, "PROVIDER_STOPPED_RESPONSE");
+   },
+   detectRefusal: () => false,
+   shouldRetryRefusal: true,
+   retryTerminalError: ({error}) => !/prohibited|safety/i.test(String(error)),
+   rerouteOnError: async () => "runpod",
+ }), /PROHIBITED_CONTENT/);
+ assert.deepEqual(executed, ["google"]);
+});
