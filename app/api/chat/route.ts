@@ -2936,7 +2936,7 @@ ${chunkWorkflowSummary}`;
                 console.warn("[VisualContinuity] initial identity mismatch", {
                   requestId, issue: inspection.issue ?? "unknown",
                 });
-                const repairingProvider = providers.find(candidate => candidate.name === result.provider);
+                const repairingProvider = providers.find(candidate => candidate.name === result!.provider);
                 if (repairingProvider) {
                   const retryParams = createParams(result.model);
                   const repaired = await repairingProvider.generate({
