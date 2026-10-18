@@ -26,6 +26,7 @@ test('Agents UI: create/edit/archive, saved approval, durable pending status, re
    const request=route.request(),url=new URL(request.url()),body=request.postDataJSON?.();
    if(!url.pathname.startsWith('/api/'))return route.fulfill({contentType:'text/html',body:html});
    const reply=(data,status=200)=>route.fulfill({status,contentType:'application/json',body:JSON.stringify(data)});
+   if(url.pathname==='/api/projects/overview')return reply({projects:[{id:'project-fixture',actorId:'actor-fixture',chatId:'chat-fixture',chatTitle:'Project chat',name:'Token board pilot',status:'running',phase:'development',detail:'Working on development milestone.',milestoneIndex:0,milestoneCount:2,cycles:1,maxCycles:8,updatedAt:'2026-10-18',deadline:'2026-10-21'}]});
    if(fail)return reply({error:'Fixture service unavailable'},503);
    if(url.pathname==='/api/agents'){
     if(request.method()==='POST'){
@@ -58,6 +59,8 @@ test('Agents UI: create/edit/archive, saved approval, durable pending status, re
   });
   await page.goto('http://localhost/agents');
   await page.getByText('No managed agents yet.',{exact:false}).waitFor();
+  await page.getByRole('heading',{name:'Token board pilot'}).waitFor();
+  await page.getByText('Working on development milestone.',{exact:true}).waitFor();
   await page.getByLabel('Name',{exact:true}).fill('Writer');
   await page.getByLabel('Purpose, instructions and responsibilities').fill('Draft concise reports');
   await page.getByRole('button',{name:'Save agent',exact:true}).click();
