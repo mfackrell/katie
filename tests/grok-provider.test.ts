@@ -4,7 +4,7 @@ import { GrokProvider } from "../lib/providers/grok-provider";
 import type { ChatGenerateParams } from "../lib/providers/types";
 
 const params: ChatGenerateParams = {
-  name: "Katie", persona: "Be helpful.", summary: "Private unrelated memory", history: [],
+  name: "Katie", persona: "Be helpful.", summary: "", history: [],
   user: "Generate an illustration of a cat watching a sunset.", requestIntent: "image-generation", modelId: "grok-imagine-image-2.0",
 };
 function json(body: unknown, status = 200): Response {
@@ -31,6 +31,61 @@ test("Grok image models use images/generations and return displayable persistabl
   assert.equal(result.text, "[Image Generated]");
   assert.deepEqual(result.content, [{ type: "image", url: "data:image/png;base64,aW1hZ2U=" }]);
   assert.doesNotMatch(JSON.stringify(requests[0].body), /Private unrelated memory|messages|tools/);
+});
+
+test("Grok synthesizes the same STM, ITM, and LTM inputs Gemini sees into its bounded Imagine prompt", async (t) => {
+  const calls: Array<{ url: string; body: Record<string, any> }> = [];
+  t.mock.method(globalThis, "fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    const body = JSON.parse(String(init?.body ?? "{}"));
+    calls.push({ url, body });
+    if (url.endsWith("/responses")) {
+      return json({ output_text: "Jess is an avid competitive runner; Katie is a bookkeeper; Chloe has blonde hair." });
+    }
+    return json({ data: [{ b64_json: "aW1hZ2U=", mime_type: "image/png" }] });
+  });
+  const audit: Array<Record<string, unknown>> = [];
+  const input: ChatGenerateParams = {
+    ...params,
+    persona: "CORE_PERSONA: Katie. LONG_TERM_MEMORY: Jess is a runner and Katie a bookkeeper.",
+    summary: "Prior adventures at the beach with Chloe and Jess.",
+    history: [
+      { role: "user", content: "Jess always goes running first." },
+      { role: "assistant", content: "Katie balances the books in the morning." },
+    ],
+    user: "Create a group photograph of Katie, Jess and Chloe at the house.",
+    onProviderSystemPrepared: async capture => { audit.push(capture as unknown as Record<string, unknown>); },
+  };
+  await new GrokProvider("test-key").generate(input);
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0].url, "https://api.x.ai/v1/responses");
+  const context = calls[0].body.input[1].content[0].text as string;
+  assert.match(context, /LONG_TERM_MEMORY/);
+  assert.match(context, /Prior adventures at the beach/);
+  assert.match(context, /USER: Jess always goes running first/);
+  assert.match(context, /ASSISTANT: Katie balances the books/);
+  assert.equal(calls[1].url, "https://api.x.ai/v1/images/generations");
+  const prompt = calls[1].body.prompt as string;
+  assert.match(prompt, /^Create a group photograph of Katie, Jess and Chloe at the house/);
+  assert.match(prompt, /Jess is an avid competitive runner/);
+  assert.match(prompt, /Katie is a bookkeeper/);
+  assert.ok(prompt.length <= 1024);
+  assert.equal(audit[0].imagePrompt, prompt);
+  assert.equal((audit[0].contextSynthesis as { sourceHistoryTurns: number }).sourceHistoryTurns, 2);
+  assert.equal(audit[0].endpoint, "images/generations");
+  assert.equal((audit[0].systemMessages as unknown[]).length, 0);
+});
+
+test("Grok never silently loses established image character memory on condenser failure", async (t) => {
+  const calls: string[] = [];
+  t.mock.method(globalThis, "fetch", async (input: RequestInfo | URL) => {
+    calls.push(String(input));
+    return json({ error: "unavailable" }, 502);
+  });
+  await assert.rejects(new GrokProvider("test-key").generate({
+    ...params, history: [{ role: "user", content: "Jess is a runner." }],
+  }), /context condensation failed/i);
+  assert.deepEqual(calls, ["https://api.x.ai/v1/responses"]);
 });
 
 test("Grok image aliases and quality models never fall back to grok-2 text generation", async (t) => {

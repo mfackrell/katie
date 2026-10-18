@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { chooseVisualSubjects, canonicalSubject, loadVisualContinuity } from "../lib/chat/visual-continuity";
+import { chooseVisualSubjects, canonicalSubject, loadVisualContinuity, describeActorVisualLongTermMemory } from "../lib/chat/visual-continuity";
 
 const chatId = "chat-1";
 const rows = [
@@ -111,5 +111,43 @@ test("group reference retrieval supplies actual saved image bytes to the image r
       call.filters.some(filter => filter[0] === "actor_id" && filter[1] === actorId)));
   } finally {
     scope.__KATIE_SUPABASE_ADMIN_CLIENT__ = previous;
+  }
+});
+
+test("canonical visual long-term memory indexes privately owned message pointers without copying image bytes", async () => {
+  const seen: Array<[string, string]> = [];
+  const row = {
+    subject_key: "jess", label: "Jess", source_chat_id: "saved-chat",
+    source_message_id: "saved-message", asset_index: 0, approved: true,
+    updated_at: "2026-10-18T14:17:25Z",
+  };
+  const fake = {
+    from(name: string) {
+      assert.equal(name, "visual_references");
+      const q = {
+        select(_columns: string) { return q; },
+        eq(field: string, value: unknown) {
+          seen.push([field, String(value)]);
+          return q;
+        },
+        order(_field: string, _options: unknown) { return q; },
+        limit(_limit: number) { return q; },
+        async returns() { return { data: [row], error: null }; },
+      };
+      return q;
+    },
+  };
+  const globals = globalThis as unknown as { __KATIE_SUPABASE_ADMIN_CLIENT__?: unknown };
+  const before = globals.__KATIE_SUPABASE_ADMIN_CLIENT__;
+  globals.__KATIE_SUPABASE_ADMIN_CLIENT__ = fake;
+  try {
+    const manifest = await describeActorVisualLongTermMemory("actor-123");
+    assert.deepEqual(seen, [["actor_id", "actor-123"]]);
+    assert.match(manifest, /VISUAL_LONG_TERM_MEMORY/);
+    assert.match(manifest, /"sourceMessageId":"saved-message"/);
+    assert.match(manifest, /"userApproved":true/);
+    assert.doesNotMatch(manifest, /data:image|base64,/);
+  } finally {
+    globals.__KATIE_SUPABASE_ADMIN_CLIENT__ = before;
   }
 });

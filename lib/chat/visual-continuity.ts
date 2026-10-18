@@ -70,6 +70,44 @@ export function chooseVisualSubjects(
   };
 }
 
+/**
+ * This is the actor's authoritative VISUAL long-term memory. The record points
+ * to an immutable saved message asset, NOT a duplicate base64 blob and NOT an
+ * untrusted URL. It survives conversation summarization and is shared across
+ * the actor's chats. The pointer is checked for ownership when pixels are read.
+ */
+export type VisualReferencePointer = Pick<ReferenceRow,
+  "subject_key" | "label" | "source_chat_id" | "source_message_id" |
+  "asset_index" | "approved" | "updated_at">;
+
+export async function listActorVisualReferencePointers(actorId: string): Promise<VisualReferencePointer[]> {
+  const { data, error } = await getSupabaseAdminClient().from("visual_references")
+    .select("subject_key,label,source_chat_id,source_message_id,asset_index,approved,updated_at")
+    .eq("actor_id", actorId)
+    .order("updated_at", { ascending: false })
+    .limit(80)
+    .returns<VisualReferencePointer>();
+  if (error) throw new Error(`Visual long-term memory index unavailable: ${error.message}`);
+  return data ?? [];
+}
+
+export async function describeActorVisualLongTermMemory(actorId: string): Promise<string> {
+  const rows = await listActorVisualReferencePointers(actorId);
+  return [
+    "VISUAL_LONG_TERM_MEMORY (actor-wide durable, database-backed image identities):",
+    "Each record is a canonical identity reference to a privately saved image in messages.content.assets.",
+    "These records are not inline image bytes. During image creation, Katie retrieves the actual image privately.",
+    "An unapproved record is provisional, not proof that the depicted face has been user-confirmed.",
+    ...rows.map(row => `IMAGE_IDENTITY ${JSON.stringify({
+      key: row.subject_key, label: row.label, sourceChatId: row.source_chat_id,
+      sourceMessageId: row.source_message_id, assetIndex: row.asset_index,
+      userApproved: row.approved, updatedAt: row.updated_at,
+    })}`),
+    ...(rows.length ? [] : ["No established visual references yet."]),
+    "END_VISUAL_LONG_TERM_MEMORY",
+  ].join("\n");
+}
+
 export async function loadVisualContinuity(input: {
   actorId: string; chatId: string; prompt: string; actorName: string; existingImageCount: number;
 }): Promise<VisualContinuity> {

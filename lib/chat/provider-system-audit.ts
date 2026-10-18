@@ -23,6 +23,8 @@ export function boundProviderSystemAudit(audit: ProviderSystemAudit): StoredProv
     model: audit.model,
     endpoint: audit.endpoint,
     systemMessages,
+    ...(typeof audit.imagePrompt === "string" ? { imagePrompt: audit.imagePrompt.slice(0, 2048) } : {}),
+    ...(audit.contextSynthesis ? { contextSynthesis: audit.contextSynthesis } : {}),
     capturedAt: new Date().toISOString(),
     truncated,
   };
