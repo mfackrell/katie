@@ -153,3 +153,15 @@ test('context-only clarification retains reviewed research and requests revised 
  assert.match(reply,/Reviewed research retained/);assert.equal(calls[0].args.p_action,'context');
  assert.equal(calls[0].args.p_text,'The existing app uses the App Router.');
 });
+
+
+test('aggregate project budget stops further missions while preserving prior spend',async()=>{
+ const calls=[],p={...owner,phase:'research',active_mission_id:null,token_allowance:60000};
+ const db={from:()=>({select(){return this;},eq:async()=>({data:[{actual_tokens:55000,reserved_tokens:0}],error:null})})};
+ const {runProjectBatch}=modules({
+  '@/lib/projects/store':{projectRpc:async(name,args)=>{if(name==='project_dispatch_recovery_candidates')return [];if(name==='claim_work_project')return p;calls.push({name,args});return true;},projectRuns:async()=>[]},
+  '@/lib/data/supabase/admin':{getSupabaseAdminClient:()=>db}
+ })('@/lib/projects/worker');
+ await runProjectBatch();assert.equal(calls.length,1);assert.equal(calls[0].args.p_action,'block');
+ assert.match(calls[0].args.p_data.detail,/Aggregate project token budget/);
+});
