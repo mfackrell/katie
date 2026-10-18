@@ -280,6 +280,14 @@ function buildSystemPromptResponse(
         "",
         fenced(`Actual provider system message ${index + 1}`, content),
       ]),
+      ...(latest.snapshot.imagePrompt ? [
+        "",
+        "Exact image-generation prompt (the outgoing API body.prompt; not a system-role message):",
+        fenced("Image API prompt", latest.snapshot.imagePrompt),
+        latest.snapshot.contextSynthesis
+          ? `Grok image context: ${JSON.stringify(latest.snapshot.contextSynthesis)}`
+          : "",
+      ] : []),
     ] : [
       "**Last outbound provider system-message snapshot:** Not recorded yet for this chat. Earlier calls preceded this audit feature. The stored actor prompt above is not a substitute for the actual provider payload.",
     ]),
