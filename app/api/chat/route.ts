@@ -1964,7 +1964,7 @@ async function executeChat(request: NextRequest) {
                 summary,
                 history: historyForProvider,
                 message: forReview ? message : visualContinuity
-                  ? (messageForGeneration === message ? visualContinuity.prompt : visualContinuity.prompt + "\\n\\nADDITIONAL REQUEST CONTEXT:\\n" + messageForGeneration)
+                  ? (messageForGeneration === message ? visualContinuity.prompt : visualContinuity.prompt + "\n\nADDITIONAL REQUEST CONTEXT:\n" + messageForGeneration)
                   : messageForGeneration,
                 requestIntent: resolvedRequestIntent,
                 secondaryIntents: storedWebsite.fresh ? [...(resolvedRoutingIntentForReroute?.secondaryIntents ?? []), "web-search"] : resolvedRoutingIntentForReroute?.secondaryIntents ?? [],
@@ -2931,7 +2931,7 @@ ${chunkWorkflowSummary}`;
             }
 
             if (visualContinuity?.references.length && resolvedRequestIntent === "image-generation") {
-              let inspection = await verifyVisualContinuity({ references: visualContinuity.references, result, providers });
+              let inspection = await verifyVisualContinuity({ references: visualContinuity.references, result: result!, providers });
               if (inspection.status === "fail") {
                 console.warn("[VisualContinuity] initial identity mismatch", {
                   requestId, issue: inspection.issue ?? "unknown",
@@ -2941,7 +2941,7 @@ ${chunkWorkflowSummary}`;
                   const retryParams = createParams(result.model);
                   const repaired = await repairingProvider.generate({
                     ...retryParams,
-                    user: retryParams.user + "\\n\\nIDENTITY CORRECTION: The previous image did not match the provided face references. " +
+                    user: retryParams.user + "\n\nIDENTITY CORRECTION: The previous image did not match the provided face references. " +
                       (inspection.issue ?? "") +
                       " Keep every named person's identity faithful to their numbered reference image. Regenerate the requested scene.",
                   });
