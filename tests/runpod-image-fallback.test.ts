@@ -94,7 +94,7 @@ test("Reject malformed upstream output and wrong image bytes",async()=>{
       n++;
       return n===1
         ? new Response(JSON.stringify({status:"COMPLETED",output:{image_url:imageUrl}}),{status:200})
-        : new Response("not image bytes",{status:200});
+        : new Response("not an image; length exceeds minimum",{status:200});
     }) as typeof fetch,
   }),/unsupported image format/);
 });
