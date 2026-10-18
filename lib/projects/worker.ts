@@ -45,6 +45,8 @@ async function advance(p: Project) {
                 await finish('input', { detail: essential.question ?? 'A concrete project decision is required before continuing.' });
                 return;
             }
+            const failedCoordinator=current.jobs.find(j=>j.status==='failed'&&j.role!=='development');
+            if(failedCoordinator){await finish('block',{detail:'The '+p.phase+' worker failed before its result could be verified: '+String(failedCoordinator.result?.detail??failedCoordinator.detail??'Unknown coordinator failure')+'. Prior work and charges remain saved; this is not evidence that the implementation needs another coding job.'});return;}
             const notes = current.jobs.filter(j => j.role === 'review').map(j => j.result?.summary ?? j.detail).filter(Boolean).join('\n');
             if (p.approved_hash && ['development', 'assessment'].includes(p.phase) && p.cycles < p.max_cycles && runs.filter(r=>r.kind==='development'&&r.milestone_index===Math.min(p.milestone_index,p.spec!.milestones.length-1)).length<2) {
                 await finish('retry', { detail: 'Repair the original unmet requirements. ' + (notes || m.detail), failed_mission: m.id });
