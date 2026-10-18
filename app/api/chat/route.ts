@@ -73,6 +73,7 @@ import {
   improveCreativeOriginality,
 } from "@/lib/chat/creative-continuity";
 import { isLikelyProviderRefusal, runWithRefusalFallback, shouldRetryOnProviderRefusal } from "@/lib/router/refusal-detection";
+import { generateRunpodImage, runpodImageConfigured, shouldTryRunpodImage, type ImageProviderFailure } from "@/lib/chat/runpod-image-fallback";
 import {
   classifyGenerationFailure,
   describeGenerationFailure,
@@ -2011,6 +2012,7 @@ ${chunkWorkflowSummary}`;
               explainer?: SelectionExplainer;
               routingSource?: "initial" | "ai-reroute" | "deterministic-fallback";
               runpodVideoFallback?: boolean;
+              runpodImageFallback?: boolean;
             };
             const attempts: GenerationAttempt[] = [
               { provider, modelId, explainer: selectionExplainer, routingSource: "initial" },
@@ -2029,6 +2031,7 @@ ${chunkWorkflowSummary}`;
             const failedGenerationCandidates: Array<{ providerName: LlmProvider["name"]; modelId: string }> = [];
             const failedGenerationCandidateKeys = new Set<string>();
             const failedProviderNames = new Set<LlmProvider["name"]>();
+            const imageProviderFailures: ImageProviderFailure[] = [];
             const maxRefusalReroutes = 3;
             const maxErrorReroutes = 4;
             let refusalRerouteCount = 0;
@@ -2054,6 +2057,22 @@ ${chunkWorkflowSummary}`;
                   // they must not draft a replacement answer to a short "yes".
                   return { text: pendingReviewClarification.pending.candidate,
                     provider: candidate.provider.name, model: candidate.modelId };
+                }
+                if (candidate.runpodImageFallback) {
+                  // Only after BOTH Grok and Gemini experienced technical errors.
+                  // Content moderation, safety refusals and visual-reference drops
+                  // must never trigger a third provider.
+                  if (!shouldTryRunpodImage({
+                    failures: imageProviderFailures,
+                    enabled: runpodImageConfigured(),
+                    hasReferenceImages: Boolean(visualContinuity?.references.length ||
+                      rerouteHasVisualInput),
+                  })) throw new Error("RunPod image fallback is not eligible for this request.");
+                  console.info("[Image Routing] RunPod technical fallback accepted after Grok and Gemini failures", {
+                    requestId,
+                    endpointConfigured: true,
+                  });
+                  return await generateRunpodImage(visualContinuity?.prompt ?? messageForGeneration);
                 }
                 if (candidate.runpodVideoFallback) {
                   // Only the authorized original attachment goes to Qwen. A
@@ -2685,6 +2704,24 @@ ${chunkWorkflowSummary}`;
               },
               rerouteOnError: async ({ attempt, error }) => {
                 if (hasVideoInput) return null; // Attempt Grok directly, not another Gemini routing loop.
+                if (attempt.runpodImageFallback) return null;
+                // Third provider is optional and strictly for TWO technical
+                // failures, never a provider's content/safety decision.
+                if (resolvedRequestIntent === "image-generation" &&
+                    shouldTryRunpodImage({
+                      failures: imageProviderFailures,
+                      enabled: runpodImageConfigured(),
+                      hasReferenceImages: Boolean(visualContinuity?.references.length ||
+                        rerouteHasVisualInput),
+                    })) {
+                  console.info("[Image Routing] Both image providers failed technically; selecting RunPod", { requestId });
+                  return {
+                    provider: attempt.provider,
+                    modelId: "runpod-image",
+                    runpodImageFallback: true,
+                    routingSource: "deterministic-fallback" as const,
+                  };
+                }
                 if ((collaborationEnabledForRequest && collaborationDeadlineMs - Date.now() < 195_000) ||
                     !resolvedRoutingIntentForReroute || errorRerouteCount >= maxErrorReroutes) {
                   return null;
@@ -2794,6 +2831,14 @@ ${chunkWorkflowSummary}`;
                 });
               },
               onError: ({ attempt, error }) => {
+                if (resolvedRequestIntent === "image-generation" &&
+                    !attempt.runpodImageFallback &&
+                    (attempt.provider.name === "grok" || attempt.provider.name === "google")) {
+                  imageProviderFailures.push({
+                    provider: attempt.provider.name,
+                    error: error instanceof Error ? error.message : String(error),
+                  });
+                }
                 const failureScope = classifyGenerationFailure(error);
                 // RunPod is an independent video provider; its failures must
                 // never mark Gemini unhealthy in the shared provider registry.
@@ -2808,7 +2853,8 @@ ${chunkWorkflowSummary}`;
             });
             result = generationAttempt.result;
             provider = generationAttempt.attempt.provider;
-            modelId = generationAttempt.attempt.modelId;
+            modelId = generationAttempt.attempt.runpodImageFallback
+              ? generationAttempt.result.model : generationAttempt.attempt.modelId;
 
             if (!result || (!result.text && !(result.content?.length) && !streamedText)) {
               throw new Error(`AI Provider ${provider.name} returned an empty response.`);
