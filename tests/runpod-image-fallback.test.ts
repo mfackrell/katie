@@ -180,3 +180,28 @@ test("Two non-policy image failures make RunPod eligible even when Gemini return
     enabled:true,hasReferenceImages:false,
   }),true);
 });
+
+test("Accepted RunPod jobs remain eligible past twelve quick status polls",async()=>{
+  let posts=0,checks=0;
+  const output=await generateRunpodImage("Test sketch",{
+    apiKey:"test-key",
+    sleepFn:async()=>{},
+    fetchFn:(async(url:string|URL|Request)=>{
+      const href=String(url);
+      if(href.endsWith("/runsync")){
+        posts++;
+        return new Response(JSON.stringify({status:"IN_QUEUE",id:"sync-longwait-8910-u1"}),{status:200});
+      }
+      if(href.includes("/status/")){
+        checks++;
+        return new Response(JSON.stringify(checks<14
+          ? {status:"IN_PROGRESS",id:"sync-longwait-8910-u1"}
+          : {status:"COMPLETED",id:"sync-longwait-8910-u1",output:{image_url:imageUrl}}),{status:200});
+      }
+      return new Response(Buffer.from(png,"base64"),{status:200});
+    }) as typeof fetch,
+  });
+  assert.equal(posts,1);
+  assert.equal(checks,14);
+  assert.equal(output.content?.[0]?.type,"image");
+});
