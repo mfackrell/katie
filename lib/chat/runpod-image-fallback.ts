@@ -7,7 +7,7 @@ import type { ProviderResponse } from "@/lib/providers/types";
  */
 export type ImageProviderFailure = { provider: "grok" | "google"; error: string };
 
-const MODERATION = /prohibited[_ -]?content|content[_ -]?moderat|moderation|\bsafety\b|\bpolicy\b|\brefus(?:al|ed)\b|\bnsfw\b|\bblocked\b|\bdisallowed\b|\binappropriate\b/i;
+const MODERATION = /prohibited[_ -]?content|content[_ -]?moderat|moderation|\bsafety\b|\bpolicy\b|\brefus(?:al|ed)\b|\bdeclin(?:e|ed)\b|\bdenied\b|\bnot permitted\b|\bviolation\b|\bnsfw\b|\bblocked\b|\bdisallowed\b|\binappropriate\b/i;
 const TECHNICAL = /(?:\b429\b|\b50[0-9]\b|\b52[0-9]\b|\b503\b|\b504\b|rate.?limit|too many requests|timeout|timed out|overload|temporar(?:ily|y)|econnreset|econnrefused|etimedout|fetch failed|network error|service unavailable|gateway timeout|connection (?:lost|reset|failed))/i;
 
 export function isModerationImageFailure(error: unknown): boolean {
