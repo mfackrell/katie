@@ -26,6 +26,7 @@ test('Agents UI: create/edit/archive, saved approval, durable pending status, re
    const request=route.request(),url=new URL(request.url()),body=request.postDataJSON?.();
    if(!url.pathname.startsWith('/api/'))return route.fulfill({contentType:'text/html',body:html});
    const reply=(data,status=200)=>route.fulfill({status,contentType:'application/json',body:JSON.stringify(data)});
+   if(url.pathname==='/api/projects/overview')return reply({projects:[]});
    if(fail)return reply({error:'Fixture service unavailable'},503);
    if(url.pathname==='/api/agents'){
     if(request.method()==='POST'){
