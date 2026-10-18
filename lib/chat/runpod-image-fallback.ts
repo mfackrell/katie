@@ -62,7 +62,7 @@ async function completedRunpodOutput(
       throw new Error("RunPod did not return a valid job ID for status polling.");
     }
     const remainingMs = deadline - Date.now();
-    if (remainingMs <= POLL_INTERVAL_MS || checks >= 12) {
+    if (remainingMs <= POLL_INTERVAL_MS || checks >= Math.ceil(POLL_TOTAL_MS / POLL_INTERVAL_MS)) {
       throw new Error("RunPod image generation is still processing; bounded polling expired.");
     }
     await sleepFn(POLL_INTERVAL_MS);
