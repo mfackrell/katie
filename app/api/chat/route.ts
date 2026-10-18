@@ -2064,7 +2064,8 @@ ${chunkWorkflowSummary}`;
                   // must never trigger a third provider.
                   if (!shouldTryRunpodImage({
                     failures: imageProviderFailures,
-                    enabled: runpodImageConfigured(),
+                    enabled: runpodImageConfigured() &&
+                        !resolvedRoutingIntentForReroute?.secondaryIntents?.includes("safety-sensitive-vision"),
                     hasReferenceImages: Boolean(visualContinuity?.references.length ||
                       rerouteHasVisualInput),
                   })) throw new Error("RunPod image fallback is not eligible for this request.");
@@ -2710,7 +2711,8 @@ ${chunkWorkflowSummary}`;
                 if (resolvedRequestIntent === "image-generation" &&
                     shouldTryRunpodImage({
                       failures: imageProviderFailures,
-                      enabled: runpodImageConfigured(),
+                      enabled: runpodImageConfigured() &&
+                        !resolvedRoutingIntentForReroute?.secondaryIntents?.includes("safety-sensitive-vision"),
                       hasReferenceImages: Boolean(visualContinuity?.references.length ||
                         rerouteHasVisualInput),
                     })) {
