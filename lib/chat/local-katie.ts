@@ -10,7 +10,7 @@ import {
 import { MEMORY_ARCHITECTURE_GUIDE, SHORT_TERM_MESSAGE_LIMIT } from "@/lib/memory/memory-contract";
 import { filterConversationalMessages, messagesFromShortTermMemory, refreshShortTermMemory } from "@/lib/memory/short-term";
 import { latestProviderSystemAudit, type StoredProviderSystemAudit } from "@/lib/chat/provider-system-audit";
-import { describeActorVisualLongTermMemory } from "@/lib/chat/visual-continuity";
+import { listActorVisualReferencePointers } from "@/lib/chat/visual-continuity";
 
 export type LocalKatieResponse = {
   text: string;
@@ -411,14 +411,27 @@ export async function resolveLocalKatieResponse(params: {
     await refreshShortTermMemory(params.actorId, params.chatId);
     const records = await listMemoryRecordsForActor(params.actorId);
     const layers = requestedLayers(params.message);
-    const visualMemory = !layers || layers.has("long-term")
-      ? await describeActorVisualLongTermMemory(params.actorId).catch(error =>
-          "VISUAL_LONG_TERM_MEMORY: unavailable (" +
-          (error instanceof Error ? error.message : "read failed") + ").")
-      : "";
+    let visualIndexWarning = "";
+    if (!layers || layers.has("long-term")) {
+      try {
+        const visualReferences = await listActorVisualReferencePointers(params.actorId);
+        if (visualReferences.length) {
+          records.push({
+            layer: "long-term", actorId: params.actorId, chatId: "actor-wide",
+            content: { imageReferences: visualReferences },
+            updatedAt: visualReferences[0].updated_at,
+          });
+        }
+      } catch (error) {
+        visualIndexWarning = "The actor-wide visual-image index could not be inspected; this is not evidence that it is empty.";
+        console.warn("[VisualLongTermMemory] direct memory inspection degraded", {
+          reason: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
     return {
       reason: "memory",
-      text: [buildMemoryResponse(params.message, records, params.chatId), visualMemory]
+      text: [buildMemoryResponse(params.message, records, params.chatId), visualIndexWarning]
         .filter(Boolean).join("\n\n"),
     };
   }
