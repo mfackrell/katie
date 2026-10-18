@@ -2842,12 +2842,12 @@ ${chunkWorkflowSummary}`;
                 const failureScope = classifyGenerationFailure(error);
                 // RunPod is an independent video provider; its failures must
                 // never mark Gemini unhealthy in the shared provider registry.
-                if (failureScope === "provider" && !attempt.runpodVideoFallback) {
+                if (failureScope === "provider" && !attempt.runpodVideoFallback && !attempt.runpodImageFallback) {
                   failedProviderNames.add(attempt.provider.name);
                   void recordSharedProviderFailure(attempt.provider.name, error);
                 }
                 console.warn(
-                  `[Chat API] Generation failed for ${attempt.runpodVideoFallback ? "runpod" : attempt.provider.name}:${attempt.modelId} (${error instanceof Error ? error.message : String(error)}).`
+                  `[Chat API] Generation failed for ${attempt.runpodVideoFallback || attempt.runpodImageFallback ? "runpod" : attempt.provider.name}:${attempt.modelId} (${error instanceof Error ? error.message : String(error)}).`
                 );
               }
             });
