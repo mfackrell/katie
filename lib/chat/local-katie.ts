@@ -10,6 +10,7 @@ import {
 import { MEMORY_ARCHITECTURE_GUIDE, SHORT_TERM_MESSAGE_LIMIT } from "@/lib/memory/memory-contract";
 import { filterConversationalMessages, messagesFromShortTermMemory, refreshShortTermMemory } from "@/lib/memory/short-term";
 import { latestProviderSystemAudit, type StoredProviderSystemAudit } from "@/lib/chat/provider-system-audit";
+import { describeActorVisualLongTermMemory } from "@/lib/chat/visual-continuity";
 
 export type LocalKatieResponse = {
   text: string;
@@ -409,9 +410,16 @@ export async function resolveLocalKatieResponse(params: {
   if (isMemoryRequest(params.message)) {
     await refreshShortTermMemory(params.actorId, params.chatId);
     const records = await listMemoryRecordsForActor(params.actorId);
+    const layers = requestedLayers(params.message);
+    const visualMemory = !layers || layers.has("long-term")
+      ? await describeActorVisualLongTermMemory(params.actorId).catch(error =>
+          "VISUAL_LONG_TERM_MEMORY: unavailable (" +
+          (error instanceof Error ? error.message : "read failed") + ").")
+      : "";
     return {
       reason: "memory",
-      text: buildMemoryResponse(params.message, records, params.chatId),
+      text: [buildMemoryResponse(params.message, records, params.chatId), visualMemory]
+        .filter(Boolean).join("\n\n"),
     };
   }
 
