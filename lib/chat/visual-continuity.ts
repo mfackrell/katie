@@ -37,14 +37,19 @@ export function chooseVisualSubjects(
   actorName: string,
   chatId: string,
 ): { keys: string[]; anchor: { key: string; label: string; replace: boolean } | null } {
-  const group = /\b(?:all of you|everybody|everyone|group (?:photo|picture|portrait)|together)\b/i.test(prompt);
-  const explicit = prompt.match(/\b(?:image|picture|photo|portrait|illustration|drawing)\s+of\s+([a-z][a-z0-9_-]{1,63}|you)\b/i);
-  const raw = explicit?.[1]?.toLowerCase() === "you" ? actorName : explicit?.[1] ?? "";
-  const candidate = canonicalSubject(raw);
+  const wholeCast = /\b(?:all of you|everybody|everyone|group (?:photo|picture|portrait))\b/i.test(prompt);
+  const group = wholeCast || /\btogether\b/i.test(prompt);
+  const explicit = prompt.match(/\b(?:image|picture|photo|portrait|illustration|drawing)\s+of\s+(?:(?:a|an|the)\s+)?([a-z][a-z0-9_-]{1,63}|you)\b/i);
+  const token = explicit?.[1] ?? "";
+  const raw = token.toLowerCase() === "you" ? actorName : token;
+  const isPerson = token.toLowerCase() === "you" || /^[A-Z]/.test(token) ||
+    rows.some(row => row.subject_key === canonicalSubject(token));
+  const candidate = isPerson ? canonicalSubject(raw) : "";
   const known = rows.filter(r => wholeWord(prompt, r.label)).map(r => r.subject_key);
   // "all of you" is scoped to this ongoing chat's cast, not every person the actor has drawn.
   const cast = rows.filter(r => r.source_chat_id === chatId).slice(0, MAX_REFERENCES).map(r => r.subject_key);
-  const keys = group ? [...new Set([...known, ...cast])].slice(0, MAX_REFERENCES)
+  const keys = group
+    ? [...new Set([...known, ...(wholeCast ? cast : [])])].slice(0, MAX_REFERENCES)
     : [...new Set(known.length > 1 ? known : candidate && rows.some(r => r.subject_key === candidate) ? [candidate] : known)].slice(0, MAX_REFERENCES);
   const correction = /^(?:\s*(?:no[,!.]?|actually[,!.]?|she(?:'s| is)|he(?:'s| is)|they(?:'re| are)|make|change|correct|fix|keep|same|but|not)\b)/i.test(prompt);
   const pronounCorrection = !group && !candidate && !known.length && correction &&
