@@ -19,6 +19,7 @@ export type Project = {
     objective: string;
     clarifications: string;
     repository_id: string | null;
+    repository_full_name: string | null;
     status: string;
     phase: string;
     spec: ProjectPlan | null;
