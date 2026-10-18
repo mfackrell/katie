@@ -2769,7 +2769,7 @@ export function ChatPanel({
                           }
                         })();
                       }}
-                      className="absolute bottom-3 right-3 rounded-xl border border-white/10 bg-zinc-950/80 px-3 py-1.5 text-xs font-medium text-white opacity-0 transition-opacity hover:bg-zinc-900 focus-visible:opacity-100 group-hover:opacity-100"
+                      className="absolute bottom-3 right-3 rounded-xl border border-white/10 bg-zinc-950/80 px-3 py-1.5 text-xs font-medium text-white opacity-100 transition-opacity hover:bg-zinc-900 focus-visible:opacity-100 sm:opacity-0 sm:group-hover:opacity-100"
                     >
                       Remember this face
                     </button>
