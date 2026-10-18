@@ -224,3 +224,22 @@ test('global project approval discovery only exposes pending approvals belonging
  assert.deepEqual(JSON.parse(JSON.stringify(data.approvals)),[{actorId:actor,chatId:chat,chatTitle:visible[0].title,projectName:'Token board'}]);
  assert.equal(JSON.stringify(data).includes('approvalHash'),false);
 });
+
+
+test('settled mission reservations count once so approved project may enter its first coding milestone',async()=>{
+ const calls=[],p={...owner,status:'running',phase:'development',milestone_index:0,cycles:0,active_mission_id:null,token_allowance:600000};
+ const usage=[60189,67713,74080,16781,54509,51829].map(n=>({actual_tokens:n,reserved_tokens:n}));
+ const db={from:()=>({select(){return this;},eq:async()=>({data:usage,error:null})})};
+ const {runProjectBatch}=modules({
+  '@/lib/projects/store':{
+   projectRpc:async(name,args)=>{if(name==='project_dispatch_recovery_candidates')return [];if(name==='claim_work_project')return p;calls.push({name,args});return true;},
+   projectRuns:async()=>[],milestoneEvidence:async()=>[]
+  },
+  '@/lib/data/supabase/admin':{getSupabaseAdminClient:()=>db}
+ })('@/lib/projects/worker');
+ const result=await runProjectBatch();
+ assert.equal(result.status,'processed');
+ assert.equal(calls.length,1);
+ assert.equal(calls[0].args.p_action,'child','actual 325101 tokens leaves 274899 uncommitted for development');
+ assert.equal(calls[0].args.p_data.kind,'development');
+});
