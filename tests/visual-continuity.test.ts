@@ -18,7 +18,7 @@ test("individual portraits choose their original identity and do not overwrite i
 
 test("corrections reference and replace the last individual identity", () => {
   const latestChloe = [rows[2], rows[1], rows[0], rows[3]];
-  const plan = chooseVisualSubjects("She's blonde…", latestChloe, "Katie", chatId);
+  const plan = chooseVisualSubjects("She’s blonde…", latestChloe, "Katie", chatId);
   assert.deepEqual(plan.keys, ["chloe"]);
   assert.equal(plan.anchor?.replace, true);
 });
