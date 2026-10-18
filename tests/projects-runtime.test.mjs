@@ -126,3 +126,19 @@ test('explicit non-scope note preserves the active project and does not issue an
  assert.equal(calls[0].args.p_action,'note');
  assert.equal(calls[0].args.p_text,'Please update me after the next milestone');
 });
+
+
+test('project watchdog halts three consecutive failed same-phase attempts without restarting work',async()=>{
+ const f=coordinator();f.p.phase='research';f.p.active_mission_id=null;
+ for(let i=0;i<3;i++){const mid=randomUUID();f.runs.push({mission_id:mid,kind:'research',ordinal:i+1,milestone_index:0,binding:null,outcome:{reason:'failed'}});f.missions.set(mid,{mission:{id:mid,status:'blocked'},jobs:[]});}
+ await f.tick();assert.equal(f.p.status,'blocked');assert.equal(f.calls.at(-1).p_action,'block');assert.match(f.calls.at(-1).p_data.detail,/Progress watchdog/);
+});
+test('independent failed acceptance checks drive a targeted repair, not a generic repeat',async()=>{
+ const f=coordinator();await f.tick();const mid=f.p.active_mission_id;
+ f.missions.set(mid,{mission:{id:mid,status:'blocked',detail:'Independent reviewer rejected deliverable'},jobs:[
+  {role:'development',status:'completed',result:{}},
+  {role:'review',status:'completed',result:{checks:[{id:'orthogonal-moves',passed:false,evidence:'Diagonal moves incorrectly change the counter.'}]}}
+ ]});
+ await f.tick();assert.equal(f.calls.at(-1).p_action,'retry');assert.match(f.calls.at(-1).p_data.detail,/Diagonal moves incorrectly change the counter/);
+ assert.equal(f.calls.at(-1).p_data.findings[0],'orthogonal-moves: Diagonal moves incorrectly change the counter.');
+});
