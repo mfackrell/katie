@@ -38,6 +38,61 @@ export function shouldTryRunpodImage(input: {
 export const RUNPOD_IMAGE_MODEL_ID = "black-forest-labs-flux-1-schnell";
 const IMAGE_URL_HOST = "image.runpod.ai";
 const MAX_IMAGE_BYTES = 12 * 1024 * 1024;
+const RUNPOD_JOB_ID = /^[A-Za-z0-9-]{8,150}$/;
+const POLL_INTERVAL_MS = 1500;
+const POLL_TOTAL_MS = 45_000;
+
+/**
+ * A RunPod /runsync request is allowed to return IN_QUEUE or IN_PROGRESS.
+ * Recover that SAME accepted job via its bounded /status endpoint; never
+ * submit a duplicate generation request while the first job is running.
+ */
+async function completedRunpodOutput(
+  initial: unknown,
+  fetchFn: typeof fetch,
+  apiKey: string,
+  sleepFn: (milliseconds: number) => Promise<void>,
+): Promise<{image_url?: unknown}> {
+  if (!initial || typeof initial !== "object") throw new Error("Invalid RunPod image response.");
+  let job = initial as { id?: unknown; status?: unknown; output?: { image_url?: unknown }; error?: unknown };
+  const deadline = Date.now() + POLL_TOTAL_MS;
+  let checks = 0;
+  while (job.status === "IN_QUEUE" || job.status === "IN_PROGRESS") {
+    if (typeof job.id !== "string" || !RUNPOD_JOB_ID.test(job.id)) {
+      throw new Error("RunPod did not return a valid job ID for status polling.");
+    }
+    const remainingMs = deadline - Date.now();
+    if (remainingMs <= POLL_INTERVAL_MS || checks >= Math.ceil(POLL_TOTAL_MS / POLL_INTERVAL_MS)) {
+      throw new Error("RunPod image generation is still processing; bounded polling expired.");
+    }
+    await sleepFn(POLL_INTERVAL_MS);
+    const response = await fetchFn(
+      `https://api.runpod.ai/v2/${RUNPOD_IMAGE_MODEL_ID}/status/${job.id}`,
+      {
+        method: "GET",
+        headers: { Authorization: `Bearer ${apiKey}`, Accept: "application/json" },
+        cache: "no-store",
+        redirect: "error",
+        signal: AbortSignal.timeout(Math.max(1000, Math.min(12_000, deadline - Date.now()))),
+      },
+    );
+    if (!response.ok) throw new Error(`RunPod status check failed (HTTP ${response.status}).`);
+    const next: unknown = await response.json();
+    if (!next || typeof next !== "object") throw new Error("RunPod status response was invalid.");
+    const state = next as typeof job;
+    // Never allow a provider response to replace the accepted job identity.
+    if (state.id !== undefined && state.id !== job.id) {
+      throw new Error("RunPod status response job identity mismatch.");
+    }
+    job = { ...state, id: job.id };
+    checks++;
+  }
+  if (job.status !== "COMPLETED") {
+    throw new Error(`RunPod image generation did not complete (${String(job.status ?? "unknown")}).`);
+  }
+  return job.output ?? {};
+}
+
 
 export function runpodImageConfigured(): boolean {
   return Boolean(process.env.RUNPOD_API_KEY);
@@ -93,6 +148,7 @@ async function collectImageBytes(response: Response): Promise<Buffer> {
 export async function generateRunpodImage(prompt: string, deps: {
   fetchFn?: typeof fetch;
   apiKey?: string;
+  sleepFn?: (milliseconds: number) => Promise<void>;
 } = {}): Promise<ProviderResponse> {
   const apiKey = deps.apiKey ?? process.env.RUNPOD_API_KEY ?? "";
   if (!apiKey) throw new Error("RunPod API key is not configured.");
@@ -115,12 +171,15 @@ export async function generateRunpodImage(prompt: string, deps: {
   );
   if (!response.ok) throw new Error(`RunPod public image endpoint failed (HTTP ${response.status}).`);
   const payload: unknown = await response.json();
-  if (!payload || typeof payload !== "object") throw new Error("Invalid RunPod image response.");
-  const result = payload as { status?: unknown; output?: { image_url?: unknown } };
-  if (result.status !== "COMPLETED") throw new Error("RunPod public image generation did not complete.");
+  const output = await completedRunpodOutput(
+    payload,
+    fetchFn,
+    apiKey,
+    deps.sleepFn ?? (ms => new Promise(resolve => setTimeout(resolve, ms))),
+  );
 
   // Fetch the expiring CDN image with no auth headers, credentials or redirects.
-  const safeUrl = checkedImageUrl(result.output?.image_url);
+  const safeUrl = checkedImageUrl(output.image_url);
   const imageResponse = await fetchFn(safeUrl, {
     method: "GET", redirect: "error", cache: "no-store",
     signal: AbortSignal.timeout(20000),
