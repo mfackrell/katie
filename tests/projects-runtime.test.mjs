@@ -142,3 +142,14 @@ test('independent failed acceptance checks drive a targeted repair, not a generi
  await f.tick();assert.equal(f.calls.at(-1).p_action,'retry');assert.match(f.calls.at(-1).p_data.detail,/Diagonal moves incorrectly change the counter/);
  assert.equal(f.calls.at(-1).p_data.findings[0],'orthogonal-moves: Diagonal moves incorrectly change the counter.');
 });
+
+
+test('context-only clarification retains reviewed research and requests revised specification',async()=>{
+ const calls=[],p={...owner,phase:'specification',approved_hash:null,approval_hash:null};
+ const {handleProjectChat}=modules({'@/lib/projects/store':{
+  projectForChat:async()=>p,projectRpc:async(name,args)=>{calls.push({name,args});return {...p,detail:'Reviewed research retained. Replanning specification.'};}
+ }})('@/lib/projects/chat');
+ const reply=await handleProjectChat({actorId:actor,chatId:chat,message:'project context: The existing app uses the App Router.'},'context-only',[],true);
+ assert.match(reply,/Reviewed research retained/);assert.equal(calls[0].args.p_action,'context');
+ assert.equal(calls[0].args.p_text,'The existing app uses the App Router.');
+});
