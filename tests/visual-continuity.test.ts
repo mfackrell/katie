@@ -37,7 +37,7 @@ test("group portraits use same-chat cast, not unrelated actor-wide identities", 
 
 test("explicit two-person request retains both labels and never overwrites either identity", () => {
   const plan = chooseVisualSubjects("Draw Chloe and Jess together", rows, "Katie", chatId);
-  assert.deepEqual(plan.keys, ["chloe", "jess", "katie"]);
+  assert.deepEqual(plan.keys, ["chloe", "jess"]);
   assert.equal(plan.anchor, null);
 });
 
@@ -50,7 +50,7 @@ test("actor-wide names are available explicitly across chats without attaching a
 test("unrelated image does not hijack an existing identity", () => {
   const plan = chooseVisualSubjects("Create an image of a mountain lake", rows, "Katie", chatId);
   assert.deepEqual(plan.keys, []);
-  assert.equal(plan.anchor?.key, "mountain");
+  assert.equal(plan.anchor, null);
 });
 
 test("subject labels are bounded and canonicalized", () => {
