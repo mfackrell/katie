@@ -45,7 +45,10 @@ export function chooseVisualSubjects(
   const isPerson = token.toLowerCase() === "you" || /^[A-Z]/.test(token) ||
     rows.some(row => row.subject_key === canonicalSubject(token));
   const candidate = isPerson ? canonicalSubject(raw) : "";
-  const known = rows.filter(r => wholeWord(prompt, r.label)).map(r => r.subject_key);
+  const known = rows.filter(r => wholeWord(prompt, r.label))
+    .sort((a, b) => prompt.toLowerCase().indexOf(a.label.toLowerCase()) -
+      prompt.toLowerCase().indexOf(b.label.toLowerCase()))
+    .map(r => r.subject_key);
   // "all of you" is scoped to this ongoing chat's cast, not every person the actor has drawn.
   const cast = rows.filter(r => r.source_chat_id === chatId).slice(0, MAX_REFERENCES).map(r => r.subject_key);
   const keys = group
