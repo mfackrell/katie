@@ -9,6 +9,36 @@ create or replace function public.control_work_project(p_id uuid,p_actor uuid,p_
   insert into project_events(project_id,event,data) values(p.id,'note',jsonb_build_object('text',p_text,'phase',p.phase,'status',p.status,'active_mission_id',p.active_mission_id));
   return to_jsonb(p);
  end if;
+ -- Factual context provided after independently reviewed research only needs a
+ -- revised specification, not another research mission. Never relax approvals.
+ if p_action='context' and p.approved_hash is null and p.phase in ('specification','approval')
+    and p.status in ('running','awaiting_input','awaiting_approval') then
+  if length(trim(p_text)) not between 1 and 4000 or length(p.clarifications)+length(p_text)>8000 then
+    raise exception 'Project context exceeds the approved context limit';
+  end if;
+  if not exists(
+    select 1 from project_runs r join agent_missions m on m.id=r.mission_id
+    where r.project_id=p.id and r.kind='research' and m.status='completed'
+      and r.outcome is not null and coalesce((r.outcome->>'superseded')::boolean,false)=false
+  ) then raise exception 'Reviewed research is required before context-only replanning';end if;
+  if p.active_mission_id is not null then
+   if exists(select 1 from agent_missions where id=p.active_mission_id and status in ('draft','running','awaiting_approval')) then
+    perform control_mission(p.active_mission_id,'stop');
+   end if;
+   update project_runs set outcome=coalesce(outcome,'{}'::jsonb)||
+     jsonb_build_object('superseded',true,'reason','Replanning with new factual context')
+   where mission_id=p.active_mission_id;
+  end if;
+  update work_projects set clarifications=clarifications||E'\\nVERIFIED CONTEXT: '||p_text,
+    spec=null,approval_hash=null,approved_hash=null,phase='specification',status='running',
+    active_mission_id=null,lease=null,lease_until=null,
+    detail='Reviewed research retained. Replanning the specification using supplied context; explicit scope approval remains required.',
+    updated_at=now() where id=p.id;
+  insert into project_events(project_id,event,data) values(p.id,'context',jsonb_build_object('text',p_text,'preserved_phase','research'));
+  select * into strict p from work_projects where id=p.id;
+  perform project_publish(p.id,p.detail);
+  return to_jsonb(p);
+ end if;
  if p_action='amend' and p.status not in ('completed','stopped') then
   if length(trim(p_text)) not between 1 and 4000 or length(p.clarifications)+length(p_text)>8000 then raise exception 'Clarification exceeds project context limit';end if;
   if p.active_mission_id is not null then
