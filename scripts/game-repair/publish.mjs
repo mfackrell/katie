@@ -10,7 +10,11 @@ const existing=git('diff','--name-only',plan.config.baselineSha,'HEAD','--').spl
 if(existing.length)assertPaths(existing,plan.config);
 const modified=git('diff','--name-only','HEAD','--').split('\n').filter(Boolean);
 const untracked=git('ls-files','--others','--exclude-standard').split('\n').filter(Boolean);
-assertPaths([...new Set([...modified,...untracked])],plan.config);
+const changes=[...new Set([...modified,...untracked])];
+// Evidence-only findings may require re-verification without changing a correct game.
+// The independent exact-head tests and reviewer still decide whether it passes.
+if(!changes.length){console.log(git('rev-parse','HEAD'));process.exit(0);}
+assertPaths(changes,plan.config);
 for(const path of plan.config.allowedPaths){const stat=lstatSync(resolve(path));if(!stat.isFile()||stat.isSymbolicLink())throw Error('Only regular source files are allowed');}
 git('add','--',...plan.config.allowedPaths);
 git('config','user.name','github-actions[bot]');git('config','user.email','41898282+github-actions[bot]@users.noreply.github.com');
