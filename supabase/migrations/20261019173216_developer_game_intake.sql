@@ -70,3 +70,18 @@ revoke all on function public.guard_game_project_mission() from public,anon,auth
 grant execute on function public.guard_game_project_mission() to service_role;
 drop trigger if exists game_project_mission_guard on public.agent_missions;
 create trigger game_project_mission_guard before update of project_id on public.agent_missions for each row execute function public.guard_game_project_mission();
+
+-- Registered workers cannot be edited through ordinary agent management.
+-- New charters require a reviewed versioned registration, never a silent edit.
+create or replace function public.guard_registered_game_specialist() returns trigger
+language plpgsql security invoker set search_path=public as $$
+begin
+ if exists(select 1 from game_specialist_bindings where agent_id=old.id) and (new.config is distinct from old.config or new.version<>old.version or new.archived is distinct from old.archived) then
+  raise exception 'Registered game specialist is immutable; create a reviewed new charter version instead of editing or archiving this worker';
+ end if;
+ return new;
+end $$;
+revoke all on function public.guard_registered_game_specialist() from public,anon,authenticated;
+grant execute on function public.guard_registered_game_specialist() to service_role;
+drop trigger if exists registered_game_specialist_guard on public.managed_agents;
+create trigger registered_game_specialist_guard before update on public.managed_agents for each row execute function public.guard_registered_game_specialist();

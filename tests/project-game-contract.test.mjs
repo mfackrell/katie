@@ -10,8 +10,10 @@ import {checkGameModel} from '../scripts/project-game-check.mjs';
 import {projectMarker,parseProjectContext,contractHash} from '../scripts/project-context.mjs';
 test('registration preserves complete rules and exact browser scenarios in the immutable owner context',()=>{
  const f=gameFixture();assert.equal(validateProjectGame(f.game,f.allowedPaths,f.contract),f.game);
- const c={version:1,projectId:'11111111-1111-4111-8111-111111111111',baseSha:'a'.repeat(40),baselineSha:'a'.repeat(40),allowedPaths:f.allowedPaths,contractHash:contractHash(f.contract),contract:f.contract,game:f.game};
+ const c={version:1,projectId:'11111111-1111-4111-8111-111111111111',baseSha:'a'.repeat(40),baselineSha:'a'.repeat(40),allowedPaths:f.allowedPaths,contractHash:contractHash(f.contract),contract:f.contract,game:f.game,gameFinal:true};
  assert.deepEqual(parseProjectContext(projectMarker(c)),c);
+ assert.deepEqual(parseProjectContext(projectMarker({...c,gameFinal:false})).game,f.game);
+ assert.equal(checkGameModel({game:f.game,gameFinal:false},'/unavailable','/unavailable'),null);
  const swapped={...f.contract,scenarios:[{name:'title-only',steps:[{action:'expectVisible',selector:'#title'}]}]};
  assert.throws(()=>projectMarker({...c,contract:swapped,contractHash:contractHash(swapped)}),/exactly execute/);
  const missing=structuredClone(f.game);missing.rules.unknowns=[{id:'edition',question:'Which edition?',status:'open',blocking:true,ruleIds:['increment']}];
@@ -27,7 +29,7 @@ test('trusted model runner tests the actual isolated engine and rejects wrong, m
  const root=mkdtempSync(join(tmpdir(),'game-engine-'));
  try{
   mkdirSync(join(root,'app/counter'),{recursive:true});mkdirSync(join(root,'node_modules'));
-  const dependencies=resolve('node_modules');mkdirSync(join(dependencies,'.vite'),{recursive:true});const f=gameFixture();const context={game:f.game};
+  const dependencies=resolve('node_modules');mkdirSync(join(dependencies,'.vite'),{recursive:true});const f=gameFixture();const context={game:f.game,gameFinal:true};
   const engine=code=>writeFileSync(join(root,f.game.enginePath),code);
   engine('export function transition(state,action){return action.type === "increment" ? {count:state.count+1} : state;}');
   assert.equal(checkGameModel(context,root,dependencies).passed,true);

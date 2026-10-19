@@ -10,9 +10,8 @@ export function startProjectIntent(text: string) {
 }
 export function gameProjectIntent(text:string) {
  const dataProduct=/\bgames?\s+(?:sales|analytics|reviews|catalog|inventory|statistics)\b/i.test(text)&&/\b(?:dashboard|tracker|analytics|portal|catalog|store|website)\b/i.test(text);
- if(dataProduct)return false;
  const explicitGameplay=/\b(?:browser|board|card|video|turn[- ]based|strategy|puzzle|multiplayer|playable)\s+games?\b|\bgames?\s+(?:with|where|that|in (?:a|the) browser)\b|\b(?:app|application|software)\b.{0,40}\b(?:for|as|to play)\s+(?:a |the )?(?:[\w-]+ )?games?\b|\bmake (?:it|this|that) (?:a |the )?games?\b/i.test(text);
- return explicitGameplay||/^games?$/i.test(text.match(/\b(?:games?|website|web app|application|app|dashboard|portal|software|program|API)\b/i)?.[0]??'');
+ return explicitGameplay||!dataProduct&&/^games?$/i.test(text.match(/\b(?:games?|website|web app|application|app|dashboard|portal|software|program|API)\b/i)?.[0]??'');
 }
 export const followupProjectIntent = (text: string) => /^(?:please\s+)?(?:build|make|create|implement|do|start)(?:\s+(?:that|it|this|the project))?[.!\s]*$/i.test(text.trim());
 const actionText = (text:string) => text.trim().replace(/^(?:actually|also|no|okay|ok)[,:]?\s+/i,'').replace(/^please\s+/i,'').replace(/^(?:can|could|would|will) (?:you|we)\s+(?:please\s+)?/i,'');

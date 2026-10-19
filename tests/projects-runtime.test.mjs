@@ -258,6 +258,7 @@ test('chat-native game intake selects the game registration RPC while ordinary a
  assert.equal(gameProjectIntent('Build a website for game reviews.'),false);
  assert.equal(gameProjectIntent('Build a game sales dashboard.'),false);
  assert.equal(gameProjectIntent('Build a games inventory tracker.'),false);
+ assert.equal(gameProjectIntent('Build a playable game with a game sales dashboard.'),true);
 });
 test('game specifications cannot bypass registered rules or swap a loading-only final contract',async()=>{
  const {gameFixture}=await import('./fixtures/game-project.mjs');const f=gameFixture();
@@ -268,13 +269,34 @@ test('game specifications cannot bypass registered rules or swap a loading-only 
  assert.throws(()=>validateProjectPlan(changed),/exactly execute/);
 });
 
-test('only the final game increment receives the complete registered model contract, bound to its saved run index',async()=>{
+test('all increments retain game rules while the final model gate binds to the saved run index',async()=>{
  const {gameFixture}=await import('./fixtures/game-project.mjs');const f=gameFixture();
  const p={...owner,profile:'game',spec:{...plan,game:f.game},milestone_index:0};
  const run={mission_id:'saved-mission',milestone_index:0,binding:{version:1,projectId:id,scopeHash:p.approved_hash,contractHash:'c'.repeat(64),contract}};
  const db={from:table=>({select(){return this;},eq(){return this;},maybeSingle:async()=>({data:table==='mission_assignments'?{mission_id:run.mission_id}:table==='project_runs'?run:p,error:null})})};
  const {getDevelopmentProjectContext}=modules({'@/lib/data/supabase/admin':{getSupabaseAdminClient:()=>db}})('@/lib/projects/store');
- assert.equal((await getDevelopmentProjectContext('job')).game,undefined);
+ assert.equal((await getDevelopmentProjectContext('job')).game.rules.game.id,'counter-pilot');
+ assert.equal((await getDevelopmentProjectContext('job')).gameFinal,false);
  run.milestone_index=1;p.milestone_index=2;
- assert.equal((await getDevelopmentProjectContext('job')).game.rules.game.id,'counter-pilot','model registration stays available after project advancement');
+ assert.equal((await getDevelopmentProjectContext('job')).gameFinal,true,'final model gate stays available after project advancement');
+});
+
+test('game specification adapter choice comes from server-owned project evidence and retains reviewed research',async()=>{
+ const f=coordinator(),mid=randomUUID();f.p.phase='specification';f.p.profile='game';
+ f.runs.push({mission_id:mid,kind:'research',ordinal:1,milestone_index:0,binding:null,outcome:{reviewedMissionId:mid}});
+ f.missions.set(mid,{mission:{id:mid,status:'completed',result:'Original controlled user rules, independently reviewed.'},jobs:[]});
+ await f.tick();const saved=f.calls.at(-1).p_data;
+ assert.equal(saved.kind,'specification');assert.equal(saved.evidence.projectProfile,'game');
+ assert.match(saved.objective,/Original controlled user rules/);assert.match(saved.objective,/game:\{enginePath,rules,acceptance\}/);
+});
+
+test('detailed game rules stay in saved evidence rather than overflowing an otherwise valid development brief',async()=>{
+ const {gameFixture}=await import('./fixtures/game-project.mjs');const g=gameFixture();
+ g.game.rules.rules[0].description='RULE_RECORD_SENTINEL '+ 'x'.repeat(6000);
+ const f=coordinator();f.p.profile='game';f.p.objective='Build the original browser game. '+ 'x'.repeat(7000);
+ f.p.spec={...plan,game:g.game};await f.tick();
+ const saved=f.calls.at(-1).p_data;
+ assert.equal(saved.kind,'development');assert.ok(saved.objective.length<12000);
+ assert.doesNotMatch(saved.objective,/RULE_RECORD_SENTINEL/);
+ assert.equal(saved.evidence.gameContract.rules.rules[0].description,g.game.rules.rules[0].description);
 });
