@@ -44,7 +44,7 @@ begin
    jsonb_build_object('mission_id',m.id,'run',p_expected_run,'charged_tokens',charged,'milestone_index',p.milestone_index));
  perform project_publish(p.id,p.detail);
  return to_jsonb(p);
-end $;
+end $$;
 exception when duplicate_function then
   -- Preserve the deployed function body; apply only missing privilege restrictions below.
   null;
