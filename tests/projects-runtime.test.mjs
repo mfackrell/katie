@@ -329,6 +329,23 @@ test('oversized game assessment is rejected before approval and large source exc
  assert.ok(retained.finalIntegratedEvidence.verification.changedFiles.some(f=>f.patchUnavailable));
 });
 
+test('game capacity estimator counts shared browser evidence once and admits a bounded full receipt',async()=>{
+ const {gameFixture}=await import('./fixtures/game-project.mjs');const g=gameFixture();
+ const {validateGameAssessmentCapacity,gameAssessmentCapacity,gameAssessmentEvidence}=modules()('@/lib/projects/game-evidence');
+ const spec={...plan,game:g.game,allowedPaths:g.allowedPaths,milestones:[{title:'Game',instruction:'Implement',contract:g.contract}],finalContract:g.contract};
+ // The old estimate counted check details twice and reserved 7 KB in addition.
+ const scenarioCount=spec.finalContract.scenarios.length;
+ spec.game.rules.rules[0].description='Rules preserved in full: '+'r'.repeat(5500);
+ const capacity=gameAssessmentCapacity(spec);
+ assert.ok(capacity.requiredCharacters<=24000,'Valid source must not be rejected by duplicated synthetic browser checks');
+ validateGameAssessmentCapacity(spec);
+ const p={...owner,profile:'game',spec};
+ const result=gameAssessmentEvidence(p,[],{head:'a'.repeat(40),taskId:'t',verification:{pullRequest:123,observedHeadSha:'a'.repeat(40),testedHeadSha:'a'.repeat(40),reviewedHeadSha:'a'.repeat(40),changedFiles:[],projectAcceptance:{passed:true,checks:[]}}});
+ assert.ok(JSON.stringify(result,null,1).length<=24000);
+ assert.equal(result.gameRules.rules[0].description,spec.game.rules.rules[0].description);
+ assert.equal(result.approvedFinalContract.scenarios.length,scenarioCount);
+});
+
 test('game approval rejects a previously supported target until its versioned game tools are installed',async()=>{
  let gameTools=false,version=1,rulesInstalled=true;const oldWorkflow='project-browser-check.mjs projectAcceptance';
  const db={from:()=>({select(){return this;},eq(){return this;},maybeSingle:async()=>({data:{repository_full_name:'owner/repo'},error:null})})};
