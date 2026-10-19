@@ -1,6 +1,6 @@
 -- Durable recovery control plane for projects, missions, and saved tasks.
 -- Diagnosis and delegation are separate from existing execution authorization.
-create table public.recovery_cases (
+create table if not exists public.recovery_cases (
  id uuid primary key default gen_random_uuid(),
  source_type text not null check (source_type in ('project','mission','task')),
  source_id uuid not null,
@@ -23,16 +23,16 @@ create table public.recovery_cases (
  updated_at timestamptz not null default now(),
  unique(source_type,source_id,source_revision)
 );
-create index recovery_cases_claim on public.recovery_cases(status,updated_at);
-create index recovery_cases_actor on public.recovery_cases(actor_id,opened_at desc);
-create table public.recovery_events(
+create index if not exists recovery_cases_claim on public.recovery_cases(status,updated_at);
+create index if not exists recovery_cases_actor on public.recovery_cases(actor_id,opened_at desc);
+create table if not exists public.recovery_events(
  id uuid primary key default gen_random_uuid(),
  case_id uuid not null references public.recovery_cases(id) on delete restrict,
  event text not null check(length(event) between 1 and 80),
  evidence jsonb not null default '{}'::jsonb,
  created_at timestamptz not null default now()
 );
-create index recovery_events_case on public.recovery_events(case_id,created_at);
+create index if not exists recovery_events_case on public.recovery_events(case_id,created_at);
 alter table public.recovery_cases enable row level security;
 alter table public.recovery_events enable row level security;
 revoke all on public.recovery_cases,public.recovery_events from public,anon,authenticated,service_role;
@@ -42,6 +42,8 @@ grant select,insert on public.recovery_events to service_role;
 -- Discover idempotently, independent of what kind of work a user requested.
 -- Deliberately exclude stopped/paused tasks, superseded project branches and
 -- tasks already represented by their parent blocked mission.
+do $migration$
+begin
 create function public.discover_recovery_cases() returns integer
 language plpgsql security invoker set search_path=public as $$
 declare n integer:=0;
@@ -73,8 +75,12 @@ begin
  on conflict do nothing;
  return n;
 end $$;
+exception when duplicate_function then null;
+end $migration$;
 
 -- Atomic lease: only one supervisor may initiate external repair work.
+do $migration$
+begin
 create function public.claim_recovery_case() returns jsonb
 language plpgsql security invoker set search_path=public as $$
 declare c recovery_cases;
@@ -92,7 +98,11 @@ begin
  insert into recovery_events(case_id,event,evidence) values(c.id,'claimed',jsonb_build_object('attempt',c.attempt));
  return to_jsonb(c);
 end $$;
+exception when duplicate_function then null;
+end $migration$;
 
+do $migration$
+begin
 create function public.finish_recovery_case(p_id uuid,p_lease uuid,p_status text,
  p_category text,p_strategy text,p_details text,p_evidence jsonb default '{}'::jsonb,
  p_issue text default null,p_pr text default null,p_head text default null) returns jsonb
@@ -118,10 +128,14 @@ begin
   jsonb_build_object('category',p_category,'strategy',p_strategy,'details',p_details,'issue',p_issue,'pr',p_pr));
  return to_jsonb(c);
 end $$;
+exception when duplicate_function then null;
+end $migration$;
 
 -- Replay a transient ordinary mission assignment at most once, with its
 -- original deadline, team, cost accounting, dependencies and authorization.
 -- Project mission transitions must instead use the existing project controller.
+do $migration$
+begin
 create function public.retry_recovery_assignment(p_case uuid,p_lease uuid,p_assignment uuid)
 returns boolean language plpgsql security invoker set search_path=public as $$
 declare c recovery_cases;m agent_missions;j mission_assignments;
@@ -145,6 +159,8 @@ begin
   jsonb_build_object('mission',m.id,'assignment',j.id,'prior_attempts',j.attempts));
  return true;
 end $$;
+exception when duplicate_function then null;
+end $migration$;
 revoke all on function public.discover_recovery_cases(),public.claim_recovery_case(),
  public.finish_recovery_case(uuid,uuid,text,text,text,text,jsonb,text,text,text),
  public.retry_recovery_assignment(uuid,uuid,uuid) from public,anon,authenticated;
