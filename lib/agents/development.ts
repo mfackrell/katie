@@ -227,7 +227,12 @@ export async function reconcileDevelopment(task: AgentTask, project?: ProjectAcc
     const receipt = parseCompletionReceipt(raw, binding.fullName, issueNumber, run.id, run.conclusion, project);
     return save(task, receipt.outcome === "READY" ? "ready" : "blocked", receipt.outcome === "READY" ? "Draft ready for owner approval. No merge or deployment." : "Independent workflow tests or review blocked completion.", { ...task.external, runUrl: run.html_url, prUrl: receipt.pr_url, receipt });
   }
-  return save(task, task.status, "No verified completion receipt among the latest 20 workflow runs. Refresh manually after workflow completion.");
+  if(verificationOnly && Date.now()-verificationSince>2*60*60*1000){
+    return save(task,'blocked','Verification-only workflow did not provide a valid tested/reviewed/browser receipt within two hours. Saved source and original project scope remain intact.');
+  }
+  return save(task, task.status, verificationOnly
+    ? 'Waiting for independent verification-only receipt on the unchanged approved code.'
+    : 'No verified completion receipt among the latest 20 workflow runs. Refresh manually after workflow completion.');
 }
 
 // Supply the coordinator with observed repository evidence after its trusted
