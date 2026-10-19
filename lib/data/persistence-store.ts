@@ -568,7 +568,7 @@ export async function clearActorLongTermMemory(actorId: string): Promise<{
     !Array.isArray(memory.entries) || memory.entries.length !== 0) {
     throw new Error("Memory clear read-back verification failed");
   }
-  return result as { entries_removed: number; documents_removed: number; legacy_rows_removed: number };
+  return result as { entries_removed: number; documents_removed: number; legacy_rows_removed: number; visual_references_removed: number };
 }
 
 export type ActorMemoryDocument = {
