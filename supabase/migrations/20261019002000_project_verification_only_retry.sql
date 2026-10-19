@@ -1,3 +1,5 @@
+do $migration$
+begin
 -- A reviewed development increment that failed infrastructure verification may
 -- be retested on its exact existing PR commit. No new coding job, mission, scope
 -- authorization, budget, milestone, or deadline is created.
@@ -52,5 +54,8 @@ begin
  perform project_publish(p.id,p.detail);
  return jsonb_build_object('status',p.status,'phase',p.phase,'cycles',p.cycles,'mission',p.active_mission_id);
 end $$;
+exception when duplicate_function then
+ null;
+end $migration$;
 revoke all on function public.retry_project_verification(uuid,uuid,uuid,uuid,bigint,bigint,bigint,text) from public,anon,authenticated;
 grant execute on function public.retry_project_verification(uuid,uuid,uuid,uuid,bigint,bigint,bigint,text) to service_role;
