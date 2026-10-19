@@ -5,6 +5,7 @@ import { readMission,rpc } from '@/lib/missions/store';
 import { completionJson,parseCompletionReceipt, type ProjectAcceptanceBinding } from '@/lib/agents/development';
 import { digest } from '@/lib/projects/contract';
 import { diagnoseRecoveryFailure,narrowPaths,type RecoverySource,type RecoveryDiagnosis } from './policy';
+import {independentRecoveryDiagnosis} from './diagnose';
 
 type Case={
  id:string;source_type:RecoverySource;source_id:string;source_revision:string;
@@ -206,10 +207,17 @@ async function handleCase(c:Case):Promise<string>{
   await finish(c,'verifying',diagnosis,'Existing approved commit remains under original verification controls; waiting for its trusted receipt.',{run:e.runId});
   return'verifying';
  }
- const protectedCase=diagnosis.strategy==='owner_required';
+ const independent=diagnosis.strategy==='diagnose'?await independentRecoveryDiagnosis({
+  sourceType:c.source_type,failure:e.detail,trustedEvidence:log+(browser?'\\n'+browser:'')}):null;
+ const protectedCase=diagnosis.strategy==='owner_required'||independent?.requiresNewPermission===true;
+ const report=independent
+   ? independent.rootCause+' '+independent.impact+' Next: '+independent.nextDiagnosticStep
+   : diagnosis.explanation;
  await finish(c,protectedCase?'requires_owner':'blocked',diagnosis,
-  protectedCase?diagnosis.explanation:'Independent diagnosis did not justify a safe automated change. Evidence saved for review.',
-  {run:e.runId,sourceCategory:c.source_type});
+  report.slice(0,2000),
+  {run:e.runId,sourceCategory:c.source_type,
+   ...(independent?{independentDiagnosis:independent}:{}),
+   evidenceVerified:false});
  return protectedCase?'requires_owner':'blocked';
 }
 async function monitorRecoveryCases():Promise<void>{
