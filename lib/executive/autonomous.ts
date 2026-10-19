@@ -55,7 +55,7 @@ export async function startExecutiveFinance(input:{actorId:string;chatId:string;
 
 export async function reconcileExecutiveFinance(){
  const db=getSupabaseAdminClient();
- const {data:running,error}=await db.from('executive_delegations') .select('id,actor_id,chat_id,mission_id,status').like('request_key','exec-finance-%').in('status',['running','verified','cancelled']).not('mission_id','is',null).order('updated_at',{ascending:false}).limit(100);
+ const {data:running,error}=await db.from('executive_delegations').select('id,actor_id,chat_id,mission_id,status,request_key').in('status',['running','verified','cancelled']).order('updated_at',{ascending:false}).limit(100);
  if(error)throw Error('Executive reconciliation inventory unavailable');
  let verified=0,blocked=0;
  for(const d of (running??[]) as Array<{id:string;actor_id:string;chat_id:string;mission_id:string|null;status:string;request_key:string}>){
