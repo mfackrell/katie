@@ -3,7 +3,7 @@ import { Octokit } from '@octokit/rest';
 import { getSupabaseAdminClient } from '@/lib/data/supabase/admin';
 import { readMission } from '@/lib/missions/store';
 import { readTask } from '@/lib/agents/store';
-import { developmentPreview, projectAcceptanceSchema, reconcileDevelopment } from '@/lib/agents/development';
+import { developmentPreview, projectAcceptanceSchema, reconcileDevelopment, retryImmutableProjectVerification } from '@/lib/agents/development';
 import { parseJSON } from '@/lib/missions/types';
 import { validateProjectPlan } from './contract';
 import { projectRpc, projectRuns, milestoneEvidence, acceptanceBinding, getDevelopmentProjectContext, type Project } from './store';
@@ -44,6 +44,22 @@ async function advance(p: Project) {
             if (essential && !p.approved_hash) {
                 await finish('input', { detail: essential.question ?? 'A concrete project decision is required before continuing.' });
                 return;
+            }
+            // Verification infrastructure failures must not spend another coding
+            // cycle. Re-dispatch independent tests/review for the exact saved PR
+            // head; keep the original mission and approval.
+            if(p.phase==='development'&&m.status==='blocked'){
+                const failedDevelopment=current.jobs.find(j=>j.role==='development'&&j.status==='failed');
+                if(failedDevelopment){
+                    try {
+                        const task=await readTask(failedDevelopment.id);
+                        if(await retryImmutableProjectVerification(task,p))return;
+                    } catch(error) {
+                        console.error('[Projects] Immutable re-verification unavailable',error instanceof Error?error.message:'Unknown error');
+                        // Do not silently create another coding attempt on
+                        // verification dispatch failure.
+                    }
+                }
             }
             const failedCoordinator=current.jobs.find(j=>j.status==='failed'&&j.role!=='development');
             if(failedCoordinator){await finish('block',{detail:'The '+p.phase+' worker failed before its result could be verified: '+String(failedCoordinator.result?.detail??failedCoordinator.detail??'Unknown coordinator failure')+'. Prior work and charges remain saved; this is not evidence that the implementation needs another coding job.'});return;}
