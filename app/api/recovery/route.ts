@@ -14,7 +14,7 @@ export async function GET(){
    .select('id,source_type,source_id,actor_id,chat_id,status,category,strategy,attempt,details,repair_issue_url,repair_pr_url,updated_at')
    .order('updated_at',{ascending:false}).limit(100);
   if(error)throw Error('Recovery history unavailable');
-  const cases=(data??[]).filter(c=>allowed.has(c.actor_id)&&(!c.chat_id||ownedChats.get(c.chat_id)===c.actor_id))
+  const cases=((data??[]) as Array<{id:string;source_type:string;source_id:string;actor_id:string;chat_id:string|null;status:string;category:string|null;strategy:string|null;attempt:number;details:string;repair_issue_url:string|null;repair_pr_url:string|null;updated_at:string}>).filter(c=>allowed.has(c.actor_id)&&(!c.chat_id||ownedChats.get(c.chat_id)===c.actor_id))
     .map(c=>({id:c.id,sourceType:c.source_type,sourceId:c.source_id,actorId:c.actor_id,
       chatId:c.chat_id,status:c.status,category:c.category,strategy:c.strategy,attempt:c.attempt,
       details:c.details,issueUrl:c.repair_issue_url,prUrl:c.repair_pr_url,updatedAt:c.updated_at}));
