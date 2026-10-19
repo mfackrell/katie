@@ -35,8 +35,16 @@ export async function verifyProject({request,output,workspace=process.cwd()}){
    npm_config_fund:'false',
   },
  });
- if(install.status!==0)throw Error('Trusted baseline dependency preparation failed; candidate tests were not run');
- const dependencies=resolve(deps,'node_modules');mkdirSync(resolve(root,'node_modules'),{recursive:true});
+ if(install.status!==0){
+  // This receipt is written by trusted verifier code outside the isolated
+  // candidate checkout. Failed application tests never create this marker.
+  writeFileSync(resolve(dirname(output),'project-verification-failure.json'),JSON.stringify({
+   version:1,kind:'infrastructure',stage:'baseline-install',
+   projectId:context.projectId,baseSha:context.baseSha,
+  }));
+  throw Error('Trusted baseline dependency preparation failed; candidate tests were not run');
+ }
+ const dependencies=resolve(deps,'node_modules');mkdirSync(resolve(dependencies,'.vite'),{recursive:true});mkdirSync(resolve(root,'node_modules'),{recursive:true});
  const script="const {spawnSync}=require('node:child_process');for(const task of ['typecheck','ci:gate']){const r=spawnSync('npm',['run',task],{stdio:'inherit'});if(r.status!==0)process.exit(r.status||1);} ";
  const checkArgs=[...sandboxArgs(root,{dependencies,writable:true}), '--setenv','CI','true','--setenv','VERCEL_ENV','development','--setenv','NEXT_PUBLIC_SUPABASE_URL','https://example.supabase.co','--setenv','NEXT_PUBLIC_SUPABASE_ANON_KEY','anon-placeholder','--setenv','SUPABASE_SERVICE_ROLE_KEY','service-role-placeholder',process.execPath,'-e',script];
  const checked=spawnSync('bwrap',checkArgs,{stdio:'inherit',timeout:1200000});if(checked.status!==0)throw Error('Isolated project CI failed');

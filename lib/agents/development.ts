@@ -1,4 +1,4 @@
-import {getDevelopmentProjectContext,acceptanceBinding,type Context} from '@/lib/projects/store';
+import {getDevelopmentProjectContext,acceptanceBinding,projectRpc,type Context} from '@/lib/projects/store';
 import {digest} from '@/lib/projects/contract';
 import { Octokit } from "@octokit/rest";
 import { inflateRawSync } from "node:zlib";
@@ -138,6 +138,61 @@ export async function dispatchDevelopment(task: AgentTask, project?: Context, as
     return save(task, "dispatching", "External acceptance is uncertain. Refresh to reconcile the durable marker; this task will not automatically submit another issue.");
   }
 }
+// Infrastructure-only recovery: the original immutable PR is re-tested,
+// never regenerated. A trusted GitHub test-job log must demonstrate that
+// the test harness failed before candidate code or browser acceptance ran.
+// The DB RPC checks the exact owner/chat/project/mission, receipt and scope
+// under an advisory lock, and preserves coding cycles and earlier charges.
+export async function retryImmutableProjectVerification(task: AgentTask, project: {
+ id:string;actor_id:string;chat_id:string;active_mission_id:string|null;approved_hash:string|null;approval_hash:string|null;
+}): Promise<boolean> {
+ if(!project.active_mission_id||!project.approved_hash||project.approved_hash!==project.approval_hash||
+   task.status!=='blocked'||task.external.projectId!==project.id)return false;
+ const parsed=receiptSchema.safeParse(task.external.receipt);
+ if(!parsed.success)return false;
+ const receipt=parsed.data;
+ if(receipt.outcome!=='BLOCKED'||receipt.checks.test!=='false'||receipt.checks.review!=='pass'||
+   receipt.checks.repair!=='failure'||!receipt.pr_url||!receipt.tested_head_sha)return false;
+ const issue=Number(task.external.issueNumber),prNumber=Number(receipt.pr_url.split('/').pop());
+ if(!Number.isSafeInteger(issue)||issue<1||!Number.isSafeInteger(prNumber)||prNumber<1||
+    receipt.issue_number!==issue||task.external.prUrl!==receipt.pr_url)return false;
+ const client=github(),binding=await repository(task);
+ const [pr,jobs,workflow]=await Promise.all([
+  client.pulls.get({owner:binding.owner,repo:binding.repo,pull_number:prNumber}),
+  client.actions.listJobsForWorkflowRun({owner:binding.owner,repo:binding.repo,run_id:receipt.run_id,per_page:30}),
+  client.actions.getWorkflow({owner:binding.owner,repo:binding.repo,workflow_id:'project-reverify.yml'}),
+ ]);
+ if(workflow.data.path!=='.github/workflows/project-reverify.yml'||workflow.data.state!=='active')return false;
+ if(!pr.data.draft||pr.data.state!=='open'||pr.data.merged||pr.data.head.sha!==receipt.tested_head_sha||
+   pr.data.head.repo?.full_name!==binding.fullName||pr.data.base.repo.full_name!==binding.fullName||
+   pr.data.base.ref!=='main')return false;
+ const testJob=jobs.data.jobs.find(j=>j.name==='test'&&j.conclusion==='success');
+ if(!testJob)return false;
+ const log=await client.actions.downloadJobLogsForWorkflowRun({owner:binding.owner,repo:binding.repo,job_id:testJob.id});
+ const output=typeof log.data==='string'?log.data:Buffer.from(log.data as ArrayBuffer).toString('utf8');
+ // Fail closed if verification failure isn't unmistakably about trusted setup.
+ const setupFailure=/Isolated baseline npm installation failed|Trusted baseline dependency preparation failed/.test(output);
+ const npmFailure=/npm error Exit handler never called|npm error code ENOTCACHED|Isolated baseline npm installation failed|Trusted baseline dependency preparation failed/.test(output);
+ // A known read-only test-runner cache mount error is also infrastructure,
+ // not evidence that the approved gameplay is wrong. A new verification-only
+ // run must still pass every test, review and browser scenario independently.
+ const viteCacheFailure=/ENOENT: no such file or directory, mkdir ['"]\/app\/node_modules\/\.vite['"]/.test(output)
+   && /Vitest failed or did not produce a completion report/.test(output);
+ if(!(setupFailure&&npmFailure)&&!viteCacheFailure)return false;
+ const bindingContext=await getDevelopmentProjectContext(task.id);
+ if(!bindingContext||bindingContext.projectId!==project.id||
+    bindingContext.scopeHash!==project.approved_hash)return false;
+ // The workflow exists on main and reuses the owner-authored issue, draft PR
+ // and pinned SHA. No code-generation or repair job exists in this workflow.
+ await client.actions.createWorkflowDispatch({owner:binding.owner,repo:binding.repo,workflow_id:'project-reverify.yml',
+  ref:'main',inputs:{issue_number:String(issue),pr_number:String(prNumber),expected_sha:receipt.tested_head_sha}});
+ const saved=await projectRpc<{status:string}|null>('retry_project_verification',{
+  p_id:project.id,p_actor:project.actor_id,p_chat:project.chat_id,
+  p_mission:project.active_mission_id,p_issue:issue,p_run:receipt.run_id,p_pr:prNumber,p_head:receipt.tested_head_sha,
+ });
+ return saved?.status==='running';
+}
+
 export async function reconcileDevelopment(task: AgentTask, project?: ProjectAcceptanceBinding) {
   if(!project&&typeof task.external.projectId==='string'){const binding=await getDevelopmentProjectContext(task.id);if(!binding||binding.projectId!==task.external.projectId)throw Error('Saved project binding unavailable');project=acceptanceBinding(binding);}
   const deadline = Date.now() + 60_000;
@@ -152,10 +207,15 @@ export async function reconcileDevelopment(task: AgentTask, project?: ProjectAcc
     issueNumber = issue.number;
     task = await save(task, "submitted", "Reconciled accepted issue; awaiting verified workflow receipt.", { ...task.external, issueNumber, issueUrl: issue.html_url, repository: binding.fullName });
   }
-  const runs = await client.actions.listWorkflowRuns({ owner: binding.owner, repo: binding.repo, workflow_id: "autonomous-development.yml", per_page: 20 });
+  const verificationSince=typeof task.external.verificationSince==='string'
+    ? Date.parse(task.external.verificationSince) : NaN;
+  const verificationOnly=Number.isFinite(verificationSince);
+  const workflowId=verificationOnly?'project-reverify.yml':'autonomous-development.yml';
+  const workflowPath='.github/workflows/'+workflowId;
+  const runs = await client.actions.listWorkflowRuns({ owner: binding.owner, repo: binding.repo, workflow_id: workflowId, per_page: 20 });
   for (const run of runs.data.workflow_runs) {
     if (Date.now() > deadline - 15_000) return save(task, task.status, "Refresh reached its bounded time window before finding a verified receipt. Refresh manually to check again.");
-    if (run.status !== "completed" || !["issues", "workflow_dispatch"].includes(run.event) || run.repository.full_name !== binding.fullName || run.head_branch !== "main" || run.head_repository?.full_name !== binding.fullName || run.path !== ".github/workflows/autonomous-development.yml") continue;
+    if (run.status !== "completed" || !["issues", "workflow_dispatch"].includes(run.event) || run.repository.full_name !== binding.fullName || run.head_branch !== "main" || run.head_repository?.full_name !== binding.fullName || run.path !== workflowPath || (verificationOnly && (run.event!=='workflow_dispatch'||new Date(run.created_at).getTime()<verificationSince))) continue;
     const artifacts = await client.actions.listWorkflowRunArtifacts({ owner: binding.owner, repo: binding.repo, run_id: run.id, per_page: 20 });
     const artifact = artifacts.data.artifacts.find(a => a.name === "agent-completion" && !a.expired && a.size_in_bytes <= 1_000_000);
     if (!artifact) continue;
@@ -167,7 +227,12 @@ export async function reconcileDevelopment(task: AgentTask, project?: ProjectAcc
     const receipt = parseCompletionReceipt(raw, binding.fullName, issueNumber, run.id, run.conclusion, project);
     return save(task, receipt.outcome === "READY" ? "ready" : "blocked", receipt.outcome === "READY" ? "Draft ready for owner approval. No merge or deployment." : "Independent workflow tests or review blocked completion.", { ...task.external, runUrl: run.html_url, prUrl: receipt.pr_url, receipt });
   }
-  return save(task, task.status, "No verified completion receipt among the latest 20 workflow runs. Refresh manually after workflow completion.");
+  if(verificationOnly && Date.now()-verificationSince>2*60*60*1000){
+    return save(task,'blocked','Verification-only workflow did not provide a valid tested/reviewed/browser receipt within two hours. Saved source and original project scope remain intact.');
+  }
+  return save(task, task.status, verificationOnly
+    ? 'Waiting for independent verification-only receipt on the unchanged approved code.'
+    : 'No verified completion receipt among the latest 20 workflow runs. Refresh manually after workflow completion.');
 }
 
 // Supply the coordinator with observed repository evidence after its trusted

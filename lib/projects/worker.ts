@@ -3,7 +3,7 @@ import { Octokit } from '@octokit/rest';
 import { getSupabaseAdminClient } from '@/lib/data/supabase/admin';
 import { readMission } from '@/lib/missions/store';
 import { readTask } from '@/lib/agents/store';
-import { developmentPreview, projectAcceptanceSchema, reconcileDevelopment } from '@/lib/agents/development';
+import { developmentPreview, projectAcceptanceSchema, reconcileDevelopment, retryImmutableProjectVerification } from '@/lib/agents/development';
 import { parseJSON } from '@/lib/missions/types';
 import { validateProjectPlan } from './contract';
 import { projectRpc, projectRuns, milestoneEvidence, acceptanceBinding, getDevelopmentProjectContext, type Project } from './store';
@@ -44,6 +44,22 @@ async function advance(p: Project) {
             if (essential && !p.approved_hash) {
                 await finish('input', { detail: essential.question ?? 'A concrete project decision is required before continuing.' });
                 return;
+            }
+            // Verification infrastructure failures must not spend another coding
+            // cycle. Re-dispatch independent tests/review for the exact saved PR
+            // head; keep the original mission and approval.
+            if(p.phase==='development'&&m.status==='blocked'){
+                const failedDevelopment=current.jobs.find(j=>j.role==='development'&&j.status==='failed');
+                if(failedDevelopment){
+                    try {
+                        const task=await readTask(failedDevelopment.id);
+                        if(await retryImmutableProjectVerification(task,p))return;
+                    } catch(error) {
+                        console.error('[Projects] Immutable re-verification unavailable',error instanceof Error?error.message:'Unknown error');
+                        // Do not silently create another coding attempt on
+                        // verification dispatch failure.
+                    }
+                }
             }
             const failedCoordinator=current.jobs.find(j=>j.status==='failed'&&j.role!=='development');
             if(failedCoordinator){await finish('block',{detail:'The '+p.phase+' worker failed before its result could be verified: '+String(failedCoordinator.result?.detail??failedCoordinator.detail??'Unknown coordinator failure')+'. Prior work and charges remain saved; this is not evidence that the implementation needs another coding job.'});return;}
@@ -226,7 +242,37 @@ async function reconcileParkedDispatch() {
     }
     return false;
 }
-export async function runProjectBatch() { const maintenance=reconcileParkedDispatch().catch(error=>{console.error('[Projects] Parked dispatch recovery failed',error instanceof Error?error.message:'Unknown failure');});try { const p = await projectRpc<Project | null>('claim_work_project'); if (!p)
+async function reconcileBlockedInfrastructureProjects(){
+    const db=getSupabaseAdminClient();
+    const {data,error}=await db.from('work_projects').select('*')
+      .eq('status','blocked').eq('phase','development').order('updated_at',{ascending:false}).limit(2);
+    if(error)throw Error('Blocked project recovery index unavailable');
+    for(const p of (data??[]) as Project[]){
+        if(!p.active_mission_id||!p.approved_hash||p.approved_hash!==p.approval_hash||new Date(p.deadline).getTime()<=Date.now())continue;
+        const saved=await readMission(p.active_mission_id);
+        if(saved.mission.status!=='blocked')continue;
+        const failed=saved.jobs.find(j=>j.role==='development'&&j.status==='failed');
+        if(!failed)continue;
+        const receipt=(failed.result?.external as Record<string,unknown>|undefined)?.receipt as Record<string,unknown>|undefined;
+        const checks=receipt?.checks as Record<string,unknown>|undefined;
+        if(receipt?.outcome!=='BLOCKED'||checks?.test!=='false'||checks?.review!=='pass'||checks?.repair!=='failure')continue;
+        const task=await readTask(failed.id);
+        if(typeof task.external.verificationSince==='string')continue;
+        try {
+            if(await retryImmutableProjectVerification(task,p)){
+                console.info('[Projects] Existing project commit queued for verification-only recovery',{project:p.id,mission:p.active_mission_id});
+                return true;
+            }
+        } catch(e){
+            console.error('[Projects] Verification-only recovery failed',{project:p.id,reason:e instanceof Error?e.message:'Unknown error'});
+        }
+    }
+    return false;
+}
+export async function runProjectBatch() { const maintenance=Promise.all([
+    reconcileParkedDispatch().catch(error=>{console.error('[Projects] Parked dispatch recovery failed',error instanceof Error?error.message:'Unknown failure');}),
+    reconcileBlockedInfrastructureProjects().catch(error=>{console.error('[Projects] Blocked verification recovery failed',error instanceof Error?error.message:'Unknown failure');})
+]);try { const p = await projectRpc<Project | null>('claim_work_project'); if (!p)
     return { claimed: 0 }; try {
     await advance(p);
     return { claimed: 1, status: 'processed' };
