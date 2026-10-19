@@ -6,6 +6,7 @@ import { missionModel,MissionModelFailure } from './model';
 import { rpc,readMission } from './store';
 import { ASSESSMENT_INSTRUCTION,REVIEW_INSTRUCTION } from '@/lib/collaboration/required-review';
 import { validateAssessment,validateAnswerReview,acceptanceIds } from '@/lib/collaboration/review-contract';
+import { researchRecoveryEvidence } from './research-evidence';
 import { measureDeliverable } from './review-length';
 import { getObjectiveFirstInstruction } from '@/lib/chat/deliverable-standard';
 import { parseJSON,validatePlan,type Claim } from './types';
@@ -21,7 +22,7 @@ export async function executeClaim(claim:Claim,model=missionModel){
  if(!['running','awaiting_approval'].includes(saved.mission.status))return;
  const completed=saved.jobs.filter(j=>j.status==='completed');
  const priorReviews=completed.filter(j=>j.role==='review').map(j=>({key:j.job_key,verdict:j.result?.verdict,findings:j.result?.findings,checks:j.result?.checks,clarification:j.result?.clarification}));
- const context=()=>JSON.stringify({objective:mission.objective,projectPhase:mission.project_kind,projectEvidence:mission.project_evidence,assignment:job.instruction,evidence:completed.filter(j=>j.role!=='plan'&&j.role!=='review').map(j=>({key:j.job_key,instruction:j.instruction,result:j.result}))});
+ const context=()=>JSON.stringify({objective:mission.objective,projectPhase:mission.project_kind,projectEvidence:researchRecoveryEvidence(mission.project_evidence,true),assignment:job.instruction,evidence:completed.filter(j=>j.role!=='plan'&&j.role!=='review').map(j=>({key:j.job_key,instruction:j.instruction,result:j.result}))});
  const finalWork=job.role==='compose'||job.role==='revise';
  const persona=frame+'\nSaved responsibilities: '+agent.config.instructions+'\n'+(finalWork?getObjectiveFirstInstruction():'Complete only input.assignment. The full objective is context for that assignment, not a request to perform the other workers’ assignments or compose the whole deliverable. Do not delegate, write a new plan, repeat unassigned calculations or recommendations, or offer future work.');
  const commit=(result:Record<string,unknown>,children:Child[]=[],status='completed',missionStatus:string|null=null,final:string|null=null)=>rpc<boolean>('commit_mission_work',{p_id:job.id,p_lease:job.lease,p_result:result,p_children:children,p_status:status,p_mission_status:missionStatus,p_final:final});
@@ -74,7 +75,7 @@ export async function executeClaim(claim:Claim,model=missionModel){
   const target=completed.find(x=>x.job_key===(job.job_key==='review_again'?'revision':'compose'));
   if(!target?.result)throw Error('Review candidate missing');
   const measured=measureDeliverable(mission.objective,String(target.result.text??target.result.output??''));
-  const checked=await model(claim,frame+'\n'+REVIEW_INSTRUCTION+'\nMEASURED LENGTH: The supplied measuredLength is computed from the entire candidate by code. Use it for length compliance; never estimate a conflicting count. Being within the cap does not waive material relevance or completeness issues. Distinguish optional tightening from a material defect; cite the concrete outcome impaired by any required deletion.','Independent assessment:\n'+JSON.stringify(assessment)+'\nRequired acceptance IDs:\n'+JSON.stringify(acceptanceIds(assessment))+'\nEvidence and candidate:\n'+JSON.stringify({objective:mission.objective,projectEvidence:mission.project_evidence,candidate:{key:target.job_key,result:target.result},measuredLength:measured,evidence:completed.filter(x=>x.role==='work'||x.role==='development').map(x=>({key:x.job_key,result:x.result})),priorFindings:priorReviews}));
+  const checked=await model(claim,frame+'\n'+REVIEW_INSTRUCTION+'\nMEASURED LENGTH: The supplied measuredLength is computed from the entire candidate by code. Use it for length compliance; never estimate a conflicting count. Being within the cap does not waive material relevance or completeness issues. Distinguish optional tightening from a material defect; cite the concrete outcome impaired by any required deletion.','Independent assessment:\n'+JSON.stringify(assessment)+'\nRequired acceptance IDs:\n'+JSON.stringify(acceptanceIds(assessment))+'\nEvidence and candidate:\n'+JSON.stringify({objective:mission.objective,projectEvidence:researchRecoveryEvidence(mission.project_evidence,false),candidate:{key:target.job_key,result:target.result},measuredLength:measured,evidence:completed.filter(x=>x.role==='work'||x.role==='development').map(x=>({key:x.job_key,result:x.result})),priorFindings:priorReviews}));
   const evaluated=validateAnswerReview(parseJSON(checked.text),assessment);
   const {wordCount,wordLimit}=measured;
   const tooLong=wordLimit!==null&&wordCount>wordLimit;

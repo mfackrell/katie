@@ -28,3 +28,23 @@ DO $$ declare p work_projects;m agent_missions;j uuid;r jsonb;scenario text;begi
   exception when sqlstate 'P2003' then null;end;
  end loop;
 end $$;
+
+-- Context repair is restricted to the recovered read-only research mission.
+DO $$ declare p work_projects;m agent_missions;j uuid;r jsonb;scenario text;begin
+ foreach scenario in array array['valid_context','missing_recovery','development_context'] loop
+  begin
+   select * into strict p from work_projects where id='44444444-4444-4444-8444-444444444444';
+   select * into strict m from agent_missions where id=p.active_mission_id;
+   update work_projects set status='blocked',phase='research',token_allowance=600000 where id=p.id;
+   update agent_missions set status='blocked',project_kind=case when scenario='development_context' then 'development' else 'research' end,project_evidence=case when scenario='missing_recovery' then '{}'::jsonb else '{"researchRecovery":{"sourceMissionId":"original-research"}}'::jsonb end,actual_tokens=1000,reserved_tokens=1200 where id=m.id;
+   insert into mission_assignments(mission_id,job_key,role,agent_id,instruction,status,attempts,result) values(m.id,'context_fixture','review',p.team[2],'Review saved research','failed',1,'{"detail":"Mission evidence exceeds bounded context. Narrow the objective or deliverable."}') returning id into j;
+   r:=retry_project_review(p.id,p.actor_id,p.chat_id);
+   if scenario='valid_context' then
+    if r is null or (select status from mission_assignments where id=j)<>'queued' or (select attempts from mission_assignments where id=j)<>1 then raise exception 'Failed research context did not retry exactly once';end if;
+    if (select result ? 'reviewContractFeedback' from mission_assignments where id=j) then raise exception 'Context failure corrupted draft-blind contract feedback';end if;
+    if (select actual_tokens from agent_missions where id=m.id)<>1000 or (select calls from agent_missions where id=m.id)<>m.calls then raise exception 'Context retry reset charges';end if;
+   elsif r is not null then raise exception 'Unsafe context retry admitted: %',scenario;end if;
+   raise exception using errcode='P2005',message='rollback context retry fixture';
+  exception when sqlstate 'P2005' then null;end;
+ end loop;
+end $$;

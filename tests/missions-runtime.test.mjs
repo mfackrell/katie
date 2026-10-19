@@ -210,3 +210,12 @@ test('measured whole-candidate length reaches review before judgment, including 
  assert.doesNotMatch(inputs[0],/Six complete words/);assert.equal(committed.p_result.wordLimit,limit);assert.equal(committed.p_result.verdict,limit===3?'changes_requested':'pass');
  }
 });
+
+test('research recovery sends substantive findings without duplicate historical assessments',async()=>{
+ const m=mission();m.project_kind='research';m.project_evidence={researchRecovery:{sourceMissionId:'saved-source-mission',lastCandidate:{text:'OLD_CANDIDATE_SENTINEL'},independentFindings:{verdict:'changes_requested',findings:['Remove peripheral API detail'],blindCriteria:'HISTORICAL_ASSESSMENT_SENTINEL'.repeat(1200),summary:'DUPLICATE_SUMMARY',checks:[{id:'retained-rule',passed:true,evidence:'DUPLICATE_PASSED_CHECK'.repeat(900)},{id:'economy',passed:false,evidence:'Peripheral API details impair the requested concise brief'}]}}};
+ const before=JSON.stringify(m.project_evidence),compose={...job(m,'compose','compose'),status:'completed',result:{text:'NEW_CANDIDATE_SENTINEL'}},review=job(m,'review','review'),work={...job(m,'work','source'),status:'completed',result:{text:'PRIMARY_SOURCE_EVIDENCE'}};let committed;
+ const {executeClaim}=modules({'@/lib/missions/store':{readMission:async()=>({mission:m,jobs:[work,compose,review]}),rpc:async(_,args)=>{committed=args;return true;}}})('@/lib/missions/worker');
+ await executeClaim({mission:m,job:review},async(_,instruction,input)=>{assert.ok(input.length<48000);if(instruction.includes('KATIE_REQUIRED_DRAFT_REVIEW')){assert.match(input,/PRIMARY_SOURCE_EVIDENCE/);assert.match(input,/NEW_CANDIDATE_SENTINEL/);assert.match(input,/Remove peripheral API detail/);assert.match(input,/Peripheral API details impair/);assert.doesNotMatch(input,/OLD_CANDIDATE_SENTINEL|HISTORICAL_ASSESSMENT_SENTINEL|DUPLICATE_PASSED_CHECK|DUPLICATE_SUMMARY/);}return{text:JSON.stringify(instruction.includes('KATIE_REQUIRED_DRAFT_REVIEW')?verdict():assessment),sources:[],calculations:[],model:'fixture'};});
+ assert.equal(committed.p_result.verdict,'pass');assert.equal(JSON.stringify(m.project_evidence),before,'Complete audit evidence remains unchanged');
+ const {researchRecoveryEvidence}=modules()('@/lib/missions/research-evidence');assert.match(JSON.stringify(researchRecoveryEvidence(m.project_evidence,true)),/OLD_CANDIDATE_SENTINEL/);
+});
