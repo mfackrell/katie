@@ -1,5 +1,6 @@
 import {handleProjectChat} from '@/lib/projects/chat';
 import {handleExecutiveSpecialistIntake} from '@/lib/executive/intake';
+import {startSpecialistAssignment} from '@/lib/executive/factory-runtime';
 import {startExecutiveFinance,startExecutiveDevelopment} from '@/lib/executive/autonomous';
 import { maskPdfSourceNames, pdfPageTaskForSource } from "@/lib/uploads/pdf-inventory";
 import { pdfSourceOccurrence, selectFreshPdfSources, selectPdfEvidenceSource } from "@/lib/chat/pdf-source-selection";
@@ -1011,13 +1012,16 @@ async function executeChat(request: NextRequest) {
     // classifier, router or model-backed memory maintenance is invoked.
     const executiveReply = !currentAgentTask() && !newAttachments.length && !requestImages?.length
       ? await handleExecutiveSpecialistIntake({actorId,chatId,message,requestId}) : null;
-    const financeReply = !executiveReply && !currentAgentTask() && !newAttachments.length && !requestImages?.length
+    const specialistReply = !executiveReply && !currentAgentTask() && !newAttachments.length && !requestImages?.length
+      ? await startSpecialistAssignment({actorId,chatId,message,requestId,activeRepoId}) : null;
+    const financeReply = !executiveReply && !specialistReply && !currentAgentTask() && !newAttachments.length && !requestImages?.length
       ? await startExecutiveFinance({actorId,chatId,message,requestId}) : null;
     const developmentReply = !executiveReply && !financeReply && !currentAgentTask() && !newAttachments.length && !requestImages?.length
       ? await startExecutiveDevelopment({actorId,chatId,message,requestId,activeRepoId}) : null;
     const projectReply = !executiveReply && !financeReply && !developmentReply && !currentAgentTask() && !newAttachments.length && !requestImages?.length
       ? await handleProjectChat({actorId,chatId,message,activeRepoId},requestId,attachmentHistory,requestTracked) : null;
     const localKatieResponse = executiveReply ? {reason: "executive" as const,text:executiveReply}
+      : specialistReply ? {reason: "executive" as const,text:specialistReply}
       : financeReply ? {reason: "executive" as const,text:financeReply}
       : developmentReply ? {reason: "executive" as const,text:developmentReply}
       : projectReply ? {reason: "project" as const,text:projectReply} : await resolveLocalKatieResponse({
