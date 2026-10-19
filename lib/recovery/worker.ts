@@ -142,7 +142,8 @@ async function delegateRepair(c:Case,e:SourceEvidence,diagnosis:RecoveryDiagnosi
  const marker='<!-- katie-recovery: '+Buffer.from(JSON.stringify(scope)).toString('base64url')+' -->';
  let projectMarker='';
  if(diagnosis.category==='implementation'&&e.project&&e.projectContext&&e.browserBinding){
-  const ctx={...e.projectContext,baseSha:sourceSha};
+  const {scopeHash:_scopeHash,...approvedContext}=e.projectContext;
+  const ctx={...approvedContext,baseSha:sourceSha};
   if(!e.project.baseline_sha||ctx.baselineSha!==e.project.baseline_sha ||
      ctx.contractHash!==digest(ctx.contract))throw Error('Original owner-approved project contract does not match repair source');
   projectMarker='<!-- katie-project: '+Buffer.from(JSON.stringify(ctx)).toString('base64url')+' -->\n';
