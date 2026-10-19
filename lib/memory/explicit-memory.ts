@@ -28,7 +28,7 @@ export async function handleExplicitMemoryMutation(
     if (isExplicitMemoryCorrection(message)) {
       // Deletion requests are not preserved as a new source document: doing so
       // would recreate the very information the user asked us to forget.
-      if (/\\b(?:delete|forget|remove)\\b/i.test(message)) {
+      if (/\b(?:delete|forget|remove|clear|erase|wipe|purge)\b/i.test(message)) {
         const before = await getLongTermMemory(actorId, chatId);
         await maybeUpdateLongTermMemory(actorId, chatId, message, { required: true });
         const after = await getLongTermMemory(actorId, chatId);
