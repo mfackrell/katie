@@ -1,0 +1,6 @@
+export function gameFixture(){
+ const rules={schemaVersion:1,game:{id:'counter-pilot',title:'Counter',edition:'User-defined test v1',kind:'original'},sources:[{id:'brief',kind:'user',reference:'Original controlled acceptance brief'}],rules:[{id:'increment',description:'Increment adds one; invalid actions preserve state',category:'action',status:'verified',sourceIds:['brief']}],unknowns:[],invariants:[{id:'whole-counter',description:'Count stays an integer',ruleIds:['increment']}],stateModel:{initialState:{count:0},phases:[]}};
+ const acceptance={schemaVersion:1,gameId:'counter-pilot',scenarios:[{id:'model',description:'Actual transition increments and rejects invalid actions',kind:'model',ruleIds:['increment'],invariantIds:['whole-counter'],steps:[{action:{type:'increment'},expectedState:{count:1}},{action:{type:'invalid'},expectedState:{count:1}}]},{id:'browser',description:'Rendered state follows click',kind:'browser',ruleIds:['increment'],invariantIds:['whole-counter'],steps:[{action:'click',selector:'#increment'},{action:'expectText',selector:'#count',value:'1'}]}]};
+ const game={enginePath:'app/counter/engine.ts',rules,acceptance};
+ return {game,contract:{path:'/counter',scenarios:acceptance.scenarios.filter(s=>s.kind==='browser').map(s=>({name:s.id,steps:s.steps}))},allowedPaths:['app/counter/']};
+}

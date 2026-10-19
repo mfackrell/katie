@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import {validateProjectGame} from './project-game-rules.mjs';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -61,11 +62,12 @@ export function validateContract(contract) {
   return contract;
 }
 export function validateProjectContext(value) {
-  exact(value, ['version', 'projectId', 'baseSha', 'baselineSha', 'allowedPaths', 'contractHash', 'contract']);
+  exact(value, ['version', 'projectId', 'baseSha', 'baselineSha', 'allowedPaths', 'contractHash', 'contract',...(value?.game?['game']:[])]);
   if (value.version !== 1 || !uuid.test(value.projectId) || !/^[a-f0-9]{40}$/.test(value.baseSha) || !/^[a-f0-9]{40}$/.test(value.baselineSha) || !/^[a-f0-9]{64}$/.test(value.contractHash)) throw Error('Invalid project identity');
   if(!Array.isArray(value.allowedPaths)||!value.allowedPaths.length||value.allowedPaths.length>12||value.allowedPaths.some(p=>typeof p!=='string'||p.length>200||!/^(?:app|apps|components|lib|public|tests|docs)\/[a-zA-Z0-9_./[\]-]+\/?$/.test(p)||p.split('/').some(s=>s==='.'||s==='..')||/\.env|\.github|node_modules/.test(p)))throw Error('Invalid approved project paths');
   validateContract(value.contract);
   if (contractHash(value.contract) !== value.contractHash) throw Error('Project contract digest mismatch');
+  if(value.game)validateProjectGame(value.game,value.allowedPaths,{scenarios:value.game.acceptance?.scenarios?.filter(s=>s.kind==='browser').map(s=>({name:s.id,steps:s.steps}))});
   return value;
 }
 export function parseProjectContext(request) {

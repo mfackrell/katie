@@ -243,3 +243,21 @@ test('settled mission reservations count once so approved project may enter its 
  assert.equal(calls[0].args.p_action,'child','actual 325101 tokens leaves 274899 uncommitted for development');
  assert.equal(calls[0].args.p_data.kind,'development');
 });
+
+test('chat-native game intake selects the game registration RPC while ordinary apps retain their existing path',async()=>{
+ const calls=[];const db={from:()=>({select(){return this;},eq(){return this;},maybeSingle:async()=>({data:{id:repo},error:null})})};
+ const {handleProjectChat,gameProjectIntent}=modules({'@/lib/data/supabase/admin':{getSupabaseAdminClient:()=>db},'@/lib/projects/store':{projectForChat:async()=>null,projectRpc:async(name,args)=>{calls.push({name,args});return owner;}}})('@/lib/projects/chat');
+ for(const [brief,expected] of [['Build a browser game with alternating turns.','create_game_work_project'],['Build a dashboard to track game sales.','create_work_project']]){
+  await handleProjectChat({actorId:actor,chatId:chat,message:brief,activeRepoId:repo},randomUUID(),[],true);
+  assert.equal(calls.at(-1).name,expected);assert.equal(calls.at(-1).args.p_objective,brief);
+ }
+ assert.equal(gameProjectIntent('Recreate the original board game in a browser.'),true);
+});
+test('game specifications cannot bypass registered rules or swap a loading-only final contract',async()=>{
+ const {gameFixture}=await import('./fixtures/game-project.mjs');const f=gameFixture();
+ const {validateProjectPlan}=modules()('@/lib/projects/contract');
+ const spec={...plan,allowedPaths:f.allowedPaths,milestones:[{title:'Complete game',instruction:'Implement rules',contract:f.contract}],finalContract:f.contract,game:f.game};
+ assert.equal(validateProjectPlan(spec).game.rules.game.id,'counter-pilot');
+ const changed=structuredClone(spec);changed.game.acceptance.scenarios[1].steps=[{action:'expectVisible',selector:'#title'}];
+ assert.throws(()=>validateProjectPlan(changed),/exactly execute/);
+});

@@ -3,6 +3,7 @@ import { rpc, readMission } from '@/lib/missions/store';
 import type { ProjectPlan } from './contract';
 export type BrowserContract = ProjectPlan['finalContract'];
 export type Context = {
+    game?: ProjectPlan['game'];
     version: 1;
     projectId: string;
     baseSha: string;
@@ -13,6 +14,7 @@ export type Context = {
     scopeHash: string;
 };
 export type Project = {
+    profile?: 'software'|'game';
     id: string;
     actor_id: string;
     chat_id: string;
@@ -65,7 +67,7 @@ export async function getDevelopmentProjectContext(jobId: string, forDispatch = 
     return null; const { data: r, error: re } = await db.from('project_runs').select('*').eq('mission_id', j.mission_id).maybeSingle<Run>(); if (re)
     throw Error('Project cycle binding unavailable'); if (!r?.binding)
     return null; const { data: p, error: pe } = await db.from('work_projects').select('*').eq('id', r.binding.projectId).maybeSingle<Project>(); if (pe || !p || forDispatch && (!p.approved_hash || p.approved_hash !== p.approval_hash || p.approved_hash !== r.binding.scopeHash || p.status !== 'running' || p.active_mission_id !== r.mission_id))
-    throw Error('Approved project scope is unavailable or changed'); return r.binding; }
+    throw Error('Approved project scope is unavailable or changed'); return {...r.binding,...(p?.profile==='game'&&p.spec?.game&&r.milestone_index===p.spec.milestones.length-1?{game:p.spec.game}:{})}; }
 export const acceptanceBinding = (c: Context) => ({ projectId: c.projectId, contractHash: c.contractHash, scenarioNames: c.contract.scenarios.map(s => s.name) });
 export async function milestoneEvidence(runs: Run[]) { const result = []; for (const r of runs.filter(r => r.outcome)) {
     const { mission } = await readMission(r.mission_id);
