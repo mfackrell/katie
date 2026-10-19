@@ -70,6 +70,11 @@ async function boundSource(c:Case):Promise<SourceEvidence|null>{
   const failed=m.jobs.find(j=>j.status==='failed');
   detail=failed?.result?.detail?.toString()??failed?.detail??m.mission.detail??detail;
   failedJobId=failed?.id??null;repositoryId=m.mission.repository_id;
+  if(failed?.role==='development'){
+    const {data:taskRow,error:taskError}=await db.from('agent_tasks').select('*').eq('id',failed.id).maybeSingle<Task>();
+    if(taskError)throw Error('Mission coding task evidence unavailable');
+    task=taskRow;
+  }
  }else{
   const {data,error}=await db.from('agent_tasks').select('*').eq('id',c.source_id).maybeSingle<Task&{actor_id:string;chat_id:string}>();
   if(error)throw Error('Recovery task unavailable');
