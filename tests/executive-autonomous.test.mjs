@@ -47,3 +47,27 @@ test('ordinary app requests and unrelated content stay with existing project rou
   'Create a specialist orchestrator for operations.'
  ])assert.equal(developmentDelegationIntent(text),false,text);
 });
+
+test('incomplete development cues with punctuation never start a mission', async()=>{
+ const incomplete=[
+  'Delegate software development to   ...?!',
+  '  Delegate software development   ...?!  ',
+  'Delegate this software development.',
+  'Delegate\tsoftware\tdevelopment\tto\t...?!',
+  'Delegate software development\n to\n ...?!',
+  'Have the software development agent implement',
+  'Have the development orchestrator build   ...?!',
+  'Please have the software development agent fix   ...?!',
+  'Executive: implement                 ...?!',
+ ];
+ for(const message of incomplete){
+  assert.equal(developmentDelegationIntent(message),false,message);
+  assert.equal(await exports.startExecutiveDevelopment({actorId:'a',chatId:'b',requestId:'c',activeRepoId:'d',message}),null,message);
+ }
+ for(const message of [
+  'Delegate software development to fix the checkout integration tests.',
+  'Please delegate this software development to add regression tests for the Executive router.',
+  'Have the development orchestrator build an invoice export endpoint.',
+  'Executive: implement an audit logging endpoint.',
+ ])assert.equal(developmentDelegationIntent(message),true,message);
+});
