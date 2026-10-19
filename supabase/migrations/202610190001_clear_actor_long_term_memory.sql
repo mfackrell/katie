@@ -11,9 +11,6 @@ declare
   v_documents integer;
   v_legacy integer;
 begin
-  if auth.role() <> 'service_role' then
-    raise exception 'service_role required';
-  end if;
   if not exists (select 1 from public.actors where id = p_actor_id) then
     raise exception 'actor not found';
   end if;
