@@ -44,6 +44,9 @@ export function assertRecoveryScope(request,workspace=process.cwd()){
  return changed;
 }
 if(process.argv[1]&&import.meta.url===pathToFileURL(resolve(process.argv[1])).href){
- try{if(process.argv.length!==3)throw Error('Usage: recovery-scope.mjs ORIGINAL_OWNER_ISSUE');assertRecoveryScope(process.argv[2]);}
- catch(e){console.error(String(e.message).slice(0,700));process.exitCode=1;}
+ try{
+  if(process.argv[2]==='prepare'&&process.argv.length===4)console.log(JSON.stringify(parseRecoveryScope(readFileSync(process.argv[3],'utf8'))));
+  else if(process.argv.length===3)assertRecoveryScope(process.argv[2]);
+  else throw Error('Usage: recovery-scope.mjs [prepare] ORIGINAL_OWNER_ISSUE');
+ }catch(e){console.error(String(e.message).slice(0,700));process.exitCode=1;}
 }
