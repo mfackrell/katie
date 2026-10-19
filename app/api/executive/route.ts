@@ -11,9 +11,11 @@ export async function GET(){
    db.from('executive_delegations').select('*').order('created_at',{ascending:false}).limit(100)
   ]);
   if(registry.error||delegations.error)throw Error('Executive registry not available');
+  const specialists=(registry.data??[]) as Array<{actor_id:string}>;
+  const assigned=(delegations.data??[]) as Array<{actor_id:string;chat_id:string}>;
   return NextResponse.json({
-   specialists:(registry.data??[]).filter(x=>actorIds.has(x.actor_id)),
-   delegations:(delegations.data??[]).filter(x=>actorIds.has(x.actor_id)&&ownedChats.get(x.chat_id)===x.actor_id)
+   specialists:specialists.filter(x=>actorIds.has(x.actor_id)),
+   delegations:assigned.filter(x=>actorIds.has(x.actor_id)&&ownedChats.get(x.chat_id)===x.actor_id)
   },{headers:{'Cache-Control':'no-store'}});
  }catch(error){
   console.error('[Executive] Registry overview error',error instanceof Error?error.message:'Unknown');
