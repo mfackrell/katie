@@ -38,6 +38,14 @@ test('explicit Executive software development requests delegate to existing spec
   'Executive: update the application to display mission review status.'
  ])assert.equal(developmentDelegationIntent(text),true,text);
 });
+test('incomplete coding delegation stays rejected with trailing whitespace or punctuation',()=>{
+ for(const suffix of ['', '   ', '\t\n', '.', '!', '?', ':', ';', ',', '...   ', '.\t\n']){
+  const incomplete='Delegate software development'+suffix;
+  assert.equal(developmentDelegationIntent(incomplete),false,JSON.stringify(incomplete));
+  const complete='Delegate software development to fix the failing checkout integration tests'+suffix;
+  assert.equal(developmentDelegationIntent(complete),true,JSON.stringify(complete));
+ }
+});
 test('ordinary app requests and unrelated content stay with existing project router',()=>{
  for(const text of [
   'Build a new dashboard for my invoices.',
