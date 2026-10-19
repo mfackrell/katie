@@ -55,8 +55,17 @@ export async function missionModel(claim:Claim,instruction:string,input:string,t
    for(const item of output){for(const block of (Array.isArray(item.content)?item.content:[]) as Array<Record<string,unknown>>){for(const a of (Array.isArray(block.annotations)?block.annotations:[]) as Array<Record<string,unknown>>){if(a.type==='url_citation'&&typeof a.url==='string'&&/^https?:\/\//.test(a.url))sources.push({url:a.url,title:String(a.title??'')});}}}
    const calls=output.filter(x=>x.type==='function_call');
    if(calls.length){
-    if(!calculatorAvailable||calculations.length+calls.length>8)throw Error('Unpermitted or excessive tool calls');
-    const answers=calls.map(c=>{if(c.name!=='calculate'||typeof c.arguments!=='string'||typeof c.call_id!=='string')throw Error('Invalid tool request');const result=calculate(JSON.parse(c.arguments));calculations.push(result);return{type:'function_call_output',call_id:c.call_id,output:JSON.stringify(result)};});
+    if(!calculatorAvailable)throw Error('Unpermitted calculator request');
+    // Model-generated parallel calculator requests can exceed the allowed
+    // budget. Execute only permitted calls and explicitly reject the rest,
+    // preserving one response for every tool call without exceeding limits.
+    const remaining=8-calculations.length;
+    const answers=calls.map((c,index)=>{
+     if(c.name!=='calculate'||typeof c.arguments!=='string'||typeof c.call_id!=='string')throw Error('Invalid tool request');
+     if(index>=remaining)return{type:'function_call_output',call_id:c.call_id,output:JSON.stringify({error:'Calculator call allowance exhausted; finish with available results, noting any missing calculations.'})};
+     const result=calculate(JSON.parse(c.arguments));calculations.push(result);
+     return{type:'function_call_output',call_id:c.call_id,output:JSON.stringify(result)};
+    });
     context=[...context,...output,...answers];continue;
    }
    if(!text)throw Error('Empty model result');
