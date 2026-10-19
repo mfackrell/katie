@@ -1,8 +1,23 @@
 import type {ProjectPlan} from './contract';
 import type {Project} from './store';
 
-// SQL checks jsonb::text. Indented JSON deliberately overestimates its spacing.
-const size=(value:unknown)=>JSON.stringify(value,null,1).length;
+// Match jsonb::text separators, without charging pretty-print indentation.
+// JS UTF-16 length conservatively overcounts astral Unicode versus PostgreSQL.
+export function jsonbTextSize(value:unknown):number{
+ const normalized=JSON.parse(JSON.stringify(value));
+ const count=(v:unknown):number=>{
+  if(Array.isArray(v))return 2+v.reduce((n,x)=>n+count(x),0)+Math.max(0,v.length-1)*2;
+  if(v&&typeof v==='object'){const entries=Object.entries(v);return 2+entries.reduce((n,[k,x])=>n+JSON.stringify(k).length+2+count(x),0)+Math.max(0,entries.length-1)*2;}
+  const text=JSON.stringify(v);
+  if(typeof v==='number'&&/e/i.test(text)){
+   const [mantissa,exponent]=text.toLowerCase().split('e'),negative=mantissa.startsWith('-'),digits=mantissa.replace('-','').replace('.',''),point=(mantissa.replace('-','').split('.')[0].length)+Number(exponent);
+   return (negative?1:0)+(point<=0?2-point+digits.length:point>=digits.length?point:digits.length+1);
+  }
+  return text.length;
+ };
+ return count(normalized);
+}
+const size=jsonbTextSize;
 export function gameAssessmentCapacity(plan:ProjectPlan){
  if(!plan.game)return null;
  const checks=plan.finalContract.scenarios.map(s=>({name:s.name,passed:true,detail:'x'.repeat(100)}));

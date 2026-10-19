@@ -315,14 +315,14 @@ test('detailed game rules stay in saved evidence rather than overflowing an othe
 
 test('oversized game assessment is rejected before approval and large source excerpts retain all rules and receipts',async()=>{
  const {gameFixture}=await import('./fixtures/game-project.mjs');const g=gameFixture();
- const {validateGameAssessmentCapacity,gameAssessmentEvidence}=modules()('@/lib/projects/game-evidence');
+ const {validateGameAssessmentCapacity,gameAssessmentEvidence,jsonbTextSize}=modules()('@/lib/projects/game-evidence');
  const spec={...plan,game:g.game,allowedPaths:g.allowedPaths,milestones:[{title:'Game',instruction:'Implement',contract:g.contract}],finalContract:g.contract};
  validateGameAssessmentCapacity(spec);
  const oversized=structuredClone(spec);oversized.game.rules.rules[0].description='x'.repeat(18000);
  assert.throws(()=>validateGameAssessmentCapacity(oversized),/before scope approval/);
  const p={...owner,profile:'game',spec},verification={observedHeadSha:'c'.repeat(40),testedHeadSha:'c'.repeat(40),reviewedHeadSha:'c'.repeat(40),projectAcceptance:{passed:true,checks:[{name:'browser',passed:true,detail:'1 rendered assertion passed'}]},changedFiles:Array.from({length:100},(_,i)=>({path:'app/counter/source-'+i+'.ts',status:'added',patch:'x'.repeat(12000)}))};
  const retained=gameAssessmentEvidence(p,[],{head:'c'.repeat(40),taskId:'task',verification,summary:'x'.repeat(12000)});
- assert.ok(JSON.stringify(retained,null,1).length<=29000);
+ assert.ok(jsonbTextSize(retained)<=29000);
  assert.equal(retained.gameRules.rules[0].description,g.game.rules.rules[0].description);
  assert.equal(retained.finalIntegratedEvidence.verification.projectAcceptance.passed,true);
  assert.equal(retained.finalIntegratedEvidence.verification.changedFileCount,100);
@@ -365,4 +365,12 @@ test('browser validation distinguishes duplicate names from total step overflow'
  const draft={...plan,milestones:[{...plan.milestones[0],contract:many}],finalContract:many};
  assert.throws(()=>validateProjectPlan(draft),/115 total steps across 2 scenarios; maximum 100 TOTAL steps/);
  many.scenarios[1].name='first';assert.throws(()=>validateProjectPlan(draft),/scenario names must be unique/);
+});
+
+
+test('assessment size follows PostgreSQL JSON spacing and expands exponent numbers',()=>{
+ const {jsonbTextSize}=modules()('@/lib/projects/game-evidence');
+ assert.equal(jsonbTextSize({a:[1,true,null,'x'],b:{c:'line\nquote"'}}),JSON.stringify({a:[1,true,null,'x'],b:{c:'line\nquote"'}}).length+7);
+ assert.equal(jsonbTextSize(1e30),31);assert.equal(jsonbTextSize(-1e-7),10);
+ assert.ok(jsonbTextSize({rows:Array.from({length:100},()=>({action:'expectText',selector:'#phase',value:'MOVE'}))})<JSON.stringify({rows:Array.from({length:100},()=>({action:'expectText',selector:'#phase',value:'MOVE'}))},null,1).length);
 });
