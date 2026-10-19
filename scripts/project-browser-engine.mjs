@@ -31,8 +31,8 @@ export async function runScenarios(contract, origin, { executablePath, timeout =
     // Chromium executable needs its packaged --single-process argument when
     // running inside Vercel. In that mode use a fresh browser per scenario:
     // recycling its contexts can terminate the entire serverless browser.
-    const launch = () => playwright.launch({
-      executablePath: executablePath ?? chromium.executablePath(),
+    const launch = async () => playwright.launch({
+      executablePath: executablePath ?? await chromium.executablePath(),
       args: deployed ? chromium.args : chromium.args.filter(arg=>arg!=='--single-process'),
       ...(proxy?{proxy}:{}), headless: true,
       timeout: Math.min(20_000, Math.max(1,deadline-Date.now()))
