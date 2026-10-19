@@ -11,7 +11,7 @@ vm.runInNewContext(js,{exports,require:(name)=>{
  if(name==='node:crypto')return{createHash:()=>({update:()=>({digest:()=>('a'.repeat(64))})})};
  return {};
 }});
-const {financeDelegationIntent}=exports;
+const {financeDelegationIntent,developmentDelegationIntent}=exports;
 test('routes explicit finance-analysis work only',()=>{
  for(const text of [
   'Analyze the company financial statements and recommend corrective actions.',
@@ -29,4 +29,21 @@ test('does not steal ordinary chat, operations, software, or privileged requests
   'Analyze revenue and change the database records.',
   'Analyze cash flow.',
  ])assert.equal(financeDelegationIntent(text),false,text);
+});
+
+test('explicit Executive software development requests delegate to existing specialist',()=>{
+ for(const text of [
+  'Delegate software development to fix the failing checkout integration tests.',
+  'Have the software development agent implement a secure audit logging endpoint.',
+  'Executive: update the application to display mission review status.'
+ ])assert.equal(developmentDelegationIntent(text),true,text);
+});
+test('ordinary app requests and unrelated content stay with existing project router',()=>{
+ for(const text of [
+  'Build a new dashboard for my invoices.',
+  'Review our software architecture and suggest improvements.',
+  'Delegate software development.',
+  'Analyze financial statements and cash flow.',
+  'Create a specialist orchestrator for operations.'
+ ])assert.equal(developmentDelegationIntent(text),false,text);
 });
