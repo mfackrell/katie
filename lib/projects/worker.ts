@@ -19,9 +19,9 @@ export async function baseline(p: Project) { if (!p.repository_id)
     throw Error('The target repository needs the versioned project execution integration before coding can be approved');
  if(p.profile==='game'){
   if(!source.includes('project-game-check.mjs')||!source.includes('project-game-rules.mjs'))throw Error('The target repository needs the versioned game model/context integration before coding can be approved');
-  const [contextTool,ciTool,modelTool]=await Promise.all(['scripts/project-context.mjs','scripts/project-ci.mjs','scripts/project-game-check.mjs'].map(path=>gh.repos.getContent({owner,repo,path,ref:'main'})));
+  const [contextTool,ciTool,modelTool,rulesTool]=await Promise.all(['scripts/project-context.mjs','scripts/project-ci.mjs','scripts/project-game-check.mjs','scripts/project-game-rules.mjs'].map(path=>gh.repos.getContent({owner,repo,path,ref:'main'}))).catch(()=>{throw Error('Target requires all versioned game verification tools before coding approval');});
   const content=(file:typeof contextTool)=>{if(Array.isArray(file.data)||!('content' in file.data))throw Error('Target game verification tools unavailable before coding approval');return Buffer.from(file.data.content,'base64').toString('utf8');};
-  if(!/export const GAME_PROJECT_CONTEXT_VERSION\s*=\s*1\s*;/.test(content(contextTool))||!content(ciTool).includes('checkGameModel(context,root,dependencies)')||!content(modelTool).includes('runGameModelAcceptance'))throw Error('Target game acceptance tools are incompatible; upgrade the connected target before coding approval');
+  if(!/export const GAME_PROJECT_CONTEXT_VERSION\s*=\s*1\s*;/.test(content(contextTool))||!content(ciTool).includes('checkGameModel(context,root,dependencies)')||!content(modelTool).includes('runGameModelAcceptance')||!content(rulesTool).includes('export function validateGameAcceptance')||!content(rulesTool).includes('export function runGameModelAcceptance'))throw Error('Target game acceptance tools are incompatible; upgrade the connected target before coding approval');
  }
  if(p.verified_sha&&p.baseline_sha)return p.baseline_sha; const b = await gh.repos.getBranch({ owner, repo, branch: 'main' }); return b.data.commit.sha; }
 function bounded(text: string) { if (text.length > 12000)
