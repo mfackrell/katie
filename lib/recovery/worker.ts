@@ -366,6 +366,9 @@ async function monitorRecoveryCases():Promise<void>{
      const main=(await client.repos.getBranch({...repo,branch:'main'})).data.commit.sha;
      const published=await client.repos.getCombinedStatusForRef({...repo,ref:main});
      const deploymentReady=published.data.statuses.some(status=>status.context.toLowerCase().includes('vercel')&&status.state==='success');
+     // Owner merge alone is insufficient. Keep the case at the release
+     // boundary until the exact merged commit is live and verified.
+     if(main!==pr.merge_commit_sha||!deploymentReady)continue;
      if(main===pr.merge_commit_sha&&deploymentReady){
       const originalIssue=int(bound.task.external.issueNumber);
       const originalPr=int((bound.task.external.prUrl as string|undefined)?.split('/').pop());
