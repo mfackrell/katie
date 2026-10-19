@@ -1,0 +1,13 @@
+{
+  "id": "beacon-relay",
+  "sourceIssue": 558,
+  "baselineSha": "d1e06f523cee59fa7fe2b6bfa68ea0a01a106cbd",
+  "allowedPaths": [
+    "app/project-pilots/beacon-relay/engine.ts",
+    "app/project-pilots/beacon-relay/page.tsx",
+    "app/project-pilots/beacon-relay/relay.module.css"
+  ],
+  "testFile": "tests/game-development/beacon-relay.test.mjs",
+  "browserFile": "tests/game-development/beacon-relay.browser.mjs",
+  "maxAttempts": 2
+}
