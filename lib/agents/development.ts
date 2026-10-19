@@ -173,7 +173,12 @@ export async function retryImmutableProjectVerification(task: AgentTask, project
  // Fail closed if verification failure isn't unmistakably about trusted setup.
  const setupFailure=/Isolated baseline npm installation failed|Trusted baseline dependency preparation failed/.test(output);
  const npmFailure=/npm error Exit handler never called|npm error code ENOTCACHED|Isolated baseline npm installation failed|Trusted baseline dependency preparation failed/.test(output);
- if(!setupFailure||!npmFailure)return false;
+ // A known read-only test-runner cache mount error is also infrastructure,
+ // not evidence that the approved gameplay is wrong. A new verification-only
+ // run must still pass every test, review and browser scenario independently.
+ const viteCacheFailure=/ENOENT: no such file or directory, mkdir ['"]\\/app\\/node_modules\\/\\.vite['"]/.test(output)
+   && /Vitest failed or did not produce a completion report/.test(output);
+ if(!(setupFailure&&npmFailure)&&!viteCacheFailure)return false;
  const bindingContext=await getDevelopmentProjectContext(task.id);
  if(!bindingContext||bindingContext.projectId!==project.id||
     bindingContext.scopeHash!==project.approved_hash)return false;
