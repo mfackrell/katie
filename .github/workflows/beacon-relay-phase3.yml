@@ -1,0 +1,58 @@
+name: Beacon Relay Phase 3 Browser Acceptance
+on:
+  push:
+    branches: [validation/beacon-relay-phase3]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  browser-acceptance:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      CI: 'true'
+      NEXT_PUBLIC_SUPABASE_URL: https://example.supabase.co
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: anon-placeholder
+      SUPABASE_SERVICE_ROLE_KEY: service-role-placeholder
+      VERCEL_ENV: development
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Record immutable source
+        run: |
+          git rev-parse HEAD | tee acceptance-commit.txt
+          git status --porcelain
+      - name: Install locked dependencies without lifecycle scripts
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Focused engine tests
+        run: node --experimental-test-isolation=none --test tests/game-development/beacon-relay.test.mjs
+      - name: Build application without unrelated postbuild activity
+        run: node node_modules/next/dist/bin/next build
+      - name: Run built Next.js server
+        run: |
+          node node_modules/next/dist/bin/next start --hostname 127.0.0.1 --port 3100 > beacon-server.log 2>&1 &
+          echo $! > beacon-server.pid
+          for i in $(seq 1 40); do
+            if curl --fail --silent --output /dev/null http://127.0.0.1:3100/project-pilots/beacon-relay; then exit 0; fi
+            sleep 2
+          done
+          cat beacon-server.log
+          exit 1
+      - name: Execute actual Chromium browser scenarios
+        run: |
+          set -o pipefail
+          BEACON_RELAY_ORIGIN=http://127.0.0.1:3100 node tests/game-development/beacon-relay.browser.mjs | tee beacon-browser-receipt.json
+      - name: Preserve evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: beacon-phase3-browser-evidence
+          path: |
+            acceptance-commit.txt
+            beacon-browser-receipt.json
+            beacon-server.log
