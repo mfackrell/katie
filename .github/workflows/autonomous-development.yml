@@ -207,9 +207,13 @@ jobs:
       - name: Ensure project filesystem isolation is available
         run: |
           command -v bwrap >/dev/null || (sudo apt-get update && sudo apt-get install -y bubblewrap)
-          # This disposable job VM must permit the verifier's user namespaces.
-          # Network/filesystem isolation remains mandatory; no unsandboxed fallback.
-          if test -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns; then sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0; fi
+          # Check sandbox capability without relying on privileged sysctl changes.
+          # Never fall back to unsandboxed browser or code execution.
+          if ! bwrap --unshare-user --ro-bind / / -- /bin/true >/dev/null 2>&1; then
+            echo 'Sandbox unavailable: runner does not permit unprivileged bubblewrap user namespaces.' >&2
+            echo 'Use a runner with user namespaces enabled; do not weaken filesystem/network isolation.' >&2
+            exit 1
+          fi
       - name: Independent verification
         id: check
         shell: bash
@@ -403,9 +407,13 @@ jobs:
       - name: Ensure project filesystem isolation is available
         run: |
           command -v bwrap >/dev/null || (sudo apt-get update && sudo apt-get install -y bubblewrap)
-          # This disposable job VM must permit the verifier's user namespaces.
-          # Network/filesystem isolation remains mandatory; no unsandboxed fallback.
-          if test -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns; then sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0; fi
+          # Check sandbox capability without relying on privileged sysctl changes.
+          # Never fall back to unsandboxed browser or code execution.
+          if ! bwrap --unshare-user --ro-bind / / -- /bin/true >/dev/null 2>&1; then
+            echo 'Sandbox unavailable: runner does not permit unprivileged bubblewrap user namespaces.' >&2
+            echo 'Use a runner with user namespaces enabled; do not weaken filesystem/network isolation.' >&2
+            exit 1
+          fi
       - name: Reverify repaired tree
         id: retest
         shell: bash
