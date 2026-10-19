@@ -1,6 +1,8 @@
 -- Operator-mediated retry of a blocked, independently reviewed development job.
 -- Preserves the approved scope, prior immutable evidence, all charges, and
 -- the original stopped mission. A retry starts a NEW bounded mission.
+do $migration$
+begin
 create function public.retry_project_infrastructure(
  p_id uuid,p_actor uuid,p_chat uuid,p_expected_mission uuid,p_expected_run bigint
 ) returns jsonb language plpgsql security invoker set search_path=public as $$
@@ -42,6 +44,10 @@ begin
    jsonb_build_object('mission_id',m.id,'run',p_expected_run,'charged_tokens',charged,'milestone_index',p.milestone_index));
  perform project_publish(p.id,p.detail);
  return to_jsonb(p);
-end $$;
+end $;
+exception when duplicate_function then
+  -- Preserve the deployed function body; apply only missing privilege restrictions below.
+  null;
+end $migration$;
 revoke all on function public.retry_project_infrastructure(uuid,uuid,uuid,uuid,bigint) from public,anon,authenticated;
 grant execute on function public.retry_project_infrastructure(uuid,uuid,uuid,uuid,bigint) to service_role;
