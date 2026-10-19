@@ -4,6 +4,7 @@ import {resolve,dirname} from 'node:path';
 import {fileURLToPath,pathToFileURL} from 'node:url';
 import {parseProjectContext} from './project-context.mjs';
 import {sandboxArgs} from './project-sandbox.mjs';
+import {checkGameModel} from './project-game-check.mjs';
 // This entry point and its sibling tools come from the preserved main artifact,
 // never from the writable candidate. Candidate commands run only in bwrap.
 export async function verifyProject({request,output,workspace=process.cwd()}){
@@ -45,6 +46,8 @@ export async function verifyProject({request,output,workspace=process.cwd()}){
   throw Error('Trusted baseline dependency preparation failed; candidate tests were not run');
  }
  const dependencies=resolve(deps,'node_modules');mkdirSync(resolve(dependencies,'.vite'),{recursive:true});mkdirSync(resolve(root,'node_modules'),{recursive:true});
+ const model=checkGameModel(context,root,dependencies);
+ if(model)writeFileSync(resolve(dirname(output),'project-game-model.json'),JSON.stringify({version:1,projectId:context.projectId,headSha:execFileSync('git',['rev-parse','HEAD'],{cwd:root,encoding:'utf8'}).trim(),checkedAt:new Date().toISOString(),...model},null,2));
  const script="const {spawnSync}=require('node:child_process');for(const task of ['typecheck','ci:gate']){const r=spawnSync('npm',['run',task],{stdio:'inherit'});if(r.status!==0)process.exit(r.status||1);} ";
  const checkArgs=[...sandboxArgs(root,{dependencies,writable:true}), '--setenv','CI','true','--setenv','VERCEL_ENV','development','--setenv','NEXT_PUBLIC_SUPABASE_URL','https://example.supabase.co','--setenv','NEXT_PUBLIC_SUPABASE_ANON_KEY','anon-placeholder','--setenv','SUPABASE_SERVICE_ROLE_KEY','service-role-placeholder',process.execPath,'-e',script];
  const checked=spawnSync('bwrap',checkArgs,{stdio:'inherit',timeout:1200000});if(checked.status!==0)throw Error('Isolated project CI failed');

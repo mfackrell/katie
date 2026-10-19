@@ -1,7 +1,9 @@
 import { createHash } from 'node:crypto';
+import {validateProjectGame} from './project-game-rules.mjs';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
+export const GAME_PROJECT_CONTEXT_VERSION = 1;
 
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 function exact(value, keys) {
@@ -61,11 +63,16 @@ export function validateContract(contract) {
   return contract;
 }
 export function validateProjectContext(value) {
-  exact(value, ['version', 'projectId', 'baseSha', 'baselineSha', 'allowedPaths', 'contractHash', 'contract']);
+  exact(value, ['version', 'projectId', 'baseSha', 'baselineSha', 'allowedPaths', 'contractHash', 'contract',...(value?.game?['game','gameFinal']:[])]);
   if (value.version !== 1 || !uuid.test(value.projectId) || !/^[a-f0-9]{40}$/.test(value.baseSha) || !/^[a-f0-9]{40}$/.test(value.baselineSha) || !/^[a-f0-9]{64}$/.test(value.contractHash)) throw Error('Invalid project identity');
   if(!Array.isArray(value.allowedPaths)||!value.allowedPaths.length||value.allowedPaths.length>12||value.allowedPaths.some(p=>typeof p!=='string'||p.length>200||!/^(?:app|apps|components|lib|public|tests|docs)\/[a-zA-Z0-9_./[\]-]+\/?$/.test(p)||p.split('/').some(s=>s==='.'||s==='..')||/\.env|\.github|node_modules/.test(p)))throw Error('Invalid approved project paths');
   validateContract(value.contract);
   if (contractHash(value.contract) !== value.contractHash) throw Error('Project contract digest mismatch');
+  if(value.game){
+    if(typeof value.gameFinal!=='boolean')throw Error('Explicit final game gate required');
+    const full=validateContract({path:value.contract.path,scenarios:value.game.acceptance?.scenarios?.filter(s=>s.kind==='browser').map(s=>({name:s.id,steps:s.steps}))});
+    validateProjectGame(value.game,value.allowedPaths,value.gameFinal?value.contract:full);
+  }
   return value;
 }
 export function parseProjectContext(request) {

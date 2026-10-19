@@ -109,8 +109,8 @@ export async function dispatchDevelopment(task: AgentTask, project?: Context, as
   if(project){
     const saved=await getDevelopmentProjectContext(task.id,true);
     if(!saved||JSON.stringify(saved)!==JSON.stringify(project)||digest(project.contract)!==project.contractHash)throw Error('Project dispatch does not match approved DB binding');
-    const {version,projectId,baseSha,baselineSha,allowedPaths,contractHash,contract}=project;
-    projectHeader='<!-- katie-project: '+Buffer.from(JSON.stringify({version,projectId,baseSha,baselineSha,allowedPaths,contractHash,contract})).toString('base64url')+' -->\n\n';
+    const {version,projectId,baseSha,baselineSha,allowedPaths,contractHash,contract,game,gameFinal}=project;
+    projectHeader='<!-- katie-project: '+Buffer.from(JSON.stringify({version,projectId,baseSha,baselineSha,allowedPaths,contractHash,contract,...(game?{game,gameFinal}:{})})).toString('base64url')+' -->\n\n';
   }
   const claimed = project ? await agentRpc<boolean>("claim_project_dispatch", {p_id:task.id,p_lease:assignmentLease??null,p_hash:project.scopeHash}) : await agentRpc<boolean>("claim_agent_dispatch", { p_id: task.id });
   if (!claimed) return readTask(task.id);

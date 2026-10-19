@@ -19,3 +19,7 @@ Use a disposable `game-repair/beacon-relay/<test>` branch based on the registere
 ## Recover a verifier environment without another code attempt
 
 After an existing registered repair, the owner may post `/katie-game-repair reverify <id>`. The trusted controller requires the original owner opt-in, an open same-repository registered PR, and a genuine prior reservation from this workflow. It scopes the current source against the same immutable baseline and skips every coding job. Independent engine/build/browser verification and review rerun for the saved current SHA, preserving a new receipt. Re-verification cannot reset the repair budget, run a second coding round or merge anything. Reviewer dependencies are installed from unchanged locked manifests with lifecycle scripts disabled before read-only review.
+
+## Chat-native games
+
+Games launched through Katie chat are registered by the developer project controller, including their saved specialist, exact approved rule/model/browser contracts, source scope and finite repair budgets. They use `autonomous-development.yml` and project repair/reverification directly. The static registration above is for the separate later-review listener and is not a prerequisite for chat intake or delivery. See `docs/chat-projects.md`.

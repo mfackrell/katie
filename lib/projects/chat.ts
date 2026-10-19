@@ -8,6 +8,20 @@ export function startProjectIntent(text: string) {
  const artifact=/^(?:please\s+)?(?:(?:can|could|would|will) you\s+)?(?:I (?:want|need|would like)(?: you to)?|create|make|develop|prepare|write|give|provide)\s+(?:me\s+)?(?:(?:a|an|the|project|technical|design|status)\s+)*(?:summary|report|explanation|overview|proposal|plan|architecture|tutorial|guide|analysis)\b/i.test(text);
  return !artifact && (direct||desire) && /\b(?:browser|website|web app|application|app|game|dashboard|portal|software|program|API)\b/i.test(text) && !/^.{0,80}\b(?:do not|don't|never|not asking you to)\s+(?:want to |you to )?(?:build|create|develop|make|implement|start)\b/i.test(text);
 }
+export function gameProjectIntent(text:string) {
+ const dataArtifact=/\b(?:dashboard|tracker|analytics|portal|catalog|store|website|site|collection|library|blog|directory|forum|wiki|app|application|software)\b/i.test(text);
+ const forwardProduct=/\bgames?\s+(?:sales?|analytics|reviews?|catalogs?|inventory|statistics|collection|library|tracking|news|prices?)\b/i.test(text)&&dataArtifact;
+ const reverseCatalog=/\b(?:catalogs?|collection|library|inventory|directory|sales|analytics|statistics)\s+(?:of|for|about)\b.{0,80}\bgames?\b/i.test(text);
+ const reverseReview=/\b(?:reviews?|news|price)\s+(?:site|website|blog|app|portal)\s+(?:for|of|about|covering)\b.{0,80}\bgames?\b|\b(?:blog|site|website|app)\s+(?:reviewing|covering)\b.{0,80}\bgames?\b/i.test(text);
+ const dataProduct=forwardProduct||reverseCatalog||reverseReview;
+ const commands=[...text.matchAll(/\b(?:build|create|develop|recreate|re-create|make|want|need|would like)\s+((?:[\w×'-]+\s+){0,10})games?\b(?=\s*(?:[.!?:,;]|$|\b(?:with|where|that|in|as|for|called|named)\b))/gi)];
+ const primaryGame=commands.some(m=>!/(?:do not|don't|never)\s*$/i.test(text.slice(0,m.index))&&!/\b(?:app|application|software|website|site|catalog|library|blog|store|portal|dashboard|tracker|reviews?|collection|directory|forum|wiki)\b/i.test(m[1]));
+ const playable=/\bplayable\s+(?:(?:browser|board|card|video|turn-based|strategy|puzzle|multiplayer)\s+)?games?\b|\bmake (?:it|this|that) (?:a |the )?games?\b/i.test(text);
+ const appForGame=/\b(?:app|application|software)\s+(?:for|as|to play)\s+(?:a |the )?(?:[\w-]+ )?games?\b(?=\s*(?:[.!?:,;]|$|\b(?:with|where|that|in|as|for|called|named)\b))/i.test(text);
+ const genre=/\b(?:browser|board|card|video|turn[- ]based|strategy|puzzle|multiplayer)\s+games?\b/i.test(text);
+ const recreation=/\b(?:recreate|re-create|replicate)\b/i.test(text)&&genre&&!dataProduct;
+ return primaryGame||playable||appForGame||recreation;
+}
 export const followupProjectIntent = (text: string) => /^(?:please\s+)?(?:build|make|create|implement|do|start)(?:\s+(?:that|it|this|the project))?[.!\s]*$/i.test(text.trim());
 const actionText = (text:string) => text.trim().replace(/^(?:actually|also|no|okay|ok)[,:]?\s+/i,'').replace(/^please\s+/i,'').replace(/^(?:can|could|would|will) (?:you|we)\s+(?:please\s+)?/i,'');
 const amendmentIntent = (text:string) => /^(?:add|change|amend|revise|update|include|remove|support|enable|use|make|retain|keep|preserve|ensure|require|avoid|prevent|fix|allow|stop)\b|^(?:also|actually|instead|one more thing|I (?:want|need|would like|would prefer))\b/i.test(actionText(text));
@@ -122,7 +136,7 @@ export async function handleProjectChat(input: {
     }
     if (objective.length > 8000)
         return 'Please narrow the project brief to 8,000 characters. I will not silently truncate its requirements.';
-    const created = await projectRpc<Project>('create_work_project', { p_id: projectId(requestId), p_request: requestId, p_actor: input.actorId, p_chat: input.chatId, p_objective: objective, p_repository: await repository(input.activeRepoId, text) });
+    const created = await projectRpc<Project>(gameProjectIntent(objective)?'create_game_work_project':'create_work_project', { p_id: projectId(requestId), p_request: requestId, p_actor: input.actorId, p_chat: input.chatId, p_objective: objective, p_repository: await repository(input.activeRepoId, text) });
     return reply(created, 'I’ve started a persistent project for this outcome. I’ll research it, preserve the requirements, prepare the architecture and exact acceptance checks, then ask once for the scoped coding approval. After that I’ll manage successive implementation, testing, permitted repairs and preview delivery and bring the result back to this chat. You can close this page.');
 }
 async function repository(active: string | undefined, text: string) { const db = getSupabaseAdminClient(); if (active) {

@@ -67,7 +67,7 @@ jobs:
           # These tools are captured from the trusted workflow/main checkout,
           # before switching to a prior project commit or running generated code.
           mkdir -p "$RUNNER_TEMP/project-tools" "$RUNNER_TEMP/agent-task"
-          cp scripts/project-context.mjs scripts/project-browser-check.mjs scripts/project-sandbox.mjs scripts/project-ci.mjs scripts/project-scope.mjs scripts/project-browser-engine.mjs scripts/recovery-scope.mjs "$RUNNER_TEMP/project-tools/"
+          cp scripts/project-game-rules.mjs scripts/project-game-check.mjs scripts/project-context.mjs scripts/project-browser-check.mjs scripts/project-sandbox.mjs scripts/project-ci.mjs scripts/project-scope.mjs scripts/project-browser-engine.mjs scripts/recovery-scope.mjs "$RUNNER_TEMP/project-tools/"
           node scripts/project-context.mjs prepare "$RUNNER_TEMP/original-agent-request.md" > "$RUNNER_TEMP/project-context.json"
           node scripts/recovery-scope.mjs prepare "$RUNNER_TEMP/original-agent-request.md" > "$RUNNER_TEMP/recovery-context.json"
           project="$(jq -r 'if . == null then "false" else "true" end' "$RUNNER_TEMP/project-context.json")"
@@ -249,7 +249,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: project-browser-test
-          path: ${{ runner.temp }}/project-acceptance.json
+          path: |
+            ${{ runner.temp }}/project-acceptance.json
+            ${{ runner.temp }}/project-game-model.json
           if-no-files-found: ignore
 
   review:
@@ -449,7 +451,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: project-browser-retest
-          path: ${{ runner.temp }}/project-acceptance.json
+          path: |
+            ${{ runner.temp }}/project-acceptance.json
+            ${{ runner.temp }}/project-game-model.json
           if-no-files-found: ignore
 
   final-review:
