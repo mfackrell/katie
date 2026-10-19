@@ -110,8 +110,10 @@ export async function reconcileExecutiveFinance(){
   const {data:mission,error:missionError}=await db.from('agent_missions').select('status,result,detail').eq('id',d.mission_id).maybeSingle();
   const missionRow=mission as {status:string;result:string|null;detail:string|null}|null;
   if(missionError||!missionRow||!['completed','blocked','failed','stopped'].includes(missionRow.status))continue;
-  const {data:review}=await db.from('mission_assignments').select('result,status').eq('mission_id',d.mission_id).eq('role','review').eq('status','completed').limit(1);
-  const reviewPassed=(review as Array<{result:{verdict?:string}|null}>|null)?.some(r=>r.result?.verdict==='pass');
+  const {data:review}=await db.from('mission_assignments').select('job_key,result,status').eq('mission_id',d.mission_id).eq('role','review').eq('status','completed').limit(20);
+  const reviewRows=(review as Array<{job_key:string;result:{verdict?:string}|null}>|null)??[];
+  const terminalReview=reviewRows.find(r=>r.job_key==='review_again')??reviewRows.find(r=>r.job_key==='review');
+  const reviewPassed=terminalReview?.result?.verdict==='pass';
   const succeeded=missionRow.status==='completed'&&reviewPassed&&typeof missionRow.result==='string'&&missionRow.result.length>0;
   if(d.status==='running'&&succeeded){
    const {data:submitted,error:submitError}=await db.rpc<{status:string}>('transition_executive_delegation',{p_id:d.id,p_actor:d.actor_id,p_chat:d.chat_id,p_action:'submit',p_evidence:{deliverable:(missionRow.result??'').slice(0,16000),missionId:d.mission_id,independentReview:'mission-pass'}});
@@ -127,7 +129,8 @@ export async function reconcileExecutiveFinance(){
   }
   // Persist output after recording the transition, using a stable ID so cron
   // retries cannot generate duplicate final chat messages.
-  const output=succeeded?'Finance completed and passed independent review.\n\n'+missionRow.result:'Finance could not complete this assignment. '+(missionRow.detail??'Independent acceptance was not established.');
+  const label=d.request_key.startsWith('exec-dev-')?'Development':'Finance';
+  const output=succeeded?label+' completed and passed independent review.\n\n'+missionRow.result:label+' could not complete this assignment. '+(missionRow.detail??'Independent acceptance was not established.');
   try{
    const replyId=missionId('executive-reply-'+d.id);
    const {data:existingReply,error:messageLookupError}=await db.from('messages').select('id').eq('id',replyId).maybeSingle();
