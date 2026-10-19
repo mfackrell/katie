@@ -18,10 +18,6 @@ export function specialistCreationIntent(message:string){
  if(capability.length>50)return null;
  return{domain,slug,capability};
 }
-function requestKey(requestId:string,message:string){
- const digest=createHash('sha256').update(requestId+'\n'+message).digest('hex');
- return 'exec-specialist-'+digest.slice(0,40);
-}
 export async function handleExecutiveSpecialistIntake(input:{
  actorId:string;chatId:string;message:string;requestId:string;
 }):Promise<string|null>{
