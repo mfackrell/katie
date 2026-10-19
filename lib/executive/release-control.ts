@@ -81,9 +81,14 @@ export async function reconcileExecutiveReleases(){
   if(completed?.length)continue;
   if(event.evidence.repository!=='mfackrell/katie')continue;
   const gh=client();
-  const {data:pull}=await gh.pulls.get({owner:'mfackrell',repo:'katie',pull_number:event.evidence.pr});
+  let pull;
+  try{({data:pull}=await gh.pulls.get({owner:'mfackrell',repo:'katie',pull_number:event.evidence.pr}));}
+  catch(error){console.error('[Executive release] PR lookup failed',event.delegation_id,error instanceof Error?error.message:'unknown');continue;}
   if(!pull.merged||!pull.merge_commit_sha)continue;
-  if(event.evidence.sha!==pull.head.sha)throw Error('Release PR head changed since authorized dispatch');
+  if(event.evidence.sha!==pull.head.sha){
+   console.error('[Executive release] PR head changed after dispatch',event.delegation_id);
+   continue;
+  }
   const status=await gh.repos.getCombinedStatusForRef({owner:'mfackrell',repo:'katie',ref:pull.merge_commit_sha});
   if(!status.data.statuses.some(s=>s.context==='Vercel'&&s.state==='success'))continue;
   const {data:delegation}=await db.from('executive_delegations')
