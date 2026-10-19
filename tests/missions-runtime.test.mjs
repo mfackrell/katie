@@ -14,6 +14,7 @@ function modules(overrides={}){
   if(name in overrides)return overrides[name];
   if(!name.startsWith('@/')&&!name.startsWith('/')&&!name.startsWith('.'))return native(name);
   let path=name.startsWith('@/')?resolve(name.slice(2)):resolve(name);
+  if(path.endsWith('.mjs'))return native(path);
   if(!path.endsWith('.ts'))path=existsSync(path+'.ts')?path+'.ts':resolve(path,'index.ts');
   if(cache.has(path))return cache.get(path);
   const exports={};cache.set(path,exports);

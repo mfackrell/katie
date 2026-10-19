@@ -26,7 +26,7 @@ Local runtimes without Linux user namespaces cannot execute the isolated accepta
 
 ## Game-specialist intake
 
-New chat-native game builds use `create_game_work_project`, which atomically preserves the original request identity and binds the existing game specialist as the implementation worker. The lead still owns architecture/specification and delivery, research remains independently reviewed, and GitHub runs independent tests and code review. The Executive registry and Executive delegation paths are unchanged.
+New chat-native game builds use `create_game_work_project`, which atomically preserves the original request identity and binds a versioned game specialist as the implementation worker. The specialist is pinned by immutable registry identity, definition version and configuration digest; duplicate display names are ignored, and later edits block new registrations. The lead still owns architecture/specification and delivery, research remains independently reviewed, and GitHub runs independent tests and code review. The Executive registry and Executive delegation paths are unchanged.
 
 A game specification adds `game: {enginePath,rules,acceptance}` using the versioned game-rule framework. Rules record edition, original versus reproduction, primary/user sources, approved interpretations, unresolved decisions, invariants and initial state. Blocking unknowns prevent coding. Every approved rule needs scenario coverage, with both model and browser scenarios. The final browser contract must exactly execute the registered browser scenarios; it cannot be replaced by a loading-page check. The complete specification, including these rules and expected states, appears in the existing scope proposal and its immutable approval digest.
 

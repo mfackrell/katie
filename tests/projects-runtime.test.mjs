@@ -252,6 +252,10 @@ test('chat-native game intake selects the game registration RPC while ordinary a
   assert.equal(calls.at(-1).name,expected);assert.equal(calls.at(-1).args.p_objective,brief);
  }
  assert.equal(gameProjectIntent('Recreate the original board game in a browser.'),true);
+ assert.equal(gameProjectIntent('Build a web app for a turn-based game.'),true);
+ assert.equal(gameProjectIntent('Build a web app for a game.'),true);
+ assert.equal(gameProjectIntent('ORIGINAL USER BRIEF: Build an app. SAVED USER FOLLOW-UP: Make it a game with alternating turns.'),true);
+ assert.equal(gameProjectIntent('Build a website for game reviews.'),false);
 });
 test('game specifications cannot bypass registered rules or swap a loading-only final contract',async()=>{
  const {gameFixture}=await import('./fixtures/game-project.mjs');const f=gameFixture();
@@ -260,4 +264,15 @@ test('game specifications cannot bypass registered rules or swap a loading-only 
  assert.equal(validateProjectPlan(spec).game.rules.game.id,'counter-pilot');
  const changed=structuredClone(spec);changed.game.acceptance.scenarios[1].steps=[{action:'expectVisible',selector:'#title'}];
  assert.throws(()=>validateProjectPlan(changed),/exactly execute/);
+});
+
+test('only the final game increment receives the complete registered model contract, bound to its saved run index',async()=>{
+ const {gameFixture}=await import('./fixtures/game-project.mjs');const f=gameFixture();
+ const p={...owner,profile:'game',spec:{...plan,game:f.game},milestone_index:0};
+ const run={mission_id:'saved-mission',milestone_index:0,binding:{version:1,projectId:id,scopeHash:p.approved_hash,contractHash:'c'.repeat(64),contract}};
+ const db={from:table=>({select(){return this;},eq(){return this;},maybeSingle:async()=>({data:table==='mission_assignments'?{mission_id:run.mission_id}:table==='project_runs'?run:p,error:null})})};
+ const {getDevelopmentProjectContext}=modules({'@/lib/data/supabase/admin':{getSupabaseAdminClient:()=>db}})('@/lib/projects/store');
+ assert.equal((await getDevelopmentProjectContext('job')).game,undefined);
+ run.milestone_index=1;p.milestone_index=2;
+ assert.equal((await getDevelopmentProjectContext('job')).game.rules.game.id,'counter-pilot','model registration stays available after project advancement');
 });

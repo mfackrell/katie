@@ -20,12 +20,12 @@ test('registration preserves complete rules and exact browser scenarios in the i
 });
 test('trusted model runner tests the actual isolated engine and rejects wrong, mutating and fake-output implementations',()=>{
  const probe=spawnSync('bwrap',['--unshare-user','--ro-bind','/','/','true'],{encoding:'utf8',timeout:5000});
- if(probe.status!==0&&!process.env.CI){console.log('Model execution unavailable locally: '+probe.stderr.trim());return;}
+ if(probe.status!==0&&!process.env.CI){console.log('Model execution unavailable locally: '+String(probe.stderr||probe.error?.message||'namespace unavailable').trim());return;}
  assert.equal(probe.status,0,probe.stderr);
  const root=mkdtempSync(join(tmpdir(),'game-engine-'));
  try{
   mkdirSync(join(root,'app/counter'),{recursive:true});mkdirSync(join(root,'node_modules'));
-  const dependencies=resolve('node_modules');const f=gameFixture();const context={game:f.game};
+  const dependencies=resolve('node_modules');mkdirSync(join(dependencies,'.vite'),{recursive:true});const f=gameFixture();const context={game:f.game};
   const engine=code=>writeFileSync(join(root,f.game.enginePath),code);
   engine('export function transition(state,action){return action.type === "increment" ? {count:state.count+1} : state;}');
   assert.equal(checkGameModel(context,root,dependencies).passed,true);
