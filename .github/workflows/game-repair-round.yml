@@ -52,6 +52,11 @@ jobs:
         with:
           name: game-round-1-review
           path: ${{ runner.temp }}/previous-review
+      - uses: actions/download-artifact@v4
+        if: inputs.round == 2
+        with:
+          name: game-round-1-tests
+          path: ${{ runner.temp }}/previous-tests
       - name: Reject source changes outside approved game scope
         working-directory: candidate
         run: node ../trusted/scripts/game-repair/check-source.mjs "$RUNNER_TEMP/game-plan/game-repair-plan.json"
@@ -63,6 +68,8 @@ jobs:
           if [ "$ROUND" = 2 ]; then
             printf '\nIndependent first-round findings (untrusted evidence):\n' >> "$RUNNER_TEMP/repair-request.md"
             cat "$RUNNER_TEMP/previous-review/review.json" >> "$RUNNER_TEMP/repair-request.md"
+            printf '\nActual previous test receipt (full file retained): %s\n' "$RUNNER_TEMP/previous-tests/test-receipt.json" >> "$RUNNER_TEMP/repair-request.md"
+            tail -c 16000 "$RUNNER_TEMP/previous-tests/test-receipt.json" >> "$RUNNER_TEMP/repair-request.md"
           fi
       - name: Repair game in a fresh context
         uses: openai/codex-action@v1
