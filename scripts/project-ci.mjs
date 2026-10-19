@@ -44,7 +44,7 @@ export async function verifyProject({request,output,workspace=process.cwd()}){
   }));
   throw Error('Trusted baseline dependency preparation failed; candidate tests were not run');
  }
- const dependencies=resolve(deps,'node_modules');mkdirSync(resolve(root,'node_modules'),{recursive:true});
+ const dependencies=resolve(deps,'node_modules');mkdirSync(resolve(dependencies,'.vite'),{recursive:true});mkdirSync(resolve(root,'node_modules'),{recursive:true});
  const script="const {spawnSync}=require('node:child_process');for(const task of ['typecheck','ci:gate']){const r=spawnSync('npm',['run',task],{stdio:'inherit'});if(r.status!==0)process.exit(r.status||1);} ";
  const checkArgs=[...sandboxArgs(root,{dependencies,writable:true}), '--setenv','CI','true','--setenv','VERCEL_ENV','development','--setenv','NEXT_PUBLIC_SUPABASE_URL','https://example.supabase.co','--setenv','NEXT_PUBLIC_SUPABASE_ANON_KEY','anon-placeholder','--setenv','SUPABASE_SERVICE_ROLE_KEY','service-role-placeholder',process.execPath,'-e',script];
  const checked=spawnSync('bwrap',checkArgs,{stdio:'inherit',timeout:1200000});if(checked.status!==0)throw Error('Isolated project CI failed');
