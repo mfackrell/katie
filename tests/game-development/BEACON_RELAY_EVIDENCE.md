@@ -77,3 +77,21 @@ The browser runner accepts only a local origin, isolates storage per scenario an
 - Evidence artifact: `beacon-phase3-browser-evidence` (artifact ID 12199470092), preserving tested SHA, browser receipt, and server log.
 - Vercel Preview for same game source commit is READY: `https://katie-m7wqmskwv-mark-fackrells-projects.vercel.app/project-pilots/beacon-relay`.
 - This acceptance execution resolves the earlier zero-browser-interaction blocker. Independent review of evidence and PR #559 remains required before labeling specialist Phase 3 finalized. No production merge or deployment requested.
+
+
+## Executed immutable Preview browser acceptance — 2026-10-19T15:36:46Z
+
+This section supersedes the historical Preview NOT_RUN statements above. It addresses review finding discussion_r4315707997.
+
+- Vercel deployment API verified deployment `dpl_ADinzR9FpqvSEYKTmSZZAXgRyiGu`, READY, Preview target (target null), source commit `64339aaf987b03cddd54d3d21117769f0b4edcc4`, branch `agent/issue-558-39268394066-1`.
+- Tested immutable URL: https://katie-hss4o6f8j-mark-fackrells-projects.vercel.app/project-pilots/beacon-relay . No mutable alias or production route used.
+- Execution: authenticated cloud Chromium tab 3 through cua_repl, with Vercel connector temporary Preview access. No protection setting changed. The scratch host rejected Chromium process creation (EACCES); consequently this was an actual cloud-browser execution, NOT a claim that the local Node runner executed.
+- Replayed every in-board action from `beacon-relay.acceptance.mjs`. Added full visible-state checks after each action, victory reload, and full reset reload. Out-of-board actions remain model-only as specified.
+- Each checkpoint read and compared all eight rendered fields through Playwright locators: red-position, blue-position, red-score, blue-score, active-player, phase, turn-number, winner. Expected snapshots were explicitly supplied separately from production logic. A mismatch throws and stops the run.
+- Result: **29 checkpoints, 232 rendered field comparisons passed**, no gameplay mismatch.
+- Sequence: Reset; End Turn no-op; invalid cells 0,5,15,3; Red move 1; extra move 2 ignored; End Turn; Blue move 14; End Turn; Red move 5; full-page reload while RESOLVE; extra move 6 ignored; End Turn (Red scores 1); extra End Turn ignored; Blue move 10; End Turn (Blue scores 1); Red move 6; End Turn; Blue move 11; End Turn; Red move 5; End Turn (Red wins 2–1); extra End Turn ignored; move 4 ignored; reload victory; Reset; reload reset.
+- Observed victory: positions Red 5 / Blue 11, scores 2 / 1, active Red, phase GAME_OVER, turn 7, winner Red. The full-page victory reload preserved these fields.
+- Observed final state after Reset and reload: positions Red 0 / Blue 15, scores 0 / 0, active Red, phase MOVE, turn 1, winner None.
+- The cloud REPL's directly serialized top-level state variable was stale across calls in the diagnostic `reload-victory` receipt entry; that diagnostic entry is not the assertion source. The assertion helper's live closure checked the rendered victory state, and the returned accessibility snapshot independently showed GAME_OVER / turn 7 / winner Red / scores 2–1 / positions 5 and 11. Final reset snapshot also independently verified.
+- Together with CI run 39277120001 (71 assertions against the local built route), both required environments now have executed browser evidence. This update changes evidence only; game, contract, engine and shared infrastructure are unchanged.
+- Independent re-review is required before claiming final Phase 3 approval. No merge or production release performed.
