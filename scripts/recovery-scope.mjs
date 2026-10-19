@@ -26,7 +26,7 @@ export function parseRecoveryScope(request){
   if(typeof path!=='string'||path.length<3||path.length>200||
    !/^(?:app|apps|components|lib|scripts|tests|packages)\/[a-zA-Z0-9_./[\]-]+\/?$/.test(path)||
    path.split('/').filter((p,i,parts)=>!(i===parts.length-1&&p==='')).some(p=>!p||p==='.'||p==='..'||p==='node_modules'||p.startsWith('.env')) ||
-   (path.endsWith('/')&&path.split('/').filter(Boolean).length<3)||
+   (path.endsWith('/')&&path.split('/').filter(Boolean).length<2)||
    /(^|\/)(?:package(?:-lock)?\.json|vercel\.json|next\.config\.[a-z]+|\.npmrc|.*\.ya?ml)$/.test(path))throw Error('Recovery path escaped approved scope');
  }
  return meta;
