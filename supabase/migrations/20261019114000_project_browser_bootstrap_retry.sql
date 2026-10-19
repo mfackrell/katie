@@ -1,3 +1,5 @@
+do $migration$
+begin
 -- One additional same-code verification retry when an existing verification-only
 -- run fails to start the browser due to the /tmp/fonts UID-mapped chown failure.
 -- The trusted coordinator separately verifies the GitHub browser artifact.
@@ -60,5 +62,8 @@ begin
  perform project_publish(p.id,p.detail);
  return jsonb_build_object('status',p.status,'phase',p.phase,'cycles',p.cycles,'mission',p.active_mission_id);
 end $$;
+exception when duplicate_function then
+ null;
+end $migration$;
 revoke all on function public.retry_project_browser_bootstrap(uuid,uuid,uuid,uuid,bigint,bigint,bigint,text) from public,anon,authenticated;
 grant execute on function public.retry_project_browser_bootstrap(uuid,uuid,uuid,uuid,bigint,bigint,bigint,text) to service_role;
