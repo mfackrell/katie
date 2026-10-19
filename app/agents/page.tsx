@@ -2,6 +2,7 @@
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { MissionsPanel } from "@/components/missions-panel";
+import {RecoveryPanel} from '@/components/recovery-panel';
 import { ProjectApprovalCard, type ProjectApproval } from "@/components/project-approval-card";
 import type { AgentConfig, AgentTask, ManagedAgent } from "@/lib/agents/policy";
 
@@ -184,6 +185,7 @@ export default function AgentsPage() {
             onApprove={hash=>{void approveProject(hash);}}
             onRequestChanges={()=>{const project=projects.find(p=>p.chatId===approval.chatId);if(project)openProject(project);}}/>}
         </section>
+        <RecoveryPanel />
         <MissionsPanel agents={agents} repos={repos} />
       <div className="grid gap-6 lg:grid-cols-2">
           <section className="space-y-4 rounded-xl border border-white/10 p-4" aria-labelledby="definitions-title"><h2 id="definitions-title" className="text-lg">Saved agents</h2>

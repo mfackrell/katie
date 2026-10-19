@@ -1,3 +1,4 @@
+import {runRecoveryBatch} from '@/lib/recovery/worker';
 import {runProjectBatch} from '@/lib/projects/worker';
 import { NextRequest,NextResponse } from 'next/server';
 import { assertCronAuth } from '@/lib/runpod/durable-results';
@@ -6,6 +7,8 @@ export const dynamic='force-dynamic';
 export const maxDuration=240;
 export async function GET(request:NextRequest){
  if(!assertCronAuth(request))return NextResponse.json({error:'unauthorized'},{status:401});
- try{const [projects,missions]=await Promise.all([runProjectBatch(),runMissionBatch()]);return NextResponse.json({...missions,projects},{headers:{'Cache-Control':'no-store'}});}
+ try{const [projects,missions,recovery]=await Promise.all([runProjectBatch(),runMissionBatch(),
+  runRecoveryBatch().catch(error=>{console.error('[Recovery] Supervisor failed',error instanceof Error?error.message:'Unknown error');return{status:'unavailable',discovered:0};})]);
+  return NextResponse.json({...missions,projects,recovery},{headers:{'Cache-Control':'no-store'}});}
  catch(error){console.error('[Missions] Background dispatcher failed',error);return NextResponse.json({error:'Mission dispatcher unavailable'},{status:503});}
 }

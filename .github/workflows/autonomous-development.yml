@@ -67,18 +67,28 @@ jobs:
           # These tools are captured from the trusted workflow/main checkout,
           # before switching to a prior project commit or running generated code.
           mkdir -p "$RUNNER_TEMP/project-tools" "$RUNNER_TEMP/agent-task"
-          cp scripts/project-context.mjs scripts/project-browser-check.mjs scripts/project-sandbox.mjs scripts/project-ci.mjs scripts/project-scope.mjs scripts/project-browser-engine.mjs "$RUNNER_TEMP/project-tools/"
+          cp scripts/project-context.mjs scripts/project-browser-check.mjs scripts/project-sandbox.mjs scripts/project-ci.mjs scripts/project-scope.mjs scripts/project-browser-engine.mjs scripts/recovery-scope.mjs "$RUNNER_TEMP/project-tools/"
           node scripts/project-context.mjs prepare "$RUNNER_TEMP/original-agent-request.md" > "$RUNNER_TEMP/project-context.json"
+          node scripts/recovery-scope.mjs prepare "$RUNNER_TEMP/original-agent-request.md" > "$RUNNER_TEMP/recovery-context.json"
           project="$(jq -r 'if . == null then "false" else "true" end' "$RUNNER_TEMP/project-context.json")"
+          recovery="$(jq -r 'if . == null then "false" else "true" end' "$RUNNER_TEMP/recovery-context.json")"
           echo "project=$project" >> "$GITHUB_OUTPUT"
           if [ "$project" = true ]; then
             base_sha="$(jq -r .baseSha "$RUNNER_TEMP/project-context.json")"
+            if [ "$recovery" = true ]; then
+              test "$(jq -r .sourceSha "$RUNNER_TEMP/recovery-context.json")" = "$base_sha" || { echo 'Recovery and project commit differ'; exit 1; }
+            fi
             echo "project_id=$(jq -r .projectId "$RUNNER_TEMP/project-context.json")" >> "$GITHUB_OUTPUT"
             echo "contract_hash=$(jq -r .contractHash "$RUNNER_TEMP/project-context.json")" >> "$GITHUB_OUTPUT"
             echo "scenario_count=$(jq -r '.contract.scenarios | length' "$RUNNER_TEMP/project-context.json")" >> "$GITHUB_OUTPUT"
             gh auth setup-git
             git fetch --no-tags origin "$base_sha"
             git switch -c "$branch" "$base_sha"
+          elif [ "$recovery" = true ]; then
+            source_sha="$(jq -r .sourceSha "$RUNNER_TEMP/recovery-context.json")"
+            gh auth setup-git
+            git fetch --no-tags origin "$source_sha"
+            git switch -c "$branch" "$source_sha"
           else
             git switch -c "$branch"
           fi
@@ -158,6 +168,7 @@ jobs:
           git add -A
           git diff --cached --quiet && { echo 'No implementation produced'; exit 1; }
           node "$RUNNER_TEMP/project-tools/project-scope.mjs" "$RUNNER_TEMP/agent-task/AGENT_REQUEST.md"
+          node "$RUNNER_TEMP/project-tools/recovery-scope.mjs" "$RUNNER_TEMP/agent-task/AGENT_REQUEST.md"
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git commit -m "agent: implement issue #$ISSUE"
@@ -383,6 +394,7 @@ jobs:
           git add -A
           git diff --cached --quiet && { echo 'No repair produced'; exit 1; }
           node "$RUNNER_TEMP/project-tools/project-scope.mjs" "$RUNNER_TEMP/agent-task/AGENT_REQUEST.md"
+          node "$RUNNER_TEMP/project-tools/recovery-scope.mjs" "$RUNNER_TEMP/agent-task/AGENT_REQUEST.md"
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git commit -m 'agent: repair test and review failures'
