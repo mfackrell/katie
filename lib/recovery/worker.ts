@@ -1,4 +1,3 @@
-import { randomUUID } from 'node:crypto';
 import { Octokit } from '@octokit/rest';
 import { getSupabaseAdminClient } from '@/lib/data/supabase/admin';
 import { readMission,rpc } from '@/lib/missions/store';
@@ -40,7 +39,6 @@ function safeEvidence(raw:string):string{
   .replace(/(authorization|api[_-]?key|token|password)\s*[:=]\s*[^\s,;]+/gi,'$1=[REDACTED]');
 }
 const int=(value:unknown):number|null=>Number.isSafeInteger(Number(value))&&Number(value)>0?Number(value):null;
-const uuid=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 async function boundSource(c:Case):Promise<SourceEvidence|null>{
  const db=getSupabaseAdminClient();
  let project:Project|null=null,task:Task|null=null,detail=c.details,failedJobId:string|null=null;
