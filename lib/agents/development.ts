@@ -176,7 +176,7 @@ export async function retryImmutableProjectVerification(task: AgentTask, project
  // A known read-only test-runner cache mount error is also infrastructure,
  // not evidence that the approved gameplay is wrong. A new verification-only
  // run must still pass every test, review and browser scenario independently.
- const viteCacheFailure=/ENOENT: no such file or directory, mkdir ['"]\\/app\\/node_modules\\/\\.vite['"]/.test(output)
+ const viteCacheFailure=/ENOENT: no such file or directory, mkdir ['"]\/app\/node_modules\/\.vite['"]/.test(output)
    && /Vitest failed or did not produce a completion report/.test(output);
  if(!(setupFailure&&npmFailure)&&!viteCacheFailure)return false;
  const bindingContext=await getDevelopmentProjectContext(task.id);
