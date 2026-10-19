@@ -205,6 +205,7 @@ jobs:
           name: project-tools
           path: ${{ runner.temp }}/project-tools
       - name: Ensure project filesystem isolation is available
+        if: needs.build.outputs.project == 'true'
         run: |
           command -v bwrap >/dev/null || (sudo apt-get update && sudo apt-get install -y bubblewrap)
           # Check sandbox capability without relying on privileged sysctl changes.
