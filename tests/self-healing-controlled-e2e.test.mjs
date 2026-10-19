@@ -11,7 +11,7 @@ function loadModule(path, resolve) {
   compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022,esModuleInterop:true}
  }).outputText;
  const exports={};
- vm.runInNewContext(code,{exports,require:name=>resolve(name),console,Buffer,Date,setTimeout,clearTimeout,process,URL},{
+ vm.runInNewContext(code,{exports,require:name=>resolve(name),console,Buffer,Date,setTimeout,clearTimeout,process:{env:{...process.env,GITHUB_TOKEN:'synthetic-e2e-no-network'}},URL},{
   filename:path,timeout:3000
  });
  return exports;
