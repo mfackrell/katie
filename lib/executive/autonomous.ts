@@ -102,10 +102,10 @@ export async function startExecutiveDevelopment(input:{actorId:string;chatId:str
 
 export async function reconcileExecutiveFinance(){
  const db=getSupabaseAdminClient();
- const {data:running,error}=await db.from('executive_delegations').select('id,actor_id,chat_id,mission_id,status,request_key').in('status',['running','verified','cancelled']).order('updated_at',{ascending:false}).limit(100);
+ const {data:running,error}=await db.from('executive_delegations').select('id,actor_id,chat_id,mission_id,status,request_key,objective').in('status',['running','verified','cancelled']).order('updated_at',{ascending:false}).limit(100);
  if(error)throw Error('Executive reconciliation inventory unavailable');
  let verified=0,blocked=0;
- for(const d of (running??[]) as Array<{id:string;actor_id:string;chat_id:string;mission_id:string|null;status:string;request_key:string}>){
+ for(const d of (running??[]) as Array<{id:string;actor_id:string;chat_id:string;mission_id:string|null;status:string;request_key:string;objective:string}>){
   if(!(d.request_key.startsWith('exec-finance-')||d.request_key.startsWith('exec-dev-')||d.request_key.startsWith('exec-specialist-task-'))||!d.mission_id)continue;
   const {data:mission,error:missionError}=await db.from('agent_missions').select('status,result,detail').eq('id',d.mission_id).maybeSingle();
   const missionRow=mission as {status:string;result:string|null;detail:string|null}|null;
@@ -115,12 +115,25 @@ export async function reconcileExecutiveFinance(){
   const terminalReview=reviewRows.find(r=>r.job_key==='review_again')??reviewRows.find(r=>r.job_key==='review');
   const reviewPassed=terminalReview?.result?.verdict==='pass';
   const succeeded=missionRow.status==='completed'&&reviewPassed&&typeof missionRow.result==='string'&&missionRow.result.length>0;
+  let releaseNote='';
   if(d.status==='running'&&succeeded){
    const {data:submitted,error:submitError}=await db.rpc<{status:string}>('transition_executive_delegation',{p_id:d.id,p_actor:d.actor_id,p_chat:d.chat_id,p_action:'submit',p_evidence:{deliverable:(missionRow.result??'').slice(0,16000),missionId:d.mission_id,independentReview:'mission-pass'}});
    if(submitError||submitted?.status!=='submitted')continue;
    const {data:accepted,error:acceptError}=await db.rpc<{status:string}>('transition_executive_delegation',{p_id:d.id,p_actor:d.actor_id,p_chat:d.chat_id,p_action:'verify',p_evidence:{independentReview:'pass',missionId:d.mission_id}});
    if(acceptError||accepted?.status!=='verified')continue;
    verified++;
+   if(d.request_key.startsWith('exec-dev-')){
+    const {authorizedReleaseObjective,dispatchReviewedRelease}=await import('./release-control');
+    if(authorizedReleaseObjective(d.objective)){
+     try{
+      await dispatchReviewedRelease({delegationId:d.id,missionId:d.mission_id});
+      releaseNote='\\n\\nProduction release was explicitly authorized and dispatched to the separately gated, reviewed-commit release workflow. Deployment has not yet been verified.';
+     }catch(error){
+      const detail=error instanceof Error?error.message:'Release dispatch unavailable';
+      releaseNote='\\n\\nRelease authorization was recorded, but deployment is blocked: '+detail+'. The reviewed draft PR remains available.';
+     }
+    }
+   }
   }else if(d.status==='running'){
    // An incomplete or unreviewed mission can never be accepted.
    const {data:cancelled,error:cancelError}=await db.rpc<{status:string}>('transition_executive_delegation',{p_id:d.id,p_actor:d.actor_id,p_chat:d.chat_id,p_action:'cancel',p_evidence:{reason:'Mission did not pass independent review',missionId:d.mission_id}});
@@ -135,10 +148,15 @@ export async function reconcileExecutiveFinance(){
    const replyId=missionId('executive-reply-'+d.id);
    const {data:existingReply,error:messageLookupError}=await db.from('messages').select('id').eq('id',replyId).maybeSingle();
    if(messageLookupError)throw messageLookupError;
-   if(!existingReply)await saveMessage(d.chat_id,{id:replyId,role:'assistant',content:output});
+   if(!existingReply)await saveMessage(d.chat_id,{id:replyId,role:'assistant',content:output+releaseNote});
   }catch(e){console.error('[Executive] Chat handoff failed',{delegationId:d.id,error:e instanceof Error?e.message:'unknown'});}
  }
  const {reconcileSpecialistFactory}=await import('./factory-runtime');
  const factory=await reconcileSpecialistFactory();
- return {verified,blocked,activated:factory.activated,factoryBlocked:factory.blocked};
+ const {reconcileExecutiveReleases}=await import('./release-control');
+ const release=await reconcileExecutiveReleases().catch(error=>{
+  console.error('[Executive] Release verification unavailable',error instanceof Error?error.message:'Unknown');
+  return {verified:0};
+ });
+ return {verified,blocked,activated:factory.activated,factoryBlocked:factory.blocked,releasesVerified:release.verified};
 }
