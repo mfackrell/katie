@@ -57,8 +57,12 @@ export async function startExecutiveFinance(input:{actorId:string;chatId:string;
 /** Executive delegates repository work to the existing, approval-gated development worker. */
 export function developmentDelegationIntent(message:string){
  const text=message.trim();
- return text.length>=35&&text.length<=7000
-  &&/^(?:please\s+)?(?:delegate\s+(?:this\s+)?(?:software\s+)?development|have\s+(?:the\s+)?(?:software\s+)?development\s+(?:orchestrator|agent)\s+(?:build|fix|implement|update|develop)|executive\s*:\s*(?:build|fix|implement|update))\b/i.test(text);
+ if(text.length>7000)return false;
+ const cue=/^(?:please\s+)?(?:delegate\s+(?:this\s+)?(?:software\s+)?development|have\s+(?:the\s+)?(?:software\s+)?development\s+(?:orchestrator|agent)\s+(?:build|fix|implement|update|develop)|executive\s*:\s*(?:build|fix|implement|update))\b/i.exec(text);
+ if(!cue)return false;
+ const objective=text.slice(cue[0].length).replace(/^[\s.,!?:;\-]+|[\s.,!?:;\-]+$/g,'').replace(/^to\s+/i,'').trim();
+ const words=objective.match(/[a-z]{2,}/gi)??[];
+ return words.length>=2&&objective.length>=8;
 }
 export async function startExecutiveDevelopment(input:{actorId:string;chatId:string;message:string;requestId:string;activeRepoId?:string|null}):Promise<string|null>{
  if(!developmentDelegationIntent(input.message))return null;
