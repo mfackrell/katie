@@ -16,7 +16,14 @@ export async function baseline(p: Project) { if (!p.repository_id)
     throw Error('The connected project target must use the existing main-branch autonomous workflow'); const user = await gh.users.getAuthenticated(); if (user.data.type !== 'User' || m.data.owner.type !== 'User' || user.data.login.toLowerCase() !== owner.toLowerCase())
     throw Error('The project target must be owned by the existing authenticated human GitHub owner'); const workflow = await gh.repos.getContent({ owner, repo, path: '.github/workflows/autonomous-development.yml', ref: 'main' }); if (Array.isArray(workflow.data) || !('content' in workflow.data))
     throw Error('Target project workflow is unavailable'); const source = Buffer.from(workflow.data.content, 'base64').toString('utf8'); if (!source.includes('project-browser-check.mjs') || !source.includes('projectAcceptance'))
-    throw Error('The target repository needs the versioned project execution integration before coding can be approved'); if(p.verified_sha&&p.baseline_sha)return p.baseline_sha; const b = await gh.repos.getBranch({ owner, repo, branch: 'main' }); return b.data.commit.sha; }
+    throw Error('The target repository needs the versioned project execution integration before coding can be approved');
+ if(p.profile==='game'){
+  if(!source.includes('project-game-check.mjs')||!source.includes('project-game-rules.mjs'))throw Error('The target repository needs the versioned game model/context integration before coding can be approved');
+  const [contextTool,ciTool,modelTool]=await Promise.all(['scripts/project-context.mjs','scripts/project-ci.mjs','scripts/project-game-check.mjs'].map(path=>gh.repos.getContent({owner,repo,path,ref:'main'})));
+  const content=(file:typeof contextTool)=>{if(Array.isArray(file.data)||!('content' in file.data))throw Error('Target game verification tools unavailable before coding approval');return Buffer.from(file.data.content,'base64').toString('utf8');};
+  if(!/export const GAME_PROJECT_CONTEXT_VERSION\s*=\s*1\s*;/.test(content(contextTool))||!content(ciTool).includes('checkGameModel(context,root,dependencies)')||!content(modelTool).includes('runGameModelAcceptance'))throw Error('Target game acceptance tools are incompatible; upgrade the connected target before coding approval');
+ }
+ if(p.verified_sha&&p.baseline_sha)return p.baseline_sha; const b = await gh.repos.getBranch({ owner, repo, branch: 'main' }); return b.data.commit.sha; }
 function bounded(text: string) { if (text.length > 12000)
     throw Error('Project milestone context exceeds its bounded input. Narrow the specification; original requirements have not been truncated.'); return text; }
 

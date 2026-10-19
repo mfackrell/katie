@@ -266,6 +266,9 @@ test('chat-native game intake selects the game registration RPC while ordinary a
  assert.equal(gameProjectIntent('Build a review site for video games.'),false);
  assert.equal(gameProjectIntent('Build a blog reviewing board games.'),false);
  assert.equal(gameProjectIntent('Build an app for video game reviews.'),false);
+ assert.equal(gameProjectIntent('Build an app to review video games.'),false);
+ assert.equal(gameProjectIntent('Build a virtual futuristic deck-building game.'),true);
+ assert.equal(gameProjectIntent('Build a 4×4 turn-based game.'),true);
  assert.equal(gameProjectIntent('I want to recreate Fortress America, the original board game, in a browser app. Require independent review before completion.'),true);
  assert.equal(gameProjectIntent('Build a turn-based game with a game sales dashboard.'),true);
 });
@@ -324,4 +327,18 @@ test('oversized game assessment is rejected before approval and large source exc
  assert.equal(retained.finalIntegratedEvidence.verification.projectAcceptance.passed,true);
  assert.equal(retained.finalIntegratedEvidence.verification.changedFileCount,100);
  assert.ok(retained.finalIntegratedEvidence.verification.changedFiles.some(f=>f.patchUnavailable));
+});
+
+test('game approval rejects a previously supported target until its versioned game tools are installed',async()=>{
+ let gameTools=false,version=1;const oldWorkflow='project-browser-check.mjs projectAcceptance';
+ const db={from:()=>({select(){return this;},eq(){return this;},maybeSingle:async()=>({data:{repository_full_name:'owner/repo'},error:null})})};
+ class Octokit{users={getAuthenticated:async()=>({data:{type:'User',login:'owner'}})};repos={get:async()=>({data:{default_branch:'main',owner:{type:'User',login:'owner'}}}),getBranch:async()=>({data:{commit:{sha:'a'.repeat(40)}}}),getContent:async({path})=>({data:{content:Buffer.from(path==='.github/workflows/autonomous-development.yml'?oldWorkflow+(gameTools?' project-game-check.mjs project-game-rules.mjs':''):path==='scripts/project-context.mjs'?'export const GAME_PROJECT_CONTEXT_VERSION = '+version+';':path==='scripts/project-ci.mjs'?'checkGameModel(context,root,dependencies)':'runGameModelAcceptance').toString('base64')}})};}
+ const {baseline}=modules({'@/lib/data/supabase/admin':{getSupabaseAdminClient:()=>db},'@octokit/rest':{Octokit}})('@/lib/projects/worker');
+ const prior=process.env.PROJECT_PREVIEW_REPOSITORIES;process.env.PROJECT_PREVIEW_REPOSITORIES='owner/repo';
+ try{
+  assert.equal(await baseline({...owner,profile:'software'}),'a'.repeat(40));
+  await assert.rejects(baseline({...owner,profile:'game'}),/versioned game model\/context integration before coding/);
+  gameTools=true;version=0;await assert.rejects(baseline({...owner,profile:'game'}),/incompatible/);
+  version=1;assert.equal(await baseline({...owner,profile:'game'}),'a'.repeat(40));
+ }finally{if(prior===undefined)delete process.env.PROJECT_PREVIEW_REPOSITORIES;else process.env.PROJECT_PREVIEW_REPOSITORIES=prior;}
 });

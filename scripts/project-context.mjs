@@ -3,6 +3,7 @@ import {validateProjectGame} from './project-game-rules.mjs';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
+export const GAME_PROJECT_CONTEXT_VERSION = 1;
 
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 function exact(value, keys) {

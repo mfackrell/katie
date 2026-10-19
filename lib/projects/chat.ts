@@ -14,11 +14,13 @@ export function gameProjectIntent(text:string) {
  const reverseCatalog=/\b(?:catalogs?|collection|library|inventory|directory|sales|analytics|statistics)\s+(?:of|for|about)\b.{0,80}\bgames?\b/i.test(text);
  const reverseReview=/\b(?:reviews?|news|price)\s+(?:site|website|blog|app|portal)\s+(?:for|of|about|covering)\b.{0,80}\bgames?\b|\b(?:blog|site|website|app)\s+(?:reviewing|covering)\b.{0,80}\bgames?\b/i.test(text);
  const dataProduct=forwardProduct||reverseCatalog||reverseReview;
- const primaryGame=/\b(?:build|create|develop|recreate|re-create|make|want|need|would like)\s+(?:(?:me|to|you|a|an|the|original|new|simple|small|browser|board|card|video|turn-based|strategy|puzzle|multiplayer|playable)\s+)*games?\b(?=\s*(?:[.!?:,;]|$|\b(?:with|where|that|in|as|for|called|named)\b))/i.test(text);
+ const commands=[...text.matchAll(/\b(?:build|create|develop|recreate|re-create|make|want|need|would like)\s+((?:[\w×'-]+\s+){0,10})games?\b(?=\s*(?:[.!?:,;]|$|\b(?:with|where|that|in|as|for|called|named)\b))/gi)];
+ const primaryGame=commands.some(m=>!/(?:do not|don't|never)\s*$/i.test(text.slice(0,m.index))&&!/\b(?:app|application|software|website|site|catalog|library|blog|store|portal|dashboard|tracker|reviews?|collection|directory|forum|wiki)\b/i.test(m[1]));
  const playable=/\bplayable\s+(?:(?:browser|board|card|video|turn-based|strategy|puzzle|multiplayer)\s+)?games?\b|\bmake (?:it|this|that) (?:a |the )?games?\b/i.test(text);
  const appForGame=/\b(?:app|application|software)\s+(?:for|as|to play)\s+(?:a |the )?(?:[\w-]+ )?games?\b(?=\s*(?:[.!?:,;]|$|\b(?:with|where|that|in|as|for|called|named)\b))/i.test(text);
  const genre=/\b(?:browser|board|card|video|turn[- ]based|strategy|puzzle|multiplayer)\s+games?\b/i.test(text);
- return primaryGame||playable||appForGame||!dataProduct&&genre;
+ const recreation=/\b(?:recreate|re-create|replicate)\b/i.test(text)&&genre&&!dataProduct;
+ return primaryGame||playable||appForGame||recreation;
 }
 export const followupProjectIntent = (text: string) => /^(?:please\s+)?(?:build|make|create|implement|do|start)(?:\s+(?:that|it|this|the project))?[.!\s]*$/i.test(text.trim());
 const actionText = (text:string) => text.trim().replace(/^(?:actually|also|no|okay|ok)[,:]?\s+/i,'').replace(/^please\s+/i,'').replace(/^(?:can|could|would|will) (?:you|we)\s+(?:please\s+)?/i,'');
