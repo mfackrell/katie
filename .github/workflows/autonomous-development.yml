@@ -179,7 +179,7 @@ jobs:
 
   test:
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     timeout-minutes: 35
     outputs:
       passed: ${{ steps.check.outputs.passed }}
@@ -204,12 +204,15 @@ jobs:
         with:
           name: project-tools
           path: ${{ runner.temp }}/project-tools
-      - name: Ensure project filesystem isolation is available
-        if: needs.build.outputs.project == 'true'
+      - name: Ensure trusted filesystem and user namespace isolation is available
         run: |
           command -v bwrap >/dev/null || (sudo apt-get update && sudo apt-get install -y bubblewrap)
           # Check sandbox capability without relying on privileged sysctl changes.
           # Never fall back to unsandboxed browser or code execution.
+          if ! unshare --user --map-root-user /bin/true >/dev/null 2>&1; then
+            echo 'Sandbox unavailable: runner cannot create UID-mapped user namespace.' >&2
+            exit 1
+          fi
           if ! bwrap --unshare-user --ro-bind / / -- /bin/true >/dev/null 2>&1; then
             echo 'Sandbox unavailable: runner does not permit unprivileged bubblewrap user namespaces.' >&2
             echo 'Use a runner with user namespaces enabled; do not weaken filesystem/network isolation.' >&2
