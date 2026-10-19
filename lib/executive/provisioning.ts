@@ -22,7 +22,7 @@ export type ProvisioningDecision=
 // All unknown capability implementations must be commissioned, not invented.
 export function decideProvisioning(input:CapabilityRequirement,registered:AvailableSpecialist[],availableMissionCapabilities:string[]):ProvisioningDecision{
  const required=capabilityRequirement.parse(input);
- const existing=selectSpecialist(registered,required.capability)[0];
+ const existing=selectSpecialist(registered,required.capability).map(s=>registered.find(x=>x.slug===s.slug)!).find(Boolean);
  if(existing)return{route:'reuse',specialistId:existing.id,specialistSlug:existing.slug,capability:required.capability};
  const available=new Set(availableMissionCapabilities.map(x=>capability.parse(x)));
  const missing=required.proposedCapabilities.filter(x=>!available.has(x));
