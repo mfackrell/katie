@@ -68,13 +68,13 @@ export async function startExecutiveDevelopment(input:{actorId:string;chatId:str
  const {data:existing,error:existingError}=await db.from('executive_delegations').select('id,status').eq('actor_id',input.actorId).eq('chat_id',input.chatId).eq('request_key',requestKey).maybeSingle<{id:string;status:string}>();
  if(existingError)throw Error('Development delegation lookup failed');
  if(existing)return 'Development delegation '+existing.id+' already exists; status '+existing.status+'.';
- const {data:registry,error:registryError}=await db.from('executive_orchestrators').select('slug,capabilities').eq('actor_id',input.actorId).eq('status','active').limit(100).returns<Array<{slug:string;capabilities:string[]}>>();
+ const {data:registry,error:registryError}=await db.from('executive_orchestrators').select('slug,capabilities').eq('actor_id',input.actorId).eq('status','active').limit(100).returns<{slug:string;capabilities:string[]}>();
  if(registryError)throw Error('Executive development registry unavailable');
  const specialist=registry?.find(r=>r.capabilities.includes('repository_maintenance')&&r.capabilities.includes('web_application_delivery'));
  if(!specialist)return 'An active development specialist with repository authority is not registered.';
  const {data:repo,error:repoError}=await db.from('repo_sync_runs').select('id,repository_full_name').eq('id',input.activeRepoId).maybeSingle<{id:string;repository_full_name:string}>();
  if(repoError||!repo||!repo.repository_full_name.includes('/'))return 'The selected repository is not a verified connected repository.';
- const {data:workers,error:workerError}=await db.from('managed_agents').select('id,config').eq('archived',false).limit(100).returns<Array<{id:string;config:{name?:string;development?:boolean}}>>();
+ const {data:workers,error:workerError}=await db.from('managed_agents').select('id,config').eq('archived',false).limit(100).returns<{id:string;config:{name?:string;development?:boolean}}>();
  if(workerError)throw Error('Development worker inventory unavailable');
  const leader=workers?.find(a=>a.config?.name==='Mission Lead');
  const developer=workers?.find(a=>a.config?.name==='Development Agent'&&a.config?.development===true);
