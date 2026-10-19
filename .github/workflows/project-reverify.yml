@@ -79,7 +79,7 @@ jobs:
           echo "scenario_count=$(jq -r '.contract.scenarios | length' "$RUNNER_TEMP/project-context.json")" >> "$GITHUB_OUTPUT"
           git fetch --no-tags origin "$EXPECTED_SHA"
           git checkout --detach "$EXPECTED_SHA"
-          node "$RUNNER_TEMP/project-tools/project-scope.mjs" "$RUNNER_TEMP/agent-task/AGENT_REQUEST.md"
+          node "$RUNNER_TEMP/project-tools/project-scope.mjs" "$RUNNER_TEMP/agent-task/AGENT_REQUEST.md" --verify-committed
       - uses: actions/upload-artifact@v4
         with:
           name: original-project-request
