@@ -58,7 +58,7 @@ export async function startExecutiveFinance(input:{actorId:string;chatId:string;
 export function developmentDelegationIntent(message:string){
  const text=message.trim();
  return text.length>=30&&text.length<=7000
-  &&/^(?:please\\s+)?(?:delegate\\s+(?:this\\s+)?(?:software\\s+)?development|have\\s+(?:the\\s+)?(?:software\\s+)?development\\s+(?:orchestrator|agent)\\s+(?:build|fix|implement|update|develop)|executive\\s*:\\s*(?:build|fix|implement|update))\\b/i.test(text);
+  &&/^(?:please\s+)?(?:delegate\s+(?:this\s+)?(?:software\s+)?development|have\s+(?:the\s+)?(?:software\s+)?development\s+(?:orchestrator|agent)\s+(?:build|fix|implement|update|develop)|executive\s*:\s*(?:build|fix|implement|update))\b/i.test(text);
 }
 export async function startExecutiveDevelopment(input:{actorId:string;chatId:string;message:string;requestId:string;activeRepoId?:string|null}):Promise<string|null>{
  if(!developmentDelegationIntent(input.message))return null;
