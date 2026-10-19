@@ -53,13 +53,56 @@ export async function startExecutiveFinance(input:{actorId:string;chatId:string;
  return 'I delegated this financial analysis to Finance. Katie is executing it through the saved mission worker with independent review. I will post the reviewed result in this conversation when finished. Delegation: '+delegationRow.id+'.';
 }
 
+
+/** Executive delegates repository work to the existing, approval-gated development worker. */
+export function developmentDelegationIntent(message:string){
+ const text=message.trim();
+ return text.length>=30&&text.length<=7000
+  &&/^(?:please\\s+)?(?:delegate\\s+(?:this\\s+)?(?:software\\s+)?development|have\\s+(?:the\\s+)?(?:software\\s+)?development\\s+(?:orchestrator|agent)\\s+(?:build|fix|implement|update|develop)|executive\\s*:\\s*(?:build|fix|implement|update))\\b/i.test(text);
+}
+export async function startExecutiveDevelopment(input:{actorId:string;chatId:string;message:string;requestId:string;activeRepoId?:string|null}):Promise<string|null>{
+ if(!developmentDelegationIntent(input.message))return null;
+ if(!input.activeRepoId)return 'Select a connected repository before delegating software changes to Development.';
+ const db=getSupabaseAdminClient();
+ const requestKey='exec-dev-'+createHash('sha256').update(input.requestId).digest('hex').slice(0,40);
+ const {data:existing,error:existingError}=await db.from('executive_delegations').select('id,status').eq('actor_id',input.actorId).eq('chat_id',input.chatId).eq('request_key',requestKey).maybeSingle<{id:string;status:string}>();
+ if(existingError)throw Error('Development delegation lookup failed');
+ if(existing)return 'Development delegation '+existing.id+' already exists; status '+existing.status+'.';
+ const {data:registry,error:registryError}=await db.from('executive_orchestrators').select('slug,capabilities').eq('actor_id',input.actorId).eq('status','active').limit(100).returns<Array<{slug:string;capabilities:string[]}>>();
+ if(registryError)throw Error('Executive development registry unavailable');
+ const specialist=registry?.find(r=>r.capabilities.includes('repository_maintenance')&&r.capabilities.includes('web_application_delivery'));
+ if(!specialist)return 'An active development specialist with repository authority is not registered.';
+ const {data:repo,error:repoError}=await db.from('repo_sync_runs').select('id,repository_full_name').eq('id',input.activeRepoId).maybeSingle<{id:string;repository_full_name:string}>();
+ if(repoError||!repo||!/^[-\\w]+\\/[-\\w.]+$/.test(repo.repository_full_name))return 'The selected repository is not a verified connected repository.';
+ const {data:workers,error:workerError}=await db.from('managed_agents').select('id,config').eq('archived',false).limit(100).returns<Array<{id:string;config:{name?:string;development?:boolean}}>>();
+ if(workerError)throw Error('Development worker inventory unavailable');
+ const leader=workers?.find(a=>a.config?.name==='Mission Lead');
+ const developer=workers?.find(a=>a.config?.name==='Development Agent'&&a.config?.development===true);
+ if(!leader||!developer)return 'Verified development workers are unavailable; no write was started.';
+ const id=missionId(requestKey),deadline=new Date(Date.now()+3*60*60000).toISOString();
+ const objective=input.message+'\\nCONNECTED REPOSITORY: '+repo.repository_full_name+'\\nDevelopment must use its existing GitHub issue, draft PR, checks, and independent review. Do not auto-merge or deploy without the existing release authorization.';
+ const {data:delegation,error:delegateError}=await db.rpc<{id:string}>('propose_executive_delegation',{p_actor:input.actorId,p_chat:input.chatId,p_slug:specialist.slug,p_request:requestKey,p_objective:objective,p_capability:'repository_maintenance',p_success:['Deliver reviewed implementation evidence from the connected repository','Produce an independently checked draft PR or a truthful blocker','Do not bypass existing approval gates'],p_budget:60000,p_deadline:deadline});
+ if(delegateError||!delegation?.id)throw Error('Executive development proposal failed');
+ const {error:missionError}=await db.rpc('create_mission',{p_id:id,p_objective:objective,p_agents:[leader.id,developer.id],p_minutes:120,p_repository:repo.id});
+ if(missionError)throw Error('Development mission creation failed: '+missionError.message.slice(0,180));
+ const {error:linkError}=await db.from('executive_delegations').eq('id',delegation.id).eq('status','proposed').update({mission_id:id});
+ if(linkError)throw Error('Development mission link failed');
+ const {error:startError}=await db.rpc('control_mission',{p_id:id,p_action:'start',p_job:null});
+ if(startError)throw Error('Development mission could not start');
+ for(const action of ['accept','start']){
+  const {data,error}=await db.rpc<{status:string}>('transition_executive_delegation',{p_id:delegation.id,p_actor:input.actorId,p_chat:input.chatId,p_action:action,p_evidence:{}});
+  if(error||!data)throw Error('Development transition failed: '+action);
+ }
+ return 'Executive delegated the repository work to Development using the existing review-gated GitHub workflow. I will deliver the checked draft PR or a blocker in this chat. Delegation: '+delegation.id+'.';
+}
+
 export async function reconcileExecutiveFinance(){
  const db=getSupabaseAdminClient();
  const {data:running,error}=await db.from('executive_delegations').select('id,actor_id,chat_id,mission_id,status,request_key').in('status',['running','verified','cancelled']).order('updated_at',{ascending:false}).limit(100);
  if(error)throw Error('Executive reconciliation inventory unavailable');
  let verified=0,blocked=0;
  for(const d of (running??[]) as Array<{id:string;actor_id:string;chat_id:string;mission_id:string|null;status:string;request_key:string}>){
-  if(!d.request_key.startsWith('exec-finance-')||!d.mission_id)continue;
+  if(!(d.request_key.startsWith('exec-finance-')||d.request_key.startsWith('exec-dev-'))||!d.mission_id)continue;
   const {data:mission,error:missionError}=await db.from('agent_missions').select('status,result,detail').eq('id',d.mission_id).maybeSingle();
   const missionRow=mission as {status:string;result:string|null;detail:string|null}|null;
   if(missionError||!missionRow||!['completed','blocked','failed','stopped'].includes(missionRow.status))continue;
