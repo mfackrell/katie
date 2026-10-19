@@ -101,7 +101,8 @@ export async function runMissionBatch(model=missionModel){
   try{await executeClaim(claim,model);return {jobId:claim.job.id,status:'processed'};}
   catch(error){const detail=error instanceof Error?error.message.slice(0,600):'Assignment execution failed';console.error('[Missions] Assignment failed',{jobId:claim.job.id,detail});
    const invalidContract=error instanceof MissionModelFailure&&error.partial.reviewPhase==='assessment';
-   const retry=claim.job.attempts<2&&(invalidContract||/timeout|timed out|connection|fetch failed|429|rate limit|500|502|503|504/i.test(detail));
+   const truncatedGameSpecification=error instanceof MissionModelFailure&&error.partial.incompleteReason==='max_output_tokens'&&claim.mission.project_kind==='specification'&&(claim.mission.project_evidence as {projectProfile?:string}|null)?.projectProfile==='game'&&['compose','revise'].includes(claim.job.role);
+   const retry=claim.job.attempts<2&&(invalidContract||truncatedGameSpecification||/timeout|timed out|connection|fetch failed|429|rate limit|500|502|503|504/i.test(detail));
    await rpc('commit_mission_work',{p_id:claim.job.id,p_lease:claim.job.lease,p_result:{...(error instanceof MissionModelFailure?error.partial:{}),detail},p_children:[],p_status:retry?'queued':'failed',p_mission_status:retry?null:'blocked',p_final:null});
    return {jobId:claim.job.id,status:retry?'retrying':'blocked'};}
  }));
