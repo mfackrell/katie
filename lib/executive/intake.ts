@@ -11,7 +11,7 @@ export function specialistCreationIntent(message:string){
  const match=/^(?:i (?:want|need|would like) (?:you to )?|go ahead and |proceed (?:to )?(?:with )?)?(?:create|configure|set up|setup|provision|establish|add|build)\s+(?:me\s+)?(?:a |an |the |new |specialized |specialist )*([a-z][a-z\s-]{1,65}?)\s+(?:specialist )?(?:orchestrator|sub-orchestrator)\b[.!?\s]*$/i.exec(cleaned);
  if(!match)return null;
  const domain=match[1].trim().toLowerCase().replace(/\s+/g,' ');
- if(/^(?:another|new|more|some|that|this|one|the)$/i.test(domain))return null;
+ if(/^(?:a|an|another|new|more|some|that|this|one|the)$/i.test(domain))return null;
  const slug=domain.replace(/[^a-z0-9]+/g,'_').replace(/^_+|_+$/g,'').slice(0,40);
  if(!/^[a-z][a-z0-9_]{1,39}$/.test(slug))return null;
  // These are capability REQUESTS, not a claim that the tools exist.
