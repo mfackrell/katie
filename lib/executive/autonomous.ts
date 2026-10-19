@@ -140,6 +140,13 @@ export async function reconcileExecutiveFinance(){
    if(cancelError||cancelled?.status!=='cancelled')continue;
    blocked++;
   }
+  if(d.status==='verified'&&succeeded&&d.request_key.startsWith('exec-dev-')){
+   const {authorizedReleaseObjective,dispatchReviewedRelease}=await import('./release-control');
+   if(authorizedReleaseObjective(d.objective)){
+    try{await dispatchReviewedRelease({delegationId:d.id,missionId:d.mission_id});}
+    catch(error){console.error('[Executive] Release retry blocked',{delegationId:d.id,reason:error instanceof Error?error.message:'unknown'});}
+   }
+  }
   // Persist output after recording the transition, using a stable ID so cron
   // retries cannot generate duplicate final chat messages.
   const label=d.request_key.startsWith('exec-dev-')?'Development':d.request_key.startsWith('exec-specialist-task-')?'Specialist':'Finance';
