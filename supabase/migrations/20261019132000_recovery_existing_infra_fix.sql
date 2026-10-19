@@ -2,6 +2,8 @@
 -- replay of a blocked approved code increment, without another coding cycle.
 -- The supervisor verifies the GitHub release/test artifacts and exact PR SHA
 -- before calling this service-only locked transition.
+do $migration$
+begin
 create function public.reverify_project_after_existing_fix(
  p_case uuid,p_lease uuid,p_issue bigint,p_pr bigint,p_head text,p_release_sha text
 ) returns jsonb language plpgsql security invoker set search_path=public as $$
@@ -53,6 +55,8 @@ begin
    'prior_cycles',p.cycles,'charged_tokens',used));
  return jsonb_build_object('status','running','cycles',p.cycles,'mission',m.id);
 end $$;
+exception when duplicate_function then null;
+end $migration$;
 revoke all on function public.reverify_project_after_existing_fix(uuid,uuid,bigint,bigint,text,text)
  from public,anon,authenticated;
 grant execute on function public.reverify_project_after_existing_fix(uuid,uuid,bigint,bigint,text,text) to service_role;
