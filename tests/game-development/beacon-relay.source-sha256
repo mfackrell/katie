@@ -1,0 +1,7 @@
+1f44fb7645a7f2867744b4b60642076d6f12331baa0939f281b9a5c14ac63939  app/project-pilots/beacon-relay/engine.ts
+098f562398d08e2bc45dc23a1cf35f3f1b46601bd1dea78cc6794bc6dfb16ce7  app/project-pilots/beacon-relay/page.tsx
+e3adf302833249b263d866b4e2d4d656652e0dd5e4a0f0bc2203da50e2b78204  app/project-pilots/beacon-relay/relay.module.css
+8c6aff1b75b85649384d89918ad2d9bab1e993cdd42fb66110302edbaa818753  tests/game-development/beacon-relay.rules.json
+ba5972fe43c45f5963da5380151a31e5ca0f017c98c1adfe5c65eba85d7e0d5d  tests/game-development/beacon-relay.acceptance.mjs
+6f4fd2f79ba88eba426b273a6ae4959290c68f9443039964d1927fe4f80d19d7  tests/game-development/beacon-relay.test.mjs
+4eda21d1ba160961ba889bc2a2c58e9db7ea820e782c5f5f743cc949ffb0a11a  tests/game-development/beacon-relay.browser.mjs

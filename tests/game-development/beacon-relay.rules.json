@@ -1,0 +1,149 @@
+{
+  "schemaVersion": 1,
+  "game": {
+    "id": "beacon-relay-duel",
+    "title": "Beacon Relay Duel",
+    "edition": "Original user-approved design v1 (managed task definition 3, 2026-10-19)",
+    "kind": "original"
+  },
+  "sources": [
+    {
+      "id": "user-design",
+      "kind": "user",
+      "reference": "AGENT_REQUEST.md: managed task f8d12c82-3070-43e1-9846-45599098cccd, definition 3, GAMEPLAY authoritative requirements; read in this implementation session."
+    }
+  ],
+  "rules": [
+    {
+      "id": "setup",
+      "category": "setup",
+      "description": "A 4x4 row-major board 0..15; Red at 0, Blue at 15; scores 0, Red active, turn 1, MOVE, no winner; exactly one token per player.",
+      "status": "verified",
+      "sourceIds": [
+        "user-design"
+      ]
+    },
+    {
+      "id": "move",
+      "category": "action",
+      "description": "In MOVE only the active token may move one orthogonal step to an unoccupied tile; invalid actions preserve the complete state.",
+      "status": "verified",
+      "sourceIds": [
+        "user-design"
+      ]
+    },
+    {
+      "id": "resolve",
+      "category": "phase",
+      "description": "A valid move changes only the active position and phase to RESOLVE; all further tile clicks do nothing.",
+      "status": "verified",
+      "sourceIds": [
+        "user-design"
+      ]
+    },
+    {
+      "id": "score",
+      "category": "turn",
+      "description": "End Turn acts only in RESOLVE and awards exactly one point iff the active token is on beacon 5 or 10.",
+      "status": "verified",
+      "sourceIds": [
+        "user-design"
+      ]
+    },
+    {
+      "id": "alternate",
+      "category": "turn",
+      "description": "Unless victory, End Turn alternates active player, increments turn and returns to MOVE.",
+      "status": "verified",
+      "sourceIds": [
+        "user-design"
+      ]
+    },
+    {
+      "id": "victory",
+      "category": "victory",
+      "description": "At score 2 the active player wins and phase becomes GAME_OVER; actions freeze until Reset.",
+      "status": "verified",
+      "sourceIds": [
+        "user-design"
+      ]
+    },
+    {
+      "id": "reset",
+      "category": "reset",
+      "description": "Reset restores every initial value and persists it.",
+      "status": "verified",
+      "sourceIds": [
+        "user-design"
+      ]
+    },
+    {
+      "id": "persist",
+      "category": "persistence",
+      "description": "Complete state persists in browser localStorage through full-page reload, including RESOLVE.",
+      "status": "verified",
+      "sourceIds": [
+        "user-design"
+      ]
+    },
+    {
+      "id": "ui",
+      "category": "ui",
+      "description": "Local two-human React route /project-pilots/beacon-relay provides instructions and stable requested selectors with exact numeric and player/phase labels.",
+      "status": "verified",
+      "sourceIds": [
+        "user-design"
+      ]
+    }
+  ],
+  "unknowns": [],
+  "invariants": [
+    {
+      "id": "state-integrity",
+      "description": "Exactly one distinct in-bounds token per player, valid phase/turn/score/winner, deterministic immutable actions.",
+      "ruleIds": [
+        "setup",
+        "move",
+        "resolve",
+        "score",
+        "alternate",
+        "victory",
+        "reset",
+        "persist",
+        "ui"
+      ]
+    }
+  ],
+  "stateModel": {
+    "initialState": {
+      "positions": {
+        "Red": 0,
+        "Blue": 15
+      },
+      "scores": {
+        "Red": 0,
+        "Blue": 0
+      },
+      "activePlayer": "Red",
+      "turn": 1,
+      "phase": "MOVE",
+      "winner": null
+    },
+    "phases": [
+      "MOVE",
+      "RESOLVE",
+      "GAME_OVER"
+    ]
+  },
+  "nonApplicable": [
+    "Hidden information",
+    "Randomness",
+    "Combat",
+    "AI",
+    "Networking",
+    "External assets"
+  ],
+  "decisions": [
+    "No unresolved gameplay questions or extra mechanics. Invalid or unavailable storage falls back to a fresh in-memory game; this defensive behavior does not change approved gameplay."
+  ]
+}
