@@ -1,5 +1,8 @@
--- Recover the same first failed game-specification writer after installing
--- the bounded output fix. Never reset calls, attempts, charges or deadlines.
+-- Explicit actor/chat-bound Resume may retry one legacy unknown stop reason.
+-- This is not automatic truncation classification: unknown stays unknown in
+-- the receipt and audit event. Known content_filter failures are ineligible.
+-- Automatic worker retries separately require confirmed max_output_tokens.
+-- Never reset calls, attempts, charges or deadlines.
 create function public.retry_game_specification(p_id uuid,p_actor uuid,p_chat uuid) returns boolean
 language plpgsql security invoker set search_path=public as $$
 declare p work_projects;m agent_missions;j mission_assignments;charged bigint;
@@ -15,10 +18,10 @@ begin
   and result->>'detail'='Model output incomplete: incomplete'
   and (result->>'incompleteReason' is null or result->>'incompleteReason'='max_output_tokens') order by created_at limit 1 for update;
  if not found then return false;end if;
- update mission_assignments set status='queued',lease=null,lease_until=null,available_at=now(),detail='Retrying the incomplete game specification with bounded compact JSON.',updated_at=now() where id=j.id;
+ update mission_assignments set status='queued',lease=null,lease_until=null,available_at=now(),detail=case when j.result->>'incompleteReason' is null then 'Explicitly resumed legacy specification; original provider stop reason is unknown.' else 'Retrying the output-limited game specification with bounded compact JSON.' end,updated_at=now() where id=j.id;
  update agent_missions set status='running',detail='Retrying the incomplete specification; all prior usage remains charged.',updated_at=now() where id=m.id;
- update work_projects set status='running',lease=null,lease_until=null,detail='Completing the saved game specification; prior work, charges and limits remain.',updated_at=now() where id=p.id returning * into p;
- insert into project_events(project_id,event,data) values(p.id,'game_specification_output_retry',jsonb_build_object('missionId',m.id,'jobId',j.id,'attemptsUsed',j.attempts,'chargedTokens',charged));
+ update work_projects set status='running',lease=null,lease_until=null,detail=case when j.result->>'incompleteReason' is null then 'Explicit Resume accepted for the saved legacy specification. Its original provider stop reason remains unknown; prior work, charges and limits remain.' else 'Completing the saved game specification; prior work, charges and limits remain.' end,updated_at=now() where id=p.id returning * into p;
+ insert into project_events(project_id,event,data) values(p.id,'game_specification_output_retry',jsonb_build_object('missionId',m.id,'jobId',j.id,'attemptsUsed',j.attempts,'chargedTokens',charged,'trigger','explicit_resume','classification',case when j.result->>'incompleteReason' is null then 'legacy_unknown_explicit_resume' else 'max_output_tokens' end,'sourceIncompleteReason',j.result->>'incompleteReason'));
  perform project_publish(p.id,p.detail);return true;
 end $$;
 revoke all on function public.retry_game_specification(uuid,uuid,uuid) from public,anon,authenticated;
