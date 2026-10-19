@@ -49,8 +49,10 @@ export async function handleExecutiveSpecialistIntake(input:{
  if(planned.decision.route==='reuse')
   return 'An active '+title+' already supports this capability. I have recorded the executive provisioning decision and can delegate a specific objective to it. No new specialist is needed.';
  if(planned.decision.route==='configure'){
-  const row=planned.request as {id?:string};
+  const row=planned.request as {id?:string;status?:string};
   if(!row.id)throw Error('Provisioning request identity missing');
+  if(['configured','validated','activated'].includes(row.status??''))
+   return 'The '+title+' provisioning request is already '+row.status+'. I will not create duplicate specialist definitions.';
   const configured=await configureExecutiveSpecialist({actorId:input.actorId,chatId:input.chatId,
    requestId:row.id,capabilityCatalogVerified:true});
   if(!configured)throw Error('Specialist configuration evidence unavailable');
@@ -67,8 +69,10 @@ export async function handleExecutiveSpecialistIntake(input:{
   .filter(x=>x.capabilities.includes('specialist_build')).sort((a,b)=>a.slug.localeCompare(b.slug));
  if(!available.length)
   return 'I recorded the request to create a '+title+'. Katie currently has no active, verified specialist-builder capability, so it is awaiting that connection. I have not claimed that development has started or created an unapproved agent.';
- const plan=planned.request as {id?:string};
+ const plan=planned.request as {id?:string;status?:string};
  if(!plan.id)throw Error('Provisioning request identity missing');
+ if(['commissioned','validated','activated'].includes(plan.status??''))
+  return 'The '+title+' provisioning request is already '+plan.status+'. No duplicate builder delegation was created.';
  const originalKey=requestKey(input.requestId,input.message);
  const stamp=(plan as {created_at?:string}).created_at;
  if(typeof stamp!=='string'||!Number.isFinite(Date.parse(stamp)))throw Error('Durable provisioning timestamp missing');
