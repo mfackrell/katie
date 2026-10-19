@@ -51,7 +51,7 @@ begin
  select 'project',p.id,p.phase||':'||p.milestone_index||':'||p.cycles||':'||coalesce(p.active_mission_id::text,'none'),
  p.actor_id,p.chat_id,p.repository_id,left(coalesce(p.detail,'Project blocked'),2000)
  from work_projects p
- where p.status='blocked' and p.deadline>now() and p.updated_at>now()-interval '14 days'
+ where p.status='blocked' and p.deadline>now() and p.updated_at>now()-interval '12 hours'
  and p.approved_hash is not distinct from p.approval_hash
  and (select count(*) from recovery_cases r where r.source_type='project' and r.source_id=p.id)<4
  on conflict do nothing;
@@ -60,14 +60,14 @@ begin
  select 'mission',m.id,m.status||':'||coalesce((select max(j.id::text||':'||j.attempts::text) from mission_assignments j where j.mission_id=m.id and j.status='failed'),'none'),
  (m.team->0->>'actor_id')::uuid,m.repository_id,left(coalesce(m.detail,'Mission blocked'),2000)
  from agent_missions m
- where m.status='blocked' and m.project_id is null and m.updated_at>now()-interval '14 days'
+ where m.status='blocked' and m.project_id is null and m.deadline>now() and m.updated_at>now()-interval '12 hours'
  and (m.team->0->>'actor_id') is not null
  and (select count(*) from recovery_cases r where r.source_type='mission' and r.source_id=m.id)<3
  on conflict do nothing;
  insert into recovery_cases(source_type,source_id,source_revision,actor_id,chat_id,repository_id,details)
  select 'task',t.id,t.request_id,t.actor_id,t.chat_id,t.repository_id,left(coalesce(t.details,'Task blocked'),2000)
  from agent_tasks t
- where t.status in ('blocked','failed') and t.updated_at>now()-interval '14 days'
+ where t.status in ('blocked','failed') and t.updated_at>now()-interval '12 hours'
  and not exists(select 1 from mission_assignments j where j.id=t.id)
  and (select count(*) from recovery_cases r where r.source_type='task' and r.source_id=t.id)<3
  on conflict do nothing;
