@@ -340,7 +340,6 @@ async function monitorRecoveryCases():Promise<void>{
       }
      }
     }
-   }
    await db.from('recovery_cases').eq('id',c.id).in('status',['delegated','awaiting_release']).update({status:'verifying',
     repair_pr_url:prUrl,repair_head_sha:pr.head.sha,
     details:'Verified repair was owner-merged. Original project acceptance remains required; no coding scope was bypassed.',
