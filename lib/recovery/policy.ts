@@ -30,7 +30,7 @@ export function validRepairPath(path:string):boolean{
  return typeof path==='string'&&path.length>3&&path.length<=200&&
    /^(?:app|apps|components|lib|scripts|tests|packages)\/[A-Za-z0-9_./[\]-]+\/?$/.test(path)&&
    !path.split('/').slice(0,-(path.endsWith('/')?1:0)||undefined).some(part=>!part||part==='.'||part==='..'||part==='node_modules'||part==='.git'||part==='.github'||part.startsWith('.env'))&&
-   !(path.endsWith('/')&&path.split('/').filter(Boolean).length<3)&&
+   !(path.endsWith('/')&&path.split('/').filter(Boolean).length<2)&&
    !/(^|\/)(?:package(?:-lock)?\.json|vercel\.json|next\.config\.[a-z]+|\.npmrc|.*\.ya?ml)$/.test(path);
 }
 export function narrowPaths(paths:unknown):string[]{
