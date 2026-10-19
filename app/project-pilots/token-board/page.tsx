@@ -1,10 +1,25 @@
 "use client";
 
-import { useState } from "react";
-import { moveToken } from "./board";
+import { useEffect, useState } from "react";
+import { moveToken, type BoardState } from "./board";
+
+const storageKey = "token-board-state";
 
 export default function TokenBoardPage() {
   const [game, setGame] = useState({ position: 0, moves: 0 });
+
+  const [ready, setReady] = useState(false);
+
+  useEffect(() => {
+    const saved = localStorage.getItem(storageKey);
+    if (saved) setGame(JSON.parse(saved) as BoardState);
+    setReady(true);
+  }, []);
+
+  useEffect(() => {
+    // Wait for restoration before writing so the initial render cannot erase a saved game.
+    if (ready) localStorage.setItem(storageKey, JSON.stringify(game));
+  }, [game, ready]);
 
   function moveTo(cell: number) {
     setGame(current => moveToken(current, cell));
@@ -22,6 +37,7 @@ export default function TokenBoardPage() {
             key={cell}
             id={`cell-${cell}`}
             type="button"
+            disabled={!ready}
             aria-label={`Cell ${cell}${game.position === cell ? ", blue token" : ""}`}
             aria-pressed={game.position === cell}
             onClick={() => moveTo(cell)}
@@ -43,6 +59,15 @@ export default function TokenBoardPage() {
           <dd id="moves" className="text-2xl font-semibold">{game.moves}</dd>
         </div>
       </dl>
+      <button
+        id="reset"
+        type="button"
+        disabled={!ready}
+        onClick={() => setGame({ position: 0, moves: 0 })}
+        className="rounded-lg border border-zinc-600 px-5 py-2 hover:bg-zinc-800 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-400"
+      >
+        Reset
+      </button>
     </main>
   );
 }

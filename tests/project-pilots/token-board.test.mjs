@@ -20,13 +20,17 @@ const contract = {
         ...Array.from({ length: 9 }, (_, cell) => ({ action: 'expectVisible', selector: `#cell-${cell}` })),
         { action: 'expectVisible', selector: '#position' },
         { action: 'expectVisible', selector: '#moves' },
+        { action: 'expectVisible', selector: '#reset' },
         text('#position', 0), text('#moves', 0),
       ],
     },
     {
-      name: 'Legal move increments once and diagonal leaves state unchanged',
+      name: 'Legal move, rejected diagonal, same-route persistence and reset',
       steps: [{ action: 'goto', path }, click(1), text('#position', 1), text('#moves', 1),
-        click(5), text('#position', 1), text('#moves', 1)],
+        click(5), text('#position', 1), text('#moves', 1),
+        { action: 'goto', path }, text('#position', 1), text('#moves', 1),
+        { action: 'click', selector: '#reset' }, text('#position', 0), text('#moves', 0),
+        { action: 'goto', path }, text('#position', 0), text('#moves', 0)],
     },
   ],
 };
@@ -75,6 +79,7 @@ test('token board browser contract and every source/destination movement pair', 
     for (let source = 0; source < 9; source++) {
       for (let destination = 0; destination < 9; destination++) {
         await page.goto(origin + path);
+        await page.locator('#reset').click();
         const index = traversal.indexOf(source);
         for (const cell of traversal.slice(1, index + 1)) await page.locator(`#cell-${cell}`).click();
         await page.locator(`#cell-${destination}`).click();
@@ -88,6 +93,7 @@ test('token board browser contract and every source/destination movement pair', 
     }
     // Native buttons must support keyboard movement as well as pointer clicks.
     await page.goto(origin + path);
+    await page.locator('#reset').click();
     await page.locator('#cell-3').focus();
     await page.keyboard.press('Enter');
     await page.waitForFunction(() => document.querySelector('#position')?.textContent === '3');
