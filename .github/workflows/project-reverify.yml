@@ -1,0 +1,238 @@
+name: Katie reverify immutable project increment
+
+on:
+  workflow_dispatch:
+    inputs:
+      issue_number:
+        description: Original owner-authored agent issue
+        type: number
+        required: true
+      pr_number:
+        description: Existing draft PR containing the implementation
+        type: number
+        required: true
+      expected_sha:
+        description: Exact candidate head commit to verify (40 hexadecimal characters)
+        type: string
+        required: true
+
+permissions:
+  contents: read
+  issues: read
+  pull-requests: read
+
+concurrency:
+  group: katie-reverify-${{ inputs.issue_number }}-${{ inputs.expected_sha }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    outputs:
+      issue: ${{ steps.identity.outputs.issue }}
+      pr: ${{ steps.identity.outputs.pr }}
+      sha: ${{ steps.identity.outputs.sha }}
+      project_id: ${{ steps.identity.outputs.project_id }}
+      contract_hash: ${{ steps.identity.outputs.contract_hash }}
+      scenario_count: ${{ steps.identity.outputs.scenario_count }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Validate owner issue, draft PR, and immutable code SHA
+        id: identity
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE: ${{ inputs.issue_number }}
+          PR: ${{ inputs.pr_number }}
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+        run: |
+          set -euo pipefail
+          [[ "$ISSUE" =~ ^[1-9][0-9]*$ && "$PR" =~ ^[1-9][0-9]*$ && "$EXPECTED_SHA" =~ ^[a-f0-9]{40}$ ]] || exit 1
+          author="$(gh issue view "$ISSUE" --repo "$GITHUB_REPOSITORY" --json author --jq '.author.login')"
+          [[ "$author" == "$GITHUB_REPOSITORY_OWNER" ]] || { echo 'Owner authorization required'; exit 1; }
+          pr_json="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR")"
+          jq -e --arg repo "$GITHUB_REPOSITORY" --arg sha "$EXPECTED_SHA" '
+            .state == "open" and .draft == true and .merged_at == null and
+            .base.ref == "main" and .base.repo.full_name == $repo and
+            .head.repo.full_name == $repo and .head.sha == $sha
+          ' <<< "$pr_json" >/dev/null || { echo 'PR changed, merged, or not owner-repository scoped'; exit 1; }
+          mkdir -p "$RUNNER_TEMP/project-tools" "$RUNNER_TEMP/agent-task"
+          gh issue view "$ISSUE" --repo "$GITHUB_REPOSITORY" --json title,body --jq '.title + "\n\n" + (.body // "")' > "$RUNNER_TEMP/agent-task/AGENT_REQUEST.md"
+          cp scripts/project-context.mjs scripts/project-browser-check.mjs scripts/project-sandbox.mjs scripts/project-ci.mjs scripts/project-scope.mjs scripts/project-browser-engine.mjs "$RUNNER_TEMP/project-tools/"
+          node scripts/project-context.mjs prepare "$RUNNER_TEMP/agent-task/AGENT_REQUEST.md" > "$RUNNER_TEMP/project-context.json"
+          jq -e '.projectId and .contractHash and .baseSha and (.allowedPaths | length > 0)' "$RUNNER_TEMP/project-context.json" >/dev/null || exit 1
+          echo "issue=$ISSUE" >> "$GITHUB_OUTPUT"
+          echo "pr=https://github.com/$GITHUB_REPOSITORY/pull/$PR" >> "$GITHUB_OUTPUT"
+          echo "sha=$EXPECTED_SHA" >> "$GITHUB_OUTPUT"
+          echo "project_id=$(jq -r .projectId "$RUNNER_TEMP/project-context.json")" >> "$GITHUB_OUTPUT"
+          echo "contract_hash=$(jq -r .contractHash "$RUNNER_TEMP/project-context.json")" >> "$GITHUB_OUTPUT"
+          echo "scenario_count=$(jq -r '.contract.scenarios | length' "$RUNNER_TEMP/project-context.json")" >> "$GITHUB_OUTPUT"
+          git fetch --no-tags origin "$EXPECTED_SHA"
+          git checkout --detach "$EXPECTED_SHA"
+          node "$RUNNER_TEMP/project-tools/project-scope.mjs" "$RUNNER_TEMP/agent-task/AGENT_REQUEST.md"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: original-project-request
+          path: ${{ runner.temp }}/agent-task/AGENT_REQUEST.md
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: trusted-project-tools
+          path: ${{ runner.temp }}/project-tools/*.mjs
+          if-no-files-found: error
+
+  test:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    outputs:
+      passed: ${{ steps.check.outputs.passed }}
+      head: ${{ steps.check.outputs.head }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.build.outputs.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - uses: actions/download-artifact@v4
+        with:
+          name: original-project-request
+          path: ${{ runner.temp }}/agent-task
+      - uses: actions/download-artifact@v4
+        with:
+          name: trusted-project-tools
+          path: ${{ runner.temp }}/project-tools
+      - name: Verify required Linux namespaces exist
+        run: |
+          command -v bwrap >/dev/null || (sudo apt-get update && sudo apt-get install -y bubblewrap)
+          if test -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns; then sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0; fi
+      - name: Re-test the exact existing increment in a sandbox
+        id: check
+        shell: bash
+        env:
+          CI: 'true'
+          VERCEL_ENV: development
+          NEXT_PUBLIC_SUPABASE_URL: https://example.supabase.co
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: anon-placeholder
+          SUPABASE_SERVICE_ROLE_KEY: service-role-placeholder
+        run: |
+          set +e
+          node "$RUNNER_TEMP/project-tools/project-ci.mjs" --request "$RUNNER_TEMP/agent-task/AGENT_REQUEST.md" --output "$RUNNER_TEMP/project-acceptance.json" > agent-test.log 2>&1
+          rc=$?
+          cat agent-test.log
+          echo "head=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          if [[ "$rc" -eq 0 ]]; then echo 'passed=true' >> "$GITHUB_OUTPUT"; else echo 'passed=false' >> "$GITHUB_OUTPUT"; fi
+          exit 0
+      - uses: actions/upload-artifact@v4
+        with:
+          name: agent-test
+          path: agent-test.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: project-browser-test
+          path: ${{ runner.temp }}/project-acceptance.json
+          if-no-files-found: ignore
+
+  review:
+    needs: [build, test]
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    outputs:
+      verdict: ${{ steps.verdict.outputs.verdict }}
+      head: ${{ steps.verdict.outputs.head }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.build.outputs.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: original-project-request
+      - uses: actions/download-artifact@v4
+        with:
+          name: agent-test
+      - name: Independently review the existing code without edits
+        uses: openai/codex-action@v1
+        with:
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          permission-profile: ':read-only'
+          output-schema: '{"type":"object","properties":{"verdict":{"type":"string","enum":["pass","changes_requested"]},"summary":{"type":"string"},"blocking_findings":{"type":"array","items":{"type":"string"}}},"required":["verdict","summary","blocking_findings"],"additionalProperties":false}'
+          output-file: agent-review.json
+          prompt: |
+            Independently review the unchanged, existing candidate against
+            AGENT_REQUEST.md and agent-test.log, using the approved baseline
+            in the issue metadata. No edits, repair, or test bypass.
+            Request changes if gameplay or security requirements are unmet.
+      - name: Validate review result
+        id: verdict
+        run: |
+          set -euo pipefail
+          jq -e '.verdict == "pass" or .verdict == "changes_requested"' agent-review.json >/dev/null
+          echo "verdict=$(jq -r .verdict agent-review.json)" >> "$GITHUB_OUTPUT"
+          echo "head=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+  report:
+    if: always()
+    needs: [build, test, review]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        if: needs.build.result == 'success'
+        continue-on-error: true
+        with:
+          name: project-browser-test
+          path: ${{ runner.temp }}/project-browser
+      - name: Emit immutable re-verification receipt
+        if: needs.build.result == 'success'
+        shell: bash
+        env:
+          ISSUE: ${{ needs.build.outputs.issue }}
+          PR: ${{ needs.build.outputs.pr }}
+          HEAD: ${{ needs.build.outputs.sha }}
+          PROJECT_ID: ${{ needs.build.outputs.project_id }}
+          CONTRACT_HASH: ${{ needs.build.outputs.contract_hash }}
+          SCENARIO_COUNT: ${{ needs.build.outputs.scenario_count }}
+          TEST_PASSED: ${{ needs.test.outputs.passed }}
+          TEST_HEAD: ${{ needs.test.outputs.head }}
+          REVIEW_VERDICT: ${{ needs.review.outputs.verdict }}
+          REVIEW_HEAD: ${{ needs.review.outputs.head }}
+        run: |
+          set -euo pipefail
+          acceptance=null
+          candidate="$RUNNER_TEMP/project-browser/project-acceptance.json"
+          if [[ "$TEST_PASSED" == true && "$REVIEW_VERDICT" == pass && "$HEAD" == "$TEST_HEAD" && "$HEAD" == "$REVIEW_HEAD" ]] &&
+             jq -e --arg sha "$HEAD" --arg project "$PROJECT_ID" --arg digest "$CONTRACT_HASH" --argjson count "$SCENARIO_COUNT" '
+               .version==1 and .headSha==$sha and .projectId==$project and .contractHash==$digest and
+               .passed==true and (.checks|type=="array" and length==$count and length>0) and all(.checks[];.passed==true)
+             ' "$candidate" >/dev/null 2>&1; then
+            acceptance="$(jq -c . "$candidate")"
+          fi
+          outcome=BLOCKED
+          if [[ "$acceptance" != null ]]; then outcome=READY; fi
+          jq -n --arg repo "$GITHUB_REPOSITORY" --argjson run "$GITHUB_RUN_ID"             --argjson issue "$ISSUE" --arg pr "$PR" --arg outcome "$outcome"             --arg sha "$HEAD" --arg tested "$TEST_HEAD" --arg reviewed "$REVIEW_HEAD"             --arg test "$TEST_PASSED" --arg review "$REVIEW_VERDICT"             --argjson acceptance "$acceptance"             '{version:1,repository:$repo,run_id:$run,issue_number:$issue,pr_url:$pr,
+              outcome:$outcome,tested_head_sha:(if $tested==$sha then $tested else null end),
+              reviewed_head_sha:(if $reviewed==$sha then $reviewed else null end),
+              checks:{build:"success",test:$test,review:$review,repair:"skipped",retest:"",final_review:""}
+            } + (if $acceptance==null then {} else {projectAcceptance:$acceptance} end)' > agent-result.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: agent-completion
+          path: agent-result.json
+          if-no-files-found: ignore
