@@ -3,3 +3,5 @@ export function validateProjectGame(game:unknown,allowedPaths:string[],finalCont
 export function validateGameRules(spec:unknown):unknown;
 export function validateGameAcceptance(spec:unknown,acceptance:unknown):{contractReady:boolean};
 export function runGameModelAcceptance(spec:unknown,acceptance:unknown,applyAction:(state:unknown,action:unknown)=>unknown):any;
+
+export const GAME_RULE_CATEGORIES: readonly string[];
