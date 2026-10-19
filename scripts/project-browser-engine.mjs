@@ -27,11 +27,20 @@ export async function runScenarios(contract, origin, { executablePath, timeout =
   const checks = [];
   const deadline = Date.now() + timeout;
   try {
-    // Chromium's single-process mode cannot safely close one isolated context
-    // and continue with the next. Keep normal renderer process separation.
-    browser = await playwright.launch({ executablePath: executablePath ?? await chromium.executablePath(), args: chromium.args.filter(arg=>arg!=='--single-process'), ...(proxy?{proxy}:{}), headless: true, timeout: Math.min(20_000, timeout) });
-    timer = setTimeout(() => { void browser.close().catch(() => {}); }, Math.max(1, deadline - Date.now()));
+    // Keep the multi-process browser for isolated local CI. The Lambda-tuned
+    // Chromium executable needs its packaged --single-process argument when
+    // running inside Vercel. In that mode use a fresh browser per scenario:
+    // recycling its contexts can terminate the entire serverless browser.
+    const launch = () => playwright.launch({
+      executablePath: executablePath ?? chromium.executablePath(),
+      args: deployed ? chromium.args : chromium.args.filter(arg=>arg!=='--single-process'),
+      ...(proxy?{proxy}:{}), headless: true,
+      timeout: Math.min(20_000, Math.max(1,deadline-Date.now()))
+    });
+    if (!deployed) browser = await launch();
+    timer = setTimeout(() => { void browser?.close().catch(() => {}); }, Math.max(1, deadline - Date.now()));
     for (const scenario of contract.scenarios) {
+    if(deployed) browser = await launch();
     // Scenarios are independent test cases. Navigation within a scenario keeps
     // its storage, so reload persistence is tested without contaminating peers.
     const context = await browser.newContext({ serviceWorkers: 'block', acceptDownloads: false,...(deployed?{extraHTTPHeaders:{'x-vercel-skip-toolbar':'1'}}:{}) });
@@ -95,7 +104,10 @@ export async function runScenarios(contract, origin, { executablePath, timeout =
         if (!assertions || denied.length) throw Error(denied[0] ?? 'No assertions executed');
         checks.push({ name: scenario.name, passed: true, detail: `${assertions} rendered application assertion(s) passed` });
       } catch (error) { checks.push({ name: scenario.name, passed: false, detail: String(error.message).slice(0, 600) }); }
-      finally { await context.close().catch(() => {}); }
+      finally {
+        await context.close().catch(() => {});
+        if(deployed) { await browser?.close().catch(()=>{}); browser=undefined; }
+      }
     }
   } finally {
     clearTimeout(timer);
