@@ -1,6 +1,6 @@
 -- Executive registry: contracts are explicitly capability-scoped and versioned.
 -- Specialist execution internals remain outside this layer.
-create table public.executive_orchestrators(
+create table if not exists public.executive_orchestrators(
  id uuid primary key default gen_random_uuid(),
  actor_id uuid not null references public.actors(id),
  slug text not null check(slug ~ '^[a-z][a-z0-9_-]{1,49}$'),
@@ -17,7 +17,7 @@ create table public.executive_orchestrators(
  unique(actor_id,slug),
  check(adapter='mission' and endpoint_key is null or adapter='external' and endpoint_key is not null and endpoint_key ~ '^[a-z][a-z0-9_-]{2,70}$')
 );
-create table public.executive_delegations(
+create table if not exists public.executive_delegations(
  id uuid primary key default gen_random_uuid(),
  orchestrator_id uuid not null references public.executive_orchestrators(id) on delete restrict,
  actor_id uuid not null references public.actors(id),
@@ -38,15 +38,15 @@ create table public.executive_delegations(
  unique(actor_id,chat_id,request_key),
  check(result is null or jsonb_typeof(result)='object')
 );
-create table public.executive_delegation_events(
+create table if not exists public.executive_delegation_events(
  id uuid primary key default gen_random_uuid(),
  delegation_id uuid not null references public.executive_delegations(id) on delete restrict,
  event text not null,
  evidence jsonb not null default '{}'::jsonb,
  created_at timestamptz not null default now()
 );
-create index executive_delegate_queue on public.executive_delegations(status,deadline);
-create index executive_registry_capabilities on public.executive_orchestrators using gin(capabilities);
+create index if not exists executive_delegate_queue on public.executive_delegations(status,deadline);
+create index if not exists executive_registry_capabilities on public.executive_orchestrators using gin(capabilities);
 alter table public.executive_orchestrators enable row level security;
 alter table public.executive_delegations enable row level security;
 alter table public.executive_delegation_events enable row level security;
@@ -54,6 +54,8 @@ revoke all on public.executive_orchestrators,public.executive_delegations,public
 grant select,insert,update on public.executive_orchestrators,public.executive_delegations to service_role;
 grant select,insert on public.executive_delegation_events to service_role;
 
+do $migration$
+begin
 create function public.register_executive_orchestrator(p_actor uuid,p_slug text,p_title text,
  p_description text,p_capabilities text[],p_adapter text,p_endpoint text default null)
 returns jsonb language plpgsql security invoker set search_path=public as $$
@@ -79,7 +81,11 @@ begin
  values(p_actor,p_slug,p_title,p_description,p_capabilities,p_adapter,p_endpoint) returning * into o;
  return to_jsonb(o);
 end $$;
+exception when duplicate_function then null;
+end $migration$;
 
+do $migration$
+begin
 create function public.propose_executive_delegation(p_actor uuid,p_chat uuid,p_slug text,
  p_request text,p_objective text,p_capability text,p_success jsonb,p_budget integer,p_deadline timestamptz)
 returns jsonb language plpgsql security invoker set search_path=public as $$
@@ -107,9 +113,13 @@ begin
  insert into executive_delegation_events(delegation_id,event,evidence) values(d.id,'proposed',jsonb_build_object('specialist',o.slug,'version',o.version));
  return to_jsonb(d);
 end $$;
+exception when duplicate_function then null;
+end $migration$;
 
 -- No specialist may self-report executive acceptance. The executive must
 -- independently accept or reject a submitted evidence package.
+do $migration$
+begin
 create function public.transition_executive_delegation(p_id uuid,p_actor uuid,p_chat uuid,
  p_action text,p_evidence jsonb default '{}'::jsonb)
 returns jsonb language plpgsql security invoker set search_path=public as $$
@@ -134,6 +144,8 @@ begin
  insert into executive_delegation_events(delegation_id,event,evidence) values(d.id,p_action,p_evidence);
  return to_jsonb(d);
 end $$;
+exception when duplicate_function then null;
+end $migration$;
 revoke all on function public.register_executive_orchestrator(uuid,text,text,text,text[],text,text),
  public.propose_executive_delegation(uuid,uuid,text,text,text,text,jsonb,integer,timestamptz),
  public.transition_executive_delegation(uuid,uuid,uuid,text,jsonb) from public,anon,authenticated;
