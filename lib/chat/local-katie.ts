@@ -99,8 +99,38 @@ const MEMORY_SYNONYMS: Record<string, string[]> = {
   condo: ["property", "real estate", "home"],
 };
 
+function editDistanceAtMostTwo(a: string, b: string): boolean {
+  if (Math.abs(a.length - b.length) > 2) return false;
+  const previous = Array.from({ length: b.length + 1 }, (_, i) => i);
+  for (let i = 1; i <= a.length; i++) {
+    const next = [i];
+    for (let j = 1; j <= b.length; j++) {
+      next[j] = Math.min(next[j - 1] + 1, previous[j] + 1,
+        previous[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+    }
+    if (Math.min(...next) > 2) return false;
+    previous.splice(0, previous.length, ...next);
+  }
+  return previous[b.length] <= 2;
+}
+
 export function isSystemPromptRequest(message: string): boolean {
-  return SYSTEM_PROMPT_REQUEST_PATTERNS.some((pattern) => pattern.test(message));
+  if (SYSTEM_PROMPT_REQUEST_PATTERNS.some(pattern => pattern.test(message))) return true;
+  // A bounded typo fallback only for explicit inspection commands. Never
+  // reinterpret quoted examples, negations, or general discussion as commands.
+  const normalized = message.trim().toLowerCase().replace(/[?!.,]+$/g, "");
+  if (/\b(?:don't|do not|never|without|not to)\s+(?:show|display|print|give|reveal)\b/.test(normalized)) return false;
+  const command = /^(?:(?:please|can you|could you|would you)\s+)?(?:show|display|print|give|reveal)\s+(?:me\s+)?(?:your|the|my|current|actual|exact|full)\s+/;
+  if (!command.test(normalized)) return false;
+  const remainder = normalized.replace(command, "");
+  const tokens = remainder.match(/[a-z]+/g) ?? [];
+  if (tokens.length < 2 || tokens.length > 5) return false;
+  for (let i = 0; i < tokens.length - 1; i++) {
+    if (editDistanceAtMostTwo(tokens[i], "system") &&
+      (editDistanceAtMostTwo(tokens[i + 1], "prompt") ||
+        editDistanceAtMostTwo(tokens[i + 1], "message"))) return true;
+  }
+  return false;
 }
 
 export function isExplicitMemoryCorrection(message: string): boolean {
