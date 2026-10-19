@@ -99,6 +99,7 @@ async function advance(p: Project) {
                 await finish('retry', { detail: 'TARGETED REPAIR ONLY. Preserve approved scope and verified prior milestones. Fix these reviewer findings: ' + notes, findings, failed_mission: m.id });
                 return;
             }
+            if(p.phase==='research'&&await projectRpc<boolean>('recover_project_research',{p_id:p.id,p_lease:p.lease}))return;
             await finish('block', { detail: 'A project milestone is blocked: ' + (notes || m.detail || m.status) });
             return;
         }

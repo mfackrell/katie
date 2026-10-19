@@ -201,3 +201,12 @@ test('game specification can express arbitrary exact states without sending an u
   assert.equal(normal.ledger[0].text.format.type,'json_schema');assert.equal(normal.ledger[0].text.format.schema.properties.game,undefined);
  }finally{if(prior===undefined)delete process.env.OPENAI_API_KEY;else process.env.OPENAI_API_KEY=prior;}
 });
+
+test('measured whole-candidate length reaches review before judgment, including the research objective',async()=>{
+ for(const limit of [3,700]){const m=mission();m.objective=`Original build context. Give concise source-supported findings in at most ${limit} words. Do not implement.`;
+ const compose={...job(m,'compose','compose'),status:'completed',result:{text:'Six complete words constitute this candidate'}},review=job(m,'review','review');let committed;const inputs=[];
+ const {executeClaim}=modules({'@/lib/missions/store':{readMission:async()=>({mission:m,jobs:[compose,review]}),rpc:async(_,args)=>{committed=args;return true;}}})('@/lib/missions/worker');
+ await executeClaim({mission:m,job:review},async(_,instruction,input)=>{inputs.push(input);if(instruction.includes('KATIE_REQUIRED_DRAFT_REVIEW')){const evidence=JSON.parse(input.split('Evidence and candidate:\n')[1]);assert.equal(evidence.measuredLength.wordCount,6);assert.equal(evidence.measuredLength.wordLimit,limit);assert.match(instruction,/never estimate a conflicting count/);return{text:JSON.stringify(verdict()),sources:[],calculations:[],model:'fixture'};}return{text:JSON.stringify(assessment),sources:[],calculations:[],model:'fixture'};});
+ assert.doesNotMatch(inputs[0],/Six complete words/);assert.equal(committed.p_result.wordLimit,limit);assert.equal(committed.p_result.verdict,limit===3?'changes_requested':'pass');
+ }
+});
