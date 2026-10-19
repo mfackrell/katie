@@ -38,6 +38,20 @@ test('explicit Executive software development requests delegate to existing spec
   'Executive: update the application to display mission review status.'
  ])assert.equal(developmentDelegationIntent(text),true,text);
 });
+test('development routing requires a complete delegated objective',()=>{
+ for(const [incomplete,complete] of [
+  ['Delegate software development to',
+   'Delegate software development to fix the failing checkout integration tests.'],
+  ['Have the development agent fix',
+   'Have the development agent fix the failing checkout integration tests.'],
+  ['Executive: update',
+   'Executive: update the application to display mission review status.']
+ ]){
+  assert.equal(developmentDelegationIntent(incomplete),false,incomplete);
+  assert.equal(developmentDelegationIntent(`  ${incomplete}  `),false,'padding must not complete an objective');
+  assert.equal(developmentDelegationIntent(complete),true,complete);
+ }
+});
 test('ordinary app requests and unrelated content stay with existing project router',()=>{
  for(const text of [
   'Build a new dashboard for my invoices.',
