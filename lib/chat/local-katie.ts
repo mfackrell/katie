@@ -112,7 +112,7 @@ export function isExplicitMemoryCorrection(message: string): boolean {
   // Ordinary correction verbs require a nearby memory reference. Clarification
   // verbs require an OWNED memory reference, so a question such as "clarify
   // what you mean by memory architecture" is not treated as a write.
-  const explicitEdit = /\b(?:correct|change|update|revise|fix|replace|remove|delete|forget|wrong|incorrect|not true|inaccurate)\b[^\n]{0,180}\b(?:memory|remember(?:ed)?|stored|saved)\b|\b(?:memory|remember(?:ed)?|stored|saved)\b[^\n]{0,180}\b(?:correct|change|update|revise|fix|replace|remove|delete|forget|wrong|incorrect|inaccurate)\b/i;
+  const explicitEdit = /\b(?:correct|change|update|revise|fix|replace|remove|delete|forget|clear|erase|wipe|purge|wrong|incorrect|not true|inaccurate)\b[^\n]{0,180}\b(?:memory|remember(?:ed)?|stored|saved)\b|\b(?:memory|remember(?:ed)?|stored|saved)\b[^\n]{0,180}\b(?:correct|change|update|revise|fix|replace|remove|delete|forget|clear|erase|wipe|purge|wrong|incorrect|inaccurate)\b/i;
   const clarifyEdit = /\b(?:clarify|clarification|amend|refine|adjust|reframe)\b[^\n]{0,180}\b(?:(?:your|the|my|its)\s+(?:(?:long[- ]term|saved|stored)\s+)?memory|facts you have remembered|what you (?:remembered|stored|saved))\b|\b(?:your|the|my|its)\s+(?:(?:long[- ]term|saved|stored)\s+)?memory\b[^\n]{0,180}\b(?:clarify|clarification|amend|refine|adjust|reframe)\b/i;
   return explicitEdit.test(message) || clarifyEdit.test(message);
 }
