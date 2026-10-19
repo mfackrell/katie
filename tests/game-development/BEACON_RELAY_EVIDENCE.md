@@ -18,7 +18,20 @@ The existing `scripts/project-browser-engine.mjs` harness is used by `beacon-rel
 
 The actual built server was attempted with `next start --hostname 127.0.0.1 --port 3100` and failed: `listen EPERM: operation not permitted 127.0.0.1:3100`. Bundled Chromium extracted successfully, but the real harness launch also failed with `FATAL:content/browser/sandbox_host_linux.cc:41 ... shutdown: Operation not permitted (1)` / SIGTRAP. No browser interaction or rendered assertion executed. This is a sandbox infrastructure failure, not evidence of a gameplay defect. No environment, permissions, orchestration or server configuration was changed to work around it. The platform test stage must run the supplied browser check in its authorized environment.
 
-No private Preview or immutable committed patch SHA exists in this implementation workspace. Base HEAD was `016f65251815d583de26e259d2f39f4b81c1856a`; this is **not** the tested patch SHA. `beacon-relay.source-sha256` binds the tested source files. The owning workflow must commit, independently test/review, and produce the draft PR and immutable tested SHA. No commit, push, merge, deployment or production access was performed here. A passing model/build is not a completed live validation.
+The initial implementation workspace had no immutable committed patch SHA; its base was `016f65251815d583de26e259d2f39f4b81c1856a` (not the tested patch). The repair checkout now contains immutable commit `3e113ed70dd737b2a32c6e10e406b2657568d487`. The local repair verification below tested that commit's unchanged game source and acceptance files. `beacon-relay.source-sha256` also binds those files. No private Preview was tested. Draft PR delivery and Preview verification remain with the owning workflow. No commit, push, merge, deployment or production access was performed here. A passing model/build is not a completed live validation.
+
+## Repair verification (2026-10-19)
+
+Classification: TOOL/TEST INFRASTRUCTURE. The supplied CI log completed successfully; the independent review identified missing executed browser evidence, not a proven gameplay defect. No gameplay or test changes were warranted.
+
+Tested commit: `3e113ed70dd737b2a32c6e10e406b2657568d487`. All seven entries in `beacon-relay.source-sha256` matched before verification. Only this evidence document was updated afterward.
+
+- Focused reporter command in Reproduce: **5 passed**, zero failed, cancelled, skipped or todo.
+- `node node_modules/next/dist/bin/next build`: **passed**, including lint/type validation and static generation of `/project-pilots/beacon-relay`.
+- Built server command in Reproduce: **blocked**, exit 1, `listen EPERM: operation not permitted 127.0.0.1:3100`.
+- `BEACON_RELAY_ORIGIN=http://127.0.0.1:3100 node tests/game-development/beacon-relay.browser.mjs`: **blocked**, exit 1 before page creation. Packaged Chromium failed at `content/browser/sandbox_host_linux.cc:41`, `shutdown: Operation not permitted (1)`, then SIGTRAP. **Zero browser interactions or rendered assertions executed.**
+
+The blocking finding remains unresolved. The platform owner must run the existing browser command against this immutable source in an authorized environment that permits the local server and Chromium, and retain its receipt. Required movement, scoring, RESOLVE reload, victory freeze and reset persistence browser results are still NOT_RUN; model/build success does not substitute for them. Shared infrastructure, permissions and runners were not changed.
 
 ## Rule traceability
 
