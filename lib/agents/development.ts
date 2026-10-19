@@ -37,7 +37,7 @@ export function parseCompletionReceipt(value: unknown, repo: string, issue: numb
   return { ...receipt, outcome: conclusion === "success" && receipt.outcome === "READY" && receipt.pr_url && passed && boundHeads && browserPassed ? "READY" as const : "BLOCKED" as const };
 }
 // Read one fixed JSON file in a bounded GitHub artifact. No filesystem extraction or shell.
-export function completionJson(zip: Buffer): unknown {
+export function completionJson(zip: Buffer, entryName = 'agent-result.json'): unknown {
   if (zip.length > 1_000_000) throw new Error("Artifact too large");
   for (let p = Math.max(0, zip.length - 65557); p <= zip.length - 22; p++) {
     if (zip.readUInt32LE(p) !== 0x06054b50) continue;
@@ -51,7 +51,7 @@ export function completionJson(zip: Buffer): unknown {
       const name = zip.subarray(offset + 46, offset + 46 + nameLength).toString();
       const local = zip.readUInt32LE(offset + 42);
       offset += 46 + nameLength + extra + comment;
-      if (name !== "agent-result.json") continue;
+      if (name !== entryName) continue;
       if (size > 65536 || unpacked > 65536 || local + 30 > zip.length || zip.readUInt32LE(local) !== 0x04034b50) throw new Error("Receipt exceeds bounds");
       const start = local + 30 + zip.readUInt16LE(local + 26) + zip.readUInt16LE(local + 28);
       if (start + size > zip.length) throw new Error("Truncated receipt");
@@ -151,8 +151,11 @@ export async function retryImmutableProjectVerification(task: AgentTask, project
  const parsed=receiptSchema.safeParse(task.external.receipt);
  if(!parsed.success)return false;
  const receipt=parsed.data;
- if(receipt.outcome!=='BLOCKED'||receipt.checks.test!=='false'||receipt.checks.review!=='pass'||
-   receipt.checks.repair!=='failure'||!receipt.pr_url||!receipt.tested_head_sha)return false;
+ const failedTrustedSetup=receipt.checks.review==='pass'&&receipt.checks.repair==='failure';
+ const failedBrowserBootstrap=receipt.checks.review==='changes_requested'&&receipt.checks.repair==='skipped'&&
+    typeof task.external.verificationSince==='string';
+ if(receipt.outcome!=='BLOCKED'||receipt.checks.test!=='false'||(!failedTrustedSetup&&!failedBrowserBootstrap)||
+    !receipt.pr_url||!receipt.tested_head_sha)return false;
  const issue=Number(task.external.issueNumber),prNumber=Number(receipt.pr_url.split('/').pop());
  if(!Number.isSafeInteger(issue)||issue<1||!Number.isSafeInteger(prNumber)||prNumber<1||
     receipt.issue_number!==issue||task.external.prUrl!==receipt.pr_url)return false;
@@ -168,17 +171,35 @@ export async function retryImmutableProjectVerification(task: AgentTask, project
    pr.data.base.ref!=='main')return false;
  const testJob=jobs.data.jobs.find(j=>j.name==='test'&&j.conclusion==='success');
  if(!testJob)return false;
- const log=await client.actions.downloadJobLogsForWorkflowRun({owner:binding.owner,repo:binding.repo,job_id:testJob.id});
- const output=typeof log.data==='string'?log.data:Buffer.from(log.data as ArrayBuffer).toString('utf8');
- // Fail closed if verification failure isn't unmistakably about trusted setup.
- const setupFailure=/Isolated baseline npm installation failed|Trusted baseline dependency preparation failed/.test(output);
- const npmFailure=/npm error Exit handler never called|npm error code ENOTCACHED|Isolated baseline npm installation failed|Trusted baseline dependency preparation failed/.test(output);
- // A known read-only test-runner cache mount error is also infrastructure,
- // not evidence that the approved gameplay is wrong. A new verification-only
- // run must still pass every test, review and browser scenario independently.
- const viteCacheFailure=/ENOENT: no such file or directory, mkdir ['"]\/app\/node_modules\/\.vite['"]/.test(output)
-   && /Vitest failed or did not produce a completion report/.test(output);
- if(!(setupFailure&&npmFailure)&&!viteCacheFailure)return false;
+ let trustedInfrastructureFailure=false;
+ if(failedTrustedSetup){
+    const log=await client.actions.downloadJobLogsForWorkflowRun({owner:binding.owner,repo:binding.repo,job_id:testJob.id});
+    const output=typeof log.data==='string'?log.data:Buffer.from(log.data as ArrayBuffer).toString('utf8');
+    // Fail closed if verification failure isn't unmistakably about trusted setup.
+    const setupFailure=/Isolated baseline npm installation failed|Trusted baseline dependency preparation failed/.test(output);
+    const npmFailure=/npm error Exit handler never called|npm error code ENOTCACHED|Isolated baseline npm installation failed|Trusted baseline dependency preparation failed/.test(output);
+    const viteCacheFailure=/ENOENT: no such file or directory, mkdir ['"]\/app\/node_modules\/\.vite['"]/.test(output)
+      && /Vitest failed or did not produce a completion report/.test(output);
+    trustedInfrastructureFailure=(setupFailure&&npmFailure)||viteCacheFailure;
+ }else if(failedBrowserBootstrap){
+    const artifacts=await client.actions.listWorkflowRunArtifacts({owner:binding.owner,repo:binding.repo,
+      run_id:receipt.run_id,per_page:20});
+    const browserArtifact=artifacts.data.artifacts.find(a=>a.name==='project-browser-test'&&!a.expired&&a.size_in_bytes<=1_000_000);
+    if(browserArtifact){
+      const binary=await client.actions.downloadArtifact({owner:binding.owner,repo:binding.repo,
+        artifact_id:browserArtifact.id,archive_format:'zip'});
+      const raw=completionJson(Buffer.from(binary.data as ArrayBuffer),'project-acceptance.json');
+      const record=projectAcceptanceSchema.safeParse(raw);
+      const bindingContext=await getDevelopmentProjectContext(task.id);
+      trustedInfrastructureFailure=!!record.success && !!bindingContext &&
+        record.data.passed===false && record.data.headSha===receipt.tested_head_sha &&
+        record.data.projectId===project.id && record.data.contractHash===bindingContext.contractHash &&
+        record.data.checks.length===1 && record.data.checks[0].name==='browser runner' &&
+        record.data.checks[0].passed===false &&
+        record.data.checks[0].detail==="EINVAL: invalid argument, chown '/tmp/fonts'";
+    }
+ }
+ if(!trustedInfrastructureFailure)return false;
  const bindingContext=await getDevelopmentProjectContext(task.id);
  if(!bindingContext||bindingContext.projectId!==project.id||
     bindingContext.scopeHash!==project.approved_hash)return false;
@@ -186,7 +207,8 @@ export async function retryImmutableProjectVerification(task: AgentTask, project
  // and pinned SHA. No code-generation or repair job exists in this workflow.
  await client.actions.createWorkflowDispatch({owner:binding.owner,repo:binding.repo,workflow_id:'project-reverify.yml',
   ref:'main',inputs:{issue_number:String(issue),pr_number:String(prNumber),expected_sha:receipt.tested_head_sha}});
- const saved=await projectRpc<{status:string}|null>('retry_project_verification',{
+ const saved=await projectRpc<{status:string}|null>(failedBrowserBootstrap
+   ? 'retry_project_browser_bootstrap' : 'retry_project_verification',{
   p_id:project.id,p_actor:project.actor_id,p_chat:project.chat_id,
   p_mission:project.active_mission_id,p_issue:issue,p_run:receipt.run_id,p_pr:prNumber,p_head:receipt.tested_head_sha,
  });

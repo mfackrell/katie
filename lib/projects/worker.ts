@@ -255,9 +255,11 @@ async function reconcileBlockedInfrastructureProjects(){
         if(!failed)continue;
         const receipt=(failed.result?.external as Record<string,unknown>|undefined)?.receipt as Record<string,unknown>|undefined;
         const checks=receipt?.checks as Record<string,unknown>|undefined;
-        if(receipt?.outcome!=='BLOCKED'||checks?.test!=='false'||checks?.review!=='pass'||checks?.repair!=='failure')continue;
+        const setupFailure=checks?.review==='pass'&&checks?.repair==='failure';
+        const browserBootstrapFailure=checks?.review==='changes_requested'&&checks?.repair==='skipped';
+        if(receipt?.outcome!=='BLOCKED'||checks?.test!=='false'||(!setupFailure&&!browserBootstrapFailure))continue;
         const task=await readTask(failed.id);
-        if(typeof task.external.verificationSince==='string')continue;
+        if(!browserBootstrapFailure&&typeof task.external.verificationSince==='string')continue;
         try {
             if(await retryImmutableProjectVerification(task,p)){
                 console.info('[Projects] Existing project commit queued for verification-only recovery',{project:p.id,mission:p.active_mission_id});

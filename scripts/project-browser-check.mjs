@@ -3,7 +3,7 @@ import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { createServer } from 'node:net';
-import {runScenarios} from './project-browser-engine.mjs';
+import {runScenarios,prepareTrustedChromium} from './project-browser-engine.mjs';
 export {localRequestAllowed,runScenarios} from './project-browser-engine.mjs';
 import {sandboxArgs} from './project-sandbox.mjs';
 import { parseProjectContext } from './project-context.mjs';
@@ -14,7 +14,7 @@ async function assertPortFree(port) {
   await new Promise((done, reject) => { server.once('error', reject); server.listen(port, '127.0.0.1', done); });
   await new Promise(done => server.close(done));
 }
-export async function runIsolatedProjectCheck({ request, port, output, dependencies }) {
+export async function runIsolatedProjectCheck({ request, port, output, dependencies, browserExecutablePath }) {
   if (resolve(request) === resolve(output)) throw Error('Acceptance output must not overwrite the original request');
   const original = readFileSync(request, 'utf8');
   rmSync(output, { force: true }); // Never leave a previous run's passing artifact.
@@ -52,7 +52,13 @@ export async function runIsolatedProjectCheck({ request, port, output, dependenc
       await new Promise(r => setTimeout(r, 100));
     }
     if (!ready) throw Error('Local Next application did not start');
-    report.checks = await runScenarios(metadata.contract, origin, { timeout: TOTAL_MS - (Date.now() - started) - 5000 });
+    // The browser bundle and Open Sans font tree were expanded by the trusted
+    // verifier before entering the user namespace. Sparticuz calls chown()
+    // while expanding /tmp/fonts, which fails under UID-mapped namespaces.
+    // The already prepared binary is read-only to generated app code.
+    if (typeof browserExecutablePath !== 'string' || !browserExecutablePath.startsWith('/tmp/') || !existsSync(browserExecutablePath))
+      throw Error('Trusted Chromium executable was not prepared before namespace entry');
+    report.checks = await runScenarios(metadata.contract, origin, { executablePath: browserExecutablePath, timeout: TOTAL_MS - (Date.now() - started) - 5000 });
     const finalHead = execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8', timeout: 5000 }).trim();
     report.passed = !expired && finalHead === headSha && server.exitCode === null && report.checks.length === metadata.contract.scenarios.length && report.checks.every(c => c.passed);
   } catch (error) { report.checks.push({ name: 'browser runner', passed: false, detail: String(error.message).slice(0, 600) }); }
@@ -80,10 +86,14 @@ export async function checkProject({ request, port, output, dependencies }) {
   const report = { version: 1, projectId: metadata.projectId, contractHash: metadata.contractHash, headSha, passed: false, checks: [] };
   let child, timer, logs = '';
   try {
+    // Provision fonts and the Chromium executable in the trusted runner
+    // BEFORE entering an unprivileged user namespace. No model-authored
+    // application code executes during provisioning.
+    const browserExecutablePath = await prepareTrustedChromium();
     const moduleUrl = import.meta.url;
     const code = `import { runIsolatedProjectCheck } from ${JSON.stringify(moduleUrl)}; const r = await runIsolatedProjectCheck(JSON.parse(process.argv[1])); if (!r.passed) process.exitCode = 1;`;
     child = spawn('unshare', ['--user', '--map-root-user', '--net', '--pid', '--fork', '--kill-child=SIGKILL', 'python3', '-c', networkBootstrap,
-      process.execPath, '--input-type=module', '-e', code, JSON.stringify({ request: resolve(request), port, output: resolve(output), dependencies })], {
+      process.execPath, '--input-type=module', '-e', code, JSON.stringify({ request: resolve(request), port, output: resolve(output), dependencies, browserExecutablePath })], {
       detached: true, stdio: ['ignore', 'pipe', 'pipe'],
       env: { PATH: process.env.PATH, HOME: '/tmp', TMPDIR: '/tmp', NODE_ENV: 'production', NEXT_TELEMETRY_DISABLED: '1' },
     });

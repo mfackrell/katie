@@ -1,5 +1,15 @@
 import {chromium as playwright} from 'playwright-core';
 import chromium from '@sparticuz/chromium';
+import {accessSync,constants} from 'node:fs';
+// Only the trusted parent of the browser namespace calls this. The extracted
+// binary and its fonts are prepared on the CI runner before UID mapping;
+// unprivileged child processes must never invoke tar/chown for /tmp/fonts.
+export async function prepareTrustedChromium() {
+  const executablePath = await chromium.executablePath();
+  if(executablePath !== '/tmp/chromium')throw Error('Unexpected Chromium executable location');
+  accessSync(executablePath,constants.X_OK);
+  return executablePath;
+}
 import {validateContract} from './project-context.mjs';
 const TOTAL_MS=150000;
 export function localRequestAllowed(raw, origin, method = 'GET') {
