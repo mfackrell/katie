@@ -73,7 +73,7 @@ export async function startExecutiveDevelopment(input:{actorId:string;chatId:str
  const specialist=registry?.find(r=>r.capabilities.includes('repository_maintenance')&&r.capabilities.includes('web_application_delivery'));
  if(!specialist)return 'An active development specialist with repository authority is not registered.';
  const {data:repo,error:repoError}=await db.from('repo_sync_runs').select('id,repository_full_name').eq('id',input.activeRepoId).maybeSingle<{id:string;repository_full_name:string}>();
- if(repoError||!repo||!/^[-\\w]+\\/[-\\w.]+$/.test(repo.repository_full_name))return 'The selected repository is not a verified connected repository.';
+ if(repoError||!repo||!repo.repository_full_name.includes('/'))return 'The selected repository is not a verified connected repository.';
  const {data:workers,error:workerError}=await db.from('managed_agents').select('id,config').eq('archived',false).limit(100).returns<Array<{id:string;config:{name?:string;development?:boolean}}>>();
  if(workerError)throw Error('Development worker inventory unavailable');
  const leader=workers?.find(a=>a.config?.name==='Mission Lead');
