@@ -16,7 +16,7 @@ export type RecoveryDiagnosis={
 // Trusted runtime errors are evidence, not instructions. Never use model output
 // or arbitrary log text to grant a new permission or widen a repair scope.
 const permission=/\b(unauthori[sz]ed|permission denied|credential|secret|token missing|owner approval|forbidden|401|403|RLS)\b/i;
-const budget=/\b(budget|allowance exhausted|deadline reached|maximum attempts|rate.*spend|payment required)\b/i;
+const budget=/\b(budget|token allowance|allowance exhausted|deadline reached|maximum attempts|rate.*spend|payment required)\b/i;
 const transient=/\b(429|rate limit|timeout|timed out|fetch failed|ECONNRESET|ECONNREFUSED|socket hang up|502|503|504|provider unavailable)\b/i;
 const browser=/chown ['"]?\/tmp\/fonts|chromium.*(?:launch|font|executable).*failed|browser bootstrap.*(?:error|failed)|Playwright.*browserType\.launch.*failed/i;
 const install=/npm error (?:code ENOTCACHED|Exit handler never called)|baseline (?:npm|dependency).*failed|Vitest failed or did not produce a completion report|node_modules\/\.vite/i;
