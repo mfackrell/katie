@@ -262,6 +262,11 @@ test('chat-native game intake selects the game registration RPC while ordinary a
  assert.equal(gameProjectIntent('Build a board game catalog website.'),false);
  assert.equal(gameProjectIntent('Build a video game reviews website.'),false);
  assert.equal(gameProjectIntent('Build a board game review blog.'),false);
+ assert.equal(gameProjectIntent('Build a catalog of board games.'),false);
+ assert.equal(gameProjectIntent('Build a review site for video games.'),false);
+ assert.equal(gameProjectIntent('Build a blog reviewing board games.'),false);
+ assert.equal(gameProjectIntent('Build an app for video game reviews.'),false);
+ assert.equal(gameProjectIntent('I want to recreate Fortress America, the original board game, in a browser app. Require independent review before completion.'),true);
  assert.equal(gameProjectIntent('Build a turn-based game with a game sales dashboard.'),true);
 });
 test('game specifications cannot bypass registered rules or swap a loading-only final contract',async()=>{

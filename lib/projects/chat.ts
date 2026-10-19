@@ -9,7 +9,11 @@ export function startProjectIntent(text: string) {
  return !artifact && (direct||desire) && /\b(?:browser|website|web app|application|app|game|dashboard|portal|software|program|API)\b/i.test(text) && !/^.{0,80}\b(?:do not|don't|never|not asking you to)\s+(?:want to |you to )?(?:build|create|develop|make|implement|start)\b/i.test(text);
 }
 export function gameProjectIntent(text:string) {
- const dataProduct=/\bgames?\s+(?:sales?|analytics|reviews?|catalogs?|inventory|statistics|collection|library|tracking)\b/i.test(text)&&/\b(?:dashboard|tracker|analytics|portal|catalog|store|website|collection|library|blog|directory|forum|wiki)\b/i.test(text);
+ const dataArtifact=/\b(?:dashboard|tracker|analytics|portal|catalog|store|website|site|collection|library|blog|directory|forum|wiki|app|application|software)\b/i.test(text);
+ const forwardProduct=/\bgames?\s+(?:sales?|analytics|reviews?|catalogs?|inventory|statistics|collection|library|tracking|news|prices?)\b/i.test(text)&&dataArtifact;
+ const reverseCatalog=/\b(?:catalogs?|collection|library|inventory|directory|sales|analytics|statistics)\s+(?:of|for|about)\b.{0,80}\bgames?\b/i.test(text);
+ const reverseReview=/\b(?:reviews?|news|price)\s+(?:site|website|blog|app|portal)\s+(?:for|of|about|covering)\b.{0,80}\bgames?\b|\b(?:blog|site|website|app)\s+(?:reviewing|covering)\b.{0,80}\bgames?\b/i.test(text);
+ const dataProduct=forwardProduct||reverseCatalog||reverseReview;
  const primaryGame=/\b(?:build|create|develop|recreate|re-create|make|want|need|would like)\s+(?:(?:me|to|you|a|an|the|original|new|simple|small|browser|board|card|video|turn-based|strategy|puzzle|multiplayer|playable)\s+)*games?\b(?=\s*(?:[.!?:,;]|$|\b(?:with|where|that|in|as|for|called|named)\b))/i.test(text);
  const playable=/\bplayable\s+(?:(?:browser|board|card|video|turn-based|strategy|puzzle|multiplayer)\s+)?games?\b|\bmake (?:it|this|that) (?:a |the )?games?\b/i.test(text);
  const appForGame=/\b(?:app|application|software)\s+(?:for|as|to play)\s+(?:a |the )?(?:[\w-]+ )?games?\b(?=\s*(?:[.!?:,;]|$|\b(?:with|where|that|in|as|for|called|named)\b))/i.test(text);
