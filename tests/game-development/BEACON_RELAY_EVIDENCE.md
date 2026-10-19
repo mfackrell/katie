@@ -67,3 +67,13 @@ BEACON_RELAY_ORIGIN=http://127.0.0.1:3100 node tests/game-development/beacon-rel
 ```
 
 The browser runner accepts only a local origin, isolates storage per scenario and blocks external requests. It fails visibly if Chromium or rendered assertions fail; it does not mark missing browser runs as passed.
+
+## Executed CI browser acceptance — 2026-10-19
+
+- GitHub Actions run: https://github.com/mfackrell/katie/actions/runs/39277120001 (workflow_dispatch, completed SUCCESS).
+- Browser acceptance job ID: 118144312635, completed SUCCESS; runner checked out and asserted exact game source commit `9eea65541e96ced56106c85d9f9d48aad53b9382`.
+- Executed actual Chromium browser harness `BEACON_RELAY_ORIGIN=http://127.0.0.1:3100 node tests/game-development/beacon-relay.browser.mjs` against a built local Next.js route.
+- Browser receipt in job logs: `browserChecks` with `passed: true` and `71 rendered application assertion(s) passed`.
+- Evidence artifact: `beacon-phase3-browser-evidence` (artifact ID 12199470092), preserving tested SHA, browser receipt, and server log.
+- Vercel Preview for same game source commit is READY: `https://katie-m7wqmskwv-mark-fackrells-projects.vercel.app/project-pilots/beacon-relay`.
+- This acceptance execution resolves the earlier zero-browser-interaction blocker. Independent review of evidence and PR #559 remains required before labeling specialist Phase 3 finalized. No production merge or deployment requested.
