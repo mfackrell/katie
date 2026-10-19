@@ -220,7 +220,9 @@ async function handleCase(c:Case):Promise<string>{
  const repo=await sourceRepository(e.repositoryId);
  const client=repo?ownerClient():null;
  const [log,browser]=repo&&client?await Promise.all([workflowLog(client,repo,e.runId),browserFailure(client,repo,e)]):['',''];
- const diagnosis=diagnoseRecoveryFailure({sourceType:c.source_type,detail:e.detail,
+ const diagnosis=diagnoseRecoveryFailure({sourceType:c.source_type,
+  detail:e.project&&new Date(e.project.deadline).getTime()<=Date.now()
+    ? 'Project deadline reached; owner authorization required to continue. '+e.detail : e.detail,
   trustedLog:log+(browser?'\nVERIFIED_BROWSER_ARTIFACT:\n'+browser:''),approvedProjectPaths:e.project?.approved_hash===e.project?.approval_hash?e.project?.spec?.allowedPaths:null,
   taskKind:e.task?.kind,previousVerification:!!e.task?.external?.verificationSince});
  if(diagnosis.strategy==='retry_original'&&c.source_type==='mission'&&e.failedJobId){
