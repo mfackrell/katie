@@ -67,7 +67,7 @@ export function validateProjectContext(value) {
   if(!Array.isArray(value.allowedPaths)||!value.allowedPaths.length||value.allowedPaths.length>12||value.allowedPaths.some(p=>typeof p!=='string'||p.length>200||!/^(?:app|apps|components|lib|public|tests|docs)\/[a-zA-Z0-9_./[\]-]+\/?$/.test(p)||p.split('/').some(s=>s==='.'||s==='..')||/\.env|\.github|node_modules/.test(p)))throw Error('Invalid approved project paths');
   validateContract(value.contract);
   if (contractHash(value.contract) !== value.contractHash) throw Error('Project contract digest mismatch');
-  if(value.game)validateProjectGame(value.game,value.allowedPaths,{scenarios:value.game.acceptance?.scenarios?.filter(s=>s.kind==='browser').map(s=>({name:s.id,steps:s.steps}))});
+  if(value.game)validateProjectGame(value.game,value.allowedPaths,value.contract);
   return value;
 }
 export function parseProjectContext(request) {

@@ -12,6 +12,8 @@ test('registration preserves complete rules and exact browser scenarios in the i
  const f=gameFixture();assert.equal(validateProjectGame(f.game,f.allowedPaths,f.contract),f.game);
  const c={version:1,projectId:'11111111-1111-4111-8111-111111111111',baseSha:'a'.repeat(40),baselineSha:'a'.repeat(40),allowedPaths:f.allowedPaths,contractHash:contractHash(f.contract),contract:f.contract,game:f.game};
  assert.deepEqual(parseProjectContext(projectMarker(c)),c);
+ const swapped={...f.contract,scenarios:[{name:'title-only',steps:[{action:'expectVisible',selector:'#title'}]}]};
+ assert.throws(()=>projectMarker({...c,contract:swapped,contractHash:contractHash(swapped)}),/exactly execute/);
  const missing=structuredClone(f.game);missing.rules.unknowns=[{id:'edition',question:'Which edition?',status:'open',blocking:true,ruleIds:['increment']}];
  assert.throws(()=>validateProjectGame(missing,f.allowedPaths,f.contract),/resolve game rules/);
  assert.throws(()=>validateProjectGame(f.game,['app/elsewhere/'],f.contract),/outside approved/);

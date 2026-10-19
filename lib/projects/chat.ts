@@ -9,7 +9,7 @@ export function startProjectIntent(text: string) {
  return !artifact && (direct||desire) && /\b(?:browser|website|web app|application|app|game|dashboard|portal|software|program|API)\b/i.test(text) && !/^.{0,80}\b(?:do not|don't|never|not asking you to)\s+(?:want to |you to )?(?:build|create|develop|make|implement|start)\b/i.test(text);
 }
 export function gameProjectIntent(text:string) {
- const dataProduct=/\b(?:dashboard|tracker|analytics|portal|catalog|store|website)\b[\s\S]*\bgames?\s+(?:sales|analytics|reviews|catalog|inventory|statistics)\b/i.test(text);
+ const dataProduct=/\bgames?\s+(?:sales|analytics|reviews|catalog|inventory|statistics)\b/i.test(text)&&/\b(?:dashboard|tracker|analytics|portal|catalog|store|website)\b/i.test(text);
  if(dataProduct)return false;
  const explicitGameplay=/\b(?:browser|board|card|video|turn[- ]based|strategy|puzzle|multiplayer|playable)\s+games?\b|\bgames?\s+(?:with|where|that|in (?:a|the) browser)\b|\b(?:app|application|software)\b.{0,40}\b(?:for|as|to play)\s+(?:a |the )?(?:[\w-]+ )?games?\b|\bmake (?:it|this|that) (?:a |the )?games?\b/i.test(text);
  return explicitGameplay||/^games?$/i.test(text.match(/\b(?:games?|website|web app|application|app|dashboard|portal|software|program|API)\b/i)?.[0]??'');

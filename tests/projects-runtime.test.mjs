@@ -256,6 +256,8 @@ test('chat-native game intake selects the game registration RPC while ordinary a
  assert.equal(gameProjectIntent('Build a web app for a game.'),true);
  assert.equal(gameProjectIntent('ORIGINAL USER BRIEF: Build an app. SAVED USER FOLLOW-UP: Make it a game with alternating turns.'),true);
  assert.equal(gameProjectIntent('Build a website for game reviews.'),false);
+ assert.equal(gameProjectIntent('Build a game sales dashboard.'),false);
+ assert.equal(gameProjectIntent('Build a games inventory tracker.'),false);
 });
 test('game specifications cannot bypass registered rules or swap a loading-only final contract',async()=>{
  const {gameFixture}=await import('./fixtures/game-project.mjs');const f=gameFixture();
