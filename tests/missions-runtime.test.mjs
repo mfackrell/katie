@@ -259,3 +259,12 @@ test('validation repair receives the rejected draft and stops after the third at
  await worker.runMissionBatch(invalid);assert.equal(committed.p_status,'queued');
  j.attempts=3;claimed=false;await worker.runMissionBatch(invalid);assert.equal(committed.p_status,'failed');assert.equal(committed.p_mission_status,'blocked');
 });
+
+test('oversized rejected drafts cannot overflow the repair model input or disappear from storage',async()=>{
+ const {gameFixture}=await import('./fixtures/game-project.mjs');const f=gameFixture();f.game.rules.stateModel.initialState.large='x'.repeat(60000);
+ const draft={name:'Counter',summary:'Oversized draft',requirements:['Retain original requirement'],allowedPaths:f.allowedPaths,milestones:[{title:'Complete game',instruction:'Build every rule',contract:f.contract}],finalContract:f.contract,game:f.game};
+ const text=JSON.stringify(draft),m={...mission(),objective:'Authoritative original requirement sentinel',project_kind:'specification',project_evidence:{projectProfile:'game'}},j={...job(m,'compose','compose'),result:{specificationValidationFeedback:'Specification exceeds bounded package',rejectedSpecification:text}};
+ const worker=modules({'@/lib/missions/store':{readMission:async()=>({mission:m,jobs:[j]}),rpc:async()=>true}})('@/lib/missions/worker');
+ await assert.rejects(worker.executeClaim({mission:m,job:j},async(_,instruction,input)=>{assert.ok(input.length<48000);const data=JSON.parse(input);assert.equal(data.objective,m.objective);assert.equal(data.rejectedDraft.specificationOmitted,true);assert.equal(data.rejectedDraft.specification,undefined);assert.ok(data.rejectedDraft.uniqueCharacters>48000);assert.ok(data.rejectedDraft.contracts[0].totalSteps>0);throw Error('fixture stop after inspecting bounded input');}),/fixture stop/);
+ assert.equal(j.result.rejectedSpecification,text);
+});

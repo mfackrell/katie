@@ -33,7 +33,17 @@ export async function executeClaim(claim:Claim,model=missionModel){
    return {currentValidation,uniqueCharacters:canonical(gameSpecificationView(plan)).length,uniqueCharacterLimit:20000,status:'REJECTED, not approved evidence',specification:gameSpecificationView(plan),instruction:'Repair this saved draft against validation feedback and the original requirements. Server-generated contractRef/stepsRef resolve to the identical finalContract content. Return fully expanded JSON, never references. Prefer one complete milestone when the original brief permits it. Keep at most 100 total browser steps per contract; consolidate repeated setup while retaining all requirements. Also keep unique specification content below 20,000 characters.'};}catch{return undefined;}
  };
  const rejectedDraft=repair();
- const context=()=>JSON.stringify({objective:mission.objective,projectPhase:mission.project_kind,projectEvidence:rejectedDraft?undefined:researchRecoveryEvidence(mission.project_evidence,true),rejectedDraft,assignment:job.instruction,specificationValidationFeedback:job.result?.specificationValidationFeedback,evidence:completed.filter(j=>j.role!=='plan'&&j.role!=='review').map(j=>({key:j.job_key,instruction:j.instruction,result:candidateEvidence(j.result)}))});
+ const context=()=>{
+  const data={objective:mission.objective,projectPhase:mission.project_kind,projectEvidence:rejectedDraft?undefined:researchRecoveryEvidence(mission.project_evidence,true),rejectedDraft,assignment:job.instruction,specificationValidationFeedback:job.result?.specificationValidationFeedback,evidence:completed.filter(j=>j.role!=='plan'&&j.role!=='review').map(j=>({key:j.job_key,instruction:j.instruction,result:candidateEvidence(j.result)}))};
+  // Keep the complete rejected draft in storage, never let it crowd the original
+  // requirements out of a bounded repair request. Diagnostics remain actionable.
+  const suffix=job.role==='revise'?'\nReview findings: '+JSON.stringify(priorReviews):'';
+  if(rejectedDraft&&JSON.stringify(data).length+suffix.length>48000){
+   const {specification,...diagnostics}=rejectedDraft;
+   return JSON.stringify({...data,rejectedDraft:{...diagnostics,specificationOmitted:true,omissionReason:'The saved rejected draft does not fit the repair input budget. Regenerate from the unchanged original objective and measured validation diagnostics; the entire rejected draft remains saved for audit.',contracts:[...specification.milestones.map(m=>({title:m.title,...('contract' in m?{contract:m.contract}:{contract:specification.finalContract})})),{title:'finalContract',contract:specification.finalContract}].map(m=>({title:m.title,scenarioCount:m.contract.scenarios.length,totalSteps:m.contract.scenarios.reduce((n,s)=>n+s.steps.length,0)}))}});
+  }
+  return JSON.stringify(data);
+ };
  const finalWork=job.role==='compose'||job.role==='revise';
  const persona=frame+'\nSaved responsibilities: '+agent.config.instructions+'\n'+(finalWork?getObjectiveFirstInstruction():'Complete only input.assignment. The full objective is context for that assignment, not a request to perform the other workers’ assignments or compose the whole deliverable. Do not delegate, write a new plan, repeat unassigned calculations or recommendations, or offer future work.');
  const commit=(result:Record<string,unknown>,children:Child[]=[],status='completed',missionStatus:string|null=null,final:string|null=null)=>rpc<boolean>('commit_mission_work',{p_id:job.id,p_lease:job.lease,p_result:result,p_children:children,p_status:status,p_mission_status:missionStatus,p_final:final});
