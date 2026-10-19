@@ -19,7 +19,7 @@ function modules(overrides={}){
   if(cache.has(path))return cache.get(path);
   const exports={};cache.set(path,exports);
   const code=ts.transpileModule(readFileSync(path,'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022,esModuleInterop:true}}).outputText;
-  vm.runInNewContext(code,{exports,require:n=>n.startsWith('.')?load(resolve(dirname(path),n)):load(n),process,Buffer,Date,console,Set,Map,URL,URLSearchParams,TextEncoder,TextDecoder,Request,Response,Headers,ReadableStream,AbortController,AbortSignal,File,Blob,fetch,crypto:webcrypto,setTimeout,clearTimeout,setInterval,clearInterval},{filename:path});
+  vm.runInNewContext(code,{exports,require:n=>n.startsWith('.')?load(resolve(dirname(path),n)):load(n),process,Buffer,Date,JSON,console,Set,Map,URL,URLSearchParams,TextEncoder,TextDecoder,Request,Response,Headers,ReadableStream,AbortController,AbortSignal,File,Blob,fetch,crypto:webcrypto,setTimeout,clearTimeout,setInterval,clearInterval},{filename:path});
   return exports;
  };
  return load;
@@ -196,7 +196,7 @@ test('game specification can express arbitrary exact states without sending an u
  try{
   const m={...mission(),project_kind:'specification',project_evidence:{projectProfile:'game'}},j=job(m,'compose','compose');
   const f=modelFixture([response('{"game":{"state":{"arbitrary":1}}}')]);await f.call({mission:m,job:j},'Produce JSON for the complete game specification','Saved game requirements');
-  assert.equal(f.ledger[0].text.format.type,'json_object');assert.equal(f.ledger[0].max_output_tokens,9000);
+  assert.equal(f.ledger[0].text.format.type,'json_object');assert.equal(f.ledger[0].max_output_tokens,16000);
   const normal=modelFixture([response('{}')]);await normal.call({mission:{...m,project_evidence:null},job:j},'Produce JSON','Ordinary software specification');
   assert.equal(normal.ledger[0].text.format.type,'json_schema');assert.equal(normal.ledger[0].text.format.schema.properties.game,undefined);
  }finally{if(prior===undefined)delete process.env.OPENAI_API_KEY;else process.env.OPENAI_API_KEY=prior;}
@@ -218,4 +218,27 @@ test('research recovery sends substantive findings without duplicate historical 
  await executeClaim({mission:m,job:review},async(_,instruction,input)=>{assert.ok(input.length<48000);if(instruction.includes('KATIE_REQUIRED_DRAFT_REVIEW')){assert.match(input,/PRIMARY_SOURCE_EVIDENCE/);assert.match(input,/NEW_CANDIDATE_SENTINEL/);assert.match(input,/Remove peripheral API detail/);assert.match(input,/Peripheral API details impair/);assert.doesNotMatch(input,/OLD_CANDIDATE_SENTINEL|HISTORICAL_ASSESSMENT_SENTINEL|DUPLICATE_PASSED_CHECK|DUPLICATE_SUMMARY/);}return{text:JSON.stringify(instruction.includes('KATIE_REQUIRED_DRAFT_REVIEW')?verdict():assessment),sources:[],calculations:[],model:'fixture'};});
  assert.equal(committed.p_result.verdict,'pass');assert.equal(JSON.stringify(m.project_evidence),before,'Complete audit evidence remains unchanged');
  const {researchRecoveryEvidence}=modules()('@/lib/missions/research-evidence');assert.match(JSON.stringify(researchRecoveryEvidence(m.project_evidence,true)),/OLD_CANDIDATE_SENTINEL/);
+});
+
+test('game specification records provider truncation and retries only its first output-limit failure',async()=>{
+ const prior=process.env.OPENAI_API_KEY;process.env.OPENAI_API_KEY='fixture-only';try{const m=mission();m.project_kind='specification';m.project_evidence={projectProfile:'game'};const j=job(m,'compose','compose'),f=modelFixture([response('',{status:'incomplete',incomplete_details:{reason:'max_output_tokens'}})]);await assert.rejects(f.call({mission:m,job:j},'Compose','Source'),e=>e.partial?.incompleteReason==='max_output_tokens'&&e.partial.outputTokenLimit===16000);assert.match(f.ledger[0].instructions,/minified complete JSON/);assert.match(f.ledger[0].instructions,/20,000 characters/);
+ for(const [kind,profile,reason,attempts,retry] of [['specification','game','max_output_tokens',1,true],['specification','game','max_output_tokens',2,false],['specification','software','max_output_tokens',1,false],['development','game','max_output_tokens',1,false],['specification','game','content_filter',1,false],['specification','game',null,1,false]]){
+  m.project_kind=kind;m.project_evidence={projectProfile:profile};j.attempts=attempts;let claimed=false,committed;const load=modules({'@/lib/missions/store':{readMission:async()=>({mission:m,jobs:[j]}),rpc:async(n,a)=>{if(n==='claim_mission_work'){if(claimed)return null;claimed=true;return{mission:m,job:j};}committed=a;return true;}}});const {MissionModelFailure}=load('@/lib/missions/model');await load('@/lib/missions/worker').runMissionBatch(async()=>{throw new MissionModelFailure('Model output incomplete: incomplete',{incompleteReason:reason,outputTokenLimit:16000});});assert.equal(committed.p_status,retry?'queued':'failed');assert.equal(committed.p_mission_status,retry?null:'blocked');assert.equal(committed.p_result.incompleteReason,reason);
+ }
+ }finally{if(prior===undefined)delete process.env.OPENAI_API_KEY;else process.env.OPENAI_API_KEY=prior;}
+});
+
+test('failed Responses retain provider errors and transient codes retry once without treating invalid prompts as transient',async()=>{
+ const prior=process.env.OPENAI_API_KEY;process.env.OPENAI_API_KEY='fixture-only';try{
+ for(const code of ['server_error','rate_limit_exceeded','invalid_prompt']){const m=mission(),j=job(m),f=modelFixture([response('',{status:'failed',error:{code,message:'Provider diagnostic'}})]);await assert.rejects(f.call({mission:m,job:j},'Analyze','Source'),e=>e.partial?.providerErrorCode===code&&e.partial.providerErrorMessage==='Provider diagnostic');
+ let claimed=false,committed;const load=modules({'@/lib/missions/store':{readMission:async()=>({mission:m,jobs:[j]}),rpc:async(n,a)=>{if(n==='claim_mission_work'){if(claimed)return null;claimed=true;return{mission:m,job:j};}committed=a;return true;}}});const {MissionModelFailure}=load('@/lib/missions/model');await load('@/lib/missions/worker').runMissionBatch(async()=>{throw new MissionModelFailure('Model output incomplete: failed',{providerErrorCode:code,providerErrorMessage:'Provider diagnostic'});});assert.equal(committed.p_status,code==='invalid_prompt'?'failed':'queued');assert.equal(committed.p_result.providerErrorCode,code);
+ }
+ }finally{if(prior===undefined)delete process.env.OPENAI_API_KEY;else process.env.OPENAI_API_KEY=prior;}
+});
+test('oversized game specification is rejected before review and repairs once against validation feedback',async()=>{
+ const {gameFixture}=await import('./fixtures/game-project.mjs');const f=gameFixture(),valid={name:'Counter',summary:'A controlled counter',requirements:['Increment and reject invalid actions'],allowedPaths:f.allowedPaths,milestones:[{title:'Complete game',instruction:'Build every approved rule',contract:f.contract}],finalContract:f.contract,game:f.game};
+ const m=mission();m.project_kind='specification';m.project_evidence={projectProfile:'game'};const j=job(m,'compose','compose');let claimed=false,committed,seen;
+ const load=modules({'@/lib/missions/store':{readMission:async()=>({mission:m,jobs:[j]}),rpc:async(n,a)=>{if(n==='claim_mission_work'){if(claimed)return null;claimed=true;return{mission:m,job:j};}committed=a;return true;}}});const worker=load('@/lib/missions/worker');
+ const oversized={...valid,requirements:Array(30).fill('x'.repeat(500)),summary:'x'.repeat(1800),milestones:[{...valid.milestones[0],instruction:'x'.repeat(3500)}]};for(const invalid of [oversized,{...valid,game:undefined}]){claimed=false;await worker.runMissionBatch(async()=>({text:JSON.stringify(invalid),sources:[],calculations:[],model:'fixture'}));assert.equal(committed.p_status,'queued');assert.equal(committed.p_mission_status,null);assert.match(committed.p_result.specificationValidationFeedback,/bounded approval|Game specification requires/);assert.equal(committed.p_final,null);}
+ j.attempts=2;j.result=committed.p_result;claimed=false;await worker.runMissionBatch(async(_,instruction,input)=>{seen=input;return{text:JSON.stringify(valid,null,2),sources:[],calculations:[],model:'fixture'};});assert.match(seen,/specificationValidationFeedback/);assert.equal(committed.p_status,'completed',JSON.stringify(committed.p_result));assert.equal(committed.p_result.text,JSON.stringify(valid));assert.equal(committed.p_mission_status,null,'Validation is not independent approval');
 });
