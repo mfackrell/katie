@@ -1,0 +1,94 @@
+name: Executive autonomous release
+
+on:
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        required: true
+        type: number
+      issue_number:
+        required: true
+        type: number
+      run_id:
+        required: true
+        type: number
+      head_sha:
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: read
+
+concurrency:
+  group: executive-release-${{ inputs.pr_number }}
+  cancel-in-progress: false
+
+jobs:
+  reviewed-release:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          persist-credentials: false
+      - name: Verify exact autonomous development receipt
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+          ISSUE_NUMBER: ${{ inputs.issue_number }}
+          RUN_ID: ${{ inputs.run_id }}
+          EXPECTED_SHA: ${{ inputs.head_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$EXPECTED_SHA" =~ ^[a-f0-9]{40}$ ]] || exit 1
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID" --jq '.conclusion' | grep -qx success
+          gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER" > /tmp/executive-pr.json
+          jq -e --arg sha "$EXPECTED_SHA" --arg base main \
+            '.state=="open" and .merged==false and .base.ref==$base and .head.sha==$sha' /tmp/executive-pr.json >/dev/null
+          gh api "repos/$GITHUB_REPOSITORY/issues/$ISSUE_NUMBER" > /tmp/executive-issue.json
+          jq -e '.title|startswith("[agent]")' /tmp/executive-issue.json >/dev/null
+          jq -e --arg issue "$ISSUE_NUMBER" '.body|contains("#"+$issue)' /tmp/executive-pr.json >/dev/null
+          gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/files?per_page=100" > /tmp/executive-files.json
+          jq -e 'all(.[]; (.filename!=".github/workflows/executive-autonomous-release.yml" and .filename!="scripts/executive-release-verifier.mjs"))' /tmp/executive-files.json >/dev/null
+          artifact="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID/artifacts" --jq '.artifacts[]|select(.name=="agent-completion" and .expired==false)|.id' | head -n 1)"
+          test -n "$artifact"
+          gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$artifact/zip" > /tmp/executive-receipt.zip
+          unzip -p /tmp/executive-receipt.zip agent-result.json > /tmp/executive-receipt.json
+          RECEIPT_FILE=/tmp/executive-receipt.json node scripts/executive-release-verifier.mjs
+      - name: Merge only the verified commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+          EXPECTED_SHA: ${{ inputs.head_sha }}
+        run: |
+          set -euo pipefail
+          gh pr ready "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" || true
+          gh pr merge "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --squash --match-head-commit "$EXPECTED_SHA"
+          gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER" --jq '.merge_commit_sha' > /tmp/merged-head
+          test -s /tmp/merged-head
+      - name: Verify Vercel deployment status for merged commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          sha="$(cat /tmp/merged-head)"
+          [[ "$sha" =~ ^[a-f0-9]{40}$ ]] || exit 1
+          for i in $(seq 1 36); do
+            gh api "repos/$GITHUB_REPOSITORY/commits/$sha/status" > /tmp/release-status.json
+            if jq -e '.statuses|any(.context=="Vercel" and .state=="success")' /tmp/release-status.json >/dev/null; then
+              echo "Vercel confirms production deployment of $sha"
+              exit 0
+            fi
+            if jq -e '.statuses|any(.context=="Vercel" and .state=="failure")' /tmp/release-status.json >/dev/null; then
+              echo "Vercel deployment failed" >&2
+              exit 1
+            fi
+            sleep 10
+          done
+          echo "No Vercel success on merged commit; release verification not complete" >&2
+          exit 1
