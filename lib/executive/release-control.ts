@@ -33,7 +33,7 @@ export function releaseReceiptFromResult(result:Delivery){
 export async function dispatchReviewedRelease(input:{delegationId:string;missionId:string}){
  const db=getSupabaseAdminClient();
  const {data:prior,error:priorError}=await db.from('executive_delegation_events')
-  .select('id').eq('delegation_id',input.delegationId).eq('event','release_dispatched').limit(1);
+  .select('id').eq('delegation_id',input.delegationId).in('event',['release_dispatched','release_verified']).limit(1);
  if(priorError)throw Error('Release dispatch inventory unavailable');
  if(prior?.length)return 'already_dispatched';
  const {data:jobs,error:jobsError}=await db.from('mission_assignments')
@@ -57,6 +57,17 @@ export async function dispatchReviewedRelease(input:{delegationId:string;mission
  if(recordError)throw Error('Release requested but durable dispatch receipt unavailable');
  return 'dispatched';
 }
+// Release state is append-only; callers can distinguish a pending release from a verified one.
+export async function releaseStatus(delegationId:string){
+ const db=getSupabaseAdminClient();
+ const {data,error}=await db.from('executive_delegation_events').select('event,evidence,created_at')
+  .eq('delegation_id',delegationId).in('event',['release_dispatched','release_verified','release_blocked'])
+  .order('created_at',{ascending:false}).limit(20);
+ if(error)throw Error('Release status unavailable');
+ const events=(data??[]) as Array<{event:string;evidence:unknown;created_at:string}>;
+ return {state:events.some(e=>e.event==='release_verified')?'verified':events.some(e=>e.event==='release_dispatched')?'dispatched':events.some(e=>e.event==='release_blocked')?'blocked':'not_requested',events};
+}
+
 export async function reconcileExecutiveReleases(){
  const db=getSupabaseAdminClient();
  const {data:events,error}=await db.from('executive_delegation_events')
@@ -72,6 +83,7 @@ export async function reconcileExecutiveReleases(){
   const gh=client();
   const {data:pull}=await gh.pulls.get({owner:'mfackrell',repo:'katie',pull_number:event.evidence.pr});
   if(!pull.merged||!pull.merge_commit_sha)continue;
+  if(event.evidence.sha!==pull.head.sha)throw Error('Release PR head changed since authorized dispatch');
   const status=await gh.repos.getCombinedStatusForRef({owner:'mfackrell',repo:'katie',ref:pull.merge_commit_sha});
   if(!status.data.statuses.some(s=>s.context==='Vercel'&&s.state==='success'))continue;
   const {data:delegation}=await db.from('executive_delegations')
