@@ -20,7 +20,7 @@ export function gameSpecificationView(p:ProjectPlan){
  return {...p,milestones:p.milestones.map(({contract,...m})=>digest(contract)===digest(p.finalContract)?{...m,contractRef:'finalContract'}:{...m,contract}),
   game:{...p.game,acceptance:{...p.game.acceptance,scenarios:p.game.acceptance.scenarios.map((s:Record<string,unknown>)=>{
    const final=p.finalContract.scenarios.find(b=>b.name===s.id);
-   if(s.kind==='browser'&&final&&digest(final.steps)===digest(s.steps)){const {steps,...metadata}=s;return{...metadata,stepsRef:`finalContract.scenarios[name=${String(s.id)}].steps`};}
+   if(s.kind==='browser'&&final&&digest(final.steps)===digest(s.steps)){const metadata={...s};delete metadata.steps;return{...metadata,stepsRef:`finalContract.scenarios[name=${String(s.id)}].steps`};}
    return s;
   })}}};
 }
