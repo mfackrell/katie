@@ -3,13 +3,17 @@ import type {Project} from './store';
 
 // SQL checks jsonb::text. Indented JSON deliberately overestimates its spacing.
 const size=(value:unknown)=>JSON.stringify(value,null,1).length;
-export function validateGameAssessmentCapacity(plan:ProjectPlan){
- if(!plan.game)return;
+export function gameAssessmentCapacity(plan:ProjectPlan){
+ if(!plan.game)return null;
  const checks=plan.finalContract.scenarios.map(s=>({name:s.name,passed:true,detail:'x'.repeat(100)}));
  const fixed={gameRules:plan.game.rules,approvedFinalContract:plan.finalContract,previewChecks:checks,incrementChecks:checks,url:'x'.repeat(2000)};
  // Reserve 7 KB for immutable receipts, phase history and identifiers. The
  // remaining 6 KB below the SQL cap is for bounded actual source excerpts.
- if(size(fixed)+7000>24000)throw Error('Game specification exceeds the final assessment evidence capacity. Compact the rule record and scenarios before scope approval; do not drop original requirements.');
+ return {requiredCharacters:size(fixed)+7000,maximumCharacters:24000};
+}
+export function validateGameAssessmentCapacity(plan:ProjectPlan){
+ const capacity=gameAssessmentCapacity(plan);
+ if(capacity&&capacity.requiredCharacters>capacity.maximumCharacters)throw Error(`Game specification exceeds the final assessment evidence capacity: ${capacity.requiredCharacters} characters required, maximum ${capacity.maximumCharacters}. Compact rule descriptions and consolidate repeated browser setup before scope approval; preserve every original requirement.`);
 }
 export function gameAssessmentEvidence(p:Project,history:Array<{phase:string;index:number;status:string;head?:unknown}>,outcome:Record<string,unknown>|null){
  const v=outcome?.verification as Record<string,unknown>|undefined;

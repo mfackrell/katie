@@ -1,3 +1,5 @@
+import {gameAssessmentCapacity} from '@/lib/projects/game-evidence';
+import {GAME_RULE_CATEGORIES} from '../../scripts/project-game-rules.mjs';
 import {validateProjectPlan,projectPlanSchema,gameSpecificationView,canonical,digest} from '@/lib/projects/contract';
 import {getDevelopmentProjectContext,acceptanceBinding} from '@/lib/projects/store';
 import { agentRpc } from '@/lib/agents/store';
@@ -30,7 +32,8 @@ export async function executeClaim(claim:Claim,model=missionModel){
  const repair=()=>{
   if(mission.project_kind!=='specification'||(mission.project_evidence as {projectProfile?:string}|null)?.projectProfile!=='game'||typeof job.result?.rejectedSpecification!=='string')return undefined;
   try{const plan=projectPlanSchema.parse(parseJSON(job.result.rejectedSpecification));let currentValidation='';try{validateProjectPlan(plan);}catch(error){currentValidation=error instanceof Error?error.message:String(error);}
-   return {currentValidation,uniqueCharacters:canonical(gameSpecificationView(plan)).length,uniqueCharacterLimit:20000,status:'REJECTED, not approved evidence',specification:gameSpecificationView(plan),instruction:'Repair this saved draft against validation feedback and the original requirements. Server-generated contractRef/stepsRef resolve to the identical finalContract content. Return fully expanded JSON, never references. Prefer one complete milestone when the original brief permits it. Keep at most 100 total browser steps per contract; consolidate repeated setup while retaining all requirements. Also keep unique specification content below 20,000 characters.'};}catch{return undefined;}
+   const covered=new Set(plan.game?.acceptance?.scenarios?.flatMap((s:Record<string,unknown>)=>Array.isArray(s.ruleIds)?s.ruleIds:[])??[]);const missingRuleCoverage=plan.game?.rules?.rules?.filter((r:Record<string,unknown>)=>r.status!=='unresolved'&&!covered.has(r.id)).map((r:Record<string,unknown>)=>r.id)??[];
+   return {currentValidation,assessmentCapacity:gameAssessmentCapacity(plan),allowedRuleCategories:GAME_RULE_CATEGORIES,missingRuleCoverage,uniqueCharacters:canonical(gameSpecificationView(plan)).length,uniqueCharacterLimit:20000,status:'REJECTED, not approved evidence',specification:gameSpecificationView(plan),instruction:'Repair this saved draft against validation feedback and the original requirements. Server-generated contractRef/stepsRef resolve to the identical finalContract content. Return fully expanded JSON, never references. Prefer one complete milestone when the original brief permits it. Keep at most 100 total browser steps per contract; consolidate repeated setup while retaining all requirements. Also keep unique specification content below 20,000 characters.'};}catch{return undefined;}
  };
  const rejectedDraft=repair();
  const context=()=>{
@@ -39,7 +42,7 @@ export async function executeClaim(claim:Claim,model=missionModel){
   // requirements out of a bounded repair request. Diagnostics remain actionable.
   const suffix=job.role==='revise'?'\nReview findings: '+JSON.stringify(priorReviews):'';
   if(rejectedDraft&&JSON.stringify(data).length+suffix.length>48000){
-   const compact={...data,rejectedDraft:{status:rejectedDraft.status,specificationOmitted:true,currentValidation:rejectedDraft.currentValidation.slice(0,600),uniqueCharacters:rejectedDraft.uniqueCharacters,uniqueCharacterLimit:20000,omissionReason:'Regenerate from the unchanged original objective and validation diagnostics. The full rejected draft remains saved.'}};
+   const compact={...data,rejectedDraft:{status:rejectedDraft.status,specificationOmitted:true,assessmentCapacity:rejectedDraft.assessmentCapacity,allowedRuleCategories:GAME_RULE_CATEGORIES,missingRuleCoverage:rejectedDraft.missingRuleCoverage,currentValidation:rejectedDraft.currentValidation.slice(0,600),uniqueCharacters:rejectedDraft.uniqueCharacters,uniqueCharacterLimit:20000,omissionReason:'Regenerate from the unchanged original objective and validation diagnostics. The full rejected draft remains saved.'}};
    const compactText=JSON.stringify(compact);
    if(compactText.length+suffix.length>48000)throw new MissionModelFailure('Specification repair context exceeds 48,000 characters even without the rejected draft; original requirements and saved draft retained for scope clarification.',{repairContextOverflow:true,specificationValidationFeedback:job.result?.specificationValidationFeedback,rejectedSpecification:job.result?.rejectedSpecification});
    return compactText;

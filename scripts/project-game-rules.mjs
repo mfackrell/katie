@@ -18,7 +18,8 @@ function refs(values, allowed, name) {
   ok(Array.isArray(values) && values.length > 0 && values.every(value=>allowed.has(value)),name+' references must resolve');
   ok(new Set(values).size===values.length,name+' contains duplicate references');
 }
-const categories = new Set(['setup','action','turn','phase','combat','randomness','information','victory','persistence','reset','ui','other']);
+export const GAME_RULE_CATEGORIES = Object.freeze(['setup','action','turn','phase','combat','randomness','information','victory','persistence','reset','ui','other']);
+const categories = new Set(GAME_RULE_CATEGORIES);
 export function validateGameRules(spec) {
   ok(object(spec) && spec.schemaVersion===1 && object(spec.game),'schemaVersion/game required');
   ok(id(spec.game.id) && label(spec.game.title) && label(spec.game.edition) && ['original','reproduction'].includes(spec.game.kind),'identify game and edition');
@@ -28,6 +29,8 @@ export function validateGameRules(spec) {
     if(source.kind==='official')ok(label(source.edition),'official source needs edition');
   }
   const ruleIds=ids(spec.rules,'rules');
+  const invalidCategories=spec.rules.filter(rule=>!categories.has(rule.category));
+  ok(invalidCategories.length===0,'unsupported rule categories: '+invalidCategories.map(rule=>rule.id+'='+String(rule.category)).join(', ')+'. Allowed categories: '+GAME_RULE_CATEGORIES.join(', '));
   const unresolvedRules=[];
   for(const rule of spec.rules){
     ok(label(rule.description) && categories.has(rule.category) && ['verified','approved_interpretation','unresolved'].includes(rule.status),'rule '+rule.id+' incomplete');
@@ -77,7 +80,8 @@ export function validateGameAcceptance(spec,acceptance) {
     }
   }
   ok(model>0 && browser>0,'a browser game needs model and real-browser contracts');
-  for(const rule of spec.rules)if(rule.status!=='unresolved')ok(covered.has(rule.id),'approved rule '+rule.id+' missing acceptance coverage');
+  const missing=spec.rules.filter(rule=>rule.status!=='unresolved'&&!covered.has(rule.id)).map(rule=>rule.id);
+  ok(missing.length===0,missing.map(id=>'approved rule '+id+' missing acceptance coverage').join('; '));
   return {gameId:spec.game.id,scenarioCount:scenarioIds.size,modelScenarioCount:model,browserScenarioCount:browser,pendingAmbiguities:rules.unresolvedBlocking,contractReady:rules.unresolvedBlocking.length===0&&rules.unresolvedRules.length===0};
 }
 export function runGameModelAcceptance(spec,acceptance,applyAction){
