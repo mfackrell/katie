@@ -278,9 +278,33 @@ async function monitorRecoveryCases():Promise<void>{
     c.category==='implementation'?bound?.browserBinding:null);
   if(!accepted)continue;
   if(pr.merged_at){
+   // Human merge is a release decision, not proof of the original outcome.
+   // For infrastructure repairs, resume only the same approved code after
+   // the reviewed repair is the live, successful main-branch commit.
+   if(c.category==='verification_infrastructure'&&c.source_type==='project'&&
+      c.status==='awaiting_release'&&bound?.project&&bound.task&&bound.headSha){
+     const main=(await client.repos.getBranch({...repo,branch:'main'})).data.commit.sha;
+     const published=await client.repos.getCombinedStatusForRef({...repo,ref:main});
+     const deploymentReady=published.data.statuses.some(status=>status.context.toLowerCase().includes('vercel')&&status.state==='success');
+     if(main===pr.merge_commit_sha&&deploymentReady){
+      const originalIssue=int(bound.task.external.issueNumber);
+      const originalPr=int((bound.task.external.prUrl as string|undefined)?.split('/').pop());
+      if(originalIssue&&originalPr&&bound.project.active_mission_id){
+       // The existing project-reverify workflow does not run a coding agent.
+       await client.actions.createWorkflowDispatch({...repo,workflow_id:'project-reverify.yml',ref:'main',
+        inputs:{issue_number:String(originalIssue),pr_number:String(originalPr),expected_sha:bound.headSha}});
+       const resumed=await rpc<{status:string}|null>('resume_project_after_recovery',{
+        p_case:c.id,p_actor:c.actor_id,p_chat:c.chat_id,p_original_issue:originalIssue,
+        p_original_pr:originalPr,p_original_sha:bound.headSha,
+       });
+       if(resumed?.status==='running')continue;
+      }
+     }
+    }
+   }
    await db.from('recovery_cases').eq('id',c.id).in('status',['delegated','awaiting_release']).update({status:'verifying',
     repair_pr_url:prUrl,repair_head_sha:pr.head.sha,
-    details:'Independently verified recovery was owner-merged. Original goal still requires its own acceptance evidence.',
+    details:'Verified repair was owner-merged. Original project acceptance remains required; no coding scope was bypassed.',
     updated_at:new Date().toISOString()});
   }else if(pr.draft&&c.status==='delegated'){
    await db.from('recovery_cases').eq('id',c.id).eq('status','delegated').update({status:'awaiting_release',
