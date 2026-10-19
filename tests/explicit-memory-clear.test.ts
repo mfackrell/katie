@@ -15,6 +15,9 @@ test("does not confuse single-entry deletion, correction, inspection or saving w
     "show me all entries in your long-term memory",
     "remember all of these facts in long-term memory",
     "delete the last message from this chat",
+    "Do not delete all my long-term memory entries",
+    "Explain why someone might remove all their long-term memories",
+    "I want you to remember the phrase remove all long-term memory entries",
   ]) {
     assert.equal(isFullActorMemoryClear(message), false, message);
   }
