@@ -71,3 +71,15 @@ test('incomplete development cues with punctuation never start a mission', async
   'Executive: implement an audit logging endpoint.',
  ])assert.equal(developmentDelegationIntent(message),true,message);
 });
+
+test('punctuation padding cannot substitute for a complete development objective', async()=>{
+ for(const [incomplete,complete] of [
+  ['Delegate software development to fix ...?!', 'Delegate software development to fix checkout ...?!'],
+  ['Have the software development agent implement logging ...?!', 'Have the software development agent implement audit logging ...?!'],
+  ['Executive: update checkout ...?!', 'Executive: update checkout validation ...?!'],
+ ]){
+  assert.equal(developmentDelegationIntent(incomplete),false,incomplete);
+  assert.equal(await exports.startExecutiveDevelopment({actorId:'a',chatId:'b',requestId:'c',activeRepoId:'d',message:incomplete}),null,incomplete);
+  assert.equal(developmentDelegationIntent(complete),true,complete);
+ }
+});
