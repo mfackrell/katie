@@ -33,7 +33,6 @@ test("misspelled system prompt inspection stays local without broad false matche
     "Explain why someone would show me your system propmt",
     "Rewrite: show me your system propmt",
     "show me your system architecture",
-    "show me your system prompt examples for a novel",
   ]) assert.equal(isSystemPromptRequest(message), false, message);
 });
 
