@@ -67,7 +67,7 @@ export async function reconcileExecutiveFinance(){
   const reviewPassed=(review as Array<{result:{verdict?:string}|null}>|null)?.some(r=>r.result?.verdict==='pass');
   const succeeded=missionRow.status==='completed'&&reviewPassed&&typeof missionRow.result==='string'&&missionRow.result.length>0;
   if(d.status==='running'&&succeeded){
-   const {data:submitted,error:submitError}=await db.rpc('transition_executive_delegation',{p_id:d.id,p_actor:d.actor_id,p_chat:d.chat_id,p_action:'submit',p_evidence:{deliverable:missionRow.result.slice(0,16000),missionId:d.mission_id,independentReview:'mission-pass'}});
+   const {data:submitted,error:submitError}=await db.rpc('transition_executive_delegation',{p_id:d.id,p_actor:d.actor_id,p_chat:d.chat_id,p_action:'submit',p_evidence:{deliverable:(missionRow.result??'').slice(0,16000),missionId:d.mission_id,independentReview:'mission-pass'}});
    if(submitError||submitted?.status!=='submitted')continue;
    const {data:accepted,error:acceptError}=await db.rpc('transition_executive_delegation',{p_id:d.id,p_actor:d.actor_id,p_chat:d.chat_id,p_action:'verify',p_evidence:{independentReview:'pass',missionId:d.mission_id}});
    if(acceptError||accepted?.status!=='verified')continue;
