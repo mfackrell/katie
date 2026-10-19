@@ -1,0 +1,40 @@
+{
+  "result": {
+    "deployment": {
+      "id": "dpl_ADinzR9FpqvSEYKTmSZZAXgRyiGu",
+      "name": "katie",
+      "url": "katie-hss4o6f8j-mark-fackrells-projects.vercel.app",
+      "type": "LAMBDAS",
+      "state": "READY",
+      "createdAt": 1792423687522,
+      "creator": {
+        "uid": "Uo20uGNiTXnh8shNAxMCEN77",
+        "username": "mfackrell"
+      },
+      "project": {
+        "id": "prj_HuonAMnD6OhPAZ8tYVlyqQ5OjcEL",
+        "name": "katie",
+        "framework": "nextjs"
+      },
+      "meta": {
+        "githubCommitRef": "agent/issue-558-39268394066-1",
+        "githubCommitSha": "64339aaf987b03cddd54d3d21117769f0b4edcc4",
+        "githubCommitMessage": "test: attach passing immutable browser acceptance evidence for Beacon Relay",
+        "githubRepo": "katie",
+        "githubOrg": "mfackrell"
+      },
+      "alias": [
+        "katie-git-agent-issue-558-39268394066-1-mark-fackrells-projects.vercel.app"
+      ],
+      "target": null,
+      "regions": [
+        "iad1"
+      ],
+      "buildingAt": 1792423828131,
+      "ready": 1792423887978,
+      "readyState": "READY",
+      "source": "git",
+      "aliasError": null
+    }
+  }
+}

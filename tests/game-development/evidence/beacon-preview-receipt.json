@@ -1,0 +1,1579 @@
+{
+  "schemaVersion": 1,
+  "startedAt": "2026-10-19T15:53:47.417Z",
+  "sourceCommit": "64339aaf987b03cddd54d3d21117769f0b4edcc4",
+  "deploymentId": "dpl_ADinzR9FpqvSEYKTmSZZAXgRyiGu",
+  "url": "https://katie-hss4o6f8j-mark-fackrells-projects.vercel.app/project-pilots/beacon-relay",
+  "executor": "cua_repl cloud Chromium with Playwright locators",
+  "checkpoints": [
+    {
+      "action": "#reset",
+      "url": "https://katie-hss4o6f8j-mark-fackrells-projects.vercel.app/project-pilots/beacon-relay",
+      "assertions": [
+        {
+          "selector": "#red-position",
+          "expected": "0",
+          "actual": "0",
+          "passed": true
+        },
+        {
+          "selector": "#blue-position",
+          "expected": "15",
+          "actual": "15",
+          "passed": true
+        },
+        {
+          "selector": "#red-score",
+          "expected": "0",
+          "actual": "0",
+          "passed": true
+        },
+        {
+          "selector": "#blue-score",
+          "expected": "0",
+          "actual": "0",
+          "passed": true
+        },
+        {
+          "selector": "#active-player",
+          "expected": "Red",
+          "actual": "Red",
+          "passed": true
+        },
+        {
+          "selector": "#phase",
+          "expected": "MOVE",
+          "actual": "MOVE",
+          "passed": true
+        },
+        {
+          "selector": "#turn-number",
+          "expected": "1",
+          "actual": "1",
+          "passed": true
+        },
+        {
+          "selector": "#winner",
+          "expected": "None",
+          "actual": "None",
+          "passed": true
+        }
+      ]
+    },
+    {
+      "action": "#end-turn",
+      "url": "https://katie-hss4o6f8j-mark-fackrells-projects.vercel.app/project-pilots/beacon-relay",
+      "assertions": [
+        {
+          "selector": "#red-position",
+          "expected": "0",
+          "actual": "0",
+          "passed": true
+        },
+        {
+          "selector": "#blue-position",
+          "expected": "15",
+          "actual": "15",
+          "passed": true
+        },
+        {
+          "selector": "#red-score",
+          "expected": "0",
+          "actual": "0",
+          "passed": true
+        },
+        {
+          "selector": "#blue-score",
+          "expected": "0",
+          "actual": "0",
+          "passed": true
+        },
+        {
+          "selector": "#active-player",
+          "expected": "Red",
+          "actual": "Red",
+          "passed": true
+        },
+        {
+          "selector": "#phase",
+          "expected": "MOVE",
+          "actual": "MOVE",
+          "passed": true
+        },
+        {
+          "selector": "#turn-number",
+          "expected": "1",
+          "actual": "1",
+          "passed": true
+        },
+        {
+          "selector": "#winner",
+          "expected": "None",
+          "actual": "None",
+          "passed": true
+        }
+      ]
+    },
+    {
+      "action": "#cell-0",
+      "url": "https://katie-hss4o6f8j-mark-fackrells-projects.vercel.app/project-pilots/beacon-relay",
+      "assertions": [
+        {
+          "selector": "#red-position",
+          "expected": "0",
+          "actual": "0",
+          "passed": true
+        },
+        {
+          "selector": "#blue-position",
+          "expected": "15",
+          "actual": "15",
+          "passed": true
+        },
+        {
+          "selector": "#red-score",
+          "expected": "0",
+          "actual": "0",
+          "passed": true
+        },
+        {
+          "selector": "#blue-score",
+          "expected": "0",
+          "actual": "0",
+          "passed": true
+        },
+        {
+          "selector": "#active-player",
+          "expected": "Red",
+          "actual": "Red",
+          "passed": true
+        },
+        {
+          "selector": "#phase",
+          "expected": "MOVE",
+          "actual": "MOVE",
+          "passed": true
+        },
+        {
+          "selector": "#turn-number",
+          "expected": "1",
+          "actual": "1",
+          "passed": true
+        },
+        {
+          "selector": "#winner",
+          "expected": "None",
+          "actual": "None",
+          "passed": true
+        }
+      ]
+    },
+    {
+      "action": "#cell-5",
+      "url": "https://katie-hss4o6f8j-mark-fackrells-projects.vercel.app/project-pilots/beacon-relay",
+      "assertions": [
+        {
+          "selector": "#red-position",
+          "expected": "0",
+          "actual": "0",
+          "passed": true
+        },
+        {
+          "selector": "#blue-position",
+          "expected": "15",
+          "actual": "15",
+          "passed": true
+        },
+        {
+          "selector": "#red-score",
+          "expected": "0",
+          "actual": "0",
+          "passed": true
+        },
+        {
+          "selector": "#blue-score",
+          "expected": "0",
+          "actual": "0",
+          "passed": true
+        },
+        {
+          "selector": "#active-player",
+          "expected": "Red",
+          "actual": "Red",
+          "passed": true
+        },
+        {
+          "selector": "#phase",
+          "expected": "MOVE",
+          "actual": "MOVE",
+          "passed": true
+        },
+        {
+          "selector": "#turn-number",
+          "expected": "1",
+          "actual": "1",
+          "passed": true
+        },
+        {
+          "selector": "#winner",
+          "expected": "None",
+          "actual": "None",
+          "passed": true
+        }
+      ]
+    },
+    {
+      "action": "#cell-15",
+      "url": "https://katie-hss4o6f8j-mark-fackrells-projects.vercel.app/project-pilots/beacon-relay",
+      "assertions": [
+        {
+          "selector": "#red-position",
+          "expected": "0",
+          "actual": "0",
+          "passed": true
+        },
+        {
+          "selector": "#blue-position",
+          "expected": "15",
+          "actual": "15",
+          "passed": true
+        },
+        {
+          "selector": "#red-score",
+          "expected": "0",
+          "actual": "0",
+          "passed": true
+        },
+        {
+          "selector": "#blue-score",
+          "expected": "0",
+          "actual": "0",
+          "passed": true
+        },
+        {
+          "selector": "#active-player",
+          "expected": "Red",
+          "actual": "Red",
+          "passed": true
+        },
+        {
+          "selector": "#phase",
+          "expected": "MOVE",
+          "actual": "MOVE",
+          "passed": true
+        },
+        {
+          "selector": "#turn-number",
+          "expected": "1",
+          "actual": "1",
+          "passed": true
+        },
+        {
+          "selector": "#winner",
+          "expected": "None",
+          "actual": "None",
+          "passed": true
+        }
+      ]
+    },
+    {
+      "action": "#cell-3",
+      "url": "https://katie-hss4o6f8j-mark-fackrells-projects.vercel.app/project-pilots/beacon-relay",
+      "assertions": [
+        {
+          "selector": "#red-position",
+          "expected": "0",
+          "actual": "0",
+          "passed": true
+        },
+        {
+          "selector": "#blue-position",
+          "expected": "15",
+          "actual": "15",
+          "passed": true
+        },
+        {
+          "selector": "#red-score",
+          "expected": "0",
+          "actual": "0",
+          "passed": true
+        },
+        {
+          "selector": "#blue-score",
+          "expected": "0",
+          "actual": "0",
+          "passed": true
+        },
+        {
+          "selector": "#active-player",
+          "expected": "Red",
+          "actual": "Red",
+          "passed": true
+        },
+        {
+          "selector": "#phase",
+          "expected": "MOVE",
+          "actual": "MOVE",
+          "passed": true
+        },
+        {
+          "selector": "#turn-number",
+          "expected": "1",
+          "actual": "1",
+          "passed": true
+        },
+        {
+          "selector": "#winner",
+          "expected": "None",
+          "actual": "None",
+          "passed": true
+        }
+      ]
+    },
+    {
+      "action": "#cell-1",
+      "url": "https://katie-hss4o6f8j-mark-fackrells-projects.vercel.app/project-pilots/beacon-relay",
+      "assertions": [
+        {
+          "selector": "#red-position",
+          "expected": "1",
+          "actual": "1",
+          "passed": true
+        },
+        {
+          "selector": "#blue-position",
+          "expected": "15",
+          "actual": "15",
+          "passed": true
+        },
+        {
+          "selector": "#red-score",
+          "expected": "0",
+          "actual": "0",
+          "passed": true
+        },
+        {
+          "selector": "#blue-score",
+          "expected": "0",
+          "actual": "0",
+          "passed": true
+        },
+        {
+          "selector": "#active-player",
+          "expected": "Red",
+          "actual": "Red",
+          "passed": true
+        },
+        {
+          "selector": "#phase",
+          "expected": "RESOLVE",
+          "actual": "RESOLVE",
+          "passed": true
+        },
+        {
+          "selector": "#turn-number",
+          "expected": "1",
+          "actual": "1",
+          "passed": true
+        },
+        {
+          "selector": "#winner",
+          "expected": "None",
+          "actual": "None",
+          "passed": true
+        }
+      ]
+    },
+    {
+      "action": "#cell-2",
+      "url": "https://katie-hss4o6f8j-mark-fackrells-projects.vercel.app/project-pilots/beacon-relay",
+      "assertions": [
+        {
+          "selector": "#red-position",
+          "expected": "1",
+          "actual": "1",
+          "passed": true
+        },
+        {
+          "selector": "#blue-position",
+          "expected": "15",
+          "actual": "15",
+          "passed": true
+        },
+        {
+          "selector": "#red-score",
+          "expected": "0",
+          "actual": "0",
+          "passed": true
+        },
+        {
+          "selector": "#blue-score",
+          "expected": "0",
+          "actual": "0",
+          "passed": true
+        },
+        {
+          "selector": "#active-player",
+          "expected": "Red",
+          "actual": "Red",
+          "passed": true
+        },
+        {
+          "selector": "#phase",
+          "expected": "RESOLVE",
+          "actual": "RESOLVE",
+          "passed": true
+        },
+        {
+          "selector": "#turn-number",
+          "expected": "1",
+          "actual": "1",
+          "passed": true
+        },
+        {
+          "selector": "#winner",
+          "expected": "None",
+          "actual": "None",
+          "passed": true
+        }
+      ]
+    },
+    {
+      "action": "#end-turn",
+      "url": "https://katie-hss4o6f8j-mark-fackrells-projects.vercel.app/project-pilots/beacon-relay",
+      "assertions": [
+        {
+          "selector": "#red-position",
+          "expected": "1",
+          "actual": "1",
+          "passed": true
+        },
+        {
+          "selector": "#blue-position",
+          "expected": "15",
+          "actual": "15",
+          "passed": true
+        },
+        {
+          "selector": "#red-score",
+          "expected": "0",
+          "actual": "0",
+          "passed": true
+        },
+        {
+          "selector": "#blue-score",
+          "expected": "0",
+          "actual": "0",
+          "passed": true
+        },
+        {
+          "selector": "#active-player",
+          "expected": "Blue",
+          "actual": "Blue",
+          "passed": true
+        },
+        {
+          "selector": "#phase",
+          "expected": "MOVE",
+          "actual": "MOVE",
+          "passed": true
+        },
+        {
+          "selector": "#turn-number",
+          "expected": "2",
+          "actual": "2",
+          "passed": true
+        },
+        {
+          "selector": "#winner",
+          "expected": "None",
+          "actual": "None",
+          "passed": true
+        }
+      ]
+    },
+    {
+      "action": "#cell-14",
+      "url": "https://katie-hss4o6f8j-mark-fackrells-projects.vercel.app/project-pilots/beacon-relay",
+      "assertions": [
+        {
+          "selector": "#red-position",
+          "expected": "1",
+          "actual": "1",
+          "passed": true
+        },
+        {
+          "selector": "#blue-position",
+          "expected": "14",
+          "actual": "14",
+          "passed": true
+        },
+        {
+          "selector": "#red-score",
+          "expected": "0",
+          "actual": "0",
+          "passed": true
+        },
+        {
+          "selector": "#blue-score",
+          "expected": "0",
+          "actual": "0",
+          "passed": true
+        },
+        {
+          "selector": "#active-player",
+          "expected": "Blue",
+          "actual": "Blue",
+          "passed": true
+        },
+        {
+          "selector": "#phase",
+          "expected": "RESOLVE",
+          "actual": "RESOLVE",
+          "passed": true
+        },
+        {
+          "selector": "#turn-number",
+          "expected": "2",
+          "actual": "2",
+          "passed": true
+        },
+        {
+          "selector": "#winner",
+          "expected": "None",
+          "actual": "None",
+          "passed": true
+        }
+      ]
+    },
+    {
+      "action": "#end-turn",
+      "url": "https://katie-hss4o6f8j-mark-fackrells-projects.vercel.app/project-pilots/beacon-relay",
+      "assertions": [
+        {
+          "selector": "#red-position",
+          "expected": "1",
+          "actual": "1",
+          "passed": true
+        },
+        {
+          "selector": "#blue-position",
+          "expected": "14",
+          "actual": "14",
+          "passed": true
+        },
+        {
+          "selector": "#red-score",
+          "expected": "0",
+          "actual": "0",
+          "passed": true
+        },
+        {
+          "selector": "#blue-score",
+          "expected": "0",
+          "actual": "0",
+          "passed": true
+        },
+        {
+          "selector": "#active-player",
+          "expected": "Red",
+          "actual": "Red",
+          "passed": true
+        },
+        {
+          "selector": "#phase",
+          "expected": "MOVE",
+          "actual": "MOVE",
+          "passed": true
+        },
+        {
+          "selector": "#turn-number",
+          "expected": "3",
+          "actual": "3",
+          "passed": true
+        },
+        {
+          "selector": "#winner",
+          "expected": "None",
+          "actual": "None",
+          "passed": true
+        }
+      ]
+    },
+    {
+      "action": "#cell-5",
+      "url": "https://katie-hss4o6f8j-mark-fackrells-projects.vercel.app/project-pilots/beacon-relay",
+      "assertions": [
+        {
+          "selector": "#red-position",
+          "expected": "5",
+          "actual": "5",
+          "passed": true
+        },
+        {
+          "selector": "#blue-position",
+          "expected": "14",
+          "actual": "14",
+          "passed": true
+        },
+        {
+          "selector": "#red-score",
+          "expected": "0",
+          "actual": "0",
+          "passed": true
+        },
+        {
+          "selector": "#blue-score",
+          "expected": "0",
+          "actual": "0",
+          "passed": true
+        },
+        {
+          "selector": "#active-player",
+          "expected": "Red",
+          "actual": "Red",
+          "passed": true
+        },
+        {
+          "selector": "#phase",
+          "expected": "RESOLVE",
+          "actual": "RESOLVE",
+          "passed": true
+        },
+        {
+          "selector": "#turn-number",
+          "expected": "3",
+          "actual": "3",
+          "passed": true
+        },
+        {
+          "selector": "#winner",
+          "expected": "None",
+          "actual": "None",
+          "passed": true
+        }
+      ]
+    },
+    {
+      "action": "reload",
+      "url": "https://katie-hss4o6f8j-mark-fackrells-projects.vercel.app/project-pilots/beacon-relay",
+      "assertions": [
+        {
+          "selector": "#red-position",
+          "expected": "5",
+          "actual": "5",
+          "passed": true
+        },
+        {
+          "selector": "#blue-position",
+          "expected": "14",
+          "actual": "14",
+          "passed": true
+        },
+        {
+          "selector": "#red-score",
+          "expected": "0",
+          "actual": "0",
+          "passed": true
+        },
+        {
+          "selector": "#blue-score",
+          "expected": "0",
+          "actual": "0",
+          "passed": true
+        },
+        {
+          "selector": "#active-player",
+          "expected": "Red",
+          "actual": "Red",
+          "passed": true
+        },
+        {
+          "selector": "#phase",
+          "expected": "RESOLVE",
+          "actual": "RESOLVE",
+          "passed": true
+        },
+        {
+          "selector": "#turn-number",
+          "expected": "3",
+          "actual": "3",
+          "passed": true
+        },
+        {
+          "selector": "#winner",
+          "expected": "None",
+          "actual": "None",
+          "passed": true
+        }
+      ]
+    },
+    {
+      "action": "#cell-6",
+      "url": "https://katie-hss4o6f8j-mark-fackrells-projects.vercel.app/project-pilots/beacon-relay",
+      "assertions": [
+        {
+          "selector": "#red-position",
+          "expected": "5",
+          "actual": "5",
+          "passed": true
+        },
+        {
+          "selector": "#blue-position",
+          "expected": "14",
+          "actual": "14",
+          "passed": true
+        },
+        {
+          "selector": "#red-score",
+          "expected": "0",
+          "actual": "0",
+          "passed": true
+        },
+        {
+          "selector": "#blue-score",
+          "expected": "0",
+          "actual": "0",
+          "passed": true
+        },
+        {
+          "selector": "#active-player",
+          "expected": "Red",
+          "actual": "Red",
+          "passed": true
+        },
+        {
+          "selector": "#phase",
+          "expected": "RESOLVE",
+          "actual": "RESOLVE",
+          "passed": true
+        },
+        {
+          "selector": "#turn-number",
+          "expected": "3",
+          "actual": "3",
+          "passed": true
+        },
+        {
+          "selector": "#winner",
+          "expected": "None",
+          "actual": "None",
+          "passed": true
+        }
+      ]
+    },
+    {
+      "action": "#end-turn",
+      "url": "https://katie-hss4o6f8j-mark-fackrells-projects.vercel.app/project-pilots/beacon-relay",
+      "assertions": [
+        {
+          "selector": "#red-position",
+          "expected": "5",
+          "actual": "5",
+          "passed": true
+        },
+        {
+          "selector": "#blue-position",
+          "expected": "14",
+          "actual": "14",
+          "passed": true
+        },
+        {
+          "selector": "#red-score",
+          "expected": "1",
+          "actual": "1",
+          "passed": true
+        },
+        {
+          "selector": "#blue-score",
+          "expected": "0",
+          "actual": "0",
+          "passed": true
+        },
+        {
+          "selector": "#active-player",
+          "expected": "Blue",
+          "actual": "Blue",
+          "passed": true
+        },
+        {
+          "selector": "#phase",
+          "expected": "MOVE",
+          "actual": "MOVE",
+          "passed": true
+        },
+        {
+          "selector": "#turn-number",
+          "expected": "4",
+          "actual": "4",
+          "passed": true
+        },
+        {
+          "selector": "#winner",
+          "expected": "None",
+          "actual": "None",
+          "passed": true
+        }
+      ]
+    },
+    {
+      "action": "#end-turn",
+      "url": "https://katie-hss4o6f8j-mark-fackrells-projects.vercel.app/project-pilots/beacon-relay",
+      "assertions": [
+        {
+          "selector": "#red-position",
+          "expected": "5",
+          "actual": "5",
+          "passed": true
+        },
+        {
+          "selector": "#blue-position",
+          "expected": "14",
+          "actual": "14",
+          "passed": true
+        },
+        {
+          "selector": "#red-score",
+          "expected": "1",
+          "actual": "1",
+          "passed": true
+        },
+        {
+          "selector": "#blue-score",
+          "expected": "0",
+          "actual": "0",
+          "passed": true
+        },
+        {
+          "selector": "#active-player",
+          "expected": "Blue",
+          "actual": "Blue",
+          "passed": true
+        },
+        {
+          "selector": "#phase",
+          "expected": "MOVE",
+          "actual": "MOVE",
+          "passed": true
+        },
+        {
+          "selector": "#turn-number",
+          "expected": "4",
+          "actual": "4",
+          "passed": true
+        },
+        {
+          "selector": "#winner",
+          "expected": "None",
+          "actual": "None",
+          "passed": true
+        }
+      ]
+    },
+    {
+      "action": "#cell-10",
+      "url": "https://katie-hss4o6f8j-mark-fackrells-projects.vercel.app/project-pilots/beacon-relay",
+      "assertions": [
+        {
+          "selector": "#red-position",
+          "expected": "5",
+          "actual": "5",
+          "passed": true
+        },
+        {
+          "selector": "#blue-position",
+          "expected": "10",
+          "actual": "10",
+          "passed": true
+        },
+        {
+          "selector": "#red-score",
+          "expected": "1",
+          "actual": "1",
+          "passed": true
+        },
+        {
+          "selector": "#blue-score",
+          "expected": "0",
+          "actual": "0",
+          "passed": true
+        },
+        {
+          "selector": "#active-player",
+          "expected": "Blue",
+          "actual": "Blue",
+          "passed": true
+        },
+        {
+          "selector": "#phase",
+          "expected": "RESOLVE",
+          "actual": "RESOLVE",
+          "passed": true
+        },
+        {
+          "selector": "#turn-number",
+          "expected": "4",
+          "actual": "4",
+          "passed": true
+        },
+        {
+          "selector": "#winner",
+          "expected": "None",
+          "actual": "None",
+          "passed": true
+        }
+      ]
+    },
+    {
+      "action": "#end-turn",
+      "url": "https://katie-hss4o6f8j-mark-fackrells-projects.vercel.app/project-pilots/beacon-relay",
+      "assertions": [
+        {
+          "selector": "#red-position",
+          "expected": "5",
+          "actual": "5",
+          "passed": true
+        },
+        {
+          "selector": "#blue-position",
+          "expected": "10",
+          "actual": "10",
+          "passed": true
+        },
+        {
+          "selector": "#red-score",
+          "expected": "1",
+          "actual": "1",
+          "passed": true
+        },
+        {
+          "selector": "#blue-score",
+          "expected": "1",
+          "actual": "1",
+          "passed": true
+        },
+        {
+          "selector": "#active-player",
+          "expected": "Red",
+          "actual": "Red",
+          "passed": true
+        },
+        {
+          "selector": "#phase",
+          "expected": "MOVE",
+          "actual": "MOVE",
+          "passed": true
+        },
+        {
+          "selector": "#turn-number",
+          "expected": "5",
+          "actual": "5",
+          "passed": true
+        },
+        {
+          "selector": "#winner",
+          "expected": "None",
+          "actual": "None",
+          "passed": true
+        }
+      ]
+    },
+    {
+      "action": "#cell-6",
+      "url": "https://katie-hss4o6f8j-mark-fackrells-projects.vercel.app/project-pilots/beacon-relay",
+      "assertions": [
+        {
+          "selector": "#red-position",
+          "expected": "6",
+          "actual": "6",
+          "passed": true
+        },
+        {
+          "selector": "#blue-position",
+          "expected": "10",
+          "actual": "10",
+          "passed": true
+        },
+        {
+          "selector": "#red-score",
+          "expected": "1",
+          "actual": "1",
+          "passed": true
+        },
+        {
+          "selector": "#blue-score",
+          "expected": "1",
+          "actual": "1",
+          "passed": true
+        },
+        {
+          "selector": "#active-player",
+          "expected": "Red",
+          "actual": "Red",
+          "passed": true
+        },
+        {
+          "selector": "#phase",
+          "expected": "RESOLVE",
+          "actual": "RESOLVE",
+          "passed": true
+        },
+        {
+          "selector": "#turn-number",
+          "expected": "5",
+          "actual": "5",
+          "passed": true
+        },
+        {
+          "selector": "#winner",
+          "expected": "None",
+          "actual": "None",
+          "passed": true
+        }
+      ]
+    },
+    {
+      "action": "#end-turn",
+      "url": "https://katie-hss4o6f8j-mark-fackrells-projects.vercel.app/project-pilots/beacon-relay",
+      "assertions": [
+        {
+          "selector": "#red-position",
+          "expected": "6",
+          "actual": "6",
+          "passed": true
+        },
+        {
+          "selector": "#blue-position",
+          "expected": "10",
+          "actual": "10",
+          "passed": true
+        },
+        {
+          "selector": "#red-score",
+          "expected": "1",
+          "actual": "1",
+          "passed": true
+        },
+        {
+          "selector": "#blue-score",
+          "expected": "1",
+          "actual": "1",
+          "passed": true
+        },
+        {
+          "selector": "#active-player",
+          "expected": "Blue",
+          "actual": "Blue",
+          "passed": true
+        },
+        {
+          "selector": "#phase",
+          "expected": "MOVE",
+          "actual": "MOVE",
+          "passed": true
+        },
+        {
+          "selector": "#turn-number",
+          "expected": "6",
+          "actual": "6",
+          "passed": true
+        },
+        {
+          "selector": "#winner",
+          "expected": "None",
+          "actual": "None",
+          "passed": true
+        }
+      ]
+    },
+    {
+      "action": "#cell-11",
+      "url": "https://katie-hss4o6f8j-mark-fackrells-projects.vercel.app/project-pilots/beacon-relay",
+      "assertions": [
+        {
+          "selector": "#red-position",
+          "expected": "6",
+          "actual": "6",
+          "passed": true
+        },
+        {
+          "selector": "#blue-position",
+          "expected": "11",
+          "actual": "11",
+          "passed": true
+        },
+        {
+          "selector": "#red-score",
+          "expected": "1",
+          "actual": "1",
+          "passed": true
+        },
+        {
+          "selector": "#blue-score",
+          "expected": "1",
+          "actual": "1",
+          "passed": true
+        },
+        {
+          "selector": "#active-player",
+          "expected": "Blue",
+          "actual": "Blue",
+          "passed": true
+        },
+        {
+          "selector": "#phase",
+          "expected": "RESOLVE",
+          "actual": "RESOLVE",
+          "passed": true
+        },
+        {
+          "selector": "#turn-number",
+          "expected": "6",
+          "actual": "6",
+          "passed": true
+        },
+        {
+          "selector": "#winner",
+          "expected": "None",
+          "actual": "None",
+          "passed": true
+        }
+      ]
+    },
+    {
+      "action": "#end-turn",
+      "url": "https://katie-hss4o6f8j-mark-fackrells-projects.vercel.app/project-pilots/beacon-relay",
+      "assertions": [
+        {
+          "selector": "#red-position",
+          "expected": "6",
+          "actual": "6",
+          "passed": true
+        },
+        {
+          "selector": "#blue-position",
+          "expected": "11",
+          "actual": "11",
+          "passed": true
+        },
+        {
+          "selector": "#red-score",
+          "expected": "1",
+          "actual": "1",
+          "passed": true
+        },
+        {
+          "selector": "#blue-score",
+          "expected": "1",
+          "actual": "1",
+          "passed": true
+        },
+        {
+          "selector": "#active-player",
+          "expected": "Red",
+          "actual": "Red",
+          "passed": true
+        },
+        {
+          "selector": "#phase",
+          "expected": "MOVE",
+          "actual": "MOVE",
+          "passed": true
+        },
+        {
+          "selector": "#turn-number",
+          "expected": "7",
+          "actual": "7",
+          "passed": true
+        },
+        {
+          "selector": "#winner",
+          "expected": "None",
+          "actual": "None",
+          "passed": true
+        }
+      ]
+    },
+    {
+      "action": "#cell-5",
+      "url": "https://katie-hss4o6f8j-mark-fackrells-projects.vercel.app/project-pilots/beacon-relay",
+      "assertions": [
+        {
+          "selector": "#red-position",
+          "expected": "5",
+          "actual": "5",
+          "passed": true
+        },
+        {
+          "selector": "#blue-position",
+          "expected": "11",
+          "actual": "11",
+          "passed": true
+        },
+        {
+          "selector": "#red-score",
+          "expected": "1",
+          "actual": "1",
+          "passed": true
+        },
+        {
+          "selector": "#blue-score",
+          "expected": "1",
+          "actual": "1",
+          "passed": true
+        },
+        {
+          "selector": "#active-player",
+          "expected": "Red",
+          "actual": "Red",
+          "passed": true
+        },
+        {
+          "selector": "#phase",
+          "expected": "RESOLVE",
+          "actual": "RESOLVE",
+          "passed": true
+        },
+        {
+          "selector": "#turn-number",
+          "expected": "7",
+          "actual": "7",
+          "passed": true
+        },
+        {
+          "selector": "#winner",
+          "expected": "None",
+          "actual": "None",
+          "passed": true
+        }
+      ]
+    },
+    {
+      "action": "#end-turn",
+      "url": "https://katie-hss4o6f8j-mark-fackrells-projects.vercel.app/project-pilots/beacon-relay",
+      "assertions": [
+        {
+          "selector": "#red-position",
+          "expected": "5",
+          "actual": "5",
+          "passed": true
+        },
+        {
+          "selector": "#blue-position",
+          "expected": "11",
+          "actual": "11",
+          "passed": true
+        },
+        {
+          "selector": "#red-score",
+          "expected": "2",
+          "actual": "2",
+          "passed": true
+        },
+        {
+          "selector": "#blue-score",
+          "expected": "1",
+          "actual": "1",
+          "passed": true
+        },
+        {
+          "selector": "#active-player",
+          "expected": "Red",
+          "actual": "Red",
+          "passed": true
+        },
+        {
+          "selector": "#phase",
+          "expected": "GAME_OVER",
+          "actual": "GAME_OVER",
+          "passed": true
+        },
+        {
+          "selector": "#turn-number",
+          "expected": "7",
+          "actual": "7",
+          "passed": true
+        },
+        {
+          "selector": "#winner",
+          "expected": "Red",
+          "actual": "Red",
+          "passed": true
+        }
+      ]
+    },
+    {
+      "action": "#end-turn",
+      "url": "https://katie-hss4o6f8j-mark-fackrells-projects.vercel.app/project-pilots/beacon-relay",
+      "assertions": [
+        {
+          "selector": "#red-position",
+          "expected": "5",
+          "actual": "5",
+          "passed": true
+        },
+        {
+          "selector": "#blue-position",
+          "expected": "11",
+          "actual": "11",
+          "passed": true
+        },
+        {
+          "selector": "#red-score",
+          "expected": "2",
+          "actual": "2",
+          "passed": true
+        },
+        {
+          "selector": "#blue-score",
+          "expected": "1",
+          "actual": "1",
+          "passed": true
+        },
+        {
+          "selector": "#active-player",
+          "expected": "Red",
+          "actual": "Red",
+          "passed": true
+        },
+        {
+          "selector": "#phase",
+          "expected": "GAME_OVER",
+          "actual": "GAME_OVER",
+          "passed": true
+        },
+        {
+          "selector": "#turn-number",
+          "expected": "7",
+          "actual": "7",
+          "passed": true
+        },
+        {
+          "selector": "#winner",
+          "expected": "Red",
+          "actual": "Red",
+          "passed": true
+        }
+      ]
+    },
+    {
+      "action": "#cell-4",
+      "url": "https://katie-hss4o6f8j-mark-fackrells-projects.vercel.app/project-pilots/beacon-relay",
+      "assertions": [
+        {
+          "selector": "#red-position",
+          "expected": "5",
+          "actual": "5",
+          "passed": true
+        },
+        {
+          "selector": "#blue-position",
+          "expected": "11",
+          "actual": "11",
+          "passed": true
+        },
+        {
+          "selector": "#red-score",
+          "expected": "2",
+          "actual": "2",
+          "passed": true
+        },
+        {
+          "selector": "#blue-score",
+          "expected": "1",
+          "actual": "1",
+          "passed": true
+        },
+        {
+          "selector": "#active-player",
+          "expected": "Red",
+          "actual": "Red",
+          "passed": true
+        },
+        {
+          "selector": "#phase",
+          "expected": "GAME_OVER",
+          "actual": "GAME_OVER",
+          "passed": true
+        },
+        {
+          "selector": "#turn-number",
+          "expected": "7",
+          "actual": "7",
+          "passed": true
+        },
+        {
+          "selector": "#winner",
+          "expected": "Red",
+          "actual": "Red",
+          "passed": true
+        }
+      ]
+    },
+    {
+      "action": "reload",
+      "url": "https://katie-hss4o6f8j-mark-fackrells-projects.vercel.app/project-pilots/beacon-relay",
+      "assertions": [
+        {
+          "selector": "#red-position",
+          "expected": "5",
+          "actual": "5",
+          "passed": true
+        },
+        {
+          "selector": "#blue-position",
+          "expected": "11",
+          "actual": "11",
+          "passed": true
+        },
+        {
+          "selector": "#red-score",
+          "expected": "2",
+          "actual": "2",
+          "passed": true
+        },
+        {
+          "selector": "#blue-score",
+          "expected": "1",
+          "actual": "1",
+          "passed": true
+        },
+        {
+          "selector": "#active-player",
+          "expected": "Red",
+          "actual": "Red",
+          "passed": true
+        },
+        {
+          "selector": "#phase",
+          "expected": "GAME_OVER",
+          "actual": "GAME_OVER",
+          "passed": true
+        },
+        {
+          "selector": "#turn-number",
+          "expected": "7",
+          "actual": "7",
+          "passed": true
+        },
+        {
+          "selector": "#winner",
+          "expected": "Red",
+          "actual": "Red",
+          "passed": true
+        }
+      ]
+    },
+    {
+      "action": "#reset",
+      "url": "https://katie-hss4o6f8j-mark-fackrells-projects.vercel.app/project-pilots/beacon-relay",
+      "assertions": [
+        {
+          "selector": "#red-position",
+          "expected": "0",
+          "actual": "0",
+          "passed": true
+        },
+        {
+          "selector": "#blue-position",
+          "expected": "15",
+          "actual": "15",
+          "passed": true
+        },
+        {
+          "selector": "#red-score",
+          "expected": "0",
+          "actual": "0",
+          "passed": true
+        },
+        {
+          "selector": "#blue-score",
+          "expected": "0",
+          "actual": "0",
+          "passed": true
+        },
+        {
+          "selector": "#active-player",
+          "expected": "Red",
+          "actual": "Red",
+          "passed": true
+        },
+        {
+          "selector": "#phase",
+          "expected": "MOVE",
+          "actual": "MOVE",
+          "passed": true
+        },
+        {
+          "selector": "#turn-number",
+          "expected": "1",
+          "actual": "1",
+          "passed": true
+        },
+        {
+          "selector": "#winner",
+          "expected": "None",
+          "actual": "None",
+          "passed": true
+        }
+      ]
+    },
+    {
+      "action": "reload",
+      "url": "https://katie-hss4o6f8j-mark-fackrells-projects.vercel.app/project-pilots/beacon-relay",
+      "assertions": [
+        {
+          "selector": "#red-position",
+          "expected": "0",
+          "actual": "0",
+          "passed": true
+        },
+        {
+          "selector": "#blue-position",
+          "expected": "15",
+          "actual": "15",
+          "passed": true
+        },
+        {
+          "selector": "#red-score",
+          "expected": "0",
+          "actual": "0",
+          "passed": true
+        },
+        {
+          "selector": "#blue-score",
+          "expected": "0",
+          "actual": "0",
+          "passed": true
+        },
+        {
+          "selector": "#active-player",
+          "expected": "Red",
+          "actual": "Red",
+          "passed": true
+        },
+        {
+          "selector": "#phase",
+          "expected": "MOVE",
+          "actual": "MOVE",
+          "passed": true
+        },
+        {
+          "selector": "#turn-number",
+          "expected": "1",
+          "actual": "1",
+          "passed": true
+        },
+        {
+          "selector": "#winner",
+          "expected": "None",
+          "actual": "None",
+          "passed": true
+        }
+      ]
+    }
+  ],
+  "passed": true,
+  "completedAt": "2026-10-19T15:54:12.858Z",
+  "assertionCount": 232
+}
