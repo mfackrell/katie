@@ -53,7 +53,7 @@ export async function startExecutiveFinance(input:{actorId:string;chatId:string;
 
 export async function reconcileExecutiveFinance(){
  const db=getSupabaseAdminClient();
- const {data:running,error}=await db.from('executive_delegations').select('id,actor_id,chat_id,mission_id,status').eq('status','running').not('mission_id','is',null).limit(30);
+ const {data:running,error}=await db.from('executive_delegations').select('id,actor_id,chat_id,mission_id,status').in('status',['running','verified','cancelled']).not('mission_id','is',null).order('updated_at',{ascending:false}).limit(100);
  if(error)throw Error('Executive reconciliation inventory unavailable');
  let verified=0,blocked=0;
  for(const d of running??[]){
@@ -62,13 +62,13 @@ export async function reconcileExecutiveFinance(){
   const {data:review}=await db.from('mission_assignments').select('result,status').eq('mission_id',d.mission_id).eq('role','review').eq('status','completed').limit(1);
   const reviewPassed=review?.some(r=>r.result?.verdict==='pass');
   const succeeded=mission.status==='completed'&&reviewPassed&&typeof mission.result==='string'&&mission.result.length>0;
-  if(succeeded){
+  if(d.status==='running'&&succeeded){
    const {data:submitted,error:submitError}=await db.rpc('transition_executive_delegation',{p_id:d.id,p_actor:d.actor_id,p_chat:d.chat_id,p_action:'submit',p_evidence:{deliverable:mission.result.slice(0,16000),missionId:d.mission_id,independentReview:'mission-pass'}});
    if(submitError||submitted?.status!=='submitted')continue;
    const {data:accepted,error:acceptError}=await db.rpc('transition_executive_delegation',{p_id:d.id,p_actor:d.actor_id,p_chat:d.chat_id,p_action:'verify',p_evidence:{independentReview:'pass',missionId:d.mission_id}});
    if(acceptError||accepted?.status!=='verified')continue;
    verified++;
-  }else{
+  }else if(d.status==='running'){
    // An incomplete or unreviewed mission can never be accepted.
    const {data:cancelled,error:cancelError}=await db.rpc('transition_executive_delegation',{p_id:d.id,p_actor:d.actor_id,p_chat:d.chat_id,p_action:'cancel',p_evidence:{reason:'Mission did not pass independent review',missionId:d.mission_id}});
    if(cancelError||cancelled?.status!=='cancelled')continue;
@@ -78,7 +78,10 @@ export async function reconcileExecutiveFinance(){
   // retries cannot generate duplicate final chat messages.
   const output=succeeded?'Finance completed and passed independent review.\n\n'+mission.result:'Finance could not complete this assignment. '+(mission.detail??'Independent acceptance was not established.');
   try{
-   await saveMessage(d.chat_id,{id:missionId('executive-reply-'+d.id),role:'assistant',content:output});
+   const replyId=missionId('executive-reply-'+d.id);
+   const {data:existingReply,error:messageLookupError}=await db.from('messages').select('id').eq('id',replyId).maybeSingle();
+   if(messageLookupError)throw messageLookupError;
+   if(!existingReply)await saveMessage(d.chat_id,{id:replyId,role:'assistant',content:output});
   }catch(e){console.error('[Executive] Chat handoff failed',{delegationId:d.id,error:e instanceof Error?e.message:'unknown'});}
  }
  return {verified,blocked};
