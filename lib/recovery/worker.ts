@@ -142,8 +142,11 @@ async function delegateRepair(c:Case,e:SourceEvidence,diagnosis:RecoveryDiagnosi
  const marker='<!-- katie-recovery: '+Buffer.from(JSON.stringify(scope)).toString('base64url')+' -->';
  let projectMarker='';
  if(diagnosis.category==='implementation'&&e.project&&e.projectContext&&e.browserBinding){
-  const {scopeHash:_scopeHash,...approvedContext}=e.projectContext;
-  const ctx={...approvedContext,baseSha:sourceSha};
+  const ctx={
+    version:1,projectId:e.projectContext.projectId,baseSha:sourceSha,
+    baselineSha:e.projectContext.baselineSha,allowedPaths:e.projectContext.allowedPaths,
+    contractHash:e.projectContext.contractHash,contract:e.projectContext.contract
+  };
   if(!e.project.baseline_sha||ctx.baselineSha!==e.project.baseline_sha ||
      ctx.contractHash!==digest(ctx.contract))throw Error('Original owner-approved project contract does not match repair source');
   projectMarker='<!-- katie-project: '+Buffer.from(JSON.stringify(ctx)).toString('base64url')+' -->\n';
@@ -218,7 +221,7 @@ async function monitorRecoveryCases():Promise<void>{
   if(c.status==='verifying'){
    const e=await boundSource(c);
    if(!e){
-    await db.from('recovery_cases').update({status:'resolved',details:'Original task or project is no longer blocked.',updated_at:new Date().toISOString()}).eq('id',c.id).eq('status','verifying');
+    await db.from('recovery_cases').eq('id',c.id).eq('status','verifying').update({status:'resolved',details:'Original task or project is no longer blocked.',updated_at:new Date().toISOString()});
     continue;
    }
    // No blind timeout or reset of previously charged tokens. A blocked
@@ -239,13 +242,13 @@ async function monitorRecoveryCases():Promise<void>{
   const pr=(await client.pulls.get({...repo,pull_number:prNumber})).data;
   if(pr.head.repo?.full_name!==repo.fullName||pr.base.repo.full_name!==repo.fullName)continue;
   if(pr.merged_at){
-   await db.from('recovery_cases').update({status:'verifying',repair_pr_url:prUrl,
+   await db.from('recovery_cases').eq('id',c.id).in('status',['delegated','awaiting_release']).update({status:'verifying',repair_pr_url:prUrl,
     details:'Reviewed recovery PR merged. Rechecking the original task within its existing authorization.',
-    updated_at:new Date().toISOString()}).eq('id',c.id).in('status',['delegated','awaiting_release']);
+    updated_at:new Date().toISOString()});
   }else if(pr.draft&&c.status==='delegated'){
-   await db.from('recovery_cases').update({status:'awaiting_release',repair_pr_url:prUrl,
+   await db.from('recovery_cases').eq('id',c.id).eq('status','delegated').update({status:'awaiting_release',repair_pr_url:prUrl,
     details:'Recovery draft PR produced. Independent CI/review and owner merge approval remain required.',
-    updated_at:new Date().toISOString()}).eq('id',c.id).eq('status','delegated');
+    updated_at:new Date().toISOString()});
   }
  }
 }
