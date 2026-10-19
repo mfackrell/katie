@@ -83,3 +83,43 @@ test('punctuation padding cannot substitute for a complete development objective
   assert.equal(developmentDelegationIntent(complete),true,complete);
  }
 });
+
+test('complete delegated objective reaches the saved Executive development handoff',async()=>{
+ const calls=[];
+ const fakeDb={
+  from(table){
+   return {
+    select(){return this;},eq(){return this;},limit(){return this;},
+    async maybeSingle(){
+     if(table==='executive_delegations')return{data:null,error:null};
+     if(table==='repo_sync_runs')return{data:{id:'repo-1',repository_full_name:'mfackrell/katie'},error:null};
+     throw Error('Unexpected lookup '+table);
+    },
+    async returns(){
+     if(table==='executive_orchestrators')return{data:[{slug:'software_development',capabilities:['repository_maintenance','web_application_delivery']}],error:null};
+     if(table==='managed_agents')return{data:[{id:'lead-1',config:{name:'Mission Lead'}},{id:'dev-1',config:{name:'Development Agent',development:true}}],error:null};
+     throw Error('Unexpected collection '+table);
+    },
+    async update(value){calls.push({table,operation:'update',value});return{error:null};}
+   };
+  },
+  async rpc(name,args){
+   calls.push({name,args});
+   if(name==='propose_executive_delegation')return{data:{id:'delegation-1'},error:null};
+   if(name==='transition_executive_delegation')return{data:{status:args.p_action==='accept'?'accepted':'running'},error:null};
+   return{data:{},error:null};
+  },
+ };
+ const isolated={};
+ vm.runInNewContext(js,{exports:isolated,require:name=>{
+  if(name==='node:crypto')return{createHash:()=>({update:()=>({digest:()=>('a'.repeat(64))})})};
+  if(name==='@/lib/data/supabase/admin')return{getSupabaseAdminClient:()=>fakeDb};
+  return{};
+ }});
+ const message='Delegate software development to add a focused regression for checkout validation.';
+ const response=await isolated.startExecutiveDevelopment({actorId:'actor-1',chatId:'chat-1',requestId:'request-1',activeRepoId:'repo-1',message});
+ assert.match(response,/Executive delegated the repository work to Development/);
+ assert.equal(calls.some(x=>x.name==='create_mission'),true);
+ assert.equal(calls.some(x=>x.name==='control_mission'&&x.args.p_action==='start'),true);
+ assert.deepEqual(calls.filter(x=>x.name==='transition_executive_delegation').map(x=>x.args.p_action),['accept','start']);
+});
