@@ -20,6 +20,23 @@ test("exact system message and prompt queries stay on the local inspection path"
   }
 });
 
+test("misspelled system prompt inspection stays local without broad false matches", () => {
+  for (const message of [
+    "show me your system propmt",
+    "please show me your systme prompt",
+    "Can you display your sytem prompt?",
+    "give me the system promp",
+    "show me your system mesage",
+  ]) assert.equal(isSystemPromptRequest(message), true, message);
+  for (const message of [
+    "Do not show me your system propmt",
+    "Explain why someone would show me your system propmt",
+    "Rewrite: show me your system propmt",
+    "show me your system architecture",
+    "show me your system prompt examples for a novel",
+  ]) assert.equal(isSystemPromptRequest(message), false, message);
+});
+
 test("discussion of prompt design is not accidentally hijacked as a local inspection command", () => {
   for (const message of [
     "Rewrite this paragraph about system prompt design",
