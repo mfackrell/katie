@@ -287,13 +287,22 @@ async function monitorRecoveryCases():Promise<void>{
  if(error)throw Error('Recovery follow-up queue unavailable');
  for(const c of (data??[]) as Case[]){
   if(c.status==='verifying'){
-   const e=await boundSource(c);
-   if(!e){
-    await db.from('recovery_cases').eq('id',c.id).eq('status','verifying').update({status:'resolved',details:'Original task or project is no longer blocked.',updated_at:new Date().toISOString()});
-    continue;
+   const table=c.source_type==='project'?'work_projects':c.source_type==='mission'?'agent_missions':'agent_tasks';
+   const {data:original,error:lookupError}=await db.from(table).select('status').eq('id',c.source_id).maybeSingle<{status:string}>();
+   if(lookupError||!original)continue;
+   if(original.status==='completed'||c.source_type==='task'&&original.status==='ready'){
+    await db.from('recovery_cases').eq('id',c.id).eq('status','verifying').update({
+      status:'resolved',details:'The original task completed successfully after verified recovery.',
+      updated_at:new Date().toISOString()
+    });
+   }else if(original.status==='blocked'&&Date.now()-Date.parse(c.updated_at)>2*60*60*1000){
+    await db.from('recovery_cases').eq('id',c.id).eq('status','verifying').update({
+      status:'blocked',details:'The original task is still blocked after a bounded recovery attempt. Evidence and charges are retained.',
+      updated_at:new Date().toISOString()
+    });
    }
-   // No blind timeout or reset of previously charged tokens. A blocked
-   // source after an attempted retry remains recorded for owner review.
+   // A running original is STILL under independent verification. Never claim
+   // completion merely because its status changed from blocked to running.
    continue;
   }
   if(!c.repair_issue_url)continue;
