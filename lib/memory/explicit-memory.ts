@@ -1,7 +1,16 @@
-import { getLongTermMemory, saveActorMemoryDocument, setLongTermMemory } from "@/lib/data/persistence-store";
+import { clearActorLongTermMemory, getLongTermMemory, saveActorMemoryDocument, setLongTermMemory } from "@/lib/data/persistence-store";
 import { maybeUpdateLongTermMemory } from "@/lib/memory/long-term-editor";
 import { isExplicitMemoryCorrection } from "@/lib/chat/local-katie";
 import { extractAndSaveExplicitFacts } from "@/lib/memory/explicit-fact-extractor";
+
+export function isFullActorMemoryClear(message: string): boolean {
+  const normalized = message.trim().replace(/\s+/g, " ");
+  if (/\b(?:do not|don't|never|not to|without)\s+(?:remove|delete|clear|erase|wipe|forget|purge)\b/i.test(normalized)) return false;
+  const imperative = /^(?:(?:please|kindly)\s+)?(?:remove|delete|clear|erase|wipe|forget|purge)\b/i.test(normalized)
+    || /\b(?:i want you to|you need to|please|can you|could you|would you|go ahead and)\s+(?:remove|delete|clear|erase|wipe|forget|purge)\b/i.test(normalized);
+  return imperative && /\b(?:all|every|entire|whole|everything)\b/i.test(normalized)
+    && /\b(?:long[- ]term memory|memory layer|memory entries|memories|entries.{0,55}long[- ]term memory)\b/i.test(normalized);
+}
 
 type Entry = {
   key: string; category: "fact"; value: string; source: "user-stated"; confidence: "high";
@@ -14,12 +23,23 @@ export async function handleExplicitMemoryMutation(
   actorId: string, chatId: string, messageId: string, message: string
 ): Promise<string> {
   try {
+    if (isFullActorMemoryClear(message)) {
+      const removed = await clearActorLongTermMemory(actorId);
+      return `Cleared and verified this actor's long-term memory: ${removed.entries_removed} entries, ${removed.documents_removed} reference documents, ${removed.legacy_rows_removed} legacy records, and ${removed.visual_references_removed} visual-memory references removed. Other actors, chat history and short/intermediate memory were not changed.`;
+    }
     if (isExplicitMemoryCorrection(message)) {
       // Deletion requests are not preserved as a new source document: doing so
       // would recreate the very information the user asked us to forget.
-      if (/\\b(?:delete|forget|remove)\\b/i.test(message)) {
+      if (/\b(?:delete|forget|remove|clear|erase|wipe|purge)\b/i.test(message)) {
+        const before = await getLongTermMemory(actorId, chatId);
         await maybeUpdateLongTermMemory(actorId, chatId, message, { required: true });
-        return "The requested memory edit was saved. I did not create a new source document for this deletion.";
+        const after = await getLongTermMemory(actorId, chatId);
+        const original = Array.isArray(before.entries) ? before.entries : [];
+        const revised = Array.isArray(after.entries) ? after.entries : [];
+        if (!original.some((old) => !revised.some((entry) => JSON.stringify(entry) === JSON.stringify(old)))) {
+          throw new Error("Deletion not verified: no prior memory entry was removed");
+        }
+        return "The memory deletion was applied and verified against stored entries. No new source document was created.";
       }
 
       // A correction MUST remain authoritative even when an LLM returns

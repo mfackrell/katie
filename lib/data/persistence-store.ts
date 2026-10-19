@@ -547,6 +547,30 @@ export async function getLongTermMemory(actorId: string, _chatId: string): Promi
   return data?.content ?? {};
 }
 
+export async function clearActorLongTermMemory(actorId: string): Promise<{
+  entries_removed: number; documents_removed: number; legacy_rows_removed: number; visual_references_removed: number;
+}> {
+  const client = getSupabaseAdminClient();
+  const { data, error } = await client.rpc("clear_actor_long_term_memory", { p_actor_id: actorId });
+  if (error) throw new Error(`Actor memory clear failed: ${error.message}`);
+  const result = data as { entries_removed?: number; documents_removed?: number; legacy_rows_removed?: number; visual_references_removed?: number } | null;
+  if (!result || ![result.entries_removed, result.documents_removed, result.legacy_rows_removed, result.visual_references_removed].every(
+    value => typeof value === "number" && Number.isInteger(value) && value >= 0
+  )) throw new Error("Memory clear did not return verified deletion counts");
+  const { data: documents, error: docError } = await client.from("actor_memory_documents")
+    .select("id").eq("actor_id", actorId).limit(1);
+  const { data: legacy, error: legacyError } = await client.from("long_term_memory")
+    .select("id").eq("actor_id", actorId).limit(1);
+  const { data: visuals, error: visualError } = await client.from("visual_references")
+    .select("subject_key").eq("actor_id", actorId).limit(1);
+  const memory = await getLongTermMemory(actorId, "actor-wide");
+  if (docError || legacyError || visualError || documents?.length || legacy?.length || visuals?.length ||
+    !Array.isArray(memory.entries) || memory.entries.length !== 0) {
+    throw new Error("Memory clear read-back verification failed");
+  }
+  return result as { entries_removed: number; documents_removed: number; legacy_rows_removed: number; visual_references_removed: number };
+}
+
 export type ActorMemoryDocument = {
   id: string; title: string; content: string; createdAt: string;
 };
