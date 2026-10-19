@@ -29,6 +29,7 @@ jobs:
       pr: ${{ steps.plan.outputs.pr }}
       head: ${{ steps.plan.outputs.head }}
       branch: ${{ steps.plan.outputs.branch }}
+      verify_only: ${{ steps.plan.outputs.verify_only }}
       tool_sha: ${{ github.workflow_sha }}
     steps:
       - uses: actions/checkout@v4
@@ -62,6 +63,7 @@ jobs:
       branch: ${{ needs.plan.outputs.branch }}
       pr: ${{ needs.plan.outputs.pr }}
       round: 1
+      verify_only: ${{ needs.plan.outputs.verify_only == 'true' }}
     secrets: inherit
     permissions:
       contents: write
@@ -70,6 +72,7 @@ jobs:
   round-two:
     needs: [plan, round-one]
     if: >-
+      needs.plan.outputs.verify_only != 'true' &&
       needs.round-one.outputs.verdict == 'changes_requested' &&
       needs.round-one.outputs.head != ''
     uses: ./.github/workflows/game-repair-round.yml

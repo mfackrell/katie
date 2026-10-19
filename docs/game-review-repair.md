@@ -15,3 +15,7 @@ Artifacts are retained per round: plan/request, developer response, actual tests
 ## Controlled live test
 
 Use a disposable `game-repair/beacon-relay/<test>` branch based on the registered baseline. Introduce one real gameplay defect (e.g. change victory from two points to three) without changing fixtures. Open a draft PR, enable game repair using the owner command, and request Codex review. The reviewer must detect the defect; the listener must reserve, repair, push, execute tests, and obtain independent approval with no manual fix. Preserve run and PR links. The pilot branch is never merged; it does not affect the validated original PR #559 or production.
+
+## Recover a verifier environment without another code attempt
+
+After an existing registered repair, the owner may post `/katie-game-repair reverify <id>`. The trusted controller requires the original owner opt-in, an open same-repository registered PR, and a genuine prior reservation from this workflow. It scopes the current source against the same immutable baseline and skips every coding job. Independent engine/build/browser verification and review rerun for the saved current SHA, preserving a new receipt. Re-verification cannot reset the repair budget, run a second coding round or merge anything. Reviewer dependencies are installed from unchanged locked manifests with lifecycle scripts disabled before read-only review.
