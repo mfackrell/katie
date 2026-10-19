@@ -18,7 +18,7 @@ function missionId(key:string){
 }
 export async function startExecutiveFinance(input:{actorId:string;chatId:string;message:string;requestId:string}):Promise<string|null>{
  if(!financeDelegationIntent(input.message))return null;
- const db=getSupabaseAdminClient(),requestKey='exec-finance-'+createHash('sha256').update(input.requestId).digest('hex').slice(0,40);
+ const db:any=getSupabaseAdminClient(),requestKey='exec-finance-'+createHash('sha256').update(input.requestId).digest('hex').slice(0,40);
  const {data:existing,error:existingError}=await db.from('executive_delegations').select('id,mission_id,status').eq('actor_id',input.actorId).eq('chat_id',input.chatId).eq('request_key',requestKey).maybeSingle();
  if(existingError)throw Error('Executive request history unavailable');
  if(existing)return 'Finance assignment already recorded. Delegation '+existing.id+'; status '+existing.status+'.';
@@ -52,7 +52,7 @@ export async function startExecutiveFinance(input:{actorId:string;chatId:string;
 }
 
 export async function reconcileExecutiveFinance(){
- const db=getSupabaseAdminClient();
+ const db:any=getSupabaseAdminClient();
  const {data:running,error}=await db.from('executive_delegations') .select('id,actor_id,chat_id,mission_id,status').like('request_key','exec-finance-%').in('status',['running','verified','cancelled']).not('mission_id','is',null).order('updated_at',{ascending:false}).limit(100);
  if(error)throw Error('Executive reconciliation inventory unavailable');
  let verified=0,blocked=0;
