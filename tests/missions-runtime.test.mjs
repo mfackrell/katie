@@ -248,3 +248,33 @@ test('game review sees a lossless shared-contract view and completion retains th
  const m=mission();m.project_kind='specification';m.project_evidence={projectProfile:'game'};const compose={...job(m,'compose','compose'),status:'completed',result:{text}},review=job(m,'review','review');let committed;
  const {executeClaim}=modules({'@/lib/missions/store':{readMission:async()=>({mission:m,jobs:[compose,review]}),rpc:async(_,a)=>{committed=a;return true;}}})('@/lib/missions/worker');await executeClaim({mission:m,job:review},async(_,instruction,input)=>{if(instruction.includes('KATIE_REQUIRED_DRAFT_REVIEW')){const evidence=JSON.parse(input.split('Evidence and candidate:\n')[1]),candidate=evidence.candidate.result;assert.equal(candidate.text,undefined);assert.equal(candidate.specification.milestones[0].contractRef,'finalContract');assert.equal(candidate.specification.game.acceptance.scenarios.find(s=>s.kind==='browser').stepsRef,'finalContract.scenarios[name=browser].steps');assert.deepEqual(candidate.specification.finalContract,full.finalContract);assert.deepEqual(candidate.specification.game.rules,full.game.rules);assert.deepEqual(candidate.specification.game.acceptance.scenarios.find(s=>s.kind==='model'),full.game.acceptance.scenarios.find(s=>s.kind==='model'));assert.match(candidate.fullSpecificationHash,/^[a-f0-9]{64}$/);assert.match(candidate.referenceNote,/Every original rule/);}return{text:JSON.stringify(instruction.includes('KATIE_REQUIRED_DRAFT_REVIEW')?verdict():assessment),sources:[],calculations:[],model:'fixture'};});assert.equal(committed.p_final,text);assert.equal(compose.result.text,text);assert.equal(committed.p_result.verdict,'pass');
 });
+
+test('validation repair receives the rejected draft and stops after the third attempt',async()=>{
+ const {gameFixture}=await import('./fixtures/game-project.mjs');const f=gameFixture();
+ const draft={name:'Counter',summary:'Saved draft sentinel',requirements:['Increment and reject invalid actions'],allowedPaths:f.allowedPaths,milestones:[{title:'Complete game',instruction:'Build every approved rule',contract:f.contract}],finalContract:f.contract,game:f.game};
+ const m={...mission(),project_kind:'specification',project_evidence:{projectProfile:'game'}};
+ const j={...job(m,'compose','compose'),attempts:2,result:{specificationValidationFeedback:'Invalid scenario count',rejectedSpecification:JSON.stringify(draft)}};let claimed=false,committed;
+ const worker=modules({'@/lib/missions/store':{readMission:async()=>({mission:m,jobs:[j]}),rpc:async(n,a)=>{if(n==='claim_mission_work'){if(claimed)return null;claimed=true;return{mission:m,job:j};}committed=a;return true;}}})('@/lib/missions/worker');
+ const invalid=async(_,instruction,input)=>{const data=JSON.parse(input);assert.equal(data.rejectedDraft.specification.summary,'Saved draft sentinel');assert.match(data.rejectedDraft.instruction,/100 total browser steps/);assert.equal(data.rejectedDraft.specification.milestones[0].contractRef,'finalContract');return{text:'{}',sources:[],calculations:[],model:'fixture'};};
+ await worker.runMissionBatch(invalid);assert.equal(committed.p_status,'queued');
+ j.attempts=3;claimed=false;await worker.runMissionBatch(invalid);assert.equal(committed.p_status,'failed');assert.equal(committed.p_mission_status,'blocked');
+});
+
+test('oversized rejected drafts cannot overflow the repair model input or disappear from storage',async()=>{
+ const {gameFixture}=await import('./fixtures/game-project.mjs');const f=gameFixture();f.game.rules.stateModel.initialState.large='x'.repeat(60000);
+ const draft={name:'Counter',summary:'Oversized draft',requirements:['Retain original requirement'],allowedPaths:f.allowedPaths,milestones:[{title:'Complete game',instruction:'Build every rule',contract:f.contract}],finalContract:f.contract,game:f.game};
+ const text=JSON.stringify(draft),m={...mission(),objective:'Authoritative original requirement sentinel',project_kind:'specification',project_evidence:{projectProfile:'game'}},j={...job(m,'compose','compose'),result:{specificationValidationFeedback:'Specification exceeds bounded package',rejectedSpecification:text}};
+ const worker=modules({'@/lib/missions/store':{readMission:async()=>({mission:m,jobs:[j]}),rpc:async()=>true}})('@/lib/missions/worker');
+ await assert.rejects(worker.executeClaim({mission:m,job:j},async(_,instruction,input)=>{assert.ok(input.length<48000);const data=JSON.parse(input);assert.equal(data.objective,m.objective);assert.equal(data.rejectedDraft.specificationOmitted,true);assert.equal(data.rejectedDraft.specification,undefined);assert.ok(data.rejectedDraft.uniqueCharacters>48000);assert.ok(data.rejectedDraft.currentValidation.length<=600);throw Error('fixture stop after inspecting bounded input');}),/fixture stop/);
+ assert.equal(j.result.rejectedSpecification,text);
+});
+
+
+test('unfittable original repair context blocks honestly and preserves the rejected draft',async()=>{
+ const {gameFixture}=await import('./fixtures/game-project.mjs');const f=gameFixture();
+ const draft={name:'Counter',summary:'Saved draft',requirements:['Retain every requirement'],allowedPaths:f.allowedPaths,milestones:[{title:'Complete',instruction:'Build all rules',contract:f.contract}],finalContract:f.contract,game:f.game};
+ const text=JSON.stringify(draft),m={...mission(),objective:'x'.repeat(48000),project_kind:'specification',project_evidence:{projectProfile:'game'}},j={...job(m,'compose','compose'),attempts:2,result:{specificationValidationFeedback:'Invalid scenario count',rejectedSpecification:text}};let claimed=false,committed;
+ const worker=modules({'@/lib/missions/store':{readMission:async()=>({mission:m,jobs:[j]}),rpc:async(n,a)=>{if(n==='claim_mission_work'){if(claimed)return null;claimed=true;return{mission:m,job:j};}committed=a;return true;}}})('@/lib/missions/worker');
+ await worker.runMissionBatch(()=>assert.fail('No unbounded model input may be sent'));
+ assert.equal(committed.p_status,'failed');assert.equal(committed.p_result.repairContextOverflow,true);assert.equal(committed.p_result.rejectedSpecification,text);assert.equal(committed.p_result.specificationValidationFeedback,j.result.specificationValidationFeedback);
+});

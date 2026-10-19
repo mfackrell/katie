@@ -28,8 +28,10 @@ export function validateProjectPlan(raw: unknown) { const p = projectPlanSchema.
     throw Error('Specification exceeds the bounded approval/evidence package; simplify the milestones without dropping requirements'); for (const prefix of p.allowedPaths)
     if (!/^(?:app|apps|components|lib|public|tests|docs)\/[a-zA-Z0-9_./[\]-]+\/?$/.test(prefix) || prefix.split('/').some(s => s === '.' || s === '..') || /\.env|\.github|node_modules/.test(prefix))
         throw Error('Scope requires isolated application/source/test paths; dependencies, secrets and deployment configuration need a separate decision'); for (const c of [...p.milestones.map(m => m.contract), p.finalContract]) {
-    if (new Set(c.scenarios.map(s => s.name)).size !== c.scenarios.length || c.scenarios.flatMap(s => s.steps).length > 100)
-        throw Error('Invalid scenario count');
+    if (new Set(c.scenarios.map(s => s.name)).size !== c.scenarios.length)
+        throw Error('Browser scenario names must be unique within each contract');
+    const steps=c.scenarios.reduce((n,s)=>n+s.steps.length,0);
+    if(steps>100)throw Error(`Browser contract ${c.path} has ${steps} total steps across ${c.scenarios.length} scenarios; maximum 100 TOTAL steps per contract. Consolidate repeated setup into end-to-end scenarios, retaining every required state assertion, invalid action and reload check. Updating finalContract also requires identical updates to the final milestone contract and registered browser scenarios.`);
     for (const s of c.scenarios)
         if (!s.steps.some(s => s.action === 'expectText' || s.action === 'expectVisible') || s.steps.some(s => s.action.startsWith('expect') && 'selector' in s && /^(?:\*|html|body|:root)$/i.test(s.selector)))
             throw Error('Scenarios require actual application assertions');
