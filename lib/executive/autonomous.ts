@@ -106,7 +106,7 @@ export async function reconcileExecutiveFinance(){
  if(error)throw Error('Executive reconciliation inventory unavailable');
  let verified=0,blocked=0;
  for(const d of (running??[]) as Array<{id:string;actor_id:string;chat_id:string;mission_id:string|null;status:string;request_key:string}>){
-  if(!(d.request_key.startsWith('exec-finance-')||d.request_key.startsWith('exec-dev-'))||!d.mission_id)continue;
+  if(!(d.request_key.startsWith('exec-finance-')||d.request_key.startsWith('exec-dev-')||d.request_key.startsWith('exec-specialist-task-'))||!d.mission_id)continue;
   const {data:mission,error:missionError}=await db.from('agent_missions').select('status,result,detail').eq('id',d.mission_id).maybeSingle();
   const missionRow=mission as {status:string;result:string|null;detail:string|null}|null;
   if(missionError||!missionRow||!['completed','blocked','failed','stopped'].includes(missionRow.status))continue;
@@ -129,7 +129,7 @@ export async function reconcileExecutiveFinance(){
   }
   // Persist output after recording the transition, using a stable ID so cron
   // retries cannot generate duplicate final chat messages.
-  const label=d.request_key.startsWith('exec-dev-')?'Development':'Finance';
+  const label=d.request_key.startsWith('exec-dev-')?'Development':d.request_key.startsWith('exec-specialist-task-')?'Specialist':'Finance';
   const output=succeeded?label+' completed and passed independent review.\n\n'+missionRow.result:label+' could not complete this assignment. '+(missionRow.detail??'Independent acceptance was not established.');
   try{
    const replyId=missionId('executive-reply-'+d.id);
@@ -138,5 +138,7 @@ export async function reconcileExecutiveFinance(){
    if(!existingReply)await saveMessage(d.chat_id,{id:replyId,role:'assistant',content:output});
   }catch(e){console.error('[Executive] Chat handoff failed',{delegationId:d.id,error:e instanceof Error?e.message:'unknown'});}
  }
- return {verified,blocked};
+ const {reconcileSpecialistFactory}=await import('./factory-runtime');
+ const factory=await reconcileSpecialistFactory();
+ return {verified,blocked,...factory};
 }
