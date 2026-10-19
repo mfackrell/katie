@@ -5,8 +5,10 @@ import { extractAndSaveExplicitFacts } from "@/lib/memory/explicit-fact-extracto
 
 export function isFullActorMemoryClear(message: string): boolean {
   const normalized = message.trim().replace(/\s+/g, " ");
-  return /\b(?:remove|delete|clear|erase|wipe|forget|purge)\b/i.test(normalized)
-    && /\b(?:all|every|entire|whole|everything)\b/i.test(normalized)
+  if (/\b(?:do not|don't|never|not to|without)\s+(?:remove|delete|clear|erase|wipe|forget|purge)\b/i.test(normalized)) return false;
+  const imperative = /^(?:(?:please|kindly)\s+)?(?:remove|delete|clear|erase|wipe|forget|purge)\b/i.test(normalized)
+    || /\b(?:i want you to|you need to|please|can you|could you|would you|go ahead and)\s+(?:remove|delete|clear|erase|wipe|forget|purge)\b/i.test(normalized);
+  return imperative && /\b(?:all|every|entire|whole|everything)\b/i.test(normalized)
     && /\b(?:long[- ]term memory|memory layer|memory entries|memories|entries.{0,55}long[- ]term memory)\b/i.test(normalized);
 }
 
