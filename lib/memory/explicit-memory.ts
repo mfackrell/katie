@@ -23,7 +23,7 @@ export async function handleExplicitMemoryMutation(
   try {
     if (isFullActorMemoryClear(message)) {
       const removed = await clearActorLongTermMemory(actorId);
-      return `Cleared and verified this actor's long-term memory: ${removed.entries_removed} entries, ${removed.documents_removed} reference documents, and ${removed.legacy_rows_removed} legacy records removed. Other actors, chat history and short/intermediate memory were not changed.`;
+      return `Cleared and verified this actor's long-term memory: ${removed.entries_removed} entries, ${removed.documents_removed} reference documents, ${removed.legacy_rows_removed} legacy records, and ${removed.visual_references_removed} visual-memory references removed. Other actors, chat history and short/intermediate memory were not changed.`;
     }
     if (isExplicitMemoryCorrection(message)) {
       // Deletion requests are not preserved as a new source document: doing so
