@@ -13,7 +13,7 @@ export function gameAssessmentCapacity(plan:ProjectPlan){
 }
 export function validateGameAssessmentCapacity(plan:ProjectPlan){
  const capacity=gameAssessmentCapacity(plan);
- if(capacity&&capacity.requiredCharacters>capacity.maximumCharacters)throw Error(`Game specification exceeds the final assessment evidence capacity: ${capacity.requiredCharacters} characters required, maximum ${capacity.maximumCharacters}. Compact rule descriptions and consolidate repeated browser setup; preserve every original requirement.`);
+ if(capacity&&capacity.requiredCharacters>capacity.maximumCharacters)throw Error(`Game specification exceeds the final assessment evidence capacity: ${capacity.requiredCharacters} characters required, maximum ${capacity.maximumCharacters}. Compact rule descriptions and consolidate repeated browser setup before scope approval; preserve every original requirement.`);
 }
 export function gameAssessmentEvidence(p:Project,history:Array<{phase:string;index:number;status:string;head?:unknown}>,outcome:Record<string,unknown>|null){
  const v=outcome?.verification as Record<string,unknown>|undefined;
