@@ -50,7 +50,10 @@ test('production release needs explicit user authorization, not a casual coding 
   return require(name);
  }});
  const f=exp.authorizedReleaseObjective;
- assert.equal(f('Delegate software development to fix code and deploy the changes to production.'),true);
+ const developmentObjective='Delegate software development to fix code';
+ assert.equal(f(developmentObjective),false,'a plain development assignment does not authorize production release');
+ assert.equal(f(`${developmentObjective} and deploy the changes to production.`),true,
+  'explicit production-release authorization in the objective permits release');
  assert.equal(f('Delegate software development to fix code and deploy the changes to production.\\nCONNECTED REPOSITORY: mfackrell/katie\\nDo not auto-merge or deploy without existing release authorization.'),true);
  for(const msg of ['Build an app','Deploy to staging','Deploy to production, but do not deploy',
   'Do not deploy to production','Build and open a draft PR']){
