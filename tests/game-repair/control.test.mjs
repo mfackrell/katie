@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {createRequire} from 'node:module';
-import {decide,assertPaths,ownerEnabled,enabledGame,REVIEWER_ID} from '../../scripts/game-repair/control.mjs';
+import {decide,assertPaths,ownerEnabled,enabledGame,plan,REVIEWER_ID} from '../../scripts/game-repair/control.mjs';
 const config=JSON.parse(readFileSync(new URL('../../config/game-projects/beacon-relay.json',import.meta.url)));
 const head='a'.repeat(40),repo='mfackrell/katie';
 const pr={state:'open',base:{ref:'main',repo:{full_name:repo,owner:{login:'mfackrell'}}},head:{sha:head,ref:'game-repair/beacon-relay/test',repo:{full_name:repo}}};
@@ -77,4 +77,27 @@ test('latest owner enable command supersedes an older typo or different game',()
  assert.equal(enabledGame([old,corrected],'mfackrell'),'beacon-relay');
  assert.equal(enabledGame([corrected,old],'mfackrell'),'beacon-relay');
  assert.equal(enabledGame([old,{...corrected,user:{login:'outsider'}}],'mfackrell'),'typo');
+});
+
+
+test('verifier recovery reuses current saved head without reserving or starting new coding',async t=>{
+ const {mkdtempSync,readFileSync,rmSync}=await import('node:fs');const {tmpdir}=await import('node:os');const {join}=await import('node:path');
+ const output=mkdtempSync(join(tmpdir(),'game-reverify-'));t.after(()=>rmSync(output,{recursive:true,force:true}));
+ const prior={pr:565,game:'beacon-relay',runId:499,sourceSha:'b'.repeat(40),attempt:1,reservedAttempts:2};
+ const reservation={user:{login:'github-actions[bot]'},body:'<!-- katie-game-repair:v1 '+JSON.stringify(prior)+' -->'};
+ const listComments=()=>{},listReviewComments=()=>{};let writes=0;
+ const github={rest:{pulls:{get:async()=>({data:pr}),listReviewComments},issues:{listComments,createComment:async()=>{writes++;throw Error('Re-verification cannot reserve a coding attempt');}},actions:{getWorkflowRun:async()=>({data:{path:'.github/workflows/game-review-repair.yml',repository:{full_name:repo}}})}},paginate:async method=>method===listComments?[owner,reservation]:[{...finding,commit_id:prior.sourceSha}]};
+ const outputs={};
+ await plan({github,context:{repo:{owner:'mfackrell',repo:'katie'},runId:500,payload:{issue:{number:565},comment:{user:{login:'mfackrell'},body:'/katie-game-repair reverify beacon-relay'}}},core:{notice:()=>{},setOutput:(k,v)=>outputs[k]=v},root:new URL('../../',import.meta.url).pathname,output});
+ assert.equal(outputs.verify_only,'true');assert.equal(outputs.ready,'true');assert.equal(outputs.head,head);assert.equal(writes,0);
+ const saved=JSON.parse(readFileSync(join(output,'game-repair-plan.json')));assert.equal(saved.sourceRunId,499);assert.equal(saved.verificationOnly,true);
+ const {load}=createRequire(import.meta.url)('js-yaml');const round=load(readFileSync(new URL('../../.github/workflows/game-repair-round.yml',import.meta.url),'utf8'));
+ assert.equal(round.jobs.repair.if,'inputs.verify_only != true');
+});
+
+test('verifier recovery requires an existing authenticated workflow reservation',async()=>{
+ const outputs={};const listComments=()=>{},listReviewComments=()=>{};
+ const github={rest:{pulls:{get:async()=>({data:pr}),listReviewComments},issues:{listComments}},paginate:async method=>method===listComments?[owner]:[finding]};
+ await plan({github,context:{repo:{owner:'mfackrell',repo:'katie'},runId:501,payload:{issue:{number:565},comment:{user:{login:'mfackrell'},body:'/katie-game-repair reverify beacon-relay'}}},core:{notice:()=>{},setOutput:(k,v)=>outputs[k]=v},root:new URL('../../',import.meta.url).pathname,output:'/tmp/unused-game-reverify'});
+ assert.equal(outputs.ready,undefined);
 });

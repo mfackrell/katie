@@ -14,16 +14,20 @@ on:
       pr:
         type: string
         required: true
+      verify_only:
+        type: boolean
+        default: false
       round:
         type: number
         required: true
     outputs:
       head:
-        value: ${{ jobs.repair.outputs.head }}
+        value: ${{ jobs.repair.outputs.head || inputs.head }}
       verdict:
         value: ${{ jobs.review.outputs.verdict }}
 jobs:
   repair:
+    if: inputs.verify_only != true
     runs-on: ubuntu-22.04
     timeout-minutes: 25
     outputs:
@@ -118,6 +122,7 @@ jobs:
           if-no-files-found: ignore
   test:
     needs: repair
+    if: always() && (inputs.verify_only || needs.repair.result == 'success')
     runs-on: ubuntu-22.04
     timeout-minutes: 25
     outputs:
@@ -130,7 +135,7 @@ jobs:
           persist-credentials: false
       - uses: actions/checkout@v4
         with:
-          ref: ${{ needs.repair.outputs.head }}
+          ref: ${{ needs.repair.outputs.head || inputs.head }}
           path: candidate
           fetch-depth: 0
           persist-credentials: false
@@ -145,6 +150,7 @@ jobs:
         working-directory: candidate
         run: |
           set -euo pipefail
+          node ../trusted/scripts/game-repair/check-source.mjs "$RUNNER_TEMP/game-plan/game-repair-plan.json"
           sudo apt-get update -qq
           sudo apt-get install -y bubblewrap
           bwrap --unshare-user --ro-bind / / -- /bin/true
@@ -158,7 +164,7 @@ jobs:
       - name: Independently execute engine, build and browser acceptance
         id: verify
         env:
-          HEAD_SHA: ${{ needs.repair.outputs.head }}
+          HEAD_SHA: ${{ needs.repair.outputs.head || inputs.head }}
         run: |
           set +e
           node trusted/scripts/game-repair/verify.mjs "$RUNNER_TEMP/game-plan/game-repair-plan.json" "$GITHUB_WORKSPACE/candidate" "$RUNNER_TEMP/game-deps/node_modules" "$RUNNER_TEMP/test-receipt.json"
@@ -172,7 +178,7 @@ jobs:
           if-no-files-found: error
   review:
     needs: [repair, test]
-    if: always() && needs.repair.result == 'success'
+    if: always() && (inputs.verify_only || needs.repair.result == 'success')
     runs-on: ubuntu-22.04
     timeout-minutes: 20
     outputs:
@@ -180,7 +186,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ needs.repair.outputs.head }}
+          ref: ${{ needs.repair.outputs.head || inputs.head }}
+          fetch-depth: 0
           persist-credentials: false
       - uses: actions/download-artifact@v4
         with:
@@ -191,6 +198,15 @@ jobs:
         with:
           name: game-round-${{ inputs.round }}-tests
           path: ${{ runner.temp }}/game-tests
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install immutable reviewer dependencies without lifecycle scripts
+        run: |
+          set -euo pipefail
+          baseline="$(node -p 'JSON.parse(require("fs").readFileSync(process.env.RUNNER_TEMP+"/game-plan/game-repair-plan.json")).config.baselineSha')"
+          git diff --exit-code "$baseline" HEAD -- package.json package-lock.json
+          npm ci --ignore-scripts --no-audit --no-fund
       - name: Review independently without developer response
         uses: openai/codex-action@v1
         with:
@@ -212,7 +228,7 @@ jobs:
         id: result
         env:
           TEST_PASSED: ${{ needs.test.outputs.passed }}
-          HEAD_SHA: ${{ needs.repair.outputs.head }}
+          HEAD_SHA: ${{ needs.repair.outputs.head || inputs.head }}
         run: |
           set -euo pipefail
           node - <<'NODE'
