@@ -1,4 +1,4 @@
-import {readFileSync,writeFileSync,mkdirSync} from 'node:fs';
+import {readFileSync,writeFileSync,mkdirSync,existsSync} from 'node:fs';
 import {resolve} from 'node:path';
 export const REVIEWER_ID=199175422;
 export const STATE='<!-- katie-game-repair:v1 ';
@@ -23,6 +23,11 @@ export function assertTarget(pr,repo,config){
 }
 export function assertPaths(changes,config){
  if(!changes.length||changes.some(p=>!config.allowedPaths.includes(p)))throw Error('Repair escaped registered gameplay scope or produced no change');
+}
+export function enabledGame(comments,owner){
+ return comments.filter(c=>c.user?.login?.toLowerCase()===owner.toLowerCase()&&/^\/katie-game-repair enable [a-z0-9-]+$/.test(c.body?.trim()??''))
+ .sort((a,b)=>String(a.updated_at??a.created_at??'').localeCompare(String(b.updated_at??b.created_at??'')))
+ .at(-1)?.body.trim().split(' ').at(-1);
 }
 export function ownerEnabled(comments,owner,game){
  const commands=comments.filter(c=>c.user?.login?.toLowerCase()===owner.toLowerCase()&&[
@@ -51,9 +56,11 @@ export async function plan({github,context,core,root=process.cwd(),output=proces
  // authenticated reviewer state from GitHub. All candidate data stays in files.
  const pr=(await github.rest.pulls.get({...repo,pull_number:number})).data;
  const comments=await github.paginate(github.rest.issues.listComments,{...repo,issue_number:number,per_page:100});
- const game=comments.find(c=>c.user?.login?.toLowerCase()===repo.owner.toLowerCase()&&/^\/katie-game-repair enable [a-z0-9-]+$/.test(c.body?.trim()??''))?.body.trim().split(' ').at(-1);
+ const game=enabledGame(comments,repo.owner);
  if(!game)return;
- const config=JSON.parse(readFileSync(resolve(root,'config/game-projects',game+'.json'),'utf8'));
+ const configPath=resolve(root,'config/game-projects',game+'.json');
+ if(!existsSync(configPath)){core.notice('Game is not registered in trusted configuration');return;}
+ const config=JSON.parse(readFileSync(configPath,'utf8'));
  const reservations=comments.flatMap(c=>{
   if(c.user?.login!=='github-actions[bot]'||!c.body?.startsWith(STATE))return[];
   try{return[JSON.parse(c.body.slice(STATE.length,c.body.indexOf(' -->')))];}catch{return[];}

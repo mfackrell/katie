@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {createRequire} from 'node:module';
-import {decide,assertPaths,ownerEnabled,REVIEWER_ID} from '../../scripts/game-repair/control.mjs';
+import {decide,assertPaths,ownerEnabled,enabledGame,REVIEWER_ID} from '../../scripts/game-repair/control.mjs';
 const config=JSON.parse(readFileSync(new URL('../../config/game-projects/beacon-relay.json',import.meta.url)));
 const head='a'.repeat(40),repo='mfackrell/katie';
 const pr={state:'open',base:{ref:'main',repo:{full_name:repo,owner:{login:'mfackrell'}}},head:{sha:head,ref:'game-repair/beacon-relay/test',repo:{full_name:repo}}};
@@ -69,4 +69,12 @@ test('an owner can revoke repair authorization and stale enable commands cannot 
  assert.equal(ownerEnabled([enable,disable],'mfackrell','beacon-relay'),false);
  assert.equal(decide(input({comments:[enable,disable,summary()]})).status,'disabled');
  assert.equal(ownerEnabled([enable,disable,{...disable,user:{login:'outsider'},body:enable.body,updated_at:'2026-10-19T15:02:00Z'}],'mfackrell','beacon-relay'),false);
+});
+
+test('latest owner enable command supersedes an older typo or different game',()=>{
+ const old={...owner,body:'/katie-game-repair enable typo',updated_at:'2026-10-19T15:00:00Z'};
+ const corrected={...owner,updated_at:'2026-10-19T15:01:00Z'};
+ assert.equal(enabledGame([old,corrected],'mfackrell'),'beacon-relay');
+ assert.equal(enabledGame([corrected,old],'mfackrell'),'beacon-relay');
+ assert.equal(enabledGame([old,{...corrected,user:{login:'outsider'}}],'mfackrell'),'typo');
 });
