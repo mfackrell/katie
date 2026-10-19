@@ -1,3 +1,4 @@
+import {validateProjectPlan} from '@/lib/projects/contract';
 import {getDevelopmentProjectContext,acceptanceBinding} from '@/lib/projects/store';
 import { agentRpc } from '@/lib/agents/store';
 import { dispatchDevelopment,reconcileDevelopment,developmentEvidence } from '@/lib/agents/development';
@@ -22,7 +23,7 @@ export async function executeClaim(claim:Claim,model=missionModel){
  if(!['running','awaiting_approval'].includes(saved.mission.status))return;
  const completed=saved.jobs.filter(j=>j.status==='completed');
  const priorReviews=completed.filter(j=>j.role==='review').map(j=>({key:j.job_key,verdict:j.result?.verdict,findings:j.result?.findings,checks:j.result?.checks,clarification:j.result?.clarification}));
- const context=()=>JSON.stringify({objective:mission.objective,projectPhase:mission.project_kind,projectEvidence:researchRecoveryEvidence(mission.project_evidence,true),assignment:job.instruction,evidence:completed.filter(j=>j.role!=='plan'&&j.role!=='review').map(j=>({key:j.job_key,instruction:j.instruction,result:j.result}))});
+ const context=()=>JSON.stringify({objective:mission.objective,projectPhase:mission.project_kind,projectEvidence:researchRecoveryEvidence(mission.project_evidence,true),assignment:job.instruction,specificationValidationFeedback:job.result?.specificationValidationFeedback,evidence:completed.filter(j=>j.role!=='plan'&&j.role!=='review').map(j=>({key:j.job_key,instruction:j.instruction,result:j.result}))});
  const finalWork=job.role==='compose'||job.role==='revise';
  const persona=frame+'\nSaved responsibilities: '+agent.config.instructions+'\n'+(finalWork?getObjectiveFirstInstruction():'Complete only input.assignment. The full objective is context for that assignment, not a request to perform the other workers’ assignments or compose the whole deliverable. Do not delegate, write a new plan, repeat unassigned calculations or recommendations, or offer future work.');
  const commit=(result:Record<string,unknown>,children:Child[]=[],status='completed',missionStatus:string|null=null,final:string|null=null)=>rpc<boolean>('commit_mission_work',{p_id:job.id,p_lease:job.lease,p_result:result,p_children:children,p_status:status,p_mission_status:missionStatus,p_final:final});
@@ -92,6 +93,10 @@ export async function executeClaim(claim:Claim,model=missionModel){
  const capability=job.payload.capability;
  const tools=job.role==='work'&&capability==='research'?'research':job.role==='work'&&capability==='analysis'?'calculate':'none';
  const result=await model(claim,persona+'\n'+(finalWork?'Return only the final deliverable addressing the entire objective and saved review findings. When reporting completed development, the verified changedFiles patches, validation excerpts and immutable SHAs are authoritative. Report the actual work; never rewrite a file or reconstruct a diff as if it were committed. Quote exact content only from the supplied patch. Never invent check commands or outputs; cite the supplied check evidence. Apply whole-deliverable length limits to the ENTIRE response, including evidence, tables and source links. Apply section-specific length limits only to their named sections. Do not add a separate package, duplicated calculations, process commentary, or an offer of future work outside that limit.':'Return only the assigned evidence or analysis, with explicit sources, calculations, and findings, in at most 600 words unless this assignment explicitly requires more.'),context()+(job.role==='revise'?'\nReview findings: '+JSON.stringify(priorReviews):''),tools);
+ if(finalWork&&mission.project_kind==='specification'&&(mission.project_evidence as {projectProfile?:string}|null)?.projectProfile==='game'){
+  try{result.text=JSON.stringify(validateProjectPlan(parseJSON(result.text)));}
+  catch(error){const feedback=error&&typeof error==='object'&&'message' in error&&typeof error.message==='string'?error.message.slice(0,600):'Invalid JSON';throw new MissionModelFailure('Invalid game specification: '+feedback,{specificationValidationFeedback:feedback});}
+ }
  await commit(result);
 }
 export async function runMissionBatch(model=missionModel){
@@ -102,7 +107,9 @@ export async function runMissionBatch(model=missionModel){
   catch(error){const detail=error instanceof Error?error.message.slice(0,600):'Assignment execution failed';console.error('[Missions] Assignment failed',{jobId:claim.job.id,detail});
    const invalidContract=error instanceof MissionModelFailure&&error.partial.reviewPhase==='assessment';
    const truncatedGameSpecification=error instanceof MissionModelFailure&&error.partial.incompleteReason==='max_output_tokens'&&claim.mission.project_kind==='specification'&&(claim.mission.project_evidence as {projectProfile?:string}|null)?.projectProfile==='game'&&['compose','revise'].includes(claim.job.role);
-   const retry=claim.job.attempts<2&&(invalidContract||truncatedGameSpecification||/timeout|timed out|connection|fetch failed|429|rate limit|500|502|503|504/i.test(detail));
+   const transientProvider=error instanceof MissionModelFailure&&['server_error','rate_limit_exceeded'].includes(String(error.partial.providerErrorCode));
+   const invalidGameSpecification=error instanceof MissionModelFailure&&typeof error.partial.specificationValidationFeedback==='string';
+   const retry=claim.job.attempts<2&&(invalidContract||truncatedGameSpecification||transientProvider||invalidGameSpecification||/timeout|timed out|connection|fetch failed|429|rate limit|500|502|503|504/i.test(detail));
    await rpc('commit_mission_work',{p_id:claim.job.id,p_lease:claim.job.lease,p_result:{...(error instanceof MissionModelFailure?error.partial:{}),detail},p_children:[],p_status:retry?'queued':'failed',p_mission_status:retry?null:'blocked',p_final:null});
    return {jobId:claim.job.id,status:retry?'retrying':'blocked'};}
  }));

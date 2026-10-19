@@ -50,7 +50,7 @@ export async function missionModel(claim:Claim,instruction:string,input:string,t
   try{
    const response=await client.responses.create(request as unknown as OpenAI.Responses.ResponseCreateParamsNonStreaming,{timeout:inferenceTimeout});
    await rpc('finish_mission_call',{p_call:callId,p_tokens:response.usage?.total_tokens??null});
-   if(response.status!=='completed')throw new MissionModelFailure('Model output incomplete: '+response.status,{responseStatus:response.status,incompleteReason:response.incomplete_details?.reason??null,outputTokenLimit:outputTokens});
+   if(response.status!=='completed')throw new MissionModelFailure('Model output incomplete: '+response.status,{responseStatus:response.status,incompleteReason:response.incomplete_details?.reason??null,outputTokenLimit:outputTokens,providerErrorCode:response.error?.code??null,providerErrorMessage:response.error?.message?.slice(0,600)??null});
    text=response.output_text?.trim()??'';
    const output=response.output as unknown as Array<Record<string,unknown>>;
    for(const item of output){for(const block of (Array.isArray(item.content)?item.content:[]) as Array<Record<string,unknown>>){for(const a of (Array.isArray(block.annotations)?block.annotations:[]) as Array<Record<string,unknown>>){if(a.type==='url_citation'&&typeof a.url==='string'&&/^https?:\/\//.test(a.url))sources.push({url:a.url,title:String(a.title??'')});}}}

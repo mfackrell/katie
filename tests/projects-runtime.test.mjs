@@ -343,3 +343,9 @@ test('game approval rejects a previously supported target until its versioned ga
   rulesInstalled=true;assert.equal(await baseline({...owner,profile:'game'}),'a'.repeat(40));
  }finally{if(prior===undefined)delete process.env.PROJECT_PREVIEW_REPOSITORIES;else process.env.PROJECT_PREVIEW_REPOSITORIES=prior;}
 });
+
+test('Resume reaches the exact saved game specification retry before generic blocked control',async()=>{
+ let p={...owner,profile:'game',phase:'specification',status:'blocked'},calls=[];
+ const {handleProjectChat}=modules({'@/lib/projects/store':{projectForChat:async()=>p,projectRpc:async(name,args)=>{calls.push({name,args});if(name==='retry_project_review')return null;if(name==='retry_game_specification'){p={...p,status:'running',detail:'Completing saved specification'};return true;}assert.fail('Recovered specification must not reach generic blocked control');}}})('@/lib/projects/chat');
+ const out=await handleProjectChat({actorId:actor,chatId:chat,message:'resume the project'},'resume-spec',[],true);assert.match(out,/Completing saved specification/);assert.deepEqual(calls.map(c=>c.name),['retry_project_review','retry_game_specification']);assert.equal(calls[1].args.p_id,id);assert.equal(calls[1].args.p_actor,actor);assert.equal(calls[1].args.p_chat,chat);
+});
