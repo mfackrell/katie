@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {createRequire} from 'node:module';
-import {decide,assertPaths,REVIEWER_ID} from '../../scripts/game-repair/control.mjs';
+import {decide,assertPaths,ownerEnabled,REVIEWER_ID} from '../../scripts/game-repair/control.mjs';
 const config=JSON.parse(readFileSync(new URL('../../config/game-projects/beacon-relay.json',import.meta.url)));
 const head='a'.repeat(40),repo='mfackrell/katie';
 const pr={state:'open',base:{ref:'main',repo:{full_name:repo,owner:{login:'mfackrell'}}},head:{sha:head,ref:'game-repair/beacon-relay/test',repo:{full_name:repo}}};
@@ -61,4 +61,12 @@ test('trusted preflight rejects protected source changes before an agent can exe
  writeFileSync(join(root,config.allowedPaths[0]),'fixed');git('add','.');git('commit','-qm','game change');assert.equal(run().status,0);
  mkdirSync(join(root,'.codex'));writeFileSync(join(root,'.codex/config.toml'),'dangerous');git('add','.');git('commit','-qm','protected change');
  assert.notEqual(run().status,0);
+});
+
+test('an owner can revoke repair authorization and stale enable commands cannot override it',()=>{
+ const enable={...owner,updated_at:'2026-10-19T15:00:00Z'};
+ const disable={...owner,body:'/katie-game-repair disable beacon-relay',updated_at:'2026-10-19T15:01:00Z'};
+ assert.equal(ownerEnabled([enable,disable],'mfackrell','beacon-relay'),false);
+ assert.equal(decide(input({comments:[enable,disable,summary()]})).status,'disabled');
+ assert.equal(ownerEnabled([enable,disable,{...disable,user:{login:'outsider'},body:enable.body,updated_at:'2026-10-19T15:02:00Z'}],'mfackrell','beacon-relay'),false);
 });

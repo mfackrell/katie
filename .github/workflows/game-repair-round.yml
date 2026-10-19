@@ -73,6 +73,19 @@ jobs:
           working-directory: candidate
           prompt-file: ${{ runner.temp }}/repair-request.md
           output-file: ${{ runner.temp }}/repair-response.md
+      - name: Recheck live authorization before publishing
+        uses: actions/github-script@v7
+        env:
+          EXPECTED: ${{ inputs.head }}
+        with:
+          script: |
+            const fs=require('fs');
+            const plan=JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP+'/game-plan/game-repair-plan.json'));
+            const {assertTarget,ownerEnabled}=await import(`${process.env.GITHUB_WORKSPACE}/trusted/scripts/game-repair/control.mjs`);
+            const pr=(await github.rest.pulls.get({...context.repo,pull_number:plan.pr})).data;
+            const comments=await github.paginate(github.rest.issues.listComments,{...context.repo,issue_number:plan.pr,per_page:100});
+            assertTarget(pr,`${context.repo.owner}/${context.repo.repo}`,plan.config);
+            if(pr.head.sha!==process.env.EXPECTED||pr.head.ref!==plan.branch||!ownerEnabled(comments,context.repo.owner,plan.game))throw Error('Head, branch or owner authorization changed; repair publication stopped');
       - name: Enforce scope and publish with a head lease
         id: publish
         working-directory: candidate
@@ -84,7 +97,7 @@ jobs:
           ROUND: ${{ inputs.round }}
         run: |
           set -euo pipefail
-          current="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR" --jq '.head.sha')"
+          current="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR" --jq 'select(.state == "open") | .head.sha')"
           test "$current" = "$EXPECTED" || { echo 'PR changed during repair'; exit 1; }
           node ../trusted/scripts/game-repair/publish.mjs "$RUNNER_TEMP/game-plan/game-repair-plan.json" "$ROUND"
           gh auth setup-git

@@ -2,7 +2,7 @@
 
 This additive workflow handles later Codex GitHub findings for registered games. It does not change Katie's executive orchestrator, shared recovery supervisor, normal software tasks, or production release authority.
 
-Register a game in `config/game-projects/<id>.json` through a reviewed change. Pin the approved game and its unmodified test fixtures to a baseline SHA, the original issue, exact editable gameplay files, and a two-attempt budget. The repository owner then posts `/katie-game-repair enable <id>` on an open same-repository game PR. Registration does not itself run coding: a completed, authenticated Codex review with findings on the current PR head is required.
+Register a game in `config/game-projects/<id>.json` through a reviewed change. Pin the approved game and its unmodified test fixtures to a baseline SHA, the original issue, exact editable gameplay files, and a two-attempt budget. The repository owner then posts `/katie-game-repair enable <id>` on an open same-repository game PR. The owner can revoke consent with `/katie-game-repair disable <id>` or by closing the PR. Authorization and PR state are rechecked before publication. Registration does not itself run coding: a completed, authenticated Codex review with findings on the current PR head is required.
 
 The listener runs on default-branch issue-comment events, including Codex's edited review-summary comment. It re-reads owner authorization, PR identity, trusted bot identity, exact reviewed SHA and inline findings through GitHub's API. Forks, stale findings, ordinary comments and unregistered tasks cannot start repair. Per-PR concurrency and an early durable reservation prevent duplicate attempts. A reservation consumes the bounded budget even if infrastructure fails.
 

@@ -24,9 +24,15 @@ export function assertTarget(pr,repo,config){
 export function assertPaths(changes,config){
  if(!changes.length||changes.some(p=>!config.allowedPaths.includes(p)))throw Error('Repair escaped registered gameplay scope or produced no change');
 }
+export function ownerEnabled(comments,owner,game){
+ const commands=comments.filter(c=>c.user?.login?.toLowerCase()===owner.toLowerCase()&&[
+  `/katie-game-repair enable ${game}`,`/katie-game-repair disable ${game}`
+ ].includes(c.body?.trim())).sort((a,b)=>String(a.updated_at??a.created_at??'').localeCompare(String(b.updated_at??b.created_at??'')));
+ return commands.at(-1)?.body.trim()===`/katie-game-repair enable ${game}`;
+}
 export function decide({pr,repo,config,comments,reviewComments,attempts}){
  assertTarget(pr,repo,config);
- const enabled=comments.some(c=>c.user?.login?.toLowerCase()===pr.base.repo.owner.login.toLowerCase()&&c.body?.trim()===`/katie-game-repair enable ${config.id}`);
+ const enabled=ownerEnabled(comments,pr.base.repo.owner.login,config.id);
  if(!enabled)return{status:'disabled'};
  const state=reviewState(comments,pr.head.sha);
  if(state.status!=='changes_requested')return state;
