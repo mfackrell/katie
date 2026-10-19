@@ -70,7 +70,9 @@ export async function handleExecutiveSpecialistIntake(input:{
  const plan=planned.request as {id?:string};
  if(!plan.id)throw Error('Provisioning request identity missing');
  const originalKey=requestKey(input.requestId,input.message);
- const deadline=new Date(Date.now()+7*86400000).toISOString();
+ const stamp=(plan as {created_at?:string}).created_at;
+ if(typeof stamp!=='string'||!Number.isFinite(Date.parse(stamp)))throw Error('Durable provisioning timestamp missing');
+ const deadline=new Date(Date.parse(stamp)+7*86400000).toISOString();
  const {data:delegation,error:delegateError}=await db.rpc('propose_executive_delegation',{
   p_actor:input.actorId,p_chat:input.chatId,p_slug:available[0].slug,
   p_request:'commission-'+originalKey,p_objective:'Build and independently verify '+title+
