@@ -139,7 +139,12 @@ export async function reconcileSpecialistFactory(){
    .eq('status','completed').limit(10).returns<{job_key:string;result:{verdict?:string}|null}>();
   if(reviewsError)throw Error('Independent factory review lookup failed');
   const final=reviews?.find(r=>r.job_key==='review_again')??reviews?.find(r=>r.job_key==='review');
-  const passed=mission.status==='completed'&&final?.result?.verdict==='pass'&&Boolean(mission.result?.trim());
+  const {data:assignments,error:assignmentsError}=await db.from('mission_assignments')
+   .select('agent_id,role,status').eq('mission_id',missionId).eq('status','completed').limit(12)
+   .returns<{agent_id:string;role:string;status:string}>();
+  if(assignmentsError)throw Error('Factory independent worker evidence unavailable');
+  const workerIds=new Set((assignments??[]).filter(a=>a.role==='work'||a.role==='development').map(a=>a.agent_id));
+  const passed=mission.status==='completed'&&final?.result?.verdict==='pass'&&Boolean(mission.result?.trim())&&workerIds.size>=2;
   if(passed){
    const evidence={independentReview:'pass',acceptanceEvidence:[{kind:'mission',missionId,result:(mission.result??'').slice(0,3500)}]};
    const {data:validated,error:validationError}=await db.rpc('transition_executive_provisioning',{
