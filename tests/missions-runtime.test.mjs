@@ -253,6 +253,7 @@ test('validation repair receives the rejected draft and stops after the third at
  const {gameFixture}=await import('./fixtures/game-project.mjs');const f=gameFixture();
  const draft={name:'Counter',summary:'Saved draft sentinel',requirements:['Increment and reject invalid actions'],allowedPaths:f.allowedPaths,milestones:[{title:'Complete game',instruction:'Build every approved rule',contract:f.contract}],finalContract:f.contract,game:f.game};
  const m={...mission(),project_kind:'specification',project_evidence:{projectProfile:'game'}};
+ draft.game.rules.rules[0].category='invalid-category';
  const j={...job(m,'compose','compose'),attempts:2,result:{specificationValidationFeedback:'Invalid scenario count',rejectedSpecification:JSON.stringify(draft)}};let claimed=false,committed;
  const worker=modules({'@/lib/missions/store':{readMission:async()=>({mission:m,jobs:[j]}),rpc:async(n,a)=>{if(n==='claim_mission_work'){if(claimed)return null;claimed=true;return{mission:m,job:j};}committed=a;return true;}}})('@/lib/missions/worker');
  const invalid=async(_,instruction,input)=>{const data=JSON.parse(input);assert.equal(data.rejectedDraft.specification.summary,'Saved draft sentinel');assert.match(data.rejectedDraft.instruction,/100 total browser steps/);assert.equal(data.rejectedDraft.specification.milestones[0].contractRef,'finalContract');return{text:'{}',sources:[],calculations:[],model:'fixture'};};
@@ -273,8 +274,18 @@ test('oversized rejected drafts cannot overflow the repair model input or disapp
 test('unfittable original repair context blocks honestly and preserves the rejected draft',async()=>{
  const {gameFixture}=await import('./fixtures/game-project.mjs');const f=gameFixture();
  const draft={name:'Counter',summary:'Saved draft',requirements:['Retain every requirement'],allowedPaths:f.allowedPaths,milestones:[{title:'Complete',instruction:'Build all rules',contract:f.contract}],finalContract:f.contract,game:f.game};
+ draft.game.rules.rules[0].category='invalid-category';
  const text=JSON.stringify(draft),m={...mission(),objective:'x'.repeat(48000),project_kind:'specification',project_evidence:{projectProfile:'game'}},j={...job(m,'compose','compose'),attempts:2,result:{specificationValidationFeedback:'Invalid scenario count',rejectedSpecification:text}};let claimed=false,committed;
  const worker=modules({'@/lib/missions/store':{readMission:async()=>({mission:m,jobs:[j]}),rpc:async(n,a)=>{if(n==='claim_mission_work'){if(claimed)return null;claimed=true;return{mission:m,job:j};}committed=a;return true;}}})('@/lib/missions/worker');
  await worker.runMissionBatch(()=>assert.fail('No unbounded model input may be sent'));
  assert.equal(committed.p_status,'failed');assert.equal(committed.p_result.repairContextOverflow,true);assert.equal(committed.p_result.rejectedSpecification,text);assert.equal(committed.p_result.specificationValidationFeedback,j.result.specificationValidationFeedback);
+});
+
+
+test('a saved specification made valid by a platform fix is reused without inference and still needs review',async()=>{
+ const {gameFixture}=await import('./fixtures/game-project.mjs');const f=gameFixture(),draft={name:'Counter',summary:'Saved full draft',requirements:['All original requirements'],allowedPaths:f.allowedPaths,milestones:[{title:'Complete',instruction:'Build all rules',contract:f.contract}],finalContract:f.contract,game:f.game};
+ const m={...mission(),project_kind:'specification',project_evidence:{projectProfile:'game'}},j={...job(m,'compose','compose'),result:{specificationValidationFeedback:'Old capacity estimate',rejectedSpecification:JSON.stringify(draft)}};let committed;
+ const worker=modules({'@/lib/missions/store':{readMission:async()=>({mission:m,jobs:[j]}),rpc:async(_,a)=>{committed=a;return true;}}})('@/lib/missions/worker');
+ await worker.executeClaim({mission:m,job:j},()=>assert.fail('Do not regenerate a valid saved draft'));
+ assert.equal(committed.p_result.text,JSON.stringify(draft));assert.equal(committed.p_result.recovery.kind,'revalidated_saved_specification');assert.equal(committed.p_mission_status,null);assert.equal(committed.p_final,null);
 });

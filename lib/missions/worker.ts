@@ -52,6 +52,12 @@ export async function executeClaim(claim:Claim,model=missionModel){
  const finalWork=job.role==='compose'||job.role==='revise';
  const persona=frame+'\nSaved responsibilities: '+agent.config.instructions+'\n'+(finalWork?getObjectiveFirstInstruction():'Complete only input.assignment. The full objective is context for that assignment, not a request to perform the other workers’ assignments or compose the whole deliverable. Do not delegate, write a new plan, repeat unassigned calculations or recommendations, or offer future work.');
  const commit=(result:Record<string,unknown>,children:Child[]=[],status='completed',missionStatus:string|null=null,final:string|null=null)=>rpc<boolean>('commit_mission_work',{p_id:job.id,p_lease:job.lease,p_result:result,p_children:children,p_status:status,p_mission_status:missionStatus,p_final:final});
+ // After a platform validation fix, reuse a now-valid saved draft rather than
+ // spend another inference rewriting it. Independent review still runs normally.
+ if(finalWork&&mission.project_kind==='specification'&&(mission.project_evidence as {projectProfile?:string}|null)?.projectProfile==='game'&&typeof job.result?.rejectedSpecification==='string'){
+  let recovered;try{recovered=validateProjectPlan(parseJSON(job.result.rejectedSpecification));}catch{/* Still invalid: use the bounded model repair below. */}
+  if(recovered?.game){await commit({text:JSON.stringify(recovered),sources:[],calculations:[],recovery:{kind:'revalidated_saved_specification',previousFailure:job.result.specificationValidationFeedback}});return;}
+ }
  if(job.role==='plan'){
   if(mission.project_kind==='specification'||mission.project_kind==='assessment'){
    const specification=mission.project_kind==='specification';
