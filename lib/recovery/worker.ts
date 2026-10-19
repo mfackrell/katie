@@ -220,6 +220,27 @@ async function handleCase(c:Case):Promise<string>{
    evidenceVerified:false});
  return protectedCase?'requires_owner':'blocked';
 }
+// Read the trusted machine-readable GitHub completion receipt. Merely
+// discovering a draft PR or a human-written "READY" comment is never proof.
+async function verifiedRepairReceipt(client:Octokit,repo:{owner:string;repo:string;fullName:string},
+ issueNumber:number,pr:{html_url:string;head:{sha:string}},project?:ProjectAcceptanceBinding|null){
+ const runs=await client.actions.listWorkflowRuns({...repo,workflow_id:'autonomous-development.yml',per_page:50});
+ for(const run of runs.data.workflow_runs.slice(0,30)){
+  if(run.status!=='completed'||run.path!=='.github/workflows/autonomous-development.yml'||
+    run.repository.full_name!==repo.fullName||run.head_branch!=='main')continue;
+  try{
+   const artifacts=await client.actions.listWorkflowRunArtifacts({...repo,run_id:run.id,per_page:20});
+   const artifact=artifacts.data.artifacts.find(x=>x.name==='agent-completion'&&!x.expired&&x.size_in_bytes<=1_000_000);
+   if(!artifact)continue;
+   const downloaded=await client.actions.downloadArtifact({...repo,artifact_id:artifact.id,archive_format:'zip'});
+   const raw=completionJson(Buffer.from(downloaded.data as ArrayBuffer)) as Record<string,unknown>;
+   if(raw.issue_number!==issueNumber||raw.pr_url!==pr.html_url)continue;
+   const accepted=parseCompletionReceipt(raw,repo.fullName,issueNumber,run.id,run.conclusion,project??undefined);
+   return accepted.outcome==='READY'&&accepted.tested_head_sha===pr.head.sha&&accepted.reviewed_head_sha===pr.head.sha;
+  }catch{/* Do not infer a passing review from an inaccessible or corrupt artifact. */}
+ }
+ return false;
+}
 async function monitorRecoveryCases():Promise<void>{
  const db=getSupabaseAdminClient();
  const {data,error}=await db.from('recovery_cases').select('*').in('status',['verifying','delegated','awaiting_release'])
@@ -242,20 +263,29 @@ async function monitorRecoveryCases():Promise<void>{
   const client=ownerClient();
   const issueNumber=Number(c.repair_issue_url.split('/').pop());
   if(!Number.isSafeInteger(issueNumber)||issueNumber<1)continue;
-  const comments=await client.issues.listComments({...repo,issue_number:issueNumber,per_page:100});
-  const prUrl=comments.data.map(x=>x.body??'').join('\n')
-    .match(new RegExp('https://github\\.com/'+repo.fullName.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+'/pull/[1-9][0-9]*'))?.[0]??null;
-  if(!prUrl)continue;
-  const prNumber=Number(prUrl.split('/').pop());
-  const pr=(await client.pulls.get({...repo,pull_number:prNumber})).data;
-  if(pr.head.repo?.full_name!==repo.fullName||pr.base.repo.full_name!==repo.fullName)continue;
+  // The original workflow creates a draft branch and PR on behalf of the
+  // human owner. Match its saved issue-number binding, not untrusted comments.
+  const pulls=await client.pulls.list({...repo,state:'all',sort:'created',direction:'desc',per_page:100});
+  const pr=pulls.data.find(x=>x.head.ref.startsWith('agent/issue-'+issueNumber+'-')&&
+    x.base.repo.full_name===repo.fullName&&x.head.repo?.full_name===repo.fullName);
+  if(!pr){
+    // Preserve the pending assignment; the workflow may still be executing.
+    continue;
+  }
+  const prUrl=pr.html_url;
+  const bound=await boundSource(c);
+  const accepted=await verifiedRepairReceipt(client,repo,issueNumber,pr,
+    c.category==='implementation'?bound?.browserBinding:null);
+  if(!accepted)continue;
   if(pr.merged_at){
-   await db.from('recovery_cases').eq('id',c.id).in('status',['delegated','awaiting_release']).update({status:'verifying',repair_pr_url:prUrl,
-    details:'Reviewed recovery PR merged. Rechecking the original task within its existing authorization.',
+   await db.from('recovery_cases').eq('id',c.id).in('status',['delegated','awaiting_release']).update({status:'verifying',
+    repair_pr_url:prUrl,repair_head_sha:pr.head.sha,
+    details:'Independently verified recovery was owner-merged. Original goal still requires its own acceptance evidence.',
     updated_at:new Date().toISOString()});
   }else if(pr.draft&&c.status==='delegated'){
-   await db.from('recovery_cases').eq('id',c.id).eq('status','delegated').update({status:'awaiting_release',repair_pr_url:prUrl,
-    details:'Recovery draft PR produced. Independent CI/review and owner merge approval remain required.',
+   await db.from('recovery_cases').eq('id',c.id).eq('status','delegated').update({status:'awaiting_release',
+    repair_pr_url:prUrl,repair_head_sha:pr.head.sha,
+    details:'Recovery code passed independent CI and review. Awaiting owner-controlled release; no automatic merge.',
     updated_at:new Date().toISOString()});
   }
  }
