@@ -46,7 +46,6 @@ jobs:
         with:
           node-version: '22'
           cache: npm
-      - run: npm ci --ignore-scripts --no-audit --no-fund
       - name: Validate owner issue, draft PR, and immutable code SHA
         id: identity
         shell: bash
