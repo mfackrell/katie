@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ActorFormModal } from "@/components/actor-form-modal";
 import { ChatPanel } from "@/components/chat-panel";
+import { PendingMissionApprovals } from "@/components/pending-mission-approvals";
 import { Sidebar } from "@/components/sidebar";
 import { beginInFlightRequest, endInFlightRequest } from "@/lib/chat/inflight-guards";
 import type { Actor, ChatThread, ConnectedRepo } from "@/lib/types/chat";
@@ -610,6 +611,7 @@ export default function HomePage() {
         </div>
 
         <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+          <PendingMissionApprovals />
           {pendingProjectApprovals.filter(p => chats.some(c=>c.id===p.chatId&&c.actorId===p.actorId)).map(p => (
             <button key={p.chatId} type="button" onClick={() => handleSelectChat(p.chatId)}
               className="mx-3 mt-2 shrink-0 rounded-xl border-2 border-amber-400 bg-amber-950 px-4 py-3 text-left text-sm font-semibold text-amber-50 shadow-lg sm:mx-6"
