@@ -267,6 +267,7 @@ test('controlled E2E refuses unverified repair and refuses release without succe
  other.repairPr.merged=true;other.repairPr.merged_at='2026-10-19T12:00:00Z';
  await other.worker.runRecoveryBatch();
  assert.equal(other.tables.work_projects[0].status,'blocked','unverified production cannot resume');
+ assert.equal(other.tables.recovery_cases[0].status,'awaiting_release','unverified deployment must retain explicit release gate');
  assert.equal(other.dispatched.length,0);
  assert.equal(other.tables.work_projects[0].cycles,2);
 });
