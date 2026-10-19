@@ -107,7 +107,7 @@ test('Chromium font provisioning happens before UID-mapped acceptance browser su
     const path=process.argv[1];
     const server=createServer((_req,res)=>{
       res.setHeader('Content-Type','text/html');
-      res.end('<button id="move" onclick="document.getElementById(\\"position\\").textContent=\\"1\\"">Move</button><p id="position">0</p>');
+      res.end('<button id="move">Move</button><p id="position">0</p><script>document.getElementById("move").onclick=()=>document.getElementById("position").textContent="1"</script>');
     });
     await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
     try{
