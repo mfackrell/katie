@@ -22,9 +22,9 @@ export async function startExecutiveFinance(input:{actorId:string;chatId:string;
  const {data:existing,error:existingError}=await db.from('executive_delegations').select('id,mission_id,status').eq('actor_id',input.actorId).eq('chat_id',input.chatId).eq('request_key',requestKey).maybeSingle();
  if(existingError)throw Error('Executive request history unavailable');
  if(existing){const row=existing as {id:string;status:string};return 'Finance assignment already recorded. Delegation '+row.id+'; status '+row.status+'.';}
- const {data:matches,error:registryError}=await db.from('executive_orchestrators').select('slug,id').eq('actor_id',input.actorId).eq('status','active').contains('capabilities',['financial_analysis']).order('slug').limit(1);
+ const {data:matches,error:registryError}=await db.from('executive_orchestrators').select('slug,id,capabilities').eq('actor_id',input.actorId).eq('status','active').order('slug',{ascending:true}).limit(100);
  if(registryError)throw Error('Executive specialist registry unavailable');
- const finance=(matches as Array<{id:string;slug:string}>|null)?.[0];
+ const finance=(matches as Array<{id:string;slug:string;capabilities:string[]}>|null)?.find(x=>x.capabilities.includes('financial_analysis'));
  if(!finance)return null; // Ordinary Katie remains responsible if no verified specialist exists.
  const {data:agents,error:agentError}=await db.from('managed_agents').select('id,config').eq('archived',false).limit(100);
  if(agentError)throw Error('Executive worker inventory unavailable');
@@ -42,7 +42,7 @@ export async function startExecutiveFinance(input:{actorId:string;chatId:string;
  if(delegationError||!delegationRow?.id)throw Error('Executive delegation creation failed');
  const {error:missionError}=await db.rpc('create_mission',{p_id:id,p_objective:input.message,p_agents:[leader.id,analyst.id],p_minutes:30,p_repository:null});
  if(missionError)throw Error('Finance mission creation failed: '+missionError.message.slice(0,150));
- const {error:linkError}=await db.from('executive_delegations').update({mission_id:id}).eq('id',delegationRow.id).eq('status','proposed');
+ const {error:linkError}=await db.from('executive_delegations').eq('id',delegationRow.id).eq('status','proposed').update({mission_id:id});
  if(linkError)throw Error('Finance mission linkage failed');
  const {error:startError}=await db.rpc('control_mission',{p_id:id,p_action:'start',p_job:null});
  if(startError)throw Error('Finance mission start failed');
@@ -58,7 +58,8 @@ export async function reconcileExecutiveFinance(){
  const {data:running,error}=await db.from('executive_delegations') .select('id,actor_id,chat_id,mission_id,status').like('request_key','exec-finance-%').in('status',['running','verified','cancelled']).not('mission_id','is',null).order('updated_at',{ascending:false}).limit(100);
  if(error)throw Error('Executive reconciliation inventory unavailable');
  let verified=0,blocked=0;
- for(const d of (running??[]) as Array<{id:string;actor_id:string;chat_id:string;mission_id:string;status:string}>){
+ for(const d of (running??[]) as Array<{id:string;actor_id:string;chat_id:string;mission_id:string|null;status:string;request_key:string}>){
+  if(!d.request_key.startsWith('exec-finance-')||!d.mission_id)continue;
   const {data:mission,error:missionError}=await db.from('agent_missions').select('status,result,detail').eq('id',d.mission_id).maybeSingle();
   const missionRow=mission as {status:string;result:string|null;detail:string|null}|null;
   if(missionError||!missionRow||!['completed','blocked','failed','stopped'].includes(missionRow.status))continue;
