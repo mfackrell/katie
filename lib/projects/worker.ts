@@ -280,7 +280,7 @@ export async function runProjectBatch() { const maintenance=Promise.all([
     return { claimed: 1, status: 'processed' };
 }
 catch (error) {
-    const detail = error instanceof Error ? error.message.slice(0, 800) : 'Project coordination failed';
+    const detail = error instanceof Error ? ('Project coordination error: '+error.name+'; Chromium diagnostic tail: '+error.message.slice(-1550)).slice(0,1800) : 'Project coordination failed';
     console.error('[Projects]', { project: p.id, detail });
     await projectRpc('finish_work_project', { p_id: p.id, p_lease: p.lease, p_action: 'error', p_data: { detail } });
     return { claimed: 1, status: 'blocked' };
