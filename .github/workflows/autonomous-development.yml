@@ -179,7 +179,7 @@ jobs:
 
   test:
     needs: build
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     timeout-minutes: 35
     outputs:
       passed: ${{ steps.check.outputs.passed }}
@@ -206,6 +206,13 @@ jobs:
           path: ${{ runner.temp }}/project-tools
       - name: Ensure trusted filesystem and user namespace isolation is available
         run: |
+          set -euo pipefail
+          if [ ! -x /usr/lib/postgresql/16/bin/initdb ]; then
+            sudo apt-get update
+            sudo apt-get install -y postgresql-16
+          fi
+          test -x /usr/lib/postgresql/16/bin/initdb || { echo 'PostgreSQL 16 initdb is required for DB integration tests'; exit 1; }
+          if test -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns; then sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0; fi
           command -v bwrap >/dev/null || (sudo apt-get update && sudo apt-get install -y bubblewrap)
           # Check sandbox capability without relying on privileged sysctl changes.
           # Never fall back to unsandboxed browser or code execution.
