@@ -358,3 +358,11 @@ test('game planning counts identical shared browser contracts once and keeps eve
  assert.ok(canonical(view).length<20000);assert.equal(view.milestones[0].contractRef,'finalContract');assert.equal(view.game.acceptance.scenarios.find(s=>s.kind==='browser').stepsRef,'finalContract.scenarios[name=browser].steps');assert.equal(view.finalContract.scenarios[0].steps.length,6);assert.equal(view.finalContract.scenarios[0].steps.at(-1).value,'3'.repeat(2000));assert.equal(canonical(approved),before,'Full saved contract is not modified');assert.equal(digest(approved),digest(full));
  const mismatched=structuredClone(full);mismatched.milestones[0].contract=structuredClone(mismatched.finalContract);mismatched.milestones[0].contract.scenarios[0].steps.at(-1).value='wrong';assert.throws(()=>validateProjectPlan(mismatched),/entire final acceptance/);
 });
+
+test('browser validation distinguishes duplicate names from total step overflow',()=>{
+ const {validateProjectPlan}=modules()('@/lib/projects/contract');
+ const many={path:'/pilot',scenarios:[{name:'first',steps:Array(60).fill({action:'expectText',selector:'#state',value:'ok'})},{name:'second',steps:Array(55).fill({action:'expectText',selector:'#state',value:'ok'})}]};
+ const draft={...plan,milestones:[{...plan.milestones[0],contract:many}],finalContract:many};
+ assert.throws(()=>validateProjectPlan(draft),/115 total steps across 2 scenarios; maximum 100 TOTAL steps/);
+ many.scenarios[1].name='first';assert.throws(()=>validateProjectPlan(draft),/scenario names must be unique/);
+});

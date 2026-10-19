@@ -1,4 +1,4 @@
-import {validateProjectPlan,gameSpecificationView,digest} from '@/lib/projects/contract';
+import {validateProjectPlan,projectPlanSchema,gameSpecificationView,canonical,digest} from '@/lib/projects/contract';
 import {getDevelopmentProjectContext,acceptanceBinding} from '@/lib/projects/store';
 import { agentRpc } from '@/lib/agents/store';
 import { dispatchDevelopment,reconcileDevelopment,developmentEvidence } from '@/lib/agents/development';
@@ -27,7 +27,13 @@ export async function executeClaim(claim:Claim,model=missionModel){
   if(mission.project_kind!=='specification'||(mission.project_evidence as {projectProfile?:string}|null)?.projectProfile!=='game'||typeof result?.text!=='string')return result;
   try{const plan=validateProjectPlan(parseJSON(result.text));if(!plan.game)return result;const metadata={...result};delete metadata.text;return{...metadata,specification:gameSpecificationView(plan),fullSpecificationHash:digest(plan),referenceNote:'Server-validated lossless view. contractRef and stepsRef resolve to the identical full finalContract below. Every original rule, model state, browser step and unique milestone contract is retained; the complete expanded original stays saved.'};}catch{return result;}
  };
- const context=()=>JSON.stringify({objective:mission.objective,projectPhase:mission.project_kind,projectEvidence:researchRecoveryEvidence(mission.project_evidence,true),assignment:job.instruction,specificationValidationFeedback:job.result?.specificationValidationFeedback,evidence:completed.filter(j=>j.role!=='plan'&&j.role!=='review').map(j=>({key:j.job_key,instruction:j.instruction,result:candidateEvidence(j.result)}))});
+ const repair=()=>{
+  if(mission.project_kind!=='specification'||(mission.project_evidence as {projectProfile?:string}|null)?.projectProfile!=='game'||typeof job.result?.rejectedSpecification!=='string')return undefined;
+  try{const plan=projectPlanSchema.parse(parseJSON(job.result.rejectedSpecification));let currentValidation='';try{validateProjectPlan(plan);}catch(error){currentValidation=error instanceof Error?error.message:String(error);}
+   return {currentValidation,uniqueCharacters:canonical(gameSpecificationView(plan)).length,uniqueCharacterLimit:20000,status:'REJECTED, not approved evidence',specification:gameSpecificationView(plan),instruction:'Repair this saved draft against validation feedback and the original requirements. Server-generated contractRef/stepsRef resolve to the identical finalContract content. Return fully expanded JSON, never references. Prefer one complete milestone when the original brief permits it. Keep at most 100 total browser steps per contract; consolidate repeated setup while retaining all requirements. Also keep unique specification content below 20,000 characters.'};}catch{return undefined;}
+ };
+ const rejectedDraft=repair();
+ const context=()=>JSON.stringify({objective:mission.objective,projectPhase:mission.project_kind,projectEvidence:rejectedDraft?undefined:researchRecoveryEvidence(mission.project_evidence,true),rejectedDraft,assignment:job.instruction,specificationValidationFeedback:job.result?.specificationValidationFeedback,evidence:completed.filter(j=>j.role!=='plan'&&j.role!=='review').map(j=>({key:j.job_key,instruction:j.instruction,result:candidateEvidence(j.result)}))});
  const finalWork=job.role==='compose'||job.role==='revise';
  const persona=frame+'\nSaved responsibilities: '+agent.config.instructions+'\n'+(finalWork?getObjectiveFirstInstruction():'Complete only input.assignment. The full objective is context for that assignment, not a request to perform the other workers’ assignments or compose the whole deliverable. Do not delegate, write a new plan, repeat unassigned calculations or recommendations, or offer future work.');
  const commit=(result:Record<string,unknown>,children:Child[]=[],status='completed',missionStatus:string|null=null,final:string|null=null)=>rpc<boolean>('commit_mission_work',{p_id:job.id,p_lease:job.lease,p_result:result,p_children:children,p_status:status,p_mission_status:missionStatus,p_final:final});
@@ -113,7 +119,7 @@ export async function runMissionBatch(model=missionModel){
    const truncatedGameSpecification=error instanceof MissionModelFailure&&error.partial.incompleteReason==='max_output_tokens'&&claim.mission.project_kind==='specification'&&(claim.mission.project_evidence as {projectProfile?:string}|null)?.projectProfile==='game'&&['compose','revise'].includes(claim.job.role);
    const transientProvider=error instanceof MissionModelFailure&&['server_error','rate_limit_exceeded'].includes(String(error.partial.providerErrorCode));
    const invalidGameSpecification=error instanceof MissionModelFailure&&typeof error.partial.specificationValidationFeedback==='string';
-   const retry=claim.job.attempts<2&&(invalidContract||truncatedGameSpecification||transientProvider||invalidGameSpecification||/timeout|timed out|connection|fetch failed|429|rate limit|500|502|503|504/i.test(detail));
+   const retry=(invalidGameSpecification&&claim.job.attempts<3)||(claim.job.attempts<2&&(invalidContract||truncatedGameSpecification||transientProvider||/timeout|timed out|connection|fetch failed|429|rate limit|500|502|503|504/i.test(detail)));
    await rpc('commit_mission_work',{p_id:claim.job.id,p_lease:claim.job.lease,p_result:{...(error instanceof MissionModelFailure?error.partial:{}),detail},p_children:[],p_status:retry?'queued':'failed',p_mission_status:retry?null:'blocked',p_final:null});
    return {jobId:claim.job.id,status:retry?'retrying':'blocked'};}
  }));
