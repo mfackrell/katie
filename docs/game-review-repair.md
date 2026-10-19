@@ -1,0 +1,17 @@
+# Game Development Agent: bounded review repair
+
+This additive workflow handles later Codex GitHub findings for registered games. It does not change Katie's executive orchestrator, shared recovery supervisor, normal software tasks, or production release authority.
+
+Register a game in `config/game-projects/<id>.json` through a reviewed change. Pin the approved game and its unmodified test fixtures to a baseline SHA, the original issue, exact editable gameplay files, and a two-attempt budget. The repository owner then posts `/katie-game-repair enable <id>` on an open same-repository game PR. Registration does not itself run coding: a completed, authenticated Codex review with findings on the current PR head is required.
+
+The listener runs on default-branch issue-comment events, including Codex's edited review-summary comment. It re-reads owner authorization, PR identity, trusted bot identity, exact reviewed SHA and inline findings through GitHub's API. Forks, stale findings, ordinary comments and unregistered tasks cannot start repair. Per-PR concurrency and an early durable reservation prevent duplicate attempts. A reservation consumes the bounded budget even if infrastructure fails.
+
+Each repair runs in a fresh Codex action, may edit only registered game source, and publishes with an expected-head lease. Trusted preflight rejects protected changes before invoking the agent. Tests and the independent reviewer run on separate fresh runners, with read-only baseline dependencies and generated code in filesystem/network namespaces. Original rules and fixtures cannot be rewritten by the repair. Engine, Next build and actual built-route Chromium execution produce a raw JSON receipt, including commands, output, exit codes, timestamps and commit SHA. The independent reviewer does not receive the developer's response. A pass requires passing exact-head tests and zero blocking findings.
+
+If the first independent review requests changes, a second repair receives its persisted findings automatically. The second round repeats tests and independent review. No third round runs. Infrastructure failures or an exhausted budget produce an escalation comment with durable artifact links; they never count as passing gameplay. Subsequent deliveries with changed scope need fresh reviewed authorization, not a model-authored budget reset.
+
+Artifacts are retained per round: plan/request, developer response, actual tests, and independent structured review. The final comment names the exact verified commit and links the workflow run. Nothing merges or publishes a production release. The existing game's contract still separately requires source-bound deployed Preview acceptance before final delivery; a passing local repair receipt never satisfies that gate.
+
+## Controlled live test
+
+Use a disposable `game-repair/beacon-relay/<test>` branch based on the registered baseline. Introduce one real gameplay defect (e.g. change victory from two points to three) without changing fixtures. Open a draft PR, enable game repair using the owner command, and request Codex review. The reviewer must detect the defect; the listener must reserve, repair, push, execute tests, and obtain independent approval with no manual fix. Preserve run and PR links. The pilot branch is never merged; it does not affect the validated original PR #559 or production.

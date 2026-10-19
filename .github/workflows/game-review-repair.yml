@@ -1,0 +1,111 @@
+name: Katie game review repair
+on:
+  issue_comment:
+    types: [created, edited]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: Registered same-repository game PR
+        type: number
+        required: true
+permissions:
+  contents: read
+  issues: write
+  pull-requests: read
+  actions: read
+concurrency:
+  group: game-review-repair-${{ github.event.issue.number || inputs.pr_number }}
+  cancel-in-progress: false
+jobs:
+  plan:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.issue.pull_request &&
+       (github.event.comment.user.id == 199175422 ||
+        github.event.comment.user.login == github.repository_owner))
+    runs-on: ubuntu-22.04
+    outputs:
+      ready: ${{ steps.plan.outputs.ready }}
+      pr: ${{ steps.plan.outputs.pr }}
+      head: ${{ steps.plan.outputs.head }}
+      branch: ${{ steps.plan.outputs.branch }}
+      tool_sha: ${{ github.workflow_sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/github-script@v7
+        id: plan
+        with:
+          script: |
+            const {plan}=await import(`${process.env.GITHUB_WORKSPACE}/scripts/game-repair/control.mjs`);
+            await plan({github,context,core});
+      - uses: actions/upload-artifact@v4
+        if: steps.plan.outputs.ready == 'true'
+        with:
+          name: game-repair-plan
+          path: |
+            ${{ runner.temp }}/game-repair-plan.json
+            ${{ runner.temp }}/GAME_REPAIR_REQUEST.md
+          if-no-files-found: error
+  round-one:
+    needs: plan
+    if: needs.plan.outputs.ready == 'true'
+    uses: ./.github/workflows/game-repair-round.yml
+    with:
+      tool_sha: ${{ needs.plan.outputs.tool_sha }}
+      head: ${{ needs.plan.outputs.head }}
+      branch: ${{ needs.plan.outputs.branch }}
+      pr: ${{ needs.plan.outputs.pr }}
+      round: 1
+    secrets: inherit
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: read
+  round-two:
+    needs: [plan, round-one]
+    if: >-
+      needs.round-one.outputs.verdict == 'changes_requested' &&
+      needs.round-one.outputs.head != ''
+    uses: ./.github/workflows/game-repair-round.yml
+    with:
+      tool_sha: ${{ needs.plan.outputs.tool_sha }}
+      head: ${{ needs.round-one.outputs.head }}
+      branch: ${{ needs.plan.outputs.branch }}
+      pr: ${{ needs.plan.outputs.pr }}
+      round: 2
+    secrets: inherit
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: read
+  report:
+    needs: [plan, round-one, round-two]
+    if: always() && needs.plan.outputs.ready == 'true'
+    runs-on: ubuntu-22.04
+    permissions:
+      issues: write
+      pull-requests: read
+    steps:
+      - uses: actions/github-script@v7
+        env:
+          PR: ${{ needs.plan.outputs.pr }}
+          FIRST: ${{ needs.round-one.outputs.verdict }}
+          SECOND: ${{ needs.round-two.outputs.verdict }}
+          SHA: ${{ needs.round-two.outputs.head || needs.round-one.outputs.head }}
+        with:
+          script: |
+            const verdict=process.env.SECOND || process.env.FIRST;
+            const pr=(await github.rest.pulls.get({...context.repo,pull_number:Number(process.env.PR)})).data;
+            const pass=verdict==='pass' && pr.state==='open' && pr.head.sha===process.env.SHA;
+            await github.rest.issues.createComment({...context.repo,issue_number:Number(process.env.PR),body:
+              `### Game repair ${pass?'verified':'escalated'}\n\n`+
+              `Commit: \`${process.env.SHA || 'unavailable'}\`. Independent verdict: ${verdict || 'infrastructure failure'}.\n\n`+
+              `[Durable test and independent-review artifacts](https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}).\n\n`+
+              (pass?'Engine, build and built-route browser checks passed. Deployed Preview acceptance remains a separate release requirement.':'The bounded automatic repair stopped. Inspect retained evidence; no further coding was launched.')+
+              '\n\nNo merge or production release occurred.'});
