@@ -217,6 +217,22 @@ async function handleCase(c:Case):Promise<string>{
  const e=await boundSource(c);
  const stale:RecoveryDiagnosis={category:'unknown',strategy:'diagnose',explanation:'Source no longer blocked.',evidence:c.details,allowedPaths:[]};
  if(!e){await finish(c,'resolved',stale,'Original task is no longer blocked. No repair was necessary.');return'resolved';}
+ // Reuse Katie's existing once-only reviewed-contract recovery when a
+ // project reviewer produced a malformed provenance contract. This repairs
+ // the reviewer, not the source or the originally approved implementation.
+ if(e.project&&e.project.active_mission_id&&
+   /Invalid task conflict provenance|Independent assessment contract validation failed/.test(e.detail)){
+  const recovered=await rpc<{status:string}|null>('retry_project_review',{
+   p_id:e.project.id,p_actor:e.project.actor_id,p_chat:e.project.chat_id,
+  }).catch(()=>null);
+  if(recovered?.status==='running'){
+   const safe:RecoveryDiagnosis={category:'configuration',strategy:'retry_original',
+    explanation:'Retried malformed independent review contract using saved evidence.',
+    evidence:e.detail,allowedPaths:[]};
+   await finish(c,'verifying',safe,safe.explanation,{originalMission:e.project.active_mission_id});
+   return'verifying';
+  }
+ }
  const repo=await sourceRepository(e.repositoryId);
  const client=repo?ownerClient():null;
  const [log,browser]=repo&&client?await Promise.all([workflowLog(client,repo,e.runId),browserFailure(client,repo,e)]):['',''];
