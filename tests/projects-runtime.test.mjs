@@ -259,6 +259,10 @@ test('chat-native game intake selects the game registration RPC while ordinary a
  assert.equal(gameProjectIntent('Build a game sales dashboard.'),false);
  assert.equal(gameProjectIntent('Build a games inventory tracker.'),false);
  assert.equal(gameProjectIntent('Build a playable game with a game sales dashboard.'),true);
+ assert.equal(gameProjectIntent('Build a board game catalog website.'),false);
+ assert.equal(gameProjectIntent('Build a video game reviews website.'),false);
+ assert.equal(gameProjectIntent('Build a board game review blog.'),false);
+ assert.equal(gameProjectIntent('Build a turn-based game with a game sales dashboard.'),true);
 });
 test('game specifications cannot bypass registered rules or swap a loading-only final contract',async()=>{
  const {gameFixture}=await import('./fixtures/game-project.mjs');const f=gameFixture();
@@ -299,4 +303,20 @@ test('detailed game rules stay in saved evidence rather than overflowing an othe
  assert.equal(saved.kind,'development');assert.ok(saved.objective.length<12000);
  assert.doesNotMatch(saved.objective,/RULE_RECORD_SENTINEL/);
  assert.equal(saved.evidence.gameContract.rules.rules[0].description,g.game.rules.rules[0].description);
+});
+
+test('oversized game assessment is rejected before approval and large source excerpts retain all rules and receipts',async()=>{
+ const {gameFixture}=await import('./fixtures/game-project.mjs');const g=gameFixture();
+ const {validateGameAssessmentCapacity,gameAssessmentEvidence}=modules()('@/lib/projects/game-evidence');
+ const spec={...plan,game:g.game,allowedPaths:g.allowedPaths,milestones:[{title:'Game',instruction:'Implement',contract:g.contract}],finalContract:g.contract};
+ validateGameAssessmentCapacity(spec);
+ const oversized=structuredClone(spec);oversized.game.rules.rules[0].description='x'.repeat(18000);
+ assert.throws(()=>validateGameAssessmentCapacity(oversized),/before scope approval/);
+ const p={...owner,profile:'game',spec},verification={observedHeadSha:'c'.repeat(40),testedHeadSha:'c'.repeat(40),reviewedHeadSha:'c'.repeat(40),projectAcceptance:{passed:true,checks:[{name:'browser',passed:true,detail:'1 rendered assertion passed'}]},changedFiles:Array.from({length:100},(_,i)=>({path:'app/counter/source-'+i+'.ts',status:'added',patch:'x'.repeat(12000)}))};
+ const retained=gameAssessmentEvidence(p,[],{head:'c'.repeat(40),taskId:'task',verification,summary:'x'.repeat(12000)});
+ assert.ok(JSON.stringify(retained,null,1).length<=29000);
+ assert.equal(retained.gameRules.rules[0].description,g.game.rules.rules[0].description);
+ assert.equal(retained.finalIntegratedEvidence.verification.projectAcceptance.passed,true);
+ assert.equal(retained.finalIntegratedEvidence.verification.changedFileCount,100);
+ assert.ok(retained.finalIntegratedEvidence.verification.changedFiles.some(f=>f.patchUnavailable));
 });

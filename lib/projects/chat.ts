@@ -9,9 +9,12 @@ export function startProjectIntent(text: string) {
  return !artifact && (direct||desire) && /\b(?:browser|website|web app|application|app|game|dashboard|portal|software|program|API)\b/i.test(text) && !/^.{0,80}\b(?:do not|don't|never|not asking you to)\s+(?:want to |you to )?(?:build|create|develop|make|implement|start)\b/i.test(text);
 }
 export function gameProjectIntent(text:string) {
- const dataProduct=/\bgames?\s+(?:sales|analytics|reviews|catalog|inventory|statistics)\b/i.test(text)&&/\b(?:dashboard|tracker|analytics|portal|catalog|store|website)\b/i.test(text);
- const explicitGameplay=/\b(?:browser|board|card|video|turn[- ]based|strategy|puzzle|multiplayer|playable)\s+games?\b|\bgames?\s+(?:with|where|that|in (?:a|the) browser)\b|\b(?:app|application|software)\b.{0,40}\b(?:for|as|to play)\s+(?:a |the )?(?:[\w-]+ )?games?\b|\bmake (?:it|this|that) (?:a |the )?games?\b/i.test(text);
- return explicitGameplay||!dataProduct&&/^games?$/i.test(text.match(/\b(?:games?|website|web app|application|app|dashboard|portal|software|program|API)\b/i)?.[0]??'');
+ const dataProduct=/\bgames?\s+(?:sales?|analytics|reviews?|catalogs?|inventory|statistics|collection|library|tracking)\b/i.test(text)&&/\b(?:dashboard|tracker|analytics|portal|catalog|store|website|collection|library|blog|directory|forum|wiki)\b/i.test(text);
+ const primaryGame=/\b(?:build|create|develop|recreate|re-create|make|want|need|would like)\s+(?:(?:me|to|you|a|an|the|original|new|simple|small|browser|board|card|video|turn-based|strategy|puzzle|multiplayer|playable)\s+)*games?\b(?=\s*(?:[.!?:,;]|$|\b(?:with|where|that|in|as|for|called|named)\b))/i.test(text);
+ const playable=/\bplayable\s+(?:(?:browser|board|card|video|turn-based|strategy|puzzle|multiplayer)\s+)?games?\b|\bmake (?:it|this|that) (?:a |the )?games?\b/i.test(text);
+ const appForGame=/\b(?:app|application|software)\s+(?:for|as|to play)\s+(?:a |the )?(?:[\w-]+ )?games?\b(?=\s*(?:[.!?:,;]|$|\b(?:with|where|that|in|as|for|called|named)\b))/i.test(text);
+ const genre=/\b(?:browser|board|card|video|turn[- ]based|strategy|puzzle|multiplayer)\s+games?\b/i.test(text);
+ return primaryGame||playable||appForGame||!dataProduct&&genre;
 }
 export const followupProjectIntent = (text: string) => /^(?:please\s+)?(?:build|make|create|implement|do|start)(?:\s+(?:that|it|this|the project))?[.!\s]*$/i.test(text.trim());
 const actionText = (text:string) => text.trim().replace(/^(?:actually|also|no|okay|ok)[,:]?\s+/i,'').replace(/^please\s+/i,'').replace(/^(?:can|could|would|will) (?:you|we)\s+(?:please\s+)?/i,'');
