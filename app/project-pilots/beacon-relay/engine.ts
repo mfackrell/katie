@@ -29,7 +29,7 @@ export function transition(state: GameState, action: Action): GameState {
   }
   if (action.type === "END_TURN" && state.phase === "RESOLVE") {
     const scores = { ...state.scores, [player]: state.scores[player] + (isBeacon(state.positions[player]) ? 1 : 0) };
-    if (scores[player] === 2) return { ...state, scores, phase: "GAME_OVER", winner: player };
+    if (scores[player] === 3) return { ...state, scores, phase: "GAME_OVER", winner: player };
     return { ...state, scores, activePlayer: other, turn: state.turn + 1, phase: "MOVE" };
   }
   return state;
