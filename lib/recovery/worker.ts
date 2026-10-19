@@ -125,6 +125,38 @@ async function issueForCase(client:Octokit,repo:{owner:string;repo:string},caseI
  const list=await client.issues.listForRepo({...repo,state:'all',creator:repo.owner,sort:'created',direction:'desc',per_page:100});
  return list.data.find(x=>!x.pull_request&&x.body?.includes('<!-- katie-recovery:')&&x.body?.includes('RECOVERY_CASE:'+caseId))??null;
 }
+async function retryExistingAfterTrustedRelease(c:Case,e:SourceEvidence,diagnosis:RecoveryDiagnosis,
+ client:Octokit,repo:{owner:string;repo:string;fullName:string}):Promise<boolean>{
+ if(diagnosis.category!=='verification_infrastructure'||!e.project||!e.projectContext||
+    !e.runId||!e.issueNumber||!e.prUrl||!e.headSha)return false;
+ const prNumber=int(e.prUrl.split('/').pop());
+ if(!prNumber)return false;
+ const [run,branch,pr,workflow]=await Promise.all([
+  client.actions.getWorkflowRun({...repo,run_id:e.runId}),
+  client.repos.getBranch({...repo,branch:'main'}),
+  client.pulls.get({...repo,pull_number:prNumber}),
+  client.actions.getWorkflow({...repo,workflow_id:'project-reverify.yml'}),
+ ]);
+ if(workflow.data.state!=='active'||workflow.data.path!=='.github/workflows/project-reverify.yml'||
+   run.data.repository.full_name!==repo.fullName||
+   !pr.data.draft||pr.data.state!=='open'||pr.data.merged||
+   pr.data.head.sha!==e.headSha||pr.data.head.repo?.full_name!==repo.fullName||
+   pr.data.base.repo.full_name!==repo.fullName||branch.data.commit.sha===run.data.head_sha)return false;
+ const main=branch.data.commit.sha;
+ const comparison=await client.repos.compareCommitsWithBasehead({...repo,basehead:run.data.head_sha+'...'+main,per_page:100});
+ if(comparison.data.status!=='ahead'||!comparison.data.files?.length||
+   !comparison.data.files.some(file=>diagnosis.allowedPaths.some(path=>file.filename===path||path.endsWith('/')&&file.filename.startsWith(path))))return false;
+ const published=await client.repos.getCombinedStatusForRef({...repo,ref:main});
+ if(!published.data.statuses.some(x=>x.context.toLowerCase().includes('vercel')&&x.state==='success'))return false;
+ // No code-generation workflow is involved. These inputs pin the unchanged
+ // game/app code SHA and its original owner-authored task.
+ await client.actions.createWorkflowDispatch({...repo,workflow_id:'project-reverify.yml',ref:'main',
+  inputs:{issue_number:String(e.issueNumber),pr_number:String(prNumber),expected_sha:e.headSha}});
+ const resumed=await rpc<{status:string}|null>('reverify_project_after_existing_fix',{
+  p_case:c.id,p_lease:c.lease,p_issue:e.issueNumber,p_pr:prNumber,p_head:e.headSha,p_release_sha:main
+ });
+ return resumed?.status==='running';
+}
 async function delegateRepair(c:Case,e:SourceEvidence,diagnosis:RecoveryDiagnosis,
  client:Octokit,repo:{owner:string;repo:string;fullName:string}):Promise<{issue:string;head:string}>{
  await verifiedOwner(client,repo);
@@ -193,6 +225,13 @@ async function handleCase(c:Case):Promise<string>{
   if(accepted){
    await finish(c,'verifying',diagnosis,'Retried original worker under its existing budget and deadline.',{assignment:e.failedJobId});
    return'verifying';
+  }
+ }
+ if(diagnosis.category==='verification_infrastructure'&&repo&&client){
+  try{
+   if(await retryExistingAfterTrustedRelease(c,e,diagnosis,client,repo))return'verifying';
+  }catch(error){
+   console.warn('[Recovery] Existing infrastructure recovery unavailable',error instanceof Error?error.message:'Unknown error');
   }
  }
  if(diagnosis.strategy==='scoped_repair'&&repo&&client){
