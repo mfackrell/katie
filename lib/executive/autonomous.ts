@@ -140,5 +140,5 @@ export async function reconcileExecutiveFinance(){
  }
  const {reconcileSpecialistFactory}=await import('./factory-runtime');
  const factory=await reconcileSpecialistFactory();
- return {verified,blocked,...factory};
+ return {verified,blocked,activated:factory.activated,factoryBlocked:factory.blocked};
 }
