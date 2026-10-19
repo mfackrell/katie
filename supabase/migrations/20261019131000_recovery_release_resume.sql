@@ -2,6 +2,8 @@
 -- infrastructure repair has been merged by the human owner. This does not
 -- alter the original coding scope, grant a new permission, or spawn a new
 -- coding mission. The coordinator verifies the GitHub release separately.
+do $migration$
+begin
 create function public.resume_project_after_recovery(
  p_case uuid,p_actor uuid,p_chat uuid,p_original_issue bigint,p_original_pr bigint,p_original_sha text
 ) returns jsonb language plpgsql security invoker set search_path=public as $$
@@ -51,5 +53,7 @@ begin
     'original_sha',p_original_sha,'original_cycles',p.cycles,'charged_tokens',used));
  return jsonb_build_object('status','running','cycles',p.cycles,'mission',m.id);
 end $$;
+exception when duplicate_function then null;
+end $migration$;
 revoke all on function public.resume_project_after_recovery(uuid,uuid,uuid,bigint,bigint,text) from public,anon,authenticated;
 grant execute on function public.resume_project_after_recovery(uuid,uuid,uuid,bigint,bigint,text) to service_role;
