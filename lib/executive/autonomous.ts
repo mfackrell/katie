@@ -34,7 +34,7 @@ export async function startExecutiveFinance(input:{actorId:string;chatId:string;
  if(!leader||!analyst)throw Error('Verified finance mission workers unavailable');
  const deadline=new Date(Date.now()+40*60000).toISOString(),id=missionId(requestKey);
  const success=['Calculate accurately using only supplied evidence','Give actionable CFO analysis and label assumptions','Pass independent saved mission review'];
- const {data:delegation,error:delegationError}=await db.rpc('propose_executive_delegation',{
+ const {data:delegation,error:delegationError}=await db.rpc<{id:string}>('propose_executive_delegation',{
   p_actor:input.actorId,p_chat:input.chatId,p_slug:finance.slug,p_request:requestKey,
   p_objective:input.message,p_capability:'financial_analysis',p_success:success,p_budget:60000,p_deadline:deadline
  });
@@ -47,7 +47,7 @@ export async function startExecutiveFinance(input:{actorId:string;chatId:string;
  const {error:startError}=await db.rpc('control_mission',{p_id:id,p_action:'start',p_job:null});
  if(startError)throw Error('Finance mission start failed');
  for(const action of ['accept','start']){
-  const {data,error}=await db.rpc('transition_executive_delegation',{p_id:delegationRow.id,p_actor:input.actorId,p_chat:input.chatId,p_action:action,p_evidence:{}});
+  const {data,error}=await db.rpc<{status:string}>('transition_executive_delegation',{p_id:delegationRow.id,p_actor:input.actorId,p_chat:input.chatId,p_action:action,p_evidence:{}});
   if(error||!data)throw Error('Executive delegation transition failed: '+action);
  }
  return 'I delegated this financial analysis to Finance. Katie is executing it through the saved mission worker with independent review. I will post the reviewed result in this conversation when finished. Delegation: '+delegationRow.id+'.';
