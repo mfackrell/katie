@@ -14,7 +14,7 @@ permissions:
   pull-requests: read
   actions: read
 concurrency:
-  group: game-review-repair-${{ github.event.issue.number || inputs.pr_number }}
+  group: game-review-repair-${{ (github.event_name == 'workflow_dispatch' || github.event.comment.user.id == 199175422 || github.event.comment.user.login == github.repository_owner) && (github.event.issue.number || inputs.pr_number) || github.run_id }}
   cancel-in-progress: false
 jobs:
   plan:
