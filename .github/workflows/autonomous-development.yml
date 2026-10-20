@@ -81,6 +81,8 @@ jobs:
             echo "project_id=$(jq -r .projectId "$RUNNER_TEMP/project-context.json")" >> "$GITHUB_OUTPUT"
             echo "contract_hash=$(jq -r .contractHash "$RUNNER_TEMP/project-context.json")" >> "$GITHUB_OUTPUT"
             echo "scenario_count=$(jq -r '.contract.scenarios | length' "$RUNNER_TEMP/project-context.json")" >> "$GITHUB_OUTPUT"
+            echo "coding_model=$(jq -r '.codingModel // ""' "$RUNNER_TEMP/project-context.json")" >> "$GITHUB_OUTPUT"
+            echo "review_model=$(jq -r '.reviewModel // ""' "$RUNNER_TEMP/project-context.json")" >> "$GITHUB_OUTPUT"
             gh auth setup-git
             git fetch --no-tags origin "$base_sha"
             git switch -c "$branch" "$base_sha"
@@ -113,6 +115,7 @@ jobs:
         uses: openai/codex-action@v1
         with:
           openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          model: ${{ steps.task.outputs.coding_model }}
           permission-profile: ':workspace'
           prompt: |
             You are Katie's implementation agent. Read AGENT_REQUEST.md and
@@ -285,6 +288,7 @@ jobs:
         uses: openai/codex-action@v1
         with:
           openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          model: ${{ steps.task.outputs.review_model }}
           permission-profile: ':read-only'
           output-schema: '{"type":"object","properties":{"verdict":{"type":"string","enum":["pass","changes_requested"]},"summary":{"type":"string"},"blocking_findings":{"type":"array","items":{"type":"string"}}},"required":["verdict","summary","blocking_findings"],"additionalProperties":false}'
           output-file: agent-review.json
@@ -372,6 +376,7 @@ jobs:
         uses: openai/codex-action@v1
         with:
           openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          model: ${{ steps.task.outputs.coding_model }}
           permission-profile: ':workspace'
           prompt: |
             You are the repair agent in a fresh context. First read
@@ -488,6 +493,7 @@ jobs:
         uses: openai/codex-action@v1
         with:
           openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          model: ${{ steps.task.outputs.review_model }}
           permission-profile: ':read-only'
           output-schema: '{"type":"object","properties":{"verdict":{"type":"string","enum":["pass","changes_requested"]},"summary":{"type":"string"},"blocking_findings":{"type":"array","items":{"type":"string"}}},"required":["verdict","summary","blocking_findings"],"additionalProperties":false}'
           output-file: agent-final-review.json
