@@ -1,5 +1,6 @@
 import {gameAssessmentCapacity} from '@/lib/projects/game-evidence';
 import {GAME_RULE_CATEGORIES} from '../../scripts/project-game-rules.mjs';
+import {gameCoverageRepair} from '@/lib/projects/game-coverage-repair.mjs';
 import {validateProjectPlan,projectPlanSchema,gameSpecificationView,canonical,digest} from '@/lib/projects/contract';
 import {getDevelopmentProjectContext,acceptanceBinding} from '@/lib/projects/store';
 import { agentRpc } from '@/lib/agents/store';
@@ -36,13 +37,14 @@ export async function executeClaim(claim:Claim,model=missionModel){
    return {currentValidation,assessmentCapacity:gameAssessmentCapacity(plan),allowedRuleCategories:GAME_RULE_CATEGORIES,missingRuleCoverage,uniqueCharacters:canonical(gameSpecificationView(plan)).length,uniqueCharacterLimit:20000,status:'REJECTED, not approved evidence',specification:gameSpecificationView(plan),instruction:'Repair this saved draft against validation feedback and the original requirements. Server-generated contractRef/stepsRef resolve to the identical finalContract content. Return fully expanded JSON, never references. Prefer one complete milestone when the original brief permits it. Keep at most 100 total browser steps per contract; consolidate repeated setup while retaining all requirements. Also keep unique specification content below 20,000 characters.'};}catch{return undefined;}
  };
  const rejectedDraft=repair();
+ const coverageRepair=rejectedDraft?.specification&&typeof job.result?.rejectedSpecification==='string'?gameCoverageRepair(projectPlanSchema.parse(parseJSON(job.result.rejectedSpecification))):null;
  const context=()=>{
-  const data={objective:mission.objective,projectPhase:mission.project_kind,projectEvidence:rejectedDraft?undefined:researchRecoveryEvidence(mission.project_evidence,true),rejectedDraft,assignment:job.instruction,specificationValidationFeedback:job.result?.specificationValidationFeedback,evidence:completed.filter(j=>j.role!=='plan'&&j.role!=='review').map(j=>({key:j.job_key,instruction:j.instruction,result:candidateEvidence(j.result)}))};
+  const data={objective:mission.objective,projectPhase:mission.project_kind,projectEvidence:rejectedDraft?undefined:researchRecoveryEvidence(mission.project_evidence,true),rejectedDraft,coverageRepair,assignment:job.instruction,specificationValidationFeedback:job.result?.specificationValidationFeedback,evidence:completed.filter(j=>j.role!=='plan'&&j.role!=='review').map(j=>({key:j.job_key,instruction:j.instruction,result:candidateEvidence(j.result)}))};
   // Keep the complete rejected draft in storage, never let it crowd the original
   // requirements out of a bounded repair request. Diagnostics remain actionable.
   const suffix=job.role==='revise'?'\nReview findings: '+JSON.stringify(priorReviews):'';
   if(rejectedDraft&&JSON.stringify(data).length+suffix.length>48000){
-   const compact={...data,rejectedDraft:{status:rejectedDraft.status,specificationOmitted:true,assessmentCapacity:rejectedDraft.assessmentCapacity,allowedRuleCategories:GAME_RULE_CATEGORIES,missingRuleCoverage:rejectedDraft.missingRuleCoverage,currentValidation:rejectedDraft.currentValidation.slice(0,600),uniqueCharacters:rejectedDraft.uniqueCharacters,uniqueCharacterLimit:20000,omissionReason:'Regenerate from the unchanged original objective and validation diagnostics. The full rejected draft remains saved.'}};
+   const compact={...data,coverageRepair,rejectedDraft:{status:rejectedDraft.status,specificationOmitted:true,assessmentCapacity:rejectedDraft.assessmentCapacity,allowedRuleCategories:GAME_RULE_CATEGORIES,missingRuleCoverage:rejectedDraft.missingRuleCoverage,currentValidation:rejectedDraft.currentValidation.slice(0,600),uniqueCharacters:rejectedDraft.uniqueCharacters,uniqueCharacterLimit:20000,omissionReason:'The full rejected draft remains saved. Restore its existing scenarios rather than inventing coverage; use coverageRepair.requiredCoverage to produce genuine new assertions. Regenerate only if input limits prevent preserving the draft.'}};
    const compactText=JSON.stringify(compact);
    if(compactText.length+suffix.length>48000)throw new MissionModelFailure('Specification repair context exceeds 48,000 characters even without the rejected draft; original requirements and saved draft retained for scope clarification.',{repairContextOverflow:true,specificationValidationFeedback:job.result?.specificationValidationFeedback,rejectedSpecification:job.result?.rejectedSpecification});
    return compactText;
