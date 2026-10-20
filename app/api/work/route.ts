@@ -15,6 +15,7 @@ type ProjectRow = {
   updated_at: string;
   result: string | null;
   spec: { name?: string } | null;
+  objective?: string;
 };
 type MissionRow = {
   id: string;
@@ -77,7 +78,7 @@ export async function GET() {
       db
         .from("work_projects")
         .select(
-          "id,actor_id,chat_id,status,phase,detail,updated_at,spec,result",
+          "id,actor_id,chat_id,status,phase,detail,updated_at,spec,result,objective",
         )
         .order("updated_at", { ascending: false })
         .limit(500),
@@ -162,7 +163,7 @@ export async function GET() {
         key: workKey("project", p.id),
         source: "project",
         id: p.id,
-        title: p.spec?.name ?? "Development project",
+        title: p.spec?.name ?? p.objective ?? "Development project",
         status: p.status,
         phase: p.phase,
         detail: p.detail,
