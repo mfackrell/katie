@@ -94,3 +94,79 @@ test("route contains the exact required accessible selectors and persistent stor
   assert.match(page, /localStorage\.getItem/);
   assert.match(page, /transition\(/);
 });
+
+
+if (process.env.SIGNAL_SPRINT_BROWSER_ACCEPTANCE === "1") {
+  test("Chromium verifies the built route, invalid actions, reloads, victory and reset", { timeout: 150_000 }, async () => {
+    const { spawn } = await import("node:child_process");
+    const { runScenarios, prepareTrustedChromium } = await import("../../scripts/project-browser-engine.mjs");
+    const port = 31947;
+    const origin = `http://127.0.0.1:${port}`;
+    const server = spawn(process.execPath, ["node_modules/next/dist/bin/next", "start", "--hostname", "127.0.0.1", "--port", String(port)], {
+      cwd: process.cwd(), stdio: ["ignore", "pipe", "pipe"],
+      env: { ...process.env, NODE_ENV: "production", NEXT_TELEMETRY_DISABLED: "1" }
+    });
+    let output = "";
+    for (const stream of [server.stdout, server.stderr]) stream.on("data", chunk => { output = (output + String(chunk)).slice(-2500); });
+    const path = "/project-pilots/signal-sprint";
+    const goto = { action: "goto", path };
+    const click = selector => ({ action: "click", selector });
+    const expect = (selector, value) => ({ action: "expectText", selector, value });
+    const ready = expect("#ready", "Ready to play");
+    const contract = {
+      path, scenarios: [
+        {
+          name: "initial-and-invalid-actions",
+          steps: [goto, ready, expect("#count", "0"), expect("#player", "A"),
+            expect("#phase", "MOVE"), expect("#winner", "None"),
+            click("#end-turn"), expect("#count", "0"), expect("#player", "A"),
+            click("#move"), expect("#count", "1"), expect("#phase", "RESOLVE"),
+            click("#move"), expect("#count", "1"), expect("#player", "A"),
+            goto, ready, expect("#count", "1"), expect("#phase", "RESOLVE"),
+            click("#end-turn"), expect("#player", "B"), expect("#phase", "MOVE")]
+        },
+        {
+          name: "four-turn-victory-terminal-noops-and-reload",
+          steps: [goto, ready,
+            click("#move"), click("#end-turn"), expect("#player", "B"),
+            click("#move"), click("#end-turn"), expect("#player", "A"),
+            click("#move"), click("#end-turn"), expect("#player", "B"),
+            click("#move"), expect("#count", "4"), expect("#phase", "RESOLVE"),
+            click("#end-turn"), expect("#phase", "FINISHED"), expect("#winner", "B"),
+            click("#move"), click("#end-turn"), expect("#count", "4"),
+            expect("#player", "B"), expect("#winner", "B"),
+            goto, ready, expect("#phase", "FINISHED"), expect("#winner", "B"),
+            click("#reset"), expect("#count", "0"), expect("#player", "A"),
+            expect("#phase", "MOVE"), expect("#winner", "None"),
+            goto, ready, expect("#count", "0"), expect("#phase", "MOVE")]
+        },
+        {
+          name: "reset-unresolved-turn-and-reload",
+          steps: [goto, ready, click("#move"), expect("#phase", "RESOLVE"),
+            goto, ready, expect("#count", "1"), expect("#player", "A"),
+            click("#reset"), expect("#count", "0"), expect("#phase", "MOVE"),
+            goto, ready, expect("#count", "0"), expect("#winner", "None")]
+        }
+      ]
+    };
+    try {
+      let started = false;
+      for (let attempt = 0; attempt < 100; attempt++) {
+        if (server.exitCode !== null) throw Error("Next server exited: " + output);
+        try {
+          const response = await fetch(origin + path, { signal: AbortSignal.timeout(1_000) });
+          await response.body?.cancel();
+          if (response.ok) { started = true; break; }
+        } catch {}
+        await new Promise(done => setTimeout(done, 250));
+      }
+      assert.ok(started, "Built Next server did not start: " + output);
+      const executablePath = await prepareTrustedChromium();
+      const checks = await runScenarios(contract, origin, { executablePath, timeout: 100_000 });
+      assert.equal(checks.length, contract.scenarios.length);
+      for (const check of checks) assert.equal(check.passed, true, check.name + ": " + check.detail);
+    } finally {
+      server.kill("SIGKILL");
+    }
+  });
+}
