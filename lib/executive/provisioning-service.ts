@@ -20,7 +20,7 @@ export async function planExecutiveProvisioning(input:ProvisionRequest){
  valid.parse(input.actorId);valid.parse(input.chatId);
  if(typeof input.requestKey!=='string'||input.requestKey.length<5||input.requestKey.length>128)
   throw Error('Invalid durable executive request key');
- const {data:request,error:rpcError}=await db.rpc('propose_executive_provisioning',{
+ const {data:request,error:rpcError}=await db.rpc<{id:string;status:string}>('propose_executive_provisioning',{
   p_actor:input.actorId,p_chat:input.chatId,p_request:input.requestKey,
   p_requirement:requirement,p_route:decision.route,
   p_specialist:decision.route==='reuse'?decision.specialistId:null
