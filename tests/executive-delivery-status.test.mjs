@@ -33,6 +33,8 @@ test('factory completion waits for its existing durable activation or blocker me
  for(const status of ['activated','blocked'])assert.equal(
   executiveDeliveryPending([],[{...p,status}],new Set([factoryReplyId(p.id)])),false,status);
  assert.equal(executiveDeliveryPending([],[{...p,route:'commission',status:'commission_pending'}],new Set()),false);
+ assert.equal(executiveDeliveryPending([],[{...p,evidence:{}}],new Set()),false,
+  'a startup error without a linked acceptance mission must not poll forever');
 });
 test('delivery status reads only the requested actor/chat and reports read failures',async()=>{
  const x=service({executive_delegations:[d]});

@@ -103,14 +103,33 @@ export async function startExecutiveDevelopment(input:{actorId:string;chatId:str
 
 export async function reconcileExecutiveFinance(){
  const db=getSupabaseAdminClient();
- const {data:running,error}=await db.from('executive_delegations').select('id,actor_id,chat_id,mission_id,status,request_key,objective').in('status',['running','submitted','verified','cancelled']).order('updated_at',{ascending:false}).limit(100);
+ const {data:running,error}=await db.from('executive_delegations').select('id,actor_id,chat_id,mission_id,status,request_key,objective').in('status',['proposed','accepted','running','submitted','verified','cancelled']).order('updated_at',{ascending:false}).limit(100);
  if(error)throw Error('Executive reconciliation inventory unavailable');
  let verified=0,blocked=0;
  for(const d of (running??[]) as Array<{id:string;actor_id:string;chat_id:string;mission_id:string|null;status:string;request_key:string;objective:string}>){
   if(!(d.request_key.startsWith('exec-finance-')||d.request_key.startsWith('exec-dev-')||d.request_key.startsWith('exec-specialist-task-'))||!d.mission_id)continue;
   const {data:mission,error:missionError}=await db.from('agent_missions').select('status,result,detail').eq('id',d.mission_id).maybeSingle();
   const missionRow=mission as {status:string;result:string|null;detail:string|null}|null;
-  if(missionError||!missionRow||!['completed','blocked','failed','stopped'].includes(missionRow.status))continue;
+  if(missionError||!missionRow)continue;
+  // The authorized, linked mission may have started before the handoff's
+  // accept/start writes were interrupted. Resume those writes, not a new job.
+  if(d.status==='proposed'||d.status==='accepted'){
+   if(missionRow.status==='draft'){
+    const {error:startError}=await db.rpc('control_mission',{p_id:d.mission_id,p_action:'start',p_job:null});
+    if(startError)continue;
+    missionRow.status='running';
+   }
+   let resumed=true;
+   for(const action of d.status==='proposed'?['accept','start']:['start']){
+    const {data,error:transitionError}=await db.rpc<{status:string}>('transition_executive_delegation',{
+     p_id:d.id,p_actor:d.actor_id,p_chat:d.chat_id,p_action:action,p_evidence:{}
+    });
+    if(transitionError||!data){resumed=false;break;}
+    d.status=data.status;
+   }
+   if(!resumed)continue;
+  }
+  if(!['completed','blocked','failed','stopped'].includes(missionRow.status))continue;
   const {data:review,error:reviewError}=await db.from('mission_assignments').select('job_key,result,status').eq('mission_id',d.mission_id).eq('role','review').eq('status','completed').limit(20);
   if(reviewError)continue;
   const reviewRows=(review as Array<{job_key:string;result:{verdict?:string}|null}>|null)??[];

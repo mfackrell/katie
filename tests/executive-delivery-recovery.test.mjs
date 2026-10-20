@@ -5,9 +5,9 @@ import {createRequire} from 'node:module';
 import vm from 'node:vm';
 import ts from 'typescript';
 const native=createRequire(import.meta.url);
-function runtime({factory=false,fail=null,missionStatus='completed'}={}){
+function runtime({factory=false,fail=null,missionStatus='completed',initialStatus}={}){
  const request={id:'request',actor_id:'actor',chat_id:'chat',specialist_slug:'operations',capability:'operations_analysis',
-  status:factory?'configured':'running',evidence:{acceptanceMissionId:'mission'},mission_id:'mission',request_key:'exec-specialist-task-test',objective:'Read-only analysis'};
+  status:initialStatus??(factory?'configured':'running'),evidence:{acceptanceMissionId:'mission'},mission_id:'mission',request_key:'exec-specialist-task-test',objective:'Read-only analysis'};
  const messages=new Map(),actions=[],updates=[];let failure=fail;
  const jobs=[{job_key:'review',role:'review',status:'completed',result:{verdict:'pass'}},
   ...['analyst','researcher'].map(agent_id=>({agent_id,role:'work',status:'completed',payload:{capability:'analysis'},result:{calculations:[{result:6}]}}))].map(job=>({...job,mission_id:'mission'}));
@@ -23,7 +23,7 @@ function runtime({factory=false,fail=null,missionStatus='completed'}={}){
  };return query;},
  async rpc(_name,args){actions.push(args.p_action);
   if(failure===args.p_action){failure=null;return {data:null,error:Error('interrupted transition')};}
-  const next={submit:'submitted',verify:'verified',validate:'validated',activate:'activated',cancel:'cancelled'}[args.p_action];
+  const next={accept:'accepted',start:'running',submit:'submitted',verify:'verified',validate:'validated',activate:'activated',cancel:'cancelled'}[args.p_action];
   request.status=next;if(args.p_action==='validate')request.evidence=args.p_evidence;
   return {data:{status:next},error:null};}
  };
@@ -51,6 +51,13 @@ test('submitted delegation recovers verification and delivers once without a new
  await x.run();assert.equal(x.messages.size,1);
  assert.deepEqual(x.actions,['submit','verify','verify']);
 });
+for(const initialStatus of ['proposed','accepted']){
+ test(`linked ${initialStatus} delegation resumes its handoff and delivers its reviewed mission`,async()=>{
+  const x=runtime({initialStatus});await x.run();await x.run();
+  assert.equal(x.request.status,'verified');assert.equal(x.messages.size,1);
+  assert.deepEqual(x.actions,initialStatus==='proposed'?['accept','start','submit','verify']:['start','submit','verify']);
+ });
+}
 for(const failure of ['activate','upgrade','delivery']){
  test(`factory resumes after ${failure} interruption and delivers exactly once`,async()=>{
   const x=runtime({factory:true,fail:failure});await x.run().catch(error=>assert.match(error.message,/interrupted|configuration/));

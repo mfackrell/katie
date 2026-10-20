@@ -9,16 +9,16 @@ function uuid(value:string){
 export const delegationReplyId=(id:string)=>uuid('executive-finance-mission:executive-reply-'+id);
 export const factoryReplyId=(id:string)=>uuid('executive-factory:reply:'+id);
 type Delegation={id:string;status:string;request_key:string;mission_id:string|null};
-type Provisioning={id:string;status:string;route:string;evidence:{acceptanceMissionId?:string;acceptanceEvidence?:unknown[]}|null};
+type Provisioning={id:string;status:string;route:string;evidence:{acceptanceMissionId?:string;acceptanceEvidence?:Array<{missionId?:string}>}|null};
 export function executiveDeliveryPending(delegations:Delegation[],provisioning:Provisioning[],messageIds:Set<string>){
  const assignment=delegations.some(d=>d.mission_id&&
   /^(exec-finance-|exec-dev-|exec-specialist-task-)/.test(d.request_key)&&
   (['proposed','accepted','running','submitted'].includes(d.status)||
    ['verified','cancelled'].includes(d.status)&&!messageIds.has(delegationReplyId(d.id))));
  const factory=provisioning.some(p=>p.route==='configure'&&
+  Boolean(p.evidence?.acceptanceMissionId||p.evidence?.acceptanceEvidence?.some(e=>e.missionId))&&
   (['configured','validated'].includes(p.status)||
    ['activated','blocked'].includes(p.status)&&
-    Boolean(p.evidence?.acceptanceMissionId||p.evidence?.acceptanceEvidence?.length)&&
     !messageIds.has(factoryReplyId(p.id))));
  return assignment||factory;
 }
