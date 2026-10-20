@@ -223,8 +223,10 @@ function AgentCard({
   return (
     <article className="min-w-0 rounded-xl border border-white/10 p-5">
       <p className="text-xs font-medium text-emerald-300">
-        {card.kind === "orchestrator"
-          ? "Orchestrator · coordinates a team"
+        {card.kind === "executive"
+          ? "Executive · creates and manages autonomous specialists"
+          : card.kind === "orchestrator"
+          ? "Specialist orchestrator · coordinates a team"
           : card.kind === "worker"
             ? "Internal task agent · isolated worker"
             : "Single-task agent · direct conversation"}
@@ -291,7 +293,9 @@ function AgentCard({
             .join(", ")}
         </p>
       )}
-      <AgentControls card={card} actors={actors} onChanged={onChanged} />
+      {card.kind === "executive" ? (
+        <p className="mt-4 text-xs text-zinc-400">System identity. Management rules are enforced by the Executive runtime, not editable chatbot instructions.</p>
+      ) : <AgentControls card={card} actors={actors} onChanged={onChanged} />}
     </article>
   );
 }
