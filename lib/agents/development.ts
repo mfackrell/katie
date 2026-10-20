@@ -26,7 +26,7 @@ const receiptSchema = z.object({
 export function parseCompletionReceipt(value: unknown, repo: string, issue: number, runId: number, conclusion: string | null, project?: ProjectAcceptanceBinding) {
   const receipt = receiptSchema.parse(value);
   if (receipt.repository !== repo || receipt.issue_number !== issue || receipt.run_id !== runId) throw new Error("Receipt association invalid");
-  if (receipt.pr_url && !new RegExp(`^https://github\\.com/${repo.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}/pull/[1-9][0-9]*$`).test(receipt.pr_url)) throw new Error("Invalid receipt PR");
+  if (receipt.pr_url && !new RegExp(`^https://github\.com/${repo.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}/pull/[1-9][0-9]*$`).test(receipt.pr_url)) throw new Error("Invalid receipt PR");
   const c = receipt.checks;
   const passed = c.build === "success" && ((c.repair === "skipped" && c.test === "true" && c.review === "pass" && ["", "skipped"].includes(c.retest) && ["", "skipped"].includes(c.final_review)) || (c.repair === "success" && c.retest === "true" && c.final_review === "pass"));
   const boundHeads=receipt.tested_head_sha===undefined&&receipt.reviewed_head_sha===undefined||typeof receipt.tested_head_sha==='string'&&receipt.tested_head_sha===receipt.reviewed_head_sha;
@@ -105,12 +105,12 @@ async function save(task: AgentTask, status: string, details: string | null, ext
 export async function chooseTrustedGithubModels(objective:string){
  const providers=getAvailableProviders().filter(p=>p.name==='openai');
  if(!providers.length)throw Error('No configured provider supports the trusted GitHub coding executor');
- const decision=async(role:string)=>chooseProvider(role+' for authorized isolated GitHub software development\\n'+objective.slice(0,3200),
+ const decision=async(role:string)=>chooseProvider(role+' for authorized isolated GitHub software development\n'+objective.slice(0,3200),
    'Select a capable model for '+role+'. GitHub executor: Codex permission-profile, independent tests and review.',providers);
  const [coding,review]=await Promise.all([decision('implementation and debugging'),decision('independent code review')]);
  const models=(d:Awaited<ReturnType<typeof chooseProvider>>)=>[{provider:d.provider,modelId:d.modelId},...d.fallbackChain];
- const code=models(coding).find(x=>x.provider.name==='openai'&&/^gpt-\\d+(?:\\.\\d+)?-codex(?:-(?:mini|max))?$/.test(x.modelId));
- const reviewer=models(review).find(x=>x.provider.name==='openai'&&/^gpt-\\d+(?:\\.\\d+)?(?:-codex(?:-(?:mini|max))?)?$/.test(x.modelId));
+ const code=models(coding).find(x=>x.provider.name==='openai'&&/^gpt-\d+(?:\.\d+)?-codex(?:-(?:mini|max))?$/.test(x.modelId));
+ const reviewer=models(review).find(x=>x.provider.name==='openai'&&/^gpt-\d+(?:\.\d+)?(?:-codex(?:-(?:mini|max))?)?$/.test(x.modelId));
  if(!code||!reviewer)throw Error('Router found no verified model for the protected coding and review tools');
  return {codingModel:code.modelId,reviewModel:reviewer.modelId};
 }
