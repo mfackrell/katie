@@ -322,7 +322,7 @@ test("bounded validation falls back before comparing after two material rejectio
   assert.equal(result.audit.status,"completed_with_review_notes");
   assert.equal(result.audit.contractFindings?.length,2);
   assert.equal(result.audit.reviews,undefined);
-  assert.match(result.result.text,/independent review could not verify/i);
+  assert.equal(result.result.text,draft.text);
   assert.equal(result.audit.draft, draft.text);
   assert.equal(result.audit.pendingClarification,undefined);
 });
