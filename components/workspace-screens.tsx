@@ -145,6 +145,7 @@ export function HomeScreen() {
   const attention = topLevelWork(work.data?.items ?? []).filter(
     (i) => needsYou(i) && !i.isTest,
   );
+  const actorsById = new Map((actors.data?.actors ?? []).map((actor) => [actor.id, actor]));
   const visibleIds = new Set(
     (actors.data?.actors ?? [])
       .filter((a) => actorAudience(a) === "conversation")
@@ -234,7 +235,12 @@ export function HomeScreen() {
             key={chat.id}
             href={conversationHref(chat.id)}
           >
-            <span>{chat.title}</span>
+            <div className="min-w-0">
+              <p className="break-words font-medium">{chat.title}</p>
+              <p className="mt-1 text-sm text-zinc-400">
+                With {actorsById.get(chat.actorId)?.name}
+              </p>
+            </div>
             <span className="text-xs text-zinc-500">
               {date(chat.updatedAt)}
             </span>
