@@ -134,3 +134,16 @@ test('factory refuses unsupported accepted scenarios even if given a bad configu
  }),/No independently verifiable mission acceptance scenario/);
  assert.equal(calls.some(c=>c.name==='create_mission'),false);
 });
+
+test('read-only repository audits use research workers and preserve repository context',async()=>{
+ const {factory,calls}=setup({registered:{slug:'software_development',status:'active',capabilities:['repository_maintenance']}});
+ const message='Ask the software development orchestrator to inspect the connected repository read-only and report architecture defects without changing any code.';
+ const result=await factory.startSpecialistAssignment({actorId:'actor',chatId:'chat',requestId:'audit-1',message,activeRepoId:'repo-id'});
+ assert.match(result,/Mission:/);
+ const mission=calls.find(c=>c.name==='create_mission');
+ assert.deepEqual(Array.from(mission.args.p_agents),['lead','analyst','researcher']);
+ assert.equal(mission.args.p_repository,'repo-id');
+ const denied=await factory.startSpecialistAssignment({actorId:'actor',chatId:'chat',requestId:'audit-2',message});
+ assert.match(denied,/Select a verified connected repository/);
+ assert.equal(calls.filter(c=>c.name==='create_mission').length,1);
+});
