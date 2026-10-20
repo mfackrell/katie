@@ -116,19 +116,12 @@ export async function runRequiredDraftReview(input: {
   const audit: ReviewAudit = { sourceTurns: baseline.turns, mode: "always", status: "unavailable", draft, draftHash: hash(draft), finalHash: hash(draft), attempts: [] };
   const prepare = (p: ChatGenerateParams, participant: CollaborationParticipant) => input.prepareParams?.(p, participant) ?? p;
   const unavailable = (notice: string) => {
-    // Preserve the requested work without implying that verification succeeded.
-    // A verifier failure is not a missing user fact and should not prompt an
-    // endless retry/clarification cycle.
-    if (draft.trim()) {
-      const note = `Independent review could not be completed (${notice}). This draft has not been approved; verify its claims before submitting.`;
-      const text = `Unverified draft (independent review incomplete):\n\n${draft.trim()}\n\n---\nReview note (not part of the deliverable): ${note}`;
-      audit.status = "completed_with_review_notes";
-      audit.completionNote = note;
-      audit.finalHash = hash(text);
-      return { result: { ...input.draft, text }, audit };
-    }
-    const text = `The draft is empty and independent review could not be completed (${notice}). Please retry the original task.`;
-    audit.status = "needs_user_input";
+    // Keep review metadata outside the user's requested artifact. No draft is
+    // represented as approved unless the exact text was approved.
+    const note = `Independent review incomplete: ${notice}. The working draft remains in the review audit.`;
+    audit.status = "completed_with_review_notes";
+    audit.completionNote = note;
+    const text = "I prepared a draft, but independent review could not verify it. The draft has been retained for repair; I cannot present it as a completed, approved deliverable.";
     audit.finalHash = hash(text);
     return { result: { ...input.draft, text }, audit };
   };
@@ -224,7 +217,9 @@ export async function runRequiredDraftReview(input: {
       let review = await compare(draft, [], false);
       audit.attempts.push({ reviewer, phase: "comparison" });
       if (review.verdict === "approve") {
+        if (audit.reviews?.at(-1)?.answerHash !== hash(draft)) throw new Error("Approval did not match the original draft");
         audit.status = "approved";
+        audit.finalHash = hash(draft);
         return { result: input.draft, audit };
       }
       // Bounded repair: a revision is never reported as successful merely because it exists.
@@ -232,6 +227,9 @@ export async function runRequiredDraftReview(input: {
       let candidate = input.draft;
       try {
         for (let pass = 0; pass < 3; pass++) {
+          // Only the latest verified assessment applies to the current candidate.
+          // Historical findings remain in audit.reviews, not as live blockers.
+          findings.length = 0;
           findings.push(review.findings);
           phase = "revision";
           input.onProgress?.("Revising the answer to satisfy the validated task and substantive findings.");
@@ -244,6 +242,10 @@ export async function runRequiredDraftReview(input: {
           candidate = { ...input.draft, ...revision };
           review = await compare(candidate.text, findings, true);
           if (review.verdict === "approve") {
+            if (audit.reviews?.at(-1)?.answerHash !== hash(candidate.text) ||
+                audit.reviews?.at(-1)?.phase !== "final_validation") {
+              throw new Error("Final approval was not bound to the exact revised text");
+            }
             audit.status = "revised";
             audit.finalHash = hash(candidate.text);
             return { result: candidate, audit };
@@ -274,14 +276,15 @@ export async function runRequiredDraftReview(input: {
           audit.finalHash = hash(pending.question);
           return { result: { ...input.draft, text: pending.question }, audit };
         }
-        // No user-owned blocking fact was identified. Do NOT fabricate a question.
-        // Deliver the best supported candidate with the remaining review issues
-        // clearly separated from the deliverable, never falsely marked approved.
-        const note = "Independent review did not fully approve this draft. Please check the unresolved issues before submitting: " +
-          (review.findings || (error instanceof Error ? error.message : String(error))).slice(0, 1000);
-        const text = `${candidate.text.trim()}\n\n---\nReview note (not part of the deliverable): ${note}`;
+        // Preserve both the candidate and the exact review findings in the
+        // audit. Never append findings about earlier versions to revised prose.
+        const latest = audit.reviews?.at(-1);
+        const matching = latest?.answerHash === hash(candidate.text);
         audit.status = "completed_with_review_notes";
-        audit.completionNote = note;
+        audit.completionNote = matching
+          ? "Latest candidate was reviewed but not approved: " + latest.review.findings
+          : "Final candidate has not been independently reviewed. The last review findings belong to an earlier version.";
+        const text = "The revised draft has not passed independent review. I have retained the draft and version-specific findings for further repair; it is not ready for submission.";
         audit.finalHash = hash(text);
         return { result: { ...candidate, text }, audit };
       }
