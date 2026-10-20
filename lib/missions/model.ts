@@ -1,6 +1,7 @@
 import {GAME_RULE_CATEGORIES} from '../../scripts/project-game-rules.mjs';
 import {projectPlanSchema} from '@/lib/projects/contract';
 import OpenAI from 'openai';
+import {getAvailableProviders} from '@/lib/providers';
 import { zodTextFormat } from 'openai/helpers/zod';
 import { randomUUID } from 'node:crypto';
 import { rpc } from './store';
@@ -11,6 +12,42 @@ const REVIEW_MODEL='gpt-5.4';
 const calculator={type:'function',name:'calculate',description:'Execute a deterministic arithmetic calculation. Numbers must come from supplied evidence or explicitly labeled assumptions.',strict:true,parameters:{type:'object',properties:{operation:{type:'string',enum:['add','subtract','multiply','divide','power']},values:{type:'array',items:{type:'number'},minItems:2,maxItems:12}},required:['operation','values'],additionalProperties:false}};
 export class MissionModelFailure extends Error { constructor(message:string,readonly partial:Record<string,unknown>){super(message);this.name='MissionModelFailure';} }
 export type ModelResult={text:string;sources:Array<{url:string;title:string}>;calculations:unknown[];model:string};
+export function isCreditExhaustion(error:unknown):boolean{
+ const e=error as {status?:number;code?:string;error?:{code?:string;message?:string};message?:string}|null;
+ const code=String(e?.code??e?.error?.code??'').toLowerCase();
+ const message=String(e?.message??e?.error?.message??'').toLowerCase();
+ return (e?.status===429||code==='insufficient_quota'||code==='billing_hard_limit_reached')&&
+  (/credit|quota|balance|billing|insufficient/.test(message)||code==='insufficient_quota'||code==='billing_hard_limit_reached');
+}
+// Provider routing is shared with ordinary Katie chats. Quota failures may
+// switch providers, but cannot waive mission budgets, role permissions, or
+// independent review. Never retry a possibly completed output as fallback.
+export async function missionCreditFallback(claim:Claim,instruction:string,input:string,outputTokens:number,
+   quotaError:unknown):Promise<ModelResult>{
+ if(!isCreditExhaustion(quotaError))throw quotaError;
+ const providers=getAvailableProviders().filter(p=>p.name!=='openai');
+ const selected=providers.find(p=>p.name==='google')??providers.find(p=>p.name==='anthropic')??providers.find(p=>p.name==='grok');
+ if(!selected)throw new MissionModelFailure('OpenAI credits exhausted and no configured alternative provider is available.',{providerErrorCode:'insufficient_quota',fallbackUnavailable:true});
+ const models=selected.name==='google'?['gemini-3.1-pro','gemini-2.5-pro']:
+   selected.name==='anthropic'?['claude-sonnet-4-6','claude-sonnet-4-5']:['grok-4'];
+ const model=models[0];
+ const reserve=Math.max(6000,Math.ceil(Buffer.byteLength(instruction+input,'utf8')/2)+outputTokens+512);
+ const callId=randomUUID();
+ if(!await rpc<boolean>('reserve_mission_call',{p_id:claim.job.id,p_lease:claim.job.lease,p_call:callId,p_model:selected.name+':'+model,p_tokens:reserve}))
+    throw new MissionModelFailure('Fallback blocked by original mission token budget or lease.',{fallbackBudgetExhausted:true});
+ try{
+  const result=await selected.generate({name:'Katie mission worker',persona:instruction,summary:'Bounded, role-scoped mission.',user:input,history:[],modelId:model});
+  const content=String(result.text??'').trim();
+  if(!content||content.length>Math.max(24000,outputTokens*5)||result.truncated)
+   throw new MissionModelFailure('Fallback output incomplete or oversized.',{fallbackProvider:selected.name,fallbackModel:model});
+  await rpc('finish_mission_call',{p_call:callId,p_tokens:result.usage?.totalTokens??null});
+  return {text:content,sources:[],calculations:[],model:selected.name+':'+result.model};
+ }catch(error){
+  await rpc('finish_mission_call',{p_call:callId,p_tokens:null}).catch(()=>{});
+  throw error;
+ }
+}
+
 // A bounded execution adapter uses the existing OpenAI credential/SDK. Ordinary
 // chat adapters remain unchanged; their unbounded continuation defaults cannot
 // enforce a mission allowance. No SDK inference retries or automatic fallback.
@@ -90,7 +127,9 @@ export async function missionModel(claim:Claim,instruction:string,input:string,t
     if(!sources.length)throw new MissionModelFailure('Research returned no cited live sources',{text,sources,calculations,model:selectedModel,consultedSources:[...consulted],outputTypes:output.map(item=>String(item.type))});
    }
    return{text,sources,calculations,model:selectedModel};
-  }catch(error){await rpc('finish_mission_call',{p_call:callId,p_tokens:null}).catch(()=>{});throw error;}
+  }catch(error){await rpc('finish_mission_call',{p_call:callId,p_tokens:null}).catch(()=>{});
+   if(tools==='none'&&isCreditExhaustion(error))return missionCreditFallback(claim,String(request.instructions),input,outputTokens,error);
+   throw error;}
  }
  throw Error('Calculation output did not complete within its call allowance');
 }
