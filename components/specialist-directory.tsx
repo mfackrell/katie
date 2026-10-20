@@ -295,6 +295,8 @@ function AgentCard({
       )}
       {card.kind === "executive" ? (
         <p className="mt-4 text-xs text-zinc-400">System identity. Management rules are enforced by the Executive runtime, not editable chatbot instructions.</p>
+      ) : card.registry ? (
+        <p className="mt-4 text-xs text-zinc-400">This specialist uses a versioned, independently verified mission contract. Review its capability and assignment settings in <Link href="/settings/advanced" className="underline">Advanced management</Link>; it does not share editable global Executive instructions.</p>
       ) : <AgentControls card={card} actors={actors} onChanged={onChanged} />}
     </article>
   );
