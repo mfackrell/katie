@@ -109,9 +109,35 @@ export async function executeClaim(claim:Claim,model=missionModel){
   const target=completed.find(x=>x.job_key===(job.job_key==='review_again'?'revision':'compose'));
   if(!target?.result)throw Error('Review candidate missing');
   const measured=measureDeliverable(mission.objective,String(target.result.text??target.result.output??''));
-  const checked=await model(claim,frame+'\n'+REVIEW_INSTRUCTION+(mission.project_kind==='specification'&&(mission.project_evidence as {projectProfile?:string}|null)?.projectProfile==='game'?'\nGAME REVIEW REFERENCE SEMANTICS: Candidate specification.contractRef and stepsRef are server-validated lossless views of canonically identical fully saved contracts and browser steps, NOT missing acceptance content. Their full content exists under candidate.specification.finalContract; compare there and do not falsely demand duplicate steps arrays in this reviewer-only view. Evaluate unresolved or resolved game unknowns against actual source decisions; do not infer resolutions.':'')+'\nMEASURED LENGTH: The supplied measuredLength is computed from the entire candidate by code. Use it for length compliance; never estimate a conflicting count. Being within the cap does not waive material relevance or completeness issues. Distinguish optional tightening from a material defect; cite the concrete outcome impaired by any required deletion.','Independent assessment:\n'+JSON.stringify(assessment)+'\nRequired acceptance IDs:\n'+JSON.stringify(acceptanceIds(assessment))+'\nEvidence and candidate:\n'+JSON.stringify({objective:mission.objective,projectEvidence:researchRecoveryEvidence(mission.project_evidence,false),candidate:{key:target.job_key,result:candidateEvidence(target.result)},measuredLength:measured,evidence:completed.filter(x=>x.role==='work'||x.role==='development').map(x=>({key:x.job_key,result:x.result})),priorFindings:mission.project_kind==='specification'&&(mission.project_evidence as {projectProfile?:string}|null)?.projectProfile==='game'
-   ?priorReviews.map(({checks,...review})=>({...review,priorCheckCount:Array.isArray(checks)?checks.length:0,priorCheckDetail:'Already represented by the independent task contract above; findings and verdict retained.'}))
-   :priorReviews}));
+  const gameReview=mission.project_kind==='specification'&&(mission.project_evidence as {projectProfile?:string}|null)?.projectProfile==='game';
+  const persisted=researchRecoveryEvidence(mission.project_evidence,false);
+  // Saved reviewed research, rejected drafts and prior review receipts stay in
+  // storage. The independent reviewer receives only source IDs and the CURRENT
+  // complete candidate (in a lossless contract view) without repeated drafts.
+  const reviewEvidence=gameReview&&persisted&&typeof persisted==='object'
+    ?(()=>{const e=persisted as Record<string,unknown>;
+      const research=e.reviewedResearch as {reviewedMissionId?:string}|undefined;
+      const recovery=e.recoveryCoverage as {sourceMissionId?:string;findings?:string}|undefined;
+      return {projectProfile:'game',reviewedResearchMissionId:research?.reviewedMissionId,
+        recoverySourceMissionId:recovery?.sourceMissionId,recoveryValidationFindings:recovery?.findings,
+        originalEvidence:'Full original research and previous drafts retained in durable mission records'};
+     })()
+    :persisted;
+  const reviewPayload={objective:mission.objective,projectEvidence:reviewEvidence,
+    candidate:{key:target.job_key,result:candidateEvidence(target.result)},
+    measuredLength:measured,
+    evidence:completed.filter(x=>x.role==='work'||x.role==='development').map(x=>({key:x.job_key,result:x.result})),
+    priorFindings:gameReview?priorReviews.map(({checks,...rest})=>({...rest,priorCheckCount:Array.isArray(checks)?checks.length:0})):priorReviews};
+  const reviewFrame=frame+'\n'+REVIEW_INSTRUCTION+(gameReview?
+    '\nGAME REVIEW REFERENCE SEMANTICS: contractRef and stepsRef are server-validated lossless views of duplicate contracts; inspect candidate.specification.finalContract for full steps. Evaluate this CURRENT candidate independently. The prior draft and charges remain saved.':'')+
+    '\nMEASURED LENGTH: The supplied measuredLength is computed by code from the entire candidate. Use it for length compliance; never estimate a conflicting count. Distinguish true acceptance failures from formatting preferences.';
+  const reviewInput='Independent assessment:\n'+JSON.stringify(assessment)+
+    '\nRequired acceptance IDs:\n'+JSON.stringify(acceptanceIds(assessment))+
+    '\nEvidence and candidate:\n'+JSON.stringify(reviewPayload);
+  if(reviewFrame.length+reviewInput.length>48000)
+    throw new MissionModelFailure('Review input exceeds 48,000-character bound before provider dispatch; candidate and receipts remain saved.',{
+      reviewContextOverflow:true,candidateJobId:target.id,reviewInputCharacters:reviewFrame.length+reviewInput.length});
+  const checked=await model(claim,reviewFrame,reviewInput);
   const evaluated=validateAnswerReview(parseJSON(checked.text),assessment);
   const {wordCount,wordLimit}=measured;
   const tooLong=wordLimit!==null&&wordCount>wordLimit;
