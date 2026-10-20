@@ -231,7 +231,7 @@ async function advance(p: Project) {
               .from('project_events').select('data').eq('project_id',p.id)
               .eq('event','game_revision_timeout_recovered').order('created_at',{ascending:false}).limit(1);
             if(recoveryError)throw Error('Saved game revision recovery evidence unavailable');
-            const note=(recovery?.[0]?.data as {findings?:string;sourceMissionId?:string}|undefined);
+            const note=((recovery??[]) as Array<{data?:{findings?:string;sourceMissionId?:string}}>)[0]?.data;
             if(note&&typeof note.findings==='string')
                 projectEvidence={...(projectEvidence as Record<string,unknown>),recoveryReview:{sourceMissionId:note.sourceMissionId,findings:note.findings.slice(0,2200),instruction:'Correct these independent review findings. Full prior evidence remains saved; do not repeat research or assume approval.'}};
         }
@@ -307,7 +307,7 @@ async function reconcileBlockedGameRevisions(){
       .eq('status','blocked').eq('profile','game').eq('phase','specification')
       .order('updated_at',{ascending:false}).limit(2);
     if(error)throw Error('Blocked game revision recovery index unavailable');
-    for(const p of data??[]){
+    for(const p of (data??[]) as Array<{id:string}>){
         if(await projectRpc<boolean>('recover_game_revision_timeout',{p_id:p.id})){
             console.info('[Projects] Saved game revision timeout recovered without resetting charges',{project:p.id});
             return true;
