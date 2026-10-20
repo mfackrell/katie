@@ -776,8 +776,11 @@ export function WorkDetailScreen({ reference }: { reference: string }) {
               </Link>
             )}
             <p className="mt-3 text-xs text-zinc-500">
-              Execution: {item.status} · Review: {item.reviewState} · Delivery:{" "}
-              {item.deliveryState}
+              Execution: {item.status}
+              {item.coordinationState
+                ? ` · Coordination: ${item.coordinationState}`
+                : ""}{" "}
+              · Review: {item.reviewState} · Delivery: {item.deliveryState}
             </p>
           </section>
           <section className="space-y-3">

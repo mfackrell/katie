@@ -124,3 +124,14 @@ test("UI metadata migration denies public access and rejects stale writes withou
     /update (actors|agent_missions|work_projects|agent_tasks) set/i,
   );
 });
+
+test("cancelled delegations preserve execution evidence without generating stale decisions", () => {
+  const row = item("mission", "cancelled", {
+    status: "blocked",
+    coordinationState: "cancelled",
+  });
+  assert.equal(model.needsYou(row), false);
+  assert.equal(model.isActive(row), false);
+  assert.equal(model.workLabel(row), "Stopped");
+  assert.equal(row.status, "blocked");
+});

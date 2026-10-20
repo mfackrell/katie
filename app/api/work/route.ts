@@ -43,6 +43,7 @@ type DelegationRow = {
   chat_id: string;
   mission_id: string | null;
   orchestrator_id: string;
+  status: string;
   updated_at: string;
 };
 type JobRow = {
@@ -96,7 +97,9 @@ export async function GET() {
         .limit(500),
       db
         .from("executive_delegations")
-        .select("id,actor_id,chat_id,mission_id,orchestrator_id,updated_at")
+        .select(
+          "id,actor_id,chat_id,mission_id,orchestrator_id,updated_at,status",
+        )
         .order("updated_at", { ascending: false })
         .limit(500),
       db
@@ -202,6 +205,7 @@ export async function GET() {
         id: m.id,
         title: m.objective,
         status: m.status,
+        coordinationState: d?.status,
         phase: m.project_kind ?? m.status,
         detail: m.detail,
         updatedAt: m.updated_at,

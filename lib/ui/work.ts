@@ -5,6 +5,7 @@ export type WorkItem = {
   id: string;
   title: string;
   status: string;
+  coordinationState?: string;
   phase: string;
   detail: string | null;
   updatedAt: string | null;
@@ -34,6 +35,8 @@ export function actorAudience(actor: {
       : "conversation";
 }
 export function workLabel(item: WorkItem): string {
+  if (["cancelled", "rejected"].includes(item.coordinationState ?? ""))
+    return "Stopped";
   if (item.status === "completed") {
     if (item.deliveryState === "pending") return "Delivering result";
     if (item.deliveryState === "delivered") return "Result ready";
@@ -60,11 +63,15 @@ export function workLabel(item: WorkItem): string {
   return labels[item.status] ?? item.status.replaceAll("_", " ");
 }
 export function needsYou(item: WorkItem) {
+  if (["cancelled", "rejected"].includes(item.coordinationState ?? ""))
+    return false;
   return ["awaiting_approval", "awaiting_clarification", "blocked"].includes(
     item.status,
   );
 }
 export function isActive(item: WorkItem) {
+  if (["cancelled", "rejected"].includes(item.coordinationState ?? ""))
+    return false;
   return !["completed", "failed", "stopped", "cancelled"].includes(item.status);
 }
 export function topLevelWork(items: WorkItem[]) {
