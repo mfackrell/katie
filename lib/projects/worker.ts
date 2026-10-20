@@ -5,7 +5,7 @@ import { readMission } from '@/lib/missions/store';
 import { readTask } from '@/lib/agents/store';
 import { developmentPreview, projectAcceptanceSchema, reconcileDevelopment, retryImmutableProjectVerification } from '@/lib/agents/development';
 import { parseJSON } from '@/lib/missions/types';
-import { validateProjectPlan, digest } from './contract';
+import { validateProjectPlan, digest, projectPlanSchema, gameSpecificationView, canonical } from './contract';
 import {gameAssessmentEvidence} from './game-evidence';
 import { projectRpc, projectRuns, milestoneEvidence, acceptanceBinding, getDevelopmentProjectContext, type Project } from './store';
 export async function baseline(p: Project) { if (!p.repository_id)
@@ -248,11 +248,15 @@ async function advance(p: Project) {
                 let draft:unknown=null;
                 try{
                     const raw=prior?.result?.rejectedSpecification;
-                    if(raw&&raw.length<=17000)draft=JSON.parse(raw);
+                    if(raw){
+                        const source=projectPlanSchema.parse(JSON.parse(raw));
+                        const view=gameSpecificationView(source);
+                        if(canonical(view).length<=20000)draft=view;
+                    }
                 }catch{/* Preserve unparseable original in its durable mission. */}
                 projectEvidence={...(projectEvidence as Record<string,unknown>),
                   recoveryCoverage:{sourceMissionId:recovered.sourceMissionId,findings:recovered.findings,
-                    rejectedDraft:draft,instructions:'Preserve valid scenarios, add real observable or model-based proof for missing rule IDs, never invent rules or user decisions; require fresh independent review.'}};
+                    rejectedDraft:draft,instructions:'contractRef and stepsRef are lossless server-resolved references to finalContract; return fully expanded JSON. Preserve valid scenarios, add real observable or model-based proof for missing rule IDs, never invent rules or user decisions; require fresh independent review.'}};
             }
         }
         // Keep the complete independently reviewed research as structured evidence,
