@@ -281,8 +281,8 @@ try {
   assert.equal(chats.some(chat => chat.title === "Disposable UI check"), false);
   await page.getByLabel("Search conversations").fill("Operations");
   await page.getByText("Operations analysis", { exact: true }).click();
-  await page.getByPlaceholder("Ask Katie…").waitFor();
-  const composer = page.getByPlaceholder("Ask Katie…");
+  await page.getByPlaceholder("Ask Executive Orchestrator…").waitFor();
+  const composer = page.getByPlaceholder("Ask Executive Orchestrator…");
   const modelSettings = page.getByRole("button", { name: "Hide answering models", exact: true });
   assert.equal(await modelSettings.getAttribute("aria-expanded"), "true");
   await page.getByLabel("Answering model for openai", { exact: true }).selectOption("gpt-example");
@@ -328,7 +328,7 @@ try {
     await page.getByText("Internal worker", { exact: true }).count(),
     0,
   );
-  await page.getByRole("heading", { name: "Executive Orchestrator", exact: true }).waitFor();
+  await page.getByRole("region", { name: "Executive Orchestrator", exact: true }).getByRole("heading", { name: "Executive Orchestrator", exact: true }).first().waitFor();
   await page.getByRole("region", { name: "Executive Orchestrator", exact: true }).waitFor();
   await page.getByRole("region", { name: "Specialist Orchestrators", exact: true }).waitFor();
   await page.getByRole("region", { name: "Single-task agents", exact: true }).waitFor();
