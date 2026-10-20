@@ -91,6 +91,21 @@ export async function routedMissionText(claim:Claim,instruction:string,input:str
  throw new MissionModelFailure('All authorized model candidates failed.',{routingExhausted:true,
   lastProviderFailure:lastError instanceof Error?lastError.message.slice(0,500):'unknown'});
 }
+// Native web search and the deterministic calculator need Responses tool
+// compatibility. Use the same router, but only admit models backed by the
+// verified native tool adapter. Cross-provider text substitution would lose
+// research provenance or deterministic calculator calls.
+export async function selectNativeToolModel(claim:Claim,instruction:string,kind:'research'|'calculate') {
+ const capable=getAvailableProviders().filter(p=>p.name==='openai');
+ if(!capable.length)throw new MissionModelFailure('No tool-compatible provider is configured.',{capability:kind,providerUnavailable:true});
+ const decision=await chooseProvider(kind+' with native '+(kind==='research'?'web_search':'calculator')+
+   '\n'+claim.mission.objective.slice(0,2500),instruction.slice(0,2500),capable);
+ const ranked=[{provider:decision.provider,modelId:decision.modelId},...decision.fallbackChain];
+ const suitable=ranked.find(x=>x.provider.name==='openai'&&/^gpt-5(?:\.\d+)?(?:-mini)?$/.test(x.modelId));
+ if(!suitable)throw new MissionModelFailure('Router found no model verified for the required native tool.',{
+   capability:kind,providerUnavailable:true,selectedModel:decision.modelId});
+ return suitable.modelId;
+}
 // A bounded execution adapter uses the existing OpenAI credential/SDK. Ordinary
 // chat adapters remain unchanged; their unbounded continuation defaults cannot
 // enforce a mission allowance. No SDK inference retries or automatic fallback.
@@ -99,10 +114,11 @@ export async function missionModel(claim:Claim,instruction:string,input:string,t
  if(!agent)throw Error('Saved worker unavailable');
  if(tools==='research'&&!agent.config.research)throw Error('Research permission denied');
  if(tools!=='none'&&!process.env.OPENAI_API_KEY)throw Error('Research/calculation tool provider unavailable');
- const selectedModel=claim.job.role==='plan'||tools==='research'||claim.job.role==='review'||claim.job.role==='compose'||claim.job.role==='revise'||tools==='calculate'?REVIEW_MODEL:WORKER_MODEL;
+ let selectedModel=claim.job.role==='plan'||tools==='research'||claim.job.role==='review'||claim.job.role==='compose'||claim.job.role==='revise'||tools==='calculate'?REVIEW_MODEL:WORKER_MODEL;
  const gameSpecification=claim.mission.project_kind==='specification'&&(claim.mission.project_evidence as {projectProfile?:string}|null)?.projectProfile==='game';
  const outputTokens=gameSpecification&&['compose','revise'].includes(claim.job.role)?16000:claim.mission.project_kind==='specification'&&['compose','revise'].includes(claim.job.role)?6000:claim.job.role==='review'?5000:3000;
  if(input.length>48000)throw Error('Mission evidence exceeds bounded context. Narrow the objective or deliverable.');
+ if(claim.mission.project_id&&tools!=='none')selectedModel=await selectNativeToolModel(claim,instruction,tools);
  if(tools==='none'&&claim.mission.project_id)return routedMissionText(claim,instruction+
    (gameSpecification&&['compose','revise'].includes(claim.job.role)?'\nRespond with complete minified expanded game specification JSON; preserve every original rule, model and browser acceptance and obey the saved validation feedback.':''),input,outputTokens);
  const client=new OpenAI({apiKey:process.env.OPENAI_API_KEY,maxRetries:0,timeout:90_000,fetch:globalThis.fetch.bind(globalThis)});
