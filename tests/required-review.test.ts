@@ -218,7 +218,7 @@ test("same-model reviewer and expired budgets cannot claim independent review", 
   const s = setup();
   const same = await runRequiredDraftReview({ requestId: "same", draft, params, leadProvider: s.lead, deadlineMs: deadline(), selectHelper: async () => ({ provider: s.lead, modelId: "lead" }) });
   assert.equal(same.audit.status, "completed_with_review_notes");
-  assert.match(same.result.text, /Unverified draft/);
+  assert.match(same.result.text, /independent review could not verify/i);
   const expired = await runRequiredDraftReview({ requestId: "expired", draft, params, leadProvider: s.lead, deadlineMs: Date.now() - 1, selectHelper: async () => { throw new Error("Must not call"); } });
   assert.equal(expired.audit.attempts.length, 0);
   assert.equal(expired.audit.status, "completed_with_review_notes");
@@ -259,7 +259,7 @@ test("unavailable reviewer returns transparently unverified draft without asking
   assert.match(result.result.text, /independent review could not verify/i);
   assert.equal(result.audit.draft, draft.text);
   assert.equal(result.audit.pendingClarification, undefined);
-  assert.match(result.audit.completionNote ?? "", /not been approved/);
+  assert.match(result.audit.completionNote ?? "", /review incomplete/i);
 });
 
 
@@ -321,7 +321,7 @@ test("bounded validation falls back before comparing after two material rejectio
   assert.equal(result.audit.status,"completed_with_review_notes");
   assert.equal(result.audit.contractFindings?.length,2);
   assert.equal(result.audit.reviews,undefined);
-  assert.match(result.result.text,/Unverified draft/);
+  assert.match(result.result.text,/independent review could not verify/i);
   assert.equal(result.audit.draft, draft.text);
   assert.equal(result.audit.pendingClarification,undefined);
 });
