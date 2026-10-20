@@ -21,10 +21,14 @@ const size=jsonbTextSize;
 export function gameAssessmentCapacity(plan:ProjectPlan){
  if(!plan.game)return null;
  const checks=plan.finalContract.scenarios.map(s=>({name:s.name,passed:true,detail:'x'.repeat(100)}));
- const fixed={gameRules:plan.game.rules,approvedFinalContract:plan.finalContract,previewChecks:checks,incrementChecks:checks,url:'x'.repeat(2000)};
- // Reserve 7 KB for immutable receipts, phase history and identifiers. The
- // remaining 6 KB below the SQL cap is for bounded actual source excerpts.
- return {requiredCharacters:size(fixed)+7000,maximumCharacters:24000};
+ // Mirror the durable assessment's actual single-copy game rules and final
+ // browser contract. Browser check results are represented once in the preview;
+ // the previous estimator duplicated them and rejected otherwise valid plans.
+ // Keep a 5 KB allowance for preview metadata, immutable receipts, milestone
+ // history, identifiers and verification. Source patches are separately bounded
+ // by gameAssessmentEvidence and are not needed for the SQL 24 KB base envelope.
+ const fixed={gameRules:plan.game.rules,approvedFinalContract:plan.finalContract,preview:{checks},approvedScopeHash:'x'.repeat(64)};
+ return {requiredCharacters:size(fixed)+5000,maximumCharacters:24000};
 }
 export function validateGameAssessmentCapacity(plan:ProjectPlan){
  const capacity=gameAssessmentCapacity(plan);
