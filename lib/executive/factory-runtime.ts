@@ -116,10 +116,13 @@ export async function startSpecialistAssignment(input:{actorId:string;chatId:str
  const requestKey=stableKey('exec-specialist-task-',input.requestId);
  const {data:existing}=await db.from('executive_delegations').select('id,status').eq('actor_id',input.actorId).eq('chat_id',input.chatId).eq('request_key',requestKey).maybeSingle<{id:string;status:string}>();
  if(existing)return 'Specialist assignment '+existing.id+' is already '+existing.status+'.';
- const coding=/\b(?:implement|code|develop|fix the code|modify repository|deploy|build an app|build a website)\b/i.test(intent.objective);
+ // Read-only audits may inspect a verified repository, but MUST NOT receive
+ // a developer/write-enabled worker solely because the task mentions code.
+ const auditOnly=/\b(?:read[- ]only|do not modify|no changes|inspect|audit|review)\b/i.test(intent.objective);
+ const coding=!auditOnly&&/\b(?:implement|write code|develop|fix the code|modify repository|deploy|build an app|build a website)\b/i.test(intent.objective);
  const repositoryTask=coding||/\b(?:repository|codebase|source code|github|pull request|commit history)\b/i.test(intent.objective);
  if(repositoryTask&&!input.activeRepoId)return 'Select a verified connected repository for this specialist assignment.';
- const agents=await team(repositoryTask);
+ const agents=await team(coding);
  const missionId=stableUuid(requestKey),deadline=new Date(Date.now()+3*60*60000).toISOString();
  const {data:delegation,error:proposalError}=await db.rpc<{id:string}>('propose_executive_delegation',{
   p_actor:input.actorId,p_chat:input.chatId,p_slug:intent.slug,p_request:requestKey,
