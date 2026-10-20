@@ -129,8 +129,8 @@ export async function executeClaim(claim:Claim,model=missionModel){
     evidence:completed.filter(x=>x.role==='work'||x.role==='development').map(x=>({key:x.job_key,result:x.result})),
     priorFindings:gameReview?priorReviews.map(({checks,...rest})=>({...rest,priorCheckCount:Array.isArray(checks)?checks.length:0})):priorReviews};
   const reviewFrame=frame+'\n'+REVIEW_INSTRUCTION+(gameReview?
-    '\nGAME REVIEW: contractRef and stepsRef are server-validated lossless views of duplicate contracts; inspect candidate.specification.finalContract for full steps. Evaluate this CURRENT candidate independently. The prior draft and charges remain saved.':'')+
-    '\nUse the supplied measuredLength; distinguish true acceptance failures from formatting preferences.';
+    '\nGAME REVIEW REFERENCE SEMANTICS: contractRef and stepsRef are server-validated lossless views of duplicate contracts; inspect candidate.specification.finalContract for full steps. Evaluate this CURRENT candidate independently. The prior draft and charges remain saved.':'')+
+    '\nMEASURED LENGTH: The supplied measuredLength is computed by code from the entire candidate. Use it for length compliance; never estimate a conflicting count. Distinguish true acceptance failures from formatting preferences.';
   const reviewInput='Independent assessment:\n'+JSON.stringify(assessment)+
     '\nRequired acceptance IDs:\n'+JSON.stringify(acceptanceIds(assessment))+
     '\nEvidence and candidate:\n'+JSON.stringify(reviewPayload);
