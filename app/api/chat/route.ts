@@ -1034,15 +1034,15 @@ async function executeChat(request: NextRequest) {
       }
       console.info("[ReviewContinuity] Retrieved working draft without new review", { requestId, chatId, sourceRequestId: saved?.request_id ?? null });
     }
-    const executiveReply = !currentAgentTask() && !newAttachments.length && !requestImages?.length
+    const executiveReply = savedDraftReply === null && !currentAgentTask() && !newAttachments.length && !requestImages?.length
       ? await handleExecutiveSpecialistIntake({actorId,chatId,message,requestId}) : null;
-    const specialistReply = !executiveReply && !currentAgentTask() && !newAttachments.length && !requestImages?.length
+    const specialistReply = savedDraftReply === null && !executiveReply && !currentAgentTask() && !newAttachments.length && !requestImages?.length
       ? await startSpecialistAssignment({actorId,chatId,message,requestId,activeRepoId}) : null;
-    const financeReply = !executiveReply && !specialistReply && !currentAgentTask() && !newAttachments.length && !requestImages?.length
+    const financeReply = savedDraftReply === null && !executiveReply && !specialistReply && !currentAgentTask() && !newAttachments.length && !requestImages?.length
       ? await startExecutiveFinance({actorId,chatId,message,requestId}) : null;
-    const developmentReply = !executiveReply && !specialistReply && !financeReply && !currentAgentTask() && !newAttachments.length && !requestImages?.length
+    const developmentReply = savedDraftReply === null && !executiveReply && !specialistReply && !financeReply && !currentAgentTask() && !newAttachments.length && !requestImages?.length
       ? await startExecutiveDevelopment({actorId,chatId,message,requestId,activeRepoId}) : null;
-    const projectReply = !executiveReply && !specialistReply && !financeReply && !developmentReply && !currentAgentTask() && !newAttachments.length && !requestImages?.length
+    const projectReply = savedDraftReply === null && !executiveReply && !specialistReply && !financeReply && !developmentReply && !currentAgentTask() && !newAttachments.length && !requestImages?.length
       ? await handleProjectChat({actorId,chatId,message,activeRepoId},requestId,attachmentHistory,requestTracked) : null;
     const localKatieResponse = savedDraftReply !== null ? { reason: "project" as const, text: savedDraftReply } : executiveReply ? {reason: "executive" as const,text:executiveReply}
       : specialistReply ? {reason: "executive" as const,text:specialistReply}
