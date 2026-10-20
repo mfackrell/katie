@@ -12,9 +12,11 @@ function isSavedState(value: unknown): value is GameState {
   if (s.player !== "A" && s.player !== "B") return false;
   if (s.phase !== "MOVE" && s.phase !== "RESOLVE" && s.phase !== "FINISHED") return false;
   if (s.winner !== null && s.winner !== "A" && s.winner !== "B") return false;
-  if (s.winner !== null) return s.phase === "FINISHED" && s.count === 4 && s.winner === s.player;
-  if (s.phase === "FINISHED" || (s.phase === "MOVE" && s.count === 4)) return false;
-  return s.player === ((Math.floor((s.count as number) - (s.phase === "RESOLVE" ? 0 : 0)) % 2) === 0 ? "A" : "B") || s.phase === "RESOLVE";
+  if (s.phase === "FINISHED") return s.count === 4 && s.player === "B" && s.winner === "B";
+  if (s.winner !== null) return false;
+  const count = s.count as number;
+  if (s.phase === "MOVE") return count < 4 && s.player === (count % 2 === 0 ? "A" : "B");
+  return count >= 1 && s.player === (count % 2 === 1 ? "A" : "B");
 }
 
 export default function SignalSprintPage() {
