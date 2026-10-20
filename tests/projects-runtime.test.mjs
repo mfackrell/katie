@@ -41,7 +41,7 @@ test('project plans retain a full final contract and reject trivial, external or
 function coordinator({deployedPassed=true}={}){let p=structuredClone(owner),runs=[],missions=new Map(),counter=0,preview=null;const calls=[];const {digest}=modules()('@/lib/projects/contract');
  const db={from:()=>({select(){return this;},eq(){return this;},not(){return this;},in(){return this;},order(){return this;},limit:async()=>({data:[],error:null}),maybeSingle:async()=>({data:p,error:null})})};
  const rpc=async(name,args)=>{if(name==='project_dispatch_recovery_candidates')return [];if(name==='claim_work_project')return p.status==='running'?structuredClone(p):null;assert.equal(name,'finish_work_project');calls.push(structuredClone(args));if(args.p_action==='child'){
-   const mid=randomUUID(),ctx=args.p_data.kind==='development'?{version:1,projectId:id,scopeHash:p.approved_hash,baseSha:p.verified_sha??p.baseline_sha,contractHash:digest(plan.milestones[p.milestone_index].contract),contract:plan.milestones[p.milestone_index].contract}:null;
+   const mid=randomUUID(),ctx=args.p_data.kind==='development'?{version:1,projectId:id,scopeHash:p.approved_hash,baseSha:p.verified_sha??p.baseline_sha,contractHash:digest(p.spec.milestones[p.milestone_index].contract),contract:p.spec.milestones[p.milestone_index].contract}:null;
    p.active_mission_id=mid;runs.push({mission_id:mid,kind:args.p_data.kind,ordinal:++counter,milestone_index:p.milestone_index,binding:ctx,outcome:null});missions.set(mid,{mission:{id:mid,status:'running'},jobs:[]});
   }else if(args.p_action==='advance'){const r=runs.find(r=>r.mission_id===p.active_mission_id);r.outcome=args.p_data;p.verified_sha=args.p_data.head;p.milestone_index++;p.active_mission_id=null;if(p.milestone_index===plan.milestones.length)p.phase='delivery';}
   else if(args.p_action==='preview'){p.preview=args.p_data;p.phase='browser_check';p.active_mission_id=null;}
@@ -51,7 +51,7 @@ function coordinator({deployedPassed=true}={}){let p=structuredClone(owner),runs
   return true;
  };
  const {runProjectBatch}=modules({'@/lib/projects/preview':{verifyDeployedPreview:async(v,c,pid)=>({passed:deployedPassed,headSha:v.headSha,deploymentId:v.deploymentId,statusId:v.statusId,url:v.url,projectId:pid,contractHash:digest(c),checks:c.scenarios.map(s=>({name:s.name,passed:deployedPassed,detail:'Actual deployed browser fixture'}))}),PreviewAccessUnavailable:class extends Error{}},'@/lib/projects/store':{projectRpc:rpc,projectRuns:async()=>runs,milestoneEvidence:async()=>runs.filter(r=>r.outcome).map(r=>({phase:r.kind,index:r.milestone_index,result:missions.get(r.mission_id)?.mission.result,missionStatus:missions.get(r.mission_id)?.mission.status,evidence:r.outcome})),acceptanceBinding:c=>({projectId:c.projectId,contractHash:c.contractHash,scenarioNames:c.contract.scenarios.map(s=>s.name)})},'@/lib/data/supabase/admin':{getSupabaseAdminClient:()=>db},'@/lib/missions/store':{readMission:async mid=>missions.get(mid)},'@/lib/agents/store':{readTask:async taskId=>({id:taskId})},'@/lib/agents/development':{projectAcceptanceSchema:modules()('@/lib/agents/development').projectAcceptanceSchema,developmentPreview:async()=>preview}})('@/lib/projects/worker');
- function complete(head,bad=false){const r=runs.at(-1),c=r.binding;missions.set(r.mission_id,{mission:{id:r.mission_id,status:'completed',result:'Actual reviewed increment fixture'},jobs:[{id:randomUUID(),role:'development',result:{verification:{observedHeadSha:head,testedHeadSha:head,reviewedHeadSha:head,changedFiles:[{path:'app/pilot/page.tsx',patch:'Actual immutable source patch fixture'}],projectAcceptance:{version:1,projectId:id,contractHash:c.contractHash,headSha:head,passed:!bad,checks:[{name:'Move token',passed:!bad,detail:'Actual DOM assertion fixture'}]}}}}]});}
+ function complete(head,bad=false){const r=runs.at(-1),c=r.binding;missions.set(r.mission_id,{mission:{id:r.mission_id,status:'completed',result:'Actual reviewed increment fixture'},jobs:[{id:randomUUID(),role:'development',result:{verification:{observedHeadSha:head,testedHeadSha:head,reviewedHeadSha:head,changedFiles:[{path:p.spec.allowedPaths[0]+'page.tsx',patch:'Actual immutable source patch fixture'}],projectAcceptance:{version:1,projectId:id,contractHash:c.contractHash,headSha:head,passed:!bad,checks:c.contract.scenarios.map(s=>({name:s.name,passed:!bad,detail:'Actual DOM assertion fixture'}))}}}}]});}
  return{tick:runProjectBatch,get p(){return p;},runs,calls,missions,complete,setPreview:v=>{preview=v;}};
 }
 test('actual coordinator accumulates reviewed increments, waits for a real preview and requires final whole-project assessment',async()=>{
@@ -325,6 +325,62 @@ test('detailed game rules stay in saved evidence rather than overflowing an othe
  assert.equal(saved.kind,'development');assert.ok(saved.objective.length<12000);
  assert.doesNotMatch(saved.objective,/RULE_RECORD_SENTINEL/);
  assert.equal(saved.evidence.gameContract.rules.rules[0].description,g.game.rules.rules[0].description);
+});
+
+
+test('game handoff retains full approved browser evidence even when legacy milestone prose exceeds 12 KB',async()=>{
+ const {gameFixture}=await import('./fixtures/game-project.mjs');const g=gameFixture();
+ const extra=Array.from({length:8},(_,i)=>({action:'expectText',selector:'#proof-'+i,value:'BROWSER_EXPECTATION_'+i+'x'.repeat(1510)}));
+ g.contract.scenarios[0].steps.push(...extra);
+ g.game.acceptance.scenarios.find(s=>s.kind==='browser').steps=g.contract.scenarios[0].steps;
+ const {validateProjectPlan,digest}=modules()('@/lib/projects/contract');
+ const spec=validateProjectPlan({name:'Counter',summary:'Original controlled game',requirements:['All original actions and browser expectations'],allowedPaths:g.allowedPaths,milestones:[{title:'Complete Game',instruction:'Implement exact phase and model/browser assertions. '+ 'INSTRUCTION_SENTINEL '.repeat(90),contract:g.contract}],finalContract:g.contract,game:g.game});
+ const f=coordinator();f.p.profile='game';f.p.spec=spec;f.p.objective='Implement original game without changing rules. '+ 'USER_SOURCE_SENTINEL '.repeat(70);f.p.clarifications='Do not change the verified game semantics.';
+ const legacy=JSON.stringify(spec.finalContract)+JSON.stringify({summary:spec.summary,requirements:spec.requirements,allowedPaths:spec.allowedPaths})+spec.milestones[0].instruction+f.p.objective;
+ assert.ok(legacy.length>12000,'test must reproduce original oversized milestone');
+ await f.tick();const saved=f.calls.at(-1).p_data;
+ assert.equal(saved.kind,'development');assert.ok(saved.objective.length<12000);
+ assert.match(saved.objective,/USER_SOURCE_SENTINEL/);
+ assert.doesNotMatch(saved.objective,/BROWSER_EXPECTATION_0/);
+ assert.equal(saved.evidence.approvedScopeHash,f.p.approved_hash);
+ assert.equal(saved.evidence.approvedMilestone.browserContractHash,digest(spec.finalContract));
+ assert.deepEqual(Array.from(saved.evidence.approvedMilestone.browserScenarioNames),spec.finalContract.scenarios.map(s=>s.name));
+ assert.match(saved.evidence.approvedMilestone.instruction,/INSTRUCTION_SENTINEL/);
+ assert.equal(saved.evidence.gameContract.acceptance.scenarios.find(s=>s.kind==='browser').steps.at(-1).value,extra.at(-1).value);
+ assert.ok(JSON.stringify(saved.evidence).length<30000,'approved evidence stays within the persisted SQL envelope');
+ assert.equal(digest(f.runs[0].binding.contract),saved.evidence.approvedMilestone.browserContractHash,'native coding binding preserves full original browser contract');
+ assert.equal(f.runs[0].binding.contract.scenarios[0].steps.length,g.contract.scenarios[0].steps.length);
+});
+
+test('game project passes saved development to deployment-bound browser check and final assessment without skipping gates',async()=>{
+ const {gameFixture}=await import('./fixtures/game-project.mjs');const g=gameFixture();
+ const f=coordinator();f.p.profile='game';f.p.spec={...plan,allowedPaths:g.allowedPaths,milestones:[{title:'Final',instruction:'Implement exact original game',contract:g.contract}],finalContract:g.contract,game:g.game};
+ await f.tick();assert.equal(f.calls.at(-1).p_data.kind,'development');
+ f.complete('c'.repeat(40));await f.tick();assert.equal(f.p.phase,'delivery');assert.equal(f.p.verified_sha,'c'.repeat(40));
+ await f.tick();assert.equal(f.calls.at(-1).p_action,'wait','no fabricated preview');
+ f.setPreview({url:'https://pilot.vercel.app/counter',headSha:'c'.repeat(40),deploymentId:1,statusId:2,immutable:true});
+ await f.tick();assert.equal(f.p.phase,'browser_check');
+ await f.tick();assert.equal(f.p.phase,'assessment');
+ await f.tick();assert.equal(f.calls.at(-1).p_data.kind,'assessment');
+ assert.equal(f.calls.at(-1).p_data.evidence.gameRules.game.id,g.game.rules.game.id);
+ assert.equal(f.calls.at(-1).p_data.evidence.approvedFinalContract.scenarios[0].name,g.contract.scenarios[0].name);
+ assert.equal(f.p.status,'running','independent assessment still required');
+ const saved=f.missions.get(f.p.active_mission_id);saved.mission.status='completed';saved.mission.result='Verified independently reviewed completed game';
+ await f.tick();assert.equal(f.p.status,'completed');
+});
+
+test('a blocked coordination phase without a child is explicitly resumed, not silently re-researched',async()=>{
+ const p={...owner,profile:'game',phase:'specification',status:'blocked',active_mission_id:null,detail:'Previous coordinator input exceeded bound'};
+ const calls=[];
+ const {handleProjectChat}=modules({'@/lib/projects/store':{
+   projectForChat:async()=>p,
+   projectRpc:async(name,args)=>{calls.push({name,args});if(name==='retry_project_review')return null;return {...p,status:'running',detail:'Resuming the saved project and its existing budgets.'};}
+ }})('@/lib/projects/chat');
+ const result=await handleProjectChat({actorId:actor,chatId:chat,message:'resume project'},'resume-existing',[],true);
+ assert.match(result,/Resuming the saved project/);
+ assert.equal(calls.at(-1).name,'control_work_project');
+ assert.equal(calls.at(-1).args.p_action,'resume');
+ assert.ok(calls.every(call=>call.args.p_action!=='amend'));
 });
 
 test('oversized game assessment is rejected before approval and large source excerpts retain all rules and receipts',async()=>{
