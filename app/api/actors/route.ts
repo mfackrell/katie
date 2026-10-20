@@ -113,6 +113,8 @@ export async function PATCH(request: NextRequest) {
     const { purpose, reviewMode } = updateActorSchema.parse(await request.json());
 
     if (await managedActor(actorId)) return NextResponse.json({ error: "Edit managed agents in Agents management." }, { status: 409 });
+    const executiveIdentity = await getActorById(actorId);
+    if (executiveIdentity?.actorKind === "executive") return NextResponse.json({ error: "Executive system identity cannot be edited through ordinary actor settings." }, { status: 403 });
     const existingActor = await getActorById(actorId);
     if (!existingActor) {
       return NextResponse.json({ error: `Actor not found: ${actorId}` }, { status: 404 });
@@ -160,6 +162,7 @@ export async function DELETE(request: NextRequest) {
     const actors = await listActors();
 
     const target = actors.find((actor) => actor.id === actorId);
+    if (target?.actorKind === "executive") return NextResponse.json({ error: "Executive system identity cannot be deleted." }, { status: 403 });
     if (!target) {
       return NextResponse.json({ error: `Actor not found: ${actorId}` }, { status: 404 });
     }
@@ -179,6 +182,7 @@ export async function DELETE(request: NextRequest) {
       });
     }
 
+    if (actors.some((actor) => actor.actorKind === "executive" && toDelete.has(actor.id))) return NextResponse.json({ error: "Cannot cascade-delete the Executive system identity." }, { status: 403 });
     const deletedActorIds = [...toDelete];
     await deleteActorsById(deletedActorIds);
 
