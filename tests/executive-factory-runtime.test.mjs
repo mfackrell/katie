@@ -8,7 +8,7 @@ const require=createRequire(import.meta.url);
 const js=ts.transpileModule(readFileSync('lib/executive/factory-runtime.ts','utf8'),{
  compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}
 }).outputText;
-function setup({registered=null,agentRows=null}={}){
+function setup({registered=null,agentRows=null,provisionRoute=null}={}){
  const calls=[], saved=[];
  const agents=agentRows??[
   {id:'lead',config:{name:'Mission Lead',research:false,development:true}},
@@ -38,6 +38,13 @@ function setup({registered=null,agentRows=null}={}){
  vm.runInNewContext(js,{exports,require:name=>{
   if(name==='@/lib/data/supabase/admin')return {getSupabaseAdminClient:()=>db};
   if(name==='@/lib/data/persistence-store')return {saveMessage:async(_id,msg)=>saved.push(msg)};
+  if(name==='./provisioning-service')return {planExecutiveProvisioning:async input=>{
+   calls.push({kind:'plan',input});
+   const route=provisionRoute??(registered?.status==='active'?'reuse':'configure');
+   const decision=route==='reuse'?{route,specialistSlug:registered?.slug??input.requirement.proposedSlug}:
+    route==='commission'?{route,missingCapabilities:[input.requirement.capability]}:{route};
+   return {decision,request:{id:'provision-id',status:'proposed'}};
+  }};
   return require(name);
  },Date,console,Buffer});
  return {factory:exports,calls,saved};
@@ -64,7 +71,8 @@ test('active specialists are reusable without duplicate provisioning',async()=>{
   intent:{domain:'operations',slug:'operations',capability:'operations_analysis'}
  });
  assert.match(response,/already an active specialist/);
- assert.equal(calls.length,0);
+ assert.ok(calls.some(c=>c.kind==='plan'));
+ assert.equal(calls.some(c=>c.name==='create_mission'),false);
 });
 test('specialist dispatch intent is narrow and never takes ordinary requests',()=>{
  const {factory}=setup();
@@ -83,4 +91,23 @@ test('inactive specialist refuses work rather than claiming completion',async()=
  });
  assert.match(response,/not active/);
  assert.equal(calls.some(c=>c.name==='create_mission'),false);
+});
+
+test('unverified capability is commissioned, not configured or falsely activated',async()=>{
+ const {factory,calls}=setup({provisionRoute:'commission'});
+ const response=await factory.startSpecialistFactory({
+  actorId:'actor',chatId:'chat',requestId:'request',message:'Create a logistics orchestrator',
+  intent:{domain:'logistics',slug:'logistics',capability:'logistics_coordination'}
+ });
+ assert.match(response,/commissioning is pending/);
+ assert.match(response,/logistics_coordination/);
+ assert.ok(calls.some(c=>c.kind==='plan'&&c.input.requirement.capability==='logistics_coordination'));
+ assert.equal(calls.some(c=>c.name==='create_mission'),false);
+ assert.equal(calls.some(c=>c.name==='transition_executive_provisioning'),false);
+});
+test('specialist assignment suppresses all later executive and project routers',()=>{
+ const route=readFileSync('app/api/chat/route.ts','utf8');
+ for(const downstream of ['finance','development','project']){
+  assert.match(route,new RegExp('const '+downstream+'Reply = !executiveReply && !specialistReply &&'));
+ }
 });
