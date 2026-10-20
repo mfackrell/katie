@@ -109,11 +109,11 @@ test('unverified capability is commissioned, not configured or falsely activated
  assert.equal(calls.some(c=>c.name==='create_mission'),false);
  assert.equal(calls.some(c=>c.name==='transition_executive_provisioning'),false);
 });
-test('specialist assignment suppresses all later executive and project routers',()=>{
+test('dedicated EO is routed outside ordinary Katie chat and project workflows',()=>{
  const route=readFileSync('app/api/chat/route.ts','utf8');
- for(const downstream of ['finance','development','project']){
-  assert.match(route,new RegExp('const '+downstream+'Reply = !executiveReply && !specialistReply &&'));
- }
+ assert.ok(route.includes("if(actorRole.actor_kind==='executive')return executeExecutiveCommand"));
+ assert.match(route,/const executiveReply=null, specialistReply=null, financeReply=null, developmentReply=null/);
+ assert.doesNotMatch(route,/const financeReply = !executiveReply/);
 });
 
 test('research capability requires real native web-search evidence in acceptance objective',async()=>{
@@ -133,4 +133,17 @@ test('factory refuses unsupported accepted scenarios even if given a bad configu
   intent:{domain:'unsupported',slug:'unsupported',capability:'unverified_coordination'}
  }),/No independently verifiable mission acceptance scenario/);
  assert.equal(calls.some(c=>c.name==='create_mission'),false);
+});
+
+test('read-only repository audits use research workers and preserve repository context',async()=>{
+ const {factory,calls}=setup({registered:{slug:'software_development',status:'active',capabilities:['repository_maintenance']}});
+ const message='Ask the software development orchestrator to inspect the connected repository read-only and report architecture defects without changing any code.';
+ const result=await factory.startSpecialistAssignment({actorId:'actor',chatId:'chat',requestId:'audit-1',message,activeRepoId:'repo-id'});
+ assert.match(result,/Mission:/);
+ const mission=calls.find(c=>c.name==='create_mission');
+ assert.deepEqual(Array.from(mission.args.p_agents),['lead','analyst','researcher']);
+ assert.equal(mission.args.p_repository,'repo-id');
+ const denied=await factory.startSpecialistAssignment({actorId:'actor',chatId:'chat',requestId:'audit-2',message});
+ assert.match(denied,/Select a verified connected repository/);
+ assert.equal(calls.filter(c=>c.name==='create_mission').length,1);
 });

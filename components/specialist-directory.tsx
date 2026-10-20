@@ -25,7 +25,7 @@ type Card = {
   actor: Actor;
   name: string;
   description: string;
-  kind: "orchestrator" | "single" | "worker";
+  kind: "executive" | "orchestrator" | "single" | "worker";
   registry?: Registry;
   managed?: ManagedAgent;
 };
@@ -223,8 +223,10 @@ function AgentCard({
   return (
     <article className="min-w-0 rounded-xl border border-white/10 p-5">
       <p className="text-xs font-medium text-emerald-300">
-        {card.kind === "orchestrator"
-          ? "Orchestrator · coordinates a team"
+        {card.kind === "executive"
+          ? "Executive · creates and manages autonomous specialists"
+          : card.kind === "orchestrator"
+          ? "Specialist orchestrator · coordinates a team"
           : card.kind === "worker"
             ? "Internal task agent · isolated worker"
             : "Single-task agent · direct conversation"}
@@ -291,7 +293,11 @@ function AgentCard({
             .join(", ")}
         </p>
       )}
-      <AgentControls card={card} actors={actors} onChanged={onChanged} />
+      {card.kind === "executive" ? (
+        <p className="mt-4 text-xs text-zinc-400">System identity. Management rules are enforced by the Executive runtime, not editable chatbot instructions.</p>
+      ) : card.registry ? (
+        <p className="mt-4 text-xs text-zinc-400">This specialist uses a versioned, independently verified mission contract. Review its capability and assignment settings in <Link href="/settings/advanced" className="underline">Advanced management</Link>; it does not share editable global Executive instructions.</p>
+      ) : <AgentControls card={card} actors={actors} onChanged={onChanged} />}
     </article>
   );
 }
@@ -320,17 +326,16 @@ export function SpecialistDirectory({ id }: { id?: string }) {
       .filter((value) => value.key.startsWith("chat:") && value.value.archived)
       .map((value) => value.key.slice(5)),
   );
-  const rootIds = new Set(entries.map((entry) => entry.actor_id));
+  
   const cards: Card[] = all
     .filter((actor) => !actor.managedAgentId)
     .map((actor) => {
-      const executive =
-        actor.name.toLowerCase() === "katie" || rootIds.has(actor.id);
+      const executive = actor.actorKind === "executive";
       return {
         id: `persona:${actor.id}`,
         actor,
-        name: executive ? `Executive Orchestrator · ${actor.name}` : actor.name,
-        kind: executive ? "orchestrator" : "single",
+        name: executive ? "Executive Orchestrator" : actor.name,
+        kind: executive ? "executive" : "single",
         description: executive
           ? "Coordinates specialist orchestrators and their independently reviewed teams. Continue an existing discussion or start a new assignment."
           : state.get(`actor:${actor.id}`)?.summary ||
@@ -340,7 +345,7 @@ export function SpecialistDirectory({ id }: { id?: string }) {
     });
   for (const entry of entries) {
     const actor = all.find((actor) => actor.id === entry.actor_id);
-    if (actor && entry.status !== "retired")
+    if (actor?.actorKind === "executive" && entry.status !== "retired")
       cards.push({
         id: `capability:${entry.id}`,
         actor,
@@ -374,9 +379,7 @@ export function SpecialistDirectory({ id }: { id?: string }) {
     event.preventDefault();
     setError("");
     if (kind === "orchestrator") {
-      const executive =
-        all.find((actor) => actor.name.toLowerCase() === "katie") ??
-        all.find((actor) => rootIds.has(actor.id));
+      const executive = all.find((actor) => actor.actorKind === "executive");
       if (!executive) {
         setError("Executive is unavailable. Reload the directory.");
         return;
@@ -547,7 +550,7 @@ export function SpecialistDirectory({ id }: { id?: string }) {
             value={query}
             onChange={(event) => setQuery(event.target.value)}
           />
-          {(["orchestrator", "single", "worker"] as const).map((group) => {
+          {(["executive", "orchestrator", "single", "worker"] as const).map((group) => {
             const visible = cards.filter(
               (card) =>
                 card.kind === group &&
@@ -599,14 +602,14 @@ export function SpecialistDirectory({ id }: { id?: string }) {
                 key={group}
                 className="mt-9"
                 aria-label={
-                  group === "orchestrator"
-                    ? "Orchestrator agents"
+                  group === "executive" ? "Executive Orchestrator" : group === "orchestrator"
+                    ? "Specialist Orchestrators"
                     : "Single-task agents"
                 }
               >
                 <h2 className="text-xl font-semibold">
-                  {group === "orchestrator"
-                    ? "Orchestrator agents"
+                  {group === "executive" ? "Executive Orchestrator" : group === "orchestrator"
+                    ? "Specialist Orchestrators"
                     : "Single-task agents"}
                 </h2>
                 {content}

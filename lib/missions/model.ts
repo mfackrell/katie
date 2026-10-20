@@ -1,18 +1,16 @@
 import {GAME_RULE_CATEGORIES} from '../../scripts/project-game-rules.mjs';
 import {projectPlanSchema} from '@/lib/projects/contract';
-import OpenAI from 'openai';
-import {getAvailableProviders} from '@/lib/providers';
-import {chooseProvider} from '@/lib/router/master-router';
 import { zodTextFormat } from 'openai/helpers/zod';
+import {orchestrationChoices,orchestrationFailure,type OrchestrationChoice} from '@/lib/orchestration/routing';
+import {boundedProvider} from '@/lib/orchestration/bounded-provider';
 import { randomUUID } from 'node:crypto';
 import { rpc } from './store';
 import { calculate,planSchema,type Claim } from './types';
-const WORKER_MODEL='gpt-5-mini';
-const REVIEW_MODEL='gpt-5.4';
+
 
 const calculator={type:'function',name:'calculate',description:'Execute a deterministic arithmetic calculation. Numbers must come from supplied evidence or explicitly labeled assumptions.',strict:true,parameters:{type:'object',properties:{operation:{type:'string',enum:['add','subtract','multiply','divide','power']},values:{type:'array',items:{type:'number'},minItems:2,maxItems:12}},required:['operation','values'],additionalProperties:false}};
 export class MissionModelFailure extends Error { constructor(message:string,readonly partial:Record<string,unknown>){super(message);this.name='MissionModelFailure';} }
-export type ModelResult={text:string;sources:Array<{url:string;title:string}>;calculations:unknown[];model:string};
+export type ModelResult={text:string;sources:Array<{url:string;title:string}>;calculations:unknown[];model:string;provider?:string;routingReason?:string;attemptedModels?:string[]};
 export function isCreditExhaustion(error:unknown):boolean{
  const e=error as {status?:number;code?:string;error?:{code?:string;message?:string};message?:string}|null;
  const code=String(e?.code??e?.error?.code??'').toLowerCase();
@@ -20,92 +18,44 @@ export function isCreditExhaustion(error:unknown):boolean{
  return (e?.status===429||code==='insufficient_quota'||code==='billing_hard_limit_reached')&&
   (/credit|quota|balance|billing|insufficient/.test(message)||code==='insufficient_quota'||code==='billing_hard_limit_reached');
 }
-// Provider routing is shared with ordinary Katie chats. Quota failures may
-// switch providers, but cannot waive mission budgets, role permissions, or
-// independent review. Never retry a possibly completed output as fallback.
-export async function missionCreditFallback(claim:Claim,instruction:string,input:string,outputTokens:number,
-   quotaError:unknown):Promise<ModelResult>{
- if(!isCreditExhaustion(quotaError))throw quotaError;
- const providers=getAvailableProviders().filter(p=>p.name!=='openai');
- const selected=providers.find(p=>p.name==='google')??providers.find(p=>p.name==='anthropic')??providers.find(p=>p.name==='grok');
- if(!selected)throw new MissionModelFailure('OpenAI credits exhausted and no configured alternative provider is available.',{providerErrorCode:'insufficient_quota',fallbackUnavailable:true});
- const models=selected.name==='google'?['gemini-3.1-pro','gemini-2.5-pro']:
-   selected.name==='anthropic'?['claude-sonnet-4-6','claude-sonnet-4-5']:['grok-4'];
- const model=models[0];
- const reserve=Math.max(6000,Math.ceil(Buffer.byteLength(instruction+input,'utf8')/2)+outputTokens+512);
- const callId=randomUUID();
- if(!await rpc<boolean>('reserve_mission_call',{p_id:claim.job.id,p_lease:claim.job.lease,p_call:callId,p_model:selected.name+':'+model,p_tokens:reserve}))
-    throw new MissionModelFailure('Fallback blocked by original mission token budget or lease.',{fallbackBudgetExhausted:true});
- try{
-  const result=await selected.generate({name:'Katie mission worker',persona:instruction,summary:'Bounded, role-scoped mission.',user:input,history:[],modelId:model});
-  const content=String(result.text??'').trim();
-  if(!content||content.length>Math.max(24000,outputTokens*5)||result.truncated)
-   throw new MissionModelFailure('Fallback output incomplete or oversized.',{fallbackProvider:selected.name,fallbackModel:model});
-  await rpc('finish_mission_call',{p_call:callId,p_tokens:result.usage?.totalTokens??null});
-  return {text:content,sources:[],calculations:[],model:selected.name+':'+result.model};
- }catch(error){
-  await rpc('finish_mission_call',{p_call:callId,p_tokens:null}).catch(()=>{});
-  throw error;
- }
-}
-
-// All text-only mission roles use Katie's capability-aware router BEFORE
-// attempting inference. The same ranked fallback chain is used when a provider
-// is temporarily unavailable. Model selection never grants tool permissions.
-export async function routedMissionText(claim:Claim,instruction:string,input:string,outputTokens:number):Promise<ModelResult>{
- const providers=getAvailableProviders();
- if(!providers.length)throw Error('No configured model providers available for this mission');
- const purpose=claim.mission.project_kind+' / '+claim.job.role;
- const decision=await chooseProvider(purpose+'\n'+claim.mission.objective.slice(0,3600),
-  instruction.slice(0,3000),providers);
- const choices=[{provider:decision.provider,modelId:decision.modelId},
-   ...decision.fallbackChain.map(x=>({provider:x.provider,modelId:x.modelId}))];
- const dedup=new Set<string>();let lastError:unknown;
- const reserve=Math.max(5000,Math.ceil(Buffer.byteLength(instruction+input,'utf8')/2)+outputTokens+512);
- for(const choice of choices){
-  const key=choice.provider.name+':'+choice.modelId;
-  if(dedup.has(key))continue;dedup.add(key);
-  const callId=randomUUID();
-  if(!await rpc<boolean>('reserve_mission_call',{p_id:claim.job.id,p_lease:claim.job.lease,
-     p_call:callId,p_model:key,p_tokens:reserve}))
-    throw new MissionModelFailure('Mission exhausted its original authorization or token budget.',{routingBudgetBlocked:true});
-  try{
-   const result=await choice.provider.generate({
-    name:'Katie mission '+claim.job.role,persona:instruction,summary:'Execute ONLY the specified mission stage. Do not invent tools, completion or permissions.',
-    user:input,history:[],modelId:choice.modelId});
-   const content=String(result.text??'').trim();
-   if(!content||result.truncated)throw new MissionModelFailure('Routed model output incomplete.',{
-      selectedProvider:key,outputIncomplete:true});
-   await rpc('finish_mission_call',{p_call:callId,p_tokens:result.usage?.totalTokens??null});
-   return{text:content,sources:[],calculations:[],model:key};
-  }catch(error){
-   await rpc('finish_mission_call',{p_call:callId,p_tokens:null}).catch(()=>{});
-   lastError=error;
-   const status=(error as {status?:number})?.status;
-   const code=String((error as {code?:string})?.code??'').toLowerCase();
-   if(!isCreditExhaustion(error)&&status!==429&&status!==502&&status!==503&&status!==504&&
-      !['server_error','rate_limit_exceeded'].includes(code))throw error;
-   console.warn('[Missions] Model route failed; trying next ranked compatible provider',{role:claim.job.role,model:key,status,code});
-  }
- }
- throw new MissionModelFailure('All authorized model candidates failed.',{routingExhausted:true,
-  lastProviderFailure:lastError instanceof Error?lastError.message.slice(0,500):'unknown'});
-}
-// A bounded execution adapter uses the existing OpenAI credential/SDK. Ordinary
-// chat adapters remain unchanged; their unbounded continuation defaults cannot
-// enforce a mission allowance. No SDK inference retries or automatic fallback.
+// Every stage and child mission routes afresh against the active model registry.
+// Attempts share the same saved lease/budget; no workflow or evidence is reset.
 export async function missionModel(claim:Claim,instruction:string,input:string,tools:'none'|'research'|'calculate'='none'):Promise<ModelResult>{
  const agent=claim.mission.team.find(a=>a.id===claim.job.agent_id);
  if(!agent)throw Error('Saved worker unavailable');
  if(tools==='research'&&!agent.config.research)throw Error('Research permission denied');
- if(tools!=='none'&&!process.env.OPENAI_API_KEY)throw Error('Research/calculation tool provider unavailable');
- const selectedModel=claim.job.role==='plan'||tools==='research'||claim.job.role==='review'||claim.job.role==='compose'||claim.job.role==='revise'||tools==='calculate'?REVIEW_MODEL:WORKER_MODEL;
+ if(input.length>48000)throw Error('Mission evidence exceeds bounded context. Narrow the objective or deliverable.');
+ const choices=await orchestrationChoices({objective:claim.mission.objective,instruction:claim.job.instruction+'\n'+instruction,
+  requestId:claim.job.id,accounting:{
+   reserve:async(model,tokens)=>{const id=randomUUID();if(!await rpc<boolean>('reserve_mission_routing_call',{p_id:claim.job.id,p_lease:claim.job.lease,p_call:id,p_model:model,p_tokens:tokens}))throw Error('Worker no longer authorized or mission allowance exhausted');return id;},
+   finish:async(id,tokens)=>{await rpc('finish_mission_call',{p_call:id,p_tokens:tokens});}
+  },research:tools==='research',review:claim.job.role==='review',planning:claim.job.role==='plan'});
+ const attemptedModels:string[]=[];
+ const failedProviders=new Set<string>();
+ let last:unknown;
+ for(const choice of choices){
+  if(failedProviders.has(choice.provider.name))continue;
+  attemptedModels.push(choice.provider.name+':'+choice.modelId);
+  try{const result=await executeMissionModel(claim,instruction,input,tools,choice);return{...result,provider:choice.provider.name,routingReason:choice.reasoning,attemptedModels};}
+  catch(error){
+   last=error;
+   // Invalid output needs the existing repair workflow, never an implicit fresh
+   // draft. Authorization/budget denial must never trigger another inference.
+   const detail=error instanceof Error?error.message:String(error);
+   if(/allowance exhausted|no longer authorized|permission denied|Invalid tool|Unpermitted|tool arguments instead/i.test(detail)||(error instanceof MissionModelFailure&&!['server_error','rate_limit_exceeded','insufficient_quota'].includes(String(error.partial.providerErrorCode))))throw error;
+   if(await orchestrationFailure(choice,error)==='provider'||isCreditExhaustion(error))failedProviders.add(choice.provider.name);
+   console.warn('[Missions] Model attempt failed; trying next eligible provider',{jobId:claim.job.id,provider:choice.provider.name,model:choice.modelId});
+  }
+ }
+ if(last instanceof MissionModelFailure)throw new MissionModelFailure(last.message,{...last.partial,attemptedModels,providerFailure:true});
+ if(last instanceof Error)throw new MissionModelFailure(last.message,{attemptedModels,providerFailure:true});
+ throw Error('No eligible orchestration model could execute this assignment');
+}
+async function executeMissionModel(claim:Claim,instruction:string,input:string,tools:'none'|'research'|'calculate',choice:OrchestrationChoice):Promise<ModelResult>{
+ const selectedModel=choice.modelId;
  const gameSpecification=claim.mission.project_kind==='specification'&&(claim.mission.project_evidence as {projectProfile?:string}|null)?.projectProfile==='game';
  const outputTokens=gameSpecification&&['compose','revise'].includes(claim.job.role)?16000:claim.mission.project_kind==='specification'&&['compose','revise'].includes(claim.job.role)?6000:claim.job.role==='review'?5000:3000;
- if(input.length>48000)throw Error('Mission evidence exceeds bounded context. Narrow the objective or deliverable.');
- if(tools==='none'&&claim.mission.project_id)return routedMissionText(claim,instruction+
-   (gameSpecification&&['compose','revise'].includes(claim.job.role)?'\nRespond with complete minified expanded game specification JSON; preserve every original rule, model and browser acceptance and obey the saved validation feedback.':''),input,outputTokens);
- const client=new OpenAI({apiKey:process.env.OPENAI_API_KEY,maxRetries:0,timeout:90_000,fetch:globalThis.fetch.bind(globalThis)});
+ const client=boundedProvider(choice);
  const sources:ModelResult['sources']=[],calculations:unknown[]=[];
  if(input.length>48000)throw Error('Mission evidence exceeds bounded context. Narrow the objective or deliverable.');
  let context:unknown[]=[{role:'user',content:input}];
@@ -124,15 +74,15 @@ export async function missionModel(claim:Claim,instruction:string,input:string,t
   // inference. Keep a conservative byte fallback if counting is unavailable.
   const countInput:Record<string,unknown>={...request};
   delete countInput.max_output_tokens;delete countInput.store;delete countInput.max_tool_calls;
-  const counted=await client.post<unknown,{input_tokens:number}>('/responses/input_tokens',{body:countInput,timeout:15_000}).catch(()=>null);
+  const counted=await client.post('/responses/input_tokens',{body:countInput,timeout:15_000}).catch(()=>null);
   const inputTokens=counted&&Number.isSafeInteger(counted.input_tokens)&&counted.input_tokens>=0?counted.input_tokens+256:Buffer.byteLength(JSON.stringify(request),'utf8');
   // Output includes reasoning; native search requires additional headroom.
   const reserve=inputTokens+outputTokens+(tools==='research'?32000:0);
   const inferenceTimeout=tools==='calculate'?Math.min(90_000,calculationDeadline-Date.now()-5000):90_000;
   if(inferenceTimeout<1000)throw Error('Calculation execution time allowance exhausted');
-  if(!await rpc<boolean>('reserve_mission_call',{p_id:claim.job.id,p_lease:claim.job.lease,p_call:callId,p_model:selectedModel,p_tokens:reserve}))throw Error('Worker no longer authorized or mission allowance exhausted');
+  if(!await rpc<boolean>('reserve_mission_call',{p_id:claim.job.id,p_lease:claim.job.lease,p_call:callId,p_model:choice.provider.name+':'+selectedModel,p_tokens:reserve}))throw Error('Worker no longer authorized or mission allowance exhausted');
   try{
-   const response=await client.responses.create(request as unknown as OpenAI.Responses.ResponseCreateParamsNonStreaming,{timeout:inferenceTimeout});
+   const response=await client.responses.create(request,{timeout:inferenceTimeout});
    await rpc('finish_mission_call',{p_call:callId,p_tokens:response.usage?.total_tokens??null});
    if(response.status!=='completed')throw new MissionModelFailure('Model output incomplete: '+response.status,{responseStatus:response.status,incompleteReason:response.incomplete_details?.reason??null,outputTokenLimit:outputTokens,providerErrorCode:response.error?.code??null,providerErrorMessage:response.error?.message?.slice(0,600)??null});
    text=response.output_text?.trim()??'';
@@ -173,9 +123,7 @@ export async function missionModel(claim:Claim,instruction:string,input:string,t
     if(!sources.length)throw new MissionModelFailure('Research returned no cited live sources',{text,sources,calculations,model:selectedModel,consultedSources:[...consulted],outputTypes:output.map(item=>String(item.type))});
    }
    return{text,sources,calculations,model:selectedModel};
-  }catch(error){await rpc('finish_mission_call',{p_call:callId,p_tokens:null}).catch(()=>{});
-   if(tools==='none'&&isCreditExhaustion(error))return missionCreditFallback(claim,String(request.instructions),input,outputTokens,error);
-   throw error;}
+  }catch(error){await rpc('finish_mission_call',{p_call:callId,p_tokens:null}).catch(()=>{});throw error;}
  }
  throw Error('Calculation output did not complete within its call allowance');
 }

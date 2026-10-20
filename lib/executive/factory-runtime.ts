@@ -6,6 +6,7 @@ import {factoryReplyId} from './delivery';
 
 type Intent={domain:string;slug:string;capability:string};
 type Agent={id:string;config:{name?:string;research?:boolean;development?:boolean}};
+const routingPolicy={version:1,selection:'task-capability',scope:'every-stage-and-child-mission',providerFallback:true,modelPins:false} as const;
 const digest=(value:string)=>createHash('sha256').update(value).digest('hex');
 function stableUuid(key:string){const h=digest('executive-factory:'+key);return [h.slice(0,8),h.slice(8,12),'4'+h.slice(13,16),'8'+h.slice(17,20),h.slice(20,32)].join('-');}
 function stableKey(prefix:string,value:string){return prefix+digest(value).slice(0,40);}
@@ -45,7 +46,7 @@ export async function startSpecialistFactory(input:{actorId:string;chatId:string
  const requirement={
   capability:intent.capability,
   objective:'Configure and independently accept a working '+intent.domain+' mission specialist.',
-  successCriteria:['Three saved independent agents complete a real delegated mission','Final independent mission review passes','The specialist can receive new work through Executive'],
+  successCriteria:['Three saved independent agents complete a real delegated mission','Final independent mission review passes','The specialist can receive new work through Executive','Every task, review and subordinate mission uses capability-based model/submodel routing with provider fallback; no fixed provider or model'],
   proposedSlug:intent.slug,
   proposedTitle:intent.domain.replace(/\b[a-z]/g,c=>c.toUpperCase())+' Orchestrator',
   proposedDescription:'Executive-directed '+intent.domain+' specialist using the verified multi-agent mission runtime.',
@@ -61,7 +62,7 @@ export async function startSpecialistFactory(input:{actorId:string;chatId:string
  if(request.status==='proposed'){
   const {data:configured,error}=await db.rpc('transition_executive_provisioning',{
    p_id:request.id,p_actor:actorId,p_chat:chatId,p_action:'configure',
-   p_evidence:{capabilityCatalogVerified:true,adapter:'existing-reviewed-mission-runtime',toolsAdded:[]}
+   p_evidence:{capabilityCatalogVerified:true,adapter:'existing-reviewed-mission-runtime',modelRouting:routingPolicy,toolsAdded:[]}
   });
   if(error||!configured)throw Error('Existing mission runtime configuration failed');
  }
@@ -89,7 +90,7 @@ export async function startSpecialistFactory(input:{actorId:string;chatId:string
   .update({token_allowance:95000});
  if(budgetError)throw Error('Bounded specialist acceptance budget unavailable');
  const {error:saveError}=await db.from('executive_provisioning_requests').eq('id',request.id).eq('status','configured').update({
-  evidence:{adapter:'mission',acceptanceMissionId:missionId,acceptanceCapability:intent.capability,teamIds:agentIds,capabilityCatalogVerified:true,toolsAdded:[]}
+  evidence:{adapter:'mission',acceptanceMissionId:missionId,acceptanceCapability:intent.capability,teamIds:agentIds,modelRouting:routingPolicy,capabilityCatalogVerified:true,toolsAdded:[]}
  });
  if(saveError)throw Error('Specialist factory acceptance linkage failed');
  const {error:startError}=await db.rpc('control_mission',{p_id:missionId,p_action:'start',p_job:null});
@@ -116,8 +117,12 @@ export async function startSpecialistAssignment(input:{actorId:string;chatId:str
  const requestKey=stableKey('exec-specialist-task-',input.requestId);
  const {data:existing}=await db.from('executive_delegations').select('id,status').eq('actor_id',input.actorId).eq('chat_id',input.chatId).eq('request_key',requestKey).maybeSingle<{id:string;status:string}>();
  if(existing)return 'Specialist assignment '+existing.id+' is already '+existing.status+'.';
- const coding=/\b(?:implement|code|develop|fix the code|modify repository|deploy|build an app|build a website)\b/i.test(intent.objective);
- if(coding&&!input.activeRepoId)return 'Select a connected repository to authorize this coding assignment.';
+ // Read-only audits may inspect a verified repository, but MUST NOT receive
+ // a developer/write-enabled worker solely because the task mentions code.
+ const auditOnly=/\b(?:read[- ]only|do not modify|no changes|inspect|audit|review)\b/i.test(intent.objective);
+ const coding=!auditOnly&&/\b(?:implement|write code|develop|fix the code|modify repository|deploy|build an app|build a website)\b/i.test(intent.objective);
+ const repositoryTask=coding||/\b(?:repository|codebase|source code|github|pull request|commit history)\b/i.test(intent.objective);
+ if(repositoryTask&&!input.activeRepoId)return 'Select a verified connected repository for this specialist assignment.';
  const agents=await team(coding);
  const missionId=stableUuid(requestKey),deadline=new Date(Date.now()+3*60*60000).toISOString();
  const {data:delegation,error:proposalError}=await db.rpc<{id:string}>('propose_executive_delegation',{
@@ -129,7 +134,7 @@ export async function startSpecialistAssignment(input:{actorId:string;chatId:str
  if(proposalError||!delegation?.id)throw Error('Specialist delegation failed');
  const {error:missionError}=await db.rpc('create_mission',{
   p_id:missionId,p_objective:intent.objective+'\nSpecialist: '+intent.slug+'; independently delegated worker tasks and final reviewed deliverable required.',
-  p_agents:agents,p_minutes:110,p_repository:coding?input.activeRepoId:null
+  p_agents:agents,p_minutes:110,p_repository:repositoryTask?input.activeRepoId:null
  });
  if(missionError)throw Error('Specialist mission creation failed: '+boundedError(missionError));
  const {error:linkError}=await db.from('executive_delegations').eq('id',delegation.id).eq('status','proposed').update({mission_id:missionId});
@@ -210,7 +215,7 @@ export async function reconcileSpecialistFactory(){
     workers.some(a=>a.payload?.capability==='analysis'&&Boolean(a.result?.calculations?.length));
   const passed=mission.status==='completed'&&final?.result?.verdict==='pass'&&Boolean(mission.result?.trim())&&workerIds.size>=2&&demonstrated;
   if(passed){
-   const evidence={independentReview:'pass',acceptanceEvidence:[{kind:'mission',missionId,capability:request.capability,verifiedToolEvidence:true,result:(mission.result??'').slice(0,3500)}]};
+   const evidence={independentReview:'pass',modelRouting:routingPolicy,acceptanceEvidence:[{kind:'mission',missionId,capability:request.capability,verifiedToolEvidence:true,result:(mission.result??'').slice(0,3500)}]};
    if(request.status==='configured'){
     const {data:validated,error:validationError}=await db.rpc('transition_executive_provisioning',{
      p_id:request.id,p_actor:request.actor_id,p_chat:request.chat_id,p_action:'validate',p_evidence:evidence

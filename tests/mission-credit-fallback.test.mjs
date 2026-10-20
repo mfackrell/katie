@@ -11,6 +11,7 @@ test('orchestrator credit failure fallback is precise and preserves original mis
  assert.equal(check({status:401,message:'bad key'}),false);
  assert.match(source,/reserve_mission_call/);
  assert.match(source,/finish_mission_call/);
- assert.match(source,/getAvailableProviders/);
- assert.match(source,/tools==='none'&&isCreditExhaustion/);
+ assert.match(source,/orchestrationChoices/);
+ assert.match(source,/failedProviders.add/);
+ assert.doesNotMatch(source,/tools==='none'&&isCreditExhaustion/);
 });

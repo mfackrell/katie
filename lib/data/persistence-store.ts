@@ -8,6 +8,7 @@ type JsonRecord = Record<string, unknown>;
 type ActorRow = {
   id: string;
   name: string;
+  actor_kind: 'standard' | 'executive';
   system_prompt: string;
   parent_actor_id: string | null;
   routing_profile: unknown;
@@ -46,6 +47,7 @@ function toActor(row: ActorRow): Actor {
   return {
     id: row.id,
     name: row.name,
+    actorKind: row.actor_kind,
     purpose: row.system_prompt,
     reviewMode: normalizeReviewMode(row.review_mode),
     routingProfile: (() => {
@@ -126,7 +128,7 @@ async function requireActor(actorId: string): Promise<ActorRow> {
   const client = getSupabaseAdminClient();
   const { data, error } = await client
     .from("actors")
-    .select("id,name,system_prompt,parent_actor_id,routing_profile,review_mode,created_at,updated_at")
+    .select("id,name,actor_kind,system_prompt,parent_actor_id,routing_profile,review_mode,created_at,updated_at")
     .eq("id", actorId)
     .maybeSingle<ActorRow>();
 
@@ -176,7 +178,7 @@ export async function getActorById(actorId: string): Promise<Actor | null> {
   const client = getSupabaseAdminClient();
   const { data, error } = await client
     .from("actors")
-    .select("id,name,system_prompt,parent_actor_id,routing_profile,review_mode,created_at,updated_at")
+    .select("id,name,actor_kind,system_prompt,parent_actor_id,routing_profile,review_mode,created_at,updated_at")
     .eq("id", actorId)
     .maybeSingle<ActorRow>();
 
@@ -206,7 +208,7 @@ export async function listActors(): Promise<Actor[]> {
   const client = getSupabaseAdminClient();
   const { data, error } = await client
     .from("actors")
-    .select("id,name,system_prompt,parent_actor_id,routing_profile,review_mode,created_at,updated_at")
+    .select("id,name,actor_kind,system_prompt,parent_actor_id,routing_profile,review_mode,created_at,updated_at")
     .order("name", { ascending: true })
     .order("created_at", { ascending: true })
     .returns<ActorRow>();
@@ -234,7 +236,7 @@ export async function saveActor(actor: Actor): Promise<Actor> {
   const { data, error } = await client
     .from("actors")
     .upsert(payload, { onConflict: "id" })
-    .select("id,name,system_prompt,parent_actor_id,routing_profile,review_mode,created_at,updated_at")
+    .select("id,name,actor_kind,system_prompt,parent_actor_id,routing_profile,review_mode,created_at,updated_at")
     .single<ActorRow>();
 
   if (error) {

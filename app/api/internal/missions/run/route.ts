@@ -1,4 +1,5 @@
 import {reconcileExecutiveFinance} from '@/lib/executive/autonomous';
+import {reconcileExecutiveManagement} from '@/lib/executive/general';
 import {runRecoveryBatch} from '@/lib/recovery/worker';
 import {runProjectBatch} from '@/lib/projects/worker';
 import { NextRequest,NextResponse } from 'next/server';
@@ -11,6 +12,7 @@ export async function GET(request:NextRequest){
  try{const [projects,missions,recovery]=await Promise.all([runProjectBatch(),runMissionBatch(),
   runRecoveryBatch().catch(error=>{console.error('[Recovery] Supervisor failed',error instanceof Error?error.message:'Unknown error');return{status:'unavailable',discovered:0};})]);
   const executive=await reconcileExecutiveFinance().catch(error=>{console.error('[Executive] Reconcile failed',error);return{verified:0,blocked:0};});
-  return NextResponse.json({...missions,projects,recovery,executive},{headers:{'Cache-Control':'no-store'}});}
+  const executiveManagement=await reconcileExecutiveManagement().catch(error=>{console.error('[Executive] Management reconciliation failed',error);return{completed:0,blocked:0,working:0};});
+  return NextResponse.json({...missions,projects,recovery,executive,executiveManagement},{headers:{'Cache-Control':'no-store'}});}
  catch(error){console.error('[Missions] Background dispatcher failed',error);return NextResponse.json({error:'Mission dispatcher unavailable'},{status:503});}
 }

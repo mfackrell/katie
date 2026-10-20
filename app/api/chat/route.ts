@@ -1,7 +1,5 @@
 import {handleProjectChat} from '@/lib/projects/chat';
-import {handleExecutiveSpecialistIntake} from '@/lib/executive/intake';
-import {startSpecialistAssignment} from '@/lib/executive/factory-runtime';
-import {startExecutiveFinance,startExecutiveDevelopment} from '@/lib/executive/autonomous';
+import {executeExecutiveCommand} from '@/lib/executive/transport';
 import { maskPdfSourceNames, pdfPageTaskForSource } from "@/lib/uploads/pdf-inventory";
 import { pdfSourceOccurrence, selectFreshPdfSources, selectPdfEvidenceSource } from "@/lib/chat/pdf-source-selection";
 import { inspectSavedPdf } from "@/lib/uploads/stored-uploads";
@@ -631,6 +629,12 @@ export async function POST(request: NextRequest) {
     let payload: RequestPayload;
     try { payload = await parseIncomingPayload(request.clone()); }
     catch { return executeChat(request); }
+    // A database-owned EO identity is the only way into management mode.
+    // Intercept BEFORE attachments, memory, model collaboration, and ordinary chat.
+    const {data:actorRole,error:actorRoleError}=await getSupabaseAdminClient()
+      .from('actors').select('actor_kind').eq('id',payload.actorId).maybeSingle<{actor_kind:string}>();
+    if(actorRoleError||!actorRole)return NextResponse.json({error:'Actor identity unavailable'},{status:503});
+    if(actorRole.actor_kind==='executive')return executeExecutiveCommand(payload,request);
     const task = await authorizeManagedChat(request, payload);
     if (task) {
       const claimed = await agentRpc<boolean>("claim_agent_execution", { p_id: task.id, p_request: task.request_id });
@@ -1035,14 +1039,9 @@ async function executeChat(request: NextRequest) {
       }
       console.info("[ReviewContinuity] Retrieved working draft without new review", { requestId, chatId, sourceRequestId: saved?.request_id ?? null });
     }
-    const executiveReply = !currentAgentTask() && savedDraftReply === null && !newAttachments.length && !requestImages?.length
-      ? await handleExecutiveSpecialistIntake({actorId,chatId,message,requestId}) : null;
-    const specialistReply = !executiveReply && !currentAgentTask() && savedDraftReply === null && !newAttachments.length && !requestImages?.length
-      ? await startSpecialistAssignment({actorId,chatId,message,requestId,activeRepoId}) : null;
-    const financeReply = !executiveReply && !specialistReply && !currentAgentTask() && savedDraftReply === null && !newAttachments.length && !requestImages?.length
-      ? await startExecutiveFinance({actorId,chatId,message,requestId}) : null;
-    const developmentReply = !executiveReply && !specialistReply && !financeReply && !currentAgentTask() && savedDraftReply === null && !newAttachments.length && !requestImages?.length
-      ? await startExecutiveDevelopment({actorId,chatId,message,requestId,activeRepoId}) : null;
+    // EO commands are intercepted before executeChat; no management path exists
+    // in normal Katie model routing.
+    const executiveReply=null, specialistReply=null, financeReply=null, developmentReply=null;
     const projectReply = !executiveReply && !specialistReply && !financeReply && !developmentReply && !currentAgentTask() && savedDraftReply === null && !newAttachments.length && !requestImages?.length
       ? await handleProjectChat({actorId,chatId,message,activeRepoId},requestId,attachmentHistory,requestTracked) : null;
     const localKatieResponse = savedDraftReply !== null ? { reason: "project" as const, text: savedDraftReply } : executiveReply ? {reason: "executive" as const,text:executiveReply}
