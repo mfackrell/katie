@@ -57,6 +57,7 @@ function database(tables, failedTable) {
     },
     from(table) {
       const filters = [];
+      let updates;
       const result = () => ({
         data: (tables[table] ?? []).filter((row) =>
           filters.every(([key, value]) => row[key] === value),
@@ -64,6 +65,12 @@ function database(tables, failedTable) {
         error: table === failedTable ? { message: "Unavailable" } : null,
       });
       const q = {
+        updateReturning(value) {
+          calls.push({ table, updates: value });
+          const output = result();
+          if (!output.error) output.data.forEach(row => Object.assign(row, value));
+          return Promise.resolve(output);
+        },
         select() {
           return q;
         },
@@ -81,10 +88,12 @@ function database(tables, failedTable) {
           return q;
         },
         returns: async () => result(),
-        maybeSingle: async () => ({
-          ...result(),
-          data: result().data[0] ?? null,
-        }),
+        maybeSingle: async () => {
+          const output = result();
+          const row = output.data[0] ?? null;
+          if (row && updates && !output.error) Object.assign(row, updates);
+          return { ...output, data: row };
+        },
         then(resolve) {
           calls.push(table);
           return Promise.resolve(result()).then(resolve);
@@ -178,6 +187,31 @@ test("work inventory excludes foreign chat records, groups coding tasks, and dis
     body.items.find((i) => i.key === "mission:m").deliveryState,
     "unknown",
   );
+});
+
+test("orchestrator removal retires only the owned version and preserves history", async () => {
+  const id = "88888888-8888-4888-8888-888888888888";
+  const entry = { id, actor_id: "a", status: "active", version: 2 };
+  const db = database({ executive_orchestrators: [entry] });
+  const load = modules({
+    "@/lib/data/supabase/admin": { getSupabaseAdminClient: () => db },
+    "@/lib/data/persistence-store": { listActors: async () => [{ id: "a" }] },
+  });
+  const route = load("@/app/api/specialists/route");
+  assert.equal((await route.DELETE(new Request(`http://localhost/api/specialists?id=${id}&version=1`))).status, 409);
+  assert.equal(db.calls.length, 0);
+  const response = await route.DELETE(new Request(`http://localhost/api/specialists?id=${id}&version=2`));
+  assert.equal(response.status, 200);
+  assert.equal((await response.json()).retainedHistory, true);
+  assert.equal(entry.status, "retired");
+  assert.equal(entry.version, 3);
+  assert.equal(db.calls.length, 1);
+  const foreign = modules({
+    "@/lib/data/supabase/admin": { getSupabaseAdminClient: () => db },
+    "@/lib/data/persistence-store": { listActors: async () => [{ id: "other" }] },
+  })("@/app/api/specialists/route");
+  assert.equal((await foreign.DELETE(new Request(`http://localhost/api/specialists?id=${id}&version=3`))).status, 404);
+  assert.equal(db.calls.length, 1);
 });
 test("one unavailable source produces an explicit warning without erasing independent work", async () => {
   const db = database(

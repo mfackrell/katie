@@ -117,6 +117,14 @@ class PostgrestQuery {
     return this.execute<null>("PATCH", payload, { allowEmpty: true });
   }
 
+  updateReturning<T>(payload: Record<string, unknown>, columns = "*") {
+    return this.execute<T[]>("PATCH", payload, {
+      select: columns,
+      prefer: "return=representation",
+      expectRepresentation: true,
+    });
+  }
+
   delete() {
     return this.execute<null>("DELETE", undefined, { allowEmpty: true });
   }

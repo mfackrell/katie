@@ -1,4 +1,5 @@
 "use client";
+import { SpecialistDirectory } from "@/components/specialist-directory";
 import Notepad from "@/components/Notepad";
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
@@ -36,18 +37,6 @@ type WorkResponse = {
   warnings: string[];
   checkedAt: string;
   limit: number;
-};
-type Registry = {
-  id: string;
-  actor_id: string;
-  slug: string;
-  title: string;
-  description: string;
-  capabilities: string[];
-  status: string;
-  autonomy: string;
-  adapter: string;
-  version: number;
 };
 function date(value: string | null) {
   return value ? new Date(value).toLocaleString() : "Update time unavailable";
@@ -415,7 +404,7 @@ export function NewConversationScreen() {
   const actors = useResource<{ actors: Actor[] }>("/api/actors"),
     params = useSearchParams(),
     router = useRouter(),
-    [text, setText] = useState(""),
+    [text, setText] = useState(params.get("request") ?? ""),
     [busy, setBusy] = useState(false),
     [error, setError] = useState(""),
     guard = useRef(false);
@@ -946,184 +935,7 @@ export function WorkDetailScreen({ reference }: { reference: string }) {
   );
 }
 export function SpecialistsScreen({ id }: { id?: string }) {
-  const preferences = useUIIndex();
-  const actors = useResource<{ actors: Actor[] }>("/api/actors"),
-    registry = useResource<{ specialists: Registry[] }>("/api/specialists"),
-    [query, setQuery] = useState("");
-  const publicActors = (actors.data?.actors ?? []).filter(
-    (a) =>
-      actorAudience(a) === "conversation" &&
-      !["worker", "test"].includes(
-        preferences.byKey.get(`actor:${a.id}`)?.audience ?? "",
-      ) &&
-      !preferences.byKey.get(`actor:${a.id}`)?.archived &&
-      a.name.toLowerCase() !== "katie",
-  );
-  const cards = [
-    ...publicActors.map((a) => ({
-      id: `persona:${a.id}`,
-      name: a.name,
-      description:
-        preferences.byKey.get(`actor:${a.id}`)?.summary ||
-        (a.routingProfile?.summary ??
-          "Saved conversational specialist. Open its profile to inspect its purpose and settings."),
-      status: "Available",
-      type: "Conversational persona",
-      href: `/conversations/new?actor=${encodeURIComponent(a.id)}`,
-      instructions: a.purpose,
-      capabilities: [] as string[],
-    })),
-    ...(registry.data?.specialists ?? []).map((s) => ({
-      id: `capability:${s.id}`,
-      name: s.title,
-      description: s.description,
-      status:
-        s.status === "active"
-          ? "Available"
-          : s.status === "registered"
-            ? "Setting up"
-            : s.status === "retired"
-              ? "Archived"
-              : "Paused",
-      type: `${s.adapter === "mission" ? "Delegates to a reviewed team" : "External adapter"} · ${s.autonomy}`,
-      href: `/conversations/new?actor=${encodeURIComponent(s.actor_id)}&specialist=${encodeURIComponent(s.slug)}`,
-      instructions: "",
-      capabilities: s.capabilities,
-    })),
-  ];
-  const selected = cards.find((c) => c.id === id);
-  return (
-    <div className="mx-auto max-w-5xl px-5 py-10 sm:px-10">
-      <Heading
-        title={selected?.name ?? "Specialists"}
-        description={
-          selected
-            ? selected.description
-            : "Choose a capability when useful. Katie remains your default point of contact."
-        }
-      />
-      <ErrorState
-        error={actors.error || registry.error}
-        retry={() => {
-          void actors.refresh();
-          void registry.refresh();
-        }}
-      />
-      {id && !selected && !actors.loading && !registry.loading ? (
-        <p>
-          Specialist unavailable.{" "}
-          <Link href="/specialists" className="underline">
-            Open catalog
-          </Link>
-        </p>
-      ) : selected ? (
-        <section className="space-y-5">
-          <p className="text-sm text-zinc-400">
-            {selected.type} · {selected.status}
-          </p>
-          <h2 className="font-semibold">Capabilities and boundaries</h2>
-          {selected.capabilities.length ? (
-            <>
-              <ul className="list-inside list-disc text-sm text-zinc-300">
-                {selected.capabilities.map((c) => (
-                  <li key={c}>{c.replaceAll("_", " ")}</li>
-                ))}
-              </ul>
-              <p className="text-sm text-zinc-400">
-                Managed mission tasks do not receive attachment/media or
-                repository-read access. Development requires its separately
-                approved repository workflow.
-              </p>
-            </>
-          ) : (
-            <p className="text-sm text-zinc-400">
-              Uses this persona’s own conversation and actor memory. Opening it
-              does not copy another persona’s private context.
-            </p>
-          )}
-          <p className="text-sm text-zinc-500">
-            Creator and creation reason: unknown. Identity preserved; no worker
-            configurations have been merged.
-          </p>
-          {selected.instructions && (
-            <details className="rounded-xl border border-white/10 p-4">
-              <summary className="cursor-pointer">
-                Purpose and saved instructions
-              </summary>
-              <p className="mt-4 whitespace-pre-wrap text-sm text-zinc-400">
-                {selected.instructions}
-              </p>
-            </details>
-          )}
-          {selected.status === "Available" && (
-            <Link href={selected.href} className={quiet}>
-              Use specialist
-            </Link>
-          )}
-          <Link href="/specialists" className={`${quiet} ml-2`}>
-            Back to specialists
-          </Link>
-        </section>
-      ) : (
-        <>
-          <input
-            className={input}
-            aria-label="Search specialists"
-            placeholder="Search purposes or capabilities"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-          />
-          <div className="mt-6 grid gap-4 md:grid-cols-2">
-            {cards
-              .filter(
-                (c) =>
-                  c.status === "Available" &&
-                  `${c.name} ${c.description}`
-                    .toLowerCase()
-                    .includes(query.toLowerCase()),
-              )
-              .map((c) => (
-                <article
-                  key={c.id}
-                  className="flex flex-col rounded-xl border border-white/10 p-5"
-                >
-                  <p className="text-xs text-zinc-500">{c.type}</p>
-                  <h2 className="mt-2 text-lg font-semibold">{c.name}</h2>
-                  <p className="my-3 line-clamp-3 text-sm leading-6 text-zinc-400">
-                    {c.description}
-                  </p>
-                  <div className="mt-auto flex flex-wrap gap-2 pt-3">
-                    <Link className={quiet} href={c.href}>
-                      Use specialist
-                    </Link>
-                    <Link
-                      className={quiet}
-                      href={`/specialists/${encodeURIComponent(c.id)}`}
-                    >
-                      About
-                    </Link>
-                  </div>
-                </article>
-              ))}
-          </div>
-          <p className="mt-6 text-sm text-zinc-500">
-            Need another capability?{" "}
-            <Link
-              href="/conversations/new"
-              className="text-emerald-300 underline"
-            >
-              Describe the need to Katie
-            </Link>
-            . Existing activation checks govern availability.{" "}
-            <Link href="/settings/advanced" className="underline">
-              Internal workers and test candidates
-            </Link>{" "}
-            remain in Advanced.
-          </p>
-        </>
-      )}
-    </div>
-  );
+  return <SpecialistDirectory id={id} />;
 }
 export function SettingsScreen() {
   return (
