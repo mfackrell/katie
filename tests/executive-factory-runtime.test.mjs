@@ -8,7 +8,7 @@ const require=createRequire(import.meta.url);
 const js=ts.transpileModule(readFileSync('lib/executive/factory-runtime.ts','utf8'),{
  compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}
 }).outputText;
-function setup({registered=null,agentRows=null}={}){
+function setup({registered=null,agentRows=null,provisionRoute=null}={}){
  const calls=[], saved=[];
  const agents=agentRows??[
   {id:'lead',config:{name:'Mission Lead',research:false,development:true}},
@@ -38,6 +38,13 @@ function setup({registered=null,agentRows=null}={}){
  vm.runInNewContext(js,{exports,require:name=>{
   if(name==='@/lib/data/supabase/admin')return {getSupabaseAdminClient:()=>db};
   if(name==='@/lib/data/persistence-store')return {saveMessage:async(_id,msg)=>saved.push(msg)};
+  if(name==='./provisioning-service')return {planExecutiveProvisioning:async input=>{
+   calls.push({kind:'plan',input});
+   const route=provisionRoute??(registered?.status==='active'?'reuse':'configure');
+   const decision=route==='reuse'?{route,specialistSlug:registered?.slug??input.requirement.proposedSlug}:
+    route==='commission'?{route,missingCapabilities:[input.requirement.capability]}:{route};
+   return {decision,request:{id:'provision-id',status:'proposed'}};
+  }};
   return require(name);
  },Date,console,Buffer});
  return {factory:exports,calls,saved};
@@ -53,6 +60,9 @@ test('Executive factory creates a real three-agent acceptance mission but does n
  assert.ok(make,'a real mission must be created');
  assert.deepEqual(Array.from(make.args.p_agents),['lead','analyst','researcher']);
  assert.equal(make.args.p_repository,null);
+ assert.match(make.args.p_objective,/spare capacity and reopen rate/);
+ assert.match(make.args.p_objective,/deterministic calculator/);
+ assert.ok(calls.some(c=>c.kind==='update'&&c.table==='agent_missions'&&c.value.token_allowance===95000));
  assert.ok(calls.some(c=>c.name==='control_mission'&&c.args.p_action==='start'));
  assert.ok(calls.some(c=>c.kind==='update'&&c.table==='executive_provisioning_requests'&&c.value.evidence.acceptanceMissionId));
  assert.equal(calls.some(c=>c.name==='transition_executive_provisioning'&&c.args.p_action==='activate'),false);
@@ -64,7 +74,8 @@ test('active specialists are reusable without duplicate provisioning',async()=>{
   intent:{domain:'operations',slug:'operations',capability:'operations_analysis'}
  });
  assert.match(response,/already an active specialist/);
- assert.equal(calls.length,0);
+ assert.ok(calls.some(c=>c.kind==='plan'));
+ assert.equal(calls.some(c=>c.name==='create_mission'),false);
 });
 test('specialist dispatch intent is narrow and never takes ordinary requests',()=>{
  const {factory}=setup();
@@ -82,5 +93,43 @@ test('inactive specialist refuses work rather than claiming completion',async()=
   actorId:'actor',chatId:'chat',requestId:'request',message:'Ask the operations orchestrator to analyze plant scheduling.'
  });
  assert.match(response,/not active/);
+ assert.equal(calls.some(c=>c.name==='create_mission'),false);
+});
+
+test('unverified capability is commissioned, not configured or falsely activated',async()=>{
+ const {factory,calls}=setup({provisionRoute:'commission'});
+ const response=await factory.startSpecialistFactory({
+  actorId:'actor',chatId:'chat',requestId:'request',message:'Create a logistics orchestrator',
+  intent:{domain:'logistics',slug:'logistics',capability:'logistics_coordination'}
+ });
+ assert.match(response,/commissioning is pending/);
+ assert.match(response,/logistics_coordination/);
+ assert.ok(calls.some(c=>c.kind==='plan'&&c.input.requirement.capability==='logistics_coordination'));
+ assert.equal(calls.some(c=>c.name==='create_mission'),false);
+ assert.equal(calls.some(c=>c.name==='transition_executive_provisioning'),false);
+});
+test('specialist assignment suppresses all later executive and project routers',()=>{
+ const route=readFileSync('app/api/chat/route.ts','utf8');
+ for(const downstream of ['finance','development','project']){
+  assert.match(route,new RegExp('const '+downstream+'Reply = !executiveReply && !specialistReply &&'));
+ }
+});
+
+test('research capability requires real native web-search evidence in acceptance objective',async()=>{
+ const {factory,calls}=setup();
+ await factory.startSpecialistFactory({
+  actorId:'actor',chatId:'chat',requestId:'research-request',message:'Create a research orchestrator',
+  intent:{domain:'research',slug:'research',capability:'research_synthesis'}
+ });
+ const mission=calls.find(c=>c.name==='create_mission');
+ assert.match(mission.args.p_objective,/native LIVE public-web search/);
+ assert.match(mission.args.p_objective,/Never fabricate a URL/);
+});
+test('factory refuses unsupported accepted scenarios even if given a bad configure decision',async()=>{
+ const {factory,calls}=setup();
+ await assert.rejects(()=>factory.startSpecialistFactory({
+  actorId:'actor',chatId:'chat',requestId:'unknown-request',message:'Create an unsupported orchestrator',
+  intent:{domain:'unsupported',slug:'unsupported',capability:'unverified_coordination'}
+ }),/No independently verifiable mission acceptance scenario/);
  assert.equal(calls.some(c=>c.name==='create_mission'),false);
 });

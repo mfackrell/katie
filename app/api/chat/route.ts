@@ -1016,9 +1016,9 @@ async function executeChat(request: NextRequest) {
       ? await startSpecialistAssignment({actorId,chatId,message,requestId,activeRepoId}) : null;
     const financeReply = !executiveReply && !specialistReply && !currentAgentTask() && !newAttachments.length && !requestImages?.length
       ? await startExecutiveFinance({actorId,chatId,message,requestId}) : null;
-    const developmentReply = !executiveReply && !financeReply && !currentAgentTask() && !newAttachments.length && !requestImages?.length
+    const developmentReply = !executiveReply && !specialistReply && !financeReply && !currentAgentTask() && !newAttachments.length && !requestImages?.length
       ? await startExecutiveDevelopment({actorId,chatId,message,requestId,activeRepoId}) : null;
-    const projectReply = !executiveReply && !financeReply && !developmentReply && !currentAgentTask() && !newAttachments.length && !requestImages?.length
+    const projectReply = !executiveReply && !specialistReply && !financeReply && !developmentReply && !currentAgentTask() && !newAttachments.length && !requestImages?.length
       ? await handleProjectChat({actorId,chatId,message,activeRepoId},requestId,attachmentHistory,requestTracked) : null;
     const localKatieResponse = executiveReply ? {reason: "executive" as const,text:executiveReply}
       : specialistReply ? {reason: "executive" as const,text:specialistReply}

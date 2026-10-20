@@ -1,6 +1,7 @@
 import {createHash} from 'node:crypto';
 import {getSupabaseAdminClient} from '@/lib/data/supabase/admin';
 import {saveMessage} from '@/lib/data/persistence-store';
+import {planExecutiveProvisioning} from './provisioning-service';
 
 type Intent={domain:string;slug:string;capability:string};
 type Agent={id:string;config:{name?:string;research?:boolean;development?:boolean}};
@@ -31,10 +32,6 @@ async function reportOnce(chatId:string,key:string,message:string){
 export async function startSpecialistFactory(input:{actorId:string;chatId:string;requestId:string;message:string;intent:Intent}){
  const {actorId,chatId,requestId,intent}=input,db=getSupabaseAdminClient();
  const key=stableKey('exec-factory-',requestId+'\n'+input.message);
- const {data:existing,error:lookupError}=await db.from('executive_orchestrators')
-  .select('id,slug,status').eq('actor_id',actorId).eq('slug',intent.slug).maybeSingle<{id:string;slug:string;status:string}>();
- if(lookupError)throw Error('Specialist registry lookup failed');
- if(existing?.status==='active')return intent.slug+' is already an active specialist. You can assign it work directly.';
  const requirement={
   capability:intent.capability,
   objective:'Configure and independently accept a working '+intent.domain+' mission specialist.',
@@ -44,10 +41,13 @@ export async function startSpecialistFactory(input:{actorId:string;chatId:string
   proposedDescription:'Executive-directed '+intent.domain+' specialist using the verified multi-agent mission runtime.',
   proposedCapabilities:[intent.capability],
  };
- const {data:request,error:reqError}=await db.rpc<{id:string;status:string}>('propose_executive_provisioning',{
-  p_actor:actorId,p_chat:chatId,p_request:key,p_requirement:requirement,p_route:'configure',p_specialist:null
- });
- if(reqError||!request?.id)throw Error('Specialist factory request could not be saved');
+ // Capability selection must use the verified active mission catalog. A generic
+ // research playbook does not prove a newly requested tool or specialty exists.
+ const {decision,request}=await planExecutiveProvisioning({actorId,chatId,requestKey:key,requirement});
+ if(decision.route==='reuse')return decision.specialistSlug+' is already an active specialist for '+intent.capability+'. You can assign it work directly.';
+ if(decision.route==='commission')return 'Executive recorded the request for '+requirement.proposedTitle+
+  ', but the verified mission capability catalog lacks '+decision.missingCapabilities.join(', ')+
+  '. Specialist commissioning is pending; no unimplemented capability was configured or activated. Request: '+request.id+'.';
  if(request.status==='proposed'){
   const {data:configured,error}=await db.rpc('transition_executive_provisioning',{
    p_id:request.id,p_actor:actorId,p_chat:chatId,p_action:'configure',
@@ -58,16 +58,28 @@ export async function startSpecialistFactory(input:{actorId:string;chatId:string
  // The acceptance test is a real mission: not an activation assertion or a code generation promise.
  const agentIds=await team();
  const missionId=stableUuid('accept:'+key);
- const objective='SPECIALIST FACTORY ACCEPTANCE — '+requirement.proposedTitle+'. '+ 
-  'Use the three independently assigned saved agents to deliver a concrete '+intent.domain+
-  ' operations playbook for an example business situation. Include an independently researched perspective, a separate operating analysis, clear responsibilities, measurable completion criteria and an actionable decision. '+
-  'Treat external facts as unverified until supported by evidence. This acceptance proves the reusable mission adapter can do actual work; it does not create new external tool permissions.';
+ const cases:Record<string,string>={
+  financial_analysis:'Hypothetical business: revenue $10,000, cost of sales $6,000, operating expenses $2,500, cash $2,000 and accounts payable due this month $1,800. Have an analysis worker use the deterministic calculator for gross margin, operating profit and cash-versus-payables coverage; have a second saved worker separately challenge the assumptions and recommend an action.',
+  operations_analysis:'Hypothetical service desk: 20 requests daily, 30-request daily capacity, 4 reopened requests per 100 completed, and a one-day turnaround goal. Have an analysis worker use the deterministic calculator for spare capacity and reopen rate; have a second saved worker identify quality risks and propose an action.',
+  research_synthesis:'Using native LIVE public-web search, have a research-enabled saved worker find and cite at least one primary official source on small-business financial recordkeeping guidance (for example the IRS or SBA). Have a second saved worker independently assess relevance, distinguish the guidance from hypothetical advice, and describe one concrete takeaway. Never fabricate a URL or replace real search with model memory.',
+ };
+ const scenario=cases[intent.capability];
+ if(!scenario)throw Error('No independently verifiable mission acceptance scenario supports this capability');
+ const objective='SPECIALIST FACTORY ACCEPTANCE — '+requirement.proposedTitle+'. '+
+  'Prove the declared '+intent.capability+' capability on this bounded case: '+scenario+
+  ' Have the saved lead plan work for at least TWO distinct substantive workers, then compose a memo under 450 words with explicit assumptions, calculations or source links, separate worker findings and measurable acceptance criteria. Final independent review must pass. '+
+  'Do not claim external integrations, repository access or specialist tools not provided by the existing mission adapter.';
  const {error:createError}=await db.rpc('create_mission',{
   p_id:missionId,p_objective:objective,p_agents:agentIds,p_minutes:110,p_repository:null
  });
  if(createError)throw Error('Specialist acceptance mission unavailable: '+boundedError(createError));
+ // The independently reviewed multi-worker + possible revision cycle can
+ // legitimately exceed the ordinary 60k-token mission allowance.
+ const {error:budgetError}=await db.from('agent_missions').eq('id',missionId).eq('status','draft')
+  .update({token_allowance:95000});
+ if(budgetError)throw Error('Bounded specialist acceptance budget unavailable');
  const {error:saveError}=await db.from('executive_provisioning_requests').eq('id',request.id).eq('status','configured').update({
-  evidence:{adapter:'mission',acceptanceMissionId:missionId,teamIds:agentIds,capabilityCatalogVerified:true,toolsAdded:[]}
+  evidence:{adapter:'mission',acceptanceMissionId:missionId,acceptanceCapability:intent.capability,teamIds:agentIds,capabilityCatalogVerified:true,toolsAdded:[]}
  });
  if(saveError)throw Error('Specialist factory acceptance linkage failed');
  const {error:startError}=await db.rpc('control_mission',{p_id:missionId,p_action:'start',p_job:null});
@@ -124,11 +136,11 @@ export async function startSpecialistAssignment(input:{actorId:string;chatId:str
 export async function reconcileSpecialistFactory(){
  const db=getSupabaseAdminClient();
  const {data,error}=await db.from('executive_provisioning_requests')
-  .select('id,actor_id,chat_id,specialist_slug,status,evidence,updated_at')
+  .select('id,actor_id,chat_id,specialist_slug,capability,status,evidence,updated_at')
   .eq('status','configured').order('updated_at',{ascending:false}).limit(100);
  if(error)throw Error('Specialist acceptance inventory unavailable');
  let activated=0,blocked=0;
- for(const request of (data??[]) as Array<{id:string;actor_id:string;chat_id:string;specialist_slug:string;status:string;evidence:{acceptanceMissionId?:string}|null}>){
+ for(const request of (data??[]) as Array<{id:string;actor_id:string;chat_id:string;specialist_slug:string;capability:string;status:string;evidence:{acceptanceMissionId?:string}|null}>){
   const missionId=request.evidence?.acceptanceMissionId;
   if(!missionId)continue;
   const {data:mission,error:missionError}=await db.from('agent_missions')
@@ -140,13 +152,20 @@ export async function reconcileSpecialistFactory(){
   if(reviewsError)throw Error('Independent factory review lookup failed');
   const final=reviews?.find(r=>r.job_key==='review_again')??reviews?.find(r=>r.job_key==='review');
   const {data:assignments,error:assignmentsError}=await db.from('mission_assignments')
-   .select('agent_id,role,status').eq('mission_id',missionId).eq('status','completed').limit(12)
-   .returns<{agent_id:string;role:string;status:string}>();
+   .select('agent_id,role,status,payload,result').eq('mission_id',missionId).eq('status','completed').limit(12)
+   .returns<{agent_id:string;role:string;status:string;payload:{capability?:string}|null;result:{sources?:Array<{url?:string}>;calculations?:unknown[]}|null}>();
   if(assignmentsError)throw Error('Factory independent worker evidence unavailable');
   const workerIds=new Set((assignments??[]).filter(a=>a.role==='work'||a.role==='development').map(a=>a.agent_id));
-  const passed=mission.status==='completed'&&final?.result?.verdict==='pass'&&Boolean(mission.result?.trim())&&workerIds.size>=2;
+  const workers=(assignments??[]).filter(a=>a.role==='work');
+  // A generic memo cannot verify a declared domain capability. Require native
+  // tool receipts from a worker, as well as the independent result review.
+  const demonstrated=request.capability==='research_synthesis'
+   ? workers.some(a=>a.payload?.capability==='research'&&a.result?.sources?.some(s=>typeof s.url==='string'&&/^https?:\/\//.test(s.url)))
+   : ['financial_analysis','operations_analysis'].includes(request.capability)&&
+    workers.some(a=>a.payload?.capability==='analysis'&&Boolean(a.result?.calculations?.length));
+  const passed=mission.status==='completed'&&final?.result?.verdict==='pass'&&Boolean(mission.result?.trim())&&workerIds.size>=2&&demonstrated;
   if(passed){
-   const evidence={independentReview:'pass',acceptanceEvidence:[{kind:'mission',missionId,result:(mission.result??'').slice(0,3500)}]};
+   const evidence={independentReview:'pass',acceptanceEvidence:[{kind:'mission',missionId,capability:request.capability,verifiedToolEvidence:true,result:(mission.result??'').slice(0,3500)}]};
    const {data:validated,error:validationError}=await db.rpc('transition_executive_provisioning',{
     p_id:request.id,p_actor:request.actor_id,p_chat:request.chat_id,p_action:'validate',p_evidence:evidence
    });
@@ -162,11 +181,13 @@ export async function reconcileSpecialistFactory(){
     ' after a completed, independently reviewed three-agent acceptance mission. You can assign it objectives directly. Mission '+missionId+'.');
    activated++;
   }else{
+   const reason=!demonstrated?'The declared capability was not proven with a native calculator or live-web research receipt':
+    mission.detail??'Independent acceptance failed';
    const {error:blockError}=await db.from('executive_provisioning_requests').eq('id',request.id).eq('status','configured')
-    .update({status:'blocked',evidence:{acceptanceMissionId:missionId,reason:mission.detail??'Independent acceptance failed'}});
+    .update({status:'blocked',evidence:{acceptanceMissionId:missionId,reason}});
    if(blockError)throw Error('Specialist factory blocker could not be saved');
    await reportOnce(request.chat_id,request.id,'Executive could not activate '+request.specialist_slug+
-    ': '+(mission.detail??'independent acceptance failed')+'. Mission '+missionId+'.');
+    ': '+reason+'. Mission '+missionId+'.');
    blocked++;
   }
  }
