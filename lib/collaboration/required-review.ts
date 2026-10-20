@@ -17,6 +17,8 @@ export type ReviewAudit = {
   draftHash: string;
   finalHash: string;
   draft: string;
+  lastCandidate?: string;
+  lastCandidateHash?: string;
   reviewer?: CollaborationParticipant;
   verdict?: "approve" | "revise";
   findings?: string;
@@ -240,6 +242,8 @@ export async function runRequiredDraftReview(input: {
           }, lead)), Math.min(clean.images?.length ? 90_000 : 60_000, reviewDeadlineMs - Date.now() - 35_000));
           if (!revision.text.trim() || revision.truncated) throw new Error("Revision was empty or truncated");
           candidate = { ...input.draft, ...revision };
+          audit.lastCandidate = candidate.text;
+          audit.lastCandidateHash = hash(candidate.text);
           review = await compare(candidate.text, findings, true);
           if (review.verdict === "approve") {
             if (audit.reviews?.at(-1)?.answerHash !== hash(candidate.text) ||
