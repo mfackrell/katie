@@ -374,7 +374,7 @@ test('a blocked coordination phase without a child is explicitly resumed, not si
  const calls=[];
  const {handleProjectChat}=modules({'@/lib/projects/store':{
    projectForChat:async()=>p,
-   projectRpc:async(name,args)=>{calls.push({name,args});if(name==='retry_project_review')return null;return {...p,status:'running',detail:'Resuming the saved project and its existing budgets.'};}
+   projectRpc:async(name,args)=>{calls.push({name,args});if(name==='retry_project_review')return null;if(name==='retry_game_specification')return false;return {...p,status:'running',detail:'Resuming the saved project and its existing budgets.'};}
  }})('@/lib/projects/chat');
  const result=await handleProjectChat({actorId:actor,chatId:chat,message:'resume project'},'resume-existing',[],true);
  assert.match(result,/Resuming the saved project/);
