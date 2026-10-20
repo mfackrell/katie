@@ -1,6 +1,7 @@
 import {getSupabaseAdminClient} from '@/lib/data/supabase/admin';
 import {capabilityRequirement,decideProvisioning,type AvailableSpecialist,type CapabilityRequirement} from './provisioning';
 import {z} from 'zod';
+import {verifiedMissionCatalog,type CatalogAgent} from './mission-catalog';
 export type ProvisionRequest={actorId:string;chatId:string;requestKey:string;requirement:CapabilityRequirement};
 // Called only by the trusted Executive Orchestrator service. No browser write
 // endpoint or arbitrary specialist endpoint URL is exposed.
@@ -11,10 +12,13 @@ export async function planExecutiveProvisioning(input:ProvisionRequest){
   .eq('actor_id',input.actorId).limit(100);
  if(error)throw Error('Specialist capability inventory unavailable');
  const specialists=(data??[]) as AvailableSpecialist[];
- // A mission capability exists only if the caller has explicitly registered
- // a verified, ACTIVE mission adapter claiming that capability.
- const missionCapabilities=[...new Set(specialists.filter(s=>s.status==='active'&&s.adapter==='mission')
-  .flatMap(s=>s.capabilities))];
+ // The available mission toolset is a separately verified, bounded catalog.
+ // It cannot be inferred from already active specialists: doing that makes
+ // the configure route unreachable and prevents creating a new specialist.
+ const {data:agents,error:agentsError}=await db.from('managed_agents')
+  .select('config').eq('archived',false).limit(100);
+ if(agentsError)throw Error('Verified mission agent inventory unavailable');
+ const missionCapabilities=verifiedMissionCatalog((agents??[]) as CatalogAgent[]);
  const decision=decideProvisioning(requirement,specialists,missionCapabilities);
  const valid=z.string().uuid();
  valid.parse(input.actorId);valid.parse(input.chatId);
