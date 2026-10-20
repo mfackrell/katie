@@ -137,7 +137,17 @@ try {
         body: JSON.stringify(data),
       });
     if (req.method() !== "GET") mutations.push({ path: url.pathname, body });
-    if (url.pathname === "/api/actors") return reply({ actors });
+    if (url.pathname === "/api/actors") {
+      if (req.method() === "POST") {
+        const actor = { id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", ...body };
+        actors.push(actor); return reply({ actor }, 201);
+      }
+      const index = actors.findIndex(actor => actor.id === url.searchParams.get("id"));
+      if (req.method() === "PATCH") { assert.ok(index >= 0); Object.assign(actors[index], body); return reply({ actor: actors[index] }); }
+      if (req.method() === "DELETE") { assert.ok(index >= 0); actors.splice(index, 1); return reply({ deletedActorIds: [url.searchParams.get("id")] }); }
+      return reply({ actors });
+    }
+    if (url.pathname === "/api/agents") return reply({ agents: [] });
     if (url.pathname === "/api/chats") {
       if (req.method() === "DELETE") {
         const index = chats.findIndex(chat => chat.id === url.searchParams.get("id"));
@@ -204,6 +214,7 @@ try {
             description: "Assess process capacity and bottlenecks.",
             capabilities: ["operations_analysis"],
             status: "active",
+            version: 1,
             autonomy: "delegated",
             adapter: "mission",
             version: 1,
@@ -315,6 +326,30 @@ try {
     await page.getByText("Internal worker", { exact: true }).count(),
     0,
   );
+  await page.getByRole("heading", { name: "Executive Orchestrator · Katie", exact: true }).waitFor();
+  await page.getByRole("region", { name: "Orchestrator agents", exact: true }).waitFor();
+  await page.getByRole("region", { name: "Single-task agents", exact: true }).waitFor();
+  await page.getByLabel("Active chats for Operations", { exact: true }).selectOption(c);
+  await composer.waitFor();
+  assert.ok(page.url().endsWith("/conversations/" + c));
+  await page.getByRole("link", { name: "Specialists", exact: true }).click();
+  await page.getByRole("button", { name: "+ Create agent", exact: true }).click();
+  await page.getByLabel("Agent name", { exact: true }).fill("Fixture specialist");
+  await page.getByLabel("System instructions", { exact: true }).fill("Use only verified figures.");
+  await page.getByRole("button", { name: "Create single-task agent", exact: true }).click();
+  const created = page.getByRole("article").filter({ has: page.getByRole("heading", { name: "Fixture specialist", exact: true }) });
+  await created.getByText("System instructions & agent settings", { exact: true }).click();
+  await created.getByLabel("System instructions for Fixture specialist", { exact: true }).fill("Use verified figures and show calculations.");
+  await created.getByRole("button", { name: "Save system instructions", exact: true }).click();
+  await created.getByText("System instructions saved.", { exact: true }).waitFor();
+  assert.equal(actors.find(actor => actor.name === "Fixture specialist").purpose, "Use verified figures and show calculations.");
+  page.once("dialog", dialog => dialog.dismiss());
+  await created.getByRole("button", { name: "Delete agent", exact: true }).click();
+  assert.ok(actors.some(actor => actor.name === "Fixture specialist"));
+  page.once("dialog", dialog => dialog.accept());
+  await created.getByRole("button", { name: "Delete agent", exact: true }).click();
+  await created.waitFor({ state: "hidden" });
+  assert.equal(actors.some(actor => actor.name === "Fixture specialist"), false);
   await page.screenshot({
     path: output + "/specialists-desktop.png",
     fullPage: true,
@@ -369,6 +404,9 @@ try {
       passed: true,
       checks: [
         "home",
+        "orchestrator and single-task separation",
+        "specialist active-chat selection",
+        "agent create/edit/delete with confirmation",
         "chat deletion confirmation and list refresh",
         "visible answering model overrides",
         "worker filtering",

@@ -24,6 +24,23 @@ function loadClient(t: TestContext) {
   return getSupabaseAdminClient();
 }
 
+test("conditional updates return affected rows and distinguish stale writes", async (t) => {
+  const client = loadClient(t);
+  t.mock.method(globalThis, "fetch", async (input: string | URL | Request, init?: RequestInit) => {
+    const url = new URL(String(input));
+    assert.equal(init?.method, "PATCH");
+    assert.equal(new Headers(init?.headers).get("Prefer"), "return=representation");
+    assert.equal(url.searchParams.get("id"), "eq.saved");
+    assert.equal(url.searchParams.get("actor_id"), "eq.owner");
+    assert.equal(url.searchParams.get("select"), "id");
+    assert.deepEqual(JSON.parse(String(init?.body)), { status: "retired" });
+    return Response.json(url.searchParams.get("version") === "eq.2" ? [{ id: "saved" }] : []);
+  });
+  const update = (version: number) => client.from("executive_orchestrators").eq("id", "saved").eq("actor_id", "owner").eq("version", version).updateReturning<{ id: string }>({ status: "retired" }, "id");
+  assert.deepEqual((await update(2)).data, [{ id: "saved" }]);
+  assert.deepEqual((await update(1)).data, []);
+});
+
 test("equality filters deliver literal values after one HTTP query decode", async (t) => {
   const client = loadClient(t);
   const values = [
