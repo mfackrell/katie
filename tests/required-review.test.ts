@@ -219,7 +219,7 @@ test("same-model reviewer and expired budgets cannot claim independent review", 
   const s = setup();
   const same = await runRequiredDraftReview({ requestId: "same", draft, params, leadProvider: s.lead, deadlineMs: deadline(), selectHelper: async () => ({ provider: s.lead, modelId: "lead" }) });
   assert.equal(same.audit.status, "completed_with_review_notes");
-  assert.match(same.result.text, /independent review could not verify/i);
+  assert.equal(same.result.text, draft.text);
   const expired = await runRequiredDraftReview({ requestId: "expired", draft, params, leadProvider: s.lead, deadlineMs: Date.now() - 1, selectHelper: async () => { throw new Error("Must not call"); } });
   assert.equal(expired.audit.attempts.length, 0);
   assert.equal(expired.audit.status, "completed_with_review_notes");
