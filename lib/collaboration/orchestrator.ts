@@ -28,6 +28,8 @@ const DEFAULT_MAX_DEPTH = 2;
 const DEFAULT_MAX_CONTRIBUTION_CHARS = 12_000;
 const DEFAULT_MAX_TOTAL_CONTRIBUTION_CHARS = 48_000;
 const DEFAULT_PARTICIPANT_TIMEOUT_MS = 120_000;
+const PRO_MODEL_LEAD_TIMEOUT_MS = 300_000;
+const isDeepProModel = (modelId: string) => /^gpt-5\\.5-pro(?:-|$)/i.test(modelId);
 const DEFAULT_RESEARCH_TIMEOUT_MS = 180_000;
 const DEFAULT_MAX_TOTAL_DURATION_MS = 770_000;
 const FINAL_SYNTHESIS_TIMEOUT_MS = 180_000;
@@ -243,7 +245,12 @@ export async function runAdaptiveCollaboration(
     Math.max(0, remainingTotalMs() - finalSynthesisReserveMs);
 
   const resumed = options.resumeState?.requestId === options.requestId ? options.resumeState : undefined;
-  const minimumLeadControlMs = participantTimeoutMs;
+  // Slow, high-reasoning models need a larger lead-control window.
+  // Never exceed the shared execution deadline or steal final-synthesis reserve.
+  const leadControlTimeoutMs = isDeepProModel(options.leadModelId)
+    ? Math.max(participantTimeoutMs, PRO_MODEL_LEAD_TIMEOUT_MS)
+    : participantTimeoutMs;
+  const minimumLeadControlMs = leadControlTimeoutMs;
   const minimumFinalTimeMs = FINAL_SYNTHESIS_TIMEOUT_MS;
   const lead = participant(options.leadProvider, options.leadModelId);
   const trace: CollaborationTraceEvent[] = [];
@@ -337,15 +344,27 @@ export async function runAdaptiveCollaboration(
     }
 
     const effectiveTimeoutMs = Math.min(timeoutMs, remaining);
+    const startedAt = Date.now();
+    await emit({ type: "stage_started", requester: { provider: provider.name, modelId },
+      detail: `stage=${label}; configuredTimeoutMs=${timeoutMs}; effectiveTimeoutMs=${effectiveTimeoutMs}; remainingBeforeFinalMs=${remaining}` });
     const availableGraceMs = Math.max(0, remaining - effectiveTimeoutMs);
     const effectiveGraceMs = Math.min(lateResultGraceMs, availableGraceMs);
 
-    return withTimeout(
-      provider.generate({ ...params, modelId }),
-      effectiveTimeoutMs,
-      label,
-      effectiveGraceMs,
-    );
+    try {
+      const result = await withTimeout(
+        provider.generate({ ...params, modelId }),
+        effectiveTimeoutMs,
+        label,
+        effectiveGraceMs,
+      );
+      await emit({ type: "stage_completed", requester: { provider: provider.name, modelId },
+        detail: `stage=${label}; elapsedMs=${Date.now() - startedAt}; completed=true` });
+      return result;
+    } catch (error) {
+      await emit({ type: "stage_failed", requester: { provider: provider.name, modelId },
+        detail: `stage=${label}; elapsedMs=${Date.now() - startedAt}; configuredTimeoutMs=${timeoutMs}; reason=${error instanceof Error ? error.message : String(error)}` });
+      throw error;
+    }
   };
 
   const resolveHelper = async (
@@ -899,7 +918,7 @@ export async function runAdaptiveCollaboration(
       response = await callControl(
         options.leadProvider, options.leadModelId, leadParams,
         `Collaboration lead ${lead.provider}:${lead.modelId}`,
-        participantTimeoutMs, minimumLeadControlMs,
+        leadControlTimeoutMs, minimumLeadControlMs,
       );
     } catch (error) {
         if (isTerminalProviderError(error)) throw error;
