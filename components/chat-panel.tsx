@@ -15,6 +15,8 @@ import {
   useRef,
   useState,
 } from "react";
+import { readPendingAttachments,savePendingAttachments } from "@/lib/ui/pending-attachments";
+import { useSavedState } from "@/components/saved-workspace-state";
 import type { FileReference } from "@/lib/providers/types";
 import { acknowledgeVideoUploads, uploadFilesDirect } from "@/lib/uploads/direct-upload-client";
 import type { Message } from "@/lib/types/chat";
@@ -734,6 +736,29 @@ export function ChatPanel({
   const [messagesByChatId, setMessagesByChatId] = useState<Record<string, Message[]>>({});
   const [isHydratingMessages, setIsHydratingMessages] = useState(false);
   const [input, setInput] = useState("");
+  const draft=useSavedState(`chat:${chatId}`);
+  const saveDraft=draft.save;
+  const [draftReady,setDraftReady]=useState(false);
+  useEffect(()=>{const compose=(event:Event)=>{const value=(event as CustomEvent<{chatId:string;text:string}>).detail;if(value.chatId===chatId){setInput(value.text);requestAnimationFrame(()=>textareaRef.current?.focus());}};window.addEventListener("katie:compose-correction",compose);return()=>window.removeEventListener("katie:compose-correction",compose);},[chatId]);
+  const draftInitialized=useRef(false);
+  useEffect(()=>{
+    if(draftInitialized.current||!draft.state)return;
+    draftInitialized.current=true;
+    let local="";try{local=window.sessionStorage.getItem(`katie.draft.v1.${chatId}`)??"";}catch{}
+    setInput(local||draft.state.value.draft||"");setDraftReady(true);
+  },[chatId,draft.state]);
+  useEffect(()=>{
+    if(!draft.error||draftInitialized.current)return;
+    draftInitialized.current=true;
+    try{setInput(window.sessionStorage.getItem(`katie.draft.v1.${chatId}`)??"");}catch{}
+    setDraftReady(true);
+  },[chatId,draft.error]);
+  useEffect(()=>{if(!draftReady)return;try{window.sessionStorage.setItem(`katie.draft.v1.${chatId}`,input);}catch{}},[input,chatId,draftReady]);
+  useEffect(()=>{
+    if(!draftReady||!draft.state||draft.state.value.draft===input||draft.error)return;
+    const timer=window.setTimeout(()=>{void saveDraft({draft:input});},700);
+    return()=>window.clearTimeout(timer);
+  },[input,draftReady,draft.state,saveDraft,draft.error]);
   const [loading, setLoading] = useState(false);
   const [meta, setMeta] = useState<{ provider: string; model: string } | null>(
     null,
@@ -748,6 +773,10 @@ export function ChatPanel({
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
   const [uploadingFiles, setUploadingFiles] = useState(false);
   const [fileReferences, setFileReferences] = useState<FileReference[]>([]);
+  const [attachmentsReady,setAttachmentsReady]=useState(false);
+  const [attachmentSaveError,setAttachmentSaveError]=useState(false);
+  useEffect(()=>{let active=true;readPendingAttachments(chatId).then(value=>{if(!active)return;if(value){setSelectedImages(value.images);setSelectedImageFiles(value.imageFiles);setSelectedVideos(value.videos);setSelectedFiles(value.files);setFileReferences(value.references);}setAttachmentsReady(true);}).catch(()=>{if(active)setAttachmentsReady(true);});return()=>{active=false;};},[chatId]);
+  useEffect(()=>{if(!attachmentsReady)return;void savePendingAttachments(chatId,{images:selectedImages,imageFiles:selectedImageFiles,videos:selectedVideos,files:selectedFiles,references:fileReferences}).then(()=>setAttachmentSaveError(false)).catch(()=>setAttachmentSaveError(true));},[chatId,attachmentsReady,selectedImages,selectedImageFiles,selectedVideos,selectedFiles,fileReferences]);
   const [statusMessage, setStatusMessage] = useState("");
   const [failoverNotice, setFailoverNotice] = useState("");
   const [collaborationActivity, setCollaborationActivity] = useState<CollaborationActivityItem[]>([]);
@@ -785,7 +814,7 @@ export function ChatPanel({
 
   const canSend = useMemo(
     () =>
-      !managedAgentId && hasValidChatSelection &&
+      !managedAgentId && draftReady && attachmentsReady && hasValidChatSelection &&
       (input.trim().length > 0 ||
         selectedImages.length > 0 ||
         selectedVideos.length > 0 ||
@@ -803,6 +832,8 @@ export function ChatPanel({
       fileReferences.length,
       hasValidChatSelection,
       managedAgentId,
+      draftReady,
+      attachmentsReady,
     ],
   );
 
@@ -950,6 +981,8 @@ export function ChatPanel({
       window.removeEventListener("pageshow", handlePageShow);
     };
   }, [chatId]);
+
+  useEffect(()=>{if(isHydratingMessages)return;const frame=requestAnimationFrame(()=>{try{const saved=window.sessionStorage.getItem(`katie.scroll.v1.${chatId}`);if(saved&&messagesContainerRef.current)messagesContainerRef.current.scrollTop=Number(saved);}catch{}});return()=>cancelAnimationFrame(frame);},[chatId,isHydratingMessages]);
 
   const messagesByChatIdRef = useRef<Record<string, Message[]>>({});
 
@@ -1383,7 +1416,7 @@ export function ChatPanel({
     }
     if (!hasValidChatSelection) {
       setStatusMessage(
-        "Select an actor and chat before sending a message.",
+        "Open a conversation before sending a message.",
       );
       return;
     }
@@ -2331,7 +2364,7 @@ export function ChatPanel({
 
   return (
     <main className="relative flex h-full min-h-0 w-full flex-1 flex-col overflow-hidden bg-gradient-to-b from-white/[0.02] via-transparent to-black/10">
-      <header className="shrink-0 border-b border-white/10 pb-2 pl-16 pr-3 pt-[calc(env(safe-area-inset-top)+0.55rem)] sm:px-6 sm:py-3">
+      <header className="shrink-0 border-b border-white/10 pb-2 pl-4 pr-3 pt-[calc(env(safe-area-inset-top)+0.55rem)] sm:px-6 sm:py-3">
         <div className="flex flex-col gap-2.5">
           <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
             <div className="flex min-w-0 items-center gap-2.5">
@@ -2340,37 +2373,23 @@ export function ChatPanel({
               </div>
               <div className="min-w-0">
                 <p className="hidden text-[10px] font-semibold uppercase tracking-[0.24em] text-zinc-500 sm:block">
-                  Master Router
+                  With {activeActorName || "Katie"}
                 </p>
                 <div className="sm:hidden">
                   <h2 className="truncate text-[15px] font-semibold tracking-tight text-white">
-                    {activeActorName || "Katie"}
+                    {activeChatTitle || "New conversation"}
                   </h2>
                   <p className="truncate text-[11px] text-zinc-500">
-                    {activeChatTitle || "New chat"}
+                    With {activeActorName || "Katie"}
                   </p>
                 </div>
                 <h2 className="hidden truncate text-xl font-semibold tracking-tight text-white sm:block">
-                  Katie - AI Command Center
+                  {activeChatTitle || "New conversation"}
                 </h2>
               </div>
             </div>
 
             <div className="flex flex-wrap items-center gap-2 sm:justify-end">
-              <p className="hidden max-w-full items-center gap-2 rounded-full border border-emerald-400/30 bg-emerald-500/10 px-2.5 py-1 text-[11px] text-emerald-100 sm:inline-flex">
-                <span className="h-1.5 w-1.5 flex-none rounded-full bg-emerald-300 shadow-[0_0_10px_rgba(110,231,183,0.8)]" />
-                <span className="truncate">
-                  Active:
-                  {" "}
-                  <span className="font-semibold text-white">
-                    {activeActorName || "No actor"}
-                  </span>
-                  {" · "}
-                  <span className="font-semibold text-white">
-                    {activeChatTitle || "No chat"}
-                  </span>
-                </span>
-              </p>
               {meta ? (
                 <p className="hidden max-w-full items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-2.5 py-1 text-[11px] text-zinc-400 sm:inline-flex">
                   <span className="h-1.5 w-1.5 flex-none rounded-full bg-emerald-400 shadow-[0_0_10px_rgba(52,211,153,0.7)]" />
@@ -2520,11 +2539,11 @@ export function ChatPanel({
               <button
                 type="button"
                 onClick={() => setShowModelControls((current) => !current)}
-                className="inline-flex h-9 items-center justify-center rounded-xl border border-white/10 bg-white/[0.05] px-3 text-[11px] font-medium text-zinc-200 transition active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 md:hidden"
+                className="inline-flex h-9 items-center justify-center rounded-xl border border-white/10 bg-white/[0.05] px-3 text-[11px] font-medium text-zinc-200 transition active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
                 aria-expanded={showModelControls}
                 aria-controls="model-controls"
               >
-                {showModelControls ? "Hide models" : "Models"}
+                {showModelControls ? "Close model settings" : selectedOverride ? "Model override active" : "Automatic · settings"}
               </button>
             </div>
           </div>
@@ -2533,11 +2552,11 @@ export function ChatPanel({
             id="model-controls"
             className={[
               "grid gap-2 overflow-hidden transition-all",
-              showModelControls ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0 md:grid-rows-[1fr] md:opacity-100",
+              showModelControls ? "grid-rows-[1fr] opacity-100" : "hidden",
             ].join(" ")}
           >
             <div className="min-h-0">
-              <div className="max-h-[45dvh] overflow-y-auto rounded-xl bg-black/10 p-1.5 md:flex md:max-h-none md:flex-row md:flex-nowrap md:items-center md:gap-2 md:overflow-visible md:bg-transparent md:p-0">
+              <div className="max-h-[45dvh] overflow-y-auto rounded-xl bg-black/10 p-1.5 md:flex md:max-h-none md:flex-row md:flex-wrap md:items-center md:gap-2 md:overflow-auto md:bg-transparent md:p-0">
                 <label
                   className="flex min-h-9 shrink-0 items-center gap-1.5 rounded-xl border border-white/10 bg-white/[0.035] px-2.5 py-1.5 text-[11px] text-zinc-300"
                   title="Show model selection explainer"
@@ -2587,7 +2606,7 @@ export function ChatPanel({
                         }}
                         className="min-w-0 flex-1 rounded-lg border border-white/10 bg-zinc-950/90 px-2 py-1.5 text-[11px] text-zinc-100 outline-none ring-emerald-500 transition focus:ring"
                       >
-                        <option value="">Master Router (Auto)</option>
+                        <option value="">Automatic</option>
                         {options.map((modelId) => (
                           <option key={modelId} value={modelId}>
                             {modelId}
@@ -2603,6 +2622,8 @@ export function ChatPanel({
         </div>
       </header>
 
+      {attachmentSaveError&&<p role="alert" className="px-5 text-xs text-amber-200">Attachments are retained for this session; browser storage could not save them for refresh.</p>}
+      {draftReady && <p role="status" className="shrink-0 px-5 py-1 text-xs text-zinc-500">{draft.error?"Draft retained in this browser; server save unavailable.":draft.saving?"Saving draft…":input&&draft.state?.value.draft===input?"Draft saved":""}</p>}
       {projectApproval?.chatId===chatId && !managedAgentId ? (
         <ProjectApprovalCard
           approval={projectApproval.approval}
@@ -2634,24 +2655,25 @@ export function ChatPanel({
 
       <section
         ref={messagesContainerRef}
+        onScroll={event=>{try{window.sessionStorage.setItem(`katie.scroll.v1.${chatId}`,String(event.currentTarget.scrollTop));}catch{}}}
         className="relative min-h-0 flex-1 space-y-3 overflow-y-auto px-3 py-3 pb-5 overscroll-contain sm:space-y-5 sm:px-6 sm:py-5 sm:pb-28"
       >
         {isHydratingMessages ? (
           <div className="max-w-2xl rounded-[28px] border border-white/10 bg-white/[0.035] p-6 shadow-[0_20px_60px_rgba(0,0,0,0.18)] backdrop-blur-sm">
             <p className="text-sm font-medium text-zinc-200">Loading saved thread…</p>
-            <p className="mt-2 text-sm leading-6 text-zinc-500">Rehydrating the full persisted transcript for this chat.</p>
+            <p className="mt-2 text-sm leading-6 text-zinc-500">Restoring this conversation.</p>
           </div>
         ) : messages.length === 0 ? (
           <div className="max-w-2xl rounded-[28px] border border-white/10 bg-white/[0.035] p-6 shadow-[0_20px_60px_rgba(0,0,0,0.18)] backdrop-blur-sm">
-            <p className="text-sm font-medium text-zinc-200">Ready for orchestration.</p>
+            <p className="text-sm font-medium text-zinc-200">What would you like to get done?</p>
             <p className="mt-2 text-sm leading-6 text-zinc-500">
-              Start a new message to invoke the master router.
+              Describe the outcome you need, or ask a question.
             </p>
           </div>
         ) : null}
         {messages.map((message) => (
           <div
-            key={message.id}
+            key={message.id} id={`message-${message.id}`}
             className={[
               "max-w-4xl overflow-hidden rounded-2xl border px-3 py-3 text-[15px] shadow-[0_14px_36px_rgba(0,0,0,0.16)] backdrop-blur-sm sm:w-full sm:rounded-[24px] sm:px-5 sm:py-4 sm:text-sm sm:shadow-[0_20px_60px_rgba(0,0,0,0.18)]",
               message.role === "user"
@@ -2888,7 +2910,7 @@ export function ChatPanel({
         </p>
         {!hasValidChatSelection ? (
           <p className="mb-3 rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-100">
-            Select an actor and chat to enable sending.
+            Open a conversation to send a message.
           </p>
         ) : null}
 
@@ -2976,7 +2998,7 @@ export function ChatPanel({
                 onChange={handleInputChange}
                 onKeyDown={handleKeyDown}
                 onPaste={handlePaste}
-                placeholder="Ask your actor something..."
+                placeholder={`Ask ${activeActorName || "Katie"}…`}
                 className="min-h-[44px] max-h-36 w-full resize-none overflow-y-auto rounded-xl border border-white/10 bg-zinc-950/80 px-3 py-2.5 text-[16px] leading-6 text-zinc-100 outline-none ring-emerald-500 placeholder:text-zinc-500 focus:ring sm:min-h-[48px] sm:max-h-48 sm:rounded-2xl sm:px-4 sm:py-3 sm:pr-14 sm:text-sm"
               />
               <div ref={emojiPickerRef} className="absolute bottom-2 right-2 block">

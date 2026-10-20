@@ -37,6 +37,12 @@ jobs:
       - name: Run strict CI gate (typecheck + all offline tests + build + smoke)
         run: npm run ci:gate
 
+      - name: Workspace navigation and continuity in Chromium
+        env:
+          KATIE_UI_START_SERVER: "1"
+          KATIE_UI_SERVER_MODE: start
+        run: node scripts/workspace-ui-acceptance.mjs
+
       - name: Real Chromium Signal Sprint acceptance
         env:
           SIGNAL_SPRINT_BROWSER_ACCEPTANCE: "1"

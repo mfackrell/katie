@@ -9,4 +9,6 @@ tsconfig.tsbuildinfo
 
 .test-dist/
 .website-test-dist/
-work/
+/work/
+
+supabase/.temp/

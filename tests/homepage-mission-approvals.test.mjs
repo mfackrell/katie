@@ -33,7 +33,7 @@ function route(missions,jobs,failedTable=null){
 }
 
 test('main Katie page displays the global coding approval surface',()=>{
- const page=readFileSync(resolve('app/page.tsx'),'utf8');
+ const page=readFileSync(resolve('components/workspace-screens.tsx'),'utf8');
  const card=readFileSync(resolve('components/pending-mission-approvals.tsx'),'utf8');
  assert.match(page,/<PendingMissionApprovals\s*\/>/);
  assert.match(card,/Approve coding for draft PR/);

@@ -12,7 +12,7 @@ type PendingApproval = {
   createdAt: string;
 };
 
-export function PendingMissionApprovals() {
+export function PendingMissionApprovals({missionId,missionIds}:{missionId?:string;missionIds?:string[]} = {}) {
   const [approvals,setApprovals] = useState<PendingApproval[]>([]);
   const [error,setError] = useState('');
   const [busy,setBusy] = useState<string | null>(null);
@@ -66,9 +66,10 @@ export function PendingMissionApprovals() {
     }finally{setBusy(null);}
   };
 
-  if(!approvals.length&&!error&&!notice)return null;
+  const visible=approvals.filter(a=>(!missionId||a.missionId===missionId)&&(!missionIds||missionIds.includes(a.missionId)));
+  if(!visible.length&&!error&&!notice)return null;
   return <section aria-label='Development approvals' className='mx-3 mt-2 shrink-0 space-y-3 sm:mx-6' data-testid='home-development-approvals'>
-    {approvals.map(approval=>(
+    {visible.map(approval=>(
       <article key={approval.jobId} className='rounded-xl border-2 border-amber-400 bg-amber-950/95 p-4 text-amber-50 shadow-lg'>
         <p className='text-xs font-bold uppercase tracking-wider text-amber-300'>Action required · Katie is waiting for your approval</p>
         <h2 className='mt-1 text-lg font-semibold'>Approve development work</h2>
@@ -83,7 +84,7 @@ export function PendingMissionApprovals() {
             className='min-h-11 rounded-lg bg-amber-400 px-5 py-2 font-bold text-zinc-950 hover:bg-amber-300 disabled:opacity-50'>
             {busy===approval.jobId?'Approving…':'Approve coding for draft PR'}
           </button>
-          <Link className='rounded-lg border border-amber-300/60 px-4 py-2 text-sm underline underline-offset-2' href={'/agents?mission='+encodeURIComponent(approval.missionId)}>Open full mission</Link>
+          <Link className='rounded-lg border border-amber-300/60 px-4 py-2 text-sm underline underline-offset-2' href={'/work/'+encodeURIComponent('mission:'+approval.missionId)}>Open full mission</Link>
         </div>
       </article>
     ))}
