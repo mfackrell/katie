@@ -175,6 +175,7 @@ test('pending approval is shown as an actionable scope card and a stale approval
  const {GET,POST}=modules({
   'next/server':{NextResponse:{json:(value,options)=>Response.json(value,options)}},
   '@/lib/data/persistence-store':{getChatById,getMessages},
+  '@/lib/executive/delivery':{hasPendingExecutiveDelivery:async()=>false},
   '@/lib/projects/store':{
    projectForChat:async()=>pending,
    projectRpc:async(name,args)=>{calls.push({name,args});return {...pending,status:'running',phase:'development'};}

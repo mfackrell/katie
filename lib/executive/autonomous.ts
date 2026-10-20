@@ -1,6 +1,7 @@
 import {createHash} from 'node:crypto';
 import {getSupabaseAdminClient} from '@/lib/data/supabase/admin';
 import {saveMessage} from '@/lib/data/persistence-store';
+import {delegationReplyId} from './delivery';
 
 // Only explicit, standalone financial-analysis objectives enter the pilot.
 // Registry capabilities are authoritative; never route software or external writes.
@@ -152,7 +153,7 @@ export async function reconcileExecutiveFinance(){
   const label=d.request_key.startsWith('exec-dev-')?'Development':d.request_key.startsWith('exec-specialist-task-')?'Specialist':'Finance';
   const output=succeeded?label+' completed and passed independent review.\n\n'+missionRow.result:label+' could not complete this assignment. '+(missionRow.detail??'Independent acceptance was not established.');
   try{
-   const replyId=missionId('executive-reply-'+d.id);
+   const replyId=delegationReplyId(d.id);
    const {data:existingReply,error:messageLookupError}=await db.from('messages').select('id').eq('id',replyId).maybeSingle();
    if(messageLookupError)throw messageLookupError;
    if(!existingReply)await saveMessage(d.chat_id,{id:replyId,role:'assistant',content:output+releaseNote});

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
 import { getChatById, getMessages } from '@/lib/data/persistence-store';
 import { projectForChat, projectRpc, type Project } from '@/lib/projects/store';
+import { hasPendingExecutiveDelivery } from '@/lib/executive/delivery';
 
 const projectIdentity = z.object({ actorId: z.string().uuid(), chatId: z.string().uuid() });
 const approvalInput = projectIdentity.extend({ approvalHash: z.string().regex(/^[a-f0-9]{64}$/) }).strict();
@@ -37,11 +38,14 @@ export async function GET(request: NextRequest) {
         const c = await getChatById(chatId);
         if (c?.actorId !== actorId) return NextResponse.json({ error: 'Project chat unavailable' }, { status: 404 });
         const p = await projectForChat(actorId, chatId);
+        const messages = await getMessages(chatId);
+        const executivePending = await hasPendingExecutiveDelivery(actorId, chatId, messages);
         return NextResponse.json({
             active: p?.status === 'running',
             status: p?.status ?? null,
             approval: approvalFor(p),
-            messages: await getMessages(chatId),
+            messages,
+            executivePending,
         }, { headers: { 'Cache-Control': 'no-store' } });
     } catch (error) {
         if (error instanceof z.ZodError) return NextResponse.json({ error: 'Invalid project identity' }, { status: 400 });

@@ -2,6 +2,7 @@ import {createHash} from 'node:crypto';
 import {getSupabaseAdminClient} from '@/lib/data/supabase/admin';
 import {saveMessage} from '@/lib/data/persistence-store';
 import {planExecutiveProvisioning} from './provisioning-service';
+import {factoryReplyId} from './delivery';
 
 type Intent={domain:string;slug:string;capability:string};
 type Agent={id:string;config:{name?:string;research?:boolean;development?:boolean}};
@@ -23,7 +24,7 @@ async function team(withDevelopment=false){
  return [lead.id,analyst.id,specialist.id];
 }
 async function reportOnce(chatId:string,key:string,message:string){
- const db=getSupabaseAdminClient(),id=stableUuid('reply:'+key);
+ const db=getSupabaseAdminClient(),id=factoryReplyId(key);
  const {data,error}=await db.from('messages').select('id').eq('id',id).maybeSingle<{id:string}>();
  if(error)throw Error('Executive delivery history unavailable');
  if(!data)await saveMessage(chatId,{id,role:'assistant',content:message});

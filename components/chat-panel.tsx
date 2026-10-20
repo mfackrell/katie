@@ -1024,21 +1024,22 @@ export function ChatPanel({
   const projectProgressSignature = useMemo(() => messages.filter(m=>m.role==='assistant'&&m.content.includes('<!-- katie-project-status:')).map(m=>m.id+':'+m.content.match(/<!-- katie-project-status:[a-f0-9-]+:([^ ]+) -->/)?.[1]).join('|'),[messages]);
   useEffect(()=>{
     if(!chatId||!actorId||loading)return;
-    let cancelled=false,inFlight=false;
+    let cancelled=false,inFlight=false,done=false;
     setProjectApproval(null);
     setProjectApprovalError(null);
     const refresh=async()=>{
-      if(cancelled||inFlight||document.visibilityState==='hidden')return;
+      if(cancelled||inFlight||done||document.visibilityState==='hidden')return;
       inFlight=true;
       try {
         const r=await fetch('/api/projects?chatId='+encodeURIComponent(chatId)+'&actorId='+encodeURIComponent(actorId),{cache:'no-store'});
         if(!r.ok)return;
-        const p=await r.json() as {active:boolean;status:string|null;approval:ProjectApproval|null;messages:Message[]};
+        const p=await r.json() as {active:boolean;status:string|null;executivePending?:boolean;approval:ProjectApproval|null;messages:Message[]};
         if(cancelled)return;
         setProjectApproval(p.approval?{chatId,approval:p.approval}:null);
         // Executive missions can deliver after the immediate chat reply, even
-        // without a software project (or after its completion). Keep the visible
-        // idle chat synchronized with persisted messages until it is left.
+        // without a software project (or after its completion). Stop only when
+        // its terminal reply is included in this persisted message snapshot.
+        done=(!p.status||['completed','stopped'].includes(p.status))&&!p.executivePending;
         if(!Array.isArray(p.messages))return;
         setMessages(current=>current.length===p.messages.length&&current.every((m,i)=>m.id===p.messages[i].id&&m.content===p.messages[i].content)?current:p.messages);
         setMessagesByChatId(current=>({...current,[chatId]:p.messages}));
@@ -1046,7 +1047,7 @@ export function ChatPanel({
       finally {inFlight=false;}
     };
     const timer=window.setInterval(()=>{void refresh();},15000);
-    const resume=()=>{void refresh();};
+    const resume=()=>{done=false;void refresh();};
     window.addEventListener('focus',resume);
     document.addEventListener('visibilitychange',resume);
     void refresh();

@@ -12,7 +12,7 @@ const end=source.indexOf('\n  async function approveProject',start);
 const effect=ts.transpileModule(source.slice(start,end),{
  compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}
 }).outputText;
-function chat({status=null,loading=false}={}){
+function chat({status=null,loading=false,executivePending=true}={}){
  let tick,cleanup,current=[],cache={},requests=0,pending;
  const receipt={id:'receipt',content:'Executive assigned operations to its independent agent team.'};
  const answer={id:'answer',content:'Specialist completed and passed independent review.'};
@@ -21,7 +21,7 @@ function chat({status=null,loading=false}={}){
   window:{setInterval(fn){tick=fn;return 1;},clearInterval(){tick=null;},addEventListener(){},removeEventListener(){}},
   useEffect(fn){cleanup=fn();},setProjectApproval(){},setProjectApprovalError(){},
   setMessages(fn){current=fn(current);},setMessagesByChatId(fn){cache=fn(cache);},
-  async fetch(){requests++;if(pending)await pending;return {ok:true,json:async()=>({status,approval:null,messages:requests===1?[receipt]:[receipt,answer]})};}
+  async fetch(){requests++;if(pending)await pending;return {ok:true,json:async()=>({status,executivePending:executivePending&&requests===1,approval:null,messages:requests===1?[receipt]:[receipt,answer]})};}
  };
  vm.runInNewContext(effect,context);
  const flush=()=>new Promise(resolve=>setImmediate(resolve));
@@ -37,12 +37,17 @@ for(const status of [null,'completed','stopped']){
   assert.deepEqual(Array.from(ui.messages,m=>m.id),['receipt','answer']);
   await ui.poll();
   assert.equal(ui.messages.filter(m=>m.id==='answer').length,1);
+  assert.equal(ui.requests,2,'stop polling once the terminal result is delivered');
   assert.deepEqual(ui.cache.chat,ui.messages);
  });
 }
 test('background chat synchronization stops while hidden or streaming',async()=>{
  const ui=chat();await ui.flush();ui.hide();await ui.poll();assert.equal(ui.requests,1);
  const streaming=chat({loading:true});await streaming.poll();assert.equal(streaming.requests,0);
+});
+test('ordinary idle chat without a project or pending Executive result stops polling',async()=>{
+ const ui=chat({executivePending:false});await ui.flush();await ui.poll();await ui.poll();
+ assert.equal(ui.requests,1);
 });
 test('leaving the chat discards an in-flight background response',async()=>{
  const ui=chat();await ui.flush();let release;
