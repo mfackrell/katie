@@ -103,7 +103,7 @@ export async function startExecutiveDevelopment(input:{actorId:string;chatId:str
 
 export async function reconcileExecutiveFinance(){
  const db=getSupabaseAdminClient();
- const {data:running,error}=await db.from('executive_delegations').select('id,actor_id,chat_id,mission_id,status,request_key,objective').in('status',['running','verified','cancelled']).order('updated_at',{ascending:false}).limit(100);
+ const {data:running,error}=await db.from('executive_delegations').select('id,actor_id,chat_id,mission_id,status,request_key,objective').in('status',['running','submitted','verified','cancelled']).order('updated_at',{ascending:false}).limit(100);
  if(error)throw Error('Executive reconciliation inventory unavailable');
  let verified=0,blocked=0;
  for(const d of (running??[]) as Array<{id:string;actor_id:string;chat_id:string;mission_id:string|null;status:string;request_key:string;objective:string}>){
@@ -111,15 +111,18 @@ export async function reconcileExecutiveFinance(){
   const {data:mission,error:missionError}=await db.from('agent_missions').select('status,result,detail').eq('id',d.mission_id).maybeSingle();
   const missionRow=mission as {status:string;result:string|null;detail:string|null}|null;
   if(missionError||!missionRow||!['completed','blocked','failed','stopped'].includes(missionRow.status))continue;
-  const {data:review}=await db.from('mission_assignments').select('job_key,result,status').eq('mission_id',d.mission_id).eq('role','review').eq('status','completed').limit(20);
+  const {data:review,error:reviewError}=await db.from('mission_assignments').select('job_key,result,status').eq('mission_id',d.mission_id).eq('role','review').eq('status','completed').limit(20);
+  if(reviewError)continue;
   const reviewRows=(review as Array<{job_key:string;result:{verdict?:string}|null}>|null)??[];
   const terminalReview=reviewRows.find(r=>r.job_key==='review_again')??reviewRows.find(r=>r.job_key==='review');
   const reviewPassed=terminalReview?.result?.verdict==='pass';
   const succeeded=missionRow.status==='completed'&&reviewPassed&&typeof missionRow.result==='string'&&missionRow.result.length>0;
   let releaseNote='';
-  if(d.status==='running'&&succeeded){
-   const {data:submitted,error:submitError}=await db.rpc<{status:string}>('transition_executive_delegation',{p_id:d.id,p_actor:d.actor_id,p_chat:d.chat_id,p_action:'submit',p_evidence:{deliverable:(missionRow.result??'').slice(0,16000),missionId:d.mission_id,independentReview:'mission-pass'}});
-   if(submitError||submitted?.status!=='submitted')continue;
+  if(['running','submitted'].includes(d.status)&&succeeded){
+   if(d.status==='running'){
+    const {data:submitted,error:submitError}=await db.rpc<{status:string}>('transition_executive_delegation',{p_id:d.id,p_actor:d.actor_id,p_chat:d.chat_id,p_action:'submit',p_evidence:{deliverable:(missionRow.result??'').slice(0,16000),missionId:d.mission_id,independentReview:'mission-pass'}});
+    if(submitError||submitted?.status!=='submitted')continue;
+   }
    const {data:accepted,error:acceptError}=await db.rpc<{status:string}>('transition_executive_delegation',{p_id:d.id,p_actor:d.actor_id,p_chat:d.chat_id,p_action:'verify',p_evidence:{independentReview:'pass',missionId:d.mission_id}});
    if(acceptError||accepted?.status!=='verified')continue;
    verified++;

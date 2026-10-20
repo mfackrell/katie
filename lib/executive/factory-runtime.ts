@@ -138,12 +138,33 @@ export async function reconcileSpecialistFactory(){
  const db=getSupabaseAdminClient();
  const {data,error}=await db.from('executive_provisioning_requests')
   .select('id,actor_id,chat_id,specialist_slug,capability,status,evidence,updated_at')
-  .eq('status','configured').order('updated_at',{ascending:false}).limit(100);
+  .in('status',['configured','validated','activated','blocked']).order('updated_at',{ascending:false}).limit(100);
  if(error)throw Error('Specialist acceptance inventory unavailable');
  let activated=0,blocked=0;
- for(const request of (data??[]) as Array<{id:string;actor_id:string;chat_id:string;specialist_slug:string;capability:string;status:string;evidence:{acceptanceMissionId?:string}|null}>){
-  const missionId=request.evidence?.acceptanceMissionId;
+ for(const request of (data??[]) as Array<{id:string;actor_id:string;chat_id:string;specialist_slug:string;capability:string;status:string;evidence:{acceptanceMissionId?:string;acceptanceEvidence?:Array<{missionId?:string}>;reason?:string}|null}>){
+  const missionId=request.evidence?.acceptanceMissionId??request.evidence?.acceptanceEvidence?.[0]?.missionId;
   if(!missionId)continue;
+  // Transitions and chat persistence are separate durable writes. A later cron
+  // must finish activation configuration/delivery after either write fails.
+  if(request.status==='activated'||request.status==='blocked'){
+   const {data:delivered,error:deliveryError}=await db.from('messages').select('id')
+    .eq('id',factoryReplyId(request.id)).maybeSingle();
+   if(deliveryError)throw Error('Factory delivery history unavailable');
+   if(delivered)continue;
+   if(request.status==='activated'){
+    const {error:upgradeError}=await db.from('executive_orchestrators').eq('actor_id',request.actor_id)
+     .eq('slug',request.specialist_slug).eq('status','active').update({autonomy:'delegated'});
+    if(upgradeError)throw Error('Specialist autonomous operation configuration failed');
+    await reportOnce(request.chat_id,request.id,'Executive activated '+request.specialist_slug+
+     ' after a completed, independently reviewed three-agent acceptance mission. You can assign it objectives directly. Mission '+missionId+'.');
+    activated++;
+   }else{
+    await reportOnce(request.chat_id,request.id,'Executive could not activate '+request.specialist_slug+
+     ': '+(request.evidence?.reason??'Independent acceptance failed')+'. Mission '+missionId+'.');
+    blocked++;
+   }
+   continue;
+  }
   const {data:mission,error:missionError}=await db.from('agent_missions')
    .select('status,result,detail').eq('id',missionId).maybeSingle<{status:string;result:string|null;detail:string|null}>();
   if(missionError||!mission||!['completed','blocked','stopped'].includes(mission.status))continue;
@@ -167,10 +188,12 @@ export async function reconcileSpecialistFactory(){
   const passed=mission.status==='completed'&&final?.result?.verdict==='pass'&&Boolean(mission.result?.trim())&&workerIds.size>=2&&demonstrated;
   if(passed){
    const evidence={independentReview:'pass',acceptanceEvidence:[{kind:'mission',missionId,capability:request.capability,verifiedToolEvidence:true,result:(mission.result??'').slice(0,3500)}]};
-   const {data:validated,error:validationError}=await db.rpc('transition_executive_provisioning',{
-    p_id:request.id,p_actor:request.actor_id,p_chat:request.chat_id,p_action:'validate',p_evidence:evidence
-   });
-   if(validationError||!validated)continue;
+   if(request.status==='configured'){
+    const {data:validated,error:validationError}=await db.rpc('transition_executive_provisioning',{
+     p_id:request.id,p_actor:request.actor_id,p_chat:request.chat_id,p_action:'validate',p_evidence:evidence
+    });
+    if(validationError||!validated)continue;
+   }
    const {data:active,error:activationError}=await db.rpc('transition_executive_provisioning',{
     p_id:request.id,p_actor:request.actor_id,p_chat:request.chat_id,p_action:'activate',p_evidence:{independentReview:'pass'}
    });
