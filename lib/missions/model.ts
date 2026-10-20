@@ -57,7 +57,7 @@ export async function routedMissionText(claim:Claim,instruction:string,input:str
  if(!providers.length)throw Error('No configured model providers available for this mission');
  const purpose=claim.mission.project_kind+' / '+claim.job.role;
  const decision=await chooseProvider(purpose+'\n'+claim.mission.objective.slice(0,3600),
-  instruction.slice(0,3000),providers,{actorId:claim.mission.team[0]?.id});
+  instruction.slice(0,3000),providers);
  const choices=[{provider:decision.provider,modelId:decision.modelId},
    ...decision.fallbackChain.map(x=>({provider:x.provider,modelId:x.modelId}))];
  const dedup=new Set<string>();let lastError:unknown;
