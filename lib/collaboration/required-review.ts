@@ -148,13 +148,14 @@ export async function runRequiredDraftReview(input: {
     }
   };
   const unavailable = (notice: string) => {
-    // Keep review metadata outside the user's requested artifact. No draft is
-    // represented as approved unless the exact text was approved.
-    const note = `Independent review incomplete: ${notice}. The working draft remains in the review audit.`;
+    const text = audit.lastCandidate?.trim() || draft.trim();
     audit.status = "completed_with_review_notes";
-    audit.completionNote = note;
-    const text = "I prepared a draft, but independent review could not verify it. The draft has been retained for repair; I cannot present it as a completed, approved deliverable.";
+    audit.completionNote = "Independent review incomplete: " + notice;
+    audit.lastCandidate = text;
+    audit.lastCandidateHash = hash(text);
     audit.finalHash = hash(text);
+    // Deliver usable work. Verification status and defects remain in metadata,
+    // not appended to paste-ready source text.
     return { result: { ...input.draft, text }, audit };
   };
   input.onProgress?.("Establishing independent evidence and quality criteria before revealing the draft.");
@@ -316,17 +317,16 @@ export async function runRequiredDraftReview(input: {
           audit.finalHash = hash(pending.question);
           return { result: { ...input.draft, text: pending.question }, audit };
         }
-        // Preserve both the candidate and the exact review findings in the
-        // audit. Never append findings about earlier versions to revised prose.
         const latest = audit.reviews?.at(-1);
         const matching = latest?.answerHash === hash(candidate.text);
         audit.status = "completed_with_review_notes";
         audit.completionNote = matching
           ? "Latest candidate was reviewed but not approved: " + latest.review.findings
-          : "Final candidate has not been independently reviewed. The last review findings belong to an earlier version.";
-        const text = "The revised draft has not passed independent review. I have retained the draft and version-specific findings for further repair; it is not ready for submission.";
-        audit.finalHash = hash(text);
-        return { result: { ...candidate, text }, audit };
+          : "Final candidate not independently reviewed; earlier findings are version-specific.";
+        audit.lastCandidate = candidate.text;
+        audit.lastCandidateHash = hash(candidate.text);
+        audit.finalHash = hash(candidate.text);
+        return { result: candidate, audit };
       }
     } catch (error) {
       audit.attempts.push({ reviewer, phase, error: error instanceof Error ? error.message : String(error) });

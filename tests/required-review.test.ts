@@ -150,7 +150,7 @@ test("a persistently invalid task definition cannot approve an answer", async ()
   const result = await s.run();
   assert.ok(!s.phases.includes("review"));
   assert.equal(result.audit.status, "completed_with_review_notes");
-  assert.match(result.result.text, /independent review could not verify/i);
+  assert.equal(result.result.text, draft.text);
   assert.equal(result.audit.draft, draft.text);
   assert.equal(result.audit.pendingClarification, undefined);
   assert.equal(s.phases.filter(p => p === "contract").length, 2);
@@ -187,6 +187,7 @@ test("exhausted nonessential review returns the draft with transparent review no
   assert.equal(result.audit.status, "completed_with_review_notes");
   assert.equal(result.audit.pendingClarification, undefined);
   assert.equal(result.audit.lastCandidate, "Improved application draft 3.");
+  assert.equal(result.result.text, "Improved application draft 3.");
   assert.doesNotMatch(result.result.text, /Review note/);
   assert.doesNotMatch(result.result.text, /can you clarify this outstanding requirement/i);
   assert.equal(result.audit.reviews?.at(-1)?.review.verdict, "revise");
@@ -218,7 +219,7 @@ test("same-model reviewer and expired budgets cannot claim independent review", 
   const s = setup();
   const same = await runRequiredDraftReview({ requestId: "same", draft, params, leadProvider: s.lead, deadlineMs: deadline(), selectHelper: async () => ({ provider: s.lead, modelId: "lead" }) });
   assert.equal(same.audit.status, "completed_with_review_notes");
-  assert.match(same.result.text, /independent review could not verify/i);
+  assert.equal(same.result.text, draft.text);
   const expired = await runRequiredDraftReview({ requestId: "expired", draft, params, leadProvider: s.lead, deadlineMs: Date.now() - 1, selectHelper: async () => { throw new Error("Must not call"); } });
   assert.equal(expired.audit.attempts.length, 0);
   assert.equal(expired.audit.status, "completed_with_review_notes");
@@ -256,7 +257,7 @@ test("unavailable reviewer returns transparently unverified draft without asking
   const s = setup();
   const result = await runRequiredDraftReview({ requestId: "no-reviewer", draft, params, leadProvider: s.lead, deadlineMs: deadline(), selectHelper: async () => null });
   assert.equal(result.audit.status, "completed_with_review_notes");
-  assert.match(result.result.text, /independent review could not verify/i);
+  assert.equal(result.result.text, draft.text);
   assert.equal(result.audit.draft, draft.text);
   assert.equal(result.audit.pendingClarification, undefined);
   assert.match(result.audit.completionNote ?? "", /review incomplete/i);
@@ -321,7 +322,7 @@ test("bounded validation falls back before comparing after two material rejectio
   assert.equal(result.audit.status,"completed_with_review_notes");
   assert.equal(result.audit.contractFindings?.length,2);
   assert.equal(result.audit.reviews,undefined);
-  assert.match(result.result.text,/independent review could not verify/i);
+  assert.equal(result.result.text,draft.text);
   assert.equal(result.audit.draft, draft.text);
   assert.equal(result.audit.pendingClarification,undefined);
 });
@@ -921,9 +922,10 @@ test("rejected final draft stays in audit with findings bound to its hash, never
   assert.equal(result.audit.reviews?.at(-1)?.answerHash, result.audit.lastCandidateHash);
   assert.equal(result.audit.reviews?.at(-1)?.review.verdict, "revise");
   assert.match(result.audit.completionNote ?? "", /not approved/i);
-  assert.doesNotMatch(result.result.text, /Final revised draft C|Remove the unsupported claim|Review note/);
-  assert.match(result.result.text, /not ready for submission/i);
-  assert.notEqual(result.audit.finalHash, result.audit.lastCandidateHash);
+  assert.equal(result.result.text, "Final revised draft C.");
+  assert.doesNotMatch(result.result.text, /Remove the unsupported claim|Review note/);
+  assert.equal(result.audit.status, "completed_with_review_notes");
+  assert.equal(result.audit.finalHash, result.audit.lastCandidateHash);
 });
 
 
