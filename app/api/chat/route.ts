@@ -1021,7 +1021,8 @@ async function executeChat(request: NextRequest) {
         .eq("actor_id", actorId).eq("chat_id", chatId)
         .order("created_at", { ascending: false }).limit(30);
       if (draftError) throw new Error("Unable to retrieve saved drafts: " + draftError.message);
-      const saved = (recentAudits ?? []).find(row => {
+      const rows = (recentAudits ?? []) as Array<{ request_id: string; review_audit: { draft?: string; lastCandidate?: string; status?: string } | null }>;
+      const saved = rows.find(row => {
         const audit = row.review_audit as { draft?: string; lastCandidate?: string } | null;
         return Boolean(audit?.lastCandidate?.trim() || audit?.draft?.trim());
       });
