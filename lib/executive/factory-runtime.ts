@@ -58,10 +58,11 @@ export async function startSpecialistFactory(input:{actorId:string;chatId:string
  // The acceptance test is a real mission: not an activation assertion or a code generation promise.
  const agentIds=await team();
  const missionId=stableUuid('accept:'+key);
- const objective='SPECIALIST FACTORY ACCEPTANCE — '+requirement.proposedTitle+'. '+ 
-  'Use the three independently assigned saved agents to deliver a concrete '+intent.domain+
-  ' operations playbook for an example business situation. Include an independently researched perspective, a separate operating analysis, clear responsibilities, measurable completion criteria and an actionable decision. '+
-  'Treat external facts as unverified until supported by evidence. This acceptance proves the reusable mission adapter can do actual work; it does not create new external tool permissions.';
+ const objective='SPECIALIST FACTORY ACCEPTANCE — '+requirement.proposedTitle+'. '+
+  'Use this bounded, hypothetical '+intent.domain+' case only: a service team receives 20 requests per day, can handle 30 per day, reopens 4 requests per 100 completed, and targets a one-day turnaround. '+
+  'Have the saved lead coordinate at least TWO distinct substantive workers on independent calculations, capacity/quality risks and a practical operating response. No external source lookup is required; identify the case numbers as hypothetical. '+
+  'Compose a single decision memo under 450 words with the arithmetic, distinct roles, an actionable improvement and measurable acceptance criteria. Independently review the final memo against the full objective. '+
+  'This validates the existing read-only mission adapter and review workflow; it does not prove or grant external integrations or specialized tools.';
  const {error:createError}=await db.rpc('create_mission',{
   p_id:missionId,p_objective:objective,p_agents:agentIds,p_minutes:110,p_repository:null
  });
