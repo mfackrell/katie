@@ -5,7 +5,7 @@ import { readMission } from '@/lib/missions/store';
 import { readTask } from '@/lib/agents/store';
 import { developmentPreview, projectAcceptanceSchema, reconcileDevelopment, retryImmutableProjectVerification } from '@/lib/agents/development';
 import { parseJSON } from '@/lib/missions/types';
-import { validateProjectPlan } from './contract';
+import { validateProjectPlan, digest } from './contract';
 import {gameAssessmentEvidence} from './game-evidence';
 import { projectRpc, projectRuns, milestoneEvidence, acceptanceBinding, getDevelopmentProjectContext, type Project } from './store';
 export async function baseline(p: Project) { if (!p.repository_id)
@@ -234,8 +234,34 @@ async function advance(p: Project) {
         const stage = p.spec.milestones[p.milestone_index];
         if (!stage)
             throw Error('Approved milestone missing');
-        if(game)projectEvidence={gameContract:p.spec.game};
-        objective = bounded(`${source}\n\nAPPROVED SPECIFICATION:\n${JSON.stringify({ summary: p.spec.summary, requirements: p.spec.requirements, allowedPaths: p.spec.allowedPaths })}\n\nCURRENT CODING MILESTONE ${p.milestone_index + 1}/${p.spec.milestones.length}:\n${stage.title}\n${stage.instruction}\n\nAPPROVED BROWSER CONTRACT:\n${JSON.stringify(stage.contract)}\n\nPREVIOUS VERIFIED HEAD: ${p.verified_sha ?? p.baseline_sha}. The server supplies the exact immutable starting commit. Preserve previous increments and implement this stage completely.\n\nUnresolved findings: ${p.detail ?? 'None.'}\nDo not merge, publish production, change dependencies/secrets/services, or touch files outside the approved paths. Deliver a draft PR through the existing independent test/review/browser pipeline. This is milestone completion, not a claim that later stages are done.`);
+        if(game){
+            // The approved game and browser contract already have durable,
+            // server-validated homes. Never repeat the entire browser step
+            // matrix inside the 12 KB mission objective: large but valid game
+            // contracts previously blocked the transition into development.
+            // Native coding loads the exact saved approved browser contract
+            // from project_runs.binding, independently of model-authored text.
+            projectEvidence={
+                gameContract:p.spec.game,
+                approvedMilestone:{
+                    index:p.milestone_index,
+                    total:p.spec.milestones.length,
+                    title:stage.title,
+                    instruction:stage.instruction,
+                    requirements:p.spec.requirements,
+                    allowedPaths:p.spec.allowedPaths,
+                    browserContractHash:digest(stage.contract),
+                    browserScenarioNames:stage.contract.scenarios.map(s=>s.name),
+                    browserContractSource:'server-owned project_runs.binding.contract',
+                    previousVerifiedHead:p.verified_sha??p.baseline_sha,
+                    unresolvedFindings:p.detail??null
+                },
+                approvedScopeHash:p.approved_hash
+            };
+            objective=bounded(`${source}\n\nAPPROVED DEVELOPMENT MILESTONE ${p.milestone_index+1}/${p.spec.milestones.length}. The complete approved requirements, implementation instructions, narrow paths, verified base SHA, original game rules, and scenario names are saved in projectEvidence.approvedMilestone and projectEvidence.gameContract. The EXACT approved phase-specific browser contract, including every expected assertion and step, is bound by the trusted controller at project_runs.binding.contract for this development job. Follow these authoritative saved records; do not invent rules, skip scenarios, or take a previous mission as proof of this milestone.\nDo not merge, publish production, change dependencies/secrets/services, or touch files outside approved paths. Deliver a tested, independently reviewed draft PR with immutable commit and bound browser/model verification. Do not claim later stages are complete.`);
+        }else{
+            objective = bounded(`${source}\n\nAPPROVED SPECIFICATION:\n${JSON.stringify({ summary: p.spec.summary, requirements: p.spec.requirements, allowedPaths: p.spec.allowedPaths })}\n\nCURRENT CODING MILESTONE ${p.milestone_index + 1}/${p.spec.milestones.length}:\n${stage.title}\n${stage.instruction}\n\nAPPROVED BROWSER CONTRACT:\n${JSON.stringify(stage.contract)}\n\nPREVIOUS VERIFIED HEAD: ${p.verified_sha ?? p.baseline_sha}. The server supplies the exact immutable starting commit. Preserve previous increments and implement this stage completely.\n\nUnresolved findings: ${p.detail ?? 'None.'}\nDo not merge, publish production, change dependencies/secrets/services, or touch files outside the approved paths. Deliver a draft PR through the existing independent test/review/browser pipeline. This is milestone completion, not a claim that later stages are done.`);
+        }
     }
     else if (p.phase === 'assessment') {
         const final = [...evidence].reverse().find(e => e.phase === 'development');
