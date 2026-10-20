@@ -18,7 +18,7 @@ test('Executive chat must never fall back to regular language-model work',()=>{
  const chat=read('app/api/chat/route.ts');
  assert.match(chat,/const executiveMode=executiveIdentity\.actor_kind==='executive'/);
  assert.match(chat,/handleExecutiveManagement\(/);
- assert.match(chat,/const projectReply = !executiveMode/);
+ assert.match(chat,/const projectReply = !executiveReply/);
  assert.match(chat,/const localKatieResponse = executiveMode \?/);
  const manager=read('lib/executive/management.ts');
  assert.match(manager,/executive_management_requests/);
