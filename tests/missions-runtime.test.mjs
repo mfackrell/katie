@@ -246,7 +246,32 @@ test('oversized game specification is rejected before review and repairs once ag
 test('game review sees a lossless shared-contract view and completion retains the full original specification',async()=>{
  const {gameFixture}=await import('./fixtures/game-project.mjs');const f=gameFixture();const full={name:'Counter',summary:'Complete game',requirements:['Increment with no invalid-state mutation'],allowedPaths:f.allowedPaths,milestones:[{title:'Complete',instruction:'Implement all requirements',contract:f.contract}],finalContract:f.contract,game:f.game};const text=JSON.stringify(full);
  const m=mission();m.project_kind='specification';m.project_evidence={projectProfile:'game'};const compose={...job(m,'compose','compose'),status:'completed',result:{text}},review=job(m,'review','review');let committed;
- const {executeClaim}=modules({'@/lib/missions/store':{readMission:async()=>({mission:m,jobs:[compose,review]}),rpc:async(_,a)=>{committed=a;return true;}}})('@/lib/missions/worker');await executeClaim({mission:m,job:review},async(_,instruction,input)=>{if(instruction.includes('KATIE_REQUIRED_DRAFT_REVIEW')){const evidence=JSON.parse(input.split('Evidence and candidate:\n')[1]),candidate=evidence.candidate.result;assert.equal(candidate.text,undefined);assert.equal(candidate.specification.milestones[0].contractRef,'finalContract');assert.equal(candidate.specification.game.acceptance.scenarios.find(s=>s.kind==='browser').stepsRef,'finalContract.scenarios[name=browser].steps');assert.deepEqual(candidate.specification.finalContract,full.finalContract);assert.deepEqual(candidate.specification.game.rules,full.game.rules);assert.deepEqual(candidate.specification.game.acceptance.scenarios.find(s=>s.kind==='model'),full.game.acceptance.scenarios.find(s=>s.kind==='model'));assert.match(candidate.fullSpecificationHash,/^[a-f0-9]{64}$/);assert.match(candidate.referenceNote,/Every original rule/);}return{text:JSON.stringify(instruction.includes('KATIE_REQUIRED_DRAFT_REVIEW')?verdict():assessment),sources:[],calculations:[],model:'fixture'};});assert.equal(committed.p_final,text);assert.equal(compose.result.text,text);assert.equal(committed.p_result.verdict,'pass');
+ const {executeClaim}=modules({'@/lib/missions/store':{readMission:async()=>({mission:m,jobs:[compose,review]}),rpc:async(_,a)=>{committed=a;return true;}}})('@/lib/missions/worker');await executeClaim({mission:m,job:review},async(_,instruction,input)=>{if(instruction.includes('KATIE_REQUIRED_DRAFT_REVIEW')){const evidence=JSON.parse(input.split('Evidence and candidate:\n')[1]),candidate=evidence.candidate.result;assert.match(instruction,/GAME REVIEW REFERENCE SEMANTICS/);assert.equal(candidate.text,undefined);assert.equal(candidate.specification.milestones[0].contractRef,'finalContract');assert.equal(candidate.specification.game.acceptance.scenarios.find(s=>s.kind==='browser').stepsRef,'finalContract.scenarios[name=browser].steps');assert.deepEqual(candidate.specification.finalContract,full.finalContract);assert.deepEqual(candidate.specification.game.rules,full.game.rules);assert.deepEqual(candidate.specification.game.acceptance.scenarios.find(s=>s.kind==='model'),full.game.acceptance.scenarios.find(s=>s.kind==='model'));assert.match(candidate.fullSpecificationHash,/^[a-f0-9]{64}$/);assert.match(candidate.referenceNote,/Every original rule/);}return{text:JSON.stringify(instruction.includes('KATIE_REQUIRED_DRAFT_REVIEW')?verdict():assessment),sources:[],calculations:[],model:'fixture'};});assert.equal(committed.p_final,text);assert.equal(compose.result.text,text);assert.equal(committed.p_result.verdict,'pass');
+});
+
+test('game second-pass review keeps findings but omits duplicated large prior-check matrices',async()=>{
+ const {gameFixture}=await import('./fixtures/game-project.mjs');const f=gameFixture();
+ const full={name:'Counter',summary:'Game',requirements:['Preserve original rules'],allowedPaths:f.allowedPaths,milestones:[{title:'Complete',instruction:'All rules',contract:f.contract}],finalContract:f.contract,game:f.game};
+ const m={...mission(),project_kind:'specification',project_evidence:{projectProfile:'game'},objective:'Review saved game with original requirements.'};
+ const compose={...job(m,'compose','compose'),status:'completed',result:{text:JSON.stringify(full)}};
+ const checks=Array.from({length:250},(_,i)=>({id:'req-'+i,passed:false,evidence:'Previous details '+String(i).repeat(250)}));
+ const previous={...job(m,'review','review'),status:'completed',result:{verdict:'changes_requested',findings:['Preserve the full browser scenarios'],checks}};
+ const revision={...job(m,'revise','revision'),status:'completed',result:{text:JSON.stringify(full)}};
+ const again=job(m,'review','review_again');let committed;
+ const {executeClaim}=modules({'@/lib/missions/store':{readMission:async()=>({mission:m,jobs:[compose,previous,revision,again]}),rpc:async(_,a)=>{committed=a;return true;}}})('@/lib/missions/worker');
+ await executeClaim({mission:m,job:again},async(_,instruction,input)=>{
+  if(instruction.includes('KATIE_REQUIRED_DRAFT_REVIEW')){
+   assert.ok(input.length<48000,'Repeated checks must not exhaust the independent review context');
+   const evidence=JSON.parse(input.split('Evidence and candidate:\n')[1]);
+   assert.equal(evidence.priorFindings[0].priorCheckCount,checks.length);
+   assert.equal(evidence.priorFindings[0].checks,undefined);
+   assert.deepEqual(Array.from(evidence.priorFindings[0].findings),['Preserve the full browser scenarios']);
+   assert.deepEqual(evidence.candidate.result.specification.finalContract,full.finalContract);
+  }
+  return{text:JSON.stringify(instruction.includes('KATIE_REQUIRED_DRAFT_REVIEW')?verdict():assessment),sources:[],calculations:[],model:'fixture'};
+ });
+ assert.equal(committed.p_mission_status,'completed');
+ assert.equal(committed.p_result.verdict,'pass');
 });
 
 test('validation repair receives the rejected draft and stops after the third attempt',async()=>{
