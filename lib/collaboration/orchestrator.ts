@@ -28,7 +28,12 @@ const DEFAULT_MAX_DEPTH = 2;
 const DEFAULT_MAX_CONTRIBUTION_CHARS = 12_000;
 const DEFAULT_MAX_TOTAL_CONTRIBUTION_CHARS = 48_000;
 const DEFAULT_PARTICIPANT_TIMEOUT_MS = 120_000;
-const PRO_MODEL_LEAD_TIMEOUT_MS = 300_000;
+const PRO_MODEL_LEAD_TIMEOUT_MS = (() => {
+  const raw = Number(process.env.KATIE_PRO_MODEL_TIMEOUT_MS);
+  return Number.isFinite(raw) && raw >= 120_000
+    ? Math.min(Math.floor(raw), 360_000)
+    : 300_000;
+})();
 const isDeepProModel = (modelId: string) => /^gpt-5\\.5-pro(?:-|$)/i.test(modelId);
 const DEFAULT_RESEARCH_TIMEOUT_MS = 180_000;
 const DEFAULT_MAX_TOTAL_DURATION_MS = 770_000;
@@ -250,7 +255,7 @@ export async function runAdaptiveCollaboration(
   const leadControlTimeoutMs = isDeepProModel(options.leadModelId)
     ? Math.max(participantTimeoutMs, PRO_MODEL_LEAD_TIMEOUT_MS)
     : participantTimeoutMs;
-  const minimumLeadControlMs = leadControlTimeoutMs;
+  const minimumLeadControlMs = participantTimeoutMs;
   const minimumFinalTimeMs = FINAL_SYNTHESIS_TIMEOUT_MS;
   const lead = participant(options.leadProvider, options.leadModelId);
   const trace: CollaborationTraceEvent[] = [];
