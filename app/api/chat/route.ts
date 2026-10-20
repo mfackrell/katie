@@ -1,8 +1,5 @@
 import {handleProjectChat} from '@/lib/projects/chat';
 import {executeExecutiveCommand} from '@/lib/executive/transport';
-import {handleExecutiveSpecialistIntake} from '@/lib/executive/intake';
-import {startSpecialistAssignment} from '@/lib/executive/factory-runtime';
-import {startExecutiveFinance,startExecutiveDevelopment} from '@/lib/executive/autonomous';
 import { maskPdfSourceNames, pdfPageTaskForSource } from "@/lib/uploads/pdf-inventory";
 import { pdfSourceOccurrence, selectFreshPdfSources, selectPdfEvidenceSource } from "@/lib/chat/pdf-source-selection";
 import { inspectSavedPdf } from "@/lib/uploads/stored-uploads";
