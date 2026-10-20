@@ -10,7 +10,8 @@ const a = "11111111-1111-4111-8111-111111111111",
   m = "44444444-4444-4444-8444-444444444444",
   p = "55555555-5555-4555-8555-555555555555";
 const actors = [
-  { id: a, name: "Katie", purpose: "Coordinate outcomes." },
+  { id: a, name: "Katie", purpose: "Answer ordinary requests.", actorKind: "standard" },
+  { id: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee", name: "Executive Orchestrator", purpose: "Manage agents.", actorKind: "executive" },
   {
     id: b,
     name: "Internal worker",
@@ -326,7 +327,7 @@ try {
     await page.getByText("Internal worker", { exact: true }).count(),
     0,
   );
-  await page.getByRole("heading", { name: "Executive Orchestrator · Katie", exact: true }).waitFor();
+  await page.getByRole("heading", { name: "Executive Orchestrator", exact: true }).waitFor();
   await page.getByRole("region", { name: "Orchestrator agents", exact: true }).waitFor();
   await page.getByRole("region", { name: "Single-task agents", exact: true }).waitFor();
   await page.getByLabel("Active chats for Operations", { exact: true }).selectOption(c);
