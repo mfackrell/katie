@@ -6,6 +6,7 @@ import vm from 'node:vm';
 const src=readFileSync('lib/executive/management.ts','utf8');
 const transpiled=ts.transpileModule(src,{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText;
 function scenario(kind='executive'){
+ const generalCalls=[];
  const writes=[];
  const db={
   from(table){
@@ -29,20 +30,20 @@ function scenario(kind='executive'){
   if(name==='./intake')return{handleExecutiveSpecialistIntake:async()=>null};
   if(name==='./factory-runtime')return{startSpecialistAssignment:async()=>null};
   if(name==='./autonomous')return{startExecutiveFinance:async()=>null,startExecutiveDevelopment:async()=>null};
+  if(name==='./general')return{startGeneralExecutiveManagement:async input=>{generalCalls.push(input);return 'Executive objective registered. Autonomous specialist missions started: 2.';}};
   throw Error('Unexpected dependency '+name);
  }});
- return{run:exports.handleExecutiveManagement,writes};
+ return{run:exports.handleExecutiveManagement,writes,generalCalls};
 }
 const input={actorId:'eo',chatId:'chat',requestId:'req-1',message:'# Executive Assignment: Comprehensive Independent Audit of Katie\n\nInvestigate the entire platform and create specialist autonomous workflows.'};
-test('unsupported real Executive assignment is durably BLOCKED, never answered or completed',async()=>{
+test('general Executive assignment enters autonomous planner, never ordinary chat',async()=>{
  const x=scenario();
  const answer=await x.run(input);
- assert.match(answer,/BLOCKED/);
- assert.match(answer,/NOT performed the assignment/);
+ assert.match(answer,/Autonomous specialist missions started: 2/);
  assert.equal(x.writes.filter(w=>w.kind==='insert').length,1);
- const recorded=x.writes.find(w=>w.kind==='update');
- assert.equal(recorded.row.status,'blocked');
- assert.equal(recorded.row.detail,answer);
+ assert.equal(x.generalCalls.length,1);
+ assert.equal(x.generalCalls[0].message,input.message);
+ assert.equal(x.writes.some(w=>w.kind==='update'),false); // Planner owns the plan transitions.
 });
 test('standard Katie actor cannot invoke the Executive management plane',async()=>{
  const x=scenario('standard');
