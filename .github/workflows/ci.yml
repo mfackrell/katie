@@ -37,6 +37,11 @@ jobs:
       - name: Run strict CI gate (typecheck + all offline tests + build + smoke)
         run: npm run ci:gate
 
+      - name: Real Chromium Signal Sprint acceptance
+        env:
+          SIGNAL_SPRINT_BROWSER_ACCEPTANCE: "1"
+        run: node --test tests/game-development/signal-sprint.test.mjs
+
   review-completion:
     runs-on: ubuntu-latest
     timeout-minutes: 10
