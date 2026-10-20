@@ -1,5 +1,5 @@
 import {handleProjectChat} from '@/lib/projects/chat';
-import {handleExecutiveManagement} from '@/lib/executive/management';
+import {executeExecutiveCommand} from '@/lib/executive/transport';
 import {handleExecutiveSpecialistIntake} from '@/lib/executive/intake';
 import {startSpecialistAssignment} from '@/lib/executive/factory-runtime';
 import {startExecutiveFinance,startExecutiveDevelopment} from '@/lib/executive/autonomous';
@@ -632,6 +632,12 @@ export async function POST(request: NextRequest) {
     let payload: RequestPayload;
     try { payload = await parseIncomingPayload(request.clone()); }
     catch { return executeChat(request); }
+    // A database-owned EO identity is the only way into management mode.
+    // Intercept BEFORE attachments, memory, model collaboration, and ordinary chat.
+    const {data:actorRole,error:actorRoleError}=await getSupabaseAdminClient()
+      .from('actors').select('actor_kind').eq('id',payload.actorId).maybeSingle<{actor_kind:string}>();
+    if(actorRoleError||!actorRole)return NextResponse.json({error:'Actor identity unavailable'},{status:503});
+    if(actorRole.actor_kind==='executive')return executeExecutiveCommand(payload,request);
     const task = await authorizeManagedChat(request, payload);
     if (task) {
       const claimed = await agentRpc<boolean>("claim_agent_execution", { p_id: task.id, p_request: task.request_id });
@@ -1036,20 +1042,12 @@ async function executeChat(request: NextRequest) {
       }
       console.info("[ReviewContinuity] Retrieved working draft without new review", { requestId, chatId, sourceRequestId: saved?.request_id ?? null });
     }
-    // Role is database-owned: never infer Executive privileges from an actor's
-    // name, instructions or prompt. EO work cannot enter general model chat.
-    const {data:executiveIdentity,error:executiveIdentityError}=await getSupabaseAdminClient()
-      .from('actors').select('actor_kind').eq('id',actorId).maybeSingle<{actor_kind:string}>();
-    if(executiveIdentityError||!executiveIdentity)throw Error('Actor role lookup unavailable');
-    const executiveMode=executiveIdentity.actor_kind==='executive'&&!currentAgentTask();
-    const executiveReply=executiveMode
-      ? await handleExecutiveManagement({actorId,chatId,message,requestId,activeRepoId}) : null;
-    const specialistReply=null;
-    const financeReply=null;
-    const developmentReply=null;
-    const projectReply = !executiveMode && !executiveReply && !specialistReply && !financeReply && !developmentReply && !currentAgentTask() && savedDraftReply === null && !newAttachments.length && !requestImages?.length
+    // EO commands are intercepted before executeChat; no management path exists
+    // in normal Katie model routing.
+    const executiveReply=null, specialistReply=null, financeReply=null, developmentReply=null;
+    const projectReply = !executiveReply && !specialistReply && !financeReply && !developmentReply && !currentAgentTask() && savedDraftReply === null && !newAttachments.length && !requestImages?.length
       ? await handleProjectChat({actorId,chatId,message,activeRepoId},requestId,attachmentHistory,requestTracked) : null;
-    const localKatieResponse = executiveMode ? {reason: 'executive' as const,text:executiveReply!} : savedDraftReply !== null ? { reason: "project" as const, text: savedDraftReply } : executiveReply ? {reason: "executive" as const,text:executiveReply}
+    const localKatieResponse = savedDraftReply !== null ? { reason: "project" as const, text: savedDraftReply } : executiveReply ? {reason: "executive" as const,text:executiveReply}
       : specialistReply ? {reason: "executive" as const,text:specialistReply}
       : financeReply ? {reason: "executive" as const,text:financeReply}
       : developmentReply ? {reason: "executive" as const,text:developmentReply}
