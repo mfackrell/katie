@@ -117,8 +117,12 @@ export async function runRequiredDraftReview(input: {
   const reviewDeadlineMs = Math.min(input.deadlineMs, Date.now() + 480_000);
   // Screenshot-backed verification needs time to inspect every supplied frame.
   const participantTimeoutMs = input.participantTimeoutMs ?? (clean.images?.length ? 90_000 : 45_000);
+  const requestedProTimeoutMs = Number(process.env.KATIE_PRO_MODEL_TIMEOUT_MS);
+  const proTimeoutMs = Number.isFinite(requestedProTimeoutMs) && requestedProTimeoutMs >= 120_000
+    ? Math.min(Math.floor(requestedProTimeoutMs), 360_000)
+    : 300_000;
   const reviewTimeoutFor = (modelId: string, fallback: number) =>
-    /^gpt-5\\.5-pro(?:-|$)/i.test(modelId) ? Math.max(fallback, 300_000) : fallback;
+    /^gpt-5\\.5-pro(?:-|$)/i.test(modelId) ? Math.max(fallback, proTimeoutMs) : fallback;
   const audit: ReviewAudit = { sourceTurns: baseline.turns, mode: "always", status: "unavailable", draft, draftHash: hash(draft), finalHash: hash(draft), attempts: [] };
   const prepare = (p: ChatGenerateParams, participant: CollaborationParticipant) => input.prepareParams?.(p, participant) ?? p;
   const unavailable = (notice: string) => {
