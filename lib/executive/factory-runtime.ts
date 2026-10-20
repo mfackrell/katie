@@ -2,6 +2,7 @@ import {createHash} from 'node:crypto';
 import {getSupabaseAdminClient} from '@/lib/data/supabase/admin';
 import {saveMessage} from '@/lib/data/persistence-store';
 import {planExecutiveProvisioning} from './provisioning-service';
+import {factoryReplyId} from './delivery';
 
 type Intent={domain:string;slug:string;capability:string};
 type Agent={id:string;config:{name?:string;research?:boolean;development?:boolean}};
@@ -23,10 +24,19 @@ async function team(withDevelopment=false){
  return [lead.id,analyst.id,specialist.id];
 }
 async function reportOnce(chatId:string,key:string,message:string){
- const db=getSupabaseAdminClient(),id=stableUuid('reply:'+key);
+ const db=getSupabaseAdminClient(),id=factoryReplyId(key);
  const {data,error}=await db.from('messages').select('id').eq('id',id).maybeSingle<{id:string}>();
  if(error)throw Error('Executive delivery history unavailable');
  if(!data)await saveMessage(chatId,{id,role:'assistant',content:message});
+}
+async function markFactoryDelivered(id:string){
+ const db=getSupabaseAdminClient();
+ const {data,error}=await db.from('executive_provisioning_requests').select('evidence').eq('id',id)
+  .maybeSingle<{evidence:Record<string,unknown>|null}>();
+ if(error||!data)throw Error('Factory delivery receipt unavailable');
+ const {error:saveError}=await db.from('executive_provisioning_requests').eq('id',id)
+  .in('status',['activated','blocked']).update({evidence:{...data.evidence,chatDeliveredAt:new Date().toISOString()}});
+ if(saveError)throw Error('Factory delivery receipt could not be saved');
 }
 /** Reuse the independently reviewed mission adapter. A domain label alone grants no new tools. */
 export async function startSpecialistFactory(input:{actorId:string;chatId:string;requestId:string;message:string;intent:Intent}){
@@ -135,17 +145,52 @@ export async function startSpecialistAssignment(input:{actorId:string;chatId:str
 
 export async function reconcileSpecialistFactory(){
  const db=getSupabaseAdminClient();
- const {data,error}=await db.from('executive_provisioning_requests')
-  .select('id,actor_id,chat_id,specialist_slug,capability,status,evidence,updated_at')
-  .eq('status','configured').order('updated_at',{ascending:false}).limit(100);
- if(error)throw Error('Specialist acceptance inventory unavailable');
+ const fields='id,actor_id,chat_id,specialist_slug,capability,status,evidence,updated_at';
+ const [active,delivery]=await Promise.all([
+  db.from('executive_provisioning_requests').select(fields).eq('route','configure').in('status',['configured','validated'])
+   .or('evidence->>acceptanceMissionId.not.is.null,evidence->acceptanceEvidence->0->>missionId.not.is.null')
+   .order('updated_at',{ascending:true}).limit(100),
+  db.from('executive_provisioning_requests').select(fields).eq('route','configure').in('status',['activated','blocked'])
+   .or('evidence->>acceptanceMissionId.not.is.null,evidence->acceptanceEvidence->0->>missionId.not.is.null')
+   .is('evidence->>chatDeliveredAt',null).order('updated_at',{ascending:true}).limit(100),
+ ]);
+ if(active.error||delivery.error)throw Error('Specialist acceptance inventory unavailable');
+ const data=[...(active.data??[]),...(delivery.data??[])];
  let activated=0,blocked=0;
- for(const request of (data??[]) as Array<{id:string;actor_id:string;chat_id:string;specialist_slug:string;capability:string;status:string;evidence:{acceptanceMissionId?:string}|null}>){
-  const missionId=request.evidence?.acceptanceMissionId;
+ for(const request of (data??[]) as Array<{id:string;actor_id:string;chat_id:string;specialist_slug:string;capability:string;status:string;evidence:{acceptanceMissionId?:string;acceptanceEvidence?:Array<{missionId?:string}>;reason?:string}|null}>){
+  const missionId=request.evidence?.acceptanceMissionId??request.evidence?.acceptanceEvidence?.[0]?.missionId;
   if(!missionId)continue;
+  // Transitions and chat persistence are separate durable writes. A later cron
+  // must finish activation configuration/delivery after either write fails.
+  if(request.status==='activated'||request.status==='blocked'){
+   const {data:delivered,error:deliveryError}=await db.from('messages').select('id')
+    .eq('id',factoryReplyId(request.id)).maybeSingle();
+   if(deliveryError)throw Error('Factory delivery history unavailable');
+   if(delivered){await markFactoryDelivered(request.id);continue;}
+   if(request.status==='activated'){
+    const {error:upgradeError}=await db.from('executive_orchestrators').eq('actor_id',request.actor_id)
+     .eq('slug',request.specialist_slug).eq('status','active').update({autonomy:'delegated'});
+    if(upgradeError)throw Error('Specialist autonomous operation configuration failed');
+    await reportOnce(request.chat_id,request.id,'Executive activated '+request.specialist_slug+
+     ' after a completed, independently reviewed three-agent acceptance mission. You can assign it objectives directly. Mission '+missionId+'.');
+    activated++;
+   }else{
+    await reportOnce(request.chat_id,request.id,'Executive could not activate '+request.specialist_slug+
+     ': '+(request.evidence?.reason??'Independent acceptance failed')+'. Mission '+missionId+'.');
+    blocked++;
+   }
+   await markFactoryDelivered(request.id);
+   continue;
+  }
   const {data:mission,error:missionError}=await db.from('agent_missions')
    .select('status,result,detail').eq('id',missionId).maybeSingle<{status:string;result:string|null;detail:string|null}>();
-  if(missionError||!mission||!['completed','blocked','stopped'].includes(mission.status))continue;
+  if(missionError||!mission)continue;
+  if(request.status==='configured'&&mission.status==='draft'){
+   const {error:startError}=await db.rpc('control_mission',{p_id:missionId,p_action:'start',p_job:null});
+   if(startError)throw Error('Linked specialist acceptance could not resume');
+   continue;
+  }
+  if(!['completed','blocked','stopped'].includes(mission.status))continue;
   const {data:reviews,error:reviewsError}=await db.from('mission_assignments')
    .select('job_key,status,result').eq('mission_id',missionId).eq('role','review')
    .eq('status','completed').limit(10).returns<{job_key:string;result:{verdict?:string}|null}>();
@@ -166,10 +211,12 @@ export async function reconcileSpecialistFactory(){
   const passed=mission.status==='completed'&&final?.result?.verdict==='pass'&&Boolean(mission.result?.trim())&&workerIds.size>=2&&demonstrated;
   if(passed){
    const evidence={independentReview:'pass',acceptanceEvidence:[{kind:'mission',missionId,capability:request.capability,verifiedToolEvidence:true,result:(mission.result??'').slice(0,3500)}]};
-   const {data:validated,error:validationError}=await db.rpc('transition_executive_provisioning',{
-    p_id:request.id,p_actor:request.actor_id,p_chat:request.chat_id,p_action:'validate',p_evidence:evidence
-   });
-   if(validationError||!validated)continue;
+   if(request.status==='configured'){
+    const {data:validated,error:validationError}=await db.rpc('transition_executive_provisioning',{
+     p_id:request.id,p_actor:request.actor_id,p_chat:request.chat_id,p_action:'validate',p_evidence:evidence
+    });
+    if(validationError||!validated)continue;
+   }
    const {data:active,error:activationError}=await db.rpc('transition_executive_provisioning',{
     p_id:request.id,p_actor:request.actor_id,p_chat:request.chat_id,p_action:'activate',p_evidence:{independentReview:'pass'}
    });
@@ -179,6 +226,7 @@ export async function reconcileSpecialistFactory(){
    if(upgradeError)throw Error('Specialist autonomous operation configuration failed');
    await reportOnce(request.chat_id,request.id,'Executive activated '+request.specialist_slug+
     ' after a completed, independently reviewed three-agent acceptance mission. You can assign it objectives directly. Mission '+missionId+'.');
+   await markFactoryDelivered(request.id);
    activated++;
   }else{
    const reason=!demonstrated?'The declared capability was not proven with a native calculator or live-web research receipt':
@@ -188,6 +236,7 @@ export async function reconcileSpecialistFactory(){
    if(blockError)throw Error('Specialist factory blocker could not be saved');
    await reportOnce(request.chat_id,request.id,'Executive could not activate '+request.specialist_slug+
     ': '+reason+'. Mission '+missionId+'.');
+   await markFactoryDelivered(request.id);
    blocked++;
   }
  }

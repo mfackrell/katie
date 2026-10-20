@@ -1033,10 +1033,13 @@ export function ChatPanel({
       try {
         const r=await fetch('/api/projects?chatId='+encodeURIComponent(chatId)+'&actorId='+encodeURIComponent(actorId),{cache:'no-store'});
         if(!r.ok)return;
-        const p=await r.json() as {active:boolean;status:string|null;approval:ProjectApproval|null;messages:Message[]};
+        const p=await r.json() as {active:boolean;status:string|null;executivePending?:boolean;approval:ProjectApproval|null;messages:Message[]};
         if(cancelled)return;
         setProjectApproval(p.approval?{chatId,approval:p.approval}:null);
-        done=!p.status||['completed','stopped'].includes(p.status);
+        // Executive missions can deliver after the immediate chat reply, even
+        // without a software project (or after its completion). Stop only when
+        // its terminal reply is included in this persisted message snapshot.
+        done=(!p.status||['completed','stopped'].includes(p.status))&&!p.executivePending;
         if(!Array.isArray(p.messages))return;
         setMessages(current=>current.length===p.messages.length&&current.every((m,i)=>m.id===p.messages[i].id&&m.content===p.messages[i].content)?current:p.messages);
         setMessagesByChatId(current=>({...current,[chatId]:p.messages}));

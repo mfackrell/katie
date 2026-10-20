@@ -38,6 +38,7 @@ function setup({registered=null,agentRows=null,provisionRoute=null}={}){
  vm.runInNewContext(js,{exports,require:name=>{
   if(name==='@/lib/data/supabase/admin')return {getSupabaseAdminClient:()=>db};
   if(name==='@/lib/data/persistence-store')return {saveMessage:async(_id,msg)=>saved.push(msg)};
+  if(name==='./delivery')return {factoryReplyId:id=>id};
   if(name==='./provisioning-service')return {planExecutiveProvisioning:async input=>{
    calls.push({kind:'plan',input});
    const route=provisionRoute??(registered?.status==='active'?'reuse':'configure');

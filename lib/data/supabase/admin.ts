@@ -2,13 +2,14 @@ declare const process: { env: Record<string, string | undefined> };
 
 type QueryResult<T> = Promise<{ data: T; error: { message: string } | null }>;
 
-type Filter = { type: "eq" | "in" | "lt"; field: string; value: unknown };
+type Filter = { type: "eq" | "in" | "lt" | "is" | "or"; field: string; value: unknown };
 type Sort = { field: string; ascending: boolean };
 
 class PostgrestQuery {
   private filters: Filter[] = [];
   private sorts: Sort[] = [];
   private rowLimit: number | null = null;
+  private rowOffset: number | null = null;
   private selectedColumns = "*";
 
   constructor(private readonly config: { url: string; key: string }, private readonly table: string) {}
@@ -33,6 +34,16 @@ class PostgrestQuery {
     return this;
   }
 
+  is(field: string, value: null | boolean) {
+    this.filters.push({ type: "is", field, value });
+    return this;
+  }
+
+  or(filters: string) {
+    this.filters.push({ type: "or", field: "or", value: filters });
+    return this;
+  }
+
   order(field: string, options: { ascending: boolean }) {
     this.sorts.push({ field, ascending: options.ascending });
     return this;
@@ -40,6 +51,12 @@ class PostgrestQuery {
 
   limit(value: number) {
     this.rowLimit = value;
+    return this;
+  }
+
+  range(from: number, to: number) {
+    this.rowOffset = from;
+    this.rowLimit = to - from + 1;
     return this;
   }
 
@@ -117,7 +134,9 @@ class PostgrestQuery {
     url.searchParams.set("select", selectOverride ?? this.selectedColumns);
 
     for (const filter of this.filters) {
-      if (filter.type === "eq" || filter.type === "lt") {
+      if (filter.type === "or") {
+        url.searchParams.set("or", `(${String(filter.value)})`);
+      } else if (filter.type === "eq" || filter.type === "lt" || filter.type === "is") {
         // URLSearchParams encodes once; pre-encoding leaves escaped timestamps
         // and other literal values in the filter received by PostgREST.
         url.searchParams.set(filter.field, `${filter.type}.${String(filter.value)}`);
@@ -136,6 +155,9 @@ class PostgrestQuery {
 
     if (this.rowLimit !== null) {
       url.searchParams.set("limit", String(this.rowLimit));
+    }
+    if (this.rowOffset !== null) {
+      url.searchParams.set("offset", String(this.rowOffset));
     }
 
     return url.toString();
