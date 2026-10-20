@@ -44,7 +44,7 @@ export function validateGameRules(spec) {
   for(const unknown of spec.unknowns){
     ok(object(unknown) && id(unknown.id) && !seenUnknowns.has(unknown.id),'unknowns need unique ids');
     seenUnknowns.add(unknown.id);
-    ok(label(unknown.question) && ['open','resolved'].includes(unknown.status) && typeof unknown.blocking==='boolean','unknown incomplete');
+    ok(label(unknown.question) && ['open','resolved'].includes(unknown.status) && typeof unknown.blocking==='boolean','unknown '+unknown.id+' incomplete: require question, status (open|resolved) and boolean blocking; description alone is not a question');
     refs(unknown.ruleIds,ruleIds,'unknown '+unknown.id+' ruleIds');
     if(unknown.status==='resolved')refs([unknown.decisionSourceId],sourceIds,'resolution source');
     if(unknown.status==='open' && unknown.blocking)unresolvedBlocking.push(unknown.id);
