@@ -117,8 +117,9 @@ export async function startSpecialistAssignment(input:{actorId:string;chatId:str
  const {data:existing}=await db.from('executive_delegations').select('id,status').eq('actor_id',input.actorId).eq('chat_id',input.chatId).eq('request_key',requestKey).maybeSingle<{id:string;status:string}>();
  if(existing)return 'Specialist assignment '+existing.id+' is already '+existing.status+'.';
  const coding=/\b(?:implement|code|develop|fix the code|modify repository|deploy|build an app|build a website)\b/i.test(intent.objective);
- if(coding&&!input.activeRepoId)return 'Select a connected repository to authorize this coding assignment.';
- const agents=await team(coding);
+ const repositoryTask=coding||/\b(?:repository|codebase|source code|github|pull request|commit history)\b/i.test(intent.objective);
+ if(repositoryTask&&!input.activeRepoId)return 'Select a verified connected repository for this specialist assignment.';
+ const agents=await team(repositoryTask);
  const missionId=stableUuid(requestKey),deadline=new Date(Date.now()+3*60*60000).toISOString();
  const {data:delegation,error:proposalError}=await db.rpc<{id:string}>('propose_executive_delegation',{
   p_actor:input.actorId,p_chat:input.chatId,p_slug:intent.slug,p_request:requestKey,
@@ -129,7 +130,7 @@ export async function startSpecialistAssignment(input:{actorId:string;chatId:str
  if(proposalError||!delegation?.id)throw Error('Specialist delegation failed');
  const {error:missionError}=await db.rpc('create_mission',{
   p_id:missionId,p_objective:intent.objective+'\nSpecialist: '+intent.slug+'; independently delegated worker tasks and final reviewed deliverable required.',
-  p_agents:agents,p_minutes:110,p_repository:coding?input.activeRepoId:null
+  p_agents:agents,p_minutes:110,p_repository:repositoryTask?input.activeRepoId:null
  });
  if(missionError)throw Error('Specialist mission creation failed: '+boundedError(missionError));
  const {error:linkError}=await db.from('executive_delegations').eq('id',delegation.id).eq('status','proposed').update({mission_id:missionId});
