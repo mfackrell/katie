@@ -1,4 +1,5 @@
 import {handleProjectChat} from '@/lib/projects/chat';
+import {handleExecutiveManagement} from '@/lib/executive/management';
 import {handleExecutiveSpecialistIntake} from '@/lib/executive/intake';
 import {startSpecialistAssignment} from '@/lib/executive/factory-runtime';
 import {startExecutiveFinance,startExecutiveDevelopment} from '@/lib/executive/autonomous';
@@ -1035,17 +1036,20 @@ async function executeChat(request: NextRequest) {
       }
       console.info("[ReviewContinuity] Retrieved working draft without new review", { requestId, chatId, sourceRequestId: saved?.request_id ?? null });
     }
-    const executiveReply = !currentAgentTask() && savedDraftReply === null && !newAttachments.length && !requestImages?.length
-      ? await handleExecutiveSpecialistIntake({actorId,chatId,message,requestId}) : null;
-    const specialistReply = !executiveReply && !currentAgentTask() && savedDraftReply === null && !newAttachments.length && !requestImages?.length
-      ? await startSpecialistAssignment({actorId,chatId,message,requestId,activeRepoId}) : null;
-    const financeReply = !executiveReply && !specialistReply && !currentAgentTask() && savedDraftReply === null && !newAttachments.length && !requestImages?.length
-      ? await startExecutiveFinance({actorId,chatId,message,requestId}) : null;
-    const developmentReply = !executiveReply && !specialistReply && !financeReply && !currentAgentTask() && savedDraftReply === null && !newAttachments.length && !requestImages?.length
-      ? await startExecutiveDevelopment({actorId,chatId,message,requestId,activeRepoId}) : null;
-    const projectReply = !executiveReply && !specialistReply && !financeReply && !developmentReply && !currentAgentTask() && savedDraftReply === null && !newAttachments.length && !requestImages?.length
+    // Role is database-owned: never infer Executive privileges from an actor's
+    // name, instructions or prompt. EO work cannot enter general model chat.
+    const {data:executiveIdentity,error:executiveIdentityError}=await getSupabaseAdminClient()
+      .from('actors').select('actor_kind').eq('id',actorId).maybeSingle<{actor_kind:string}>();
+    if(executiveIdentityError||!executiveIdentity)throw Error('Actor role lookup unavailable');
+    const executiveMode=executiveIdentity.actor_kind==='executive'&&!currentAgentTask();
+    const executiveReply=executiveMode
+      ? await handleExecutiveManagement({actorId,chatId,message,requestId,activeRepoId}) : null;
+    const specialistReply=null;
+    const financeReply=null;
+    const developmentReply=null;
+    const projectReply = !executiveMode && !executiveReply && !specialistReply && !financeReply && !developmentReply && !currentAgentTask() && savedDraftReply === null && !newAttachments.length && !requestImages?.length
       ? await handleProjectChat({actorId,chatId,message,activeRepoId},requestId,attachmentHistory,requestTracked) : null;
-    const localKatieResponse = savedDraftReply !== null ? { reason: "project" as const, text: savedDraftReply } : executiveReply ? {reason: "executive" as const,text:executiveReply}
+    const localKatieResponse = executiveMode ? {reason: 'executive' as const,text:executiveReply!} : savedDraftReply !== null ? { reason: "project" as const, text: savedDraftReply } : executiveReply ? {reason: "executive" as const,text:executiveReply}
       : specialistReply ? {reason: "executive" as const,text:specialistReply}
       : financeReply ? {reason: "executive" as const,text:financeReply}
       : developmentReply ? {reason: "executive" as const,text:developmentReply}
