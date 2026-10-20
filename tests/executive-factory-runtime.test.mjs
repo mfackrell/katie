@@ -60,6 +60,9 @@ test('Executive factory creates a real three-agent acceptance mission but does n
  assert.ok(make,'a real mission must be created');
  assert.deepEqual(Array.from(make.args.p_agents),['lead','analyst','researcher']);
  assert.equal(make.args.p_repository,null);
+ assert.match(make.args.p_objective,/spare capacity and reopen rate/);
+ assert.match(make.args.p_objective,/deterministic calculator/);
+ assert.ok(calls.some(c=>c.kind==='update'&&c.table==='agent_missions'&&c.value.token_allowance===95000));
  assert.ok(calls.some(c=>c.name==='control_mission'&&c.args.p_action==='start'));
  assert.ok(calls.some(c=>c.kind==='update'&&c.table==='executive_provisioning_requests'&&c.value.evidence.acceptanceMissionId));
  assert.equal(calls.some(c=>c.name==='transition_executive_provisioning'&&c.args.p_action==='activate'),false);
@@ -110,4 +113,23 @@ test('specialist assignment suppresses all later executive and project routers',
  for(const downstream of ['finance','development','project']){
   assert.match(route,new RegExp('const '+downstream+'Reply = !executiveReply && !specialistReply &&'));
  }
+});
+
+test('research capability requires real native web-search evidence in acceptance objective',async()=>{
+ const {factory,calls}=setup();
+ await factory.startSpecialistFactory({
+  actorId:'actor',chatId:'chat',requestId:'research-request',message:'Create a research orchestrator',
+  intent:{domain:'research',slug:'research',capability:'research_synthesis'}
+ });
+ const mission=calls.find(c=>c.name==='create_mission');
+ assert.match(mission.args.p_objective,/native LIVE public-web search/);
+ assert.match(mission.args.p_objective,/Never fabricate a URL/);
+});
+test('factory refuses unsupported accepted scenarios even if given a bad configure decision',async()=>{
+ const {factory,calls}=setup();
+ await assert.rejects(()=>factory.startSpecialistFactory({
+  actorId:'actor',chatId:'chat',requestId:'unknown-request',message:'Create an unsupported orchestrator',
+  intent:{domain:'unsupported',slug:'unsupported',capability:'unverified_coordination'}
+ }),/No independently verifiable mission acceptance scenario/);
+ assert.equal(calls.some(c=>c.name==='create_mission'),false);
 });
