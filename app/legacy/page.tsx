@@ -1,0 +1,699 @@
+"use client";
+
+import { useEffect, useMemo, useRef, useState } from "react";
+import { ActorFormModal } from "@/components/actor-form-modal";
+import { ChatPanel } from "@/components/chat-panel";
+import { PendingMissionApprovals } from "@/components/pending-mission-approvals";
+import { Sidebar } from "@/components/sidebar";
+import { beginInFlightRequest, endInFlightRequest } from "@/lib/chat/inflight-guards";
+import type { Actor, ChatThread, ConnectedRepo } from "@/lib/types/chat";
+
+type PendingProjectApproval = { actorId: string; chatId: string; chatTitle: string; projectName: string };
+
+type ModalState =
+  | { type: "primary" }
+  | {
+      type: "sub";
+      parentActor: Actor;
+    }
+  | null;
+
+const ACTIVE_ACTOR_STORAGE_KEY = "katie.activeActorId";
+const ACTIVE_CHAT_STORAGE_KEY = "katie.activeChatId";
+const ACTOR_CHAT_SELECTIONS_STORAGE_KEY = "katie.actorChatSelections";
+const ACTIVE_REPO_STORAGE_KEY = "katie.activeRepoId";
+const REPO_INJECTION_ENABLED_STORAGE_KEY = "katie.repoInjectionEnabled";
+
+function pickActiveActorId(actors: Actor[], preferredActorId: string | null): string {
+  if (preferredActorId && actors.some((actor) => actor.id === preferredActorId)) {
+    return preferredActorId;
+  }
+
+  return actors[0]?.id ?? "";
+}
+
+function pickActiveChatId(
+  chats: ChatThread[],
+  actorId: string,
+  preferredChatId: string | null,
+  actorChatSelections: Record<string, string>,
+): string {
+  const actorChats = chats.filter((chat) => chat.actorId === actorId);
+  const preferredIds = [preferredChatId, actorChatSelections[actorId]].filter(
+    (value): value is string => Boolean(value),
+  );
+
+  for (const candidateId of preferredIds) {
+    if (actorChats.some((chat) => chat.id === candidateId)) {
+      return candidateId;
+    }
+  }
+
+  return actorChats[0]?.id ?? "";
+}
+
+function pickNextActiveChatAfterDeletion(
+  chats: ChatThread[],
+  deletedChat: ChatThread,
+  actorChatSelections: Record<string, string>,
+): string {
+  const sameActorChatId = pickActiveChatId(chats, deletedChat.actorId, null, actorChatSelections);
+  if (sameActorChatId) {
+    return sameActorChatId;
+  }
+
+  const nextActorId = chats[0]?.actorId ?? "";
+  if (!nextActorId) {
+    return "";
+  }
+
+  return pickActiveChatId(chats, nextActorId, null, actorChatSelections);
+}
+
+export default function HomePage() {
+  const [actors, setActors] = useState<Actor[]>([]);
+  const [chats, setChats] = useState<ChatThread[]>([]);
+  const [pendingProjectApprovals, setPendingProjectApprovals] = useState<PendingProjectApproval[]>([]);
+  const [approvalDiscoveryError, setApprovalDiscoveryError] = useState(false);
+  const [activeActorId, setActiveActorId] = useState("");
+  const [activeChatId, setActiveChatId] = useState("");
+  const [actorChatSelections, setActorChatSelections] = useState<Record<string, string>>({});
+  const [connectedRepos, setConnectedRepos] = useState<ConnectedRepo[]>([]);
+  const [activeRepoId, setActiveRepoId] = useState("");
+  const [repoInjectionEnabled, setRepoInjectionEnabled] = useState(true);
+  const [modalState, setModalState] = useState<ModalState>(null);
+  const [hasLoadedPersistedState, setHasLoadedPersistedState] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [uiError, setUiError] = useState("");
+  const [creatingChatByActorId, setCreatingChatByActorId] = useState<Record<string, boolean>>({});
+  const creatingChatByActorIdRef = useRef(new Set<string>());
+  const creatingActorRef = useRef(false);
+
+  useEffect(() => {
+    async function fetchInitialData() {
+      try {
+        const [actorsResponse, chatsResponse, reposResponse] = await Promise.all([
+          fetch("/api/actors", { cache: "no-store" }),
+          fetch("/api/chats", { cache: "no-store" }),
+          fetch("/api/admin/repos", { cache: "no-store" }),
+        ]);
+
+        const actorsPayload = actorsResponse.ok
+          ? ((await actorsResponse.json()) as { actors?: Actor[] })
+          : { actors: [] };
+        const chatsPayload = chatsResponse.ok
+          ? ((await chatsResponse.json()) as { chats?: ChatThread[] })
+          : { chats: [] };
+        const reposPayload = reposResponse.ok
+          ? ((await reposResponse.json()) as {
+              repos?: Array<{ id: string; full_name: string; created_at: string }>;
+            })
+          : { repos: [] };
+
+        const persistedActors = actorsPayload.actors ?? [];
+        const persistedActorIds = new Set(persistedActors.map((actor) => actor.id));
+        const persistedChats = (chatsPayload.chats ?? []).filter((chat) =>
+          persistedActorIds.has(chat.actorId),
+        );
+        const storedActorId = window.localStorage.getItem(ACTIVE_ACTOR_STORAGE_KEY);
+        const storedChatId = window.localStorage.getItem(ACTIVE_CHAT_STORAGE_KEY);
+        const storedActorSelections = window.localStorage.getItem(
+          ACTOR_CHAT_SELECTIONS_STORAGE_KEY,
+        );
+        const storedRepoId = window.localStorage.getItem(ACTIVE_REPO_STORAGE_KEY);
+        const storedRepoInjectionEnabled = window.localStorage.getItem(
+          REPO_INJECTION_ENABLED_STORAGE_KEY,
+        );
+        const nextActorChatSelections = storedActorSelections
+          ? (JSON.parse(storedActorSelections) as Record<string, string>)
+          : {};
+        const validActorIds = new Set(persistedActors.map((actor) => actor.id));
+        const chatById = new Map(persistedChats.map((chat) => [chat.id, chat]));
+        const sanitizedActorChatSelections = Object.fromEntries(
+          Object.entries(nextActorChatSelections).filter(
+            ([actorId, chatId]) =>
+              validActorIds.has(actorId) &&
+              chatById.has(chatId) &&
+              chatById.get(chatId)?.actorId === actorId,
+          ),
+        );
+        const nextActiveActorId = pickActiveActorId(persistedActors, storedActorId);
+        const nextActiveChatId = pickActiveChatId(
+          persistedChats,
+          nextActiveActorId,
+          storedChatId,
+          sanitizedActorChatSelections,
+        );
+        const persistedRepos = (reposPayload.repos ?? []).map((repo) => ({
+          id: repo.id,
+          fullName: repo.full_name,
+          createdAt: repo.created_at,
+        }));
+        const nextActiveRepoId = persistedRepos.some((repo) => repo.id === storedRepoId)
+          ? (storedRepoId ?? "")
+          : persistedRepos[0]?.id ?? "";
+        const nextRepoInjectionEnabled = storedRepoInjectionEnabled !== "false";
+
+        setActors(persistedActors);
+        setChats(persistedChats);
+        setConnectedRepos(persistedRepos);
+        setActiveRepoId(nextActiveRepoId);
+        setRepoInjectionEnabled(nextRepoInjectionEnabled);
+        setActorChatSelections(sanitizedActorChatSelections);
+        setActiveActorId(nextActiveActorId);
+        setActiveChatId(nextActiveChatId);
+      } finally {
+        setHasLoadedPersistedState(true);
+      }
+    }
+
+    void fetchInitialData();
+  }, []);
+
+  useEffect(() => {
+    if (!hasLoadedPersistedState) return;
+    let cancelled = false;
+    let busy = false;
+    const refresh = async () => {
+      if (busy || cancelled || document.visibilityState === "hidden") return;
+      busy = true;
+      try {
+        const response = await fetch("/api/projects/pending", { cache: "no-store" });
+        if (!response.ok) throw Error("Pending approval lookup failed");
+        const payload = await response.json() as { approvals?: PendingProjectApproval[] };
+        if (!cancelled) {
+          setPendingProjectApprovals(payload.approvals ?? []);
+          setApprovalDiscoveryError(false);
+        }
+      } catch {
+        if (!cancelled) setApprovalDiscoveryError(true);
+      } finally { busy = false; }
+    };
+    const timer = window.setInterval(() => { void refresh(); }, 15000);
+    const focused = () => { void refresh(); };
+    window.addEventListener("focus", focused);
+    document.addEventListener("visibilitychange", focused);
+    void refresh();
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+      window.removeEventListener("focus", focused);
+      document.removeEventListener("visibilitychange", focused);
+    };
+  }, [hasLoadedPersistedState]);
+
+  useEffect(() => {
+    if (!hasLoadedPersistedState) {
+      return;
+    }
+
+    if (activeActorId) {
+      window.localStorage.setItem(ACTIVE_ACTOR_STORAGE_KEY, activeActorId);
+      return;
+    }
+
+    window.localStorage.removeItem(ACTIVE_ACTOR_STORAGE_KEY);
+  }, [activeActorId, hasLoadedPersistedState]);
+
+  useEffect(() => {
+    if (!hasLoadedPersistedState) {
+      return;
+    }
+
+    if (activeChatId) {
+      window.localStorage.setItem(ACTIVE_CHAT_STORAGE_KEY, activeChatId);
+      return;
+    }
+
+    window.localStorage.removeItem(ACTIVE_CHAT_STORAGE_KEY);
+  }, [activeChatId, hasLoadedPersistedState]);
+
+  useEffect(() => {
+    if (!hasLoadedPersistedState) {
+      return;
+    }
+
+    window.localStorage.setItem(
+      ACTOR_CHAT_SELECTIONS_STORAGE_KEY,
+      JSON.stringify(actorChatSelections),
+    );
+  }, [actorChatSelections, hasLoadedPersistedState]);
+
+  useEffect(() => {
+    if (!hasLoadedPersistedState) {
+      return;
+    }
+
+    if (activeRepoId) {
+      window.localStorage.setItem(ACTIVE_REPO_STORAGE_KEY, activeRepoId);
+      return;
+    }
+
+    window.localStorage.removeItem(ACTIVE_REPO_STORAGE_KEY);
+  }, [activeRepoId, hasLoadedPersistedState]);
+
+  useEffect(() => {
+    if (!hasLoadedPersistedState) {
+      return;
+    }
+
+    window.localStorage.setItem(
+      REPO_INJECTION_ENABLED_STORAGE_KEY,
+      repoInjectionEnabled ? "true" : "false",
+    );
+  }, [repoInjectionEnabled, hasLoadedPersistedState]);
+
+  useEffect(() => {
+    if (!hasLoadedPersistedState || actors.length === 0) {
+      if (hasLoadedPersistedState && actors.length === 0) {
+        setActorChatSelections({});
+        setActiveActorId("");
+        setActiveChatId("");
+      }
+      return;
+    }
+
+    if (!actors.some((actor) => actor.id === activeActorId)) {
+      const nextActorId = pickActiveActorId(actors, null);
+      setActiveActorId(nextActorId);
+      setActiveChatId(pickActiveChatId(chats, nextActorId, null, actorChatSelections));
+      return;
+    }
+
+    const nextChatId = pickActiveChatId(chats, activeActorId, activeChatId, actorChatSelections);
+    if (nextChatId !== activeChatId) {
+      setActiveChatId(nextChatId);
+    }
+
+    const validActorIds = new Set(actors.map((actor) => actor.id));
+    const validChatsById = new Map(
+      chats
+        .filter((chat) => validActorIds.has(chat.actorId))
+        .map((chat) => [chat.id, chat]),
+    );
+    const sanitizedSelections = Object.fromEntries(
+      Object.entries(actorChatSelections).filter(
+        ([actorId, chatId]) =>
+          validActorIds.has(actorId) &&
+          validChatsById.has(chatId) &&
+          validChatsById.get(chatId)?.actorId === actorId,
+      ),
+    );
+    if (Object.keys(sanitizedSelections).length !== Object.keys(actorChatSelections).length) {
+      setActorChatSelections(sanitizedSelections);
+    }
+
+    if (!connectedRepos.some((repo) => repo.id === activeRepoId)) {
+      setActiveRepoId(connectedRepos[0]?.id ?? "");
+    }
+  }, [
+    activeActorId,
+    activeChatId,
+    actorChatSelections,
+    activeRepoId,
+    actors,
+    chats,
+    connectedRepos,
+    hasLoadedPersistedState,
+  ]);
+
+  useEffect(() => {
+    if (!sidebarOpen) {
+      return;
+    }
+
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+
+    return () => {
+      document.body.style.overflow = previousOverflow;
+    };
+  }, [sidebarOpen]);
+
+  const filteredChats = useMemo(
+    () => chats.filter((chat) => actors.some((actor) => actor.id === chat.actorId)),
+    [actors, chats],
+  );
+  const activeActor = useMemo(
+    () => actors.find((actor) => actor.id === activeActorId) ?? null,
+    [actors, activeActorId],
+  );
+  const activeChat = useMemo(
+    () => chats.find((chat) => chat.id === activeChatId) ?? null,
+    [chats, activeChatId],
+  );
+
+  async function createChat(
+    actorId: string,
+    options?: { createStarterChat?: boolean; title?: string },
+  ) {
+    const normalizedActorId = actorId.trim();
+    if (!beginInFlightRequest(creatingChatByActorIdRef.current, normalizedActorId)) {
+      return;
+    }
+
+    setCreatingChatByActorId((current) => ({ ...current, [normalizedActorId]: true }));
+    setUiError("");
+
+    try {
+      const chatResponse = await fetch("/api/chats", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          actorId: normalizedActorId,
+          title: options?.title ?? `Chat ${new Date().toLocaleString()}`,
+          ...(options?.createStarterChat ? { createStarterChat: true } : {}),
+        }),
+      });
+      const chatPayload = (await chatResponse.json()) as { chat?: ChatThread; error?: string };
+
+      if (!chatResponse.ok || !chatPayload.chat) {
+        const message = chatPayload.error ?? "Failed to create chat.";
+        setUiError(message);
+        throw new Error(message);
+      }
+
+      const createdChat = chatPayload.chat;
+      setChats((current) => [createdChat, ...current.filter((chat) => chat.id !== createdChat.id)]);
+      setActorChatSelections((current) => ({ ...current, [normalizedActorId]: createdChat.id }));
+      setActiveActorId(normalizedActorId);
+      setActiveChatId(createdChat.id);
+      setSidebarOpen(false);
+    } finally {
+      endInFlightRequest(creatingChatByActorIdRef.current, normalizedActorId);
+      setCreatingChatByActorId((current) => {
+        const next = { ...current };
+        delete next[normalizedActorId];
+        return next;
+      });
+    }
+  }
+
+  async function createActor(input: { name: string; purpose?: string; parentId?: string; reviewMode?: "adaptive" | "always" | "off" }) {
+    if (creatingActorRef.current) {
+      return;
+    }
+
+    creatingActorRef.current = true;
+    setUiError("");
+
+    try {
+      const actorResponse = await fetch("/api/actors", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+        },
+        body: JSON.stringify(input),
+      });
+
+      const actorPayload = (await actorResponse.json()) as { actor?: Actor; error?: string };
+
+      if (!actorResponse.ok || !actorPayload.actor) {
+        throw new Error(actorPayload.error ?? "Failed to create actor.");
+      }
+
+      const createdActor = actorPayload.actor;
+      setActors((current) => [
+        ...current.filter((actor) => actor.id !== createdActor.id),
+        createdActor,
+      ]);
+      setSidebarOpen(false);
+      try {
+        await createChat(createdActor.id, { createStarterChat: true });
+      } catch {
+        // createChat already writes user-facing UI error state.
+      }
+    } finally {
+      creatingActorRef.current = false;
+    }
+  }
+
+
+  function updateActorPurpose(updatedActor: Actor) {
+    setActors((current) =>
+      current.map((actor) => (actor.id === updatedActor.id ? { ...actor, purpose: updatedActor.purpose } : actor)),
+    );
+  }
+
+  async function deleteActor(actor: Actor) {
+    setUiError("");
+    const response = await fetch(`/api/actors?id=${encodeURIComponent(actor.id)}`, {
+      method: "DELETE",
+    });
+
+    const payload = (await response.json()) as { deletedActorIds?: string[]; error?: string };
+
+    if (!response.ok || !payload.deletedActorIds?.length) {
+      throw new Error(payload.error ?? "Failed to delete actor.");
+    }
+
+    const deletedIds = new Set(payload.deletedActorIds);
+    const nextActors = actors.filter((item) => !deletedIds.has(item.id));
+    const nextChats = chats.filter((chat) => !deletedIds.has(chat.actorId));
+    const nextSelections = Object.fromEntries(
+      Object.entries(actorChatSelections).filter(
+        ([actorId, chatId]) => !deletedIds.has(actorId) && nextChats.some((chat) => chat.id === chatId),
+      ),
+    );
+    const nextActiveActorId = deletedIds.has(activeActorId)
+      ? pickActiveActorId(nextActors, null)
+      : activeActorId;
+    const nextActiveChatId = pickActiveChatId(
+      nextChats,
+      nextActiveActorId,
+      deletedIds.has(activeChatId) ? null : activeChatId,
+      nextSelections,
+    );
+
+    setActors(nextActors);
+    setChats(nextChats);
+    setActorChatSelections(nextSelections);
+    setActiveActorId(nextActiveActorId);
+    setActiveChatId(nextActiveChatId);
+  }
+
+  async function deleteChat(chat: ChatThread) {
+    setUiError("");
+    const response = await fetch(`/api/chats?id=${encodeURIComponent(chat.id)}`, {
+      method: "DELETE",
+    });
+
+    const payload = (await response.json()) as { deletedChatId?: string; error?: string };
+
+    if (!response.ok || payload.deletedChatId !== chat.id) {
+      throw new Error(payload.error ?? "Failed to delete chat.");
+    }
+
+    const nextChats = chats.filter((item) => item.id !== chat.id);
+    const nextSelections = Object.fromEntries(
+      Object.entries(actorChatSelections).flatMap(([actorId, chatId]) => {
+        if (chatId !== chat.id) {
+          return [[actorId, chatId]];
+        }
+
+        const nextChatId = pickActiveChatId(nextChats, actorId, null, actorChatSelections);
+        return nextChatId ? [[actorId, nextChatId]] : [];
+      }),
+    );
+    const nextActiveChatId =
+      activeChatId === chat.id
+        ? pickNextActiveChatAfterDeletion(nextChats, chat, nextSelections)
+        : activeChatId;
+    const nextActiveActorId =
+      activeChatId === chat.id && nextActiveChatId
+        ? nextChats.find((item) => item.id === nextActiveChatId)?.actorId ?? activeActorId
+        : activeActorId;
+
+    setChats(nextChats);
+    setActorChatSelections(nextSelections);
+    setActiveActorId(nextActiveActorId);
+    setActiveChatId(nextActiveChatId);
+  }
+
+  async function renameChat(chatId: string, title: string) {
+    const normalizedTitle = title.trim();
+    if (!normalizedTitle) {
+      throw new Error("Chat title cannot be empty.");
+    }
+
+    setUiError("");
+    const response = await fetch("/api/chats", {
+      method: "PATCH",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        id: chatId,
+        title: normalizedTitle,
+      }),
+    });
+
+    const payload = (await response.json()) as { chat?: ChatThread; error?: string };
+    if (!response.ok || !payload.chat) {
+      throw new Error(payload.error ?? "Failed to rename chat.");
+    }
+
+    const updatedChat = payload.chat;
+    setChats((current) =>
+      current.map((chat) => (chat.id === updatedChat.id ? updatedChat : chat)),
+    );
+  }
+
+  function handleSelectActor(nextActorId: string) {
+    setActiveActorId(nextActorId);
+    setActiveChatId((current) =>
+      pickActiveChatId(chats, nextActorId, current, actorChatSelections),
+    );
+    setSidebarOpen(false);
+  }
+
+  function handleSelectChat(nextChatId: string) {
+    const selectedChat = chats.find((chat) => chat.id === nextChatId);
+    if (!selectedChat) {
+      return;
+    }
+
+    setActiveActorId(selectedChat.actorId);
+    setActiveChatId(nextChatId);
+    setActorChatSelections((current) => ({ ...current, [selectedChat.actorId]: nextChatId }));
+    setSidebarOpen(false);
+  }
+
+  return (
+    <div className="relative h-dvh overflow-hidden p-0 text-zinc-100 lg:px-6 lg:py-6">
+      <div className="pointer-events-none absolute inset-0 overflow-hidden">
+        <div className="absolute inset-x-0 top-0 h-72 bg-gradient-to-b from-white/[0.03] to-transparent" />
+        <div className="absolute left-[8%] top-20 h-56 w-56 rounded-full bg-sky-500/10 blur-3xl" />
+        <div className="absolute right-[10%] top-12 h-64 w-64 rounded-full bg-emerald-500/10 blur-3xl" />
+        <div className="absolute bottom-[-6rem] left-1/3 h-72 w-72 rounded-full bg-indigo-500/10 blur-3xl" />
+      </div>
+
+      <div className="relative mx-auto flex h-dvh min-h-0 w-full max-w-[1600px] overflow-hidden bg-zinc-950/80 backdrop-blur-xl lg:h-[calc(100dvh-3rem)] lg:rounded-[28px] lg:border lg:border-white/10 lg:shadow-[0_40px_120px_rgba(0,0,0,0.55)]">
+        <div className="pointer-events-none absolute inset-0 hidden rounded-[28px] ring-1 ring-inset ring-white/5 lg:block" />
+        <button
+          type="button"
+          className="absolute left-3 top-[calc(env(safe-area-inset-top)+0.55rem)] z-30 inline-flex h-10 w-10 items-center justify-center rounded-xl border border-white/10 bg-zinc-900/85 text-lg font-medium text-zinc-100 shadow-[0_10px_30px_rgba(0,0,0,0.35)] backdrop-blur-sm transition active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400 lg:hidden"
+          onClick={() => setSidebarOpen(true)}
+          aria-label="Open sidebar"
+        >
+          <span aria-hidden>☰</span>
+        </button>
+
+        <div className="hidden h-full min-h-0 w-80 min-w-[20rem] max-w-[22rem] flex-none border-r border-white/10 lg:flex">
+          <Sidebar
+            actors={actors}
+            chats={filteredChats}
+            activeActorId={activeActorId}
+            activeChatId={activeChatId}
+            onSelectActor={handleSelectActor}
+            onSelectChat={handleSelectChat}
+            onCreateChat={createChat}
+            onOpenCreateActor={() => setModalState({ type: "primary" })}
+            onOpenCreateSubActor={(actor) => setModalState({ type: "sub", parentActor: actor })}
+            onDeleteActor={deleteActor}
+            onDeleteChat={deleteChat}
+            onRenameChat={renameChat}
+            onError={setUiError}
+            onActorPurposeUpdated={updateActorPurpose}
+            isCreatingChat={(actorId) => Boolean(creatingChatByActorId[actorId])}
+            connectedRepos={connectedRepos}
+            activeRepoId={activeRepoId}
+            onActiveRepoChange={setActiveRepoId}
+            repoInjectionEnabled={repoInjectionEnabled}
+            onRepoInjectionEnabledChange={setRepoInjectionEnabled}
+            onRepoConnected={(repo) => {
+              setConnectedRepos((current) => [repo, ...current.filter((item) => item.id !== repo.id)]);
+              setActiveRepoId(repo.id);
+            }}
+          />
+        </div>
+
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+          <PendingMissionApprovals />
+          {pendingProjectApprovals.filter(p => chats.some(c=>c.id===p.chatId&&c.actorId===p.actorId)).map(p => (
+            <button key={p.chatId} type="button" onClick={() => handleSelectChat(p.chatId)}
+              className="mx-3 mt-2 shrink-0 rounded-xl border-2 border-amber-400 bg-amber-950 px-4 py-3 text-left text-sm font-semibold text-amber-50 shadow-lg sm:mx-6"
+              aria-label={`Open approval required for ${p.projectName}`}>
+              <span className="block text-xs font-bold uppercase tracking-wider text-amber-300">Action required · Katie is awaiting your approval</span>
+              <span className="mt-1 block truncate">{p.projectName} · {p.chatTitle}</span>
+              <span className="mt-1 block text-xs text-amber-200">Open this project to review scope and approve →</span>
+            </button>
+          ))}
+          {approvalDiscoveryError && (
+            <p role="alert" className="mx-3 mt-2 rounded-xl border border-red-400/40 bg-red-950/80 px-3 py-2 text-xs text-red-100 sm:mx-6">
+              Could not load project approvals. Check your connection or reload Katie.
+            </p>
+          )}
+          <ChatPanel key={activeChatId}
+            actorId={activeActorId}
+            chatId={activeChatId}
+            managedAgentId={activeActor?.managedAgentId}
+            activeActorName={activeActor?.name ?? ""}
+            activeChatTitle={activeChat?.title ?? ""}
+            activeRepoId={activeRepoId}
+            repoInjectionEnabled={repoInjectionEnabled}
+          />
+        </div>
+
+        <div
+          className={[
+            "absolute inset-0 z-40 bg-black/60 backdrop-blur-[1px] transition-opacity duration-200 lg:hidden",
+            sidebarOpen ? "opacity-100" : "pointer-events-none opacity-0",
+          ].join(" ")}
+          onClick={() => setSidebarOpen(false)}
+          aria-hidden
+        />
+        {sidebarOpen ? (
+        <aside
+          className="absolute inset-y-0 left-0 z-50 w-[min(22rem,92vw)] border-r border-white/10 bg-zinc-950 shadow-[0_24px_80px_rgba(0,0,0,0.5)] transition-transform duration-200 ease-out lg:hidden translate-x-0"
+          aria-hidden={false}
+        >
+          <Sidebar
+            actors={actors}
+            chats={filteredChats}
+            activeActorId={activeActorId}
+            activeChatId={activeChatId}
+            onSelectActor={handleSelectActor}
+            onSelectChat={handleSelectChat}
+            onCreateChat={createChat}
+            onOpenCreateActor={() => setModalState({ type: "primary" })}
+            onOpenCreateSubActor={(actor) => setModalState({ type: "sub", parentActor: actor })}
+            onDeleteActor={deleteActor}
+            onDeleteChat={deleteChat}
+            onRenameChat={renameChat}
+            onError={setUiError}
+            onActorPurposeUpdated={updateActorPurpose}
+            isCreatingChat={(actorId) => Boolean(creatingChatByActorId[actorId])}
+            connectedRepos={connectedRepos}
+            activeRepoId={activeRepoId}
+            onActiveRepoChange={setActiveRepoId}
+            repoInjectionEnabled={repoInjectionEnabled}
+            onRepoInjectionEnabledChange={setRepoInjectionEnabled}
+            onRepoConnected={(repo) => {
+              setConnectedRepos((current) => [repo, ...current.filter((item) => item.id !== repo.id)]);
+              setActiveRepoId(repo.id);
+            }}
+          />
+        </aside>
+        ) : null}
+      </div>
+
+      {uiError ? (
+        <div className="fixed inset-x-3 top-3 z-[70] mx-auto max-w-[1600px] rounded-xl border border-red-500/40 bg-zinc-950/95 px-4 py-3 text-sm text-red-100 shadow-2xl lg:static lg:mt-3">
+          {uiError}
+        </div>
+      ) : null}
+
+      {modalState ? (
+        <ActorFormModal
+          mode={modalState.type}
+          parentActor={modalState.type === "sub" ? modalState.parentActor : undefined}
+          onClose={() => setModalState(null)}
+          onCreate={createActor}
+        />
+      ) : null}
+    </div>
+  );
+}

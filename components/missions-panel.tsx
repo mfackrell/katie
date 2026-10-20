@@ -21,7 +21,7 @@ export function MissionsPanel({agents,repos}:{agents:ManagedAgent[];repos:Array<
  },[]);
  useEffect(()=>{let active=true;selected.current=new URLSearchParams(window.location.search).get('mission');void refresh().catch(e=>{if(active)setError(e.message);});const timer=setInterval(()=>{if(!document.hidden&&!busyRef.current)void refresh().catch(e=>{if(active)setError(e.message);});},15000);return()=>{active=false;clearInterval(timer);};},[refresh]);
  async function work(action:()=>Promise<void>){if(busyRef.current)return;busyRef.current=true;setBusy(true);setError('');try{await action();}catch(e){setError(e instanceof Error?e.message:'Mission operation failed');}finally{busyRef.current=false;setBusy(false);}}
- async function inspect(id:string){selected.current=id;lastStatus.current=null;window.history.replaceState(null,'','/agents?mission='+encodeURIComponent(id));await refresh();}
+ async function inspect(id:string){selected.current=id;lastStatus.current=null;window.history.replaceState(null,'','/settings/advanced?mission='+encodeURIComponent(id));await refresh();}
  async function control(action:string,jobId?:string){if(!current)return;await api('/api/missions',{action,id:current.mission.id,...(jobId?{jobId}:{})});await refresh();}
  return <section className='space-y-4 rounded-xl border border-sky-500/30 p-4' aria-labelledby='missions-title'>
   <h2 id='missions-title' className='text-xl font-semibold'>Autonomous missions</h2>
