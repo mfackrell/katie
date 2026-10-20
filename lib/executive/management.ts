@@ -40,8 +40,8 @@ export async function handleExecutiveManagement(input:{
   result='Executive assignment registered but BLOCKED: no authorized autonomous specialist workflow was selected for this objective. The Executive has NOT performed the assignment, created agents, or completed an audit. An executive planning/provisioning capability must be implemented and independently verified before this work can start. Ordinary Katie chat will not be used as a fallback.';
  }
  const {error:saveError}=await db.from('executive_management_requests')
-  .update({status,detail:result,updated_at:new Date().toISOString()})
-  .eq('actor_id',input.actorId).eq('chat_id',input.chatId).eq('request_id',input.requestId);
+  .eq('actor_id',input.actorId).eq('chat_id',input.chatId).eq('request_id',input.requestId)
+  .update({status,detail:result,updated_at:new Date().toISOString()});
  if(saveError)throw Error('Executive management result could not be recorded');
  return result;
 }
