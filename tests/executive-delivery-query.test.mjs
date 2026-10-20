@@ -12,11 +12,12 @@ test('actual PostgREST client sends linked-mission and undelivered-receipt filte
  const filter='evidence->>acceptanceMissionId.not.is.null,evidence->acceptanceEvidence->0->>missionId.not.is.null';
  const result=await exports.getSupabaseAdminClient().from('executive_provisioning_requests')
   .select('id,evidence').eq('route','configure').in('status',['activated','blocked']).or(filter)
-  .is('evidence->>chatDeliveredAt',null).order('updated_at',{ascending:true}).limit(100).returns();
+  .is('evidence->>chatDeliveredAt',null).order('updated_at',{ascending:true}).range(100,199).returns();
  assert.equal(result.error,null);assert.equal(requests.length,1);
  const params=requests[0].searchParams;
  assert.equal(params.get('or'),'('+filter+')');
  assert.equal(params.get('evidence->>chatDeliveredAt'),'is.null');
  assert.equal(params.get('status'),'in.("activated","blocked")');
  assert.equal(params.get('route'),'eq.configure');assert.equal(params.get('limit'),'100');
+ assert.equal(params.get('offset'),'100');
 });

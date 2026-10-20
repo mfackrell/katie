@@ -25,6 +25,7 @@ function runtime({factory=false,fail=null,missionStatus='completed',initialStatu
    updates.push(table);if(table==='executive_provisioning_requests')for(const row of this.rows())Object.assign(row,value);return {error:null};}
  };return query;},
  async rpc(_name,args){actions.push(args.p_action);
+  if(_name==='control_mission'){actions[actions.length-1]='mission:'+args.p_action;missionStatus='running';return {data:{status:'running'},error:null};}
   if(failure===args.p_action){failure=null;return {data:null,error:Error('interrupted transition')};}
   const next={accept:'accepted',start:'running',submit:'submitted',verify:'verified',validate:'validated',activate:'activated',cancel:'cancelled'}[args.p_action];
   request.status=next;if(args.p_action==='validate')request.evidence=args.p_evidence;
@@ -82,4 +83,9 @@ test('100 delivered factory rows cannot hide active acceptance and leave the del
  assert.equal(x.historical.every(r=>typeof r.evidence.chatDeliveredAt==='string'),true);
  const writes=x.updates.length;await x.run();assert.equal(x.updates.length,writes,
   'delivered terminal rows no longer occupy or repeatedly write the retry queue');
+});
+test('linked draft factory acceptance resumes its saved mission without activating or duplicating work',async()=>{
+ const x=runtime({factory:true,missionStatus:'draft'});await x.run();await x.run();
+ assert.equal(x.request.status,'configured');assert.equal(x.messages.size,0);
+ assert.deepEqual(x.actions,['mission:start']);
 });

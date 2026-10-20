@@ -9,6 +9,7 @@ class PostgrestQuery {
   private filters: Filter[] = [];
   private sorts: Sort[] = [];
   private rowLimit: number | null = null;
+  private rowOffset: number | null = null;
   private selectedColumns = "*";
 
   constructor(private readonly config: { url: string; key: string }, private readonly table: string) {}
@@ -50,6 +51,12 @@ class PostgrestQuery {
 
   limit(value: number) {
     this.rowLimit = value;
+    return this;
+  }
+
+  range(from: number, to: number) {
+    this.rowOffset = from;
+    this.rowLimit = to - from + 1;
     return this;
   }
 
@@ -148,6 +155,9 @@ class PostgrestQuery {
 
     if (this.rowLimit !== null) {
       url.searchParams.set("limit", String(this.rowLimit));
+    }
+    if (this.rowOffset !== null) {
+      url.searchParams.set("offset", String(this.rowOffset));
     }
 
     return url.toString();

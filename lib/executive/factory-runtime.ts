@@ -184,7 +184,13 @@ export async function reconcileSpecialistFactory(){
   }
   const {data:mission,error:missionError}=await db.from('agent_missions')
    .select('status,result,detail').eq('id',missionId).maybeSingle<{status:string;result:string|null;detail:string|null}>();
-  if(missionError||!mission||!['completed','blocked','stopped'].includes(mission.status))continue;
+  if(missionError||!mission)continue;
+  if(request.status==='configured'&&mission.status==='draft'){
+   const {error:startError}=await db.rpc('control_mission',{p_id:missionId,p_action:'start',p_job:null});
+   if(startError)throw Error('Linked specialist acceptance could not resume');
+   continue;
+  }
+  if(!['completed','blocked','stopped'].includes(mission.status))continue;
   const {data:reviews,error:reviewsError}=await db.from('mission_assignments')
    .select('job_key,status,result').eq('mission_id',missionId).eq('role','review')
    .eq('status','completed').limit(10).returns<{job_key:string;result:{verdict?:string}|null}>();

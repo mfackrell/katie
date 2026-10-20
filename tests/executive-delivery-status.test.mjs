@@ -10,7 +10,7 @@ const js=ts.transpileModule(readFileSync('lib/executive/delivery.ts','utf8'),{
 }).outputText;
 function service(rows={}){
  const calls=[],exports={};
- const db={from(table){const filters=[];return {select(){return this;},eq(k,v){filters.push([k,v]);return this;},order(){return this;},async limit(){calls.push({table,filters});return {data:rows[table]??[],error:rows.error??null};}};}};
+ const db={from(table){const filters=[];return {select(){return this;},eq(k,v){filters.push([k,v]);return this;},order(){return this;},async range(from,to){calls.push({table,filters,from,to});return {data:(rows[table]??[]).slice(from,to+1),error:rows.error??null};}};}};
  vm.runInNewContext(js,{exports,require:name=>name==='@/lib/data/supabase/admin'?{getSupabaseAdminClient:()=>db}:require(name),Set});
  return {...exports,calls};
 }
@@ -43,3 +43,15 @@ test('delivery status reads only the requested actor/chat and reports read failu
  for(const call of x.calls)assert.deepEqual(JSON.parse(JSON.stringify(call.filters)),[['actor_id','owner'],['chat_id','chat']]);
  await assert.rejects(service({error:Error('offline')}).hasPendingExecutiveDelivery('owner','chat',[]),/unavailable/);
 });
+for(const table of ['executive_delegations','executive_provisioning_requests']){
+ test(`pending work beyond 100 ${table} records keeps chat delivery polling`,async()=>{
+  const terminal=Array.from({length:150},(_,i)=>table==='executive_delegations'
+   ? {...d,id:'old-'+i,status:'verified'}
+   : {id:'old-'+i,route:'configure',status:'activated',evidence:{acceptanceMissionId:'mission'}});
+  const x=service({[table]:[...terminal,table==='executive_delegations'?d:
+   {id:'pending',route:'configure',status:'configured',evidence:{acceptanceMissionId:'mission'}}]});
+  const messages=terminal.map(r=>({id:table==='executive_delegations'?x.delegationReplyId(r.id):x.factoryReplyId(r.id)}));
+  assert.equal(await x.hasPendingExecutiveDelivery('owner','chat',messages),true);
+  assert.equal(x.calls.filter(c=>c.table===table).length,2);
+ });
+}

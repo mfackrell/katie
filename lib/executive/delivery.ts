@@ -24,13 +24,22 @@ export function executiveDeliveryPending(delegations:Delegation[],provisioning:P
 }
 export async function hasPendingExecutiveDelivery(actorId:string,chatId:string,messages:Array<{id:string}>){
  const db=getSupabaseAdminClient();
- const [delegations,provisioning]=await Promise.all([
-  db.from('executive_delegations').select('id,status,request_key,mission_id')
-   .eq('actor_id',actorId).eq('chat_id',chatId).order('created_at',{ascending:false}).limit(100),
-  db.from('executive_provisioning_requests').select('id,status,route,evidence')
-   .eq('actor_id',actorId).eq('chat_id',chatId).order('created_at',{ascending:false}).limit(100),
+ const ids=new Set(messages.map(m=>m.id));
+ async function inventory(table:string,fields:string,pending:(rows:unknown[])=>boolean){
+  // A full first page cannot establish that older work has finished. Stable,
+  // oldest-first pages also avoid insertion shifting records across offsets.
+  for(let offset=0;;offset+=100){
+   const {data,error}=await db.from(table).select(fields).eq('actor_id',actorId).eq('chat_id',chatId)
+    .order('created_at',{ascending:true}).order('id',{ascending:true}).range(offset,offset+99);
+   if(error)throw Error('Executive delivery status unavailable');
+   const rows=data??[];
+   if(pending(rows))return true;
+   if(rows.length<100)return false;
+  }
+ }
+ const pending=await Promise.all([
+  inventory('executive_delegations','id,status,request_key,mission_id',rows=>executiveDeliveryPending(rows as Delegation[],[],ids)),
+  inventory('executive_provisioning_requests','id,status,route,evidence',rows=>executiveDeliveryPending([],rows as Provisioning[],ids)),
  ]);
- if(delegations.error||provisioning.error)throw Error('Executive delivery status unavailable');
- return executiveDeliveryPending((delegations.data??[]) as Delegation[],
-  (provisioning.data??[]) as Provisioning[],new Set(messages.map(m=>m.id)));
+ return pending.some(Boolean);
 }
