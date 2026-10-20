@@ -35,7 +35,7 @@ export async function orchestrationChoices(input:{objective:string;instruction:s
   'Autonomous assignment. Choose the strongest available model/submodel for this exact task, not the cheapest default. '+
   (input.research?'Native live web search with cited receipts required. ':'')+
   (input.review?'Independent substantive verification; prioritize reasoning depth. ':''),providers,{
-   routingRequestId:input.requestId,diverseFallbackProviders:true,
+   routingRequestId:input.requestId,diverseFallbackProviders:true,decisionCandidatesPerProvider:4,
    ...(input.research?{requestIntent:'web-search' as const}:input.review?{requestIntent:'assistant-reflection' as const}:input.planning?{requestIntent:'architecture-review' as const}:{})
   });
  const ranked=[{provider:decision.provider,modelId:decision.modelId},...decision.fallbackChain];

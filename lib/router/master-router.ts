@@ -18,6 +18,7 @@ import {
   scoreModelsForIntent,
   validateRoutingDecision
 } from "@/lib/router/model-intent";
+import { shortlistDecisionCandidates } from "@/lib/router/candidate-shortlist";
 import { isBlockedRoutingModel } from "@/lib/router/routing-model-filters";
 import { evaluatePolicyRouting, getPolicyConfig } from "@/lib/router/policy-engine";
 import { LlmProvider } from "@/lib/providers/types";
@@ -688,6 +689,7 @@ export async function chooseProvider(
   providers: LlmProvider[],
   options?: {
     diverseFallbackProviders?: boolean;
+    decisionCandidatesPerProvider?: number;
     hasImages?: boolean;
     hasVideoInput?: boolean;
     routingTraceEnabled?: boolean;
@@ -1118,6 +1120,7 @@ export async function chooseProvider(
         }
       };
     });
+    llmCandidatesUsed = shortlistDecisionCandidates(llmCandidatesUsed, options?.decisionCandidatesPerProvider);
     console.info(`[LLM Router Preferences] ${JSON.stringify({ requestId: traceRequestId, intent, preferenceProfile })}`);
     console.info(
       `[LLM Router Candidates] ${JSON.stringify({ requestId: traceRequestId, count: llmCandidatesUsed.length, candidates: llmCandidatesUsed })}`

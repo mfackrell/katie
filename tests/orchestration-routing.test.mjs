@@ -53,7 +53,7 @@ test('EO and child stages use task routing with original scope and provider-dive
  assert.equal(choices[0].modelId,'best-writer');assert.equal(choices[0].provider.name,'google');
  assert.deepEqual(Array.from(choices,c=>c.modelId),['best-writer','deep-reasoner','alternative','smaller-reasoner']);
  assert.match(seen[0].prompt,/Original user objective[\s\S]*Scoped delegated writing/);
- assert.equal(seen[0].options.diverseFallbackProviders,true);
+ assert.equal(seen[0].options.diverseFallbackProviders,true);assert.equal(seen[0].options.decisionCandidatesPerProvider,4);
  await route({objective:'Audit',instruction:'Independent review',requestId:'review',review:true});
  assert.equal(seen[1].options.requestIntent,'assistant-reflection');
  await route({objective:'Audit',instruction:'Delegate',requestId:'plan',planning:true});assert.equal(seen[2].options.requestIntent,'architecture-review');
@@ -136,4 +136,16 @@ test('routing-model inference is bounded and accounted before dispatch',async()=
 test('no eligible provider blocks explicitly and oversized context never starts routing or inference',async()=>{
  const h=harness([],[]);await assert.rejects(h.run(claim(),'Analyze','Evidence'),/No eligible orchestration model/);
  const large=harness([choice('anthropic','model')],[]);await assert.rejects(large.run(claim(),'Analyze','x'.repeat(48001)),/bounded context/);assert.equal(large.calls.length,0);assert.equal(large.ledger.length,0);
+});
+
+
+test('large routing inventories keep every provider without exhausting a mission before its first call',()=>{
+ const shortlist=modules()('@/lib/router/candidate-shortlist').shortlistDecisionCandidates;
+ const candidates=Array.from({length:151},(_,i)=>({providerName:i<100?'openai':i<125?'google':i<139?'anthropic':'grok',modelId:'ranked-'+i,capabilities:'source metadata '.repeat(70)}));
+ const bounded=shortlist(candidates,4);
+ assert.equal(bounded.length,16);assert.equal(new Set(bounded.map(c=>c.providerName)).size,4);
+ for(const p of ['openai','google','anthropic','grok'])assert.deepEqual(Array.from(bounded.filter(c=>c.providerName===p),c=>c.modelId),candidates.filter(c=>c.providerName===p).slice(0,4).map(c=>c.modelId));
+ const reserve=Buffer.byteLength(JSON.stringify(bounded))+12000+2000;
+ assert.ok(reserve<60000,'bounded routing reservation fits the unchanged initial mission allowance');
+ assert.equal(shortlist(candidates),candidates,'ordinary routing keeps its existing inventory policy');
 });
