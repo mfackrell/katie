@@ -1010,6 +1010,30 @@ async function executeChat(request: NextRequest) {
 
     // Inspect deterministic, database-owned configuration before any model,
     // classifier, router or model-backed memory maintenance is invoked.
+    // Existing drafts are user-owned working material. Inspection requires no
+    // model generation, task contract, or independent approval.
+    const draftInspection = !currentAgentTask() && !newAttachments.length && !requestImages?.length &&
+      /^(?:please\\s+)?(?:show|display|retrieve|let me see|give me|send me)\\s+(?:(?:your|me|the|my|current|latest|most recent|unapproved|working|existing|saved)\\s+)*(?:draft|version)(?:\\s+(?:you have|right now|so far))?[.!?\\s]*$/i.test(message.trim());
+    let savedDraftReply: string | null = null;
+    if (draftInspection) {
+      const { data: recentAudits, error: draftError } = await getSupabaseAdminClient().from("chat_requests")
+        .select("request_id,review_audit,created_at")
+        .eq("actor_id", actorId).eq("chat_id", chatId)
+        .order("created_at", { ascending: false }).limit(30);
+      if (draftError) throw new Error("Unable to retrieve saved drafts: " + draftError.message);
+      const saved = (recentAudits ?? []).find(row => {
+        const audit = row.review_audit as { draft?: string; lastCandidate?: string } | null;
+        return Boolean(audit?.lastCandidate?.trim() || audit?.draft?.trim());
+      });
+      if (saved) {
+        const audit = saved.review_audit as { draft?: string; lastCandidate?: string; status?: string };
+        const raw = (audit.lastCandidate || audit.draft || "").trim();
+        savedDraftReply = `Draft from request ${saved.request_id} (${audit.status === "approved" || audit.status === "revised" ? "approved" : "not independently approved"}):\\n\\n${raw}`;
+      } else {
+        savedDraftReply = "No saved application draft was found in this conversation.";
+      }
+      console.info("[ReviewContinuity] Retrieved working draft without new review", { requestId, chatId, sourceRequestId: saved?.request_id ?? null });
+    }
     const executiveReply = !currentAgentTask() && !newAttachments.length && !requestImages?.length
       ? await handleExecutiveSpecialistIntake({actorId,chatId,message,requestId}) : null;
     const specialistReply = !executiveReply && !currentAgentTask() && !newAttachments.length && !requestImages?.length
@@ -1020,7 +1044,7 @@ async function executeChat(request: NextRequest) {
       ? await startExecutiveDevelopment({actorId,chatId,message,requestId,activeRepoId}) : null;
     const projectReply = !executiveReply && !specialistReply && !financeReply && !developmentReply && !currentAgentTask() && !newAttachments.length && !requestImages?.length
       ? await handleProjectChat({actorId,chatId,message,activeRepoId},requestId,attachmentHistory,requestTracked) : null;
-    const localKatieResponse = executiveReply ? {reason: "executive" as const,text:executiveReply}
+    const localKatieResponse = savedDraftReply !== null ? { reason: "project" as const, text: savedDraftReply } : executiveReply ? {reason: "executive" as const,text:executiveReply}
       : specialistReply ? {reason: "executive" as const,text:specialistReply}
       : financeReply ? {reason: "executive" as const,text:financeReply}
       : developmentReply ? {reason: "executive" as const,text:developmentReply}
