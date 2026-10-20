@@ -18,13 +18,13 @@ export async function handleExecutiveManagement(input:{
  const {data:chat,error:chatError}=await db.from('chats').select('actor_id').eq('id',input.chatId).maybeSingle<{actor_id:string}>();
  if(chatError||chat?.actor_id!==input.actorId)throw Error('Executive conversation ownership mismatch');
  // Management status is not a new project or an invitation to answer with a model.
- if(/^(?:(?:what(?:'s| is)|show|check|give me|tell me)\\s+(?:(?:the|my|this)\\s+)?)?(?:status|progress)(?:\\s+(?:of|on)\\s+(?:the|this|my)\\s+(?:assignment|mission|audit|project))?[?!.\\s]*$|^how(?:'s| is)\\s+(?:the|this|my)\\s+(?:audit|project|assignment|mission)\\s+(?:going|progressing)[?!.\\s]*$/i.test(input.message.trim())){
+ if(/^(?:(?:what(?:'s| is)|show|check|give me|tell me)\s+(?:(?:the|my|this)\s+)?)?(?:status|progress)(?:\s+(?:of|on)\s+(?:the|this|my)\s+(?:assignment|mission|audit|project))?[?!.\s]*$|^how(?:'s| is)\s+(?:the|this|my)\s+(?:audit|project|assignment|mission)\s+(?:going|progressing)[?!.\s]*$/i.test(input.message.trim())){
   const {data:latest,error:statusError}=await db.from('executive_management_requests')
    .select('status,detail,request_id').eq('actor_id',input.actorId).eq('chat_id',input.chatId)
    .order('created_at',{ascending:false}).limit(1);
   if(statusError)throw Error('Executive status history unavailable');
   const task=(latest as Array<{status:string;detail:string|null;request_id:string}>|null)?.[0];
-  return task?'Executive assignment status: '+task.status+'.\\n'+(task.detail??'The assigned specialists have not reported a completed result.'):'No Executive assignment exists in this conversation.';
+  return task?'Executive assignment status: '+task.status+'.\n'+(task.detail??'The assigned specialists have not reported a completed result.'):'No Executive assignment exists in this conversation.';
  }
  const {data:prior,error:priorError}=await db.from('executive_management_requests')
   .select('objective,status,detail,plan').eq('actor_id',input.actorId).eq('chat_id',input.chatId)
