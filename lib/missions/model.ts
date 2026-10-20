@@ -2,6 +2,7 @@ import {GAME_RULE_CATEGORIES} from '../../scripts/project-game-rules.mjs';
 import {projectPlanSchema} from '@/lib/projects/contract';
 import OpenAI from 'openai';
 import {getAvailableProviders} from '@/lib/providers';
+import {chooseProvider} from '@/lib/router/master-router';
 import { zodTextFormat } from 'openai/helpers/zod';
 import { randomUUID } from 'node:crypto';
 import { rpc } from './store';
@@ -48,6 +49,48 @@ export async function missionCreditFallback(claim:Claim,instruction:string,input
  }
 }
 
+// All text-only mission roles use Katie's capability-aware router BEFORE
+// attempting inference. The same ranked fallback chain is used when a provider
+// is temporarily unavailable. Model selection never grants tool permissions.
+export async function routedMissionText(claim:Claim,instruction:string,input:string,outputTokens:number):Promise<ModelResult>{
+ const providers=getAvailableProviders();
+ if(!providers.length)throw Error('No configured model providers available for this mission');
+ const purpose=claim.mission.project_kind+' / '+claim.job.role;
+ const decision=await chooseProvider(purpose+'\n'+claim.mission.objective.slice(0,3600),
+  instruction.slice(0,3000),providers);
+ const choices=[{provider:decision.provider,modelId:decision.modelId},
+   ...decision.fallbackChain.map(x=>({provider:x.provider,modelId:x.modelId}))];
+ const dedup=new Set<string>();let lastError:unknown;
+ const reserve=Math.max(5000,Math.ceil(Buffer.byteLength(instruction+input,'utf8')/2)+outputTokens+512);
+ for(const choice of choices){
+  const key=choice.provider.name+':'+choice.modelId;
+  if(dedup.has(key))continue;dedup.add(key);
+  const callId=randomUUID();
+  if(!await rpc<boolean>('reserve_mission_call',{p_id:claim.job.id,p_lease:claim.job.lease,
+     p_call:callId,p_model:key,p_tokens:reserve}))
+    throw new MissionModelFailure('Mission exhausted its original authorization or token budget.',{routingBudgetBlocked:true});
+  try{
+   const result=await choice.provider.generate({
+    name:'Katie mission '+claim.job.role,persona:instruction,summary:'Execute ONLY the specified mission stage. Do not invent tools, completion or permissions.',
+    user:input,history:[],modelId:choice.modelId});
+   const content=String(result.text??'').trim();
+   if(!content||result.truncated)throw new MissionModelFailure('Routed model output incomplete.',{
+      selectedProvider:key,outputIncomplete:true});
+   await rpc('finish_mission_call',{p_call:callId,p_tokens:result.usage?.totalTokens??null});
+   return{text:content,sources:[],calculations:[],model:key};
+  }catch(error){
+   await rpc('finish_mission_call',{p_call:callId,p_tokens:null}).catch(()=>{});
+   lastError=error;
+   const status=(error as {status?:number})?.status;
+   const code=String((error as {code?:string})?.code??'').toLowerCase();
+   if(!isCreditExhaustion(error)&&status!==429&&status!==502&&status!==503&&status!==504&&
+      !['server_error','rate_limit_exceeded'].includes(code))throw error;
+   console.warn('[Missions] Model route failed; trying next ranked compatible provider',{role:claim.job.role,model:key,status,code});
+  }
+ }
+ throw new MissionModelFailure('All authorized model candidates failed.',{routingExhausted:true,
+  lastProviderFailure:lastError instanceof Error?lastError.message.slice(0,500):'unknown'});
+}
 // A bounded execution adapter uses the existing OpenAI credential/SDK. Ordinary
 // chat adapters remain unchanged; their unbounded continuation defaults cannot
 // enforce a mission allowance. No SDK inference retries or automatic fallback.
@@ -55,10 +98,13 @@ export async function missionModel(claim:Claim,instruction:string,input:string,t
  const agent=claim.mission.team.find(a=>a.id===claim.job.agent_id);
  if(!agent)throw Error('Saved worker unavailable');
  if(tools==='research'&&!agent.config.research)throw Error('Research permission denied');
- if(!process.env.OPENAI_API_KEY)throw Error('Existing OpenAI connection unavailable');
+ if(tools!=='none'&&!process.env.OPENAI_API_KEY)throw Error('Research/calculation tool provider unavailable');
  const selectedModel=claim.job.role==='plan'||tools==='research'||claim.job.role==='review'||claim.job.role==='compose'||claim.job.role==='revise'||tools==='calculate'?REVIEW_MODEL:WORKER_MODEL;
  const gameSpecification=claim.mission.project_kind==='specification'&&(claim.mission.project_evidence as {projectProfile?:string}|null)?.projectProfile==='game';
  const outputTokens=gameSpecification&&['compose','revise'].includes(claim.job.role)?16000:claim.mission.project_kind==='specification'&&['compose','revise'].includes(claim.job.role)?6000:claim.job.role==='review'?5000:3000;
+ if(input.length>48000)throw Error('Mission evidence exceeds bounded context. Narrow the objective or deliverable.');
+ if(tools==='none'&&claim.mission.project_id)return routedMissionText(claim,instruction+
+   (gameSpecification&&['compose','revise'].includes(claim.job.role)?'\nRespond with complete minified expanded game specification JSON; preserve every original rule, model and browser acceptance and obey the saved validation feedback.':''),input,outputTokens);
  const client=new OpenAI({apiKey:process.env.OPENAI_API_KEY,maxRetries:0,timeout:90_000,fetch:globalThis.fetch.bind(globalThis)});
  const sources:ModelResult['sources']=[],calculations:unknown[]=[];
  if(input.length>48000)throw Error('Mission evidence exceeds bounded context. Narrow the objective or deliverable.');
