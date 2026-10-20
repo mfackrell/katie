@@ -320,16 +320,15 @@ export function SpecialistDirectory({ id }: { id?: string }) {
       .filter((value) => value.key.startsWith("chat:") && value.value.archived)
       .map((value) => value.key.slice(5)),
   );
-  const rootIds = new Set(entries.map((entry) => entry.actor_id));
+  
   const cards: Card[] = all
     .filter((actor) => !actor.managedAgentId)
     .map((actor) => {
-      const executive =
-        actor.name.toLowerCase() === "katie" || rootIds.has(actor.id);
+      const executive = actor.actorKind === "executive";
       return {
         id: `persona:${actor.id}`,
         actor,
-        name: executive ? `Executive Orchestrator · ${actor.name}` : actor.name,
+        name: executive ? "Executive Orchestrator" : actor.name,
         kind: executive ? "orchestrator" : "single",
         description: executive
           ? "Coordinates specialist orchestrators and their independently reviewed teams. Continue an existing discussion or start a new assignment."
