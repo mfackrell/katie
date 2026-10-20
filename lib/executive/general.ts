@@ -32,7 +32,8 @@ async function sendAssignment(row:Pick<RecordRow,'actor_id'|'chat_id'>,assignmen
   assignment.blocked='A verified connected repository must be selected for repository inspection; no code was accessed.';
   return;
  }
- const message='Ask the '+assignment.slug.replaceAll('_',' ')+' orchestrator to '+assignment.objective;
+ const normalized=assignment.objective.replace(/\s+/g,' ');
+ const message='Ask the '+assignment.slug.replaceAll('_',' ')+' orchestrator to '+normalized+(assignment.requiresRepository?' Inspect the connected repository read-only; do not modify it.':'');
  const reply=await startSpecialistAssignment({
   actorId:row.actor_id,chatId:row.chat_id,requestId:assignment.requestId,
   message,activeRepoId
@@ -52,7 +53,17 @@ async function advanceProvision(row:Pick<RecordRow,'actor_id'|'chat_id'>,item:Pr
   .maybeSingle<{slug:string;status:string;capabilities:string[]}>();
  if(error)throw Error('Executive provisioned specialist lookup failed');
  if(registry?.status==='active'&&registry.capabilities.includes(item.capability))return;
- if(item.started)return;
+ if(item.started){
+  const {data:request,error:requestError}=await getSupabaseAdminClient()
+   .from('executive_provisioning_requests').select('status,evidence')
+   .eq('actor_id',row.actor_id).eq('chat_id',row.chat_id)
+   .eq('request_key','exec-factory-'+hash(item.requestId+'\n'+'Create a '+item.domain+' orchestrator').slice(0,40))
+   .maybeSingle<{status:string;evidence:{reason?:string}|null}>();
+  if(requestError)throw Error('Executive specialist commissioning state unavailable');
+  if(request?.status==='blocked'||request?.status==='cancelled')
+   item.blocked=request.evidence?.reason??'Independent specialist factory acceptance failed';
+  return;
+ }
  const response=await startSpecialistFactory({
   actorId:row.actor_id,chatId:row.chat_id,requestId:item.requestId,
   message:'Create a '+item.domain+' orchestrator',
@@ -70,9 +81,13 @@ async function specialistActive(row:Pick<RecordRow,'actor_id'>,item:Provision){
  return data?.status==='active'&&data.capabilities.includes(item.capability);
 }
 async function advancePlan(row:RecordRow,plan:SavedPlan,activeRepoId?:string|null){
- for(const work of plan.assignments)await sendAssignment(row,work,activeRepoId);
+ for(const work of plan.assignments){
+  try{await sendAssignment(row,work,activeRepoId);}
+  catch(error){work.blocked='Mission dispatch failed: '+(error instanceof Error?error.message.slice(0,500):'unknown');}
+ }
  for(const provision of plan.provision){
-  await advanceProvision(row,provision);
+  try{await advanceProvision(row,provision);}
+  catch(error){provision.blocked='Commissioning failed: '+(error instanceof Error?error.message.slice(0,500):'unknown');}
   if(!provision.blocked&&await specialistActive(row,provision)){
    // Commissioned specialists receive their first real objective; commissioning
    // is NOT itself equivalent to delivery of the user's requested result.
@@ -83,7 +98,10 @@ async function advancePlan(row:RecordRow,plan:SavedPlan,activeRepoId?:string|nul
    });
   }
  }
- for(const work of plan.assignments)await sendAssignment(row,work,activeRepoId);
+ for(const work of plan.assignments){
+  try{await sendAssignment(row,work,activeRepoId);}
+  catch(error){work.blocked='Mission dispatch failed: '+(error instanceof Error?error.message.slice(0,500):'unknown');}
+ }
 }
 export async function startGeneralExecutiveManagement(input:{
  actorId:string;chatId:string;requestId:string;message:string;activeRepoId?:string|null;
