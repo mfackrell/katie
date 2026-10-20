@@ -176,7 +176,7 @@ export async function reconcileExecutiveManagement(){
     ...plan.unavailable.map(x=>x.capability+': '+x.reason)];
    const report='EXECUTIVE DELIVERY — '+(failures.length?'PARTIAL / BLOCKED':'INDEPENDENTLY VERIFIED')+
     '\n\nOriginal objective:\n'+row.objective.slice(0,1500)+
-    '\n\nSpecialist results:\n'+states.map((state,i)=>'## '+plan.assignments[i].slug+' — '+state.state+'\n'+state.result.slice(0,7000)).join('\n\n')+
+    '\n\nSpecialist results:\n'+states.map((state,i)=>'## '+plan.assignments[i].slug+' — '+state.state+'\n'+state.result).join('\n\n')+
     (failures.length?'\n\nUnresolved limitations:\n'+failures.map(x=>'- '+x.slice(0,700)).join('\n'):'')+
     '\n\nThe Executive did not perform these specialist analyses; only saved, reviewed specialist results are represented as verified.';
    const id=finalId(row.id);
