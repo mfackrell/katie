@@ -2,6 +2,7 @@ import {getSupabaseAdminClient} from '@/lib/data/supabase/admin';
 import {handleExecutiveSpecialistIntake} from './intake';
 import {startSpecialistAssignment} from './factory-runtime';
 import {startExecutiveFinance,startExecutiveDevelopment} from './autonomous';
+import {startGeneralExecutiveManagement} from './general';
 
 /**
  * Executive-exclusive management plane. A missed capability is a durable blocker,
@@ -17,11 +18,11 @@ export async function handleExecutiveManagement(input:{
  const {data:chat,error:chatError}=await db.from('chats').select('actor_id').eq('id',input.chatId).maybeSingle<{actor_id:string}>();
  if(chatError||chat?.actor_id!==input.actorId)throw Error('Executive conversation ownership mismatch');
  const {data:prior,error:priorError}=await db.from('executive_management_requests')
-  .select('objective,status,detail').eq('actor_id',input.actorId).eq('chat_id',input.chatId)
-  .eq('request_id',input.requestId).maybeSingle<{objective:string;status:string;detail:string|null}>();
+  .select('objective,status,detail,plan').eq('actor_id',input.actorId).eq('chat_id',input.chatId)
+  .eq('request_id',input.requestId).maybeSingle<{objective:string;status:string;detail:string|null;plan:Parameters<typeof startGeneralExecutiveManagement>[1]|null}>();
  if(priorError)throw Error('Executive management history unavailable');
  if(prior&&prior.objective!==input.message)throw Error('Executive request ID reused with a different objective');
- if(prior?.status!=='received'&&prior?.detail)return prior.detail;
+ if(prior?.status!=='received'&&prior?.status!=='planning'&&prior?.detail)return prior.detail;
  if(!prior){
   const {error}=await db.from('executive_management_requests').insert({
    actor_id:input.actorId,chat_id:input.chatId,request_id:input.requestId,
@@ -31,11 +32,13 @@ export async function handleExecutiveManagement(input:{
  }
  let result:string|null=null;
  // Existing management contracts can be reused, but only within Executive.
+ if(prior?.plan)return startGeneralExecutiveManagement(input,prior.plan);
  result=await handleExecutiveSpecialistIntake(input);
  if(!result)result=await startSpecialistAssignment(input);
  if(!result)result=await startExecutiveFinance(input);
  if(!result)result=await startExecutiveDevelopment(input);
- const status=result&&(/\b(?:delegated|assigned|executing|mission:)\b/i.test(result))?'delegated':'blocked';
+ if(!result)return startGeneralExecutiveManagement(input);
+ const status=result&&(/\b(?:delegated|assigned|executing|launched)\b|\bMission:\s*[0-9a-f-]{36}/i.test(result))?'delegated':'blocked';
  if(!result){
   result='Executive assignment registered but BLOCKED: no authorized autonomous specialist workflow was selected for this objective. The Executive has NOT performed the assignment, created agents, or completed an audit. An executive planning/provisioning capability must be implemented and independently verified before this work can start. Ordinary Katie chat will not be used as a fallback.';
  }
