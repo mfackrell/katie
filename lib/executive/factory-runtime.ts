@@ -1,6 +1,7 @@
 import {createHash} from 'node:crypto';
 import {getSupabaseAdminClient} from '@/lib/data/supabase/admin';
 import {saveMessage} from '@/lib/data/persistence-store';
+import {planExecutiveProvisioning} from './provisioning-service';
 
 type Intent={domain:string;slug:string;capability:string};
 type Agent={id:string;config:{name?:string;research?:boolean;development?:boolean}};
@@ -31,10 +32,6 @@ async function reportOnce(chatId:string,key:string,message:string){
 export async function startSpecialistFactory(input:{actorId:string;chatId:string;requestId:string;message:string;intent:Intent}){
  const {actorId,chatId,requestId,intent}=input,db=getSupabaseAdminClient();
  const key=stableKey('exec-factory-',requestId+'\n'+input.message);
- const {data:existing,error:lookupError}=await db.from('executive_orchestrators')
-  .select('id,slug,status').eq('actor_id',actorId).eq('slug',intent.slug).maybeSingle<{id:string;slug:string;status:string}>();
- if(lookupError)throw Error('Specialist registry lookup failed');
- if(existing?.status==='active')return intent.slug+' is already an active specialist. You can assign it work directly.';
  const requirement={
   capability:intent.capability,
   objective:'Configure and independently accept a working '+intent.domain+' mission specialist.',
@@ -44,10 +41,13 @@ export async function startSpecialistFactory(input:{actorId:string;chatId:string
   proposedDescription:'Executive-directed '+intent.domain+' specialist using the verified multi-agent mission runtime.',
   proposedCapabilities:[intent.capability],
  };
- const {data:request,error:reqError}=await db.rpc<{id:string;status:string}>('propose_executive_provisioning',{
-  p_actor:actorId,p_chat:chatId,p_request:key,p_requirement:requirement,p_route:'configure',p_specialist:null
- });
- if(reqError||!request?.id)throw Error('Specialist factory request could not be saved');
+ // Capability selection must use the verified active mission catalog. A generic
+ // research playbook does not prove a newly requested tool or specialty exists.
+ const {decision,request}=await planExecutiveProvisioning({actorId,chatId,requestKey:key,requirement});
+ if(decision.route==='reuse')return decision.specialistSlug+' is already an active specialist for '+intent.capability+'. You can assign it work directly.';
+ if(decision.route==='commission')return 'Executive recorded the request for '+requirement.proposedTitle+
+  ', but the verified mission capability catalog lacks '+decision.missingCapabilities.join(', ')+
+  '. Specialist commissioning is pending; no unimplemented capability was configured or activated. Request: '+request.id+'.';
  if(request.status==='proposed'){
   const {data:configured,error}=await db.rpc('transition_executive_provisioning',{
    p_id:request.id,p_actor:actorId,p_chat:chatId,p_action:'configure',
