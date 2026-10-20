@@ -179,7 +179,7 @@ export async function reconcileExecutiveManagement(){
     '\n\nSpecialist results:\n'+states.map((state,i)=>'## '+plan.assignments[i].slug+' — '+state.state+'\n'+state.result).join('\n\n')+
     (failures.length?'\n\nUnresolved limitations:\n'+failures.map(x=>'- '+x.slice(0,700)).join('\n'):'')+
     '\n\nThe Executive did not perform these specialist analyses; only saved, reviewed specialist results are represented as verified.';
-   const id=finalId(row.id);
+   const id=finalId(row.id+'\n'+report);
    const {data:priorMessage,error:priorError}=await db.from('messages').select('id').eq('id',id).maybeSingle();
    if(priorError)throw Error('Executive final delivery receipt unavailable');
    if(!priorMessage)await saveMessage(row.chat_id,{id,role:'assistant',content:report});

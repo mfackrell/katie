@@ -27,3 +27,11 @@ test('Executive never accepts mission completion without a passing independent r
 test('Executive delivery remains idempotent after the message was saved before ledger completion',async()=>{
  const r=runtime({alreadyDelivered:true});await r.run();assert.equal(r.saved.length,0);assert.equal(r.writes.at(-1).status,'completed');
 });
+
+
+test('recovered Executive results get a new delivery receipt while repeated identical reports remain stable',async()=>{
+ const blocked=runtime({review:'changes_requested'}),verified=runtime(),same=runtime();
+ await blocked.run();await verified.run();await same.run();
+ assert.notEqual(blocked.saved[0].id,verified.saved[0].id);
+ assert.equal(verified.saved[0].id,same.saved[0].id);
+});
