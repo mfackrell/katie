@@ -113,7 +113,8 @@ export default function SignalSprintPage() {
           <h2 className="mb-2 font-bold" style={{ color: "#e9f5ff" }}>How to play</h2>
           <p>Player A moves first. A valid <strong>Move</strong> adds one signal; <strong>End Turn</strong> resolves it and passes control to the other player. Whoever resolves the fourth signal wins. Out-of-turn actions have no effect. Progress is automatically saved, including unfinished turns and wins, so you can reload safely.</p>
         </section>
-        <p className="mt-6 text-center text-xs" style={{ color: "#67819b" }}>Signal Sprint · Original test edition v1 · Local two-player</p>
+        <p id="ready" aria-live="polite" className="mt-6 text-center text-xs" style={{ color: "#67819b" }}>{loaded ? "Ready to play" : "Loading saved game…"}</p>
+        <p className="mt-1 text-center text-xs" style={{ color: "#67819b" }}>Signal Sprint · Original test edition v1 · Local two-player</p>
       </div>
     </main>
   );
