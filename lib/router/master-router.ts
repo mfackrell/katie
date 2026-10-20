@@ -634,11 +634,13 @@ function buildFallbackChain({
   availableByProvider,
   intent,
   registryLookup,
-  actorRoutingProfile
+  actorRoutingProfile,
+  diverseProviders
 }: {
   scoredCandidates: Array<{ provider: LlmProvider; modelId: string; score: number }>;
   selectedProviderName: string;
   selectedModelId: string;
+  diverseProviders?: boolean;
   availableByProvider: Array<{ provider: LlmProvider; models: string[] }>;
   intent: Awaited<ReturnType<typeof inferRequestIntent>>;
   registryLookup?: Map<string, RegistryRoutingModel>;
@@ -647,7 +649,12 @@ function buildFallbackChain({
   const usedKeys = new Set<string>([`${selectedProviderName}:${selectedModelId}`]);
   const fallbackChain: Array<{ provider: LlmProvider; modelId: string; score: number }> = [];
 
-  for (const candidate of scoredCandidates) {
+  const providerSeen = new Set<string>([selectedProviderName]);
+  const preferred = diverseProviders ? scoredCandidates.filter(candidate => {
+    if (providerSeen.has(candidate.provider.name)) return false;
+    providerSeen.add(candidate.provider.name); return true;
+  }) : [];
+  for (const candidate of [...preferred, ...scoredCandidates]) {
     const validated = validateRoutingDecision(
       { providerName: candidate.provider.name, modelId: candidate.modelId },
       availableByProvider,
@@ -680,6 +687,7 @@ export async function chooseProvider(
   context: string,
   providers: LlmProvider[],
   options?: {
+    diverseFallbackProviders?: boolean;
     hasImages?: boolean;
     hasVideoInput?: boolean;
     routingTraceEnabled?: boolean;
@@ -913,6 +921,7 @@ export async function chooseProvider(
 
   const applyPolicyGuardrail = (selection: Selection): RoutingDecision => {
     const fallbackChain = buildFallbackChain({
+      diverseProviders: options?.diverseFallbackProviders,
       scoredCandidates: rankedCandidates,
       selectedProviderName: selection.provider.name,
       selectedModelId: selection.modelId,

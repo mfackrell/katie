@@ -1,28 +1,61 @@
 import {GAME_RULE_CATEGORIES} from '../../scripts/project-game-rules.mjs';
 import {projectPlanSchema} from '@/lib/projects/contract';
-import OpenAI from 'openai';
 import { zodTextFormat } from 'openai/helpers/zod';
+import {orchestrationChoices,orchestrationFailure,type OrchestrationChoice} from '@/lib/orchestration/routing';
+import {boundedProvider} from '@/lib/orchestration/bounded-provider';
 import { randomUUID } from 'node:crypto';
 import { rpc } from './store';
 import { calculate,planSchema,type Claim } from './types';
-const WORKER_MODEL='gpt-5-mini';
-const REVIEW_MODEL='gpt-5.4';
+
 
 const calculator={type:'function',name:'calculate',description:'Execute a deterministic arithmetic calculation. Numbers must come from supplied evidence or explicitly labeled assumptions.',strict:true,parameters:{type:'object',properties:{operation:{type:'string',enum:['add','subtract','multiply','divide','power']},values:{type:'array',items:{type:'number'},minItems:2,maxItems:12}},required:['operation','values'],additionalProperties:false}};
 export class MissionModelFailure extends Error { constructor(message:string,readonly partial:Record<string,unknown>){super(message);this.name='MissionModelFailure';} }
-export type ModelResult={text:string;sources:Array<{url:string;title:string}>;calculations:unknown[];model:string};
-// A bounded execution adapter uses the existing OpenAI credential/SDK. Ordinary
-// chat adapters remain unchanged; their unbounded continuation defaults cannot
-// enforce a mission allowance. No SDK inference retries or automatic fallback.
+export type ModelResult={text:string;sources:Array<{url:string;title:string}>;calculations:unknown[];model:string;provider?:string;routingReason?:string;attemptedModels?:string[]};
+export function isCreditExhaustion(error:unknown):boolean{
+ const e=error as {status?:number;code?:string;error?:{code?:string;message?:string};message?:string}|null;
+ const code=String(e?.code??e?.error?.code??'').toLowerCase();
+ const message=String(e?.message??e?.error?.message??'').toLowerCase();
+ return (e?.status===429||code==='insufficient_quota'||code==='billing_hard_limit_reached')&&
+  (/credit|quota|balance|billing|insufficient/.test(message)||code==='insufficient_quota'||code==='billing_hard_limit_reached');
+}
+// Every stage and child mission routes afresh against the active model registry.
+// Attempts share the same saved lease/budget; no workflow or evidence is reset.
 export async function missionModel(claim:Claim,instruction:string,input:string,tools:'none'|'research'|'calculate'='none'):Promise<ModelResult>{
  const agent=claim.mission.team.find(a=>a.id===claim.job.agent_id);
  if(!agent)throw Error('Saved worker unavailable');
  if(tools==='research'&&!agent.config.research)throw Error('Research permission denied');
- if(!process.env.OPENAI_API_KEY)throw Error('Existing OpenAI connection unavailable');
- const selectedModel=claim.job.role==='plan'||tools==='research'||claim.job.role==='review'||claim.job.role==='compose'||claim.job.role==='revise'||tools==='calculate'?REVIEW_MODEL:WORKER_MODEL;
+ if(input.length>48000)throw Error('Mission evidence exceeds bounded context. Narrow the objective or deliverable.');
+ const choices=await orchestrationChoices({objective:claim.mission.objective,instruction:claim.job.instruction+'\n'+instruction,
+  requestId:claim.job.id,accounting:{
+   reserve:async(model,tokens)=>{const id=randomUUID();if(!await rpc<boolean>('reserve_mission_routing_call',{p_id:claim.job.id,p_lease:claim.job.lease,p_call:id,p_model:model,p_tokens:tokens}))throw Error('Worker no longer authorized or mission allowance exhausted');return id;},
+   finish:async(id,tokens)=>{await rpc('finish_mission_call',{p_call:id,p_tokens:tokens});}
+  },research:tools==='research',review:claim.job.role==='review',planning:claim.job.role==='plan'});
+ const attemptedModels:string[]=[];
+ const failedProviders=new Set<string>();
+ let last:unknown;
+ for(const choice of choices){
+  if(failedProviders.has(choice.provider.name))continue;
+  attemptedModels.push(choice.provider.name+':'+choice.modelId);
+  try{const result=await executeMissionModel(claim,instruction,input,tools,choice);return{...result,provider:choice.provider.name,routingReason:choice.reasoning,attemptedModels};}
+  catch(error){
+   last=error;
+   // Invalid output needs the existing repair workflow, never an implicit fresh
+   // draft. Authorization/budget denial must never trigger another inference.
+   const detail=error instanceof Error?error.message:String(error);
+   if(/allowance exhausted|no longer authorized|permission denied|Invalid tool|Unpermitted|tool arguments instead/i.test(detail)||(error instanceof MissionModelFailure&&!['server_error','rate_limit_exceeded','insufficient_quota'].includes(String(error.partial.providerErrorCode))))throw error;
+   if(await orchestrationFailure(choice,error)==='provider'||isCreditExhaustion(error))failedProviders.add(choice.provider.name);
+   console.warn('[Missions] Model attempt failed; trying next eligible provider',{jobId:claim.job.id,provider:choice.provider.name,model:choice.modelId});
+  }
+ }
+ if(last instanceof MissionModelFailure)throw new MissionModelFailure(last.message,{...last.partial,attemptedModels,providerFailure:true});
+ if(last instanceof Error)throw new MissionModelFailure(last.message,{attemptedModels,providerFailure:true});
+ throw Error('No eligible orchestration model could execute this assignment');
+}
+async function executeMissionModel(claim:Claim,instruction:string,input:string,tools:'none'|'research'|'calculate',choice:OrchestrationChoice):Promise<ModelResult>{
+ const selectedModel=choice.modelId;
  const gameSpecification=claim.mission.project_kind==='specification'&&(claim.mission.project_evidence as {projectProfile?:string}|null)?.projectProfile==='game';
  const outputTokens=gameSpecification&&['compose','revise'].includes(claim.job.role)?16000:claim.mission.project_kind==='specification'&&['compose','revise'].includes(claim.job.role)?6000:claim.job.role==='review'?5000:3000;
- const client=new OpenAI({apiKey:process.env.OPENAI_API_KEY,maxRetries:0,timeout:90_000,fetch:globalThis.fetch.bind(globalThis)});
+ const client=boundedProvider(choice);
  const sources:ModelResult['sources']=[],calculations:unknown[]=[];
  if(input.length>48000)throw Error('Mission evidence exceeds bounded context. Narrow the objective or deliverable.');
  let context:unknown[]=[{role:'user',content:input}];
@@ -41,15 +74,15 @@ export async function missionModel(claim:Claim,instruction:string,input:string,t
   // inference. Keep a conservative byte fallback if counting is unavailable.
   const countInput:Record<string,unknown>={...request};
   delete countInput.max_output_tokens;delete countInput.store;delete countInput.max_tool_calls;
-  const counted=await client.post<unknown,{input_tokens:number}>('/responses/input_tokens',{body:countInput,timeout:15_000}).catch(()=>null);
+  const counted=await client.post('/responses/input_tokens',{body:countInput,timeout:15_000}).catch(()=>null);
   const inputTokens=counted&&Number.isSafeInteger(counted.input_tokens)&&counted.input_tokens>=0?counted.input_tokens+256:Buffer.byteLength(JSON.stringify(request),'utf8');
   // Output includes reasoning; native search requires additional headroom.
   const reserve=inputTokens+outputTokens+(tools==='research'?32000:0);
   const inferenceTimeout=tools==='calculate'?Math.min(90_000,calculationDeadline-Date.now()-5000):90_000;
   if(inferenceTimeout<1000)throw Error('Calculation execution time allowance exhausted');
-  if(!await rpc<boolean>('reserve_mission_call',{p_id:claim.job.id,p_lease:claim.job.lease,p_call:callId,p_model:selectedModel,p_tokens:reserve}))throw Error('Worker no longer authorized or mission allowance exhausted');
+  if(!await rpc<boolean>('reserve_mission_call',{p_id:claim.job.id,p_lease:claim.job.lease,p_call:callId,p_model:choice.provider.name+':'+selectedModel,p_tokens:reserve}))throw Error('Worker no longer authorized or mission allowance exhausted');
   try{
-   const response=await client.responses.create(request as unknown as OpenAI.Responses.ResponseCreateParamsNonStreaming,{timeout:inferenceTimeout});
+   const response=await client.responses.create(request,{timeout:inferenceTimeout});
    await rpc('finish_mission_call',{p_call:callId,p_tokens:response.usage?.total_tokens??null});
    if(response.status!=='completed')throw new MissionModelFailure('Model output incomplete: '+response.status,{responseStatus:response.status,incompleteReason:response.incomplete_details?.reason??null,outputTokenLimit:outputTokens,providerErrorCode:response.error?.code??null,providerErrorMessage:response.error?.message?.slice(0,600)??null});
    text=response.output_text?.trim()??'';

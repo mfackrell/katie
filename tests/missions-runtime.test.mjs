@@ -75,7 +75,7 @@ test('a second unsuccessful review blocks instead of creating an endless repair 
 });
 function modelFixture(responses,reserve=true,inputCount=12){let dispatches=0;const ledger=[],counts=[],reservations=[];
  class Client{post=async(path,options)=>{counts.push({path,...options});if(inputCount instanceof Error)throw inputCount;return{input_tokens:inputCount};};responses={create:async request=>{dispatches++;ledger.push(request);return responses.shift();}};}
- const load=modules({'openai':{__esModule:true,default:Client},'@/lib/missions/store':{rpc:async(name,args)=>{if(name==='reserve_mission_call'){reservations.push(args);return reserve;}return true;}}});
+ const load=modules({'@/lib/orchestration/routing':{orchestrationChoices:async input=>[{provider:{name:'openai'},modelId:input.planning||input.research||input.review||/Analyze/.test(input.instruction)?'gpt-5.4':'gpt-5-mini',reasoning:'Injected transport fixture'}],orchestrationFailure:async()=>{}},'openai':{__esModule:true,default:Client},'@/lib/missions/store':{rpc:async(name,args)=>{if(name==='reserve_mission_call'){reservations.push(args);return reserve;}return true;}}});
  return{call:load('@/lib/missions/model').missionModel,ledger,counts,reservations,count:()=>dispatches};
 }
 const response=(text,extra={})=>({status:'completed',output_text:text,output:[],usage:{total_tokens:12},...extra});

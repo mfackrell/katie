@@ -16,8 +16,8 @@ function runtime(response){
  const exports={};
  vm.runInNewContext(js,{exports,console,require(name){
   if(name==='zod')return require('zod');
-  if(name==='@/lib/providers')return{getAvailableProviders:()=>[provider]};
-  if(name==='@/lib/router/master-router')return{selectControlPlaneDecisionModels:()=>[{provider,modelId:'control'}]};
+  if(name==='@/lib/orchestration/routing')return{orchestrationChoices:async()=>[{provider,modelId:'control',reasoning:'fixture'}],orchestrationFailure:async()=>{}};
+  if(name==='@/lib/orchestration/bounded-provider')return{boundedProvider:()=>({responses:{create:async()=>({status:'completed',output_text:JSON.stringify(response)})}})};
   throw Error('Unexpected dependency '+name);
  }});
  return exports;
