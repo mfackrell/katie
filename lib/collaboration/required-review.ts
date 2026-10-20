@@ -134,6 +134,10 @@ export async function runRequiredDraftReview(input: {
   input.onProgress?.("Establishing independent evidence and quality criteria before revealing the draft.");
   if (!draft.trim()) return unavailable("Independent review unavailable: no text draft was produced.");
 
+  // Retain an independently validated task contract when a later comparison
+  // or final verification fails. A replacement reviewer must not repeat the
+  // expensive completed assessment and contract stages.
+  let validatedAssessment: IndependentAssessment | undefined;
   // A failed or malformed reviewer is retried with a different eligible model.
   for (let attempt = 0; attempt < 3; attempt++) {
     if (reviewDeadlineMs - Date.now() < 15_000) break;
@@ -151,9 +155,10 @@ export async function runRequiredDraftReview(input: {
       if (used.some(p => key(p) === key(reviewer!))) throw new Error("Reviewer must be a different, unused model");
       used.push(reviewer);
       // A different model validates the task definition while both calls remain draft-blind.
-      let assessment: IndependentAssessment | undefined;
+      let assessment: IndependentAssessment | undefined = validatedAssessment;
       let contractFeedback = "";
-      for (let pass = 0; pass < MAX_CONTRACT_REJECTIONS; pass++) {
+      if (assessment) input.onProgress?.("Reusing the previously validated task contract for replacement reviewer.");
+      for (let pass = 0; !assessment && pass < MAX_CONTRACT_REJECTIONS; pass++) {
         phase = "assessment";
         const assessmentResponse = await within(() => selected.provider.generate(prepare({
           ...clean, modelId: selected.modelId, onProviderSystemPrepared: undefined,
@@ -199,6 +204,7 @@ export async function runRequiredDraftReview(input: {
         if (contractRejections >= MAX_CONTRACT_REJECTIONS) throw new Error("Task contract rejected after bounded validation attempts");
       }
       if (!assessment) throw new Error("Task contract failed independent validation");
+      validatedAssessment = assessment;
       audit.independentAssessment = assessment;
       audit.reviewer = reviewer;
       const independentAssessment = JSON.stringify(assessment);
