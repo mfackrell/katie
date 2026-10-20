@@ -235,6 +235,26 @@ async function advance(p: Project) {
             if(note&&typeof note.findings==='string')
                 projectEvidence={...(projectEvidence as Record<string,unknown>),recoveryReview:{sourceMissionId:note.sourceMissionId,findings:note.findings.slice(0,2200),instruction:'Correct these independent review findings. Full prior evidence remains saved; do not repeat research or assume approval.'}};
         }
+        if(game){
+            const {data:events,error}=await getSupabaseAdminClient().from('project_events')
+              .select('data').eq('project_id',p.id).eq('event','game_rule_coverage_recovered')
+              .order('created_at',{ascending:false}).limit(1);
+            if(error)throw Error('Game coverage recovery evidence unavailable');
+            const recovered=((events??[]) as Array<{data?:{sourceMissionId?:string;findings?:string;revisionJobId?:string}}>)[0]?.data;
+            if(recovered?.revisionJobId){
+                const {data:prior,error:pe}=await getSupabaseAdminClient().from('mission_assignments')
+                  .select('result').eq('id',recovered.revisionJobId).maybeSingle<{result:{rejectedSpecification?:string}|null}>();
+                if(pe)throw Error('Saved rejected game draft unavailable');
+                let draft:unknown=null;
+                try{
+                    const raw=prior?.result?.rejectedSpecification;
+                    if(raw&&raw.length<=17000)draft=JSON.parse(raw);
+                }catch{/* Preserve unparseable original in its durable mission. */}
+                projectEvidence={...(projectEvidence as Record<string,unknown>),
+                  recoveryCoverage:{sourceMissionId:recovered.sourceMissionId,findings:recovered.findings,
+                    rejectedDraft:draft,instructions:'Preserve valid scenarios, add real observable or model-based proof for missing rule IDs, never invent rules or user decisions; require fresh independent review.'}};
+            }
+        }
         // Keep the complete independently reviewed research as structured evidence,
         // not a second copy inside the 12 KB mission instruction. The original
         // user objective remains unchanged and authoritative.
@@ -308,7 +328,7 @@ async function reconcileBlockedGameRevisions(){
       .order('updated_at',{ascending:false}).limit(2);
     if(error)throw Error('Blocked game revision recovery index unavailable');
     for(const p of (data??[]) as Array<{id:string}>){
-        if(await projectRpc<boolean>('recover_game_revision_timeout',{p_id:p.id})){
+        if(await projectRpc<boolean>('recover_game_revision_timeout',{p_id:p.id}) || await projectRpc<boolean>('recover_game_rule_coverage',{p_id:p.id})){
             console.info('[Projects] Saved game revision timeout recovered without resetting charges',{project:p.id});
             return true;
         }
