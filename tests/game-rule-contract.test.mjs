@@ -63,6 +63,21 @@ test('unresolved rules and open blocking edition conflicts cannot imply readines
   spec.rules[0].status='unresolved';
   assert.throws(()=>validateGameAcceptance(spec,acceptance),/claims unresolved rule/);
 });
+test('generated unknown records require explicit question, status, blocking and linked rules',()=>{
+ const {spec}=fixture();
+ // Regression for Signal Sprint's rejected {id,description}-only records.
+ spec.unknowns=[{id:'u1',description:'Local storage key unspecified'}];
+ assert.throws(()=>validateGameRules(spec),/unknown u1 incomplete: require question, status/);
+ spec.unknowns=[{id:'u1',question:'What storage key name should be used?',status:'open',blocking:false,ruleIds:['persist']}];
+ assert.equal(validateGameRules(spec).unresolvedBlocking.length,0);
+ spec.unknowns[0].ruleIds=['not-a-rule'];
+ assert.throws(()=>validateGameRules(spec),/unknown u1 ruleIds references must resolve/);
+ spec.unknowns=[{id:'u1',question:'Which gameplay mechanic?',status:'open',blocking:true,ruleIds:['orthogonal']}];
+ assert.deepEqual(validateGameRules(spec).unresolvedBlocking,['u1']);
+ spec.unknowns=[{id:'u1',question:'Which edition?',status:'resolved',blocking:false,ruleIds:['orthogonal'],decisionSourceId:'not-a-source'}];
+ assert.throws(()=>validateGameRules(spec),/resolution source references must resolve/);
+});
+
 test('fabricated provenance, invalid sources and duplicate rule IDs are rejected',()=>{
   const {spec}=fixture();
   spec.rules[0].sourceIds=['invented-source'];
