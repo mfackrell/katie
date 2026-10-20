@@ -272,11 +272,11 @@ try {
   const composer = page.getByPlaceholder("Ask Katie…");
   const modelSettings = page.getByRole("button", { name: "Hide answering models", exact: true });
   assert.equal(await modelSettings.getAttribute("aria-expanded"), "true");
-  await page.getByLabel("openai", { exact: true }).selectOption("gpt-example");
-  assert.equal(await page.getByLabel("openai", { exact: true }).inputValue(), "gpt-example");
+  await page.getByLabel("Answering model for openai", { exact: true }).selectOption("gpt-example");
+  assert.equal(await page.getByLabel("Answering model for openai", { exact: true }).inputValue(), "gpt-example");
   await modelSettings.click();
   await page.getByRole("button", { name: "Answering model: gpt-example", exact: true }).click();
-  await page.getByLabel("openai", { exact: true }).selectOption("");
+  await page.getByLabel("Answering model for openai", { exact: true }).selectOption("");
   await composer.fill("Keep this draft without executing.");
   await page.getByText("Draft saved", { exact: true }).waitFor();
   assert.equal(

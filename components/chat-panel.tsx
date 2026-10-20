@@ -2587,6 +2587,7 @@ export function ChatPanel({
                     >
                       <span className="shrink-0 capitalize text-zinc-500">{providerName}</span>
                       <select
+                        aria-label={`Answering model for ${providerName}`}
                         value={selectedValue}
                         onChange={(event) => {
                           const nextModel = event.target.value;
