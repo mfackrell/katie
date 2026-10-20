@@ -925,3 +925,37 @@ test("rejected final draft stays in audit with findings bound to its hash, never
   assert.match(result.result.text, /not ready for submission/i);
   assert.notEqual(result.audit.finalHash, result.audit.lastCandidateHash);
 });
+
+
+test("replacement reviewer reuses validated assessment after comparison failure", async () => {
+  const phases: string[] = [];
+  const first = makeProvider("anthropic", async p => {
+    if (p.persona.includes("KATIE_INDEPENDENT_ASSESSMENT")) {
+      phases.push("assessment"); return response("anthropic", "first", assessment);
+    }
+    phases.push("first-comparison"); throw new Error("Reviewer provider timed out");
+  });
+  const second = makeProvider("google", async p => {
+    if (p.persona.includes("KATIE_INDEPENDENT_ASSESSMENT")) {
+      phases.push("repeated-assessment");
+      throw new Error("Already validated assessment was needlessly repeated");
+    }
+    phases.push("second-comparison"); return response("google", "second", verdict("approve"));
+  });
+  const lead = makeProvider("openai", async p => {
+    if (p.persona.includes("KATIE_TASK_CONTRACT_VALIDATION")) {
+      phases.push("contract"); return contractApproval(p);
+    }
+    throw new Error("Unexpected revision");
+  });
+  const result = await runRequiredDraftReview({
+    requestId: "reuse-verified-contract",
+    draft, params, leadProvider: lead, deadlineMs: Date.now() + 240_000,
+    selectHelper: async context => context.usedParticipants.length === 1
+      ? { provider: first, modelId: "first" }
+      : { provider: second, modelId: "second" },
+  });
+  assert.equal(result.audit.status, "approved");
+  assert.deepEqual(phases, ["assessment", "contract", "first-comparison", "second-comparison"]);
+  assert.equal(result.audit.contractValidation?.verdict, "approve");
+});
