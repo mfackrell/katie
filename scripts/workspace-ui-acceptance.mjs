@@ -328,7 +328,8 @@ try {
     0,
   );
   await page.getByRole("heading", { name: "Executive Orchestrator", exact: true }).waitFor();
-  await page.getByRole("region", { name: "Orchestrator agents", exact: true }).waitFor();
+  await page.getByRole("region", { name: "Executive Orchestrator", exact: true }).waitFor();
+  await page.getByRole("region", { name: "Specialist Orchestrators", exact: true }).waitFor();
   await page.getByRole("region", { name: "Single-task agents", exact: true }).waitFor();
   await page.getByLabel("Active chats for Operations", { exact: true }).selectOption(c);
   await composer.waitFor();
