@@ -230,3 +230,30 @@ test("workspace state rejects unknown conversations before issuing any write", a
   assert.equal((await route.PATCH(request)).status, 409);
   assert.equal(db.calls.length, 0);
 });
+
+test("projects retain their original requested outcome before a specification name exists", async () => {
+  const db = database({
+    work_projects: [
+      {
+        id: "draft-project",
+        actor_id: "a",
+        chat_id: "c",
+        objective: "Build Take Eleven with explicit turn rules",
+        status: "blocked",
+        phase: "specification",
+        spec: null,
+      },
+    ],
+  });
+  const load = modules({
+    "@/lib/data/supabase/admin": { getSupabaseAdminClient: () => db },
+    "@/lib/data/persistence-store": {
+      listChats: async () => [{ id: "c", actorId: "a" }],
+    },
+  });
+  const body = await (await load("@/app/api/work/route").GET()).json();
+  assert.equal(
+    body.items[0].title,
+    "Build Take Eleven with explicit turn rules",
+  );
+});
