@@ -160,7 +160,7 @@ export async function reconcileSpecialistFactory(){
   // A generic memo cannot verify a declared domain capability. Require native
   // tool receipts from a worker, as well as the independent result review.
   const demonstrated=request.capability==='research_synthesis'
-   ? workers.some(a=>a.payload?.capability==='research'&&a.result?.sources?.some(s=>typeof s.url==='string'&&/^https?:\\/\\//.test(s.url)))
+   ? workers.some(a=>a.payload?.capability==='research'&&a.result?.sources?.some(s=>typeof s.url==='string'&&/^https?:\/\//.test(s.url)))
    : ['financial_analysis','operations_analysis'].includes(request.capability)&&
     workers.some(a=>a.payload?.capability==='analysis'&&Boolean(a.result?.calculations?.length));
   const passed=mission.status==='completed'&&final?.result?.verdict==='pass'&&Boolean(mission.result?.trim())&&workerIds.size>=2&&demonstrated;
