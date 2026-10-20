@@ -332,7 +332,7 @@ async function reconcileBlockedGameRevisions(){
       .order('updated_at',{ascending:false}).limit(2);
     if(error)throw Error('Blocked game revision recovery index unavailable');
     for(const p of (data??[]) as Array<{id:string}>){
-        if(await projectRpc<boolean>('recover_game_revision_timeout',{p_id:p.id}) || await projectRpc<boolean>('recover_game_rule_coverage',{p_id:p.id})){
+        if(await projectRpc<boolean>('recover_game_revision_timeout',{p_id:p.id}) || await projectRpc<boolean>('recover_game_rule_coverage',{p_id:p.id}) || await projectRpc<boolean>('recover_bounded_game_review',{p_id:p.id})){
             console.info('[Projects] Saved game revision timeout recovered without resetting charges',{project:p.id});
             return true;
         }
