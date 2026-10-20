@@ -43,7 +43,7 @@ function coordinator({deployedPassed=true}={}){let p=structuredClone(owner),runs
  const rpc=async(name,args)=>{if(name==='project_dispatch_recovery_candidates')return [];if(name==='claim_work_project')return p.status==='running'?structuredClone(p):null;assert.equal(name,'finish_work_project');calls.push(structuredClone(args));if(args.p_action==='child'){
    const mid=randomUUID(),ctx=args.p_data.kind==='development'?{version:1,projectId:id,scopeHash:p.approved_hash,baseSha:p.verified_sha??p.baseline_sha,contractHash:digest(p.spec.milestones[p.milestone_index].contract),contract:p.spec.milestones[p.milestone_index].contract}:null;
    p.active_mission_id=mid;runs.push({mission_id:mid,kind:args.p_data.kind,ordinal:++counter,milestone_index:p.milestone_index,binding:ctx,outcome:null});missions.set(mid,{mission:{id:mid,status:'running'},jobs:[]});
-  }else if(args.p_action==='advance'){const r=runs.find(r=>r.mission_id===p.active_mission_id);r.outcome=args.p_data;p.verified_sha=args.p_data.head;p.milestone_index++;p.active_mission_id=null;if(p.milestone_index===plan.milestones.length)p.phase='delivery';}
+  }else if(args.p_action==='advance'){const r=runs.find(r=>r.mission_id===p.active_mission_id);r.outcome=args.p_data;p.verified_sha=args.p_data.head;p.milestone_index++;p.active_mission_id=null;if(p.milestone_index===p.spec.milestones.length)p.phase='delivery';}
   else if(args.p_action==='preview'){p.preview=args.p_data;p.phase='browser_check';p.active_mission_id=null;}
   else if(args.p_action==='browser'){p.preview.browserAcceptance=args.p_data;p.phase='assessment';}
   else if(args.p_action==='complete'){p.status='completed';p.result=args.p_data.result;}
