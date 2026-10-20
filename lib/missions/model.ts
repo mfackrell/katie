@@ -103,7 +103,7 @@ export async function missionModel(claim:Claim,instruction:string,input:string,t
  const gameSpecification=claim.mission.project_kind==='specification'&&(claim.mission.project_evidence as {projectProfile?:string}|null)?.projectProfile==='game';
  const outputTokens=gameSpecification&&['compose','revise'].includes(claim.job.role)?16000:claim.mission.project_kind==='specification'&&['compose','revise'].includes(claim.job.role)?6000:claim.job.role==='review'?5000:3000;
  if(input.length>48000)throw Error('Mission evidence exceeds bounded context. Narrow the objective or deliverable.');
- if(tools==='none')return routedMissionText(claim,instruction+
+ if(tools==='none'&&claim.mission.project_id)return routedMissionText(claim,instruction+
    (gameSpecification&&['compose','revise'].includes(claim.job.role)?'\nRespond with complete minified expanded game specification JSON; preserve every original rule, model and browser acceptance and obey the saved validation feedback.':''),input,outputTokens);
  const client=new OpenAI({apiKey:process.env.OPENAI_API_KEY,maxRetries:0,timeout:90_000,fetch:globalThis.fetch.bind(globalThis)});
  const sources:ModelResult['sources']=[],calculations:unknown[]=[];
