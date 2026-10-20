@@ -299,7 +299,20 @@ test('game specification adapter choice comes from server-owned project evidence
  f.missions.set(mid,{mission:{id:mid,status:'completed',result:'Original controlled user rules, independently reviewed.'},jobs:[]});
  await f.tick();const saved=f.calls.at(-1).p_data;
  assert.equal(saved.kind,'specification');assert.equal(saved.evidence.projectProfile,'game');
- assert.match(saved.objective,/Original controlled user rules/);assert.match(saved.objective,/game:\{enginePath,rules,acceptance\}/);
+ assert.equal(saved.evidence.reviewedResearch.text,'Original controlled user rules, independently reviewed.');assert.doesNotMatch(saved.objective,/Original controlled user rules/);assert.match(saved.objective,/game:\{enginePath,rules,acceptance\}/);
+});
+
+test('long independently reviewed research is retained without overflowing game specification mission instructions',async()=>{
+ const f=coordinator(),mid=randomUUID(),research='VERIFIED_SOURCE_SENTINEL '+ 'rule evidence '.repeat(540);
+ f.p.phase='specification';f.p.profile='game';
+ f.runs.push({mission_id:mid,kind:'research',ordinal:1,milestone_index:0,binding:null,outcome:{reviewedMissionId:mid}});
+ f.missions.set(mid,{mission:{id:mid,status:'completed',result:research},jobs:[]});
+ await f.tick();const saved=f.calls.at(-1).p_data;
+ assert.equal(saved.kind,'specification');
+ assert.ok(saved.objective.length<12000);
+ assert.doesNotMatch(saved.objective,/VERIFIED_SOURCE_SENTINEL/);
+ assert.equal(saved.evidence.reviewedResearch.text,research);
+ assert.equal(saved.evidence.reviewedResearch.reviewedMissionId,mid);
 });
 
 test('detailed game rules stay in saved evidence rather than overflowing an otherwise valid development brief',async()=>{
