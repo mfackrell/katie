@@ -373,9 +373,7 @@ export function SpecialistDirectory({ id }: { id?: string }) {
     event.preventDefault();
     setError("");
     if (kind === "orchestrator") {
-      const executive =
-        all.find((actor) => actor.name.toLowerCase() === "katie") ??
-        all.find((actor) => rootIds.has(actor.id));
+      const executive = all.find((actor) => actor.actorKind === "executive");
       if (!executive) {
         setError("Executive is unavailable. Reload the directory.");
         return;
