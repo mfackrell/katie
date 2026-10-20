@@ -5,13 +5,14 @@ import { chromium } from "playwright-core";
 import bundledChromium from "@sparticuz/chromium";
 const origin = process.env.KATIE_UI_TEST_ORIGIN ?? "http://127.0.0.1:3141";
 const a = "11111111-1111-4111-8111-111111111111",
+  e = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
   b = "22222222-2222-4222-8222-222222222222",
   c = "33333333-3333-4333-8333-333333333333",
   m = "44444444-4444-4444-8444-444444444444",
   p = "55555555-5555-4555-8555-555555555555";
 const actors = [
   { id: a, name: "Katie", purpose: "Answer ordinary requests.", actorKind: "standard" },
-  { id: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee", name: "Executive Orchestrator", purpose: "Manage agents.", actorKind: "executive" },
+  { id: e, name: "Executive Orchestrator", purpose: "Manage agents.", actorKind: "executive" },
   {
     id: b,
     name: "Internal worker",
@@ -31,7 +32,7 @@ const chats = [
   { id: "99999999-9999-4999-8999-999999999999", actorId: a, title: "Disposable UI check", createdAt: "2026-10-20T12:00:00Z", updatedAt: "2026-10-20T13:00:00Z" },
   {
     id: c,
-    actorId: a,
+    actorId: e,
     title: "Operations analysis",
     createdAt: "2026-10-20T12:00:00Z",
     updatedAt: "2026-10-20T14:00:00Z",
@@ -209,7 +210,7 @@ try {
         specialists: [
           {
             id: "88888888-8888-4888-8888-888888888888",
-            actor_id: a,
+            actor_id: e,
             slug: "operations",
             title: "Operations",
             description: "Assess process capacity and bottlenecks.",
