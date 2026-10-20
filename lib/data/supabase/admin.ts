@@ -2,7 +2,7 @@ declare const process: { env: Record<string, string | undefined> };
 
 type QueryResult<T> = Promise<{ data: T; error: { message: string } | null }>;
 
-type Filter = { type: "eq" | "in" | "lt"; field: string; value: unknown };
+type Filter = { type: "eq" | "in" | "lt" | "is" | "or"; field: string; value: unknown };
 type Sort = { field: string; ascending: boolean };
 
 class PostgrestQuery {
@@ -30,6 +30,16 @@ class PostgrestQuery {
 
   lt(field: string, value: unknown) {
     this.filters.push({ type: "lt", field, value });
+    return this;
+  }
+
+  is(field: string, value: null | boolean) {
+    this.filters.push({ type: "is", field, value });
+    return this;
+  }
+
+  or(filters: string) {
+    this.filters.push({ type: "or", field: "or", value: filters });
     return this;
   }
 
@@ -117,7 +127,9 @@ class PostgrestQuery {
     url.searchParams.set("select", selectOverride ?? this.selectedColumns);
 
     for (const filter of this.filters) {
-      if (filter.type === "eq" || filter.type === "lt") {
+      if (filter.type === "or") {
+        url.searchParams.set("or", `(${String(filter.value)})`);
+      } else if (filter.type === "eq" || filter.type === "lt" || filter.type === "is") {
         // URLSearchParams encodes once; pre-encoding leaves escaped timestamps
         // and other literal values in the filter received by PostgREST.
         url.searchParams.set(filter.field, `${filter.type}.${String(filter.value)}`);
