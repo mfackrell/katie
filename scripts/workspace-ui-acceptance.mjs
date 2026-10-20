@@ -27,6 +27,7 @@ const actors = [
   },
 ];
 const chats = [
+  { id: "99999999-9999-4999-8999-999999999999", actorId: a, title: "Disposable UI check", createdAt: "2026-10-20T12:00:00Z", updatedAt: "2026-10-20T13:00:00Z" },
   {
     id: c,
     actorId: a,
@@ -138,6 +139,12 @@ try {
     if (req.method() !== "GET") mutations.push({ path: url.pathname, body });
     if (url.pathname === "/api/actors") return reply({ actors });
     if (url.pathname === "/api/chats") {
+      if (req.method() === "DELETE") {
+        const index = chats.findIndex(chat => chat.id === url.searchParams.get("id"));
+        assert.ok(index >= 0);
+        chats.splice(index, 1);
+        return reply({ success: true });
+      }
       if (req.method() === "POST") {
         const chat = {
           ...body,
@@ -246,21 +253,30 @@ try {
     .getByRole("heading", { name: "Welcome back", exact: true })
     .waitFor();
   await page.getByText("Operations analysis", { exact: true }).waitFor();
+  page.once("dialog", dialog => dialog.dismiss());
+  await page.getByRole("button", { name: "Delete chat: Operations analysis", exact: true }).click();
+  assert.equal(mutations.filter(r => r.path === "/api/chats").length, 0);
   await page.screenshot({ path: output + "/home-desktop.png", fullPage: true });
   await page.getByRole("link", { name: "Conversations", exact: true }).click();
   await page
     .getByRole("heading", { name: "Conversations", exact: true })
     .waitFor();
   assert.equal(await page.getByText("Internal QA history").count(), 0);
+  page.once("dialog", dialog => dialog.accept());
+  await page.getByRole("button", { name: "Delete chat: Disposable UI check", exact: true }).click();
+  await page.getByText("Disposable UI check", { exact: true }).waitFor({ state: "hidden" });
+  assert.equal(chats.some(chat => chat.title === "Disposable UI check"), false);
   await page.getByLabel("Search conversations").fill("Operations");
   await page.getByText("Operations analysis", { exact: true }).click();
   await page.getByPlaceholder("Ask Katie…").waitFor();
   const composer = page.getByPlaceholder("Ask Katie…");
-  const modelSettings = page.getByRole("button", { name: "Automatic · settings", exact: true });
-  assert.equal(await modelSettings.getAttribute("aria-expanded"), "false");
+  const modelSettings = page.getByRole("button", { name: "Hide answering models", exact: true });
+  assert.equal(await modelSettings.getAttribute("aria-expanded"), "true");
+  await page.getByLabel("Answering model for openai", { exact: true }).selectOption("gpt-example");
+  assert.equal(await page.getByLabel("Answering model for openai", { exact: true }).inputValue(), "gpt-example");
   await modelSettings.click();
-  assert.equal(await page.getByRole("button", { name: "Close model settings", exact: true }).getAttribute("aria-expanded"), "true");
-  await page.getByRole("button", { name: "Close model settings", exact: true }).click();
+  await page.getByRole("button", { name: "Answering model: gpt-example", exact: true }).click();
+  await page.getByLabel("Answering model for openai", { exact: true }).selectOption("");
   await composer.fill("Keep this draft without executing.");
   await page.getByText("Draft saved", { exact: true }).waitFor();
   assert.equal(
@@ -353,6 +369,8 @@ try {
       passed: true,
       checks: [
         "home",
+        "chat deletion confirmation and list refresh",
+        "visible answering model overrides",
         "worker filtering",
         "searchable conversations",
         "canonical links",

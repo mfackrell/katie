@@ -52,6 +52,28 @@ type Registry = {
 function date(value: string | null) {
   return value ? new Date(value).toLocaleString() : "Update time unavailable";
 }
+function DeleteChatButton({ chat, onDeleted }: { chat: ChatThread; onDeleted: () => void }) {
+  const [deleting, setDeleting] = useState(false);
+  const [error, setError] = useState("");
+  async function remove() {
+    if (deleting || !window.confirm(`Permanently delete “${chat.title}” and its messages? This cannot be undone.`)) return;
+    setDeleting(true);
+    setError("");
+    try {
+      const response = await fetch(`/api/chats?id=${encodeURIComponent(chat.id)}`, { method: "DELETE" });
+      if (!response.ok) throw new Error("Could not delete this chat. Please try again.");
+      onDeleted();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Could not delete this chat.");
+    } finally {
+      setDeleting(false);
+    }
+  }
+  return <div className="shrink-0">
+    <button type="button" className="min-h-11 rounded-lg px-3 text-sm text-zinc-400 hover:bg-red-500/10 hover:text-red-300 disabled:opacity-40" aria-label={`Delete chat: ${chat.title}`} disabled={deleting} onClick={() => void remove()}>{deleting ? "Deleting…" : "Delete"}</button>
+    {error && <p role="alert" className="max-w-48 text-xs text-red-300">{error}</p>}
+  </div>;
+}
 function Status({ item }: { item: WorkItem }) {
   return (
     <span
@@ -230,9 +252,9 @@ export function HomeScreen() {
           }}
         />
         {recent.map((chat) => (
+          <div key={chat.id} className="mt-3 flex items-center gap-2 rounded-xl border border-white/10 pr-2">
           <Link
-            className="mt-3 flex flex-wrap justify-between gap-3 rounded-xl border border-white/10 p-4 hover:bg-white/5"
-            key={chat.id}
+            className="min-w-0 flex flex-1 flex-wrap justify-between gap-3 rounded-xl p-4 hover:bg-white/5"
             href={conversationHref(chat.id)}
           >
             <div className="min-w-0">
@@ -245,6 +267,8 @@ export function HomeScreen() {
               {date(chat.updatedAt)}
             </span>
           </Link>
+          <DeleteChatButton chat={chat} onDeleted={() => void chats.refresh()} />
+          </div>
         ))}
         {!recent.length && !chats.loading && (
           <p className="mt-4 text-sm text-zinc-500">
@@ -341,10 +365,10 @@ export function ConversationsScreen() {
         </p>
       ) : (
         list.slice((page - 1) * 25, page * 25).map((chat) => (
+          <div key={chat.id} className="flex items-center gap-2 border-b border-white/10">
           <Link
             href={conversationHref(chat.id)}
-            key={chat.id}
-            className="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 py-5"
+            className="min-w-0 flex flex-1 flex-wrap items-center justify-between gap-3 py-5"
           >
             <div className="min-w-0">
               <h2 className="break-words font-medium">{chat.title}</h2>
@@ -356,6 +380,8 @@ export function ConversationsScreen() {
               {date(chat.updatedAt)}
             </time>
           </Link>
+          <DeleteChatButton chat={chat} onDeleted={() => void chats.refresh()} />
+          </div>
         ))
       )}
       {!list.length && !chats.loading && (

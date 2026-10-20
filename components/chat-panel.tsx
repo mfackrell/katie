@@ -784,7 +784,7 @@ export function ChatPanel({
   const [collaborationSummary, setCollaborationSummary] = useState<CollaborationUiMetadata | null>(null);
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
   const [emojiPickerOpen, setEmojiPickerOpen] = useState(false);
-  const [showModelControls, setShowModelControls] = useState(false);
+  const [showModelControls, setShowModelControls] = useState(true);
   const [selectionExplainer, setSelectionExplainer] = useState<SelectionExplainer | null>(null);
   const [isRoutingSelectionInFlight, setIsRoutingSelectionInFlight] = useState(false);
   const [modelExplainerHidden, setModelExplainerHidden] = useState(false);
@@ -2533,7 +2533,7 @@ export function ChatPanel({
                 aria-expanded={showModelControls}
                 aria-controls="model-controls"
               >
-                {showModelControls ? "Close model settings" : selectedOverride ? "Model override active" : "Automatic · settings"}
+                {showModelControls ? "Hide answering models" : selectedOverride ? `Answering model: ${selectedOverride.modelId}` : "Choose answering model"}
               </button>
             </div>
           </div>
@@ -2587,6 +2587,7 @@ export function ChatPanel({
                     >
                       <span className="shrink-0 capitalize text-zinc-500">{providerName}</span>
                       <select
+                        aria-label={`Answering model for ${providerName}`}
                         value={selectedValue}
                         onChange={(event) => {
                           const nextModel = event.target.value;
