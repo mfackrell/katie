@@ -128,6 +128,26 @@ test('explicit non-scope note preserves the active project and does not issue an
 });
 
 
+test('timed-out game revision recovery is bounded, review-grounded and does not erase prior missions',async()=>{
+ const events=[];const p={...owner,status:'blocked',phase:'specification',profile:'game',active_mission_id:randomUUID()};
+ const db={from:table=>({select(){return this;},eq(){return this;},order(){return this;},limit:async()=>({data:table==='work_projects'?[{id:p.id}]:[],error:null})})};
+ const {runProjectBatch}=modules({
+  '@/lib/data/supabase/admin':{getSupabaseAdminClient:()=>db},
+  '@/lib/projects/store':{projectRpc:async(name,args)=>{
+   events.push({name,args});
+   if(name==='project_dispatch_recovery_candidates')return[];
+   if(name==='claim_work_project')return null;
+   if(name==='recover_game_revision_timeout')return true;
+   throw Error('Unexpected mutation');
+  }}
+ })('@/lib/projects/worker');
+ const result=await runProjectBatch();
+ assert.equal(result.claimed,0);
+ assert.equal(events.filter(e=>e.name==='recover_game_revision_timeout').length,1);
+ assert.equal(events.find(e=>e.name==='recover_game_revision_timeout').args.p_id,p.id);
+ assert.ok(!events.some(e=>e.name==='create_work_project'||e.name==='control_work_project'));
+});
+
 test('project watchdog halts three consecutive failed same-phase attempts without restarting work',async()=>{
  const f=coordinator();f.p.phase='research';f.p.active_mission_id=null;
  for(let i=0;i<3;i++){const mid=randomUUID();f.runs.push({mission_id:mid,kind:'research',ordinal:i+1,milestone_index:0,binding:null,outcome:{reason:'failed'}});f.missions.set(mid,{mission:{id:mid,status:'blocked'},jobs:[]});}

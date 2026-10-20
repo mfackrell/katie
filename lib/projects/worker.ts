@@ -223,6 +223,18 @@ async function advance(p: Project) {
         const v=previous?.evidence?.verification as {changedFiles?:Array<{path:string;status?:string;patch?:string}>}|undefined;let bytes=0;
         projectEvidence=p.verified_sha?{priorVerifiedImplementation:{head:p.verified_sha,baseline:p.baseline_sha,changedFiles:(v?.changedFiles??[]).slice(0,20).map(f=>{const include=typeof f.patch==='string'&&bytes+f.patch.length<=4000;if(include)bytes+=f.patch!.length;return{path:f.path,status:f.status,...(include?{patch:f.patch}:{patchOmitted:true})};}),omittedFileCount:Math.max(0,(v?.changedFiles?.length??0)-20),note:'Bounded planning evidence only; original requirements remain authoritative and native coding reads the complete inherited commit.'}}:undefined;
         projectEvidence={...(projectEvidence as Record<string,unknown>??{}),...(game?{projectProfile:'game'}:{}),reviewedResearch:{text:research.result,reviewedMissionId:research.evidence?.reviewedMissionId??null,phase:'research'}};
+        if(game){
+            // Compact, trusted findings from the failed revision accompany the
+            // next specification. The full prior draft, review and token charges
+            // remain saved in their original mission.
+            const {data:recovery,error:recoveryError}=await getSupabaseAdminClient()
+              .from('project_events').select('data').eq('project_id',p.id)
+              .eq('event','game_revision_timeout_recovered').order('created_at',{ascending:false}).limit(1);
+            if(recoveryError)throw Error('Saved game revision recovery evidence unavailable');
+            const note=((recovery??[]) as Array<{data?:{findings?:string;sourceMissionId?:string}}>)[0]?.data;
+            if(note&&typeof note.findings==='string')
+                projectEvidence={...(projectEvidence as Record<string,unknown>),recoveryReview:{sourceMissionId:note.sourceMissionId,findings:note.findings.slice(0,2200),instruction:'Correct these independent review findings. Full prior evidence remains saved; do not repeat research or assume approval.'}};
+        }
         // Keep the complete independently reviewed research as structured evidence,
         // not a second copy inside the 12 KB mission instruction. The original
         // user objective remains unchanged and authoritative.
@@ -286,6 +298,23 @@ async function reconcileParkedDispatch() {
     }
     return false;
 }
+async function reconcileBlockedGameRevisions(){
+    // Recover the same project at specification, not a new research or coding
+    // mission. PostgreSQL atomically enforces the old verdict, timeout cause,
+    // original aggregate budget, milestone limit and one-recovery ceiling.
+    const db=getSupabaseAdminClient();
+    const {data,error}=await db.from('work_projects').select('id')
+      .eq('status','blocked').eq('profile','game').eq('phase','specification')
+      .order('updated_at',{ascending:false}).limit(2);
+    if(error)throw Error('Blocked game revision recovery index unavailable');
+    for(const p of (data??[]) as Array<{id:string}>){
+        if(await projectRpc<boolean>('recover_game_revision_timeout',{p_id:p.id})){
+            console.info('[Projects] Saved game revision timeout recovered without resetting charges',{project:p.id});
+            return true;
+        }
+    }
+    return false;
+}
 async function reconcileBlockedInfrastructureProjects(){
     const db=getSupabaseAdminClient();
     const {data,error}=await db.from('work_projects').select('*')
@@ -317,7 +346,8 @@ async function reconcileBlockedInfrastructureProjects(){
 }
 export async function runProjectBatch() { const maintenance=Promise.all([
     reconcileParkedDispatch().catch(error=>{console.error('[Projects] Parked dispatch recovery failed',error instanceof Error?error.message:'Unknown failure');}),
-    reconcileBlockedInfrastructureProjects().catch(error=>{console.error('[Projects] Blocked verification recovery failed',error instanceof Error?error.message:'Unknown failure');})
+    reconcileBlockedInfrastructureProjects().catch(error=>{console.error('[Projects] Blocked verification recovery failed',error instanceof Error?error.message:'Unknown failure');}),
+    reconcileBlockedGameRevisions().catch(error=>{console.error('[Projects] Game revision recovery failed',error instanceof Error?error.message:'Unknown failure');})
 ]);try { const p = await projectRpc<Project | null>('claim_work_project'); if (!p)
     return { claimed: 0 }; try {
     await advance(p);
