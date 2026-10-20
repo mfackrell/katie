@@ -256,6 +256,11 @@ try {
   await page.getByText("Operations analysis", { exact: true }).click();
   await page.getByPlaceholder("Ask Katie…").waitFor();
   const composer = page.getByPlaceholder("Ask Katie…");
+  const modelSettings = page.getByRole("button", { name: "Automatic · settings", exact: true });
+  assert.equal(await modelSettings.getAttribute("aria-expanded"), "false");
+  await modelSettings.click();
+  assert.equal(await page.getByRole("button", { name: "Close model settings", exact: true }).getAttribute("aria-expanded"), "true");
+  await page.getByRole("button", { name: "Close model settings", exact: true }).click();
   await composer.fill("Keep this draft without executing.");
   await page.getByText("Draft saved", { exact: true }).waitFor();
   assert.equal(

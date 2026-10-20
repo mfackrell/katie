@@ -2159,16 +2159,6 @@ export function ChatPanel({
     });
   }
 
-  useEffect(() => {
-    if (typeof window === "undefined") {
-      return;
-    }
-
-    if (window.innerWidth >= 768) {
-      setShowModelControls(true);
-    }
-  }, []);
-
   function handleKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
     if (event.key === "Enter" && !event.shiftKey) {
       event.preventDefault();
