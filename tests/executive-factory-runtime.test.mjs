@@ -109,11 +109,11 @@ test('unverified capability is commissioned, not configured or falsely activated
  assert.equal(calls.some(c=>c.name==='create_mission'),false);
  assert.equal(calls.some(c=>c.name==='transition_executive_provisioning'),false);
 });
-test('specialist assignment suppresses all later executive and project routers',()=>{
+test('dedicated EO is routed outside ordinary Katie chat and project workflows',()=>{
  const route=readFileSync('app/api/chat/route.ts','utf8');
- for(const downstream of ['finance','development','project']){
-  assert.match(route,new RegExp('const '+downstream+'Reply = !executiveReply && !specialistReply &&'));
- }
+ assert.match(route,/if\\(actorRole\\.actor_kind==='executive'\\)return executeExecutiveCommand/);
+ assert.match(route,/const executiveReply=null, specialistReply=null, financeReply=null, developmentReply=null/);
+ assert.doesNotMatch(route,/const financeReply = !executiveReply/);
 });
 
 test('research capability requires real native web-search evidence in acceptance objective',async()=>{
