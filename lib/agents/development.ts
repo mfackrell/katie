@@ -1,5 +1,7 @@
 import {getDevelopmentProjectContext,acceptanceBinding,projectRpc,type Context} from '@/lib/projects/store';
 import {digest} from '@/lib/projects/contract';
+import {getAvailableProviders} from '@/lib/providers';
+import {chooseProvider} from '@/lib/router/master-router';
 import { Octokit } from "@octokit/rest";
 import { inflateRawSync } from "node:zlib";
 import { z } from "zod";
@@ -97,6 +99,21 @@ async function save(task: AgentTask, status: string, details: string | null, ext
   if (error) throw new Error("Unable to persist development status");
   return { ...task, status, details, external };
 }
+// The repository executor is a protected Codex action. Route separately for
+// implementation and independent review, but accept only models compatible with
+// this actual executor. Never silently hand GitHub write access to a text model.
+export async function chooseTrustedGithubModels(objective:string){
+ const providers=getAvailableProviders().filter(p=>p.name==='openai');
+ if(!providers.length)throw Error('No configured provider supports the trusted GitHub coding executor');
+ const decision=async(role:string)=>chooseProvider(role+' for authorized isolated GitHub software development\\n'+objective.slice(0,3200),
+   'Select a capable model for '+role+'. GitHub executor: Codex permission-profile, independent tests and review.',providers);
+ const [coding,review]=await Promise.all([decision('implementation and debugging'),decision('independent code review')]);
+ const models=(d:Awaited<ReturnType<typeof chooseProvider>>)=>[{provider:d.provider,modelId:d.modelId},...d.fallbackChain];
+ const code=models(coding).find(x=>x.provider.name==='openai'&&/^gpt-\\d+(?:\\.\\d+)?-codex(?:-(?:mini|max))?$/.test(x.modelId));
+ const reviewer=models(review).find(x=>x.provider.name==='openai'&&/^gpt-\\d+(?:\\.\\d+)?(?:-codex(?:-(?:mini|max))?)?$/.test(x.modelId));
+ if(!code||!reviewer)throw Error('Router found no verified model for the protected coding and review tools');
+ return {codingModel:code.modelId,reviewModel:reviewer.modelId};
+}
 const marker = (task: AgentTask) => `<!-- katie-managed-task:${task.id} -->`;
 export async function dispatchDevelopment(task: AgentTask, project?: Context, assignmentLease?:string) {
   if (task.status !== "dispatching") return task;
@@ -110,7 +127,8 @@ export async function dispatchDevelopment(task: AgentTask, project?: Context, as
     const saved=await getDevelopmentProjectContext(task.id,true);
     if(!saved||JSON.stringify(saved)!==JSON.stringify(project)||digest(project.contract)!==project.contractHash)throw Error('Project dispatch does not match approved DB binding');
     const {version,projectId,baseSha,baselineSha,allowedPaths,contractHash,contract,game,gameFinal}=project;
-    projectHeader='<!-- katie-project: '+Buffer.from(JSON.stringify({version,projectId,baseSha,baselineSha,allowedPaths,contractHash,contract,...(game?{game,gameFinal}:{})})).toString('base64url')+' -->\n\n';
+    const routed=await chooseTrustedGithubModels(task.input+'\n'+task.snapshot.instructions);
+    projectHeader='<!-- katie-project: '+Buffer.from(JSON.stringify({version,projectId,baseSha,baselineSha,allowedPaths,contractHash,contract,...routed,...(game?{game,gameFinal}:{})})).toString('base64url')+' -->\n\n';
   }
   const claimed = project ? await agentRpc<boolean>("claim_project_dispatch", {p_id:task.id,p_lease:assignmentLease??null,p_hash:project.scopeHash}) : await agentRpc<boolean>("claim_agent_dispatch", { p_id: task.id });
   if (!claimed) return readTask(task.id);
