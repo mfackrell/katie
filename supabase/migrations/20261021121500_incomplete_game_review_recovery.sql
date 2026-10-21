@@ -4,7 +4,7 @@
 create or replace function public.resume_incomplete_game_review(p_id uuid,p_actor uuid,p_chat uuid,p_preflight jsonb default null)
 returns boolean language plpgsql security invoker set search_path=public as $$
 declare p work_projects;m agent_missions;j mission_assignments;c mission_assignments;
- spent bigint;seq integer;mid uuid;candidate_hash text;refresh boolean;
+ spent bigint;seq integer;mid uuid;candidate_hash text;refresh boolean;technical boolean;recovery_event text;
 begin
  perform pg_advisory_xact_lock(hashtextextended('katie.mission.state',0));
  select * into p from work_projects where id=p_id and actor_id=p_actor and chat_id=p_chat for update;
@@ -19,7 +19,9 @@ begin
  select * into j from mission_assignments where mission_id=m.id and role='review' and status='failed'
   and (result->>'responseStatus'='incomplete' and coalesce(result->>'incompleteReason','max_output_tokens')='max_output_tokens'
     or result->>'admissionDenied'='true' or result->>'reviewContextOverflow'='true'
-    or detail='Model output incomplete: incomplete') order by updated_at desc limit 1 for update;
+    or detail='Model output incomplete: incomplete'
+    or (payload ? 'reviewModelCheckpoint' and (result->>'reviewStageDeferred'='true'
+      or detail='Worker lease expired; prior model-call reservation remains charged.'))) order by updated_at desc limit 1 for update;
  if not found then return false;end if;
  select * into c from mission_assignments where mission_id=m.id
   and job_key=case when j.job_key='review_again' then 'revision' else 'compose' end and status='completed'
@@ -54,12 +56,20 @@ begin
   or length(p_preflight->>'input') not between 1 and 128000
  ) then return false;end if;
 
- -- Each recovery kind is bounded per exact candidate. One fresh charged
- -- reassessment may replace oversized derived criteria; the saved candidate
- -- and complete original sources are never regenerated or discarded.
- if exists(select 1 from project_events where project_id=p.id and event=case when refresh then 'independent_assessment_refresh_started' else 'incomplete_game_review_resumed' end
-  and data->>'candidateHash'=candidate_hash) then return false;end if;
+ -- One additional technical continuation per exact candidate covers expired
+ -- admission holds and exhausted worker leases. Never reset the old child or
+ -- turn unchanged budget denial into a recurring stream of fresh missions.
  select coalesce(sum(greatest(actual_tokens,reserved_tokens)),0) into spent from agent_missions where project_id=p.id;
+ technical:=coalesce(j.payload ? 'reviewModelCheckpoint' and (j.result->>'reviewStageDeferred'='true'
+   or j.detail='Worker lease expired; prior model-call reservation remains charged.'),false)
+   or coalesce(j.result->>'admissionDenied'='true' and m.deadline<=now()+interval '5 minutes'
+     and (j.result->>'remainingTokens')~'^[0-9]+$'
+     and p.token_allowance-spent>greatest(10000,(j.result->>'remainingTokens')::bigint),false);
+ if j.result->>'admissionDenied'='true' and m.project_evidence ? 'reviewContinuation' and not technical then return false;end if;
+ recovery_event:=case when refresh then 'independent_assessment_refresh_started'
+   when technical then 'technical_review_continuation_started' else 'incomplete_game_review_resumed' end;
+ if exists(select 1 from project_events where project_id=p.id and event=recovery_event
+   and data->>'candidateHash'=candidate_hash) then return false;end if;
  select count(*)+1 into seq from project_runs where project_id=p.id;
  -- Dispatch admission uses the real stage payload/native count, not a guessed
  -- minimum. No reservation or generation charge is made by this transaction.
@@ -81,7 +91,7 @@ begin
   jsonb_build_object('continuationSource',jsonb_build_object('missionId',m.id,'jobId',j.id,'attempts',j.attempts)),'queued');
  insert into project_runs(project_id,mission_id,kind,ordinal,milestone_index)
  values(p.id,mid,'specification',seq,p.milestone_index);
- insert into project_events(project_id,event,data) values(p.id,case when refresh then 'independent_assessment_refresh_started' else 'incomplete_game_review_resumed' end,jsonb_build_object(
+ insert into project_events(project_id,event,data) values(p.id,recovery_event,jsonb_build_object(
   'sourceMissionId',m.id,'missionId',mid,'reviewJobId',j.id,'candidateHash',candidate_hash,
   'chargedTokens',spent,'remainingTokens',p.token_allowance-spent,'previousAttempts',j.attempts,
   'savedCandidateUnchanged',true,'codingApproved',false,'dispatchPending',true,'priorAssessment',case when refresh then j.payload->'reviewModelCheckpoint' else null end));
