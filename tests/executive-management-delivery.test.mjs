@@ -40,7 +40,7 @@ test('recovered Executive results get a new delivery receipt while repeated iden
 test('commissioned synthesis waits for reviewed source work and receives its mission bindings',async()=>{
  const waiting=runtime({provision:true,sourceStatus:'running'});await waiting.run();assert.equal(waiting.dispatches.length,0);assert.equal(waiting.writes.at(-1).status,'running');
  const rejected=runtime({provision:true,review:'changes_requested'});await rejected.run();assert.equal(rejected.dispatches.length,0);assert.equal(rejected.writes.at(-1).status,'blocked');
- const ready=runtime({provision:true});await ready.run();assert.equal(ready.dispatches.length,1);assert.deepEqual(Array.from(ready.dispatches[0].sourceMissionIds),['mission']);
+ const ready=runtime({provision:true});await ready.run();assert.equal(ready.dispatches.length,1);assert.deepEqual(Array.from(ready.dispatches[0].sourceMissionIds),['mission']);assert.equal(ready.dispatches[0].requiresRepository,false);
 });
 
 test('unrelated commissioned work is not made dependent on existing source audits',async()=>{
