@@ -692,6 +692,7 @@ export async function chooseProvider(
   options?: {
     diverseFallbackProviders?: boolean;
     decisionCandidatesPerProvider?: number;
+    decisionTimeoutMs?: number;
     hasImages?: boolean;
     hasVideoInput?: boolean;
     routingTraceEnabled?: boolean;
@@ -1182,6 +1183,7 @@ export async function chooseProvider(
       preferenceProfile,
       candidates: llmCandidatesUsed,
       decisionProviders: controlPlaneDecisionProviders,
+      timeoutMs: options?.decisionTimeoutMs,
       registryLookup
     });
     console.info(`[LLM Router] requestId=${traceRequestId} output_accepted=${llmRouting.accepted}`);

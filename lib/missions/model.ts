@@ -48,6 +48,7 @@ export async function missionModel(claim:Claim,instruction:string,input:string,t
  const attemptedModels:string[]=[];
  const failedProviders=new Set<string>();
  let last:unknown;
+ let incomplete:Record<string,unknown>|undefined;
  let expandedOutputTokens:number|undefined;
  for(const choice of choices){
   if(failedProviders.has(choice.provider.name))continue;
@@ -56,6 +57,7 @@ export async function missionModel(claim:Claim,instruction:string,input:string,t
    let result:ModelResult;
    try{result=await executeMissionModel(claim,instruction,input,tools,choice,executionDeadline,expandedOutputTokens);}
    catch(error){
+    if(error instanceof MissionModelFailure&&typeof error.partial.partialText==='string')incomplete=error.partial;
     if(!(error instanceof MissionModelFailure)||error.partial.incompleteReason!=='max_output_tokens'||expandedOutputTokens||Number(error.partial.outputTokenLimit)>=12000)throw error;
     // One capacity correction on the selected model, within the same ledger and
     // wall-clock window. Never rotate through providers with an identical cap.
@@ -68,7 +70,10 @@ export async function missionModel(claim:Claim,instruction:string,input:string,t
   }catch(error){
    last=error;
    if(error instanceof MissionAdmissionError){
-    if(!error.canTryAlternative)throw error;
+    if(!error.canTryAlternative){
+     if(incomplete)throw new MissionModelFailure(error.message,{...incomplete,admissionDenied:true,requestedTokens:error.requestedTokens,remainingTokens:error.capacity?.remainingTokens,attemptedModels});
+     throw error;
+    }
     console.info('[Missions] Candidate not admitted; no provider call made',{jobId:claim.job.id,model:choice.modelId,requested:error.requestedTokens,remaining:error.capacity?.remainingTokens});
     continue;
    }
@@ -82,15 +87,15 @@ export async function missionModel(claim:Claim,instruction:string,input:string,t
    console.warn('[Missions] Model attempt failed; trying next eligible provider',{jobId:claim.job.id,provider:choice.provider.name,model:choice.modelId,error:detail.slice(0,350)});
   }
  }
- if(last instanceof MissionAdmissionError)throw new MissionModelFailure('No eligible model request fits the remaining mission allowance. Saved work and all usage are preserved.',{admissionDenied:true,requestedTokens:last.requestedTokens,remainingTokens:last.capacity?.remainingTokens,attemptedModels});
+ if(last instanceof MissionAdmissionError)throw new MissionModelFailure('No eligible model request fits the remaining mission allowance. Saved work and all usage are preserved.',{...incomplete,admissionDenied:true,requestedTokens:last.requestedTokens,remainingTokens:last.capacity?.remainingTokens,attemptedModels});
  if(last instanceof MissionModelFailure)throw new MissionModelFailure(last.message,{...last.partial,attemptedModels,providerFailure:true});
- if(last instanceof Error)throw new MissionModelFailure(last.message,{attemptedModels,providerFailure:true});
+ if(last instanceof Error)throw new MissionModelFailure(last.message,{...incomplete,attemptedModels,providerFailure:true});
  throw Error('No eligible orchestration model could execute this assignment');
 }
 async function executeMissionModel(claim:Claim,instruction:string,input:string,tools:'none'|'research'|'calculate',choice:OrchestrationChoice,executionDeadline:number,expandedOutputTokens?:number):Promise<ModelResult>{
  const selectedModel=choice.modelId;
  const gameSpecification=claim.mission.project_kind==='specification'&&(claim.mission.project_evidence as {projectProfile?:string}|null)?.projectProfile==='game';
- const outputTokens=expandedOutputTokens??(gameSpecification&&['compose','revise'].includes(claim.job.role)?16000:['compose','revise'].includes(claim.job.role)?6000:claim.job.role==='review'?5000:3000);
+ const outputTokens=expandedOutputTokens??(gameSpecification&&['compose','revise'].includes(claim.job.role)?16000:['compose','revise'].includes(claim.job.role)?6000:claim.job.role==='review'?(input.startsWith('Independent assessment:\n')?10000:5000):3000);
  const client=boundedProvider(choice);
  const sources:ModelResult['sources']=[],calculations:unknown[]=[];
  if(!fitsMissionEnvelope(instruction,input))throw Error('Mission evidence exceeds bounded context. Narrow the objective or deliverable.');

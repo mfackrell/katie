@@ -2046,6 +2046,7 @@ export function filterCandidatesForIntent(
 }
 
 export async function chooseRoutingWithLLM(args: {
+  timeoutMs?: number;
   prompt: string;
   intent: RequestIntent;
   secondaryIntents?: RequestIntent[];
@@ -2152,7 +2153,7 @@ Rules:
       }
       return { selectedProvider, selectedModel };
     },
-    timeoutMs: CONTROL_PLANE_DECISION_TIMEOUT_MS
+    timeoutMs: args.timeoutMs ?? CONTROL_PLANE_DECISION_TIMEOUT_MS
   });
   if (!result) {
     return { accepted: false, reason: "all_decision_providers_failed" };

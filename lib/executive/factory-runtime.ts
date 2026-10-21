@@ -114,7 +114,7 @@ export function specialistAssignmentIntent(message:string){
  if(!/^[a-z][a-z0-9_]{1,39}$/.test(slug)||objective.length<12)return null;
  return{slug,objective};
 }
-export async function startSpecialistAssignment(input:{actorId:string;chatId:string;requestId:string;message:string;activeRepoId?:string|null;sourceMissionIds?:string[]}):Promise<string|null>{
+export async function startSpecialistAssignment(input:{actorId:string;chatId:string;requestId:string;message:string;activeRepoId?:string|null;requiresRepository?:boolean;sourceMissionIds?:string[]}):Promise<string|null>{
  const intent=specialistAssignmentIntent(input.message);if(!intent)return null;
  const db=getSupabaseAdminClient();
  const {data:registered,error}=await db.from('executive_orchestrators').select('slug,status,capabilities')
@@ -128,7 +128,9 @@ export async function startSpecialistAssignment(input:{actorId:string;chatId:str
  // a developer/write-enabled worker solely because the task mentions code.
  const auditOnly=/\b(?:read[- ]only|do not modify|no changes|inspect|audit|review)\b/i.test(intent.objective);
  const coding=!auditOnly&&/\b(?:implement|write code|develop|fix the code|modify repository|deploy|build an app|build a website)\b/i.test(intent.objective);
- const repositoryTask=coding||/\b(?:repository|codebase|source code|github|pull request|commit history)\b/i.test(intent.objective);
+ // The validated management plan already determines repository scope. Re-reading
+ // a prohibition such as "no repository changes" as a requirement reverses it.
+ const repositoryTask=coding||(input.requiresRepository??/\b(?:repository|codebase|source code|github|pull request|commit history)\b/i.test(intent.objective));
  if(repositoryTask&&!input.activeRepoId)return 'Select a verified connected repository for this specialist assignment.';
  const agents=await team(coding);
  if(existing&&(existing.status!=='proposed'||existing.objective!==intent.objective||existing.capability!==registered.capabilities[0]))throw Error('Saved Executive proposal identity conflict');

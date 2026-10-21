@@ -57,7 +57,7 @@ test('EO and child stages use task routing with original scope and provider-dive
  assert.equal(choices[0].modelId,'best-writer');assert.equal(choices[0].provider.name,'google');
  assert.deepEqual(Array.from(choices,c=>c.modelId),['best-writer','deep-reasoner','alternative','smaller-reasoner']);
  assert.match(seen[0].prompt,/Original user objective[\s\S]*Scoped delegated writing/);
- assert.equal(seen[0].options.diverseFallbackProviders,true);assert.equal(seen[0].options.decisionCandidatesPerProvider,4);
+ assert.equal(seen[0].options.decisionTimeoutMs,60000);assert.equal(seen[0].options.diverseFallbackProviders,true);assert.equal(seen[0].options.decisionCandidatesPerProvider,4);
  await route({objective:'Audit',instruction:'Independent review',requestId:'review',review:true});
  assert.equal(seen[1].options.requestIntent,'assistant-reflection');
  await route({objective:'Audit',instruction:'Delegate',requestId:'plan',planning:true});assert.equal(seen[2].options.requestIntent,'architecture-review');
@@ -221,4 +221,28 @@ test('Grok search retains its hard call cap and omits OpenAI-only search context
   await boundedProvider(choice('grok','current-grok')).responses.create({model:'current-grok',instructions:'Research',input:[{role:'user',content:'Find a primary source'}],max_output_tokens:3000,tools:[{type:'web_search',search_context_size:'low'}],max_tool_calls:4},{timeout:1000});
   assert.equal(sent.tools[0].type,'web_search');assert.equal(sent.tools[0].search_context_size,undefined);assert.equal(sent.max_tool_calls,4);
  }finally{if(old===undefined)delete process.env.GROK_API_KEY;else process.env.GROK_API_KEY=old;}
+});
+
+test('bounded text work excludes incompatible audio, image, embedding and agent endpoints',()=>{
+ const {boundedModelSupported}=modules()('@/lib/orchestration/request-rejection');
+ for(const model of ['gpt-audio-mini-2025-10-06','gpt-realtime','gpt-4o-transcribe','gpt-image-2','text-embedding-3-large','gemini-3.8-flash-tts','grok-imagine-video','computer-use-preview'])assert.equal(boundedModelSupported('openai',model),false,model);
+ for(const [provider,model] of [['openai','gpt-5.6-sol'],['anthropic','claude-opus-5-5'],['google','gemini-3.7-flash'],['grok','grok-4.7']])assert.equal(boundedModelSupported(provider,model),true);
+});
+test('the mission router waits for its bounded native decision instead of abandoning it at chat latency',async()=>{
+ const timers=[],calls=[];
+ const router=modules({}, {setTimeout:(fn,ms)=>{timers.push(ms);return setTimeout(fn,ms===12000?1:100);}})('@/lib/router/model-intent');
+ const candidate={providerName:'openai',modelId:'gpt-5.6-sol',supports_text:true,prior_score:1};
+ const result=await router.chooseRoutingWithLLM({prompt:'Independent audit',intent:'assistant-reflection',timeoutMs:60000,
+  modalityFlags:{has_images:false,has_video_input:false},hardRouteContext:{hard_rule_applied:false,rule:'none'},preferenceProfile:{},candidates:[candidate],
+  decisionProviders:[{provider:{name:'openai',generate:async()=>{calls.push('primary');await new Promise(r=>setTimeout(r,10));return{text:JSON.stringify({selected:{provider:'openai',model:'gpt-5.6-sol'}})};}},modelId:'gpt-5.6-sol'},
+  {provider:{name:'anthropic',generate:async()=>{calls.push('fallback');throw Error('must not abandon completed decision');}},modelId:'claude-sonnet-5'}]});
+ assert.equal(result.accepted,true);assert.deepEqual(calls,['primary']);assert.deepEqual(timers,[60000]);
+});
+test('an unaffordable capacity retry preserves the original incomplete response',async()=>{
+ let reservations=0;
+ const load=modules({
+  '@/lib/orchestration/routing':{orchestrationChoices:async()=>[choice('anthropic','reasoner')],orchestrationFailure:async()=> 'model'},
+  '@/lib/missions/store':{rpc:async(name)=>name==='reserve_mission_call'?++reservations===1:name==='mission_call_capacity'?{authorized:true,remainingTokens:1,callsRemaining:5}:true}
+ },{fetch:async url=>new Response(JSON.stringify(url.endsWith('/count_tokens')?{input_tokens:200}:anthropic('Original partial reasoning',{stop_reason:'max_tokens'})),{status:200})});
+ await assert.rejects(load('@/lib/missions/model').missionModel(claim('compose'),'Compose','Evidence'),error=>{assert.equal(error.partial.partialText,'Original partial reasoning');assert.equal(error.partial.outputTokenLimit,6000);assert.equal(error.partial.admissionDenied,true);return true;});
 });
