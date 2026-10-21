@@ -154,6 +154,8 @@ export function validateAssessment(value: unknown, turns: SourceTurn[], options:
 export type AnswerReview = {
   verdict: "approve" | "revise";
   findings: string;
+  /** Nonblocking reviewer ideas cannot initiate a revision. */
+  optionalSuggestions?: string;
   checks: Array<{ id: string; passed: boolean; evidence: string }>;
   /** Only when a user-owned fact is genuinely necessary to finish; never for optional enrichment. */
   clarification?: { question: string; missingFact: string; essential: boolean };
@@ -191,6 +193,13 @@ export function validateAnswerReview(value: unknown, assessment: IndependentAsse
   if (r.clarification === null) delete r.clarification;
   if (r.clarification !== undefined && (!nonempty(r.clarification.question) || !nonempty(r.clarification.missingFact) || typeof r.clarification.essential !== "boolean")) throw new Error("Invalid reviewer clarification");
   if (r.verdict === "approve" && r.checks.some(c => !c.passed)) throw new Error("Approval contradicts failed acceptance checks");
+  // A critic can always invent stylistic improvements. If its own independent
+  // acceptance checks find no material defect, the result is acceptable.
+  // Retain its observations without treating them as blockers.
+  if (r.verdict === "revise" && r.checks.every(c => c.passed)) {
+    r.optionalSuggestions = r.findings;
+    r.verdict = "approve";
+  }
   return r;
 }
 
