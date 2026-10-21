@@ -1047,3 +1047,24 @@ test("wrong-target draft stays withheld when a later validator approves without 
   assert.equal(result.audit.lastCandidate, contaminated);
   assert.equal(result.result.text, contaminated);
 });
+
+test("acceptance-first: optional reviewer critique cannot trigger revision when all checks pass", async () => {
+  const reviewer = makeProvider("anthropic", async p => {
+    if (p.persona.includes("KATIE_INDEPENDENT_ASSESSMENT")) return response("anthropic","reviewer",assessment);
+    return response("anthropic","reviewer", {
+      ...verdict("approve"), verdict:"revise",
+      findings:"Optional: an opening phrase could be slightly shorter. No material defect.",
+    });
+  });
+  const lead = makeProvider("openai", async p => {
+    if(p.persona.includes("KATIE_TASK_CONTRACT_VALIDATION")) return contractApproval(p);
+    throw new Error("Unnecessary revision was attempted after passing all checks");
+  });
+  const result=await runRequiredDraftReview({
+    requestId:"nonblocking-style",draft,params,leadProvider:lead,deadlineMs:deadline(),
+    selectHelper:async c=>c.usedParticipants.length===1?{provider:reviewer,modelId:"reviewer"}:null,
+  });
+  assert.equal(result.audit.status,"approved");
+  assert.equal(result.result.text,draft.text);
+  assert.match(result.audit.reviews?.[0].review.optionalSuggestions??"",/slightly shorter/);
+});
