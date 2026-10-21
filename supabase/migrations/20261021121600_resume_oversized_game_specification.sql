@@ -29,3 +29,7 @@ begin
  perform public.project_publish(p.id,'Oversized specification context repaired; resuming from original reviewed research with original budget.');
  return true;
 end;$$;
+
+-- These maintenance RPCs must not be callable from browser/data API roles.
+revoke all on function public.resume_oversized_game_specification(uuid,uuid,uuid) from public, anon, authenticated;
+grant execute on function public.resume_oversized_game_specification(uuid,uuid,uuid) to service_role;
