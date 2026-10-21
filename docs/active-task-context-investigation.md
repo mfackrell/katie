@@ -1,6 +1,6 @@
 # Active-task context isolation investigation
 
-Status: implementation and deterministic regression review completed; live acceptance remains open. Do not interpret this report or a passing focused suite as proof that Katie now chooses the strongest evidence in production.
+Status: PR #625 deployed to production; live acceptance has demonstrated correct Controller evidence selection but exposed additional resume and durable-memory failures. The mission remains open. See `active-task-live-acceptance-625.md` for request-level independent findings.
 
 ## Evidence and causal findings
 
@@ -36,7 +36,7 @@ Focused validation before broad-suite compatibility corrections: typecheck passe
 
 The broader run exposed PDF/media harness assumptions after moving task resolution earlier, and a real source-scope issue: excluded fresh PDF text could enter early identity classification. The source-scope correction and updated harness results are recorded in the final validation update below. Database/browser integration failures must not be counted as passes.
 
-## Live acceptance protocol — not yet executed
+## Live acceptance protocol and acceptance gates
 
 Use isolated test chats and synthetic facts, never write fixture claims into the user's professional memory. Keep production career data intact. Capture each request ID, deployment SHA, model, active project ID, selected source IDs, final answer, and independent review audit. Have a separate reviewer judge the actual final answer against the active brief and the supplied facts.
 
@@ -56,7 +56,7 @@ Use both the incident domain and a different pair of synthetic engagements to te
 
 A native Katie mission was created through the existing mission RPC using its saved Mission Lead, Analysis and Development team, scoped to independent read-only investigation: `7047194c-8da7-4a3b-9a9e-a95391691aa2`. It blocked during planning with `Model output incomplete: incomplete` after one recorded call / 10,047 actual tokens. No native specialist output was produced. Its budget was not reset or increased. The external implementation/review specialists did complete their separate code review work; that is not a substitute for a successful native mission.
 
-The deployed application requires Vercel authentication in the available browser. The connector can read protected deployment URLs but does not provide the interactive POST workflow needed for these conversations. No production merge/deployment or live acceptance is claimed.
+PR #625 merged as `7ed9465599ef18e9c4b8baed6398375caafba2ed`. Production deployment `dpl_CmbWSLbpjRg3HeBio37f91YMUczT` was verified READY with this SHA and canonical alias. GitHub CI and website-review workflows passed on the released PR head. The authenticated browser now runs real conversations with isolated actor `bca79e2a-4e0b-4da0-94a5-146818fa75cc`, cloned instructions/routing and mandatory review. The original professional actor and memory remain unchanged. Initial live results and newly discovered failures are recorded in the companion acceptance report. Preview intentionally has no production data/model credentials; none were copied into preview.
 
 Remaining risks: actor-wide memory remains broad rather than relevance-ranked; model judgment can still choose weak evidence despite correct context; multi-writer updates of the same application need concurrency testing; very long restored histories need context-budget evaluation; actual cross-specialist transfer and durable professional-memory extraction require live verification. Fresh images do not have the PDF-equivalent exclusion/save-only source gate; image observation was already broad and remains so. Full untruncated task history favors fidelity but can increase prompt cost. Native planner incomplete-output recovery is unresolved and separate from this patch.
 
