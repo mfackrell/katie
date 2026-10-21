@@ -1,3 +1,4 @@
+import type { ProjectTransition } from "@/lib/chat/task-progress";
 import { isNonConversationalModel } from "@/lib/models/non-conversational";
 import {
   isImageGenerationModel as isGoogleImageGenerationModel,
@@ -105,6 +106,7 @@ export type RequestClassification = {
   provider_refusal_risk?: ProviderRefusalRisk | null;
   response_purpose?: ResponsePurpose;
   project_relation?: ProjectRelation;
+  project_transition?: ProjectTransition;
 };
 export type ScoreAdjustment = { label: string; delta: number };
 export type CandidateScoreBreakdown = {
@@ -504,6 +506,7 @@ export function parseIntentClassifierResponse(raw: string, intents: RequestInten
   let providerRefusalRisk: ProviderRefusalRisk | null | undefined;
   let responsePurpose: ResponsePurpose | undefined;
   let projectRelation: ProjectRelation | undefined;
+  let projectTransition: ProjectTransition | undefined;
 
   try {
     let classifierOutput: Record<string, unknown> | null = null;
@@ -556,6 +559,19 @@ export function parseIntentClassifierResponse(raw: string, intents: RequestInten
       ? classifierOutput.response_purpose.trim().toLowerCase() : "";
     responsePurpose = responsePurposeValue === "conversation" || responsePurposeValue === "deliverable"
       ? responsePurposeValue : undefined;
+    const transition = classifierOutput.project_transition;
+    if (transition && typeof transition === "object") {
+      const value = transition as Record<string, unknown>;
+      if (["new", "resume", "ambiguous"].includes(String(value.action)) &&
+          (value.projectId === undefined || typeof value.projectId === "string") &&
+          (value.sourceQuote === undefined || typeof value.sourceQuote === "string") &&
+          (value.clarification === undefined || typeof value.clarification === "string")) {
+        projectTransition = { action: value.action as ProjectTransition["action"],
+          ...(typeof value.projectId === "string" ? {projectId:value.projectId} : {}),
+          ...(typeof value.sourceQuote === "string" ? {sourceQuote:value.sourceQuote} : {}),
+          ...(typeof value.clarification === "string" ? {clarification:value.clarification} : {}) };
+      }
+    }
     const projectRelationValue = typeof classifierOutput.project_relation === "string"
       ? classifierOutput.project_relation.trim().toLowerCase() : "";
     projectRelation = projectRelationValue === "new_project" || projectRelationValue === "same_project"
@@ -570,7 +586,8 @@ export function parseIntentClassifierResponse(raw: string, intents: RequestInten
     ...(complexity ? { complexity } : {}),
     ...(providerRefusalRisk ? { provider_refusal_risk: providerRefusalRisk } : {}),
     ...(responsePurpose ? { response_purpose: responsePurpose } : {}),
-    ...(projectRelation ? { project_relation: projectRelation } : {})
+    ...(projectRelation ? { project_relation: projectRelation } : {}),
+    ...(projectTransition ? { project_transition: projectTransition } : {})
   };
 
   if (intents.includes(classifiedIntent as RequestIntent)) {
@@ -606,6 +623,8 @@ type ControlPlaneSelectionOptions = {
   activeRepoContextAttached?: boolean;
   routingSignals?: Record<string, boolean> | Record<string, unknown>;
   conversationContext?: string;
+  /** Source-linked project state is never trimmed with generic conversation history. */
+  activeTaskContext?: string;
   requestId?: string;
 };
 
@@ -673,7 +692,7 @@ export function buildIntentClassifierSystemPrompt(
 You are the Intent Classifier for Katie.
 ## Output Format
 Return ONLY valid JSON. No markdown, no explanation.
-Schema: {"intent":"<intent>","secondary_intents":["<intent>",...],"complexity":"low|medium|high","provider_refusal_risk":"low|medium|high","preferred_provider":"<provider>"|null,"response_purpose":"conversation|deliverable","project_relation":"new_project|same_project"|null}
+Schema: {"intent":"<intent>","secondary_intents":["<intent>",...],"complexity":"low|medium|high","provider_refusal_risk":"low|medium|high","preferred_provider":"<provider>"|null,"response_purpose":"conversation|deliverable","project_relation":"new_project|same_project"|null,"project_transition":{"action":"new|resume|ambiguous","projectId":"saved ID for resume","sourceQuote":"exact CURRENT user wording authorizing new/resume","clarification":"targeted question if ambiguous"}|null}
 Use {"intent":"null","secondary_intents":[],"complexity":"low","provider_refusal_risk":"low","preferred_provider":null,"response_purpose":"deliverable","project_relation":null} when genuinely unsure.
 Intent and secondary_intents must use only: ${intents.join("|")}
 
@@ -695,6 +714,7 @@ Intent and secondary_intents must use only: ${intents.join("|")}
 - conversation means a brief explanation of a term, acknowledgment, conversational answer, or necessary clarification. Do not advance an unfinished deliverable while the user is asking what a question means.
 - A mixed reply such as "No distribution experience; I don't know what sponsor reporting is" needs conversation: acknowledge the supplied fact, explain the term, and preserve any unanswered experience question. Not knowing a term is not evidence of lacking the underlying experience.
 - deliverable means a completed draft, substantive revision, application answer, analysis, implementation, research, or explicit saved-draft review. A short "yes, draft it" or a missing fact that enables the requested work is deliverable. Low complexity does not make a deliverable conversational. Default to deliverable if uncertain.
+- project_transition is null for ordinary follow-ups to the current project. For a new project emit action new and an exact sourceQuote from the CURRENT USER MESSAGE establishing the new objective. For return to a saved project emit action resume, its exact saved ID from the project catalog, and the exact sourceQuote requesting the return. Never infer a project switch from automatically retrieved attachments or historical summaries. If several projects fit and the current message does not resolve the target, emit action ambiguous with one targeted clarification. A generic request for examples or another question retains the active project unless the user establishes a switch.
 - project_relation compares the current request with the most recent actual user project in conversation_context, not a stale saved objective or assistant summary. A newly pasted, different job description or project brief is new_project even without the words "new project". A follow-up application question or terminology clarification for the current role is same_project. Use null if there is insufficient evidence; do not invent a project relationship.
 
 ## Web-Search Classification
@@ -854,6 +874,7 @@ async function classifyIntentWithLLMProviders(
     provider_refusal_risk?: ProviderRefusalRisk;
     response_purpose?: ResponsePurpose;
     project_relation?: ProjectRelation;
+    project_transition?: ProjectTransition;
     context?: string;
   }> = [
     { user: "What happened in AI news today?", intent: "web-search" },
@@ -957,6 +978,7 @@ async function classifyIntentWithLLMProviders(
     systemPrompt,
     "Few-shot examples:",
     fewShot,
+    options?.activeTaskContext ? `ACTIVE_TASK_CONTEXT (source-linked state, separate from historical conversation):\n${options.activeTaskContext}` : "ACTIVE_TASK_CONTEXT: none",
     conversationContext ? `CONVERSATION_CONTEXT:\n${conversationContext}` : "CONVERSATION_CONTEXT: none",
     `CURRENT_USER_MESSAGE: ${prompt}`
   ].join("\n\n");
@@ -1143,6 +1165,7 @@ type InferredRequestClassification = {
   providerRefusalRisk?: ProviderRefusalRisk | null;
   responsePurpose?: ResponsePurpose;
   projectRelation?: ProjectRelation;
+  projectTransition?: ProjectTransition;
 };
 
 export type ClassifiedIntentWithSource = {
@@ -1248,7 +1271,8 @@ export async function inferRequestClassificationWithSource(
       complexity: classifiedOutput.complexity ?? null,
       providerRefusalRisk: classifiedOutput.provider_refusal_risk ?? null,
       ...(classifiedOutput.response_purpose ? { responsePurpose: classifiedOutput.response_purpose } : {}),
-      ...(classifiedOutput.project_relation ? { projectRelation: classifiedOutput.project_relation } : {})
+      ...(classifiedOutput.project_relation ? { projectRelation: classifiedOutput.project_relation } : {}),
+      ...(classifiedOutput.project_transition ? { projectTransition: classifiedOutput.project_transition } : {})
     }, "llm");
   }
 

@@ -2031,3 +2031,21 @@ test("explicit 403 refusal is terminal when retry on refusal is disabled", async
   }), /selected model declined this request/i);
   assert.deepEqual(requests, ["grok"]);
 });
+
+test("active project state survives generic history compaction in the actual classifier request", async () => {
+  const activeTaskContext=JSON.stringify({activeProject:{id:"active-source-brief",text:"BEGIN REQUIREMENTS "+"distinct requirement; ".repeat(700)+"END REQUIREMENTS"},savedProjects:[{id:"historical-project",text:"historical objective"}]});
+  let seen=false;
+  const classifier=provider("openai",["gpt-5.6-sol"],async ({user,modelId})=>{
+    seen=true;
+    assert.ok(user.includes(activeTaskContext),"full source-linked project state must reach the model byte-for-byte");
+    assert.match(user,/ACTIVE_TASK_CONTEXT/);
+    assert.match(user,/CURRENT_USER_MESSAGE: Please share relevant examples/);
+    return {text:JSON.stringify({intent:"general-text",preferred_provider:null,project_relation:"same_project"}),model:modelId??"gpt-5.6-sol",provider:"openai"};
+  }).provider;
+  const result=await inferRequestClassification("Please share relevant examples",false,{
+    decisionProviders:[{provider:classifier,modelId:"gpt-5.6-sol"}],activeTaskContext,
+    conversationContext:"OLD CONVERSATION ".repeat(900),
+  });
+  assert.ok(seen);
+  assert.equal(result.projectRelation,"same_project");
+});

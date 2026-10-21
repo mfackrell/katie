@@ -25,7 +25,7 @@ export type ReviewAudit = {
   independentAssessment?: IndependentAssessment;
   sourceTurns?: Array<{ id: string; text: string }>;
   contractFindings?: Array<{ validator: CollaborationParticipant; verdict: string; findings: string }>;
-  contractValidation?: { verdict: "approve"; findings: string; validator: CollaborationParticipant; sourceCoverage: Array<{ sourceId: string; finding: string }> };
+  contractValidation?: { verdict: "approve"; findings: string; validator: CollaborationParticipant; sourceCoverage: Array<{ sourceId: string; finding: string }>; resolutions?: ContractResolution[] };
   reviews?: Array<{ phase: "comparison" | "final_validation"; answerHash: string; review: AnswerReview }>;
   attempts: Array<{ reviewer?: CollaborationParticipant; phase?: "assessment" | "contract_validation" | "comparison" | "revision" | "final_validation"; error?: string }>;
 };
@@ -33,6 +33,22 @@ export type ReviewAudit = {
 // Leave room for contract repair and validation of the actual final answer.
 export const REQUIRED_REVIEW_RESERVE_MS = 360_000;
 const MAX_CONTRACT_REJECTIONS = 2;
+type ContractObjection = { id: string; findings: string };
+type ContractResolution = { objectionId: string; sourceId: string; quote: string; resolution: string };
+/** A retry must account for the material objection against firsthand evidence. */
+export function validateContractResolutions(value: unknown, objections: ContractObjection[], turns: SourceTurn[]): ContractResolution[] {
+  if (!objections.length) return [];
+  const resolutions = value as ContractResolution[];
+  const normalize = (text: string) => text.replace(/\s+/g, " ").trim();
+  if (!Array.isArray(resolutions) || resolutions.length !== objections.length ||
+    new Set(resolutions.map(item => item?.objectionId)).size !== objections.length ||
+    resolutions.some(item => !item || !objections.some(objection => objection.id === item.objectionId) ||
+      typeof item.resolution !== "string" || !item.resolution.trim() || typeof item.quote !== "string" || !item.quote.trim() ||
+      !turns.some(turn => turn.id === item.sourceId && normalize(turn.text).includes(normalize(item.quote))))) {
+    throw new Error("Contract approval must resolve every prior material objection with an exact authoritative source citation");
+  }
+  return resolutions;
+}
 export const ASSESSMENT_INSTRUCTION = [
   "KATIE_INDEPENDENT_ASSESSMENT",
   "There are TWO distinct tasks: your internal task is to return assessment JSON; the END USER task is the deliverable requested in the authoritative user turns. Every objective, qualification, criterion and taskContract field must describe the END USER task. Never substitute your internal review assignment for their task. For example, if the user requested finished prose, its acceptance criteria must assess finished prose even though you return JSON here.",
@@ -124,6 +140,7 @@ export async function runRequiredDraftReview(input: {
   const reviewTimeoutFor = (modelId: string, fallback: number) =>
     /^gpt-5\\.5-pro(?:-|$)/i.test(modelId) ? Math.max(fallback, proTimeoutMs) : fallback;
   const audit: ReviewAudit = { sourceTurns: baseline.turns, mode: "always", status: "unavailable", draft, draftHash: hash(draft), finalHash: hash(draft), attempts: [] };
+  const contractObjections: ContractObjection[] = [];
   const prepare = (p: ChatGenerateParams, participant: CollaborationParticipant) => input.prepareParams?.(p, participant) ?? p;
   const timedReviewCall = async <T,>(
     stage: string,
@@ -154,6 +171,12 @@ export async function runRequiredDraftReview(input: {
     audit.lastCandidate = text;
     audit.lastCandidateHash = hash(text);
     audit.finalHash = hash(text);
+    if (contractObjections.length && !audit.contractValidation) {
+      const blocker = "I couldn’t verify that this draft answers the current task. I need to resolve the conflicting requirements before providing a finished answer.";
+      audit.status = "unavailable";
+      audit.finalHash = hash(blocker);
+      return { result: { ...input.draft, text: blocker }, audit };
+    }
     // Deliver usable work. Verification status and defects remain in metadata,
     // not appended to paste-ready source text.
     return { result: { ...input.draft, text }, audit };
@@ -183,7 +206,7 @@ export async function runRequiredDraftReview(input: {
       used.push(reviewer);
       // A different model validates the task definition while both calls remain draft-blind.
       let assessment: IndependentAssessment | undefined = validatedAssessment;
-      let contractFeedback = "";
+      let contractFeedback = contractObjections.map(item => `${item.id}: ${item.findings}`).join("\n");
       if (assessment) input.onProgress?.("Reusing the previously validated task contract for replacement reviewer.");
       for (let pass = 0; !assessment && pass < MAX_CONTRACT_REJECTIONS; pass++) {
         phase = "assessment";
@@ -195,7 +218,7 @@ export async function runRequiredDraftReview(input: {
         }, reviewer!)));
         if (assessmentResponse.truncated) throw new Error("Independent assessment was truncated");
         try {
-          assessment = validateAssessment(parseReviewJson(assessmentResponse.text), baseline.contractTurns, { activeNewTask: baseline.activeNewTask });
+          assessment = validateAssessment(parseReviewJson(assessmentResponse.text), baseline.contractTurns, { activeNewTask: baseline.activeNewTask, parentProjectSourceId: baseline.parentProjectSourceId });
         } catch (error) {
           if (pass === MAX_CONTRACT_REJECTIONS - 1) throw error;
           contractFeedback = `The proposed contract failed source/schema validation: ${error instanceof Error ? error.message : String(error)}. Rebuild the assessment with valid references to the supplied user turns. Do not change or invent the source text.`;
@@ -208,10 +231,10 @@ export async function runRequiredDraftReview(input: {
           ...clean, modelId: lead.modelId, onProviderSystemPrepared: undefined,
           requestIntent: "assistant-reflection", secondaryIntents: [],
           persona: `${source.persona}\n\n${CONTRACT_VALIDATION_INSTRUCTION}`,
-          user: `${baseline.text}\nPROPOSED TASK CONTRACT AND CRITERIA:\n${JSON.stringify(assessment)}\nReturn ONLY contract validation JSON. No current draft has been supplied.`,
+          user: `${baseline.text}\nPROPOSED TASK CONTRACT AND CRITERIA:\n${JSON.stringify(assessment)}\nPRIOR MATERIAL CONTRACT OBJECTIONS:\n${JSON.stringify(contractObjections)}\nWhen approving after an objection, include resolutions: [{objectionId, sourceId, quote, resolution}] for EVERY listed objection. Quote exact text from an ACTIVE CONTRACT SOURCE and explain how it resolves that objection; do not merely restate approval or the proposed contract. Unresolved target ambiguity requires revise.\nReturn ONLY contract validation JSON. No current draft has been supplied.`,
         }, lead)));
         if (validation.truncated) throw new Error("Contract validation was truncated");
-        const checked = parseReviewJson(validation.text) as { verdict: string; findings: string; issueType?: string; sourceCoverage: Array<{ sourceId: string; finding: string }> };
+        const checked = parseReviewJson(validation.text) as { verdict: string; findings: string; issueType?: string; sourceCoverage: Array<{ sourceId: string; finding: string }>; resolutions?: ContractResolution[] };
         if (!checked || !["approve", "revise"].includes(checked.verdict) || typeof checked.findings !== "string" || !checked.findings.trim() ||
             !Array.isArray(checked.sourceCoverage) || checked.sourceCoverage.length !== baseline.contractTurns.length ||
             new Set(checked.sourceCoverage.map(c => c?.sourceId)).size !== baseline.contractTurns.length ||
@@ -222,11 +245,13 @@ export async function runRequiredDraftReview(input: {
         // Optional refinements are not material acceptance blockers.
         const materialRejection = checked.verdict === "revise" && checked.issueType !== "optional_improvement";
         if (!materialRejection) {
-          audit.contractValidation = { verdict: "approve", findings: checked.findings, validator: lead, sourceCoverage: checked.sourceCoverage };
+          const resolutions = validateContractResolutions(checked.resolutions, contractObjections, baseline.contractTurns);
+          audit.contractValidation = { verdict: "approve", findings: checked.findings, validator: lead, sourceCoverage: checked.sourceCoverage, resolutions };
           break;
         }
         contractRejections += 1;
-        contractFeedback = checked.findings;
+        contractObjections.push({ id: `contract-objection-${contractRejections}`, findings: checked.findings });
+        contractFeedback = contractObjections.map(item => `${item.id}: ${item.findings}`).join("\n");
         assessment = undefined;
         if (contractRejections >= MAX_CONTRACT_REJECTIONS) throw new Error("Task contract rejected after bounded validation attempts");
       }

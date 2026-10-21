@@ -29,7 +29,7 @@ test('source dates constrain the actual production routing block rather than fal
  const load=modules(),select=load('lib/chat/pdf-source-selection.ts').selectPdfEvidenceSource;
  for(const message of ['Read my PDF uploaded yesterday','Read my PDF from two weeks ago']) {
   const result=await vm.runInNewContext(ts.transpileModule(`(async()=>{${source.slice(start,end)}return attachmentDecision;})()`,{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText,{
-   selectFreshPdfSources:load('lib/chat/pdf-source-selection.ts').selectFreshPdfSources,selectPdfEvidenceSource:select,pdfSourceTask:message,pdfTaskContext:null,timelineActive:false,savedVideoFollowUp:null,
+   selectFreshPdfSources:load('lib/chat/pdf-source-selection.ts').selectFreshPdfSources,selectPdfEvidenceSource:select,pdfSourceTask:message,pdfTaskContext:null,pdfProgress:{projectContext:null},timelineActive:false,savedVideoFollowUp:null,
    catalog:[old],mediaMemory:{hits:[{attachment_id:'old',source_chat_id:'source'}]},newAttachments:[],attachmentHistory:[],timelineSelection:{},
    selectStoredAttachments:()=>{throw Error('Must not discard date restriction through fallback');},message,
   });

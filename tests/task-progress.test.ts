@@ -226,7 +226,7 @@ test("a newly pasted role replaces the old project without requiring an explicit
 
 test("the existing classifier can establish a different project for a brief without a recognizable title",()=>{
   const old=rebuildTaskProgress(history);
-  const current=applyUserToTaskProgress(old,{messageId:"new-client",text:"We need a three-month turnaround for a regional distributor.",projectRelation:"new_project"});
+  const current=applyUserToTaskProgress(old,{messageId:"new-client",text:"We need a three-month turnaround for a regional distributor.",projectRelation:"new_project",projectTransition:{action:"new",sourceQuote:"three-month turnaround for a regional distributor"}});
   assert.equal(current.projectContext?.userMessageId,"new-client");
   assert.equal(current.objective?.userMessageId,"new-client");
   assert.deepEqual(current.pending,[]);

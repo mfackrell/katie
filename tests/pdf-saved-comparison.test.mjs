@@ -20,7 +20,7 @@ const pdf=(id,name)=>({id,fileId:id,chatId:'old-chat',fileName:name,mimeType:'ap
 async function run(message,fresh,saved,genericIds=[]){
  let selectorCalls=0;
  const decision=await vm.runInNewContext(code(`(async()=>{${selection}return {attachmentDecision,freshPdfSelection};})()`),{
-  ...scope,...load('lib/uploads/pdf-inventory.ts'),message,pdfSourceTask:message,pdfTaskContext:null,newAttachments:fresh,catalog:saved,attachmentHistory:[],timelineActive:false,timelineSelection:{},savedVideoFollowUp:null,mediaMemory:null,
+  ...scope,...load('lib/uploads/pdf-inventory.ts'),message,pdfSourceTask:message,pdfTaskContext:null,pdfProgress:{projectContext:null},chatId:"current-chat",newAttachments:fresh,catalog:saved,attachmentHistory:[],timelineActive:false,timelineSelection:{},savedVideoFollowUp:null,mediaMemory:null,
   selectStoredAttachments:async()=>{selectorCalls++;return {method:'none',selections:saved.filter(f=>genericIds.includes(f.id)).map(attachment=>({attachment,mode:'source'}))};},
  });
  vm.runInNewContext(code(quota),{newAttachments:fresh,timelineActive:false,...decision});

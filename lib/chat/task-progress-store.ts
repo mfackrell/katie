@@ -1,12 +1,19 @@
 import { getSupabaseAdminClient } from "@/lib/data/supabase/admin";
-import { emptyTaskProgress, type TaskProgressState } from "@/lib/chat/task-progress";
+import { emptyTaskProgress, type TaskProgressState, type ProjectSnapshot, mergeTaskProjects } from "@/lib/chat/task-progress";
 
 type StoredRow = { state: TaskProgressState };
 
 function isProgress(value: unknown): value is TaskProgressState {
   if (!value || typeof value !== "object") return false;
   const state = value as Partial<TaskProgressState>;
-  return state.version === 1 &&
+  const validSource = (source: unknown) => Boolean(source && typeof source === "object" &&
+    typeof (source as {text?:unknown}).text === "string" &&
+    typeof (source as {userMessageId?:unknown}).userMessageId === "string");
+  const validProjects = state.projects === undefined || (Array.isArray(state.projects) &&
+    state.projects.every(project => project && validSource(project.projectContext) &&
+      (project.objective === null || validSource(project.objective)) &&
+      Array.isArray(project.pending) && Array.isArray(project.answered)));
+  return validProjects && state.version === 1 &&
     Array.isArray(state.pending) &&
     Array.isArray(state.answered) &&
     ["working", "awaiting_user_answer", "answers_received"].includes(String(state.stage));
@@ -47,3 +54,17 @@ export function resetInvalidTaskProgress(): TaskProgressState {
   return emptyTaskProgress();
 }
 
+
+/** Read only projects owned by this actor; callers must never select one implicitly. */
+export async function loadActorTaskProjects(actorId: string): Promise<ProjectSnapshot[]> {
+  const {data,error} = await getSupabaseAdminClient().from("chat_task_progress")
+    .select("chat_id,state,updated_at").eq("actor_id",actorId).order("updated_at",{ascending:true});
+  if (error) throw new Error("Saved project catalog unavailable");
+  return ((data ?? []) as Array<{chat_id:string;state:unknown;updated_at:string}>).flatMap(row => {
+    if (!isProgress(row.state)) return [];
+    return (mergeTaskProjects(row.state, []).projects ?? []).map(project => ({
+      ...project, sourceChatId: project.sourceChatId ?? row.chat_id,
+      updatedAt: project.updatedAt ?? row.updated_at,
+    }));
+  });
+}
