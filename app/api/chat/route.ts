@@ -3044,6 +3044,7 @@ ${chunkWorkflowSummary}`;
                       actorId,
                       projectSourceId: reviewTaskProgress.projectContext.userMessageId,
                       objectiveSourceId: reviewTaskProgress.objective.userMessageId,
+                      requirementsRevision: reviewTaskProgress.requirementsRevision ?? 1,
                     } }
                   : {}),
                 sourceTurns: buildReviewSourceTurns({
