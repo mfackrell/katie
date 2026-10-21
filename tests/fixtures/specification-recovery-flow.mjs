@@ -180,7 +180,7 @@ export async function specificationRecoveryFlow(db){
    await projectWorker.runProjectBatch();
    // Actual admission failure, exhausted deferrals and real expired claims
    // each get one bounded replacement; old charges/deadlines stay immutable.
-   for(const failure of ['expired_admission','deferred_lease','expired_claim']){
+   for(const failure of ['expired_admission','deferred_lease','expired_claim','last_call','last_routing','last_tokens']){
     await db.query('savepoint technical_recovery');
     const previousCounts=counts,previousGenerations=generations;
     try{
@@ -191,7 +191,22 @@ export async function specificationRecoveryFlow(db){
       await db.query("update work_projects set status='running' where id=$1",[id]);
       await db.query("update agent_missions set status='running' where id=$1",[continued]);
       await db.query("update mission_assignments set status='queued',attempts=$2,available_at=now() where mission_id=$1 and job_key='review_again'",[continued,failure==='expired_claim'?1:0]);
-      if(failure==='expired_claim'){
+      if(failure==='last_call'||failure==='last_routing'||failure==='last_tokens'){
+       if(failure==='last_tokens'){await db.query('update work_projects set token_allowance=600000 where id=$1',[id]);await db.query('update agent_missions set token_allowance=120000,actual_tokens=120000,reserved_tokens=120000 where id=$1',[continued]);}
+       else await db.query(failure==='last_call'?'update agent_missions set calls=max_calls-1 where id=$1':'update agent_missions set routing_calls=max_calls*3 where id=$1',[continued]);
+       let nativeGenerations=0;
+       const lastCallWorker=modules({'@/lib/missions/store':{rpc,readMission},
+        '@/lib/orchestration/routing':{orchestrationChoices:async({accounting})=>{if(failure==='last_routing')await accounting.reserve('fixture:routing',1000);return[{provider:{name:'openai'},modelId:'last-call-primary',reasoning:'Controlled transport'},{provider:{name:'anthropic'},modelId:'denied-fallback',reasoning:'Controlled fallback'}];},orchestrationFailure:async()=> 'model'},
+        '@/lib/orchestration/bounded-provider':{boundedProvider:()=>({post:async()=>({input_tokens:1000}),responses:{create:async()=>{nativeGenerations++;return{status:'incomplete',incomplete_details:{reason:'max_output_tokens'},output:[],usage:{total_tokens:100}};}}})}})('@/lib/missions/worker');
+       assert.equal((await lastCallWorker.runMissionBatch()).outcomes[0].status,'blocked');
+       const exhausted=await readMission(continued),failed=exhausted.jobs.find(j=>j.job_key==='review_again');
+       assert.equal(nativeGenerations,failure==='last_call'?1:0,'Capacity denial never starts another inference');
+       assert.equal(failed.result.admissionDenied,true);
+       if(failure==='last_call'){assert.equal(exhausted.mission.calls,exhausted.mission.max_calls);assert.equal(failed.result.responseStatus,'incomplete');assert.equal(failed.result.incompleteReason,'max_output_tokens');assert.equal(failed.result.callsRemaining,0);}
+       else if(failure==='last_routing'){assert.equal(exhausted.mission.routing_calls,exhausted.mission.max_calls*3);assert.equal(failed.result.routingCallsRemaining,0);}
+       else assert.equal(failed.result.remainingTokens,0);
+       assert.equal(JSON.stringify(failed.payload.reviewModelCheckpoint),checkpoint);
+      }else if(failure==='expired_claim'){
        const claim=await rpc('claim_mission_work');assert.equal(claim.job.attempts,2);
        await db.query("update mission_assignments set lease_until=now()-interval '1 minute' where id=$1",[claim.job.id]);
        assert.equal(await rpc('claim_mission_work'),null);
@@ -207,7 +222,7 @@ export async function specificationRecoveryFlow(db){
        const failed=(await readMission(continued)).jobs.find(j=>j.job_key==='review_again');assert.equal(failed.status,'failed',JSON.stringify(failed));assert.equal(failed.result.reviewStageDeferred,true);assert.equal(failed.attempts,3);
       }
      }
-     await db.query("update work_projects set status='blocked',token_allowance=120000 where id=$1",[id]);
+     await db.query("update work_projects set status='blocked',token_allowance=$2 where id=$1",[id,failure==='last_tokens'?600000:120000]);
      const old=await readMission(continued);
      assert.equal(await rpc('resume_incomplete_game_review',{p_id:id,p_actor:actor,p_chat:chat}),true,failure+' must recover');
      const child=(await db.query('select active_mission_id from work_projects where id=$1',[id])).rows[0].active_mission_id;

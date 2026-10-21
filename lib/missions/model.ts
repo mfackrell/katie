@@ -36,17 +36,20 @@ export async function missionModel(claim:Claim,instruction:string,input:string,t
  const checkpoint=claim.job.payload?.reviewModelCheckpoint as {hash?:string;response?:ModelResult}|undefined;
  if(checkpointHash&&checkpoint?.hash===checkpointHash&&typeof checkpoint.response?.text==='string'
    &&typeof checkpoint.response.model==='string'&&Array.isArray(checkpoint.response.sources)&&Array.isArray(checkpoint.response.calculations))return checkpoint.response;
- const choices=await orchestrationChoices({objective:claim.mission.objective,instruction:claim.job.instruction+'\n'+instruction,
+ const attemptedModels:string[]=[];
+ let last:unknown;let priorModelFailure:MissionModelFailure|undefined;
+ const admissionFailure=(error:MissionAdmissionError)=>new MissionModelFailure(error.message,{...priorModelFailure?.partial,admissionDenied:true,requestedTokens:error.requestedTokens,remainingTokens:error.capacity?.remainingTokens,callsRemaining:error.capacity?.callsRemaining,routingCallsRemaining:error.capacity?.routingCallsRemaining,attemptedModels});
+ let choices:OrchestrationChoice[];
+ try{choices=await orchestrationChoices({objective:claim.mission.objective,instruction:claim.job.instruction+'\n'+instruction,
   requestId:claim.job.id,accounting:{
-   reserve:async(model,tokens)=>{if(Date.now()>=executionDeadline-5000)throw Error('Mission execution time window exhausted before routing dispatch');const id=randomUUID();if(!await rpc<boolean>('reserve_mission_routing_call',{p_id:claim.job.id,p_lease:claim.job.lease,p_call:id,p_model:model,p_tokens:tokens}))throw Error('Worker no longer authorized or mission allowance exhausted');return id;},
+   reserve:async(model,tokens)=>{if(Date.now()>=executionDeadline-5000)throw Error('Mission execution time window exhausted before routing dispatch');const id=randomUUID();if(!await rpc<boolean>('reserve_mission_routing_call',{p_id:claim.job.id,p_lease:claim.job.lease,p_call:id,p_model:model,p_tokens:tokens}))await explainAdmissionDenial(claim,tokens);return id;},
    finish:async(id,tokens)=>{await rpc('finish_mission_call',{p_call:id,p_tokens:tokens});}
   },research:tools==='research',review:claim.job.role==='review',
   // The server already knows specification writing is architecture/planning.
   // Avoid paying a second classifier to rediscover this known phase.
   planning:claim.job.role==='plan'||(claim.mission.project_kind==='specification'&&['compose','revise'].includes(claim.job.role))});
- const attemptedModels:string[]=[];
+ }catch(error){if(error instanceof MissionAdmissionError&&error.capacity?.authorized)throw admissionFailure(error);throw error;}
  const failedProviders=new Set<string>();
- let last:unknown;
  for(const choice of choices){
   if(failedProviders.has(choice.provider.name))continue;
   attemptedModels.push(choice.provider.name+':'+choice.modelId);
@@ -57,8 +60,9 @@ export async function missionModel(claim:Claim,instruction:string,input:string,t
    return complete;
   }catch(error){
    last=error;
+   if(error instanceof MissionModelFailure)priorModelFailure=error;
    if(error instanceof MissionAdmissionError){
-    if(!error.canTryAlternative)throw error;
+    if(!error.canTryAlternative){if(error.capacity?.authorized)throw admissionFailure(error);throw error;}
     console.info('[Missions] Candidate not admitted; no provider call made',{jobId:claim.job.id,model:choice.modelId,requested:error.requestedTokens,remaining:error.capacity?.remainingTokens});
     continue;
    }
@@ -69,7 +73,7 @@ export async function missionModel(claim:Claim,instruction:string,input:string,t
    console.warn('[Missions] Model attempt failed; trying next eligible provider',{jobId:claim.job.id,provider:choice.provider.name,model:choice.modelId,error:detail.slice(0,350)});
   }
  }
- if(last instanceof MissionAdmissionError)throw new MissionModelFailure('No eligible model request fits the remaining mission allowance. Saved work and all usage are preserved.',{admissionDenied:true,requestedTokens:last.requestedTokens,remainingTokens:last.capacity?.remainingTokens,attemptedModels});
+ if(last instanceof MissionAdmissionError)throw admissionFailure(last);
  if(last instanceof MissionModelFailure)throw new MissionModelFailure(last.message,{...last.partial,attemptedModels,providerFailure:true});
  if(last instanceof Error)throw new MissionModelFailure(last.message,{attemptedModels,providerFailure:true});
  throw Error('No eligible orchestration model could execute this assignment');
