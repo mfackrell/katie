@@ -61,6 +61,7 @@ test('EO and child stages use task routing with original scope and provider-dive
  await route({objective:'Audit',instruction:'Independent review',requestId:'review',review:true});
  assert.equal(seen[1].options.requestIntent,'assistant-reflection');
  await route({objective:'Audit',instruction:'Delegate',requestId:'plan',planning:true});assert.equal(seen[2].options.requestIntent,'architecture-review');
+ await route({objective:'Find sources using live web search then write a memo',instruction:'Compose from saved research',requestId:'compose',synthesis:true});assert.equal(seen[3].options.requestIntent,'general-text');
 });
 
 test('mission executes on Anthropic without any OpenAI key and saves actual provider/model and usage',async()=>{
@@ -194,11 +195,23 @@ test('failed or empty live model discovery cannot silently reuse stale registry 
  const load=modules({'@/lib/providers':{getAvailableProviders:()=>providers},'@/lib/router/provider-health':{filterProvidersBySharedHealth:async p=>({providers:p})},'@/lib/router/master-router':{chooseProvider:async()=>{decisions++;throw Error('Must not guess');}}});
  await assert.rejects(load('@/lib/orchestration/routing').orchestrationChoices({objective:'Review',instruction:'Assess',requestId:'failed-discovery'}),/No connected provider/);assert.equal(decisions,0);
 });
-test('truncated native generation can fall back without treating partial text as an accepted result',async()=>{
- const h=harness([choice('anthropic','deep-reasoner'),choice('google','compatible-reasoner')],[anthropic('Incomplete source analysis',{stop_reason:'max_tokens'}),google('Complete source analysis')]);
- const r=await h.run(claim(),'Analyze','Evidence');assert.equal(r.text,'Complete source analysis');assert.equal(r.provider,'google');
+test('truncated native generation corrects capacity once without cycling through providers at the same cap',async()=>{
+ const h=harness([choice('anthropic','deep-reasoner'),choice('google','compatible-reasoner')],[anthropic('Incomplete source analysis',{stop_reason:'max_tokens'}),anthropic('Complete source analysis')]);
+ const r=await h.run(claim(),'Analyze','Evidence');assert.equal(r.text,'Complete source analysis');assert.equal(r.provider,'anthropic');
+ assert.deepEqual(h.calls.map(c=>c.body.max_tokens),[3000,6000]);
  assert.equal(h.ledger.filter(x=>x.name==='reserve_mission_call').length,2);
  assert.equal(h.ledger.filter(x=>x.name==='finish_mission_call'&&x.p_tokens===30).length,2);
+});
+test('a second output truncation preserves partial evidence and blocks without another provider charge',async()=>{
+ const h=harness([choice('anthropic','deep-reasoner'),choice('google','compatible-reasoner')],[anthropic('First partial',{stop_reason:'max_tokens'}),anthropic('Second partial',{stop_reason:'max_tokens'})]);
+ await assert.rejects(h.run(claim('compose'),'Compose','Evidence'),error=>{assert.equal(error.partial.partialText,'Second partial');assert.equal(error.partial.outputTokenLimit,12000);return true;});
+ assert.equal(h.calls.length,2);assert.ok(h.calls.every(c=>c.body.model==='deep-reasoner'));
+});
+test('composition routing uses its actual stage without sending the full execution system prompt to the router',async()=>{
+ let routed;const load=modules({'@/lib/orchestration/routing':{orchestrationChoices:async input=>{routed=input;return[];}},'@/lib/missions/store':{rpc:async()=>true}});
+ const c=claim('compose');c.mission.objective='Research primary sources then compose the requested memo';
+ await assert.rejects(load('@/lib/missions/model').missionModel(c,'PRIVATE_EXECUTION_SYSTEM_PROMPT','Saved research'),/No eligible/);
+ assert.equal(routed.synthesis,true);assert.equal(routed.research,false);assert.match(routed.instruction,/CURRENT EXECUTION STAGE: compose/);assert.doesNotMatch(routed.instruction,/PRIVATE_EXECUTION_SYSTEM_PROMPT/);
 });
 test('Grok search retains its hard call cap and omits OpenAI-only search context settings',async()=>{
  const old=process.env.GROK_API_KEY;process.env.GROK_API_KEY='fixture-only';let sent;
