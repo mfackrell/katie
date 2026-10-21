@@ -1,3 +1,4 @@
+import {EXECUTIVE_SOURCE_MARKER,executiveSourceReports} from './source-handoff';
 import {createHash} from 'node:crypto';
 import {getSupabaseAdminClient} from '@/lib/data/supabase/admin';
 import {saveMessage} from '@/lib/data/persistence-store';
@@ -107,7 +108,7 @@ export function specialistAssignmentIntent(message:string){
  if(!/^[a-z][a-z0-9_]{1,39}$/.test(slug)||objective.length<12)return null;
  return{slug,objective};
 }
-export async function startSpecialistAssignment(input:{actorId:string;chatId:string;requestId:string;message:string;activeRepoId?:string|null}):Promise<string|null>{
+export async function startSpecialistAssignment(input:{actorId:string;chatId:string;requestId:string;message:string;activeRepoId?:string|null;sourceMissionIds?:string[]}):Promise<string|null>{
  const intent=specialistAssignmentIntent(input.message);if(!intent)return null;
  const db=getSupabaseAdminClient();
  const {data:registered,error}=await db.from('executive_orchestrators').select('slug,status,capabilities')
@@ -115,8 +116,8 @@ export async function startSpecialistAssignment(input:{actorId:string;chatId:str
  if(error)throw Error('Specialist assignment lookup unavailable');
  if(!registered||registered.status!=='active')return intent.slug+' is not active. Create and verify that orchestrator first.';
  const requestKey=stableKey('exec-specialist-task-',input.requestId);
- const {data:existing}=await db.from('executive_delegations').select('id,status').eq('actor_id',input.actorId).eq('chat_id',input.chatId).eq('request_key',requestKey).maybeSingle<{id:string;status:string}>();
- if(existing)return 'Specialist assignment '+existing.id+' is already '+existing.status+'.';
+ const {data:existing}=await db.from('executive_delegations').select('id,status,mission_id').eq('actor_id',input.actorId).eq('chat_id',input.chatId).eq('request_key',requestKey).maybeSingle<{id:string;status:string;mission_id:string|null}>();
+ if(existing?.mission_id)return 'Specialist assignment '+existing.id+' is already '+existing.status+'.';
  // Read-only audits may inspect a verified repository, but MUST NOT receive
  // a developer/write-enabled worker solely because the task mentions code.
  const auditOnly=/\b(?:read[- ]only|do not modify|no changes|inspect|audit|review)\b/i.test(intent.objective);
@@ -132,8 +133,16 @@ export async function startSpecialistAssignment(input:{actorId:string;chatId:str
   p_budget:60000,p_deadline:deadline
  });
  if(proposalError||!delegation?.id)throw Error('Specialist delegation failed');
+ if(input.sourceMissionIds?.length){
+  await executiveSourceReports({actorId:input.actorId,chatId:input.chatId,missionIds:input.sourceMissionIds});
+  // Persist references BEFORE linking or starting the mission. Recovery can
+  // reconstruct the evidence even if dispatch is interrupted after creation.
+  const {error:sourceError}=await db.from('executive_delegations').eq('id',delegation.id).eq('status','proposed')
+   .update({result:{sourceMissionIds:input.sourceMissionIds}});
+  if(sourceError)throw Error('Executive source handoff could not be saved');
+ }
  const {error:missionError}=await db.rpc('create_mission',{
-  p_id:missionId,p_objective:intent.objective+'\nSpecialist: '+intent.slug+'; independently delegated worker tasks and final reviewed deliverable required.',
+  p_id:missionId,p_objective:intent.objective+(input.sourceMissionIds?.length?EXECUTIVE_SOURCE_MARKER:'')+'\nSpecialist: '+intent.slug+'; independently delegated worker tasks and final reviewed deliverable required.',
   p_agents:agents,p_minutes:110,p_repository:repositoryTask?input.activeRepoId:null
  });
  if(missionError)throw Error('Specialist mission creation failed: '+boundedError(missionError));

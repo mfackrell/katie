@@ -1,3 +1,4 @@
+import {EXECUTIVE_SOURCE_MARKER,sourceReportsForMission} from '@/lib/executive/source-handoff';
 import {repositoryInspection,workflowInspection,readOnlyRepositoryObjective} from './inspection';
 import {gameAssessmentCapacity} from '@/lib/projects/game-evidence';
 import {GAME_RULE_CATEGORIES} from '../../scripts/project-game-rules.mjs';
@@ -28,6 +29,7 @@ export async function executeClaim(claim:Claim,model=missionModel){
  if(!['running','awaiting_approval'].includes(saved.mission.status))return;
  const operationalEvidence=await workflowInspection(mission);
  if(operationalEvidence)mission.project_evidence={...((mission.project_evidence??{}) as Record<string,unknown>),operationalEvidence};
+ if(mission.objective.includes(EXECUTIVE_SOURCE_MARKER))mission.project_evidence={...((mission.project_evidence??{}) as Record<string,unknown>),executiveSources:await sourceReportsForMission(mission.id)};
  const completed=saved.jobs.filter(j=>j.status==='completed');
  const priorReviews=completed.filter(j=>j.role==='review').map(j=>({key:j.job_key,verdict:j.result?.verdict,findings:j.result?.findings,checks:j.result?.checks,clarification:j.result?.clarification}));
  const candidateEvidence=(result:Record<string,unknown>|null|undefined)=>{

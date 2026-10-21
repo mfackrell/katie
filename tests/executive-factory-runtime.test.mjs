@@ -38,6 +38,7 @@ function setup({registered=null,agentRows=null,provisionRoute=null}={}){
  vm.runInNewContext(js,{exports,require:name=>{
   if(name==='@/lib/data/supabase/admin')return {getSupabaseAdminClient:()=>db};
   if(name==='@/lib/data/persistence-store')return {saveMessage:async(_id,msg)=>saved.push(msg)};
+  if(name==='./source-handoff')return{EXECUTIVE_SOURCE_MARKER:'\nExecutive source handoff: fixture',executiveSourceReports:async input=>{calls.push({kind:'source-validation',input});return[{report:'Reviewed report'}];}};
   if(name==='./delivery')return {factoryReplyId:id=>id};
   if(name==='./provisioning-service')return {planExecutiveProvisioning:async input=>{
    calls.push({kind:'plan',input});
@@ -146,4 +147,13 @@ test('read-only repository audits use research workers and preserve repository c
  const denied=await factory.startSpecialistAssignment({actorId:'actor',chatId:'chat',requestId:'audit-2',message});
  assert.match(denied,/Select a verified connected repository/);
  assert.equal(calls.filter(c=>c.name==='create_mission').length,1);
+});
+
+test('source reports are validated and their durable references saved before a synthesis mission is linked or started',async()=>{
+ const {factory,calls}=setup({registered:{slug:'synthesis',status:'active',capabilities:['research_synthesis']}});
+ const ids=['11111111-1111-4111-8111-111111111111'];
+ await factory.startSpecialistAssignment({actorId:'actor',chatId:'chat',requestId:'source-assignment',message:'Ask the synthesis orchestrator to consolidate the independently reviewed reports.',sourceMissionIds:ids});
+ const validated=calls.findIndex(c=>c.kind==='source-validation'),bound=calls.findIndex(c=>c.kind==='update'&&c.table==='executive_delegations'&&c.value.result?.sourceMissionIds),created=calls.findIndex(c=>c.name==='create_mission');
+ assert.ok(validated>=0&&bound>validated&&created>bound);assert.deepEqual(calls[bound].value.result.sourceMissionIds,ids);
+ assert.match(calls[created].args.p_objective,/Executive source handoff/);
 });

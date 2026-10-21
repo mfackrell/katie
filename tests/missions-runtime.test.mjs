@@ -357,3 +357,10 @@ test('two source inspections plus analysis complete revision and both independen
  for(const key of ['plan','source_one','source_two','analysis','compose','review','revision','review_again']){const j=jobs.find(x=>x.job_key===key);assert.ok(j,key);j.status='running';await executeClaim({mission:m,job:j},model);}
  assert.equal(used,12);assert.equal(m.status,'completed');assert.equal(jobs.find(x=>x.job_key==='review_again').result.verdict,'pass');
 });
+test('source-bound synthesis planning receives complete verified upstream reports',async()=>{
+ const marker='\nExecutive source handoff: fixture',report='Full reviewed upstream evidence. '.repeat(900)+' UPSTREAM_REPORT_END';
+ const m=mission();m.objective='Synthesize the source reports.'+marker;const j=job(m,'plan','plan');let input;
+ const load=modules({'@/lib/executive/source-handoff':{EXECUTIVE_SOURCE_MARKER:marker,sourceReportsForMission:async id=>{assert.equal(id,m.id);return[{missionId:'upstream',report,reviewVerdict:'pass'}];}},'@/lib/missions/store':{readMission:async()=>({mission:m,jobs:[j]}),rpc:async()=>true}});
+ await load('@/lib/missions/worker').executeClaim({mission:m,job:j},async(_,__,body)=>{input=JSON.parse(body);return{text:JSON.stringify({assignments:[{key:'challenge',agentId:team[0].id,instruction:'Independently challenge the supplied reports',capability:'analysis',dependencies:[]}],deliverable:'Consolidated reviewed report'}),sources:[],calculations:[],model:'task-selected'};});
+ assert.equal(input.projectEvidence.executiveSources[0].report,report);assert.match(input.projectEvidence.executiveSources[0].report,/UPSTREAM_REPORT_END$/);
+});
