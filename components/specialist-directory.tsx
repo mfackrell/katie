@@ -74,7 +74,7 @@ function MemoryCalibration({actor}:{actor:Actor}) {
  const values=new Map((report?.entries||[]).map(e=>[e.key,e.value]));
  return <section className="mt-4 rounded-lg border border-white/15 p-3">
    <h3 className="font-medium text-sm">Long-term memory calibration</h3>
-   <p className="mt-2 text-xs text-zinc-400">AI reviews this actor's memory against its purpose. Nothing is removed automatically. Contradictions require your clarification; uncertain or unique facts stay intact.</p>
+   <p className="mt-2 text-xs text-zinc-400">AI reviews this actor&apos;s memory against its purpose. Nothing is removed automatically. Contradictions require your clarification; uncertain or unique facts stay intact.</p>
    <button type="button" className={button+" mt-3"} disabled={busy} onClick={()=>void preview()}>{busy?"Working…":"Calibrate memory"}</button>
    {report&&<div className="mt-4 space-y-3 text-sm">
      <p>{report.entries.length} stored entries · {report.groups.length} optional cleanup proposals · {report.conflicts.length} questions</p>
