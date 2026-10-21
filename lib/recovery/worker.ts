@@ -235,8 +235,8 @@ async function handleCase(c:Case):Promise<string>{
  }
  // Recovery may inspect stale work, but it must not delegate new source
  // changes under a superseded or expired project authorization.
- if(e.project&&(e.project.approved_hash===null||
-    e.project.approved_hash!==e.project.approval_hash||
+ if(e.project&&((e.project.phase==='development'&&(
+    e.project.approved_hash===null||e.project.approved_hash!==e.project.approval_hash))||
     new Date(e.project.deadline).getTime()<=Date.now())){
   const gated:RecoveryDiagnosis={category:'permissions',strategy:'owner_required',
    explanation:'Existing project scope approval or deadline is no longer valid.',
