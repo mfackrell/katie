@@ -1068,3 +1068,39 @@ test("acceptance-first: optional reviewer critique cannot trigger revision when 
   assert.equal(result.result.text,draft.text);
   assert.match(result.audit.reviews?.[0].review.optionalSuggestions??"",/slightly shorter/);
 });
+
+test("durable review contracts survive repeat requests and isolate separate applications", async () => {
+  const records: Record<string, any>[] = [];
+  const previous = (globalThis as any).__KATIE_SUPABASE_ADMIN_CLIENT__;
+  class Query {
+    filters: Array<[string, unknown]> = [];
+    eq(k:string,v:unknown){this.filters.push([k,v]);return this;}
+    select(_fields:string){return this;}
+    async maybeSingle<T>(){
+      return {data:(records.find(r=>this.filters.every(([k,v])=>r[k]===v))??null) as T|null,error:null};
+    }
+    async insert(value:Record<string,unknown>){
+      if(records.some(r=>["actor_id","project_source_id","objective_source_id","source_hash"].every(k=>r[k]===value[k])))
+        return {error:{code:"23505",message:"duplicate"}};
+      records.push({...value});return {error:null};
+    }
+  }
+  (globalThis as any).__KATIE_SUPABASE_ADMIN_CLIENT__={from:(table:string)=>{
+    assert.equal(table,"actor_review_contracts");return new Query();
+  }};
+  try {
+    const {readDurableReviewContract,saveDurableReviewContract}=require("../lib/collaboration/durable-review-contract") as typeof import("../lib/collaboration/durable-review-contract");
+    const base={actorId:"actor-one",projectSourceId:"A",objectiveSourceId:"question-1"};
+    const approved:any={verdict:"approve",findings:"Accepted",validator:{provider:"openai",modelId:"lead"},sourceCoverage:[]};
+    await saveDurableReviewContract(base,"Interim Controller WIP","Tell me about WIP",assessment,approved);
+    await saveDurableReviewContract(base,"Interim Controller WIP","Tell me about WIP",assessment,approved);
+    assert.equal(records.length,1);
+    assert.ok(await readDurableReviewContract(base,"Interim Controller WIP","Tell me about WIP"));
+    assert.equal(await readDurableReviewContract({...base,projectSourceId:"B"},"Interim Controller WIP","Tell me about WIP"),null);
+    assert.equal(await readDurableReviewContract({...base,objectiveSourceId:"question-2"},"Interim Controller WIP","Tell me about WIP"),null);
+    assert.equal(await readDurableReviewContract(base,"Different CFO brief","Tell me about WIP"),null);
+    assert.equal(await readDurableReviewContract(base,"Interim Controller WIP","New task question"),null);
+  } finally {
+    (globalThis as any).__KATIE_SUPABASE_ADMIN_CLIENT__=previous;
+  }
+});
