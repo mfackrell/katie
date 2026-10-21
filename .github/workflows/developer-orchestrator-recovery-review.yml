@@ -1,0 +1,47 @@
+name: developer-orchestrator-recovery-review
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+permissions:
+  contents: read
+concurrency:
+  group: developer-orchestrator-recovery-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+jobs:
+  independent-recovery-review:
+    if: github.event.pull_request.head.ref == 'fix/618-orchestrator-spec-recovery' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login == github.repository_owner
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Independent recovery architecture review
+        uses: openai/codex-action@v1
+        with:
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          permission-profile: ':read-only'
+          output-schema: '{"type":"object","properties":{"verdict":{"type":"string","enum":["pass","changes_requested"]},"summary":{"type":"string"},"blocking_findings":{"type":"array","items":{"type":"string"}}},"required":["verdict","summary","blocking_findings"],"additionalProperties":false}'
+          output-file: developer-orchestrator-recovery-review.json
+          prompt: |
+            Independently inspect origin/main...HEAD and the related actual code.
+            Do not alter files. Do not accept the PR description as proof.
+            Objective: repair the autonomous Developer Orchestrator's stalled game specification stages while preserving exact user requirements, completed independently reviewed research, original token/accounting history, deadlines, saved assignments, actor/chat isolation and explicit coding approval.
+            Verify both recovery SQL RPCs against actual schema, existing migration conventions and existing worker admission rules. Challenge SQL privilege grants and row locks, lease races, budget/call/routing limits, expired deadlines, one-shot records, and whether the recovered worker can actually progress.
+            Verify failed incomplete reviews fall back to other eligible model providers within real budgets, without disabling independent review. Verify the oversized brief is transmitted losslessly as authoritative project evidence, and model input is still within project phase limits. Check regression tests are meaningful, not just regexes.
+            Reject if any substantive defect, missing recovery path, security regression, untested behavior, or insufficient evidence remains. Return specific fixes and paths. Do not claim deployed acceptance or independent test outcomes you did not observe.
+      - name: Enforce review verdict and exact head
+        if: always()
+        run: |
+          git rev-parse HEAD > developer-orchestrator-reviewed-head.txt
+          jq -e '.verdict == "pass"' developer-orchestrator-recovery-review.json
+      - name: Preserve independent review evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: developer-orchestrator-recovery-review
+          path: |
+            developer-orchestrator-recovery-review.json
+            developer-orchestrator-reviewed-head.txt
