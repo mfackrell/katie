@@ -88,14 +88,13 @@ async function calibrationApply(actorId:string,hash:string,approved:CalibrationG
     memory_content:row.content,approved_changes:approved
   });
   if(backupError)return NextResponse.json({error:"Could not save restoration backup; nothing changed"},{status:500});
-  const {data:saved,error}=await db.from("actor_long_term_memory")
+  const {error}=await db.from("actor_long_term_memory")
     .eq("actor_id",actorId).eq("revision",row.revision)
-    .update({content:next,revision:row.revision+1,updated_at:new Date().toISOString()})
-    .select("revision").maybeSingle<{revision:number}>();
-  if(error||!saved)return NextResponse.json({error:"Memory changed concurrently. Recalibrate."},{status:409});
-  const {data:verified}=await db.from("actor_long_term_memory").select("content").eq("actor_id",actorId).single<{content:typeof next}>();
-  if(!verified||calibrationHash(verified.content)!==calibrationHash(next))return NextResponse.json({error:"Write verification failed; backup retained for restoration"},{status:500});
-  return NextResponse.json({ok:true,previous:original.length,current:next.entries.length,revision:saved.revision});
+    .update({content:next,revision:row.revision+1,updated_at:new Date().toISOString()});
+  if(error)return NextResponse.json({error:"Memory update failed: "+error.message},{status:500});
+  const {data:verified}=await db.from("actor_long_term_memory").select("revision,content").eq("actor_id",actorId).single<{revision:number;content:typeof next}>();
+  if(!verified||verified.revision!==row.revision+1||calibrationHash(verified.content)!==calibrationHash(next))return NextResponse.json({error:"Concurrent change or write verification failure. Backup retained; recalibrate."},{status:409});
+  return NextResponse.json({ok:true,previous:original.length,current:next.entries.length,revision:verified.revision});
 }
 const createActorSchema = z.object({
   name: z.string().min(1),
