@@ -49,6 +49,7 @@ export type Project = {
     result: string | null;
 };
 export type Run = {
+    created_at: string;
     mission_id: string;
     kind: string;
     ordinal: number;
