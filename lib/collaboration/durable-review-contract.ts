@@ -36,7 +36,7 @@ export async function saveDurableReviewContract(
     objective_source_id: scope.objectiveSourceId, source_hash: sourceHash,
     assessment, validation
   });
-  if (error && error.code !== "23505") throw new Error("Could not save durable review contract: " + error.message);
+  if (error && ("code" in error && error.code === "23505") === false) throw new Error("Could not save durable review contract: " + error.message);
   const saved = await readDurableReviewContract(scope, parent, objective);
   if (!saved) throw new Error("Durable review contract did not survive read-back");
   return saved;
