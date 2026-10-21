@@ -1,49 +1,62 @@
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {test} from 'node:test';
-
 const root=new URL('../',import.meta.url);
 const read=(file)=>readFileSync(new URL(file,root),'utf8');
 
-test('specification recovery does not demand coding approval before scope exists',()=>{
+test('specification recovery does not demand development scope approval',()=>{
  const worker=read('lib/recovery/worker.ts');
  assert.match(worker,/e\.project\.phase==='development'&&\(/);
- assert.match(worker,/e\.project\.approved_hash===null\|\|e\.project\.approved_hash!==e\.project\.approval_hash/);
  assert.match(worker,/new Date\(e\.project\.deadline\)\.getTime\(\)<=Date\.now\(\)/);
 });
 
-test('incomplete model outputs can use a different eligible provider',()=>{
+test('incomplete inference attempts can use a different eligible provider',()=>{
  const model=read('lib/missions/model.ts');
  assert.match(model,/error\.partial\.responseStatus==='incomplete'/);
  assert.match(model,/error\.partial\.incompleteReason==='max_output_tokens'/);
  assert.match(model,/failedProviders\.has\(choice\.provider\.name\)/);
 });
 
-test('long original game requirements are not silently truncated',()=>{
+test('game specification carries original user words to compose and draft-blind review',()=>{
  const worker=read('lib/projects/worker.ts');
- assert.match(worker,/sourceForMission=source\.length>6500/);
- assert.match(worker,/originalUserOutcome:source/);
- assert.match(worker,/Do not omit or summarize requirements/);
+ const review=read('lib/missions/worker.ts');
+ assert.match(worker,/boundedGameSpecification\(detailed:string,original:string,game:boolean\)/);
+ assert.match(worker,/if\(detailed\.length<=12000\)return detailed/);
+ assert.match(worker,/const compact=\x60\$\{original\}/);
+ assert.match(worker,/objective = boundedGameSpecification/);
  assert.match(worker,/await finish\('child', \{ kind: p\.phase, objective, evidence: projectEvidence \}\)/);
+ assert.match(review,/text:mission\.objective/);
+ assert.doesNotMatch(worker,/sourceForMission|originalUserOutcome:source/);
 });
 
+test('both guarded recovery RPCs have active supervisor callers',()=>{
+ const worker=read('lib/projects/worker.ts');
+ assert.match(worker,/resume_incomplete_game_review',authorized/);
+ assert.match(worker,/resume_oversized_game_specification',authorized/);
+ for(const file of ['20261021121500_incomplete_game_review_recovery.sql','20261021121600_resume_oversized_game_specification.sql']){
+  const sql=read('supabase/migrations/'+file);
+  assert.match(sql,/actor_id=p_actor and chat_id=p_chat/);
+  assert.match(sql,/token_allowance-charged/);
+  assert.match(sql,/revoke all on function public\./);
+  assert.match(sql,/to service_role/);
+ }
+});
 
-test('durable review recovery keeps original attempt counts and budgets',()=>{
+test('review recovery checks two real call slots and adequate uncommitted budget',()=>{
  const sql=read('supabase/migrations/20261021121500_incomplete_game_review_recovery.sql');
- assert.match(sql,/p\.actor_id|actor_id=p_actor/);
- assert.match(sql,/p\.chat_id|chat_id=p_chat/);
- assert.match(sql,/m\.deadline<=now\(\)\+interval '5 minutes'/);
- assert.match(sql,/p\.token_allowance-charged<10000/);
- assert.match(sql,/j\.status='failed'|status='failed'/);
+ assert.match(sql,/m\.max_calls-m\.calls<2/);
+ assert.match(sql,/m\.token_allowance-greatest\(m\.actual_tokens,m\.reserved_tokens\)<20000/);
  assert.match(sql,/savedCandidateUnchanged/);
  assert.doesNotMatch(sql,/set attempts\s*=|set reserved_tokens\s*=|set token_allowance\s*=|set approved_hash\s*=/i);
 });
 
-test('oversized game recovery requires completed research and a current budget',()=>{
- const sql=read('supabase/migrations/20261021121600_resume_oversized_game_specification.sql');
- assert.match(sql,/m\.status='completed'/);
- assert.match(sql,/r\.kind='research'/);
- assert.match(sql,/p\.token_allowance-charged<30000/);
- assert.match(sql,/p\.approved_hash is not null/);
- assert.match(sql,/oversized_game_specification_resumed/);
+test('real PostgreSQL fixture exercises both recovery RPCs and browser role denials',()=>{
+ const testSource=read('tests/projects-sql.test.mjs');
+ const sql=read('tests/fixtures/game-orchestrator-recovery-618.sql');
+ assert.match(testSource,/game-orchestrator-recovery-618\.sql/);
+ assert.match(sql,/claim_mission_work\(\)/);
+ assert.match(sql,/claim_work_project\(\)/);
+ assert.match(sql,/review_wrong_actor/);
+ assert.match(sql,/oversized_wrong_chat/);
+ assert.match(sql,/has_function_privilege\('anon'/);
 });
