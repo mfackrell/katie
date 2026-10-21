@@ -46,7 +46,7 @@ test.before(()=>{process.env.CLAUDE_API_KEY='transport-test';process.env.GOOGLE_
 test.after(()=>{for(const [k,v]of Object.entries(originalKeys)){if(v===undefined)delete process.env[k];else process.env[k]=v;}});
 
 test('EO and child stages use task routing with original scope and provider-diverse fallback, without provider pins',async()=>{
- const seen=[],providers=['anthropic','google','openai','grok'].map(name=>({name}));
+ const seen=[],providers=['anthropic','google','openai','grok'].map(name=>({name,listModels:async()=>name==='google'?['best-writer']:name==='anthropic'?['deep-reasoner','smaller-reasoner']:['alternative']}));
  const load=modules({
   '@/lib/providers':{getAvailableProviders:()=>providers},
   '@/lib/router/provider-health':{filterProvidersBySharedHealth:async p=>({providers:p})},
@@ -122,7 +122,7 @@ test('explicit routing policy is inherited by factory-created orchestrators and 
 });
 
 test('routing-model inference is bounded and accounted before dispatch',async()=>{
- const providers=[{name:'anthropic',listModels:async()=>['router-model']}],events=[];
+ const providers=[{name:'anthropic',listModels:async()=>['router-model','worker-model']}],events=[];
  const load=modules({
   '@/lib/providers':{getAvailableProviders:()=>providers},
   '@/lib/router/provider-health':{filterProvidersBySharedHealth:async p=>({providers:p})},
@@ -178,4 +178,34 @@ test('bounded transport excludes incompatible agent endpoints without pinning a 
  for(const status of [408,409,500,503])assert.equal(rejectedBeforeInference({status,message:'Unknown execution'}),false);
  assert.equal(rejectedBeforeInference({status:400,message:'Unknown failure'}),false);
  assert.equal(rejectedBeforeInference(Error('404 mentioned only in an untrusted log')),false);
+});
+test('autonomous decisions and fallbacks are restricted to current provider inventories, not stale registry entries',async()=>{
+ const providers=[{name:'openai',listModels:async()=>['accessible-model']},{name:'google',listModels:async()=>['models/gemini-current','models/deep-research-pro-preview']}];let seen;
+ const load=modules({'@/lib/providers':{getAvailableProviders:()=>providers},'@/lib/router/provider-health':{filterProvidersBySharedHealth:async p=>({providers:p})},'@/lib/router/master-router':{chooseProvider:async(_,__,p,options)=>{
+  seen=options;assert.equal(options.candidateAllowed('openai','stale-unavailable-model'),false);assert.equal(options.candidateAllowed('google','deep-research-pro-preview'),false);assert.equal(options.candidateAllowed('openai','accessible-model'),true);
+  assert.deepEqual(Array.from(await p[1].listModels()),['gemini-current']);
+  return{provider:p[0],modelId:'stale-unavailable-model',fallbackChain:[{provider:p[0],modelId:'accessible-model'},{provider:p[1],modelId:'gemini-current'}],reasoning:'Capability-ranked inventory'};
+ }}});
+ const choices=await load('@/lib/orchestration/routing').orchestrationChoices({objective:'Review actual evidence',instruction:'Independent assessment',requestId:'inventory-test'});
+ assert.ok(seen);assert.deepEqual(Array.from(choices,c=>c.modelId),['accessible-model','gemini-current']);
+});
+test('failed or empty live model discovery cannot silently reuse stale registry candidates',async()=>{
+ let decisions=0;const providers=[{name:'openai',listModels:async()=>{throw Error('Discovery unavailable');}},{name:'google',listModels:async()=>[]}];
+ const load=modules({'@/lib/providers':{getAvailableProviders:()=>providers},'@/lib/router/provider-health':{filterProvidersBySharedHealth:async p=>({providers:p})},'@/lib/router/master-router':{chooseProvider:async()=>{decisions++;throw Error('Must not guess');}}});
+ await assert.rejects(load('@/lib/orchestration/routing').orchestrationChoices({objective:'Review',instruction:'Assess',requestId:'failed-discovery'}),/No connected provider/);assert.equal(decisions,0);
+});
+test('truncated native generation can fall back without treating partial text as an accepted result',async()=>{
+ const h=harness([choice('anthropic','deep-reasoner'),choice('google','compatible-reasoner')],[anthropic('Incomplete source analysis',{stop_reason:'max_tokens'}),google('Complete source analysis')]);
+ const r=await h.run(claim(),'Analyze','Evidence');assert.equal(r.text,'Complete source analysis');assert.equal(r.provider,'google');
+ assert.equal(h.ledger.filter(x=>x.name==='reserve_mission_call').length,2);
+ assert.equal(h.ledger.filter(x=>x.name==='finish_mission_call'&&x.p_tokens===30).length,2);
+});
+test('Grok search retains its hard call cap and omits OpenAI-only search context settings',async()=>{
+ const old=process.env.GROK_API_KEY;process.env.GROK_API_KEY='fixture-only';let sent;
+ try{
+  class Client{responses={create:async body=>{sent=body;return{status:'completed',output_text:'Source-grounded result',output:[]};}};}
+  const {boundedProvider}=modules({'openai':{__esModule:true,default:Client}})('@/lib/orchestration/bounded-provider');
+  await boundedProvider(choice('grok','current-grok')).responses.create({model:'current-grok',instructions:'Research',input:[{role:'user',content:'Find a primary source'}],max_output_tokens:3000,tools:[{type:'web_search',search_context_size:'low'}],max_tool_calls:4},{timeout:1000});
+  assert.equal(sent.tools[0].type,'web_search');assert.equal(sent.tools[0].search_context_size,undefined);assert.equal(sent.max_tool_calls,4);
+ }finally{if(old===undefined)delete process.env.GROK_API_KEY;else process.env.GROK_API_KEY=old;}
 });

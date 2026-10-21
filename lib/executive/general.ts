@@ -4,7 +4,7 @@ import {saveMessage} from '@/lib/data/persistence-store';
 import {executivePlanSchema,planExecutiveAssignment,type ExecutivePlan} from './planner';
 import {startSpecialistAssignment,startSpecialistFactory} from './factory-runtime';
 
-type Assignment=ExecutivePlan['assignments'][number]&{requestId:string;missionId?:string;blocked?:string};
+type Assignment=ExecutivePlan['assignments'][number]&{requestId:string;missionId?:string;sourceMissionIds?:string[];blocked?:string};
 type Provision=ExecutivePlan['provision'][number]&{requestId:string;started?:boolean;blocked?:string};
 type SavedPlan={assignments:Assignment[];provision:Provision[];unavailable:ExecutivePlan['unavailable'];createdAt:string};
 type RecordRow={id:string;actor_id:string;chat_id:string;request_id:string;objective:string;status:string;detail:string|null;plan:SavedPlan|null};
@@ -36,7 +36,7 @@ async function sendAssignment(row:Pick<RecordRow,'actor_id'|'chat_id'>,assignmen
  const message='Ask the '+assignment.slug.replaceAll('_',' ')+' orchestrator to '+normalized+(assignment.requiresRepository?' Inspect the connected repository read-only; do not modify it.':'');
  const reply=await startSpecialistAssignment({
   actorId:row.actor_id,chatId:row.chat_id,requestId:assignment.requestId,
-  message,activeRepoId
+  message,activeRepoId,sourceMissionIds:assignment.sourceMissionIds
  });
  const missionId=reply?.match(missionPattern)?.[1]??await recoverMissionId(assignment.requestId);
  if(missionId){assignment.missionId=missionId;return;}
@@ -92,10 +92,19 @@ async function advancePlan(row:RecordRow,plan:SavedPlan,activeRepoId?:string|nul
    // Commissioned specialists receive their first real objective; commissioning
    // is NOT itself equivalent to delivery of the user's requested result.
    const existing=plan.assignments.find(x=>x.requestId===provision.requestId+'-assignment');
-   if(!existing)plan.assignments.push({
-    slug:provision.domain,objective:provision.objective,requiresRepository:false,
-    requestId:provision.requestId+'-assignment'
-   });
+   if(!existing){
+    // Newly commissioned specialists receive the completed source work, not
+    // just instructions to synthesize reports they cannot otherwise access.
+    const sourceDependent=provision.sourceSlugs!==undefined?provision.sourceSlugs.length>0:provision.capability==='research_synthesis'&&/\b(?:synthesi[sz]e|consolidat\w*|integrat\w*)\b/i.test(provision.objective)&&/\b(?:upstream|workstreams?|technical|operational|source reports?)\b/i.test(provision.objective);
+    const original=sourceDependent?plan.assignments.filter(a=>!plan.provision.some(p=>a.requestId===p.requestId+'-assignment')&&(!provision.sourceSlugs||provision.sourceSlugs.includes(a.slug))):[];
+    const sources=await Promise.all(original.map(a=>a.missionId?missionState(a.missionId):{state:a.blocked?'blocked':'running',result:''}));
+    if(sources.some(s=>s.state==='running'))continue;
+    if(sources.some(s=>s.state!=='verified')){provision.blocked='Source workstreams have not passed independent review; synthesis was not started.';continue;}
+    plan.assignments.push({
+     slug:provision.domain,objective:provision.objective,requiresRepository:false,
+     requestId:provision.requestId+'-assignment',sourceMissionIds:original.flatMap(a=>a.missionId?[a.missionId]:[])
+    });
+   }
   }
  }
  for(const work of plan.assignments){

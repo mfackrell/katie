@@ -5,9 +5,9 @@ import { createRequire } from 'node:module';
 import { resolve, dirname } from 'node:path';
 import vm from 'node:vm';
 import ts from 'typescript';
-import { randomUUID, webcrypto } from 'node:crypto';
+import { randomUUID, webcrypto, createHash } from 'node:crypto';
 const native=createRequire(import.meta.url);
-function modules(overrides={}){
+function modules(overrides={},globals={}){
  for(const [key,value] of Object.entries(overrides))if(key.startsWith('@/'))overrides[resolve(key.slice(2))]=value;
  const cache=new Map();
  const load=name=>{
@@ -19,7 +19,7 @@ function modules(overrides={}){
   if(cache.has(path))return cache.get(path);
   const exports={};cache.set(path,exports);
   const code=ts.transpileModule(readFileSync(path,'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022,esModuleInterop:true}}).outputText;
-  vm.runInNewContext(code,{exports,require:n=>n.startsWith('.')?load(resolve(dirname(path),n)):load(n),process,Buffer,Date,JSON,console,Set,Map,URL,URLSearchParams,TextEncoder,TextDecoder,Request,Response,Headers,ReadableStream,AbortController,AbortSignal,File,Blob,fetch,crypto:webcrypto,setTimeout,clearTimeout,setInterval,clearInterval},{filename:path});
+  vm.runInNewContext(code,{exports,require:n=>n.startsWith('.')?load(resolve(dirname(path),n)):load(n),process,Buffer,Date,JSON,console,Set,Map,URL,URLSearchParams,TextEncoder,TextDecoder,Request,Response,Headers,ReadableStream,AbortController,AbortSignal,File,Blob,fetch,crypto:webcrypto,setTimeout,clearTimeout,setInterval,clearInterval,...globals},{filename:path});
   return exports;
  };
  return load;
@@ -356,4 +356,43 @@ test('two source inspections plus analysis complete revision and both independen
  const {executeClaim}=modules({'@/lib/missions/store':store,'@/lib/missions/inspection':{workflowInspection:async()=>null,readOnlyRepositoryObjective:()=>false,repositoryInspection:async(_,__,choose)=>{await choose('manifest');return{sha:'a'.repeat(40),files:[{path:'core.ts',excerpt:'1: inspected source'}]};}}})('@/lib/missions/worker');
  for(const key of ['plan','source_one','source_two','analysis','compose','review','revision','review_again']){const j=jobs.find(x=>x.job_key===key);assert.ok(j,key);j.status='running';await executeClaim({mission:m,job:j},model);}
  assert.equal(used,12);assert.equal(m.status,'completed');assert.equal(jobs.find(x=>x.job_key==='review_again').result.verdict,'pass');
+});
+
+test('long source reports are partitioned losslessly and rechecked independently without overflowing any model input',async()=>{
+ const source=modules()('@/lib/executive/source-handoff'),marker=source.EXECUTIVE_SOURCE_MARKER;
+ const reports=[0,1].map(i=>({missionId:'upstream-'+i,objective:'Reviewed source '+i,report:('Verified source '+i+' evidence. ').repeat(850)+' END_'+i,reviewJobId:'source-review-'+i,reviewVerdict:'pass',observedUpdatedAt:'2026-10-21'}));
+ const groups=source.executiveSourceGroups(reports);assert.equal(groups.length,3);
+ const m=mission();m.objective='Synthesize every source report with all material evidence.'+marker;const jobs=[job(m,'plan','plan')];let calls=0,sourceChecks=0;
+ const store={readMission:async()=>({mission:m,jobs:structuredClone(jobs)}),rpc:async(name,args)=>{
+  assert.equal(name,'commit_mission_work');const j=jobs.find(x=>x.id===args.p_id);Object.assign(j,{status:args.p_status,result:args.p_result});
+  for(const child of args.p_children)jobs.push({...job(m,child.role,child.key),agent_id:child.agent_id,instruction:child.instruction,dependencies:child.dependencies,payload:child.payload??{},status:'queued'});
+  if(args.p_mission_status)m.status=args.p_mission_status;if(args.p_final)m.result=args.p_final;return true;
+ }};
+ const model=async(c,instruction,input)=>{calls++;assert.ok(input.length<=48000,'Source handoff overflowed a model input');let text='Evidence-cited digest and final report';
+  if(instruction.includes('EVERY original source fragment')){sourceChecks++;text=JSON.stringify({verdict:c.job.job_key==='review'?'changes_requested':'pass',findings:c.job.job_key==='review'?['Material source conflict must be resolved']:[],summary:'Full source group checked independently'});}
+  else if(c.job.role==='review')text=instruction.includes('KATIE_REQUIRED_DRAFT_REVIEW')?JSON.stringify(verdict('approve')):JSON.stringify(assessment);
+  if(c.job.role==='revise')text='Revised evidence-cited synthesis';
+  return{text,sources:[],calculations:[],model:'task-selected',provider:'native-provider'};
+ };
+ const {executeClaim}=modules({'@/lib/missions/store':store,'@/lib/executive/source-handoff':{...source,sourceReportsForMission:async()=>reports}})('@/lib/missions/worker');
+ await executeClaim({mission:m,job:jobs[0]},model);assert.equal(calls,0,'Mechanical source partitioning should not spend inference');
+ for(const key of [...groups.map((_,i)=>'source_'+i),'compose']){const j=jobs.find(x=>x.job_key===key);j.status='running';await executeClaim({mission:m,job:j},model);}
+ for(const key of ['review','revision','review_again']){const j=jobs.find(x=>x.job_key===key);assert.ok(j,key);
+  do{j.status='running';await executeClaim({mission:m,job:j},model);}while(j.status==='waiting_external');
+ }
+ assert.equal(m.status,'completed');assert.equal(sourceChecks,groups.length*2);assert.equal(calls,15);assert.ok(calls<=20);
+ assert.equal(jobs.find(j=>j.job_key==='review_again').result.sourceChecks.checks.length,groups.length);
+ assert.equal(jobs.find(j=>j.job_key==='review').result.verdict,'changes_requested','An approving overall model must not waive a failed full-source check');
+ assert.notEqual(jobs.find(j=>j.job_key==='review').result.sourceChecks.key,jobs.find(j=>j.job_key==='review_again').result.sourceChecks.key);
+});
+
+test('completed source checks survive a later review transport failure without being paid for again',async()=>{
+ const source=modules()('@/lib/executive/source-handoff'),m=mission();m.objective='Synthesize upstream source reports.'+source.EXECUTIVE_SOURCE_MARKER;
+ const reports=[{missionId:'source',objective:'Audit',report:'Complete verified source report.',reviewJobId:'review-source',reviewVerdict:'pass',observedUpdatedAt:'2026-10-21'}],groups=source.executiveSourceGroups(reports);
+ const candidate={...job(m,'compose','compose'),status:'completed',result:{text:'Candidate report'}},review=job(m,'review','review');
+ review.result={sourceChecks:{key:createHash('sha256').update(JSON.stringify({candidate:'Candidate report',sourceGroups:groups})).digest('hex'),checks:[{verdict:'pass',findings:[],summary:'Previously verified full source'}]}};
+ let claimed=false,committed,calls=0;
+ const load=modules({'@/lib/executive/source-handoff':{...source,sourceReportsForMission:async()=>reports},'@/lib/missions/store':{readMission:async()=>({mission:m,jobs:[candidate,review]}),rpc:async(name,args)=>{if(name==='claim_mission_work'){if(claimed)return null;claimed=true;return{mission:m,job:review};}committed=args;return true;}}},{Error});
+ await load('@/lib/missions/worker').runMissionBatch(async()=>{calls++;throw Error('500 provider unavailable');});
+ assert.equal(calls,1,'A saved source check must not be rerun before the remaining review stage');assert.equal(committed.p_status,'queued');assert.deepEqual(committed.p_result.sourceChecks,review.result.sourceChecks);
 });

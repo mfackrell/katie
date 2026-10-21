@@ -8,7 +8,7 @@ const require=createRequire(import.meta.url);
 const js=ts.transpileModule(readFileSync('lib/executive/factory-runtime.ts','utf8'),{
  compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}
 }).outputText;
-function setup({registered=null,agentRows=null,provisionRoute=null}={}){
+function setup({registered=null,agentRows=null,provisionRoute=null,existingDelegation=null}={}){
  const calls=[], saved=[];
  const agents=agentRows??[
   {id:'lead',config:{name:'Mission Lead',research:false,development:true}},
@@ -21,7 +21,7 @@ function setup({registered=null,agentRows=null,provisionRoute=null}={}){
    const filter=[];
    const builder={
     select(){return this;},eq(...args){filter.push(args);return this;},limit(){return this;},order(){return this;},
-    async maybeSingle(){return {data:table==='executive_orchestrators'?registered:null,error:null};},
+    async maybeSingle(){return {data:table==='executive_orchestrators'?registered:table==='executive_delegations'?existingDelegation:null,error:null};},
     async returns(){return {data:table==='managed_agents'?agents:[],error:null};},
     async update(value){calls.push({kind:'update',table,filter,value});return {error:null};}
    };
@@ -38,6 +38,7 @@ function setup({registered=null,agentRows=null,provisionRoute=null}={}){
  vm.runInNewContext(js,{exports,require:name=>{
   if(name==='@/lib/data/supabase/admin')return {getSupabaseAdminClient:()=>db};
   if(name==='@/lib/data/persistence-store')return {saveMessage:async(_id,msg)=>saved.push(msg)};
+  if(name==='./source-handoff')return{EXECUTIVE_SOURCE_MARKER:'\nExecutive source handoff: fixture',executiveSourceGroups:()=>[],executiveSourceReports:async input=>{calls.push({kind:'source-validation',input});return[{report:'Reviewed report'}];}};
   if(name==='./delivery')return {factoryReplyId:id=>id};
   if(name==='./provisioning-service')return {planExecutiveProvisioning:async input=>{
    calls.push({kind:'plan',input});
@@ -63,7 +64,7 @@ test('Executive factory creates a real three-agent acceptance mission but does n
  assert.equal(make.args.p_repository,null);
  assert.match(make.args.p_objective,/spare capacity and reopen rate/);
  assert.match(make.args.p_objective,/deterministic calculator/);
- assert.ok(calls.some(c=>c.kind==='update'&&c.table==='agent_missions'&&c.value.token_allowance===95000));
+ assert.ok(calls.some(c=>c.kind==='update'&&c.table==='agent_missions'&&c.value.token_allowance===120000&&c.value.max_calls===20));
  assert.ok(calls.some(c=>c.name==='control_mission'&&c.args.p_action==='start'));
  assert.ok(calls.some(c=>c.kind==='update'&&c.table==='executive_provisioning_requests'&&c.value.evidence.acceptanceMissionId));
  assert.equal(calls.some(c=>c.name==='transition_executive_provisioning'&&c.args.p_action==='activate'),false);
@@ -146,4 +147,30 @@ test('read-only repository audits use research workers and preserve repository c
  const denied=await factory.startSpecialistAssignment({actorId:'actor',chatId:'chat',requestId:'audit-2',message});
  assert.match(denied,/Select a verified connected repository/);
  assert.equal(calls.filter(c=>c.name==='create_mission').length,1);
+});
+
+test('source reports are validated and their durable references saved before a synthesis mission is linked or started',async()=>{
+ const {factory,calls}=setup({registered:{slug:'synthesis',status:'active',capabilities:['research_synthesis']}});
+ const ids=['11111111-1111-4111-8111-111111111111'];
+ await factory.startSpecialistAssignment({actorId:'actor',chatId:'chat',requestId:'source-assignment',message:'Ask the synthesis orchestrator to consolidate the independently reviewed reports.',sourceMissionIds:ids});
+ const validated=calls.findIndex(c=>c.kind==='source-validation'),bound=calls.findIndex(c=>c.kind==='update'&&c.table==='executive_delegations'&&c.value.result?.sourceMissionIds),created=calls.findIndex(c=>c.name==='create_mission');
+ assert.ok(validated>=0&&bound>validated&&created>bound);assert.deepEqual(calls[bound].value.result.sourceMissionIds,ids);
+ assert.match(calls[created].args.p_objective,/Executive source handoff/);
+});
+
+test('Executive assignments reserve bounded routing and complete review capacity before execution',async()=>{
+ const {factory,calls}=setup({registered:{slug:'operations',status:'active',capabilities:['operations_analysis']}});
+ await factory.startSpecialistAssignment({actorId:'actor',chatId:'chat',requestId:'capacity-assignment',message:'Ask the operations orchestrator to independently assess the supplied operating results.'});
+ const proposal=calls.find(c=>c.name==='propose_executive_delegation');assert.equal(proposal.args.p_budget,120000);
+ const capacity=calls.findIndex(c=>c.kind==='update'&&c.table==='agent_missions'&&c.value.max_calls===20),start=calls.findIndex(c=>c.name==='control_mission');
+ assert.ok(capacity>=0&&capacity<start);assert.equal(calls[capacity].value.token_allowance,120000);
+});
+
+test('an unlinked saved proposal reuses its deadline, budget and criteria rather than changing idempotent values',async()=>{
+ const objective='Consolidate the reviewed source reports.',existing={id:'delegation-id',status:'proposed',mission_id:null,deadline:'2099-01-01T00:00:00.000Z',budget_tokens:60000,success_criteria:['Saved original acceptance'],objective,capability:'research_synthesis'};
+ const {factory,calls}=setup({registered:{slug:'synthesis',status:'active',capabilities:['research_synthesis']},existingDelegation:existing});
+ await factory.startSpecialistAssignment({actorId:'actor',chatId:'chat',requestId:'resume-proposal',message:'Ask the synthesis orchestrator to '+objective});
+ const proposal=calls.find(c=>c.name==='propose_executive_delegation');assert.equal(proposal.args.p_deadline,existing.deadline);assert.equal(proposal.args.p_budget,existing.budget_tokens);assert.deepEqual(proposal.args.p_success,existing.success_criteria);
+ assert.ok(calls.some(c=>c.name==='create_mission'));assert.ok(calls.some(c=>c.name==='control_mission'));
+ assert.equal(calls.find(c=>c.kind==='update'&&c.table==='agent_missions').value.token_allowance,existing.budget_tokens);
 });
