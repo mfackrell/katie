@@ -56,3 +56,7 @@ begin
  perform public.project_publish(p.id,'Saved specification independent review resumed under original budgets and authorization.');
  return true;
 end;$$;
+
+-- These maintenance RPCs must not be callable from browser/data API roles.
+revoke all on function public.resume_incomplete_game_review(uuid,uuid,uuid) from public, anon, authenticated;
+grant execute on function public.resume_incomplete_game_review(uuid,uuid,uuid) to service_role;
