@@ -502,3 +502,44 @@ test("automatic actor-purpose learning persists firsthand facts with quoted evid
  assert.match(observedPrompt,/Help with executive project applications/);
  assert.equal((retained.entries as any[])[0].evidenceQuotes[0].messageId,"m1");
 });
+
+test("automatic memory accepts valid unwrapped version-3 model output with firsthand provenance", async () => {
+ const state=makeState();
+ (globalThis as any).__KATIE_SUPABASE_ADMIN_CLIENT__=createFakeClient(state);
+ const quote="I brought in full-time AR and AP managers when the accounting team had departed.";
+ (globalThis as any).__KATIE_LONG_TERM_MEMORY_OPENAI_CLIENT__=createMockMemoryEditorClient(JSON.stringify({
+  version:3,purpose:"Actor memory",entries:[{
+   key:"career.accounting.team.recovery",category:"fact",
+   value:"User hired full-time AR and AP managers after most of the accounting function departed.",
+   source:"user-stated",confidence:"high",evidenceMessageIds:["m1"],
+   evidenceQuotes:[{messageId:"m1",quote}]
+  }]
+ }));
+ const {store,memoryEditor}=loadModules();
+ await store.saveActor({id:"a1",name:"Application Specialist",purpose:"Craft compelling project applications."});
+ await store.saveChat({id:"c1",actorId:"a1",title:"Current",createdAt:"x",updatedAt:"x"});
+ await store.saveChat({id:"c2",actorId:"a1",title:"Later",createdAt:"x",updatedAt:"x"});
+ await store.saveMessage("c1",{id:"m1",role:"user",content:quote});
+ await memoryEditor.maybeUpdateLongTermMemory("a1","c1",quote);
+ const entries=(await store.getLongTermMemory("a1","c2")).entries as any[];
+ assert.equal(entries.length,1);
+ assert.equal(entries[0].source,"user-stated");
+ assert.equal(entries[0].evidenceMessageIds[0],"m1");
+});
+test("unwrapped memory without matching user evidence is not saved", async () => {
+ const state=makeState();
+ (globalThis as any).__KATIE_SUPABASE_ADMIN_CLIENT__=createFakeClient(state);
+ (globalThis as any).__KATIE_LONG_TERM_MEMORY_OPENAI_CLIENT__=createMockMemoryEditorClient(JSON.stringify({
+  version:3,purpose:"Actor memory",entries:[{
+   key:"unsupported",category:"fact",value:"An invented claim.",
+   source:"user-stated",confidence:"high",evidenceMessageIds:["m1"],
+   evidenceQuotes:[{messageId:"m1",quote:"The user did something that they never actually said."}]
+  }]
+ }));
+ const {store,memoryEditor}=loadModules();
+ await store.saveActor({id:"a1",name:"Application Specialist",purpose:"Write applications."});
+ await store.saveChat({id:"c1",actorId:"a1",title:"Current",createdAt:"x",updatedAt:"x"});
+ await store.saveMessage("c1",{id:"m1",role:"user",content:"A different statement about work."});
+ await memoryEditor.maybeUpdateLongTermMemory("a1","c1","A different statement about work.");
+ assert.equal((await store.getLongTermMemory("a1","c1")).entries,undefined);
+});
