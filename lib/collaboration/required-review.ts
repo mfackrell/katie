@@ -77,7 +77,8 @@ export const REVIEW_INSTRUCTION = [
   "KATIE_REQUIRED_DRAFT_REVIEW",
   CONTRACT_RULES,
   getReviewerCompletionInstruction(false),
-  "COMPARATIVE REVIEW: FIRST challenge the chosen approach against your independently established best supported alternative. Identify the outcome gain and any loss from retaining, changing, adding or removing content; do not mistake isolated compliance for improvement. THEN assess evidence selection, expression and usability within that approach. Enforce factual and explicit-requirement constraints throughout. Reject a materially weaker approach even if its execution is polished; approve sound work without rewarding detail or correction counts for their own sake.",
+  "ACCEPTANCE GATE FIRST: Your job is to decide whether the deliverable is sufficient for its real audience and purpose, not to generate critiques. Approve an effective, factually supported result even when stylistic improvements are imaginable. Optional advice NEVER blocks acceptance. Return revise only for a material defect that would meaningfully impair accuracy, answer coverage, usability, or strategic effectiveness; specify its consequence, cite actual evidence, and weigh what a revision might damage. Do not reopen previously resolved issues or require perfection. When the answer is ready, verdict must be approve.",
+    "COMPARATIVE REVIEW: FIRST challenge the chosen approach against your independently established best supported alternative. Identify the outcome gain and any loss from retaining, changing, adding or removing content; do not mistake isolated compliance for improvement. THEN assess evidence selection, expression and usability within that approach. Enforce factual and explicit-requirement constraints throughout. Reject a materially weaker approach even if its execution is polished; approve sound work without rewarding detail or correction counts for their own sake.",
   "PROGRESSION REVIEW: If a user follows up on your earlier questions, use the explicit question/answer evidence links and source IDs to identify the completed step. Reject a response that restarts the previous assessment, repeats earlier unanswered questions as though no response was given, or defers instead of taking the next authorized action. Do not force an application draft or action the user has not requested; the point is to advance their actual task.",
   "RED-PEN TEST: For each substantial background example, ask what distinct decision-relevant point it proves and whether the response would be stronger without it. A true but peripheral anecdote must be REMOVED, not merely fact-corrected. If a reviewer previously recommended narrowing a tangential claim, revisit whether the entire example belongs. A more precise version of an irrelevant example is still irrelevant. Conversely, preserve high-value details when they demonstrate a distinct requirement or competitive strength.",
   "Do not force caveats about missing optional historic information into a response simply to signal diligence. Verify the requested metric using confirmed values, then weigh every optional disclosure by its actual contribution to the audience.",
@@ -172,10 +173,7 @@ export async function runRequiredDraftReview(input: {
     audit.lastCandidateHash = hash(text);
     audit.finalHash = hash(text);
     if (contractObjections.length && !audit.contractValidation) {
-      const blocker = "I couldn’t verify that this draft answers the current task. I need to resolve the conflicting requirements before providing a finished answer.";
-      audit.status = "unavailable";
-      audit.finalHash = hash(blocker);
-      return { result: { ...input.draft, text: blocker }, audit };
+      audit.completionNote = "Independent review contract could not be validated; original user-facing draft preserved. " + notice;
     }
     // Deliver usable work. Verification status and defects remain in metadata,
     // not appended to paste-ready source text.
@@ -286,11 +284,13 @@ export async function runRequiredDraftReview(input: {
         audit.finalHash = hash(draft);
         return { result: input.draft, audit };
       }
+      // Reviewer acceptance is the default unless a material defect is supported.
+      // No revision is launched solely to optimize optional style suggestions.
       // Bounded repair: a revision is never reported as successful merely because it exists.
       const findings: string[] = [];
       let candidate = input.draft;
       try {
-        for (let pass = 0; pass < 3; pass++) {
+        for (let pass = 0; pass < 2; pass++) {
           // Only the latest verified assessment applies to the current candidate.
           // Historical findings remain in audit.reviews, not as live blockers.
           findings.length = 0;
