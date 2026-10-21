@@ -160,7 +160,13 @@ export function isPdfContentRequest(message: string, sourceNames: string[] = [])
   const attachmentQualified = sourceNames.length>0 && /\b(?:attached|uploaded)\s+(?:[a-z-]+\s+){0,3}(?:contracts?|agreements?|invoices?|receipts?|resumes?|forms?|papers?|manuals?|books?|letters?)\b/i.test(message);
   const sourceReference = attachmentQualified || attachmentPronoun || /\b(?:pdfs?|documents?|attachments?|files?|pages?|statements?|reports?|sources?|this|these|those)\b|\.pdf\b/i.test(message);
   const contentReference = /\b(?:transactions?|charges?|amounts?|values?|totals?|rows?|columns?|charts?|tables?|figures?|scans?|extracted text|parsed text)\b/i.test(message);
-  const explicit = ((sourceReference || contentReference) && /\b(?:read|extract|analy[sz]e|inspect|review|summari[sz]e|compare|explain|interpret|calculate|reconcile)\b/i.test(message))
+  // An explicit request to perform work using a source also authorizes reading
+  // it, without a domain-specific list of occupations or application types.
+  const sourceDirectedAction = sourceNames.length > 0 && sourceReference &&
+    message.split(/[;!?\n]/).some(clause =>
+      /^\s*(?:please\s+)?(?:help me|can you|could you)\s+\w+(?:\s+\w+){0,4}\s+(?:to|using|from|based on)\s+(?:this|that|these|those|the attached|the uploaded)\b/i.test(clause) ||
+      /^\s*(?:please\s+)?use\s+(?:(?:the|this|that|these|those|my|attached|uploaded)\s+)*(?:PDF source|pdfs?|documents?|attachments?|files?|reports?|statements?)\s+to\b/i.test(clause));
+  const explicit = sourceDirectedAction || ((sourceReference || contentReference) && /\b(?:read|extract|analy[sz]e|inspect|review|summari[sz]e|compare|explain|interpret|calculate|reconcile)\b/i.test(message))
     || (sourceReference && /\b(?:ocr|transcribe|scan|check|examine|describe|audit|process|look\s+(?:at|through|over))\b/i.test(message));
   if(sourceNames.length>0 && /^(?:please\s+)?(?:read|review|inspect|analy[sz]e|summari[sz]e|ocr|transcribe|scan)[.!?\s]*$/i.test(message)) return true;
   const storedForLater = /\b(?:keep|save|store|retain|upload|attach)\b.{0,100}\b(?:later|reference|storage|only|do not|don't)\b/i.test(message);

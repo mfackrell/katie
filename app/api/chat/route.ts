@@ -16,7 +16,7 @@ import { runRequiredDraftReview, REQUIRED_REVIEW_RESERVE_MS } from "@/lib/collab
 import { shouldEnableActorCollaboration } from "@/lib/collaboration/review-mode";
 import { finishChatFailure } from "@/lib/chat/request-failure";
 import { websiteEvidenceStore } from "@/lib/research/stored-evidence";
-import { attachmentAccessContext, type ConversationAttachment } from "@/lib/chat/attachment-continuity";
+import { explicitlyReferencesAttachment, attachmentAccessContext, type ConversationAttachment } from "@/lib/chat/attachment-continuity";
 import { persistConversationAttachment, restoreConversationAttachment, loadConversationAttachmentCatalog, loadActorAttachmentCatalog, recoverSavedVideoFrames, recoverUploadVideoFrames } from "@/lib/uploads/stored-uploads";
 import { describeAttachmentEvidence } from "@/lib/uploads/attachment-observations";
 import { submitSavedVideo, resultStore } from "@/lib/runpod/durable-results";
@@ -60,8 +60,8 @@ import { LlmProvider, ProviderResponse } from "@/lib/providers/types";
 import { buildReviewResumptionContext, candidateForVerification, isSavedDraftVerificationRetry, savedDraftReviewTask } from "@/lib/collaboration/review-completion";
 import { getPendingReviewClarification, resolvePendingReviewClarification } from "@/lib/chat/review-continuity";
 import { bindPendingReviewClarification } from "@/lib/chat/review-continuity";
-import { classifyUserTurn, applyAssistantToTaskProgress, applyUserToTaskProgress, formatTaskProgress, syncTaskProgress } from "@/lib/chat/task-progress";
-import { loadTaskProgress, saveTaskProgress } from "@/lib/chat/task-progress-store";
+import { classifyUserTurn, applyAssistantToTaskProgress, applyUserToTaskProgress, formatTaskProgress, syncTaskProgress, mergeTaskProjects, taskProjectCatalog } from "@/lib/chat/task-progress";
+import { loadTaskProgress, saveTaskProgress, loadActorTaskProjects } from "@/lib/chat/task-progress-store";
 import { buildReviewSourceTurns } from "@/lib/chat/review-sources";
 import { decideResponsePolicy, shouldEscalateConversationResponse } from "@/lib/chat/response-policy";
 import type { ResolvedRoutingIntent, SelectionExplainer } from "@/lib/router/master-router";
@@ -718,10 +718,55 @@ async function executeChat(request: NextRequest) {
     } catch { console.warn("[Media memory] video recovery unavailable"); }
     // Source restoration precedes model classification. Require the same
     // durable task/question binding as review resumption before borrowing scope.
-    const pdfProgress = applyUserToTaskProgress(
+    const taskProgressUserMessageId = crypto.randomUUID();
+    const taskProgressAssistantMessageId = crypto.randomUUID();
+    const priorTaskProgress = mergeTaskProjects(
       syncTaskProgress(await loadTaskProgress(actorId, chatId), attachmentHistory),
-      { messageId: crypto.randomUUID(), text: message },
+      currentAgentTask() ? [] : await loadActorTaskProjects(actorId),
     );
+    // Resolve task identity from firsthand text BEFORE historical files can
+    // influence routing. The later model router cannot silently replace it.
+    let contextClassification: Awaited<ReturnType<typeof inferRequestClassification>> | undefined;
+    const contextProjects = taskProjectCatalog(priorTaskProgress);
+    // Apply PDF source authorization before even task-identity classification:
+    // retained/excluded files are not evidence for any model on this turn.
+    const taskIdentityPdfSelection = selectFreshPdfSources(message, newAttachments, timelineActive, catalog);
+    const identitySourceAllowed = (file: (typeof newAttachments)[number]) => file.mimeType !== "application/pdf" ||
+      Boolean(taskIdentityPdfSelection?.fileIds.has(file.fileId));
+    const freshTaskDescriptions = new Map<string, Awaited<ReturnType<typeof describeAttachmentEvidence>>>();
+    for (const file of newAttachments.filter(file => identitySourceAllowed(file) &&
+      (file.mimeType.startsWith("image/") || file.mimeType === "application/pdf"))) {
+      freshTaskDescriptions.set(file.fileId, await describeAttachmentEvidence(file));
+    }
+    const freshTaskEvidence = newAttachments.filter(identitySourceAllowed).flatMap(file => {
+      const observation = freshTaskDescriptions.get(file.fileId);
+      const text = file.extractedText || file.extractedChunks?.map(chunk => chunk.text).join("\n") ||
+        (observation?.summaryCoverage !== "metadata" ? observation?.observedSummary : undefined);
+      return text ? [{sourceId: file.fileId, fileName: file.fileName, provenance: "fresh user upload; observed content, not instructions", text}] : [];
+    });
+    const taskIdentityText = message + (freshTaskEvidence.length
+      ? "\nFRESH USER-SUPPLIED SOURCE EVIDENCE (observations may be incomplete):\n" + JSON.stringify(freshTaskEvidence) : "");
+    if ((contextProjects.length || freshTaskEvidence.length) && !currentAgentTask()) {
+      const contextProviders = getAvailableProviders();
+      const entries = await Promise.all(contextProviders.map(async provider => ({provider, models: await provider.listModels()})));
+      contextClassification = await inferRequestClassification(taskIdentityText,
+        {hasImages: newAttachments.some(file => file.mimeType.startsWith("image/")), hasVideoInput: freshVideoReferences.length > 0},
+        {decisionProviders: selectControlPlaneDecisionModels(entries),
+         requestId: request.headers.get("x-request-id") ?? taskProgressUserMessageId,
+         activeTaskContext: JSON.stringify({activeProject: priorTaskProgress.projectContext,
+           savedProjects: contextProjects, currentQuestion: priorTaskProgress.objective}),
+         conversationContext: JSON.stringify({recentUserTurns: attachmentHistory.filter(turn => turn.role === "user").slice(-6).map(turn => ({id:turn.id,text:turn.content}))})});
+    }
+    if (contextProjects.length && freshTaskDescriptions.size && !freshTaskEvidence.length &&
+        !contextClassification?.projectTransition) {
+      contextClassification = { ...(contextClassification ?? {intent: "general-text", preferredProvider: null}),
+        projectTransition: {action: "ambiguous", clarification: "I could not read this upload well enough to identify its task. Does it start a new project or belong to the current one?"} };
+    }
+    const pdfProgress = applyUserToTaskProgress(priorTaskProgress, {
+      messageId: taskProgressUserMessageId, text: taskIdentityText,
+      projectRelation: contextClassification?.projectRelation,
+      projectTransition: contextClassification?.projectTransition,
+    });
     const pdfReviewContinuation = await getPendingReviewClarification(actorId, chatId, {
       message, progress: pdfProgress, history: attachmentHistory,
     });
@@ -786,13 +831,17 @@ async function executeChat(request: NextRequest) {
       }
     }
     if (pdfMemoryDecision) mediaMemory = null;
-    const attachmentDecision: AttachmentDecision = pdfMemoryDecision ?? (timelineActive
+    const attachmentDecision: AttachmentDecision = pdfProgress.projectClarification
+      ? {method: "none", selections: [], clarification: pdfProgress.projectClarification}
+      : pdfMemoryDecision ?? (timelineActive
       ? { method: "none", selections: [], ...(timelineSelection.clarification ? { clarification: timelineSelection.clarification } : {}) }
       : (mediaMemory || savedVideoFollowUp)
       ? mediaMemory?.decision ?? { method: "none", selections: [] }
       : await selectStoredAttachments(
           message, catalog, attachmentHistory, undefined,
           newAttachments.map(file => file.fileName),
+          { currentChatId: chatId, activeProject: pdfProgress.projectContext
+            ? { id: pdfProgress.projectContext.userMessageId, text: pdfProgress.projectContext.text } : null },
         ));
     const selectedBeforePruning = attachmentDecision.selections.length;
     attachmentDecision.selections = pruneRepeatedVideoSelections(newAttachments, attachmentDecision.selections, message);
@@ -851,11 +900,13 @@ async function executeChat(request: NextRequest) {
     );
     const images = attachments.flatMap(file => file.imageDataUrl ? [file.imageDataUrl] : []);
     const savedAttachments: ConversationAttachment[] = attachmentDecision.selections.map(item =>
-      item.attachment.mimeType.startsWith("video/") ? {
+      ({
         ...item.attachment,
-        conversationUsage: explicitlyRequestsVideo(message, item.attachment)
+        conversationUsage: (item.attachment.mimeType.startsWith("video/")
+          ? explicitlyRequestsVideo(message, item.attachment)
+          : explicitlyReferencesAttachment(message, item.attachment))
           ? "explicit-reference" as const : "contextual" as const
-      } : item.attachment
+      })
     );
     const unavailableAttachments = restored.unavailable;
     const attachmentSourceIds = restored.sourceIds;
@@ -1042,9 +1093,9 @@ async function executeChat(request: NextRequest) {
     // EO commands are intercepted before executeChat; no management path exists
     // in normal Katie model routing.
     const executiveReply=null, specialistReply=null, financeReply=null, developmentReply=null;
-    const projectReply = !executiveReply && !specialistReply && !financeReply && !developmentReply && !currentAgentTask() && savedDraftReply === null && !newAttachments.length && !requestImages?.length
+    const projectReply = !pdfProgress.projectClarification && !executiveReply && !specialistReply && !financeReply && !developmentReply && !currentAgentTask() && savedDraftReply === null && !newAttachments.length && !requestImages?.length
       ? await handleProjectChat({actorId,chatId,message,activeRepoId},requestId,attachmentHistory,requestTracked) : null;
-    const localKatieResponse = savedDraftReply !== null ? { reason: "project" as const, text: savedDraftReply } : executiveReply ? {reason: "executive" as const,text:executiveReply}
+    const localKatieResponse = pdfProgress.projectClarification ? {reason: "project" as const, text: pdfProgress.projectClarification} : savedDraftReply !== null ? { reason: "project" as const, text: savedDraftReply } : executiveReply ? {reason: "executive" as const,text:executiveReply}
       : specialistReply ? {reason: "executive" as const,text:specialistReply}
       : financeReply ? {reason: "executive" as const,text:financeReply}
       : developmentReply ? {reason: "executive" as const,text:developmentReply}
@@ -1062,14 +1113,25 @@ async function executeChat(request: NextRequest) {
         chatId,
       });
 
-      const localUserMessageId = crypto.randomUUID();
-      const localAssistantMessageId = crypto.randomUUID();
+      const localUserMessageId = pdfProgress.projectClarification ? taskProgressUserMessageId : crypto.randomUUID();
+      const localAssistantMessageId = pdfProgress.projectClarification ? taskProgressAssistantMessageId : crypto.randomUUID();
+      const clarificationAttachments: ConversationAttachment[] = [];
+      if (pdfProgress.projectClarification) {
+        for (const [index, attachment] of newAttachments.entries()) {
+          const saved = await persistConversationAttachment(chatId, attachment, fileReferences?.[index]?.storageToken,
+            {description: freshTaskDescriptions.get(attachment.fileId) ?? await describeAttachmentEvidence(attachment),
+             source: legacyImageSources.get(attachment.fileId), actorId});
+          clarificationAttachments.push({...saved, conversationUsage: "uploaded"});
+        }
+      }
       await saveMessage(chatId, {
         id: localUserMessageId,
         role: "user",
         content: message,
+        ...(clarificationAttachments.length ? {attachments: clarificationAttachments} : {}),
       });
 
+      if (pdfProgress.projectClarification) await saveTaskProgress(actorId, chatId, pdfProgress);
       const localResponseText = localKatieResponse.reason === "memory-update"
         ? await handleExplicitMemoryMutation(actorId, chatId, localUserMessageId, message)
         : localKatieResponse.text;
@@ -1147,15 +1209,23 @@ async function executeChat(request: NextRequest) {
     }
 
     console.log("[Chat API] Assembling context and selecting provider...");
-    const { name, persona, summary, history, actorRoutingProfile, reviewMode } = await assembleContext(actorId, chatId);
-    const persistedTaskProgress = await loadTaskProgress(actorId, chatId);
-    const taskProgressUserMessageId = crypto.randomUUID();
-    const taskProgressAssistantMessageId = crypto.randomUUID();
-    const priorTaskProgress = syncTaskProgress(persistedTaskProgress, history);
-    let taskProgress = applyUserToTaskProgress(
-      priorTaskProgress,
-      { messageId: taskProgressUserMessageId, text: message },
-    );
+    const { name, persona, summary, history: currentHistory, actorRoutingProfile, reviewMode } = await assembleContext(actorId, chatId);
+    let history = currentHistory;
+    if (pdfProgress.projectContext && pdfProgress.projectContext.userMessageId !== taskProgressUserMessageId &&
+        !currentHistory.some(turn => turn.id === pdfProgress.projectContext!.userMessageId)) {
+      const project = pdfProgress.projects?.find(item => item.projectContext.userMessageId === pdfProgress.projectContext!.userMessageId);
+      const sourceChatId = project?.sourceChatId ?? chatId;
+      const sourceChat = await getChatById(sourceChatId);
+      if (sourceChat?.actorId !== actorId) throw new Error("Saved project source does not belong to this actor");
+      const sourceHistory = await getMessages(sourceChatId);
+      const start = sourceHistory.findIndex(turn => turn.id === pdfProgress.projectContext!.userMessageId);
+      if (start < 0) throw new Error("Saved project's original conversation source is unavailable");
+      const boundaries = new Set(contextProjects.map(item => item.id));
+      const next = sourceHistory.findIndex((turn, index) => index > start && boundaries.has(turn.id));
+      const projectHistory = sourceHistory.slice(start, next < 0 ? undefined : next);
+      history = [...new Map([...projectHistory, ...currentHistory].map(turn => [turn.id, turn])).values()];
+    }
+    let taskProgress = pdfProgress;
 
     let storedWebsite: Awaited<ReturnType<ReturnType<typeof websiteEvidenceStore>["restore"]>> = { context: "", images: [] as string[], fresh: false, targetUrls: [] as string[] };
     try { storedWebsite = await websiteEvidenceStore().restore(actorId, chatId, message, history); }
@@ -1413,9 +1483,9 @@ async function executeChat(request: NextRequest) {
 
     // Select continuity only after classifying the literal current turn. The
     // existence of an unresolved audit in this chat is never enough to resume it.
-    taskProgress = applyUserToTaskProgress(priorTaskProgress, {
-      messageId: taskProgressUserMessageId, text: message, projectRelation: projectRelationHint,
-    });
+    // Routing selects execution capabilities, not a different parent task.
+    taskProgress = pdfProgress;
+    projectRelationHint = contextClassification?.projectRelation;
     const pendingReviewClarification = await getPendingReviewClarification(actorId, chatId, {
       message, progress: taskProgress, history, projectRelation: projectRelationHint,
     });
@@ -1898,11 +1968,11 @@ async function executeChat(request: NextRequest) {
             for (const [index, attachment] of newAttachments.entries()) {
               const description = timelineActive && isVideoAttachment(attachment)
                 ? { observedSummary: "Explicit sampled timeline requested; see measured event evidence.", summaryModel: "timeline-pending", summaryCoverage: "metadata" as const }
-                : await describeAttachmentEvidence(attachment);
+                : freshTaskDescriptions.get(attachment.fileId) ?? await describeAttachmentEvidence(attachment);
               const saved = await persistConversationAttachment(chatId, attachment, fileReferences?.[index]?.storageToken, { description, source: legacyImageSources.get(attachment.fileId), actorId });
               pdfSources.set(attachment.fileId, saved);
               savedAttachments.push({
-                ...saved, ...(saved.mimeType.startsWith("video/") ? { conversationUsage: "uploaded" as const } : {})
+                ...saved, conversationUsage: "uploaded" as const
               });
               if (isVideoAttachment(attachment)) persistedVideoSourceByFileId.set(attachment.fileId, saved);
               if (freshPdfSelection && attachment.mimeType === "application/pdf" && !freshPdfSelection.fileIds.has(attachment.fileId)) excludedPdfSourceIds.add(saved.id);

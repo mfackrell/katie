@@ -17,7 +17,7 @@ test('Executive commands use dedicated transport before all ordinary chat proces
  const idx=route.indexOf("if(actorRole.actor_kind==='executive')return executeExecutiveCommand(payload,request)");
  assert.ok(idx>0);
  assert.ok(idx<route.indexOf("const task = await authorizeManagedChat"));
- assert.match(route,/const projectReply = !executiveReply/);
+ assert.match(route,/const projectReply = !pdfProgress\.projectClarification && !executiveReply/);
  const transport=read('lib/executive/transport.ts');
  assert.match(transport,/handleExecutiveManagement\(/);
  assert.doesNotMatch(transport,/getAvailableProviders|assembleContext|runAdaptiveCollaboration/);

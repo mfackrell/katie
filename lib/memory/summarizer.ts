@@ -70,7 +70,14 @@ async function summarizeInto(priorSummary: string, messages: Message[]): Promise
     ],
   });
 
-  return response.choices[0]?.message?.content?.trim() || priorSummary;
+  const choice = response.choices[0];
+  const summary = choice?.message?.content?.trim();
+  // Never advance the durable source cursor past incomplete or absent output.
+  // The next request must be able to retry these exact source messages.
+  if (choice?.finish_reason !== "stop" || !summary) {
+    throw new Error("Intermediate memory summary incomplete; source cursor retained");
+  }
+  return summary;
 }
 
 function parseV2(memory: Record<string, unknown>): IntermediateMemoryV2 | null {

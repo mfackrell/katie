@@ -1,3 +1,4 @@
+import type { ProjectTransition } from "@/lib/chat/task-progress";
 import {
   buildCandidateMetadata,
   buildRoutingPreferenceProfile,
@@ -50,6 +51,7 @@ export type ResolvedRoutingIntent = {
   providerRefusalRisk?: ProviderRefusalRisk | null;
   responsePurpose?: ResponsePurpose;
   projectRelation?: ProjectRelation;
+  projectTransition?: ProjectTransition;
 };
 export type SelectionExplainer = {
   selected_model?: string;
@@ -804,7 +806,8 @@ export async function chooseProvider(
           complexity: requestClassification.complexity ?? null,
           providerRefusalRisk: requestClassification.providerRefusalRisk ?? null,
           ...(requestClassification.responsePurpose ? { responsePurpose: requestClassification.responsePurpose } : {}),
-          ...(requestClassification.projectRelation ? { projectRelation: requestClassification.projectRelation } : {})
+          ...(requestClassification.projectRelation ? { projectRelation: requestClassification.projectRelation } : {}),
+          ...(requestClassification.projectTransition ? { projectTransition: requestClassification.projectTransition } : {})
         }
       : {
           // Local classification is a deliberate router fallback, never an

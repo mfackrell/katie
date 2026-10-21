@@ -46,3 +46,16 @@ test("access context preserves summary provenance and does not invent prior proc
   assert.match(context, /Ask the user to reattach/);
   assert.match(attachmentAccessContext([], [video], []), /source attached this turn/);
 });
+
+test("automatic image reuse preserves origin without becoming a new continuity anchor", () => {
+  const screenshot: ConversationAttachment = { ...doc, mimeType: "image/png", fileName: "brief.png", chatId: "original-chat", createdAt: "2026-10-20T15:37:00Z", conversationUsage: "contextual" };
+  assert.deepEqual(selectFollowUpAttachments("What about that?", [user("Examples", [screenshot]), reply]), []);
+  assert.deepEqual(selectFollowUpAttachments("Inspect brief.png", [user("Examples", [screenshot]), reply]), [screenshot], "explicit historical retrieval remains available");
+  const context = attachmentAccessContext([], [screenshot], [], new Set([screenshot.id]));
+  assert.match(context, /original-chat/);
+  assert.match(context, /2026-10-20T15:37:00Z/);
+  assert.match(context, /"conversationUsage":"contextual"/);
+  assert.match(context, /not necessarily newly uploaded/);
+  const decoded = parseMessageContent(encodeMessageContent(user("Examples", [screenshot])));
+  assert.deepEqual(decoded.attachments, [screenshot]);
+});

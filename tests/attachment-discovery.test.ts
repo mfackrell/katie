@@ -307,3 +307,19 @@ test("a new attached clip avoids an unnecessary remote saved-file selector", asy
   assert.equal(calls, 1);
   assert.equal(explicit.selections[0].attachment.id, oldClip.id);
 });
+
+test("contextually restored screenshots do not renew recency and selector receives the active task", async () => {
+  const old: ConversationAttachment = { ...doc, id: "old-brief", fileName: "old.png", mimeType: "image/png", chatId: "earlier-chat", createdAt: "2026-10-20", observedSummary: "Forecasting and lender reporting application" };
+  const current: ConversationAttachment = { ...old, id: "current-brief", fileName: "current.png", chatId: "current-chat", createdAt: "2026-10-21", observedSummary: "Project accounting and work in progress application" };
+  const history: Message[] = [{ id: "auto-reuse", role: "user", chatId: "current-chat", content: "Give examples", createdAt: "2026-10-21", attachments: [{ ...old, conversationUsage: "contextual" }] }];
+  assert.equal(rankAttachmentCandidates("Give examples", [old, current], history)[0].id, current.id);
+  const decision = await selectStoredAttachments("Give examples", [old, current], history, async prompt => {
+    const input = JSON.parse(prompt);
+    assert.deepEqual(input.taskContext, { currentChatId: "current-chat", activeProject: { id: "project-b", text: "Project accounting and work in progress" } });
+    assert.equal(input.files[0].id, current.id);
+    assert.equal(input.files.find((file: {id: string}) => file.id === old.id).sourceChatId, "earlier-chat");
+    assert.equal(input.recentConversation[0].attachments[0].usage, "contextual");
+    return { selections: [{ id: current.id, mode: "source" }] };
+  }, [], { currentChatId: "current-chat", activeProject: { id: "project-b", text: "Project accounting and work in progress" } });
+  assert.equal(decision.selections[0].attachment.id, current.id);
+});
