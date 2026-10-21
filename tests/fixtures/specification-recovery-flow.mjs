@@ -40,12 +40,18 @@ export async function specificationRecoveryFlow(db){
   }
   p=(await db.query('select * from work_projects where id=$1',[id])).rows[0];assert.equal(p.status,'blocked');assert.equal(p.failures,3);
 
-  assert.equal((await db.query('select resume_oversized_game_specification($1,$2,$3) ok',[id,actor,chat])).rows[0].ok,true);
+  const oversizedResearch='Reviewed primary-source details retained without deletion. '.repeat(400);
+  await db.query('update agent_missions set result=$2 where id=$1',[researchId,oversizedResearch]);
+  const sourceWords=`ORIGINAL USER OUTCOME (must remain authoritative):\n${original}\n${clarification}`;
+  const oversizedEvidence={projectProfile:'game',originalUserOutcome:sourceWords,reviewedResearch:{text:oversizedResearch,reviewedMissionId:researchId,phase:'research'}};
+  assert.ok(sourceWords.length<30000&&oversizedResearch.length<30000&&JSON.stringify(oversizedEvidence).length>30000);
+  assert.equal((await db.query('select resume_oversized_game_specification($1,$2,$3,$4) ok',[id,actor,chat,JSON.stringify(oversizedEvidence)])).rows[0].ok,false);
+
 
   const rpc=async(name,args={})=>{
    assert.match(name,/^[a-z_]+$/);if(name==='project_dispatch_recovery_candidates')return[];
    const entries=Object.entries(args);
-   const values=entries.map(([k,v])=>['p_data','p_result','p_children','p_response'].includes(k)?JSON.stringify(v):v);
+   const values=entries.map(([k,v])=>['p_data','p_result','p_children','p_response','p_evidence'].includes(k)?JSON.stringify(v):v);
    return(await db.query(`select public.${name}(${entries.map(([k],i)=>k+' => $'+(i+1)).join(',')}) value`,values)).rows[0].value;
   };
   const readMission=async mid=>({mission:(await db.query('select * from agent_missions where id=$1',[mid])).rows[0],jobs:(await db.query('select * from mission_assignments where mission_id=$1 order by created_at',[mid])).rows});
@@ -58,9 +64,27 @@ export async function specificationRecoveryFlow(db){
   const milestoneEvidence=async rows=>Promise.all(rows.filter(r=>r.outcome).map(async r=>({phase:r.kind,index:r.milestone_index,result:(await readMission(r.mission_id)).mission.result,missionStatus:(await readMission(r.mission_id)).mission.status,evidence:r.outcome})));
   const load=modules({'@/lib/data/supabase/admin':{getSupabaseAdminClient:()=>admin},'@/lib/missions/store':{rpc,readMission},'@/lib/projects/store':{projectRpc:rpc,projectRuns:runs,milestoneEvidence},'@octokit/rest':{Octokit:GitHub}});
   const projectWorker=load('@/lib/projects/worker'),missionWorker=load('@/lib/missions/worker');
+  // The real supervisor must also leave a combined oversized payload pending,
+  // without a child, recovery record, new charge or success announcement.
+  await projectWorker.runProjectBatch();
+  p=(await db.query('select * from work_projects where id=$1',[id])).rows[0];assert.equal(p.status,'blocked');assert.equal(p.active_mission_id,null);
+  assert.equal(Number((await db.query("select count(*) n from project_events where project_id=$1 and event='oversized_game_specification_resumed'",[id])).rows[0].n),0);
+  assert.equal(Number((await db.query("select count(*) n from messages where chat_id=$1 and content like '%Specification context admitted%'",[chat])).rows[0].n),0);
+  assert.equal(Number((await db.query('select sum(greatest(actual_tokens,reserved_tokens)) n from agent_missions where project_id=$1',[id])).rows[0].n),0);
+  assert.equal(p.objective,original);assert.equal(p.clarifications,clarification);
+  // Append fresh independently reviewed compact research. The previous source
+  // stays byte-for-byte intact and remains part of the original history.
+  const compactResearchId=randomUUID();
+  await db.query("insert into agent_missions(id,objective,team,status,max_calls,token_allowance,max_minutes,deadline,result,project_id,project_kind) select $1,'Fresh independently reviewed research',team,'completed',12,120000,120,deadline,$2,project_id,'research' from agent_missions where id=$3",[compactResearchId,research,researchId]);
+  await db.query("insert into project_runs(project_id,mission_id,kind,ordinal,milestone_index,outcome) values($1,$2,'research',(select count(*)+1 from project_runs where project_id=$1),0,$3)",[id,compactResearchId,JSON.stringify({result:research,reviewedMissionId:compactResearchId})]);
+  await projectWorker.runProjectBatch();
+  p=(await db.query('select * from work_projects where id=$1',[id])).rows[0];assert.equal(p.status,'running');assert.equal(p.active_mission_id,null);
+  assert.equal(Number((await db.query("select count(*) n from project_events where project_id=$1 and event='oversized_game_specification_resumed'",[id])).rows[0].n),1);
   await projectWorker.runProjectBatch();
   p=(await db.query('select * from work_projects where id=$1',[id])).rows[0];
   assert.equal(p.status,'running');assert.ok(p.active_mission_id);
+  assert.equal((await readMission(researchId)).mission.result,oversizedResearch);
+
   const source=(await readMission(p.active_mission_id)).mission;
   assert.equal(source.project_evidence.originalUserOutcome,`ORIGINAL USER OUTCOME (must remain authoritative):\n${original}\n${clarification}`);
   assert.equal(source.project_evidence.reviewedResearch.text,research);

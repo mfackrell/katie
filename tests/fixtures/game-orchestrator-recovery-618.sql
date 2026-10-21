@@ -1,7 +1,7 @@
 -- Behavioral integration acceptance for guarded specification resumes, rolled back
 -- to leave the existing test fixtures and usage counters untouched.
 do $$
-declare p work_projects; m agent_missions; r mission_assignments; c jsonb; charged bigint; scenario text; ok boolean; n integer; continuation uuid; claim_job uuid; original_deadline timestamptz; saved_config jsonb; saved_version integer;
+declare p work_projects; m agent_missions; r mission_assignments; c jsonb; charged bigint; scenario text; ok boolean; n integer; continuation uuid; claim_job uuid; original_deadline timestamptz; saved_config jsonb; saved_version integer; evidence jsonb;
 begin
  select * into strict p from work_projects where id='44444444-4444-4444-8444-444444444444';
  select * into strict m from agent_missions where id=p.active_mission_id;
@@ -100,16 +100,18 @@ begin
    if scenario='oversized_deadline' then update work_projects set deadline=now()+interval '10 minutes' where id=p.id;end if;
    if scenario='oversized_approval' then update work_projects set approved_hash=repeat('a',64) where id=p.id;end if;
    select coalesce(sum(greatest(actual_tokens,reserved_tokens)),0) into charged from agent_missions where project_id=p.id;
+   select jsonb_build_object('projectProfile','game','reviewedResearch',jsonb_build_object('text',x.result,'reviewedMissionId',pr.outcome->>'reviewedMissionId','phase','research')) into evidence
+    from project_runs pr join agent_missions x on x.id=pr.mission_id where pr.project_id=p.id and pr.kind='research' and x.status='completed' and pr.outcome is not null and coalesce((pr.outcome->>'superseded')::boolean,false)=false order by pr.ordinal desc limit 1;
    ok:=resume_oversized_game_specification(p.id,
      case when scenario='oversized_wrong_actor' then gen_random_uuid() else p.actor_id end,
-     case when scenario='oversized_wrong_chat' then gen_random_uuid() else p.chat_id end);
+     case when scenario='oversized_wrong_chat' then gen_random_uuid() else p.chat_id end,evidence);
    if scenario='oversized_valid' then
     if not ok then raise exception 'Valid oversized recovery did not resume';end if;
     if (select status from work_projects where id=p.id)<>'running'
       or (select active_mission_id from work_projects where id=p.id) is not null
       or (select approved_hash from work_projects where id=p.id) is not null then raise exception 'Oversized recovery skipped safeguard';end if;
     if (select coalesce(sum(greatest(actual_tokens,reserved_tokens)),0) from agent_missions where project_id=p.id)<>charged then raise exception 'Oversized recovery reset charges';end if;
-    if resume_oversized_game_specification(p.id,p.actor_id,p.chat_id) then raise exception 'Repeated oversized recovery';end if;
+    if resume_oversized_game_specification(p.id,p.actor_id,p.chat_id,evidence) then raise exception 'Repeated oversized recovery';end if;
     c:=claim_work_project();
     if c is null or c->>'id'<>p.id::text then raise exception 'Recovered project not claimable';end if;
    elsif ok then raise exception 'Unsafe oversized resume: %',scenario;end if;
@@ -120,7 +122,7 @@ begin
     or has_function_privilege('authenticated','public.resume_pending_game_review(uuid,uuid,uuid)','execute')
     or has_function_privilege('anon','public.resume_incomplete_game_review(uuid,uuid,uuid)','execute')
     or has_function_privilege('authenticated','public.resume_incomplete_game_review(uuid,uuid,uuid)','execute')
-    or has_function_privilege('anon','public.resume_oversized_game_specification(uuid,uuid,uuid)','execute')
-    or has_function_privilege('authenticated','public.resume_oversized_game_specification(uuid,uuid,uuid)','execute')
+    or has_function_privilege('anon','public.resume_oversized_game_specification(uuid,uuid,uuid,jsonb)','execute')
+    or has_function_privilege('authenticated','public.resume_oversized_game_specification(uuid,uuid,uuid,jsonb)','execute')
  then raise exception 'Recovery RPCs exposed to browser callers';end if;
 end $$;

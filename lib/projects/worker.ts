@@ -35,6 +35,55 @@ function boundedGameSpecification(detailed:string,original:string,game:boolean){
 }
 
 
+export async function buildSpecificationEvidence(p:Project,evidence:Awaited<ReturnType<typeof milestoneEvidence>>,source:string){
+    const game=p.profile==='game';
+    let projectEvidence:unknown;
+    const research=[...evidence].reverse().find(e=>e.phase==='research'&&e.missionStatus==='completed'&&!e.evidence?.superseded);
+    if(!research?.result)throw Error('Latest reviewed research is unavailable for specification');
+    const previous=[...evidence].reverse().find(e=>e.phase==='development'&&e.evidence?.head===p.verified_sha);
+    const v=previous?.evidence?.verification as {changedFiles?:Array<{path:string;status?:string;patch?:string}>}|undefined;let bytes=0;
+    projectEvidence=p.verified_sha?{priorVerifiedImplementation:{head:p.verified_sha,baseline:p.baseline_sha,changedFiles:(v?.changedFiles??[]).slice(0,20).map(f=>{const include=typeof f.patch==='string'&&bytes+f.patch.length<=4000;if(include)bytes+=f.patch!.length;return{path:f.path,status:f.status,...(include?{patch:f.patch}:{patchOmitted:true})};}),omittedFileCount:Math.max(0,(v?.changedFiles?.length??0)-20),note:'Bounded planning evidence only; original requirements remain authoritative and native coding reads the complete inherited commit.'}}:undefined;
+    projectEvidence={...(projectEvidence as Record<string,unknown>??{}),...(game?{projectProfile:'game'}:{}),reviewedResearch:{text:research.result,reviewedMissionId:research.evidence?.reviewedMissionId??null,phase:'research'}};
+    if(game){
+        // Compact, trusted findings from the failed revision accompany the
+        // next specification. The full prior draft, review and token charges
+        // remain saved in their original mission.
+        const {data:recovery,error:recoveryError}=await getSupabaseAdminClient()
+          .from('project_events').select('data').eq('project_id',p.id)
+          .eq('event','game_revision_timeout_recovered').order('created_at',{ascending:false}).limit(1);
+        if(recoveryError)throw Error('Saved game revision recovery evidence unavailable');
+        const note=((recovery??[]) as Array<{data?:{findings?:string;sourceMissionId?:string}}>)[0]?.data;
+        if(note&&typeof note.findings==='string')
+            projectEvidence={...(projectEvidence as Record<string,unknown>),recoveryReview:{sourceMissionId:note.sourceMissionId,findings:note.findings.slice(0,2200),instruction:'Correct these independent review findings. Full prior evidence remains saved; do not repeat research or assume approval.'}};
+    }
+    if(game){
+        const {data:events,error}=await getSupabaseAdminClient().from('project_events')
+          .select('data').eq('project_id',p.id).eq('event','game_rule_coverage_recovered')
+          .order('created_at',{ascending:false}).limit(1);
+        if(error)throw Error('Game coverage recovery evidence unavailable');
+        const recovered=((events??[]) as Array<{data?:{sourceMissionId?:string;findings?:string;revisionJobId?:string}}>)[0]?.data;
+        if(recovered?.revisionJobId){
+            const {data:prior,error:pe}=await getSupabaseAdminClient().from('mission_assignments')
+              .select('result').eq('id',recovered.revisionJobId).maybeSingle<{result:{rejectedSpecification?:string}|null}>();
+            if(pe)throw Error('Saved rejected game draft unavailable');
+            let draft:unknown=null;
+            try{
+                const raw=prior?.result?.rejectedSpecification;
+                if(raw){
+                    const source=projectPlanSchema.parse(JSON.parse(raw));
+                    const view=gameSpecificationView(source);
+                    if(canonical(view).length<=20000)draft=view;
+                }
+            }catch{/* Preserve unparseable original in its durable mission. */}
+            projectEvidence={...(projectEvidence as Record<string,unknown>),
+              recoveryCoverage:{sourceMissionId:recovered.sourceMissionId,findings:recovered.findings,
+                rejectedDraft:draft,instructions:'contractRef and stepsRef are lossless server-resolved references to finalContract; return fully expanded JSON. Preserve valid scenarios, add real observable or model-based proof for missing rule IDs, never invent rules or user decisions; require fresh independent review.'}};
+        }
+    }
+    if(source.length>6500)projectEvidence={...(projectEvidence as Record<string,unknown>),originalUserOutcome:source};
+    return projectEvidence;
+}
+
 async function advance(p: Project) {
     const finish = (action: string, data: Record<string, unknown> = {}) => projectRpc<boolean>('finish_work_project', { p_id: p.id, p_lease: p.lease, p_action: action, p_data: data });
     const runs = await projectRuns(p.id);
@@ -227,48 +276,7 @@ async function advance(p: Project) {
     if (p.phase === 'research')
         objective = bounded(`${source}\n\nPHASE: Research only; this is not project completion. ${gamePlanning} Find primary-source rules, APIs and constraints needed for this exact outcome. Do not invent requirements. Identify edition/version ambiguities or missing material decisions as essential clarification. Give concise source-supported findings in at most 700 words. Do not implement or change repositories.`);
     else if (p.phase === 'specification') {
-        const research=[...evidence].reverse().find(e=>e.phase==='research'&&e.missionStatus==='completed'&&!e.evidence?.superseded);
-        if(!research?.result)throw Error('Latest reviewed research is unavailable for specification');
-        const previous=[...evidence].reverse().find(e=>e.phase==='development'&&e.evidence?.head===p.verified_sha);
-        const v=previous?.evidence?.verification as {changedFiles?:Array<{path:string;status?:string;patch?:string}>}|undefined;let bytes=0;
-        projectEvidence=p.verified_sha?{priorVerifiedImplementation:{head:p.verified_sha,baseline:p.baseline_sha,changedFiles:(v?.changedFiles??[]).slice(0,20).map(f=>{const include=typeof f.patch==='string'&&bytes+f.patch.length<=4000;if(include)bytes+=f.patch!.length;return{path:f.path,status:f.status,...(include?{patch:f.patch}:{patchOmitted:true})};}),omittedFileCount:Math.max(0,(v?.changedFiles?.length??0)-20),note:'Bounded planning evidence only; original requirements remain authoritative and native coding reads the complete inherited commit.'}}:undefined;
-        projectEvidence={...(projectEvidence as Record<string,unknown>??{}),...(game?{projectProfile:'game'}:{}),reviewedResearch:{text:research.result,reviewedMissionId:research.evidence?.reviewedMissionId??null,phase:'research'}};
-        if(game){
-            // Compact, trusted findings from the failed revision accompany the
-            // next specification. The full prior draft, review and token charges
-            // remain saved in their original mission.
-            const {data:recovery,error:recoveryError}=await getSupabaseAdminClient()
-              .from('project_events').select('data').eq('project_id',p.id)
-              .eq('event','game_revision_timeout_recovered').order('created_at',{ascending:false}).limit(1);
-            if(recoveryError)throw Error('Saved game revision recovery evidence unavailable');
-            const note=((recovery??[]) as Array<{data?:{findings?:string;sourceMissionId?:string}}>)[0]?.data;
-            if(note&&typeof note.findings==='string')
-                projectEvidence={...(projectEvidence as Record<string,unknown>),recoveryReview:{sourceMissionId:note.sourceMissionId,findings:note.findings.slice(0,2200),instruction:'Correct these independent review findings. Full prior evidence remains saved; do not repeat research or assume approval.'}};
-        }
-        if(game){
-            const {data:events,error}=await getSupabaseAdminClient().from('project_events')
-              .select('data').eq('project_id',p.id).eq('event','game_rule_coverage_recovered')
-              .order('created_at',{ascending:false}).limit(1);
-            if(error)throw Error('Game coverage recovery evidence unavailable');
-            const recovered=((events??[]) as Array<{data?:{sourceMissionId?:string;findings?:string;revisionJobId?:string}}>)[0]?.data;
-            if(recovered?.revisionJobId){
-                const {data:prior,error:pe}=await getSupabaseAdminClient().from('mission_assignments')
-                  .select('result').eq('id',recovered.revisionJobId).maybeSingle<{result:{rejectedSpecification?:string}|null}>();
-                if(pe)throw Error('Saved rejected game draft unavailable');
-                let draft:unknown=null;
-                try{
-                    const raw=prior?.result?.rejectedSpecification;
-                    if(raw){
-                        const source=projectPlanSchema.parse(JSON.parse(raw));
-                        const view=gameSpecificationView(source);
-                        if(canonical(view).length<=20000)draft=view;
-                    }
-                }catch{/* Preserve unparseable original in its durable mission. */}
-                projectEvidence={...(projectEvidence as Record<string,unknown>),
-                  recoveryCoverage:{sourceMissionId:recovered.sourceMissionId,findings:recovered.findings,
-                    rejectedDraft:draft,instructions:'contractRef and stepsRef are lossless server-resolved references to finalContract; return fully expanded JSON. Preserve valid scenarios, add real observable or model-based proof for missing rule IDs, never invent rules or user decisions; require fresh independent review.'}};
-            }
-        }
+        projectEvidence=await buildSpecificationEvidence(p,evidence,source);
         // Keep the complete independently reviewed research as structured evidence,
         // not a second copy inside the 12 KB mission instruction. The original
         // user objective remains unchanged and authoritative.
@@ -317,9 +325,6 @@ async function advance(p: Project) {
     }
     else
         throw Error('Unknown project phase');
-    if(p.phase==='specification'&&evidenceBrief){
-        projectEvidence={...(projectEvidence&&typeof projectEvidence==='object'?projectEvidence as Record<string,unknown>:{}),originalUserOutcome:source};
-    }
     // The durable SQL admission fence verifies aggregate evidence size;
     // preflight before consuming a child mission or recovery allowance.
     if(jsonbTextSize(projectEvidence??{})>30000)throw Error('Project evidence exceeds bounded context; original requirements retained without starting a child');
@@ -347,18 +352,29 @@ async function reconcileBlockedGameRevisions(){
     // Stable keyset pagination ensures two older unrecoverable jobs never starve
     // a later eligible project, even as concurrent recoveries alter statuses.
     for(;;){
-        const q=db.from('work_projects').select('id,actor_id,chat_id')
+        const q=db.from('work_projects').select('*')
           .eq('status','blocked').eq('profile','game').eq('phase','specification')
           .order('id',{ascending:true}).range(offset,offset+29);
         const {data,error}=await q;
         if(error)throw Error('Blocked game revision recovery index unavailable');
-        const rows=(data??[]) as Array<{id:string;actor_id:string;chat_id:string}>;
+        const rows=(data??[]) as Project[];
         if(!rows.length)break;
         for(const p of rows){
             const authorized={p_id:p.id,p_actor:p.actor_id,p_chat:p.chat_id};
-            const native=await projectRpc<boolean>('resume_pending_game_review',authorized) ||
-              await projectRpc<boolean>('resume_incomplete_game_review',authorized) ||
-              await projectRpc<boolean>('resume_oversized_game_specification',authorized);
+            let oversized=false;
+            if(!p.active_mission_id&&/Project (?:milestone context exceeds its bounded input|evidence exceeds bounded context)/.test(p.detail??'')){
+                // Use the SAME complete payload builder as actual dispatch.
+                // A non-fitting payload remains pending: no RPC, wake-up event,
+                // model call or success announcement is consumed.
+                const source=`ORIGINAL USER OUTCOME (must remain authoritative):\n${p.objective}\n${p.clarifications}`;
+                try{
+                    const evidence=await buildSpecificationEvidence(p,await milestoneEvidence(await projectRuns(p.id)),source);
+                    if(jsonbTextSize(evidence)>30000)continue;
+                    oversized=await projectRpc<boolean>('resume_oversized_game_specification',{...authorized,p_evidence:evidence});
+                }catch(error){console.warn('[Projects] Specification recovery preflight unavailable',{project:p.id,detail:error instanceof Error?error.message:'Evidence unavailable'});continue;}
+            }
+            const native=oversized || await projectRpc<boolean>('resume_pending_game_review',authorized) ||
+              await projectRpc<boolean>('resume_incomplete_game_review',authorized);
             if(native || await projectRpc<boolean>('recover_game_revision_timeout',{p_id:p.id}) || await projectRpc<boolean>('recover_game_rule_coverage',{p_id:p.id}) || await projectRpc<boolean>('recover_bounded_game_review',{p_id:p.id}) || await projectRpc<boolean>('recover_mission_credit_failure',{p_id:p.id})){
                 console.info('[Projects] Saved specification work recovered within original limits',{project:p.id});
                 return true;
