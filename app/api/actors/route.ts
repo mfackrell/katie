@@ -83,9 +83,9 @@ async function calibrationApply(actorId:string,hash:string,approved:CalibrationG
   const next={...row.content,entries:original.filter(e=>!removed.has(e.key)).map(e=>replacements.get(e.key)||e)};
   if(!approved.length)return NextResponse.json({ok:true,previous:original.length,current:original.length});
   // Save a complete immutable restoration copy before any mutation.
-  const {error:backupError}=await db.from("actor_memory_documents").insert({
-    actor_id:actorId,title:"Memory calibration backup "+new Date().toISOString(),
-    content:JSON.stringify({revision:row.revision,content:row.content,approved})
+  const {error:backupError}=await db.from("actor_memory_calibration_backups").insert({
+    actor_id:actorId,memory_revision:row.revision,
+    memory_content:row.content,approved_changes:approved
   });
   if(backupError)return NextResponse.json({error:"Could not save restoration backup; nothing changed"},{status:500});
   const {data:saved,error}=await db.from("actor_long_term_memory")
