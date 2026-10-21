@@ -5,6 +5,7 @@ import { pdfSourceOccurrence, selectFreshPdfSources, selectPdfEvidenceSource } f
 import { inspectSavedPdf } from "@/lib/uploads/stored-uploads";
 import { agentRpc, refreshTask } from "@/lib/agents/store";
 import { authorizeManagedChat } from "@/lib/agents/runtime";
+import { loadTaskHandoffEvidence } from "@/lib/agents/task-handoff";
 import { runAgentTask, currentAgentTask } from "@/lib/agents/policy";
 import { timelineIntent, resolveTimelineSource } from "@/lib/video-timeline/intent";
 import { runVideoTimeline } from "@/lib/video-timeline/service";
@@ -1222,6 +1223,11 @@ async function executeChat(request: NextRequest) {
         !currentHistory.some(turn => turn.id === pdfProgress.projectContext!.userMessageId)) {
       const project = pdfProgress.projects?.find(item => item.projectContext.userMessageId === pdfProgress.projectContext!.userMessageId);
       const sourceChatId = project?.sourceChatId ?? chatId;
+      const managedTask = currentAgentTask();
+      const handoffHistory = managedTask && sourceChatId !== chatId ? await loadTaskHandoffEvidence(managedTask, pdfProgress.projectContext.userMessageId) : null;
+      if (handoffHistory) {
+        history = [...new Map([...handoffHistory, ...currentHistory].map(turn => [turn.id, turn])).values()];
+      } else {
       const sourceChat = await getChatById(sourceChatId);
       if (sourceChat?.actorId !== actorId) throw new Error("Saved project source does not belong to this actor");
       const sourceHistory = await getMessages(sourceChatId);
@@ -1231,6 +1237,7 @@ async function executeChat(request: NextRequest) {
       const next = sourceHistory.findIndex((turn, index) => index > start && boundaries.has(turn.id));
       const projectHistory = sourceHistory.slice(start, next < 0 ? undefined : next);
       history = [...new Map([...projectHistory, ...currentHistory].map(turn => [turn.id, turn])).values()];
+      }
     }
     let taskProgress = pdfProgress;
 

@@ -410,6 +410,9 @@ export function rebuildTaskProgress(history: ProgressMessage[]): TaskProgressSta
 /** Recover unrecorded turns after an interrupted request or a second device. */
 export function syncTaskProgress(previous: TaskProgressState | null, history: ProgressMessage[]): TaskProgressState {
   if (!previous) return rebuildTaskProgress(history);
+  // An explicit cross-specialist handoff seeds a ledger before its first message.
+  // An empty target chat is not evidence that pending source questions disappeared.
+  if (!history.length) return previous;
   const userCursor = history.findIndex(item => item.id === previous.lastUserMessageId);
   const assistantCursor = history.findIndex(item => item.id === previous.lastAssistantMessageId);
   const cursor = Math.max(userCursor, assistantCursor);

@@ -13,6 +13,9 @@ test('Agents UI: create/edit/archive, saved approval, durable pending status, re
  try {
   const page=await browser.newPage({viewport:{width:390,height:844}});
   const errors=[];page.on('pageerror',e=>errors.push(e.message));
+  const createBodies=[];
+  const sourceChatId=randomUUID(),sourceActorId=randomUUID();
+  let preview={handoff:{sourceActorId,sourceChatId,projectId:randomUUID()},label:'Application B: Controller. Prioritize project accounting and WIP.'};
   const agents=[],tasks=[];let executionCount=0,fail=false,loseContinuation=true;const turns=new Map(),submissions=[];
   const code=ts.transpileModule(readFileSync('app/settings/advanced/page.tsx','utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022,jsx:ts.JsxEmit.ReactJSX,esModuleInterop:true}}).outputText;
   const missionCode=ts.transpileModule(readFileSync('components/missions-panel.tsx','utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022,jsx:ts.JsxEmit.ReactJSX,esModuleInterop:true}}).outputText;
@@ -39,8 +42,9 @@ test('Agents UI: create/edit/archive, saved approval, durable pending status, re
    if(url.pathname==='/api/missions')return reply({missions:[]});
    if(url.pathname==='/api/admin/repos')return reply({repos:[]});
    if(url.pathname==='/api/agent-tasks'){
-    if(request.method()==='GET')return reply(url.searchParams.has('id')?{task:tasks.find(t=>t.id===url.searchParams.get('id'))}:{tasks});
+    if(request.method()==='GET'){if(url.searchParams.has('handoffChatId'))return reply(preview);return reply(url.searchParams.has('id')?{task:tasks.find(t=>t.id===url.searchParams.get('id'))}:{tasks});}
     if(body.action==='create'){
+     createBodies.push(body);
      const agent=agents.find(a=>a.id===body.agentId);
      const task={id:body.id,agent_id:agent.id,actor_id:agent.actor_id,chat_id:randomUUID(),snapshot:structuredClone(agent.config),definition_version:agent.version,kind:body.kind,initial_input:body.input,input:body.input,request_id:'agent:'+body.id,status:'draft',repository_full_name:null,external:{}};tasks.push(task);return reply({task});
     }
@@ -68,7 +72,7 @@ test('Agents UI: create/edit/archive, saved approval, durable pending status, re
   await page.getByLabel('Agent',{exact:true}).selectOption(agents[0].id);
   await page.getByLabel('Task instructions',{exact:true}).fill('Write a report');
   await page.getByRole('button',{name:'Save task for approval'}).click();
-  await page.getByRole('button',{name:'Start saved task'}).waitFor();assert.equal(executionCount,0);
+  await page.getByRole('button',{name:'Start saved task'}).waitFor();assert.equal(executionCount,0);assert.equal(createBodies[0].handoff,undefined);assert.equal(await page.getByLabel('Carry current conversation context',{exact:true}).isChecked(),false);
   await page.getByRole('button',{name:'Edit Writer'}).click();
   await page.getByLabel('Purpose, instructions and responsibilities').fill('Changed instructions');
   await page.getByRole('button',{name:'Save agent',exact:true}).click();
@@ -88,6 +92,27 @@ test('Agents UI: create/edit/archive, saved approval, durable pending status, re
   assert.deepEqual(submissions[0],submissions[1]);
   await page.reload();await page.getByText('Saved reviewed draft',{exact:true}).waitFor();assert.equal(executionCount,2);
   assert.equal(await page.getByRole('button',{name:'Retry saved continuation'}).count(),0);
+  // Source selection is explicit, visible and revalidated immediately before submission.
+  await page.evaluate(id=>localStorage.setItem('katie.activeChatId',id),sourceChatId);
+  await page.getByLabel('Agent',{exact:true}).selectOption(agents[0].id);
+  await page.getByLabel('Task instructions',{exact:true}).fill('Select the strongest examples for this application.');
+  await page.getByLabel('Carry current conversation context',{exact:true}).check();
+  await page.getByText(preview.label,{exact:true}).waitFor();
+  assert.equal(await page.getByRole('link',{name:'View source conversation'}).getAttribute('href'),'/conversations/'+sourceChatId);
+  preview={handoff:{sourceActorId,sourceChatId,projectId:randomUUID()},label:'Application C: Finance Transformation Lead. Prioritize process improvement.'};
+  await page.getByRole('button',{name:'Save task for approval'}).click();
+  await page.getByText('The active task changed. Select its context again before saving.',{exact:true}).waitFor();
+  assert.equal(createBodies.length,1);
+  assert.equal(await page.getByLabel('Carry current conversation context',{exact:true}).isChecked(),false);
+  await page.getByLabel('Carry current conversation context',{exact:true}).check();
+  await page.getByText(preview.label,{exact:true}).waitFor();
+  await page.getByRole('button',{name:'Save task for approval'}).click();
+  await page.getByRole('heading',{name:'Saved task · draft'}).waitFor();
+  assert.deepEqual(createBodies[1].handoff,preview.handoff);
+  assert.equal(await page.getByLabel('Carry current conversation context',{exact:true}).isChecked(),false);
+  await page.getByLabel('Task type',{exact:true}).selectOption('development');
+  assert.equal(await page.getByLabel('Carry current conversation context',{exact:true}).count(),0);
+  await page.getByLabel('Task type',{exact:true}).selectOption('general');
   await page.getByRole('button',{name:'Archive Writer'}).click();await page.getByText('Writer (archived)',{exact:true}).waitFor();
   fail=true;await page.getByRole('button',{name:'Refresh status'}).click();await page.getByRole('alert').waitFor();assert.match(await page.getByRole('alert').innerText(),/unavailable/);
   assert.deepEqual(errors,[]);
