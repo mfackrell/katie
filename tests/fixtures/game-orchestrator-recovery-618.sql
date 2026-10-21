@@ -53,7 +53,10 @@ begin
     detail='Project milestone context exceeds its bounded input. Narrow the specification; original requirements have not been truncated.',
     token_allowance=600000,deadline=now()+interval '2 days',lease=null,lease_until=null where id=p.id;
    update agent_missions set status='completed' where id in (select mission_id from project_runs where project_id=p.id and kind='research');
-   if scenario='oversized_budget' then update work_projects set token_allowance=60000 where id=p.id;end if;
+   if scenario='oversized_budget' then
+     update work_projects set token_allowance=60000 where id=p.id;
+     update agent_missions set reserved_tokens=greatest(reserved_tokens,actual_tokens)+1 where id=m.id;
+   end if;
    if scenario='oversized_deadline' then update work_projects set deadline=now()+interval '10 minutes' where id=p.id;end if;
    if scenario='oversized_approval' then update work_projects set approved_hash=repeat('a',64) where id=p.id;end if;
    select coalesce(sum(greatest(actual_tokens,reserved_tokens)),0) into charged from agent_missions where project_id=p.id;
