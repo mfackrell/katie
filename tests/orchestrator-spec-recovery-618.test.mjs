@@ -26,7 +26,11 @@ test('game specification carries original user words to compose and draft-blind 
  assert.match(worker,/objective = boundedGameSpecification/);
  assert.match(worker,/await finish\('child', \{ kind: p\.phase, objective, evidence: projectEvidence \}\)/);
  assert.match(review,/text:mission\.objective/);
- assert.doesNotMatch(worker,/sourceForMission|originalUserOutcome:source/);
+ assert.doesNotMatch(worker,/sourceForMission/);
+ assert.match(worker,/originalUserOutcome:source/);
+ assert.match(review,/const sourceForReview=typeof authoritativeBrief==='string'/);
+ assert.match(review,/text:sourceForReview/);
+ assert.match(review,/originalUserOutcome:e\.originalUserOutcome/);
 });
 
 test('both guarded recovery RPCs have active supervisor callers',()=>{
