@@ -41,7 +41,8 @@ export async function saveDurableReviewContract(
   assessment: IndependentAssessment, validation: Validation
 ) {
   if (validation.verdict !== "approve") throw new Error("Only validated contracts may be saved");
-  const sourceHash = fingerprint(parent, objective);
+  const version = revisionOf(scope);
+  const sourceHash = fingerprint(parent, objective, version);
   // Once validated, a source-version contract is immutable. Concurrent requests
   // may race to insert it, but must never rewrite each other's accepted criteria.
   const existing = await readDurableReviewContract(scope, parent, objective);
