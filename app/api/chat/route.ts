@@ -1,4 +1,4 @@
-import {handleProjectChat} from '@/lib/projects/chat';
+import {handleProjectChat, startProjectIntent, followupProjectIntent, isProjectStopIntent} from '@/lib/projects/chat';
 import {executeExecutiveCommand} from '@/lib/executive/transport';
 import { maskPdfSourceNames, pdfPageTaskForSource } from "@/lib/uploads/pdf-inventory";
 import { pdfSourceOccurrence, selectFreshPdfSources, selectPdfEvidenceSource } from "@/lib/chat/pdf-source-selection";
@@ -52,6 +52,7 @@ import { chooseProvider, selectControlPlaneDecisionModels } from "@/lib/router/m
 import {
   detectWebSearchSignals,
   inferRequestClassification,
+  resolveProjectTransition,
   RequestIntent,
   RoutingHint
 } from "@/lib/router/model-intent";
@@ -746,23 +747,29 @@ async function executeChat(request: NextRequest) {
     });
     const taskIdentityText = message + (freshTaskEvidence.length
       ? "\nFRESH USER-SUPPLIED SOURCE EVIDENCE (observations may be incomplete):\n" + JSON.stringify(freshTaskEvidence) : "");
-    if ((contextProjects.length || freshTaskEvidence.length) && !currentAgentTask()) {
+    let softwareBuildIntent = false;
+    // A scoped stop/pause controls existing durable work, not application identity.
+    // Execute it below only after request tracking; do not let an unrelated task
+    // clarification prevent cancellation or rewrite the application ledger.
+    const isProjectStopRequest = !currentAgentTask() && !newAttachments.length && !requestImages?.length && isProjectStopIntent(message);
+    if (!isProjectStopRequest && (contextProjects.length || freshTaskEvidence.length || startProjectIntent(message) || followupProjectIntent(message)) && !currentAgentTask() &&
+        !(classifyUserTurn(message) === "conversation" && !newAttachments.length)) {
       const contextProviders = getAvailableProviders();
       const entries = await Promise.all(contextProviders.map(async provider => ({provider, models: await provider.listModels()})));
-      contextClassification = await inferRequestClassification(taskIdentityText,
-        {hasImages: newAttachments.some(file => file.mimeType.startsWith("image/")), hasVideoInput: freshVideoReferences.length > 0},
-        {decisionProviders: selectControlPlaneDecisionModels(entries),
+      const projectTransition = await resolveProjectTransition(taskIdentityText,
+        {activeProject:priorTaskProgress.projectContext,savedProjects:contextProjects},
+        {decisionProviders: selectControlPlaneDecisionModels(entries), authoritativeUserMessage:message,
+         onExecutionKind: decision => { softwareBuildIntent = decision.kind === "software_build"; },
          requestId: request.headers.get("x-request-id") ?? taskProgressUserMessageId,
-         activeTaskContext: JSON.stringify({activeProject: priorTaskProgress.projectContext,
-           savedProjects: contextProjects, currentQuestion: priorTaskProgress.objective}),
          conversationContext: JSON.stringify({recentUserTurns: attachmentHistory.filter(turn => turn.role === "user").slice(-6).map(turn => ({id:turn.id,text:turn.content}))})});
+      contextClassification = {intent:"general-text",preferredProvider:null,projectTransition};
     }
     if (contextProjects.length && freshTaskDescriptions.size && !freshTaskEvidence.length &&
         !contextClassification?.projectTransition) {
       contextClassification = { ...(contextClassification ?? {intent: "general-text", preferredProvider: null}),
         projectTransition: {action: "ambiguous", clarification: "I could not read this upload well enough to identify its task. Does it start a new project or belong to the current one?"} };
     }
-    const pdfProgress = applyUserToTaskProgress(priorTaskProgress, {
+    const pdfProgress = isProjectStopRequest ? {...priorTaskProgress, projectClarification: undefined} : applyUserToTaskProgress(priorTaskProgress, {
       messageId: taskProgressUserMessageId, text: taskIdentityText,
       projectRelation: contextClassification?.projectRelation,
       projectTransition: contextClassification?.projectTransition,
@@ -1094,7 +1101,7 @@ async function executeChat(request: NextRequest) {
     // in normal Katie model routing.
     const executiveReply=null, specialistReply=null, financeReply=null, developmentReply=null;
     const projectReply = !pdfProgress.projectClarification && !executiveReply && !specialistReply && !financeReply && !developmentReply && !currentAgentTask() && savedDraftReply === null && !newAttachments.length && !requestImages?.length
-      ? await handleProjectChat({actorId,chatId,message,activeRepoId},requestId,attachmentHistory,requestTracked) : null;
+      ? await handleProjectChat({actorId,chatId,message,activeRepoId,softwareBuildIntent},requestId,attachmentHistory,requestTracked) : null;
     const localKatieResponse = pdfProgress.projectClarification ? {reason: "project" as const, text: pdfProgress.projectClarification} : savedDraftReply !== null ? { reason: "project" as const, text: savedDraftReply } : executiveReply ? {reason: "executive" as const,text:executiveReply}
       : specialistReply ? {reason: "executive" as const,text:specialistReply}
       : financeReply ? {reason: "executive" as const,text:financeReply}

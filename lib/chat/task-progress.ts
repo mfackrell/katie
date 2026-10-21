@@ -278,6 +278,7 @@ export function applyUserToTaskProgress(
       projectClarification: "Which saved project do you want to resume? The proposed project could not be found." };
     // Resuming is a control transition, never an answer to an old pending question.
     return checkpointProject({ ...state, ...target, projectClarification: undefined,
+      objective: {text:input.text,userMessageId:input.messageId},
       lastUserMessageId: input.messageId, lastAssistantMessageId: null,
       lastUserIntent: "continuation", stage: target.pending.length ? "awaiting_user_answer" : "working",
       nextAction: target.pending.length ? "await_user_answers" : "continue_original_goal" });

@@ -323,7 +323,12 @@ test('early task identity classification respects PDF source authorization befor
    request:{headers:{get:()=> 'test-request'}},currentAgentTask:()=>null,
    getAvailableProviders:()=>[{listModels:async()=>[]}],selectControlPlaneDecisionModels:()=>[],
    describeAttachmentEvidence:async file=>{descriptions.push(file.fileId);return {observedSummary:'Metadata',summaryCoverage:'metadata'};},
-   inferRequestClassification:async text=>{classified.push(text);return {projectRelation:'same_project'};},
+   resolveProjectTransition:async (text,context,options)=>{
+    classified.push(text);
+    assert.equal(context.activeProject.userMessageId,'existing-project');
+    assert.equal(options.authoritativeUserMessage,message,'Only literal user text may authorize a transition');
+    return undefined; // Required resolver chose same; preserve the active project.
+   },
   });
   assert.deepEqual(descriptions,authorized,`${message}: only authorized PDFs may be described for identity`);
   assert.equal(classified.length,1,'Existing project identity is checked from the actual user request');

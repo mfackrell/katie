@@ -1,6 +1,6 @@
 # Active-task context isolation investigation
 
-Status: implementation and deterministic regression review completed; live acceptance remains open. Do not interpret this report or a passing focused suite as proof that Katie now chooses the strongest evidence in production.
+Status: PR #625 deployed to production; live acceptance has demonstrated correct Controller evidence selection but exposed additional resume and durable-memory failures. The mission remains open. See `active-task-live-acceptance-625.md` for request-level independent findings.
 
 ## Evidence and causal findings
 
@@ -36,7 +36,7 @@ Focused validation before broad-suite compatibility corrections: typecheck passe
 
 The broader run exposed PDF/media harness assumptions after moving task resolution earlier, and a real source-scope issue: excluded fresh PDF text could enter early identity classification. The source-scope correction and updated harness results are recorded in the final validation update below. Database/browser integration failures must not be counted as passes.
 
-## Live acceptance protocol — not yet executed
+## Live acceptance protocol and acceptance gates
 
 Use isolated test chats and synthetic facts, never write fixture claims into the user's professional memory. Keep production career data intact. Capture each request ID, deployment SHA, model, active project ID, selected source IDs, final answer, and independent review audit. Have a separate reviewer judge the actual final answer against the active brief and the supplied facts.
 
@@ -56,7 +56,7 @@ Use both the incident domain and a different pair of synthetic engagements to te
 
 A native Katie mission was created through the existing mission RPC using its saved Mission Lead, Analysis and Development team, scoped to independent read-only investigation: `7047194c-8da7-4a3b-9a9e-a95391691aa2`. It blocked during planning with `Model output incomplete: incomplete` after one recorded call / 10,047 actual tokens. No native specialist output was produced. Its budget was not reset or increased. The external implementation/review specialists did complete their separate code review work; that is not a substitute for a successful native mission.
 
-The deployed application requires Vercel authentication in the available browser. The connector can read protected deployment URLs but does not provide the interactive POST workflow needed for these conversations. No production merge/deployment or live acceptance is claimed.
+PR #625 merged as `7ed9465599ef18e9c4b8baed6398375caafba2ed`. Production deployment `dpl_CmbWSLbpjRg3HeBio37f91YMUczT` was verified READY with this SHA and canonical alias. GitHub CI and website-review workflows passed on the released PR head. The authenticated browser now runs real conversations with isolated actor `bca79e2a-4e0b-4da0-94a5-146818fa75cc`, cloned instructions/routing and mandatory review. The original professional actor and memory remain unchanged. Initial live results and newly discovered failures are recorded in the companion acceptance report. Preview intentionally has no production data/model credentials; none were copied into preview.
 
 Remaining risks: actor-wide memory remains broad rather than relevance-ranked; model judgment can still choose weak evidence despite correct context; multi-writer updates of the same application need concurrency testing; very long restored histories need context-budget evaluation; actual cross-specialist transfer and durable professional-memory extraction require live verification. Fresh images do not have the PDF-equivalent exclusion/save-only source gate; image observation was already broad and remains so. Full untruncated task history favors fidelity but can increase prompt cost. Native planner incomplete-output recovery is unresolved and separate from this patch.
 
@@ -67,3 +67,15 @@ Remaining risks: actor-wide memory remains broad rather than relevance-ranked; m
 The full run completed: 1,153 tests passed in successful Node test files, and all 7 Vitest tests passed; 17 Node files failed. Six failures were route-harness assumptions exposed by moving resolution earlier (Executive, media-memory, three PDF, video-timeline). Targeted reruns corrected those fixtures while retaining their source-isolation assertions. The new PDF source-scope production correction plus its surrounding focused suites passed 153/153; Executive passed 3/3. Video timeline passed 6/6. Independent review separately reran the three PDF suites: 132/132 passed, with no remaining blocker in the scoped correction.
 
 The other eleven failures remain open: eight SQL files cannot initialize the required local PostgreSQL binaries; API startup fails on network-interface permission; browser isolation checks fail on unavailable user namespaces/expected executable location; the unchanged test-runner self-test timed out. Classification is based on failure locations and unchanged code, not a clean baseline replay. No security sandbox or test gate was disabled, and these are not reported as passes. The full suite has **not** passed.
+
+## Live-discovered follow-up corrections
+
+Live acceptance found an explicitly named cross-chat resume still returned a clarification. The saved A/B registry was intact; the exact model decision was not retained in logs, so omission versus loss through null-intent fallback cannot be distinguished. PR #629 replaces that broad classification call with a required, source-validated task transition using the existing control-plane model selection. It does not add another routine call.
+
+A third application request launched a software project because `startProjectIntent` treated leading “Start” plus any “application” as authority to launch coding work. Software execution now requires an independent semantic decision supported by current user wording. Existing stop/pause controls bypass unrelated application ambiguity without changing its ledger. The erroneous isolated project and its research mission were stopped through existing scoped control RPCs.
+
+PR #627 fixed an independently reproduced API rejection: the automatic memory repair requested JSON mode without saying JSON. The actual isolated run produced HTTP400; the new regression reproduced it before the fix. Original-incident logs around16:20–16:40 show rejected source repairs, but no matching JSON400, so that error is not asserted as the cause of the original contamination.
+
+Live memory inspection also found a full assistant examples draft stored as a high-confidence user-stated fact, citing only the user's request to condense it. Literal quotation checking was insufficient. The follow-up adds a separate per-entry semantic support check against cited USER messages and user-only context, before automatic merge. It checks all factual claims, subject/fiction qualifiers and source attribution; malformed or missing verdicts cannot authorize a write. Unsupported entries receive one bounded repair and are checked again. Valid sibling entries and unrelated existing knowledge remain preserved. It neither uses an assistant draft as evidence nor retroactively deletes existing memory.
+
+The memory regressions pass24/24 independently; the corrected source-scope/route harnesses pass116/116. The initial PR629 full CI run passed1,279 tests in successful Node files plus7 Vitest tests but failed one stale PDF test-harness dependency; it was corrected without weakening source-authorization assertions. A new full CI run and post-deployment live retests remain required. Existing contaminated memories, finite source context, and model semantic judgments remain limitations; do not infer universal truth from a schema-valid verdict.
