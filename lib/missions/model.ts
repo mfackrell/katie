@@ -1,4 +1,5 @@
 import {rejectedBeforeInference} from '@/lib/orchestration/request-rejection';
+import {shouldFallbackIncompleteReview} from './review-fallback.mjs';
 import {GAME_RULE_CATEGORIES} from '../../scripts/project-game-rules.mjs';
 import {projectPlanSchema} from '@/lib/projects/contract';
 import { zodTextFormat } from 'openai/helpers/zod';
@@ -82,8 +83,7 @@ export async function missionModel(claim:Claim,instruction:string,input:string,t
    // Exhausting the same output cap is not a provider outage. Preserve the
    // response and diagnose capacity instead of buying the same failure six times.
    if(truncated)throw new MissionModelFailure(error.message,{...error.partial,attemptedModels});
-   const incompleteReview=claim.job.role==='review'&&error instanceof MissionModelFailure&&
-     error.partial.responseStatus==='incomplete'&&error.partial.incompleteReason!=='max_output_tokens';
+   const incompleteReview=shouldFallbackIncompleteReview(claim.job.role,error);
    if(/allowance exhausted|no longer authorized|permission denied|Invalid tool|Unpermitted|tool arguments instead|execution time window/i.test(detail)||
       (error instanceof MissionModelFailure&&!truncated&&!incompleteReview&&
        !['server_error','rate_limit_exceeded','insufficient_quota'].includes(String(error.partial.providerErrorCode))))throw error;
