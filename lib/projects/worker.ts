@@ -343,18 +343,29 @@ async function reconcileBlockedGameRevisions(){
     // mission. PostgreSQL atomically enforces the old verdict, timeout cause,
     // original aggregate budget, milestone limit and one-recovery ceiling.
     const db=getSupabaseAdminClient();
-    const {data,error}=await db.from('work_projects').select('id,actor_id,chat_id')
-      .eq('status','blocked').eq('profile','game').eq('phase','specification')
-      .order('id',{ascending:true}).limit(30);
-    if(error)throw Error('Blocked game revision recovery index unavailable');
-    for(const p of (data??[]) as Array<{id:string;actor_id:string;chat_id:string}>){
-        const authorized={p_id:p.id,p_actor:p.actor_id,p_chat:p.chat_id};
-        const native=await projectRpc<boolean>('resume_incomplete_game_review',authorized) ||
-          await projectRpc<boolean>('resume_oversized_game_specification',authorized);
-        if(native || await projectRpc<boolean>('recover_game_revision_timeout',{p_id:p.id}) || await projectRpc<boolean>('recover_game_rule_coverage',{p_id:p.id}) || await projectRpc<boolean>('recover_bounded_game_review',{p_id:p.id}) || await projectRpc<boolean>('recover_mission_credit_failure',{p_id:p.id})){
-            console.info('[Projects] Saved game revision timeout recovered without resetting charges',{project:p.id});
-            return true;
+    let cursor:string|null=null;
+    // Stable keyset pagination ensures two older unrecoverable jobs never starve
+    // a later eligible project, even as concurrent recoveries alter statuses.
+    for(;;){
+        let q=db.from('work_projects').select('id,actor_id,chat_id')
+          .eq('status','blocked').eq('profile','game').eq('phase','specification')
+          .order('id',{ascending:true}).limit(30);
+        if(cursor)q=q.gt('id',cursor);
+        const {data,error}=await q;
+        if(error)throw Error('Blocked game revision recovery index unavailable');
+        const rows=(data??[]) as Array<{id:string;actor_id:string;chat_id:string}>;
+        if(!rows.length)break;
+        for(const p of rows){
+            cursor=p.id;
+            const authorized={p_id:p.id,p_actor:p.actor_id,p_chat:p.chat_id};
+            const native=await projectRpc<boolean>('resume_incomplete_game_review',authorized) ||
+              await projectRpc<boolean>('resume_oversized_game_specification',authorized);
+            if(native || await projectRpc<boolean>('recover_game_revision_timeout',{p_id:p.id}) || await projectRpc<boolean>('recover_game_rule_coverage',{p_id:p.id}) || await projectRpc<boolean>('recover_bounded_game_review',{p_id:p.id}) || await projectRpc<boolean>('recover_mission_credit_failure',{p_id:p.id})){
+                console.info('[Projects] Saved specification work recovered within original limits',{project:p.id});
+                return true;
+            }
         }
+        if(rows.length<30)break;
     }
     return false;
 }
