@@ -82,7 +82,7 @@ function MemoryCalibration({actor}:{actor:Actor}) {
        <h4 className="font-medium text-amber-200">Clarification needed — records preserved</h4>
        {report.conflicts.map((conflict,i)=><div key={i} className="mt-3">
          <p>{conflict.question}</p>
-         <p className="mt-1 text-xs text-zinc-400">Affected records: {conflict.keys.join(", ")}</p>
+         {conflict.keys.map(key=><p key={key} className="mt-2 break-words text-xs text-zinc-400"><strong>{key}</strong>: {values.get(key)}</p>)}
          <p className="mt-1 text-xs">These entries are not changed until you clarify. Your answer should be recorded as new source evidence, not inferred by the reviewer.</p>
          <Link className={button+" mt-2"} href={`/conversations/new?actor=${encodeURIComponent(actor.id)}&request=${encodeURIComponent("Please ask me to resolve this long-term-memory contradiction, and retain my clarification for future use: "+conflict.question+" [keys: "+conflict.keys.join(", ")+"]")}`}>Clarify with {actor.name}</Link>
        </div>)}
