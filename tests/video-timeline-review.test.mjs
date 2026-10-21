@@ -56,7 +56,7 @@ test('actual chat route resolves fresh/saved/current video timeline turns before
   if(fixture.source)assert.equal(resolved.timelineSelection.source.id,fixture.source);
   if(fixture.clarify)assert.ok(resolved.timelineSelection.clarification);
   if(resolved.timelineActive){
-   let selectionCalls=0;Object.assign(context,resolved,{pdfMemoryDecision:null,mediaMemory:null,savedVideoFollowUp:null,selectStoredAttachments:()=>{selectionCalls++;throw Error('ordinary media routing');}});
+   let selectionCalls=0;Object.assign(context,resolved,{pdfProgress:{projectContext:null},pdfMemoryDecision:null,mediaMemory:null,savedVideoFollowUp:null,selectStoredAttachments:()=>{selectionCalls++;throw Error('ordinary media routing');}});
    vm.runInContext(choice,context);const selected=await context.exports.choose();assert.equal(selected.selections.length,0);assert.equal(selectionCalls,0);
   }
  }));

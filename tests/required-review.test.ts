@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { runAdaptiveCollaboration } from "../lib/collaboration/orchestrator";
 import { runAgentTask, type AgentTask } from "../lib/agents/policy";
-import { runRequiredDraftReview } from "../lib/collaboration/required-review";
+import { runRequiredDraftReview, validateContractResolutions } from "../lib/collaboration/required-review";
 import { getDeliverableStandardInstruction } from "../lib/chat/deliverable-standard";
 import { createReviewClarification, buildReviewResumptionContext } from "../lib/collaboration/review-completion";
 import { acceptanceIds, reviewBaseline, validateAssessment, validateAnswerReview, type AnswerReview, type IndependentAssessment } from "../lib/collaboration/review-contract";
@@ -52,7 +52,9 @@ function makeProvider(name: LlmProvider["name"], generate: (p: ChatGenerateParam
 }
 function contractApproval(p: ChatGenerateParams, decision: "approve" | "revise" = "approve") {
   const ids = [...p.user.matchAll(/"id":"(turn-\d+|latest-user)"/g)].map(m => m[1]);
-  return response("openai", "lead", { verdict: decision, findings: decision === "approve" ? "All original requirements and later factual corrections reconciled." : "Revenue was omitted despite the original explicit requirement.", sourceCoverage: [...new Set(ids)].map(sourceId => ({ sourceId, finding: "Checked this turn against the proposed deliverable and requirements." })) });
+  return response("openai", "lead", { verdict: decision, findings: decision === "approve" ? "All original requirements and later factual corrections reconciled." : "Revenue was omitted despite the original explicit requirement.", sourceCoverage: [...new Set(ids)].map(sourceId => ({ sourceId, finding: "Checked this turn against the proposed deliverable and requirements." })),
+    resolutions: [...p.user.matchAll(/"id":"(contract-objection-\d+)"/g)].map(match => ({ objectionId: match[1], sourceId: "turn-2", quote: question, resolution: "The revised contract preserves the original explicit revenue requirement." })),
+  });
 }
 function setup(options: { reviews?: Array<ReturnType<typeof verdict>>; assessment?: IndependentAssessment; revisions?: string[]; contractRejectOnce?: boolean; contractAlwaysReject?: boolean } = {}) {
   const phases: string[] = [];
@@ -149,8 +151,9 @@ test("a persistently invalid task definition cannot approve an answer", async ()
   const s = setup({ contractAlwaysReject: true });
   const result = await s.run();
   assert.ok(!s.phases.includes("review"));
-  assert.equal(result.audit.status, "completed_with_review_notes");
-  assert.equal(result.result.text, draft.text);
+  assert.equal(result.audit.status, "unavailable");
+  assert.match(result.result.text, /conflicting requirements/);
+  assert.equal(result.audit.lastCandidate, draft.text);
   assert.equal(result.audit.draft, draft.text);
   assert.equal(result.audit.pendingClarification, undefined);
   assert.equal(s.phases.filter(p => p === "contract").length, 2);
@@ -319,10 +322,12 @@ test("bounded validation falls back before comparing after two material rejectio
   const s=setup({contractAlwaysReject:true});
   const result=await s.run();
   assert.deepEqual(s.phases,["assessment","contract","assessment","contract"]);
-  assert.equal(result.audit.status,"completed_with_review_notes");
+  assert.equal(result.audit.status,"unavailable");
   assert.equal(result.audit.contractFindings?.length,2);
   assert.equal(result.audit.reviews,undefined);
-  assert.equal(result.result.text,draft.text);
+  assert.match(result.result.text,/conflicting requirements/);
+  assert.ok(!result.result.text.includes(draft.text));
+  assert.equal(result.audit.lastCandidate,draft.text);
   assert.equal(result.audit.draft, draft.text);
   assert.equal(result.audit.pendingClarification,undefined);
 });
@@ -813,11 +818,12 @@ test("new explicit application question isolates contract negotiation from compl
     user: latest,
   };
   const baseline = reviewBaseline(source, progress);
-  assert.deepEqual(baseline.contractTurns, [{ id: "latest-user", text: latest }]);
+  assert.deepEqual(baseline.contractTurns, [{ id: "turn-1", text: parent }, { id: "latest-user", text: latest }]);
   assert.match(baseline.text, /ACTIVE CONTRACT SOURCES/);
   assert.match(baseline.text, /BACKGROUND USER EVIDENCE/);
   assert.match(baseline.text, /PE-backed industrial company/);
-  assert.ok(!baseline.text.includes('"id":"turn-1"'), "Completed earlier turns must not retain contract source IDs.");
+  assert.ok(baseline.text.includes('"id":"turn-1"'), "The parent brief remains an authoritative source.");
+  assert.ok(!baseline.text.includes('"id":"turn-2"'), "Completed earlier questions must not retain contract source IDs.");
 
   const a: IndependentAssessment = {
     objective: "Provide 3 to 5 representative examples of the user's relevant experience for the current opportunity.",
@@ -841,7 +847,7 @@ test("new explicit application question isolates contract negotiation from compl
   const reviewer = makeProvider("openai", async p => {
     if (p.persona.includes("KATIE_INDEPENDENT_ASSESSMENT")) {
       phases.push("assessment");
-      assert.ok(!p.user.includes('"id":"turn-1"'));
+      assert.ok(p.user.includes('"id":"turn-1"'));
       assert.match(p.user, /BACKGROUND USER EVIDENCE/);
       return response("openai", "reviewer", a);
     }
@@ -855,7 +861,7 @@ test("new explicit application question isolates contract negotiation from compl
       verdict: "approve",
       findings: "The contract faithfully captures the active broad examples question.",
       issueType: "none",
-      sourceCoverage: [{ sourceId: "latest-user", finding: "This is the sole active contract source for the new deliverable." }],
+      sourceCoverage: [{ sourceId: "turn-1", finding: "The parent brief governs relevance." }, { sourceId: "latest-user", finding: "This sets the current deliverable." }],
     });
   });
   const result = await runRequiredDraftReview({
@@ -869,8 +875,8 @@ test("new explicit application question isolates contract negotiation from compl
   });
   assert.equal(result.audit.status, "approved");
   assert.deepEqual(phases, ["assessment", "contract", "review"]);
-  assert.equal(result.audit.contractValidation?.sourceCoverage.length, 1);
-  assert.equal(result.audit.contractValidation?.sourceCoverage[0].sourceId, "latest-user");
+  assert.equal(result.audit.contractValidation?.sourceCoverage.length, 2);
+  assert.equal(result.audit.contractValidation?.sourceCoverage[1].sourceId, "latest-user");
 });
 
 
@@ -960,4 +966,85 @@ test("replacement reviewer reuses validated assessment after comparison failure"
   assert.equal(result.audit.status, "approved");
   assert.deepEqual(phases, ["assessment", "contract", "first-comparison", "second-comparison"]);
   assert.equal(result.audit.contractValidation?.verdict, "approve");
+});
+
+test("active parent remains citeable after compaction without importing a previous opportunity", () => {
+  const old = "Planning engagement: forecast liquidity and lender compliance.";
+  const active = "Controller engagement: construction accounting, WIP and project revenue recognition.";
+  const source = { ...params, history: [{ role: "user" as const, content: old }], user: "Please share 3 to 5 examples of relevant experience." };
+  const progress = {
+    version: 1 as const, objective: { userMessageId: "question", text: source.user },
+    projectContext: { userMessageId: "controller-brief", text: active },
+    stage: "working" as const, nextAction: "continue_original_goal" as const,
+    pending: [], answered: [], lastAssistantMessageId: null, lastUserMessageId: "question", lastUserIntent: "new_task" as const,
+  };
+  const baseline = reviewBaseline(source, progress);
+  assert.equal(baseline.parentProjectSourceId, "project:controller-brief");
+  assert.deepEqual(baseline.contractTurns.map(turn => turn.text), [active, source.user]);
+  assert.ok(baseline.turns.some(turn => turn.id === baseline.parentProjectSourceId));
+  const contract = structuredClone(assessment);
+  contract.taskContract.requirements = [
+    { id: "examples", sourceId: "latest-user", requirement: "Supply three to five examples", status: "active" },
+    { id: "target", sourceId: baseline.parentProjectSourceId!, requirement: "Relate evidence to the controller engagement", status: "active" },
+  ];
+  contract.taskContract.conflicts = [];
+  assert.doesNotThrow(() => validateAssessment(contract, baseline.contractTurns, {
+    activeNewTask: true, parentProjectSourceId: baseline.parentProjectSourceId,
+  }));
+  contract.taskContract.requirements[1].sourceId = "turn-1";
+  assert.throws(() => validateAssessment(contract, baseline.contractTurns, {
+    activeNewTask: true, parentProjectSourceId: baseline.parentProjectSourceId,
+  }), /completed earlier questions/);
+});
+
+test("a contract retry cannot silently discard a wrong-target objection", () => {
+  const objections = [{ id: "contract-objection-1", findings: "The active brief is the Controller engagement, not the historical planning engagement." }];
+  const turns = [{ id: "parent", text: "Controller engagement: construction accounting and WIP." }, { id: "latest-user", text: "Share three relevant examples." }];
+  assert.throws(() => validateContractResolutions(undefined, objections, turns), /every prior material objection/);
+  assert.throws(() => validateContractResolutions([], objections, turns), /every prior material objection/);
+  assert.throws(() => validateContractResolutions([{ objectionId: objections[0].id, sourceId: "latest-user", quote: "FP&A engagement", resolution: "The user switched back." }], objections, turns), /every prior material objection/);
+  const resolution = [{ objectionId: objections[0].id, sourceId: "parent", quote: "Controller engagement: construction accounting and WIP.", resolution: "The repaired contract now evaluates these examples against the Controller requirements." }];
+  assert.deepEqual(validateContractResolutions(resolution, objections, turns), resolution);
+});
+
+test("wrong-target draft stays withheld when a later validator approves without resolving the earlier objection", async () => {
+  const parent = "Controller engagement: construction accounting, WIP, job costing and project revenue recognition.";
+  const current = "Please share 3 to 5 examples of your relevant experience.";
+  const source: ChatGenerateParams = { ...params, history: [{ role: "user", content: parent }], user: current };
+  const progress = {
+    version: 1 as const, objective: { userMessageId: "question", text: current },
+    projectContext: { userMessageId: "controller", text: parent },
+    stage: "working" as const, nextAction: "continue_original_goal" as const,
+    pending: [], answered: [], lastAssistantMessageId: null, lastUserMessageId: "question", lastUserIntent: "new_task" as const,
+  };
+  const proposed = structuredClone(assessment);
+  proposed.taskContract.requirements = [{ id: "examples", sourceId: "latest-user", status: "active", requirement: "Share three to five examples." }];
+  proposed.taskContract.conflicts = [];
+  proposed.objective = "Supply examples for the historical planning engagement.";
+  let validations = 0;
+  const reviewer = makeProvider("anthropic", async () => response("anthropic", "reviewer", proposed));
+  const lead = makeProvider("openai", async p => {
+    validations++;
+    if (validations === 2) assert.match(p.user, /contract-objection-1/);
+    return response("openai", "lead", {
+      verdict: validations === 1 ? "revise" : "approve",
+      issueType: validations === 1 ? "wrong_active_deliverable" : "none",
+      findings: validations === 1 ? "The most recent parent is Controller; historical planning evidence must not switch it." : "Approved.",
+      sourceCoverage: [{ sourceId: "turn-1", finding: "Parent brief." }, { sourceId: "latest-user", finding: "Current examples question." }],
+      // Deliberately omit the required source-linked objection resolution.
+    });
+  });
+  const contaminated = "Integrated forecasting and lender reporting lead these examples for the earlier application.";
+  const result = await runRequiredDraftReview({
+    requestId: "wrong-target-retry", params: source, taskProgress: progress,
+    observedEvidence: "Historical saved screenshot: Interim Director of FP&A, uploaded for a previous application.",
+    draft: response("openai", "lead", contaminated), leadProvider: lead, deadlineMs: deadline(),
+    selectHelper: async c => c.usedParticipants.length === 1 ? { provider: reviewer, modelId: "reviewer" } : null,
+  });
+  assert.equal(validations, 2);
+  assert.equal(result.audit.status, "unavailable");
+  assert.equal(result.audit.contractValidation, undefined);
+  assert.equal(result.audit.lastCandidate, contaminated);
+  assert.ok(!result.result.text.includes(contaminated));
+  assert.match(result.result.text, /conflicting requirements/);
 });

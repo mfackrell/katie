@@ -101,7 +101,7 @@ class Query {
         const chatId = row.chat_id as string | undefined;
         const uniqueIdx = tableRows.findIndex((item) => {
           if (id && item.id === id) return true;
-          if (actorId && chatId && item.actor_id === actorId && item.chat_id === chatId) return true;
+          if (!id && actorId && chatId && item.actor_id === actorId && item.chat_id === chatId) return true;
           if (this.table === "actor_long_term_memory" && actorId && item.actor_id === actorId) return true;
           if (this.table === "actor_memory_documents" && row.source_message_id && item.source_message_id === row.source_message_id) return true;
           return false;
@@ -216,11 +216,19 @@ function loadModules() {
   return { store, memoryEditor };
 }
 
+function supportResponse(params: any) {
+  if (!params.messages?.[0]?.content.startsWith("Independently review durable memory support")) return undefined;
+  const { candidates } = JSON.parse(params.messages[1].content);
+  return { choices: [{ message: { content: JSON.stringify({ verdicts: candidates.map((entry: any) => ({ key: entry.key, supported: true, reason: "Test reviewer accepts source support" })) }) } }] };
+}
+
 function createMockMemoryEditorClient(responseContent: string) {
   return {
     chat: {
       completions: {
-        async create() {
+        async create(params: any) {
+          const support = supportResponse(params);
+          if (support) return support;
           return {
             choices: [
               {
@@ -487,6 +495,7 @@ test("automatic actor-purpose learning persists firsthand facts with quoted evid
  const quote="At our installation company I updated WIP every month.";
  let observedPrompt="";
  (globalThis as any).__KATIE_LONG_TERM_MEMORY_OPENAI_CLIENT__={chat:{completions:{async create(p:any){
+   const support = supportResponse(p); if (support) return support;
    observedPrompt=p.messages.map((m:any)=>m.content).join("\\n");
    return {choices:[{message:{content:JSON.stringify({action:"replace",updatedContent:{
      version:3,purpose:"Actor memory",entries:[{key:"experience.wip",category:"fact",value:"User updated WIP monthly for installation projects.",source:"user-stated",confidence:"high",evidenceMessageIds:["m1"],evidenceQuotes:[{messageId:"m1",quote}]}]}})}}]};
@@ -542,4 +551,139 @@ test("unwrapped memory without matching user evidence is not saved", async () =>
  await store.saveMessage("c1",{id:"m1",role:"user",content:"A different statement about work."});
  await memoryEditor.maybeUpdateLongTermMemory("a1","c1","A different statement about work.");
  assert.equal((await store.getLongTermMemory("a1","c1")).entries,undefined);
+});
+
+test("automatic memory repair satisfies provider JSON mode and saves only repaired source-verified facts", async () => {
+ const state=makeState();
+ (globalThis as any).__KATIE_SUPABASE_ADMIN_CLIENT__=createFakeClient(state);
+ const quote="I reconciled project costs to the general ledger every month.";
+ const entry={key:"career.project.cost.reconciliation",category:"fact",value:quote,
+   source:"user-stated",confidence:"high",evidenceMessageIds:["m1"]};
+ let calls=0;
+ (globalThis as any).__KATIE_LONG_TERM_MEMORY_OPENAI_CLIENT__={chat:{completions:{async create(params:any){
+   calls++;
+   const support = supportResponse(params); if (support) return support;
+   const prompt=params.messages.map((message:any)=>message.content).join("\n");
+   // Reproduce the provider's admission rule, rather than allowing every mock
+   // request through regardless of the production response_format contract.
+   if(params.response_format?.type === "json_object" && !/json/i.test(prompt)) {
+     throw new Error("400 'messages' must contain the word 'json' when response_format is json_object");
+   }
+   return {choices:[{message:{content:JSON.stringify({action:"replace",updatedContent:{
+     version:3,purpose:"Durable career knowledge",entries:[{...entry,
+       evidenceQuotes:[{messageId:"m1",quote:calls===1?"A source quote that was never provided.":quote}]}]
+   }})}}]};
+ }}}};
+ const {store,memoryEditor}=loadModules();
+ await store.saveActor({id:"a1",name:"Advisor",purpose:"Prepare relevant professional examples."});
+ await store.saveChat({id:"c1",actorId:"a1",title:"Current",createdAt:"x",updatedAt:"x"});
+ await store.setLongTermMemory("a1","c1",memory(fact("existing","Existing durable experience.")));
+ await store.saveMessage("c1",{id:"m1",role:"user",content:quote});
+ await memoryEditor.maybeUpdateLongTermMemory("a1","c1",quote);
+ assert.equal(calls,3,"Invalid initial evidence must enter repair and independent support review");
+ const entries=(await store.getLongTermMemory("a1","other-chat")).entries as any[];
+ assert.equal(entries.length,2,"Repair preserves unrelated durable knowledge");
+ const saved=entries.find(value=>value.key===entry.key);
+ assert.equal(saved?.value,quote);
+ assert.deepEqual(saved?.evidenceQuotes,[{messageId:"m1",quote}]);
+});
+
+for (const verdictMode of ["unsupported", "missing", "duplicate", "unknown", "string-boolean", "invalid-json"] as const) {
+ test(`semantic support rejects ${verdictMode} candidate while retaining valid sibling and existing memory`, async () => {
+  const state=makeState();
+  (globalThis as any).__KATIE_SUPABASE_ADMIN_CLIENT__=createFakeClient(state);
+  const instruction="Condense the current three examples for the application to 180 words total.";
+  const source="For the fictional candidate: I reconciled project costs every month.";
+  const valid={...fact("fixture.costs","The fictional candidate reconciled project costs monthly."),evidenceQuotes:[{messageId:"m1",quote:source}]};
+  const invalid={...fact("draft.claim","Mark recovered $180,000 in project revenue."),evidenceMessageIds:["m2"],evidenceQuotes:[{messageId:"m2",quote:instruction}]};
+  let repairs=0;
+  (globalThis as any).__KATIE_LONG_TERM_MEMORY_OPENAI_CLIENT__={chat:{completions:{async create(params:any){
+   const system=params.messages[0].content;
+   let result:any;
+   if(system.startsWith("Independently review")) {
+    const data=JSON.parse(params.messages[1].content);
+    assert.equal(data.userContext.some((message:any)=>message.content.includes("ASSISTANT DRAFT")),false);
+    const good={key:valid.key,supported:true,reason:"Cited user fact retains fictional subject"};
+    const bad={key:invalid.key,supported:false,reason:"Editing instruction does not support draft claims or real-user attribution"};
+    result={verdicts:[good,...(verdictMode==="missing"?[]:verdictMode==="duplicate"?[{...bad,supported:true},{...bad,supported:true}]:verdictMode==="unknown"?[{...bad,key:"invented",supported:true}]:verdictMode==="string-boolean"?[{...bad,supported:"true"}]:[bad])]};
+    if(verdictMode==="invalid-json") return {choices:[{message:{content:"not JSON"}}]};
+   } else if(system.startsWith("You are repairing")) {
+    repairs++;
+    assert.match(params.messages[1].content,/support|verdict/i);
+    result={action:"no_change"};
+   } else result={action:"replace",updatedContent:memory(valid,invalid)};
+   return {choices:[{message:{content:JSON.stringify(result)}}]};
+  }}}};
+  const {store,memoryEditor}=loadModules();
+  await store.saveActor({id:"a1",name:"Advisor",purpose:"Professional evidence"});
+  await store.saveChat({id:"c1",actorId:"a1",title:"Test",createdAt:"x",updatedAt:"x"});
+  await store.setLongTermMemory("a1","c1",memory(fact("existing","Existing professional fact.")));
+  await store.saveMessage("c1",{id:"m1",role:"user",content:source,createdAt:"2026-01-01T00:00:00Z"});
+  await store.saveMessage("c1",{id:"draft",role:"assistant",content:"ASSISTANT DRAFT: Mark recovered $180,000.",createdAt:"2026-01-01T00:00:01Z"});
+  await store.saveMessage("c1",{id:"m2",role:"user",content:instruction,createdAt:"2026-01-01T00:00:02Z"});
+  await memoryEditor.maybeUpdateLongTermMemory("a1","c1",instruction);
+  const entries=(await store.getLongTermMemory("a1","other-chat")).entries as any[];
+  assert.deepEqual(entries.map(entry=>entry.key).sort(),verdictMode==="invalid-json"?["existing"]:["existing",valid.key]);
+  assert.equal(repairs,1);
+ });
+}
+
+test("semantic repair must cite original user facts and retain fictional qualification before cross-chat persistence", async()=>{
+ const state=makeState();
+ (globalThis as any).__KATIE_SUPABASE_ADMIN_CLIENT__=createFakeClient(state);
+ const source="For the fictional candidate only: I recovered $180,000 in missed change orders.";
+ const instruction="Please shorten the examples and retain the strongest evidence.";
+ const wrong={...fact("candidate.recovery","Mark recovered $180,000 in missed change orders."),evidenceMessageIds:["m2"],evidenceQuotes:[{messageId:"m2",quote:instruction}]};
+ const corrected={...wrong,value:"The fictional candidate recovered $180,000 in missed change orders.",evidenceMessageIds:["m1"],evidenceQuotes:[{messageId:"m1",quote:source}]};
+ let reviews=0,repairs=0;
+ (globalThis as any).__KATIE_LONG_TERM_MEMORY_OPENAI_CLIENT__={chat:{completions:{async create(params:any){
+  const system=params.messages[0].content;
+  let result:any;
+  if(system.startsWith("Independently review")){
+   reviews++;
+   const candidate=JSON.parse(params.messages[1].content).candidates[0];
+   result={verdicts:[{key:wrong.key,supported:candidate.value===corrected.value&&candidate.evidenceMessageIds[0]==="m1",reason:"Must preserve fictional subject and cite factual user statement"}]};
+  } else if(system.startsWith("You are repairing")){
+   repairs++;
+   assert.match(params.messages[1].content,/Must preserve fictional subject/);
+   result={action:"replace",updatedContent:memory(corrected)};
+  } else result={action:"replace",updatedContent:memory(wrong)};
+  return {choices:[{message:{content:JSON.stringify(result)}}]};
+ }}}};
+ const {store,memoryEditor}=loadModules();
+ await store.saveActor({id:"a1",name:"Advisor",purpose:"Applications"});
+ await store.saveChat({id:"c1",actorId:"a1",title:"Test",createdAt:"x",updatedAt:"x"});
+ await store.saveMessage("c1",{id:"m1",role:"user",content:source,createdAt:"2026-01-01T00:00:00Z"});
+ await store.saveMessage("c1",{id:"draft",role:"assistant",content:"Acknowledged.",createdAt:"2026-01-01T00:00:01Z"});
+ await store.saveMessage("c1",{id:"m2",role:"user",content:instruction,createdAt:"2026-01-01T00:00:02Z"});
+ await memoryEditor.maybeUpdateLongTermMemory("a1","c1",instruction);
+ const entries=(await store.getLongTermMemory("a1","different-chat")).entries as any[];
+ assert.equal(entries[0].value,corrected.value);
+ assert.deepEqual(entries[0].evidenceMessageIds,["m1"]);
+ assert.equal(reviews,2);
+ assert.equal(repairs,1);
+});
+
+test("literal fictional source cannot become real-user experience and repair outage preserves valid sibling", async()=>{
+ const state=makeState();
+ (globalThis as any).__KATIE_SUPABASE_ADMIN_CLIENT__=createFakeClient(state);
+ const source="This is fictional candidate experience, not Mark's: recovered $180,000 in change orders.";
+ const qualified={...fact("fixture.recovery","The fictional candidate recovered $180,000 in change orders."),evidenceQuotes:[{messageId:"m1",quote:source}]};
+ const wrong={...qualified,key:"mark.recovery",value:"Mark recovered $180,000 in change orders."};
+ (globalThis as any).__KATIE_LONG_TERM_MEMORY_OPENAI_CLIENT__={chat:{completions:{async create(params:any){
+  const system=params.messages[0].content;
+  if(system.startsWith("You are repairing")) throw new Error("Repair provider unavailable");
+  const result=system.startsWith("Independently review")?{verdicts:[
+   {key:qualified.key,supported:true,reason:"Fictional qualifier preserved"},
+   {key:wrong.key,supported:false,reason:"Exact source explicitly excludes Mark"},
+  ]}:{action:"replace",updatedContent:memory(qualified,wrong)};
+  return {choices:[{message:{content:JSON.stringify(result)}}]};
+ }}}};
+ const {store,memoryEditor}=loadModules();
+ await store.saveActor({id:"a1",name:"Advisor",purpose:"Applications"});
+ await store.saveChat({id:"c1",actorId:"a1",title:"Test",createdAt:"x",updatedAt:"x"});
+ await store.saveMessage("c1",{id:"m1",role:"user",content:source});
+ await memoryEditor.maybeUpdateLongTermMemory("a1","c1",source);
+ const entries=(await store.getLongTermMemory("a1","different-chat")).entries as any[];
+ assert.deepEqual(entries.map(entry=>entry.key),[qualified.key]);
 });

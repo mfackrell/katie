@@ -5,13 +5,14 @@ import {createRequire} from 'node:module';
 import vm from 'node:vm';
 import ts from 'typescript';
 const native=createRequire(import.meta.url);
-function runtime({factory=false,fail=null,missionStatus='completed',initialStatus,deliveredRows=0,unlinkedRows=0}={}){
+function runtime({factory=false,fail=null,missionStatus='completed',initialStatus,deliveredRows=0,unlinkedRows=0,previousBlocker=false}={}){
  const request={id:'request',actor_id:'actor',chat_id:'chat',route:'configure',specialist_slug:'operations',capability:'operations_analysis',
   status:initialStatus??(factory?'configured':'running'),evidence:{acceptanceMissionId:'mission'},mission_id:'mission',request_key:'exec-specialist-task-test',objective:'Read-only analysis'};
  const historical=Array.from({length:deliveredRows},(_,i)=>({...request,id:'delivered-'+i,status:'activated'}));
  const unlinked=Array.from({length:unlinkedRows},(_,i)=>({...request,id:'unlinked-'+i,evidence:{}}));
  const provisioning=[...historical,...unlinked,request];
- const messages=new Map(historical.map(r=>['factory-'+r.id,{id:'factory-'+r.id}])),actions=[],updates=[];let failure=fail;
+ const messages=new Map(historical.map(r=>['factory-'+r.id,{id:'factory-'+r.id,content:'Executive activated operations'}])),actions=[],updates=[];let failure=fail;
+ if(previousBlocker)messages.set((factory?'factory-':'delegation-')+request.id,{id:(factory?'factory-':'delegation-')+request.id,content:'Earlier blocked outcome'});
  const jobs=[{job_key:'review',role:'review',status:'completed',result:{verdict:'pass'}},
   ...['analyst','researcher'].map(agent_id=>({agent_id,role:'work',status:'completed',payload:{capability:'analysis'},result:{calculations:[{result:6}]}}))].map(job=>({...job,mission_id:'mission'}));
  const db={from(table){const filters=[];let cap=Infinity;const query={
@@ -40,7 +41,7 @@ function runtime({factory=false,fail=null,missionStatus='completed',initialStatu
     if(failure==='delivery'){failure=null;throw Error('interrupted chat write');}messages.set(message.id,message);
    }};
    if(name==='./source-handoff')return {};
-   if(name==='./delivery')return {delegationReplyId:id=>'delegation-'+id,factoryReplyId:id=>'factory-'+id};
+   if(name==='./delivery')return {delegationReplyId:(id,ok)=>'delegation-'+id+(ok?':completed':''),factoryReplyId:(id,ok)=>'factory-'+id+(ok?':activated':'')};
    if(name==='./factory-runtime')return {reconcileSpecialistFactory:async()=>({activated:0,blocked:0})};
    if(name==='./release-control')return {reconcileExecutiveReleases:async()=>({verified:0})};
    if(name==='./provisioning-service')return {};
@@ -89,4 +90,11 @@ test('linked draft factory acceptance resumes its saved mission without activati
  const x=runtime({factory:true,missionStatus:'draft'});await x.run();await x.run();
  assert.equal(x.request.status,'configured');assert.equal(x.messages.size,0);
  assert.deepEqual(x.actions,['mission:start']);
+});
+
+for(const factory of [false,true])test(`recovered ${factory?'factory':'delegation'} preserves blocker and delivers success exactly once`,async()=>{
+ const x=runtime({factory,previousBlocker:true});await x.run();await x.run();
+ assert.equal(x.messages.size,2);assert.equal([...x.messages.values()][0].content,'Earlier blocked outcome');
+ assert.match([...x.messages.values()][1].content,/completed and passed independent review|Executive activated/);
+ assert.equal(x.request.status,factory?'activated':'verified');
 });

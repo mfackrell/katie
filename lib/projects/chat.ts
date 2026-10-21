@@ -32,6 +32,11 @@ function projectControl(text:string):'pause'|'stop'|'resume'|null {
  if(!/resume|continue/i.test(match[1])){if(!directed)return null;return /pause/i.test(match[1])?'pause':'stop';}
  return directed?'resume':null;
 }
+/** Stopping already-bound work must remain available during task ambiguity. */
+export function isProjectStopIntent(text: string): boolean {
+ const control = projectControl(text);
+ return control === 'stop' || control === 'pause';
+}
 export function referencedProjectBrief(history:Message[]):string|null {
  const turns=history.map((m,index)=>({m,index})).filter(({m})=>m.role==='user'&&!followupProjectIntent(m.content)&&!projectControl(m.content)&&!/^(?:yes|no|ok(?:ay)?|thanks|thank you|proceed|go ahead|approved?)[.!\s]*$/i.test(m.content.trim()));
  const anchors=turns.filter(({m})=>m.content.trim().length>0&&/\b(?:browser|website|web app|application|app|game|software|portal)\b/i.test(m.content)&&(startProjectIntent(m.content)||/\bI (?:want|need|would like)\b/i.test(m.content)&&!/^\s*I (?:want|need|would like)\s+(?:(?:a|an|the|project|technical|status)\s+)*(?:summary|report|explanation|overview|plan|tutorial|guide)\b/i.test(m.content)));
@@ -49,6 +54,8 @@ export async function handleProjectChat(input: {
     chatId: string;
     message: string;
     activeRepoId?: string;
+    /** Source-validated semantic admission from the shared control plane. */
+    softwareBuildIntent?: boolean;
 }, requestId: string, history: Message[], tracked: boolean): Promise<string | null> {
     const text = input.message.trim(), pending = history.some(m => m.role === 'assistant' && marker.test(m.content) && !['completed', 'stopped'].includes(m.content.match(marker)![1]));
     const start = startProjectIntent(text), follow = followupProjectIntent(text), control = /\b(?:project|progress|status|pause|stop|resume|continue|approve|game|edition|requirement|keyboard|multiplayer)\b|^go ahead|how.{0,12}going/i.test(text);
@@ -110,6 +117,9 @@ export async function handleProjectChat(input: {
             if(!tracked)throw Error('Durable tracking is required for a project answer');
             const n=await mutate('answer',{p_text:explicitAnswer?.[1]??text});return reply(n,'I saved your answer to the project question and will continue planning with that decision.');
         }
+        // A different non-software outcome must not amend a saved coding
+        // scope merely because its wording overlaps the old objective.
+        if (start && input.softwareBuildIntent !== true) return null;
         const topicWords=new Set((p.objective+' '+p.clarifications+' '+(p.spec?.requirements.join(' ')??'')).toLowerCase().match(/[a-z]{5,}/g)??[]);for(const common of ['build','browser','project','create','application','working','original','return','result','preview','complete','required','should','would','could','please','there','their','which','about','after','before'])topicWords.delete(common);
         const related=(text.toLowerCase().match(/[a-z]{5,}/g)??[]).some(w=>topicWords.has(w));
         const projectReference=related||/\b(?:the|this|my) (?:game|app|website|project)\b|\b(?:edition|requirement|keyboard|multiplayer|undo|button|controls?|localStorage|reload|persistence|interface|screen|layout|component|accessibility|opponent|rules?|turns?|pieces?|dark mode)\b|^(?:please )?(?:make|change|update|keep|retain|preserve|fix) (?:it|this|that)\b/i.test(actionText(text));
@@ -126,6 +136,10 @@ export async function handleProjectChat(input: {
             return reply(p, p.result ?? p.detail ?? p.status);
         return null;
     }
+    // Lexical matches identify candidates only. Ambiguous nouns such as
+    // "application" or "program" are not authorization to launch coding.
+    // Existing saved-project controls above retain their scoped behavior.
+    if (input.softwareBuildIntent !== true) return null;
     if (!tracked)
         throw Error('Durable chat request tracking is required before launching background projects');
     let objective = text;

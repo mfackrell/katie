@@ -51,8 +51,10 @@ function blockBetween(first, last) {
 }
 
 // Execute production statements selected by their AST, not copied gate logic.
-const continuitySelection = unique(calls('applyUserToTaskProgress').filter(node =>
-  ts.isBinaryExpression(node.parent)), 'post-classification task selection');
+const contextResolutionBlock = blockBetween(statement(declaration('contextClassification')), statement(declaration('pdfProgress')));
+const continuitySelection = unique(findNodes(node => ts.isBinaryExpression(node) &&
+  ts.isIdentifier(node.left) && node.left.text === 'taskProgress' &&
+  ts.isIdentifier(node.right) && node.right.text === 'pdfProgress'), 'frozen task selection');
 const selectionBlock = blockBetween(statement(continuitySelection), statement(declaration('requiredReviewForRequest')));
 const collaborationGate = code(statement(declaration('collaborationEnabledForRequest')));
 const generationParams = code(unique(findNodes(node => ts.isFunctionDeclaration(node) &&
@@ -122,7 +124,7 @@ function fixture() {
     return Response.json(matches.slice(0, Number(url.searchParams.get('limit') ?? matches.length)));
   };
   const modules = new Map();
-  const globals = { URL, Response, Date, Map, Set, console: quietConsole, fetch,
+  const globals = { requestImages:[], isProjectStopIntent:text=>text === "Stop the coding project", startProjectIntent:()=>false, followupProjectIntent:()=>false, URL, Response, Date, Map, Set, console: quietConsole, fetch,
     process: { env: { NEXT_PUBLIC_SUPABASE_URL: 'https://supabase.example.test', SUPABASE_SERVICE_ROLE_KEY: 'test-only-no-network' } } };
   const load = path => {
     path = resolve(path.endsWith('.ts') ? path : path + '.ts');
@@ -137,7 +139,7 @@ function fixture() {
     return exports;
   };
   const helpers = Object.assign({}, ...[
-    'lib/chat/task-progress', 'lib/chat/response-policy', 'lib/chat/review-continuity',
+    'lib/chat/task-progress', 'lib/chat/pdf-source-selection', 'lib/chat/response-policy', 'lib/chat/review-continuity',
     'lib/chat/review-sources', 'lib/chat/video-evidence', 'lib/collaboration/review-completion',
     'lib/collaboration/activation', 'lib/collaboration/review-mode', 'lib/data/supabase/admin', 'lib/agents/policy',
   ].map(load));
@@ -150,7 +152,8 @@ function fixture() {
 
 async function select(f, { message, messageId, priorTaskProgress, history, projectRelation = 'same_project', responsePurpose = 'conversation', reviewMode = 'always' }) {
   return vm.runInNewContext(compile(`(async () => {
-    let taskProgress = priorTaskProgress;
+    ${contextResolutionBlock}
+    let taskProgress = pdfProgress;
     ${selectionBlock}
     ${collaborationGate}
     return { taskProgress, reviewTaskProgress, pendingReviewClarification, verifyingSavedDraft,
@@ -159,6 +162,12 @@ async function select(f, { message, messageId, priorTaskProgress, history, proje
   })()`), {
     ...f.globals, ...f.helpers, actorId: ACTOR_ID, chatId: CHAT_ID, requestId: 'current-request',
     message, taskProgressUserMessageId: messageId, priorTaskProgress, history,
+    attachmentHistory: history, newAttachments: [], freshVideoReferences: [], catalog:[],
+    request: { headers: { get: () => 'current-request' } },
+    currentAgentTask: () => null,
+    getAvailableProviders: () => [{ listModels: async () => [] }],
+    selectControlPlaneDecisionModels: () => [],
+    resolveProjectTransition: async () => undefined,
     projectRelationHint: projectRelation, responsePurposeHint: responsePurpose,
     resolvedRequestIntent: 'general-text', resolvedRoutingIntentForReroute: { complexity: 'low' },
     reviewMode, attachments: [], images: [], storedWebsite: { fresh: false },
@@ -360,9 +369,16 @@ test('PDF source preselection borrows only the bound active review task', async 
   const start = routeSource.indexOf('    const pdfProgress =');
   const end = routeSource.indexOf('    const memoryMode =', start);
   assert.ok(start > 0 && end > start);
-  const run = message => vm.runInNewContext(compile(`(async()=>{${routeSource.slice(start, end)}return {pdfTaskContext,pdfSourceTask};})()`), {
+  const run = message => vm.runInNewContext(compile(`(async()=>{${contextResolutionBlock}
+${routeSource.slice(statement(declaration('pdfReviewContinuation')).getStart(routeAst), end)}return {pdfTaskContext,pdfSourceTask};})()`), {
     ...f.globals, ...f.helpers, message, actorId: ACTOR_ID, chatId: CHAT_ID,
-    attachmentHistory: history, loadTaskProgress: async () => progress,
+    attachmentHistory: history, priorTaskProgress: progress,
+    taskProgressUserMessageId: 'source-selection-turn', newAttachments: [], freshVideoReferences: [], catalog:[], timelineActive:false,
+    request: { headers: { get: () => 'current-request' } },
+    currentAgentTask: () => null,
+    getAvailableProviders: () => [{ listModels: async () => [] }],
+    selectControlPlaneDecisionModels: () => [],
+    resolveProjectTransition: async () => undefined,
     crypto: { randomUUID: () => 'source-selection-turn' },
   });
   assert.equal((await run('yes')).pdfTaskContext, 'Analyze report.pdf page 2');
@@ -373,4 +389,233 @@ test('PDF source preselection borrows only the bound active review task', async 
   }
   current.review_audit.pendingClarification.binding.taskId = 'unrelated-task';
   assert.equal((await run('yes')).pdfTaskContext, null);
+});
+
+test('actual route resolves identity before historical attachment retrieval and freezes it against later routing', async () => {
+  const f = fixture();
+  const { progress, history } = await replayPosting(f);
+  assert.ok(declaration('pdfProgress').pos < declaration('attachmentDecision').pos,
+    'Historical source selection must follow current task resolution');
+  const events = [];
+  const result = await vm.runInNewContext(compile(`(async () => {
+    ${contextResolutionBlock}
+    ${code(statement(declaration('attachmentDecision')))}
+    let taskProgress = pdfProgress;
+    // Simulate a later capability router incorrectly treating the generic question
+    // as a new project after it has inspected a historical attachment.
+    let projectRelationHint = 'new_project';
+    ${selectionBlock}
+    return {taskProgress, projectRelationHint, attachmentDecision};
+  })()`), {
+    ...f.globals, ...f.helpers,
+    message: OLD_TASK, taskProgressUserMessageId: 'examples-question',
+    priorTaskProgress: progress, attachmentHistory: history, history,
+    actorId: ACTOR_ID, chatId: CHAT_ID, requestId: 'ordered-request',
+    request: { headers: { get: () => 'ordered-request' } },
+    newAttachments: [], freshVideoReferences: [], currentAgentTask: () => null,
+    getAvailableProviders: () => [{ listModels: async () => [] }],
+    selectControlPlaneDecisionModels: () => [],
+    resolveProjectTransition: async (_message, context, options) => {
+      events.push('resolve-identity');
+      assert.equal(context.activeProject.userMessageId, POSTING_ID);
+      assert.equal(context.activeProject.text, DISTRIBUTION_POSTING);
+      assert.ok(!options.conversationContext.includes('old-screenshot'),
+        'Historical file selection must not define the identity decision');
+      return undefined;
+    },
+    catalog: [{id:'old-screenshot', fileName:'old.png', mimeType:'image/png'}],
+    selectStoredAttachments: async (_message, _catalog, _history, _decide, _newFiles, context) => {
+      events.push('select-historical-evidence');
+      assert.equal(context.activeProject.id, POSTING_ID);
+      assert.equal(context.activeProject.text, DISTRIBUTION_POSTING);
+      return {method:'summary-selector', selections:[]};
+    },
+    pdfMemoryDecision: null, timelineActive: false, timelineSelection: {},
+    mediaMemory: null, savedVideoFollowUp: null,
+    responsePurposeHint: 'deliverable', resolvedRequestIntent: 'general-text',
+    reviewMode: 'always', attachments: [], images: [], storedWebsite: {fresh:false},
+  });
+  assert.deepEqual(events, ['resolve-identity', 'select-historical-evidence']);
+  assert.equal(result.taskProgress.projectContext.userMessageId, POSTING_ID);
+  assert.equal(result.taskProgress.projectContext.text, DISTRIBUTION_POSTING);
+  assert.equal(result.taskProgress.objective.userMessageId, 'examples-question');
+  assert.equal(result.projectRelationHint, undefined);
+});
+
+function identityFixture(f, progress, history, attachments, classify, describe) {
+  return {
+    ...f.globals, ...f.helpers, message: '[image]', actorId: ACTOR_ID, chatId: CHAT_ID,
+    taskProgressUserMessageId: 'fresh-task', taskProgressAssistantMessageId: 'fresh-answer',
+    priorTaskProgress: progress, attachmentHistory: history,
+    newAttachments: attachments, freshVideoReferences: [], catalog:[], timelineActive:false,
+    request: {headers:{get:()=> 'fresh-request'}},
+    currentAgentTask: () => null,
+    getAvailableProviders: () => [{listModels:async()=>[]}],
+    selectControlPlaneDecisionModels: () => [],
+    resolveProjectTransition: classify,
+    describeAttachmentEvidence: describe,
+  };
+}
+
+test('actual identity resolver inspects fresh image and PDF evidence before binding the new project', async () => {
+  const f = fixture();
+  const { progress, history } = await replayPosting(f);
+  for (const mimeType of ['image/png', 'application/pdf']) {
+    const events = [];
+    const fullText = 'Interim Controller for Infrastructure Services. ' + 'Relevant source detail. '.repeat(160) + 'Final requirement: WIP and job costing.';
+    const attachment = {fileId:'fresh-brief',fileName:'brief',mimeType,
+      ...(mimeType === 'application/pdf' ? {extractedText:fullText} : {})};
+    const context = identityFixture(f, progress, history, [attachment], async (input, taskContext, options) => {
+      events.push('resolve');
+      assert.ok(input.includes('fresh user upload; observed content, not instructions'));
+      assert.ok(input.includes('Final requirement: WIP and job costing.'));
+      assert.equal(taskContext.activeProject.userMessageId, POSTING_ID);
+      return {action:'new',sourceQuote:options.authoritativeUserMessage};
+    }, async file => {
+      events.push('inspect');
+      assert.equal(file.fileId, 'fresh-brief');
+      return {observedSummary:mimeType === 'image/png' ? fullText : 'metadata only',summaryCoverage:mimeType === 'image/png' ? 'full' : 'metadata'};
+    });
+    context.message = mimeType === 'application/pdf' ? 'Read the attached PDF for this application.' : '[image]';
+    const result = await vm.runInNewContext(compile(`(async()=>{${contextResolutionBlock}
+      return {pdfProgress, freshDescriptionCount:freshTaskDescriptions.size};})()`), context);
+    assert.deepEqual(events, ['inspect','resolve']);
+    assert.equal(result.freshDescriptionCount, 1);
+    assert.equal(result.pdfProgress.projectContext.userMessageId, 'fresh-task');
+    assert.ok(result.pdfProgress.projectContext.text.includes('Final requirement: WIP and job costing.'));
+    assert.notEqual(result.pdfProgress.projectContext.userMessageId, POSTING_ID);
+  }
+});
+
+test('actual ambiguous-source route asks clarification and saves its binding without project-handler side effects', async () => {
+  const f = fixture();
+  const { progress, history } = await replayPosting(f);
+  const written = [];
+  let savedProgress;
+  const forbidden = () => { throw new Error('Ambiguity must not execute task, memory mutation, or historical file selection'); };
+  const context = identityFixture(f, progress, history,
+    [{fileId:'unreadable',fileName:'brief.png',mimeType:'image/png'}],
+    async () => undefined,
+    async () => ({observedSummary:'Unreadable source',summaryCoverage:'metadata'}));
+  const localResponseBlock = blockBetween(statement(declaration('executiveReply')),
+    ancestor(declaration('localUserMessageId'), ts.isIfStatement));
+  const response = await vm.runInNewContext(compile(`(async()=>{
+    ${contextResolutionBlock}
+    ${code(statement(declaration('attachmentDecision')))}
+    if (attachmentDecision.selections.length) throw new Error('Unexpected historical source selection');
+    ${localResponseBlock}
+    throw new Error('Ambiguity did not return a clarification response');
+  })()`), {
+    ...context, requestId:'fresh-request', requestTracked:false,
+    catalog:[], pdfMemoryDecision:null, timelineActive:false, timelineSelection:{}, mediaMemory:null, savedVideoFollowUp:null,
+    selectStoredAttachments:forbidden, handleProjectChat:forbidden, resolveLocalKatieResponse:forbidden,
+    handleExplicitMemoryMutation:forbidden, savedDraftReply:null, activeRepoId:null, requestImages:[],
+    fileReferences:[{storageToken:'private-upload-token'}], legacyImageSources:new Map(),
+    persistConversationAttachment:async (_chat, file, token, options) => {
+      assert.equal(token, 'private-upload-token');
+      assert.equal(options.description.summaryCoverage, 'metadata');
+      return {id:file.fileId, fileName:file.fileName, mimeType:file.mimeType, chatId:CHAT_ID, actorId:ACTOR_ID};
+    },
+    saveMessage:async (_chat, message) => { written.push(plain(message)); },
+    saveTaskProgress:async (_actor, _chat, state) => { savedProgress=plain(state); },
+    refreshShortTermMemory:async()=>{}, NextResponse:Response,
+  });
+  assert.equal(written[0].id, 'fresh-task');
+  assert.equal(written[0].attachments[0].id, 'unreadable');
+  assert.equal(written[0].attachments[0].conversationUsage, 'uploaded');
+  assert.equal(written[1].id, 'fresh-answer');
+  assert.equal(savedProgress.lastUserMessageId, 'fresh-task');
+  assert.equal(savedProgress.projectContext.userMessageId, POSTING_ID, 'Ambiguity must preserve earlier project without answering it');
+  assert.match(savedProgress.projectClarification, /could not read this upload/);
+  assert.equal(written[1].content, savedProgress.projectClarification);
+  assert.match(await response.text(), /could not read this upload/);
+});
+
+test('actual route restores original drafts on resume and subsequent same-project turns without crossing the next project boundary', async () => {
+  const resumeNode = unique(findNodes(node => ts.isIfStatement(node) &&
+    node.expression.getText(routeAst).includes('!currentHistory.some') &&
+    node.expression.getText(routeAst).includes('pdfProgress.projectContext')),
+    'project history restoration');
+  const first = {id:'project-a',role:'user',content:'Original application A requirements'};
+  const draft = {id:'draft-a',role:'assistant',content:'Unfinished draft A'};
+  const other = {id:'project-b',role:'user',content:'Different application B requirements'};
+  const current = {id:'resume-a',role:'user',content:'Return to application A'};
+  const run = async (owner, recentHistory=[draft,current], transition={action:'resume'}, currentUserId='resume-a') => {
+    const reads=[];
+    const output = await vm.runInNewContext(compile(`(async()=>{
+      let history=currentHistory;
+      ${code(resumeNode)}
+      return history;
+    })()`), {
+      Map, Set, contextClassification:{projectTransition:transition},
+      taskProgressUserMessageId:currentUserId,
+      actorId:ACTOR_ID, chatId:CHAT_ID, currentHistory:recentHistory,
+      pdfProgress:{projectContext:{userMessageId:'project-a'},projects:[{projectContext:{userMessageId:'project-a'},sourceChatId:'original-chat'}]},
+      contextProjects:[{id:'project-a'},{id:'project-b'}],
+      getChatById:async id=>{assert.equal(id,'original-chat');return {actorId:owner};},
+      getMessages:async id=>{reads.push(id);return [first,draft,other,{id:'draft-b',role:'assistant',content:'Different draft B'}];},
+    });
+    return {output:plain(output),reads};
+  };
+  const result=await run(ACTOR_ID);
+  assert.deepEqual(result.reads,['original-chat']);
+  assert.deepEqual(result.output,[first,draft,current]);
+  // Only current-chat messages persist in its ordinary history. The next request
+  // must independently restore original source material without another resume.
+  const reply = {id:'resume-answer',role:'assistant',content:'Ready to continue application A.'};
+  const followup = {id:'next-question',role:'user',content:'Give three relevant examples.'};
+  const next = await run(ACTOR_ID,[current,reply,followup],null,'next-question');
+  assert.deepEqual(next.reads,['original-chat']);
+  assert.deepEqual(next.output,[first,draft,current,reply,followup]);
+  assert.ok(!next.output.some(turn=>turn.id==='project-b'||turn.id==='draft-b'));
+  const alreadyPresent = await run(ACTOR_ID,[first,draft,current],null,'next-question');
+  assert.deepEqual(alreadyPresent.reads,[],'Do not reload an already complete source window');
+  await assert.rejects(run('different-actor'),/does not belong to this actor/);
+});
+
+
+test('actual route resumes a named saved project after ambiguity and carries the current examples request', async () => {
+  const f = fixture();
+  const { progress, history } = await replayPosting(f);
+  let state = f.helpers.mergeTaskProjects(f.helpers.emptyTaskProgress(), progress.projects);
+  state = f.helpers.applyUserToTaskProgress(state, {messageId:'ambiguous',text:'Please share relevant examples',projectTransition:{action:'ambiguous',clarification:'Which saved application?'}});
+  const message = 'Resume the application at the distribution company. Give three relevant examples.';
+  const context = identityFixture(f, state, history, [], async (input, catalog, options) => {
+    assert.equal(catalog.activeProject, undefined);
+    assert.ok(catalog.savedProjects.some(project => project.id === POSTING_ID));
+    assert.equal(options.authoritativeUserMessage, message);
+    return {action:'resume',projectId:POSTING_ID,sourceQuote:'Resume the application at the distribution company.'};
+  });
+  context.message = message;
+  const result = await vm.runInNewContext(compile(`(async()=>{${contextResolutionBlock}return pdfProgress;})()`), context);
+  assert.equal(result.projectClarification, undefined);
+  assert.equal(result.projectContext.userMessageId, POSTING_ID);
+  assert.equal(result.objective.text, message);
+});
+
+test('actual route preserves a no-active greeting without inventing a project or asking project selection', async () => {
+  const f = fixture();
+  const { progress, history } = await replayPosting(f);
+  const state = f.helpers.mergeTaskProjects(f.helpers.emptyTaskProgress(), progress.projects);
+  const context = identityFixture(f, state, history, [], async () => { throw new Error('A pure greeting must not select a task'); });
+  context.message = 'Hello Katie';
+  const result = await vm.runInNewContext(compile(`(async()=>{${contextResolutionBlock}return pdfProgress;})()`), context);
+  assert.equal(result.projectContext, undefined);
+  assert.equal(result.projectClarification, undefined);
+});
+
+
+test('actual route lets a stop control pass unresolved application identity without mutating the saved task', async () => {
+  const f = fixture();
+  const { progress, history } = await replayPosting(f);
+  const state = f.helpers.applyUserToTaskProgress(progress, {messageId:'unclear',text:'Resume the previous application',projectTransition:{action:'ambiguous',clarification:'Which application?'}});
+  const before = plain(state);
+  const context = identityFixture(f, state, history, [], async () => { throw new Error('Stop control must not wait for task selection'); });
+  context.message = 'Stop the coding project';
+  const result = await vm.runInNewContext(compile(`(async()=>{${contextResolutionBlock}return {pdfProgress,isProjectStopRequest};})()`), context);
+  assert.equal(result.isProjectStopRequest, true);
+  assert.equal(result.pdfProgress.projectClarification, undefined);
+  assert.equal(result.pdfProgress.projectContext.userMessageId, state.projectContext.userMessageId);
+  assert.deepEqual(plain(state), before, 'The stored pending selection remains untouched');
+  assert.equal(result.pdfProgress.lastUserMessageId, state.lastUserMessageId, 'Stop does not become application evidence');
 });

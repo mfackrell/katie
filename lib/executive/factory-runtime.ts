@@ -26,7 +26,13 @@ async function team(withDevelopment=false){
  return [lead.id,analyst.id,specialist.id];
 }
 async function reportOnce(chatId:string,key:string,message:string){
- const db=getSupabaseAdminClient(),id=factoryReplyId(key);
+ const succeeded=message.startsWith('Executive activated ');
+ const db=getSupabaseAdminClient(),id=factoryReplyId(key,succeeded);
+ if(succeeded){
+  const {data:legacy,error}=await db.from('messages').select('content').eq('id',factoryReplyId(key)).maybeSingle<{content:string}>();
+  if(error)throw Error('Executive delivery history unavailable');
+  if(legacy?.content?.startsWith('Executive activated '))return;
+ }
  const {data,error}=await db.from('messages').select('id').eq('id',id).maybeSingle<{id:string}>();
  if(error)throw Error('Executive delivery history unavailable');
  if(!data)await saveMessage(chatId,{id,role:'assistant',content:message});
@@ -183,7 +189,7 @@ export async function reconcileSpecialistFactory(){
   // must finish activation configuration/delivery after either write fails.
   if(request.status==='activated'||request.status==='blocked'){
    const {data:delivered,error:deliveryError}=await db.from('messages').select('id')
-    .eq('id',factoryReplyId(request.id)).maybeSingle();
+    .eq('id',factoryReplyId(request.id,request.status==='activated')).maybeSingle();
    if(deliveryError)throw Error('Factory delivery history unavailable');
    if(delivered){await markFactoryDelivered(request.id);continue;}
    if(request.status==='activated'){

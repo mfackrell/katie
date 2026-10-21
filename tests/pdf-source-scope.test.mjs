@@ -33,7 +33,7 @@ for(const message of ['Read annual report.pdf','Read “annual report.pdf”','R
 
 async function run(message,fresh,timelineActive=false,timelineClarification,saved=[]){
  const inspected=[],inspectedTasks=[],analysisTasks=[],retained=[],sources=new Map();
- const fixture={...scope,Error,...load('lib/uploads/pdf-inventory.ts'),newAttachments:fresh,message,pdfSourceTask:message,pdfTaskContext:null,timelineActive,timelineSelection:{clarification:timelineClarification},mediaMemory:null,savedVideoFollowUp:null,
+ const fixture={...scope,Error,...load('lib/uploads/pdf-inventory.ts'),newAttachments:fresh,message,pdfSourceTask:message,pdfTaskContext:null,pdfProgress:{projectContext:null},timelineActive,timelineSelection:{clarification:timelineClarification},mediaMemory:null,savedVideoFollowUp:null,
   catalog:catalog(saved),attachmentHistory:[],restored:{references:[],unavailable:[],sourceIds:new Set()},timelineContext:'',
   ...load('lib/chat/video-attachment-dedup.ts'),...load('lib/chat/attachment-continuity.ts'),
   fingerprintChatRequest:load('lib/chat/request-idempotency.ts').fingerprintChatRequest,
@@ -42,7 +42,7 @@ async function run(message,fresh,timelineActive=false,timelineClarification,save
   temporalIntent:timelineActive?{kind:'tail',tail:30}:null,
   selectStoredAttachments:async()=>({method:'none',selections:[]}),
   actorId:'actor',chatId:'chat',overrideProvider:null,overrideModel:null,activeRepoId:null,repoInjectionEnabled:false,
-  fileReferences:fresh,legacyImageSources:new Map(),pdfSources:sources,persistedVideoSourceByFileId:new Map(),isVideoAttachment:file=>file.mimeType.startsWith('video/'),
+  fileReferences:fresh,legacyImageSources:new Map(),freshTaskDescriptions:new Map(),pdfSources:sources,persistedVideoSourceByFileId:new Map(),isVideoAttachment:file=>file.mimeType.startsWith('video/'),
   describeAttachmentEvidence:async file=>({observedSummary:`TEXT-${file.fileId}`,summaryModel:'offline',summaryCoverage:'partial'}),
   persistConversationAttachment:async(_chat,file,_token,{description})=>{retained.push(file.fileId);return {...file,id:'saved-'+file.fileId,...description};},
   inspectSavedPdf:async(_chat,source,_actor,task,_owns,analysisTask)=>{inspected.push(source.fileId);inspectedTasks.push(task);analysisTasks.push(analysisTask);return {version:'test',pages:[{physicalPage:1,observations:`EVIDENCE-${source.fileId}`} ]};},
@@ -295,5 +295,45 @@ test('generic unrelated actions do not authorize a PDF merely because it is atta
 test('attachment-qualified document nouns authorize the selected uploaded PDF',async()=>{
  for(const message of ['Summarize the attached contract','Review the uploaded invoice','Analyze the attached rental agreement']){
   const result=await run(message,[pdf('a','a.pdf')]);assert.deepEqual(result.inspected,['a'],message);
+ }
+});
+
+test('early task identity classification respects PDF source authorization before reading or exposing text',async()=>{
+ const task=load('lib/chat/task-progress.ts');
+ const priorTaskProgress=task.rebuildTaskProgress([{id:'existing-project',role:'user',content:'New project: prepare a professional application.'}]);
+ const cases=[
+  ['Keep these PDFs for later; tell me a joke',[pdf('one','report.pdf'),pdf('two','other.pdf')],[]],
+  ['Read only report.pdf',[pdf('one','report.pdf'),pdf('two','other.pdf')],['one']],
+  ['Read only "report.pdf", ignore "other.pdf"',[pdf('one','report.pdf'),pdf('two','other.pdf')],[]],
+  ['Summarize notes.txt',[pdf('one','report.pdf'),{fileId:'note',fileName:'notes.txt',mimeType:'text/plain',extractedText:'NOTE-SOURCE'}],[]],
+  ['Help me apply to this attached PDF',[pdf('one','opportunity.pdf')],['one']],
+  ['Help me prepare a proposal using this attached PDF',[pdf('one','brief.pdf')],['one']],
+  ['Use this attached PDF to answer the question',[pdf('one','brief.pdf')],['one']],
+  ['Do not help me apply to this attached PDF; save it for later',[pdf('one','brief.pdf')],[]],
+  ['Keep this PDF for later; help me write a poem',[pdf('one','brief.pdf')],[]],
+ ];
+ for(const [message,fresh,authorized] of cases){
+  const descriptions=[],classified=[];
+  await vm.runInNewContext(code(`(async()=>{
+   ${part('    let contextClassification:', '    const pdfReviewContinuation =')}
+   return pdfProgress;
+  })()`),{
+   ...scope,...task,Map,Set,priorTaskProgress,message,newAttachments:fresh,catalog:[],timelineActive:false,
+   attachmentHistory:[],freshVideoReferences:[],taskProgressUserMessageId:'current-turn',
+   request:{headers:{get:()=> 'test-request'}},currentAgentTask:()=>null,
+   getAvailableProviders:()=>[{listModels:async()=>[]}],selectControlPlaneDecisionModels:()=>[],
+   describeAttachmentEvidence:async file=>{descriptions.push(file.fileId);return {observedSummary:'Metadata',summaryCoverage:'metadata'};},
+   resolveProjectTransition:async (text,context,options)=>{
+    classified.push(text);
+    assert.equal(context.activeProject.userMessageId,'existing-project');
+    assert.equal(options.authoritativeUserMessage,message,'Only literal user text may authorize a transition');
+    return undefined; // Required resolver chose same; preserve the active project.
+   },
+  });
+  assert.deepEqual(descriptions,authorized,`${message}: only authorized PDFs may be described for identity`);
+  assert.equal(classified.length,1,'Existing project identity is checked from the actual user request');
+  for(const file of fresh.filter(file=>file.mimeType==='application/pdf')){
+   assert.equal(classified[0].includes(`TEXT-${file.fileId}`),authorized.includes(file.fileId),`${message}: classifier scope for ${file.fileName}`);
+  }
  }
 });

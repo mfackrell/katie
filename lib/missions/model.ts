@@ -38,23 +38,37 @@ export async function missionModel(claim:Claim,instruction:string,input:string,t
    &&typeof checkpoint.response.model==='string'&&Array.isArray(checkpoint.response.sources)&&Array.isArray(checkpoint.response.calculations))return checkpoint.response;
  const attemptedModels:string[]=[];
  let last:unknown;let priorModelFailure:MissionModelFailure|undefined;
+ const gameSpecification=claim.mission.project_kind==='specification'&&(claim.mission.project_evidence as {projectProfile?:string}|null)?.projectProfile==='game';
  const admissionFailure=(error:MissionAdmissionError)=>new MissionModelFailure(error.message,{...priorModelFailure?.partial,admissionDenied:true,requestedTokens:error.requestedTokens,remainingTokens:error.capacity?.remainingTokens,callsRemaining:error.capacity?.callsRemaining,routingCallsRemaining:error.capacity?.routingCallsRemaining,attemptedModels});
  let choices:OrchestrationChoice[];
- try{choices=await orchestrationChoices({objective:claim.mission.objective,instruction:claim.job.instruction+'\n'+instruction,
+ try{choices=await orchestrationChoices({objective:claim.mission.objective,instruction:
+  `CURRENT EXECUTION STAGE: ${claim.job.role}. Available tools for THIS call: ${tools}. `+
+  (['compose','revise'].includes(claim.job.role)?'Synthesize the saved worker evidence; research has already been delegated. Do not classify this as a new web search. ':'')+
+  (claim.job.role==='review'?'Independently verify the saved work and original objective. ':'')+claim.job.instruction,
   requestId:claim.job.id,accounting:{
    reserve:async(model,tokens)=>{if(Date.now()>=executionDeadline-5000)throw Error('Mission execution time window exhausted before routing dispatch');const id=randomUUID();if(!await rpc<boolean>('reserve_mission_routing_call',{p_id:claim.job.id,p_lease:claim.job.lease,p_call:id,p_model:model,p_tokens:tokens}))await explainAdmissionDenial(claim,tokens);return id;},
    finish:async(id,tokens)=>{await rpc('finish_mission_call',{p_call:id,p_tokens:tokens});}
   },research:tools==='research',review:claim.job.role==='review',
   // The server already knows specification writing is architecture/planning.
   // Avoid paying a second classifier to rediscover this known phase.
-  planning:claim.job.role==='plan'||(claim.mission.project_kind==='specification'&&['compose','revise'].includes(claim.job.role))});
+  planning:claim.job.role==='plan'||(claim.mission.project_kind==='specification'&&['compose','revise'].includes(claim.job.role)),
+  synthesis:['compose','revise'].includes(claim.job.role)});
  }catch(error){if(error instanceof MissionAdmissionError&&error.capacity?.authorized)throw admissionFailure(error);throw error;}
  const failedProviders=new Set<string>();
+ let expandedOutputTokens:number|undefined;
  for(const choice of choices){
   if(failedProviders.has(choice.provider.name))continue;
   attemptedModels.push(choice.provider.name+':'+choice.modelId);
   try{
-   const result=await executeMissionModel(claim,instruction,input,tools,choice,executionDeadline);
+   let result:ModelResult;
+   try{result=await executeMissionModel(claim,instruction,input,tools,choice,executionDeadline,expandedOutputTokens);}
+   catch(error){
+    if(gameSpecification||!(error instanceof MissionModelFailure)||error.partial.incompleteReason!=='max_output_tokens'||expandedOutputTokens||Number(error.partial.outputTokenLimit)>=12000)throw error;
+    // One capacity correction on the selected model, within the same ledger and
+    // wall-clock window. Never rotate through providers with an identical cap.
+    expandedOutputTokens=Math.min(12000,Number(error.partial.outputTokenLimit)*2);
+    result=await executeMissionModel(claim,instruction,input,tools,choice,executionDeadline,expandedOutputTokens);
+   }
    const complete={...result,provider:choice.provider.name,routingReason:choice.reasoning,attemptedModels};
    if(checkpointHash&&!await rpc<boolean>('checkpoint_mission_review_model',{p_id:claim.job.id,p_lease:claim.job.lease,p_hash:checkpointHash,p_response:complete}))throw Error('Worker no longer authorized to persist review checkpoint');
    return complete;
@@ -67,6 +81,10 @@ export async function missionModel(claim:Claim,instruction:string,input:string,t
     continue;
    }
    const detail=error instanceof Error?error.message:String(error);
+   const truncated=error instanceof MissionModelFailure&&error.partial.incompleteReason==='max_output_tokens';
+   // General synthesis expands capacity once; game specifications already use
+   // their larger phase envelope and may use one eligible alternative per provider.
+   if(truncated&&!gameSpecification)throw new MissionModelFailure(error.message,{...error.partial,attemptedModels});
    if(/allowance exhausted|no longer authorized|permission denied|Invalid tool|Unpermitted|tool arguments instead|execution time window/i.test(detail)||(error instanceof MissionModelFailure&&!['server_error','rate_limit_exceeded','insufficient_quota'].includes(String(error.partial.providerErrorCode))&&!(error.partial.responseStatus==='incomplete'&&(error.partial.incompleteReason===null||error.partial.incompleteReason==='max_output_tokens'))))throw error;
    if(error instanceof MissionModelFailure&&error.partial.responseStatus==='incomplete'){failedProviders.add(choice.provider.name);}else if(await orchestrationFailure(choice,error)==='provider'||isCreditExhaustion(error))failedProviders.add(choice.provider.name);
 
@@ -78,10 +96,10 @@ export async function missionModel(claim:Claim,instruction:string,input:string,t
  if(last instanceof Error)throw new MissionModelFailure(last.message,{attemptedModels,providerFailure:true});
  throw Error('No eligible orchestration model could execute this assignment');
 }
-async function executeMissionModel(claim:Claim,instruction:string,input:string,tools:'none'|'research'|'calculate',choice:OrchestrationChoice,executionDeadline:number):Promise<ModelResult>{
+async function executeMissionModel(claim:Claim,instruction:string,input:string,tools:'none'|'research'|'calculate',choice:OrchestrationChoice,executionDeadline:number,expandedOutputTokens?:number):Promise<ModelResult>{
  const selectedModel=choice.modelId;
  const gameSpecification=claim.mission.project_kind==='specification'&&(claim.mission.project_evidence as {projectProfile?:string}|null)?.projectProfile==='game';
- const outputTokens=gameSpecification&&['compose','revise'].includes(claim.job.role)?16000:claim.mission.project_kind==='specification'&&['compose','revise'].includes(claim.job.role)?6000:claim.job.role==='review'?(gameSpecification?10000:5000):3000;
+ const outputTokens=expandedOutputTokens??(gameSpecification&&['compose','revise'].includes(claim.job.role)?16000:['compose','revise'].includes(claim.job.role)?6000:claim.job.role==='review'?(gameSpecification?10000:5000):3000);
  const client=boundedProvider(choice);
  const sources:ModelResult['sources']=[],calculations:unknown[]=[];
  if(!fitsMissionEnvelope(instruction,input,missionInputLimit(claim)))throw Error('Mission evidence exceeds bounded context. Narrow the objective or deliverable.');
@@ -111,7 +129,7 @@ async function executeMissionModel(claim:Claim,instruction:string,input:string,t
   try{
    const response=await client.responses.create(request,{timeout:inferenceTimeout});
    await rpc('finish_mission_call',{p_call:callId,p_tokens:response.usage?.total_tokens??null});
-   if(response.status!=='completed')throw new MissionModelFailure('Model output incomplete: '+response.status,{responseStatus:response.status,incompleteReason:response.incomplete_details?.reason??null,outputTokenLimit:outputTokens,providerErrorCode:response.error?.code??null,providerErrorMessage:response.error?.message?.slice(0,600)??null});
+   if(response.status!=='completed')throw new MissionModelFailure('Model output incomplete: '+response.status,{responseStatus:response.status,incompleteReason:response.incomplete_details?.reason??null,outputTokenLimit:outputTokens,partialText:response.output_text??'',provider:choice.provider.name,model:selectedModel,providerErrorCode:response.error?.code??null,providerErrorMessage:response.error?.message?.slice(0,600)??null});
    text=response.output_text?.trim()??'';
    const output=response.output as unknown as Array<Record<string,unknown>>;
    for(const item of output){for(const block of (Array.isArray(item.content)?item.content:[]) as Array<Record<string,unknown>>){for(const a of (Array.isArray(block.annotations)?block.annotations:[]) as Array<Record<string,unknown>>){if(a.type==='url_citation'&&typeof a.url==='string'&&/^https?:\/\//.test(a.url))sources.push({url:a.url,title:String(a.title??'')});}}}

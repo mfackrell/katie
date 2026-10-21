@@ -23,8 +23,25 @@ export type AnsweredTaskQuestion = TaskQuestion & {
 };
 export type UserTurnIntent = "new_task" | "revision" | "feedback" | "answer" | "clarification" | "conversation" | "continuation";
 
+export type ProjectTransition = {
+  action: "new" | "resume" | "ambiguous";
+  projectId?: string;
+  /** Exact current user wording supporting a change, never attachment text. */
+  sourceQuote?: string;
+  clarification?: string;
+};
+export type ProjectSnapshot = {
+  sourceChatId?: string;
+  updatedAt?: string;
+  projectContext: { text: string; userMessageId: string };
+  objective: { text: string; userMessageId: string } | null;
+  pending: TaskQuestion[];
+  answered: AnsweredTaskQuestion[];
+};
 export type TaskProgressState = {
   version: 1;
+  projects?: ProjectSnapshot[];
+  projectClarification?: string;
   objective: { text: string; userMessageId: string } | null;
   /** Firsthand overarching project/context, separate from the active question. */
   projectContext?: { text: string; userMessageId: string } | null;
@@ -39,7 +56,6 @@ export type TaskProgressState = {
 };
 
 export type ProgressMessage = Pick<Message, "id" | "role" | "content">;
-const MAX_ANSWERED = 18;
 const MAX_QUESTIONS = 8;
 
 function explicitlyStartsProject(text: string): boolean {
@@ -190,7 +206,92 @@ export function emptyTaskProgress(): TaskProgressState {
   return { version: 1, objective: null, stage: "working", nextAction: "continue_original_goal", pending: [], answered: [], lastAssistantMessageId: null, lastUserMessageId: null };
 }
 
+/** Persist original project sources outside lossy conversation summaries. */
+function checkpointProject(state: TaskProgressState, changed = false): TaskProgressState {
+  if (!state.projectContext) return state;
+  const prior = state.projects?.find(project =>
+    project.projectContext.userMessageId === state.projectContext!.userMessageId);
+  const sourceChatId = prior?.sourceChatId;
+  const updatedAt = changed ? new Date(Math.max(Date.now(), Date.parse(prior?.updatedAt ?? "") + 1 || 0)).toISOString() : prior?.updatedAt;
+  const snapshot: ProjectSnapshot = {
+    ...(sourceChatId ? {sourceChatId} : {}),
+    ...(updatedAt ? {updatedAt} : {}),
+    projectContext: state.projectContext, objective: state.objective,
+    pending: state.pending, answered: state.answered,
+  };
+  return { ...state, projects: [...(state.projects ?? []).filter(project =>
+    project.projectContext.userMessageId !== state.projectContext!.userMessageId), snapshot] };
+}
+
+export function mergeTaskProjects(state: TaskProgressState, projects: ProjectSnapshot[]): TaskProgressState {
+  // A copied project never outranks a later edit simply because it is local.
+  // Importing does not select a different project. Equal versions favor local state.
+  const byId = new Map<string, ProjectSnapshot>();
+  for (const project of [...projects, ...(checkpointProject(state).projects ?? [])]) {
+    const id = project.projectContext.userMessageId;
+    const prior = byId.get(id);
+    if (!prior || (project.updatedAt ?? "") >= (prior.updatedAt ?? "")) byId.set(id, project);
+  }
+  const current = state.projectContext ? byId.get(state.projectContext.userMessageId) : undefined;
+  return { ...state, ...(current ? {projectContext: current.projectContext,
+    objective: current.objective, pending: current.pending, answered: current.answered} : {}),
+    projects: [...byId.values()] };
+}
+
+export function taskProjectCatalog(state: TaskProgressState): Array<{ id: string; text: string; sourceChatId?: string }> {
+  return (checkpointProject(state).projects ?? []).map(project => ({
+    id: project.projectContext.userMessageId, text: project.projectContext.text, sourceChatId: project.sourceChatId,
+  }));
+}
+
 export function applyUserToTaskProgress(
+  previous: TaskProgressState,
+  input: { messageId: string; text: string; projectRelation?: "new_project" | "same_project"; projectTransition?: ProjectTransition },
+): TaskProgressState {
+  if (previous.lastUserMessageId === input.messageId) return previous;
+  const state = checkpointProject(previous);
+  const transition = input.projectTransition;
+  const turnIntent = classifyUserTurn(input.text);
+  // A greeting must not become a synthetic project that legitimizes a later
+  // otherwise ambiguous application question.
+  if (!state.projectContext && !transition && turnIntent === "conversation") {
+    return { ...state, lastUserMessageId: input.messageId, lastUserIntent: "conversation" };
+  }
+  if (!state.projectContext && !transition && (state.projects?.length ?? 0) > 0 &&
+      turnIntent !== "conversation" && !isProjectBrief(input.text)) {
+    return { ...state, lastUserMessageId: input.messageId,
+      projectClarification: "Which saved project should I continue?" };
+  }
+  if (transition?.action === "ambiguous") {
+    return { ...state, lastUserMessageId: input.messageId, projectClarification:
+      transition.clarification?.trim() || "Which saved project should this request continue?" };
+  }
+  const quote = transition?.sourceQuote?.trim();
+  const sourced = Boolean(quote && input.text.includes(quote));
+  if (transition && (transition.action === "new" || transition.action === "resume") && !sourced) {
+    return { ...state, lastUserMessageId: input.messageId,
+      projectClarification: "Which project should this request address? I could not verify the proposed change against your message." };
+  }
+  if (transition?.action === "resume") {
+    const target = state.projects?.find(project => project.projectContext.userMessageId === transition.projectId);
+    if (!target) return { ...state, lastUserMessageId: input.messageId,
+      projectClarification: "Which saved project do you want to resume? The proposed project could not be found." };
+    // Resuming is a control transition, never an answer to an old pending question.
+    return checkpointProject({ ...state, ...target, projectClarification: undefined,
+      objective: {text:input.text,userMessageId:input.messageId},
+      lastUserMessageId: input.messageId, lastAssistantMessageId: null,
+      lastUserIntent: "continuation", stage: target.pending.length ? "awaiting_user_answer" : "working",
+      nextAction: target.pending.length ? "await_user_answers" : "continue_original_goal" });
+  }
+  // A routing hint alone is not authoritative evidence that a parent changed.
+  const relation = transition?.action === "new" ? "new_project"
+    : transition?.action === "resume" ? "same_project"
+    : input.projectRelation === "new_project" ? undefined : input.projectRelation;
+  const next = applyUserTurn({ ...state, projectClarification: undefined }, { ...input, projectRelation: relation });
+  return checkpointProject(next, true);
+}
+
+function applyUserTurn(
   previous: TaskProgressState,
   input: { messageId: string; text: string; projectRelation?: "new_project" | "same_project" },
 ): TaskProgressState {
@@ -205,8 +306,8 @@ export function applyUserToTaskProgress(
     (input.projectRelation !== "same_project" && isProjectBrief(text) &&
       currentQuestion !== (previous.projectContext ?? previous.objective)?.text);
   const projectContext = startsNewProject
-    ? {text: currentQuestion.slice(0, 4000), userMessageId: input.messageId}
-    : (previous.projectContext ?? previous.objective ?? {text: currentQuestion.slice(0, 4000), userMessageId: input.messageId});
+    ? {text: currentQuestion, userMessageId: input.messageId}
+    : (previous.projectContext ?? previous.objective ?? {text: currentQuestion, userMessageId: input.messageId});
   const pending = previous.pending;
   const numbered = splitNumberedAnswers(text);
   const intent = startsNewProject ? "new_task" : classifyUserTurn(text);
@@ -216,18 +317,18 @@ export function applyUserToTaskProgress(
     for (const question of pending) {
       const specific = numbered.get(question.index);
       if (specific && !isTerminologyClarification(specific)) {
-        answered.push({ ...question, userMessageId: input.messageId, answer: specific.slice(0, 1300), exactNumberedMatch: true });
+        answered.push({ ...question, userMessageId: input.messageId, answer: specific, exactNumberedMatch: true });
         continue;
       }
       // Keep compound questions open. Preserve any explicit partial fact as a
       // literal statement, never infer "no experience" from "what does it mean".
       const partial = partialFactsFromClarification(specific ?? (numbered.size === 0 && pending.length === 1 ? text : ""));
-      if (partial) answered.push({ ...question, userMessageId: input.messageId, answer: partial.slice(0, 1300), exactNumberedMatch: Boolean(specific), partial: true });
+      if (partial) answered.push({ ...question, userMessageId: input.messageId, answer: partial, exactNumberedMatch: Boolean(specific), partial: true });
       remaining.push(question);
     }
     return {
       ...previous, projectContext, pending: remaining,
-      answered: [...previous.answered, ...answered].slice(-MAX_ANSWERED),
+      answered: [...previous.answered, ...answered],
       stage: "awaiting_user_answer", nextAction: "await_user_answers",
       lastUserMessageId: input.messageId, lastUserIntent: "clarification",
     };
@@ -237,9 +338,9 @@ export function applyUserToTaskProgress(
     return {
       ...previous,
       projectContext,
-      ...(intent === "new_task" || !previous.objective ? { objective: { text: currentQuestion.slice(0, 2000), userMessageId: input.messageId } } : {}),
+      ...(intent === "new_task" || !previous.objective ? { objective: { text: currentQuestion, userMessageId: input.messageId } } : {}),
       pending: intent === "new_task" || intent === "revision" ? [] : previous.pending,
-      answered: intent === "new_task" ? [] : previous.answered,
+      answered: startsNewProject ? [] : previous.answered,
       stage: intent === "conversation" && previous.pending.length ? "awaiting_user_answer" : "working",
       nextAction: intent === "conversation" && previous.pending.length ? "await_user_answers" : "continue_original_goal",
       lastUserMessageId: input.messageId,
@@ -251,12 +352,12 @@ export function applyUserToTaskProgress(
   for (const question of pending) {
     const specific = numbered.get(question.index);
     if (specific) {
-      answered.push({ ...question, userMessageId: input.messageId, answer: specific.slice(0, 1300), exactNumberedMatch: true });
+      answered.push({ ...question, userMessageId: input.messageId, answer: specific, exactNumberedMatch: true });
     } else if (numbered.size === 0 && pending.length === 1) {
-      answered.push({ ...question, userMessageId: input.messageId, answer: text.slice(0, 1300), exactNumberedMatch: false });
+      answered.push({ ...question, userMessageId: input.messageId, answer: text, exactNumberedMatch: false });
     } else if (numbered.size === 0) {
       // Don't invent a mapping for an unnumbered answer to multiple questions.
-      answered.push({ ...question, userMessageId: input.messageId, answer: text.slice(0, 1300), exactNumberedMatch: false });
+      answered.push({ ...question, userMessageId: input.messageId, answer: text, exactNumberedMatch: false });
     } else {
       remaining.push(question);
     }
@@ -265,7 +366,7 @@ export function applyUserToTaskProgress(
     ...previous,
     projectContext,
     pending: remaining,
-    answered: [...previous.answered, ...answered].slice(-MAX_ANSWERED),
+    answered: [...previous.answered, ...answered],
     stage: "answers_received",
     nextAction: "advance_after_answers",
     lastUserMessageId: input.messageId,
@@ -293,7 +394,7 @@ export function applyAssistantToTaskProgress(
       .filter((question, index, items) => items.findIndex(other => normalized(other.text) === normalized(question.text)) === index)
       .slice(0, MAX_QUESTIONS)
     : questions;
-  return { ...previous, pending, stage: pending.length ? "awaiting_user_answer" : "working", nextAction: pending.length ? "await_user_answers" : "continue_original_goal", lastAssistantMessageId: input.messageId };
+  return checkpointProject({ ...previous, pending, stage: pending.length ? "awaiting_user_answer" : "working", nextAction: pending.length ? "await_user_answers" : "continue_original_goal", lastAssistantMessageId: input.messageId }, true);
 }
 
 /** Reconstruct a partial ledger from durable chat messages if the cache was absent. */
@@ -325,12 +426,14 @@ export function syncTaskProgress(previous: TaskProgressState | null, history: Pr
         : question;
     return {
       ...recent,
+      projects: [...(checkpointProject(previous).projects ?? []), ...(recent.projects ?? [])]
+        .filter((item, index, all) => !all.slice(index + 1).some(other => other.projectContext.userMessageId === item.projectContext.userMessageId)),
       objective: recent.objective ?? previous.objective,
       projectContext,
       pending: recent.pending.map(recoverProjectBinding),
       answered: [...(changedProject ? [] : previous.answered), ...recent.answered.map(recoverProjectBinding)]
         .filter((item, index, array) => array.findIndex(other => other.id === item.id && other.userMessageId === item.userMessageId) === index)
-        .slice(-MAX_ANSWERED),
+        ,
     };
   }
   let state = previous;
@@ -342,7 +445,7 @@ export function syncTaskProgress(previous: TaskProgressState | null, history: Pr
 }
 
 export function formatTaskProgress(progress: TaskProgressState): string {
-  const completed = progress.answered.slice(-10).map(item => ({
+  const completed = progress.answered.map(item => ({
     assistantQuestionSource: item.assistantMessageId,
     userAnswerSource: item.userMessageId,
     question: item.text,
@@ -355,7 +458,9 @@ export function formatTaskProgress(progress: TaskProgressState): string {
     "This record links prior assistant QUESTIONS to subsequent user ANSWERS. The user's answers are authoritative. Assistant questions only explain what was being answered: do NOT adopt other assistant statements as facts or constraints.",
     "A follow-up answer advances an existing task. Do not restart the original assessment, re-ask answered questions, or turn confirmations into another generic summary. Complete the next useful step for the user's goal, subject to explicit new instructions.",
     "Do not treat this record as a permanent instruction. A user's explicit new request overrides old progress; a cached objective is provisional.",
-    "PARENT PROJECT CONTEXT (firsthand, advisory; only applicable if the current question refers to the same project): " + JSON.stringify(progress.projectContext ?? null),
+    "ACTIVE PARENT PROJECT (firsthand source; governs relevance until the user changes project): " + JSON.stringify(progress.projectContext ?? null),
+    ...(progress.projectClarification ? ["UNRESOLVED PROJECT: " + progress.projectClarification + " Ask this clarification before producing a project-specific answer."] : []),
+    "HISTORICAL PROJECT IDENTITIES (reference only; their objectives do not govern this turn): " + JSON.stringify((progress.projects ?? []).filter(project => project.projectContext.userMessageId !== progress.projectContext?.userMessageId).map(project => ({id:project.projectContext.userMessageId}))),
     "CURRENT QUESTION OR DELIVERABLE (authoritative for this turn, distinct from the parent project): " + JSON.stringify(progress.objective),
     "Interpret generic requests for relevant experience or examples against the full applicable parent project, not against a narrower question asked earlier. Prior question-specific evidence priorities, exclusions and example sets expire with their original deliverable; factual corrections remain valid.",
     "Latest user turn type (advisory; verify against literal user request): " + (progress.lastUserIntent ?? "unspecified"),
