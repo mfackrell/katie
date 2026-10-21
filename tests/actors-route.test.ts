@@ -12,13 +12,15 @@ type DbState = {
   short_term_memory: Row[];
   intermediate_memory: Row[];
   long_term_memory: Row[];
+  actor_long_term_memory?: Row[];
+  actor_memory_calibration_backups?: Row[];
 };
 
 class Query {
   constructor(
     private readonly state: DbState,
     private readonly table: keyof DbState,
-    private readonly mode: "select" | "update" = "select",
+    private readonly mode: "select" | "update" | "insert" = "select",
     private payload: Row | null = null,
     private filters: Array<{ field: string; value: unknown; op: "eq" }> = [],
   ) {}
@@ -30,6 +32,10 @@ class Query {
   update(payload: Row) {
     this.payload = payload;
     return new Query(this.state, this.table, "update", this.payload, this.filters);
+  }
+
+  insert(payload: Row) {
+    return new Query(this.state, this.table, "insert", payload, this.filters);
   }
 
   upsert(payload: Row) {
@@ -46,13 +52,20 @@ class Query {
     return this.resolve<T>();
   }
 
+  single<T>() {
+    return this.resolve<T>();
+  }
+
   then(resolve: (value: unknown) => unknown, reject?: (error: unknown) => unknown) {
     return this.resolve().then(resolve, reject);
   }
 
   private async resolve<T>(): Promise<{ data: T; error: null }> {
-    const tableRows = this.state[this.table];
+    const tableRows = (this.state[this.table] ??= []);
 
+    if (this.mode === "insert") {
+      tableRows.push({ ...(this.payload ?? {}) });
+    }
     if (this.mode === "update") {
       for (let i = 0; i < tableRows.length; i += 1) {
         if (this.matches(tableRows[i])) {
@@ -152,4 +165,53 @@ test("review-only PATCH persists mode without changing prompt or routing; invali
   assert.equal(state.actors[0].review_mode, "always");
   assert.equal((await patch("off")).status, 200);
   assert.equal(state.actors[0].review_mode, "off");
+});
+
+
+test("memory calibration merges only signed approved duplicates, preserving all facts and restoration backup", async()=>{
+ const actorId="ab234567-1234-4321-8765-123456789abc";
+ const original={version:3,purpose:"Actor memory",entries:[
+   {key:"a",value:"Original project recovery fact",source:"user-stated",evidenceMessageIds:["m1"]},
+   {key:"b",value:"Complementary project recovery detail",source:"user-stated",evidenceMessageIds:["m2"]},
+   {key:"c",value:"Unrelated useful work experience",source:"user-stated"}
+ ]};
+ const state:DbState={actors:[{id:actorId,name:"Advisor",system_prompt:"Executive project applications",parent_actor_id:null,routing_profile:null,created_at:"x",updated_at:"x"}],managed_agents:[],chats:[],messages:[],short_term_memory:[],intermediate_memory:[],long_term_memory:[],actor_long_term_memory:[{actor_id:actorId,revision:5,content:original}],actor_memory_calibration_backups:[]};
+ (globalThis as any).__KATIE_SUPABASE_ADMIN_CLIENT__=createFakeClient(state);
+ process.env.OPENAI_API_KEY="test-only-signing-key";
+ const {PATCH}=loadPatchHandler();
+ const {createHash,createHmac}=require("node:crypto") as typeof import("node:crypto");
+ const hash=createHash("sha256").update(JSON.stringify(original)).digest("hex");
+ const group={type:"redundancy",keys:["a","b"],reason:"Overlapping statements"};
+ const groups=[group];
+ const proof=createHmac("sha256",process.env.OPENAI_API_KEY).update(JSON.stringify({actorId,hash,groups})).digest("hex");
+ const body={calibration:"apply",hash,proof,groups,approved:groups};
+ const response=await PATCH(new NextRequest("http://localhost/api/actors?id="+actorId,{method:"PATCH",headers:{"content-type":"application/json"},body:JSON.stringify(body)}));
+ assert.equal(response.status,200,JSON.stringify(await response.json()));
+ const saved=(state.actor_long_term_memory![0].content as typeof original).entries;
+ assert.equal(saved.length,2);
+ assert.ok(saved.find(e=>e.key==="a")?.value.includes("Original project recovery fact"));
+ assert.ok(saved.find(e=>e.key==="a")?.value.includes("Complementary project recovery detail"));
+ assert.ok(saved.find(e=>e.key==="c"));
+ assert.equal(state.actor_memory_calibration_backups?.length,1);
+ assert.deepEqual(state.actor_memory_calibration_backups?.[0].memory_content,original);
+});
+
+test("calibration cannot apply unsigned or stale proposals",async()=>{
+ const actorId="ab234567-1234-4321-8765-123456789abc";
+ const original={version:3,purpose:"Memory",entries:[{key:"a",value:"Keep this important fact"},{key:"b",value:"Keep a second fact"}]};
+ const state:DbState={actors:[{id:actorId,name:"Advisor",system_prompt:"Applications",parent_actor_id:null,routing_profile:null,created_at:"x",updated_at:"x"}],managed_agents:[],chats:[],messages:[],short_term_memory:[],intermediate_memory:[],long_term_memory:[],actor_long_term_memory:[{actor_id:actorId,revision:2,content:original}],actor_memory_calibration_backups:[]};
+ (globalThis as any).__KATIE_SUPABASE_ADMIN_CLIENT__=createFakeClient(state);
+ process.env.OPENAI_API_KEY="test-only-signing-key";
+ const {PATCH}=loadPatchHandler();
+ const {createHash,createHmac}=require("node:crypto") as typeof import("node:crypto");
+ const hash=createHash("sha256").update(JSON.stringify(original)).digest("hex");
+ const approved=[{type:"irrelevant",keys:["a"],reason:"test"}];
+ const invalid=await PATCH(new NextRequest("http://localhost/api/actors?id="+actorId,{method:"PATCH",headers:{"content-type":"application/json"},body:JSON.stringify({calibration:"apply",hash,proof:"0".repeat(64),groups:approved,approved})}));
+ assert.equal(invalid.status,409);
+ const proof=createHmac("sha256",process.env.OPENAI_API_KEY).update(JSON.stringify({actorId,hash,groups:approved})).digest("hex");
+ const invalidHash="f".repeat(64);
+ const stale=await PATCH(new NextRequest("http://localhost/api/actors?id="+actorId,{method:"PATCH",headers:{"content-type":"application/json"},body:JSON.stringify({calibration:"apply",hash:invalidHash,proof,groups:approved,approved})}));
+ assert.equal(stale.status,409);
+ assert.equal((state.actor_long_term_memory![0].content as typeof original).entries.length,2);
+ assert.equal(state.actor_memory_calibration_backups?.length,0);
 });
