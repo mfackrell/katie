@@ -72,3 +72,11 @@ test('generic credentials are scrubbed from code, JSON and raw Authorization hea
  const clean=api.redactInspection(source);
  for(const secret of ['opaque-token-123','opaque-secret-456','opaque-json-789','opaque-key-123','opaque-refresh-456','opaque-bearer-789'])assert.equal(clean.includes(secret),false,secret);
 });
+
+test('redaction preserves TypeScript primitive annotations instead of inventing syntax defects',()=>{
+ const {api}=repositoryFixture();
+ const source='export function signature(payload: string, secret: string): string {\n const token: string = "runtime-placeholder";\n return payload;\n}';
+ assert.equal(api.redactInspection(source),source.replace('runtime-placeholder','[REDACTED]'));
+ const redacted=api.redactInspection('const token = "opaque-value";');
+ assert.equal(redacted,'const token = "[REDACTED]";');
+});

@@ -12,7 +12,7 @@ import type { AgentTask } from '@/lib/agents/policy';
 import { missionModel,MissionModelFailure } from './model';
 import {fitsMissionEnvelope} from './request-budget';
 import { rpc,readMission } from './store';
-import { ASSESSMENT_INSTRUCTION,REVIEW_INSTRUCTION } from '@/lib/collaboration/required-review';
+import { ASSESSMENT_INSTRUCTION,REVIEW_INSTRUCTION } from './review-instructions';
 import { validateAssessment,validateAnswerReview,acceptanceIds } from '@/lib/collaboration/review-contract';
 import { researchRecoveryEvidence } from './research-evidence';
 import { measureDeliverable } from './review-length';
@@ -36,7 +36,11 @@ export async function executeClaim(claim:Claim,model=missionModel){
  const completed=saved.jobs.filter(j=>j.status==='completed');
  const priorReviews=completed.filter(j=>j.role==='review').map(j=>({key:j.job_key,verdict:j.result?.verdict,findings:j.result?.findings,checks:j.result?.checks,clarification:j.result?.clarification}));
  const candidateEvidence=(result:Record<string,unknown>|null|undefined)=>{
-  if(mission.project_kind!=='specification'||(mission.project_evidence as {projectProfile?:string}|null)?.projectProfile!=='game'||typeof result?.text!=='string')return result;
+  if(mission.project_kind!=='specification'||(mission.project_evidence as {projectProfile?:string}|null)?.projectProfile!=='game'||typeof result?.text!=='string'){
+   if(!result)return result;
+   const evidence={...result};delete evidence.routingReason;delete evidence.attemptedModels;
+   return evidence; // Transport diagnostics remain saved; all substantive evidence stays verbatim.
+  }
   try{const plan=validateProjectPlan(parseJSON(result.text));if(!plan.game)return result;const metadata={...result};delete metadata.text;return{...metadata,specification:gameSpecificationView(plan),fullSpecificationHash:digest(plan),referenceNote:'Server-validated lossless view. contractRef and stepsRef resolve to the identical full finalContract below. Every original rule, model state, browser step and unique milestone contract is retained; the complete expanded original stays saved.'};}catch{return result;}
  };
  const repair=()=>{
@@ -168,7 +172,7 @@ export async function executeClaim(claim:Claim,model=missionModel){
   const reviewPayload={objective:mission.objective,projectEvidence:reviewEvidence,
     candidate:{key:target.job_key,result:candidateEvidence(target.result)},
     measuredLength:measured,
-    evidence:completed.filter(x=>x.role==='work'||x.role==='development').map(x=>({key:x.job_key,result:x.result})),
+    evidence:completed.filter(x=>x.role==='work'||x.role==='development').map(x=>({key:x.job_key,result:candidateEvidence(x.result)})),
     fullSourceChecks:sourceGroups.length?job.result?.sourceChecks:undefined,
     priorFindings:sourceGroups.length?priorReviews.map(({checks,...rest})=>({...rest,priorCheckCount:Array.isArray(checks)?checks.length:0})):gameReview?priorReviews.map(({checks,...rest})=>({...rest,priorCheckCount:Array.isArray(checks)?checks.length:0})):priorReviews};
   const reviewFrame=frame+'\n'+REVIEW_INSTRUCTION+(gameReview?

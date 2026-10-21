@@ -9,7 +9,7 @@ import {classifyGenerationFailure} from '@/lib/router/provider-error';
 export type OrchestrationChoice={provider:LlmProvider;modelId:string;reasoning:string};
 /** Shared by EO management and ALL mission-backed child orchestrators. No saved model pins. */
 type Accounting={reserve:(model:string,tokens:number)=>Promise<string>;finish:(id:string,tokens:number|null)=>Promise<void>};
-export async function orchestrationChoices(input:{objective:string;instruction:string;requestId:string;research?:boolean;review?:boolean;planning?:boolean;accounting?:Accounting}):Promise<OrchestrationChoice[]>{
+export async function orchestrationChoices(input:{objective:string;instruction:string;requestId:string;research?:boolean;review?:boolean;planning?:boolean;synthesis?:boolean;accounting?:Accounting}):Promise<OrchestrationChoice[]>{
  const health=await filterProvidersBySharedHealth(getAvailableProviders());
  // Gemini grounding currently has no server-enforced per-request search-use cap.
  // Never silently remove a mission's hard tool budget to enable another model.
@@ -50,7 +50,7 @@ export async function orchestrationChoices(input:{objective:string;instruction:s
   (input.research?'Native live web search with cited receipts required. ':'')+
   (input.review?'Independent substantive verification; prioritize reasoning depth. ':''),providers,{
    routingRequestId:input.requestId,candidateAllowed:(provider,model)=>inventory.get(provider)?.has(model.replace(/^models\//,''))===true,diverseFallbackProviders:true,decisionCandidatesPerProvider:4,
-   ...(input.research?{requestIntent:'web-search' as const}:input.review?{requestIntent:'assistant-reflection' as const}:input.planning?{requestIntent:'architecture-review' as const}:{})
+   ...(input.research?{requestIntent:'web-search' as const}:input.review?{requestIntent:'assistant-reflection' as const}:input.planning?{requestIntent:'architecture-review' as const}:input.synthesis?{requestIntent:'general-text' as const}:{})
   });
  const ranked=[{provider:decision.provider,modelId:decision.modelId},...decision.fallbackChain];
  const seen=new Set<string>();

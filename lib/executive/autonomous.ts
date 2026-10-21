@@ -175,7 +175,12 @@ export async function reconcileExecutiveFinance(){
   const label=d.request_key.startsWith('exec-dev-')?'Development':d.request_key.startsWith('exec-specialist-task-')?'Specialist':'Finance';
   const output=succeeded?label+' completed and passed independent review.\n\n'+missionRow.result:label+' could not complete this assignment. '+(missionRow.detail??'Independent acceptance was not established.');
   try{
-   const replyId=delegationReplyId(d.id);
+   const replyId=delegationReplyId(d.id,succeeded);
+   if(succeeded){
+    const {data:legacy,error}=await db.from('messages').select('content').eq('id',delegationReplyId(d.id)).maybeSingle<{content:string}>();
+    if(error)throw error;
+    if(legacy?.content?.startsWith(label+' completed and passed independent review.'))continue;
+   }
    const {data:existingReply,error:messageLookupError}=await db.from('messages').select('id').eq('id',replyId).maybeSingle();
    if(messageLookupError)throw messageLookupError;
    if(!existingReply)await saveMessage(d.chat_id,{id:replyId,role:'assistant',content:output+releaseNote});

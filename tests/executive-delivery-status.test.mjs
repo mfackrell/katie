@@ -22,7 +22,7 @@ test('terminal delegation waits for its durable reply, including transition/deli
   assert.equal(executiveDeliveryPending([{...d,status}],[],new Set()),true,status);
  }
  for(const status of ['verified','cancelled'])assert.equal(
-  executiveDeliveryPending([{...d,status}],[],new Set([delegationReplyId(d.id)])),false,status);
+  executiveDeliveryPending([{...d,status}],[],new Set([delegationReplyId(d.id,status==='verified')])),false,status);
  assert.equal(executiveDeliveryPending([{...d,request_key:'unrelated'}],[],new Set()),false);
 });
 test('factory completion waits for its existing durable activation or blocker message',()=>{
@@ -31,7 +31,7 @@ test('factory completion waits for its existing durable activation or blocker me
  for(const status of ['configured','validated','activated','blocked'])assert.equal(
   executiveDeliveryPending([],[{...p,status}],new Set()),true,status);
  for(const status of ['activated','blocked'])assert.equal(
-  executiveDeliveryPending([],[{...p,status}],new Set([factoryReplyId(p.id)])),false,status);
+  executiveDeliveryPending([],[{...p,status}],new Set([factoryReplyId(p.id,status==='activated')])),false,status);
  assert.equal(executiveDeliveryPending([],[{...p,route:'commission',status:'commission_pending'}],new Set()),false);
  assert.equal(executiveDeliveryPending([],[{...p,evidence:{}}],new Set()),false,
   'a startup error without a linked acceptance mission must not poll forever');
@@ -50,8 +50,15 @@ for(const table of ['executive_delegations','executive_provisioning_requests']){
    : {id:'old-'+i,route:'configure',status:'activated',evidence:{acceptanceMissionId:'mission'}});
   const x=service({[table]:[...terminal,table==='executive_delegations'?d:
    {id:'pending',route:'configure',status:'configured',evidence:{acceptanceMissionId:'mission'}}]});
-  const messages=terminal.map(r=>({id:table==='executive_delegations'?x.delegationReplyId(r.id):x.factoryReplyId(r.id)}));
+  const messages=terminal.map(r=>({id:table==='executive_delegations'?x.delegationReplyId(r.id,true):x.factoryReplyId(r.id,true)}));
   assert.equal(await x.hasPendingExecutiveDelivery('owner','chat',messages),true);
   assert.equal(x.calls.filter(c=>c.table===table).length,2);
  });
 }
+
+test('a saved blocker cannot satisfy the recovered success delivery receipt',()=>{
+ const x=service(),p={id:'request',route:'configure',status:'activated',evidence:{acceptanceMissionId:'mission'}};
+ assert.equal(x.executiveDeliveryPending([{...d,status:'verified'}],[],new Set([x.delegationReplyId(d.id)])),true);
+ assert.equal(x.executiveDeliveryPending([],[p],new Set([x.factoryReplyId(p.id)])),true);
+ assert.equal(x.executiveDeliveryPending([{...d,status:'verified'}],[],new Set([x.delegationReplyId(d.id)]),new Set([x.delegationReplyId(d.id)])),false);
+});

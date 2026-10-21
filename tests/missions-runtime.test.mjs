@@ -396,3 +396,21 @@ test('completed source checks survive a later review transport failure without b
  await load('@/lib/missions/worker').runMissionBatch(async()=>{calls++;throw Error('500 provider unavailable');});
  assert.equal(calls,1,'A saved source check must not be rerun before the remaining review stage');assert.equal(committed.p_status,'queued');assert.deepEqual(committed.p_result.sourceChecks,review.result.sourceChecks);
 });
+
+test('audit review keeps the full immutable source and all acceptance gates inside the bounded envelope',async()=>{
+ const m=mission();m.objective='Audit source evidence read-only. Preserve immutable source references and report actual coverage.';
+ const excerpt='SOURCE_START\n'+ 'source line\n'.repeat(2600)+'SOURCE_END';
+ const worker={...job(m,'work','source_audit'),status:'completed',result:{text:'Source finding',inspection:{sha:'a'.repeat(40),files:[{path:'core.ts',excerpt}]},routingReason:'transport diagnostic '.repeat(1000),attemptedModels:['model-1','model-2']}};
+ const compose={...job(m,'compose','compose'),status:'completed',result:{text:'Source-grounded report',routingReason:'transport diagnostic '.repeat(500)}};
+ const review=job(m,'review','review');let committed;const requests=[];
+ const load=modules({'@/lib/missions/store':{readMission:async()=>({mission:m,jobs:[worker,compose,review]}),rpc:async(_,args)=>{committed=args;return true;}},'@/lib/missions/inspection':{workflowInspection:async()=>null}});
+ await load('@/lib/missions/worker').executeClaim({mission:m,job:review},async(_,instruction,input)=>{
+  requests.push({instruction,input});assert.ok(instruction.length<10000);assert.ok(input.length<=48000);
+  return{text:JSON.stringify(instruction.includes('KATIE_REQUIRED_DRAFT_REVIEW')?verdict():assessment),model:'independent',sources:[],calculations:[]};
+ });
+ assert.doesNotMatch(requests[0].input,/Source-grounded report|SOURCE_START/);
+ const input=requests[1].input;assert.ok(input.includes(JSON.stringify(excerpt)));assert.ok(input.includes('a'.repeat(40)));assert.doesNotMatch(input,/transport diagnostic/);
+ const contract=load('@/lib/collaboration/review-contract');for(const id of contract.acceptanceIds(assessment))assert.ok(input.includes(id));
+ for(const instruction of Object.values(contract.JUDGMENT_CHECKS))assert.ok(requests[1].instruction.includes(instruction));
+ assert.equal(committed.p_mission_status,'completed');assert.equal(worker.result.inspection.files[0].excerpt,excerpt);assert.ok(worker.result.routingReason.length>10000);
+});

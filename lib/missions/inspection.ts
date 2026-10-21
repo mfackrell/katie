@@ -14,7 +14,8 @@ export function inspectablePath(path:string){
 export function redactInspection(text:string){
  return text.replace(/(?:sk-proj-|sk-|ghp_|github_pat_)[A-Za-z0-9_-]{10,}/g,'[REDACTED_SECRET]')
   .replace(/\bBearer\s+[A-Za-z0-9._~+\/-]+={0,2}/gi,'Bearer [REDACTED]')
-  .replace(/((?:[A-Za-z_][\w-]*[_-])?(?:authorization|api[_-]?key|password|token|secret|credential|private[_-]?key)s?["']?\s*[:=]\s*)(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`|[^\s,;]+)/gi,'$1"[REDACTED]"');
+  .replace(/((?:[A-Za-z_][\w-]*[_-])?(?:authorization|api[_-]?key|password|token|secret|credential|private[_-]?key)s?\s*:\s*(?:string|number|boolean|unknown|any)\s*=\s*)(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`|[^\s,;]+)/gi,'$1"[REDACTED]"')
+  .replace(/((?:[A-Za-z_][\w-]*[_-])?(?:authorization|api[_-]?key|password|token|secret|credential|private[_-]?key)s?["']?\s*[:=]\s*)(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`|[^\s,;]+)/gi,(match,prefix:string)=>/:\s*$/.test(prefix)&&/^(?:string|number|boolean|unknown|any|never|object)(?=[)\];,=:{?]|$)/.test(match.slice(prefix.length))?match:prefix+'"[REDACTED]"');
 }
 export async function repositoryInspection(mission:Mission,instruction:string,choose:(input:string)=>Promise<string>,allowance=16000){
  if(!mission.repository_id)throw Error('Read-only inspection requires a saved connected repository');
@@ -52,6 +53,7 @@ export async function repositoryInspection(mission:Mission,instruction:string,ch
  const checks=await gh.actions.listWorkflowRunsForRepo({owner,repo,head_sha:sha,per_page:8}).then(r=>r.data.workflow_runs.map(r=>({id:r.id,name:r.name,status:r.status,conclusion:r.conclusion,headSha:r.head_sha,url:r.html_url}))).catch(()=>null);
  return{kind:'read_only_repository_inspection',repository:binding.repository_full_name,sha,observedAt:new Date().toISOString(),files,checks,
   limitations:['Only the saved connected repository was read. No commands, writes, issues, PRs, deployments or production changes were performed.',
+   'Secret-bearing spans may be redacted. Redacted text is not raw source and cannot establish a syntax or type error at the redaction boundary without independent evidence.',
    'Files and excerpts are a bounded selection, not proof that the entire source or running application was inspected. Cite exact inspected lines and identify missing coverage.',
    ...(tree.data.truncated||paths.length<all.length?['The source manifest was truncated; omitted paths were not inspected.']:[]),
    ...(checks===null?['CI history unavailable.']:['CI statuses are existing same-commit GitHub records, not tests executed by this worker.'])]};
