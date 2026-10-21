@@ -46,6 +46,7 @@ export async function missionModel(claim:Claim,instruction:string,input:string,t
   // Avoid paying a second classifier to rediscover this known phase.
   planning:claim.job.role==='plan'||(claim.mission.project_kind==='specification'&&['compose','revise'].includes(claim.job.role)),
   synthesis:['compose','revise'].includes(claim.job.role)});
+ const acceptanceInjection=Boolean(process.env.KATIE_ACCEPTANCE_MISSION_ID&&process.env.KATIE_ACCEPTANCE_MISSION_ID===claim.mission.id&&claim.job.role==='work'&&claim.mission.objective.startsWith('[SYNTHETIC PROVIDER FAILOVER ACCEPTANCE]')&&(claim.mission.project_evidence as {syntheticFaultAcceptance?:boolean}|null)?.syntheticFaultAcceptance===true);
  const attemptedModels:string[]=[];
  const failedProviders=new Set<string>();
  let last:unknown;
@@ -56,14 +57,14 @@ export async function missionModel(claim:Claim,instruction:string,input:string,t
   attemptedModels.push(choice.provider.name+':'+choice.modelId);
   try{
    let result:ModelResult;
-   try{result=await executeMissionModel(claim,instruction,input,tools,choice,executionDeadline,expandedOutputTokens);}
+   try{result=await executeMissionModel(claim,instruction,input,tools,choice,executionDeadline,expandedOutputTokens,acceptanceInjection&&attemptedModels.length===1);}
    catch(error){
     if(error instanceof MissionModelFailure&&typeof error.partial.partialText==='string')incomplete=error.partial;
     if(!(error instanceof MissionModelFailure)||error.partial.incompleteReason!=='max_output_tokens'||expandedOutputTokens||Number(error.partial.outputTokenLimit)>=12000)throw error;
     // One capacity correction on the selected model, within the same ledger and
     // wall-clock window. Never rotate through providers with an identical cap.
     expandedOutputTokens=Math.min(12000,Number(error.partial.outputTokenLimit)*2);
-    result=await executeMissionModel(claim,instruction,input,tools,choice,executionDeadline,expandedOutputTokens);
+    result=await executeMissionModel(claim,instruction,input,tools,choice,executionDeadline,expandedOutputTokens,acceptanceInjection&&attemptedModels.length===1);
    }
    const complete={...result,provider:choice.provider.name,routingReason:choice.reasoning,attemptedModels};
    if(checkpointHash&&!await rpc<boolean>('checkpoint_mission_review_model',{p_id:claim.job.id,p_lease:claim.job.lease,p_hash:checkpointHash,p_response:complete}))throw Error('Worker no longer authorized to persist review checkpoint');
@@ -96,7 +97,7 @@ export async function missionModel(claim:Claim,instruction:string,input:string,t
  if(last instanceof Error)throw new MissionModelFailure(last.message,{...incomplete,attemptedModels,providerFailure:true});
  throw Error('No eligible orchestration model could execute this assignment');
 }
-async function executeMissionModel(claim:Claim,instruction:string,input:string,tools:'none'|'research'|'calculate',choice:OrchestrationChoice,executionDeadline:number,expandedOutputTokens?:number):Promise<ModelResult>{
+async function executeMissionModel(claim:Claim,instruction:string,input:string,tools:'none'|'research'|'calculate',choice:OrchestrationChoice,executionDeadline:number,expandedOutputTokens?:number,injectSyntheticFailure=false):Promise<ModelResult>{
  const selectedModel=choice.modelId;
  const gameSpecification=claim.mission.project_kind==='specification'&&(claim.mission.project_evidence as {projectProfile?:string}|null)?.projectProfile==='game';
  const outputTokens=expandedOutputTokens??(gameSpecification&&['compose','revise'].includes(claim.job.role)?16000:['compose','revise'].includes(claim.job.role)?6000:claim.job.role==='review'?(input.startsWith('Independent assessment:\n')?10000:5000):3000);
@@ -127,6 +128,7 @@ async function executeMissionModel(claim:Claim,instruction:string,input:string,t
   if(!await rpc<boolean>('reserve_mission_call',{p_id:claim.job.id,p_lease:claim.job.lease,p_call:callId,p_model:choice.provider.name+':'+selectedModel,p_tokens:reserve}))await explainAdmissionDenial(claim,reserve);
   const started=Date.now();
   try{
+   if(injectSyntheticFailure){console.warn('[Missions] Synthetic acceptance injection: provider quota failure before inference',{missionId:claim.mission.id,jobId:claim.job.id,provider:choice.provider.name,model:selectedModel});throw Object.assign(new Error('Synthetic quota failure for isolated acceptance mission'),{status:429,code:'insufficient_quota'});}
    const response=await client.responses.create(request,{timeout:inferenceTimeout});
    await rpc('finish_mission_call',{p_call:callId,p_tokens:response.usage?.total_tokens??null});
    if(response.status!=='completed')throw new MissionModelFailure('Model output incomplete: '+response.status,{responseStatus:response.status,incompleteReason:response.incomplete_details?.reason??null,outputTokenLimit:outputTokens,partialText:response.output_text??'',provider:choice.provider.name,model:selectedModel,providerErrorCode:response.error?.code??null,providerErrorMessage:response.error?.message?.slice(0,600)??null});

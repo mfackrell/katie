@@ -5,7 +5,7 @@ import vm from 'node:vm';
 import ts from 'typescript';
 import {shouldFallbackIncompleteReview} from '../lib/missions/review-fallback.mjs';
 const source=readFileSync('lib/missions/model.ts','utf8');
-function loadRouterFixture({failPrimary=false,incompletePrimary=false,allow=true}={}){
+function loadRouterFixture({failPrimary=false,incompletePrimary=false,allow=true,acceptance=false}={}){
  let calls=[],reserve=[],chosen=0;
  const first={name:'google',generate:async p=>{calls.push(['google',p.modelId]);if(failPrimary){const err=Error('quota');err.status=429;err.code='insufficient_quota';throw err;}return{text:'valid model result',model:p.modelId,provider:'google',usage:{totalTokens:65}};}};
  const second={name:'anthropic',generate:async p=>{calls.push(['anthropic',p.modelId]);return{text:'recovered verified text',model:p.modelId,provider:'anthropic',usage:{totalTokens:72}};}};
@@ -24,7 +24,7 @@ function loadRouterFixture({failPrimary=false,incompletePrimary=false,allow=true
  :name==='@/lib/projects/contract'?{projectPlanSchema:{omit:()=>({})}}
  :name==='./types'?{planSchema:{}}:{};
  vm.runInNewContext(out,{exports,require,process,Buffer,console,setTimeout,clearTimeout},{filename:'model.js'});
- const claim={mission:{id:'m',project_id:'p',objective:'Implement an original game',team:[{id:'agent',config:{research:false}}],project_kind:'specification'},job:{id:'job',agent_id:'agent',lease:'lease',role:'review'}};
+ const claim={mission:{id:'m',project_id:'p',objective:acceptance?'[SYNTHETIC PROVIDER FAILOVER ACCEPTANCE] Validate a bounded operations memo':'Implement an original game',project_evidence:acceptance?{syntheticFaultAcceptance:true}:undefined,team:[{id:'agent',config:{research:false}}],project_kind:'specification'},job:{id:'job',agent_id:'agent',lease:'lease',role:acceptance?'work':'review'}};
  return{run:()=>exports.missionModel(claim,'Review independent specification','Saved exact candidate'),calls,reserve,chosen:()=>chosen};
 }
 test('mission router selects capable candidate before inference and preserves model evidence',async()=>{
@@ -48,4 +48,20 @@ test('incomplete independent review falls back to the next capable model without
  assert.equal(result.provider,'anthropic');
  assert.deepEqual(t.calls.map(c=>c[0]),['google','anthropic']);
  assert.equal(t.reserve.length,2);
+});
+
+test('production acceptance injection is mission-scoped, applies to first candidate only, and recovers across providers',async()=>{
+ const old=process.env.KATIE_ACCEPTANCE_MISSION_ID;
+ try{
+  process.env.KATIE_ACCEPTANCE_MISSION_ID='m';
+  const injected=loadRouterFixture({acceptance:true});
+  const success=await injected.run();
+  assert.equal(success.provider,'anthropic');
+  assert.deepEqual(injected.calls.map(x=>x[0]),['anthropic']);
+  assert.equal(injected.reserve.length,2);
+  assert.equal(injected.reserve[0].p_model,'google:gemini-3.1-pro');
+  assert.equal(injected.reserve[1].p_model,'anthropic:claude-sonnet-4-6');
+  const ordinary=loadRouterFixture();
+  assert.equal((await ordinary.run()).provider,'google');
+ }finally{if(old===undefined)delete process.env.KATIE_ACCEPTANCE_MISSION_ID;else process.env.KATIE_ACCEPTANCE_MISSION_ID=old;}
 });
