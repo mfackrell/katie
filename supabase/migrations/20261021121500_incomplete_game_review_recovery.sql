@@ -15,7 +15,7 @@ begin
  select * into m from agent_missions where id=p.active_mission_id and project_id=p.id for update;
  if not found or m.status<>'blocked' or m.project_kind<>'specification'
   or m.project_evidence->>'projectProfile' is distinct from 'game'
-  or m.project_evidence ? 'reviewContinuation' then return false;end if;
+ then return false;end if;
  select * into j from mission_assignments where mission_id=m.id and role='review' and status='failed'
   and (result->>'responseStatus'='incomplete' and coalesce(result->>'incompleteReason','max_output_tokens')='max_output_tokens'
     or result->>'admissionDenied'='true' or result->>'reviewContextOverflow'='true'
@@ -92,18 +92,21 @@ begin
   or p.deadline<=now()+interval '10 minutes' or p.lease_until>now() then return false;end if;
  select * into m from agent_missions where id=p.active_mission_id and project_id=p.id for update;
  if not found or m.status<>'blocked' or not(m.project_evidence ? 'reviewContinuation')
-  or m.calls>=m.max_calls or m.routing_calls>=m.max_calls*3 then return false;end if;
+  or m.deadline<=now()+interval '5 minutes' or m.calls>=m.max_calls or m.routing_calls>=m.max_calls*3 then return false;end if;
  select * into j from mission_assignments where mission_id=m.id and role='review' and status='failed'
   and result->>'admissionDenied'='true' and (result->>'remainingTokens')~'^[0-9]+$' for update;
  if not found or exists(select 1 from mission_assignments a join agent_missions x on x.id=a.mission_id
    where x.project_id=p.id and a.status='running' and a.lease_until>now()) then return false;end if;
+ if exists(select 1 from jsonb_array_elements(m.team) t where not exists(
+  select 1 from managed_agents a where a.id=(t->>'id')::uuid and a.actor_id=(t->>'actor_id')::uuid
+   and not a.archived and a.config=t->'config' and a.version=(t->>'version')::integer)) then return false;end if;
  select coalesce(sum(greatest(actual_tokens,reserved_tokens)),0) into spent from agent_missions where project_id=p.id;
  capacity:=least(120000-greatest(m.actual_tokens,m.reserved_tokens),p.token_allowance-spent);
  if capacity<=greatest(10000,(j.result->>'remainingTokens')::bigint) then return false;end if;
  insert into project_events(project_id,event,data) values(p.id,'pending_game_review_capacity_changed',jsonb_build_object(
   'missionId',m.id,'previousDeadline',m.deadline,'previousAttempts',j.attempts,'chargedTokens',spent,'remainingTokens',capacity));
  update agent_missions set status='running',token_allowance=least(120000,p.token_allowance-spent+greatest(m.actual_tokens,m.reserved_tokens)),
-  deadline=least(p.deadline,now()+interval '120 minutes'),updated_at=now() where id=m.id;
+  updated_at=now() where id=m.id;
  update mission_assignments set status='queued',lease=null,lease_until=null,available_at=now(),updated_at=now() where id=j.id;
  update work_projects set status='running',lease=null,lease_until=null,failures=0,updated_at=now() where id=p.id;
  return true;

@@ -44,10 +44,11 @@ export async function executeClaim(claim:Claim,model=missionModel){
   // Keep the complete rejected draft in storage, never let it crowd the original
   // requirements out of a bounded repair request. Diagnostics remain actionable.
   const suffix=job.role==='revise'?'\nReview findings: '+JSON.stringify(priorReviews):'';
-  if(rejectedDraft&&JSON.stringify(data).length+suffix.length>48000){
+  const inputLimit=missionInputLimit(claim);
+  if(rejectedDraft&&JSON.stringify(data).length+suffix.length>inputLimit){
    const compact={...data,coverageRepair,rejectedDraft:{status:rejectedDraft.status,specificationOmitted:true,assessmentCapacity:rejectedDraft.assessmentCapacity,allowedRuleCategories:GAME_RULE_CATEGORIES,missingRuleCoverage:rejectedDraft.missingRuleCoverage,currentValidation:rejectedDraft.currentValidation.slice(0,600),uniqueCharacters:rejectedDraft.uniqueCharacters,uniqueCharacterLimit:20000,omissionReason:'The full rejected draft remains saved. Restore its existing scenarios rather than inventing coverage; use coverageRepair.requiredCoverage to produce genuine new assertions. Regenerate only if input limits prevent preserving the draft.'}};
    const compactText=JSON.stringify(compact);
-   if(compactText.length+suffix.length>48000)throw new MissionModelFailure('Specification repair context exceeds 48,000 characters even without the rejected draft; original requirements and saved draft retained for scope clarification.',{repairContextOverflow:true,specificationValidationFeedback:job.result?.specificationValidationFeedback,rejectedSpecification:job.result?.rejectedSpecification});
+   if(compactText.length+suffix.length>inputLimit)throw new MissionModelFailure('Specification repair context exceeds '+inputLimit+' characters even without the rejected draft; original requirements and saved draft retained for scope clarification.',{repairContextOverflow:true,specificationValidationFeedback:job.result?.specificationValidationFeedback,rejectedSpecification:job.result?.rejectedSpecification});
    return compactText;
   }
   return JSON.stringify(data);

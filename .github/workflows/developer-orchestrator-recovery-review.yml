@@ -24,6 +24,11 @@ jobs:
           cache: npm
       - name: Install review test dependencies
         run: npm ci
+      - name: Verify recovery against native PostgreSQL and actual workers
+        run: |
+          set -o pipefail
+          node --test tests/mission-budget-architecture.test.mjs tests/mission-smart-routing.test.mjs tests/missions-runtime.test.mjs tests/projects-runtime.test.mjs tests/orchestrator-spec-recovery-618.test.mjs tests/projects-sql.test.mjs 2>&1 | tee developer-orchestrator-recovery-tests.txt
+          git rev-parse HEAD > developer-orchestrator-tested-head.txt
       - name: Independent recovery architecture review
         uses: openai/codex-action@v1
         with:
@@ -34,6 +39,7 @@ jobs:
           prompt: |
             Independently inspect origin/main...HEAD and the related actual code.
             Do not alter files. Do not accept the PR description as proof.
+            The preceding workflow step executed focused runtime tests and real native PostgreSQL recovery tests on this exact checkout. Inspect developer-orchestrator-recovery-tests.txt and developer-orchestrator-tested-head.txt as observed test evidence, alongside the actual implementation and behavioral assertions. Do not represent those controlled tests as deployed acceptance.
             Objective: repair the autonomous Developer Orchestrator's stalled game specification stages while preserving exact user requirements, completed independently reviewed research, original token/accounting history, deadlines, saved assignments, actor/chat isolation and explicit coding approval.
             Verify both recovery SQL RPCs against actual schema, existing migration conventions and existing worker admission rules. Challenge SQL privilege grants and row locks, lease races, budget/call/routing limits, expired deadlines, one-shot records, and whether the recovered worker can actually progress.
             Verify failed incomplete reviews fall back to other eligible model providers within real budgets, without disabling independent review. Verify the oversized brief is transmitted losslessly as authoritative project evidence, and model input is still within project phase limits. Check regression tests are meaningful, not just regexes.
@@ -51,3 +57,5 @@ jobs:
           path: |
             developer-orchestrator-recovery-review.json
             developer-orchestrator-reviewed-head.txt
+            developer-orchestrator-recovery-tests.txt
+            developer-orchestrator-tested-head.txt

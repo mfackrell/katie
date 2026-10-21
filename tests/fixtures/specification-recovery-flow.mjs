@@ -127,5 +127,52 @@ export async function specificationRecoveryFlow(db){
    await projectWorker.runProjectBatch();p=(await db.query('select * from work_projects where id=$1',[id])).rows[0];assert.equal(p.status,'awaiting_approval');assert.equal(p.approved_hash,null);
   }finally{if(priorKey===undefined)delete process.env.OPENAI_API_KEY;else process.env.OPENAI_API_KEY=priorKey;}
 
+  // A recovered FIRST review may reject its draft, produce a new valid
+  // revision, and then lose review_again to incomplete output. Recover that
+  // NEW exact candidate, not a recursive replay of the first candidate hash.
+  const technicalSource=randomUUID(),initialSpec={...spec,summary:'First candidate in a separate incomplete-review lifecycle'},revisedSpec={...spec,summary:'Revised candidate after substantive independent findings'};
+  const originalMission=await readMission(source.id),lead=originalMission.mission.team[0].id,reviewer=originalMission.mission.team[1].id;
+  await db.query("insert into agent_missions(id,objective,team,status,max_calls,token_allowance,max_minutes,deadline,project_id,project_kind,project_evidence) values($1,$2,$3,'blocked',12,120000,120,now()-interval '1 minute',$4,'specification',$5)",[technicalSource,source.objective,JSON.stringify(source.team),id,JSON.stringify(source.project_evidence)]);
+  await db.query("insert into mission_assignments(mission_id,job_key,role,agent_id,instruction,status,result) values($1,'plan','plan',$2,'Saved phase plan','completed','{}'),($1,'compose','compose',$2,'Saved complete candidate','completed',$3),($1,'review','review',$4,'Independent specification review','failed','{\"responseStatus\":\"incomplete\",\"incompleteReason\":\"max_output_tokens\"}')",[technicalSource,lead,JSON.stringify({text:JSON.stringify(initialSpec)}),reviewer]);
+  await db.query("update mission_assignments set dependencies=array['compose'] where mission_id=$1 and role='review'",[technicalSource]);
+  await db.query("insert into project_runs(project_id,mission_id,kind,ordinal,milestone_index) values($1,$2,'specification',(select count(*)+1 from project_runs where project_id=$1),0)",[id,technicalSource]);
+  await db.query("update work_projects set status='blocked',phase='specification',spec=null,approval_hash=null,approved_hash=null,token_allowance=600000,active_mission_id=$2 where id=$1",[id,technicalSource]);
+  assert.equal(await rpc('resume_incomplete_game_review',{p_id:id,p_actor:actor,p_chat:chat}),true);
+  const firstContinuation=(await db.query('select active_mission_id from work_projects where id=$1',[id])).rows[0].active_mission_id;
+  let answerReviews=0,blindGenerations=0;
+  const originalKey=process.env.OPENAI_API_KEY;process.env.OPENAI_API_KEY='fixture-only';
+  try{
+   class Client{
+    async post(){return{input_tokens:1000};}
+    responses={create:async request=>{
+     const input=request.input[0].content;
+     if(input.startsWith('AUTHORITATIVE_USER_TURNS:')){blindGenerations++;return{status:'completed',output_text:JSON.stringify(assessment),output:[],usage:{total_tokens:100}};}
+     if(request.instructions.includes('KATIE_REQUIRED_DRAFT_REVIEW')){
+      answerReviews++;
+      if(answerReviews===2)return{status:'incomplete',incomplete_details:{reason:'max_output_tokens'},output:[],usage:{total_tokens:100}};
+      const approved=answerReviews>2,ids=load('@/lib/collaboration/review-contract').acceptanceIds(assessment);
+      return{status:'completed',output_text:JSON.stringify({verdict:approved?'approve':'revise',findings:approved?'Revised rule proof verified':'Repair required rule proof',checks:ids.map(id=>({id,passed:approved,evidence:approved?'Revised expected state verified':'Missing original boundary proof'}))}),output:[],usage:{total_tokens:100}};
+     }
+     return{status:'completed',output_text:JSON.stringify(revisedSpec),output:[],usage:{total_tokens:100}};
+    }};
+   }
+   const worker=modules({'@/lib/data/supabase/admin':{getSupabaseAdminClient:()=>admin},'@/lib/missions/store':{rpc,readMission},
+    '@/lib/orchestration/routing':{orchestrationChoices:async()=>[{provider:{name:'openai'},modelId:'fixture-reviewed-model',reasoning:'Controlled transport'}],orchestrationFailure:async()=> 'model'},openai:{__esModule:true,default:Client}})('@/lib/missions/worker');
+   assert.equal((await worker.runMissionBatch()).outcomes[0].status,'processed');
+   assert.equal((await worker.runMissionBatch()).outcomes[0].status,'processed');
+   assert.equal((await worker.runMissionBatch()).outcomes[0].status,'blocked');
+   await projectWorker.runProjectBatch();
+   const before=await readMission(firstContinuation),newText=before.jobs.find(j=>j.job_key==='revision').result.text;
+   assert.equal(JSON.parse(newText).summary,revisedSpec.summary);
+   assert.equal(await rpc('resume_incomplete_game_review',{p_id:id,p_actor:actor,p_chat:chat}),true,'A new revised candidate needs its own review continuation');
+   const secondContinuation=(await db.query('select active_mission_id from work_projects where id=$1',[id])).rows[0].active_mission_id;
+   assert.notEqual(secondContinuation,firstContinuation);
+   assert.equal((await readMission(secondContinuation)).jobs.find(j=>j.job_key==='revision').result.text,newText);
+   assert.equal((await worker.runMissionBatch()).outcomes[0].status,'processed');
+   assert.equal(blindGenerations,2,'review_again reuses its exact saved blind checkpoint after continuation');
+   assert.equal((await readMission(firstContinuation)).mission.calls,before.mission.calls);
+   await projectWorker.runProjectBatch();p=(await db.query('select * from work_projects where id=$1',[id])).rows[0];assert.equal(p.status,'awaiting_approval');assert.equal(p.spec.summary,revisedSpec.summary);assert.equal(p.approved_hash,null);
+  }finally{if(originalKey===undefined)delete process.env.OPENAI_API_KEY;else process.env.OPENAI_API_KEY=originalKey;}
+
  }finally{await db.query('rollback');if(priorPreview===undefined)delete process.env.PROJECT_PREVIEW_REPOSITORIES;else process.env.PROJECT_PREVIEW_REPOSITORIES=priorPreview;}
 }

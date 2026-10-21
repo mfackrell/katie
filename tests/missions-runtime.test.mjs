@@ -325,3 +325,13 @@ test('a saved draft-blind stage gets a fresh bounded lease instead of permanentl
  await worker.runMissionBatch(async()=>{modelCalls++;return{text:JSON.stringify(assessment),sources:[],calculations:[],model:'independent-fixture'};});
  assert.equal(modelCalls,1);assert.equal(committed.p_status,'queued');assert.equal(committed.p_mission_status,null);assert.equal(committed.p_result.reviewStageDeferred,true);assert.equal(compose.result.text,'Unchanged saved specification');
 });
+
+
+test('a validation-rejected game revision keeps a complete draft that fits the 96K repair envelope',async()=>{
+ const {gameFixture}=await import('./fixtures/game-project.mjs');const f=gameFixture();f.game.rules.stateModel.initialState.detail='r'.repeat(55000);
+ const draft={name:'Counter',summary:'Saved rejected revision',requirements:['Retain original rules'],allowedPaths:f.allowedPaths,milestones:[{title:'Complete',instruction:'Preserve all rules',contract:f.contract}],finalContract:f.contract,game:f.game};
+ const m={...mission(),project_kind:'specification',project_evidence:{projectProfile:'game'}},j={...job(m,'revise','revision'),result:{rejectedSpecification:JSON.stringify(draft),specificationValidationFeedback:'Specification exceeds approved unique size'}};
+ const worker=modules({'@/lib/missions/store':{readMission:async()=>({mission:m,jobs:[j]}),rpc:async()=>true}})('@/lib/missions/worker');
+ await assert.rejects(worker.executeClaim({mission:m,job:j},async(_,instruction,input)=>{assert.ok(input.length>48000&&input.length<=96000);const data=JSON.parse(input.split('\nReview findings: ')[0]);assert.equal(data.rejectedDraft.specification.game.rules.stateModel.initialState.detail,f.game.rules.stateModel.initialState.detail);assert.equal(data.rejectedDraft.specificationOmitted,undefined);throw Error('Fixture inspected full admissible repair');}),/Fixture inspected full admissible repair/);
+ assert.equal(j.result.rejectedSpecification,JSON.stringify(draft));
+});

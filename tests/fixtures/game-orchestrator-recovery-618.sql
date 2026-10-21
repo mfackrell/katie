@@ -1,7 +1,7 @@
 -- Behavioral integration acceptance for guarded specification resumes, rolled back
 -- to leave the existing test fixtures and usage counters untouched.
 do $$
-declare p work_projects; m agent_missions; r mission_assignments; c jsonb; charged bigint; scenario text; ok boolean; n integer; continuation uuid; claim_job uuid;
+declare p work_projects; m agent_missions; r mission_assignments; c jsonb; charged bigint; scenario text; ok boolean; n integer; continuation uuid; claim_job uuid; original_deadline timestamptz; saved_config jsonb; saved_version integer;
 begin
  select * into strict p from work_projects where id='44444444-4444-4444-8444-444444444444';
  select * into strict m from agent_missions where id=p.active_mission_id;
@@ -55,7 +55,20 @@ begin
      update work_projects set status='blocked' where id=p.id;
      if resume_pending_game_review(p.id,p.actor_id,p.chat_id) then raise exception 'Unchanged denial was retried';end if;
      update work_projects set token_allowance=token_allowance+20000 where id=p.id;
+     select deadline into original_deadline from agent_missions where id=continuation;
+     update agent_missions set deadline=now()-interval '1 second' where id=continuation;
+     if resume_pending_game_review(p.id,p.actor_id,p.chat_id) then raise exception 'Expired pending child extended';end if;
+     update agent_missions set deadline=original_deadline where id=continuation;
+     select config,version into saved_config,saved_version from managed_agents where id=r.agent_id;
+     update managed_agents set archived=true where id=r.agent_id;
+     if resume_pending_game_review(p.id,p.actor_id,p.chat_id) then raise exception 'Archived saved agent resumed';end if;
+     update managed_agents set archived=false,config=config||'{"instructions":"Changed pending instructions"}' where id=r.agent_id;
+     if resume_pending_game_review(p.id,p.actor_id,p.chat_id) then raise exception 'Modified saved instructions resumed';end if;
+     update managed_agents set config=saved_config,version=version+1 where id=r.agent_id;
+     if resume_pending_game_review(p.id,p.actor_id,p.chat_id) then raise exception 'Modified saved version resumed';end if;
+     update managed_agents set version=saved_version where id=r.agent_id;
      if not resume_pending_game_review(p.id,p.actor_id,p.chat_id) then raise exception 'Pending continuation was permanently consumed';end if;
+     if (select deadline from agent_missions where id=continuation)<>original_deadline then raise exception 'Pending child deadline extended';end if;
      if (select active_mission_id from work_projects where id=p.id)<>continuation then raise exception 'Pending recovery created another child';end if;
      c:=claim_mission_work();claim_job:=(c->'job'->>'id')::uuid;
     end if;
