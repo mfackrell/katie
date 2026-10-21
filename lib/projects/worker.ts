@@ -343,20 +343,18 @@ async function reconcileBlockedGameRevisions(){
     // mission. PostgreSQL atomically enforces the old verdict, timeout cause,
     // original aggregate budget, milestone limit and one-recovery ceiling.
     const db=getSupabaseAdminClient();
-    let cursor:string|null=null;
+    let offset=0;
     // Stable keyset pagination ensures two older unrecoverable jobs never starve
     // a later eligible project, even as concurrent recoveries alter statuses.
     for(;;){
         let q=db.from('work_projects').select('id,actor_id,chat_id')
           .eq('status','blocked').eq('profile','game').eq('phase','specification')
-          .order('id',{ascending:true}).limit(30);
-        if(cursor)q=q.gt('id',cursor);
+          .order('id',{ascending:true}).range(offset,offset+29);
         const {data,error}=await q;
         if(error)throw Error('Blocked game revision recovery index unavailable');
         const rows=(data??[]) as Array<{id:string;actor_id:string;chat_id:string}>;
         if(!rows.length)break;
         for(const p of rows){
-            cursor=p.id;
             const authorized={p_id:p.id,p_actor:p.actor_id,p_chat:p.chat_id};
             const native=await projectRpc<boolean>('resume_incomplete_game_review',authorized) ||
               await projectRpc<boolean>('resume_oversized_game_specification',authorized);
@@ -366,6 +364,7 @@ async function reconcileBlockedGameRevisions(){
             }
         }
         if(rows.length<30)break;
+        offset+=30;
     }
     return false;
 }
