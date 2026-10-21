@@ -89,8 +89,9 @@ async function calibrationApply(actorId:string,hash:string,approved:CalibrationG
   });
   if(backupError)return NextResponse.json({error:"Could not save restoration backup; nothing changed"},{status:500});
   const {data:saved,error}=await db.from("actor_long_term_memory")
+    .eq("actor_id",actorId).eq("revision",row.revision)
     .update({content:next,revision:row.revision+1,updated_at:new Date().toISOString()})
-    .eq("actor_id",actorId).eq("revision",row.revision).select("revision").maybeSingle<{revision:number}>();
+    .select("revision").maybeSingle<{revision:number}>();
   if(error||!saved)return NextResponse.json({error:"Memory changed concurrently. Recalibrate."},{status:409});
   const {data:verified}=await db.from("actor_long_term_memory").select("content").eq("actor_id",actorId).single<{content:typeof next}>();
   if(!verified||calibrationHash(verified.content)!==calibrationHash(next))return NextResponse.json({error:"Write verification failed; backup retained for restoration"},{status:500});
