@@ -290,7 +290,7 @@ export async function runRequiredDraftReview(input: {
       const findings: string[] = [];
       let candidate = input.draft;
       try {
-        for (let pass = 0; pass < 2; pass++) {
+        for (let pass = 0; pass < 3; pass++) {
           // Only the latest verified assessment applies to the current candidate.
           // Historical findings remain in audit.reviews, not as live blockers.
           findings.length = 0;
