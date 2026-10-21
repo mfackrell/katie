@@ -7,7 +7,7 @@ import vm from 'node:vm';
 import ts from 'typescript';
 import { randomUUID, webcrypto, createHash } from 'node:crypto';
 const native=createRequire(import.meta.url);
-function modules(overrides={}){
+function modules(overrides={},globals={}){
  for(const [key,value] of Object.entries(overrides))if(key.startsWith('@/'))overrides[resolve(key.slice(2))]=value;
  const cache=new Map();
  const load=name=>{
@@ -19,7 +19,7 @@ function modules(overrides={}){
   if(cache.has(path))return cache.get(path);
   const exports={};cache.set(path,exports);
   const code=ts.transpileModule(readFileSync(path,'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022,esModuleInterop:true}}).outputText;
-  vm.runInNewContext(code,{exports,require:n=>n.startsWith('.')?load(resolve(dirname(path),n)):load(n),process,Buffer,Date,JSON,console,Set,Map,URL,URLSearchParams,TextEncoder,TextDecoder,Request,Response,Headers,ReadableStream,AbortController,AbortSignal,File,Blob,fetch,crypto:webcrypto,setTimeout,clearTimeout,setInterval,clearInterval},{filename:path});
+  vm.runInNewContext(code,{exports,require:n=>n.startsWith('.')?load(resolve(dirname(path),n)):load(n),process,Buffer,Date,JSON,console,Set,Map,URL,URLSearchParams,TextEncoder,TextDecoder,Request,Response,Headers,ReadableStream,AbortController,AbortSignal,File,Blob,fetch,crypto:webcrypto,setTimeout,clearTimeout,setInterval,clearInterval,...globals},{filename:path});
   return exports;
  };
  return load;
@@ -392,7 +392,7 @@ test('completed source checks survive a later review transport failure without b
  const candidate={...job(m,'compose','compose'),status:'completed',result:{text:'Candidate report'}},review=job(m,'review','review');
  review.result={sourceChecks:{key:createHash('sha256').update(JSON.stringify({candidate:'Candidate report',sourceGroups:groups})).digest('hex'),checks:[{verdict:'pass',findings:[],summary:'Previously verified full source'}]}};
  let claimed=false,committed,calls=0;
- const load=modules({'@/lib/executive/source-handoff':{...source,sourceReportsForMission:async()=>reports},'@/lib/missions/store':{readMission:async()=>({mission:m,jobs:[candidate,review]}),rpc:async(name,args)=>{if(name==='claim_mission_work'){if(claimed)return null;claimed=true;return{mission:m,job:review};}committed=args;return true;}}});
+ const load=modules({'@/lib/executive/source-handoff':{...source,sourceReportsForMission:async()=>reports},'@/lib/missions/store':{readMission:async()=>({mission:m,jobs:[candidate,review]}),rpc:async(name,args)=>{if(name==='claim_mission_work'){if(claimed)return null;claimed=true;return{mission:m,job:review};}committed=args;return true;}}},{Error});
  await load('@/lib/missions/worker').runMissionBatch(async()=>{calls++;throw Error('500 provider unavailable');});
  assert.equal(calls,1,'A saved source check must not be rerun before the remaining review stage');assert.equal(committed.p_status,'queued');assert.deepEqual(committed.p_result.sourceChecks,review.result.sourceChecks);
 });
