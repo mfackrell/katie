@@ -543,3 +543,37 @@ test("unwrapped memory without matching user evidence is not saved", async () =>
  await memoryEditor.maybeUpdateLongTermMemory("a1","c1","A different statement about work.");
  assert.equal((await store.getLongTermMemory("a1","c1")).entries,undefined);
 });
+
+test("automatic memory repair satisfies provider JSON mode and saves only repaired source-verified facts", async () => {
+ const state=makeState();
+ (globalThis as any).__KATIE_SUPABASE_ADMIN_CLIENT__=createFakeClient(state);
+ const quote="I reconciled project costs to the general ledger every month.";
+ const entry={key:"career.project.cost.reconciliation",category:"fact",value:quote,
+   source:"user-stated",confidence:"high",evidenceMessageIds:["m1"]};
+ let calls=0;
+ (globalThis as any).__KATIE_LONG_TERM_MEMORY_OPENAI_CLIENT__={chat:{completions:{async create(params:any){
+   calls++;
+   const prompt=params.messages.map((message:any)=>message.content).join("\n");
+   // Reproduce the provider's admission rule, rather than allowing every mock
+   // request through regardless of the production response_format contract.
+   if(params.response_format?.type === "json_object" && !/json/i.test(prompt)) {
+     throw new Error("400 'messages' must contain the word 'json' when response_format is json_object");
+   }
+   return {choices:[{message:{content:JSON.stringify({action:"replace",updatedContent:{
+     version:3,purpose:"Durable career knowledge",entries:[{...entry,
+       evidenceQuotes:[{messageId:"m1",quote:calls===1?"A source quote that was never provided.":quote}]}]
+   }})}}]};
+ }}}};
+ const {store,memoryEditor}=loadModules();
+ await store.saveActor({id:"a1",name:"Advisor",purpose:"Prepare relevant professional examples."});
+ await store.saveChat({id:"c1",actorId:"a1",title:"Current",createdAt:"x",updatedAt:"x"});
+ await store.setLongTermMemory("a1","c1",memory(fact("existing","Existing durable experience.")));
+ await store.saveMessage("c1",{id:"m1",role:"user",content:quote});
+ await memoryEditor.maybeUpdateLongTermMemory("a1","c1",quote);
+ assert.equal(calls,2,"Invalid initial evidence must enter the repair path");
+ const entries=(await store.getLongTermMemory("a1","other-chat")).entries as any[];
+ assert.equal(entries.length,2,"Repair preserves unrelated durable knowledge");
+ const saved=entries.find(value=>value.key===entry.key);
+ assert.equal(saved?.value,quote);
+ assert.deepEqual(saved?.evidenceQuotes,[{messageId:"m1",quote}]);
+});
