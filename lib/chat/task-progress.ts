@@ -24,7 +24,7 @@ export type AnsweredTaskQuestion = TaskQuestion & {
 export type UserTurnIntent = "new_task" | "revision" | "feedback" | "answer" | "clarification" | "conversation" | "continuation";
 
 export type ProjectTransition = {
-  action: "new" | "resume" | "ambiguous";
+  action: "new" | "resume" | "ambiguous" | "amend";
   projectId?: string;
   /** Exact current user wording supporting a change, never attachment text. */
   sourceQuote?: string;
@@ -37,9 +37,12 @@ export type ProjectSnapshot = {
   objective: { text: string; userMessageId: string } | null;
   pending: TaskQuestion[];
   answered: AnsweredTaskQuestion[];
+  requirementsRevision?: number;
 };
 export type TaskProgressState = {
   version: 1;
+  /** Per-active-project criteria version; ordinary revisions do not increment it. */
+  requirementsRevision?: number;
   projects?: ProjectSnapshot[];
   projectClarification?: string;
   objective: { text: string; userMessageId: string } | null;
@@ -218,6 +221,7 @@ function checkpointProject(state: TaskProgressState, changed = false): TaskProgr
     ...(updatedAt ? {updatedAt} : {}),
     projectContext: state.projectContext, objective: state.objective,
     pending: state.pending, answered: state.answered,
+    requirementsRevision: state.requirementsRevision ?? 1,
   };
   return { ...state, projects: [...(state.projects ?? []).filter(project =>
     project.projectContext.userMessageId !== state.projectContext!.userMessageId), snapshot] };
@@ -234,7 +238,8 @@ export function mergeTaskProjects(state: TaskProgressState, projects: ProjectSna
   }
   const current = state.projectContext ? byId.get(state.projectContext.userMessageId) : undefined;
   return { ...state, ...(current ? {projectContext: current.projectContext,
-    objective: current.objective, pending: current.pending, answered: current.answered} : {}),
+    objective: current.objective, pending: current.pending, answered: current.answered,
+    requirementsRevision: current.requirementsRevision ?? 1} : {}),
     projects: [...byId.values()] };
 }
 
@@ -278,10 +283,22 @@ export function applyUserToTaskProgress(
       projectClarification: "Which saved project do you want to resume? The proposed project could not be found." };
     // Resuming is a control transition, never an answer to an old pending question.
     return checkpointProject({ ...state, ...target, projectClarification: undefined,
-      objective: {text:input.text,userMessageId:input.messageId},
+      objective: target.objective ?? {text:input.text,userMessageId:input.messageId},
       lastUserMessageId: input.messageId, lastAssistantMessageId: null,
       lastUserIntent: "continuation", stage: target.pending.length ? "awaiting_user_answer" : "working",
       nextAction: target.pending.length ? "await_user_answers" : "continue_original_goal" });
+  }
+  if (transition?.action === "amend") {
+    if (!state.projectContext || !sourced) {
+      return { ...state, lastUserMessageId: input.messageId, projectClarification:
+        "Could not verify the proposed requirements amendment against the active project and your exact words." };
+    }
+    const revised = applyUserTurn({ ...state, projectClarification: undefined },
+      { messageId: input.messageId, text: input.text, projectRelation: "same_project" });
+    return checkpointProject({
+      ...revised,
+      requirementsRevision: (state.requirementsRevision ?? 1) + 1,
+    }, true);
   }
   // A routing hint alone is not authoritative evidence that a parent changed.
   const relation = transition?.action === "new" ? "new_project"
@@ -338,6 +355,7 @@ function applyUserTurn(
     return {
       ...previous,
       projectContext,
+      ...(startsNewProject ? { requirementsRevision: 1 } : {}),
       ...(intent === "new_task" || !previous.objective ? { objective: { text: currentQuestion, userMessageId: input.messageId } } : {}),
       pending: intent === "new_task" || intent === "revision" ? [] : previous.pending,
       answered: startsNewProject ? [] : previous.answered,
