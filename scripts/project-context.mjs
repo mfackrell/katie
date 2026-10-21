@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 export const GAME_PROJECT_CONTEXT_VERSION = 1;
+export const PROJECT_CONTEXT_MAX_BYTES = 128000;
 
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 function exact(value, keys) {
@@ -85,15 +86,15 @@ export function parseProjectContext(request) {
   const markers = [...request.matchAll(/<!-- katie-project: ([A-Za-z0-9_-]+) -->/g)];
   if (occurrences.length !== 1 || markers.length !== 1) throw Error('Malformed or duplicate project marker');
   const encoded = markers[0][1];
-  if (encoded.length > 42667) throw Error('Project marker exceeds bounds');
+  if (encoded.length > 170667) throw Error('Project marker exceeds bounds');
   const bytes = Buffer.from(encoded, 'base64url');
-  if (bytes.length > 32000 || bytes.toString('base64url') !== encoded) throw Error('Invalid project encoding');
+  if (bytes.length > PROJECT_CONTEXT_MAX_BYTES || bytes.toString('base64url') !== encoded) throw Error('Invalid project encoding');
   return validateProjectContext(JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes)));
 }
 export function projectMarker(context) {
   validateProjectContext(context);
   const bytes = Buffer.from(JSON.stringify(context));
-  if (bytes.length > 32000) throw Error('Project marker exceeds bounds');
+  if (bytes.length > PROJECT_CONTEXT_MAX_BYTES) throw Error('Project marker exceeds bounds');
   return `<!-- katie-project: ${bytes.toString('base64url')} -->`;
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {

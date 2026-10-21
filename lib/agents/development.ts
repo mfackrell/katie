@@ -150,9 +150,9 @@ export async function dispatchDevelopment(task: AgentTask, project?: Context, as
   let issueBody:string;
   try{issueBody=packDevelopmentRequest(originalBody,marker(task));
     if(issueBody!==originalBody){
-      const files=await Promise.all(['scripts/request-envelope.mjs','.github/workflows/autonomous-development.yml','.github/workflows/project-reverify.yml'].map(path=>client.repos.getContent({...binding,path,ref:'main'})));
+      const files=await Promise.all(['scripts/request-envelope.mjs','.github/workflows/autonomous-development.yml','.github/workflows/project-reverify.yml','scripts/project-context.mjs'].map(path=>client.repos.getContent({...binding,path,ref:'main'})));
       const contents=files.map(file=>{if(Array.isArray(file.data)||!('content' in file.data))throw Error('Target lossless request transport unavailable');return Buffer.from(file.data.content,'base64').toString('utf8');});
-      if(!contents[0].includes('export const REQUEST_ENVELOPE_VERSION = 1;')||contents.slice(1).some(text=>!text.includes('node scripts/request-envelope.mjs unpack')))throw Error('Target requires the versioned lossless request decoder before a large coding handoff');
+      if(!contents[0].includes('export const REQUEST_ENVELOPE_VERSION = 1;')||contents.slice(1,3).some(text=>!text.includes('node scripts/request-envelope.mjs unpack'))||!contents[3].includes('export const PROJECT_CONTEXT_MAX_BYTES = 128000;'))throw Error('Target requires the versioned lossless request decoder before a large coding handoff');
     }
   }catch(error){return save(task,'blocked',error instanceof Error?error.message:'Complete coding request could not be prepared');}
   const claimed = project ? await agentRpc<boolean>("claim_project_dispatch", {p_id:task.id,p_lease:assignmentLease??null,p_hash:project.scopeHash}) : await agentRpc<boolean>("claim_agent_dispatch", { p_id: task.id });
