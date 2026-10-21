@@ -13,7 +13,7 @@ export type DurableReviewScope = {
 type Validation = NonNullable<ReviewAudit["contractValidation"]>;
 type Row = { assessment: IndependentAssessment; validation: Validation; source_hash: string; requirements_revision: number };
 const fingerprint = (parent: string, objective: string, revision = 1) =>
-  createHash("sha256").update(JSON.stringify([parent.trim(), objective.trim(), revision])).digest("hex");
+  createHash("sha256").update(JSON.stringify(revision === 1 ? [parent.trim(), objective.trim()] : [parent.trim(), objective.trim(), revision])).digest("hex");
 const revisionOf = (scope: DurableReviewScope) => {
   const version = scope.requirementsRevision ?? 1;
   if (!Number.isSafeInteger(version) || version < 1) throw new Error("Invalid review contract revision");
@@ -31,9 +31,9 @@ export async function readDurableReviewContract(scope: DurableReviewScope, paren
   const { data, error } = await scoped(scope).select("assessment,validation,source_hash,requirements_revision")
     .eq("source_hash", sourceHash).maybeSingle<Row>();
   if (error) throw new Error("Could not read durable contract: " + error.message);
-  if (!data || data.source_hash !== sourceHash || data.requirements_revision !== version || data.validation?.verdict !== "approve" ||
+  if (!data || data.source_hash !== sourceHash || (data.requirements_revision ?? 1) !== version || data.validation?.verdict !== "approve" ||
       !data.assessment?.taskContract || !Array.isArray(data.assessment.taskContract.requirements)) return null;
-  return { assessment: data.assessment, validation: data.validation, revision: data.requirements_revision };
+  return { assessment: data.assessment, validation: data.validation, revision: data.requirements_revision ?? 1 };
 }
 
 export async function saveDurableReviewContract(
