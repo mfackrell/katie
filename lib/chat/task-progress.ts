@@ -451,6 +451,7 @@ export function syncTaskProgress(previous: TaskProgressState | null, history: Pr
         .filter((item, index, all) => !all.slice(index + 1).some(other => other.projectContext.userMessageId === item.projectContext.userMessageId)),
       objective: recent.objective ?? previous.objective,
       projectContext,
+      requirementsRevision: changedProject ? (recent.requirementsRevision ?? 1) : (previous.requirementsRevision ?? 1),
       pending: recent.pending.map(recoverProjectBinding),
       answered: [...(changedProject ? [] : previous.answered), ...recent.answered.map(recoverProjectBinding)]
         .filter((item, index, array) => array.findIndex(other => other.id === item.id && other.userMessageId === item.userMessageId) === index)
