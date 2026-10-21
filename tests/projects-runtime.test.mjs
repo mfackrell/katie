@@ -482,3 +482,26 @@ test('assessment size follows PostgreSQL JSON spacing and expands exponent numbe
  assert.equal(jsonbTextSize(1e30),31);assert.equal(jsonbTextSize(-1e-7),10);
  assert.ok(jsonbTextSize({rows:Array.from({length:100},()=>({action:'expectText',selector:'#phase',value:'MOVE'}))})<JSON.stringify({rows:Array.from({length:100},()=>({action:'expectText',selector:'#phase',value:'MOVE'}))},null,1).length);
 });
+
+
+test('non-game briefs above 6500 characters remain complete in final composition and both independent review requests',async()=>{
+ const f=coordinator();f.p.objective='Complete ordinary app source. '.repeat(245);f.p.clarifications='Explicit user clarification: preserve reload and keyboard access.';
+ assert.ok(f.p.objective.length>6500);await f.tick();f.complete('c'.repeat(40));await f.tick();await f.tick();f.complete('d'.repeat(40));await f.tick();
+ f.setPreview({url:'https://pilot.vercel.app/pilot',headSha:'d'.repeat(40),deploymentId:1,statusId:2});await f.tick();await f.tick();await f.tick();
+ const data=f.calls.at(-1).p_data;assert.equal(data.kind,'assessment');assert.ok(data.objective.includes(f.p.objective));assert.ok(data.objective.includes(f.p.clarifications));
+ const aid=randomUUID(),m={id:randomUUID(),objective:data.objective,project_kind:'assessment',project_evidence:data.evidence,status:'running',team:[{id:aid,config:{instructions:'Verify the full original outcome'}}]};
+ const makeJob=role=>({id:randomUUID(),mission_id:m.id,job_key:role,role,agent_id:aid,instruction:'Verify the entire outcome',payload:{},status:'running',lease:randomUUID(),lease_until:new Date(Date.now()+360000).toISOString(),attempts:1});
+ const compose=makeJob('compose'),review=makeJob('review'),jobs=[compose,review];let committed;
+ const load=modules({'@/lib/missions/store':{readMission:async()=>({mission:m,jobs}),rpc:async(_,args)=>{committed=args;return true;}}}),worker=load('@/lib/missions/worker');
+ const assessment={objective:'Complete original app',qualifications:['App evidence'],strongestEvidence:['Original requirements'],criteria:['All original requirements'],synthesis:{conclusion:'Check the complete outcome',dimensions:[{dimension:'Coverage',supportedScope:'Entire original source',evidence:['Original user turns']}],emphasis:'Complete outcome'},taskContract:{deliverable:'Independent final assessment',requirements:[{id:'outcome',requirement:'Complete original app',sourceId:'latest-user',status:'active'}],conflicts:[]}};
+ let requests=0;
+ const model=async(c,instruction,input)=>{
+  requests++;let text;
+  if(c.job.role==='compose'){const context=JSON.parse(input);assert.ok(context.objective.includes(f.p.objective));assert.ok(context.objective.includes(f.p.clarifications));text='Candidate delivery';}
+  else if(!instruction.includes('KATIE_REQUIRED_DRAFT_REVIEW')){const turns=JSON.parse(input.split('AUTHORITATIVE_USER_TURNS:\n')[1]);assert.ok(turns.at(-1).text.includes(f.p.objective));assert.ok(turns.at(-1).text.includes(f.p.clarifications));assert.doesNotMatch(input,/Candidate delivery/);text=JSON.stringify(assessment);}
+  else{const context=JSON.parse(input.split('Evidence and candidate:\n')[1]);assert.ok(context.objective.includes(f.p.objective));assert.ok(context.objective.includes(f.p.clarifications));text=JSON.stringify({verdict:'approve',findings:'Every original requirement checked',checks:load('@/lib/collaboration/review-contract').acceptanceIds(assessment).map(id=>({id,passed:true,evidence:'Full original brief and clarification checked'}))});}
+  return{text,sources:[],calculations:[],model:'independent-fixture'};
+ };
+ await worker.executeClaim({mission:m,job:compose},model);compose.result=committed.p_result;compose.status='completed';await worker.executeClaim({mission:m,job:review},model);
+ assert.equal(requests,3);assert.equal(committed.p_mission_status,'completed');
+});
