@@ -3037,6 +3037,15 @@ ${chunkWorkflowSummary}`;
                 leadProvider: draftProvider,
                 deadlineMs: executionDeadlineMs,
                 taskProgress: reviewTaskProgress,
+                // Stable source identities survive follow-up requests and application switches.
+                // A distinct project or question has a different contract key.
+                ...(reviewTaskProgress?.projectContext?.userMessageId && reviewTaskProgress?.objective?.userMessageId
+                  ? { durableScope: {
+                      actorId,
+                      projectSourceId: reviewTaskProgress.projectContext.userMessageId,
+                      objectiveSourceId: reviewTaskProgress.objective.userMessageId,
+                    } }
+                  : {}),
                 sourceTurns: buildReviewSourceTurns({
                   history: historyForProvider, latestMessage: message, progress: reviewTaskProgress,
                   savedSourceTurns: pendingReviewClarification?.pending.sourceTurns,
