@@ -10,6 +10,7 @@ function loadRouterFixture({failPrimary=false,allow=true}={}){
  const second={name:'anthropic',generate:async p=>{calls.push(['anthropic',p.modelId]);return{text:'recovered verified text',model:p.modelId,provider:'anthropic',usage:{totalTokens:72}};}};
  const out=ts.transpileModule(source,{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022,esModuleInterop:true}}).outputText,exports={};
  const require=name=>name==='@/lib/orchestration/routing'?{orchestrationChoices:async()=>{chosen++;return[{provider:first,modelId:'gemini-3.1-pro',reasoning:'fixture'},{provider:second,modelId:'claude-sonnet-4-6',reasoning:'fixture'}];},orchestrationFailure:async()=> 'provider'}
+ :name==='@/lib/orchestration/request-rejection'?{rejectedBeforeInference:error=>error.status===429}
  :name==='@/lib/orchestration/bounded-provider'?{boundedProvider:choice=>({post:async()=>({input_tokens:20}),responses:{create:async request=>{const r=await choice.provider.generate({modelId:request.model});return{status:'completed',output_text:r.text,output:[],usage:{total_tokens:r.usage.totalTokens}};}}})}
  :name==='./request-budget'?{missionInputLimit:()=>48000,fitsMissionEnvelope:()=>true,missionExecutionDeadline:()=>Date.now()+240000,missionAttemptTimeout:()=>90000,MissionAdmissionError:class extends Error{},explainAdmissionDenial:async()=>{throw Error('Worker no longer authorized or mission allowance exhausted');}}
  :name==='@/lib/providers'?{getAvailableProviders:()=>[first,second]}

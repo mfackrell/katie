@@ -45,7 +45,7 @@ function nativeRequest(provider:string,request:BoundedRequest){
    if(item.role)contents.push({role:item.role==='assistant'?'model':'user',parts:[{text:String(item.content??'')}]});
   }
   body={systemInstruction:{parts:[{text:instructions}]},contents,generationConfig:{maxOutputTokens:request.max_output_tokens,...(request.text?.format?{responseMimeType:'application/json'}:{})},
-   ...(calculator?{tools:[{functionDeclarations:[{name:calculator.name,description:calculator.description,parameters:calculator.parameters}]}]}:{})};
+   ...(calculator?{tools:[{functionDeclarations:[{name:calculator.name,description:calculator.description,parametersJsonSchema:calculator.parameters}]}]}:{})};
  }
  return{url,headers,body};
 }

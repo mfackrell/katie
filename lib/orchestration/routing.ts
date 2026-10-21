@@ -1,4 +1,5 @@
 import {supportsBoundedModel} from './compatibility';
+import {rejectedBeforeInference} from './request-rejection';
 import {getAvailableProviders} from '@/lib/providers';
 import type {LlmProvider} from '@/lib/providers/types';
 import {chooseProvider} from '@/lib/router/master-router';
@@ -33,7 +34,7 @@ export async function orchestrationChoices(input:{objective:string;instruction:s
     if(reservation)await input.accounting!.finish(reservation,result.usage?.total_tokens??null);
     if(result.status!=='completed'||!result.output_text?.trim())throw Error('Routing decision incomplete');
     return{text:result.output_text,model:params.modelId,provider:provider.name};
-   }catch(error){if(reservation)await input.accounting!.finish(reservation,null);throw error;}
+   }catch(error){if(reservation)await input.accounting!.finish(reservation,rejectedBeforeInference(error)?0:null);throw error;}
   }
  } satisfies LlmProvider));
  if(!providers.length)throw Error('No connected provider supports the required bounded orchestration tools');
@@ -41,7 +42,7 @@ export async function orchestrationChoices(input:{objective:string;instruction:s
   'Autonomous assignment. Choose the strongest available model/submodel for this exact task, not the cheapest default. '+
   (input.research?'Native live web search with cited receipts required. ':'')+
   (input.review?'Independent substantive verification; prioritize reasoning depth. ':''),providers,{
-   routingRequestId:input.requestId,diverseFallbackProviders:true,decisionCandidatesPerProvider:4,
+   routingRequestId:input.requestId,candidateAllowed:(provider,model)=>supportsBoundedModel(provider,model),diverseFallbackProviders:true,decisionCandidatesPerProvider:4,
    ...(input.research?{requestIntent:'web-search' as const}:input.review?{requestIntent:'assistant-reflection' as const}:input.planning?{requestIntent:'architecture-review' as const}:{})
   });
  const ranked=[{provider:decision.provider,modelId:decision.modelId},...decision.fallbackChain];

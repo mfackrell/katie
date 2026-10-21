@@ -1,3 +1,4 @@
+import {rejectedBeforeInference} from '@/lib/orchestration/request-rejection';
 import {GAME_RULE_CATEGORIES} from '../../scripts/project-game-rules.mjs';
 import {projectPlanSchema} from '@/lib/projects/contract';
 import { zodTextFormat } from 'openai/helpers/zod';
@@ -139,7 +140,7 @@ async function executeMissionModel(claim:Claim,instruction:string,input:string,t
    }
    return{text,sources,calculations,model:selectedModel};
   }catch(error){
-   await rpc('finish_mission_call',{p_call:callId,p_tokens:null}).catch(()=>{});
+   await rpc('finish_mission_call',{p_call:callId,p_tokens:rejectedBeforeInference(error)?0:null}).catch(()=>{});
    console.warn('[Missions] Provider attempt ended',{jobId:claim.job.id,callId,provider:choice.provider.name,model:selectedModel,durationMs:Date.now()-started,reservedTokens:reserve,countMethod:counted?'provider':'conservative-bytes',error:error instanceof Error?error.message.slice(0,350):'Unknown provider failure'});
    throw error;
   }

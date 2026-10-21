@@ -165,11 +165,15 @@ function parseMemoryEditorResult(
       return { action: "no_change" };
     }
 
-    if (parsed.action !== "replace") {
-      return null;
-    }
+    // Some JSON-mode models return the requested version-3 memory object
+    // directly rather than wrapping it in {action:"replace",updatedContent}.
+    // Normalize the envelope, but never bypass per-entry evidence validation.
+    const proposed = parsed.action === "replace" ? parsed.updatedContent
+      : parsed.action === undefined && parsed.version === 3 && Array.isArray(parsed.entries)
+        ? parsed : null;
+    if (!proposed) return null;
 
-    const updatedContent = normalizeUpdatedContent(parsed.updatedContent, allowedEvidenceIds);
+    const updatedContent = normalizeUpdatedContent(proposed, allowedEvidenceIds);
     if (!updatedContent) {
       return null;
     }
@@ -403,7 +407,9 @@ export async function maybeUpdateLongTermMemory(
     const decision = parseMemoryEditorResult(rawResult, allowedEvidenceIds);
     if (!decision) {
       if (options.required) throw new Error("Memory editor returned invalid update");
-      console.log("[LongTermMemoryEditor] No-op: invalid model response", { actorId, chatId });
+      // A malformed envelope is an execution failure, not a legitimate
+      // no-change decision. Surface it for monitoring and later replay.
+      console.error("[LongTermMemoryEditor] Invalid model response; memory not saved", { actorId, chatId, latestUserMessagePreview: truncateForLog(latestUserMessage, 120) });
       return;
     }
 

@@ -700,6 +700,7 @@ export async function chooseProvider(
     actorId?: string;
     actorRoutingProfile?: ActorRoutingProfile;
     routingHints?: RoutingHint[];
+    candidateAllowed?: (provider: LlmProvider["name"], modelId: string) => boolean;
     excludedCandidates?: Array<{ providerName: LlmProvider["name"]; modelId: string }>;
     rerouteContext?: RoutingRerouteContext | null;
   }
@@ -733,7 +734,8 @@ export async function chooseProvider(
     if (registrySnapshot?.get(provider.name)?.length) {
       const eligibleModels = (registrySnapshot.get(provider.name) ?? [])
         .filter((record) => record.routing_eligibility !== "disabled" && record.routing_eligibility !== "manual_override_only")
-        .map((record) => record.model_id);
+        .map((record) => record.model_id)
+        .filter((model) => options?.candidateAllowed?.(provider.name,model) !== false);
       const restrictedForTextOnly = (registrySnapshot.get(provider.name) ?? [])
         .filter((record) => record.routing_eligibility === "restricted")
         .map((record) => record.model_id);
@@ -745,7 +747,7 @@ export async function chooseProvider(
 
     const fallbackModels = await provider.listModels();
     console.warn(`[ModelRegistry] requestId=${traceRequestId} provider=${provider.name} using_provider_fallback=true count=${fallbackModels.length}`);
-    return { provider, models: fallbackModels };
+    return { provider, models: fallbackModels.filter(model => options?.candidateAllowed?.(provider.name,model) !== false) };
   }));
 
   const controlPlaneDecisionProviders = selectControlPlaneDecisionModels(modelEntries, registryLookup, traceRequestId);

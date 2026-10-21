@@ -3,17 +3,20 @@ import type { ManagedAgent } from '@/lib/agents/policy';
 export type Mission = { project_id?:string|null;project_kind?:string|null;project_evidence?:unknown; id:string;objective:string;team:ManagedAgent[];status:string;max_calls:number;calls:number;token_allowance:number;reserved_tokens:number;actual_tokens:number;max_minutes:number;deadline:string|null;result:string|null;detail:string|null;repository_id:string|null };
 export type Assignment = {id:string;mission_id:string;job_key:string;role:'plan'|'work'|'compose'|'review'|'revise'|'development';agent_id:string;instruction:string;dependencies:string[];payload:Record<string,unknown>;status:string;attempts:number;lease:string;lease_until:string;result:Record<string,unknown>|null;detail:string|null};
 export type Claim = {mission:Mission;job:Assignment};
-export const planSchema = z.object({assignments:z.array(z.object({key:z.string().regex(/^[a-z][a-z0-9_]{0,24}$/),agentId:z.string().uuid(),instruction:z.string().min(1).max(5000),capability:z.enum(['analysis','research','writing','development']),dependencies:z.array(z.string()).max(2)}).strict()).min(1).max(3),deliverable:z.string().min(1).max(2000)}).strict();
+export const planSchema = z.object({assignments:z.array(z.object({key:z.string().regex(/^[a-z][a-z0-9_]{0,24}$/),agentId:z.string().uuid(),instruction:z.string().min(1).max(5000),capability:z.enum(['analysis','research','writing','development','repository_review']),dependencies:z.array(z.string()).max(2)}).strict()).min(1).max(3),deliverable:z.string().min(1).max(2000)}).strict();
 export const reviewSchema=z.object({verdict:z.enum(['pass','changes_requested','blocked']),findings:z.array(z.string().min(1).max(2000)).max(8),summary:z.string().min(1).max(3000)}).strict();
 export function parseJSON(text:string):unknown {return JSON.parse(text.trim().replace(/^```(?:json)?\s*/, '').replace(/\s*```$/, ''));}
+export const readOnlyRepositoryObjective=(text:string)=>/\b(?:read[- ]only|do not modify|without (?:changing|modifying))\b/i.test(text);
 export function validatePlan(value:unknown,mission:Mission){
  const plan=planSchema.parse(value),seen=new Set<string>();
+ if(plan.assignments.filter(a=>a.capability==='repository_review'||(a.capability==='development'&&readOnlyRepositoryObjective(mission.objective))).length>2)throw Error('At most two repository inspections fit the complete independent review and revision cycle');
  for(const a of plan.assignments){
   if(['plan','compose','review','revision','review_again'].includes(a.key)||seen.has(a.key))throw Error('Reserved or duplicate assignment key');
   if(a.dependencies.some(d=>!seen.has(d)))throw Error('Dependencies must reference earlier assignments in this mission');
   const agent=mission.team.find(x=>x.id===a.agentId);
   if(!agent)throw Error('Planner selected an agent outside the saved team');
   if(a.capability==='research'&&!agent.config.research)throw Error('Research permission denied');
+  if(a.capability==='repository_review'&&!mission.repository_id)throw Error('Saved repository read binding required');
   if(a.capability==='development'&&(!agent.config.development||!mission.repository_id))throw Error('Approved development connection required');
   seen.add(a.key);
  }
