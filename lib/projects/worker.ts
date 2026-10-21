@@ -355,7 +355,7 @@ async function reconcileBlockedGameRevisions(){
     const db=getSupabaseAdminClient();
     const {data,error}=await db.from('work_projects').select('id')
       .eq('status','blocked').eq('profile','game').eq('phase','specification')
-      .order('updated_at',{ascending:false}).limit(2);
+      .order('updated_at',{ascending:false}).limit(20);
     if(error)throw Error('Blocked game revision recovery index unavailable');
     for(const p of (data??[]) as Array<{id:string}>){
         if(await projectRpc<boolean>('recover_game_revision_timeout',{p_id:p.id}) || await projectRpc<boolean>('recover_game_rule_coverage',{p_id:p.id}) || await projectRpc<boolean>('recover_bounded_game_review',{p_id:p.id}) || await projectRpc<boolean>('recover_mission_credit_failure',{p_id:p.id}) || await projectRpc<boolean>('recover_game_specification_checkpoint',{p_id:p.id})){
