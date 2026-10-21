@@ -32,7 +32,11 @@ function harness(choices,replies,reserve=true){
  const load=modules({
   '@/lib/orchestration/routing':{orchestrationChoices:async()=>choices,orchestrationFailure:async(_,e)=>/429|credits/i.test(e.message)?'provider':'model'},
   '@/lib/missions/store':{rpc:async(name,args)=>{ledger.push({name,...args});return name==='reserve_mission_call'?reserve:true;}}
- },{fetch:async(url,request)=>{calls.push({url,body:JSON.parse(request.body),signal:request.signal});const reply=replies.shift();if(reply instanceof Error)throw reply;return new Response(JSON.stringify(reply),{status:200});}});
+ },{fetch:async(url,request)=>{
+  if(url.endsWith('/count_tokens'))return new Response(JSON.stringify({input_tokens:200}),{status:200});
+  if(url.endsWith(':countTokens'))return new Response(JSON.stringify({totalTokens:200}),{status:200});
+  calls.push({url,body:JSON.parse(request.body),signal:request.signal});const reply=replies.shift();if(reply instanceof Error)throw reply;return new Response(JSON.stringify(reply),{status:200});
+ }});
  return{run:load('@/lib/missions/model').missionModel,calls,ledger};
 }
 const anthropic=(text,extra={})=>({content:[{type:'text',text}],stop_reason:'end_turn',usage:{input_tokens:20,output_tokens:10},...extra});
@@ -81,7 +85,8 @@ test('billing failure falls back across providers within the same job/lease and 
 test('budget denial prevents every native provider from dispatching or falling back',async()=>{
  const h=harness([choice('anthropic','model-a'),choice('google','model-b')],[],false);
  await assert.rejects(h.run(claim(),'Analyze','Evidence'),/allowance exhausted/);
- assert.equal(h.calls.length,0);assert.equal(h.ledger.length,1);
+ assert.equal(h.calls.length,0);assert.equal(h.ledger.length,2);
+ assert.deepEqual(h.ledger.map(x=>x.name),['reserve_mission_call','mission_call_capacity']);
 });
 
 test('Anthropic calculator executes deterministic typed tools and returns native tool results',async()=>{

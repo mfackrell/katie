@@ -7,6 +7,7 @@ import { agentRpc } from '@/lib/agents/store';
 import { dispatchDevelopment,reconcileDevelopment,developmentEvidence } from '@/lib/agents/development';
 import type { AgentTask } from '@/lib/agents/policy';
 import { missionModel,MissionModelFailure } from './model';
+import {fitsMissionEnvelope} from './request-budget';
 import { rpc,readMission } from './store';
 import { ASSESSMENT_INSTRUCTION,REVIEW_INSTRUCTION } from '@/lib/collaboration/required-review';
 import { validateAssessment,validateAnswerReview,acceptanceIds } from '@/lib/collaboration/review-contract';
@@ -134,9 +135,12 @@ export async function executeClaim(claim:Claim,model=missionModel){
   const reviewInput='Independent assessment:\n'+JSON.stringify(assessment)+
     '\nRequired acceptance IDs:\n'+JSON.stringify(acceptanceIds(assessment))+
     '\nEvidence and candidate:\n'+JSON.stringify(reviewPayload);
-  if(reviewFrame.length+reviewInput.length>48000)
-    throw new MissionModelFailure('Review input exceeds 48,000-character bound before provider dispatch; candidate and receipts remain saved.',{
-      reviewContextOverflow:true,candidateJobId:target.id,reviewInputCharacters:reviewFrame.length+reviewInput.length});
+  // The mission runner's 48K input envelope excludes its system instruction.
+  // Apply the same envelope here; count BOTH fields with the provider before
+  // reservation. Do not confuse characters with tokens or delete acceptance.
+  if(!fitsMissionEnvelope(reviewFrame,reviewInput))
+    throw new MissionModelFailure('Review input exceeds its bounded envelope before provider dispatch; candidate and receipts remain saved.',{
+      reviewContextOverflow:true,candidateJobId:target.id,reviewInputCharacters:reviewInput.length,reviewInstructionCharacters:reviewFrame.length});
   const checked=await model(claim,reviewFrame,reviewInput);
   const evaluated=validateAnswerReview(parseJSON(checked.text),assessment);
   const {wordCount,wordLimit}=measured;
