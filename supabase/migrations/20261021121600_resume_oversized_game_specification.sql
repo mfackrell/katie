@@ -2,7 +2,7 @@
 -- Guard all project-level permissions, historical charges and attempt limits.
 create or replace function public.resume_oversized_game_specification(p_id uuid,p_actor uuid,p_chat uuid)
 returns boolean language plpgsql set search_path to 'public' as $$
-declare p public.work_projects; charged bigint; runs_used int;
+declare p public.work_projects; charged bigint; runs_used int; latest_research text; brief_chars int;
 begin
  perform pg_advisory_xact_lock(hashtextextended('katie.mission.state',0));
  select * into p from public.work_projects where id=p_id and actor_id=p_actor and chat_id=p_chat for update;
@@ -12,15 +12,22 @@ begin
    or p.deadline<=now()+interval '30 minutes'
    or p.detail not like '%Project milestone context exceeds its bounded input%'
  then return false;end if;
- -- A one-shot recovery may be consumed only when the complete authoritative
- -- brief fits the compact fallback. Larger charters require scoped human action.
- if length(p.objective)+length(coalesce(p.clarifications,''))>8500 then return false;end if;
- if exists(select 1 from public.project_events where project_id=p.id and event='oversized_game_specification_resumed') then return false;end if;
- if not exists(select 1 from public.project_runs r join public.agent_missions m on m.id=r.mission_id
-  where r.project_id=p.id and r.kind='research' and m.status='completed'
-    and r.outcome is not null and length(coalesce(r.outcome->>'result',''))<=12000
-    and coalesce((r.outcome->>'superseded')::boolean,false)=false)
- then return false;end if;
+ -- The exact most recent eligible research payload is the source the real worker
+ -- consumes. Validate it before the one-shot record can be spent.
+ select m.result into latest_research from public.project_runs r
+ join public.agent_missions m on m.id=r.mission_id
+ where r.project_id=p.id and r.kind='research' and m.status='completed'
+   and r.outcome is not null
+   and coalesce((r.outcome->>'superseded')::boolean,false)=false
+ order by r.ordinal desc limit 1;
+ if not found or coalesce(length(latest_research),0)=0 then return false;end if;
+ brief_chars:=length(p.objective)+length(coalesce(p.clarifications,''));
+ -- A brief longer than the objective budget is forwarded as preserved evidence.
+ -- Keep the complete serialized evidence below SQL's 30k limit.
+ if brief_chars>22000 or (case when brief_chars>6500 then brief_chars else 0 end)+
+    length(latest_research)+2500>30000 then return false;end if;
+ if exists(select 1 from public.project_events where project_id=p.id
+   and event='oversized_game_specification_resumed') then return false;end if;
  select count(*) into runs_used from public.project_runs where project_id=p.id;
  select coalesce(sum(greatest(actual_tokens,reserved_tokens)),0) into charged from public.agent_missions where project_id=p.id;
  if runs_used>=p.max_missions or p.token_allowance-charged<30000 then return false;end if;
