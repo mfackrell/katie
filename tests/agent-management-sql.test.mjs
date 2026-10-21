@@ -25,7 +25,7 @@ test('agent management: real SQL snapshots, grants, associations, concurrent adm
   await db.query(readFileSync('supabase/migrations/20261016211426_agent_management.sql','utf8'));
   await db.query(readFileSync('supabase/migrations/202610120003_chat_task_progress.sql','utf8'));
   await db.query('create table messages(id text primary key,actor_id uuid,chat_id uuid,role text,content text,created_at timestamptz default now()); grant select on messages to service_role;');
-  await db.query(readFileSync('supabase/migrations/20261021000000_agent_task_context_handoffs.sql','utf8'));
+  await db.query(readFileSync('supabase/migrations/20261021190018_agent_task_context_handoffs.sql','utf8'));
   const cfg={name:'Researcher',instructions:'Analyze carefully',research:false,attachments:false,development:true,maxActiveTasks:1,maxInputChars:1000,reviewMode:'always'};
   const make=async(config=cfg)=>(await db.query('select save_managed_agent(null,$1,false) result',[config])).rows[0].result;
   const a=await make();
