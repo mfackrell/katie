@@ -22,15 +22,14 @@ BEGIN
   IF p.active_mission_id IS NOT NULL THEN
     SELECT * INTO source_mission FROM agent_missions
       WHERE id=p.active_mission_id AND project_id=p.id FOR UPDATE;
-    IF NOT FOUND OR source_mission.status NOT IN ('blocked','stopped')
-      OR (source_mission.status='stopped' AND source_mission.deadline>now())
+    IF NOT FOUND OR source_mission.status<>'blocked'
     THEN RETURN false; END IF;
   END IF;
   -- Source must be a persisted, completed specification composition, never a
   -- reviewer response or model-authored project metadata.
   SELECT j.* INTO source_job
     FROM mission_assignments j JOIN agent_missions m ON m.id=j.mission_id
-    WHERE m.project_id=p.id AND m.project_kind='specification'
+    WHERE m.project_id=p.id AND m.project_kind='specification' AND m.status='blocked'
       AND j.role='compose' AND j.status='completed'
       AND jsonb_typeof(j.result->'text')='string'
       AND length(j.result->>'text') BETWEEN 100 AND 40000
