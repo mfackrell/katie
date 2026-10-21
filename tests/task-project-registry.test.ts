@@ -106,3 +106,20 @@ test("generic examples request in a new chat requires choosing a saved applicati
   const brief=applyUserToTaskProgress(state,{messageId:"new-brief",text:"New project: product engineering leadership"});
   assert.equal(brief.projectContext?.userMessageId,"new-brief");
 });
+
+test("a seeded specialist handoff survives an empty target chat and supplies active sources to generation",()=>{
+ let source=project(emptyTaskProgress(),"client-source","New project: project accounting and WIP controls for the current client");
+ source=applyAssistantToTaskProgress(source,{messageId:"ask",text:"How many projects did you reconcile?"});
+ source=applyUserToTaskProgress(source,{messageId:"confirmed",text:"I reconciled 35 projects and corrected $420,000 in estimates."});
+ source=applyAssistantToTaskProgress(source,{messageId:"next-question",text:"What was the review cadence?"});
+ const handed=syncTaskProgress(structuredClone(source),[]);
+ assert.deepEqual(handed.pending,source.pending);
+ assert.deepEqual(handed.answered,source.answered);
+ const current=applyUserToTaskProgress(handed,{messageId:"specialist-request",text:"Give three relevant examples for this client."});
+ const assembled=formatTaskProgress(current);
+ assert.equal(current.projectContext?.userMessageId,"client-source");
+ assert.match(assembled,/project accounting and WIP controls/);
+ assert.match(assembled,/35 projects/);
+ assert.match(assembled,/confirmed/);
+ assert.match(assembled,/Give three relevant examples/);
+});

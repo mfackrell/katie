@@ -3,11 +3,13 @@ import { z } from "zod";
 import { getSupabaseAdminClient } from "@/lib/data/supabase/admin";
 import { agentRpc, readTask, refreshTask } from "@/lib/agents/store";
 import { dispatchDevelopment, reconcileDevelopment } from "@/lib/agents/development";
+import { getChatById } from "@/lib/data/persistence-store";
+import { loadTaskProgress } from "@/lib/chat/task-progress-store";
 import type { AgentTask } from "@/lib/agents/policy";
 export const runtime = "nodejs";
 export const maxDuration = 120;
 
-const create = z.object({ action: z.literal("create"), id: z.string().uuid(), agentId: z.string().uuid(), input: z.string().trim().min(1).max(16000), kind: z.enum(["general", "development"]), repositoryId: z.string().uuid().optional() }).strict();
+const create = z.object({ action: z.literal("create"), id: z.string().uuid(), agentId: z.string().uuid(), input: z.string().trim().min(1).max(16000), kind: z.enum(["general", "development"]), repositoryId: z.string().uuid().optional(), handoff: z.object({sourceActorId:z.string().uuid(),sourceChatId:z.string().uuid(),projectId:z.string().min(1)}).strict().optional() }).strict();
 const action = z.discriminatedUnion("action", [
   z.object({ action: z.literal("start"), id: z.string().uuid() }).strict(),
   z.object({ action: z.literal("refresh"), id: z.string().uuid() }).strict(),
@@ -15,6 +17,14 @@ const action = z.discriminatedUnion("action", [
 ]);
 export async function GET(request: NextRequest) {
   try {
+    const handoffChatId=request.nextUrl.searchParams.get("handoffChatId");
+    if(handoffChatId){
+      const chat=await getChatById(z.string().uuid().parse(handoffChatId));
+      if(!chat) throw new Error("Source conversation unavailable");
+      const state=await loadTaskProgress(chat.actorId,chat.id);
+      if(!state?.projectContext || state.projectClarification) throw new Error("Select an unambiguous source project first");
+      return NextResponse.json({handoff:{sourceActorId:chat.actorId,sourceChatId:chat.id,projectId:state.projectContext.userMessageId},label:state.projectContext.text.slice(0,160)}, {headers:{"Cache-Control":"no-store"}});
+    }
     let id = request.nextUrl.searchParams.get("id");
     const chatId = request.nextUrl.searchParams.get("chatId");
     if (!id && chatId) {
@@ -34,7 +44,8 @@ export async function POST(request: NextRequest) {
     const raw = await request.json();
     if (raw.action === "create") {
       const body = create.parse(raw);
-      const task = await agentRpc("create_agent_task", { p_id: body.id, p_agent: body.agentId, p_input: body.input, p_kind: body.kind, p_repository: body.repositoryId ?? null });
+      if(body.handoff && body.kind!=="general") throw new Error("Application context handoff requires a general task");
+      const task = body.handoff ? await agentRpc("create_agent_task_handoff", {p_id:body.id,p_agent:body.agentId,p_input:body.input,p_source_actor:body.handoff.sourceActorId,p_source_chat:body.handoff.sourceChatId,p_project:body.handoff.projectId}) : await agentRpc("create_agent_task", { p_id: body.id, p_agent: body.agentId, p_input: body.input, p_kind: body.kind, p_repository: body.repositoryId ?? null });
       return NextResponse.json({ task });
     }
     const body = action.parse(raw);

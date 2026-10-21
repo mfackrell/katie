@@ -309,3 +309,45 @@ test('large approved game dispatch is lossless, bounded and reconcilable, while 
   }finally{if(prior===undefined)delete process.env.GITHUB_TOKEN;else process.env.GITHUB_TOKEN=prior;}
  }
 });
+
+test('explicit handoff API resolves a source chat and submits its exact selection transactionally',async()=>{
+ const actor=randomUUID(),chat=randomUUID(),agent=randomUUID(),taskId=randomUUID();
+ let ambiguous=false;const calls=[];
+ const load=modules({
+  '@/lib/data/persistence-store':{getChatById:async id=>id===chat?{id,actorId:actor}:null},
+  '@/lib/chat/task-progress-store':{loadTaskProgress:async(a,c)=>{assert.equal(a,actor);assert.equal(c,chat);return {projectContext:{userMessageId:'source-project',text:'Current active client brief'},...(ambiguous?{projectClarification:'Which project?'}:{})};}},
+  '@/lib/agents/store':{agentRpc:async(name,args)=>{calls.push({name,args});return{id:taskId};}},
+  '@/lib/agents/development':{},
+ });
+ const {NextRequest}=load('next/server'),route=load('@/app/api/agent-tasks/route');
+ const source=await (await route.GET(new NextRequest('http://local/api/agent-tasks?handoffChatId='+chat))).json();
+ assert.deepEqual(source.handoff,{sourceActorId:actor,sourceChatId:chat,projectId:'source-project'});
+ assert.equal(source.label,'Current active client brief');
+ const create=body=>route.POST(new NextRequest('http://local/api/agent-tasks',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)}));
+ assert.equal((await create({action:'create',id:taskId,agentId:agent,input:'Give relevant examples',kind:'general',handoff:source.handoff})).status,200);
+ assert.equal(calls[0].name,'create_agent_task_handoff');
+ assert.deepEqual(JSON.parse(JSON.stringify(calls[0].args)),{p_id:taskId,p_agent:agent,p_input:'Give relevant examples',p_source_actor:actor,p_source_chat:chat,p_project:'source-project'});
+ assert.equal((await create({action:'create',id:randomUUID(),agentId:agent,input:'Build it',kind:'development',handoff:source.handoff})).status,409);
+ assert.equal(calls.length,1);
+ ambiguous=true;
+ assert.equal((await route.GET(new NextRequest('http://local/api/agent-tasks?handoffChatId='+chat))).status,503);
+ assert.equal((await route.GET(new NextRequest('http://local/api/agent-tasks?handoffChatId='+randomUUID()))).status,503);
+});
+
+test('managed chat restores only receipt-bound frozen handoff facts and draft into its actual history',async()=>{
+ const task=baseTask();const filters=[];let mismatch=false;
+ const source=[{id:'source-project',chatId:'source-chat',role:'user',content:'Current client needs WIP controls',createdAt:'2026-01-01'}, {id:'fact-source',chatId:'source-chat',role:'user',content:'Confirmed 35 jobs and $420,000 corrected estimates',createdAt:'2026-01-02'}, {id:'draft-source',chatId:'source-chat',role:'assistant',content:'Latest active draft about WIP controls',createdAt:'2026-01-03'}];
+ const load=modules({'@/lib/data/supabase/admin':{getSupabaseAdminClient:()=>({from:table=>{assert.equal(table,'agent_task_context_handoffs');const q={select:()=>q,eq:(key,value)=>{filters.push([key,value]);return q;},maybeSingle:async()=>({data:{project_id:mismatch?'other-project':'source-project',source_messages:source},error:null})};return q;}})}});
+ const {loadTaskHandoffEvidence}=load('@/lib/agents/task-handoff');
+ const route=readFileSync('app/api/chat/route.ts','utf8');const begin=route.indexOf('    let history = currentHistory;'),end=route.indexOf('    let taskProgress = pdfProgress;',begin);
+ assert.ok(begin>0&&end>begin);
+ const compiled=ts.transpileModule(`(async()=>{${route.slice(begin,end)}return history;})()`,{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText;
+ const current=[{id:'target-user',role:'user',content:'Give three examples'}];
+ const run=()=>vm.runInNewContext(compiled,{currentHistory:current,pdfProgress:{projectContext:{userMessageId:'source-project',text:'Current client needs WIP controls'},projects:[{projectContext:{userMessageId:'source-project'},sourceChatId:'source-chat'}]},taskProgressUserMessageId:'new-user',chatId:task.chat_id,actorId:task.actor_id,currentAgentTask:()=>task,loadTaskHandoffEvidence,Map,contextProjects:[],getChatById:()=>{throw Error('Must not read a foreign actor chat');},getMessages:()=>{throw Error('Must not retrieve unrelated source history');}});
+ const history=await run();
+ assert.deepEqual(JSON.parse(JSON.stringify(history.map(m=>m.id))),['source-project','fact-source','draft-source','target-user']);
+ assert.match(history.map(m=>m.content).join('\n'),/35 jobs/);assert.match(history.map(m=>m.content).join('\n'),/Latest active draft/);
+ assert.ok(filters.some(([k,v])=>k==='target_actor_id'&&v===task.actor_id));assert.ok(filters.some(([k,v])=>k==='target_chat_id'&&v===task.chat_id));
+ mismatch=true;await assert.rejects(run(),/binding mismatch/);
+
+});
