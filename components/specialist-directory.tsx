@@ -45,7 +45,7 @@ async function change(url: string, method: string, body?: unknown) {
 }
 
 type CalibrationGroup={type:"redundancy"|"irrelevant";keys:string[];reason:string};
-type CalibrationResult={hash:string;groups:CalibrationGroup[];conflicts:Array<{keys:string[];question:string}>;entries:Array<{key:string;value:string}>};
+type CalibrationResult={hash:string;proof:string;groups:CalibrationGroup[];conflicts:Array<{keys:string[];question:string}>;entries:Array<{key:string;value:string}>};
 function MemoryCalibration({actor}:{actor:Actor}) {
  const [busy,setBusy]=useState(false),[error,setError]=useState(""),[notice,setNotice]=useState("");
  const [report,setReport]=useState<CalibrationResult|null>(null),[selected,setSelected]=useState<number[]>([]);
@@ -64,7 +64,7 @@ function MemoryCalibration({actor}:{actor:Actor}) {
    setBusy(true);setError("");
    try{
      const result=await change(`/api/actors?id=${encodeURIComponent(actor.id)}`,"PATCH",{
-       calibration:"apply",hash:report.hash,approved:selected.map(i=>report.groups[i])
+       calibration:"apply",hash:report.hash,proof:report.proof,groups:report.groups,approved:selected.map(i=>report.groups[i])
      }) as {previous:number;current:number};
      setNotice(`Memory calibrated: ${result.previous} → ${result.current} entries. Restoration backup saved.`);
      setReport(null);setSelected([]);
