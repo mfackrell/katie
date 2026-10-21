@@ -40,7 +40,7 @@ export async function executeClaim(claim:Claim,model=missionModel){
  const rejectedDraft=repair();
  const coverageRepair=rejectedDraft?.specification&&typeof job.result?.rejectedSpecification==='string'?gameCoverageRepair(projectPlanSchema.parse(parseJSON(job.result.rejectedSpecification))):null;
  const context=()=>{
-  const data={objective:mission.objective,projectPhase:mission.project_kind,projectEvidence:rejectedDraft?undefined:researchRecoveryEvidence(mission.project_evidence,true),rejectedDraft,coverageRepair,assignment:job.instruction,specificationValidationFeedback:job.result?.specificationValidationFeedback,evidence:completed.filter(j=>j.role!=='plan'&&j.role!=='review').map(j=>({key:j.job_key,instruction:j.instruction,result:candidateEvidence(j.result)}))};
+  const data={objective:mission.objective,projectPhase:mission.project_kind,projectEvidence:rejectedDraft?{originalUserOutcome:(mission.project_evidence as Record<string,unknown>|null)?.originalUserOutcome,reviewedResearch:(mission.project_evidence as Record<string,unknown>|null)?.reviewedResearch}:researchRecoveryEvidence(mission.project_evidence,true),rejectedDraft,coverageRepair,assignment:job.instruction,specificationValidationFeedback:job.result?.specificationValidationFeedback,evidence:completed.filter(j=>j.role!=='plan'&&j.role!=='review').map(j=>({key:j.job_key,instruction:j.instruction,result:candidateEvidence(j.result)}))};
   // Keep the complete rejected draft in storage, never let it crowd the original
   // requirements out of a bounded repair request. Diagnostics remain actionable.
   const suffix=job.role==='revise'?'\nReview findings: '+JSON.stringify(priorReviews):'';
@@ -101,7 +101,9 @@ export async function executeClaim(claim:Claim,model=missionModel){
  }
  if(job.role==='review'){
   // First pass is draft-blind: objective and acceptance contract only.
-  const turns=[{id:'turn-1',text:'Saved lead responsibilities: '+mission.team[0].config.instructions},{id:'latest-user',text:mission.objective}];
+  const authoritativeBrief=(mission.project_evidence as {originalUserOutcome?:unknown}|null)?.originalUserOutcome;
+  const sourceForReview=typeof authoritativeBrief==='string'?mission.objective+'\nORIGINAL SOURCE BRIEF (complete, authoritative):\n'+authoritativeBrief:mission.objective;
+  const turns=[{id:'turn-1',text:'Saved lead responsibilities: '+mission.team[0].config.instructions},{id:'latest-user',text:sourceForReview}];
   const feedback=typeof job.result?.reviewContractFeedback==='string'?job.result.reviewContractFeedback.slice(0,600):null;
   const blind=await model(claim,frame+'\n'+ASSESSMENT_INSTRUCTION+'\nOnly the supplied source-turn IDs may appear in taskContract requirement or conflict citations. Use an empty conflicts array when no explicit source conflict exists. Validator feedback is formatting/provenance feedback, not a new user requirement or fact.', 'AUTHORITATIVE_USER_TURNS:\n'+JSON.stringify(turns)+(feedback?'\nCONTRACT_VALIDATOR_FEEDBACK (rebuild from the original sources; no draft has been supplied):\n'+JSON.stringify({error:feedback,allowedSourceIds:turns.map(t=>t.id)}):''));
   let assessment:ReturnType<typeof validateAssessment>;
@@ -119,7 +121,7 @@ export async function executeClaim(claim:Claim,model=missionModel){
     ?(()=>{const e=persisted as Record<string,unknown>;
       const research=e.reviewedResearch as {reviewedMissionId?:string}|undefined;
       const recovery=e.recoveryCoverage as {sourceMissionId?:string;findings?:string}|undefined;
-      return {projectProfile:'game',reviewedResearchMissionId:research?.reviewedMissionId,
+      return {projectProfile:'game',originalUserOutcome:e.originalUserOutcome,reviewedResearchText:(e.reviewedResearch as {text?:string}|undefined)?.text,reviewedResearchMissionId:research?.reviewedMissionId,
         recoverySourceMissionId:recovery?.sourceMissionId,recoveryValidationFindings:recovery?.findings,
         originalEvidence:'Full original research and previous drafts retained in durable mission records'};
      })()
