@@ -67,6 +67,22 @@ export async function executeClaim(claim:Claim,model=missionModel){
  const finalWork=job.role==='compose'||job.role==='revise';
  const persona=frame+'\nSaved responsibilities: '+agent.config.instructions+'\n'+(finalWork?getObjectiveFirstInstruction():'Complete only input.assignment. The full objective is context for that assignment, not a request to perform the other workers’ assignments or compose the whole deliverable. Do not delegate, write a new plan, repeat unassigned calculations or recommendations, or offer future work.');
  const commit=(result:Record<string,unknown>,children:Child[]=[],status='completed',missionStatus:string|null=null,final:string|null=null)=>rpc<boolean>('commit_mission_work',{p_id:job.id,p_lease:job.lease,p_result:result,p_children:children,p_status:status,p_mission_status:missionStatus,p_final:final});
+ // A project recovery may point to a server-verified saved composition.
+ // This avoids paying for another draft; independent review still executes.
+ if(job.role==='compose'&&mission.project_kind==='specification'&&
+    (mission.project_evidence as {projectProfile?:string}|null)?.projectProfile==='game'){
+   const checkpoint=(mission.project_evidence as {savedSpecificationCheckpoint?:{text?:string;status?:string}}|null)?.savedSpecificationCheckpoint;
+   if(checkpoint?.status==='unreviewed'&&typeof checkpoint.text==='string'){
+     try{
+       const candidate=validateProjectPlan(parseJSON(checkpoint.text));
+       if(candidate.game){
+         await commit({text:JSON.stringify(candidate),sources:[],calculations:[],
+           recovery:{kind:'saved_composition_checkpoint',freshReviewRequired:true}});
+         return;
+       }
+     }catch{/* Invalid checkpoint: compose again against the original objective. */}
+   }
+ }
  // After a platform validation fix, reuse a now-valid saved draft rather than
  // spend another inference rewriting it. Independent review still runs normally.
  if(finalWork&&mission.project_kind==='specification'&&(mission.project_evidence as {projectProfile?:string}|null)?.projectProfile==='game'&&typeof job.result?.rejectedSpecification==='string'){
