@@ -80,7 +80,7 @@ function modelFixture(responses,reserve=true,inputCount=12){let dispatches=0;con
 }
 const response=(text,extra={})=>({status:'completed',output_text:text,output:[],usage:{total_tokens:12},...extra});
 test('budget uses counted input with output headroom and conservatively falls back when unavailable',async()=>{
- const prior=process.env.OPENAI_API_KEY;process.env.OPENAI_API_KEY='fixture-only';try{const m=mission(),j=job(m),input='Long evidence '.repeat(2000),f=modelFixture([response('Analysis')],true,4000);await f.call({mission:m,job:j},'Analyze',input);assert.equal(f.reservations[0].p_tokens,4000+256+3000);assert.equal(f.counts[0].path,'/responses/input_tokens');assert.equal(f.counts[0].body.input[0].content,input);assert.equal(f.counts[0].body.max_output_tokens,undefined);assert.equal(f.counts[0].timeout,15000);const fallback=modelFixture([response('Analysis')],true,Error('Counting unavailable'));await fallback.call({mission:m,job:j},'Analyze',input);assert.ok(fallback.reservations[0].p_tokens>Buffer.byteLength(input)+3000);}finally{if(prior===undefined)delete process.env.OPENAI_API_KEY;else process.env.OPENAI_API_KEY=prior;}
+ const prior=process.env.OPENAI_API_KEY;process.env.OPENAI_API_KEY='fixture-only';try{const m=mission(),j=job(m),input='Long evidence '.repeat(2000),f=modelFixture([response('Analysis')],true,4000);await f.call({mission:m,job:j},'Analyze',input);assert.equal(f.reservations[0].p_tokens,4000+256+3000);assert.equal(f.counts[0].path,'/responses/input_tokens');assert.equal(f.counts[0].body.input[0].content,input);assert.equal(f.counts[0].body.max_output_tokens,undefined);assert.equal(f.ledger[0].reasoning,undefined,'Use selected model defaults; a universal low effort breaks Pro models');assert.equal(f.counts[0].timeout,15000);const fallback=modelFixture([response('Analysis')],true,Error('Counting unavailable'));await fallback.call({mission:m,job:j},'Analyze',input);assert.ok(fallback.reservations[0].p_tokens>Buffer.byteLength(input)+3000);}finally{if(prior===undefined)delete process.env.OPENAI_API_KEY;else process.env.OPENAI_API_KEY=prior;}
 });
 test('planner dispatch constrains assignment keys with the actual strict output schema',async()=>{
  const prior=process.env.OPENAI_API_KEY;process.env.OPENAI_API_KEY='fixture-only';try{const m=mission(),j=job(m,'plan','plan'),f=modelFixture([response('{}')]);await f.call({mission:m,job:j},'Plan','Objective');const format=f.ledger[0].text.format;assert.equal(format.type,'json_schema');assert.equal(format.strict,true);const assignments=format.schema.properties.assignments;assert.equal(assignments.maxItems,3);assert.equal(assignments.items.additionalProperties,false);assert.equal(assignments.items.properties.key.pattern,'^[a-z][a-z0-9_]{0,24}$');assert.equal(assignments.items.properties.agentId.format,'uuid');assert.equal(assignments.items.properties.instruction.maxLength,5000);const other=modelFixture([response('Analysis')]);await other.call({mission:m,job:job(m)},'Analyze','Input');assert.equal(other.ledger[0].text,undefined);}finally{if(prior===undefined)delete process.env.OPENAI_API_KEY;else process.env.OPENAI_API_KEY=prior;}
@@ -313,4 +313,15 @@ test('a saved specification made valid by a platform fix is reused without infer
  const worker=modules({'@/lib/missions/store':{readMission:async()=>({mission:m,jobs:[j]}),rpc:async(_,a)=>{committed=a;return true;}}})('@/lib/missions/worker');
  await worker.executeClaim({mission:m,job:j},()=>assert.fail('Do not regenerate a valid saved draft'));
  assert.equal(committed.p_result.text,JSON.stringify(draft));assert.equal(committed.p_result.recovery.kind,'revalidated_saved_specification');assert.equal(committed.p_mission_status,null);assert.equal(committed.p_final,null);
+});
+
+
+test('a saved draft-blind stage gets a fresh bounded lease instead of permanently blocking candidate review',async()=>{
+ const m={...mission(),project_kind:'specification',project_evidence:{projectProfile:'game'}};
+ const compose={...job(m,'compose','compose'),status:'completed',result:{text:'Unchanged saved specification'}};
+ const review={...job(m,'review','review'),lease_until:new Date(Date.now()+200000).toISOString()};
+ let claimed=false,committed,modelCalls=0;
+ const worker=modules({'@/lib/missions/store':{readMission:async()=>({mission:m,jobs:[compose,review]}),rpc:async(n,a)=>{if(n==='claim_mission_work'){if(claimed)return null;claimed=true;return{mission:m,job:review};}committed=a;return true;}}})('@/lib/missions/worker');
+ await worker.runMissionBatch(async()=>{modelCalls++;return{text:JSON.stringify(assessment),sources:[],calculations:[],model:'independent-fixture'};});
+ assert.equal(modelCalls,1);assert.equal(committed.p_status,'queued');assert.equal(committed.p_mission_status,null);assert.equal(committed.p_result.reviewStageDeferred,true);assert.equal(compose.result.text,'Unchanged saved specification');
 });

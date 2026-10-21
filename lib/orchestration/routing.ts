@@ -1,3 +1,4 @@
+import {supportsBoundedModel} from './compatibility';
 import {getAvailableProviders} from '@/lib/providers';
 import type {LlmProvider} from '@/lib/providers/types';
 import {chooseProvider} from '@/lib/router/master-router';
@@ -13,7 +14,7 @@ export async function orchestrationChoices(input:{objective:string;instruction:s
  // Gemini grounding currently has no server-enforced per-request search-use cap.
  // Never silently remove a mission's hard tool budget to enable another model.
  const providers=health.providers.filter(p=>!input.research||p.name!=='google').map(provider=>({
-  name:provider.name,listModels:()=>provider.listModels(),
+  name:provider.name,listModels:async()=>(await provider.listModels()).filter(id=>supportsBoundedModel(provider.name,id)),
   // Router classification and selection are inference too: use bounded native
   // transports and the SAME mission call ledger as execution, not chat adapters.
   generate:async(params)=>{
@@ -45,7 +46,7 @@ export async function orchestrationChoices(input:{objective:string;instruction:s
   });
  const ranked=[{provider:decision.provider,modelId:decision.modelId},...decision.fallbackChain];
  const seen=new Set<string>();
- const allowed=ranked.filter(c=>providers.some(p=>p.name===c.provider.name));
+ const allowed=ranked.filter(c=>providers.some(p=>p.name===c.provider.name)&&supportsBoundedModel(c.provider.name,c.modelId));
  const primary=allowed.filter(c=>{if(seen.has(c.provider.name))return false;seen.add(c.provider.name);return true;});
  const keys=new Set(primary.map(c=>c.provider.name+':'+c.modelId));
  const choices=[...primary,...allowed.filter(c=>!keys.has(c.provider.name+':'+c.modelId))].slice(0,6)

@@ -1,3 +1,4 @@
+import {supportsBoundedModel} from './compatibility';
 import OpenAI from 'openai';
 import type {OrchestrationChoice} from './routing';
 
@@ -60,6 +61,7 @@ async function nativePost(url:string,headers:Record<string,string>,body:Item,tim
 /** No chat continuation loops, SDK retries, or hidden inference calls. */
 export function boundedProvider(choice:OrchestrationChoice):Client{
  const provider=choice.provider.name;
+ if(!supportsBoundedModel(provider,choice.modelId))throw Error('Selected model requires a different orchestration transport');
  if(provider==='openai'||provider==='grok'){
   const apiKey=provider==='openai'?process.env.OPENAI_API_KEY:process.env.GROK_API_KEY??process.env.XAI_API_KEY??process.env.grok_api_key;
   if(!apiKey)throw Error('Selected provider connection unavailable: '+provider);

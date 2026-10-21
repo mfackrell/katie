@@ -74,3 +74,56 @@ begin
 end $$;
 revoke all on function public.resume_incomplete_game_review(uuid,uuid,uuid) from public,anon,authenticated;
 grant execute on function public.resume_incomplete_game_review(uuid,uuid,uuid) to service_role;
+
+-- A zero-inference continuation denied by actual admission remains pending,
+-- rather than spending a one-shot recovery. Retry the SAME child only when its
+-- remaining authorized capacity has increased. Never retry a spent review,
+-- widen the project ceiling, reset attempts, or repeatedly wake an unchanged
+-- capacity denial. Original source missions remain untouched.
+create or replace function public.resume_pending_game_review(p_id uuid,p_actor uuid,p_chat uuid)
+returns boolean language plpgsql security invoker set search_path=public as $$
+declare p work_projects;m agent_missions;j mission_assignments;spent bigint;capacity bigint;
+begin
+ perform pg_advisory_xact_lock(hashtextextended('katie.mission.state',0));
+ select * into p from work_projects where id=p_id and actor_id=p_actor and chat_id=p_chat for update;
+ if not found or p.status<>'blocked' or p.phase<>'specification' or p.profile<>'game'
+  or p.spec is not null or p.approval_hash is not null or p.approved_hash is not null
+  or p.deadline<=now()+interval '10 minutes' or p.lease_until>now() then return false;end if;
+ select * into m from agent_missions where id=p.active_mission_id and project_id=p.id for update;
+ if not found or m.status<>'blocked' or not(m.project_evidence ? 'reviewContinuation')
+  or m.calls<>0 or m.routing_calls>=m.max_calls*3 then return false;end if;
+ select * into j from mission_assignments where mission_id=m.id and role='review' and status='failed'
+  and result->>'admissionDenied'='true' and (result->>'remainingTokens')~'^[0-9]+$' for update;
+ if not found or exists(select 1 from mission_assignments a join agent_missions x on x.id=a.mission_id
+   where x.project_id=p.id and a.status='running' and a.lease_until>now()) then return false;end if;
+ select coalesce(sum(greatest(actual_tokens,reserved_tokens)),0) into spent from agent_missions where project_id=p.id;
+ capacity:=least(120000-greatest(m.actual_tokens,m.reserved_tokens),p.token_allowance-spent);
+ if capacity<=greatest(10000,(j.result->>'remainingTokens')::bigint) then return false;end if;
+ insert into project_events(project_id,event,data) values(p.id,'pending_game_review_capacity_changed',jsonb_build_object(
+  'missionId',m.id,'previousDeadline',m.deadline,'previousAttempts',j.attempts,'chargedTokens',spent,'remainingTokens',capacity));
+ update agent_missions set status='running',token_allowance=least(120000,p.token_allowance-spent+greatest(m.actual_tokens,m.reserved_tokens)),
+  deadline=least(p.deadline,now()+interval '120 minutes'),updated_at=now() where id=m.id;
+ update mission_assignments set status='queued',lease=null,lease_until=null,available_at=now(),updated_at=now() where id=j.id;
+ update work_projects set status='running',lease=null,lease_until=null,failures=0,updated_at=now() where id=p.id;
+ return true;
+end $$;
+revoke all on function public.resume_pending_game_review(uuid,uuid,uuid) from public,anon,authenticated;
+grant execute on function public.resume_pending_game_review(uuid,uuid,uuid) to service_role;
+
+-- Finalize dispatch provenance only when a real execution reservation succeeds.
+-- Rejected calls do not spend this marker or any inference-call slot.
+create or replace function public.reserve_mission_call(p_id uuid,p_lease uuid,p_call uuid,p_model text,p_tokens integer)
+returns boolean language plpgsql security invoker set search_path=public as $$
+declare accepted boolean;m agent_missions;
+begin
+ accepted:=public.try_reserve_mission_capacity(p_id,p_lease,p_call,p_model,p_tokens,false);
+ if accepted then
+  select x.* into m from agent_missions x join mission_assignments a on a.mission_id=x.id where a.id=p_id;
+  if m.project_evidence ? 'reviewContinuation' and not exists(select 1 from project_events
+    where project_id=m.project_id and event='review_continuation_dispatched' and data->>'missionId'=m.id::text) then
+   insert into project_events(project_id,event,data) values(m.project_id,'review_continuation_dispatched',
+    jsonb_build_object('missionId',m.id,'candidateHash',m.project_evidence->'reviewContinuation'->>'candidateHash','callId',p_call));
+  end if;
+ end if;
+ return accepted;
+end $$;

@@ -163,3 +163,22 @@ test('incomplete reviewer never launches next provider when no reservation fits'
  assert.equal(h.actual(),30);
  assert.ok(h.denials()>=1);
 });
+
+
+test('bounded executor filters Interactions-only models before routing or reservation while retaining ordinary Google and OpenAI Pro choices',async()=>{
+ const google={name:'google',listModels:async()=>['deep-research-pro-preview-12-2025','gemini-3.1-pro']};
+ const openai={name:'openai',listModels:async()=>['gpt-5.4-pro-2026-03-05']};
+ let observed;
+ const load=modules({
+  '@/lib/providers':{getAvailableProviders:()=>[google,openai]},
+  '@/lib/router/provider-health':{filterProvidersBySharedHealth:async providers=>({providers})},
+  '@/lib/router/master-router':{chooseProvider:async(_,__,providers)=>{
+   observed=await Promise.all(providers.map(async p=>({provider:p.name,models:await p.listModels()})));
+   return{provider:google,modelId:'deep-research-pro-preview-12-2025',fallbackChain:[{provider:google,modelId:'gemini-3.1-pro'},{provider:openai,modelId:'gpt-5.4-pro-2026-03-05'}],reasoning:'Fixture'};
+  }}
+ });
+ const choices=await load('@/lib/orchestration/routing').orchestrationChoices({objective:'Independent review',instruction:'Exact saved evidence',requestId:'fixture',review:true});
+ assert.deepEqual(Array.from(observed[0].models),['gemini-3.1-pro']);
+ assert.deepEqual(Array.from(choices,c=>c.modelId),['gemini-3.1-pro','gpt-5.4-pro-2026-03-05']);
+ assert.throws(()=>load('@/lib/orchestration/bounded-provider').boundedProvider(pick('google','deep-research-pro-preview-12-2025')),/different orchestration transport/);
+});

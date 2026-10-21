@@ -356,7 +356,8 @@ async function reconcileBlockedGameRevisions(){
         if(!rows.length)break;
         for(const p of rows){
             const authorized={p_id:p.id,p_actor:p.actor_id,p_chat:p.chat_id};
-            const native=await projectRpc<boolean>('resume_incomplete_game_review',authorized) ||
+            const native=await projectRpc<boolean>('resume_pending_game_review',authorized) ||
+              await projectRpc<boolean>('resume_incomplete_game_review',authorized) ||
               await projectRpc<boolean>('resume_oversized_game_specification',authorized);
             if(native || await projectRpc<boolean>('recover_game_revision_timeout',{p_id:p.id}) || await projectRpc<boolean>('recover_game_rule_coverage',{p_id:p.id}) || await projectRpc<boolean>('recover_bounded_game_review',{p_id:p.id}) || await projectRpc<boolean>('recover_mission_credit_failure',{p_id:p.id})){
                 console.info('[Projects] Saved specification work recovered within original limits',{project:p.id});

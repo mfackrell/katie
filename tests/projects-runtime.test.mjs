@@ -137,7 +137,7 @@ test('timed-out game revision recovery is bounded, review-grounded and does not 
    events.push({name,args});
    if(name==='project_dispatch_recovery_candidates')return[];
    if(name==='claim_work_project')return null;
-   if(['resume_incomplete_game_review','resume_oversized_game_specification'].includes(name))return false;
+   if(['resume_pending_game_review','resume_incomplete_game_review','resume_oversized_game_specification'].includes(name))return false;
    if(name==='recover_game_revision_timeout')return true;
    throw Error('Unexpected mutation');
   }}

@@ -7,7 +7,7 @@ import { agentRpc } from '@/lib/agents/store';
 import { dispatchDevelopment,reconcileDevelopment,developmentEvidence } from '@/lib/agents/development';
 import type { AgentTask } from '@/lib/agents/policy';
 import { missionModel,MissionModelFailure } from './model';
-import {fitsMissionEnvelope,missionInputLimit} from './request-budget';
+import {fitsMissionEnvelope,missionInputLimit,missionExecutionDeadline} from './request-budget';
 import { rpc,readMission } from './store';
 import { ASSESSMENT_INSTRUCTION,REVIEW_INSTRUCTION } from '@/lib/collaboration/required-review';
 import { validateAssessment,validateAnswerReview,acceptanceIds } from '@/lib/collaboration/review-contract';
@@ -143,6 +143,11 @@ export async function executeClaim(claim:Claim,model=missionModel){
   if(!fitsMissionEnvelope(reviewFrame,reviewInput,missionInputLimit(claim)))
     throw new MissionModelFailure('Review input exceeds its bounded envelope before provider dispatch; candidate and receipts remain saved.',{
       reviewContextOverflow:true,candidateJobId:target.id,reviewInputCharacters:reviewInput.length,reviewInstructionCharacters:reviewFrame.length});
+  // The draft-blind response is already checkpointed by missionModel. Start
+  // candidate review in a fresh lease if this one cannot give it a full attempt.
+  // Never turn a successfully saved review stage into a terminal project error.
+  if(missionExecutionDeadline(claim)-Date.now()<95000)
+    throw new MissionModelFailure('Review stage checkpoint saved; continuing candidate verification in a fresh worker lease.',{reviewStageDeferred:true});
   const checked=await model(claim,reviewFrame,reviewInput);
   const evaluated=validateAnswerReview(parseJSON(checked.text),assessment);
   const {wordCount,wordLimit}=measured;
@@ -176,7 +181,8 @@ export async function runMissionBatch(model=missionModel){
    const truncatedGameSpecification=error instanceof MissionModelFailure&&error.partial.incompleteReason==='max_output_tokens'&&claim.mission.project_kind==='specification'&&(claim.mission.project_evidence as {projectProfile?:string}|null)?.projectProfile==='game'&&['compose','revise'].includes(claim.job.role);
    const transientProvider=error instanceof MissionModelFailure&&['server_error','rate_limit_exceeded'].includes(String(error.partial.providerErrorCode));
    const invalidGameSpecification=error instanceof MissionModelFailure&&!error.partial.repairContextOverflow&&typeof error.partial.specificationValidationFeedback==='string';
-   const retry=(invalidGameSpecification&&claim.job.attempts<3)||(claim.job.attempts<2&&(invalidContract||truncatedGameSpecification||transientProvider||/timeout|timed out|connection|fetch failed|429|rate limit|500|502|503|504/i.test(detail)));
+   const deferredReview=claim.job.role==='review'&&((error instanceof MissionModelFailure&&error.partial.reviewStageDeferred===true)||/execution time window exhausted/.test(detail));
+   const retry=(deferredReview&&claim.job.attempts<3)||(invalidGameSpecification&&claim.job.attempts<3)||(claim.job.attempts<2&&(invalidContract||truncatedGameSpecification||transientProvider||/timeout|timed out|connection|fetch failed|429|rate limit|500|502|503|504/i.test(detail)));
    await rpc('commit_mission_work',{p_id:claim.job.id,p_lease:claim.job.lease,p_result:{...(error instanceof MissionModelFailure?error.partial:{}),detail},p_children:[],p_status:retry?'queued':'failed',p_mission_status:retry?null:'blocked',p_final:null});
    return {jobId:claim.job.id,status:retry?'retrying':'blocked'};}
  }));

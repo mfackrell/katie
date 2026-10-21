@@ -5,7 +5,7 @@ export type MissionCapacity={authorized:boolean;remainingTokens:number;callsRema
 // Review combines the full source brief, lossless candidate and independent criteria.
 // It needs a larger input than composition; native token counting and atomic
 // reservation still enforce the unchanged spending ceiling before inference.
-export function missionInputLimit(claim:Claim){return claim.job.role==='review'&&claim.mission.project_kind==='specification'&&
+export function missionInputLimit(claim:Claim){return ['review','revise'].includes(claim.job.role)&&claim.mission.project_kind==='specification'&&
  (claim.mission.project_evidence as {projectProfile?:string}|null)?.projectProfile==='game'?96000:48000;}
 export function fitsMissionEnvelope(instruction:string,input:string,inputLimit=48000){return instruction.length<=48000&&input.length<=inputLimit;}
 

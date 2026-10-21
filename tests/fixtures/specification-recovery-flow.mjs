@@ -1,0 +1,84 @@
+import assert from 'node:assert/strict';
+import {randomUUID} from 'node:crypto';
+import {modules} from './recovery-module-loader.mjs';
+import {gameFixture} from './game-project.mjs';
+
+// Real PostgreSQL RPCs and real project/mission workers. Only the external LLM
+// response and GitHub baseline read are controlled fixtures. All admission,
+// child creation, dependencies, review validation and approval fences execute.
+export async function specificationRecoveryFlow(db){
+ const actor='11111111-1111-4111-8111-111111111111',chat=randomUUID(),id=randomUUID();
+ const original='Exact "quoted" original Counter rules. '.repeat(175).slice(0,6500);
+ const clarification='Preserve keyboard and reload requirements. '.repeat(360);
+ const research='Reviewed primary-source rules and supplied original decisions. '.repeat(60);
+ const fixture=gameFixture();
+ const spec={name:'Counter',summary:'Complete Counter game',requirements:Array.from({length:27},(_,i)=>String(i)+' '+ 'R'.repeat(490)),allowedPaths:fixture.allowedPaths,milestones:[{title:'Complete',instruction:'Preserve every original rule',contract:fixture.contract}],finalContract:fixture.contract,game:fixture.game};
+ const assessment={objective:'Original Counter specification',qualifications:['Rules'],strongestEvidence:['Reviewed research'],criteria:['Every original rule '+ 'coverage '.repeat(650)],synthesis:{conclusion:'Check full Counter rules',dimensions:[{dimension:'Rules',supportedScope:'Entire specification',evidence:['Original user turns']}],emphasis:'Exact original outcome'},taskContract:{deliverable:'Specification',requirements:[{id:'source-rules',requirement:'Original Counter rules',sourceId:'latest-user',status:'active'}],conflicts:[]}};
+ const priorPreview=process.env.PROJECT_PREVIEW_REPOSITORIES;
+ process.env.PROJECT_PREVIEW_REPOSITORIES='owner/repo';
+ await db.query('begin');
+ try{
+  // Isolate claims from unrelated existing fixture work, inside this rollback.
+  await db.query("update work_projects set status='paused'");
+  await db.query("update agent_missions set status='stopped'");
+  await db.query("update mission_assignments set status='stopped',lease=null,lease_until=null where status<>'completed'");
+  await db.query('insert into chats(id,actor_id,title) values($1,$2,$3)',[chat,actor,'Recovery full flow']);
+  await db.query('select create_game_work_project($1,$2,$3,$4,$5,$6)',[id,'full-flow-'+id,actor,chat,original,'33333333-3333-4333-8333-333333333333']);
+  await db.query('update work_projects set clarifications=$2 where id=$1',[id,clarification]);
+  let p=(await db.query('select claim_work_project() p')).rows[0].p;
+  await db.query("select finish_work_project($1,$2,'child',$3)",[id,p.lease,JSON.stringify({kind:'research',objective:'Research the exact supplied rules'})]);
+  const researchId=(await db.query('select active_mission_id from work_projects where id=$1',[id])).rows[0].active_mission_id;
+  await db.query("update agent_missions set status='completed',result=$2 where id=$1",[researchId,research]);
+  await db.query("update mission_assignments set status='completed' where mission_id=$1",[researchId]);
+  p=(await db.query('select claim_work_project() p')).rows[0].p;
+  await db.query("select finish_work_project($1,$2,'advance',$3)",[id,p.lease,JSON.stringify({result:research,reviewedMissionId:researchId})]);
+  await db.query("update work_projects set status='blocked',detail='Project milestone context exceeds its bounded input.' where id=$1",[id]);
+  assert.equal((await db.query('select resume_oversized_game_specification($1,$2,$3) ok',[id,actor,chat])).rows[0].ok,true);
+
+  const rpc=async(name,args={})=>{
+   assert.match(name,/^[a-z_]+$/);if(name==='project_dispatch_recovery_candidates')return[];
+   const entries=Object.entries(args);
+   const values=entries.map(([k,v])=>['p_data','p_result','p_children','p_response'].includes(k)?JSON.stringify(v):v);
+   return(await db.query(`select public.${name}(${entries.map(([k],i)=>k+' => $'+(i+1)).join(',')}) value`,values)).rows[0].value;
+  };
+  const readMission=async mid=>({mission:(await db.query('select * from agent_missions where id=$1',[mid])).rows[0],jobs:(await db.query('select * from mission_assignments where mission_id=$1 order by created_at',[mid])).rows});
+  const admin={from(table){
+   assert.match(table,/^[a-z_]+$/);let fields='*',conditions=[],values=[],sort='',count='',offset='';
+   const q={select(v){fields=v;return q;},eq(k,v){values.push(v);conditions.push(k+'=$'+values.length);return q;},order(k,o){sort=' order by '+k+(o?.ascending?' asc':' desc');return q;},limit(n){count=' limit '+n;return q;},range(a,b){count=' limit '+(b-a+1);offset=' offset '+a;return q;},not(){return q;},async maybeSingle(){const r=await q;return{data:r.data[0]??null,error:null};},then(resolve,reject){return db.query('select '+fields+' from '+table+(conditions.length?' where '+conditions.join(' and '):'')+sort+count+offset,values).then(r=>resolve({data:r.rows,error:null}),reject);}};return q;
+  }};
+  class GitHub{users={getAuthenticated:async()=>({data:{login:'owner',type:'User'}})};repos={get:async()=>({data:{default_branch:'main',owner:{type:'User'}}}),getBranch:async()=>({data:{commit:{sha:'a'.repeat(40)}}}),getContent:async({path})=>({data:{content:Buffer.from(path.endsWith('project-context.mjs')?'export const GAME_PROJECT_CONTEXT_VERSION=1;':path.endsWith('project-ci.mjs')?'checkGameModel(context,root,dependencies)':path.endsWith('project-game-check.mjs')?'runGameModelAcceptance':path.endsWith('project-game-rules.mjs')?'export function validateGameAcceptance export function runGameModelAcceptance':'project-browser-check.mjs projectAcceptance project-game-check.mjs project-game-rules.mjs').toString('base64')}})};}
+  const runs=async()=> (await db.query('select * from project_runs where project_id=$1 order by ordinal',[id])).rows;
+  const milestoneEvidence=async rows=>Promise.all(rows.filter(r=>r.outcome).map(async r=>({phase:r.kind,index:r.milestone_index,result:(await readMission(r.mission_id)).mission.result,missionStatus:(await readMission(r.mission_id)).mission.status,evidence:r.outcome})));
+  const load=modules({'@/lib/data/supabase/admin':{getSupabaseAdminClient:()=>admin},'@/lib/missions/store':{rpc,readMission},'@/lib/projects/store':{projectRpc:rpc,projectRuns:runs,milestoneEvidence},'@octokit/rest':{Octokit:GitHub}});
+  const projectWorker=load('@/lib/projects/worker'),missionWorker=load('@/lib/missions/worker');
+  await projectWorker.runProjectBatch();
+  p=(await db.query('select * from work_projects where id=$1',[id])).rows[0];
+  assert.equal(p.status,'running');assert.ok(p.active_mission_id);
+  const source=(await readMission(p.active_mission_id)).mission;
+  assert.equal(source.project_evidence.originalUserOutcome,`ORIGINAL USER OUTCOME (must remain authoritative):\n${original}\n${clarification}`);
+  assert.equal(source.project_evidence.reviewedResearch.text,research);
+  assert.ok(source.objective.length<=12000);
+  let passes=0,sawRevision=false,modelCalls=0;
+  const model=async(claim,instruction,input)=>{
+   modelCalls++;
+   assert.equal(load('@/lib/missions/request-budget').fitsMissionEnvelope(instruction,input,load('@/lib/missions/request-budget').missionInputLimit(claim)),true);
+   // Exercise the exact same atomic execution admission that missionModel uses.
+   const callId=randomUUID();assert.equal(await rpc('reserve_mission_call',{p_id:claim.job.id,p_lease:claim.job.lease,p_call:callId,p_model:'fixture:independent',p_tokens:Math.ceil(Buffer.byteLength(input)/4)+10000}),true);
+   await rpc('finish_mission_call',{p_call:callId,p_tokens:100});
+   const reviewing=claim.job.role==='review',candidatePass=instruction.includes('KATIE_REQUIRED_DRAFT_REVIEW');
+   if(reviewing&&!candidatePass)assert.ok(input.includes(JSON.stringify(original).slice(1,-1)));
+   if(claim.job.role==='revise'){sawRevision=true;const data=JSON.parse(input.split('\nReview findings: ')[0]);assert.equal(data.projectEvidence.originalUserOutcome,source.project_evidence.originalUserOutcome);assert.equal(data.projectEvidence.reviewedResearch.text,research);assert.ok(input.length>48000);}
+   let text=JSON.stringify(spec);
+   if(reviewing){
+    if(candidatePass){passes++;const approved=passes>1;const ids=load('@/lib/collaboration/review-contract').acceptanceIds(assessment);text=JSON.stringify({verdict:approved?'approve':'revise',findings:approved?'Exact original rules and entire revised candidate verified':'Correct substantive rule proof. '+ 'Missing boundary-state evidence. '.repeat(85),checks:ids.map(id=>({id,passed:approved,evidence:approved?'Rule and expected state verified':'Missing required rule proof'}))});}
+    else text=JSON.stringify(assessment);
+   }
+   return{text,sources:[],calculations:[],model:'fixture-independent'};
+  };
+  for(let n=0;n<5;n++){const claim=await rpc('claim_mission_work');assert.ok(claim,'Expected phase worker '+n);await missionWorker.executeClaim(claim,model);}
+  assert.equal(passes,2);assert.equal(sawRevision,true);assert.equal(modelCalls,6);
+  await projectWorker.runProjectBatch();
+  p=(await db.query('select * from work_projects where id=$1',[id])).rows[0];
+  assert.equal(p.status,'awaiting_approval');assert.equal(p.phase,'approval');assert.equal(p.approved_hash,null);assert.ok(p.approval_hash);assert.deepEqual(p.spec,spec);
+ }finally{await db.query('rollback');if(priorPreview===undefined)delete process.env.PROJECT_PREVIEW_REPOSITORIES;else process.env.PROJECT_PREVIEW_REPOSITORIES=priorPreview;}
+}

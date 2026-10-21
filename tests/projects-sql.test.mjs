@@ -23,6 +23,9 @@ test('projects: real PostgreSQL idempotency, scope, lifecycle fencing and aggreg
   assert.equal(await reserveRouting(job.lease,randomUUID()),false);
   await db.query('rollback');
   const rivals=await Promise.all([connect(),connect()]);for(const c of rivals)await c.query('set role service_role');const reservations=await Promise.all(rivals.map(c=>c.query('select reserve_mission_call($1,$2,$3,$4,$5) ok',[job.id,job.lease,randomUUID(),'fixture',20000])));assert.equal(reservations.filter(r=>r.rows[0].ok).length,1,'project prior charges plus concurrent reservations cannot exceed the shared allowance');assert.equal((await db.query('select status from work_projects')).rows[0].status,'running');assert.equal(Number((await db.query('select sum(reserved_tokens) amount from agent_missions')).rows[0].amount),50000);
+  // A reservation denial remains nonterminal. Seed a separate genuine worker
+  // failure for recovery discovery rather than relying on the old denial bug.
+  await db.query("update work_projects set status='blocked',detail='Fixture: verified worker failure'");
   // Durable recovery is generic and does not create a new coding mission.
   const discovered=await db.query('select discover_recovery_cases() n');
   assert.ok(Number(discovered.rows[0].n)>=1);
@@ -97,6 +100,7 @@ test('projects: real PostgreSQL idempotency, scope, lifecycle fencing and aggreg
   assert.equal(await recover(args),null,'infrastructure retry is exactly once');
   assert.equal((await db.query('select count(*) n from project_runs where project_id=$1 and outcome->>\'infrastructure_retry\'=\'true\'',[fixtureProject])).rows[0].n,'1');
   await db.query('rollback');
+  await (await import('./fixtures/specification-recovery-flow.mjs')).specificationRecoveryFlow(db);
   // Concurrent recovery calls admit exactly one review continuation and fence
   // old worker leases. This is an actual two-connection PostgreSQL race.
   await db.query("update work_projects set status='blocked',phase='specification',profile='game',spec=null,approval_hash=null,approved_hash=null,token_allowance=600000,deadline=now()+interval '2 days',lease=null,lease_until=null where id=$1",[fixtureProject]);
