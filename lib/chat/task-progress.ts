@@ -281,9 +281,15 @@ export function applyUserToTaskProgress(
     const target = state.projects?.find(project => project.projectContext.userMessageId === transition.projectId);
     if (!target) return { ...state, lastUserMessageId: input.messageId,
       projectClarification: "Which saved project do you want to resume? The proposed project could not be found." };
-    // Resuming is a control transition, never an answer to an old pending question.
+    // A pure resume preserves the original deliverable and its contract.
+    // A resume that also specifies substantial additional work starts a new
+    // source-linked question under the restored parent project.
+    const afterResume = quote ? input.text.replace(quote, "").replace(/^[\s.,!?;:–—-]+|[\s.,!?;:–—-]+$/g, "") : "";
+    const resumeObjective = afterResume.trim()
+      ? { text: input.text, userMessageId: input.messageId }
+      : (target.objective ?? { text: input.text, userMessageId: input.messageId });
     return checkpointProject({ ...state, ...target, projectClarification: undefined,
-      objective: target.objective ?? {text:input.text,userMessageId:input.messageId},
+      objective: resumeObjective,
       lastUserMessageId: input.messageId, lastAssistantMessageId: null,
       lastUserIntent: "continuation", stage: target.pending.length ? "awaiting_user_answer" : "working",
       nextAction: target.pending.length ? "await_user_answers" : "continue_original_goal" });
