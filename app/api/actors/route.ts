@@ -58,6 +58,10 @@ async function calibrationPreview(actorId:string) {
     if(!["redundancy","irrelevant"].includes(item.type))continue;
     const keys=validKeys(item.keys,keyset).filter(k=>!used.has(k));
     if(keys.length<(item.type==="redundancy"?2:1))continue;
+    if(item.type==="redundancy"){
+      const sources=keys.map(k=>entries.find(e=>e.key===k)!);
+      if(sources.some(e=>e.source!==sources[0].source || e.category!==sources[0].category))continue;
+    }
     keys.forEach(k=>used.add(k));groups.push({type:item.type,keys,reason:String(item.reason||"").slice(0,1200)});
   }
   const hash=calibrationHash(data?.content);
@@ -86,6 +90,8 @@ async function calibrationApply(actorId:string,hash:string,approved:CalibrationG
     if(group.type==="irrelevant"){keys.forEach(k=>removed.add(k));continue;}
     if(keys.length<2)return NextResponse.json({error:"Invalid consolidation"},{status:400});
     const items=keys.map(k=>lookup.get(k)!);
+    if(items.some(e=>e.source!==items[0].source||e.category!==items[0].category))
+      return NextResponse.json({error:"Entries with different provenance or categories cannot be merged"},{status:400});
     const head=items[0];
     const statements=[...new Set(items.map(e=>e.value.trim()))];
     const ids=[...new Set(items.flatMap(e=>e.evidenceMessageIds||[]))];
@@ -94,6 +100,8 @@ async function calibrationApply(actorId:string,hash:string,approved:CalibrationG
     keys.slice(1).forEach(k=>removed.add(k));
   }
   const next={...row.content,entries:original.filter(e=>!removed.has(e.key)).map(e=>replacements.get(e.key)||e)};
+  if(original.length>10&&removed.size>Math.max(10,Math.floor(original.length*0.2)))
+    return NextResponse.json({error:"Too many removals in one calibration. Apply smaller reviewed groups to protect memory."},{status:400});
   if(!approved.length)return NextResponse.json({ok:true,previous:original.length,current:original.length});
   // Save a complete immutable restoration copy before any mutation.
   const {error:backupError}=await db.from("actor_memory_calibration_backups").insert({
