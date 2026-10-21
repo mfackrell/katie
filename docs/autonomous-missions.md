@@ -21,3 +21,23 @@ Live-pilot hardening: planning and research use GPT-5 Mini; deterministic-calcul
 Verified coding handoffs include the observed open draft PR, head SHA and branch, complete changed-file list (up to thirty files), up to 12 KB of whole patches with explicit omissions, and selected build-log validation excerpts. These read-only observations supplement the trusted completion receipt; they do not authorize a merge or replace independent workflow tests/review. A passed final review replaces stale waiting-for-receipt progress text with a completed summary.
 
 Commit identity: the existing workflow records the exact test/retest and review/final-review checkout SHAs in its completion receipt and cannot report READY if those SHAs differ. Draft verification requires that tested/reviewed SHA, reads the diff between immutable base/head SHAs, and checks the PR head remains unchanged after collection. Legacy unrepaired receipts are bound through both native checkout logs. Legacy repaired receipts without a recorded retest SHA require revalidation with the updated workflow.
+
+### Read-only inspection
+
+`repository_review` is separate from `development`. It reads only a saved connected
+repository at one immutable commit, selects bounded regular source blobs from its
+manifest, redacts credential patterns, and records exact source lines and existing
+same-commit CI results. It cannot execute commands, modify files, create issues or
+PRs, or deploy. Explicitly read-only legacy audit assignments use this adapter too;
+ordinary development assignments retain their approval gate. Incomplete manifests,
+source excerpts and unavailable CI records remain visible coverage limitations.
+
+Executive operational audits receive bounded saved execution traces only from
+missions delegated by the same actor in the same conversation. They do not receive
+arbitrary database queries, other conversation content, or provider credentials.
+
+Explicit provider HTTP rejections before inference settle their reservation at
+zero tokens. Timeouts, transport failures, incomplete responses and ambiguous
+errors retain their original conservative holds. Call-attempt ceilings and actual
+usage are never reset. Autonomous routing also excludes models whose required API
+transport is unavailable; provider-specific requests retain supported defaults.

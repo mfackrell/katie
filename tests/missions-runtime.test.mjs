@@ -314,3 +314,22 @@ test('a saved specification made valid by a platform fix is reused without infer
  await worker.executeClaim({mission:m,job:j},()=>assert.fail('Do not regenerate a valid saved draft'));
  assert.equal(committed.p_result.text,JSON.stringify(draft));assert.equal(committed.p_result.recovery.kind,'revalidated_saved_specification');assert.equal(committed.p_mission_status,null);assert.equal(committed.p_final,null);
 });
+
+test('read-only legacy repository jobs inspect evidence without dispatching a coding task or requesting approval',async()=>{
+ const m=mission();m.repository_id='saved-repo';m.objective='Audit the connected repository read-only; do not modify code.';
+ const j=job(m,'development','source_audit');let committed;let dispatched=0;const calls=[];
+ const inspection={kind:'read_only_repository_inspection',sha:'a'.repeat(40),files:[{path:'core.ts',excerpt:'1: export const value=42;',throughLine:1}],checks:[]};
+ const load=modules({
+  '@/lib/missions/inspection':{readOnlyRepositoryObjective:()=>true,workflowInspection:async()=>null,repositoryInspection:async(_,__,choose)=>{assert.equal(await choose('manifest'),'paths');return inspection;}},
+  '@/lib/agents/development':{dispatchDevelopment:async()=>{dispatched++;throw Error('No writes permitted');}},
+  '@/lib/missions/store':{readMission:async()=>({mission:m,jobs:[j]}),rpc:async(_,args)=>{committed=args;return true;}}
+ });
+ await load('@/lib/missions/worker').executeClaim({mission:m,job:j},async(_,instruction,input)=>{calls.push({instruction,input});return{text:input==='manifest'?'paths':'Source-grounded finding',sources:[],calculations:[],model:'routed'};});
+ assert.equal(dispatched,0);assert.equal(committed.p_status,'completed');assert.equal(committed.p_result.inspection.sha,inspection.sha);assert.match(calls[1].input,/1: export const value=42/);assert.match(calls[1].instruction,/Never claim commands/);
+});
+test('task-selected models receive their own supported default reasoning configuration',async()=>{
+ const old=process.env.OPENAI_API_KEY;process.env.OPENAI_API_KEY='fixture-only';try{
+  const m=mission(),f=modelFixture([response('Analysis')]);await f.call({mission:m,job:job(m)},'Analyze','Evidence');
+  assert.equal(f.ledger[0].reasoning,undefined);
+ }finally{if(old===undefined)delete process.env.OPENAI_API_KEY;else process.env.OPENAI_API_KEY=old;}
+});
