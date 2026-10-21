@@ -57,7 +57,7 @@ test('counting failure remains conservative and does not remove live-research to
  await client.responses.create(research,{timeout:5000});assert.equal(calls[0].tools[0].max_uses,4);
 });
 
-function fixture({counts=[10000,10000],failFirst=false,remaining=120000,authorized=true}={}){
+function fixture({counts=[10000,10000],failFirst=false,incompleteFirst=false,remaining=120000,authorized=true}={}){
  const events=[],inferences=[],reservations=[],checkpoints=[];let used=0,actual=0,routes=0,denials=0;
  const perCall=new Map();
  const choices=[pick('anthropic','preferred'),pick('google','next-compatible')];
@@ -88,6 +88,7 @@ function fixture({counts=[10000,10000],failFirst=false,remaining=120000,authoriz
    if(url.includes('countTokens'))return new Response(JSON.stringify({totalTokens:counts[1]}));
    inferences.push({url,body});
    if(failFirst&&inferences.length===1)throw Error('Request timed out');
+   if(incompleteFirst&&inferences.length===1)return new Response(JSON.stringify({...claude('Reasoning consumed output'),stop_reason:'max_tokens'}));
    return new Response(JSON.stringify(url.includes('anthropic')?claude('Saved result'):gemini('Saved result')));
  }});
  return{c,call:load('@/lib/missions/model').missionModel,events,inferences,reservations,checkpoints,used:()=>used,actual:()=>actual,routes:()=>routes,denials:()=>denials};
@@ -143,4 +144,21 @@ test('review and execution use the same separate request envelopes without dropp
  assert.match(worker,/fitsMissionEnvelope\(reviewFrame,reviewInput\)/);
  assert.match(model,/fitsMissionEnvelope\(instruction,input\)/);
  assert.match(worker,/validateAnswerReview\(parseJSON\(checked.text\),assessment\)/);
+});
+
+
+test('incomplete reviewer response charges original provider and falls back to eligible model',async()=>{
+ const h=fixture({incompleteFirst:true,remaining:100000});h.c.job.role='review';
+ const result=await h.call(h.c,'Review all saved requirements','Candidate and original rules');
+ assert.equal(result.provider,'google');assert.equal(h.inferences.length,2);
+ assert.equal(h.reservations[0].p_model,'anthropic:preferred');
+ assert.equal(h.reservations[1].p_model,'google:next-compatible');
+ assert.ok(h.actual()>=30,'actual usage of both attempts must be charged');
+});
+
+test('incomplete reviewer never launches next provider when no reservation fits',async()=>{
+ const h=fixture({incompleteFirst:true,remaining:20000});h.c.job.role='review';
+ await assert.rejects(h.call(h.c,'Review saved candidate','Unchanged original game brief'));
+ assert.equal(h.inferences.length,0,'no model runs without an affordable reservation');
+ assert.ok(h.denials()>=1);
 });
