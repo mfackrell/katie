@@ -74,7 +74,7 @@ class Query {
       }
     }
 
-    const rows = this.state[this.table].filter((row) => this.matches(row));
+    const rows = tableRows.filter((row) => this.matches(row));
     return { data: (rows[0] ?? null) as T, error: null };
   }
 
