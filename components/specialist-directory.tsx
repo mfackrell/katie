@@ -251,7 +251,6 @@ function AgentControls({
           </p>
         )}
       </form>
-      <MemoryCalibration actor={card.actor} />
     </details>
   );
 }
@@ -341,6 +340,7 @@ function AgentCard({
           </Link>
         )}
       </div>
+      <MemoryCalibration actor={card.actor} />
       {detail && !!card.registry?.capabilities.length && (
         <p className="mt-4 text-sm text-zinc-400">
           Capabilities:{" "}
