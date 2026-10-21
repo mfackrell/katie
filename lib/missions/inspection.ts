@@ -72,7 +72,8 @@ export async function workflowInspection(mission:Mission){
  ]);
  if(missions.error||jobs.error)throw Error('Scoped execution trace unavailable');
  const text=redactInspection(JSON.stringify({delegations,missions:missions.data,jobs:jobs.data}));
+ const clean=JSON.parse(text) as {missions:Array<Record<string,unknown>>};
  return{kind:'scoped_workflow_trace',observedAt:new Date().toISOString(),actorId:binding.actor_id,chatId:binding.chat_id,
-  trace:text.length<=12000?JSON.parse(text):{missions:missions.data,omitted:'Assignment/delegation details exceed the bounded evidence envelope.'},
+  trace:text.length<=12000?clean:{missions:clean.missions.map(m=>({...m,detail:typeof m.detail==='string'?m.detail.slice(0,400):m.detail})),omitted:'Assignment/delegation details exceed the bounded evidence envelope.'},
   limitations:['Only saved missions delegated in this Executive conversation were queried. No other chat content, provider secrets, database-wide logs or live browser behavior was inspected.']};
 }
