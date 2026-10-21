@@ -326,7 +326,7 @@ test("bounded validation falls back before comparing after two material rejectio
   assert.equal(result.audit.contractFindings?.length,2);
   assert.equal(result.audit.reviews,undefined);
   assert.equal(result.result.text,draft.text);
-  assert.ok(!result.result.text.includes(draft.text));
+  assert.equal(result.result.text, draft.text);
   assert.equal(result.audit.lastCandidate,draft.text);
   assert.equal(result.audit.draft, draft.text);
   assert.equal(result.audit.pendingClarification,undefined);
@@ -1046,5 +1046,4 @@ test("wrong-target draft stays withheld when a later validator approves without 
   assert.equal(result.audit.contractValidation, undefined);
   assert.equal(result.audit.lastCandidate, contaminated);
   assert.equal(result.result.text, contaminated);
-  assert.equal(result.result.text, draft.text);
 });
