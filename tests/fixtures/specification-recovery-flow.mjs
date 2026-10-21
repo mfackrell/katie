@@ -32,7 +32,14 @@ export async function specificationRecoveryFlow(db){
   await db.query("update mission_assignments set status='completed' where mission_id=$1",[researchId]);
   p=(await db.query('select claim_work_project() p')).rows[0].p;
   await db.query("select finish_work_project($1,$2,'advance',$3)",[id,p.lease,JSON.stringify({result:research,reviewedMissionId:researchId})]);
-  await db.query("update work_projects set status='blocked',detail='Project milestone context exceeds its bounded input.' where id=$1",[id]);
+  // Reproduce the real controller's error/error/error -> blocked transition,
+  // including its exhausted failure counter, rather than hand-setting blocked.
+  for(let attempt=0;attempt<3;attempt++){
+   p=(await db.query('select claim_work_project() p')).rows[0].p;
+   await db.query("select finish_work_project($1,$2,'error',$3)",[id,p.lease,JSON.stringify({detail:'Project coordination error: Project milestone context exceeds its bounded input.'})]);
+  }
+  p=(await db.query('select * from work_projects where id=$1',[id])).rows[0];assert.equal(p.status,'blocked');assert.equal(p.failures,3);
+
   assert.equal((await db.query('select resume_oversized_game_specification($1,$2,$3) ok',[id,actor,chat])).rows[0].ok,true);
 
   const rpc=async(name,args={})=>{
@@ -80,5 +87,45 @@ export async function specificationRecoveryFlow(db){
   await projectWorker.runProjectBatch();
   p=(await db.query('select * from work_projects where id=$1',[id])).rows[0];
   assert.equal(p.status,'awaiting_approval');assert.equal(p.phase,'approval');assert.equal(p.approved_hash,null);assert.ok(p.approval_hash);assert.deepEqual(p.spec,spec);
+
+  // Recover an expired/incomplete review, then exercise ACTUAL missionModel
+  // counting, admission and checkpoint persistence against PostgreSQL. The
+  // provider transport returns controlled independent review JSON.
+  const sourceMission=source.id;
+  await db.query("update work_projects set status='blocked',phase='specification',spec=null,approval_hash=null,approved_hash=null,active_mission_id=$2 where id=$1",[id,sourceMission]);
+  await db.query("update agent_missions set status='blocked',deadline=now()-interval '1 minute',reserved_tokens=60000,actual_tokens=60000 where id=$1",[sourceMission]);
+  await db.query("update mission_assignments set status='failed',detail='Model output incomplete: incomplete',result='{\"responseStatus\":\"incomplete\",\"incompleteReason\":\"max_output_tokens\"}' where mission_id=$1 and job_key='review_again'",[sourceMission]);
+  await db.query("update work_projects set token_allowance=80000 where id=$1",[id]);
+  assert.equal(await rpc('resume_incomplete_game_review',{p_id:id,p_actor:actor,p_chat:chat}),true);
+  const continued=(await db.query('select active_mission_id from work_projects where id=$1',[id])).rows[0].active_mission_id;
+  let counts=0,generations=0;
+  const priorKey=process.env.OPENAI_API_KEY;process.env.OPENAI_API_KEY='fixture-only';
+  try{
+   class ProviderClient{
+    async post(){counts++;return{input_tokens:counts===1?1000:12000};}
+    responses={create:async()=>{generations++;const ids=load('@/lib/collaboration/review-contract').acceptanceIds(assessment);
+     return{status:'completed',output_text:JSON.stringify(generations===1?assessment:{verdict:'approve',findings:'Entire saved candidate checked',checks:ids.map(id=>({id,passed:true,evidence:'Exact original rules checked against saved candidate'}))}),output:[],usage:{total_tokens:100}};
+    }};
+   }
+   const real=modules({'@/lib/data/supabase/admin':{getSupabaseAdminClient:()=>admin},'@/lib/missions/store':{rpc,readMission},
+    '@/lib/orchestration/routing':{orchestrationChoices:async()=>[{provider:{name:'openai'},modelId:'fixture-reviewed-model',reasoning:'Controlled transport'}],orchestrationFailure:async()=> 'model'},
+    openai:{__esModule:true,default:ProviderClient}})('@/lib/missions/worker');
+   const first=await real.runMissionBatch();assert.equal(first.outcomes[0].status,'blocked');
+   let saved=await readMission(continued),review=saved.jobs.find(j=>j.job_key==='review_again');
+   assert.equal(saved.mission.calls,1);assert.equal(saved.mission.actual_tokens,100);assert.equal(review.result.admissionDenied,true);assert.ok(review.payload.reviewModelCheckpoint);
+   const checkpoint=JSON.stringify(review.payload.reviewModelCheckpoint),attempts=review.attempts;
+   await projectWorker.runProjectBatch();
+   assert.equal(await rpc('resume_pending_game_review',{p_id:id,p_actor:actor,p_chat:chat}),false,'Unchanged denial must not loop');
+   await db.query('update work_projects set token_allowance=120000 where id=$1',[id]);
+   assert.equal(await rpc('resume_pending_game_review',{p_id:id,p_actor:actor,p_chat:chat}),true);
+   assert.equal((await db.query('select active_mission_id from work_projects where id=$1',[id])).rows[0].active_mission_id,continued);
+   assert.equal((await readMission(continued)).jobs.find(j=>j.job_key==='review_again').attempts,attempts);
+   const next=await real.runMissionBatch();assert.equal(next.outcomes[0].status,'processed');
+   saved=await readMission(continued);assert.equal(saved.mission.status,'completed');assert.equal(generations,2,'The checkpointed assessment must not be generated again');assert.equal(counts,3);
+   assert.equal(JSON.stringify(saved.jobs.find(j=>j.job_key==='review_again').payload.reviewModelCheckpoint),checkpoint);
+   assert.equal((await readMission(sourceMission)).mission.actual_tokens,60000,'Source charges remain unchanged');
+   await projectWorker.runProjectBatch();p=(await db.query('select * from work_projects where id=$1',[id])).rows[0];assert.equal(p.status,'awaiting_approval');assert.equal(p.approved_hash,null);
+  }finally{if(priorKey===undefined)delete process.env.OPENAI_API_KEY;else process.env.OPENAI_API_KEY=priorKey;}
+
  }finally{await db.query('rollback');if(priorPreview===undefined)delete process.env.PROJECT_PREVIEW_REPOSITORIES;else process.env.PROJECT_PREVIEW_REPOSITORIES=priorPreview;}
 }

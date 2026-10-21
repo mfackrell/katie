@@ -18,6 +18,12 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
           persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install review test dependencies
+        run: npm ci
       - name: Independent recovery architecture review
         uses: openai/codex-action@v1
         with:

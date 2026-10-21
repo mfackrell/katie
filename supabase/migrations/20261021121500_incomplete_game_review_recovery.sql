@@ -75,9 +75,10 @@ end $$;
 revoke all on function public.resume_incomplete_game_review(uuid,uuid,uuid) from public,anon,authenticated;
 grant execute on function public.resume_incomplete_game_review(uuid,uuid,uuid) to service_role;
 
--- A zero-inference continuation denied by actual admission remains pending,
--- rather than spending a one-shot recovery. Retry the SAME child only when its
--- remaining authorized capacity has increased. Never retry a spent review,
+-- A continuation denied by actual admission remains pending, including one
+-- whose successful draft-blind assessment is already saved and charged.
+-- Retry the SAME child only when its remaining authorized capacity has
+-- increased. Never duplicate a completed review stage,
 -- widen the project ceiling, reset attempts, or repeatedly wake an unchanged
 -- capacity denial. Original source missions remain untouched.
 create or replace function public.resume_pending_game_review(p_id uuid,p_actor uuid,p_chat uuid)
@@ -91,7 +92,7 @@ begin
   or p.deadline<=now()+interval '10 minutes' or p.lease_until>now() then return false;end if;
  select * into m from agent_missions where id=p.active_mission_id and project_id=p.id for update;
  if not found or m.status<>'blocked' or not(m.project_evidence ? 'reviewContinuation')
-  or m.calls<>0 or m.routing_calls>=m.max_calls*3 then return false;end if;
+  or m.calls>=m.max_calls or m.routing_calls>=m.max_calls*3 then return false;end if;
  select * into j from mission_assignments where mission_id=m.id and role='review' and status='failed'
   and result->>'admissionDenied'='true' and (result->>'remainingTokens')~'^[0-9]+$' for update;
  if not found or exists(select 1 from mission_assignments a join agent_missions x on x.id=a.mission_id

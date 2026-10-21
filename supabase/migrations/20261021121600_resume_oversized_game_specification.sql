@@ -23,7 +23,8 @@ begin
  if not found or coalesce(length(latest_research),0)=0 then return false;end if;
  -- A retryable coordinator wake-up, not a spent child/recovery slot.
  -- The actual fully serialized evidence is checked at child admission.
- if p.failures>=3 or (p.lease is not null and p.lease_until>now()) then return false;end if;
+ if (select count(*) from project_events where project_id=p.id and event='oversized_game_specification_resumed')>=2
+    or (p.lease is not null and p.lease_until>now()) then return false;end if;
  select count(*) into runs_used from public.project_runs where project_id=p.id;
  select coalesce(sum(greatest(actual_tokens,reserved_tokens)),0) into charged from public.agent_missions where project_id=p.id;
  if runs_used>=p.max_missions or p.token_allowance-charged<10000 then return false;end if;
@@ -32,7 +33,7 @@ begin
   updated_at=now() where id=p.id;
  insert into public.project_events(project_id,event,data) values(p.id,'oversized_game_specification_resumed',
   jsonb_build_object('reviewedResearchRetained',true,'chargedTokens',charged,'remainingTokens',p.token_allowance-charged,
-   'priorRuns',runs_used,'codingApproved',false,'dispatchPending',true));
+   'priorRuns',runs_used,'previousFailures',p.failures,'codingApproved',false,'dispatchPending',true));
  perform public.project_publish(p.id,'Oversized specification context repaired; resuming from original reviewed research with original budget.');
  return true;
 end;$$;
