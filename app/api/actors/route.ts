@@ -1,3 +1,5 @@
+import OpenAI from "openai";
+import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import { managedActor } from "@/lib/agents/store";
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
@@ -8,6 +10,114 @@ import { selectControlPlaneDecisionModels } from "@/lib/router/master-router";
 import { createNeutralActorRoutingProfile, generateActorRoutingProfile } from "@/lib/router/actor-routing-profile";
 import type { Actor } from "@/lib/types/chat";
 
+type CalibrationEntry = {key:string;value:string;source?:string;category?:string;evidenceMessageIds?:string[];evidenceQuotes?:Array<{messageId:string;quote:string}>;[key:string]:unknown};
+type CalibrationGroup = {type:"redundancy"|"irrelevant";keys:string[];reason:string};
+const calibrationHash=(value:unknown)=>createHash("sha256").update(JSON.stringify(value)).digest("hex");
+const proposalProof=(actorId:string,hash:string,groups:CalibrationGroup[])=>{
+  const secret=process.env.KATIE_MEMORY_CALIBRATION_SIGNING_KEY||process.env.OPENAI_API_KEY;
+  if(!secret)throw new Error("Calibration signing key unavailable");
+  return createHmac("sha256",secret).update(JSON.stringify({actorId,hash,groups})).digest("hex");
+};
+const validKeys=(value:unknown,keys:Set<string>)=>Array.isArray(value) && value.every(k=>typeof k==="string"&&keys.has(k)) ? [...new Set(value as string[])].sort() : [];
+async function calibrationPreview(actorId:string) {
+  const actor=await getActorById(actorId);
+  if(!actor) return NextResponse.json({error:"Actor not found"},{status:404});
+  const db=getSupabaseAdminClient();
+  const {data,error}=await db.from("actor_long_term_memory").select("revision,content").eq("actor_id",actorId).maybeSingle<{revision:number;content:{entries:CalibrationEntry[]}}>();
+  if(error) return NextResponse.json({error:error.message},{status:500});
+  const entries=data?.content?.entries??[];
+  if(!entries.length) return NextResponse.json({hash:calibrationHash(data?.content??{}),groups:[],conflicts:[],entries:[]});
+  if(!process.env.OPENAI_API_KEY) return NextResponse.json({error:"Calibration model unavailable"},{status:503});
+  const model=new OpenAI({apiKey:process.env.OPENAI_API_KEY});
+  const answer=await model.chat.completions.create({
+    model:process.env.KATIE_MEMORY_CALIBRATION_MODEL||"gpt-5.5-2026-04-23",
+    response_format:{type:"json_object"},
+    messages:[
+      {role:"system",content:[
+        "Review this actor's long-term memory against its purpose. Suggest, NEVER execute, safe cleanups.",
+        "Identify truly redundant facts, historical contradictions needing USER clarification, and records with no plausible future relevance to this actor's work.",
+        "Historical differences in time, scope, title, business, or corrections are not contradictions.",
+        "Preserve all useful details. Merge only if every fact and original evidence can be preserved.",
+        "Prefer no cleanup to unsafe cleanup. For contradictions ask a clear user question and do not prescribe removal.",
+        "Output JSON with groups:[{type:'redundancy'|'irrelevant',keys:[original keys],reason:string}], conflicts:[{keys:[original keys],question:string}].",
+        "Keys may appear only once across all proposals. Do not propose a rewritten fact.",
+      ].join("\n")},
+      {role:"user",content:JSON.stringify({actor:{name:actor.name,purpose:actor.purpose},entries:entries.map(e=>({key:e.key,value:e.value,source:e.source,category:e.category}))})}
+    ]
+  });
+  const parsed=JSON.parse(answer.choices[0]?.message?.content||"{}") as {groups?:CalibrationGroup[];conflicts?:Array<{keys:string[];question:string}>};
+  if(!parsed||!Array.isArray(parsed.groups)||!Array.isArray(parsed.conflicts))throw new Error("Invalid calibration report structure");
+  const keyset=new Set(entries.map(e=>e.key)),used=new Set<string>();
+  const conflicts:Array<{keys:string[];question:string}>=[];
+  for(const item of parsed.conflicts||[]){
+    const keys=validKeys(item.keys,keyset).filter(k=>!used.has(k));
+    if(keys.length<2||typeof item.question!=="string"||!item.question.trim())continue;
+    keys.forEach(k=>used.add(k));conflicts.push({keys,question:item.question.slice(0,1200)});
+  }
+  const groups:CalibrationGroup[]=[];
+  for(const item of parsed.groups||[]){
+    if(!["redundancy","irrelevant"].includes(item.type))continue;
+    const keys=validKeys(item.keys,keyset).filter(k=>!used.has(k));
+    if(keys.length<(item.type==="redundancy"?2:1))continue;
+    if(item.type==="redundancy"){
+      const sources=keys.map(k=>entries.find(e=>e.key===k)!);
+      if(sources.some(e=>e.source!==sources[0].source || e.category!==sources[0].category))continue;
+    }
+    keys.forEach(k=>used.add(k));groups.push({type:item.type,keys,reason:String(item.reason||"").slice(0,1200)});
+  }
+  const hash=calibrationHash(data?.content);
+  return NextResponse.json({hash,proof:proposalProof(actorId,hash,groups),groups,conflicts,entries:entries.map(e=>({key:e.key,value:e.value})),revision:data?.revision});
+}
+async function calibrationApply(actorId:string,hash:string,approved:CalibrationGroup[],proposed:CalibrationGroup[],proof:string){
+  if(!/^[a-f0-9]{64}$/.test(hash)||!Array.isArray(approved)||approved.length>160||!Array.isArray(proposed)||proposed.length>160||!(/^[a-f0-9]{64}$/.test(proof)))
+    return NextResponse.json({error:"Invalid approvals"},{status:400});
+  const expected=proposalProof(actorId,hash,proposed);
+  if(!timingSafeEqual(Buffer.from(proof,"hex"),Buffer.from(expected,"hex")))
+    return NextResponse.json({error:"Proposal could not be verified. Recalibrate."},{status:409});
+  const suggested=new Set(proposed.map(g=>JSON.stringify(g)));
+  if(approved.some(g=>!suggested.has(JSON.stringify(g))))
+    return NextResponse.json({error:"Only originally suggested changes may be approved"},{status:400});
+  const db=getSupabaseAdminClient();
+  const {data:row,error:readError}=await db.from("actor_long_term_memory").select("revision,content").eq("actor_id",actorId).single<{revision:number;content:{entries:CalibrationEntry[];version?:number;purpose?:string}}>();
+  if(readError||!row)return NextResponse.json({error:"Memory unavailable"},{status:500});
+  if(calibrationHash(row.content)!==hash)return NextResponse.json({error:"Memory changed. Recalibrate before applying."},{status:409});
+  const original=row.content.entries||[],lookup=new Map(original.map(e=>[e.key,e]));
+  const removed=new Set<string>(),replacements=new Map<string,CalibrationEntry>(),seen=new Set<string>();
+  for(const group of approved){
+    if(!group||!["redundancy","irrelevant"].includes(group.type)||!Array.isArray(group.keys))return NextResponse.json({error:"Invalid proposal"},{status:400});
+    const keys=validKeys(group.keys,new Set(lookup.keys()));
+    if(keys.length!==group.keys.length||keys.some(k=>seen.has(k)))return NextResponse.json({error:"Overlapping or unknown memory keys"},{status:400});
+    keys.forEach(k=>seen.add(k));
+    if(group.type==="irrelevant"){keys.forEach(k=>removed.add(k));continue;}
+    if(keys.length<2)return NextResponse.json({error:"Invalid consolidation"},{status:400});
+    const items=keys.map(k=>lookup.get(k)!);
+    if(items.some(e=>e.source!==items[0].source||e.category!==items[0].category))
+      return NextResponse.json({error:"Entries with different provenance or categories cannot be merged"},{status:400});
+    const head=items[0];
+    const statements=[...new Set(items.map(e=>e.value.trim()))];
+    const ids=[...new Set(items.flatMap(e=>e.evidenceMessageIds||[]))];
+    const quotes=[...new Map(items.flatMap(e=>e.evidenceQuotes||[]).map(q=>[q.messageId+"|"+q.quote,q])).values()];
+    replacements.set(head.key,{...head,value:statements.join("\n"),evidenceMessageIds:ids,evidenceQuotes:quotes});
+    keys.slice(1).forEach(k=>removed.add(k));
+  }
+  const next={...row.content,entries:original.filter(e=>!removed.has(e.key)).map(e=>replacements.get(e.key)||e)};
+  if(original.length>10&&removed.size>Math.max(10,Math.floor(original.length*0.2)))
+    return NextResponse.json({error:"Too many removals in one calibration. Apply smaller reviewed groups to protect memory."},{status:400});
+  if(!approved.length)return NextResponse.json({ok:true,previous:original.length,current:original.length});
+  // Save a complete immutable restoration copy before any mutation.
+  const {error:backupError}=await db.from("actor_memory_calibration_backups").insert({
+    actor_id:actorId,memory_revision:row.revision,
+    memory_content:row.content,approved_changes:approved
+  });
+  if(backupError)return NextResponse.json({error:"Could not save restoration backup; nothing changed"},{status:500});
+  const {error}=await db.from("actor_long_term_memory")
+    .eq("actor_id",actorId).eq("revision",row.revision)
+    .update({content:next,revision:row.revision+1,updated_at:new Date().toISOString()});
+  if(error)return NextResponse.json({error:"Memory update failed: "+error.message},{status:500});
+  const {data:verified}=await db.from("actor_long_term_memory").select("revision,content").eq("actor_id",actorId).single<{revision:number;content:typeof next}>();
+  if(!verified||verified.revision!==row.revision+1||calibrationHash(verified.content)!==calibrationHash(next))return NextResponse.json({error:"Concurrent change or write verification failure. Backup retained; recalibrate."},{status:409});
+  return NextResponse.json({ok:true,previous:original.length,current:next.entries.length,revision:verified.revision});
+}
 const createActorSchema = z.object({
   name: z.string().min(1),
   reviewMode: z.enum(["adaptive", "always", "off"]).optional(),
@@ -61,7 +171,9 @@ export async function GET() {
 
 export async function POST(request: NextRequest) {
   try {
-    const payload = createActorSchema.parse(await request.json());
+    const raw = await request.json();
+    if(raw?.calibration === "preview") return calibrationPreview(z.string().uuid().parse(raw.actorId));
+    const payload = createActorSchema.parse(raw);
     const { name, parentId } = payload;
 
     let purpose = payload.purpose?.trim();
@@ -110,7 +222,9 @@ export async function PATCH(request: NextRequest) {
 
   try {
     const { id: actorId } = actorIdParamSchema.parse({ id: url.searchParams.get("id") });
-    const { purpose, reviewMode } = updateActorSchema.parse(await request.json());
+    const raw = await request.json();
+    if(raw?.calibration === "apply") return calibrationApply(actorId,String(raw.hash||""),raw.approved,raw.groups,raw.proof);
+    const { purpose, reviewMode } = updateActorSchema.parse(raw);
 
     if (await managedActor(actorId)) return NextResponse.json({ error: "Edit managed agents in Agents management." }, { status: 409 });
     const executiveIdentity = await getActorById(actorId);
