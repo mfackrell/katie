@@ -236,6 +236,32 @@ async function advance(p: Project) {
                 projectEvidence={...(projectEvidence as Record<string,unknown>),recoveryReview:{sourceMissionId:note.sourceMissionId,findings:note.findings.slice(0,2200),instruction:'Correct these independent review findings. Full prior evidence remains saved; do not repeat research or assume approval.'}};
         }
         if(game){
+            // A prior composition is a checkpoint, not an approved specification.
+            // Reuse only a server-saved candidate and require the normal fresh
+            // independent review on this new mission.
+            const {data:checkpoints,error:checkpointError}=await getSupabaseAdminClient()
+              .from('project_events').select('data').eq('project_id',p.id)
+              .eq('event','game_specification_checkpoint_recovered')
+              .order('created_at',{ascending:false}).limit(1);
+            if(checkpointError)throw Error('Game checkpoint recovery evidence unavailable');
+            const checkpoint=((checkpoints??[]) as Array<{data?:{sourceJobId?:string;sourceMissionId?:string}}>)[0]?.data;
+            if(checkpoint?.sourceJobId){
+                const {data:composition,error:compositionError}=await getSupabaseAdminClient()
+                  .from('mission_assignments').select('status,role,result')
+                  .eq('id',checkpoint.sourceJobId).maybeSingle<{status:string;role:string;result:{text?:string}|null}>();
+                if(compositionError||composition?.status!=='completed'||composition.role!=='compose'||
+                   typeof composition.result?.text!=='string')throw Error('Saved game composition checkpoint invalid');
+                projectEvidence={...(projectEvidence as Record<string,unknown>),
+                    savedSpecificationCheckpoint:{
+                      sourceMissionId:checkpoint.sourceMissionId,
+                      sourceJobId:checkpoint.sourceJobId,
+                      text:composition.result.text,
+                      status:'unreviewed',
+                      instruction:'Reuse the exact saved candidate only if it still validates. A separate independent reviewer must verify every original requirement; this checkpoint is not approval.'
+                    }};
+            }
+        }
+        if(game){
             const {data:events,error}=await getSupabaseAdminClient().from('project_events')
               .select('data').eq('project_id',p.id).eq('event','game_rule_coverage_recovered')
               .order('created_at',{ascending:false}).limit(1);
@@ -332,7 +358,7 @@ async function reconcileBlockedGameRevisions(){
       .order('updated_at',{ascending:false}).limit(2);
     if(error)throw Error('Blocked game revision recovery index unavailable');
     for(const p of (data??[]) as Array<{id:string}>){
-        if(await projectRpc<boolean>('recover_game_revision_timeout',{p_id:p.id}) || await projectRpc<boolean>('recover_game_rule_coverage',{p_id:p.id}) || await projectRpc<boolean>('recover_bounded_game_review',{p_id:p.id}) || await projectRpc<boolean>('recover_mission_credit_failure',{p_id:p.id})){
+        if(await projectRpc<boolean>('recover_game_revision_timeout',{p_id:p.id}) || await projectRpc<boolean>('recover_game_rule_coverage',{p_id:p.id}) || await projectRpc<boolean>('recover_bounded_game_review',{p_id:p.id}) || await projectRpc<boolean>('recover_mission_credit_failure',{p_id:p.id}) || await projectRpc<boolean>('recover_game_specification_checkpoint',{p_id:p.id})){
             console.info('[Projects] Saved game revision timeout recovered without resetting charges',{project:p.id});
             return true;
         }
