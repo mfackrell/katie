@@ -425,9 +425,31 @@ export async function maybeUpdateLongTermMemory(
       }
       await setLongTermMemory(actorId, chatId, decision.updatedContent);
     } else {
-      const changes = verifiedAutomaticPatches(
+      let changes = verifiedAutomaticPatches(
         decision.updatedContent.entries, currentEntries(currentLongTermMemory), recentMessages,
       );
+      if (!changes.length && decision.updatedContent.entries.length) {
+        // Recover rather than silently dropping a potentially meaningful update.
+        // The repair must still satisfy the same provenance validation.
+        const repair = await client.chat.completions.create({
+          model: MEMORY_EDITOR_MODEL, temperature: 0,
+          response_format: { type: "json_object" },
+          messages: [
+            { role: "system", content: "You are repairing Katie's actor-purpose-aware durable memory proposal. Return ONLY new or changed facts relevant to the actor's future work. Every entry must include evidenceMessageIds and evidenceQuotes with an EXACT, verbatim 20+ character excerpt from the corresponding USER message below. Do not infer facts from assistant messages. Do not include old memory entries. Respond with action=replace and updatedContent version=3, purpose and entries; use action=no_change only if the user supplied no durable information." },
+            { role: "user", content: [
+              `actorPurpose: ${actor?.purpose ?? ""}`,
+              `previousRejectedEntries: ${JSON.stringify(decision.updatedContent.entries)}`,
+              "Reason: none of the proposed entries passed the user-source evidence validation.",
+              "recentRoleAttributedMessages:", formatTranscript(recentMessages),
+            ].join("\\n\\n") },
+          ],
+        });
+        const repaired = parseMemoryEditorResult(repair.choices?.[0]?.message?.content?.trim() ?? "", allowedEvidenceIds);
+        if (repaired?.action === "replace") {
+          changes = verifiedAutomaticPatches(repaired.updatedContent.entries, currentEntries(currentLongTermMemory), recentMessages);
+        }
+        console.info("[LongTermMemoryEditor] Source repair", { actorId, chatId, recovered: changes.length > 0 });
+      }
       if (!changes.length) {
         console.warn("[LongTermMemoryEditor] Candidate memory rejected: no source-verified changes", { actorId, chatId, proposedCount: decision.updatedContent.entries.length });
         return;
