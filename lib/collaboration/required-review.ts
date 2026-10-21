@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { readDurableReviewContract, saveDurableReviewContract, type DurableReviewScope } from "@/lib/collaboration/durable-review-contract";
 import { getReviewerCompletionInstruction } from "@/lib/chat/deliverable-standard";
 import type { TaskProgressState } from "@/lib/chat/task-progress";
 import { createReviewClarification, type PendingReviewClarification } from "@/lib/collaboration/review-completion";
@@ -120,6 +121,7 @@ export async function runRequiredDraftReview(input: {
   prepareParams?: (params: ChatGenerateParams, participant: CollaborationParticipant) => ChatGenerateParams;
   onProgress?: (stage: string) => void;
   participantTimeoutMs?: number;
+  durableScope?: DurableReviewScope;
 }): Promise<{ result: ProviderResponse; audit: ReviewAudit }> {
   const draft = input.draft.text;
   const lead = { provider: input.draft.provider, modelId: input.draft.model };
@@ -186,6 +188,19 @@ export async function runRequiredDraftReview(input: {
   // or final verification fails. A replacement reviewer must not repeat the
   // expensive completed assessment and contract stages.
   let validatedAssessment: IndependentAssessment | undefined;
+  if (input.durableScope) {
+    try {
+      const restored = await readDurableReviewContract(input.durableScope, baseline.parentProject ?? "", baseline.activeQuestion);
+      if (restored) {
+        validatedAssessment = restored.assessment;
+        audit.contractValidation = restored.validation;
+        audit.independentAssessment = restored.assessment;
+        input.onProgress?.("Resumed independently validated task contract from durable application history.");
+      }
+    } catch (error) {
+      console.warn("[DurableReviewContract] Read failed; reviewing again", { requestId: input.requestId, error: String(error) });
+    }
+  }
   // A failed or malformed reviewer is retried with a different eligible model.
   for (let attempt = 0; attempt < 3; attempt++) {
     if (reviewDeadlineMs - Date.now() < 15_000) break;
@@ -245,6 +260,13 @@ export async function runRequiredDraftReview(input: {
         if (!materialRejection) {
           const resolutions = validateContractResolutions(checked.resolutions, contractObjections, baseline.contractTurns);
           audit.contractValidation = { verdict: "approve", findings: checked.findings, validator: lead, sourceCoverage: checked.sourceCoverage, resolutions };
+          if (input.durableScope) {
+            try {
+              await saveDurableReviewContract(input.durableScope, baseline.parentProject ?? "", baseline.activeQuestion, assessment!, audit.contractValidation);
+            } catch (error) {
+              console.warn("[DurableReviewContract] Save failed; continuing with in-request contract", { requestId: input.requestId, error: String(error) });
+            }
+          }
           break;
         }
         contractRejections += 1;
