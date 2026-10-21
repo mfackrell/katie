@@ -53,14 +53,22 @@ test('inspection rejects secret paths, traversal, invented paths and symlinks be
 });
 test('operational evidence is constrained to the bound Executive actor and conversation',async()=>{
  const filters=[];
- const rows={executive_delegations:[{id:'d',mission_id:'m',actor_id:'owner',chat_id:'conversation'}],agent_missions:[{id:'m',status:'running',detail:'sk-proj-abcdefghijklmnop '+'.'.repeat(13000)}],mission_assignments:[{id:'j',mission_id:'m'}]};
+ const rows={executive_delegations:[{id:'d',mission_id:'m',actor_id:'owner',chat_id:'conversation'}],agent_missions:[{id:'m',status:'running',detail:'CLIENT_SECRET = \"opaque-workflow-secret\"; sk-proj-abcdefghijklmnop '+'.'.repeat(13000)}],mission_assignments:[{id:'j',mission_id:'m'}]};
  const db={from:table=>{const q={select:()=>q,eq:(k,v)=>{filters.push([table,k,v]);return q;},in:(k,v)=>{filters.push([table,k,Array.from(v)]);return q;},order:()=>q,limit:()=>q,returns:async()=>({data:rows[table]}),maybeSingle:async()=>({data:rows[table][0]}),then:resolve=>Promise.resolve({data:rows[table]}).then(resolve)};return q;}};
  const api=modules({'@/lib/data/supabase/admin':{getSupabaseAdminClient:()=>db}})('@/lib/missions/inspection');
  const evidence=await api.workflowInspection({id:'m',objective:'Audit operational workflow traces'});
- assert.doesNotMatch(JSON.stringify(evidence),/sk-proj/);assert.ok(JSON.stringify(evidence).length<12000);
+ assert.doesNotMatch(JSON.stringify(evidence),/sk-proj|opaque-workflow-secret/);assert.ok(JSON.stringify(evidence).length<12000);
  assert.equal(evidence.actorId,'owner');assert.equal(evidence.chatId,'conversation');
  assert.ok(filters.some(x=>x[0]==='executive_delegations'&&x[1]==='actor_id'&&x[2]==='owner'));
  assert.ok(filters.some(x=>x[0]==='executive_delegations'&&x[1]==='chat_id'&&x[2]==='conversation'));
  assert.ok(filters.filter(x=>x[1]==='mission_id'&&Array.isArray(x[2])).every(x=>x[2].join(',')==='m'));
  assert.equal(await api.workflowInspection({id:'m',objective:'Write a letter'}),null);
+});
+
+test('generic credentials are scrubbed from code, JSON and raw Authorization headers',()=>{
+ const {api}=repositoryFixture();
+ const source='const AUTH_TOKEN = "opaque-token-123"; const CLIENT_SECRET = "opaque-secret-456"; '+
+  '{"token":"opaque-json-789","apiKey":"opaque-key-123","refresh_token":"opaque-refresh-456"}\nAuthorization: Bearer opaque-bearer-789';
+ const clean=api.redactInspection(source);
+ for(const secret of ['opaque-token-123','opaque-secret-456','opaque-json-789','opaque-key-123','opaque-refresh-456','opaque-bearer-789'])assert.equal(clean.includes(secret),false,secret);
 });

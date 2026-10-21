@@ -4,7 +4,7 @@ import {getSupabaseAdminClient} from '@/lib/data/supabase/admin';
 import {parseJSON,type Mission} from './types';
 
 // A read binding is separate from permission to dispatch a coding workflow.
-export const readOnlyRepositoryObjective=(text:string)=>/\b(?:read[- ]only|do not modify|without (?:changing|modifying))\b/i.test(text);
+export {readOnlyRepositoryObjective} from './types';
 export function inspectablePath(path:string){
  return path.length<=250&&!path.startsWith('/')&&!path.split('/').some(x=>x==='..'||x==='node_modules'||x==='.git')
   &&!/(?:^|\/)(?:\.env[^/]*|[^/]*(?:secret|credential|private[-_]?key)[^/]*|[^/]*\.(?:pem|key|p12|pfx))$/i.test(path)
@@ -13,7 +13,8 @@ export function inspectablePath(path:string){
 }
 export function redactInspection(text:string){
  return text.replace(/(?:sk-proj-|sk-|ghp_|github_pat_)[A-Za-z0-9_-]{10,}/g,'[REDACTED_SECRET]')
-  .replace(/(authorization|api[_-]?key|password|access[_-]?token)\s*[:=]\s*["']?[^\s,"';]+/gi,'$1=[REDACTED]');
+  .replace(/\bBearer\s+[A-Za-z0-9._~+\/-]+={0,2}/gi,'Bearer [REDACTED]')
+  .replace(/((?:[A-Za-z_][\w-]*[_-])?(?:authorization|api[_-]?key|password|token|secret|credential|private[_-]?key)s?["']?\s*[:=]\s*)(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`|[^\s,;]+)/gi,'$1"[REDACTED]"');
 }
 export async function repositoryInspection(mission:Mission,instruction:string,choose:(input:string)=>Promise<string>,allowance=16000){
  if(!mission.repository_id)throw Error('Read-only inspection requires a saved connected repository');
@@ -71,7 +72,7 @@ export async function workflowInspection(mission:Mission){
   db.from('mission_assignments').select('id,mission_id,job_key,role,status,attempts,detail,created_at,updated_at').in('mission_id',ids).order('updated_at',{ascending:false}).limit(25)
  ]);
  if(missions.error||jobs.error)throw Error('Scoped execution trace unavailable');
- const text=redactInspection(JSON.stringify({delegations,missions:missions.data,jobs:jobs.data}));
+ const text=JSON.stringify({delegations,missions:missions.data,jobs:jobs.data},(_key,value)=>typeof value==='string'?redactInspection(value):value);
  const clean=JSON.parse(text) as {missions:Array<Record<string,unknown>>};
  return{kind:'scoped_workflow_trace',observedAt:new Date().toISOString(),actorId:binding.actor_id,chatId:binding.chat_id,
   trace:text.length<=12000?clean:{missions:clean.missions.map(m=>({...m,detail:typeof m.detail==='string'?m.detail.slice(0,400):m.detail})),omitted:'Assignment/delegation details exceed the bounded evidence envelope.'},

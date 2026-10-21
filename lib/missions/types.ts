@@ -6,8 +6,10 @@ export type Claim = {mission:Mission;job:Assignment};
 export const planSchema = z.object({assignments:z.array(z.object({key:z.string().regex(/^[a-z][a-z0-9_]{0,24}$/),agentId:z.string().uuid(),instruction:z.string().min(1).max(5000),capability:z.enum(['analysis','research','writing','development','repository_review']),dependencies:z.array(z.string()).max(2)}).strict()).min(1).max(3),deliverable:z.string().min(1).max(2000)}).strict();
 export const reviewSchema=z.object({verdict:z.enum(['pass','changes_requested','blocked']),findings:z.array(z.string().min(1).max(2000)).max(8),summary:z.string().min(1).max(3000)}).strict();
 export function parseJSON(text:string):unknown {return JSON.parse(text.trim().replace(/^```(?:json)?\s*/, '').replace(/\s*```$/, ''));}
+export const readOnlyRepositoryObjective=(text:string)=>/\b(?:read[- ]only|do not modify|without (?:changing|modifying))\b/i.test(text);
 export function validatePlan(value:unknown,mission:Mission){
  const plan=planSchema.parse(value),seen=new Set<string>();
+ if(plan.assignments.filter(a=>a.capability==='repository_review'||(a.capability==='development'&&readOnlyRepositoryObjective(mission.objective))).length>2)throw Error('At most two repository inspections fit the complete independent review and revision cycle');
  for(const a of plan.assignments){
   if(['plan','compose','review','revision','review_again'].includes(a.key)||seen.has(a.key))throw Error('Reserved or duplicate assignment key');
   if(a.dependencies.some(d=>!seen.has(d)))throw Error('Dependencies must reference earlier assignments in this mission');

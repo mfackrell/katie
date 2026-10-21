@@ -333,3 +333,27 @@ test('task-selected models receive their own supported default reasoning configu
   assert.equal(f.ledger[0].reasoning,undefined);
  }finally{if(old===undefined)delete process.env.OPENAI_API_KEY;else process.env.OPENAI_API_KEY=old;}
 });
+
+test('repository inspection planning reserves room for a substantive revision and both reviews',()=>{
+ const m=mission();m.repository_id='saved-repo';const {validatePlan}=modules()('@/lib/missions/types');
+ const task=i=>({key:'source_'+i,agentId:m.team[0].id,instruction:'Inspect source',capability:'repository_review',dependencies:[]});
+ assert.throws(()=>validatePlan({assignments:[task(1),task(2),task(3)],deliverable:'Audit'},m),/At most two/);
+ assert.equal(validatePlan({assignments:[task(1),task(2),{...task(3),capability:'analysis'}],deliverable:'Audit'},m).assignments.length,3);
+});
+test('two source inspections plus analysis complete revision and both independent reviews within twelve model calls',async()=>{
+ const m=mission();m.repository_id='saved-repo';const jobs=[job(m,'plan','plan')];let used=0;
+ const store={readMission:async()=>({mission:m,jobs:structuredClone(jobs)}),rpc:async(name,args)=>{
+  assert.equal(name,'commit_mission_work');const j=jobs.find(x=>x.id===args.p_id);Object.assign(j,{status:args.p_status,result:args.p_result});
+  for(const child of args.p_children)jobs.push({...job(m,child.role,child.key),agent_id:child.agent_id,instruction:child.instruction,dependencies:child.dependencies,payload:child.payload??{},status:'queued'});
+  if(args.p_mission_status)m.status=args.p_mission_status;if(args.p_final)m.result=args.p_final;return true;
+ }};
+ const model=async(c,instruction,input)=>{
+  used++;assert.ok(used<=m.max_calls,'The supported revision cycle exceeded the saved call ceiling');let text='Supported findings';
+  if(c.job.role==='plan')text=JSON.stringify({assignments:[{key:'source_one',agentId:team[0].id,instruction:'Inspect backend',capability:'repository_review',dependencies:[]},{key:'source_two',agentId:team[1].id,instruction:'Inspect frontend',capability:'repository_review',dependencies:[]},{key:'analysis',agentId:team[2].id,instruction:'Assess supplied evidence',capability:'analysis',dependencies:[]}],deliverable:'A supported recommendation'});
+  if(c.job.role==='review')text=instruction.includes('KATIE_REQUIRED_DRAFT_REVIEW')?JSON.stringify(verdict(c.job.job_key==='review'?'revise':'approve')):JSON.stringify(assessment);
+  return{text,sources:[],calculations:[],model:'task-selected'};
+ };
+ const {executeClaim}=modules({'@/lib/missions/store':store,'@/lib/missions/inspection':{workflowInspection:async()=>null,readOnlyRepositoryObjective:()=>false,repositoryInspection:async(_,__,choose)=>{await choose('manifest');return{sha:'a'.repeat(40),files:[{path:'core.ts',excerpt:'1: inspected source'}]};}}})('@/lib/missions/worker');
+ for(const key of ['plan','source_one','source_two','analysis','compose','review','revision','review_again']){const j=jobs.find(x=>x.job_key===key);assert.ok(j,key);j.status='running';await executeClaim({mission:m,job:j},model);}
+ assert.equal(used,12);assert.equal(m.status,'completed');assert.equal(jobs.find(x=>x.job_key==='review_again').result.verdict,'pass');
+});
