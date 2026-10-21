@@ -29,7 +29,7 @@ test('executive planner accepts multi-specialist delegation plus independently c
    {slug:'operations',objective:'Audit user workflows and produce independently reviewable UX defects.',requiresRepository:false},
    {slug:'software_development',objective:'Inspect the connected repository and identify architecture risks without modifying code.',requiresRepository:true}
   ],
-  provision:[{domain:'research',capability:'research_synthesis',objective:'Research platform reliability practices with attributable external sources.'}],
+  provision:[{domain:'research',capability:'research_synthesis',objective:'Research platform reliability practices with attributable external sources.',sourceSlugs:[]}],
   unavailable:[]
  };
  const p=await runtime(plan).planExecutiveAssignment({objective:audit,specialists:verified,requestId:'test-audit'});
@@ -44,4 +44,11 @@ test('unverified specialist slugs and unavailable capability contracts are rejec
  ]){
   await assert.rejects(()=>runtime(bad).planExecutiveAssignment({objective:audit,specialists:verified,requestId:'reject'}),/verified delegation plan/);
  }
+});
+
+test('commissioned work declares explicit, valid upstream assignment dependencies',async()=>{
+ const work={slug:'operations',objective:'Produce a reviewed operational audit with execution evidence.',requiresRepository:false};
+ const provision={domain:'synthesis',capability:'research_synthesis',objective:'Combine the reviewed source reports into the requested executive report.',sourceSlugs:['operations']};
+ const result=await runtime({assignments:[work],provision:[provision],unavailable:[]}).planExecutiveAssignment({objective:audit,specialists:verified,requestId:'sources'});assert.deepEqual(Array.from(result.provision[0].sourceSlugs),['operations']);
+ for(const sources of [undefined,['unknown'],['operations','operations']])await assert.rejects(runtime({assignments:[work],provision:[{...provision,sourceSlugs:sources}],unavailable:[]}).planExecutiveAssignment({objective:audit,specialists:verified,requestId:'invalid-sources'}),/verified delegation plan/);
 });

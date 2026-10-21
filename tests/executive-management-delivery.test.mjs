@@ -5,10 +5,10 @@ import ts from 'typescript';
 import vm from 'node:vm';
 import {createRequire} from 'node:module';
 const require=createRequire(import.meta.url);
-function runtime({review='pass',alreadyDelivered=false,provision=false,sourceStatus='completed',provisionCapability='research_synthesis',provisionObjective='Synthesize source reports'}={}){
+function runtime({review='pass',alreadyDelivered=false,provision=false,sourceStatus='completed',provisionCapability='research_synthesis',provisionObjective='Synthesize source reports',provisionSources=undefined}={}){
  const result='Reviewed evidence. '.repeat(900)+' COMPLETE_FINAL_SENTINEL',saved=[],writes=[],dispatches=[];
  const row={id:'record',actor_id:'eo',chat_id:'chat',request_id:'request',objective:'Complete an evidence-backed audit.',status:'running',detail:'Working',plan:{assignments:[{slug:'operations',objective:'Audit workflow',requiresRepository:false,requestId:'assignment',missionId:'mission'}],provision:[],unavailable:[],createdAt:'2026-10-20T00:00:00Z'}};
- if(provision)row.plan.provision.push({domain:'synthesis',capability:provisionCapability,objective:provisionObjective,requestId:'provision',started:true});
+ if(provision)row.plan.provision.push({domain:'synthesis',capability:provisionCapability,objective:provisionObjective,sourceSlugs:provisionSources,requestId:'provision',started:true});
  const db={from(table){return{
   select(){return this;},eq(){return this;},in(){return this;},order(){return this;},limit(){return this;},
   async returns(){if(table==='executive_management_requests')return{data:[row],error:null};if(table==='mission_assignments')return{data:[{job_key:'review',result:{verdict:review},status:'completed'}],error:null};throw Error(table);},
@@ -46,4 +46,9 @@ test('commissioned synthesis waits for reviewed source work and receives its mis
 test('unrelated commissioned work is not made dependent on existing source audits',async()=>{
  const r=runtime({provision:true,sourceStatus:'running',provisionCapability:'financial_analysis',provisionObjective:'Analyze the supplied liquidity forecast independently.'});
  await r.run();assert.equal(r.dispatches.length,1);assert.deepEqual(Array.from(r.dispatches[0].sourceMissionIds),[]);
+});
+
+test('explicit source links govern dependencies across domains, while [] keeps independent synthesis runnable',async()=>{
+ const dependent=runtime({provision:true,sourceStatus:'running',provisionCapability:'financial_analysis',provisionObjective:'Analyze the operating report for financial impact.',provisionSources:['operations']});await dependent.run();assert.equal(dependent.dispatches.length,0);
+ const independent=runtime({provision:true,sourceStatus:'running',provisionObjective:'Synthesize technical public-source reports independently.',provisionSources:[]});await independent.run();assert.equal(independent.dispatches.length,1);assert.deepEqual(Array.from(independent.dispatches[0].sourceMissionIds),[]);
 });
