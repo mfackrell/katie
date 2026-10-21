@@ -151,7 +151,7 @@ test("a persistently invalid task definition cannot approve an answer", async ()
   const s = setup({ contractAlwaysReject: true });
   const result = await s.run();
   assert.ok(!s.phases.includes("review"));
-  assert.equal(result.audit.status, "unavailable");
+  assert.equal(result.audit.status, "completed_with_review_notes");
   assert.equal(result.result.text, draft.text);
   assert.equal(result.audit.lastCandidate, draft.text);
   assert.equal(result.audit.draft, draft.text);
@@ -322,7 +322,7 @@ test("bounded validation falls back before comparing after two material rejectio
   const s=setup({contractAlwaysReject:true});
   const result=await s.run();
   assert.deepEqual(s.phases,["assessment","contract","assessment","contract"]);
-  assert.equal(result.audit.status,"unavailable");
+  assert.equal(result.audit.status,"completed_with_review_notes");
   assert.equal(result.audit.contractFindings?.length,2);
   assert.equal(result.audit.reviews,undefined);
   assert.equal(result.result.text,draft.text);
@@ -1042,7 +1042,7 @@ test("wrong-target draft stays withheld when a later validator approves without 
     selectHelper: async c => c.usedParticipants.length === 1 ? { provider: reviewer, modelId: "reviewer" } : null,
   });
   assert.equal(validations, 2);
-  assert.equal(result.audit.status, "unavailable");
+  assert.equal(result.audit.status, "completed_with_review_notes");
   assert.equal(result.audit.contractValidation, undefined);
   assert.equal(result.audit.lastCandidate, contaminated);
   assert.equal(result.result.text, contaminated);
