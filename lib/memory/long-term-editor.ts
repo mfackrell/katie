@@ -441,7 +441,7 @@ export async function maybeUpdateLongTermMemory(
           model: MEMORY_EDITOR_MODEL, temperature: 0,
           response_format: { type: "json_object" },
           messages: [
-            { role: "system", content: "You are repairing Katie's actor-purpose-aware durable memory proposal. Return ONLY new or changed facts relevant to the actor's future work. Every entry must include evidenceMessageIds and evidenceQuotes with an EXACT, verbatim 20+ character excerpt from the corresponding USER message below. Do not infer facts from assistant messages. Do not include old memory entries. Respond with action=replace and updatedContent version=3, purpose and entries; use action=no_change only if the user supplied no durable information." },
+            { role: "system", content: "You are repairing Katie's actor-purpose-aware durable memory proposal. Return ONLY strict JSON containing new or changed facts relevant to the actor's future work. Every entry must include evidenceMessageIds and evidenceQuotes with an EXACT, verbatim 20+ character excerpt from the corresponding USER message below. Do not infer facts from assistant messages. Do not include old memory entries. Respond with action=replace and updatedContent version=3, purpose and entries; use action=no_change only if the user supplied no durable information." },
             { role: "user", content: [
               `actorPurpose: ${actor?.purpose ?? ""}`,
               `previousRejectedEntries: ${JSON.stringify(decision.updatedContent.entries)}`,
