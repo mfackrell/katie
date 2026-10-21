@@ -56,8 +56,8 @@ export async function executeClaim(claim:Claim,model=missionModel){
      ?researchRecoveryEvidence(mission.project_evidence,true)
      :(()=>{const raw=researchRecoveryEvidence(mission.project_evidence,false);
        if(!raw||typeof raw!=='object'||Array.isArray(raw))return raw;
-       const {savedSpecificationCheckpoint: _savedCheckpoint,...rest}=raw as Record<string,unknown>;
-       return rest;})()),assignedSourceGroup:typeof job.payload.executiveSourceGroup==='number'?sourceGroups[job.payload.executiveSourceGroup]:undefined,rejectedDraft,coverageRepair,assignment:job.instruction,sourceDigestContractFeedback:job.result?.sourceDigestContractFeedback,specificationValidationFeedback:job.result?.specificationValidationFeedback,evidence:completed.filter(j=>j.role!=='plan'&&j.role!=='review').map(j=>({key:j.job_key,instruction:j.instruction,result:candidateEvidence(j.result)}))};
+       return Object.fromEntries(Object.entries(raw as Record<string,unknown>)
+         .filter(([key])=>key!=='savedSpecificationCheckpoint'));})()),assignedSourceGroup:typeof job.payload.executiveSourceGroup==='number'?sourceGroups[job.payload.executiveSourceGroup]:undefined,rejectedDraft,coverageRepair,assignment:job.instruction,sourceDigestContractFeedback:job.result?.sourceDigestContractFeedback,specificationValidationFeedback:job.result?.specificationValidationFeedback,evidence:completed.filter(j=>j.role!=='plan'&&j.role!=='review').map(j=>({key:j.job_key,instruction:j.instruction,result:candidateEvidence(j.result)}))};
   // Keep the complete rejected draft in storage, never let it crowd the original
   // requirements out of a bounded repair request. Diagnostics remain actionable.
   const suffix=job.role==='revise'?'\nReview findings: '+JSON.stringify(priorReviews):'';
