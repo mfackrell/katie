@@ -1100,6 +1100,14 @@ test("durable review contracts survive repeat requests and isolate separate appl
     assert.equal(await readDurableReviewContract({...base,objectiveSourceId:"question-2"},"Interim Controller WIP","Tell me about WIP"),null);
     assert.equal(await readDurableReviewContract(base,"Different CFO brief","Tell me about WIP"),null);
     assert.equal(await readDurableReviewContract(base,"Interim Controller WIP","New task question"),null);
+    // Material requirement amendments create a new immutable version without
+    // changing the original review history or transferring other applications.
+    const amended={...base,requirementsRevision:2};
+    assert.equal(await readDurableReviewContract(amended,"Interim Controller WIP","Tell me about WIP"),null);
+    await saveDurableReviewContract(amended,"Interim Controller WIP","Tell me about WIP",assessment,approved);
+    assert.ok(await readDurableReviewContract(amended,"Interim Controller WIP","Tell me about WIP"));
+    assert.ok(await readDurableReviewContract(base,"Interim Controller WIP","Tell me about WIP"));
+    assert.equal(records.length,2);
   } finally {
     (globalThis as any).__KATIE_SUPABASE_ADMIN_CLIENT__=previous;
   }
@@ -1126,7 +1134,7 @@ test("real review pipeline reuses contract on follow-up and rebuilds it for anot
   }};
   const appA={actorId:"actor-1",projectSourceId:"project-A",objectiveSourceId:"question-A"};
   try {
-    const run=async(scope:typeof appA)=>{
+    const run=async(scope:typeof appA & {requirementsRevision?:number})=>{
       const s=setup({reviews:[verdict("approve")]});
       const result=await runRequiredDraftReview({
         requestId:"durable-contract-test",draft,params,leadProvider:s.lead,
@@ -1145,7 +1153,13 @@ test("real review pipeline reuses contract on follow-up and rebuilds it for anot
     assert.ok(resumed.calls.some(p=>p.user.includes("Historical strongestEvidence and qualifications are NOT a frozen ranking")));
     assert.deepEqual((await run({...appA,projectSourceId:"project-B"})).phases,["assessment","contract","review"]);
     assert.deepEqual((await run({...appA,objectiveSourceId:"question-B"})).phases,["assessment","contract","review"]);
-    assert.equal(rows.length,3);
+    const amended=await run({...appA,requirementsRevision:2});
+    assert.deepEqual(amended.phases,["assessment","contract","review"],"Material requirements amendments must be revalidated");
+    assert.equal(amended.audit.contractSource,"validated_new");
+    const amendmentFollowup=await run({...appA,requirementsRevision:2});
+    assert.deepEqual(amendmentFollowup.phases,["review"],"Versioned acceptance criteria reused after amendment");
+    assert.equal(amendmentFollowup.audit.contractSource,"reused");
+    assert.equal(rows.length,4);
   } finally {
     (globalThis as any).__KATIE_SUPABASE_ADMIN_CLIENT__=before;
   }

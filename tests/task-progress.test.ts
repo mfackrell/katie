@@ -406,3 +406,30 @@ test("required-review quality-first selection prefers verified high reasoning ov
   assert.equal(alreadyUsed,null);
 });
 
+
+test("source-verified material requirement amendments version only the active application", () => {
+  const briefA="Interim Controller for PE-backed infrastructure business: manage WIP and job costing.";
+  const briefB="Interim CFO for a software business: operating forecast and cash planning.";
+  let state=applyUserToTaskProgress(emptyTaskProgress(),{messageId:"project-A",text:briefA,
+    projectTransition:{action:"new",sourceQuote:"Interim Controller"}});
+  assert.equal(state.requirementsRevision,1);
+  state=applyUserToTaskProgress(state,{messageId:"feedback-1",text:"Please shorten the opening."});
+  assert.equal(state.requirementsRevision,1,"Stylistic follow-up does not invalidate a validated contract");
+  const changed="The client has added a mandatory requirement for quarterly audit committee reporting.";
+  const amended=applyUserToTaskProgress(state,{messageId:"amend-A",text:changed,
+    projectTransition:{action:"amend",sourceQuote:"mandatory requirement for quarterly audit committee reporting"}});
+  assert.equal(amended.requirementsRevision,2);
+  assert.equal(amended.projectContext?.userMessageId,"project-A");
+  const unsupported=applyUserToTaskProgress(amended,{messageId:"bad-amend",text:"Please shorten this.",
+    projectTransition:{action:"amend",sourceQuote:"nonexistent sourced requirement change"}});
+  assert.equal(unsupported.requirementsRevision,2);
+  assert.ok(unsupported.projectClarification);
+  const second=applyUserToTaskProgress(amended,{messageId:"project-B",text:briefB,
+    projectTransition:{action:"new",sourceQuote:"Interim CFO"}});
+  assert.equal(second.requirementsRevision,1);
+  const restored=applyUserToTaskProgress(second,{messageId:"resume-A",text:"Resume the earlier Controller project.",
+    projectTransition:{action:"resume",projectId:"project-A",sourceQuote:"Resume the earlier Controller project."}});
+  assert.equal(restored.requirementsRevision,2);
+  assert.equal(restored.projectContext?.userMessageId,"project-A");
+  assert.equal(restored.objective?.userMessageId,amended.objective?.userMessageId);
+});

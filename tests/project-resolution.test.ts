@@ -57,3 +57,23 @@ test("software execution needs an independent positive kind and literal current 
   assert.equal(transition?.action,expected?"new":"ambiguous");
  }
 });
+
+test("material requirements amendments require current-user quotation and keep the same project", async () => {
+  const message="The client now requires quarterly audit committee reporting as a mandatory acceptance criterion.";
+  const correct=await resolveProjectTransition(message,{
+    activeProject:a.projectContext,savedProjects:taskProjectCatalog(a),
+  },{authoritativeUserMessage:message,decisionProviders:[{
+    provider:provider("openai",JSON.stringify({
+      action:"amend",sourceQuote:"now requires quarterly audit committee reporting",
+    })),modelId:"gpt-5.6-sol",
+  }]});
+  assert.equal(correct?.action,"amend");
+  const unchanged=await resolveProjectTransition(message,{
+    activeProject:a.projectContext,savedProjects:taskProjectCatalog(a),
+  },{authoritativeUserMessage:message,decisionProviders:[{
+    provider:provider("openai",JSON.stringify({
+      action:"amend",sourceQuote:"an invented mandatory requirement",
+    })),modelId:"gpt-5.6-sol",
+  }]});
+  assert.equal(unchanged?.action,"ambiguous","Unverified amendment must not change accepted criteria");
+});
