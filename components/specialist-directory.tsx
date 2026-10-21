@@ -83,7 +83,8 @@ function MemoryCalibration({actor}:{actor:Actor}) {
        {report.conflicts.map((conflict,i)=><div key={i} className="mt-3">
          <p>{conflict.question}</p>
          <p className="mt-1 text-xs text-zinc-400">Affected records: {conflict.keys.join(", ")}</p>
-         <p className="mt-1 text-xs">Please clarify this in a conversation with {actor.name}. No conflicting entry will be changed by this calibration.</p>
+         <p className="mt-1 text-xs">These entries are not changed until you clarify. Your answer should be recorded as new source evidence, not inferred by the reviewer.</p>
+         <Link className={button+" mt-2"} href={`/conversations/new?actor=${encodeURIComponent(actor.id)}&request=${encodeURIComponent("Please ask me to resolve this long-term-memory contradiction, and retain my clarification for future use: "+conflict.question+" [keys: "+conflict.keys.join(", ")+"]")}`}>Clarify with {actor.name}</Link>
        </div>)}
      </div>}
      {report.groups.map((group,i)=><label key={i} className="block rounded-lg border border-white/10 p-3">
