@@ -154,3 +154,28 @@ test('large routing inventories keep every provider without exhausting a mission
  assert.ok(reserve<60000,'bounded routing reservation fits the unchanged initial mission allowance');
  assert.equal(shortlist(candidates),candidates,'ordinary routing keeps its existing inventory policy');
 });
+
+test('pre-generation HTTP rejection settles at zero while timeout retains the original hold',async()=>{
+ for(const [status,expected] of [[400,0],[404,0],[429,0],[408,null],[503,null]]){
+  const error=Object.assign(Error(status===400?'Unsupported value in request':'Request failed'),{status});
+  const h=harness([choice('anthropic','first'),choice('google','second')],[error,google('Recovered')]);
+  const result=await h.run(claim(),'Analyze','Evidence');assert.equal(result.text,'Recovered');
+  assert.equal(h.ledger.find(x=>x.name==='finish_mission_call').p_tokens,expected);
+ }
+});
+test('Gemini sends strict calculator schema through the JSON Schema field',async()=>{
+ const h=harness([choice('google','calculator')],[google('No arithmetic needed')]);
+ await h.run(claim(),'Analyze','Qualitative evidence','calculate');
+ const declaration=h.calls[0].body.tools[0].functionDeclarations[0];
+ assert.equal(declaration.parameters,undefined);assert.equal(declaration.parametersJsonSchema.additionalProperties,false);
+});
+test('bounded transport excludes incompatible agent endpoints without pinning a model',()=>{
+ const {boundedModelSupported,rejectedBeforeInference}=modules()('@/lib/orchestration/request-rejection');
+ assert.equal(boundedModelSupported('google','deep-research-pro-preview-12-2025'),false);
+ assert.equal(boundedModelSupported('google','models/deep-research-pro-preview-12-2025'),false);
+ assert.equal(boundedModelSupported('google','gemini-pro-latest'),true);
+ assert.equal(boundedModelSupported('openai','task-selected-model'),true);
+ for(const status of [408,409,500,503])assert.equal(rejectedBeforeInference({status,message:'Unknown execution'}),false);
+ assert.equal(rejectedBeforeInference({status:400,message:'Unknown failure'}),false);
+ assert.equal(rejectedBeforeInference(Error('404 mentioned only in an untrusted log')),false);
+});
