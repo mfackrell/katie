@@ -5,7 +5,7 @@ export type MissionCapacity={authorized:boolean;remainingTokens:number;callsRema
 // Game planning carries the full source brief, reviewed research, lossless
 // candidate and independent criteria. Native token counting and atomic
 // reservation still enforce the unchanged spending ceiling before inference.
-export function missionInputLimit(claim:Claim){return ['compose','review','revise'].includes(claim.job.role)&&claim.mission.project_kind==='specification'&&
+export function missionInputLimit(claim:Claim){return ['compose','review','revise'].includes(claim.job.role)&&['specification','development','assessment'].includes(claim.mission.project_kind??'')&&
  (claim.mission.project_evidence as {projectProfile?:string}|null)?.projectProfile==='game'?128000:48000;}
 export function fitsMissionEnvelope(instruction:string,input:string,inputLimit=48000){return instruction.length<=48000&&input.length<=inputLimit;}
 

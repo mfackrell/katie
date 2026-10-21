@@ -123,9 +123,11 @@ export async function dispatchDevelopment(task: AgentTask, project?: Context, as
     return save(task, "blocked", "Project metadata is not permitted in ordinary coding input. A DB-bound approved project dispatcher is required.");
   }
   let projectHeader='';
+  let originalProjectSource='';
   if(project){
     const saved=await getDevelopmentProjectContext(task.id,true);
     if(!saved||JSON.stringify(saved)!==JSON.stringify(project)||digest(project.contract)!==project.contractHash)throw Error('Project dispatch does not match approved DB binding');
+    if(project.originalUserOutcome)originalProjectSource=project.originalUserOutcome+'\n\nAPPROVED MILESTONE DETAILS:\n'+JSON.stringify(project.approvedMilestone)+'\n\n';
     const {version,projectId,baseSha,baselineSha,allowedPaths,contractHash,contract,game,gameFinal}=project;
     const routed=await chooseTrustedGithubModels(task.input+'\n'+task.snapshot.instructions);
     projectHeader='<!-- katie-project: '+Buffer.from(JSON.stringify({version,projectId,baseSha,baselineSha,allowedPaths,contractHash,contract,...routed,...(game?{game,gameFinal}:{})})).toString('base64url')+' -->\n\n';
@@ -149,7 +151,7 @@ export async function dispatchDevelopment(task: AgentTask, project?: Context, as
   try {
     const issue = await client.issues.create({ owner: binding.owner, repo: binding.repo,
       title: `[agent] ${task.input.split("\n")[0].slice(0, 180)}`,
-      body: `${marker(task)}\n\n${projectHeader}${task.input}\n\n## Saved agent responsibilities\n${task.snapshot.instructions}\n\nDefinition version: ${task.definition_version}. Approved managed task: ${task.id}.\nUse the existing owner-only implementation, independent tests, review, bounded repair and draft PR workflow. No deployment or automatic merge.`,
+      body: `${marker(task)}\n\n${projectHeader}${originalProjectSource}${task.input}\n\n## Saved agent responsibilities\n${task.snapshot.instructions}\n\nDefinition version: ${task.definition_version}. Approved managed task: ${task.id}.\nUse the existing owner-only implementation, independent tests, review, bounded repair and draft PR workflow. No deployment or automatic merge.`,
     });
     return save(task, "submitted", "Owner-authored issue accepted. Workflow completion has not yet been verified.", { ...task.external,attempted: true, issueNumber: issue.data.number, issueUrl: issue.data.html_url, repository: binding.fullName });
   } catch {

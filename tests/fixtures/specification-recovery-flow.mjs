@@ -62,7 +62,8 @@ export async function specificationRecoveryFlow(db){
   class GitHub{users={getAuthenticated:async()=>({data:{login:'owner',type:'User'}})};repos={get:async()=>({data:{default_branch:'main',owner:{type:'User'}}}),getBranch:async()=>({data:{commit:{sha:'a'.repeat(40)}}}),getContent:async({path})=>({data:{content:Buffer.from(path.endsWith('project-context.mjs')?'export const GAME_PROJECT_CONTEXT_VERSION=1;':path.endsWith('project-ci.mjs')?'checkGameModel(context,root,dependencies)':path.endsWith('project-game-check.mjs')?'runGameModelAcceptance':path.endsWith('project-game-rules.mjs')?'export function validateGameAcceptance export function runGameModelAcceptance':'project-browser-check.mjs projectAcceptance project-game-check.mjs project-game-rules.mjs').toString('base64')}})};}
   const runs=async()=> (await db.query('select * from project_runs where project_id=$1 order by ordinal',[id])).rows;
   const milestoneEvidence=async rows=>Promise.all(rows.filter(r=>r.outcome).map(async r=>({phase:r.kind,index:r.milestone_index,result:(await readMission(r.mission_id)).mission.result,missionStatus:(await readMission(r.mission_id)).mission.status,evidence:r.outcome})));
-  const load=modules({'@/lib/data/supabase/admin':{getSupabaseAdminClient:()=>admin},'@/lib/missions/store':{rpc,readMission},'@/lib/projects/store':{projectRpc:rpc,projectRuns:runs,milestoneEvidence},'@octokit/rest':{Octokit:GitHub}});
+  const actualProjectStore=modules({'@/lib/data/supabase/admin':{getSupabaseAdminClient:()=>admin},'@/lib/missions/store':{rpc,readMission}})('@/lib/projects/store');
+  const load=modules({'@/lib/data/supabase/admin':{getSupabaseAdminClient:()=>admin},'@/lib/missions/store':{rpc,readMission},'@/lib/projects/store':{...actualProjectStore,projectRpc:rpc,projectRuns:runs,milestoneEvidence},'@octokit/rest':{Octokit:GitHub}});
   const projectWorker=load('@/lib/projects/worker'),missionWorker=load('@/lib/missions/worker');
   // The complete combined brief and reviewed research exceed the old 30K
   // fence. The phase-specific lossless path admits them together and progresses
@@ -102,6 +103,53 @@ export async function specificationRecoveryFlow(db){
   await projectWorker.runProjectBatch();
   p=(await db.query('select * from work_projects where id=$1',[id])).rows[0];
   assert.equal(p.status,'awaiting_approval');assert.equal(p.phase,'approval');assert.equal(p.approved_hash,null);assert.ok(p.approval_hash);assert.deepEqual(p.spec,spec);
+
+  // Continue the recovered large source beyond scope approval. External code
+  // and deployed-browser receipts below are controlled fixtures; admission,
+  // scope approval, immutable bindings and final assessment are actual workers.
+  await db.query('savepoint approved_handoffs');
+  try{
+   await projectWorker.runProjectBatch();assert.equal((await db.query('select active_mission_id from work_projects where id=$1',[id])).rows[0].active_mission_id,null,'No coding before explicit approval');
+   const scope=p.approval_hash;
+   await rpc('control_work_project',{p_id:id,p_actor:actor,p_chat:chat,p_action:'approve',p_hash:scope});
+   await projectWorker.runProjectBatch();
+   p=(await db.query('select * from work_projects where id=$1',[id])).rows[0];const developmentId=p.active_mission_id;assert.ok(developmentId);assert.equal(p.phase,'development');
+   const development=await readMission(developmentId);assert.ok(development.mission.objective.length<12000);assert.equal(development.mission.project_evidence.originalUserOutcome,sourceWords);assert.deepEqual(development.mission.project_evidence.approvedMilestone.requirements,spec.requirements);
+   let claim=await rpc('claim_mission_work');assert.equal(claim.job.role,'development');
+   await missionWorker.executeClaim(claim,async()=>{throw Error('External coding is not an ordinary model call');});
+   await projectWorker.runProjectBatch();claim=await rpc('claim_mission_work');assert.equal(claim.job.payload.approved,true);
+   const store=modules({'@/lib/data/supabase/admin':{getSupabaseAdminClient:()=>admin},'@/lib/missions/store':{rpc,readMission}})('@/lib/projects/store');
+   const binding=await store.getDevelopmentProjectContext(claim.job.id,true);assert.equal(binding.originalUserOutcome,sourceWords);assert.equal(binding.scopeHash,scope);assert.deepEqual(binding.approvedMilestone.requirements,spec.requirements);
+   const task=await rpc('mission_development_task',{p_job:claim.job.id,p_lease:claim.job.lease});assert.ok(task.input.length<=16000);assert.equal(task.id,claim.job.id);
+   const head='b'.repeat(40),contractHash=binding.contractHash;
+   const checks=spec.finalContract.scenarios.map(s=>({name:s.name,passed:true,detail:'Controlled original-contract receipt'}));
+   const acceptance={version:1,projectId:id,headSha:head,contractHash,passed:true,checks};
+   const verification={observedHeadSha:head,testedHeadSha:head,reviewedHeadSha:head,changedFiles:[{path:spec.allowedPaths[0],status:'added',patch:'+ controlled fixture'}],projectAcceptance:acceptance};
+   await db.query("update mission_assignments set status='completed',lease=null,lease_until=null,result=$2 where mission_id=$1",[developmentId,JSON.stringify({verification})]);
+   await db.query("update agent_missions set status='completed',result='Controlled immutable reviewed implementation' where id=$1",[developmentId]);
+   await projectWorker.runProjectBatch();
+   p=(await db.query('select * from work_projects where id=$1',[id])).rows[0];assert.equal(p.phase,'delivery');assert.equal(p.verified_sha,head);
+   let projectClaim=await rpc('claim_work_project');const preview={immutable:true,headSha:head,deploymentId:1,statusId:2,url:'https://controlled-preview.example/'};
+   await rpc('finish_work_project',{p_id:id,p_lease:projectClaim.lease,p_action:'preview',p_data:preview});
+   projectClaim=await rpc('claim_work_project');await rpc('finish_work_project',{p_id:id,p_lease:projectClaim.lease,p_action:'browser',p_data:{...preview,...acceptance}});
+   await projectWorker.runProjectBatch();
+   p=(await db.query('select * from work_projects where id=$1',[id])).rows[0];assert.equal(p.phase,'assessment');assert.ok(p.active_mission_id);
+   const finalMission=await readMission(p.active_mission_id);assert.ok(finalMission.mission.objective.length<12000);assert.equal(finalMission.mission.project_evidence.originalUserOutcome,sourceWords);assert.deepEqual(finalMission.mission.project_evidence.approvedRequirements,spec.requirements);
+   let finalCalls=0;
+   for(let n=0;n<3;n++){
+    const finalClaim=await rpc('claim_mission_work');assert.ok(finalClaim);
+    await missionWorker.executeClaim(finalClaim,async(c,instruction,input)=>{
+     finalCalls++;assert.ok(load('@/lib/missions/request-budget').fitsMissionEnvelope(instruction,input,load('@/lib/missions/request-budget').missionInputLimit(c)));
+     if(c.job.role==='compose'){assert.equal(JSON.parse(input).projectEvidence.originalUserOutcome,sourceWords);return{text:'Controlled whole-project assessment',sources:[],calculations:[],model:'independent-fixture'};}
+     const checking=instruction.includes('KATIE_REQUIRED_DRAFT_REVIEW');
+     if(!checking)assert.ok(input.includes(JSON.stringify(sourceWords).slice(1,-1)));
+     const ids=load('@/lib/collaboration/review-contract').acceptanceIds(assessment);
+     return{text:JSON.stringify(checking?{verdict:'approve',findings:'Controlled full-source and bound evidence checked',checks:ids.map(id=>({id,passed:true,evidence:'Controlled full original source verified'}))}:assessment),sources:[],calculations:[],model:'independent-fixture'};
+    });
+   }
+   assert.equal(finalCalls,3);assert.equal((await readMission(p.active_mission_id)).mission.status,'completed');
+   assert.equal((await db.query('select approved_hash from work_projects where id=$1',[id])).rows[0].approved_hash,scope);
+  }finally{await db.query('rollback to savepoint approved_handoffs');p=(await db.query('select * from work_projects where id=$1',[id])).rows[0];}
 
   // Recover an expired/incomplete review, then exercise ACTUAL missionModel
   // counting, admission and checkpoint persistence against PostgreSQL. The

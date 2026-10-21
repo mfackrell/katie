@@ -3,6 +3,8 @@ import { rpc, readMission } from '@/lib/missions/store';
 import type { ProjectPlan } from './contract';
 export type BrowserContract = ProjectPlan['finalContract'];
 export type Context = {
+    originalUserOutcome?: string;
+    approvedMilestone?: Record<string,unknown>;
     game?: ProjectPlan['game'];
     gameFinal?: boolean;
     version: 1;
@@ -70,7 +72,7 @@ export async function getDevelopmentProjectContext(jobId: string, forDispatch = 
     return null; const { data: p, error: pe } = await db.from('work_projects').select('*').eq('id', r.binding.projectId).maybeSingle<Project>(); if (pe || !p || forDispatch && (!p.approved_hash || p.approved_hash !== p.approval_hash || p.approved_hash !== r.binding.scopeHash || p.status !== 'running' || p.active_mission_id !== r.mission_id))
     throw Error('Approved project scope is unavailable or changed');
     if(forDispatch&&p.profile==='game'&&!await projectRpc<boolean>('game_project_specialist_valid',{p_id:p.id}))throw Error('Pinned game specialist changed before dispatch');
-    return {...r.binding,...(p?.profile==='game'&&p.spec?.game?{game:p.spec.game,gameFinal:r.milestone_index===p.spec.milestones.length-1}:{})}; }
+    return {...r.binding,...(p.profile==='game'&&p.spec?.game?{approvedMilestone:{title:p.spec.milestones[r.milestone_index].title,instruction:p.spec.milestones[r.milestone_index].instruction,requirements:p.spec.requirements,allowedPaths:p.spec.allowedPaths},originalUserOutcome:`ORIGINAL USER OUTCOME (must remain authoritative):\n${p.objective}\n${p.clarifications}`} : {}),...(p?.profile==='game'&&p.spec?.game?{game:p.spec.game,gameFinal:r.milestone_index===p.spec.milestones.length-1}:{})}; }
 export const acceptanceBinding = (c: Context) => ({ projectId: c.projectId, contractHash: c.contractHash, scenarioNames: c.contract.scenarios.map(s => s.name) });
 export async function milestoneEvidence(runs: Run[]) { const result = []; for (const r of runs.filter(r => r.outcome)) {
     const { mission } = await readMission(r.mission_id);
