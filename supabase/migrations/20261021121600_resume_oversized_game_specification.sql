@@ -2,7 +2,7 @@
 -- Guard all project-level permissions, historical charges and attempt limits.
 create or replace function public.resume_oversized_game_specification(p_id uuid,p_actor uuid,p_chat uuid)
 returns boolean language plpgsql set search_path to 'public' as $$
-declare p public.work_projects; charged bigint; runs_used int; latest_research text; brief_chars int;
+declare p public.work_projects; charged bigint; runs_used int; latest_research text;
 begin
  perform pg_advisory_xact_lock(hashtextextended('katie.mission.state',0));
  select * into p from public.work_projects where id=p_id and actor_id=p_actor and chat_id=p_chat for update;
@@ -21,22 +21,18 @@ begin
    and coalesce((r.outcome->>'superseded')::boolean,false)=false
  order by r.ordinal desc limit 1;
  if not found or coalesce(length(latest_research),0)=0 then return false;end if;
- brief_chars:=length(p.objective)+length(coalesce(p.clarifications,''));
- -- A brief longer than the objective budget is forwarded as preserved evidence.
- -- Keep the complete serialized evidence below SQL's 30k limit.
- if brief_chars>22000 or (case when brief_chars>6500 then brief_chars else 0 end)+
-    length(latest_research)+2500>30000 then return false;end if;
- if exists(select 1 from public.project_events where project_id=p.id
-   and event='oversized_game_specification_resumed') then return false;end if;
+ -- A retryable coordinator wake-up, not a spent child/recovery slot.
+ -- The actual fully serialized evidence is checked at child admission.
+ if p.failures>=3 or (p.lease is not null and p.lease_until>now()) then return false;end if;
  select count(*) into runs_used from public.project_runs where project_id=p.id;
  select coalesce(sum(greatest(actual_tokens,reserved_tokens)),0) into charged from public.agent_missions where project_id=p.id;
- if runs_used>=p.max_missions or p.token_allowance-charged<30000 then return false;end if;
- update public.work_projects set status='running',lease=null,lease_until=null,failures=0,
+ if runs_used>=p.max_missions or p.token_allowance-charged<10000 then return false;end if;
+ update public.work_projects set status='running',lease=null,lease_until=null,
   detail='Resuming specification from saved independently reviewed research with original instructions stored losslessly as mission evidence. Previous attempts and charges retained.',
   updated_at=now() where id=p.id;
  insert into public.project_events(project_id,event,data) values(p.id,'oversized_game_specification_resumed',
   jsonb_build_object('reviewedResearchRetained',true,'chargedTokens',charged,'remainingTokens',p.token_allowance-charged,
-   'priorRuns',runs_used,'codingApproved',false));
+   'priorRuns',runs_used,'codingApproved',false,'dispatchPending',true));
  perform public.project_publish(p.id,'Oversized specification context repaired; resuming from original reviewed research with original budget.');
  return true;
 end;$$;

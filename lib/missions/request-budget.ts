@@ -2,7 +2,12 @@ import {rpc} from './store';
 import type {Claim} from './types';
 
 export type MissionCapacity={authorized:boolean;remainingTokens:number;callsRemaining:number;routingCallsRemaining:number;reason?:string};
-export function fitsMissionEnvelope(instruction:string,input:string){return instruction.length<=48000&&input.length<=48000;}
+// Review combines the full source brief, lossless candidate and independent criteria.
+// It needs a larger input than composition; native token counting and atomic
+// reservation still enforce the unchanged spending ceiling before inference.
+export function missionInputLimit(claim:Claim){return claim.job.role==='review'&&claim.mission.project_kind==='specification'&&
+ (claim.mission.project_evidence as {projectProfile?:string}|null)?.projectProfile==='game'?96000:48000;}
+export function fitsMissionEnvelope(instruction:string,input:string,inputLimit=48000){return instruction.length<=48000&&input.length<=inputLimit;}
 
 /** A rejected reservation is NOT a provider call or a failed mission. */
 export class MissionAdmissionError extends Error {

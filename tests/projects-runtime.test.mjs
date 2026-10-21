@@ -130,13 +130,14 @@ test('explicit non-scope note preserves the active project and does not issue an
 
 test('timed-out game revision recovery is bounded, review-grounded and does not erase prior missions',async()=>{
  const events=[];const p={...owner,status:'blocked',phase:'specification',profile:'game',active_mission_id:randomUUID()};
- const db={from:table=>({select(){return this;},eq(){return this;},order(){return this;},limit:async()=>({data:table==='work_projects'?[{id:p.id}]:[],error:null})})};
+ const db={from:table=>({select(){return this;},eq(){return this;},order(){return this;},range:async()=>({data:table==='work_projects'?[{id:p.id,actor_id:actor,chat_id:chat}]:[],error:null}),limit:async()=>({data:[],error:null})})};
  const {runProjectBatch}=modules({
   '@/lib/data/supabase/admin':{getSupabaseAdminClient:()=>db},
   '@/lib/projects/store':{projectRpc:async(name,args)=>{
    events.push({name,args});
    if(name==='project_dispatch_recovery_candidates')return[];
    if(name==='claim_work_project')return null;
+   if(['resume_incomplete_game_review','resume_oversized_game_specification'].includes(name))return false;
    if(name==='recover_game_revision_timeout')return true;
    throw Error('Unexpected mutation');
   }}

@@ -141,8 +141,8 @@ test('review and execution use the same separate request envelopes without dropp
  assert.equal(budget.fitsMissionEnvelope('instruction','c'.repeat(48001)),false);
  const worker=readFileSync('lib/missions/worker.ts','utf8');
  const model=readFileSync('lib/missions/model.ts','utf8');
- assert.match(worker,/fitsMissionEnvelope\(reviewFrame,reviewInput\)/);
- assert.match(model,/fitsMissionEnvelope\(instruction,input\)/);
+ assert.match(worker,/fitsMissionEnvelope\(reviewFrame,reviewInput,missionInputLimit\(claim\)\)/);
+ assert.match(model,/fitsMissionEnvelope\(instruction,input,missionInputLimit\(claim\)\)/);
  assert.match(worker,/validateAnswerReview\(parseJSON\(checked.text\),assessment\)/);
 });
 
@@ -157,8 +157,9 @@ test('incomplete reviewer response charges original provider and falls back to e
 });
 
 test('incomplete reviewer never launches next provider when no reservation fits',async()=>{
- const h=fixture({incompleteFirst:true,remaining:20000});h.c.job.role='review';
+ const h=fixture({incompleteFirst:true,counts:[1000,60000],remaining:20000});h.c.job.role='review';
  await assert.rejects(h.call(h.c,'Review saved candidate','Unchanged original game brief'));
- assert.equal(h.inferences.length,0,'no model runs without an affordable reservation');
+ assert.equal(h.inferences.length,1,'the first incomplete response ran and was charged; unaffordable fallback never runs');
+ assert.equal(h.actual(),30);
  assert.ok(h.denials()>=1);
 });

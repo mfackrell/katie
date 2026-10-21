@@ -22,7 +22,7 @@ test('projects: real PostgreSQL idempotency, scope, lifecycle fencing and aggreg
   await db.query('update agent_missions set routing_calls=max_calls*3 where id=$1',[job.mission_id]);
   assert.equal(await reserveRouting(job.lease,randomUUID()),false);
   await db.query('rollback');
-  const rivals=await Promise.all([connect(),connect()]);for(const c of rivals)await c.query('set role service_role');const reservations=await Promise.all(rivals.map(c=>c.query('select reserve_mission_call($1,$2,$3,$4,$5) ok',[job.id,job.lease,randomUUID(),'fixture',20000])));assert.equal(reservations.filter(r=>r.rows[0].ok).length,1,'project prior charges plus concurrent reservations cannot exceed the shared allowance');assert.equal((await db.query('select status from work_projects')).rows[0].status,'blocked');assert.equal(Number((await db.query('select sum(reserved_tokens) amount from agent_missions')).rows[0].amount),50000);
+  const rivals=await Promise.all([connect(),connect()]);for(const c of rivals)await c.query('set role service_role');const reservations=await Promise.all(rivals.map(c=>c.query('select reserve_mission_call($1,$2,$3,$4,$5) ok',[job.id,job.lease,randomUUID(),'fixture',20000])));assert.equal(reservations.filter(r=>r.rows[0].ok).length,1,'project prior charges plus concurrent reservations cannot exceed the shared allowance');assert.equal((await db.query('select status from work_projects')).rows[0].status,'running');assert.equal(Number((await db.query('select sum(reserved_tokens) amount from agent_missions')).rows[0].amount),50000);
   // Durable recovery is generic and does not create a new coding mission.
   const discovered=await db.query('select discover_recovery_cases() n');
   assert.ok(Number(discovered.rows[0].n)>=1);
@@ -97,6 +97,18 @@ test('projects: real PostgreSQL idempotency, scope, lifecycle fencing and aggreg
   assert.equal(await recover(args),null,'infrastructure retry is exactly once');
   assert.equal((await db.query('select count(*) n from project_runs where project_id=$1 and outcome->>\'infrastructure_retry\'=\'true\'',[fixtureProject])).rows[0].n,'1');
   await db.query('rollback');
+  // Concurrent recovery calls admit exactly one review continuation and fence
+  // old worker leases. This is an actual two-connection PostgreSQL race.
+  await db.query("update work_projects set status='blocked',phase='specification',profile='game',spec=null,approval_hash=null,approved_hash=null,token_allowance=600000,deadline=now()+interval '2 days',lease=null,lease_until=null where id=$1",[fixtureProject]);
+  await db.query("update agent_missions set status='blocked',project_kind='specification',project_evidence='{\"projectProfile\":\"game\"}',deadline=now()-interval '1 minute' where id=$1",[fixtureMission]);
+  await db.query("update mission_assignments set status='completed',lease=null,lease_until=null,dependencies='{}' where mission_id=$1",[fixtureMission]);
+  await db.query("update mission_assignments set result='{\"text\":\"Exact source candidate for race\"}' where mission_id=$1 and job_key='compose'",[fixtureMission]);
+  await db.query("update mission_assignments set status='failed',dependencies=array['compose'],detail='Model output incomplete: incomplete' where mission_id=$1 and role='review'",[fixtureMission]);
+  const oldUsage=Number((await db.query('select sum(greatest(actual_tokens,reserved_tokens)) n from agent_missions where project_id=$1',[fixtureProject])).rows[0].n);
+  const recoveries=await Promise.all(rivals.map(c=>c.query('select resume_incomplete_game_review($1,$2,$3) ok',[fixtureProject,args[1],args[2]])));
+  assert.equal(recoveries.filter(r=>r.rows[0].ok).length,1);
+  assert.equal(Number((await db.query('select sum(greatest(actual_tokens,reserved_tokens)) n from agent_missions where project_id=$1',[fixtureProject])).rows[0].n),oldUsage);
+  assert.equal((await db.query('select status from agent_missions where id=$1',[fixtureMission])).rows[0].status,'blocked');
   await db.query('reset role');await db.query('set role anon');for(const table of ['work_projects','project_agents','project_runs','project_events'])await assert.rejects(db.query('select * from '+table),/permission denied/);await assert.rejects(db.query('select claim_work_project()'),/permission denied/);await assert.rejects(db.query("select retry_project_review('44444444-4444-4444-8444-444444444444','11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222')"),/permission denied/);
  }finally{await Promise.allSettled(clients.map(c=>c.end()));if(started)run('pg_ctl',['-D',data,'-m','immediate','-w','stop']);rmSync(root,{recursive:true,force:true});}
 });

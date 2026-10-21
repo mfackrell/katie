@@ -6,7 +6,7 @@ import { readTask } from '@/lib/agents/store';
 import { developmentPreview, projectAcceptanceSchema, reconcileDevelopment, retryImmutableProjectVerification } from '@/lib/agents/development';
 import { parseJSON } from '@/lib/missions/types';
 import { validateProjectPlan, digest, projectPlanSchema, gameSpecificationView, canonical } from './contract';
-import {gameAssessmentEvidence} from './game-evidence';
+import {gameAssessmentEvidence,jsonbTextSize} from './game-evidence';
 import { projectRpc, projectRuns, milestoneEvidence, acceptanceBinding, getDevelopmentProjectContext, type Project } from './store';
 export async function baseline(p: Project) { if (!p.repository_id)
     return null; const { data: r, error } = await getSupabaseAdminClient().from('repo_sync_runs').select('repository_full_name').eq('id', p.repository_id).maybeSingle<{
@@ -322,7 +322,7 @@ async function advance(p: Project) {
     }
     // The durable SQL admission fence verifies aggregate evidence size;
     // preflight before consuming a child mission or recovery allowance.
-    if(JSON.stringify(projectEvidence??{}).length>30000)throw Error('Project evidence exceeds bounded context; original requirements retained without starting a child');
+    if(jsonbTextSize(projectEvidence??{})>30000)throw Error('Project evidence exceeds bounded context; original requirements retained without starting a child');
     await finish('child', { kind: p.phase, objective, evidence: projectEvidence });
 }
 async function reconcileParkedDispatch() {
@@ -347,7 +347,7 @@ async function reconcileBlockedGameRevisions(){
     // Stable keyset pagination ensures two older unrecoverable jobs never starve
     // a later eligible project, even as concurrent recoveries alter statuses.
     for(;;){
-        let q=db.from('work_projects').select('id,actor_id,chat_id')
+        const q=db.from('work_projects').select('id,actor_id,chat_id')
           .eq('status','blocked').eq('profile','game').eq('phase','specification')
           .order('id',{ascending:true}).range(offset,offset+29);
         const {data,error}=await q;

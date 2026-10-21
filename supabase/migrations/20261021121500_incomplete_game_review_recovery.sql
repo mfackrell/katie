@@ -1,62 +1,76 @@
--- One-shot, actor/chat-scoped review recovery for exact saved game draft.
--- Never restores an expired mission, resets charges, or waives coding approval.
-create or replace function public.resume_incomplete_game_review(p_id uuid, p_actor uuid, p_chat uuid)
-returns boolean language plpgsql set search_path to 'public' as $$
-declare p public.work_projects; m public.agent_missions; j public.mission_assignments; charged bigint;
+-- A review continuation is a new bounded child, never a reset of an expired
+-- mission's charges, attempts or deadline. Its completed candidate and any
+-- source-matching draft-blind checkpoint are copied exactly with provenance.
+create or replace function public.resume_incomplete_game_review(p_id uuid,p_actor uuid,p_chat uuid)
+returns boolean language plpgsql security invoker set search_path=public as $$
+declare p work_projects;m agent_missions;j mission_assignments;c mission_assignments;
+ spent bigint;seq integer;mid uuid;candidate_hash text;
 begin
  perform pg_advisory_xact_lock(hashtextextended('katie.mission.state',0));
- select * into p from public.work_projects
-  where id=p_id and actor_id=p_actor and chat_id=p_chat for update;
+ select * into p from work_projects where id=p_id and actor_id=p_actor and chat_id=p_chat for update;
  if not found or p.status<>'blocked' or p.phase<>'specification' or p.profile<>'game'
-   or p.spec is not null or p.approved_hash is not null or p.approval_hash is not null
-   or p.active_mission_id is null or p.deadline<=now()+interval '10 minutes'
- then return false; end if;
- select * into m from public.agent_missions
-  where id=p.active_mission_id and project_id=p.id for update;
+  or p.spec is not null or p.approved_hash is not null or p.approval_hash is not null
+  or p.active_mission_id is null or p.deadline<=now()+interval '10 minutes'
+  or (p.lease is not null and p.lease_until>now()) then return false;end if;
+ select * into m from agent_missions where id=p.active_mission_id and project_id=p.id for update;
  if not found or m.status<>'blocked' or m.project_kind<>'specification'
-   or m.deadline<=now()+interval '5 minutes'
-   or m.max_calls-m.calls<2 or m.max_calls*3-m.routing_calls<2
-   or m.token_allowance-greatest(m.actual_tokens,m.reserved_tokens)<20000
- then return false; end if;
- select * into j from public.mission_assignments
-  where mission_id=m.id and role='review' and status='failed'
-    and (detail='Model output incomplete: incomplete'
-         or result->>'detail'='Model output incomplete: incomplete')
-  order by updated_at desc limit 1 for update;
- if not found then return false; end if;
- if not exists(select 1 from public.mission_assignments
-   where mission_id=m.id and job_key='compose' and status='completed'
-     and length(coalesce(result->>'text',''))>0)
- then return false; end if;
- if exists(select 1 from public.mission_assignments a
-   join public.agent_missions x on x.id=a.mission_id
-   where x.project_id=p.id and a.status='running' and a.lease_until>now())
- then return false;end if;
- if exists(select 1 from public.project_events
-   where project_id=p.id and event='incomplete_game_review_resumed'
-     and data->>'reviewJobId'=j.id::text)
- then return false;end if;
- select coalesce(sum(greatest(actual_tokens,reserved_tokens)),0) into charged
-   from public.agent_missions where project_id=p.id;
- if p.token_allowance-charged<20000 then return false;end if;
- update public.mission_assignments set status='queued',lease=null,lease_until=null,
-  available_at=now(),detail='Resume the identical saved draft for independent review with eligible provider fallback.',
-  updated_at=now() where id=j.id;
- update public.agent_missions set status='running',
-  detail='Recovered only failed independent review; original draft, charges, attempts and deadline retained.',
-  updated_at=now() where id=m.id;
- update public.work_projects set status='running',lease=null,lease_until=null,
-  detail='Exact saved specification returned to independent review, within original limits. Coding remains unapproved.',
-  updated_at=now() where id=p.id;
- insert into public.project_events(project_id,event,data) values
-  (p.id,'incomplete_game_review_resumed',jsonb_build_object(
-   'missionId',m.id,'reviewJobId',j.id,'chargedTokens',charged,
-   'remainingTokens',p.token_allowance-charged,'previousAttempts',j.attempts,
-   'savedCandidateUnchanged',true,'codingApproved',false));
- perform public.project_publish(p.id,'Saved specification independent review resumed under original budgets and authorization.');
+  or m.project_evidence->>'projectProfile' is distinct from 'game'
+  or m.project_evidence ? 'reviewContinuation' then return false;end if;
+ select * into j from mission_assignments where mission_id=m.id and role='review' and status='failed'
+  and (result->>'responseStatus'='incomplete' and coalesce(result->>'incompleteReason','max_output_tokens')='max_output_tokens'
+    or result->>'admissionDenied'='true' or result->>'reviewContextOverflow'='true'
+    or detail='Model output incomplete: incomplete') order by updated_at desc limit 1 for update;
+ if not found then return false;end if;
+ select * into c from mission_assignments where mission_id=m.id
+  and job_key=case when j.job_key='review_again' then 'revision' else 'compose' end and status='completed'
+  and length(coalesce(result->>'text',''))>0 for update;
+ if not found then return false;end if;
+ if exists(select 1 from mission_assignments a join agent_missions x on x.id=a.mission_id
+   where x.project_id=p.id and a.status='running' and a.lease_until>now()) then return false;end if;
+ -- A continuation cannot resurrect archived/modified agents or a dependency
+ -- whose original evidence is unfinished or excluded from read-only recovery.
+ if exists(select 1 from jsonb_array_elements(m.team) t where not exists(
+  select 1 from managed_agents a where a.id=(t->>'id')::uuid and a.actor_id=(t->>'actor_id')::uuid
+   and not a.archived and a.config=t->'config' and a.version=(t->>'version')::integer)) then return false;end if;
+ if exists(select 1 from mission_assignments a,unnest(a.dependencies) dep
+   where a.mission_id=m.id and (a.status='completed' and a.role<>'development' or a.id=j.id)
+    and not exists(select 1 from mission_assignments d where d.mission_id=m.id and d.job_key=dep
+      and d.status='completed' and d.role<>'development')) then return false;end if;
+ candidate_hash:=encode(sha256(convert_to(c.result->>'text','UTF8')),'hex');
+ -- At most one continuation per exact source candidate. A failed continuation
+ -- remains diagnosable and cannot consume the project in recursive retries.
+ if exists(select 1 from project_events where project_id=p.id and event='incomplete_game_review_resumed'
+  and data->>'candidateHash'=candidate_hash) then return false;end if;
+ select coalesce(sum(greatest(actual_tokens,reserved_tokens)),0) into spent from agent_missions where project_id=p.id;
+ select count(*)+1 into seq from project_runs where project_id=p.id;
+ -- Dispatch admission uses the real stage payload/native count, not a guessed
+ -- minimum. No reservation or generation charge is made by this transaction.
+ if seq>p.max_missions or p.token_allowance-spent<10000 then return false;end if;
+ mid:=gen_random_uuid();
+ insert into agent_missions(id,objective,team,status,max_calls,token_allowance,max_minutes,deadline,project_id,project_kind,project_evidence,detail)
+ values(mid,m.objective,m.team,'running',m.max_calls,least(120000,p.token_allowance-spent),120,
+  least(p.deadline,now()+interval '120 minutes'),p.id,'specification',m.project_evidence||
+  jsonb_build_object('reviewContinuation',jsonb_build_object('missionId',m.id,'candidateJobId',c.id,'candidateHash',candidate_hash)),
+  'Continue independent review of the exact saved candidate. Original mission remains immutable.');
+ -- Copy completed dependencies and review receipts, including the preceding
+ -- rejected review when continuing review_again. No implementation is copied.
+ insert into mission_assignments(mission_id,job_key,role,agent_id,instruction,dependencies,payload,status,attempts,result,detail)
+ select mid,a.job_key,a.role,a.agent_id,a.instruction,a.dependencies,a.payload,'completed',0,a.result,
+  'Reused completed evidence from source assignment '||a.id::text
+ from mission_assignments a where a.mission_id=m.id and a.status='completed' and a.role<>'development';
+ insert into mission_assignments(mission_id,job_key,role,agent_id,instruction,dependencies,payload,status)
+ values(mid,j.job_key,j.role,j.agent_id,j.instruction,j.dependencies,j.payload||
+  jsonb_build_object('continuationSource',jsonb_build_object('missionId',m.id,'jobId',j.id,'attempts',j.attempts)),'queued');
+ insert into project_runs(project_id,mission_id,kind,ordinal,milestone_index)
+ values(p.id,mid,'specification',seq,p.milestone_index);
+ insert into project_events(project_id,event,data) values(p.id,'incomplete_game_review_resumed',jsonb_build_object(
+  'sourceMissionId',m.id,'missionId',mid,'reviewJobId',j.id,'candidateHash',candidate_hash,
+  'chargedTokens',spent,'remainingTokens',p.token_allowance-spent,'previousAttempts',j.attempts,
+  'savedCandidateUnchanged',true,'codingApproved',false,'dispatchPending',true));
+ update work_projects set status='running',active_mission_id=mid,lease=null,lease_until=null,failures=0,
+  detail='Saved specification independent review continued. Original charges and project deadline retained; coding remains unapproved.',updated_at=now() where id=p.id;
+ perform project_publish(p.id,'Continuing the saved specification independent review. No redrafting or coding approval.');
  return true;
-end;$$;
-
--- These maintenance RPCs must not be callable from browser/data API roles.
-revoke all on function public.resume_incomplete_game_review(uuid,uuid,uuid) from public, anon, authenticated;
+end $$;
+revoke all on function public.resume_incomplete_game_review(uuid,uuid,uuid) from public,anon,authenticated;
 grant execute on function public.resume_incomplete_game_review(uuid,uuid,uuid) to service_role;

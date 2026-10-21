@@ -1,66 +1,71 @@
+import test from 'node:test';
 import assert from 'node:assert/strict';
-import {readFileSync} from 'node:fs';
-import {test} from 'node:test';
-const root=new URL('../',import.meta.url);
-const read=(file)=>readFileSync(new URL(file,root),'utf8');
+import { readFileSync, existsSync } from 'node:fs';
+import { createRequire } from 'node:module';
+import { resolve, dirname } from 'node:path';
+import vm from 'node:vm';
+import ts from 'typescript';
+import { randomUUID, webcrypto } from 'node:crypto';
+const native=createRequire(import.meta.url);
+function modules(overrides={}){
+ for(const [key,value] of Object.entries(overrides))if(key.startsWith('@/'))overrides[resolve(key.slice(2))]=value;
+ const cache=new Map();
+ const load=name=>{
+  if(name in overrides)return overrides[name];
+  if(!name.startsWith('@/')&&!name.startsWith('/')&&!name.startsWith('.'))return native(name);
+  let path=name.startsWith('@/')?resolve(name.slice(2)):resolve(name);
+  if(path.endsWith('.mjs'))return native(path);
+  if(!path.endsWith('.ts'))path=existsSync(path+'.ts')?path+'.ts':resolve(path,'index.ts');
+  if(cache.has(path))return cache.get(path);
+  const exports={};cache.set(path,exports);
+  const code=ts.transpileModule(readFileSync(path,'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022,esModuleInterop:true}}).outputText;
+  vm.runInNewContext(code,{exports,require:n=>n.startsWith('.')?load(resolve(dirname(path),n)):load(n),process,Buffer,Date,JSON,console,Set,Map,URL,URLSearchParams,TextEncoder,TextDecoder,Request,Response,Headers,ReadableStream,AbortController,AbortSignal,File,Blob,fetch,crypto:webcrypto,setTimeout,clearTimeout,setInterval,clearInterval},{filename:path});
+  return exports;
+ };
+ return load;
+}
 
-test('specification recovery does not demand development scope approval',()=>{
- const worker=read('lib/recovery/worker.ts');
- assert.match(worker,/e\.project\.phase==='development'&&\(/);
- assert.match(worker,/new Date\(e\.project\.deadline\)\.getTime\(\)<=Date\.now\(\)/);
+import {gameFixture} from './fixtures/game-project.mjs';
+const agent='11111111-1111-4111-8111-111111111111';
+const brief='Exact original: "quoted" \\ backslash, newline\n🙂 '.repeat(22000).slice(0,22000);
+const research='Source-supported finding. '.repeat(200);
+const f=gameFixture();
+const candidate={name:'Counter',summary:'Complete game',requirements:Array.from({length:28},(_,i)=>String(i)+' '+ 'R'.repeat(490)),allowedPaths:f.allowedPaths,milestones:[{title:'Complete',instruction:'Implement the original rules',contract:f.contract}],finalContract:f.contract,game:f.game};
+const text=JSON.stringify(candidate);
+const assessment={objective:'Exact source outcome',qualifications:['Game rules'],strongestEvidence:['Reviewed research'],criteria:['Verify every rule '+ 'criterion '.repeat(700)],synthesis:{conclusion:'Verify source coverage',dimensions:[{dimension:'Rules',supportedScope:'Complete rules',evidence:['Original brief']}],emphasis:'Complete outcome'},taskContract:{deliverable:'Specification',requirements:[{id:'all-rules',requirement:'Retain every explicit rule',sourceId:'latest-user',status:'active'}],conflicts:[]}};
+const m={id:'mission',objective:'Specification phase. Read originalUserOutcome completely.',project_kind:'specification',project_evidence:{projectProfile:'game',originalUserOutcome:brief,reviewedResearch:{text:research,reviewedMissionId:'research'}},status:'running',team:[{id:agent,config:{instructions:'Use the exact rules'}}]};
+const job=role=>({id:role,mission_id:m.id,job_key:role,role,agent_id:agent,instruction:'Complete phase',payload:{},lease:'lease',status:'running',attempts:1});
+const compose={...job('compose'),status:'completed',result:{text}};
+
+test('actual composition and both independent review passes preserve escaped source, research and full candidate at supported maximums',async()=>{
+ let committed;const review=job('review'),calls=[];
+ const store={readMission:async()=>({mission:m,jobs:[compose,review]}),rpc:async(_,args)=>{committed=args;return true;}};
+ const load=modules({'@/lib/missions/store':store});
+ const worker=load('@/lib/missions/worker');
+ await worker.executeClaim({mission:m,job:job('compose')},async(_,instruction,input)=>{
+  const data=JSON.parse(input);assert.equal(data.projectEvidence.originalUserOutcome,brief);assert.equal(data.projectEvidence.reviewedResearch.text,research);
+  assert.ok(input.length<=48000);return{text,sources:[],calculations:[],model:'fixture'};
+ });
+ await worker.executeClaim({mission:m,job:review},async(claim,instruction,input)=>{
+  calls.push(input);
+  const isReview=instruction.includes('KATIE_REQUIRED_DRAFT_REVIEW');
+  if(!isReview){const turns=JSON.parse(input.split('AUTHORITATIVE_USER_TURNS:\n')[1]);assert.ok(turns[1].text.endsWith(brief));assert.doesNotMatch(input,/Complete game/);}
+  else{
+   const data=JSON.parse(input.split('Evidence and candidate:\n')[1]);assert.equal(data.projectEvidence.originalUserOutcome,brief);assert.equal(data.projectEvidence.reviewedResearchText,research);
+   assert.deepEqual(data.candidate.result.specification.game.rules,candidate.game.rules);
+   assert.deepEqual(data.candidate.result.specification.finalContract,candidate.finalContract);
+   const budget=load('@/lib/missions/request-budget');assert.ok(input.length>48000,'Exercise the formerly contradictory 48K envelope');
+   assert.equal(budget.fitsMissionEnvelope(instruction,input,budget.missionInputLimit(claim)),true);
+  }
+  const ids=load('@/lib/collaboration/review-contract').acceptanceIds(assessment);
+  return{text:JSON.stringify(isReview?{verdict:'approve',findings:'Every rule and expected state checked',checks:ids.map(id=>({id,passed:true,evidence:'Exact original source and complete candidate match'}))}:assessment),sources:[],calculations:[],model:'independent-fixture'};
+ });
+ assert.equal(calls.length,2);assert.equal(committed.p_final,text);assert.equal(committed.p_mission_status,'completed');assert.equal(compose.result.text,text);
 });
 
-test('incomplete inference attempts can use a different eligible provider',()=>{
- const model=read('lib/missions/model.ts');
- assert.match(model,/error\.partial\.responseStatus==='incomplete'/);
- assert.match(model,/error\.partial\.incompleteReason==='max_output_tokens'/);
- assert.match(model,/failedProviders\.has\(choice\.provider\.name\)/);
-});
-
-test('game specification carries original user words to compose and draft-blind review',()=>{
- const worker=read('lib/projects/worker.ts');
- const review=read('lib/missions/worker.ts');
- assert.match(worker,/boundedGameSpecification\(detailed:string,original:string,game:boolean\)/);
- assert.match(worker,/if\(detailed\.length<=12000\)return detailed/);
- assert.match(worker,/const compact=\x60\$\{original\}/);
- assert.match(worker,/objective = boundedGameSpecification/);
- assert.match(worker,/await finish\('child', \{ kind: p\.phase, objective, evidence: projectEvidence \}\)/);
- assert.match(review,/text:mission\.objective/);
- assert.doesNotMatch(worker,/sourceForMission/);
- assert.match(worker,/originalUserOutcome:source/);
- assert.match(review,/const sourceForReview=typeof authoritativeBrief==='string'/);
- assert.match(review,/text:sourceForReview/);
- assert.match(review,/originalUserOutcome:e\.originalUserOutcome/);
-});
-
-test('both guarded recovery RPCs have active supervisor callers',()=>{
- const worker=read('lib/projects/worker.ts');
- assert.match(worker,/resume_incomplete_game_review',authorized/);
- assert.match(worker,/resume_oversized_game_specification',authorized/);
- for(const file of ['20261021121500_incomplete_game_review_recovery.sql','20261021121600_resume_oversized_game_specification.sql']){
-  const sql=read('supabase/migrations/'+file);
-  assert.match(sql,/actor_id=p_actor and chat_id=p_chat/);
-  assert.match(sql,/token_allowance-charged/);
-  assert.match(sql,/revoke all on function public\./);
-  assert.match(sql,/to service_role/);
- }
-});
-
-test('review recovery checks two real call slots and adequate uncommitted budget',()=>{
- const sql=read('supabase/migrations/20261021121500_incomplete_game_review_recovery.sql');
- assert.match(sql,/m\.max_calls-m\.calls<2/);
- assert.match(sql,/m\.token_allowance-greatest\(m\.actual_tokens,m\.reserved_tokens\)<20000/);
- assert.match(sql,/savedCandidateUnchanged/);
- assert.doesNotMatch(sql,/set attempts\s*=|set reserved_tokens\s*=|set token_allowance\s*=|set approved_hash\s*=/i);
-});
-
-test('real PostgreSQL fixture exercises both recovery RPCs and browser role denials',()=>{
- const testSource=read('tests/projects-sql.test.mjs');
- const sql=read('tests/fixtures/game-orchestrator-recovery-618.sql');
- assert.match(testSource,/game-orchestrator-recovery-618\.sql/);
- assert.match(sql,/claim_mission_work\(\)/);
- assert.match(sql,/claim_work_project\(\)/);
- assert.match(sql,/review_wrong_actor/);
- assert.match(sql,/oversized_wrong_chat/);
- assert.match(sql,/has_function_privilege\('anon'/);
+test('shared serialization counts escapes, Unicode and metadata before child admission',()=>{
+ const {jsonbTextSize}=modules()('@/lib/projects/game-evidence');
+ const data={originalUserOutcome:brief,reviewedResearch:{text:research},recovery:{id:'original',findings:'"\\\n'.repeat(200)}};
+ assert.ok(jsonbTextSize(data)>brief.length+research.length);
+ const n=jsonbTextSize({value:''});assert.equal(jsonbTextSize({value:'x'.repeat(30000-n)}),30000);assert.equal(jsonbTextSize({value:'x'.repeat(30001-n)}),30001);
 });
