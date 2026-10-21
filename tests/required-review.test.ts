@@ -610,10 +610,10 @@ test("objective-first standard reaches independent assessment, comparison, revis
       return response("anthropic", "reviewer", assessment);
     }
     if (p.user.includes(rebuilt)) {
-      assert.match(p.persona, /FINAL VERIFICATION: Reassess the complete revised response/);
-      assert.match(p.persona, /not merely that earlier requested edits were applied/);
+      assert.match(p.persona, /FINAL VERIFICATION: Evaluate whether the exact revised answer/);
+      assert.match(p.persona, /Do not ask whether a different answer might be marginally better/);
       assert.match(p.persona, /Do not fail any check merely because suggested wording/);
-      assert.match(p.persona, /strongest effective response is not a mandate for endless stylistic optimization/);
+      assert.match(p.persona, /otherwise approve/);
       return response("anthropic", "reviewer", verdict("approve"));
     }
     assert.match(p.persona, /DRAFT COMPARISON: Compare the draft with the independently established ideal approach/);
@@ -649,7 +649,7 @@ test("comparative review can preserve a sound original without requiring correct
   assert.deepEqual(s.phases, ["assessment", "contract", "review"]);
   const reviewCall = s.calls.find(call => call.persona.includes("KATIE_REQUIRED_DRAFT_REVIEW"));
   assert.ok(reviewCall);
-  assert.match(reviewCall.persona, /do not mistake isolated compliance for improvement/);
+  assert.match(reviewCall.persona, /FIRST decide whether this draft meets the material acceptance threshold/);
   assert.match(reviewCall.persona, /implementing feedback is not itself evidence of improvement/);
 });
 
