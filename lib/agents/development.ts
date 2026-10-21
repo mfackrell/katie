@@ -1,3 +1,4 @@
+import {packDevelopmentRequest} from '../../scripts/request-envelope.mjs';
 import {getDevelopmentProjectContext,acceptanceBinding,projectRpc,type Context} from '@/lib/projects/store';
 import {digest} from '@/lib/projects/contract';
 import {getAvailableProviders} from '@/lib/providers';
@@ -132,9 +133,6 @@ export async function dispatchDevelopment(task: AgentTask, project?: Context, as
     const routed=await chooseTrustedGithubModels(task.input+'\n'+task.snapshot.instructions);
     projectHeader='<!-- katie-project: '+Buffer.from(JSON.stringify({version,projectId,baseSha,baselineSha,allowedPaths,contractHash,contract,...routed,...(game?{game,gameFinal}:{})})).toString('base64url')+' -->\n\n';
   }
-  const claimed = project ? await agentRpc<boolean>("claim_project_dispatch", {p_id:task.id,p_lease:assignmentLease??null,p_hash:project.scopeHash}) : await agentRpc<boolean>("claim_agent_dispatch", { p_id: task.id });
-  if (!claimed) return readTask(task.id);
-  task = { ...task, external: { attempted: true, ...(project?{projectId:project.projectId}:{}) } };
   let client: Octokit, binding: Awaited<ReturnType<typeof repository>>;
   try {
     client = github(); binding = await repository(task);
@@ -148,13 +146,27 @@ export async function dispatchDevelopment(task: AgentTask, project?: Context, as
       if (workflow.data.path !== ".github/workflows/autonomous-development.yml" || workflow.data.state !== "active") throw new Error("Workflow unavailable");
     } catch { return save(task, "blocked", "Blocked integration: the existing autonomous-development workflow is unavailable or disabled. No coding issue was submitted."); }
   } catch (error) { return save(task, "blocked", error instanceof Error && error.message.startsWith("Blocked integration:") ? error.message : "Blocked integration: unable to verify authenticated repository owner."); }
+  const originalBody=`${marker(task)}\n\n${projectHeader}${originalProjectSource}${task.input}\n\n## Saved agent responsibilities\n${task.snapshot.instructions}\n\nDefinition version: ${task.definition_version}. Approved managed task: ${task.id}.\nUse the existing owner-only implementation, independent tests, review, bounded repair and draft PR workflow. No deployment or automatic merge.`;
+  let issueBody:string;
+  try{issueBody=packDevelopmentRequest(originalBody,marker(task));
+    if(issueBody!==originalBody){
+      const files=await Promise.all(['scripts/request-envelope.mjs','.github/workflows/autonomous-development.yml','.github/workflows/project-reverify.yml'].map(path=>client.repos.getContent({...binding,path,ref:'main'})));
+      const contents=files.map(file=>{if(Array.isArray(file.data)||!('content' in file.data))throw Error('Target lossless request transport unavailable');return Buffer.from(file.data.content,'base64').toString('utf8');});
+      if(!contents[0].includes('export const REQUEST_ENVELOPE_VERSION = 1;')||contents.slice(1).some(text=>!text.includes('node scripts/request-envelope.mjs unpack')))throw Error('Target requires the versioned lossless request decoder before a large coding handoff');
+    }
+  }catch(error){return save(task,'blocked',error instanceof Error?error.message:'Complete coding request could not be prepared');}
+  const claimed = project ? await agentRpc<boolean>("claim_project_dispatch", {p_id:task.id,p_lease:assignmentLease??null,p_hash:project.scopeHash}) : await agentRpc<boolean>("claim_agent_dispatch", { p_id: task.id });
+  if (!claimed) return readTask(task.id);
+  task = { ...task, external: { attempted: true, ...(project?{projectId:project.projectId}:{}) } };
   try {
     const issue = await client.issues.create({ owner: binding.owner, repo: binding.repo,
       title: `[agent] ${task.input.split("\n")[0].slice(0, 180)}`,
-      body: `${marker(task)}\n\n${projectHeader}${originalProjectSource}${task.input}\n\n## Saved agent responsibilities\n${task.snapshot.instructions}\n\nDefinition version: ${task.definition_version}. Approved managed task: ${task.id}.\nUse the existing owner-only implementation, independent tests, review, bounded repair and draft PR workflow. No deployment or automatic merge.`,
+      body: issueBody,
     });
     return save(task, "submitted", "Owner-authored issue accepted. Workflow completion has not yet been verified.", { ...task.external,attempted: true, issueNumber: issue.data.number, issueUrl: issue.data.html_url, repository: binding.fullName });
-  } catch {
+  } catch (error) {
+    const status=Number((error as {status?:unknown})?.status);
+    if([400,401,403,404,413,422,429].includes(status))return save(task,'blocked','GitHub definitively rejected the coding issue (HTTP '+status+'). Original source and approved scope remain saved; no accepted issue is pending.',{...task.external,attempted:false,dispatchRejected:true,dispatchStatus:status});
     return save(task, "dispatching", "External acceptance is uncertain. Refresh to reconcile the durable marker; this task will not automatically submit another issue.");
   }
 }

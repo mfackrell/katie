@@ -67,6 +67,7 @@ jobs:
           ' <<< "$pr_json" >/dev/null || { echo 'PR changed, merged, or not owner-repository scoped'; exit 1; }
           mkdir -p "$RUNNER_TEMP/project-tools" "$RUNNER_TEMP/agent-task"
           gh issue view "$ISSUE" --repo "$GITHUB_REPOSITORY" --json title,body --jq '.title + "\n\n" + (.body // "")' > "$RUNNER_TEMP/agent-task/AGENT_REQUEST.md"
+          node scripts/request-envelope.mjs unpack "$RUNNER_TEMP/agent-task/AGENT_REQUEST.md"
           cp scripts/project-game-rules.mjs scripts/project-game-check.mjs scripts/project-context.mjs scripts/project-browser-check.mjs scripts/project-sandbox.mjs scripts/project-ci.mjs scripts/project-scope.mjs scripts/project-browser-engine.mjs "$RUNNER_TEMP/project-tools/"
           node scripts/project-context.mjs prepare "$RUNNER_TEMP/agent-task/AGENT_REQUEST.md" > "$RUNNER_TEMP/project-context.json"
           jq -e '.projectId and .contractHash and .baseSha and (.allowedPaths | length > 0)' "$RUNNER_TEMP/project-context.json" >/dev/null || exit 1

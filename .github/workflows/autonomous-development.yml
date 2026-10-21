@@ -64,6 +64,7 @@ jobs:
           test "$author" = "$GITHUB_REPOSITORY_OWNER" || { echo 'Only owner-authored issues are authorized'; exit 1; }
           branch="agent/issue-$ISSUE-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
           gh issue view "$ISSUE" --repo "$GITHUB_REPOSITORY" --json title,body --jq '.title + "\n\n" + (.body // "")' > "$RUNNER_TEMP/original-agent-request.md"
+          node scripts/request-envelope.mjs unpack "$RUNNER_TEMP/original-agent-request.md"
           # These tools are captured from the trusted workflow/main checkout,
           # before switching to a prior project commit or running generated code.
           mkdir -p "$RUNNER_TEMP/project-tools" "$RUNNER_TEMP/agent-task"

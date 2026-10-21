@@ -124,6 +124,7 @@ async function advance(p: Project) {
                 if(failedDevelopment){
                     try {
                         const task=await readTask(failedDevelopment.id);
+                        if(task.external?.dispatchRejected===true){await finish('block',{detail:task.details??'GitHub rejected coding dispatch before acceptance; original scope retained.'});return;}
                         if(await retryImmutableProjectVerification(task,p))return;
                     } catch(error) {
                         console.error('[Projects] Immutable re-verification unavailable',error instanceof Error?error.message:'Unknown error');

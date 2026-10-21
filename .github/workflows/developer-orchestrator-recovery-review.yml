@@ -27,7 +27,7 @@ jobs:
       - name: Verify recovery against native PostgreSQL and actual workers
         run: |
           set -o pipefail
-          node --test tests/agent-management-runtime.test.mjs tests/mission-budget-architecture.test.mjs tests/mission-smart-routing.test.mjs tests/missions-runtime.test.mjs tests/projects-runtime.test.mjs tests/orchestrator-spec-recovery-618.test.mjs tests/projects-sql.test.mjs 2>&1 | tee developer-orchestrator-recovery-tests.txt
+          node --test tests/request-envelope.test.mjs tests/agent-management-runtime.test.mjs tests/mission-budget-architecture.test.mjs tests/mission-smart-routing.test.mjs tests/missions-runtime.test.mjs tests/projects-runtime.test.mjs tests/orchestrator-spec-recovery-618.test.mjs tests/projects-sql.test.mjs 2>&1 | tee developer-orchestrator-recovery-tests.txt
           git rev-parse HEAD > developer-orchestrator-tested-head.txt
       - name: Independent recovery architecture review
         uses: openai/codex-action@v1
