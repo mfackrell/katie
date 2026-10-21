@@ -26,3 +26,24 @@ test('long original game requirements are not silently truncated',()=>{
  assert.match(worker,/Do not omit or summarize requirements/);
  assert.match(worker,/await finish\('child', \{ kind: p\.phase, objective, evidence: projectEvidence \}\)/);
 });
+
+
+test('durable review recovery keeps original attempt counts and budgets',()=>{
+ const sql=read('supabase/migrations/20261021121500_incomplete_game_review_recovery.sql');
+ assert.match(sql,/p\.actor_id|actor_id=p_actor/);
+ assert.match(sql,/p\.chat_id|chat_id=p_chat/);
+ assert.match(sql,/m\.deadline<=now\(\)\+interval '5 minutes'/);
+ assert.match(sql,/p\.token_allowance-charged<10000/);
+ assert.match(sql,/j\.status='failed'|status='failed'/);
+ assert.match(sql,/savedCandidateUnchanged/);
+ assert.doesNotMatch(sql,/set attempts\s*=|set reserved_tokens\s*=|set token_allowance\s*=|set approved_hash\s*=/i);
+});
+
+test('oversized game recovery requires completed research and a current budget',()=>{
+ const sql=read('supabase/migrations/20261021121600_resume_oversized_game_specification.sql');
+ assert.match(sql,/m\.status='completed'/);
+ assert.match(sql,/r\.kind='research'/);
+ assert.match(sql,/p\.token_allowance-charged<30000/);
+ assert.match(sql,/p\.approved_hash is not null/);
+ assert.match(sql,/oversized_game_specification_resumed/);
+});
