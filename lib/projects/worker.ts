@@ -380,7 +380,7 @@ async function reconcileBlockedGameRevisions(){
             let reviewPreflight:Awaited<ReturnType<typeof preflightSavedReview>>|undefined;
             if(p.active_mission_id){
                 const saved=await readMission(p.active_mission_id);
-                const overflow=saved.jobs.filter(j=>j.role==='review'&&j.status==='failed'&&j.result?.reviewContextOverflow===true).at(-1);
+                const overflow=saved.jobs.filter(j=>j.role==='review'&&j.status==='failed'&&(j.result?.reviewContextOverflow===true||j.detail==='Mission evidence exceeds bounded context. Narrow the objective or deliverable.')).at(-1);
                 if(overflow){reviewPreflight=await preflightSavedReview(saved,overflow);if(!reviewPreflight){
                     if(await projectRpc<boolean>('resume_incomplete_game_review',{...authorized,p_preflight:{refreshAssessment:true}}))return true;
                     continue;

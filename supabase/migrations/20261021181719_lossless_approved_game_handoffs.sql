@@ -14,5 +14,11 @@ do $migration$ declare definition text;needle text:= $needle$j.result->>'reviewS
  select pg_get_functiondef('public.resume_incomplete_game_review(uuid,uuid,uuid,jsonb)'::regprocedure) into definition;
  if position(needle in definition)=0 then raise exception 'Expected technical recovery fence missing';end if;
  definition:=replace(definition,needle,needle||$extension$ or (j.result->>'admissionDenied'='true' and (j.result->>'callsRemaining'='0' and m.calls>=m.max_calls or j.result->>'routingCallsRemaining'='0' and m.routing_calls>=m.max_calls*3 or j.result->>'remainingTokens'='0' and greatest(m.actual_tokens,m.reserved_tokens)>=120000))$extension$);
+ -- Older workers persisted only this diagnostic, before structured overflow
+ -- receipts existed. Apply the same mandatory preflight/fresh-review fence.
+ definition:=replace(definition,$old$j.result->>'reviewContextOverflow'='true'$old$,
+  $new$(j.result->>'reviewContextOverflow'='true' or j.detail='Mission evidence exceeds bounded context. Narrow the objective or deliverable.')$new$);
+ definition:=replace(definition,$old$or result->>'reviewContextOverflow'='true'$old$,
+  $new$or (result->>'reviewContextOverflow'='true' or detail='Mission evidence exceeds bounded context. Narrow the objective or deliverable.')$new$);
  execute definition;
 end $migration$;

@@ -340,6 +340,26 @@ export async function specificationRecoveryFlow(db){
    const compactWorker=modules({...overrides,openai:{__esModule:true,default:CompactClient}})('@/lib/missions/worker');
    assert.equal((await compactWorker.runMissionBatch()).outcomes[0].status,'processed');assert.equal(calls,2,'Fresh independent assessment and candidate verification are both charged');assert.equal((await readMission(reassessment.mission.id)).mission.actual_tokens,200);assert.equal(JSON.stringify((await readMission(contextMission)).jobs.find(j=>j.job_key==='review_again').payload.reviewModelCheckpoint),originalReceipt);
    await projectWorker.runProjectBatch();p=(await db.query('select * from work_projects where id=$1',[id])).rows[0];assert.equal(p.status,'awaiting_approval');assert.equal(p.spec.summary,contextCandidate.summary);assert.equal(p.approved_hash,null);
+
+   // Legacy workers recorded only a plain diagnostic and could expire before
+   // this repair deployed. No checkpoint is fabricated: charge both new passes.
+   await db.query('savepoint legacy_context_recovery');
+   try{
+    const legacyCandidate={...contextCandidate,summary:'Legacy expired context-only failure'};
+    await db.query("update mission_assignments set result=$2 where mission_id=$1 and job_key='revision'",[contextMission,JSON.stringify({text:JSON.stringify(legacyCandidate)})]);
+    await db.query("update mission_assignments set status='failed',result='{}',payload='{}',detail='Mission evidence exceeds bounded context. Narrow the objective or deliverable.',lease=null,lease_until=null where mission_id=$1 and job_key='review_again'",[contextMission]);
+    await db.query("update agent_missions set status='blocked',deadline=now()-interval '1 hour' where id=$1",[contextMission]);
+    await db.query("update work_projects set status='blocked',phase='specification',spec=null,approval_hash=null,approved_hash=null,active_mission_id=$2 where id=$1",[id,contextMission]);
+    const legacyBefore=await readMission(contextMission),priorCalls=calls;
+    assert.equal(await rpc('resume_incomplete_game_review',{p_id:id,p_actor:actor,p_chat:chat}),false,'Legacy overflow also requires preflight or a fresh charged assessment');
+    await projectWorker.runProjectBatch();
+    const legacyProject=(await db.query('select * from work_projects where id=$1',[id])).rows[0];assert.equal(legacyProject.status,'running');assert.notEqual(legacyProject.active_mission_id,contextMission);
+    assert.equal(await rpc('resume_incomplete_game_review',{p_id:id,p_actor:actor,p_chat:chat,p_preflight:{refreshAssessment:true}}),false,'Duplicate continuation is suppressed');
+    const legacyChild=await readMission(legacyProject.active_mission_id);assert.equal(legacyChild.jobs.find(j=>j.job_key==='revision').result.text,JSON.stringify(legacyCandidate));assert.deepEqual(legacyChild.mission.project_evidence, {...legacyBefore.mission.project_evidence,reviewContinuation:{missionId:contextMission,candidateJobId:legacyBefore.jobs.find(j=>j.job_key==='revision').id,candidateHash:legacyChild.mission.project_evidence.reviewContinuation.candidateHash}});
+    assert.equal((await compactWorker.runMissionBatch()).outcomes[0].status,'processed');assert.equal(calls-priorCalls,2);assert.equal((await readMission(legacyProject.active_mission_id)).mission.actual_tokens,200);
+    const legacyAfter=await readMission(contextMission);for(const field of ['actual_tokens','reserved_tokens','calls','routing_calls','deadline'])assert.equal(String(legacyAfter.mission[field]),String(legacyBefore.mission[field]),field+' retained');
+    await projectWorker.runProjectBatch();const finished=(await db.query('select * from work_projects where id=$1',[id])).rows[0];assert.equal(finished.status,'awaiting_approval');assert.equal(finished.spec.summary,legacyCandidate.summary);assert.equal(finished.approved_hash,null);
+   }finally{await db.query('rollback to savepoint legacy_context_recovery');}
   }finally{if(oldApiKey===undefined)delete process.env.OPENAI_API_KEY;else process.env.OPENAI_API_KEY=oldApiKey;}
 
  }finally{await db.query('rollback');if(priorPreview===undefined)delete process.env.PROJECT_PREVIEW_REPOSITORIES;else process.env.PROJECT_PREVIEW_REPOSITORIES=priorPreview;}
