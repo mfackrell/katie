@@ -5,7 +5,7 @@ import { createRequire } from 'node:module';
 import { resolve, dirname } from 'node:path';
 import vm from 'node:vm';
 import ts from 'typescript';
-import { randomUUID, webcrypto } from 'node:crypto';
+import { randomUUID, webcrypto, createHash } from 'node:crypto';
 const native=createRequire(import.meta.url);
 function modules(overrides={}){
  for(const [key,value] of Object.entries(overrides))if(key.startsWith('@/'))overrides[resolve(key.slice(2))]=value;
@@ -384,4 +384,15 @@ test('long source reports are partitioned losslessly and rechecked independently
  assert.equal(jobs.find(j=>j.job_key==='review_again').result.sourceChecks.checks.length,groups.length);
  assert.equal(jobs.find(j=>j.job_key==='review').result.verdict,'changes_requested','An approving overall model must not waive a failed full-source check');
  assert.notEqual(jobs.find(j=>j.job_key==='review').result.sourceChecks.key,jobs.find(j=>j.job_key==='review_again').result.sourceChecks.key);
+});
+
+test('completed source checks survive a later review transport failure without being paid for again',async()=>{
+ const source=modules()('@/lib/executive/source-handoff'),m=mission();m.objective='Synthesize upstream source reports.'+source.EXECUTIVE_SOURCE_MARKER;
+ const reports=[{missionId:'source',objective:'Audit',report:'Complete verified source report.',reviewJobId:'review-source',reviewVerdict:'pass',observedUpdatedAt:'2026-10-21'}],groups=source.executiveSourceGroups(reports);
+ const candidate={...job(m,'compose','compose'),status:'completed',result:{text:'Candidate report'}},review=job(m,'review','review');
+ review.result={sourceChecks:{key:createHash('sha256').update(JSON.stringify({candidate:'Candidate report',sourceGroups:groups})).digest('hex'),checks:[{verdict:'pass',findings:[],summary:'Previously verified full source'}]}};
+ let claimed=false,committed,calls=0;
+ const load=modules({'@/lib/executive/source-handoff':{...source,sourceReportsForMission:async()=>reports},'@/lib/missions/store':{readMission:async()=>({mission:m,jobs:[candidate,review]}),rpc:async(name,args)=>{if(name==='claim_mission_work'){if(claimed)return null;claimed=true;return{mission:m,job:review};}committed=args;return true;}}});
+ await load('@/lib/missions/worker').runMissionBatch(async()=>{calls++;throw Error('500 provider unavailable');});
+ assert.equal(calls,1,'A saved source check must not be rerun before the remaining review stage');assert.equal(committed.p_status,'queued');assert.deepEqual(committed.p_result.sourceChecks,review.result.sourceChecks);
 });
