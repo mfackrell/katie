@@ -12,10 +12,14 @@ begin
    or p.deadline<=now()+interval '30 minutes'
    or p.detail not like '%Project milestone context exceeds its bounded input%'
  then return false;end if;
+ -- A one-shot recovery may be consumed only when the complete authoritative
+ -- brief fits the compact fallback. Larger charters require scoped human action.
+ if length(p.objective)+length(coalesce(p.clarifications,''))>8500 then return false;end if;
  if exists(select 1 from public.project_events where project_id=p.id and event='oversized_game_specification_resumed') then return false;end if;
  if not exists(select 1 from public.project_runs r join public.agent_missions m on m.id=r.mission_id
   where r.project_id=p.id and r.kind='research' and m.status='completed'
-    and r.outcome is not null and coalesce((r.outcome->>'superseded')::boolean,false)=false)
+    and r.outcome is not null and length(coalesce(r.outcome->>'result',''))<=12000
+    and coalesce((r.outcome->>'superseded')::boolean,false)=false)
  then return false;end if;
  select count(*) into runs_used from public.project_runs where project_id=p.id;
  select coalesce(sum(greatest(actual_tokens,reserved_tokens)),0) into charged from public.agent_missions where project_id=p.id;
