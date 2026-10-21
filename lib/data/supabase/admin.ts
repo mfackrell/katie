@@ -5,6 +5,42 @@ type QueryResult<T> = Promise<{ data: T; error: { message: string } | null }>;
 type Filter = { type: "eq" | "in" | "lt" | "is" | "or"; field: string; value: unknown };
 type Sort = { field: string; ascending: boolean };
 
+// A timed-out write/RPC can have committed on the server. Never replay it here.
+// Reads are retried only for transport failures and transient gateway statuses.
+const REQUEST_TIMEOUT_MS = 20000;
+const READ_RETRIES = 1;
+const wait = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
+async function boundedRequest(url: string, init: RequestInit, operation: string, retryRead = false): Promise<Response> {
+  const method = init.method ?? 'GET';
+  for (let attempt = 0; ; attempt++) {
+    const started = performance.now();
+    let status: number | undefined;
+    let failure = 'none';
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+    try {
+      const response = await fetch(url, { ...init, signal: controller.signal });
+      status = response.status;
+      if (retryRead && attempt < READ_RETRIES && [429, 502, 503, 504].includes(status)) {
+        failure = 'transient_http';
+        await response.body?.cancel().catch(() => undefined);
+      } else {
+        return response;
+      }
+    } catch (error) {
+      failure = controller.signal.aborted ? 'timeout' : 'transport';
+      if (!retryRead || attempt >= READ_RETRIES) throw error;
+    } finally {
+      clearTimeout(timer);
+      const elapsedMs = Math.round(performance.now() - started);
+      if (failure !== 'none' || elapsedMs >= 1000 || (status !== undefined && status >= 400)) {
+        console.warn('[Supabase HTTP]', { operation, method, status: status ?? null, elapsedMs, failure, attempt });
+      }
+    }
+    await wait(100 * (attempt + 1));
+  }
+}
+
 class PostgrestQuery {
   private filters: Filter[] = [];
   private sorts: Sort[] = [];
@@ -191,7 +227,7 @@ class PostgrestQuery {
         requestUrl = url.toString();
       }
 
-      const response = await fetch(requestUrl, {
+      const response = await boundedRequest(requestUrl, {
         method,
         headers: {
           apikey: this.config.key,
@@ -202,7 +238,7 @@ class PostgrestQuery {
         },
         body: body ? JSON.stringify(body) : undefined,
         cache: "no-store",
-      });
+      }, `table:${this.table}`, method === "GET");
 
       if (response.status === 406 && options?.allowEmpty) {
         return { data: null as T, error: null };
@@ -265,7 +301,7 @@ class PostgrestClient {
 
   async rpc<T = unknown>(name: string, args: Record<string, unknown>): QueryResult<T> {
     try {
-      const response = await fetch(
+      const response = await boundedRequest(
         `${this.config.url}/rest/v1/rpc/${encodeURIComponent(name)}`,
         {
           method: "POST",
@@ -276,7 +312,7 @@ class PostgrestClient {
           },
           body: JSON.stringify(args),
           cache: "no-store",
-        },
+        }, `rpc:${name}`,
       );
       if (!response.ok) {
         return { data: null as T, error: { message: await response.text() || response.statusText } };
