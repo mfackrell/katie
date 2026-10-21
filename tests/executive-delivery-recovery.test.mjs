@@ -39,6 +39,7 @@ function runtime({factory=false,fail=null,missionStatus='completed',initialStatu
    if(name==='@/lib/data/persistence-store')return {saveMessage:async(_chat,message)=>{
     if(failure==='delivery'){failure=null;throw Error('interrupted chat write');}messages.set(message.id,message);
    }};
+   if(name==='./source-handoff')return {};
    if(name==='./delivery')return {delegationReplyId:id=>'delegation-'+id,factoryReplyId:id=>'factory-'+id};
    if(name==='./factory-runtime')return {reconcileSpecialistFactory:async()=>({activated:0,blocked:0})};
    if(name==='./release-control')return {reconcileExecutiveReleases:async()=>({verified:0})};
