@@ -10,7 +10,7 @@ export const executivePlanSchema=z.object({
  }).strict()).max(5),
  provision:z.array(z.object({
   domain:slug,capability:slug,
-  objective:z.string().trim().min(15).max(3500)
+  objective:z.string().trim().min(15).max(3500),sourceSlugs:z.array(slug).max(5).optional()
  }).strict()).max(3),
  unavailable:z.array(z.object({
   capability:slug,reason:z.string().trim().min(12).max(1000)
@@ -18,6 +18,8 @@ export const executivePlanSchema=z.object({
 }).strict().superRefine((plan,ctx)=>{
  if(!plan.assignments.length&&!plan.provision.length&&!plan.unavailable.length)
   ctx.addIssue({code:'custom',message:'Executive plan must include at least one workstream or blocker'});
+ const assigned=new Set(plan.assignments.map(a=>a.slug));
+ for(const provision of plan.provision){const sources=provision.sourceSlugs??[];if(new Set(sources).size!==sources.length||sources.some(s=>!assigned.has(s)))ctx.addIssue({code:'custom',message:'Provision sourceSlugs must name distinct assignments in this plan'});}
  const unique=new Set<string>();
  for(const work of plan.assignments){
   const key=work.slug+'\n'+work.objective.toLowerCase();
@@ -38,6 +40,7 @@ export async function planExecutiveAssignment(input:{
   'Active verified specialists (ONLY these slugs can appear in assignments):',
   JSON.stringify(input.specialists),
   'Factory-provisionable capability contracts: financial_analysis, operations_analysis, research_synthesis.',
+  'Every provision item MUST declare sourceSlugs: list only existing assignment slugs whose completed reviewed reports it needs, or [] for independent work. Do not invent dependencies from a domain label.',
   'If a needed capability is absent but matches one of those contracts, add a provision item with a short domain slug and that exact capability.',
   'If a needed capability requires tools or permissions not proven by these contracts, list it in unavailable; NEVER invent tool access.',
   'Create 2-5 distinct substantive workstreams for multidomain projects if qualified specialists exist; use one for a focused task.',
@@ -46,7 +49,7 @@ export async function planExecutiveAssignment(input:{
   'Do not interpret authorization to audit as approval to change or deploy production.',
   'Do not produce the requested deliverable yourself.',
   'Do not say work is complete or independently reviewed before evidence exists.',
-  'Schema: {"assignments":[{"slug":"registered_slug","objective":"task with criteria","requiresRepository":true|false}],"provision":[{"domain":"short_name","capability":"one_verified_factory_capability","objective":"task with criteria"}],"unavailable":[{"capability":"snake_case","reason":"specific limitation"}]}'
+  'Schema: {"assignments":[{"slug":"registered_slug","objective":"task with criteria","requiresRepository":true|false}],"provision":[{"domain":"short_name","capability":"one_verified_factory_capability","objective":"task with criteria","sourceSlugs":[]}],"unavailable":[{"capability":"snake_case","reason":"specific limitation"}]}'
  ].join('\n');
  let last='Executive planning unavailable';
  for(const choice of choices){
@@ -56,6 +59,7 @@ export async function planExecutiveAssignment(input:{
    },{timeout:90_000});
    if(response.status!=='completed')throw Error('Executive planning output incomplete');
    const parsed=executivePlanSchema.parse(JSON.parse(response.output_text?.trim()??''));
+   if(parsed.provision.some(p=>p.sourceSlugs===undefined))throw Error('Commissioned work must explicitly declare sourceSlugs');
    const registered=new Set(input.specialists.map(s=>s.slug));
    const supported=new Set(['financial_analysis','operations_analysis','research_synthesis']);
    if(parsed.assignments.some(a=>!registered.has(a.slug)))throw Error('Plan selected unregistered specialist');

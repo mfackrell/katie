@@ -70,7 +70,7 @@ export function boundedProvider(choice:OrchestrationChoice):Client{
    post:async(path,options):Promise<{input_tokens:number}>=>provider==='openai'?client.post(path,options):Promise.reject(Error('Conservative byte counting required')),
    responses:{create:async(request,options)=>{
     const body:Item={...request};
-    if(provider==='grok'){delete body.reasoning;delete body.text;delete body.include;body.input=[{role:'system',content:body.instructions},...request.input];delete body.instructions;}
+    if(provider==='grok'){body.tools=request.tools?.map(tool=>{const native:Item={...tool};delete native.search_context_size;return native;});delete body.reasoning;delete body.text;delete body.include;body.input=[{role:'system',content:body.instructions},...request.input];delete body.instructions;}
     return client.responses.create(body as unknown as OpenAI.Responses.ResponseCreateParamsNonStreaming,options);
    }}
   };

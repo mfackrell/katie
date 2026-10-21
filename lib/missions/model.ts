@@ -65,6 +65,7 @@ export async function missionModel(claim:Claim,instruction:string,input:string,t
    const detail=error instanceof Error?error.message:String(error);
    if(/allowance exhausted|no longer authorized|permission denied|Invalid tool|Unpermitted|tool arguments instead|execution time window/i.test(detail)||(error instanceof MissionModelFailure&&!['server_error','rate_limit_exceeded','insufficient_quota'].includes(String(error.partial.providerErrorCode))&&!(error.partial.responseStatus==='incomplete'&&(error.partial.incompleteReason===null||error.partial.incompleteReason==='max_output_tokens'))))throw error;
    if(error instanceof MissionModelFailure&&error.partial.responseStatus==='incomplete'){failedProviders.add(choice.provider.name);}else if(await orchestrationFailure(choice,error)==='provider'||isCreditExhaustion(error))failedProviders.add(choice.provider.name);
+
    console.warn('[Missions] Model attempt failed; trying next eligible provider',{jobId:claim.job.id,provider:choice.provider.name,model:choice.modelId,error:detail.slice(0,350)});
   }
  }
