@@ -30,14 +30,17 @@ export async function saveDurableReviewContract(
 ) {
   if (validation.verdict !== "approve") throw new Error("Only validated contracts may be saved");
   const sourceHash = fingerprint(parent, objective);
+  // Once validated, a source-version contract is immutable. Concurrent requests
+  // may race to insert it, but must never rewrite each other's accepted criteria.
+  const existing = await readDurableReviewContract(scope, parent, objective);
+  if (existing) return existing;
   const client = getSupabaseAdminClient();
   const { error } = await client.from("actor_review_contracts").insert({
     actor_id: scope.actorId, project_source_id: scope.projectSourceId,
     objective_source_id: scope.objectiveSourceId, source_hash: sourceHash,
     assessment, validation
   });
-  if (error && ("code" in error && error.code === "23505") === false) throw new Error("Could not save durable review contract: " + error.message);
   const saved = await readDurableReviewContract(scope, parent, objective);
-  if (!saved) throw new Error("Durable review contract did not survive read-back");
+  if (!saved) throw new Error("Durable review contract did not survive read-back: " + (error?.message ?? "missing row"));
   return saved;
 }
