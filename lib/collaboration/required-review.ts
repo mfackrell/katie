@@ -188,9 +188,10 @@ export async function runRequiredDraftReview(input: {
   // or final verification fails. A replacement reviewer must not repeat the
   // expensive completed assessment and contract stages.
   let validatedAssessment: IndependentAssessment | undefined;
+  const stableObjective = input.taskProgress?.objective?.text ?? baseline.activeQuestion;
   if (input.durableScope) {
     try {
-      const restored = await readDurableReviewContract(input.durableScope, baseline.parentProject ?? "", baseline.activeQuestion);
+      const restored = await readDurableReviewContract(input.durableScope, baseline.parentProject ?? "", stableObjective);
       if (restored) {
         validatedAssessment = restored.assessment;
         audit.contractValidation = restored.validation;
@@ -262,7 +263,7 @@ export async function runRequiredDraftReview(input: {
           audit.contractValidation = { verdict: "approve", findings: checked.findings, validator: lead, sourceCoverage: checked.sourceCoverage, resolutions };
           if (input.durableScope) {
             try {
-              await saveDurableReviewContract(input.durableScope, baseline.parentProject ?? "", baseline.activeQuestion, assessment!, audit.contractValidation);
+              await saveDurableReviewContract(input.durableScope, baseline.parentProject ?? "", stableObjective, assessment!, audit.contractValidation);
             } catch (error) {
               console.warn("[DurableReviewContract] Save failed; continuing with in-request contract", { requestId: input.requestId, error: String(error) });
             }
