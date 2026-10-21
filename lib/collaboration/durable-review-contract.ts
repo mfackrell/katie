@@ -31,12 +31,12 @@ export async function saveDurableReviewContract(
   if (validation.verdict !== "approve") throw new Error("Only validated contracts may be saved");
   const sourceHash = fingerprint(parent, objective);
   const client = getSupabaseAdminClient();
-  const { error } = await client.from("actor_review_contracts").upsert({
+  const { error } = await client.from("actor_review_contracts").insert({
     actor_id: scope.actorId, project_source_id: scope.projectSourceId,
     objective_source_id: scope.objectiveSourceId, source_hash: sourceHash,
     assessment, validation
-  }, { onConflict: "actor_id,project_source_id,objective_source_id,source_hash", ignoreDuplicates: true });
-  if (error) throw new Error("Could not save durable review contract: " + error.message);
+  });
+  if (error && error.code !== "23505") throw new Error("Could not save durable review contract: " + error.message);
   const saved = await readDurableReviewContract(scope, parent, objective);
   if (!saved) throw new Error("Durable review contract did not survive read-back");
   return saved;
