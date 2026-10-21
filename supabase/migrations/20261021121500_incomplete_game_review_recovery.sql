@@ -15,8 +15,8 @@ begin
   where id=p.active_mission_id and project_id=p.id for update;
  if not found or m.status<>'blocked' or m.project_kind<>'specification'
    or m.deadline<=now()+interval '5 minutes'
-   or m.calls>=m.max_calls or m.routing_calls>=m.max_calls*3
-   or m.token_allowance-greatest(m.actual_tokens,m.reserved_tokens)<10000
+   or m.max_calls-m.calls<2 or m.max_calls*3-m.routing_calls<2
+   or m.token_allowance-greatest(m.actual_tokens,m.reserved_tokens)<20000
  then return false; end if;
  select * into j from public.mission_assignments
   where mission_id=m.id and role='review' and status='failed'
@@ -38,7 +38,7 @@ begin
  then return false;end if;
  select coalesce(sum(greatest(actual_tokens,reserved_tokens)),0) into charged
    from public.agent_missions where project_id=p.id;
- if p.token_allowance-charged<10000 then return false;end if;
+ if p.token_allowance-charged<20000 then return false;end if;
  update public.mission_assignments set status='queued',lease=null,lease_until=null,
   available_at=now(),detail='Resume the identical saved draft for independent review with eligible provider fallback.',
   updated_at=now() where id=j.id;
