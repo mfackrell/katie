@@ -15,6 +15,7 @@ export type ReviewAudit = {
   status: "approved" | "revised" | "unavailable" | "revision_failed" | "needs_user_input" | "completed_with_review_notes";
   pendingClarification?: PendingReviewClarification;
   completionNote?: string;
+  contractSource?: "validated_new" | "reused";
   draftHash: string;
   finalHash: string;
   draft: string;
@@ -196,6 +197,8 @@ export async function runRequiredDraftReview(input: {
         validatedAssessment = restored.assessment;
         audit.contractValidation = restored.validation;
         audit.independentAssessment = restored.assessment;
+        audit.contractSource = "reused";
+        console.info("[DurableReviewContract] Reusing validated application criteria", { requestId: input.requestId });
         input.onProgress?.("Resumed independently validated task contract from durable application history.");
       }
     } catch (error) {
@@ -261,6 +264,7 @@ export async function runRequiredDraftReview(input: {
         if (!materialRejection) {
           const resolutions = validateContractResolutions(checked.resolutions, contractObjections, baseline.contractTurns);
           audit.contractValidation = { verdict: "approve", findings: checked.findings, validator: lead, sourceCoverage: checked.sourceCoverage, resolutions };
+          audit.contractSource = "validated_new";
           if (input.durableScope) {
             try {
               await saveDurableReviewContract(input.durableScope, baseline.parentProject ?? "", stableObjective, assessment!, audit.contractValidation);
@@ -290,7 +294,7 @@ export async function runRequiredDraftReview(input: {
           persona: `${source.persona}\n\n${REVIEW_INSTRUCTION}\n${final
             ? "FINAL VERIFICATION: Evaluate whether the exact revised answer now satisfies the established material acceptance criteria. Do not ask whether a different answer might be marginally better. If an actual material issue remains, explain its consequence and supporting evidence; otherwise approve. Do not reopen a resolved strategic issue or demand literal compliance with earlier cosmetic suggestions. Approve when the material objective, factual boundaries and usability are satisfied; strongest effective response is not a mandate for endless stylistic optimization. Reject a polished checklist or irrelevant narrative even if each sentence is accurate; approve a sound response without inventing new requirements."
             : "DRAFT COMPARISON: Compare the draft with the independently established ideal approach before inspecting individual defects. If its central message or reasoning stance is wrong, require a rebuilt response rather than sentence-level repairs."}`,
-          user: `${baseline.text}\nVALIDATED INDEPENDENT ASSESSMENT:\n${independentAssessment}\nREQUIRED ACCEPTANCE IDS:\n${JSON.stringify(acceptanceIds(assessment!))}\nMANDATORY JUDGMENT STANDARDS (apply independently even if the generated criteria omit them):\n${JSON.stringify(JUDGMENT_CHECKS)}\nPRIOR FINDINGS TO VERIFY:\n${JSON.stringify(priorFindings)}\n<answer_to_review>\n${answer}\n</answer_to_review>\nReturn ONLY review JSON. Evaluate the actual answer, not an intended revision.`,
+          user: `${baseline.text}\n${audit.contractSource === "reused" ? "SAVED CONTRACT CONTINUITY: The accepted assignment and requirements are stable. Historical strongestEvidence and qualifications are NOT a frozen ranking. Reconsider all newly confirmed firsthand experience in the current sources and actor memory; prioritize more relevant evidence without renegotiating stable requirements. User changes to explicit constraints remain authoritative." : ""}\nVALIDATED INDEPENDENT ASSESSMENT:\n${independentAssessment}\nREQUIRED ACCEPTANCE IDS:\n${JSON.stringify(acceptanceIds(assessment!))}\nMANDATORY JUDGMENT STANDARDS (apply independently even if the generated criteria omit them):\n${JSON.stringify(JUDGMENT_CHECKS)}\nPRIOR FINDINGS TO VERIFY:\n${JSON.stringify(priorFindings)}\n<answer_to_review>\n${answer}\n</answer_to_review>\nReturn ONLY review JSON. Evaluate the actual answer, not an intended revision.`,
         }, reviewer!)));
         if (response.truncated) throw new Error("Reviewer output was truncated");
         const review = validateAnswerReview(parseReviewJson(response.text), assessment!);

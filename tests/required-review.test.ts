@@ -1134,12 +1134,17 @@ test("real review pipeline reuses contract on follow-up and rebuilds it for anot
         selectHelper:async()=>({provider:s.reviewer,modelId:"reviewer"})
       });
       assert.equal(result.audit.status,"approved");
-      return s.phases;
+      return { phases:s.phases, audit:result.audit, calls:s.calls };
     };
-    assert.deepEqual(await run(appA),["assessment","contract","review"]);
-    assert.deepEqual(await run(appA),["review"],"follow-up reuses independently validated criteria");
-    assert.deepEqual(await run({...appA,projectSourceId:"project-B"}),["assessment","contract","review"]);
-    assert.deepEqual(await run({...appA,objectiveSourceId:"question-B"}),["assessment","contract","review"]);
+    const first=await run(appA);
+    assert.deepEqual(first.phases,["assessment","contract","review"]);
+    assert.equal(first.audit.contractSource,"validated_new");
+    const resumed=await run(appA);
+    assert.deepEqual(resumed.phases,["review"],"follow-up reuses independently validated criteria");
+    assert.equal(resumed.audit.contractSource,"reused");
+    assert.ok(resumed.calls.some(p=>p.user.includes("Historical strongestEvidence and qualifications are NOT a frozen ranking")));
+    assert.deepEqual((await run({...appA,projectSourceId:"project-B"})).phases,["assessment","contract","review"]);
+    assert.deepEqual((await run({...appA,objectiveSourceId:"question-B"})).phases,["assessment","contract","review"]);
     assert.equal(rows.length,3);
   } finally {
     (globalThis as any).__KATIE_SUPABASE_ADMIN_CLIENT__=before;
