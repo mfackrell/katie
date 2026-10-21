@@ -1134,7 +1134,7 @@ test("real review pipeline reuses contract on follow-up and rebuilds it for anot
   }};
   const appA={actorId:"actor-1",projectSourceId:"project-A",objectiveSourceId:"question-A"};
   try {
-    const run=async(scope:typeof appA)=>{
+    const run=async(scope:typeof appA & {requirementsRevision?:number})=>{
       const s=setup({reviews:[verdict("approve")]});
       const result=await runRequiredDraftReview({
         requestId:"durable-contract-test",draft,params,leadProvider:s.lead,
@@ -1153,7 +1153,13 @@ test("real review pipeline reuses contract on follow-up and rebuilds it for anot
     assert.ok(resumed.calls.some(p=>p.user.includes("Historical strongestEvidence and qualifications are NOT a frozen ranking")));
     assert.deepEqual((await run({...appA,projectSourceId:"project-B"})).phases,["assessment","contract","review"]);
     assert.deepEqual((await run({...appA,objectiveSourceId:"question-B"})).phases,["assessment","contract","review"]);
-    assert.equal(rows.length,3);
+    const amended=await run({...appA,requirementsRevision:2});
+    assert.deepEqual(amended.phases,["assessment","contract","review"],"Material requirements amendments must be revalidated");
+    assert.equal(amended.audit.contractSource,"validated_new");
+    const amendmentFollowup=await run({...appA,requirementsRevision:2});
+    assert.deepEqual(amendmentFollowup.phases,["review"],"Versioned acceptance criteria reused after amendment");
+    assert.equal(amendmentFollowup.audit.contractSource,"reused");
+    assert.equal(rows.length,4);
   } finally {
     (globalThis as any).__KATIE_SUPABASE_ADMIN_CLIENT__=before;
   }
