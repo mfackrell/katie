@@ -120,8 +120,8 @@ begin
  end loop;
  if has_function_privilege('anon','public.resume_pending_game_review(uuid,uuid,uuid)','execute')
     or has_function_privilege('authenticated','public.resume_pending_game_review(uuid,uuid,uuid)','execute')
-    or has_function_privilege('anon','public.resume_incomplete_game_review(uuid,uuid,uuid)','execute')
-    or has_function_privilege('authenticated','public.resume_incomplete_game_review(uuid,uuid,uuid)','execute')
+    or has_function_privilege('anon','public.resume_incomplete_game_review(uuid,uuid,uuid,jsonb)','execute')
+    or has_function_privilege('authenticated','public.resume_incomplete_game_review(uuid,uuid,uuid,jsonb)','execute')
     or has_function_privilege('anon','public.resume_oversized_game_specification(uuid,uuid,uuid,jsonb)','execute')
     or has_function_privilege('authenticated','public.resume_oversized_game_specification(uuid,uuid,uuid,jsonb)','execute')
  then raise exception 'Recovery RPCs exposed to browser callers';end if;

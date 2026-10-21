@@ -1,3 +1,4 @@
+import {preflightSavedReview} from '@/lib/missions/worker';
 import {verifyDeployedPreview,PreviewAccessUnavailable} from '@/lib/projects/preview';
 import { Octokit } from '@octokit/rest';
 import { getSupabaseAdminClient } from '@/lib/data/supabase/admin';
@@ -373,8 +374,14 @@ async function reconcileBlockedGameRevisions(){
                     oversized=await projectRpc<boolean>('resume_oversized_game_specification',{...authorized,p_evidence:evidence});
                 }catch(error){console.warn('[Projects] Specification recovery preflight unavailable',{project:p.id,detail:error instanceof Error?error.message:'Evidence unavailable'});continue;}
             }
+            let reviewPreflight:Awaited<ReturnType<typeof preflightSavedReview>>|undefined;
+            if(p.active_mission_id){
+                const saved=await readMission(p.active_mission_id);
+                const overflow=saved.jobs.filter(j=>j.role==='review'&&j.status==='failed'&&j.result?.reviewContextOverflow===true).at(-1);
+                if(overflow){reviewPreflight=await preflightSavedReview(saved,overflow);if(!reviewPreflight)continue;}
+            }
             const native=oversized || await projectRpc<boolean>('resume_pending_game_review',authorized) ||
-              await projectRpc<boolean>('resume_incomplete_game_review',authorized);
+              await projectRpc<boolean>('resume_incomplete_game_review',{...authorized,...(reviewPreflight?{p_preflight:reviewPreflight}:{})});
             if(native || await projectRpc<boolean>('recover_game_revision_timeout',{p_id:p.id}) || await projectRpc<boolean>('recover_game_rule_coverage',{p_id:p.id}) || await projectRpc<boolean>('recover_bounded_game_review',{p_id:p.id}) || await projectRpc<boolean>('recover_mission_credit_failure',{p_id:p.id})){
                 console.info('[Projects] Saved specification work recovered within original limits',{project:p.id});
                 return true;

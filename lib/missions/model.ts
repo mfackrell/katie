@@ -18,6 +18,9 @@ export function isCreditExhaustion(error:unknown):boolean{
  return (e?.status===429||code==='insufficient_quota'||code==='billing_hard_limit_reached')&&
   (/credit|quota|balance|billing|insufficient/.test(message)||code==='insufficient_quota'||code==='billing_hard_limit_reached');
 }
+export function missionReviewCheckpointHash(claim:Claim,instruction:string,input:string,tools='none'){
+ return createHash('sha256').update(JSON.stringify({instruction,input,tools,objective:claim.mission.objective,agent:claim.job.agent_id})).digest('hex');
+}
 // Every stage and child mission routes against the active model registry. Only
 // an unchanged, draft-blind review-contract response may be reused; the worker
 // still validates its source provenance, and independently reviews the candidate.
@@ -28,7 +31,7 @@ export async function missionModel(claim:Claim,instruction:string,input:string,t
  if(!fitsMissionEnvelope(instruction,input,missionInputLimit(claim)))throw Error('Mission evidence exceeds bounded context. Narrow the objective or deliverable.');
  const executionDeadline=missionExecutionDeadline(claim);
  const checkpointStage=claim.job.role==='review'&&tools==='none'&&input.startsWith('AUTHORITATIVE_USER_TURNS:\n');
- const checkpointHash=checkpointStage?createHash('sha256').update(JSON.stringify({instruction,input,tools,objective:claim.mission.objective,agent:claim.job.agent_id})).digest('hex'):null;
+ const checkpointHash=checkpointStage?missionReviewCheckpointHash(claim,instruction,input,tools):null;
  const checkpoint=claim.job.payload?.reviewModelCheckpoint as {hash?:string;response?:ModelResult}|undefined;
  if(checkpointHash&&checkpoint?.hash===checkpointHash&&typeof checkpoint.response?.text==='string'
    &&typeof checkpoint.response.model==='string'&&Array.isArray(checkpoint.response.sources)&&Array.isArray(checkpoint.response.calculations))return checkpoint.response;

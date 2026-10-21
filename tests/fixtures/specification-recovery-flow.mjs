@@ -51,7 +51,7 @@ export async function specificationRecoveryFlow(db){
   const rpc=async(name,args={})=>{
    assert.match(name,/^[a-z_]+$/);if(name==='project_dispatch_recovery_candidates')return[];
    const entries=Object.entries(args);
-   const values=entries.map(([k,v])=>['p_data','p_result','p_children','p_response','p_evidence'].includes(k)?JSON.stringify(v):v);
+   const values=entries.map(([k,v])=>['p_data','p_result','p_children','p_response','p_evidence','p_preflight'].includes(k)?JSON.stringify(v):v);
    return(await db.query(`select public.${name}(${entries.map(([k],i)=>k+' => $'+(i+1)).join(',')}) value`,values)).rows[0].value;
   };
   const readMission=async mid=>({mission:(await db.query('select * from agent_missions where id=$1',[mid])).rows[0],jobs:(await db.query('select * from mission_assignments where mission_id=$1 order by created_at',[mid])).rows});
@@ -197,6 +197,50 @@ export async function specificationRecoveryFlow(db){
    assert.equal((await readMission(firstContinuation)).mission.calls,before.mission.calls);
    await projectWorker.runProjectBatch();p=(await db.query('select * from work_projects where id=$1',[id])).rows[0];assert.equal(p.status,'awaiting_approval');assert.equal(p.spec.summary,revisedSpec.summary);assert.equal(p.approved_hash,null);
   }finally{if(originalKey===undefined)delete process.env.OPENAI_API_KEY;else process.env.OPENAI_API_KEY=originalKey;}
+
+  // Known review overflow must preflight the real source-matching assessment
+  // and complete candidate before spending a child slot or candidate marker.
+  const contextMission=(await db.query("select mission_id from project_runs where project_id=$1 and kind='specification' order by ordinal desc limit 1",[id])).rows[0].mission_id;
+  const contextCandidate={...spec,summary:'Distinct saved candidate for exact review-context preflight'};
+  await db.query("update mission_assignments set result=$2 where mission_id=$1 and job_key='revision'",[contextMission,JSON.stringify({text:JSON.stringify(contextCandidate)})]);
+  await db.query("update work_projects set status='running',phase='specification',spec=null,approval_hash=null,approved_hash=null,active_mission_id=$2,failures=0 where id=$1",[id,contextMission]);
+  await db.query("update agent_missions set status='running' where id=$1",[contextMission]);
+  await db.query("update mission_assignments set status='queued',available_at=now(),lease=null,lease_until=null,result=null,payload='{}' where mission_id=$1 and job_key='review_again'",[contextMission]);
+  const largeAssessment={...assessment,criteria:Array.from({length:2700},(_,i)=>'Criterion '+i)};
+  assert.ok(JSON.stringify(largeAssessment).length<50000);
+  const oldApiKey=process.env.OPENAI_API_KEY;process.env.OPENAI_API_KEY='fixture-only';
+  try{
+   class OverflowClient{async post(){return{input_tokens:1000};}responses={create:async()=>({status:'completed',output_text:JSON.stringify(largeAssessment),output:[],usage:{total_tokens:100}})};}
+   const overrides={'@/lib/data/supabase/admin':{getSupabaseAdminClient:()=>admin},'@/lib/missions/store':{rpc,readMission},'@/lib/orchestration/routing':{orchestrationChoices:async()=>[{provider:{name:'openai'},modelId:'fixture-reviewed-model',reasoning:'Controlled transport'}],orchestrationFailure:async()=> 'model'}};
+   const overflowWorker=modules({...overrides,openai:{__esModule:true,default:OverflowClient}})('@/lib/missions/worker');
+   assert.equal((await overflowWorker.runMissionBatch()).outcomes[0].status,'blocked');
+   let saved=await readMission(contextMission),failed=saved.jobs.find(j=>j.job_key==='review_again');
+   assert.equal(failed.result.reviewContextOverflow,true);assert.ok(failed.result.reviewInputCharacters>96000);assert.ok(failed.payload.reviewModelCheckpoint);
+   await projectWorker.runProjectBatch();
+   const originalText=saved.jobs.find(j=>j.job_key==='revision').result.text;
+   const originalReceipt=JSON.stringify(failed.payload.reviewModelCheckpoint);
+   const beforeSlots=Number((await db.query('select count(*) n from project_runs where project_id=$1',[id])).rows[0].n);
+   const beforeMarkers=Number((await db.query("select count(*) n from project_events where project_id=$1 and event='incomplete_game_review_resumed'",[id])).rows[0].n);
+   assert.equal(await overflowWorker.preflightSavedReview(saved,failed),null);
+   assert.equal(await rpc('resume_incomplete_game_review',{p_id:id,p_actor:actor,p_chat:chat}),false,'A known oversized review cannot consume recovery without preflight');
+   await projectWorker.runProjectBatch();
+   assert.equal(Number((await db.query('select count(*) n from project_runs where project_id=$1',[id])).rows[0].n),beforeSlots);
+   assert.equal(Number((await db.query("select count(*) n from project_events where project_id=$1 and event='incomplete_game_review_resumed'",[id])).rows[0].n),beforeMarkers);
+   saved=await readMission(contextMission);assert.equal(saved.jobs.find(j=>j.job_key==='revision').result.text,originalText);assert.equal(JSON.stringify(saved.jobs.find(j=>j.job_key==='review_again').payload.reviewModelCheckpoint),originalReceipt);
+   // A fresh concise independent assessment can later make the unchanged full
+   // source/candidate admissible. Keep the previous entire receipt in history.
+   await db.query("insert into project_events(project_id,event,data) values($1,'prior_independent_assessment_retained',$2)",[id,JSON.stringify({receipt:failed.payload.reviewModelCheckpoint})]);
+   const compact=structuredClone(failed.payload.reviewModelCheckpoint);compact.response.text=JSON.stringify(assessment);compact.response.model='fixture-fresh-independent-assessment';
+   await db.query("update mission_assignments set payload=jsonb_set(payload,'{reviewModelCheckpoint}',$2) where id=$1",[failed.id,JSON.stringify(compact)]);
+   saved=await readMission(contextMission);failed=saved.jobs.find(j=>j.job_key==='review_again');
+   const preflight=await overflowWorker.preflightSavedReview(saved,failed);assert.ok(preflight);assert.ok(preflight.input.length<=96000);
+   assert.equal(await rpc('resume_incomplete_game_review',{p_id:id,p_actor:actor,p_chat:chat,p_preflight:preflight}),true);
+   let calls=0;
+   class CompactClient{async post(){return{input_tokens:1000};}responses={create:async()=>{calls++;return{status:'completed',output_text:JSON.stringify({verdict:'approve',findings:'Entire original source and preserved candidate checked',checks:load('@/lib/collaboration/review-contract').acceptanceIds(assessment).map(id=>({id,passed:true,evidence:'Original rule and complete candidate verified'}))}),output:[],usage:{total_tokens:100}};}};}
+   const compactWorker=modules({...overrides,openai:{__esModule:true,default:CompactClient}})('@/lib/missions/worker');
+   assert.equal((await compactWorker.runMissionBatch()).outcomes[0].status,'processed');assert.equal(calls,1,'The exact compact source-matching checkpoint is reused');
+   await projectWorker.runProjectBatch();p=(await db.query('select * from work_projects where id=$1',[id])).rows[0];assert.equal(p.status,'awaiting_approval');assert.equal(p.spec.summary,contextCandidate.summary);assert.equal(p.approved_hash,null);
+  }finally{if(oldApiKey===undefined)delete process.env.OPENAI_API_KEY;else process.env.OPENAI_API_KEY=oldApiKey;}
 
  }finally{await db.query('rollback');if(priorPreview===undefined)delete process.env.PROJECT_PREVIEW_REPOSITORIES;else process.env.PROJECT_PREVIEW_REPOSITORIES=priorPreview;}
 }

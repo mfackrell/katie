@@ -1,7 +1,7 @@
 -- A review continuation is a new bounded child, never a reset of an expired
 -- mission's charges, attempts or deadline. Its completed candidate and any
 -- source-matching draft-blind checkpoint are copied exactly with provenance.
-create or replace function public.resume_incomplete_game_review(p_id uuid,p_actor uuid,p_chat uuid)
+create or replace function public.resume_incomplete_game_review(p_id uuid,p_actor uuid,p_chat uuid,p_preflight jsonb default null)
 returns boolean language plpgsql security invoker set search_path=public as $$
 declare p work_projects;m agent_missions;j mission_assignments;c mission_assignments;
  spent bigint;seq integer;mid uuid;candidate_hash text;
@@ -37,6 +37,22 @@ begin
     and not exists(select 1 from mission_assignments d where d.mission_id=m.id and d.job_key=dep
       and d.status='completed' and d.role<>'development')) then return false;end if;
  candidate_hash:=encode(sha256(convert_to(c.result->>'text','UTF8')),'hex');
+ -- A previously measured overflow is never retried by copying the unchanged
+ -- request blindly. The real worker must capture the complete current request
+ -- from its source-matching saved assessment and prove it now fits.
+ if j.result->>'reviewContextOverflow'='true' and (
+  p_preflight is null or p_preflight->>'reviewJobId' is distinct from j.id::text
+  or p_preflight->>'candidateHash' is distinct from candidate_hash
+  or p_preflight->>'checkpointHash' is distinct from j.payload->'reviewModelCheckpoint'->>'hash'
+  or p_preflight->>'checkpointHash' is null
+  or p_preflight->>'assessmentHash' is distinct from encode(sha256(convert_to(j.payload->'reviewModelCheckpoint'->'response'->>'text','UTF8')),'hex')
+  or p_preflight->>'assessmentHash' is null
+  or jsonb_typeof(p_preflight->'instruction') is distinct from 'string'
+  or jsonb_typeof(p_preflight->'input') is distinct from 'string'
+  or length(p_preflight->>'instruction') not between 1 and 48000
+  or length(p_preflight->>'input') not between 1 and 96000
+ ) then return false;end if;
+
  -- At most one continuation per exact source candidate. A failed continuation
  -- remains diagnosable and cannot consume the project in recursive retries.
  if exists(select 1 from project_events where project_id=p.id and event='incomplete_game_review_resumed'
@@ -72,8 +88,8 @@ begin
  perform project_publish(p.id,'Continuing the saved specification independent review. No redrafting or coding approval.');
  return true;
 end $$;
-revoke all on function public.resume_incomplete_game_review(uuid,uuid,uuid) from public,anon,authenticated;
-grant execute on function public.resume_incomplete_game_review(uuid,uuid,uuid) to service_role;
+revoke all on function public.resume_incomplete_game_review(uuid,uuid,uuid,jsonb) from public,anon,authenticated;
+grant execute on function public.resume_incomplete_game_review(uuid,uuid,uuid,jsonb) to service_role;
 
 -- A continuation denied by actual admission remains pending, including one
 -- whose successful draft-blind assessment is already saved and charged.
