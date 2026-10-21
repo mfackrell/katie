@@ -3,10 +3,10 @@ import {projectPlanSchema} from '@/lib/projects/contract';
 import { zodTextFormat } from 'openai/helpers/zod';
 import {orchestrationChoices,orchestrationFailure,type OrchestrationChoice} from '@/lib/orchestration/routing';
 import {boundedProvider} from '@/lib/orchestration/bounded-provider';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { rpc } from './store';
 import { calculate,planSchema,type Claim } from './types';
-
+import {MissionAdmissionError,explainAdmissionDenial,missionExecutionDeadline,missionAttemptTimeout,fitsMissionEnvelope} from './request-budget';
 
 const calculator={type:'function',name:'calculate',description:'Execute a deterministic arithmetic calculation. Numbers must come from supplied evidence or explicitly labeled assumptions.',strict:true,parameters:{type:'object',properties:{operation:{type:'string',enum:['add','subtract','multiply','divide','power']},values:{type:'array',items:{type:'number'},minItems:2,maxItems:12}},required:['operation','values'],additionalProperties:false}};
 export class MissionModelFailure extends Error { constructor(message:string,readonly partial:Record<string,unknown>){super(message);this.name='MissionModelFailure';} }
@@ -18,49 +18,67 @@ export function isCreditExhaustion(error:unknown):boolean{
  return (e?.status===429||code==='insufficient_quota'||code==='billing_hard_limit_reached')&&
   (/credit|quota|balance|billing|insufficient/.test(message)||code==='insufficient_quota'||code==='billing_hard_limit_reached');
 }
-// Every stage and child mission routes afresh against the active model registry.
-// Attempts share the same saved lease/budget; no workflow or evidence is reset.
+// Every stage and child mission routes against the active model registry. Only
+// an unchanged, draft-blind review-contract response may be reused; the worker
+// still validates its source provenance, and independently reviews the candidate.
 export async function missionModel(claim:Claim,instruction:string,input:string,tools:'none'|'research'|'calculate'='none'):Promise<ModelResult>{
  const agent=claim.mission.team.find(a=>a.id===claim.job.agent_id);
  if(!agent)throw Error('Saved worker unavailable');
  if(tools==='research'&&!agent.config.research)throw Error('Research permission denied');
- if(input.length>48000)throw Error('Mission evidence exceeds bounded context. Narrow the objective or deliverable.');
+ if(!fitsMissionEnvelope(instruction,input))throw Error('Mission evidence exceeds bounded context. Narrow the objective or deliverable.');
+ const executionDeadline=missionExecutionDeadline(claim);
+ const checkpointStage=claim.job.role==='review'&&tools==='none'&&input.startsWith('AUTHORITATIVE_USER_TURNS:\n');
+ const checkpointHash=checkpointStage?createHash('sha256').update(JSON.stringify({instruction,input,tools,objective:claim.mission.objective,agent:claim.job.agent_id})).digest('hex'):null;
+ const checkpoint=claim.job.payload?.reviewModelCheckpoint as {hash?:string;response?:ModelResult}|undefined;
+ if(checkpointHash&&checkpoint?.hash===checkpointHash&&typeof checkpoint.response?.text==='string'
+   &&typeof checkpoint.response.model==='string'&&Array.isArray(checkpoint.response.sources)&&Array.isArray(checkpoint.response.calculations))return checkpoint.response;
  const choices=await orchestrationChoices({objective:claim.mission.objective,instruction:claim.job.instruction+'\n'+instruction,
   requestId:claim.job.id,accounting:{
-   reserve:async(model,tokens)=>{const id=randomUUID();if(!await rpc<boolean>('reserve_mission_routing_call',{p_id:claim.job.id,p_lease:claim.job.lease,p_call:id,p_model:model,p_tokens:tokens}))throw Error('Worker no longer authorized or mission allowance exhausted');return id;},
+   reserve:async(model,tokens)=>{if(Date.now()>=executionDeadline-5000)throw Error('Mission execution time window exhausted before routing dispatch');const id=randomUUID();if(!await rpc<boolean>('reserve_mission_routing_call',{p_id:claim.job.id,p_lease:claim.job.lease,p_call:id,p_model:model,p_tokens:tokens}))throw Error('Worker no longer authorized or mission allowance exhausted');return id;},
    finish:async(id,tokens)=>{await rpc('finish_mission_call',{p_call:id,p_tokens:tokens});}
-  },research:tools==='research',review:claim.job.role==='review',planning:claim.job.role==='plan'});
+  },research:tools==='research',review:claim.job.role==='review',
+  // The server already knows specification writing is architecture/planning.
+  // Avoid paying a second classifier to rediscover this known phase.
+  planning:claim.job.role==='plan'||(claim.mission.project_kind==='specification'&&['compose','revise'].includes(claim.job.role))});
  const attemptedModels:string[]=[];
  const failedProviders=new Set<string>();
  let last:unknown;
  for(const choice of choices){
   if(failedProviders.has(choice.provider.name))continue;
   attemptedModels.push(choice.provider.name+':'+choice.modelId);
-  try{const result=await executeMissionModel(claim,instruction,input,tools,choice);return{...result,provider:choice.provider.name,routingReason:choice.reasoning,attemptedModels};}
-  catch(error){
+  try{
+   const result=await executeMissionModel(claim,instruction,input,tools,choice,executionDeadline);
+   const complete={...result,provider:choice.provider.name,routingReason:choice.reasoning,attemptedModels};
+   if(checkpointHash&&!await rpc<boolean>('checkpoint_mission_review_model',{p_id:claim.job.id,p_lease:claim.job.lease,p_hash:checkpointHash,p_response:complete}))throw Error('Worker no longer authorized to persist review checkpoint');
+   return complete;
+  }catch(error){
    last=error;
-   // Invalid output needs the existing repair workflow, never an implicit fresh
-   // draft. Authorization/budget denial must never trigger another inference.
+   if(error instanceof MissionAdmissionError){
+    if(!error.canTryAlternative)throw error;
+    console.info('[Missions] Candidate not admitted; no provider call made',{jobId:claim.job.id,model:choice.modelId,requested:error.requestedTokens,remaining:error.capacity?.remainingTokens});
+    continue;
+   }
    const detail=error instanceof Error?error.message:String(error);
-   if(/allowance exhausted|no longer authorized|permission denied|Invalid tool|Unpermitted|tool arguments instead/i.test(detail)||(error instanceof MissionModelFailure&&!['server_error','rate_limit_exceeded','insufficient_quota'].includes(String(error.partial.providerErrorCode))))throw error;
+   if(/allowance exhausted|no longer authorized|permission denied|Invalid tool|Unpermitted|tool arguments instead|execution time window/i.test(detail)||(error instanceof MissionModelFailure&&!['server_error','rate_limit_exceeded','insufficient_quota'].includes(String(error.partial.providerErrorCode))))throw error;
    if(await orchestrationFailure(choice,error)==='provider'||isCreditExhaustion(error))failedProviders.add(choice.provider.name);
-   console.warn('[Missions] Model attempt failed; trying next eligible provider',{jobId:claim.job.id,provider:choice.provider.name,model:choice.modelId});
+   console.warn('[Missions] Model attempt failed; trying next eligible provider',{jobId:claim.job.id,provider:choice.provider.name,model:choice.modelId,error:detail.slice(0,350)});
   }
  }
+ if(last instanceof MissionAdmissionError)throw new MissionModelFailure('No eligible model request fits the remaining mission allowance. Saved work and all usage are preserved.',{admissionDenied:true,requestedTokens:last.requestedTokens,remainingTokens:last.capacity?.remainingTokens,attemptedModels});
  if(last instanceof MissionModelFailure)throw new MissionModelFailure(last.message,{...last.partial,attemptedModels,providerFailure:true});
  if(last instanceof Error)throw new MissionModelFailure(last.message,{attemptedModels,providerFailure:true});
  throw Error('No eligible orchestration model could execute this assignment');
 }
-async function executeMissionModel(claim:Claim,instruction:string,input:string,tools:'none'|'research'|'calculate',choice:OrchestrationChoice):Promise<ModelResult>{
+async function executeMissionModel(claim:Claim,instruction:string,input:string,tools:'none'|'research'|'calculate',choice:OrchestrationChoice,executionDeadline:number):Promise<ModelResult>{
  const selectedModel=choice.modelId;
  const gameSpecification=claim.mission.project_kind==='specification'&&(claim.mission.project_evidence as {projectProfile?:string}|null)?.projectProfile==='game';
  const outputTokens=gameSpecification&&['compose','revise'].includes(claim.job.role)?16000:claim.mission.project_kind==='specification'&&['compose','revise'].includes(claim.job.role)?6000:claim.job.role==='review'?5000:3000;
  const client=boundedProvider(choice);
  const sources:ModelResult['sources']=[],calculations:unknown[]=[];
- if(input.length>48000)throw Error('Mission evidence exceeds bounded context. Narrow the objective or deliverable.');
+ if(!fitsMissionEnvelope(instruction,input))throw Error('Mission evidence exceeds bounded context. Narrow the objective or deliverable.');
  let context:unknown[]=[{role:'user',content:input}];
  let text='';
- const calculationDeadline=Date.now()+180_000;
+ const calculationDeadline=Math.min(executionDeadline,Date.now()+180_000);
  for(let turn=0;turn<(tools==='calculate'?4:1);turn++){
   if(tools==='calculate'&&Date.now()>calculationDeadline-10_000)throw Error('Calculation execution time allowance exhausted');
   const callId=randomUUID();
@@ -70,17 +88,17 @@ async function executeMissionModel(claim:Claim,instruction:string,input:string,t
    ...(claim.job.role==='plan'?{text:{format:zodTextFormat(planSchema,'mission_plan')}}:claim.mission.project_kind==='specification'&&['compose','revise'].includes(claim.job.role)?{text:{format:gameSpecification?{type:'json_object'}:zodTextFormat(projectPlanSchema.omit({game:true}),'project_specification')}}:{}),
    ...(tools==='research'?{tools:[{type:'web_search',search_context_size:'low'}],include:['web_search_call.action.sources'],tool_choice:'required',max_tool_calls:4}:calculatorAvailable?{tools:[calculator],tool_choice:'auto'}:{}),
   };
-  // Count the complete input, including tools and review schemas, without an
-  // inference. Keep a conservative byte fallback if counting is unavailable.
   const countInput:Record<string,unknown>={...request};
   delete countInput.max_output_tokens;delete countInput.store;delete countInput.max_tool_calls;
-  const counted=await client.post('/responses/input_tokens',{body:countInput,timeout:15_000}).catch(()=>null);
+  const countingTimeout=Math.min(15000,executionDeadline-Date.now()-5000);
+  if(countingTimeout<1000)throw Error('Mission execution time window exhausted before dispatch; saved work remains intact');
+  const counted=await client.post('/responses/input_tokens',{body:countInput,timeout:countingTimeout}).catch(()=>null);
   const inputTokens=counted&&Number.isSafeInteger(counted.input_tokens)&&counted.input_tokens>=0?counted.input_tokens+256:Buffer.byteLength(JSON.stringify(request),'utf8');
-  // Output includes reasoning; native search requires additional headroom.
   const reserve=inputTokens+outputTokens+(tools==='research'?32000:0);
-  const inferenceTimeout=tools==='calculate'?Math.min(90_000,calculationDeadline-Date.now()-5000):90_000;
-  if(inferenceTimeout<1000)throw Error('Calculation execution time allowance exhausted');
-  if(!await rpc<boolean>('reserve_mission_call',{p_id:claim.job.id,p_lease:claim.job.lease,p_call:callId,p_model:choice.provider.name+':'+selectedModel,p_tokens:reserve}))throw Error('Worker no longer authorized or mission allowance exhausted');
+  const inferenceTimeout=tools==='calculate'?Math.min(90_000,calculationDeadline-Date.now()-5000):missionAttemptTimeout(executionDeadline,outputTokens);
+  if(inferenceTimeout<1000)throw Error('Mission execution time window exhausted before dispatch; saved work remains intact');
+  if(!await rpc<boolean>('reserve_mission_call',{p_id:claim.job.id,p_lease:claim.job.lease,p_call:callId,p_model:choice.provider.name+':'+selectedModel,p_tokens:reserve}))await explainAdmissionDenial(claim,reserve);
+  const started=Date.now();
   try{
    const response=await client.responses.create(request,{timeout:inferenceTimeout});
    await rpc('finish_mission_call',{p_call:callId,p_tokens:response.usage?.total_tokens??null});
@@ -91,9 +109,6 @@ async function executeMissionModel(claim:Claim,instruction:string,input:string,t
    const calls=output.filter(x=>x.type==='function_call');
    if(calls.length){
     if(!calculatorAvailable)throw Error('Unpermitted calculator request');
-    // Model-generated parallel calculator requests can exceed the allowed
-    // budget. Execute only permitted calls and explicitly reject the rest,
-    // preserving one response for every tool call without exceeding limits.
     const remaining=8-calculations.length;
     const answers=calls.map((c,index)=>{
      if(c.name!=='calculate'||typeof c.arguments!=='string'||typeof c.call_id!=='string')throw Error('Invalid tool request');
@@ -110,10 +125,7 @@ async function executeMissionModel(claim:Claim,instruction:string,input:string,t
     if(value&&typeof value==='object'&&'operation' in value&&'values' in value)throw Error('Calculation returned tool arguments instead of the assigned analysis');
    }
    if(tools==='research'){
-    // Some Responses-compatible transports return explicit links but
-    // omit inline annotations. Accept those only when the native search output
-    // independently records the same URL as consulted, never from text alone.
-    const linked=new Set(Array.from(text.matchAll(/https?:\/\/[^\s<>()\[\]]+/g),m=>m[0].replace(/[.,;:!?*_`]+$/g,''))); 
+    const linked=new Set(Array.from(text.matchAll(/https?:\/\/[^\s<>()\[\]]+/g),m=>m[0].replace(/[.,;:!?*_`]+$/g,'')));
     const consulted=new Set<string>();
     for(const item of output){if(item.type!=='web_search_call'||!item.action||typeof item.action!=='object')continue;const action=item.action as Record<string,unknown>;
      if((action.type==='open_page'||action.type==='find_in_page')&&typeof action.url==='string')consulted.add(action.url);
@@ -123,7 +135,11 @@ async function executeMissionModel(claim:Claim,instruction:string,input:string,t
     if(!sources.length)throw new MissionModelFailure('Research returned no cited live sources',{text,sources,calculations,model:selectedModel,consultedSources:[...consulted],outputTypes:output.map(item=>String(item.type))});
    }
    return{text,sources,calculations,model:selectedModel};
-  }catch(error){await rpc('finish_mission_call',{p_call:callId,p_tokens:null}).catch(()=>{});throw error;}
+  }catch(error){
+   await rpc('finish_mission_call',{p_call:callId,p_tokens:null}).catch(()=>{});
+   console.warn('[Missions] Provider attempt ended',{jobId:claim.job.id,callId,provider:choice.provider.name,model:selectedModel,durationMs:Date.now()-started,reservedTokens:reserve,countMethod:counted?'provider':'conservative-bytes',error:error instanceof Error?error.message.slice(0,350):'Unknown provider failure'});
+   throw error;
+  }
  }
  throw Error('Calculation output did not complete within its call allowance');
 }

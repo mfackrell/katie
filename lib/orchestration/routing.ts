@@ -21,9 +21,14 @@ export async function orchestrationChoices(input:{objective:string;instruction:s
    const request={model:params.modelId,instructions:params.persona,
     input:[...params.history,{role:'user',content:params.summary+'\n'+params.user}],max_output_tokens:2000,store:false};
    if(JSON.stringify(request).length>96000)throw Error('Routing context exceeds bounded input');
-   const reservation=await input.accounting?.reserve(provider.name+':'+params.modelId,Buffer.byteLength(JSON.stringify(request),'utf8')+2000);
+   const client=boundedProvider({provider,modelId:params.modelId,reasoning:'routing decision'});
+   const countInput:Record<string,unknown>={...request};delete countInput.max_output_tokens;delete countInput.store;
+   const counted=await Promise.resolve().then(()=>client.post('/responses/input_tokens',{body:countInput,timeout:15000})).catch(()=>null);
+   const inputTokens=counted&&Number.isSafeInteger(counted.input_tokens)&&counted.input_tokens>=0
+    ?counted.input_tokens+256:Buffer.byteLength(JSON.stringify(request),'utf8');
+   const reservation=await input.accounting?.reserve(provider.name+':'+params.modelId,inputTokens+2000);
    try{
-    const result=await boundedProvider({provider,modelId:params.modelId,reasoning:'routing decision'}).responses.create(request,{timeout:30_000});
+    const result=await client.responses.create(request,{timeout:30_000});
     if(reservation)await input.accounting!.finish(reservation,result.usage?.total_tokens??null);
     if(result.status!=='completed'||!result.output_text?.trim())throw Error('Routing decision incomplete');
     return{text:result.output_text,model:params.modelId,provider:provider.name};
@@ -39,8 +44,6 @@ export async function orchestrationChoices(input:{objective:string;instruction:s
    ...(input.research?{requestIntent:'web-search' as const}:input.review?{requestIntent:'assistant-reflection' as const}:input.planning?{requestIntent:'architecture-review' as const}:{})
   });
  const ranked=[{provider:decision.provider,modelId:decision.modelId},...decision.fallbackChain];
- // Keep the selected submodel and the best alternative from each connected
- // provider. A provider outage must not spend every attempt on the same vendor.
  const seen=new Set<string>();
  const allowed=ranked.filter(c=>providers.some(p=>p.name===c.provider.name));
  const primary=allowed.filter(c=>{if(seen.has(c.provider.name))return false;seen.add(c.provider.name);return true;});

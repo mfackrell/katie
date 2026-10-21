@@ -10,59 +10,93 @@ type NativeResponse={content?:ClaudeBlock[];stop_reason?:string;usage?:{input_to
 export type BoundedRequest={model:string;instructions:string;input:unknown[];max_output_tokens:number;tools?:Array<{type:string;name?:string;description?:string;parameters?:unknown}>;text?:{format?:{type?:string;schema?:unknown}};[key:string]:unknown};
 type BoundedResponse={status?:string;output_text?:string;output:unknown[];usage?:{total_tokens?:number};incomplete_details?:{reason?:string}|null;error?:{code?:string;message?:string}|null};
 type Client={post:(path:string,options:{body:Record<string,unknown>;timeout:number})=>Promise<{input_tokens:number}>;responses:{create:(request:BoundedRequest,options:{timeout:number})=>Promise<BoundedResponse>}};
-/** Normalize native bounded transports to the existing mission tool/evidence protocol.
- * No chat continuation loops, SDK retries, or hidden inference calls. */
+
+/** Counting and generation MUST serialize the same system prompt, schema,
+ * messages and tool definitions. Counting never invokes a generative model. */
+function nativeRequest(provider:string,request:BoundedRequest){
+ const calculator=request.tools?.find(t=>t.type==='function');
+ const research=request.tools?.some(t=>t.type==='web_search');
+ const schema=request.text?.format?.schema;
+ const instructions=request.instructions+(schema?'\nReturn ONLY JSON matching this schema: '+JSON.stringify(schema):request.text?.format?'\nReturn ONLY valid JSON.':'');
+ let url:string,headers:Record<string,string>,body:Item;
+ if(provider==='anthropic'){
+  const key=process.env.CLAUDE_API_KEY??process.env.claude_api_key;if(!key)throw Error('Selected Anthropic connection unavailable');
+  url='https://api.anthropic.com/v1/messages';headers={'x-api-key':key,'anthropic-version':'2023-06-01'};
+  const messages:Item[]=[];
+  for(const item of request.input as WireInput[]){
+   if(item.nativeAnthropic){messages.push({role:'assistant',content:item.nativeAnthropic});continue;}
+   if(item.type==='function_call')continue;
+   if(item.type==='function_call_output'){const last=messages.at(-1);const block={type:'tool_result',tool_use_id:item.call_id,content:item.output};if(last?.role==='user'&&Array.isArray(last.content))last.content.push(block);else messages.push({role:'user',content:[block]});continue;}
+   if(item.role)messages.push({role:item.role,content:item.content});
+  }
+  body={model:request.model,max_tokens:request.max_output_tokens,system:instructions,messages,
+   ...(research?{tools:[{type:'web_search_20250305',name:'web_search',max_uses:4}]}:calculator?{tools:[{name:calculator.name,description:calculator.description,input_schema:calculator.parameters}]}:{})};
+ }else{
+  if(provider!=='google')throw Error('Unsupported native provider');
+  if(research)throw Error('Gemini bounded native search unavailable');
+  const key=process.env.GOOGLE_API_KEY;if(!key)throw Error('Selected Google connection unavailable');
+  url='https://generativelanguage.googleapis.com/v1beta/models/'+encodeURIComponent(request.model.replace(/^models\//,''))+':generateContent';headers={'x-goog-api-key':key};
+  const contents:GoogleContent[]=[];
+  for(const item of request.input as WireInput[]){
+   if(item.nativeGoogle){contents.push(item.nativeGoogle);continue;}
+   if(item.type==='function_call')continue;
+   if(item.type==='function_call_output'){const part={functionResponse:{name:'calculate',...(item.call_id?.startsWith('google-')?{}:{id:item.call_id}),response:JSON.parse(item.output??'{}')}};const last=contents.at(-1);if(last?.role==='user')last.parts.push(part);else contents.push({role:'user',parts:[part]});continue;}
+   if(item.role)contents.push({role:item.role==='assistant'?'model':'user',parts:[{text:String(item.content??'')}]});
+  }
+  body={systemInstruction:{parts:[{text:instructions}]},contents,generationConfig:{maxOutputTokens:request.max_output_tokens,...(request.text?.format?{responseMimeType:'application/json'}:{})},
+   ...(calculator?{tools:[{functionDeclarations:[{name:calculator.name,description:calculator.description,parameters:calculator.parameters}]}]}:{})};
+ }
+ return{url,headers,body};
+}
+async function nativePost(url:string,headers:Record<string,string>,body:Item,timeout:number){
+ const response=await fetch(url,{method:'POST',headers:{'content-type':'application/json',...headers},body:JSON.stringify(body),signal:AbortSignal.timeout(timeout)});
+ if(!response.ok){
+  const detail=(await response.text()).slice(0,600);
+  let code='';try{const parsed=JSON.parse(detail);code=String(parsed.error?.type??parsed.error?.code??'');}catch{/* HTTP status still classifies this failure. */}
+  throw Object.assign(Error('Native provider request failed ('+response.status+'): '+detail),{status:response.status,code,requestId:response.headers.get('request-id')??response.headers.get('x-request-id')});
+ }
+ return response;
+}
+/** No chat continuation loops, SDK retries, or hidden inference calls. */
 export function boundedProvider(choice:OrchestrationChoice):Client{
  const provider=choice.provider.name;
  if(provider==='openai'||provider==='grok'){
   const apiKey=provider==='openai'?process.env.OPENAI_API_KEY:process.env.GROK_API_KEY??process.env.XAI_API_KEY??process.env.grok_api_key;
   if(!apiKey)throw Error('Selected provider connection unavailable: '+provider);
   const client=new OpenAI({apiKey,maxRetries:0,timeout:90_000,fetch:globalThis.fetch.bind(globalThis),...(provider==='grok'?{baseURL:'https://api.x.ai/v1'}:{})});
-  return {
-   post:async(path:string,options:{body:Record<string,unknown>;timeout:number}):Promise<{input_tokens:number}>=>provider==='openai'?client.post(path,options):Promise.reject(Error('Conservative byte counting required')),
-   responses:{create:async(request:BoundedRequest,options:{timeout:number})=>{
+  return{
+   post:async(path,options):Promise<{input_tokens:number}>=>provider==='openai'?client.post(path,options):Promise.reject(Error('Conservative byte counting required')),
+   responses:{create:async(request,options)=>{
     const body:Item={...request};
     if(provider==='grok'){delete body.reasoning;delete body.text;delete body.include;body.input=[{role:'system',content:body.instructions},...request.input];delete body.instructions;}
     return client.responses.create(body as unknown as OpenAI.Responses.ResponseCreateParamsNonStreaming,options);
    }}
   };
  }
- return {
-  post:async():Promise<{input_tokens:number}>=>{throw Error('Conservative byte counting required');},
-  responses:{create:async(request:BoundedRequest,options:{timeout:number})=>{
-   const calculator=request.tools?.find(t=>t.type==='function');
-   const research=request.tools?.some(t=>t.type==='web_search');
-   const schema=request.text?.format?.schema;
-   const instructions=request.instructions+(schema?'\nReturn ONLY JSON matching this schema: '+JSON.stringify(schema):request.text?.format?'\nReturn ONLY valid JSON.':'');
-   let url:string,headers:Record<string,string>,body:Item;
+ return{
+  post:async(path,options)=>{
+   if(path!=='/responses/input_tokens')throw Error('Unsupported token-count operation');
+   const request=options.body as BoundedRequest;
+   const native=nativeRequest(provider,request);
+   let url:string,body:Item;
    if(provider==='anthropic'){
-    const key=process.env.CLAUDE_API_KEY??process.env.claude_api_key;if(!key)throw Error('Selected Anthropic connection unavailable');
-    url='https://api.anthropic.com/v1/messages';headers={'x-api-key':key,'anthropic-version':'2023-06-01'};
-    const messages:Item[]=[];
-    for(const item of request.input as WireInput[]){
-     if(item.nativeAnthropic){messages.push({role:'assistant',content:item.nativeAnthropic});continue;}
-     if(item.type==='function_call')continue;
-     if(item.type==='function_call_output'){const last=messages.at(-1);const block={type:'tool_result',tool_use_id:item.call_id,content:item.output};if(last?.role==='user'&&Array.isArray(last.content))last.content.push(block);else messages.push({role:'user',content:[block]});continue;}
-     if(item.role)messages.push({role:item.role,content:item.content});
-    }
-    body={model:request.model,max_tokens:request.max_output_tokens,system:instructions,messages,
-     ...(research?{tools:[{type:'web_search_20250305',name:'web_search',max_uses:4}]}:calculator?{tools:[{name:calculator.name,description:calculator.description,input_schema:calculator.parameters}]}:{})};
+    // Anthropic does not count server-side search tools. Fall back to the
+    // existing conservative reservation for those requests, never drop tools.
+    if(request.tools?.some(t=>t.type==='web_search'))throw Error('Native search token count unavailable');
+    url=native.url+'/count_tokens';body={...native.body};delete body.max_tokens;
    }else{
-    if(research)throw Error('Gemini bounded native search unavailable');
-    const key=process.env.GOOGLE_API_KEY;if(!key)throw Error('Selected Google connection unavailable');
-    url='https://generativelanguage.googleapis.com/v1beta/models/'+encodeURIComponent(request.model.replace(/^models\//,''))+':generateContent';headers={'x-goog-api-key':key};
-    const contents:GoogleContent[]=[];
-    for(const item of request.input as WireInput[]){
-     if(item.nativeGoogle){contents.push(item.nativeGoogle);continue;}
-     if(item.type==='function_call')continue;
-     if(item.type==='function_call_output'){const part={functionResponse:{name:'calculate',...(item.call_id?.startsWith('google-')?{}:{id:item.call_id}),response:JSON.parse(item.output??'{}')}};const last=contents.at(-1);if(last?.role==='user')last.parts.push(part);else contents.push({role:'user',parts:[part]});continue;}
-     if(item.role)contents.push({role:item.role==='assistant'?'model':'user',parts:[{text:String(item.content??'')}]});
-    }
-    body={systemInstruction:{parts:[{text:instructions}]},contents,generationConfig:{maxOutputTokens:request.max_output_tokens,...(request.text?.format?{responseMimeType:'application/json'}:{})},
-     ...(calculator?{tools:[{functionDeclarations:[{name:calculator.name,description:calculator.description,parameters:calculator.parameters}]}]}:{})};
+    url=native.url.replace(/:generateContent$/,':countTokens');
+    body={generateContentRequest:{...native.body,model:'models/'+request.model.replace(/^models\//,'')}};
    }
-   const response=await fetch(url,{method:'POST',headers:{'content-type':'application/json',...headers},body:JSON.stringify(body),signal:AbortSignal.timeout(options.timeout)});
-   if(!response.ok)throw Error(provider+' request failed ('+response.status+'): '+(await response.text()).slice(0,600));
+   const response=await nativePost(url,native.headers,body,options.timeout);
+   const raw=await response.json() as {input_tokens?:number;totalTokens?:number};
+   const tokens=provider==='anthropic'?raw.input_tokens:raw.totalTokens;
+   if(!Number.isSafeInteger(tokens)||typeof tokens!=='number'||tokens<0)throw Error('Invalid native token count');
+   return{input_tokens:tokens};
+  },
+  responses:{create:async(request,options)=>{
+   const native=nativeRequest(provider,request);
+   const response=await nativePost(native.url,native.headers,native.body,options.timeout);
    const raw:NativeResponse=await response.json();
    const output:Item[]=[];let text='',truncated=false,usage=0,incompleteReason='unknown';
    if(provider==='anthropic'){
