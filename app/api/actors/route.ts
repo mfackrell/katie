@@ -46,6 +46,7 @@ async function calibrationPreview(actorId:string) {
     ]
   });
   const parsed=JSON.parse(answer.choices[0]?.message?.content||"{}") as {groups?:CalibrationGroup[];conflicts?:Array<{keys:string[];question:string}>};
+  if(!parsed||!Array.isArray(parsed.groups)||!Array.isArray(parsed.conflicts))throw new Error("Invalid calibration report structure");
   const keyset=new Set(entries.map(e=>e.key)),used=new Set<string>();
   const conflicts:Array<{keys:string[];question:string}>=[];
   for(const item of parsed.conflicts||[]){
