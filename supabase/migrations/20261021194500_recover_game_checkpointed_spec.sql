@@ -51,3 +51,7 @@ BEGIN
    'Saved specification checkpoint recovered. Fresh independent review is required before any coding approval.');
   RETURN true;
 END $function$;
+
+-- Recovery changes mission ownership and scheduling; backend only.
+REVOKE ALL ON FUNCTION public.recover_game_specification_checkpoint(uuid) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.recover_game_specification_checkpoint(uuid) TO service_role;
