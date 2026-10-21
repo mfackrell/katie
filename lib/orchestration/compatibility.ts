@@ -5,5 +5,6 @@ import type {LlmProvider} from '@/lib/providers/types';
 // background lifecycle; they cannot execute on this transport. Keep them in
 // the shared registry for compatible executors, but never reserve here.
 export function supportsBoundedModel(provider:LlmProvider['name'],modelId:string){
+ if(/audio|realtime|transcrib|transcrip|whisper|(?:^|[-_])tts(?:[-_]|$)|embedding|moderation|image|imagine|sora|lyria|nano-banana|computer-use|robotics/i.test(modelId))return false;
  return !(provider==='google'&&/(?:^|[-/])deep-research(?:-|$)/i.test(modelId.replace(/^models\//,'')));
 }

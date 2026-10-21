@@ -246,3 +246,21 @@ test('an unaffordable capacity retry preserves the original incomplete response'
  },{fetch:async url=>new Response(JSON.stringify(url.endsWith('/count_tokens')?{input_tokens:200}:anthropic('Original partial reasoning',{stop_reason:'max_tokens'})),{status:200})});
  await assert.rejects(load('@/lib/missions/model').missionModel(claim('compose'),'Compose','Evidence'),error=>{assert.equal(error.partial.partialText,'Original partial reasoning');assert.equal(error.partial.outputTokenLimit,6000);assert.equal(error.partial.admissionDenied,true);return true;});
 });
+
+
+test('mixed provider inventories admit only compatible synchronous text endpoints before routing or client construction',async()=>{
+ const inventories={openai:['gpt-5.6-sol','gpt-audio','gpt-realtime','whisper-1','text-embedding-3-large','omni-moderation-latest','gpt-image-1','sora-2','tts-1'],google:['gemini-3.1-pro-preview','models/deep-research-pro-preview','gemini-image-preview','lyria-2','nano-banana-pro','gemini-robotics-er'],anthropic:['claude-opus-4-6','claude-computer-use'],grok:['grok-4.2','grok-imagine-image','grok-transcription']};
+ const providers=Object.entries(inventories).map(([name,ids])=>({name,listModels:async()=>ids}));let routed=false;
+ const load=modules({'@/lib/providers':{getAvailableProviders:()=>providers},'@/lib/router/provider-health':{filterProvidersBySharedHealth:async p=>({providers:p})},'@/lib/router/master-router':{chooseProvider:async(_,__,available,options)=>{
+  routed=true;
+  for(const p of available){const ids=await p.listModels();assert.deepEqual(Array.from(ids),[inventories[p.name][0]]);for(const id of inventories[p.name])assert.equal(options.candidateAllowed(p.name,id),id===inventories[p.name][0]);}
+  // Even a stale/malformed registry choice cannot restore an incompatible model.
+  return{provider:providers[0],modelId:'gpt-image-1',fallbackChain:providers.map(p=>({provider:p,modelId:inventories[p.name][0]})),reasoning:'Mixed inventory fixture'};
+ }}});
+ const choices=await load('@/lib/orchestration/routing').orchestrationChoices({objective:'Review saved text',instruction:'Independent comparison',requestId:'mixed-inventory'});
+ assert.equal(routed,true);assert.equal(choices.length,4);assert.deepEqual(Array.from(choices,c=>c.modelId),Object.values(inventories).map(ids=>ids[0]));
+ const provider=load('@/lib/orchestration/bounded-provider').boundedProvider;
+ for(const [name,ids] of Object.entries(inventories))for(const id of ids.slice(1))assert.throws(()=>provider(choice(name,id)),/different orchestration transport/);
+ // The client fence fires before any environment lookup, token count or inference.
+ assert.doesNotThrow(()=>provider(choice('anthropic',inventories.anthropic[0])));
+});

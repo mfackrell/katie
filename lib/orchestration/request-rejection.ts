@@ -12,7 +12,5 @@ export function rejectedBeforeInference(error:unknown){
  return /invalid_request|invalid_argument|unsupported|bad_request/i.test(code)||/unsupported|invalid json payload|only supports .*api|credit balance|not supported/i.test(message);
 }
 export function boundedModelSupported(provider:string,model:string){
- if(/audio|realtime|transcrib|whisper|(?:^|[-_])tts(?:[-_]|$)|embedding|moderation|image|imagine|sora|lyria|nano-banana|computer-use|robotics/i.test(model))return false;
- // These are agent jobs served only by Interactions, not generateContent.
  return supportsBoundedModel(provider as Parameters<typeof supportsBoundedModel>[0],model);
 }
