@@ -1,5 +1,6 @@
 import {
   getLongTermMemory,
+  getActorById,
   getRecentMessages,
   mergeActorLongTermMemoryEntries,
   setLongTermMemory,
@@ -209,10 +210,9 @@ function verifiedAutomaticPatches(
     if (evidenceIds.length !== entry.evidenceMessageIds.length ||
         evidenceIds.some(id => !entry.evidenceMessageIds?.includes(id))) continue;
 
-    const directPreference = entry.category === "preference" &&
-      claimed.some(item => /\b(?:I (?:prefer|want|need)|my preference|please (?:always|never)|from now on)\b/i.test(item.quote));
-    const source = entry.category === "pattern" || !directPreference
-      ? "assistant-inference" : entry.source;
+    // Firsthand factual statements with exact matching user quotations retain
+    // their firsthand attribution. Inferred generalizations remain inferences.
+    const source = entry.category === "pattern" ? "assistant-inference" : entry.source;
     patches.push({
       ...entry,
       source,
@@ -294,9 +294,10 @@ export async function maybeUpdateLongTermMemory(
       return;
     }
 
-    const [currentLongTermMemory, rawRecentMessages] = await Promise.all([
+    const [currentLongTermMemory, rawRecentMessages, actor] = await Promise.all([
       getLongTermMemory(actorId, chatId),
       getRecentMessages(chatId, MEMORY_EDITOR_HISTORY_MESSAGES + 40),
+      getActorById(actorId),
     ]);
 
     const completedMessages = filterConversationalMessages(rawRecentMessages);
@@ -332,7 +333,9 @@ export async function maybeUpdateLongTermMemory(
           role: "system",
           content: [
             "You are Katie's LONG-TERM MEMORY editor.",
-            "Long-term memory contains only durable information important enough to remain useful across the full conversation.",
+            "Long-term memory contains durable information valuable to this actor across future conversations and tasks.",
+            "Evaluate salience in the context of the actor’s actual purpose and responsibilities, rather than a fixed domain keyword list. A specialist must independently recognize evidence and historical context needed to do its assigned work in future conversations.",
+            "For example, material firsthand details about what the user did, how, when, where, with whom, or with what results may be important for an advisory actor. This is an example of context-relative salience, not an exhaustive rule.",
             "Allowed categories: fact, preference, relationship, goal, decision, constraint, pattern.",
             "",
             "Storage rules:",
@@ -344,7 +347,7 @@ export async function maybeUpdateLongTermMemory(
             "- Store durable lessons using the existing preference or pattern categories, appropriate evidenceMessageIds and confidence. A lesson inferred from multiple user messages may cite those messages; never attribute an assistant's interpretation to the user as a direct statement.",
             "- In ordinary automatic updates, return only NEW or CHANGED memories, not a complete memory snapshot. The database preserves omitted existing memories.",
             "- Every new or changed automatic memory requires evidenceQuotes: [{messageId,quote}], containing an exact meaningful excerpt of at least 20 characters from the cited USER message in recentRoleAttributedMessages. The evidenceMessageIds must be those same message IDs. Unrelated job postings and valid but irrelevant message IDs are not evidence.",
-            "- Generalized lessons inferred from feedback are assistant-inference with calibrated confidence, not user-stated facts. Reserve user-stated for directly expressed preferences.",
+            "- Generalized lessons inferred from feedback are assistant-inference with calibrated confidence, not user-stated facts. Direct factual statements by the user and directly expressed preferences are user-stated when supported by exact quotations.",
             "- Do not turn isolated feedback, quoted third-party criticism, or tentative interpretations into permanent user preferences. A one-off writing edit is usually task-local; use no_change when there is no durable lesson.",
             "- Allow learned preferences to evolve when the user provides new information or changes their expectations. Respect explicit corrections and preserve otherwise distinct existing memories.",
             "- Do NOT store raw transcripts, rolling summaries, routing/session state, temporary status, routine travel, momentary emotions, one-off jokes, or short-lived circumstances.",
@@ -362,6 +365,8 @@ export async function maybeUpdateLongTermMemory(
             "Required format:",
             '{"version":3,"purpose":"...","entries":[{"key":"stable.short.identifier","category":"fact|preference|relationship|goal|decision|constraint|pattern","value":"...","source":"user-stated|assistant-inference","confidence":"high|medium|low","evidenceMessageIds":["USER_MESSAGE_ID"],"evidenceQuotes":[{"messageId":"USER_MESSAGE_ID","quote":"exact supporting user excerpt"}],"lastConfirmedAt":"ISO timestamp if known"}]}',
             "",
+            "Interpret the actor purpose and the newest user message before deciding no_change. Preserve newly stated reusable task-domain evidence even if it is only relevant to this specialist.",
+            "Every proposed memory must contain an exact 20+ character verbatim user quote and matching USER message ID; never return a replace proposal without this provenance. Existing memory is context, not output; only supply new or changed entries.",
             "Return strict JSON only:",
             '{"action":"no_change"}',
             "or",
@@ -372,6 +377,8 @@ export async function maybeUpdateLongTermMemory(
           role: "user",
           content: [
             `actorId: ${actorId}`,
+            `actorName: ${actor?.name ?? "Katie"}`,
+            `actorPurposeAndInstructions: ${actor?.purpose ?? ""}`,
             `chatId: ${chatId}`,
             `latestUserMessage: ${latestUserMessage}`,
             `existingLongTermMemoryContent: ${JSON.stringify(currentLongTermMemory)}`,
@@ -418,11 +425,33 @@ export async function maybeUpdateLongTermMemory(
       }
       await setLongTermMemory(actorId, chatId, decision.updatedContent);
     } else {
-      const changes = verifiedAutomaticPatches(
+      let changes = verifiedAutomaticPatches(
         decision.updatedContent.entries, currentEntries(currentLongTermMemory), recentMessages,
       );
+      if (!changes.length && decision.updatedContent.entries.length) {
+        // Recover rather than silently dropping a potentially meaningful update.
+        // The repair must still satisfy the same provenance validation.
+        const repair = await client.chat.completions.create({
+          model: MEMORY_EDITOR_MODEL, temperature: 0,
+          response_format: { type: "json_object" },
+          messages: [
+            { role: "system", content: "You are repairing Katie's actor-purpose-aware durable memory proposal. Return ONLY new or changed facts relevant to the actor's future work. Every entry must include evidenceMessageIds and evidenceQuotes with an EXACT, verbatim 20+ character excerpt from the corresponding USER message below. Do not infer facts from assistant messages. Do not include old memory entries. Respond with action=replace and updatedContent version=3, purpose and entries; use action=no_change only if the user supplied no durable information." },
+            { role: "user", content: [
+              `actorPurpose: ${actor?.purpose ?? ""}`,
+              `previousRejectedEntries: ${JSON.stringify(decision.updatedContent.entries)}`,
+              "Reason: none of the proposed entries passed the user-source evidence validation.",
+              "recentRoleAttributedMessages:", formatTranscript(recentMessages),
+            ].join("\\n\\n") },
+          ],
+        });
+        const repaired = parseMemoryEditorResult(repair.choices?.[0]?.message?.content?.trim() ?? "", allowedEvidenceIds);
+        if (repaired?.action === "replace") {
+          changes = verifiedAutomaticPatches(repaired.updatedContent.entries, currentEntries(currentLongTermMemory), recentMessages);
+        }
+        console.info("[LongTermMemoryEditor] Source repair", { actorId, chatId, recovered: changes.length > 0 });
+      }
       if (!changes.length) {
-        console.log("[LongTermMemoryEditor] No-op: no source-verified durable changes", { actorId, chatId });
+        console.warn("[LongTermMemoryEditor] Candidate memory rejected: no source-verified changes", { actorId, chatId, proposedCount: decision.updatedContent.entries.length });
         return;
       }
       await mergeActorLongTermMemoryEntries(actorId, changes);

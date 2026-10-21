@@ -480,3 +480,25 @@ test("concurrent updates from different chats merge without losing entries", asy
   const keys=(result.entries as Array<{key:string}>).map(e=>e.key).sort();
   assert.deepEqual(keys,["from.chat.one","from.chat.two"]);
 });
+
+test("automatic actor-purpose learning persists firsthand facts with quoted evidence", async () => {
+ const state=makeState();
+ (globalThis as any).__KATIE_SUPABASE_ADMIN_CLIENT__=createFakeClient(state);
+ const quote="At our installation company I updated WIP every month.";
+ let observedPrompt="";
+ (globalThis as any).__KATIE_LONG_TERM_MEMORY_OPENAI_CLIENT__={chat:{completions:{async create(p:any){
+   observedPrompt=p.messages.map((m:any)=>m.content).join("\\n");
+   return {choices:[{message:{content:JSON.stringify({action:"replace",updatedContent:{
+     version:3,purpose:"Actor memory",entries:[{key:"experience.wip",category:"fact",value:"User updated WIP monthly for installation projects.",source:"user-stated",confidence:"high",evidenceMessageIds:["m1"],evidenceQuotes:[{messageId:"m1",quote}]}]}})}}]};
+ }}}};
+ const {store,memoryEditor}=loadModules();
+ await store.saveActor({id:"a1",name:"Advisor",purpose:"Help with executive project applications."});
+ await store.saveChat({id:"c1",actorId:"a1",title:"Old",createdAt:"x",updatedAt:"x"});
+ await store.saveChat({id:"c2",actorId:"a1",title:"New",createdAt:"x",updatedAt:"x"});
+ await store.saveMessage("c1",{id:"m1",role:"user",content:quote});
+ await memoryEditor.maybeUpdateLongTermMemory("a1","c1",quote);
+ const retained=await store.getLongTermMemory("a1","c2");
+ assert.equal((retained.entries as any[])[0].source,"user-stated");
+ assert.match(observedPrompt,/Help with executive project applications/);
+ assert.equal((retained.entries as any[])[0].evidenceQuotes[0].messageId,"m1");
+});
