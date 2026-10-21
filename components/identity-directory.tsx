@@ -23,8 +23,18 @@ function IdentityProfile({ actor }: { actor: Actor }) {
     }
   }, [saved.state, actor.managedAgentId, actor.routingProfile?.summary]);
   return (
-    <details className="rounded-xl border border-white/10 p-4">
-      <summary className="cursor-pointer">
+    <div className="rounded-xl border border-white/10 p-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <span className="font-medium">{actor.name}</span>
+        <Link
+          className="inline-flex min-h-11 items-center rounded-lg border border-emerald-400/40 px-3 py-2 text-sm text-emerald-200 hover:bg-emerald-400/10"
+          href={`/specialists/${encodeURIComponent(`persona:${actor.id}`)}#memory-calibration`}
+        >
+          Calibrate memory
+        </Link>
+      </div>
+      <details className="mt-2">
+      <summary className="cursor-pointer text-sm text-zinc-400">Manage actor profile · 
         {actor.name} ·{" "}
         {actor.managedAgentId
           ? "Internal worker"
@@ -107,7 +117,8 @@ function IdentityProfile({ actor }: { actor: Actor }) {
           </p>
         )}
       </div>
-    </details>
+      </details>
+    </div>
   );
 }
 export function IdentityDirectory() {
