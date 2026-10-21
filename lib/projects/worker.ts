@@ -191,10 +191,26 @@ async function advance(p: Project) {
     const attempts = runs.filter(r => r.kind === p.phase && r.milestone_index === p.milestone_index &&
         !r.outcome?.superseded);
     if (attempts.length >= 3 && !p.active_mission_id) {
+        // A checkpoint recovery is a one-time, explicitly budget-fenced
+        // exception to the historical failures watchdog. It authorizes ONE
+        // new specification child, not infinite repeats of a failing phase.
+        let checkpointPending=false;
+        if(game&&p.phase==='specification'){
+            const {data:checkpoints,error:checkpointError}=await getSupabaseAdminClient()
+                .from('project_events').select('created_at')
+                .eq('project_id',p.id).eq('event','game_specification_checkpoint_recovered')
+                .order('created_at',{ascending:false}).limit(1);
+            if(checkpointError)throw Error('Unable to inspect saved checkpoint recovery watchdog');
+            const recoveredAt=((checkpoints??[]) as Array<{created_at:string}>)[0]?.created_at;
+            checkpointPending=Boolean(recoveredAt)&&!runs.some(r=>r.kind==='specification'&&
+                new Date(r.created_at).getTime()>=new Date(recoveredAt).getTime());
+        }
+        if(!checkpointPending){
         const states = await Promise.all(attempts.slice(-3).map(async r => (await readMission(r.mission_id)).mission.status));
         if (states.every(status => status === 'blocked' || status === 'stopped')) {
             await finish('block', { detail: 'Progress watchdog: three consecutive failed '+p.phase+' attempts at the same milestone. Completed evidence and consumed budgets are preserved; an explicit diagnosis or revised scope is required before any further work.' });
             return;
+        }
         }
     }
     // Do not spawn more research or planning jobs when cumulative spend has
