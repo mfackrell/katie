@@ -10,6 +10,7 @@ import type { AgentConfig, AgentTask, ManagedAgent } from "@/lib/agents/policy";
 type TaskView = AgentTask & { output?: string | null; review?: unknown; progress?: unknown };
 type ProjectSummary = { id:string; actorId:string; chatId:string; chatTitle:string; name:string; status:string; phase:string; detail:string|null; milestoneIndex:number; milestoneCount:number; cycles:number; maxCycles:number; updatedAt:string; deadline:string };
 type PendingReply = { taskId: string; turnId: string; expectedRequestId: string; message: string };
+type HandoffPreview = { handoff: { sourceActorId: string; sourceChatId: string; projectId: string }; label: string };
 const replyKey = (taskId: string) => `katie.agentReply.v1.${taskId}`;
 function savedReply(taskId: string): PendingReply | null {
   try {
@@ -43,6 +44,11 @@ export default function AgentsPage() {
   const [agentId, setAgentId] = useState("");
   const [input, setInput] = useState("");
   const [kind, setKind] = useState<"general" | "development">("general");
+  const [carryContext, setCarryContext] = useState(false);
+  const [handoffPreview, setHandoffPreview] = useState<HandoffPreview | null>(null);
+  const [handoffLoading, setHandoffLoading] = useState(false);
+  const [handoffError, setHandoffError] = useState("");
+  const handoffRequest = useRef(0);
   const [repos, setRepos] = useState<{ id: string; full_name: string }[]>([]);
   const [repoId, setRepoId] = useState("");
   const [selected, setSelected] = useState<TaskView | null>(null);
@@ -53,6 +59,60 @@ export default function AgentsPage() {
   const busyRef = useRef(false);
   const creationId = useRef<string | null>(null);
   const [error, setError] = useState("");
+  function clearHandoff() {
+    handoffRequest.current += 1;
+    setCarryContext(false); setHandoffPreview(null); setHandoffLoading(false); setHandoffError("");
+  }
+  async function chooseHandoff(checked: boolean) {
+    clearHandoff();
+    if (!checked) return;
+    const request = handoffRequest.current;
+    setCarryContext(true); setHandoffLoading(true);
+    try {
+      const chatId = window.localStorage.getItem("katie.activeChatId");
+      if (!chatId) throw new Error("Open the source conversation first, then return here to carry its context.");
+      const preview = await api(`/api/agent-tasks?handoffChatId=${encodeURIComponent(chatId)}`) as HandoffPreview;
+      if (request !== handoffRequest.current) return;
+      if (!preview.handoff || preview.handoff.sourceChatId !== chatId || !preview.label)
+        throw new Error("The source conversation’s active task could not be verified.");
+      if (window.localStorage.getItem("katie.activeChatId") !== chatId)
+        throw new Error("The current conversation changed. Select its context again.");
+      setHandoffPreview(preview);
+    } catch (e) {
+      if (request === handoffRequest.current) { setCarryContext(false); setHandoffError(e instanceof Error ? e.message : "Conversation context unavailable."); }
+    } finally { if (request === handoffRequest.current) setHandoffLoading(false); }
+  }
+  useEffect(() => {
+    const invalidate = () => {
+      if (handoffPreview && window.localStorage.getItem("katie.activeChatId") !== handoffPreview.handoff.sourceChatId) {
+        clearHandoff(); setHandoffError("The current conversation changed. Select its context again.");
+      }
+    };
+    window.addEventListener("storage", invalidate); window.addEventListener("focus", invalidate);
+    return () => { window.removeEventListener("storage", invalidate); window.removeEventListener("focus", invalidate); };
+  }, [handoffPreview]);
+  async function createTask() {
+    let handoff: HandoffPreview["handoff"] | undefined;
+    if (kind === "general" && carryContext) {
+      if (handoffLoading || !handoffPreview) throw new Error("Wait for the source context to be verified.");
+      const chatId = window.localStorage.getItem("katie.activeChatId");
+      if (chatId !== handoffPreview.handoff.sourceChatId) {
+        clearHandoff(); throw new Error("The current conversation changed. Select its context again.");
+      }
+      const current = await api(`/api/agent-tasks?handoffChatId=${encodeURIComponent(chatId)}`) as HandoffPreview;
+      if (window.localStorage.getItem("katie.activeChatId") !== chatId ||
+          current.handoff?.sourceActorId !== handoffPreview.handoff.sourceActorId ||
+          current.handoff?.sourceChatId !== handoffPreview.handoff.sourceChatId ||
+          current.handoff?.projectId !== handoffPreview.handoff.projectId || current.label !== handoffPreview.label) {
+        clearHandoff(); throw new Error("The active task changed. Select its context again before saving.");
+      }
+      handoff = current.handoff;
+    }
+    const id = creationId.current ??= crypto.randomUUID();
+    const result = await api("/api/agent-tasks", { action: "create", id, agentId, input, kind,
+      ...(kind === "development" ? { repositoryId: repoId } : {}), ...(handoff ? { handoff } : {}) });
+    select(result.task); creationId.current = null; setInput(""); clearHandoff(); await load();
+  }
   async function loadProjects() {
     try {
       const result = await api("/api/projects/overview") as {projects:ProjectSummary[]};
@@ -207,12 +267,19 @@ export default function AgentsPage() {
             </form>
           </section>
           <section className="space-y-4 rounded-xl border border-white/10 p-4" aria-labelledby="task-title"><h2 id="task-title" className="text-lg">Assign a task</h2>
-            <form className="space-y-3" onSubmit={event => { event.preventDefault(); void work(async () => { const id = creationId.current ??= crypto.randomUUID(); const result = await api("/api/agent-tasks", { action: "create", id, agentId, input, kind, ...(kind === "development" ? { repositoryId: repoId } : {}) }); select(result.task); creationId.current = null; setInput(""); await load(); }); }}>
+            <form className="space-y-3" onSubmit={event => { event.preventDefault(); void work(createTask); }}>
               <label className="block">Agent<select aria-label="Agent" className={field} value={agentId} required onChange={e => setAgentId(e.target.value)}><option value="">Choose an agent</option>{agents.filter(a => !a.archived).map(a => <option key={a.id} value={a.id}>{a.config.name}</option>)}</select></label>
-              <label className="block">Task type<select aria-label="Task type" className={field} value={kind} onChange={e => setKind(e.target.value as typeof kind)}><option value="general">Research, analysis, finance, writing or code assistance</option><option value="development">Autonomous software development</option></select></label>
+              <label className="block">Task type<select aria-label="Task type" className={field} value={kind} onChange={e => { setKind(e.target.value as typeof kind); clearHandoff(); }}><option value="general">Research, analysis, finance, writing or code assistance</option><option value="development">Autonomous software development</option></select></label>
               {kind === "development" && <label className="block">Connected repository<select aria-label="Connected repository" className={field} value={repoId} required onChange={e => setRepoId(e.target.value)}><option value="">Choose repository</option>{repos.map(r => <option key={r.id} value={r.id}>{r.full_name}</option>)}</select></label>}
+              {kind === "general" && <div className="space-y-2 rounded-lg border border-white/10 p-3">
+                <label className="flex items-center gap-2"><input type="checkbox" checked={carryContext} disabled={busy || handoffLoading} onChange={e => void chooseHandoff(e.target.checked)} />Carry current conversation context</label>
+                <p className="text-xs text-zinc-400">Include the active task’s requirements, decisions and confirmed facts for the selected specialist.</p>
+                {handoffLoading && <p role="status" className="text-sm">Verifying source context…</p>}
+                {handoffPreview && <div className="text-sm"><p className="font-medium">Active task to carry:</p><p className="whitespace-pre-wrap break-words">{handoffPreview.label}</p><Link className="underline" href={`/conversations/${encodeURIComponent(handoffPreview.handoff.sourceChatId)}`}>View source conversation</Link></div>}
+                {handoffError && <p role="alert" className="text-sm text-amber-200">{handoffError}</p>}
+              </div>}
               <label className="block">Task instructions<textarea className={field} value={input} rows={5} required maxLength={agents.find(a => a.id === agentId)?.config.maxInputChars ?? 16000} onChange={e => setInput(e.target.value)} /></label>
-              <button className={button} disabled={busy}>Save task for approval</button>
+              <button className={button} disabled={busy || handoffLoading || (carryContext && !handoffPreview)}>Save task for approval</button>
             </form>
             <h3>Task history</h3>{!tasks.length && <p>No saved tasks yet.</p>}
             <ul className="max-h-80 space-y-2 overflow-y-auto">{tasks.map(t => <li key={t.id}><button className={`${button} w-full text-left`} disabled={busy} onClick={() => void work(() => inspect(t.id))}>{t.snapshot.name} · {t.initial_input.slice(0, 90)} · {t.status}</button></li>)}</ul>

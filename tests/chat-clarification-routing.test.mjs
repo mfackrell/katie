@@ -547,7 +547,7 @@ test('actual route restores original drafts on resume and subsequent same-projec
       ${code(resumeNode)}
       return history;
     })()`), {
-      Map, Set, contextClassification:{projectTransition:transition},
+      Map, Set, currentAgentTask:()=>null, contextClassification:{projectTransition:transition},
       taskProgressUserMessageId:currentUserId,
       actorId:ACTOR_ID, chatId:CHAT_ID, currentHistory:recentHistory,
       pdfProgress:{projectContext:{userMessageId:'project-a'},projects:[{projectContext:{userMessageId:'project-a'},sourceChatId:'original-chat'}]},
