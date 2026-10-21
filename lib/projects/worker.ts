@@ -236,6 +236,32 @@ async function advance(p: Project) {
                 projectEvidence={...(projectEvidence as Record<string,unknown>),recoveryReview:{sourceMissionId:note.sourceMissionId,findings:note.findings.slice(0,2200),instruction:'Correct these independent review findings. Full prior evidence remains saved; do not repeat research or assume approval.'}};
         }
         if(game){
+            // A prior composition is a checkpoint, not an approved specification.
+            // Reuse only a server-saved candidate and require the normal fresh
+            // independent review on this new mission.
+            const {data:checkpoints,error:checkpointError}=await getSupabaseAdminClient()
+              .from('project_events').select('data').eq('project_id',p.id)
+              .eq('event','game_specification_checkpoint_recovered')
+              .order('created_at',{ascending:false}).limit(1);
+            if(checkpointError)throw Error('Game checkpoint recovery evidence unavailable');
+            const checkpoint=((checkpoints??[]) as Array<{data?:{sourceJobId?:string;sourceMissionId?:string}}>)[0]?.data;
+            if(checkpoint?.sourceJobId){
+                const {data:composition,error:compositionError}=await getSupabaseAdminClient()
+                  .from('mission_assignments').select('status,role,result')
+                  .eq('id',checkpoint.sourceJobId).maybeSingle<{status:string;role:string;result:{text?:string}|null}>();
+                if(compositionError||composition?.status!=='completed'||composition.role!=='compose'||
+                   typeof composition.result?.text!=='string')throw Error('Saved game composition checkpoint invalid');
+                projectEvidence={...(projectEvidence as Record<string,unknown>),
+                    savedSpecificationCheckpoint:{
+                      sourceMissionId:checkpoint.sourceMissionId,
+                      sourceJobId:checkpoint.sourceJobId,
+                      text:composition.result.text,
+                      status:'unreviewed',
+                      instruction:'Reuse the exact saved candidate only if it still validates. A separate independent reviewer must verify every original requirement; this checkpoint is not approval.'
+                    }};
+            }
+        }
+        if(game){
             const {data:events,error}=await getSupabaseAdminClient().from('project_events')
               .select('data').eq('project_id',p.id).eq('event','game_rule_coverage_recovered')
               .order('created_at',{ascending:false}).limit(1);
@@ -262,7 +288,7 @@ async function advance(p: Project) {
         // Keep the complete independently reviewed research as structured evidence,
         // not a second copy inside the 12 KB mission instruction. The original
         // user objective remains unchanged and authoritative.
-        objective = bounded(`${source}\n\nREVIEWED RESEARCH: The complete independently reviewed research is supplied in projectEvidence.reviewedResearch; use it without repeating it in the instruction.\n\n${gamePlanning} Produce ONLY the requested project specification JSON, not code. Preserve every original requirement. Plan one to six cumulative coding milestones. Each milestone needs a phase-specific real browser contract for that increment; the final milestone contract MUST equal finalContract and cover the entire integrated original goal, including all required AI, human play, persistence and backend behavior. Earlier contracts may test partial milestones; they never replace the final requirements. Use isolated app/source/test paths, no dependencies/secrets/production resources. Include concrete DOM selectors and expected exact rendered states, interaction sequences, invalid-action boundaries and reload behavior as appropriate. Each scenario must assert actual application state. Each scenario starts in a fresh browser context with empty application storage; navigation within the same scenario preserves localStorage, so test persistence with multiple steps in that one scenario. Output {name,summary,requirements,allowedPaths,milestones:[{title,instruction,contract:{path,scenarios:[{name,steps:[{action,selector?,value?,path?}]}]}}],finalContract}. Actions: goto(path), click(selector), fill(selector,value), expectVisible(selector), expectText(selector,value). At most 100 steps per contract, 20 scenarios, each scenario at least one assertion. All navigation local paths only. allowedPaths must be narrow filenames or isolated directory prefixes ending in /. Do not scope the entire Katie application. ${game?'Also include game:{enginePath,rules,acceptance}. The final milestone executes all registered model scenarios; earlier browser contracts may cover partial increments. enginePath must be a self-contained .ts or .mjs file exporting transition(state,action); no imports or side effects. rules={schemaVersion:1,game:{id,title,edition,kind:"original"|"reproduction"},sources:[{id,kind:"user"|"official"|"authorized_reference"|"other",reference,edition?}],rules:[{id,description,category,status:"verified"|"approved_interpretation"|"unresolved",sourceIds:[]}],unknowns:[{id,question,status:"open"|"resolved",blocking:boolean,ruleIds:[existingRuleId],decisionSourceId?}],invariants:[{id,description,ruleIds:[]}],stateModel:{initialState,phases:[]}}. acceptance={schemaVersion:1,gameId,scenarios:[{id,description,kind:"model"|"browser",ruleIds:[],invariantIds:[],steps:[]}]}. Every approved rule must have scenario coverage. Include both model and browser scenarios. Model steps are {action:{type,...},expectedState:<exact full state>}; each scenario starts at initialState. Browser steps use the existing browser actions. finalContract.scenarios MUST exactly equal browser scenarios mapped to {name:id,steps}. For unknowns, use [] if none; every nonempty entry MUST include question, status, blocking, nonempty ruleIds referencing existing rules, and decisionSourceId for resolved entries. Do not substitute description for question. Nonblocking unknowns cannot replace decisions affecting game mechanics. Resolve blocking unknowns before coding. Use stable lowercase IDs.':''} Return a complete specification satisfying the original user outcome; ambiguities require clarification rather than guessed gameplay.`);
+        objective = bounded(`${source}\n\nREVIEWED RESEARCH: The complete independently reviewed research is supplied in projectEvidence.reviewedResearch; use it without repeating it in the instruction.\n\n${gamePlanning} Produce ONLY the requested project specification JSON, not code. Preserve every original requirement. Plan one to six cumulative coding milestones. Each milestone needs a phase-specific real browser contract for that increment; the final milestone contract MUST equal finalContract and cover the entire integrated original goal, including all required AI, human play, persistence and backend behavior. Earlier contracts may test partial milestones; they never replace the final requirements. Use isolated app/source/test paths, no dependencies/secrets/production resources. Include concrete DOM selectors and expected exact rendered states, interaction sequences, invalid-action boundaries and reload behavior as appropriate. Each scenario must assert actual application state. Each scenario starts in a fresh browser context with empty application storage; navigation within the same scenario preserves localStorage, so test persistence with multiple steps in that one scenario. Output {name,summary,requirements,allowedPaths,milestones:[{title,instruction,contract:{path,scenarios:[{name,steps:[{action,selector?,value?,path?}]}]}}],finalContract}. Actions: goto(path), click(selector), fill(selector,value), expectVisible(selector), expectText(selector,value). At most 100 steps per contract, 20 scenarios, each scenario at least one assertion. All navigation local paths only. allowedPaths must be narrow filenames or isolated directory prefixes ending in /. Do not scope the entire Katie application. ${game?'Include game:{enginePath,rules,acceptance} validated by the server. Implement a pure transition(state,action) engine in a self-contained .ts or .mjs file without imports or side effects. Register full rules, sources, unknowns, invariants, state model and model/browser acceptance; every approved rule needs scenario coverage. Browser acceptance scenarios must exactly match finalContract.scenarios with full steps. Do not guess blocking mechanics, omit required assertions, or use unresolved questions as substitutes for requirements.':''} Return a complete specification satisfying the original user outcome; ambiguities require clarification rather than guessed gameplay.`);
     }
     else if (p.phase === 'development') {
         if (!p.spec || !p.approved_hash || p.approved_hash !== p.approval_hash)
@@ -329,10 +355,10 @@ async function reconcileBlockedGameRevisions(){
     const db=getSupabaseAdminClient();
     const {data,error}=await db.from('work_projects').select('id')
       .eq('status','blocked').eq('profile','game').eq('phase','specification')
-      .order('updated_at',{ascending:false}).limit(2);
+      .order('updated_at',{ascending:false}).limit(20);
     if(error)throw Error('Blocked game revision recovery index unavailable');
     for(const p of (data??[]) as Array<{id:string}>){
-        if(await projectRpc<boolean>('recover_game_revision_timeout',{p_id:p.id}) || await projectRpc<boolean>('recover_game_rule_coverage',{p_id:p.id}) || await projectRpc<boolean>('recover_bounded_game_review',{p_id:p.id}) || await projectRpc<boolean>('recover_mission_credit_failure',{p_id:p.id})){
+        if(await projectRpc<boolean>('recover_game_revision_timeout',{p_id:p.id}) || await projectRpc<boolean>('recover_game_rule_coverage',{p_id:p.id}) || await projectRpc<boolean>('recover_bounded_game_review',{p_id:p.id}) || await projectRpc<boolean>('recover_mission_credit_failure',{p_id:p.id}) || await projectRpc<boolean>('recover_game_specification_checkpoint',{p_id:p.id})){
             console.info('[Projects] Saved game revision timeout recovered without resetting charges',{project:p.id});
             return true;
         }

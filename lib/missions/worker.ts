@@ -52,7 +52,12 @@ export async function executeClaim(claim:Claim,model=missionModel){
  const rejectedDraft=repair();
  const coverageRepair=rejectedDraft?.specification&&typeof job.result?.rejectedSpecification==='string'?gameCoverageRepair(projectPlanSchema.parse(parseJSON(job.result.rejectedSpecification))):null;
  const context=()=>{
-  const data={objective:mission.objective,projectPhase:mission.project_kind,projectEvidence:rejectedDraft?undefined:researchRecoveryEvidence(mission.project_evidence,true),assignedSourceGroup:typeof job.payload.executiveSourceGroup==='number'?sourceGroups[job.payload.executiveSourceGroup]:undefined,rejectedDraft,coverageRepair,assignment:job.instruction,sourceDigestContractFeedback:job.result?.sourceDigestContractFeedback,specificationValidationFeedback:job.result?.specificationValidationFeedback,evidence:completed.filter(j=>j.role!=='plan'&&j.role!=='review').map(j=>({key:j.job_key,instruction:j.instruction,result:candidateEvidence(j.result)}))};
+  const data={objective:mission.objective,projectPhase:mission.project_kind,projectEvidence:rejectedDraft?undefined:(job.role==='compose'
+     ?researchRecoveryEvidence(mission.project_evidence,true)
+     :(()=>{const raw=researchRecoveryEvidence(mission.project_evidence,false);
+       if(!raw||typeof raw!=='object'||Array.isArray(raw))return raw;
+       return Object.fromEntries(Object.entries(raw as Record<string,unknown>)
+         .filter(([key])=>key!=='savedSpecificationCheckpoint'));})()),assignedSourceGroup:typeof job.payload.executiveSourceGroup==='number'?sourceGroups[job.payload.executiveSourceGroup]:undefined,rejectedDraft,coverageRepair,assignment:job.instruction,sourceDigestContractFeedback:job.result?.sourceDigestContractFeedback,specificationValidationFeedback:job.result?.specificationValidationFeedback,evidence:completed.filter(j=>j.role!=='plan'&&j.role!=='review').map(j=>({key:j.job_key,instruction:j.instruction,result:candidateEvidence(j.result)}))};
   // Keep the complete rejected draft in storage, never let it crowd the original
   // requirements out of a bounded repair request. Diagnostics remain actionable.
   const suffix=job.role==='revise'?'\nReview findings: '+JSON.stringify(priorReviews):'';
@@ -67,6 +72,22 @@ export async function executeClaim(claim:Claim,model=missionModel){
  const finalWork=job.role==='compose'||job.role==='revise';
  const persona=frame+'\nSaved responsibilities: '+agent.config.instructions+'\n'+(finalWork?getObjectiveFirstInstruction():'Complete only input.assignment. The full objective is context for that assignment, not a request to perform the other workers’ assignments or compose the whole deliverable. Do not delegate, write a new plan, repeat unassigned calculations or recommendations, or offer future work.');
  const commit=(result:Record<string,unknown>,children:Child[]=[],status='completed',missionStatus:string|null=null,final:string|null=null)=>rpc<boolean>('commit_mission_work',{p_id:job.id,p_lease:job.lease,p_result:result,p_children:children,p_status:status,p_mission_status:missionStatus,p_final:final});
+ // A project recovery may point to a server-verified saved composition.
+ // This avoids paying for another draft; independent review still executes.
+ if(job.role==='compose'&&mission.project_kind==='specification'&&
+    (mission.project_evidence as {projectProfile?:string}|null)?.projectProfile==='game'){
+   const checkpoint=(mission.project_evidence as {savedSpecificationCheckpoint?:{text?:string;status?:string}}|null)?.savedSpecificationCheckpoint;
+   if(checkpoint?.status==='unreviewed'&&typeof checkpoint.text==='string'){
+     try{
+       const candidate=validateProjectPlan(parseJSON(checkpoint.text));
+       if(candidate.game){
+         await commit({text:JSON.stringify(candidate),sources:[],calculations:[],
+           recovery:{kind:'saved_composition_checkpoint',freshReviewRequired:true}});
+         return;
+       }
+     }catch{/* Invalid checkpoint: compose again against the original objective. */}
+   }
+ }
  // After a platform validation fix, reuse a now-valid saved draft rather than
  // spend another inference rewriting it. Independent review still runs normally.
  if(finalWork&&mission.project_kind==='specification'&&(mission.project_evidence as {projectProfile?:string}|null)?.projectProfile==='game'&&typeof job.result?.rejectedSpecification==='string'){

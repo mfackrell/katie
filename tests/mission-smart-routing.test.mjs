@@ -3,14 +3,16 @@ import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import vm from 'node:vm';
 import ts from 'typescript';
+import {shouldFallbackIncompleteReview} from '../lib/missions/review-fallback.mjs';
 const source=readFileSync('lib/missions/model.ts','utf8');
-function loadRouterFixture({failPrimary=false,allow=true}={}){
+function loadRouterFixture({failPrimary=false,incompletePrimary=false,allow=true}={}){
  let calls=[],reserve=[],chosen=0;
  const first={name:'google',generate:async p=>{calls.push(['google',p.modelId]);if(failPrimary){const err=Error('quota');err.status=429;err.code='insufficient_quota';throw err;}return{text:'valid model result',model:p.modelId,provider:'google',usage:{totalTokens:65}};}};
  const second={name:'anthropic',generate:async p=>{calls.push(['anthropic',p.modelId]);return{text:'recovered verified text',model:p.modelId,provider:'anthropic',usage:{totalTokens:72}};}};
  const out=ts.transpileModule(source,{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022,esModuleInterop:true}}).outputText,exports={};
- const require=name=>name==='@/lib/orchestration/routing'?{orchestrationChoices:async()=>{chosen++;return[{provider:first,modelId:'gemini-3.1-pro',reasoning:'fixture'},{provider:second,modelId:'claude-sonnet-4-6',reasoning:'fixture'}];},orchestrationFailure:async()=> 'provider'}
- :name==='@/lib/orchestration/bounded-provider'?{boundedProvider:choice=>({post:async()=>({input_tokens:20}),responses:{create:async request=>{const r=await choice.provider.generate({modelId:request.model});return{status:'completed',output_text:r.text,output:[],usage:{total_tokens:r.usage.totalTokens}};}}})}
+ const require=name=>name==='./review-fallback.mjs'?{shouldFallbackIncompleteReview}
+ :name==='@/lib/orchestration/routing'?{orchestrationChoices:async()=>{chosen++;return[{provider:first,modelId:'gemini-3.1-pro',reasoning:'fixture'},{provider:second,modelId:'claude-sonnet-4-6',reasoning:'fixture'}];},orchestrationFailure:async()=> 'provider'}
+ :name==='@/lib/orchestration/bounded-provider'?{boundedProvider:choice=>({post:async()=>({input_tokens:20}),responses:{create:async request=>{const r=await choice.provider.generate({modelId:request.model});return{status:incompletePrimary&&choice.provider===first?'incomplete':'completed',incomplete_details:{reason:'provider_interrupted'},output_text:r.text,output:[],usage:{total_tokens:r.usage.totalTokens}};}}})}
  :name==='./request-budget'?{fitsMissionEnvelope:()=>true,missionExecutionDeadline:()=>Date.now()+240000,missionAttemptTimeout:()=>90000,MissionAdmissionError:class extends Error{},explainAdmissionDenial:async()=>{throw Error('Worker no longer authorized or mission allowance exhausted');}}
  :name==='@/lib/orchestration/request-rejection'?{rejectedBeforeInference:()=>false}
  :name==='@/lib/providers'?{getAvailableProviders:()=>[first,second]}
@@ -39,4 +41,11 @@ test('mission router uses ranked chain only after eligible provider failure',asy
 });
 test('no provider call when mission budget disallows reservation',async()=>{
  const t=loadRouterFixture({allow:false});await assert.rejects(t.run(),/budget|allowance/);assert.equal(t.calls.length,0);
+});
+
+test('incomplete independent review falls back to the next capable model without discarding charges',async()=>{
+ const t=loadRouterFixture({incompletePrimary:true});const result=await t.run();
+ assert.equal(result.provider,'anthropic');
+ assert.deepEqual(t.calls.map(c=>c[0]),['google','anthropic']);
+ assert.equal(t.reserve.length,2);
 });
