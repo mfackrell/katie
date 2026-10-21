@@ -335,6 +335,9 @@ try {
   await page.getByLabel("Active chats for Operations", { exact: true }).selectOption(c);
   await composer.waitFor();
   assert.ok(page.url().endsWith("/conversations/" + c));
+  // A modern conversation must become the source offered by Advanced handoff.
+  assert.equal(await page.evaluate(() => localStorage.getItem("katie.activeChatId")), c);
+  assert.equal(await page.evaluate(() => localStorage.getItem("katie.activeActorId")), chats.find(chat => chat.id === c).actorId);
   await page.getByRole("link", { name: "Specialists", exact: true }).click();
   await page.getByRole("button", { name: "+ Create agent", exact: true }).click();
   await page.getByLabel("Agent name", { exact: true }).fill("Fixture specialist");
