@@ -219,7 +219,7 @@ function loadModules() {
 function supportResponse(params: any) {
   if (!params.messages?.[0]?.content.startsWith("Independently review durable memory support")) return undefined;
   const { candidates } = JSON.parse(params.messages[1].content);
-  return { choices: [{ message: { content: JSON.stringify({ verdicts: candidates.map((entry: any) => ({ key: entry.key, supported: true, reason: "Test reviewer accepts source support" })) }) } }] };
+  return { choices: [{ message: { content: JSON.stringify({ verdicts: candidates.map((entry: any) => ({ key: entry.key, supported: true, durable: true, reason: "Test reviewer accepts source support" })) }) } }] };
 }
 
 function createMockMemoryEditorClient(responseContent: string) {
@@ -580,7 +580,7 @@ test("automatic memory repair satisfies provider JSON mode and saves only repair
  await store.setLongTermMemory("a1","c1",memory(fact("existing","Existing durable experience.")));
  await store.saveMessage("c1",{id:"m1",role:"user",content:quote});
  await memoryEditor.maybeUpdateLongTermMemory("a1","c1",quote);
- assert.equal(calls,3,"Invalid initial evidence must enter repair and independent support review");
+ assert.equal(calls,4,"Invalid initial evidence must enter repair and both independent support reviews");
  const entries=(await store.getLongTermMemory("a1","other-chat")).entries as any[];
  assert.equal(entries.length,2,"Repair preserves unrelated durable knowledge");
  const saved=entries.find(value=>value.key===entry.key);
@@ -603,7 +603,7 @@ for (const verdictMode of ["unsupported", "missing", "duplicate", "unknown", "st
    if(system.startsWith("Independently review")) {
     const data=JSON.parse(params.messages[1].content);
     assert.equal(data.userContext.some((message:any)=>message.content.includes("ASSISTANT DRAFT")),false);
-    const good={key:valid.key,supported:true,reason:"Cited user fact retains fictional subject"};
+    const good={key:valid.key,supported:true,durable:true,reason:"Cited user fact retains fictional subject"};
     const bad={key:invalid.key,supported:false,reason:"Editing instruction does not support draft claims or real-user attribution"};
     result={verdicts:[good,...(verdictMode==="missing"?[]:verdictMode==="duplicate"?[{...bad,supported:true},{...bad,supported:true}]:verdictMode==="unknown"?[{...bad,key:"invented",supported:true}]:verdictMode==="string-boolean"?[{...bad,supported:"true"}]:[bad])]};
     if(verdictMode==="invalid-json") return {choices:[{message:{content:"not JSON"}}]};
@@ -642,7 +642,7 @@ test("semantic repair must cite original user facts and retain fictional qualifi
   if(system.startsWith("Independently review")){
    reviews++;
    const candidate=JSON.parse(params.messages[1].content).candidates[0];
-   result={verdicts:[{key:wrong.key,supported:candidate.value===corrected.value&&candidate.evidenceMessageIds[0]==="m1",reason:"Must preserve fictional subject and cite factual user statement"}]};
+   result={verdicts:[{key:wrong.key,supported:candidate.value===corrected.value&&candidate.evidenceMessageIds[0]==="m1",durable:true,reason:"Must preserve fictional subject and cite factual user statement"}]};
   } else if(system.startsWith("You are repairing")){
    repairs++;
    assert.match(params.messages[1].content,/Must preserve fictional subject/);
@@ -660,7 +660,7 @@ test("semantic repair must cite original user facts and retain fictional qualifi
  const entries=(await store.getLongTermMemory("a1","different-chat")).entries as any[];
  assert.equal(entries[0].value,corrected.value);
  assert.deepEqual(entries[0].evidenceMessageIds,["m1"]);
- assert.equal(reviews,2);
+ assert.equal(reviews,3);
  assert.equal(repairs,1);
 });
 
@@ -674,7 +674,7 @@ test("literal fictional source cannot become real-user experience and repair out
   const system=params.messages[0].content;
   if(system.startsWith("You are repairing")) throw new Error("Repair provider unavailable");
   const result=system.startsWith("Independently review")?{verdicts:[
-   {key:qualified.key,supported:true,reason:"Fictional qualifier preserved"},
+   {key:qualified.key,supported:true,durable:true,reason:"Fictional qualifier preserved"},
    {key:wrong.key,supported:false,reason:"Exact source explicitly excludes Mark"},
   ]}:{action:"replace",updatedContent:memory(qualified,wrong)};
   return {choices:[{message:{content:JSON.stringify(result)}}]};
@@ -686,4 +686,46 @@ test("literal fictional source cannot become real-user experience and repair out
  await memoryEditor.maybeUpdateLongTermMemory("a1","c1",source);
  const entries=(await store.getLongTermMemory("a1","different-chat")).entries as any[];
  assert.deepEqual(entries.map(entry=>entry.key),[qualified.key]);
+});
+
+test("actual Juniper draft cannot borrow uncited career history, and sourced resume instruction is not durable", async()=>{
+ const state=makeState();
+ (globalThis as any).__KATIE_SUPABASE_ADMIN_CLIENT__=createFakeClient(state);
+ const history="Fictional candidate experience: at Ridge Utilities, reduced close from twelve days to seven; at Cedar Distribution, reduced forecast preparation from ten days to four.";
+ const request="Start a separate application D: Finance Transformation Lead at Juniper Manufacturing, a new application distinct from C. The client needs faster finance processes, reliable data reconciliation, and repeatable management reporting. It is not recruiting for a construction-accounting or lender-reporting mandate. Using only the previously confirmed fictional candidate accomplishments, choose the two strongest examples and explain their relevance in a short application answer. Keep applications A and B available for later.";
+ const quote="Start a separate application D: Finance Transformation Lead at Juniper Manufacturing, a new application distinct from C. The client needs faster finance processes, reliable data reconciliation, and repeatable management reporting.";
+ const draft={...fact("application.D.Juniper.Manufacturing","For the Finance Transformation Lead position at Juniper Manufacturing, I can leverage my experience to meet the client's needs for faster finance processes and reliable data reconciliation. At Ridge Utilities, I cut the monthly close from twelve days to seven by rebuilding cost coding and reconciling the subledger to the general ledger, demonstrating my ability to tighten reconciliation and speed core finance processes. Additionally, at Cedar Distribution, I built an integrated income statement, balance sheet, and cash-flow forecast, reducing forecast preparation from ten days to four, which shows my capability in creating repeatable reporting structures and faster planning cycles. I would apply these approaches at Juniper to enhance efficiency and reliability in finance operations."),evidenceMessageIds:["request"],evidenceQuotes:[{messageId:"request",quote}]};
+ const instruction={...draft,key:"application.instruction",value:quote};
+ const genuine={...fact("fixture.ridge","The fictional candidate reduced close from twelve days to seven at Ridge Utilities."),evidenceMessageIds:["history"],evidenceQuotes:[{messageId:"history",quote:history}]};
+ const calls:string[]=[];
+ (globalThis as any).__KATIE_LONG_TERM_MEMORY_OPENAI_CLIENT__={chat:{completions:{async create(params:any){
+  const system=params.messages[0].content;
+  let result:any;
+  if(system.startsWith("Independently review")){
+   const payload=JSON.parse(params.messages[1].content);
+   if(system.includes("(source)")) {
+    for (const candidate of payload.candidates) {
+     calls.push(candidate.key);
+     assert.deepEqual(payload.userContext.map((message:any)=>message.id),candidate.evidenceMessageIds);
+     if(candidate.key===draft.key) assert.equal(JSON.stringify(payload.userContext).includes("at Ridge Utilities"),false,"Uncited true facts must be structurally absent");
+    }
+    result={verdicts:payload.candidates.map((candidate:any)=>({key:candidate.key,supported:candidate.key!==draft.key,durable:candidate.key===genuine.key,reason:"Cited evidence and independent durability judgment"}))};
+   } else {
+    assert.deepEqual(payload.candidates.map((candidate:any)=>candidate.key),[genuine.key],"Context stage cannot rescue a failed source or durability decision");
+    result={verdicts:[{key:genuine.key,supported:true,durable:true,reason:"Fictional qualification retained"}]};
+   }
+  } else if(system.startsWith("You are repairing")) result={action:"no_change"};
+  else result={action:"replace",updatedContent:memory(draft,instruction,genuine)};
+  return {choices:[{message:{content:JSON.stringify(result)}}]};
+ }}}};
+ const {store,memoryEditor}=loadModules();
+ await store.saveActor({id:"a1",name:"Advisor",purpose:"Applications"});
+ await store.saveChat({id:"c1",actorId:"a1",title:"Test",createdAt:"x",updatedAt:"x"});
+ await store.saveMessage("c1",{id:"history",role:"user",content:history,createdAt:"2026-01-01T00:00:00Z"});
+ await store.saveMessage("c1",{id:"reply",role:"assistant",content:"Acknowledged",createdAt:"2026-01-01T00:00:01Z"});
+ await store.saveMessage("c1",{id:"request",role:"user",content:request,createdAt:"2026-01-01T00:00:02Z"});
+ await memoryEditor.maybeUpdateLongTermMemory("a1","c1",request);
+ const entries=(await store.getLongTermMemory("a1","other-chat")).entries as any[];
+ assert.deepEqual(entries.map(entry=>entry.key),[genuine.key]);
+ assert.equal(calls.length,3);
 });
