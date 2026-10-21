@@ -5,7 +5,7 @@ import vm from 'node:vm';
 import ts from 'typescript';
 import {shouldFallbackIncompleteReview} from '../lib/missions/review-fallback.mjs';
 const source=readFileSync('lib/missions/model.ts','utf8');
-function loadRouterFixture({failPrimary=false,incompletePrimary=false,allow=true}={}){
+function loadRouterFixture({failPrimary=false,incompletePrimary=false,allow=true,acceptance=false}={}){
  let calls=[],reserve=[],chosen=0;
  const first={name:'google',generate:async p=>{calls.push(['google',p.modelId]);if(failPrimary){const err=Error('quota');err.status=429;err.code='insufficient_quota';throw err;}return{text:'valid model result',model:p.modelId,provider:'google',usage:{totalTokens:65}};}};
  const second={name:'anthropic',generate:async p=>{calls.push(['anthropic',p.modelId]);return{text:'recovered verified text',model:p.modelId,provider:'anthropic',usage:{totalTokens:72}};}};
