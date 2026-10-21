@@ -174,3 +174,16 @@ test('an unlinked saved proposal reuses its deadline, budget and criteria rather
  assert.ok(calls.some(c=>c.name==='create_mission'));assert.ok(calls.some(c=>c.name==='control_mission'));
  assert.equal(calls.find(c=>c.kind==='update'&&c.table==='agent_missions').value.token_allowance,existing.budget_tokens);
 });
+
+test('structured repository scope keeps prohibitions from becoming access requirements',async()=>{
+ const {factory,calls}=setup({registered:{slug:'operations',status:'active',capabilities:['operations_analysis']}});
+ const response=await factory.startSpecialistAssignment({actorId:'actor',chatId:'chat',requestId:'isolated',requiresRepository:false,
+  message:'Ask the operations orchestrator to analyze the synthetic service desk. No external research, repository changes, or new specialist creation.'});
+ assert.match(response,/Executive assigned operations/);
+ const mission=calls.find(c=>c.name==='create_mission');assert.equal(mission.args.p_repository,null);
+ assert.match(mission.args.p_objective,/No external research, repository changes/);
+ assert.equal(mission.args.p_agents.includes('developer'),false);
+ const denied=await factory.startSpecialistAssignment({actorId:'actor',chatId:'chat',requestId:'actual-code',requiresRepository:false,
+  message:'Ask the operations orchestrator to implement the backend and deploy the application.'});
+ assert.match(denied,/Select a verified connected repository/);
+});

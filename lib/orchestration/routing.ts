@@ -51,7 +51,10 @@ export async function orchestrationChoices(input:{objective:string;instruction:s
   'Autonomous assignment. Choose the strongest available model/submodel for this exact task, not the cheapest default. '+
   (input.research?'Native live web search with cited receipts required. ':'')+
   (input.review?'Independent substantive verification; prioritize reasoning depth. ':''),providers,{
-   routingRequestId:input.requestId,candidateAllowed:(provider,model)=>inventory.get(provider)?.has(model.replace(/^models\//,''))===true,diverseFallbackProviders:true,decisionCandidatesPerProvider:4,
+   // Native token counting, reservation, generation and settlement must finish
+   // before the router abandons a decision. The ordinary chat 12s race used to
+   // discard charged, successful responses and start overlapping fallbacks.
+   routingRequestId:input.requestId,decisionTimeoutMs:60000,candidateAllowed:(provider,model)=>inventory.get(provider)?.has(model.replace(/^models\//,''))===true,diverseFallbackProviders:true,decisionCandidatesPerProvider:4,
    ...(input.research?{requestIntent:'web-search' as const}:input.review?{requestIntent:'assistant-reflection' as const}:input.planning?{requestIntent:'architecture-review' as const}:input.synthesis?{requestIntent:'general-text' as const}:{})
 
   });

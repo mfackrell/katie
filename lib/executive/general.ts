@@ -36,7 +36,7 @@ async function sendAssignment(row:Pick<RecordRow,'actor_id'|'chat_id'>,assignmen
  const message='Ask the '+assignment.slug.replaceAll('_',' ')+' orchestrator to '+normalized+(assignment.requiresRepository?' Inspect the connected repository read-only; do not modify it.':'');
  const reply=await startSpecialistAssignment({
   actorId:row.actor_id,chatId:row.chat_id,requestId:assignment.requestId,
-  message,activeRepoId,sourceMissionIds:assignment.sourceMissionIds
+  message,activeRepoId,requiresRepository:assignment.requiresRepository,sourceMissionIds:assignment.sourceMissionIds
  });
  const missionId=reply?.match(missionPattern)?.[1]??await recoverMissionId(assignment.requestId);
  if(missionId){assignment.missionId=missionId;return;}
