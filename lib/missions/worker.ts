@@ -107,9 +107,9 @@ export async function executeClaim(claim:Claim,model=missionModel,options?:{save
   const sourceForReview=typeof authoritativeBrief==='string'?mission.objective+'\nORIGINAL SOURCE BRIEF (complete, authoritative):\n'+authoritativeBrief:mission.objective;
   const turns=[{id:'turn-1',text:'Saved lead responsibilities: '+mission.team[0].config.instructions},{id:'latest-user',text:sourceForReview}];
   const feedback=typeof job.result?.reviewContractFeedback==='string'?job.result.reviewContractFeedback.slice(0,600):null;
-  const blind=await model(claim,frame+'\n'+ASSESSMENT_INSTRUCTION+'\nOnly the supplied source-turn IDs may appear in taskContract requirement or conflict citations. Use an empty conflicts array when no explicit source conflict exists. Validator feedback is formatting/provenance feedback, not a new user requirement or fact.', 'AUTHORITATIVE_USER_TURNS:\n'+JSON.stringify(turns)+(feedback?'\nCONTRACT_VALIDATOR_FEEDBACK (rebuild from the original sources; no draft has been supplied):\n'+JSON.stringify({error:feedback,allowedSourceIds:turns.map(t=>t.id)}):''));
+  const blind=await model(claim,frame+'\n'+ASSESSMENT_INSTRUCTION+(job.payload.assessmentRefresh===true?'\nBOUNDED_INDEPENDENT_REASSESSMENT: Independently rebuild the assessment from the COMPLETE original authoritative sources. The previous receipt remains archived and is not acceptance authority. Use at most 24 entries in each derived qualifications, strongestEvidence, criteria and synthesis.dimensions array. Consolidate redundant generic standards rather than repeat them. Preserve EVERY explicit original user requirement in taskContract; source IDs refer to the complete original turns. Do not repeat entire source passages. This is a fresh charged independent assessment, not permission to weaken the requested outcome.':'')+'\nOnly the supplied source-turn IDs may appear in taskContract requirement or conflict citations. Use an empty conflicts array when no explicit source conflict exists. Validator feedback is formatting/provenance feedback, not a new user requirement or fact.', 'AUTHORITATIVE_USER_TURNS:\n'+JSON.stringify(turns)+(feedback?'\nCONTRACT_VALIDATOR_FEEDBACK (rebuild from the original sources; no draft has been supplied):\n'+JSON.stringify({error:feedback,allowedSourceIds:turns.map(t=>t.id)}):''));
   let assessment:ReturnType<typeof validateAssessment>;
-  try{assessment=validateAssessment(parseJSON(blind.text),turns);}
+  try{assessment=validateAssessment(parseJSON(blind.text),turns);if(job.payload.assessmentRefresh===true&&[assessment.qualifications,assessment.strongestEvidence,assessment.criteria,assessment.synthesis.dimensions].some(a=>a.length>24))throw Error('Independent reassessment must consolidate derived standards into at most 24 entries per derived array while preserving every explicit original requirement');}
   catch(error){const detail=error&&typeof error==='object'&&'message' in error&&typeof error.message==='string'?error.message:'Invalid independent assessment';throw new MissionModelFailure('Independent assessment contract validation failed: '+detail,{reviewPhase:'assessment',reviewContractFeedback:detail.slice(0,600)});}
   const target=completed.find(x=>x.job_key===(job.job_key==='review_again'?'revision':'compose'));
   if(!target?.result)throw Error('Review candidate missing');
@@ -140,7 +140,7 @@ export async function executeClaim(claim:Claim,model=missionModel,options?:{save
     '\nRequired acceptance IDs:\n'+JSON.stringify(acceptanceIds(assessment))+
     '\nEvidence and candidate:\n'+JSON.stringify(reviewPayload);
   options?.captureReview?.(reviewFrame,reviewInput);
-  // The mission runner's 48K input envelope excludes its system instruction.
+  // The phase-specific input envelope excludes its system instruction.
   // Apply the same envelope here; count BOTH fields with the provider before
   // reservation. Do not confuse characters with tokens or delete acceptance.
   if(!fitsMissionEnvelope(reviewFrame,reviewInput,missionInputLimit(claim)))
@@ -197,6 +197,7 @@ export async function runMissionBatch(model=missionModel){
 // source and candidate now fit before creating a child. Reuse the real worker's
 // request builder in a read-only capture; no inference, checkpoint or commit runs.
 export async function preflightSavedReview(saved:Awaited<ReturnType<typeof readMission>>,job:Claim['job']){
+ if(job.role!=='review')return null;
  const checkpoint=job.payload?.reviewModelCheckpoint as {hash?:string;response?:Awaited<ReturnType<typeof missionModel>>}|undefined;
  if(!checkpoint?.response||typeof checkpoint.response.text!=='string')return null;
  const mission={...saved.mission,status:'running',deadline:new Date(Date.now()+7200000).toISOString()};

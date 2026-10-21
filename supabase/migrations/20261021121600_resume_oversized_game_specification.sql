@@ -1,3 +1,20 @@
+-- Phase-specific evidence admission: complete game brief plus reviewed research.
+-- The model worker separately enforces a 128K character request envelope and
+-- native token reservation within the unchanged mission/project spending caps.
+create or replace function public.project_evidence_limit(p_profile text,p_phase text)
+returns integer language sql immutable security invoker set search_path=public as $$
+ select case when p_profile='game' and p_phase='specification' then 60000 else 30000 end;
+$$;
+revoke all on function public.project_evidence_limit(text,text) from public,anon,authenticated;
+grant execute on function public.project_evidence_limit(text,text) to service_role;
+do $$ declare definition text;begin
+ select pg_get_functiondef('public.finish_work_project(uuid,uuid,text,jsonb)'::regprocedure) into definition;
+ if position('length(coalesce((p_data->''evidence'')::text,''''))>30000' in definition)=0 then raise exception 'Expected phase evidence fence missing';end if;
+ definition:=replace(definition,'length(coalesce((p_data->''evidence'')::text,''''))>30000',
+ 'length(coalesce((p_data->''evidence'')::text,''''))>public.project_evidence_limit(p.profile,kind)');
+ execute definition;
+end $$;
+
 -- Resume only the specification stage from independently approved research.
 -- Guard all project-level permissions, historical charges and attempt limits.
 create or replace function public.resume_oversized_game_specification(p_id uuid,p_actor uuid,p_chat uuid,p_evidence jsonb default null)
@@ -25,7 +42,7 @@ begin
  -- Exact complete evidence is built by the real worker, not a raw text-length
  -- estimate. Validate serialization and authoritative source identity before
  -- recording any wake-up or publishing an admission announcement.
- if p_evidence is null or jsonb_typeof(p_evidence)<>'object' or length(p_evidence::text)>30000
+ if p_evidence is null or jsonb_typeof(p_evidence)<>'object' or length(p_evidence::text)>public.project_evidence_limit(p.profile,p.phase)
   or p_evidence->>'projectProfile' is distinct from 'game'
   or p_evidence->'reviewedResearch'->>'text' is distinct from latest_research
   or p_evidence->'reviewedResearch'->>'reviewedMissionId' is distinct from research_id

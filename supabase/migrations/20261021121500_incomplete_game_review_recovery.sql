@@ -4,7 +4,7 @@
 create or replace function public.resume_incomplete_game_review(p_id uuid,p_actor uuid,p_chat uuid,p_preflight jsonb default null)
 returns boolean language plpgsql security invoker set search_path=public as $$
 declare p work_projects;m agent_missions;j mission_assignments;c mission_assignments;
- spent bigint;seq integer;mid uuid;candidate_hash text;
+ spent bigint;seq integer;mid uuid;candidate_hash text;refresh boolean;
 begin
  perform pg_advisory_xact_lock(hashtextextended('katie.mission.state',0));
  select * into p from work_projects where id=p_id and actor_id=p_actor and chat_id=p_chat for update;
@@ -37,10 +37,11 @@ begin
     and not exists(select 1 from mission_assignments d where d.mission_id=m.id and d.job_key=dep
       and d.status='completed' and d.role<>'development')) then return false;end if;
  candidate_hash:=encode(sha256(convert_to(c.result->>'text','UTF8')),'hex');
+ refresh:=coalesce(j.result->>'reviewContextOverflow'='true' and p_preflight->>'refreshAssessment'='true',false);
  -- A previously measured overflow is never retried by copying the unchanged
  -- request blindly. The real worker must capture the complete current request
  -- from its source-matching saved assessment and prove it now fits.
- if j.result->>'reviewContextOverflow'='true' and (
+ if j.result->>'reviewContextOverflow'='true' and not refresh and (
   p_preflight is null or p_preflight->>'reviewJobId' is distinct from j.id::text
   or p_preflight->>'candidateHash' is distinct from candidate_hash
   or p_preflight->>'checkpointHash' is distinct from j.payload->'reviewModelCheckpoint'->>'hash'
@@ -50,12 +51,13 @@ begin
   or jsonb_typeof(p_preflight->'instruction') is distinct from 'string'
   or jsonb_typeof(p_preflight->'input') is distinct from 'string'
   or length(p_preflight->>'instruction') not between 1 and 48000
-  or length(p_preflight->>'input') not between 1 and 96000
+  or length(p_preflight->>'input') not between 1 and 128000
  ) then return false;end if;
 
- -- At most one continuation per exact source candidate. A failed continuation
- -- remains diagnosable and cannot consume the project in recursive retries.
- if exists(select 1 from project_events where project_id=p.id and event='incomplete_game_review_resumed'
+ -- Each recovery kind is bounded per exact candidate. One fresh charged
+ -- reassessment may replace oversized derived criteria; the saved candidate
+ -- and complete original sources are never regenerated or discarded.
+ if exists(select 1 from project_events where project_id=p.id and event=case when refresh then 'independent_assessment_refresh_started' else 'incomplete_game_review_resumed' end
   and data->>'candidateHash'=candidate_hash) then return false;end if;
  select coalesce(sum(greatest(actual_tokens,reserved_tokens)),0) into spent from agent_missions where project_id=p.id;
  select count(*)+1 into seq from project_runs where project_id=p.id;
@@ -75,17 +77,17 @@ begin
   'Reused completed evidence from source assignment '||a.id::text
  from mission_assignments a where a.mission_id=m.id and a.status='completed' and a.role<>'development';
  insert into mission_assignments(mission_id,job_key,role,agent_id,instruction,dependencies,payload,status)
- values(mid,j.job_key,j.role,j.agent_id,j.instruction,j.dependencies,j.payload||
+ values(mid,j.job_key,j.role,j.agent_id,j.instruction,j.dependencies,(case when refresh then (j.payload-'reviewModelCheckpoint')||jsonb_build_object('assessmentRefresh',true) else j.payload end)||
   jsonb_build_object('continuationSource',jsonb_build_object('missionId',m.id,'jobId',j.id,'attempts',j.attempts)),'queued');
  insert into project_runs(project_id,mission_id,kind,ordinal,milestone_index)
  values(p.id,mid,'specification',seq,p.milestone_index);
- insert into project_events(project_id,event,data) values(p.id,'incomplete_game_review_resumed',jsonb_build_object(
+ insert into project_events(project_id,event,data) values(p.id,case when refresh then 'independent_assessment_refresh_started' else 'incomplete_game_review_resumed' end,jsonb_build_object(
   'sourceMissionId',m.id,'missionId',mid,'reviewJobId',j.id,'candidateHash',candidate_hash,
   'chargedTokens',spent,'remainingTokens',p.token_allowance-spent,'previousAttempts',j.attempts,
-  'savedCandidateUnchanged',true,'codingApproved',false,'dispatchPending',true));
+  'savedCandidateUnchanged',true,'codingApproved',false,'dispatchPending',true,'priorAssessment',case when refresh then j.payload->'reviewModelCheckpoint' else null end));
  update work_projects set status='running',active_mission_id=mid,lease=null,lease_until=null,failures=0,
   detail='Saved specification independent review continued. Original charges and project deadline retained; coding remains unapproved.',updated_at=now() where id=p.id;
- perform project_publish(p.id,'Continuing the saved specification independent review. No redrafting or coding approval.');
+ perform project_publish(p.id,case when refresh then 'Refreshing the oversized independent assessment against the complete original sources. The saved specification and earlier receipt remain intact.' else 'Continuing the saved specification independent review. No redrafting or coding approval.' end);
  return true;
 end $$;
 revoke all on function public.resume_incomplete_game_review(uuid,uuid,uuid,jsonb) from public,anon,authenticated;

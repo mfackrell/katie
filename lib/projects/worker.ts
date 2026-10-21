@@ -1,3 +1,4 @@
+import {projectEvidenceLimit} from './evidence-budget';
 import {preflightSavedReview} from '@/lib/missions/worker';
 import {verifyDeployedPreview,PreviewAccessUnavailable} from '@/lib/projects/preview';
 import { Octokit } from '@octokit/rest';
@@ -328,7 +329,7 @@ async function advance(p: Project) {
         throw Error('Unknown project phase');
     // The durable SQL admission fence verifies aggregate evidence size;
     // preflight before consuming a child mission or recovery allowance.
-    if(jsonbTextSize(projectEvidence??{})>30000)throw Error('Project evidence exceeds bounded context; original requirements retained without starting a child');
+    if(jsonbTextSize(projectEvidence??{})>projectEvidenceLimit(p.profile,p.phase))throw Error('Project evidence exceeds bounded context; original requirements retained without starting a child');
     await finish('child', { kind: p.phase, objective, evidence: projectEvidence });
 }
 async function reconcileParkedDispatch() {
@@ -370,7 +371,7 @@ async function reconcileBlockedGameRevisions(){
                 const source=`ORIGINAL USER OUTCOME (must remain authoritative):\n${p.objective}\n${p.clarifications}`;
                 try{
                     const evidence=await buildSpecificationEvidence(p,await milestoneEvidence(await projectRuns(p.id)),source);
-                    if(jsonbTextSize(evidence)>30000)continue;
+                    if(jsonbTextSize(evidence)>projectEvidenceLimit(p.profile,p.phase))continue;
                     oversized=await projectRpc<boolean>('resume_oversized_game_specification',{...authorized,p_evidence:evidence});
                 }catch(error){console.warn('[Projects] Specification recovery preflight unavailable',{project:p.id,detail:error instanceof Error?error.message:'Evidence unavailable'});continue;}
             }
@@ -378,7 +379,10 @@ async function reconcileBlockedGameRevisions(){
             if(p.active_mission_id){
                 const saved=await readMission(p.active_mission_id);
                 const overflow=saved.jobs.filter(j=>j.role==='review'&&j.status==='failed'&&j.result?.reviewContextOverflow===true).at(-1);
-                if(overflow){reviewPreflight=await preflightSavedReview(saved,overflow);if(!reviewPreflight)continue;}
+                if(overflow){reviewPreflight=await preflightSavedReview(saved,overflow);if(!reviewPreflight){
+                    if(await projectRpc<boolean>('resume_incomplete_game_review',{...authorized,p_preflight:{refreshAssessment:true}}))return true;
+                    continue;
+                }}
             }
             const native=oversized || await projectRpc<boolean>('resume_pending_game_review',authorized) ||
               await projectRpc<boolean>('resume_incomplete_game_review',{...authorized,...(reviewPreflight?{p_preflight:reviewPreflight}:{})});
