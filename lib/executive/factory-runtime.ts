@@ -88,7 +88,7 @@ export async function startSpecialistFactory(input:{actorId:string;chatId:string
  // The independently reviewed multi-worker + possible revision cycle can
  // legitimately exceed the ordinary 60k-token mission allowance.
  const {error:budgetError}=await db.from('agent_missions').eq('id',missionId).eq('status','draft')
-  .update({token_allowance:95000});
+  .update({token_allowance:120000,max_calls:20});
  if(budgetError)throw Error('Bounded specialist acceptance budget unavailable');
  const {error:saveError}=await db.from('executive_provisioning_requests').eq('id',request.id).eq('status','configured').update({
   evidence:{adapter:'mission',acceptanceMissionId:missionId,acceptanceCapability:intent.capability,teamIds:agentIds,modelRouting:routingPolicy,capabilityCatalogVerified:true,toolsAdded:[]}
@@ -130,7 +130,7 @@ export async function startSpecialistAssignment(input:{actorId:string;chatId:str
   p_actor:input.actorId,p_chat:input.chatId,p_slug:intent.slug,p_request:requestKey,
   p_objective:intent.objective,p_capability:registered.capabilities[0],
   p_success:['Deliver the requested result','Use independent agents and a final independent review','Report verified evidence or a blocker'],
-  p_budget:60000,p_deadline:deadline
+  p_budget:120000,p_deadline:deadline
  });
  if(proposalError||!delegation?.id)throw Error('Specialist delegation failed');
  if(input.sourceMissionIds?.length){
@@ -146,6 +146,10 @@ export async function startSpecialistAssignment(input:{actorId:string;chatId:str
   p_agents:agents,p_minutes:110,p_repository:repositoryTask?input.activeRepoId:null
  });
  if(missionError)throw Error('Specialist mission creation failed: '+boundedError(missionError));
+ // Reserve capacity for task routing, substantive work and a full independent
+ // revision cycle, including bounded provider fallbacks. Usage is never reset.
+ const {error:capacityError}=await db.from('agent_missions').eq('id',missionId).eq('status','draft').update({token_allowance:120000,max_calls:20});
+ if(capacityError)throw Error('Executive mission capacity could not be configured');
  const {error:linkError}=await db.from('executive_delegations').eq('id',delegation.id).eq('status','proposed').update({mission_id:missionId});
  if(linkError)throw Error('Specialist mission linking failed');
  const {error:startError}=await db.rpc('control_mission',{p_id:missionId,p_action:'start',p_job:null});

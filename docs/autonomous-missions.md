@@ -41,3 +41,13 @@ zero tokens. Timeouts, transport failures, incomplete responses and ambiguous
 errors retain their original conservative holds. Call-attempt ceilings and actual
 usage are never reset. Autonomous routing also excludes models whose required API
 transport is unavailable; provider-specific requests retain supported defaults.
+
+Executive delegated and factory-acceptance missions use the existing hard maximum
+of 120,000 tokens and 20 model calls. This bounded profile covers routing inference,
+provider fallbacks, specialist work, composition, and a substantive revision with
+both independent reviews. The registry ranks models only within a current provider
+model inventory; historical registry entries cannot establish account access.
+Provider-specific tool options are serialized by the native adapter. Truncated
+outputs may try another eligible model within the same ledger and execution window.
+Commissioned synthesis waits for completed independent source reviews and receives
+their complete reports through durable, conversation-scoped mission references.

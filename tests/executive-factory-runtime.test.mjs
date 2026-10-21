@@ -64,7 +64,7 @@ test('Executive factory creates a real three-agent acceptance mission but does n
  assert.equal(make.args.p_repository,null);
  assert.match(make.args.p_objective,/spare capacity and reopen rate/);
  assert.match(make.args.p_objective,/deterministic calculator/);
- assert.ok(calls.some(c=>c.kind==='update'&&c.table==='agent_missions'&&c.value.token_allowance===95000));
+ assert.ok(calls.some(c=>c.kind==='update'&&c.table==='agent_missions'&&c.value.token_allowance===120000&&c.value.max_calls===20));
  assert.ok(calls.some(c=>c.name==='control_mission'&&c.args.p_action==='start'));
  assert.ok(calls.some(c=>c.kind==='update'&&c.table==='executive_provisioning_requests'&&c.value.evidence.acceptanceMissionId));
  assert.equal(calls.some(c=>c.name==='transition_executive_provisioning'&&c.args.p_action==='activate'),false);
@@ -156,4 +156,12 @@ test('source reports are validated and their durable references saved before a s
  const validated=calls.findIndex(c=>c.kind==='source-validation'),bound=calls.findIndex(c=>c.kind==='update'&&c.table==='executive_delegations'&&c.value.result?.sourceMissionIds),created=calls.findIndex(c=>c.name==='create_mission');
  assert.ok(validated>=0&&bound>validated&&created>bound);assert.deepEqual(calls[bound].value.result.sourceMissionIds,ids);
  assert.match(calls[created].args.p_objective,/Executive source handoff/);
+});
+
+test('Executive assignments reserve bounded routing and complete review capacity before execution',async()=>{
+ const {factory,calls}=setup({registered:{slug:'operations',status:'active',capabilities:['operations_analysis']}});
+ await factory.startSpecialistAssignment({actorId:'actor',chatId:'chat',requestId:'capacity-assignment',message:'Ask the operations orchestrator to independently assess the supplied operating results.'});
+ const proposal=calls.find(c=>c.name==='propose_executive_delegation');assert.equal(proposal.args.p_budget,120000);
+ const capacity=calls.findIndex(c=>c.kind==='update'&&c.table==='agent_missions'&&c.value.max_calls===20),start=calls.findIndex(c=>c.name==='control_mission');
+ assert.ok(capacity>=0&&capacity<start);assert.equal(calls[capacity].value.token_allowance,120000);
 });
