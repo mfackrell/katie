@@ -1,5 +1,5 @@
 import OpenAI from "openai";
-import { createHash } from "node:crypto";
+import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import { managedActor } from "@/lib/agents/store";
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
@@ -13,6 +13,11 @@ import type { Actor } from "@/lib/types/chat";
 type CalibrationEntry = {key:string;value:string;source?:string;category?:string;evidenceMessageIds?:string[];evidenceQuotes?:Array<{messageId:string;quote:string}>;[key:string]:unknown};
 type CalibrationGroup = {type:"redundancy"|"irrelevant";keys:string[];reason:string};
 const calibrationHash=(value:unknown)=>createHash("sha256").update(JSON.stringify(value)).digest("hex");
+const proposalProof=(actorId:string,hash:string,groups:CalibrationGroup[])=>{
+  const secret=process.env.KATIE_MEMORY_CALIBRATION_SIGNING_KEY||process.env.OPENAI_API_KEY;
+  if(!secret)throw new Error("Calibration signing key unavailable");
+  return createHmac("sha256",secret).update(JSON.stringify({actorId,hash,groups})).digest("hex");
+};
 const validKeys=(value:unknown,keys:Set<string>)=>Array.isArray(value) && value.every(k=>typeof k==="string"&&keys.has(k)) ? [...new Set(value as string[])].sort() : [];
 async function calibrationPreview(actorId:string) {
   const actor=await getActorById(actorId);
@@ -55,10 +60,18 @@ async function calibrationPreview(actorId:string) {
     if(keys.length<(item.type==="redundancy"?2:1))continue;
     keys.forEach(k=>used.add(k));groups.push({type:item.type,keys,reason:String(item.reason||"").slice(0,1200)});
   }
-  return NextResponse.json({hash:calibrationHash(data?.content),groups,conflicts,entries:entries.map(e=>({key:e.key,value:e.value})),revision:data?.revision});
+  const hash=calibrationHash(data?.content);
+  return NextResponse.json({hash,proof:proposalProof(actorId,hash,groups),groups,conflicts,entries:entries.map(e=>({key:e.key,value:e.value})),revision:data?.revision});
 }
-async function calibrationApply(actorId:string,hash:string,approved:CalibrationGroup[]){
-  if(!/^[a-f0-9]{64}$/.test(hash)||!Array.isArray(approved)||approved.length>160)return NextResponse.json({error:"Invalid approvals"},{status:400});
+async function calibrationApply(actorId:string,hash:string,approved:CalibrationGroup[],proposed:CalibrationGroup[],proof:string){
+  if(!/^[a-f0-9]{64}$/.test(hash)||!Array.isArray(approved)||approved.length>160||!Array.isArray(proposed)||proposed.length>160||!(/^[a-f0-9]{64}$/.test(proof)))
+    return NextResponse.json({error:"Invalid approvals"},{status:400});
+  const expected=proposalProof(actorId,hash,proposed);
+  if(!timingSafeEqual(Buffer.from(proof,"hex"),Buffer.from(expected,"hex")))
+    return NextResponse.json({error:"Proposal could not be verified. Recalibrate."},{status:409});
+  const suggested=new Set(proposed.map(g=>JSON.stringify(g)));
+  if(approved.some(g=>!suggested.has(JSON.stringify(g))))
+    return NextResponse.json({error:"Only originally suggested changes may be approved"},{status:400});
   const db=getSupabaseAdminClient();
   const {data:row,error:readError}=await db.from("actor_long_term_memory").select("revision,content").eq("actor_id",actorId).single<{revision:number;content:{entries:CalibrationEntry[];version?:number;purpose?:string}}>();
   if(readError||!row)return NextResponse.json({error:"Memory unavailable"},{status:500});
@@ -201,7 +214,7 @@ export async function PATCH(request: NextRequest) {
   try {
     const { id: actorId } = actorIdParamSchema.parse({ id: url.searchParams.get("id") });
     const raw = await request.json();
-    if(raw?.calibration === "apply") return calibrationApply(actorId,String(raw.hash||""),raw.approved);
+    if(raw?.calibration === "apply") return calibrationApply(actorId,String(raw.hash||""),raw.approved,raw.groups,raw.proof);
     const { purpose, reviewMode } = updateActorSchema.parse(raw);
 
     if (await managedActor(actorId)) return NextResponse.json({ error: "Edit managed agents in Agents management." }, { status: 409 });
