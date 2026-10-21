@@ -266,7 +266,7 @@ async function handleCase(c:Case):Promise<string>{
    console.warn('[Recovery] Existing infrastructure recovery unavailable',error instanceof Error?error.message:'Unknown error');
   }
  }
- if(diagnosis.strategy==='scoped_repair'&&repo&&client){
+ if(diagnosis.strategy==='scoped_repair'&&repo&&client&&(!e.project||(e.project.phase==='development'&&e.project.approved_hash!==null&&e.project.approved_hash===e.project.approval_hash))){
   const delegated=await delegateRepair(c,e,diagnosis,client,repo);
   await finish(c,'delegated',diagnosis,'Recovery specialist assigned. Awaiting independent CI and code review; no automatic merge.',{run:e.runId,originalHead:e.headSha},
     delegated.issue,delegated.head);
