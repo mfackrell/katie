@@ -62,7 +62,7 @@ import { LlmProvider, ProviderResponse } from "@/lib/providers/types";
 import { buildReviewResumptionContext, candidateForVerification, isSavedDraftVerificationRetry, savedDraftReviewTask } from "@/lib/collaboration/review-completion";
 import { getPendingReviewClarification, resolvePendingReviewClarification } from "@/lib/chat/review-continuity";
 import { bindPendingReviewClarification } from "@/lib/chat/review-continuity";
-import { classifyUserTurn, applyAssistantToTaskProgress, applyUserToTaskProgress, formatTaskProgress, syncTaskProgress, mergeTaskProjects, taskProjectCatalog } from "@/lib/chat/task-progress";
+import { classifyUserTurn, applyAssistantToTaskProgress, applyUserToTaskProgress, formatTaskProgress, syncTaskProgress, recoverTaskWorkProduct, mergeTaskProjects, taskProjectCatalog } from "@/lib/chat/task-progress";
 import { loadTaskProgress, saveTaskProgress, loadActorTaskProjects } from "@/lib/chat/task-progress-store";
 import { buildReviewSourceTurns } from "@/lib/chat/review-sources";
 import { decideResponsePolicy, shouldEscalateConversationResponse } from "@/lib/chat/response-policy";
@@ -1239,6 +1239,7 @@ async function executeChat(request: NextRequest) {
       history = [...new Map([...projectHistory, ...currentHistory].map(turn => [turn.id, turn])).values()];
       }
     }
+    pdfProgress.workProduct = recoverTaskWorkProduct(pdfProgress, history);
     let taskProgress = pdfProgress;
 
     let storedWebsite: Awaited<ReturnType<ReturnType<typeof websiteEvidenceStore>["restore"]>> = { context: "", images: [] as string[], fresh: false, targetUrls: [] as string[] };
@@ -3206,6 +3207,7 @@ ${chunkWorkflowSummary}`;
             }
             taskProgress = applyAssistantToTaskProgress(taskProgress, {
               messageId: assistantMessageId, text: assistantText, responsePurpose: responsePolicy.purpose,
+              retainWorkProduct: !requiredReviewForRequest || reviewCompleted,
             });
             const taskProgressSaved = await saveTaskProgress(actorId, chatId, taskProgress);
             if (currentAgentTask()) {

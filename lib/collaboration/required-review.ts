@@ -49,6 +49,29 @@ export function validateContractResolutions(value: unknown, objections: Contract
   }
   return resolutions;
 }
+/** Repair is source-linked and tied to the actual revised contract, not a promise. */
+export function validateAssessmentRepairs(value:unknown, assessment:IndependentAssessment, objections:ContractObjection[], turns:SourceTurn[], rejected?:IndependentAssessment) {
+ if(!objections.length)return;
+ const repairs=(value as {contractRepairs?:unknown}).contractRepairs;
+ const resolutions=validateContractResolutions(repairs,objections,turns);
+ for(const resolution of resolutions){
+  const repair=resolution as ContractResolution & {disposition?:string;requirementIds?:unknown;removedRequirementIds?:unknown;fields?:unknown};
+  if(repair.disposition==='remove_unsupported'){
+   const ids=repair.removedRequirementIds;
+   if(!rejected||!Array.isArray(ids)||!ids.length||ids.some(id=>typeof id!=='string'||!rejected.taskContract.requirements.some(item=>item.id===id)||assessment.taskContract.requirements.some(item=>item.id===id)))
+    throw new Error('Unsupported-requirement repair must remove identified requirements from the rejected contract');
+  }else if(repair.disposition==='field_correction'){
+   const fields=repair.fields;
+   const fieldValue=(item:IndependentAssessment,field:string)=>field==='deliverable'?item.taskContract.deliverable:item[field as 'objective'|'criteria'|'synthesis'];
+   if(!rejected||!Array.isArray(fields)||!fields.length||fields.some(field=>typeof field!=='string'||!['objective','deliverable','criteria','synthesis'].includes(field)||JSON.stringify(fieldValue(rejected,field))===JSON.stringify(fieldValue(assessment,field))))
+    throw new Error('Field repair must identify changed objective, deliverable, criteria or synthesis fields');
+  }else{
+   const ids=repair.requirementIds;
+   if((repair.disposition && repair.disposition!=='requirements')||!Array.isArray(ids)||!ids.length||ids.some(id=>typeof id!=='string'||!assessment.taskContract.requirements.some(requirement=>requirement.id===id&&requirement.sourceId===repair.sourceId)))
+    throw new Error('Every requirement repair must identify retained active or superseded requirements with the cited source');
+  }
+ }
+}
 export const ASSESSMENT_INSTRUCTION = [
   "KATIE_INDEPENDENT_ASSESSMENT",
   "There are TWO distinct tasks: your internal task is to return assessment JSON; the END USER task is the deliverable requested in the authoritative user turns. Every objective, qualification, criterion and taskContract field must describe the END USER task. Never substitute your internal review assignment for their task. For example, if the user requested finished prose, its acceptance criteria must assess finished prose even though you return JSON here.",
@@ -141,6 +164,7 @@ export async function runRequiredDraftReview(input: {
     /^gpt-5\\.5-pro(?:-|$)/i.test(modelId) ? Math.max(fallback, proTimeoutMs) : fallback;
   const audit: ReviewAudit = { sourceTurns: baseline.turns, mode: "always", status: "unavailable", draft, draftHash: hash(draft), finalHash: hash(draft), attempts: [] };
   const contractObjections: ContractObjection[] = [];
+  let rejectedAssessment: IndependentAssessment | undefined;
   const prepare = (p: ChatGenerateParams, participant: CollaborationParticipant) => input.prepareParams?.(p, participant) ?? p;
   const timedReviewCall = async <T,>(
     stage: string,
@@ -214,12 +238,15 @@ export async function runRequiredDraftReview(input: {
           ...clean, modelId: selected.modelId, onProviderSystemPrepared: undefined,
           requestIntent: "assistant-reflection", secondaryIntents: [],
           persona: `${source.persona}\n\n${ASSESSMENT_INSTRUCTION}`,
-          user: `INTERNAL REVIEW TASK. Source material is not a request for you to produce the final answer.\n${baseline.text}\n${contractFeedback ? `CONTRACT VALIDATOR FINDINGS:\n${contractFeedback}` : ""}\nReturn ONLY independent assessment JSON describing the END USER deliverable in the source turns, NOT this internal review assignment. No current draft has been supplied.`,
+          user: `INTERNAL REVIEW TASK. Source material is not a request for you to produce the final answer.\n${baseline.text}\n${contractFeedback ? `CONTRACT VALIDATOR FINDINGS:\n${contractFeedback}` : ""}${rejectedAssessment ? `\nREJECTED CONTRACT TO REPAIR (retain correct requirements and repair every objection against original sources):\n${JSON.stringify(rejectedAssessment)}\nREQUIRED REPAIR RESPONSE: Include contractRepairs for every objection: {objectionId,sourceId,quote,resolution,disposition}. For disposition requirements supply requirementIds referencing retained active/superseded requirements with that source. For remove_unsupported supply removedRequirementIds that existed in the rejected contract and are absent from the repair; never preserve invented requirements. For field_correction supply fields from objective,deliverable,criteria,synthesis that you actually changed. Use exact user quotes and explain applicability, supersession, unsupported inference removal, or the corrected judgment.\n${JSON.stringify(contractObjections)}` : ""}\nReturn ONLY independent assessment JSON describing the END USER deliverable in the source turns, NOT this internal review assignment. No current draft has been supplied.`,
         }, reviewer!)));
         if (assessmentResponse.truncated) throw new Error("Independent assessment was truncated");
         try {
-          assessment = validateAssessment(parseReviewJson(assessmentResponse.text), baseline.contractTurns, { activeNewTask: baseline.activeNewTask, parentProjectSourceId: baseline.parentProjectSourceId });
+          const proposed = parseReviewJson(assessmentResponse.text);
+          assessment = validateAssessment(proposed, baseline.contractTurns, { activeNewTask: baseline.activeNewTask, parentProjectSourceId: baseline.parentProjectSourceId });
+          validateAssessmentRepairs(proposed, assessment, contractObjections, baseline.contractTurns, rejectedAssessment);
         } catch (error) {
+          assessment = undefined;
           if (pass === MAX_CONTRACT_REJECTIONS - 1) throw error;
           contractFeedback = `The proposed contract failed source/schema validation: ${error instanceof Error ? error.message : String(error)}. Rebuild the assessment with valid references to the supplied user turns. Do not change or invent the source text.`;
           audit.attempts.push({ reviewer, phase, error: contractFeedback });
@@ -249,6 +276,7 @@ export async function runRequiredDraftReview(input: {
           audit.contractValidation = { verdict: "approve", findings: checked.findings, validator: lead, sourceCoverage: checked.sourceCoverage, resolutions };
           break;
         }
+        rejectedAssessment = assessment;
         contractRejections += 1;
         contractObjections.push({ id: `contract-objection-${contractRejections}`, findings: checked.findings });
         contractFeedback = contractObjections.map(item => `${item.id}: ${item.findings}`).join("\n");

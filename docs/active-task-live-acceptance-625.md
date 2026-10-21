@@ -115,6 +115,72 @@ Read-only inspection of `actor_long_term_memory` for the isolated test actor, ro
 
 Independent assessment: **FAIL for durable-memory source attribution**. That user instruction does not entail the stored factual claims. Some underlying facts are supported elsewhere in the conversation, but the entry does not cite those sources; the literal quote validation accepted an unrelated instruction as evidence. The row separately preserves a fictional-fixture disclaimer and the directly sourced $180,000 control fact. Those valid entries do not cure the draft's false attribution. The orchestrator is investigating a semantic evidence-validation correction; no repair is claimed here.
 
+## Followup release and original-memory correction checkpoint
+
+The orchestrator reports PR #627's JSON repair admission fix is deployed READY. Integrated PR #629 (required task resolution, software-build admission, stop continuity, and semantic memory support) passed CI and website review at head `24920a69` and merged as `6b0729c1fc46e8db07d6cc37ef5341adbc88efe4`. Deployment `dpl_4aemEAtLqELxFiANXpeP7Bxv5WoF` was verified READY on the canonical alias around 18:46 UTC. Live retests began afterward; the observations above remain pre-fix results and are not erased by the new deployment.
+
+Chronological correction to the earlier “original actor memory unchanged” checkpoint: after those tests, one original-actor attribution entry was independently reviewed against its exact USER source and corrected with approval. Entry `katie.sponsor.reporting.experience` on actor `d36824aa-7fcd-4a7a-978a-73f073ccc789` incorrectly attributed the user's sponsor-reporting experience to Katie/she. The context investigator reports a guarded value-only correction to Mark/he at `2026-10-21T18:45:28.748582Z`, revision 9 to 10, preserving all metadata and verifying the other 152 entries unchanged (153 total). The reviewer independently verified the source and original error before execution but did not execute the mutation. The ambiguous interim-preference entry remains untouched.
+
+## Post-PR #629 live retests
+
+### R1: Exact named cross-chat resume
+
+The original explicit A resume request was resubmitted in chat `0d66ae31-47e2-4b56-86e1-11e9bce4a029` after the canonical deployment was READY. Request `bc319352-f087-4b45-9ebd-57fbb81c9df1`, assistant `c0cb1c3c-7055-4946-8515-836b980e2a4a`, completed in **139.915 seconds**, lead `claude-haiku-5-5`, reviewer `gpt-5.6-luna`, revised and approved.
+
+Independent assessment: **PASS on retest**. The final produces three Cedar Distribution examples aligned to Northstar: integrated income statement/balance-sheet/cash-flow forecasting with the ten-to-four-day improvement, monthly covenant reporting, and downside scenarios. It does not repeat the failed clarification, ask for previously supplied facts, or import Controller priorities. Board scenario analysis is described as relevance to the target role, not invented past board responsibility. This resolves the observed C2 resume failure for this tested input; the earlier failure remains in the record.
+
+### R2: Generic followup after resume while another application runs
+
+In A's resumed chat, the user asks only to condense those examples into one paragraph of at most 100 words, preserving the strongest quantified outcome. Request `26f653fe-fe99-4993-9e67-80014c68b360`, assistant `b494abf9-edf8-4613-8c80-1708114a8dd7`, completed in **89.772 seconds**, Haiku/Luna, approved.
+
+Independent assessment: **PASS**. The 69-word paragraph remains Northstar/Cedar, includes the integrated forecast, ten-to-four-day improvement, covenant reporting and downside scenarios, with no repeated brief or facts needed. The review source set includes the original A user brief and resumed objective. Application D was being processed separately at the same time; its requirements did not displace A's.
+
+### R3: New application and relevant historical evidence reuse
+
+Application D repeats the Juniper Finance Transformation Lead business problem from the earlier failed C attempt, explicitly as a distinct application, retaining A/B. Request `a5689c69-09bc-4a3f-9078-d3b739a04169`, assistant `bc471b37-b1f1-4226-ad41-d61f0d33f621`, completed in **217.662 seconds**, lead `gpt-5.4-mini-2026-03-17`, reviewer `claude-opus-5-5`, revised and approved.
+
+The final selects Ridge's close reduction from twelve days to seven through cost coding and subledger/GL reconciliation, followed by Cedar's integrated forecast and preparation reduction from ten days to four. It explicitly links these to faster processes, reliable reconciliation, and repeatable reporting, followed by a separate note that D is distinct from C and A/B remain open.
+
+Independent assessment: **PASS for the previously failed new-application route and for relevant history reuse**. It generates a career application answer, rather than a coding-project launch. It draws appropriate facts from both earlier applications while excluding obsolete construction-accounting/lender mandates. It does not invent manufacturing experience or systems. Parallel A and D outputs demonstrate distinct active objectives in separate chats, beyond merely preserving registry state.
+
+### R4: Post-fix durable-memory source inspection
+
+Read-only inspection of the test actor's durable memory updated `2026-10-21T18:53:24.992873Z` reveals a new entry `application.D.Juniper.Manufacturing`. It contains first-person Ridge/Cedar accomplishments from the generated D answer, marked high-confidence `user-stated`, but its sole citation is user message `94cd791d-6ba2-4a24-a376-0ea968ceb3d8`, whose quote establishes the Juniper role and requirements, not those accomplishments. Entry `candidate.application.examples.relevant` also stores the A resume instruction itself as a durable fact.
+
+Independent assessment: **FAIL persists after #629 for durable source attribution and memory scope**. The user-facing D answer is well supported by earlier source turns, but the stored entry does not cite them, and its task-local draft is not persistent professional knowledge. The independent semantic review had access to other user messages; the result shows that the instruction not to substitute those messages was insufficient. It does not reveal the exact internal reasoning. A followup is being designed to structurally isolate each candidate's cited USER sources for factual entailment before a separate contextual qualification check. No success is claimed for that untested correction.
+
+### R5: Stop request after manual cleanup
+
+After the accidentally launched work had already been stopped, the user submitted “Stop the coding project.” Request `a8572c40-9181-402d-b8ac-7e117c184718`, assistant `db8d616a-e1a0-462d-b084-b4ae118cca03`, completed in **30.658 seconds**. It says no coding project is running, but then claims B has no examples drafted and A is paused “as you asked.” B has several saved example drafts; A was retained open and resumed.
+
+Independent assessment: **limited result, not a full stop-control pass**. No new work was launched and the previous A/B/C clarification dead-end did not recur. However, this was not a stop of running work, and the generated application-status recap is inaccurate. Actual bound stop execution remains deterministically tested rather than established by this already-stopped live case. The misleading progress recap was reported to the orchestrator.
+
+### R6: Resume B's latest prepared draft
+
+The user requests: “Resume application B at Granite Infrastructure and show the latest three-example draft we already prepared, including the subsequently confirmed control result.” Request `2d5ad2bb-73c8-470e-8069-0fbced60467e`, assistant `3c633f7e-d23f-4135-96b3-c35fe6c03f0a`, completed in **63.694 seconds** with:
+
+> I couldn’t verify that this draft answers the current task. I need to resolve the conflicting requirements before providing a finished answer.
+
+Independent assessment: **FAIL for successful latest-draft resume**. The audit's user-source set contains the correct B brief, all three examples, and the $180,000 addition. The contract validator twice required retaining the prior 180-word limit; bounded repair still failed to incorporate it. A secondary finding concerns an unsupported exclusion attributed to a user turn. The validator also notes prior draft text was not supplied in its input. This is evidence of unsuccessful contract repair/continuity, not evidence that all relevant facts were lost. The system withheld an unverified result instead of presenting a misleading approved draft, but the user's requested outcome was not delivered.
+
+### R7: Reuse newly learned professional evidence in a fresh application chat
+
+Application E supplies a new explicitly fictional Atlas Manufacturing accomplishment in user message `d0d6d588-1dfe-4403-9c85-a00708273307`: in 2021, consolidated six subsidiaries, reconciled intercompany balances, and reduced group reporting preparation from eight days to three. Durable entry `application.E.Maple.Health` preserves these facts, fictional attribution, and the exact original user source.
+
+In fresh chat `12b602be-b246-405e-a0a9-d0920d91e347`, application F requests the strongest prior example for Elm Retail's Group Reporting Lead mandate without resupplying facts. Request `d7ad729c-079a-4cf6-bc01-34c1c6290006`, assistant `0bbef90c-8e75-4906-9deb-a952a753f0d6`, completed in **123.602 seconds**, lead `claude-fable-5-1`, reviewer `gpt-5.6-luna`.
+
+Independent assessment: **PASS for relevant durable-memory reuse, with a review qualification**. The final selects Atlas's six subsidiaries/intercompany work/eight-to-three-day result and connects it to Elm's needs. The audit's user-source list contains only the F request; the provider system contains the persisted E memory entry with original factual provenance, while rendered historical task context lists only IDs. This supports actual actor-wide durable-memory use, not merely same-chat recall. The system completed with review notes (`verdict=revise`): the reviewer asked to remove “achieved in a single engagement,” but that minor phrase remains. It is not a fully reviewer-approved answer. One correctly stored/reused entry does not negate the independently observed wrong-source entries.
+
+### H1: Explicit managed handoff UI after #631
+
+The orchestrator reports #631 deployed READY, but the first handoff attempt after opening E in the modern workspace failed its source preview with “Open the source conversation first.” Source inspection shows only the legacy workspace wrote the active-chat localStorage key used by the new preview. No managed handoff answer was produced.
+
+Independent review approved a narrow modern-workspace fix: synchronize chat/actor IDs only once the actual existing pair is loaded; browser acceptance now asserts both IDs after real conversation navigation. The fix still requires deployment and a live retry. This UI failure is distinct from the successful receipt migration and PostgreSQL tests.
+
 ## Verification limits
 
-At this checkpoint, cross-chat resume after clarification, third-application routing, conversational stop recovery, and durable-memory source attribution have **failed live**. Full simultaneous-application continuity remains **unverified live**. These successful answers and review handoffs do not establish overall mission completion. Followup deployments and live retests must be recorded separately without erasing these observations.
+Current release checkpoint: PR #632 isolated-citation/durability gate is deployed READY (`dpl_A2nrz5WM…`, merge prefix `e6aedd`), with a fresh Atlas control-fact request submitted for actual provider/memory verification. PR #634 modern-workspace handoff source fix is pending. Additional latest-draft/contract-repair and selected professional-knowledge capsule changes have passed scoped independent code review and deterministic tests, but are not yet live-verified. Knowledge transfer includes original owned USER evidence and keeps it separate from active task requirements; it does not clone all professional memory.
+
+Handoff checkpoint: the orchestrator reports PR #631 CI/website review passed, its reviewed receipt migration applied, and merge `30b809e83d65369555034c6ef037549c852a36a3`. The isolated managed specialist ContextHandoffAcceptance631 was created through the UI (review always, research/development disabled). Deployment and actual handoff output remain pending; no live pass is implied by migration or task creation.
+
+A's cross-chat resume, subsequent generic followup, distinct concurrent applications, new-application routing, and relevant historical reuse have **passed post-fix live retests**. B's latest-draft resume and durable-memory source attribution **failed after #629**. Conversational stop recovery awaits a successful live retest. Explicit managed-specialist handoff remains **unverified live**. These successful answers and review handoffs do not establish overall mission completion.

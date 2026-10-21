@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import {emptyTaskProgress,applyUserToTaskProgress,applyAssistantToTaskProgress,mergeTaskProjects,taskProjectCatalog,syncTaskProgress,formatTaskProgress} from "../lib/chat/task-progress";
+import {emptyTaskProgress,applyUserToTaskProgress,applyAssistantToTaskProgress,mergeTaskProjects,taskProjectCatalog,syncTaskProgress,formatTaskProgress,recoverTaskWorkProduct} from "../lib/chat/task-progress";
 
 const project = (state: ReturnType<typeof emptyTaskProgress>, id:string,text:string) => applyUserToTaskProgress(state,{
   messageId:id,text,projectTransition:{action:"new",sourceQuote:text},
@@ -122,4 +122,33 @@ test("a seeded specialist handoff survives an empty target chat and supplies act
  assert.match(assembled,/35 projects/);
  assert.match(assembled,/confirmed/);
  assert.match(assembled,/Give three relevant examples/);
+});
+
+test("successful work references stay with their project across switches and questions do not erase drafts",()=>{
+ let state=project(emptyTaskProgress(),"b","New project: controls");
+ state=applyUserToTaskProgress(state,{messageId:"limit",text:"Condense these examples to 180 words."});
+ state=applyAssistantToTaskProgress(state,{messageId:"b-draft",text:"Three verified examples",responsePurpose:"deliverable"});
+ state=applyAssistantToTaskProgress(state,{messageId:"question",text:"Would you like another edit?",responsePurpose:"conversation"});
+ assert.equal(state.workProduct?.assistantMessageId,"b-draft");
+ state=project(state,"d","New project: unrelated operating strategy");
+ assert.equal(state.workProduct,undefined);
+ state=applyAssistantToTaskProgress(state,{messageId:"d-draft",text:"Other project draft",responsePurpose:"deliverable"});
+ state=applyUserToTaskProgress(state,{messageId:"resume",text:"Resume project B latest draft",projectTransition:{action:"resume",projectId:"b",sourceQuote:"Resume project B"}});
+ assert.equal(state.workProduct?.assistantMessageId,"b-draft");
+ assert.match(formatTaskProgress(state),/180 words/);
+ assert.ok(!formatTaskProgress(state).includes("Other project draft"));
+ state=applyAssistantToTaskProgress(state,{messageId:"blocker",text:"Review could not verify this answer",responsePurpose:"deliverable",retainWorkProduct:false});
+ assert.equal(state.workProduct?.assistantMessageId,"b-draft");
+});
+
+
+test("legacy prior-work recovery stays within known active-project boundaries",()=>{
+ let state=project(emptyTaskProgress(),"a","New project A");
+ state=project(state,"b","New project B");
+ state=project(state,"d","New project D");
+ state=applyUserToTaskProgress(state,{messageId:"resume",text:"Resume B",projectTransition:{action:"resume",projectId:"b",sourceQuote:"Resume B"}});
+ const history=[{id:"a",role:"user" as const,content:"New project A"},{id:"adraft",role:"assistant" as const,content:"Wrong A draft"},{id:"b",role:"user" as const,content:"New project B"},{id:"limit",role:"user" as const,content:"Condense to 180 words"},{id:"bdraft",role:"assistant" as const,content:"Correct B prior response"},{id:"d",role:"user" as const,content:"New project D"},{id:"ddraft",role:"assistant" as const,content:"Wrong D draft"}];
+ const reference=recoverTaskWorkProduct(state,history);
+ assert.equal(reference?.assistantMessageId,"bdraft");assert.equal(reference?.request.userMessageId,"limit");
+ assert.equal(recoverTaskWorkProduct(state,history.slice(5)),undefined,'Missing parent anchor must not guess global latest draft');
 });

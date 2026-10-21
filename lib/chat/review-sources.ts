@@ -27,6 +27,10 @@ export function buildReviewSourceTurns(input: {
   }
   addMissing(input.progress?.projectContext?.text);
   addMissing(input.progress?.objective?.text);
+  if(input.progress?.workProduct?.projectId===input.progress?.projectContext?.userMessageId){
+    for(const request of input.progress?.workProduct?.requestSources ?? []) addMissing(request.text);
+    addMissing(input.progress?.workProduct?.request.text);
+  }
   // Keep the real historical turns verbatim and in order, including repeated
   // factual corrections. Only recovered context above is deduplicated.
   texts.push(...historical);

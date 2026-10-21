@@ -128,7 +128,7 @@ test('actual development dispatch rejects non-owner/app credentials and reconcil
  }
 });
 test('actual context assembly uses the admitted instructions/review preference after actor edits',async()=>{
- const load=modules({'@/lib/data/persistence-store':{
+ const load=modules({'@/lib/agents/task-handoff-knowledge':{loadTaskHandoffKnowledgeContext:async()=>''},'@/lib/data/persistence-store':{
   getChatContextState:async()=>({actor:{purpose:'Edited after admission',reviewMode:'off'},recentMessages:[],shortTermMemory:{},intermediateMemory:{},longTermMemory:{}}),
   listActorMemoryDocuments:async()=>[],
  }});
@@ -292,6 +292,7 @@ test('explicit handoff API resolves a source chat and submits its exact selectio
   '@/lib/chat/task-progress-store':{loadTaskProgress:async(a,c)=>{assert.equal(a,actor);assert.equal(c,chat);return {projectContext:{userMessageId:'source-project',text:'Current active client brief'},...(ambiguous?{projectClarification:'Which project?'}:{})};}},
   '@/lib/agents/store':{agentRpc:async(name,args)=>{calls.push({name,args});return{id:taskId};}},
   '@/lib/agents/development':{},
+  '@/lib/agents/task-handoff-knowledge':{prepareTaskHandoffKnowledge:async(binding,input,id)=>{assert.equal(id,taskId);assert.equal(binding.sourceActorId,actor);return [];}},
  });
  const {NextRequest}=load('next/server'),route=load('@/app/api/agent-tasks/route');
  const source=await (await route.GET(new NextRequest('http://local/api/agent-tasks?handoffChatId='+chat))).json();
@@ -299,8 +300,8 @@ test('explicit handoff API resolves a source chat and submits its exact selectio
  assert.equal(source.label,'Current active client brief');
  const create=body=>route.POST(new NextRequest('http://local/api/agent-tasks',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)}));
  assert.equal((await create({action:'create',id:taskId,agentId:agent,input:'Give relevant examples',kind:'general',handoff:source.handoff})).status,200);
- assert.equal(calls[0].name,'create_agent_task_handoff');
- assert.deepEqual(JSON.parse(JSON.stringify(calls[0].args)),{p_id:taskId,p_agent:agent,p_input:'Give relevant examples',p_source_actor:actor,p_source_chat:chat,p_project:'source-project'});
+ assert.equal(calls[0].name,'create_agent_task_handoff_with_knowledge');
+ assert.deepEqual(JSON.parse(JSON.stringify(calls[0].args)),{p_id:taskId,p_agent:agent,p_input:'Give relevant examples',p_source_actor:actor,p_source_chat:chat,p_project:'source-project',p_knowledge:[]});
  assert.equal((await create({action:'create',id:randomUUID(),agentId:agent,input:'Build it',kind:'development',handoff:source.handoff})).status,409);
  assert.equal(calls.length,1);
  ambiguous=true;
@@ -317,7 +318,7 @@ test('managed chat restores only receipt-bound frozen handoff facts and draft in
  assert.ok(begin>0&&end>begin);
  const compiled=ts.transpileModule(`(async()=>{${route.slice(begin,end)}return history;})()`,{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText;
  const current=[{id:'target-user',role:'user',content:'Give three examples'}];
- const run=()=>vm.runInNewContext(compiled,{currentHistory:current,pdfProgress:{projectContext:{userMessageId:'source-project',text:'Current client needs WIP controls'},projects:[{projectContext:{userMessageId:'source-project'},sourceChatId:'source-chat'}]},taskProgressUserMessageId:'new-user',chatId:task.chat_id,actorId:task.actor_id,currentAgentTask:()=>task,loadTaskHandoffEvidence,Map,contextProjects:[],getChatById:()=>{throw Error('Must not read a foreign actor chat');},getMessages:()=>{throw Error('Must not retrieve unrelated source history');}});
+ const run=()=>vm.runInNewContext(compiled,{currentHistory:current,pdfProgress:{projectContext:{userMessageId:'source-project',text:'Current client needs WIP controls'},projects:[{projectContext:{userMessageId:'source-project'},sourceChatId:'source-chat'}]},taskProgressUserMessageId:'new-user',chatId:task.chat_id,actorId:task.actor_id,currentAgentTask:()=>task,loadTaskHandoffEvidence,recoverTaskWorkProduct:load("@/lib/chat/task-progress").recoverTaskWorkProduct,Map,contextProjects:[],getChatById:()=>{throw Error('Must not read a foreign actor chat');},getMessages:()=>{throw Error('Must not retrieve unrelated source history');}});
  const history=await run();
  assert.deepEqual(JSON.parse(JSON.stringify(history.map(m=>m.id))),['source-project','fact-source','draft-source','target-user']);
  assert.match(history.map(m=>m.content).join('\n'),/35 jobs/);assert.match(history.map(m=>m.content).join('\n'),/Latest active draft/);

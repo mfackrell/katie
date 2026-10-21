@@ -729,3 +729,23 @@ test("actual Juniper draft cannot borrow uncited career history, and sourced res
  assert.deepEqual(entries.map(entry=>entry.key),[genuine.key]);
  assert.equal(calls.length,3);
 });
+
+test("handoff fact validation isolates cited source but earlier fiction qualifier can veto attribution",async()=>{
+ const {memoryEditor}=loadModules();
+ const factText="I consolidated six subsidiaries and reduced reporting preparation from eight days to three.";
+ const selected={...fact("atlas","Mark consolidated six subsidiaries and reduced reporting preparation from eight days to three."),category:"fact" as const,source:"user-stated" as const,confidence:"high" as const,evidenceMessageIds:["fact"],evidenceQuotes:[{messageId:"fact",quote:factText}]};
+ const messages=[
+  {id:"qualifier",role:"user" as const,chatId:"old",createdAt:"2026-01-01",content:"This is a fictional candidate exercise, not Mark's career history."},
+  {id:"fact",role:"user" as const,chatId:"old",createdAt:"2026-01-02",content:factText},
+ ];
+ let stages=0;
+ (globalThis as any).__KATIE_LONG_TERM_MEMORY_OPENAI_CLIENT__={chat:{completions:{async create(params:any){
+  stages++;
+  const sourceStage=params.messages[0].content.includes("(source)");
+  const payload=JSON.parse(params.messages[1].content);
+  assert.deepEqual(payload.userContext.map((message:any)=>message.id),sourceStage?["fact"]:["qualifier","fact"]);
+  return{choices:[{message:{content:JSON.stringify({verdicts:[{key:selected.key,supported:sourceStage,durable:true,reason:sourceStage?"Direct source support":"Earlier fictional qualification forbids Mark attribution"}]})}}]};
+ }}}};
+ await assert.rejects(memoryEditor.verifyTaskMemorySupport([selected],messages),/Earlier fictional qualification/);
+ assert.equal(stages,2);
+});
