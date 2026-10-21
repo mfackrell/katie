@@ -21,3 +21,11 @@ test('foreign, incomplete, unreviewed and superseded source reports cannot becom
  }
  const f=fixture();for(const ids of [[],[id,id],['invented-source']])await assert.rejects(f.api.executiveSourceReports({actorId:'owner',chatId:'chat',missionIds:ids}),/Invalid Executive source/);
 });
+
+test('source groups preserve every character, bound encoded input and reject oversized dispatch before inference',()=>{
+ const {api}=fixture();const reports=[0,1].map(i=>({missionId:'source-'+i,objective:'Source',report:('Full source '+i+' evidence. ').repeat(1100),reviewJobId:'review-'+i}));
+ const groups=api.executiveSourceGroups(reports);assert.equal(groups.length,3);
+ for(const g of groups)assert.ok(JSON.stringify(g).length<=18000);
+ for(const report of reports){const parts=groups.flatMap(g=>g.fragments).filter(p=>p.missionId===report.missionId);assert.equal(parts.map(p=>p.text).join(''),report.report);assert.equal(parts[0].start,0);assert.equal(parts.at(-1).end,report.report.length);}
+ assert.throws(()=>api.executiveSourceGroups([{...reports[0],report:'x'.repeat(100000)}]),/stage the source work/);
+});

@@ -51,3 +51,14 @@ Provider-specific tool options are serialized by the native adapter. Truncated
 outputs may try another eligible model within the same ledger and execution window.
 Commissioned synthesis waits for completed independent source reviews and receives
 their complete reports through durable, conversation-scoped mission references.
+
+Source-bound synthesis partitions complete reports into at most three lossless
+JSON-encoded evidence groups of at most 18,000 characters each. Saved workers read
+all groups; digests stay bounded. Each independent review verifies the candidate
+against every original group in separate lease-free continuations, then performs
+the normal draft-blind assessment and full review. Saved group receipts are bound
+to the exact candidate and source hash; revision rechecks every group. Failed
+source checks force revision even if the overall model approves. Oversized source
+sets are rejected before mission execution and remain intact for staged analysis.
+Only objectives explicitly requesting synthesis of source work inherit those
+source dependencies; unrelated commissioned work remains independently runnable.

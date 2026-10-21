@@ -23,3 +23,27 @@ export async function sourceReportsForMission(missionId:string){
  if(error||!binding?.result?.sourceMissionIds)throw Error('Durable Executive source handoff unavailable');
  return executiveSourceReports({actorId:binding.actor_id,chatId:binding.chat_id,missionIds:binding.result.sourceMissionIds});
 }
+
+export type ExecutiveSourceReport=Awaited<ReturnType<typeof executiveSourceReports>>[number];
+export type ExecutiveSourceGroup={fragments:Array<{missionId:string;reviewJobId:string;start:number;end:number;text:string}>};
+/** Partition every character; never replace an accepted report with a clipped
+ * summary. Three encoded groups fit both the model envelope and revision ledger. */
+export function executiveSourceGroups(reports:ExecutiveSourceReport[]){
+ const groups:ExecutiveSourceGroup[]=[];let current:ExecutiveSourceGroup={fragments:[]};
+ for(const report of reports){
+  let start=0;
+  while(start<report.report.length){
+   let low=1,high=Math.min(report.report.length-start,18000),length=0;
+   while(low<=high){const middle=Math.floor((low+high)/2),fragment={missionId:report.missionId,reviewJobId:report.reviewJobId,start,end:start+middle,text:report.report.slice(start,start+middle)};
+    if(JSON.stringify({fragments:[...current.fragments,fragment]}).length<=18000){length=middle;low=middle+1;}else high=middle-1;
+   }
+   if(!length){if(!current.fragments.length)throw Error('Executive source metadata exceeds the bounded group envelope');groups.push(current);current={fragments:[]};if(groups.length>=3)throw Error('Executive source reports exceed three bounded evidence groups; stage the source work before synthesis. Complete reports remain saved.');continue;}
+   current.fragments.push({missionId:report.missionId,reviewJobId:report.reviewJobId,start,end:start+length,text:report.report.slice(start,start+length)});start+=length;
+  }
+ }
+ if(current.fragments.length)groups.push(current);
+ return groups;
+}
+export function executiveSourceManifest(reports:ExecutiveSourceReport[]){
+ return reports.map(({report,...source})=>({...source,objective:source.objective.slice(0,200),reportCharacters:report.length,completeReportRetained:true}));
+}

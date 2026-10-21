@@ -95,7 +95,8 @@ async function advancePlan(row:RecordRow,plan:SavedPlan,activeRepoId?:string|nul
    if(!existing){
     // Newly commissioned specialists receive the completed source work, not
     // just instructions to synthesize reports they cannot otherwise access.
-    const original=plan.assignments.filter(a=>!plan.provision.some(p=>a.requestId===p.requestId+'-assignment'));
+    const sourceDependent=provision.capability==='research_synthesis'&&/\b(?:synthesi[sz]e|consolidat\w*|integrat\w*)\b/i.test(provision.objective)&&/\b(?:upstream|workstreams?|technical|operational|source reports?)\b/i.test(provision.objective);
+    const original=sourceDependent?plan.assignments.filter(a=>!plan.provision.some(p=>a.requestId===p.requestId+'-assignment')):[];
     const sources=await Promise.all(original.map(a=>a.missionId?missionState(a.missionId):{state:a.blocked?'blocked':'running',result:''}));
     if(sources.some(s=>s.state==='running'))continue;
     if(sources.some(s=>s.state!=='verified')){provision.blocked='Source workstreams have not passed independent review; synthesis was not started.';continue;}

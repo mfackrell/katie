@@ -8,7 +8,7 @@ const require=createRequire(import.meta.url);
 const js=ts.transpileModule(readFileSync('lib/executive/factory-runtime.ts','utf8'),{
  compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}
 }).outputText;
-function setup({registered=null,agentRows=null,provisionRoute=null}={}){
+function setup({registered=null,agentRows=null,provisionRoute=null,existingDelegation=null}={}){
  const calls=[], saved=[];
  const agents=agentRows??[
   {id:'lead',config:{name:'Mission Lead',research:false,development:true}},
@@ -21,7 +21,7 @@ function setup({registered=null,agentRows=null,provisionRoute=null}={}){
    const filter=[];
    const builder={
     select(){return this;},eq(...args){filter.push(args);return this;},limit(){return this;},order(){return this;},
-    async maybeSingle(){return {data:table==='executive_orchestrators'?registered:null,error:null};},
+    async maybeSingle(){return {data:table==='executive_orchestrators'?registered:table==='executive_delegations'?existingDelegation:null,error:null};},
     async returns(){return {data:table==='managed_agents'?agents:[],error:null};},
     async update(value){calls.push({kind:'update',table,filter,value});return {error:null};}
    };
@@ -38,7 +38,7 @@ function setup({registered=null,agentRows=null,provisionRoute=null}={}){
  vm.runInNewContext(js,{exports,require:name=>{
   if(name==='@/lib/data/supabase/admin')return {getSupabaseAdminClient:()=>db};
   if(name==='@/lib/data/persistence-store')return {saveMessage:async(_id,msg)=>saved.push(msg)};
-  if(name==='./source-handoff')return{EXECUTIVE_SOURCE_MARKER:'\nExecutive source handoff: fixture',executiveSourceReports:async input=>{calls.push({kind:'source-validation',input});return[{report:'Reviewed report'}];}};
+  if(name==='./source-handoff')return{EXECUTIVE_SOURCE_MARKER:'\nExecutive source handoff: fixture',executiveSourceGroups:()=>[],executiveSourceReports:async input=>{calls.push({kind:'source-validation',input});return[{report:'Reviewed report'}];}};
   if(name==='./delivery')return {factoryReplyId:id=>id};
   if(name==='./provisioning-service')return {planExecutiveProvisioning:async input=>{
    calls.push({kind:'plan',input});
@@ -164,4 +164,13 @@ test('Executive assignments reserve bounded routing and complete review capacity
  const proposal=calls.find(c=>c.name==='propose_executive_delegation');assert.equal(proposal.args.p_budget,120000);
  const capacity=calls.findIndex(c=>c.kind==='update'&&c.table==='agent_missions'&&c.value.max_calls===20),start=calls.findIndex(c=>c.name==='control_mission');
  assert.ok(capacity>=0&&capacity<start);assert.equal(calls[capacity].value.token_allowance,120000);
+});
+
+test('an unlinked saved proposal reuses its deadline, budget and criteria rather than changing idempotent values',async()=>{
+ const objective='Consolidate the reviewed source reports.',existing={id:'delegation-id',status:'proposed',mission_id:null,deadline:'2099-01-01T00:00:00.000Z',budget_tokens:60000,success_criteria:['Saved original acceptance'],objective,capability:'research_synthesis'};
+ const {factory,calls}=setup({registered:{slug:'synthesis',status:'active',capabilities:['research_synthesis']},existingDelegation:existing});
+ await factory.startSpecialistAssignment({actorId:'actor',chatId:'chat',requestId:'resume-proposal',message:'Ask the synthesis orchestrator to '+objective});
+ const proposal=calls.find(c=>c.name==='propose_executive_delegation');assert.equal(proposal.args.p_deadline,existing.deadline);assert.equal(proposal.args.p_budget,existing.budget_tokens);assert.deepEqual(proposal.args.p_success,existing.success_criteria);
+ assert.ok(calls.some(c=>c.name==='create_mission'));assert.ok(calls.some(c=>c.name==='control_mission'));
+ assert.equal(calls.find(c=>c.kind==='update'&&c.table==='agent_missions').value.token_allowance,existing.budget_tokens);
 });

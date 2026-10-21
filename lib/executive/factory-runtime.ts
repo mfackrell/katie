@@ -1,4 +1,4 @@
-import {EXECUTIVE_SOURCE_MARKER,executiveSourceReports} from './source-handoff';
+import {EXECUTIVE_SOURCE_MARKER,executiveSourceReports,executiveSourceGroups} from './source-handoff';
 import {createHash} from 'node:crypto';
 import {getSupabaseAdminClient} from '@/lib/data/supabase/admin';
 import {saveMessage} from '@/lib/data/persistence-store';
@@ -116,7 +116,7 @@ export async function startSpecialistAssignment(input:{actorId:string;chatId:str
  if(error)throw Error('Specialist assignment lookup unavailable');
  if(!registered||registered.status!=='active')return intent.slug+' is not active. Create and verify that orchestrator first.';
  const requestKey=stableKey('exec-specialist-task-',input.requestId);
- const {data:existing}=await db.from('executive_delegations').select('id,status,mission_id').eq('actor_id',input.actorId).eq('chat_id',input.chatId).eq('request_key',requestKey).maybeSingle<{id:string;status:string;mission_id:string|null}>();
+ const {data:existing}=await db.from('executive_delegations').select('id,status,mission_id,deadline,budget_tokens,success_criteria,objective,capability').eq('actor_id',input.actorId).eq('chat_id',input.chatId).eq('request_key',requestKey).maybeSingle<{id:string;status:string;mission_id:string|null;deadline:string;budget_tokens:number;success_criteria:string[];objective:string;capability:string}>();
  if(existing?.mission_id)return 'Specialist assignment '+existing.id+' is already '+existing.status+'.';
  // Read-only audits may inspect a verified repository, but MUST NOT receive
  // a developer/write-enabled worker solely because the task mentions code.
@@ -125,16 +125,17 @@ export async function startSpecialistAssignment(input:{actorId:string;chatId:str
  const repositoryTask=coding||/\b(?:repository|codebase|source code|github|pull request|commit history)\b/i.test(intent.objective);
  if(repositoryTask&&!input.activeRepoId)return 'Select a verified connected repository for this specialist assignment.';
  const agents=await team(coding);
- const missionId=stableUuid(requestKey),deadline=new Date(Date.now()+3*60*60000).toISOString();
+ if(existing&&(existing.status!=='proposed'||existing.objective!==intent.objective||existing.capability!==registered.capabilities[0]))throw Error('Saved Executive proposal identity conflict');
+ const missionId=stableUuid(requestKey),deadline=existing?.deadline??new Date(Date.now()+3*60*60000).toISOString();
  const {data:delegation,error:proposalError}=await db.rpc<{id:string}>('propose_executive_delegation',{
   p_actor:input.actorId,p_chat:input.chatId,p_slug:intent.slug,p_request:requestKey,
   p_objective:intent.objective,p_capability:registered.capabilities[0],
-  p_success:['Deliver the requested result','Use independent agents and a final independent review','Report verified evidence or a blocker'],
-  p_budget:120000,p_deadline:deadline
+  p_success:existing?.success_criteria??['Deliver the requested result','Use independent agents and a final independent review','Report verified evidence or a blocker'],
+  p_budget:existing?.budget_tokens??120000,p_deadline:deadline
  });
  if(proposalError||!delegation?.id)throw Error('Specialist delegation failed');
  if(input.sourceMissionIds?.length){
-  await executiveSourceReports({actorId:input.actorId,chatId:input.chatId,missionIds:input.sourceMissionIds});
+  executiveSourceGroups(await executiveSourceReports({actorId:input.actorId,chatId:input.chatId,missionIds:input.sourceMissionIds}));
   // Persist references BEFORE linking or starting the mission. Recovery can
   // reconstruct the evidence even if dispatch is interrupted after creation.
   const {error:sourceError}=await db.from('executive_delegations').eq('id',delegation.id).eq('status','proposed')
@@ -148,7 +149,7 @@ export async function startSpecialistAssignment(input:{actorId:string;chatId:str
  if(missionError)throw Error('Specialist mission creation failed: '+boundedError(missionError));
  // Reserve capacity for task routing, substantive work and a full independent
  // revision cycle, including bounded provider fallbacks. Usage is never reset.
- const {error:capacityError}=await db.from('agent_missions').eq('id',missionId).eq('status','draft').update({token_allowance:120000,max_calls:20});
+ const {error:capacityError}=await db.from('agent_missions').eq('id',missionId).eq('status','draft').update({token_allowance:existing?.budget_tokens??120000,max_calls:20});
  if(capacityError)throw Error('Executive mission capacity could not be configured');
  const {error:linkError}=await db.from('executive_delegations').eq('id',delegation.id).eq('status','proposed').update({mission_id:missionId});
  if(linkError)throw Error('Specialist mission linking failed');
