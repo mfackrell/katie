@@ -30,7 +30,7 @@ export async function recordAndReconcileSpecialistEstimate(input:{
  const {data:rows,error}=await db.from('project_specialist_estimates').select('estimate')
   .eq('project_id',input.projectId).eq('scope_hash',input.scopeHash);
  if(error)throw Error('Specialist estimation records unavailable');
- const submissions=(rows??[]).map((r:{estimate:unknown})=>r.estimate);
+ const submissions=(rows??[]).map((row:unknown)=>{if(!row||typeof row!=='object'||!('estimate' in row))throw Error('Invalid specialist estimate record');return (row as {estimate:unknown}).estimate;});
  try{return reconcileSpecialistEstimates(input.scopeForecast,submissions);}
  catch{return null;} // Other specialists have not yet delivered; never use provisional as reviewed.
 }
