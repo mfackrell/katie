@@ -80,6 +80,7 @@ jobs:
           stage='stage trusted verification scripts'
           cp scripts/project-game-rules.mjs scripts/project-game-check.mjs scripts/project-context.mjs scripts/project-browser-check.mjs scripts/project-sandbox.mjs scripts/project-ci.mjs scripts/project-scope.mjs scripts/project-browser-engine.mjs "$RUNNER_TEMP/project-tools/"
           stage='validate saved project metadata in issue'
+          node scripts/request-envelope.mjs unpack "$RUNNER_TEMP/agent-task/AGENT_REQUEST.md"
           node scripts/project-context.mjs prepare "$RUNNER_TEMP/agent-task/AGENT_REQUEST.md" > "$RUNNER_TEMP/project-context.json"
           stage='validate project contract envelope'
           jq -e '.projectId and .contractHash and .baseSha and (.allowedPaths | length > 0)' "$RUNNER_TEMP/project-context.json" >/dev/null || exit 1
