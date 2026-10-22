@@ -140,7 +140,7 @@ test('review and execution use the same separate request envelopes without dropp
  assert.equal(budget.fitsMissionEnvelope('instruction','c'.repeat(48001)),false);
  const worker=readFileSync('lib/missions/worker.ts','utf8');
  const model=readFileSync('lib/missions/model.ts','utf8');
- assert.match(worker,/fitsMissionEnvelope\(reviewFrame,reviewInput\)/);
- assert.match(model,/fitsMissionEnvelope\(instruction,input\)/);
+ assert.match(worker,/fitsMissionEnvelope\(reviewFrame,reviewInput,missionInputLimit\(claim\)\)/);
+ assert.match(model,/fitsMissionEnvelope\(instruction,input,missionInputLimit\(claim\)\)/);
  assert.match(worker,/validateAnswerReview\(parseJSON\(checked.text\),assessment\)/);
 });
