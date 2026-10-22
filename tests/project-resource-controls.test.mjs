@@ -10,7 +10,7 @@ test('estimate is advisory and is not tied to existing fixed project token ceili
  assert.doesNotMatch(sql,/estimated_tokens\s*<=\s*token_allowance/);
 });
 test('estimate update never changes authorization, status, lease or operational watchdogs',()=>{
- const body=sql.split('CREATE OR REPLACE FUNCTION public.set_project_resource_estimate(')[1].split('END \\$fn\\$;')[0];
+ const body=sql.split('CREATE OR REPLACE FUNCTION public.set_project_resource_estimate(')[1].split('END $fn$;')[0];
  assert.match(body,/UPDATE work_projects SET estimated_tokens=/);
  assert.doesNotMatch(body, /SET[^;]*token_allowance\s*=/i);
  assert.doesNotMatch(body, /SET[^;]*status\s*=/i);
