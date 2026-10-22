@@ -36,19 +36,24 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 );
 `;
 
-const initResult = spawnSync('psql', [databaseUrl, '-v', 'ON_ERROR_STOP=1', '-c', baseSql], {
-  stdio: 'inherit'
-});
-
-if (initResult.error) {
-  console.error('Failed to run psql. Ensure psql is installed and available in PATH.');
-  console.error(initResult.error.message);
-  process.exit(1);
+// This DDL is idempotent. A Supavisor authentication timeout can occur before
+// PostgreSQL sees it. Retry ONLY this idempotent initialization operation.
+// Never apply this retry policy to arbitrary migration files or ledger writes.
+let initialized = false;
+for (let attempt = 0; attempt < 3; attempt++) {
+  const init = spawnSync('psql', [databaseUrl, '-v', 'ON_ERROR_STOP=1', '-c', baseSql],
+    { encoding: 'utf8', timeout: 30000 });
+  if (init.status === 0) { initialized = true; break; }
+  const stderr = init.stderr ?? '';
+  const transient = /authentication did not complete|authentication timeout|connection timed out|could not connect|connection terminated/i.test(stderr);
+  if (!transient || attempt === 2) {
+    process.stderr.write(stderr || init.error?.message || 'Database initialization failed');
+    process.exit(init.status ?? 1);
+  }
+  console.warn('Transient database authentication failure during idempotent schema_migrations initialization; retrying.');
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 400 * (attempt + 1));
 }
-
-if (initResult.status !== 0) {
-  process.exit(initResult.status ?? 1);
-}
+if (!initialized) throw Error('Migration initialization was not confirmed');
 
 // Read the complete ledger once. The prior runner created a fresh Supavisor
 // authentication session for EVERY applied migration (even no-op releases).
