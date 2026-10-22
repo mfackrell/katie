@@ -6,7 +6,7 @@ import {recordAndReconcileSpecialistEstimate} from './specialist-estimate-handof
 // Existing project authorization and database mission reservations remain binding.
 export async function runSpecialistResourceBatch(){
  const db=getSupabaseAdminClient();
- const {data:dispatched,error:dispatchError}=await db.rpc<Record<string,string>|null>('dispatch_specialist_resource_estimate');
+ const {data:dispatched,error:dispatchError}=await db.rpc<Record<string,string>|null>('dispatch_specialist_resource_estimate',{});
  if(dispatchError)throw Error('Specialist resource dispatch unavailable: '+dispatchError.message.slice(0,150));
  const {data:rows,error}=await db.from('project_specialist_dispatches')
    .select('project_id,scope_hash,package_id,specialist,mission_id,status')
