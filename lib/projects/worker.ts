@@ -126,11 +126,11 @@ async function advance(p: Project) {
             // A forecast does not increase token_allowance or approve coding.
             // Save the granular rationale durably for audit and future calibration.
             const db=getSupabaseAdminClient();
-            const {error:forecastError}=await db.from('work_projects').update({
+            const {error:forecastError}=await db.from('work_projects').eq('id',p.id).eq('phase','specification').update({
                 estimated_tokens:forecast.totals.expectedTokens,
                 estimate_rationale:JSON.stringify(forecast),
                 estimate_updated_at:new Date().toISOString()
-            }).eq('id',p.id).eq('phase','specification');
+            });
             if(forecastError)throw Error('Project resource forecast could not be saved');
             await finish('spec', { spec, baseline: base, detail: 'Specification reviewed. Scope-based resource forecast saved; spending authorization unchanged. ' + (p.repository_id ? 'Preparing your exact coding-scope approval.' : 'Name a connected target repository before coding can begin.') });
             return;
