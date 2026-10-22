@@ -1,0 +1,1 @@
+export function estimateProjectResources(spec: any, objective?: string): { totals: { lowerTokens: number; expectedTokens: number; upperTokens: number }; workPackages: Array<{id:string;label:string;estimatedTokens:number}>; rationale:string; [key:string]:unknown };

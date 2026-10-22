@@ -7,6 +7,7 @@ import { developmentPreview, projectAcceptanceSchema, reconcileDevelopment, retr
 import { parseJSON } from '@/lib/missions/types';
 import { validateProjectPlan, digest, projectPlanSchema, gameSpecificationView, canonical } from './contract';
 import {gameAssessmentEvidence} from './game-evidence';
+import {estimateProjectResources} from './resource-forecast.mjs';
 import { projectRpc, projectRuns, milestoneEvidence, acceptanceBinding, getDevelopmentProjectContext, type Project } from './store';
 export async function baseline(p: Project) { if (!p.repository_id)
     return null; const { data: r, error } = await getSupabaseAdminClient().from('repo_sync_runs').select('repository_full_name').eq('id', p.repository_id).maybeSingle<{
@@ -121,7 +122,17 @@ async function advance(p: Project) {
             const spec = validateProjectPlan(parseJSON(m.result ?? ''));
             if(game&&!spec.game)throw Error('Game specification requires source-grounded rules and registered model/browser acceptance');
             const base = await baseline(p);
-            await finish('spec', { spec, baseline: base, detail: 'Specification reviewed. ' + (p.repository_id ? 'Preparing your exact coding-scope approval.' : 'Name a connected target repository before coding can begin.') });
+            const forecast=estimateProjectResources(spec,p.objective+' '+p.clarifications);
+            // A forecast does not increase token_allowance or approve coding.
+            // Save the granular rationale durably for audit and future calibration.
+            const db=getSupabaseAdminClient();
+            const {error:forecastError}=await db.from('work_projects').eq('id',p.id).eq('phase','specification').update({
+                estimated_tokens:forecast.totals.expectedTokens,
+                estimate_rationale:JSON.stringify(forecast),
+                estimate_updated_at:new Date().toISOString()
+            });
+            if(forecastError)throw Error('Project resource forecast could not be saved');
+            await finish('spec', { spec, baseline: base, detail: 'Specification reviewed. Scope-based resource forecast saved; spending authorization unchanged. ' + (p.repository_id ? 'Preparing your exact coding-scope approval.' : 'Name a connected target repository before coding can begin.') });
             return;
         }
         if (p.phase === 'development') {
