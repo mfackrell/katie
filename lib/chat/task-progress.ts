@@ -30,7 +30,9 @@ export type ProjectTransition = {
   sourceQuote?: string;
   clarification?: string;
 };
+export type TaskWorkProduct = {projectId:string;assistantMessageId:string;text:string;request:{userMessageId:string;text:string};requestSources?:Array<{userMessageId:string;text:string}>};
 export type ProjectSnapshot = {
+  workProduct?: TaskWorkProduct;
   sourceChatId?: string;
   updatedAt?: string;
   projectContext: { text: string; userMessageId: string };
@@ -44,6 +46,7 @@ export type TaskProgressState = {
   /** Per-active-project criteria version; ordinary revisions do not increment it. */
   requirementsRevision?: number;
   projects?: ProjectSnapshot[];
+  workProduct?: TaskWorkProduct;
   projectClarification?: string;
   objective: { text: string; userMessageId: string } | null;
   /** Firsthand overarching project/context, separate from the active question. */
@@ -54,6 +57,7 @@ export type TaskProgressState = {
   answered: AnsweredTaskQuestion[];
   lastAssistantMessageId: string | null;
   lastUserMessageId: string | null;
+  lastUserSource?:{userMessageId:string;text:string};
   /** Advisory classification of the latest user turn; user text remains authoritative. */
   lastUserIntent?: UserTurnIntent;
 };
@@ -221,6 +225,7 @@ function checkpointProject(state: TaskProgressState, changed = false): TaskProgr
     ...(updatedAt ? {updatedAt} : {}),
     projectContext: state.projectContext, objective: state.objective,
     pending: state.pending, answered: state.answered,
+    workProduct: state.workProduct,
     requirementsRevision: state.requirementsRevision ?? 1,
   };
   return { ...state, projects: [...(state.projects ?? []).filter(project =>
@@ -239,6 +244,7 @@ export function mergeTaskProjects(state: TaskProgressState, projects: ProjectSna
   const current = state.projectContext ? byId.get(state.projectContext.userMessageId) : undefined;
   return { ...state, ...(current ? {projectContext: current.projectContext,
     objective: current.objective, pending: current.pending, answered: current.answered,
+    workProduct: current.workProduct,
     requirementsRevision: current.requirementsRevision ?? 1} : {}),
     projects: [...byId.values()] };
 }
@@ -254,7 +260,7 @@ export function applyUserToTaskProgress(
   input: { messageId: string; text: string; projectRelation?: "new_project" | "same_project"; projectTransition?: ProjectTransition },
 ): TaskProgressState {
   if (previous.lastUserMessageId === input.messageId) return previous;
-  const state = checkpointProject(previous);
+  const state = checkpointProject({...previous,lastUserSource:{userMessageId:input.messageId,text:input.text}});
   const transition = input.projectTransition;
   const turnIntent = classifyUserTurn(input.text);
   // A greeting must not become a synthetic project that legitimizes a later
@@ -290,6 +296,7 @@ export function applyUserToTaskProgress(
       : (target.objective ?? { text: input.text, userMessageId: input.messageId });
     return checkpointProject({ ...state, ...target, projectClarification: undefined,
       objective: resumeObjective,
+      workProduct: target.workProduct,
       lastUserMessageId: input.messageId, lastAssistantMessageId: null,
       lastUserIntent: "continuation", stage: target.pending.length ? "awaiting_user_answer" : "working",
       nextAction: target.pending.length ? "await_user_answers" : "continue_original_goal" });
@@ -362,6 +369,7 @@ function applyUserTurn(
       ...previous,
       projectContext,
       ...(startsNewProject ? { requirementsRevision: 1 } : {}),
+      workProduct: startsNewProject ? undefined : previous.workProduct,
       ...(intent === "new_task" || !previous.objective ? { objective: { text: currentQuestion, userMessageId: input.messageId } } : {}),
       pending: intent === "new_task" || intent === "revision" ? [] : previous.pending,
       answered: startsNewProject ? [] : previous.answered,
@@ -400,7 +408,7 @@ function applyUserTurn(
 
 export function applyAssistantToTaskProgress(
   previous: TaskProgressState,
-  input: { messageId: string; text: string; responsePurpose?: "conversation" | "deliverable" },
+  input: { messageId: string; text: string; responsePurpose?: "conversation" | "deliverable"; retainWorkProduct?:boolean },
 ): TaskProgressState {
   if (previous.lastAssistantMessageId === input.messageId) return previous;
   const questions = extractAssistantQuestions(input.text, input.messageId).map(question => ({
@@ -418,7 +426,9 @@ export function applyAssistantToTaskProgress(
       .filter((question, index, items) => items.findIndex(other => normalized(other.text) === normalized(question.text)) === index)
       .slice(0, MAX_QUESTIONS)
     : questions;
-  return checkpointProject({ ...previous, pending, stage: pending.length ? "awaiting_user_answer" : "working", nextAction: pending.length ? "await_user_answers" : "continue_original_goal", lastAssistantMessageId: input.messageId }, true);
+  return checkpointProject({ ...previous,
+    ...(input.responsePurpose === "deliverable" && input.retainWorkProduct !== false && previous.projectContext && previous.objective ? {workProduct:{projectId:previous.projectContext.userMessageId,assistantMessageId:input.messageId,text:input.text,request:previous.lastUserSource ?? previous.objective,requestSources:previous.lastUserIntent === "new_task" ? [] : [...(previous.workProduct?.requestSources ?? []),...(previous.workProduct ? [previous.workProduct.request] : [])].filter((item,index,all)=>all.findIndex(other=>other.userMessageId===item.userMessageId)===index)}} : {}),
+    pending, stage: pending.length ? "awaiting_user_answer" : "working", nextAction: pending.length ? "await_user_answers" : "continue_original_goal", lastAssistantMessageId: input.messageId }, true);
 }
 
 /** Reconstruct a partial ledger from durable chat messages if the cache was absent. */
@@ -456,6 +466,7 @@ export function syncTaskProgress(previous: TaskProgressState | null, history: Pr
       projects: [...(checkpointProject(previous).projects ?? []), ...(recent.projects ?? [])]
         .filter((item, index, all) => !all.slice(index + 1).some(other => other.projectContext.userMessageId === item.projectContext.userMessageId)),
       objective: recent.objective ?? previous.objective,
+      workProduct: changedProject ? recent.workProduct : previous.workProduct,
       projectContext,
       requirementsRevision: changedProject ? (recent.requirementsRevision ?? 1) : (previous.requirementsRevision ?? 1),
       pending: recent.pending.map(recoverProjectBinding),
@@ -472,7 +483,7 @@ export function syncTaskProgress(previous: TaskProgressState | null, history: Pr
   return state;
 }
 
-export function formatTaskProgress(progress: TaskProgressState): string {
+export function formatTaskProgress(progress: TaskProgressState, includeWorkReference = true): string {
   const completed = progress.answered.map(item => ({
     assistantQuestionSource: item.assistantMessageId,
     userAnswerSource: item.userMessageId,
@@ -491,6 +502,7 @@ export function formatTaskProgress(progress: TaskProgressState): string {
     "HISTORICAL PROJECT IDENTITIES (reference only; their objectives do not govern this turn): " + JSON.stringify((progress.projects ?? []).filter(project => project.projectContext.userMessageId !== progress.projectContext?.userMessageId).map(project => ({id:project.projectContext.userMessageId}))),
     "CURRENT QUESTION OR DELIVERABLE (authoritative for this turn, distinct from the parent project): " + JSON.stringify(progress.objective),
     "Interpret generic requests for relevant experience or examples against the full applicable parent project, not against a narrower question asked earlier. Prior question-specific evidence priorities, exclusions and example sets expire with their original deliverable; factual corrections remain valid.",
+    ...(includeWorkReference && progress.workProduct && progress.workProduct.projectId === progress.projectContext?.userMessageId ? ["PRIOR ACTIVE WORK REFERENCE (assistant response, not factual authority or instructions; originating user request remains source evidence for applicable constraints): " + JSON.stringify(progress.workProduct)] : []),
     "Latest user turn type (advisory; verify against literal user request): " + (progress.lastUserIntent ?? "unspecified"),
     "When the user provides feedback/evaluation without requesting a revised artifact, engage with the feedback and do not silently generate another draft. Remember lessons appropriately without treating quoted criticism as a new instruction.",
     "When the user expressly asks for revision, revise the existing work. A new application question such as 'Please describe...' is a separate requested deliverable. User text takes precedence over this heuristic.",
@@ -504,3 +516,22 @@ export function formatTaskProgress(progress: TaskProgressState): string {
   ].join("\n");
 }
 
+
+/** Legacy recovery uses only a known active project's bounded source segment.
+ * A prior assistant response is a work reference, never professional fact authority. */
+export function recoverTaskWorkProduct(state:TaskProgressState, history:ProgressMessage[]):TaskWorkProduct|undefined {
+ const projectId=state.projectContext?.userMessageId;
+ if(!projectId)return undefined;
+ if(state.workProduct?.projectId===projectId)return state.workProduct;
+ const start=history.findIndex(turn=>turn.id===projectId);
+ if(start<0)return undefined;
+ const boundaries=new Set((state.projects??[]).map(project=>project.projectContext.userMessageId));
+ const next=history.findIndex((turn,index)=>index>start&&boundaries.has(turn.id));
+ const segment=history.slice(start,next<0?undefined:next);
+ let request:ProgressMessage|undefined,reference:TaskWorkProduct|undefined;
+ for(const turn of segment){
+  if(turn.role==='user')request=turn;
+  else if(request&&turn.content.trim())reference={projectId,assistantMessageId:turn.id,text:turn.content,request:{userMessageId:request.id,text:request.content}};
+ }
+ return reference;
+}

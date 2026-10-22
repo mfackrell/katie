@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { runAdaptiveCollaboration } from "../lib/collaboration/orchestrator";
 import { runAgentTask, type AgentTask } from "../lib/agents/policy";
-import { runRequiredDraftReview, validateContractResolutions } from "../lib/collaboration/required-review";
+import { runRequiredDraftReview, validateContractResolutions, validateAssessmentRepairs } from "../lib/collaboration/required-review";
 import { getDeliverableStandardInstruction } from "../lib/chat/deliverable-standard";
 import { createReviewClarification, buildReviewResumptionContext } from "../lib/collaboration/review-completion";
 import { acceptanceIds, reviewBaseline, validateAssessment, validateAnswerReview, type AnswerReview, type IndependentAssessment } from "../lib/collaboration/review-contract";
@@ -70,7 +70,7 @@ function setup(options: { reviews?: Array<ReturnType<typeof verdict>>; assessmen
       assert.ok(!p.user.includes(draft.text));
       assert.ok(p.user.includes(question));
       assert.ok(p.user.includes("they didn't ask for revenue size"));
-      return response("anthropic", "reviewer", options.assessment ?? assessment);
+      return response("anthropic", "reviewer", {...(options.assessment ?? assessment),...(p.user.includes("REQUIRED REPAIR RESPONSE")?{contractRepairs:[{objectionId:"contract-objection-1",sourceId:"turn-2",quote:question,resolution:"Retained the explicit requirement in the repaired contract",requirementIds:["revenue"]}]}:{})});
     }
     phases.push("review");
     return response("anthropic", "reviewer", options.reviews?.[reviewIndex++] ?? verdict("approve"));
@@ -1022,7 +1022,7 @@ test("wrong-target draft stays withheld when a later validator approves without 
   proposed.taskContract.conflicts = [];
   proposed.objective = "Supply examples for the historical planning engagement.";
   let validations = 0;
-  const reviewer = makeProvider("anthropic", async () => response("anthropic", "reviewer", proposed));
+  const reviewer = makeProvider("anthropic", async p => response("anthropic", "reviewer", {...proposed,...(p.user.includes("REQUIRED REPAIR RESPONSE")?{contractRepairs:[{objectionId:"contract-objection-1",sourceId:"latest-user",quote:current,resolution:"Current examples request retained",requirementIds:["examples"]}]}:{})}));
   const lead = makeProvider("openai", async p => {
     validations++;
     if (validations === 2) assert.match(p.user, /contract-objection-1/);
@@ -1163,4 +1163,72 @@ test("real review pipeline reuses contract on follow-up and rebuilds it for anot
   } finally {
     (globalThis as any).__KATIE_SUPABASE_ADMIN_CLIENT__=before;
   }
+});
+
+test("resumed prior work is a separate reference and its constraint source remains authoritative",()=>{
+ const request="Condense these examples to 180 words, retaining the confirmed correction.";
+ const progress={version:1 as const,projectContext:{userMessageId:"b",text:"Active project controls"},objective:{userMessageId:"resume",text:"Resume the latest draft for this project"},stage:"working" as const,nextAction:"continue_original_goal" as const,pending:[],answered:[],lastAssistantMessageId:null,lastUserMessageId:"resume",lastUserIntent:"continuation" as const,workProduct:{projectId:"b",assistantMessageId:"saved-draft",text:"PRIOR DRAFT: three verified examples",request:{userMessageId:"length-request",text:request}}};
+ const baseline=reviewBaseline({...params,user:progress.objective.text,history:[{role:"user",content:request}]},progress);
+ assert.match(baseline.text,/PRIOR ACTIVE-PROJECT WORK REFERENCE/);
+ assert.match(baseline.text,/PRIOR DRAFT: three verified examples/);
+ assert.ok(baseline.contractTurns.some(turn=>turn.text===request));
+ assert.ok(!baseline.contractTurns.some(turn=>turn.text.includes("PRIOR DRAFT")));
+ assert.deepEqual(baseline.params.history,[]);
+ assert.ok(!baseline.text.includes(draft.text));
+ const other=reviewBaseline(params,{...progress,workProduct:{...progress.workProduct,projectId:"other"}});
+ assert.ok(!other.text.includes("PRIOR DRAFT"));
+});
+
+test("a repaired assessment must retain the disputed source-linked requirement, not just promise compliance",()=>{
+ const objections=[{id:"contract-objection-1",findings:"The earlier explicit output limit remains applicable"}];
+ const turns=[{id:"turn-2",text:question}];
+ const repair={contractRepairs:[{objectionId:"contract-objection-1",sourceId:"turn-2",quote:question,resolution:"Preserved original explicit requirement",requirementIds:["revenue"]}]};
+ assert.doesNotThrow(()=>validateAssessmentRepairs(repair,assessment,objections,turns));
+ const missing=structuredClone(assessment);missing.taskContract.requirements=missing.taskContract.requirements.filter(item=>item.id!=="revenue");
+ assert.throws(()=>validateAssessmentRepairs(repair,missing,objections,turns),/retained active or superseded requirements/);
+ assert.throws(()=>validateAssessmentRepairs({},assessment,objections,turns),/resolve every prior/);
+});
+
+test("contract repair may remove unsupported requirements or correct reasoning without fabricating replacement requirements",()=>{
+ const rejected=structuredClone(assessment);
+ rejected.taskContract.requirements.push({id:"invented",sourceId:"turn-2",requirement:"Exclude all other career experience",status:"active"});
+ const objections=[{id:"contract-objection-1",findings:"That exclusion is not in the user source"}];
+ const turns=[{id:"turn-2",text:question}];
+ const removal={contractRepairs:[{objectionId:"contract-objection-1",sourceId:"turn-2",quote:question,resolution:"The source asks for relevant experience and contains no exclusion",disposition:"remove_unsupported",removedRequirementIds:["invented"]}]};
+ assert.doesNotThrow(()=>validateAssessmentRepairs(removal,assessment,objections,turns,rejected));
+ assert.throws(()=>validateAssessmentRepairs(removal,rejected,objections,turns,rejected),/must remove/);
+ const corrected=structuredClone(assessment);corrected.criteria.push("Prioritize relevant verified experience across the active client's needs");
+ const repair={contractRepairs:[{objectionId:"contract-objection-1",sourceId:"turn-2",quote:question,resolution:"This is a derived relevance criterion, not a user prohibition",disposition:"field_correction",fields:["criteria"]}]};
+ assert.doesNotThrow(()=>validateAssessmentRepairs(repair,corrected,objections,turns,assessment));
+ assert.throws(()=>validateAssessmentRepairs(repair,assessment,objections,turns,assessment),/changed objective/);
+});
+
+test("resumed draft repair retains an earlier output limit and supplies the prior work without promoting it to user evidence",async()=>{
+ const parent="Interim Controller: WIP, job costing, revenue controls and hands-on close.";
+ const limit="Condense the current three examples to 180 words. Keep the confirmed $180,000 correction.";
+ const latest="Resume application B and its latest draft. Give the three relevant examples.";
+ const priorText="Prior draft: Harbor WIP; Ridge close; Fieldworks revenue controls.";
+ const progress={version:1 as const,projectContext:{userMessageId:"b",text:parent},objective:{userMessageId:"resume",text:latest},stage:"working" as const,nextAction:"continue_original_goal" as const,pending:[],answered:[],lastAssistantMessageId:null,lastUserMessageId:"resume",lastUserIntent:"continuation" as const,workProduct:{projectId:"b",assistantMessageId:"prior-draft",text:priorText,request:{userMessageId:"limit",text:limit}}};
+ const initial=structuredClone(assessment);initial.taskContract.requirements=[{id:"examples",sourceId:"latest-user",requirement:"Three relevant examples for the active Controller application",status:"active"}];initial.taskContract.conflicts=[];
+ const repaired=structuredClone(initial);repaired.taskContract.requirements.push({id:"output-limit",sourceId:"turn-2",quote:limit,requirement:"Retain the three-example draft within 180 words and preserve the confirmed correction",status:"active"});
+ let assessments=0,validations=0;
+ const reviewer=makeProvider("anthropic",async p=>{
+  if(p.persona.includes("KATIE_INDEPENDENT_ASSESSMENT")){
+   assessments++;assert.ok(p.user.includes(priorText));assert.match(p.user,/NOT authoritative facts/);
+   if(assessments===1)return response("anthropic","reviewer",initial);
+   assert.match(p.user,/REJECTED CONTRACT TO REPAIR/);assert.ok(p.user.includes(JSON.stringify(initial)));
+   return response("anthropic","reviewer",{...repaired,contractRepairs:[{objectionId:"contract-objection-1",sourceId:"turn-2",quote:limit,resolution:"The user resumes the same draft; its output limit remains applicable",disposition:"requirements",requirementIds:["output-limit"]}]});
+  }
+  assert.ok(p.user.includes('"id":"output-limit"'));
+  return response("anthropic","reviewer",verdict("approve",repaired));
+ });
+ const lead=makeProvider("openai",async p=>{
+  validations++;
+  return response("openai","lead",{verdict:validations===1?"revise":"approve",issueType:validations===1?"missing_requirement":"none",findings:validations===1?"The earlier user output limit still governs the resumed draft but was omitted":"Original constraints are preserved",sourceCoverage:["turn-1","turn-2","latest-user"].map(sourceId=>({sourceId,finding:"Checked against active user sources"})),...(validations===2?{resolutions:[{objectionId:"contract-objection-1",sourceId:"turn-2",quote:limit,resolution:"The retained requirement now includes the limit and confirmed correction"}]}:{})});
+ });
+ const answer="Harbor: reconciled WIP across 35 jobs and corrected estimates; subsequent controls caught $180,000 in unapproved revenue. Ridge: improved the close from 12 to 7 days and corrected job coding. Fieldworks: strengthened unbilled-revenue controls.";
+ const result=await runRequiredDraftReview({requestId:"resume-prior-work-regression",params:{...params,user:latest,history:[]},sourceTurns:[{id:"turn-1",text:parent},{id:"turn-2",text:limit},{id:"latest-user",text:latest}],taskProgress:progress,draft:response("openai","lead",answer),leadProvider:lead,deadlineMs:deadline(),selectHelper:async c=>c.usedParticipants.length===1?{provider:reviewer,modelId:"reviewer"}:null});
+ assert.equal(result.audit.status,"approved");assert.equal(result.result.text,answer);assert.equal(assessments,2);assert.equal(validations,2);
+ assert.ok(result.result.text.split(/\s+/).length<=180);assert.match(result.result.text,/\$180,000/);
+ assert.ok(!result.audit.sourceTurns?.some(turn=>turn.text===priorText));
 });
