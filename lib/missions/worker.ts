@@ -159,8 +159,9 @@ export async function executeClaim(claim:Claim,model=missionModel){
   if(job.payload.approved!==true){await commit({detail:'Approve this exact saved coding assignment to submit an owner-authored GitHub issue. No merge or deployment is authorized.'},[],'awaiting_approval');return;}
   // Existing task IDs and durable dispatch markers protect the external write,
   // including recovery after a worker dies following possible acceptance.
-  const project=mission.project_id?await getDevelopmentProjectContext(job.id,true):null;
-  const binding=project?acceptanceBinding(project):undefined;
+  const project=await getDevelopmentProjectContext(job.id,true);
+  if(!project)throw Error('Registered Developer project lacks its DB-approved milestone contract');
+  const binding=acceptanceBinding(project);
   let task:AgentTask;
   const prior=await rpc<AgentTask|null>('mission_development_task',{p_job:job.id,p_lease:job.lease});
   if(!prior)throw Error('Saved development binding unavailable');
