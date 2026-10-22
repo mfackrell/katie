@@ -39,13 +39,10 @@ export async function runSpecialistResourceBatch(){
    scopeForecast:scope as {workPackages:Array<{id:string}>;totals:{expectedTokens:number}}
   });
   if(revised){
-   // Compare-and-swap prevents stale results overriding concurrent project updates.
-   const updated={...scope,specialistPlan:revised};
-   const {error:updateError}=await db.from('work_projects')
-     .eq('id',entry.project_id).eq('approval_hash',entry.scope_hash)
-     .eq('estimate_rationale',p.estimate_rationale)
-     .update({estimate_rationale:JSON.stringify(updated),estimate_updated_at:new Date().toISOString()});
-   if(updateError)throw Error('Consolidated specialist forecast persistence failed');
+   const {data:saved,error:saveError}=await db.rpc<boolean>('save_project_specialist_consolidation',{
+    p_project:entry.project_id,p_scope_hash:entry.scope_hash,p_plan:revised
+   });
+   if(saveError||!saved)throw Error('Consolidated specialist forecast persistence failed');
   }
   const {error:markError}=await db.from('project_specialist_dispatches')
    .eq('project_id',entry.project_id).eq('scope_hash',entry.scope_hash)
