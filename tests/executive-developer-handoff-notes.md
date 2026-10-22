@@ -1,0 +1,3 @@
+# Executive→Developer handoff acceptance
+
+A delegated Executive development assignment must register a durable Developer Orchestrator project from the original objective and the saved approved assignment identity. The Developer project owns scope validation, coding approval, immutable browser and model evidence, revisions, and completion. The Executive assignment must not issue duplicate GitHub work or report completion until the Developer project reports a verified result. Historical GitHub issue #650, draft PR #651 and head e85f581 remain prior evidence; they are not automatically asserted to satisfy a contract that did not exist.
