@@ -2,7 +2,11 @@ import {rpc} from './store';
 import type {Claim} from './types';
 
 export type MissionCapacity={authorized:boolean;remainingTokens:number;callsRemaining:number;routingCallsRemaining:number;reason?:string};
-export function fitsMissionEnvelope(instruction:string,input:string){return instruction.length<=48000&&input.length<=48000;}
+export function missionInputLimit(claim:Claim):number {
+ const evidence=claim.mission.project_evidence as {projectProfile?:string}|null;
+ return evidence?.projectProfile==='game' && claim.mission.project_kind==='specification' && ['compose','review','revise'].includes(claim.job.role) ? 96000 : 48000;
+}
+export function fitsMissionEnvelope(instruction:string,input:string,inputLimit=48000){return instruction.length<=48000&&input.length<=inputLimit;}
 
 /** A rejected reservation is NOT a provider call or a failed mission. */
 export class MissionAdmissionError extends Error {
