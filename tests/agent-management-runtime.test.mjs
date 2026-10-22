@@ -336,4 +336,5 @@ test('approved game coding handoff preserves original source through versioned l
  assert.match(dispatch,/approvedSource\\}\\$\\{task\\.input\\}/);
  assert.match(dispatch,/packDevelopmentRequest\\(fullBody, marker\\(task\\)\\)/);
  assert.match(dispatch,/body: issueBody/);
+ assert.ok(dispatch.indexOf('packDevelopmentRequest(fullBody, marker(task))') < dispatch.indexOf('const claimed = project ?'), 'validate complete request before claiming dispatch');
 });
