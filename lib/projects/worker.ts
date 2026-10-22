@@ -10,6 +10,7 @@ import {gameAssessmentEvidence} from './game-evidence';
 import {estimateProjectResources} from './resource-forecast.mjs';
 import {enrichResourceForecast} from './resource-economics.mjs';
 import {provisionalSpecialistPlan} from './specialist-resource-plan.mjs';
+import {runSpecialistResourceBatch} from './specialist-dispatch';
 import { projectRpc, projectRuns, milestoneEvidence, acceptanceBinding, getDevelopmentProjectContext, type Project } from './store';
 export async function baseline(p: Project) { if (!p.repository_id)
     return null; const { data: r, error } = await getSupabaseAdminClient().from('repo_sync_runs').select('repository_full_name').eq('id', p.repository_id).maybeSingle<{
@@ -440,6 +441,7 @@ async function reconcileBlockedInfrastructureProjects(){
     return false;
 }
 export async function runProjectBatch() { const maintenance=Promise.all([
+    runSpecialistResourceBatch().catch(error=>{console.error('[Projects] Specialist forecast execution failed',error instanceof Error?error.message:'Unknown failure');}),
     reconcileParkedDispatch().catch(error=>{console.error('[Projects] Parked dispatch recovery failed',error instanceof Error?error.message:'Unknown failure');}),
     reconcileBlockedInfrastructureProjects().catch(error=>{console.error('[Projects] Blocked verification recovery failed',error instanceof Error?error.message:'Unknown failure');}),
     reconcileBlockedGameRevisions().catch(error=>{console.error('[Projects] Game revision recovery failed',error instanceof Error?error.message:'Unknown failure');})
