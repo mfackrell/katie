@@ -18,11 +18,11 @@ export type RecoveryDiagnosis={
 const permission=/\b(unauthori[sz]ed|permission denied|credential|secret|token missing|owner approval|forbidden|401|403|RLS)\b/i;
 const budget=/\b(budget|token allowance|allowance exhausted|deadline reached|maximum attempts|rate.*spend|payment required)\b/i;
 const transient=/\b(429|rate limit|timeout|timed out|fetch failed|ECONNRESET|ECONNREFUSED|socket hang up|502|503|504|provider unavailable)\b/i;
-const browser=/chown ['"]?\/tmp\/fonts|chromium.*(?:launch|font|executable).*failed|browser bootstrap.*(?:error|failed)|Playwright.*browserType\.launch.*failed/i;
+const browser=/browserType\.launch:\s*Target page, context or browser has been closed|chown ['"]?\/tmp\/fonts|chromium.*(?:launch|font|executable).*failed|browser bootstrap.*(?:error|failed)|Playwright.*browserType\.launch.*failed/i;
 const install=/npm error (?:code ENOTCACHED|Exit handler never called)|baseline (?:npm|dependency).*failed|Vitest failed or did not produce a completion report|node_modules\/\.vite/i;
 const testFailure=/\b(AssertionError|expect\w* failed|test failed|independent review rejected|missing requirement|changes_requested|Rendered text does not equal approved expected value|TypeError|SyntaxError)\b/i;
 
-const browserPaths=['scripts/project-browser-check.mjs','scripts/project-browser-engine.mjs','scripts/project-sandbox.mjs','tests/project-browser-check.test.mjs','tests/project-sandbox.test.mjs'];
+const browserPaths=['scripts/project-browser-check.mjs','scripts/project-browser-engine.mjs','scripts/project-sandbox.mjs','lib/projects/preview.ts','tests/project-browser-check.test.mjs','tests/project-sandbox.test.mjs'];
 const dependencyPaths=['scripts/project-ci.mjs','scripts/project-sandbox.mjs','tests/project-sandbox.test.mjs','tests/projects-runtime.test.mjs'];
 export const allowedInfrastructurePaths=(kind:'browser'|'dependency'):string[]=>kind==='browser'?browserPaths:dependencyPaths;
 
