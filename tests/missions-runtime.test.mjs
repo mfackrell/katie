@@ -125,6 +125,8 @@ test('Executive coding approval delegates to Developer project without bypassing
   '@/lib/missions/store':{readMission:async()=>({mission:m,jobs:[j]}),rpc:async(name,args)=>{if(name==='mission_development_task')return task;if(name==='commit_mission_work'){commits.push(args);return true;}assert.fail('Unexpected RPC '+name);}},
  })('@/lib/missions/worker');
  const execute=()=>executeClaim({mission:m,job:j},()=>assert.fail('Delegation must not execute a coding model'));
+ await execute();assert.equal(commits.at(-1).p_status,'awaiting_approval');assert.equal(projects.length,0);
+ j.payload.approved=true;
  await execute();assert.equal(commits.at(-1).p_status,'waiting_external');assert.equal(projects.length,1);
  assert.equal(projects[0].name,'create_game_work_project');assert.equal(projects[0].args.p_request,'executive-delegated:'+m.id);
  assert.equal(projects[0].args.p_actor,task.actor_id);assert.equal(projects[0].args.p_chat,task.chat_id);assert.equal(projects[0].args.p_repository,m.repository_id);
