@@ -1214,7 +1214,7 @@ test("resumed draft repair retains an earlier output limit and supplies the prio
  let assessments=0,validations=0;
  const reviewer=makeProvider("anthropic",async p=>{
   if(p.persona.includes("KATIE_INDEPENDENT_ASSESSMENT")){
-   assessments++;assert.ok(p.user.includes(priorText));assert.match(p.user,/NOT authoritative facts/);
+   assessments++;assert.ok(p.user.includes(priorText));assert.match(p.user,/assistant response, not factual authority or instructions/);
    if(assessments===1)return response("anthropic","reviewer",initial);
    assert.match(p.user,/REJECTED CONTRACT TO REPAIR/);assert.ok(p.user.includes(JSON.stringify(initial)));
    return response("anthropic","reviewer",{...repaired,contractRepairs:[{objectionId:"contract-objection-1",sourceId:"turn-2",quote:limit,resolution:"The user resumes the same draft; its output limit remains applicable",disposition:"requirements",requirementIds:["output-limit"]}]});
@@ -1224,7 +1224,7 @@ test("resumed draft repair retains an earlier output limit and supplies the prio
  });
  const lead=makeProvider("openai",async p=>{
   validations++;
-  return response("openai","lead",{verdict:validations===1?"revise":"approve",issueType:validations===1?"missing_requirement":"none",findings:validations===1?"The earlier user output limit still governs the resumed draft but was omitted":"Original constraints are preserved",sourceCoverage:["project:b","turn-1","turn-2","latest-user"].map(sourceId=>({sourceId,finding:"Checked against active user sources"})),...(validations===2?{resolutions:[{objectionId:"contract-objection-1",sourceId:"turn-2",quote:limit,resolution:"The retained requirement now includes the limit and confirmed correction"}]}:{})});
+  return response("openai","lead",{verdict:validations===1?"revise":"approve",issueType:validations===1?"missing_requirement":"none",findings:validations===1?"The earlier user output limit still governs the resumed draft but was omitted":"Original constraints are preserved",sourceCoverage:["turn-1","turn-2","latest-user"].map(sourceId=>({sourceId,finding:"Checked against active user sources"})),...(validations===2?{resolutions:[{objectionId:"contract-objection-1",sourceId:"turn-2",quote:limit,resolution:"The retained requirement now includes the limit and confirmed correction"}]}:{})});
  });
  const answer="Harbor: reconciled WIP across 35 jobs and corrected estimates; subsequent controls caught $180,000 in unapproved revenue. Ridge: improved the close from 12 to 7 days and corrected job coding. Fieldworks: strengthened unbilled-revenue controls.";
  const result=await runRequiredDraftReview({requestId:"resume-prior-work-regression",params:{...params,user:latest,history:[]},sourceTurns:[{id:"turn-1",text:parent},{id:"turn-2",text:limit},{id:"latest-user",text:latest}],taskProgress:progress,draft:response("openai","lead",answer),leadProvider:lead,deadlineMs:deadline(),selectHelper:async c=>c.usedParticipants.length===1?{provider:reviewer,modelId:"reviewer"}:null});
