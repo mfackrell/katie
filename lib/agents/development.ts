@@ -4,6 +4,7 @@ import {getAvailableProviders} from '@/lib/providers';
 import {chooseProvider} from '@/lib/router/master-router';
 import { Octokit } from "@octokit/rest";
 import { inflateRawSync } from "node:zlib";
+import { packDevelopmentRequest } from '../../scripts/request-envelope.mjs';
 import { z } from "zod";
 import { getSupabaseAdminClient } from "@/lib/data/supabase/admin";
 import { agentRpc, readTask } from "./store";
@@ -123,12 +124,25 @@ export async function dispatchDevelopment(task: AgentTask, project?: Context, as
     return save(task, "blocked", "Project metadata is not permitted in ordinary coding input. A DB-bound approved project dispatcher is required.");
   }
   let projectHeader='';
+  let approvedSource = '';
   if(project){
     const saved=await getDevelopmentProjectContext(task.id,true);
     if(!saved||JSON.stringify(saved)!==JSON.stringify(project)||digest(project.contract)!==project.contractHash)throw Error('Project dispatch does not match approved DB binding');
     const {version,projectId,baseSha,baselineSha,allowedPaths,contractHash,contract,game,gameFinal}=project;
+    if (project.originalUserOutcome && project.approvedMilestone) {
+      approvedSource = 'ORIGINAL USER OUTCOME (authoritative; do not replace with assistant summaries):\n' +
+        project.originalUserOutcome + '\n\nAPPROVED MILESTONE (source-bound):\n' +
+        JSON.stringify(project.approvedMilestone) + '\n\n';
+    }
     const routed=await chooseTrustedGithubModels(task.input+'\n'+task.snapshot.instructions);
     projectHeader='<!-- katie-project: '+Buffer.from(JSON.stringify({version,projectId,baseSha,baselineSha,allowedPaths,contractHash,contract,...routed,...(game?{game,gameFinal}:{})})).toString('base64url')+' -->\n\n';
+  }
+  const fullBody = `${marker(task)}\n\n${projectHeader}${approvedSource}${task.input}\n\n## Saved agent responsibilities\n${task.snapshot.instructions}\n\nDefinition version: ${task.definition_version}. Approved managed task: ${task.id}.\nUse the existing owner-only implementation, independent tests, review, bounded repair and draft PR workflow. No deployment or automatic merge.`;
+  let issueBody: string;
+  try {
+    issueBody = packDevelopmentRequest(fullBody, marker(task));
+  } catch (error) {
+    return save(task, "blocked", error instanceof Error ? error.message : "Complete approved coding request cannot fit lossless transport");
   }
   const claimed = project ? await agentRpc<boolean>("claim_project_dispatch", {p_id:task.id,p_lease:assignmentLease??null,p_hash:project.scopeHash}) : await agentRpc<boolean>("claim_agent_dispatch", { p_id: task.id });
   if (!claimed) return readTask(task.id);
@@ -149,7 +163,7 @@ export async function dispatchDevelopment(task: AgentTask, project?: Context, as
   try {
     const issue = await client.issues.create({ owner: binding.owner, repo: binding.repo,
       title: `[agent] ${task.input.split("\n")[0].slice(0, 180)}`,
-      body: `${marker(task)}\n\n${projectHeader}${task.input}\n\n## Saved agent responsibilities\n${task.snapshot.instructions}\n\nDefinition version: ${task.definition_version}. Approved managed task: ${task.id}.\nUse the existing owner-only implementation, independent tests, review, bounded repair and draft PR workflow. No deployment or automatic merge.`,
+      body: issueBody,
     });
     return save(task, "submitted", "Owner-authored issue accepted. Workflow completion has not yet been verified.", { ...task.external,attempted: true, issueNumber: issue.data.number, issueUrl: issue.data.html_url, repository: binding.fullName });
   } catch {
