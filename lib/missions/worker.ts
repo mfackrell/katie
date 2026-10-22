@@ -147,7 +147,7 @@ export async function executeClaim(claim:Claim,model=missionModel){
    const request='executive-delegated:'+mission.id;
    const objective=mission.objective;
    if(objective.length>8000)throw Error('Delegated project requires a complete objective within the project contract limit; no truncation is permitted');
-   const project=await projectRpc<{id:string;status:string;detail:string}>((gameProjectIntent(objective)?'create_game_work_project':'create_work_project'),{
+   const project=await projectRpc<{id:string;status:string;detail:string;result:string|null}>((gameProjectIntent(objective)?'create_game_work_project':'create_work_project'),{
     p_id:projectId(request),p_request:request,p_actor:task.actor_id,p_chat:task.chat_id,p_objective:objective,p_repository:mission.repository_id
    });
    if(project.status==='completed'&&project.result){
