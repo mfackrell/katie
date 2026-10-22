@@ -137,6 +137,13 @@ export async function dispatchDevelopment(task: AgentTask, project?: Context, as
     const routed=await chooseTrustedGithubModels(task.input+'\n'+task.snapshot.instructions);
     projectHeader='<!-- katie-project: '+Buffer.from(JSON.stringify({version,projectId,baseSha,baselineSha,allowedPaths,contractHash,contract,...routed,...(game?{game,gameFinal}:{})})).toString('base64url')+' -->\n\n';
   }
+  const fullBody = `${marker(task)}\n\n${projectHeader}${approvedSource}${task.input}\n\n## Saved agent responsibilities\n${task.snapshot.instructions}\n\nDefinition version: ${task.definition_version}. Approved managed task: ${task.id}.\nUse the existing owner-only implementation, independent tests, review, bounded repair and draft PR workflow. No deployment or automatic merge.`;
+  let issueBody: string;
+  try {
+    issueBody = packDevelopmentRequest(fullBody, marker(task));
+  } catch (error) {
+    return save(task, "blocked", error instanceof Error ? error.message : "Complete approved coding request cannot fit lossless transport");
+  }
   const claimed = project ? await agentRpc<boolean>("claim_project_dispatch", {p_id:task.id,p_lease:assignmentLease??null,p_hash:project.scopeHash}) : await agentRpc<boolean>("claim_agent_dispatch", { p_id: task.id });
   if (!claimed) return readTask(task.id);
   task = { ...task, external: { attempted: true, ...(project?{projectId:project.projectId}:{}) } };
@@ -153,13 +160,6 @@ export async function dispatchDevelopment(task: AgentTask, project?: Context, as
       if (workflow.data.path !== ".github/workflows/autonomous-development.yml" || workflow.data.state !== "active") throw new Error("Workflow unavailable");
     } catch { return save(task, "blocked", "Blocked integration: the existing autonomous-development workflow is unavailable or disabled. No coding issue was submitted."); }
   } catch (error) { return save(task, "blocked", error instanceof Error && error.message.startsWith("Blocked integration:") ? error.message : "Blocked integration: unable to verify authenticated repository owner."); }
-  const fullBody = `${marker(task)}\n\n${projectHeader}${approvedSource}${task.input}\n\n## Saved agent responsibilities\n${task.snapshot.instructions}\n\nDefinition version: ${task.definition_version}. Approved managed task: ${task.id}.\nUse the existing owner-only implementation, independent tests, review, bounded repair and draft PR workflow. No deployment or automatic merge.`;
-  let issueBody: string;
-  try {
-    issueBody = packDevelopmentRequest(fullBody, marker(task));
-  } catch (error) {
-    return save(task, "blocked", error instanceof Error ? error.message : "Complete approved coding request cannot fit lossless transport");
-  }
   try {
     const issue = await client.issues.create({ owner: binding.owner, repo: binding.repo,
       title: `[agent] ${task.input.split("\n")[0].slice(0, 180)}`,
