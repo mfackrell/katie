@@ -1,3 +1,4 @@
+import { loadTaskHandoffKnowledgeContext } from "@/lib/agents/task-handoff-knowledge";
 import { currentAgentTask } from "@/lib/agents/policy";
 import { getDeliverableStandardInstruction } from "@/lib/chat/deliverable-standard";
 import { getChatContextState, listActorMemoryDocuments } from "@/lib/data/persistence-store";
@@ -22,6 +23,8 @@ export async function assembleContext(actorId: string, chatId: string): Promise<
     chatId
   );
 
+  const managedTask = currentAgentTask();
+  const handoffKnowledge = managedTask ? await loadTaskHandoffKnowledgeContext(managedTask) : "";
   const referenceDocuments = await listActorMemoryDocuments(actorId, 20);
   let documentCharacters = 0;
   const referenceText = referenceDocuments
@@ -68,6 +71,7 @@ export async function assembleContext(actorId: string, chatId: string): Promise<
       MEMORY_ARCHITECTURE_GUIDE,
       correctionsBlock,
       longTermBlock,
+      handoffKnowledge,
       "ACTOR MEMORY REFERENCE DOCUMENTS: These are verbatim user-requested long-term records and archived historical records. The current structured long-term facts and the most recent explicit user corrections take precedence when records conflict.",
       referenceText || "(No reference documents)",
       "END_ACTOR_MEMORY_REFERENCE_DOCUMENTS",

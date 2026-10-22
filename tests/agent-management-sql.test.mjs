@@ -6,6 +6,7 @@ import {join} from 'node:path';
 import {spawnSync} from 'node:child_process';
 import {randomUUID} from 'node:crypto';
 import pg from 'pg';
+import {handoffKnowledgeFlow} from './fixtures/handoff-knowledge-flow.mjs';
 
 test('agent management: real SQL snapshots, grants, associations, concurrent admission and claims', {timeout:180000},async t=>{
  const bin=process.env.KATIE_TEST_PG_BIN||'/usr/lib/postgresql/16/bin';
@@ -26,11 +27,14 @@ test('agent management: real SQL snapshots, grants, associations, concurrent adm
   await db.query(readFileSync('supabase/migrations/202610120003_chat_task_progress.sql','utf8'));
   await db.query('create table messages(id text primary key,actor_id uuid,chat_id uuid,role text,content text,created_at timestamptz default now()); grant select on messages to service_role;');
   await db.query(readFileSync('supabase/migrations/20261021190018_agent_task_context_handoffs.sql','utf8'));
+  await db.query('create table actor_long_term_memory(actor_id uuid primary key,content jsonb); grant select on actor_long_term_memory to service_role;');
+  await db.query(readFileSync('supabase/migrations/20261022193000_agent_task_handoff_knowledge.sql','utf8'));
   const cfg={name:'Researcher',instructions:'Analyze carefully',research:false,attachments:false,development:true,maxActiveTasks:1,maxInputChars:1000,reviewMode:'always'};
   const make=async(config=cfg)=>(await db.query('select save_managed_agent(null,$1,false) result',[config])).rows[0].result;
   const a=await make();
   const task=async(agent=a,kind='general',repo=null,id=randomUUID())=>(await db.query('select create_agent_task($1,$2,$3,$4,$5) result',[id,agent.id,'Saved task',kind,repo])).rows[0].result;
   const one=await task(),two=await task();
+  await t.test('knowledge capsules are exact, separately scoped, atomic and immutable',()=>handoffKnowledgeFlow(db,make));
   await t.test('explicit specialist handoff freezes only the selected active project and rejects mismatches',async()=>{
    const sourceChat=randomUUID(),target=await make(),id=randomUUID();
    const context={text:'Active client requires project accounting.',userMessageId:'active-source'};
