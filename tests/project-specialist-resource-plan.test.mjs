@@ -22,3 +22,11 @@ test('specialists may revise estimates but cannot overlap or omit ownership',()=
  assert.throws(()=>reconcileSpecialistEstimates(scope,[...proposals,proposals[0]]),/Overlapping/);
  assert.throws(()=>reconcileSpecialistEstimates(scope,proposals.slice(0,1)),/Unestimated/);
 });
+
+test('provisional dependencies reference only in-scope packages',()=>{
+ const plan=provisionalSpecialistPlan(scope);
+ const names=new Set(scope.workPackages.map(p=>p.id));
+ for(const assignment of plan.assignments)
+  assert.ok(assignment.dependencies.every(dep=>names.has(dep)));
+ assert.deepEqual(plan.assignments.find(a=>a.packageId==='testing_debugging').dependencies,['backend_data']);
+});
