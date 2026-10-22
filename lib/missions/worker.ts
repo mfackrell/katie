@@ -35,7 +35,7 @@ export async function executeClaim(claim:Claim,model=missionModel){
  if(sourceReports)mission.project_evidence={...((mission.project_evidence??{}) as Record<string,unknown>),executiveSources:executiveSourceManifest(sourceReports)};
  const completed=saved.jobs.filter(j=>j.status==='completed');
  const priorReviews=completed.filter(j=>j.role==='review').map(j=>({key:j.job_key,verdict:j.result?.verdict,findings:j.result?.findings,checks:j.result?.checks,clarification:j.result?.clarification}));
- const revisionFindings=priorReviews.map(({checks,...rest})=>({...rest,checkCount:Array.isArray(checks)?checks.length:0}));
+ const revisionFindings=priorReviews.map(({checks,...rest})=>({...rest,checkCount:Array.isArray(checks)?checks.length:0,failedChecks:Array.isArray(checks)?checks.filter((c:Record<string,unknown>)=>c.passed===false).map((c:Record<string,unknown>)=>({id:c.id,evidence:typeof c.evidence==='string'?c.evidence.slice(0,500):undefined})):[]}));
  const candidateEvidence=(result:Record<string,unknown>|null|undefined)=>{
   if(mission.project_kind!=='specification'||(mission.project_evidence as {projectProfile?:string}|null)?.projectProfile!=='game'||typeof result?.text!=='string'){
    if(!result)return result;
