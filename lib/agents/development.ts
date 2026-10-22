@@ -4,6 +4,7 @@ import {getAvailableProviders} from '@/lib/providers';
 import {chooseProvider} from '@/lib/router/master-router';
 import { Octokit } from "@octokit/rest";
 import { inflateRawSync } from "node:zlib";
+import { packDevelopmentRequest } from '../../scripts/request-envelope.mjs';
 import { z } from "zod";
 import { getSupabaseAdminClient } from "@/lib/data/supabase/admin";
 import { agentRpc, readTask } from "./store";
@@ -152,14 +153,17 @@ export async function dispatchDevelopment(task: AgentTask, project?: Context, as
       if (workflow.data.path !== ".github/workflows/autonomous-development.yml" || workflow.data.state !== "active") throw new Error("Workflow unavailable");
     } catch { return save(task, "blocked", "Blocked integration: the existing autonomous-development workflow is unavailable or disabled. No coding issue was submitted."); }
   } catch (error) { return save(task, "blocked", error instanceof Error && error.message.startsWith("Blocked integration:") ? error.message : "Blocked integration: unable to verify authenticated repository owner."); }
-  // Fail closed if complete original sources cannot fit the existing coding-issue transport.
-  // Never silently truncate approved requirements or publish a partial coding contract.
-  const requestedBodyBytes = Buffer.byteLength(projectHeader + approvedSource + task.input + task.snapshot.instructions, 'utf8');
-  if (requestedBodyBytes > 55000) return save(task, "blocked", "Complete approved project source exceeds the current GitHub issue transport budget. Preserve the saved sources and require an independently verified lossless handoff before dispatch.");
+  const fullBody = `${marker(task)}\n\n${projectHeader}${approvedSource}${task.input}\n\n## Saved agent responsibilities\n${task.snapshot.instructions}\n\nDefinition version: ${task.definition_version}. Approved managed task: ${task.id}.\nUse the existing owner-only implementation, independent tests, review, bounded repair and draft PR workflow. No deployment or automatic merge.`;
+  let issueBody: string;
+  try {
+    issueBody = packDevelopmentRequest(fullBody, marker(task));
+  } catch (error) {
+    return save(task, "blocked", error instanceof Error ? error.message : "Complete approved coding request cannot fit lossless transport");
+  }
   try {
     const issue = await client.issues.create({ owner: binding.owner, repo: binding.repo,
       title: `[agent] ${task.input.split("\n")[0].slice(0, 180)}`,
-      body: `${marker(task)}\n\n${projectHeader}${approvedSource}${task.input}\n\n## Saved agent responsibilities\n${task.snapshot.instructions}\n\nDefinition version: ${task.definition_version}. Approved managed task: ${task.id}.\nUse the existing owner-only implementation, independent tests, review, bounded repair and draft PR workflow. No deployment or automatic merge.`,
+      body: issueBody,
     });
     return save(task, "submitted", "Owner-authored issue accepted. Workflow completion has not yet been verified.", { ...task.external,attempted: true, issueNumber: issue.data.number, issueUrl: issue.data.html_url, repository: binding.fullName });
   } catch {
