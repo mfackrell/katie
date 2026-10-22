@@ -20,9 +20,9 @@ DECLARE p work_projects; package jsonb; forecast jsonb; ids text[]; k text; spec
 BEGIN
  PERFORM pg_advisory_xact_lock(hashtextextended('katie.mission.state',0));
  FOR p IN SELECT * FROM work_projects
-  WHERE phase='approval' AND spec IS NOT NULL AND approval_hash IS NOT NULL
+  WHERE status='awaiting_approval' AND phase='approval' AND spec IS NOT NULL AND approval_hash IS NOT NULL
     AND deadline>now()+interval '30 minutes'
-    AND estimate_rationale IS NOT NULL AND status NOT IN ('stopped','completed')
+    AND estimate_rationale IS NOT NULL
   ORDER BY created_at FOR UPDATE SKIP LOCKED LIMIT 10
  LOOP
   BEGIN forecast:=p.estimate_rationale::jsonb;EXCEPTION WHEN others THEN CONTINUE; END;
