@@ -6,6 +6,10 @@ on:
       - main
   workflow_dispatch:
 
+concurrency:
+  group: katie-production-database-migrations
+  cancel-in-progress: false
+
 jobs:
   migrate:
     name: Migrate production database
