@@ -25,6 +25,13 @@ export default function ChatWorkspace({
   const chat = chats.data?.chats.find((c) => c.id === conversationId),
     actor = actors.data?.actors.find((a) => a.id === chat?.actorId);
   useEffect(() => {
+    // Advanced handoff previews must follow the actual modern workspace, not
+    // a stale conversation last opened through the legacy interface.
+    if (!chat || !actor) return;
+    window.localStorage.setItem("katie.activeActorId", actor.id);
+    window.localStorage.setItem("katie.activeChatId", chat.id);
+  }, [chat?.id, actor?.id]);
+  useEffect(() => {
     if (!saved.state || contextReady) return;
     setRepoId(saved.state.value.repoId ?? "");
     setSource(saved.state.value.repoSource ?? false);
