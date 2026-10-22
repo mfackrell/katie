@@ -31,7 +31,11 @@ create or replace function public.create_work_project(p_id uuid,p_request text,p
     where p_request='executive-delegated:'||m.id::text and j.role='development'
       and t.actor_id=p_actor and t.chat_id=p_chat and t.agent_id=j.agent_id;
   update work_projects set clarifications=
-    'DELEGATION PROVENANCE: The Executive Orchestrator delegated this project. Prior GitHub issue or draft PR may exist from an earlier attempt; recover and independently verify saved source before any implementation. The historical work is NOT a validated project contract or coding approval. Consult the stored executive_delegation_received event for the original artifact references.'
+    'DELEGATION PROVENANCE: The Executive Orchestrator delegated this project. Prior owner-authored GitHub issue: '||
+      coalesce((select t.external->>'issueUrl' from mission_assignments j join agent_tasks t on t.id=j.id
+        join agent_missions m on m.id=j.mission_id where p_request='executive-delegated:'||m.id::text
+          and j.role='development' limit 1),'not yet recorded')||
+      '. Locate any existing draft PR and immutable code SHA associated with that issue. Recover and independently verify saved source before new implementation. Historical work is NOT a validated project contract or coding approval; consult the stored executive_delegation_received event.'
   where id=p.id returning * into p;
  end if;
  return to_jsonb(p);
