@@ -250,7 +250,7 @@ async function handleCase(c:Case):Promise<string>{
  const diagnosis=diagnoseRecoveryFailure({sourceType:c.source_type,
   detail:e.project&&new Date(e.project.deadline).getTime()<=Date.now()
     ? 'Project deadline reached; owner authorization required to continue. '+e.detail : e.detail,
-  trustedLog:log+(browser?'\nVERIFIED_BROWSER_ARTIFACT:\n'+browser:''),approvedProjectPaths:e.project?.approved_hash===e.project?.approval_hash?e.project?.spec?.allowedPaths:null,
+  trustedLog:log+(browser?'\nVERIFIED_BROWSER_ARTIFACT:\n'+browser:'')+(e.project?.phase==='browser_check'&&e.project.status==='blocked'?'\nTRUSTED_PROJECT_BROWSER_RUNNER_ERROR:\n'+e.detail.slice(0,1600):''),approvedProjectPaths:e.project?.approved_hash===e.project?.approval_hash?e.project?.spec?.allowedPaths:null,
   taskKind:e.task?.kind,previousVerification:!!e.task?.external?.verificationSince});
  if(diagnosis.strategy==='retry_original'&&c.source_type==='mission'&&e.failedJobId){
   const accepted=await rpc<boolean>('retry_recovery_assignment',{p_case:c.id,p_lease:c.lease,p_assignment:e.failedJobId});
