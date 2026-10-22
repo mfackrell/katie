@@ -165,3 +165,22 @@ test("timestamp compare-and-set clears pending work and cannot overwrite a newer
     { timestamp: `eq.${originalTimestamp}`, matched: false },
   ]);
 });
+
+test("Supabase read retries origin 522 once while mutating RPC is never replayed", async (t) => {
+  const client = loadClient(t);
+  let reads = 0, writes = 0;
+  t.mock.method(globalThis, "fetch", async (_input: string | URL | Request, init?: RequestInit) => {
+    if (init?.method === "GET") {
+      reads++;
+      return reads === 1 ? new Response("origin timeout", {status: 522}) : Response.json([{id:"recovered"}]);
+    }
+    writes++;
+    return new Response("origin timeout", {status: 522});
+  });
+  const recovered = await client.from("items").select("id").returns<{id:string}>();
+  assert.deepEqual(recovered.data,[{id:"recovered"}]);
+  assert.equal(reads,2);
+  const write = await client.rpc("start_mission",{p_id:"mission"});
+  assert.ok(write.error);
+  assert.equal(writes,1,"Ambiguous writes must never replay");
+});
