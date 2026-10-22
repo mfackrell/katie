@@ -16,5 +16,23 @@ create or replace function public.create_work_project(p_id uuid,p_request text,p
   if not exists(select 1 from managed_agents where id=aid and not archived) then raise exception 'A saved project agent was disabled; restore or replace it explicitly';end if;ids:=array_append(ids,aid);
  end loop;
  insert into work_projects(id,request_id,actor_id,chat_id,objective,repository_id,team,detail) values(p_id,p_request,p_actor,p_chat,p_objective,p_repository,ids,'Researching the requested outcome. No coding or production changes authorized yet.') returning * into p;
- insert into project_events(project_id,event,data) values(p.id,'created',jsonb_build_object('objective',p.objective,'repository',p.repository_id));return to_jsonb(p);
+ insert into project_events(project_id,event,data) values(p.id,'created',jsonb_build_object('objective',p.objective,'repository',p.repository_id));
+ if p_request like 'executive-delegated:%' then
+  -- A previous issue/PR is source evidence, not an approved game contract.
+  -- Preserve linkage without allowing the saved artifact to bypass research,
+  -- scope approval, independent checks or the original target repository.
+  insert into project_events(project_id,event,data)
+    select p.id,'executive_delegation_received',jsonb_build_object(
+      'missionId',m.id,'assignmentId',j.id,'sourceTaskStatus',t.status,
+      'sourceIssueUrl',t.external->>'issueUrl','sourcePrUrl',t.external->>'prUrl',
+      'priorWorkVerified',false,'codingApprovalInherited',false)
+    from agent_missions m join mission_assignments j on j.mission_id=m.id
+    join agent_tasks t on t.id=j.id
+    where p_request='executive-delegated:'||m.id::text and j.role='development'
+      and t.actor_id=p_actor and t.chat_id=p_chat and t.agent_id=j.agent_id;
+  update work_projects set clarifications=
+    'DELEGATION PROVENANCE: The Executive Orchestrator delegated this project. Prior GitHub issue or draft PR may exist from an earlier attempt; recover and independently verify saved source before any implementation. The historical work is NOT a validated project contract or coding approval. Consult the stored executive_delegation_received event for the original artifact references.'
+  where id=p.id returning * into p;
+ end if;
+ return to_jsonb(p);
 end $$;
