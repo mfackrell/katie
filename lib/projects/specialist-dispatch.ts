@@ -34,7 +34,7 @@ export async function runSpecialistResourceBatch(){
   try{scope=JSON.parse(p.estimate_rationale);}catch{throw Error('Saved project forecast invalid');}
   if(!scope.workPackages||!scope.totals)throw Error('Scoped work packages unavailable');
   const revised=await recordAndReconcileSpecialistEstimate({
-   projectId:entry.project_id,missionId:entry.mission_id,specialist:entry.specialist,
+   projectId:entry.project_id,missionId:entry.mission_id,specialist:entry.specialist,packageId:entry.package_id,
    scopeHash:entry.scope_hash,
    scopeForecast:scope as {workPackages:Array<{id:string}>;totals:{expectedTokens:number}}
   });
