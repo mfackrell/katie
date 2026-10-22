@@ -61,3 +61,45 @@ BEGIN
 END $fn$;
 REVOKE ALL ON FUNCTION public.dispatch_specialist_resource_estimate() FROM PUBLIC,anon,authenticated;
 GRANT EXECUTE ON FUNCTION public.dispatch_specialist_resource_estimate() TO service_role;
+
+-- Store the final executive consolidation separately from the legacy
+-- 4,000-character estimate_rationale column; retain the original baseline.
+CREATE TABLE IF NOT EXISTS public.project_specialist_consolidations (
+ project_id uuid NOT NULL REFERENCES public.work_projects(id),
+ scope_hash text NOT NULL,
+ plan jsonb NOT NULL,
+ updated_at timestamptz NOT NULL DEFAULT now(),
+ PRIMARY KEY(project_id,scope_hash),
+ CHECK (jsonb_typeof(plan)='object')
+);
+ALTER TABLE public.project_specialist_consolidations ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON public.project_specialist_consolidations FROM PUBLIC,anon,authenticated;
+GRANT SELECT,INSERT,UPDATE ON public.project_specialist_consolidations TO service_role;
+
+CREATE OR REPLACE FUNCTION public.save_project_specialist_consolidation(
+ p_project uuid,p_scope_hash text,p_plan jsonb
+) RETURNS boolean LANGUAGE plpgsql SET search_path TO 'public' AS $save$
+DECLARE p work_projects; package_count integer; recorded_count integer;
+BEGIN
+ SELECT * INTO p FROM work_projects WHERE id=p_project FOR UPDATE;
+ IF NOT FOUND OR p.approval_hash IS DISTINCT FROM p_scope_hash
+   OR p.estimate_rationale IS NULL
+   OR p_plan->>'kind'<>'reconciled_specialist_resource_forecast'
+   OR p_plan->>'independentlySubmitted'<>'true'
+   OR jsonb_typeof(p_plan->'assignments')<>'array' THEN RETURN false; END IF;
+ package_count:=jsonb_array_length((p.estimate_rationale::jsonb)->'workPackages');
+ SELECT count(*) INTO recorded_count FROM project_specialist_estimates
+  WHERE project_id=p_project AND scope_hash=p_scope_hash;
+ IF package_count=0 OR package_count IS NULL
+  OR recorded_count<>package_count
+  OR jsonb_array_length(p_plan->'assignments')<>package_count THEN RETURN false; END IF;
+ INSERT INTO project_specialist_consolidations(project_id,scope_hash,plan)
+ VALUES(p_project,p_scope_hash,p_plan)
+ ON CONFLICT(project_id,scope_hash) DO UPDATE
+ SET plan=excluded.plan,updated_at=now();
+ RETURN true;
+END $save$;
+REVOKE ALL ON FUNCTION public.save_project_specialist_consolidation(uuid,text,jsonb)
+ FROM PUBLIC,anon,authenticated;
+GRANT EXECUTE ON FUNCTION public.save_project_specialist_consolidation(uuid,text,jsonb)
+ TO service_role;
