@@ -81,6 +81,11 @@ jobs:
           cp scripts/project-game-rules.mjs scripts/project-game-check.mjs scripts/project-context.mjs scripts/project-browser-check.mjs scripts/project-sandbox.mjs scripts/project-ci.mjs scripts/project-scope.mjs scripts/project-browser-engine.mjs "$RUNNER_TEMP/project-tools/"
           stage='validate saved project metadata in issue'
           node scripts/project-context.mjs prepare "$RUNNER_TEMP/agent-task/AGENT_REQUEST.md" > "$RUNNER_TEMP/project-context.json"
+          stage='require original approved project binding'
+          if ! jq -e 'type == "object" and .projectId != null and .contractHash != null and .baseSha != null and ((.allowedPaths | type) == "array")' "$RUNNER_TEMP/project-context.json" >/dev/null; then
+            echo "::error::PROJECT_BINDING_MISSING: This issue was dispatched as a standalone mission without a registered approved project contract. project-reverify.yml cannot validate it. Register and approve an authoritative project contract, bind it to this existing mission/task, and use the dedicated migration/recovery path. Do not fabricate a katie-project marker or create duplicate issue/PR." >&2
+            exit 1
+          fi
           stage='validate project contract envelope'
           jq -e '.projectId and .contractHash and .baseSha and (.allowedPaths | length > 0)' "$RUNNER_TEMP/project-context.json" >/dev/null || exit 1
           echo "issue=$ISSUE" >> "$GITHUB_OUTPUT"
