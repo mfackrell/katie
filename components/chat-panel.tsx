@@ -380,6 +380,11 @@ async function pollForPersistedAssistant(
           { cache: "no-store" },
         );
 
+        // An aged, verified missing POST is terminal, rather than trapping the composer.
+        if (statusResponse.status === 404 && Number.isFinite(startedAtMs) && Date.now() - startedAtMs >= 30_000) {
+          throw new TerminalChatError("Katie did not receive this request. Your message has been restored as a draft; resend it when ready.");
+        }
+
         if (statusResponse.ok) {
           const statusPayload = (await statusResponse.json()) as {
             status?: "processing" | "completed" | "failed";
@@ -1234,6 +1239,7 @@ export function ChatPanel({
       } catch (error) {
         if (error instanceof TerminalChatError) {
           clearPendingChatRequest(chatId);
+          if (!cancelled) setInput(pending.content);
           if (!cancelled) {
             const failure: Message = { id: error.messageId ?? pending.requestId ?? crypto.randomUUID(), chatId,
               role: "assistant", content: chatFailureContent(error.message), createdAt: new Date().toISOString() };
@@ -2042,6 +2048,8 @@ export function ChatPanel({
         } catch (recoveryError: unknown) {
           if (recoveryError instanceof TerminalChatError) {
             terminalFailure = true;
+            clearPendingChatRequest(chatId);
+            setInput(content);
             rawMessage = recoveryError.message;
             failureMessageId = recoveryError.messageId;
           }
