@@ -1232,3 +1232,17 @@ test("resumed draft repair retains an earlier output limit and supplies the prio
  assert.ok(result.result.text.split(/\s+/).length<=180);assert.match(result.result.text,/\$180,000/);
  assert.ok(!result.audit.sourceTurns?.some(turn=>turn.text===priorText));
 });
+
+test("first-delivery gate requires decision continuity and strategic judgment", () => {
+  const evaluated = structuredClone(assessment);
+  const checks = acceptanceIds(evaluated).map(id => ({id,passed:true,evidence:"Supported by the actual response and original user sources."}));
+  assert.ok(checks.some(c => c.id === "decision-continuity-and-authorization"));
+  assert.ok(checks.some(c => c.id === "strategic-judgment-and-commitment-risk"));
+  const broken = structuredClone(checks);
+  broken.find(c => c.id === "decision-continuity-and-authorization")!.passed = false;
+  broken.find(c => c.id === "decision-continuity-and-authorization")!.evidence = "The proposal omitted the source-authorized billing cadence.";
+  assert.throws(() => validateAnswerReview({verdict:"approve",findings:"Ready",checks:broken},evaluated),/Approval contradicts failed acceptance checks/);
+  const flagged = validateAnswerReview({verdict:"revise",findings:"Restore the authorized billing cadence",checks:broken},evaluated);
+  assert.equal(flagged.verdict,"revise");
+  assert.equal(validateAnswerReview({verdict:"revise",findings:"Optional phrasing refinement",checks},evaluated).verdict,"approve");
+});
