@@ -1,4 +1,5 @@
--- Network or worker retries reuse an identical reviewed estimate without duplicating cost or records.\nCREATE OR REPLACE FUNCTION public.record_reviewed_specialist_estimate(
+-- Network or worker retries reuse an identical reviewed estimate without duplicating cost or records.
+CREATE OR REPLACE FUNCTION public.record_reviewed_specialist_estimate(
  p_project uuid,p_mission uuid,p_specialist text,p_scope_hash text,p_estimate jsonb
 ) RETURNS boolean LANGUAGE plpgsql SET search_path TO 'public' AS $fn$
 DECLARE m agent_missions; p work_projects; j_count integer;
@@ -18,7 +19,10 @@ BEGIN
  IF (m.result::jsonb)->'packages' IS DISTINCT FROM p_estimate->'packages'
   OR (m.result::jsonb)->>'specialist' IS DISTINCT FROM p_specialist
   OR (m.result::jsonb)->>'scopeHash' IS DISTINCT FROM p_scope_hash THEN RETURN false; END IF;
- IF EXISTS (SELECT 1 FROM project_specialist_estimates WHERE mission_id=p_mission\n  AND project_id=p_project AND specialist=p_specialist AND scope_hash=p_scope_hash\n  AND estimate=p_estimate) THEN RETURN true; END IF;\n INSERT INTO project_specialist_estimates(project_id,mission_id,specialist,scope_hash,estimate)
+ IF EXISTS (SELECT 1 FROM project_specialist_estimates WHERE mission_id=p_mission
+  AND project_id=p_project AND specialist=p_specialist AND scope_hash=p_scope_hash
+  AND estimate=p_estimate) THEN RETURN true; END IF;
+ INSERT INTO project_specialist_estimates(project_id,mission_id,specialist,scope_hash,estimate)
  VALUES (p_project,p_mission,p_specialist,p_scope_hash,p_estimate)
  ON CONFLICT (mission_id) DO NOTHING;
  RETURN FOUND;
