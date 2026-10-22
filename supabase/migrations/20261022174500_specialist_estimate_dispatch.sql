@@ -29,6 +29,10 @@ BEGIN
   IF forecast->'specialistPlan'->>'independentlySubmitted' IS DISTINCT FROM 'false' THEN CONTINUE; END IF;
   planned:=forecast->'specialistPlan'->'assignments';
   IF jsonb_typeof(planned)<>'array' THEN CONTINUE; END IF;
+  -- Do not spend on later estimates while an earlier reviewed specialist
+  -- mission is blocked; preserve the blocker for an explicit recovery decision.
+  IF EXISTS(SELECT 1 FROM project_specialist_dispatches
+    WHERE project_id=p.id AND scope_hash=p.approval_hash AND status='blocked') THEN CONTINUE; END IF;
   SELECT coalesce(sum(greatest(coalesce(actual_tokens,0),coalesce(reserved_tokens,0))),0)
     INTO charged FROM agent_missions WHERE project_id=p.id;
   IF charged+12000>p.token_allowance THEN CONTINUE; END IF;
