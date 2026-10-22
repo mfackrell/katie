@@ -325,3 +325,16 @@ test('managed chat restores only receipt-bound frozen handoff facts and draft in
  assert.ok(filters.some(([k,v])=>k==='target_actor_id'&&v===task.actor_id));assert.ok(filters.some(([k,v])=>k==='target_chat_id'&&v===task.chat_id));
  mismatch=true;await assert.rejects(run(),/binding mismatch/);
 });
+
+
+test('approved game coding handoff retains authoritative source and fails closed on oversized transport', () => {
+ const source=readFileSync('lib/projects/store.ts','utf8');
+ const dispatch=readFileSync('lib/agents/development.ts','utf8');
+ assert.match(source,/originalUserOutcome:\s*`ORIGINAL USER OUTCOME/);
+ assert.match(source,/approvedMilestone:\s*\{/);
+ assert.match(source,/p\.approved_hash===p\.approval_hash/);
+ assert.match(dispatch,/approvedSource\}\$\{task\.input\}/);
+ assert.match(dispatch,/Buffer\.byteLength\(projectHeader \+ approvedSource \+ task\.input \+ task\.snapshot\.instructions/);
+ assert.match(dispatch,/requestedBodyBytes > 55000/);
+ assert.match(dispatch,/Complete approved project source exceeds/);
+});
