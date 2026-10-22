@@ -131,7 +131,7 @@ async function advance(p: Project) {
                 .eq('is_active',true).eq('pricing_status','verified').limit(100);
             if(registryError)console.warn('[Projects] Verified pricing snapshot unavailable');
             const {data:history,error:historyError}=await db.from('agent_missions')
-                .select('actual_tokens,created_at,updated_at').eq('status','completed')
+                .select('actual_tokens,created_at,updated_at').eq('status','completed').in('project_kind',['research','specification','development','assessment'])
                 .order('updated_at',{ascending:false}).limit(60);
             if(historyError)console.warn('[Projects] Mission duration evidence unavailable');
             const forecast=enrichResourceForecast(scopeForecast,{
