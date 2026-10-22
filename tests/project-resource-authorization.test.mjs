@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 const source=readFileSync('supabase/migrations/20261022234500_authorize_saved_project_resources.sql','utf8');
 test('resource authorization is service-only, scoped and auditable',()=>{
- assert.match(source,/p_id=p_id and actor_id=p_actor and chat_id=p_chat/);
+ assert.match(source,/id=p_id and actor_id=p_actor and chat_id=p_chat/);
  assert.match(source,/p\.token_allowance is distinct from p_expected_allowance/);
  assert.match(source,/p_approval_ref is null/);
  assert.match(source,/event='resource_authorization'/);
