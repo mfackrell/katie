@@ -5,10 +5,21 @@ ALTER TABLE public.work_projects
  ADD COLUMN IF NOT EXISTS estimate_rationale text,
  ADD COLUMN IF NOT EXISTS estimate_updated_at timestamptz,
  ADD COLUMN IF NOT EXISTS budget_authorization_source text NOT NULL DEFAULT 'legacy_default';
-ALTER TABLE public.work_projects
- ADD CONSTRAINT work_projects_estimate_positive CHECK (estimated_tokens IS NULL OR estimated_tokens > 0),
- ADD CONSTRAINT work_projects_estimate_rationale_size CHECK (estimate_rationale IS NULL OR length(estimate_rationale) <= 4000),
- ADD CONSTRAINT work_projects_authorization_source_valid CHECK (budget_authorization_source IN ('legacy_default','user_approved','policy'));
+-- Older deployments created these constraints outside this file's migration ledger.
+-- PostgreSQL lacks ADD CONSTRAINT IF NOT EXISTS, so guard each by name.
+DO $constraints$
+BEGIN
+ IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = 'public.work_projects'::regclass AND conname = 'work_projects_estimate_positive') THEN
+   ALTER TABLE public.work_projects ADD CONSTRAINT work_projects_estimate_positive CHECK (estimated_tokens IS NULL OR estimated_tokens > 0);
+ END IF;
+ IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = 'public.work_projects'::regclass AND conname = 'work_projects_estimate_rationale_size') THEN
+   ALTER TABLE public.work_projects ADD CONSTRAINT work_projects_estimate_rationale_size CHECK (estimate_rationale IS NULL OR length(estimate_rationale) <= 4000);
+ END IF;
+ IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = 'public.work_projects'::regclass AND conname = 'work_projects_authorization_source_valid') THEN
+   ALTER TABLE public.work_projects ADD CONSTRAINT work_projects_authorization_source_valid CHECK (budget_authorization_source IN ('legacy_default','user_approved','policy'));
+ END IF;
+END
+$constraints$;
 COMMENT ON COLUMN public.work_projects.estimated_tokens IS
  'Non-binding forecast; exceeding this estimate alone MUST NOT change project status or admission.';
 COMMENT ON COLUMN public.work_projects.token_allowance IS
