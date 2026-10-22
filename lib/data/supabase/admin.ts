@@ -21,7 +21,7 @@ async function boundedRequest(url: string, init: RequestInit, operation: string,
     try {
       const response = await fetch(url, { ...init, signal: controller.signal });
       status = response.status;
-      if (retryRead && attempt < READ_RETRIES && [429, 502, 503, 504].includes(status)) {
+      if (retryRead && attempt < READ_RETRIES && [408, 429, 500, 502, 503, 504, 520, 521, 522, 523, 524].includes(status)) {
         failure = 'transient_http';
         await response.body?.cancel().catch(() => undefined);
       } else {
