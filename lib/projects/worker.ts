@@ -9,6 +9,7 @@ import { validateProjectPlan, digest, projectPlanSchema, gameSpecificationView, 
 import {gameAssessmentEvidence} from './game-evidence';
 import {estimateProjectResources} from './resource-forecast.mjs';
 import {enrichResourceForecast} from './resource-economics.mjs';
+import {provisionalSpecialistPlan} from './specialist-resource-plan.mjs';
 import { projectRpc, projectRuns, milestoneEvidence, acceptanceBinding, getDevelopmentProjectContext, type Project } from './store';
 export async function baseline(p: Project) { if (!p.repository_id)
     return null; const { data: r, error } = await getSupabaseAdminClient().from('repo_sync_runs').select('repository_full_name').eq('id', p.repository_id).maybeSingle<{
@@ -137,11 +138,15 @@ async function advance(p: Project) {
             const forecast=enrichResourceForecast(scopeForecast,{
                 models:registryError?[]:registry??[],missionHistory:historyError?[]:history??[]
             });
+            const specialistPlan=provisionalSpecialistPlan(forecast);
+            // This is explicit EO baseline ownership, not independent specialist
+            // agreement. Specialist submissions must replace it after review.
+            const consolidatedForecast={...forecast,specialistPlan};
             // A forecast does not increase token_allowance or approve coding.
             // Save the granular rationale durably for audit and future calibration.
             const {error:forecastError}=await db.from('work_projects').eq('id',p.id).eq('phase','specification').update({
                 estimated_tokens:forecast.totals.expectedTokens,
-                estimate_rationale:JSON.stringify(forecast),
+                estimate_rationale:JSON.stringify(consolidatedForecast),
                 estimate_updated_at:new Date().toISOString()
             });
             if(forecastError)throw Error('Project resource forecast could not be saved');
