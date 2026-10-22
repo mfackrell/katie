@@ -315,7 +315,7 @@ jobs:
   repair:
     needs: [build, test, review]
     if: ${{ needs.review.result == 'success' && (needs.test.outputs.passed != 'true' || needs.review.outputs.verdict != 'pass') }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
     outputs:
       passed: ${{ steps.retest.outputs.passed }}
