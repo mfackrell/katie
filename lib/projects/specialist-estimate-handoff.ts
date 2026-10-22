@@ -5,7 +5,7 @@ import {reconcileSpecialistEstimates} from './specialist-resource-plan.mjs';
 // Called only when a specialist mission has completed its normal independent
 // review. Never accept estimates that originated with a provisional baseline.
 export async function recordAndReconcileSpecialistEstimate(input:{
- projectId:string;missionId:string;specialist:string;scopeHash:string;
+ projectId:string;missionId:string;specialist:string;scopeHash:string;packageId?:string;
  scopeForecast:{workPackages:Array<{id:string}>;totals:{expectedTokens:number}};
 }){
  const {mission,jobs}=await readMission(input.missionId);
@@ -19,6 +19,7 @@ export async function recordAndReconcileSpecialistEstimate(input:{
  const packages=body.packages;
  if(!Array.isArray(packages)||body.specialist!==input.specialist||
     body.scopeHash!==input.scopeHash)throw Error('Specialist submission identity and scope mismatch');
+ if(input.packageId&&(packages.length!==1||!packages[0]||packages[0].packageId!==input.packageId))throw Error('Specialist estimate must match its single assigned package');
  const proposal={specialist:input.specialist,origin:'specialist_verified',packages};
  // Do not authorize a call or spending because the forecast changed.
  const db=getSupabaseAdminClient();
