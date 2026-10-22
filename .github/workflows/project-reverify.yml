@@ -58,7 +58,10 @@ jobs:
           set -euo pipefail
           stage='validate inputs'
           trap 'echo "::error::Immutable verification setup failed at: ${stage} (line ${LINENO}, exit ${?})" >&2' ERR
-          [[ "$ISSUE" =~ ^[1-9][0-9]*$ && "$PR" =~ ^[1-9][0-9]*$ && "$EXPECTED_SHA" =~ ^[a-f0-9]{40}$ ]] || exit 1
+          if ! [[ "$ISSUE" =~ ^[1-9][0-9]*$ ]]; then echo "::error::Invalid issue_number (must be positive integer)" >&2; exit 1; fi
+          if ! [[ "$PR" =~ ^[1-9][0-9]*$ ]]; then echo "::error::Invalid pr_number (must be positive integer)" >&2; exit 1; fi
+          if ! [[ "$EXPECTED_SHA" =~ ^[a-f0-9]{40}$ ]]; then echo "::error::Invalid expected_sha format (must be exactly 40 lowercase hexadecimal characters; received length ${#EXPECTED_SHA})" >&2; exit 1; fi
+          echo "Preflight input format valid: issue $ISSUE, PR $PR, expected SHA length ${#EXPECTED_SHA}"
           stage='fetch owner-authored issue'
           author="$(gh issue view "$ISSUE" --repo "$GITHUB_REPOSITORY" --json author --jq '.author.login')"
           [[ "$author" == "$GITHUB_REPOSITORY_OWNER" ]] || { echo 'Owner authorization required'; exit 1; }
