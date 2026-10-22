@@ -330,11 +330,11 @@ test('managed chat restores only receipt-bound frozen handoff facts and draft in
 test('approved game coding handoff preserves original source through versioned lossless transport', () => {
  const source=readFileSync('lib/projects/store.ts','utf8');
  const dispatch=readFileSync('lib/agents/development.ts','utf8');
- assert.match(source,/originalUserOutcome:\\s*`ORIGINAL USER OUTCOME/);
- assert.match(source,/approvedMilestone:\\s*\\{/);
- assert.match(source,/p\\.approved_hash===p\\.approval_hash/);
- assert.match(dispatch,/approvedSource\\}\\$\\{task\\.input\\}/);
- assert.match(dispatch,/packDevelopmentRequest\\(fullBody, marker\\(task\\)\\)/);
- assert.match(dispatch,/body: issueBody/);
- assert.ok(dispatch.indexOf('packDevelopmentRequest(fullBody, marker(task))') < dispatch.indexOf('const claimed = project ?'), 'validate complete request before claiming dispatch');
+ assert.ok(source.includes('originalUserOutcome:`ORIGINAL USER OUTCOME'));
+ assert.ok(source.includes('approvedMilestone:{'));
+ assert.ok(source.includes('p.approved_hash===p.approval_hash'));
+ assert.ok(dispatch.includes('${approvedSource}${task.input}'));
+ assert.ok(dispatch.includes('packDevelopmentRequest(fullBody, marker(task))'));
+ assert.ok(dispatch.includes('body: issueBody'));
+ assert.ok(dispatch.indexOf('packDevelopmentRequest(fullBody, marker(task))') < dispatch.indexOf('const claimed = project ?'));
 });
