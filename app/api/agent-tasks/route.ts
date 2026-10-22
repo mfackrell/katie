@@ -5,6 +5,7 @@ import { agentRpc, readTask, refreshTask } from "@/lib/agents/store";
 import { dispatchDevelopment, reconcileDevelopment } from "@/lib/agents/development";
 import { getChatById } from "@/lib/data/persistence-store";
 import { loadTaskProgress } from "@/lib/chat/task-progress-store";
+import { prepareTaskHandoffKnowledge } from "@/lib/agents/task-handoff-knowledge";
 import type { AgentTask } from "@/lib/agents/policy";
 export const runtime = "nodejs";
 export const maxDuration = 120;
@@ -45,7 +46,8 @@ export async function POST(request: NextRequest) {
     if (raw.action === "create") {
       const body = create.parse(raw);
       if(body.handoff && body.kind!=="general") throw new Error("Application context handoff requires a general task");
-      const task = body.handoff ? await agentRpc("create_agent_task_handoff", {p_id:body.id,p_agent:body.agentId,p_input:body.input,p_source_actor:body.handoff.sourceActorId,p_source_chat:body.handoff.sourceChatId,p_project:body.handoff.projectId}) : await agentRpc("create_agent_task", { p_id: body.id, p_agent: body.agentId, p_input: body.input, p_kind: body.kind, p_repository: body.repositoryId ?? null });
+      const knowledge = body.handoff ? await prepareTaskHandoffKnowledge(body.handoff, body.input, body.id) : [];
+      const task = body.handoff ? await agentRpc("create_agent_task_handoff_with_knowledge", {p_id:body.id,p_agent:body.agentId,p_input:body.input,p_source_actor:body.handoff.sourceActorId,p_source_chat:body.handoff.sourceChatId,p_project:body.handoff.projectId,p_knowledge:knowledge}) : await agentRpc("create_agent_task", { p_id: body.id, p_agent:body.agentId, p_input:body.input, p_kind: body.kind, p_repository:body.repositoryId ?? null });
       return NextResponse.json({ task });
     }
     const body = action.parse(raw);
