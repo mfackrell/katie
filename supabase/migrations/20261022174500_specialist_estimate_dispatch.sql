@@ -16,7 +16,7 @@ GRANT SELECT,INSERT,UPDATE ON public.project_specialist_dispatches TO service_ro
 CREATE OR REPLACE FUNCTION public.dispatch_specialist_resource_estimate()
 RETURNS jsonb LANGUAGE plpgsql SET search_path TO 'public' AS $fn$
 DECLARE p work_projects; package jsonb; forecast jsonb; ids text[]; k text; specialist_name text; mid uuid;
- charged bigint; goal text; planned jsonb;
+ charged bigint; goal text; planned jsonb; assigned_team uuid[];
 BEGIN
  PERFORM pg_advisory_xact_lock(hashtextextended('katie.mission.state',0));
  FOR p IN SELECT * FROM work_projects
@@ -47,8 +47,18 @@ BEGIN
      '. Return ONLY JSON with specialist, scopeHash, packages:[{packageId,lowerTokens,expectedTokens,upperTokens,basis,dependencies}]. '||
      'ScopeHash='||p.approval_hash||'. Investigate complexity and uncertainty; do not copy baseline numbers without evaluating them. '||
      'Do not code, change project scope, use paid tools, or treat estimates as spending approval.';
+   -- Put the relevant saved specialist in the lead position, keeping the
+   -- other two actors available for independent planning/review.
+   IF cardinality(p.team)<>3 THEN CONTINUE; END IF;
+   IF specialist_name IN ('backend','frontend') THEN
+     assigned_team:=ARRAY[p.team[3],p.team[1],p.team[2]];
+   ELSIF specialist_name IN ('quality_assurance','independent_review') THEN
+     assigned_team:=ARRAY[p.team[2],p.team[1],p.team[3]];
+   ELSE
+     assigned_team:=p.team;
+   END IF;
    mid:=gen_random_uuid();
-   PERFORM create_mission(mid,goal,p.team,30,null);
+   PERFORM create_mission(mid,goal,assigned_team,30,null);
    UPDATE agent_missions SET project_id=p.id,project_kind='resource_estimate',token_allowance=12000
     WHERE id=mid;
    INSERT INTO project_specialist_dispatches(project_id,scope_hash,package_id,specialist,mission_id,status)
