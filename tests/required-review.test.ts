@@ -1169,7 +1169,7 @@ test("resumed prior work is a separate reference and its constraint source remai
  const request="Condense these examples to 180 words, retaining the confirmed correction.";
  const progress={version:1 as const,projectContext:{userMessageId:"b",text:"Active project controls"},objective:{userMessageId:"resume",text:"Resume the latest draft for this project"},stage:"working" as const,nextAction:"continue_original_goal" as const,pending:[],answered:[],lastAssistantMessageId:null,lastUserMessageId:"resume",lastUserIntent:"continuation" as const,workProduct:{projectId:"b",assistantMessageId:"saved-draft",text:"PRIOR DRAFT: three verified examples",request:{userMessageId:"length-request",text:request}}};
  const baseline=reviewBaseline({...params,user:progress.objective.text,history:[{role:"user",content:request}]},progress);
- assert.match(baseline.text,/PRIOR ACTIVE-PROJECT WORK REFERENCE/);
+ assert.match(baseline.text,/PRIOR ACTIVE WORK REFERENCE/);
  assert.match(baseline.text,/PRIOR DRAFT: three verified examples/);
  assert.ok(baseline.contractTurns.some(turn=>turn.text===request));
  assert.ok(!baseline.contractTurns.some(turn=>turn.text.includes("PRIOR DRAFT")));
@@ -1224,11 +1224,11 @@ test("resumed draft repair retains an earlier output limit and supplies the prio
  });
  const lead=makeProvider("openai",async p=>{
   validations++;
-  return response("openai","lead",{verdict:validations===1?"revise":"approve",issueType:validations===1?"missing_requirement":"none",findings:validations===1?"The earlier user output limit still governs the resumed draft but was omitted":"Original constraints are preserved",sourceCoverage:["turn-1","turn-2","latest-user"].map(sourceId=>({sourceId,finding:"Checked against active user sources"})),...(validations===2?{resolutions:[{objectionId:"contract-objection-1",sourceId:"turn-2",quote:limit,resolution:"The retained requirement now includes the limit and confirmed correction"}]}:{})});
+  return response("openai","lead",{verdict:validations===1?"revise":"approve",issueType:validations===1?"missing_requirement":"none",findings:validations===1?"The earlier user output limit still governs the resumed draft but was omitted":"Original constraints are preserved",sourceCoverage:["project:b","turn-1","turn-2","latest-user"].map(sourceId=>({sourceId,finding:"Checked against active user sources"})),...(validations===2?{resolutions:[{objectionId:"contract-objection-1",sourceId:"turn-2",quote:limit,resolution:"The retained requirement now includes the limit and confirmed correction"}]}:{})});
  });
  const answer="Harbor: reconciled WIP across 35 jobs and corrected estimates; subsequent controls caught $180,000 in unapproved revenue. Ridge: improved the close from 12 to 7 days and corrected job coding. Fieldworks: strengthened unbilled-revenue controls.";
  const result=await runRequiredDraftReview({requestId:"resume-prior-work-regression",params:{...params,user:latest,history:[]},sourceTurns:[{id:"turn-1",text:parent},{id:"turn-2",text:limit},{id:"latest-user",text:latest}],taskProgress:progress,draft:response("openai","lead",answer),leadProvider:lead,deadlineMs:deadline(),selectHelper:async c=>c.usedParticipants.length===1?{provider:reviewer,modelId:"reviewer"}:null});
- assert.equal(result.audit.status,"approved");assert.equal(result.result.text,answer);assert.equal(assessments,2);assert.equal(validations,2);
+ assert.equal(result.audit.status,"approved",JSON.stringify({attempts:result.audit.attempts,contractFindings:result.audit.contractFindings,completionNote:result.audit.completionNote}));assert.equal(result.result.text,answer);assert.equal(assessments,2);assert.equal(validations,2);
  assert.ok(result.result.text.split(/\s+/).length<=180);assert.match(result.result.text,/\$180,000/);
  assert.ok(!result.audit.sourceTurns?.some(turn=>turn.text===priorText));
 });
