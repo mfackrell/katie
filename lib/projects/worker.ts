@@ -130,7 +130,13 @@ async function advance(p: Project) {
                 .select('provider_name,model_id,pricing_status,pricing_input_per_1m,pricing_output_per_1m,pricing_verified_at')
                 .eq('is_active',true).eq('pricing_status','verified').limit(100);
             if(registryError)console.warn('[Projects] Verified pricing snapshot unavailable');
-            const forecast=enrichResourceForecast(scopeForecast,{models:registryError?[]:registry??[]});
+            const {data:history,error:historyError}=await db.from('agent_missions')
+                .select('actual_tokens,created_at,updated_at').eq('status','completed')
+                .order('updated_at',{ascending:false}).limit(60);
+            if(historyError)console.warn('[Projects] Mission duration evidence unavailable');
+            const forecast=enrichResourceForecast(scopeForecast,{
+                models:registryError?[]:registry??[],missionHistory:historyError?[]:history??[]
+            });
             // A forecast does not increase token_allowance or approve coding.
             // Save the granular rationale durably for audit and future calibration.
             const {error:forecastError}=await db.from('work_projects').eq('id',p.id).eq('phase','specification').update({
