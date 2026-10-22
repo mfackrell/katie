@@ -30,7 +30,12 @@ BEGIN
  WHERE mission_id=p_mission AND role='review' AND status='completed';
  IF j_count<1 THEN RETURN false; END IF;
  IF p_estimate IS NULL OR jsonb_typeof(p_estimate)<>'object'
-   OR length(p_estimate::text)>20000 THEN RETURN false; END IF;
+   OR length(p_estimate::text)>20000 OR p_estimate->>'origin'<>'specialist_verified' THEN RETURN false; END IF;
+ -- The submitted work packages must be verbatim from the reviewed mission output.
+ IF NOT pg_input_is_valid(m.result,'jsonb') THEN RETURN false; END IF;
+ IF (m.result::jsonb)->'packages' IS DISTINCT FROM p_estimate->'packages'
+  OR (m.result::jsonb)->>'specialist' IS DISTINCT FROM p_specialist
+  OR (m.result::jsonb)->>'scopeHash' IS DISTINCT FROM p_scope_hash THEN RETURN false; END IF;
  INSERT INTO project_specialist_estimates(project_id,mission_id,specialist,scope_hash,estimate)
  VALUES (p_project,p_mission,p_specialist,p_scope_hash,p_estimate)
  ON CONFLICT (mission_id) DO NOTHING;
