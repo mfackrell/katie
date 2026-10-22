@@ -8,6 +8,7 @@ import { parseJSON } from '@/lib/missions/types';
 import { validateProjectPlan, digest, projectPlanSchema, gameSpecificationView, canonical } from './contract';
 import {gameAssessmentEvidence} from './game-evidence';
 import {estimateProjectResources} from './resource-forecast.mjs';
+import {enrichResourceForecast} from './resource-economics.mjs';
 import { projectRpc, projectRuns, milestoneEvidence, acceptanceBinding, getDevelopmentProjectContext, type Project } from './store';
 export async function baseline(p: Project) { if (!p.repository_id)
     return null; const { data: r, error } = await getSupabaseAdminClient().from('repo_sync_runs').select('repository_full_name').eq('id', p.repository_id).maybeSingle<{
@@ -122,10 +123,22 @@ async function advance(p: Project) {
             const spec = validateProjectPlan(parseJSON(m.result ?? ''));
             if(game&&!spec.game)throw Error('Game specification requires source-grounded rules and registered model/browser acceptance');
             const base = await baseline(p);
-            const forecast=estimateProjectResources(spec,p.objective+' '+p.clarifications);
+            const scopeForecast=estimateProjectResources(spec,p.objective+' '+p.clarifications);
+            const db=getSupabaseAdminClient();
+            // Missing or unverified costs must never block reviewed requirements.
+            const {data:registry,error:registryError}=await db.from('model_registry')
+                .select('provider_name,model_id,pricing_status,pricing_input_per_1m,pricing_output_per_1m,pricing_verified_at')
+                .eq('is_active',true).eq('pricing_status','verified').limit(100);
+            if(registryError)console.warn('[Projects] Verified pricing snapshot unavailable');
+            const {data:history,error:historyError}=await db.from('agent_missions')
+                .select('actual_tokens,created_at,updated_at').eq('status','completed').in('project_kind',['research','specification','development','assessment'])
+                .order('updated_at',{ascending:false}).limit(60);
+            if(historyError)console.warn('[Projects] Mission duration evidence unavailable');
+            const forecast=enrichResourceForecast(scopeForecast,{
+                models:registryError?[]:registry??[],missionHistory:historyError?[]:history??[]
+            });
             // A forecast does not increase token_allowance or approve coding.
             // Save the granular rationale durably for audit and future calibration.
-            const db=getSupabaseAdminClient();
             const {error:forecastError}=await db.from('work_projects').eq('id',p.id).eq('phase','specification').update({
                 estimated_tokens:forecast.totals.expectedTokens,
                 estimate_rationale:JSON.stringify(forecast),
