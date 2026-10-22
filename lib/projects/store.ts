@@ -41,7 +41,11 @@ export type Project = {
     cycles: number;
     max_cycles: number;
     max_missions: number;
-    token_allowance: number;
+    token_allowance: number; // Enforced authorization, not the resource forecast
+    estimated_tokens?: number | null;
+    estimate_rationale?: string | null;
+    estimate_updated_at?: string | null;
+    budget_authorization_source?: 'legacy_default'|'user_approved'|'policy';
     deadline: string;
     active_mission_id: string | null;
     lease: string;
