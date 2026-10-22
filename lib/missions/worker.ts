@@ -5,7 +5,9 @@ import {gameAssessmentCapacity} from '@/lib/projects/game-evidence';
 import {GAME_RULE_CATEGORIES} from '../../scripts/project-game-rules.mjs';
 import {gameCoverageRepair} from '@/lib/projects/game-coverage-repair.mjs';
 import {validateProjectPlan,projectPlanSchema,gameSpecificationView,canonical,digest} from '@/lib/projects/contract';
-import {getDevelopmentProjectContext,acceptanceBinding} from '@/lib/projects/store';
+import {getDevelopmentProjectContext,acceptanceBinding,projectRpc} from '@/lib/projects/store';
+import {projectId} from '@/lib/projects/contract';
+import {gameProjectIntent} from '@/lib/projects/chat';
 import { agentRpc } from '@/lib/agents/store';
 import { dispatchDevelopment,reconcileDevelopment,developmentEvidence } from '@/lib/agents/development';
 import type { AgentTask } from '@/lib/agents/policy';
@@ -135,11 +137,31 @@ export async function executeClaim(claim:Claim,model=missionModel){
  }
  if(job.role==='development'){
   if(!agent.config.development||!mission.repository_id)throw Error('Development not permitted');
+  if(job.payload.approved!==true){await commit({detail:'Executive delegation approval required. Project coding still requires separate Developer Orchestrator scope approval.'},[],'awaiting_approval');return;}
+  // Executive delegation is supervision, not authorization to bypass the
+  // Developer Orchestrator's research, immutable scope contract, coding approval,
+  // private preview and independent acceptance lifecycle. In particular, an
+  // Executive mission without a registered project must not issue code directly.
+  if(!mission.project_id){
+   const task=await rpc<AgentTask|null>('mission_development_task',{p_job:job.id,p_lease:job.lease});
+   if(!task)throw Error('Saved Developer Orchestrator assignment unavailable');
+   const request='executive-delegated:'+mission.id;
+   const objective=mission.objective;
+   if(objective.length>8000)throw Error('Delegated project requires a complete objective within the project contract limit; no truncation is permitted');
+   const project=await projectRpc<{id:string;status:string;detail:string;result:string|null}>((gameProjectIntent(objective)?'create_game_work_project':'create_work_project'),{
+    p_id:projectId(request),p_request:request,p_actor:task.actor_id,p_chat:task.chat_id,p_objective:objective,p_repository:mission.repository_id
+   });
+   if(project.status==='completed'&&project.result){
+    await commit({output:project.result,delegatedProjectId:project.id,projectStatus:project.status,sourceIssue:task.external?.issueUrl??null,sourcePr:task.external?.prUrl??null});return;
+   }
+   await commit({detail:'Delegated to Developer Orchestrator project. Scope authorization, implementation, real-browser acceptance and independent review belong to the project; this Executive assignment is incomplete.',delegatedProjectId:project.id,projectStatus:project.status,sourceIssue:task.external?.issueUrl??null,sourcePr:task.external?.prUrl??null},[],'waiting_external');return;
+  }
   if(job.payload.approved!==true){await commit({detail:'Approve this exact saved coding assignment to submit an owner-authored GitHub issue. No merge or deployment is authorized.'},[],'awaiting_approval');return;}
   // Existing task IDs and durable dispatch markers protect the external write,
   // including recovery after a worker dies following possible acceptance.
-  const project=mission.project_id?await getDevelopmentProjectContext(job.id,true):null;
-  const binding=project?acceptanceBinding(project):undefined;
+  const project=await getDevelopmentProjectContext(job.id,true);
+  if(!project)throw Error('Registered Developer project lacks its DB-approved milestone contract');
+  const binding=acceptanceBinding(project);
   let task:AgentTask;
   const prior=await rpc<AgentTask|null>('mission_development_task',{p_job:job.id,p_lease:job.lease});
   if(!prior)throw Error('Saved development binding unavailable');

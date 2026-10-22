@@ -115,43 +115,24 @@ test('an approving model cannot bypass an explicit whole-response word limit',as
  review.job_key='review_again';const revision={...compose,job_key:'revision'};const load=modules({'@/lib/missions/store':{readMission:async()=>({mission:m,jobs:[revision,review]}),rpc:async(_,args)=>{committed=args;return true;}}});await load('@/lib/missions/worker').executeClaim({mission:m,job:review},async(_,instruction)=>({text:instruction.includes('KATIE_REQUIRED_DRAFT_REVIEW')?JSON.stringify(verdict()):JSON.stringify(assessment),sources:[],calculations:[],model:'fixture'}));assert.equal(committed.p_mission_status,'blocked');assert.equal(committed.p_final,null);assert.equal(committed.p_children.length,0);
 });
 
-test('approved development waits externally, then reclaimed work completes only after a verified draft receipt',async()=>{
- const prior=process.env.GITHUB_TOKEN;process.env.GITHUB_TOKEN='fixture-only';
- try{
-  const m=mission();m.repository_id=randomUUID();m.team[0].config.development=true;m.team[0].config.maxActiveTasks=1;
-  const j=job(m,'development','coding');j.payload={};
-  const task={id:j.id,agent_id:j.agent_id,kind:'development',status:'draft',request_id:'agent:'+j.id,input:'MISSION OBJECTIVE: Build from the preceding research. ASSIGNMENT: '+j.instruction+' DEPENDENCY EVIDENCE: handoff-sentinel research result https://example.com/source',snapshot:m.team[0].config,definition_version:1,repository_id:m.repository_id,repository_full_name:'owner/repo',external:{}};
-  let writes=0,finished=false,committed,draftEvidence=true,observedHead='a'.repeat(40),changeDuringRead=false,headReads=0;
-  const receipt={version:1,repository:'owner/repo',run_id:99,issue_number:7,pr_url:'https://github.com/owner/repo/pull/8',outcome:'READY',checks:{build:'success',test:'true',review:'pass',repair:'skipped',retest:'',final_review:''}};
-  const artifact=()=>{
-   const file=Buffer.from('agent-result.json'),content=Buffer.from(JSON.stringify(receipt));
-   const local=Buffer.alloc(30);local.writeUInt32LE(0x04034b50);local.writeUInt32LE(content.length,18);local.writeUInt32LE(content.length,22);local.writeUInt16LE(file.length,26);
-   const central=Buffer.alloc(46);central.writeUInt32LE(0x02014b50);central.writeUInt32LE(content.length,20);central.writeUInt32LE(content.length,24);central.writeUInt16LE(file.length,28);
-   const end=Buffer.alloc(22);end.writeUInt32LE(0x06054b50);end.writeUInt16LE(1,10);end.writeUInt32LE(central.length+file.length,12);end.writeUInt32LE(local.length+file.length+content.length,16);
-   return Buffer.concat([local,file,content,central,file,end]);
-  };
-  class GitHub{
-   users={getAuthenticated:async()=>({data:{type:'User',login:'owner'}})};
-   repos={get:async()=>({data:{owner:{type:'User',login:'owner'}}}),compareCommitsWithBasehead:async args=>{assert.equal(args.basehead,'b'.repeat(40)+'...'+'a'.repeat(40));return{data:{files:[{filename:'docs/pilot.md',status:'added',additions:5,deletions:0,patch:'@@ -0,0 +1,5 @@\n+# Pilot\n+\n+First paragraph.\n+\n+Second paragraph.'}]}};}};
-   issues={create:async payload=>{assert.ok(payload.body.includes(task.input),'Dispatch uses the exact approved evidence package');assert.match(payload.body,/handoff-sentinel/);assert.match(payload.body,/Build from the preceding research/);writes++;return{data:{number:7,html_url:'https://github.com/owner/repo/issues/7'}};}};
-   pulls={get:async()=>{headReads++;return({data:{draft:draftEvidence,state:'open',merged:false,changed_files:1,html_url:receipt.pr_url,head:{ref:'agent/pilot',sha:changeDuringRead&&headReads>1?'c'.repeat(40):observedHead,repo:{full_name:'owner/repo'}},base:{sha:'b'.repeat(40),repo:{full_name:'owner/repo'}}}});},listFiles:async()=>({data:[{filename:'docs/pilot.md',status:'added',additions:5,deletions:0,patch:'@@ -0,0 +1,5 @@\n+# Pilot\n+\n+First paragraph.\n+\n+Second paragraph.'}]})};
-   actions={getWorkflow:async()=>({data:{path:'.github/workflows/autonomous-development.yml',state:'active'}}),listWorkflowRuns:async()=>({data:{workflow_runs:finished?[{id:99,status:'completed',conclusion:'success',event:'issues',repository:{full_name:'owner/repo'},head_repository:{full_name:'owner/repo'},head_branch:'main',path:'.github/workflows/autonomous-development.yml',html_url:'https://github.com/owner/repo/actions/runs/99'}]:[]}}),listWorkflowRunArtifacts:async()=>({data:{artifacts:[{name:'agent-completion',id:10,expired:false,size_in_bytes:500}]}}),downloadArtifact:async()=>({data:artifact()}),listJobsForWorkflowRun:async()=>({data:{jobs:[{id:11,name:'build',conclusion:'success',html_url:'https://github.com/owner/repo/actions/runs/99/job/11'},{id:12,name:'test',conclusion:'success'},{id:13,name:'review',conclusion:'success'}]}}),downloadJobLogsForWorkflowRun:async args=>({data:args.job_id!==11?'2026-10-17T00:00:00Z [command]/usr/bin/git log -1 --format=%H\n2026-10-17T00:00:00Z '+'a'.repeat(40)+'\n':'console.log(\'PASS: invented source string\');\n2026-10-17T00:00:00Z PASS: Markdown parser validated one heading and two paragraphs.'})};
-  }
-  const db={from(){const q={select:()=>q,eq:()=>q,maybeSingle:async()=>({data:{repository_full_name:'owner/repo'},error:null}),update:async patch=>{Object.assign(task,patch);return{error:null};}};return q;}};
-  const {executeClaim}=modules({
-   '@octokit/rest':{Octokit:GitHub},'@/lib/data/supabase/admin':{getSupabaseAdminClient:()=>db},
-   '@/lib/agents/store':{agentRpc:async(name)=>{if(name==='transition_agent_task'){task.status='dispatching';return task;}assert.equal(name,'claim_agent_dispatch');assert.equal(task.external.attempted,undefined);task.external={attempted:true};return true;}},
-   '@/lib/missions/store':{readMission:async()=>({mission:m,jobs:[j]}),rpc:async(name,args)=>{if(name==='mission_development_task')return task;assert.equal(name,'commit_mission_work');committed=args;return true;}},
-  })('@/lib/missions/worker');
-  const execute=()=>executeClaim({mission:m,job:j},()=>assert.fail('Development must not invoke models'));
-  await execute();assert.equal(committed.p_status,'awaiting_approval');assert.equal(writes,0);
-  j.payload.approved=true;await execute();assert.equal(committed.p_status,'waiting_external');assert.equal(task.status,'submitted');assert.equal(writes,1);
-  // Reclaimed assignment uses the durable submitted task and verifies its receipt.
-  j.lease=randomUUID();finished=true;await execute();
-  assert.equal(committed.p_status,'completed');assert.equal(task.status,'ready');assert.equal(committed.p_result.external.receipt.outcome,'READY');assert.equal(committed.p_result.external.prUrl,receipt.pr_url);assert.equal(writes,1);
-  assert.equal(committed.p_result.verification.changedFiles.length,1);assert.equal(committed.p_result.verification.changedFiles[0].path,'docs/pilot.md');assert.match(committed.p_result.verification.changedFiles[0].patch,/# Pilot/);assert.equal(committed.p_result.verification.observedHeadSha,'a'.repeat(40));assert.equal(committed.p_result.verification.validation.excerpts.length,1);assert.match(committed.p_result.verification.validation.excerpts[0],/Markdown parser validated/);
-  draftEvidence=false;await assert.rejects(execute(),/Draft evidence unavailable/);assert.equal(writes,1);draftEvidence=true;task.external.receipt={...receipt,repository:'else/other'};await assert.rejects(execute(),/Receipt association invalid/);assert.equal(writes,1);task.external.receipt=receipt;observedHead='c'.repeat(40);await assert.rejects(execute(),/immutable tested and reviewed commit/);observedHead='a'.repeat(40);headReads=0;changeDuringRead=true;await assert.rejects(execute(),/Draft changed while collecting/);assert.equal(writes,1);
- }finally{if(prior===undefined)delete process.env.GITHUB_TOKEN;else process.env.GITHUB_TOKEN=prior;}
+test('Executive coding approval delegates to Developer project without bypassing its contract or issuing another GitHub issue',async()=>{
+ const m=mission();m.repository_id=randomUUID();m.objective='Build a playable browser game with deterministic rules';m.team[0].config.development=true;
+ const j=job(m,'development','coding');j.payload={};
+ const task={id:j.id,actor_id:randomUUID(),chat_id:randomUUID(),external:{issueUrl:'https://github.com/owner/repo/issues/650'}};
+ const projects=[],commits=[];let status='running';
+ const {executeClaim}=modules({
+  '@/lib/projects/store':{projectRpc:async(name,args)=>{projects.push({name,args});return {id:args.p_id,status,result:status==='completed'?'VERIFIED DEVELOPER ACCEPTANCE':null};},getDevelopmentProjectContext:async()=>null,acceptanceBinding:()=>({})},
+  '@/lib/missions/store':{readMission:async()=>({mission:m,jobs:[j]}),rpc:async(name,args)=>{if(name==='mission_development_task')return task;if(name==='commit_mission_work'){commits.push(args);return true;}assert.fail('Unexpected RPC '+name);}},
+ })('@/lib/missions/worker');
+ const execute=()=>executeClaim({mission:m,job:j},()=>assert.fail('Delegation must not execute a coding model'));
+ await execute();assert.equal(commits.at(-1).p_status,'awaiting_approval');assert.equal(projects.length,0);
+ j.payload.approved=true;
+ await execute();assert.equal(commits.at(-1).p_status,'waiting_external');assert.equal(projects.length,1);
+ assert.equal(projects[0].name,'create_game_work_project');assert.equal(projects[0].args.p_request,'executive-delegated:'+m.id);
+ assert.equal(projects[0].args.p_actor,task.actor_id);assert.equal(projects[0].args.p_chat,task.chat_id);assert.equal(projects[0].args.p_repository,m.repository_id);
+ assert.equal(commits.at(-1).p_result.delegatedProjectId,projects[0].args.p_id);
+ j.payload.approved=true;await execute();assert.equal(projects[1].args.p_id,projects[0].args.p_id);assert.equal(commits.at(-1).p_status,'waiting_external');
+ status='completed';await execute();assert.equal(commits.at(-1).p_status,'completed');assert.equal(commits.at(-1).p_result.output,'VERIFIED DEVELOPER ACCEPTANCE');
 });
 
 test('an approval carrying essential missing input stays blocked and preserves the actual question',async()=>{
