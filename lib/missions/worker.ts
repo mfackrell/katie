@@ -150,7 +150,10 @@ export async function executeClaim(claim:Claim,model=missionModel){
    const project=await projectRpc<{id:string;status:string;detail:string}>((gameProjectIntent(objective)?'create_game_work_project':'create_work_project'),{
     p_id:projectId(request),p_request:request,p_actor:task.actor_id,p_chat:task.chat_id,p_objective:objective,p_repository:mission.repository_id
    });
-   await commit({detail:'Delegated to Developer Orchestrator project. Project scope and coding authorization are independently managed; the Executive assignment is not complete.',delegatedProjectId:project.id,projectStatus:project.status,sourceIssue:task.external?.issueUrl??null,sourcePr:task.external?.prUrl??null},[],'waiting_external');return;
+   if(project.status==='completed'&&project.result){
+    await commit({output:project.result,delegatedProjectId:project.id,projectStatus:project.status,sourceIssue:task.external?.issueUrl??null,sourcePr:task.external?.prUrl??null});return;
+   }
+   await commit({detail:'Delegated to Developer Orchestrator project. Scope authorization, implementation, real-browser acceptance and independent review belong to the project; this Executive assignment is incomplete.',delegatedProjectId:project.id,projectStatus:project.status,sourceIssue:task.external?.issueUrl??null,sourcePr:task.external?.prUrl??null},[],'waiting_external');return;
   }
   if(job.payload.approved!==true){await commit({detail:'Approve this exact saved coding assignment to submit an owner-authored GitHub issue. No merge or deployment is authorized.'},[],'awaiting_approval');return;}
   // Existing task IDs and durable dispatch markers protect the external write,
