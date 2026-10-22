@@ -22,6 +22,13 @@ test('recovery triage distinguishes transient provider, trusted infrastructure, 
   trustedLog:"EINVAL: invalid argument, chown '/tmp/fonts'",approvedProjectPaths:['app/project-pilots/token-board/']});
  assert.equal(d.strategy,'scoped_repair');assert.ok(d.allowedPaths.includes('scripts/project-browser-check.mjs'));
  assert.equal(d.allowedPaths.includes('app/project-pilots/token-board/'),false,'infrastructure repair cannot change application code');
+d=diagnoseRecoveryFailure({sourceType:'project',detail:'browser_check: browser launch stopped',
+  trustedLog:'TRUSTED_PROJECT_BROWSER_RUNNER_ERROR: browserType.launch: Target page, context or browser has been closed'});
+ assert.equal(d.category,'verification_infrastructure','server-recorded browser launcher failure is infrastructure');
+ assert.equal(d.strategy,'scoped_repair');
+ assert.ok(d.allowedPaths.includes('lib/projects/preview.ts'));
+ d=diagnoseRecoveryFailure({sourceType:'project',detail:'browser_check: browser launch stopped'});
+ assert.notEqual(d.strategy,'scoped_repair','unverified browser errors cannot grant code changes');
  d=diagnoseRecoveryFailure({sourceType:'project',detail:'Independent test failed: Rendered text does not equal approved expected value',
   approvedProjectPaths:['app/project-pilots/token-board/']});
  assert.equal(d.category,'implementation');assert.equal(d.strategy,'scoped_repair');
