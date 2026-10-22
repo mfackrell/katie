@@ -11,11 +11,13 @@ test('mission admission is project-budget-fenced, unique, and server-owned',()=>
  assert.match(sql,/PERFORM create_mission/);
  assert.match(sql,/project_kind='resource_estimate'/);
  assert.match(sql,/REVOKE ALL ON FUNCTION public.dispatch_specialist_resource_estimate/);
+ assert.match(sql,/project_specialist_consolidations/);
+ assert.match(sql,/recorded_count<>package_count/);
 });
 test('completed specialist results are attributed to reviewed missions and reconciled',()=>{
  assert.match(dispatcher,/recordAndReconcileSpecialistEstimate/);
  assert.match(dispatcher,/mission.status!=='completed'/);
  assert.match(dispatcher,/p.approval_hash!==entry.scope_hash/);
- assert.match(dispatcher,/estimate_rationale',p.estimate_rationale/);
+ assert.match(dispatcher,/save_project_specialist_consolidation/);
  assert.match(coordinator,/runSpecialistResourceBatch\(\)/);
 });
