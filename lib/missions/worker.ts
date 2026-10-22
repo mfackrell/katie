@@ -137,6 +137,7 @@ export async function executeClaim(claim:Claim,model=missionModel){
  }
  if(job.role==='development'){
   if(!agent.config.development||!mission.repository_id)throw Error('Development not permitted');
+  if(job.payload.approved!==true){await commit({detail:'Executive delegation approval required. Project coding still requires separate Developer Orchestrator scope approval.'},[],'awaiting_approval');return;}
   // Executive delegation is supervision, not authorization to bypass the
   // Developer Orchestrator's research, immutable scope contract, coding approval,
   // private preview and independent acceptance lifecycle. In particular, an
