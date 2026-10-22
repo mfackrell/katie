@@ -24,6 +24,12 @@ function approvalFor(p: Project | null) {
         allowedPaths: p.spec.allowedPaths,
         repository: p.repository_full_name,
         deadline: p.deadline,
+        resourceBudget: {
+            estimatedTokens: p.estimated_tokens ?? null,
+            authorizedTokens: p.token_allowance,
+            authorizationSource: p.budget_authorization_source ?? 'legacy_default',
+            estimateRationale: p.estimate_rationale ?? null,
+        },
         limits: { codingJobs: p.max_cycles, modelTokens: p.token_allowance, missions: p.max_missions },
         specification: p.spec,
     };
@@ -44,6 +50,13 @@ export async function GET(request: NextRequest) {
             active: p?.status === 'running',
             status: p?.status ?? null,
             approval: approvalFor(p),
+            resourceBudget: p ? {
+                estimatedTokens: p.estimated_tokens ?? null,
+                authorizedTokens: p.token_allowance,
+                authorizationSource: p.budget_authorization_source ?? 'legacy_default',
+                estimateRationale: p.estimate_rationale ?? null,
+                safeguards: { maxMissions: p.max_missions, maxCodingCycles: p.max_cycles, deadline: p.deadline },
+            } : null,
             messages,
             executivePending,
         }, { headers: { 'Cache-Control': 'no-store' } });
