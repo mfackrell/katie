@@ -68,6 +68,7 @@ jobs:
           # before switching to a prior project commit or running generated code.
           mkdir -p "$RUNNER_TEMP/project-tools" "$RUNNER_TEMP/agent-task"
           cp scripts/project-game-rules.mjs scripts/project-game-check.mjs scripts/project-context.mjs scripts/project-browser-check.mjs scripts/project-sandbox.mjs scripts/project-ci.mjs scripts/project-scope.mjs scripts/project-browser-engine.mjs scripts/recovery-scope.mjs "$RUNNER_TEMP/project-tools/"
+          node scripts/request-envelope.mjs unpack "$RUNNER_TEMP/original-agent-request.md"
           node scripts/project-context.mjs prepare "$RUNNER_TEMP/original-agent-request.md" > "$RUNNER_TEMP/project-context.json"
           node scripts/recovery-scope.mjs prepare "$RUNNER_TEMP/original-agent-request.md" > "$RUNNER_TEMP/recovery-context.json"
           project="$(jq -r 'if . == null then "false" else "true" end' "$RUNNER_TEMP/project-context.json")"
