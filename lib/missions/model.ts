@@ -8,7 +8,7 @@ import {boundedProvider} from '@/lib/orchestration/bounded-provider';
 import { createHash, randomUUID } from 'node:crypto';
 import { rpc } from './store';
 import { calculate,planSchema,type Claim } from './types';
-import {MissionAdmissionError,explainAdmissionDenial,missionExecutionDeadline,missionAttemptTimeout,fitsMissionEnvelope} from './request-budget';
+import {MissionAdmissionError,explainAdmissionDenial,missionExecutionDeadline,missionAttemptTimeout,fitsMissionEnvelope,missionInputLimit} from './request-budget';
 
 const calculator={type:'function',name:'calculate',description:'Execute a deterministic arithmetic calculation. Numbers must come from supplied evidence or explicitly labeled assumptions.',strict:true,parameters:{type:'object',properties:{operation:{type:'string',enum:['add','subtract','multiply','divide','power']},values:{type:'array',items:{type:'number'},minItems:2,maxItems:12}},required:['operation','values'],additionalProperties:false}};
 export class MissionModelFailure extends Error { constructor(message:string,readonly partial:Record<string,unknown>){super(message);this.name='MissionModelFailure';} }
@@ -27,7 +27,7 @@ export async function missionModel(claim:Claim,instruction:string,input:string,t
  const agent=claim.mission.team.find(a=>a.id===claim.job.agent_id);
  if(!agent)throw Error('Saved worker unavailable');
  if(tools==='research'&&!agent.config.research)throw Error('Research permission denied');
- if(!fitsMissionEnvelope(instruction,input))throw Error('Mission evidence exceeds bounded context. Narrow the objective or deliverable.');
+ if(!fitsMissionEnvelope(instruction,input,missionInputLimit(claim)))throw Error('Mission evidence exceeds bounded context. Narrow the objective or deliverable.');
  const executionDeadline=missionExecutionDeadline(claim);
  const checkpointStage=claim.job.role==='review'&&tools==='none'&&input.startsWith('AUTHORITATIVE_USER_TURNS:\n');
  const checkpointHash=checkpointStage?createHash('sha256').update(JSON.stringify({instruction,input,tools,objective:claim.mission.objective,agent:claim.job.agent_id})).digest('hex'):null;
@@ -103,7 +103,7 @@ async function executeMissionModel(claim:Claim,instruction:string,input:string,t
  const outputTokens=expandedOutputTokens??(gameSpecification&&['compose','revise'].includes(claim.job.role)?16000:['compose','revise'].includes(claim.job.role)?6000:claim.job.role==='review'?(input.startsWith('Independent assessment:\n')?10000:5000):3000);
  const client=boundedProvider(choice);
  const sources:ModelResult['sources']=[],calculations:unknown[]=[];
- if(!fitsMissionEnvelope(instruction,input))throw Error('Mission evidence exceeds bounded context. Narrow the objective or deliverable.');
+ if(!fitsMissionEnvelope(instruction,input,missionInputLimit(claim)))throw Error('Mission evidence exceeds bounded context. Narrow the objective or deliverable.');
  let context:unknown[]=[{role:'user',content:input}];
  let text='';
  const calculationDeadline=Math.min(executionDeadline,Date.now()+180_000);
