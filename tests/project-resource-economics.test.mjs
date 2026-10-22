@@ -32,3 +32,11 @@ test('zero/missing prices, insufficient historical samples and unverified cost i
  assert.equal(r.estimatedToolCostUsd,null);
  assert.equal(r.estimatedInfrastructureCostUsd,null);
 });
+
+test('observed elapsed time uses completed mission evidence only with sufficient samples',()=>{
+ const history=Array.from({length:5},(_,i)=>({actual_tokens:1000,created_at:'2026-10-01T00:00:00Z',updated_at:'2026-10-01T01:00:00Z'}));
+ const forecast=enrichResourceForecast(base,{missionHistory:history});
+ assert.equal(forecast.estimatedElapsedHours.expected,200);
+ assert.equal(forecast.estimatedElapsedHours.source,'historical_mission_wall_clock_throughput_single_worker');
+ assert.equal(enrichResourceForecast(base,{missionHistory:history.slice(0,4)}).estimatedElapsedHours,null);
+});
