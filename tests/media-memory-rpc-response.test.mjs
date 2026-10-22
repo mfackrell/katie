@@ -10,7 +10,7 @@ function loadModule(path, values = {}) {
   const compiled = ts.transpileModule(readFileSync(path, 'utf8'), {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
   }).outputText;
-  vm.runInNewContext(compiled, { exports, console, ...values });
+  vm.runInNewContext(compiled, { exports, console, AbortController, setTimeout, clearTimeout, performance, ...values });
   return exports;
 }
 function client(response) {
