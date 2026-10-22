@@ -27,7 +27,7 @@ function fixture(t) {
 function trustedTools(root){
   mkdirSync(join(root, 'scripts'));
   mkdirSync(join(root, 'temp', 'project-tools'), {recursive:true});
-  for(const name of ['project-game-rules.mjs','project-game-check.mjs','project-context.mjs','project-browser-check.mjs','project-sandbox.mjs','project-ci.mjs','project-scope.mjs','project-browser-engine.mjs','recovery-scope.mjs']){const source=new URL('../scripts/'+name,import.meta.url);copyFileSync(source,join(root,'scripts',name));copyFileSync(source,join(root,'temp','project-tools',name));}
+  for(const name of ['project-game-rules.mjs','project-game-check.mjs','project-context.mjs','request-envelope.mjs','project-browser-check.mjs','project-sandbox.mjs','project-ci.mjs','project-scope.mjs','project-browser-engine.mjs','recovery-scope.mjs']){const source=new URL('../scripts/'+name,import.meta.url);copyFileSync(source,join(root,'scripts',name));copyFileSync(source,join(root,'temp','project-tools',name));}
 }
 function shell(script, root, mode, extra = {}) {
   return spawnSync('bash', ['-e', '-o', 'pipefail', '-c', script], {
