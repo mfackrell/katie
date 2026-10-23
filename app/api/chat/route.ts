@@ -680,7 +680,9 @@ async function executeChat(request: NextRequest) {
     // This does not grant new credentials: writes remain in the existing
     // audited project/developer workflow with its approval and verification.
     const selfInspectionRequest = /\b(?:your(?:self| own)?|katie(?:'s)?)\b/i.test(message) &&
-      /\b(?:repository|repo|github|source|codebase|architecture|routing|deployment|logs?|implementation|inspect|debug|fix|edit|modify)\b/i.test(message);
+      (/\b(?:repository|repo|github|source|codebase|architecture|routing|deployment|logs?|implementation|inspect|debug|fix|edit|modify)\b/i.test(message) ||
+       /\b(?:see|view|understand|know|examine|look at|access)\b[^.!?]{0,55}\b(?:yourself|your own (?:system|self)|katie)\b/i.test(message) ||
+       /\b(?:yourself|your own (?:system|self)|katie)\b[^.!?]{0,55}\b(?:see|view|understand|know|examine|access)\b/i.test(message));
     let selfRepoId: string | null = null;
     if (!activeRepoId && repoInjectionEnabled && selfInspectionRequest && !currentAgentTask()) {
       const admin = getSupabaseAdminClient();
@@ -1629,7 +1631,7 @@ async function executeChat(request: NextRequest) {
       repoInjectionEnabled,
       hasActiveRepo: activeRepoContext !== null,
       requestIntent: resolvedRequestIntent,
-      message,
+      message: selfInspectionRequest ? `${message}\nInspect repository source and architecture.` : message,
     });
 
     if (repoGate.attach && activeRepoContext) {
