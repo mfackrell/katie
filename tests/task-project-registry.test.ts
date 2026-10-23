@@ -123,3 +123,12 @@ test("a seeded specialist handoff survives an empty target chat and supplies act
  assert.match(assembled,/confirmed/);
  assert.match(assembled,/Give three relevant examples/);
 });
+
+test("unrelated standalone professional biography is not blocked by saved projects",()=>{
+  const a=project(emptyTaskProgress(),"a","New project: family logistics");
+  const b=project(emptyTaskProgress(),"b","New project: construction accounting");
+  const state=mergeTaskProjects(emptyTaskProgress(),[...(a.projects??[]),...(b.projects??[])]);
+  const profile=applyUserToTaskProgress(state,{messageId:"bio",text:"I am a fractional CFO with 25 years of experience. Please remember my professional background."});
+  assert.equal(profile.projectClarification,undefined);
+  assert.equal(profile.projects?.length,2);
+});
