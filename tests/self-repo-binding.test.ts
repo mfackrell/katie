@@ -7,5 +7,5 @@ test("self inspection binds Katie's connected own repository without bypassing e
  assert.match(route,/selfActor\?\.name\?\.trim\(\)\.toLowerCase\(\) === "katie"/);
  assert.match(route,/\.eq\("repository_full_name","mfackrell\/katie"\)/);
  assert.match(route,/const effectiveRepoId = activeRepoId \?\? selfRepoId/);
- assert.match(route,/activeRepoId:effectiveRepoId \\?\\? undefined/);
+ assert.match(route,/activeRepoId:effectiveRepoId \?\? undefined/);
 });
