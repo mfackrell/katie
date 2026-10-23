@@ -774,7 +774,7 @@ async function executeChat(request: NextRequest) {
     // Stored projects are reference material, not a standing command to classify
     // every ordinary conversation as a project continuation. An explicit current
     // project reference or a fresh task source can still activate resolution.
-    const explicitSavedProjectReference = /\b(?:resume|return to|back to|continue|reopen|switch to|go back to|saved project|saved application|earlier project|earlier application|that project|the project)\b/i.test(message);
+    const explicitSavedProjectReference = /\b(?:(?:resume|return to|back to|reopen|switch to|go back to)\b.{0,100}\b(?:project|app|application|game|website)\b|(?:saved|earlier)\s+(?:project|application)\b|(?:the|this|that)\s+project\b|continue\s+(?:(?:the|my|this|that)\s+)?(?:project|game|app|application|website)\b)/i.test(message);
     if (!isProjectStopRequest && !standaloneFragment && (freshTaskEvidence.length || startProjectIntent(message) || followupProjectIntent(message) || (contextProjects.length > 0 && explicitSavedProjectReference) || (priorTaskProgress.projectContext && classifyUserTurn(message) === "new_task")) && !currentAgentTask() &&
         !(classifyUserTurn(message) === "conversation" && !newAttachments.length)) {
       const contextProviders = getAvailableProviders();
