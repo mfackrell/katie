@@ -274,6 +274,14 @@ export function applyUserToTaskProgress(
     return { ...state, lastUserMessageId: input.messageId,
       projectClarification: "Which saved project should I continue?" };
   }
+  // An unrelated new-chat request is not a resume request. Keep the saved
+  // catalog available for later explicit selection without binding its state.
+  if (!state.projectContext && !transition && (state.projects?.length ?? 0) > 0 &&
+      !isProjectBrief(input.text)) {
+    return { ...state, lastUserMessageId: input.messageId,
+      lastUserIntent: turnIntent, projectClarification: undefined,
+      objective: { text: input.text, userMessageId: input.messageId } };
+  }
   if (transition?.action === "ambiguous") {
     return { ...state, lastUserMessageId: input.messageId, projectClarification:
       transition.clarification?.trim() || "Which saved project should this request continue?" };
