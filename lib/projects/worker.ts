@@ -296,7 +296,7 @@ async function advance(p: Project) {
                 const {data:composition,error:compositionError}=await getSupabaseAdminClient()
                   .from('mission_assignments').select('status,role,result')
                   .eq('id',checkpoint.sourceJobId).maybeSingle<{status:string;role:string;result:{text?:string}|null}>();
-                if(compositionError||composition?.status!=='completed'||composition.role!=='compose'||
+                if(compositionError||composition?.status!=='completed'||!['compose','revise'].includes(composition.role)||
                    typeof composition.result?.text!=='string')throw Error('Saved game composition checkpoint invalid');
                 projectEvidence={...(projectEvidence as Record<string,unknown>),
                     savedSpecificationCheckpoint:{
@@ -324,7 +324,10 @@ async function advance(p: Project) {
                     if(raw){
                         const source=projectPlanSchema.parse(JSON.parse(raw));
                         const view=gameSpecificationView(source);
-                        if(canonical(view).length<=20000)draft=view;
+                        // Match the validated game-specific lossless checkpoint envelope.
+                        // The legacy 20K limit discarded valid saved repair evidence and
+                        // forced unnecessary regeneration of the same specification.
+                        if(canonical(view).length<=40000)draft=view;
                     }
                 }catch{/* Preserve unparseable original in its durable mission. */}
                 projectEvidence={...(projectEvidence as Record<string,unknown>),
