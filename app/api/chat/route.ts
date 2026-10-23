@@ -1631,13 +1631,17 @@ async function executeChat(request: NextRequest) {
       }
     }
 
+    const recentUserTopic = attachmentHistory.filter(turn => turn.role === "user").slice(-8)
+      .map(turn => turn.content).join("\n");
+    const continuitySelfInspection = /\\b(?:can you see yourself|see yourself yet|your own code|inspect yourself)\\b/i.test(message) ||
+      (selfInspectionRequest && /\\b(?:code|repo|architecture|routing)\\b/i.test(recentUserTopic));
     const repoGate = shouldAttachRepoSourceDeterministically({
       // A direct request to inspect Katie herself authorizes this one scoped source read.
       // Do not change the persistent toggle or attach repositories to unrelated turns.
       repoInjectionEnabled: repoInjectionEnabled || (ownSourceInspectionAuthorized && activeRepoContext?.repositoryFullName === "mfackrell/katie"),
       hasActiveRepo: activeRepoContext !== null,
       requestIntent: resolvedRequestIntent,
-      message: selfInspectionRequest ? `${message}\nInspect repository source and architecture.` : message,
+      message: (selfInspectionRequest || continuitySelfInspection) ? `${message}\nInspect Katie own source code and routing implementation.` : message,
     });
 
     if (repoGate.attach && activeRepoContext) {
@@ -1708,7 +1712,7 @@ async function executeChat(request: NextRequest) {
     });
     if (shouldAttachSourceContext && activeRepoContext && loadedRepoContext) {
       try {
-        const fileSelection = await selectFilesForInjection(activeRepoContext.id, message, [], "smart");
+        const fileSelection = await selectFilesForInjection(activeRepoContext.id, (selfInspectionRequest || continuitySelfInspection) ? `${message}\nKatie own routing source architecture` : message, [], "smart");
         const settled = await Promise.allSettled(
           fileSelection.selected.map((filePath) => fetchFullFile(activeRepoContext.id, filePath, 250_000)),
         );
