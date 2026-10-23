@@ -1,4 +1,4 @@
-import {handleProjectChat, startProjectIntent, followupProjectIntent, isProjectStopIntent} from '@/lib/projects/chat';
+import {handleProjectChat, startProjectIntent, followupProjectIntent, isProjectStopIntent} from '@/lib/developer/project-conversation';
 import {executeExecutiveCommand} from '@/lib/executive/transport';
 import { maskPdfSourceNames, pdfPageTaskForSource } from "@/lib/uploads/pdf-inventory";
 import { pdfSourceOccurrence, selectFreshPdfSources, selectPdfEvidenceSource } from "@/lib/chat/pdf-source-selection";
@@ -771,7 +771,11 @@ async function executeChat(request: NextRequest) {
     // clarification prevent cancellation or rewrite the application ledger.
     const isProjectStopRequest = !currentAgentTask() && !newAttachments.length && !requestImages?.length && isProjectStopIntent(message);
     const standaloneFragment = !newAttachments.length && !requestImages?.length && /^\s*[\p{L}\p{N}]+(?:\s+[\p{L}\p{N}]+)?[.!?]?\s*$/u.test(message) && !startProjectIntent(message) && !followupProjectIntent(message) && !isProjectStopIntent(message);
-    if (!isProjectStopRequest && !standaloneFragment && (contextProjects.length || freshTaskEvidence.length || startProjectIntent(message) || followupProjectIntent(message)) && !currentAgentTask() &&
+    // Stored projects are reference material, not a standing command to classify
+    // every ordinary conversation as a project continuation. An explicit current
+    // project reference or a fresh task source can still activate resolution.
+    const explicitSavedProjectReference = /\b(?:(?:resume|return to|back to|reopen|switch to|go back to)\b.{0,100}\b(?:project|app|application|game|website)\b|(?:saved|earlier)\s+(?:project|application)\b|(?:the|this|that)\s+project\b|continue\s+(?:(?:the|my|this|that)\s+)?(?:project|game|app|application|website)\b)/i.test(message);
+    if (!isProjectStopRequest && !standaloneFragment && (freshTaskEvidence.length || startProjectIntent(message) || followupProjectIntent(message) || (contextProjects.length > 0 && explicitSavedProjectReference) || (priorTaskProgress.projectContext && classifyUserTurn(message) === "new_task")) && !currentAgentTask() &&
         !(classifyUserTurn(message) === "conversation" && !newAttachments.length)) {
       const contextProviders = getAvailableProviders();
       const entries = await Promise.all(contextProviders.map(async provider => ({provider, models: await provider.listModels()})));
@@ -1119,7 +1123,10 @@ async function executeChat(request: NextRequest) {
     // EO commands are intercepted before executeChat; no management path exists
     // in normal Katie model routing.
     const executiveReply=null, specialistReply=null, financeReply=null, developmentReply=null;
-    const explicitProjectControl = startProjectIntent(message) || followupProjectIntent(message) || isProjectStopIntent(message);
+    // Standalone Katie only RELAYS explicit commands to the Developer project
+    // controller. Status, scoped approvals and amendments stay durable there.
+    const savedDeveloperCommand = /^(?:(?:(?:what(?:'s| is)|show|check|give me|tell me|how(?:'s| is))\b.{0,36})?(?:project\s+(?:status|progress)|(?:the|my|this)\s+project\s+(?:status|progress)|project\s+(?:note|context|answer)\s*:)|(?:please\s+)?(?:resume|pause|stop|approve)\s+(?:(?:the|my|this)\s+)?project\b|(?:please\s+)?(?:add|change|fix|remove|update|keep|retain|preserve|support|enable)\b.{0,180}\b(?:game|app|website|project|software|multiplayer|keyboard|undo|button)\b)/i.test(message.trim());
+    const explicitProjectControl = startProjectIntent(message) || followupProjectIntent(message) || isProjectStopIntent(message) || savedDeveloperCommand;
     const projectReply = !pdfProgress.projectClarification && !executiveReply && (explicitProjectControl || softwareBuildIntent) && !standaloneFragment && !specialistReply && !financeReply && !developmentReply && !currentAgentTask() && savedDraftReply === null && !newAttachments.length && !requestImages?.length
       ? await handleProjectChat({actorId,chatId,message,activeRepoId:effectiveRepoId ?? undefined,softwareBuildIntent},requestId,attachmentHistory,requestTracked) : null;
     const localKatieResponse = !standaloneFragment && (explicitProjectControl || newAttachments.length > 0) && pdfProgress.projectClarification ? {reason: "project" as const, text: pdfProgress.projectClarification} : savedDraftReply !== null ? { reason: "project" as const, text: savedDraftReply } : executiveReply ? {reason: "executive" as const,text:executiveReply}
@@ -1321,9 +1328,9 @@ async function executeChat(request: NextRequest) {
     const controlPlaneConversationContext = [
       summary ? `Conversation summary: ${summary}` : "",
       history.length ? `Recent conversation: ${JSON.stringify(history.slice(-4))}` : "",
-      `Active project (advisory): ${JSON.stringify(priorTaskProgress.projectContext?.text.slice(0, 1800) ?? null)}`,
-      `Current requested deliverable (advisory): ${JSON.stringify(priorTaskProgress.objective?.text ?? null)}`,
-      `Outstanding questions: ${JSON.stringify(priorTaskProgress.pending.slice(-4).map(question => ({ id: question.id, text: question.text })))}`,
+      `Active project (advisory): ${JSON.stringify(explicitSavedProjectReference ? priorTaskProgress.projectContext?.text.slice(0, 1800) ?? null : null)}`,
+      `Current requested deliverable (advisory): ${JSON.stringify(explicitSavedProjectReference ? priorTaskProgress.objective?.text ?? null : null)}`,
+      `Outstanding questions: ${JSON.stringify(explicitSavedProjectReference ? priorTaskProgress.pending.slice(-4).map(question => ({ id: question.id, text: question.text })) : [])}`,
       `Has attached images: ${Boolean((Array.isArray(images) && images.length > 0) || attachments.some((attachment) => attachment.mimeType.startsWith("image/")))}`,
       `Saved attachment selection: ${selectionContext()}`,
       `Active repo: ${sessionContext.activeRepo ? `${sessionContext.activeRepo.fullName} (${sessionContext.activeRepo.id})` : "none"}`
