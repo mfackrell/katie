@@ -77,7 +77,7 @@ export function MessageReactions({actorId,chatId,messageId,onReaction,disabled=f
         {option.emoji}
       </button>)}
     </div>
-    {delivered && <p role="status" className="mt-1 text-xs text-emerald-300">Reaction delivered. Katie is responding in this conversation.</p>}
+    {delivered && <p role="status" className="mt-1 text-xs text-emerald-300">Reaction saved. Katie’s reply is queued and will appear here.</p>}
     {error&&<p role="alert" className="mt-1 text-xs text-rose-300">{error}</p>}
   </div>;
 }
