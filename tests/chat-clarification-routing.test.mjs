@@ -494,7 +494,8 @@ test('unreadable source keeps conversation on model path without a local project
     [{fileId:'unreadable',fileName:'brief.png',mimeType:'image/png'}],
     async () => undefined,
     async () => ({observedSummary:'Unreadable source',summaryCoverage:'metadata'}));
-  const result = await vm.runInNewContext(compile(`(async()=>{ ${contextResolutionBlock} return {
+  const fullResolutionBlock = blockBetween(statement(declaration('contextClassification')), statement(declaration('pdfReviewContinuation')));
+  const result = await vm.runInNewContext(compile(`(async()=>{ ${fullResolutionBlock} return {
     clarification: pdfProgress.projectClarification,
     project: pdfProgress.projectContext?.userMessageId,
     freshDescriptionCount: freshTaskDescriptions.size
