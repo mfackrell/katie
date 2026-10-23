@@ -487,48 +487,24 @@ test('actual identity resolver inspects fresh image and PDF evidence before bind
   }
 });
 
-test('actual ambiguous-source route asks clarification and saves its binding without project-handler side effects', async () => {
+test('unreadable source keeps conversation on model path without a local project clarification', async () => {
   const f = fixture();
   const { progress, history } = await replayPosting(f);
-  const written = [];
-  let savedProgress;
-  const forbidden = () => { throw new Error('Ambiguity must not execute task, memory mutation, or historical file selection'); };
   const context = identityFixture(f, progress, history,
     [{fileId:'unreadable',fileName:'brief.png',mimeType:'image/png'}],
     async () => undefined,
     async () => ({observedSummary:'Unreadable source',summaryCoverage:'metadata'}));
-  const localResponseBlock = blockBetween(statement(declaration('executiveReply')),
-    ancestor(declaration('localUserMessageId'), ts.isIfStatement));
-  const response = await vm.runInNewContext(compile(`(async()=>{
-    ${contextResolutionBlock}
-    ${code(statement(declaration('attachmentDecision')))}
-    if (attachmentDecision.selections.length) throw new Error('Unexpected historical source selection');
-    ${localResponseBlock}
-    throw new Error('Ambiguity did not return a clarification response');
-  })()`), {
-    ...context, requestId:'fresh-request', requestTracked:false,
-    catalog:[], pdfMemoryDecision:null, timelineActive:false, timelineSelection:{}, mediaMemory:null, savedVideoFollowUp:null,
-    selectStoredAttachments:forbidden, handleProjectChat:forbidden, resolveLocalKatieResponse:forbidden,
-    handleExplicitMemoryMutation:forbidden, savedDraftReply:null, activeRepoId:null, requestImages:[],
-    fileReferences:[{storageToken:'private-upload-token'}], legacyImageSources:new Map(),
-    persistConversationAttachment:async (_chat, file, token, options) => {
-      assert.equal(token, 'private-upload-token');
-      assert.equal(options.description.summaryCoverage, 'metadata');
-      return {id:file.fileId, fileName:file.fileName, mimeType:file.mimeType, chatId:CHAT_ID, actorId:ACTOR_ID};
-    },
-    saveMessage:async (_chat, message) => { written.push(plain(message)); },
-    saveTaskProgress:async (_actor, _chat, state) => { savedProgress=plain(state); },
-    refreshShortTermMemory:async()=>{}, NextResponse:Response,
-  });
-  assert.equal(written[0].id, 'fresh-task');
-  assert.equal(written[0].attachments[0].id, 'unreadable');
-  assert.equal(written[0].attachments[0].conversationUsage, 'uploaded');
-  assert.equal(written[1].id, 'fresh-answer');
-  assert.equal(savedProgress.lastUserMessageId, 'fresh-task');
-  assert.equal(savedProgress.projectContext.userMessageId, POSTING_ID, 'Ambiguity must preserve earlier project without answering it');
-  assert.match(savedProgress.projectClarification, /could not read this upload/);
-  assert.equal(written[1].content, savedProgress.projectClarification);
-  assert.match(await response.text(), /could not read this upload/);
+  const result = await vm.runInNewContext(compile(`(async()=>{ ${contextResolutionBlock} return {
+    clarification: pdfProgress.projectClarification,
+    project: pdfProgress.projectContext?.userMessageId,
+    freshDescriptionCount: freshTaskDescriptions.size
+  }; })()`), context);
+  assert.equal(result.clarification, undefined,
+    'Unreadable evidence should not force a local project-selection reply');
+  assert.equal(result.project, POSTING_ID,
+    'Previously active project identity is preserved without making a new choice');
+  assert.equal(result.freshDescriptionCount, 1,
+    'The uploaded evidence is still inspected for later model handling');
 });
 
 test('actual route restores original drafts on resume and subsequent same-project turns without crossing the next project boundary', async () => {
