@@ -1,4 +1,5 @@
 import {handleProjectChat, startProjectIntent, followupProjectIntent, isProjectStopIntent} from '@/lib/projects/chat';
+import {referencesSavedProject} from '@/lib/chat/project-reference';
 import {executeExecutiveCommand} from '@/lib/executive/transport';
 import { maskPdfSourceNames, pdfPageTaskForSource } from "@/lib/uploads/pdf-inventory";
 import { pdfSourceOccurrence, selectFreshPdfSources, selectPdfEvidenceSource } from "@/lib/chat/pdf-source-selection";
@@ -774,7 +775,7 @@ async function executeChat(request: NextRequest) {
     // Stored projects are reference material, not a standing command to classify
     // every ordinary conversation as a project continuation. An explicit current
     // project reference or a fresh task source can still activate resolution.
-    const explicitSavedProjectReference = /\\b(?:resume|return to|back to|continue|reopen|switch to|go back to|saved project|saved application|earlier project|earlier application|that project|the project)\\b/i.test(message);
+    const explicitSavedProjectReference = referencesSavedProject(message);
     if (!isProjectStopRequest && !standaloneFragment && (freshTaskEvidence.length || startProjectIntent(message) || followupProjectIntent(message) || (contextProjects.length > 0 && explicitSavedProjectReference)) && !currentAgentTask() &&
         !(classifyUserTurn(message) === "conversation" && !newAttachments.length)) {
       const contextProviders = getAvailableProviders();
