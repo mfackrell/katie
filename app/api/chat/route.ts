@@ -756,7 +756,7 @@ async function executeChat(request: NextRequest) {
     // Historical actor projects inform model context but do not authorize local arbitration.
     // Only an explicit project operation can enter the local management path.
     const explicitProjectOperation = startProjectIntent(message) || followupProjectIntent(message) || isProjectStopIntent(message);
-    if (!isProjectStopRequest && (explicitProjectOperation || freshTaskEvidence.length > 0) && !currentAgentTask() &&
+    if (!isProjectStopRequest && (contextProjects.length || freshTaskEvidence.length || explicitProjectOperation) && !currentAgentTask() &&
         !(classifyUserTurn(message) === "conversation" && !newAttachments.length)) {
       const contextProviders = getAvailableProviders();
       const entries = await Promise.all(contextProviders.map(async provider => ({provider, models: await provider.listModels()})));
