@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import {readFileSync} from "node:fs";
 import {runInNewContext} from "node:vm";
 
-const source=readFileSync("lib/projects/chat.ts","utf8");
+const source=readFileSync("lib/developer/project-conversation.ts","utf8");
 const from=source.indexOf("export function selfCodeChangeIntent");
 const to=source.indexOf("export function startProjectIntent",from);
 assert.ok(from >= 0 && to > from);

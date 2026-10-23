@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import {emptyTaskProgress,applyUserToTaskProgress,applyAssistantToTaskProgress,mergeTaskProjects,taskProjectCatalog,syncTaskProgress,formatTaskProgress} from "../lib/chat/task-progress";
+import {emptyTaskProgress,applyUserToTaskProgress,applyAssistantToTaskProgress,mergeTaskProjects,taskProjectCatalog,syncTaskProgress,formatTaskProgress,isProfessionalProfileMaterial} from "../lib/chat/task-progress";
 
 const project = (state: ReturnType<typeof emptyTaskProgress>, id:string,text:string) => applyUserToTaskProgress(state,{
   messageId:id,text,projectTransition:{action:"new",sourceQuote:text},
@@ -98,7 +98,8 @@ test("generic examples request in a new chat requires choosing a saved applicati
   for(const previous of [state,applyUserToTaskProgress(state,{messageId:"hello",text:"hello"})]) {
     const next=applyUserToTaskProgress(previous,{messageId:"examples",text:"Please share 3 to 5 examples of your relevant experience."});
     assert.equal(next.projectContext,undefined);
-    assert.ok(next.projectClarification);
+    assert.equal(next.projectClarification,undefined,"ordinary request may start without selecting a saved application");
+    assert.equal(next.projectContext,undefined,"saved project is not auto-bound");
     assert.equal(next.projects?.length,2);
   }
   const explicit=applyUserToTaskProgress(state,{messageId:"different",text:"Build a weather dashboard",projectTransition:{action:"new",sourceQuote:"Build a weather dashboard"}});
@@ -122,4 +123,32 @@ test("a seeded specialist handoff survives an empty target chat and supplies act
  assert.match(assembled,/35 projects/);
  assert.match(assembled,/confirmed/);
  assert.match(assembled,/Give three relevant examples/);
+});
+
+test("unrelated standalone professional biography is not blocked by saved projects",()=>{
+  const a=project(emptyTaskProgress(),"a","New project: family logistics");
+  const b=project(emptyTaskProgress(),"b","New project: construction accounting");
+  const state=mergeTaskProjects(emptyTaskProgress(),[...(a.projects??[]),...(b.projects??[])]);
+  const profile=applyUserToTaskProgress(state,{messageId:"bio",text:"I am a fractional CFO with 25 years of experience. Please remember my professional background."});
+  assert.equal(profile.projectClarification,undefined);
+  assert.equal(profile.projects?.length,2);
+});
+
+test("professional profile detaches stale active project while retaining saved project data",()=>{
+ const initial=project(emptyTaskProgress(),"sisters","New project: coordinate my sisters' travel");
+ const profile=[
+ "# Mark — Professional Identity & Operating Profile",
+ "I have 25 years of experience in finance and operations leadership.",
+ "## Who I Am",
+ "I am an interim business executive and fractional CFO.",
+ "## My Businesses",
+ "I operate consulting, technology, and short-term rental companies."
+ ].join("\n");
+ assert.equal(isProfessionalProfileMaterial(profile),true);
+ const state=applyUserToTaskProgress(initial,{messageId:"profile",text:profile});
+ assert.equal(state.projectContext,null);
+ assert.equal(state.projectClarification,undefined);
+ assert.equal(state.objective,null,"a biography is not a deliverable");
+ assert.equal(state.lastUserIntent,"conversation");
+ assert.ok(state.projects?.some(p=>p.projectContext.userMessageId==="sisters"));
 });

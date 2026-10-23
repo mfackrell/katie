@@ -255,6 +255,15 @@ export function taskProjectCatalog(state: TaskProgressState): Array<{ id: string
   }));
 }
 
+/** Firsthand user biography/profile is durable personal context, not project scope. */
+export function isProfessionalProfileMaterial(message: string): boolean {
+  const text = message.trim();
+  if (text.length < 160) return false;
+  const heading = text.split(/\n/).find(line => line.trim())?.replace(/^[#*\s]+|[*\s]+$/g, "") ?? "";
+  return /\b(?:professional identity|professional profile|personal profile|operating profile|biographical profile|who i am|my background)\b/i.test(heading)
+    && /\b(?:experience|businesses|career|leadership|background|work)\b/i.test(text);
+}
+
 export function applyUserToTaskProgress(
   previous: TaskProgressState,
   input: { messageId: string; text: string; projectRelation?: "new_project" | "same_project"; projectTransition?: ProjectTransition },
@@ -263,15 +272,32 @@ export function applyUserToTaskProgress(
   const state = checkpointProject({...previous,lastUserSource:{userMessageId:input.messageId,text:input.text}});
   const transition = input.projectTransition;
   const turnIntent = classifyUserTurn(input.text);
+  // A personal profile cannot amend, resume, or become a managed project.
+  // Preserve prior projects in the catalog, but remove their active binding.
+  if (!transition && isProfessionalProfileMaterial(input.text)) {
+    return { ...state, projectContext: null, objective: null,
+      projectClarification: undefined, pending: [], answered: [],
+      stage: "working", nextAction: "continue_original_goal",
+      lastUserMessageId: input.messageId, lastUserIntent: "conversation" };
+  }
   // A greeting must not become a synthetic project that legitimizes a later
   // otherwise ambiguous application question.
   if (!state.projectContext && !transition && turnIntent === "conversation") {
     return { ...state, lastUserMessageId: input.messageId, lastUserIntent: "conversation" };
   }
   if (!state.projectContext && !transition && (state.projects?.length ?? 0) > 0 &&
-      turnIntent !== "conversation" && !isProjectBrief(input.text)) {
+      turnIntent !== "conversation" && !isProjectBrief(input.text) &&
+      /^(?:continue|resume|return|go back|back to|the previous|the earlier|that one|the other one)\b/i.test(input.text.trim())) {
     return { ...state, lastUserMessageId: input.messageId,
       projectClarification: "Which saved project should I continue?" };
+  }
+  // An unrelated new-chat request is not a resume request. Keep the saved
+  // catalog available for later explicit selection without binding its state.
+  if (!state.projectContext && !transition && (state.projects?.length ?? 0) > 0 &&
+      !isProjectBrief(input.text)) {
+    return { ...state, lastUserMessageId: input.messageId,
+      lastUserIntent: turnIntent, projectClarification: undefined,
+      objective: { text: input.text, userMessageId: input.messageId } };
   }
   if (transition?.action === "ambiguous") {
     return { ...state, lastUserMessageId: input.messageId, projectClarification:
