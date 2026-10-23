@@ -1,5 +1,4 @@
 import {handleProjectChat, startProjectIntent, followupProjectIntent, isProjectStopIntent} from '@/lib/projects/chat';
-import { shouldUseLocalProjectControl } from "@/lib/chat/project-control-boundary";
 import {executeExecutiveCommand} from '@/lib/executive/transport';
 import { maskPdfSourceNames, pdfPageTaskForSource } from "@/lib/uploads/pdf-inventory";
 import { pdfSourceOccurrence, selectFreshPdfSources, selectPdfEvidenceSource } from "@/lib/chat/pdf-source-selection";
@@ -754,7 +753,7 @@ async function executeChat(request: NextRequest) {
     // Execute it below only after request tracking; do not let an unrelated task
     // clarification prevent cancellation or rewrite the application ledger.
     const isProjectStopRequest = !currentAgentTask() && !newAttachments.length && !requestImages?.length && isProjectStopIntent(message);
-    if (!isProjectStopRequest && shouldUseLocalProjectControl(message) && !currentAgentTask() &&
+    if (!isProjectStopRequest && (startProjectIntent(message) || followupProjectIntent(message) || isProjectStopIntent(message)) && !currentAgentTask() &&
         !(classifyUserTurn(message) === "conversation" && !newAttachments.length)) {
       const contextProviders = getAvailableProviders();
       const entries = await Promise.all(contextProviders.map(async provider => ({provider, models: await provider.listModels()})));
@@ -1102,9 +1101,9 @@ async function executeChat(request: NextRequest) {
     // EO commands are intercepted before executeChat; no management path exists
     // in normal Katie model routing.
     const executiveReply=null, specialistReply=null, financeReply=null, developmentReply=null;
-    const projectReply = (shouldUseLocalProjectControl(message) || isProjectStopRequest) && !pdfProgress.projectClarification && !executiveReply && !specialistReply && !financeReply && !developmentReply && !currentAgentTask() && savedDraftReply === null && !newAttachments.length && !requestImages?.length
+    const projectReply = ((startProjectIntent(message) || followupProjectIntent(message) || isProjectStopIntent(message)) || isProjectStopRequest) && !pdfProgress.projectClarification && !executiveReply && !specialistReply && !financeReply && !developmentReply && !currentAgentTask() && savedDraftReply === null && !newAttachments.length && !requestImages?.length
       ? await handleProjectChat({actorId,chatId,message,activeRepoId,softwareBuildIntent},requestId,attachmentHistory,requestTracked) : null;
-    const localKatieResponse = (shouldUseLocalProjectControl(message) || isProjectStopRequest) && pdfProgress.projectClarification ? {reason: "project" as const, text: pdfProgress.projectClarification} : savedDraftReply !== null ? { reason: "project" as const, text: savedDraftReply } : executiveReply ? {reason: "executive" as const,text:executiveReply}
+    const localKatieResponse = ((startProjectIntent(message) || followupProjectIntent(message) || isProjectStopIntent(message)) || isProjectStopRequest) && pdfProgress.projectClarification ? {reason: "project" as const, text: pdfProgress.projectClarification} : savedDraftReply !== null ? { reason: "project" as const, text: savedDraftReply } : executiveReply ? {reason: "executive" as const,text:executiveReply}
       : specialistReply ? {reason: "executive" as const,text:specialistReply}
       : financeReply ? {reason: "executive" as const,text:financeReply}
       : developmentReply ? {reason: "executive" as const,text:developmentReply}
