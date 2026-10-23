@@ -680,12 +680,18 @@ async function executeChat(request: NextRequest) {
     // This does not grant new credentials: writes remain in the existing
     // audited project/developer workflow with its approval and verification.
     const selfInspectionRequest = /\b(?:your(?:self| own)?|katie(?:'s)?)\b/i.test(message) &&
-      /\b(?:repository|repo|github|source|codebase|architecture|routing|deployment|logs?|implementation|inspect|debug|fix|edit|modify)\b/i.test(message);
+      (/\b(?:repository|repo|github|source|codebase|architecture|routing|deployment|logs?|implementation|inspect|debug|fix|edit|modify)\b/i.test(message) ||
+       /\b(?:see|view|understand|know|examine|look at|access)\b[^.!?]{0,55}\b(?:yourself|your own (?:system|self)|katie)\b/i.test(message) ||
+       /\b(?:yourself|your own (?:system|self)|katie)\b[^.!?]{0,55}\b(?:see|view|understand|know|examine|access)\b/i.test(message));
     let selfRepoId: string | null = null;
-    if (!activeRepoId && repoInjectionEnabled && selfInspectionRequest && !currentAgentTask()) {
+    let ownSourceInspectionAuthorized = false;
+    if (selfInspectionRequest && !currentAgentTask()) {
       const admin = getSupabaseAdminClient();
-      const {data: selfActor} = await admin.from("actors").select("name").eq("id",actorId).maybeSingle<{name:string}>();
-      if (selfActor?.name?.trim().toLowerCase() === "katie") {
+      const {data: selfActor} = await admin.from("actors").select("name,actor_kind").eq("id",actorId).maybeSingle<{name:string;actor_kind:string}>();
+      if (selfActor?.name?.trim().toLowerCase() === "katie" && selfActor.actor_kind === "standard") {
+        ownSourceInspectionAuthorized = true;
+      }
+      if (ownSourceInspectionAuthorized && !activeRepoId) {
         const {data: ownRepo} = await admin.from("repo_sync_runs")
           .select("id").eq("repository_full_name","mfackrell/katie")
           .order("created_at",{ascending:false}).limit(1).maybeSingle<{id:string}>();
@@ -1626,10 +1632,12 @@ async function executeChat(request: NextRequest) {
     }
 
     const repoGate = shouldAttachRepoSourceDeterministically({
-      repoInjectionEnabled,
+      // A direct request to inspect Katie herself authorizes this one scoped source read.
+      // Do not change the persistent toggle or attach repositories to unrelated turns.
+      repoInjectionEnabled: repoInjectionEnabled || (ownSourceInspectionAuthorized && activeRepoContext?.repositoryFullName === "mfackrell/katie"),
       hasActiveRepo: activeRepoContext !== null,
       requestIntent: resolvedRequestIntent,
-      message,
+      message: selfInspectionRequest ? `${message}\nInspect repository source and architecture.` : message,
     });
 
     if (repoGate.attach && activeRepoContext) {
