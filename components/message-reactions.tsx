@@ -30,7 +30,7 @@ async function fetchSnapshot(actorId:string,chatId:string):Promise<ReactionSnaps
   return job;
 }
 
-export function MessageReactions({actorId,chatId,messageId}:{actorId:string;chatId:string;messageId:string}) {
+export function MessageReactions({actorId,chatId,messageId,onReaction,disabled=false}:{actorId:string;chatId:string;messageId:string;disabled?:boolean;onReaction:(reaction:MessageReaction|null)=>void}) {
   const [selected,setSelected]=useState<MessageReaction|null>(null);
   const [pending,setPending]=useState(false);
   const [ready,setReady]=useState(false);
@@ -46,7 +46,7 @@ export function MessageReactions({actorId,chatId,messageId}:{actorId:string;chat
   },[actorId,chatId,messageId]);
 
   async function choose(code:MessageReaction) {
-    if(pending)return;
+    if(pending || disabled)return;
     const next=selected===code?null:code;
     setPending(true);setError("");setDelivered(false);
     try {
@@ -58,6 +58,7 @@ export function MessageReactions({actorId,chatId,messageId}:{actorId:string;chat
       if(!response.ok)throw Error(result.error||"Reaction could not be saved.");
       setSelected(next);
       setDelivered(true);
+      onReaction(next);
       const key=actorId+":"+chatId;
       const snapshot=cache.get(key)??{reactions:{}};
       if(next)snapshot.reactions[messageId]=next;
@@ -70,13 +71,13 @@ export function MessageReactions({actorId,chatId,messageId}:{actorId:string;chat
     <div className="flex flex-wrap gap-1" role="group" aria-label="React to Katie's message">
       {options.map(option=><button key={option.code} type="button" title={option.label}
         aria-label={option.label+" reaction"} aria-pressed={selected===option.code}
-        disabled={!ready||pending||Boolean(error&& !ready)}
+        disabled={!ready||pending||disabled||Boolean(error&& !ready)}
         onClick={()=>void choose(option.code)}
         className={`rounded-lg border px-2 py-1 text-base transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 disabled:opacity-40 ${selected===option.code?"border-emerald-400 bg-emerald-500/20":"border-white/10 hover:bg-white/10"}`}>
         {option.emoji}
       </button>)}
     </div>
-    {delivered && <p role="status" className="mt-1 text-xs text-emerald-300">Reaction delivered to Katie’s feedback inbox.</p>}
+    {delivered && <p role="status" className="mt-1 text-xs text-emerald-300">Reaction delivered. Katie is responding in this conversation.</p>}
     {error&&<p role="alert" className="mt-1 text-xs text-rose-300">{error}</p>}
   </div>;
 }
