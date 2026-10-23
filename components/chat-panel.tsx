@@ -1975,12 +1975,14 @@ export function ChatPanel({
         // The optimistic message never reached /api/chat. Restore its draft
         // and the original browser File objects so a retry can consult the
         // durable /api/upload/result instead of uploading video bytes again.
-        setInput(content);
-        setSelectedFiles(filesToUpload);
-        setSelectedVideos(videosToUpload);
-        setSelectedImageFiles(imageFilesToUpload);
-        setSelectedImages(selectedImages);
-        setFileReferences(priorReferences);
+        if (!reactionContent) {
+          setInput(content);
+          setSelectedFiles(filesToUpload);
+          setSelectedVideos(videosToUpload);
+          setSelectedImageFiles(imageFilesToUpload);
+          setSelectedImages(selectedImages);
+          setFileReferences(priorReferences);
+        }
         setMessages((current) => {
           const withoutOptimistic = current.filter((message) => message.id !== optimisticUserMessage.id);
           setMessagesByChatId((cache) => ({ ...cache, [chatId]: withoutOptimistic }));
@@ -1989,7 +1991,7 @@ export function ChatPanel({
       } else if (requestStage === "sending chat request" && uploadedReferencesForRetry) {
         // Server acceptance may be uncertain, but no bytes need transferring
         // if the user chooses to retry after the existing-request recovery.
-        setFileReferences(uploadedReferencesForRetry);
+        if (!reactionContent) setFileReferences(uploadedReferencesForRetry);
       }
 
       if (error instanceof DOMException && error.name === "AbortError") {
@@ -2068,7 +2070,7 @@ export function ChatPanel({
           if (recoveryError instanceof TerminalChatError) {
             terminalFailure = true;
             clearPendingChatRequest(chatId);
-            setInput(content);
+            if (!reactionContent) setInput(content);
             rawMessage = recoveryError.message;
             failureMessageId = recoveryError.messageId;
           }
