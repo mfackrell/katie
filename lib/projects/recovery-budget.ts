@@ -16,9 +16,9 @@ export async function recoveryResourceProposal(p:Project) {
  if(de)throw Error('Cannot read saved specification lineage');
  let spec=p.spec;
  if(!spec) for(const run of drafts??[]){
-   const {data:jobs,error:je}=await db.from('mission_assignments').select('result').eq('mission_id',run.mission_id).eq('role','compose').eq('status','completed').limit(1).returns<{result:{text?:string}}>();
+   const {data:jobs,error:je}=await db.from('mission_assignments').select('result').eq('mission_id',run.mission_id).in('role',['revise','compose']).eq('status','completed').order('created_at',{ascending:false}).limit(5).returns<{result:{text?:string}}>();
    if(je)throw Error('Cannot read saved composition');
-   try {if(jobs?.[0]?.result?.text){spec=validateProjectPlan(JSON.parse(jobs[0].result.text));break;}}catch{/* a rejected draft is not approved scope */}
+   try {for(const job of jobs??[]){if(!job.result?.text)continue;try{spec=validateProjectPlan(JSON.parse(job.result.text));break;}catch{/* Try next preserved candidate. */}}if(spec)break;}catch{/* a rejected draft is not approved scope */}
  }
  // The developer must not invent a financial estimate from an invalid specification.
  if(!spec)return {state:'needs_specialist_estimate' as const,used,authorized:p.token_allowance,remaining:Math.max(0,p.token_allowance-used),reason:'No validated, source-grounded specification for resource planning'};
