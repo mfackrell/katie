@@ -1,3 +1,4 @@
+import { nativeToolTurn } from "./native-tools";
 import { requireAgentResearch } from "@/lib/agents/policy";
 import { buildVideoTimingEvidence, buildGrokVideoFrames } from "@/lib/chat/video-evidence";
 import OpenAI from "openai";
@@ -281,6 +282,7 @@ function hasVideoAttachments(params: ChatGenerateParams): boolean {
 }
 
 export class GrokProvider implements LlmProvider {
+  generateToolTurn(params: import("@/lib/tools/types").ToolTurnParams) { return nativeToolTurn("grok", this.apiKey, params); }
   name = "grok" as const;
   private client: OpenAI;
   private apiKey: string;

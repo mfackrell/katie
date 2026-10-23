@@ -1,3 +1,4 @@
+import { nativeToolTurn } from "./native-tools";
 import {
   ChatGenerateParams,
   LlmProvider,
@@ -146,6 +147,7 @@ function toProviderResponse(params: {
 }
 
 export class ClaudeProvider implements LlmProvider {
+  generateToolTurn(params: import("@/lib/tools/types").ToolTurnParams) { return nativeToolTurn("anthropic", this.apiKey, params); }
   name = "anthropic" as const;
   private defaultModel = "claude-4.5-sonnet";
 

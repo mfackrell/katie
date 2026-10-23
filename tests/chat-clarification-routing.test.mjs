@@ -203,8 +203,8 @@ function addCurrentPending(f, progress, questionMessageId, question, candidate =
   return row;
 }
 
-async function runPipeline(f, selection, { message = SHORT_REPLY, history, output = EXPLANATION, resultExtras = {}, generationMessage = message, reviewMode = 'always' }) {
-  const counts = { provider: 0, collaboration: 0, capability: 0, review: 0 };
+async function runPipeline(f, selection, { message = SHORT_REPLY, history, output = EXPLANATION, resultExtras = {}, generationMessage = message, reviewMode = 'always', selfToolsEnabled = false }) {
+  const counts = { provider: 0, collaboration: 0, capability: 0, review: 0, tools: 0 };
   const chunks = [];
   const generationInputs = [];
   const reviews = [];
@@ -234,6 +234,17 @@ async function runPipeline(f, selection, { message = SHORT_REPLY, history, outpu
     return { result, taskProgress, escalatedConversation, reviewCompleted };
   })()`), {
     ...f.globals, ...f.helpers, ...selection,
+    selfToolsEnabled, request: { headers: new Headers() },
+    runSelfInspection: async input => {
+      counts.tools++;
+      assert.equal(input.actorId, ACTOR_ID);
+      assert.equal(input.chatId, CHAT_ID);
+      assert.equal(input.requestId, 'current-request');
+      assert.equal(input.provider, provider);
+      assert.ok(input.request.headers);
+      generationInputs.push(input.params);
+      return providerResult();
+    },
     message, messageForGeneration: generationMessage, actorId: ACTOR_ID, chatId: CHAT_ID, requestId: 'current-request',
     taskProgressAssistantMessageId: 'current-answer', provider, providers: [provider], modelId: 'fixture-haiku',
     name: 'Katie', personaForGeneration: 'Katie persona', summary: '', historyForProvider: history,
@@ -279,7 +290,7 @@ test('actual route rejects the old October pending task and answers the 97-chara
   assert.ok(selected.taskProgress.pending.some(question => question.assistantMessageId === QUESTION_ID));
 
   const result = await runPipeline(f, selected, { history });
-  assert.deepEqual(result.counts, { provider: 1, collaboration: 0, capability: 0, review: 0 });
+  assert.deepEqual(result.counts, { provider: 1, collaboration: 0, capability: 0, review: 0, tools: 0 });
   assert.equal(result.generationInputs[0].user, SHORT_REPLY);
   assert.ok(!result.generationInputs[0].persona.includes('OLD FOUR-EXAMPLE DRAFT'));
   assert.ok(!result.generationInputs[0].persona.includes('KATIE_RESUME_PENDING_COMPLETION'));
@@ -300,7 +311,7 @@ test('actual route reviews unexpected substantive output before publication and 
   const result = await runPipeline(f, selected, { history, output: draft,
     generationMessage: SHORT_REPLY + '\n\nGENERATION-ONLY INTERNAL CONTEXT' });
   assert.equal(result.escalatedConversation, true);
-  assert.deepEqual(result.counts, { provider: 1, collaboration: 0, capability: 0, review: 1 });
+  assert.deepEqual(result.counts, { provider: 1, collaboration: 0, capability: 0, review: 1, tools: 0 });
   assert.equal(result.chunks.filter(chunk => chunk.type === 'delta').length, 0);
   assert.equal(result.chunks.find(chunk => chunk.type === 'content').text, 'REVIEWED: ' + draft);
   const review = result.reviews[0];
@@ -349,7 +360,7 @@ test('actual saved-verification retry reviews the matched candidate without gene
   assert.equal(selected.requiredReviewForRequest, true);
   assert.equal(selected.collaborationEnabledForRequest, false);
   const result = await runPipeline(f, selected, { message: 'yes', history });
-  assert.deepEqual(result.counts, { provider: 0, collaboration: 0, capability: 0, review: 1 });
+  assert.deepEqual(result.counts, { provider: 0, collaboration: 0, capability: 0, review: 1, tools: 0 });
   assert.equal(result.reviews[0].draft.text, 'EXACT SAVED CANDIDATE');
   assert.deepEqual(plain(result.reviews[0].sourceTurns.at(-1)), { id: 'latest-user', text: 'yes' });
   assert.ok(!result.reviews[0].assessmentParams.user.includes('EXACT SAVED CANDIDATE'));
@@ -618,4 +629,17 @@ test('actual route lets a stop control pass unresolved application identity with
   assert.equal(result.pdfProgress.projectContext.userMessageId, state.projectContext.userMessageId);
   assert.deepEqual(plain(state), before, 'The stored pending selection remains untouched');
   assert.equal(result.pdfProgress.lastUserMessageId, state.lastUserMessageId, 'Stop does not become application evidence');
+});
+
+ test('tool-enabled generation passes caller context and keeps the selected model path', async () => {
+  const f = fixture();
+  const { history } = await replayPosting(f);
+  const selected = await select(f, { message: SHORT_REPLY, messageId: REPLY_ID,
+    priorTaskProgress: f.helpers.rebuildTaskProgress(history), history });
+  const result = await runPipeline(f, selected, { history, selfToolsEnabled: true });
+  assert.equal(result.counts.tools, 1);
+  assert.equal(result.counts.provider, 0);
+  assert.equal(result.counts.collaboration, 0);
+  assert.equal(result.generationInputs.length, 1);
+  assert.equal(result.generationInputs[0].modelId, 'fixture-haiku');
 });
