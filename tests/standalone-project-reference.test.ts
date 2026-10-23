@@ -12,6 +12,8 @@ test("ordinary biography does not reference a managed project", () => {
     "My professional identity: I am an interim CFO and executive. Here is my experience.",
     "Tell me who you think I am professionally",
     "How are you doing?",
+    "Continue talking about my professional background.",
+    "Back to what I was saying about work.",
     "Please remember my financial and operational background.",
   ]) assert.equal(referencesSavedProject.test(message), false, message);
 });
