@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
+import { randomUUID } from 'node:crypto';
+import { recoveryResourceProposal } from '@/lib/projects/recovery-budget';
 import { getChatById, getMessages } from '@/lib/data/persistence-store';
 import { projectForChat, projectRpc, type Project } from '@/lib/projects/store';
 import { hasPendingExecutiveDelivery } from '@/lib/executive/delivery';
@@ -46,7 +48,9 @@ export async function GET(request: NextRequest) {
         const p = await projectForChat(actorId, chatId);
         const messages = await getMessages(chatId);
         const executivePending = await hasPendingExecutiveDelivery(actorId, chatId, messages);
+        const resourceRecovery = p ? await recoveryResourceProposal(p) : null;
         return NextResponse.json({
+            resourceRecovery,
             active: p?.status === 'running',
             status: p?.status ?? null,
             approval: approvalFor(p),
@@ -88,4 +92,41 @@ export async function POST(request: NextRequest) {
     } catch {
         return NextResponse.json({ error: 'Approval could not be saved. Refresh the scope and try again.' }, { status: 409 });
     }
+}
+
+const recoveryApprovalInput=projectIdentity.extend({
+  scopeHash:z.string().regex(/^[a-f0-9]{64}$/),
+  authorizedCeiling:z.number().int().positive(),
+  renewalHours:z.union([z.literal(48),z.literal(72)]),
+}).strict();
+
+// Owner-initiated action only: a forecast or cron can NEVER approve spending.
+export async function PATCH(request:NextRequest){
+ let input:z.infer<typeof recoveryApprovalInput>;
+ try{input=recoveryApprovalInput.parse(await request.json());}
+ catch{return NextResponse.json({error:'Invalid resource authorization'}, {status:400});}
+ try{
+  const p=await ownedProject(input.actorId,input.chatId);
+  if(!p)return NextResponse.json({error:'Project chat unavailable'},{status:404});
+  const proposal=await recoveryResourceProposal(p);
+  if(!proposal||proposal.state!=='estimated'||!proposal.needsAuthorization||proposal.scopeHash!==input.scopeHash||
+     proposal.proposedCeiling!==input.authorizedCeiling)
+    return NextResponse.json({error:'Resource proposal changed; refresh before approving'},{status:409});
+  const deadline=new Date(Date.now()+input.renewalHours*3600000).toISOString();
+  const {data,error}=await (await import('@/lib/data/supabase/admin')).getSupabaseAdminClient().rpc(
+   'authorize_work_project_resources',{
+    p_id:p.id,p_actor:input.actorId,p_chat:input.chatId,p_expected_allowance:p.token_allowance,
+    p_authorized_allowance:input.authorizedCeiling>p.token_allowance?input.authorizedCeiling:null,
+    p_max_missions:proposal.proposedMaxMissions>p.max_missions?proposal.proposedMaxMissions:null,
+    p_deadline:deadline,p_approval_ref:randomUUID(),
+    p_approval_note:'Owner explicitly approved the Developer Orchestrator saved-state resource proposal '+proposal.scopeHash+
+      '; independent review and coding approval remain required.'
+   });
+  if(error)throw Error(error.message);
+  // The normal Developer Orchestrator cron remains responsible for recovery;
+  // never start unreviewed coding from this API request.
+  return NextResponse.json({authorization:data,recovery:'pending_developer_orchestrator'});
+ }catch{
+  return NextResponse.json({error:'Resource authorization could not be applied; no recovery started'},{status:409});
+ }
 }
