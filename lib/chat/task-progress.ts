@@ -269,7 +269,8 @@ export function applyUserToTaskProgress(
     return { ...state, lastUserMessageId: input.messageId, lastUserIntent: "conversation" };
   }
   if (!state.projectContext && !transition && (state.projects?.length ?? 0) > 0 &&
-      turnIntent !== "conversation" && !isProjectBrief(input.text)) {
+      turnIntent !== "conversation" && !isProjectBrief(input.text) &&
+      /^(?:continue|resume|return|go back|back to|the previous|the earlier|that one|the other one)\b/i.test(input.text.trim())) {
     return { ...state, lastUserMessageId: input.messageId,
       projectClarification: "Which saved project should I continue?" };
   }
