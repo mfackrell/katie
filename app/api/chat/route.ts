@@ -775,7 +775,7 @@ async function executeChat(request: NextRequest) {
     // every ordinary conversation as a project continuation. An explicit current
     // project reference or a fresh task source can still activate resolution.
     const explicitSavedProjectReference = /\b(?:resume|return to|back to|continue|reopen|switch to|go back to|saved project|saved application|earlier project|earlier application|that project|the project)\b/i.test(message);
-    if (!isProjectStopRequest && !standaloneFragment && (freshTaskEvidence.length || startProjectIntent(message) || followupProjectIntent(message) || (contextProjects.length > 0 && explicitSavedProjectReference)) && !currentAgentTask() &&
+    if (!isProjectStopRequest && !standaloneFragment && (freshTaskEvidence.length || startProjectIntent(message) || followupProjectIntent(message) || (contextProjects.length > 0 && explicitSavedProjectReference) || (priorTaskProgress.projectContext && classifyUserTurn(message) === "new_task")) && !currentAgentTask() &&
         !(classifyUserTurn(message) === "conversation" && !newAttachments.length)) {
       const contextProviders = getAvailableProviders();
       const entries = await Promise.all(contextProviders.map(async provider => ({provider, models: await provider.listModels()})));
