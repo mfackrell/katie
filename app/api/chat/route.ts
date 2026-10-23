@@ -1,4 +1,4 @@
-import {handleProjectChat, startProjectIntent, followupProjectIntent, isProjectStopIntent} from '@/lib/projects/chat';
+import {handleProjectChat, startProjectIntent, followupProjectIntent, isProjectStopIntent, selfCodeChangeIntent} from '@/lib/projects/chat';
 import {executeExecutiveCommand} from '@/lib/executive/transport';
 import { maskPdfSourceNames, pdfPageTaskForSource } from "@/lib/uploads/pdf-inventory";
 import { pdfSourceOccurrence, selectFreshPdfSources, selectPdfEvidenceSource } from "@/lib/chat/pdf-source-selection";
@@ -765,7 +765,7 @@ async function executeChat(request: NextRequest) {
     });
     const taskIdentityText = message + (freshTaskEvidence.length
       ? "\nFRESH USER-SUPPLIED SOURCE EVIDENCE (observations may be incomplete):\n" + JSON.stringify(freshTaskEvidence) : "");
-    let softwareBuildIntent = false;
+    let softwareBuildIntent = Boolean(selfRepoId && selfCodeChangeIntent(message));
     // A scoped stop/pause controls existing durable work, not application identity.
     // Execute it below only after request tracking; do not let an unrelated task
     // clarification prevent cancellation or rewrite the application ledger.

@@ -2,7 +2,17 @@ import { getSupabaseAdminClient } from '@/lib/data/supabase/admin';
 import type { Message } from '@/lib/types/chat';
 import { projectForChat, projectRpc, type Project } from './store';
 import { projectId, projectMessage } from './contract';
+/** Explicit instruction to modify Katie's own connected source, never mere
+ * architecture discussion, inspection, or a quoted example. */
+export function selfCodeChangeIntent(text: string): boolean {
+ const normalized=text.trim();
+ return /^(?:please\\s+)?(?:(?:can|could|would|will) you\\s+(?:please\\s+)?)?(?:fix|modify|edit|change|update|implement|repair|refactor)\\b/i.test(normalized)
+   && /\\b(?:your|katie(?:'s)?|your own)\\b/i.test(normalized)
+   && /\\b(?:repo(?:sitory)?|github|source code|codebase|routing code|backend code|implementation)\\b/i.test(normalized)
+   && !/\\b(?:don't|do not|never|without changing|read.only|only inspect|just review)\\b/i.test(normalized);
+}
 export function startProjectIntent(text: string) {
+ if(selfCodeChangeIntent(text))return true;
  const direct=/^\s*(?:please\s+)?(?:(?:can|could|would|will) you\s+(?:please\s+)?)?(?:build|create|develop|recreate|re-create|make|implement|launch|start)\b/i.test(text);
  const desire=/^\s*I (?:want|need|would like)\b/i.test(text) && !/^.{0,100}\b(?:explain|understand|learn|discuss|describe|whether|capable|how to)\b/i.test(text.split(/[.!?]\s/)[0]);
  const artifact=/^(?:please\s+)?(?:(?:can|could|would|will) you\s+)?(?:I (?:want|need|would like)(?: you to)?|create|make|develop|prepare|write|give|provide)\s+(?:me\s+)?(?:(?:a|an|the|project|technical|design|status)\s+)*(?:summary|report|explanation|overview|proposal|plan|architecture|tutorial|guide|analysis)\b/i.test(text);
