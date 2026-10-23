@@ -128,7 +128,7 @@ export async function handleProjectChat(input: {
             const n=await mutate('amend',{p_text:text});return reply(n,n.detail!);
         }
         if (start || follow)
-            return reply(p, 'I am already managing a project in this chat. Ask for its status, pause or stop it, or start a separate chat for a different project.');
+            return reply(p, 'A Developer Orchestrator project is already active in this chat. Ask for its status, pause or stop it, or start a separate chat for a different project.');
         return null;
     }
     if (!start && !follow) {
@@ -151,7 +151,7 @@ export async function handleProjectChat(input: {
     if (objective.length > 8000)
         return 'Please narrow the project brief to 8,000 characters. I will not silently truncate its requirements.';
     const created = await projectRpc<Project>(gameProjectIntent(objective)?'create_game_work_project':'create_work_project', { p_id: projectId(requestId), p_request: requestId, p_actor: input.actorId, p_chat: input.chatId, p_objective: objective, p_repository: await repository(input.activeRepoId, text) });
-    return reply(created, 'I’ve started a persistent project for this outcome. I’ll research it, preserve the requirements, prepare the architecture and exact acceptance checks, then ask once for the scoped coding approval. After that I’ll manage successive implementation, testing, permitted repairs and preview delivery and bring the result back to this chat. You can close this page.');
+    return reply(created, 'I’ve delegated a persistent project to the Developer Orchestrator. It will research the objective, preserve the requirements, prepare architecture and acceptance checks, and request scoped coding approval. After approval, the durable project worker will manage implementation, independent testing, permitted repairs and preview delivery, then report the verified result here. You can close this page.');
 }
 async function repository(active: string | undefined, text: string) { const db = getSupabaseAdminClient(); if (active) {
     const { data, error } = await db.from('repo_sync_runs').select('id').eq('id', active).maybeSingle<{
