@@ -148,6 +148,7 @@ test("professional profile detaches stale active project while retaining saved p
  const state=applyUserToTaskProgress(initial,{messageId:"profile",text:profile});
  assert.equal(state.projectContext,null);
  assert.equal(state.projectClarification,undefined);
- assert.equal(state.objective?.text,profile);
+ assert.equal(state.objective,null,"a biography is not a deliverable");
+ assert.equal(state.lastUserIntent,"conversation");
  assert.ok(state.projects?.some(p=>p.projectContext.userMessageId==="sisters"));
 });
