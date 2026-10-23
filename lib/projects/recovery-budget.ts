@@ -31,3 +31,21 @@ export async function recoveryResourceProposal(p:Project) {
  const needsAuthorization=ceiling>p.token_allowance || new Date(p.deadline).getTime()<=Date.now()+30*60*1000 || (missions?.length??0)>=p.max_missions-1;
  return {state:'estimated' as const,used,authorized:p.token_allowance,remaining:Math.max(0,p.token_allowance-used),expectedAdditional:expected,upperAdditional:pending,proposedCeiling:Math.max(p.token_allowance,ceiling),priorMissionCount:missions?.length??0,proposedMaxMissions:Math.max(p.max_missions,(missions?.length??0)+Math.max(3,spec.milestones.length*2+2)),forecast,scopeHash,needsAuthorization,authorizationSource:p.budget_authorization_source??'legacy_default'};
 }
+
+export async function announceBlockedRecoveryResources(p:Project){
+ const proposal=await recoveryResourceProposal(p);
+ if(!proposal||proposal.state!=='estimated'||!proposal.needsAuthorization)return false;
+ const db=getSupabaseAdminClient();
+ const {data:prior,error:pe}=await db.from('project_events').select('id').eq('project_id',p.id)
+   .eq('event','developer_resource_approval_requested').limit(1).returns<Array<{id:string}>>();
+ if(pe)throw Error('Cannot inspect prior developer resource approval request');
+ if(prior?.length)return false; // Do not nag, or continually issue new approval requests.
+ const {error}=await db.from('project_events').insert({project_id:p.id,event:'developer_resource_approval_requested',
+  data:{scopeHash:proposal.scopeHash,used:proposal.used,authorized:p.token_allowance,
+   expectedAdditional:proposal.expectedAdditional,upperAdditional:proposal.upperAdditional,
+   proposedCeiling:proposal.proposedCeiling,proposedMaxMissions:proposal.proposedMaxMissions,
+   originalDeadline:p.deadline,reason:'Saved-state recovery requires owner resource authorization'}}); 
+ if(error)throw Error('Cannot save developer resource approval request');
+ await db.rpc('project_publish',{p_id:p.id,p_text:'Developer Orchestrator recovered the saved work and prepared a resource estimate. Additional spending approval is required in the project before resuming. Existing charges and artifacts are preserved.'});
+ return true;
+}
