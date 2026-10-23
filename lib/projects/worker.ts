@@ -296,7 +296,7 @@ async function advance(p: Project) {
                 const {data:composition,error:compositionError}=await getSupabaseAdminClient()
                   .from('mission_assignments').select('status,role,result')
                   .eq('id',checkpoint.sourceJobId).maybeSingle<{status:string;role:string;result:{text?:string}|null}>();
-                if(compositionError||composition?.status!=='completed'||composition.role!=='compose'||
+                if(compositionError||composition?.status!=='completed'||!['compose','revise'].includes(composition.role)||
                    typeof composition.result?.text!=='string')throw Error('Saved game composition checkpoint invalid');
                 projectEvidence={...(projectEvidence as Record<string,unknown>),
                     savedSpecificationCheckpoint:{
