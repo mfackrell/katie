@@ -745,6 +745,7 @@ export function ChatPanel({
   const [isHydratingMessages, setIsHydratingMessages] = useState(false);
   const [input, setInput] = useState("");
   const [replyTo, setReplyTo] = useState<Pick<Message, "id" | "role" | "content"> | null>(null);
+  useEffect(() => setReplyTo(null), [chatId]);
   const draft=useSavedState(`chat:${chatId}`);
   const saveDraft=draft.save;
   const [draftReady,setDraftReady]=useState(false);
