@@ -4,6 +4,7 @@ import {readFileSync} from 'node:fs';
 const validator=readFileSync('lib/projects/contract.ts','utf8');
 const worker=readFileSync('lib/missions/worker.ts','utf8');
 const projectWorker=readFileSync('lib/projects/worker.ts','utf8');
+const recoveryBudget=readFileSync('lib/projects/recovery-budget.ts','utf8');
 test('lossless game approval bound matches saved checkpoint capacity and preserves all validation gates',()=>{
  assert.match(validator,/canonical\(gameSpecificationView\(p\)\)\.length>40000/);
  assert.match(validator,/validateProjectGame\(p\.game,p\.allowedPaths,p\.finalContract\)/);
@@ -12,6 +13,8 @@ test('lossless game approval bound matches saved checkpoint capacity and preserv
  assert.match(worker,/uniqueCharacterLimit:40000/);
  assert.match(projectWorker,/if\(canonical\(view\)\.length<=40000\)draft=view/);
  assert.doesNotMatch(projectWorker,/if\(canonical\(view\)\.length<=20000\)draft=view/);
+ assert.match(recoveryBudget,/\.in\('role',\['revise','compose'\]\)/);
+ assert.match(recoveryBudget,/\.order\('created_at',\{ascending:false\}\)/);
  assert.match(worker,/revalidated_saved_specification/);
  assert.match(worker,/freshReviewRequired:true/);
  assert.match(worker,/uniqueCharacters:canonical\(gameSpecificationView\(plan\)\)\.length/);
