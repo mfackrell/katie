@@ -31,3 +31,13 @@ test("project command implementation is owned by Developer, not standalone conve
   assert.doesNotMatch(legacy, /projectRpc\s*</);
   assert.match(legacy, /from '@\/lib\/developer\/project-conversation'/);
 });
+
+test("standalone chat relays explicit Developer controls without hijacking unrelated requests", () => {
+ const match = /const savedDeveloperCommand = \/(.*)\/i\.test\(message\.trim\(\)\);/s.exec(route);
+ assert.ok(match, "The chat route must use a source-visible explicit Developer command gate");
+ const command = new RegExp(match[1], "i");
+ for (const message of ["Project status", "Resume the project", "Approve project abc123", "Add undo button to the game"])
+   assert.equal(command.test(message), true, message);
+ for (const message of ["Write a birthday greeting", "My professional identity and CFO experience", "Add milk to my shopping list"])
+   assert.equal(command.test(message), false, message);
+});
