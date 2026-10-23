@@ -98,7 +98,8 @@ test("generic examples request in a new chat requires choosing a saved applicati
   for(const previous of [state,applyUserToTaskProgress(state,{messageId:"hello",text:"hello"})]) {
     const next=applyUserToTaskProgress(previous,{messageId:"examples",text:"Please share 3 to 5 examples of your relevant experience."});
     assert.equal(next.projectContext,undefined);
-    assert.ok(next.projectClarification);
+    assert.equal(next.projectClarification,undefined,"ordinary request may start without selecting a saved application");
+    assert.equal(next.projectContext,undefined,"saved project is not auto-bound");
     assert.equal(next.projects?.length,2);
   }
   const explicit=applyUserToTaskProgress(state,{messageId:"different",text:"Build a weather dashboard",projectTransition:{action:"new",sourceQuote:"Build a weather dashboard"}});
