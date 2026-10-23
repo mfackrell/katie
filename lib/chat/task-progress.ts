@@ -255,6 +255,15 @@ export function taskProjectCatalog(state: TaskProgressState): Array<{ id: string
   }));
 }
 
+/** Firsthand user biography/profile is durable personal context, not project scope. */
+export function isProfessionalProfileMaterial(message: string): boolean {
+  const text = message.trim();
+  if (text.length < 160) return false;
+  const heading = text.split(/\n/).find(line => line.trim())?.replace(/^[#*\s]+|[*\s]+$/g, "") ?? "";
+  return /\b(?:professional identity|professional profile|personal profile|operating profile|biographical profile|who i am|my background)\b/i.test(heading)
+    && /\b(?:experience|businesses|career|leadership|background|work)\b/i.test(text);
+}
+
 export function applyUserToTaskProgress(
   previous: TaskProgressState,
   input: { messageId: string; text: string; projectRelation?: "new_project" | "same_project"; projectTransition?: ProjectTransition },
@@ -263,6 +272,14 @@ export function applyUserToTaskProgress(
   const state = checkpointProject({...previous,lastUserSource:{userMessageId:input.messageId,text:input.text}});
   const transition = input.projectTransition;
   const turnIntent = classifyUserTurn(input.text);
+  // A personal profile cannot amend, resume, or become a managed project.
+  // Preserve prior projects in the catalog, but remove their active binding.
+  if (!transition && isProfessionalProfileMaterial(input.text)) {
+    return { ...state, projectContext: null, objective: {text: input.text, userMessageId: input.messageId},
+      projectClarification: undefined, pending: [], answered: [],
+      stage: "working", nextAction: "continue_original_goal",
+      lastUserMessageId: input.messageId, lastUserIntent: "new_task" };
+  }
   // A greeting must not become a synthetic project that legitimizes a later
   // otherwise ambiguous application question.
   if (!state.projectContext && !transition && turnIntent === "conversation") {
