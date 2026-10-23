@@ -1,3 +1,4 @@
+import { runSelfInspection } from "@/lib/tools/self-inspection";
 import {handleProjectChat, startProjectIntent, followupProjectIntent, isProjectStopIntent} from '@/lib/projects/chat';
 import {executeExecutiveCommand} from '@/lib/executive/transport';
 import { maskPdfSourceNames, pdfPageTaskForSource } from "@/lib/uploads/pdf-inventory";
@@ -680,8 +681,15 @@ async function executeChat(request: NextRequest) {
     // This does not grant new credentials: writes remain in the existing
     // audited project/developer workflow with its approval and verification.
     const selfInspectionRequest = /\b(?:your(?:self| own)?|katie(?:'s)?)\b/i.test(message) &&
-      /\b(?:repository|repo|github|source|codebase|architecture|routing|deployment|logs?|implementation|inspect|debug|fix|edit|modify)\b/i.test(message);
+      /\b(?:repository|repo|github|source|codebase|architecture|routing|deployment|supabase|vercel|database|commits?|checks?|schemas?|rows?|logs?|implementation|inspect|debug|fix|edit|modify)\b/i.test(message);
     let selfRepoId: string | null = null;
+    const selfToolRequest = selfInspectionRequest ||
+      /\b(?:github|supabase|vercel)\b/i.test(message) &&
+      /\b(?:inspect|read|list|show|verify|create|edit|write|change|migrate|deploy|rollback|logs?|schema|rows?|commits?|checks?)\b/i.test(message);
+    const selfToolActor = selfToolRequest && !currentAgentTask()
+      ? await getSupabaseAdminClient().from("actors").select("name,actor_kind").eq("id", actorId).maybeSingle<{name:string;actor_kind:string}>()
+      : null;
+    const selfToolsEnabled = selfToolActor?.data?.name.trim().toLowerCase() === "katie" && selfToolActor.data.actor_kind === "standard";
     if (!activeRepoId && repoInjectionEnabled && selfInspectionRequest && !currentAgentTask()) {
       const admin = getSupabaseAdminClient();
       const {data: selfActor} = await admin.from("actors").select("name").eq("id",actorId).maybeSingle<{name:string}>();
@@ -2372,7 +2380,16 @@ ${chunkWorkflowSummary}`;
                   resolvedRequestIntent
                 );
 
-                const generation = collaborationEnabledForRequest
+                const generation = selfToolsEnabled
+                  ? await (async () => {
+                      const result = await runSelfInspection({ actorId, chatId, requestId, provider,
+                        params: finalParams, deadlineMs: executionDeadlineMs,
+                        onRecord: record => emitChunk({ type: "metadata", toolCall: record }),
+                      });
+                      enqueueDelta(result.text);
+                      return { result, streamedText: result.text };
+                    })()
+                  : collaborationEnabledForRequest
                   ? await (async () => {
                       const collaborationBaseParams = baseParams;
                       const collaboration = await runAdaptiveCollaboration({

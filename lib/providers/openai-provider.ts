@@ -1,3 +1,4 @@
+import { nativeToolTurn } from "./native-tools";
 import OpenAI from "openai";
 import {
   ChatGenerateParams,
@@ -253,11 +254,12 @@ function getCompletedResponseFromEvent(event: unknown): OpenAI.Responses.Respons
 }
 
 export class OpenAiProvider implements LlmProvider {
+  generateToolTurn(params: import("@/lib/tools/types").ToolTurnParams) { return nativeToolTurn("openai", this.apiKey, params); }
   name = "openai" as const;
   private client: OpenAI;
   private defaultModel = "gpt-4o";
 
-  constructor(apiKey: string) {
+  constructor(private apiKey: string) {
     this.client = new OpenAI({ apiKey, fetch: globalThis.fetch.bind(globalThis) });
   }
 
