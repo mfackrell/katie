@@ -765,7 +765,7 @@ async function executeChat(request: NextRequest) {
     });
     const taskIdentityText = message + (freshTaskEvidence.length
       ? "\nFRESH USER-SUPPLIED SOURCE EVIDENCE (observations may be incomplete):\n" + JSON.stringify(freshTaskEvidence) : "");
-    let softwareBuildIntent = Boolean(selfRepoId && selfCodeChangeIntent(message));
+    let softwareBuildIntent = false;
     // A scoped stop/pause controls existing durable work, not application identity.
     // Execute it below only after request tracking; do not let an unrelated task
     // clarification prevent cancellation or rewrite the application ledger.
@@ -1120,6 +1120,7 @@ async function executeChat(request: NextRequest) {
     // in normal Katie model routing.
     const executiveReply=null, specialistReply=null, financeReply=null, developmentReply=null;
     const explicitProjectControl = startProjectIntent(message) || followupProjectIntent(message) || isProjectStopIntent(message);
+    if (effectiveRepoId && selfCodeChangeIntent(message)) softwareBuildIntent = true;
     const projectReply = !pdfProgress.projectClarification && !executiveReply && (explicitProjectControl || softwareBuildIntent) && !standaloneFragment && !specialistReply && !financeReply && !developmentReply && !currentAgentTask() && savedDraftReply === null && !newAttachments.length && !requestImages?.length
       ? await handleProjectChat({actorId,chatId,message,activeRepoId:effectiveRepoId ?? undefined,softwareBuildIntent},requestId,attachmentHistory,requestTracked) : null;
     const localKatieResponse = !standaloneFragment && (explicitProjectControl || newAttachments.length > 0) && pdfProgress.projectClarification ? {reason: "project" as const, text: pdfProgress.projectClarification} : savedDraftReply !== null ? { reason: "project" as const, text: savedDraftReply } : executiveReply ? {reason: "executive" as const,text:executiveReply}
