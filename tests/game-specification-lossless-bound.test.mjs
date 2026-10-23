@@ -5,6 +5,7 @@ const validator=readFileSync('lib/projects/contract.ts','utf8');
 const worker=readFileSync('lib/missions/worker.ts','utf8');
 const projectWorker=readFileSync('lib/projects/worker.ts','utf8');
 const recoveryBudget=readFileSync('lib/projects/recovery-budget.ts','utf8');
+const checkpointMigration=readFileSync('supabase/migrations/20261023194500_recover_latest_game_revision_checkpoint.sql','utf8');
 test('lossless game approval bound matches saved checkpoint capacity and preserves all validation gates',()=>{
  assert.match(validator,/canonical\(gameSpecificationView\(p\)\)\.length>40000/);
  assert.match(validator,/validateProjectGame\(p\.game,p\.allowedPaths,p\.finalContract\)/);
@@ -18,4 +19,12 @@ test('lossless game approval bound matches saved checkpoint capacity and preserv
  assert.match(worker,/revalidated_saved_specification/);
  assert.match(worker,/freshReviewRequired:true/);
  assert.match(worker,/uniqueCharacters:canonical\(gameSpecificationView\(plan\)\)\.length/);
+});
+
+test('autonomous checkpoint recovers newest revision with a project budget fence and fresh independent review',()=>{
+ assert.match(checkpointMigration,/j\.role IN \('revise','compose'\)/);
+ assert.match(checkpointMigration,/ORDER BY m\.created_at DESC,j\.created_at DESC LIMIT 1/);
+ assert.match(checkpointMigration,/p\.token_allowance-spent<25000/);
+ assert.match(projectWorker,/\['compose','revise'\]\.includes\(composition\.role\)/);
+ assert.match(projectWorker,/status:'unreviewed'/);
 });
