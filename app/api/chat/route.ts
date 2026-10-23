@@ -1251,7 +1251,24 @@ async function executeChat(request: NextRequest) {
     }
     images.push(...storedWebsite.images);
     if (storedWebsite.fresh) messageForGeneration += `\nRetrieve a fresh inspection of: ${storedWebsite.targetUrls.join(", ")}`;
-    const activeRepoContext = activeRepoId ? await loadActiveRepoContext(activeRepoId) : null;
+    // Read-only self-inspection defaults to Katie's own connected source when no
+    // repository was selected. Never override an explicit selection or a disabled
+    // source-injection setting, and never grant another actor implicit access.
+    const selfInspectionRequest = /\\b(?:your(?:self| own)?|katie(?:'s)?)\\b/i.test(message) &&
+      /\\b(?:repository|repo|github|source|codebase|architecture|routing|deployment|logs?|implementation|inspect|debug|fix|edit|modify)\\b/i.test(message);
+    let selfRepoId: string | null = null;
+    if (!activeRepoId && repoInjectionEnabled && selfInspectionRequest && !currentAgentTask()) {
+      const admin = getSupabaseAdminClient();
+      const {data: selfActor} = await admin.from("actors").select("name").eq("id",actorId).maybeSingle<{name:string}>();
+      if (selfActor?.name?.trim().toLowerCase() === "katie") {
+        const {data: ownRepo} = await admin.from("repo_sync_runs")
+          .select("id").eq("repository_full_name","mfackrell/katie")
+          .order("created_at",{ascending:false}).limit(1).maybeSingle<{id:string}>();
+        selfRepoId = ownRepo?.id ?? null;
+      }
+    }
+    const effectiveRepoId = activeRepoId ?? selfRepoId;
+    const activeRepoContext = effectiveRepoId ? await loadActiveRepoContext(effectiveRepoId) : null;
     const sessionContext: ChatSessionContext = {
       activeRepo: activeRepoContext
         ? {
