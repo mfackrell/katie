@@ -753,7 +753,8 @@ async function executeChat(request: NextRequest) {
     // Execute it below only after request tracking; do not let an unrelated task
     // clarification prevent cancellation or rewrite the application ledger.
     const isProjectStopRequest = !currentAgentTask() && !newAttachments.length && !requestImages?.length && isProjectStopIntent(message);
-    if (!isProjectStopRequest && (startProjectIntent(message) || followupProjectIntent(message) || isProjectStopIntent(message)) && !currentAgentTask() &&
+    const standaloneFragment = !newAttachments.length && !requestImages?.length && /^\s*[\p{L}\p{N}]+(?:\s+[\p{L}\p{N}]+)?[.!?]?\s*$/u.test(message) && !startProjectIntent(message) && !followupProjectIntent(message) && !isProjectStopIntent(message);
+    if (!isProjectStopRequest && !standaloneFragment && (contextProjects.length || freshTaskEvidence.length || startProjectIntent(message) || followupProjectIntent(message)) && !currentAgentTask() &&
         !(classifyUserTurn(message) === "conversation" && !newAttachments.length)) {
       const contextProviders = getAvailableProviders();
       const entries = await Promise.all(contextProviders.map(async provider => ({provider, models: await provider.listModels()})));
@@ -1101,9 +1102,9 @@ async function executeChat(request: NextRequest) {
     // EO commands are intercepted before executeChat; no management path exists
     // in normal Katie model routing.
     const executiveReply=null, specialistReply=null, financeReply=null, developmentReply=null;
-    const projectReply = ((startProjectIntent(message) || followupProjectIntent(message) || isProjectStopIntent(message)) || isProjectStopRequest) && !pdfProgress.projectClarification && !executiveReply && !specialistReply && !financeReply && !developmentReply && !currentAgentTask() && savedDraftReply === null && !newAttachments.length && !requestImages?.length
+    const projectReply = !standaloneFragment && !pdfProgress.projectClarification && !executiveReply && !specialistReply && !financeReply && !developmentReply && !currentAgentTask() && savedDraftReply === null && !newAttachments.length && !requestImages?.length
       ? await handleProjectChat({actorId,chatId,message,activeRepoId,softwareBuildIntent},requestId,attachmentHistory,requestTracked) : null;
-    const localKatieResponse = ((startProjectIntent(message) || followupProjectIntent(message) || isProjectStopIntent(message)) || isProjectStopRequest) && pdfProgress.projectClarification ? {reason: "project" as const, text: pdfProgress.projectClarification} : savedDraftReply !== null ? { reason: "project" as const, text: savedDraftReply } : executiveReply ? {reason: "executive" as const,text:executiveReply}
+    const localKatieResponse = !standaloneFragment && pdfProgress.projectClarification ? {reason: "project" as const, text: pdfProgress.projectClarification} : savedDraftReply !== null ? { reason: "project" as const, text: savedDraftReply } : executiveReply ? {reason: "executive" as const,text:executiveReply}
       : specialistReply ? {reason: "executive" as const,text:specialistReply}
       : financeReply ? {reason: "executive" as const,text:financeReply}
       : developmentReply ? {reason: "executive" as const,text:developmentReply}
