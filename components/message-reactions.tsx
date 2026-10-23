@@ -30,7 +30,7 @@ async function fetchSnapshot(actorId:string,chatId:string):Promise<ReactionSnaps
   return job;
 }
 
-export function MessageReactions({actorId,chatId,messageId}:{actorId:string;chatId:string;messageId:string}) {
+export function MessageReactions({actorId,chatId,messageId,onReaction}:{actorId:string;chatId:string;messageId:string;onReaction:(reaction:MessageReaction|null)=>void}) {
   const [selected,setSelected]=useState<MessageReaction|null>(null);
   const [pending,setPending]=useState(false);
   const [ready,setReady]=useState(false);
@@ -58,6 +58,7 @@ export function MessageReactions({actorId,chatId,messageId}:{actorId:string;chat
       if(!response.ok)throw Error(result.error||"Reaction could not be saved.");
       setSelected(next);
       setDelivered(true);
+      onReaction(next);
       const key=actorId+":"+chatId;
       const snapshot=cache.get(key)??{reactions:{}};
       if(next)snapshot.reactions[messageId]=next;
@@ -76,7 +77,7 @@ export function MessageReactions({actorId,chatId,messageId}:{actorId:string;chat
         {option.emoji}
       </button>)}
     </div>
-    {delivered && <p role="status" className="mt-1 text-xs text-emerald-300">Reaction delivered to Katie’s feedback inbox.</p>}
+    {delivered && <p role="status" className="mt-1 text-xs text-emerald-300">Reaction delivered. Katie is responding in this conversation.</p>}
     {error&&<p role="alert" className="mt-1 text-xs text-rose-300">{error}</p>}
   </div>;
 }
