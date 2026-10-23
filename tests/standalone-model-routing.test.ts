@@ -1,13 +1,13 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-const source = readFileSync("app/api/chat/route.ts", "utf8");
-test("bare standalone fragments stay on LLM path rather than project arbitration", () => {
-  assert.match(source, /const standaloneFragment =/);
-  assert.match(source, /!standaloneFragment && \(contextProjects\.length \|\| freshTaskEvidence\.length/);
-  assert.match(source, /const projectReply = !pdfProgress\.projectClarification && !executiveReply && !standaloneFragment/);
-  assert.match(source, /const localKatieResponse = !standaloneFragment && pdfProgress\.projectClarification/);
+const route=readFileSync("app/api/chat/route.ts","utf8");
+test("ordinary conversation cannot produce locally arbitrated project reply",()=>{
+  assert.match(route,/const explicitProjectControl = startProjectIntent\(message\) \|\| followupProjectIntent\(message\) \|\| isProjectStopIntent\(message\)/);
+  assert.match(route,/const projectReply = !pdfProgress\.projectClarification && !executiveReply && \(explicitProjectControl \|\| softwareBuildIntent\)/);
+  assert.match(route,/const localKatieResponse = !standaloneFragment && \(explicitProjectControl \|\| newAttachments\.length > 0\) && pdfProgress\.projectClarification/);
 });
-test("explicit project and attachment routing remains available", () => {
-  assert.match(source, /contextProjects\.length \|\| freshTaskEvidence\.length \|\| startProjectIntent\(message\) \|\| followupProjectIntent\(message\)/);
+test("attachment and explicit management still retain dedicated processing",()=>{
+  assert.match(route,/newAttachments\.length > 0/);
+  assert.match(route,/explicitProjectControl/);
 });
