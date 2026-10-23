@@ -29,6 +29,7 @@ import {
 } from "@/lib/chat/reasoning-stream";
 import { ReasoningExplainerPanel } from "@/components/reasoning-explainer-panel";
 import { RememberFaceControl } from "@/components/remember-face-control";
+import { MessageReactions } from "@/components/message-reactions";
 import { ProjectApprovalCard, type ProjectApproval } from "@/components/project-approval-card";
 import {DeveloperResourceCard,type RecoveryProposal} from "@/components/developer-resource-card";
 
@@ -2841,6 +2842,7 @@ export function ChatPanel({
                 <p className="whitespace-pre-wrap break-words leading-7 text-zinc-100/95">{message.content}</p>
               )
             ) : null}
+            {message.role === "assistant" && message.id && <MessageReactions actorId={actorId} chatId={chatId} messageId={message.id} />}
             {message.attachments?.length ? (
               <ul aria-label="Referenced files" className="mt-3 flex flex-wrap gap-2 text-xs text-zinc-300">
                 {message.attachments.map(file => (

@@ -12,6 +12,7 @@ type DbState = {
   long_term_memory: Row[];
   actor_long_term_memory: Row[];
   actor_memory_documents: Row[];
+  message_reactions: Row[];
 };
 
 class Query {
@@ -195,7 +196,7 @@ function makeState(): DbState {
     messages: [],
     short_term_memory: [],
     intermediate_memory: [],
-    long_term_memory: [], actor_long_term_memory: [], actor_memory_documents: []
+    long_term_memory: [], actor_long_term_memory: [], actor_memory_documents: [], message_reactions: []
   };
 }
 
