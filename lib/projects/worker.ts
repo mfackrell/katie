@@ -11,6 +11,7 @@ import {estimateProjectResources} from './resource-forecast.mjs';
 import {enrichResourceForecast} from './resource-economics.mjs';
 import {provisionalSpecialistPlan} from './specialist-resource-plan.mjs';
 import {runSpecialistResourceBatch} from './specialist-dispatch';
+import {announceBlockedRecoveryResources} from './recovery-budget';
 import { projectRpc, projectRuns, milestoneEvidence, acceptanceBinding, getDevelopmentProjectContext, type Project } from './store';
 export async function baseline(p: Project) { if (!p.repository_id)
     return null; const { data: r, error } = await getSupabaseAdminClient().from('repo_sync_runs').select('repository_full_name').eq('id', p.repository_id).maybeSingle<{
@@ -394,6 +395,14 @@ async function reconcileParkedDispatch() {
     }
     return false;
 }
+async function reconcileBlockedResourceApprovals(){
+ const db=getSupabaseAdminClient();
+ const {data,error}=await db.from('work_projects').select('*').eq('status','blocked')
+  .eq('profile','game').eq('phase','specification').order('updated_at',{ascending:false}).limit(5).returns<Project>();
+ if(error)throw Error('Cannot inspect blocked developer projects for resource planning');
+ for(const p of data??[])if(await announceBlockedRecoveryResources(p))return true;
+ return false;
+}
 async function reconcileBlockedGameRevisions(){
     // Recover the same project at specification, not a new research or coding
     // mission. PostgreSQL atomically enforces the old verdict, timeout cause,
@@ -451,6 +460,8 @@ export async function runProjectBatch() {
     await Promise.all([
       reconcileBlockedInfrastructureProjects().catch(error=>{console.error('[Projects] Blocked verification recovery failed',error instanceof Error?error.message:'Unknown failure');}),
       reconcileBlockedGameRevisions().catch(error=>{console.error('[Projects] Game revision recovery failed',error instanceof Error?error.message:'Unknown failure');})
+    // Owner authorization is requested, never silently granted.
+    ,reconcileBlockedResourceApprovals().catch(error=>{console.error('[Projects] Developer resource proposal failed',error instanceof Error?error.message:'Unknown failure');})
     ]);
  })();try { const p = await projectRpc<Project | null>('claim_work_project'); if (!p)
     return { claimed: 0 }; try {
