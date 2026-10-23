@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import {emptyTaskProgress,applyUserToTaskProgress,applyAssistantToTaskProgress,mergeTaskProjects,taskProjectCatalog,syncTaskProgress,formatTaskProgress} from "../lib/chat/task-progress";
+import {emptyTaskProgress,applyUserToTaskProgress,applyAssistantToTaskProgress,mergeTaskProjects,taskProjectCatalog,syncTaskProgress,formatTaskProgress,isProfessionalProfileMaterial} from "../lib/chat/task-progress";
 
 const project = (state: ReturnType<typeof emptyTaskProgress>, id:string,text:string) => applyUserToTaskProgress(state,{
   messageId:id,text,projectTransition:{action:"new",sourceQuote:text},
@@ -132,4 +132,22 @@ test("unrelated standalone professional biography is not blocked by saved projec
   const profile=applyUserToTaskProgress(state,{messageId:"bio",text:"I am a fractional CFO with 25 years of experience. Please remember my professional background."});
   assert.equal(profile.projectClarification,undefined);
   assert.equal(profile.projects?.length,2);
+});
+
+test("professional profile detaches stale active project while retaining saved project data",()=>{
+ const initial=project(emptyTaskProgress(),"sisters","New project: coordinate my sisters' travel");
+ const profile=[
+ "# Mark — Professional Identity & Operating Profile",
+ "I have 25 years of experience in finance and operations leadership.",
+ "## Who I Am",
+ "I am an interim business executive and fractional CFO.",
+ "## My Businesses",
+ "I operate consulting, technology, and short-term rental companies."
+ ].join("\n");
+ assert.equal(isProfessionalProfileMaterial(profile),true);
+ const state=applyUserToTaskProgress(initial,{messageId:"profile",text:profile});
+ assert.equal(state.projectContext,null);
+ assert.equal(state.projectClarification,undefined);
+ assert.equal(state.objective?.text,profile);
+ assert.ok(state.projects?.some(p=>p.projectContext.userMessageId==="sisters"));
 });
