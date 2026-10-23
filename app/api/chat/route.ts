@@ -1,4 +1,4 @@
-import {handleProjectChat, startProjectIntent, followupProjectIntent, isProjectStopIntent, selfCodeChangeIntent} from '@/lib/projects/chat';
+import {handleProjectChat, startProjectIntent, followupProjectIntent, isProjectStopIntent} from '@/lib/projects/chat';
 import {executeExecutiveCommand} from '@/lib/executive/transport';
 import { maskPdfSourceNames, pdfPageTaskForSource } from "@/lib/uploads/pdf-inventory";
 import { pdfSourceOccurrence, selectFreshPdfSources, selectPdfEvidenceSource } from "@/lib/chat/pdf-source-selection";
