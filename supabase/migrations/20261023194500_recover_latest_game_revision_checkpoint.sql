@@ -17,7 +17,8 @@ BEGIN
   SELECT count(*) INTO run_count FROM project_runs WHERE project_id=p.id;
   SELECT coalesce(sum(greatest(coalesce(actual_tokens,0),coalesce(reserved_tokens,0))),0)
     INTO spent FROM agent_missions WHERE project_id=p.id;
-  -- Do not admit a new review mission with inadequate aggregate allowance.\n  IF run_count>=p.max_missions OR p.token_allowance-spent<25000 THEN RETURN false; END IF;
+  -- Do not admit a new review mission with inadequate aggregate allowance.
+  IF run_count>=p.max_missions OR p.token_allowance-spent<25000 THEN RETURN false; END IF;
   -- An active mission must have finished or expired; never steal a live lease.
   IF p.active_mission_id IS NOT NULL THEN
     SELECT * INTO source_mission FROM agent_missions
