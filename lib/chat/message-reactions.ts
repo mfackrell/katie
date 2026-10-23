@@ -29,7 +29,8 @@ export async function recentReactionContext(actorId: string, chatId: string): Pr
   const {data: messages, error: messageError}=await db.from("messages")
     .select("id,content").in("id",ids).eq("actor_id",actorId).eq("role","assistant");
   if (messageError) return "";
-  const byId=new Map((messages??[]).map((m:{id:string;content:string})=>[m.id,m.content]));
+  const typedMessages = (messages ?? []) as Array<{id:string;content:string}>;
+  const byId = new Map(typedMessages.map(m => [m.id,m.content]));
   const summary=rows.filter(x=>byId.has(x.message_id)).slice(0,20).map(x=>{
     const raw=byId.get(x.message_id)??"";
     let content=raw;
