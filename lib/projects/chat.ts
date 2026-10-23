@@ -6,10 +6,10 @@ import { projectId, projectMessage } from './contract';
  * architecture discussion, inspection, or a quoted example. */
 export function selfCodeChangeIntent(text: string): boolean {
  const normalized=text.trim();
- return /^(?:please\\s+)?(?:(?:can|could|would|will) you\\s+(?:please\\s+)?)?(?:fix|modify|edit|change|update|implement|repair|refactor)\\b/i.test(normalized)
-   && /\\b(?:your|katie(?:'s)?|your own)\\b/i.test(normalized)
-   && /\\b(?:repo(?:sitory)?|github|source code|codebase|routing code|backend code|implementation)\\b/i.test(normalized)
-   && !/\\b(?:don't|do not|never|without changing|read.only|only inspect|just review)\\b/i.test(normalized);
+ return /^(?:please\s+)?(?:(?:can|could|would|will) you\s+(?:please\s+)?)?(?:fix|modify|edit|change|update|implement|repair|refactor)\b/i.test(normalized)
+   && /\b(?:your|katie(?:'s)?|your own)\b/i.test(normalized)
+   && /\b(?:repo(?:sitory)?|github|source code|codebase|routing code|backend code|implementation)\b/i.test(normalized)
+   && !/\b(?:don't|do not|never|without changing|read.only|only inspect|just review)\b/i.test(normalized);
 }
 export function startProjectIntent(text: string) {
  if(selfCodeChangeIntent(text))return true;
