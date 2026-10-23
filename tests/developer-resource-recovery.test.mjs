@@ -17,3 +17,17 @@ test('developer orchestrator owns recovery resource proposals and no automatic s
  assert.match(route,/recovery:'pending_developer_orchestrator'/);
  assert.doesNotMatch(proposal,/authorize_work_project_resources/);
 });
+
+test('owner authorization produces one bounded, resume-eligible checkpoint without reset',()=>{
+ const migration=readFileSync('supabase/migrations/20261023174000_resume_authorized_game_project.sql','utf8');
+ const worker=readFileSync('lib/projects/worker.ts','utf8');
+ assert.match(migration,/budget_authorization_source<>'user_approved'/);
+ assert.match(migration,/event='resource_authorization'/);
+ assert.match(migration,/event='developer_budget_recovery_started'/);
+ assert.match(migration,/p\.token_allowance-charged<25000/);
+ assert.match(migration,/active_mission_id=null/);
+ assert.match(migration,/codingApproved',false/);
+ assert.match(worker,/resumeAuthorizedDeveloperProjects/);
+ assert.match(worker,/resume_authorized_game_project/);
+ assert.match(worker,/developer_budget_recovery_started/);
+});
