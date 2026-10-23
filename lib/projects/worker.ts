@@ -326,7 +326,8 @@ async function advance(p: Project) {
                         const view=gameSpecificationView(source);
                         // Match the validated game-specific lossless checkpoint envelope.
                         // The legacy 20K limit discarded valid saved repair evidence and
-                        // forced unnecessary regeneration of the same specification.\n                        if(canonical(view).length<=40000)draft=view;
+                        // forced unnecessary regeneration of the same specification.
+                        if(canonical(view).length<=40000)draft=view;
                     }
                 }catch{/* Preserve unparseable original in its durable mission. */}
                 projectEvidence={...(projectEvidence as Record<string,unknown>),
