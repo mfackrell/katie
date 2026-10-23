@@ -778,7 +778,7 @@ async function executeChat(request: NextRequest) {
       const projectTransition = await resolveProjectTransition(taskIdentityText,
         {activeProject:priorTaskProgress.projectContext,savedProjects:contextProjects},
         {decisionProviders: selectControlPlaneDecisionModels(entries), authoritativeUserMessage:message,
-         onExecutionKind: decision => { softwareBuildIntent = decision.kind === "software_build"; },
+         onExecutionKind: decision => { softwareBuildIntent = softwareBuildIntent || decision.kind === "software_build"; },
          requestId: request.headers.get("x-request-id") ?? taskProgressUserMessageId,
          conversationContext: JSON.stringify({recentUserTurns: attachmentHistory.filter(turn => turn.role === "user").slice(-6).map(turn => ({id:turn.id,text:turn.content}))})});
       contextClassification = {intent:"general-text",preferredProvider:null,projectTransition};
