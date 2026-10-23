@@ -1102,7 +1102,7 @@ async function executeChat(request: NextRequest) {
     // EO commands are intercepted before executeChat; no management path exists
     // in normal Katie model routing.
     const executiveReply=null, specialistReply=null, financeReply=null, developmentReply=null;
-    const projectReply = !standaloneFragment && !pdfProgress.projectClarification && !executiveReply && !specialistReply && !financeReply && !developmentReply && !currentAgentTask() && savedDraftReply === null && !newAttachments.length && !requestImages?.length
+    const projectReply = !pdfProgress.projectClarification && !executiveReply && !standaloneFragment && !specialistReply && !financeReply && !developmentReply && !currentAgentTask() && savedDraftReply === null && !newAttachments.length && !requestImages?.length
       ? await handleProjectChat({actorId,chatId,message,activeRepoId,softwareBuildIntent},requestId,attachmentHistory,requestTracked) : null;
     const localKatieResponse = !standaloneFragment && pdfProgress.projectClarification ? {reason: "project" as const, text: pdfProgress.projectClarification} : savedDraftReply !== null ? { reason: "project" as const, text: savedDraftReply } : executiveReply ? {reason: "executive" as const,text:executiveReply}
       : specialistReply ? {reason: "executive" as const,text:specialistReply}
