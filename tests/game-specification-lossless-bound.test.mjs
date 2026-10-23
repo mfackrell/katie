@@ -28,3 +28,12 @@ test('autonomous checkpoint recovers newest revision with a project budget fence
  assert.match(projectWorker,/\['compose','revise'\]\.includes\(composition\.role\)/);
  assert.match(projectWorker,/status:'unreviewed'/);
 });
+
+test('completed resource approval does not permanently suppress subsequent recovery requests',()=>{
+ const budget=readFileSync('lib/projects/recovery-budget.ts','utf8');
+ assert.match(budget,/latestApproval=events\?\.find/);
+ assert.match(budget,/developer_resource_approval_requested/);
+ assert.match(budget,/resource_authorization/);
+ assert.match(budget,/if\(priorPending\)return false/);
+ assert.doesNotMatch(budget,/if\(prior\?\.length\)return false/);
+});
