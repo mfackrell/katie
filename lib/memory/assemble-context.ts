@@ -1,3 +1,4 @@
+import { recentReactionContext } from "@/lib/chat/message-reactions";
 import { loadTaskHandoffKnowledgeContext } from "@/lib/agents/task-handoff-knowledge";
 import { currentAgentTask } from "@/lib/agents/policy";
 import { getDeliverableStandardInstruction } from "@/lib/chat/deliverable-standard";
@@ -26,6 +27,7 @@ export async function assembleContext(actorId: string, chatId: string): Promise<
   const managedTask = currentAgentTask();
   const handoffKnowledge = managedTask ? await loadTaskHandoffKnowledgeContext(managedTask) : "";
   const referenceDocuments = await listActorMemoryDocuments(actorId, 20);
+  const reactionContext = await recentReactionContext(actorId, chatId);
   let documentCharacters = 0;
   const referenceText = referenceDocuments
     .filter((doc) => {
@@ -72,6 +74,7 @@ export async function assembleContext(actorId: string, chatId: string): Promise<
       correctionsBlock,
       longTermBlock,
       handoffKnowledge,
+      reactionContext,
       "ACTOR MEMORY REFERENCE DOCUMENTS: These are verbatim user-requested long-term records and archived historical records. The current structured long-term facts and the most recent explicit user corrections take precedence when records conflict.",
       referenceText || "(No reference documents)",
       "END_ACTOR_MEMORY_REFERENCE_DOCUMENTS",
