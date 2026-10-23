@@ -21,7 +21,7 @@ export async function GET(req:NextRequest) {
   const {data,error}=await getSupabaseAdminClient().from("message_reactions")
     .select("message_id,reaction").eq("actor_id",actorId).eq("chat_id",chatId);
   if(error)return NextResponse.json({error:"Reactions unavailable."},{status:503});
-  return NextResponse.json({reactions:Object.fromEntries((data??[]).map(x=>[x.message_id,x.reaction]))},{headers:{"Cache-Control":"no-store"}});
+  return NextResponse.json({reactions:Object.fromEntries(((data??[]) as Array<{message_id:string;reaction:string}>).map(x=>[x.message_id,x.reaction]))},{headers:{"Cache-Control":"no-store"}});
 }
 
 export async function POST(req:NextRequest) {
