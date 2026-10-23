@@ -2,6 +2,21 @@ import { z } from 'zod';
 import { getSupabaseAdminClient } from '@/lib/data/supabase/admin';
 import { runModelTools, type ScopedTool, type ToolAudit } from './loop';
 import type { ChatGenerateParams, LlmProvider } from '@/lib/providers/types';
+import { authorizeSelfToolCaller } from './authorization';
+
+// Remote response shapes; runtime checks below gate data used as evidence.
+interface Commit { sha: string; parents?: {sha: string}[]; html_url?: string }
+interface TreeEntry {type: string; path: string}
+interface Check {name: string; status: string; conclusion: string; html_url: string}
+interface Status {context: string; state: string}
+interface Deployment {uid: string; state: string; target: string; url: string; meta?: {githubCommitSha?: string}}
+interface Alias {alias: string}
+interface InspectionResponse {
+  sha: string; truncated: boolean; tree?: TreeEntry[]; encoding: string; content: string; size: number;
+  total_count: number; check_runs?: Check[]; state: string; statuses?: Status[];
+  deployments?: Deployment[]; meta?: {githubCommitSha?: string; githubCommitOrg?: string; githubCommitRepo?: string};
+  projectId: string; readyState: string; target: string; aliases?: Alias[]; deployment?: {id: string};
+}
 
 const empty = z.object({}).strict();
 const pathSchema = z.object({ path: z.string().max(240).regex(/^(?:[\w@().-]+\/)*[\w@().-]+$/).refine(p =>
@@ -13,13 +28,13 @@ const blocked = (reason: string) => ({ status: 'blocked', reason });
 /** All resource selectors are server-owned. Model arguments can only narrow scope. */
 export function createSelfInspectionTools(input: {
   actorId: string; chatId: string; requestId: string; pinnedSha?: string;
-  fetchJson(url: string, headers: Record<string, string>, signal: AbortSignal): Promise<any>;
+  fetchJson(url: string, headers: Record<string, string>, signal: AbortSignal): Promise<unknown>;
 }): ScopedTool[] {
   let pinnedSha = input.pinnedSha && /^[a-f0-9]{40}$/.test(input.pinnedSha) ? input.pinnedSha : undefined;
   const github = async (path: string, signal: AbortSignal) => {
     const token = process.env.GITHUB_TOKEN ?? process.env.GITHUB_PAT ?? process.env.GH_TOKEN;
-    if (!token) return blocked('GitHub connection requires a server-side GITHUB_TOKEN with read access to mfackrell/katie.');
-    return input.fetchJson(`https://api.github.com/repos/mfackrell/katie/${path}`, { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json' }, signal);
+    if (!token) throw new Error('GitHub connection requires a server-side GITHUB_TOKEN with read access to mfackrell/katie.');
+    return await input.fetchJson(`https://api.github.com/repos/mfackrell/katie/${path}`, { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json' }, signal) as InspectionResponse;
   };
   const pin = async (signal: AbortSignal) => {
     if (pinnedSha) return pinnedSha;
@@ -33,15 +48,15 @@ export function createSelfInspectionTools(input: {
         const sha = await pin(signal); if (!sha) return blocked('GitHub source pin unavailable.');
         const commits = await github(`commits?sha=${sha}&per_page=10`, signal);
         if (!Array.isArray(commits)) return blocked('GitHub commit history unavailable.');
-        return { sha, commits: commits.map(c => ({sha:c.sha,parents:c.parents?.map((p:any)=>p.sha),url:c.html_url})) };
+        return { sha, commits: commits.map((c: Commit) => ({sha:c.sha,parents:c.parents?.map(p=>p.sha),url:c.html_url})) };
       } },
     { name: 'github_source', description: 'Pin Katie own repository HEAD to an immutable SHA and list source paths. This is repository HEAD, not verified production SHA.', parameters: objectSchema(), validate: empty,
       execute: async (_, signal) => {
         const sha = await pin(signal);
         if (!sha) return blocked('Cannot authenticate and pin mfackrell/katie source. Check the GitHub connection.');
         const tree = await github(`git/trees/${sha}?recursive=1`, signal);
-        return { repository: 'mfackrell/katie', sha, truncated: tree.truncated === true || tree.tree?.length > 800,
-          paths: tree.tree?.filter((p: any) => p.type === 'blob' && pathSchema.safeParse({path:p.path}).success).slice(0,800).map((p: any) => p.path) };
+        return { repository: 'mfackrell/katie', sha, truncated: tree.truncated === true || (tree.tree?.length ?? 0) > 800,
+          paths: tree.tree?.filter((p: TreeEntry) => p.type === 'blob' && pathSchema.safeParse({path:p.path}).success).slice(0,800).map((p: TreeEntry) => p.path) };
       } },
     { name: 'github_read_file', description: 'Read a bounded UTF-8 source file at the pinned own repository SHA. Secret/config credential paths are denied.',
       parameters: objectSchema({path:{type:'string',maxLength:240}}, ['path']), validate: pathSchema,
@@ -57,8 +72,8 @@ export function createSelfInspectionTools(input: {
         const sha = await pin(signal); if (!sha) return blocked('GitHub source pin unavailable.');
         const checks = await github(`commits/${sha}/check-runs?per_page=50`, signal);
         const statuses = await github(`commits/${sha}/status?per_page=50`, signal);
-        return { sha, totalChecks: checks.total_count, checks: checks.check_runs?.map((c:any)=>({name:c.name,status:c.status,conclusion:c.conclusion,url:c.html_url})),
-          state: statuses.state, statuses: statuses.statuses?.map((c:any)=>({context:c.context,state:c.state})), acceptance: 'Check status alone does not authorize merge or deployment.' };
+        return { sha, totalChecks: checks.total_count, checks: checks.check_runs?.map((c: Check)=>({name:c.name,status:c.status,conclusion:c.conclusion,url:c.html_url})),
+          state: statuses.state, statuses: statuses.statuses?.map((c: Status)=>({context:c.context,state:c.state})), acceptance: 'Check status alone does not authorize merge or deployment.' };
       } },
     { name: 'supabase_schema', description: 'Inspect column metadata for scoped application request and tool receipt tables; no arbitrary SQL or secret values.', parameters: objectSchema(), validate: empty,
       execute: async () => {
@@ -80,8 +95,8 @@ export function createSelfInspectionTools(input: {
         if (!token) return blocked('Vercel management connection missing: configure VERCEL_TOKEN server-side with access to the connected Katie project. Redeploy configuration, then retry inspection. Git-triggered deployments do not verify management access.');
         if (!project) return blocked('Vercel connection missing VERCEL_PROJECT_ID. Bind the Katie project server-side before inspection.');
         const query = new URLSearchParams({projectId:project,limit:'5', ...(team ? {teamId:team} : {})});
-        const data = await input.fetchJson(`https://api.vercel.com/v6/deployments?${query}`, {Authorization:`Bearer ${token}`}, signal);
-        return { projectId: project, deployments: data.deployments?.map((d:any)=>({id:d.uid,state:d.state,target:d.target,url:d.url,sha:d.meta?.githubCommitSha})),
+        const data = await input.fetchJson(`https://api.vercel.com/v6/deployments?${query}`, {Authorization:`Bearer ${token}`}, signal) as InspectionResponse;
+        return { projectId: project, deployments: data.deployments?.map((d: Deployment)=>({id:d.uid,state:d.state,target:d.target,url:d.url,sha:d.meta?.githubCommitSha})),
           limitation: 'Deployment metadata does not verify production alias, runtime logs or acceptance.' };
       } },
     { name: 'vercel_production', description: 'Verify READY production deployment SHA and Katie production alias through connected Vercel management API.', parameters: objectSchema(), validate: empty,
@@ -90,15 +105,15 @@ export function createSelfInspectionTools(input: {
         if (!token || !project) return blocked('Vercel connection requires server-side VERCEL_TOKEN and VERCEL_PROJECT_ID (and VERCEL_TEAM_ID for a team project). No production verification has occurred.');
         const query=new URLSearchParams({projectId:project,target:'production',limit:'5',...(team?{teamId:team}:{})});
         const headers={Authorization:`Bearer ${token}`};
-        const list=await input.fetchJson(`https://api.vercel.com/v6/deployments?${query}`,headers,signal);
-        const deployment=list.deployments?.find((d:any)=>d.target==='production'&&d.state==='READY');
+        const list=await input.fetchJson(`https://api.vercel.com/v6/deployments?${query}`,headers,signal) as InspectionResponse;
+        const deployment=list.deployments?.find((d: Deployment)=>d.target==='production'&&d.state==='READY');
         if (!deployment || typeof deployment.uid!=='string' || !/^[a-zA-Z0-9_-]+$/.test(deployment.uid)) return blocked('No READY production deployment found for the connected project.');
         const teamQuery=team?`?${new URLSearchParams({teamId:team})}`:'';
-        const detail=await input.fetchJson(`https://api.vercel.com/v13/deployments/${deployment.uid}${teamQuery}`,headers,signal);
-        const aliases=await input.fetchJson(`https://api.vercel.com/v2/deployments/${deployment.uid}/aliases${teamQuery}`,headers,signal);
-        const alias=await input.fetchJson(`https://api.vercel.com/v4/aliases/katie-mu.vercel.app${teamQuery}`,headers,signal);
+        const detail=await input.fetchJson(`https://api.vercel.com/v13/deployments/${deployment.uid}${teamQuery}`,headers,signal) as InspectionResponse;
+        const aliases=await input.fetchJson(`https://api.vercel.com/v2/deployments/${deployment.uid}/aliases${teamQuery}`,headers,signal) as InspectionResponse;
+        const alias=await input.fetchJson(`https://api.vercel.com/v4/aliases/katie-mu.vercel.app${teamQuery}`,headers,signal) as InspectionResponse;
         const sha=detail.meta?.githubCommitSha;
-        if (alias.projectId!==project || alias.deployment?.id!==deployment.uid || detail.meta?.githubCommitOrg!=='mfackrell' || detail.meta?.githubCommitRepo!=='katie' || detail.projectId!==project || detail.readyState!=='READY' || detail.target!=='production' || typeof sha!=='string' || !/^[a-f0-9]{40}$/.test(sha) || !aliases.aliases?.some((a:any)=>a.alias==='katie-mu.vercel.app')) return blocked('Production project, READY state, SHA or katie-mu.vercel.app alias could not be verified.');
+        if (alias.projectId!==project || alias.deployment?.id!==deployment.uid || detail.meta?.githubCommitOrg!=='mfackrell' || detail.meta?.githubCommitRepo!=='katie' || detail.projectId!==project || detail.readyState!=='READY' || detail.target!=='production' || typeof sha!=='string' || !/^[a-f0-9]{40}$/.test(sha) || !aliases.aliases?.some((a: Alias)=>a.alias==='katie-mu.vercel.app')) return blocked('Production project, READY state, SHA or katie-mu.vercel.app alias could not be verified.');
         return {status:'verified',projectId:project,deploymentId:deployment.uid,sha,state:'READY',alias:'katie-mu.vercel.app',verifiedAt:new Date().toISOString()};
       } },
     { name: 'change_capability', description: 'Report required approval and connection checkpoints for GitHub changes, Supabase DML/migrations, Vercel deployment/rollback and logs. Does not authorize or perform mutations.',
@@ -124,11 +139,14 @@ async function boundedJson(url: string, headers: Record<string,string>, signal: 
 }
 
 export async function runSelfInspection(input: {
+  request: Pick<Request, 'headers'>;
   actorId: string; chatId: string; requestId: string; provider: LlmProvider; params: ChatGenerateParams;
   deadlineMs: number; onRecord?(record: ToolAudit): void;
 }) {
   const db = getSupabaseAdminClient();
+  let ownerId: string;
   const authorize = async () => {
+    ownerId = await authorizeSelfToolCaller(input.request, input.actorId, input.chatId);
     const request = await db.from('chat_requests').select('actor_id,chat_id,status').eq('request_id',input.requestId).maybeSingle<{actor_id:string;chat_id:string;status:string}>();
     const actor = await db.from('actors').select('name,actor_kind').eq('id',input.actorId).maybeSingle<{name:string;actor_kind:string}>();
     const chat = await db.from('chats').select('actor_id').eq('id',input.chatId).maybeSingle<{actor_id:string}>();
@@ -144,6 +162,7 @@ export async function runSelfInspection(input: {
   return runModelTools({ ...input, sequenceStart, authorize, tools:createSelfInspectionTools({...input,pinnedSha,fetchJson:boundedJson}),
     audit: async record => {
       const {error} = await db.from('self_tool_receipts').insert({request_id:input.requestId,actor_id:input.actorId,chat_id:input.chatId,
+        owner_id:ownerId,
         sequence:record.sequence,phase:record.phase,tool:record.tool,provider:record.provider,model:record.model,
         ...(record.arguments ? {arguments:record.arguments} : {}), ...(record.result ? {result:record.result} : {})});
       if (error) throw new Error('Durable tool audit unavailable; execution stopped');

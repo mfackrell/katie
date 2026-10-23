@@ -42,9 +42,10 @@ export async function nativeToolTurn(provider: LlmProvider['name'], apiKey: stri
   }
   // Anthropic and Gemini require parallel results grouped into a single user turn.
   if (provider === 'anthropic' || provider === 'google') {
-    const b = body as Record<string, any>; const key = provider === 'google' ? 'contents' : 'messages';
+    type NativeMessage = { role: string; parts: unknown[]; content: unknown[] };
+    const b = body as Record<string, NativeMessage[]>; const key = provider === 'google' ? 'contents' : 'messages';
     const content = provider === 'google' ? 'parts' : 'content';
-    b[key] = b[key].reduce((all: any[], message: any) => {
+    b[key] = b[key].reduce((all: NativeMessage[], message: NativeMessage) => {
       const previous = all.at(-1);
       if (previous?.role === message.role) previous[content].push(...message[content]);
       else all.push(message);

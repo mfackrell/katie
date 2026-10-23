@@ -1,4 +1,5 @@
 import { runSelfInspection } from "@/lib/tools/self-inspection";
+import { authorizeSelfToolCaller } from "@/lib/tools/authorization";
 import {handleProjectChat, startProjectIntent, followupProjectIntent, isProjectStopIntent} from '@/lib/projects/chat';
 import {executeExecutiveCommand} from '@/lib/executive/transport';
 import { maskPdfSourceNames, pdfPageTaskForSource } from "@/lib/uploads/pdf-inventory";
@@ -690,6 +691,10 @@ async function executeChat(request: NextRequest) {
       ? await getSupabaseAdminClient().from("actors").select("name,actor_kind").eq("id", actorId).maybeSingle<{name:string;actor_kind:string}>()
       : null;
     const selfToolsEnabled = selfToolActor?.data?.name.trim().toLowerCase() === "katie" && selfToolActor.data.actor_kind === "standard";
+    if (selfToolsEnabled) {
+      try { await authorizeSelfToolCaller(request, actorId, chatId); }
+      catch { return NextResponse.json({ error: "Self-tool caller authorization denied. An authenticated owner grant and server-bound Katie identity are required." }, { status: 403 }); }
+    }
     if (!activeRepoId && repoInjectionEnabled && selfInspectionRequest && !currentAgentTask()) {
       const admin = getSupabaseAdminClient();
       const {data: selfActor} = await admin.from("actors").select("name").eq("id",actorId).maybeSingle<{name:string}>();
@@ -2382,7 +2387,7 @@ ${chunkWorkflowSummary}`;
 
                 const generation = selfToolsEnabled
                   ? await (async () => {
-                      const result = await runSelfInspection({ actorId, chatId, requestId, provider,
+                      const result = await runSelfInspection({ request, actorId, chatId, requestId, provider,
                         params: finalParams, deadlineMs: executionDeadlineMs,
                         onRecord: record => emitChunk({ type: "metadata", toolCall: record }),
                       });

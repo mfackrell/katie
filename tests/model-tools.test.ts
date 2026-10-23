@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { runModelTools, type ToolAudit, type ScopedTool } from '../lib/tools/loop';
 import { createSelfInspectionTools, runSelfInspection } from '../lib/tools/self-inspection';
 import { nativeToolTurn } from '../lib/providers/native-tools';
+import { authorizeSelfToolCaller } from '../lib/tools/authorization';
 import type { LlmProvider } from '../lib/providers/types';
 import type { ToolTurn } from '../lib/tools/types';
 
@@ -133,20 +134,48 @@ test('Vercel verification requires the bound project, READY state, source SHA an
 
 test('runtime denies request, actor identity, executive, chat mismatch and database failures before native execution',async()=>{
   const saved=globalThis.__KATIE_SUPABASE_ADMIN_CLIENT__;
+  const savedFetch=globalThis.fetch;
+  const savedEnv={...process.env};
+  process.env.KATIE_SELF_ACTOR_ID='a';
+  process.env.NEXT_PUBLIC_SUPABASE_URL='https://auth.example.test';
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY='test-anon';
+  const owner='11111111-1111-4111-8111-111111111111';
+  globalThis.fetch=async()=>Response.json({id:owner});
   try {
     for(const mismatch of ['requestActor','requestChat','chatActor','identity','executive','status','database']){
       let modelCalls=0;
       globalThis.__KATIE_SUPABASE_ADMIN_CLIENT__={from:(table:string)=>{
         const query:any={select:()=>query,eq:()=>query,maybeSingle:async()=>({error:mismatch==='database'?{message:'db error'}:null,data:
-          table==='chat_requests'?{actor_id:mismatch==='requestActor'?'other':'a',chat_id:mismatch==='requestChat'?'other':'c',status:mismatch==='status'?'completed':'processing'}
+          table==='self_tool_owner_grants'?{owner_id:owner}:table==='chat_requests'?{actor_id:mismatch==='requestActor'?'other':'a',chat_id:mismatch==='requestChat'?'other':'c',status:mismatch==='status'?'completed':'processing'}
           :table==='actors'?{name:mismatch==='identity'?'Other':'Katie',actor_kind:mismatch==='executive'?'executive':'standard'}
           :{actor_id:mismatch==='chatActor'?'other':'a'}})};return query;
       }} as unknown as NonNullable<typeof globalThis.__KATIE_SUPABASE_ADMIN_CLIENT__>;
-      await assert.rejects(runSelfInspection({actorId:'a',chatId:'c',requestId:'r',params,deadlineMs:Date.now()+60000,
+      await assert.rejects(runSelfInspection({request:{headers:new Headers({authorization:'Bearer test-session'})},actorId:'a',chatId:'c',requestId:'r',params,deadlineMs:Date.now()+60000,
         provider:{...provider([]),generateToolTurn:async()=>{modelCalls++;return result();}}}),/authorization denied/);
       assert.equal(modelCalls,0,mismatch);
     }
-  } finally {globalThis.__KATIE_SUPABASE_ADMIN_CLIENT__=saved;}
+  } finally {globalThis.__KATIE_SUPABASE_ADMIN_CLIENT__=saved;globalThis.fetch=savedFetch;process.env=savedEnv;}
+});
+
+test('self tools authenticate the caller and reject absent, forged, cross-owner and cross-chat grants',async()=>{
+  const saved=globalThis.__KATIE_SUPABASE_ADMIN_CLIENT__, savedFetch=globalThis.fetch, savedEnv={...process.env};
+  const owner='11111111-1111-4111-8111-111111111111';
+  process.env.KATIE_SELF_ACTOR_ID='a';process.env.NEXT_PUBLIC_SUPABASE_URL='https://auth.example.test';process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY='test-anon';
+  try {
+    for(const scenario of ['absent','forged','crossOwner','crossChat','unboundActor','revoked','valid']) {
+      let authCalls=0;const filters:Record<string,unknown>={};
+      globalThis.fetch=async(url,init)=>{authCalls++;assert.equal(String(url),'https://auth.example.test/auth/v1/user');assert.equal(new Headers(init?.headers).get('authorization'),'Bearer test-session');return scenario==='forged'?new Response(null,{status:401}):Response.json({id:owner});};
+      globalThis.__KATIE_SUPABASE_ADMIN_CLIENT__={from:(table:string)=>{
+        assert.equal(table,'self_tool_owner_grants');
+        const q:any={select:()=>q,eq:(key:string,value:unknown)=>{filters[key]=value;return q;},maybeSingle:async()=>({error:null,data:['crossOwner','crossChat','revoked'].includes(scenario)?null:{owner_id:owner}})};return q;
+      }} as unknown as NonNullable<typeof saved>;
+      const request={headers:new Headers(scenario==='absent'?{}:{authorization:'Bearer test-session'})};
+      const attempt=authorizeSelfToolCaller(request,scenario==='unboundActor'?'other':'a','c');
+      if(scenario==='valid')assert.equal(await attempt,owner);else await assert.rejects(attempt,/authorization denied/);
+      if(['crossOwner','crossChat','revoked','valid'].includes(scenario))assert.deepEqual(filters,{owner_id:owner,actor_id:'a',chat_id:'c'});
+      if(['absent','unboundActor'].includes(scenario))assert.equal(authCalls,0);
+    }
+  } finally {globalThis.__KATIE_SUPABASE_ADMIN_CLIENT__=saved;globalThis.fetch=savedFetch;process.env=savedEnv;}
 });
 
 test('material changes remain visibly blocked and never invoke external writes',async()=>{
