@@ -319,8 +319,8 @@ export async function selectFilesForInjection(
   const hints = parseHints(userMessage);
   // Architecture questions need implementation entrypoints, not the first
   // alphabetically sorted files (which are predominantly CI workflows).
-  const selfArchitecture = /\\b(?:yourself|your own|katie|self.inspection|self.aware)\\b/i.test(userMessage) &&
-    /\\b(?:code|routing|router|source|repo|architecture|implementation|inspect|see|view)\\b/i.test(userMessage);
+  const selfArchitecture = /\b(?:yourself|your own|katie|self.inspection|self.aware)\b/i.test(userMessage) &&
+    /\b(?:code|routing|router|source|repo|architecture|implementation|inspect|see|view)\b/i.test(userMessage);
   if (selfArchitecture && !hints.length) {
     const preferred = [
       "app/api/chat/route.ts",
