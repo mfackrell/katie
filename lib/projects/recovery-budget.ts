@@ -12,11 +12,11 @@ export async function recoveryResourceProposal(p:Project) {
  const {data:missions,error:me}=await db.from('agent_missions').select('actual_tokens,reserved_tokens,project_kind').eq('project_id',p.id).returns<Usage>();
  if(me)throw Error('Cannot read historical resource usage');
  const used=(missions??[]).reduce((sum,m)=>sum+Math.max(m.actual_tokens??0,m.reserved_tokens??0),0);
- const {data:drafts,error:de}=await db.from('project_runs').select('mission_id').eq('project_id',p.id).eq('kind','specification').order('created_at',{ascending:false}).limit(10).returns<Array<{mission_id:string}>>();
+ const {data:drafts,error:de}=await db.from('project_runs').select('mission_id').eq('project_id',p.id).eq('kind','specification').order('created_at',{ascending:false}).limit(10).returns<{mission_id:string}>();
  if(de)throw Error('Cannot read saved specification lineage');
  let spec=p.spec;
  if(!spec) for(const run of drafts??[]){
-   const {data:jobs,error:je}=await db.from('mission_assignments').select('result').eq('mission_id',run.mission_id).eq('role','compose').eq('status','completed').limit(1).returns<Array<{result:{text?:string}}>>();
+   const {data:jobs,error:je}=await db.from('mission_assignments').select('result').eq('mission_id',run.mission_id).eq('role','compose').eq('status','completed').limit(1).returns<{result:{text?:string}}>();
    if(je)throw Error('Cannot read saved composition');
    try {if(jobs?.[0]?.result?.text){spec=validateProjectPlan(JSON.parse(jobs[0].result.text));break;}}catch{/* a rejected draft is not approved scope */}
  }
@@ -37,7 +37,7 @@ export async function announceBlockedRecoveryResources(p:Project){
  if(!proposal||proposal.state!=='estimated'||!proposal.needsAuthorization)return false;
  const db=getSupabaseAdminClient();
  const {data:prior,error:pe}=await db.from('project_events').select('id').eq('project_id',p.id)
-   .eq('event','developer_resource_approval_requested').limit(1).returns<Array<{id:string}>>();
+   .eq('event','developer_resource_approval_requested').limit(1).returns<{id:string}>();
  if(pe)throw Error('Cannot inspect prior developer resource approval request');
  if(prior?.length)return false; // Do not nag, or continually issue new approval requests.
  const {error}=await db.from('project_events').insert({project_id:p.id,event:'developer_resource_approval_requested',
