@@ -2,12 +2,16 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 const source = readFileSync("app/api/chat/route.ts", "utf8");
-test("bare standalone fragments stay on LLM path rather than project arbitration", () => {
-  assert.match(source, /const standaloneFragment =/);
-  assert.match(source, /!standaloneFragment && \(contextProjects\.length \|\| freshTaskEvidence\.length/);
-  assert.match(source, /const projectReply = !pdfProgress\.projectClarification && !executiveReply && !standaloneFragment/);
-  assert.match(source, /const localKatieResponse = !standaloneFragment && pdfProgress\.projectClarification/);
+
+test("normal standalone conversation never triggers local historical-project arbitration by length", () => {
+  assert.match(source, /const explicitProjectOperation = startProjectIntent\(message\) \|\| followupProjectIntent\(message\) \|\| isProjectStopIntent\(message\)/);
+  assert.match(source, /if \(!isProjectStopRequest && explicitProjectOperation && !currentAgentTask\(\)/);
+  assert.match(source, /const projectReply = !pdfProgress\.projectClarification && !executiveReply && explicitProjectOperation/);
+  assert.match(source, /const localKatieResponse = explicitProjectOperation && pdfProgress\.projectClarification/);
+  assert.match(source, /if \(!explicitProjectOperation && !currentAgentTask\(\)\) pdfProgress\.projectClarification = undefined/);
+  assert.doesNotMatch(source, /standaloneFragment/);
 });
-test("explicit project and attachment routing remains available", () => {
-  assert.match(source, /contextProjects\.length \|\| freshTaskEvidence\.length \|\| startProjectIntent\(message\) \|\| followupProjectIntent\(message\)/);
+
+test("project-management operations remain explicitly authorized", () => {
+  assert.match(source, /explicitProjectOperation = startProjectIntent\(message\) \|\| followupProjectIntent\(message\) \|\| isProjectStopIntent\(message\)/);
 });
