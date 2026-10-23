@@ -275,10 +275,10 @@ export function applyUserToTaskProgress(
   // A personal profile cannot amend, resume, or become a managed project.
   // Preserve prior projects in the catalog, but remove their active binding.
   if (!transition && isProfessionalProfileMaterial(input.text)) {
-    return { ...state, projectContext: null, objective: {text: input.text, userMessageId: input.messageId},
+    return { ...state, projectContext: null, objective: null,
       projectClarification: undefined, pending: [], answered: [],
       stage: "working", nextAction: "continue_original_goal",
-      lastUserMessageId: input.messageId, lastUserIntent: "new_task" };
+      lastUserMessageId: input.messageId, lastUserIntent: "conversation" };
   }
   // A greeting must not become a synthetic project that legitimizes a later
   // otherwise ambiguous application question.
