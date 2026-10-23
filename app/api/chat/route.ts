@@ -771,7 +771,11 @@ async function executeChat(request: NextRequest) {
     // clarification prevent cancellation or rewrite the application ledger.
     const isProjectStopRequest = !currentAgentTask() && !newAttachments.length && !requestImages?.length && isProjectStopIntent(message);
     const standaloneFragment = !newAttachments.length && !requestImages?.length && /^\s*[\p{L}\p{N}]+(?:\s+[\p{L}\p{N}]+)?[.!?]?\s*$/u.test(message) && !startProjectIntent(message) && !followupProjectIntent(message) && !isProjectStopIntent(message);
-    if (!isProjectStopRequest && !standaloneFragment && (contextProjects.length || freshTaskEvidence.length || startProjectIntent(message) || followupProjectIntent(message)) && !currentAgentTask() &&
+    // Stored projects are reference material, not a standing command to classify
+    // every ordinary conversation as a project continuation. An explicit current
+    // project reference or a fresh task source can still activate resolution.
+    const explicitSavedProjectReference = /\\b(?:resume|return to|back to|continue|reopen|switch to|go back to|saved project|saved application|earlier project|earlier application|that project|the project)\\b/i.test(message);
+    if (!isProjectStopRequest && !standaloneFragment && (freshTaskEvidence.length || startProjectIntent(message) || followupProjectIntent(message) || (contextProjects.length > 0 && explicitSavedProjectReference)) && !currentAgentTask() &&
         !(classifyUserTurn(message) === "conversation" && !newAttachments.length)) {
       const contextProviders = getAvailableProviders();
       const entries = await Promise.all(contextProviders.map(async provider => ({provider, models: await provider.listModels()})));
