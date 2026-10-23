@@ -1,4 +1,5 @@
-import { NextRequest, NextResponse } from "next/server";
+import { after, NextRequest, NextResponse } from "next/server";
+import { processReactionReply } from "@/lib/chat/reaction-reply-worker";
 import { z } from "zod";
 import { getChatById } from "@/lib/data/persistence-store";
 import { getSupabaseAdminClient } from "@/lib/data/supabase/admin";
@@ -42,5 +43,12 @@ export async function POST(req:NextRequest) {
     },{onConflict:"message_id"});
     if(error)return NextResponse.json({error:"Could not save reaction."},{status:503});
   }
-  return NextResponse.json({messageId,reaction},{headers:{"Cache-Control":"no-store"}});
+  // The database trigger atomically creates a reply job with the reaction event.
+  // Browser disconnects cannot cancel that obligation; cron independently recovers it.
+  const {data:job,error:jobError}=await db.from("reaction_reply_jobs")
+    .select("id").eq("actor_id",actorId).eq("chat_id",chatId).eq("message_id",messageId)
+    .order("id",{ascending:false}).limit(1).maybeSingle<{id:number}>();
+  if(jobError||!job)return NextResponse.json({error:"Reaction saved but reply job could not be verified."},{status:503});
+  after(async()=>{await processReactionReply(job.id,req.nextUrl.origin);});
+  return NextResponse.json({messageId,reaction,replyQueued:true,jobId:job.id},{headers:{"Cache-Control":"no-store"}});
 }
