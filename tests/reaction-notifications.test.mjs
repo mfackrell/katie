@@ -18,7 +18,8 @@ test('actor only loads its own notifications with original reply context',()=>{
  assert.match(actor,/reaction removed; do not continue treating it as an endorsement/);
  assert.match(context,/recentActorReactionEvents\(actorId, chatId\)/);
 });
-test('UI confirms server acknowledged delivery but not independent model execution',()=>{
- assert.match(ui,/Reaction delivered to Katie’s feedback inbox/);
+test('UI confirms persisted reaction and initiates conversational reply',()=>{
+ assert.match(ui,/Reaction delivered\. Katie is responding in this conversation\./);
+ assert.match(ui,/onReaction\(next\)/);
  assert.doesNotMatch(ui,/Katie has processed your feedback/);
 });
