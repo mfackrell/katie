@@ -1326,9 +1326,9 @@ async function executeChat(request: NextRequest) {
     const controlPlaneConversationContext = [
       summary ? `Conversation summary: ${summary}` : "",
       history.length ? `Recent conversation: ${JSON.stringify(history.slice(-4))}` : "",
-      `Active project (advisory): ${JSON.stringify(priorTaskProgress.projectContext?.text.slice(0, 1800) ?? null)}`,
-      `Current requested deliverable (advisory): ${JSON.stringify(priorTaskProgress.objective?.text ?? null)}`,
-      `Outstanding questions: ${JSON.stringify(priorTaskProgress.pending.slice(-4).map(question => ({ id: question.id, text: question.text })))}`,
+      `Active project (advisory): ${JSON.stringify(explicitSavedProjectReference ? priorTaskProgress.projectContext?.text.slice(0, 1800) ?? null : null)}`,
+      `Current requested deliverable (advisory): ${JSON.stringify(explicitSavedProjectReference ? priorTaskProgress.objective?.text ?? null : null)}`,
+      `Outstanding questions: ${JSON.stringify(explicitSavedProjectReference ? priorTaskProgress.pending.slice(-4).map(question => ({ id: question.id, text: question.text })) : [])}`,
       `Has attached images: ${Boolean((Array.isArray(images) && images.length > 0) || attachments.some((attachment) => attachment.mimeType.startsWith("image/")))}`,
       `Saved attachment selection: ${selectionContext()}`,
       `Active repo: ${sessionContext.activeRepo ? `${sessionContext.activeRepo.fullName} (${sessionContext.activeRepo.id})` : "none"}`
