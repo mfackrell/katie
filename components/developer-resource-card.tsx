@@ -10,7 +10,7 @@ export function DeveloperResourceCard({proposal,pending,error,onApprove}:{
  <h3 className="font-semibold">Katie needs approval to recover this project</h3>
  <p>Previously accounted: {proposal.used.toLocaleString()} tokens. Current authorization: {proposal.authorized.toLocaleString()} tokens.</p>
  <p>Estimated additional work: {proposal.expectedAdditional.toLocaleString()} tokens; conservative upper estimate: {proposal.upperAdditional.toLocaleString()} tokens.</p>
- <p>Proposed **total** spending ceiling: <strong>{proposal.proposedCeiling.toLocaleString()} tokens</strong>. This is an estimate, not a charge.</p>
+ <p>Proposed total spending ceiling: <strong>{proposal.proposedCeiling.toLocaleString()} tokens</strong>. This is an estimate, not a charge.</p>
  <p>Proposed mission limit: {proposal.proposedMaxMissions}. The saved work and historical charges will remain unchanged.</p>
  <p className="text-xs opacity-70">Independent specification review and coding approval are still required.</p>
  {error?<p role="alert">{error}</p>:null}

@@ -102,16 +102,19 @@ const recoveryApprovalInput=projectIdentity.extend({
 
 // Owner-initiated action only: a forecast or cron can NEVER approve spending.
 export async function PATCH(request:NextRequest){
+ let stage='load_owned_project';
  let input:z.infer<typeof recoveryApprovalInput>;
  try{input=recoveryApprovalInput.parse(await request.json());}
  catch{return NextResponse.json({error:'Invalid resource authorization'}, {status:400});}
  try{
   const p=await ownedProject(input.actorId,input.chatId);
   if(!p)return NextResponse.json({error:'Project chat unavailable'},{status:404});
+  stage='recalculate_proposal';
   const proposal=await recoveryResourceProposal(p);
   if(!proposal||proposal.state!=='estimated'||!proposal.needsAuthorization||proposal.scopeHash!==input.scopeHash||
      proposal.proposedCeiling!==input.authorizedCeiling)
     return NextResponse.json({error:'Resource proposal changed; refresh before approving'},{status:409});
+  stage='authorize_resources_rpc';
   const deadline=new Date(Date.now()+input.renewalHours*3600000).toISOString();
   const {data,error}=await (await import('@/lib/data/supabase/admin')).getSupabaseAdminClient().rpc(
    'authorize_work_project_resources',{
@@ -126,7 +129,10 @@ export async function PATCH(request:NextRequest){
   // The normal Developer Orchestrator cron remains responsible for recovery;
   // never start unreviewed coding from this API request.
   return NextResponse.json({authorization:data,recovery:'pending_developer_orchestrator'});
- }catch{
-  return NextResponse.json({error:'Resource authorization could not be applied; no recovery started'},{status:409});
+ }catch(e){
+  const message=e instanceof Error?e.message:String(e);
+  console.error('[Projects] Resource authorization failed',{stage,errorType:e instanceof Error?e.name:typeof e,reason:message.slice(0,400)});
+  const category=/timeout|abort|fetch|502|503|504|522|upstream/i.test(message)?'temporary_database_failure':'authorization_conflict';
+  return NextResponse.json({error:category==='temporary_database_failure'?'Supabase connection failed while saving authorization; refresh project status before retrying.':'Resource authorization was rejected; project was not restarted.',code:category,stage},{status:category==='temporary_database_failure'?503:409});
  }
 }
