@@ -440,12 +440,19 @@ async function reconcileBlockedInfrastructureProjects(){
     }
     return false;
 }
-export async function runProjectBatch() { const maintenance=Promise.all([
-    runSpecialistResourceBatch().catch(error=>{console.error('[Projects] Specialist forecast execution failed',error instanceof Error?error.message:'Unknown failure');}),
-    reconcileParkedDispatch().catch(error=>{console.error('[Projects] Parked dispatch recovery failed',error instanceof Error?error.message:'Unknown failure');}),
-    reconcileBlockedInfrastructureProjects().catch(error=>{console.error('[Projects] Blocked verification recovery failed',error instanceof Error?error.message:'Unknown failure');}),
-    reconcileBlockedGameRevisions().catch(error=>{console.error('[Projects] Game revision recovery failed',error instanceof Error?error.message:'Unknown failure');})
-]);try { const p = await projectRpc<Project | null>('claim_work_project'); if (!p)
+export async function runProjectBatch() {
+ // Limit maintenance fan-out to two DB-using operations at a time; retain
+ // independent mission execution and run all maintenance even after failures.
+ const maintenance=(async()=>{
+    await Promise.all([
+      runSpecialistResourceBatch().catch(error=>{console.error('[Projects] Specialist forecast execution failed',error instanceof Error?error.message:'Unknown failure');}),
+      reconcileParkedDispatch().catch(error=>{console.error('[Projects] Parked dispatch recovery failed',error instanceof Error?error.message:'Unknown failure');})
+    ]);
+    await Promise.all([
+      reconcileBlockedInfrastructureProjects().catch(error=>{console.error('[Projects] Blocked verification recovery failed',error instanceof Error?error.message:'Unknown failure');}),
+      reconcileBlockedGameRevisions().catch(error=>{console.error('[Projects] Game revision recovery failed',error instanceof Error?error.message:'Unknown failure');})
+    ]);
+ })();try { const p = await projectRpc<Project | null>('claim_work_project'); if (!p)
     return { claimed: 0 }; try {
     await advance(p);
     return { claimed: 1, status: 'processed' };
