@@ -19,7 +19,7 @@ test('actor only loads its own notifications with original reply context',()=>{
  assert.match(context,/recentActorReactionEvents\(actorId, chatId\)/);
 });
 test('UI confirms persisted reaction and initiates conversational reply',()=>{
- assert.match(ui,/Reaction delivered\. Katie is responding in this conversation\./);
+ assert.match(ui,/Reaction saved\. Katie’s reply is queued and will appear here\./);
  assert.match(ui,/onReaction\(next\)/);
  assert.doesNotMatch(ui,/Katie has processed your feedback/);
 });
