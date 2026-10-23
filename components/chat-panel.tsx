@@ -744,6 +744,8 @@ export function ChatPanel({
   const [messagesByChatId, setMessagesByChatId] = useState<Record<string, Message[]>>({});
   const [isHydratingMessages, setIsHydratingMessages] = useState(false);
   const [input, setInput] = useState("");
+  const [replyTo, setReplyTo] = useState<Pick<Message, "id" | "role" | "content"> | null>(null);
+  useEffect(() => setReplyTo(null), [chatId]);
   const draft=useSavedState(`chat:${chatId}`);
   const saveDraft=draft.save;
   const [draftReady,setDraftReady]=useState(false);
@@ -1474,7 +1476,10 @@ export function ChatPanel({
       return;
     }
 
-    const content = reactionContent ?? input.trim();
+    const replySnapshot = reactionContent ? null : replyTo;
+    const content = reactionContent ?? (replySnapshot
+      ? `[Reply to ${replySnapshot.role} message ${replySnapshot.id}]\nOriginal message:\n${replySnapshot.content}\n[End original message]\n\nMy reply:\n${input.trim()}`
+      : input.trim());
     let imagesToSend = reactionContent ? [] : [...selectedImages];
     const imageFilesToUpload = reactionContent ? [] : [...selectedImageFiles];
     const videosToUpload = reactionContent ? [] : [...selectedVideos];
@@ -1483,6 +1488,7 @@ export function ChatPanel({
     const hasImages = imagesToSend.length > 0;
 
     if (!reactionContent) {
+      setReplyTo(null);
       setInput("");
       setSelectedImages([]);
       setSelectedImageFiles([]);
@@ -2001,7 +2007,8 @@ export function ChatPanel({
         // and the original browser File objects so a retry can consult the
         // durable /api/upload/result instead of uploading video bytes again.
         if (!reactionContent) {
-          setInput(content);
+          setInput(replySnapshot ? input : content);
+          setReplyTo(replySnapshot);
           setSelectedFiles(filesToUpload);
           setSelectedVideos(videosToUpload);
           setSelectedImageFiles(imageFilesToUpload);
@@ -2095,7 +2102,7 @@ export function ChatPanel({
           if (recoveryError instanceof TerminalChatError) {
             terminalFailure = true;
             clearPendingChatRequest(chatId);
-            if (!reactionContent) setInput(content);
+            if (!reactionContent) { setInput(replySnapshot ? input : content); setReplyTo(replySnapshot); }
             rawMessage = recoveryError.message;
             failureMessageId = recoveryError.messageId;
           }
@@ -2738,6 +2745,11 @@ export function ChatPanel({
                   ? ` (${message.model})`
                   : ""}
               </p>
+              <div className="flex items-center gap-1">
+              <button type="button" aria-label={`Reply to ${message.role} message`} onClick={() => {
+                setReplyTo({id:message.id,role:message.role,content:message.content});
+                requestAnimationFrame(()=>textareaRef.current?.focus());
+              }} className="rounded-lg border border-white/10 px-2 py-1 text-[11px] text-zinc-300 hover:bg-white/10">Reply</button>
               <button
                 type="button"
                 onClick={() =>
@@ -2746,7 +2758,7 @@ export function ChatPanel({
                 className="shrink-0 rounded-lg border border-white/10 bg-white/[0.03] px-2 py-1 text-[10px] font-medium text-zinc-400 transition hover:border-white/20 hover:bg-white/[0.06] hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 sm:rounded-xl sm:px-2.5 sm:py-1.5 sm:text-[11px]"
               >
                 {copiedMessageId === message.id ? "Copied" : "Copy"}
-              </button>
+              </button></div>
             </div>
             {message.role === "assistant" &&
             message.content.startsWith("[Katie video analysis pending:") ? (() => {
@@ -2961,6 +2973,10 @@ export function ChatPanel({
         <p className="sr-only" role="status" aria-live="polite">
           {statusMessage}
         </p>
+        {replyTo && <div className="mb-2 flex items-start justify-between gap-2 rounded-xl border border-sky-400/20 bg-sky-400/5 px-3 py-2 text-xs text-zinc-300">
+          <div className="min-w-0"><span className="font-semibold text-sky-200">Replying to {replyTo.role === "assistant" ? activeActorName : "your message"}</span><p className="mt-1 line-clamp-2 break-words">{replyTo.content.slice(0,260)}</p></div>
+          <button type="button" aria-label="Cancel reply" onClick={()=>setReplyTo(null)} className="shrink-0 rounded px-2 py-1 hover:bg-white/10">✕</button>
+        </div>}
         {!hasValidChatSelection ? (
           <p className="mb-3 rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-100">
             Open a conversation to send a message.
