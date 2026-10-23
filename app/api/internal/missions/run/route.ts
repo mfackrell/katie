@@ -9,13 +9,8 @@ export const dynamic='force-dynamic';
 export const maxDuration=240;
 export async function GET(request:NextRequest){
  if(!assertCronAuth(request))return NextResponse.json({error:'unauthorized'},{status:401});
- try{
-  // Mission claims and project maintenance both perform lock-taking RPCs.
-  // Avoid competing with project/recovery sweeps in the same cron tick.
-  // This does not serialize independent mission claims or impose token budgets.
-  const missions=await runMissionBatch();
-  const projects=await runProjectBatch();
-  const recovery=await runRecoveryBatch().catch(error=>{console.error('[Recovery] Supervisor failed',error instanceof Error?error.message:'Unknown error');return{status:'unavailable',discovered:0};});
+ try{const [projects,missions,recovery]=await Promise.all([runProjectBatch(),runMissionBatch(),
+  runRecoveryBatch().catch(error=>{console.error('[Recovery] Supervisor failed',error instanceof Error?error.message:'Unknown error');return{status:'unavailable',discovered:0};})]);
   const executive=await reconcileExecutiveFinance().catch(error=>{console.error('[Executive] Reconcile failed',error);return{verified:0,blocked:0};});
   const executiveManagement=await reconcileExecutiveManagement().catch(error=>{console.error('[Executive] Management reconciliation failed',error);return{completed:0,blocked:0,working:0};});
   return NextResponse.json({...missions,projects,recovery,executive,executiveManagement},{headers:{'Cache-Control':'no-store'}});}
