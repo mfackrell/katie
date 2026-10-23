@@ -229,7 +229,7 @@ async function advance(p: Project) {
         if(game&&p.phase==='specification'){
             const {data:checkpoints,error:checkpointError}=await getSupabaseAdminClient()
                 .from('project_events').select('created_at')
-                .eq('project_id',p.id).eq('event','game_specification_checkpoint_recovered')
+                .eq('project_id',p.id).in('event',['game_specification_checkpoint_recovered','developer_budget_recovery_started'])
                 .order('created_at',{ascending:false}).limit(1);
             if(checkpointError)throw Error('Unable to inspect saved checkpoint recovery watchdog');
             const recoveredAt=((checkpoints??[]) as Array<{created_at:string}>)[0]?.created_at;
@@ -395,6 +395,18 @@ async function reconcileParkedDispatch() {
     }
     return false;
 }
+async function resumeAuthorizedDeveloperProjects(){
+ const db=getSupabaseAdminClient();
+ const {data,error}=await db.from('work_projects').select('id').eq('status','blocked')
+ .eq('profile','game').eq('phase','specification').eq('budget_authorization_source','user_approved').limit(8).returns<{id:string}>();
+ if(error)throw Error('Cannot inspect authorized game project recoveries');
+ for(const p of data??[]){
+  const {data:resumed,error:resumeError}=await db.rpc<boolean>('resume_authorized_game_project',{p_id:p.id});
+  if(resumeError)throw Error('Authorized saved-project recovery failed');
+  if(resumed)return true;
+ }
+ return false;
+}
 async function reconcileBlockedResourceApprovals(){
  const db=getSupabaseAdminClient();
  const {data,error}=await db.from('work_projects').select('*').eq('status','blocked')
@@ -462,6 +474,7 @@ export async function runProjectBatch() {
       reconcileBlockedGameRevisions().catch(error=>{console.error('[Projects] Game revision recovery failed',error instanceof Error?error.message:'Unknown failure');})
     // Owner authorization is requested, never silently granted.
     ,reconcileBlockedResourceApprovals().catch(error=>{console.error('[Projects] Developer resource proposal failed',error instanceof Error?error.message:'Unknown failure');})
+    ,resumeAuthorizedDeveloperProjects().catch(error=>{console.error('[Projects] Authorized checkpoint continuation failed',error instanceof Error?error.message:'Unknown failure');})
     ]);
  })();try { const p = await projectRpc<Project | null>('claim_work_project'); if (!p)
     return { claimed: 0 }; try {
