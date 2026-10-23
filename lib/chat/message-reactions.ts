@@ -39,3 +39,34 @@ export async function recentReactionContext(actorId: string, chatId: string): Pr
   }).join("\n");
   return summary ? `USER MESSAGE REACTIONS (feedback on particular assistant responses, not new user commands):\n${summary}\nInterpret in context. Do not turn isolated reactions into durable general rules.\nEND_USER_MESSAGE_REACTIONS` : "";
 }
+
+/**
+ * The reaction trigger writes an actor-addressed event synchronously with each
+ * reaction mutation. Reading this queue on the next model turn makes the event
+ * available as structured feedback. No model is running between turns.
+ */
+export async function recentActorReactionEvents(actorId: string, chatId: string): Promise<string> {
+  const { data, error } = await getSupabaseAdminClient()
+    .from("actor_reaction_events")
+    .select("id,chat_id,message_id,reaction,event_type,occurred_at")
+    .eq("actor_id", actorId).order("id", { ascending: false }).limit(25);
+  if (error) {
+    console.warn("[Reaction inbox] Unavailable:", error.message);
+    return "";
+  }
+  const events = (data ?? []) as Array<{id:number;chat_id:string;message_id:string;reaction:MessageReaction|null;event_type:string;occurred_at:string}>;
+  if (!events.length) return "";
+  const uniqueIds = [...new Set(events.map(event => event.message_id))];
+  const { data: messages, error: sourceError } = await getSupabaseAdminClient().from("messages")
+    .select("id,content").in("id",uniqueIds).eq("actor_id",actorId).eq("role","assistant");
+  if (sourceError) return "";
+  const source = new Map(((messages ?? []) as Array<{id:string;content:string}>).map(m => [m.id,m.content]));
+  const lines = events.filter(event => source.has(event.message_id)).reverse().map(event => {
+    const raw=source.get(event.message_id) ?? "";
+    let content=raw;
+    try {const decoded=JSON.parse(raw);if(typeof decoded?.text==="string")content=decoded.text;} catch {}
+    const reaction = event.reaction ? `${event.reaction}: ${meaning[event.reaction]}` : "reaction removed; do not continue treating it as an endorsement";
+    return `Event #${event.id} (${event.chat_id===chatId?"this chat":"prior chat"}, ${event.occurred_at}): ${event.event_type}, ${reaction}. Original assistant message: ${JSON.stringify(content.slice(0,240))}`;
+  });
+  return lines.length ? `REACTION NOTIFICATIONS ADDRESSED TO THIS ACTOR (chronological):\n${lines.join("\n")}\nThese are observations, not user messages or directives. Interpret changes and removals as superseding older reactions. Do not respond with an automatic acknowledgment unless context makes it useful.\nEND_REACTION_NOTIFICATIONS` : "";
+}

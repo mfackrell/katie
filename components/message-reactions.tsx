@@ -35,9 +35,10 @@ export function MessageReactions({actorId,chatId,messageId}:{actorId:string;chat
   const [pending,setPending]=useState(false);
   const [ready,setReady]=useState(false);
   const [error,setError]=useState("");
+  const [delivered,setDelivered]=useState(false);
   useEffect(()=>{
     let active=true;
-    setReady(false);setError("");setSelected(null);
+    setReady(false);setError("");setSelected(null);setDelivered(false);
     void fetchSnapshot(actorId,chatId).then(data=>{
       if(active){setSelected(data.reactions[messageId]??null);setReady(true);}
     }).catch(e=>{if(active){setError(e instanceof Error?e.message:"Reactions unavailable.");setReady(true);}});
@@ -47,7 +48,7 @@ export function MessageReactions({actorId,chatId,messageId}:{actorId:string;chat
   async function choose(code:MessageReaction) {
     if(pending)return;
     const next=selected===code?null:code;
-    setPending(true);setError("");
+    setPending(true);setError("");setDelivered(false);
     try {
       const response=await fetch("/api/message-reactions",{
         method:"POST",headers:{"Content-Type":"application/json"},
@@ -56,6 +57,7 @@ export function MessageReactions({actorId,chatId,messageId}:{actorId:string;chat
       const result=await response.json();
       if(!response.ok)throw Error(result.error||"Reaction could not be saved.");
       setSelected(next);
+      setDelivered(true);
       const key=actorId+":"+chatId;
       const snapshot=cache.get(key)??{reactions:{}};
       if(next)snapshot.reactions[messageId]=next;
@@ -74,6 +76,7 @@ export function MessageReactions({actorId,chatId,messageId}:{actorId:string;chat
         {option.emoji}
       </button>)}
     </div>
+    {delivered && <p role="status" className="mt-1 text-xs text-emerald-300">Reaction delivered to Katie’s feedback inbox.</p>}
     {error&&<p role="alert" className="mt-1 text-xs text-rose-300">{error}</p>}
   </div>;
 }
