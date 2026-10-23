@@ -34,7 +34,7 @@ export async function POST(req:NextRequest) {
     .eq("id",messageId).eq("actor_id",actorId).eq("chat_id",chatId).eq("role","assistant").maybeSingle();
   if(lookupError||!message)return NextResponse.json({error:"Saved assistant message unavailable."},{status:404});
   if(reaction===null) {
-    const {error}=await db.from("message_reactions").delete().eq("message_id",messageId).eq("actor_id",actorId).eq("chat_id",chatId);
+    const {error}=await db.from("message_reactions").eq("message_id",messageId).eq("actor_id",actorId).eq("chat_id",chatId).delete();
     if(error)return NextResponse.json({error:"Could not remove reaction."},{status:503});
   } else {
     const {error}=await db.from("message_reactions").upsert({
