@@ -676,6 +676,23 @@ async function executeChat(request: NextRequest) {
     const currentChat = await getChatById(chatId);
     if (!currentChat || currentChat.actorId !== actorId) return NextResponse.json({ error: "Chat does not belong to this actor." }, { status: 404 });
     const repoInjectionEnabled = currentAgentTask() ? false : repoInjectionEnabledFromPayload !== false;
+    // Resolve Katie's own repository before either project control or model routing.
+    // This does not grant new credentials: writes remain in the existing
+    // audited project/developer workflow with its approval and verification.
+    const selfInspectionRequest = /\\b(?:your(?:self| own)?|katie(?:'s)?)\\b/i.test(message) &&
+      /\\b(?:repository|repo|github|source|codebase|architecture|routing|deployment|logs?|implementation|inspect|debug|fix|edit|modify)\\b/i.test(message);
+    let selfRepoId: string | null = null;
+    if (!activeRepoId && repoInjectionEnabled && selfInspectionRequest && !currentAgentTask()) {
+      const admin = getSupabaseAdminClient();
+      const {data: selfActor} = await admin.from("actors").select("name").eq("id",actorId).maybeSingle<{name:string}>();
+      if (selfActor?.name?.trim().toLowerCase() === "katie") {
+        const {data: ownRepo} = await admin.from("repo_sync_runs")
+          .select("id").eq("repository_full_name","mfackrell/katie")
+          .order("created_at",{ascending:false}).limit(1).maybeSingle<{id:string}>();
+        selfRepoId = ownRepo?.id ?? null;
+      }
+    }
+    const effectiveRepoId = activeRepoId ?? selfRepoId;
     const newAttachments = await hydrateStoredAttachments(fileReferences ?? []);
     const legacyImageSources = new Map<string, File>();
     for (const image of requestImages ?? []) {
@@ -1104,7 +1121,7 @@ async function executeChat(request: NextRequest) {
     const executiveReply=null, specialistReply=null, financeReply=null, developmentReply=null;
     const explicitProjectControl = startProjectIntent(message) || followupProjectIntent(message) || isProjectStopIntent(message);
     const projectReply = !pdfProgress.projectClarification && !executiveReply && (explicitProjectControl || softwareBuildIntent) && !standaloneFragment && !specialistReply && !financeReply && !developmentReply && !currentAgentTask() && savedDraftReply === null && !newAttachments.length && !requestImages?.length
-      ? await handleProjectChat({actorId,chatId,message,activeRepoId,softwareBuildIntent},requestId,attachmentHistory,requestTracked) : null;
+      ? await handleProjectChat({actorId,chatId,message,activeRepoId:effectiveRepoId ?? undefined,softwareBuildIntent},requestId,attachmentHistory,requestTracked) : null;
     const localKatieResponse = !standaloneFragment && (explicitProjectControl || newAttachments.length > 0) && pdfProgress.projectClarification ? {reason: "project" as const, text: pdfProgress.projectClarification} : savedDraftReply !== null ? { reason: "project" as const, text: savedDraftReply } : executiveReply ? {reason: "executive" as const,text:executiveReply}
       : specialistReply ? {reason: "executive" as const,text:specialistReply}
       : financeReply ? {reason: "executive" as const,text:financeReply}
@@ -1251,23 +1268,6 @@ async function executeChat(request: NextRequest) {
     }
     images.push(...storedWebsite.images);
     if (storedWebsite.fresh) messageForGeneration += `\nRetrieve a fresh inspection of: ${storedWebsite.targetUrls.join(", ")}`;
-    // Read-only self-inspection defaults to Katie's own connected source when no
-    // repository was selected. Never override an explicit selection or a disabled
-    // source-injection setting, and never grant another actor implicit access.
-    const selfInspectionRequest = /\\b(?:your(?:self| own)?|katie(?:'s)?)\\b/i.test(message) &&
-      /\\b(?:repository|repo|github|source|codebase|architecture|routing|deployment|logs?|implementation|inspect|debug|fix|edit|modify)\\b/i.test(message);
-    let selfRepoId: string | null = null;
-    if (!activeRepoId && repoInjectionEnabled && selfInspectionRequest && !currentAgentTask()) {
-      const admin = getSupabaseAdminClient();
-      const {data: selfActor} = await admin.from("actors").select("name").eq("id",actorId).maybeSingle<{name:string}>();
-      if (selfActor?.name?.trim().toLowerCase() === "katie") {
-        const {data: ownRepo} = await admin.from("repo_sync_runs")
-          .select("id").eq("repository_full_name","mfackrell/katie")
-          .order("created_at",{ascending:false}).limit(1).maybeSingle<{id:string}>();
-        selfRepoId = ownRepo?.id ?? null;
-      }
-    }
-    const effectiveRepoId = activeRepoId ?? selfRepoId;
     const activeRepoContext = effectiveRepoId ? await loadActiveRepoContext(effectiveRepoId) : null;
     const sessionContext: ChatSessionContext = {
       activeRepo: activeRepoContext
