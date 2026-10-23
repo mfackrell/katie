@@ -30,6 +30,7 @@ import {
 import { ReasoningExplainerPanel } from "@/components/reasoning-explainer-panel";
 import { RememberFaceControl } from "@/components/remember-face-control";
 import { ProjectApprovalCard, type ProjectApproval } from "@/components/project-approval-card";
+import {DeveloperResourceCard,type RecoveryProposal} from "@/components/developer-resource-card";
 
 type ProviderName = "openai" | "google" | "grok" | "anthropic";
 
@@ -737,6 +738,7 @@ export function ChatPanel({
   const [messages, setMessages] = useState<Message[]>([]);
   const [projectApproval, setProjectApproval] = useState<{chatId:string;approval:ProjectApproval}|null>(null);
   const [projectApprovalPending, setProjectApprovalPending] = useState(false);
+  const [resourceRecovery, setResourceRecovery] = useState<{chatId:string;proposal:RecoveryProposal}|null>(null);
   const [projectApprovalError, setProjectApprovalError] = useState<string|null>(null);
   const [messagesByChatId, setMessagesByChatId] = useState<Record<string, Message[]>>({});
   const [isHydratingMessages, setIsHydratingMessages] = useState(false);
@@ -1064,6 +1066,7 @@ export function ChatPanel({
     if(!chatId||!actorId||loading)return;
     let cancelled=false,inFlight=false,done=false;
     setProjectApproval(null);
+    setResourceRecovery(null);
     setProjectApprovalError(null);
     const refresh=async()=>{
       if(cancelled||inFlight||done||document.visibilityState==='hidden')return;
@@ -1071,9 +1074,10 @@ export function ChatPanel({
       try {
         const r=await fetch('/api/projects?chatId='+encodeURIComponent(chatId)+'&actorId='+encodeURIComponent(actorId),{cache:'no-store'});
         if(!r.ok)return;
-        const p=await r.json() as {active:boolean;status:string|null;executivePending?:boolean;approval:ProjectApproval|null;messages:Message[]};
+        const p=await r.json() as {active:boolean;status:string|null;executivePending?:boolean;approval:ProjectApproval|null;resourceRecovery:RecoveryProposal|null;messages:Message[]};
         if(cancelled)return;
         setProjectApproval(p.approval?{chatId,approval:p.approval}:null);
+        setResourceRecovery(p.resourceRecovery?{chatId,proposal:p.resourceRecovery}:null);
         // Executive missions can deliver after the immediate chat reply, even
         // without a software project (or after its completion). Stop only when
         // its terminal reply is included in this persisted message snapshot.
@@ -1112,6 +1116,20 @@ export function ChatPanel({
     }catch(error){
       setProjectApprovalError(error instanceof Error?error.message:'Approval failed. Refresh the project scope.');
     }finally {setProjectApprovalPending(false);}
+  }
+
+  async function approveRecovery(hash:string,ceiling:number,hours:48|72){
+    if(!chatId||!actorId||projectApprovalPending||loading)return;
+    setProjectApprovalPending(true);setProjectApprovalError(null);
+    try{
+      const response=await fetch('/api/projects',{method:'PATCH',headers:{'Content-Type':'application/json'},
+       body:JSON.stringify({actorId,chatId,scopeHash:hash,authorizedCeiling:ceiling,renewalHours:hours})});
+      const result=await response.json() as {error?:string};
+      if(!response.ok)throw Error(result.error??'Resource approval failed');
+      setResourceRecovery(null);
+      setStatusMessage('Resource authorization saved. Katie will attempt recovery from the existing checkpoint.');
+    }catch(e){setProjectApprovalError(e instanceof Error?e.message:'Resource approval failed');}
+    finally{setProjectApprovalPending(false);}
   }
 
   function requestProjectChanges() {
@@ -2623,6 +2641,11 @@ export function ChatPanel({
 
       {attachmentSaveError&&<p role="alert" className="px-5 text-xs text-amber-200">Attachments are retained for this session; browser storage could not save them for refresh.</p>}
       {draftReady && <p role="status" className="shrink-0 px-5 py-1 text-xs text-zinc-500">{draft.error?"Draft retained in this browser; server save unavailable.":draft.saving?"Saving draft…":input&&draft.state?.value.draft===input?"Draft saved":""}</p>}
+      {resourceRecovery?.chatId===chatId && !managedAgentId ? (
+        <DeveloperResourceCard proposal={resourceRecovery.proposal}
+         pending={projectApprovalPending||loading} error={projectApprovalError}
+         onApprove={(hash,ceiling,hours)=>{void approveRecovery(hash,ceiling,hours);}}/>
+      ):null}
       {projectApproval?.chatId===chatId && !managedAgentId ? (
         <ProjectApprovalCard
           approval={projectApproval.approval}
