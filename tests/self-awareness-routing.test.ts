@@ -4,8 +4,8 @@ import {readFileSync} from "node:fs";
 const src=readFileSync("app/api/chat/route.ts","utf8");
 test("natural self-awareness prompts request Katie's own repository evidence",()=>{
  assert.ok(src.includes("see|view|understand|know|examine|look at|access"));
- assert.ok(src.includes("message: selfInspectionRequest ?"));
- assert.ok(src.includes("Inspect repository source and architecture."));
+ assert.ok(src.includes("message: (selfInspectionRequest || continuitySelfInspection) ?"));
+ assert.ok(src.includes("Inspect Katie own source code and routing implementation."));
 });
 test("explicit self inspection can override only current source gate, not general user setting",()=>{
  assert.ok(src.includes("ownSourceInspectionAuthorized && activeRepoContext?.repositoryFullName === \"mfackrell/katie\""));

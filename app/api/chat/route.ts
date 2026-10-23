@@ -1638,13 +1638,17 @@ async function executeChat(request: NextRequest) {
       }
     }
 
+    const recentUserTopic = attachmentHistory.filter(turn => turn.role === "user").slice(-8)
+      .map(turn => turn.content).join("\n");
+    const continuitySelfInspection = /\\b(?:can you see yourself|see yourself yet|your own code|inspect yourself)\\b/i.test(message) ||
+      (selfInspectionRequest && /\\b(?:code|repo|architecture|routing)\\b/i.test(recentUserTopic));
     const repoGate = shouldAttachRepoSourceDeterministically({
       // A direct request to inspect Katie herself authorizes this one scoped source read.
       // Do not change the persistent toggle or attach repositories to unrelated turns.
       repoInjectionEnabled: repoInjectionEnabled || (ownSourceInspectionAuthorized && activeRepoContext?.repositoryFullName === "mfackrell/katie"),
       hasActiveRepo: activeRepoContext !== null,
       requestIntent: resolvedRequestIntent,
-      message: selfInspectionRequest ? `${message}\nInspect repository source and architecture.` : message,
+      message: (selfInspectionRequest || continuitySelfInspection) ? `${message}\nInspect Katie own source code and routing implementation.` : message,
     });
 
     if (repoGate.attach && activeRepoContext) {
@@ -1715,7 +1719,7 @@ async function executeChat(request: NextRequest) {
     });
     if (shouldAttachSourceContext && activeRepoContext && loadedRepoContext) {
       try {
-        const fileSelection = await selectFilesForInjection(activeRepoContext.id, message, [], "smart");
+        const fileSelection = await selectFilesForInjection(activeRepoContext.id, (selfInspectionRequest || continuitySelfInspection) ? `${message}\nKatie own routing source architecture` : message, [], "smart");
         const settled = await Promise.allSettled(
           fileSelection.selected.map((filePath) => fetchFullFile(activeRepoContext.id, filePath, 250_000)),
         );
@@ -1728,6 +1732,14 @@ async function executeChat(request: NextRequest) {
           .map((result, index) => (result.status === "rejected" ? { path: fileSelection.selected[index], reason: "fetch failed" } : null))
           .filter((item): item is { path: string; reason: string } => item !== null);
         const inclusionManifest = buildInclusionManifest(included, truncated, skipped);
+        const routingSourceAvailable = included.some(file => file.filePath === "app/api/chat/route.ts");
+        const sourceEvidenceStatus = {
+          repositoryConnected: true,
+          retrievalAttempted: true,
+          relevantRoutingSourceRetrieved: routingSourceAvailable,
+          behaviorIndependentlyVerified: false,
+        };
+        console.info("[Chat API] Self-inspection evidence status", { requestId, ...sourceEvidenceStatus });
         const fullFileContents = included
           .map((file) => `--- ${file.filePath} (${file.byteCount} bytes, sha256: ${file.sha256}) ---\n${file.content}`)
           .join("\n\n");
@@ -1750,7 +1762,7 @@ async function executeChat(request: NextRequest) {
           ? `\nWARNING: The following requested files could not be included:\n${skipped.map((item) => `- ${item.path} (${item.reason})`).join("\n")}\nAnalysis is based only on available files above.`
           : "";
 
-        personaForGeneration = `${personaForGeneration}\n\n${inclusionManifest}\n\n${promptContractBlock}\n\n${fullFileContents}${warningBlock}`;
+        personaForGeneration = `${personaForGeneration}\n\n${inclusionManifest}\n\nSELF_INSPECTION_EVIDENCE_STATUS: ${JSON.stringify(sourceEvidenceStatus)}\nAccess to a repository, retrieval of a relevant file, and independent behavioral verification are three distinct claims. Do not conflate them. If asked whether you can see yourself, report precisely which files are in the manifest, which relevant implementation files were retrieved, and what has not been verified. ${continuitySelfInspection ? "Resolve yourself as Katie and her source implementation, not a person or object in any unrelated previous image." : ""}\n\n${promptContractBlock}\n\n${fullFileContents}${warningBlock}`;
       } catch (error) {
         console.error("[Chat API] Full-file injection failed", { requestId, reason: error instanceof Error ? error.message : String(error) });
         personaForGeneration = `${personaForGeneration}\nFull-file injection failed. Repository context may be incomplete.`;
