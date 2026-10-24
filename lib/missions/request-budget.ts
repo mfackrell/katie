@@ -1,4 +1,5 @@
 import {rpc} from './store';
+import {measureDeliverable} from './review-length';
 import {readOnlyRepositoryObjective,type Claim} from './types';
 
 export type MissionCapacity={authorized:boolean;remainingTokens:number;callsRemaining:number;routingCallsRemaining:number;reason?:string};
@@ -11,6 +12,17 @@ export function missionInputLimit(claim:Claim):number {
  const repositoryAudit=Boolean(claim.mission.repository_id)&&readOnlyRepositoryObjective(claim.mission.objective);
  const operationalAudit=/\baudit\b/i.test(claim.mission.objective)&&/\b(?:workflow|operational|assignment histor|execution record)/i.test(claim.mission.objective);
  return finalStage&&((evidence?.projectProfile==='game'&&claim.mission.project_kind==='specification')||repositoryAudit||operationalAudit)?96000:48000;
+}
+/** Size the first audited deliverable for its full evidence-backed scope. A
+ * known short word cap stays small; an unbounded audit must not buy a predictably
+ * truncated draft before receiving the already-supported 12K output envelope. */
+export function missionOutputLimit(claim:Claim,input:string):number {
+ if(['compose','revise'].includes(claim.job.role)){
+  if(claim.mission.project_kind==='specification'&&(claim.mission.project_evidence as {projectProfile?:string}|null)?.projectProfile==='game')return 16000;
+  const limit=measureDeliverable(claim.mission.objective,'').wordLimit;
+  return missionInputLimit(claim)>48000&&(limit===null||limit>1200)?12000:6000;
+ }
+ return claim.job.role==='review'?(input.startsWith('Independent assessment:\n')?10000:5000):3000;
 }
 export function fitsMissionEnvelope(instruction:string,input:string,inputLimit=48000){return instruction.length<=48000&&input.length<=inputLimit;}
 

@@ -157,3 +157,55 @@ begin
  if not exists(select 1 from executive_management_requests r,jsonb_array_elements(r.plan->'assignments') a where a->>'slug'='operations' and a->>'missionId'=new_m.id::text) then raise exception 'Parent did not follow continuation';end if;
 end $$;
 select 'Missing trace analysis continuation is bounded, idempotent and preserves saved draft, review and original charges.' as result;
+
+-- Final comparison only: retain the revised artifact and reusable blind criteria.
+update agent_missions set status='blocked',actual_tokens=115891,reserved_tokens=115891,calls=4 where id='e3139a58-27f7-4501-8045-ab969eded3fa';
+update mission_assignments set status='completed',lease=null,lease_until=null,result='{"verdict":"changes_requested","findings":["Reclassify redaction artifact"],"checks":[]}' where mission_id='e3139a58-27f7-4501-8045-ab969eded3fa' and job_key='review';
+insert into mission_assignments(mission_id,job_key,role,agent_id,instruction,dependencies,status,result,payload) values
+ ('e3139a58-27f7-4501-8045-ab969eded3fa','revision','revise','aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa','Resolve findings',array['review'],'completed','{"text":"Revised immutable source audit at 5a77c2564af6d0e8bc9de58b861205a9a30e2c98"}','{}'),
+ ('e3139a58-27f7-4501-8045-ab969eded3fa','review_again','review','bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb','Final independent review',array['revision'],'failed','{"admissionDenied":true}','{"reviewModelCheckpoint":{"hash":"saved","response":{"text":"Actual blind criteria"}},"operationalEvidenceSnapshot":{"kind":"scoped_workflow_trace","observedAt":"2026-10-24T16:31:40Z"}}');
+update executive_delegations set status='cancelled' where mission_id='e3139a58-27f7-4501-8045-ab969eded3fa';
+insert into executive_delegation_events(delegation_id,event,evidence,created_at) select id,'cancel','{"reason":"Mission did not pass independent review"}',now()+interval '2 seconds' from executive_delegations where mission_id='e3139a58-27f7-4501-8045-ab969eded3fa';
+create table technical_before as select jsonb_build_object('mission',to_jsonb(m),'jobs',(select jsonb_agg(to_jsonb(j) order by id) from mission_assignments j where mission_id=m.id),'calls',(select jsonb_agg(to_jsonb(c) order by id) from mission_calls c where job_id in(select id from mission_assignments where mission_id=m.id))) state from agent_missions m where id='e3139a58-27f7-4501-8045-ab969eded3fa';
+-- Preserve newly completed operations worker analyses, then recover only finish stages.
+update agent_missions set status='blocked',actual_tokens=108459,reserved_tokens=108459,calls=4 where id='6f48cceb-3657-4a56-8fdd-2b120012fc64';
+update mission_assignments set status='completed',result=jsonb_build_object('text','Actual retained trace analysis '||job_key) where mission_id='6f48cceb-3657-4a56-8fdd-2b120012fc64' and role='work';
+update mission_assignments set status='failed',result='{"admissionDenied":true}' where mission_id='6f48cceb-3657-4a56-8fdd-2b120012fc64' and job_key='revision';
+update executive_delegations set status='cancelled' where mission_id='6f48cceb-3657-4a56-8fdd-2b120012fc64';
+insert into executive_delegation_events(delegation_id,event,evidence,created_at) select id,'cancel','{"reason":"Mission did not pass independent review"}',now()+interval '3 seconds' from executive_delegations where mission_id='6f48cceb-3657-4a56-8fdd-2b120012fc64';
+\ir ../../supabase/migrations/20261024164500_continue_saved_audit_completion.sql
+\ir ../../supabase/migrations/20261024164500_continue_saved_audit_completion.sql
+
+do $$
+declare source agent_missions;new_m agent_missions;after_state jsonb;
+begin
+ select * into source from agent_missions where id='e3139a58-27f7-4501-8045-ab969eded3fa';
+ select jsonb_build_object('mission',to_jsonb(source),'jobs',(select jsonb_agg(to_jsonb(j) order by id) from mission_assignments j where mission_id=source.id),'calls',(select jsonb_agg(to_jsonb(c) order by id) from mission_calls c where job_id in(select id from mission_assignments where mission_id=source.id))) into after_state;
+ if after_state is distinct from (select state from technical_before) then raise exception 'Technical source or charges changed';end if;
+ select * into new_m from agent_missions where project_evidence->'savedAuditCompletion'->>'sourceMissionId'=source.id::text;
+ if not found or new_m.deadline is distinct from source.deadline or new_m.token_allowance<>50000 or new_m.max_calls<>4 then raise exception 'Wrong final-review authority';end if;
+ if (select count(*) from agent_missions where project_evidence->'savedAuditCompletion'->>'sourceMissionId'=source.id::text)<>1 then raise exception 'Duplicate review continuation';end if;
+ if (select count(*) from mission_assignments where mission_id=new_m.id and status='queued' and job_key='review_again')<>1 or exists(select 1 from mission_assignments where mission_id=new_m.id and status<>'completed' and job_key<>'review_again') then raise exception 'Recovery buys repeated work';end if;
+ if exists(select 1 from mission_assignments where mission_id=new_m.id and role='review' and result->>'verdict'='pass') then raise exception 'Review approved manually';end if;
+ if (select result from mission_assignments where mission_id=new_m.id and job_key='revision') is distinct from (select result from mission_assignments where mission_id=source.id and job_key='revision') then raise exception 'Saved revision changed';end if;
+ if (select payload->'reviewModelCheckpoint' from mission_assignments where mission_id=new_m.id and job_key='review_again') is distinct from (select payload->'reviewModelCheckpoint' from mission_assignments where mission_id=source.id and job_key='review_again') then raise exception 'Completed blind criteria lost';end if;
+end $$;
+select 'Final-review continuation retains all source work, charges, criteria and original deadline; only the remaining comparison is queued.' as result;
+
+do $$
+declare m agent_missions;
+begin
+ if (select count(*) from agent_missions where project_evidence ? 'savedAuditCompletion' and status='draft')<>2 then raise exception 'New work ran before matching runtime';end if;
+ select * into m from agent_missions where project_evidence->'savedAuditCompletion'->>'sourceMissionId'='6f48cceb-3657-4a56-8fdd-2b120012fc64';
+ if m.token_allowance<>80000 or m.max_calls<>6 or m.deadline is distinct from (select deadline from agent_missions where id='6f48cceb-3657-4a56-8fdd-2b120012fc64') then raise exception 'Operations finish authority changed';end if;
+ if exists(select 1 from mission_assignments j join mission_assignments original on original.mission_id='6f48cceb-3657-4a56-8fdd-2b120012fc64' and original.job_key=j.job_key where j.mission_id=m.id and j.role='work' and (j.result is distinct from original.result or j.status<>'completed')) then raise exception 'Completed trace workers repeated or changed';end if;
+ update executive_delegations set status='cancelled' where mission_id=m.id;
+ if activate_saved_audit_completion()<>1 then raise exception 'Cancelled delegation resumed';end if;
+ update executive_delegations set status='running' where mission_id=m.id;
+ update agent_missions set deadline=now()-interval '1 minute' where id=m.id;
+ if activate_saved_audit_completion()<>0 then raise exception 'Expired completion started';end if;
+ update agent_missions set deadline=m.deadline where id=m.id;
+ if activate_saved_audit_completion()<>1 or activate_saved_audit_completion()<>0 then raise exception 'Runtime start not idempotent';end if;
+ if has_function_privilege('authenticated','activate_saved_audit_completion()','execute') then raise exception 'Runtime gate accessible to users';end if;
+end $$;
+select 'Matching runtime starts both saved audit completion stages exactly once.' as result;

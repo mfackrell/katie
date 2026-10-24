@@ -8,7 +8,7 @@ import {boundedProvider} from '@/lib/orchestration/bounded-provider';
 import { createHash, randomUUID } from 'node:crypto';
 import { rpc } from './store';
 import { calculate,planSchema,missionDeliverableSchema,parseJSON,type Claim } from './types';
-import {MissionAdmissionError,explainAdmissionDenial,missionExecutionDeadline,missionAttemptTimeout,fitsMissionEnvelope,missionInputLimit} from './request-budget';
+import {MissionAdmissionError,explainAdmissionDenial,missionExecutionDeadline,missionAttemptTimeout,fitsMissionEnvelope,missionInputLimit,missionOutputLimit} from './request-budget';
 
 const calculator={type:'function',name:'calculate',description:'Execute a deterministic arithmetic calculation. Numbers must come from supplied evidence or explicitly labeled assumptions.',strict:true,parameters:{type:'object',properties:{operation:{type:'string',enum:['add','subtract','multiply','divide','power']},values:{type:'array',items:{type:'number'},minItems:2,maxItems:12}},required:['operation','values'],additionalProperties:false}};
 export class MissionModelFailure extends Error { constructor(message:string,readonly partial:Record<string,unknown>){super(message);this.name='MissionModelFailure';} }
@@ -102,7 +102,7 @@ async function executeMissionModel(claim:Claim,instruction:string,input:string,t
  const gameSpecification=claim.mission.project_kind==='specification'&&(claim.mission.project_evidence as {projectProfile?:string}|null)?.projectProfile==='game';
  const deliverableEnvelope=claim.mission.project_kind!=='specification'&&['compose','revise'].includes(claim.job.role);
  if(deliverableEnvelope)instruction+='\nOUTPUT CONTRACT: Return ONLY JSON with exactly two string fields: {"deliverable":"the complete user-facing final artifact","composerNotes":"internal change notes, or empty"}. Put all revision commentary exclusively in composerNotes. The deliverable must stand alone within the user word limit: no word-count claims, appended change log, reviewer impersonation, or claim that review has already passed. The server independently reviews only the complete deliverable and persists your notes separately.';
- const outputTokens=expandedOutputTokens??(gameSpecification&&['compose','revise'].includes(claim.job.role)?16000:['compose','revise'].includes(claim.job.role)?6000:claim.job.role==='review'?(input.startsWith('Independent assessment:\n')?10000:5000):3000);
+ const outputTokens=expandedOutputTokens??missionOutputLimit(claim,input);
  const client=boundedProvider(choice);
  const sources:ModelResult['sources']=[],calculations:unknown[]=[];
  if(!fitsMissionEnvelope(instruction,input,missionInputLimit(claim)))throw Error('Mission evidence exceeds bounded context. Narrow the objective or deliverable.');

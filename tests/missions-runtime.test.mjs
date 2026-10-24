@@ -468,3 +468,46 @@ test('workers receive their actual dependency artifacts without unrelated comple
   assert.deepEqual(JSON.parse(input).evidence,[]);return{text:'Independent analysis',model:'fixture',sources:[],calculations:[]};
  });
 });
+
+
+test('unbounded audit revisions receive full output capacity on the first counted dispatch',async()=>{
+ const prior=process.env.OPENAI_API_KEY;process.env.OPENAI_API_KEY='fixture-only';
+ try{
+  for(const [objective,expected] of [['Audit the connected repository read-only and revise every material finding.',12000],['Audit the connected repository read-only. Deliver the complete report in at most 1200 words.',6000]]){
+   const m=mission();m.objective=objective;m.repository_id=randomUUID();
+   const j=job(m,'revise','revision'),f=modelFixture([response(JSON.stringify({deliverable:'Complete supported report',composerNotes:'Resolved findings'}))],true,27000);
+   const result=await f.call({mission:m,job:j},'Revise all findings','Immutable source and saved draft');
+   assert.equal(result.text,'Complete supported report');assert.equal(f.count(),1);assert.equal(f.ledger[0].max_output_tokens,expected);assert.equal(f.reservations[0].p_tokens,27000+256+expected);
+  }
+ }finally{if(prior===undefined)delete process.env.OPENAI_API_KEY;else process.env.OPENAI_API_KEY=prior;}
+});
+
+
+test('operational evidence encoding is lossless across shared and changed historical rows',()=>{
+ const {encodeOperationalEvidence}=modules()('@/lib/missions/operational-evidence');
+ const row={id:'mission-1',status:'running',detail:'Actual preserved diagnostic '.repeat(100),updated_at:'16:01:00'},changed={...row,status:'blocked',updated_at:'16:05:00'};
+ const older={kind:'scoped_workflow_trace',observedAt:'16:01:40',trace:{missions:[row],jobs:[],delegations:[]},limitations:['Scoped only']},later={...older,observedAt:'16:05:40',trace:{missions:[changed],jobs:[],delegations:[]}};
+ const original={projectEvidence:{operationalBaseline:older,operationalEvidence:later},candidate:{result:{text:'Claim at the earlier time',operationalEvidence:older}},evidence:[{result:{operationalEvidence:older}}]};
+ const encoded=encodeOperationalEvidence(original);assert.ok(JSON.stringify(encoded).length<JSON.stringify(original).length*0.7);
+ const decode=value=>Array.isArray(value)?value.map(decode):value&&typeof value==='object'?('$operationalRecord' in value?encoded.operationalRecordEncoding.records[value.$operationalRecord]:Object.fromEntries(Object.entries(value).filter(([key])=>key!=='operationalRecordEncoding').map(([key,v])=>[key,decode(v)]))):value;
+ assert.deepEqual(decode(encoded),original);assert.equal(Object.keys(encoded.operationalRecordEncoding.records).length,2);
+ assert.equal(original.candidate.result.operationalEvidence.trace.missions[0].status,'running');assert.equal(original.projectEvidence.operationalEvidence.trace.missions[0].status,'blocked');
+});
+
+test('independent review consumes complete encoded snapshots while retaining raw observation receipts',async()=>{
+ const m=mission();m.objective='Audit operational workflows using actual records.';
+ const row={id:'tracked-mission',status:'running',detail:'Exact operational evidence '.repeat(100)};
+ const old={kind:'scoped_workflow_trace',observedAt:'earlier',trace:{missions:[row]}},now={...old,observedAt:'later',trace:{missions:[{...row,status:'blocked'}]}};
+ m.project_evidence={operationalBaseline:old};
+ const source={...job(m,'work','source'),status:'completed',result:{text:'Worker finding',operationalEvidence:old}},compose={...job(m,'compose','compose'),status:'completed',result:{text:'Candidate',operationalEvidence:old}},review=job(m,'review','review');let committed;
+ const load=modules({'@/lib/missions/inspection':{workflowInspection:async()=>now},'@/lib/missions/store':{readMission:async()=>({mission:m,jobs:[source,compose,review]}),rpc:async(name,args)=>{if(name==='commit_mission_work')committed=args;return true;}}});
+ await load('@/lib/missions/worker').executeClaim({mission:m,job:review},async(_c,instruction,input)=>{
+  if(instruction.includes('KATIE_REQUIRED_DRAFT_REVIEW')){
+   const data=JSON.parse(input.split('Evidence and candidate:\n')[1]);assert.ok(data.operationalRecordEncoding);
+   const resolveSnapshot=s=>({...s,trace:{missions:s.trace.missions.map(r=>data.operationalRecordEncoding.records[r.$operationalRecord])}});
+   assert.deepEqual(resolveSnapshot(data.candidate.result.operationalEvidence),old);assert.deepEqual(resolveSnapshot(data.projectEvidence.operationalEvidence),now);assert.deepEqual(resolveSnapshot(data.evidence[0].result.operationalEvidence),old);
+  }
+  return{text:JSON.stringify(instruction.includes('KATIE_REQUIRED_DRAFT_REVIEW')?verdict():assessment),model:'independent',sources:[],calculations:[]};
+ });
+ assert.equal(committed.p_mission_status,'completed');assert.deepEqual(committed.p_result.operationalEvidence,now);
+});
