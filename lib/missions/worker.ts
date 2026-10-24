@@ -15,7 +15,7 @@ import { missionModel,MissionModelFailure } from './model';
 import {fitsMissionEnvelope,missionInputLimit} from './request-budget';
 import { rpc,readMission } from './store';
 import {encodeOperationalEvidence} from './operational-evidence';
-import {applyMissionRevisionPatch} from './revision-patch';
+import {applyMissionRevisionPatch,recoverMissionRevisionPatch} from './revision-patch';
 import { ASSESSMENT_INSTRUCTION,REVIEW_INSTRUCTION } from './review-instructions';
 import { validateAssessment,validateAnswerReview,acceptanceIds } from '@/lib/collaboration/review-contract';
 import { researchRecoveryEvidence } from './research-evidence';
@@ -49,7 +49,7 @@ export async function executeClaim(claim:Claim,model=missionModel){
  const candidateEvidence=(result:Record<string,unknown>|null|undefined)=>{
   if(mission.project_kind!=='specification'||(mission.project_evidence as {projectProfile?:string}|null)?.projectProfile!=='game'||typeof result?.text!=='string'){
    if(!result)return result;
-   const evidence={...result};delete evidence.routingReason;delete evidence.attemptedModels;delete evidence.composerNotes;
+   const evidence={...result};delete evidence.routingReason;delete evidence.attemptedModels;delete evidence.composerNotes;delete evidence.revisionPatch;delete evidence.recoveredPatch;
    return evidence; // Transport diagnostics remain saved; all substantive evidence stays verbatim.
   }
   try{const plan=validateProjectPlan(parseJSON(result.text));if(!plan.game)return result;const metadata={...result};delete metadata.text;return{...metadata,specification:gameSpecificationView(plan),fullSpecificationHash:digest(plan),referenceNote:'Server-validated lossless view. contractRef and stepsRef resolve to the identical full finalContract below. Every original rule, model state, browser step and unique milestone contract is retained; the complete expanded original stays saved.'};}catch{return result;}
@@ -63,6 +63,7 @@ export async function executeClaim(claim:Claim,model=missionModel){
  const rejectedDraft=repair();
  const coverageRepair=rejectedDraft?.specification&&typeof job.result?.rejectedSpecification==='string'?gameCoverageRepair(projectPlanSchema.parse(parseJSON(job.result.rejectedSpecification))):null;
  const context=()=>{
+  if(job.role==='revise'&&typeof job.payload.revisionPatchBaseHash==='string')return JSON.stringify({objective:mission.objective,assignment:job.instruction,revisionPatchFeedback:job.result?.revisionPatchFeedback,priorReviewFindings:revisionFindings,candidate:{text:completed.find(j=>j.job_key==='compose')?.result?.text,sha256:job.payload.revisionPatchBaseHash},scope:'Apply only factual/length corrections established by the actual saved review. The independent reviewer receives the complete original source artifacts and the complete patched candidate.'});
   const data={objective:mission.objective,projectPhase:mission.project_kind,projectEvidence:rejectedDraft?undefined:(job.role==='compose'
      ?researchRecoveryEvidence(mission.project_evidence,true)
      :(()=>{const raw=researchRecoveryEvidence(mission.project_evidence,false);
@@ -84,6 +85,13 @@ export async function executeClaim(claim:Claim,model=missionModel){
  const targetedPatch=job.role==='revise'&&typeof job.payload.revisionPatchBaseHash==='string';
  const persona=frame+'\nSaved responsibilities: '+agent.config.instructions+'\n'+(finalWork?getObjectiveFirstInstruction():'Complete only input.assignment. The full objective is context for that assignment, not a request to perform the other workers’ assignments or compose the whole deliverable. Do not delegate, write a new plan, repeat unassigned calculations or recommendations, or offer future work.');
  const commit=(result:Record<string,unknown>,children:Child[]=[],status='completed',missionStatus:string|null=null,final:string|null=null)=>rpc<boolean>('commit_mission_work',{p_id:job.id,p_lease:job.lease,p_result:{...result,...(operationalEvidence&&job.role!=='plan'?{operationalEvidence}: {})},p_children:children,p_status:status,p_mission_status:missionStatus,p_final:final});
+ if(targetedPatch&&job.result?.incompleteReason==='max_output_tokens'&&typeof job.result?.partialText==='string'){
+  const base=completed.find(j=>j.job_key==='compose')?.result?.text;
+  if(typeof base==='string'&&!mission.project_id){
+   let recovered;try{recovered=recoverMissionRevisionPatch(base,String(job.payload.revisionPatchBaseHash),job.result.partialText);}catch{/* Invalid/incomplete edits still require a real model repair. */}
+   if(recovered){await commit({...recovered,model:job.result.model,provider:job.result.provider,reusedFrom:job.payload.continuedFrom});return;}
+  }
+ }
  // A project recovery may point to a server-verified saved composition.
  // This avoids paying for another draft; independent review still executes.
  if(job.role==='compose'&&mission.project_kind==='specification'&&
@@ -230,7 +238,7 @@ export async function executeClaim(claim:Claim,model=missionModel){
     priorFindings:sourceGroups.length?priorReviews.map(({checks,...rest})=>({...rest,priorCheckCount:Array.isArray(checks)?checks.length:0})):gameReview?priorReviews.map(({checks,...rest})=>({...rest,priorCheckCount:Array.isArray(checks)?checks.length:0})):priorReviews};
   const reviewFrame=frame+'\n'+REVIEW_INSTRUCTION+(gameReview?
     '\nGAME REVIEW REFERENCE SEMANTICS: contractRef and stepsRef are server-validated lossless views of duplicate contracts; inspect candidate.specification.finalContract for full steps. Evaluate this CURRENT candidate independently. The prior draft and charges remain saved.':'')+
-    '\nMEASURED LENGTH: The supplied measuredLength is computed by code from the entire candidate. Use it for length compliance; never estimate a conflicting count. Distinguish true acceptance failures from formatting preferences.';
+    '\nREVIEW TIMING: You are performing the current independent review. A prior blocked review or a draft-stage pending-review label is not evidence that this current review is missing; determine approval from the full candidate, actual sources and acceptance checks. Do not require your own successful verdict to exist before you can issue it. Never accept a false claim that earlier review passed.\nMEASURED LENGTH: The supplied measuredLength is computed by code from the entire candidate. Use it for length compliance; never estimate a conflicting count. Distinguish true acceptance failures from formatting preferences.';
   const reviewInput='Independent assessment:\n'+JSON.stringify(assessment)+
     '\nRequired acceptance IDs:\n'+JSON.stringify(acceptanceIds(assessment))+
     '\nEvidence and candidate:\n'+JSON.stringify(encodeOperationalEvidence(reviewPayload));
@@ -277,7 +285,7 @@ export async function executeClaim(claim:Claim,model=missionModel){
 export async function runMissionBatch(model=missionModel){
  // Only this runtime understands the larger read-only audit envelope. The RPC
  // is fenced, preserves budgets/attempts and allows one matching recovery.
- try{await rpc('activate_saved_audit_corrections');await rpc('activate_saved_audit_completion');await rpc('resume_repository_review_context');}
+ try{await rpc('activate_saved_audit_effort_recovery');await rpc('activate_saved_audit_corrections');await rpc('activate_saved_audit_completion');await rpc('resume_repository_review_context');}
  catch(error){console.warn('[Missions] Review context recovery unavailable',error instanceof Error?error.message:'unknown');}
  const claims:Claim[]=[];
  for(let i=0;i<3;i++){const claim=await rpc<Claim|null>('claim_mission_work');if(!claim)break;claims.push(claim);}

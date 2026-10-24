@@ -7,6 +7,7 @@ on:
       - 'supabase/migrations/20261024163500_continue_operations_trace_revision.sql'
       - 'supabase/migrations/20261024164500_continue_saved_audit_completion.sql'
       - 'supabase/migrations/20261024171000_continue_audit_factual_corrections.sql'
+      - 'supabase/migrations/20261024174000_recover_complete_audit_edits.sql'
       - 'tests/fixtures/executive-saved-continuation.sql'
       - '.github/workflows/executive-recovery-check.yml'
 jobs:

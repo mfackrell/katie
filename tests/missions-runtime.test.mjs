@@ -43,7 +43,7 @@ test('targeted factual corrections preserve untouched bytes and require full ind
  await executeClaim({mission:m,job:revision},async(_,instruction,input)=>{inputs.push(input);assert.match(instruction,/Preserve all other content verbatim/);return{text:JSON.stringify(patch),model:'patch-model',sources:[],calculations:[]};});
  assert.equal(committed.p_result.text,fixed.text);assert.equal(committed.p_mission_status,null);assert.equal(committed.p_final,null);assert.equal(committed.p_result.revisionPatch.baseHash,hash);assert.match(inputs[0],/Six skipped runs/);
  revision.status='completed';revision.result=committed.p_result;
- await executeClaim({mission:m,job:again},async(_,instruction,input)=>{if(instruction.includes('KATIE_REQUIRED_DRAFT_REVIEW'))assert.ok(input.includes(fixed.text));return{text:JSON.stringify(instruction.includes('KATIE_REQUIRED_DRAFT_REVIEW')?verdict():assessment),model:'independent-review',sources:[],calculations:[]};});
+ await executeClaim({mission:m,job:again},async(_,instruction,input)=>{if(instruction.includes('KATIE_REQUIRED_DRAFT_REVIEW')){assert.ok(input.includes(fixed.text));assert.doesNotMatch(input,/revisionPatch|recoveredPatch/);}return{text:JSON.stringify(instruction.includes('KATIE_REQUIRED_DRAFT_REVIEW')?verdict():assessment),model:'independent-review',sources:[],calculations:[]};});
  assert.equal(committed.p_mission_status,'completed');assert.equal(committed.p_final,fixed.text);
  const prior=process.env.OPENAI_API_KEY;process.env.OPENAI_API_KEY='fixture-only';try{const f=modelFixture([response(JSON.stringify(patch))]);const r=await f.call({mission:m,job:revision},'Apply exact edits','Evidence');assert.equal(f.ledger[0].max_output_tokens,3000);assert.equal(f.ledger[0].text.format.name,'mission_revision_patch');assert.deepEqual(JSON.parse(r.text),patch);}finally{if(prior===undefined)delete process.env.OPENAI_API_KEY;else process.env.OPENAI_API_KEY=prior;}
 });
@@ -525,4 +525,18 @@ test('independent review consumes complete encoded snapshots while retaining raw
   return{text:JSON.stringify(instruction.includes('KATIE_REQUIRED_DRAFT_REVIEW')?verdict():assessment),model:'independent',sources:[],calculations:[]};
  });
  assert.equal(committed.p_mission_status,'completed');assert.deepEqual(committed.p_result.operationalEvidence,now);
+});
+
+test('complete saved edits survive truncated private notes without another inference or approval',async()=>{
+ const base='Original immutable evidence remains intact. Incorrect count: four. All other observations and limitations stay unchanged.';
+ const hash=createHash('sha256').update(base).digest('hex');
+ const partial=JSON.stringify({edits:[{before:'count: four',after:'count: six'}],composerNotes:'unfinished'}).slice(0,-7);
+ const {recoverMissionRevisionPatch}=modules()('@/lib/missions/revision-patch');
+ assert.equal(recoverMissionRevisionPatch(base,hash,partial).text,base.replace('four','six'));
+ assert.throws(()=>recoverMissionRevisionPatch(base,hash,partial.slice(0,35)));
+ assert.throws(()=>recoverMissionRevisionPatch(base,'wrong',partial));
+ const m=mission(),compose={...job(m,'compose','compose'),status:'completed',result:{text:base}},revision=job(m,'revise','revision');revision.payload={revisionPatchBaseHash:hash,continuedFrom:{assignmentId:'saved-real-output'}};revision.result={incompleteReason:'max_output_tokens',partialText:partial,model:'actual-model',provider:'google'};let committed;
+ const {executeClaim}=modules({'@/lib/missions/store':{readMission:async()=>({mission:m,jobs:[compose,revision]}),rpc:async(_,a)=>{committed=a;return true;}}})('@/lib/missions/worker');
+ await executeClaim({mission:m,job:revision},async()=>{throw Error('Completed edits must not be purchased again');});
+ assert.equal(committed.p_result.text,base.replace('four','six'));assert.equal(committed.p_mission_status,null);assert.equal(committed.p_final,null);assert.equal(committed.p_result.recoveredPatch.independentReviewRequired,true);
 });

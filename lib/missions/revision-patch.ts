@@ -19,3 +19,23 @@ export function applyMissionRevisionPatch(base:string,expectedHash:string,respon
  if(text.length<base.length*0.6||text.length>base.length+4000)throw Error('Targeted revision changed too much content');
  return{text,composerNotes:patch.composerNotes,revisionPatch:{baseHash:actualHash,resultHash:createHash('sha256').update(text).digest('hex'),edits:patch.edits}};
 }
+
+/** Recover only a fully returned edits array. Never infer a missing character,
+ * replacement, or reviewer verdict. Truncated internal notes are not a deliverable. */
+export function recoverMissionRevisionPatch(base:string,expectedHash:string,partial:string){
+ const prefix=/^\s*\{\s*"edits"\s*:\s*\[/.exec(partial);
+ if(!prefix)throw Error('No complete leading edits array');
+ const start=prefix[0].length-1;let depth=0,quoted=false,escaped=false,end=-1;
+ for(let i=start;i<partial.length;i++){
+  const ch=partial[i];
+  if(quoted){if(escaped)escaped=false;else if(ch==='\\')escaped=true;else if(ch==='"')quoted=false;continue;}
+  if(ch==='"'){quoted=true;continue;}
+  if(ch==='[')depth++;else if(ch===']'&&--depth===0){end=i+1;break;}
+ }
+ if(end<0)throw Error('Edits array itself is incomplete');
+ const tail=partial.slice(end).trim();
+ if(tail){const key=/^,\s*"([^"]*)/.exec(tail);if(!key||!('composerNotes'.startsWith(key[1])||key[1]==='composerNotes'))throw Error('Truncation is not confined to private notes');}
+ const edits=JSON.parse(partial.slice(start,end));
+ const result=applyMissionRevisionPatch(base,expectedHash,JSON.stringify({edits,composerNotes:''}));
+ return{...result,recoveredPatch:{partialHash:createHash('sha256').update(partial).digest('hex'),notesIncomplete:true,independentReviewRequired:true}};
+}

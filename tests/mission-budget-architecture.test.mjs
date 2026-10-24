@@ -159,3 +159,14 @@ test('read-only repository final stages retain complete 53K review evidence with
  claim.mission.repository_id='saved';claim.mission.objective='Implement an application.';assert.equal(budget.missionInputLimit(claim),48000);
  claim.mission.repository_id=null;claim.mission.objective='Audit operational workflows using saved execution records.';assert.equal(budget.missionInputLimit(claim),96000);
 });
+
+test('native correction effort is counted and dispatched identically without changing tools',async()=>{
+ for(const [provider,model] of [['anthropic','claude-sonnet-5'],['google','gemini-3.7-flash']]){
+  const calls=[],load=modules({'openai':unusedOpenAI},{fetch:async(url,init)=>{calls.push(JSON.parse(init.body));return new Response(JSON.stringify(url.includes('count')?(provider==='anthropic'?{input_tokens:40}:{totalTokens:40}):(provider==='anthropic'?claude('ok'):gemini('ok'))));}});
+  const c=load('@/lib/orchestration/bounded-provider').boundedProvider(pick(provider,model)),r={...request,model,executionEffort:'low'};
+  await c.post('/responses/input_tokens',{body:r,timeout:5000});await c.responses.create(r,{timeout:5000});
+  const counted=provider==='anthropic'?calls[0]:calls[0].generateContentRequest;
+  if(provider==='anthropic'){assert.equal(calls[1].output_config.effort,'low');assert.deepEqual(counted.output_config,calls[1].output_config);}else{assert.equal(calls[1].generationConfig.thinkingConfig.thinkingLevel,'LOW');assert.deepEqual(counted.generationConfig,calls[1].generationConfig);}
+  assert.deepEqual(counted.tools,calls[1].tools);assert.equal(calls[1].executionEffort,undefined);
+ }
+});
