@@ -2416,7 +2416,7 @@ ${chunkWorkflowSummary}`;
                   resolvedRequestIntent
                 );
 
-                const generation = selfToolsEnabled
+                const generation = (typeof selfToolsEnabled !== 'undefined' && selfToolsEnabled)
                   ? await (async () => {
                       const result = await runSelfInspection({ request, actorId, chatId, requestId, provider,
                         params: finalParams, deadlineMs: executionDeadlineMs,
