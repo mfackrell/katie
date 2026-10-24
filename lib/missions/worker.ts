@@ -14,6 +14,7 @@ import type { AgentTask } from '@/lib/agents/policy';
 import { missionModel,MissionModelFailure } from './model';
 import {fitsMissionEnvelope,missionInputLimit} from './request-budget';
 import { rpc,readMission } from './store';
+import {encodeOperationalEvidence} from './operational-evidence';
 import { ASSESSMENT_INSTRUCTION,REVIEW_INSTRUCTION } from './review-instructions';
 import { validateAssessment,validateAnswerReview,acceptanceIds } from '@/lib/collaboration/review-contract';
 import { researchRecoveryEvidence } from './research-evidence';
@@ -76,7 +77,7 @@ export async function executeClaim(claim:Claim,model=missionModel){
    if(compactText.length+suffix.length>48000)throw new MissionModelFailure('Specification repair context exceeds 48,000 characters even without the rejected draft; original requirements and saved draft retained for scope clarification.',{repairContextOverflow:true,specificationValidationFeedback:job.result?.specificationValidationFeedback,rejectedSpecification:job.result?.rejectedSpecification});
    return compactText;
   }
-  return JSON.stringify(data);
+  return JSON.stringify(encodeOperationalEvidence(data));
  };
  const finalWork=job.role==='compose'||job.role==='revise';
  const persona=frame+'\nSaved responsibilities: '+agent.config.instructions+'\n'+(finalWork?getObjectiveFirstInstruction():'Complete only input.assignment. The full objective is context for that assignment, not a request to perform the other workers’ assignments or compose the whole deliverable. Do not delegate, write a new plan, repeat unassigned calculations or recommendations, or offer future work.');
@@ -230,7 +231,7 @@ export async function executeClaim(claim:Claim,model=missionModel){
     '\nMEASURED LENGTH: The supplied measuredLength is computed by code from the entire candidate. Use it for length compliance; never estimate a conflicting count. Distinguish true acceptance failures from formatting preferences.';
   const reviewInput='Independent assessment:\n'+JSON.stringify(assessment)+
     '\nRequired acceptance IDs:\n'+JSON.stringify(acceptanceIds(assessment))+
-    '\nEvidence and candidate:\n'+JSON.stringify(reviewPayload);
+    '\nEvidence and candidate:\n'+JSON.stringify(encodeOperationalEvidence(reviewPayload));
   // The mission runner's 48K input envelope excludes its system instruction.
   // Apply the same envelope here; count BOTH fields with the provider before
   // reservation. Do not confuse characters with tokens or delete acceptance.
@@ -266,7 +267,7 @@ export async function executeClaim(claim:Claim,model=missionModel){
 export async function runMissionBatch(model=missionModel){
  // Only this runtime understands the larger read-only audit envelope. The RPC
  // is fenced, preserves budgets/attempts and allows one matching recovery.
- try{await rpc('resume_repository_review_context');}
+ try{await rpc('activate_saved_audit_completion');await rpc('resume_repository_review_context');}
  catch(error){console.warn('[Missions] Review context recovery unavailable',error instanceof Error?error.message:'unknown');}
  const claims:Claim[]=[];
  for(let i=0;i<3;i++){const claim=await rpc<Claim|null>('claim_mission_work');if(!claim)break;claims.push(claim);}
