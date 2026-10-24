@@ -306,3 +306,32 @@ do $$declare m agent_missions;s agent_missions;after_state jsonb;begin
  if has_function_privilege('authenticated','activate_saved_audit_contract_recovery()','execute') then raise exception 'Contract start gate exposed';end if;
 end $$;
 select 'Length/schema repair continuation preserves expired sources and charges, reuses latest actual candidates and requires fresh independent review.' as result;
+
+-- Terminal technical review hit an uncertain long-running Pro request. The new
+-- runtime excludes that synchronous transport mismatch and retains the hold.
+update agent_missions set status='blocked',actual_tokens=27254,reserved_tokens=57491,calls=3,routing_calls=3 where id='07bb60f2-db69-4961-8ea6-20f7d883fa59';
+update mission_assignments set id='a2d4c109-961e-4656-9164-5cde01651c8f',status='failed',attempts=1,result='{"admissionDenied":true}',payload=payload||'{"reviewModelCheckpoint":{"hash":"exact-current-contract","response":{"text":"Actual valid saved blind assessment","model":"claude-opus-5-5"}}}' where mission_id='07bb60f2-db69-4961-8ea6-20f7d883fa59' and job_key='review_again';
+update mission_assignments set status='completed',result='{"text":"Final actual technical correction; source evidence unchanged"}' where mission_id='07bb60f2-db69-4961-8ea6-20f7d883fa59' and job_key='revision';
+insert into mission_calls(id,job_id,status,reserved_tokens,actual_tokens) values('b32ede9b-c821-4074-bd2e-83f289e5174c','a2d4c109-961e-4656-9164-5cde01651c8f','uncertain',30237,null);
+update agent_missions set status='blocked',actual_tokens=29052,reserved_tokens=29052,calls=2,routing_calls=1 where id='d0fde164-a838-4dea-843c-0b7a3c40614f';
+update mission_assignments set id='a43dcd4c-96d2-40ab-908d-5ee8581f6f48',status='failed',attempts=1,result='{"incompleteReason":"max_output_tokens","partialText":"Changed partial response must NOT be resumed"}' where mission_id='d0fde164-a838-4dea-843c-0b7a3c40614f' and job_key='revision';
+update executive_delegations set status='cancelled' where mission_id in('07bb60f2-db69-4961-8ea6-20f7d883fa59','d0fde164-a838-4dea-843c-0b7a3c40614f');
+insert into executive_delegation_events(delegation_id,event,evidence,created_at) select id,'cancel','{"reason":"Mission did not pass independent review"}',now()+interval '11 seconds' from executive_delegations where mission_id in('07bb60f2-db69-4961-8ea6-20f7d883fa59','d0fde164-a838-4dea-843c-0b7a3c40614f');
+create table terminal_sources_before as select id,jsonb_build_object('mission',to_jsonb(m),'jobs',(select jsonb_agg(to_jsonb(j) order by id) from mission_assignments j where mission_id=m.id),'calls',(select jsonb_agg(to_jsonb(c) order by id) from mission_calls c where job_id in(select id from mission_assignments where mission_id=m.id))) state from agent_missions m where id in('07bb60f2-db69-4961-8ea6-20f7d883fa59','d0fde164-a838-4dea-843c-0b7a3c40614f');
+\ir ../../supabase/migrations/20261024183000_resume_audit_partial_edits_and_review.sql
+\ir ../../supabase/migrations/20261024183000_resume_audit_partial_edits_and_review.sql
+
+do $$declare m agent_missions;s agent_missions;after_state jsonb;begin
+ if (select count(*) from agent_missions where project_evidence ? 'savedAuditTerminalReview')<>1 then raise exception 'Duplicate terminal review';end if;
+ select * into m from agent_missions where project_evidence ? 'savedAuditTerminalReview';
+ if m.status<>'draft' or m.token_allowance<>50000 or m.max_calls<>3 or m.deadline is distinct from (select deadline from agent_missions where id='07bb60f2-db69-4961-8ea6-20f7d883fa59') then raise exception 'Terminal review authority changed';end if;
+ if (select count(*) from mission_assignments where mission_id=m.id and status='queued')<>1 or (select status from mission_assignments where mission_id=m.id and job_key='revision')<>'completed' then raise exception 'Repeated completed correction';end if;
+ if (select payload->'reviewModelCheckpoint' from mission_assignments where mission_id=m.id and job_key='review_again') is distinct from (select payload->'reviewModelCheckpoint' from mission_assignments where id='a2d4c109-961e-4656-9164-5cde01651c8f') then raise exception 'Completed blind criteria lost';end if;
+ if resume_saved_partial_audit_edits()<>1 or resume_saved_partial_audit_edits()<>0 then raise exception 'Start gate accepted changed partial or repeated work';end if;
+ for s in select * from agent_missions where id in('07bb60f2-db69-4961-8ea6-20f7d883fa59','d0fde164-a838-4dea-843c-0b7a3c40614f') loop
+  select jsonb_build_object('mission',to_jsonb(s),'jobs',(select jsonb_agg(to_jsonb(j) order by id) from mission_assignments j where mission_id=s.id),'calls',(select jsonb_agg(to_jsonb(c) order by id) from mission_calls c where job_id in(select id from mission_assignments where mission_id=s.id))) into after_state;
+  if after_state is distinct from (select state from terminal_sources_before where id=s.id) then raise exception 'Source artifacts, attempts, deadline or uncertain charge changed';end if;
+ end loop;
+ if has_function_privilege('authenticated','resume_saved_partial_audit_edits()','execute') then raise exception 'Partial recovery exposed';end if;
+end $$;
+select 'Only terminal comparison starts; uncertain charges and completed criteria remain exact, and a changed partial response cannot resume.' as result;

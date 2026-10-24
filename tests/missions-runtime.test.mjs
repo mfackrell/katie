@@ -565,3 +565,29 @@ test('review requests explicit portable contracts without weakening source-linke
  const bad={...assessment,taskContract:{...assessment.taskContract,requirements:[{id:'fabricated',requirement:'Invented',sourceId:'unknown',status:'active',supersededBy:null}]}};
  await assert.rejects(load('@/lib/missions/worker').executeClaim({mission:m,job:review},async()=>({text:JSON.stringify(bad),model:'independent',sources:[],calculations:[]})),/Invalid requirement citation/);
 });
+
+test('partial edit streams preserve complete edits and request only the unfinished correction',async()=>{
+ const base='Original immutable evidence stays. Wrong count four. One extra word here. More preserved evidence and source references.';
+ const hash=createHash('sha256').update(base).digest('hex');
+ const partial=JSON.stringify({edits:[{before:'count four',after:'count six'},{before:'extra word',after:'word'}],composerNotes:''}).split('"after":"word"')[0]+'"after":"wo';
+ const load=modules(),recover=load('@/lib/missions/revision-patch').recoverMissionRevisionPrefix;
+ const prefix=recover(base,hash,partial);assert.equal(prefix.text,base.replace('four','six'));assert.equal(prefix.recoveredPatch.completeEditCount,1);assert.equal(prefix.recoveredPatch.unfinishedEditOmitted,true);
+ assert.throws(()=>recover(base,'changed',partial));assert.throws(()=>recover(base,hash,'{"edits":[{"before":"incomplete'));assert.throws(()=>recover(base,hash,partial.replace('count four','absent')));
+ const m=mission();m.objective='Deliver a report in at most 16 words.';
+ const compose={...job(m,'compose','compose'),status:'completed',result:{text:base}},revision=job(m,'revise','revision');revision.payload={revisionPatchBaseHash:hash};revision.result={incompleteReason:'max_output_tokens',partialText:partial,model:'actual-model',provider:'anthropic'};let committed;
+ const {executeClaim}=modules({'@/lib/missions/store':{readMission:async()=>({mission:m,jobs:[compose,revision]}),rpc:async(_,a)=>{committed=a;return true;}}})('@/lib/missions/worker');
+ await executeClaim({mission:m,job:revision},async(_c,instruction,input)=>{
+  const data=JSON.parse(input);assert.equal(data.editableSpan,'extra word');assert.equal(data.candidateHash,prefix.revisionPatch.resultHash);assert.equal(data.measuredWholeCandidate.wordCount,17);assert.doesNotMatch(input,/Original immutable evidence stays/);assert.match(instruction,/at most TWO tiny edits/);
+  return{text:JSON.stringify({edits:[{before:'extra word',after:'word'}],composerNotes:''}),model:'finishing-model',provider:'google',sources:[],calculations:[]};
+ });assert.equal(committed.p_result.revisionPatch.previousPatch.resultHash,prefix.revisionPatch.resultHash);assert.match(committed.p_result.text,/count six/);assert.equal(compose.result.text,base);assert.equal(committed.p_mission_status,null);assert.equal(committed.p_final,null);
+});
+
+test('validated complete edit prefixes receive one durable continuation without resetting attempts or approving work',async()=>{
+ const m=mission(),base='Original immutable evidence stays intact. Count four. Other factual observations remain unchanged.';
+ const compose={...job(m,'compose','compose'),status:'completed',result:{text:base}},revision=job(m,'revise','revision');revision.payload={revisionPatchBaseHash:createHash('sha256').update(base).digest('hex')};revision.attempts=1;
+ let claimed=false,committed;const load=modules({'@/lib/missions/store':{readMission:async()=>({mission:m,jobs:[compose,revision]}),rpc:async(n,a)=>{if(n==='claim_mission_work'){if(claimed)return null;claimed=true;return{mission:m,job:revision};}if(n==='commit_mission_work')committed=a;return true;}}});
+ const {MissionModelFailure}=load('@/lib/missions/model'),worker=load('@/lib/missions/worker');const partial='{"edits":[{"before":"Count four","after":"Count six"},{"before":"Other factual';
+ const incomplete=async()=>{throw new MissionModelFailure('Model output incomplete',{incompleteReason:'max_output_tokens',partialText:partial,model:'actual'});};
+ await worker.runMissionBatch(incomplete);assert.equal(committed.p_status,'queued');assert.equal(committed.p_mission_status,null);assert.equal(committed.p_result.partialText,partial);assert.equal(revision.attempts,1);
+ revision.attempts=2;claimed=false;await worker.runMissionBatch(incomplete);assert.equal(committed.p_status,'failed');assert.equal(committed.p_mission_status,'blocked');assert.equal(committed.p_final,null);
+});

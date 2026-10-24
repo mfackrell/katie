@@ -15,7 +15,7 @@ import { missionModel,MissionModelFailure } from './model';
 import {fitsMissionEnvelope,missionInputLimit} from './request-budget';
 import { rpc,readMission } from './store';
 import {encodeOperationalEvidence} from './operational-evidence';
-import {applyMissionRevisionPatch,recoverMissionRevisionPatch} from './revision-patch';
+import {applyMissionRevisionPatch,recoverMissionRevisionPatch,recoverMissionRevisionPrefix} from './revision-patch';
 import { ASSESSMENT_INSTRUCTION,REVIEW_INSTRUCTION } from './review-instructions';
 import { validateAssessment,validateAnswerReview,acceptanceIds } from '@/lib/collaboration/review-contract';
 import { researchRecoveryEvidence } from './research-evidence';
@@ -62,8 +62,14 @@ export async function executeClaim(claim:Claim,model=missionModel){
  };
  const rejectedDraft=repair();
  const coverageRepair=rejectedDraft?.specification&&typeof job.result?.rejectedSpecification==='string'?gameCoverageRepair(projectPlanSchema.parse(parseJSON(job.result.rejectedSpecification))):null;
+ const originalPatchBase=completed.find(j=>j.job_key==='compose')?.result?.text;
+ let patchContinuation:ReturnType<typeof recoverMissionRevisionPrefix>|undefined;
+ const patchBase=()=>patchContinuation?.text??originalPatchBase;
+ const patchHash=()=>patchContinuation?.revisionPatch.resultHash??String(job.payload.revisionPatchBaseHash);
+ const remainingPatchCharacters=()=>typeof originalPatchBase==='string'?Math.min(6000,Math.ceil(originalPatchBase.length*0.35))-(patchContinuation?.changedCharacters??0):0;
  const context=()=>{
-  if(job.role==='revise'&&typeof job.payload.revisionPatchBaseHash==='string')return JSON.stringify({objective:mission.objective,assignment:job.instruction,revisionPatchFeedback:job.result?.revisionPatchFeedback,measuredLength:measureDeliverable(mission.objective,String(completed.find(j=>j.job_key==='compose')?.result?.text??'')),deliverableLengthFeedback:job.result?.deliverableLengthFeedback,rejectedRevisionPatch:job.result?.rejectedRevisionPatch,priorReviewFindings:revisionFindings,candidate:{text:completed.find(j=>j.job_key==='compose')?.result?.text,sha256:job.payload.revisionPatchBaseHash},scope:'Apply only factual/length corrections established by the actual saved review. The independent reviewer receives the complete original source artifacts and the complete patched candidate.'});
+  if(patchContinuation?.unfinishedSpan)return JSON.stringify({objective:'Finish the one unfinished edit by shortening its actual source span, preserving every fact, source ID, qualification and coverage limitation. All preceding completed edits are already applied. Return only exact before/after edits within editableSpan; no other text can change.',measuredWholeCandidate:measureDeliverable(mission.objective,patchContinuation.text),remainingPatchCharacters:remainingPatchCharacters(),candidateHash:patchHash(),editableSpan:patchContinuation.unfinishedSpan,scope:'Only this remaining span is assigned to this editor. The entire candidate, all source artifacts and prior findings remain saved for full independent review.'});
+  if(job.role==='revise'&&typeof job.payload.revisionPatchBaseHash==='string')return JSON.stringify({objective:mission.objective,assignment:patchContinuation?'Preserve the complete edits already recovered in this candidate. Resolve only remaining actual findings and the measured word excess with at most two small edits within remainingPatchCharacters. Do not repeat edits already applied.':job.instruction,completedEditRecovery:patchContinuation?{...patchContinuation.recoveredPatch,remainingPatchCharacters:remainingPatchCharacters()}:undefined,revisionPatchFeedback:job.result?.revisionPatchFeedback,measuredLength:measureDeliverable(mission.objective,String(patchBase()??'')),deliverableLengthFeedback:job.result?.deliverableLengthFeedback,rejectedRevisionPatch:job.result?.rejectedRevisionPatch,priorReviewFindings:revisionFindings,candidate:{text:patchBase(),sha256:patchHash()},scope:'Apply only factual/length corrections established by the actual saved review. The independent reviewer receives the complete original source artifacts and the complete patched candidate.'});
   const data={objective:mission.objective,projectPhase:mission.project_kind,projectEvidence:rejectedDraft?undefined:(job.role==='compose'
      ?researchRecoveryEvidence(mission.project_evidence,true)
      :(()=>{const raw=researchRecoveryEvidence(mission.project_evidence,false);
@@ -97,7 +103,12 @@ export async function executeClaim(claim:Claim,model=missionModel){
   const base=completed.find(j=>j.job_key==='compose')?.result?.text;
   if(typeof base==='string'&&!mission.project_id){
    let recovered;try{recovered=recoverMissionRevisionPatch(base,String(job.payload.revisionPatchBaseHash),job.result.partialText);}catch{/* Invalid/incomplete edits still require a real model repair. */}
-   if(recovered){await commit({...recovered,model:job.result.model,provider:job.result.provider,reusedFrom:job.payload.continuedFrom});return;}
+   if(recovered){await commit({...recovered,recoveredPatch:{...recovered.recoveredPatch,sourceResponse:job.result},model:job.result.model,provider:job.result.provider,reusedFrom:job.payload.continuedFrom});return;}
+   try{patchContinuation=recoverMissionRevisionPrefix(base,String(job.payload.revisionPatchBaseHash),job.result.partialText);}catch{/* Never infer an incomplete edit. */}
+   if(patchContinuation){
+    const measured=measureDeliverable(mission.objective,patchContinuation.text);
+    if(measured.wordLimit===null||measured.wordCount<=measured.wordLimit){await commit({...patchContinuation,recoveredPatch:{...patchContinuation.recoveredPatch,sourceResponse:job.result},model:job.result.model,provider:job.result.provider});return;}
+   }
   }
  }
  // A project recovery may point to a server-verified saved composition.
@@ -274,14 +285,14 @@ export async function executeClaim(claim:Claim,model=missionModel){
  }
  const capability=job.payload.capability;
  const tools=job.role==='work'&&capability==='research'?'research':job.role==='work'&&capability==='analysis'?'calculate':'none';
- const result=await model(claim,persona+'\n'+(targetedPatch?'Return only exact before/after edits for the compose candidate in the supplied evidence, resolving the latest independent factual findings. Use measuredLength and any deliverableLengthFeedback to keep the whole result below its word limit with headroom. Preserve prior factual corrections when retrying rejected edits against the original base. Preserve all other content verbatim; the server will apply your edits and send the complete artifact for independent review.':finalWork?'Return only the final deliverable addressing the entire objective and saved review findings. When reporting completed development, the verified changedFiles patches, validation excerpts and immutable SHAs are authoritative. Report the actual work; never rewrite a file or reconstruct a diff as if it were committed. Quote exact content only from the supplied patch. Never invent check commands or outputs; cite the supplied check evidence. Apply whole-deliverable length limits to the ENTIRE response, including evidence, tables and source links. Apply section-specific length limits only to their named sections. Do not add a separate package, duplicated calculations, process commentary, or an offer of future work outside that limit.':'Return only the assigned evidence or analysis, with explicit sources, calculations, and findings, in at most 600 words unless this assignment explicitly requires more.'),context(),tools);
+ const result=await model(claim,persona+(patchContinuation?'\nSTREAM RECOVERY: The supplied candidate already incorporates every fully returned edit from the prior actual response. Only a small measured word excess remains. Return at most TWO tiny edits touching no more than '+remainingPatchCharacters()+' original candidate characters. Do not rewrite paragraphs or repeat completed work. Keep composerNotes empty.':'')+'\n'+(targetedPatch?'Return only exact before/after edits for the compose candidate in the supplied evidence, resolving the latest independent factual findings. Use measuredLength and any deliverableLengthFeedback to keep the whole result below its word limit with headroom. Preserve prior factual corrections when retrying rejected edits against the original base. Preserve all other content verbatim; the server will apply your edits and send the complete artifact for independent review.':finalWork?'Return only the final deliverable addressing the entire objective and saved review findings. When reporting completed development, the verified changedFiles patches, validation excerpts and immutable SHAs are authoritative. Report the actual work; never rewrite a file or reconstruct a diff as if it were committed. Quote exact content only from the supplied patch. Never invent check commands or outputs; cite the supplied check evidence. Apply whole-deliverable length limits to the ENTIRE response, including evidence, tables and source links. Apply section-specific length limits only to their named sections. Do not add a separate package, duplicated calculations, process commentary, or an offer of future work outside that limit.':'Return only the assigned evidence or analysis, with explicit sources, calculations, and findings, in at most 600 words unless this assignment explicitly requires more.'),context(),tools);
  if(targetedPatch){
-  const base=completed.find(j=>j.job_key==='compose')?.result?.text;
+  const base=patchBase();
   if(typeof base!=='string'||mission.project_id)throw Error('Targeted revision requires a saved ordinary mission candidate');
   let patched;
-  try{patched=applyMissionRevisionPatch(base,String(job.payload.revisionPatchBaseHash),result.text);}
+  try{patched=applyMissionRevisionPatch(base,patchHash(),result.text);if(patchContinuation&&(patched.revisionPatch.edits.length>2||(patchContinuation.unfinishedSpan!==undefined&&patched.revisionPatch.edits.some(e=>!patchContinuation!.unfinishedSpan!.includes(e.before)))||patched.revisionPatch.edits.reduce((n,e)=>n+e.before.length,0)>remainingPatchCharacters()||patched.text.length>String(originalPatchBase).length+4000||patched.text.length<String(originalPatchBase).length*0.6))throw Error('Continuation exceeded the remaining original change allowance');}
   catch(error){throw new MissionModelFailure('Targeted revision validation failed',{rejectedRevisionPatch:result.text,revisionPatchFeedback:error instanceof Error?error.message:'Invalid patch'});}
-  await commit({...result,...patched});return;
+  await commit({...result,...patched,...(patchContinuation?{revisionPatch:{...patched.revisionPatch,previousPatch:patchContinuation.revisionPatch},recoveredPatch:{...patchContinuation.recoveredPatch,sourceResponse:job.result}}:{})});return;
  }
  if(typeof job.payload.executiveSourceGroup==='number'&&result.text.length>2200)throw new MissionModelFailure('Source digest exceeds its 2,200 character contract',{sourceDigestContractFeedback:'Return the assigned evidence digest within 2,200 characters, retaining material source IDs, findings and contradictions.'});
  if(finalWork&&mission.project_kind==='specification'&&(mission.project_evidence as {projectProfile?:string}|null)?.projectProfile==='game'){
@@ -293,7 +304,7 @@ export async function executeClaim(claim:Claim,model=missionModel){
 export async function runMissionBatch(model=missionModel){
  // Only this runtime understands the larger read-only audit envelope. The RPC
  // is fenced, preserves budgets/attempts and allows one matching recovery.
- try{await rpc('activate_saved_audit_contract_recovery');await rpc('activate_saved_audit_effort_recovery');await rpc('activate_saved_audit_corrections');await rpc('activate_saved_audit_completion');await rpc('resume_repository_review_context');}
+ try{await rpc('resume_saved_partial_audit_edits');await rpc('activate_saved_audit_contract_recovery');await rpc('activate_saved_audit_effort_recovery');await rpc('activate_saved_audit_corrections');await rpc('activate_saved_audit_completion');await rpc('resume_repository_review_context');}
  catch(error){console.warn('[Missions] Review context recovery unavailable',error instanceof Error?error.message:'unknown');}
  const claims:Claim[]=[];
  for(let i=0;i<3;i++){const claim=await rpc<Claim|null>('claim_mission_work');if(!claim)break;claims.push(claim);}
@@ -305,11 +316,17 @@ export async function runMissionBatch(model=missionModel){
    const diagnostic={stage:claim.job.role,errorType:error instanceof Error?error.name:typeof error,code:typeof raw?.code==='string'?raw.code:undefined,httpStatus:typeof raw?.status==='number'?raw.status:typeof raw?.response?.status==='number'?raw.response.status:undefined,acceptedIssue:claim.job.role==='development'&&claim.job.payload?.approved===true};
    console.error('[Missions] Assignment failed',{jobId:claim.job.id,detail,diagnostic});
    const invalidContract=error instanceof MissionModelFailure&&(error.partial.reviewPhase==='assessment'||Boolean(error.partial.sourceCheckContractFeedback)||Boolean(error.partial.sourceDigestContractFeedback)||Boolean(error.partial.deliverableContractFeedback)||Boolean(error.partial.revisionPatchFeedback)||Boolean(error.partial.deliverableLengthFeedback));
+   let recoverableEdits=false;
+   if(claim.job.attempts<2&&claim.job.role==='revise'&&typeof claim.job.payload.revisionPatchBaseHash==='string'&&error instanceof MissionModelFailure&&error.partial.incompleteReason==='max_output_tokens'&&typeof error.partial.partialText==='string'){
+    try{const source=await readMission(claim.mission.id);const base=source.jobs.find(j=>j.job_key==='compose'&&j.status==='completed')?.result?.text;
+     if(typeof base==='string'){try{recoverMissionRevisionPatch(base,claim.job.payload.revisionPatchBaseHash,error.partial.partialText);}catch{recoverMissionRevisionPrefix(base,claim.job.payload.revisionPatchBaseHash,error.partial.partialText);}recoverableEdits=true;}
+    }catch{/* No fully validated completed edits: retain the failure, do not guess. */}
+   }
    const truncatedGameSpecification=error instanceof MissionModelFailure&&error.partial.incompleteReason==='max_output_tokens'&&claim.mission.project_kind==='specification'&&(claim.mission.project_evidence as {projectProfile?:string}|null)?.projectProfile==='game'&&['compose','revise'].includes(claim.job.role);
    const transientProvider=error instanceof MissionModelFailure&&['server_error','rate_limit_exceeded'].includes(String(error.partial.providerErrorCode));
    const invalidGameSpecification=error instanceof MissionModelFailure&&!error.partial.repairContextOverflow&&typeof error.partial.specificationValidationFeedback==='string';
    const reconcileAcceptedDevelopment=claim.job.role==='development'&&claim.job.attempts<2;
-   const retry=reconcileAcceptedDevelopment||(invalidGameSpecification&&claim.job.attempts<3)||(claim.job.attempts<2&&(invalidContract||truncatedGameSpecification||transientProvider||/timeout|timed out|connection|fetch failed|429|rate limit|500|502|503|504/i.test(detail)));
+   const retry=reconcileAcceptedDevelopment||(invalidGameSpecification&&claim.job.attempts<3)||(claim.job.attempts<2&&(recoverableEdits||invalidContract||truncatedGameSpecification||transientProvider||/timeout|timed out|connection|fetch failed|429|rate limit|500|502|503|504/i.test(detail)));
    await rpc('commit_mission_work',{p_id:claim.job.id,p_lease:claim.job.lease,p_result:{...(claim.job.role==='review'&&claim.job.result?.sourceChecks?{sourceChecks:claim.job.result.sourceChecks}:{}),...(error instanceof MissionModelFailure?error.partial:{}),detail,diagnostic},p_children:[],p_status:retry?'queued':'failed',p_mission_status:retry?null:'blocked',p_final:null});
    return {jobId:claim.job.id,status:retry?'retrying':'blocked'};}
  }));

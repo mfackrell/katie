@@ -192,3 +192,9 @@ test('adding a strict review format invalidates an older unconstrained checkpoin
  await h.call(h.c,'Independent contract',input,'none','assessment');assert.equal(h.inferences.length,first+1);
  await h.call(h.c,'Independent contract',input,'none','assessment');assert.equal(h.inferences.length,first+1);
 });
+
+test('bounded routing excludes variants needing background execution while retaining synchronous alternatives',()=>{
+ const {boundedModelSupported}=modules()('@/lib/orchestration/request-rejection');
+ for(const model of ['gpt-5-pro-2025-10-06','gpt-5.2-pro','gpt-5.5-pro','o3-pro','o3-deep-research-2025-06-26'])assert.equal(boundedModelSupported('openai',model),false);
+ for(const [provider,model] of [['openai','gpt-5.6-sol'],['openai','gpt-5.4-mini'],['anthropic','claude-opus-5-5'],['google','gemini-3.7-pro'],['grok','grok-4.7']])assert.equal(boundedModelSupported(provider,model),true);
+});

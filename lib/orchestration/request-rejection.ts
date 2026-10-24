@@ -12,6 +12,11 @@ export function rejectedBeforeInference(error:unknown){
 }
 export function boundedModelSupported(provider:string,model:string){
  if(/audio|realtime|transcrib|whisper|(?:^|[-_])tts(?:[-_]|$)|embedding|moderation|image|imagine|sora|lyria|nano-banana|computer-use|robotics/i.test(model))return false;
+ // These long-running reasoning/research variants need a resumable background
+ // response adapter. A synchronous 90-second call cannot safely provide that
+ // capability; an observed GPT-5 Pro timeout retained an uncertain reservation.
+ // This filter applies only to bounded orchestration, never ordinary chat.
+ if(provider==='openai'&&/^(?:gpt-5(?:\.\d+)?-pro|o[13]-pro|o[34](?:-mini)?-deep-research)(?:-|$)/i.test(model))return false;
  // These are agent jobs served only by Interactions, not generateContent.
  return !(provider==='google'&&/^deep-research(?:-|$)/i.test(model.replace(/^models\//,'')));
 }
