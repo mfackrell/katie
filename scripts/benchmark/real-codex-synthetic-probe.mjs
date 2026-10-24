@@ -36,7 +36,8 @@ const server=createServer((req,res)=>{
 try{
  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
  const port=server.address().port;
- writeFileSync(join(state,'config.toml'),`model_provider = "synthetic_http"\n[model_providers.synthetic_http]\nname = "Synthetic HTTP"\nwire_api = "responses"\nrequires_openai_auth = true\nsupports_websockets = false\nbase_url = "http://127.0.0.1:${port}/v1"\nrequest_max_retries = 0\nstream_max_retries = 0\n`);\n const codex=new Codex({baseUrl:'http://127.0.0.1:'+port+'/v1',apiKey:'synthetic-only',
+ writeFileSync(join(state,'config.toml'),`model_provider = "synthetic_http"\n[model_providers.synthetic_http]\nname = "Synthetic HTTP"\nwire_api = "responses"\nrequires_openai_auth = true\nsupports_websockets = false\nbase_url = "http://127.0.0.1:${port}/v1"\nrequest_max_retries = 0\nstream_max_retries = 0\n`);
+ const codex=new Codex({baseUrl:'http://127.0.0.1:'+port+'/v1',apiKey:'synthetic-only',
   env:{PATH:process.env.PATH||'',HOME:home,CODEX_HOME:state,CODEX_SQLITE_HOME:state,CODEX_API_KEY:'synthetic-only'}});
  const thread=codex.startThread({workingDirectory:repo,skipGitRepoCheck:false,sandboxMode:'workspace-write'});
  let completed=false;let diagnostics=[];
