@@ -17,7 +17,7 @@ begin
  if not found then return null; end if;
  select * into a from public.benchmark_budget_accounts where id=b.account_id for update;
  if not found or b.experiment_id<>a.experiment_id or a.arm<>'orchestrated'
-    or a.frozen_at is not null then return null; end if;
+    then return null; end if;
  if exists(select 1 from public.benchmark_budget_calls
            where account_id=a.id and state='overrun') then return null; end if;
  select coalesce(sum(reserved_tokens),0) into hold
