@@ -40,7 +40,7 @@ export async function announceBlockedRecoveryResources(p:Project){
  const {data:events,error:pe}=await db.from('project_events').select('event,created_at')
    .eq('project_id',p.id).in('event',['developer_resource_approval_requested','resource_authorization'])
    .order('created_at',{ascending:false}).limit(100)
-   .returns<{event:string;created_at:string}[]>();
+   .returns<{event:string;created_at:string}>();
  if(pe)throw Error('Cannot inspect prior developer resource approval request');
  const recent=events??[];
  const latestApproval=recent.find(e=>e.event==='resource_authorization');
