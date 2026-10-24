@@ -34,10 +34,22 @@ export function SelfToolsOwnerSession({ chatId }: { chatId: string }) {
   async function signIn(event: FormEvent) {
     event.preventDefault();
     if (!client || !email.trim()) return;
+    const canonicalOrigin = "https://katie-mu.vercel.app";
+    if (window.location.origin !== canonicalOrigin) {
+      window.location.assign(canonicalOrigin + window.location.pathname + window.location.search);
+      return;
+    }
     const {error} = await client.auth.signInWithOtp({
-      email: email.trim(), options: { emailRedirectTo: window.location.origin }
+      email: email.trim(), options: { emailRedirectTo: canonicalOrigin }
     });
-    setNotice(error ? "Could not start owner sign-in." : "Check your email for a secure sign-in link.");
+    if (error) {
+      const rateLimited = error.status === 429 || error.code === "over_email_send_rate_limit";
+      setNotice(rateLimited
+        ? "Supabase has reached its sign-in email limit. Do not retry repeatedly; try later or contact the administrator to configure custom SMTP."
+        : "Owner sign-in failed: " + (error.message || "Check the authentication configuration."));
+      return;
+    }
+    setNotice("A sign-in link was requested. Check your email and open it once using this browser.");
   }
   async function authorizeChat() {
     const token=await ownerSessionBearer();
