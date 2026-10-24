@@ -167,6 +167,21 @@ jobs:
           BRANCH: ${{ steps.task.outputs.branch }}
         run: |
           set -euo pipefail
+          # Do not create another implementation PR for an issue that already
+          # has an open PR. The orchestrator must recover/continue existing work.
+          existing="$(gh pr list --repo "$GITHUB_REPOSITORY" --state open --limit 200 --json number,headRefName,title,body |
+            node -e '
+              let s=""; process.stdin.on("data",x=>s+=x); process.stdin.on("end",()=>{
+                const issue=process.argv[1], branch=process.argv[2];
+                const prs=JSON.parse(s);
+                const hits=prs.filter(p=>p.headRefName===branch ||
+                  new RegExp("(^|[^0-9])#"+issue+"(?![0-9])").test((p.title||"")+" "+(p.body||"")));
+                if(hits.length)process.stdout.write(hits.map(p=>"#"+p.number).join(","));
+              });' "$ISSUE" "$BRANCH")"
+          if [ -n "$existing" ]; then
+            echo "::error::Existing open PR(s) $existing already address issue #$ISSUE. Resume or review that work; no duplicate PR created."
+            exit 1
+          fi
           rm -f AGENT_REQUEST.md
           test -z "$(git status --porcelain -- .github/workflows/autonomous-development.yml)" || { echo 'Protected workflow edited'; exit 1; }
           git add -A
