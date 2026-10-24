@@ -5,7 +5,7 @@
 // Factory injection permits nonbillable tests without loading the SDK.
 export async function runNativeBenchmark({
   createCodex, gateway, arm, workingDirectory, prompt, model, sandbox='workspace-write',
-  approvedAccountId, approvalReceipt, onEvent=()=>{}
+  approvedAccountId, approvalReceipt, isolatedHome, isolatedCodexHome, runtimeQualification, onEvent=()=>{}
 }) {
  if(!['native','thin','full'].includes(arm))throw Error('BENCHMARK_ARM_INVALID');
  if(!gateway||gateway.attested!==true||gateway.enforcesEveryRequest!==true||
@@ -17,6 +17,15 @@ export async function runNativeBenchmark({
     approvalReceipt?.gatewayId!==gateway.id||
     approvalReceipt?.status!=='approved')
    throw Error('BENCHMARK_OWNER_AUTHORIZATION_REQUIRED');
+ if(runtimeQualification?.verified!==true || runtimeQualification?.gatewayId!==gateway.id ||
+    runtimeQualification?.accountId!==approvedAccountId ||
+    runtimeQualification?.realSdkTested!==true || runtimeQualification?.providerBypassDenied!==true)
+   throw Error('BENCHMARK_RUNTIME_NOT_QUALIFIED');
+ if(typeof isolatedHome!=='string'||!isolatedHome.startsWith('/')||
+    typeof isolatedCodexHome!=='string'||!isolatedCodexHome.startsWith('/')||
+    isolatedHome===process.env.HOME||isolatedCodexHome===process.env.CODEX_HOME||
+    !isolatedCodexHome.startsWith(isolatedHome+'/'))
+   throw Error('BENCHMARK_ISOLATED_HOME_REQUIRED');
  if(!workingDirectory||!prompt||!model||typeof createCodex!=='function')
    throw Error('BENCHMARK_RUNTIME_CONFIG_INVALID');
  if(!['workspace-write','read-only'].includes(sandbox))
@@ -24,7 +33,8 @@ export async function runNativeBenchmark({
  const runtime=await createCodex({
   baseUrl:gateway.baseUrl,
   // Avoid inheriting arbitrary host variables and alternate upstream keys.
-  env:{PATH:process.env.PATH??'',HOME:process.env.HOME??'',
+  env:{PATH:process.env.PATH??'',HOME:isolatedHome,CODEX_HOME:isolatedCodexHome,
+       CODEX_SQLITE_HOME:isolatedCodexHome,
        BENCHMARK_GATEWAY_ACCOUNT:approvedAccountId}
  });
  const thread=runtime.startThread({
