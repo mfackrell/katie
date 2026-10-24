@@ -1,0 +1,34 @@
+name: Take Eleven architecture benchmark
+on:
+  workflow_dispatch:
+    inputs:
+      token_cap:
+        description: "Per-arm token authorization (must be enforced by both adapters)"
+        required: true
+        type: number
+      timeout_minutes:
+        description: "Time cap per arm"
+        required: true
+        default: "15"
+        type: choice
+        options: ["5", "10", "15", "30"]
+permissions:
+  contents: read
+concurrency:
+  group: take-eleven-controlled-benchmark
+  cancel-in-progress: false
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate benchmark configuration and adapters
+        env:
+          BENCHMARK_TOKEN_CAP: ${{ inputs.token_cap }}
+        run: |
+          set -euo pipefail
+          test "$BENCHMARK_TOKEN_CAP" -gt 0
+          test -n "${{ secrets.BENCHMARK_DIRECT_ADAPTER }}" || { echo "Direct adapter missing"; exit 1; }
+          test -n "${{ secrets.BENCHMARK_ORCHESTRATED_ADAPTER }}" || { echo "Orchestrated adapter missing"; exit 1; }
+          echo "Adapters configured. Launch remains gated until both adapter implementations and independent browser acceptance are verified."
+          # Intentionally no paid inference: secrets alone do not prove token-cap enforcement.
