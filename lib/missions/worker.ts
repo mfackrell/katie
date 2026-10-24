@@ -41,7 +41,7 @@ export async function executeClaim(claim:Claim,model=missionModel){
  const candidateEvidence=(result:Record<string,unknown>|null|undefined)=>{
   if(mission.project_kind!=='specification'||(mission.project_evidence as {projectProfile?:string}|null)?.projectProfile!=='game'||typeof result?.text!=='string'){
    if(!result)return result;
-   const evidence={...result};delete evidence.routingReason;delete evidence.attemptedModels;
+   const evidence={...result};delete evidence.routingReason;delete evidence.attemptedModels;delete evidence.composerNotes;
    return evidence; // Transport diagnostics remain saved; all substantive evidence stays verbatim.
   }
   try{const plan=validateProjectPlan(parseJSON(result.text));if(!plan.game)return result;const metadata={...result};delete metadata.text;return{...metadata,specification:gameSpecificationView(plan),fullSpecificationHash:digest(plan),referenceNote:'Server-validated lossless view. contractRef and stepsRef resolve to the identical full finalContract below. Every original rule, model state, browser step and unique milestone contract is retained; the complete expanded original stays saved.'};}catch{return result;}
@@ -267,7 +267,7 @@ export async function runMissionBatch(model=missionModel){
    const detail=(candidate&&candidate!=='Unknown error: {}'?candidate:'Unclassified development integration failure') .slice(0,600);
    const diagnostic={stage:claim.job.role,errorType:error instanceof Error?error.name:typeof error,code:typeof raw?.code==='string'?raw.code:undefined,httpStatus:typeof raw?.status==='number'?raw.status:typeof raw?.response?.status==='number'?raw.response.status:undefined,acceptedIssue:claim.job.role==='development'&&claim.job.payload?.approved===true};
    console.error('[Missions] Assignment failed',{jobId:claim.job.id,detail,diagnostic});
-   const invalidContract=error instanceof MissionModelFailure&&(error.partial.reviewPhase==='assessment'||Boolean(error.partial.sourceCheckContractFeedback)||Boolean(error.partial.sourceDigestContractFeedback));
+   const invalidContract=error instanceof MissionModelFailure&&(error.partial.reviewPhase==='assessment'||Boolean(error.partial.sourceCheckContractFeedback)||Boolean(error.partial.sourceDigestContractFeedback)||Boolean(error.partial.deliverableContractFeedback));
    const truncatedGameSpecification=error instanceof MissionModelFailure&&error.partial.incompleteReason==='max_output_tokens'&&claim.mission.project_kind==='specification'&&(claim.mission.project_evidence as {projectProfile?:string}|null)?.projectProfile==='game'&&['compose','revise'].includes(claim.job.role);
    const transientProvider=error instanceof MissionModelFailure&&['server_error','rate_limit_exceeded'].includes(String(error.partial.providerErrorCode));
    const invalidGameSpecification=error instanceof MissionModelFailure&&!error.partial.repairContextOverflow&&typeof error.partial.specificationValidationFeedback==='string';
