@@ -52,7 +52,7 @@ begin
   case when allowance=100000 and job_key='revision' then 'compose' else role end,
   agent_id,instruction,
   case when allowance=100000 and job_key='revision' then array(select job_key from mission_assignments where mission_id=source_id and role='work' and status='completed') when allowance=100000 and job_key='review_again' then array['compose'] else dependencies end,
-  payload||jsonb_build_object('reusedFrom',jsonb_build_object('missionId',source_id,'assignmentId',id,'attempts',attempts,'resultHash',md5(coalesce(result::text,'')))),
+  (payload-'continuedFrom')||jsonb_build_object('reusedFrom',jsonb_build_object('missionId',source_id,'assignmentId',id,'attempts',attempts,'resultHash',md5(coalesce(result::text,'')))),
   'completed',0,result,'Verbatim artifact reused; original observation, attempts and charges remain unchanged.'
  from mission_assignments where mission_id=source_id and status='completed'
   and (allowance=120000 or job_key not in('compose','review'));
@@ -60,13 +60,13 @@ begin
  select new_id,'revision','revise',agent_id,
   case when allowance=100000 then 'Apply exact before/after corrections to the saved compose artifact for every latest independent factual finding. Preserve all other wording and immutable source references. Do not add new release claims or rewrite for style.' else instruction end,
   case when allowance=100000 then array['review'] else dependencies end,
-  (payload-'operationalEvidenceSnapshot'-'reviewModelCheckpoint')||jsonb_build_object('continuedFrom',jsonb_build_object('missionId',source_id,'assignmentId',id,'attempts',attempts,'resultHash',md5(coalesce(result::text,''))))||
+  (payload-'operationalEvidenceSnapshot'-'reviewModelCheckpoint'-'reusedFrom')||jsonb_build_object('continuedFrom',jsonb_build_object('missionId',source_id,'assignmentId',id,'attempts',attempts,'resultHash',md5(coalesce(result::text,''))))||
   case when allowance=100000 then jsonb_build_object('revisionPatchBaseHash',encode(sha256(convert_to(result->>'text','UTF8')),'hex')) else '{}'::jsonb end,
   'queued',0,null,'Only the unresolved correction executes; all previous results remain in their original records.'
  from mission_assignments where mission_id=source_id and job_key='revision';
  insert into mission_assignments(mission_id,job_key,role,agent_id,instruction,dependencies,payload,status,attempts,result,detail)
  select new_id,'review_again','review',agent_id,instruction,array['revision'],
-  (payload-'operationalEvidenceSnapshot')||jsonb_build_object('continuedFrom',jsonb_build_object('missionId',source_id,'assignmentId',id,'attempts',attempts,'resultHash',md5(coalesce(result::text,'')))),
+  (payload-'operationalEvidenceSnapshot'-'reusedFrom')||jsonb_build_object('continuedFrom',jsonb_build_object('missionId',source_id,'assignmentId',id,'attempts',attempts,'resultHash',md5(coalesce(result::text,'')))),
   'queued',0,null,'Fresh full independent comparison required; actual unchanged blind criteria may be reused.'
  from mission_assignments where mission_id=source_id and job_key='review_again';
  if exists(select 1 from mission_assignments where mission_id=new_id and role='review' and result->>'verdict'='pass') then raise exception 'Review pass cannot be imported';end if;
