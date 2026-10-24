@@ -1,3 +1,4 @@
+import { nativeToolTurn } from "./native-tools";
 import { requireAgentResearch } from "@/lib/agents/policy";
 import { buildVideoTimingEvidence, buildGrokVideoFrames } from "@/lib/chat/video-evidence";
 import OpenAI from "openai";
@@ -442,6 +443,7 @@ ${getKatieReasoningExplainerStatement()}` }]
     return typed;
   }
 
+  generateToolTurn(params: import("@/lib/tools/types").ToolTurnParams) { return nativeToolTurn("grok", this.apiKey, params); }
   async listModels(): Promise<string[]> {
     try {
       const models = await this.client.models.list();
