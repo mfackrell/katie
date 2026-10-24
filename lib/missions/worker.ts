@@ -30,7 +30,13 @@ export async function executeClaim(claim:Claim,model=missionModel){
  const agent=mission.team.find(a=>a.id===job.agent_id);
  if(!agent)throw Error('Saved worker definition missing');
  if(!['running','awaiting_approval'].includes(saved.mission.status))return;
- const operationalEvidence=await workflowInspection(mission);
+ // A worker's observations are point-in-time evidence. Reuse the fenced
+ // checkpoint on retries; later reviewers must not silently replace it with a
+ // different live state and call an earlier true observation false.
+ const operationalEvidence=job.payload.operationalEvidenceSnapshot??await workflowInspection(mission);
+ if(operationalEvidence&&!job.payload.operationalEvidenceSnapshot){
+  if(!await rpc<boolean>('checkpoint_mission_operational_evidence',{p_id:job.id,p_lease:job.lease,p_evidence:operationalEvidence}))throw Error('Worker no longer authorized to checkpoint its operational evidence');
+ }
  if(operationalEvidence)mission.project_evidence={...((mission.project_evidence??{}) as Record<string,unknown>),operationalEvidence};
  const sourceReports=mission.objective.includes(EXECUTIVE_SOURCE_MARKER)?await sourceReportsForMission(mission.id):null;
  const sourceGroups=sourceReports?executiveSourceGroups(sourceReports):[];
@@ -74,7 +80,7 @@ export async function executeClaim(claim:Claim,model=missionModel){
  };
  const finalWork=job.role==='compose'||job.role==='revise';
  const persona=frame+'\nSaved responsibilities: '+agent.config.instructions+'\n'+(finalWork?getObjectiveFirstInstruction():'Complete only input.assignment. The full objective is context for that assignment, not a request to perform the other workers’ assignments or compose the whole deliverable. Do not delegate, write a new plan, repeat unassigned calculations or recommendations, or offer future work.');
- const commit=(result:Record<string,unknown>,children:Child[]=[],status='completed',missionStatus:string|null=null,final:string|null=null)=>rpc<boolean>('commit_mission_work',{p_id:job.id,p_lease:job.lease,p_result:result,p_children:children,p_status:status,p_mission_status:missionStatus,p_final:final});
+ const commit=(result:Record<string,unknown>,children:Child[]=[],status='completed',missionStatus:string|null=null,final:string|null=null)=>rpc<boolean>('commit_mission_work',{p_id:job.id,p_lease:job.lease,p_result:{...result,...(operationalEvidence&&job.role!=='plan'?{operationalEvidence}: {})},p_children:children,p_status:status,p_mission_status:missionStatus,p_final:final});
  // A project recovery may point to a server-verified saved composition.
  // This avoids paying for another draft; independent review still executes.
  if(job.role==='compose'&&mission.project_kind==='specification'&&
@@ -258,6 +264,10 @@ export async function executeClaim(claim:Claim,model=missionModel){
  await commit(result);
 }
 export async function runMissionBatch(model=missionModel){
+ // Only this runtime understands the larger read-only audit envelope. The RPC
+ // is fenced, preserves budgets/attempts and allows one matching recovery.
+ try{await rpc('resume_repository_review_context');}
+ catch(error){console.warn('[Missions] Review context recovery unavailable',error instanceof Error?error.message:'unknown');}
  const claims:Claim[]=[];
  for(let i=0;i<3;i++){const claim=await rpc<Claim|null>('claim_mission_work');if(!claim)break;claims.push(claim);}
  const outcomes=await Promise.all(claims.map(async claim=>{

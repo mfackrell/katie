@@ -410,18 +410,46 @@ test('completed source checks survive a later review transport failure without b
 
 test('audit review keeps the full immutable source and all acceptance gates inside the bounded envelope',async()=>{
  const m=mission();m.objective='Audit source evidence read-only. Preserve immutable source references and report actual coverage.';
- const excerpt='SOURCE_START\n'+ 'source line\n'.repeat(2600)+'SOURCE_END';
+ m.repository_id=randomUUID();
+ const excerpt='SOURCE_START\n'+ 'source line\n'.repeat(4400)+'SOURCE_END';
  const worker={...job(m,'work','source_audit'),status:'completed',result:{text:'Source finding',inspection:{sha:'a'.repeat(40),files:[{path:'core.ts',excerpt}]},routingReason:'transport diagnostic '.repeat(1000),attemptedModels:['model-1','model-2']}};
  const compose={...job(m,'compose','compose'),status:'completed',result:{text:'Source-grounded report',routingReason:'transport diagnostic '.repeat(500)}};
  const review=job(m,'review','review');let committed;const requests=[];
  const load=modules({'@/lib/missions/store':{readMission:async()=>({mission:m,jobs:[worker,compose,review]}),rpc:async(_,args)=>{committed=args;return true;}},'@/lib/missions/inspection':{workflowInspection:async()=>null}});
  await load('@/lib/missions/worker').executeClaim({mission:m,job:review},async(_,instruction,input)=>{
-  requests.push({instruction,input});assert.ok(instruction.length<10000);assert.ok(input.length<=48000);
+  requests.push({instruction,input});assert.ok(instruction.length<12000);assert.ok(input.length<=96000);
   return{text:JSON.stringify(instruction.includes('KATIE_REQUIRED_DRAFT_REVIEW')?verdict():assessment),model:'independent',sources:[],calculations:[]};
  });
  assert.doesNotMatch(requests[0].input,/Source-grounded report|SOURCE_START/);
- const input=requests[1].input;assert.ok(input.includes(JSON.stringify(excerpt)));assert.ok(input.includes('a'.repeat(40)));assert.doesNotMatch(input,/transport diagnostic/);
+ const input=requests[1].input;assert.ok(input.length>48000);assert.ok(input.includes(JSON.stringify(excerpt)));assert.ok(input.includes('a'.repeat(40)));assert.doesNotMatch(input,/transport diagnostic/);
  const contract=load('@/lib/collaboration/review-contract');for(const id of contract.acceptanceIds(assessment))assert.ok(input.includes(id));
  for(const instruction of Object.values(contract.JUDGMENT_CHECKS))assert.ok(requests[1].instruction.includes(instruction));
  assert.equal(committed.p_mission_status,'completed');assert.equal(worker.result.inspection.files[0].excerpt,excerpt);assert.ok(worker.result.routingReason.length>10000);
+});
+
+test('operational workers checkpoint their observation and review retains each historical snapshot',async()=>{
+ const m=mission();m.objective='Audit operational workflows using actual records.';
+ const earlier={kind:'scoped_workflow_trace',observedAt:'2026-10-24T16:01:40Z',trace:{status:'running'}},later={...earlier,observedAt:'2026-10-24T16:05:40Z',trace:{status:'blocked'}};
+ const work=job(m),compose={...job(m,'compose','compose'),status:'completed',result:{text:'The job was running at 16:01:40Z.',operationalEvidence:earlier}},review=job(m,'review','review');
+ let inspections=0,committed;const checkpoints=[];
+ const load=modules({'@/lib/missions/inspection':{workflowInspection:async()=>{inspections++;return later;}},'@/lib/missions/store':{
+  readMission:async()=>({mission:m,jobs:[compose,review]}),rpc:async(name,args)=>{if(name==='checkpoint_mission_operational_evidence')checkpoints.push(args);if(name==='commit_mission_work')committed=args;return true;}
+ }});
+ work.payload.operationalEvidenceSnapshot=earlier;
+ await load('@/lib/missions/worker').executeClaim({mission:m,job:work},async(_c,_i,input)=>{
+  assert.equal(JSON.parse(input).projectEvidence.operationalEvidence.observedAt,earlier.observedAt);
+  return{text:'Historical observation',sources:[],calculations:[],model:'fixture'};
+ });
+ assert.equal(inspections,0);assert.deepEqual(committed.p_result.operationalEvidence,earlier);
+ await load('@/lib/missions/worker').executeClaim({mission:m,job:review},async(_c,instruction,input)=>{
+  if(instruction.includes('KATIE_REQUIRED_DRAFT_REVIEW')){
+   const data=JSON.parse(input.split('Evidence and candidate:\n')[1]);
+   assert.deepEqual(data.candidate.result.operationalEvidence,earlier);
+   assert.deepEqual(data.projectEvidence.operationalEvidence,later);
+   assert.match(instruction,/later status transition is new evidence/);
+  }
+  return{text:JSON.stringify(instruction.includes('KATIE_REQUIRED_DRAFT_REVIEW')?verdict():assessment),sources:[],calculations:[],model:'fixture'};
+ });
+ assert.equal(inspections,1);assert.equal(checkpoints.length,1);assert.equal(checkpoints[0].p_lease,review.lease);
+ assert.deepEqual(committed.p_result.operationalEvidence,later);assert.deepEqual(compose.result.operationalEvidence,earlier);
 });
