@@ -31,6 +31,9 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y postgresql-client
 
+      - name: Validate migration audit syntax
+        run: node --check scripts/audit-migration-authority.mjs
+
       - name: Audit migration ledger before deployment
         run: node scripts/audit-migration-authority.mjs
 
