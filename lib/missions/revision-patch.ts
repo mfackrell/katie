@@ -39,3 +39,33 @@ export function recoverMissionRevisionPatch(base:string,expectedHash:string,part
  const result=applyMissionRevisionPatch(base,expectedHash,JSON.stringify({edits,composerNotes:''}));
  return{...result,recoveredPatch:{partialHash:createHash('sha256').update(partial).digest('hex'),notesIncomplete:true,independentReviewRequired:true}};
 }
+
+/** A stream can end inside its last edit. Retain only preceding, fully parsed
+ * edits; never fill a missing character or apply the unfinished replacement.
+ * This is an unapproved candidate, still subject to length and full review. */
+export function recoverMissionRevisionPrefix(base:string,expectedHash:string,partial:string){
+ const prefix=/^\s*\{\s*"edits"\s*:\s*\[/.exec(partial);
+ if(!prefix)throw Error('Missing leading edits array');
+ let offset=prefix[0].length;const edits:unknown[]=[];
+ while(offset<partial.length){
+  while(/\s/.test(partial[offset]??''))offset++;
+  if(partial[offset]!=='{')throw Error('Expected an edit object');
+  let depth=0,quoted=false,escaped=false,end=-1;
+  for(let i=offset;i<partial.length;i++){
+   const ch=partial[i];
+   if(quoted){if(escaped)escaped=false;else if(ch==='\\')escaped=true;else if(ch==='"')quoted=false;continue;}
+   if(ch==='"'){quoted=true;continue;}
+   if(ch==='{')depth++;else if(ch==='}'&&--depth===0){end=i+1;break;}
+  }
+  if(end<0){
+   if(!edits.length)throw Error('No complete edits to recover');
+   const result=applyMissionRevisionPatch(base,expectedHash,JSON.stringify({edits,composerNotes:''}));
+   return{...result,recoveredPatch:{partialHash:createHash('sha256').update(partial).digest('hex'),completeEditCount:edits.length,unfinishedEditOmitted:true,independentReviewRequired:true},changedCharacters:result.revisionPatch.edits.reduce((n,e)=>n+e.before.length,0)};
+  }
+  edits.push(JSON.parse(partial.slice(offset,end)));offset=end;
+  while(/\s/.test(partial[offset]??''))offset++;
+  if(partial[offset]!==',')throw Error('Expected an unfinished final edit after the complete prefix');
+  offset++;
+ }
+ throw Error('Missing unfinished edit');
+}
