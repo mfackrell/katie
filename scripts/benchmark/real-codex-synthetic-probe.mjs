@@ -22,7 +22,7 @@ const server=createServer((req,res)=>{
   const id='resp_synthetic_'+requests.length;
   const headers={'content-type':'text/event-stream','cache-control':'no-cache'};
   res.writeHead(200,headers);
-  const put=(type,payload)=>res.write('event: '+type+'\\ndata: '+JSON.stringify(payload)+'\\n\\n');
+  const put=(type,payload)=>res.write('event: '+type+'\ndata: '+JSON.stringify(payload)+'\n\n');
   const response={id,object:'response',created_at:1,model:body.model||'synthetic',status:'completed',output:[],usage:{input_tokens:3,output_tokens:2,total_tokens:5}};
   put('response.created',{type:'response.created',response:{...response,status:'in_progress'}});
   const message={id:'msg_'+requests.length,type:'message',role:'assistant',status:'completed',content:[{type:'output_text',text:'SYNTHETIC_READY',annotations:[]}]};
@@ -30,7 +30,7 @@ const server=createServer((req,res)=>{
   put('response.output_text.delta',{type:'response.output_text.delta',item_id:message.id,output_index:0,content_index:0,delta:'SYNTHETIC_READY'});
   put('response.output_item.done',{type:'response.output_item.done',output_index:0,item:message});
   put('response.completed',{type:'response.completed',response:{...response,output:[message]}});
-  res.end('data: [DONE]\\n\\n');
+  res.end('data: [DONE]\n\n');
  });
 });
 try{
