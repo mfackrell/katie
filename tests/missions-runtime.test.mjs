@@ -32,6 +32,36 @@ const job=(m,role='work',key='work')=>({id:randomUUID(),mission_id:m.id,job_key:
 
 const assessment={objective:'A supported recommendation',qualifications:['Service economics'],strongestEvidence:['Supplied assumptions'],criteria:['Supported recommendation'],synthesis:{conclusion:'Weigh economics and market evidence',dimensions:[{dimension:'Economics',supportedScope:'Scenario analysis',evidence:['Supplied assumptions']}],emphasis:'Decision relevance'},taskContract:{deliverable:'A recommendation',requirements:[{id:'outcome',requirement:'A supported recommendation',sourceId:'latest-user',status:'active'}],conflicts:[]}};
 const verdict=(decision='approve')=>({verdict:decision,findings:decision==='approve'?'Verified complete outcome':'Incorrect arithmetic',checks:modules()('@/lib/collaboration/review-contract').acceptanceIds(assessment).map(id=>({id,passed:decision==='approve',evidence:decision==='approve'?'Specific support checked':'Incorrect arithmetic in the draft'}))});
+test('native composition separates deliverable from saved composer notes and rejects ambiguous envelopes',async()=>{
+ const prior=process.env.OPENAI_API_KEY;process.env.OPENAI_API_KEY='fixture-only';
+ try{
+  for(const role of ['compose','revise']){
+   const m=mission(),j=job(m,role,role),f=modelFixture([response(JSON.stringify({deliverable:'75% utilization; 5 spare requests/day; 2 business days.',composerNotes:'Removed the inaccurate word-count footer.'}))]);
+   const result=await f.call({mission:m,job:j},'Return final memo','Saved evidence');
+   assert.equal(result.text,'75% utilization; 5 spare requests/day; 2 business days.');
+   assert.equal(result.composerNotes,'Removed the inaccurate word-count footer.');
+   assert.equal(f.ledger[0].text.format.schema.additionalProperties,false);
+   assert.match(f.ledger[0].instructions,/revision commentary exclusively in composerNotes/);
+  }
+  const invalid='{"deliverable":"Memo","composerNotes":"","unreviewedAppendix":"Extra claims"}';
+  const f=modelFixture([response(invalid)]);
+  await assert.rejects(f.call({mission:mission(),job:job(mission(),'compose','compose')},'Compose','Evidence'),e=>e.partial?.rejectedDeliverableResponse===invalid);
+ }finally{if(prior===undefined)delete process.env.OPENAI_API_KEY;else process.env.OPENAI_API_KEY=prior;}
+});
+test('review receives the whole deliverable without private composer commentary and enforces compound under limits',async()=>{
+ for(const objective of ['Calculate capacity and deliver a memo under 6 words here.','Deliverable: a draft executive memo under 6 words that answers the question.']){
+  const m=mission();m.objective=objective;
+  const compose={...job(m,'compose','compose'),status:'completed',result:{text:'Six complete words exceed this limit',composerNotes:'COMPOSER_ONLY: an internal change log, not a reviewer verdict'}},review=job(m,'review','review');let committed;
+  const {executeClaim}=modules({'@/lib/missions/store':{readMission:async()=>({mission:m,jobs:[compose,review]}),rpc:async(_,args)=>{committed=args;return true;}}})('@/lib/missions/worker');
+  await executeClaim({mission:m,job:review},async(_,instruction,input)=>{
+   assert.doesNotMatch(input,/COMPOSER_ONLY/);
+   return{text:instruction.includes('KATIE_REQUIRED_DRAFT_REVIEW')?JSON.stringify(verdict()):JSON.stringify(assessment),sources:[],calculations:[],model:'fixture'};
+  });
+  assert.equal(committed.p_result.wordLimit,5);assert.equal(committed.p_result.wordCount,6);
+  assert.equal(committed.p_result.verdict,'changes_requested');assert.equal(committed.p_final,null);
+  assert.match(compose.result.composerNotes,/COMPOSER_ONLY/,'durable notes are not erased');
+ }
+});
 test('planner rejects invented agents, unauthorized research/development, duplicate keys and dependency cycles',()=>{
  const {validatePlan}=modules()('@/lib/missions/types'),m=mission();
  const one={key:'economics',agentId:team[0].id,instruction:'Calculate economics',capability:'analysis',dependencies:[]};
