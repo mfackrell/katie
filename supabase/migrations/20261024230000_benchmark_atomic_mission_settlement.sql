@@ -9,8 +9,10 @@ begin
  perform pg_advisory_xact_lock(hashtextextended('katie.mission.state',0));
  select * into c from public.mission_calls where id=p_call for update;
  if not found then raise exception 'missing legacy call'; end if;
- select * into b from public.benchmark_budget_calls
-  where request_key=p_call::text for update;
+ select bc.* into b from public.benchmark_budget_calls bc
+  join public.benchmark_mission_bindings mb on mb.account_id=bc.account_id
+  join public.mission_assignments ma on ma.mission_id=mb.mission_id
+  where ma.id=c.job_id and bc.request_key=p_call::text for update of bc;
  if not found then raise exception 'missing benchmark projection'; end if;
  select * into a from public.benchmark_budget_accounts where id=b.account_id for update;
  if c.status='completed' and b.state in ('settled','overrun') then
