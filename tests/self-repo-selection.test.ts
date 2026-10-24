@@ -33,3 +33,15 @@ test("actual architecture matcher selects source for the live self-inspection ph
   assert.match(result.reason,/Architecture-aware/);
  }
 });
+
+test("production continuity matcher recognizes ordinary user messages",()=>{
+ const {runInNewContext}=require("node:vm") as typeof import("node:vm");
+ const from=route.indexOf("    const continuitySelfInspection =");
+ const to=route.indexOf("    const repoGate =",from);
+ assert.ok(from>=0 && to>from);
+ const source=route.slice(from,to);
+ const match=runInNewContext("(function(message,selfInspectionRequest,recentUserTopic){"+source+"return continuitySelfInspection;})");
+ assert.equal(match("can you see yourself yet?",false,""),true);
+ assert.equal(match("Inspect your own code",true,"Earlier we discussed routing"),true);
+ assert.equal(match("What is in this picture?",false,"Earlier we discussed routing"),false);
+});
