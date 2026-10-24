@@ -453,3 +453,18 @@ test('operational workers checkpoint their observation and review retains each h
  assert.equal(inspections,1);assert.equal(checkpoints.length,1);assert.equal(checkpoints[0].p_lease,review.lease);
  assert.deepEqual(committed.p_result.operationalEvidence,later);assert.deepEqual(compose.result.operationalEvidence,earlier);
 });
+
+
+test('workers receive their actual dependency artifacts without unrelated completed drafts',async()=>{
+ const m=mission(),source={...job(m,'work','research_source'),status:'completed',result:{text:'Actual searched source',sources:[{url:'https://example.com/primary'}]}},unrelated={...job(m,'compose','compose'),status:'completed',result:{text:'Unrelated unreviewed draft'}};
+ const dependent=job(m,'work','assess_relevance');dependent.dependencies=['research_source'];
+ const load=modules({'@/lib/missions/store':{readMission:async()=>({mission:m,jobs:[source,unrelated,dependent]}),rpc:async()=>true}});
+ await load('@/lib/missions/worker').executeClaim({mission:m,job:dependent},async(_c,_i,input)=>{
+  const evidence=JSON.parse(input).evidence;assert.deepEqual(evidence.map(e=>e.key),['research_source']);assert.equal(evidence[0].result.sources[0].url,'https://example.com/primary');
+  return{text:'Checked actual source',model:'fixture',sources:[],calculations:[]};
+ });
+ dependent.dependencies=[];
+ await load('@/lib/missions/worker').executeClaim({mission:m,job:dependent},async(_c,_i,input)=>{
+  assert.deepEqual(JSON.parse(input).evidence,[]);return{text:'Independent analysis',model:'fixture',sources:[],calculations:[]};
+ });
+});

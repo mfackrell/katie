@@ -123,3 +123,37 @@ begin
  if has_function_privilege('anon','checkpoint_mission_operational_evidence(uuid,uuid,jsonb)','execute') or has_function_privilege('authenticated','resume_repository_review_context()','execute') then raise exception 'Recovery permission widened';end if;
 end $$;
 select 'Operational snapshot identity and lease fencing passed.' as result;
+
+-- Set up the real operations failure shape for its bounded missing-analysis
+-- continuation. The source itself must remain bit-for-bit unchanged afterwards.
+alter table executive_delegations add column created_at timestamptz default now();
+update agent_missions set status='blocked',repository_id=null,actual_tokens=73361,reserved_tokens=95966,calls=5,deadline=now()+interval '60 minutes',
+ team='[{"id":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa","config":{"name":"Lead"}},{"id":"bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb","config":{"name":"Analysis"}}]'
+ where id='b50007ae-016a-435e-8835-9109405011d5';
+update mission_assignments set status='completed',result='{"verdict":"changes_requested","findings":["Workers did not analyze the supplied trace"],"checks":[]}' where mission_id='b50007ae-016a-435e-8835-9109405011d5' and job_key='review';
+update mission_assignments set status='completed',result='{"text":"Saved unreviewed operations draft"}' where mission_id='b50007ae-016a-435e-8835-9109405011d5' and job_key='compose';
+insert into mission_assignments(mission_id,job_key,role,agent_id,instruction,status,result) values('b50007ae-016a-435e-8835-9109405011d5','revision','revise','aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa','Resolve actual trace analysis and unsupported claims.','failed','{"admissionDenied":true}');
+update executive_delegations set status='cancelled' where mission_id='b50007ae-016a-435e-8835-9109405011d5';
+insert into executive_delegation_events(delegation_id,event,evidence,created_at) select id,'cancel','{"reason":"Mission did not pass independent review"}',now()+interval '1 second' from executive_delegations where mission_id='b50007ae-016a-435e-8835-9109405011d5';
+create table operations_before as select jsonb_build_object('mission',to_jsonb(m),'jobs',(select jsonb_agg(to_jsonb(j) order by id) from mission_assignments j where mission_id=m.id),'calls',(select jsonb_agg(to_jsonb(c) order by id) from mission_calls c where job_id in(select id from mission_assignments where mission_id=m.id))) state from agent_missions m where id='b50007ae-016a-435e-8835-9109405011d5';
+\ir ../../supabase/migrations/20261024163500_continue_operations_trace_revision.sql
+\ir ../../supabase/migrations/20261024163500_continue_operations_trace_revision.sql
+
+do $$
+declare after_state jsonb;new_m agent_missions;source agent_missions;
+begin
+ select * into source from agent_missions where id='b50007ae-016a-435e-8835-9109405011d5';
+ select jsonb_build_object('mission',to_jsonb(source),'jobs',(select jsonb_agg(to_jsonb(j) order by id) from mission_assignments j where mission_id=source.id),'calls',(select jsonb_agg(to_jsonb(c) order by id) from mission_calls c where job_id in(select id from mission_assignments where mission_id=source.id))) into after_state;
+ if after_state is distinct from (select state from operations_before) then raise exception 'Operations source or charges changed';end if;
+ select * into new_m from agent_missions where project_evidence->'continuation'->>'sourceMissionId'=source.id::text;
+ if not found or new_m.deadline is distinct from source.deadline or new_m.token_allowance<>120000 or new_m.max_calls<>10 then raise exception 'Wrong continuation authority';end if;
+ if (select count(*) from agent_missions where project_evidence->'continuation'->>'sourceMissionId'=source.id::text)<>1 then raise exception 'Duplicate operations continuation';end if;
+ if (select count(*) from mission_assignments where mission_id=new_m.id and role='work' and status='queued')<>2 then raise exception 'Missing substantive trace workers';end if;
+ if (select count(*) from mission_assignments where mission_id=new_m.id and status='completed')<>2 then raise exception 'Unexpected completed work invented';end if;
+ if exists(select 1 from mission_assignments where mission_id=new_m.id and role='review' and result->>'verdict'='pass') then raise exception 'Review passed by recovery';end if;
+ if (select dependencies from mission_assignments where mission_id=new_m.id and job_key='revision') is distinct from array['review','trace_facts','trace_challenge'] then raise exception 'Revision bypasses worker dependencies';end if;
+ if (select result from mission_assignments where mission_id=new_m.id and job_key='compose') is distinct from (select result from mission_assignments where mission_id=source.id and job_key='compose') then raise exception 'Saved draft changed';end if;
+ if not(new_m.project_evidence->'operationalBaseline' ? 'observedAt') then raise exception 'Actual baseline not retained';end if;
+ if not exists(select 1 from executive_management_requests r,jsonb_array_elements(r.plan->'assignments') a where a->>'slug'='operations' and a->>'missionId'=new_m.id::text) then raise exception 'Parent did not follow continuation';end if;
+end $$;
+select 'Missing trace analysis continuation is bounded, idempotent and preserves saved draft, review and original charges.' as result;
