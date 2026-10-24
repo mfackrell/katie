@@ -1,3 +1,6 @@
+-- Ensure composite chat/actor pair is a valid FK target without altering chat data.
+create unique index if not exists chats_id_actor_id_unique_for_self_tool_grants on public.chats(id, actor_id);
+
 -- Explicit server-managed ownership admission. No implicit grant from actor names
 -- or caller-supplied IDs. Provision only after verifying chat ownership out of band.
 create table public.self_tool_owner_grants (
