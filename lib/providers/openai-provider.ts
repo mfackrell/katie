@@ -1,3 +1,4 @@
+import { nativeToolTurn } from "./native-tools";
 import OpenAI from "openai";
 import {
   ChatGenerateParams,
@@ -261,6 +262,7 @@ export class OpenAiProvider implements LlmProvider {
     this.client = new OpenAI({ apiKey, fetch: globalThis.fetch.bind(globalThis) });
   }
 
+  generateToolTurn(params: import("@/lib/tools/types").ToolTurnParams) { return nativeToolTurn("openai", this.apiKey, params); }
   async listModels(): Promise<string[]> {
     const models = await this.client.models.list();
     return models.data.map((model) => model.id);
