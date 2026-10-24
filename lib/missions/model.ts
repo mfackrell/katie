@@ -135,7 +135,7 @@ async function executeMissionModel(claim:Claim,instruction:string,input:string,t
   if(inferenceTimeout<1000)throw Error('Mission execution time window exhausted before dispatch; saved work remains intact');
   // Only a persisted, server-owned benchmark binding may switch billing ledgers.
   const {data:bench,error:benchError}=await getSupabaseAdminClient().from('benchmark_mission_bindings')
-    .select('account_id,experiment_id,baseline_sha').eq('mission_id',claim.mission.id).maybeSingle();
+    .select('account_id,experiment_id,baseline_sha').eq('mission_id',claim.mission.id).maybeSingle<{account_id:string;experiment_id:string;baseline_sha:string}>();
   if(benchError)throw Error('Benchmark mission binding lookup failed closed');
   const benchmarkBinding=bench?{
    verifiedByServer:true,missionId:claim.mission.id,arm:'orchestrated',
@@ -152,7 +152,8 @@ async function executeMissionModel(claim:Claim,instruction:string,input:string,t
        model:choice.provider.name+':'+selectedModel,maxInputTokens:Math.max(1,reserve-outputTokens),
        maxOutputTokens:outputTokens,
        invoke:async()=>{const r=await client.responses.create(request,{timeout:inferenceTimeout});
-        return {...r,usage:{...r.usage,inputTokens:r.usage?.input_tokens,outputTokens:r.usage?.output_tokens}};}
+        const usage=r.usage as {total_tokens?:number;input_tokens?:number;output_tokens?:number}|undefined;
+        return {...r,usage:{...usage,inputTokens:usage?.input_tokens,outputTokens:usage?.output_tokens}};}
       })
      : await client.responses.create(request,{timeout:inferenceTimeout});
    if(!benchmarkBinding)await rpc('finish_mission_call',{p_call:callId,p_tokens:response.usage?.total_tokens??null});
