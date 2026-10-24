@@ -12,7 +12,7 @@ import {MissionAdmissionError,explainAdmissionDenial,missionExecutionDeadline,mi
 
 const calculator={type:'function',name:'calculate',description:'Execute a deterministic arithmetic calculation. Numbers must come from supplied evidence or explicitly labeled assumptions.',strict:true,parameters:{type:'object',properties:{operation:{type:'string',enum:['add','subtract','multiply','divide','power']},values:{type:'array',items:{type:'number'},minItems:2,maxItems:12}},required:['operation','values'],additionalProperties:false}};
 export class MissionModelFailure extends Error { constructor(message:string,readonly partial:Record<string,unknown>){super(message);this.name='MissionModelFailure';} }
-export type ModelResult={text:string;sources:Array<{url:string;title:string}>;calculations:unknown[];model:string;provider?:string;routingReason?:string;attemptedModels?:string[];composerNotes?:string;executionEffort?:string};
+export type ModelResult={text:string;sources:Array<{url:string;title:string}>;calculations:unknown[];model:string;provider?:string;routingReason?:string;attemptedModels?:string[];composerNotes?:string;requestedExecutionEffort?:string};
 export function isCreditExhaustion(error:unknown):boolean{
  const e=error as {status?:number;code?:string;error?:{code?:string;message?:string};message?:string}|null;
  const code=String(e?.code??e?.error?.code??'').toLowerCase();
@@ -66,7 +66,7 @@ export async function missionModel(claim:Claim,instruction:string,input:string,t
     expandedOutputTokens=Math.min(12000,Number(error.partial.outputTokenLimit)*2);
     result=await executeMissionModel(claim,instruction,input,tools,choice,executionDeadline,expandedOutputTokens,acceptanceInjection&&attemptedModels.length===1);
    }
-   const complete={...result,executionEffort:claim.job.role==='revise'&&typeof claim.job.payload.revisionPatchBaseHash==='string'?'low':['compose','revise'].includes(claim.job.role)&&claim.mission.project_kind!=='specification'?'medium':undefined,provider:choice.provider.name,routingReason:choice.reasoning,attemptedModels};
+   const complete={...result,requestedExecutionEffort:claim.job.role==='revise'&&typeof claim.job.payload.revisionPatchBaseHash==='string'?'low':['compose','revise'].includes(claim.job.role)&&claim.mission.project_kind!=='specification'?'medium':undefined,provider:choice.provider.name,routingReason:choice.reasoning,attemptedModels};
    if(checkpointHash&&!await rpc<boolean>('checkpoint_mission_review_model',{p_id:claim.job.id,p_lease:claim.job.lease,p_hash:checkpointHash,p_response:complete}))throw Error('Worker no longer authorized to persist review checkpoint');
    return complete;
   }catch(error){
