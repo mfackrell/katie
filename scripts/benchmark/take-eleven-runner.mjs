@@ -5,6 +5,7 @@ import {spawnSync} from 'node:child_process';
 import {readFileSync,writeFileSync,mkdirSync} from 'node:fs';
 import {resolve} from 'node:path';
 import {randomUUID} from 'node:crypto';
+import {authorizeBenchmarkPair} from './take-eleven-adapters.mjs';
 
 const fail=(s)=>{throw new Error(s)};
 const argv=process.argv.slice(2);
@@ -14,6 +15,8 @@ const cfg=JSON.parse(readFileSync(configPath,'utf8'));
 if(!Number.isSafeInteger(cfg.capTokens)||cfg.capTokens<=0)fail('positive integer capTokens required');
 if(!cfg.baselineSha || !/^[a-f0-9]{40}$/.test(cfg.baselineSha))fail('exact 40-character baseline SHA required');
 if(!Array.isArray(cfg.arms)||cfg.arms.length!==2||new Set(cfg.arms.map(a=>a.id)).size!==2||!['direct','orchestrated'].every(id=>cfg.arms.some(a=>a.id===id)))fail('exactly direct and orchestrated arms required');
+const admission=authorizeBenchmarkPair(cfg.capabilities);
+if(!admission.ready)fail('Benchmark adapters not ready: '+JSON.stringify(admission));
 const out=resolve(arg('--out')||'benchmark-results');
 mkdirSync(out,{recursive:true});
 const runId=randomUUID();
