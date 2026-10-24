@@ -1,0 +1,32 @@
+name: Executive saved-work recovery verification
+on:
+  pull_request:
+    paths:
+      - 'supabase/migrations/20261024154500_continue_executive_saved_audit.sql'
+      - 'tests/fixtures/executive-saved-continuation.sql'
+      - '.github/workflows/executive-recovery-check.yml'
+jobs:
+  postgres-recovery:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: fixture-only
+          POSTGRES_DB: recovery_fixture
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check the production migration entry points
+        run: |
+          node --check scripts/audit-migration-authority.mjs
+          node --check scripts/run-migrations.mjs
+      - name: Verify real PostgreSQL recovery and idempotence
+        run: psql postgresql://postgres:fixture-only@localhost:5432/recovery_fixture -v ON_ERROR_STOP=1 -f tests/fixtures/executive-saved-continuation.sql
