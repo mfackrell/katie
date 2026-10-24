@@ -24,6 +24,11 @@ function modules(overrides={},globals={}){
  return load;
 }
 const original={CLAUDE_API_KEY:process.env.CLAUDE_API_KEY,GOOGLE_API_KEY:process.env.GOOGLE_API_KEY};
+test('short deliverable comparisons reserve a complete bounded verdict without reducing blind assessment or long reviews',()=>{
+ const {missionOutputLimit}=modules()('@/lib/missions/request-budget');const c={mission:{objective:'Deliver a report at most 1200 words.'},job:{role:'review',payload:{}}};
+ assert.equal(missionOutputLimit(c,'Independent assessment:\ncriteria'),6000);assert.equal(missionOutputLimit(c,'AUTHORITATIVE_USER_TURNS:\nsource'),5000);
+ c.mission.objective='Deliver an unrestricted technical audit.';assert.equal(missionOutputLimit(c,'Independent assessment:\ncriteria'),10000);
+});
 test.before(()=>{process.env.CLAUDE_API_KEY='fixture-only';process.env.GOOGLE_API_KEY='fixture-only';});
 test.after(()=>{for(const [k,v]of Object.entries(original))if(v===undefined)delete process.env[k];else process.env[k]=v;});
 const unusedOpenAI={__esModule:true,default:class {constructor(){throw Error('No OpenAI inference in this fixture');}}};

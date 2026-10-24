@@ -582,6 +582,16 @@ test('partial edit streams preserve complete edits and request only the unfinish
  });assert.equal(committed.p_result.revisionPatch.previousPatch.resultHash,prefix.revisionPatch.resultHash);assert.match(committed.p_result.text,/count six/);assert.equal(compose.result.text,base);assert.equal(committed.p_mission_status,null);assert.equal(committed.p_final,null);
 });
 
+test('final ordinary review retains every prior failure and full source without repeating old passed matrices',async()=>{
+ const m=mission(),compose={...job(m,'compose','compose'),status:'completed',result:{text:'Original draft'}},revision={...job(m,'revise','revision'),status:'completed',result:{text:'Complete corrected deliverable'}},source={...job(m,'work','source'),status:'completed',result:{text:'Complete actual source evidence'}};
+ const old={...job(m,'review','review'),status:'completed',result:{verdict:'changes_requested',findings:['The material causal claim needs qualification.'],checks:[{id:'old-pass',passed:true,evidence:'REDUNDANT_PASSED_MATRIX '.repeat(400)},{id:'old-fail',passed:false,evidence:'Complete historical failure evidence '.repeat(30)}]}},review=job(m,'review','review_again');let committed;
+ const load=modules({'@/lib/missions/store':{readMission:async()=>({mission:m,jobs:[compose,source,old,revision,review]}),rpc:async(_,args)=>{committed=args;return true;}}});
+ await load('@/lib/missions/worker').executeClaim({mission:m,job:review},async(_c,instruction,input)=>{
+  if(instruction.includes('KATIE_REQUIRED_DRAFT_REVIEW')){const payload=JSON.parse(input.split('Evidence and candidate:\n')[1]);assert.equal(payload.priorFindings[0].priorCheckCount,2);assert.deepEqual(payload.priorFindings[0].failedChecks,[old.result.checks[1]]);assert.deepEqual(payload.priorFindings[0].findings,old.result.findings);assert.doesNotMatch(input,/REDUNDANT_PASSED_MATRIX/);assert.match(input,/Complete actual source evidence/);assert.match(input,/Complete corrected deliverable/);for(const id of load('@/lib/collaboration/review-contract').acceptanceIds(assessment))assert.ok(input.includes(id));}
+  return{text:JSON.stringify(instruction.includes('KATIE_REQUIRED_DRAFT_REVIEW')?verdict():assessment),model:'independent',sources:[],calculations:[]};
+ });assert.equal(old.result.checks.length,2);assert.equal(committed.p_mission_status,'completed');
+});
+
 test('validated complete edit prefixes receive one durable continuation without resetting attempts or approving work',async()=>{
  const m=mission(),base='Original immutable evidence stays intact. Count four. Other factual observations remain unchanged.';
  const compose={...job(m,'compose','compose'),status:'completed',result:{text:base}},revision=job(m,'revise','revision');revision.payload={revisionPatchBaseHash:createHash('sha256').update(base).digest('hex')};revision.attempts=1;

@@ -254,7 +254,7 @@ export async function executeClaim(claim:Claim,model=missionModel){
     measuredLength:measured,
     evidence:completed.filter(x=>x.role==='work'||x.role==='development').map(x=>({key:x.job_key,result:candidateEvidence(x.result)})),
     fullSourceChecks:sourceGroups.length?job.result?.sourceChecks:undefined,
-    priorFindings:sourceGroups.length?priorReviews.map(({checks,...rest})=>({...rest,priorCheckCount:Array.isArray(checks)?checks.length:0})):gameReview?priorReviews.map(({checks,...rest})=>({...rest,priorCheckCount:Array.isArray(checks)?checks.length:0})):priorReviews};
+    priorFindings:sourceGroups.length?priorReviews.map(({checks,...rest})=>({...rest,priorCheckCount:Array.isArray(checks)?checks.length:0})):gameReview?priorReviews.map(({checks,...rest})=>({...rest,priorCheckCount:Array.isArray(checks)?checks.length:0})):priorReviews.map(({checks,...rest})=>({...rest,priorCheckCount:Array.isArray(checks)?checks.length:0,failedChecks:Array.isArray(checks)?checks.filter((c:Record<string,unknown>)=>c.passed!==true):[]}))};
   const reviewFrame=frame+'\n'+REVIEW_INSTRUCTION+(gameReview?
     '\nGAME REVIEW REFERENCE SEMANTICS: contractRef and stepsRef are server-validated lossless views of duplicate contracts; inspect candidate.specification.finalContract for full steps. Evaluate this CURRENT candidate independently. The prior draft and charges remain saved.':'')+
     '\nREVIEW TIMING: You are performing the current independent review. A prior blocked review or a draft-stage pending-review label is not evidence that this current review is missing; determine approval from the full candidate, actual sources and acceptance checks. Do not require your own successful verdict to exist before you can issue it. Never accept a false claim that earlier review passed.\nMEASURED LENGTH: The supplied measuredLength is computed by code from the entire candidate. Use it for length compliance; never estimate a conflicting count. Distinguish true acceptance failures from formatting preferences.';
@@ -304,7 +304,7 @@ export async function executeClaim(claim:Claim,model=missionModel){
 export async function runMissionBatch(model=missionModel){
  // Only this runtime understands the larger read-only audit envelope. The RPC
  // is fenced, preserves budgets/attempts and allows one matching recovery.
- try{await rpc('resume_saved_partial_audit_edits');await rpc('activate_saved_audit_contract_recovery');await rpc('activate_saved_audit_effort_recovery');await rpc('activate_saved_audit_corrections');await rpc('activate_saved_audit_completion');await rpc('resume_repository_review_context');}
+ try{await rpc('resume_compact_audit_comparison');await rpc('resume_saved_partial_audit_edits');await rpc('activate_saved_audit_contract_recovery');await rpc('activate_saved_audit_effort_recovery');await rpc('activate_saved_audit_corrections');await rpc('activate_saved_audit_completion');await rpc('resume_repository_review_context');}
  catch(error){console.warn('[Missions] Review context recovery unavailable',error instanceof Error?error.message:'unknown');}
  const claims:Claim[]=[];
  for(let i=0;i<3;i++){const claim=await rpc<Claim|null>('claim_mission_work');if(!claim)break;claims.push(claim);}

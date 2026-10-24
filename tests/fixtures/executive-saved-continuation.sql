@@ -335,3 +335,34 @@ do $$declare m agent_missions;s agent_missions;after_state jsonb;begin
  if has_function_privilege('authenticated','resume_saved_partial_audit_edits()','execute') then raise exception 'Partial recovery exposed';end if;
 end $$;
 select 'Only terminal comparison starts; uncertain charges and completed criteria remain exact, and a changed partial response cannot resume.' as result;
+
+-- An approved sibling can release ONLY its unused allowance. The aggregate
+-- ceiling, actual charges, historical holds, criteria and deadline are invariant.
+update agent_missions set status='completed',actual_tokens=40493,reserved_tokens=40493,calls=1,routing_calls=1 where id='e0d14a70-7499-4fa4-8b3a-886612aea2c1';
+update mission_assignments set status='completed',result='{"verdict":"pass","findings":["Fixture independent review receipt"]}' where mission_id='e0d14a70-7499-4fa4-8b3a-886612aea2c1' and job_key='review_again';
+update executive_delegations set status='verified' where mission_id='e0d14a70-7499-4fa4-8b3a-886612aea2c1';
+update agent_missions set status='blocked',actual_tokens=49725,reserved_tokens=49725,calls=4,routing_calls=4 where id='d0fde164-a838-4dea-843c-0b7a3c40614f';
+update mission_assignments set status='completed',result='{"text":"Actual saved short correction","revisionPatch":{"resultHash":"abab5e201c4e9d2904fe925972ea8a028a7660f5b3244e948983bb903479b16b"}}' where mission_id='d0fde164-a838-4dea-843c-0b7a3c40614f' and job_key='revision';
+update mission_assignments set status='failed',attempts=1,result='{"admissionDenied":true}',payload=payload||'{"reviewModelCheckpoint":{"hash":"1066266dda95924c993a2c456a4b5ba4fb1be29ec8e9432ca4a4aaf58d9bba85","response":{"text":"Saved actual blind criteria"}}}' where mission_id='d0fde164-a838-4dea-843c-0b7a3c40614f' and job_key='review_again';
+create table compact_before as select id,to_jsonb(m) state from agent_missions m where id in('e0d14a70-7499-4fa4-8b3a-886612aea2c1','d0fde164-a838-4dea-843c-0b7a3c40614f');
+create table compact_jobs_before as select id,to_jsonb(j) state from mission_assignments j where mission_id in('e0d14a70-7499-4fa4-8b3a-886612aea2c1','d0fde164-a838-4dea-843c-0b7a3c40614f');
+\ir ../../supabase/migrations/20261024185000_finish_audit_within_existing_ceiling.sql
+do $$declare before_row record;after_row jsonb;begin
+ update executive_delegations set status='verified' where mission_id='d0fde164-a838-4dea-843c-0b7a3c40614f';
+ if resume_compact_audit_comparison()<>0 then raise exception 'Unexpected delegation resumed';end if;
+ update executive_delegations set status='cancelled' where mission_id='d0fde164-a838-4dea-843c-0b7a3c40614f';
+ if resume_compact_audit_comparison()<>1 or resume_compact_audit_comparison()<>0 then raise exception 'Bounded redistribution not idempotent';end if;
+ if (select sum(token_allowance) from agent_missions where id in(select id from compact_before))<>120000 then raise exception 'Total budget increased';end if;
+ if (select token_allowance from agent_missions where id='e0d14a70-7499-4fa4-8b3a-886612aea2c1')<>40493 or (select token_allowance from agent_missions where id='d0fde164-a838-4dea-843c-0b7a3c40614f')<>79507 then raise exception 'Wrong unused amount transferred';end if;
+ for before_row in select * from compact_before loop
+  select to_jsonb(m)-array['token_allowance','status','detail','updated_at'] into after_row from agent_missions m where id=before_row.id;
+  if after_row is distinct from before_row.state-array['token_allowance','status','detail','updated_at'] then raise exception 'Deadline, accounting or saved mission output changed';end if;
+ end loop;
+ for before_row in select * from compact_jobs_before loop
+  select to_jsonb(j)-array['status','available_at','detail','updated_at'] into after_row from mission_assignments j where id=before_row.id;
+  if after_row is distinct from before_row.state-array['status','available_at','detail','updated_at'] then raise exception 'Attempts, criteria or artifact changed';end if;
+ end loop;
+ if (select status from mission_calls where id='b32ede9b-c821-4074-bd2e-83f289e5174c')<>'uncertain' then raise exception 'Prior uncertain charge altered';end if;
+ if has_function_privilege('authenticated','resume_compact_audit_comparison()','execute') then raise exception 'Redistribution exposed';end if;
+end $$;
+select 'Unused sibling allowance is redistributed once, never increased; independent review remains mandatory and all charges and artifacts survive.' as result;
