@@ -36,13 +36,29 @@ export async function missionModel(claim:Claim,instruction:string,input:string,t
  const checkpoint=claim.job.payload?.reviewModelCheckpoint as {hash?:string;response?:ModelResult}|undefined;
  if(checkpointHash&&checkpoint?.hash===checkpointHash&&typeof checkpoint.response?.text==='string'
    &&typeof checkpoint.response.model==='string'&&Array.isArray(checkpoint.response.sources)&&Array.isArray(checkpoint.response.calculations))return checkpoint.response;
+ const {data:routingBench,error:routingBenchError}=await getSupabaseAdminClient()
+  .from('benchmark_mission_bindings').select('account_id,experiment_id,baseline_sha')
+  .eq('mission_id',claim.mission.id).maybeSingle<{account_id:string;experiment_id:string;baseline_sha:string}>();
+ if(routingBenchError)throw Error('Benchmark routing binding lookup failed closed');
  const choices=await orchestrationChoices({objective:claim.mission.objective,instruction:
   `CURRENT EXECUTION STAGE: ${claim.job.role}. Available tools for THIS call: ${tools}. Complete input size: ${instruction.length+input.length} characters; select a model with sufficient context capacity. `+
   (['compose','revise'].includes(claim.job.role)?'Synthesize the saved worker evidence; research has already been delegated. Do not classify this as a new web search. ':'')+
   (claim.job.role==='review'?'Independently verify the saved work and original objective. ':'')+claim.job.instruction,
   requestId:claim.job.id,accounting:{
-   reserve:async(model,tokens)=>{if(Date.now()>=executionDeadline-5000)throw Error('Mission execution time window exhausted before routing dispatch');const id=randomUUID();if(!await rpc<boolean>('reserve_mission_routing_call',{p_id:claim.job.id,p_lease:claim.job.lease,p_call:id,p_model:model,p_tokens:tokens}))throw Error('Worker no longer authorized or mission allowance exhausted');return id;},
-   finish:async(id,tokens)=>{await rpc('finish_mission_call',{p_call:id,p_tokens:tokens});}
+   reserve:async(model,tokens)=>{
+    if(Date.now()>=executionDeadline-5000)throw Error('Mission execution time window exhausted before routing dispatch');
+    const id=randomUUID();
+    if(routingBench){
+     const reservation=await rpc<string|null>('benchmark_reserve_mission_call',{p_job:claim.job.id,p_lease:claim.job.lease,p_call:id,p_model:model,p_tokens:tokens,p_routing:true});
+     if(!reservation)throw Error('Benchmark routing admission denied');
+    }else if(!await rpc<boolean>('reserve_mission_routing_call',{p_id:claim.job.id,p_lease:claim.job.lease,p_call:id,p_model:model,p_tokens:tokens}))
+     throw Error('Worker no longer authorized or mission allowance exhausted');
+    return id;
+   },
+   finish:async(id,tokens)=>{
+    if(routingBench)await rpc('benchmark_finish_mission_call',{p_call:id,p_tokens:tokens});
+    else await rpc('finish_mission_call',{p_call:id,p_tokens:tokens});
+   }
   },research:tools==='research',review:claim.job.role==='review',
   // The server already knows specification writing is architecture/planning.
   // Avoid paying a second classifier to rediscover this known phase.
