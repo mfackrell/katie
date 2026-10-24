@@ -1,10 +1,10 @@
 "use client";
 
 import { FormEvent, useEffect, useState } from "react";
-import { browserOwnerAuth } from "@/lib/tools/browser-owner-session";
+import { browserOwnerAuth, ownerSessionBearer } from "@/lib/tools/browser-owner-session";
 
 /** Authentication is not authorization: server separately requires an explicit actor/chat grant. */
-export function SelfToolsOwnerSession() {
+export function SelfToolsOwnerSession({ chatId }: { chatId: string }) {
   const client = browserOwnerAuth();
   const [email, setEmail] = useState("");
   const [signedIn, setSignedIn] = useState(false);
@@ -27,6 +27,19 @@ export function SelfToolsOwnerSession() {
     });
     setNotice(error ? "Could not start owner sign-in." : "Check your email for a secure sign-in link.");
   }
+  async function authorizeChat() {
+    const token=await ownerSessionBearer();
+    if(!token) {setNotice("Please sign in first.");return;}
+    try {
+      const response=await fetch("/api/self-tools/owner-grant",{
+        method:"POST",
+        headers:{"content-type":"application/json",Authorization:`Bearer ${token}`},
+        body:JSON.stringify({chatId})
+      });
+      setNotice(response.ok ? "Owner authorization recorded for this chat." :
+        "Owner enrollment unavailable or not authorized. Check server configuration.");
+    } catch { setNotice("Could not reach owner authorization service."); }
+  }
   async function signOut() {
     if (!client) return;
     const {error} = await client.auth.signOut();
@@ -37,7 +50,7 @@ export function SelfToolsOwnerSession() {
       {signedIn ? (
         <div className="flex items-center justify-between gap-3">
           <span>Owner session active. Self-management still requires server authorization.</span>
-          <button type="button" onClick={()=>void signOut()} className="underline">Sign out</button>
+          <div className="flex gap-3"><button type="button" onClick={()=>void authorizeChat()} className="underline">Authorize this chat</button><button type="button" onClick={()=>void signOut()} className="underline">Sign out</button></div>
         </div>
       ) : (
         <form onSubmit={(event)=>void signIn(event)} className="flex items-center gap-2">
