@@ -366,3 +366,28 @@ do $$declare before_row record;after_row jsonb;begin
  if has_function_privilege('authenticated','resume_compact_audit_comparison()','execute') then raise exception 'Redistribution exposed';end if;
 end $$;
 select 'Unused sibling allowance is redistributed once, never increased; independent review remains mandatory and all charges and artifacts survive.' as result;
+
+-- A genuine comparison rejection can fund only its unfinished correction from
+-- the same workstream's unused older allowance, with no aggregate increase.
+update agent_missions set status='blocked',actual_tokens=74667,reserved_tokens=74667,calls=5,routing_calls=5 where id='d0fde164-a838-4dea-843c-0b7a3c40614f';
+update mission_assignments set status='completed',result='{"verdict":"changes_requested","findings":["Deployment receipt assertions are unsupported; qualify unavailable coverage and explicitly close prior findings"],"checks":[{"id":"factual-support","passed":false,"evidence":"No deployment receipt supplied"}]}' where mission_id='d0fde164-a838-4dea-843c-0b7a3c40614f' and job_key='review_again';
+update executive_delegations set status='cancelled' where mission_id='d0fde164-a838-4dea-843c-0b7a3c40614f';
+insert into executive_delegation_events(delegation_id,event,evidence,created_at) select id,'cancel','{"reason":"Mission did not pass independent review"}',now()+interval '13 seconds' from executive_delegations where mission_id='d0fde164-a838-4dea-843c-0b7a3c40614f';
+create table closure_before as select id,to_jsonb(m) state from agent_missions m where id in('d0fde164-a838-4dea-843c-0b7a3c40614f','c1d6ca76-dc21-4025-84bb-1d8a6a30e587');
+\ir ../../supabase/migrations/20261024191500_complete_operations_factual_closure.sql
+\ir ../../supabase/migrations/20261024191500_complete_operations_factual_closure.sql
+do $$declare m agent_missions;s agent_missions;begin
+ if (select count(*) from agent_missions where project_evidence ? 'finalOperationsCorrection')<>1 then raise exception 'Duplicate factual closure';end if;
+ select * into m from agent_missions where project_evidence ? 'finalOperationsCorrection';
+ if m.status<>'running' or m.max_calls<>3 or m.token_allowance<>49497 or m.calls<>0 or m.actual_tokens<>0 or m.reserved_tokens<>0 or m.deadline>now()+interval '31 minutes' or m.deadline<=now() then raise exception 'Unbounded correction';end if;
+ if (select count(*) from mission_assignments where mission_id=m.id and status='queued')<>2 then raise exception 'Wrong correction scope';end if;
+ if (select result from mission_assignments where mission_id=m.id and job_key='compose') is distinct from (select result from mission_assignments where mission_id='d0fde164-a838-4dea-843c-0b7a3c40614f' and job_key='revision') then raise exception 'Actual candidate not retained';end if;
+ if (select result from mission_assignments where mission_id=m.id and job_key='review') is distinct from (select result from mission_assignments where mission_id='d0fde164-a838-4dea-843c-0b7a3c40614f' and job_key='review_again') then raise exception 'Actual review lost';end if;
+ if (select payload->'reviewModelCheckpoint' from mission_assignments where mission_id=m.id and job_key='review_again') is distinct from (select payload->'reviewModelCheckpoint' from mission_assignments where mission_id='d0fde164-a838-4dea-843c-0b7a3c40614f' and job_key='review_again') then raise exception 'Blind criteria lost';end if;
+ select * into s from agent_missions where id='c1d6ca76-dc21-4025-84bb-1d8a6a30e587';
+ if s.token_allowance+m.token_allowance<>80000 or (to_jsonb(s)-'token_allowance') is distinct from (select state-'token_allowance' from closure_before where id=s.id) then raise exception 'Donor charges, deadline or aggregate authorization changed';end if;
+ select * into s from agent_missions where id='d0fde164-a838-4dea-843c-0b7a3c40614f';
+ if to_jsonb(s) is distinct from (select state from closure_before where id=s.id) then raise exception 'Original rejected mission changed';end if;
+ if exists(select 1 from mission_assignments where mission_id=m.id and role='review' and result->>'verdict'='pass') then raise exception 'Approval manufactured';end if;
+end $$;
+select 'Only exact factual correction and fresh comparison are commissioned; older allowance is reallocated without altering any original artifact, charge or deadline.' as result;
