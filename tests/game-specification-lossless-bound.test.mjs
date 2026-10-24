@@ -24,7 +24,10 @@ test('lossless game approval bound matches saved checkpoint capacity and preserv
 test('autonomous checkpoint recovers newest revision with a project budget fence and fresh independent review',()=>{
  assert.match(checkpointMigration,/j\.role IN \('revise','compose'\)/);
  assert.match(checkpointMigration,/ORDER BY m\.created_at DESC,j\.created_at DESC LIMIT 1/);
- assert.match(checkpointMigration,/p\.token_allowance-spent<25000/);
+ // Assert the guard is executable SQL, not merely present inside a comment.
+ const executableSql=checkpointMigration.replace(/--[^\\n]*/g,'').replace(/\\/\\*[\\s\\S]*?\\*\\//g,'');
+ assert.match(executableSql,/IF\\s+run_count>=p\\.max_missions\\s+OR\\s+p\\.token_allowance-spent<25000\\s+THEN RETURN false; END IF;/);
+ assert.doesNotMatch(checkpointMigration,/--[^\\n]*\\\\n\\s+IF\\s+run_count/);
  assert.match(projectWorker,/\['compose','revise'\]\.includes\(composition\.role\)/);
  assert.match(projectWorker,/status:'unreviewed'/);
 });
