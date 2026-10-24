@@ -46,20 +46,20 @@ export function SelfToolsOwnerSession({ chatId }: { chatId: string }) {
     setNotice(error ? "Sign-out failed." : "Signed out of self-management tools.");
   }
   return (
-    <section aria-label="Katie self-tools owner authentication" className="border-t border-white/10 px-3 py-2 text-xs text-zinc-400">
+    <section aria-label="Katie self-tools owner authentication" className="shrink-0 border-t border-emerald-500/30 bg-zinc-900 px-4 py-3 text-sm text-zinc-100">
       {signedIn ? (
-        <div className="flex items-center justify-between gap-3">
+        <div className="flex flex-wrap items-center justify-between gap-3">
           <span>Owner session active. Self-management still requires server authorization.</span>
-          <div className="flex gap-3"><button type="button" onClick={()=>void authorizeChat()} className="underline">Authorize this chat</button><button type="button" onClick={()=>void signOut()} className="underline">Sign out</button></div>
+          <div className="flex flex-wrap gap-3"><button type="button" onClick={()=>void authorizeChat()} className="underline">Authorize this chat</button><button type="button" onClick={()=>void signOut()} className="underline">Sign out</button></div>
         </div>
       ) : (
-        <form onSubmit={(event)=>void signIn(event)} className="flex items-center gap-2">
+        <form onSubmit={(event)=>void signIn(event)} className="flex flex-wrap items-center gap-3">
           <label htmlFor="self-tools-owner-email">Owner sign-in</label>
           <input id="self-tools-owner-email" type="email" autoComplete="email" required
             value={email} onChange={event=>setEmail(event.target.value)}
-            className="min-w-0 flex-1 rounded bg-zinc-900 px-2 py-1 text-white"
+            className="min-w-[180px] flex-1 rounded-lg border border-zinc-600 bg-zinc-950 px-3 py-2 text-white placeholder:text-zinc-400"
             placeholder="Email address" />
-          <button type="submit" className="underline">Send link</button>
+          <button type="submit" className="shrink-0 rounded-lg bg-emerald-500 px-4 py-2 font-semibold text-zinc-950 hover:bg-emerald-400">Send sign-in link</button>
         </form>
       )}
       {notice && <p role="status">{notice}</p>}
