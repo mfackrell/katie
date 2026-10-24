@@ -1,3 +1,5 @@
+import { runSelfInspection } from "@/lib/tools/self-inspection";
+import { authorizeSelfToolCaller } from "@/lib/tools/authorization";
 import {handleProjectChat, startProjectIntent, followupProjectIntent, isProjectStopIntent} from '@/lib/developer/project-conversation';
 import {executeExecutiveCommand} from '@/lib/executive/transport';
 import { maskPdfSourceNames, pdfPageTaskForSource } from "@/lib/uploads/pdf-inventory";
@@ -684,6 +686,21 @@ async function executeChat(request: NextRequest) {
        /\b(?:see|view|understand|know|examine|look at|access)\b[^.!?]{0,55}\b(?:yourself|your own (?:system|self)|katie)\b/i.test(message) ||
        /\b(?:yourself|your own (?:system|self)|katie)\b[^.!?]{0,55}\b(?:see|view|understand|know|examine|access)\b/i.test(message));
     let selfRepoId: string | null = null;
+    const selfToolRequest = (selfInspectionRequest ||
+      /\b(?:github|supabase|vercel)\b/i.test(message) &&
+      /\b(?:inspect|read|list|show|verify|create|edit|write|change|migrate|deploy|rollback|logs?|schema|rows?|commits?|checks?)\b/i.test(message));
+    const selfToolActor = selfToolRequest && !currentAgentTask()
+      ? await getSupabaseAdminClient().from("actors").select("name,actor_kind").eq("id", actorId).maybeSingle<{name:string;actor_kind:string}>()
+      : null;
+    // Display names are editable and must never grant self-management access.
+    const selfToolsEnabled = Boolean(process.env.KATIE_SELF_ACTOR_ID) &&
+      actorId === process.env.KATIE_SELF_ACTOR_ID &&
+      selfToolActor?.data?.actor_kind === "standard";
+    if (selfToolsEnabled) {
+      try { await authorizeSelfToolCaller(request, actorId, chatId); }
+      catch { return NextResponse.json({ error: "Self-tool caller authorization denied. An authenticated owner grant and server-bound Katie identity are required." }, { status: 403 }); }
+    }
+
     let ownSourceInspectionAuthorized = false;
     if (selfInspectionRequest && !currentAgentTask()) {
       const admin = getSupabaseAdminClient();
@@ -2399,7 +2416,16 @@ ${chunkWorkflowSummary}`;
                   resolvedRequestIntent
                 );
 
-                const generation = collaborationEnabledForRequest
+                const generation = selfToolsEnabled
+                  ? await (async () => {
+                      const result = await runSelfInspection({ request, actorId, chatId, requestId, provider,
+                        params: finalParams, deadlineMs: executionDeadlineMs,
+                        onRecord: record => emitChunk({ type: "metadata", toolCall: record }),
+                      });
+                      enqueueDelta(result.text);
+                      return { result, streamedText: result.text };
+                    })()
+                  : collaborationEnabledForRequest
                   ? await (async () => {
                       const collaborationBaseParams = baseParams;
                       const collaboration = await runAdaptiveCollaboration({
