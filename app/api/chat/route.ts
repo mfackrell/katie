@@ -1740,7 +1740,7 @@ async function executeChat(request: NextRequest) {
         const skipped = settled
           .map((result, index) => (result.status === "rejected" ? { path: fileSelection.selected[index], reason: "fetch failed" } : null))
           .filter((item): item is { path: string; reason: string } => item !== null);
-        const inclusionManifest = buildInclusionManifest(included, truncated, skipped);
+        const inclusionManifest = `${buildInclusionManifest(included, truncated, skipped)}\n- included_partial_excerpts: [${partialSource.map(file => file.filePath).join("; ")}]`;
         const routingSourceAvailable = Boolean(routingEvidence?.content.trim());
         const sourceEvidenceStatus = {
           repositoryConnected: true,
@@ -1766,7 +1766,7 @@ async function executeChat(request: NextRequest) {
 
         const promptContractBlock = `You have access to the following complete files:\n${
           included.map((file) => `- ${file.filePath} (${file.byteCount} bytes)`).join("\n") || "- none"
-        }\n\nIf a file is marked as truncated, its content was cut at the byte limit; reason may be provided.\nIf a file is marked as skipped or not included, you cannot reference its contents.\nNever claim to have seen a file that is not listed in FILES_INCLUSION_MANIFEST.\nIf a user asks you to review/fix a file not in the manifest, say so explicitly.\n\n---`;
+        }\n\nFiles labelled PARTIAL SOURCE EXCERPT are readable only for the displayed excerpt and cannot support claims about omitted sections.\nIf a file is marked as skipped or not included, you cannot reference its contents.\nNever claim to have seen a file that is not listed in FILES_INCLUSION_MANIFEST.\nIf a user asks you to review/fix a file not in the manifest, say so explicitly.\n\n---`;
         const warningBlock = skipped.length
           ? `\nWARNING: The following requested files could not be included:\n${skipped.map((item) => `- ${item.path} (${item.reason})`).join("\n")}\nAnalysis is based only on available files above.`
           : "";
