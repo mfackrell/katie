@@ -41,3 +41,11 @@ test('source evidence and deployment acceptance must remain distinct',()=>{
  assert.match(source,/repository HEAD, not verified production SHA/i);
  assert.match(source,/katie-mu\.vercel\.app/);
 });
+
+test('owner grants migration provisions composite FK eligibility before use',()=>{
+ const sql=readFileSync('supabase/migrations/20261023130000_self_tool_owner_grants.sql','utf8');
+ assert.match(sql,/create unique index if not exists chats_id_actor_id_unique_for_self_tool_grants on public\.chats\(id, actor_id\)/i);
+ assert.match(sql,/foreign key \(chat_id, actor_id\) references public\.chats\(id, actor_id\)/i);
+ assert.match(sql,/enable row level security/i);
+ assert.match(sql,/revoke all on public\.self_tool_owner_grants from public, anon, authenticated/i);
+});
