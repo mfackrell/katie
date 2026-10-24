@@ -56,5 +56,7 @@ begin
    provider_namespace=p_namespace,provider_request_id=p_provider_request where id=c.id;
  return new_state;
 end $$;
+-- Remove the obsolete three-argument overload: it cannot bind provider namespace.
+drop function if exists public.benchmark_reconcile_receipt(uuid,text,bigint);
 revoke all on function public.benchmark_reconcile_receipt(uuid,text,text,bigint) from public,anon,authenticated;
 grant execute on function public.benchmark_reconcile_receipt(uuid,text,text,bigint) to service_role;
