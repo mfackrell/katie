@@ -338,7 +338,6 @@ select 'Only terminal comparison starts; uncertain charges and completed criteri
 
 -- An approved sibling can release ONLY its unused allowance. The aggregate
 -- ceiling, actual charges, historical holds, criteria and deadline are invariant.
-alter table mission_assignments add column available_at timestamptz;
 update agent_missions set status='completed',actual_tokens=40493,reserved_tokens=40493,calls=1,routing_calls=1 where id='e0d14a70-7499-4fa4-8b3a-886612aea2c1';
 update mission_assignments set status='completed',result='{"verdict":"pass","findings":["Fixture independent review receipt"]}' where mission_id='e0d14a70-7499-4fa4-8b3a-886612aea2c1' and job_key='review_again';
 update executive_delegations set status='verified' where mission_id='e0d14a70-7499-4fa4-8b3a-886612aea2c1';
