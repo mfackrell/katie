@@ -170,3 +170,25 @@ test('native correction effort is counted and dispatched identically without cha
   assert.deepEqual(counted.tools,calls[1].tools);assert.equal(calls[1].executionEffort,undefined);
  }
 });
+
+test('native review grammar uses identical schemas for counting and inference and retains tools',async()=>{
+ for(const [provider,model] of [['anthropic','claude-opus-5-5'],['google','gemini-3.7-pro']]){
+  const calls=[],load=modules({'openai':unusedOpenAI},{fetch:async(url,init)=>{calls.push(JSON.parse(init.body));return new Response(JSON.stringify(url.includes('count')?(provider==='anthropic'?{input_tokens:40}:{totalTokens:40}):(provider==='anthropic'?claude('{}'):gemini('{}'))));}});
+  const c=load('@/lib/orchestration/bounded-provider').boundedProvider(pick(provider,model));
+  for(const phase of ['assessment','comparison','source']){
+   const format=load('@/lib/missions/review-format').missionReviewFormat(phase),r={...request,model,text:{format},executionEffort:'low'};
+   await c.post('/responses/input_tokens',{body:r,timeout:5000});await c.responses.create(r,{timeout:5000});
+   const counted=provider==='anthropic'?calls.at(-2):calls.at(-2).generateContentRequest,generated=calls.at(-1);
+   const config=provider==='anthropic'?'output_config':'generationConfig';assert.deepEqual(counted[config],generated[config]);
+   assert.deepEqual(provider==='anthropic'?generated.output_config.format.schema:generated.generationConfig.responseJsonSchema,JSON.parse(JSON.stringify(format.schema)));assert.deepEqual(counted.tools,generated.tools);
+   assert.equal(format.schema.additionalProperties,false);assert.ok(format.schema.required.length>0);
+  }
+ }
+});
+
+test('adding a strict review format invalidates an older unconstrained checkpoint',async()=>{
+ const h=fixture();h.c.job.role='review';const input='AUTHORITATIVE_USER_TURNS:\nOriginal source';
+ await h.call(h.c,'Independent contract',input);const first=h.inferences.length;
+ await h.call(h.c,'Independent contract',input,'none','assessment');assert.equal(h.inferences.length,first+1);
+ await h.call(h.c,'Independent contract',input,'none','assessment');assert.equal(h.inferences.length,first+1);
+});

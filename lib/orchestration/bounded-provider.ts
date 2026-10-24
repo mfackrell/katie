@@ -7,7 +7,7 @@ type GoogleContent={role:string;parts:GooglePart[]};
 type ClaudeBlock={type:string;text?:string;id?:string;name?:string;input?:unknown;citations?:Array<{url?:string;title?:string}>};
 type WireInput={nativeAnthropic?:ClaudeBlock[];nativeGoogle?:GoogleContent;type?:string;call_id?:string;output?:string;role?:string;content?:unknown};
 type NativeResponse={content?:ClaudeBlock[];stop_reason?:string;usage?:{input_tokens?:number;output_tokens?:number;cache_read_input_tokens?:number;cache_creation_input_tokens?:number};candidates?:Array<{content?:GoogleContent;finishReason?:string}>;usageMetadata?:{totalTokenCount?:number}};
-export type BoundedRequest={model:string;instructions:string;input:unknown[];max_output_tokens:number;executionEffort?:'low'|'medium';tools?:Array<{type:string;name?:string;description?:string;parameters?:unknown}>;text?:{format?:{type?:string;schema?:unknown}};[key:string]:unknown};
+export type BoundedRequest={model:string;instructions:string;input:unknown[];max_output_tokens:number;executionEffort?:'low'|'medium';tools?:Array<{type:string;name?:string;description?:string;parameters?:unknown}>;text?:{format?:{type?:string;name?:string;schema?:unknown}};[key:string]:unknown};
 type BoundedResponse={status?:string;output_text?:string;output:unknown[];usage?:{total_tokens?:number};incomplete_details?:{reason?:string}|null;error?:{code?:string;message?:string}|null};
 type Client={post:(path:string,options:{body:Record<string,unknown>;timeout:number})=>Promise<{input_tokens:number}>;responses:{create:(request:BoundedRequest,options:{timeout:number})=>Promise<BoundedResponse>}};
 
@@ -17,6 +17,9 @@ function nativeRequest(provider:string,request:BoundedRequest){
  const calculator=request.tools?.find(t=>t.type==='function');
  const research=request.tools?.some(t=>t.type==='web_search');
  const schema=request.text?.format?.schema;
+ // Review schemas use only the common native JSON Schema subset. Other
+ // contracts retain their existing prompt and server validation behavior.
+ const nativeReviewSchema=schema&&/^mission_review_(assessment|comparison|source)$/.test(request.text?.format?.name??'')?schema:undefined;
  const instructions=request.instructions+(schema?'\nReturn ONLY JSON matching this schema: '+JSON.stringify(schema):request.text?.format?'\nReturn ONLY valid JSON.':'');
  let url:string,headers:Record<string,string>,body:Item;
  if(provider==='anthropic'){
@@ -30,7 +33,7 @@ function nativeRequest(provider:string,request:BoundedRequest){
    if(item.role)messages.push({role:item.role,content:item.content});
   }
   body={model:request.model,max_tokens:request.max_output_tokens,system:instructions,messages,
-   ...(request.executionEffort&&/^claude-(?:opus|sonnet|haiku|fable|mythos)-5(?:-|$)/.test(request.model)?{output_config:{effort:request.executionEffort}}:{}),
+   ...((request.executionEffort||nativeReviewSchema)&&/^claude-(?:opus|sonnet|haiku|fable|mythos)-5(?:-|$)/.test(request.model)?{output_config:{...(request.executionEffort?{effort:request.executionEffort}:{}),...(nativeReviewSchema?{format:{type:'json_schema',schema:nativeReviewSchema}}:{})}}:{}),
    ...(research?{tools:[{type:'web_search_20250305',name:'web_search',max_uses:4}]}:calculator?{tools:[{name:calculator.name,description:calculator.description,input_schema:calculator.parameters}]}:{})};
  }else{
   if(provider!=='google')throw Error('Unsupported native provider');
@@ -44,7 +47,7 @@ function nativeRequest(provider:string,request:BoundedRequest){
    if(item.type==='function_call_output'){const part={functionResponse:{name:'calculate',...(item.call_id?.startsWith('google-')?{}:{id:item.call_id}),response:JSON.parse(item.output??'{}')}};const last=contents.at(-1);if(last?.role==='user')last.parts.push(part);else contents.push({role:'user',parts:[part]});continue;}
    if(item.role)contents.push({role:item.role==='assistant'?'model':'user',parts:[{text:String(item.content??'')}]});
   }
-  body={systemInstruction:{parts:[{text:instructions}]},contents,generationConfig:{maxOutputTokens:request.max_output_tokens,...(request.executionEffort&&/^gemini-3(?:[.-])/.test(request.model.replace(/^models\//,''))?{thinkingConfig:{thinkingLevel:request.executionEffort==='low'?'LOW':/flash/.test(request.model)?'MEDIUM':'HIGH'}}:{}),...(request.text?.format?{responseMimeType:'application/json'}:{})},
+  body={systemInstruction:{parts:[{text:instructions}]},contents,generationConfig:{maxOutputTokens:request.max_output_tokens,...(request.executionEffort&&/^gemini-3(?:[.-])/.test(request.model.replace(/^models\//,''))?{thinkingConfig:{thinkingLevel:request.executionEffort==='low'?'LOW':/flash/.test(request.model)?'MEDIUM':'HIGH'}}:{}),...(request.text?.format?{responseMimeType:'application/json',...(nativeReviewSchema?{responseJsonSchema:nativeReviewSchema}:{})}:{})},
    ...(calculator?{tools:[{functionDeclarations:[{name:calculator.name,description:calculator.description,parametersJsonSchema:calculator.parameters}]}]}:{})};
  }
  return{url,headers,body};
