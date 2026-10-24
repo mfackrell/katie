@@ -1733,6 +1733,12 @@ async function executeChat(request: NextRequest) {
           .filter((item): item is { path: string; reason: string } => item !== null);
         const inclusionManifest = buildInclusionManifest(included, truncated, skipped);
         const routingSourceAvailable = included.some(file => file.filePath === "app/api/chat/route.ts");
+        // Production acceptance: a self-inspection response must receive the actual routing implementation.
+        if ((selfInspectionRequest || continuitySelfInspection) &&
+            activeRepoContext.repositoryFullName === "mfackrell/katie" && !routingSourceAvailable) {
+          console.error("[Chat API] Self-inspection source acceptance failed", { requestId, selected: fileSelection.selected, skipped, truncated });
+          return NextResponse.json({ error: "Katie routing implementation could not be retrieved for this request.", requestId }, { status: 503 });
+        }
         const sourceEvidenceStatus = {
           repositoryConnected: true,
           retrievalAttempted: true,
@@ -1765,6 +1771,9 @@ async function executeChat(request: NextRequest) {
         personaForGeneration = `${personaForGeneration}\n\n${inclusionManifest}\n\nSELF_INSPECTION_EVIDENCE_STATUS: ${JSON.stringify(sourceEvidenceStatus)}\nAccess to a repository, retrieval of a relevant file, and independent behavioral verification are three distinct claims. Do not conflate them. If asked whether you can see yourself, report precisely which files are in the manifest, which relevant implementation files were retrieved, and what has not been verified. ${continuitySelfInspection ? "Resolve yourself as Katie and her source implementation, not a person or object in any unrelated previous image." : ""}\n\n${promptContractBlock}\n\n${fullFileContents}${warningBlock}`;
       } catch (error) {
         console.error("[Chat API] Full-file injection failed", { requestId, reason: error instanceof Error ? error.message : String(error) });
+        if ((selfInspectionRequest || continuitySelfInspection) && activeRepoContext.repositoryFullName === "mfackrell/katie") {
+          return NextResponse.json({error:"Katie source inspection failed before routing implementation could be delivered.",requestId},{status:503});
+        }
         personaForGeneration = `${personaForGeneration}\nFull-file injection failed. Repository context may be incomplete.`;
       }
     }
