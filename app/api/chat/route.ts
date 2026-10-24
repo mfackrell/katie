@@ -690,7 +690,10 @@ async function executeChat(request: NextRequest) {
     const selfToolActor = selfToolRequest && !currentAgentTask()
       ? await getSupabaseAdminClient().from("actors").select("name,actor_kind").eq("id", actorId).maybeSingle<{name:string;actor_kind:string}>()
       : null;
-    const selfToolsEnabled = selfToolActor?.data?.name.trim().toLowerCase() === "katie" && selfToolActor.data.actor_kind === "standard";
+    // Display names are editable and must never grant self-management access.
+    const selfToolsEnabled = Boolean(process.env.KATIE_SELF_ACTOR_ID) &&
+      actorId === process.env.KATIE_SELF_ACTOR_ID &&
+      selfToolActor?.data?.actor_kind === "standard";
     if (selfToolsEnabled) {
       try { await authorizeSelfToolCaller(request, actorId, chatId); }
       catch { return NextResponse.json({ error: "Self-tool caller authorization denied. An authenticated owner grant and server-bound Katie identity are required." }, { status: 403 }); }
