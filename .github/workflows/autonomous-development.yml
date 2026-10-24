@@ -62,6 +62,18 @@ jobs:
           set -euo pipefail
           author="$(gh issue view "$ISSUE" --repo "$GITHUB_REPOSITORY" --json author --jq '.author.login')"
           test "$author" = "$GITHUB_REPOSITORY_OWNER" || { echo 'Only owner-authored issues are authorized'; exit 1; }
+          # Reject duplicate issue dispatch before costly implementation or branch creation.
+          existing="$(gh pr list --repo "$GITHUB_REPOSITORY" --state open --limit 200 --json number,headRefName,title,body |
+            node -e '
+              let s="";process.stdin.on("data",x=>s+=x);process.stdin.on("end",()=>{
+                const issue=process.argv[1],prs=JSON.parse(s);
+                const found=prs.filter(p=>new RegExp("(^|[^0-9])#"+issue+"(?![0-9])").test((p.title||"")+" "+(p.body||"")));
+                process.stdout.write(found.map(p=>"#"+p.number).join(","));
+              });' "$ISSUE")"
+          if [ -n "$existing" ]; then
+            echo "::error::Issue #$ISSUE has existing open PR(s): $existing. Continue those PRs instead of dispatching duplicate implementation."
+            exit 1
+          fi
           branch="agent/issue-$ISSUE-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
           gh issue view "$ISSUE" --repo "$GITHUB_REPOSITORY" --json title,body --jq '.title + "\n\n" + (.body // "")' > "$RUNNER_TEMP/original-agent-request.md"
           # These tools are captured from the trusted workflow/main checkout,
