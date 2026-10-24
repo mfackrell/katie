@@ -49,6 +49,7 @@ try{
   }
  }catch(error){diagnostics.push(String(error?.message||error).slice(0,400));}
  assert(requests.length>=1,'synthetic gateway never received SDK traffic');
+ assert(!existsSync(join(repo,'unexpected-provider-output')),'Unrequested tool side effect');
  console.log(JSON.stringify({gatewayRequests:requests.length,completed,events:diagnostics.slice(-15),remaining,session:thread.id??null}));
  if(!completed)throw Error('SYNTHETIC_RESPONSES_PROTOCOL_NOT_QUALIFIED');
 }finally{await new Promise(resolve=>server.close(resolve));rmSync(root,{recursive:true,force:true});}
