@@ -293,6 +293,26 @@ export async function fetchFullFile(repoId: string, filePath: string, hardCap = 
   return fullContent;
 }
 
+/** Pure source selection shared by the production route and acceptance tests. */
+export function selectSelfInspectionImplementationPaths(userMessage: string, filePaths: string[]): string[] | null {
+  const selfArchitecture = /\\b(?:yourself|your own|katie|self.inspection|self.aware)\\b/i.test(userMessage) &&
+    /\\b(?:code|routing|router|source|repo|architecture|implementation|inspect|see|view)\\b/i.test(userMessage);
+  if (!selfArchitecture) return null;
+  const preferred = [
+    "app/api/chat/route.ts",
+    "lib/router/master-router.ts",
+    "lib/router/model-intent.ts",
+    "lib/repo/content-injector.ts",
+    "lib/repo/repo-access.ts",
+    "lib/chat/local-katie.ts",
+    "lib/providers/types.ts",
+    "lib/projects/chat.ts",
+    "lib/agents/development.ts",
+    "lib/tools/self-inspection.ts",
+  ];
+  return preferred.filter(path => filePaths.includes(path) && !shouldSkipPath(path).skip);
+}
+
 export async function selectFilesForInjection(
   repoId: string,
   userMessage: string,
@@ -317,28 +337,10 @@ export async function selectFilesForInjection(
   }
 
   const hints = parseHints(userMessage);
-  // Architecture questions need implementation entrypoints, not the first
-  // alphabetically sorted files (which are predominantly CI workflows).
-  const selfArchitecture = /\b(?:yourself|your own|katie|self.inspection|self.aware)\b/i.test(userMessage) &&
-    /\b(?:code|routing|router|source|repo|architecture|implementation|inspect|see|view)\b/i.test(userMessage);
-  if (selfArchitecture) {
-    const preferred = [
-      "app/api/chat/route.ts",
-      "lib/router/master-router.ts",
-      "lib/router/model-intent.ts",
-      "lib/repo/content-injector.ts",
-      "lib/repo/repo-access.ts",
-      "lib/chat/local-katie.ts",
-      "lib/providers/types.ts",
-      "lib/projects/chat.ts",
-      "lib/agents/development.ts",
-      "lib/tools/self-inspection.ts",
-    ];
-    const selected = preferred.filter(path => filePaths.includes(path) && !shouldSkipPath(path).skip);
-    // Self-inspection is evidence-driven, even when the user supplied a path hint.
-    // Always put the live request entrypoint first, before less relevant sources.
-    console.info("[Repo Injector] Architecture-aware source selection",{selected});
-    return {selected, reason: "Architecture-aware selection of actual chat, router, repository and tool implementations."};
+  const implementationPaths = selectSelfInspectionImplementationPaths(userMessage, filePaths);
+  if (implementationPaths) {
+    console.info("[Repo Injector] Architecture-aware source selection",{selected: implementationPaths});
+    return {selected: implementationPaths, reason: "Architecture-aware selection of actual chat, router, repository and tool implementations."};
   }
   const selected = filePaths
     .filter((path) => !shouldSkipPath(path).skip)
