@@ -5,14 +5,14 @@ import vm from 'node:vm';
 import ts from 'typescript';
 import {shouldFallbackIncompleteReview} from '../lib/missions/review-fallback.mjs';
 const source=readFileSync('lib/missions/model.ts','utf8');
-function loadRouterFixture({failPrimary=false,incompletePrimary=false,allow=true,acceptance=false}={}){
+function loadRouterFixture({failPrimary=false,incompletePrimary=false,emptyTruncation=false,allow=true,acceptance=false}={}){
  let calls=[],reserve=[],chosen=0;
  const first={name:'google',generate:async p=>{calls.push(['google',p.modelId]);if(failPrimary){const err=Error('quota');err.status=429;err.code='insufficient_quota';throw err;}return{text:'valid model result',model:p.modelId,provider:'google',usage:{totalTokens:65}};}};
  const second={name:'anthropic',generate:async p=>{calls.push(['anthropic',p.modelId]);return{text:'recovered verified text',model:p.modelId,provider:'anthropic',usage:{totalTokens:72}};}};
  const out=ts.transpileModule(source,{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022,esModuleInterop:true}}).outputText,exports={};
  const require=name=>name==='./review-fallback.mjs'?{shouldFallbackIncompleteReview}
  :name==='@/lib/orchestration/routing'?{orchestrationChoices:async()=>{chosen++;return[{provider:first,modelId:'gemini-3.1-pro',reasoning:'fixture'},{provider:second,modelId:'claude-sonnet-4-6',reasoning:'fixture'}];},orchestrationFailure:async()=> 'provider'}
- :name==='@/lib/orchestration/bounded-provider'?{boundedProvider:choice=>({post:async()=>({input_tokens:20}),responses:{create:async request=>{const r=await choice.provider.generate({modelId:request.model});return{status:incompletePrimary&&choice.provider===first?'incomplete':'completed',incomplete_details:{reason:'provider_interrupted'},output_text:r.text,output:[],usage:{total_tokens:r.usage.totalTokens}};}}})}
+ :name==='@/lib/orchestration/bounded-provider'?{boundedProvider:choice=>({post:async()=>({input_tokens:20}),responses:{create:async request=>{const r=await choice.provider.generate({modelId:request.model});return{status:(incompletePrimary||emptyTruncation)&&choice.provider===first?'incomplete':'completed',incomplete_details:{reason:emptyTruncation?'max_output_tokens':'provider_interrupted'},output_text:emptyTruncation&&choice.provider===first?'':r.text,output:[],usage:{total_tokens:r.usage.totalTokens}};}}})}
  :name==='./request-budget'?{fitsMissionEnvelope:()=>true,missionInputLimit:()=>48000,missionOutputLimit:claim=>claim.job.role==='review'?5000:3000,missionExecutionDeadline:()=>Date.now()+240000,missionAttemptTimeout:()=>90000,MissionAdmissionError:class extends Error{},explainAdmissionDenial:async()=>{throw Error('Worker no longer authorized or mission allowance exhausted');}}
  :name==='@/lib/orchestration/request-rejection'?{rejectedBeforeInference:()=>false}
  :name==='@/lib/providers'?{getAvailableProviders:()=>[first,second]}
@@ -24,7 +24,7 @@ function loadRouterFixture({failPrimary=false,incompletePrimary=false,allow=true
  :name==='@/lib/projects/contract'?{projectPlanSchema:{omit:()=>({})}}
  :name==='./types'?{planSchema:{}}:{};
  vm.runInNewContext(out,{exports,require,process,Buffer,console,setTimeout,clearTimeout},{filename:'model.js'});
- const claim={mission:{id:'m',project_id:'p',objective:acceptance?'[SYNTHETIC PROVIDER FAILOVER ACCEPTANCE] Validate a bounded operations memo':'Implement an original game',project_evidence:acceptance?{syntheticFaultAcceptance:true}:undefined,team:[{id:'agent',config:{research:false}}],project_kind:'specification'},job:{id:'job',agent_id:'agent',lease:'lease',role:acceptance?'work':'review'}};
+ const claim={mission:{id:'m',project_id:'p',objective:acceptance?'[SYNTHETIC PROVIDER FAILOVER ACCEPTANCE] Validate a bounded operations memo':'Implement an original game',project_evidence:acceptance?{syntheticFaultAcceptance:true}:undefined,team:[{id:'agent',config:{research:false}}],project_kind:'specification'},job:{id:'job',agent_id:'agent',lease:'lease',role:acceptance||emptyTruncation?'work':'review'}};
  return{run:()=>exports.missionModel(claim,'Review independent specification','Saved exact candidate'),calls,reserve,chosen:()=>chosen};
 }
 test('mission router selects capable candidate before inference and preserves model evidence',async()=>{
@@ -64,4 +64,11 @@ test('production acceptance injection is mission-scoped, applies to first candid
   const ordinary=loadRouterFixture();
   assert.equal((await ordinary.run()).provider,'google');
  }finally{if(old===undefined)delete process.env.KATIE_ACCEPTANCE_MISSION_ID;else process.env.KATIE_ACCEPTANCE_MISSION_ID=old;}
+});
+
+
+test('empty output at the model cap falls back without buying a larger empty retry',async()=>{
+ const t=loadRouterFixture({emptyTruncation:true});const result=await t.run();
+ assert.equal(result.provider,'anthropic');assert.deepEqual(t.calls.map(c=>c[0]),['google','anthropic']);assert.equal(t.reserve.length,2);
+ assert.equal(t.reserve[0].p_tokens,t.reserve[1].p_tokens,'Fallback retains the original tool/output budget');
 });

@@ -209,3 +209,40 @@ begin
  if has_function_privilege('authenticated','activate_saved_audit_completion()','execute') then raise exception 'Runtime gate accessible to users';end if;
 end $$;
 select 'Matching runtime starts both saved audit completion stages exactly once.' as result;
+
+-- Model-reviewed factual corrections and an exhausted empty response are distinct
+-- failure shapes. Neither permits altering saved results or marking review passed.
+update agent_missions set status='blocked',actual_tokens=43293,reserved_tokens=43293,calls=1 where id='3229be40-69ed-47c7-8057-d8c4e05394ef';
+update mission_assignments set status='completed',result='{"verdict":"changes_requested","findings":["Correct three factual inaccuracies"],"checks":[]}' where mission_id='3229be40-69ed-47c7-8057-d8c4e05394ef' and job_key='review_again';
+update agent_missions set status='blocked',actual_tokens=76456,reserved_tokens=76456,calls=2 where id='f8734d8d-7c2c-4fce-84d9-b1a6ba0ecca7';
+update mission_assignments set status='failed',attempts=1,result='{"incompleteReason":"max_output_tokens","partialText":"","outputTokenLimit":12000}' where mission_id='f8734d8d-7c2c-4fce-84d9-b1a6ba0ecca7' and job_key='revision';
+update executive_delegations set status='cancelled' where mission_id in('3229be40-69ed-47c7-8057-d8c4e05394ef','f8734d8d-7c2c-4fce-84d9-b1a6ba0ecca7');
+insert into executive_delegation_events(delegation_id,event,evidence,created_at) select id,'cancel','{"reason":"Mission did not pass independent review"}',now()+interval '5 seconds' from executive_delegations where mission_id in('3229be40-69ed-47c7-8057-d8c4e05394ef','f8734d8d-7c2c-4fce-84d9-b1a6ba0ecca7');
+create table correction_sources_before as select id,jsonb_build_object('mission',to_jsonb(m),'jobs',(select jsonb_agg(to_jsonb(j) order by id) from mission_assignments j where mission_id=m.id),'calls',(select jsonb_agg(to_jsonb(c) order by id) from mission_calls c where job_id in(select id from mission_assignments where mission_id=m.id))) state from agent_missions m where id in('3229be40-69ed-47c7-8057-d8c4e05394ef','f8734d8d-7c2c-4fce-84d9-b1a6ba0ecca7');
+\ir ../../supabase/migrations/20261024171000_continue_audit_factual_corrections.sql
+\ir ../../supabase/migrations/20261024171000_continue_audit_factual_corrections.sql
+
+do $$
+declare source agent_missions;m agent_missions;after_state jsonb;candidate jsonb;
+begin
+ if (select count(*) from agent_missions where project_evidence ? 'savedAuditCorrections')<>2 then raise exception 'Duplicate corrective recovery';end if;
+ for m in select * from agent_missions where project_evidence ? 'savedAuditCorrections' loop
+  select * into source from agent_missions where id=(m.project_evidence->'savedAuditCorrections'->>'sourceMissionId')::uuid;
+  select jsonb_build_object('mission',to_jsonb(source),'jobs',(select jsonb_agg(to_jsonb(j) order by id) from mission_assignments j where mission_id=source.id),'calls',(select jsonb_agg(to_jsonb(c) order by id) from mission_calls c where job_id in(select id from mission_assignments where mission_id=source.id))) into after_state;
+  if after_state is distinct from (select state from correction_sources_before where id=source.id) then raise exception 'Original source artifacts or charges mutated';end if;
+  if m.status<>'draft' or m.deadline is distinct from source.deadline or m.calls<>0 or m.actual_tokens<>0 or m.reserved_tokens<>0 then raise exception 'Correction authority changed';end if;
+  if exists(select 1 from mission_assignments where mission_id=m.id and role='review' and result->>'verdict'='pass') then raise exception 'Imported approval';end if;
+  if (select count(*) from mission_assignments where mission_id=m.id and status='queued')<>2 then raise exception 'Repeated completed work';end if;
+  if exists(select 1 from mission_assignments j join mission_assignments o on o.id=(j.payload->'reusedFrom'->>'assignmentId')::uuid where j.mission_id=m.id and j.result is distinct from o.result) then raise exception 'Reused artifact changed';end if;
+  if source.id='3229be40-69ed-47c7-8057-d8c4e05394ef' then
+   select result into candidate from mission_assignments where mission_id=source.id and job_key='revision';
+   if (select result from mission_assignments where mission_id=m.id and job_key='compose') is distinct from candidate then raise exception 'Correction based on wrong draft';end if;
+   if (select payload->>'revisionPatchBaseHash' from mission_assignments where mission_id=m.id and job_key='revision') is distinct from encode(sha256(convert_to(candidate->>'text','UTF8')),'hex') then raise exception 'Patch not bound to exact reviewed candidate';end if;
+   if (select payload->'reviewModelCheckpoint' from mission_assignments where mission_id=m.id and job_key='review_again') is distinct from (select payload->'reviewModelCheckpoint' from mission_assignments where mission_id=source.id and job_key='review_again') then raise exception 'Blind criteria lost';end if;
+  end if;
+ end loop;
+ if activate_saved_audit_completion()<>0 then raise exception 'Older runtime activated new work';end if;
+ if activate_saved_audit_corrections()<>2 or activate_saved_audit_corrections()<>0 then raise exception 'Matching correction gate not idempotent';end if;
+ if has_function_privilege('authenticated','activate_saved_audit_corrections()','execute') then raise exception 'Correction gate available to users';end if;
+end $$;
+select 'Targeted corrections preserve exact rejected candidate, real review, immutable work and all charges; empty-output recovery uses matching new runtime.' as result;
