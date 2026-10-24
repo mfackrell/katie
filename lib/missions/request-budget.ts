@@ -17,6 +17,7 @@ export function missionInputLimit(claim:Claim):number {
  * known short word cap stays small; an unbounded audit must not buy a predictably
  * truncated draft before receiving the already-supported 12K output envelope. */
 export function missionOutputLimit(claim:Claim,input:string):number {
+ if(claim.job.role==='revise'&&typeof claim.job.payload?.revisionPatchBaseHash==='string')return 3000;
  if(['compose','revise'].includes(claim.job.role)){
   if(claim.mission.project_kind==='specification'&&(claim.mission.project_evidence as {projectProfile?:string}|null)?.projectProfile==='game')return 16000;
   const limit=measureDeliverable(claim.mission.objective,'').wordLimit;
