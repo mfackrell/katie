@@ -133,7 +133,7 @@ export class GoogleProvider implements LlmProvider {
   private client: GoogleGenAI;
   private defaultModel = "gemini-3.1-pro";
 
-  constructor(apiKey: string) {
+  constructor(private readonly apiKey: string) {
     this.client = new GoogleGenAI({ apiKey });
   }
 
