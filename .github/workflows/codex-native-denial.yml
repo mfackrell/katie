@@ -25,3 +25,5 @@ jobs:
         run: node scripts/benchmark/real-codex-denial-probe.mjs
       - name: Qualify synthetic streaming Responses protocol
         run: node scripts/benchmark/real-codex-synthetic-probe.mjs
+      - name: Qualify real native shell and file edit against synthetic gateway
+        run: node scripts/benchmark/real-codex-tools-probe.mjs
