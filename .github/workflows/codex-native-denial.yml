@@ -23,3 +23,5 @@ jobs:
         run: npm install --no-save --package-lock=false --ignore-scripts @openai/codex-sdk@0.164.0
       - name: Run real CLI/SDK against local deny-only gateway
         run: node scripts/benchmark/real-codex-denial-probe.mjs
+      - name: Qualify synthetic streaming Responses protocol
+        run: node scripts/benchmark/real-codex-synthetic-probe.mjs
