@@ -44,7 +44,7 @@ try{
  try{
   const {events}=await thread.runStreamed('Reply SYNTHETIC_READY. No other work.');
   for await(const event of events){
-   diagnostics.push(event.type);
+   diagnostics.push(event.type==='error' ? 'error:'+JSON.stringify(event).slice(0,1200) : event.type);
    if(event.type==='turn.completed')completed=true;
   }
  }catch(error){diagnostics.push(String(error?.message||error).slice(0,400));}
