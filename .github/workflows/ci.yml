@@ -8,7 +8,7 @@ on:
 
 jobs:
   gate:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     env:
       NEXT_PUBLIC_SUPABASE_URL: https://example.supabase.co
@@ -57,7 +57,7 @@ jobs:
         run: node --test tests/game-development/signal-sprint.test.mjs
 
   review-completion:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     env:
       NEXT_PUBLIC_SUPABASE_URL: https://example.supabase.co
@@ -77,7 +77,7 @@ jobs:
         run: npm run test:review
 
   video-fallback:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - name: Checkout
