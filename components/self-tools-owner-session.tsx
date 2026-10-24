@@ -12,7 +12,19 @@ export function SelfToolsOwnerSession({ chatId }: { chatId: string }) {
   useEffect(() => {
     if (!client) return;
     let active = true;
-    void client.auth.getSession().then(({data}) => { if(active) setSignedIn(Boolean(data.session)); });
+    // Passwordless callback failures arrive in the URL hash, not as a React error.
+    const fragment = new URLSearchParams(window.location.hash.replace(/^#/, ""));
+    const code = fragment.get("error_code");
+    if (code) {
+      setNotice(code === "otp_expired"
+        ? "This sign-in link was already used or expired. Request a fresh link and open it once in this browser."
+        : "Sign-in could not be completed. Request a new link.");
+    }
+    void client.auth.getSession().then(({data,error}) => {
+      if(!active) return;
+      setSignedIn(Boolean(data.session));
+      if(error) setNotice("Unable to restore the owner session. Request a fresh sign-in link.");
+    });
     const {data:{subscription}} = client.auth.onAuthStateChange((_event,session)=>{
       if(active) setSignedIn(Boolean(session));
     });
@@ -46,20 +58,20 @@ export function SelfToolsOwnerSession({ chatId }: { chatId: string }) {
     setNotice(error ? "Sign-out failed." : "Signed out of self-management tools.");
   }
   return (
-    <section aria-label="Katie self-tools owner authentication" className="border-t border-white/10 px-3 py-2 text-xs text-zinc-400">
+    <section aria-label="Katie self-tools owner authentication" className="shrink-0 border-t border-emerald-500/30 bg-zinc-900 px-4 py-3 text-sm text-zinc-100">
       {signedIn ? (
         <div className="flex items-center justify-between gap-3">
           <span>Owner session active. Self-management still requires server authorization.</span>
           <div className="flex gap-3"><button type="button" onClick={()=>void authorizeChat()} className="underline">Authorize this chat</button><button type="button" onClick={()=>void signOut()} className="underline">Sign out</button></div>
         </div>
       ) : (
-        <form onSubmit={(event)=>void signIn(event)} className="flex items-center gap-2">
+        <form onSubmit={(event)=>void signIn(event)} className="flex flex-wrap items-center gap-3">
           <label htmlFor="self-tools-owner-email">Owner sign-in</label>
           <input id="self-tools-owner-email" type="email" autoComplete="email" required
             value={email} onChange={event=>setEmail(event.target.value)}
-            className="min-w-0 flex-1 rounded bg-zinc-900 px-2 py-1 text-white"
+            className="min-w-[180px] flex-1 rounded border border-zinc-600 bg-zinc-950 px-3 py-2 text-white"
             placeholder="Email address" />
-          <button type="submit" className="underline">Send link</button>
+          <button type="submit" className="rounded bg-emerald-500 px-4 py-2 font-semibold text-zinc-950">Send sign-in link</button>
         </form>
       )}
       {notice && <p role="status">{notice}</p>}
