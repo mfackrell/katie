@@ -16,7 +16,7 @@ test('admission preserves existing mission lease, deadline, call and parent guar
 test('settlement charges mission and benchmark in same transaction',()=>{
  assert.match(settle,/finish_mission_call\(p_call,p_tokens\)/);
  assert.match(settle,/spent_tokens=spent_tokens\+p_tokens/);
- assert.match(settle,/state='overrun'/);
+ assert.match(settle,/then 'overrun' else 'settled'/);
  assert.match(settle,/c\.actual_tokens is distinct from p_tokens/);
  assert.match(settle,/c\.status='completed'/);
 });
