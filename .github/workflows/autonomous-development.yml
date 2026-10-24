@@ -62,6 +62,18 @@ jobs:
           set -euo pipefail
           author="$(gh issue view "$ISSUE" --repo "$GITHUB_REPOSITORY" --json author --jq '.author.login')"
           test "$author" = "$GITHUB_REPOSITORY_OWNER" || { echo 'Only owner-authored issues are authorized'; exit 1; }
+          # Reject duplicate issue dispatch before costly implementation or branch creation.
+          existing="$(gh pr list --repo "$GITHUB_REPOSITORY" --state open --limit 200 --json number,headRefName,title,body |
+            node -e '
+              let s="";process.stdin.on("data",x=>s+=x);process.stdin.on("end",()=>{
+                const issue=process.argv[1],prs=JSON.parse(s);
+                const found=prs.filter(p=>new RegExp("(^|[^0-9])#"+issue+"(?![0-9])").test((p.title||"")+" "+(p.body||"")));
+                process.stdout.write(found.map(p=>"#"+p.number).join(","));
+              });' "$ISSUE")"
+          if [ -n "$existing" ]; then
+            echo "::error::Issue #$ISSUE has existing open PR(s): $existing. Continue those PRs instead of dispatching duplicate implementation."
+            exit 1
+          fi
           branch="agent/issue-$ISSUE-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
           gh issue view "$ISSUE" --repo "$GITHUB_REPOSITORY" --json title,body --jq '.title + "\n\n" + (.body // "")' > "$RUNNER_TEMP/original-agent-request.md"
           # These tools are captured from the trusted workflow/main checkout,
@@ -167,6 +179,21 @@ jobs:
           BRANCH: ${{ steps.task.outputs.branch }}
         run: |
           set -euo pipefail
+          # Do not create another implementation PR for an issue that already
+          # has an open PR. The orchestrator must recover/continue existing work.
+          existing="$(gh pr list --repo "$GITHUB_REPOSITORY" --state open --limit 200 --json number,headRefName,title,body |
+            node -e '
+              let s=""; process.stdin.on("data",x=>s+=x); process.stdin.on("end",()=>{
+                const issue=process.argv[1], branch=process.argv[2];
+                const prs=JSON.parse(s);
+                const hits=prs.filter(p=>p.headRefName===branch ||
+                  new RegExp("(^|[^0-9])#"+issue+"(?![0-9])").test((p.title||"")+" "+(p.body||"")));
+                if(hits.length)process.stdout.write(hits.map(p=>"#"+p.number).join(","));
+              });' "$ISSUE" "$BRANCH")"
+          if [ -n "$existing" ]; then
+            echo "::error::Existing open PR(s) $existing already address issue #$ISSUE. Resume or review that work; no duplicate PR created."
+            exit 1
+          fi
           rm -f AGENT_REQUEST.md
           test -z "$(git status --porcelain -- .github/workflows/autonomous-development.yml)" || { echo 'Protected workflow edited'; exit 1; }
           git add -A
