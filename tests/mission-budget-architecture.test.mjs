@@ -128,6 +128,7 @@ test('long-draft timeout is bounded by the original worker lease and one shared 
  const now=Date.now(),claim={mission:{deadline:new Date(now+7200000).toISOString()},job:{lease_until:new Date(now+360000).toISOString()}};
  const deadline=budget.missionExecutionDeadline(claim,now);assert.equal(deadline,now+240000);
  assert.equal(budget.missionAttemptTimeout(deadline,16000,now),180000);
+ assert.equal(budget.missionAttemptTimeout(deadline,12000,now),180000);
  assert.equal(budget.missionAttemptTimeout(deadline,16000,now+200000),35000);
  assert.equal(budget.missionExecutionDeadline(claim,now+200000),deadline,'second call cannot reset the worker clock');
 });
@@ -143,4 +144,18 @@ test('review and execution use the same separate request envelopes without dropp
  assert.match(worker,/fitsMissionEnvelope\(reviewFrame,reviewInput,missionInputLimit\(claim\)\)/);
  assert.match(model,/fitsMissionEnvelope\(instruction,input,missionInputLimit\(claim\)\)/);
  assert.match(worker,/validateAnswerReview\(parseJSON\(checked.text\),assessment\)/);
+});
+
+test('read-only repository final stages retain complete 53K review evidence within a counted 96K envelope',()=>{
+ const budget=modules({'@/lib/missions/store':{}})('@/lib/missions/request-budget');
+ const claim={mission:{objective:'Audit the connected repository read-only; do not modify it.',repository_id:'saved-repository'},job:{role:'review'}};
+ for(const role of ['compose','review','revise']){
+  claim.job.role=role;const limit=budget.missionInputLimit(claim);
+  assert.equal(limit,96000);assert.equal(budget.fitsMissionEnvelope('i'.repeat(9523),'e'.repeat(53146),limit),true);
+  assert.equal(budget.fitsMissionEnvelope('instruction','e'.repeat(96001),limit),false);
+ }
+ claim.job.role='work';assert.equal(budget.missionInputLimit(claim),48000);
+ claim.job.role='review';claim.mission.repository_id=null;assert.equal(budget.missionInputLimit(claim),48000);
+ claim.mission.repository_id='saved';claim.mission.objective='Implement an application.';assert.equal(budget.missionInputLimit(claim),48000);
+ claim.mission.repository_id=null;claim.mission.objective='Audit operational workflows using saved execution records.';assert.equal(budget.missionInputLimit(claim),96000);
 });

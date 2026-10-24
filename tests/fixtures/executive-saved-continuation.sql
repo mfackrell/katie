@@ -68,3 +68,58 @@ begin
  if (select plan->'provision'->0->'sourceSlugs' from executive_management_requests)<>'["software_development","operations"]'::jsonb then raise exception 'Source dependencies changed';end if;
 end $$;
 select 'Recovery preserves artifacts, uncertain charges and independent review; idempotence passed.' as result;
+
+-- Simulate the observed 53,146-character review failure without spending again.
+alter table mission_assignments add column available_at timestamptz default now();
+alter table executive_delegations add column updated_at timestamptz default now();
+alter table executive_delegation_events add column created_at timestamptz default now();
+do $$begin
+ if not exists(select 1 from pg_roles where rolname='anon') then create role anon;end if;
+ if not exists(select 1 from pg_roles where rolname='authenticated') then create role authenticated;end if;
+ if not exists(select 1 from pg_roles where rolname='service_role') then create role service_role;end if;
+end $$;
+\ir ../../supabase/migrations/20261024161000_resume_repository_review_context.sql
+update agent_missions set status='blocked',objective='Audit the repository read-only.',repository_id=gen_random_uuid()
+ where project_evidence->'continuation'->>'sourceMissionId'='9ecb8f69-6a7a-4428-8b1b-206d013d44bc';
+update mission_assignments set status='failed',attempts=1,result='{"reviewContextOverflow":true,"reviewInputCharacters":53146,"candidateJobId":"saved-candidate"}'
+ where role='review' and mission_id in(select id from agent_missions where project_evidence->'continuation'->>'sourceMissionId'='9ecb8f69-6a7a-4428-8b1b-206d013d44bc');
+update executive_delegations set status='cancelled' where mission_id in(select id from agent_missions where project_evidence->'continuation'->>'sourceMissionId'='9ecb8f69-6a7a-4428-8b1b-206d013d44bc');
+insert into executive_delegation_events(delegation_id,event,evidence) select id,'cancel','{"reason":"Mission did not pass independent review"}' from executive_delegations where mission_id in(select id from agent_missions where project_evidence->'continuation'->>'sourceMissionId'='9ecb8f69-6a7a-4428-8b1b-206d013d44bc');
+create table capacity_before as select id,token_allowance,reserved_tokens,actual_tokens,calls,routing_calls,deadline from agent_missions;
+do $$begin
+ if resume_repository_review_context()<>1 then raise exception 'Expected one eligible review recovery';end if;
+ if resume_repository_review_context()<>0 then raise exception 'Repeated context recovery';end if;
+ if exists(select 1 from agent_missions m join capacity_before b using(id) where row(m.token_allowance,m.reserved_tokens,m.actual_tokens,m.calls,m.routing_calls,m.deadline) is distinct from row(b.token_allowance,b.reserved_tokens,b.actual_tokens,b.calls,b.routing_calls,b.deadline)) then raise exception 'Recovery changed capacity or usage';end if;
+ if exists(select 1 from mission_assignments where payload ? 'reviewEnvelopeRecovery' and (status<>'queued' or attempts<>1 or result->>'candidateJobId'<>'saved-candidate')) then raise exception 'Prior attempts or evidence lost';end if;
+ if (select count(*) from executive_delegation_events where event='repository_review_context_recovery')<>1 then raise exception 'Recovery evidence missing';end if;
+end $$;
+
+-- An owner cancellation, an exhausted allowance, and an expired deadline must
+-- each prevent recovery, even when the review itself has a matching failure.
+update agent_missions set status='blocked',objective='Audit read-only.',repository_id=gen_random_uuid()
+ where project_evidence->'continuation'->>'sourceMissionId'='7d866a71-1c66-4a7a-832c-765591f7741b';
+update mission_assignments set status='failed',attempts=1,result='{"reviewContextOverflow":true,"reviewInputCharacters":53146}'
+ where role='review' and mission_id in(select id from agent_missions where project_evidence->'continuation'->>'sourceMissionId'='7d866a71-1c66-4a7a-832c-765591f7741b');
+update executive_delegations set status='cancelled' where mission_id in(select id from agent_missions where project_evidence->'continuation'->>'sourceMissionId'='7d866a71-1c66-4a7a-832c-765591f7741b');
+insert into executive_delegation_events(delegation_id,event,evidence) select id,'cancel','{"reason":"Owner stopped the assignment"}' from executive_delegations where mission_id in(select id from agent_missions where project_evidence->'continuation'->>'sourceMissionId'='7d866a71-1c66-4a7a-832c-765591f7741b');
+do $$begin if resume_repository_review_context()<>0 then raise exception 'Owner cancellation bypassed';end if;end $$;
+update executive_delegations set status='running' where mission_id in(select id from agent_missions where project_evidence->'continuation'->>'sourceMissionId'='7d866a71-1c66-4a7a-832c-765591f7741b');
+update agent_missions set actual_tokens=token_allowance where project_evidence->'continuation'->>'sourceMissionId'='7d866a71-1c66-4a7a-832c-765591f7741b';
+do $$begin if resume_repository_review_context()<>0 then raise exception 'Exhausted capacity bypassed';end if;end $$;
+update agent_missions set actual_tokens=0,deadline=now()-interval '1 minute' where project_evidence->'continuation'->>'sourceMissionId'='7d866a71-1c66-4a7a-832c-765591f7741b';
+do $$begin if resume_repository_review_context()<>0 then raise exception 'Expired deadline bypassed';end if;end $$;
+select 'Context recovery preserves authority, source evidence and capacity; exclusion guards passed.' as result;
+
+do $$
+declare target mission_assignments;snapshot jsonb:='{"kind":"scoped_workflow_trace","observedAt":"2026-10-24T16:01:40Z","trace":{"status":"running"}}';
+begin
+ select * into target from mission_assignments where payload ? 'reviewEnvelopeRecovery';
+ update mission_assignments set status='running',lease=gen_random_uuid(),lease_until=now()+interval '6 minutes' where id=target.id returning * into target;
+ if checkpoint_mission_operational_evidence(target.id,gen_random_uuid(),snapshot) then raise exception 'Wrong lease accepted';end if;
+ if not checkpoint_mission_operational_evidence(target.id,target.lease,snapshot) then raise exception 'Valid snapshot rejected';end if;
+ if not checkpoint_mission_operational_evidence(target.id,target.lease,snapshot) then raise exception 'Idempotent snapshot rejected';end if;
+ if checkpoint_mission_operational_evidence(target.id,target.lease,snapshot||'{"observedAt":"2026-10-24T16:05:40Z"}'::jsonb) then raise exception 'Historical snapshot overwritten';end if;
+ if (select payload->'operationalEvidenceSnapshot' from mission_assignments where id=target.id) is distinct from snapshot then raise exception 'Snapshot changed';end if;
+ if has_function_privilege('anon','checkpoint_mission_operational_evidence(uuid,uuid,jsonb)','execute') or has_function_privilege('authenticated','resume_repository_review_context()','execute') then raise exception 'Recovery permission widened';end if;
+end $$;
+select 'Operational snapshot identity and lease fencing passed.' as result;

@@ -35,7 +35,7 @@ export async function missionModel(claim:Claim,instruction:string,input:string,t
  if(checkpointHash&&checkpoint?.hash===checkpointHash&&typeof checkpoint.response?.text==='string'
    &&typeof checkpoint.response.model==='string'&&Array.isArray(checkpoint.response.sources)&&Array.isArray(checkpoint.response.calculations))return checkpoint.response;
  const choices=await orchestrationChoices({objective:claim.mission.objective,instruction:
-  `CURRENT EXECUTION STAGE: ${claim.job.role}. Available tools for THIS call: ${tools}. `+
+  `CURRENT EXECUTION STAGE: ${claim.job.role}. Available tools for THIS call: ${tools}. Complete input size: ${instruction.length+input.length} characters; select a model with sufficient context capacity. `+
   (['compose','revise'].includes(claim.job.role)?'Synthesize the saved worker evidence; research has already been delegated. Do not classify this as a new web search. ':'')+
   (claim.job.role==='review'?'Independently verify the saved work and original objective. ':'')+claim.job.instruction,
   requestId:claim.job.id,accounting:{

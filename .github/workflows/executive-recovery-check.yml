@@ -3,6 +3,7 @@ on:
   pull_request:
     paths:
       - 'supabase/migrations/20261024154500_continue_executive_saved_audit.sql'
+      - 'supabase/migrations/20261024161000_resume_repository_review_context.sql'
       - 'tests/fixtures/executive-saved-continuation.sql'
       - '.github/workflows/executive-recovery-check.yml'
 jobs:

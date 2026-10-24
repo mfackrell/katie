@@ -1,10 +1,16 @@
 import {rpc} from './store';
-import type {Claim} from './types';
+import {readOnlyRepositoryObjective,type Claim} from './types';
 
 export type MissionCapacity={authorized:boolean;remainingTokens:number;callsRemaining:number;routingCallsRemaining:number;reason?:string};
 export function missionInputLimit(claim:Claim):number {
  const evidence=claim.mission.project_evidence as {projectProfile?:string}|null;
- return evidence?.projectProfile==='game' && claim.mission.project_kind==='specification' && ['compose','review','revise'].includes(claim.job.role) ? 96000 : 48000;
+ const finalStage=['compose','review','revise'].includes(claim.job.role);
+ // Immutable source excerpts, a full candidate and independently scoped live
+ // traces must fit together. This changes input capacity, not token authority:
+ // native counting and the existing fenced reservation still admit each call.
+ const repositoryAudit=Boolean(claim.mission.repository_id)&&readOnlyRepositoryObjective(claim.mission.objective);
+ const operationalAudit=/\baudit\b/i.test(claim.mission.objective)&&/\b(?:workflow|operational|assignment histor|execution record)/i.test(claim.mission.objective);
+ return finalStage&&((evidence?.projectProfile==='game'&&claim.mission.project_kind==='specification')||repositoryAudit||operationalAudit)?96000:48000;
 }
 export function fitsMissionEnvelope(instruction:string,input:string,inputLimit=48000){return instruction.length<=48000&&input.length<=inputLimit;}
 
@@ -34,5 +40,5 @@ export function missionExecutionDeadline(claim:Claim,now=Date.now()){
 export function missionAttemptTimeout(deadline:number,outputTokens:number,now=Date.now()){
  // Long structured drafts are not given the same timeout as a short classifier.
  // This does NOT extend the caller's overall runtime, lease, or project deadline.
- return Math.min(outputTokens>=16000?180_000:90_000,deadline-now-5000);
+ return Math.min(outputTokens>=12000?180_000:90_000,deadline-now-5000);
 }
