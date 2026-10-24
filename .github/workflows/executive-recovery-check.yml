@@ -10,6 +10,7 @@ on:
       - 'supabase/migrations/20261024174000_recover_complete_audit_edits.sql'
       - 'supabase/migrations/20261024181000_finish_audit_contract_repairs.sql'
       - 'supabase/migrations/20261024183000_resume_audit_partial_edits_and_review.sql'
+      - 'supabase/migrations/20261024185000_finish_audit_within_existing_ceiling.sql'
       - 'tests/fixtures/executive-saved-continuation.sql'
       - '.github/workflows/executive-recovery-check.yml'
 jobs:

@@ -23,7 +23,14 @@ export function missionOutputLimit(claim:Claim,input:string):number {
   const limit=measureDeliverable(claim.mission.objective,'').wordLimit;
   return missionInputLimit(claim)>48000&&(limit===null||limit>1200)?12000:6000;
  }
- return claim.job.role==='review'?(input.startsWith('Independent assessment:\n')?10000:5000):3000;
+ if(claim.job.role==='review'){
+  if(!input.startsWith('Independent assessment:\n'))return 5000;
+  const limit=measureDeliverable(claim.mission.objective,'').wordLimit;
+  // Short artifacts need a full comparison, not another report. Keep all
+  // acceptance checks while reserving a proportional structured verdict.
+  return limit!==null&&limit<=1200?6000:10000;
+ }
+ return 3000;
 }
 export function fitsMissionEnvelope(instruction:string,input:string,inputLimit=48000){return instruction.length<=48000&&input.length<=inputLimit;}
 
