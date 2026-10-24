@@ -526,3 +526,17 @@ test('independent review consumes complete encoded snapshots while retaining raw
  });
  assert.equal(committed.p_mission_status,'completed');assert.deepEqual(committed.p_result.operationalEvidence,now);
 });
+
+test('complete saved edits survive truncated private notes without another inference or approval',async()=>{
+ const base='Original immutable evidence remains intact. Incorrect count: four. All other observations and limitations stay unchanged.';
+ const hash=createHash('sha256').update(base).digest('hex');
+ const partial=JSON.stringify({edits:[{before:'count: four',after:'count: six'}],composerNotes:'unfinished'}).slice(0,-7);
+ const {recoverMissionRevisionPatch}=modules()('@/lib/missions/revision-patch');
+ assert.equal(recoverMissionRevisionPatch(base,hash,partial).text,base.replace('four','six'));
+ assert.throws(()=>recoverMissionRevisionPatch(base,hash,partial.slice(0,35)));
+ assert.throws(()=>recoverMissionRevisionPatch(base,'wrong',partial));
+ const m=mission(),compose={...job(m,'compose','compose'),status:'completed',result:{text:base}},revision=job(m,'revise','revision');revision.payload={revisionPatchBaseHash:hash,continuedFrom:{assignmentId:'saved-real-output'}};revision.result={incompleteReason:'max_output_tokens',partialText:partial,model:'actual-model',provider:'google'};let committed;
+ const {executeClaim}=modules({'@/lib/missions/store':{readMission:async()=>({mission:m,jobs:[compose,revision]}),rpc:async(_,a)=>{committed=a;return true;}}})('@/lib/missions/worker');
+ await executeClaim({mission:m,job:revision},async()=>{throw Error('Completed edits must not be purchased again');});
+ assert.equal(committed.p_result.text,base.replace('four','six'));assert.equal(committed.p_mission_status,null);assert.equal(committed.p_final,null);assert.equal(committed.p_result.recoveredPatch.independentReviewRequired,true);
+});

@@ -246,3 +246,28 @@ begin
  if has_function_privilege('authenticated','activate_saved_audit_corrections()','execute') then raise exception 'Correction gate available to users';end if;
 end $$;
 select 'Targeted corrections preserve exact rejected candidate, real review, immutable work and all charges; empty-output recovery uses matching new runtime.' as result;
+
+-- Latest live shapes: complete technical edits with truncated notes, and a real
+-- operations rejection for measured length and causal overstatement.
+update agent_missions set status='blocked',actual_tokens=94780,reserved_tokens=94780,calls=3 where id='d7050282-3f98-4809-86be-3811be11dff3';
+update mission_assignments set status='failed',result=jsonb_build_object('incompleteReason','max_output_tokens','partialText','{"edits":[{"before":"Saved","after":"Corrected"}],"composerNotes":"'||repeat('notes',30)) where mission_id='d7050282-3f98-4809-86be-3811be11dff3' and job_key='revision';
+update agent_missions set status='blocked',actual_tokens=104696,reserved_tokens=104696,calls=5 where id='f29d9d4c-583e-44dd-8a86-b173ede4407a';
+update mission_assignments set status='completed',result='{"text":"Saved operations revision for narrow correction"}' where mission_id='f29d9d4c-583e-44dd-8a86-b173ede4407a' and job_key='revision';
+update mission_assignments set status='completed',result='{"verdict":"changes_requested","findings":["1274 words exceeds 1200; recast causal certainty as hypotheses"]}' where mission_id='f29d9d4c-583e-44dd-8a86-b173ede4407a' and job_key='review_again';
+update executive_delegations set status='cancelled' where mission_id in('d7050282-3f98-4809-86be-3811be11dff3','f29d9d4c-583e-44dd-8a86-b173ede4407a');
+insert into executive_delegation_events(delegation_id,event,evidence,created_at) select id,'cancel','{"reason":"Mission did not pass independent review"}',now()+interval '7 seconds' from executive_delegations where mission_id in('d7050282-3f98-4809-86be-3811be11dff3','f29d9d4c-583e-44dd-8a86-b173ede4407a');
+\ir ../../supabase/migrations/20261024174000_recover_complete_audit_edits.sql
+\ir ../../supabase/migrations/20261024174000_recover_complete_audit_edits.sql
+
+do $$declare m agent_missions;begin
+ if (select count(*) from agent_missions where project_evidence ? 'savedAuditEffortRecovery')<>2 then raise exception 'Duplicate complete-edit recovery';end if;
+ for m in select * from agent_missions where project_evidence ? 'savedAuditEffortRecovery' loop
+  if m.status<>'draft' or m.deadline is distinct from (select deadline from agent_missions where id=(m.project_evidence->'savedAuditEffortRecovery'->>'sourceMissionId')::uuid) then raise exception 'Premature start or deadline change';end if;
+  if exists(select 1 from mission_assignments a join mission_assignments o on o.id=(a.payload->'reusedFrom'->>'assignmentId')::uuid where a.mission_id=m.id and a.result is distinct from o.result) then raise exception 'Reused artifact changed';end if;
+  if (select count(*) from mission_assignments where mission_id=m.id and status='queued')<>2 then raise exception 'Wrong recovery stages';end if;
+  if m.token_allowance=50000 and (select result from mission_assignments where mission_id=m.id and job_key='revision') is distinct from (select result from mission_assignments where mission_id='d7050282-3f98-4809-86be-3811be11dff3' and job_key='revision') then raise exception 'Actual truncated response lost';end if;
+ end loop;
+ if activate_saved_audit_corrections()<>0 or activate_saved_audit_effort_recovery()<>2 or activate_saved_audit_effort_recovery()<>0 then raise exception 'Complete-edit runtime gate failed';end if;
+ if has_function_privilege('authenticated','activate_saved_audit_effort_recovery()','execute') then raise exception 'Complete-edit gate exposed';end if;
+end $$;
+select 'Complete actual edits remain recoverable without inference; source artifacts, charges, deadlines and independent review retained.' as result;

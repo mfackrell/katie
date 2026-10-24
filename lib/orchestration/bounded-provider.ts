@@ -7,7 +7,7 @@ type GoogleContent={role:string;parts:GooglePart[]};
 type ClaudeBlock={type:string;text?:string;id?:string;name?:string;input?:unknown;citations?:Array<{url?:string;title?:string}>};
 type WireInput={nativeAnthropic?:ClaudeBlock[];nativeGoogle?:GoogleContent;type?:string;call_id?:string;output?:string;role?:string;content?:unknown};
 type NativeResponse={content?:ClaudeBlock[];stop_reason?:string;usage?:{input_tokens?:number;output_tokens?:number;cache_read_input_tokens?:number;cache_creation_input_tokens?:number};candidates?:Array<{content?:GoogleContent;finishReason?:string}>;usageMetadata?:{totalTokenCount?:number}};
-export type BoundedRequest={model:string;instructions:string;input:unknown[];max_output_tokens:number;tools?:Array<{type:string;name?:string;description?:string;parameters?:unknown}>;text?:{format?:{type?:string;schema?:unknown}};[key:string]:unknown};
+export type BoundedRequest={model:string;instructions:string;input:unknown[];max_output_tokens:number;executionEffort?:'low'|'medium';tools?:Array<{type:string;name?:string;description?:string;parameters?:unknown}>;text?:{format?:{type?:string;schema?:unknown}};[key:string]:unknown};
 type BoundedResponse={status?:string;output_text?:string;output:unknown[];usage?:{total_tokens?:number};incomplete_details?:{reason?:string}|null;error?:{code?:string;message?:string}|null};
 type Client={post:(path:string,options:{body:Record<string,unknown>;timeout:number})=>Promise<{input_tokens:number}>;responses:{create:(request:BoundedRequest,options:{timeout:number})=>Promise<BoundedResponse>}};
 
@@ -30,6 +30,7 @@ function nativeRequest(provider:string,request:BoundedRequest){
    if(item.role)messages.push({role:item.role,content:item.content});
   }
   body={model:request.model,max_tokens:request.max_output_tokens,system:instructions,messages,
+   ...(request.executionEffort&&/^claude-(?:opus|sonnet|haiku|fable|mythos)-5(?:-|$)/.test(request.model)?{output_config:{effort:request.executionEffort}}:{}),
    ...(research?{tools:[{type:'web_search_20250305',name:'web_search',max_uses:4}]}:calculator?{tools:[{name:calculator.name,description:calculator.description,input_schema:calculator.parameters}]}:{})};
  }else{
   if(provider!=='google')throw Error('Unsupported native provider');
@@ -43,7 +44,7 @@ function nativeRequest(provider:string,request:BoundedRequest){
    if(item.type==='function_call_output'){const part={functionResponse:{name:'calculate',...(item.call_id?.startsWith('google-')?{}:{id:item.call_id}),response:JSON.parse(item.output??'{}')}};const last=contents.at(-1);if(last?.role==='user')last.parts.push(part);else contents.push({role:'user',parts:[part]});continue;}
    if(item.role)contents.push({role:item.role==='assistant'?'model':'user',parts:[{text:String(item.content??'')}]});
   }
-  body={systemInstruction:{parts:[{text:instructions}]},contents,generationConfig:{maxOutputTokens:request.max_output_tokens,...(request.text?.format?{responseMimeType:'application/json'}:{})},
+  body={systemInstruction:{parts:[{text:instructions}]},contents,generationConfig:{maxOutputTokens:request.max_output_tokens,...(request.executionEffort&&/^gemini-3(?:[.-])/.test(request.model.replace(/^models\//,''))?{thinkingConfig:{thinkingLevel:request.executionEffort==='low'?'LOW':/flash/.test(request.model)?'MEDIUM':'HIGH'}}:{}),...(request.text?.format?{responseMimeType:'application/json'}:{})},
    ...(calculator?{tools:[{functionDeclarations:[{name:calculator.name,description:calculator.description,parametersJsonSchema:calculator.parameters}]}]}:{})};
  }
  return{url,headers,body};
@@ -65,9 +66,9 @@ export function boundedProvider(choice:OrchestrationChoice):Client{
   if(!apiKey)throw Error('Selected provider connection unavailable: '+provider);
   const client=new OpenAI({apiKey,maxRetries:0,timeout:90_000,fetch:globalThis.fetch.bind(globalThis),...(provider==='grok'?{baseURL:'https://api.x.ai/v1'}:{})});
   return{
-   post:async(path,options):Promise<{input_tokens:number}>=>provider==='openai'?client.post(path,options):Promise.reject(Error('Conservative byte counting required')),
+   post:async(path,options):Promise<{input_tokens:number}>=>{if(provider!=='openai')throw Error('Conservative byte counting required');const body={...options.body};delete body.executionEffort;return client.post(path,{...options,body});},
    responses:{create:async(request,options)=>{
-    const body:Item={...request};
+    const body:Item={...request};delete body.executionEffort;
     if(provider==='grok'){body.tools=request.tools?.map(tool=>{const native:Item={...tool};delete native.search_context_size;return native;});delete body.reasoning;delete body.text;delete body.include;body.input=[{role:'system',content:body.instructions},...request.input];delete body.instructions;}
     return client.responses.create(body as unknown as OpenAI.Responses.ResponseCreateParamsNonStreaming,options);
    }}
