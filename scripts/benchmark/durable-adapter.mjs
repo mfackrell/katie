@@ -26,11 +26,12 @@ export function durableBenchmarkAdapter(db,accountId) {
       return {committed:await call('benchmark_settle_call',{p_call:reservationId,p_actual:actual})===true};
     }
    }),
-  reconcileProviderReceipt:async({reservationId,providerRequestId,inputTokens,outputTokens})=>{
-   if(!reservationId || typeof providerRequestId!=='string' || !providerRequestId.trim() ||
+  reconcileProviderReceipt:async({reservationId,providerNamespace,providerRequestId,inputTokens,outputTokens})=>{
+   if(!reservationId || typeof providerNamespace!=='string' || !providerNamespace.trim() ||
+      typeof providerRequestId!=='string' || !providerRequestId.trim() ||
       !Number.isSafeInteger(inputTokens)||inputTokens<0 || !Number.isSafeInteger(outputTokens)||outputTokens<0)
      throw Error('BENCHMARK_RECEIPT_INCOMPLETE');
-   return call('benchmark_reconcile_receipt',{p_call:reservationId,p_provider_request:providerRequestId,p_actual:inputTokens+outputTokens});
+   return call('benchmark_reconcile_receipt',{p_call:reservationId,p_namespace:providerNamespace,p_provider_request:providerRequestId,p_actual:inputTokens+outputTokens});
   },
   redeemApprovedIncrease:async(approvalId)=>{
    if(typeof approvalId!=='string'||!approvalId)throw Error('BENCHMARK_APPROVAL_ID_REQUIRED');
