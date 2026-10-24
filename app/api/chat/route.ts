@@ -1727,12 +1727,21 @@ async function executeChat(request: NextRequest) {
           .filter((result): result is PromiseFulfilledResult<Awaited<ReturnType<typeof fetchFullFile>>> => result.status === "fulfilled")
           .map((result) => result.value);
         const included = fullFileResults.filter((file) => !file.isTruncated);
+        // A large routing file must remain visible as a clearly labelled excerpt.
+        // Previously truncated files were silently dropped from the model prompt.
+        const partialSource = fullFileResults.filter((file) => file.isTruncated);
+        const selfInspectionSourceRequired = (selfInspectionRequest || continuitySelfInspection) &&
+          activeRepoContext.repositoryFullName === "mfackrell/katie";
+        const routingEvidence = fullFileResults.find(file => file.filePath === "app/api/chat/route.ts");
+        if (selfInspectionSourceRequired && (!routingEvidence || !routingEvidence.content.trim())) {
+          throw new Error("SELF_INSPECTION_SOURCE_MISSING: app/api/chat/route.ts was not retrieved");
+        }
         const truncated = fullFileResults.filter((file) => file.isTruncated).map((file) => file.filePath);
         const skipped = settled
           .map((result, index) => (result.status === "rejected" ? { path: fileSelection.selected[index], reason: "fetch failed" } : null))
           .filter((item): item is { path: string; reason: string } => item !== null);
         const inclusionManifest = buildInclusionManifest(included, truncated, skipped);
-        const routingSourceAvailable = included.some(file => file.filePath === "app/api/chat/route.ts");
+        const routingSourceAvailable = Boolean(routingEvidence?.content.trim());
         const sourceEvidenceStatus = {
           repositoryConnected: true,
           retrievalAttempted: true,
@@ -1740,8 +1749,8 @@ async function executeChat(request: NextRequest) {
           behaviorIndependentlyVerified: false,
         };
         console.info("[Chat API] Self-inspection evidence status", { requestId, ...sourceEvidenceStatus });
-        const fullFileContents = included
-          .map((file) => `--- ${file.filePath} (${file.byteCount} bytes, sha256: ${file.sha256}) ---\n${file.content}`)
+        const fullFileContents = [...included, ...partialSource]
+          .map((file) => `--- ${file.filePath} (${file.isTruncated ? "PARTIAL SOURCE EXCERPT; truncated" : "complete"}, ${file.byteCount} bytes, sha256: ${file.sha256}) ---\n${file.isTruncated ? file.content.slice(0, 24_000) : file.content}`)
           .join("\n\n");
 
         console.info("[Chat API] Full-file injection metadata", {
@@ -1765,7 +1774,11 @@ async function executeChat(request: NextRequest) {
         personaForGeneration = `${personaForGeneration}\n\n${inclusionManifest}\n\nSELF_INSPECTION_EVIDENCE_STATUS: ${JSON.stringify(sourceEvidenceStatus)}\nAccess to a repository, retrieval of a relevant file, and independent behavioral verification are three distinct claims. Do not conflate them. If asked whether you can see yourself, report precisely which files are in the manifest, which relevant implementation files were retrieved, and what has not been verified. ${continuitySelfInspection ? "Resolve yourself as Katie and her source implementation, not a person or object in any unrelated previous image." : ""}\n\n${promptContractBlock}\n\n${fullFileContents}${warningBlock}`;
       } catch (error) {
         console.error("[Chat API] Full-file injection failed", { requestId, reason: error instanceof Error ? error.message : String(error) });
-        personaForGeneration = `${personaForGeneration}\nFull-file injection failed. Repository context may be incomplete.`;
+        if ((selfInspectionRequest || continuitySelfInspection) && activeRepoContext.repositoryFullName === "mfackrell/katie") {
+          return NextResponse.json({ error: "Self-inspection source retrieval failed", code: "SELF_INSPECTION_SOURCE_MISSING", requestId }, { status: 503 });
+        }
+        personaForGeneration = `${personaForGeneration}
+Full-file injection failed. Repository context may be incomplete.`;
       }
     }
     const shouldRunRepoAudit = shouldAttachSourceContext && shouldRunRepoAuditMode(message);
