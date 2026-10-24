@@ -48,8 +48,19 @@ try{
    if(event.type==='turn.completed')completed=true;
   }
  }catch(error){diagnostics.push(String(error?.message||error).slice(0,400));}
+ assert(completed,'initial synthetic turn did not complete');
+ const priorRequests=requests.length;
+ const resumed=codex.resumeThread(thread.id,{workingDirectory:repo,skipGitRepoCheck:false,sandboxMode:'workspace-write'});
+ let resumedComplete=false;
+ const continuation=await resumed.runStreamed('Continue this session. Reply SYNTHETIC_READY again.');
+ for await(const event of continuation.events){
+  if(event.type==='turn.completed')resumedComplete=true;
+  if(event.type==='turn.failed')throw Error('NATIVE_SESSION_RESUME_FAILED');
+ }
+ assert(resumedComplete,'native resumed turn did not complete');
+ assert(requests.length>priorRequests,'native resumed turn bypassed synthetic gateway');
  assert(requests.length>=1,'synthetic gateway never received SDK traffic');
  assert(!existsSync(join(repo,'unexpected-provider-output')),'Unrequested tool side effect');
- console.log(JSON.stringify({gatewayRequests:requests.length,completed,events:diagnostics.slice(-15),remaining,session:thread.id??null}));
+ console.log(JSON.stringify({gatewayRequests:requests.length,completed,resumedComplete,events:diagnostics.slice(-15),remaining,session:thread.id??null}));
  if(!completed)throw Error('SYNTHETIC_RESPONSES_PROTOCOL_NOT_QUALIFIED');
 }finally{await new Promise(resolve=>server.close(resolve));rmSync(root,{recursive:true,force:true});}
