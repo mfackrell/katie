@@ -32,6 +32,8 @@ import { RememberFaceControl } from "@/components/remember-face-control";
 import { MessageReactions } from "@/components/message-reactions";
 import { ProjectApprovalCard, type ProjectApproval } from "@/components/project-approval-card";
 import {DeveloperResourceCard,type RecoveryProposal} from "@/components/developer-resource-card";
+import { SelfToolsOwnerSession } from "@/components/self-tools-owner-session";
+import { ownerSessionBearer } from "@/lib/tools/browser-owner-session";
 
 type ProviderName = "openai" | "google" | "grok" | "anthropic";
 
@@ -1639,11 +1641,13 @@ export function ChatPanel({
       });
 
       requestStage = "sending chat request";
+      const ownerBearer = await ownerSessionBearer();
       const response = await fetch("/api/chat", {
         method: "POST",
         headers: {
           "content-type": "application/json",
           "x-request-id": clientRequestId,
+          ...(ownerBearer ? { Authorization: `Bearer ${ownerBearer}` } : {}),
         },
         signal: abortController.signal,
         body: requestBody,
@@ -2969,6 +2973,7 @@ export function ChatPanel({
         </p>
       )}
       {managedAgentId && <p className="border-t border-white/10 px-4 py-3 text-sm text-zinc-300">This is a managed agent workspace. <a href={`/agents?chat=${encodeURIComponent(chatId)}`} className="underline">Open Agents management to continue the saved task.</a></p>}
+      {!managedAgentId && activeActorName.trim().toLowerCase() === 'katie' && <SelfToolsOwnerSession />}
       <form hidden={Boolean(managedAgentId)} onSubmit={onSubmit} className="shrink-0 border-t border-white/10 bg-zinc-950/92 px-2 py-2 pb-[calc(env(safe-area-inset-bottom)+0.5rem)] backdrop-blur-xl sm:bg-transparent sm:px-6 sm:py-4 sm:backdrop-blur-none">
         <p className="sr-only" role="status" aria-live="polite">
           {statusMessage}
