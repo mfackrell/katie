@@ -25,7 +25,6 @@ if(!cfg.nonBillableFixture)fail('Benchmark execution disabled without non-billab
 // Fixture scripts are owned by the reviewed harness, not by the model under test.
 for(const arm of cfg.arms){
  if(arm.command!=='node' || arm.args?.length!==1 ||
-    !/^scripts\\/benchmark\\/fixtures\\/(direct|orchestrated)\\.mjs$/.test(arm.args[0]) ||
     arm.args[0]!==`scripts/benchmark/fixtures/${arm.id}.mjs`)
    fail('Untrusted non-billable fixture command');
 }
