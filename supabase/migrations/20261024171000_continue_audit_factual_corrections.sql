@@ -19,7 +19,7 @@ begin
  select * into m from agent_missions where id=source_id for update;
  if not found then continue;end if;
  if m.status<>'blocked' or m.project_id is not null or (allowance=100000 and m.repository_id is null) or (allowance=120000 and m.repository_id is not null) or m.deadline<=now()+interval '15 minutes'
-  or m.actual_tokens<>expected_usage or m.reserved_tokens<>expected_usage or m.calls<>case when allowance=100000 then 1 else 2 end then raise exception 'Saved audit completion source changed';end if;
+  or m.actual_tokens<>expected_usage or m.reserved_tokens<>expected_usage or m.calls<>(case when allowance=100000 then 1 else 2 end) then raise exception 'Saved audit completion source changed';end if;
  select * into j from mission_assignments where mission_id=source_id and job_key=case when allowance=100000 then 'review_again' else 'revision' end;
  if not found or (allowance=100000 and (j.status<>'completed' or j.result->>'verdict' is distinct from 'changes_requested'))
   or (allowance=120000 and (j.status<>'failed' or j.result->>'incompleteReason' is distinct from 'max_output_tokens' or coalesce(j.result->>'partialText','')<>''))
