@@ -258,7 +258,7 @@ export class OpenAiProvider implements LlmProvider {
   private client: OpenAI;
   private defaultModel = "gpt-4o";
 
-  constructor(apiKey: string) {
+  constructor(private readonly apiKey: string) {
     this.client = new OpenAI({ apiKey, fetch: globalThis.fetch.bind(globalThis) });
   }
 
