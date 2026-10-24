@@ -36,10 +36,17 @@ export async function announceBlockedRecoveryResources(p:Project){
  const proposal=await recoveryResourceProposal(p);
  if(!proposal||proposal.state!=='estimated'||!proposal.needsAuthorization)return false;
  const db=getSupabaseAdminClient();
- const {data:prior,error:pe}=await db.from('project_events').select('id').eq('project_id',p.id)
-   .eq('event','developer_resource_approval_requested').limit(1).returns<{id:string}>();
+ // A completed authorization must not suppress a later request for new resources.
+ const {data:events,error:pe}=await db.from('project_events').select('event,created_at')
+   .eq('project_id',p.id).in('event',['developer_resource_approval_requested','resource_authorization'])
+   .order('created_at',{ascending:false}).limit(100)
+   .returns<{event:string;created_at:string}>();
  if(pe)throw Error('Cannot inspect prior developer resource approval request');
- if(prior?.length)return false; // Do not nag, or continually issue new approval requests.
+ const recent=events??[];
+ const latestApproval=recent.find(e=>e.event==='resource_authorization');
+ const pending=recent.some(e=>e.event==='developer_resource_approval_requested'
+   && (!latestApproval || new Date(e.created_at).getTime()>new Date(latestApproval.created_at).getTime()));
+ if(pending)return false;
  const {error}=await db.from('project_events').insert({project_id:p.id,event:'developer_resource_approval_requested',
   data:{scopeHash:proposal.scopeHash,used:proposal.used,authorized:p.token_allowance,
    expectedAdditional:proposal.expectedAdditional,upperAdditional:proposal.upperAdditional,
