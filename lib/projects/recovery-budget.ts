@@ -41,7 +41,7 @@ export async function announceBlockedRecoveryResources(p:Project){
  const {data:events,error:pe}=await db.from('project_events').select('event,created_at,data')
    .eq('project_id',p.id).in('event',['developer_resource_approval_requested','resource_authorization'])
    .order('created_at',{ascending:false}).limit(30)
-   .returns<Array<{event:string;created_at:string;data:{scopeHash?:string;authorized?:number;newAllowance?:number}}>>();
+   .returns<{event:string;created_at:string;data:{scopeHash?:string;authorized?:number;newAllowance?:number}}[]>();
  if(pe)throw Error('Cannot inspect developer resource authorization history');
  const latestApproval=events?.find(e=>e.event==='resource_authorization');
  const priorPending=events?.some(e=>e.event==='developer_resource_approval_requested'
