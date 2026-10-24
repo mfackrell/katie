@@ -6,7 +6,7 @@ const route=readFileSync("app/api/chat/route.ts","utf8");
 test("Katie own architecture selects actual implementation files rather than alphabetic workflow defaults",()=>{
  assert.ok(src.includes("Architecture-aware selection"));
  for(const p of ["app/api/chat/route.ts","lib/router/master-router.ts","lib/repo/content-injector.ts","lib/chat/local-katie.ts"]) assert.ok(src.includes(p));
- assert.ok(src.indexOf("if (selfArchitecture && !hints.length)") < src.indexOf(".slice(0, 12)"));
+ assert.ok(src.indexOf("if (selfArchitecture)") < src.indexOf(".slice(0, 12)"));
 });
 test("follow-up source selection favors self-inspection intent rather than unrelated image context",()=>{
  assert.ok(route.includes("continuitySelfInspection"));
@@ -32,4 +32,25 @@ test("actual architecture matcher selects source for the live self-inspection ph
   assert.ok(!result.selected.includes(".github/workflows/ci.yml"),message);
   assert.match(result.reason,/Architecture-aware/);
  }
+});
+
+test("self-inspection source contract does not silently answer without routing implementation",()=>{
+ assert.ok(route.includes('SELF_INSPECTION_SOURCE_MISSING'));
+ assert.ok(route.includes('selfInspectionSourceRequired && (!routingEvidence || !routingEvidence.content.trim())'));
+ assert.ok(route.includes('return NextResponse.json({ error: "Self-inspection source retrieval failed"'));
+ assert.ok(route.includes("PARTIAL SOURCE EXCERPT"));
+ assert.ok(route.includes("...included, ...partialSource"));
+});
+test("incidental file hints do not suppress routing source selection",()=>{
+ const { runInNewContext } = require("node:vm") as typeof import("node:vm");
+ const start=src.indexOf("  const selfArchitecture =");
+ const end=src.indexOf("  const selected = filePaths",start);
+ const branch=src.slice(start,end);
+ const filePaths=[".github/workflows/ci.yml","tests/something.ts","app/api/chat/route.ts","lib/router/master-router.ts"];
+ const compiled="(function(userMessage,filePaths){ const hints=['tests/something.ts']; const shouldSkipPath=()=>({skip:false}); "+branch+"return {selected:filePaths.slice(0,12),reason:'default'}; })";
+ const fn=runInNewContext(compiled,{console:{info:()=>{}}}) as (message:string,paths:string[])=>{selected:string[],reason:string};
+ const result=fn("Katie inspect your own routing code tests/something.ts",filePaths);
+ assert.ok(result.selected.includes("app/api/chat/route.ts"));
+ assert.ok(result.selected.includes("tests/something.ts"));
+ assert.ok(!result.selected.includes(".github/workflows/ci.yml"));
 });
