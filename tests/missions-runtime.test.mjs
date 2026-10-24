@@ -540,3 +540,28 @@ test('complete saved edits survive truncated private notes without another infer
  await executeClaim({mission:m,job:revision},async()=>{throw Error('Completed edits must not be purchased again');});
  assert.equal(committed.p_result.text,base.replace('four','six'));assert.equal(committed.p_mission_status,null);assert.equal(committed.p_final,null);assert.equal(committed.p_result.recoveredPatch.independentReviewRequired,true);
 });
+
+test('whole-deliverable preflight preserves rejected edits and retries against the original immutable base',async()=>{
+ const m=mission();m.objective='Deliver a report in at most 18 words.';
+ const base='Evidence one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen eighteen nineteen twenty.';
+ const compose={...job(m,'compose','compose'),status:'completed',result:{text:base}},revision=job(m,'revise','revision');
+ revision.payload={revisionPatchBaseHash:createHash('sha256').update(base).digest('hex')};let committed,calls=0;
+ const {executeClaim}=modules({'@/lib/missions/store':{readMission:async()=>({mission:m,jobs:[compose,revision]}),rpc:async(_,a)=>{committed=a;return true;}}})('@/lib/missions/worker');
+ const rejected={edits:[{before:'one two',after:'one three'}],composerNotes:''};
+ await assert.rejects(executeClaim({mission:m,job:revision},async()=>({text:JSON.stringify(rejected),model:'actual',provider:'anthropic',sources:[],calculations:[]})),e=>{
+  assert.match(e.message,/measured word limit before independent review/);assert.equal(e.partial.deliverableLengthFeedback.wordCount,21);assert.equal(e.partial.deliverableLengthFeedback.wordLimit,18);assert.equal(e.partial.rejectedDeliverable.model,'actual');assert.deepEqual(JSON.parse(e.partial.rejectedRevisionPatch),rejected);revision.result=e.partial;return true;
+ });assert.equal(committed,undefined);assert.equal(compose.result.text,base);
+ await executeClaim({mission:m,job:revision},async(_c,_i,input)=>{
+  calls++;const data=JSON.parse(input);assert.equal(data.candidate.text,base);assert.equal(data.deliverableLengthFeedback.wordCount,21);assert.deepEqual(JSON.parse(data.rejectedRevisionPatch),rejected);
+  return{text:JSON.stringify({edits:[{before:'one two three four five six',after:'one three'}],composerNotes:''}),model:'actual',sources:[],calculations:[]};
+ });assert.equal(calls,1);assert.equal(committed.p_result.text.trim().split(/\s+/).length,17);assert.equal(committed.p_mission_status,null);assert.equal(committed.p_final,null);
+});
+
+test('review requests explicit portable contracts without weakening source-linked validators',async()=>{
+ const m=mission(),compose={...job(m,'compose','compose'),status:'completed',result:{text:'Candidate'}},review=job(m,'review','review'),phases=[];let committed;
+ const load=modules({'@/lib/missions/store':{readMission:async()=>({mission:m,jobs:[compose,review]}),rpc:async(_,a)=>{committed=a;return true;}}});
+ await load('@/lib/missions/worker').executeClaim({mission:m,job:review},async(_c,_i,_input,tools,phase)=>{phases.push(phase);assert.equal(tools,'none');return{text:JSON.stringify(phase==='assessment'?assessment:verdict()),model:'independent',sources:[],calculations:[]};});
+ assert.deepEqual(phases,['assessment','comparison']);assert.equal(committed.p_mission_status,'completed');
+ const bad={...assessment,taskContract:{...assessment.taskContract,requirements:[{id:'fabricated',requirement:'Invented',sourceId:'unknown',status:'active',supersededBy:null}]}};
+ await assert.rejects(load('@/lib/missions/worker').executeClaim({mission:m,job:review},async()=>({text:JSON.stringify(bad),model:'independent',sources:[],calculations:[]})),/Invalid requirement citation/);
+});

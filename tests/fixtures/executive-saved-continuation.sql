@@ -271,3 +271,38 @@ do $$declare m agent_missions;begin
  if has_function_privilege('authenticated','activate_saved_audit_effort_recovery()','execute') then raise exception 'Complete-edit gate exposed';end if;
 end $$;
 select 'Complete actual edits remain recoverable without inference; source artifacts, charges, deadlines and independent review retained.' as result;
+
+-- Reproduce the exact next production failures. The source deadlines expired;
+-- only a new bounded finishing mission may execute after the matching fixes.
+update agent_missions set status='blocked',actual_tokens=41196,reserved_tokens=41196,calls=1,deadline=now()-interval '1 minute' where id='6e1d5b7e-e0cd-4158-86e4-2f53b72d934b';
+update mission_assignments set status='completed',result='{"text":"Saved technically corrected report with immutable source SHA and current review findings"}' where mission_id='6e1d5b7e-e0cd-4158-86e4-2f53b72d934b' and job_key='revision';
+update mission_assignments set status='completed',result='{"verdict":"changes_requested","findings":["Resolve effort label inconsistency and unsupported adjacency"]}' where mission_id='6e1d5b7e-e0cd-4158-86e4-2f53b72d934b' and job_key='review_again';
+update agent_missions set status='blocked',actual_tokens=30503,reserved_tokens=30503,calls=3,deadline=now()-interval '1 minute' where id='c1d6ca76-dc21-4025-84bb-1d8a6a30e587';
+update mission_assignments set status='completed',result='{"text":"Saved operations report with factual corrections but 1272 measured words"}' where mission_id='c1d6ca76-dc21-4025-84bb-1d8a6a30e587' and job_key='revision';
+update mission_assignments set status='failed',attempts=2,result='{"reviewPhase":"assessment","detail":"Malformed JSON"}' where mission_id='c1d6ca76-dc21-4025-84bb-1d8a6a30e587' and job_key='review_again';
+update executive_delegations set status='cancelled' where mission_id in('6e1d5b7e-e0cd-4158-86e4-2f53b72d934b','c1d6ca76-dc21-4025-84bb-1d8a6a30e587');
+insert into executive_delegation_events(delegation_id,event,evidence,created_at) select id,'cancel','{"reason":"Mission did not pass independent review"}',now()+interval '9 seconds' from executive_delegations where mission_id in('6e1d5b7e-e0cd-4158-86e4-2f53b72d934b','c1d6ca76-dc21-4025-84bb-1d8a6a30e587');
+create table contract_sources_before as select id,jsonb_build_object('mission',to_jsonb(m),'jobs',(select jsonb_agg(to_jsonb(j) order by id) from mission_assignments j where mission_id=m.id),'calls',(select jsonb_agg(to_jsonb(c) order by id) from mission_calls c where job_id in(select id from mission_assignments where mission_id=m.id))) state from agent_missions m where id in('6e1d5b7e-e0cd-4158-86e4-2f53b72d934b','c1d6ca76-dc21-4025-84bb-1d8a6a30e587');
+\ir ../../supabase/migrations/20261024181000_finish_audit_contract_repairs.sql
+\ir ../../supabase/migrations/20261024181000_finish_audit_contract_repairs.sql
+
+do $$declare m agent_missions;s agent_missions;after_state jsonb;begin
+ if (select count(*) from agent_missions where project_evidence ? 'savedAuditContractRecovery')<>2 then raise exception 'Duplicate contract finishing mission';end if;
+ if (select sum(token_allowance) from agent_missions where project_evidence ? 'savedAuditContractRecovery')<>130000 then raise exception 'Unbounded finishing capacity';end if;
+ for m in select * from agent_missions where project_evidence ? 'savedAuditContractRecovery' loop
+  select * into s from agent_missions where id=(m.project_evidence->'savedAuditContractRecovery'->>'sourceMissionId')::uuid;
+  select jsonb_build_object('mission',to_jsonb(s),'jobs',(select jsonb_agg(to_jsonb(j) order by id) from mission_assignments j where mission_id=s.id),'calls',(select jsonb_agg(to_jsonb(c) order by id) from mission_calls c where job_id in(select id from mission_assignments where mission_id=s.id))) into after_state;
+  if after_state is distinct from (select state from contract_sources_before where id=s.id) then raise exception 'Expired source, artifacts or ledger changed';end if;
+  if m.status<>'draft' or m.calls<>0 or m.actual_tokens<>0 or m.reserved_tokens<>0 or m.max_calls<>6 or m.deadline<=now() or m.deadline>now()+interval '61 minutes' then raise exception 'Finishing scope not bounded or premature execution';end if;
+  if exists(select 1 from mission_assignments a join mission_assignments o on o.id=(a.payload->'reusedFrom'->>'assignmentId')::uuid where a.mission_id=m.id and a.result is distinct from o.result) then raise exception 'Saved artifact modified';end if;
+  if (select result from mission_assignments where mission_id=m.id and job_key='compose') is distinct from (select result from mission_assignments where mission_id=s.id and job_key='revision') then raise exception 'Latest candidate not retained';end if;
+  if (select count(*) from mission_assignments where mission_id=m.id and status='queued')<>2 or exists(select 1 from mission_assignments where mission_id=m.id and role='review' and result->>'verdict'='pass') then raise exception 'Review skipped or repeated work';end if;
+  if (select payload->>'revisionPatchBaseHash' from mission_assignments where mission_id=m.id and job_key='revision') is distinct from (select encode(sha256(convert_to(result->>'text','UTF8')),'hex') from mission_assignments where mission_id=m.id and job_key='compose') then raise exception 'Wrong immutable patch base';end if;
+ end loop;
+ update executive_delegations set status='cancelled' where mission_id=m.id;
+ if activate_saved_audit_contract_recovery()<>1 then raise exception 'Cancelled work started';end if;
+ update executive_delegations set status='running' where mission_id=m.id;
+ if activate_saved_audit_contract_recovery()<>1 or activate_saved_audit_contract_recovery()<>0 then raise exception 'Contract runtime gate not idempotent';end if;
+ if has_function_privilege('authenticated','activate_saved_audit_contract_recovery()','execute') then raise exception 'Contract start gate exposed';end if;
+end $$;
+select 'Length/schema repair continuation preserves expired sources and charges, reuses latest actual candidates and requires fresh independent review.' as result;

@@ -1,3 +1,4 @@
+import {missionReviewFormat,type ReviewFormat} from './review-format';
 import {rejectedBeforeInference} from '@/lib/orchestration/request-rejection';
 import {shouldFallbackIncompleteReview} from './review-fallback.mjs';
 import {GAME_RULE_CATEGORIES} from '../../scripts/project-game-rules.mjs';
@@ -23,14 +24,14 @@ export function isCreditExhaustion(error:unknown):boolean{
 // Every stage and child mission routes against the active model registry. Only
 // an unchanged, draft-blind review-contract response may be reused; the worker
 // still validates its source provenance, and independently reviews the candidate.
-export async function missionModel(claim:Claim,instruction:string,input:string,tools:'none'|'research'|'calculate'='none'):Promise<ModelResult>{
+export async function missionModel(claim:Claim,instruction:string,input:string,tools:'none'|'research'|'calculate'='none',reviewFormat?:ReviewFormat):Promise<ModelResult>{
  const agent=claim.mission.team.find(a=>a.id===claim.job.agent_id);
  if(!agent)throw Error('Saved worker unavailable');
  if(tools==='research'&&!agent.config.research)throw Error('Research permission denied');
  if(!fitsMissionEnvelope(instruction,input,missionInputLimit(claim)))throw Error('Mission evidence exceeds bounded context. Narrow the objective or deliverable.');
  const executionDeadline=missionExecutionDeadline(claim);
  const checkpointStage=claim.job.role==='review'&&tools==='none'&&input.startsWith('AUTHORITATIVE_USER_TURNS:\n');
- const checkpointHash=checkpointStage?createHash('sha256').update(JSON.stringify({instruction,input,tools,objective:claim.mission.objective,agent:claim.job.agent_id})).digest('hex'):null;
+ const checkpointHash=checkpointStage?createHash('sha256').update(JSON.stringify({instruction,input,tools,...(reviewFormat?{reviewFormat}:{}),objective:claim.mission.objective,agent:claim.job.agent_id})).digest('hex'):null;
  const checkpoint=claim.job.payload?.reviewModelCheckpoint as {hash?:string;response?:ModelResult}|undefined;
  if(checkpointHash&&checkpoint?.hash===checkpointHash&&typeof checkpoint.response?.text==='string'
    &&typeof checkpoint.response.model==='string'&&Array.isArray(checkpoint.response.sources)&&Array.isArray(checkpoint.response.calculations))return checkpoint.response;
@@ -57,14 +58,14 @@ export async function missionModel(claim:Claim,instruction:string,input:string,t
   attemptedModels.push(choice.provider.name+':'+choice.modelId);
   try{
    let result:ModelResult;
-   try{result=await executeMissionModel(claim,instruction,input,tools,choice,executionDeadline,expandedOutputTokens,acceptanceInjection&&attemptedModels.length===1);}
+   try{result=await executeMissionModel(claim,instruction,input,tools,choice,executionDeadline,expandedOutputTokens,acceptanceInjection&&attemptedModels.length===1,reviewFormat);}
    catch(error){
     if(error instanceof MissionModelFailure&&typeof error.partial.partialText==='string')incomplete=error.partial;
     if(!(error instanceof MissionModelFailure)||error.partial.incompleteReason!=='max_output_tokens'||!String(error.partial.partialText??'').trim()||expandedOutputTokens||Number(error.partial.outputTokenLimit)>=12000)throw error;
     // One capacity correction on the selected model, within the same ledger and
     // wall-clock window. Never rotate through providers with an identical cap.
     expandedOutputTokens=Math.min(12000,Number(error.partial.outputTokenLimit)*2);
-    result=await executeMissionModel(claim,instruction,input,tools,choice,executionDeadline,expandedOutputTokens,acceptanceInjection&&attemptedModels.length===1);
+    result=await executeMissionModel(claim,instruction,input,tools,choice,executionDeadline,expandedOutputTokens,acceptanceInjection&&attemptedModels.length===1,reviewFormat);
    }
    const complete={...result,requestedExecutionEffort:claim.job.role==='revise'&&typeof claim.job.payload.revisionPatchBaseHash==='string'?'low':['compose','revise'].includes(claim.job.role)&&claim.mission.project_kind!=='specification'?'medium':undefined,provider:choice.provider.name,routingReason:choice.reasoning,attemptedModels};
    if(checkpointHash&&!await rpc<boolean>('checkpoint_mission_review_model',{p_id:claim.job.id,p_lease:claim.job.lease,p_hash:checkpointHash,p_response:complete}))throw Error('Worker no longer authorized to persist review checkpoint');
@@ -98,12 +99,12 @@ export async function missionModel(claim:Claim,instruction:string,input:string,t
  if(last instanceof Error)throw new MissionModelFailure(last.message,{...incomplete,attemptedModels,providerFailure:true});
  throw Error('No eligible orchestration model could execute this assignment');
 }
-async function executeMissionModel(claim:Claim,instruction:string,input:string,tools:'none'|'research'|'calculate',choice:OrchestrationChoice,executionDeadline:number,expandedOutputTokens?:number,injectSyntheticFailure=false):Promise<ModelResult>{
+async function executeMissionModel(claim:Claim,instruction:string,input:string,tools:'none'|'research'|'calculate',choice:OrchestrationChoice,executionDeadline:number,expandedOutputTokens?:number,injectSyntheticFailure=false,reviewFormat?:ReviewFormat):Promise<ModelResult>{
  const selectedModel=choice.modelId;
  const gameSpecification=claim.mission.project_kind==='specification'&&(claim.mission.project_evidence as {projectProfile?:string}|null)?.projectProfile==='game';
  const targetedPatch=claim.job.role==='revise'&&typeof claim.job.payload.revisionPatchBaseHash==='string';
  const deliverableEnvelope=!targetedPatch&&claim.mission.project_kind!=='specification'&&['compose','revise'].includes(claim.job.role);
- if(targetedPatch)instruction+='\nTARGETED REVISION CONTRACT: Return only JSON with edits:[{before,after}] and composerNotes. Each before must be an exact unique span of the saved compose candidate. Make only the specified factual corrections, at most five non-overlapping edits, together changing no more than 35% of the original text or 6000 original characters. Preserve all other source references and wording. The server applies these edits and independently reviews the COMPLETE resulting artifact. Never claim review passed.';
+ if(targetedPatch)instruction+='\nTARGETED REVISION CONTRACT: Return only JSON with edits:[{before,after}] and composerNotes set to an empty string. Each before must be an exact unique span of the saved compose candidate. Make only the specified factual corrections, at most eight non-overlapping edits, together changing no more than 35% of the original text or 6000 original characters. Preserve all other source references and wording. The server applies these edits and independently reviews the COMPLETE resulting artifact. Never claim review passed.';
  if(deliverableEnvelope)instruction+='\nOUTPUT CONTRACT: Return ONLY JSON with exactly two string fields: {"deliverable":"the complete user-facing final artifact","composerNotes":"internal change notes, or empty"}. Put all revision commentary exclusively in composerNotes. The deliverable must stand alone within the user word limit: no word-count claims, appended change log, reviewer impersonation, or claim that review has already passed. The server independently reviews only the complete deliverable and persists your notes separately.';
  const outputTokens=expandedOutputTokens??missionOutputLimit(claim,input);
  const client=boundedProvider(choice);
@@ -118,7 +119,7 @@ async function executeMissionModel(claim:Claim,instruction:string,input:string,t
   const calculatorAvailable=tools==='calculate'&&turn<3&&calculations.length<8;
   const calculatorPhase=tools!=='calculate'?'':'\nUse the calculator whenever the assignment needs arithmetic; for qualitative analysis without arithmetic, return the complete analysis directly without a tool call. Return the COMPLETE assigned analysis as explanatory prose and tables when ready. Do not emit tool arguments as your final answer. '+(calculatorAvailable?`Request useful independent calculations together. At most ${8-calculations.length} additional calculator calls are available across ${3-turn} remaining tool turns; finish as soon as you have the needed results.`:'The calculator phase is finished. No tools remain; finish using the returned results and state any remaining limitation.');
   const request={model:selectedModel,instructions:instruction+(gameSpecification&&['compose','revise'].includes(claim.job.role)?'\nGAME RULE SCHEMA: Every rule.category must be one of '+GAME_RULE_CATEGORIES.join(', ')+'. Do not invent categories such as state, transition, outcome, invalid-action, terminal or architecture; use an applicable allowed category or other. Every verified/approved rule ID, including engine architecture and UI requirements, must appear in at least one acceptance scenario ruleIds list. UNKNOWN SCHEMA: game.rules.unknowns must be an array; use [] if none. Every entry needs {id,question,status:\"open\"|\"resolved\",blocking:boolean,ruleIds:[existingRuleId]}. For resolved entries, also include decisionSourceId identifying a real source. A descriptive {id,description} entry is INVALID. Unspecified cosmetic or storage-key details can remain open nonblocking questions only if their ruleIds resolve; never silently treat a blocking gameplay decision as nonblocking. Each scenario needs nonempty valid ruleIds and invariantIds. On repair, satisfy ALL supplied diagnostics together, including missingRuleCoverage, uniqueCharacterLimit and assessmentCapacity; fixing only the first error is insufficient.\nGAME SPECIFICATION SIZE: Return minified complete JSON. The unique specification must fit 20,000 characters; the server counts canonically identical repeated browser contracts once. Return the complete expanded JSON with all required copies; do not emit references or omit data. Use one complete milestone when the original request permits it; do not invent staged increments. Each browser contract has at most 100 TOTAL steps across all scenarios, not 100 per scenario. Count navigation, clicks and assertions. Use concise rule descriptions and consolidated browser paths while retaining every required rule, state assertion, invalid action and reload check. No omitted requirements or placeholder references.':'')+calculatorPhase+(tools==='research'?'\nUse live web search for this assignment and cite consulted primary pages with native inline URL citations. Use at most four native web calls. If the first query returns no results, broaden the query before concluding that research is unavailable. Return source-supported findings and explicitly identify gaps; do not substitute remembered URLs or claim uncited research.':''),input:context,max_output_tokens:outputTokens,store:false,executionEffort:targetedPatch?'low' as const:deliverableEnvelope?'medium' as const:undefined,
-   ...(targetedPatch?{text:{format:zodTextFormat(missionRevisionPatchSchema,'mission_revision_patch')}}:claim.job.role==='plan'?{text:{format:zodTextFormat(planSchema,'mission_plan')}}:claim.mission.project_kind==='specification'&&['compose','revise'].includes(claim.job.role)?{text:{format:gameSpecification?{type:'json_object'}:zodTextFormat(projectPlanSchema.omit({game:true}),'project_specification')}}:deliverableEnvelope?{text:{format:zodTextFormat(missionDeliverableSchema,'mission_deliverable')}}:{}),
+   ...(reviewFormat?{text:{format:missionReviewFormat(reviewFormat)}}:targetedPatch?{text:{format:zodTextFormat(missionRevisionPatchSchema,'mission_revision_patch')}}:claim.job.role==='plan'?{text:{format:zodTextFormat(planSchema,'mission_plan')}}:claim.mission.project_kind==='specification'&&['compose','revise'].includes(claim.job.role)?{text:{format:gameSpecification?{type:'json_object'}:zodTextFormat(projectPlanSchema.omit({game:true}),'project_specification')}}:deliverableEnvelope?{text:{format:zodTextFormat(missionDeliverableSchema,'mission_deliverable')}}:{}),
    ...(tools==='research'?{tools:[{type:'web_search',search_context_size:'low'}],include:['web_search_call.action.sources'],tool_choice:'required',max_tool_calls:4}:calculatorAvailable?{tools:[calculator],tool_choice:'auto'}:{}),
   };
   const countInput:Record<string,unknown>={...request};
