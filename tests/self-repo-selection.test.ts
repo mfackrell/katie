@@ -45,3 +45,14 @@ test("production continuity matcher recognizes ordinary user messages",()=>{
  assert.equal(match("Inspect your own code",true,"Earlier we discussed routing"),true);
  assert.equal(match("What is in this picture?",false,"Earlier we discussed routing"),false);
 });
+
+test("production acceptance rejects self-inspection when routing file is absent",()=>{
+ const anchor=route.indexOf("const routingSourceAvailable =");
+ const end=route.indexOf("const sourceEvidenceStatus =",anchor);
+ assert.ok(anchor>=0 && end>anchor);
+ const guard=route.slice(anchor,end);
+ assert.match(guard,/filePath === "app\/api\/chat\/route\.ts"/);
+ assert.match(guard,/selfInspectionRequest \|\| continuitySelfInspection/);
+ assert.match(guard,/!routingSourceAvailable/);
+ assert.match(guard,/status: 503/);
+});
