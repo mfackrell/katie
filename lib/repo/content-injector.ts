@@ -321,7 +321,7 @@ export async function selectFilesForInjection(
   // alphabetically sorted files (which are predominantly CI workflows).
   const selfArchitecture = /\b(?:yourself|your own|katie|self.inspection|self.aware)\b/i.test(userMessage) &&
     /\b(?:code|routing|router|source|repo|architecture|implementation|inspect|see|view)\b/i.test(userMessage);
-  if (selfArchitecture && !hints.length) {
+  if (selfArchitecture) {
     const preferred = [
       "app/api/chat/route.ts",
       "lib/router/master-router.ts",
@@ -335,6 +335,8 @@ export async function selectFilesForInjection(
       "lib/tools/self-inspection.ts",
     ];
     const selected = preferred.filter(path => filePaths.includes(path) && !shouldSkipPath(path).skip);
+    // Self-inspection is evidence-driven, even when the user supplied a path hint.
+    // Always put the live request entrypoint first, before less relevant sources.
     console.info("[Repo Injector] Architecture-aware source selection",{selected});
     return {selected, reason: "Architecture-aware selection of actual chat, router, repository and tool implementations."};
   }
