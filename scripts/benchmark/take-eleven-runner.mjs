@@ -21,6 +21,14 @@ if(process.env.BENCHMARK_ENABLE_PAID==='1')fail('Live benchmark disabled: provid
 const admission=authorizeBenchmarkPair(cfg.capabilities);
 if(!admission.ready)fail('Benchmark adapters not ready: '+JSON.stringify(admission));
 if(!cfg.nonBillableFixture)fail('Benchmark execution disabled without non-billable fixture; provider metering not integrated');
+// A caller-set fixture flag cannot grant access to arbitrary executables or secrets.
+// Fixture scripts are owned by the reviewed harness, not by the model under test.
+for(const arm of cfg.arms){
+ if(arm.command!=='node' || arm.args?.length!==1 ||
+    !/^scripts\\/benchmark\\/fixtures\\/(direct|orchestrated)\\.mjs$/.test(arm.args[0]) ||
+    arm.args[0]!==`scripts/benchmark/fixtures/${arm.id}.mjs`)
+   fail('Untrusted non-billable fixture command');
+}
 const out=resolve(arg('--out')||'benchmark-results');
 mkdirSync(out,{recursive:true});
 const runId=randomUUID();
@@ -38,7 +46,7 @@ for(const arm of cfg.arms){
  if(clean.status!==0||clean.stdout.trim())fail(`${arm.id} worktree not clean`);
  // An adapter must read this cap and stop BEFORE exceeding it. No adapter, no run.
  const started=Date.now();
- const child=spawnSync(arm.command,arm.args,{cwd,encoding:'utf8',timeout:cfg.timeoutMs||900000,maxBuffer:1024*1024,env:{...process.env,BENCHMARK_ARM:arm.id,BENCHMARK_TOKEN_CAP:String(cfg.capTokens),BENCHMARK_RUN_ID:runId,BENCHMARK_BASELINE_SHA:cfg.baselineSha,BENCHMARK_RECEIPT_PATH:resolve(out,`${arm.id}-provider.json`)}});
+ const child=spawnSync(arm.command,arm.args,{cwd,encoding:'utf8',timeout:cfg.timeoutMs||900000,maxBuffer:1024*1024,env:{PATH:process.env.PATH??'',HOME:process.env.HOME??'',BENCHMARK_FIXTURE_ONLY:'1',BENCHMARK_ARM:arm.id,BENCHMARK_TOKEN_CAP:String(cfg.capTokens),BENCHMARK_RUN_ID:runId,BENCHMARK_BASELINE_SHA:cfg.baselineSha,BENCHMARK_RECEIPT_PATH:resolve(out,`${arm.id}-provider.json`)}});
  const receiptPath=resolve(out,`${arm.id}-provider.json`);
  let receipt=null;
  try {receipt=JSON.parse(readFileSync(receiptPath,'utf8'))}catch{}
