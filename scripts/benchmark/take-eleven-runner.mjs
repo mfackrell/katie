@@ -15,8 +15,12 @@ const cfg=JSON.parse(readFileSync(configPath,'utf8'));
 if(!Number.isSafeInteger(cfg.capTokens)||cfg.capTokens<=0)fail('positive integer capTokens required');
 if(!cfg.baselineSha || !/^[a-f0-9]{40}$/.test(cfg.baselineSha))fail('exact 40-character baseline SHA required');
 if(!Array.isArray(cfg.arms)||cfg.arms.length!==2||new Set(cfg.arms.map(a=>a.id)).size!==2||!['direct','orchestrated'].every(id=>cfg.arms.some(a=>a.id===id)))fail('exactly direct and orchestrated arms required');
+// Caller-provided booleans are not proof of live adapter integration.
+// Until an independently attested provider usage bridge exists, refuse paid dispatch.
+if(process.env.BENCHMARK_ENABLE_PAID==='1')fail('Live benchmark disabled: provider-authoritative per-request limits not integrated in both engines');
 const admission=authorizeBenchmarkPair(cfg.capabilities);
 if(!admission.ready)fail('Benchmark adapters not ready: '+JSON.stringify(admission));
+if(!cfg.nonBillableFixture)fail('Benchmark execution disabled without non-billable fixture; provider metering not integrated');
 const out=resolve(arg('--out')||'benchmark-results');
 mkdirSync(out,{recursive:true});
 const runId=randomUUID();
