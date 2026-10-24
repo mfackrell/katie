@@ -18,6 +18,8 @@ test('standalone model tools require explicit owner session and bound grant, nev
  assert.match(authorization,/self_tool_owner_grants/);
  assert.match(authorization,/\.eq\('actor_id', actorId\)\.eq\('chat_id', chatId\)/);
  assert.match(route,/authorizeSelfToolCaller\(request, actorId, chatId\)/);
+ assert.match(route,/actorId === process\.env\.KATIE_SELF_ACTOR_ID/);
+ assert.doesNotMatch(route,/selfToolsEnabled = selfToolActor\?\.data\?\.name/);
 });
 
 test('tool-enabled conversation retains router-selected provider and auditable results',()=>{
