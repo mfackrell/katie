@@ -1,3 +1,4 @@
+import { nativeToolTurn } from "./native-tools";
 import { assertProviderOutput, inspectGoogleStatus } from "./response-errors";
 import { GoogleGenAI, ThinkingLevel as GoogleThinkingLevel } from "@google/genai";
 import {
@@ -136,6 +137,7 @@ export class GoogleProvider implements LlmProvider {
     this.client = new GoogleGenAI({ apiKey });
   }
 
+  generateToolTurn(params: import("@/lib/tools/types").ToolTurnParams) { return nativeToolTurn("google", this.apiKey, params); }
   async listModels(): Promise<string[]> {
     try {
       const listResponse = await this.client.models.list();
