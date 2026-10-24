@@ -182,6 +182,7 @@ export interface ProviderStreamHandlers {
 export interface LlmProvider {
   name: "openai" | "google" | "grok" | "anthropic";
   listModels(): Promise<string[]>;
+  generateToolTurn?(params: import("@/lib/tools/types").ToolTurnParams): Promise<import("@/lib/tools/types").ToolTurn>;
   generate(params: ChatGenerateParams): Promise<ProviderResponse>;
   generateStream?(
     params: ChatGenerateParams,

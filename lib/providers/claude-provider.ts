@@ -1,3 +1,4 @@
+import { nativeToolTurn } from "./native-tools";
 import {
   ChatGenerateParams,
   LlmProvider,
@@ -151,6 +152,7 @@ export class ClaudeProvider implements LlmProvider {
 
   constructor(private apiKey: string) {}
 
+  generateToolTurn(params: import("@/lib/tools/types").ToolTurnParams) { return nativeToolTurn("anthropic", this.apiKey, params); }
   async listModels(): Promise<string[]> {
     try {
       const response = await fetch("https://api.anthropic.com/v1/models", {
