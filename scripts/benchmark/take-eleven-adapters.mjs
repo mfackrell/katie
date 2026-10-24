@@ -6,14 +6,14 @@ export const TAKE_ELEVEN_ARMS=Object.freeze({
   engine:'github-actions-codex',
   workflow:'.github/workflows/autonomous-development.yml',
   dispatchEvent:'workflow_dispatch',
-  requires:['isolatedBranchCheckout','serverSideTokenCap','providerUsageReceipt','immutableAcceptance']
+  requires:['isolatedBranchCheckout','serverSideTokenCap','providerUsageReceipt','immutableAcceptance','ownerApprovalVerifier']
  }),
  orchestrated:Object.freeze({
   branch:'benchmark/take-eleven-orchestrated',
   engine:'katie-project-worker',
   source:'lib/projects/worker.ts',
   missionEngine:'lib/missions/worker.ts',
-  requires:['isolatedProject','isolatedBranchCheckout','serverSideTokenCap','providerUsageReceipt','immutableAcceptance']
+  requires:['isolatedProject','isolatedBranchCheckout','serverSideTokenCap','providerUsageReceipt','immutableAcceptance','ownerApprovalVerifier']
  })
 });
 export function adapterPreflight(arm, capabilities){

@@ -3,7 +3,22 @@
 export class BenchmarkBudget {
  constructor(capTokens) {
   if(!Number.isSafeInteger(capTokens)||capTokens<=0)throw Error('invalid benchmark cap');
-  this.capTokens=capTokens; this.committed=0; this.reservations=new Map();
+  this.capTokens=capTokens; this.committed=0; this.reservations=new Map(); this.approvals=[];
+ }
+ // Only accept a VERIFIED, server-issued owner authorization. A client-provided
+ // approved:true field is not authorization. The verifier is a trusted adapter.
+ async approveIncrease(authorization,verifyOwnerAuthorization){
+  if(typeof verifyOwnerAuthorization!=='function')throw Error('OWNER_VERIFIER_REQUIRED');
+  const result=await verifyOwnerAuthorization(authorization);
+  if(!result || result.verified!==true || result.actorRole!=='owner' ||
+     result.scope!=='take-eleven-benchmark' ||
+     !Number.isSafeInteger(result.newCeiling) || result.newCeiling<=this.capTokens ||
+     typeof result.approvalId!=='string' || !result.approvalId ||
+     this.approvals.some(x=>x.approvalId===result.approvalId))throw Error('INVALID_OWNER_BUDGET_AUTHORIZATION');
+  const previousCeiling=this.capTokens;
+  this.capTokens=result.newCeiling;
+  this.approvals.push(Object.freeze({approvalId:result.approvalId,previousCeiling,newCeiling:result.newCeiling}));
+  return this.snapshot();
  }
  get reserved(){return [...this.reservations.values()].reduce((sum,v)=>sum+v,0)}
  get available(){return this.capTokens-this.committed-this.reserved}
@@ -22,5 +37,5 @@ export class BenchmarkBudget {
   return {actual,remaining:this.available};
  }
  // On ambiguous provider errors, retain reservation until reconciled; never refund blindly.
- snapshot(){return {capTokens:this.capTokens,committedTokens:this.committed,reservedTokens:this.reserved,availableTokens:this.available}}
+ snapshot(){return {capTokens:this.capTokens,committedTokens:this.committed,reservedTokens:this.reserved,availableTokens:this.available,approvals:[...this.approvals]}}
 }
