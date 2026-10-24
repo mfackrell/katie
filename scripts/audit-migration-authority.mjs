@@ -30,6 +30,7 @@ const mappedNative=native.filter(x=>nativeAliases[x.name]).map(x=>({
 }));
 const summary={authority:"public.schema_migrations via GitHub Actions migrate.yml",repoFiles:files.length,customEntries:custom.length,nativeEntries:native.length,missingCustom:absent,checksumMismatch:altered,historicalOnly:legacyOnly,mappedNative,unmappedNative:native.filter(x=>!nativeAliases[x.name]).length};
 console.log(JSON.stringify(summary,null,2));
-if(altered.length){console.error("Historical migration checksum mismatch; refuse deployment.");process.exit(1)}\n// Missing ledger records are legitimately pending new migrations on main.
+if(altered.length){console.error("Historical migration checksum mismatch; refuse deployment.");process.exit(1)}
+// Missing ledger records are legitimately pending new migrations on main.
 // Native Supabase history is independent historical evidence, not a second write authority.
 // Do not modify native history based on inferred name/timestamp matching.
