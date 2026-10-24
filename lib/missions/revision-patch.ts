@@ -60,7 +60,13 @@ export function recoverMissionRevisionPrefix(base:string,expectedHash:string,par
   if(end<0){
    if(!edits.length)throw Error('No complete edits to recover');
    const result=applyMissionRevisionPatch(base,expectedHash,JSON.stringify({edits,composerNotes:''}));
-   return{...result,recoveredPatch:{partialHash:createHash('sha256').update(partial).digest('hex'),completeEditCount:edits.length,unfinishedEditOmitted:true,independentReviewRequired:true},changedCharacters:result.revisionPatch.edits.reduce((n,e)=>n+e.before.length,0)};
+   // The original span may itself be fully returned even though its replacement
+   // is cut off. Reuse that exact span for a small finishing call, never the
+   // incomplete replacement. Full-candidate application and review remain fenced.
+   const before=/^\{\s*"before"\s*:\s*("(?:[^"\\]|\\.)*")\s*,\s*"after"\s*:/.exec(partial.slice(offset));
+   const span:unknown=before?JSON.parse(before[1]):undefined;
+   const unfinishedSpan=typeof span==='string'&&span.length>0&&result.text.indexOf(span)>=0&&result.text.indexOf(span)===result.text.lastIndexOf(span)?span:undefined;
+   return{...result,unfinishedSpan,recoveredPatch:{partialHash:createHash('sha256').update(partial).digest('hex'),completeEditCount:edits.length,unfinishedEditOmitted:true,independentReviewRequired:true},changedCharacters:result.revisionPatch.edits.reduce((n,e)=>n+e.before.length,0)};
   }
   edits.push(JSON.parse(partial.slice(offset,end)));offset=end;
   while(/\s/.test(partial[offset]??''))offset++;

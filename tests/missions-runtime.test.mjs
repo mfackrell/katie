@@ -577,8 +577,8 @@ test('partial edit streams preserve complete edits and request only the unfinish
  const compose={...job(m,'compose','compose'),status:'completed',result:{text:base}},revision=job(m,'revise','revision');revision.payload={revisionPatchBaseHash:hash};revision.result={incompleteReason:'max_output_tokens',partialText:partial,model:'actual-model',provider:'anthropic'};let committed;
  const {executeClaim}=modules({'@/lib/missions/store':{readMission:async()=>({mission:m,jobs:[compose,revision]}),rpc:async(_,a)=>{committed=a;return true;}}})('@/lib/missions/worker');
  await executeClaim({mission:m,job:revision},async(_c,instruction,input)=>{
-  const data=JSON.parse(input);assert.equal(data.candidate.text,prefix.text);assert.equal(data.candidate.sha256,prefix.revisionPatch.resultHash);assert.equal(data.completedEditRecovery.completeEditCount,1);assert.match(instruction,/at most TWO tiny edits/);
-  return{text:JSON.stringify({edits:[{before:'One extra word here.',after:'One word.'}],composerNotes:''}),model:'finishing-model',provider:'google',sources:[],calculations:[]};
+  const data=JSON.parse(input);assert.equal(data.editableSpan,'extra word');assert.equal(data.candidateHash,prefix.revisionPatch.resultHash);assert.equal(data.measuredWholeCandidate.wordCount,17);assert.doesNotMatch(input,/Original immutable evidence stays/);assert.match(instruction,/at most TWO tiny edits/);
+  return{text:JSON.stringify({edits:[{before:'extra word',after:'word'}],composerNotes:''}),model:'finishing-model',provider:'google',sources:[],calculations:[]};
  });assert.equal(committed.p_result.revisionPatch.previousPatch.resultHash,prefix.revisionPatch.resultHash);assert.match(committed.p_result.text,/count six/);assert.equal(compose.result.text,base);assert.equal(committed.p_mission_status,null);assert.equal(committed.p_final,null);
 });
 
