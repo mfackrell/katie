@@ -54,6 +54,7 @@ try{
   }
  }catch(error){diagnostics.push(String(error?.message||error).slice(0,400));}
  assert(requests.length>=1,'synthetic gateway never received SDK traffic');
+ console.log(JSON.stringify({requests:requests.length,events:diagnostics,completed,toolCreated:existsSync(join(repo,'native-tool.txt'))}));
  assert(existsSync(join(repo,'native-tool.txt')),'Native SDK did not create file through shell tool');
  assert.equal(readFileSync(join(repo,'native-tool.txt'),'utf8'),'NATIVE_TOOL_OK');
  assert(requests.length>=2,'Tool execution did not return tool results to model');
