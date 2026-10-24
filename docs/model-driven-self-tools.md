@@ -49,7 +49,7 @@ The integration branch supplies `components/self-tools-owner-session.tsx` and `l
 These changes DO NOT bootstrap an owner automatically. An administrator must separately:
 1. Configure the Supabase Auth public URL/key for the client and server, email-link redirect allowlist, and `KATIE_SELF_ACTOR_ID` bound to the verified Katie actor UUID.
 2. Apply and validate both reviewed migrations using the single authorized migration workflow, after successful CI and staged schema compatibility testing.
-3. Complete owner Auth login and independently verify the authenticated user's identity before provisioning a scoped owner/actor/chat grant through a reviewed administrative channel.
+3. Configure `KATIE_OWNER_AUTH_USER_ID` with the independently verified Supabase Auth owner UUID. Complete email-link sign-in and use the explicit "Authorize this chat" control; the server verifies the bearer token and refuses grants unless the authenticated user matches the configured owner and the chat belongs to the pinned Katie actor.
 4. Run the real model-to-tool acceptance conversation and inspect pinned Git SHA, provider/model provenance, durable tool receipts and source inclusion.
 
 No production grant or credential onboarding is implied by merging code. Missing setup must fail closed. Provider-native read operations and change-capability reporting do not fulfill the full GitHub/Supabase/Vercel mutation workflow requested by issue #688.
