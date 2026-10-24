@@ -34,6 +34,21 @@ BEGIN
  BEGIN PERFORM public.benchmark_finish_mission_call(c1,71);
  EXCEPTION WHEN OTHERS THEN collision:=true; END;
  IF NOT collision THEN RAISE EXCEPTION 'conflicting replay accepted'; END IF;
+ c2:=gen_random_uuid();
+ r:=public.benchmark_reserve_mission_call(j,lease_id,c2,'fixture',80,false);
+ IF r IS NULL THEN RAISE EXCEPTION 'uncertain reserve rejected'; END IF;
+ PERFORM public.benchmark_finish_mission_call(c2,NULL);
+ IF (SELECT status FROM public.mission_calls WHERE id=c2)<>'uncertain' THEN
+  RAISE EXCEPTION 'uncertain hold not preserved'; END IF;
+ PERFORM public.benchmark_reconcile_uncertain_mission_call(c2,'fixture-provider','receipt-uncertain-1',55);
+ PERFORM public.benchmark_reconcile_uncertain_mission_call(c2,'fixture-provider','receipt-uncertain-1',55);
+ IF (SELECT spent_tokens FROM public.benchmark_budget_accounts WHERE id=acct)<>245
+ OR (SELECT actual_tokens FROM public.agent_missions WHERE id=m)<>245 THEN
+  RAISE EXCEPTION 'uncertain reconciliation mismatch'; END IF;
+ collision:=false;
+ BEGIN PERFORM public.benchmark_reconcile_uncertain_mission_call(c2,'fixture-provider','receipt-conflict',55);
+ EXCEPTION WHEN OTHERS THEN collision:=true; END;
+ IF NOT collision THEN RAISE EXCEPTION 'conflicting uncertain receipt accepted'; END IF;
  denied:=public.benchmark_reserve_mission_call(j,gen_random_uuid(),gen_random_uuid(),'fixture',10,true);
  IF denied IS NOT NULL THEN RAISE EXCEPTION 'stale lease allowed'; END IF;
 END $$;
