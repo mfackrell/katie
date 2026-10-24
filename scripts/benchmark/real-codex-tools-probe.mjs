@@ -27,8 +27,8 @@ const server=createServer((req,res)=>{
   put('response.created',{type:'response.created',response:{...response,status:'in_progress'}});
   const first=requests.length===1;
   const message=first
-   ? {id:'call_shell_1',type:'function_call',name:'shell_command',call_id:'call_test_1',
-      arguments:JSON.stringify({command:'printf NATIVE_TOOL_OK > native-tool.txt && test -s native-tool.txt',workdir:repo}),status:'completed'}
+   ? {id:'call_shell_1',type:'function_call',name:'functions.exec',call_id:'call_test_1',
+      input:'const r=await tools.exec_command({cmd:["bash","-lc","printf NATIVE_TOOL_OK > native-tool.txt && test -s native-tool.txt"],workdir:"'+repo+'"});text(r);',status:'completed'}
    : {id:'msg_'+requests.length,type:'message',role:'assistant',status:'completed',
       content:[{type:'output_text',text:'NATIVE_TOOL_DONE',annotations:[]}]};
   put('response.output_item.added',{type:'response.output_item.added',output_index:0,item:message});
@@ -49,7 +49,7 @@ try{
  try{
   const {events}=await thread.runStreamed('Create native-tool.txt containing NATIVE_TOOL_OK using a shell command, verify the file with shell, then reply NATIVE_TOOL_DONE.');
   for await(const event of events){
-   diagnostics.push(event.type==='error' ? 'error:'+JSON.stringify(event).slice(0,1200) : event.type);
+   diagnostics.push(event.type==='error'||event.type==='item.completed' ? JSON.stringify(event).slice(0,1800) : event.type);
    if(event.type==='turn.completed')completed=true;
   }
  }catch(error){diagnostics.push(String(error?.message||error).slice(0,400));}
