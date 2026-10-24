@@ -8,7 +8,7 @@ on:
 
 jobs:
   gate:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     env:
       NEXT_PUBLIC_SUPABASE_URL: https://example.supabase.co
@@ -34,6 +34,14 @@ jobs:
           # Network/filesystem isolation remains mandatory; no unsandboxed fallback.
           if test -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns; then sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0; fi
 
+      - name: Install PostgreSQL 16 for isolated integration tests
+        run: |
+          if ! test -x /usr/lib/postgresql/16/bin/initdb; then
+            sudo apt-get update
+            sudo apt-get install -y postgresql-16
+          fi
+          test -x /usr/lib/postgresql/16/bin/initdb
+
       - name: Run strict CI gate (typecheck + all offline tests + build + smoke)
         run: npm run ci:gate
 
@@ -49,7 +57,7 @@ jobs:
         run: node --test tests/game-development/signal-sprint.test.mjs
 
   review-completion:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     env:
       NEXT_PUBLIC_SUPABASE_URL: https://example.supabase.co
@@ -69,7 +77,7 @@ jobs:
         run: npm run test:review
 
   video-fallback:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - name: Checkout
