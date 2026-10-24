@@ -8,6 +8,8 @@ import {orchestrationChoices,orchestrationFailure,type OrchestrationChoice} from
 import {boundedProvider} from '@/lib/orchestration/bounded-provider';
 import { createHash, randomUUID } from 'node:crypto';
 import { rpc } from './store';
+import {executeBenchmarkMissionProvider} from './benchmark-provider.mjs';
+import {getSupabaseAdminClient} from '@/lib/data/supabase/admin';
 import { calculate,planSchema,missionDeliverableSchema,missionRevisionPatchSchema,parseJSON,type Claim } from './types';
 import {MissionAdmissionError,explainAdmissionDenial,missionExecutionDeadline,missionAttemptTimeout,fitsMissionEnvelope,missionInputLimit,missionOutputLimit} from './request-budget';
 
@@ -131,12 +133,29 @@ async function executeMissionModel(claim:Claim,instruction:string,input:string,t
   const reserve=inputTokens+outputTokens+(tools==='research'?32000:0);
   const inferenceTimeout=tools==='calculate'?Math.min(90_000,calculationDeadline-Date.now()-5000):missionAttemptTimeout(executionDeadline,outputTokens);
   if(inferenceTimeout<1000)throw Error('Mission execution time window exhausted before dispatch; saved work remains intact');
-  if(!await rpc<boolean>('reserve_mission_call',{p_id:claim.job.id,p_lease:claim.job.lease,p_call:callId,p_model:choice.provider.name+':'+selectedModel,p_tokens:reserve}))await explainAdmissionDenial(claim,reserve);
+  // Only a persisted, server-owned benchmark binding may switch billing ledgers.
+  const {data:bench,error:benchError}=await getSupabaseAdminClient().from('benchmark_mission_bindings')
+    .select('account_id,experiment_id,baseline_sha').eq('mission_id',claim.mission.id).maybeSingle();
+  if(benchError)throw Error('Benchmark mission binding lookup failed closed');
+  const benchmarkBinding=bench?{
+   verifiedByServer:true,missionId:claim.mission.id,arm:'orchestrated',
+   accountId:bench.account_id,experimentId:bench.experiment_id,baselineSha:bench.baseline_sha
+  }:null;
+  if(!benchmarkBinding&&!await rpc<boolean>('reserve_mission_call',{p_id:claim.job.id,p_lease:claim.job.lease,p_call:callId,p_model:choice.provider.name+':'+selectedModel,p_tokens:reserve}))await explainAdmissionDenial(claim,reserve);
   const started=Date.now();
   try{
    if(injectSyntheticFailure){console.warn('[Missions] Synthetic acceptance injection: provider quota failure before inference',{missionId:claim.mission.id,jobId:claim.job.id,provider:choice.provider.name,model:selectedModel});throw Object.assign(new Error('Synthetic quota failure for isolated acceptance mission'),{status:429,code:'insufficient_quota'});}
-   const response=await client.responses.create(request,{timeout:inferenceTimeout});
-   await rpc('finish_mission_call',{p_call:callId,p_tokens:response.usage?.total_tokens??null});
+   const response=benchmarkBinding
+     ? await executeBenchmarkMissionProvider({
+       db:getSupabaseAdminClient(),binding:benchmarkBinding,missionId:claim.mission.id,
+       baselineSha:benchmarkBinding.baselineSha,requestId:callId,
+       model:choice.provider.name+':'+selectedModel,maxInputTokens:Math.max(1,reserve-outputTokens),
+       maxOutputTokens:outputTokens,
+       invoke:async()=>{const r=await client.responses.create(request,{timeout:inferenceTimeout});
+        return {...r,usage:{...r.usage,inputTokens:r.usage?.input_tokens,outputTokens:r.usage?.output_tokens}};}
+      })
+     : await client.responses.create(request,{timeout:inferenceTimeout});
+   if(!benchmarkBinding)await rpc('finish_mission_call',{p_call:callId,p_tokens:response.usage?.total_tokens??null});
    if(response.status!=='completed')throw new MissionModelFailure('Model output incomplete: '+response.status,{responseStatus:response.status,incompleteReason:response.incomplete_details?.reason??null,outputTokenLimit:outputTokens,partialText:response.output_text??'',outputKinds:((response.output??[]) as Array<Record<string,unknown>>).flatMap(item=>Array.isArray(item.nativeAnthropic)?item.nativeAnthropic.map((block:Record<string,unknown>)=>String(block.type??'unknown')):[String(item.type??'unknown')]),provider:choice.provider.name,model:selectedModel,providerErrorCode:response.error?.code??null,providerErrorMessage:response.error?.message?.slice(0,600)??null});
    text=response.output_text?.trim()??'';
    const output=response.output as unknown as Array<Record<string,unknown>>;
@@ -175,7 +194,7 @@ async function executeMissionModel(claim:Claim,instruction:string,input:string,t
    }
    return{text,sources,calculations,model:selectedModel};
   }catch(error){
-   await rpc('finish_mission_call',{p_call:callId,p_tokens:rejectedBeforeInference(error)?0:null}).catch(()=>{});
+   if(!benchmarkBinding)await rpc('finish_mission_call',{p_call:callId,p_tokens:rejectedBeforeInference(error)?0:null}).catch(()=>{});
    console.warn('[Missions] Provider attempt ended',{jobId:claim.job.id,callId,provider:choice.provider.name,model:selectedModel,durationMs:Date.now()-started,reservedTokens:reserve,countMethod:counted?'provider':'conservative-bytes',error:error instanceof Error?error.message.slice(0,350):'Unknown provider failure'});
    throw error;
   }
