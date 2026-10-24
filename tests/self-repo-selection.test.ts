@@ -6,7 +6,7 @@ const route=readFileSync("app/api/chat/route.ts","utf8");
 test("Katie own architecture selects actual implementation files rather than alphabetic workflow defaults",()=>{
  assert.ok(src.includes("Architecture-aware selection"));
  for(const p of ["app/api/chat/route.ts","lib/router/master-router.ts","lib/repo/content-injector.ts","lib/chat/local-katie.ts"]) assert.ok(src.includes(p));
- assert.ok(src.indexOf("if (selfArchitecture && !hints.length)") < src.indexOf(".slice(0, 12)"));
+ assert.ok(src.indexOf("if (selfArchitecture)") < src.indexOf(".slice(0, 12)"));
 });
 test("follow-up source selection favors self-inspection intent rather than unrelated image context",()=>{
  assert.ok(route.includes("continuitySelfInspection"));
@@ -32,4 +32,21 @@ test("actual architecture matcher selects source for the live self-inspection ph
   assert.ok(!result.selected.includes(".github/workflows/ci.yml"),message);
   assert.match(result.reason,/Architecture-aware/);
  }
+});
+
+test("live self-inspection follow-up regex matches conversational requests",()=>{
+ const {runInNewContext}=require("node:vm") as typeof import("node:vm");
+ const start=route.indexOf("    const continuitySelfInspection =");
+ const end=route.indexOf("    const repoGate =",start);
+ assert.ok(start>=0 && end>start,"route has follow-up detection");
+ const block=route.slice(start,end);
+ const probe=runInNewContext("(function(message,recentUserTopic,selfInspectionRequest){"+block+";return continuitySelfInspection;})");
+ assert.equal(probe("can you see yourself yet?","",false),true);
+ assert.equal(probe("take a look","we were inspecting Katie routing code",true),true);
+ assert.equal(probe("what is in that photo?","a photo",false),false);
+});
+test("routing source must be included in generation context, not merely connected",()=>{
+ assert.ok(route.includes('included.some(file => file.filePath === "app/api/chat/route.ts")'));
+ assert.ok(route.includes("fullFileContents"));
+ assert.ok(route.includes("SELF_INSPECTION_EVIDENCE_STATUS"));
 });
