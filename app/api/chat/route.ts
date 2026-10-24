@@ -1640,8 +1640,8 @@ async function executeChat(request: NextRequest) {
 
     const recentUserTopic = attachmentHistory.filter(turn => turn.role === "user").slice(-8)
       .map(turn => turn.content).join("\n");
-    const continuitySelfInspection = /\\b(?:can you see yourself|see yourself yet|your own code|inspect yourself)\\b/i.test(message) ||
-      (selfInspectionRequest && /\\b(?:code|repo|architecture|routing)\\b/i.test(recentUserTopic));
+    const continuitySelfInspection = /\b(?:can you see yourself|see yourself yet|your own code|inspect yourself)\b/i.test(message) ||
+      (selfInspectionRequest && /\b(?:code|repo|architecture|routing)\b/i.test(recentUserTopic));
     const repoGate = shouldAttachRepoSourceDeterministically({
       // A direct request to inspect Katie herself authorizes this one scoped source read.
       // Do not change the persistent toggle or attach repositories to unrelated turns.
