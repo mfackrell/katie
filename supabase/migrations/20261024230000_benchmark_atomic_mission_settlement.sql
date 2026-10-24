@@ -30,7 +30,7 @@ begin
    state=case when p_tokens>b.reserved_tokens then 'overrun' else 'settled' end where id=b.id;
   if p_tokens>b.reserved_tokens then
    -- No further admission after a known provider overrun, even below account cap.
-   update public.benchmark_budget_accounts set frozen_at=coalesce(frozen_at,now()) where id=a.id;
+   -- Admission checks any recorded overrun state before allowing another call.
   end if;
  end if;
  return true;
