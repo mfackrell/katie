@@ -25,5 +25,9 @@ jobs:
         run: node scripts/benchmark/real-codex-denial-probe.mjs
       - name: Qualify synthetic streaming Responses protocol
         run: node scripts/benchmark/real-codex-synthetic-probe.mjs
+      - name: Install filesystem isolation for containment probe
+        run: command -v bwrap >/dev/null || (sudo apt-get update && sudo apt-get install -y bubblewrap)
+      - name: Test kernel filesystem and network fencing (without Codex)
+        run: bash scripts/benchmark/os-containment-probe.sh
       - name: Qualify real native shell and file edit against synthetic gateway
         run: node scripts/benchmark/real-codex-tools-probe.mjs
