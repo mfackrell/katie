@@ -17,7 +17,7 @@ const server=createServer((req,res)=>{
  const chunks=[];req.on('data',c=>chunks.push(c));
  req.on('end',()=>{
   let body={};try{body=JSON.parse(Buffer.concat(chunks).toString());}catch{}
-  requests.push({method:req.method,url:req.url,model:body.model,input:body.input});
+  requests.push({method:req.method,url:req.url,model:body.model,input:body.input,tools:body.tools});
   if(--remaining<0){res.writeHead(429,{'content-type':'application/json'});res.end(JSON.stringify({error:{message:'SYNTHETIC_BUDGET_EXHAUSTED',type:'insufficient_quota',code:'insufficient_quota'}}));return;}
   const id='resp_synthetic_'+requests.length;
   const headers={'content-type':'text/event-stream','cache-control':'no-cache'};
@@ -27,7 +27,7 @@ const server=createServer((req,res)=>{
   put('response.created',{type:'response.created',response:{...response,status:'in_progress'}});
   const first=requests.length===1;
   const message=first
-   ? {id:'call_shell_1',type:'custom_tool_call',name:'functions.exec',call_id:'call_test_1',
+   ? {id:'call_shell_1',type:'custom_tool_call',name:'exec',call_id:'call_test_1',
       input:'const r=await tools.exec_command({cmd:["bash","-lc","printf NATIVE_TOOL_OK > native-tool.txt && test -s native-tool.txt"],workdir:"'+repo+'"});text(r);',status:'completed'}
    : {id:'msg_'+requests.length,type:'message',role:'assistant',status:'completed',
       content:[{type:'output_text',text:'NATIVE_TOOL_DONE',annotations:[]}]};
@@ -54,7 +54,7 @@ try{
   }
  }catch(error){diagnostics.push(String(error?.message||error).slice(0,400));}
  assert(requests.length>=1,'synthetic gateway never received SDK traffic');
- console.log(JSON.stringify({requests:requests.length,requestInputs:requests.slice(0,3).map(x=>x.input).map(x=>JSON.stringify(x).slice(0,1400)),events:diagnostics,completed,toolCreated:existsSync(join(repo,'native-tool.txt'))}));
+ console.log(JSON.stringify({requests:requests.length,requestTail:requests.slice(0,3).map(x=>JSON.stringify(x.input).slice(-1300)),toolCatalog:requests[0]?.tools?.map(t=>({name:t.name,type:t.type})),events:diagnostics,completed,toolCreated:existsSync(join(repo,'native-tool.txt'))}));
  assert(existsSync(join(repo,'native-tool.txt')),'Native SDK did not create file through shell tool');
  assert.equal(readFileSync(join(repo,'native-tool.txt'),'utf8'),'NATIVE_TOOL_OK');
  assert(requests.length>=2,'Tool execution did not return tool results to model');
