@@ -64,6 +64,8 @@ const {data:grantId,error:issueError}=await db.rpc('benchmark_issue_execution_gr
 if(issueError||typeof grantId!=='string')denied('atomic owner grant issuance rejected');
 const clientToken=randomBytes(32).toString('base64url');
 const root=mkdtempSync(join(tmpdir(),'katie-trusted-gateway-'));
+const evidencePath=process.env.KATIE_NATIVE_EVIDENCE_FILE;
+const decisions=[];
 const sockdir=join(root,'sock'),socket=join(sockdir,'gateway.sock');
 mkdirSync(sockdir,{mode:0o700});
 const perRequestCap=Math.min(20000,Number(approval.max_tokens),Number(account.cap_tokens));
@@ -122,6 +124,7 @@ try{
   if(decision.phase!==phase||!['pass','changes_requested'].includes(decision.verdict)||
      typeof decision.findings!=='string'||!decision.findings.trim())
     denied('invalid independent review verdict');
+  decisions.push(decision);
   return decision;
  };
  stopTimer=setInterval(async()=>{
@@ -144,6 +147,12 @@ try{
   const final=await runPhase('final-review');
   if(final.verdict!=='pass')denied('independent final review requires changes');
  } 
+ if(!evidencePath||!evidencePath.startsWith(process.env.RUNNER_TEMP+'/'))
+  denied('trusted evidence destination unavailable');
+ writeFileSync(evidencePath,JSON.stringify({version:1,trialId:proof.trialId,taskId:proof.taskId,
+  approvalId:proof.approvalId,projectId:proof.projectId,review:decisions[0],
+  finalReview:decisions.at(-1),repairPerformed:decisions.length===2,
+  metered:true,completed:true})+'\n',{mode:0o600,flag:'wx'});
  console.log('NATIVE_METERED_REVIEW_AND_BOUNDED_REPAIR_COMPLETED');
  console.log('NATIVE_DEVELOPER_RETURNED_TO_EXISTING_TEST_REVIEW_PIPELINE');
 }finally{
