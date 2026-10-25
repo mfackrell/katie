@@ -41,7 +41,7 @@ const server=createNativeHttpBridge({
    ['response.output_item.done',{type:'response.output_item.done',output_index:0,item}],
    ['response.completed',{type:'response.completed',response}]
   ];
-  const sse=events.map(([type,payload])=>'event: '+type+'\\ndata: '+JSON.stringify(payload)+'\\n\\n').join('')+'data: [DONE]\\n\\n';
+  const sse=events.map(([type,payload])=>'event: '+type+'\ndata: '+JSON.stringify(payload)+'\n\n').join('')+'data: [DONE]\n\n';
   return {providerRequestId:'synthetic-request-'+providerRequests,actualTokens:5,
    body:sse,contentType:'text/event-stream'};
  }
