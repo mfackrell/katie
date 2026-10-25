@@ -5,7 +5,7 @@ import type { LlmProvider } from './types';
 export async function nativeToolTurn(provider: LlmProvider['name'], apiKey: string, p: ToolTurnParams): Promise<ToolTurn> {
   let url: string, body: unknown;
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-  const responsesApi = provider === 'openai' && /^(?:gpt-5|o[1-4])/.test(p.modelId);
+  const responsesApi = provider === 'openai' && /^(?:gpt-5|o[1-4])/.test(p.modelId) && !/chat-latest/i.test(p.modelId);
   if (responsesApi) {
     url = 'https://api.openai.com/v1/responses';
     headers.Authorization = `Bearer ${apiKey}`;
@@ -54,7 +54,15 @@ export async function nativeToolTurn(provider: LlmProvider['name'], apiKey: stri
   }
   const res = await fetch(url, { method: 'POST', headers, body: JSON.stringify(body), signal: p.signal, cache: 'no-store' });
   // Never propagate a credential-bearing upstream error body into model context or audit.
-  if (!res.ok) { await res.body?.cancel(); throw new Error(`Tool model request failed (${provider}, HTTP ${res.status})`); }
+  if (!res.ok) {
+    await res.body?.cancel();
+    // Keep upstream payloads and credentials out of logs, but preserve diagnostic status.
+    const error = new Error(`Tool model request failed (${provider}, HTTP ${res.status})`) as Error & { status: number; code: string };
+    error.status = res.status;
+    error.code = res.status === 429 ? 'upstream_rate_limited' : res.status === 401 || res.status === 403
+      ? 'upstream_auth_or_access_denied' : res.status === 404 ? 'upstream_model_or_endpoint_not_found' : 'upstream_http_error';
+    throw error;
+  }
   const reader = res.body?.getReader();
   if (!reader) throw new Error('Tool model response missing');
   const chunks: Uint8Array[] = []; let size = 0;
