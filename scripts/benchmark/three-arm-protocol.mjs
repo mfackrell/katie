@@ -58,12 +58,8 @@ export function reconcileThreeArmTrial(protocol,records){
    }else throw Error('BENCHMARK_UNSUPPORTED_OPERATION_STATE');
   }
   const overCeiling=actual+held>protocol.tokenCap;
-  // Caller-authored flags and receipt strings are not authoritative evidence.
-  const acceptanceComplete=false && r.acceptanceChecks.length>0&&
-   r.acceptanceChecks.every(x=>x.contractSha256===protocol.contractSha256&&
-    x.acceptanceSha256===protocol.acceptanceSha256&&
-    x.candidateSha===r.candidateSha&&x.protected===true&&x.passed===true&&
-    typeof x.evidenceId==='string'&&x.evidenceId.length>0);
+  // Receipt-shaped data supplied by a trial cannot authorize completion.
+  const acceptanceComplete=false;
   return {arm:r.arm,candidateSha:r.candidateSha,actualTokens:actual,
    unresolvedHeldTokens:held,unresolvedOperations:unknown,
    overCeiling,acceptanceComplete:acceptanceComplete&&unknown===0&&!overCeiling,
