@@ -89,3 +89,14 @@ test('interrupted native execution retains scope-checked Git checkpoints outside
  assert.match(host,/--clearenv/);
  assert.doesNotMatch(child,/GH_TOKEN|GITHUB_TOKEN/);
 });
+
+test('interrupted child recovery is bounded, ledger-reconciled and fenced to trusted checkpoint',()=>{
+ assert.match(host,/for\(let attempt=0;attempt<2;attempt\+\+\)/);
+ assert.match(host,/\.in\('state',\['reserved','unresolved'\]\)/);
+ assert.match(host,/native recovery requires authoritative reconciliation/);
+ assert.match(host,/benchmark_gateway_execution_live/);
+ assert.match(host,/git\('reset','--hard',trustedCheckpointSha\)/);
+ assert.match(host,/native agent changed protected Git commit ancestry/);
+ assert.match(host,/NATIVE_BOUNDED_CHILD_RECOVERY_FROM_COMMITTED_CHECKPOINT/);
+ assert.doesNotMatch(host,/benchmark_issue_execution_grant\(.*retry/s);
+});
