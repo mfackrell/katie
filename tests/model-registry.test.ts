@@ -93,3 +93,14 @@ test("only confirmed upstream 404 quarantines a model; transient failures never 
   assert.equal(isDefinitiveModelUnavailable(new Error("timeout")), false);
   assert.equal(isDefinitiveModelUnavailable(new Error("HTTP 404 mentioned in unrelated text")), false);
 });
+
+test("empty registry pool cannot fall back to provider catalog and reselect quarantined model", async () => {
+  const openai = fakeProvider("openai", ["gpt-5-chat-latest"]);
+  const snapshot = new Map<LlmProvider["name"], RegistryRoutingModel[]>([["openai", []]]);
+  await assert.rejects(
+    chooseProvider("hello", "", [openai], {
+      requestIntent: "general-text", modelRegistrySnapshot: snapshot, routingTraceEnabled: false,
+    }),
+    /No eligible routing candidates/,
+  );
+});
