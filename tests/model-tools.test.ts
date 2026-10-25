@@ -228,7 +228,7 @@ test('native GPT chat-latest uses chat completions; HTTP status survives safe pr
     routes.push(String(input));
     return new Response('',{status:404});
   }) as typeof fetch;
-  const options={modelId:'gpt-5-chat-latest',system:'test',messages:[{role:'user',text:'hello'}],tools:[]};
+  const options={modelId:'gpt-5-chat-latest',system:'test',signal:new AbortController().signal,messages:[{role:'user',text:'hello'}],tools:[]};
   try {
     await assert.rejects(nativeToolTurn('openai','test',options as Parameters<typeof nativeToolTurn>[2]),(error:unknown)=>{
       assert.equal((error as {status:number}).status,404);
