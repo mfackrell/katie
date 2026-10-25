@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { reconcileSelfInspectionEvidence } from './inspection-evidence';
 import { getSupabaseAdminClient } from '@/lib/data/supabase/admin';
 import { runModelTools, type ScopedTool, type ToolAudit } from './loop';
 import type { ChatGenerateParams, LlmProvider } from '@/lib/providers/types';
@@ -43,6 +44,13 @@ export function createSelfInspectionTools(input: {
     return pinnedSha = commit.sha;
   };
   return [
+    { name: 'self_inspection_evidence', description: 'First step for self-inspection: pin repository SHA, read actual runtime SHA, and reconcile evidence. A match is not independent production alias verification or behavioral acceptance.', parameters: objectSchema(), validate: empty,
+      execute: async (_, signal) => {
+        const repositorySha = await pin(signal);
+        const runtimeSha = process.env.VERCEL_GIT_COMMIT_SHA;
+        return { repository: 'mfackrell/katie', ...reconcileSelfInspectionEvidence({repositorySha,runtimeSha}),
+          nextSteps: ['For relevant files use github_read_file at pinned SHA and cite returned sha/blobSha/line range.','For additional paths use github_source_paths with nextOffset.','Only vercel_production can independently verify the production alias; if unavailable report unverified rather than mismatch.','Actual behavior requires tests, not source or commit matching.'] };
+      } },
     { name: 'github_commits', description: 'List recent commit SHAs and parent SHAs from the pinned own repository source.', parameters: objectSchema(), validate: empty,
       execute: async (_, signal) => {
         const sha = await pin(signal); if (!sha) return blocked('GitHub source pin unavailable.');
@@ -50,7 +58,7 @@ export function createSelfInspectionTools(input: {
         if (!Array.isArray(commits)) return blocked('GitHub commit history unavailable.');
         return { sha, commits: commits.map((c: Commit) => ({sha:c.sha,parents:c.parents?.map(p=>p.sha),url:c.html_url})) };
       } },
-    { name: 'github_source', description: 'Pin Katie own repository HEAD to an immutable SHA and list source paths. This is repository HEAD, not verified production SHA.', parameters: objectSchema(), validate: empty,
+    { name: 'github_source', description: 'Pin Katie own repository HEAD to an immutable SHA and list first source paths; if truncated continue with github_source_paths. This is repository HEAD, not verified production SHA.', parameters: objectSchema(), validate: empty,
       execute: async (_, signal) => {
         const sha = await pin(signal);
         if (!sha) return blocked('Cannot authenticate and pin mfackrell/katie source. Check the GitHub connection.');
