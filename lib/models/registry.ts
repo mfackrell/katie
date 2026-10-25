@@ -208,8 +208,8 @@ export async function quarantineUnavailableModel(providerName: LlmProvider["name
   if (!isDefinitiveModelUnavailable(error)) return false;
   const client = getSupabaseAdminClient();
   const {error: dbError} = await client.from("model_registry")
-    .update({is_active:false, routing_eligibility:"disabled", failure_reason:"runtime_model_404", last_exception_at:new Date().toISOString()})
-    .eq("provider_name",providerName).eq("normalized_model_id",normalizeModelId(modelId));
+    .eq("provider_name",providerName).eq("normalized_model_id",normalizeModelId(modelId))
+    .update({is_active:false, routing_eligibility:"disabled", failure_reason:"runtime_model_404", last_exception_at:new Date().toISOString()});
   if (dbError) throw new Error(dbError.message);
   console.warn("[ModelRegistry] model_quarantined", {provider:providerName,modelId,reason:"upstream_404"});
   return true;
@@ -230,7 +230,8 @@ export async function refreshModelRegistry(providers: LlmProvider[]): Promise<Mo
       const {data: quarantined, error: quarantineError} = await client.from("model_registry")
         .select("normalized_model_id,last_exception_at")
         .eq("provider_name", provider.name).eq("failure_reason","runtime_model_404")
-        .eq("is_active",false);
+        .eq("is_active",false)
+        .returns<{normalized_model_id:string;last_exception_at:string|null}>();
       if(quarantineError) throw new Error(quarantineError.message);
       const quarantinedIds = new Set((quarantined ?? []).map(row=>row.normalized_model_id as string));
       const rows = discovered.filter(modelId=>!quarantinedIds.has(normalizeModelId(modelId)))
@@ -247,8 +248,9 @@ export async function refreshModelRegistry(providers: LlmProvider[]): Promise<Mo
             console.info("[ModelRegistry] model_reverified",{provider:provider.name,modelId:candidateId});
           }
         } catch(error) {
-          await client.from("model_registry").update({last_exception_at:nowIso})
-            .eq("provider_name",provider.name).eq("normalized_model_id",normalizeModelId(candidateId));
+          await client.from("model_registry").eq("provider_name",provider.name)
+            .eq("normalized_model_id",normalizeModelId(candidateId))
+            .update({last_exception_at:nowIso});
           console.warn("[ModelRegistry] model_reverification_failed",{provider:provider.name,modelId:candidateId});
         }
       }
