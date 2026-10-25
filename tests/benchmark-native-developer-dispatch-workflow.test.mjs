@@ -100,3 +100,18 @@ test('interrupted child recovery is bounded, ledger-reconciled and fenced to tru
  assert.match(host,/NATIVE_BOUNDED_CHILD_RECOVERY_FROM_COMMITTED_CHECKPOINT/);
  assert.doesNotMatch(host,/benchmark_issue_execution_grant\(.*retry/s);
 });
+
+test('Full and the three contained comparison arms share the exact SDK phase engine',()=>{
+ const shared=readFileSync('scripts/benchmark/shared-native-phase.mjs','utf8');
+ const probe=readFileSync('scripts/benchmark/native-four-phase-contained-host-probe.mjs','utf8');
+ const contained=readFileSync('scripts/benchmark/native-four-phase-contained-client.mjs','utf8');
+ assert.match(shared,/new Codex\(/);
+ assert.match(shared,/BENCHMARK_ARMS=Object.freeze\(\['native','thin','full'\]\)/);
+ assert.match(child,/executeSharedNativePhase\(/);
+ assert.match(contained,/executeSharedNativePhase\(/);
+ assert.match(host,/shared-native-phase\.mjs/);
+ assert.match(host,/KATIE_BENCHMARK_ARM','full'/);
+ assert.match(probe,/for\(const nextArm of \['native','thin','full'\]\)/);
+ assert.match(probe,/join\(workRoot,arm\)/);
+ assert.match(probe,/reservations\.length,12/);
+});
