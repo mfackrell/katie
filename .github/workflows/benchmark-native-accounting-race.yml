@@ -20,12 +20,14 @@ jobs:
           node-version: '22'
           cache: npm
       - run: npm ci
-      - name: Install PostgreSQL 16 server binaries
+      - name: Install available PostgreSQL server binaries
         run: |
-          if ! test -x /usr/lib/postgresql/16/bin/initdb; then
+          if ! find /usr/lib/postgresql -path '*/bin/initdb' -type f 2>/dev/null | grep -q .; then
             sudo apt-get update
-            sudo apt-get install -y postgresql-16
+            sudo apt-get install -y postgresql
           fi
-          test -x /usr/lib/postgresql/16/bin/initdb
+          PG_INITDB="$(find /usr/lib/postgresql -path '*/bin/initdb' -type f | sort -V | tail -n 1)"
+          test -x "$PG_INITDB"
+          echo "KATIE_TEST_PG_BIN=$(dirname "$PG_INITDB")" >> "$GITHUB_ENV"
       - name: Two independent connections compete for Full native final mission slot
         run: node --test tests/benchmark-full-native-race.test.mjs
