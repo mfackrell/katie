@@ -36,9 +36,11 @@ export async function missionModel(claim:Claim,instruction:string,input:string,t
  const checkpoint=claim.job.payload?.reviewModelCheckpoint as {hash?:string;response?:ModelResult}|undefined;
  if(checkpointHash&&checkpoint?.hash===checkpointHash&&typeof checkpoint.response?.text==='string'
    &&typeof checkpoint.response.model==='string'&&Array.isArray(checkpoint.response.sources)&&Array.isArray(checkpoint.response.calculations))return checkpoint.response;
- const {data:routingBench,error:routingBenchError}=await getSupabaseAdminClient()
-  .from('benchmark_mission_bindings').select('account_id,experiment_id,baseline_sha')
-  .eq('mission_id',claim.mission.id).maybeSingle<{account_id:string;experiment_id:string;baseline_sha:string}>();
+ const {data:routingBench,error:routingBenchError}=process.env.KATIE_BENCHMARK_MISSION_DISPATCH==='enabled'
+  ? await getSupabaseAdminClient().from('benchmark_mission_bindings')
+      .select('account_id,experiment_id,baseline_sha')
+      .eq('mission_id',claim.mission.id).maybeSingle<{account_id:string;experiment_id:string;baseline_sha:string}>()
+  : {data:null,error:null};
  if(routingBenchError)throw Error('Benchmark routing binding lookup failed closed');
  const choices=await orchestrationChoices({objective:claim.mission.objective,instruction:
   `CURRENT EXECUTION STAGE: ${claim.job.role}. Available tools for THIS call: ${tools}. Complete input size: ${instruction.length+input.length} characters; select a model with sufficient context capacity. `+
@@ -149,8 +151,11 @@ async function executeMissionModel(claim:Claim,instruction:string,input:string,t
   const inferenceTimeout=tools==='calculate'?Math.min(90_000,calculationDeadline-Date.now()-5000):missionAttemptTimeout(executionDeadline,outputTokens);
   if(inferenceTimeout<1000)throw Error('Mission execution time window exhausted before dispatch; saved work remains intact');
   // Only a persisted, server-owned benchmark binding may switch billing ledgers.
-  const {data:bench,error:benchError}=await getSupabaseAdminClient().from('benchmark_mission_bindings')
-    .select('account_id,experiment_id,baseline_sha').eq('mission_id',claim.mission.id).maybeSingle<{account_id:string;experiment_id:string;baseline_sha:string}>();
+  const {data:bench,error:benchError}=process.env.KATIE_BENCHMARK_MISSION_DISPATCH==='enabled'
+   ? await getSupabaseAdminClient().from('benchmark_mission_bindings')
+      .select('account_id,experiment_id,baseline_sha')
+      .eq('mission_id',claim.mission.id).maybeSingle<{account_id:string;experiment_id:string;baseline_sha:string}>()
+   : {data:null,error:null};
   if(benchError)throw Error('Benchmark mission binding lookup failed closed');
   const benchmarkBinding=bench?{
    verifiedByServer:true,missionId:claim.mission.id,arm:'orchestrated',
