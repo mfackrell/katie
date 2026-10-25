@@ -28,6 +28,7 @@ import { isLikelyProviderRefusal, runWithRefusalFallback } from "../lib/router/r
 import {
   classifyGenerationFailure,
   describeGenerationFailure,
+  getProviderErrorDiagnostics,
   isExplicitContentRefusal,
   filterHealthyProviders,
 } from "../lib/router/provider-error";
@@ -2048,4 +2049,22 @@ test("active project state survives generic history compaction in the actual cla
   });
   assert.ok(seen);
   assert.equal(result.projectRelation,"same_project");
+});
+
+test("provider diagnostic metadata excludes upstream messages and secrets", () => {
+  const error = Object.assign(new Error("sensitive upstream details"), {
+    status: 404,
+    code: "model_not_found",
+    type: "invalid_request_error",
+    request_id: "private-request",
+    apiKey: "secret",
+  });
+  assert.deepEqual(getProviderErrorDiagnostics(error), {
+    status: 404,
+    code: "model_not_found",
+    type: "invalid_request_error",
+  });
+  assert.deepEqual(getProviderErrorDiagnostics({status: 429, code: "bad value with spaces", type: 42}), {
+    status: 429, code: null, type: null,
+  });
 });
