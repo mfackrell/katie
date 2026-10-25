@@ -34,6 +34,15 @@ jobs:
           # Network/filesystem isolation remains mandatory; no unsandboxed fallback.
           if test -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns; then sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0; fi
 
+      - name: Install PostgreSQL 16 for real database acceptance
+        run: |
+          if ! test -x /usr/lib/postgresql/16/bin/initdb; then
+            sudo apt-get update
+            sudo apt-get install -y postgresql-16
+          fi
+          test -x /usr/lib/postgresql/16/bin/initdb
+          test -x /usr/lib/postgresql/16/bin/pg_ctl
+
       - name: Run strict CI gate (typecheck + all offline tests + build + smoke)
         run: npm run ci:gate
 
