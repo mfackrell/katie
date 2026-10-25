@@ -115,7 +115,7 @@ try{
   child=null;
   if(outcome.code!==0)denied('native '+phase+' failed; spending holds retained');
   if(!reviewing)return null;
-  const marker=output.split('\\n').filter(x=>x.startsWith('NATIVE_REVIEW_RESULT=')).at(-1);
+  const marker=output.split('\n').filter(x=>x.startsWith('NATIVE_REVIEW_RESULT=')).at(-1);
   if(!marker)denied('missing independent '+phase+' decision');
   let decision;try{decision=JSON.parse(marker.slice('NATIVE_REVIEW_RESULT='.length))}
   catch{denied('invalid independent review output')}
