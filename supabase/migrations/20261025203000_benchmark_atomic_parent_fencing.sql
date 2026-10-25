@@ -23,6 +23,9 @@ begin
     p.deadline<=now() or p.actor_id<>g.owner_actor_id or
     p.approved_hash is null or p.approved_hash is distinct from p.approval_hash
   then raise exception 'Developer project stopped or approval withdrawn';end if;
+  -- Parent validity alone does not preserve mission/project call ceilings.
+  -- Full provider calls require an external-session-aware atomic mission bridge.
+  raise exception 'Full native admission requires atomic mission bridge';
  end if;
  select * into a from public.benchmark_budget_accounts where id=g.account_id for update;
  if not found or a.trial_id<>g.trial_id or a.owner_actor_id<>g.owner_actor_id or
