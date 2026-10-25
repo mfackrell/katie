@@ -46,3 +46,44 @@ test('stopped or expired execution cannot forward an upstream attempt',async()=>
  }),/EXECUTION_STOPPED/);
  assert.equal(calls,0);
 });
+
+test('contained four-phase provider cycle meters implementation, review, repair and final review',async()=>{
+ const phases=['implementation','review','repair','final-review'];
+ const admitted=[],settled=[],seen=new Set();
+ const db={rpc:async(name,args)=>{
+  if(name==='benchmark_gateway_execution_live')return {data:true,error:null};
+  assert.equal(name,'benchmark_full_native_reserve');
+  assert.ok(!seen.has(args.p_request_key),'each phase requires a distinct provider admission');
+  seen.add(args.p_request_key);admitted.push(args);
+  return {data:'op-'+admitted.length,error:null};
+ }};
+ for(const phase of phases){
+  const n=settled.length;
+  const result=await forwardAuthorizedModelRequest({...request,fullMission:true,db,
+   requestBody:{model:'mock',phase},
+   upstream:async body=>({providerRequestId:'fixture-'+body.phase,actualTokens:11,body:'{}'}),
+   recordReceipt:async receipt=>settled.push({...receipt,phase})
+  });
+  assert.equal(result.providerRequestId,'fixture-'+phase);
+  assert.equal(settled.length,n+1);
+ }
+ assert.equal(admitted.length,4);
+ assert.equal(settled.length,4);
+ assert.equal(new Set(settled.map(x=>x.operationId)).size,4);
+ assert.equal(settled.reduce((sum,x)=>sum+x.actualTokens,0),44);
+});
+test('interrupted phase does not silently replay an unresolved provider call',async()=>{
+ let admissions=0,receipts=0;
+ const db={rpc:async(name)=>{
+  if(name==='benchmark_gateway_execution_live')return {data:true,error:null};
+  admissions++;return {data:'unresolved-op',error:null};
+ }};
+ await assert.rejects(forwardAuthorizedModelRequest({...request,db,fullMission:true,
+  upstream:async()=>{throw Error('connection interrupted after submission')},
+  recordReceipt:async()=>{receipts++}
+ }),/GATEWAY_UPSTREAM_UNCERTAIN/);
+ assert.equal(admissions,1);
+ assert.equal(receipts,0);
+ // Recovery must reconcile the existing admission. It may not assume an
+ // interrupted request was free or replay it with a fresh operation identity.
+});
