@@ -6,6 +6,8 @@ import {mkdirSync,writeFileSync} from 'node:fs';
 import {join} from 'node:path';
 const require=createRequire('/work/package.json');
 const {Codex}=await import(pathToFileURL(require.resolve('@openai/codex-sdk')).href);
+const phase=process.env.KATIE_NATIVE_PHASE||'implementation';
+if(!['implementation','review','repair','final-review'].includes(phase))throw Error('NATIVE_PHASE_INVALID');
 const root='/work',home='/tmp/native-home',state=join(home,'.codex');
 mkdirSync(state,{recursive:true});
 const gateway='http://127.0.0.1:43181/v1';
@@ -19,14 +21,23 @@ const codex=new Codex({baseUrl:gateway,apiKey:bearer,env:{
  PATH:process.env.PATH||'',HOME:home,CODEX_HOME:state,CODEX_SQLITE_HOME:state,
  CODEX_API_KEY:bearer}});
 const thread=codex.startThread({workingDirectory:root,skipGitRepoCheck:false,
- sandboxMode:'danger-full-access',model});
-let completed=false;
-const {events}=await thread.runStreamed(
- 'Read AGENT_REQUEST.md. Complete the approved engineering work within the permitted paths. Run tests. Do not publish, merge or deploy.');
+ sandboxMode:phase==='review'||phase==='final-review'?'read-only':'danger-full-access',model});
+let completed=false,reviewMessage='';
+const prompts={
+ implementation:'Read AGENT_REQUEST.md. Complete the approved engineering work within the permitted paths. Run tests. Do not publish, merge or deploy.',
+ review:'You are a fresh independent reviewer. Read AGENT_REQUEST.md and inspect all uncommitted changes and tests against the approved request. Do not edit any file. Your FINAL reply must start with precisely PASS or CHANGES_REQUESTED, followed by actionable findings. Never say PASS if you cannot independently verify requirements and scope.',
+ repair:'Read AGENT_REQUEST.md and /trusted/review-findings.txt. Fix only the independent reviewer findings in approved scope. Run tests. Do not publish, merge, deploy or bypass accounting.',
+ 'final-review':'You are a fresh independent reviewer. Read AGENT_REQUEST.md and inspect all current changes and tests. Do not edit. Your FINAL reply must start with precisely PASS or CHANGES_REQUESTED, followed by actionable findings. Request changes if prior findings remain.'
+};
+const {events}=await thread.runStreamed(prompts[phase]);
 for await(const event of events){
  if(event.type==='thread.started')process.stdout.write('NATIVE_THREAD='+JSON.stringify(event)+'\n');
+ if(event.type==='item.completed'&&event.item?.type==='agent_message'&&typeof event.item.text==='string')reviewMessage=event.item.text;
  if(event.type==='turn.failed')throw Error('NATIVE_TURN_FAILED');
  if(event.type==='turn.completed')completed=true;
 }
 if(!completed)throw Error('NATIVE_TURN_INCOMPLETE');
-process.stdout.write('NATIVE_DEVELOPMENT_RETURNED_FOR_INDEPENDENT_VERIFICATION\n');
+if(phase==='review'||phase==='final-review'){
+ const verdict=/^PASS(?:\s|$)/.test(reviewMessage.trim())?'pass':'changes_requested';
+ process.stdout.write('NATIVE_REVIEW_RESULT='+JSON.stringify({phase,verdict,findings:reviewMessage.slice(0,12000)})+'\n');
+}else process.stdout.write('NATIVE_DEVELOPMENT_RETURNED_FOR_INDEPENDENT_VERIFICATION\n');
