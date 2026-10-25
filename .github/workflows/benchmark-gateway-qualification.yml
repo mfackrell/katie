@@ -37,5 +37,7 @@ jobs:
           node --check scripts/benchmark/native-dispatch-cli.mjs
           node --check scripts/benchmark/native-dispatch-contract.mjs
           node --test tests/benchmark-native-dispatch-contract.test.mjs tests/benchmark-native-developer-dispatch-workflow.test.mjs
+      - name: Qualify real SDK four-phase metered lifecycle with synthetic responses
+        run: node scripts/benchmark/native-four-phase-probe.mjs
       - name: Qualify actual SDK plus HTTP gateway inside containment
         run: bash scripts/benchmark/real-codex-gateway-bwrap-probe.sh
