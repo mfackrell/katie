@@ -11,6 +11,7 @@ import {createNativeHttpBridge} from './native-http-bridge.mjs';
 import {createResponsesProvider} from './native-provider-receipts.mjs';
 import {tokenDigest} from './authenticated-native-gateway.mjs';
 import {readNativeHandoff} from './native-dispatch-contract.mjs';
+import {assertTrustedBoundary,protectedNativeMounts,protectedGitConfig} from './native-trust-boundary.mjs';
 const require=createRequire(join(process.cwd(),'package.json'));
 const {createClient}=require('@supabase/supabase-js');
 const [,,requestFile,manifestFile,childFile]=process.argv;
@@ -66,11 +67,12 @@ const clientToken=randomBytes(32).toString('base64url');
 const root=mkdtempSync(join(tmpdir(),'katie-trusted-gateway-'));
 const evidencePath=process.env.KATIE_NATIVE_EVIDENCE_FILE;
 const decisions=[];
+const boundary=assertTrustedBoundary(process.cwd());
 const checkpointBranch=process.env.KATIE_NATIVE_CHECKPOINT_BRANCH;
 if(!/^agent\/issue-[0-9]+-[0-9]+-[0-9]+$/.test(checkpointBranch||'')||!process.env.GH_TOKEN)
  denied('durable Git checkpoint authority unavailable');
 execFileSync('gh',['auth','setup-git'],{env:{PATH:process.env.PATH||'',GH_TOKEN:process.env.GH_TOKEN},timeout:20000});
-const git=(...args)=>execFileSync('git',args,{cwd:process.cwd(),encoding:'utf8',timeout:20000}).trim();
+const git=(...args)=>execFileSync('git',[...protectedGitConfig,...args],{cwd:boundary.root,encoding:'utf8',timeout:20000}).trim();
 let trustedCheckpointSha=git('rev-parse','HEAD');
 const commitCandidate=(label)=>{
   if(git('rev-parse','HEAD')!==trustedCheckpointSha)
@@ -79,8 +81,8 @@ const commitCandidate=(label)=>{
   git('add','-A');
   const toolsRoot=process.env.RUNNER_TEMP;
   if(!toolsRoot)denied('trusted scope tools unavailable');
-  execFileSync('node',[join(toolsRoot,'project-tools','project-scope.mjs'),requestFile],{cwd:process.cwd(),timeout:20000,stdio:'inherit'});
-  execFileSync('node',[join(toolsRoot,'project-tools','recovery-scope.mjs'),requestFile],{cwd:process.cwd(),timeout:20000,stdio:'inherit'});
+  execFileSync('node',[join(toolsRoot,'project-tools','project-scope.mjs'),requestFile],{cwd:boundary.root,timeout:20000,stdio:'inherit'});
+  execFileSync('node',[join(toolsRoot,'project-tools','recovery-scope.mjs'),requestFile],{cwd:boundary.root,timeout:20000,stdio:'inherit'});
   git('-c','user.name=katie-native-checkpoint','-c','user.email=katie-native-checkpoint@users.noreply.github.com','commit','-m',label);
   const sha=git('rev-parse','HEAD');
   // Scope-verified checkpoint persists outside the short-lived runner before
@@ -118,7 +120,8 @@ try{
   const args=['--die-with-parent','--new-session','--unshare-all','--clearenv',
    '--ro-bind','/usr','/usr','--ro-bind','/bin','/bin',
    '--ro-bind','/lib','/lib','--ro-bind','/lib64','/lib64',
-   '--ro-bind','/opt','/opt',reviewing?'--ro-bind':'--bind',process.cwd(),'/work',
+   '--ro-bind','/opt','/opt',reviewing?'--ro-bind':'--bind',boundary.root,'/work',
+   ...protectedNativeMounts(boundary),
    '--dir','/trusted','--ro-bind',childFile,'/trusted/native-development-child.mjs',
    '--ro-bind',requestFile,'/trusted/AGENT_REQUEST.md',
    ...(findings?['--ro-bind',join(root,'review-findings.txt'),'/trusted/review-findings.txt']:[]),
