@@ -29,7 +29,7 @@ describe("structured visual response contract", () => {
     expect(parseStructuredResponse({ ...valid, version: 2 })).toBeNull();
   });
   it("rejects nonfinite chart values and missing evidence", () => {
-    const chart = valid.blocks[1];
+    const chart = valid.blocks[1] as (typeof valid.blocks[number] & { evidence: { origin: string; description: string } });
     expect(parseStructuredResponse({ ...valid, blocks: [{ ...chart, points: [
       { label: "A", value: Infinity }, { label: "B", value: 5 },
     ] }] })).toBeNull();
