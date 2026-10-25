@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { chooseProvider } from "../lib/router/master-router";
-import { computeRoutingEligibility, normalizeModelId, type RegistryRoutingModel } from "../lib/models/registry";
+import { computeRoutingEligibility, isDefinitiveModelUnavailable, normalizeModelId, type RegistryRoutingModel } from "../lib/models/registry";
 import type { LlmProvider } from "../lib/providers/types";
 
 function fakeProvider(name: LlmProvider["name"], models: string[]): LlmProvider {
@@ -74,11 +74,33 @@ test("router consumes registry snapshot and avoids manual_override_only entries"
     ]
   ]);
 
-  const selected = await chooseProvider("summarize this note", "", [google], {
-    requestIntent: "general-text",
-    modelRegistrySnapshot: snapshot,
-    routingTraceEnabled: false
-  });
+  for (const excludedEligibility of ["manual_override_only", "disabled"] as const) {
+    snapshot.get("google")![0].routing_eligibility = excludedEligibility;
+    const selected = await chooseProvider("summarize this note", "", [google], {
+      requestIntent: "general-text",
+      modelRegistrySnapshot: snapshot,
+      routingTraceEnabled: false
+    });
+    assert.equal(selected.modelId, "gemini-3.1-flash");
+  }
+});
 
-  assert.equal(selected.modelId, "gemini-3.1-flash");
+test("only confirmed upstream 404 quarantines a model; transient failures never do", () => {
+  assert.equal(isDefinitiveModelUnavailable({status:404}), true);
+  for (const status of [401,403,408,429,500,503]) {
+    assert.equal(isDefinitiveModelUnavailable({status}), false);
+  }
+  assert.equal(isDefinitiveModelUnavailable(new Error("timeout")), false);
+  assert.equal(isDefinitiveModelUnavailable(new Error("HTTP 404 mentioned in unrelated text")), false);
+});
+
+test("empty registry pool cannot fall back to provider catalog and reselect quarantined model", async () => {
+  const openai = fakeProvider("openai", ["gpt-5-chat-latest"]);
+  const snapshot = new Map<LlmProvider["name"], RegistryRoutingModel[]>([["openai", []]]);
+  await assert.rejects(
+    chooseProvider("hello", "", [openai], {
+      requestIntent: "general-text", modelRegistrySnapshot: snapshot, routingTraceEnabled: false,
+    }),
+    /No eligible routing candidates/,
+  );
 });
