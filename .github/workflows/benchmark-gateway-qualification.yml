@@ -1,0 +1,30 @@
+name: Native gateway nonbillable qualification
+on:
+  pull_request:
+    paths:
+      - 'scripts/benchmark/**'
+      - 'supabase/migrations/*benchmark*'
+      - '.github/workflows/benchmark-gateway-qualification.yml'
+  workflow_dispatch:
+jobs:
+  native-gateway:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    env:
+      OPENAI_API_KEY: ''
+      CODEX_ACCESS_TOKEN: ''
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install pinned real Codex SDK
+        run: npm install --no-save --package-lock=false --ignore-scripts @openai/codex-sdk@0.164.0
+      - name: Install sandbox and permit user namespace inside disposable runner
+        run: |
+          command -v bwrap >/dev/null || (sudo apt-get update && sudo apt-get install -y bubblewrap)
+          if test -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns; then sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0; fi
+      - name: Qualify actual SDK plus HTTP gateway inside containment
+        run: bash scripts/benchmark/real-codex-gateway-bwrap-probe.sh
