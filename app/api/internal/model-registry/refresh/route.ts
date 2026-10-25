@@ -18,12 +18,13 @@ export async function POST(request: NextRequest) {
   }
 
   const providers = getAvailableProviders();
-  await refreshModelRegistry(providers);
+  const discovery = await refreshModelRegistry(providers);
   const snapshot = await getRoutingRegistryByProvider(providers);
 
   return NextResponse.json({
     ok: true,
     refreshed_at: new Date().toISOString(),
+    discovery,
     providers: providers.map((provider) => ({
       provider: provider.name,
       model_count: (snapshot.get(provider.name) ?? []).length
@@ -43,6 +44,7 @@ export async function GET(request: NextRequest) {
     provider: provider.name,
     eligible: (snapshot.get(provider.name) ?? []).filter(model=>model.routing_eligibility!=="disabled" && model.routing_eligibility!=="manual_override_only").length,
   }));
-  console.info("[ModelRegistry] scheduled_refresh_complete", { providers: results });
-  return NextResponse.json({ok:true,refreshed_at:new Date().toISOString(),providers:results});
+  console.info("[ModelRegistry] scheduled_refresh_complete", { providers: results, discovery });
+  const ok = discovery.length === providers.length && discovery.every(item=>item.ok);
+  return NextResponse.json({ok,refreshed_at:new Date().toISOString(),discovery,providers:results},{status:ok?200:503});
 }
