@@ -78,3 +78,14 @@ test('native reviews require immutable approved baseline and readonly execution'
  assert.match(host,/KATIE_NATIVE_BASELINE_SHA',proof\.baselineSha/);
  assert.match(host,/reviewing\?'--ro-bind':'--bind'/);
 });
+
+test('interrupted native execution retains scope-checked Git checkpoints outside the runner',()=>{
+ assert.match(host,/KATIE_NATIVE_CHECKPOINT_BRANCH/);
+ assert.match(host,/project-scope\.mjs/);
+ assert.match(host,/recovery-scope\.mjs/);
+ assert.match(host,/git\('push','origin',\`HEAD:refs\/heads\/\$\{checkpointBranch\}\`\)/);
+ assert.match(workflow,/KATIE_NATIVE_CHECKPOINT_BRANCH: \$\{\{ steps\.task\.outputs\.branch \}\}/);
+ assert.match(workflow,/GH_TOKEN: \$\{\{ github\.token \}\}/);
+ assert.match(host,/--clearenv/);
+ assert.doesNotMatch(child,/GH_TOKEN|GITHUB_TOKEN/);
+});
