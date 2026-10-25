@@ -55,7 +55,7 @@ try{
  writeFileSync(join(state,'config.toml'),`model_provider = "synthetic_http"\n[model_providers.synthetic_http]\nname = "Synthetic HTTP"\nwire_api = "responses"\nrequires_openai_auth = true\nsupports_websockets = false\nbase_url = "http://127.0.0.1:${port}/v1"\nrequest_max_retries = 0\nstream_max_retries = 0\n`);
  const codex=new Codex({baseUrl:'http://127.0.0.1:'+port+'/v1',apiKey:'synthetic-only',
   env:{PATH:process.env.PATH||'',HOME:home,CODEX_HOME:state,CODEX_SQLITE_HOME:state,CODEX_API_KEY:'synthetic-only'}});
- const thread=codex.startThread({workingDirectory:repo,skipGitRepoCheck:false,sandboxMode:'workspace-write'});
+ const thread=codex.startThread({workingDirectory:repo,skipGitRepoCheck:false,sandboxMode:process.env.KATIE_OUTER_SANDBOX_CONFIRMED==='1'?'danger-full-access':'workspace-write'});
  let completed=false;let diagnostics=[];
  try{
   const {events}=await thread.runStreamed('Create native-tool.txt containing NATIVE_TOOL_OK using a shell command, verify the file with shell, then reply NATIVE_TOOL_DONE.');
