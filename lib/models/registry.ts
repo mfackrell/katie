@@ -242,8 +242,19 @@ export async function refreshModelRegistry(providers: LlmProvider[], options?: {
       if (options?.verifyQuarantined && probeCandidate) {
         const candidateId = discovered.find(id => normalizeModelId(id) === probeCandidate.normalized_model_id)!;
         try {
-          const result = await provider.generate({modelId:candidateId,name:"Model verification",persona:"Reply with OK only.",summary:"",history:[],user:"OK"});
-          if (result.text?.trim()) {
+          // Verify the same native tool-calling capability Katie uses for self-inspection,
+          // rather than merely testing ordinary text generation on a different endpoint.
+          const result = provider.generateToolTurn
+            ? await provider.generateToolTurn({
+                modelId:candidateId, system:"Reply with OK.", messages:[{role:"user",text:"OK"}],
+                tools:[{name:"ping",description:"Optional health verification",parameters:{type:"object",properties:{}}}],
+                signal:AbortSignal.timeout(12000),
+              })
+            : await provider.generate({modelId:candidateId,name:"Model verification",persona:"Reply with OK only.",summary:"",history:[],user:"OK"});
+          const valid = "response" in result
+            ? Boolean(result.response.text?.trim() || result.calls.length)
+            : Boolean(result.text?.trim());
+          if (valid) {
             rows.push(enrichModelRecord(provider.name,candidateId,pricingCatalog,nowIso));
             console.info("[ModelRegistry] model_reverified",{provider:provider.name,modelId:candidateId});
           }
