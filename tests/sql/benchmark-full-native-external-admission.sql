@@ -1,16 +1,15 @@
 -- Run after the proposed combined migrations inside BEGIN/ROLLBACK only.
 DO $$
-declare existing public.work_projects; agent uuid;
+declare agent uuid;
  owner uuid; chat uuid; proj uuid:=gen_random_uuid(); mission uuid:=gen_random_uuid();
  job uuid:=gen_random_uuid(); trial uuid; acc uuid; grant_id uuid;
  exp uuid:=gen_random_uuid(); key uuid:=gen_random_uuid(); receipt uuid;
  blocked boolean;
 begin
- select * into existing from public.work_projects limit 1;
+ select id,actor_id into chat,owner from public.chats limit 1;
  if not found then raise exception 'fixture requires existing actor/chat';end if;
  select id into agent from public.managed_agents limit 1;
  if agent is null then raise exception 'fixture requires managed agent';end if;
- owner:=existing.actor_id;chat:=existing.chat_id;
  insert into public.work_projects(id,request_id,actor_id,chat_id,objective,team,
  status,phase,deadline,approved_hash,approval_hash)
  values(proj,gen_random_uuid()::text,owner,chat,'isolated native accounting fixture',
