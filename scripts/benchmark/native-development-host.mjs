@@ -131,6 +131,7 @@ try{
    '--setenv','KATIE_NATIVE_MODEL',approval.model,
    '--setenv','KATIE_NATIVE_BRIDGE_TOKEN',clientToken,
    '--setenv','KATIE_NATIVE_PHASE',phase,
+   '--setenv','KATIE_BENCHMARK_ARM','full',
    '--setenv','KATIE_NATIVE_BASELINE_SHA',proof.baselineSha,
    '--setenv','KATIE_OUTER_SANDBOX_CONFIRMED','1',
    '--chdir','/work','/bin/sh','-c',command];
