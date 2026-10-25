@@ -8,6 +8,9 @@ export function SelfToolsOwnerSession({ chatId }: { chatId: string }) {
   const client = browserOwnerAuth();
   const [email, setEmail] = useState("");
   const [signedIn, setSignedIn] = useState(false);
+  const [code, setCode] = useState("");
+  const [codeRequested, setCodeRequested] = useState(false);
+  const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState("");
   useEffect(() => {
     if (!client) return;
@@ -33,11 +36,36 @@ export function SelfToolsOwnerSession({ chatId }: { chatId: string }) {
   if (!client) return null;
   async function signIn(event: FormEvent) {
     event.preventDefault();
-    if (!client || !email.trim()) return;
-    const {error} = await client.auth.signInWithOtp({
-      email: email.trim(), options: { emailRedirectTo: window.location.origin }
-    });
-    setNotice(error ? "Could not start owner sign-in." : "Check your email for a secure sign-in link.");
+    if (!client || !email.trim() || busy) return;
+    setBusy(true);
+    try {
+      const {error} = await client.auth.signInWithOtp({
+        email: email.trim(), options: { shouldCreateUser: false }
+      });
+      if(error) {
+        const rateLimited = error.status === 429 || error.code === "over_email_send_rate_limit";
+        setNotice(rateLimited ? "Supabase's email limit has been reached. Please avoid repeated requests." :
+          "Could not send verification code: " + error.message);
+        return;
+      }
+      setCodeRequested(true);
+      setNotice("Verification code requested. Enter the six-digit code from your email.");
+    } finally { setBusy(false); }
+  }
+  async function verifyCode(event: FormEvent) {
+    event.preventDefault();
+    if (!client || !/^[0-9]{6}$/.test(code) || busy) return;
+    setBusy(true);
+    try {
+      const {error} = await client.auth.verifyOtp({
+        email: email.trim(), token: code, type: "email"
+      });
+      if(error) {setNotice("Code verification failed: " + error.message);return;}
+      setCode("");
+      setCodeRequested(false);
+      setSignedIn(true);
+      setNotice("Owner session active. Authorize this chat to use self-management tools.");
+    } finally {setBusy(false);}
   }
   async function authorizeChat() {
     const token=await ownerSessionBearer();
@@ -65,14 +93,25 @@ export function SelfToolsOwnerSession({ chatId }: { chatId: string }) {
           <div className="flex gap-3"><button type="button" onClick={()=>void authorizeChat()} className="underline">Authorize this chat</button><button type="button" onClick={()=>void signOut()} className="underline">Sign out</button></div>
         </div>
       ) : (
-        <form onSubmit={(event)=>void signIn(event)} className="flex flex-wrap items-center gap-3">
-          <label htmlFor="self-tools-owner-email">Owner sign-in</label>
-          <input id="self-tools-owner-email" type="email" autoComplete="email" required
-            value={email} onChange={event=>setEmail(event.target.value)}
-            className="min-w-[180px] flex-1 rounded border border-zinc-600 bg-zinc-950 px-3 py-2 text-white"
-            placeholder="Email address" />
-          <button type="submit" className="rounded bg-emerald-500 px-4 py-2 font-semibold text-zinc-950">Send sign-in link</button>
-        </form>
+        <div className="flex flex-wrap items-center gap-3">
+          <form onSubmit={(event)=>void signIn(event)} className="flex flex-wrap items-center gap-3">
+            <label htmlFor="self-tools-owner-email">Owner email</label>
+            <input id="self-tools-owner-email" type="email" autoComplete="email" required
+              value={email} onChange={event=>setEmail(event.target.value)} disabled={busy || codeRequested}
+              className="min-w-[180px] flex-1 rounded border border-zinc-600 bg-zinc-950 px-3 py-2 text-white"
+              placeholder="Email address" />
+            {!codeRequested && <button type="submit" disabled={busy} className="rounded bg-emerald-500 px-4 py-2 font-semibold text-zinc-950">Send verification code</button>}
+          </form>
+          {codeRequested && <form onSubmit={(event)=>void verifyCode(event)} className="flex flex-wrap items-center gap-2">
+            <label htmlFor="self-tools-email-code">Six-digit code</label>
+            <input id="self-tools-email-code" inputMode="numeric" pattern="[0-9]{6}" maxLength={6}
+              autoComplete="one-time-code" required value={code}
+              onChange={event=>setCode(event.target.value.replace(/\\D/g,"").slice(0,6))}
+              className="w-32 rounded border border-zinc-600 bg-zinc-950 px-3 py-2 text-white" />
+            <button type="submit" disabled={busy || code.length!==6} className="rounded bg-emerald-500 px-4 py-2 font-semibold text-zinc-950">Verify code</button>
+            <button type="button" onClick={()=>{setCodeRequested(false);setCode("");setNotice("");}} className="underline">Change email</button>
+          </form>}
+        </div>
       )}
       {notice && <p role="status">{notice}</p>}
     </section>
