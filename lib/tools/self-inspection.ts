@@ -58,6 +58,12 @@ export function createSelfInspectionTools(input: {
         return { repository: 'mfackrell/katie', sha, truncated: tree.truncated === true || (tree.tree?.length ?? 0) > 800,
           paths: tree.tree?.filter((p: TreeEntry) => p.type === 'blob' && pathSchema.safeParse({path:p.path}).success).slice(0,800).map((p: TreeEntry) => p.path) };
       } },
+    { name: 'production_runtime_revision', description: 'Report the commit SHA injected by Vercel into this running server. Runtime-reported evidence only; not independent alias verification.', parameters: objectSchema(), validate: empty,
+      execute: async () => {
+        const sha = process.env.VERCEL_GIT_COMMIT_SHA;
+        if (!sha || !/^[a-f0-9]{40}$/.test(sha)) return blocked('Runtime revision unavailable.');
+        return {status:'runtime_reported',sha,source:'VERCEL_GIT_COMMIT_SHA',limitation:'Does not independently prove Vercel alias assignment or acceptance tests.'};
+      } },
     { name: 'github_read_file', description: 'Read a bounded UTF-8 source file at the pinned own repository SHA. Secret/config credential paths are denied.',
       parameters: objectSchema({path:{type:'string',maxLength:240}}, ['path']), validate: pathSchema,
       execute: async (args, signal) => {
