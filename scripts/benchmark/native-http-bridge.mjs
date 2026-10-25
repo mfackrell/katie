@@ -1,16 +1,25 @@
 import {createServer} from 'node:http';
+import {createHash,timingSafeEqual} from 'node:crypto';
 import {forwardAuthorizedModelRequest} from './authenticated-native-gateway.mjs';
 
 // Runs in the trusted execution host, outside the agent's mount namespace.
 // The caller must supply a server-owned grant and DB client. This bridge
 // deliberately does not forward model requests unless all dependencies exist.
 export function createNativeHttpBridge({db,grantToken,trialId,executionEpoch,
- providerNamespace,upperTokens,upstream,recordReceipt}){
- if(!db||!grantToken||!trialId||!upstream||!recordReceipt)
+ providerNamespace,upperTokens,upstream,recordReceipt,clientToken}){
+ if(!db||!grantToken||!trialId||!upstream||!recordReceipt||
+    typeof clientToken!=='string'||clientToken.length<12)
   throw Error('NATIVE_GATEWAY_NOT_CONFIGURED');
  return createServer(async(req,res)=>{
   if(req.method!=='POST'||req.url!=='/v1/responses'){
    res.writeHead(404);res.end();return;
+  }
+  const provided=req.headers.authorization;
+  const expected=Buffer.from(createHash('sha256').update(clientToken).digest());
+  const received=typeof provided==='string'&&provided.startsWith('Bearer ')
+   ?Buffer.from(createHash('sha256').update(provided.slice(7)).digest()):Buffer.alloc(32);
+  if(!timingSafeEqual(expected,received)){
+   res.writeHead(401,{'cache-control':'no-store'});res.end();return;
   }
   try{
    let raw='';
