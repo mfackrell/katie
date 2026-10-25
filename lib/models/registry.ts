@@ -216,7 +216,7 @@ export async function quarantineUnavailableModel(providerName: LlmProvider["name
 }
 
 export type ModelRefreshOutcome = {provider:LlmProvider["name"];ok:boolean;discovered:number;disabled:number;reason?:string};
-export async function refreshModelRegistry(providers: LlmProvider[]): Promise<ModelRefreshOutcome[]> {
+export async function refreshModelRegistry(providers: LlmProvider[], options?: { verifyQuarantined?: boolean }): Promise<ModelRefreshOutcome[]> {
   const client = getSupabaseAdminClient();
   const nowIso = new Date().toISOString();
   const pricingCatalog = await fetchLiteLlmPricingCatalog();
@@ -239,7 +239,7 @@ export async function refreshModelRegistry(providers: LlmProvider[]): Promise<Mo
 
       const probeCandidate = (quarantined ?? []).find(row => discovered.some(id => normalizeModelId(id) === row.normalized_model_id)
         && (!row.last_exception_at || Date.now()-new Date(row.last_exception_at).getTime() >= 60*60*1000));
-      if (probeCandidate) {
+      if (options?.verifyQuarantined && probeCandidate) {
         const candidateId = discovered.find(id => normalizeModelId(id) === probeCandidate.normalized_model_id)!;
         try {
           const result = await provider.generate({modelId:candidateId,name:"Model verification",persona:"Reply with OK only.",summary:"",history:[],user:"OK"});
