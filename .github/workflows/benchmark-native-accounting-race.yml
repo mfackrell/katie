@@ -1,0 +1,31 @@
+name: Full native accounting race qualification
+on:
+  pull_request:
+    paths:
+      - 'tests/benchmark-full-native-race.test.mjs'
+      - 'tests/sql/benchmark-*'
+      - 'supabase/migrations/*benchmark*'
+      - '.github/workflows/benchmark-native-accounting-race.yml'
+  workflow_dispatch:
+jobs:
+  real-postgres-race:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - name: Install PostgreSQL 16 server binaries
+        run: |
+          if ! test -x /usr/lib/postgresql/16/bin/initdb; then
+            sudo apt-get update
+            sudo apt-get install -y postgresql-16
+          fi
+          test -x /usr/lib/postgresql/16/bin/initdb
+      - name: Two independent connections compete for Full native final mission slot
+        run: node --test tests/benchmark-full-native-race.test.mjs
