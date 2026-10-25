@@ -32,6 +32,7 @@ jobs:
       project_id: ${{ steps.task.outputs.project_id }}
       contract_hash: ${{ steps.task.outputs.contract_hash }}
       scenario_count: ${{ steps.task.outputs.scenario_count }}
+      native: ${{ steps.task.outputs.native }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -58,6 +59,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           ISSUE: ${{ github.event.issue.number || inputs.issue_number }}
           REPAIR_SMOKE: ${{ github.event_name == 'issues' && contains(github.event.issue.title, '[repair-smoke]') }}
+          KATIE_NATIVE_HANDOFF_HMAC_KEY: ${{ secrets.KATIE_NATIVE_HANDOFF_HMAC_KEY }}
         run: |
           set -euo pipefail
           author="$(gh issue view "$ISSUE" --repo "$GITHUB_REPOSITORY" --json author --jq '.author.login')"
@@ -81,6 +83,12 @@ jobs:
           mkdir -p "$RUNNER_TEMP/project-tools" "$RUNNER_TEMP/agent-task"
           cp scripts/project-game-rules.mjs scripts/project-game-check.mjs scripts/project-context.mjs scripts/project-browser-check.mjs scripts/project-sandbox.mjs scripts/project-ci.mjs scripts/project-scope.mjs scripts/project-browser-engine.mjs scripts/recovery-scope.mjs "$RUNNER_TEMP/project-tools/"
           node scripts/request-envelope.mjs unpack "$RUNNER_TEMP/original-agent-request.md"
+          # Validate the signed benchmark mode BEFORE switching to candidate code.
+          mkdir -p "$RUNNER_TEMP/native-host"
+          cp scripts/benchmark/{native-dispatch-contract,native-dispatch-cli,native-development-host,native-development-child,native-http-bridge,native-provider-receipts,authenticated-native-gateway}.mjs "$RUNNER_TEMP/native-host/"
+          node "$RUNNER_TEMP/native-host/native-dispatch-cli.mjs" verify "$RUNNER_TEMP/original-agent-request.md" "$RUNNER_TEMP/native-benchmark.json"
+          native="$(jq -r '.native' "$RUNNER_TEMP/native-benchmark.json")"
+          echo "native=$native" >> "$GITHUB_OUTPUT"
           node scripts/project-context.mjs prepare "$RUNNER_TEMP/original-agent-request.md" > "$RUNNER_TEMP/project-context.json"
           node scripts/recovery-scope.mjs prepare "$RUNNER_TEMP/original-agent-request.md" > "$RUNNER_TEMP/recovery-context.json"
           project="$(jq -r 'if . == null then "false" else "true" end' "$RUNNER_TEMP/project-context.json")"
@@ -124,7 +132,25 @@ jobs:
           name: project-tools
           path: ${{ runner.temp }}/project-tools/*.mjs
           if-no-files-found: error
+      - name: Install pinned native SDK for benchmark-bound engineering
+        if: steps.task.outputs.native == 'true'
+        run: |
+          npm install --no-save --package-lock=false --ignore-scripts @openai/codex-sdk@0.164.0
+          command -v bwrap >/dev/null || (sudo apt-get update && sudo apt-get install -y bubblewrap)
+          command -v socat >/dev/null || (sudo apt-get update && sudo apt-get install -y socat)
+          if test -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns; then sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0; fi
+      - name: Run approved native Developer through trusted gateway
+        if: steps.task.outputs.native == 'true'
+        env:
+          KATIE_NATIVE_HANDOFF_HMAC_KEY: ${{ secrets.KATIE_NATIVE_HANDOFF_HMAC_KEY }}
+          KATIE_BENCHMARK_SERVICE_ROLE_KEY: ${{ secrets.KATIE_BENCHMARK_SERVICE_ROLE_KEY }}
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.KATIE_BENCHMARK_SUPABASE_URL }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          KATIE_BENCHMARK_PAID_EXECUTION: ${{ vars.KATIE_BENCHMARK_PAID_EXECUTION }}
+        run: |
+          node "$RUNNER_TEMP/native-host/native-development-host.mjs" "$RUNNER_TEMP/original-agent-request.md" "$RUNNER_TEMP/native-benchmark.json" "$RUNNER_TEMP/native-host/native-development-child.mjs"
       - name: Autonomous developer
+        if: steps.task.outputs.native != 'true'
         uses: openai/codex-action@v1
         with:
           openai-api-key: ${{ secrets.OPENAI_API_KEY }}
@@ -294,6 +320,7 @@ jobs:
 
   review:
     needs: [build, test]
+    if: needs.build.outputs.native != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 35
     outputs:
