@@ -84,3 +84,14 @@ test('only a trusted journal and correctly signed complete verifier matrix may p
  const missing={...deps,loadOperations:async(_e,_r,arm)=>arm==='native'?[]:deps.loadOperations(_e,_r,arm)};
  assert.equal((await buildVerifiedReport(protocol,records,missing)).accepted,false);
 });
+
+test('failed over-cap trial remains visible without false comparison success',()=>{
+ const r=['native','thin','full'].map(record);
+ r[2].operations[0].actualTokens=1200;
+ const report=buildReport(protocol,r);
+ assert.equal(report.accepted,false);
+ assert.equal(report.comparisonValid,false);
+ assert.equal(report.results.length,3);
+ assert.equal(report.results.find(x=>x.arm==='full').status,'overrun');
+ assert.equal(report.results.find(x=>x.arm==='full').actualTokens,1200);
+});
