@@ -2,11 +2,22 @@
 // Synthetic text is scripted; no live model or provider credentials.
 import {Codex} from '@openai/codex-sdk';
 import {createServer} from 'node:http';
+import {connect} from 'node:net';
 import {mkdtempSync,mkdirSync,rmSync,readFileSync,existsSync,writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {execFileSync} from 'node:child_process';
 import assert from 'node:assert/strict';
+// The isolation runner must not inherit real provider credentials.
+if(process.env.OPENAI_API_KEY||process.env.CODEX_ACCESS_TOKEN)
+ throw Error('REAL_PROVIDER_CREDENTIAL_EXPOSED');
+const outboundConnected=await new Promise(resolve=>{
+ const socket=connect({host:'1.1.1.1',port:443,timeout:700});
+ socket.once('connect',()=>{socket.destroy();resolve(true)});
+ socket.once('error',()=>resolve(false));
+ socket.once('timeout',()=>{socket.destroy();resolve(false)});
+});
+if(outboundConnected)throw Error('UNMETERED_PROVIDER_EGRESS_ALLOWED');
 const root=mkdtempSync(join(tmpdir(),'codex-tools-'));
 const home=join(root,'home'),state=join(home,'.codex'),repo=join(root,'repo');
 mkdirSync(state,{recursive:true});mkdirSync(repo);
