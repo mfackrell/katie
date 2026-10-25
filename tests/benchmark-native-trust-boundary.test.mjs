@@ -55,6 +55,22 @@ test('agent cannot poison credentialed host Git metadata, hooks or dependencies'
   execFileSync('git',[...protectedGitConfig,'-C',root,
    '-c','user.name=Test','-c','user.email=test@example.invalid','commit','-qm','safe checkpoint']);
   assert.equal(spawnSync('test',['-e',injected]).status,1,'malicious hook ran on host');
+  // Exercise trusted checkpoint upload, working-tree recovery and publication
+  // after the adversary has attempted to rewrite Git metadata/config.
+  const checkpoint=execFileSync('git',[...protectedGitConfig,'-C',root,'rev-parse','HEAD'],{encoding:'utf8'}).trim();
+  const remote=mkdtempSync(join(tmpdir(),'trusted-publish-'));
+  try{
+   execFileSync('git',['init','--bare','-q',remote]);
+   execFileSync('git',[...protectedGitConfig,'-C',root,'remote','add','safe-origin',remote]);
+   execFileSync('git',[...protectedGitConfig,'-C',root,'push','safe-origin','HEAD:refs/heads/checkpoint']);
+   assert.equal(execFileSync('git',['--git-dir',remote,'rev-parse','refs/heads/checkpoint'],{encoding:'utf8'}).trim(),checkpoint);
+   writeFileSync(join(root,'safe.txt'),'UNTRUSTED_UNCOMMITTED_EDIT');
+   execFileSync('git',[...protectedGitConfig,'-C',root,'reset','--hard',checkpoint]);
+   assert.equal(readFileSync(join(root,'safe.txt'),'utf8'),'SAFE');
+   execFileSync('git',[...protectedGitConfig,'-C',root,'push','safe-origin','HEAD:refs/heads/published']);
+   assert.equal(execFileSync('git',['--git-dir',remote,'rev-parse','refs/heads/published'],{encoding:'utf8'}).trim(),checkpoint);
+   assert.equal(spawnSync('test',['-e',injected]).status,1);
+  }finally{rmSync(remote,{recursive:true,force:true})}
  });
 });
 
