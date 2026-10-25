@@ -31,7 +31,7 @@ test('revoked execution never forwards real HTTP requests',async()=>{
  let sent=0;
  const server=createNativeHttpBridge({db:{rpc:async()=>({data:false,error:null})},
   grantToken:'synthetic-'+('z'.repeat(48)),trialId:'trial',executionEpoch:1,
-  providerNamespace:'fixture',upperTokens:100,
+  providerNamespace:'fixture',upperTokens:100,clientToken:'synthetic-fixture-token',
   upstream:async()=>{sent++;},recordReceipt:async()=>{}});
  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
  try{
