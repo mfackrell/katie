@@ -2,6 +2,20 @@ import type { LlmProvider } from "@/lib/providers/types";
 
 export type GenerationFailureScope = "provider" | "model" | "refusal";
 
+/** Safe provider diagnostics: never log upstream bodies, request prompts, or credentials. */
+export function getProviderErrorDiagnostics(error: unknown): {
+  status: number | null;
+  code: string | null;
+  type: string | null;
+} {
+  const value = error && typeof error === "object" ? error as Record<string, unknown> : {};
+  const status = typeof value.status === "number" && Number.isInteger(value.status) ? value.status : null;
+  const safeIdentifier = (candidate: unknown): string | null =>
+    typeof candidate === "string" && /^[a-zA-Z0-9_.-]{1,100}$/.test(candidate) ? candidate : null;
+  return { status, code: safeIdentifier(value.code), type: safeIdentifier(value.type) };
+}
+
+
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error ?? "");
 }
