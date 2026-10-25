@@ -32,7 +32,7 @@ export async function forwardAuthorizedModelRequest({
   if(typeof response?.providerRequestId!=='string'||
      !Number.isSafeInteger(response?.actualTokens)||response.actualTokens<0)
    throw Error('GATEWAY_PROVIDER_RECEIPT_UNKNOWN');
-  await recordReceipt({operationId:id,namespace:providerNamespace,
+  await recordReceipt({requestKey:key,operationId:id,namespace:providerNamespace,
    providerRequestId:response.providerRequestId,actualTokens:response.actualTokens});
   return response;
  } catch(error){
