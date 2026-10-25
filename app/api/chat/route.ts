@@ -82,6 +82,7 @@ import { generateRunpodImage, runpodImageConfigured, shouldTryRunpodImage, isMod
 import {
   classifyGenerationFailure,
   describeGenerationFailure,
+  getProviderErrorDiagnostics,
   filterHealthyProviders,
 } from "@/lib/router/provider-error";
 import {
@@ -3048,9 +3049,18 @@ ${chunkWorkflowSummary}`;
                   failedProviderNames.add(attempt.provider.name);
                   void recordSharedProviderFailure(attempt.provider.name, error);
                 }
-                console.warn(
-                  `[Chat API] Generation failed for ${attempt.runpodVideoFallback || attempt.runpodImageFallback ? "runpod" : attempt.provider.name}:${attempt.modelId} (${error instanceof Error ? error.message : String(error)}).`
-                );
+                console.warn("[Chat API] Generation failed", {
+                  requestId,
+                  provider: attempt.runpodVideoFallback || attempt.runpodImageFallback ? "runpod" : attempt.provider.name,
+                  modelId: attempt.modelId,
+                  endpoint: attempt.provider.name === "openai"
+                    ? (/chat-latest/i.test(attempt.modelId) ? "chat-completions"
+                      : /gpt-5|^o[1-4]/i.test(attempt.modelId) ? "responses" : "chat-completions")
+                    : "provider-native",
+                  ...getProviderErrorDiagnostics(error),
+                  failureScope,
+                  failureSummary: describeGenerationFailure(error),
+                });
               }
             });
             result = generationAttempt.result;
