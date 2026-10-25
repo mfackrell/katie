@@ -123,6 +123,7 @@ try{
    '--ro-bind','/opt','/opt',reviewing?'--ro-bind':'--bind',boundary.root,'/work',
    ...protectedNativeMounts(boundary),
    '--dir','/trusted','--ro-bind',childFile,'/trusted/native-development-child.mjs',
+   '--ro-bind',join(process.env.RUNNER_TEMP,'native-host','shared-native-phase.mjs'),'/trusted/shared-native-phase.mjs',
    '--ro-bind',requestFile,'/trusted/AGENT_REQUEST.md',
    ...(findings?['--ro-bind',join(root,'review-findings.txt'),'/trusted/review-findings.txt']:[]),
    '--bind',sockdir,'/gateway','--tmpfs','/tmp','--proc','/proc','--dev','/dev',
