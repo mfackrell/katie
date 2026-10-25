@@ -83,10 +83,14 @@ jobs:
           mkdir -p "$RUNNER_TEMP/project-tools" "$RUNNER_TEMP/agent-task"
           cp scripts/project-game-rules.mjs scripts/project-game-check.mjs scripts/project-context.mjs scripts/project-browser-check.mjs scripts/project-sandbox.mjs scripts/project-ci.mjs scripts/project-scope.mjs scripts/project-browser-engine.mjs scripts/recovery-scope.mjs "$RUNNER_TEMP/project-tools/"
           node scripts/request-envelope.mjs unpack "$RUNNER_TEMP/original-agent-request.md"
-          # Validate the signed benchmark mode BEFORE switching to candidate code.
-          mkdir -p "$RUNNER_TEMP/native-host"
-          cp scripts/benchmark/{native-dispatch-contract,native-dispatch-cli,native-development-host,native-development-child,native-http-bridge,native-provider-receipts,authenticated-native-gateway}.mjs "$RUNNER_TEMP/native-host/"
-          node "$RUNNER_TEMP/native-host/native-dispatch-cli.mjs" verify "$RUNNER_TEMP/original-agent-request.md" "$RUNNER_TEMP/native-benchmark.json"
+          # Ordinary owner-authored projects must not depend on benchmark files.
+          if grep -Eq '<!--[[:space:]]*katie-native-benchmark:' "$RUNNER_TEMP/original-agent-request.md"; then
+            mkdir -p "$RUNNER_TEMP/native-host"
+            cp scripts/benchmark/{native-dispatch-contract,native-dispatch-cli,native-development-host,native-development-child,native-http-bridge,native-provider-receipts,authenticated-native-gateway}.mjs "$RUNNER_TEMP/native-host/"
+            node "$RUNNER_TEMP/native-host/native-dispatch-cli.mjs" verify "$RUNNER_TEMP/original-agent-request.md" "$RUNNER_TEMP/native-benchmark.json"
+          else
+            printf '{"native":false}\\n' > "$RUNNER_TEMP/native-benchmark.json"
+          fi
           native="$(jq -r '.native' "$RUNNER_TEMP/native-benchmark.json")"
           echo "native=$native" >> "$GITHUB_OUTPUT"
           node scripts/project-context.mjs prepare "$RUNNER_TEMP/original-agent-request.md" > "$RUNNER_TEMP/project-context.json"
