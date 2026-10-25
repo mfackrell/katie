@@ -734,7 +734,7 @@ export async function chooseProvider(
   const registryLookup = registrySnapshot ? snapshotToLookup(registrySnapshot) : undefined;
 
   const modelEntries = await Promise.all(providers.map(async (provider) => {
-    if (registrySnapshot?.get(provider.name)?.length) {
+    if (registrySnapshot?.has(provider.name)) {
       const eligibleModels = (registrySnapshot.get(provider.name) ?? [])
         .filter((record) => record.routing_eligibility !== "disabled" && record.routing_eligibility !== "manual_override_only")
         .map((record) => record.model_id)
