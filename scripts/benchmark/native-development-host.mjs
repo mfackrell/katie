@@ -147,6 +147,31 @@ try{
   decisions.push(decision);
   return decision;
  };
+ const safelyRunPhase=async(phase,findings='')=>{
+  // One bounded retry only for an interrupted native child, never for a
+  // rejected reviewer verdict, missing receipt, expired grant or failed auth.
+  for(let attempt=0;attempt<2;attempt++){
+   try{return await runPhase(phase,findings)}
+   catch(error){
+    if(attempt!==0||!/NATIVE_HOST_DENIED: native (implementation|review|repair|final-review) failed; spending holds retained/.test(String(error?.message)))
+     throw error;
+    const {data:pending,error:ledgerError}=await db.from('benchmark_budget_calls')
+      .select('id').eq('account_id',account.id)
+      .in('state',['reserved','unresolved']).limit(1);
+    if(ledgerError||!Array.isArray(pending)||pending.length)
+     denied('native recovery requires authoritative reconciliation of pending provider charges');
+    const {data:stillLive,error:liveError}=await db.rpc('benchmark_gateway_execution_live',{
+     p_digest:tokenDigest(grantToken),p_trial:proof.trialId,p_epoch:1
+    });
+    if(liveError||stillLive!==true)denied('native recovery grant stopped or expired');
+    // Only commit-stable source is eligible for retry; partial interrupted
+    // edits are discarded. All new provider attempts require fresh admission.
+    git('reset','--hard','HEAD');
+    git('clean','-fd');
+    console.log('NATIVE_BOUNDED_CHILD_RECOVERY_FROM_COMMITTED_CHECKPOINT');
+   }
+  }
+ };
  stopTimer=setInterval(async()=>{
   try{
    const [g,p]=await Promise.all([
@@ -158,15 +183,15 @@ try{
       !p.approved_hash||p.approved_hash!==p.approval_hash)child?.kill('SIGKILL');
   }catch{child?.kill('SIGKILL')}
  },3000);
- await runPhase('implementation');
+ await safelyRunPhase('implementation');
  let candidateHead=commitCandidate('native: checkpoint approved implementation');
- const first=await runPhase('review');
+ const first=await safelyRunPhase('review');
  if(first.verdict!=='pass'){
   // One bounded repair only. Every retry/request remains metered; any uncertain
   // provider call holds capacity rather than being silently refunded.
-  await runPhase('repair',first.findings);
+  await safelyRunPhase('repair',first.findings);
   candidateHead=commitCandidate('native: checkpoint bounded repair');
-  const final=await runPhase('final-review');
+  const final=await safelyRunPhase('final-review');
   if(final.verdict!=='pass')denied('independent final review requires changes');
  } 
  if(!evidencePath||!evidencePath.startsWith(process.env.RUNNER_TEMP+'/'))
