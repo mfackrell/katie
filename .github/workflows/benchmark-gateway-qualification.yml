@@ -28,6 +28,8 @@ jobs:
           if test -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns; then sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0; fi
       - name: Install Unix-socket proxy for separated gateway host
         run: command -v socat >/dev/null || (sudo apt-get update && sudo apt-get install -y socat)
+      - name: Adversarial shared trust boundary (Git, hooks, dependencies, symlinks)
+        run: node --test tests/benchmark-native-trust-boundary.test.mjs
       - name: Qualify separated gateway host and isolated SDK over Unix socket
         run: node scripts/benchmark/external-native-gateway-host-probe.mjs
       - name: Validate signed Developer dispatch scripts and source contracts
