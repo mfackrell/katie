@@ -46,13 +46,13 @@ const server=createNativeHttpBridge({
    ['response.completed',{type:'response.completed',response}]
   ];
   return {providerRequestId:response.id,actualTokens:5,contentType:'text/event-stream',
-   body:events.map(([event,data])=>'event: '+event+'\\ndata: '+JSON.stringify(data)+'\\n\\n').join('')+'data: [DONE]\\n\\n'};
+   body:events.map(([event,data])=>'event: '+event+'\ndata: '+JSON.stringify(data)+'\n\n').join('')+'data: [DONE]\n\n'};
  }
 });
 try{
  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
  const url='http://127.0.0.1:'+server.address().port+'/v1';
- writeFileSync(join(state,'config.toml'),'model_provider = "fixture"\\n[model_providers.fixture]\\nname = "Fixture"\\nwire_api = "responses"\\nrequires_openai_auth = true\\nsupports_websockets = false\\nbase_url = "'+url+'"\\nrequest_max_retries = 0\\nstream_max_retries = 0\\n');
+ writeFileSync(join(state,'config.toml'),'model_provider = "fixture"\n[model_providers.fixture]\nname = "Fixture"\nwire_api = "responses"\nrequires_openai_auth = true\nsupports_websockets = false\nbase_url = "'+url+'"\nrequest_max_retries = 0\nstream_max_retries = 0\n');
  for(const phase of phases){
   const codex=new Codex({baseUrl:url,apiKey:'synthetic-bridge-token',env:{
    PATH:process.env.PATH||'',HOME:home,CODEX_HOME:state,CODEX_SQLITE_HOME:state,
