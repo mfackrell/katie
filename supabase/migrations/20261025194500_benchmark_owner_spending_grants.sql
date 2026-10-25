@@ -40,7 +40,22 @@ begin
  select * into acc from public.benchmark_budget_accounts where id=a.account_id for update;
  if t.id is null or acc.id is null or t.state not in ('qualified','running') or
  t.owner_actor_id<>a.actor_id or acc.owner_actor_id<>a.actor_id or
- acc.trial_id<>t.id or a.protocol_digest !~ '^[a-f0-9]{64} then raise exception 'spending binding mismatch';end if;
+ acc.trial_id<>t.id or a.protocol_digest !~ '^[a-f0-9]{64} 'spending binding mismatch';end if;
+ if acc.cap_tokens>a.max_tokens or acc.frozen_at is not null
+ then raise exception 'approval ceiling invalid';end if;
+ insert into public.benchmark_execution_grants(token_digest,trial_id,account_id,
+ owner_actor_id,protocol_digest,repository,model,execution_epoch,deadline)
+ values(p_digest,p_trial,a.account_id,a.actor_id,a.protocol_digest,
+ p_repository,p_model,p_epoch,p_deadline) returning id into result;
+ update public.benchmark_native_spending_approvals set consumed_at=now() where id=a.id;
+ return result;
+end $$;
+revoke all on function public.benchmark_issue_execution_grant(uuid,uuid,uuid,uuid,uuid,text,text,bigint,timestamptz,text)
+ from public,anon,authenticated;
+grant execute on function public.benchmark_issue_execution_grant(uuid,uuid,uuid,uuid,uuid,text,text,bigint,timestamptz,text)
+ to service_role;
+
+ then raise exception 'spending binding mismatch';end if;
  if acc.cap_tokens>a.max_tokens or acc.frozen_at is not null
  then raise exception 'approval ceiling invalid';end if;
  insert into public.benchmark_execution_grants(token_digest,trial_id,account_id,
