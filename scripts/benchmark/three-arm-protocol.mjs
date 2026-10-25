@@ -57,7 +57,7 @@ export function reconcileThreeArmTrial(protocol,records){
     held+=op.reservedTokens;unknown++;
    }else throw Error('BENCHMARK_UNSUPPORTED_OPERATION_STATE');
   }
-  if(actual+held>protocol.tokenCap)throw Error('BENCHMARK_ACCOUNT_OVER_CEILING');
+  const overCeiling=actual+held>protocol.tokenCap;
   // Caller-authored flags and receipt strings are not authoritative evidence.
   const acceptanceComplete=false && r.acceptanceChecks.length>0&&
    r.acceptanceChecks.every(x=>x.contractSha256===protocol.contractSha256&&
@@ -66,8 +66,8 @@ export function reconcileThreeArmTrial(protocol,records){
     typeof x.evidenceId==='string'&&x.evidenceId.length>0);
   return {arm:r.arm,candidateSha:r.candidateSha,actualTokens:actual,
    unresolvedHeldTokens:held,unresolvedOperations:unknown,
-   acceptanceComplete:acceptanceComplete&&unknown===0,
-   status:acceptanceComplete&&unknown===0?'evidence-complete':'unverified'};
+   overCeiling,acceptanceComplete:acceptanceComplete&&unknown===0&&!overCeiling,
+   status:overCeiling?'overrun':acceptanceComplete&&unknown===0?'evidence-complete':'unverified'};
  });
  return {experimentId:identity.experimentId,replicate:identity.replicate,
   protocolDigest:identity.protocolDigest,accepted:results.every(r=>r.acceptanceComplete),
@@ -118,8 +118,8 @@ export async function buildVerifiedReport(protocol,records,{
    try{passed=verifySignature(null,Buffer.from(JSON.stringify(signed)),
       verifierPublicKey,Buffer.from(signature,'base64'));}catch{passed=false;}
   }
-  verified.push({...result,acceptanceComplete:!!passed&&result.unresolvedOperations===0,
-   status:passed&&result.unresolvedOperations===0?'verified':'unverified'});
+  verified.push({...result,acceptanceComplete:!!passed&&result.unresolvedOperations===0&&!result.overCeiling,
+   status:result.overCeiling?'overrun':passed&&result.unresolvedOperations===0?'verified':'unverified'});
  }
  return {...base,verification:'signed-independent-evidence',
   accepted:verified.every(x=>x.acceptanceComplete),
