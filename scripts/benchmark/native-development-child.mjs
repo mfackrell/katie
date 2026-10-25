@@ -6,6 +6,8 @@ import {mkdirSync,writeFileSync} from 'node:fs';
 import {join} from 'node:path';
 const require=createRequire('/work/package.json');
 const {Codex}=await import(pathToFileURL(require.resolve('@openai/codex-sdk')).href);
+const arm=process.env.KATIE_BENCHMARK_ARM;
+if(!['native','thin','full'].includes(arm))throw Error('NATIVE_ARM_INVALID');
 const phase=process.env.KATIE_NATIVE_PHASE||'implementation';
 if(!['implementation','review','repair','final-review'].includes(phase))throw Error('NATIVE_PHASE_INVALID');
 const baseline=process.env.KATIE_NATIVE_BASELINE_SHA;
