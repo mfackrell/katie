@@ -215,6 +215,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           ISSUE: ${{ steps.task.outputs.issue }}
           BRANCH: ${{ steps.task.outputs.branch }}
+          NATIVE: ${{ steps.task.outputs.native }}
         run: |
           set -euo pipefail
           # Do not create another implementation PR for an issue that already
@@ -234,13 +235,19 @@ jobs:
           fi
           rm -f AGENT_REQUEST.md
           test -z "$(git status --porcelain -- .github/workflows/autonomous-development.yml)" || { echo 'Protected workflow edited'; exit 1; }
-          git add -A
-          git diff --cached --quiet && { echo 'No implementation produced'; exit 1; }
-          node "$RUNNER_TEMP/project-tools/project-scope.mjs" "$RUNNER_TEMP/agent-task/AGENT_REQUEST.md"
-          node "$RUNNER_TEMP/project-tools/recovery-scope.mjs" "$RUNNER_TEMP/agent-task/AGENT_REQUEST.md"
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git commit -m "agent: implement issue #$ISSUE"
+          if [[ "$NATIVE" == true ]]; then
+            test -z "$(git status --porcelain)" || { echo 'Native candidate changed after trusted review'; exit 1; }
+            node "$RUNNER_TEMP/project-tools/project-scope.mjs" "$RUNNER_TEMP/agent-task/AGENT_REQUEST.md" --verify-committed
+            jq -e --arg sha "$(git rev-parse HEAD)" '.metered == true and .completed == true and .reviewedHeadSha == $sha and .finalReview.verdict == "pass"' "$RUNNER_TEMP/native-metered-review.json" >/dev/null || { echo 'Trusted native review SHA mismatch'; exit 1; }
+          else
+            git add -A
+            git diff --cached --quiet && { echo 'No implementation produced'; exit 1; }
+            node "$RUNNER_TEMP/project-tools/project-scope.mjs" "$RUNNER_TEMP/agent-task/AGENT_REQUEST.md"
+            node "$RUNNER_TEMP/project-tools/recovery-scope.mjs" "$RUNNER_TEMP/agent-task/AGENT_REQUEST.md"
+            git config user.name 'github-actions[bot]'
+            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+            git commit -m "agent: implement issue #$ISSUE"
+          fi
           gh auth setup-git
           git push origin "HEAD:refs/heads/$BRANCH"
           pr="$(gh pr create --repo "$GITHUB_REPOSITORY" --draft --base main --head "$BRANCH" --title "[agent] Implementation for issue #$ISSUE" --body "Automated development for #$ISSUE. No merge or production deployment authorized. Test and independent review results follow.")"
