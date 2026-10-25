@@ -25,6 +25,7 @@ test('Full native trial admission uses two real PostgreSQL connections and one m
    f.endsWith('_chat_projects.sql')||f.endsWith('_project_phase_budgets.sql')||
    f.endsWith('_developer_game_intake.sql')||f.endsWith('_executive_registry_delegation.sql'))])
    await db.query(readFileSync('supabase/migrations/'+file,'utf8'));
+  await db.query(readFileSync('supabase/migrations/20261024163000_benchmark_durable_accounts.sql','utf8'));
   // Dependencies from source PRs are intentionally included in one snapshot.
   await db.query(readFileSync('tests/sql/benchmark-combined-smoke-part1.sql','utf8'));
   for(const name of [
