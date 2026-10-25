@@ -8,7 +8,7 @@ export const tokenDigest=token=>{
 };
 export async function forwardAuthorizedModelRequest({
  db,grantToken,trialId,executionEpoch,model,requestBody,
- upperTokens,upstream,providerNamespace,recordReceipt
+ upperTokens,upstream,providerNamespace,recordReceipt,fullMission=false
 }){
  if(!db||typeof db.rpc!=='function'||typeof upstream!=='function'||
     typeof recordReceipt!=='function'||!trialId||!providerNamespace||
@@ -22,7 +22,7 @@ export async function forwardAuthorizedModelRequest({
  });
  if(live.error||live.data!==true)throw Error('GATEWAY_EXECUTION_STOPPED');
  const key=randomUUID();
- const {data:id,error}=await db.rpc('benchmark_grant_reserve',{
+ const {data:id,error}=await db.rpc(fullMission?'benchmark_full_native_reserve':'benchmark_grant_reserve',{
   p_digest:tokenDigest(grantToken),p_trial:trialId,p_epoch:executionEpoch,
   p_request_key:key,p_model:model,p_tokens:upperTokens
  });
