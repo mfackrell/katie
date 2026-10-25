@@ -132,24 +132,27 @@ export async function dispatchDevelopment(task: AgentTask, project?: Context, as
       .eq('task_id',task.id).maybeSingle();
     if(error)throw Error('Benchmark development binding lookup failed closed');
     if(binding){
-      if(binding.contract_hash!==project.contractHash||
-         binding.baseline_sha!==project.baselineSha||
-         binding.status!=='qualified')
+      const bound=binding as {trial_id:string;contract_hash:string;baseline_sha:string;status:string};
+      if(bound.contract_hash!==project.contractHash||
+         bound.baseline_sha!==project.baselineSha||
+         bound.status!=='qualified')
         throw Error('Benchmark dispatch rejected: approved task/contract mismatch');
       const {data:trial,error:trialError}=await getSupabaseAdminClient()
         .from('benchmark_three_arm_trials')
         .select('id,arm,contract_sha256,baseline_sha,owner_actor_id,state')
-        .eq('id',binding.trial_id).maybeSingle();
-      if(trialError||!trial||trial.arm!=='full'||trial.state!=='qualified'||
-         trial.contract_sha256!==project.contractHash||
-         trial.baseline_sha!==project.baselineSha)
+        .eq('id',bound.trial_id).maybeSingle();
+      const t=trial as {arm:string;state:string;contract_sha256:string;baseline_sha:string;owner_actor_id:string}|null;
+      if(trialError||!t||t.arm!=='full'||t.state!=='qualified'||
+         t.contract_sha256!==project.contractHash||
+         t.baseline_sha!==project.baselineSha)
         throw Error('Benchmark dispatch rejected: trial authority mismatch');
       const {data:account,error:accountError}=await getSupabaseAdminClient()
         .from('benchmark_budget_accounts')
         .select('id,owner_actor_id,trial_id,frozen_at')
-        .eq('trial_id',binding.trial_id).maybeSingle();
-      if(accountError||!account||account.trial_id!==binding.trial_id||
-         account.owner_actor_id!==trial.owner_actor_id||account.frozen_at)
+        .eq('trial_id',bound.trial_id).maybeSingle();
+      const a=account as {trial_id:string;owner_actor_id:string;frozen_at:string|null}|null;
+      if(accountError||!a||a.trial_id!==bound.trial_id||
+         a.owner_actor_id!==t.owner_actor_id||a.frozen_at)
         throw Error('Benchmark dispatch rejected: missing or quarantined account');
       // A qualified row is not authenticated spending authorization.
       // Never reach claim_project_dispatch or issue creation without a real gateway.
