@@ -247,7 +247,7 @@ export async function refreshModelRegistry(providers: LlmProvider[], options?: {
             rows.push(enrichModelRecord(provider.name,candidateId,pricingCatalog,nowIso));
             console.info("[ModelRegistry] model_reverified",{provider:provider.name,modelId:candidateId});
           }
-        } catch(error) {
+        } catch {
           await client.from("model_registry").eq("provider_name",provider.name)
             .eq("normalized_model_id",normalizeModelId(candidateId))
             .update({last_exception_at:nowIso});
