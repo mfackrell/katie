@@ -44,10 +44,10 @@ test('native engineering cannot invoke unmetered review, repair, or final-review
 });
 
 test('native independent reviewers are isolated and every phase shares the metered host gateway',()=>{
- assert.match(host,/await runPhase\('implementation'\)/);
- assert.match(host,/await runPhase\('review'\)/);
- assert.match(host,/await runPhase\('repair',first\.findings\)/);
- assert.match(host,/await runPhase\('final-review'\)/);
+ assert.match(host,/await safelyRunPhase\('implementation'\)/);
+ assert.match(host,/await safelyRunPhase\('review'\)/);
+ assert.match(host,/await safelyRunPhase\('repair',first\.findings\)/);
+ assert.match(host,/await safelyRunPhase\('final-review'\)/);
  assert.match(host,/if\(final\.verdict!=='pass'\)denied/);
  assert.match(host,/reviewing\?'--ro-bind':'--bind'/);
  assert.match(host,/NATIVE_METERED_REVIEW_AND_BOUNDED_REPAIR_COMPLETED/);
@@ -74,7 +74,7 @@ test('native completion evidence is pinned to reviewed commit and separately tes
 test('native reviews require immutable approved baseline and readonly execution',()=>{
  assert.match(child,/NATIVE_BASELINE_MISSING/);
  assert.match(child,/git diff /);
- assert.match(child,/baseline\+'\.\.\.HEAD'/);
+ assert.match(child,/baseline\+'\.\.\.HEAD/);
  assert.match(host,/KATIE_NATIVE_BASELINE_SHA',proof\.baselineSha/);
  assert.match(host,/reviewing\?'--ro-bind':'--bind'/);
 });
