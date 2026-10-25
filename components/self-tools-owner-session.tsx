@@ -49,12 +49,12 @@ export function SelfToolsOwnerSession({ chatId }: { chatId: string }) {
         return;
       }
       setCodeRequested(true);
-      setNotice("Verification code requested. Enter the six-digit code from your email.");
+      setNotice("Verification code requested. Enter the six- or eight-digit code from your email.");
     } finally { setBusy(false); }
   }
   async function verifyCode(event: FormEvent) {
     event.preventDefault();
-    if (!client || !/^[0-9]{6}$/.test(code) || busy) return;
+    if (!client || !/^[0-9]{6,8}$/.test(code) || busy) return;
     setBusy(true);
     try {
       const {error} = await client.auth.verifyOtp({
@@ -103,12 +103,12 @@ export function SelfToolsOwnerSession({ chatId }: { chatId: string }) {
             {!codeRequested && <button type="submit" disabled={busy} className="rounded bg-emerald-500 px-4 py-2 font-semibold text-zinc-950">Send verification code</button>}
           </form>
           {codeRequested && <form onSubmit={(event)=>void verifyCode(event)} className="flex flex-wrap items-center gap-2">
-            <label htmlFor="self-tools-email-code">Six-digit code</label>
-            <input id="self-tools-email-code" inputMode="numeric" pattern="[0-9]{6}" maxLength={6}
+            <label htmlFor="self-tools-email-code">Verification code</label>
+            <input id="self-tools-email-code" inputMode="numeric" pattern="[0-9]{6}([0-9]{2})?" maxLength={8}
               autoComplete="one-time-code" required value={code}
-              onChange={event=>setCode(event.target.value.replace(/\\D/g,"").slice(0,6))}
+              onChange={event=>setCode(event.target.value.replace(/\\D/g,"").slice(0,8))}
               className="w-32 rounded border border-zinc-600 bg-zinc-950 px-3 py-2 text-white" />
-            <button type="submit" disabled={busy || code.length!==6} className="rounded bg-emerald-500 px-4 py-2 font-semibold text-zinc-950">Verify code</button>
+            <button type="submit" disabled={busy || ![6,8].includes(code.length)} className="rounded bg-emerald-500 px-4 py-2 font-semibold text-zinc-950">Verify code</button>
             <button type="button" onClick={()=>{setCodeRequested(false);setCode("");setNotice("");}} className="underline">Change email</button>
           </form>}
         </div>
