@@ -1,6 +1,6 @@
 import {readFileSync,writeFileSync,mkdirSync} from 'node:fs';
 import {resolve} from 'node:path';
-import {createHash} from 'node:crypto';
+import {createHash,verify as verifySignature} from 'node:crypto';
 export const ARMS=Object.freeze(['native','thin','full']);
 const sha=(s,n)=>typeof s==='string'&&new RegExp('^[0-9a-f]{'+n+'}$').test(s);
 const digest=v=>createHash('sha256').update(JSON.stringify(v)).digest('hex');
@@ -58,7 +58,8 @@ export function reconcileThreeArmTrial(protocol,records){
    }else throw Error('BENCHMARK_UNSUPPORTED_OPERATION_STATE');
   }
   if(actual+held>protocol.tokenCap)throw Error('BENCHMARK_ACCOUNT_OVER_CEILING');
-  const acceptanceComplete=r.acceptanceChecks.length>0&&
+  // Caller-authored flags and receipt strings are not authoritative evidence.
+  const acceptanceComplete=false && r.acceptanceChecks.length>0&&
    r.acceptanceChecks.every(x=>x.contractSha256===protocol.contractSha256&&
     x.acceptanceSha256===protocol.acceptanceSha256&&
     x.candidateSha===r.candidateSha&&x.protected===true&&x.passed===true&&
@@ -77,4 +78,47 @@ export function buildReport(protocol,records){
  const report=reconcileThreeArmTrial(protocol,records);
  return {...report,paidExecutionAuthorized:false,
   comparisonValid:report.accepted&&report.results.every(x=>x.unresolvedHeldTokens===0)};
+}
+
+// Authoritative verification requires evidence retrieved independently from a
+// trusted server-side source plus a verifier signature. Caller records, flags,
+// and evidence IDs above can NEVER establish acceptance.
+export async function buildVerifiedReport(protocol,records,{
+ loadAuthority,loadEvidence,verifierPublicKey
+}={}){
+ const base=buildReport(protocol,records);
+ if(typeof loadAuthority!=='function'||typeof loadEvidence!=='function'||!verifierPublicKey)
+  return {...base,verification:'unavailable',accepted:false,comparisonValid:false};
+ const authority=await loadAuthority(protocol.experimentId,protocol.replicate);
+ if(!authority||authority.protocolDigest!==base.protocolDigest||
+    authority.acceptanceSha256!==protocol.acceptanceSha256||
+    !Array.isArray(authority.expectedCheckIds)||authority.expectedCheckIds.length===0||
+    new Set(authority.expectedCheckIds).size!==authority.expectedCheckIds.length)
+  throw Error('BENCHMARK_AUTHORITY_INVALID');
+ const verified=[];
+ for(const result of base.results){
+  const evidence=await loadEvidence(protocol.experimentId,protocol.replicate,result.arm);
+  const candidate=result.candidateSha;
+  let passed=sha(candidate,40)&&evidence&&evidence.candidateSha===candidate&&
+    evidence.protocolDigest===base.protocolDigest&&
+    evidence.acceptanceSha256===protocol.acceptanceSha256&&
+    evidence.arm===result.arm&&
+    typeof evidence.verifierId==='string'&&evidence.verifierId.length>0&&
+    typeof evidence.signature==='string'&&
+    Array.isArray(evidence.checks)&&
+    evidence.checks.length===authority.expectedCheckIds.length&&
+    authority.expectedCheckIds.every(id=>evidence.checks.some(x=>x.id===id&&x.passed===true&&
+      x.candidateSha===candidate&&x.evidenceId&&x.verifierId===evidence.verifierId));
+  if(passed){
+   const {signature,...signed}=evidence;
+   try{passed=verifySignature(null,Buffer.from(JSON.stringify(signed)),
+      verifierPublicKey,Buffer.from(signature,'base64'));}catch{passed=false;}
+  }
+  verified.push({...result,acceptanceComplete:!!passed&&result.unresolvedOperations===0,
+   status:passed&&result.unresolvedOperations===0?'verified':'unverified'});
+ }
+ return {...base,verification:'signed-independent-evidence',
+  accepted:verified.every(x=>x.acceptanceComplete),
+  comparisonValid:verified.every(x=>x.acceptanceComplete),
+  results:verified};
 }
