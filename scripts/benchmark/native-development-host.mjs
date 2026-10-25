@@ -1,0 +1,123 @@
+// Trusted GitHub Actions host. Never run this file from the candidate worktree.
+// For paid execution it requires a separate, previously owner-approved spending
+// record and an explicit privileged workflow switch; CI/synthetic jobs cannot pay.
+import {readFileSync,mkdtempSync,mkdirSync,rmSync,statSync} from 'node:fs';
+import {join} from 'node:path';
+import {tmpdir} from 'node:os';
+import {randomBytes} from 'node:crypto';
+import {spawn} from 'node:child_process';
+import {createRequire} from 'node:module';
+import {createNativeHttpBridge} from './native-http-bridge.mjs';
+import {createResponsesProvider} from './native-provider-receipts.mjs';
+import {tokenDigest} from './authenticated-native-gateway.mjs';
+import {readNativeHandoff} from './native-dispatch-contract.mjs';
+const require=createRequire(join(process.cwd(),'package.json'));
+const {createClient}=require('@supabase/supabase-js');
+const [,,requestFile,manifestFile,childFile]=process.argv;
+const denied=message=>{throw Error('NATIVE_HOST_DENIED: '+message)};
+if(!requestFile||!manifestFile||!childFile)denied('missing verified inputs');
+if(process.env.KATIE_BENCHMARK_PAID_EXECUTION!=='enabled')
+ denied('no separately enabled paid benchmark run');
+const signingKey=process.env.KATIE_NATIVE_HANDOFF_HMAC_KEY;
+const proof=readNativeHandoff(readFileSync(requestFile,'utf8'),signingKey);
+const manifest=JSON.parse(readFileSync(manifestFile,'utf8'));
+for(const key of ['taskId','trialId','approvalId','projectId','contractHash','baselineSha','expiresAt'])
+ if(manifest[key]!==proof[key])denied('handoff changed after signature verification');
+if(process.env.GITHUB_REPOSITORY!=='mfackrell/katie')denied('repository identity mismatch');
+const url=process.env.NEXT_PUBLIC_SUPABASE_URL;
+const serviceKey=process.env.KATIE_BENCHMARK_SERVICE_ROLE_KEY;
+const providerKey=process.env.OPENAI_API_KEY;
+if(!url||!serviceKey||!providerKey||!process.env.GITHUB_RUN_ID)
+ denied('gateway credentials unavailable');
+const db=createClient(url,serviceKey,{auth:{persistSession:false,autoRefreshToken:false}});
+const readOne=async(table,column,value,fields='*')=>{
+ const {data,error}=await db.from(table).select(fields).eq(column,value).maybeSingle();
+ if(error||!data)denied('required durable '+table+' record missing');
+ return data;
+};
+const approval=await readOne('benchmark_native_spending_approvals','id',proof.approvalId);
+if(approval.trial_id!==proof.trialId||approval.task_id!==proof.taskId||
+ approval.project_id!==proof.projectId||approval.repository!==process.env.GITHUB_REPOSITORY||
+ approval.revoked_at||approval.consumed_at||new Date(approval.deadline).getTime()<=Date.now())
+ denied('owner spending approval is missing or consumed');
+const trial=await readOne('benchmark_three_arm_trials','id',proof.trialId);
+const project=await readOne('work_projects','id',proof.projectId);
+const account=await readOne('benchmark_budget_accounts','id',approval.account_id);
+const task=await readOne('agent_tasks','id',proof.taskId);
+if(trial.arm!=='full'||trial.state!=='qualified'||
+ trial.owner_actor_id!==approval.actor_id||
+ account.trial_id!==trial.id||account.owner_actor_id!==approval.actor_id||
+ project.actor_id!==approval.actor_id||project.chat_id!==approval.chat_id||
+ project.status!=='running'||project.phase!=='development'||
+ project.approved_hash!==project.approval_hash||!project.approved_hash||
+ project.deadline<=new Date().toISOString()||
+ task.actor_id!==approval.actor_id||task.chat_id!==approval.chat_id)
+ denied('trial, project, owner or task state mismatch');
+const grantToken=randomBytes(48).toString('base64url');
+const {data:grantId,error:issueError}=await db.rpc('benchmark_issue_execution_grant',{
+ p_owner:approval.owner_id,p_actor:approval.actor_id,p_chat:approval.chat_id,
+ p_trial:proof.trialId,p_approval:proof.approvalId,
+ p_repository:approval.repository,p_model:approval.model,
+ p_epoch:1,p_deadline:approval.deadline,p_digest:tokenDigest(grantToken)
+});
+if(issueError||typeof grantId!=='string')denied('atomic owner grant issuance rejected');
+const clientToken=randomBytes(32).toString('base64url');
+const root=mkdtempSync(join(tmpdir(),'katie-trusted-gateway-'));
+const sockdir=join(root,'sock'),socket=join(sockdir,'gateway.sock');
+mkdirSync(sockdir,{mode:0o700});
+const perRequestCap=Math.min(20000,Number(approval.max_tokens),Number(account.cap_tokens));
+if(!Number.isSafeInteger(perRequestCap)||perRequestCap<=0)denied('invalid frozen request reservation');
+const upstream=createResponsesProvider({apiKey:providerKey});
+const server=createNativeHttpBridge({
+ db,grantToken,trialId:proof.trialId,executionEpoch:1,
+ providerNamespace:'openai-responses',upperTokens:perRequestCap,
+ upstream,clientToken,fullMission:true,
+ recordReceipt:async({requestKey,operationId,namespace,providerRequestId,actualTokens})=>{
+  const {data,error}=await db.rpc('benchmark_reconcile_linked_receipt',{
+   p_mission_call:requestKey,p_namespace:namespace,
+   p_provider_request:providerRequestId,p_actual:actualTokens
+  });
+  if(error||data!==true)throw Error('NATIVE_LINKED_RECEIPT_NOT_RECONCILED');
+ }
+});
+let child=null,stopTimer=null;
+try{
+ await new Promise(resolve=>server.listen(socket,resolve));
+ const command='socat TCP-LISTEN:43181,bind=127.0.0.1,reuseaddr,fork UNIX-CONNECT:/gateway/gateway.sock & p=$!; trap "kill $p 2>/dev/null || :" EXIT; node /trusted/native-development-child.mjs';
+ const args=['--die-with-parent','--new-session','--unshare-all','--clearenv',
+  '--ro-bind','/usr','/usr','--ro-bind','/bin','/bin',
+  '--ro-bind','/lib','/lib','--ro-bind','/lib64','/lib64',
+  '--ro-bind','/opt','/opt','--ro-bind',process.cwd(),'/work',
+  '--ro-bind',childFile,'/trusted/native-development-child.mjs',
+  '--bind',sockdir,'/gateway','--tmpfs','/tmp','--proc','/proc','--dev','/dev',
+  '--setenv','HOME','/tmp/agent','--setenv','CODEX_HOME','/tmp/agent/.codex',
+  '--setenv','PATH','/opt/hostedtoolcache/node/22.23.3/x64/bin:/usr/bin:/bin',
+  '--setenv','KATIE_NATIVE_MODEL',approval.model,
+  '--setenv','KATIE_NATIVE_BRIDGE_TOKEN',clientToken,
+  '--setenv','KATIE_OUTER_SANDBOX_CONFIRMED','1',
+  '--chdir','/work','/bin/sh','-c',command];
+ child=spawn('bwrap',args,{env:{PATH:process.env.PATH||''},stdio:['ignore','pipe','pipe']});
+ child.stdout.on('data',x=>process.stdout.write(x));
+ child.stderr.on('data',x=>process.stderr.write(x));
+ stopTimer=setInterval(async()=>{
+  try{
+   const [g,p]=await Promise.all([
+    readOne('benchmark_execution_grants','id',grantId,'stopped_at,revoked_at,deadline'),
+    readOne('work_projects','id',proof.projectId,'status,deadline,approval_hash,approved_hash')
+   ]);
+   if(g.stopped_at||g.revoked_at||new Date(g.deadline)<=new Date()||
+      p.status!=='running'||new Date(p.deadline)<=new Date()||
+      !p.approved_hash||p.approved_hash!==p.approval_hash)child?.kill('SIGKILL');
+  }catch{child?.kill('SIGKILL')}
+ },3000);
+ const outcome=await new Promise((resolve,reject)=>{
+  child.once('error',reject);child.once('close',(code,signal)=>resolve({code,signal}));
+ });
+ if(outcome.code!==0)denied('contained native execution failed; holds retained');
+ console.log('NATIVE_DEVELOPER_RETURNED_TO_EXISTING_TEST_REVIEW_PIPELINE');
+}finally{
+ if(stopTimer)clearInterval(stopTimer);
+ if(child&&!child.killed)child.kill('SIGKILL');
+ await new Promise(resolve=>server.close(resolve));
+ rmSync(root,{recursive:true,force:true});
+}
