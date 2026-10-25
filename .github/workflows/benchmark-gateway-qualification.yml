@@ -26,5 +26,9 @@ jobs:
         run: |
           command -v bwrap >/dev/null || (sudo apt-get update && sudo apt-get install -y bubblewrap)
           if test -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns; then sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0; fi
+      - name: Install Unix-socket proxy for separated gateway host
+        run: command -v socat >/dev/null || (sudo apt-get update && sudo apt-get install -y socat)
+      - name: Qualify separated gateway host and isolated SDK over Unix socket
+        run: node scripts/benchmark/external-native-gateway-host-probe.mjs
       - name: Qualify actual SDK plus HTTP gateway inside containment
         run: bash scripts/benchmark/real-codex-gateway-bwrap-probe.sh
