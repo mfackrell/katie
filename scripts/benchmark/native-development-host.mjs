@@ -5,7 +5,7 @@ import {readFileSync,writeFileSync,mkdtempSync,mkdirSync,rmSync,statSync} from '
 import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {randomBytes} from 'node:crypto';
-import {spawn} from 'node:child_process';
+import {spawn,execFileSync} from 'node:child_process';
 import {createRequire} from 'node:module';
 import {createNativeHttpBridge} from './native-http-bridge.mjs';
 import {createResponsesProvider} from './native-provider-receipts.mjs';
@@ -66,6 +66,17 @@ const clientToken=randomBytes(32).toString('base64url');
 const root=mkdtempSync(join(tmpdir(),'katie-trusted-gateway-'));
 const evidencePath=process.env.KATIE_NATIVE_EVIDENCE_FILE;
 const decisions=[];
+const git=(...args)=>execFileSync('git',args,{cwd:process.cwd(),encoding:'utf8',timeout:20000}).trim();
+const commitCandidate=(label)=>{
+  rmSync(join(process.cwd(),'AGENT_REQUEST.md'),{force:true});
+  git('add','-A');
+  const toolsRoot=process.env.RUNNER_TEMP;
+  if(!toolsRoot)denied('trusted scope tools unavailable');
+  execFileSync('node',[join(toolsRoot,'project-tools','project-scope.mjs'),requestFile],{cwd:process.cwd(),timeout:20000,stdio:'inherit'});
+  execFileSync('node',[join(toolsRoot,'project-tools','recovery-scope.mjs'),requestFile],{cwd:process.cwd(),timeout:20000,stdio:'inherit'});
+  git('-c','user.name=katie-native-checkpoint','-c','user.email=katie-native-checkpoint@users.noreply.github.com','commit','-m',label);
+  return git('rev-parse','HEAD');
+};
 const sockdir=join(root,'sock'),socket=join(sockdir,'gateway.sock');
 mkdirSync(sockdir,{mode:0o700});
 const perRequestCap=Math.min(20000,Number(approval.max_tokens),Number(account.cap_tokens));
@@ -139,11 +150,13 @@ try{
   }catch{child?.kill('SIGKILL')}
  },3000);
  await runPhase('implementation');
+ let candidateHead=commitCandidate('native: checkpoint approved implementation');
  const first=await runPhase('review');
  if(first.verdict!=='pass'){
   // One bounded repair only. Every retry/request remains metered; any uncertain
   // provider call holds capacity rather than being silently refunded.
   await runPhase('repair',first.findings);
+  candidateHead=commitCandidate('native: checkpoint bounded repair');
   const final=await runPhase('final-review');
   if(final.verdict!=='pass')denied('independent final review requires changes');
  } 
@@ -152,7 +165,7 @@ try{
  writeFileSync(evidencePath,JSON.stringify({version:1,trialId:proof.trialId,taskId:proof.taskId,
   approvalId:proof.approvalId,projectId:proof.projectId,review:decisions[0],
   finalReview:decisions.at(-1),repairPerformed:decisions.length===2,
-  metered:true,completed:true})+'\n',{mode:0o600,flag:'wx'});
+  metered:true,completed:true,reviewedHeadSha:candidateHead})+'\n',{mode:0o600,flag:'wx'});
  console.log('NATIVE_METERED_REVIEW_AND_BOUNDED_REPAIR_COMPLETED');
  console.log('NATIVE_DEVELOPER_RETURNED_TO_EXISTING_TEST_REVIEW_PIPELINE');
 }finally{
