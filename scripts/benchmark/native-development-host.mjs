@@ -1,7 +1,7 @@
 // Trusted GitHub Actions host. Never run this file from the candidate worktree.
 // For paid execution it requires a separate, previously owner-approved spending
 // record and an explicit privileged workflow switch; CI/synthetic jobs cannot pay.
-import {readFileSync,mkdtempSync,mkdirSync,rmSync,statSync} from 'node:fs';
+import {readFileSync,writeFileSync,mkdtempSync,mkdirSync,rmSync,statSync} from 'node:fs';
 import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {randomBytes} from 'node:crypto';
@@ -84,22 +84,45 @@ const server=createNativeHttpBridge({
 let child=null,stopTimer=null;
 try{
  await new Promise(resolve=>server.listen(socket,resolve));
- const command='socat TCP-LISTEN:43181,bind=127.0.0.1,reuseaddr,fork UNIX-CONNECT:/gateway/gateway.sock & p=$!; trap "kill $p 2>/dev/null || :" EXIT; node /trusted/native-development-child.mjs';
- const args=['--die-with-parent','--new-session','--unshare-all','--clearenv',
-  '--ro-bind','/usr','/usr','--ro-bind','/bin','/bin',
-  '--ro-bind','/lib','/lib','--ro-bind','/lib64','/lib64',
-  '--ro-bind','/opt','/opt','--bind',process.cwd(),'/work','--dir','/trusted',
-  '--ro-bind',childFile,'/trusted/native-development-child.mjs',
-  '--bind',sockdir,'/gateway','--tmpfs','/tmp','--proc','/proc','--dev','/dev',
-  '--setenv','HOME','/tmp/agent','--setenv','CODEX_HOME','/tmp/agent/.codex',
-  '--setenv','PATH',process.env.PATH||'/usr/bin:/bin',
-  '--setenv','KATIE_NATIVE_MODEL',approval.model,
-  '--setenv','KATIE_NATIVE_BRIDGE_TOKEN',clientToken,
-  '--setenv','KATIE_OUTER_SANDBOX_CONFIRMED','1',
-  '--chdir','/work','/bin/sh','-c',command];
- child=spawn('bwrap',args,{env:{PATH:process.env.PATH||''},stdio:['ignore','pipe','pipe']});
- child.stdout.on('data',x=>process.stdout.write(x));
- child.stderr.on('data',x=>process.stderr.write(x));
+ const runPhase=async(phase,findings='')=>{
+  // All phases reuse the SAME server-side grant and per-request atomic meter.
+  // A fresh Codex process/thread is required for independent reviews.
+  if(findings)writeFileSync(join(root,'review-findings.txt'),findings,{mode:0o600});
+  const reviewing=phase==='review'||phase==='final-review';
+  const command='socat TCP-LISTEN:43181,bind=127.0.0.1,reuseaddr,fork UNIX-CONNECT:/gateway/gateway.sock & p=$!; trap "kill $p 2>/dev/null || :" EXIT; node /trusted/native-development-child.mjs';
+  const args=['--die-with-parent','--new-session','--unshare-all','--clearenv',
+   '--ro-bind','/usr','/usr','--ro-bind','/bin','/bin',
+   '--ro-bind','/lib','/lib','--ro-bind','/lib64','/lib64',
+   '--ro-bind','/opt','/opt',reviewing?'--ro-bind':'--bind',process.cwd(),'/work',
+   '--dir','/trusted','--ro-bind',childFile,'/trusted/native-development-child.mjs',
+   ...(findings?['--ro-bind',join(root,'review-findings.txt'),'/trusted/review-findings.txt']:[]),
+   '--bind',sockdir,'/gateway','--tmpfs','/tmp','--proc','/proc','--dev','/dev',
+   '--setenv','HOME','/tmp/agent','--setenv','CODEX_HOME','/tmp/agent/.codex',
+   '--setenv','PATH',process.env.PATH||'/usr/bin:/bin',
+   '--setenv','KATIE_NATIVE_MODEL',approval.model,
+   '--setenv','KATIE_NATIVE_BRIDGE_TOKEN',clientToken,
+   '--setenv','KATIE_NATIVE_PHASE',phase,
+   '--setenv','KATIE_OUTER_SANDBOX_CONFIRMED','1',
+   '--chdir','/work','/bin/sh','-c',command];
+  child=spawn('bwrap',args,{env:{PATH:process.env.PATH||''},stdio:['ignore','pipe','pipe']});
+  let output='';
+  child.stdout.on('data',x=>{process.stdout.write(x);output=(output+x).slice(-20000)});
+  child.stderr.on('data',x=>process.stderr.write(x));
+  const outcome=await new Promise((resolve,reject)=>{
+   child.once('error',reject);child.once('close',(code,signal)=>resolve({code,signal}));
+  });
+  child=null;
+  if(outcome.code!==0)denied('native '+phase+' failed; spending holds retained');
+  if(!reviewing)return null;
+  const marker=output.split('\\n').filter(x=>x.startsWith('NATIVE_REVIEW_RESULT=')).at(-1);
+  if(!marker)denied('missing independent '+phase+' decision');
+  let decision;try{decision=JSON.parse(marker.slice('NATIVE_REVIEW_RESULT='.length))}
+  catch{denied('invalid independent review output')}
+  if(decision.phase!==phase||!['pass','changes_requested'].includes(decision.verdict)||
+     typeof decision.findings!=='string'||!decision.findings.trim())
+    denied('invalid independent review verdict');
+  return decision;
+ };
  stopTimer=setInterval(async()=>{
   try{
    const [g,p]=await Promise.all([
@@ -111,10 +134,16 @@ try{
       !p.approved_hash||p.approved_hash!==p.approval_hash)child?.kill('SIGKILL');
   }catch{child?.kill('SIGKILL')}
  },3000);
- const outcome=await new Promise((resolve,reject)=>{
-  child.once('error',reject);child.once('close',(code,signal)=>resolve({code,signal}));
- });
- if(outcome.code!==0)denied('contained native execution failed; holds retained');
+ await runPhase('implementation');
+ const first=await runPhase('review');
+ if(first.verdict!=='pass'){
+  // One bounded repair only. Every retry/request remains metered; any uncertain
+  // provider call holds capacity rather than being silently refunded.
+  await runPhase('repair',first.findings);
+  const final=await runPhase('final-review');
+  if(final.verdict!=='pass')denied('independent final review requires changes');
+ } 
+ console.log('NATIVE_METERED_REVIEW_AND_BOUNDED_REPAIR_COMPLETED');
  console.log('NATIVE_DEVELOPER_RETURNED_TO_EXISTING_TEST_REVIEW_PIPELINE');
 }finally{
  if(stopTimer)clearInterval(stopTimer);
