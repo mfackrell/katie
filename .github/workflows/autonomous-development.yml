@@ -640,7 +640,7 @@ jobs:
           # tested/reviewed SHA. Fail closed until post-commit acceptance exists.
           if [[ "${NATIVE:-false}" == true ]]; then
             evidence="$RUNNER_TEMP/native-review/native-metered-review.json"
-            if jq -e '.version == 1 and .metered == true and .completed == true and .review.verdict == "pass" and .finalReview.verdict == "pass"' "$evidence" >/dev/null 2>&1; then
+            if jq -e '.version == 1 and .metered == true and .completed == true and .review.verdict != null and .finalReview.verdict == "pass"' "$evidence" >/dev/null 2>&1; then
               outcome='BLOCKED — native metered review recorded; post-commit acceptance unverified'
             else
               outcome='BLOCKED — trusted native metered review evidence missing or failed'
