@@ -30,5 +30,12 @@ jobs:
         run: command -v socat >/dev/null || (sudo apt-get update && sudo apt-get install -y socat)
       - name: Qualify separated gateway host and isolated SDK over Unix socket
         run: node scripts/benchmark/external-native-gateway-host-probe.mjs
+      - name: Validate signed Developer dispatch scripts and source contracts
+        run: |
+          node --check scripts/benchmark/native-development-host.mjs
+          node --check scripts/benchmark/native-development-child.mjs
+          node --check scripts/benchmark/native-dispatch-cli.mjs
+          node --check scripts/benchmark/native-dispatch-contract.mjs
+          node --test tests/benchmark-native-dispatch-contract.test.mjs tests/benchmark-native-developer-dispatch-workflow.test.mjs
       - name: Qualify actual SDK plus HTTP gateway inside containment
         run: bash scripts/benchmark/real-codex-gateway-bwrap-probe.sh
