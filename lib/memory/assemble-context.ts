@@ -2,6 +2,7 @@ import { recentActorReactionEvents, recentReactionContext } from "@/lib/chat/mes
 import { loadTaskHandoffKnowledgeContext } from "@/lib/agents/task-handoff-knowledge";
 import { currentAgentTask } from "@/lib/agents/policy";
 import { getDeliverableStandardInstruction } from "@/lib/chat/deliverable-standard";
+import { getAdaptiveResponseCompositionInstruction } from "@/lib/chat/adaptive-response-composition";
 import { getChatContextState, listActorMemoryDocuments } from "@/lib/data/persistence-store";
 import { MEMORY_ARCHITECTURE_GUIDE, SHORT_TERM_MESSAGE_LIMIT } from "@/lib/memory/memory-contract";
 import { filterConversationalMessages, messagesFromShortTermMemory } from "@/lib/memory/short-term";
@@ -70,6 +71,7 @@ export async function assembleContext(actorId: string, chatId: string): Promise<
     persona: [
       currentAgentTask()?.snapshot.instructions ?? actor.purpose,
       getDeliverableStandardInstruction(),
+      getAdaptiveResponseCompositionInstruction(),
       MEMORY_ARCHITECTURE_GUIDE,
       correctionsBlock,
       longTermBlock,
