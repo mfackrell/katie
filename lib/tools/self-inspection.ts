@@ -58,14 +58,32 @@ export function createSelfInspectionTools(input: {
         return { repository: 'mfackrell/katie', sha, truncated: tree.truncated === true || (tree.tree?.length ?? 0) > 800,
           paths: tree.tree?.filter((p: TreeEntry) => p.type === 'blob' && pathSchema.safeParse({path:p.path}).success).slice(0,800).map((p: TreeEntry) => p.path) };
       } },
+    { name: 'production_runtime_revision', description: 'Report the commit SHA injected by Vercel into this running server. Runtime-reported evidence only; not independent alias verification.', parameters: objectSchema(), validate: empty,
+      execute: async () => {
+        const sha = process.env.VERCEL_GIT_COMMIT_SHA;
+        if (!sha || !/^[a-f0-9]{40}$/.test(sha)) return blocked('Runtime revision unavailable.');
+        return {status:'runtime_reported',sha,source:'VERCEL_GIT_COMMIT_SHA',limitation:'Does not independently prove Vercel alias assignment or acceptance tests.'};
+      } },
+    { name: 'github_source_paths', description: 'Page allowed source paths at the pinned SHA; use offset to continue beyond the first 800 entries.', parameters:objectSchema({offset:{type:'integer',minimum:0},limit:{type:'integer',minimum:1,maximum:200}}),validate:z.object({offset:z.number().int().min(0).optional(),limit:z.number().int().min(1).max(200).optional()}).strict(),
+      execute:async (args,signal)=>{
+        const sha=await pin(signal); if(!sha)return blocked('GitHub source pin unavailable.');
+        const tree=await github(`git/trees/${sha}?recursive=1`,signal);
+        const paths=(tree.tree??[]).filter((p:TreeEntry)=>p.type==='blob'&&pathSchema.safeParse({path:p.path}).success).map((p:TreeEntry)=>p.path);
+        const parsed=z.object({offset:z.number().int().min(0).optional(),limit:z.number().int().min(1).max(200).optional()}).strict().parse(args);
+        const offset=parsed.offset??0,limit=parsed.limit??100;
+        return {sha,paths:paths.slice(offset,offset+limit),nextOffset:offset+limit<paths.length?offset+limit:null,totalVisible:paths.length,githubTreeTruncated:tree.truncated===true};
+      } },
     { name: 'github_read_file', description: 'Read a bounded UTF-8 source file at the pinned own repository SHA. Secret/config credential paths are denied.',
-      parameters: objectSchema({path:{type:'string',maxLength:240}}, ['path']), validate: pathSchema,
+      parameters: objectSchema({path:{type:'string',maxLength:240},startLine:{type:'integer',minimum:1},lineCount:{type:'integer',minimum:1,maximum:150}}, ['path']), validate: pathSchema.extend({startLine:z.number().int().min(1).optional(),lineCount:z.number().int().min(1).max(150).optional()}),
       execute: async (args, signal) => {
-        const {path} = pathSchema.parse(args); const sha = await pin(signal);
+        const parsed=pathSchema.extend({startLine:z.number().int().min(1).optional(),lineCount:z.number().int().min(1).max(150).optional()}).parse(args);
+        const {path} = parsed; const sha = await pin(signal);
         if (!sha) return blocked('GitHub source pin unavailable. Connect GitHub first.');
         const file = await github(`contents/${path.split('/').map(encodeURIComponent).join('/')}?ref=${sha}`, signal);
-        if (file.encoding !== 'base64' || typeof file.content !== 'string' || file.size > 24000) return blocked('File is not a bounded readable source file.');
-        return { repository: 'mfackrell/katie', sha, path, blobSha: file.sha, text: Buffer.from(file.content, 'base64').toString('utf8') };
+        if (file.encoding !== 'base64' || typeof file.content !== 'string' || file.size > 700000) return blocked('Source file exceeds retrieval bound.');
+        const lines=Buffer.from(file.content, 'base64').toString('utf8').split('\n');
+        const startLine=parsed.startLine??1, lineCount=parsed.lineCount??Math.min(150,lines.length);
+        return { repository:'mfackrell/katie',sha,path,blobSha:file.sha,startLine,endLine:Math.min(lines.length,startLine+lineCount-1),totalLines:lines.length,hasMore:startLine+lineCount<=lines.length,text:lines.slice(startLine-1,startLine-1+lineCount).join('\n') };
       } },
     { name: 'github_ci', description: 'Inspect check runs and commit statuses for the pinned own repository SHA.', parameters: objectSchema(), validate: empty,
       execute: async (_, signal) => {
