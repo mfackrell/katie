@@ -4,6 +4,7 @@ import {readFileSync} from 'node:fs';
 const workflow=readFileSync('.github/workflows/autonomous-development.yml','utf8');
 const host=readFileSync('scripts/benchmark/native-development-host.mjs','utf8');
 const handoff=readFileSync('lib/agents/development.ts','utf8');
+const child=readFileSync('scripts/benchmark/native-development-child.mjs','utf8');
 const grant=readFileSync('supabase/migrations/20261025211500_benchmark_approved_dispatch_activation.sql','utf8');
 test('existing owner-only engineering workflow selects signed native host without Codex action bypass',()=>{
  assert.match(workflow,/native-dispatch-cli\.mjs\" verify/);
@@ -40,4 +41,18 @@ test('native engineering cannot invoke unmetered review, repair, or final-review
  // Any native paid review/repair integration must replace this fail-closed
  // barrier with an independently authorized, metered trusted-host path.
  assert.equal((review+repair+finalReview).match(/openai\/codex-action@v1/g)?.length,3);
+});
+
+test('native independent reviewers are isolated and every phase shares the metered host gateway',()=>{
+ assert.match(host,/await runPhase\('implementation'\)/);
+ assert.match(host,/await runPhase\('review'\)/);
+ assert.match(host,/await runPhase\('repair',first\.findings\)/);
+ assert.match(host,/await runPhase\('final-review'\)/);
+ assert.match(host,/if\(final\.verdict!=='pass'\)denied/);
+ assert.match(host,/reviewing\?'--ro-bind':'--bind'/);
+ assert.match(host,/NATIVE_METERED_REVIEW_AND_BOUNDED_REPAIR_COMPLETED/);
+ assert.match(child,/KATIE_NATIVE_PHASE/);
+ assert.match(child,/sandboxMode:phase==='review'\|\|phase==='final-review'\?'read-only'/);
+ assert.match(child,/NATIVE_REVIEW_RESULT/);
+ assert.doesNotMatch(child,/OPENAI_API_KEY|SUPABASE_SERVICE_ROLE_KEY/);
 });
