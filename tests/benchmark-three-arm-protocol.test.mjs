@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {validateThreeArmProtocol,reconcileThreeArmTrial,buildReport} from '../scripts/benchmark/three-arm-protocol.mjs';
+import {generateKeyPairSync,sign} from 'node:crypto';
+import {validateThreeArmProtocol,reconcileThreeArmTrial,buildReport,buildVerifiedReport} from '../scripts/benchmark/three-arm-protocol.mjs';
 const hex=(c,n)=>c.repeat(n);
 const shared={baselineSha:hex('a',40),contractSha256:hex('b',64),
  acceptanceSha256:hex('c',64),toolProfileSha256:hex('d',64),
@@ -20,7 +21,7 @@ test('exactly three matching trial arms required',()=>{
 });
 test('canonical operation counted once; all three acceptance checks protected',()=>{
  const report=buildReport(protocol,['native','thin','full'].map(record));
- assert.equal(report.accepted,true);
+ assert.equal(report.accepted,false);
  assert.equal(report.paidExecutionAuthorized,false);
  assert.equal(report.results.reduce((n,x)=>n+x.actualTokens,0),420);
 });
@@ -44,4 +45,42 @@ test('altered contract/candidate review cannot pass',()=>{
  assert.equal(buildReport(protocol,r).accepted,false);
  r[2].candidateSha=hex('2',40);
  assert.throws(()=>buildReport(protocol,r),/IDENTITY_MISMATCH/);
+});
+
+test('null candidate, empty operations, and forged evidence never pass',()=>{
+ const records=['native','thin','full'].map(record);
+ for(const r of records){r.candidateSha=null;r.operations=[];r.acceptanceChecks=[{
+  contractSha256:protocol.contractSha256,acceptanceSha256:protocol.acceptanceSha256,
+  candidateSha:null,protected:true,passed:true,evidenceId:'forged'}];}
+ const forgedProtocol={...protocol,trials:protocol.trials.map(t=>({...t,candidateSha:null}))};
+ const report=buildReport(forgedProtocol,records);
+ assert.equal(report.accepted,false);
+ assert.equal(report.comparisonValid,false);
+});
+test('only a trusted journal and correctly signed complete verifier matrix may pass',async()=>{
+ const records=['native','thin','full'].map(record);
+ const keys=generateKeyPairSync('ed25519');
+ const checks=['deterministic','browser','independent-review'];
+ const evidence=Object.fromEntries(records.map(r=>{
+  const payload={arm:r.arm,candidateSha:r.candidateSha,protocolDigest:digest,
+   acceptanceSha256:protocol.acceptanceSha256,verifierId:'independent-verifier',
+   checks:checks.map(id=>({id,passed:true,candidateSha:r.candidateSha,
+    evidenceId:r.arm+'-'+id,verifierId:'independent-verifier'}))};
+  return [r.arm,{...payload,signature:sign(null,Buffer.from(JSON.stringify(payload)),keys.privateKey).toString('base64')}];
+ }));
+ const deps={loadAuthority:async()=>({protocolDigest:digest,
+  acceptanceSha256:protocol.acceptanceSha256,expectedCheckIds:checks}),
+  loadEvidence:async(_exp,_rep,arm)=>evidence[arm],
+  loadOperations:async(_exp,_rep,arm)=>records.find(r=>r.arm===arm).operations,
+  verifierPublicKey:keys.publicKey};
+ assert.equal((await buildVerifiedReport(protocol,records,deps)).accepted,true);
+ assert.equal((await buildVerifiedReport(protocol,records)).accepted,false);
+ evidence.native.checks[0].passed=false;
+ assert.equal((await buildVerifiedReport(protocol,records,deps)).accepted,false);
+ evidence.native.checks[0].passed=true;
+ evidence.native.signature='forged';
+ assert.equal((await buildVerifiedReport(protocol,records,deps)).accepted,false);
+ evidence.native.signature=sign(null,Buffer.from(JSON.stringify((({signature,...v})=>v)(evidence.native))),keys.privateKey).toString('base64');
+ const missing={...deps,loadOperations:async(_e,_r,arm)=>arm==='native'?[]:deps.loadOperations(_e,_r,arm)};
+ assert.equal((await buildVerifiedReport(protocol,records,missing)).accepted,false);
 });
