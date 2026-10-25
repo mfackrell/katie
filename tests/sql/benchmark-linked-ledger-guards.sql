@@ -28,11 +28,17 @@ begin
  exception when others then rejected:=true;end;
  if not rejected then raise exception 'generic receipt mutated linked ledger';end if;
  perform public.benchmark_finish_mission_call(call_id,15);
+ perform public.benchmark_reconcile_linked_receipt(call_id,'fixture','receipt-1',15);
+ perform public.benchmark_reconcile_linked_receipt(call_id,'fixture','receipt-1',15);
  if (select spent_tokens from public.benchmark_budget_accounts where id=account)<>15
  or (select actual_tokens from public.agent_missions where id=m)<>15
  then raise exception 'atomic settlement mismatch';end if;
  perform public.benchmark_finish_mission_call(call_id,15);
  if (select spent_tokens from public.benchmark_budget_accounts where id=account)<>15
  then raise exception 'replay double charged';end if;
- raise notice 'linked reservation, generic guards, atomic settlement and replay passed';
+ rejected:=false;
+ begin perform public.benchmark_reconcile_linked_receipt(call_id,'fixture','receipt-2',15);
+ exception when others then rejected:=true;end;
+ if not rejected then raise exception 'conflicting linked receipt accepted';end if;
+ raise notice 'linked guards, atomic settlement, receipt and replay passed';
 end $$;
