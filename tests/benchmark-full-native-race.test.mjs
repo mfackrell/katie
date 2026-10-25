@@ -43,6 +43,13 @@ test('Full native trial admission uses two real PostgreSQL connections and one m
    '20261025205000_benchmark_native_owner_assignment_grants'])
     await db.query(readFileSync('supabase/migrations/'+name+'.sql','utf8'));
   await db.query('set role service_role');
+  await db.query("insert into actors(id,name) values('a1111111-1111-4111-8111-111111111111','Native acceptance fixture')");
+  await db.query("insert into chats(id,actor_id,title) values('a2222222-2222-4222-8222-222222222222','a1111111-1111-4111-8111-111111111111','Native acceptance fixture')");
+  await db.query(`insert into managed_agents(actor_id,config) values
+   ('a1111111-1111-4111-8111-111111111111',
+    '{"name":"Native Developer","instructions":"Test only",
+    "research":true,"development":true,"attachments":false,
+    "reviewMode":"always","maxActiveTasks":1,"maxInputChars":1000}'::jsonb)`);
   await db.query(readFileSync('tests/sql/benchmark-full-native-external-admission.sql','utf8'));
   const row=(await db.query(`select g.trial_id,g.token_digest,g.execution_epoch,g.project_id,
     m.id as mission_id
