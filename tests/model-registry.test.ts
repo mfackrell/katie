@@ -74,13 +74,15 @@ test("router consumes registry snapshot and avoids manual_override_only entries"
     ]
   ]);
 
-  const selected = await chooseProvider("summarize this note", "", [google], {
-    requestIntent: "general-text",
-    modelRegistrySnapshot: snapshot,
-    routingTraceEnabled: false
-  });
-
-  assert.equal(selected.modelId, "gemini-3.1-flash");
+  for (const excludedEligibility of ["manual_override_only", "disabled"] as const) {
+    snapshot.get("google")![0].routing_eligibility = excludedEligibility;
+    const selected = await chooseProvider("summarize this note", "", [google], {
+      requestIntent: "general-text",
+      modelRegistrySnapshot: snapshot,
+      routingTraceEnabled: false
+    });
+    assert.equal(selected.modelId, "gemini-3.1-flash");
+  }
 });
 
 test("only confirmed upstream 404 quarantines a model; transient failures never do", () => {
