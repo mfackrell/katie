@@ -69,18 +69,20 @@ export function createSelfInspectionTools(input: {
         const sha=await pin(signal); if(!sha)return blocked('GitHub source pin unavailable.');
         const tree=await github(`git/trees/${sha}?recursive=1`,signal);
         const paths=(tree.tree??[]).filter((p:TreeEntry)=>p.type==='blob'&&pathSchema.safeParse({path:p.path}).success).map((p:TreeEntry)=>p.path);
-        const offset=args.offset??0,limit=args.limit??100;
+        const parsed=z.object({offset:z.number().int().min(0).optional(),limit:z.number().int().min(1).max(200).optional()}).strict().parse(args);
+        const offset=parsed.offset??0,limit=parsed.limit??100;
         return {sha,paths:paths.slice(offset,offset+limit),nextOffset:offset+limit<paths.length?offset+limit:null,totalVisible:paths.length,githubTreeTruncated:tree.truncated===true};
       } },
     { name: 'github_read_file', description: 'Read a bounded UTF-8 source file at the pinned own repository SHA. Secret/config credential paths are denied.',
       parameters: objectSchema({path:{type:'string',maxLength:240},startLine:{type:'integer',minimum:1},lineCount:{type:'integer',minimum:1,maximum:150}}, ['path']), validate: pathSchema.extend({startLine:z.number().int().min(1).optional(),lineCount:z.number().int().min(1).max(150).optional()}),
       execute: async (args, signal) => {
-        const {path} = pathSchema.parse({path:args.path}); const sha = await pin(signal);
+        const parsed=pathSchema.extend({startLine:z.number().int().min(1).optional(),lineCount:z.number().int().min(1).max(150).optional()}).parse(args);
+        const {path} = parsed; const sha = await pin(signal);
         if (!sha) return blocked('GitHub source pin unavailable. Connect GitHub first.');
         const file = await github(`contents/${path.split('/').map(encodeURIComponent).join('/')}?ref=${sha}`, signal);
         if (file.encoding !== 'base64' || typeof file.content !== 'string' || file.size > 700000) return blocked('Source file exceeds retrieval bound.');
         const lines=Buffer.from(file.content, 'base64').toString('utf8').split('\n');
-        const startLine=args.startLine??1, lineCount=args.lineCount??Math.min(150,lines.length);
+        const startLine=parsed.startLine??1, lineCount=parsed.lineCount??Math.min(150,lines.length);
         return { repository:'mfackrell/katie',sha,path,blobSha:file.sha,startLine,endLine:Math.min(lines.length,startLine+lineCount-1),totalLines:lines.length,hasMore:startLine+lineCount<=lines.length,text:lines.slice(startLine-1,startLine-1+lineCount).join('\n') };
       } },
     { name: 'github_ci', description: 'Inspect check runs and commit statuses for the pinned own repository SHA.', parameters: objectSchema(), validate: empty,
