@@ -58,3 +58,23 @@ test('native independent reviewers are isolated and every phase shares the meter
  assert.match(child,/NATIVE_REVIEW_RESULT/);
  assert.doesNotMatch(child,/OPENAI_API_KEY|SUPABASE_SERVICE_ROLE_KEY/);
 });
+
+test('native completion evidence is pinned to reviewed commit and separately tested head',()=>{
+ assert.match(host,/commitCandidate\('native: checkpoint approved implementation'\)/);
+ assert.match(host,/commitCandidate\('native: checkpoint bounded repair'\)/);
+ assert.match(host,/project-scope\.mjs/);
+ assert.match(host,/reviewedHeadSha:candidateHead/);
+ assert.match(workflow,/project-scope\.mjs" "\$RUNNER_TEMP\/agent-task\/AGENT_REQUEST\.md" --verify-committed/);
+ assert.match(workflow,/\.reviewedHeadSha == \$head/);
+ assert.match(workflow,/\.projectId == \$project/);
+ assert.match(workflow,/\$TEST" == true && "\$BUILD" == success/);
+ assert.match(workflow,/approved project browser acceptance is missing or failed/);
+ assert.match(workflow,/if \[\[ "\$REPAIR" == success && "\$\{NATIVE:-false\}" != true \]\]/);
+});
+test('native reviews require immutable approved baseline and readonly execution',()=>{
+ assert.match(child,/NATIVE_BASELINE_MISSING/);
+ assert.match(child,/git diff /);
+ assert.match(child,/baseline\+'\.\.\.HEAD'/);
+ assert.match(host,/KATIE_NATIVE_BASELINE_SHA',proof\.baselineSha/);
+ assert.match(host,/reviewing\?'--ro-bind':'--bind'/);
+});
