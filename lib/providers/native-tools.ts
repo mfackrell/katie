@@ -52,7 +52,12 @@ export async function nativeToolTurn(provider: LlmProvider['name'], apiKey: stri
       return all;
     }, []);
   }
+  const endpoint = provider === 'google' ? 'generateContent' : provider === 'anthropic' ? 'messages' : responsesApi ? 'responses' : 'chat-completions';
+  let phase = 'request';
+  let httpStatus: number | null = null;
+  try {
   const res = await fetch(url, { method: 'POST', headers, body: JSON.stringify(body), signal: p.signal, cache: 'no-store' });
+  httpStatus = res.status;
   // Never propagate a credential-bearing upstream error body into model context or audit.
   if (!res.ok) {
     await res.body?.cancel();
@@ -63,12 +68,14 @@ export async function nativeToolTurn(provider: LlmProvider['name'], apiKey: stri
       ? 'upstream_auth_or_access_denied' : res.status === 404 ? 'upstream_model_or_endpoint_not_found' : 'upstream_http_error';
     throw error;
   }
+  phase = 'response-read';
   const reader = res.body?.getReader();
   if (!reader) throw new Error('Tool model response missing');
   const chunks: Uint8Array[] = []; let size = 0;
   try { for (;;) { const {done, value} = await reader.read(); if (done) break; size += value.length;
     if (size > 256_000) throw new Error('Tool model response exceeded bounds'); chunks.push(value); }
   } catch (error) { await reader.cancel().catch(() => {}); throw error; }
+  phase = 'response-parse';
   const data = JSON.parse(Buffer.concat(chunks).toString('utf8'));
   let text = ''; let calls: ToolTurn['calls'] = [];
   if (responsesApi) {
@@ -95,4 +102,23 @@ export async function nativeToolTurn(provider: LlmProvider['name'], apiKey: stri
   if (!text && !calls.length) throw new Error('Tool model returned no text or calls');
   if (calls.length > 8 || calls.some(c => typeof c.id !== 'string' || typeof c.name !== 'string')) throw new Error('Invalid tool calls');
   return { response: { text, model: data.model ?? data.modelVersion ?? p.modelId, provider, truncated: data.status === 'incomplete' || data.stop_reason === 'max_tokens' || data.choices?.[0]?.finish_reason === 'length' || data.candidates?.[0]?.finishReason === 'MAX_TOKENS' }, calls, ...(provider === 'google' ? { nativeParts: data.candidates?.[0]?.content?.parts } : responsesApi ? { nativeParts: data.output } : {}) };
+  } catch (error) {
+    const status = error && typeof error === 'object' && 'status' in error && typeof (error as {status?:unknown}).status === 'number'
+      ? (error as {status:number}).status : httpStatus;
+    const errCode = error && typeof error === 'object' && 'code' in error && typeof (error as {code?:unknown}).code === 'string'
+      ? (error as {code:string}).code : null;
+    const aborted = p.signal.aborted || (error instanceof Error && error.name === 'AbortError');
+    const timeout = error instanceof Error && (error.name === 'TimeoutError' || /timed out/i.test(error.message));
+    const classification = aborted ? 'aborted' : timeout ? 'timeout'
+      : status === 429 ? 'rate_limited' : status === 401 || status === 403 ? 'auth_or_access'
+      : status === 404 ? 'model_or_endpoint_not_found' : status !== null && status >= 500 ? 'upstream_server_error'
+      : phase === 'response-parse' ? 'invalid_response' : status === null ? 'transport_error' : 'provider_error';
+    // No body, URL query, raw exception string, prompts or secrets are logged.
+    console.warn('[NativeTool] provider_attempt_failed', {
+      requestId:p.requestId ?? 'unknown', turn:p.turn ?? null, provider, modelId:p.modelId,
+      endpoint, phase, status, code:errCode && /^[a-zA-Z0-9_.-]{1,80}$/.test(errCode) ? errCode : null,
+      classification,
+    });
+    throw error;
+  }
 }
