@@ -50,7 +50,9 @@ try{
  }catch(error){diagnostics.push(String(error?.message||error).slice(0,400));}
  assert(completed,'initial synthetic turn did not complete');
  const priorRequests=requests.length;
- const resumed=codex.resumeThread(thread.id,{workingDirectory:repo,skipGitRepoCheck:false,sandboxMode:'workspace-write'});
+ const recoveredSdk=new Codex({baseUrl:'http://127.0.0.1:'+port+'/v1',apiKey:'synthetic-only',
+  env:{PATH:process.env.PATH||'',HOME:home,CODEX_HOME:state,CODEX_SQLITE_HOME:state,CODEX_API_KEY:'synthetic-only'}});
+ const resumed=recoveredSdk.resumeThread(thread.id,{workingDirectory:repo,skipGitRepoCheck:false,sandboxMode:'workspace-write'});
  let resumedComplete=false;
  const continuation=await resumed.runStreamed('Continue this session. Reply SYNTHETIC_READY again.');
  for await(const event of continuation.events){
