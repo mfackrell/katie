@@ -8,6 +8,8 @@ const require=createRequire('/work/package.json');
 const {Codex}=await import(pathToFileURL(require.resolve('@openai/codex-sdk')).href);
 const phase=process.env.KATIE_NATIVE_PHASE||'implementation';
 if(!['implementation','review','repair','final-review'].includes(phase))throw Error('NATIVE_PHASE_INVALID');
+const baseline=process.env.KATIE_NATIVE_BASELINE_SHA;
+if(!/^[a-f0-9]{40}$/.test(baseline??''))throw Error('NATIVE_BASELINE_MISSING');
 const root='/work',home='/tmp/native-home',state=join(home,'.codex');
 mkdirSync(state,{recursive:true});
 const gateway='http://127.0.0.1:43181/v1';
@@ -29,7 +31,9 @@ const prompts={
  repair:'Read the immutable owner request at /trusted/AGENT_REQUEST.md and /trusted/review-findings.txt. Fix only the independent reviewer findings in approved scope. Run tests. Do not publish, merge, deploy or bypass accounting.',
  'final-review':'You are a fresh independent reviewer. Read the immutable owner request at /trusted/AGENT_REQUEST.md and inspect all current changes and tests. Do not edit. Your FINAL reply must start with precisely PASS or CHANGES_REQUESTED, followed by actionable findings. Request changes if prior findings remain.'
 };
-const {events}=await thread.runStreamed(prompts[phase]);
+const reviewing=phase==='review'||phase==='final-review';
+const anchored=reviewing?prompts[phase]+' Independently inspect the complete diff with git diff '+baseline+'...HEAD. Verify that commit HEAD contains all reviewed changes.':prompts[phase];
+const {events}=await thread.runStreamed(anchored);
 for await(const event of events){
  if(event.type==='thread.started')process.stdout.write('NATIVE_THREAD='+JSON.stringify(event)+'\n');
  if(event.type==='item.completed'&&event.item?.type==='agent_message'&&typeof event.item.text==='string')reviewMessage=event.item.text;
