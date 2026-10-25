@@ -1,4 +1,4 @@
-import {createHash,randomUUID,timingSafeEqual} from 'node:crypto';
+import {createHash,randomUUID} from 'node:crypto';
 
 // Trusted gateway process only. Never supply its service-role DB client,
 // provider credentials, or bearer grant to the native agent's shell environment.
@@ -17,6 +17,10 @@ export async function forwardAuthorizedModelRequest({
   throw Error('GATEWAY_CONFIGURATION_INVALID');
  // Every actual attempt has its own operation identity. No SDK turn-level
  // accounting and no "attested=true" substitute for DB reservation.
+ const live=await db.rpc('benchmark_gateway_execution_live',{
+  p_digest:tokenDigest(grantToken),p_trial:trialId,p_epoch:executionEpoch
+ });
+ if(live.error||live.data!==true)throw Error('GATEWAY_EXECUTION_STOPPED');
  const key=randomUUID();
  const {data:id,error}=await db.rpc('benchmark_grant_reserve',{
   p_digest:tokenDigest(grantToken),p_trial:trialId,p_epoch:executionEpoch,
