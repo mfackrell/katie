@@ -220,6 +220,9 @@ jobs:
           NATIVE: ${{ steps.task.outputs.native }}
         run: |
           set -euo pipefail
+          # Candidate code never gets to select Git hooks, monitoring helpers,
+          # diff programs or external protocols during credentialed publication.
+          git() { command git -c core.hooksPath=/dev/null -c core.fsmonitor=false -c core.pager=cat -c diff.external= -c protocol.ext.allow=never "$@"; }
           # Do not create another implementation PR for an issue that already
           # has an open PR. The orchestrator must recover/continue existing work.
           existing="$(gh pr list --repo "$GITHUB_REPOSITORY" --state open --limit 200 --json number,headRefName,title,body |
