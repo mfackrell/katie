@@ -64,6 +64,14 @@ export function createSelfInspectionTools(input: {
         if (!sha || !/^[a-f0-9]{40}$/.test(sha)) return blocked('Runtime revision unavailable.');
         return {status:'runtime_reported',sha,source:'VERCEL_GIT_COMMIT_SHA',limitation:'Does not independently prove Vercel alias assignment or acceptance tests.'};
       } },
+    { name: 'github_source_paths', description: 'Page allowed source paths at the pinned SHA; use offset to continue beyond the first 800 entries.', parameters:objectSchema({offset:{type:'integer',minimum:0},limit:{type:'integer',minimum:1,maximum:200}}),validate:z.object({offset:z.number().int().min(0).optional(),limit:z.number().int().min(1).max(200).optional()}).strict(),
+      execute:async (args,signal)=>{
+        const sha=await pin(signal); if(!sha)return blocked('GitHub source pin unavailable.');
+        const tree=await github(`git/trees/${sha}?recursive=1`,signal);
+        const paths=(tree.tree??[]).filter((p:TreeEntry)=>p.type==='blob'&&pathSchema.safeParse({path:p.path}).success).map((p:TreeEntry)=>p.path);
+        const offset=args.offset??0,limit=args.limit??100;
+        return {sha,paths:paths.slice(offset,offset+limit),nextOffset:offset+limit<paths.length?offset+limit:null,totalVisible:paths.length,githubTreeTruncated:tree.truncated===true};
+      } },
     { name: 'github_read_file', description: 'Read a bounded UTF-8 source file at the pinned own repository SHA. Secret/config credential paths are denied.',
       parameters: objectSchema({path:{type:'string',maxLength:240}}, ['path']), validate: pathSchema,
       execute: async (args, signal) => {
