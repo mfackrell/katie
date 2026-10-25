@@ -621,6 +621,7 @@ jobs:
           REPAIR: ${{ needs.repair.result }}
           RETEST: ${{ needs.repair.outputs.passed }}
           FINAL: ${{ needs.final-review.outputs.verdict }}
+          NATIVE: ${{ needs.build.outputs.native }}
           PROJECT: ${{ needs.build.outputs.project }}
           PROJECT_ID: ${{ needs.build.outputs.project_id }}
           CONTRACT_HASH: ${{ needs.build.outputs.contract_hash }}
@@ -642,21 +643,35 @@ jobs:
           if [[ "$outcome" == READY* ]] && { [[ ! "$tested_head" =~ ^[a-f0-9]{40}$ ]] || [[ "$tested_head" != "$reviewed_head" ]]; }; then
             outcome='BLOCKED — tested and reviewed commits differ or are unavailable'
           fi
-          # Native model verdicts alone cannot authorize completion.
-          # Review happens before the final commit and is not bound to a
-          # tested/reviewed SHA. Fail closed until post-commit acceptance exists.
+          # Native phases run through one trusted metered host, not unmetered
+          # review/repair jobs. Verify its authenticated task association and
+          # committed review SHA against the separately tested candidate.
           if [[ "${NATIVE:-false}" == true ]]; then
             evidence="$RUNNER_TEMP/native-review/native-metered-review.json"
-            if jq -e '.version == 1 and .metered == true and .completed == true and .review.verdict != null and .finalReview.verdict == "pass"' "$evidence" >/dev/null 2>&1; then
-              outcome='BLOCKED — native metered review recorded; post-commit acceptance unverified'
-            else
-              outcome='BLOCKED — trusted native metered review evidence missing or failed'
+            outcome='BLOCKED — trusted metered native review missing or mismatched'
+            if [[ "$TEST" == true && "$BUILD" == success && "$TEST_HEAD" =~ ^[a-f0-9]{40}$ ]] &&
+              jq -e --arg head "$TEST_HEAD" --arg project "$PROJECT_ID" '
+                .version == 1 and .metered == true and .completed == true and
+                .projectId == $project and .reviewedHeadSha == $head and
+                (.review.verdict == "pass" or .review.verdict == "changes_requested") and
+                .finalReview.verdict == "pass" and
+                ((.repairPerformed == false and .review.verdict == "pass") or
+                 (.repairPerformed == true and .review.verdict == "changes_requested"))
+              ' "$evidence" >/dev/null 2>&1; then
+              reviewed_head="$TEST_HEAD"
+              tested_head="$TEST_HEAD"
+              if [[ "$(jq -r '.repairPerformed' "$evidence")" == true ]]; then
+                REVIEW='changes_requested'; REPAIR='success'; RETEST="$TEST"; FINAL='pass'
+              else
+                REVIEW='pass'; REPAIR='skipped'; RETEST=''; FINAL=''
+              fi
+              outcome='READY — awaiting owner approval'
             fi
           fi
           acceptance='null'
           if [[ "${PROJECT:-false}" == true ]]; then
             acceptance_file="$RUNNER_TEMP/project-browser/project-browser-test/project-acceptance.json"
-            if [[ "$REPAIR" == success ]]; then acceptance_file="$RUNNER_TEMP/project-browser/project-browser-retest/project-acceptance.json"; fi
+            if [[ "$REPAIR" == success && "${NATIVE:-false}" != true ]]; then acceptance_file="$RUNNER_TEMP/project-browser/project-browser-retest/project-acceptance.json"; fi
             if jq -e --arg head "$tested_head" --arg project "$PROJECT_ID" --arg contract "$CONTRACT_HASH" --argjson count "$SCENARIO_COUNT" '
               .version == 1 and .projectId == $project and .contractHash == $contract and
               .headSha == $head and .passed == true and (.checks | type == "array" and length == $count and length > 0) and
