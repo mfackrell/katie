@@ -40,7 +40,8 @@ begin
  select * into acc from public.benchmark_budget_accounts where id=a.account_id for update;
  if t.id is null or acc.id is null or t.state not in ('qualified','running') or
  t.owner_actor_id<>a.actor_id or acc.owner_actor_id<>a.actor_id or
- acc.trial_id<>t.id or a.protocol_digest !~ '^[a-f0-9]{64} 'spending binding mismatch';end if;
+ acc.trial_id<>t.id or a.protocol_digest !~ '^[a-f0-9]{64}$'
+ then raise exception 'spending binding mismatch';end if;
  if acc.cap_tokens>a.max_tokens or acc.frozen_at is not null
  then raise exception 'approval ceiling invalid';end if;
  insert into public.benchmark_execution_grants(token_digest,trial_id,account_id,
