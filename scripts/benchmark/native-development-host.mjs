@@ -95,6 +95,7 @@ try{
    '--ro-bind','/lib','/lib','--ro-bind','/lib64','/lib64',
    '--ro-bind','/opt','/opt',reviewing?'--ro-bind':'--bind',process.cwd(),'/work',
    '--dir','/trusted','--ro-bind',childFile,'/trusted/native-development-child.mjs',
+   '--ro-bind',requestFile,'/trusted/AGENT_REQUEST.md',
    ...(findings?['--ro-bind',join(root,'review-findings.txt'),'/trusted/review-findings.txt']:[]),
    '--bind',sockdir,'/gateway','--tmpfs','/tmp','--proc','/proc','--dev','/dev',
    '--setenv','HOME','/tmp/agent','--setenv','CODEX_HOME','/tmp/agent/.codex',
