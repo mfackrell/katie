@@ -22,9 +22,13 @@ export async function meteredRequest({reserve,finalize,invoke,requestId,model,ma
   const inputTokens=u?.inputTokens;
   const outputTokens=u?.outputTokens;
   if(!Number.isSafeInteger(inputTokens)||inputTokens<0||
-     !Number.isSafeInteger(outputTokens)||outputTokens<0||
-     inputTokens+outputTokens>upper)
+     !Number.isSafeInteger(outputTokens)||outputTokens<0)
    throw Error('BENCHMARK_PROVIDER_USAGE_UNVERIFIED');
+  if(inputTokens+outputTokens>upper){
+   reconciliationAttempted=true;
+   await finalize({reservationId:reservation.id,requestId,usage:{inputTokens,outputTokens},status:'overrun'});
+   throw Error('BENCHMARK_PROVIDER_CAP_VIOLATION');
+  }
   reconciliationAttempted=true;
   const result=await finalize({reservationId:reservation.id,requestId,usage:{inputTokens,outputTokens},status:'completed'});
   if(result?.committed!==true)throw Error('BENCHMARK_ACCOUNTING_COMMIT_FAILED');

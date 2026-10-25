@@ -18,11 +18,21 @@ export function durableBenchmarkAdapter(db,accountId) {
       return {accepted:typeof id==='string'&&id.length>0,id};
     },
     finalize:async({reservationId,status,usage})=>{
-      if(status!=='completed')return {committed:false}; // unresolved hold persists in the database
+      if(status==='unresolved')return {committed:false}; // unresolved hold persists in the database
+      if(!usage)throw Error('BENCHMARK_USAGE_REQUIRED');
       const actual=usage.inputTokens+usage.outputTokens;
+      if(status==='overrun')return {committed:await call('benchmark_record_overrun',{p_call:reservationId,p_actual:actual})===true};
+      if(status!=='completed')throw Error('BENCHMARK_INVALID_SETTLEMENT');
       return {committed:await call('benchmark_settle_call',{p_call:reservationId,p_actual:actual})===true};
     }
    }),
+  reconcileProviderReceipt:async({reservationId,providerNamespace,providerRequestId,inputTokens,outputTokens})=>{
+   if(!reservationId || typeof providerNamespace!=='string' || !providerNamespace.trim() ||
+      typeof providerRequestId!=='string' || !providerRequestId.trim() ||
+      !Number.isSafeInteger(inputTokens)||inputTokens<0 || !Number.isSafeInteger(outputTokens)||outputTokens<0)
+     throw Error('BENCHMARK_RECEIPT_INCOMPLETE');
+   return call('benchmark_reconcile_receipt',{p_call:reservationId,p_namespace:providerNamespace,p_provider_request:providerRequestId,p_actual:inputTokens+outputTokens});
+  },
   redeemApprovedIncrease:async(approvalId)=>{
    if(typeof approvalId!=='string'||!approvalId)throw Error('BENCHMARK_APPROVAL_ID_REQUIRED');
    return call('benchmark_redeem_approval',{p_approval:approvalId});
