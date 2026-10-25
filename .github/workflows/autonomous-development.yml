@@ -152,6 +152,8 @@ jobs:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           KATIE_BENCHMARK_PAID_EXECUTION: ${{ vars.KATIE_BENCHMARK_PAID_EXECUTION }}
           KATIE_NATIVE_EVIDENCE_FILE: ${{ runner.temp }}/native-metered-review.json
+          KATIE_NATIVE_CHECKPOINT_BRANCH: ${{ steps.task.outputs.branch }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           node "$RUNNER_TEMP/native-host/native-development-host.mjs" "$RUNNER_TEMP/original-agent-request.md" "$RUNNER_TEMP/native-benchmark.json" "$RUNNER_TEMP/native-host/native-development-child.mjs"
       - name: Preserve trusted native review evidence
