@@ -28,7 +28,7 @@ const server=createServer((req,res)=>{
   const first=requests.length===1;
   const message=first
    ? {id:'call_shell_1',type:'custom_tool_call',name:'exec',call_id:'call_test_1',
-      input:'const r=await tools.exec_command({cmd:["bash","-lc","printf NATIVE_TOOL_OK > native-tool.txt && test -s native-tool.txt"],workdir:"'+repo+'"});text(r);',status:'completed'}
+      input:'const r=await tools.exec_command({cmd:"printf NATIVE_TOOL_OK > native-tool.txt && test -s native-tool.txt",workdir:"'+repo+'"});text(r);',status:'completed'}
    : {id:'msg_'+requests.length,type:'message',role:'assistant',status:'completed',
       content:[{type:'output_text',text:'NATIVE_TOOL_DONE',annotations:[]}]};
   put('response.output_item.added',{type:'response.output_item.added',output_index:0,item:message});
