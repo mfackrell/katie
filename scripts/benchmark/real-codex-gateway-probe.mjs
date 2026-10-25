@@ -18,7 +18,7 @@ const db={rpc:async(name,args)=>{
 }};
 const server=createNativeHttpBridge({
  db,grantToken:'only-synthetic-'+('z'.repeat(64)),trialId:'trial-synthetic',executionEpoch:1,
- providerNamespace:'local-synthetic',upperTokens:100,
+ providerNamespace:'local-synthetic',upperTokens:100,clientToken:'synthetic-only',
  recordReceipt:async x=>{receipts.push(x);},
  upstream:async body=>{
   providerRequests++;
