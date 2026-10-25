@@ -151,8 +151,16 @@ jobs:
           NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.KATIE_BENCHMARK_SUPABASE_URL }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           KATIE_BENCHMARK_PAID_EXECUTION: ${{ vars.KATIE_BENCHMARK_PAID_EXECUTION }}
+          KATIE_NATIVE_EVIDENCE_FILE: ${{ runner.temp }}/native-metered-review.json
         run: |
           node "$RUNNER_TEMP/native-host/native-development-host.mjs" "$RUNNER_TEMP/original-agent-request.md" "$RUNNER_TEMP/native-benchmark.json" "$RUNNER_TEMP/native-host/native-development-child.mjs"
+      - name: Preserve trusted native review evidence
+        if: always() && steps.task.outputs.native == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-metered-review
+          path: ${{ runner.temp }}/native-metered-review.json
+          if-no-files-found: ignore
       - name: Autonomous developer
         if: steps.task.outputs.native != 'true'
         uses: openai/codex-action@v1
@@ -290,6 +298,7 @@ jobs:
         id: check
         shell: bash
         env:
+          NATIVE: ${{ needs.build.outputs.native }}
           PROJECT: ${{ needs.build.outputs.project }}
           CI: 'true'
           VERCEL_ENV: development
@@ -586,6 +595,13 @@ jobs:
         with:
           pattern: project-browser-*
           path: ${{ runner.temp }}/project-browser
+      - name: Load trusted metered native review
+        if: needs.build.outputs.native == 'true'
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: native-metered-review
+          path: ${{ runner.temp }}/native-review
       - name: Report success or failure to the owner issue
         shell: bash
         env:
@@ -618,6 +634,17 @@ jobs:
           if [[ "$REPAIR" == 'success' ]]; then tested_head="$RETEST_HEAD"; reviewed_head="$FINAL_HEAD"; fi
           if [[ "$outcome" == READY* ]] && { [[ ! "$tested_head" =~ ^[a-f0-9]{40}$ ]] || [[ "$tested_head" != "$reviewed_head" ]]; }; then
             outcome='BLOCKED — tested and reviewed commits differ or are unavailable'
+          fi
+          # Native model verdicts alone cannot authorize completion.
+          # Review happens before the final commit and is not bound to a
+          # tested/reviewed SHA. Fail closed until post-commit acceptance exists.
+          if [[ "${NATIVE:-false}" == true ]]; then
+            evidence="$RUNNER_TEMP/native-review/native-metered-review.json"
+            if jq -e '.version == 1 and .metered == true and .completed == true and .review.verdict == "pass" and .finalReview.verdict == "pass"' "$evidence" >/dev/null 2>&1; then
+              outcome='BLOCKED — native metered review recorded; post-commit acceptance unverified'
+            else
+              outcome='BLOCKED — trusted native metered review evidence missing or failed'
+            fi
           fi
           acceptance='null'
           if [[ "${PROJECT:-false}" == true ]]; then
