@@ -15,7 +15,10 @@ export async function executeThreeArmTreatments({
  if(!gateway?.id||!gateway?.baseUrl)throw Error('BENCHMARK_GATEWAY_REQUIRED');
  // Deliberately non-production: this branch has no trusted admission token or
  // durable native provider gateway. Never forward to a reachable paid endpoint.
- if(!/^https:\\/\\/[a-z0-9.-]+\\.invalid(?:\\/|$)/.test(gateway.baseUrl))
+ let gatewayUrl;
+ try { gatewayUrl=new URL(gateway.baseUrl); } catch { throw Error('BENCHMARK_NONBILLABLE_GATEWAY_ONLY'); }
+ if(gatewayUrl.protocol!=='https:' || !gatewayUrl.hostname.endsWith('.invalid') ||
+    gatewayUrl.username || gatewayUrl.password)
   throw Error('BENCHMARK_NONBILLABLE_GATEWAY_ONLY');
  if(!workspaces||!approvals||!qualifications||!homeRoots)
   throw Error('BENCHMARK_ARM_BINDINGS_REQUIRED');
