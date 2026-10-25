@@ -29,8 +29,8 @@ test('expired, altered, or unsigned trial dispatch cannot execute',()=>{
 test('signed native Developer handoff survives existing compressed owner issue transport',()=>{
  const marker='<!-- katie-managed-task:'+payload.taskId+' -->';
  const project={projectId:payload.projectId,contractHash:payload.contractHash,baselineSha:payload.baselineSha};
- const body=marker+'\\n\\n'+encodeNativeHandoff(payload,key)+'\\n'+
-  '<!-- katie-project: '+Buffer.from(JSON.stringify(project)).toString('base64url')+' -->\\n'+
+ const body=marker+'\n\n'+encodeNativeHandoff(payload,key)+'\n'+
+  '<!-- katie-project: '+Buffer.from(JSON.stringify(project)).toString('base64url')+' -->\n'+
   'Approved engineering objective. '.repeat(3500);
  const packed=packDevelopmentRequest(body,marker);
  assert.notEqual(packed,body);
