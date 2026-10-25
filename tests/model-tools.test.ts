@@ -282,3 +282,14 @@ test('OpenAI adapter preserves upstream HTTP 404 and does not log provider respo
     assert.ok(!logs.join('').includes('sensitive upstream secret'));
   }finally {globalThis.fetch=savedFetch;console.warn=savedWarn;}
 });
+
+test('native inference supports bounded response bodies above the old 256KB limit', async () => {
+  const saved=globalThis.fetch;
+  const oversizedText='a'.repeat(280_000);
+  globalThis.fetch=(async()=>new Response(JSON.stringify({model:'gemini-test',candidates:[{content:{parts:[{text:oversizedText}]}}]}),{status:200})) as typeof fetch;
+  try {
+    const reply=await nativeToolTurn('google','test-key',{modelId:'gemini-test',system:'test',
+      messages:[{role:'user',text:'hello'}],tools:[],signal:AbortSignal.timeout(5000)});
+    assert.equal(reply.response.text.length,oversizedText.length);
+  }finally{globalThis.fetch=saved;}
+});
