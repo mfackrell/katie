@@ -220,3 +220,26 @@ test('a provider that ignores cancellation cannot hold the loop beyond its deadl
     await assert.rejects(runModelTools({...base,deadlineMs:Date.now()+30,provider:{...provider([]),generateToolTurn:async()=>new Promise(()=>{})},audit:async()=>{}}),/timed out|deadline/);
   } finally {clearInterval(keepAlive);}
 });
+
+test('native GPT chat-latest uses chat completions; HTTP status survives safe provider diagnostics',async()=>{
+  const originalFetch=globalThis.fetch;
+  const routes:string[]=[];
+  globalThis.fetch=(async(input:RequestInfo|URL)=>{
+    routes.push(String(input));
+    return new Response('',{status:404});
+  }) as typeof fetch;
+  const options={modelId:'gpt-5-chat-latest',system:'test',messages:[{role:'user',text:'hello'}],tools:[]};
+  try {
+    await assert.rejects(nativeToolTurn('openai','test',options as Parameters<typeof nativeToolTurn>[2]),(error:unknown)=>{
+      assert.equal((error as {status:number}).status,404);
+      assert.equal((error as {code:string}).code,'upstream_model_or_endpoint_not_found');
+      return true;
+    });
+    assert.equal(routes[0],'https://api.openai.com/v1/chat/completions');
+    await assert.rejects(nativeToolTurn('google','test',{...options,modelId:'gemini-pro-latest'} as Parameters<typeof nativeToolTurn>[2]),(error:unknown)=>{
+      assert.equal((error as {status:number}).status,404);
+      return true;
+    });
+    assert.match(routes[1],/generativelanguage.googleapis.com/);
+  } finally {globalThis.fetch=originalFetch;}
+});
