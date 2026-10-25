@@ -266,3 +266,19 @@ test('native failures log request-correlated sanitized HTTP and transport diagno
     assert.ok(!JSON.stringify(records).includes('private'));
   } finally {globalThis.fetch=savedFetch;console.warn=savedWarn;}
 });
+
+test('OpenAI adapter preserves upstream HTTP 404 and does not log provider response body',async()=>{
+  const {OpenAiProvider}=await import('../lib/providers/openai-provider');
+  const savedFetch=globalThis.fetch,savedWarn=console.warn;
+  const logs:string[]=[];
+  globalThis.fetch=(async()=>new Response(JSON.stringify({error:{message:'sensitive upstream secret',type:'invalid_request_error',code:'model_not_found'}}),{status:404,headers:{'content-type':'application/json'}})) as typeof fetch;
+  console.warn=(...args:unknown[])=>{logs.push(JSON.stringify(args));};
+  try {
+    const provider=new OpenAiProvider('test-key');
+    await assert.rejects(provider.generate({modelId:'gpt-5-chat-latest',name:'Katie',persona:'test',summary:'',user:'ping',history:[]}),error=>{
+      assert.equal((error as {status:number}).status,404);
+      return true;
+    });
+    assert.ok(!logs.join('').includes('sensitive upstream secret'));
+  }finally {globalThis.fetch=savedFetch;console.warn=savedWarn;}
+});
