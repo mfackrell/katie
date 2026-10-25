@@ -25,3 +25,19 @@ test('native paid gateway never inherits provider or Supabase credentials',()=>{
  assert.match(grant,/a\.task_id is null/);
  assert.match(grant,/state='running'/);
 });
+
+test('native engineering cannot invoke unmetered review, repair, or final-review model actions',()=>{
+ // Native phases must be explicitly budget-gateway-backed before being enabled.
+ // A normal Codex action with the repository API key would bypass durable
+ // per-request reservations and authoritative receipt settlement.
+ const review=workflow.match(/\n  review:\n([\s\S]*?)\n  repair:/)?.[1];
+ const repair=workflow.match(/\n  repair:\n([\s\S]*?)\n  final-review:/)?.[1];
+ const finalReview=workflow.match(/\n  final-review:\n([\s\S]*?)\n  report:/)?.[1];
+ assert.ok(review && repair && finalReview,'review lifecycle must exist');
+ assert.match(review,/if: needs\.build\.outputs\.native != 'true'/);
+ assert.match(repair,/needs\.review\.result == 'success'/);
+ assert.match(finalReview,/needs\.repair\.result == 'success'/);
+ // Any native paid review/repair integration must replace this fail-closed
+ // barrier with an independently authorized, metered trusted-host path.
+ assert.equal((review+repair+finalReview).match(/openai\/codex-action@v1/g)?.length,3);
+});
