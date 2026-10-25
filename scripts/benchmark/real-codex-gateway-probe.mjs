@@ -1,7 +1,7 @@
 // Real SDK + HTTP bridge qualification. Synthetic transport; no paid credentials.
 import {Codex} from '@openai/codex-sdk';
 import {createNativeHttpBridge} from './native-http-bridge.mjs';
-import {mkdtempSync,mkdirSync,readFileSync,existsSync,rmSync} from 'node:fs';
+import {mkdtempSync,mkdirSync,readFileSync,existsSync,rmSync,writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {execFileSync} from 'node:child_process';
@@ -49,6 +49,7 @@ const server=createNativeHttpBridge({
 try{
  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
  const url='http://127.0.0.1:'+server.address().port+'/v1';
+ writeFileSync(join(codexHome,'config.toml'),'model_provider = "synthetic_http"\n[model_providers.synthetic_http]\nname = "Synthetic HTTP"\nwire_api = "responses"\nrequires_openai_auth = true\nsupports_websockets = false\nbase_url = "'+url+'"\nrequest_max_retries = 0\nstream_max_retries = 0\n');
  const codex=new Codex({baseUrl:url,apiKey:'synthetic-only',env:{
   PATH:process.env.PATH||'',HOME:home,CODEX_HOME:codexHome,CODEX_SQLITE_HOME:codexHome,
   CODEX_API_KEY:'synthetic-only'
