@@ -7,6 +7,7 @@ import { browserOwnerAuth, ownerSessionBearer } from "@/lib/tools/browser-owner-
 export function SelfToolsOwnerSession({ chatId }: { chatId: string }) {
   const client = browserOwnerAuth();
   const [email, setEmail] = useState("");
+  const [emailReady, setEmailReady] = useState(false);
   const [signedIn, setSignedIn] = useState(false);
   const [code, setCode] = useState("");
   const [codeRequested, setCodeRequested] = useState(false);
@@ -15,6 +16,8 @@ export function SelfToolsOwnerSession({ chatId }: { chatId: string }) {
   useEffect(() => {
     if (!client) return;
     let active = true;
+    try { const stored = window.sessionStorage.getItem("katie-owner-otp-email"); if (stored) setEmail(stored); } catch {}
+    setEmailReady(true);
     // Passwordless callback failures arrive in the URL hash, not as a React error.
     const fragment = new URLSearchParams(window.location.hash.replace(/^#/, ""));
     const code = fragment.get("error_code");
@@ -37,6 +40,7 @@ export function SelfToolsOwnerSession({ chatId }: { chatId: string }) {
   async function signIn(event: FormEvent) {
     event.preventDefault();
     if (!client || !email.trim() || busy) return;
+    try { window.sessionStorage.setItem("katie-owner-otp-email", email.trim()); } catch {}
     setBusy(true);
     try {
       const {error} = await client.auth.signInWithOtp({
@@ -54,7 +58,10 @@ export function SelfToolsOwnerSession({ chatId }: { chatId: string }) {
   }
   async function verifyCode(event: FormEvent) {
     event.preventDefault();
-    if (!client || !/^[0-9]{6,8}$/.test(code) || busy) return;
+    if (!client || busy) return;
+    if (!email.trim()) { setNotice("Enter the owner email address before verifying the code. No new email is needed."); return; }
+    if (!/^[0-9]{6,8}$/.test(code)) { setNotice("Enter your six- or eight-digit verification code."); return; }
+    try { window.sessionStorage.setItem("katie-owner-otp-email", email.trim()); } catch {}
     setBusy(true);
     try {
       const {error} = await client.auth.verifyOtp({
@@ -97,7 +104,7 @@ export function SelfToolsOwnerSession({ chatId }: { chatId: string }) {
           <form onSubmit={(event)=>void signIn(event)} className="flex flex-wrap items-center gap-3">
             <label htmlFor="self-tools-owner-email">Owner email</label>
             <input id="self-tools-owner-email" type="email" autoComplete="email" required
-              value={email} onChange={event=>setEmail(event.target.value)} disabled={busy}
+              value={email} onChange={event=>{setEmail(event.target.value);try{window.sessionStorage.setItem("katie-owner-otp-email",event.target.value);}catch{}}} disabled={busy || !emailReady}
               className="min-w-[180px] flex-1 rounded border border-zinc-600 bg-zinc-950 px-3 py-2 text-white"
               placeholder="Email address" />
             {!codeRequested && <button type="submit" disabled={busy} className="rounded bg-emerald-500 px-4 py-2 font-semibold text-zinc-950">Send verification code</button>}
