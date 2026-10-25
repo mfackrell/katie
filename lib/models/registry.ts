@@ -201,9 +201,11 @@ function enrichModelRecord(providerName: LlmProvider["name"], modelId: string, p
  * The upstream catalog is not proof that the model can answer inference requests.
  * Transient errors (timeouts, 429, 5xx) never quarantine a model.
  */
+export function isDefinitiveModelUnavailable(error: unknown): boolean {
+  return Boolean(error && typeof error === "object" && "status" in error && (error as {status?:unknown}).status === 404);
+}
 export async function quarantineUnavailableModel(providerName: LlmProvider["name"], modelId: string, error: unknown): Promise<boolean> {
-  const status = error && typeof error === "object" && "status" in error ? (error as {status?:unknown}).status : null;
-  if (status !== 404) return false;
+  if (!isDefinitiveModelUnavailable(error)) return false;
   const client = getSupabaseAdminClient();
   const {error: dbError} = await client.from("model_registry")
     .update({is_active:false, routing_eligibility:"disabled", failure_reason:"runtime_model_404", last_exception_at:new Date().toISOString()})
