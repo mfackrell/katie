@@ -66,6 +66,10 @@ const clientToken=randomBytes(32).toString('base64url');
 const root=mkdtempSync(join(tmpdir(),'katie-trusted-gateway-'));
 const evidencePath=process.env.KATIE_NATIVE_EVIDENCE_FILE;
 const decisions=[];
+const checkpointBranch=process.env.KATIE_NATIVE_CHECKPOINT_BRANCH;
+if(!/^agent\/issue-[0-9]+-[0-9]+-[0-9]+$/.test(checkpointBranch||'')||!process.env.GH_TOKEN)
+ denied('durable Git checkpoint authority unavailable');
+execFileSync('gh',['auth','setup-git'],{env:{PATH:process.env.PATH||'',GH_TOKEN:process.env.GH_TOKEN},timeout:20000});
 const git=(...args)=>execFileSync('git',args,{cwd:process.cwd(),encoding:'utf8',timeout:20000}).trim();
 const commitCandidate=(label)=>{
   rmSync(join(process.cwd(),'AGENT_REQUEST.md'),{force:true});
@@ -75,7 +79,11 @@ const commitCandidate=(label)=>{
   execFileSync('node',[join(toolsRoot,'project-tools','project-scope.mjs'),requestFile],{cwd:process.cwd(),timeout:20000,stdio:'inherit'});
   execFileSync('node',[join(toolsRoot,'project-tools','recovery-scope.mjs'),requestFile],{cwd:process.cwd(),timeout:20000,stdio:'inherit'});
   git('-c','user.name=katie-native-checkpoint','-c','user.email=katie-native-checkpoint@users.noreply.github.com','commit','-m',label);
-  return git('rev-parse','HEAD');
+  const sha=git('rev-parse','HEAD');
+  // Scope-verified checkpoint persists outside the short-lived runner before
+  // another metered phase begins. GitHub credentials stay in the trusted host.
+  git('push','origin',`HEAD:refs/heads/${checkpointBranch}`);
+  return sha;
 };
 const sockdir=join(root,'sock'),socket=join(sockdir,'gateway.sock');
 mkdirSync(sockdir,{mode:0o700});
