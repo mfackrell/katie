@@ -215,10 +215,12 @@ export async function quarantineUnavailableModel(providerName: LlmProvider["name
   return true;
 }
 
-export async function refreshModelRegistry(providers: LlmProvider[]): Promise<void> {
+export type ModelRefreshOutcome = {provider:LlmProvider["name"];ok:boolean;discovered:number;disabled:number;reason?:string};
+export async function refreshModelRegistry(providers: LlmProvider[]): Promise<ModelRefreshOutcome[]> {
   const client = getSupabaseAdminClient();
   const nowIso = new Date().toISOString();
   const pricingCatalog = await fetchLiteLlmPricingCatalog();
+  const outcomes: ModelRefreshOutcome[] = [];
 
   for (const provider of providers) {
     try {
@@ -287,13 +289,16 @@ export async function refreshModelRegistry(providers: LlmProvider[]): Promise<vo
         discovered_count: discovered.length,
         disabled_count: toDisable.length
       });
+      outcomes.push({provider:provider.name,ok:true,discovered:discovered.length,disabled:toDisable.length});
     } catch (error) {
       console.error("[ModelRegistry] provider_discovery_failed", {
         provider: provider.name,
         error: error instanceof Error ? error.message : String(error)
       });
+      outcomes.push({provider:provider.name,ok:false,discovered:0,disabled:0,reason:"discovery_failed"});
     }
   }
+  return outcomes;
 }
 
 export async function getRoutingRegistryByProvider(providers: LlmProvider[]): Promise<Map<LlmProvider["name"], RegistryRoutingModel[]>> {
