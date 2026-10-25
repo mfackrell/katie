@@ -243,3 +243,26 @@ test('native GPT chat-latest uses chat completions; HTTP status survives safe pr
     assert.match(routes[1],/generativelanguage.googleapis.com/);
   } finally {globalThis.fetch=originalFetch;}
 });
+
+test('native failures log request-correlated sanitized HTTP and transport diagnostics',async()=>{
+  const savedFetch=globalThis.fetch, savedWarn=console.warn;
+  const records:Array<{[key:string]:unknown}>=[];
+  console.warn=((message:unknown,data?:unknown)=>{if(message==='[NativeTool] provider_attempt_failed')records.push(data as Record<string,unknown>);});
+  const params={modelId:'gemini-pro-latest',system:'secret prompt',signal:new AbortController().signal,
+    requestId:'test-request-42',turn:2,messages:[{role:'user',text:'private'}],tools:[]};
+  try {
+    globalThis.fetch=(async()=>new Response('sensitive upstream error',{status:429})) as typeof fetch;
+    await assert.rejects(nativeToolTurn('google','secret-key',params as Parameters<typeof nativeToolTurn>[2]));
+    assert.equal(records[0].requestId,'test-request-42');
+    assert.equal(records[0].provider,'google');
+    assert.equal(records[0].modelId,'gemini-pro-latest');
+    assert.equal(records[0].status,429);
+    assert.equal(records[0].classification,'rate_limited');
+    globalThis.fetch=(async()=>{throw new TypeError('credentials and private details');}) as typeof fetch;
+    await assert.rejects(nativeToolTurn('openai','secret-key',params as Parameters<typeof nativeToolTurn>[2]));
+    assert.equal(records[1].status,null);
+    assert.equal(records[1].classification,'transport_error');
+    assert.ok(!JSON.stringify(records).includes('secret'));
+    assert.ok(!JSON.stringify(records).includes('private'));
+  } finally {globalThis.fetch=savedFetch;console.warn=savedWarn;}
+});
