@@ -11,7 +11,7 @@ const work=join(root,'work'),socketdir=join(root,'socket'),socket=join(socketdir
 mkdirSync(work);mkdirSync(socketdir);
 execFileSync('git',['init','-q',work]);
 const phases=['implementation','review','repair','final-review'];
-let phase=null,forwarded=0;
+let phase=null,arm=null,forwarded=0;
 const reservations=[],receipts=[];
 const db={rpc:async(name,args)=>{
  if(name==='benchmark_gateway_execution_live')return {data:true,error:null};
@@ -27,7 +27,7 @@ const server=createNativeHttpBridge({
  clientToken:'contained-fixture-token',recordReceipt:async r=>receipts.push(r),
  upstream:async request=>{
   forwarded++;
-  assert.equal(phases[forwarded-1],phase,'unexpected SDK retry or continuation');
+  assert.equal(phases[(forwarded-1)%4],phase,'unexpected SDK retry or continuation');
   const verdict=phase==='review'?'CHANGES_REQUESTED: synthetic defect':
    phase==='final-review'?'PASS: synthetic repair verified':'DONE';
   const item={id:'msg_'+forwarded,type:'message',role:'assistant',status:'completed',
@@ -47,6 +47,8 @@ const server=createNativeHttpBridge({
 });
 try{
  await new Promise(resolve=>server.listen(socket,resolve));
+ for(const nextArm of ['native','thin','full']){
+  arm=nextArm;
  for(const next of phases){
   phase=next;
   const reviewing=phase==='review'||phase==='final-review';
@@ -60,6 +62,7 @@ try{
    '--setenv','HOME','/tmp/contained','--setenv','CODEX_HOME','/tmp/contained/.codex',
    '--setenv','PATH',process.env.PATH||'/usr/bin:/bin',
    '--setenv','KATIE_NATIVE_PHASE',phase,
+   '--setenv','KATIE_BENCHMARK_ARM',arm,
    '--setenv','KATIE_OUTER_SANDBOX_CONFIRMED','1',
    '--chdir','/app','/bin/sh','-c',command];
   const child=spawn('bwrap',args,{env:{PATH:process.env.PATH||''}});
@@ -73,12 +76,13 @@ try{
   assert.equal(code,0,phase+':'+errors+'\n'+output);
   assert.match(output,new RegExp('CONTAINED_PHASE_PASS='+phase));
  }
- assert.equal(forwarded,4);
- assert.equal(reservations.length,4,'unmetered native phase');
- assert.equal(receipts.length,4,'unreconciled native phase');
- assert.equal(new Set(reservations.map(x=>x.p_request_key)).size,4);
- assert.equal(receipts.reduce((n,x)=>n+x.actualTokens,0),20);
- console.log('NATIVE_CONTAINED_FOUR_PHASE_E2E_PASS');
+ }
+ assert.equal(forwarded,12);
+ assert.equal(reservations.length,12,'unmetered native phase');
+ assert.equal(receipts.length,12,'unreconciled native phase');
+ assert.equal(new Set(reservations.map(x=>x.p_request_key)).size,12);
+ assert.equal(receipts.reduce((n,x)=>n+x.actualTokens,0),60);
+ console.log('NATIVE_THIN_FULL_SHARED_CONTAINED_PHASES_PASS');
 }finally{
  await new Promise(resolve=>server.close(resolve));
  rmSync(root,{recursive:true,force:true});
