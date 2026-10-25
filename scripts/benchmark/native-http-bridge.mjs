@@ -6,7 +6,7 @@ import {forwardAuthorizedModelRequest} from './authenticated-native-gateway.mjs'
 // The caller must supply a server-owned grant and DB client. This bridge
 // deliberately does not forward model requests unless all dependencies exist.
 export function createNativeHttpBridge({db,grantToken,trialId,executionEpoch,
- providerNamespace,upperTokens,upstream,recordReceipt,clientToken}){
+ providerNamespace,upperTokens,upstream,recordReceipt,clientToken,fullMission=false}){
  if(!db||!grantToken||!trialId||!upstream||!recordReceipt||
     typeof clientToken!=='string'||clientToken.length<12)
   throw Error('NATIVE_GATEWAY_NOT_CONFIGURED');
@@ -31,7 +31,7 @@ export function createNativeHttpBridge({db,grantToken,trialId,executionEpoch,
    if(!body||typeof body.model!=='string')throw Error('MODEL_REQUIRED');
    const result=await forwardAuthorizedModelRequest({
     db,grantToken,trialId,executionEpoch,model:body.model,
-    requestBody:body,upperTokens,upstream,providerNamespace,recordReceipt
+    requestBody:body,upperTokens,upstream,providerNamespace,recordReceipt,fullMission
    });
    if(!result||typeof result.body!=='string')throw Error('UPSTREAM_RESPONSE_INVALID');
    res.writeHead(200,{'content-type':result.contentType||'application/json',
