@@ -51,6 +51,8 @@ test('native independent reviewers are isolated and every phase shares the meter
  assert.match(host,/if\(final\.verdict!=='pass'\)denied/);
  assert.match(host,/reviewing\?'--ro-bind':'--bind'/);
  assert.match(host,/NATIVE_METERED_REVIEW_AND_BOUNDED_REPAIR_COMPLETED/);
+ assert.match(host,/--ro-bind',requestFile,'\/trusted\/AGENT_REQUEST\.md'/);
+ assert.match(child,/immutable owner request at \/trusted\/AGENT_REQUEST\.md/);
  assert.match(child,/KATIE_NATIVE_PHASE/);
  assert.match(child,/sandboxMode:phase==='review'\|\|phase==='final-review'\?'read-only'/);
  assert.match(child,/NATIVE_REVIEW_RESULT/);
