@@ -13,6 +13,10 @@ export async function executeThreeArmTreatments({
  if(typeof composeTreatment!=='function'||typeof createCodex!=='function')
   throw Error('BENCHMARK_ENGINE_REQUIRED');
  if(!gateway?.id||!gateway?.baseUrl)throw Error('BENCHMARK_GATEWAY_REQUIRED');
+ // Deliberately non-production: this branch has no trusted admission token or
+ // durable native provider gateway. Never forward to a reachable paid endpoint.
+ if(!/^https:\\/\\/[a-z0-9.-]+\\.invalid(?:\\/|$)/.test(gateway.baseUrl))
+  throw Error('BENCHMARK_NONBILLABLE_GATEWAY_ONLY');
  if(!workspaces||!approvals||!qualifications||!homeRoots)
   throw Error('BENCHMARK_ARM_BINDINGS_REQUIRED');
  const inputs=[];
