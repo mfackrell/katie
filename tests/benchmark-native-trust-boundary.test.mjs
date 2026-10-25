@@ -57,3 +57,17 @@ test('agent cannot poison credentialed host Git metadata, hooks or dependencies'
   assert.equal(spawnSync('test',['-e',injected]).status,1,'malicious hook ran on host');
  });
 });
+
+test('checkpoint, recovery and publication use the same protected Git boundary',()=>{
+ const host=readFileSync('scripts/benchmark/native-development-host.mjs','utf8');
+ const workflow=readFileSync('.github/workflows/autonomous-development.yml','utf8');
+ assert.match(host,/\.\.\.protectedGitConfig,\.\.\.args/);
+ assert.match(host,/git\('push','origin'/);
+ assert.match(host,/git\('reset','--hard',trustedCheckpointSha\)/);
+ assert.match(host,/\.\.\.protectedNativeMounts\(boundary\)/);
+ const publish=workflow.slice(workflow.indexOf('      - name: Create draft pull request'));
+ assert.match(publish,/git\(\) \{ command git -c core\.hooksPath=\/dev\/null/);
+ assert.match(publish,/git push origin/);
+ assert.match(publish,/git commit -m/);
+ assert.match(workflow,/native-trust-boundary\}\.mjs/);
+});
