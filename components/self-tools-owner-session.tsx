@@ -49,7 +49,7 @@ export function SelfToolsOwnerSession({ chatId }: { chatId: string }) {
         return;
       }
       setCodeRequested(true);
-      setNotice("Verification code requested. Enter the six- or eight-digit code from your email.");
+      setNotice("Verification code requested. The code field remains available after a page refresh; do not request another code if you already have one.");
     } finally { setBusy(false); }
   }
   async function verifyCode(event: FormEvent) {
@@ -97,19 +97,19 @@ export function SelfToolsOwnerSession({ chatId }: { chatId: string }) {
           <form onSubmit={(event)=>void signIn(event)} className="flex flex-wrap items-center gap-3">
             <label htmlFor="self-tools-owner-email">Owner email</label>
             <input id="self-tools-owner-email" type="email" autoComplete="email" required
-              value={email} onChange={event=>setEmail(event.target.value)} disabled={busy || codeRequested}
+              value={email} onChange={event=>setEmail(event.target.value)} disabled={busy}
               className="min-w-[180px] flex-1 rounded border border-zinc-600 bg-zinc-950 px-3 py-2 text-white"
               placeholder="Email address" />
             {!codeRequested && <button type="submit" disabled={busy} className="rounded bg-emerald-500 px-4 py-2 font-semibold text-zinc-950">Send verification code</button>}
           </form>
-          {codeRequested && <form onSubmit={(event)=>void verifyCode(event)} className="flex flex-wrap items-center gap-2">
+          {<form onSubmit={(event)=>void verifyCode(event)} className="flex flex-wrap items-center gap-2">
             <label htmlFor="self-tools-email-code">Verification code</label>
             <input id="self-tools-email-code" inputMode="numeric" pattern="[0-9]{6}([0-9]{2})?" maxLength={8}
               autoComplete="one-time-code" required value={code}
-              onChange={event=>setCode(event.target.value.replace(/\\D/g,"").slice(0,8))}
+              onChange={event=>setCode(event.target.value.replace(/\D/g,"").slice(0,8))}
               className="w-32 rounded border border-zinc-600 bg-zinc-950 px-3 py-2 text-white" />
             <button type="submit" disabled={busy || ![6,8].includes(code.length)} className="rounded bg-emerald-500 px-4 py-2 font-semibold text-zinc-950">Verify code</button>
-            <button type="button" onClick={()=>{setCodeRequested(false);setCode("");setNotice("");}} className="underline">Change email</button>
+
           </form>}
         </div>
       )}
