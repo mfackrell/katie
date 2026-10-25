@@ -11,7 +11,10 @@ test('benchmark binding is checked at existing engineering dispatch before claim
  assert.ok(gate>=0&&gate<claim&&claim<issue);
  assert.match(fn,/bound\.contract_hash!==project\.contractHash/);
  assert.match(fn,/bound\.baseline_sha!==project\.baselineSha/);
- assert.match(fn,/Benchmark native dispatch requires authenticated spending grant/);
+ assert.match(fn,/Benchmark native dispatch denied: no live task-specific owner spending approval/);
+ assert.match(fn,/encodeNativeHandoff/);
+ assert.match(fn,/benchmark_native_spending_approvals/);
+ assert.match(fn,/benchmarkRepository!==binding\.fullName/);
  assert.match(fn,/t\.arm!=='full'/);
  assert.match(fn,/t\.contract_sha256!==project\.contractHash/);
  assert.match(fn,/a\.owner_actor_id!==t\.owner_actor_id/);
