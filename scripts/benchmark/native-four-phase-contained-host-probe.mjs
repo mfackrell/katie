@@ -7,9 +7,9 @@ import {join} from 'node:path';
 import {spawn,execFileSync} from 'node:child_process';
 import assert from 'node:assert/strict';
 const root=mkdtempSync(join(tmpdir(),'four-phase-contained-'));
-const work=join(root,'work'),socketdir=join(root,'socket'),socket=join(socketdir,'gateway.sock');
-mkdirSync(work);mkdirSync(socketdir);
-execFileSync('git',['init','-q',work]);
+const workRoot=join(root,'workspaces'),socketdir=join(root,'socket'),socket=join(socketdir,'gateway.sock');
+mkdirSync(workRoot);mkdirSync(socketdir);
+for(const id of ['native','thin','full']){const dir=join(workRoot,id);mkdirSync(dir);execFileSync('git',['init','-q',dir]);}
 const phases=['implementation','review','repair','final-review'];
 let phase=null,arm=null,forwarded=0;
 const reservations=[],receipts=[];
@@ -57,7 +57,7 @@ try{
    '--ro-bind','/usr','/usr','--ro-bind','/bin','/bin',
    '--ro-bind','/lib','/lib','--ro-bind','/lib64','/lib64',
    '--ro-bind','/opt','/opt','--ro-bind',process.cwd(),'/app',
-   reviewing?'--ro-bind':'--bind',work,'/work',
+   reviewing?'--ro-bind':'--bind',join(workRoot,arm),'/work',
    '--bind',socketdir,'/gateway','--tmpfs','/tmp','--proc','/proc','--dev','/dev',
    '--setenv','HOME','/tmp/contained','--setenv','CODEX_HOME','/tmp/contained/.codex',
    '--setenv','PATH',process.env.PATH||'/usr/bin:/bin',
