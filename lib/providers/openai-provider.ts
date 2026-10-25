@@ -213,7 +213,9 @@ function classifyModel(modelId: string): ModelClassification {
 
   const isResponsesApi =
     (modelLower.includes("gpt-5") || imageGenerationModel || /^o[1-4]/.test(modelLower)) &&
-    !modelLower.includes("search-preview");
+    !modelLower.includes("search-preview") &&
+    // The chat-latest aliases are Chat Completions models, not Responses models.
+    !modelLower.includes("chat-latest");
 
   if (isResponsesApi) {
     return {
