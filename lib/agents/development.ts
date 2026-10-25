@@ -129,18 +129,32 @@ export async function dispatchDevelopment(task: AgentTask, project?: Context, as
     const {data:binding,error}=await getSupabaseAdminClient()
       .from('benchmark_development_dispatches')
       .select('task_id,trial_id,contract_hash,baseline_sha,status')
-      .eq('task_id',task.id)
-      .maybeSingle();
+      .eq('task_id',task.id).maybeSingle();
     if(error)throw Error('Benchmark development binding lookup failed closed');
     if(binding){
       if(binding.contract_hash!==project.contractHash||
          binding.baseline_sha!==project.baselineSha||
          binding.status!=='qualified')
         throw Error('Benchmark dispatch rejected: approved task/contract mismatch');
-      // Do not claim_project_dispatch or submit an owner-authored issue until the
-      // trusted gateway can atomically bind trial, execution epoch, and budget.
+      const {data:trial,error:trialError}=await getSupabaseAdminClient()
+        .from('benchmark_three_arm_trials')
+        .select('id,arm,contract_sha256,baseline_sha,owner_actor_id,state')
+        .eq('id',binding.trial_id).maybeSingle();
+      if(trialError||!trial||trial.arm!=='full'||trial.state!=='qualified'||
+         trial.contract_sha256!==project.contractHash||
+         trial.baseline_sha!==project.baselineSha)
+        throw Error('Benchmark dispatch rejected: trial authority mismatch');
+      const {data:account,error:accountError}=await getSupabaseAdminClient()
+        .from('benchmark_budget_accounts')
+        .select('id,owner_actor_id,trial_id,frozen_at')
+        .eq('trial_id',binding.trial_id).maybeSingle();
+      if(accountError||!account||account.trial_id!==binding.trial_id||
+         account.owner_actor_id!==trial.owner_actor_id||account.frozen_at)
+        throw Error('Benchmark dispatch rejected: missing or quarantined account');
+      // A qualified row is not authenticated spending authorization.
+      // Never reach claim_project_dispatch or issue creation without a real gateway.
       return save(task,'blocked',
-        'Benchmark native dispatch requires verified execution grant and gateway; paid work disabled.');
+        'Benchmark native dispatch requires authenticated spending grant and durable gateway; paid work disabled.');
     }
   }
   let projectHeader='';
