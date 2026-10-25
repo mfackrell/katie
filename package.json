@@ -51,7 +51,10 @@
     "remark-gfm": "4.0.1",
     "@sparticuz/chromium": "148.0.0",
     "playwright-core": "1.63.0",
-    "sharp": "0.33.5"
+    "sharp": "0.33.5",
+    "remark-math": "^6.0.0",
+    "rehype-katex": "^7.0.1",
+    "katex": "^0.16.22"
   },
   "devDependencies": {
     "@types/node": "^22.10.1",
