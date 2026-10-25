@@ -25,6 +25,10 @@
     {
       "path": "/api/internal/reaction-replies/reconcile",
       "schedule": "* * * * *"
+    },
+    {
+      "path": "/api/internal/model-registry/refresh",
+      "schedule": "*/5 * * * *"
     }
   ],
   "git": {
