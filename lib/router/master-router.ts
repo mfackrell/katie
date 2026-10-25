@@ -842,7 +842,7 @@ export async function chooseProvider(
 
   let availableByProvider = modelEntries.map(({ provider, models }) => ({
     provider,
-    models: (models.length ? models : [pickDefaultModel(provider, [])]).filter(
+    models: (models.length || registrySnapshot?.has(provider.name) ? models : [pickDefaultModel(provider, [])]).filter(
       (modelId) => !isBlockedRoutingModel(provider.name, modelId),
     )
   }));
