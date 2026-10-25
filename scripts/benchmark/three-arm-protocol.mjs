@@ -84,10 +84,10 @@ export function buildReport(protocol,records){
 // trusted server-side source plus a verifier signature. Caller records, flags,
 // and evidence IDs above can NEVER establish acceptance.
 export async function buildVerifiedReport(protocol,records,{
- loadAuthority,loadEvidence,verifierPublicKey
+ loadAuthority,loadEvidence,loadOperations,verifierPublicKey
 }={}){
  const base=buildReport(protocol,records);
- if(typeof loadAuthority!=='function'||typeof loadEvidence!=='function'||!verifierPublicKey)
+ if(typeof loadAuthority!=='function'||typeof loadEvidence!=='function'||typeof loadOperations!=='function'||!verifierPublicKey)
   return {...base,verification:'unavailable',accepted:false,comparisonValid:false};
  const authority=await loadAuthority(protocol.experimentId,protocol.replicate);
  if(!authority||authority.protocolDigest!==base.protocolDigest||
@@ -98,8 +98,12 @@ export async function buildVerifiedReport(protocol,records,{
  const verified=[];
  for(const result of base.results){
   const evidence=await loadEvidence(protocol.experimentId,protocol.replicate,result.arm);
+  const canonicalOperations=await loadOperations(protocol.experimentId,protocol.replicate,result.arm);
+  const supplied=records.find(r=>r.arm===result.arm).operations;
+  const costMatched=Array.isArray(canonicalOperations)&&canonicalOperations.length>0&&
+    JSON.stringify(canonicalOperations)===JSON.stringify(supplied);
   const candidate=result.candidateSha;
-  let passed=sha(candidate,40)&&evidence&&evidence.candidateSha===candidate&&
+  let passed=costMatched&&sha(candidate,40)&&evidence&&evidence.candidateSha===candidate&&
     evidence.protocolDigest===base.protocolDigest&&
     evidence.acceptanceSha256===protocol.acceptanceSha256&&
     evidence.arm===result.arm&&
