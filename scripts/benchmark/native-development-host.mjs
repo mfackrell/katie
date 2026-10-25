@@ -116,6 +116,7 @@ try{
    '--setenv','KATIE_NATIVE_MODEL',approval.model,
    '--setenv','KATIE_NATIVE_BRIDGE_TOKEN',clientToken,
    '--setenv','KATIE_NATIVE_PHASE',phase,
+   '--setenv','KATIE_NATIVE_BASELINE_SHA',proof.baselineSha,
    '--setenv','KATIE_OUTER_SANDBOX_CONFIRMED','1',
    '--chdir','/work','/bin/sh','-c',command];
   child=spawn('bwrap',args,{env:{PATH:process.env.PATH||''},stdio:['ignore','pipe','pipe']});
