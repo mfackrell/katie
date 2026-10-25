@@ -42,6 +42,16 @@ jobs:
           fi
           test -x /usr/lib/postgresql/16/bin/initdb
 
+      - name: Install available PostgreSQL fixture server
+        run: |
+          if ! find /usr/lib/postgresql -path '*/bin/initdb' -type f 2>/dev/null | grep -q .; then
+            sudo apt-get update
+            sudo apt-get install -y postgresql
+          fi
+          PG_INITDB="$(find /usr/lib/postgresql -path '*/bin/initdb' -type f | sort -V | tail -n 1)"
+          test -x "$PG_INITDB"
+          echo "KATIE_TEST_PG_BIN=$(dirname "$PG_INITDB")" >> "$GITHUB_ENV"
+
       - name: Run strict CI gate (typecheck + all offline tests + build + smoke)
         run: npm run ci:gate
 
