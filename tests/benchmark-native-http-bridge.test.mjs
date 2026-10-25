@@ -10,7 +10,7 @@ test('real local HTTP POST traverses durable reservation and trusted receipt',as
  }};
  const server=createNativeHttpBridge({db,
   grantToken:'synthetic-'+('z'.repeat(48)),trialId:'trial',executionEpoch:1,
-  providerNamespace:'fixture',upperTokens:100,
+  providerNamespace:'fixture',upperTokens:100,clientToken:'synthetic-fixture-token',
   upstream:async body=>{provider++;assert.equal(body.model,'fixture');
    return {providerRequestId:'provider-1',actualTokens:10,
     body:JSON.stringify({id:'response-1',status:'completed'})};},
@@ -19,7 +19,7 @@ test('real local HTTP POST traverses durable reservation and trusted receipt',as
  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
  try{
   const response=await fetch('http://127.0.0.1:'+server.address().port+'/v1/responses',{
-   method:'POST',headers:{'content-type':'application/json'},
+   method:'POST',headers:{'content-type':'application/json',authorization:'Bearer synthetic-fixture-token'},
    body:JSON.stringify({model:'fixture',input:'test'})});
   assert.equal(response.status,200);
   assert.equal(provider,1);
@@ -36,7 +36,7 @@ test('revoked execution never forwards real HTTP requests',async()=>{
  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
  try{
   const response=await fetch('http://127.0.0.1:'+server.address().port+'/v1/responses',{
-   method:'POST',body:JSON.stringify({model:'fixture'})});
+   method:'POST',headers:{authorization:'Bearer synthetic-fixture-token'},body:JSON.stringify({model:'fixture'})});
   assert.equal(response.status,403);
   assert.equal(sent,0);
  }finally{await new Promise(resolve=>server.close(resolve))}
