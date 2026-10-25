@@ -70,10 +70,10 @@ export async function nativeToolTurn(provider: LlmProvider['name'], apiKey: stri
   }
   phase = 'response-read';
   const reader = res.body?.getReader();
-  if (!reader) throw new Error('Tool model response missing');
+  if (!reader) throw Object.assign(new Error('Tool model response missing'), { code: 'native_response_missing_body' });
   const chunks: Uint8Array[] = []; let size = 0;
   try { for (;;) { const {done, value} = await reader.read(); if (done) break; size += value.length;
-    if (size > 256_000) throw new Error('Tool model response exceeded bounds'); chunks.push(value); }
+    if (size > 2_000_000) throw Object.assign(new Error('Tool model response exceeded bounds'), { code: 'native_response_too_large' }); chunks.push(value); }
   } catch (error) { await reader.cancel().catch(() => {}); throw error; }
   phase = 'response-parse';
   const data = JSON.parse(Buffer.concat(chunks).toString('utf8'));
@@ -99,7 +99,7 @@ export async function nativeToolTurn(provider: LlmProvider['name'], apiKey: stri
       id: c.id, name: c.function.name, arguments: JSON.parse(c.function.arguments),
     }));
   }
-  if (!text && !calls.length) throw new Error('Tool model returned no text or calls');
+  if (!text && !calls.length) throw Object.assign(new Error('Tool model returned no text or calls'), { code: 'native_response_empty' });
   if (calls.length > 8 || calls.some(c => typeof c.id !== 'string' || typeof c.name !== 'string')) throw new Error('Invalid tool calls');
   return { response: { text, model: data.model ?? data.modelVersion ?? p.modelId, provider, truncated: data.status === 'incomplete' || data.stop_reason === 'max_tokens' || data.choices?.[0]?.finish_reason === 'length' || data.candidates?.[0]?.finishReason === 'MAX_TOKENS' }, calls, ...(provider === 'google' ? { nativeParts: data.candidates?.[0]?.content?.parts } : responsesApi ? { nativeParts: data.output } : {}) };
   } catch (error) {
@@ -112,7 +112,8 @@ export async function nativeToolTurn(provider: LlmProvider['name'], apiKey: stri
     const classification = aborted ? 'aborted' : timeout ? 'timeout'
       : status === 429 ? 'rate_limited' : status === 401 || status === 403 ? 'auth_or_access'
       : status === 404 ? 'model_or_endpoint_not_found' : status !== null && status >= 500 ? 'upstream_server_error'
-      : phase === 'response-parse' ? 'invalid_response' : status === null ? 'transport_error' : 'provider_error';
+      : errCode === 'native_response_too_large' ? 'response_size_limit' : errCode === 'native_response_empty' ? 'empty_response' : errCode === 'native_response_missing_body' ? 'missing_response_body' 
+      : phase === 'response-parse' ? 'invalid_response' : status === null ? 'transport_error' : 'response_read_error';
     // No body, URL query, raw exception string, prompts or secrets are logged.
     console.warn('[NativeTool] provider_attempt_failed', {
       requestId:p.requestId ?? 'unknown', turn:p.turn ?? null, provider, modelId:p.modelId,
