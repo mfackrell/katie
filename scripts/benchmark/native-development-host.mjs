@@ -45,6 +45,7 @@ const project=await readOne('work_projects','id',proof.projectId);
 const account=await readOne('benchmark_budget_accounts','id',approval.account_id);
 const task=await readOne('agent_tasks','id',proof.taskId);
 if(trial.arm!=='full'||trial.state!=='qualified'||
+ trial.contract_sha256!==proof.contractHash||trial.baseline_sha!==proof.baselineSha||
  trial.owner_actor_id!==approval.actor_id||
  account.trial_id!==trial.id||account.owner_actor_id!==approval.actor_id||
  project.actor_id!==approval.actor_id||project.chat_id!==approval.chat_id||
@@ -87,11 +88,11 @@ try{
  const args=['--die-with-parent','--new-session','--unshare-all','--clearenv',
   '--ro-bind','/usr','/usr','--ro-bind','/bin','/bin',
   '--ro-bind','/lib','/lib','--ro-bind','/lib64','/lib64',
-  '--ro-bind','/opt','/opt','--ro-bind',process.cwd(),'/work',
+  '--ro-bind','/opt','/opt','--bind',process.cwd(),'/work','--dir','/trusted',
   '--ro-bind',childFile,'/trusted/native-development-child.mjs',
   '--bind',sockdir,'/gateway','--tmpfs','/tmp','--proc','/proc','--dev','/dev',
   '--setenv','HOME','/tmp/agent','--setenv','CODEX_HOME','/tmp/agent/.codex',
-  '--setenv','PATH','/opt/hostedtoolcache/node/22.23.3/x64/bin:/usr/bin:/bin',
+  '--setenv','PATH',process.env.PATH||'/usr/bin:/bin',
   '--setenv','KATIE_NATIVE_MODEL',approval.model,
   '--setenv','KATIE_NATIVE_BRIDGE_TOKEN',clientToken,
   '--setenv','KATIE_OUTER_SANDBOX_CONFIRMED','1',
