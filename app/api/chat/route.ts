@@ -1,3 +1,4 @@
+import { quarantineUnavailableModel } from "@/lib/models/registry";
 import { runSelfInspection } from "@/lib/tools/self-inspection";
 import { authorizeSelfToolCaller } from "@/lib/tools/authorization";
 import {handleProjectChat, startProjectIntent, followupProjectIntent, isProjectStopIntent} from '@/lib/developer/project-conversation';
@@ -3043,6 +3044,13 @@ ${chunkWorkflowSummary}`;
                   });
                 }
                 const failureScope = classifyGenerationFailure(error);
+                if (!attempt.runpodVideoFallback && !attempt.runpodImageFallback) {
+                  void quarantineUnavailableModel(attempt.provider.name, attempt.modelId, error)
+                    .catch((failure) => console.warn("[ModelRegistry] quarantine_write_failed", {
+                      provider: attempt.provider.name, modelId: attempt.modelId,
+                      reason: failure instanceof Error ? failure.message : "unknown",
+                    }));
+                }
                 // RunPod is an independent video provider; its failures must
                 // never mark Gemini unhealthy in the shared provider registry.
                 if (failureScope === "provider" && !attempt.runpodVideoFallback && !attempt.runpodImageFallback) {
