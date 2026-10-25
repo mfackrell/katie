@@ -24,7 +24,7 @@ const thread=codex.startThread({workingDirectory:root,skipGitRepoCheck:false,
  sandboxMode:phase==='review'||phase==='final-review'?'read-only':'danger-full-access',model});
 let completed=false,reviewMessage='';
 const prompts={
- implementation:'Read AGENT_REQUEST.md. Complete the approved engineering work within the permitted paths. Run tests. Do not publish, merge or deploy.',
+ implementation:'Read the immutable owner request at /trusted/AGENT_REQUEST.md. Complete the approved engineering work within the permitted paths. Run tests. Do not publish, merge or deploy.',
  review:'You are a fresh independent reviewer. Read AGENT_REQUEST.md and inspect all uncommitted changes and tests against the approved request. Do not edit any file. Your FINAL reply must start with precisely PASS or CHANGES_REQUESTED, followed by actionable findings. Never say PASS if you cannot independently verify requirements and scope.',
  repair:'Read AGENT_REQUEST.md and /trusted/review-findings.txt. Fix only the independent reviewer findings in approved scope. Run tests. Do not publish, merge, deploy or bypass accounting.',
  'final-review':'You are a fresh independent reviewer. Read AGENT_REQUEST.md and inspect all current changes and tests. Do not edit. Your FINAL reply must start with precisely PASS or CHANGES_REQUESTED, followed by actionable findings. Request changes if prior findings remain.'
