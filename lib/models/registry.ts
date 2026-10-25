@@ -197,6 +197,22 @@ function enrichModelRecord(providerName: LlmProvider["name"], modelId: string, p
   };
 }
 
+/** A definitive 404 on a selected inference model must not be retried indefinitely.
+ * The upstream catalog is not proof that the model can answer inference requests.
+ * Transient errors (timeouts, 429, 5xx) never quarantine a model.
+ */
+export async function quarantineUnavailableModel(providerName: LlmProvider["name"], modelId: string, error: unknown): Promise<boolean> {
+  const status = error && typeof error === "object" && "status" in error ? (error as {status?:unknown}).status : null;
+  if (status !== 404) return false;
+  const client = getSupabaseAdminClient();
+  const {error: dbError} = await client.from("model_registry")
+    .update({is_active:false, routing_eligibility:"disabled", failure_reason:"runtime_model_404", last_exception_at:new Date().toISOString()})
+    .eq("provider_name",providerName).eq("normalized_model_id",normalizeModelId(modelId));
+  if (dbError) throw new Error(dbError.message);
+  console.warn("[ModelRegistry] model_quarantined", {provider:providerName,modelId,reason:"upstream_404"});
+  return true;
+}
+
 export async function refreshModelRegistry(providers: LlmProvider[]): Promise<void> {
   const client = getSupabaseAdminClient();
   const nowIso = new Date().toISOString();
@@ -205,8 +221,33 @@ export async function refreshModelRegistry(providers: LlmProvider[]): Promise<vo
   for (const provider of providers) {
     try {
       const discovered = await provider.listModels();
-      const rows = discovered.map((modelId) => enrichModelRecord(provider.name, modelId, pricingCatalog, nowIso));
+      // Preserve quarantines across discovery: listModels() can still advertise a
+      // model that returns 404 for actual inference.
+      const {data: quarantined, error: quarantineError} = await client.from("model_registry")
+        .select("normalized_model_id,last_exception_at")
+        .eq("provider_name", provider.name).eq("failure_reason","runtime_model_404")
+        .eq("is_active",false);
+      if(quarantineError) throw new Error(quarantineError.message);
+      const quarantinedIds = new Set((quarantined ?? []).map(row=>row.normalized_model_id as string));
+      const rows = discovered.filter(modelId=>!quarantinedIds.has(normalizeModelId(modelId)))
+        .map((modelId) => enrichModelRecord(provider.name, modelId, pricingCatalog, nowIso));
 
+      const probeCandidate = (quarantined ?? []).find(row => discovered.some(id => normalizeModelId(id) === row.normalized_model_id)
+        && (!row.last_exception_at || Date.now()-new Date(row.last_exception_at).getTime() >= 60*60*1000));
+      if (probeCandidate) {
+        const candidateId = discovered.find(id => normalizeModelId(id) === probeCandidate.normalized_model_id)!;
+        try {
+          const result = await provider.generate({modelId:candidateId,name:"Model verification",persona:"Reply with OK only.",summary:"",history:[],user:"OK"});
+          if (result.text?.trim()) {
+            rows.push(enrichModelRecord(provider.name,candidateId,pricingCatalog,nowIso));
+            console.info("[ModelRegistry] model_reverified",{provider:provider.name,modelId:candidateId});
+          }
+        } catch(error) {
+          await client.from("model_registry").update({last_exception_at:nowIso})
+            .eq("provider_name",provider.name).eq("normalized_model_id",normalizeModelId(candidateId));
+          console.warn("[ModelRegistry] model_reverification_failed",{provider:provider.name,modelId:candidateId});
+        }
+      }
       if (rows.length) {
         const { error } = await client.from("model_registry").upsert(rows, { onConflict: "provider_name,normalized_model_id" });
         if (error) {
