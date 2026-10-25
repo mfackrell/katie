@@ -13,6 +13,7 @@ bwrap --die-with-parent --new-session --unshare-all \
  --bind "$root/tmp" /tmp --proc /proc --dev /dev \
  --setenv HOME /tmp/sandbox-home --setenv CODEX_HOME /tmp/sandbox-home/.codex \
  --setenv OPENAI_API_KEY '' --setenv CODEX_ACCESS_TOKEN '' \
+ --setenv KATIE_OUTER_SANDBOX_CONFIRMED 1 \
  --chdir /app /usr/bin/env node scripts/benchmark/real-codex-tools-probe.mjs
 # The tool probe itself checks the actual filesystem edit, shell exit, and
 # intercepted synthetic provider requests before reporting success.
