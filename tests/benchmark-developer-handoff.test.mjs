@@ -9,13 +9,13 @@ test('benchmark binding is checked at existing engineering dispatch before claim
  const claim=fn.indexOf('claim_project_dispatch');
  const issue=fn.indexOf('client.issues.create');
  assert.ok(gate>=0&&gate<claim&&claim<issue);
- assert.match(fn,/binding\.contract_hash!==project\.contractHash/);
- assert.match(fn,/binding\.baseline_sha!==project\.baselineSha/);
+ assert.match(fn,/bound\.contract_hash!==project\.contractHash/);
+ assert.match(fn,/bound\.baseline_sha!==project\.baselineSha/);
  assert.match(fn,/Benchmark native dispatch requires authenticated spending grant/);
- assert.match(fn,/trial\.arm!=='full'/);
- assert.match(fn,/trial\.contract_sha256!==project\.contractHash/);
- assert.match(fn,/account\.owner_actor_id!==trial\.owner_actor_id/);
- assert.match(fn,/account\.frozen_at/);
+ assert.match(fn,/t\.arm!=='full'/);
+ assert.match(fn,/t\.contract_sha256!==project\.contractHash/);
+ assert.match(fn,/a\.owner_actor_id!==t\.owner_actor_id/);
+ assert.match(fn,/a\.frozen_at/);
 });
 test('ordinary projects default to original authorized GitHub path',()=>{
  assert.match(dispatch,/process\.env\.KATIE_NATIVE_BENCHMARK_DISPATCH==='enabled'/);
