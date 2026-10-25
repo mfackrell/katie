@@ -41,3 +41,20 @@ test('revoked execution never forwards real HTTP requests',async()=>{
   assert.equal(sent,0);
  }finally{await new Promise(resolve=>server.close(resolve))}
 });
+
+test('unauthenticated local HTTP request never reserves or forwards',async()=>{
+ let requests=0;
+ const server=createNativeHttpBridge({
+ db:{rpc:async()=>{requests++;return{data:true,error:null}}},
+ grantToken:'synthetic-'+('z'.repeat(48)),trialId:'trial',executionEpoch:1,
+ providerNamespace:'fixture',upperTokens:100,clientToken:'synthetic-fixture-token',
+ upstream:async()=>{requests++},recordReceipt:async()=>{}
+ });
+ await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+ try{
+  const response=await fetch('http://127.0.0.1:'+server.address().port+'/v1/responses',{
+   method:'POST',body:JSON.stringify({model:'fixture'})});
+  assert.equal(response.status,401);
+  assert.equal(requests,0);
+ }finally{await new Promise(resolve=>server.close(resolve))}
+});
