@@ -71,7 +71,10 @@ if(!/^agent\/issue-[0-9]+-[0-9]+-[0-9]+$/.test(checkpointBranch||'')||!process.e
  denied('durable Git checkpoint authority unavailable');
 execFileSync('gh',['auth','setup-git'],{env:{PATH:process.env.PATH||'',GH_TOKEN:process.env.GH_TOKEN},timeout:20000});
 const git=(...args)=>execFileSync('git',args,{cwd:process.cwd(),encoding:'utf8',timeout:20000}).trim();
+let trustedCheckpointSha=git('rev-parse','HEAD');
 const commitCandidate=(label)=>{
+  if(git('rev-parse','HEAD')!==trustedCheckpointSha)
+   denied('native agent changed protected Git commit ancestry');
   rmSync(join(process.cwd(),'AGENT_REQUEST.md'),{force:true});
   git('add','-A');
   const toolsRoot=process.env.RUNNER_TEMP;
@@ -83,6 +86,7 @@ const commitCandidate=(label)=>{
   // Scope-verified checkpoint persists outside the short-lived runner before
   // another metered phase begins. GitHub credentials stay in the trusted host.
   git('push','origin',`HEAD:refs/heads/${checkpointBranch}`);
+  trustedCheckpointSha=sha;
   return sha;
 };
 const sockdir=join(root,'sock'),socket=join(sockdir,'gateway.sock');
@@ -166,7 +170,7 @@ try{
     if(liveError||stillLive!==true)denied('native recovery grant stopped or expired');
     // Only commit-stable source is eligible for retry; partial interrupted
     // edits are discarded. All new provider attempts require fresh admission.
-    git('reset','--hard','HEAD');
+    git('reset','--hard',trustedCheckpointSha);
     git('clean','-fd');
     console.log('NATIVE_BOUNDED_CHILD_RECOVERY_FROM_COMMITTED_CHECKPOINT');
    }
