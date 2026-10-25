@@ -531,12 +531,13 @@ export class OpenAiProvider implements LlmProvider {
         return await this.generateStreamForModel(selectedModel, params, classification, handlers);
       } catch (error: unknown) {
         lastError = error;
-        const detail = error instanceof Error ? error.message : String(error);
-        console.error(`[OpenAiProvider] Streaming API failure for ${selectedModel} via ${classification.endpoint}: ${detail}`);
+        console.warn("[OpenAiProvider] streaming_attempt_failed", { model:selectedModel, endpoint:classification.endpoint,
+          status: error && typeof error === "object" && "status" in error ? (error as {status:unknown}).status : null });
       }
     }
 
-    throw new Error(`OpenAI streaming request failed for model ${requestedModel}${lastError ? `: ${String(lastError)}` : ""}`);
+    if (lastError) throw lastError;
+    throw new Error(`OpenAI streaming request failed for model ${requestedModel}`);
   }
 
   async generate(params: ChatGenerateParams): Promise<ProviderResponse> {
@@ -582,11 +583,12 @@ export class OpenAiProvider implements LlmProvider {
         return await this.generateForModel(selectedModel, params, classification);
       } catch (error: unknown) {
         lastError = error;
-        const detail = error instanceof Error ? error.message : String(error);
-        console.error(`[OpenAiProvider] API failure for ${selectedModel} via ${classification.endpoint}: ${detail}`);
+        console.warn("[OpenAiProvider] attempt_failed", { model:selectedModel, endpoint:classification.endpoint,
+          status: error && typeof error === "object" && "status" in error ? (error as {status:unknown}).status : null });
       }
     }
 
-    throw new Error(`OpenAI request failed for model ${requestedModel}${lastError ? `: ${String(lastError)}` : ""}`);
+    if (lastError) throw lastError;
+    throw new Error(`OpenAI request failed for model ${requestedModel}`);
   }
 }
