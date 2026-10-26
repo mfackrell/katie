@@ -1,3 +1,4 @@
+import { isExplicitKatieSelfInspectionRequest } from "@/lib/tools/self-inspection-intent";
 import { quarantineUnavailableModel } from "@/lib/models/registry";
 import { runSelfInspection } from "@/lib/tools/self-inspection";
 import { authorizeSelfToolCaller } from "@/lib/tools/authorization";
@@ -683,11 +684,7 @@ async function executeChat(request: NextRequest) {
     // Resolve Katie's own repository before either project control or model routing.
     // This does not grant new credentials: writes remain in the existing
     // audited project/developer workflow with its approval and verification.
-    // Natural-language references to "yourself" and "know" in pasted conversations
-    // must never activate the privileged self-inspection execution path.
-    const selfInspectionRequest = /\b(?:your(?:self| own)?|katie(?:'s)?)\b/i.test(message) &&
-      (/\b(?:repository|repo|github|source|codebase|architecture|routing|deployment|logs?|implementation|inspect|debug|fix|edit|modify)\b/i.test(message) ||
-       /^\s*(?:(?:hey|hi)\s+katie[,!.]?\s*)?(?:(?:can|could|would|will)\s+you\s+|(?:please\s+)?)?(?:see|view|inspect|examine|look at|access)\s+(?:yourself|your own (?:system|self|implementation|code)|katie(?:'s)?\s+(?:system|code|implementation))\b/i.test(message));
+    const selfInspectionRequest = isExplicitKatieSelfInspectionRequest(message);
     let selfRepoId: string | null = null;
     const selfToolRequest = (selfInspectionRequest ||
       /\b(?:github|supabase|vercel)\b/i.test(message) &&
