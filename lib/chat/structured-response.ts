@@ -55,7 +55,7 @@ const comparisonBlock = z.object({
     label: short,
     values: z.array(z.string().max(500)).min(2).max(5),
   }).strict()).min(1).max(30),
-}).strict().refine(block => block.rows.every(row => row.values.length === block.columns.length), "Every comparison row must match the column count");
+}).strict();
 const timelineBlock = z.object({
   type: z.literal("timeline"),
   events: z.array(z.object({
@@ -81,7 +81,13 @@ export const structuredResponseSchema = z.object({
   blocks: z.array(visualBlockSchema).min(1).max(30),
   /** Always available when a richer client cannot render the blocks. */
   fallbackMarkdown: z.string().min(1).max(32000),
-}).strict();
+}).strict().superRefine((response, ctx) => {
+  response.blocks.forEach((block, index) => {
+    if (block.type === "comparison" && block.rows.some(row => row.values.length !== block.columns.length)) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Comparison rows must match column count", path: ["blocks", index] });
+    }
+  });
+});
 
 export type StructuredResponse = z.infer<typeof structuredResponseSchema>;
 export type VisualBlock = z.infer<typeof visualBlockSchema>;
