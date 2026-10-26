@@ -10,15 +10,15 @@ function fixtures(arm){
   contract_sha256:'c'.repeat(64),baseline_sha:'b'.repeat(40),
   model_policy_sha256:'d'.repeat(64),tool_profile_sha256:'e'.repeat(64),
   runtime_sha256:'f'.repeat(64),acceptance_sha256:'a'.repeat(64)};
- const account={id:arm+'-account',arm,trial_id:trial.id,owner_actor_id:'actor',cap_tokens:100};
+ const account={id:arm+'-account',arm,trial_id:trial.id,owner_actor_id:'actor',cap_tokens:20000};
  const approval={id:arm+'-approval',trial_id:trial.id,account_id:account.id,
   actor_id:'actor',chat_id:'chat',owner_id:'owner',repository:'mfackrell/katie',
-  model:'synthetic',max_tokens:100,deadline:'2099-01-01T00:00:00Z',
+  model:'synthetic',max_tokens:20000,deadline:'2099-01-01T00:00:00Z',
   task_id:null,project_id:null,mission_assignment_id:null};
  const identity={experimentId:trial.experiment_id,replicate:1,
   baselineSha:trial.baseline_sha,contractSha256:trial.contract_sha256,
   acceptanceSha256:trial.acceptance_sha256,toolProfileSha256:trial.tool_profile_sha256,
-  modelPolicySha256:trial.model_policy_sha256,runtimeSha256:trial.runtime_sha256,tokenCap:100};
+  modelPolicySha256:trial.model_policy_sha256,runtimeSha256:trial.runtime_sha256,tokenCap:20000};
  approval.protocol_digest=createHash('sha256').update(JSON.stringify(identity)).digest('hex');
  return {arm,trial,account,approval,ownerId:'owner',repository:'mfackrell/katie'};
 }
