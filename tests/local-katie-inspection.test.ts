@@ -109,21 +109,20 @@ test("natural clarification commands are routed to guaranteed memory writes", ()
   ]) assert.equal(isExplicitMemoryCorrection(message), false, message);
 });
 
-test("saved assistant replies close their stream before slow LLM-backed memory updates", () => {
+test("saved assistant replies register nonblocking memory updates before stream closure", () => {
   const route = readFileSync("app/api/chat/route.ts", "utf8");
   const save = route.indexOf("await completeChatRequest(requestId, {", route.indexOf("Generation successful. Saving assistant response."));
-  const savedResponseRefresh = route.indexOf("await refreshShortTermMemory(actorId, chatId);", save);
-  const close = route.indexOf("controller.close();", savedResponseRefresh);
-  const defer = route.indexOf("after(async () => {", close);
+  const refreshed = route.indexOf("await refreshShortTermMemory(actorId, chatId);", save);
+  const defer = route.indexOf("after(async () => {", refreshed);
   const longTerm = route.indexOf("maybeUpdateLongTermMemory(actorId, chatId, message)", defer);
   const summary = route.indexOf("maybeUpdateSummary(chatId)", defer);
-  assert.ok(save >= 0 && savedResponseRefresh > save && close > savedResponseRefresh &&
-    defer > close && longTerm > defer && summary > defer,
-    "final response must be saved, sent, and closed before deferred memory work");
-  const synchronousTail = route.slice(savedResponseRefresh, close);
-  assert.doesNotMatch(synchronousTail, /maybeUpdateLongTermMemory|maybeUpdateSummary/,
-    "never await slow memory model calls while the chat stream stays open");
-  assert.match(route.slice(defer, summary + 150), /Promise\.allSettled/,
+  const close = route.indexOf("controller.close();", defer);
+  assert.ok(save >= 0 && refreshed > save && defer > refreshed &&
+    longTerm > defer && summary > defer && close > summary,
+    "response must be durable and deferred work registered before stream close");
+  assert.doesNotMatch(route.slice(refreshed, defer), /await maybeUpdateLongTermMemory|await maybeUpdateSummary/,
+    "do not await memory models synchronously in the response");
+  assert.match(route.slice(defer, summary + 150), /Promise\\.allSettled/,
     "background maintenance should handle partial failures independently");
 });
 
