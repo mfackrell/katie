@@ -2092,7 +2092,7 @@ async function executeChat(request: NextRequest) {
             await saveTaskProgress(actorId, chatId, taskProgress);
             console.log(`[Chat API] Requesting generation from ${provider.name} using model ${modelId}...`);
             const presentationEnabled = process.env.KATIE_PRESENTATION_V1 === "enabled" && !currentAgentTask();
-            if (presentationEnabled) personaForGeneration += "\\n\\n" + PRESENTATION_GENERATION_GUIDANCE;
+            if (presentationEnabled) personaForGeneration += "\n\n" + PRESENTATION_GENERATION_GUIDANCE;
             const presentationFilter = presentationEnabled ? new PresentationStreamFilter() : null;
             const enqueueDelta = (delta: string) => {
               // Always-mode responses remain buffered until the output guard
