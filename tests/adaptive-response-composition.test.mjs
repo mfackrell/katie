@@ -19,7 +19,9 @@ test('policy selects natural formatting without templates or fake status', () =>
   assert.match(policy, /fenced code blocks/);
   assert.match(policy, /verified/);
   assert.match(policy, /actor identity/);
-  assert.match(policy, /never obligatory/);
+  assert.match(policy, /context-appropriate emoji/);
+  assert.match(policy, /do not make every message emoji-free by default/);
+  assert.match(policy, /Never add an emoji merely to fill a quota/);
 });
 
 test('existing GitHub-flavored Markdown rendering and stream remain intact', () => {
