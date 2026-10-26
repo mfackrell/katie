@@ -19,6 +19,30 @@ export const PRESENTATION_GENERATION_GUIDANCE = [
   "No executable code, HTML, CSS, URLs, actions, arbitrary fields or other component types in visual JSON.",
 ].join("\n");
 
+/** Recover only whitespace at prose-block boundaries. Every non-whitespace
+ * character must still occur in canonical order; the strict schema remains the
+ * final authority and the original answer is never rewritten. */
+function reconcileOrderedMarkdown(canonical: string, value: unknown): unknown {
+  if (!Array.isArray(value) || value.length > 30) return value;
+  const markdown = value.filter(block => block?.type === "markdown");
+  if (!markdown.length || markdown.some(block => typeof block.text !== "string" || !block.text.trim())) return value;
+  if (markdown.map(block => block.text).join("") === canonical) return value;
+  let cursor = 0;
+  const replacement = new Map<object, string>();
+  for (const block of markdown) {
+    const body = block.text.trim();
+    const start = canonical.indexOf(body, cursor);
+    if (start < 0 || canonical.slice(cursor, start).trim()) return value;
+    const end = start + body.length;
+    replacement.set(block, canonical.slice(cursor, end));
+    cursor = end;
+  }
+  if (canonical.slice(cursor).trim()) return value;
+  const last = markdown[markdown.length - 1];
+  replacement.set(last, replacement.get(last)! + canonical.slice(cursor));
+  return value.map(block => replacement.has(block) ? { ...block, text: replacement.get(block) } : block);
+}
+
 export function parsePresentationTail(
   raw: string, assets: Array<{ type: string; url: string }> = [],
 ): {
@@ -46,7 +70,7 @@ export function parsePresentationTail(
     }
     const record = parsed as { version: unknown; blocks: unknown };
     const presentation = validatePresentation({
-      version: record.version, blocks: record.blocks, fallbackMarkdown: prefix,
+      version: record.version, blocks: reconcileOrderedMarkdown(prefix, record.blocks), fallbackMarkdown: prefix,
     });
     if (!presentation) console.warn("[Presentation] invalid model payload", {
       issues: (() => { const checked = structuredResponseSchema.safeParse({version:record.version,blocks:record.blocks,fallbackMarkdown:prefix}); return checked.success ? [] : checked.error.issues.map(issue => ({ code:issue.code,path:issue.path })); })(),

@@ -44,6 +44,25 @@ describe("provider-neutral progressive presentation protocol", () => {
       .toEqual(["markdown", "selector", "markdown"]);
     expect(parsePresentationTail(source).text).toBe(ordered);
   });
+  it("recovers omitted boundary newlines while preserving the exact canonical answer", () => {
+    const answer = "Before.\n\nAfter.\n";
+    const source = answer + PRESENTATION_START + JSON.stringify({ version: 1, blocks: [
+      { type: "markdown", text: "Before." }, ...blocks,
+      { type: "markdown", text: "After." },
+    ] }) + PRESENTATION_END;
+    const result = parsePresentationTail(source);
+    expect(result.presentation?.blocks.map(block => block.type)).toEqual(["markdown", "chart", "markdown"]);
+    expect(result.presentation?.blocks.filter(block => block.type === "markdown").map(block => block.text).join("")).toBe(answer);
+    expect(result.text).toBe(answer);
+  });
+  it("does not repair missing, changed or reordered substantive text", () => {
+    for (const texts of [["Before.", "Changed."], ["After.", "Before."], ["Before."]]) {
+      const source = "Before. After." + PRESENTATION_START + JSON.stringify({ version: 1,
+        blocks: [...texts.map(text => ({ type: "markdown", text })), ...blocks],
+      }) + PRESENTATION_END;
+      expect(parsePresentationTail(source)).toEqual({ text: "Before. After.", presentation: null });
+    }
+  });
   it("streams a plain answer without losing content", () => {
     const filter = new PresentationStreamFilter();
     const input = "Just a normal chat message about revenue.";
