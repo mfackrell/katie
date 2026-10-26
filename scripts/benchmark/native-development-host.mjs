@@ -12,6 +12,7 @@ import {createResponsesProvider} from './native-provider-receipts.mjs';
 import {tokenDigest} from './authenticated-native-gateway.mjs';
 import {readNativeHandoff} from './native-dispatch-contract.mjs';
 import {assertTrustedBoundary,protectedNativeMounts,protectedGitConfig} from './native-trust-boundary.mjs';
+import {sharedNativeContainerArgs} from './shared-native-container.mjs';
 const require=createRequire(join(process.cwd(),'package.json'));
 const {createClient}=require('@supabase/supabase-js');
 const [,,requestFile,manifestFile,childFile]=process.argv;
@@ -117,26 +118,24 @@ try{
   if(findings)writeFileSync(join(root,'review-findings.txt'),findings,{mode:0o600});
   const reviewing=phase==='review'||phase==='final-review';
   const command='socat TCP-LISTEN:43181,bind=127.0.0.1,reuseaddr,fork UNIX-CONNECT:/gateway/gateway.sock & p=$!; trap "kill $p 2>/dev/null || :" EXIT; node /trusted/native-development-child.mjs';
-  const args=['--die-with-parent','--new-session','--unshare-all','--clearenv',
-   '--ro-bind','/usr','/usr','--ro-bind','/bin','/bin',
-   '--ro-bind','/lib','/lib','--ro-bind','/lib64','/lib64',
-   '--ro-bind','/opt','/opt',reviewing?'--ro-bind':'--bind',boundary.root,'/work',
-   ...protectedNativeMounts(boundary),
-   '--dir','/trusted','--ro-bind',childFile,'/trusted/native-development-child.mjs',
-   '--ro-bind',join(process.env.RUNNER_TEMP,'native-host','shared-native-phase.mjs'),'/trusted/shared-native-phase.mjs',
-   '--ro-bind',join(process.env.RUNNER_TEMP,'native-host','shared-native-policy.mjs'),'/trusted/shared-native-policy.mjs',
-   '--ro-bind',requestFile,'/trusted/AGENT_REQUEST.md',
-   ...(findings?['--ro-bind',join(root,'review-findings.txt'),'/trusted/review-findings.txt']:[]),
-   '--bind',sockdir,'/gateway','--tmpfs','/tmp','--proc','/proc','--dev','/dev',
-   '--setenv','HOME','/tmp/agent','--setenv','CODEX_HOME','/tmp/agent/.codex',
-   '--setenv','PATH',process.env.PATH||'/usr/bin:/bin',
-   '--setenv','KATIE_NATIVE_MODEL',approval.model,
-   '--setenv','KATIE_NATIVE_BRIDGE_TOKEN',clientToken,
-   '--setenv','KATIE_NATIVE_PHASE',phase,
-   '--setenv','KATIE_BENCHMARK_ARM','full',
-   '--setenv','KATIE_NATIVE_BASELINE_SHA',proof.baselineSha,
-   '--setenv','KATIE_OUTER_SANDBOX_CONFIRMED','1',
-   '--chdir','/work','/bin/sh','-c',command];
+  const args=sharedNativeContainerArgs({
+   workspace:boundary.root,socketDir:sockdir,arm:'full',phase,command,
+   readOnly:reviewing,
+   extraMounts:[
+    ...protectedNativeMounts(boundary),
+    '--dir','/trusted',
+    '--ro-bind',childFile,'/trusted/native-development-child.mjs',
+    '--ro-bind',join(process.env.RUNNER_TEMP,'native-host','shared-native-phase.mjs'),'/trusted/shared-native-phase.mjs',
+    '--ro-bind',join(process.env.RUNNER_TEMP,'native-host','shared-native-policy.mjs'),'/trusted/shared-native-policy.mjs',
+    ...(findings?['--ro-bind',join(root,'review-findings.txt'),'/trusted/review-findings.txt']:[]),
+    '--ro-bind',requestFile,'/trusted/AGENT_REQUEST.md'
+   ],
+   extraEnv:[
+    '--setenv','KATIE_NATIVE_MODEL',approval.model,
+    '--setenv','KATIE_NATIVE_BRIDGE_TOKEN',clientToken,
+    '--setenv','KATIE_NATIVE_BASELINE_SHA',proof.baselineSha
+   ]
+  });
   child=spawn('bwrap',args,{env:{PATH:process.env.PATH||''},stdio:['ignore','pipe','pipe']});
   let output='';
   child.stdout.on('data',x=>{process.stdout.write(x);output=(output+x).slice(-20000)});
