@@ -31,7 +31,8 @@ export function createNativeHttpBridge({db,grantToken,trialId,executionEpoch,
    if(!body||typeof body.model!=='string')throw Error('MODEL_REQUIRED');
    const result=await forwardAuthorizedModelRequest({
     db,grantToken,trialId,executionEpoch,model:body.model,
-    requestBody:body,upperTokens,upstream,providerNamespace,recordReceipt,fullMission
+    requestBody:body,upperTokens,upstream,providerNamespace,recordReceipt,
+    fullMission:typeof fullMission==='function'?fullMission():fullMission
    });
    if(!result||typeof result.body!=='string')throw Error('UPSTREAM_RESPONSE_INVALID');
    res.writeHead(200,{'content-type':result.contentType||'application/json',
