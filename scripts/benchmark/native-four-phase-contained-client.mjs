@@ -19,7 +19,8 @@ const arm=process.env.KATIE_BENCHMARK_ARM;
 assertNativeEffectivePolicy({gateway:url,model:'synthetic',arm,phase});
 const {completed,reviewMessage:message}=await executeSharedNativePhase({
  Codex,arm,phase,gateway:url,bearer:'contained-fixture-token',model:'synthetic',
- home,state,root:'/work',prompt:'Contained qualification phase: '+phase
+ home,state,root:'/work',prompt:'Contained qualification phase: '+phase,
+ onEvent:event=>{if(event.type==='turn.failed')console.error('CONTAINED_SYNTHETIC_TURN_FAILURE',String(event.error?.message||event.error?.code||'unknown').slice(0,300))}
 });
 assert(completed,'CONTAINED_PHASE_INCOMPLETE:'+phase);
 if(phase==='review')assert.match(message,/^CHANGES_REQUESTED/);
