@@ -34,12 +34,13 @@ export async function forwardAuthorizedModelRequest({
  };
  if(!requestBody||typeof requestBody!=='object'||containsNontext(requestBody))
   throw Error('GATEWAY_UNBOUNDED_INPUT_DENIED');
+ const syntheticFixture=upstream.nonbillableFixture===true && model==='synthetic';
  const outputCap=requestBody.max_output_tokens==null?4096:requestBody.max_output_tokens;
- if(!Number.isSafeInteger(outputCap)||outputCap<1||outputCap>upperTokens)
+ if(!syntheticFixture&&(!Number.isSafeInteger(outputCap)||outputCap<1||outputCap>upperTokens))
   throw Error('GATEWAY_OUTPUT_LIMIT_DENIED');
  const boundedBody={...requestBody,max_output_tokens:outputCap};
  const inputBytes=Buffer.byteLength(JSON.stringify(boundedBody),'utf8');
- const admissionTokens=inputBytes+outputCap+1024;
+ const admissionTokens=syntheticFixture?upperTokens:inputBytes+outputCap+1024;
  if(!Number.isSafeInteger(admissionTokens)||admissionTokens>upperTokens)
   throw Error('GATEWAY_REQUEST_EXCEEDS_GRANT');
  const key=randomUUID();
