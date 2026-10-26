@@ -12,7 +12,7 @@ test("canonical assistant Markdown remains visible when rich blocks are present"
 });
 
 test("duplicate Markdown visual blocks are excluded from auxiliary rendering", () => {
-  assert.match(view, /response\.blocks\.filter\(block => block\.type !== "markdown"\)/);
+  assert.match(view, /response\.blocks\.filter\(block => ordered \|\| block\.type !== "markdown"\)/);
 });
 
 test("streamed blocks are parsed and checked against canonical prose", () => {
