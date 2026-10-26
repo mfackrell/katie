@@ -3,6 +3,7 @@ on:
   pull_request:
     paths:
       - 'tests/benchmark-full-native-race.test.mjs'
+      - 'tests/benchmark-nonfull-grant-postgres.test.mjs'
       - 'tests/sql/benchmark-*'
       - 'supabase/migrations/*benchmark*'
       - '.github/workflows/benchmark-native-accounting-race.yml'
@@ -31,3 +32,5 @@ jobs:
           echo "KATIE_TEST_PG_BIN=$(dirname "$PG_INITDB")" >> "$GITHUB_ENV"
       - name: Two independent connections compete for Full native final mission slot
         run: node --test tests/benchmark-full-native-race.test.mjs
+      - name: Native Thin disposable PostgreSQL owner grant issuance and denial
+        run: node --test tests/benchmark-nonfull-grant-postgres.test.mjs
