@@ -91,5 +91,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: nonfull-nonbillable-qualification
-          path: ${{ runner.temp }}/native-thin-approved.json
+          path: |
+            ${{ runner.temp }}/native-thin-approved.json
+            ${{ runner.temp }}/nonfull-staging-acceptance.json
           if-no-files-found: ignore
