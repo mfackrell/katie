@@ -6,6 +6,8 @@ import { chatFailureContent } from "@/lib/chat/request-failure";
 import EmojiPicker, { Theme } from "emoji-picker-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import remarkMath from "remark-math";
+import rehypeKatex from "rehype-katex";
 import {
   ClipboardEvent,
   FormEvent,
@@ -2818,7 +2820,8 @@ export function ChatPanel({
                 <div className="break-words text-zinc-100/95">
                   {!(message.presentation?.blocks.some(block => block.type === "markdown")) &&
                     <ReactMarkdown
-                    remarkPlugins={[remarkGfm]}
+                    remarkPlugins={[remarkGfm, remarkMath]}
+                    rehypePlugins={[rehypeKatex]}
                     components={{
                       h1: ({ children }) => (
                         <h1 className="mb-4 mt-6 text-2xl font-semibold tracking-tight text-white first:mt-0">
