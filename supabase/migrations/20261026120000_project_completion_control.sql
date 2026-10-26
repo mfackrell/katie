@@ -97,11 +97,20 @@ begin
    'attempted',jsonb_build_array('Retried within the saved scope; the same failure recurred without new execution evidence.'),
    'minimumAction','Correct the recorded execution defect before starting a new attempt. Existing artifacts, permissions and charges remain recorded.') where id=p.id;
   insert into project_events(project_id,event,data) values(p.id,'failed',jsonb_build_object('ownerAgentId',p.completion_contract->>'ownerAgentId','cause',payload));
-  perform project_publish(p.id,'Failed: '||(payload->>'detail'));
  elsif action in ('block','input','error') then
   update work_projects set impediment=coalesce(payload->'impediment',jsonb_build_object('kind','blocked','step',p.phase,'impediment',payload->>'detail',
    'attempted',jsonb_build_array('Inspected the saved phase and available execution receipts.'),'minimumAction','Resolve the recorded impediment before resuming the saved project.')) where id=p.id;
  elsif action<>'wait' then update work_projects set impediment=null where id=p.id;
+ end if;
+ -- The original conversation receives the actionable blocker, not merely a
+ -- status label while the attempted work and required action stay hidden in DB.
+ select * into strict p from work_projects where id=p_id;
+ -- Input questions retain their exact saved text for authenticated short-answer
+ -- binding in project-conversation; terminal blockers receive the full receipt.
+ if p.status in ('blocked','failed') and p.impediment is not null then
+  perform project_publish(p.id,case p.status when 'failed' then 'Failed' else 'Blocked' end||' at '||p.phase||': '||(p.impediment->>'impediment')||
+   E'\n\nAttempted: '||(select string_agg(value,' ') from jsonb_array_elements_text(p.impediment->'attempted'))||
+   E'\nRequired: '||(p.impediment->>'minimumAction'));
  end if;
  return true;
 end $$;

@@ -29,6 +29,7 @@ DO $$ declare p work_projects; original work_projects; l uuid; m uuid; ok boolea
  if not finish_work_project(p.id,l,'wait','{"detail":"Still thinking"}') then raise exception 'Progress check failed';end if;
  select * into strict p from work_projects where id=p.id;
  if p.status<>'blocked' or p.impediment->>'minimumAction' is null or jsonb_array_length(p.impediment->'attempted')=0 then raise exception 'Analysis/polling failed to terminate with an actionable blocker';end if;
+ if not exists(select 1 from messages where chat_id=p.chat_id and content like '%Attempted:%' and content like '%Required: Restore the stalled worker%') then raise exception 'Actionable blocker was not delivered';end if;
  if p.completion_contract<>contract then raise exception 'Polling changed completion criteria';end if;
  -- Repeating an identical coordination failure does not masquerade as progress.
  update work_projects set status='running',lease=l,lease_until=now()+interval '5 minutes',progress_since=now(),error_signature=null,repeated_errors=0 where id=p.id;
@@ -39,6 +40,7 @@ DO $$ declare p work_projects; original work_projects; l uuid; m uuid; ok boolea
  select * into strict p from work_projects where id=p.id;
  if p.status<>'failed' or p.repeated_errors<>2 or p.impediment->>'kind'<>'failed' then raise exception 'Repeated unchanged failure did not terminate';end if;
  if not exists(select 1 from messages where chat_id=p.chat_id and content like '%katie-project-status:'||p.id||':failed%') then raise exception 'Failure was not delivered to original conversation';end if;
+ if not exists(select 1 from messages where chat_id=p.chat_id and content like '%Attempted:%' and content like '%Required: Correct the recorded execution defect%') then raise exception 'Concrete failure decision was not delivered';end if;
  if finish_work_project(p.id,l,'wait') then raise exception 'Terminal task restarted by polling';end if;
  if (select jsonb_agg(jsonb_build_array(id,reserved_tokens,actual_tokens,calls) order by id) from agent_missions where project_id=p.id) is distinct from charges then raise exception 'Closure altered charges or reservations';end if;
  if p.token_allowance<>original.token_allowance or p.cycles<>original.cycles then raise exception 'Completion controls reset resource bounds';end if;
