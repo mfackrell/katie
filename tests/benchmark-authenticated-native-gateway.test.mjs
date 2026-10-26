@@ -60,8 +60,8 @@ test('contained four-phase provider cycle meters implementation, review, repair 
  for(const phase of phases){
   const n=settled.length;
   const result=await forwardAuthorizedModelRequest({...request,fullMission:true,db,
-   requestBody:{model:'mock',phase},
-   upstream:async body=>({providerRequestId:'fixture-'+body.phase,actualTokens:11,body:'{}'}),
+   requestBody:{model:'mock',input:'phase:'+phase},
+   upstream:async body=>({providerRequestId:'fixture-'+body.input.slice(6),actualTokens:11,body:'{}'}),
    recordReceipt:async receipt=>settled.push({...receipt,phase})
   });
   assert.equal(result.providerRequestId,'fixture-'+phase);
