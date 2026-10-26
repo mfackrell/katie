@@ -1,6 +1,7 @@
 import {createServer} from 'node:http';
 import {createHash,timingSafeEqual} from 'node:crypto';
 import {forwardAuthorizedModelRequest} from './authenticated-native-gateway.mjs';
+import {assertNativeRequestTools} from './shared-native-policy.mjs';
 
 // Runs in the trusted execution host, outside the agent's mount namespace.
 // The caller must supply a server-owned grant and DB client. This bridge
@@ -28,7 +29,7 @@ export function createNativeHttpBridge({db,grantToken,trialId,executionEpoch,
     if(raw.length>2_000_000)throw Error('BODY_TOO_LARGE');
    }
    const body=JSON.parse(raw);
-   if(!body||typeof body.model!=='string')throw Error('MODEL_REQUIRED');
+   assertNativeRequestTools(body);
    const result=await forwardAuthorizedModelRequest({
     db,grantToken,trialId,executionEpoch,model:body.model,
     requestBody:body,upperTokens,upstream,providerNamespace,recordReceipt,
