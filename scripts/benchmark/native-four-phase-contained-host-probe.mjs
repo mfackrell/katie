@@ -2,6 +2,7 @@
 // socket gateway. All responses are synthetic and cannot incur model charges.
 import {createNativeHttpBridge} from './native-http-bridge.mjs';
 import {sharedNativeContainerArgs} from './shared-native-container.mjs';
+import {assertTrustedBoundary,protectedNativeMounts} from './native-trust-boundary.mjs';
 import {mkdtempSync,mkdirSync,rmSync,readFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
@@ -10,7 +11,7 @@ import assert from 'node:assert/strict';
 const root=mkdtempSync(join(tmpdir(),'four-phase-contained-'));
 const workRoot=join(root,'workspaces'),socketdir=join(root,'socket'),socket=join(socketdir,'gateway.sock');
 mkdirSync(workRoot);mkdirSync(socketdir);
-for(const id of ['native','thin','full']){const dir=join(workRoot,id);mkdirSync(dir);execFileSync('git',['init','-q',dir]);}
+for(const id of ['native','thin','full']){const dir=join(workRoot,id);mkdirSync(dir);execFileSync('git',['init','-q',dir]);mkdirSync(join(dir,'node_modules'));}
 const phases=['implementation','review','repair','final-review'];
 const requestedArm=process.env.KATIE_TRIAL_ARM;
 if(requestedArm&& !['native','thin'].includes(requestedArm))throw Error('NONFULL_ARM_REQUIRED');
@@ -73,7 +74,8 @@ try{
   const args=sharedNativeContainerArgs({
    workspace:join(workRoot,arm),socketDir:socketdir,arm,phase,command,
    readOnly:reviewing,
-   extraMounts:['--ro-bind',process.cwd(),'/app']
+   extraMounts:[...protectedNativeMounts(assertTrustedBoundary(join(workRoot,arm))),
+    '--ro-bind',process.cwd(),'/app']
   });
   // The shared launcher runs from /work. Test code is in trusted /app.
   const child=spawn('bwrap',args,{env:{PATH:process.env.PATH||''}});
