@@ -51,3 +51,21 @@ test('same gateway rejects provider-hosted tools and allows native custom/functi
  assert.match(gateway,/assertNativeRequestTools\(body\)/);
  assert.match(gateway,/fullMission:typeof fullMission==='function'\?fullMission\(\):fullMission/);
 });
+
+test('Codex namespace groups only client-owned function/custom tools',()=>{
+ assert.equal(assertNativeRequestTools({model:'synthetic',tools:[{
+  type:'namespace',name:'functions',tools:[
+   {type:'custom',name:'exec'},
+   {type:'function',name:'apply_patch'}
+  ]
+ }]}),true);
+ for(const nested of [{type:'web_search'},{type:'mcp',server_url:'https://remote.example'},
+   {type:'function',name:'unsafe',server_url:'https://remote.example'}]){
+  assert.throws(()=>assertNativeRequestTools({model:'synthetic',tools:[{
+   type:'namespace',name:'functions',tools:[nested]
+  }]}),/REMOTE_PROVIDER_TOOL_DENIED/);
+ }
+ assert.throws(()=>assertNativeRequestTools({model:'synthetic',tools:[{
+  type:'namespace',name:'functions',tools:'not an array'
+ }]}),/REMOTE_PROVIDER_TOOL_DENIED/);
+});
