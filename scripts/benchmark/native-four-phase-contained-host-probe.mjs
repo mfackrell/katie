@@ -1,7 +1,7 @@
 // True contained four-phase SDK qualification with a separate trusted Unix
 // socket gateway. All responses are synthetic and cannot incur model charges.
 import {createNativeHttpBridge} from './native-http-bridge.mjs';
-import {mkdtempSync,mkdirSync,rmSync} from 'node:fs';
+import {mkdtempSync,mkdirSync,rmSync,readFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {spawn,execFileSync} from 'node:child_process';
@@ -14,6 +14,19 @@ const phases=['implementation','review','repair','final-review'];
 const requestedArm=process.env.KATIE_TRIAL_ARM;
 if(requestedArm&& !['native','thin'].includes(requestedArm))throw Error('NONFULL_ARM_REQUIRED');
 const selectedArms=requestedArm?[requestedArm]:['native','thin','full'];
+const manifestPath=process.env.KATIE_TRIAL_MANIFEST;
+let boundTrialId='synthetic-trial';
+if(requestedArm){
+ if(!manifestPath)throw Error('NONFULL_LAUNCH_MANIFEST_REQUIRED');
+ const manifest=JSON.parse(readFileSync(manifestPath,'utf8'));
+ if(manifest.arm!==requestedArm||manifest.qualification!=='nonbillable-only'||
+    manifest.requiresNewGrantBeforePaidExecution!==true||
+    typeof manifest.trialId!=='string'||!manifest.trialId||
+    typeof manifest.accountId!=='string'||!manifest.accountId||
+    typeof manifest.approvalId!=='string'||!manifest.approvalId)
+  throw Error('NONFULL_LAUNCH_IDENTITY_MISMATCH');
+ boundTrialId=manifest.trialId;
+}
 let phase=null,arm=null,forwarded=0;
 const reservations=[],receipts=[];
 const db={rpc:async(name,args)=>{
@@ -25,7 +38,7 @@ const db={rpc:async(name,args)=>{
  throw Error('UNEXPECTED_RPC_'+name);
 }};
 const server=createNativeHttpBridge({
- db,grantToken:'synthetic-'+('z'.repeat(60)),trialId:'synthetic-trial',
+ db,grantToken:'synthetic-'+('z'.repeat(60)),trialId:boundTrialId,
  executionEpoch:1,providerNamespace:'synthetic',upperTokens:100,fullMission:true,
  clientToken:'contained-fixture-token',recordReceipt:async r=>receipts.push(r),
  upstream:async request=>{
