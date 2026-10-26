@@ -24,7 +24,7 @@ test('policy selects natural formatting without templates or fake status', () =>
 
 test('existing GitHub-flavored Markdown rendering and stream remain intact', () => {
   assert.match(panel, /ReactMarkdown/);
-  assert.match(panel, /remarkPlugins=\{\[remarkGfm\]\}/);
+  assert.match(panel, /remarkPlugins=\{\[remarkGfm, remarkMath\]\}/);
   assert.match(panel, /decoder\.decode\(value, \{ stream: true \}\)/);
   assert.match(route, /new ReadableStream<Uint8Array>/);
 });
