@@ -18,7 +18,19 @@ export function browserOwnerAuth(): SupabaseClient | null {
 export async function ownerSessionBearer(): Promise<string | null> {
   const client = browserOwnerAuth();
   if (!client) return null;
-  const { data, error } = await client.auth.getSession();
-  if (error || !data.session?.access_token) return null;
-  return data.session.access_token;
+  // Owner authorization is optional for ordinary chat. Never hold the chat
+  // request indefinitely while Supabase restores or refreshes a browser session.
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const session = await Promise.race([
+      client.auth.getSession().then(({ data, error }) =>
+        error ? null : data.session?.access_token ?? null),
+      new Promise<null>((resolve) => {
+        timeout = setTimeout(() => resolve(null), 4000);
+      }),
+    ]);
+    return session;
+  } finally {
+    if (timeout !== undefined) clearTimeout(timeout);
+  }
 }
