@@ -1,5 +1,5 @@
-import { validatePresentation } from "@/lib/presentation/default-registry";
-import type { StructuredResponse } from "@/lib/chat/structured-response";
+import { validatePresentation } from "./default-registry";
+import type { StructuredResponse } from "../chat/structured-response";
 
 export const PRESENTATION_START = "\n<katie-presentation-v1>\n";
 export const PRESENTATION_END = "\n</katie-presentation-v1>";
