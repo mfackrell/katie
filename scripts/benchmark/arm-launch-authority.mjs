@@ -1,3 +1,4 @@
+import {createHash} from 'node:crypto';
 // Trusted Native/Thin entrypoint authority. A trial flag or model-authored
 // payload is NEVER spending authorization. Native/Thin cannot impersonate Full.
 export function verifyNonFullLaunch({arm,trial,account,approval,ownerId,repository,now=Date.now()}){
@@ -17,7 +18,14 @@ export function verifyNonFullLaunch({arm,trial,account,approval,ownerId,reposito
     Number(approval.max_tokens)<=0||Number(account.cap_tokens)>Number(approval.max_tokens)||
     approval.task_id!=null||approval.project_id!=null||approval.mission_assignment_id!=null)
   throw Error('NONFULL_OWNER_AUTHORITY_DENIED');
- for(const key of ['contract_sha256','baseline_sha','model_policy_sha256','tool_profile_sha256','runtime_sha256']){
+ const contract={experimentId:trial.experiment_id,replicate:trial.replicate,
+  baselineSha:trial.baseline_sha,contractSha256:trial.contract_sha256,
+  acceptanceSha256:trial.acceptance_sha256,toolProfileSha256:trial.tool_profile_sha256,
+  modelPolicySha256:trial.model_policy_sha256,runtimeSha256:trial.runtime_sha256,
+  tokenCap:Number(account.cap_tokens)};
+ const computed=createHash('sha256').update(JSON.stringify(contract)).digest('hex');
+ if(approval.protocol_digest!==computed)throw Error('NONFULL_PROTOCOL_AUTHORITY_MISMATCH');
+ for(const key of ['contract_sha256','baseline_sha','model_policy_sha256','tool_profile_sha256','runtime_sha256','acceptance_sha256']){
   if(typeof trial[key]!=='string'||!trial[key])throw Error('NONFULL_TRIAL_IDENTITY_INCOMPLETE');
  }
  return Object.freeze({arm,trialId:trial.id,accountId:account.id,approvalId:approval.id,
