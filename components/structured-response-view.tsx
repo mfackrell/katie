@@ -1,7 +1,11 @@
 "use client";
 
 import ReactMarkdown from "react-markdown";
+import { useState } from "react";
+import { RememberFaceControl } from "@/components/remember-face-control";
 import remarkGfm from "remark-gfm";
+import remarkMath from "remark-math";
+import rehypeKatex from "rehype-katex";
 import type { StructuredResponse, VisualBlock } from "@/lib/chat/structured-response";
 
 const statusLabels = {
@@ -25,9 +29,23 @@ function ChartBlock({ block }: { block: Extract<VisualBlock, { type: "chart" }> 
   const label = block.evidence.origin === "observed" ? "Observed" : block.evidence.origin === "estimated" ? "Estimated" : "Illustrative";
   return <figure className="rounded-lg border border-white/15 p-3">
     <figcaption className="font-semibold">{block.title}</figcaption>
-    {block.chart === "donut" ? <ul className="mt-3 space-y-1 text-sm">
-      {block.points.map((point, index) => <li key={index} className="flex justify-between gap-2"><span>{point.label}</span><span>{point.value.toLocaleString()} {block.unit ?? ""}</span></li>)}
-    </ul> : <svg className="mt-2 h-auto w-full" viewBox={`0 0 ${width} ${height}`} role="img" aria-label={block.accessibleSummary}>
+    {block.chart === "donut" ? <svg className="mx-auto mt-2 h-52 w-full max-w-sm" viewBox="0 0 260 220" role="img" aria-label={block.accessibleSummary}>
+      {block.points.map((point, index) => {
+        const total = block.points.reduce((sum, item) => sum + item.value, 0);
+        const previous = block.points.slice(0, index).reduce((sum, item) => sum + item.value, 0);
+        const radius = 68;
+        const circumference = 2 * Math.PI * radius;
+        const length = circumference * point.value / total;
+        const offset = -circumference * previous / total;
+        return <circle key={index} cx="130" cy="108" r={radius} fill="none" stroke={`hsl(${(index * 57 + 145) % 360} 65% 55%)`}
+          strokeWidth="28" strokeDasharray={`${length} ${circumference - length}`}
+          strokeDashoffset={offset} transform="rotate(-90 130 108)">
+          <title>{point.label}: {point.value.toLocaleString()} {block.unit ?? ""}</title>
+        </circle>;
+      })}
+      <circle cx="130" cy="108" r="45" fill="none" />
+      <text x="130" y="112" textAnchor="middle" fill="currentColor" fontSize="14">Total: {block.points.reduce((sum, p) => sum + p.value, 0).toLocaleString()}</text>
+    </svg> : <svg className="mt-2 h-auto w-full" viewBox={`0 0 ${width} ${height}`} role="img" aria-label={block.accessibleSummary}>
       <line x1={inset} y1={height - inset} x2={width - inset} y2={height - inset} stroke="currentColor" opacity="0.4" />
       {block.chart === "line" ? <polyline fill="none" stroke="currentColor" strokeWidth="3" points={block.points.map((point, index) => `${x(index)},${y(point.value)}`).join(" ")} /> : block.points.map((point, index) => {
         const band = (width - inset * 2) / block.points.length;
@@ -48,9 +66,27 @@ function ChartBlock({ block }: { block: Extract<VisualBlock, { type: "chart" }> 
   </figure>;
 }
 
-function RenderBlock({ block }: { block: VisualBlock }) {
+function SelectorBlock({ block }: { block: Extract<VisualBlock, { type: "selector" }> }) {
+  const [selected, setSelected] = useState(0);
+  return <section className="rounded-lg border border-white/15 p-3">
+    <h3 className="font-semibold">{block.title}</h3>
+    <div className="mt-2 flex flex-wrap gap-2" role="group" aria-label={block.title}>
+      {block.options.map((option, index) =>
+        <button key={index} type="button" aria-pressed={selected === index}
+          className={`rounded-md border px-3 py-1.5 text-sm ${selected === index ? "border-emerald-400 bg-emerald-900/30" : "border-white/20"}`}
+          onClick={() => setSelected(index)}>{option.label}</button>)}
+    </div>
+    <p className="mt-2 whitespace-pre-wrap text-sm">{block.options[selected].description}</p>
+  </section>;
+}
+
+type MessageIdentity = { actorId?: string; chatId?: string; messageId?: string };
+function RenderBlock({ block, assets = [], actorId, chatId, messageId }: {
+  block: VisualBlock;
+  assets?: Array<{type: string; url: string}>;
+} & MessageIdentity) {
   switch (block.type) {
-    case "markdown": return <div className="prose prose-invert max-w-none"><ReactMarkdown remarkPlugins={[remarkGfm]}>{block.text}</ReactMarkdown></div>;
+    case "markdown": return <div className="prose prose-invert max-w-none"><ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]}>{block.text}</ReactMarkdown></div>;
     case "cards": return <div className="grid gap-3 sm:grid-cols-2">
       {block.items.map((item, index) => <section key={index} className="rounded-lg border border-white/15 p-3">
         <h3 className="font-semibold">{item.title}</h3>
@@ -60,6 +96,24 @@ function RenderBlock({ block }: { block: VisualBlock }) {
       </section>)}
     </div>;
     case "chart": return <ChartBlock block={block} />;
+    case "metric": return <section className="rounded-lg border border-white/15 p-3" aria-label={block.label}>
+      <p className="text-sm opacity-75">{block.label}</p><p className="text-2xl font-semibold">{block.value}</p>
+      {block.description && <p className="mt-1 text-sm">{block.description}</p>}
+    </section>;
+    case "selector": return <SelectorBlock block={block} />;
+    case "media": {
+      const asset = assets[block.assetIndex];
+      if (!asset || asset.type !== "image" || !/^https:\/\//i.test(asset.url)) {
+        return <p className="text-sm">{block.alt} (image unavailable)</p>;
+      }
+      return <figure className="rounded-lg border border-white/15 p-2">
+        {/* Images are references to already-authorized saved message assets, not model-authored URLs. */}
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img src={asset.url} alt={block.alt} loading="lazy" className="max-h-80 w-full rounded object-contain" />
+        {block.caption && <figcaption className="mt-1 text-xs opacity-75">{block.caption}</figcaption>}
+        {actorId && chatId && messageId && <RememberFaceControl actorId={actorId} chatId={chatId} messageId={messageId} assetIndex={block.assetIndex} />}
+      </figure>;
+    }
     case "statuses": return <dl className="space-y-2">
       {block.entries.map((entry, index) => <div key={index} className="rounded border border-white/15 p-2">
         <dt className="font-medium">{entry.label}: {statusLabels[entry.state]}</dt>
@@ -78,8 +132,13 @@ function RenderBlock({ block }: { block: VisualBlock }) {
 }
 
 /** Receives only server-validated response blocks; never accepts model-owned React code. */
-export function StructuredResponseView({ response }: { response: StructuredResponse }) {
+export function StructuredResponseView({ response, assets, ordered = false, actorId, chatId, messageId }: {
+  response: StructuredResponse;
+  assets?: Array<{ type: string; url: string }>;
+  ordered?: boolean;
+} & MessageIdentity) {
   return <div className="space-y-4" aria-label="Structured assistant response">
-    {response.blocks.filter(block => block.type !== "markdown").map((block, index) => <RenderBlock key={index} block={block} />)}
+    {response.blocks.filter(block => ordered || block.type !== "markdown")
+      .map((block, index) => <RenderBlock key={index} block={block} assets={assets} actorId={actorId} chatId={chatId} messageId={messageId} />)}
   </div>;
 }

@@ -27,6 +27,23 @@ describe("provider-neutral progressive presentation protocol", () => {
     expect(output).not.toContain("chart");
     expect(output).not.toContain("katie-presentation-v1");
   });
+  it("validates ordered interleaving with identical fallback markdown", () => {
+    const ordered = "Before. After.";
+    const source = ordered + PRESENTATION_START + JSON.stringify({
+      version: 1,
+      blocks: [
+        { type: "markdown", text: "Before. " },
+        { type: "selector", title: "Scenario", options: [
+          { label: "Base", description: "Conservative" },
+          { label: "Stretch", description: "Optimistic" },
+        ] },
+        { type: "markdown", text: "After." },
+      ],
+    }) + PRESENTATION_END;
+    expect(parsePresentationTail(source).presentation?.blocks.map(x => x.type))
+      .toEqual(["markdown", "selector", "markdown"]);
+    expect(parsePresentationTail(source).text).toBe(ordered);
+  });
   it("streams a plain answer without losing content", () => {
     const filter = new PresentationStreamFilter();
     const input = "Just a normal chat message about revenue.";
@@ -44,6 +61,15 @@ describe("provider-neutral progressive presentation protocol", () => {
     const extra = "Safe." + PRESENTATION_START +
       JSON.stringify({ version: 1, blocks, url: "https://unsafe.example" }) + PRESENTATION_END;
     expect(parsePresentationTail(extra).presentation).toBeNull();
+  });
+  it("rejects forged image references unless backed by saved assistant assets", () => {
+    const source = "Image is attached." + PRESENTATION_START + JSON.stringify({
+      version: 1, blocks: [{ type: "media", assetIndex: 0, alt: "Saved image" }],
+    }) + PRESENTATION_END;
+    expect(parsePresentationTail(source).presentation).toBeNull();
+    expect(parsePresentationTail(source, [{ type: "image", url: "javascript:alert(1)" }]).presentation).toBeNull();
+    expect(parsePresentationTail(source, [{ type: "image", url: "https://example.com/saved.png" }]).presentation?.blocks[0].type)
+      .toBe("media");
   });
   it("rejects oversized model output while preserving prose", () => {
     const overlarge = "Safe." + PRESENTATION_START + "x".repeat(70_000) + PRESENTATION_END;

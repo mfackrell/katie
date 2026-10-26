@@ -2818,7 +2818,8 @@ export function ChatPanel({
             {message.content ? (
               message.role === "assistant" ? (
                 <div className="break-words text-zinc-100/95">
-                  <ReactMarkdown
+                  {!(message.presentation?.blocks.some(block => block.type === "markdown")) &&
+                    <ReactMarkdown
                     remarkPlugins={[remarkGfm, remarkMath]}
                     rehypePlugins={[rehypeKatex]}
                     components={{
@@ -2906,8 +2907,8 @@ export function ChatPanel({
                     }}
                   >
                     {message.content}
-                  </ReactMarkdown>
-                  {message.presentation && <StructuredResponseView response={message.presentation} />}
+                  </ReactMarkdown>}
+                  {message.presentation && <StructuredResponseView response={message.presentation} assets={message.assets} ordered={message.presentation.blocks.some(block => block.type === "markdown")} />}
                 </div>
               ) : (
                 <p className="whitespace-pre-wrap break-words leading-7 text-zinc-100/95">{message.content}</p>

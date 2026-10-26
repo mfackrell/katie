@@ -66,6 +66,9 @@ jobs:
           SIGNAL_SPRINT_BROWSER_ACCEPTANCE: "1"
         run: node --test tests/game-development/signal-sprint.test.mjs
 
+      - name: Presentation renderer browser acceptance
+        run: node scripts/presentation-browser-acceptance.mjs
+
   review-completion:
     runs-on: ubuntu-24.04
     timeout-minutes: 10

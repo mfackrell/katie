@@ -3286,7 +3286,7 @@ ${chunkWorkflowSummary}`;
             // unvalidated or unpersisted interactive components.
             const rawAssistantText = result.text || streamedText;
             const presentationResult = presentationEnabled
-              ? parsePresentationTail(rawAssistantText)
+              ? parsePresentationTail(rawAssistantText, imageAssets)
               : { text: rawAssistantText, presentation: null };
             const assistantText = presentationResult.text;
             const assistantPresentation = presentationResult.presentation;

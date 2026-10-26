@@ -9,14 +9,17 @@ export const PRESENTATION_GENERATION_GUIDANCE = [
   "Answer the user normally in complete Markdown prose. A visual must be optional, never compulsory.",
   "Only when cards, a chart, statuses, comparison, timeline or details would materially improve comprehension, append ONE machine-readable visual specification at the VERY END.",
   "Append a newline, <katie-presentation-v1>, a newline, compact JSON with ONLY version:1 and blocks, then a newline and </katie-presentation-v1>.",
-  "The text before the marker must be a complete useful answer; never reference hidden JSON in the visible explanation.",
+  "The text before the marker must remain the complete readable answer. For interleaved display, markdown blocks must concatenate EXACTLY to that answer, including whitespace, with other component blocks between them. Otherwise put only visual blocks after the answer.",
   "Allowed blocks: markdown {type,text}; cards {type,items:[{title,description,value?,status?}]}; chart {type,chart:'line'|'bar'|'donut',title,points:[{label,value}],unit?,evidence:{origin:'observed'|'estimated'|'illustrative',description},accessibleSummary}; statuses {type,entries:[{label,state,evidence}]}; comparison {type,columns:[strings],rows:[{label,values:[strings]}]}; timeline {type,events:[{label,date,description,state?}]}; details {type,title,body}.",
+  "Additional approved blocks: metric {type:'metric',label,value,description?}; selector {type:'selector',title,options:[{label,description}]}; media {type:'media',assetIndex,alt,caption?}. Media assetIndex must reference an already saved image in the response, never a generated URL.",
   "Statuses: completed, in_progress, pending, blocked, failed, unverified.",
   "Use only grounded numerical data; do not invent metrics, sources, CI states, dates or evidence. Use ordinary Markdown if uncertain.",
   "No executable code, HTML, CSS, URLs, actions, arbitrary fields or other component types in visual JSON.",
 ].join("\n");
 
-export function parsePresentationTail(raw: string): {
+export function parsePresentationTail(
+  raw: string, assets: Array<{ type: string; url: string }> = [],
+): {
   text: string;
   presentation: StructuredResponse | null;
 } {
@@ -41,6 +44,13 @@ export function parsePresentationTail(raw: string): {
     const presentation = validatePresentation({
       version: record.version, blocks: record.blocks, fallbackMarkdown: prefix,
     });
+    // A model may reference only an image actually attached to this saved
+    // assistant message. It cannot introduce URLs or external requests.
+    if (presentation?.blocks.some(block => block.type === "media" &&
+      (assets[block.assetIndex]?.type !== "image" ||
+        !(assets[block.assetIndex]?.url ?? "").startsWith("https://")))) {
+      return { text: prefix, presentation: null };
+    }
     return { text: prefix, presentation };
   } catch {
     return { text: prefix, presentation: null };
