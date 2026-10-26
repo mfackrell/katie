@@ -122,7 +122,7 @@ test("saved assistant replies register nonblocking memory updates before stream 
     "response must be durable and deferred work registered before stream close");
   assert.doesNotMatch(route.slice(refreshed, defer), /await maybeUpdateLongTermMemory|await maybeUpdateSummary/,
     "do not await memory models synchronously in the response");
-  assert.match(route.slice(defer, summary + 150), /Promise\\.allSettled/,
+  assert.match(route.slice(defer, summary + 150), /Promise\.allSettled/,
     "background maintenance should handle partial failures independently");
 });
 
