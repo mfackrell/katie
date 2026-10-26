@@ -62,6 +62,15 @@ describe("provider-neutral progressive presentation protocol", () => {
       JSON.stringify({ version: 1, blocks, url: "https://unsafe.example" }) + PRESENTATION_END;
     expect(parsePresentationTail(extra).presentation).toBeNull();
   });
+  it("rejects forged image references unless backed by saved assistant assets", () => {
+    const source = "Image is attached." + PRESENTATION_START + JSON.stringify({
+      version: 1, blocks: [{ type: "media", assetIndex: 0, alt: "Saved image" }],
+    }) + PRESENTATION_END;
+    expect(parsePresentationTail(source).presentation).toBeNull();
+    expect(parsePresentationTail(source, [{ type: "image", url: "javascript:alert(1)" }]).presentation).toBeNull();
+    expect(parsePresentationTail(source, [{ type: "image", url: "https://example.com/saved.png" }]).presentation?.blocks[0].type)
+      .toBe("media");
+  });
   it("rejects oversized model output while preserving prose", () => {
     const overlarge = "Safe." + PRESENTATION_START + "x".repeat(70_000) + PRESENTATION_END;
     expect(parsePresentationTail(overlarge)).toEqual({ text: "Safe.", presentation: null });
