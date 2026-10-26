@@ -11,8 +11,16 @@ const uuid=i=>'00000000-0000-4000-8000-'+String(i).padStart(12,'0');
 const load=f=>readFileSync(f,'utf8');
 test('Native and Thin real PostgreSQL grants, reservations, receipts and contained SDK phases',
  {timeout:240000},async t=>{
- if(spawnSync('bwrap',['--unshare-user','--ro-bind','/','/','--','/bin/true']).status!==0||
-    spawnSync('which',['socat']).status!==0)return t.skip('sandbox unavailable');
+ const sandboxAvailable=spawnSync('bwrap',['--unshare-user','--ro-bind','/','/','--','/bin/true']).status===0
+   && spawnSync('which',['socat']).status===0;
+ if(!sandboxAvailable){
+   if(process.env.KATIE_REQUIRE_NATIVE_BWRAP==='1')throw Error('REQUIRED_NATIVE_SANDBOX_UNAVAILABLE');
+   // General CI validates fail-closed input admission; the dedicated hosted
+   // qualification MUST run the complete contained SDK/PostgreSQL test.
+   await assert.rejects(runNonFullAuthorizedHost({arm:'native',db:null,workspace:null}),
+     /NONFULL_HOST_PAID_EXECUTION_DENIED/);
+   return;
+ }
  const bin=process.env.KATIE_TEST_PG_BIN||'/usr/lib/postgresql/16/bin';
  const root=mkdtempSync(join(tmpdir(),'native-thin-db-sdk-')),data=join(root,'data');
  let started=false,sql;
