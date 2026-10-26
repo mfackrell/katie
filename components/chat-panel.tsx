@@ -1,6 +1,7 @@
 "use client";
 
 import Image from "next/image";
+import { StructuredResponseView } from "@/components/structured-response-view";
 import { chatFailureContent } from "@/lib/chat/request-failure";
 import EmojiPicker, { Theme } from "emoji-picker-react";
 import ReactMarkdown from "react-markdown";
@@ -20,6 +21,7 @@ import { useSavedState } from "@/components/saved-workspace-state";
 import type { FileReference } from "@/lib/providers/types";
 import { acknowledgeVideoUploads, uploadFilesDirect } from "@/lib/uploads/direct-upload-client";
 import type { Message } from "@/lib/types/chat";
+import { parseStructuredResponse, type StructuredResponse } from "@/lib/chat/structured-response";
 import { canSubmitChatRequest } from "@/lib/chat/request-guards";
 import {
   applyReasoningEvent,
@@ -1737,6 +1739,7 @@ export function ChatPanel({
       const decoder = new TextDecoder();
       let buffered = "";
       let textContent = "";
+      let presentation: StructuredResponse | undefined;
       let assets: Array<{ type: string; url: string }> = [];
       let provider = "unknown";
       let model = "unknown";
@@ -1805,6 +1808,7 @@ export function ChatPanel({
             | {
                 type: "content";
                 text: string;
+                presentation?: StructuredResponse;
                 assets?: Array<{ type: string; url: string }>;
                 provider?: string;
                 model?: string;
@@ -1875,8 +1879,10 @@ export function ChatPanel({
           }
 
           if (chunk.type === "content") {
-            if (!textContent) {
-              textContent = chunk.text;
+            textContent = chunk.text;
+            if (chunk.presentation) {
+              const verified = parseStructuredResponse(chunk.presentation);
+              if (verified && verified.fallbackMarkdown === chunk.text) presentation = verified;
             }
             if (chunk.assets?.length) {
               assets = [...assets, ...chunk.assets];
@@ -1895,6 +1901,7 @@ export function ChatPanel({
           | {
               type: "content";
               text: string;
+              presentation?: StructuredResponse;
               assets?: Array<{ type: string; url: string }>;
               provider?: string;
               model?: string;
@@ -1959,8 +1966,10 @@ export function ChatPanel({
         }
 
         if (trailingChunk.type === "content") {
-          if (!textContent) {
-            textContent = trailingChunk.text;
+          textContent = trailingChunk.text;
+          if (trailingChunk.presentation) {
+            const verified = parseStructuredResponse(trailingChunk.presentation);
+            if (verified && verified.fallbackMarkdown === trailingChunk.text) presentation = verified;
           }
           if (trailingChunk.assets?.length) {
             assets = [...assets, ...trailingChunk.assets];
@@ -1978,6 +1987,7 @@ export function ChatPanel({
         role: "assistant",
         model,
         content: textContent,
+        ...(presentation ? { presentation } : {}),
         assets,
         createdAt: new Date().toISOString(),
       };
@@ -2894,6 +2904,7 @@ export function ChatPanel({
                   >
                     {message.content}
                   </ReactMarkdown>
+                  {message.presentation && <StructuredResponseView response={message.presentation} />}
                 </div>
               ) : (
                 <p className="whitespace-pre-wrap break-words leading-7 text-zinc-100/95">{message.content}</p>
