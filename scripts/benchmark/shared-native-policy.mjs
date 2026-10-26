@@ -12,6 +12,7 @@ export function nativeCodexConfig(gateway=NATIVE_GATEWAY_URL){
  if(gateway!==NATIVE_GATEWAY_URL)throw Error('NATIVE_GATEWAY_POLICY_MISMATCH');
  return [
   'model_provider = "contained_gateway"',
+  'web_search = "disabled"',
   '[model_providers.contained_gateway]',
   'name = "Contained gateway"',
   'wire_api = "responses"',
