@@ -39,7 +39,7 @@ const response = {
 export default function PresentationAcceptancePage() {
   return <main className="mx-auto max-w-2xl p-6" data-testid="presentation-fixture">
     <StructuredResponseView response={response} ordered assets={[{ type: "image", url: "https://images.example.test/saved.png" }]} />
-    <div data-testid="equation"><ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]}>{"Inline $x^2$.\\n\\n$x^2+y^2=z^2$"}</ReactMarkdown></div>
+    <div data-testid="equation"><ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]}>{"Inline $x^2$.\\n\\n$$\\nx^2+y^2=z^2\\n$$"}</ReactMarkdown></div>
   </main>;
 }
 `;
