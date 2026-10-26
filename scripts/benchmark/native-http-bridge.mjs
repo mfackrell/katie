@@ -39,7 +39,11 @@ export function createNativeHttpBridge({db,grantToken,trialId,executionEpoch,
    res.writeHead(200,{'content-type':result.contentType||'application/json',
     'cache-control':'no-store'});
    res.end(result.body);
-  }catch{
+  }catch(error){
+   if(process.env.KATIE_BENCHMARK_GATEWAY_DIAGNOSTICS==='enabled'){
+    const code=String(error?.message||'UNKNOWN');
+    if(/^NATIVE_|^GATEWAY_/.test(code))console.error('NATIVE_GATEWAY_DENIAL_CODE',code.slice(0,120));
+   }
    res.writeHead(403,{'content-type':'application/json','cache-control':'no-store'});
    res.end(JSON.stringify({error:{message:'GATEWAY_REQUEST_DENIED'}}));
   }
