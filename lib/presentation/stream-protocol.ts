@@ -1,4 +1,5 @@
 import { validatePresentation } from "./default-registry";
+import { structuredResponseSchema } from "../chat/structured-response";
 import type { StructuredResponse } from "../chat/structured-response";
 
 export const PRESENTATION_START = "\n<katie-presentation-v1>\n";
@@ -12,6 +13,7 @@ export const PRESENTATION_GENERATION_GUIDANCE = [
   "The text before the marker must remain the complete readable answer. For interleaved display, markdown blocks must concatenate EXACTLY to that answer, including whitespace, with other component blocks between them. Otherwise put only visual blocks after the answer.",
   "Allowed blocks: markdown {type,text}; cards {type,items:[{title,description,value?,status?}]}; chart {type,chart:'line'|'bar'|'donut',title,points:[{label,value}],unit?,evidence:{origin:'observed'|'estimated'|'illustrative',description},accessibleSummary}; statuses {type,entries:[{label,state,evidence}]}; comparison {type,columns:[strings],rows:[{label,values:[strings]}]}; timeline {type,events:[{label,date,description,state?}]}; details {type,title,body}.",
   "Additional approved blocks: metric {type:'metric',label,value,description?}; selector {type:'selector',title,options:[{label,description}]}; media {type:'media',assetIndex,alt,caption?}. Media assetIndex must reference an already saved image in the response, never a generated URL.",
+  "Keep all operational facts, statuses and scenario explanations in the readable Markdown too, so fallback never loses information. Escape currency dollar signs (\\$100k); reserve unescaped dollars for math. Display equations use $$ on separate lines.",
   "Statuses: completed, in_progress, pending, blocked, failed, unverified.",
   "Use only grounded numerical data; do not invent metrics, sources, CI states, dates or evidence. Use ordinary Markdown if uncertain.",
   "No executable code, HTML, CSS, URLs, actions, arbitrary fields or other component types in visual JSON.",
@@ -43,6 +45,12 @@ export function parsePresentationTail(
     const record = parsed as { version: unknown; blocks: unknown };
     const presentation = validatePresentation({
       version: record.version, blocks: record.blocks, fallbackMarkdown: prefix,
+    });
+    if (!presentation) console.warn("[Presentation] invalid model payload", {
+      issues: (() => { const checked = structuredResponseSchema.safeParse({version:record.version,blocks:record.blocks,fallbackMarkdown:prefix}); return checked.success ? [] : checked.error.issues.map(issue => ({ code:issue.code,path:issue.path })); })(),
+      blockTypes: Array.isArray(record.blocks) ? record.blocks.map(block => block && typeof block === "object" ? (block as {type?: unknown}).type : null) : null,
+      canonicalCharacters: prefix.length,
+      orderedCharacters: Array.isArray(record.blocks) ? record.blocks.filter(block => block?.type === "markdown").map(block => block.text).join("").length : 0,
     });
     // A model may reference only an image actually attached to this saved
     // assistant message. It cannot introduce URLs or external requests.

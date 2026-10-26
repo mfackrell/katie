@@ -1,11 +1,8 @@
 "use client";
 
-import ReactMarkdown from "react-markdown";
+import { AssistantMarkdown } from "@/components/assistant-markdown";
 import { useState } from "react";
 import { RememberFaceControl } from "@/components/remember-face-control";
-import remarkGfm from "remark-gfm";
-import remarkMath from "remark-math";
-import rehypeKatex from "rehype-katex";
 import type { StructuredResponse, VisualBlock } from "@/lib/chat/structured-response";
 
 const statusLabels = {
@@ -80,13 +77,13 @@ function SelectorBlock({ block }: { block: Extract<VisualBlock, { type: "selecto
   </section>;
 }
 
-type MessageIdentity = { actorId?: string; chatId?: string; messageId?: string };
-function RenderBlock({ block, assets = [], actorId, chatId, messageId }: {
+type MessageIdentity = { actorId?: string; chatId?: string; messageId?: string; onDownload?: (url: string) => void };
+function RenderBlock({ block, assets = [], actorId, chatId, messageId, onDownload }: {
   block: VisualBlock;
   assets?: Array<{type: string; url: string}>;
 } & MessageIdentity) {
   switch (block.type) {
-    case "markdown": return <div className="prose prose-invert max-w-none"><ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]}>{block.text}</ReactMarkdown></div>;
+    case "markdown": return <AssistantMarkdown>{block.text}</AssistantMarkdown>;
     case "cards": return <div className="grid gap-3 sm:grid-cols-2">
       {block.items.map((item, index) => <section key={index} className="rounded-lg border border-white/15 p-3">
         <h3 className="font-semibold">{item.title}</h3>
@@ -110,6 +107,7 @@ function RenderBlock({ block, assets = [], actorId, chatId, messageId }: {
         {/* Images are references to already-authorized saved message assets, not model-authored URLs. */}
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img src={asset.url} alt={block.alt} loading="lazy" className="max-h-80 w-full rounded object-contain" />
+        {onDownload && <button type="button" onClick={() => onDownload(asset.url)} className="mt-2 rounded border border-white/20 px-3 py-1 text-sm">Download</button>}
         {block.caption && <figcaption className="mt-1 text-xs opacity-75">{block.caption}</figcaption>}
         {actorId && chatId && messageId && <RememberFaceControl actorId={actorId} chatId={chatId} messageId={messageId} assetIndex={block.assetIndex} />}
       </figure>;
@@ -132,13 +130,13 @@ function RenderBlock({ block, assets = [], actorId, chatId, messageId }: {
 }
 
 /** Receives only server-validated response blocks; never accepts model-owned React code. */
-export function StructuredResponseView({ response, assets, ordered = false, actorId, chatId, messageId }: {
+export function StructuredResponseView({ response, assets, ordered = false, actorId, chatId, messageId, onDownload }: {
   response: StructuredResponse;
   assets?: Array<{ type: string; url: string }>;
   ordered?: boolean;
 } & MessageIdentity) {
   return <div className="space-y-4" aria-label="Structured assistant response">
     {response.blocks.filter(block => ordered || block.type !== "markdown")
-      .map((block, index) => <RenderBlock key={index} block={block} assets={assets} actorId={actorId} chatId={chatId} messageId={messageId} />)}
+      .map((block, index) => <RenderBlock key={index} block={block} assets={assets} actorId={actorId} chatId={chatId} messageId={messageId} onDownload={onDownload} />)}
   </div>;
 }
