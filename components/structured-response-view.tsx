@@ -3,6 +3,8 @@
 import ReactMarkdown from "react-markdown";
 import { useState } from "react";
 import remarkGfm from "remark-gfm";
+import remarkMath from "remark-math";
+import rehypeKatex from "rehype-katex";
 import type { StructuredResponse, VisualBlock } from "@/lib/chat/structured-response";
 
 const statusLabels = {
@@ -79,7 +81,7 @@ function SelectorBlock({ block }: { block: Extract<VisualBlock, { type: "selecto
 
 function RenderBlock({ block, assets = [] }: { block: VisualBlock; assets?: Array<{type: string; url: string}> }) {
   switch (block.type) {
-    case "markdown": return <div className="prose prose-invert max-w-none"><ReactMarkdown remarkPlugins={[remarkGfm]}>{block.text}</ReactMarkdown></div>;
+    case "markdown": return <div className="prose prose-invert max-w-none"><ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]}>{block.text}</ReactMarkdown></div>;
     case "cards": return <div className="grid gap-3 sm:grid-cols-2">
       {block.items.map((item, index) => <section key={index} className="rounded-lg border border-white/15 p-3">
         <h3 className="font-semibold">{item.title}</h3>
