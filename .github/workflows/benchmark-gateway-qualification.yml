@@ -32,6 +32,8 @@ jobs:
         run: node --test tests/benchmark-native-trust-boundary.test.mjs
       - name: Qualify Native Thin owner grant and canonical HTTP receipt boundaries
         run: node --test tests/benchmark-arm-launch-authority.test.mjs tests/benchmark-nonfull-trusted-grant.test.mjs
+      - name: Qualify Native Thin shared trusted host and actual SDK grant-to-receipt flow
+        run: node --test tests/benchmark-nonfull-trusted-host.test.mjs
       - name: Qualify separated gateway host and isolated SDK over Unix socket
         run: node scripts/benchmark/external-native-gateway-host-probe.mjs
       - name: Validate signed Developer dispatch scripts and source contracts
