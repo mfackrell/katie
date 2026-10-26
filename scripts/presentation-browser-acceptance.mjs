@@ -17,18 +17,16 @@ const port = Number(process.env.KATIE_PRESENTATION_TEST_PORT ?? 38091);
 if (!Number.isInteger(port) || port < 1024 || port > 65535) throw new Error("Invalid browser fixture port");
 if (existsSync(fixturePath)) throw new Error("Refusing to replace an existing route");
 
+const equationMarkdown = "Currency $40k to $120k. Inline $x^2$ and $2m$. Code `\"$100k\"`.\n\n$$\nx^2+y^2=z^2\n$$";
 const fixture = `
 "use client";
 import { StructuredResponseView } from "@/components/structured-response-view";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
-import remarkMath from "remark-math";
-import rehypeKatex from "rehype-katex";
+import { AssistantMarkdown } from "@/components/assistant-markdown";
 import type { StructuredResponse } from "@/lib/chat/structured-response";
 const response = {
   version: 1, fallbackMarkdown: "Before. After.",
   blocks: [
-    { type: "markdown", text: "Before. " },
+    { type: "markdown", text: "## Before.\\n\\n1. First item\\n2. Second item\\n\\n" },
     { type: "metric", label: "Verified revenue", value: "$120" },
     { type: "chart", chart: "donut", title: "Illustrative mix", points: [{ label: "A", value: 25 }, { label: "B", value: 75 }], evidence: { origin: "illustrative", description: "Test-only figures" }, accessibleSummary: "Illustrative 25 and 75 mix" },
     { type: "selector", title: "Forecast scenario", options: [{ label: "Base", description: "Base case result" }, { label: "Upside", description: "Upside case result" }] },
@@ -39,7 +37,7 @@ const response = {
 export default function PresentationAcceptancePage() {
   return <main className="mx-auto max-w-2xl p-6" data-testid="presentation-fixture">
     <StructuredResponseView response={response} ordered assets={[{ type: "image", url: "https://images.example.test/saved.png" }]} />
-    <div data-testid="equation"><ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]}>{"Inline $x^2$.\\n\\n$$\\nx^2+y^2=z^2\\n$$"}</ReactMarkdown></div>
+    <div data-testid="equation"><AssistantMarkdown>{${JSON.stringify(equationMarkdown)}}</AssistantMarkdown></div>
   </main>;
 }
 `;
@@ -93,8 +91,13 @@ try {
   }
   if (await page.locator('svg[aria-label="Illustrative 25 and 75 mix"] circle').count() < 2) throw new Error("Donut SVG not rendered");
   if (await page.locator('img[alt="Authorized fixture image"]').count() !== 1) throw new Error("Saved media missing");
-  if (await page.locator('[data-testid="equation"] .katex').count() < 2) throw new Error("Inline/display KaTeX failed");
+  if (await page.locator('[data-testid="equation"] .katex').count() !== 3) throw new Error("Inline/display KaTeX failed");
   if (await page.locator('[data-testid="equation"] .katex-display').count() < 1) throw new Error("Display equation not rendered");
+  if ((await page.locator('[data-testid="equation"] code').innerText()) !== '"$100k"') throw new Error("Currency handling altered code");
+  if (await page.getByRole("heading", {name:"Before."}).count() !== 1) throw new Error("Ordered heading missing");
+  const listStyle = await page.locator('[aria-label="Structured assistant response"] ol').evaluate(el => getComputedStyle(el).listStyleType);
+  if (listStyle !== "decimal") throw new Error("Ordered list lost numbering: " + listStyle);
+  if (!(await page.locator('[data-testid="equation"]').innerText()).includes("$40k to $120k")) throw new Error("Currency interpreted as math");
   await page.getByRole("button", { name: "Upside" }).click();
   if (!(await getText()).includes("Upside case result")) throw new Error("Interactive selector failed");
   await page.reload();
