@@ -1,7 +1,7 @@
 // Owner-only, explicitly staged Native/Thin qualification. This deliberately
 // refuses production credentials and never forwards requests to a paid provider.
 import {createRequire} from 'node:module';
-import {mkdtempSync,mkdirSync,rmSync} from 'node:fs';
+import {mkdtempSync,mkdirSync,rmSync,writeFileSync} from 'node:fs';
 import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {execFileSync} from 'node:child_process';
@@ -65,9 +65,32 @@ try{
  mkdirSync(join(workspace,'node_modules'));
  const result=await runNonFullAuthorizedHost({db,arm,trial,account,approval,
   ownerId,repository:process.env.GITHUB_REPOSITORY,workspace,upstream});
- if(result.phases.length!==4||callCount!==4)
+ if(result.phases.length!==4||callCount!==4||
+    result.phases.some(x=>x.code!==0))
   throw Error('NONFULL_STAGING_ACCEPTANCE_INCOMPLETE');
- console.log(JSON.stringify({arm,trialId:result.trialId,grantId:result.grantId,
-  completedPhases:result.phases.length,nonbillable:true,
-  accepted:false,authoritativeLedger:'staging'}));
+ // Read authoritative staging records AFTER the actual trusted host returns.
+ const [calls,settledAccount,consumedApproval,runningTrial]=await Promise.all([
+  db.from('benchmark_budget_calls').select('id,state,actual_tokens,provider_request_id,provider_namespace').eq('account_id',accountId),
+  db.from('benchmark_budget_accounts').select('spent_tokens,frozen_at').eq('id',accountId).single(),
+  db.from('benchmark_native_spending_approvals').select('consumed_at').eq('id',approvalId).single(),
+  db.from('benchmark_three_arm_trials').select('state').eq('id',trialId).single()
+ ]);
+ if(calls.error||settledAccount.error||consumedApproval.error||runningTrial.error||
+    calls.data?.length!==4||
+    !calls.data.every(c=>c.state==='settled'&&c.actual_tokens===5&&
+      typeof c.provider_request_id==='string'&&
+      c.provider_namespace==='nonbillable-synthetic-fixture')||
+    new Set(calls.data.map(x=>x.provider_request_id)).size!==4||
+    Number(settledAccount.data?.spent_tokens)!==20||
+    settledAccount.data?.frozen_at||
+    !consumedApproval.data?.consumed_at||runningTrial.data?.state!=='running')
+  throw Error('NONFULL_STAGING_LEDGER_RECONCILIATION_FAILED');
+ const receipt={version:1,arm,trialId:result.trialId,accountId,
+  grantId:result.grantId,completedPhases:result.phases.length,
+  settledReceipts:4,actualTokens:20,nonbillable:true,accepted:false,
+  authoritativeLedger:'staging',reviewRequired:true,
+  commit:execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).trim()};
+ const evidence=join(process.env.RUNNER_TEMP||'/dev/null','nonfull-staging-acceptance.json');
+ writeFileSync(evidence,JSON.stringify(receipt)+'\n',{flag:'wx',mode:0o600});
+ console.log('NONFULL_STAGING_CANONICAL_RECEIPTS_VERIFIED:'+arm);
 }finally{rmSync(workspace,{recursive:true,force:true})}
