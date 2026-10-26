@@ -45,6 +45,9 @@ jobs:
       - name: Run strict CI gate (typecheck + all offline tests + build + smoke)
         run: npm run ci:gate
 
+      - name: Presentation renderer browser acceptance
+        run: node scripts/presentation-browser-acceptance.mjs
+
       - name: Workspace navigation and continuity in Chromium
         env:
           KATIE_UI_START_SERVER: "1"
