@@ -9,6 +9,7 @@ import {spawn,execFileSync} from 'node:child_process';
 import {createRequire} from 'node:module';
 import {createNativeHttpBridge} from './native-http-bridge.mjs';
 import {createResponsesProvider} from './native-provider-receipts.mjs';
+import {assertBenchmarkDollarCeiling} from './paid-dollar-ceiling.mjs';
 import {tokenDigest} from './authenticated-native-gateway.mjs';
 import {readNativeHandoff} from './native-dispatch-contract.mjs';
 import {assertTrustedBoundary,protectedNativeMounts,protectedGitConfig} from './native-trust-boundary.mjs';
@@ -46,6 +47,21 @@ const trial=await readOne('benchmark_three_arm_trials','id',proof.trialId);
 const project=await readOne('work_projects','id',proof.projectId);
 const account=await readOne('benchmark_budget_accounts','id',approval.account_id);
 const task=await readOne('agent_tasks','id',proof.taskId);
+// A token-only cap cannot discharge the owner's $10 per-arm approval.
+// Verify model pricing AND the independent owner-controlled upper price ceiling
+// before issuing any execution grant or allowing any paid provider traffic.
+const {data:pricing,error:pricingError}=await db.from('model_pricing')
+ .select('input_cost_per_1m,output_cost_per_1m,pricing_status')
+ .eq('provider_name','openai').eq('model_id',approval.model).maybeSingle();
+if(pricingError||!pricing||pricing.pricing_status!=='complete')
+ denied('model price evidence unavailable');
+assertBenchmarkDollarCeiling({
+ armUsdCents:Number(process.env.KATIE_BENCHMARK_APPROVED_ARM_USD_CENTS),
+ priceCeilingMicrosPerMillion:Number(process.env.KATIE_BENCHMARK_APPROVED_MAX_USD_MICROS_PER_MILLION),
+ publishedInputUsdPerMillion:pricing.input_cost_per_1m,
+ publishedOutputUsdPerMillion:pricing.output_cost_per_1m,
+ accountTokens:Number(account.cap_tokens),approvalTokens:Number(approval.max_tokens)
+});
 if(trial.arm!=='full'||trial.state!=='qualified'||
  trial.contract_sha256!==proof.contractHash||trial.baseline_sha!==proof.baselineSha||
  trial.owner_actor_id!==approval.actor_id||
