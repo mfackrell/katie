@@ -18,3 +18,5 @@ create table public.benchmark_execution_grants(
  token_digest text,trial_id uuid,account_id uuid,owner_actor_id uuid,
  protocol_digest text,repository text,model text,execution_epoch bigint,
  deadline timestamptz,unique(trial_id,execution_epoch));
+grant usage on schema public to service_role;
+grant all on all tables in schema public to service_role;
