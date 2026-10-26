@@ -1,4 +1,5 @@
 import OpenAI from "openai";
+import { getSupabaseAdminClient } from "@/lib/data/supabase/admin";
 import {
   getChatById,
   getIntermediateMemory,
@@ -176,20 +177,31 @@ export async function maybeUpdateSummary(chatId: string): Promise<void> {
         candidate = await summarizeInto(summary, messagesToFold.slice(offset, offset + size));
       }
       const checkpoint = messagesToFold[offset + size - 1];
-      // Avoid clobbering another request's successfully advanced cursor.
-      const latest = parseV2(await getIntermediateMemory(chat.actorId, chatId));
-      if (latest?.summarizedThroughMessageId !== (offset === 0 ? existing?.summarizedThroughMessageId ?? null : messagesToFold[offset - 1]?.id ?? null)) {
-        console.info("[Summarizer] Concurrent checkpoint moved; deferring", { chatId });
-        return;
-      }
-      await setIntermediateMemory(chat.actorId, chatId, {
+      // Atomic database comparison prevents concurrent requests from overwriting
+      // newer summaries, including two requests attempting the first checkpoint.
+      const expectedCursor = offset === 0
+        ? existing?.summarizedThroughMessageId ?? null
+        : messagesToFold[offset - 1]?.id ?? null;
+      const payload = {
         version: 2,
         purpose: "Compressed context older than the 30 most recent completed user-assistant exchanges.",
         summary: candidate,
         summarizedThroughMessageId: checkpoint.id,
         summarizedThroughCreatedAt: checkpoint.createdAt ?? null,
         sourceMessageCount: olderMessages.findIndex(message => message.id === checkpoint.id) + 1,
-      });
+      };
+      const { data: committed, error: commitError } = await getSupabaseAdminClient()
+        .rpc("commit_intermediate_memory_checkpoint", {
+          p_actor_id: chat.actorId,
+          p_chat_id: chatId,
+          p_expected_cursor: expectedCursor,
+          p_content: payload,
+        });
+      if (commitError) throw new Error(`Intermediate memory checkpoint unavailable: ${commitError.message}`);
+      if (committed !== true) {
+        console.info("[Summarizer] Concurrent checkpoint moved; deferring", { chatId });
+        return;
+      }
       summary = candidate;
       offset += size;
     }
