@@ -1,25 +1,43 @@
 // Read-only benchmark launch gate. Never issues grants or starts paid inference.
 // The caller must supply independently observed staging/authorization evidence.
 import {readFileSync} from 'node:fs';
+import {assertBenchmarkDollarCeiling} from './paid-dollar-ceiling.mjs';
+const APPROVED_BASELINE='0015bcdb8ac9ad94b7c74d1a4cd76737903b1319';
 export function validateLaunchReadiness(manifest,evidence){
  const blockers=[];
- if(manifest?.issue!==715||manifest?.repository!=='mfackrell/katie'||manifest?.productionPublicationAllowed!==false)
+ if(manifest?.issue!==715||manifest?.contractIssue!==650||manifest?.repository!=='mfackrell/katie'||manifest?.productionPublicationAllowed!==false)
   blockers.push('contract_identity');
  const arms=manifest?.arms;
  if(!Array.isArray(arms)||arms.length!==3||
   ['native','thin','full'].some(arm=>arms.filter(x=>x.arm===arm&&x.usdCeilingCents===1000).length!==1)||
   manifest.totalUsdCeilingCents!==3000)
   blockers.push('budget_contract');
- if(!/^[a-f0-9]{40}$/.test(manifest?.baselineSha||'')||manifest.model!=='gpt-5.3-codex')
+ if(manifest?.baselineSha!==APPROVED_BASELINE||manifest?.model!=='gpt-5.3-codex')
   blockers.push('trial_parity');
  if(manifest?.paidExecutionEnabled!==false)blockers.push('paid_execution_switch');
+ const armPriceBound=arm=>{
+  const a=Array.isArray(evidence?.arms)?evidence.arms.find(x=>x.arm===arm):null;
+  if(!a)return false;
+  try{
+   assertBenchmarkDollarCeiling({
+    armUsdCents:a.hardUsdCapCents,
+    priceCeilingMicrosPerMillion:evidence?.priceCeilingMicrosPerMillion,
+    publishedInputUsdPerMillion:evidence?.publishedInputUsdPerMillion,
+    publishedOutputUsdPerMillion:evidence?.publishedOutputUsdPerMillion,
+    accountTokens:a.accountTokens,
+    approvalTokens:a.approvalTokens
+   });
+   return true;
+  }catch{return false}
+ };
  const checks={
   staging:(evidence?.branchStatus==='FUNCTIONS_DEPLOYED'||evidence?.branchStatus==='READY')&&
     evidence?.benchmarkSchemaPresent===true&&evidence?.stagingSeparateFromProduction===true,
   contract:evidence?.contractHashVerified===true&&evidence?.acceptanceHashVerified===true&&
     evidence?.baselineSha===manifest?.baselineSha,
   parity:evidence?.modelAndToolsMatched===true,
-  pricing:evidence?.verifiedModel===manifest?.model&&evidence?.priceCeilingVerified===true,
+  pricing:evidence?.verifiedModel===manifest?.model&&evidence?.priceCeilingVerified===true&&
+    ['native','thin','full'].every(armPriceBound),
   authorization:Array.isArray(evidence?.arms)&&evidence.arms.length===3&&
     ['native','thin','full'].every(arm=>{
      const a=evidence.arms.find(x=>x.arm===arm);
