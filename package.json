@@ -23,6 +23,7 @@
     "test:video-fallback": "node scripts/run-tests.mjs video-fallback",
     "test:review": "node scripts/run-tests.mjs review",
     "test:vitest": "node scripts/run-tests.mjs vitest",
+    "test:presentation-browser": "node scripts/presentation-browser-acceptance.mjs",
     "test:integration": "node scripts/run-tests.mjs integration"
   },
   "dependencies": {
