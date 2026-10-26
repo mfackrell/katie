@@ -29,3 +29,15 @@ test('production and fixture workers derive config from the same trusted module'
  const workflow=readFileSync('.github/workflows/autonomous-development.yml','utf8');
  assert.match(workflow,/shared-native-phase,shared-native-policy,shared-native-container\}\.mjs/);
 });
+
+test('all three arms use one hardened container launcher and identical filesystem protections',()=>{
+ const launcher=readFileSync('scripts/benchmark/shared-native-container.mjs','utf8');
+ const fixture=readFileSync('scripts/benchmark/native-four-phase-contained-host-probe.mjs','utf8');
+ assert.match(host,/sharedNativeContainerArgs\(/);
+ assert.match(fixture,/sharedNativeContainerArgs\(/);
+ assert.match(launcher,/--unshare-all','--clearenv/);
+ assert.match(launcher,/--bind',socketDir,'\/gateway'/);
+ assert.match(launcher,/reviewing\?'--ro-bind':'--bind'/);
+ assert.match(host,/protectedNativeMounts\(boundary\)/);
+ assert.match(fixture,/protectedNativeMounts\(assertTrustedBoundary\(join\(workRoot,arm\)\)\)/);
+});
