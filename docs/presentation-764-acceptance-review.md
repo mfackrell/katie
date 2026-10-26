@@ -20,7 +20,7 @@ Review date: 2026-10-26. Branch `feat/unified-presentation-integration`.
 ## Acceptance test sequence still required
 
 1. Review exact PR SHA against latest main, inspect merge conflicts, obtain separate independent security reviewer approval. No self-review counts as independent.
-2. Deploy a non-production preview with the flag enabled only for approved disposable test actors and conversations. Never enable the presentation flag indiscriminately in production.
+2. Deploy an isolated non-production preview with the flag enabled and use only disposable, authorized test actors and conversations. The current flag is environment-wide, NOT actor-scoped; do not enable it in production.
 3. Use actual browser auth and test stream, refresh, reopen, mobile viewport, keyboard, screen reader, interrupted requests, retries, hostile payloads, and legacy messages. Compare the persisted response to the browser's final message.
 4. With authorized inference budget, test actual model responses from each provider, capture model identity and response format failures, compare quality and cost/latency against a Markdown baseline. No fabricated model-acceptance claims.
 5. Require all checks green at the final SHA; resolve review findings; only then consider merging. A production rollout requires an explicit approved decision and rollback plan (`KATIE_PRESENTATION_V1` off returns to Markdown).
