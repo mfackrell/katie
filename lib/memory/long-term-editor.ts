@@ -1,4 +1,3 @@
-import { maybeMaintainActorMemory } from "@/lib/memory/long-term-maintenance";
 import {
   getLongTermMemory,
   getActorById,
@@ -597,7 +596,6 @@ export async function maybeUpdateLongTermMemory(
         return;
       }
       await mergeActorLongTermMemoryEntries(actorId, changes);
-      await maybeMaintainActorMemory(actorId, client);
     }
     console.log("[LongTermMemoryEditor] Save Success", { actorId, chatId });
   } catch (error: unknown) {

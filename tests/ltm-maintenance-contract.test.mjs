@@ -12,11 +12,17 @@ test("semantic consolidation requires independent completeness and source checks
   assert.match(maintenance,/verdicts\[0\]\.complete !== true/);
   assert.match(maintenance,/verdicts\[0\]\.sameSubject !== true/);
   assert.match(maintenance,/value:group\.value\.trim\(\)/);
-  assert.match(maintenance,/row\.revision % REVIEW_INTERVAL === 0/);
+  assert.match(maintenance,/CLEANUP_EVERY_MESSAGES = 30/);
+  assert.match(maintenance,/count % CLEANUP_EVERY_MESSAGES !== 0/);
   assert.match(maintenance,/seen\.size !== originals\.length/);
 });
-test("existing LTM updates trigger maintenance only after verified automatic merge",()=>{
-  assert.match(editor,/await mergeActorLongTermMemoryEntries\(actorId, changes\);\s*await maybeMaintainActorMemory\(actorId, client\)/);
+test("cleanup is independent from normal automatic memory saving",()=>{
+  assert.match(editor,/await mergeActorLongTermMemoryEntries\(actorId, changes\)/);
+  assert.doesNotMatch(editor,/maybeMaintainActorMemory/);
+  const route=readFileSync("app/api/chat/route.ts","utf8");
+  assert.match(route,/maybeUpdateLongTermMemory\(actorId, chatId, message\)/);
+  assert.match(route,/maybeRunThirtyMessageCleanup\(actorId\)/);
+  assert.match(route,/Promise\.allSettled/);
 });
 test("storage requires revision and content match and keeps reversible history",()=>{
   assert.match(migration,/original\.revision is distinct from p_expected_revision/);

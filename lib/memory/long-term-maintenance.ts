@@ -1,3 +1,4 @@
+import OpenAI from "openai";
 import { getSupabaseAdminClient } from "@/lib/data/supabase/admin";
 
 type Entry = {
@@ -13,7 +14,7 @@ type ModelClient = { chat: { completions: { create: (args: {
 }}};
 
 const MIN_ENTRIES = 2;
-const REVIEW_INTERVAL = 8;
+const CLEANUP_EVERY_MESSAGES = 30;
 
 // Automatic consolidation requires a separate source-completeness reviewer and
 // revision-checked archival commit. Keep unique memories unchanged.
@@ -28,7 +29,7 @@ export async function maybeMaintainActorMemory(actorId: string, client: ModelCli
         row.content.entries.length < MIN_ENTRIES) return;
 
     const originals = row.content.entries;
-    const comprehensive = row.revision % REVIEW_INTERVAL === 0;
+    const comprehensive = true;
     const byKey = new Map(originals.map(entry => [entry.key, entry]));
     if (byKey.size !== originals.length) return;
     const system = [
@@ -109,6 +110,32 @@ export async function maybeMaintainActorMemory(actorId: string, client: ModelCli
   } catch (error) {
     console.error("[LTM Maintenance] Failed without modifying existing memory", {
       actorId,error:error instanceof Error?error.message:String(error),
+    });
+  }
+}
+
+/**
+ * Count actual persisted conversational messages actor-wide. This runs only after
+ * the assistant response is saved, independent of whether an LTM candidate was
+ * recognized or a memory write succeeded.
+ */
+export async function maybeRunThirtyMessageCleanup(actorId: string): Promise<void> {
+  try {
+    const admin = getSupabaseAdminClient();
+    const { data, error } = await admin.rpc("count_actor_conversational_messages", { p_actor_id: actorId });
+    if (error) throw error;
+    const count = Number(data);
+    if (!Number.isSafeInteger(count) || count <= 0 || count % CLEANUP_EVERY_MESSAGES !== 0) return;
+    if (!process.env.OPENAI_API_KEY) {
+      console.warn("[LTM Maintenance] Scheduled check skipped: OpenAI not configured", { actorId, count });
+      return;
+    }
+    console.info("[LTM Maintenance] Scheduled review started", { actorId, count });
+    const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+    await maybeMaintainActorMemory(actorId, client);
+  } catch (error) {
+    console.error("[LTM Maintenance] Scheduled review failed without blocking LTM writes", {
+      actorId, error: error instanceof Error ? error.message : String(error),
     });
   }
 }
