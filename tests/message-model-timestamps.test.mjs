@@ -16,7 +16,7 @@ test("provider history retains persisted timestamps as model-visible context", (
 });
 
 test("current timestamp is generated for the system context without rewriting user text", () => {
-  assert.match(route, /CURRENT_REQUEST_TIMESTAMP_UTC: \$\\{new Date\\(\\)\\.toISOString\\(\\)\\}/);
+  assert.ok(route.includes("CURRENT_REQUEST_TIMESTAMP_UTC: ${new Date().toISOString()}"));
   assert.match(route, /user: message,/);
 });
 
