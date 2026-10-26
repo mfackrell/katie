@@ -37,7 +37,7 @@ import { assembleContext } from "@/lib/memory/assemble-context";
 import { loadVisualContinuity, storeVisualAnchor, verifyVisualContinuity } from "@/lib/chat/visual-continuity";
 import { maybeUpdateSummary } from "@/lib/memory/summarizer";
 import { maybeUpdateLongTermMemory } from "@/lib/memory/long-term-editor";
-import { getChatById, listChatsByActorId, getMessages, getRecentMessages, saveMessage } from "@/lib/data/persistence-store";
+import { getChatById, listChatsByActorId, getMessages, getRecentMessages, saveMessage, getMessageById } from "@/lib/data/persistence-store";
 import {
   claimChatRequest,
   completeChatRequest,
@@ -1036,6 +1036,18 @@ async function executeChat(request: NextRequest) {
 
     if (idempotencyClaim.mode === "existing") {
       if (idempotencyClaim.record.status === "completed") {
+        let replayPresentation: import("@/lib/chat/structured-response").StructuredResponse | undefined;
+        if (idempotencyClaim.record.assistantMessageId) {
+          try {
+            const prior = await getMessageById(chatId, idempotencyClaim.record.assistantMessageId);
+            replayPresentation = prior?.content === idempotencyClaim.record.assistantContent
+              ? prior.presentation : undefined;
+          } catch (error) {
+            console.warn("[Presentation] Replay fell back to canonical Markdown", {
+              requestId, reason: error instanceof Error ? error.message : "lookup failed",
+            });
+          }
+        }
         const replayBody = [
           JSON.stringify({
             type: "metadata",
@@ -1047,6 +1059,7 @@ async function executeChat(request: NextRequest) {
           JSON.stringify({
             type: "content",
             text: idempotencyClaim.record.assistantContent ?? "",
+            ...(replayPresentation ? { presentation: replayPresentation } : {}),
             assets: idempotencyClaim.record.assistantAssets,
             provider: "replay",
             model: idempotencyClaim.record.assistantModel ?? "unknown",
