@@ -17,7 +17,9 @@ export const PRESENTATION_GENERATION_GUIDANCE = [
   "No executable code, HTML, CSS, URLs, actions, arbitrary fields or other component types in visual JSON.",
 ].join("\n");
 
-export function parsePresentationTail(raw: string): {
+export function parsePresentationTail(
+  raw: string, assets: Array<{ type: string; url: string }> = [],
+): {
   text: string;
   presentation: StructuredResponse | null;
 } {
@@ -42,6 +44,13 @@ export function parsePresentationTail(raw: string): {
     const presentation = validatePresentation({
       version: record.version, blocks: record.blocks, fallbackMarkdown: prefix,
     });
+    // A model may reference only an image actually attached to this saved
+    // assistant message. It cannot introduce URLs or external requests.
+    if (presentation?.blocks.some(block => block.type === "media" &&
+      (assets[block.assetIndex]?.type !== "image" ||
+        !/^https:\\/\\//i.test(assets[block.assetIndex]?.url ?? "")))) {
+      return { text: prefix, presentation: null };
+    }
     return { text: prefix, presentation };
   } catch {
     return { text: prefix, presentation: null };
