@@ -436,10 +436,10 @@ function buildGenerationParams({
 }) {
   return {
     name,
-    persona,
+    persona: `${persona}\n\nCURRENT_REQUEST_TIMESTAMP_UTC: ${new Date().toISOString()}`,
     summary,
     history,
-    user: `[Current message timestamp: ${new Date().toISOString()}]\n${message}`,
+    user: message,
     requestIntent,
     secondaryIntents,
     images,
