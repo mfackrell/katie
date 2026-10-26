@@ -3,8 +3,8 @@
 // grants Full authority, or creates an executable paid Native/Thin adapter.
 import {createHash,randomUUID} from 'node:crypto';
 import {createRequire} from 'node:module';
-import {readFileSync,writeFileSync} from 'node:fs';
-import {resolve} from 'node:path';
+import {readFileSync,writeFileSync,readdirSync} from 'node:fs';
+import {resolve,join} from 'node:path';
 import {assertBenchmarkDollarCeiling} from './paid-dollar-ceiling.mjs';
 const require=createRequire(resolve('package.json'));
 const {createClient}=require('@supabase/supabase-js');
@@ -74,6 +74,29 @@ export function verifyOwnerEnvironment(env,event){
     deny('staging-identity');
  return env.KATIE_NONFULL_STAGING_OWNER_ID;
 }
+// Compare EVERY committed migration checksum against the authoritative custom
+// ledger. Merely matching 117 rows cannot prove the schema/bootstrap identity.
+export function verifyCustomLedger(entries,dir=resolve('supabase/migrations')){
+ if(!Array.isArray(entries)||entries.length!==117)deny('custom-migration-ledger-count');
+ const files=readdirSync(dir).filter(x=>x.endsWith('.sql')).sort();
+ if(files.length!==115)deny('migration-source-version-drift');
+ const ledger=new Map();
+ for(const row of entries){
+  if(typeof row?.filename!=='string'||typeof row?.checksum!=='string'||
+     ledger.has(row.filename))deny('custom-migration-ledger-invalid');
+  ledger.set(row.filename,row.checksum);
+ }
+ for(const name of files){
+  const checksum=createHash('sha256').update(readFileSync(join(dir,name))).digest('hex');
+  if(ledger.get(name)!==checksum)deny('custom-migration-checksum:'+name);
+  ledger.delete(name);
+ }
+ const historical=['20261021121500_incomplete_game_review_recovery.sql',
+  '20261021121600_resume_oversized_game_specification.sql'];
+ if(ledger.size!==2||historical.some(name=>
+  !/^[0-9a-f]{64}$/.test(ledger.get(name)||'')))deny('unknown-historical-ledger');
+ return true;
+}
 async function rows(db,table){
  const {count,error}=await db.from(table).select('*',{count:'exact',head:true});
  if(error||!Number.isSafeInteger(count))deny('table-access:'+table);
@@ -85,8 +108,10 @@ async function insert(db,table,item){
  return data;
 }
 export async function bootstrap({db,ownerId}){
- const schemaCount=await rows(db,'schema_migrations');
- if(schemaCount!==117)deny('custom-schema-migration-coverage');
+ const {data:ledger,error:ledgerError}=await db.from('schema_migrations')
+  .select('filename,checksum');
+ if(ledgerError)deny('custom-schema-ledger-unavailable');
+ verifyCustomLedger(ledger);
  for(const table of ['actors','chats','benchmark_three_arm_trials',
   'benchmark_budget_accounts','benchmark_native_spending_approvals']){
   if(await rows(db,table)!==0)deny('not-clean-staging:'+table);
