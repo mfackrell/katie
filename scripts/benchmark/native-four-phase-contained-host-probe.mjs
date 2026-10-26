@@ -43,7 +43,7 @@ const server=createNativeHttpBridge({
  db,grantToken:'synthetic-'+('z'.repeat(60)),trialId:boundTrialId,
  executionEpoch:1,providerNamespace:'synthetic',upperTokens:100,fullMission:()=>arm==='full',
  clientToken:'contained-fixture-token',recordReceipt:async r=>receipts.push(r),
- upstream:async request=>{
+ upstream:Object.assign(async request=>{
   forwarded++;
   assert.equal(phases[(forwarded-1)%4],phase,'unexpected SDK retry or continuation');
   const verdict=phase==='review'?'CHANGES_REQUESTED: synthetic defect':
@@ -61,7 +61,7 @@ const server=createNativeHttpBridge({
   ];
   return {providerRequestId:response.id,actualTokens:5,contentType:'text/event-stream',
    body:events.map(([event,data])=>'event: '+event+'\ndata: '+JSON.stringify(data)+'\n\n').join('')+'data: [DONE]\n\n'};
- }
+ },{nonbillableFixture:true})
 });
 try{
  await new Promise(resolve=>server.listen(socket,resolve));
