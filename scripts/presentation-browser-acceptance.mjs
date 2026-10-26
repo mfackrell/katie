@@ -20,6 +20,10 @@ if (existsSync(fixturePath)) throw new Error("Refusing to replace an existing ro
 const fixture = `
 "use client";
 import { StructuredResponseView } from "@/components/structured-response-view";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
+import remarkMath from "remark-math";
+import rehypeKatex from "rehype-katex";
 import type { StructuredResponse } from "@/lib/chat/structured-response";
 const response = {
   version: 1, fallbackMarkdown: "Before. After.",
@@ -35,7 +39,7 @@ const response = {
 export default function PresentationAcceptancePage() {
   return <main className="mx-auto max-w-2xl p-6" data-testid="presentation-fixture">
     <StructuredResponseView response={response} ordered assets={[{ type: "image", url: "https://images.example.test/saved.png" }]} />
-    <p data-testid="equation" className="sr-only">Math content is checked in separate Markdown test fixtures</p>
+    <div data-testid="equation"><ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]}>{"Inline $x^2$.\\n\\n$x^2+y^2=z^2$"}</ReactMarkdown></div>
   </main>;
 }
 `;
@@ -88,6 +92,8 @@ try {
   }
   if (await page.locator('svg[aria-label="Illustrative 25 and 75 mix"] circle').count() < 2) throw new Error("Donut SVG not rendered");
   if (await page.locator('img[alt="Authorized fixture image"]').count() !== 1) throw new Error("Saved media missing");
+  if (await page.locator('[data-testid="equation"] .katex').count() < 2) throw new Error("Inline/display KaTeX failed");
+  if (await page.locator('[data-testid="equation"] .katex-display').count() < 1) throw new Error("Display equation not rendered");
   await page.getByRole("button", { name: "Upside" }).click();
   if (!(await getText()).includes("Upside case result")) throw new Error("Interactive selector failed");
   await page.reload();
@@ -96,7 +102,7 @@ try {
   await page.setViewportSize({ width: 390, height: 844 });
   const mobile = await page.evaluate(() => ({ width: document.documentElement.scrollWidth, viewport: window.innerWidth }));
   if (mobile.width > mobile.viewport + 20) throw new Error("Mobile presentation overflows: " + JSON.stringify(mobile));
-  console.log(JSON.stringify({ passed: true, ordered: true, donut: true, image: true, interaction: true, reload: true, mobile: true }));
+  console.log(JSON.stringify({ passed: true, ordered: true, donut: true, image: true, math: true, interaction: true, reload: true, mobile: true }));
 } finally {
   await cleanup();
 }
