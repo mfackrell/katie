@@ -1,4 +1,5 @@
 import { isExplicitKatieSelfInspectionRequest } from "@/lib/tools/self-inspection-intent";
+import { PresentationStreamFilter, parsePresentationTail, PRESENTATION_GENERATION_GUIDANCE } from "@/lib/presentation/stream-protocol";
 import { quarantineUnavailableModel } from "@/lib/models/registry";
 import { runSelfInspection } from "@/lib/tools/self-inspection";
 import { authorizeSelfToolCaller } from "@/lib/tools/authorization";
@@ -37,7 +38,7 @@ import { assembleContext } from "@/lib/memory/assemble-context";
 import { loadVisualContinuity, storeVisualAnchor, verifyVisualContinuity } from "@/lib/chat/visual-continuity";
 import { maybeUpdateSummary } from "@/lib/memory/summarizer";
 import { maybeUpdateLongTermMemory } from "@/lib/memory/long-term-editor";
-import { getChatById, listChatsByActorId, getMessages, getRecentMessages, saveMessage } from "@/lib/data/persistence-store";
+import { getChatById, listChatsByActorId, getMessages, getRecentMessages, saveMessage, getMessageById } from "@/lib/data/persistence-store";
 import {
   claimChatRequest,
   completeChatRequest,
@@ -1033,6 +1034,18 @@ async function executeChat(request: NextRequest) {
 
     if (idempotencyClaim.mode === "existing") {
       if (idempotencyClaim.record.status === "completed") {
+        let replayPresentation: import("@/lib/chat/structured-response").StructuredResponse | undefined;
+        if (idempotencyClaim.record.assistantMessageId) {
+          try {
+            const prior = await getMessageById(chatId, idempotencyClaim.record.assistantMessageId);
+            replayPresentation = prior && prior.content === idempotencyClaim.record.assistantContent
+              ? prior.presentation : undefined;
+          } catch (error) {
+            console.warn("[Presentation] Replay fell back to canonical Markdown", {
+              requestId, reason: error instanceof Error ? error.message : "lookup failed",
+            });
+          }
+        }
         const replayBody = [
           JSON.stringify({
             type: "metadata",
@@ -1044,6 +1057,7 @@ async function executeChat(request: NextRequest) {
           JSON.stringify({
             type: "content",
             text: idempotencyClaim.record.assistantContent ?? "",
+            ...(replayPresentation ? { presentation: replayPresentation } : {}),
             assets: idempotencyClaim.record.assistantAssets,
             provider: "replay",
             model: idempotencyClaim.record.assistantModel ?? "unknown",
@@ -2093,6 +2107,9 @@ async function executeChat(request: NextRequest) {
 
             await saveTaskProgress(actorId, chatId, taskProgress);
             console.log(`[Chat API] Requesting generation from ${provider.name} using model ${modelId}...`);
+            const presentationEnabled = process.env.KATIE_PRESENTATION_V1 === "enabled" && !currentAgentTask();
+            if (presentationEnabled) personaForGeneration += "\n\n" + PRESENTATION_GENERATION_GUIDANCE;
+            const presentationFilter = presentationEnabled ? new PresentationStreamFilter() : null;
             const enqueueDelta = (delta: string) => {
               // Always-mode responses remain buffered until the output guard
               // confirms a brief reply or independent review finishes.
@@ -2101,8 +2118,10 @@ async function executeChat(request: NextRequest) {
               // the app is backgrounded. A disconnected UI must not cancel the
               // actual model generation: keep consuming the provider stream so
               // the completed assistant response can still be persisted.
-              emitChunk({ type: "delta", text: delta });
-              const reasoningUpdate = reasoningState.addDelta(delta);
+              const visibleDelta = presentationFilter ? presentationFilter.write(delta) : delta;
+              if (!visibleDelta) return;
+              emitChunk({ type: "delta", text: visibleDelta });
+              const reasoningUpdate = reasoningState.addDelta(visibleDelta);
               if (reasoningUpdate) {
                 reasoningUpdateCount += 1;
                 if (firstReasoningUpdateAtMs === null) {
@@ -3263,20 +3282,20 @@ ${chunkWorkflowSummary}`;
                 })
                 .filter((asset): asset is { type: "image"; url: string } => Boolean(asset)) ?? [];
 
-            emitChunk({
-              type: "content",
-              text: result.text || streamedText,
-              assets: imageAssets,
-              provider: result.provider,
-              model: result.model
-            });
-
-            const finalAnswerEvent = reasoningState.finalize(result.text || streamedText);
-            emitChunk(reasoningState.snapshot());
-            emitChunk(finalAnswerEvent);
-
+            // Final content and structured blocks are committed before the
+            // authoritative content event. Interrupted streams never expose
+            // unvalidated or unpersisted interactive components.
+            const rawAssistantText = result.text || streamedText;
+            const presentationResult = presentationEnabled
+              ? parsePresentationTail(rawAssistantText)
+              : { text: rawAssistantText, presentation: null };
+            const assistantText = presentationResult.text;
+            const assistantPresentation = presentationResult.presentation;
+            if (presentationFilter && reviewMode !== "always") {
+              const tail = presentationFilter.finish();
+              if (tail) emitChunk({ type: "delta", text: tail });
+            }
             console.log("[Chat API] Generation successful. Saving assistant response.");
-            const assistantText = result.text || streamedText;
             const assistantMessageId = pendingVideoAssistantMessageId ?? taskProgressAssistantMessageId;
             await saveMessage(chatId, {
               id: assistantMessageId,
@@ -3284,7 +3303,19 @@ ${chunkWorkflowSummary}`;
               model: result.model,
               content: assistantText,
               assets: imageAssets,
+              ...(assistantPresentation ? { presentation: assistantPresentation } : {}),
             });
+            emitChunk({
+              type: "content",
+              text: assistantText,
+              ...(assistantPresentation ? { presentation: assistantPresentation } : {}),
+              assets: imageAssets,
+              provider: result.provider,
+              model: result.model,
+            });
+            const finalAnswerEvent = reasoningState.finalize(assistantText);
+            emitChunk(reasoningState.snapshot());
+            emitChunk(finalAnswerEvent);
             if (visualContinuity && imageAssets.length) {
               // Group images never become identity anchors; an explicit portrait correction may replace one.
               try {
