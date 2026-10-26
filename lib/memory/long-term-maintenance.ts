@@ -15,8 +15,8 @@ type ModelClient = { chat: { completions: { create: (args: {
 const MIN_ENTRIES = 2;
 const REVIEW_INTERVAL = 8;
 
-// Maintenance is advisory until two independent model calls agree on exact
-// source keys and replacement text. No unsupported fact can be introduced.
+// Automatic consolidation requires a separate source-completeness reviewer and
+// revision-checked archival commit. Keep unique memories unchanged.
 export async function maybeMaintainActorMemory(actorId: string, client: ModelClient): Promise<void> {
   try {
     const admin = getSupabaseAdminClient();
@@ -28,6 +28,7 @@ export async function maybeMaintainActorMemory(actorId: string, client: ModelCli
         row.content.entries.length < MIN_ENTRIES) return;
 
     const originals = row.content.entries;
+    const comprehensive = row.revision % REVIEW_INTERVAL === 0;
     const byKey = new Map(originals.map(entry => [entry.key, entry]));
     if (byKey.size !== originals.length) return;
     const system = [
@@ -47,12 +48,13 @@ export async function maybeMaintainActorMemory(actorId: string, client: ModelCli
         model: "gpt-4o-mini", temperature: 0, response_format: {type:"json_object"},
         messages: [
           {role:"system",content:instructions},
-          {role:"user",content:JSON.stringify({entries: originals})},
+          {role:"user",content:JSON.stringify({reviewMode: comprehensive ? "comprehensive" : "incremental",entries: originals})},
         ],
       });
       return JSON.parse(response.choices?.[0]?.message?.content ?? "{}") as Verdict;
     };
     const proposal = await ask(system);
+    if (!Array.isArray(proposal.groups) || proposal.groups.length === 0) return;
     const reviewResponse = await client.chat.completions.create({
       model:"gpt-4o-mini",temperature:0,response_format:{type:"json_object"},
       messages:[
