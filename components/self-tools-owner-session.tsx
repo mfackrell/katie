@@ -9,6 +9,7 @@ export function SelfToolsOwnerSession({ chatId }: { chatId: string }) {
   const [email, setEmail] = useState("");
   const [emailReady, setEmailReady] = useState(false);
   const [signedIn, setSignedIn] = useState(false);
+  const [sessionReady, setSessionReady] = useState(false);
   const [code, setCode] = useState("");
   const [codeRequested, setCodeRequested] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -26,13 +27,34 @@ export function SelfToolsOwnerSession({ chatId }: { chatId: string }) {
         ? "This sign-in link was already used or expired. Request a fresh link and open it once in this browser."
         : "Sign-in could not be completed. Request a new link.");
     }
+    // INITIAL_SESSION is the authoritative completion of Supabase's persisted
+    // session recovery. Do not let an older getSession result overwrite a later
+    // SIGNED_IN or TOKEN_REFRESHED event.
+    const {data:{subscription}} = client.auth.onAuthStateChange((event,session)=>{
+      if (!active) return;
+      if (event === "INITIAL_SESSION" || event === "SIGNED_IN" ||
+          event === "TOKEN_REFRESHED" || event === "SIGNED_OUT" ||
+          event === "USER_UPDATED") {
+        setSignedIn(Boolean(session));
+        setSessionReady(true);
+        if (session) setNotice("");
+      }
+    });
     void client.auth.getSession().then(({data,error}) => {
       if(!active) return;
-      setSignedIn(Boolean(data.session));
-      if(error) setNotice("Unable to restore the owner session. Request a fresh sign-in link.");
-    });
-    const {data:{subscription}} = client.auth.onAuthStateChange((_event,session)=>{
-      if(active) setSignedIn(Boolean(session));
+      if (error) {
+        setNotice("Owner session recovery failed: " + error.message);
+      } else if (data.session) {
+        setSignedIn(true);
+        setSessionReady(true);
+      } else {
+        // A null result does not supersede a later authenticated event.
+        setSessionReady(true);
+      }
+    }).catch((error:unknown)=>{
+      if (!active) return;
+      setSessionReady(true);
+      setNotice("Owner session recovery failed: " + (error instanceof Error ? error.message : "unknown error"));
     });
     return ()=>{active=false;subscription.unsubscribe();};
   },[client]);
@@ -71,6 +93,7 @@ export function SelfToolsOwnerSession({ chatId }: { chatId: string }) {
       setCode("");
       setCodeRequested(false);
       setSignedIn(true);
+      setSessionReady(true);
       setNotice("Owner session active. Authorize this chat to use self-management tools.");
     } finally {setBusy(false);}
   }
@@ -94,7 +117,9 @@ export function SelfToolsOwnerSession({ chatId }: { chatId: string }) {
   }
   return (
     <section aria-label="Katie self-tools owner authentication" className="shrink-0 border-t border-emerald-500/30 bg-zinc-900 px-4 py-3 text-sm text-zinc-100">
-      {signedIn ? (
+      {!sessionReady ? (
+        <p role="status">Restoring owner session…</p>
+      ) : signedIn ? (
         <div className="flex items-center justify-between gap-3">
           <span>Owner session active. Self-management still requires server authorization.</span>
           <div className="flex gap-3"><button type="button" onClick={()=>void authorizeChat()} className="underline">Authorize this chat</button><button type="button" onClick={()=>void signOut()} className="underline">Sign out</button></div>
