@@ -27,5 +27,5 @@ test('production and fixture workers derive config from the same trusted module'
  }
  assert.match(host,/shared-native-policy\.mjs/);
  const workflow=readFileSync('.github/workflows/autonomous-development.yml','utf8');
- assert.match(workflow,/shared-native-phase,shared-native-policy\}\.mjs/);
+ assert.match(workflow,/shared-native-phase,shared-native-policy,shared-native-container\}\.mjs/);
 });
