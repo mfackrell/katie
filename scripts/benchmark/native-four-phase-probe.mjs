@@ -78,5 +78,5 @@ try{
  console.log('NATIVE_FOUR_PHASE_METERED_SYNTHETIC_PASS');
 }finally{
  await new Promise(resolve=>server.close(resolve));
- rmSync(root,{recursive:true,force:true});
+ rmSync(root,{recursive:true,force:true,maxRetries:20,retryDelay:200});
 }

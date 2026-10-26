@@ -75,7 +75,8 @@ try{
    workspace:join(workRoot,arm),socketDir:socketdir,arm,phase,command,
    readOnly:reviewing,
    extraMounts:[...protectedNativeMounts(assertTrustedBoundary(join(workRoot,arm))),
-    '--ro-bind',process.cwd(),'/app']
+    '--ro-bind',process.cwd(),'/app'],
+   extraEnv:['--setenv','KATIE_NATIVE_MODEL','synthetic']
   });
   // The shared launcher runs from /work. Test code is in trusted /app.
   const child=spawn('bwrap',args,{env:{PATH:process.env.PATH||''}});

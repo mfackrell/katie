@@ -1,0 +1,113 @@
+name: Benchmark 715 owner staging qualification
+
+on:
+  workflow_dispatch:
+  issues:
+    types: [opened]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: benchmark-715-staging-owner-qualification
+  cancel-in-progress: false
+
+jobs:
+  qualify:
+    if: >-
+      ${{ github.repository == 'mfackrell/katie' &&
+          github.actor == github.repository_owner &&
+          (github.event_name == 'workflow_dispatch' ||
+           (github.event_name == 'issues' &&
+            github.event.issue.user.login == github.repository_owner &&
+            github.event.issue.title == '[benchmark-715] Owner staging nonbillable qualification')) }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 50
+    env:
+      OPENAI_API_KEY: ''
+      CODEX_ACCESS_TOKEN: ''
+      KATIE_BENCHMARK_PAID_EXECUTION: disabled
+      KATIE_NONFULL_STAGING_ONLY: ${{ secrets.KATIE_NONFULL_STAGING_CONFIRMED }}
+      KATIE_NONFULL_STAGING_SUPABASE_URL: ${{ secrets.KATIE_NONFULL_STAGING_SUPABASE_URL }}
+      KATIE_NONFULL_STAGING_SERVICE_ROLE_KEY: ${{ secrets.KATIE_NONFULL_STAGING_SERVICE_ROLE_KEY }}
+      KATIE_NONFULL_STAGING_OWNER_ID: ${{ secrets.KATIE_NONFULL_STAGING_OWNER_ID }}
+      KATIE_NONFULL_PRODUCTION_SUPABASE_URL: ${{ secrets.KATIE_NONFULL_PRODUCTION_SUPABASE_URL }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install pinned dependencies without install hooks
+        run: npm ci --ignore-scripts
+      - name: Admit exact owner and stage, create three isolated trial budgets
+        run: |
+          set -euo pipefail
+          node scripts/benchmark/owner-staging-bootstrap.mjs "$RUNNER_TEMP/benchmark-715-provision.json"
+      - name: Verify each Native/Thin grant against actual staging owner ledger
+        run: |
+          set -euo pipefail
+          for arm in native thin; do
+            mkdir -p "$RUNNER_TEMP/$arm"
+            read -r trial account approval < <(node - "$RUNNER_TEMP/benchmark-715-provision.json" "$arm" <<'NODE'
+          const fs=require('fs');
+          const manifest=JSON.parse(fs.readFileSync(process.argv[2],'utf8'));
+          const record=manifest.arms.find(x=>x.arm===process.argv[3]);
+          if(!record?.trialId||!record.accountId||!record.approvalId)process.exit(1);
+          console.log(record.trialId,record.accountId,record.approvalId);
+          NODE
+            )
+            KATIE_BENCHMARK_SUPABASE_URL="$KATIE_NONFULL_STAGING_SUPABASE_URL" \
+            KATIE_BENCHMARK_SERVICE_ROLE_KEY="$KATIE_NONFULL_STAGING_SERVICE_ROLE_KEY" \
+            KATIE_BENCHMARK_OWNER_ID="$KATIE_NONFULL_STAGING_OWNER_ID" \
+              node scripts/benchmark/native-thin-preflight.mjs \
+                "$arm" "$trial" "$account" "$approval" \
+                "$RUNNER_TEMP/$arm/native-thin-approved.json"
+          done
+      - name: Install pinned native engineering SDK
+        run: npm install --no-save --package-lock=false --ignore-scripts @openai/codex-sdk@0.164.0
+      - name: Prepare required filesystem and HTTP socket isolation
+        run: |
+          set -euo pipefail
+          command -v bwrap >/dev/null || (sudo apt-get update && sudo apt-get install -y bubblewrap)
+          command -v socat >/dev/null || (sudo apt-get update && sudo apt-get install -y socat)
+          if test -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
+      - name: Qualify Native/Thin through actual staging grant and canonical receipts
+        run: |
+          set -euo pipefail
+          base="$RUNNER_TEMP"
+          for arm in native thin; do
+            read -r trial account approval < <(node - "$base/benchmark-715-provision.json" "$arm" <<'NODE'
+          const fs=require('fs');
+          const m=JSON.parse(fs.readFileSync(process.argv[2],'utf8'));
+          const a=m.arms.find(x=>x.arm===process.argv[3]);
+          if(!a?.trialId||!a.accountId||!a.approvalId)process.exit(1);
+          console.log(a.trialId,a.accountId,a.approvalId);
+          NODE
+            )
+            export RUNNER_TEMP="$base/$arm"
+            node scripts/benchmark/nonfull-staging-launch.mjs "$arm" "$trial" "$account" "$approval"
+            test -s "$RUNNER_TEMP/nonfull-staging-acceptance.json"
+            jq -e --arg arm "$arm" '.arm == $arm and .nonbillable == true and
+              .settledReceipts == 4 and .actualTokens == 20 and
+              .accepted == false and .reviewRequired == true' \
+              "$RUNNER_TEMP/nonfull-staging-acceptance.json"
+          done
+          echo 'BENCHMARK_715_NATIVE_THIN_NONBILLABLE_QUALIFIED; Full still requires DO project/mission approval.'
+      - name: Save reviewed nonbillable receipts for reconciliation
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-715-staging-owner-qualification
+          path: |
+            ${{ runner.temp }}/benchmark-715-provision.json
+            ${{ runner.temp }}/native/native-thin-approved.json
+            ${{ runner.temp }}/thin/native-thin-approved.json
+            ${{ runner.temp }}/native/nonfull-staging-acceptance.json
+            ${{ runner.temp }}/thin/nonfull-staging-acceptance.json
+          if-no-files-found: warn

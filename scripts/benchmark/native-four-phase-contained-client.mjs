@@ -16,9 +16,10 @@ mkdirSync(state,{recursive:true});
 const url=NATIVE_GATEWAY_URL;
 writeFileSync(join(state,'config.toml'),nativeCodexConfig(url));
 const arm=process.env.KATIE_BENCHMARK_ARM;
-assertNativeEffectivePolicy({gateway:url,model:'synthetic',arm,phase});
+const approvedModel=process.env.KATIE_NATIVE_MODEL;
+assertNativeEffectivePolicy({gateway:url,model:approvedModel,arm,phase});
 const {completed,reviewMessage:message}=await executeSharedNativePhase({
- Codex,arm,phase,gateway:url,bearer:'contained-fixture-token',model:'synthetic',
+ Codex,arm,phase,gateway:url,bearer:'contained-fixture-token',model:approvedModel,
  home,state,root:'/work',prompt:'Contained qualification phase: '+phase,
  onEvent:event=>{if(event.type==='turn.failed')console.error('CONTAINED_SYNTHETIC_TURN_FAILURE',String(event.error?.message||event.error?.code||'unknown').slice(0,300))}
 });
