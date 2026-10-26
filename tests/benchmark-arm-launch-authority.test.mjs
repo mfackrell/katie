@@ -80,3 +80,12 @@ test('staging qualification requires four canonical receipts and persists review
  assert.match(workflow,/nonfull-staging-acceptance\.json/);
  assert.match(workflow,/ref: main/);
 });
+
+test('real staging qualification sends the model bound to the persisted owner grant',()=>{
+ const launcher=readFileSync('scripts/benchmark/nonfull-staging-launch.mjs','utf8');
+ const child=readFileSync('scripts/benchmark/native-four-phase-contained-client.mjs','utf8');
+ assert.match(launcher,/model:approval\.model/);
+ assert.match(child,/process\.env\.KATIE_NATIVE_MODEL/);
+ assert.match(child,/model:approvedModel/);
+ assert.doesNotMatch(child,/model:'synthetic'/);
+});
