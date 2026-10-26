@@ -1,6 +1,7 @@
 // True contained four-phase SDK qualification with a separate trusted Unix
 // socket gateway. All responses are synthetic and cannot incur model charges.
 import {createNativeHttpBridge} from './native-http-bridge.mjs';
+import {sharedNativeContainerArgs} from './shared-native-container.mjs';
 import {mkdtempSync,mkdirSync,rmSync,readFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
@@ -69,18 +70,12 @@ try{
   phase=next;
   const reviewing=phase==='review'||phase==='final-review';
   const command='socat TCP-LISTEN:43181,bind=127.0.0.1,reuseaddr,fork UNIX-CONNECT:/gateway/gateway.sock & proxy=$!; trap "kill $proxy 2>/dev/null || :" EXIT; node /app/scripts/benchmark/native-four-phase-contained-client.mjs';
-  const args=['--die-with-parent','--new-session','--unshare-all','--clearenv',
-   '--ro-bind','/usr','/usr','--ro-bind','/bin','/bin',
-   '--ro-bind','/lib','/lib','--ro-bind','/lib64','/lib64',
-   '--ro-bind','/opt','/opt','--ro-bind',process.cwd(),'/app',
-   reviewing?'--ro-bind':'--bind',join(workRoot,arm),'/work',
-   '--bind',socketdir,'/gateway','--tmpfs','/tmp','--proc','/proc','--dev','/dev',
-   '--setenv','HOME','/tmp/contained','--setenv','CODEX_HOME','/tmp/contained/.codex',
-   '--setenv','PATH',process.env.PATH||'/usr/bin:/bin',
-   '--setenv','KATIE_NATIVE_PHASE',phase,
-   '--setenv','KATIE_BENCHMARK_ARM',arm,
-   '--setenv','KATIE_OUTER_SANDBOX_CONFIRMED','1',
-   '--chdir','/app','/bin/sh','-c',command];
+  const args=sharedNativeContainerArgs({
+   workspace:join(workRoot,arm),socketDir:socketdir,arm,phase,command,
+   readOnly:reviewing,
+   extraMounts:['--ro-bind',process.cwd(),'/app']
+  });
+  // The shared launcher runs from /work. Test code is in trusted /app.
   const child=spawn('bwrap',args,{env:{PATH:process.env.PATH||''}});
   let output='',errors='';
   child.stdout.on('data',x=>output+=x);
