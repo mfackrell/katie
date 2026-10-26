@@ -32,9 +32,28 @@ export async function forwardAuthorizedModelRequest({
   return Object.entries(value).some(([key,child])=>
    ['image_url','input_audio','input_image','audio','file_id'].includes(key)||containsNontext(child));
  };
+ // Provider-side references can expand to unbounded billable context. Allow only
+ // explicitly bounded, inline text request shapes on the paid boundary.
+ const assertPaidRequestShape=body=>{
+  const keys=new Set(['model','input','instructions','max_output_tokens','stream','tools','tool_choice','parallel_tool_calls','reasoning','text','temperature','top_p','store','include','metadata','truncation']);
+  for(const key of Object.keys(body))if(!keys.has(key))throw Error('GATEWAY_UNBOUNDED_INPUT_DENIED');
+  if(typeof body.input!=='string'&&!Array.isArray(body.input))throw Error('GATEWAY_UNBOUNDED_INPUT_DENIED');
+  const parts=Array.isArray(body.input)?body.input:[];
+  for(const item of parts){
+   if(!item||typeof item!=='object'||!['user','assistant','developer','system','tool'].includes(item.role)||!Array.isArray(item.content))
+    throw Error('GATEWAY_UNBOUNDED_INPUT_DENIED');
+   for(const part of item.content){
+    if(!part||!['input_text','output_text','text'].includes(part.type)||typeof part.text!=='string')
+     throw Error('GATEWAY_UNBOUNDED_INPUT_DENIED');
+   }
+  }
+  if(body.store===true||body.truncation==='auto'||body.include?.length)
+   throw Error('GATEWAY_UNBOUNDED_INPUT_DENIED');
+ };
  const syntheticFixture=upstream.nonbillableFixture===true;
- if(!requestBody||typeof requestBody!=='object'||(!syntheticFixture&&containsNontext(requestBody)))
+ if(!requestBody||typeof requestBody!=='object'||Array.isArray(requestBody)||(!syntheticFixture&&containsNontext(requestBody)))
   throw Error('GATEWAY_UNBOUNDED_INPUT_DENIED');
+ if(!syntheticFixture)assertPaidRequestShape(requestBody);
  const outputCap=requestBody.max_output_tokens==null?4096:requestBody.max_output_tokens;
  if(!syntheticFixture&&(!Number.isSafeInteger(outputCap)||outputCap<1||outputCap>upperTokens))
   throw Error('GATEWAY_OUTPUT_LIMIT_DENIED');
