@@ -67,14 +67,14 @@ export async function handleProjectChat(input: {
     /** Source-validated semantic admission from the shared control plane. */
     softwareBuildIntent?: boolean;
 }, requestId: string, history: Message[], tracked: boolean): Promise<string | null> {
-    const text = input.message.trim(), pending = history.some(m => m.role === 'assistant' && marker.test(m.content) && !['completed', 'stopped'].includes(m.content.match(marker)![1]));
+    const text = input.message.trim(), pending = history.some(m => m.role === 'assistant' && marker.test(m.content) && !['completed', 'stopped','failed'].includes(m.content.match(marker)![1]));
     const start = startProjectIntent(text), follow = followupProjectIntent(text), control = /\b(?:project|progress|status|pause|stop|resume|continue|approve|game|edition|requirement|keyboard|multiplayer)\b|^go ahead|how.{0,12}going/i.test(text);
     if (!pending && !start && !follow && !control && !projectControl(text) && !amendmentIntent(text))
         return null;
     const p = await projectForChat(input.actorId, input.chatId);
     const reply = (p: Project, body: string) => projectMessage(p.id, p.status, body);
     const mutate = async (action: string, opts: Record<string, unknown> = {}) => projectRpc<Project>('control_work_project', { p_id: p!.id, p_actor: input.actorId, p_chat: input.chatId, p_action: action, ...opts });
-    if (p && !['completed', 'stopped'].includes(p.status)) {
+    if (p && !['completed', 'stopped','failed'].includes(p.status)) {
         // Explicit non-scope progress notes must never cancel reviewed research,
         // invalidate a saved approval, or restart a development milestone.
         const note=/^(?:project note|progress note)\s*:\s*(.+)$/is.exec(text);

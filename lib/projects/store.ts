@@ -54,6 +54,8 @@ export type Project = {
     lease: string;
     detail: string | null;
     result: string | null;
+    completion_contract?: { version: number; ownerAgentId: string; outcome: string; scopeHash: string | null; stoppingCondition: string };
+    impediment?: { kind: 'failed' | 'blocked'; step: string; impediment: string; attempted: string[]; minimumAction: string } | null;
 };
 export type Run = {
     created_at: string;

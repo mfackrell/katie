@@ -183,9 +183,9 @@ export function acceptanceIds(a: IndependentAssessment): string[] {
     "overall-objective", "factual-support", "prior-findings", ...Object.keys(JUDGMENT_CHECKS),
   ];
 }
-export function validateAnswerReview(value: unknown, assessment: IndependentAssessment): AnswerReview {
+export function validateAnswerReview(value: unknown, assessment: IndependentAssessment, requiredIds?: string[]): AnswerReview {
   const r = value as AnswerReview;
-  const expected = acceptanceIds(assessment);
+  const expected = requiredIds ?? acceptanceIds(assessment);
   if (!r || !["approve", "revise"].includes(r.verdict) || !nonempty(r.findings) || !Array.isArray(r.checks) ||
       r.checks.length !== expected.length || new Set(r.checks.map(c => c?.id)).size !== expected.length ||
       r.checks.some(c => !c || !expected.includes(c.id) || typeof c.passed !== "boolean" || !nonempty(c.evidence))) {
