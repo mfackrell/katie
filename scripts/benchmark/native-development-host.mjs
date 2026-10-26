@@ -50,16 +50,16 @@ const task=await readOne('agent_tasks','id',proof.taskId);
 // A token-only cap cannot discharge the owner's $10 per-arm approval.
 // Verify model pricing AND the independent owner-controlled upper price ceiling
 // before issuing any execution grant or allowing any paid provider traffic.
-const {data:pricing,error:pricingError}=await db.from('model_pricing')
- .select('input_cost_per_1m,output_cost_per_1m,pricing_status')
+const {data:pricing,error:pricingError}=await db.from('model_registry')
+ .select('pricing_input_per_1m,pricing_output_per_1m,pricing_status')
  .eq('provider_name','openai').eq('model_id',approval.model).maybeSingle();
-if(pricingError||!pricing||pricing.pricing_status!=='complete')
+if(pricingError||!pricing||pricing.pricing_status!=='verified')
  denied('model price evidence unavailable');
 assertBenchmarkDollarCeiling({
  armUsdCents:Number(process.env.KATIE_BENCHMARK_APPROVED_ARM_USD_CENTS),
  priceCeilingMicrosPerMillion:Number(process.env.KATIE_BENCHMARK_APPROVED_MAX_USD_MICROS_PER_MILLION),
- publishedInputUsdPerMillion:pricing.input_cost_per_1m,
- publishedOutputUsdPerMillion:pricing.output_cost_per_1m,
+ publishedInputUsdPerMillion:pricing.pricing_input_per_1m,
+ publishedOutputUsdPerMillion:pricing.pricing_output_per_1m,
  accountTokens:Number(account.cap_tokens),approvalTokens:Number(approval.max_tokens)
 });
 if(trial.arm!=='full'||trial.state!=='qualified'||
