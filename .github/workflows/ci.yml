@@ -51,13 +51,13 @@ jobs:
           KATIE_UI_SERVER_MODE: start
         run: node scripts/workspace-ui-acceptance.mjs
 
-      - name: Presentation renderer browser acceptance
-        run: node scripts/presentation-browser-acceptance.mjs
-
       - name: Real Chromium Signal Sprint acceptance
         env:
           SIGNAL_SPRINT_BROWSER_ACCEPTANCE: "1"
         run: node --test tests/game-development/signal-sprint.test.mjs
+
+      - name: Presentation renderer browser acceptance
+        run: node scripts/presentation-browser-acceptance.mjs
 
   review-completion:
     runs-on: ubuntu-24.04
