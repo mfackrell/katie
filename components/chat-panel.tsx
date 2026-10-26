@@ -1,6 +1,7 @@
 "use client";
 
 import Image from "next/image";
+import { StructuredResponseView } from "@/components/structured-response-view";
 import { chatFailureContent } from "@/lib/chat/request-failure";
 import EmojiPicker, { Theme } from "emoji-picker-react";
 import ReactMarkdown from "react-markdown";
@@ -2792,7 +2793,7 @@ export function ChatPanel({
             {message.content ? (
               message.role === "assistant" ? (
                 <div className="break-words text-zinc-100/95">
-                  <ReactMarkdown
+                  {message.presentation ? <StructuredResponseView response={message.presentation} /> : (<ReactMarkdown
                     remarkPlugins={[remarkGfm]}
                     components={{
                       h1: ({ children }) => (
@@ -2879,7 +2880,7 @@ export function ChatPanel({
                     }}
                   >
                     {message.content}
-                  </ReactMarkdown>
+                  </ReactMarkdown>)}
                 </div>
               ) : (
                 <p className="whitespace-pre-wrap break-words leading-7 text-zinc-100/95">{message.content}</p>
