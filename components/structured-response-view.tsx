@@ -1,6 +1,7 @@
 "use client";
 
 import ReactMarkdown from "react-markdown";
+import { useState } from "react";
 import remarkGfm from "remark-gfm";
 import type { StructuredResponse, VisualBlock } from "@/lib/chat/structured-response";
 
@@ -48,7 +49,21 @@ function ChartBlock({ block }: { block: Extract<VisualBlock, { type: "chart" }> 
   </figure>;
 }
 
-function RenderBlock({ block }: { block: VisualBlock }) {
+function SelectorBlock({ block }: { block: Extract<VisualBlock, { type: "selector" }> }) {
+  const [selected, setSelected] = useState(0);
+  return <section className="rounded-lg border border-white/15 p-3">
+    <h3 className="font-semibold">{block.title}</h3>
+    <div className="mt-2 flex flex-wrap gap-2" role="group" aria-label={block.title}>
+      {block.options.map((option, index) =>
+        <button key={index} type="button" aria-pressed={selected === index}
+          className={`rounded-md border px-3 py-1.5 text-sm ${selected === index ? "border-emerald-400 bg-emerald-900/30" : "border-white/20"}`}
+          onClick={() => setSelected(index)}>{option.label}</button>)}
+    </div>
+    <p className="mt-2 whitespace-pre-wrap text-sm">{block.options[selected].description}</p>
+  </section>;
+}
+
+function RenderBlock({ block, assets = [] }: { block: VisualBlock; assets?: Array<{type: string; url: string}> }) {
   switch (block.type) {
     case "markdown": return <div className="prose prose-invert max-w-none"><ReactMarkdown remarkPlugins={[remarkGfm]}>{block.text}</ReactMarkdown></div>;
     case "cards": return <div className="grid gap-3 sm:grid-cols-2">
@@ -60,6 +75,23 @@ function RenderBlock({ block }: { block: VisualBlock }) {
       </section>)}
     </div>;
     case "chart": return <ChartBlock block={block} />;
+    case "metric": return <section className="rounded-lg border border-white/15 p-3" aria-label={block.label}>
+      <p className="text-sm opacity-75">{block.label}</p><p className="text-2xl font-semibold">{block.value}</p>
+      {block.description && <p className="mt-1 text-sm">{block.description}</p>}
+    </section>;
+    case "selector": return <SelectorBlock block={block} />;
+    case "media": {
+      const asset = assets[block.assetIndex];
+      if (!asset || asset.type !== "image" || !/^https:\/\//i.test(asset.url)) {
+        return <p className="text-sm">{block.alt} (image unavailable)</p>;
+      }
+      return <figure className="rounded-lg border border-white/15 p-2">
+        {/* Images are references to already-authorized saved message assets, not model-authored URLs. */}
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img src={asset.url} alt={block.alt} loading="lazy" className="max-h-80 w-full rounded object-contain" />
+        {block.caption && <figcaption className="mt-1 text-xs opacity-75">{block.caption}</figcaption>}
+      </figure>;
+    }
     case "statuses": return <dl className="space-y-2">
       {block.entries.map((entry, index) => <div key={index} className="rounded border border-white/15 p-2">
         <dt className="font-medium">{entry.label}: {statusLabels[entry.state]}</dt>
@@ -78,8 +110,13 @@ function RenderBlock({ block }: { block: VisualBlock }) {
 }
 
 /** Receives only server-validated response blocks; never accepts model-owned React code. */
-export function StructuredResponseView({ response }: { response: StructuredResponse }) {
+export function StructuredResponseView({ response, assets, ordered = false }: {
+  response: StructuredResponse;
+  assets?: Array<{ type: string; url: string }>;
+  ordered?: boolean;
+}) {
   return <div className="space-y-4" aria-label="Structured assistant response">
-    {response.blocks.filter(block => block.type !== "markdown").map((block, index) => <RenderBlock key={index} block={block} />)}
+    {response.blocks.filter(block => ordered || block.type !== "markdown")
+      .map((block, index) => <RenderBlock key={index} block={block} assets={assets} />)}
   </div>;
 }
