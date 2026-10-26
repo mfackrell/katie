@@ -102,7 +102,7 @@ test('Native and Thin real PostgreSQL grants, reservations, receipts and contain
      ['response.completed',{type:'response.completed',response}]
     ];
     return {providerRequestId:response.id,actualTokens:5,contentType:'text/event-stream',
-     body:events.map(([kind,value])=>'event: '+kind+'\\ndata: '+JSON.stringify(value)+'\\n\\n').join('')+'data: [DONE]\\n\\n'};
+     body:events.map(([kind,value])=>'event: '+kind+'\ndata: '+JSON.stringify(value)+'\n\n').join('')+'data: [DONE]\n\n'};
    };
    upstream.nonbillableFixture=true;
    const result=await runNonFullAuthorizedHost({
