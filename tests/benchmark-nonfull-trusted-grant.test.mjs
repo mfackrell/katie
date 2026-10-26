@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
 import {issueNonFullTrustedGrant} from '../scripts/benchmark/nonfull-trusted-grant.mjs';
+import {createNonFullTrustedGateway} from '../scripts/benchmark/nonfull-trusted-gateway.mjs';
 import {forwardAuthorizedModelRequest,tokenDigest} from '../scripts/benchmark/authenticated-native-gateway.mjs';
 function fixtures(arm){
  const trial={id:arm+'-trial',arm,state:'qualified',owner_actor_id:'actor',
@@ -58,3 +59,36 @@ for(const arm of ['native','thin']){
   assert.deepEqual(ops,['benchmark_issue_nonfull_execution_grant']);
  });
 }
+
+test('real trusted HTTP gateway for Native denies unauthenticated requests and settles exactly once',async()=>{
+ const calls=[];
+ const db={rpc:async(name,args)=>{
+  calls.push(name);
+  if(name==='benchmark_issue_nonfull_execution_grant')return {data:'grant-1',error:null};
+  if(name==='benchmark_gateway_execution_live')return {data:true,error:null};
+  if(name==='benchmark_grant_reserve')return {data:'canonical-operation-1',error:null};
+  if(name==='benchmark_reconcile_receipt')return {data:'settled',error:null};
+  throw Error('unexpected database operation '+name);
+ }};
+ let upstreamCount=0;
+ const {server}=await createNonFullTrustedGateway({...fixtures('native'),db,
+  tokenFactory:()=>('trusted-token-'+('z'.repeat(50))),
+  upperTokens:20,clientToken:'trusted-local-client-secret',
+  upstream:async()=>{upstreamCount++;return {providerRequestId:'synthetic-receipt-1',
+   actualTokens:10,contentType:'application/json',body:JSON.stringify({id:'fixture'})}}
+ });
+ try{
+  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+  const endpoint='http://127.0.0.1:'+server.address().port+'/v1/responses';
+  const body=JSON.stringify({model:'synthetic'});
+  const bad=await fetch(endpoint,{method:'POST',headers:{authorization:'Bearer wrong'},body});
+  assert.equal(bad.status,401);
+  assert.equal(upstreamCount,0);
+  const good=await fetch(endpoint,{method:'POST',headers:{
+   authorization:'Bearer trusted-local-client-secret','content-type':'application/json'},body});
+  assert.equal(good.status,200);
+  assert.equal(upstreamCount,1);
+  assert.equal(calls.filter(x=>x==='benchmark_grant_reserve').length,1);
+  assert.equal(calls.filter(x=>x==='benchmark_reconcile_receipt').length,1);
+ }finally{await new Promise(resolve=>server.close(resolve))}
+});
