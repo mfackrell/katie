@@ -65,6 +65,26 @@ const timelineBlock = z.object({
     state: status.optional(),
   }).strict()).min(1).max(30),
 }).strict();
+const mediaBlock = z.object({
+  type: z.literal("media"),
+  assetIndex: z.number().int().min(0).max(19),
+  alt: short,
+  caption: short.optional(),
+}).strict();
+const selectorBlock = z.object({
+  type: z.literal("selector"),
+  title: short,
+  options: z.array(z.object({
+    label: short,
+    description: detail,
+  }).strict()).min(2).max(8),
+}).strict();
+const metricBlock = z.object({
+  type: z.literal("metric"),
+  label: short,
+  value: short,
+  description: detail.optional(),
+}).strict();
 const detailsBlock = z.object({
   type: z.literal("details"),
   title: short,
@@ -73,7 +93,7 @@ const detailsBlock = z.object({
 
 export const visualBlockSchema = z.discriminatedUnion("type", [
   markdownBlock, cardBlock, chartBlock, statusesBlock,
-  comparisonBlock, timelineBlock, detailsBlock,
+  comparisonBlock, timelineBlock, detailsBlock, mediaBlock, selectorBlock, metricBlock,
 ]);
 
 export const structuredResponseSchema = z.object({
@@ -82,6 +102,11 @@ export const structuredResponseSchema = z.object({
   /** Always available when a richer client cannot render the blocks. */
   fallbackMarkdown: z.string().min(1).max(32000),
 }).strict().superRefine((response, ctx) => {
+  const orderedText = response.blocks.filter((block) => block.type === "markdown")
+    .map(block => block.text).join("");
+  if (orderedText && orderedText !== response.fallbackMarkdown) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Ordered Markdown blocks must reconstruct canonical answer", path: ["blocks"] });
+  }
   response.blocks.forEach((block, index) => {
     if (block.type === "comparison" && block.rows.some(row => row.values.length !== block.columns.length)) {
       ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Comparison rows must match column count", path: ["blocks", index] });
