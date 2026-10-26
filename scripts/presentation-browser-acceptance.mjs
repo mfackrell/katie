@@ -63,6 +63,7 @@ async function cleanup() {
   try { await browser?.close(); } catch {}
   if (server) { try { server.kill("SIGTERM"); } catch {} }
   await rm(fixtureDir, { recursive: true, force: true });
+  await rm(resolve(root, ".next/types/app/presentation-acceptance-fixture"), { recursive: true, force: true });
 }
 try {
   await mkdir(fixtureDir, { recursive: true });
