@@ -12,7 +12,7 @@ presentationRegistry.register<StructuredResponse>({
   version: 1,
   schema: structuredResponseSchema,
   fallback: response => response.fallbackMarkdown,
-  interactions: ["expand", "inspect", "select", "copy"],
+  interactions: ["expand", "inspect"],
   maxSerializedBytes: 64 * 1024,
 });
 
