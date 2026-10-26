@@ -67,6 +67,7 @@ jobs:
       - name: Launch authorized arm through common contained SDK and synthetic gateway
         env:
           KATIE_TRIAL_ARM: ${{ inputs.arm }}
+          KATIE_TRIAL_MANIFEST: ${{ runner.temp }}/native-thin-approved.json
         run: |
           jq -e --arg arm "$KATIE_TRIAL_ARM" '.arm == $arm and .qualification == "nonbillable-only" and .requiresNewGrantBeforePaidExecution == true' "$RUNNER_TEMP/native-thin-approved.json"
           node --test tests/benchmark-native-trust-boundary.test.mjs
