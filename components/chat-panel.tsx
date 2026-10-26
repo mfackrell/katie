@@ -2743,12 +2743,26 @@ export function ChatPanel({
             ].join(" ")}
           >
             <div className="mb-2 flex items-center justify-between gap-2 sm:mb-3 sm:items-start">
-              <p className="text-[11px] font-semibold uppercase tracking-[0.24em] text-zinc-400">
-                {message.role}
-                {message.role === "assistant" && message.model
-                  ? ` (${message.model})`
-                  : ""}
-              </p>
+              <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
+                <p className="text-[11px] font-semibold uppercase tracking-[0.24em] text-zinc-400">
+                  {message.role}
+                  {message.role === "assistant" && message.model
+                    ? ` (${message.model})`
+                    : ""}
+                </p>
+                {message.createdAt && !Number.isNaN(Date.parse(message.createdAt)) ? (
+                  <time
+                    dateTime={message.createdAt}
+                    title={new Date(message.createdAt).toISOString()}
+                    className="text-[11px] tabular-nums text-zinc-500"
+                  >
+                    {new Intl.DateTimeFormat(undefined, {
+                      dateStyle: "medium",
+                      timeStyle: "short",
+                    }).format(new Date(message.createdAt))}
+                  </time>
+                ) : null}
+              </div>
               <div className="flex items-center gap-1">
               <button type="button" aria-label={`Reply to ${message.role} message`} onClick={() => {
                 setReplyTo({id:message.id,role:message.role,content:message.content});
