@@ -13,7 +13,7 @@ export async function createNonFullTrustedGateway({
   ownerId,repository,tokenFactory});
  const server=createNativeHttpBridge({
   db,grantToken:grant.grantToken,trialId:grant.trialId,
-  executionEpoch:grant.executionEpoch,providerNamespace:'openai-responses',
+  executionEpoch:grant.executionEpoch,providerNamespace:'nonbillable-synthetic-fixture',
   upperTokens,upstream,clientToken,fullMission:false,
   recordReceipt:grant.canonicalReceipt
  });
