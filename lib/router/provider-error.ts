@@ -7,12 +7,16 @@ export function getProviderErrorDiagnostics(error: unknown): {
   status: number | null;
   code: string | null;
   type: string | null;
+  phase: string | null;
+  causeCode: string | null;
 } {
   const value = error && typeof error === "object" ? error as Record<string, unknown> : {};
   const status = typeof value.status === "number" && Number.isInteger(value.status) ? value.status : null;
   const safeIdentifier = (candidate: unknown): string | null =>
     typeof candidate === "string" && /^[a-zA-Z0-9_.-]{1,100}$/.test(candidate) ? candidate : null;
-  return { status, code: safeIdentifier(value.code), type: safeIdentifier(value.type) };
+  const cause = value.cause && typeof value.cause === "object" ? value.cause as Record<string, unknown> : {};
+  return { status, code: safeIdentifier(value.code), type: safeIdentifier(value.type), phase: safeIdentifier(value.phase), causeCode: safeIdentifier(cause.code) };
+
 }
 
 

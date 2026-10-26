@@ -2063,8 +2063,12 @@ test("provider diagnostic metadata excludes upstream messages and secrets", () =
     status: 404,
     code: "model_not_found",
     type: "invalid_request_error",
+    phase: null, causeCode: null,
   });
   assert.deepEqual(getProviderErrorDiagnostics({status: 429, code: "bad value with spaces", type: 42}), {
-    status: 429, code: null, type: null,
+    status: 429, code: null, type: null, phase: null, causeCode: null,
+  });
+  assert.deepEqual(getProviderErrorDiagnostics({status: 400, phase: "response-parse", cause: {code: "invalid_response", message: "secret"}}), {
+    status: 400, code: null, type: null, phase: "response-parse", causeCode: "invalid_response",
   });
 });
