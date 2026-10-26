@@ -12,7 +12,7 @@ type ModelClient = { chat: { completions: { create: (args: {
 }) => Promise<{choices?: Array<{message?: {content?: string | null}}>}>;
 }}};
 
-const MIN_ENTRIES = 20;
+const MIN_ENTRIES = 2;
 const REVIEW_INTERVAL = 8;
 
 // Maintenance is advisory until two independent model calls agree on exact
@@ -25,7 +25,7 @@ export async function maybeMaintainActorMemory(actorId: string, client: ModelCli
       .maybeSingle<{content: {entries?: Entry[];[key:string]:unknown};revision:number}>();
     if (error) throw error;
     if (!row || !Array.isArray(row.content.entries) ||
-        row.content.entries.length < MIN_ENTRIES || row.revision % REVIEW_INTERVAL !== 0) return;
+        row.content.entries.length < MIN_ENTRIES) return;
 
     const originals = row.content.entries;
     const byKey = new Map(originals.map(entry => [entry.key, entry]));
@@ -33,13 +33,13 @@ export async function maybeMaintainActorMemory(actorId: string, client: ModelCli
     const system = [
       "You are an independent long-term-memory maintenance reviewer.",
       "Review the actor's existing durable knowledge. Prefer keeping distinct, useful facts.",
-      "Suggest merges ONLY for clearly redundant entries about the same subject.",
+      "Merge semantically overlapping entries only when they describe the same subject and a combined version preserves every material fact.",
       "Never introduce facts, reinterpret private history, drop qualifications, or infer new preferences.",
       "Do not delete unique memories based on age or personal sensitivity. Preserve their provenance.",
       "Do not rewrite memories about different events as one generic claim.",
-      "Return JSON {keepKeys:[...],groups:[{keys:[two or more original keys],key:one ORIGINAL key,value:an EXACT existing value,category:the corresponding original category,reason:...}]}.",
+      "Return JSON {keepKeys:[...],groups:[{keys:[two or more original keys],key:one ORIGINAL key,value:complete consolidated value,category:original category,reason:...}]}.",
       "Every original key must appear exactly once across keepKeys and groups.",
-      "Select the strongest existing value verbatim, with its category; no novel wording.",
+      "Synthesize only facts contained in the originals, preserving uncertainty, dates and attribution.",
       "When in doubt, keep the originals. Groups should only remove duplicative entries.",
     ].join("\n");
     const ask = async (instructions: string) => {
@@ -53,7 +53,16 @@ export async function maybeMaintainActorMemory(actorId: string, client: ModelCli
       return JSON.parse(response.choices?.[0]?.message?.content ?? "{}") as Verdict;
     };
     const proposal = await ask(system);
-    const independent = await ask(system + "\nIndependently evaluate the source entries; do not assume an earlier reviewer was right.");
+    const reviewResponse = await client.chat.completions.create({
+      model:"gpt-4o-mini",temperature:0,response_format:{type:"json_object"},
+      messages:[
+        {role:"system",content:"Independently audit proposed memory consolidations. Return JSON {verdicts:[{key:string,supported:boolean,complete:boolean,sameSubject:boolean,reason:string}]}. For each merged value, verify EVERY clause is entailed by original entries and EVERY material detail of removed entries survives. Reject distinct subjects, changed qualifications, unsupported implications or attribution changes. Judge the originals, not the proposal reason."},
+        {role:"user",content:JSON.stringify({originals,groups:proposal.groups})},
+      ],
+    });
+    const review = JSON.parse(reviewResponse.choices?.[0]?.message?.content ?? "{}") as {
+      verdicts?: Array<{key:string;supported:boolean;complete:boolean;sameSubject:boolean;reason:string}>
+    };
     const normalize = (v: Verdict) => {
       if (!v || !Array.isArray(v.keepKeys) || !Array.isArray(v.groups)) return null;
       const seen = new Set<string>(); const replacements: Entry[] = []; const archive: Entry[] = [];
@@ -66,28 +75,26 @@ export async function maybeMaintainActorMemory(actorId: string, client: ModelCli
             typeof group.key !== "string" || !group.keys.includes(group.key) ||
             !group.keys.every(k => typeof k === "string" && byKey.has(k) && !seen.has(k))) return null;
         const selected = byKey.get(group.key)!;
-        if (group.value !== selected.value || group.category !== selected.category) return null;
-        // Exact-value consolidation must be literally redundant, not merely related.
-        if (!group.keys.every(k => byKey.get(k)!.value === selected.value &&
-            byKey.get(k)!.category === selected.category &&
+        if (typeof group.value !== "string" || group.value.trim().length < 20 || group.category !== selected.category) return null;
+        if (!group.keys.every(k => byKey.get(k)!.category === selected.category &&
             byKey.get(k)!.source === selected.source)) return null;
+        const verdicts = review.verdicts?.filter(v => v.key === group.key) ?? [];
+        if (verdicts.length !== 1 || verdicts[0].supported !== true ||
+            verdicts[0].complete !== true || verdicts[0].sameSubject !== true) return null;
         for (const key of group.keys) {
           seen.add(key);
           if (key !== group.key) archive.push(byKey.get(key)!);
         }
         const evidenceIds = [...new Set(group.keys.flatMap(k => byKey.get(k)!.evidenceMessageIds ?? []))];
         const evidenceQuotes = group.keys.flatMap(k => byKey.get(k)!.evidenceQuotes ?? []);
-        replacements.push({...selected,evidenceMessageIds:evidenceIds,evidenceQuotes});
+        replacements.push({...selected,value:group.value.trim(),evidenceMessageIds:evidenceIds,evidenceQuotes});
       }
       if (seen.size !== originals.length || !originals.every(e => seen.has(e.key))) return null;
       const replace = new Map(replacements.map(entry => [entry.key, entry]));
       return {entries: originals.filter(e => !archive.some(a => a.key === e.key)).map(e => replace.get(e.key) ?? e),archive};
     };
     const approved = normalize(proposal);
-    const confirmed = normalize(independent);
-    if (!approved || !confirmed || !approved.archive.length ||
-        JSON.stringify(approved.entries) !== JSON.stringify(confirmed.entries) ||
-        JSON.stringify(approved.archive) !== JSON.stringify(confirmed.archive)) {
+    if (!approved || !approved.archive.length) {
       console.info("[LTM Maintenance] No independently verified consolidation", {actorId, revision:row.revision});
       return;
     }
