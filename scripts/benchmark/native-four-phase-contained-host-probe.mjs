@@ -30,18 +30,18 @@ if(requestedArm){
  boundTrialId=manifest.trialId;
 }
 let phase=null,arm=null,forwarded=0;
-const reservations=[],receipts=[];
+const reservations=[],receipts=[],admissionByArm=[];
 const db={rpc:async(name,args)=>{
  if(name==='benchmark_gateway_execution_live')return {data:true,error:null};
- if(name==='benchmark_full_native_reserve'){
-  reservations.push(args);
+ if(name===(arm==='full'?'benchmark_full_native_reserve':'benchmark_grant_reserve')){
+  reservations.push(args);admissionByArm.push({arm,method:name});
   return {data:'synthetic-operation-'+reservations.length,error:null};
  }
  throw Error('UNEXPECTED_RPC_'+name);
 }};
 const server=createNativeHttpBridge({
  db,grantToken:'synthetic-'+('z'.repeat(60)),trialId:boundTrialId,
- executionEpoch:1,providerNamespace:'synthetic',upperTokens:100,fullMission:true,
+ executionEpoch:1,providerNamespace:'synthetic',upperTokens:100,fullMission:()=>arm==='full',
  clientToken:'contained-fixture-token',recordReceipt:async r=>receipts.push(r),
  upstream:async request=>{
   forwarded++;
@@ -92,6 +92,7 @@ try{
  }
  assert.equal(forwarded,selectedArms.length*4);
  assert.equal(reservations.length,selectedArms.length*4,'unmetered native phase');
+ assert.ok(admissionByArm.every(x=>x.method===(x.arm==='full'?'benchmark_full_native_reserve':'benchmark_grant_reserve')));
  assert.equal(receipts.length,selectedArms.length*4,'unreconciled native phase');
  assert.equal(new Set(reservations.map(x=>x.p_request_key)).size,selectedArms.length*4);
  assert.equal(receipts.reduce((n,x)=>n+x.actualTokens,0),selectedArms.length*20);
