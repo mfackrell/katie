@@ -55,6 +55,15 @@ describe("provider-neutral progressive presentation protocol", () => {
     expect(result.presentation?.blocks.filter(block => block.type === "markdown").map(block => block.text).join("")).toBe(answer);
     expect(result.text).toBe(answer);
   });
+  it("reconciles internal whitespace and currency escaping without changing the answer", () => {
+    const answer = "Cash \\$100k.\n\nNext \\$120k.\n";
+    const source = answer + PRESENTATION_START + JSON.stringify({ version: 1, blocks: [
+      { type: "markdown", text: "Cash $100k.\nNext $120k." }, ...blocks,
+    ] }) + PRESENTATION_END;
+    const result = parsePresentationTail(source);
+    expect(result.presentation?.blocks[0]).toEqual({ type: "markdown", text: answer });
+    expect(result.text).toBe(answer);
+  });
   it("does not repair missing, changed or reordered substantive text", () => {
     for (const texts of [["Before.", "Changed."], ["After.", "Before."], ["Before."]]) {
       const source = "Before. After." + PRESENTATION_START + JSON.stringify({ version: 1,
