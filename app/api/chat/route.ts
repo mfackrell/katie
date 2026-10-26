@@ -1040,7 +1040,7 @@ async function executeChat(request: NextRequest) {
         if (idempotencyClaim.record.assistantMessageId) {
           try {
             const prior = await getMessageById(chatId, idempotencyClaim.record.assistantMessageId);
-            replayPresentation = prior?.content === idempotencyClaim.record.assistantContent
+            replayPresentation = prior && prior.content === idempotencyClaim.record.assistantContent
               ? prior.presentation : undefined;
           } catch (error) {
             console.warn("[Presentation] Replay fell back to canonical Markdown", {
