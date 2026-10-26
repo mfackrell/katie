@@ -1,0 +1,97 @@
+name: Owner-approved Native Thin nonbillable launch
+on:
+  workflow_dispatch:
+    inputs:
+      arm:
+        description: Native or Thin treatment
+        required: true
+        type: choice
+        options:
+          - native
+          - thin
+      trial_id:
+        description: Previously qualified trial UUID
+        required: true
+        type: string
+      account_id:
+        description: Existing trial-bound budget account UUID
+        required: true
+        type: string
+      approval_id:
+        description: Previously owner-authorized spending approval UUID
+        required: true
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: nonfull-owner-launch-${{ inputs.trial_id }}
+  cancel-in-progress: false
+jobs:
+  owner-nonbillable:
+    if: ${{ github.actor == github.repository_owner && github.repository == 'mfackrell/katie' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    env:
+      OPENAI_API_KEY: ''
+      CODEX_ACCESS_TOKEN: ''
+      KATIE_BENCHMARK_PAID_EXECUTION: disabled
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Require reviewed owner launch tools on main
+        run: |
+          test -f scripts/benchmark/native-thin-preflight.mjs
+          test -f scripts/benchmark/shared-native-phase.mjs
+          test -f scripts/benchmark/native-trust-boundary.mjs
+      - name: Install immutable declared dependencies without scripts
+        run: npm ci --ignore-scripts
+      - name: Validate actual durable owner/trial/account approval
+        env:
+          KATIE_BENCHMARK_SUPABASE_URL: ${{ secrets.KATIE_NONFULL_STAGING_SUPABASE_URL }}
+          KATIE_BENCHMARK_SERVICE_ROLE_KEY: ${{ secrets.KATIE_NONFULL_STAGING_SERVICE_ROLE_KEY }}
+          KATIE_BENCHMARK_OWNER_ID: ${{ secrets.KATIE_NONFULL_STAGING_OWNER_ID }}
+          KATIE_TRIAL_ARM: ${{ inputs.arm }}
+          TRIAL_ID: ${{ inputs.trial_id }}
+          ACCOUNT_ID: ${{ inputs.account_id }}
+          APPROVAL_ID: ${{ inputs.approval_id }}
+        run: |
+          node scripts/benchmark/native-thin-preflight.mjs \
+            "$KATIE_TRIAL_ARM" "$TRIAL_ID" "$ACCOUNT_ID" "$APPROVAL_ID" \
+            "$RUNNER_TEMP/native-thin-approved.json"
+      - name: Install pinned real Codex SDK with no install hooks
+        run: npm install --no-save --package-lock=false --ignore-scripts @openai/codex-sdk@0.164.0
+      - name: Prepare namespace and Unix socket isolation
+        run: |
+          command -v bwrap >/dev/null || (sudo apt-get update && sudo apt-get install -y bubblewrap)
+          command -v socat >/dev/null || (sudo apt-get update && sudo apt-get install -y socat)
+          if test -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns; then sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0; fi
+      - name: Launch actual owner-approved staging grant through shared trusted host
+        env:
+          KATIE_TRIAL_ARM: ${{ inputs.arm }}
+          TRIAL_ID: ${{ inputs.trial_id }}
+          ACCOUNT_ID: ${{ inputs.account_id }}
+          APPROVAL_ID: ${{ inputs.approval_id }}
+          KATIE_NONFULL_STAGING_ONLY: ${{ secrets.KATIE_NONFULL_STAGING_CONFIRMED }}
+          KATIE_NONFULL_STAGING_SUPABASE_URL: ${{ secrets.KATIE_NONFULL_STAGING_SUPABASE_URL }}
+          KATIE_NONFULL_STAGING_SERVICE_ROLE_KEY: ${{ secrets.KATIE_NONFULL_STAGING_SERVICE_ROLE_KEY }}
+          KATIE_NONFULL_STAGING_OWNER_ID: ${{ secrets.KATIE_NONFULL_STAGING_OWNER_ID }}
+          KATIE_NONFULL_PRODUCTION_SUPABASE_URL: ${{ secrets.KATIE_NONFULL_PRODUCTION_SUPABASE_URL }}
+        run: |
+          jq -e --arg arm "$KATIE_TRIAL_ARM" '.arm == $arm and .qualification == "nonbillable-only" and .requiresNewGrantBeforePaidExecution == true' "$RUNNER_TEMP/native-thin-approved.json"
+          node --test tests/benchmark-native-trust-boundary.test.mjs
+          node scripts/benchmark/nonfull-staging-launch.mjs "$KATIE_TRIAL_ARM" "$TRIAL_ID" "$ACCOUNT_ID" "$APPROVAL_ID"
+      - name: Preserve nonbillable authorization and qualification
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nonfull-nonbillable-qualification
+          path: |
+            ${{ runner.temp }}/native-thin-approved.json
+            ${{ runner.temp }}/nonfull-staging-acceptance.json
+          if-no-files-found: ignore

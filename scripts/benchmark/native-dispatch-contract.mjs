@@ -1,0 +1,35 @@
+import {createHmac,timingSafeEqual} from 'node:crypto';
+const uuid=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const sha=/^[a-f0-9]{40}$/;
+const hash=/^[a-f0-9]{64}$/;
+export function encodeNativeHandoff(payload,key){
+ if(!key||key.length<32)throw Error('NATIVE_HANDOFF_KEY_UNAVAILABLE');
+ if(!payload||!['taskId','trialId','approvalId','projectId'].every(k=>uuid.test(payload[k]??''))||
+    !hash.test(payload.contractHash??'')||!sha.test(payload.baselineSha??'')||
+    !Number.isSafeInteger(payload.expiresAt)||payload.expiresAt<=Date.now())
+  throw Error('NATIVE_HANDOFF_INVALID');
+ const frozen={version:1,taskId:payload.taskId,trialId:payload.trialId,
+  approvalId:payload.approvalId,projectId:payload.projectId,
+  contractHash:payload.contractHash,baselineSha:payload.baselineSha,expiresAt:payload.expiresAt};
+ const content=Buffer.from(JSON.stringify(frozen)).toString('base64url');
+ const signature=createHmac('sha256',key).update(content).digest('base64url');
+ return '<!-- katie-native-benchmark:'+content+'.'+signature+' -->';
+}
+export function readNativeHandoff(source,key,now=Date.now()){
+ const matches=[...String(source).matchAll(/<!-- katie-native-benchmark:([A-Za-z0-9_-]+)\.([A-Za-z0-9_-]+) -->/g)];
+ if(matches.length!==1)throw Error('NATIVE_HANDOFF_MISSING_OR_DUPLICATED');
+ if(!key||key.length<32)throw Error('NATIVE_HANDOFF_KEY_UNAVAILABLE');
+ const content=matches[0][1],signature=matches[0][2];
+ const expected=createHmac('sha256',key).update(content).digest();
+ const actual=Buffer.from(signature,'base64url');
+ if(actual.length!==expected.length||!timingSafeEqual(actual,expected))
+  throw Error('NATIVE_HANDOFF_UNAUTHENTICATED');
+ let p;try{p=JSON.parse(Buffer.from(content,'base64url').toString('utf8'))}
+ catch{throw Error('NATIVE_HANDOFF_INVALID')}
+ if(p.version!==1||!['taskId','trialId','approvalId','projectId'].every(k=>uuid.test(p[k]??''))||
+    !hash.test(p.contractHash??'')||!sha.test(p.baselineSha??'')||
+    !Number.isSafeInteger(p.expiresAt)||p.expiresAt<=now||
+    Object.keys(p).sort().join()!==['version','taskId','trialId','approvalId','projectId','contractHash','baselineSha','expiresAt'].sort().join())
+  throw Error('NATIVE_HANDOFF_INVALID');
+ return Object.freeze(p);
+}

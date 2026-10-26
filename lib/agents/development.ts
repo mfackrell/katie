@@ -5,6 +5,7 @@ import {chooseProvider} from '@/lib/router/master-router';
 import { Octokit } from "@octokit/rest";
 import { inflateRawSync } from "node:zlib";
 import { packDevelopmentRequest } from '../../scripts/request-envelope.mjs';
+import { encodeNativeHandoff } from '../../scripts/benchmark/native-dispatch-contract.mjs';
 import { z } from "zod";
 import { getSupabaseAdminClient } from "@/lib/data/supabase/admin";
 import { agentRpc, readTask } from "./store";
@@ -123,6 +124,63 @@ export async function dispatchDevelopment(task: AgentTask, project?: Context, as
   if (/<!--\s*katie-project\b/.test(task.input + '\n' + task.snapshot.instructions)) {
     return save(task, "blocked", "Project metadata is not permitted in ordinary coding input. A DB-bound approved project dispatcher is required.");
   }
+  let benchmarkHeader=''; let benchmarkModel=''; let benchmarkRepository='';
+  // Benchmark engineering enters at the EXISTING durable dispatch boundary.
+  // No alternate scheduler or issue path is authorized by this feature gate.
+  if (project && process.env.KATIE_NATIVE_BENCHMARK_DISPATCH==='enabled') {
+    const {data:binding,error}=await getSupabaseAdminClient()
+      .from('benchmark_development_dispatches')
+      .select('task_id,trial_id,contract_hash,baseline_sha,status')
+      .eq('task_id',task.id).maybeSingle();
+    if(error)throw Error('Benchmark development binding lookup failed closed');
+    if(binding){
+      const bound=binding as {trial_id:string;contract_hash:string;baseline_sha:string;status:string};
+      if(bound.contract_hash!==project.contractHash||
+         bound.baseline_sha!==project.baselineSha||
+         bound.status!=='qualified')
+        throw Error('Benchmark dispatch rejected: approved task/contract mismatch');
+      const {data:trial,error:trialError}=await getSupabaseAdminClient()
+        .from('benchmark_three_arm_trials')
+        .select('id,arm,contract_sha256,baseline_sha,owner_actor_id,state')
+        .eq('id',bound.trial_id).maybeSingle();
+      const t=trial as {arm:string;state:string;contract_sha256:string;baseline_sha:string;owner_actor_id:string}|null;
+      if(trialError||!t||t.arm!=='full'||t.state!=='qualified'||
+         t.contract_sha256!==project.contractHash||
+         t.baseline_sha!==project.baselineSha)
+        throw Error('Benchmark dispatch rejected: trial authority mismatch');
+      const {data:account,error:accountError}=await getSupabaseAdminClient()
+        .from('benchmark_budget_accounts')
+        .select('id,owner_actor_id,trial_id,frozen_at')
+        .eq('trial_id',bound.trial_id).maybeSingle();
+      const a=account as {trial_id:string;owner_actor_id:string;frozen_at:string|null}|null;
+      if(accountError||!a||a.trial_id!==bound.trial_id||
+         a.owner_actor_id!==t.owner_actor_id||a.frozen_at)
+        throw Error('Benchmark dispatch rejected: missing or quarantined account');
+      // A separately provisioned owner approval is required, not a qualified
+      // trial flag or model-authored statement. The approval is task-specific.
+      const {data:approved,error:approvalError}=await getSupabaseAdminClient()
+        .from('benchmark_native_spending_approvals')
+        .select('id,task_id,trial_id,account_id,actor_id,project_id,repository,model,deadline')
+        .eq('task_id',task.id).eq('trial_id',bound.trial_id)
+        .is('consumed_at',null).is('revoked_at',null).maybeSingle();
+      const approval=approved as {id:string;task_id:string;trial_id:string;account_id:string;
+        actor_id:string;project_id:string;repository:string;model:string;deadline:string}|null;
+      if(approvalError||!approval||approval.project_id!==project.projectId||
+        approval.actor_id!==t.owner_actor_id||approval.account_id!==(account as {id?:string}).id||
+        !approval.model||new Date(approval.deadline).getTime()<=Date.now())
+        throw Error('Benchmark native dispatch denied: no live task-specific owner spending approval');
+      const signingKey=process.env.KATIE_NATIVE_HANDOFF_HMAC_KEY;
+      if(!signingKey||signingKey.length<32)
+        throw Error('Benchmark handoff unavailable: trusted signing key not configured');
+      benchmarkHeader=encodeNativeHandoff({
+        taskId:task.id,trialId:bound.trial_id,approvalId:approval.id,
+        projectId:project.projectId,contractHash:project.contractHash,
+        baselineSha:project.baselineSha,
+        expiresAt:Math.min(Date.now()+30*60*1000,new Date(approval.deadline).getTime())
+      },signingKey);
+      benchmarkModel=approval.model;benchmarkRepository=approval.repository;
+    }
+  }
   let projectHeader='';
   let approvedSource = '';
   if(project){
@@ -134,10 +192,11 @@ export async function dispatchDevelopment(task: AgentTask, project?: Context, as
         project.originalUserOutcome + '\n\nAPPROVED MILESTONE (source-bound):\n' +
         JSON.stringify(project.approvedMilestone) + '\n\n';
     }
-    const routed=await chooseTrustedGithubModels(task.input+'\n'+task.snapshot.instructions);
+    const routed=benchmarkModel?{codingModel:benchmarkModel,reviewModel:benchmarkModel}:
+      await chooseTrustedGithubModels(task.input+'\n'+task.snapshot.instructions);
     projectHeader='<!-- katie-project: '+Buffer.from(JSON.stringify({version,projectId,baseSha,baselineSha,allowedPaths,contractHash,contract,...routed,...(game?{game,gameFinal}:{})})).toString('base64url')+' -->\n\n';
   }
-  const fullBody = `${marker(task)}\n\n${projectHeader}${approvedSource}${task.input}\n\n## Saved agent responsibilities\n${task.snapshot.instructions}\n\nDefinition version: ${task.definition_version}. Approved managed task: ${task.id}.\nUse the existing owner-only implementation, independent tests, review, bounded repair and draft PR workflow. No deployment or automatic merge.`;
+  const fullBody = `${marker(task)}\n\n${benchmarkHeader}${projectHeader}${approvedSource}${task.input}\n\n## Saved agent responsibilities\n${task.snapshot.instructions}\n\nDefinition version: ${task.definition_version}. Approved managed task: ${task.id}.\nUse the existing owner-only implementation, independent tests, review, bounded repair and draft PR workflow. No deployment or automatic merge.`;
   let issueBody: string;
   try {
     issueBody = packDevelopmentRequest(fullBody, marker(task));
@@ -155,6 +214,8 @@ export async function dispatchDevelopment(task: AgentTask, project?: Context, as
       return save(task, "blocked", "Blocked integration: GitHub credential must authenticate as the repository's human owner. App, bot, organization-member and collaborator credentials cannot authorize this owner-only workflow.");
     }
     if (repo.data.owner.login.toLowerCase() !== binding.owner.toLowerCase()) return save(task, "blocked", "Blocked integration: repository owner mismatch.");
+    if(benchmarkRepository&&benchmarkRepository!==binding.fullName)
+      return save(task,'blocked','Benchmark owner approval repository mismatch');
     try {
       const workflow = await client.actions.getWorkflow({ owner: binding.owner, repo: binding.repo, workflow_id: "autonomous-development.yml" });
       if (workflow.data.path !== ".github/workflows/autonomous-development.yml" || workflow.data.state !== "active") throw new Error("Workflow unavailable");
