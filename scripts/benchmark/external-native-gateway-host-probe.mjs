@@ -21,7 +21,7 @@ const server=createNativeHttpBridge({db,grantToken:'only-synthetic-'+('z'.repeat
  trialId:'synthetic-trial',executionEpoch:1,providerNamespace:'synthetic',
  upperTokens:100,clientToken:'synthetic-fixture-token',
  recordReceipt:async x=>receipts.push(x),
- upstream:async body=>{
+ upstream:Object.assign(async body=>{
   provider++;
   const first=provider===1,model=body.model||'synthetic';
   const item=first?{id:'call_'+provider,type:'custom_tool_call',name:'exec',
@@ -36,7 +36,7 @@ const server=createNativeHttpBridge({db,grantToken:'only-synthetic-'+('z'.repeat
   ['response.completed',{type:'response.completed',response}]];
   const bodyText=events.map(([name,data])=>'event: '+name+'\ndata: '+JSON.stringify(data)+'\n\n').join('')+'data: [DONE]\n\n';
   return {providerRequestId:response.id,actualTokens:5,body:bodyText,contentType:'text/event-stream'};
- }});
+ },{nonbillableFixture:true})});
 try{
  await new Promise(resolve=>server.listen(socket,resolve));
  const command='socat TCP-LISTEN:43181,bind=127.0.0.1,reuseaddr,fork UNIX-CONNECT:/gateway/gateway.sock & proxy=$!; trap "kill $proxy 2>/dev/null || :" EXIT; node scripts/benchmark/external-native-codex-client.mjs';
