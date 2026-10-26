@@ -1,4 +1,4 @@
-import { parseStructuredResponse } from "@/lib/chat/structured-response";
+import { validatePresentation } from "@/lib/presentation/default-registry";
 import { normalizeReviewMode } from "@/lib/collaboration/review-mode";
 import { getSupabaseAdminClient } from "@/lib/data/supabase/admin";
 import type { Actor, ChatThread, Message } from "@/lib/types/chat";
@@ -96,7 +96,7 @@ export function parseMessageContent(content: string): { text: string; model?: st
     if (typeof parsed.text === "string") {
       return {
         text: parsed.text,
-        ...(parseStructuredResponse(parsed.presentation) ? { presentation: parseStructuredResponse(parsed.presentation)! } : {}),
+        ...(validatePresentation(parsed.presentation)?.fallbackMarkdown === parsed.text ? { presentation: validatePresentation(parsed.presentation)! } : {}),
         ...(Array.isArray(parsed.attachments) ? { attachments: parsed.attachments.filter((item): item is NonNullable<Message["attachments"]>[number] => Boolean(item) && typeof item.id === "string" && /^[0-9a-f-]{36}$/i.test(item.id) && typeof item.fileName === "string" && typeof item.mimeType === "string") } : {}),
         ...(typeof parsed.model === "string" ? { model: parsed.model } : {}),
         ...(Array.isArray(parsed.assets)
@@ -120,7 +120,7 @@ export function parseMessageContent(content: string): { text: string; model?: st
 
 export function encodeMessageContent(message: Pick<Message, "content" | "model" | "assets" | "attachments" | "presentation">): string {
   if (message.attachments?.length || message.model || message.presentation || (message.assets && message.assets.length > 0)) {
-    return JSON.stringify({ text: message.content, model: message.model, assets: message.assets ?? [], attachments: message.attachments, ...(message.presentation ? { presentation: parseStructuredResponse(message.presentation) } : {}) });
+    return JSON.stringify({ text: message.content, model: message.model, assets: message.assets ?? [], attachments: message.attachments, ...(message.presentation ? { presentation: validatePresentation(message.presentation)?.fallbackMarkdown === message.content ? validatePresentation(message.presentation) : null } : {}) });
   }
 
   return message.content;
