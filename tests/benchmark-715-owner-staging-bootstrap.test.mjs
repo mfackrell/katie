@@ -58,7 +58,7 @@ test('staging custom ledger validates file identity and exact checksum, never on
   good.map((x,i)=>i===0?{...x,filename:'forged.sql'}:x),
  ])assert.throws(()=>verifyCustomLedger(bad),/DENIED/);
 });
-function fakeDb({priceStatus='verified',existingTrials=0,rows=117}={}){
+function fakeDb({priceStatus='verified',existingTrials=0,rows=ledgerFixture().length,seedExecutive=false,unsafeActor=false}={}){
  let sequence=0;
  const records={actors:[],chats:[],benchmark_three_arm_trials:[],
   benchmark_budget_accounts:[],benchmark_native_spending_approvals:[]};
@@ -67,6 +67,9 @@ function fakeDb({priceStatus='verified',existingTrials=0,rows=117}={}){
    select(_fields,options){
     if(table==='schema_migrations')return {then:(resolve,reject)=>Promise.resolve({
      data:ledgerFixture().slice(0,rows),error:null}).then(resolve,reject)};
+    if(table==='actors'&&!options?.head)return Promise.resolve({data:unsafeActor?
+     [{id:'unsafe',name:'Unrelated production user',actor_kind:'standard'}]:
+     seedExecutive?[{id:'fixture',name:'Executive Orchestrator',actor_kind:'executive'}]:[],error:null});
     if(options?.head)return {then:(resolve,reject)=>Promise.resolve({
      count:table==='benchmark_three_arm_trials'?existingTrials:records[table]?.length,
      error:null}).then(resolve,reject)};
@@ -97,9 +100,17 @@ test('bootstrap creates three equal capped trials, but never fabricates Full spe
               records.benchmark_three_arm_trials[2].contract_sha256);
 });
 test('dirty schema or missing verified pricing must stop before any grants',async()=>{
- for(const options of [{priceStatus:'estimated'},{existingTrials:1},{rows:116}]){
+ for(const options of [{priceStatus:'estimated'},{existingTrials:1},
+  {rows:ledgerFixture().length-1},{unsafeActor:true}]){
   const {db,records}=fakeDb(options);
   await assert.rejects(bootstrap({db,ownerId:uuid}),/DENIED/);
   assert.equal(records.benchmark_native_spending_approvals.length,0);
  }
+});
+
+test('single known migration-owned executive actor is allowed without copying user records',async()=>{
+ const {db,records}=fakeDb({seedExecutive:true});
+ const result=await bootstrap({db,ownerId:uuid});
+ assert.equal(result.arms.length,3);
+ assert.equal(records.benchmark_native_spending_approvals.length,2);
 });
