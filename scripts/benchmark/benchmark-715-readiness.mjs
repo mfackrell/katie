@@ -30,8 +30,22 @@ export function validateLaunchReadiness(manifest,evidence){
    return true;
   }catch{return false}
  };
+ // Supabase native branch replay is not Katie's deployment authority. An
+ // independently verified, immutable custom baseline is an alternative ONLY
+ // for this staging branch; never claim native MIGRATIONS_FAILED was healed.
+ const nativeHealthy=evidence?.branchStatus==='FUNCTIONS_DEPLOYED'||evidence?.branchStatus==='READY';
+ const customHealthy=evidence?.branchStatus==='MIGRATIONS_FAILED'&&
+  evidence?.deploymentAuthority==='custom-schema-ledger'&&
+  evidence?.customBaselineReceiptId==='katie-staging-20261026'&&
+  evidence?.customBaselineCatalogSha256==='9e9b4ad1fee3926672a0ff3b62ef1e1c909c2b60d3ca2d1a3341f5f4c8795009'&&
+  evidence?.customBaselineSourceCommit==='3181b9d1a5d82f2a28a21a08c449658877b4d47a'&&
+  evidence?.customCatalogVerified===true&&
+  evidence?.customLedgerRows===117&&
+  evidence?.customMigrationAuthorityAuditPassed===true&&
+  evidence?.customRunnerNoopRuns>=2&&
+  evidence?.nativeAutomaticReplayDisabled===true;
  const checks={
-  staging:(evidence?.branchStatus==='FUNCTIONS_DEPLOYED'||evidence?.branchStatus==='READY')&&
+  staging:(nativeHealthy||customHealthy)&&
     evidence?.benchmarkSchemaPresent===true&&evidence?.stagingSeparateFromProduction===true,
   contract:evidence?.contractHashVerified===true&&evidence?.acceptanceHashVerified===true&&
     evidence?.baselineSha===manifest?.baselineSha,

@@ -15,7 +15,7 @@
   "productionPublicationAllowed": false,
   "paidExecutionEnabled": false,
   "requires": [
-    "staging migrations complete and reviewed",
+    "staging migrations complete OR independently verified custom schema baseline with two deployment no-op runs",
     "isolated staging URL differs from production",
     "canonical baseline and acceptance hashes verified",
     "same model and tool policy across arms",

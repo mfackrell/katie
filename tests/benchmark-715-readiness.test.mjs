@@ -59,3 +59,33 @@ test('a verified price flag alone does not authorize unbounded token accounts',(
   assert.ok(result.blockers.includes('pricing'));
  }
 });
+
+test('independently verified custom staging baseline qualifies without rewriting native migration history',()=>{
+ const custom={
+  ...good,
+  branchStatus:'MIGRATIONS_FAILED',
+  deploymentAuthority:'custom-schema-ledger',
+  customBaselineReceiptId:'katie-staging-20261026',
+  customBaselineCatalogSha256:'9e9b4ad1fee3926672a0ff3b62ef1e1c909c2b60d3ca2d1a3341f5f4c8795009',
+  customBaselineSourceCommit:'3181b9d1a5d82f2a28a21a08c449658877b4d47a',
+  customCatalogVerified:true,
+  customLedgerRows:117,
+  customMigrationAuthorityAuditPassed:true,
+  customRunnerNoopRuns:2,
+  nativeAutomaticReplayDisabled:true
+ };
+ assert.equal(validateLaunchReadiness(manifest,custom).ready,true);
+ for(const invalid of [
+  {...custom,customBaselineReceiptId:'made-up-receipt'},
+  {...custom,customBaselineCatalogSha256:'f'.repeat(64)},
+  {...custom,customCatalogVerified:false},
+  {...custom,customRunnerNoopRuns:1},
+  {...custom,nativeAutomaticReplayDisabled:false},
+  {...custom,customLedgerRows:116},
+  {...custom,customMigrationAuthorityAuditPassed:false}
+ ]) {
+  const result=validateLaunchReadiness(manifest,invalid);
+  assert.equal(result.ready,false);
+  assert.ok(result.blockers.includes('staging'));
+ }
+});

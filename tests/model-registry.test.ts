@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { chooseProvider } from "../lib/router/master-router";
-import { computeRoutingEligibility, isDefinitiveModelUnavailable, normalizeModelId, type RegistryRoutingModel } from "../lib/models/registry";
+import { computeRoutingEligibility, isDefinitiveModelUnavailable, normalizeModelId, retainTrustedPricing, type RegistryRoutingModel } from "../lib/models/registry";
 import type { LlmProvider } from "../lib/providers/types";
 
 function fakeProvider(name: LlmProvider["name"], models: string[]): LlmProvider {
@@ -103,4 +103,45 @@ test("empty registry pool cannot fall back to provider catalog and reselect quar
     }),
     /No eligible routing candidates/,
   );
+});
+
+test("trusted official pricing survives refresh only while both rates agree and evidence is recent", () => {
+  const now="2026-10-26T22:00:00Z";
+  const fresh={
+    provider_name:"openai",
+    model_id:"gpt-5.3-codex",
+    normalized_model_id:"gpt-5.3-codex",
+    pricing_status:"estimated",
+    pricing_input_per_1m:1.75,
+    pricing_output_per_1m:14,
+    pricing_verified_at:now,
+    source_metadata:{pricing_source:"pricing_catalog"}
+  } as Parameters<typeof retainTrustedPricing>[0];
+  const prior={
+    normalized_model_id:"gpt-5.3-codex",
+    pricing_status:"verified",
+    pricing_input_per_1m:1.75,
+    pricing_output_per_1m:14,
+    pricing_verified_at:"2026-10-26T19:34:14Z",
+    source_metadata:{pricing_verification_source:"https://developers.openai.com/api/docs/models/gpt-5.3-codex",pricing_verification_date:"2026-10-26"}
+  } as NonNullable<Parameters<typeof retainTrustedPricing>[1]>;
+  const preserved=retainTrustedPricing(fresh,prior,now);
+  assert.equal(preserved.pricing_status,"verified");
+  assert.equal(preserved.pricing_verified_at,prior.pricing_verified_at);
+  assert.equal((preserved.source_metadata as Record<string,unknown>).pricing_verification_source,prior.source_metadata.pricing_verification_source);
+  for(const changed of [
+    {prior:{...prior,pricing_verified_at:"2026-10-24T19:34:14Z"}},
+    {prior:{...prior,source_metadata:{}}},
+    {prior:{...prior,source_metadata:{pricing_verification_source:"https://"}}},
+    {prior:{...prior,source_metadata:{pricing_verification_source:"https://attacker.example/api/docs/models/gpt-5.3-codex"}}},
+    {prior:{...prior,source_metadata:{pricing_verification_source:"https://developers.openai.com.attacker.example/api/docs/models/gpt-5.3-codex"}}},
+    {prior:{...prior,source_metadata:{pricing_verification_source:"https://developers.openai.com/api/docs/models/another-model"}}},
+    {prior:{...prior,pricing_status:"estimated" as const}},
+    {fresh:{...fresh,pricing_output_per_1m:15}},
+    {fresh:{...fresh,pricing_input_per_1m:null}},
+    {fresh:{...fresh,pricing_status:"missing" as const}}
+  ]){
+    const row=retainTrustedPricing(changed.fresh??fresh,changed.prior??prior,now);
+    assert.notEqual(row.pricing_status,"verified");
+  }
 });
