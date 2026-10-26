@@ -15,6 +15,7 @@ test('all arms use byte-for-byte identical gateway config and SDK policy',()=>{
   }
  }
  assert.equal(nativeCodexConfig(NATIVE_GATEWAY_URL),nativeCodexConfig());
+ assert.match(nativeCodexConfig(),/web_search = "disabled"/);
  assert.throws(()=>nativeCodexConfig('https://provider.example/v1'),/GATEWAY_POLICY_MISMATCH/);
  assert.throws(()=>assertNativeEffectivePolicy({gateway:NATIVE_GATEWAY_URL,model:'',arm:'native',phase:'review'}),/POLICY_DENIED/);
 });
