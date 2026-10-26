@@ -123,3 +123,12 @@ test('provider-expanded references and files are denied before reservation',asyn
   assert.equal(reserved,0);
  }
 });
+
+test('bounded inline Codex custom tool call and output are admitted',async()=>{
+ let admitted=0,forwarded=0;
+ await forwardAuthorizedModelRequest({...request,
+  requestBody:{model:'mock',input:[{type:'custom_tool_call',call_id:'call_1',name:'exec',input:'echo ok'},{type:'custom_tool_call_output',call_id:'call_1',output:'ok'}],max_output_tokens:100},
+  db:{rpc:async name=>name==='benchmark_gateway_execution_live'?{data:true,error:null}:(admitted++,{data:'op',error:null})},
+  upstream:async()=>{forwarded++;return{providerRequestId:'provider-tool',actualTokens:200}},recordReceipt:async()=>{}});
+ assert.equal(admitted,1);assert.equal(forwarded,1);
+});
