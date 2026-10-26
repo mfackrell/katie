@@ -1,3 +1,8 @@
+import React from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import ReactMarkdown from "react-markdown";
+import remarkMath from "remark-math";
+import rehypeKatex from "rehype-katex";
 import { describe, expect, it } from "vitest";
 import { remarkCurrencyProse } from "../lib/chat/markdown-currency";
 import type { Root } from "mdast";
@@ -17,4 +22,15 @@ describe("syntax-aware financial Markdown", () => {
     ]);
     expect(tree.children[1].value).toBe('"$100k"');
   });
+});
+
+it("renders currency prose as text and keeps explicit math and code intact", () => {
+  const html = renderToStaticMarkup(React.createElement(ReactMarkdown, {
+    remarkPlugins: [remarkMath, remarkCurrencyProse], rehypePlugins: [rehypeKatex],
+    children: 'From $40k to $120k. Inline $2m$ and $x^2$. Code `"$100k"`.\n\n```json\n"$100k"\n```',
+  }));
+  expect(html).toContain("From $40k to $120k.");
+  expect((html.match(/class="katex"/g) ?? []).length).toBe(2);
+  expect(html).toContain('<code>&quot;$100k&quot;</code>');
+  expect(html).toContain('&quot;$100k&quot;\n</code>');
 });

@@ -31,6 +31,7 @@ export function parsePresentationTail(
   const tail = raw.slice(start + PRESENTATION_START.length);
   const end = tail.lastIndexOf(PRESENTATION_END);
   if (end < 0 || tail.slice(end + PRESENTATION_END.length).trim() || !prefix.trim()) {
+    console.warn("[Presentation] incomplete envelope", { hasEnd: end >= 0, hasAnswer: Boolean(prefix.trim()) });
     return { text: prefix || raw, presentation: null };
   }
   const json = tail.slice(0, end);
@@ -40,6 +41,7 @@ export function parsePresentationTail(
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return { text: prefix, presentation: null };
     const keys = Object.keys(parsed);
     if (keys.length !== 2 || !keys.includes("version") || !keys.includes("blocks")) {
+      console.warn("[Presentation] invalid envelope fields", { keys });
       return { text: prefix, presentation: null };
     }
     const record = parsed as { version: unknown; blocks: unknown };
@@ -61,6 +63,7 @@ export function parsePresentationTail(
     }
     return { text: prefix, presentation };
   } catch {
+    console.warn("[Presentation] malformed JSON", { characters: json.length });
     return { text: prefix, presentation: null };
   }
 }
