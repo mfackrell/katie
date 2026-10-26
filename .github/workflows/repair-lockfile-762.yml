@@ -1,0 +1,31 @@
+name: Repair PR 762 lockfile
+on:
+  pull_request:
+    types: [synchronize, opened, reopened]
+    branches: [main]
+permissions:
+  contents: write
+jobs:
+  repair:
+    if: github.event.pull_request.number == 762 && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'fix/chat-latex-rendering'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/chat-latex-rendering
+          persist-credentials: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm install --package-lock-only --ignore-scripts --no-audit --no-fund
+      - name: Commit updated lockfile when needed
+        run: |
+          set -euo pipefail
+          if ! git diff --quiet -- package-lock.json; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add package-lock.json
+            git commit -m "fix: synchronize math renderer dependency lockfile"
+            git push origin HEAD:fix/chat-latex-rendering
+          fi
