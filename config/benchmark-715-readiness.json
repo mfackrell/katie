@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "issue": 715,
+  "repository": "mfackrell/katie",
+  "purpose": "Take Eleven three-arm qualification; no production publication",
+  "baselineSha": "0015bcdb8ac9ad94b7c74d1a4cd76737903b1319",
+  "contractIssue": 650,
+  "model": "gpt-5.3-codex",
+  "arms": [
+    {"arm": "native", "usdCeilingCents": 1000},
+    {"arm": "thin", "usdCeilingCents": 1000},
+    {"arm": "full", "usdCeilingCents": 1000}
+  ],
+  "totalUsdCeilingCents": 3000,
+  "productionPublicationAllowed": false,
+  "paidExecutionEnabled": false,
+  "requires": [
+    "staging migrations complete and reviewed",
+    "isolated staging URL differs from production",
+    "canonical baseline and acceptance hashes verified",
+    "same model and tool policy across arms",
+    "authoritative model pricing verified",
+    "fixed per-arm token ceilings computed from approved USD ceilings",
+    "owner-scoped trial, account, and approval records provisioned",
+    "approval deadlines and revocation enforced",
+    "verified owner-only dispatch and checkpoint paths",
+    "private browser acceptance and independently signed evidence",
+    "receipt reconciliation without unknown charges"
+  ]
+}
