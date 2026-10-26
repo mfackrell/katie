@@ -34,3 +34,13 @@ it("renders currency prose as text and keeps explicit math and code intact", () 
   expect(html).toContain('<code>&quot;$100k&quot;</code>');
   expect(html).toContain('&quot;$100k&quot;\n</code>');
 });
+
+it("renders same-line double dollars as display math and preserves inline math and code", () => {
+  const html = renderToStaticMarkup(React.createElement(ReactMarkdown, {
+    remarkPlugins: [remarkMath, remarkCurrencyProse], rehypePlugins: [rehypeKatex],
+    children: '$$x^2$$\n\nInline $x^2$ and code `$$x^2$$`.',
+  }));
+  expect((html.match(/class="katex-display"/g) ?? []).length).toBe(1);
+  expect((html.match(/class="katex"/g) ?? []).length).toBe(2);
+  expect(html).toContain('<code>$$x^2$$</code>');
+});

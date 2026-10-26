@@ -19,27 +19,33 @@ export const PRESENTATION_GENERATION_GUIDANCE = [
   "No executable code, HTML, CSS, URLs, actions, arbitrary fields or other component types in visual JSON.",
 ].join("\n");
 
-/** Recover only whitespace at prose-block boundaries. Every non-whitespace
- * character must still occur in canonical order; the strict schema remains the
- * final authority and the original answer is never rewritten. */
+/** Match formatting-equivalent prose to slices of the unchanged canonical
+ * answer. Whitespace and escaped currency dollars may differ in the model's
+ * duplicate text; substantive characters must still match in canonical order. */
 function reconcileOrderedMarkdown(canonical: string, value: unknown): unknown {
-  if (!Array.isArray(value) || value.length > 30) return value;
+  if (!Array.isArray(value) || value.length > 30 || canonical.length > 32000) return value;
   const markdown = value.filter(block => block?.type === "markdown");
   if (!markdown.length || markdown.some(block => typeof block.text !== "string" || !block.text.trim())) return value;
-  if (markdown.map(block => block.text).join("") === canonical) return value;
+  const ordered = markdown.map(block => block.text).join("");
+  if (ordered === canonical) return value;
+  const normalized = (text: string) => text.replace(/\\(?=\$\d)/g, "").replace(/\s/g, "");
+  if (normalized(ordered) !== normalized(canonical)) return value;
+  const positions: number[] = [];
+  for (let index = 0; index < canonical.length; index += 1) {
+    if (/\s/.test(canonical[index]) || (canonical[index] === "\\" && /^\$\d/.test(canonical.slice(index + 1)))) continue;
+    positions.push(index);
+  }
   let cursor = 0;
+  let characters = 0;
   const replacement = new Map<object, string>();
-  for (const block of markdown) {
-    const body = block.text.trim();
-    const start = canonical.indexOf(body, cursor);
-    if (start < 0 || canonical.slice(cursor, start).trim()) return value;
-    const end = start + body.length;
+  for (const [index, block] of markdown.entries()) {
+    const length = normalized(block.text).length;
+    if (!length) return value;
+    characters += length;
+    const end = index === markdown.length - 1 ? canonical.length : positions[characters - 1] + 1;
     replacement.set(block, canonical.slice(cursor, end));
     cursor = end;
   }
-  if (canonical.slice(cursor).trim()) return value;
-  const last = markdown[markdown.length - 1];
-  replacement.set(last, replacement.get(last)! + canonical.slice(cursor));
   return value.map(block => replacement.has(block) ? { ...block, text: replacement.get(block) } : block);
 }
 
@@ -76,6 +82,7 @@ export function parsePresentationTail(
       issues: (() => { const checked = structuredResponseSchema.safeParse({version:record.version,blocks:record.blocks,fallbackMarkdown:prefix}); return checked.success ? [] : checked.error.issues.map(issue => ({ code:issue.code,path:issue.path })); })(),
       blockTypes: Array.isArray(record.blocks) ? record.blocks.map(block => block && typeof block === "object" ? (block as {type?: unknown}).type : null) : null,
       canonicalCharacters: prefix.length,
+      equivalentWhitespace: Array.isArray(record.blocks) && record.blocks.filter(block => block?.type === "markdown").map(block => block.text).join("").replace(/\s/g, "") === prefix.replace(/\s/g, ""),
       orderedCharacters: Array.isArray(record.blocks) ? record.blocks.filter(block => block?.type === "markdown").map(block => block.text).join("").length : 0,
     });
     // A model may reference only an image actually attached to this saved
