@@ -53,6 +53,18 @@ test('owner workflow cannot execute unreviewed branches or paid model keys',()=>
  assert.match(workflow,/KATIE_BENCHMARK_PAID_EXECUTION: disabled/);
  assert.match(workflow,/OPENAI_API_KEY: ''/);
  assert.match(workflow,/native-thin-preflight\.mjs/);
- assert.match(workflow,/native-four-phase-contained-host-probe\.mjs/);
- assert.match(workflow,/KATIE_TRIAL_MANIFEST/);
+ assert.match(workflow,/nonfull-staging-launch\.mjs/);
+ assert.match(workflow,/KATIE_NONFULL_STAGING_CONFIRMED/);
+ assert.match(workflow,/KATIE_NONFULL_PRODUCTION_SUPABASE_URL/);
+ assert.match(workflow,/fetch-depth: 0/);
+});
+
+test('production credentials cannot be used by nonfull trusted staging launcher',()=>{
+ const source=readFileSync('scripts/benchmark/nonfull-staging-launch.mjs','utf8');
+ assert.match(source,/KATIE_NONFULL_STAGING_ONLY!=='verified'/);
+ assert.match(source,/KATIE_BENCHMARK_PAID_EXECUTION!=='disabled'/);
+ assert.match(source,/url===productionUrl/);
+ assert.match(source,/upstream\.nonbillableFixture=true/);
+ assert.match(source,/runNonFullAuthorizedHost\(/);
+ assert.match(source,/grantId:result\.grantId/);
 });
