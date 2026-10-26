@@ -208,12 +208,17 @@ export function verifiedAutomaticPatches(
     // A missing/invalid citation still fails closed.
     const evidenceIds = [...new Set(entry.evidenceMessageIds ?? [])];
     if (!evidenceIds.length || evidenceIds.some(id => !userById.has(id))) continue;
+    // Missing quotes can be constructed from the cited source. Incorrect
+    // provided quotations are provenance failures, never silently repaired.
+    const supplied = entry.evidenceQuotes;
+    if (supplied?.length && supplied.some(q =>
+      !q || !evidenceIds.includes(q.messageId) || typeof q.quote !== "string" ||
+      q.quote.trim().length < 20 || !userById.get(q.messageId)?.content.includes(q.quote.trim())
+    )) continue;
     const quotes = evidenceIds.map(messageId => {
       const source = userById.get(messageId)!.content.trim();
-      const provided = entry.evidenceQuotes?.find(q => q.messageId === messageId)?.quote?.trim();
-      const quote = provided && provided.length >= 20 && source.includes(provided)
-        ? provided : source.slice(0, 800);
-      return { messageId, quote };
+      const provided = supplied?.find(q => q.messageId === messageId)?.quote?.trim();
+      return { messageId, quote: provided ?? source.slice(0, 800) };
     });
     if (quotes.some(q => q.quote.length < 20)) continue;
     // Independent source-entailment and contextual qualification must BOTH
