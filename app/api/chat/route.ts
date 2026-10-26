@@ -2907,7 +2907,8 @@ ${chunkWorkflowSummary}`;
                 });
               },
               rerouteOnError: async ({ attempt, error }) => {
-                if (selfToolsEnabled && selfInspectionRequest) return null; // Inspection-contract failures cannot be repaired by switching models.\n                if (hasVideoInput) return null; // Attempt Grok directly, not another Gemini routing loop.
+                if (selfToolsEnabled && selfInspectionRequest) return null; // Inspection-contract failures cannot be repaired by switching models.
+                if (hasVideoInput) return null; // Attempt Grok directly, not another Gemini routing loop.
                 if (attempt.runpodImageFallback) return null;
                 // Third provider is optional after failures from both image models,
                 // never a workaround for their content/safety decisions.
