@@ -27,6 +27,23 @@ describe("provider-neutral progressive presentation protocol", () => {
     expect(output).not.toContain("chart");
     expect(output).not.toContain("katie-presentation-v1");
   });
+  it("validates ordered interleaving with identical fallback markdown", () => {
+    const ordered = "Before. After.";
+    const source = ordered + PRESENTATION_START + JSON.stringify({
+      version: 1,
+      blocks: [
+        { type: "markdown", text: "Before. " },
+        { type: "selector", title: "Scenario", options: [
+          { label: "Base", description: "Conservative" },
+          { label: "Stretch", description: "Optimistic" },
+        ] },
+        { type: "markdown", text: "After." },
+      ],
+    }) + PRESENTATION_END;
+    expect(parsePresentationTail(source).presentation?.blocks.map(x => x.type))
+      .toEqual(["markdown", "selector", "markdown"]);
+    expect(parsePresentationTail(source).text).toBe(ordered);
+  });
   it("streams a plain answer without losing content", () => {
     const filter = new PresentationStreamFilter();
     const input = "Just a normal chat message about revenue.";
