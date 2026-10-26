@@ -64,7 +64,8 @@ try{
  execFileSync('git',['-c','core.hooksPath=/dev/null','-C',workspace,'checkout','--detach',trial.baseline_sha],{timeout:30000});
  mkdirSync(join(workspace,'node_modules'));
  const result=await runNonFullAuthorizedHost({db,arm,trial,account,approval,
-  ownerId,repository:process.env.GITHUB_REPOSITORY,workspace,upstream});
+  ownerId,repository:process.env.GITHUB_REPOSITORY,workspace,upstream,
+  model:approval.model});
  if(result.phases.length!==4||callCount!==4||
     result.phases.some(x=>x.code!==0))
   throw Error('NONFULL_STAGING_ACCEPTANCE_INCOMPLETE');
