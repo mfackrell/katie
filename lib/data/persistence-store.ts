@@ -1,4 +1,4 @@
-import { validatePresentation } from "@/lib/presentation/default-registry";
+import { validatePresentation } from "../presentation/default-registry";
 import { normalizeReviewMode } from "@/lib/collaboration/review-mode";
 import { getSupabaseAdminClient } from "@/lib/data/supabase/admin";
 import type { Actor, ChatThread, Message } from "@/lib/types/chat";
