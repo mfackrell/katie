@@ -62,6 +62,7 @@ test('Native and Thin execute four isolated phases via same trusted DB-grant/rec
     return {providerRequestId:response.id,actualTokens:5,contentType:'text/event-stream',
      body:events.map(([kind,data])=>'event: '+kind+'\ndata: '+JSON.stringify(data)+'\n\n').join('')+'data: [DONE]\n\n'};
    };
+   upstream.nonbillableFixture=true;
    const result=await runNonFullAuthorizedHost({...fixture(arm),db,workspace:root,upstream});
    assert.equal(result.arm,arm);
    assert.equal(result.phases.length,4);
