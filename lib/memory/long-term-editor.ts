@@ -191,7 +191,7 @@ function parseMemoryEditorResult(
  * Ordinary automatic learning only emits source-verified per-key updates.
  * A valid ID without an excerpt of that actual user's text is not provenance.
  */
-function verifiedAutomaticPatches(
+export function verifiedAutomaticPatches(
   proposed: LongTermEntry[],
   current: LongTermEntry[],
   recentMessages: Awaited<ReturnType<typeof getRecentMessages>>,
@@ -203,27 +203,28 @@ function verifiedAutomaticPatches(
     const old = oldByKey.get(entry.key);
     if (old?.value === entry.value && old.category === entry.category) continue;
     if (/^(?:reference|explicit|correction)\./.test(entry.key)) continue;
-
-    const claimed = entry.evidenceQuotes;
-    if (!claimed?.length || !entry.evidenceMessageIds?.length) continue;
-    if (claimed.some(item =>
-      !item || typeof item.messageId !== "string" || typeof item.quote !== "string" ||
-      item.quote.trim().length < 20 || !userById.get(item.messageId)?.content.includes(item.quote.trim())
-    )) continue;
-    const evidenceIds = [...new Set(claimed.map(item => item.messageId))];
-    if (evidenceIds.length !== entry.evidenceMessageIds.length ||
-        evidenceIds.some(id => !entry.evidenceMessageIds?.includes(id))) continue;
-
-    // Firsthand factual statements with exact matching user quotations retain
-    // their firsthand attribution. Inferred generalizations remain inferences.
+    // Source selection remains model-owned, but quotations are reconstructed
+    // from actual user-message records, never accepted from model-authored text.
+    // A missing/invalid citation still fails closed.
+    const evidenceIds = [...new Set(entry.evidenceMessageIds ?? [])];
+    if (!evidenceIds.length || evidenceIds.some(id => !userById.has(id))) continue;
+    const quotes = evidenceIds.map(messageId => {
+      const source = userById.get(messageId)!.content.trim();
+      const provided = entry.evidenceQuotes?.find(q => q.messageId === messageId)?.quote?.trim();
+      const quote = provided && provided.length >= 20 && source.includes(provided)
+        ? provided : source.slice(0, 800);
+      return { messageId, quote };
+    });
+    if (quotes.some(q => q.quote.length < 20)) continue;
+    // Independent source-entailment and contextual qualification must BOTH
+    // approve these candidates before any memory write occurs.
     const source = entry.category === "pattern" ? "assistant-inference" : entry.source;
     patches.push({
-      ...entry,
-      source,
+      ...entry, source,
       confidence: source === "assistant-inference" && entry.confidence === "high"
         ? "medium" : entry.confidence,
       evidenceMessageIds: evidenceIds,
-      evidenceQuotes: claimed.map(item => ({ messageId: item.messageId, quote: item.quote.trim() })),
+      evidenceQuotes: quotes,
       lastConfirmedAt: userById.get(evidenceIds[0])?.createdAt ?? entry.lastConfirmedAt,
     });
   }
@@ -469,7 +470,7 @@ export async function maybeUpdateLongTermMemory(
             "- Pay particular attention to repeated feedback, explicit explanations of why an approach was ineffective, and corrections that reveal how the user evaluates quality.",
             "- Store durable lessons using the existing preference or pattern categories, appropriate evidenceMessageIds and confidence. A lesson inferred from multiple user messages may cite those messages; never attribute an assistant's interpretation to the user as a direct statement.",
             "- In ordinary automatic updates, return only NEW or CHANGED memories, not a complete memory snapshot. The database preserves omitted existing memories.",
-            "- Every new or changed automatic memory requires evidenceQuotes: [{messageId,quote}], containing an exact meaningful excerpt of at least 20 characters from the cited USER message in recentRoleAttributedMessages. The evidenceMessageIds must be those same message IDs. Unrelated job postings and valid but irrelevant message IDs are not evidence.",
+            "- Every new or changed automatic memory requires evidenceMessageIds referencing the ORIGINAL USER messages containing its factual support. Include evidenceQuotes when possible; the server independently reconstructs and verifies quotations from those message IDs. Never cite a confirmation such as all of them as evidence for the underlying fact.",
             "- Generalized lessons inferred from feedback are assistant-inference with calibrated confidence, not user-stated facts. Direct factual statements by the user and directly expressed preferences are user-stated when supported by exact quotations.",
             "- Do not turn isolated feedback, quoted third-party criticism, or tentative interpretations into permanent user preferences. A one-off writing edit is usually task-local; use no_change when there is no durable lesson.",
             "- Allow learned preferences to evolve when the user provides new information or changes their expectations. Respect explicit corrections and preserve otherwise distinct existing memories.",
@@ -489,7 +490,7 @@ export async function maybeUpdateLongTermMemory(
             '{"version":3,"purpose":"...","entries":[{"key":"stable.short.identifier","category":"fact|preference|relationship|goal|decision|constraint|pattern","value":"...","source":"user-stated|assistant-inference","confidence":"high|medium|low","evidenceMessageIds":["USER_MESSAGE_ID"],"evidenceQuotes":[{"messageId":"USER_MESSAGE_ID","quote":"exact supporting user excerpt"}],"lastConfirmedAt":"ISO timestamp if known"}]}',
             "",
             "Interpret the actor purpose and the newest user message before deciding no_change. Preserve newly stated reusable task-domain evidence even if it is only relevant to this specialist.",
-            "Every proposed memory must contain an exact 20+ character verbatim user quote and matching USER message ID; never return a replace proposal without this provenance. Existing memory is context, not output; only supply new or changed entries.",
+            "Every proposed memory must cite the original supporting USER message IDs. Quote the source when possible; server-side verification reconstructs the quote. Existing memory is context, not output; only supply new or changed entries.",
             "Return strict JSON only:",
             '{"action":"no_change"}',
             "or",
