@@ -9,7 +9,7 @@ export function verifyNonFullLaunch({arm,trial,account,approval,ownerId,reposito
     account.arm!==arm||account.trial_id!==trial.id||
     account.owner_actor_id!==trial.owner_actor_id||
     approval.trial_id!==trial.id||approval.account_id!==account.id||
-    approval.actor_id!==trial.owner_actor_id||
+    approval.actor_id!==trial.owner_actor_id||!approval.chat_id||!approval.model||
     approval.owner_id!==ownerId||approval.repository!==repository||
     approval.revoked_at||approval.consumed_at||
     !Number.isFinite(Date.parse(approval.deadline))||
