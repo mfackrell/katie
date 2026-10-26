@@ -20,7 +20,7 @@ const server=createNativeHttpBridge({
  db,grantToken:'only-synthetic-'+('z'.repeat(64)),trialId:'trial-synthetic',executionEpoch:1,
  providerNamespace:'local-synthetic',upperTokens:100,clientToken:'synthetic-only',
  recordReceipt:async x=>{receipts.push(x);},
- upstream:async body=>{
+ upstream:Object.assign(async body=>{
   providerRequests++;
   const first=providerRequests===1;
   const model=body.model||'synthetic';
@@ -44,7 +44,7 @@ const server=createNativeHttpBridge({
   const sse=events.map(([type,payload])=>'event: '+type+'\ndata: '+JSON.stringify(payload)+'\n\n').join('')+'data: [DONE]\n\n';
   return {providerRequestId:'synthetic-request-'+providerRequests,actualTokens:5,
    body:sse,contentType:'text/event-stream'};
- }
+ },{nonbillableFixture:true})
 });
 try{
  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
