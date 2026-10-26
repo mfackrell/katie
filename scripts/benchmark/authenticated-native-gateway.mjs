@@ -32,9 +32,9 @@ export async function forwardAuthorizedModelRequest({
   return Object.entries(value).some(([key,child])=>
    ['image_url','input_audio','input_image','audio','file_id'].includes(key)||containsNontext(child));
  };
- if(!requestBody||typeof requestBody!=='object'||containsNontext(requestBody))
-  throw Error('GATEWAY_UNBOUNDED_INPUT_DENIED');
  const syntheticFixture=upstream.nonbillableFixture===true && model==='synthetic';
+ if(!requestBody||typeof requestBody!=='object'||(!syntheticFixture&&containsNontext(requestBody)))
+  throw Error('GATEWAY_UNBOUNDED_INPUT_DENIED');
  const outputCap=requestBody.max_output_tokens==null?4096:requestBody.max_output_tokens;
  if(!syntheticFixture&&(!Number.isSafeInteger(outputCap)||outputCap<1||outputCap>upperTokens))
   throw Error('GATEWAY_OUTPUT_LIMIT_DENIED');
