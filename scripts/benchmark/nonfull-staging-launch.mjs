@@ -20,7 +20,9 @@ if(!['native','thin'].includes(arm)||![trialId,accountId,approvalId].every(x=>uu
 const url=process.env.KATIE_NONFULL_STAGING_SUPABASE_URL;
 const key=process.env.KATIE_NONFULL_STAGING_SERVICE_ROLE_KEY;
 const ownerId=process.env.KATIE_NONFULL_STAGING_OWNER_ID;
-if(!url||!key||!ownerId||!url.startsWith('https://')||
+const productionUrl=process.env.KATIE_NONFULL_PRODUCTION_SUPABASE_URL;
+if(!url||!key||!ownerId||!productionUrl||!url.startsWith('https://')||
+ url===productionUrl||
  url===process.env.NEXT_PUBLIC_SUPABASE_URL||
  url===process.env.KATIE_BENCHMARK_SUPABASE_URL)
  throw Error('NONFULL_STAGING_DATABASE_NOT_ATTESTED');
