@@ -4,6 +4,7 @@ import fs from 'node:fs';
 
 const shared = fs.readFileSync('lib/memory/assemble-context.ts', 'utf8');
 const policy = fs.readFileSync('lib/chat/adaptive-response-composition.ts', 'utf8');
+const markdown = fs.readFileSync('components/assistant-markdown.tsx', 'utf8');
 const panel = fs.readFileSync('components/chat-panel.tsx', 'utf8');
 const route = fs.readFileSync('app/api/chat/route.ts', 'utf8');
 
@@ -25,8 +26,9 @@ test('policy selects natural formatting without templates or fake status', () =>
 });
 
 test('existing GitHub-flavored Markdown rendering and stream remain intact', () => {
-  assert.match(panel, /ReactMarkdown/);
-  assert.match(panel, /remarkPlugins=\{\[remarkGfm, remarkMath\]\}/);
+  assert.match(panel, /AssistantMarkdown/);
+  assert.match(markdown, /ReactMarkdown/);
+  assert.match(markdown, /remarkPlugins=\{\[remarkGfm, remarkMath, remarkCurrencyProse\]\}/);
   assert.match(panel, /decoder\.decode\(value, \{ stream: true \}\)/);
   assert.match(route, /new ReadableStream<Uint8Array>/);
 });
