@@ -686,9 +686,7 @@ async function executeChat(request: NextRequest) {
     // audited project/developer workflow with its approval and verification.
     const selfInspectionRequest = isExplicitKatieSelfInspectionRequest(message);
     let selfRepoId: string | null = null;
-    const selfToolRequest = (selfInspectionRequest ||
-      /\b(?:github|supabase|vercel)\b/i.test(message) &&
-      /\b(?:inspect|read|list|show|verify|create|edit|write|change|migrate|deploy|rollback|logs?|schema|rows?|commits?|checks?)\b/i.test(message));
+    const selfToolRequest = selfInspectionRequest;
     const selfToolActor = selfToolRequest && !currentAgentTask()
       ? await getSupabaseAdminClient().from("actors").select("name,actor_kind").eq("id", actorId).maybeSingle<{name:string;actor_kind:string}>()
       : null;
@@ -2421,7 +2419,7 @@ ${chunkWorkflowSummary}`;
                   resolvedRequestIntent
                 );
 
-                const generation = (typeof selfToolsEnabled !== 'undefined' && selfToolsEnabled)
+                const generation = (selfToolsEnabled && selfInspectionRequest)
                   ? await (async () => {
                       const result = await runSelfInspection({ request, actorId, chatId, requestId, provider,
                         params: finalParams, deadlineMs: executionDeadlineMs,
@@ -2909,7 +2907,7 @@ ${chunkWorkflowSummary}`;
                 });
               },
               rerouteOnError: async ({ attempt, error }) => {
-                if (selfToolsEnabled) return null; // Self-inspection evidence failures are task-level, not model outages.\n                if (hasVideoInput) return null; // Attempt Grok directly, not another Gemini routing loop.
+                if (selfToolsEnabled && selfInspectionRequest) return null; // Inspection-contract failures cannot be repaired by switching models.\n                if (hasVideoInput) return null; // Attempt Grok directly, not another Gemini routing loop.
                 if (attempt.runpodImageFallback) return null;
                 // Third provider is optional after failures from both image models,
                 // never a workaround for their content/safety decisions.
