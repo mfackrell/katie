@@ -27,9 +27,16 @@ const fixture=arm=>{
  return {arm,trial,account,approval,ownerId:'owner',repository:'mfackrell/katie'};
 };
 test('Native and Thin execute four isolated phases via same trusted DB-grant/receipt host', {timeout:180000},async t=>{
- if(spawnSync('bwrap',['--unshare-user','--ro-bind','/','/','--','/bin/true']).status!==0||
-    spawnSync('which',['socat']).status!==0)
-  return t.skip('sandbox or Unix socket proxy unavailable');
+ const sandboxAvailable=spawnSync('bwrap',['--unshare-user','--ro-bind','/','/','--','/bin/true']).status===0
+   && spawnSync('which',['socat']).status===0;
+ if(!sandboxAvailable){
+   if(process.env.KATIE_REQUIRE_NATIVE_BWRAP==='1')throw Error('REQUIRED_NATIVE_SANDBOX_UNAVAILABLE');
+   // General CI validates fail-closed input admission; the dedicated hosted
+   // qualification MUST run the complete contained SDK/PostgreSQL test.
+   await assert.rejects(runNonFullAuthorizedHost({arm:'native',db:null,workspace:null}),
+     /NONFULL_HOST_PAID_EXECUTION_DENIED/);
+   return;
+ }
  for(const arm of ['native','thin']){
   const root=mkdtempSync(join(tmpdir(),'nonfull-trusted-host-test-'));
   try{
