@@ -41,7 +41,7 @@ export function assertNativeRequestTools(body){
    // Codex-native function/custom tool calls execute in the contained worker.
    // Provider-hosted network, MCP, browser and external shell tools are denied.
    if(!tool||!['function','custom'].includes(tool.type))
-    throw Error('NATIVE_REMOTE_PROVIDER_TOOL_DENIED');
+    throw Error('NATIVE_REMOTE_PROVIDER_TOOL_DENIED:'+String(tool?.type||'missing').replace(/[^a-zA-Z0-9_-]/g,'').slice(0,40));
   }
  }
  return true;
