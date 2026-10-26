@@ -32,9 +32,16 @@ test('canonical receipt writer persists only settled or overrun states',async()=
 });
 
 test('incomplete terminal carries authoritative usage for reconciliation',async()=>{
- const payload='event: response.incomplete\\ndata: '+JSON.stringify({type:'response.incomplete',response:{id:'resp_incomplete',status:'incomplete',usage:{total_tokens:4096}}})+'\\n\\n';
+ const payload='event: response.incomplete\ndata: '+JSON.stringify({type:'response.incomplete',response:{id:'resp_incomplete',status:'incomplete',usage:{total_tokens:4096}}})+'\n\n';
  const provider=createResponsesProvider({apiKey:key,fetchImpl:async()=>new Response(payload,{status:200})});
  const receipt=await provider({model:'test'});
  assert.equal(receipt.providerRequestId,'resp_incomplete');
  assert.equal(receipt.actualTokens,4096);
+});
+
+test('non-streaming JSON terminal preserves authoritative usage',async()=>{
+ const provider=createResponsesProvider({apiKey:key,fetchImpl:async()=>new Response(JSON.stringify({id:'resp_json',status:'incomplete',usage:{total_tokens:18}}),{status:200,headers:{'content-type':'application/json'}})});
+ const receipt=await provider({model:'test',stream:false});
+ assert.equal(receipt.providerRequestId,'resp_json');
+ assert.equal(receipt.actualTokens,18);
 });
