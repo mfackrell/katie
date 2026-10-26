@@ -1,4 +1,4 @@
-create role service_role;
+create role service_role bypassrls;
 create role anon;
 create role authenticated;
 create schema if not exists public;
