@@ -203,9 +203,9 @@ function enrichModelRecord(providerName: LlmProvider["name"], modelId: string, p
 type TrustedPricingSnapshot = Pick<ModelRegistryRecord,
   "normalized_model_id" | "pricing_status" | "pricing_input_per_1m" |
   "pricing_output_per_1m" | "pricing_verified_at" | "source_metadata">;
-export function retainTrustedPricing<T extends ReturnType<typeof enrichModelRecord>>(
-  fresh: T, prior: TrustedPricingSnapshot | undefined, nowIso: string
-): T {
+export function retainTrustedPricing(
+  fresh: ReturnType<typeof enrichModelRecord>, prior: TrustedPricingSnapshot | undefined, nowIso: string
+): ReturnType<typeof enrichModelRecord> {
   const source=prior?.source_metadata?.pricing_verification_source;
   const verifiedAt=Date.parse(prior?.pricing_verified_at ?? "");
   const now=Date.parse(nowIso);
