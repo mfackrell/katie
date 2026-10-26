@@ -21,7 +21,7 @@ import { useSavedState } from "@/components/saved-workspace-state";
 import type { FileReference } from "@/lib/providers/types";
 import { acknowledgeVideoUploads, uploadFilesDirect } from "@/lib/uploads/direct-upload-client";
 import type { Message } from "@/lib/types/chat";
-import type { StructuredResponse } from "@/lib/chat/structured-response";
+import { parseStructuredResponse, type StructuredResponse } from "@/lib/chat/structured-response";
 import { canSubmitChatRequest } from "@/lib/chat/request-guards";
 import {
   applyReasoningEvent,
@@ -1880,7 +1880,10 @@ export function ChatPanel({
 
           if (chunk.type === "content") {
             textContent = chunk.text;
-            if (chunk.presentation) presentation = chunk.presentation;
+            if (chunk.presentation) {
+              const verified = parseStructuredResponse(chunk.presentation);
+              if (verified && verified.fallbackMarkdown === chunk.text) presentation = verified;
+            }
             if (chunk.assets?.length) {
               assets = [...assets, ...chunk.assets];
             }
@@ -1964,7 +1967,10 @@ export function ChatPanel({
 
         if (trailingChunk.type === "content") {
           textContent = trailingChunk.text;
-          if (trailingChunk.presentation) presentation = trailingChunk.presentation;
+          if (trailingChunk.presentation) {
+            const verified = parseStructuredResponse(trailingChunk.presentation);
+            if (verified && verified.fallbackMarkdown === trailingChunk.text) presentation = verified;
+          }
           if (trailingChunk.assets?.length) {
             assets = [...assets, ...trailingChunk.assets];
           }
@@ -2796,7 +2802,7 @@ export function ChatPanel({
             {message.content ? (
               message.role === "assistant" ? (
                 <div className="break-words text-zinc-100/95">
-                  {message.presentation ? <StructuredResponseView response={message.presentation} /> : (<ReactMarkdown
+                  <ReactMarkdown
                     remarkPlugins={[remarkGfm]}
                     components={{
                       h1: ({ children }) => (
@@ -2883,7 +2889,8 @@ export function ChatPanel({
                     }}
                   >
                     {message.content}
-                  </ReactMarkdown>)}
+                  </ReactMarkdown>
+                  {message.presentation && <StructuredResponseView response={message.presentation} />}
                 </div>
               ) : (
                 <p className="whitespace-pre-wrap break-words leading-7 text-zinc-100/95">{message.content}</p>
