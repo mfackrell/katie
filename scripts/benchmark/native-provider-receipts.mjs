@@ -17,6 +17,10 @@ export function createResponsesProvider({apiKey,fetchImpl=fetch,baseUrl='https:/
   if(raw.length>16_000_000)throw Error('GATEWAY_RESPONSE_TOO_LARGE');
   const frames=raw.split(/\n\n/);
   let terminal=null;
+  if((resp.headers.get('content-type')||'').includes('application/json')){
+   let parsed;try{parsed=JSON.parse(raw)}catch{throw Error('GATEWAY_AUTHORITATIVE_RECEIPT_MISSING')}
+   if(['completed','incomplete'].includes(parsed?.status))terminal=parsed;
+  }
   for(const frame of frames){
    const event=frame.split(/\r?\n/).find(line=>line.startsWith('data: '));
    if(!event||event==='data: [DONE]')continue;
