@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {forwardAuthorizedModelRequest,tokenDigest} from '../scripts/benchmark/authenticated-native-gateway.mjs';
 const token='synthetic-only-token-'+('x'.repeat(50));
 const request={grantToken:token,trialId:'trial-1',executionEpoch:1,model:'mock',
- requestBody:{model:'mock'},upperTokens:40,providerNamespace:'fixture'};
+ requestBody:{model:'mock'},upperTokens:10000,providerNamespace:'fixture'};
 test('denied grant never reaches model provider',async()=>{
  let forwarded=0;
  await assert.rejects(forwardAuthorizedModelRequest({...request,
@@ -86,4 +86,28 @@ test('interrupted phase does not silently replay an unresolved provider call',as
  assert.equal(receipts,0);
  // Recovery must reconcile the existing admission. It may not assume an
  // interrupted request was free or replay it with a fresh operation identity.
+});
+
+
+test('reserves the actual bounded envelope and caps provider output',async()=>{
+ let reserved,forwarded;
+ await forwardAuthorizedModelRequest({...request,
+  requestBody:{model:'mock',input:'small fixture',max_output_tokens:50},
+  db:{rpc:async(name,args)=>name==='benchmark_gateway_execution_live'?{data:true,error:null}:(reserved=args.p_tokens,{data:'op',error:null})},
+  upstream:async body=>(forwarded=body,{providerRequestId:'receipt',actualTokens:15}),
+  recordReceipt:async()=>{}
+ });
+ assert.equal(forwarded.max_output_tokens,50);
+ assert.ok(reserved>=Buffer.byteLength(JSON.stringify(forwarded),'utf8')+50);
+});
+test('oversized or unbounded provider inputs cannot create billable admission',async()=>{
+ for(const body of [{model:'mock',input:'x'.repeat(12000)},
+  {model:'mock',input:[{type:'input_image',image_url:'https://example.com/img'}]}]){
+  let admission=0;
+  await assert.rejects(forwardAuthorizedModelRequest({...request,requestBody:body,
+   db:{rpc:async name=>{if(name==='benchmark_gateway_execution_live')return {data:true,error:null};admission++;return{data:'op',error:null}}},
+   upstream:async()=>{throw Error('must not reach provider')},recordReceipt:async()=>{}
+  }),/GATEWAY_(REQUEST_EXCEEDS_GRANT|UNBOUNDED_INPUT_DENIED)/);
+  assert.equal(admission,0);
+ }
 });
