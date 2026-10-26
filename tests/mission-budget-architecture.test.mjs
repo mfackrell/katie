@@ -148,7 +148,7 @@ test('review and execution use the same separate request envelopes without dropp
  const model=readFileSync('lib/missions/model.ts','utf8');
  assert.match(worker,/fitsMissionEnvelope\(reviewFrame,reviewInput,missionInputLimit\(claim\)\)/);
  assert.match(model,/fitsMissionEnvelope\(instruction,input,missionInputLimit\(claim\)\)/);
- assert.match(worker,/validateAnswerReview\(parseJSON\(checked.text\),assessment\)/);
+ assert.match(worker,/validateAnswerReview\(parseJSON\(checked.text\),assessment,projectReview\?PROJECT_ACCEPTANCE_IDS:undefined\)/);
 });
 
 test('read-only repository final stages retain complete 53K review evidence within a counted 96K envelope',()=>{

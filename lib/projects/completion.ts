@@ -1,17 +1,21 @@
 import type { IndependentAssessment } from '@/lib/collaboration/review-contract';
 import type { Project } from './store';
+import { createHash } from 'node:crypto';
 
 // The controller assigns the phase and objective before any candidate exists.
 // Review and repair use this SAME contract; a critic cannot create a new rubric.
 export function projectReviewAssessment(objective: string, phase: string): IndependentAssessment {
+    // The full objective is supplied once in the review evidence. Binding it by
+    // hash avoids multiplying a large original brief inside the input envelope.
+    const boundOutcome = `${phase} outcome; authoritative objective SHA-256: ${createHash('sha256').update(objective).digest('hex')}`;
     const evidence = phase === 'research' ? 'Support research findings with actual sources; identify only gaps that prevent the assigned outcome.'
         : phase === 'specification' ? 'The specification covers the original requirements with bounded paths, implementable milestones and meaningful acceptance checks. Optional improvements are not requirements.'
         : 'Completion claims must match the supplied immutable implementation, independent test/review and approved acceptance receipts. Missing evidence of a required outcome is a defect.';
     return {
-        objective, qualifications: [phase], strongestEvidence: ['Saved source artifacts and execution receipts'],
+        objective: boundOutcome, qualifications: [phase], strongestEvidence: ['Saved source artifacts and execution receipts'],
         criteria: [evidence, 'Resolve material prior failures within this scope. Do not introduce additional deliverables or require optional discoveries before completion.'],
-        synthesis: { conclusion: 'Complete the assigned phase against its original outcome.', dimensions: [{ dimension: phase, supportedScope: objective, evidence: ['Authoritative mission objective and project evidence'] }], emphasis: 'Necessary evidence, bounded verification, decisive closure' },
-        taskContract: { deliverable: objective, requirements: [{ id: 'assigned-outcome', requirement: objective, sourceId: 'latest-user', status: 'active' }], conflicts: [] },
+        synthesis: { conclusion: 'Complete the assigned phase against its original outcome.', dimensions: [{ dimension: phase, supportedScope: 'The complete original objective supplied verbatim with the candidate evidence.', evidence: ['Authoritative mission objective and project evidence'] }], emphasis: 'Necessary evidence, bounded verification, decisive closure' },
+        taskContract: { deliverable: boundOutcome, requirements: [{ id: 'assigned-outcome', requirement: 'Fulfill every requirement in the authoritative mission objective for this phase. Use the original outcome supplied verbatim in Evidence and candidate.objective.', sourceId: 'latest-user', status: 'active' }], conflicts: [] },
     };
 }
 

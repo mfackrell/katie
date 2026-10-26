@@ -45,7 +45,7 @@ declare p work_projects; signature text; action text:=p_action; payload jsonb:=p
 begin
  perform pg_advisory_xact_lock(hashtextextended('katie.mission.state',0));
  select * into p from work_projects where id=p_id for update;
- if not found or p.status<>'running' or p.lease is distinct from p_lease or p.lease_until<=now() or p.deadline<=now() then return false;end if;
+ if not found or p.status<>'running' or p_lease is null or p.lease_until is null or p.lease is distinct from p_lease or p.lease_until<=now() or p.deadline<=now() then return false;end if;
  -- Existing engineering workflows can legitimately run for more than an hour.
  -- Preserve their two-hour reconciliation window; ordinary phase work is shorter.
  if exists(select 1 from agent_tasks t join mission_assignments j on j.id=t.id where j.mission_id=p.active_mission_id) then stall_window:=interval '2 hours';end if;
@@ -62,7 +62,9 @@ begin
   payload:=jsonb_build_object('detail','No new completed artifact or external execution transition for '||stall_window||' in '||p.phase||'. Work is blocked; saved results and charges are retained.',
    'impediment',jsonb_build_object('kind','blocked','step',p.phase,'impediment','Saved execution has made no observable progress for '||stall_window||'.',
     'attempted',jsonb_build_array('Inspected persisted assignment artifacts and external task transitions; repeated polling is not execution.'),
-    'minimumAction','Restore the stalled worker or external workflow for the saved mission, then resume within the existing authorization.'));
+    'minimumAction',case when p.phase in ('delivery','assessment') and p.verified_sha is not null
+     then 'Restore the private Preview receipt for verified commit '||p.verified_sha||'; retain the approved acceptance contract.'
+     else 'Restore the stalled worker or external workflow for saved mission '||coalesce(p.active_mission_id::text,'in project '||p.id)||', then resume within the existing authorization.' end));
  end if;
  if action='error' then
   if p.error_signature=md5(coalesce(payload->>'detail','')) and p.progress_signature=signature then

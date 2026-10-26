@@ -14,6 +14,7 @@ DO $$ declare p work_projects; original work_projects; l uuid; m uuid; ok boolea
  l:=gen_random_uuid();
  update work_projects set status='running',phase='research',active_mission_id=null,lease=l,lease_until=now()+interval '5 minutes',deadline=now()+interval '3 hours' where id=p.id;
  if finish_work_project(p.id,gen_random_uuid(),'wait') then raise exception 'Wrong lease accepted';end if;
+ if finish_work_project(p.id,null,'wait') then raise exception 'Absent lease accepted';end if;
  begin
   perform finish_work_project(p.id,l,'complete','{"result":"I completed everything"}');
   raise exception 'Expected unverified completion rejection';

@@ -33,6 +33,11 @@ const job=(m,role='work',key='work')=>({id:randomUUID(),mission_id:m.id,job_key:
 const assessment={objective:'A supported recommendation',qualifications:['Service economics'],strongestEvidence:['Supplied assumptions'],criteria:['Supported recommendation'],synthesis:{conclusion:'Weigh economics and market evidence',dimensions:[{dimension:'Economics',supportedScope:'Scenario analysis',evidence:['Supplied assumptions']}],emphasis:'Decision relevance'},taskContract:{deliverable:'A recommendation',requirements:[{id:'outcome',requirement:'A supported recommendation',sourceId:'latest-user',status:'active'}],conflicts:[]}};
 const verdict=(decision='approve')=>({verdict:decision,findings:decision==='approve'?'Verified complete outcome':'Incorrect arithmetic',checks:modules()('@/lib/collaboration/review-contract').acceptanceIds(assessment).map(id=>({id,passed:decision==='approve',evidence:decision==='approve'?'Specific support checked':'Incorrect arithmetic in the draft'}))});
 test('DO closes against one fixed contract, records optional discoveries and bounds failed repairs',async()=>{
+ const completion=modules()('@/lib/projects/completion');
+ const largeObjective='Original requirement. '.repeat(500);
+ const fixed=completion.projectReviewAssessment(largeObjective,'assessment');
+ assert.ok(JSON.stringify(fixed).length<2400,'Large objectives must not be multiplied inside the review envelope');
+ assert.notEqual(fixed.objective,completion.projectReviewAssessment(largeObjective+'Changed requirement.','assessment').objective);
  for(const outcome of ['pass','optional','repair','failed','blocked']){
   const m=mission();m.project_id=randomUUID();m.project_kind='assessment';m.objective='Deliver the approved inventory page with tested stock persistence.';
   const compose={...job(m,'compose','compose'),status:'completed',result:{text:'Inventory page at immutable fixture SHA. Saved stock persistence checks passed.'}},review=job(m,'review','review');
