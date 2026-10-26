@@ -5,6 +5,7 @@ import {pathToFileURL} from 'node:url';
 import {mkdirSync,writeFileSync} from 'node:fs';
 import {join} from 'node:path';
 import {executeSharedNativePhase,assertNativeArmPhase} from '/trusted/shared-native-phase.mjs';
+import {NATIVE_GATEWAY_URL,nativeCodexConfig,assertNativeEffectivePolicy} from '/trusted/shared-native-policy.mjs';
 const require=createRequire('/work/package.json');
 const {Codex}=await import(pathToFileURL(require.resolve('@openai/codex-sdk')).href);
 const arm=process.env.KATIE_BENCHMARK_ARM;
@@ -14,11 +15,11 @@ const baseline=process.env.KATIE_NATIVE_BASELINE_SHA;
 if(!/^[a-f0-9]{40}$/.test(baseline??''))throw Error('NATIVE_BASELINE_MISSING');
 const root='/work',home='/tmp/native-home',state=join(home,'.codex');
 mkdirSync(state,{recursive:true});
-const gateway='http://127.0.0.1:43181/v1';
-writeFileSync(join(state,'config.toml'),
- 'model_provider = "contained_gateway"\n[model_providers.contained_gateway]\nname = "Contained gateway"\nwire_api = "responses"\nrequires_openai_auth = true\nsupports_websockets = false\nbase_url = "'+gateway+'"\nrequest_max_retries = 0\nstream_max_retries = 0\n');
+const gateway=NATIVE_GATEWAY_URL;
+writeFileSync(join(state,'config.toml'),nativeCodexConfig(gateway));
 const bearer=process.env.KATIE_NATIVE_BRIDGE_TOKEN;
 const model=process.env.KATIE_NATIVE_MODEL;
+assertNativeEffectivePolicy({gateway,model,arm,phase});
 if(!bearer||!model||process.env.KATIE_OUTER_SANDBOX_CONFIRMED!=='1')
  throw Error('NATIVE_WORKER_NOT_ATTESTED');
 const prompts={
