@@ -26,9 +26,23 @@ function ChartBlock({ block }: { block: Extract<VisualBlock, { type: "chart" }> 
   const label = block.evidence.origin === "observed" ? "Observed" : block.evidence.origin === "estimated" ? "Estimated" : "Illustrative";
   return <figure className="rounded-lg border border-white/15 p-3">
     <figcaption className="font-semibold">{block.title}</figcaption>
-    {block.chart === "donut" ? <ul className="mt-3 space-y-1 text-sm">
-      {block.points.map((point, index) => <li key={index} className="flex justify-between gap-2"><span>{point.label}</span><span>{point.value.toLocaleString()} {block.unit ?? ""}</span></li>)}
-    </ul> : <svg className="mt-2 h-auto w-full" viewBox={`0 0 ${width} ${height}`} role="img" aria-label={block.accessibleSummary}>
+    {block.chart === "donut" ? <svg className="mx-auto mt-2 h-52 w-full max-w-sm" viewBox="0 0 260 220" role="img" aria-label={block.accessibleSummary}>
+      {block.points.map((point, index) => {
+        const total = block.points.reduce((sum, item) => sum + item.value, 0);
+        const previous = block.points.slice(0, index).reduce((sum, item) => sum + item.value, 0);
+        const radius = 68;
+        const circumference = 2 * Math.PI * radius;
+        const length = circumference * point.value / total;
+        const offset = -circumference * previous / total;
+        return <circle key={index} cx="130" cy="108" r={radius} fill="none" stroke={`hsl(${(index * 57 + 145) % 360} 65% 55%)`}
+          strokeWidth="28" strokeDasharray={`${length} ${circumference - length}`}
+          strokeDashoffset={offset} transform="rotate(-90 130 108)">
+          <title>{point.label}: {point.value.toLocaleString()} {block.unit ?? ""}</title>
+        </circle>;
+      })}
+      <circle cx="130" cy="108" r="45" fill="none" />
+      <text x="130" y="112" textAnchor="middle" fill="currentColor" fontSize="14">Total: {block.points.reduce((sum, p) => sum + p.value, 0).toLocaleString()}</text>
+    </svg> : <svg className="mt-2 h-auto w-full" viewBox={`0 0 ${width} ${height}`} role="img" aria-label={block.accessibleSummary}>
       <line x1={inset} y1={height - inset} x2={width - inset} y2={height - inset} stroke="currentColor" opacity="0.4" />
       {block.chart === "line" ? <polyline fill="none" stroke="currentColor" strokeWidth="3" points={block.points.map((point, index) => `${x(index)},${y(point.value)}`).join(" ")} /> : block.points.map((point, index) => {
         const band = (width - inset * 2) / block.points.length;
