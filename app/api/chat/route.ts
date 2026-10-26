@@ -3375,10 +3375,15 @@ ${chunkWorkflowSummary}`;
             after(async () => {
               console.log("[Chat API] Memory persistence start", { actorId, chatId, requestId });
               try {
+                const retention = maybeUpdateLongTermMemory(actorId, chatId, message);
+                const cleanup = retention.then(
+                  () => maybeRunThirtyMessageCleanup(actorId),
+                  () => maybeRunThirtyMessageCleanup(actorId),
+                );
                 const memoryResults = await Promise.allSettled([
-                  maybeUpdateLongTermMemory(actorId, chatId, message),
+                  retention,
                   maybeUpdateSummary(chatId),
-                  maybeRunThirtyMessageCleanup(actorId),
+                  cleanup,
                 ]);
                 memoryResults.forEach((memoryResult, index) => {
                   if (memoryResult.status === "rejected") {
