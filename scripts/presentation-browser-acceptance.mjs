@@ -22,6 +22,7 @@ const fixture = `
 "use client";
 import { StructuredResponseView } from "@/components/structured-response-view";
 import { AssistantMarkdown } from "@/components/assistant-markdown";
+import { ChatPanel } from "@/components/chat-panel";
 import type { StructuredResponse } from "@/lib/chat/structured-response";
 const response = {
   version: 1, fallbackMarkdown: "Before. After.",
@@ -38,6 +39,7 @@ export default function PresentationAcceptancePage() {
   return <main className="mx-auto max-w-2xl p-6" data-testid="presentation-fixture">
     <StructuredResponseView response={response} ordered assets={[{ type: "image", url: "https://images.example.test/saved.png" }]} />
     <div data-testid="equation"><AssistantMarkdown>{${JSON.stringify(equationMarkdown)}}</AssistantMarkdown></div>
+    <div className="h-[700px]" data-testid="stream-chat"><ChatPanel actorId="11111111-1111-4111-8111-111111111111" chatId="22222222-2222-4222-8222-222222222222" activeActorName="Acceptance" activeChatTitle="Streaming regression" activeRepoId="" repoInjectionEnabled={false} /></div>
   </main>;
 }
 `;
@@ -78,6 +80,39 @@ try {
     headless: true,
   });
   const page = await browser.newPage({ viewport: { width: 1280, height: 860 } });
+  await page.route("**/api/**", route => {
+    const url = new URL(route.request().url());
+    const body = route.request().postDataJSON();
+    const payload = url.pathname === "/api/models" ? { openai: ["fixture"] }
+      : url.pathname === "/api/messages" ? { messages: [] }
+      : url.pathname === "/api/ui-state" ? { state: { key: body?.key ?? url.searchParams.get("key"), version: 1, value: body?.value ?? {} } }
+      : url.pathname === "/api/version" ? { version: "fixture" } : {};
+    return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(payload) });
+  });
+  // A gated fetch stream verifies the real ChatPanel before the final event,
+  // without a provider call or a timing-dependent sleep.
+  await page.addInitScript(() => {
+    const original = window.fetch.bind(window);
+    window.fetch = async (input, init) => {
+      if (new URL(input instanceof Request ? input.url : String(input), location.href).pathname !== "/api/chat") return original(input, init);
+      const encoder = new TextEncoder();
+      return new Response(new ReadableStream({ start(controller) {
+        const emit = value => controller.enqueue(encoder.encode(JSON.stringify(value) + "\n"));
+        emit({ type: "metadata", provider: "openai", modelId: "fixture" });
+        emit({ type: "delta", text: "Streaming first part. " });
+        window.__finishPresentationStream = () => {
+          emit({ type: "content", provider: "openai", model: "fixture", text: "Streaming first part. Final answer.", presentation: {
+            version: 1, fallbackMarkdown: "Streaming first part. Final answer.", blocks: [
+              { type: "markdown", text: "Streaming first part. " },
+              { type: "metric", label: "Stream complete", value: "Ready" },
+              { type: "markdown", text: "Final answer." },
+            ],
+          } });
+          controller.close();
+        };
+      } }), { headers: { "content-type": "application/x-ndjson" } });
+    };
+  });
   await page.route("https://images.example.test/saved.png", route => route.fulfill({
     status: 200, contentType: "image/png",
     body: Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL/nwAAAABJRU5ErkJggg==", "base64"),
@@ -106,7 +141,19 @@ try {
   await page.setViewportSize({ width: 390, height: 844 });
   const mobile = await page.evaluate(() => ({ width: document.documentElement.scrollWidth, viewport: window.innerWidth }));
   if (mobile.width > mobile.viewport + 20) throw new Error("Mobile presentation overflows: " + JSON.stringify(mobile));
-  console.log(JSON.stringify({ passed: true, ordered: true, donut: true, image: true, math: true, interaction: true, reload: true, mobile: true }));
+  const composer = page.getByPlaceholder("Ask Acceptance…");
+  await composer.fill("Exercise the gated stream.");
+  await page.getByRole("button", { name: "Send", exact: true }).click();
+  const preview = page.getByLabel("Streaming assistant response", { exact: true });
+  await preview.waitFor();
+  if (!(await preview.innerText()).includes("Streaming first part.")) throw new Error("Answer deltas are not rendered before completion");
+  if (await page.getByText("Stream complete", { exact: true }).count()) throw new Error("Uncommitted visual rendered during stream");
+  if (!(await page.getByRole("button", { name: "Cancel", exact: true }).isVisible())) throw new Error("Stream completed before preview assertion");
+  await page.evaluate(() => window.__finishPresentationStream());
+  await preview.waitFor({ state: "hidden" });
+  await page.getByText("Stream complete", { exact: true }).waitFor();
+  if ((await page.locator('[data-testid="stream-chat"]').innerText()).includes("<katie-presentation-v1>")) throw new Error("Internal presentation markup leaked");
+  console.log(JSON.stringify({ passed: true, ordered: true, donut: true, image: true, math: true, interaction: true, reload: true, mobile: true, streamingPreview: true }));
 } finally {
   await cleanup();
 }

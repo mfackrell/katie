@@ -780,6 +780,7 @@ export function ChatPanel({
   const [selectedOverride, setSelectedOverride] =
     useState<SelectedOverride>(null);
   const [streamingModel, setStreamingModel] = useState<string | null>(null);
+  const [streamingAnswer, setStreamingAnswer] = useState("");
   const [selectedImages, setSelectedImages] = useState<string[]>([]);
   const [selectedImageFiles, setSelectedImageFiles] = useState<File[]>([]);
   const [selectedVideos, setSelectedVideos] = useState<File[]>([]);
@@ -1015,6 +1016,7 @@ export function ChatPanel({
       setStatusMessage("");
       setFailoverNotice("");
       setStreamingModel(null);
+    setStreamingAnswer("");
       setCollaborationActivity([]);
       setCollaborationActive(false);
       setCollaborationSummary(null);
@@ -1282,6 +1284,7 @@ export function ChatPanel({
         if (!cancelled) {
           setLoading(false);
           setStreamingModel(null);
+          setStreamingAnswer("");
           setIsRoutingSelectionInFlight(false);
         }
       }
@@ -1502,6 +1505,7 @@ export function ChatPanel({
     }
     setLoading(true);
     setStreamingModel(null);
+    setStreamingAnswer("");
     setSelectionExplainer(null);
     setIsRoutingSelectionInFlight(true);
     setExplainerOpen(true);
@@ -1818,6 +1822,7 @@ export function ChatPanel({
           if (chunk.type === "metadata") {
             if (chunk.resetText) {
               textContent = "";
+              setStreamingAnswer("");
             }
             setStreamingModel(chunk.modelId);
             provider = chunk.provider;
@@ -1858,6 +1863,7 @@ export function ChatPanel({
 
           if (chunk.type === "delta") {
             textContent += chunk.text;
+            setStreamingAnswer(textContent);
             applyFallbackReasoningFromDelta(chunk.text);
             applyFallbackReasoningUpdate(chunk.text);
           }
@@ -1879,6 +1885,7 @@ export function ChatPanel({
 
           if (chunk.type === "content") {
             textContent = chunk.text;
+            setStreamingAnswer(textContent);
             if (chunk.presentation) {
               const verified = parseStructuredResponse(chunk.presentation);
               if (verified && verified.fallbackMarkdown === chunk.text) presentation = verified;
@@ -1911,6 +1918,7 @@ export function ChatPanel({
         if (trailingChunk.type === "metadata") {
           if (trailingChunk.resetText) {
             textContent = "";
+            setStreamingAnswer("");
           }
           setStreamingModel(trailingChunk.modelId);
           provider = trailingChunk.provider;
@@ -1945,6 +1953,7 @@ export function ChatPanel({
 
         if (trailingChunk.type === "delta") {
           textContent += trailingChunk.text;
+          setStreamingAnswer(textContent);
           applyFallbackReasoningFromDelta(trailingChunk.text);
           applyFallbackReasoningUpdate(trailingChunk.text);
         }
@@ -1966,6 +1975,7 @@ export function ChatPanel({
 
         if (trailingChunk.type === "content") {
           textContent = trailingChunk.text;
+          setStreamingAnswer(textContent);
           if (trailingChunk.presentation) {
             const verified = parseStructuredResponse(trailingChunk.presentation);
             if (verified && verified.fallbackMarkdown === trailingChunk.text) presentation = verified;
@@ -1980,6 +1990,7 @@ export function ChatPanel({
 
       abortControllerRef.current = null;
       setMeta({ provider, model });
+      setStreamingAnswer("");
       const assistantMessage: Message = {
         id: crypto.randomUUID(),
         chatId,
@@ -2156,6 +2167,7 @@ export function ChatPanel({
       abortControllerRef.current = null;
       setLoading(false);
       setStreamingModel(null);
+    setStreamingAnswer("");
       setIsRoutingSelectionInFlight(false);
     }
   }
@@ -2873,6 +2885,11 @@ export function ChatPanel({
               ))}
           </div>
         ))}
+        {loading && streamingAnswer && (
+          <div aria-label="Streaming assistant response" aria-busy="true" className="max-w-full rounded-[24px] border border-white/10 bg-white/[0.04] px-5 py-4 text-zinc-100/95">
+            <AssistantMarkdown>{streamingAnswer}</AssistantMarkdown>
+          </div>
+        )}
         {loading && (
           <div className="flex w-fit items-center gap-3 rounded-[24px] border border-white/10 bg-white/[0.04] px-4 py-3 text-sm text-zinc-300 shadow-[0_20px_60px_rgba(0,0,0,0.18)] backdrop-blur-sm">
             <div className="h-4 w-4 animate-spin rounded-full border-2 border-emerald-400 border-t-transparent" />
