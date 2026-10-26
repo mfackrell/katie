@@ -1,3 +1,4 @@
+import { PresentationStreamFilter, parsePresentationTail, PRESENTATION_GENERATION_GUIDANCE } from "@/lib/presentation/stream-protocol";
 import { quarantineUnavailableModel } from "@/lib/models/registry";
 import { runSelfInspection } from "@/lib/tools/self-inspection";
 import { authorizeSelfToolCaller } from "@/lib/tools/authorization";
@@ -2090,6 +2091,9 @@ async function executeChat(request: NextRequest) {
 
             await saveTaskProgress(actorId, chatId, taskProgress);
             console.log(`[Chat API] Requesting generation from ${provider.name} using model ${modelId}...`);
+            const presentationEnabled = process.env.KATIE_PRESENTATION_V1 === "enabled" && !currentAgentTask();
+            if (presentationEnabled) personaForGeneration += "\\n\\n" + PRESENTATION_GENERATION_GUIDANCE;
+            const presentationFilter = presentationEnabled ? new PresentationStreamFilter() : null;
             const enqueueDelta = (delta: string) => {
               // Always-mode responses remain buffered until the output guard
               // confirms a brief reply or independent review finishes.
@@ -2098,8 +2102,10 @@ async function executeChat(request: NextRequest) {
               // the app is backgrounded. A disconnected UI must not cancel the
               // actual model generation: keep consuming the provider stream so
               // the completed assistant response can still be persisted.
-              emitChunk({ type: "delta", text: delta });
-              const reasoningUpdate = reasoningState.addDelta(delta);
+              const visibleDelta = presentationFilter ? presentationFilter.write(delta) : delta;
+              if (!visibleDelta) return;
+              emitChunk({ type: "delta", text: visibleDelta });
+              const reasoningUpdate = reasoningState.addDelta(visibleDelta);
               if (reasoningUpdate) {
                 reasoningUpdateCount += 1;
                 if (firstReasoningUpdateAtMs === null) {
