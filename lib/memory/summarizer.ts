@@ -169,7 +169,7 @@ export async function maybeUpdateSummary(chatId: string): Promise<void> {
       let candidate: string;
       try {
         candidate = await summarizeInto(summary, messagesToFold.slice(offset, offset + size));
-      } catch (error) {
+      } catch {
         // One attempt with half as many messages. If that fails, leave the
         // source cursor exactly where it was and retry on the next invocation.
         size = Math.min(10, size);
