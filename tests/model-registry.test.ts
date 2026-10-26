@@ -108,6 +108,8 @@ test("empty registry pool cannot fall back to provider catalog and reselect quar
 test("trusted official pricing survives refresh only while both rates agree and evidence is recent", () => {
   const now="2026-10-26T22:00:00Z";
   const fresh={
+    provider_name:"openai",
+    model_id:"gpt-5.3-codex",
     normalized_model_id:"gpt-5.3-codex",
     pricing_status:"estimated",
     pricing_input_per_1m:1.75,
@@ -130,6 +132,10 @@ test("trusted official pricing survives refresh only while both rates agree and 
   for(const changed of [
     {prior:{...prior,pricing_verified_at:"2026-10-24T19:34:14Z"}},
     {prior:{...prior,source_metadata:{}}},
+    {prior:{...prior,source_metadata:{pricing_verification_source:"https://"}}},
+    {prior:{...prior,source_metadata:{pricing_verification_source:"https://attacker.example/api/docs/models/gpt-5.3-codex"}}},
+    {prior:{...prior,source_metadata:{pricing_verification_source:"https://developers.openai.com.attacker.example/api/docs/models/gpt-5.3-codex"}}},
+    {prior:{...prior,source_metadata:{pricing_verification_source:"https://developers.openai.com/api/docs/models/another-model"}}},
     {prior:{...prior,pricing_status:"estimated" as const}},
     {fresh:{...fresh,pricing_output_per_1m:15}},
     {fresh:{...fresh,pricing_input_per_1m:null}},
