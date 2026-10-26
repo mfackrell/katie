@@ -1898,6 +1898,7 @@ export function ChatPanel({
           | {
               type: "content";
               text: string;
+              presentation?: StructuredResponse;
               assets?: Array<{ type: string; url: string }>;
               provider?: string;
               model?: string;
