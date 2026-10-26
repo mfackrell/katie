@@ -32,6 +32,40 @@ const job=(m,role='work',key='work')=>({id:randomUUID(),mission_id:m.id,job_key:
 
 const assessment={objective:'A supported recommendation',qualifications:['Service economics'],strongestEvidence:['Supplied assumptions'],criteria:['Supported recommendation'],synthesis:{conclusion:'Weigh economics and market evidence',dimensions:[{dimension:'Economics',supportedScope:'Scenario analysis',evidence:['Supplied assumptions']}],emphasis:'Decision relevance'},taskContract:{deliverable:'A recommendation',requirements:[{id:'outcome',requirement:'A supported recommendation',sourceId:'latest-user',status:'active'}],conflicts:[]}};
 const verdict=(decision='approve')=>({verdict:decision,findings:decision==='approve'?'Verified complete outcome':'Incorrect arithmetic',checks:modules()('@/lib/collaboration/review-contract').acceptanceIds(assessment).map(id=>({id,passed:decision==='approve',evidence:decision==='approve'?'Specific support checked':'Incorrect arithmetic in the draft'}))});
+test('DO closes against one fixed contract, records optional discoveries and bounds failed repairs',async()=>{
+ const completion=modules()('@/lib/projects/completion');
+ const largeObjective='Original requirement. '.repeat(500);
+ const fixed=completion.projectReviewAssessment(largeObjective,'assessment');
+ assert.ok(JSON.stringify(fixed).length<2400,'Large objectives must not be multiplied inside the review envelope');
+ assert.notEqual(fixed.objective,completion.projectReviewAssessment(largeObjective+'Changed requirement.','assessment').objective);
+ for(const outcome of ['pass','optional','repair','failed','blocked']){
+  const m=mission();m.project_id=randomUUID();m.project_kind='assessment';m.objective='Deliver the approved inventory page with tested stock persistence.';
+  const compose={...job(m,'compose','compose'),status:'completed',result:{text:'Inventory page at immutable fixture SHA. Saved stock persistence checks passed.'}},review=job(m,'review','review');
+  const jobs=[compose,review],commits=[],inputs=[];
+  const load=modules({'@/lib/missions/store':{readMission:async()=>({mission:m,jobs}),rpc:async(name,args)=>{assert.equal(name,'commit_mission_work');commits.push(args);return true;}}});
+  const {executeClaim}=load('@/lib/missions/worker'),{PROJECT_ACCEPTANCE_IDS}=load('@/lib/projects/completion');
+  const model=async(claim,instruction,input)=>{
+   inputs.push({instruction,input});assert.doesNotMatch(instruction,/KATIE_INDEPENDENT_ASSESSMENT/,'No model-generated replacement rubric');
+   if(claim.job.role==='revise')return{text:'Inventory page repaired. Correct immutable fixture receipt now covers stock persistence.',model:'repair-fixture'};
+   const failed=outcome==='failed'||outcome==='blocked'||outcome==='repair'&&claim.job.job_key==='review';
+   return{text:JSON.stringify({verdict:failed||outcome==='optional'?'revise':'approve',findings:failed?'Stock persistence lacks a matching test receipt.':'All required outcomes pass; optionally add a chart.',checks:PROJECT_ACCEPTANCE_IDS.map(id=>({id,passed:!(failed&&id==='factual-support'),evidence:failed&&id==='factual-support'?'Persistence receipt is missing for the candidate SHA.':'Verified against the supplied fixture artifact.'})),optionalSuggestions:'Optional chart, outside the requested scope.',...(outcome==='blocked'?{clarification:{essential:true,missingFact:'Owner-only stock source identity',question:'Which saved stock source is authoritative?'}}:{})}),model:'independent-fixture'};
+  };
+  await executeClaim({mission:m,job:review},model);
+  const first=commits.at(-1);assert.equal(inputs.length,1,'One independent comparison; no planning loop');
+  if(outcome==='pass'||outcome==='optional'){
+   assert.equal(first.p_mission_status,'completed');assert.equal(first.p_final,compose.result.text);assert.equal(first.p_children.length,0);assert.ok(first.p_result.optionalSuggestions);continue;
+  }
+  if(outcome==='blocked'){assert.equal(first.p_mission_status,'blocked');assert.equal(first.p_final,null);assert.equal(first.p_children.length,0);assert.match(first.p_result.detail,/Which saved stock source/);continue;}
+  assert.equal(first.p_children.length,2);assert.doesNotMatch(first.p_children[0].instruction,/chart/);assert.match(first.p_children[0].instruction,/Persistence receipt/);
+  review.status='completed';review.result=first.p_result;
+  const revision={...job(m,'revise','revision'),instruction:first.p_children[0].instruction},again=job(m,'review','review_again');jobs.push(revision,again);
+  await executeClaim({mission:m,job:revision},model);revision.status='completed';revision.result=commits.at(-1).p_result;
+  await executeClaim({mission:m,job:again},model);
+  const last=commits.at(-1);assert.equal(last.p_children.length,0,'A second failed review cannot open another loop');
+  assert.equal(last.p_result.blindCriteria,first.p_result.blindCriteria,'Repairs cannot expand acceptance');
+  assert.equal(last.p_mission_status,outcome==='repair'?'completed':'blocked');assert.equal(last.p_final,outcome==='repair'?revision.result.text:null);
+ }
+});
 test('targeted factual corrections preserve untouched bytes and require full independent review',async()=>{
  const base='Immutable source: 5a77c2564af6d0e8bc9de58b861205a9a30e2c98. There were four skipped runs. The remaining evidence and scope limitations must remain verbatim.';
  const hash=createHash('sha256').update(base).digest('hex'),patch={edits:[{before:'four skipped runs',after:'six skipped runs'}],composerNotes:'Corrected the independently identified count.'};
@@ -178,6 +212,7 @@ test('Executive coding approval delegates to Developer project without bypassing
  assert.equal(commits.at(-1).p_result.delegatedProjectId,projects[0].args.p_id);
  j.payload.approved=true;await execute();assert.equal(projects[1].args.p_id,projects[0].args.p_id);assert.equal(commits.at(-1).p_status,'waiting_external');
  status='completed';await execute();assert.equal(commits.at(-1).p_status,'completed');assert.equal(commits.at(-1).p_result.output,'VERIFIED DEVELOPER ACCEPTANCE');
+ for(status of ['blocked','failed','stopped']){await execute();assert.equal(commits.at(-1).p_mission_status,'blocked');assert.equal(commits.at(-1).p_final,null);assert.equal(commits.at(-1).p_result.projectStatus,status);assert.match(commits.at(-1).p_result.detail,new RegExp(status));}
 });
 
 test('an approval carrying essential missing input stays blocked and preserves the actual question',async()=>{

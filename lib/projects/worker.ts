@@ -13,6 +13,7 @@ import {provisionalSpecialistPlan} from './specialist-resource-plan.mjs';
 import {runSpecialistResourceBatch} from './specialist-dispatch';
 import {announceBlockedRecoveryResources} from './recovery-budget';
 import { projectRpc, projectRuns, milestoneEvidence, acceptanceBinding, getDevelopmentProjectContext, type Project } from './store';
+import { projectClosure, projectImpediment } from './completion';
 export async function baseline(p: Project) { if (!p.repository_id)
     return null; const { data: r, error } = await getSupabaseAdminClient().from('repo_sync_runs').select('repository_full_name').eq('id', p.repository_id).maybeSingle<{
     repository_full_name: string;
@@ -33,7 +34,7 @@ function bounded(text: string) { if (text.length > 12000)
     throw Error('Project milestone context exceeds its bounded input. Narrow the specification; original requirements have not been truncated.'); return text; }
 
 async function advance(p: Project) {
-    const finish = (action: string, data: Record<string, unknown> = {}) => projectRpc<boolean>('finish_work_project', { p_id: p.id, p_lease: p.lease, p_action: action, p_data: data });
+    const finish = (action: string, data: Record<string, unknown> = {}) => projectRpc<boolean>('finish_work_project', { p_id: p.id, p_lease: p.lease, p_action: action, p_data: ['block','input'].includes(action) ? {...data, impediment: data.impediment ?? projectImpediment(p,String(data.detail??'Required evidence unavailable'))} : data });
     const runs = await projectRuns(p.id);
     const game=p.profile==='game';
     const source = `ORIGINAL USER OUTCOME (must remain authoritative):\n${p.objective}\n${p.clarifications}`;
@@ -57,7 +58,8 @@ async function advance(p: Project) {
                 question?: string;
             } | undefined;
             if (essential && !p.approved_hash) {
-                await finish('input', { detail: essential.question ?? 'A concrete project decision is required before continuing.' });
+                const question=essential.question ?? 'A concrete project decision is required before continuing.';
+                await finish('input', { detail:question, impediment:projectImpediment(p,question,['Examined the independent review and its essential missing fact.'],question) });
                 return;
             }
             // Verification infrastructure failures must not spend another coding
@@ -186,7 +188,7 @@ async function advance(p: Project) {
             const url = new URL(p.spec!.finalContract.path, live.url).href;
             if(!p.preview?.browserAcceptance?.passed)throw Error('Actual deployed browser evidence is required before completion');
             if(live.deploymentId!==p.preview.deploymentId||live.statusId!==p.preview.statusId||url!==p.preview.url){await finish('preview',{...live,url});return;}
-            await finish('complete', { result: m.result + '\n\nVerified playable preview: ' + url, preview: { ...live, url }, verified_head: p.verified_sha });
+            await finish('complete', { result: projectClosure(p,url), preview: { ...live, url }, verified_head: p.verified_sha, reviewedMissionId:m.id });
             return;
         }
     }
@@ -213,8 +215,8 @@ async function advance(p: Project) {
             if(result.passed){await finish('browser',result);return;}
             const failures=result.checks.filter(c=>!c.passed).map(c=>c.name+': '+c.detail).join('\n');
             const attempts=runs.filter(r=>r.kind==='development'&&r.milestone_index===p.spec!.milestones.length-1).length;
-            await finish(p.cycles<p.max_cycles&&attempts<2?'retry':'block',{detail:'Actual deployed browser acceptance failed. Repair the unmet original requirements: '+failures});
-        }catch(error){if(error instanceof PreviewAccessUnavailable){await finish('block',{detail:error.message});return;}throw error;}
+            await finish(p.cycles<p.max_cycles&&attempts<2?'retry':'block',{detail:'Actual deployed browser acceptance failed. Repair the unmet original requirements: '+failures,findings:result.checks.filter(c=>!c.passed).map(c=>c.name+': '+c.detail)});
+        }catch(error){if(error instanceof PreviewAccessUnavailable){await finish('block',{detail:error.message,impediment:projectImpediment(p,error.message,[`Attempted approved acceptance against ${p.preview.url}.`],`Restore access to the approved preview ${p.preview.url} through the existing authenticated connection.`)});return;}throw error;}
         return;
     }
     // A finite project needs a progress watchdog before authorizing another
@@ -338,7 +340,7 @@ async function advance(p: Project) {
         // Keep the complete independently reviewed research as structured evidence,
         // not a second copy inside the 12 KB mission instruction. The original
         // user objective remains unchanged and authoritative.
-        objective = bounded(`${source}\n\nREVIEWED RESEARCH: The complete independently reviewed research is supplied in projectEvidence.reviewedResearch; use it without repeating it in the instruction.\n\n${gamePlanning} Produce ONLY the requested project specification JSON, not code. Preserve every original requirement. Plan one to six cumulative coding milestones. Each milestone needs a phase-specific real browser contract for that increment; the final milestone contract MUST equal finalContract and cover the entire integrated original goal, including all required AI, human play, persistence and backend behavior. Earlier contracts may test partial milestones; they never replace the final requirements. Use isolated app/source/test paths, no dependencies/secrets/production resources. Include concrete DOM selectors and expected exact rendered states, interaction sequences, invalid-action boundaries and reload behavior as appropriate. Each scenario must assert actual application state. Each scenario starts in a fresh browser context with empty application storage; navigation within the same scenario preserves localStorage, so test persistence with multiple steps in that one scenario. Output {name,summary,requirements,allowedPaths,milestones:[{title,instruction,contract:{path,scenarios:[{name,steps:[{action,selector?,value?,path?}]}]}}],finalContract}. Actions: goto(path), click(selector), fill(selector,value), expectVisible(selector), expectText(selector,value). At most 100 steps per contract, 20 scenarios, each scenario at least one assertion. All navigation local paths only. allowedPaths must be narrow filenames or isolated directory prefixes ending in /. Do not scope the entire Katie application. ${game?'Include game:{enginePath,rules,acceptance} validated by the server. Implement a pure transition(state,action) engine in a self-contained .ts or .mjs file without imports or side effects. Register full rules, sources, unknowns, invariants, state model and model/browser acceptance; every approved rule needs scenario coverage. Browser acceptance scenarios must exactly match finalContract.scenarios with full steps. Do not guess blocking mechanics, omit required assertions, or use unresolved questions as substitutes for requirements.':''} Return a complete specification satisfying the original user outcome; ambiguities require clarification rather than guessed gameplay.`);
+        objective = bounded(`${source}\n\nREVIEWED RESEARCH: The complete independently reviewed research is supplied in projectEvidence.reviewedResearch; use it without repeating it in the instruction.\n\n${gamePlanning} Produce ONLY the requested project specification JSON, not code. Preserve every original requirement. Use the fewest necessary cumulative coding milestones (one to six); prefer one complete increment when sufficient. Optional enhancements are not acceptance requirements. Each milestone needs a phase-specific real browser contract for that increment; the final milestone contract MUST equal finalContract and cover the entire integrated original goal, including all required AI, human play, persistence and backend behavior. Earlier contracts may test partial milestones; they never replace the final requirements. Use isolated app/source/test paths, no dependencies/secrets/production resources. Include concrete DOM selectors and expected exact rendered states, interaction sequences, invalid-action boundaries and reload behavior as appropriate. Each scenario must assert actual application state. Each scenario starts in a fresh browser context with empty application storage; navigation within the same scenario preserves localStorage, so test persistence with multiple steps in that one scenario. Output {name,summary,requirements,allowedPaths,milestones:[{title,instruction,contract:{path,scenarios:[{name,steps:[{action,selector?,value?,path?}]}]}}],finalContract}. Actions: goto(path), click(selector), fill(selector,value), expectVisible(selector), expectText(selector,value). At most 100 steps per contract, 20 scenarios, each scenario at least one assertion. All navigation local paths only. allowedPaths must be narrow filenames or isolated directory prefixes ending in /. Do not scope the entire Katie application. ${game?'Include game:{enginePath,rules,acceptance} validated by the server. Implement a pure transition(state,action) engine in a self-contained .ts or .mjs file without imports or side effects. Register full rules, sources, unknowns, invariants, state model and model/browser acceptance; every approved rule needs scenario coverage. Browser acceptance scenarios must exactly match finalContract.scenarios with full steps. Do not guess blocking mechanics, omit required assertions, or use unresolved questions as substitutes for requirements.':''} Return a complete specification satisfying the original user outcome; ambiguities require clarification rather than guessed gameplay.`);
     }
     else if (p.phase === 'development') {
         if (!p.spec || !p.approved_hash || p.approved_hash !== p.approval_hash)
@@ -379,7 +381,7 @@ async function advance(p: Project) {
         const final = [...evidence].reverse().find(e => e.phase === 'development');
         projectEvidence = { milestones: evidence.map(e => ({ phase: e.phase, index: e.index, status:e.missionStatus, head:e.evidence?.head })), approvedFinalContract:p.spec!.finalContract,approvedScopeHash:p.approved_hash,finalIntegratedEvidence: final?.evidence ?? null, preview: p.preview, ...(p.spec!.game?{gameRules:p.spec!.game.rules}:{}) };
         if(game)projectEvidence=gameAssessmentEvidence(p,evidence.map(e=>({phase:e.phase,index:e.index,status:e.missionStatus,head:e.evidence?.head})),final?.evidence??null);
-        objective = bounded(`${source}\n\nFINAL WHOLE-PROJECT DELIVERY: Independently check the ENTIRE original user outcome against all approved requirements and actual integrated evidence. A partial phase report, architecture document or loading page is not sufficient. Do not waive AI, human play, rules fidelity, persistence or backend requirements. Missing material evidence must remain blocked; do not invent test outcomes. If the complete outcome is supported, deliver the usable preview link, concise instructions, actual verified checks and any limitations.\nAPPROVED REQUIREMENTS:${JSON.stringify(p.spec!.requirements)}\nVERIFIED PREVIEW:${game?'See the full source-bound Preview receipt in projectEvidence.':JSON.stringify(p.preview)}\nActual head-bound milestone and final browser evidence are provided in projectEvidence.`);
+        objective = bounded(`${source}\n\nFINAL WHOLE-PROJECT DELIVERY: Independently check the ENTIRE original user outcome against all approved requirements and actual integrated evidence. A partial phase report, architecture document or loading page is not sufficient. Missing material evidence must remain blocked; do not invent test outcomes. Do not add features or checks beyond this contract unless actual evidence establishes a material failure of an existing requirement. If the complete outcome is supported, state completion, usable preview and actual verification briefly. Optional improvements belong only in optionalSuggestions, never prerequisites, unsolicited next steps or offers to continue.\nAPPROVED REQUIREMENTS:${JSON.stringify(p.spec!.requirements)}\nVERIFIED PREVIEW:${game?'See the full source-bound Preview receipt in projectEvidence.':JSON.stringify(p.preview)}\nActual head-bound milestone and final browser evidence are provided in projectEvidence.`);
     }
     else
         throw Error('Unknown project phase');
@@ -485,8 +487,8 @@ export async function runProjectBatch() {
     return { claimed: 1, status: 'processed' };
 }
 catch (error) {
-    const detail = error instanceof Error ? ('Project coordination error: '+error.name+'; Chromium diagnostic tail: '+error.message.slice(-1550)).slice(0,1800) : 'Project coordination failed';
+    const detail = error instanceof Error ? ('Project coordination error: '+error.name+'; '+error.message.slice(-1550)).slice(0,1800) : 'Project coordination failed';
     console.error('[Projects]', { project: p.id, detail });
-    await projectRpc('finish_work_project', { p_id: p.id, p_lease: p.lease, p_action: 'error', p_data: { detail } });
-    return { claimed: 1, status: 'blocked' };
+    await projectRpc('finish_work_project', { p_id: p.id, p_lease: p.lease, p_action: 'error', p_data: { detail, impediment:projectImpediment(p,detail) } });
+    return { claimed: 1, status: 'error_recorded' };
 } } finally {await maintenance;} }
