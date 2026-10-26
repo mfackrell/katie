@@ -830,7 +830,7 @@ export function ChatPanel({
 
   const canSend = useMemo(
     () =>
-      !managedAgentId && draftReady && attachmentsReady && hasValidChatSelection &&
+      !managedAgentId && draftReady && (attachmentsReady || input.trim().length > 0) && hasValidChatSelection &&
       (input.trim().length > 0 ||
         selectedImages.length > 0 ||
         selectedVideos.length > 0 ||
