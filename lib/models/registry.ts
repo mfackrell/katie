@@ -211,7 +211,7 @@ export function retainTrustedPricing(
   const now=Date.parse(nowIso);
   const age=now-verifiedAt;
   if(prior?.pricing_status!=="verified"||
-     typeof source!=="string"||!/^https:\\/\\/[^\\s]+$/.test(source)||
+     typeof source!=="string"||!source.startsWith("https://")||source.includes(" ")||
      !Number.isFinite(age)||age<0||age>24*60*60*1000||
      fresh.pricing_status!=="estimated"||
      fresh.pricing_input_per_1m===null||fresh.pricing_output_per_1m===null||
