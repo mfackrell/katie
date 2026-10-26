@@ -39,6 +39,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: main
+          fetch-depth: 0
           persist-credentials: false
       - uses: actions/setup-node@v4
         with:
@@ -52,9 +53,9 @@ jobs:
         run: npm ci --ignore-scripts
       - name: Validate actual durable owner/trial/account approval
         env:
-          KATIE_BENCHMARK_SUPABASE_URL: ${{ secrets.KATIE_BENCHMARK_SUPABASE_URL }}
-          KATIE_BENCHMARK_SERVICE_ROLE_KEY: ${{ secrets.KATIE_BENCHMARK_SERVICE_ROLE_KEY }}
-          KATIE_BENCHMARK_OWNER_ID: ${{ secrets.KATIE_BENCHMARK_OWNER_ID }}
+          KATIE_BENCHMARK_SUPABASE_URL: ${{ secrets.KATIE_NONFULL_STAGING_SUPABASE_URL }}
+          KATIE_BENCHMARK_SERVICE_ROLE_KEY: ${{ secrets.KATIE_NONFULL_STAGING_SERVICE_ROLE_KEY }}
+          KATIE_BENCHMARK_OWNER_ID: ${{ secrets.KATIE_NONFULL_STAGING_OWNER_ID }}
           KATIE_TRIAL_ARM: ${{ inputs.arm }}
           TRIAL_ID: ${{ inputs.trial_id }}
           ACCOUNT_ID: ${{ inputs.account_id }}
@@ -70,14 +71,21 @@ jobs:
           command -v bwrap >/dev/null || (sudo apt-get update && sudo apt-get install -y bubblewrap)
           command -v socat >/dev/null || (sudo apt-get update && sudo apt-get install -y socat)
           if test -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns; then sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0; fi
-      - name: Launch authorized arm through common contained SDK and synthetic gateway
+      - name: Launch actual owner-approved staging grant through shared trusted host
         env:
           KATIE_TRIAL_ARM: ${{ inputs.arm }}
-          KATIE_TRIAL_MANIFEST: ${{ runner.temp }}/native-thin-approved.json
+          TRIAL_ID: ${{ inputs.trial_id }}
+          ACCOUNT_ID: ${{ inputs.account_id }}
+          APPROVAL_ID: ${{ inputs.approval_id }}
+          KATIE_NONFULL_STAGING_ONLY: ${{ secrets.KATIE_NONFULL_STAGING_CONFIRMED }}
+          KATIE_NONFULL_STAGING_SUPABASE_URL: ${{ secrets.KATIE_NONFULL_STAGING_SUPABASE_URL }}
+          KATIE_NONFULL_STAGING_SERVICE_ROLE_KEY: ${{ secrets.KATIE_NONFULL_STAGING_SERVICE_ROLE_KEY }}
+          KATIE_NONFULL_STAGING_OWNER_ID: ${{ secrets.KATIE_NONFULL_STAGING_OWNER_ID }}
+          KATIE_NONFULL_PRODUCTION_SUPABASE_URL: ${{ secrets.KATIE_NONFULL_PRODUCTION_SUPABASE_URL }}
         run: |
           jq -e --arg arm "$KATIE_TRIAL_ARM" '.arm == $arm and .qualification == "nonbillable-only" and .requiresNewGrantBeforePaidExecution == true' "$RUNNER_TEMP/native-thin-approved.json"
           node --test tests/benchmark-native-trust-boundary.test.mjs
-          node scripts/benchmark/native-four-phase-contained-host-probe.mjs
+          node scripts/benchmark/nonfull-staging-launch.mjs "$KATIE_TRIAL_ARM" "$TRIAL_ID" "$ACCOUNT_ID" "$APPROVAL_ID"
       - name: Preserve nonbillable authorization and qualification
         if: always()
         uses: actions/upload-artifact@v4
