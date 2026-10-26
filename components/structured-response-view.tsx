@@ -2,6 +2,7 @@
 
 import ReactMarkdown from "react-markdown";
 import { useState } from "react";
+import { RememberFaceControl } from "@/components/remember-face-control";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
@@ -79,7 +80,11 @@ function SelectorBlock({ block }: { block: Extract<VisualBlock, { type: "selecto
   </section>;
 }
 
-function RenderBlock({ block, assets = [] }: { block: VisualBlock; assets?: Array<{type: string; url: string}> }) {
+type MessageIdentity = { actorId?: string; chatId?: string; messageId?: string };
+function RenderBlock({ block, assets = [], actorId, chatId, messageId }: {
+  block: VisualBlock;
+  assets?: Array<{type: string; url: string}>;
+} & MessageIdentity) {
   switch (block.type) {
     case "markdown": return <div className="prose prose-invert max-w-none"><ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]}>{block.text}</ReactMarkdown></div>;
     case "cards": return <div className="grid gap-3 sm:grid-cols-2">
@@ -106,6 +111,7 @@ function RenderBlock({ block, assets = [] }: { block: VisualBlock; assets?: Arra
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img src={asset.url} alt={block.alt} loading="lazy" className="max-h-80 w-full rounded object-contain" />
         {block.caption && <figcaption className="mt-1 text-xs opacity-75">{block.caption}</figcaption>}
+        {actorId && chatId && messageId && <RememberFaceControl actorId={actorId} chatId={chatId} messageId={messageId} assetIndex={block.assetIndex} />}
       </figure>;
     }
     case "statuses": return <dl className="space-y-2">
@@ -126,13 +132,13 @@ function RenderBlock({ block, assets = [] }: { block: VisualBlock; assets?: Arra
 }
 
 /** Receives only server-validated response blocks; never accepts model-owned React code. */
-export function StructuredResponseView({ response, assets, ordered = false }: {
+export function StructuredResponseView({ response, assets, ordered = false, actorId, chatId, messageId }: {
   response: StructuredResponse;
   assets?: Array<{ type: string; url: string }>;
   ordered?: boolean;
-}) {
+} & MessageIdentity) {
   return <div className="space-y-4" aria-label="Structured assistant response">
     {response.blocks.filter(block => ordered || block.type !== "markdown")
-      .map((block, index) => <RenderBlock key={index} block={block} assets={assets} />)}
+      .map((block, index) => <RenderBlock key={index} block={block} assets={assets} actorId={actorId} chatId={chatId} messageId={messageId} />)}
   </div>;
 }
