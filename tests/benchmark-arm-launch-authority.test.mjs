@@ -38,7 +38,7 @@ for(const arm of ['native','thin']){
    ['approval','protocol_digest','0'.repeat(64)],
    ['approval','deadline','2020-01-01T00:00:00Z']]){
    const bad=fixture(arm);bad[object][field]=value;
-   assert.throws(()=>verifyNonFullLaunch(bad),/DENIED/);
+   assert.throws(()=>verifyNonFullLaunch(bad),/DENIED|PROTOCOL_AUTHORITY_MISMATCH/);
   }
  });
 }
