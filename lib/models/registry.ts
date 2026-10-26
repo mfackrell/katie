@@ -203,9 +203,11 @@ function enrichModelRecord(providerName: LlmProvider["name"], modelId: string, p
 type TrustedPricingSnapshot = Pick<ModelRegistryRecord,
   "normalized_model_id" | "pricing_status" | "pricing_input_per_1m" |
   "pricing_output_per_1m" | "pricing_verified_at" | "source_metadata">;
+type RefreshedModelRecord = Omit<ReturnType<typeof enrichModelRecord>,"pricing_status"|"source_metadata"> &
+  Pick<ModelRegistryRecord,"pricing_status"|"source_metadata">;
 export function retainTrustedPricing(
   fresh: ReturnType<typeof enrichModelRecord>, prior: TrustedPricingSnapshot | undefined, nowIso: string
-): ReturnType<typeof enrichModelRecord> {
+): RefreshedModelRecord {
   const source=prior?.source_metadata?.pricing_verification_source;
   const verifiedAt=Date.parse(prior?.pricing_verified_at ?? "");
   const now=Date.parse(nowIso);
@@ -263,7 +265,7 @@ export async function refreshModelRegistry(providers: LlmProvider[], options?: {
       const {data: verifiedPrices,error: verifiedPriceError}=await client.from("model_registry")
         .select("normalized_model_id,pricing_status,pricing_input_per_1m,pricing_output_per_1m,pricing_verified_at,source_metadata")
         .eq("provider_name",provider.name).eq("pricing_status","verified")
-        .returns<TrustedPricingSnapshot[]>();
+        .returns<TrustedPricingSnapshot>();
       if(verifiedPriceError)throw new Error(verifiedPriceError.message);
       const verifiedById=new Map((verifiedPrices??[]).map(row=>[row.normalized_model_id,row]));
       const rows = discovered.filter(modelId=>!quarantinedIds.has(normalizeModelId(modelId)))
