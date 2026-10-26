@@ -11,6 +11,9 @@ const workRoot=join(root,'workspaces'),socketdir=join(root,'socket'),socket=join
 mkdirSync(workRoot);mkdirSync(socketdir);
 for(const id of ['native','thin','full']){const dir=join(workRoot,id);mkdirSync(dir);execFileSync('git',['init','-q',dir]);}
 const phases=['implementation','review','repair','final-review'];
+const requestedArm=process.env.KATIE_TRIAL_ARM;
+if(requestedArm&& !['native','thin'].includes(requestedArm))throw Error('NONFULL_ARM_REQUIRED');
+const selectedArms=requestedArm?[requestedArm]:['native','thin','full'];
 let phase=null,arm=null,forwarded=0;
 const reservations=[],receipts=[];
 const db={rpc:async(name,args)=>{
@@ -47,7 +50,7 @@ const server=createNativeHttpBridge({
 });
 try{
  await new Promise(resolve=>server.listen(socket,resolve));
- for(const nextArm of ['native','thin','full']){
+ for(const nextArm of selectedArms){
   arm=nextArm;
  for(const next of phases){
   phase=next;
@@ -77,12 +80,12 @@ try{
   assert.match(output,new RegExp('CONTAINED_PHASE_PASS='+phase));
  }
  }
- assert.equal(forwarded,12);
- assert.equal(reservations.length,12,'unmetered native phase');
- assert.equal(receipts.length,12,'unreconciled native phase');
- assert.equal(new Set(reservations.map(x=>x.p_request_key)).size,12);
- assert.equal(receipts.reduce((n,x)=>n+x.actualTokens,0),60);
- console.log('NATIVE_THIN_FULL_SHARED_CONTAINED_PHASES_PASS');
+ assert.equal(forwarded,selectedArms.length*4);
+ assert.equal(reservations.length,selectedArms.length*4,'unmetered native phase');
+ assert.equal(receipts.length,selectedArms.length*4,'unreconciled native phase');
+ assert.equal(new Set(reservations.map(x=>x.p_request_key)).size,selectedArms.length*4);
+ assert.equal(receipts.reduce((n,x)=>n+x.actualTokens,0),selectedArms.length*20);
+ console.log(requestedArm?'NONFULL_OWNER_APPROVED_SYNTHETIC_LAUNCH_PASS:'+requestedArm:'NATIVE_THIN_FULL_SHARED_CONTAINED_PHASES_PASS');
 }finally{
  await new Promise(resolve=>server.close(resolve));
  rmSync(root,{recursive:true,force:true});
