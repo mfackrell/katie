@@ -37,7 +37,7 @@ export async function forwardAuthorizedModelRequest({
  const assertPaidRequestShape=body=>{
   const keys=new Set(['model','input','instructions','max_output_tokens','stream','tools','tool_choice','parallel_tool_calls','reasoning','text','temperature','top_p','store','include','metadata','truncation']);
   for(const key of Object.keys(body))if(!keys.has(key))throw Error('GATEWAY_UNBOUNDED_INPUT_DENIED');
-  if(typeof body.input!=='string'&&!Array.isArray(body.input))throw Error('GATEWAY_UNBOUNDED_INPUT_DENIED');
+  if(body.input!==undefined&&typeof body.input!=='string'&&!Array.isArray(body.input))throw Error('GATEWAY_UNBOUNDED_INPUT_DENIED');
   const parts=Array.isArray(body.input)?body.input:[];
   for(const item of parts){
    if(!item||typeof item!=='object'||!['user','assistant','developer','system','tool'].includes(item.role)||!Array.isArray(item.content))
