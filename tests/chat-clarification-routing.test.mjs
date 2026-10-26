@@ -227,8 +227,9 @@ async function runPipeline(f, selection, { message = SHORT_REPLY, history, outpu
     ${escalationGuard}
     ${reviewBlock}
     ${code(statement(declaration('imageAssets')))}
-    ${code(statement(contentCall))}
     const assistantText = result.text || streamedText;
+    const assistantPresentation = null;
+    ${code(statement(contentCall))}
     const assistantMessageId = taskProgressAssistantMessageId;
     ${completionBlock}
     return { result, taskProgress, escalatedConversation, reviewCompleted };
