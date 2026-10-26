@@ -11,7 +11,7 @@ const fixture=arm=>{
  trial.acceptance_sha256='a'.repeat(64);
  const account={id:arm+'-account',arm,trial_id:trial.id,owner_actor_id:'actor',cap_tokens:100};
  const approval={id:arm+'-approval',trial_id:trial.id,account_id:account.id,actor_id:'actor',
-  owner_id:'owner',repository:'mfackrell/katie',model:'synthetic',
+  owner_id:'owner',chat_id:'chat',repository:'mfackrell/katie',model:'synthetic',
   max_tokens:100,deadline:'2099-01-01T00:00:00Z',
   task_id:null,project_id:null,mission_assignment_id:null};
  approval.protocol_digest=createHash('sha256').update(JSON.stringify({
