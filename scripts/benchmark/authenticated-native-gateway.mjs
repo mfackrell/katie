@@ -21,14 +21,35 @@ export async function forwardAuthorizedModelRequest({
   p_digest:tokenDigest(grantToken),p_trial:trialId,p_epoch:executionEpoch
  });
  if(live.error||live.data!==true)throw Error('GATEWAY_EXECUTION_STOPPED');
+ // Admission must cover the actual request, not an unrelated fixed allowance.
+ // Conservatively bound text input by its UTF-8 byte count (a token cannot
+ // span fewer than one byte), plus output and a protocol safety margin.
+ // Nontext inputs require a separate verified tokenizer/cost bound.
+ const containsNontext=value=>{
+  if(!value||typeof value!=='object')return false;
+  if(Array.isArray(value))return value.some(containsNontext);
+  if(['input_image','input_audio','input_video','image_url','file_id'].includes(value.type))return true;
+  return Object.entries(value).some(([key,child])=>
+   ['image_url','input_audio','input_image','audio','file_id'].includes(key)||containsNontext(child));
+ };
+ if(!requestBody||typeof requestBody!=='object'||containsNontext(requestBody))
+  throw Error('GATEWAY_UNBOUNDED_INPUT_DENIED');
+ const outputCap=requestBody.max_output_tokens==null?4096:requestBody.max_output_tokens;
+ if(!Number.isSafeInteger(outputCap)||outputCap<1||outputCap>upperTokens)
+  throw Error('GATEWAY_OUTPUT_LIMIT_DENIED');
+ const boundedBody={...requestBody,max_output_tokens:outputCap};
+ const inputBytes=Buffer.byteLength(JSON.stringify(boundedBody),'utf8');
+ const admissionTokens=inputBytes+outputCap+1024;
+ if(!Number.isSafeInteger(admissionTokens)||admissionTokens>upperTokens)
+  throw Error('GATEWAY_REQUEST_EXCEEDS_GRANT');
  const key=randomUUID();
  const {data:id,error}=await db.rpc(fullMission?'benchmark_full_native_reserve':'benchmark_grant_reserve',{
   p_digest:tokenDigest(grantToken),p_trial:trialId,p_epoch:executionEpoch,
-  p_request_key:key,p_model:model,p_tokens:upperTokens
+  p_request_key:key,p_model:model,p_tokens:admissionTokens
  });
  if(error||typeof id!=='string'||!id)throw Error('GATEWAY_ADMISSION_DENIED');
  try {
-  const response=await upstream(requestBody);
+  const response=await upstream(boundedBody);
   if(typeof response?.providerRequestId!=='string'||
      !Number.isSafeInteger(response?.actualTokens)||response.actualTokens<0)
    throw Error('GATEWAY_PROVIDER_RECEIPT_UNKNOWN');
