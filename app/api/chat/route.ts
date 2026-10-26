@@ -3368,18 +3368,6 @@ ${chunkWorkflowSummary}`;
               timeToFinalAnswerMs: Date.now() - requestStartedAtMs
             });
 
-            if (!streamCancelled) {
-              controller.close();
-            } else {
-              console.log("[Chat API] generation completed after client disconnect", {
-                requestId,
-                chatId,
-                provider: result.provider,
-                model: result.model,
-                responseLength: assistantText.length
-              });
-            }
-
             // Next.js keeps the function alive for after(), without holding
             // the client connection open. A memory failure cannot invalidate
             // the already-saved assistant response.
@@ -3408,6 +3396,19 @@ ${chunkWorkflowSummary}`;
                 });
               }
             });
+
+            if (!streamCancelled) {
+              controller.close();
+            } else {
+              console.log("[Chat API] generation completed after client disconnect", {
+                requestId,
+                chatId,
+                provider: result.provider,
+                model: result.model,
+                responseLength: assistantText.length
+              });
+            }
+
           } catch (error: unknown) {
             console.error("[Chat API] Stream Runtime Error:", error);
             const message = error instanceof Error ? error.message : "Unknown stream error";
