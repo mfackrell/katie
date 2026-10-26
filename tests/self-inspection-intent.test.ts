@@ -30,3 +30,14 @@ test("ordinary reflections mentioning yourself or Katie stay conversational", ()
     assert.equal(isExplicitKatieSelfInspectionRequest(prompt), false, prompt);
   }
 });
+
+test("second exact production failure stays ordinary conversation", () => {
+  const message = readFileSync(join(process.cwd(), "tests/fixtures/2026-10-26-vercel-transcript-failure.txt"), "utf8");
+  assert.ok(message.includes("Look at the Katie logs from two days ago Vercel"));
+  assert.equal(isExplicitKatieSelfInspectionRequest(message), false);
+});
+
+test("mixed technical keywords in a pasted conversation cannot trigger execution", () => {
+  assert.equal(isExplicitKatieSelfInspectionRequest("I was talking to Katie about the repository and then discussed my feelings."), false);
+  assert.equal(isExplicitKatieSelfInspectionRequest("Katie, check your repository logs."), true);
+});
