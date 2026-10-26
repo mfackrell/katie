@@ -1,3 +1,4 @@
+import type { StructuredResponse } from "@/lib/chat/structured-response";
 import type { ConversationAttachment } from "@/lib/chat/attachment-continuity";
 export type Role = "user" | "assistant";
 
@@ -63,6 +64,7 @@ export interface Message {
   role: Role;
   model?: string;
   content: string;
+  presentation?: StructuredResponse;
   attachments?: ConversationAttachment[];
   assets?: Array<{ type: string; url: string }>;
   createdAt: string;

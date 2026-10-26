@@ -1,3 +1,4 @@
+import { validatePresentation } from "../presentation/default-registry";
 import { normalizeReviewMode } from "@/lib/collaboration/review-mode";
 import { getSupabaseAdminClient } from "@/lib/data/supabase/admin";
 import type { Actor, ChatThread, Message } from "@/lib/types/chat";
@@ -89,12 +90,13 @@ function toMemoryContent(row: MemoryRow | null): JsonRecord {
   return row.content;
 }
 
-export function parseMessageContent(content: string): { text: string; model?: string; assets?: Array<{ type: string; url: string }>; attachments?: Message["attachments"] } {
+export function parseMessageContent(content: string): { text: string; model?: string; assets?: Array<{ type: string; url: string }>; attachments?: Message["attachments"]; presentation?: Message["presentation"] } {
   try {
-    const parsed = JSON.parse(content) as { text?: unknown; model?: unknown; assets?: unknown; attachments?: unknown };
+    const parsed = JSON.parse(content) as { text?: unknown; model?: unknown; assets?: unknown; attachments?: unknown; presentation?: unknown };
     if (typeof parsed.text === "string") {
       return {
         text: parsed.text,
+        ...(validatePresentation(parsed.presentation)?.fallbackMarkdown === parsed.text ? { presentation: validatePresentation(parsed.presentation)! } : {}),
         ...(Array.isArray(parsed.attachments) ? { attachments: parsed.attachments.filter((item): item is NonNullable<Message["attachments"]>[number] => Boolean(item) && typeof item.id === "string" && /^[0-9a-f-]{36}$/i.test(item.id) && typeof item.fileName === "string" && typeof item.mimeType === "string") } : {}),
         ...(typeof parsed.model === "string" ? { model: parsed.model } : {}),
         ...(Array.isArray(parsed.assets)
@@ -116,9 +118,9 @@ export function parseMessageContent(content: string): { text: string; model?: st
   return { text: content };
 }
 
-export function encodeMessageContent(message: Pick<Message, "content" | "model" | "assets" | "attachments">): string {
-  if (message.attachments?.length || message.model || (message.assets && message.assets.length > 0)) {
-    return JSON.stringify({ text: message.content, model: message.model, assets: message.assets ?? [], attachments: message.attachments });
+export function encodeMessageContent(message: Pick<Message, "content" | "model" | "assets" | "attachments" | "presentation">): string {
+  if (message.attachments?.length || message.model || message.presentation || (message.assets && message.assets.length > 0)) {
+    return JSON.stringify({ text: message.content, model: message.model, assets: message.assets ?? [], attachments: message.attachments, ...(message.presentation ? { presentation: validatePresentation(message.presentation)?.fallbackMarkdown === message.content ? validatePresentation(message.presentation) : null } : {}) });
   }
 
   return message.content;
@@ -375,6 +377,24 @@ export async function deleteChatById(chatId: string): Promise<void> {
   await deleteChat(chatId);
 }
 
+export async function getMessageById(chatId: string, messageId: string): Promise<Message | null> {
+  const client = getSupabaseAdminClient();
+  const { data, error } = await client.from("messages")
+    .select("id,actor_id,chat_id,role,content,created_at")
+    .eq("chat_id", chatId).eq("id", messageId)
+    .maybeSingle<MessageRow>();
+  if (error) throw new Error("Failed to load saved message for replay: " + error.message);
+  if (!data) return null;
+  const parsed = parseMessageContent(data.content);
+  return {
+    ...toMessage(data), content: parsed.text,
+    ...(parsed.model ? { model: parsed.model } : {}),
+    ...(parsed.assets ? { assets: parsed.assets } : {}),
+    ...(parsed.attachments ? { attachments: parsed.attachments } : {}),
+    ...(parsed.presentation ? { presentation: parsed.presentation } : {}),
+  };
+}
+
 export async function getMessages(chatId: string): Promise<Message[]> {
   const client = getSupabaseAdminClient();
   const { data, error } = await client
@@ -396,6 +416,7 @@ export async function getMessages(chatId: string): Promise<Message[]> {
       ...(parsed.model ? { model: parsed.model } : {}),
       ...(parsed.assets ? { assets: parsed.assets } : {}),
       ...(parsed.attachments ? { attachments: parsed.attachments } : {}),
+      ...(parsed.presentation ? { presentation: parsed.presentation } : {}),
     };
   });
 }
@@ -424,6 +445,7 @@ export async function getRecentMessages(chatId: string, limit = 20): Promise<Mes
         ...(parsed.model ? { model: parsed.model } : {}),
         ...(parsed.assets ? { assets: parsed.assets } : {}),
       ...(parsed.attachments ? { attachments: parsed.attachments } : {}),
+      ...(parsed.presentation ? { presentation: parsed.presentation } : {}),
       };
     });
 }
@@ -468,6 +490,7 @@ export async function saveMessage(
     ...(parsed.model ? { model: parsed.model } : {}),
     ...(parsed.assets ? { assets: parsed.assets } : {}),
       ...(parsed.attachments ? { attachments: parsed.attachments } : {}),
+      ...(parsed.presentation ? { presentation: parsed.presentation } : {}),
   };
 }
 
