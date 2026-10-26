@@ -13,7 +13,8 @@ export async function runNonFullAuthorizedHost({
  upstream,model='synthetic',upperTokens=20,onEvent=()=>{}
 }){
  if(!['native','thin'].includes(arm)||!db||!workspace||
-  process.env.KATIE_BENCHMARK_PAID_EXECUTION==='enabled')
+  process.env.KATIE_BENCHMARK_PAID_EXECUTION==='enabled'||
+  upstream?.nonbillableFixture!==true)
   throw Error('NONFULL_HOST_PAID_EXECUTION_DENIED');
  const boundary=assertTrustedBoundary(workspace);
  const secret='contained-fixture-token';
