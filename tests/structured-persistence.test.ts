@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+import { describe, it } from "node:test";
+import assert from "node:assert/strict";
 import { encodeMessageContent, parseMessageContent } from "../lib/data/persistence-store";
 
 const presentation = {
@@ -16,11 +17,11 @@ describe("structured conversation persistence", () => {
   it("round trips a validated presentation with its readable source text", () => {
     const saved = encodeMessageContent({ content: presentation.fallbackMarkdown, presentation });
     const restored = parseMessageContent(saved);
-    expect(restored.text).toBe(presentation.fallbackMarkdown);
-    expect(restored.presentation).toEqual(presentation);
+    assert.equal(restored.text, presentation.fallbackMarkdown);
+    assert.deepEqual(restored.presentation, presentation);
   });
   it("preserves old raw Markdown without new metadata", () => {
-    expect(parseMessageContent("**Existing answer**")).toEqual({ text: "**Existing answer**" });
+    assert.deepEqual(parseMessageContent("**Existing answer**"), { text: "**Existing answer**" });
   });
   it("rejects hostile structured payloads and preserves readable Markdown", () => {
     const saved = JSON.stringify({ text: "Safe answer", presentation: {
@@ -28,14 +29,14 @@ describe("structured conversation persistence", () => {
       blocks: [{ type: "iframe", src: "https://unsafe.example" }],
     } });
     const restored = parseMessageContent(saved);
-    expect(restored.text).toBe("Safe answer");
-    expect(restored.presentation).toBeUndefined();
+    assert.equal(restored.text, "Safe answer");
+    assert.equal(restored.presentation, undefined);
   });
   it("ignores unknown schema versions", () => {
     const restored = parseMessageContent(JSON.stringify({ text: "Prior version", presentation: {
       ...presentation, version: 100,
     } }));
-    expect(restored.text).toBe("Prior version");
-    expect(restored.presentation).toBeUndefined();
+    assert.equal(restored.text, "Prior version");
+    assert.equal(restored.presentation, undefined);
   });
 });
