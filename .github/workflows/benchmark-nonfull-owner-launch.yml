@@ -38,10 +38,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: main
           persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+      - name: Require reviewed owner launch tools on main
+        run: |
+          test -f scripts/benchmark/native-thin-preflight.mjs
+          test -f scripts/benchmark/shared-native-phase.mjs
+          test -f scripts/benchmark/native-trust-boundary.mjs
       - name: Install immutable declared dependencies without scripts
         run: npm ci --ignore-scripts
       - name: Validate actual durable owner/trial/account approval
