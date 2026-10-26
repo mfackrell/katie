@@ -18,8 +18,8 @@ test('existing owner-only engineering workflow selects signed native host withou
 });
 test('native paid gateway never inherits provider or Supabase credentials',()=>{
  assert.match(host,/KATIE_BENCHMARK_PAID_EXECUTION!=='enabled'/);
- assert.match(host,/--unshare-all/);
- assert.match(host,/--clearenv/);
+ assert.match(readFileSync('scripts/benchmark/shared-native-container.mjs','utf8'),/--unshare-all/);
+ assert.match(readFileSync('scripts/benchmark/shared-native-container.mjs','utf8'),/--clearenv/);
  assert.match(host,/benchmark_reconcile_linked_receipt/);
  assert.match(host,/fullMission:true/);
  assert.match(host,/NATIVE_DEVELOPER_RETURNED_TO_EXISTING_TEST_REVIEW_PIPELINE/);
@@ -49,7 +49,7 @@ test('native independent reviewers are isolated and every phase shares the meter
  assert.match(host,/await safelyRunPhase\('repair',first\.findings\)/);
  assert.match(host,/await safelyRunPhase\('final-review'\)/);
  assert.match(host,/if\(final\.verdict!=='pass'\)denied/);
- assert.match(host,/reviewing\?'--ro-bind':'--bind'/);
+ assert.match(readFileSync('scripts/benchmark/shared-native-container.mjs','utf8'),/reviewing\?'--ro-bind':'--bind'/);
  assert.match(host,/NATIVE_METERED_REVIEW_AND_BOUNDED_REPAIR_COMPLETED/);
  assert.match(host,/--ro-bind',requestFile,'\/trusted\/AGENT_REQUEST\.md'/);
  assert.match(child,/immutable owner request at \/trusted\/AGENT_REQUEST\.md/);
@@ -76,7 +76,7 @@ test('native reviews require immutable approved baseline and readonly execution'
  assert.match(child,/git diff /);
  assert.match(child,/baseline\+'\.\.\.HEAD/);
  assert.match(host,/KATIE_NATIVE_BASELINE_SHA',proof\.baselineSha/);
- assert.match(host,/reviewing\?'--ro-bind':'--bind'/);
+ assert.match(readFileSync('scripts/benchmark/shared-native-container.mjs','utf8'),/reviewing\?'--ro-bind':'--bind'/);
 });
 
 test('interrupted native execution retains scope-checked Git checkpoints outside the runner',()=>{
@@ -86,7 +86,7 @@ test('interrupted native execution retains scope-checked Git checkpoints outside
  assert.match(host,/git\('push','origin',\`HEAD:refs\/heads\/\$\{checkpointBranch\}\`\)/);
  assert.match(workflow,/KATIE_NATIVE_CHECKPOINT_BRANCH: \$\{\{ steps\.task\.outputs\.branch \}\}/);
  assert.match(workflow,/GH_TOKEN: \$\{\{ github\.token \}\}/);
- assert.match(host,/--clearenv/);
+ assert.match(readFileSync('scripts/benchmark/shared-native-container.mjs','utf8'),/--clearenv/);
  assert.doesNotMatch(child,/GH_TOKEN|GITHUB_TOKEN/);
 });
 
@@ -110,7 +110,7 @@ test('Full and the three contained comparison arms share the exact SDK phase eng
  assert.match(child,/executeSharedNativePhase\(/);
  assert.match(contained,/executeSharedNativePhase\(/);
  assert.match(host,/shared-native-phase\.mjs/);
- assert.match(host,/KATIE_BENCHMARK_ARM','full'/);
+ assert.match(host,/workspace:boundary\.root,socketDir:sockdir,arm:'full'/);
  assert.match(probe,/for\(const nextArm of selectedArms\)/);
  assert.match(probe,/join\(workRoot,arm\)/);
  assert.match(probe,/reservations\.length,selectedArms\.length\*4/);
