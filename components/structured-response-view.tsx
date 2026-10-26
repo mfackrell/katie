@@ -80,6 +80,6 @@ function RenderBlock({ block }: { block: VisualBlock }) {
 /** Receives only server-validated response blocks; never accepts model-owned React code. */
 export function StructuredResponseView({ response }: { response: StructuredResponse }) {
   return <div className="space-y-4" aria-label="Structured assistant response">
-    {response.blocks.map((block, index) => <RenderBlock key={index} block={block} />)}
+    {response.blocks.filter(block => block.type !== "markdown").map((block, index) => <RenderBlock key={index} block={block} />)}
   </div>;
 }
