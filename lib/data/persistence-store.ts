@@ -377,6 +377,24 @@ export async function deleteChatById(chatId: string): Promise<void> {
   await deleteChat(chatId);
 }
 
+export async function getMessageById(chatId: string, messageId: string): Promise<Message | null> {
+  const client = getSupabaseAdminClient();
+  const { data, error } = await client.from("messages")
+    .select("id,actor_id,chat_id,role,content,created_at")
+    .eq("chat_id", chatId).eq("id", messageId)
+    .maybeSingle<MessageRow>();
+  if (error) throw new Error("Failed to load saved message for replay: " + error.message);
+  if (!data) return null;
+  const parsed = parseMessageContent(data.content);
+  return {
+    ...toMessage(data), content: parsed.text,
+    ...(parsed.model ? { model: parsed.model } : {}),
+    ...(parsed.assets ? { assets: parsed.assets } : {}),
+    ...(parsed.attachments ? { attachments: parsed.attachments } : {}),
+    ...(parsed.presentation ? { presentation: parsed.presentation } : {}),
+  };
+}
+
 export async function getMessages(chatId: string): Promise<Message[]> {
   const client = getSupabaseAdminClient();
   const { data, error } = await client
