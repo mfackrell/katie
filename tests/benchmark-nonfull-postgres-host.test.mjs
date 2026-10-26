@@ -49,7 +49,7 @@ test('Native and Thin real PostgreSQL grants, reservations, receipts and contain
     const placeholders=values.map((_,i)=>'$'+(i+1)).join(',');
     const result=await sql.query('select '+name+'('+placeholders+') as answer',values);
     return {data:result.rows[0].answer,error:null};
-   }catch(error){return {data:null,error:{message:error.message}}}
+   }catch(error){console.error('DISPOSABLE_PG_RPC_DENIED',name,error.code,String(error.message).slice(0,260));return {data:null,error:{message:error.message}}}
   };
   for(let armIndex=0;armIndex<2;armIndex++){
    const arm=['native','thin'][armIndex];
