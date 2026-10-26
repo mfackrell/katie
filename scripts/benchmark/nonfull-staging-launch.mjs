@@ -53,7 +53,7 @@ const upstream=async request=>{
   ['response.completed',{type:'response.completed',response}]
  ];
  return {providerRequestId:response.id,actualTokens:5,contentType:'text/event-stream',
-  body:events.map(([event,value])=>'event: '+event+'\\ndata: '+JSON.stringify(value)+'\\n\\n').join('')+'data: [DONE]\\n\\n'};
+  body:events.map(([event,value])=>'event: '+event+'\ndata: '+JSON.stringify(value)+'\n\n').join('')+'data: [DONE]\n\n'};
 };
 upstream.nonbillableFixture=true;
 try{
