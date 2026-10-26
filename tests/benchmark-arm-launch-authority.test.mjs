@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import {readFileSync} from 'node:fs';
 import {verifyNonFullLaunch} from '../scripts/benchmark/arm-launch-authority.mjs';
 const fixture=arm=>{
  const trial={id:arm+'-trial',arm,state:'qualified',owner_actor_id:'actor',
@@ -32,4 +33,15 @@ for(const arm of ['native','thin']){
 }
 test('non-full authorization can never authorize Full',()=>{
  assert.throws(()=>verifyNonFullLaunch({...fixture('native'),arm:'full'}),/NONFULL_ARM_REQUIRED/);
+});
+
+test('owner workflow cannot execute unreviewed branches or paid model keys',()=>{
+ const workflow=readFileSync('.github/workflows/benchmark-nonfull-owner-launch.yml','utf8');
+ assert.match(workflow,/github.actor == github.repository_owner/);
+ assert.match(workflow,/ref: main/);
+ assert.match(workflow,/KATIE_BENCHMARK_PAID_EXECUTION: disabled/);
+ assert.match(workflow,/OPENAI_API_KEY: ''/);
+ assert.match(workflow,/native-thin-preflight\.mjs/);
+ assert.match(workflow,/native-four-phase-contained-host-probe\.mjs/);
+ assert.match(workflow,/KATIE_TRIAL_MANIFEST/);
 });
