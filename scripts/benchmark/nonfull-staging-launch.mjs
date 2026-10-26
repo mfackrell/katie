@@ -77,7 +77,7 @@ try{
  ]);
  if(calls.error||settledAccount.error||consumedApproval.error||runningTrial.error||
     calls.data?.length!==4||
-    !calls.data.every(c=>c.state==='settled'&&c.actual_tokens===5&&
+    !calls.data.every(c=>c.state==='settled'&&Number(c.actual_tokens)===5&&
       typeof c.provider_request_id==='string'&&
       c.provider_namespace==='nonbillable-synthetic-fixture')||
     new Set(calls.data.map(x=>x.provider_request_id)).size!==4||
