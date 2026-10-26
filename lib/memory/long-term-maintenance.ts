@@ -122,11 +122,10 @@ export async function maybeMaintainActorMemory(actorId: string, client: ModelCli
 export async function maybeRunThirtyMessageCleanup(actorId: string): Promise<void> {
   try {
     const admin = getSupabaseAdminClient();
-    const { count, error } = await admin.from("messages")
-      .select("id", { count: "exact", head: true })
-      .eq("actor_id", actorId).in("role", ["user", "assistant"]);
+    const { data, error } = await admin.rpc("count_actor_conversational_messages", { p_actor_id: actorId });
     if (error) throw error;
-    if (!count || count % CLEANUP_EVERY_MESSAGES !== 0) return;
+    const count = Number(data);
+    if (!Number.isSafeInteger(count) || count <= 0 || count % CLEANUP_EVERY_MESSAGES !== 0) return;
     if (!process.env.OPENAI_API_KEY) {
       console.warn("[LTM Maintenance] Scheduled check skipped: OpenAI not configured", { actorId, count });
       return;
