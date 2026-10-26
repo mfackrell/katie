@@ -10,9 +10,9 @@ import {sharedNativeContainerArgs} from './shared-native-container.mjs';
 import {assertTrustedBoundary,protectedNativeMounts} from './native-trust-boundary.mjs';
 export async function runNonFullAuthorizedHost({
  db,arm,trial,account,approval,ownerId,repository,workspace,
- upstream,clientPath,model='synthetic',upperTokens=20,onEvent=()=>{}
+ upstream,model='synthetic',upperTokens=20,onEvent=()=>{}
 }){
- if(!['native','thin'].includes(arm)||!db||!workspace||!clientPath||
+ if(!['native','thin'].includes(arm)||!db||!workspace||
   process.env.KATIE_BENCHMARK_PAID_EXECUTION==='enabled')
   throw Error('NONFULL_HOST_PAID_EXECUTION_DENIED');
  const boundary=assertTrustedBoundary(workspace);
@@ -28,11 +28,10 @@ export async function runNonFullAuthorizedHost({
   await new Promise(resolve=>server.listen(sock,resolve));
   for(const phase of ['implementation','review','repair','final-review']){
    const reviewing=phase==='review'||phase==='final-review';
-   const command='socat TCP-LISTEN:43181,bind=127.0.0.1,reuseaddr,fork UNIX-CONNECT:/gateway/gateway.sock & proxy=$!; trap "kill $proxy 2>/dev/null || :" EXIT; node /trusted/client.mjs';
+   const command='socat TCP-LISTEN:43181,bind=127.0.0.1,reuseaddr,fork UNIX-CONNECT:/gateway/gateway.sock & proxy=$!; trap "kill $proxy 2>/dev/null || :" EXIT; node /app/scripts/benchmark/native-four-phase-contained-client.mjs';
    const args=sharedNativeContainerArgs({
     workspace:boundary.root,socketDir:dir,arm,phase,command,readOnly:reviewing,
     extraMounts:[...protectedNativeMounts(boundary),
-     '--dir','/trusted','--ro-bind',clientPath,'/trusted/client.mjs',
      '--ro-bind',process.cwd(),'/app'],
     extraEnv:['--setenv','KATIE_NATIVE_MODEL',model]
    });
