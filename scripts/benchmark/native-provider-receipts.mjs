@@ -21,7 +21,7 @@ export function createResponsesProvider({apiKey,fetchImpl=fetch,baseUrl='https:/
    const event=frame.split(/\r?\n/).find(line=>line.startsWith('data: '));
    if(!event||event==='data: [DONE]')continue;
    let parsed;try{parsed=JSON.parse(event.slice(6));}catch{continue;}
-   if(parsed?.type==='response.completed')terminal=parsed.response;
+   if(['response.completed','response.incomplete'].includes(parsed?.type))terminal=parsed.response;
   }
   // Never synthesize token counts or a provider request id.
   if(!terminal||typeof terminal.id!=='string'||
