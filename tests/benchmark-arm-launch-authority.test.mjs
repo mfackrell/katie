@@ -68,3 +68,15 @@ test('production credentials cannot be used by nonfull trusted staging launcher'
  assert.match(source,/runNonFullAuthorizedHost\(/);
  assert.match(source,/grantId:result\.grantId/);
 });
+
+test('staging qualification requires four canonical receipts and persists reviewable evidence',()=>{
+ const launcher=readFileSync('scripts/benchmark/nonfull-staging-launch.mjs','utf8');
+ const workflow=readFileSync('.github/workflows/benchmark-nonfull-owner-launch.yml','utf8');
+ assert.match(launcher,/NONFULL_STAGING_LEDGER_RECONCILIATION_FAILED/);
+ assert.match(launcher,/calls\.data\?\.length!==4/);
+ assert.match(launcher,/settledReceipts:4,actualTokens:20/);
+ assert.match(launcher,/reviewRequired:true/);
+ assert.match(launcher,/nonfull-staging-acceptance\.json/);
+ assert.match(workflow,/nonfull-staging-acceptance\.json/);
+ assert.match(workflow,/ref: main/);
+});
