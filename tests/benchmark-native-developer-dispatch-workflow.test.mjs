@@ -54,7 +54,7 @@ test('native independent reviewers are isolated and every phase shares the meter
  assert.match(host,/--ro-bind',requestFile,'\/trusted\/AGENT_REQUEST\.md'/);
  assert.match(child,/immutable owner request at \/trusted\/AGENT_REQUEST\.md/);
  assert.match(child,/KATIE_NATIVE_PHASE/);
- assert.match(child,/sandboxMode:phase==='review'\|\|phase==='final-review'\?'read-only'/);
+ assert.match(readFileSync('scripts/benchmark/shared-native-phase.mjs','utf8'),/reviewing\?'read-only':'danger-full-access'/);
  assert.match(child,/NATIVE_REVIEW_RESULT/);
  assert.doesNotMatch(child,/OPENAI_API_KEY|SUPABASE_SERVICE_ROLE_KEY/);
 });
@@ -111,7 +111,7 @@ test('Full and the three contained comparison arms share the exact SDK phase eng
  assert.match(contained,/executeSharedNativePhase\(/);
  assert.match(host,/shared-native-phase\.mjs/);
  assert.match(host,/KATIE_BENCHMARK_ARM','full'/);
- assert.match(probe,/for\(const nextArm of \['native','thin','full'\]\)/);
+ assert.match(probe,/for\(const nextArm of selectedArms\)/);
  assert.match(probe,/join\(workRoot,arm\)/);
- assert.match(probe,/reservations\.length,12/);
+ assert.match(probe,/reservations\.length,selectedArms\.length\*4/);
 });
