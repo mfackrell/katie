@@ -77,9 +77,9 @@ export function verifyOwnerEnvironment(env,event){
 // Compare EVERY committed migration checksum against the authoritative custom
 // ledger. Merely matching 117 rows cannot prove the schema/bootstrap identity.
 export function verifyCustomLedger(entries,dir=resolve('supabase/migrations')){
- if(!Array.isArray(entries)||entries.length!==117)deny('custom-migration-ledger-count');
  const files=readdirSync(dir).filter(x=>x.endsWith('.sql')).sort();
- if(files.length!==115)deny('migration-source-version-drift');
+ if(!Array.isArray(entries)||entries.length!==files.length+2)
+  deny('custom-migration-ledger-count');
  const ledger=new Map();
  for(const row of entries){
   if(typeof row?.filename!=='string'||typeof row?.checksum!=='string'||
@@ -112,7 +112,14 @@ export async function bootstrap({db,ownerId}){
   .select('filename,checksum');
  if(ledgerError)deny('custom-schema-ledger-unavailable');
  verifyCustomLedger(ledger);
- for(const table of ['actors','chats','benchmark_three_arm_trials',
+ // A normal new schema replay may seed an Executive Orchestrator actor.
+ // Permit only that well-known migration fixture, never other chat/user data.
+ const {data:actors,error:actorsError}=await db.from('actors')
+  .select('id,name,actor_kind');
+ if(actorsError||!Array.isArray(actors)||actors.length>1||
+    actors.some(x=>x.name!=='Executive Orchestrator'||x.actor_kind!=='executive'))
+  deny('not-clean-staging:actors');
+ for(const table of ['chats','benchmark_three_arm_trials',
   'benchmark_budget_accounts','benchmark_native_spending_approvals']){
   if(await rows(db,table)!==0)deny('not-clean-staging:'+table);
  }
