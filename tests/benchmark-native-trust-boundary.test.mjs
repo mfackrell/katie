@@ -85,5 +85,5 @@ test('checkpoint, recovery and publication use the same protected Git boundary',
  assert.match(publish,/git\(\) \{ command git -c core\.hooksPath=\/dev\/null/);
  assert.match(publish,/git push origin/);
  assert.match(publish,/git commit -m/);
- assert.match(workflow,/native-trust-boundary\}\.mjs/);
+ assert.match(workflow,/native-trust-boundary,shared-native-phase\}\.mjs/);
 });
