@@ -108,6 +108,10 @@ export const structuredResponseSchema = z.object({
     ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Ordered Markdown blocks must reconstruct canonical answer", path: ["blocks"] });
   }
   response.blocks.forEach((block, index) => {
+    if (block.type === "chart" && block.chart === "donut" &&
+      (block.points.some(point => point.value < 0) || !block.points.some(point => point.value > 0))) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Donut data requires nonnegative values and a positive total", path: ["blocks", index] });
+    }
     if (block.type === "comparison" && block.rows.some(row => row.values.length !== block.columns.length)) {
       ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Comparison rows must match column count", path: ["blocks", index] });
     }
