@@ -439,7 +439,7 @@ function buildGenerationParams({
     persona,
     summary,
     history,
-    user: message,
+    user: `[Current message timestamp: ${new Date().toISOString()}]\n${message}`,
     requestIntent,
     secondaryIntents,
     images,
@@ -1333,7 +1333,12 @@ async function executeChat(request: NextRequest) {
     let personaForGeneration = personaWithRepoContext;
     let loadedRepoContext: RepoGenerationContext | null = null;
     let repoContextDegraded: { reason: string } | null = null;
-    const historyForProvider = history.map(({ role, content }) => ({ role, content }));
+    const historyForProvider = history.map(({ role, content, createdAt }) => ({
+      role,
+      content: createdAt && Number.isFinite(Date.parse(createdAt))
+        ? `[Message timestamp: ${new Date(createdAt).toISOString()}]\n${content}`
+        : content,
+    }));
     const videoReplyTarget = hasVideoInput
       ? await selectVideoReplyTarget(
           providers, { provider: overrideProvider, model: overrideModel },
