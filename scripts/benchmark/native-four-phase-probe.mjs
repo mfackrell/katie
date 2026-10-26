@@ -27,7 +27,7 @@ const server=createNativeHttpBridge({
  executionEpoch:1,providerNamespace:'synthetic-four-phase',upperTokens:100,
  clientToken:'synthetic-bridge-token',fullMission:true,
  recordReceipt:async r=>receipts.push(r),
- upstream:async body=>{
+ upstream:Object.assign(async body=>{
   forwarded++;
   const phase=phases[forwarded-1];
   assert.ok(phase,'unexpected extra model call');
@@ -47,7 +47,7 @@ const server=createNativeHttpBridge({
   ];
   return {providerRequestId:response.id,actualTokens:5,contentType:'text/event-stream',
    body:events.map(([event,data])=>'event: '+event+'\ndata: '+JSON.stringify(data)+'\n\n').join('')+'data: [DONE]\n\n'};
- }
+ },{nonbillableFixture:true})
 });
 try{
  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
