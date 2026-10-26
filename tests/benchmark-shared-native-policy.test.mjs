@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
-import {NATIVE_GATEWAY_URL,NATIVE_SDK_VERSION,NATIVE_RUNTIME_POLICY,nativeCodexConfig,assertNativeEffectivePolicy} from '../scripts/benchmark/shared-native-policy.mjs';
+import {NATIVE_GATEWAY_URL,NATIVE_SDK_VERSION,NATIVE_RUNTIME_POLICY,nativeCodexConfig,assertNativeEffectivePolicy,assertNativeRequestTools} from '../scripts/benchmark/shared-native-policy.mjs';
 const full=readFileSync('scripts/benchmark/native-development-child.mjs','utf8');
 const thin=readFileSync('scripts/benchmark/native-four-phase-contained-client.mjs','utf8');
 const host=readFileSync('scripts/benchmark/native-development-host.mjs','utf8');
@@ -40,4 +40,14 @@ test('all three arms use one hardened container launcher and identical filesyste
  assert.match(launcher,/reviewing\?'--ro-bind':'--bind'/);
  assert.match(host,/protectedNativeMounts\(boundary\)/);
  assert.match(fixture,/protectedNativeMounts\(assertTrustedBoundary\(join\(workRoot,arm\)\)\)/);
+});
+
+test('same gateway rejects provider-hosted tools and allows native custom/function tools',()=>{
+ assert.equal(assertNativeRequestTools({model:'synthetic',tools:[{type:'custom',name:'exec'},{type:'function',name:'function_call'}]}),true);
+ for(const type of ['web_search','web_search_preview','file_search','computer_use_preview','mcp','code_interpreter','shell']){
+  assert.throws(()=>assertNativeRequestTools({model:'synthetic',tools:[{type}]}),/REMOTE_PROVIDER_TOOL_DENIED/);
+ }
+ const gateway=readFileSync('scripts/benchmark/native-http-bridge.mjs','utf8');
+ assert.match(gateway,/assertNativeRequestTools\(body\)/);
+ assert.match(gateway,/fullMission:typeof fullMission==='function'\?fullMission\(\):fullMission/);
 });
