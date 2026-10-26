@@ -27,10 +27,12 @@ test('Native and Thin real PostgreSQL grants, reservations, receipts and contain
   await sql.connect();
   for(const path of [
    'tests/sql/benchmark-nonfull-grant-schema.sql',
+   'supabase/migrations/20261024211500_record_benchmark_overruns.sql',
+   'supabase/migrations/20261024213000_benchmark_provider_receipts.sql',
+   'supabase/migrations/20261024220000_benchmark_receipt_quarantine.sql',
    'supabase/migrations/20261025193000_benchmark_execution_grants.sql',
    'supabase/migrations/20261025200000_benchmark_gateway_stop_fence.sql',
    'supabase/migrations/20261025201000_benchmark_atomic_stop_admission.sql',
-   'tests/sql/benchmark-nonfull-real-receipts.sql',
    'supabase/migrations/20261026130000_benchmark_nonfull_execution_grants.sql'])
    await sql.query(load(path));
   await sql.query('set role service_role');
