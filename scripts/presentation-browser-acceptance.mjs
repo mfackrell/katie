@@ -11,7 +11,7 @@ import { chromium as playwrightChromium } from "playwright-core";
 import chromium from "@sparticuz/chromium";
 
 const root = resolve(".");
-const fixtureDir = resolve(root, "app/__presentation_acceptance");
+const fixtureDir = resolve(root, "app/presentation-acceptance-fixture");
 const fixturePath = resolve(fixtureDir, "page.tsx");
 const port = Number(process.env.KATIE_PRESENTATION_TEST_PORT ?? 38091);
 if (!Number.isInteger(port) || port < 1024 || port > 65535) throw new Error("Invalid browser fixture port");
@@ -43,7 +43,7 @@ export default function PresentationAcceptancePage() {
 let server;
 let browser;
 let serverOutput = "";
-const url = `http://127.0.0.1:${port}/__presentation_acceptance`;
+const url = `http://127.0.0.1:${port}/presentation-acceptance-fixture`;
 async function ready() {
   for (let attempt = 0; attempt < 75; attempt++) {
     if (server?.exitCode !== null && server?.exitCode !== undefined) throw new Error("Next exited: " + serverOutput.slice(-4000));
