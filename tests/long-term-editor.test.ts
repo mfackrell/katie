@@ -563,6 +563,10 @@ test("automatic memory repair satisfies provider JSON mode and saves only repair
    source:"user-stated",confidence:"high",evidenceMessageIds:["m1"]};
  let calls=0;
  (globalThis as any).__KATIE_LONG_TERM_MEMORY_OPENAI_CLIENT__={chat:{completions:{async create(params:any){
+   // Consolidation is a separate post-save LLM call, not an editor retry.
+   if(params.messages[0]?.content?.startsWith("You are an independent long-term-memory maintenance reviewer.")) {
+     return {choices:[{message:{content:JSON.stringify({keepKeys:["existing",entry.key],groups:[]})}}]};
+   }
    calls++;
    const support = supportResponse(params); if (support) return support;
    const prompt=params.messages.map((message:any)=>message.content).join("\n");
