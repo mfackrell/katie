@@ -111,3 +111,15 @@ test('oversized or unbounded provider inputs cannot create billable admission',a
   assert.equal(admission,0);
  }
 });
+
+test('provider-expanded references and files are denied before reservation',async()=>{
+ const inputs=[{model:'mock',input:'hello',previous_response_id:'resp_1'},
+ {model:'mock',input:[{role:'user',content:[{type:'input_file',file_url:'https://example.com/a.pdf'}]}]},
+ {model:'mock',input:'hello',conversation:'conv_1'}];
+ for(const requestBody of inputs){let reserved=0;
+  await assert.rejects(forwardAuthorizedModelRequest({...request,requestBody,
+   db:{rpc:async name=>name==='benchmark_gateway_execution_live'?{data:true,error:null}:(reserved++,{data:'op',error:null})},
+   upstream:async()=>{throw Error('must not forward')},recordReceipt:async()=>{}}),/GATEWAY_UNBOUNDED_INPUT_DENIED/);
+  assert.equal(reserved,0);
+ }
+});
