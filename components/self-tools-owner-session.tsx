@@ -17,6 +17,18 @@ export function SelfToolsOwnerSession({ chatId }: { chatId: string }) {
   useEffect(() => {
     if (!client) return;
     let active = true;
+    let settled = false;
+    const finish = (session: boolean) => {
+      if (!active) return;
+      settled = true;
+      setSignedIn(session);
+      setSessionReady(true);
+    };
+    const recoveryTimeout = window.setTimeout(() => {
+      if (!active || settled) return;
+      setSessionReady(true);
+      setNotice("Owner session restoration timed out. Authentication was not confirmed; you can retry sign-in.");
+    }, 6000);
     try { const stored = window.sessionStorage.getItem("katie-owner-otp-email"); if (stored) setEmail(stored); } catch {}
     setEmailReady(true);
     // Passwordless callback failures arrive in the URL hash, not as a React error.
@@ -35,8 +47,7 @@ export function SelfToolsOwnerSession({ chatId }: { chatId: string }) {
       if (event === "INITIAL_SESSION" || event === "SIGNED_IN" ||
           event === "TOKEN_REFRESHED" || event === "SIGNED_OUT" ||
           event === "USER_UPDATED") {
-        setSignedIn(Boolean(session));
-        setSessionReady(true);
+        finish(Boolean(session));
         if (session) setNotice("");
       }
     });
@@ -45,18 +56,17 @@ export function SelfToolsOwnerSession({ chatId }: { chatId: string }) {
       if (error) {
         setNotice("Owner session recovery failed: " + error.message);
       } else if (data.session) {
-        setSignedIn(true);
-        setSessionReady(true);
+        finish(true);
       } else {
         // A null result does not supersede a later authenticated event.
-        setSessionReady(true);
+        if (!settled) finish(false);
       }
     }).catch((error:unknown)=>{
       if (!active) return;
-      setSessionReady(true);
+      finish(false);
       setNotice("Owner session recovery failed: " + (error instanceof Error ? error.message : "unknown error"));
     });
-    return ()=>{active=false;subscription.unsubscribe();};
+    return ()=>{active=false;window.clearTimeout(recoveryTimeout);subscription.unsubscribe();};
   },[client]);
   if (!client) return null;
   async function signIn(event: FormEvent) {
