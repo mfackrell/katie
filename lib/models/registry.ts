@@ -209,11 +209,21 @@ export function retainTrustedPricing(
   fresh: ReturnType<typeof enrichModelRecord>, prior: TrustedPricingSnapshot | undefined, nowIso: string
 ): RefreshedModelRecord {
   const source=prior?.source_metadata?.pricing_verification_source;
+  // Trusted model-specific first-party source only; never accept URL lookalikes.
+  let officialSource=false;
+  if(typeof source==="string" && fresh.provider_name==="openai"){
+    try{
+      const url=new URL(source);
+      officialSource=url.origin==="https://developers.openai.com"&&
+       url.pathname==="/api/docs/models/"+fresh.normalized_model_id&&
+       !url.search&&!url.hash&&!url.username&&!url.password;
+    }catch{officialSource=false}
+  }
   const verifiedAt=Date.parse(prior?.pricing_verified_at ?? "");
   const now=Date.parse(nowIso);
   const age=now-verifiedAt;
   if(prior?.pricing_status!=="verified"||
-     typeof source!=="string"||!source.startsWith("https://")||source.includes(" ")||
+     !officialSource||
      !Number.isFinite(age)||age<0||age>24*60*60*1000||
      fresh.pricing_status!=="estimated"||
      fresh.pricing_input_per_1m===null||fresh.pricing_output_per_1m===null||
