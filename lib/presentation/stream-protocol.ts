@@ -48,7 +48,7 @@ export function parsePresentationTail(
     // assistant message. It cannot introduce URLs or external requests.
     if (presentation?.blocks.some(block => block.type === "media" &&
       (assets[block.assetIndex]?.type !== "image" ||
-        !/^https:\\/\\//i.test(assets[block.assetIndex]?.url ?? "")))) {
+        !(assets[block.assetIndex]?.url ?? "").startsWith("https://")))) {
       return { text: prefix, presentation: null };
     }
     return { text: prefix, presentation };
