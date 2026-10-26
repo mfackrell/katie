@@ -1,4 +1,4 @@
-import { getSupabaseAdminClient } from "@/lib/supabase/admin";
+import { getSupabaseAdminClient } from "@/lib/data/supabase/admin";
 
 type Entry = {
   key: string; value: string; category: string; source: string; confidence: string;
