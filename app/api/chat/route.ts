@@ -3266,20 +3266,20 @@ ${chunkWorkflowSummary}`;
                 })
                 .filter((asset): asset is { type: "image"; url: string } => Boolean(asset)) ?? [];
 
-            emitChunk({
-              type: "content",
-              text: result.text || streamedText,
-              assets: imageAssets,
-              provider: result.provider,
-              model: result.model
-            });
-
-            const finalAnswerEvent = reasoningState.finalize(result.text || streamedText);
-            emitChunk(reasoningState.snapshot());
-            emitChunk(finalAnswerEvent);
-
+            // Final content and structured blocks are committed before the
+            // authoritative content event. Interrupted streams never expose
+            // unvalidated or unpersisted interactive components.
+            const rawAssistantText = result.text || streamedText;
+            const presentationResult = presentationEnabled
+              ? parsePresentationTail(rawAssistantText)
+              : { text: rawAssistantText, presentation: null };
+            const assistantText = presentationResult.text;
+            const assistantPresentation = presentationResult.presentation;
+            if (presentationFilter && reviewMode !== "always") {
+              const tail = presentationFilter.finish();
+              if (tail) emitChunk({ type: "delta", text: tail });
+            }
             console.log("[Chat API] Generation successful. Saving assistant response.");
-            const assistantText = result.text || streamedText;
             const assistantMessageId = pendingVideoAssistantMessageId ?? taskProgressAssistantMessageId;
             await saveMessage(chatId, {
               id: assistantMessageId,
@@ -3287,7 +3287,19 @@ ${chunkWorkflowSummary}`;
               model: result.model,
               content: assistantText,
               assets: imageAssets,
+              ...(assistantPresentation ? { presentation: assistantPresentation } : {}),
             });
+            emitChunk({
+              type: "content",
+              text: assistantText,
+              ...(assistantPresentation ? { presentation: assistantPresentation } : {}),
+              assets: imageAssets,
+              provider: result.provider,
+              model: result.model,
+            });
+            const finalAnswerEvent = reasoningState.finalize(assistantText);
+            emitChunk(reasoningState.snapshot());
+            emitChunk(finalAnswerEvent);
             if (visualContinuity && imageAssets.length) {
               // Group images never become identity anchors; an explicit portrait correction may replace one.
               try {
