@@ -197,6 +197,32 @@ function enrichModelRecord(providerName: LlmProvider["name"], modelId: string, p
   };
 }
 
+// Retain independently verified pricing only while its official evidence is recent
+// and the fresh catalog still agrees with BOTH billed token rates. Provider
+// discovery cannot silently downgrade a trusted, identical price to "estimated".
+type TrustedPricingSnapshot = Pick<ModelRegistryRecord,
+  "normalized_model_id" | "pricing_status" | "pricing_input_per_1m" |
+  "pricing_output_per_1m" | "pricing_verified_at" | "source_metadata">;
+export function retainTrustedPricing<T extends ReturnType<typeof enrichModelRecord>>(
+  fresh: T, prior: TrustedPricingSnapshot | undefined, nowIso: string
+): T {
+  const source=prior?.source_metadata?.pricing_verification_source;
+  const verifiedAt=Date.parse(prior?.pricing_verified_at ?? "");
+  const now=Date.parse(nowIso);
+  const age=now-verifiedAt;
+  if(prior?.pricing_status!=="verified"||
+     typeof source!=="string"||!/^https:\\/\\/[^\\s]+$/.test(source)||
+     !Number.isFinite(age)||age<0||age>24*60*60*1000||
+     fresh.pricing_status!=="estimated"||
+     fresh.pricing_input_per_1m===null||fresh.pricing_output_per_1m===null||
+     fresh.pricing_input_per_1m!==prior.pricing_input_per_1m||
+     fresh.pricing_output_per_1m!==prior.pricing_output_per_1m)return fresh;
+  return {...fresh,pricing_status:"verified",pricing_verified_at:prior.pricing_verified_at,
+   source_metadata:{...fresh.source_metadata,
+    pricing_verification_source:source,
+    pricing_verification_date:prior.source_metadata.pricing_verification_date}};
+}
+
 /** A definitive 404 on a selected inference model must not be retried indefinitely.
  * The upstream catalog is not proof that the model can answer inference requests.
  * Transient errors (timeouts, 429, 5xx) never quarantine a model.
@@ -234,8 +260,16 @@ export async function refreshModelRegistry(providers: LlmProvider[], options?: {
         .returns<{normalized_model_id:string;last_exception_at:string|null}>();
       if(quarantineError) throw new Error(quarantineError.message);
       const quarantinedIds = new Set((quarantined ?? []).map(row=>row.normalized_model_id as string));
+      const {data: verifiedPrices,error: verifiedPriceError}=await client.from("model_registry")
+        .select("normalized_model_id,pricing_status,pricing_input_per_1m,pricing_output_per_1m,pricing_verified_at,source_metadata")
+        .eq("provider_name",provider.name).eq("pricing_status","verified")
+        .returns<TrustedPricingSnapshot[]>();
+      if(verifiedPriceError)throw new Error(verifiedPriceError.message);
+      const verifiedById=new Map((verifiedPrices??[]).map(row=>[row.normalized_model_id,row]));
       const rows = discovered.filter(modelId=>!quarantinedIds.has(normalizeModelId(modelId)))
-        .map((modelId) => enrichModelRecord(provider.name, modelId, pricingCatalog, nowIso));
+        .map((modelId) => retainTrustedPricing(
+          enrichModelRecord(provider.name,modelId,pricingCatalog,nowIso),
+          verifiedById.get(normalizeModelId(modelId)),nowIso));
 
       const probeCandidate = (quarantined ?? []).find(row => discovered.some(id => normalizeModelId(id) === row.normalized_model_id)
         && (!row.last_exception_at || Date.now()-new Date(row.last_exception_at).getTime() >= 60*60*1000));
