@@ -44,7 +44,7 @@ export async function runNonFullAuthorizedHost({
    });
    results.push({phase,code});
    onEvent({phase,code});
-   if(code!==0)throw Error('NONFULL_HOST_PHASE_FAILED:'+phase+':'+error.slice(-200));
+   if(code!==0)throw Error('NONFULL_HOST_PHASE_FAILED:'+phase+':'+error.slice(-1600));
   }
   return {arm,trialId,grantId,phases:results,accepted:false,
    receiptStatus:'REQUIRES_INDEPENDENT_DATABASE_RECONCILIATION'};
