@@ -61,11 +61,11 @@ export function runNodeFile(file, reportPath, options = {}) {
 
 function runVitest(files, reportPath) {
   const result = execute(["node_modules/vitest/vitest.mjs", "run", ...files,
-    "--maxWorkers=2", "--minWorkers=1", "--allowOnly=false", "--reporter=json", `--outputFile=${reportPath}`]);
+    "--maxWorkers=2", "--minWorkers=1", "--allowOnly=false", "--reporter=json", `--outputFile=${reportPath}`], { timeout: 300_000 });
   process.stdout.write(result.stdout ?? "");
   process.stderr.write(result.stderr ?? "");
   if (result.error || result.signal || result.status !== 0 || !existsSync(reportPath)) {
-    throw new Error("Vitest failed or did not produce a completion report", { cause: result.error });
+    throw new Error(`Vitest failed: status=${result.status} signal=${result.signal} error=${result.error?.message ?? "none"} report=${existsSync(reportPath)}`, { cause: result.error });
   }
   const report = JSON.parse(readFileSync(reportPath, "utf8"));
   const actual = report.testResults.map(test => relative(root, test.name)).sort();
