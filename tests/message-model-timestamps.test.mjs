@@ -15,8 +15,9 @@ test("provider history retains persisted timestamps as model-visible context", (
   assert.match(route, /Number\.isFinite\(Date\.parse\(createdAt\)\)/);
 });
 
-test("current message includes a freshly computed server timestamp", () => {
-  assert.match(route, /user: `\[Current message timestamp: \$\{new Date\(\)\.toISOString\(\)\}\]/);
+test("current timestamp is generated for the system context without rewriting user text", () => {
+  assert.match(route, /CURRENT_REQUEST_TIMESTAMP_UTC: \$\\{new Date\\(\\)\\.toISOString\\(\\)\\}/);
+  assert.match(route, /user: message,/);
 });
 
 test("all four provider families receive timestamped history and current message", () => {
