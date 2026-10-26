@@ -1,4 +1,6 @@
 create role service_role;
+create role anon;
+create role authenticated;
 create schema if not exists public;
 create table public.benchmark_three_arm_trials(
  id uuid primary key, arm text,state text,owner_actor_id uuid);
