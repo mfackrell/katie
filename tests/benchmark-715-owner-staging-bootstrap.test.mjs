@@ -1,6 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {frozenProtocol,protocolDigest,verifyOwnerEnvironment,bootstrap} from
+import {createHash} from 'node:crypto';
+import {readFileSync,readdirSync} from 'node:fs';
+import {resolve,join} from 'node:path';
+import {frozenProtocol,protocolDigest,verifyOwnerEnvironment,verifyCustomLedger,bootstrap} from
  '../scripts/benchmark/owner-staging-bootstrap.mjs';
 
 const uuid='aaaabbbb-cccc-4ddd-8eee-ffffffffffff';
@@ -39,6 +42,22 @@ test('one immutable baseline and protocol digest across arms',()=>{
   model_policy_sha256:p.model_policy_sha256,runtime_sha256:p.runtime_sha256},
  350000),/^[0-9a-f]{64}$/);
 });
+const dir=resolve('supabase/migrations');
+const ledgerFixture=()=>[
+ ...readdirSync(dir).filter(x=>x.endsWith('.sql')).sort().map(filename=>({
+  filename,checksum:createHash('sha256').update(readFileSync(join(dir,filename))).digest('hex')})),
+ {filename:'20261021121500_incomplete_game_review_recovery.sql',checksum:'a'.repeat(64)},
+ {filename:'20261021121600_resume_oversized_game_specification.sql',checksum:'b'.repeat(64)}
+];
+test('staging custom ledger validates file identity and exact checksum, never only count',()=>{
+ const good=ledgerFixture();
+ assert.equal(verifyCustomLedger(good),true);
+ for(const bad of [
+  good.slice(0,-1),
+  good.map((x,i)=>i===0?{...x,checksum:'0'.repeat(64)}:x),
+  good.map((x,i)=>i===0?{...x,filename:'forged.sql'}:x),
+ ])assert.throws(()=>verifyCustomLedger(bad),/DENIED/);
+});
 function fakeDb({priceStatus='verified',existingTrials=0,rows=117}={}){
  let sequence=0;
  const records={actors:[],chats:[],benchmark_three_arm_trials:[],
@@ -46,9 +65,10 @@ function fakeDb({priceStatus='verified',existingTrials=0,rows=117}={}){
  const db={from(table){
   return {
    select(_fields,options){
+    if(table==='schema_migrations')return {then:(resolve,reject)=>Promise.resolve({
+     data:ledgerFixture().slice(0,rows),error:null}).then(resolve,reject)};
     if(options?.head)return {then:(resolve,reject)=>Promise.resolve({
-     count:table==='schema_migrations'?rows:
-       table==='benchmark_three_arm_trials'?existingTrials:records[table]?.length,
+     count:table==='benchmark_three_arm_trials'?existingTrials:records[table]?.length,
      error:null}).then(resolve,reject)};
     return {eq:()=>({eq:()=>({maybeSingle:async()=>({
      data:{model_id:'gpt-5.3-codex',pricing_status:priceStatus,
