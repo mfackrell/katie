@@ -40,7 +40,7 @@ for(const arm of ['native','thin']){
   assert.equal(operations[0].args.p_digest,tokenDigest(grant.grantToken));
   const result=await forwardAuthorizedModelRequest({
    db,grantToken:grant.grantToken,trialId:grant.trialId,executionEpoch:grant.executionEpoch,
-   model:'synthetic',requestBody:{model:'synthetic'},upperTokens:20,
+   model:'synthetic',requestBody:{model:'synthetic'},upperTokens:10000,
    providerNamespace:'synthetic',fullMission:false,
    upstream:async()=>{providerCalls.push(1);return{providerRequestId:'provider-response',actualTokens:10,body:'{}'}},
    recordReceipt:grant.canonicalReceipt
@@ -73,7 +73,7 @@ test('real trusted HTTP gateway for Native denies unauthenticated requests and s
  let upstreamCount=0;
  const {server}=await createNonFullTrustedGateway({...fixtures('native'),db,
   tokenFactory:()=>('trusted-token-'+('z'.repeat(50))),
-  upperTokens:20,clientToken:'trusted-local-client-secret',
+  upperTokens:10000,clientToken:'trusted-local-client-secret',
   upstream:async()=>{upstreamCount++;return {providerRequestId:'synthetic-receipt-1',
    actualTokens:10,contentType:'application/json',body:JSON.stringify({id:'fixture'})}}
  });
