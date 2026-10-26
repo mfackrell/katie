@@ -42,6 +42,8 @@ jobs:
           node --check scripts/benchmark/native-dispatch-contract.mjs
           node --test tests/benchmark-native-dispatch-contract.test.mjs tests/benchmark-native-developer-dispatch-workflow.test.mjs
       - name: Qualify real SDK four-phase metered lifecycle with synthetic responses
+        env:
+          KATIE_BENCHMARK_GATEWAY_DIAGNOSTICS: enabled
         run: node scripts/benchmark/native-four-phase-probe.mjs
       - name: Qualify all four real SDK phases inside isolated sandbox through trusted gateway
         run: node scripts/benchmark/native-four-phase-contained-host-probe.mjs
