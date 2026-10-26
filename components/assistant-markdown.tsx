@@ -4,18 +4,13 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
+import { remarkCurrencyProse } from "@/lib/chat/markdown-currency";
 
 /** One Markdown renderer for ordinary and interleaved assistant prose. */
-// Currency suffixes are ordinary prose, even when several amounts share a line.
-// Leave explicit math ($x^2$, $2+2$) and escaped currency untouched.
-export function escapeCurrencyAmounts(text: string): string {
-  return text.replace(/(?<![\\$])\$(?=\d[\d,]*(?:\.\d+)?[kKmMbB]\b)/g, "\\$");
-}
-
 export function AssistantMarkdown({ children }: { children: string }) {
   return (
     <ReactMarkdown
-      remarkPlugins={[remarkGfm, remarkMath]}
+      remarkPlugins={[remarkGfm, remarkMath, remarkCurrencyProse]}
       rehypePlugins={[rehypeKatex]}
       components={{
         h1: ({ children }) => (
@@ -101,7 +96,7 @@ export function AssistantMarkdown({ children }: { children: string }) {
         },
       }}
     >
-      {escapeCurrencyAmounts(children)}
+      {children}
     </ReactMarkdown>
   );
 }
