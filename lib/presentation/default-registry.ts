@@ -1,5 +1,5 @@
-import { PresentationRegistry } from "@/lib/presentation/registry";
-import { structuredResponseSchema, type StructuredResponse } from "@/lib/chat/structured-response";
+import { PresentationRegistry } from "./registry";
+import { structuredResponseSchema, type StructuredResponse } from "../chat/structured-response";
 
 /**
  * Single registered implementation for the initial visual-components package.
