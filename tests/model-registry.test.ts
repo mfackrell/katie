@@ -126,7 +126,7 @@ test("trusted official pricing survives refresh only while both rates agree and 
   const preserved=retainTrustedPricing(fresh,prior,now);
   assert.equal(preserved.pricing_status,"verified");
   assert.equal(preserved.pricing_verified_at,prior.pricing_verified_at);
-  assert.equal(preserved.source_metadata.pricing_verification_source,prior.source_metadata.pricing_verification_source);
+  assert.equal((preserved.source_metadata as Record<string,unknown>).pricing_verification_source,prior.source_metadata.pricing_verification_source);
   for(const changed of [
     {prior:{...prior,pricing_verified_at:"2026-10-24T19:34:14Z"}},
     {prior:{...prior,source_metadata:{}}},
