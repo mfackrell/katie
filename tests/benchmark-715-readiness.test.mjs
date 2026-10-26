@@ -7,8 +7,11 @@ const good={
  branchStatus:'FUNCTIONS_DEPLOYED',benchmarkSchemaPresent:true,stagingSeparateFromProduction:true,
  contractHashVerified:true,acceptanceHashVerified:true,baselineSha:manifest.baselineSha,
  modelAndToolsMatched:true,verifiedModel:manifest.model,priceCeilingVerified:true,
+ priceCeilingMicrosPerMillion:14_000_000,publishedInputUsdPerMillion:'1.75',
+ publishedOutputUsdPerMillion:'14',
  arms:['native','thin','full'].map(arm=>({arm,trialRecorded:true,accountRecorded:true,
- ownerApprovalRecorded:true,deadlineVerified:true,hardUsdCapCents:1000,revocationVerified:true})),
+ ownerApprovalRecorded:true,deadlineVerified:true,hardUsdCapCents:1000,
+ accountTokens:700_000,approvalTokens:700_000,revocationVerified:true})),
  ownerOnlyDispatchVerified:true,durableCheckpointVerified:true,
  privateBrowserVerifierReady:true,independentEvidenceVerifierReady:true,
  canonicalReceiptPathVerified:true
@@ -35,4 +38,24 @@ test('one missing arm approval, USD cap mismatch or broken parity blocks launch'
 test('cannot enlarge $30 owner approval by modifying launch manifest',()=>{
  const changed={...manifest,totalUsdCeilingCents:5000};
  assert.equal(validateLaunchReadiness(changed,good).ready,false);
+});
+
+test('a different baseline or original contract cannot masquerade as approved Take Eleven',()=>{
+ for(const changed of [
+ {...manifest,baselineSha:'f'.repeat(40)},
+ {...manifest,contractIssue:999}
+ ])assert.equal(validateLaunchReadiness(changed,{...good,baselineSha:changed.baselineSha}).ready,false);
+});
+test('a verified price flag alone does not authorize unbounded token accounts',()=>{
+ for(const evidence of [
+ {...good,priceCeilingMicrosPerMillion:undefined},
+ {...good,publishedOutputUsdPerMillion:'15'},
+ {...good,arms:good.arms.map((a,i)=>i===0?{...a,accountTokens:800_000}:a)},
+ {...good,arms:good.arms.map((a,i)=>i===1?{...a,approvalTokens:800_000}:a)},
+ {...good,arms:good.arms.map((a,i)=>i===2?{...a,approvalTokens:undefined}:a)}
+ ]) {
+  const result=validateLaunchReadiness(manifest,evidence);
+  assert.equal(result.ready,false);
+  assert.ok(result.blockers.includes('pricing'));
+ }
 });
