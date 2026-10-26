@@ -11,9 +11,9 @@ test('real local HTTP POST traverses durable reservation and trusted receipt',as
  const server=createNativeHttpBridge({db,
   grantToken:'synthetic-'+('z'.repeat(48)),trialId:'trial',executionEpoch:1,
   providerNamespace:'fixture',upperTokens:100,clientToken:'synthetic-fixture-token',
-  upstream:async body=>{provider++;assert.equal(body.model,'fixture');
+  upstream:Object.assign(async body=>{provider++;assert.equal(body.model,'fixture');
    return {providerRequestId:'provider-1',actualTokens:10,
-    body:JSON.stringify({id:'response-1',status:'completed'})};},
+    body:JSON.stringify({id:'response-1',status:'completed'})};},{nonbillableFixture:true}),
   recordReceipt:async receipt=>receipts.push(receipt)
  });
  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
