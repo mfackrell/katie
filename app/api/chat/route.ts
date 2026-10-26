@@ -38,6 +38,7 @@ import { assembleContext } from "@/lib/memory/assemble-context";
 import { loadVisualContinuity, storeVisualAnchor, verifyVisualContinuity } from "@/lib/chat/visual-continuity";
 import { maybeUpdateSummary } from "@/lib/memory/summarizer";
 import { maybeUpdateLongTermMemory } from "@/lib/memory/long-term-editor";
+import { maybeRunThirtyMessageCleanup } from "@/lib/memory/long-term-maintenance";
 import { getChatById, listChatsByActorId, getMessages, getRecentMessages, saveMessage, getMessageById } from "@/lib/data/persistence-store";
 import {
   claimChatRequest,
@@ -3377,13 +3378,16 @@ ${chunkWorkflowSummary}`;
                 const memoryResults = await Promise.allSettled([
                   maybeUpdateLongTermMemory(actorId, chatId, message),
                   maybeUpdateSummary(chatId),
+                  maybeRunThirtyMessageCleanup(actorId),
                 ]);
                 memoryResults.forEach((memoryResult, index) => {
                   if (memoryResult.status === "rejected") {
                     console.error(
                       index === 0
                         ? "[Chat API] Long-Term Memory Update Error:"
-                        : "[Chat API] Intermediate Memory Update Error:",
+                        : index === 1
+                          ? "[Chat API] Intermediate Memory Update Error:"
+                          : "[Chat API] LTM Cleanup Error:",
                       memoryResult.reason,
                     );
                   }
