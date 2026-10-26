@@ -65,6 +65,27 @@ function runVitest(files, reportPath) {
   process.stdout.write(result.stdout ?? "");
   process.stderr.write(result.stderr ?? "");
   if (result.error || result.signal || result.status !== 0 || !existsSync(reportPath)) {
+    if (existsSync(reportPath)) {
+      try {
+        const diagnostics = JSON.parse(readFileSync(reportPath, "utf8"));
+        console.error("Vitest failure summary:", JSON.stringify({
+          total: diagnostics.numTotalTests,
+          passed: diagnostics.numPassedTests,
+          failed: diagnostics.numFailedTests,
+          pending: diagnostics.numPendingTests,
+          errors: diagnostics.testResults?.filter(test => test.status !== "passed").map(test => ({
+            file: relative(root, test.name),
+            status: test.status,
+            errors: test.message,
+            failures: test.assertionResults?.filter(a => a.status !== "passed").map(a => ({
+              title: a.fullName, message: a.failureMessages?.slice(0, 2),
+            })),
+          })),
+        }).slice(0, 16000));
+      } catch (diagnosticError) {
+        console.error("Vitest diagnostics unavailable:", diagnosticError);
+      }
+    }
     throw new Error(`Vitest failed: status=${result.status} signal=${result.signal} error=${result.error?.message ?? "none"} report=${existsSync(reportPath)}`, { cause: result.error });
   }
   const report = JSON.parse(readFileSync(reportPath, "utf8"));
