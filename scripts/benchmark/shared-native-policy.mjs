@@ -30,3 +30,19 @@ export function assertNativeEffectivePolicy({gateway,model,arm,phase}){
   throw Error('NATIVE_EFFECTIVE_POLICY_DENIED');
  return NATIVE_RUNTIME_POLICY;
 }
+
+export function assertNativeRequestTools(body){
+ if(!body||typeof body!=='object'||Array.isArray(body)||typeof body.model!=='string')
+  throw Error('NATIVE_REQUEST_INVALID');
+ if(body.tools!==undefined){
+  if(!Array.isArray(body.tools)||body.tools.length>100)
+   throw Error('NATIVE_TOOLS_INVALID');
+  for(const tool of body.tools){
+   // Codex-native function/custom tool calls execute in the contained worker.
+   // Provider-hosted network, MCP, browser and external shell tools are denied.
+   if(!tool||!['function','custom'].includes(tool.type))
+    throw Error('NATIVE_REMOTE_PROVIDER_TOOL_DENIED');
+  }
+ }
+ return true;
+}
