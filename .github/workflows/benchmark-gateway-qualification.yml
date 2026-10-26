@@ -35,6 +35,7 @@ jobs:
       - name: Qualify Native Thin shared trusted host and actual SDK grant-to-receipt flow
         env:
           KATIE_BENCHMARK_GATEWAY_DIAGNOSTICS: enabled
+          KATIE_REQUIRE_NATIVE_BWRAP: '1'
         run: node --test tests/benchmark-nonfull-trusted-host.test.mjs
       - name: Qualify separated gateway host and isolated SDK over Unix socket
         run: node scripts/benchmark/external-native-gateway-host-probe.mjs
