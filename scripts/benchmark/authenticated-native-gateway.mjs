@@ -40,10 +40,25 @@ export async function forwardAuthorizedModelRequest({
   if(body.input!==undefined&&typeof body.input!=='string'&&!Array.isArray(body.input))throw Error('GATEWAY_UNBOUNDED_INPUT_DENIED');
   const parts=Array.isArray(body.input)?body.input:[];
   for(const item of parts){
-   if(!item||typeof item!=='object'||!['user','assistant','developer','system','tool'].includes(item.role)||!Array.isArray(item.content))
+   if(!item||typeof item!=='object'||Array.isArray(item))throw Error('GATEWAY_UNBOUNDED_INPUT_DENIED');
+   if(item.type==='custom_tool_call'){
+    if(!Object.keys(item).every(k=>['type','call_id','name','input','status','id'].includes(k))||
+      typeof item.call_id!=='string'||typeof item.name!=='string'||typeof item.input!=='string')
+     throw Error('GATEWAY_UNBOUNDED_INPUT_DENIED');
+    continue;
+   }
+   if(item.type==='custom_tool_call_output'){
+    if(!Object.keys(item).every(k=>['type','call_id','output'].includes(k))||
+      typeof item.call_id!=='string'||typeof item.output!=='string')
+     throw Error('GATEWAY_UNBOUNDED_INPUT_DENIED');
+    continue;
+   }
+   if(!['user','assistant','developer','system','tool'].includes(item.role)||!Array.isArray(item.content)||
+     !Object.keys(item).every(k=>['role','content','type','status'].includes(k)))
     throw Error('GATEWAY_UNBOUNDED_INPUT_DENIED');
    for(const part of item.content){
-    if(!part||!['input_text','output_text','text'].includes(part.type)||typeof part.text!=='string')
+    if(!part||!['input_text','output_text','text'].includes(part.type)||typeof part.text!=='string'||
+       !Object.keys(part).every(k=>['type','text'].includes(k)))
      throw Error('GATEWAY_UNBOUNDED_INPUT_DENIED');
    }
   }
