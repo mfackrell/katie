@@ -2,6 +2,7 @@ import {createHash} from 'node:crypto';
 import {getSupabaseAdminClient} from '@/lib/data/supabase/admin';
 import {estimateProjectResources} from './resource-forecast.mjs';
 import {validateProjectPlan} from './contract';
+import {loadSpecificationRecovery,specificationProjectAdmission} from './specification-recovery';
 import type {Project} from './store';
 
 type Usage={actual_tokens:number|null;reserved_tokens:number|null;project_kind:string};
@@ -15,16 +16,15 @@ export async function recoveryResourceProposal(p:Project) {
  const {data:drafts,error:de}=await db.from('project_runs').select('mission_id').eq('project_id',p.id).eq('kind','specification').order('created_at',{ascending:false}).limit(10).returns<{mission_id:string}>();
  if(de)throw Error('Cannot read saved specification lineage');
  let spec=p.spec;
- if(!spec) for(const run of drafts??[]){
-   const {data:jobs,error:je}=await db.from('mission_assignments').select('result').eq('mission_id',run.mission_id).in('role',['revise','compose']).eq('status','completed').order('created_at',{ascending:false}).limit(5).returns<{result:{text?:string}}>();
-   if(je)throw Error('Cannot read saved composition');
-   try {for(const job of jobs??[]){if(!job.result?.text)continue;try{spec=validateProjectPlan(JSON.parse(job.result.text));break;}catch{/* Try next preserved candidate. */}}if(spec)break;}catch{/* a rejected draft is not approved scope */}
+ if(!spec){
+  const recovery=await loadSpecificationRecovery(p.id,(drafts??[]).map(r=>({...r,kind:'specification'})),`ORIGINAL USER OUTCOME (must remain authoritative):\n${p.objective}\n${p.clarifications}`);
+  if(recovery.checkpoint)spec=validateProjectPlan(JSON.parse(recovery.checkpoint.text));
  }
  // The developer must not invent a financial estimate from an invalid specification.
  if(!spec)return {state:'needs_specialist_estimate' as const,used,authorized:p.token_allowance,remaining:Math.max(0,p.token_allowance-used),reason:'No validated, source-grounded specification for resource planning'};
  const forecast=estimateProjectResources(spec,p.objective+' '+p.clarifications);
  // Forecast remaining scope independently; prior usage is not an estimate of future cost.
- const pending=forecast.totals.upperTokens;
+ const pending=Math.max(forecast.totals.upperTokens,specificationProjectAdmission(true,spec.milestones.length).requiredTokens);
  const expected=forecast.totals.expectedTokens;
  const ceiling=Math.ceil((used+pending)/1000)*1000;
  const scopeHash=hash(JSON.stringify({projectId:p.id,missionId:p.active_mission_id,used,authorized:p.token_allowance,scope:spec,forecast:forecast.totals}));

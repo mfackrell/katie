@@ -13,6 +13,7 @@ import { dispatchDevelopment,reconcileDevelopment,developmentEvidence } from '@/
 import type { AgentTask } from '@/lib/agents/policy';
 import { missionModel,MissionModelFailure } from './model';
 import {fitsMissionEnvelope,missionInputLimit} from './request-budget';
+import {specificationCandidateEvidence} from '@/lib/projects/specification-recovery';
 import { rpc,readMission } from './store';
 import {encodeOperationalEvidence} from './operational-evidence';
 import {applyMissionRevisionPatch,recoverMissionRevisionPatch,recoverMissionRevisionPrefix} from './revision-patch';
@@ -45,7 +46,8 @@ export async function executeClaim(claim:Claim,model=missionModel){
  const sourceGroups=sourceReports?executiveSourceGroups(sourceReports):[];
  if(sourceReports)mission.project_evidence={...((mission.project_evidence??{}) as Record<string,unknown>),executiveSources:executiveSourceManifest(sourceReports)};
  const completed=saved.jobs.filter(j=>j.status==='completed');
- const priorReviews=completed.filter(j=>j.role==='review').map(j=>({key:j.job_key,verdict:j.result?.verdict,findings:j.result?.findings,checks:j.result?.checks,clarification:j.result?.clarification}));
+ const recoveredReviews=(mission.project_evidence as {specificationRecovery?:{priorReviews?:Array<Record<string,unknown>>}}|null)?.specificationRecovery?.priorReviews??[];
+ const priorReviews=completed.filter(j=>j.role==='review').map(j=>({recovered:false,key:j.job_key,verdict:j.result?.verdict,findings:j.result?.findings??j.result?.summary,checks:j.result?.checks,clarification:j.result?.clarification})).concat(recoveredReviews.map(r=>({recovered:true,key:String(r.sourceJobId),verdict:r.verdict,findings:r.findings??r.summary,...(r.findings&&r.summary?{summary:r.summary}:{}),checks:r.failedChecks,clarification:r.clarification})));
  const revisionFindings=priorReviews.map(({checks,...rest})=>({...rest,checkCount:Array.isArray(checks)?checks.length:0,failedChecks:Array.isArray(checks)?checks.filter((c:Record<string,unknown>)=>c.passed===false).map((c:Record<string,unknown>)=>({id:c.id,evidence:typeof c.evidence==='string'?c.evidence.slice(0,500):undefined})):[]}));
  const candidateEvidence=(result:Record<string,unknown>|null|undefined)=>{
   if(mission.project_kind!=='specification'||(mission.project_evidence as {projectProfile?:string}|null)?.projectProfile!=='game'||typeof result?.text!=='string'){
@@ -53,7 +55,7 @@ export async function executeClaim(claim:Claim,model=missionModel){
    const evidence={...result};delete evidence.routingReason;delete evidence.attemptedModels;delete evidence.composerNotes;delete evidence.revisionPatch;delete evidence.recoveredPatch;
    return evidence; // Transport diagnostics remain saved; all substantive evidence stays verbatim.
   }
-  try{const plan=validateProjectPlan(parseJSON(result.text));if(!plan.game)return result;const metadata={...result};delete metadata.text;return{...metadata,specification:gameSpecificationView(plan),fullSpecificationHash:digest(plan),referenceNote:'Server-validated lossless view. contractRef and stepsRef resolve to the identical full finalContract below. Every original rule, model state, browser step and unique milestone contract is retained; the complete expanded original stays saved.'};}catch{return result;}
+  return specificationCandidateEvidence(result);
  };
  const repair=()=>{
   if(mission.project_kind!=='specification'||(mission.project_evidence as {projectProfile?:string}|null)?.projectProfile!=='game'||typeof job.result?.rejectedSpecification!=='string')return undefined;
@@ -76,14 +78,14 @@ export async function executeClaim(claim:Claim,model=missionModel){
      :(()=>{const raw=researchRecoveryEvidence(mission.project_evidence,false);
        if(!raw||typeof raw!=='object'||Array.isArray(raw))return raw;
        return Object.fromEntries(Object.entries(raw as Record<string,unknown>)
-         .filter(([key])=>key!=='savedSpecificationCheckpoint'));})()),assignedSourceGroup:typeof job.payload.executiveSourceGroup==='number'?sourceGroups[job.payload.executiveSourceGroup]:undefined,rejectedDraft,coverageRepair,assignment:job.instruction,deliverableLengthFeedback:job.result?.deliverableLengthFeedback,rejectedDeliverable:job.result?.rejectedDeliverable,revisionPatchFeedback:job.result?.revisionPatchFeedback,sourceDigestContractFeedback:job.result?.sourceDigestContractFeedback,specificationValidationFeedback:job.result?.specificationValidationFeedback,priorReviewFindings:job.role==='revise'?revisionFindings:undefined,evidence:completed.filter(j=>j.role!=='plan'&&j.role!=='review'&&(job.role!=='work'||job.dependencies.includes(j.job_key))).map(j=>({key:j.job_key,instruction:j.instruction,result:candidateEvidence(j.result)}))};
+         .filter(([key])=>!['savedSpecificationCheckpoint','specificationRecovery'].includes(key)));})()),assignedSourceGroup:typeof job.payload.executiveSourceGroup==='number'?sourceGroups[job.payload.executiveSourceGroup]:undefined,rejectedDraft,coverageRepair,assignment:job.instruction,deliverableLengthFeedback:job.result?.deliverableLengthFeedback,rejectedDeliverable:job.result?.rejectedDeliverable,revisionPatchFeedback:job.result?.revisionPatchFeedback,sourceDigestContractFeedback:job.result?.sourceDigestContractFeedback,specificationValidationFeedback:job.result?.specificationValidationFeedback,priorReviewFindings:job.role==='revise'?revisionFindings:undefined,evidence:completed.filter(j=>j.role!=='plan'&&j.role!=='review'&&(job.role!=='work'||job.dependencies.includes(j.job_key))).map(j=>({key:j.job_key,instruction:j.instruction,result:candidateEvidence(j.result)}))};
   // Keep the complete rejected draft in storage, never let it crowd the original
   // requirements out of a bounded repair request. Diagnostics remain actionable.
   const suffix='';
-  if(rejectedDraft&&JSON.stringify(data).length+suffix.length>48000){
+  if(rejectedDraft&&JSON.stringify(data).length+suffix.length>missionInputLimit(claim)){
    const compact={...data,coverageRepair,rejectedDraft:{status:rejectedDraft.status,specificationOmitted:true,assessmentCapacity:rejectedDraft.assessmentCapacity,allowedRuleCategories:GAME_RULE_CATEGORIES,missingRuleCoverage:rejectedDraft.missingRuleCoverage,currentValidation:rejectedDraft.currentValidation.slice(0,600),uniqueCharacters:rejectedDraft.uniqueCharacters,uniqueCharacterLimit:40000,omissionReason:'The full rejected draft remains saved. Restore its existing scenarios rather than inventing coverage; use coverageRepair.requiredCoverage to produce genuine new assertions. Regenerate only if input limits prevent preserving the draft.'}};
    const compactText=JSON.stringify(compact);
-   if(compactText.length+suffix.length>48000)throw new MissionModelFailure('Specification repair context exceeds 48,000 characters even without the rejected draft; original requirements and saved draft retained for scope clarification.',{repairContextOverflow:true,specificationValidationFeedback:job.result?.specificationValidationFeedback,rejectedSpecification:job.result?.rejectedSpecification});
+   if(compactText.length+suffix.length>missionInputLimit(claim))throw new MissionModelFailure('Specification repair context exceeds the phase-specific bounded envelope even without the rejected draft; original requirements and saved draft retained for scope clarification.',{repairContextOverflow:true,specificationValidationFeedback:job.result?.specificationValidationFeedback,rejectedSpecification:job.result?.rejectedSpecification});
    return compactText;
   }
   return JSON.stringify(encodeOperationalEvidence(data));
@@ -114,18 +116,25 @@ export async function executeClaim(claim:Claim,model=missionModel){
  }
  // A project recovery may point to a server-verified saved composition.
  // This avoids paying for another draft; independent review still executes.
- if(job.role==='compose'&&mission.project_kind==='specification'&&
-    (mission.project_evidence as {projectProfile?:string}|null)?.projectProfile==='game'){
-   const checkpoint=(mission.project_evidence as {savedSpecificationCheckpoint?:{text?:string;status?:string}}|null)?.savedSpecificationCheckpoint;
-   if(checkpoint?.status==='unreviewed'&&typeof checkpoint.text==='string'){
+ if(job.role==='compose'&&mission.project_kind==='specification'){
+   const checkpoint=(mission.project_evidence as {savedSpecificationCheckpoint?:{text?:string;status?:string;sourceMissionId?:string;sourceJobId?:string;fullSpecificationHash?:string}}|null)?.savedSpecificationCheckpoint;
+   if(checkpoint?.status==='unreviewed'){
+     let candidate;
      try{
-       const candidate=validateProjectPlan(parseJSON(checkpoint.text));
-       if(candidate.game){
-         await commit({text:JSON.stringify(candidate),sources:[],calculations:[],
-           recovery:{kind:'saved_composition_checkpoint',freshReviewRequired:true}});
-         return;
+       let text=checkpoint.text;
+       if(typeof text!=='string'){
+         if(!checkpoint.sourceMissionId||!checkpoint.sourceJobId)throw Error('Checkpoint reference missing');
+         const prior=await readMission(checkpoint.sourceMissionId);
+         const source=prior.jobs.find(j=>j.id===checkpoint.sourceJobId&&j.status==='completed'&&['compose','revise'].includes(j.role));
+         if(prior.mission.project_id!==mission.project_id||prior.mission.project_kind!=='specification'||typeof source?.result?.text!=='string')throw Error('Checkpoint source does not belong to this project');
+         text=source.result.text;
        }
-     }catch{/* Invalid checkpoint: compose again against the original objective. */}
+       candidate=validateProjectPlan(parseJSON(text));
+       if((mission.project_evidence as {projectProfile?:string}|null)?.projectProfile==='game'&&!candidate.game)throw Error('Game checkpoint is missing its game contract');
+       if(checkpoint.fullSpecificationHash&&digest(candidate)!==checkpoint.fullSpecificationHash)throw Error('Checkpoint content hash changed');
+     }catch(error){throw new MissionModelFailure('Saved specification checkpoint no longer validates; regeneration is not authorized.',{checkpointInvalid:true,sourceCheckpoint:checkpoint,validation:error instanceof Error?error.message:String(error)});}
+     await commit({text:JSON.stringify(candidate),sources:[],calculations:[],recovery:{kind:'saved_composition_checkpoint',freshReviewRequired:true}});
+     return;
    }
  }
  // After a platform validation fix, reuse a now-valid saved draft rather than
@@ -244,31 +253,33 @@ export async function executeClaim(claim:Claim,model=missionModel){
   const measured=measureDeliverable(mission.objective,String(target.result.text??target.result.output??''));
   const gameReview=mission.project_kind==='specification'&&(mission.project_evidence as {projectProfile?:string}|null)?.projectProfile==='game';
   const persisted=researchRecoveryEvidence(mission.project_evidence,false);
-  // Saved reviewed research, rejected drafts and prior review receipts stay in
-  // storage. The independent reviewer receives only source IDs and the CURRENT
-  // complete candidate (in a lossless contract view) without repeated drafts.
+  // Supply historical findings once in priorFindings for every specification
+  // profile. Hydration transport and earlier drafts remain in durable records;
+  // the reviewer receives the complete current candidate and reviewed research.
   const reviewEvidence=gameReview&&persisted&&typeof persisted==='object'
     ?(()=>{const e=persisted as Record<string,unknown>;
       const research=e.reviewedResearch as {reviewedMissionId?:string}|undefined;
       const recovery=e.recoveryCoverage as {sourceMissionId?:string;findings?:string}|undefined;
-      return {projectProfile:'game',reviewedResearchMissionId:research?.reviewedMissionId,
+      return {projectProfile:'game',reviewedResearch:e.reviewedResearch,reviewedResearchMissionId:research?.reviewedMissionId,
         recoverySourceMissionId:recovery?.sourceMissionId,recoveryValidationFindings:recovery?.findings,
-        originalEvidence:'Full original research and previous drafts retained in durable mission records'};
+        originalEvidence:'The full reviewed research is included; earlier drafts remain in durable mission records'};
      })()
-    :persisted;
+    :mission.project_kind==='specification'&&persisted&&typeof persisted==='object'&&!Array.isArray(persisted)
+      ?Object.fromEntries(Object.entries(persisted as Record<string,unknown>).filter(([key])=>!['savedSpecificationCheckpoint','specificationRecovery'].includes(key)))
+      :persisted;
   const reviewPayload={objective:mission.objective,projectEvidence:reviewEvidence,
     candidate:{key:target.job_key,result:candidateEvidence(target.result)},
     measuredLength:measured,
     evidence:completed.filter(x=>x.role==='work'||x.role==='development').map(x=>({key:x.job_key,result:candidateEvidence(x.result)})),
     fullSourceChecks:sourceGroups.length?job.result?.sourceChecks:undefined,
-    priorFindings:sourceGroups.length?priorReviews.map(({checks,...rest})=>({...rest,priorCheckCount:Array.isArray(checks)?checks.length:0})):gameReview?priorReviews.map(({checks,...rest})=>({...rest,priorCheckCount:Array.isArray(checks)?checks.length:0})):priorReviews.map(({checks,...rest})=>({...rest,priorCheckCount:Array.isArray(checks)?checks.length:0,failedChecks:Array.isArray(checks)?checks.filter((c:Record<string,unknown>)=>c.passed!==true):[]}))};
+    priorFindings:sourceGroups.length?priorReviews.map(({checks,...rest})=>({...rest,priorCheckCount:Array.isArray(checks)?checks.length:0})):gameReview?priorReviews.map(({checks,...rest})=>({...rest,priorCheckCount:Array.isArray(checks)?checks.length:0,failedChecks:Array.isArray(checks)?checks.filter((c:Record<string,unknown>)=>c.passed!==true&&(rest.recovered||PROJECT_ACCEPTANCE_IDS.includes(String(c.id)))):[]})):priorReviews.map(({checks,...rest})=>({...rest,priorCheckCount:Array.isArray(checks)?checks.length:0,failedChecks:Array.isArray(checks)?checks.filter((c:Record<string,unknown>)=>c.passed!==true):[]}))};
   const reviewFrame=frame+'\n'+(projectReview?PROJECT_REVIEW_INSTRUCTION:REVIEW_INSTRUCTION)+(gameReview?
     '\nGAME REVIEW REFERENCE SEMANTICS: contractRef and stepsRef are server-validated lossless views of duplicate contracts; inspect candidate.specification.finalContract for full steps. Evaluate this CURRENT candidate independently. The prior draft and charges remain saved.':'')+
     '\nREVIEW TIMING: You are performing the current independent review. A prior blocked review or a draft-stage pending-review label is not evidence that this current review is missing; determine approval from the full candidate, actual sources and acceptance checks. Do not require your own successful verdict to exist before you can issue it. Never accept a false claim that earlier review passed.\nMEASURED LENGTH: The supplied measuredLength is computed by code from the entire candidate. Use it for length compliance; never estimate a conflicting count. Distinguish true acceptance failures from formatting preferences.';
   const reviewInput='Independent assessment:\n'+JSON.stringify(assessment)+
     '\nRequired acceptance IDs:\n'+JSON.stringify(projectReview?PROJECT_ACCEPTANCE_IDS:acceptanceIds(assessment))+
     '\nEvidence and candidate:\n'+JSON.stringify(encodeOperationalEvidence(reviewPayload));
-  // The mission runner's 48K input envelope excludes its system instruction.
+  // The mission runner's bounded input envelope excludes its system instruction.
   // Apply the same envelope here; count BOTH fields with the provider before
   // reservation. Do not confuse characters with tokens or delete acceptance.
   if(!fitsMissionEnvelope(reviewFrame,reviewInput,missionInputLimit(claim)))
