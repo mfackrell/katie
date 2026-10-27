@@ -72,10 +72,10 @@ export function createClaudeMemoryClient() {
     const transport = new OpenAI({
       apiKey,
       baseURL: "https://api.anthropic.com/v1",
-      defaultHeaders: { "x-api-key": apiKey, "anthropic-version": "2023-06-01" },
+      defaultHeaders: { Authorization: null, "x-api-key": apiKey, "anthropic-version": "2023-06-01" },
     });
     return { chat: { completions: { async create(params: MemoryRequest) {
-      const result = await transport.post<ClaudeResponse>("/messages", {
+      const result = await transport.post<Record<string, unknown>, ClaudeResponse>("/messages", {
         body: {
           model: params.model,
           max_tokens: 16_384,
