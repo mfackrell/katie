@@ -532,7 +532,9 @@ export class OpenAiProvider implements LlmProvider {
       } catch (error: unknown) {
         lastError = error;
         console.warn("[OpenAiProvider] streaming_attempt_failed", { model:selectedModel, endpoint:classification.endpoint,
-          status: error && typeof error === "object" && "status" in error ? (error as {status:unknown}).status : null });
+          status: error && typeof error === "object" && "status" in error ? (error as {status:unknown}).status : null,
+          code: error && typeof error === "object" && "code" in error && typeof (error as {code:unknown}).code === "string" ? (error as {code:string}).code.slice(0,100) : null,
+          type: error && typeof error === "object" && "type" in error && typeof (error as {type:unknown}).type === "string" ? (error as {type:string}).type.slice(0,100) : null });
       }
     }
 
@@ -584,7 +586,9 @@ export class OpenAiProvider implements LlmProvider {
       } catch (error: unknown) {
         lastError = error;
         console.warn("[OpenAiProvider] attempt_failed", { model:selectedModel, endpoint:classification.endpoint,
-          status: error && typeof error === "object" && "status" in error ? (error as {status:unknown}).status : null });
+          status: error && typeof error === "object" && "status" in error ? (error as {status:unknown}).status : null,
+          code: error && typeof error === "object" && "code" in error && typeof (error as {code:unknown}).code === "string" ? (error as {code:string}).code.slice(0,100) : null,
+          type: error && typeof error === "object" && "type" in error && typeof (error as {type:unknown}).type === "string" ? (error as {type:string}).type.slice(0,100) : null });
       }
     }
 
