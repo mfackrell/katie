@@ -12,7 +12,7 @@ test("intermediate memory has sufficient response budget and bounded batches", (
   assert.match(source, /offset < SUMMARY_BATCH_MESSAGES \* 3/);
 });
 test("incomplete summaries do not commit, and retry with smaller batch", () => {
-  assert.match(source, /choice\?\.finish_reason !== "stop" \|\| !summary/);
+  assert.match(source, /response\.stop_reason !== "end_turn" \|\| !summary/);
   assert.match(source, /size = Math.min\(10, size\)/);
   assert.ok(source.indexOf("candidate = await summarizeInto") < source.indexOf('rpc("commit_intermediate_memory_checkpoint"'));
 });
