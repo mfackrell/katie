@@ -6,6 +6,7 @@ on:
       - 'supabase/migrations/*benchmark*'
       - '.github/workflows/benchmark-gateway-qualification.yml'
   workflow_dispatch:
+  workflow_call:
 jobs:
   native-gateway:
     runs-on: ubuntu-latest

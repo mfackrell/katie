@@ -1,0 +1,61 @@
+name: Benchmark 715 production owner qualification
+on:
+  workflow_dispatch:
+    inputs:
+      authorize:
+        description: 'Transfer unused #715 authorization to production: $30 total, $10 and 350000 tokens per arm, 4 hours. No game publication or task approval.'
+        required: true
+        type: boolean
+        default: false
+permissions:
+  contents: read
+  actions: read
+  issues: read
+concurrency:
+  group: benchmark-715-production-owner-qualification
+  cancel-in-progress: false
+jobs:
+  qualify_gateway:
+    if: >-
+      ${{ inputs.authorize == true && github.repository == 'mfackrell/katie' &&
+          github.actor == 'mfackrell' && github.triggering_actor == 'mfackrell' &&
+          github.ref == 'refs/heads/main' }}
+    uses: ./.github/workflows/benchmark-gateway-qualification.yml
+  qualify:
+    needs: qualify_gateway
+    if: >-
+      ${{ inputs.authorize == true && github.repository == 'mfackrell/katie' &&
+          github.actor == 'mfackrell' && github.triggering_actor == 'mfackrell' &&
+          github.ref == 'refs/heads/main' }}
+    environment: benchmark-paid
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci --ignore-scripts
+      - name: Owner-authorized atomic transfer and production qualification
+        env:
+          KATIE_NATIVE_HANDOFF_HMAC_KEY: ${{ secrets.KATIE_NATIVE_HANDOFF_HMAC_KEY }}
+          KATIE_NONFULL_STAGING_CONFIRMED: ${{ secrets.KATIE_NONFULL_STAGING_CONFIRMED }}
+          KATIE_NONFULL_STAGING_SUPABASE_URL: ${{ secrets.KATIE_NONFULL_STAGING_SUPABASE_URL }}
+          KATIE_NONFULL_STAGING_SERVICE_ROLE_KEY: ${{ secrets.KATIE_NONFULL_STAGING_SERVICE_ROLE_KEY }}
+          KATIE_NONFULL_STAGING_OWNER_ID: ${{ secrets.KATIE_NONFULL_STAGING_OWNER_ID }}
+          GH_TOKEN: ${{ github.token }}
+          OPENAI_API_KEY: ''
+          CODEX_ACCESS_TOKEN: ''
+        run: node scripts/benchmark/production-owner-qualification-cli.mjs
+      - name: Preserve qualification or interrupted-transfer checkpoint
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-715-production-owner-qualification
+          path: |
+            ${{ runner.temp }}/benchmark-715-production-transfer.json
+            ${{ runner.temp }}/benchmark-715-production-qualification.json
+          if-no-files-found: warn
