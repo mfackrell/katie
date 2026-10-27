@@ -110,12 +110,125 @@ test('checkpoint references are hydrated and hash-checked without inference',asy
  await h.execute({mission:h.mission,job:compose},async()=>assert.fail('No regeneration'));
  assert.equal(h.commits.at(-1).p_result.text,JSON.stringify(JSON.parse(text)));
 });
-test('ordinary software specification recovery also reuses saved work without inference',async()=>{
+test('ordinary software specification recovery and full-history independent review fit without repeated evidence',async(t)=>{
  const plan=JSON.parse(revised.result.text);delete plan.game;
  const r=helper.selectSpecificationRecovery([{...revised,result:{text:JSON.stringify(plan)}}],fixture.project.objective);
  const h=harness(r.checkpoint);h.mission.project_evidence.projectProfile='software';
- await h.execute({mission:h.mission,job:h.job('compose','compose')},async()=>assert.fail('No paid ordinary-spec compose'));
+ const compose=h.job('compose','compose');h.jobs.push(compose);
+ await h.execute({mission:h.mission,job:compose},async()=>assert.fail('No paid ordinary-spec compose'));
  assert.equal(h.commits.at(-1).p_result.text,JSON.stringify(plan));
+ compose.status='completed';compose.result=h.commits.at(-1).p_result;
+ const review=h.job('review','review');h.jobs.push(review);
+ const expected=h.mission.project_evidence.specificationRecovery.priorReviews;
+ await h.execute({mission:h.mission,job:review},async(claim,instruction,input)=>{
+  h.modelInputs.push(input);
+  const payload=JSON.parse(input.split('\nEvidence and candidate:\n')[1]);
+  assert.equal(payload.projectEvidence.specificationRecovery,undefined);
+  assert.equal(payload.projectEvidence.savedSpecificationCheckpoint,undefined);
+  assert.equal(payload.projectEvidence.reviewedResearch.text,fixture.reviewedResearch.result);
+  assert.equal(payload.objective,fixture.project.objective);
+  assert.deepEqual(JSON.parse(payload.candidate.result.text),plan);
+  assert.equal(payload.priorFindings.length,10);
+  for(const original of expected){
+   const actual=payload.priorFindings.find(r=>r.key===original.sourceJobId);
+   assert.deepEqual(actual.findings,original.findings);
+   assert.deepEqual(actual.failedChecks,original.failedChecks);
+   assert.equal(actual.clarification,original.clarification);
+   if(original.summary)assert.equal(actual.summary,original.summary);
+  }
+  const budget=load('@/lib/missions/request-budget');
+  assert.ok(budget.fitsMissionEnvelope(instruction,input,budget.missionInputLimit(claim)));
+  assert.ok(input.length<=96000);
+  t.diagnostic(`Ordinary specification review: ${input.length} characters, ten historical reviews supplied once.`);
+  assert.equal(budget.missionOutputLimit(claim,input),5000);
+  assert.equal(budget.missionInputLimit({...claim,job:{...claim.job,role:'compose'}}),48000,'ordinary composition limits are unchanged');
+  return {text:JSON.stringify({verdict:'approve',findings:'All retained ordinary-specification findings checked.',checks:h.ids.map(id=>({id,passed:true,evidence:'Checked complete original scope and saved findings.'}))}),model:'offline-independent-fixture'};
+ });
+ assert.equal(h.modelInputs.length,1);assert.equal(h.commits.at(-1).p_mission_status,'completed');
+});
+test('ordinary saved specification completes full-history review, bounded revision and final independent review',async(t)=>{
+ const original=JSON.parse(old.result.text),fixed=JSON.parse(revised.result.text);delete original.game;delete fixed.game;
+ const r=helper.selectSpecificationRecovery([{...old,result:{text:JSON.stringify(original)}}],fixture.project.objective);
+ const h=harness(r.checkpoint);h.mission.project_evidence.projectProfile='software';
+ const compose=h.job('compose','compose');h.jobs.push(compose);
+ await h.execute({mission:h.mission,job:compose},async()=>assert.fail('No regenerated specification'));
+ compose.status='completed';compose.result=h.commits.at(-1).p_result;
+ const calls=[],budget=load('@/lib/missions/request-budget');
+ const model=async(claim,instruction,input)=>{
+  calls.push(claim.job.job_key);
+  assert.ok(budget.fitsMissionEnvelope(instruction,input,budget.missionInputLimit(claim)));
+  if(claim.job.role==='revise'){
+   const payload=JSON.parse(input);
+   assert.equal(payload.projectEvidence.specificationRecovery,undefined);
+   assert.equal(payload.projectEvidence.savedSpecificationCheckpoint,undefined);
+   assert.equal(payload.projectEvidence.reviewedResearch.text,fixture.reviewedResearch.result);
+   for(const historical of h.mission.project_evidence.specificationRecovery.priorReviews){
+    assert.deepEqual(payload.priorReviewFindings.find(r=>r.key===historical.sourceJobId).findings,historical.findings);
+   }
+   assert.ok(input.length>48000,'actual full history requires the recovered revision input allowance');
+   assert.equal(budget.missionOutputLimit(claim,input),6000,'retained input does not increase output allowance');
+   t.diagnostic(`Ordinary specification revision: ${input.length} characters, output ceiling unchanged at 6000.`);
+   return {text:JSON.stringify(fixed),model:'offline-revision-fixture'};
+  }
+  const payload=JSON.parse(input.split('\nEvidence and candidate:\n')[1]);
+  assert.equal(payload.projectEvidence.specificationRecovery,undefined);
+  assert.equal(payload.priorFindings.filter(r=>r.recovered).length,10);
+  const pass=claim.job.job_key==='review_again';
+  assert.deepEqual(JSON.parse(payload.candidate.result.text),pass?fixed:original);
+  return {text:JSON.stringify({verdict:pass?'approve':'revise',findings:pass?'Saved feedback resolved.':'Preserve Next.js and all deployment prohibitions; assert A→B→A and full post-win state.',checks:h.ids.map(id=>({id,passed:pass||id!=='prior-findings',evidence:pass?'Current repaired candidate checked.':'Retained independent findings require repair.'}))}),model:'offline-review-fixture'};
+ };
+ for(const [role,key] of [['review','review'],['revise','revision'],['review','review_again']]){
+  const job=h.job(role,key);h.jobs.push(job);await h.execute({mission:h.mission,job},model);
+  job.status='completed';job.result=h.commits.at(-1).p_result;
+ }
+ assert.deepEqual(calls,['review','revision','review_again']);
+ assert.equal(h.commits.at(-1).p_children.length,0);assert.equal(h.commits.at(-1).p_mission_status,'completed');
+ assert.deepEqual(JSON.parse(h.commits.at(-1).p_final),fixed);
+ assert.deepEqual(fixed.requirements,JSON.parse(revised.result.text).requirements);
+ assert.deepEqual(fixed.allowedPaths,original.allowedPaths);
+});
+test('oversized ordinary recovery findings stop before inference without deleting saved evidence',async()=>{
+ const plan=JSON.parse(revised.result.text);delete plan.game;
+ const r=helper.selectSpecificationRecovery([{...revised,result:{text:JSON.stringify(plan)}}],fixture.project.objective);
+ const h=harness(r.checkpoint);h.mission.project_evidence.projectProfile='software';
+ const compose=h.job('compose','compose');h.jobs.push(compose);
+ await h.execute({mission:h.mission,job:compose},async()=>assert.fail('No fresh composition'));
+ compose.status='completed';compose.result=h.commits.at(-1).p_result;
+ const evidence=h.mission.project_evidence;
+ evidence.specificationRecovery.priorReviews.push({sourceJobId:randomUUID(),findings:['Retained additional finding. '.repeat(4000)],failedChecks:[]});
+ const saved=JSON.stringify(evidence);
+ await assert.rejects(h.execute({mission:h.mission,job:h.job('review','review')},async()=>assert.fail('Oversized review must not dispatch')),e=>e.partial?.reviewContextOverflow===true);
+ assert.equal(JSON.stringify(evidence),saved);
+});
+test('recovery equivalence includes authoritative requirements, not changing reviews or copied job IDs',()=>{
+ const r=helper.selectSpecificationRecovery(fixture.jobs,fixture.project.objective);
+ const key=helper.specificationRecoveryKey(r.checkpoint.fullSpecificationHash,fixture.project.objective,fixture.project.clarifications);
+ const changedFeedback=helper.selectSpecificationRecovery([...fixture.jobs,{...fixture.jobs.find(j=>j.role==='review'),id:randomUUID(),result:{findings:['New reviewer wording.'],verdict:'changes_requested'}}],fixture.project.objective);
+ assert.equal(helper.specificationRecoveryKey(changedFeedback.checkpoint.fullSpecificationHash,fixture.project.objective,fixture.project.clarifications),key);
+ assert.notEqual(helper.specificationRecoveryKey(r.checkpoint.fullSpecificationHash,fixture.project.objective+' Explicit user requirement.',fixture.project.clarifications),key);
+ assert.notEqual(helper.specificationRecoveryKey(r.checkpoint.fullSpecificationHash,fixture.project.objective,fixture.project.clarifications+' USER CLARIFICATION: PLAYING is the approved phase label.'),key);
+});
+test('actual project worker permits clarified recovery but blocks identical candidate and authoritative scope',async()=>{
+ const p={...fixture.project,id:randomUUID(),profile:'software',active_mission_id:null,status:'running',lease:randomUUID(),milestone_index:0};
+ const recovered=helper.selectSpecificationRecovery(fixture.jobs,fixture.project.objective);
+ const previous={id:randomUUID(),sourceHash:recovered.checkpoint.fullSpecificationHash,recoveryKey:helper.specificationRecoveryKey(recovered.checkpoint.fullSpecificationHash,p.objective,p.clarifications)};
+ const calls=[];
+ const db={from:table=>{
+  const filters=[];const chain={select(){return this;},eq(k,v){filters.push([k,v]);return this;},in(){return this;},order(){return this;},limit(){return this;},returns(){return this;},
+   then(resolve){const data=table==='mission_assignments'?fixture.jobs:table==='project_events'?[previous].filter(e=>filters.every(([k,v])=>k.startsWith('data->>')?e[k.slice(7)]===v:true)):[];return Promise.resolve({data,error:null}).then(resolve);}};return chain;
+ }};
+ const runs=[{kind:'specification',mission_id:latest.mission_id},{kind:'research',mission_id:randomUUID()}];
+ const runtime=modules({'@/lib/data/supabase/admin':{getSupabaseAdminClient:()=>db},
+  '@/lib/projects/specialist-dispatch':{runSpecialistResourceBatch:async()=>{}},
+  '@/lib/projects/recovery-budget':{announceBlockedRecoveryResources:async()=>{}},
+  '@/lib/projects/store':{projectRpc:async(name,args)=>{if(name==='claim_work_project')return p;if(name==='project_dispatch_recovery_candidates')return [];assert.equal(name,'finish_work_project');calls.push(args);return true;},projectRuns:async()=>runs,
+   milestoneEvidence:async()=>[{phase:'research',missionStatus:'completed',result:fixture.reviewedResearch.result,evidence:{}}]}})('@/lib/projects/worker');
+ await runtime.runProjectBatch();assert.equal(calls.at(-1).p_action,'block');assert.match(calls.at(-1).p_data.detail,/already attempted/);
+ p.clarifications+=' USER CLARIFICATION: PLAYING is the approved phase label.';
+ await runtime.runProjectBatch();assert.equal(calls.at(-1).p_action,'child');assert.match(calls.at(-1).p_data.objective,/USER CLARIFICATION/);
+ assert.equal(calls.at(-1).p_data.evidence.savedSpecificationCheckpoint.fullSpecificationHash,previous.sourceHash);
+ previous.recoveryKey=helper.specificationRecoveryKey(previous.sourceHash,p.objective,p.clarifications);
+ await runtime.runProjectBatch();assert.equal(calls.at(-1).p_action,'block');
 });
 test('checkpoint persistence failures retain their actual failure classification',async()=>{
  const r=helper.selectSpecificationRecovery(fixture.jobs,fixture.project.objective),h=harness(r.checkpoint);

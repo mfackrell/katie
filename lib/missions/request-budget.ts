@@ -5,14 +5,15 @@ import {SPECIFICATION_STAGE_TOKENS} from '@/lib/projects/specification-recovery'
 
 export type MissionCapacity={authorized:boolean;remainingTokens:number;callsRemaining:number;routingCallsRemaining:number;reason?:string};
 export function missionInputLimit(claim:Claim):number {
- const evidence=claim.mission.project_evidence as {projectProfile?:string}|null;
+ const evidence=claim.mission.project_evidence as {projectProfile?:string;savedSpecificationCheckpoint?:unknown;specificationRecovery?:unknown}|null;
  const finalStage=['compose','review','revise'].includes(claim.job.role);
  // Immutable source excerpts, a full candidate and independently scoped live
  // traces must fit together. This changes input capacity, not token authority:
  // native counting and the existing fenced reservation still admit each call.
  const repositoryAudit=Boolean(claim.mission.repository_id)&&readOnlyRepositoryObjective(claim.mission.objective);
  const operationalAudit=/\baudit\b/i.test(claim.mission.objective)&&/\b(?:workflow|operational|assignment histor|execution record)/i.test(claim.mission.objective);
- return finalStage&&((evidence?.projectProfile==='game'&&claim.mission.project_kind==='specification')||repositoryAudit||operationalAudit)?96000:48000;
+ const recoveredSpecificationStage=['review','revise'].includes(claim.job.role)&&claim.mission.project_kind==='specification'&&Boolean(evidence?.savedSpecificationCheckpoint&&evidence?.specificationRecovery);
+ return finalStage&&((evidence?.projectProfile==='game'&&claim.mission.project_kind==='specification')||recoveredSpecificationStage||repositoryAudit||operationalAudit)?96000:48000;
 }
 /** Size the first audited deliverable for its full evidence-backed scope. A
  * known short word cap stays small; an unbounded audit must not buy a predictably
@@ -21,6 +22,9 @@ export function missionOutputLimit(claim:Claim,input:string):number {
  if(claim.job.role==='revise'&&typeof claim.job.payload?.revisionPatchBaseHash==='string')return 3000;
  if(['compose','revise'].includes(claim.job.role)){
   if(claim.mission.project_kind==='specification'&&(claim.mission.project_evidence as {projectProfile?:string}|null)?.projectProfile==='game')return 16000;
+  // Recovery needs room for retained input findings, not a larger deliverable.
+  const evidence=claim.mission.project_evidence as {savedSpecificationCheckpoint?:unknown;specificationRecovery?:unknown}|null;
+  if(claim.mission.project_kind==='specification'&&evidence?.savedSpecificationCheckpoint&&evidence?.specificationRecovery)return 6000;
   const limit=measureDeliverable(claim.mission.objective,'').wordLimit;
   return missionInputLimit(claim)>48000&&(limit===null||limit>1200)?12000:6000;
  }

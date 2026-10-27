@@ -7,7 +7,7 @@ import { developmentPreview, projectAcceptanceSchema, reconcileDevelopment, retr
 import { parseJSON } from '@/lib/missions/types';
 import { validateProjectPlan, digest, projectPlanSchema } from './contract';
 import {gameAssessmentEvidence} from './game-evidence';
-import {loadSpecificationRecovery,specificationProjectAdmission} from './specification-recovery';
+import {loadSpecificationRecovery,specificationProjectAdmission,specificationRecoveryKey} from './specification-recovery';
 import {estimateProjectResources} from './resource-forecast.mjs';
 import {enrichResourceForecast} from './resource-economics.mjs';
 import {provisionalSpecialistPlan} from './specialist-resource-plan.mjs';
@@ -228,9 +228,10 @@ async function advance(p: Project) {
     }
     if(recovery?.fingerprint){
       const {data:previous,error}=await getSupabaseAdminClient().from('project_events').select('id')
-        .eq('project_id',p.id).eq('event','specification_recovery_dispatched').eq('data->>sourceHash',recovery.checkpoint!.fullSpecificationHash).limit(1);
+        .eq('project_id',p.id).eq('event','specification_recovery_dispatched')
+        .eq('data->>recoveryKey',specificationRecoveryKey(recovery.checkpoint!.fullSpecificationHash,p.objective,p.clarifications)).limit(1);
       if(error)throw Error('Cannot verify prior specification recovery attempts');
-      if(previous?.length){await finish('block',{detail:'This exact specification and independent findings were already attempted. No equivalent mission was launched; artifacts and charges remain saved.'});return;}
+      if(previous?.length){await finish('block',{detail:'This exact specification and authoritative requirements were already attempted. No equivalent mission was launched; artifacts and charges remain saved.'});return;}
     }
     // A finite project needs a progress watchdog before authorizing another
     // expensive child mission. Superseded scope revisions are not failed work.

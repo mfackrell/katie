@@ -18,6 +18,11 @@ export function specificationProjectAdmission(recovered:boolean,milestones=1){
   requiredTokens:missionTokens+futureMissions*120000,requiredMissionSlots:futureMissions+1};
 }
 export type SpecificationJob={id:string;mission_id:string;job_key:string;role:string;status:string;dependencies?:string[];created_at:string;updated_at:string;result:Record<string,unknown>|null};
+// Only a changed candidate or authoritative user scope permits another recovery.
+// Reviewer wording, copied job IDs and transport diagnostics cannot reopen it.
+export function specificationRecoveryKey(sourceHash:string,objective:string,clarifications:string){
+ return digest({sourceHash,objective,clarifications:clarifications??''});
+}
 export function specificationFindings(result:Record<string,unknown>|null){
  if(!result)return null;
  const findings=Array.isArray(result.findings)?result.findings:typeof result.findings==='string'?[result.findings]:[];
