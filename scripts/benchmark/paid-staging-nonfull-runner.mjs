@@ -102,6 +102,7 @@ export async function executePaidNonfull({db,ownerId,arm,trial,account,approval,
  const notes=[],issuedAt=Date.now();
  try{
   execFileSync('git',['clone','--no-hardlinks','--quiet',checkout,workspace],{timeout:45000});
+  git(workspace,'remote','set-url','origin','https://github.com/mfackrell/katie.git');
   git(workspace,'checkout','--detach',BASELINE);
   git(workspace,'switch','-c','benchmark/715-paid-'+arm+'-'+trial.id.slice(0,8));
   // Copy *trusted installed dependencies*. Never symlink shared host deps to
@@ -140,6 +141,7 @@ export async function executePaidNonfull({db,ownerId,arm,trial,account,approval,
   const testExit=await new Promise((resolve,reject)=>{deterministic.once('error',reject);deterministic.once('close',resolve)});
   if(testExit!==0)reject('deterministic-acceptance-failed');
   const head=git(workspace,'rev-parse','HEAD');
+  // A reviewed source commit is useful even if the later private-preview gate fails.
   if(!process.env.GH_TOKEN)reject('durable-checkpoint-token-missing');
   execFileSync('gh',['auth','setup-git'],{env:{PATH:process.env.PATH??'',GH_TOKEN:process.env.GH_TOKEN}});
   git(workspace,'push','origin','HEAD:refs/heads/benchmark/715-paid-'+arm+'-'+trial.id.slice(0,8));
