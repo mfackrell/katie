@@ -61,3 +61,28 @@ test('paid runner binds its declared socket directory before metered execution',
  assert.match(runtime,/runPhase\(\{arm,phase:name,boundary,socketdir:sockdir,/);
  assert.doesNotMatch(runtime,/runPhase\(\{arm,phase:name,boundary,socketdir,/);
 });
+
+test('paid owner workflow is issue-triggered and bound to reviewed main with separate account runs',()=>{
+ const workflow=readFileSync('.github/workflows/benchmark-715-real-native-thin.yml','utf8');
+ assert.match(workflow,/issues:\s*\n\s+types: \[opened\]/);
+ assert.match(workflow,/github\.actor == github\.repository_owner/);
+ assert.match(workflow,/github\.event\.issue\.user\.login == github\.repository_owner/);
+ assert.match(workflow,/Owner-approved paid three-arm execution/);
+ assert.match(workflow,/ref: main/);
+ assert.match(workflow,/persist-credentials: false/);
+ assert.match(workflow,/KATIE_NONFULL_STAGING_SERVICE_ROLE_KEY: \$\{\{ secrets\.KATIE_NONFULL_STAGING_SERVICE_ROLE_KEY \}\}/);
+ assert.match(workflow,/KATIE_NONFULL_PRODUCTION_SUPABASE_URL:/);
+ assert.match(workflow,/KATIE_BENCHMARK_PAID_EXECUTION: enabled/);
+ assert.match(workflow,/owner-paid-nonfull-bootstrap\.mjs/);
+ assert.match(workflow,/paid-staging-nonfull-runner\.mjs.*native/);
+ assert.match(workflow,/paid-staging-nonfull-runner\.mjs.*thin/);
+ assert.match(workflow,/\n\s+env:\s*\n\s+OPENAI_API_KEY: \$\{\{ secrets\.OPENAI_API_KEY \}\}/);
+ assert.match(workflow,/node-version: '22'/);
+ assert.match(workflow,/npm ci --ignore-scripts/);
+ assert.match(workflow,/@openai\/codex-sdk@0\.164\.0/);
+ assert.match(workflow,/if: always\(\)/);
+ assert.match(workflow,/benchmark-715-native-result\.json/);
+ assert.match(workflow,/benchmark-715-thin-result\.json/);
+ assert.doesNotMatch(workflow,/workflow_dispatch:/);
+ assert.doesNotMatch(workflow,/pull_request:/);
+});
