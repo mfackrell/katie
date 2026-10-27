@@ -289,6 +289,7 @@ async function advance(p: Project) {
         projectEvidence={...(projectEvidence as Record<string,unknown>??{}),...(game?{projectProfile:'game'}:{}),reviewedResearch:{text:research.result,reviewedMissionId:research.evidence?.reviewedMissionId??null,phase:'research'}};
         if(recovery?.checkpoint){
             const {text:_savedText,...checkpointReference}=recovery.checkpoint;
+            void _savedText;
             projectEvidence={...(projectEvidence as Record<string,unknown>),savedSpecificationCheckpoint:checkpointReference,
               specificationRecovery:{fingerprint:recovery.fingerprint,priorReviews:recovery.priorReviews,diagnostics:recovery.diagnostics}};
         }
