@@ -12,7 +12,7 @@ BEGIN
  PERFORM create_game_work_project(pid,'dispatch-recovery-'||pid,actor,chat,'Recover the original approved Take Eleven development task',repo);
  UPDATE work_projects SET status='running',phase='development',spec=current_setting('katie.test.saved_spec')::jsonb,
  repository_full_name='owner/repo',baseline_sha=repeat('a',40),approval_hash=repeat('b',64),approved_hash=repeat('b',64),
- token_allowance=950000,max_missions=14,deadline=now()+interval '3 hours',lease=lease,lease_until=now()+interval '5 minutes' WHERE id=pid;
+ token_allowance=600000,max_missions=14,deadline=now()+interval '3 hours',lease=lease,lease_until=now()+interval '5 minutes' WHERE id=pid;
  SELECT * INTO p FROM work_projects WHERE id=pid;
  IF NOT finish_work_project(pid,lease,'child',jsonb_build_object('kind','development','objective',p.objective,'evidence','{}'::jsonb)) THEN RAISE EXCEPTION 'Approved development fixture failed';END IF;
  SELECT active_mission_id INTO mid FROM work_projects WHERE id=pid;
@@ -93,5 +93,5 @@ BEGIN
    RAISE EXCEPTION 'Rollback unsafe variant';
   EXCEPTION WHEN OTHERS THEN IF SQLERRM<>'Rollback unsafe variant' THEN RAISE;END IF;END;
  END LOOP;
- IF (SELECT count(*) FROM project_runs WHERE project_id=pid)<>1 OR (SELECT cycles FROM work_projects WHERE id=pid)<>1 OR (SELECT token_allowance FROM work_projects WHERE id=pid)<>950000 THEN RAISE EXCEPTION 'Recovery created a mission/cycle or authorization';END IF;
+ IF (SELECT count(*) FROM project_runs WHERE project_id=pid)<>1 OR (SELECT cycles FROM work_projects WHERE id=pid)<>1 OR (SELECT token_allowance FROM work_projects WHERE id=pid)<>600000 THEN RAISE EXCEPTION 'Recovery created a mission/cycle or authorization';END IF;
 END $test$;
