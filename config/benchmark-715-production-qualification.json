@@ -1,0 +1,58 @@
+{
+  "issue": 715,
+  "repository": "mfackrell/katie",
+  "repositoryId": 1164130400,
+  "ownerLogin": "mfackrell",
+  "ownerGithubId": 203683423,
+  "authorizationCommentId": 6424150566,
+  "authorizationBodySha256": "e0b257a0e3045d649c6ac64b982c993585bea727b741f4b2ccea365cbbb60214",
+  "productionUrl": "https://katie-mu.vercel.app",
+  "productionDatabaseUrl": "https://barclcqataqyvifoeyop.supabase.co",
+  "stagingDatabaseUrl": "https://iytvavgbaainnsrecmcx.supabase.co",
+  "workflowPath": ".github/workflows/benchmark-715-production-owner-qualification.yml",
+  "tokenCap": 350000,
+  "armUsdCents": 1000,
+  "totalUsdCents": 3000,
+  "priceCeiling": 28,
+  "durationSeconds": 14400,
+  "protocol": {
+    "baselineSha": "0015bcdb8ac9ad94b7c74d1a4cd76737903b1319",
+    "contract_sha256": "24b651ad3cd732adb12f870002b180e3aa3dcaf365f49bb1d98a4566638211e6",
+    "acceptance_sha256": "fd8617b33401b6d0361b5d7b92db0c3a212e3dfd8e9ff64fdf5cc56a596701b0",
+    "model_policy_sha256": "1e538a292ce934ddc688e0c50e1b7b3a8e639904508812e9c49e3ffb8a0078ca",
+    "tool_profile_sha256": "45eb9a35b7570b137febcc0535f367b46b3501127ff50043453e473e3aa091fb",
+    "runtime_sha256": "5466fa42c7a2f3e62efa09a23b7cabd83ef60f249ab38e51916ffc637ae4d5be",
+    "contract": {
+      "sourceIssue": 650,
+      "baselineSha": "0015bcdb8ac9ad94b7c74d1a4cd76737903b1319",
+      "initialStones": 11,
+      "firstPlayer": "A",
+      "legalMoves": [
+        1,
+        2,
+        3
+      ],
+      "lastMoveWins": true,
+      "invalidActionPreservesState": true,
+      "persistentReload": true,
+      "resetPersists": true,
+      "directory": "app/project-pilots/take-eleven/",
+      "tests": "tests/game-development/take-eleven.test.mjs",
+      "productionPublication": false
+    },
+    "acceptance": [
+      "initial-state",
+      "legal-moves",
+      "alternating-turns",
+      "invalid-unchanged",
+      "a-wins",
+      "b-wins",
+      "reload-in-progress",
+      "reload-finished",
+      "reset-and-reload",
+      "accessible-controls",
+      "private-preview",
+      "independent-review"
+    ]
+  }
+}
