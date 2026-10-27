@@ -24,7 +24,7 @@ function git(cwd,...args){
  return execFileSync('git',[...protectedGitConfig,...args],{
   cwd,encoding:'utf8',timeout:30000,
   env:{PATH:process.env.PATH??'',HOME:process.env.HOME??'',GH_TOKEN:process.env.GH_TOKEN??''}
- }).trim();
+ });
 }
 async function lookup(db,table,id){
  const {data,error}=await db.from(table).select('*').eq('id',id).maybeSingle();
@@ -125,6 +125,11 @@ export async function executePaidNonfull({db,ownerId,arm,trial,account,approval,
   git(workspace,'add','-A');
   git(workspace,'-c','user.name=Katie Benchmark','-c','user.email=katie-benchmark@users.noreply.github.com',
    'commit','--allow-empty','-m','Take Eleven: native implementation');
+  // Persist an immutable first checkpoint before spending on review calls.
+  if(!process.env.GH_TOKEN)reject('durable-checkpoint-token-missing');
+  execFileSync('gh',['auth','setup-git'],{env:{PATH:process.env.PATH??'',GH_TOKEN:process.env.GH_TOKEN}});
+  const checkpointBranch='benchmark/715-paid-'+arm+'-'+trial.id.slice(0,8);
+  git(workspace,'push','origin','HEAD:refs/heads/'+checkpointBranch);
   const firstReview=await phase('review');notes.push(firstReview);
   if(firstReview.verdict==='changes_requested'){
    await phase('repair',firstReview.findings);
@@ -132,19 +137,32 @@ export async function executePaidNonfull({db,ownerId,arm,trial,account,approval,
    git(workspace,'add','-A');
    git(workspace,'-c','user.name=Katie Benchmark','-c','user.email=katie-benchmark@users.noreply.github.com',
     'commit','--allow-empty','-m','Take Eleven: independent review repair');
+   git(workspace,'push','origin','HEAD:refs/heads/'+checkpointBranch);
   }
   const finalReview=await phase('final-review');notes.push(finalReview);
   if(finalReview.verdict!=='pass')reject('final-independent-review-not-pass');
   assertScope(workspace);
-  const deterministic=spawn('node',['--test','tests/game-development/take-eleven.test.mjs'],
-   {cwd:workspace,stdio:'inherit',env:{PATH:process.env.PATH??'',HOME:root}});
-  const testExit=await new Promise((resolve,reject)=>{deterministic.once('error',reject);deterministic.once('close',resolve)});
-  if(testExit!==0)reject('deterministic-acceptance-failed');
-  const head=git(workspace,'rev-parse','HEAD');
+  // Run candidate-generated tests ONLY inside the same bubblewrap boundary as
+  // reviews. The test process has no GitHub, DB or provider credentials and
+  // sees read-only Git metadata, dependencies and source.
+  const command='socat TCP-LISTEN:43181,bind=127.0.0.1,reuseaddr,fork UNIX-CONNECT:/gateway/gateway.sock & p=$!; trap "kill $p 2>/dev/null || :" EXIT; node --test tests/game-development/take-eleven.test.mjs';
+  const testArgs=sharedNativeContainerArgs({workspace:boundary.root,
+   socketDir:sockdir,arm,phase:'final-review',command,readOnly:true,
+   extraMounts:protectedNativeMounts(boundary)});
+  const deterministic=spawn('bwrap',testArgs,{stdio:'inherit',
+   env:{PATH:process.env.PATH??''}});
+  const testExit=await new Promise((resolve,fail)=>{
+   deterministic.once('error',fail);deterministic.once('close',(code)=>resolve(code));
+  });
+  if(testExit!==0)reject('contained-deterministic-acceptance-failed');
+  assertScope(workspace);
+  if(git(workspace,'status','--porcelain','--untracked-files=all').trim())
+   reject('source-changed-after-review');
+  const head=git(workspace,'rev-parse','HEAD').trim();
   // A reviewed source commit is useful even if the later private-preview gate fails.
   if(!process.env.GH_TOKEN)reject('durable-checkpoint-token-missing');
   execFileSync('gh',['auth','setup-git'],{env:{PATH:process.env.PATH??'',GH_TOKEN:process.env.GH_TOKEN}});
-  git(workspace,'push','origin','HEAD:refs/heads/benchmark/715-paid-'+arm+'-'+trial.id.slice(0,8));
+  git(workspace,'push','origin','HEAD:refs/heads/'+checkpointBranch);
   const {error:statusError}=await db.from('benchmark_three_arm_trials')
    .update({state:'submitted'}).eq('id',trial.id).eq('state','running');
   if(statusError)reject('submission-status-not-committed');
