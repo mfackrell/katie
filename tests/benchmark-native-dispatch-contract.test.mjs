@@ -11,7 +11,7 @@ const payload={taskId:'11111111-1111-4111-8111-111111111111',
  trialId:'22222222-2222-4222-8222-222222222222',
  approvalId:'33333333-3333-4333-8333-333333333333',
  projectId:'44444444-4444-4444-8444-444444444444',
- contractHash:'a'.repeat(64),baselineSha:'b'.repeat(40),
+ contractHash:'a'.repeat(64),benchmarkContractHash:'c'.repeat(64),baselineSha:'b'.repeat(40),
  expiresAt:Date.now()+60000};
 test('owner-approved Developer handoff survives exact signed transport',()=>{
  const signed=encodeNativeHandoff(payload,key);
@@ -28,7 +28,7 @@ test('expired, altered, or unsigned trial dispatch cannot execute',()=>{
 
 test('signed native Developer handoff survives existing compressed owner issue transport',()=>{
  const marker='<!-- katie-managed-task:'+payload.taskId+' -->';
- const project={projectId:payload.projectId,contractHash:payload.contractHash,baselineSha:payload.baselineSha};
+ const project={projectId:payload.projectId,contractHash:payload.contractHash,benchmarkContractHash:payload.benchmarkContractHash,baselineSha:payload.baselineSha};
  const body=marker+'\n\n'+encodeNativeHandoff(payload,key)+'\n'+
   '<!-- katie-project: '+Buffer.from(JSON.stringify(project)).toString('base64url')+' -->\n'+
   'Approved engineering objective. '.repeat(3500);

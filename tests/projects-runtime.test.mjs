@@ -436,6 +436,15 @@ test('game capacity estimator counts shared browser evidence once and admits a b
  assert.equal(result.approvedFinalContract.scenarios.length,scenarioCount);
 });
 
+test('Full staging project baseline stays pinned to the bound frozen benchmark baseline',async()=>{
+ const frozen='0015bcdb8ac9ad94b7c74d1a4cd76737903b1319';
+ const db={from:(table)=>({select(){return this;},eq(){return this;},maybeSingle:async()=>({data:table==='benchmark_full_project_bindings'?{baseline_sha:frozen,benchmark_contract_hash:'c'.repeat(64),model:'gpt-5.3-codex'}:{repository_full_name:'owner/repo'},error:null})})};
+ class Octokit{users={getAuthenticated:async()=>({data:{type:'User',login:'owner'}})};repos={get:async()=>({data:{default_branch:'main',owner:{type:'User',login:'owner'}}}),getBranch:async()=>({data:{commit:{sha:'a'.repeat(40)}}}),getContent:async({path})=>({data:{content:Buffer.from(path==='.github/workflows/autonomous-development.yml'?'project-browser-check.mjs projectAcceptance project-game-check.mjs project-game-rules.mjs':path==='scripts/project-context.mjs'?'export const GAME_PROJECT_CONTEXT_VERSION = 1;':path==='scripts/project-ci.mjs'?'checkGameModel(context,root,dependencies)':'export function validateGameAcceptance export function runGameModelAcceptance').toString('base64')}})};}
+ const {baseline}=modules({'@/lib/data/supabase/admin':{getSupabaseAdminClient:()=>db},'@octokit/rest':{Octokit}})('@/lib/projects/worker');
+ const keys=['PROJECT_PREVIEW_REPOSITORIES','NEXT_PUBLIC_SUPABASE_URL','KATIE_FULL_BENCHMARK_DISPATCH'];const old=Object.fromEntries(keys.map(k=>[k,process.env[k]]));process.env.PROJECT_PREVIEW_REPOSITORIES='owner/repo';process.env.NEXT_PUBLIC_SUPABASE_URL='https://iytvavgbaainnsrecmcx.supabase.co';process.env.KATIE_FULL_BENCHMARK_DISPATCH='enabled';
+ try{assert.equal(await baseline({...owner,profile:'game',baseline_sha:null,verified_sha:null}),frozen);await assert.rejects(baseline({...owner,profile:'game',baseline_sha:'a'.repeat(40),verified_sha:null}),/differs from the saved project baseline/);}finally{for(const k of keys){if(old[k]===undefined)delete process.env[k];else process.env[k]=old[k];}}
+});
+
 test('game approval rejects a previously supported target until its versioned game tools are installed',async()=>{
  let gameTools=false,version=1,rulesInstalled=true;const oldWorkflow='project-browser-check.mjs projectAcceptance';
  const db={from:()=>({select(){return this;},eq(){return this;},maybeSingle:async()=>({data:{repository_full_name:'owner/repo'},error:null})})};

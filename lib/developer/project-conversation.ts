@@ -160,7 +160,16 @@ export async function handleProjectChat(input: {
     }
     if (objective.length > 8000)
         return 'Please narrow the project brief to 8,000 characters. I will not silently truncate its requirements.';
-    const created = await projectRpc<Project>(gameProjectIntent(objective)?'create_game_work_project':'create_work_project', { p_id: projectId(requestId), p_request: requestId, p_actor: input.actorId, p_chat: input.chatId, p_objective: objective, p_repository: await repository(input.activeRepoId, text) });
+    const projectRepository=await repository(input.activeRepoId,text);
+    const fullTrial=process.env.KATIE_FULL_BENCHMARK_TRIAL_ID;
+    const stagingProject=process.env.NEXT_PUBLIC_SUPABASE_URL?.includes('iytvavgbaainnsrecmcx.supabase.co')===true;
+    const fullTakeEleven=process.env.KATIE_FULL_BENCHMARK_DISPATCH==='enabled'&&stagingProject&&
+      !!fullTrial&&gameProjectIntent(objective)&&/take eleven|issue\s*#?715|#715/i.test(objective);
+    const created = await projectRpc<Project>(fullTakeEleven?'benchmark_create_full_game_project':gameProjectIntent(objective)?'create_game_work_project':'create_work_project', {
+      p_id:projectId(requestId),p_request:requestId,p_actor:input.actorId,p_chat:input.chatId,
+      p_objective:objective,p_repository:projectRepository,
+      ...(fullTakeEleven?{p_trial:fullTrial,p_baseline:'0015bcdb8ac9ad94b7c74d1a4cd76737903b1319',p_model:'gpt-5.3-codex'}:{})
+    });
     return reply(created, 'I’ve delegated a persistent project to the Developer Orchestrator. It will research the objective, preserve the requirements, prepare architecture and acceptance checks, and request scoped coding approval. After approval, the durable project worker will manage implementation, independent testing, permitted repairs and preview delivery, then report the verified result here. You can close this page.');
 }
 async function repository(active: string | undefined, text: string) { const db = getSupabaseAdminClient(); if (active) {
