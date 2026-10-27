@@ -55,6 +55,14 @@ BEGIN
  IF claim->'job'->>'lease'=lease::text THEN RAISE EXCEPTION 'Expired lease reused';END IF;
  IF save_project_development_dispatch(jid,lease,'submitted','Stale worker','{}')<>'false'::jsonb OR claim_project_dispatch(jid,lease,p.approved_hash) THEN RAISE EXCEPTION 'Stale worker mutated or dispatched';END IF;
  lease:=(claim->'job'->>'lease')::uuid;
+ FOREACH variant IN ARRAY ARRAY['binding','input'] LOOP
+  BEGIN
+   IF variant='binding' THEN UPDATE work_projects SET approval_hash=repeat('c',64),approved_hash=repeat('c',64) WHERE id=pid;
+   ELSE UPDATE mission_assignments SET payload=jsonb_set(payload,'{development_input}','"Conflicting frozen input"') WHERE id=jid;END IF;
+   IF save_project_development_dispatch(jid,lease,'submitted','Wrong saved scope','{}') IS DISTINCT FROM 'false'::jsonb THEN RAISE EXCEPTION 'Mismatched % observation persisted',variant;END IF;
+   RAISE EXCEPTION 'Rollback observation variant';
+  EXCEPTION WHEN OTHERS THEN IF SQLERRM<>'Rollback observation variant' THEN RAISE;END IF;END;
+ END LOOP;
  IF NOT claim_project_dispatch(jid,lease,p.approved_hash) OR claim_project_dispatch(jid,lease,p.approved_hash) THEN RAISE EXCEPTION 'POST claim not exactly once';END IF;
  task:=mission_development_task(jid,lease);
  IF (task->'external'->>'attempted') IS DISTINCT FROM 'true' THEN RAISE EXCEPTION 'Durable attempted checkpoint missing';END IF;
@@ -81,7 +89,7 @@ BEGIN
    UPDATE agent_tasks SET status='dispatching' WHERE id=jid;
    IF variant='deadline' THEN UPDATE work_projects SET deadline=now()-interval '1 second' WHERE id=pid;
    ELSIF variant='scope' THEN UPDATE work_projects SET approval_hash=repeat('c',64) WHERE id=pid;
-   ELSIF variant='budget' THEN UPDATE agent_missions SET token_allowance=4000 WHERE id=mid;
+   ELSIF variant='budget' THEN UPDATE agent_missions SET token_allowance=10000 WHERE id=mid;
    ELSIF variant='permanent' THEN UPDATE agent_tasks SET external=external||'{"receipt":{"outcome":"BLOCKED"}}'::jsonb,details='Permanent independent review failure' WHERE id=jid;
    ELSIF variant='paused' THEN UPDATE work_projects SET status='paused' WHERE id=pid;END IF;
    IF recover_project_development_dispatch(jid) THEN RAISE EXCEPTION 'Unsafe % recovery admitted',variant;END IF;
