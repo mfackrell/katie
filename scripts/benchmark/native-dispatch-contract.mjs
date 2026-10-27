@@ -5,12 +5,13 @@ const hash=/^[a-f0-9]{64}$/;
 export function encodeNativeHandoff(payload,key){
  if(!key||key.length<32)throw Error('NATIVE_HANDOFF_KEY_UNAVAILABLE');
  if(!payload||!['taskId','trialId','approvalId','projectId'].every(k=>uuid.test(payload[k]??''))||
-    !hash.test(payload.contractHash??'')||!sha.test(payload.baselineSha??'')||
+    !hash.test(payload.contractHash??'')||!hash.test(payload.benchmarkContractHash??'')||!sha.test(payload.baselineSha??'')||
     !Number.isSafeInteger(payload.expiresAt)||payload.expiresAt<=Date.now())
   throw Error('NATIVE_HANDOFF_INVALID');
  const frozen={version:1,taskId:payload.taskId,trialId:payload.trialId,
   approvalId:payload.approvalId,projectId:payload.projectId,
-  contractHash:payload.contractHash,baselineSha:payload.baselineSha,expiresAt:payload.expiresAt};
+  contractHash:payload.contractHash,benchmarkContractHash:payload.benchmarkContractHash,
+  baselineSha:payload.baselineSha,expiresAt:payload.expiresAt};
  const content=Buffer.from(JSON.stringify(frozen)).toString('base64url');
  const signature=createHmac('sha256',key).update(content).digest('base64url');
  return '<!-- katie-native-benchmark:'+content+'.'+signature+' -->';
@@ -27,9 +28,9 @@ export function readNativeHandoff(source,key,now=Date.now()){
  let p;try{p=JSON.parse(Buffer.from(content,'base64url').toString('utf8'))}
  catch{throw Error('NATIVE_HANDOFF_INVALID')}
  if(p.version!==1||!['taskId','trialId','approvalId','projectId'].every(k=>uuid.test(p[k]??''))||
-    !hash.test(p.contractHash??'')||!sha.test(p.baselineSha??'')||
+    !hash.test(p.contractHash??'')||!hash.test(p.benchmarkContractHash??'')||!sha.test(p.baselineSha??'')||
     !Number.isSafeInteger(p.expiresAt)||p.expiresAt<=now||
-    Object.keys(p).sort().join()!==['version','taskId','trialId','approvalId','projectId','contractHash','baselineSha','expiresAt'].sort().join())
+    Object.keys(p).sort().join()!==['version','taskId','trialId','approvalId','projectId','contractHash','benchmarkContractHash','baselineSha','expiresAt'].sort().join())
   throw Error('NATIVE_HANDOFF_INVALID');
  return Object.freeze(p);
 }

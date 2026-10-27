@@ -9,14 +9,15 @@ import {classifyGenerationFailure} from '@/lib/router/provider-error';
 export type OrchestrationChoice={provider:LlmProvider;modelId:string;reasoning:string};
 /** Shared by EO management and ALL mission-backed child orchestrators. No saved model pins. */
 type Accounting={reserve:(model:string,tokens:number)=>Promise<string>;finish:(id:string,tokens:number|null)=>Promise<void>};
-export async function orchestrationChoices(input:{objective:string;instruction:string;requestId:string;research?:boolean;review?:boolean;planning?:boolean;synthesis?:boolean;accounting?:Accounting}):Promise<OrchestrationChoice[]>{
+export async function orchestrationChoices(input:{objective:string;instruction:string;requestId:string;research?:boolean;review?:boolean;planning?:boolean;synthesis?:boolean;accounting?:Accounting;fixedModel?:{provider:string;modelId:string}}):Promise<OrchestrationChoice[]>{
  const health=await filterProvidersBySharedHealth(getAvailableProviders());
  // Gemini grounding currently has no server-enforced per-request search-use cap.
  // Never silently remove a mission's hard tool budget to enable another model.
  const inventory=new Map<string,Set<string>>();
- const discovered=await Promise.allSettled(health.providers.map(async provider=>{
+ const eligibleProviders=input.fixedModel?health.providers.filter(provider=>provider.name===input.fixedModel!.provider):health.providers;
+ const discovered=await Promise.allSettled(eligibleProviders.map(async provider=>{
   const models=await provider.listModels();
-  return{provider,models:new Set(models.map(id=>id.replace(/^models\//,'')).filter(id=>boundedModelSupported(provider.name,id)))};
+  return{provider,models:new Set(models.map(id=>id.replace(/^models\//,'')).filter(id=>boundedModelSupported(provider.name,id)&&(!input.fixedModel||id===input.fixedModel.modelId)))};
  }));
  for(const result of discovered)if(result.status==='fulfilled')inventory.set(result.value.provider.name,result.value.models);
  // Registry metadata ranks quality; it cannot confer current account access or
@@ -53,7 +54,7 @@ export async function orchestrationChoices(input:{objective:string;instruction:s
    // before the router abandons a decision. The ordinary chat 12s race used to
    // discard charged, successful responses and start overlapping fallbacks.
    routingRequestId:input.requestId,decisionTimeoutMs:60000,candidateAllowed:(provider,model)=>inventory.get(provider)?.has(model.replace(/^models\//,''))===true,diverseFallbackProviders:true,decisionCandidatesPerProvider:4,
-   ...(input.research?{requestIntent:'web-search' as const}:input.review?{requestIntent:'assistant-reflection' as const}:input.planning?{requestIntent:'architecture-review' as const}:input.synthesis?{requestIntent:'general-text' as const}:{})
+  ...(input.fixedModel?{requestIntent:'general-text' as const}:input.research?{requestIntent:'web-search' as const}:input.review?{requestIntent:'assistant-reflection' as const}:input.planning?{requestIntent:'architecture-review' as const}:input.synthesis?{requestIntent:'general-text' as const}:{})
   });
  const ranked=[{provider:decision.provider,modelId:decision.modelId},...decision.fallbackChain];
  const seen=new Set<string>();

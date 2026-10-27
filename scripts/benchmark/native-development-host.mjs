@@ -24,7 +24,7 @@ if(process.env.KATIE_BENCHMARK_PAID_EXECUTION!=='enabled')
 const signingKey=process.env.KATIE_NATIVE_HANDOFF_HMAC_KEY;
 const proof=readNativeHandoff(readFileSync(requestFile,'utf8'),signingKey);
 const manifest=JSON.parse(readFileSync(manifestFile,'utf8'));
-for(const key of ['taskId','trialId','approvalId','projectId','contractHash','baselineSha','expiresAt'])
+for(const key of ['taskId','trialId','approvalId','projectId','contractHash','benchmarkContractHash','baselineSha','expiresAt'])
  if(manifest[key]!==proof[key])denied('handoff changed after signature verification');
 if(process.env.GITHUB_REPOSITORY!=='mfackrell/katie')denied('repository identity mismatch');
 const url=process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -32,6 +32,8 @@ const serviceKey=process.env.KATIE_BENCHMARK_SERVICE_ROLE_KEY;
 const providerKey=process.env.OPENAI_API_KEY;
 if(!url||!serviceKey||!providerKey||!process.env.GITHUB_RUN_ID)
  denied('gateway credentials unavailable');
+if(url!=='https://iytvavgbaainnsrecmcx.supabase.co')
+ denied('benchmark execution is restricted to the authorized staging Supabase project');
 const db=createClient(url,serviceKey,{auth:{persistSession:false,autoRefreshToken:false}});
 const readOne=async(table,column,value,fields='*')=>{
  const {data,error}=await db.from(table).select(fields).eq(column,value).maybeSingle();
@@ -47,6 +49,8 @@ const trial=await readOne('benchmark_three_arm_trials','id',proof.trialId);
 const project=await readOne('work_projects','id',proof.projectId);
 const account=await readOne('benchmark_budget_accounts','id',approval.account_id);
 const task=await readOne('agent_tasks','id',proof.taskId);
+const dispatch=await readOne('benchmark_development_dispatches','task_id',proof.taskId,
+ 'task_id,trial_id,contract_hash,benchmark_contract_hash,baseline_sha,status');
 // A token-only cap cannot discharge the owner's $10 per-arm approval.
 // Verify model pricing AND the independent owner-controlled upper price ceiling
 // before issuing any execution grant or allowing any paid provider traffic.
@@ -63,7 +67,10 @@ assertBenchmarkDollarCeiling({
  accountTokens:Number(account.cap_tokens),approvalTokens:Number(approval.max_tokens)
 });
 if(trial.arm!=='full'||trial.state!=='qualified'||
- trial.contract_sha256!==proof.contractHash||trial.baseline_sha!==proof.baselineSha||
+ trial.contract_sha256!==proof.benchmarkContractHash||trial.baseline_sha!==proof.baselineSha||
+ dispatch.trial_id!==proof.trialId||dispatch.contract_hash!==proof.contractHash||
+ dispatch.benchmark_contract_hash!==proof.benchmarkContractHash||dispatch.baseline_sha!==proof.baselineSha||dispatch.status!=='qualified'||
+ approval.model!=='gpt-5.3-codex'||Number(account.cap_tokens)!==350000||
  trial.owner_actor_id!==approval.actor_id||
  account.trial_id!==trial.id||account.owner_actor_id!==approval.actor_id||
  project.actor_id!==approval.actor_id||project.chat_id!==approval.chat_id||
