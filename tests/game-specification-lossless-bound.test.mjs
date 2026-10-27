@@ -5,6 +5,8 @@ const validator=readFileSync('lib/projects/contract.ts','utf8');
 const worker=readFileSync('lib/missions/worker.ts','utf8');
 const projectWorker=readFileSync('lib/projects/worker.ts','utf8');
 const recoveryBudget=readFileSync('lib/projects/recovery-budget.ts','utf8');
+const recovery=readFileSync('lib/projects/specification-recovery.ts','utf8');
+const admission=readFileSync('supabase/migrations/20261027172000_specification_lifecycle_recovery.sql','utf8');
 const checkpointMigration=readFileSync('supabase/migrations/20261023194500_recover_latest_game_revision_checkpoint.sql','utf8');
 test('lossless game approval bound matches saved checkpoint capacity and preserves all validation gates',()=>{
  assert.match(validator,/canonical\(gameSpecificationView\(p\)\)\.length>40000/);
@@ -12,9 +14,9 @@ test('lossless game approval bound matches saved checkpoint capacity and preserv
  assert.match(validator,/validateGameAssessmentCapacity\(p\)/);
  assert.match(validator,/digest\(p\.milestones\.at\(-1\)!\.contract\) !== digest\(p\.finalContract\)/);
  assert.match(worker,/uniqueCharacterLimit:40000/);
- assert.match(projectWorker,/if\(canonical\(view\)\.length<=40000\)draft=view/);
+ assert.match(recovery,/validateProjectPlan\(parseJSON\(job\.result\.text\)\)/);
  assert.doesNotMatch(projectWorker,/if\(canonical\(view\)\.length<=20000\)draft=view/);
- assert.match(recoveryBudget,/\.in\('role',\['revise','compose'\]\)/);
+ assert.match(recoveryBudget,/loadSpecificationRecovery/);
  assert.match(recoveryBudget,/\.order\('created_at',\{ascending:false\}\)/);
  assert.match(worker,/revalidated_saved_specification/);
  assert.match(worker,/freshReviewRequired:true/);
@@ -25,6 +27,8 @@ test('autonomous checkpoint recovers newest revision with a project budget fence
  assert.match(checkpointMigration,/j\.role IN \('revise','compose'\)/);
  assert.match(checkpointMigration,/ORDER BY m\.created_at DESC,j\.created_at DESC LIMIT 1/);
  assert.match(checkpointMigration,/p\.token_allowance-spent<25000/);
- assert.match(projectWorker,/\['compose','revise'\]\.includes\(composition\.role\)/);
- assert.match(projectWorker,/status:'unreviewed'/);
+ assert.match(recovery,/\['compose','revise'\]\.includes\(j\.role\)/);
+ assert.match(admission,/spec_required:=90000/);
+ assert.match(admission,/specification_recovery_dispatched/);
+ assert.match(recovery,/status:'unreviewed'/);
 });
