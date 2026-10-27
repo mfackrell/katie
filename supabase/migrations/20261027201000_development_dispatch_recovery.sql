@@ -14,7 +14,7 @@ BEGIN
  SELECT * INTO p FROM work_projects WHERE id=m.project_id FOR UPDATE;
  IF NOT FOUND OR p.phase<>'development' OR p.active_mission_id IS DISTINCT FROM m.id OR
    p.status NOT IN ('running','blocked') OR m.status NOT IN ('running','blocked') OR
-   (j.status='running' AND j.lease_until>now()) OR j.status NOT IN ('running','failed','queued','waiting_external') THEN RETURN false; END IF;
+   (j.status='running' AND j.lease IS NOT NULL AND j.lease_until>now()) OR j.status NOT IN ('running','failed','queued','waiting_external') THEN RETURN false; END IF;
  SELECT * INTO t FROM agent_tasks WHERE id=j.id FOR UPDATE;
  IF j.status IN ('queued','waiting_external') AND p.status='running' AND m.status='running' AND
    (t.id IS NULL OR t.status IN ('draft','submitted') OR (t.status='dispatching' AND t.external ? 'attempted')) THEN RETURN false; END IF;
@@ -33,7 +33,7 @@ BEGIN
    'request',t.request_id,'attempted',attempted,'issue',t.external->'issueNumber','receipt',t.external->'receipt',
    'failure',coalesce(t.external->'dispatchFailure',source_failure))),'UTF8')),'hex');
  IF j.status IN ('queued','waiting_external') AND p.status='running' AND m.status='running' AND EXISTS(SELECT 1 FROM project_events WHERE project_id=p.id AND event='development_dispatch_recovered' AND data->>'key'=recovery_key AND created_at=j.updated_at) THEN RETURN false;END IF;
- IF p.deadline<=now() OR m.deadline<=now() THEN reason:='The original project or mission authorization deadline expired.';action_needed:='Obtain an explicit owner deadline authorization for this saved scope; no deadline was extended.';
+ IF p.deadline IS NULL OR m.deadline IS NULL OR p.deadline<=now() OR m.deadline<=now() THEN reason:='The original project or mission authorization deadline expired.';action_needed:='Obtain an explicit owner deadline authorization for this saved scope; no deadline was extended.';
  ELSIF p.approved_hash IS NULL OR p.approved_hash IS DISTINCT FROM p.approval_hash OR r.binding->>'scopeHash' IS DISTINCT FROM p.approved_hash OR j.payload->>'approved' IS DISTINCT FROM 'true' THEN reason:='The saved scope or development approval is no longer valid.';action_needed:='Obtain approval for the current authoritative scope; the prior approval was not reissued.';
  ELSIF a.id IS NULL OR a.archived OR a.config IS DISTINCT FROM frozen->'config' OR a.version IS DISTINCT FROM (frozen->>'version')::integer OR coalesce((a.config->>'development')::boolean,false)=false THEN reason:='The saved development agent identity or permissions changed.';action_needed:='Restore the approved agent definition or obtain a new explicit scope approval.';
  ELSIF coalesce(length(j.payload->>'development_input'),0)=0 OR m.repository_id IS DISTINCT FROM p.repository_id OR (t.id IS NOT NULL AND (t.kind<>'development' OR t.agent_id<>j.agent_id OR t.snapshot IS DISTINCT FROM frozen->'config' OR t.definition_version IS DISTINCT FROM (frozen->>'version')::integer OR t.initial_input IS DISTINCT FROM j.payload->>'development_input' OR t.input IS DISTINCT FROM t.initial_input OR t.repository_id IS DISTINCT FROM p.repository_id OR t.repository_full_name IS DISTINCT FROM p.repository_full_name)) THEN reason:='The saved task identity, repository or frozen approved input does not match its parent.';action_needed:='Reconcile the conflicting saved task/binding before any execution.';
@@ -77,7 +77,7 @@ BEGIN
  FOR row IN SELECT j.id FROM mission_assignments j JOIN agent_missions m ON m.id=j.mission_id
  JOIN work_projects p ON p.id=m.project_id LEFT JOIN agent_tasks t ON t.id=j.id
  WHERE j.role='development' AND j.available_at<=now() AND p.phase='development' AND p.active_mission_id=m.id
- AND p.status IN ('running','blocked') AND (j.status='failed' OR (j.status='running' AND j.lease_until<=now()) OR
+ AND p.status IN ('running','blocked') AND (j.status='failed' OR (j.status='running' AND (j.lease IS NULL OR j.lease_until IS NULL OR j.lease_until<=now())) OR
    (j.status IN ('queued','waiting_external') AND (m.status='blocked' OR p.status='blocked' OR t.status IN ('blocked','ready') OR (t.status='dispatching' AND NOT (t.external ? 'attempted')))))
  ORDER BY j.updated_at LIMIT 20 LOOP
   PERFORM recover_project_development_dispatch(row.id);
@@ -93,7 +93,7 @@ DECLARE body text;
 BEGIN
  SELECT pg_get_functiondef('public.claim_project_dispatch(uuid,uuid,text)'::regprocedure) INTO body;
  body:=replace(body,'update agent_tasks set external=jsonb_build_object(''attempted'',true,''projectId'',p.id)',
-  'if m.calls>=m.max_calls or greatest(m.actual_tokens,m.reserved_tokens)+8000>m.token_allowance or (select coalesce(sum(greatest(actual_tokens,reserved_tokens)),0) from agent_missions where project_id=p.id)+8000>p.token_allowance then return false;end if;
+  'if p_lease is null or j.lease is null or j.lease_until is null or m.deadline is null or p.deadline is null or m.calls>=m.max_calls or greatest(m.actual_tokens,m.reserved_tokens)+8000>m.token_allowance or (select coalesce(sum(greatest(actual_tokens,reserved_tokens)),0) from agent_missions where project_id=p.id)+8000>p.token_allowance then return false;end if;
  update agent_tasks set external=external||jsonb_build_object(''attempted'',true,''projectId'',p.id,''dispatchStartedAt'',now())');
  IF position('dispatchStartedAt' IN body)=0 OR position('m.calls>=m.max_calls' IN body)=0 THEN RAISE EXCEPTION 'Generic dispatch admission patch did not match the existing durable interface';END IF;
  EXECUTE body;
@@ -111,7 +111,7 @@ BEGIN
  SELECT * INTO j FROM mission_assignments WHERE id=p_id FOR UPDATE;
  SELECT * INTO p FROM work_projects WHERE id=m.project_id FOR UPDATE;
  SELECT * INTO t FROM agent_tasks WHERE id=p_id FOR UPDATE;
- IF j.id IS NULL OR t.id IS NULL OR j.role<>'development' OR j.status<>'running' OR j.lease IS DISTINCT FROM p_lease OR j.lease_until<=now()
+ IF p_lease IS NULL OR j.lease IS NULL OR j.lease_until IS NULL OR m.deadline IS NULL OR p.deadline IS NULL OR j.id IS NULL OR t.id IS NULL OR j.role<>'development' OR j.status<>'running' OR j.lease IS DISTINCT FROM p_lease OR j.lease_until<=now()
  OR m.status<>'running' OR m.deadline<=now() OR p.status<>'running' OR p.active_mission_id IS DISTINCT FROM m.id OR p.deadline<=now()
  OR p.approved_hash IS NULL OR p.approved_hash IS DISTINCT FROM p.approval_hash
  OR NOT EXISTS(SELECT 1 FROM project_runs WHERE mission_id=m.id AND binding->>'scopeHash'=p.approved_hash)

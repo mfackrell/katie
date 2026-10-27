@@ -26,7 +26,8 @@ BEGIN
  SELECT jsonb_build_object('missions',(SELECT jsonb_agg(jsonb_build_array(id,actual_tokens,reserved_tokens,calls) ORDER BY id) FROM agent_missions WHERE project_id=pid),'calls',(SELECT jsonb_agg(to_jsonb(c) ORDER BY c.id) FROM mission_calls c WHERE job_id=jid)) INTO before_charges;
  IF recover_project_development_dispatch(jid) THEN RAISE EXCEPTION 'Live worker preempted';END IF;
  -- Simulate a lost worker at its persisted pre-POST task, retaining two old attempts.
- UPDATE mission_assignments SET lease_until=now()-interval '1 second' WHERE id=jid;
+ UPDATE mission_assignments SET lease=null WHERE id=jid;
+ IF claim_project_dispatch(jid,null,p.approved_hash) OR save_project_development_dispatch(jid,null,'submitted','Missing lease','{}') IS DISTINCT FROM 'false'::jsonb THEN RAISE EXCEPTION 'Missing lease admitted execution or observation';END IF;
  -- Twenty older permanent blockers must not starve this new stranded task.
  FOR idx IN 1..20 LOOP
   clone_actor:=gen_random_uuid();clone_chat:=gen_random_uuid();clone_pid:=gen_random_uuid();
