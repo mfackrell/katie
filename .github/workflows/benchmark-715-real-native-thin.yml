@@ -41,12 +41,14 @@ jobs:
       - name: Install pinned dependencies without install scripts
         run: npm ci --ignore-scripts
       - name: Owner-admit matching staging trial and enforce dollar limit
+        id: owner_admission
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: |
           set -euo pipefail
           node scripts/benchmark/owner-paid-nonfull-bootstrap.mjs "$RUNNER_TEMP/benchmark-715-paid-manifest.json"
       - name: Install pinned native SDK and sandbox dependencies
+        id: trusted_runtime
         run: |
           set -euo pipefail
           npm install --no-save --package-lock=false --ignore-scripts @openai/codex-sdk@0.164.0
@@ -63,6 +65,7 @@ jobs:
           set -euo pipefail
           node scripts/benchmark/paid-staging-nonfull-runner.mjs "$RUNNER_TEMP/benchmark-715-paid-manifest.json" native "$RUNNER_TEMP/benchmark-715-native-result.json"
       - name: Thin candidate — same tools and spending boundary
+        if: ${{ !cancelled() && steps.owner_admission.outcome == 'success' && steps.trusted_runtime.outcome == 'success' }}
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           GH_TOKEN: ${{ github.token }}
