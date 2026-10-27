@@ -54,3 +54,10 @@ test('paid contained host reuses signed trust boundary, never a synthetic receip
  assert.match(runtime,/privateBrowserAcceptance:'not-yet-verified'/);
  assert.match(gateway,/NONFULL_GATEWAY_PROVIDER_MODE_INVALID/);
 });
+
+test('paid runner binds its declared socket directory before metered execution',()=>{
+ const runtime=readFileSync('scripts/benchmark/paid-staging-nonfull-runner.mjs','utf8');
+ assert.match(runtime,/const workspace=join\(root,'repo'\),sockdir=join\(root,'sock'\)/);
+ assert.match(runtime,/runPhase\(\{arm,phase:name,boundary,socketdir:sockdir,/);
+ assert.doesNotMatch(runtime,/runPhase\(\{arm,phase:name,boundary,socketdir,/);
+});
