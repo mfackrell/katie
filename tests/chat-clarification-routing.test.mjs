@@ -56,7 +56,7 @@ const continuitySelection = unique(findNodes(node => ts.isBinaryExpression(node)
   ts.isIdentifier(node.left) && node.left.text === 'taskProgress' &&
   ts.isIdentifier(node.right) && node.right.text === 'pdfProgress'), 'frozen task selection');
 const selectionBlock = blockBetween(statement(continuitySelection), statement(declaration('requiredReviewForRequest')));
-const collaborationGate = code(statement(declaration('collaborationEnabledForRequest')));
+const collaborationGate = blockBetween(statement(declaration('websiteResearchRequired')), statement(declaration('collaborationEnabledForRequest')));
 const generationParams = code(unique(findNodes(node => ts.isFunctionDeclaration(node) &&
   node.name?.text === 'buildGenerationParams'), 'buildGenerationParams function'));
 const createParams = code(statement(declaration('createParams')));
