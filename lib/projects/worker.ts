@@ -15,7 +15,19 @@ import {runSpecialistResourceBatch} from './specialist-dispatch';
 import {announceBlockedRecoveryResources} from './recovery-budget';
 import { projectRpc, projectRuns, milestoneEvidence, acceptanceBinding, getDevelopmentProjectContext, type Project } from './store';
 import { projectClosure, projectImpediment } from './completion';
-export async function baseline(p: Project) { if (!p.repository_id)
+export async function baseline(p: Project) {
+ let fullBaseline:string|null=null;
+ if(p.profile==='game'&&process.env.KATIE_FULL_BENCHMARK_DISPATCH==='enabled'&&process.env.NEXT_PUBLIC_SUPABASE_URL==='https://iytvavgbaainnsrecmcx.supabase.co'){
+  const {data:binding,error}=await getSupabaseAdminClient().from('benchmark_full_project_bindings')
+   .select('baseline_sha,benchmark_contract_hash,model').eq('project_id',p.id).maybeSingle<{baseline_sha:string;benchmark_contract_hash:string;model:string}>();
+  if(error)throw Error('Full benchmark project baseline lookup failed closed');
+  if(binding){
+   if(!/^[a-f0-9]{40}$/.test(binding.baseline_sha)||!/^[a-f0-9]{64}$/.test(binding.benchmark_contract_hash)||binding.model!=='gpt-5.3-codex')throw Error('Full benchmark frozen project binding is invalid');
+   if(p.baseline_sha&&p.baseline_sha!==binding.baseline_sha)throw Error('Full benchmark baseline differs from the saved project baseline');
+   fullBaseline=binding.baseline_sha;
+  }
+ }
+ if (!p.repository_id)
     return null; const { data: r, error } = await getSupabaseAdminClient().from('repo_sync_runs').select('repository_full_name').eq('id', p.repository_id).maybeSingle<{
     repository_full_name: string;
 }>(); if (error || !r || !/^[-\w.]+\/[-\w.]+$/.test(r.repository_full_name))
@@ -30,7 +42,7 @@ export async function baseline(p: Project) { if (!p.repository_id)
   const content=(file:typeof contextTool)=>{if(Array.isArray(file.data)||!('content' in file.data))throw Error('Target game verification tools unavailable before coding approval');return Buffer.from(file.data.content,'base64').toString('utf8');};
   if(!/export const GAME_PROJECT_CONTEXT_VERSION\s*=\s*1\s*;/.test(content(contextTool))||!content(ciTool).includes('checkGameModel(context,root,dependencies)')||!content(modelTool).includes('runGameModelAcceptance')||!content(rulesTool).includes('export function validateGameAcceptance')||!content(rulesTool).includes('export function runGameModelAcceptance'))throw Error('Target game acceptance tools are incompatible; upgrade the connected target before coding approval');
  }
- if(p.verified_sha&&p.baseline_sha)return p.baseline_sha; const b = await gh.repos.getBranch({ owner, repo, branch: 'main' }); return b.data.commit.sha; }
+ if(p.verified_sha&&p.baseline_sha)return p.baseline_sha;if(fullBaseline)return fullBaseline;const b = await gh.repos.getBranch({ owner, repo, branch: 'main' }); return b.data.commit.sha; }
 function bounded(text: string) { if (text.length > 12000)
     throw Error('Project milestone context exceeds its bounded input. Narrow the specification; original requirements have not been truncated.'); return text; }
 
