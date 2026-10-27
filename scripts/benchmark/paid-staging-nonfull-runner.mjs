@@ -163,9 +163,11 @@ export async function executePaidNonfull({db,ownerId,arm,trial,account,approval,
   if(!process.env.GH_TOKEN)reject('durable-checkpoint-token-missing');
   execFileSync('gh',['auth','setup-git'],{env:{PATH:process.env.PATH??'',GH_TOKEN:process.env.GH_TOKEN}});
   git(workspace,'push','origin','HEAD:refs/heads/'+checkpointBranch);
-  const {error:statusError}=await db.from('benchmark_three_arm_trials')
-   .update({state:'submitted'}).eq('id',trial.id).eq('state','running');
-  if(statusError)reject('submission-status-not-committed');
+  const {data:transitioned,error:statusError}=await db.from('benchmark_three_arm_trials')
+   .update({state:'submitted'}).eq('id',trial.id).eq('state','running')
+   .select('id');
+  if(statusError||transitioned?.length!==1||transitioned[0]?.id!==trial.id)
+   reject('submission-status-not-committed');
   confirmed=true;
   const result={arm,trialId:trial.id,accountId:account.id,commitSha:head,
    branch:'benchmark/715-paid-'+arm+'-'+trial.id.slice(0,8),
