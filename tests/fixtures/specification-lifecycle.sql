@@ -63,7 +63,7 @@ BEGIN
  SELECT * INTO p FROM work_projects WHERE id=pid;
  IF p.phase<>'approval' OR p.approved_hash IS NOT NULL OR p.approval_hash IS NULL THEN RAISE EXCEPTION 'Specification did not stop at exact scope approval';END IF;
  IF repo IS NOT NULL THEN
-  PERFORM control_work_project(pid,actor,chat,'approve',p.approval_hash);
+  PERFORM control_work_project(pid,actor,chat,'approve','',p.approval_hash);
   SELECT * INTO p FROM work_projects WHERE id=pid;
   IF p.phase<>'development' OR p.status<>'running' OR p.approved_hash IS DISTINCT FROM p.approval_hash THEN RAISE EXCEPTION 'Approved scope did not advance to existing development lifecycle';END IF;
  END IF;
