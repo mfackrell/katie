@@ -64,7 +64,7 @@ it.each([
 it("preserves explicit math, units, display math, and literal code alongside currency prose", () => {
   const markdown = "At a $25 million company, the transaction was $100 million. " +
     "Math $x^2$, $2m + n$, $25 \\times 2$, and $10 cm$. " +
-    "Inline code `$25 million`.\\n\\n$$x^2+y^2=z^2$$";
+    "Inline code `$25 million`.\n\n$$x^2+y^2=z^2$$";
   const html = renderToStaticMarkup(React.createElement(ReactMarkdown, {
     remarkPlugins: [remarkMath, remarkCurrencyProse], rehypePlugins: [rehypeKatex],
     children: markdown,
