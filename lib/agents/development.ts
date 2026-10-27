@@ -96,7 +96,12 @@ async function repository(task: AgentTask) {
   const [owner, repo] = data.repository_full_name.split("/");
   return { owner, repo, fullName: data.repository_full_name };
 }
-async function save(task: AgentTask, status: string, details: string | null, external = task.external) {
+async function save(task: AgentTask, status: string, details: string | null, external = task.external, assignmentLease?:string) {
+  if(assignmentLease){
+    const saved=await agentRpc<AgentTask | false>("save_project_development_dispatch",{p_id:task.id,p_lease:assignmentLease,p_status:status,p_detail:details,p_external:external});
+    if(!saved)throw Error("Development dispatch worker lease is stale; saved execution evidence was not overwritten");
+    return saved;
+  }
   const { error } = await getSupabaseAdminClient().from("agent_tasks").eq("id", task.id).eq("request_id", task.request_id).update({ status, details, external, updated_at: new Date().toISOString() });
   if (error) throw new Error("Unable to persist development status");
   return { ...task, status, details, external };
@@ -116,13 +121,20 @@ export async function chooseTrustedGithubModels(objective:string){
  if(!code||!reviewer)throw Error('Router found no verified model for the protected coding and review tools');
  return {codingModel:code.modelId,reviewModel:reviewer.modelId};
 }
+function dispatchFailure(error:unknown){
+ const e=error as {status?:number;message?:string;code?:string}|null;
+ const transient=Boolean(e&&([429,500,502,503,504].includes(Number(e.status))||/timeout|timed out|connection|fetch failed|ECONNRESET/i.test(e.message??'')));
+ return {kind:transient?'transient':'permanent',phase:'preflight',reason:typeof e?.message==='string'?e.message.slice(0,600):'GitHub preflight failed'};
+}
 const marker = (task: AgentTask) => `<!-- katie-managed-task:${task.id} -->`;
 export async function dispatchDevelopment(task: AgentTask, project?: Context, assignmentLease?:string) {
   if (task.status !== "dispatching") return task;
+  if(task.external.attempted)return readTask(task.id);
+  const persist=(current:AgentTask,status:string,detail:string|null,external=current.external)=>save(current,status,detail,external,assignmentLease);
   // Project metadata must eventually be appended by a DB-bound project
   // dispatcher. Ordinary/model-authored assignments cannot mint this authority.
   if (/<!--\s*katie-project\b/.test(task.input + '\n' + task.snapshot.instructions)) {
-    return save(task, "blocked", "Project metadata is not permitted in ordinary coding input. A DB-bound approved project dispatcher is required.");
+    return persist(task, "blocked", "Project metadata is not permitted in ordinary coding input. A DB-bound approved project dispatcher is required.");
   }
   let benchmarkHeader=''; let benchmarkModel=''; let benchmarkRepository='';let benchmarkContractHash='';
   // Benchmark engineering enters at the EXISTING durable dispatch boundary.
@@ -223,34 +235,34 @@ export async function dispatchDevelopment(task: AgentTask, project?: Context, as
   try {
     issueBody = packDevelopmentRequest(fullBody, marker(task));
   } catch (error) {
-    return save(task, "blocked", error instanceof Error ? error.message : "Complete approved coding request cannot fit lossless transport");
+    return persist(task, "blocked", error instanceof Error ? error.message : "Complete approved coding request cannot fit lossless transport");
   }
-  const claimed = project ? await agentRpc<boolean>("claim_project_dispatch", {p_id:task.id,p_lease:assignmentLease??null,p_hash:project.scopeHash}) : await agentRpc<boolean>("claim_agent_dispatch", { p_id: task.id });
-  if (!claimed) return readTask(task.id);
-  task = { ...task, external: { attempted: true, ...(project?{projectId:project.projectId}:{}) } };
   let client: Octokit, binding: Awaited<ReturnType<typeof repository>>;
   try {
     client = github(); binding = await repository(task);
     const [user, repo] = await Promise.all([client.users.getAuthenticated(), client.repos.get(binding)]);
     if (user.data.type !== "User" || repo.data.owner.type !== "User" || user.data.login.toLowerCase() !== repo.data.owner.login.toLowerCase()) {
-      return save(task, "blocked", "Blocked integration: GitHub credential must authenticate as the repository's human owner. App, bot, organization-member and collaborator credentials cannot authorize this owner-only workflow.");
+      return persist(task, "blocked", "Blocked integration: GitHub credential must authenticate as the repository's human owner. App, bot, organization-member and collaborator credentials cannot authorize this owner-only workflow.");
     }
-    if (repo.data.owner.login.toLowerCase() !== binding.owner.toLowerCase()) return save(task, "blocked", "Blocked integration: repository owner mismatch.");
+    if (repo.data.owner.login.toLowerCase() !== binding.owner.toLowerCase()) return persist(task, "blocked", "Blocked integration: repository owner mismatch.");
     if(benchmarkRepository&&benchmarkRepository!==binding.fullName)
-      return save(task,'blocked','Benchmark owner approval repository mismatch');
+      return persist(task,'blocked','Benchmark owner approval repository mismatch');
     try {
       const workflow = await client.actions.getWorkflow({ owner: binding.owner, repo: binding.repo, workflow_id: "autonomous-development.yml" });
       if (workflow.data.path !== ".github/workflows/autonomous-development.yml" || workflow.data.state !== "active") throw new Error("Workflow unavailable");
-    } catch { return save(task, "blocked", "Blocked integration: the existing autonomous-development workflow is unavailable or disabled. No coding issue was submitted."); }
-  } catch (error) { return save(task, "blocked", error instanceof Error && error.message.startsWith("Blocked integration:") ? error.message : "Blocked integration: unable to verify authenticated repository owner."); }
+    } catch(error) { return persist(task, "blocked", "Blocked integration: the existing autonomous-development workflow is unavailable or disabled. No coding issue was submitted.",{...task.external,dispatchFailure:dispatchFailure(error)}); }
+  } catch (error) { return persist(task, "blocked", error instanceof Error && error.message.startsWith("Blocked integration:") ? error.message : "Blocked integration: unable to verify authenticated repository owner.",{...task.external,dispatchFailure:dispatchFailure(error)}); }
+  const claimed = project ? await agentRpc<boolean>("claim_project_dispatch", {p_id:task.id,p_lease:assignmentLease??null,p_hash:project.scopeHash}) : await agentRpc<boolean>("claim_agent_dispatch", { p_id: task.id });
+  if (!claimed) return readTask(task.id);
+  task = { ...task, external: { ...task.external, attempted: true,dispatchStartedAt:new Date().toISOString(), ...(project?{projectId:project.projectId}:{}) } };
   try {
     const issue = await client.issues.create({ owner: binding.owner, repo: binding.repo,
       title: `[agent] ${task.input.split("\n")[0].slice(0, 180)}`,
       body: issueBody,
     });
-    return save(task, "submitted", "Owner-authored issue accepted. Workflow completion has not yet been verified.", { ...task.external,attempted: true, issueNumber: issue.data.number, issueUrl: issue.data.html_url, repository: binding.fullName });
+    return persist(task, "submitted", "Owner-authored issue accepted. Workflow completion has not yet been verified.", { ...task.external,attempted: true, issueNumber: issue.data.number, issueUrl: issue.data.html_url, repository: binding.fullName });
   } catch {
-    return save(task, "dispatching", "External acceptance is uncertain. Refresh to reconcile the durable marker; this task will not automatically submit another issue.");
+    return persist(task, "dispatching", "External acceptance is uncertain. Refresh to reconcile the durable marker; this task will not automatically submit another issue.");
   }
 }
 // Infrastructure-only recovery: the original immutable PR is re-tested,
@@ -330,7 +342,8 @@ export async function retryImmutableProjectVerification(task: AgentTask, project
  return saved?.status==='running';
 }
 
-export async function reconcileDevelopment(task: AgentTask, project?: ProjectAcceptanceBinding) {
+export async function reconcileDevelopment(task: AgentTask, project?: ProjectAcceptanceBinding, assignmentLease?:string) {
+  const persist=(current:AgentTask,status:string,detail:string|null,external=current.external)=>save(current,status,detail,external,assignmentLease);
   if(!project&&typeof task.external.projectId==='string'){const binding=await getDevelopmentProjectContext(task.id);if(!binding||binding.projectId!==task.external.projectId)throw Error('Saved project binding unavailable');project=acceptanceBinding(binding);}
   const deadline = Date.now() + 60_000;
   if (!["submitted", "dispatching", "ready", "blocked"].includes(task.status)) return task;
@@ -340,9 +353,16 @@ export async function reconcileDevelopment(task: AgentTask, project?: ProjectAcc
     if (!task.external.attempted || task.status === "blocked") return task;
     const issues = await client.issues.listForRepo({ owner: binding.owner, repo: binding.repo, state: "all", creator: binding.owner, per_page: 100, sort: "created", direction: "desc" });
     const issue = issues.data.find(i => !i.pull_request && i.user?.login.toLowerCase() === binding.owner.toLowerCase() && i.title.startsWith("[agent]") && (i.body ?? "").length <= 65536 && i.body?.includes(marker(task)));
-    if (!issue) return save(task, "dispatching", "No matching issue in the latest 100 owner issues. Acceptance remains uncertain; automatic resubmission is disabled.");
+    if (!issue) {
+      const since=Date.parse(String(task.external.dispatchStartedAt??task.external.verificationSince??''));
+      const expired=!Number.isFinite(since)||Date.now()-since>30*60*1000;
+      return persist(task, expired?'blocked':'dispatching', expired
+        ?'External acceptance cannot be safely reconciled to the saved task marker. Inspect the repository issue history and restore the exact accepted issue identity; automatic resubmission is not authorized.'
+        :'No matching issue in the latest 100 owner issues. Acceptance remains uncertain; automatic resubmission is disabled.',
+        {...task.external,...(expired?{dispatchFailure:{kind:'permanent',phase:'reconciliation',reason:'Ambiguous external acceptance requires exact issue identity.'}}:{})});
+    }
     issueNumber = issue.number;
-    task = await save(task, "submitted", "Reconciled accepted issue; awaiting verified workflow receipt.", { ...task.external, issueNumber, issueUrl: issue.html_url, repository: binding.fullName });
+    task = await persist(task, "submitted", "Reconciled accepted issue; awaiting verified workflow receipt.", { ...task.external, issueNumber, issueUrl: issue.html_url, repository: binding.fullName });
   }
   const verificationSince=typeof task.external.verificationSince==='string'
     ? Date.parse(task.external.verificationSince) : NaN;
@@ -351,25 +371,25 @@ export async function reconcileDevelopment(task: AgentTask, project?: ProjectAcc
   const workflowPath='.github/workflows/'+workflowId;
   const runs = await client.actions.listWorkflowRuns({ owner: binding.owner, repo: binding.repo, workflow_id: workflowId, per_page: 20 });
   for (const run of runs.data.workflow_runs) {
-    if (Date.now() > deadline - 15_000) return save(task, task.status, "Refresh reached its bounded time window before finding a verified receipt. Refresh manually to check again.");
+    if (Date.now() > deadline - 15_000) return persist(task, task.status, "Refresh reached its bounded time window before finding a verified receipt. The existing mission worker will check again.");
     if (run.status !== "completed" || !["issues", "workflow_dispatch"].includes(run.event) || run.repository.full_name !== binding.fullName || run.head_branch !== "main" || run.head_repository?.full_name !== binding.fullName || run.path !== workflowPath || (verificationOnly && (run.event!=='workflow_dispatch'||new Date(run.created_at).getTime()<verificationSince))) continue;
     const artifacts = await client.actions.listWorkflowRunArtifacts({ owner: binding.owner, repo: binding.repo, run_id: run.id, per_page: 20 });
     const artifact = artifacts.data.artifacts.find(a => a.name === "agent-completion" && !a.expired && a.size_in_bytes <= 1_000_000);
     if (!artifact) continue;
-    if (Date.now() > deadline - 15_000) return save(task, task.status, "Refresh reached its bounded time window. No new completion status has been inferred.");
+    if (Date.now() > deadline - 15_000) return persist(task, task.status, "Refresh reached its bounded time window. No new completion status has been inferred.");
     const download = await client.actions.downloadArtifact({ owner: binding.owner, repo: binding.repo, artifact_id: artifact.id, archive_format: "zip" });
     const raw = completionJson(Buffer.from(download.data as ArrayBuffer));
     const parsed = receiptSchema.safeParse(raw);
     if (!parsed.success || parsed.data.issue_number !== issueNumber) continue;
     const receipt = parseCompletionReceipt(raw, binding.fullName, issueNumber, run.id, run.conclusion, project);
-    return save(task, receipt.outcome === "READY" ? "ready" : "blocked", receipt.outcome === "READY" ? "Draft ready for owner approval. No merge or deployment." : "Independent workflow tests or review blocked completion.", { ...task.external, runUrl: run.html_url, prUrl: receipt.pr_url, receipt });
+    return persist(task, receipt.outcome === "READY" ? "ready" : "blocked", receipt.outcome === "READY" ? "Draft ready for owner approval. No merge or deployment." : "Independent workflow tests or review blocked completion.", { ...task.external, runUrl: run.html_url, prUrl: receipt.pr_url, receipt });
   }
   if(verificationOnly && Date.now()-verificationSince>2*60*60*1000){
-    return save(task,'blocked','Verification-only workflow did not provide a valid tested/reviewed/browser receipt within two hours. Saved source and original project scope remain intact.');
+    return persist(task,'blocked','Verification-only workflow did not provide a valid tested/reviewed/browser receipt within two hours. Saved source and original project scope remain intact.');
   }
-  return save(task, task.status, verificationOnly
+  return persist(task, task.status, verificationOnly
     ? 'Waiting for independent verification-only receipt on the unchanged approved code.'
-    : 'No verified completion receipt among the latest 20 workflow runs. Refresh manually after workflow completion.');
+    : 'No verified completion receipt among the latest 20 workflow runs. The existing mission worker will reconcile completion automatically.');
 }
 
 // Supply the coordinator with observed repository evidence after its trusted
