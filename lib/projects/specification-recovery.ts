@@ -46,7 +46,7 @@ export function selectSpecificationRecovery(jobs:SpecificationJob[],originalRequ
  // Pass receipts are retained too: only a fresh exact-candidate review can close.
  const priorReviews=ordered.filter(j=>j.role==='review'&&j.status==='completed'&&j.result)
   .map(j=>({sourceJobId:j.id,sourceMissionId:j.mission_id,...specificationFindings(j.result)}));
- const findings=[...new Map(priorReviews.map(r=>{const {sourceJobId:_j,sourceMissionId:_m,...content}=r;return[canonical(content),content];})).values()];
+ const findings=[...new Map(priorReviews.map(r=>{const {sourceJobId,sourceMissionId,...content}=r;void sourceJobId;void sourceMissionId;return[canonical(content),content];})).values()];
  const fingerprint=digest({candidate:plan,originalRequirements,findings,diagnostics:diagnostics.map(d=>d.detail)});
  return {checkpoint:{sourceJobId:job.id,sourceMissionId:job.mission_id,text:job.result!.text as string,
    fullSpecificationHash:digest(plan),status:'unreviewed' as const,
