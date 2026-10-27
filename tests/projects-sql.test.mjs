@@ -1,3 +1,4 @@
+import {verifyDevelopmentDispatchRecoverySql} from './helpers/development-dispatch-recovery-sql.mjs';
 import {verifySpecificationLifecycleSql} from './helpers/specification-lifecycle-sql.mjs';
 import test from 'node:test';import assert from 'node:assert/strict';import {readFileSync,mkdtempSync,rmSync,readdirSync} from 'node:fs';import {join} from 'node:path';import {tmpdir} from 'node:os';import {spawnSync} from 'node:child_process';import pg from 'pg';import {randomUUID} from 'node:crypto';
 test('projects: real PostgreSQL idempotency, scope, lifecycle fencing and aggregate reservation races',{timeout:180000},async()=>{
@@ -107,6 +108,12 @@ test('projects: real PostgreSQL idempotency, scope, lifecycle fencing and aggreg
   await db.query(readFileSync('supabase/migrations/20261027172000_specification_lifecycle_recovery.sql','utf8'));
   await db.query('set role service_role');
   await verifySpecificationLifecycleSql(db);
+  await db.query('reset role');
+  await db.query(readFileSync('supabase/migrations/20261027201000_development_dispatch_recovery.sql','utf8'));
+  await db.query('set role service_role');
+  await verifyDevelopmentDispatchRecoverySql(db);
+  await assert.rejects(db.query("set role anon;select recover_project_development_dispatch('44444444-4444-4444-8444-444444444444');"),/permission denied/);
+  await db.query('reset role');await db.query('set role service_role');
   await db.query('reset role');await db.query('set role anon');for(const table of ['work_projects','project_agents','project_runs','project_events'])await assert.rejects(db.query('select * from '+table),/permission denied/);await assert.rejects(db.query('select claim_work_project()'),/permission denied/);await assert.rejects(db.query("select retry_project_review('44444444-4444-4444-8444-444444444444','11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222')"),/permission denied/);
  }finally{await Promise.allSettled(clients.map(c=>c.end()));if(started)run('pg_ctl',['-D',data,'-m','immediate','-w','stop']);rmSync(root,{recursive:true,force:true});}
 });
