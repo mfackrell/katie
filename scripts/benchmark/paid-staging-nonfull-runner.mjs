@@ -128,7 +128,7 @@ export async function executePaidNonfull({db,ownerId,arm,trial,account,approval,
    'commit','--allow-empty','-m','Take Eleven: native implementation');
   // Persist an immutable first checkpoint before spending on review calls.
   if(!process.env.GH_TOKEN)reject('durable-checkpoint-token-missing');
-  execFileSync('gh',['auth','setup-git'],{env:{PATH:process.env.PATH??'',GH_TOKEN:process.env.GH_TOKEN}});
+  execFileSync('gh',['auth','setup-git'],{env:{PATH:process.env.PATH??'',HOME:process.env.HOME??'',GH_TOKEN:process.env.GH_TOKEN}});
   git(workspace,'push','origin','HEAD:refs/heads/'+checkpointBranch);
   const firstReview=await phase('review');notes.push(firstReview);
   if(firstReview.verdict==='changes_requested'){
@@ -161,7 +161,7 @@ export async function executePaidNonfull({db,ownerId,arm,trial,account,approval,
   const head=git(workspace,'rev-parse','HEAD').trim();
   // A reviewed source commit is useful even if the later private-preview gate fails.
   if(!process.env.GH_TOKEN)reject('durable-checkpoint-token-missing');
-  execFileSync('gh',['auth','setup-git'],{env:{PATH:process.env.PATH??'',GH_TOKEN:process.env.GH_TOKEN}});
+  execFileSync('gh',['auth','setup-git'],{env:{PATH:process.env.PATH??'',HOME:process.env.HOME??'',GH_TOKEN:process.env.GH_TOKEN}});
   git(workspace,'push','origin','HEAD:refs/heads/'+checkpointBranch);
   const {data:transitioned,error:statusError}=await db.from('benchmark_three_arm_trials')
    .update({state:'submitted'}).eq('id',trial.id).eq('state','running')
@@ -184,7 +184,7 @@ export async function executePaidNonfull({db,ownerId,arm,trial,account,approval,
    assertScope(workspace);
    if(process.env.GH_TOKEN){
     execFileSync('gh',['auth','setup-git'],{
-     env:{PATH:process.env.PATH??'',GH_TOKEN:process.env.GH_TOKEN}});
+     env:{PATH:process.env.PATH??'',HOME:process.env.HOME??'',GH_TOKEN:process.env.GH_TOKEN}});
     git(workspace,'add','-A');
     git(workspace,'-c','user.name=Katie Benchmark',
      '-c','user.email=katie-benchmark@users.noreply.github.com',
