@@ -86,3 +86,20 @@ test('paid owner workflow is issue-triggered and bound to reviewed main with sep
  assert.doesNotMatch(workflow,/workflow_dispatch:/);
  assert.doesNotMatch(workflow,/pull_request:/);
 });
+
+test('trusted Git checkpoint authentication retains HOME in every paid phase',()=>{
+ const runtime=readFileSync('scripts/benchmark/paid-staging-nonfull-runner.mjs','utf8');
+ const authCalls=runtime.match(/execFileSync\('gh',\['auth','setup-git'\],\{[\s\S]*?\}\);/g)??[];
+ assert.equal(authCalls.length,3);
+ for(const call of authCalls){
+  assert.match(call,/HOME:process\.env\.HOME/);
+  assert.match(call,/GH_TOKEN:process\.env\.GH_TOKEN/);
+ }
+});
+test('Thin executes after blocked Native only when owner admission and runtime setup passed',()=>{
+ const workflow=readFileSync('.github/workflows/benchmark-715-real-native-thin.yml','utf8');
+ assert.match(workflow,/id: owner_admission/);
+ assert.match(workflow,/id: trusted_runtime/);
+ assert.match(workflow,/name: Thin candidate[^\n]*\n\s+if: \$\{\{ !cancelled\(\) && steps\.owner_admission\.outcome == 'success' && steps\.trusted_runtime\.outcome == 'success' \}\}/);
+ assert.match(workflow,/name: Preserve trial and review evidence[\s\S]*?if: always\(\)/);
+});
