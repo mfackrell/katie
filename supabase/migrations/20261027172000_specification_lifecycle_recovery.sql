@@ -9,7 +9,7 @@ BEGIN
     OR position(' if not ok then return false;end if;' IN body)=0 THEN
    RAISE EXCEPTION 'Specification lifecycle migration requires the existing completion gate';
  END IF;
- body:=replace(body,'declare p work_projects;','declare spec_checkpoint_data jsonb; spec_source mission_assignments; spec_spent bigint; spec_required integer; spec_future integer; spec_milestones integer; spec_hash text; spec_block text; spec_mid uuid; p work_projects;');
+ body:=replace(body,'declare p work_projects;','declare spec_checkpoint_data jsonb; spec_source mission_assignments; spec_spent bigint; spec_required integer; spec_future integer; spec_milestones integer; spec_hash text; spec_recovery_key text; spec_block text; spec_mid uuid; p work_projects;');
  before_child:=$inject$
  if action='child' and p.phase='specification' and payload->>'kind'='specification' then
   spec_required:=120000; spec_milestones:=1;
@@ -26,8 +26,10 @@ BEGIN
    spec_milestones:=jsonb_array_length((spec_source.result->>'text')::jsonb->'milestones');
    if spec_milestones not between 1 and 6 then raise exception 'Saved specification milestone count invalid';end if;
    spec_required:=90000; -- review 24K + revision 40K + final review 24K + routing 2K
-   if exists(select 1 from project_events where project_id=p.id and event='specification_recovery_dispatched' and data->>'sourceHash'=spec_hash) then
-    spec_block:='This exact saved specification already had a recovery attempt. No equivalent work was launched; prior artifacts and charges remain recorded.';
+   -- Derive equivalence from locked authoritative state, never caller evidence.
+   spec_recovery_key:=encode(sha256(convert_to(project_canonical(jsonb_build_object('sourceHash',spec_hash,'objective',p.objective,'clarifications',coalesce(p.clarifications,''))),'UTF8')),'hex');
+   if exists(select 1 from project_events where project_id=p.id and event='specification_recovery_dispatched' and data->>'recoveryKey'=spec_recovery_key) then
+    spec_block:='This exact saved specification and authoritative requirements already had a recovery attempt. No equivalent work was launched; prior artifacts and charges remain recorded.';
    end if;
   elsif exists(select 1 from mission_assignments j join agent_missions m on m.id=j.mission_id
     where m.project_id=p.id and m.project_kind='specification' and (j.result->>'text' is not null or j.result->>'rejectedSpecification' is not null) and j.role in ('compose','revise')) then
@@ -47,7 +49,7 @@ BEGIN
     'minimumAction','Resolve the recorded artifact/resource blocker and obtain any required owner authorization. Existing scope, charges and deadlines are unchanged.'));
   else
    if p.team[2] is null or p.team[2]=p.team[1] then raise exception 'Independent specification reviewer required';end if;
-   payload:=jsonb_set(payload,'{evidence}',coalesce(payload->'evidence','{}')||jsonb_build_object('specificationBudget',jsonb_build_object('version',1,'missionTokens',spec_required,'futureTokens',spec_future,'sourceHash',spec_hash)));
+   payload:=jsonb_set(payload,'{evidence}',coalesce(payload->'evidence','{}')||jsonb_build_object('specificationBudget',jsonb_build_object('version',1,'missionTokens',spec_required,'futureTokens',spec_future,'sourceHash',spec_hash,'recoveryKey',spec_recovery_key)));
   end if;
  end if;
 $inject$;
@@ -63,7 +65,7 @@ $inject$;
    insert into mission_assignments(mission_id,job_key,role,agent_id,instruction,dependencies,payload) values
     (spec_mid,'compose','compose',p.team[1],'Produce the assigned specification. Reuse the saved checkpoint verbatim when present; preserve the original requirements.','{}','{}'),
     (spec_mid,'review','review',p.team[2],'Independently verify the complete specification against the original requirements, reviewed research and saved findings.',array['compose'],'{}');
-   insert into project_events(project_id,event,data) values(p.id,'specification_recovery_dispatched',jsonb_build_object('sourceHash',spec_hash,'missionId',spec_mid,'missionTokens',spec_required,'futureTokens',spec_future));
+   insert into project_events(project_id,event,data) values(p.id,'specification_recovery_dispatched',jsonb_build_object('sourceHash',spec_hash,'recoveryKey',spec_recovery_key,'missionId',spec_mid,'missionTokens',spec_required,'futureTokens',spec_future));
   end if;
  end if;
 $inject$;

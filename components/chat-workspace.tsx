@@ -1,6 +1,7 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { MemoryContext } from "@/components/memory-context";
 import { ConversationWork } from "@/components/conversation-work";
 import { ChatPanel } from "@/components/chat-panel";
@@ -12,6 +13,10 @@ export default function ChatWorkspace({
 }: {
   conversationId: string;
 }) {
+  const router = useRouter();
+  const deleteInFlight = useRef(false);
+  const [deleting, setDeleting] = useState(false);
+  const [deleted, setDeleted] = useState(false);
   const actors = useResource<{ actors: Actor[] }>("/api/actors"),
     chats = useResource<{ chats: ChatThread[] }>("/api/chats"),
     repos = useResource<{ repos: Array<{ id: string; full_name: string }> }>(
@@ -57,6 +62,43 @@ export default function ChatWorkspace({
       setError("Could not rename conversation. Retry when connected.");
     }
   }
+  async function remove() {
+    if (!chat || deleteInFlight.current) return;
+    if (!window.confirm(`Permanently delete “${chat.title}” and its messages? This cannot be undone. The specialist and its long-term memory will be kept.`)) return;
+    deleteInFlight.current = true;
+    setDeleting(true);
+    setError("");
+    try {
+      const response = await fetch(`/api/chats?id=${encodeURIComponent(chat.id)}`, {
+        method: "DELETE",
+      });
+      // Another tab may already have deleted this conversation.
+      if (!response.ok && response.status !== 404) throw Error("Delete failed");
+    } catch {
+      setError("Could not delete this conversation. Please try again.");
+      deleteInFlight.current = false;
+      setDeleting(false);
+      return;
+    }
+    // Do not leave Advanced handoff pointing at a deleted conversation. A
+    // storage restriction must not prevent navigation after a successful delete.
+    try {
+      if (window.localStorage.getItem("katie.activeChatId") === chat.id) {
+        window.localStorage.removeItem("katie.activeChatId");
+      }
+    } catch {}
+    setDeleted(true);
+    router.replace("/conversations");
+  }
+  if (deleted)
+    return (
+      <div className="p-8">
+        <p role="status">Conversation deleted.</p>
+        <Link href="/conversations" className="mt-4 inline-block underline">
+          Open Conversations
+        </Link>
+      </div>
+    );
   if (actors.loading || chats.loading)
     return (
       <p role="status" className="p-8">
@@ -84,7 +126,8 @@ export default function ChatWorkspace({
           {error}
         </p>
       )}
-      <details className="shrink-0 border-b border-white/10 px-5 py-3 text-sm">
+      <div className="flex shrink-0 items-start border-b border-white/10">
+      <details className="min-w-0 flex-1 px-5 py-3 text-sm">
         <summary className="cursor-pointer text-zinc-300">
           Context & conversation settings
         </summary>
@@ -162,6 +205,16 @@ export default function ChatWorkspace({
           )}
         </div>
       </details>
+      <button
+        type="button"
+        className="my-1 mr-3 min-h-11 shrink-0 rounded-lg px-3 text-sm text-zinc-400 hover:bg-red-500/10 hover:text-red-300 focus-visible:outline focus-visible:outline-2 focus-visible:outline-red-300 disabled:opacity-40"
+        aria-label={`Delete chat: ${chat.title}`}
+        disabled={deleting}
+        onClick={() => void remove()}
+      >
+        {deleting ? "Deleting…" : "Delete chat"}
+      </button>
+      </div>
       <ConversationWork chatId={chat.id} />
       <ChatPanel
         key={chat.id}

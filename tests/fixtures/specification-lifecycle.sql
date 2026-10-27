@@ -5,6 +5,7 @@ DECLARE actor uuid:=gen_random_uuid(); chat uuid:=gen_random_uuid(); pid uuid:=g
  mid uuid:=gen_random_uuid(); source_job uuid:=gen_random_uuid(); l uuid:=gen_random_uuid();
  candidate text:=current_setting('katie.test.saved_spec'); source_hash text; payload jsonb; p work_projects;
  child agent_missions; review_job mission_assignments; cap jsonb; call_id uuid; job_count integer; repo uuid;
+ recovery_key text; changed_key text; scope_change text;
 BEGIN
  INSERT INTO actors(id,name,system_prompt) VALUES(actor,'Specification fixture','Controlled offline fixture');
  INSERT INTO chats(id,actor_id,title) VALUES(chat,actor,'Specification lifecycle fixture');
@@ -36,6 +37,8 @@ BEGIN
  IF NOT finish_work_project(pid,l,'child',payload) THEN RAISE EXCEPTION 'Funded saved recovery failed';END IF;
  SELECT m.* INTO child FROM agent_missions m JOIN work_projects w ON w.active_mission_id=m.id WHERE w.id=pid;
  IF child.token_allowance<>90000 OR child.project_evidence->'specificationBudget'->>'futureTokens'<>'240000' THEN RAISE EXCEPTION 'Wrong mandatory-stage allowance';END IF;
+ recovery_key:=child.project_evidence->'specificationBudget'->>'recoveryKey';
+ IF recovery_key IS DISTINCT FROM current_setting('katie.test.expected_recovery_key') THEN RAISE EXCEPTION 'Worker/SQL authoritative recovery equivalence differs';END IF;
  IF (SELECT status FROM mission_assignments WHERE mission_id=child.id AND job_key='plan')<>'completed' THEN RAISE EXCEPTION 'Planning inference was not skipped';END IF;
  IF (SELECT count(*) FROM mission_assignments WHERE mission_id=child.id AND role IN ('compose','review'))<>2 THEN RAISE EXCEPTION 'Normal independent specification lifecycle missing';END IF;
  IF (SELECT actual_tokens FROM agent_missions WHERE id=mid)<>10000 OR (SELECT reserved_tokens FROM agent_missions WHERE id=mid)<>15000 THEN RAISE EXCEPTION 'Historical charges changed';END IF;
@@ -51,8 +54,29 @@ BEGIN
  IF cap->>'stageRemainingTokens'<>'14000' THEN RAISE EXCEPTION 'Routing/uncertain spending escaped stage accounting: %',cap;END IF;
  -- Reusing an identical artifact under any job ID cannot open another mission.
  UPDATE work_projects SET active_mission_id=null,status='running',lease=l,lease_until=now()+interval '5 minutes' WHERE id=pid;
- PERFORM finish_work_project(pid,l,'child',payload);
+ PERFORM finish_work_project(pid,l,'child',jsonb_set(payload,'{evidence,specificationRecovery}',jsonb_build_object('recoveryKey',repeat('f',64),'fingerprint',repeat('f',64),'priorReviews',jsonb_build_array('New reviewer wording cannot change authoritative equivalence'))));
  IF (SELECT detail FROM work_projects WHERE id=pid) NOT LIKE '%exact saved specification%' OR (SELECT count(*) FROM project_runs WHERE project_id=pid)<>2 THEN RAISE EXCEPTION 'Equivalent recovery repeated';END IF;
+ -- Authoritative requirement/clarification changes permit a separately fenced
+ -- review of the SAME saved candidate; caller feedback/keys cannot do so.
+ FOREACH scope_change IN ARRAY ARRAY['objective','clarifications'] LOOP
+  BEGIN
+   UPDATE work_projects SET status='running',lease=l,lease_until=now()+interval '5 minutes',
+    objective=CASE WHEN scope_change='objective' THEN objective||' Explicit revised user requirement.' ELSE objective END,
+    clarifications=CASE WHEN scope_change='clarifications' THEN clarifications||' USER CLARIFICATION: PLAYING is the approved phase label.' ELSE clarifications END WHERE id=pid;
+   -- An older source-only dispatch receipt cannot veto a new authoritative scope.
+   INSERT INTO project_events(project_id,event,data) VALUES(pid,'specification_recovery_dispatched',jsonb_build_object('sourceHash',source_hash));
+   PERFORM finish_work_project(pid,l,'child',payload);
+   SELECT m.project_evidence->'specificationBudget'->>'recoveryKey' INTO changed_key FROM agent_missions m JOIN work_projects w ON w.active_mission_id=m.id WHERE w.id=pid;
+   IF changed_key IS NULL OR changed_key=recovery_key OR (SELECT count(*) FROM project_runs WHERE project_id=pid)<>3 THEN RAISE EXCEPTION 'Changed authoritative scope was denied recovery';END IF;
+   IF (SELECT result->>'text' FROM mission_assignments WHERE id=source_job)<>candidate OR
+     (SELECT actual_tokens FROM agent_missions WHERE id=mid)<>10000 OR (SELECT reserved_tokens FROM agent_missions WHERE id=mid)<>15000 OR
+     (SELECT token_allowance FROM work_projects WHERE id=pid)<>600000 THEN RAISE EXCEPTION 'Scope recovery changed saved work or authorization/accounting';END IF;
+   UPDATE work_projects SET active_mission_id=null,status='running',lease=l,lease_until=now()+interval '5 minutes' WHERE id=pid;
+   PERFORM finish_work_project(pid,l,'child',payload);
+   IF (SELECT detail FROM work_projects WHERE id=pid) NOT LIKE '%exact saved specification%' OR (SELECT count(*) FROM project_runs WHERE project_id=pid)<>3 THEN RAISE EXCEPTION 'Clarified scope recovered twice';END IF;
+   RAISE EXCEPTION 'Rollback scope variant';
+  EXCEPTION WHEN OTHERS THEN IF SQLERRM<>'Rollback scope variant' THEN RAISE;END IF;END;
+ END LOOP;
  UPDATE work_projects SET active_mission_id=child.id,status='running',lease=l,lease_until=now()+interval '5 minutes' WHERE id=pid;
  BEGIN
   PERFORM finish_work_project(pid,l,'spec',jsonb_build_object('spec',candidate::jsonb,'baseline',repeat('a',40),'detail','Unreviewed fixture'));

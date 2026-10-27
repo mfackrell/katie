@@ -47,7 +47,7 @@ export async function executeClaim(claim:Claim,model=missionModel){
  if(sourceReports)mission.project_evidence={...((mission.project_evidence??{}) as Record<string,unknown>),executiveSources:executiveSourceManifest(sourceReports)};
  const completed=saved.jobs.filter(j=>j.status==='completed');
  const recoveredReviews=(mission.project_evidence as {specificationRecovery?:{priorReviews?:Array<Record<string,unknown>>}}|null)?.specificationRecovery?.priorReviews??[];
- const priorReviews=completed.filter(j=>j.role==='review').map(j=>({recovered:false,key:j.job_key,verdict:j.result?.verdict,findings:j.result?.findings??j.result?.summary,checks:j.result?.checks,clarification:j.result?.clarification})).concat(recoveredReviews.map(r=>({recovered:true,key:String(r.sourceJobId),verdict:r.verdict,findings:r.findings??r.summary,checks:r.failedChecks,clarification:r.clarification})));
+ const priorReviews=completed.filter(j=>j.role==='review').map(j=>({recovered:false,key:j.job_key,verdict:j.result?.verdict,findings:j.result?.findings??j.result?.summary,checks:j.result?.checks,clarification:j.result?.clarification})).concat(recoveredReviews.map(r=>({recovered:true,key:String(r.sourceJobId),verdict:r.verdict,findings:r.findings??r.summary,...(r.findings&&r.summary?{summary:r.summary}:{}),checks:r.failedChecks,clarification:r.clarification})));
  const revisionFindings=priorReviews.map(({checks,...rest})=>({...rest,checkCount:Array.isArray(checks)?checks.length:0,failedChecks:Array.isArray(checks)?checks.filter((c:Record<string,unknown>)=>c.passed===false).map((c:Record<string,unknown>)=>({id:c.id,evidence:typeof c.evidence==='string'?c.evidence.slice(0,500):undefined})):[]}));
  const candidateEvidence=(result:Record<string,unknown>|null|undefined)=>{
   if(mission.project_kind!=='specification'||(mission.project_evidence as {projectProfile?:string}|null)?.projectProfile!=='game'||typeof result?.text!=='string'){
@@ -253,9 +253,9 @@ export async function executeClaim(claim:Claim,model=missionModel){
   const measured=measureDeliverable(mission.objective,String(target.result.text??target.result.output??''));
   const gameReview=mission.project_kind==='specification'&&(mission.project_evidence as {projectProfile?:string}|null)?.projectProfile==='game';
   const persisted=researchRecoveryEvidence(mission.project_evidence,false);
-  // Saved reviewed research, rejected drafts and prior review receipts stay in
-  // storage. The independent reviewer receives only source IDs and the CURRENT
-  // complete candidate (in a lossless contract view) without repeated drafts.
+  // Supply historical findings once in priorFindings for every specification
+  // profile. Hydration transport and earlier drafts remain in durable records;
+  // the reviewer receives the complete current candidate and reviewed research.
   const reviewEvidence=gameReview&&persisted&&typeof persisted==='object'
     ?(()=>{const e=persisted as Record<string,unknown>;
       const research=e.reviewedResearch as {reviewedMissionId?:string}|undefined;
@@ -264,7 +264,9 @@ export async function executeClaim(claim:Claim,model=missionModel){
         recoverySourceMissionId:recovery?.sourceMissionId,recoveryValidationFindings:recovery?.findings,
         originalEvidence:'The full reviewed research is included; earlier drafts remain in durable mission records'};
      })()
-    :persisted;
+    :mission.project_kind==='specification'&&persisted&&typeof persisted==='object'&&!Array.isArray(persisted)
+      ?Object.fromEntries(Object.entries(persisted as Record<string,unknown>).filter(([key])=>!['savedSpecificationCheckpoint','specificationRecovery'].includes(key)))
+      :persisted;
   const reviewPayload={objective:mission.objective,projectEvidence:reviewEvidence,
     candidate:{key:target.job_key,result:candidateEvidence(target.result)},
     measuredLength:measured,
@@ -277,7 +279,7 @@ export async function executeClaim(claim:Claim,model=missionModel){
   const reviewInput='Independent assessment:\n'+JSON.stringify(assessment)+
     '\nRequired acceptance IDs:\n'+JSON.stringify(projectReview?PROJECT_ACCEPTANCE_IDS:acceptanceIds(assessment))+
     '\nEvidence and candidate:\n'+JSON.stringify(encodeOperationalEvidence(reviewPayload));
-  // The mission runner's 48K input envelope excludes its system instruction.
+  // The mission runner's bounded input envelope excludes its system instruction.
   // Apply the same envelope here; count BOTH fields with the provider before
   // reservation. Do not confuse characters with tokens or delete acceptance.
   if(!fitsMissionEnvelope(reviewFrame,reviewInput,missionInputLimit(claim)))
