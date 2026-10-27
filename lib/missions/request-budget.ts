@@ -1,6 +1,7 @@
 import {rpc} from './store';
 import {measureDeliverable} from './review-length';
 import {readOnlyRepositoryObjective,type Claim} from './types';
+import {SPECIFICATION_STAGE_TOKENS} from '@/lib/projects/specification-recovery';
 
 export type MissionCapacity={authorized:boolean;remainingTokens:number;callsRemaining:number;routingCallsRemaining:number;reason?:string};
 export function missionInputLimit(claim:Claim):number {
@@ -24,6 +25,9 @@ export function missionOutputLimit(claim:Claim,input:string):number {
   return missionInputLimit(claim)>48000&&(limit===null||limit>1200)?12000:6000;
  }
  if(claim.job.role==='review'){
+  // The existing fixed project phase contract has six required checks. Keep
+  // those checks complete without reserving a second long-form report.
+  if(claim.mission.project_kind==='specification')return 5000;
   if(!input.startsWith('Independent assessment:\n'))return 5000;
   const limit=measureDeliverable(claim.mission.objective,'').wordLimit;
   // Short artifacts need a full comparison, not another report. Keep all
@@ -37,9 +41,9 @@ export function fitsMissionEnvelope(instruction:string,input:string,inputLimit=4
 /** A rejected reservation is NOT a provider call or a failed mission. */
 export class MissionAdmissionError extends Error {
  constructor(readonly requestedTokens:number,readonly capacity:MissionCapacity|null){
-  super(capacity?.authorized
+  super(capacity?.reason??(capacity?.authorized
    ? `Model request requires ${requestedTokens} reserved tokens; ${capacity.remainingTokens} remain in the authorized allowance.`
-   : 'Worker no longer authorized or mission allowance exhausted');
+   : 'Worker no longer authorized or mission allowance exhausted'));
   this.name='MissionAdmissionError';
  }
  get canTryAlternative(){return this.capacity?.authorized===true&&this.capacity.callsRemaining>0&&this.capacity.remainingTokens>0;}
@@ -49,6 +53,21 @@ export async function explainAdmissionDenial(claim:Claim,requestedTokens:number)
  const capacity=value&&typeof value==='object'&&typeof value.authorized==='boolean'
   &&Number.isFinite(value.remainingTokens)&&Number.isFinite(value.callsRemaining)?value:null;
  throw new MissionAdmissionError(requestedTokens,capacity);
+}
+/** A paid draft/retry cannot consume the allowance for its required reviewers.
+ * The DB still atomically reserves each native-counted request and aggregate cost. */
+export async function assertSpecificationStageCapacity(claim:Claim,requestedTokens:number,executionFloor=0){
+ const budget=(claim.mission.project_evidence as {specificationBudget?:{version?:number}}|null)?.specificationBudget;
+ if(claim.mission.project_kind!=='specification'||budget?.version!==1)return;
+ const stage=claim.job.role==='revise'?'revision':claim.job.job_key==='review_again'?'review_again':claim.job.role;
+ if(!['compose','review','revision','review_again'].includes(stage))throw Error('Specification mission has an unbudgeted inference stage');
+ const cap=SPECIFICATION_STAGE_TOKENS[stage as 'compose'|'review'|'revision'|'review_again'];
+ const future=stage==='compose'?SPECIFICATION_STAGE_TOKENS.review+SPECIFICATION_STAGE_TOKENS.revision+SPECIFICATION_STAGE_TOKENS.review_again
+  :stage==='review'?SPECIFICATION_STAGE_TOKENS.revision+SPECIFICATION_STAGE_TOKENS.review_again
+  :stage==='revision'?SPECIFICATION_STAGE_TOKENS.review_again:0;
+ const capacity=await rpc<(MissionCapacity&{stageRemainingTokens:number})|null>('specification_call_capacity',{p_id:claim.job.id,p_lease:claim.job.lease});
+ if(requestedTokens+executionFloor>cap||!capacity?.authorized||!Number.isFinite(capacity.stageRemainingTokens)||capacity.stageRemainingTokens<requestedTokens+executionFloor||capacity.remainingTokens<requestedTokens+executionFloor+future)
+  throw new MissionAdmissionError(requestedTokens+executionFloor+future,capacity?{...capacity,reason:`Specification ${stage} request needs ${requestedTokens} tokens plus ${executionFloor} execution-output headroom; stage allowance remaining ${capacity.stageRemainingTokens}, mission allowance remaining ${capacity.remainingTokens}, protected future stages ${future}. No provider call was authorized.`}:capacity);
 }
 /** All retries within one worker invocation share its original wall-clock window.
  * Reserve two minutes for persistence/cleanup before the six-minute worker lease. */
