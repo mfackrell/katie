@@ -650,7 +650,9 @@ export async function runAdaptiveCollaboration(
                     Math.max(MIN_RESEARCH_RETRY_MS, remainingBeforeFinalMs()),
                   )
                 : researchTimeoutMs
-              : participantTimeoutMs;
+              : selected.provider.name === "openai" && /^gpt-5(?:\\.\\d+)?-pro(?:-|$)/i.test(selected.modelId)
+                ? Math.max(participantTimeoutMs, PRO_MODEL_LEAD_TIMEOUT_MS)
+                : participantTimeoutMs;
           const minimumHelperTimeMs =
             request.capability === "research" && candidateAttempt > 1
               ? MIN_RESEARCH_RETRY_MS
