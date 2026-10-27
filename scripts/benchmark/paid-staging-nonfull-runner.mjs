@@ -99,6 +99,7 @@ export async function executePaidNonfull({db,ownerId,arm,trial,account,approval,
  const root=mkdtempSync(join(tmpdir(),'benchmark-real-'+arm+'-'));
  const workspace=join(root,'repo'),sockdir=join(root,'sock');mkdirSync(sockdir);
  let server,confirmed=false;
+ const checkpointBranch='benchmark/715-paid-'+arm+'-'+trial.id.slice(0,8);
  const notes=[],issuedAt=Date.now();
  try{
   execFileSync('git',['clone','--no-hardlinks','--quiet',checkout,workspace],{timeout:45000});
@@ -128,7 +129,6 @@ export async function executePaidNonfull({db,ownerId,arm,trial,account,approval,
   // Persist an immutable first checkpoint before spending on review calls.
   if(!process.env.GH_TOKEN)reject('durable-checkpoint-token-missing');
   execFileSync('gh',['auth','setup-git'],{env:{PATH:process.env.PATH??'',GH_TOKEN:process.env.GH_TOKEN}});
-  const checkpointBranch='benchmark/715-paid-'+arm+'-'+trial.id.slice(0,8);
   git(workspace,'push','origin','HEAD:refs/heads/'+checkpointBranch);
   const firstReview=await phase('review');notes.push(firstReview);
   if(firstReview.verdict==='changes_requested'){
@@ -175,6 +175,26 @@ export async function executePaidNonfull({db,ownerId,arm,trial,account,approval,
    reviewCycles:notes.length,wallMs:Date.now()-issuedAt};
   onCompleted(result);
   return result;
+ }catch(error){
+  // Retain bounded, scope-checked work in a private branch even on failure;
+  // never call interrupted or unreconciled inference an accepted artifact.
+  try{
+   assertScope(workspace);
+   if(process.env.GH_TOKEN){
+    execFileSync('gh',['auth','setup-git'],{
+     env:{PATH:process.env.PATH??'',GH_TOKEN:process.env.GH_TOKEN}});
+    git(workspace,'add','-A');
+    git(workspace,'-c','user.name=Katie Benchmark',
+     '-c','user.email=katie-benchmark@users.noreply.github.com',
+     'commit','--allow-empty','-m','Take Eleven: blocked reviewed checkpoint');
+    git(workspace,'push','origin','HEAD:refs/heads/'+checkpointBranch);
+    console.error('BENCHMARK_PAID_FAILURE_CHECKPOINT='+checkpointBranch);
+   }
+  }catch(checkpointError){
+   console.error('BENCHMARK_PAID_CHECKPOINT_NOT_VERIFIED:'+
+    String(checkpointError?.message||'failed').slice(0,100));
+  }
+  throw error;
  }finally{
   if(server)await new Promise(resolve=>server.close(resolve));
   rmSync(root,{recursive:true,force:true,maxRetries:10,retryDelay:100});
@@ -199,8 +219,28 @@ if(process.argv[1]?.endsWith('paid-staging-nonfull-runner.mjs')){
   lookup(db,'benchmark_three_arm_trials',row.trialId),
   lookup(db,'benchmark_budget_accounts',row.accountId),
   lookup(db,'benchmark_native_spending_approvals',row.approvalId)]);
- const result=await executePaidNonfull({db,ownerId:process.env.KATIE_NONFULL_STAGING_OWNER_ID,
-  arm,trial,account,approval,providerKey:process.env.OPENAI_API_KEY});
- writeFileSync(output,JSON.stringify(result,null,2)+'\n',{mode:0o600,flag:'wx'});
- console.log('BENCHMARK_REAL_NATIVE_THIN_SUBMITTED_'+arm);
+ try{
+  const result=await executePaidNonfull({db,ownerId:process.env.KATIE_NONFULL_STAGING_OWNER_ID,
+   arm,trial,account,approval,providerKey:process.env.OPENAI_API_KEY});
+  writeFileSync(output,JSON.stringify(result,null,2)+'\n',{mode:0o600,flag:'wx'});
+  console.log('BENCHMARK_REAL_NATIVE_THIN_SUBMITTED_'+arm);
+ }catch(error){
+  // The canonical PostgreSQL budget journal, not this receipt, determines
+  // charge liabilities. Unknown provider receipts retain their holds.
+  const [ledger,settled]=await Promise.all([
+   db.from('benchmark_budget_calls').select('state,actual_tokens,reserved_tokens,provider_namespace')
+    .eq('account_id',account.id),
+   db.from('benchmark_budget_accounts').select('spent_tokens,frozen_at')
+    .eq('id',account.id).maybeSingle()
+  ]);
+  const result={arm,trialId:trial.id,accountId:account.id,
+   paidAttempted:true,accepted:false,privateBrowserAcceptance:'not-tested',
+   status:'BLOCKED',reasonCode:String(error?.message||'unknown').slice(0,180),
+   ledgerKnown:!ledger.error&&!!settled.data&&!settled.error,
+   settledTokens:settled.data?.spent_tokens??null,
+   reservedOrUnresolvedCalls:ledger.data?.filter(c=>c.state==='reserved'||c.state==='unresolved').length??null,
+   canonicalReconciliationRequired:true};
+  writeFileSync(output,JSON.stringify(result,null,2)+'\n',{mode:0o600,flag:'wx'});
+  throw error;
+ }
 }
