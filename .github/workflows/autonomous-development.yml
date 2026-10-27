@@ -147,8 +147,8 @@ jobs:
         if: steps.task.outputs.native == 'true'
         env:
           KATIE_NATIVE_HANDOFF_HMAC_KEY: ${{ secrets.KATIE_NATIVE_HANDOFF_HMAC_KEY }}
-          KATIE_BENCHMARK_SERVICE_ROLE_KEY: ${{ secrets.KATIE_BENCHMARK_SERVICE_ROLE_KEY }}
-          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.KATIE_BENCHMARK_SUPABASE_URL }}
+          KATIE_BENCHMARK_SERVICE_ROLE_KEY: ${{ secrets.KATIE_NONFULL_STAGING_SERVICE_ROLE_KEY }}
+          NEXT_PUBLIC_SUPABASE_URL: https://iytvavgbaainnsrecmcx.supabase.co
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           KATIE_BENCHMARK_PAID_EXECUTION: ${{ vars.KATIE_BENCHMARK_PAID_EXECUTION }}
           KATIE_BENCHMARK_APPROVED_ARM_USD_CENTS: ${{ vars.KATIE_BENCHMARK_APPROVED_ARM_USD_CENTS }}

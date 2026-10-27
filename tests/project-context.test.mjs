@@ -14,6 +14,12 @@ test('ordinary requests stay ordinary and exact marker round trips with stable c
   assert.equal(canonicalJSON({ z: [{ b: 2, a: 1 }], a: 3 }), '{"a":3,"z":[{"a":1,"b":2}]}');
   assert.equal(contractHash({ scenarios: m.contract.scenarios, path: '/' }), m.contractHash);
 });
+test('Full project benchmark contract identity survives strict trusted context validation',()=>{
+  const bound={...metadata(),benchmarkContractHash:'c'.repeat(64)};
+  assert.deepEqual(parseProjectContext(projectMarker(bound)),bound);
+  assert.throws(()=>projectMarker({...bound,benchmarkContractHash:'not-a-digest'}),/Invalid project identity/);
+  assert.throws(()=>projectMarker({...bound,unexpectedBenchmarkField:true}),/Invalid project metadata fields/);
+});
 test('routed coding and reviewer model identities survive trusted context validation',()=>{
   const approved={...metadata(),codingModel:'gpt-5.3-codex',reviewModel:'gpt-5.4'};
   assert.deepEqual(parseProjectContext(projectMarker(approved)),approved);

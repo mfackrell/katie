@@ -15,9 +15,14 @@ test('existing owner-only engineering workflow selects signed native host withou
  assert.match(handoff,/benchmark_native_spending_approvals/);
  assert.match(handoff,/encodeNativeHandoff/);
  assert.match(handoff,/claim_project_dispatch/);
+ assert.match(handoff,/Full benchmark project is blocked unless both Full and trusted native dispatch are enabled/);
+ assert.match(handoff,/Full benchmark dispatch is restricted to the staging Supabase project/);
 });
 test('native paid gateway never inherits provider or Supabase credentials',()=>{
  assert.match(host,/KATIE_BENCHMARK_PAID_EXECUTION!=='enabled'/);
+ assert.match(host,/url!=='https:\/\/iytvavgbaainnsrecmcx\.supabase\.co'/);
+ assert.match(workflow,/KATIE_BENCHMARK_SERVICE_ROLE_KEY: \$\{\{ secrets\.KATIE_NONFULL_STAGING_SERVICE_ROLE_KEY \}\}/);
+ assert.match(workflow,/NEXT_PUBLIC_SUPABASE_URL: https:\/\/iytvavgbaainnsrecmcx\.supabase\.co/);
  assert.match(readFileSync('scripts/benchmark/shared-native-container.mjs','utf8'),/--unshare-all/);
  assert.match(readFileSync('scripts/benchmark/shared-native-container.mjs','utf8'),/--clearenv/);
  assert.match(host,/benchmark_reconcile_linked_receipt/);

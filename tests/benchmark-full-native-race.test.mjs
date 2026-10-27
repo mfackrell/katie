@@ -28,6 +28,8 @@ test('Full native trial admission uses two real PostgreSQL connections and one m
   await db.query(readFileSync('supabase/migrations/20261024163000_benchmark_durable_accounts.sql','utf8'));
   // Dependencies from source PRs are intentionally included in one snapshot.
   await db.query(readFileSync('tests/sql/benchmark-combined-smoke-part1.sql','utf8'));
+  await db.query(readFileSync('supabase/migrations/20261021000532_atomic_mission_admission_and_review_checkpoints.sql','utf8'));
+  await db.query(readFileSync('supabase/migrations/202604030001_model_registry.sql','utf8'));
   for(const name of [
    '20261025184500_benchmark_linked_settlement_guards',
    '20261025185000_benchmark_canonical_operation_links',
@@ -35,12 +37,15 @@ test('Full native trial admission uses two real PostgreSQL connections and one m
    '20261025191500_benchmark_development_dispatches',
    '20261025193000_benchmark_execution_grants',
    '20261025194500_benchmark_owner_spending_grants',
+   '20261025194500_benchmark_owner_spending_grants',
    '20261025200000_benchmark_gateway_stop_fence',
    '20261025201000_benchmark_atomic_stop_admission',
    '20261025202000_benchmark_project_bound_grants',
    '20261025203000_benchmark_atomic_parent_fencing',
    '20261025204500_benchmark_external_native_mission_bridge',
-   '20261025205000_benchmark_native_owner_assignment_grants'])
+   '20261025205000_benchmark_native_owner_assignment_grants',
+   '20261025211000_benchmark_task_bound_spending_approvals',
+   '20261027180744_benchmark_full_do_execution_binding'])
     await db.query(readFileSync('supabase/migrations/'+name+'.sql','utf8'));
   await db.query('set role service_role');
   await db.query("insert into actors(id,name) values('a1111111-1111-4111-8111-111111111111','Native acceptance fixture')");
@@ -70,6 +75,50 @@ test('Full native trial admission uses two real PostgreSQL connections and one m
   assert.equal(mission.calls,2);
   const projections=(await db.query('select count(*)::int n from benchmark_budget_calls where account_id=(select account_id from benchmark_execution_grants where token_digest=$1)',[row.token_digest])).rows[0].n;
   assert.equal(projections,2,'exactly one new canonical charge for the admissible attempt');
+  await db.query("update work_projects set status='blocked',detail='Completed isolated Native race fixture.' where id=$1",[row.project_id]);
+
+  // Exercise the existing owner request -> game project -> project mission
+  // lifecycle. The project/account association is created atomically by its
+  // service RPC; no project, mission or spending approval is inserted directly.
+  const actor='b1111111-1111-4111-8111-111111111111',chat='b2222222-2222-4222-8222-222222222222';
+  const repo='b3333333-3333-4333-8333-333333333333',trial='b4444444-4444-4444-8444-444444444444';
+  const exp='b5555555-5555-4555-8555-555555555555',project='b6666666-6666-4666-8666-666666666666';
+  await db.query('insert into actors(id,name) values($1,$2)',[actor,'Full DO accounting fixture']);
+  await db.query('insert into chats(id,actor_id,title) values($1,$2,$3)',[chat,actor,'Full DO accounting fixture']);
+  await db.query('insert into repo_sync_runs(id,repository_full_name) values($1,$2)',[repo,'mfackrell/katie']);
+  await db.query(`insert into model_registry(provider_name,model_id,normalized_model_id,pricing_status,
+    pricing_input_per_1m,pricing_output_per_1m) values('openai','gpt-5.3-codex','gpt-5.3-codex','verified',1,28)`);
+  await db.query(`insert into benchmark_three_arm_trials(id,experiment_id,replicate,arm,owner_actor_id,
+    contract_sha256,baseline_sha,model_policy_sha256,tool_profile_sha256,acceptance_sha256,runtime_sha256,state)
+    values($1,$2,1,'full',$3,repeat('7',64),$4,repeat('8',64),repeat('9',64),repeat('a',64),repeat('b',64),'qualified')`,
+    [trial,exp,actor,'0015bcdb8ac9ad94b7c74d1a4cd76737903b1319']);
+  await db.query(`insert into benchmark_budget_accounts(experiment_id,trial_id,arm,owner_actor_id,cap_tokens,spent_tokens)
+    values($1,$2,'full',$3,350000,0)`,[exp,trial,actor]);
+  const created=(await db.query(`select benchmark_create_full_game_project($1,$2,$3,$4,$5,$6,$7,$8,$9) project`,[
+    project,'full-do-'+project,actor,chat,'Build the browser game Take Eleven for Issue #715',repo,trial,
+    '0015bcdb8ac9ad94b7c74d1a4cd76737903b1319','gpt-5.3-codex'])).rows[0].project;
+  assert.equal(created.id,project);assert.equal(created.profile,'game');assert.equal(created.token_allowance,350000);
+  const claimedProject=(await db.query('select claim_work_project() project')).rows[0].project;
+  assert.equal(claimedProject.id,project);
+  await db.query(`select finish_work_project($1,$2,'child',$3::jsonb)`,[project,claimedProject.lease,
+    JSON.stringify({kind:'research',objective:'Review the authoritative Take Eleven requirements',evidence:{}})]);
+  const claim=(await db.query('select claim_mission_work() claim')).rows[0].claim;
+  assert.ok(claim?.job?.id&&claim.job.lease);
+  const linked=(await db.query(`select mb.account_id,mb.baseline_sha from benchmark_mission_bindings mb
+    where mb.mission_id=$1`,[claim.mission.id])).rows[0];
+  assert.ok(linked);assert.equal(linked.baseline_sha,'0015bcdb8ac9ad94b7c74d1a4cd76737903b1319');
+  const call='b7777777-7777-4777-8777-777777777777';
+  const receipt=await db.query(`select benchmark_reserve_mission_call($1,$2,$3,$4,100,true) receipt`,
+    [claim.job.id,claim.job.lease,call,'openai:gpt-5.3-codex']);
+  assert.ok(receipt.rows[0].receipt,'actual DO assignment must reserve its Full ledger call atomically');
+  await db.query('select benchmark_finish_mission_call($1,90)',[call]);
+  const spent=(await db.query(`select a.spent_tokens,c.state,c.actual_tokens,mc.actual_tokens mission_actual
+    from benchmark_budget_accounts a join benchmark_budget_calls c on c.account_id=a.id
+    join mission_calls mc on mc.id=$2::uuid where a.trial_id=$1 and c.request_key=$2::text`,[trial,call])).rows[0];
+  assert.deepEqual(spent,{spent_tokens:'90',state:'settled',actual_tokens:'90',mission_actual:90});
+  const denied=await db.query(`select benchmark_reserve_mission_call($1,$2,$3,'other:model',100,false) receipt`,
+    [claim.job.id,claim.job.lease,'b8888888-8888-4888-8888-888888888888']);
+  assert.equal(denied.rows[0].receipt,null,'Full account rejects model-policy deviation before inference');
  }finally{
   for(const c of clients)try{await c.end()}catch{}
   if(started)try{run('pg_ctl',['-D',data,'-m','immediate','-w','stop'])}catch{}

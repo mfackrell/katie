@@ -136,17 +136,37 @@ export async function dispatchDevelopment(task: AgentTask, project?: Context, as
   if (/<!--\s*katie-project\b/.test(task.input + '\n' + task.snapshot.instructions)) {
     return persist(task, "blocked", "Project metadata is not permitted in ordinary coding input. A DB-bound approved project dispatcher is required.");
   }
-  let benchmarkHeader=''; let benchmarkModel=''; let benchmarkRepository='';
+  let benchmarkHeader=''; let benchmarkModel=''; let benchmarkRepository='';let benchmarkContractHash='';
   // Benchmark engineering enters at the EXISTING durable dispatch boundary.
   // No alternate scheduler or issue path is authorized by this feature gate.
-  if (project && process.env.KATIE_NATIVE_BENCHMARK_DISPATCH==='enabled') {
+  const nativeDispatchEnabled=process.env.KATIE_NATIVE_BENCHMARK_DISPATCH==='enabled';
+  const fullDispatchEnabled=process.env.KATIE_FULL_BENCHMARK_DISPATCH==='enabled';
+  const stagingRuntime=process.env.NEXT_PUBLIC_SUPABASE_URL?.includes('iytvavgbaainnsrecmcx.supabase.co')===true;
+  if(project&&fullDispatchEnabled&&!stagingRuntime)
+    throw Error('Full benchmark dispatch is restricted to the staging Supabase project');
+  if(project&&stagingRuntime){
+    const {data:fullBinding,error:fullBindingError}=await getSupabaseAdminClient()
+      .from('benchmark_full_project_bindings').select('project_id')
+      .eq('project_id',project.projectId).maybeSingle<{project_id:string}>();
+    if(fullBindingError)throw Error('Full benchmark project binding lookup failed closed');
+    if(fullBinding){
+      if(!fullDispatchEnabled||!nativeDispatchEnabled)
+        throw Error('Full benchmark project is blocked unless both Full and trusted native dispatch are enabled');
+      const {data:dispatch,error:dispatchError}=await getSupabaseAdminClient().rpc('benchmark_bind_full_development_dispatch',{
+        p_task:task.id,p_project:project.projectId,p_scope_hash:project.scopeHash,
+        p_project_contract_hash:project.contractHash
+      });
+      if(dispatchError||!dispatch)throw Error('Full benchmark dispatch could not bind approved task and spending authorization');
+    }
+  }
+  if (project && nativeDispatchEnabled) {
     const {data:binding,error}=await getSupabaseAdminClient()
       .from('benchmark_development_dispatches')
-      .select('task_id,trial_id,contract_hash,baseline_sha,status')
+      .select('task_id,trial_id,contract_hash,benchmark_contract_hash,baseline_sha,status')
       .eq('task_id',task.id).maybeSingle();
     if(error)throw Error('Benchmark development binding lookup failed closed');
     if(binding){
-      const bound=binding as {trial_id:string;contract_hash:string;baseline_sha:string;status:string};
+      const bound=binding as {trial_id:string;contract_hash:string;benchmark_contract_hash:string;baseline_sha:string;status:string};
       if(bound.contract_hash!==project.contractHash||
          bound.baseline_sha!==project.baselineSha||
          bound.status!=='qualified')
@@ -157,29 +177,31 @@ export async function dispatchDevelopment(task: AgentTask, project?: Context, as
         .eq('id',bound.trial_id).maybeSingle();
       const t=trial as {arm:string;state:string;contract_sha256:string;baseline_sha:string;owner_actor_id:string}|null;
       if(trialError||!t||t.arm!=='full'||t.state!=='qualified'||
-         t.contract_sha256!==project.contractHash||
+         t.contract_sha256!==bound.benchmark_contract_hash||
          t.baseline_sha!==project.baselineSha)
         throw Error('Benchmark dispatch rejected: trial authority mismatch');
       const {data:account,error:accountError}=await getSupabaseAdminClient()
         .from('benchmark_budget_accounts')
-        .select('id,owner_actor_id,trial_id,frozen_at')
+        .select('id,owner_actor_id,trial_id,frozen_at,cap_tokens,spent_tokens')
         .eq('trial_id',bound.trial_id).maybeSingle();
-      const a=account as {trial_id:string;owner_actor_id:string;frozen_at:string|null}|null;
+      const a=account as {id:string;trial_id:string;owner_actor_id:string;frozen_at:string|null;cap_tokens:number;spent_tokens:number}|null;
       if(accountError||!a||a.trial_id!==bound.trial_id||
-         a.owner_actor_id!==t.owner_actor_id||a.frozen_at)
+         a.owner_actor_id!==t.owner_actor_id||a.frozen_at||Number(a.cap_tokens)!==350000||Number(a.spent_tokens)<0)
         throw Error('Benchmark dispatch rejected: missing or quarantined account');
       // A separately provisioned owner approval is required, not a qualified
       // trial flag or model-authored statement. The approval is task-specific.
       const {data:approved,error:approvalError}=await getSupabaseAdminClient()
         .from('benchmark_native_spending_approvals')
-        .select('id,task_id,trial_id,account_id,actor_id,project_id,repository,model,deadline')
+        .select('id,task_id,trial_id,account_id,actor_id,project_id,mission_assignment_id,repository,model,max_tokens,deadline')
         .eq('task_id',task.id).eq('trial_id',bound.trial_id)
         .is('consumed_at',null).is('revoked_at',null).maybeSingle();
       const approval=approved as {id:string;task_id:string;trial_id:string;account_id:string;
-        actor_id:string;project_id:string;repository:string;model:string;deadline:string}|null;
+        actor_id:string;project_id:string;mission_assignment_id:string;repository:string;model:string;max_tokens:number;deadline:string}|null;
       if(approvalError||!approval||approval.project_id!==project.projectId||
         approval.actor_id!==t.owner_actor_id||approval.account_id!==(account as {id?:string}).id||
-        !approval.model||new Date(approval.deadline).getTime()<=Date.now())
+        approval.mission_assignment_id!==task.id||approval.repository!=='mfackrell/katie'||
+        approval.model!=='gpt-5.3-codex'||Number(approval.max_tokens)<Number(a?.cap_tokens)||
+        new Date(approval.deadline).getTime()<=Date.now())
         throw Error('Benchmark native dispatch denied: no live task-specific owner spending approval');
       const signingKey=process.env.KATIE_NATIVE_HANDOFF_HMAC_KEY;
       if(!signingKey||signingKey.length<32)
@@ -187,10 +209,10 @@ export async function dispatchDevelopment(task: AgentTask, project?: Context, as
       benchmarkHeader=encodeNativeHandoff({
         taskId:task.id,trialId:bound.trial_id,approvalId:approval.id,
         projectId:project.projectId,contractHash:project.contractHash,
-        baselineSha:project.baselineSha,
+        benchmarkContractHash:bound.benchmark_contract_hash,baselineSha:project.baselineSha,
         expiresAt:Math.min(Date.now()+30*60*1000,new Date(approval.deadline).getTime())
       },signingKey);
-      benchmarkModel=approval.model;benchmarkRepository=approval.repository;
+      benchmarkModel=approval.model;benchmarkRepository=approval.repository;benchmarkContractHash=bound.benchmark_contract_hash;
     }
   }
   let projectHeader='';
@@ -206,7 +228,7 @@ export async function dispatchDevelopment(task: AgentTask, project?: Context, as
     }
     const routed=benchmarkModel?{codingModel:benchmarkModel,reviewModel:benchmarkModel}:
       await chooseTrustedGithubModels(task.input+'\n'+task.snapshot.instructions);
-    projectHeader='<!-- katie-project: '+Buffer.from(JSON.stringify({version,projectId,baseSha,baselineSha,allowedPaths,contractHash,contract,...routed,...(game?{game,gameFinal}:{})})).toString('base64url')+' -->\n\n';
+    projectHeader='<!-- katie-project: '+Buffer.from(JSON.stringify({version,projectId,baseSha,baselineSha,allowedPaths,contractHash,contract,...(benchmarkContractHash?{benchmarkContractHash}:{}),...routed,...(game?{game,gameFinal}:{})})).toString('base64url')+' -->\n\n';
   }
   const fullBody = `${marker(task)}\n\n${benchmarkHeader}${projectHeader}${approvedSource}${task.input}\n\n## Saved agent responsibilities\n${task.snapshot.instructions}\n\nDefinition version: ${task.definition_version}. Approved managed task: ${task.id}.\nUse the existing owner-only implementation, independent tests, review, bounded repair and draft PR workflow. No deployment or automatic merge.`;
   let issueBody: string;
