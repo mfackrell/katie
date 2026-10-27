@@ -2,6 +2,7 @@ import { getSupabaseAdminClient } from '@/lib/data/supabase/admin';
 import type { Message } from '@/lib/types/chat';
 import { projectForChat, projectRpc, type Project } from '@/lib/projects/store';
 import { projectId, projectMessage } from '@/lib/projects/contract';
+import { fullBenchmarkProjectDecision } from '../../scripts/benchmark/full-project-gate.mjs';
 /** Explicit instruction to modify Katie's own connected source, never mere
  * architecture discussion, inspection, or a quoted example. */
 export function selfCodeChangeIntent(text: string): boolean {
@@ -162,9 +163,18 @@ export async function handleProjectChat(input: {
         return 'Please narrow the project brief to 8,000 characters. I will not silently truncate its requirements.';
     const projectRepository=await repository(input.activeRepoId,text);
     const fullTrial=process.env.KATIE_FULL_BENCHMARK_TRIAL_ID;
-    const stagingProject=process.env.NEXT_PUBLIC_SUPABASE_URL?.includes('iytvavgbaainnsrecmcx.supabase.co')===true;
-    const fullTakeEleven=process.env.KATIE_FULL_BENCHMARK_DISPATCH==='enabled'&&stagingProject&&
-      !!fullTrial&&gameProjectIntent(objective)&&/take eleven|issue\s*#?715|#715/i.test(objective);
+    const fullCandidate=gameProjectIntent(objective)&&/take eleven|issue\s*#?715|#715/i.test(objective);
+    const fullDecision=fullBenchmarkProjectDecision({
+        candidate:fullCandidate,
+        databaseUrl:process.env.SUPABASE_URL??process.env.NEXT_PUBLIC_SUPABASE_URL,
+        environment:process.env.KATIE_FULL_BENCHMARK_ENVIRONMENT,
+        dispatchEnabled:process.env.KATIE_FULL_BENCHMARK_DISPATCH==='enabled',
+        nativeDispatchEnabled:process.env.KATIE_NATIVE_BENCHMARK_DISPATCH==='enabled',
+        trialId:fullTrial
+    });
+    if(fullDecision==='blocked')
+        return 'The Take Eleven benchmark is not enabled for this database yet. No benchmark project was created. The Full trial, spending account, and both dispatch gates must be valid first.';
+    const fullTakeEleven=fullDecision==='full';
     const created = await projectRpc<Project>(fullTakeEleven?'benchmark_create_full_game_project':gameProjectIntent(objective)?'create_game_work_project':'create_work_project', {
       p_id:projectId(requestId),p_request:requestId,p_actor:input.actorId,p_chat:input.chatId,
       p_objective:objective,p_repository:projectRepository,
