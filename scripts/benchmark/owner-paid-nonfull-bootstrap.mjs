@@ -45,7 +45,8 @@ export async function preparePaidTrial({db,ownerId}){
  verifyCustomLedger(ledger);
  const source=await load(db,'benchmark_three_arm_trials');
  const old=source.filter(x=>x.replicate===1);
- if(old.length!==3||source.some(x=>x.replicate!==1))deny('replicate-already-created');
+ if(old.length!==3||source.some(x=>![1,2].includes(x.replicate))||
+  source.filter(x=>x.replicate===2).length>3)deny('replicate-identity-conflict');
  const sourceByArm=new Map(old.map(t=>[t.arm,t]));
  if(['native','thin','full'].some(arm=>!sourceByArm.has(arm)))deny('source-treatment-missing');
  const original=sourceByArm.get('native');
@@ -53,7 +54,8 @@ export async function preparePaidTrial({db,ownerId}){
   ['native','thin'].some(arm=>sourceByArm.get(arm).state!=='running'))deny('prior-qualification-not-complete');
  const refKeys=['experiment_id','baseline_sha','contract_sha256','acceptance_sha256','model_policy_sha256','tool_profile_sha256','runtime_sha256','owner_actor_id'];
  if(old.some(t=>refKeys.some(k=>t[k]!==original[k])))deny('unequal-source-protocol');
- const previous=await load(db,'benchmark_budget_accounts');
+ const allAccounts=await load(db,'benchmark_budget_accounts');
+ const previous=allAccounts.filter(a=>old.some(t=>t.id===a.trial_id));
  if(previous.length!==3||
   previous.some(a=>a.experiment_id!==original.experiment_id||
    Number(a.cap_tokens)!==CAP||Number(a.spent_tokens)!==(a.arm==='full'?0:20)||a.frozen_at||
@@ -62,7 +64,8 @@ export async function preparePaidTrial({db,ownerId}){
  if(syntheticCalls.length!==8||syntheticCalls.some(c=>
   c.state!=='settled'||c.provider_namespace!=='nonbillable-synthetic-fixture'||
   Number(c.actual_tokens)!==5))deny('synthetic-receipts-unverified');
- const previousApprovals=await load(db,'benchmark_native_spending_approvals');
+ const allApprovals=await load(db,'benchmark_native_spending_approvals');
+ const previousApprovals=allApprovals.filter(a=>old.some(t=>t.id===a.trial_id));
  if(previousApprovals.length!==2||previousApprovals.some(a=>
   a.owner_id!==ownerId||!a.consumed_at||a.revoked_at||
   !['native','thin'].some(arm=>a.trial_id===sourceByArm.get(arm).id)))deny('trusted-owner-history');
@@ -78,23 +81,54 @@ export async function preparePaidTrial({db,ownerId}){
   publishedOutputUsdPerMillion:price.pricing_output_per_1m,
   accountTokens:CAP,approvalTokens:CAP});
  const results=[];
+ // A partial database API failure must never orphan spending authorizations.
+ // Re-enter only if every existing replicate-2 row matches the same protocol,
+ // is unconsumed, has no paid receipts, and has not started execution.
+ const priorReplicate=source.filter(t=>t.replicate===2);
  const deadline=new Date(Date.now()+65*60*1000).toISOString();
  for(const arm of ['native','thin','full']){
   const prior=sourceByArm.get(arm);
-  const trial=await add(db,'benchmark_three_arm_trials',{
+  let trial=priorReplicate.find(t=>t.arm===arm);
+  const expected={
    experiment_id:prior.experiment_id,replicate:2,arm,owner_actor_id:actor,
    baseline_sha:prior.baseline_sha,contract_sha256:prior.contract_sha256,
    acceptance_sha256:prior.acceptance_sha256,model_policy_sha256:prior.model_policy_sha256,
    tool_profile_sha256:prior.tool_profile_sha256,runtime_sha256:prior.runtime_sha256,
-   state:arm==='full'?'planned':'qualified'});
-  const account=await add(db,'benchmark_budget_accounts',{
+   state:arm==='full'?'planned':'qualified'};
+  if(trial){
+   if(Object.entries(expected).some(([k,v])=>trial[k]!==v))
+    deny('partial-replicate-trial-mismatch:'+arm);
+  }else trial=await add(db,'benchmark_three_arm_trials',expected);
+  let account=allAccounts.find(a=>a.trial_id===trial.id);
+  if(account){
+   if(account.experiment_id!==prior.experiment_id||account.arm!==arm||
+      account.owner_actor_id!==actor||Number(account.cap_tokens)!==CAP||
+      Number(account.spent_tokens)!==0||account.frozen_at)
+    deny('partial-replicate-account-mismatch:'+arm);
+  }else account=await add(db,'benchmark_budget_accounts',{
    experiment_id:prior.experiment_id,trial_id:trial.id,arm,owner_actor_id:actor,
    cap_tokens:CAP,spent_tokens:0});
+  const paidCalls=syntheticCalls.filter(c=>c.account_id===account.id);
+  if(paidCalls.length)deny('paid-account-has-provider-attempts:'+arm);
   let approval=null;
-  if(arm!=='full')approval=await add(db,'benchmark_native_spending_approvals',{
+  const related=allApprovals.filter(a=>a.trial_id===trial.id);
+  if(arm==='full'&&related.length)deny('full-project-approval-not-generated');
+  if(arm!=='full'){
+   if(related.length>1)deny('duplicate-partial-approval:'+arm);
+   approval=related[0]??null;
+   if(approval){
+    if(approval.account_id!==account.id||approval.owner_id!==ownerId||
+       approval.actor_id!==actor||approval.chat_id!==chats[0].id||
+       approval.repository!==REPO||approval.model!==MODEL||
+       approval.protocol_digest!==protocolDigest(trial,CAP)||
+       Number(approval.max_tokens)!==CAP||approval.revoked_at||approval.consumed_at||
+       Date.parse(approval.deadline)<=Date.now())
+     deny('partial-approval-not-reusable:'+arm);
+   }else approval=await add(db,'benchmark_native_spending_approvals',{
     owner_id:ownerId,actor_id:actor,chat_id:chats[0].id,trial_id:trial.id,
     account_id:account.id,repository:REPO,model:MODEL,
     protocol_digest:protocolDigest(trial,CAP),max_tokens:CAP,deadline});
+  }
   results.push({arm,trialId:trial.id,accountId:account.id,
    approvalId:approval?.id??null,tokenCap:CAP,state:trial.state});
  }
