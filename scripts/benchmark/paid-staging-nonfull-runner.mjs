@@ -119,7 +119,7 @@ export async function executePaidNonfull({db,ownerId,arm,trial,account,approval,
    providerNamespace:'openai-responses'});
   server=gateway.server;
   await new Promise(resolve=>server.listen(join(sockdir,'gateway.sock'),resolve));
-  const phase=async(name,findings='')=>runPhase({arm,phase:name,boundary,socketdir,
+  const phase=async(name,findings='')=>runPhase({arm,phase:name,boundary,socketdir:sockdir,
     token:bridgeToken,model:MODEL,requestPath,childPath:childFile,hostRoot:root,findings});
   await phase('implementation');
   assertScope(workspace);
