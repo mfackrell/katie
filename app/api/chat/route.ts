@@ -1939,7 +1939,10 @@ async function executeChat(request: NextRequest) {
 
     const collaborationConfig = getCollaborationConfig();
     const collaborationDeadlineMs = Math.min(executionDeadlineMs - (requiredReviewForRequest ? REQUIRED_REVIEW_RESERVE_MS : 0), Date.now() + collaborationConfig.maxTotalDurationMs);
-    const collaborationEnabledForRequest = responsePolicy.requiresSubstantiveProcessing && !verifyingSavedDraft && shouldEnableActorCollaboration(reviewMode, storedWebsite.fresh || shouldUseAdaptiveCollaboration({
+    const websiteResearchRequired = /https?:\/\/\S+/i.test(message) &&
+      (resolvedRoutingIntentForReroute?.secondaryIntents ?? []).includes("web-search") &&
+      !/\b(?:do not|don't|without)\s+(?:browse|search|access|visit|fetch)\b/i.test(message);
+    const collaborationEnabledForRequest = (responsePolicy.requiresSubstantiveProcessing || websiteResearchRequired) && !verifyingSavedDraft && shouldEnableActorCollaboration(reviewMode, websiteResearchRequired || storedWebsite.fresh || shouldUseAdaptiveCollaboration({
       message,
       intent: resolvedRequestIntent ?? null,
       complexity: resolvedRoutingIntentForReroute?.complexity ?? null,
