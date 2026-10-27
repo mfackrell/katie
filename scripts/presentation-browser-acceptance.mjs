@@ -17,7 +17,7 @@ const port = Number(process.env.KATIE_PRESENTATION_TEST_PORT ?? 38091);
 if (!Number.isInteger(port) || port < 1024 || port > 65535) throw new Error("Invalid browser fixture port");
 if (existsSync(fixturePath)) throw new Error("Refusing to replace an existing route");
 
-const equationMarkdown = "At a $25 million education and professional development company, I led the $100 million sale. Budget $1,000 to $2,000. Currency $40k to $120k. Inline $x^2$ and $2m$. Code `\"$100k\"`.\\n\\n$\\nx^2+y^2=z^2\\n$";
+const equationMarkdown = "At a $25 million education and professional development company, I led the $100 million sale. Budget $1,000 to $2,000. Currency $40k to $120k. Inline $x^2$ and $2m$. Code `\"$100k\"`.\n\n$\nx^2+y^2=z^2\n$";
 const fixture = `
 "use client";
 import { StructuredResponseView } from "@/components/structured-response-view";
