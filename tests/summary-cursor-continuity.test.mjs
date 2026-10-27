@@ -9,16 +9,16 @@ async function run(finishReason, content) {
   const writes=[];
   const messages=Array.from({length:65},(_,i)=>({id:`m${i}`,role:i%2?'assistant':'user',content:`source ${i}`}));
   const module={exports:{}};
-  const client=class {chat={completions:{create:async()=>({choices:[{finish_reason:finishReason,message:{content}}]})}}};
+  const client=class {async post(){return {stop_reason:finishReason,content:[{type:'text',text:content}]};}};
   const admin={rpc:async(name,args)=>{assert.equal(name,'commit_intermediate_memory_checkpoint');writes.push(args);return {data:true,error:null};}};
   const store={getChatById:async()=>({actorId:'a'}),getIntermediateMemory:async()=>({version:2,summary:'saved',summarizedThroughMessageId:'m0',sourceMessageCount:1}),getRecentMessages:async()=>messages,setIntermediateMemory:async(...args)=>writes.push(args)};
   vm.runInNewContext(ts.transpileModule(source,{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022,esModuleInterop:true}}).outputText,
-    {module,exports:module.exports,process:{env:{OPENAI_API_KEY:'test-only'}},console:{error:()=>{}},require:name=>name==='openai'?client:name.includes('persistence-store')?store:name.includes('memory-contract')?{SHORT_TERM_MESSAGE_LIMIT:60}:name.includes('supabase/admin')?{getSupabaseAdminClient:()=>admin}:{filterConversationalMessages:x=>x}});
+    {module,exports:module.exports,process:{env:{CLAUDE_API_KEY:'test-only'}},console:{error:()=>{},warn:()=>{}},require:name=>name==='openai'?client:name.includes('persistence-store')?store:name.includes('memory-contract')?{SHORT_TERM_MESSAGE_LIMIT:60}:name.includes('supabase/admin')?{getSupabaseAdminClient:()=>admin}:{filterConversationalMessages:x=>x}});
   await module.exports.maybeUpdateSummary('c');
   return writes;
 }
-test('truncated intermediate summary never advances source cursor',async()=>assert.equal((await run('length','partial')).length,0));
-test('empty intermediate summary never advances source cursor',async()=>assert.equal((await run('stop','')).length,0));
+test('truncated intermediate summary never advances source cursor',async()=>assert.equal((await run('max_tokens','partial')).length,0));
+test('empty intermediate summary never advances source cursor',async()=>assert.equal((await run('end_turn','')).length,0));
 test('complete intermediate summary advances only through summarized messages',async()=>{
-  const writes=await run('stop','complete');assert.equal(writes.length,1);assert.equal(writes[0].p_expected_cursor,'m0');assert.equal(writes[0].p_content.summarizedThroughMessageId,'m4');assert.equal(writes[0].p_content.summary,'complete');
+  const writes=await run('end_turn','complete');assert.equal(writes.length,1);assert.equal(writes[0].p_expected_cursor,'m0');assert.equal(writes[0].p_content.summarizedThroughMessageId,'m4');assert.equal(writes[0].p_content.summary,'complete');
 });
