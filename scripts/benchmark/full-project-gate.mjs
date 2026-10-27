@@ -11,7 +11,8 @@ export function fullBenchmarkProjectDecision({
   candidate,databaseUrl,environment,dispatchEnabled,nativeDispatchEnabled,trialId
 }) {
   if(!candidate)return 'ordinary';
-  const url=typeof databaseUrl==='string'?databaseUrl.replace(/\\/+$/,''):'';
+  let url=typeof databaseUrl==='string'?databaseUrl:'';
+  while(url.endsWith('/'))url=url.slice(0,-1);
   const staging=url===STAGING_SUPABASE_URL;
   const production=url===PRODUCTION_SUPABASE_URL;
   if(!staging&&!production)return 'ordinary';
