@@ -5,8 +5,9 @@ import { readMission } from '@/lib/missions/store';
 import { readTask } from '@/lib/agents/store';
 import { developmentPreview, projectAcceptanceSchema, reconcileDevelopment, retryImmutableProjectVerification } from '@/lib/agents/development';
 import { parseJSON } from '@/lib/missions/types';
-import { validateProjectPlan, digest, projectPlanSchema, gameSpecificationView, canonical } from './contract';
+import { validateProjectPlan, digest, projectPlanSchema } from './contract';
 import {gameAssessmentEvidence} from './game-evidence';
+import {loadSpecificationRecovery,specificationProjectAdmission} from './specification-recovery';
 import {estimateProjectResources} from './resource-forecast.mjs';
 import {enrichResourceForecast} from './resource-economics.mjs';
 import {provisionalSpecialistPlan} from './specialist-resource-plan.mjs';
@@ -219,11 +220,23 @@ async function advance(p: Project) {
         }catch(error){if(error instanceof PreviewAccessUnavailable){await finish('block',{detail:error.message,impediment:projectImpediment(p,error.message,[`Attempted approved acceptance against ${p.preview.url}.`],`Restore access to the approved preview ${p.preview.url} through the existing authenticated connection.`)});return;}throw error;}
         return;
     }
+    const recovery=p.phase==='specification'&&!p.active_mission_id
+      ? await loadSpecificationRecovery(p.id,runs,source) : null;
+    if(recovery?.hasPriorDraft&&!recovery.checkpoint){
+      await finish('block',{detail:'Saved specification artifacts fail current validation; full regeneration is not authorized.',
+        impediment:projectImpediment(p,'No valid saved specification checkpoint',recovery.diagnostics.map(d=>d.sourceJobId+': '+d.detail),'Repair the recorded validation failures against the retained source artifacts.')});return;
+    }
+    if(recovery?.fingerprint){
+      const {data:previous,error}=await getSupabaseAdminClient().from('project_events').select('id')
+        .eq('project_id',p.id).eq('event','specification_recovery_dispatched').eq('data->>sourceHash',recovery.checkpoint!.fullSpecificationHash).limit(1);
+      if(error)throw Error('Cannot verify prior specification recovery attempts');
+      if(previous?.length){await finish('block',{detail:'This exact specification and independent findings were already attempted. No equivalent mission was launched; artifacts and charges remain saved.'});return;}
+    }
     // A finite project needs a progress watchdog before authorizing another
     // expensive child mission. Superseded scope revisions are not failed work.
     const attempts = runs.filter(r => r.kind === p.phase && r.milestone_index === p.milestone_index &&
         !r.outcome?.superseded);
-    if (attempts.length >= 3 && !p.active_mission_id) {
+    if (attempts.length >= 3 && !p.active_mission_id && !recovery?.checkpoint) {
         // A checkpoint recovery is a one-time, explicitly budget-fenced
         // exception to the historical failures watchdog. It authorizes ONE
         // new specification child, not infinite repeats of a failing phase.
@@ -256,8 +269,10 @@ async function advance(p: Project) {
     // rather than double-charging every completed call.
     const charged = ((spend ?? []) as Array<{actual_tokens: number | null;reserved_tokens:number | null}>).reduce((total: number, m) => total +
         Math.max(0, Number(m.actual_tokens ?? 0), Number(m.reserved_tokens ?? 0)), 0);
-    if (p.token_allowance - charged < 8000) {
-        await finish('block', { detail: 'Aggregate project token budget has fewer than 8,000 uncommitted tokens. Previous work is retained; a new mission is not authorized.' });
+    const specAdmission=p.phase==='specification'?specificationProjectAdmission(Boolean(recovery?.checkpoint),recovery?.checkpoint?projectPlanSchema.parse(parseJSON(recovery.checkpoint.text)).milestones.length:1):null;
+    const requiredTokens=specAdmission?.requiredTokens??8000;
+    if (p.token_allowance - charged < requiredTokens || (specAdmission&&runs.length+specAdmission.requiredMissionSlots>p.max_missions)) {
+        await finish('block', { detail: specAdmission?`Mandatory ${p.phase} stages require ${requiredTokens} tokens; ${Math.max(0,p.token_allowance-charged)} remain of ${p.token_allowance} after ${charged} charged. Required mission slots: ${specAdmission.requiredMissionSlots}; available: ${p.max_missions-runs.length}. Prior work is retained; owner resource approval is required before a new mission.`:'Aggregate project token budget has fewer than 8,000 uncommitted tokens. Previous work is retained; a new mission is not authorized.' });
         return;
     }
     const evidence = await milestoneEvidence(runs);
@@ -272,70 +287,10 @@ async function advance(p: Project) {
         const v=previous?.evidence?.verification as {changedFiles?:Array<{path:string;status?:string;patch?:string}>}|undefined;let bytes=0;
         projectEvidence=p.verified_sha?{priorVerifiedImplementation:{head:p.verified_sha,baseline:p.baseline_sha,changedFiles:(v?.changedFiles??[]).slice(0,20).map(f=>{const include=typeof f.patch==='string'&&bytes+f.patch.length<=4000;if(include)bytes+=f.patch!.length;return{path:f.path,status:f.status,...(include?{patch:f.patch}:{patchOmitted:true})};}),omittedFileCount:Math.max(0,(v?.changedFiles?.length??0)-20),note:'Bounded planning evidence only; original requirements remain authoritative and native coding reads the complete inherited commit.'}}:undefined;
         projectEvidence={...(projectEvidence as Record<string,unknown>??{}),...(game?{projectProfile:'game'}:{}),reviewedResearch:{text:research.result,reviewedMissionId:research.evidence?.reviewedMissionId??null,phase:'research'}};
-        if(game){
-            // Compact, trusted findings from the failed revision accompany the
-            // next specification. The full prior draft, review and token charges
-            // remain saved in their original mission.
-            const {data:recovery,error:recoveryError}=await getSupabaseAdminClient()
-              .from('project_events').select('data').eq('project_id',p.id)
-              .eq('event','game_revision_timeout_recovered').order('created_at',{ascending:false}).limit(1);
-            if(recoveryError)throw Error('Saved game revision recovery evidence unavailable');
-            const note=((recovery??[]) as Array<{data?:{findings?:string;sourceMissionId?:string}}>)[0]?.data;
-            if(note&&typeof note.findings==='string')
-                projectEvidence={...(projectEvidence as Record<string,unknown>),recoveryReview:{sourceMissionId:note.sourceMissionId,findings:note.findings.slice(0,2200),instruction:'Correct these independent review findings. Full prior evidence remains saved; do not repeat research or assume approval.'}};
-        }
-        if(game){
-            // A prior composition is a checkpoint, not an approved specification.
-            // Reuse only a server-saved candidate and require the normal fresh
-            // independent review on this new mission.
-            const {data:checkpoints,error:checkpointError}=await getSupabaseAdminClient()
-              .from('project_events').select('data').eq('project_id',p.id)
-              .eq('event','game_specification_checkpoint_recovered')
-              .order('created_at',{ascending:false}).limit(1);
-            if(checkpointError)throw Error('Game checkpoint recovery evidence unavailable');
-            const checkpoint=((checkpoints??[]) as Array<{data?:{sourceJobId?:string;sourceMissionId?:string}}>)[0]?.data;
-            if(checkpoint?.sourceJobId){
-                const {data:composition,error:compositionError}=await getSupabaseAdminClient()
-                  .from('mission_assignments').select('status,role,result')
-                  .eq('id',checkpoint.sourceJobId).maybeSingle<{status:string;role:string;result:{text?:string}|null}>();
-                if(compositionError||composition?.status!=='completed'||!['compose','revise'].includes(composition.role)||
-                   typeof composition.result?.text!=='string')throw Error('Saved game composition checkpoint invalid');
-                projectEvidence={...(projectEvidence as Record<string,unknown>),
-                    savedSpecificationCheckpoint:{
-                      sourceMissionId:checkpoint.sourceMissionId,
-                      sourceJobId:checkpoint.sourceJobId,
-                      text:composition.result.text,
-                      status:'unreviewed',
-                      instruction:'Reuse the exact saved candidate only if it still validates. A separate independent reviewer must verify every original requirement; this checkpoint is not approval.'
-                    }};
-            }
-        }
-        if(game){
-            const {data:events,error}=await getSupabaseAdminClient().from('project_events')
-              .select('data').eq('project_id',p.id).eq('event','game_rule_coverage_recovered')
-              .order('created_at',{ascending:false}).limit(1);
-            if(error)throw Error('Game coverage recovery evidence unavailable');
-            const recovered=((events??[]) as Array<{data?:{sourceMissionId?:string;findings?:string;revisionJobId?:string}}>)[0]?.data;
-            if(recovered?.revisionJobId){
-                const {data:prior,error:pe}=await getSupabaseAdminClient().from('mission_assignments')
-                  .select('result').eq('id',recovered.revisionJobId).maybeSingle<{result:{rejectedSpecification?:string}|null}>();
-                if(pe)throw Error('Saved rejected game draft unavailable');
-                let draft:unknown=null;
-                try{
-                    const raw=prior?.result?.rejectedSpecification;
-                    if(raw){
-                        const source=projectPlanSchema.parse(JSON.parse(raw));
-                        const view=gameSpecificationView(source);
-                        // Match the validated game-specific lossless checkpoint envelope.
-                        // The legacy 20K limit discarded valid saved repair evidence and
-                        // forced unnecessary regeneration of the same specification.
-                        if(canonical(view).length<=40000)draft=view;
-                    }
-                }catch{/* Preserve unparseable original in its durable mission. */}
-                projectEvidence={...(projectEvidence as Record<string,unknown>),
-                  recoveryCoverage:{sourceMissionId:recovered.sourceMissionId,findings:recovered.findings,
-                    rejectedDraft:draft,instructions:'contractRef and stepsRef are lossless server-resolved references to finalContract; return fully expanded JSON. Preserve valid scenarios, add real observable or model-based proof for missing rule IDs, never invent rules or user decisions; require fresh independent review.'}};
-            }
+        if(recovery?.checkpoint){
+            const {text:_savedText,...checkpointReference}=recovery.checkpoint;
+            projectEvidence={...(projectEvidence as Record<string,unknown>),savedSpecificationCheckpoint:checkpointReference,
+              specificationRecovery:{fingerprint:recovery.fingerprint,priorReviews:recovery.priorReviews,diagnostics:recovery.diagnostics}};
         }
         // Keep the complete independently reviewed research as structured evidence,
         // not a second copy inside the 12 KB mission instruction. The original
