@@ -44,3 +44,33 @@ it("renders same-line double dollars as display math and preserves inline math a
   expect((html.match(/class="katex"/g) ?? []).length).toBe(2);
   expect(html).toContain('<code>$$x^2$$</code>');
 });
+
+it.each([
+  "At a $25 million education and professional development company, I led the $100 million sale.",
+  "The budget increased from $1,000 to $2,000.",
+  "Revenue moved from $3.5 million to $5 million.",
+  "Fees ranged from $40k to $120k.",
+  "The client paid $200 per hour and $50 for travel.",
+  "The $25 million company invested $10,000 in equipment and $500 in training.",
+])("preserves exact financial prose: %s", (sentence) => {
+  const html = renderToStaticMarkup(React.createElement(ReactMarkdown, {
+    remarkPlugins: [remarkMath, remarkCurrencyProse], rehypePlugins: [rehypeKatex],
+    children: sentence,
+  }));
+  expect(html).toContain(sentence);
+  expect(html).not.toContain('class="katex"');
+});
+
+it("preserves explicit math, units, display math, and literal code alongside currency prose", () => {
+  const markdown = "At a $25 million company, the transaction was $100 million. " +
+    "Math $x^2$, $2m + n$, $25 \\times 2$, and $10 cm$. " +
+    "Inline code `$25 million`.\n\n$$x^2+y^2=z^2$$";
+  const html = renderToStaticMarkup(React.createElement(ReactMarkdown, {
+    remarkPlugins: [remarkMath, remarkCurrencyProse], rehypePlugins: [rehypeKatex],
+    children: markdown,
+  }));
+  expect(html).toContain("At a $25 million company, the transaction was $100 million.");
+  expect((html.match(/class="katex"/g) ?? []).length).toBe(5);
+  expect((html.match(/class="katex-display"/g) ?? []).length).toBe(1);
+  expect(html).toContain("<code>$25 million</code>");
+});

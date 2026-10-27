@@ -17,7 +17,7 @@ const port = Number(process.env.KATIE_PRESENTATION_TEST_PORT ?? 38091);
 if (!Number.isInteger(port) || port < 1024 || port > 65535) throw new Error("Invalid browser fixture port");
 if (existsSync(fixturePath)) throw new Error("Refusing to replace an existing route");
 
-const equationMarkdown = "Currency $40k to $120k. Inline $x^2$ and $2m$. Code `\"$100k\"`.\n\n$$\nx^2+y^2=z^2\n$$";
+const equationMarkdown = "At a $25 million education and professional development company, I led the $100 million sale. Budget $1,000 to $2,000. Currency $40k to $120k. Inline $x^2$ and $2m$. Code `\"$100k\"`.\n\n$$\nx^2+y^2=z^2\n$$";
 const fixture = `
 "use client";
 import { StructuredResponseView } from "@/components/structured-response-view";
@@ -133,6 +133,10 @@ try {
   const listStyle = await page.locator('[aria-label="Structured assistant response"] ol').evaluate(el => getComputedStyle(el).listStyleType);
   if (listStyle !== "decimal") throw new Error("Ordered list lost numbering: " + listStyle);
   if (!(await page.locator('[data-testid="equation"]').innerText()).includes("$40k to $120k")) throw new Error("Currency interpreted as math");
+  const currencyText = await page.locator('[data-testid="equation"]').innerText();
+  if (!currencyText.includes("At a $25 million education and professional development company, I led the $100 million sale.")) throw new Error("Full-dollar prose rendered as math");
+  if (!currencyText.includes("Budget $1,000 to $2,000.")) throw new Error("Comma-formatted currency rendered as math");
+  if (await page.locator('[data-testid="equation"] .katex').count() !== 3) throw new Error("Currency prose created spurious KaTeX nodes");
   await page.getByRole("button", { name: "Upside" }).click();
   if (!(await getText()).includes("Upside case result")) throw new Error("Interactive selector failed");
   await page.reload();
