@@ -74,8 +74,9 @@ test('real trusted HTTP gateway for Native denies unauthenticated requests and s
  const {server}=await createNonFullTrustedGateway({...fixtures('native'),db,
   tokenFactory:()=>('trusted-token-'+('z'.repeat(50))),
   upperTokens:10000,clientToken:'trusted-local-client-secret',
-  upstream:async()=>{upstreamCount++;return {providerRequestId:'synthetic-receipt-1',
-   actualTokens:10,contentType:'application/json',body:JSON.stringify({id:'fixture'})}}
+  upstream:Object.assign(async()=>{upstreamCount++;return {providerRequestId:'synthetic-receipt-1',
+   actualTokens:10,contentType:'application/json',body:JSON.stringify({id:'fixture'})}},
+   {nonbillableFixture:true})
  });
  try{
   await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
