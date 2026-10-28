@@ -76,8 +76,8 @@ test("native Claude request keeps plain-text output and the existing summary bud
   assert.equal(h.calls.length, 1);
   const { path, body } = h.calls[0];
   assert.equal(path, "/messages"); assert.equal(body.model, "claude-sonnet-5-5");
-  assert.equal(body.max_tokens, 2000); assert.deepEqual(body.thinking, { type: "between_tools" });
-  assert.deepEqual(body.output_config, { effort: "high" });
+  assert.equal(body.max_tokens, 2500); assert.equal(body.thinking, undefined);
+  assert.equal(body.output_config, undefined);
   for (const unsupported of ["temperature", "top_p", "top_k", "response_format", "tools"]) assert.equal(body[unsupported], undefined);
   assert.equal(body.messages.length, 1); assert.equal(body.messages[0].role, "user");
   assert.equal(h.writes[0].p_content.summary, "Historical context.");

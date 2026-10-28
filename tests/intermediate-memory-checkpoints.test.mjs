@@ -6,8 +6,11 @@ const source = readFileSync("lib/memory/summarizer.ts", "utf8");
 const migration = readFileSync("supabase/migrations/20261026165000_intermediate_memory_checkpoint.sql", "utf8");
 
 test("intermediate memory has sufficient response budget and bounded batches", () => {
-  assert.match(source, /SUMMARY_MAX_TOKENS = 2000/);
+  assert.match(source, /SUMMARY_MAX_TOKENS = 2500/);
+  assert.match(source, /OUTPUT BUDGET: target 1,500–2,300 tokens/);
   assert.match(source, /max_tokens: SUMMARY_MAX_TOKENS/);
+  assert.doesNotMatch(source, /thinking: \{ type: "between_tools" \}/);
+  assert.match(source, /response\.stop_reason !== "end_turn" \|\| !summary/);
   assert.match(source, /SUMMARY_BATCH_MESSAGES = 20/);
   assert.match(source, /offset < SUMMARY_BATCH_MESSAGES \* 3/);
 });
