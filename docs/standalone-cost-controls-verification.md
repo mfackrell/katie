@@ -6,9 +6,10 @@ All provider verification in this change is offline, with mocked HTTP responses.
 
 | Check | Evidence |
 |---|---|
+| Complete local Node 22 run before cache integration | 1,907 Node tests passed in successful files and all 82 Vitest tests passed. Two existing sandbox-dependent files could not pass without prohibited user namespaces; strict runner correctly exited nonzero |
 | TypeScript application and test compilation | Passed `tsc --noEmit` and `tsc -p tsconfig.tests.json` |
 | New behavioral Node suites | Passed auth/workflow, approval API, daily/DST, provider boundary, automatic containment, unpriced dispatch, and memory scheduling suites |
-| Pricing and reduction | 27 Vitest tests passed, including exact premium snapshots, context tiers, native function tools, immutable quotes, incompatible reductions and cheaper-model revisions |
+| Pricing and reduction | 31 Vitest tests passed, including exact premium snapshots, context tiers, native function tools, immutable quotes, incompatible reductions, cheaper-model revisions and cache integration |
 | Real PostgreSQL | Passed the actual migration and production TypeScript adapter against independent local connections; atomic admission/claims, exact approvals, ownership/ACLs, unknown/cancel fences, overruns, immutable prices, conflicts, response/provider-ID recovery, partial usage and late settlement |
 | Real browser | Passed integrated settings, scope switching, approval→saved request resume, reduction/reapproval, cancellation, reload and mobile controls. External requests rejected. Resume sends no replacement message |
 | Existing compatibility | Passed provider/native tool suites, 40 memory protocol tests, 28 PDF integrity/storage tests, 32 chat/EO routing tests, 11 deletion tests and RunPod protocol/recovery tests after preserving their offline dependency boundaries |

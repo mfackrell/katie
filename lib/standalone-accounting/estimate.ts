@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
-import { deepFreeze, getModelPrice, priceTokenUsage, PRICING_VERSION, type AccountingProvider, type ModelPrice } from "./pricing";
+import { deepFreeze, getModelPrice, priceTokenUsage, PRICING_VERSION, OPENAI_NO_FEE_CACHE_RETENTIONS, type AccountingProvider, type ModelPrice } from "./pricing";
 /** Changing counting/admissibility rules requires a new estimator identity. */
-export const ESTIMATOR_VERSION = "standalone-estimator-v2";
+export const ESTIMATOR_VERSION = "standalone-estimator-v3";
 
 export type JsonValue = null | boolean | number | string | JsonValue[] | { [key:string]: JsonValue };
 export type JsonObject = { [key:string]: JsonValue };
@@ -88,8 +88,17 @@ export function estimatePreparedRequest(request:FrozenPreparedRequest):Standalon
   if(price?.supportsStreaming===false&&body.stream===true)issues.push("Streaming is unsupported for this exact model");
   if(body.model!==undefined&&body.model!==request.model)issues.push("Body model differs from prepared model");
   if(request.provider==="google") {const pathModel=request.endpoint.match(/\/models\/([^/]+):/);if(pathModel&&decodeURIComponent(pathModel[1])!==request.model)issues.push("Google endpoint model differs from prepared model");}
-  const topAllowed=request.provider==="google"?"model contents generationConfig config systemInstruction safetySettings tools toolConfig cachedContent":"model messages input instructions system max_tokens max_output_tokens max_completion_tokens stream stream_options temperature top_p stop stop_sequences seed presence_penalty frequency_penalty logprobs top_logprobs response_format text reasoning reasoning_effort store metadata user n tools tool_choice parallel_tool_calls service_tier"+(request.provider==="anthropic"?" thinking output_config":"");
+  const topAllowed=request.provider==="google"?"model contents generationConfig config systemInstruction safetySettings tools toolConfig cachedContent":"model messages input instructions system max_tokens max_output_tokens max_completion_tokens stream stream_options temperature top_p stop stop_sequences seed presence_penalty frequency_penalty logprobs top_logprobs response_format text reasoning reasoning_effort store metadata user n tools tool_choice parallel_tool_calls service_tier"+(request.provider==="anthropic"?" thinking output_config":request.provider==="openai"?" prompt_cache_key prompt_cache_retention":"");
   for(const key of Object.keys(body))if(!topAllowed.split(" ").includes(key))issues.push("Unpriced request field: "+key);
+  if(request.provider==="openai"&&(body.prompt_cache_key!==undefined||body.prompt_cache_retention!==undefined)) {
+    const retentions=Object.hasOwn(OPENAI_NO_FEE_CACHE_RETENTIONS,request.model)?OPENAI_NO_FEE_CACHE_RETENTIONS[request.model]:undefined;
+    if(!retentions)issues.push("No reviewed no-fee cache metadata policy for this exact model");
+    const key=body.prompt_cache_key;
+    if(key!==undefined&&(typeof key!=="string"||!key.trim()||Array.from(key).length>64||/[\u0000-\u001f\u007f\ud800-\udfff]/u.test(key)))issues.push("Invalid OpenAI prompt_cache_key; expected a nonempty well-formed string of at most 64 characters without controls");
+    const retention=body.prompt_cache_retention;
+    if(retention!==undefined&&(typeof retention!=="string"||!retentions?.includes(retention)))issues.push("Unsupported OpenAI prompt_cache_retention for this exact model");
+    assumptions.push("OpenAI cache key/legacy retention metadata is frozen with the request. Reviewed retention adds no cache-write fee; the quote reserves full uncached input and assumes no cache hit.");
+  }
   if(body.cachedContent!==undefined)issues.push("Unsupported billing dimension: cachedContent");
   if(body.service_tier!==undefined&&body.service_tier!=="default")issues.push("Unsupported service tier");
   if(body.n!==undefined&&body.n!==1)issues.push("Multiple output candidates are unsupported");

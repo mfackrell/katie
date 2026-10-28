@@ -107,6 +107,8 @@ export interface ProviderSystemAudit {
 export interface ChatGenerateParams {
   /** Cancels the actual upstream transmission, including response consumption. */
   signal?: AbortSignal;
+  /** Server-derived actor/conversation scope, shared by helper calls. */
+  promptCacheKey?: string;
   /** Internal opt-in: bounded structured frame observations, no SDK inference retries. */
   boundedFrameObservations?: true;
   /** Server-restored historical evidence; never accepted directly from the browser request. */

@@ -1,4 +1,5 @@
 import { createAccountingFetch } from "@/lib/standalone-accounting/dispatch";
+import { openAiCacheSettings } from "./openai-cache";
 import type { ToolTurnParams, ToolTurn } from '@/lib/tools/types';
 import type { LlmProvider } from './types';
 
@@ -10,7 +11,7 @@ export async function nativeToolTurn(provider: LlmProvider['name'], apiKey: stri
   if (responsesApi) {
     url = 'https://api.openai.com/v1/responses';
     headers.Authorization = `Bearer ${apiKey}`;
-    body = { model: p.modelId, max_output_tokens: 4096, instructions: p.system, store: false,
+    body = { ...openAiCacheSettings(p.modelId, p.promptCacheKey), model: p.modelId, max_output_tokens: 4096, instructions: p.system, store: false,
       tools: p.tools.map(t => ({ type: 'function', ...t, strict: false })),
       input: p.messages.flatMap(m => m.role === 'tool'
         ? [{ type: 'function_call_output', call_id: m.callId, output: m.text }]
@@ -35,7 +36,7 @@ export async function nativeToolTurn(provider: LlmProvider['name'], apiKey: stri
   } else {
     url = provider === 'grok' ? 'https://api.x.ai/v1/chat/completions' : 'https://api.openai.com/v1/chat/completions';
     headers.Authorization = `Bearer ${apiKey}`;
-    body = { model: p.modelId, max_completion_tokens: 4096,
+    body = { ...(provider === "openai" ? openAiCacheSettings(p.modelId, p.promptCacheKey, "chat-completions") : {}), model: p.modelId, max_completion_tokens: 4096,
       tools: p.tools.map(t => ({ type: 'function', function: t })),
       messages: [{ role: 'system', content: p.system }, ...p.messages.map(m => m.role === 'tool'
         ? { role: 'tool', tool_call_id: m.callId, content: m.text }

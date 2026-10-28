@@ -34,6 +34,17 @@ const models: ModelPrice[] = [
   {provider:"grok",model:"grok-4.3",inputNanoUsd:"1250",outputNanoUsd:"2500",cachedInputNanoUsd:"200",maxContextTokens:1000000,maxOutputTokens:30000,tiers:[{aboveInputTokens:200000,inclusive:true,inputNanoUsd:"2500",outputNanoUsd:"5000",cachedInputNanoUsd:"400"}],source:grok},
 ];
 export const PRICING_SNAPSHOT = deepFreeze({version:PRICING_VERSION,verifiedAt:"2026-10-28",currency:"USD",unit:"microUSD",rateUnit:"nanoUSD/token",scope:"first-party-global-standard",sources:[...new Set(models.map(m=>m.source)),"https://developers.openai.com/api/docs/guides/images-vision","https://platform.claude.com/docs/en/build-with-claude/vision","https://ai.google.dev/gemini-api/docs/image-understanding"],models});
+/** Cache metadata eligibility, reviewed separately from immutable token rates.
+ * Official prompt-caching model comparison: pre-5.6 retention has no additional
+ * write charge; only the named earlier models support extended 24-hour retention.
+ * New GPT-5.6+/GPT-6 cache-write lifetimes require separate financial support.
+ */
+export const OPENAI_NO_FEE_CACHE_RETENTIONS: Readonly<Record<string, readonly string[]>> = deepFreeze({
+  "gpt-4o":["in_memory"],"gpt-4o-mini":["in_memory"],"gpt-4.1":["in_memory","24h"],
+  "gpt-5":["in_memory","24h"],"gpt-5-mini":["in_memory"],"gpt-5.4":["in_memory","24h"],
+  "gpt-5.4-pro":["in_memory"],"gpt-5.4-pro-2026-03-05":["in_memory"],
+  "gpt-5.5-pro":["24h"],"gpt-5.5-pro-2026-04-23":["24h"],"o3-pro":["in_memory"],
+});
 export function getModelPrice(provider: AccountingProvider, model: string): ModelPrice | undefined {
   // Deliberately no suffix stripping, family matching, registry fallback or guessed aliases.
   return PRICING_SNAPSHOT.models.find(row => row.provider === provider && row.model === model);

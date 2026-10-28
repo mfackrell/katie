@@ -43,7 +43,7 @@ export async function runModelTools(input: {
     await input.params.onProviderSystemPrepared?.({provider:input.provider.name,model:input.params.modelId,endpoint:'native-tools',systemMessages:[system]});
     let reply;
     try {
-      reply = await withSignal(input.provider.generateToolTurn({ modelId: input.params.modelId, system,
+      reply = await withSignal(input.provider.generateToolTurn({ promptCacheKey: input.params.promptCacheKey, modelId: input.params.modelId, system,
         messages, tools: input.tools.map(({name, description, parameters}) => ({name, description, parameters})), signal, requestId:input.requestId, turn:turn+1 }), signal);
     } catch (error) {
       // The loop owns its deadline and can fail before the HTTP adapter logs anything.

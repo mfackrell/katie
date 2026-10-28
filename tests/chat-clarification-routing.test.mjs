@@ -146,7 +146,7 @@ function fixture() {
     return exports;
   };
   const helpers = Object.assign({}, ...[
-    'lib/chat/task-progress', 'lib/chat/pdf-source-selection', 'lib/chat/response-policy', 'lib/chat/review-continuity',
+    'lib/providers/openai-cache', 'lib/chat/task-progress', 'lib/chat/pdf-source-selection', 'lib/chat/response-policy', 'lib/chat/review-continuity',
     'lib/chat/review-sources', 'lib/chat/video-evidence', 'lib/collaboration/review-completion',
     'lib/collaboration/activation', 'lib/collaboration/review-mode', 'lib/data/supabase/admin', 'lib/agents/policy',
   ].map(load));
@@ -270,6 +270,10 @@ async function runPipeline(f, selection, { message = SHORT_REPLY, history, outpu
       return { result: { ...input.draft, text: 'REVIEWED: ' + input.draft.text }, audit: { status: 'approved' } };
     },
   });
+  for (const params of generationInputs) {
+    assert.equal(params.promptCacheKey, f.helpers.conversationCacheKey(ACTOR_ID, CHAT_ID),
+      'Production generation must retain the actor/conversation cache scope');
+  }
   return { counts, chunks, generationInputs, reviews, ...state };
 }
 

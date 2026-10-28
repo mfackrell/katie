@@ -2,6 +2,7 @@ import { describe,expect,it } from "vitest";
 import { actualCostFromUsage,canonicalJson,estimatePreparedRequest,freezePreparedRequest,prepareStandaloneRequest,inlineImageDimensions,ESTIMATOR_VERSION } from "../lib/standalone-accounting/estimate";
 import { getModelPrice,priceTokenUsage,PRICING_SNAPSHOT } from "../lib/standalone-accounting/pricing";
 import { reducePreparedRequest } from "../lib/standalone-accounting/reduction";
+import { conversationCacheKey,openAiCacheSettings } from "../lib/providers/openai-cache";
 const chat=(payload:Record<string,unknown>={},model="gpt-4o")=>prepareStandaloneRequest("openai",model,"/v1/chat/completions",{model,messages:[{role:"user",content:"Hello"}],...payload});
 const png=(width:number,height:number)=>{const b=Buffer.alloc(24);Buffer.from([137,80,78,71,13,10,26,10]).copy(b);b.writeUInt32BE(width,16);b.writeUInt32BE(height,20);return `data:image/png;base64,${b.toString("base64")}`;};
 describe("immutable standalone pricing",()=>{
@@ -85,6 +86,45 @@ describe("immutable standalone pricing",()=>{
   it("detects tampered prepared requests even after restoring serialized persisted JSON",()=>{
     const original=chat();const changed=JSON.parse(JSON.stringify(original));changed.payload.messages[0].content="tampered";
     expect(estimatePreparedRequest(changed)).toMatchObject({status:"unsupported",reservationMicrousd:null});
+  });
+});
+describe("frozen no-fee OpenAI cache metadata",()=>{
+  it("uses the main stable scoped key within the documented shared 64-character limit",()=>{
+    const key=conversationCacheKey("actor","chat");expect(key).toHaveLength(64);expect(key).toMatch(/^katie:v1:[a-f0-9]{55}$/);
+    expect(conversationCacheKey("actor","chat")).toBe(key);expect(conversationCacheKey("other","chat")).not.toBe(key);expect(conversationCacheKey("actor","other")).not.toBe(key);
+  });
+  it("freezes and hashes routing/retention metadata while reserving identical full uncached input",()=>{
+    const model="gpt-5.4",key=conversationCacheKey("actor","chat");
+    const prepare=(settings:Record<string,unknown>)=>prepareStandaloneRequest("openai",model,"/v1/responses",{model,input:[{role:"user",content:"Cacheable stable instructions and the current question"}],max_output_tokens:4096,...settings});
+    const plain=prepare({}),cached=prepare(openAiCacheSettings(model,key)),quote=estimatePreparedRequest(cached),baseline=estimatePreparedRequest(plain);
+    expect(cached.payload.prompt_cache_key).toBe(key);expect(cached.payload.prompt_cache_retention).toBe("24h");expect(cached.hash).not.toBe(plain.hash);
+    expect(prepare({prompt_cache_key:"different-key",prompt_cache_retention:"24h"}).hash).not.toBe(cached.hash);
+    expect(prepare({prompt_cache_key:key,prompt_cache_retention:"in_memory"}).hash).not.toBe(cached.hash);
+    expect(quote.status).toBe("estimated");expect(quote.estimatorVersion).toBe("standalone-estimator-v3");expect(quote.inputTokens).toBe(baseline.inputTokens);expect(quote.reservationMicrousd).toBe(baseline.reservationMicrousd);
+    expect(quote.assumptions.join(" ")).toContain("reserves full uncached input");
+    expect(actualCostFromUsage(cached,{inputTokens:1000,outputTokens:100,cachedInputTokens:500}).actualMicrousd).toBe("2875");
+    const restored=JSON.parse(JSON.stringify(cached));restored.payload.prompt_cache_retention="in_memory";expect(estimatePreparedRequest(restored).status).toBe("unsupported");
+  });
+  it("allows only reviewed exact-model legacy retention settings",()=>{
+    const prepare=(model:string,retention:string)=>prepareStandaloneRequest("openai",model,"/v1/responses",{model,input:"Hello",max_output_tokens:4096,prompt_cache_key:"valid-key",prompt_cache_retention:retention});
+    for(const model of ["gpt-4.1","gpt-5","gpt-5.4","gpt-5.5-pro","gpt-5.5-pro-2026-04-23"])expect(estimatePreparedRequest(prepare(model,"24h")).status).toBe("estimated");
+    for(const model of ["gpt-4o","gpt-4o-mini","gpt-5-mini","gpt-5.4-pro","gpt-5.4-pro-2026-03-05","o3-pro"]) {
+      expect(estimatePreparedRequest(prepare(model,"24h")).status).toBe("unsupported");expect(estimatePreparedRequest(prepare(model,"in_memory")).status).toBe("estimated");
+    }
+    expect(estimatePreparedRequest(prepare("gpt-5.5-pro","in_memory")).status).toBe("unsupported");
+    for(const model of ["gpt-6.1-sol","gpt-5.6","gpt-5.4-unverified-snapshot","toString","__proto__"])expect(estimatePreparedRequest(prepare(model,"24h")).status).toBe("unsupported");
+  });
+  it("rejects malformed keys, retention types, paid-write options and cache metadata on other providers",()=>{
+    for(const key of [""," ","x".repeat(65),"bad\nkey","bad\u0000key","\ud800",42,null,{},[]])expect(estimatePreparedRequest(chat({prompt_cache_key:key})).status).toBe("unsupported");
+    for(const retention of ["30m","12h","forever",null,{},0])expect(estimatePreparedRequest(chat({prompt_cache_key:"valid",prompt_cache_retention:retention})).status).toBe("unsupported");
+    for(const options of [{ttl:"30m"},{ttl:"12h"},{mode:"explicit",ttl:"30m"}])expect(estimatePreparedRequest(chat({prompt_cache_key:"valid",prompt_cache_options:options})).status).toBe("unsupported");
+    expect(estimatePreparedRequest(chat({messages:[{role:"user",content:[{type:"text",text:"hello",prompt_cache_breakpoint:{mode:"explicit",ttl:"12h"}}]}]})).status).toBe("unsupported");
+    for(const provider of ["anthropic","grok","google"] as const) {
+      const model=provider==="anthropic"?"claude-sonnet-5-5":provider==="grok"?"grok-4.7":"gemini-2.5-pro";
+      const endpoint=provider==="anthropic"?"/v1/messages":provider==="grok"?"/v1/chat/completions":"/v1beta/models/gemini-2.5-pro:generateContent";
+      const request=prepareStandaloneRequest(provider,model,endpoint,{model,messages:[{role:"user",content:"hi"}],prompt_cache_key:"valid",prompt_cache_retention:"24h"});expect(estimatePreparedRequest(request).status).toBe("unsupported");
+    }
+    const modern=prepareStandaloneRequest("openai","gpt-6.1-sol","/v1/responses",{model:"gpt-6.1-sol",input:"Hi",...openAiCacheSettings("gpt-6.1-sol","valid-key")});expect(estimatePreparedRequest(modern).status).toBe("unsupported");
   });
 });
 describe("native client functions and bounded Claude reasoning",()=>{
