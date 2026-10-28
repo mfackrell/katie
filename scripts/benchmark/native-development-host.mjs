@@ -20,8 +20,6 @@ const {createClient}=require('@supabase/supabase-js');
 const [,,requestFile,manifestFile,childFile]=process.argv;
 const denied=message=>{throw Error('NATIVE_HOST_DENIED: '+message)};
 if(!requestFile||!manifestFile||!childFile)denied('missing verified inputs');
-if(process.env.KATIE_BENCHMARK_PAID_EXECUTION!=='enabled')
- denied('no separately enabled paid benchmark run');
 const signingKey=process.env.KATIE_NATIVE_HANDOFF_HMAC_KEY;
 const proof=readNativeHandoff(readFileSync(requestFile,'utf8'),signingKey);
 const manifest=JSON.parse(readFileSync(manifestFile,'utf8'));
@@ -30,6 +28,10 @@ for(const key of ['taskId','trialId','approvalId','projectId','contractHash','be
 if(manifest.productionRuntime!==proof.productionRuntime)denied('runtime handoff changed after verification');
 if(process.env.GITHUB_REPOSITORY!=='mfackrell/katie')denied('repository identity mismatch');
 const productionRuntime=proof.productionRuntime?openNativeProductionRuntime(proof.productionRuntime,proof,signingKey):null;
+// Production capsules are emitted only by the enabled server dispatcher after
+// its task-specific owner approval. Legacy staging retains its separate switch.
+if(!productionRuntime&&process.env.KATIE_BENCHMARK_PAID_EXECUTION!=='enabled')
+ denied('no separately enabled paid benchmark run');
 const url=productionRuntime?.url??process.env.NEXT_PUBLIC_SUPABASE_URL;
 const serviceKey=productionRuntime?.serviceRoleKey??process.env.KATIE_BENCHMARK_SERVICE_ROLE_KEY;
 if(productionRuntime)process.stdout.write('::add-mask::'+serviceKey+'\n');
@@ -72,8 +74,8 @@ const {data:pricing,error:pricingError}=await db.from('model_registry')
 if(pricingError||!pricing||pricing.pricing_status!=='verified')
  denied('model price evidence unavailable');
 assertBenchmarkDollarCeiling({
- armUsdCents:Number(process.env.KATIE_BENCHMARK_APPROVED_ARM_USD_CENTS),
- priceCeilingMicrosPerMillion:Number(process.env.KATIE_BENCHMARK_APPROVED_MAX_USD_MICROS_PER_MILLION),
+ armUsdCents:productionRuntime?1000:Number(process.env.KATIE_BENCHMARK_APPROVED_ARM_USD_CENTS),
+ priceCeilingMicrosPerMillion:productionRuntime?28000000:Number(process.env.KATIE_BENCHMARK_APPROVED_MAX_USD_MICROS_PER_MILLION),
  publishedInputUsdPerMillion:pricing.pricing_input_per_1m,
  publishedOutputUsdPerMillion:pricing.pricing_output_per_1m,
  accountTokens:Number(account.cap_tokens),approvalTokens:Number(approval.max_tokens)

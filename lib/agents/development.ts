@@ -202,6 +202,8 @@ export async function dispatchDevelopment(task: AgentTask, project?: Context, as
       const signingKey=process.env.KATIE_NATIVE_HANDOFF_HMAC_KEY;
       if(!signingKey||signingKey.length<32)
         throw Error('Benchmark handoff unavailable: trusted signing key not configured');
+      if(process.env.KATIE_BENCHMARK_PAID_EXECUTION!=='enabled')
+        throw Error('Full benchmark paid execution is disabled');
       const handoff={
         taskId:task.id,trialId:bound.trial_id,approvalId:approval.id,
         projectId:project.projectId,contractHash:project.contractHash,

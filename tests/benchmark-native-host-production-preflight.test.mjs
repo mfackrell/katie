@@ -11,7 +11,7 @@ const source=readFileSync('scripts/benchmark/native-development-host.mjs','utf8'
 const prefix=source.slice(0,source.indexOf('const clientToken=')).replace(/^import .*;\n/gm,'');
 const key='synthetic-production-preflight-signing-key';
 const ids=['11111111','22222222','33333333','44444444'].map(p=>`${p}-1111-4111-8111-111111111111`);
-async function preflight({production=true,qualification={},capsule,manifestChange={},approvalChange={}}={}){
+async function preflight({production=true,qualification={},capsule,manifestChange={},approvalChange={},envChange={}}={}){
  const expiresAt=Date.now()+600000,deadline=new Date(expiresAt).toISOString();
  const p={taskId:ids[0],trialId:ids[1],approvalId:ids[2],projectId:ids[3],contractHash:'a'.repeat(64),benchmarkContractHash:'b'.repeat(64),baselineSha:'c'.repeat(40),expiresAt};
  if(production)p.productionRuntime=capsule??sealNativeProductionRuntime('synthetic-prod-key',p,key);
@@ -29,7 +29,7 @@ async function preflight({production=true,qualification={},capsule,manifestChang
  const context={readNativeHandoff,openNativeProductionRuntime,assertBenchmarkDollarCeiling,tokenDigest,randomBytes,
   createRequire:()=>()=>({createClient:(url,secret)=>{calls.connections.push({url,secret});return db}}),join:(...p)=>p.join('/'),
   readFileSync:path=>path==='request'?body:JSON.stringify(manifest),
-  process:{argv:['node','host','request','manifest','child'],cwd:()=>'/trusted',stdout:{write:v=>calls.masks.push(v)},env:{KATIE_BENCHMARK_PAID_EXECUTION:'enabled',KATIE_NATIVE_HANDOFF_HMAC_KEY:key,GITHUB_REPOSITORY:'mfackrell/katie',NEXT_PUBLIC_SUPABASE_URL:'https://iytvavgbaainnsrecmcx.supabase.co',KATIE_BENCHMARK_SERVICE_ROLE_KEY:'synthetic-stage-key',OPENAI_API_KEY:'synthetic-provider-key',GITHUB_RUN_ID:'123',KATIE_BENCHMARK_APPROVED_ARM_USD_CENTS:'1000',KATIE_BENCHMARK_APPROVED_MAX_USD_MICROS_PER_MILLION:'28000000'}}};
+  process:{argv:['node','host','request','manifest','child'],cwd:()=>'/trusted',stdout:{write:v=>calls.masks.push(v)},env:{KATIE_BENCHMARK_PAID_EXECUTION:'enabled',KATIE_NATIVE_HANDOFF_HMAC_KEY:key,GITHUB_REPOSITORY:'mfackrell/katie',NEXT_PUBLIC_SUPABASE_URL:'https://iytvavgbaainnsrecmcx.supabase.co',KATIE_BENCHMARK_SERVICE_ROLE_KEY:'synthetic-stage-key',OPENAI_API_KEY:'synthetic-provider-key',GITHUB_RUN_ID:'123',KATIE_BENCHMARK_APPROVED_ARM_USD_CENTS:'1000',KATIE_BENCHMARK_APPROVED_MAX_USD_MICROS_PER_MILLION:'28000000',...envChange}}};
  try{await vm.runInNewContext(`(async()=>{${prefix}})()`,context);return {calls}}catch(error){return {calls,error}}
 }
 test('actual trusted-host preflight uses production capsule only for live matching qualification; legacy stays staging',async()=>{
@@ -46,4 +46,10 @@ test('corrupt or changed capsule never reaches a database or execution grant',as
  for(const options of [{capsule:'corrupt'},{manifestChange:{productionRuntime:'different'}}]){
   const r=await preflight(options);assert.ok(r.error);assert.equal(r.calls.connections.length,0);assert.equal(r.calls.grants,0);
  }
+});
+
+test('production uses its authenticated server authorization and frozen dollar ceiling; staging still needs explicit switch',async()=>{
+ const envChange={KATIE_BENCHMARK_PAID_EXECUTION:'disabled',KATIE_BENCHMARK_APPROVED_ARM_USD_CENTS:'',KATIE_BENCHMARK_APPROVED_MAX_USD_MICROS_PER_MILLION:''};
+ const p=await preflight({envChange});assert.equal(p.error,undefined);assert.equal(p.calls.grants,1);
+ const s=await preflight({production:false,envChange});assert.match(s.error?.message??'',/separately enabled/);assert.equal(s.calls.grants,0);assert.equal(s.calls.connections.length,0);
 });
