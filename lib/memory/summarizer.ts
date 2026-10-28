@@ -13,9 +13,6 @@ import type { Message } from "@/lib/types/chat";
 const SUMMARY_MODEL = "claude-sonnet-5-5";
 const SUMMARY_BATCH_MESSAGES = 20; // Ten completed user-assistant exchanges.
 const SUMMARY_MAX_TOKENS = 2500; // Provider-enforced hard ceiling for all generated tokens.
-const ITM_TARGET_MIN_TOKENS = 1500;
-const ITM_MAX_TOKENS = 2500;
-
 
 // Reuse the installed SDK only as native Claude HTTP transport, matching LTM.
 // Its default transport retries/timeouts are unchanged; no provider fallback.
