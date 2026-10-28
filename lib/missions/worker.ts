@@ -1,3 +1,4 @@
+import {ProviderAvailabilityError} from '@/lib/orchestration/routing';
 import {createHash} from 'node:crypto';
 import {EXECUTIVE_SOURCE_MARKER,sourceReportsForMission,executiveSourceGroups,executiveSourceManifest} from '@/lib/executive/source-handoff';
 import {repositoryInspection,workflowInspection,readOnlyRepositoryObjective} from './inspection';
@@ -350,7 +351,7 @@ export async function runMissionBatch(model=missionModel){
   catch(error){const raw=error as {message?:unknown;name?:unknown;status?:unknown;code?:unknown;response?:{status?:unknown}}|null;
    const candidate=error instanceof Error?error.message:typeof raw?.message==='string'?raw.message:typeof error==='string'?error:'';
    const detail=(candidate&&candidate!=='Unknown error: {}'?candidate:'Unclassified development integration failure') .slice(0,600);
-   const diagnostic={stage:claim.job.role,errorType:error instanceof Error?error.name:typeof error,code:typeof raw?.code==='string'?raw.code:undefined,httpStatus:typeof raw?.status==='number'?raw.status:typeof raw?.response?.status==='number'?raw.response.status:undefined,acceptedIssue:claim.job.role==='development'&&claim.job.payload?.approved===true};
+   const diagnostic={...(error instanceof ProviderAvailabilityError?{providerAvailability:error.failures}:{}),stage:claim.job.role,errorType:error instanceof Error?error.name:typeof error,code:typeof raw?.code==='string'?raw.code:undefined,httpStatus:typeof raw?.status==='number'?raw.status:typeof raw?.response?.status==='number'?raw.response.status:undefined,acceptedIssue:claim.job.role==='development'&&claim.job.payload?.approved===true};
    console.error('[Missions] Assignment failed',{jobId:claim.job.id,detail,diagnostic});
    let specificationCheckpointError:string|undefined;
    if(claim.mission.project_kind==='specification'&&['compose','revise'].includes(claim.job.role)&&(claim.mission.project_evidence as {specificationBudget?:{version?:number}})?.specificationBudget?.version===2&&error instanceof MissionModelFailure&&typeof error.partial.partialText==='string'){
