@@ -149,6 +149,32 @@ test('Full native trial admission uses two real PostgreSQL connections and one m
   const denied=await db.query(`select benchmark_reserve_mission_call($1,$2,$3,'other:model',100,false) receipt`,
     [claim.job.id,claim.job.lease,'b8888888-8888-4888-8888-888888888888']);
   assert.equal(denied.rows[0].receipt,null,'Full account rejects model-policy deviation before inference');
+  // Synthetic fixture only: exercise privileged task approval with real tables.
+  await db.query('reset role');
+  await db.query('create table benchmark_production_qualifications(issue integer,owner_id uuid,actor_id uuid,experiment_id uuid,deadline timestamptz,revoked_at timestamptz)');
+  await db.query('grant all on benchmark_production_qualifications to service_role');
+  await db.query(readFileSync('supabase/migrations/20261028134500_benchmark_dashboard_task_approval.sql','utf8'));
+  await db.query('set role service_role');
+  const owner=randomUUID(),scope='d'.repeat(64);
+  await db.query("insert into benchmark_production_qualifications values(715,$1,$2,$3,now()+interval '1 hour',null)",[owner,actor,exp]);
+  await db.query("update work_projects set phase='development',status='running',approved_hash=$2,approval_hash=$2 where id=$1",[project,scope]);
+  await db.query("update agent_missions set status='running' where id=$1",[claim.mission.id]);
+  await db.query("update mission_assignments set role='development',status='waiting_external',payload='{\"approved\":true}' where id=$1",[claim.job.id]);
+  await db.query("update project_runs set binding=jsonb_build_object('scopeHash',$2::text) where mission_id=$1",[claim.mission.id,scope]);
+  await db.query("insert into agent_tasks(id,agent_id,actor_id,chat_id,snapshot,definition_version,kind,initial_input,input,repository_id,request_id,status) select $1,a.id,$2,$3,a.config,a.version,'development','Take Eleven','Take Eleven',$4,$1::text,'dispatching' from managed_agents a join mission_assignments j on j.agent_id=a.id where j.id=$1",[claim.job.id,actor,chat,repo]);
+  const approve='select benchmark_dashboard_full_task($1,$2,$3,true) approval';
+  await assert.rejects(db.query(approve,[randomUUID(),claim.job.id,scope]),/authenticated owner/);
+  await assert.rejects(db.query(approve,[owner,randomUUID(),scope]),/not eligible/);
+  await assert.rejects(db.query(approve,[owner,claim.job.id,'f'.repeat(64)]),/not eligible/);
+  const before=(await db.query('select spent_tokens from benchmark_budget_accounts where id=$1',[linked.account_id])).rows[0].spent_tokens;
+  const approvals=await Promise.all([db.query(approve,[owner,claim.job.id,scope]),other.query(approve,[owner,claim.job.id,scope])]);
+  assert.equal(approvals[0].rows[0].approval.approvalId,approvals[1].rows[0].approval.approvalId);
+  assert.equal((await db.query('select count(*)::int n from benchmark_native_spending_approvals where task_id=$1',[claim.job.id])).rows[0].n,1);
+  assert.equal((await db.query('select spent_tokens from benchmark_budget_accounts where id=$1',[linked.account_id])).rows[0].spent_tokens,before);
+  await db.query("update benchmark_production_qualifications set deadline=now()-interval '1 minute'");
+  await assert.rejects(db.query(approve,[owner,claim.job.id,scope]),/authenticated owner/);
+  await db.query('reset role');await db.query('set role authenticated');
+  await assert.rejects(db.query(approve,[owner,claim.job.id,scope]),/permission denied/);
  }finally{
   for(const c of clients)try{await c.end()}catch{}
   if(started)try{run('pg_ctl',['-D',data,'-m','immediate','-w','stop'])}catch{}
