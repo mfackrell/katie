@@ -477,8 +477,8 @@ test('explicit project intake inspects fresh image and PDF evidence before bindi
       assert.equal(file.fileId, 'fresh-brief');
       return {observedSummary:mimeType === 'image/png' ? fullText : 'metadata only',summaryCoverage:mimeType === 'image/png' ? 'full' : 'metadata'};
     });
-    context.message = mimeType === 'application/pdf' ? 'Start a new project using the attached PDF brief.' : 'Start a new project using the attached image brief.';
-    context.startProjectIntent = text => text.startsWith('Start a new project');
+    context.message = mimeType === 'application/pdf' ? 'Help me apply to this attached PDF' : 'Start a new project using the attached image brief.';
+    context.startProjectIntent = text => text.startsWith('Start a new project') || text.startsWith('Help me apply');
     const result = await vm.runInNewContext(compile(`(async()=>{${contextResolutionBlock}
       return {pdfProgress, freshDescriptionCount:freshTaskDescriptions.size};})()`), context);
     assert.deepEqual(events, ['inspect','resolve']);
