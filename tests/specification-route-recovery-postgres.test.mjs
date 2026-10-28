@@ -58,6 +58,7 @@ test('Deterministic route repair preserves paid source, authority, and queued in
   await db.query(`create table provider_health(provider_name text primary key,status text,reason text,failure_count int,blocked_until timestamptz,updated_at timestamptz);grant all on provider_health to service_role`);
   await db.query(readFileSync('supabase/migrations/20261028212933_uncharged_continuation_specification_replacement.sql','utf8'));
   await db.query(readFileSync('supabase/migrations/20261028222500_deterministic_specification_route_recovery.sql','utf8'));
+  await db.query(readFileSync('supabase/migrations/20261028224000_verified_price_review_recovery.sql','utf8'));
   const actor=randomUUID(),chat=randomUUID(),repo=randomUUID(),trial=randomUUID(),exp=randomUUID(),project=randomUUID(),owner=randomUUID();
   const protocol=config.protocol;
   await db.query('insert into actors(id,name) values($1,$2)',[actor,'Synthetic continuation fixture']);
@@ -174,7 +175,49 @@ test('Deterministic route repair preserves paid source, authority, and queued in
   assert.deepEqual((await db.query("select to_jsonb(j) j from mission_assignments j where mission_id=$1 and role='review'",[work.mission.id])).rows[0].j,beforeReview);
   const audit=(await db.query("select data from project_events where project_id=$1 and event='specification_route_recovered'",[project])).rows;
   assert.equal(audit.length,1);assert.deepEqual(audit[0].data.originalResult,original);assert.equal(audit[0].data.compositionInference,false);
+  // The corrected candidate reaches review without another composition call.
+  // A denied atomic admission has no receipt and retains the normal second attempt.
+  const reviewId=beforeReview.id,reviewFailure={detail:'Full benchmark account denied atomic model-call admission'};
+  await db.query("update work_projects set status='blocked' where id=$1",[project]);
+  await db.query("update agent_missions set status='blocked' where id=$1",[work.mission.id]);
+  await db.query("update mission_assignments set status='failed',attempts=1,result=$2,detail=$3,updated_at=now()-interval '1 minute' where id=$1",[reviewId,reviewFailure,reviewFailure.detail]);
+  const priceTime=(await db.query("update model_registry set pricing_status='verified',pricing_verified_at=date_trunc('milliseconds',now()),source_metadata=jsonb_build_object('pricing_verification_source','https://developers.openai.com/api/docs/models/gpt-5.3-codex') where model_id='gpt-5.3-codex' returning pricing_verified_at")).rows[0].pricing_verified_at;
+  const retryReview=async()=>(await db.query('select recover_verified_price_review($1) ok',[project])).rows[0].ok;
+  assert.equal(await retryReview(),false,'missing corroborating price event');
+  await db.query("insert into project_events(project_id,event,data) values($1,'model_price_reverified',jsonb_build_object('model','gpt-5.3-codex','priorStatus','estimated','source','https://developers.openai.com/api/docs/models/gpt-5.3-codex','verifiedAt',$2::timestamptz))",[project,priceTime]);
+  for(const [name,sql,params] of [
+   ['zero_price',"update model_registry set pricing_input_per_1m=0 where model_id='gpt-5.3-codex'",[]],
+   ['null_price',"update model_registry set pricing_output_per_1m=null where model_id='gpt-5.3-codex'",[]],
+   ['estimated',"update model_registry set pricing_status='estimated' where model_id='gpt-5.3-codex'",[]],
+   ['future_price',"update model_registry set pricing_verified_at=now()+interval '1 hour' where model_id='gpt-5.3-codex'",[]],
+   ['stale_price',"update model_registry set pricing_verified_at=now()-interval '25 hours' where model_id='gpt-5.3-codex'",[]],
+   ['unofficial_source',"update model_registry set source_metadata='{}' where model_id='gpt-5.3-codex'",[]],
+   ['child_expiry',"update agent_missions set deadline=now()-interval '1 minute' where id=$1",[work.mission.id]],
+   ['revoked',"update benchmark_production_qualifications set revoked_at=now()",[]],
+   ['active_lease',"update mission_assignments set lease=$2,lease_until=now()+interval '1 minute' where id=$1",[reviewId,randomUUID()]],
+   ['unknown_usage',"update benchmark_budget_calls set actual_tokens=null where account_id=$1",[account]],
+   ['unsettled_usage',"update benchmark_budget_calls set state='unresolved' where account_id=$1",[account]],
+   ['wrong_plan',"update agent_missions set project_evidence=jsonb_set(project_evidence,'{benchmarkContinuationPlanHash}',to_jsonb('wrong'::text)) where id=$1",[work.mission.id]],
+   ['dependency',"update mission_assignments set dependencies='{}' where id=$1",[reviewId]],
+   ['compose_incomplete',"update mission_assignments set status='failed' where id=$1",[work.job.id]],
+   ['already_attempted_twice',"update mission_assignments set attempts=2 where id=$1",[reviewId]],
+   ['other_failure',"update mission_assignments set detail='Some generic failure' where id=$1",[reviewId]],
+   ['zero_token_call',"insert into mission_calls(id,job_id,lease,model,reserved_tokens,actual_tokens,status) values($1,$2,$3,'openai:gpt-5.3-codex',1,0,'completed')",[randomUUID(),reviewId,randomUUID()]]]){
+   await db.query('begin');await db.query(sql,params);assert.equal(await retryReview(),false,name);await db.query('rollback');
+  }
+  await db.query('begin');await db.query('reset role');await db.query('alter table benchmark_full_continuations disable trigger benchmark_continuation_immutable');
+  await db.query("update benchmark_full_continuations set created_at=now()-interval '5 hours',deadline=now()-interval '1 hour'");await db.query('set local role service_role');
+  assert.equal(await retryReview(),false,'expired parent');await db.query('rollback');
+  const reviewConcurrent=await Promise.all([db.query('select recover_verified_price_review($1) ok',[project]),rival.query('select recover_verified_price_review($1) ok',[project])]);
+  assert.equal(reviewConcurrent.filter(r=>r.rows[0].ok).length,1);assert.equal(await retryReview(),false);
+  const resumed=(await db.query('select * from mission_assignments where id=$1',[reviewId])).rows[0];
+  assert.equal(resumed.status,'queued');assert.equal(resumed.attempts,1);assert.deepEqual(resumed.result,reviewFailure);
+  assert.deepEqual((await db.query('select to_jsonb(a) a from benchmark_budget_accounts a where id=$1',[account])).rows[0].a,beforeAccount);
+  const claimedReview=(await db.query('select claim_mission_work() c')).rows[0].c;
+  assert.equal(claimedReview.job.id,reviewId);assert.equal(claimedReview.job.attempts,2,'normal lease increments preserved attempt');
+  assert.equal((await db.query('select count(*)::int n from mission_calls where job_id=$1',[reviewId])).rows[0].n,0);
   await db.query('reset role');await db.query('set role authenticated');await assert.rejects(db.query(repairSql,args),/permission denied/);
+  await assert.rejects(db.query('select recover_verified_price_review($1)',[project]),/permission denied/);
  }finally{
   for(const c of clients)try{await c.end()}catch{}
   if(started)try{run('pg_ctl',['-D',data,'-m','immediate','-w','stop'])}catch{}
