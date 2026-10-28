@@ -9,13 +9,14 @@ export function specificationMissionTokens(recovered:boolean){
  return (recovered?0:SPECIFICATION_STAGE_TOKENS.compose)+SPECIFICATION_STAGE_TOKENS.review+
   SPECIFICATION_STAGE_TOKENS.revision+SPECIFICATION_STAGE_TOKENS.review_again+SPECIFICATION_STAGE_TOKENS.routing;
 }
-export function specificationProjectAdmission(recovered:boolean,milestones=1){
+export function specificationProjectAdmission(recovered:boolean,milestones=1,assessmentTokens=120000){
  const missionTokens=specificationMissionTokens(recovered);
  // Existing project child ceiling for each remaining development milestone and
  // whole-project assessment. This is headroom, not an additional charge/grant.
  const futureMissions=milestones+1;
- return {missionTokens,futureMissions,futureTokens:futureMissions*120000,
-  requiredTokens:missionTokens+futureMissions*120000,requiredMissionSlots:futureMissions+1};
+ const futureTokens=milestones*120000+assessmentTokens;
+ return {missionTokens,futureMissions,futureTokens,
+  requiredTokens:missionTokens+futureTokens,requiredMissionSlots:futureMissions+1};
 }
 export type SpecificationJob={id:string;mission_id:string;job_key:string;role:string;status:string;dependencies?:string[];created_at:string;updated_at:string;result:Record<string,unknown>|null};
 // Only a changed candidate or authoritative user scope permits another recovery.

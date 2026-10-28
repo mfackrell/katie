@@ -281,7 +281,9 @@ async function advance(p: Project) {
     // rather than double-charging every completed call.
     const charged = ((spend ?? []) as Array<{actual_tokens: number | null;reserved_tokens:number | null}>).reduce((total: number, m) => total +
         Math.max(0, Number(m.actual_tokens ?? 0), Number(m.reserved_tokens ?? 0)), 0);
-    const specAdmission=p.phase==='specification'?specificationProjectAdmission(Boolean(recovery?.checkpoint),recovery?.checkpoint?projectPlanSchema.parse(parseJSON(recovery.checkpoint.text)).milestones.length:1):null;
+    const assessmentTokens=p.phase==='specification'&&process.env.KATIE_FULL_BENCHMARK_ENVIRONMENT==='production'
+      ?await projectRpc<number>('benchmark_project_assessment_cap',{p_project:p.id}):120000;
+    const specAdmission=p.phase==='specification'?specificationProjectAdmission(Boolean(recovery?.checkpoint),recovery?.checkpoint?projectPlanSchema.parse(parseJSON(recovery.checkpoint.text)).milestones.length:1,assessmentTokens):null;
     const requiredTokens=specAdmission?.requiredTokens??8000;
     if (p.token_allowance - charged < requiredTokens || (specAdmission&&runs.length+specAdmission.requiredMissionSlots>p.max_missions)) {
         await finish('block', { detail: specAdmission?`Mandatory ${p.phase} stages require ${requiredTokens} tokens; ${Math.max(0,p.token_allowance-charged)} remain of ${p.token_allowance} after ${charged} charged. Required mission slots: ${specAdmission.requiredMissionSlots}; available: ${p.max_missions-runs.length}. Prior work is retained; owner resource approval is required before a new mission.`:'Aggregate project token budget has fewer than 8,000 uncommitted tokens. Previous work is retained; a new mission is not authorized.' });

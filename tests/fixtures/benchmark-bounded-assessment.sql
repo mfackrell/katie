@@ -1,0 +1,31 @@
+begin;
+do $test$
+declare actor uuid:=gen_random_uuid(); chat uuid:=gen_random_uuid(); pid uuid:=gen_random_uuid(); repo uuid;
+ aid uuid:=gen_random_uuid(); exp uuid:=gen_random_uuid(); prior uuid:=gen_random_uuid(); l uuid:=gen_random_uuid(); p work_projects; child agent_missions;
+begin
+ insert into actors(id,name) values(actor,'Bounded benchmark fixture');
+ insert into chats(id,actor_id,title) values(chat,actor,'Bounded benchmark fixture');
+ select id into repo from repo_sync_runs where repository_full_name='owner/repo' limit 1;
+ perform create_game_work_project(pid,'bounded-'||pid,actor,chat,'Original bounded Take Eleven fixture',repo);
+ select * into p from work_projects where id=pid;
+ if benchmark_project_assessment_cap(pid)<>120000 then raise exception 'ordinary cap changed';end if;
+ insert into benchmark_budget_accounts(id,experiment_id,arm,cap_tokens) values(aid,exp,'full',350000);
+ insert into benchmark_full_project_bindings(project_id,account_id) values(pid,aid);
+ if benchmark_project_assessment_cap(pid)<>120000 then raise exception 'staging cap changed';end if;
+ insert into benchmark_production_qualifications(experiment_id,issue) values(exp,715);
+ if benchmark_project_assessment_cap(pid)<>60000 then raise exception 'production bounded cap missing';end if;
+ perform create_mission(prior,p.objective,p.team,120,null);
+ update agent_missions set project_id=pid,project_kind='research',status='completed',actual_tokens=31887,reserved_tokens=31887 where id=prior;
+ insert into project_runs(project_id,mission_id,kind,ordinal,milestone_index) values(pid,prior,'research',1,0);
+ update work_projects set token_allowance=350000,phase='specification',status='running',active_mission_id=null,lease=l,lease_until=now()+interval '5 minutes' where id=pid;
+ perform finish_work_project(pid,l,'child',jsonb_build_object('kind','specification','objective',p.objective,'evidence','{}'::jsonb));
+ select m.* into child from agent_missions m join work_projects w on w.active_mission_id=m.id where w.id=pid;
+ if child.id is null or child.token_allowance<>120000 or child.project_evidence->'specificationBudget'->>'futureTokens'<>'180000' then raise exception 'bounded specification not admitted';end if;
+ update agent_missions set status='completed',actual_tokens=10000,reserved_tokens=10000 where id=child.id;
+ update work_projects set phase='assessment',status='running',active_mission_id=null,lease=l,lease_until=now()+interval '5 minutes' where id=pid;
+ perform finish_work_project(pid,l,'child',jsonb_build_object('kind','assessment','objective',p.objective,'evidence','{}'::jsonb));
+ select m.* into child from agent_missions m join work_projects w on w.active_mission_id=m.id where w.id=pid;
+ if child.id is null or child.token_allowance<>60000 then raise exception 'assessment allocation not enforced';end if;
+ if (select token_allowance from work_projects where id=pid)<>350000 or (select actual_tokens from agent_missions where id=prior)<>31887 then raise exception 'authorization or prior spending changed';end if;
+end $test$;
+rollback;

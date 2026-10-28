@@ -106,8 +106,12 @@ test('projects: real PostgreSQL idempotency, scope, lifecycle fencing and aggreg
   await db.query('reset role');
   await db.query(readFileSync('supabase/migrations/20261021000532_atomic_mission_admission_and_review_checkpoints.sql','utf8'));
   await db.query(readFileSync('supabase/migrations/20261027172000_specification_lifecycle_recovery.sql','utf8'));
+  await db.query('create table benchmark_budget_accounts(id uuid primary key,experiment_id uuid,arm text,cap_tokens bigint);create table benchmark_full_project_bindings(project_id uuid,account_id uuid);create table benchmark_production_qualifications(experiment_id uuid,issue integer);grant all on benchmark_budget_accounts,benchmark_full_project_bindings,benchmark_production_qualifications to service_role');
+  await db.query(readFileSync('supabase/migrations/20261028135500_benchmark_bounded_assessment.sql','utf8'));
+
   await db.query('set role service_role');
   await verifySpecificationLifecycleSql(db);
+  await db.query(readFileSync('tests/fixtures/benchmark-bounded-assessment.sql','utf8'));
   await db.query('reset role');
   await db.query(readFileSync('supabase/migrations/20261027201000_development_dispatch_recovery.sql','utf8'));
   await db.query('set role service_role');
