@@ -1,3 +1,4 @@
+import { openAiCacheSettings } from "./openai-cache";
 import { nativeToolTurn } from "./native-tools";
 import OpenAI from "openai";
 import {
@@ -305,6 +306,7 @@ export class OpenAiProvider implements LlmProvider {
   ): Promise<ProviderResponse> {
     const completion = await this.client.chat.completions.create({
       model: selectedModel,
+      ...openAiCacheSettings(selectedModel, params.promptCacheKey, "chat-completions"),
       messages: toChatMessages(params)
     });
 
@@ -318,6 +320,7 @@ export class OpenAiProvider implements LlmProvider {
   ): Promise<ProviderResponse> {
     const response = await this.client.responses.create({
       model: selectedModel,
+      ...openAiCacheSettings(selectedModel, params.promptCacheKey),
       input: toResponsesInput(params),
       ...(classification.isImageGenerationModel
         ? {
@@ -354,6 +357,7 @@ export class OpenAiProvider implements LlmProvider {
   ): Promise<ProviderResponse> {
     const stream = await this.client.chat.completions.create({
       model: selectedModel,
+      ...openAiCacheSettings(selectedModel, params.promptCacheKey, "chat-completions"),
       messages: toChatMessages(params),
       stream: true
     });
@@ -381,6 +385,7 @@ export class OpenAiProvider implements LlmProvider {
   ): Promise<ProviderResponse> {
     const stream = await this.client.responses.create({
       model: selectedModel,
+      ...openAiCacheSettings(selectedModel, params.promptCacheKey),
       input: toResponsesInput(params),
       stream: true,
       ...(classification.isImageGenerationModel

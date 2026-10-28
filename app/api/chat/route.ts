@@ -1,3 +1,4 @@
+import { conversationCacheKey } from "@/lib/providers/openai-cache";
 import {projectForChat} from '@/lib/projects/store';
 import {loadFullBenchmarkBinding} from '../../../scripts/benchmark/full-project-gate.mjs';
 import { isExplicitKatieSelfInspectionRequest } from "@/lib/tools/self-inspection-intent";
@@ -2189,7 +2190,7 @@ async function executeChat(request: NextRequest) {
               for (const pdf of attachments.filter(file=>file.mimeType==="application/pdf")) pdf.pdfContextBlocked=true;
             }
             const createParams = (selectedModelId: string, forReview = false) =>
-              ({ ...buildGenerationParams({
+              ({ promptCacheKey: conversationCacheKey(actorId, chatId), ...buildGenerationParams({
                 name,
                 persona: [personaForGeneration, taskProgressContext, storedWebsite.context,
                   ...(!forReview ? [resumptionContext, responsePolicy.generationInstruction] : []),
