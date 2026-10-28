@@ -31,7 +31,6 @@ const MEMORY_REQUEST_PATTERNS = [
   /\b(?:short[- ]term|intermediate|long[- ]term) memory\b/i,
   /\bwhat do you remember\b/i,
   /\bdo you remember\b/i,
-  /\bwhat do you know about\b/i,
   /\bwhat (?:did|have) i (?:tell|told|say|said) you about\b/i,
   /\bwhat do you have (?:stored|saved) about\b/i,
   /\bwhat(?:'s| is) (?:stored|saved) about\b/i,
@@ -154,7 +153,7 @@ export function isExplicitMemoryMutation(message: string): boolean {
     /\b(?:remember|memorize|retain|store|save|commit|add|put|incorporate|write)\b[^\n]{0,100}\b(?:long[- ]term memory|memory|for (?:later|future)|permanently)\b|\b(?:long[- ]term memory|memory)\b[^\n]{0,90}\b(?:remember|memorize|retain|store|save|commit|add|put|incorporate|write)\b/i.test(message);
 }
 
-function isMemoryRequest(message: string): boolean {
+export function isMemoryRequest(message: string): boolean {
   const subjectIsMemory = MEMORY_REQUEST_PATTERNS.some((pattern) => pattern.test(message));
   // Mentioning "long-term memory" is not automatically an instruction to
   // dump it. Only route actual inspection questions through the local reader.

@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { isSystemPromptRequest, isExplicitMemoryMutation, isExplicitMemoryCorrection } from "../lib/chat/local-katie";
+import { isSystemPromptRequest, isExplicitMemoryMutation, isExplicitMemoryCorrection, isMemoryRequest } from "../lib/chat/local-katie";
 import { boundProviderSystemAudit } from "../lib/chat/provider-system-audit";
 
 test("exact system message and prompt queries stay on the local inspection path", () => {
@@ -46,6 +46,28 @@ test("discussion of prompt design is not accidentally hijacked as a local inspec
   ]) {
     assert.equal(isSystemPromptRequest(message), false, message);
   }
+});
+
+
+test("ordinary knowledge questions do not intercept the conversational model as memory inspection", () => {
+  for (const message of [
+    "what do you know about AI SEO",
+    "What do you know about accounting?",
+    "What do you know about our marketing strategy?",
+    "finding cold referral partners is bullshit. What do you know about AI SEO?",
+    "Tell me what you know about growth marketing",
+  ]) assert.equal(isMemoryRequest(message), false, message);
+});
+
+test("explicit saved-memory inspections retain the local inspection path", () => {
+  for (const message of [
+    "What do you remember about my career?",
+    "Do you remember what I told you about C3?",
+    "Show me your long-term memory",
+    "What is in your memory?",
+    "What do you have stored about my work?",
+    "What do you know about my memory records?",
+  ]) assert.equal(isMemoryRequest(message), true, message);
 });
 
 test("chat request short circuits before router and any model-backed memory maintenance", () => {
