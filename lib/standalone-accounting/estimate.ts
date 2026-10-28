@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { deepFreeze, getModelPrice, priceTokenUsage, PRICING_VERSION, OPENAI_NO_FEE_CACHE_RETENTIONS, type AccountingProvider, type ModelPrice } from "./pricing";
 /** Changing counting/admissibility rules requires a new estimator identity. */
-export const ESTIMATOR_VERSION = "standalone-estimator-v3";
+export const ESTIMATOR_VERSION = "standalone-estimator-v4";
 
 export type JsonValue = null | boolean | number | string | JsonValue[] | { [key:string]: JsonValue };
 export type JsonObject = { [key:string]: JsonValue };
@@ -58,10 +58,12 @@ export function inlineImageDimensions(url:string):{width:number;height:number}|u
 }
 function estimateVision(price:ModelPrice,url:string,detail:string,issues:string[],assumptions:string[]):number {
   if(!price.vision){issues.push("Image billing is unsupported for this model");return 0;}
+  // A fixed token price does not freeze what an external URL may serve later.
+  // Require image bytes in the hashed body before applying any billing shortcut.
+  const dimensions=inlineImageDimensions(url);
+  if(!dimensions){issues.push("Image content and dimensions must be available from immutable inline image bytes; external image URLs are unsupported");return 0;}
   if(price.vision.kind==="claude") {assumptions.push("Claude image allowance uses documented per-image visual-token maximum");return price.vision.maximum;}
   if(price.vision.kind==="tiles"&&detail==="low")return price.vision.base;
-  const dimensions=inlineImageDimensions(url);
-  if(!dimensions){issues.push("Image dimensions are unavailable from immutable inline image bytes");return 0;}
   let {width,height}=dimensions;
   if(price.vision.kind==="gemini25") {if(width<=384&&height<=384)return 258;const crop=Math.max(1,Math.floor(Math.min(width,height)/1.5));assumptions.push("Gemini 2.5 image allowance uses documented approximate crop formula");return Math.ceil(width/crop)*Math.ceil(height/crop)*258;}
   if(!["low","high","auto"].includes(detail)){issues.push("Unknown image detail");return 0;}

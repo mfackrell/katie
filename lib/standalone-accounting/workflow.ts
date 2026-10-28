@@ -49,7 +49,7 @@ export async function executeStandaloneWorkflow(request:NextRequest,payload:Reco
     if(workflow.status==='completed'&&workflow.result)return new Response(workflow.result.body,{status:workflow.result.status,headers:workflow.result.headers});
     return NextResponse.json({status:workflow.blocked??workflow.status,requestId,error:workflow.blocked==='approval_required'?'Approval required. Review the saved provider attempt in Usage.':workflow.blocked},{status:202});
   }
-  const finish=async(status:'paused'|'completed'|'failed',result?:Workflow['result'],error?:string)=>rpc('finish_workflow',{p_owner:ownerId,p_request:requestId,p_lease:workflow.lease_token,p_status:status,p_result:result??null,p_error:error??null});
+  const finish=async(status:'paused'|'completed'|'failed',result?:Workflow['result'],error?:string)=>rpc<Workflow>('finish_workflow',{p_owner:ownerId,p_request:requestId,p_lease:workflow.lease_token,p_status:status,p_result:result??null,p_error:error??null});
   const headers=new Headers(request.headers);headers.set('content-type','application/json');
   const original=new NextRequest(request.url,{method:'POST',headers,body:JSON.stringify(payload),signal:request.signal});
   try {
@@ -65,7 +65,14 @@ export async function executeStandaloneWorkflow(request:NextRequest,payload:Reco
       const body=new TextDecoder().decode(bytes);
       const paused=/"type":"accounting_pause"|"code":"standalone_/.test(body);
       const result={body,status:response.status,headers:Array.from(response.headers.entries())};
-      await finish(paused?'paused':response.ok?'completed':'failed',result);
+      const finished = await finish(paused?'paused':response.ok?'completed':'failed',result);
+      if (finished.status === 'paused' && !paused) {
+        // PostgreSQL also fences optional work whose caller caught a denial.
+        // Never complete a parent while a hidden paid approval remains pending.
+        const notice = {type:'accounting_pause',code:'standalone_pending_attempt',requestId,message:'Supporting work is paused for approval or unresolved accounting. Review Usage.'};
+        if (response.headers.get('content-type')?.includes('ndjson')) return new Response(body + (body.endsWith('\n') ? '' : '\n') + JSON.stringify(notice) + '\n',{status:response.status,headers:response.headers});
+        return NextResponse.json(notice,{status:402});
+      }
       return new Response(bytes,{status:response.status,headers:response.headers});
     }));
   } catch(error) {

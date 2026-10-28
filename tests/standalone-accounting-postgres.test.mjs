@@ -134,7 +134,17 @@ test('standalone ledger: real PostgreSQL atomic admission, receipts, ownership a
   assert.ok(await rpc(one,'claim_dispatch',{p_owner:owner,p_attempt:waitingSibling.id}));
   const cancelled=await rpc(one,'admit',input('cancel-main','10','cancel-request'));
   const cancelledSibling=await rpc(one,'admit',input('cancel-sibling','5','cancel-request'));
+  const inFlightSibling=await rpc(one,'admit',input('cancel-inflight','2','cancel-request'));
+  const settledSibling=await rpc(one,'admit',input('cancel-settled','1','cancel-request'));
+  await rpc(one,'claim_dispatch',{p_owner:owner,p_attempt:inFlightSibling.id});
+  await rpc(one,'claim_dispatch',{p_owner:owner,p_attempt:settledSibling.id});
+  await rpc(one,'settle',{...settle,p_attempt:settledSibling.id,p_receipt:'cancel-settled-receipt',p_actual:'1'});
   await rpc(one,'cancel',{p_owner:owner,p_attempt:cancelled.id});
+  const observedInFlight=await rpc(two,'lookup_attempt',{p_owner:owner,p_request:'cancel-request',p_key:'cancel-inflight'});
+  assert.equal(observedInFlight.state,'uncertain');assert.ok(observedInFlight.cancelled_by_owner_at,'other-worker per-attempt cancellation polls can observe the owner cancellation');
+  const observedSettled=await rpc(two,'lookup_attempt',{p_owner:owner,p_request:'cancel-request',p_key:'cancel-settled'});
+  assert.equal(observedSettled.state,'settled');assert.equal(observedSettled.actual_microusd,'1');assert.ok(observedSettled.cancelled_by_owner_at,'settled history is flagged without erasing known actual cost');
+
   assert.equal((await rpc(one,'lookup_attempt',{p_owner:owner,p_request:'cancel-request',p_key:'cancel-sibling'})).state,'cancelled');
   assert.equal(await rpc(one,'claim_dispatch',{p_owner:owner,p_attempt:cancelledSibling.id}),null);
   await assert.rejects(rpc(one,'admit',input('cancel-next','1','cancel-request')),/REQUEST_CANCELLED/);
@@ -179,8 +189,27 @@ test('standalone ledger: real PostgreSQL atomic admission, receipts, ownership a
   assert.equal((await rpc(two,'claim_workflow',{...wf,p_resume:true})).claimed,false);
   await approve(wfPause);const resume=await rpc(fresh,'claim_workflow',{...wf,p_resume:true});assert.equal(resume.claimed,true);
   await assert.rejects(rpc(one,'finish_workflow',{p_owner:owner,p_request:'workflow',p_lease:leased.lease_token,p_status:'completed'}),/LEASE_LOST/);
-  await rpc(fresh,'finish_workflow',{p_owner:owner,p_request:'workflow',p_lease:resume.lease_token,p_status:'completed',p_result:{answer:'saved'}});
+  // A swallowed optional-feature denial must never hide a durable pending attempt.
+  const premature=await rpc(fresh,'finish_workflow',{p_owner:owner,p_request:'workflow',p_lease:resume.lease_token,p_status:'completed',p_result:{answer:'apparent success'}});
+  assert.equal(premature.status,'paused');assert.equal(premature.lease_token,null);
+  assert.equal((await rpc(two,'load_workflow',{p_owner:owner,p_request:'workflow'})).status,'paused');
+  const finalLease=await rpc(fresh,'claim_workflow',{...wf,p_resume:true});assert.equal(finalLease.claimed,true);
+  assert.ok(await rpc(one,'claim_dispatch',{p_owner:owner,p_attempt:wfPause.id}));
+  await rpc(one,'settle',{...settle,p_attempt:wfPause.id,p_receipt:'workflow-final-receipt',p_actual:'90'});
+  const finished=await rpc(fresh,'finish_workflow',{p_owner:owner,p_request:'workflow',p_lease:finalLease.lease_token,p_status:'completed',p_result:{answer:'saved'}});
+  assert.equal(finished.status,'completed','all-settled workflow completes normally');
   const complete=await rpc(one,'claim_workflow',{...wf,p_resume:true});assert.equal(complete.claimed,false);assert.deepEqual(complete.result,{answer:'saved'});
+  await assert.rejects(rpc(two,'admit',input('late-helper','1','workflow')),/WORKFLOW_FINISHED/);
+  const raceWorkflow={...wf,p_request:'finish-race',p_hash:'d'.repeat(64)};
+  const raceLease=await rpc(one,'claim_workflow',raceWorkflow);
+  await one.query('begin');await rpc(one,'admit',input('concurrent-helper','1','finish-race'));
+  let finishResolved=false;
+  const racingFinish=rpc(two,'finish_workflow',{p_owner:owner,p_request:'finish-race',p_lease:raceLease.lease_token,p_status:'completed',p_result:{answer:'optional helper appeared complete'}}).then(value=>{finishResolved=true;return value;});
+  await new Promise(resolve=>setTimeout(resolve,40));assert.equal(finishResolved,false);
+  assert.equal((await admin.query('select wait_event_type from pg_stat_activity where pid=$1',[two.processID])).rows[0].wait_event_type,'Lock');
+  await one.query('commit');assert.equal((await racingFinish).status,'paused','completion waits for concurrent admission and cannot conceal the committed reservation');
+
+
   await assert.rejects(one.query('update standalone_provider_attempts set actual_microusd=0'),/permission denied/);
   await assert.rejects(one.query("update standalone_pricing_versions set metadata='{}'"),/permission denied/);
   await one.query('set role authenticated');await assert.rejects(rpc(one,'snapshot',{p_owner:owner}),/permission denied/);

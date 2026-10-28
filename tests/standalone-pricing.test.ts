@@ -65,12 +65,24 @@ describe("immutable standalone pricing",()=>{
     expect(inlineImageDimensions(png(1024,1024))).toEqual({width:1024,height:1024});
     const high=estimatePreparedRequest(chat({messages:[{role:"user",content:[{type:"image_url",image_url:{url:png(1024,1024),detail:"high"}}]}]}));
     expect(high.imageTokens).toBe(765);expect(high.status).toBe("estimated");
-    const low=estimatePreparedRequest(chat({messages:[{role:"user",content:[{type:"image_url",image_url:{url:"https://example.com/image.png",detail:"low"}}]}]}));expect(low.imageTokens).toBe(85);
+    const low=estimatePreparedRequest(chat({messages:[{role:"user",content:[{type:"image_url",image_url:{url:png(1024,1024),detail:"low"}}]}]}));expect(low.imageTokens).toBe(85);expect(low.status).toBe("estimated");
     const unknown=estimatePreparedRequest(chat({messages:[{role:"user",content:[{type:"image_url",image_url:{url:"https://example.com/image.png"}}]}]}));expect(unknown.status).toBe("unsupported");
   });
   it("includes Anthropic system strings and documented maximum image allowance",()=>{
-    const request=prepareStandaloneRequest("anthropic","claude-sonnet-4-6","/v1/messages",{model:"claude-sonnet-4-6",system:"personality",messages:[{role:"user",content:[{type:"image",source:{type:"url",url:"https://example.com/image"}}]}]});
+    const request=prepareStandaloneRequest("anthropic","claude-sonnet-4-6","/v1/messages",{model:"claude-sonnet-4-6",system:"personality",messages:[{role:"user",content:[{type:"image",source:{type:"base64",media_type:"image/png",data:png(1024,1024).split(",")[1]}}]}]});
     expect(estimatePreparedRequest(request)).toMatchObject({status:"estimated",imageTokens:1568});
+  });
+  it("rejects mutable external images before low-detail or per-image-max billing shortcuts",()=>{
+    const remote=chat({messages:[{role:"user",content:[{type:"image_url",image_url:{url:"https://example.com/mutable.png",detail:"low"}}]}]});
+    const quote=estimatePreparedRequest(remote);expect(quote.status).toBe("unsupported");expect(quote.reservationMicrousd).toBeNull();expect(quote.issues.join(" ")).toContain("external image URLs are unsupported");
+    const claude=prepareStandaloneRequest("anthropic","claude-sonnet-4-6","/v1/messages",{model:"claude-sonnet-4-6",system:"Inspect this exact image",messages:[{role:"user",content:[{type:"image",source:{type:"url",url:"https://example.com/mutable.png"}}]}]});
+    expect(estimatePreparedRequest(claude)).toMatchObject({status:"unsupported",reservationMicrousd:null,imageTokens:0});
+    // Neither lowering detail nor proposing a cheaper model may launder a mutable URL.
+    expect(reducePreparedRequest(remote).available).toBe(false);expect(reducePreparedRequest(claude).available).toBe(false);
+    const inline=(width:number)=>chat({messages:[{role:"user",content:[{type:"image_url",image_url:{url:png(width,1024),detail:"low"}}]}]});
+    expect(estimatePreparedRequest(inline(1024))).toMatchObject({status:"estimated",imageTokens:85,estimatorVersion:"standalone-estimator-v4"});
+    expect(inline(1024).hash).not.toBe(inline(1025).hash);
+    expect(estimatePreparedRequest(inline(1024)).reservationMicrousd).toBe(estimatePreparedRequest(inline(1025)).reservationMicrousd);
   });
   it("supports actual Gemini text config and fails on audio/image output/native files",()=>{
     const prepare=(config:Record<string,unknown>,parts:unknown[]=[{text:"hello"}])=>prepareStandaloneRequest("google","gemini-2.5-pro","/v1beta/models/gemini-2.5-pro:generateContent",{contents:[{role:"user",parts}],generationConfig:{responseModalities:["TEXT"],...config}});
@@ -100,7 +112,7 @@ describe("frozen no-fee OpenAI cache metadata",()=>{
     expect(cached.payload.prompt_cache_key).toBe(key);expect(cached.payload.prompt_cache_retention).toBe("24h");expect(cached.hash).not.toBe(plain.hash);
     expect(prepare({prompt_cache_key:"different-key",prompt_cache_retention:"24h"}).hash).not.toBe(cached.hash);
     expect(prepare({prompt_cache_key:key,prompt_cache_retention:"in_memory"}).hash).not.toBe(cached.hash);
-    expect(quote.status).toBe("estimated");expect(quote.estimatorVersion).toBe("standalone-estimator-v3");expect(quote.inputTokens).toBe(baseline.inputTokens);expect(quote.reservationMicrousd).toBe(baseline.reservationMicrousd);
+    expect(quote.status).toBe("estimated");expect(quote.estimatorVersion).toBe("standalone-estimator-v4");expect(quote.inputTokens).toBe(baseline.inputTokens);expect(quote.reservationMicrousd).toBe(baseline.reservationMicrousd);
     expect(quote.assumptions.join(" ")).toContain("reserves full uncached input");
     expect(actualCostFromUsage(cached,{inputTokens:1000,outputTokens:100,cachedInputTokens:500}).actualMicrousd).toBe("2875");
     const restored=JSON.parse(JSON.stringify(cached));restored.payload.prompt_cache_retention="in_memory";expect(estimatePreparedRequest(restored).status).toBe("unsupported");

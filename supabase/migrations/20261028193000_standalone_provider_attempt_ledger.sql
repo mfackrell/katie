@@ -139,6 +139,7 @@ begin
  select * into c from standalone_owner_configuration where owner_id=p_owner for update;
  if not found then raise exception 'STANDALONE_CONFIGURATION_REQUIRED';end if;
  if not standalone_verify_scope(p_owner,p_actor,p_chat) then raise exception 'STANDALONE_SCOPE_DENIED';end if;
+ if exists(select 1 from standalone_workflows where owner_id=p_owner and request_id=p_request and status in('completed','failed')) then raise exception 'STANDALONE_WORKFLOW_FINISHED';end if;
  if exists(select 1 from standalone_provider_attempts where owner_id=p_owner and request_id=p_request and cancelled_by_owner_at is not null) then raise exception 'STANDALONE_REQUEST_CANCELLED';end if;
  if exists(select 1 from standalone_provider_attempts where owner_id=p_owner and request_id=p_request and state='uncertain') then raise exception 'STANDALONE_REQUEST_UNCERTAIN';end if;
  if exists(select 1 from standalone_provider_attempts where owner_id=p_owner and request_id=p_request and actual_microusd>reserved_microusd) then raise exception 'STANDALONE_REQUEST_OVERRUN';end if;
@@ -251,9 +252,9 @@ begin
  perform 1 from standalone_owner_configuration where owner_id=p_owner for update;
  select * into a from standalone_provider_attempts where id=p_attempt and owner_id=p_owner for update;
  if not found then raise exception 'STANDALONE_ATTEMPT_NOT_FOUND';end if;
- update standalone_provider_attempts set cancelled_by_owner_at=coalesce(cancelled_by_owner_at,now()) where id=a.id;
  -- Cancellation is a request-wide fence, including concurrently prepared helpers.
- update standalone_provider_attempts set state=case when state in('paused','reserved') then 'cancelled' when state='dispatched' then 'uncertain' else state end,
+ update standalone_provider_attempts set cancelled_by_owner_at=coalesce(cancelled_by_owner_at,now()),
+ state=case when state in('paused','reserved') then 'cancelled' when state='dispatched' then 'uncertain' else state end,
  uncertainty_reason=case when state='dispatched' then 'Cancelled after dispatch; settlement pending' else uncertainty_reason end
  where owner_id=p_owner and request_id=a.request_id;
  select * into a from standalone_provider_attempts where id=p_attempt;
@@ -302,9 +303,14 @@ create function public.standalone_finish_workflow(p_owner uuid,p_request text,p_
 language plpgsql security definer set search_path=public,pg_temp as $$
 declare w standalone_workflows;
 begin
+ -- Serialize completion with admission, claims and receipts for this owner.
+ perform 1 from standalone_owner_configuration where owner_id=p_owner for update;
  select * into w from standalone_workflows where owner_id=p_owner and request_id=p_request for update;
  if not found or w.status<>'running' or w.lease_token is distinct from p_lease then raise exception 'STANDALONE_WORKFLOW_LEASE_LOST';end if;
  if p_status not in('paused','completed','failed') then raise exception 'STANDALONE_WORKFLOW_STATUS_INVALID';end if;
+ if p_status='completed' and exists(select 1 from standalone_provider_attempts where owner_id=p_owner and request_id=p_request and state in('paused','reserved','dispatched','uncertain')) then
+ p_status:='paused';
+ p_error:=coalesce(p_error,'Unresolved provider attempts prevent workflow completion.');end if;
  update standalone_workflows set status=p_status,result=p_result,error=p_error,lease_token=null,lease_expires_at=null,updated_at=now()
  where owner_id=p_owner and request_id=p_request returning * into w;return to_jsonb(w);
 end $$;

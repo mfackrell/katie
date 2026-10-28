@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ActorFormModal } from "@/components/actor-form-modal";
+import { StandaloneUsage } from "@/components/standalone-usage";
 import { ChatPanel } from "@/components/chat-panel";
 import { PendingMissionApprovals } from "@/components/pending-mission-approvals";
 import { Sidebar } from "@/components/sidebar";
@@ -626,6 +627,7 @@ export default function HomePage() {
               Could not load project approvals. Check your connection or reload Katie.
             </p>
           )}
+          {activeActor && activeChatId && !activeActor.managedAgentId && activeActor.actorKind !== "executive" && <StandaloneUsage actorId={activeActorId} chatId={activeChatId} />}
           <ChatPanel key={activeChatId}
             actorId={activeActorId}
             chatId={activeChatId}

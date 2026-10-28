@@ -5,11 +5,11 @@ import {executeStandaloneWorkflow,cachedWorkflowValue,workflowMessageId,workflow
 import {getAccountingScope} from '../lib/standalone-accounting/context';
 import {canonicalJson} from '../lib/standalone-accounting/estimate';
 const owner='11111111-1111-4111-8111-111111111111',actorId='22222222-2222-4222-8222-222222222222',chatId='33333333-3333-4333-8333-333333333333';
-let stored:any,allowed=true,executions=0,checkpoints=0;
+let stored:any,allowed=true,executions=0,checkpoints=0,pending=false;
 const payload={message:'Original task',chatId,actorId};
 function request(resume=false){return new NextRequest('http://localhost/api/chat',{method:'POST',headers:{authorization:'Bearer server-verified-token','content-type':'application/json','x-request-id':'original-request'},body:JSON.stringify(resume?{actorId,chatId,standaloneResume:true}:payload)});}
 beforeEach(()=>{
- stored=undefined;allowed=true;executions=0;checkpoints=0;
+ stored=undefined;allowed=true;executions=0;checkpoints=0;pending=false;
  process.env.NEXT_PUBLIC_SUPABASE_URL='https://auth.example.test';process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY='public';
  globalThis.fetch=async()=>Response.json({id:owner});
  globalThis.__KATIE_SUPABASE_ADMIN_CLIENT__={rpc:async(name:string,args:any)=>{
@@ -24,7 +24,7 @@ beforeEach(()=>{
   }else if(name==='standalone_checkpoint_workflow'){
    assert.equal(args.p_lease,stored.lease_token);checkpoints++;stored.checkpoints[args.p_key]=args.p_value;data=args.p_value;
   }else if(name==='standalone_finish_workflow'){
-   assert.equal(args.p_lease,stored.lease_token);stored.status=args.p_status;stored.result=args.p_result;data=stored;
+   assert.equal(args.p_lease,stored.lease_token);stored.status=args.p_status==='completed'&&pending?'paused':args.p_status;stored.result=args.p_result;data=stored;
   }else throw Error(`Unexpected RPC ${name}`);
   return {data:JSON.parse(JSON.stringify(data)),error:null};
  }} as unknown as NonNullable<typeof globalThis.__KATIE_SUPABASE_ADMIN_CLIENT__>;
@@ -56,4 +56,10 @@ test('simultaneous reconnect returns existing fenced workflow without running tw
 test('changed original body is rejected and never becomes resumed spending authority',async()=>{
  await executeStandaloneWorkflow(request(),payload,async()=>new Response('completed'));
  await assert.rejects(executeStandaloneWorkflow(request(),{...payload,message:'Changed payload'},async()=>{executions++;return new Response('bad');}),/WORKFLOW_CONFLICT/);assert.equal(executions,0);
+});
+
+test('a hidden pending attempt remains visible even when its optional caller returned success',async()=>{
+ pending=true;
+ const response=await executeStandaloneWorkflow(request(),payload,async()=>new Response('{"type":"content","text":"answer already saved"}\n',{headers:{'content-type':'application/x-ndjson'}}));
+ assert.equal(stored.status,'paused');assert.match(await response.text(),/standalone_pending_attempt/);
 });
