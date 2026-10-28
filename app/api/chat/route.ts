@@ -810,7 +810,7 @@ async function executeChat(request: NextRequest) {
     // every ordinary conversation as a project continuation. An explicit current
     // project reference or a fresh task source can still activate resolution.
     const explicitSavedProjectReference = /\b(?:(?:resume|return to|back to|reopen|switch to|go back to)\b.{0,100}\b(?:project|app|application|game|website)\b|(?:saved|earlier)\s+(?:project|application)\b|(?:the|this|that)\s+project\b|continue\s+(?:(?:the|my|this|that)\s+)?(?:project|game|app|application|website)\b)/i.test(message);
-    if (!benchmarkRelay && !isProjectStopRequest && !standaloneFragment && (freshTaskEvidence.length || startProjectIntent(message) || followupProjectIntent(message) || (contextProjects.length > 0 && explicitSavedProjectReference) || (priorTaskProgress.projectContext && classifyUserTurn(message) === "new_task")) && !currentAgentTask() &&
+    // Ordinary standalone uploads are conversation evidence, not project intake.\n    // Only explicit project requests may classify an attached source as project work.\n    const explicitUploadProjectIntent = startProjectIntent(message) || followupProjectIntent(message) || explicitSavedProjectReference;\n    if (!benchmarkRelay && !isProjectStopRequest && !standaloneFragment && ((freshTaskEvidence.length && (!newAttachments.length || explicitUploadProjectIntent)) || startProjectIntent(message) || followupProjectIntent(message) || (contextProjects.length > 0 && explicitSavedProjectReference) || (priorTaskProgress.projectContext && (!newAttachments.length || explicitUploadProjectIntent) && classifyUserTurn(message) === "new_task")) && !currentAgentTask() &&
         !(classifyUserTurn(message) === "conversation" && !newAttachments.length)) {
       const contextProviders = getAvailableProviders();
       const entries = await Promise.all(contextProviders.map(async provider => ({provider, models: await provider.listModels()})));
@@ -822,7 +822,7 @@ async function executeChat(request: NextRequest) {
          conversationContext: JSON.stringify({recentUserTurns: attachmentHistory.filter(turn => turn.role === "user").slice(-6).map(turn => ({id:turn.id,text:turn.content}))})});
       contextClassification = {intent:"general-text",preferredProvider:null,projectTransition};
     }
-    if (contextProjects.length && freshTaskDescriptions.size && !freshTaskEvidence.length &&
+    if (contextProjects.length && freshTaskDescriptions.size && !freshTaskEvidence.length && (!newAttachments.length || explicitUploadProjectIntent) &&
         !contextClassification?.projectTransition) {
       contextClassification = { ...(contextClassification ?? {intent: "general-text", preferredProvider: null}),
         projectTransition: {action: "ambiguous", clarification: "I could not read this upload well enough to identify its task. Does it start a new project or belong to the current one?"} };
