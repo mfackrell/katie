@@ -533,3 +533,40 @@ test('non-software intake cannot amend an existing coding project through overla
  assert.equal(result,null);
  assert.equal(calls.length,0);
 });
+
+async function failedFinalAssessment(){
+ const f=coordinator();
+ await f.tick();f.complete('c'.repeat(40));await f.tick();
+ await f.tick();f.complete('d'.repeat(40));await f.tick();
+ f.setPreview({url:'https://pilot.vercel.app/pilot',headSha:'d'.repeat(40),deploymentId:1,statusId:2});
+ await f.tick();await f.tick();await f.tick();
+ f.p.cycles=2;
+ const m=f.missions.get(f.p.active_mission_id);m.mission.status='blocked';
+ m.jobs=[{role:'compose',status:'completed',result:{text:'Integrated assessment'}},
+ {role:'review',job_key:'review_again',status:'completed',result:{verdict:'changes_requested',checks:[{id:'requirement:assigned-outcome',passed:false,evidence:'Saved position is not restored after reload.'}]}}];
+ return f;
+}
+test('material final assessment failure repairs the final milestone within existing bounds',async()=>{
+ const f=await failedFinalAssessment();await f.tick();
+ assert.equal(f.calls.at(-1).p_action,'retry');
+ assert.match(f.calls.at(-1).p_data.detail,/Saved position/);
+ assert.equal(f.p.verified_sha,'d'.repeat(40));
+});
+test('assessment repair refuses missing final evidence, exhausted bounds and stopped missions',async()=>{
+ for(const variant of ['missing','scope','cycles','attempts','stopped','optional']){
+  const f=await failedFinalAssessment();
+  if(variant==='missing')f.runs.splice(1,1);
+  if(variant==='scope')f.runs[1].binding.scopeHash='c'.repeat(64);
+  if(variant==='cycles')f.p.cycles=f.p.max_cycles;
+  if(variant==='attempts')f.runs.push({...f.runs[1],mission_id:randomUUID()});
+  if(variant==='stopped')f.missions.get(f.p.active_mission_id).mission.status='stopped';
+  if(variant==='optional')f.missions.get(f.p.active_mission_id).jobs[1].result={verdict:'pass',optionalSuggestions:'Add more themes'};
+  await f.tick();assert.equal(f.calls.at(-1).p_action,'block',variant);
+ }
+});
+test('explicitly stopped development mission cannot dispatch a repair from retained findings',async()=>{
+ const f=coordinator();await f.tick();f.complete('c'.repeat(40));
+ const m=f.missions.get(f.p.active_mission_id);m.mission.status='stopped';m.jobs[0].status='completed';
+ m.jobs.push({role:'review',status:'completed',result:{findings:['Saved position is not restored.']}});
+ await f.tick();assert.equal(f.calls.at(-1).p_action,'block');
+});
