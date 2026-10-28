@@ -319,7 +319,7 @@ test('early task identity classification respects PDF source authorization befor
    return pdfProgress;
   })()`),{
    benchmarkRelay:false,benchmarkIntake:false,...scope,...task,Map,Set,priorTaskProgress,message,newAttachments:fresh,catalog:[],timelineActive:false,
-   startProjectIntent:()=>false,followupProjectIntent:()=>false,
+   startProjectIntent:text=>/^Help me (?:apply|prepare a proposal)\b/i.test(text),followupProjectIntent:()=>false,
    attachmentHistory:[],freshVideoReferences:[],taskProgressUserMessageId:'current-turn',
    request:{headers:{get:()=> 'test-request'}},currentAgentTask:()=>null,
    getAvailableProviders:()=>[{listModels:async()=>[]}],selectControlPlaneDecisionModels:()=>[],
