@@ -33,11 +33,13 @@ begin
  else
   -- Backward compatibility only for the observed legacy failure, corroborated
   -- by a provider-health record already present when this assignment failed.
+  if provider is null and j.detail='No connected provider supports the required bounded orchestration tools' then return false;end if;
   if j.detail is distinct from 'No connected provider supports the required bounded orchestration tools'
    and coalesce(j.detail,'') not ilike '%no credits remaining%'
    and coalesce(j.detail,'') not ilike '%insufficient_quota%' then return false;end if;
  end if;
  if not exists(select 1 from provider_health h where (provider is null or h.provider_name=provider)
+  and (jsonb_array_length(evidence)=0 or exists(select 1 from jsonb_array_elements(evidence) e where e->>'provider'=h.provider_name and e->>'kind' in ('cooldown','billing_quota','discovery_unavailable')))
   and h.updated_at<=j.updated_at and h.blocked_until is not null and h.blocked_until<=now()
   and h.reason in ('provider billing or quota is unavailable','the provider rate-limited the request','the provider timed out','the provider could not complete the request')) then return false;end if;
  if exists(select 1 from provider_health h where (provider is null or h.provider_name=provider) and h.status='blocked' and h.blocked_until>now()) then return false;end if;

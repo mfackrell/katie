@@ -44,6 +44,7 @@ test('provider cooldown recovery is one-shot, fenced, preserves evidence and ref
   await reset();await db.query(`update mission_assignments set result='{"diagnostic":{"providerAvailability":[{"kind":"unsupported_model","provider":"openai"}]}}'`);assert.equal(await recover(),false,'capability failure');
   await reset();await db.query(`update mission_assignments set result='{"checkpoint":"saved","diagnostic":{"providerAvailability":[{"kind":"cooldown","provider":"openai"}]}}'`);assert.equal(await recover(),true,'structured cooldown recovery');
   await reset();const rival=new pg.Client({host:root,port:55481,user:'postgres',database:'postgres'});await rival.connect();try{const outcomes=await Promise.all([recover(),rival.query('select recover_mission_credit_failure($1) ok',[p]).then(r=>r.rows[0].ok)]);assert.equal(outcomes.filter(Boolean).length,1,'parallel recovery queues once');}finally{await rival.end();}
+  await reset();await db.query('delete from benchmark_full_project_bindings');assert.equal(await recover(),false,'generic failure needs a known provider binding');
   await reset();await db.query("delete from provider_health");assert.equal(await recover(),false,'unsubstantiated legacy generic failure');
  }finally{await db?.end();if(started)spawnSync(join(bin,'pg_ctl'),['-D',join(root,'data'),'-m','immediate','stop']);rmSync(root,{recursive:true,force:true});}
 });
