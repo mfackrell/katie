@@ -59,6 +59,7 @@ export async function runWithRefusalFallback<TAttempt>({
   detectRefusal,
   shouldRetryRefusal,
   retryTerminalError,
+  retryExplicitContentRefusal = true,
   rerouteOnRefusal,
   onRefusalReroute,
   onRefusalFallback,
@@ -73,6 +74,8 @@ export async function runWithRefusalFallback<TAttempt>({
   shouldRetryRefusal: boolean;
   /** Explicit video fallback may continue to the next candidate after a provider-terminal error. */
   retryTerminalError?: (context: { attempt: TAttempt; error: unknown; remainingAttempts: TAttempt[] }) => boolean;
+  /** Explicit content/safety errors are terminal for still-image vision requests. */
+  retryExplicitContentRefusal?: boolean;
   rerouteOnRefusal?: (context: {
     attempt: TAttempt;
     attemptIndex: number;
@@ -162,7 +165,7 @@ export async function runWithRefusalFallback<TAttempt>({
         const declined = new ProviderResponseError(
           "The selected model declined this request.", false, "PROVIDER_REFUSAL",
         );
-        if (!shouldRetryRefusal) throw declined;
+        if (!shouldRetryRefusal || !retryExplicitContentRefusal) throw declined;
         if (rerouteOnRefusal) {
           try {
             const reroutedAttempt = await rerouteOnRefusal({
