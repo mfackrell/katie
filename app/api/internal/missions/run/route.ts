@@ -5,6 +5,7 @@ import {runProjectBatch} from '@/lib/projects/worker';
 import { NextRequest,NextResponse } from 'next/server';
 import { assertCronAuth } from '@/lib/runpod/durable-results';
 import { runMissionBatch } from '@/lib/missions/worker';
+import { runOneSavedImageReplay } from '@/lib/chat/one-time-image-replay';
 export const dynamic='force-dynamic';
 export const maxDuration=240;
 export async function GET(request:NextRequest){
@@ -13,6 +14,7 @@ export async function GET(request:NextRequest){
   runRecoveryBatch().catch(error=>{console.error('[Recovery] Supervisor failed',error instanceof Error?error.message:'Unknown error');return{status:'unavailable',discovered:0};})]);
   const executive=await reconcileExecutiveFinance().catch(error=>{console.error('[Executive] Reconcile failed',error);return{verified:0,blocked:0};});
   const executiveManagement=await reconcileExecutiveManagement().catch(error=>{console.error('[Executive] Management reconciliation failed',error);return{completed:0,blocked:0,working:0};});
-  return NextResponse.json({...missions,projects,recovery,executive,executiveManagement},{headers:{'Cache-Control':'no-store'}});}
+  const imageReplay = await runOneSavedImageReplay().catch(error=>{console.error('[ImageReplay] worker unavailable', error instanceof Error?error.message:'Unknown error');return{status:'unavailable'};});
+  return NextResponse.json({...missions,projects,recovery,executive,executiveManagement,imageReplay},{headers:{'Cache-Control':'no-store'}});}
  catch(error){console.error('[Missions] Background dispatcher failed',error);return NextResponse.json({error:'Mission dispatcher unavailable'},{status:503});}
 }
