@@ -58,3 +58,11 @@ test('read-only prepare verifies all owner/CI evidence before any transfer exist
  assert.deepEqual(readQualification(signQualification(e.payload,key),key),e.payload);
  e.jobs=[];assert.throws(()=>verifyOwnerRun(e),/DENIED/);
 });
+
+ test('dashboard consent replaces manual GitHub identity only after server verification; all execution evidence still applies',()=>{
+  const e=evidence();e.payload.consentId='11111111-1111-4111-8111-111111111111';e.run.actor={id:1,login:'internal-bot'};e.run.triggering_actor=e.run.actor;
+  assert.throws(()=>verifyOwnerRun(e));
+  e.dashboardConsentVerified=true;assert.doesNotThrow(()=>verifyOwnerRun(e));
+  assert.deepEqual(readQualification(signQualification(e.payload,key),key),e.payload);
+  e.jobs[0].conclusion='failure';assert.throws(()=>verifyOwnerRun(e));
+ });

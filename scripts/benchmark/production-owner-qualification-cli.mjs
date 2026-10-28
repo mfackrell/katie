@@ -7,21 +7,25 @@ import {createClient} from '@supabase/supabase-js';
 import config from '../../config/benchmark-715-production-qualification.json' with {type:'json'};
 import {frozenProtocol} from './owner-staging-bootstrap.mjs';
 import {signQualification} from './production-owner-qualification.mjs';
+import {openDashboardHandoff} from './dashboard-owner-consent.mjs';
 import {productionQualificationFetch} from './production-qualification-transport.mjs';
 const env=process.env;
 const event=JSON.parse(readFileSync(env.GITHUB_EVENT_PATH,'utf8'));
+const dashboard=event.inputs?.dashboard_handoff?openDashboardHandoff(event.inputs.dashboard_handoff,env.KATIE_NATIVE_HANDOFF_HMAC_KEY,env.GITHUB_SHA):null;
+if(dashboard&&dashboard.consentId!==event.inputs.dashboard_consent_id)throw Error('DASHBOARD_OWNER_CONSENT_INVALID');
+const consent=dashboard?{consentId:dashboard.consentId}:{};
 const deny=()=>{throw Error('OWNER_PRODUCTION_QUALIFICATION_REFUSED')};
 if(env.GITHUB_EVENT_NAME!=='workflow_dispatch'||env.GITHUB_REPOSITORY!==config.repository||
- env.GITHUB_REF!=='refs/heads/main'||env.GITHUB_ACTOR!==config.ownerLogin||
- env.GITHUB_TRIGGERING_ACTOR!==config.ownerLogin||env.GITHUB_ACTOR_ID!==String(config.ownerGithubId)||
- event.repository?.id!==config.repositoryId||event.inputs?.authorize!=='true'||
+ env.GITHUB_REF!=='refs/heads/main'||
+ (!dashboard&&(env.GITHUB_ACTOR!==config.ownerLogin||env.GITHUB_TRIGGERING_ACTOR!==config.ownerLogin||env.GITHUB_ACTOR_ID!==String(config.ownerGithubId)||event.inputs?.authorize!=='true'))||
+ event.repository?.id!==config.repositoryId||
  env.OPENAI_API_KEY||env.CODEX_ACCESS_TOKEN||!env.RUNNER_TEMP||
  env.KATIE_NONFULL_STAGING_CONFIRMED!=='verified'||
  env.KATIE_NONFULL_STAGING_SUPABASE_URL!==config.stagingDatabaseUrl||
  !env.KATIE_NONFULL_STAGING_SERVICE_ROLE_KEY||!env.KATIE_NONFULL_STAGING_OWNER_ID||
  !env.KATIE_NATIVE_HANDOFF_HMAC_KEY||env.KATIE_NATIVE_HANDOFF_HMAC_KEY.length<32||
  JSON.stringify(frozenProtocol())!==JSON.stringify(config.protocol))deny();
-const productionFetch=(options)=>productionQualificationFetch(options,env.VERCEL_AUTOMATION_BYPASS_SECRET);
+const productionFetch=(options)=>productionQualificationFetch(options,dashboard?.bypass||env.VERCEL_AUTOMATION_BYPASS_SECRET);
 const ready=await productionFetch({signal:AbortSignal.timeout(15000),redirect:'error'});
 if(!ready.ok||(await ready.json()).commitSha!==env.GITHUB_SHA)deny();
 // Validate authoritative owner budget statement before fencing its old location.
@@ -35,7 +39,7 @@ if(comment.user?.id!==config.ownerGithubId||comment.user?.login!==config.ownerLo
  createHash('sha256').update(comment.body.trimEnd()).digest('hex')!==config.authorizationBodySha256)deny();
 // All production checks, including current CI/gateway and pricing, must pass
 // before the irreversible cross-database budget transfer starts its clock.
-const prepare=signQualification({version:1,phase:'prepare',authorization:'production-715-30usd-350000tokens-4hours',
+const prepare=signQualification({...consent,version:1,phase:'prepare',authorization:'production-715-30usd-350000tokens-4hours',
  runId:env.GITHUB_RUN_ID,runAttempt:Number(env.GITHUB_RUN_ATTEMPT),sha:env.GITHUB_SHA,
  expiresAt:Date.now()+120000,transfer:null},env.KATIE_NATIVE_HANDOFF_HMAC_KEY);
 const preflight=await productionFetch({method:'POST',headers:{'content-type':'text/plain'},body:prepare,
@@ -51,7 +55,7 @@ const {data:transfer,error}=await stage.rpc('benchmark_claim_production_transfer
  p_authorization_sha:config.authorizationBodySha256,p_protocol:config.protocol});
 if(error||!transfer)deny();
 writeFileSync(join(env.RUNNER_TEMP,'benchmark-715-production-transfer.json'),JSON.stringify(transfer,null,2)+'\n',{mode:0o600});
-const envelope=signQualification({version:1,phase:'commit',authorization:'production-715-30usd-350000tokens-4hours',
+const envelope=signQualification({...consent,version:1,phase:'commit',authorization:'production-715-30usd-350000tokens-4hours',
  runId:env.GITHUB_RUN_ID,runAttempt:Number(env.GITHUB_RUN_ATTEMPT),sha:env.GITHUB_SHA,
  expiresAt:Date.now()+120000,transfer},env.KATIE_NATIVE_HANDOFF_HMAC_KEY);
 const response=await productionFetch({method:'POST',headers:{'content-type':'text/plain'},body:envelope,

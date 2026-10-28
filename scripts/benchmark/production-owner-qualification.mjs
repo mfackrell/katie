@@ -19,14 +19,16 @@ export function readQualification(envelope,key,now=Date.now()){
   !/^[a-f0-9]{40}$/.test(p.sha??'')||!Number.isSafeInteger(p.expiresAt)||
   p.expiresAt<=now||p.expiresAt>now+300000||!['prepare','commit'].includes(p.phase)||
   (p.phase==='commit'?!p.transfer:p.transfer!==null)||
-  Object.keys(p).sort().join()!==['version','authorization','phase','runId','runAttempt','sha','expiresAt','transfer'].sort().join())deny();
+  (p.consentId!==undefined&&!/^[a-f0-9-]{36}$/.test(p.consentId))||
+  Object.keys(p).sort().join()!==['version','authorization','phase','runId','runAttempt','sha','expiresAt','transfer',...(p.consentId===undefined?[]:['consentId'])].sort().join())deny();
  return p;
 }
-export function verifyOwnerRun({payload,run,comment,workflow,checks,jobs,deployedSha,config}){
+export function verifyOwnerRun({payload,run,comment,workflow,checks,jobs,deployedSha,config,dashboardConsentVerified=false}){
  const owner=u=>u?.id===config.ownerGithubId&&u?.login===config.ownerLogin;
  if(payload.sha!==deployedSha||String(run?.id)!==payload.runId||run.run_attempt!==payload.runAttempt||
   run.event!=='workflow_dispatch'||run.head_branch!=='main'||run.head_sha!==payload.sha||
-  run.status!=='in_progress'||!owner(run.actor)||!owner(run.triggering_actor)||
+  run.status!=='in_progress'||
+  (payload.consentId?dashboardConsentVerified!==true:(!owner(run.actor)||!owner(run.triggering_actor)))||
   run.repository?.id!==config.repositoryId||run.repository?.full_name!==config.repository||
   !owner(run.repository?.owner)||run.path!==config.workflowPath||
   workflow?.id!==run.workflow_id||workflow.path!==config.workflowPath||workflow.state!=='active')deny();
