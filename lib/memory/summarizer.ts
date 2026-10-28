@@ -133,22 +133,22 @@ async function compactOversizedDraft(draft: string): Promise<string> {
   let response: ClaudeSummaryResponse;
   try {
     response = await client.post<Record<string, unknown>, ClaudeSummaryResponse>("/messages", {
-    body: {
-      model: SUMMARY_MODEL,
-      max_tokens: COMPACTION_MAX_TOKENS,
-      system: [
+      body: {
+        model: SUMMARY_MODEL,
+        max_tokens: COMPACTION_MAX_TOKENS,
+        system: [
         "You edit Katie's existing intermediate conversational memory, not a new transcript.",
         "The draft is already reconciled but too long. Compress it SEMANTICALLY; never cut off the end or simply delete the most recent developments.",
         "Return a complete, coherent rolling summary of about 6,000–7,000 CHARACTERS including punctuation and spaces, always below 7,500 characters.",
         "Retain important new corrections, chronological distinctions, unresolved outcomes, user-versus-assistant attribution and current conversation threads.",
         "Combine repeated topics and reduce fidelity primarily for less relevant older material. Do not pad, invent facts, append history, or reintroduce superseded interpretations.",
         "Return only the finished revised summary, with no commentary or character count.",
-      ].join("\n"),
-      messages: [{
-        role: "user",
-        content: `This reconciled draft is ${draft.length} characters, over the ${ITM_HARD_MAX_CHARACTERS}-character absolute ceiling. Shorten it without losing its latest relevant context:\n\n${draft}`,
-      }],
-    },
+        ].join("\n"),
+        messages: [{
+          role: "user",
+          content: `This reconciled draft is ${draft.length} characters, over the ${ITM_HARD_MAX_CHARACTERS}-character absolute ceiling. Shorten it without losing its latest relevant context:\n\n${draft}`,
+        }],
+      },
     });
   } catch {
     // A failed paid compaction must not trigger a near-identical smaller-batch

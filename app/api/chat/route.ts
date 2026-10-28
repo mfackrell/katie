@@ -1010,22 +1010,22 @@ async function executeChat(request: NextRequest) {
     // persistence availability can change source selection or generation.
     if (attachmentDecision.selections.length > 0) {
       try {
-      const auditRow = buildAttachmentSelectionAudit({
-        actorId, chatId, requestId, message,
-        decision: attachmentDecision, catalog, history: attachmentHistory,
-        sourceIds: restored.sourceIds,
-        newUploadCount: newAttachments.length,
-        activeProjectText: pdfProgress.projectContext?.text ?? null,
-      });
-      after(async () => {
-        try {
-          const { error } = await getSupabaseAdminClient()
-            .from("attachment_selection_diagnostics").insert(auditRow);
-          if (error) console.warn("[Attachments] Selection audit could not be saved", { requestId, reason: "database" });
-        } catch {
-          console.warn("[Attachments] Selection audit could not be saved", { requestId, reason: "transport" });
-        }
-      });
+        const auditRow = buildAttachmentSelectionAudit({
+          actorId, chatId, requestId, message,
+          decision: attachmentDecision, catalog, history: attachmentHistory,
+          sourceIds: restored.sourceIds,
+          newUploadCount: newAttachments.length,
+          activeProjectText: pdfProgress.projectContext?.text ?? null,
+        });
+        after(async () => {
+          try {
+            const { error } = await getSupabaseAdminClient()
+              .from("attachment_selection_diagnostics").insert(auditRow);
+            if (error) console.warn("[Attachments] Selection audit could not be saved", { requestId, reason: "database" });
+          } catch {
+            console.warn("[Attachments] Selection audit could not be saved", { requestId, reason: "transport" });
+          }
+        });
       } catch {
         // Diagnostics may never prevent a user's normal chat request.
         console.warn("[Attachments] Selection audit could not be prepared", { requestId });
