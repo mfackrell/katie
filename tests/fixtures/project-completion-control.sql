@@ -1,4 +1,10 @@
 begin;
+-- This fixture advances the project inactivity clock; age prior synthetic
+-- pause/resume events from preceding fixtures consistently with that clock.
+reset role;
+update project_events set created_at=now()-interval '2 hours'
+ where project_id='44444444-4444-4444-8444-444444444444' and event='resume' and data->>'previous_status'='paused';
+set local role service_role;
 DO $$ declare p work_projects; original work_projects; l uuid; m uuid; ok boolean; contract jsonb; charges jsonb;begin
  select * into strict p from work_projects where id='44444444-4444-4444-8444-444444444444';
  original:=p;
