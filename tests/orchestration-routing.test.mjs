@@ -132,9 +132,9 @@ test('routing-model inference is bounded and accounted before dispatch',async()=
    assert.equal(response.text,'Decision');
    return{provider:p[0],modelId:'worker-model',fallbackChain:[],reasoning:'selected'};
   }},
-  '@/lib/orchestration/bounded-provider':{boundedProvider:()=>({responses:{create:async(request,options)=>{events.push('dispatch');assert.equal(request.max_output_tokens,2000);assert.equal(options.timeout,30000);return{status:'completed',output_text:'Decision',usage:{total_tokens:25}};}}})}
+  '@/lib/orchestration/bounded-provider':{boundedProvider:()=>({responses:{create:async(request,options)=>{events.push('dispatch');assert.equal(request.max_output_tokens,2000);assert.equal(options.timeout,30000);return{id:'resp_route',status:'completed',output_text:'Decision',usage:{input_tokens:20,output_tokens:5,total_tokens:25}};}}})}
  });
- const accounting={reserve:async(model,tokens)=>{events.push('reserve');assert.equal(model,'anthropic:router-model');assert.ok(tokens>2000);return'call-id';},finish:async(id,tokens)=>{events.push('finish');assert.equal(id,'call-id');assert.equal(tokens,25);}};
+ const accounting={reserve:async(model,tokens)=>{events.push('reserve');assert.equal(model,'anthropic:router-model');assert.ok(tokens>2000);return'call-id';},finish:async(id,tokens,receipt)=>{events.push('finish');assert.equal(id,'call-id');assert.equal(tokens,25);assert.equal(receipt.id,'resp_route');assert.equal(receipt.usage.input_tokens,20);assert.equal(receipt.usage.output_tokens,5);}};
  await load('@/lib/orchestration/routing').orchestrationChoices({objective:'Mission',instruction:'Work',requestId:'req',accounting});
  assert.deepEqual(events,['reserve','dispatch','finish']);
 });

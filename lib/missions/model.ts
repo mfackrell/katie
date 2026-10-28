@@ -69,7 +69,10 @@ export async function missionModel(claim:Claim,instruction:string,input:string,t
   (claim.job.role==='review'?'Independently verify the saved work and original objective. ':'')+claim.job.instruction,
   requestId:claim.job.id,accounting:fullBinding?{
    reserve:async(model,tokens)=>{if(Date.now()>=executionDeadline-5000)throw Error('Mission execution time window exhausted before routing dispatch');await assertSpecificationStageCapacity(claim,tokens,missionOutputLimit(claim,input));return fullBenchmarkAccounting(claim).reserve(model,tokens,true);},
-   finish:async(id,tokens)=>{await fullBenchmarkAccounting(claim).finish(id,tokens);}
+   finish:async(id,tokens,receipt)=>{
+    if(receipt){if(!receipt.id||!receipt.usage)throw Error('Full routing provider receipt missing');await rpc('benchmark_reconcile_provider_usage',{p_call:id,p_provider_request:receipt.id,p_usage:receipt.usage,p_linked:true});}
+    else await fullBenchmarkAccounting(claim).finish(id,tokens);
+   }
   }:{
    reserve:async(model,tokens)=>{if(Date.now()>=executionDeadline-5000)throw Error('Mission execution time window exhausted before routing dispatch');await assertSpecificationStageCapacity(claim,tokens,missionOutputLimit(claim,input));const id=randomUUID();if(!await rpc<boolean>('reserve_mission_routing_call',{p_id:claim.job.id,p_lease:claim.job.lease,p_call:id,p_model:model,p_tokens:tokens}))throw Error('Worker no longer authorized or mission allowance exhausted');return id;},
    finish:async(id,tokens)=>{await rpc('finish_mission_call',{p_call:id,p_tokens:tokens});}

@@ -80,6 +80,11 @@ assertBenchmarkDollarCeiling({
  publishedOutputUsdPerMillion:pricing.pricing_output_per_1m,
  accountTokens:Number(account.cap_tokens),approvalTokens:Number(approval.max_tokens)
 });
+let delegatedTask=false;
+if(task.actor_id!==approval.actor_id||task.chat_id!==approval.chat_id){
+ const {data,error}=await db.rpc('benchmark_full_task_provenance',{p_task:task.id,p_project:project.id});
+ delegatedTask=!error&&data===true;
+}
 if(trial.arm!=='full'||trial.state!=='qualified'||
  trial.contract_sha256!==proof.benchmarkContractHash||trial.baseline_sha!==proof.baselineSha||
  dispatch.trial_id!==proof.trialId||dispatch.contract_hash!==proof.contractHash||
@@ -91,7 +96,7 @@ if(trial.arm!=='full'||trial.state!=='qualified'||
  project.status!=='running'||project.phase!=='development'||
  project.approved_hash!==project.approval_hash||!project.approved_hash||
  project.deadline<=new Date().toISOString()||
- task.actor_id!==approval.actor_id||task.chat_id!==approval.chat_id)
+ ((task.actor_id!==approval.actor_id||task.chat_id!==approval.chat_id)&&!delegatedTask))
  denied('trial, project, owner or task state mismatch');
 const grantToken=randomBytes(48).toString('base64url');
 const {data:grantId,error:issueError}=await db.rpc('benchmark_issue_execution_grant',{
