@@ -162,7 +162,7 @@ test('Full native trial admission uses two real PostgreSQL connections and one m
   await db.query("update agent_missions set status='running' where id=$1",[claim.mission.id]);
   await db.query("update project_runs set binding=jsonb_build_object('scopeHash',$2::text,'contractHash',repeat('e',64)) where mission_id=$1",[claim.mission.id,scope]);
   const developer=(await db.query("select * from managed_agents where (config->>'development')::boolean limit 1")).rows[0];
-  await db.query("update agent_missions set team=$2::jsonb where id=$1",[claim.mission.id,JSON.stringify([{id:developer.id,version:developer.version,config:developer.config}])]);
+  await db.query("update agent_missions set team=$2::jsonb,repository_id='b3333333-3333-4333-8333-333333333333' where id=$1",[claim.mission.id,JSON.stringify([{id:developer.id,version:developer.version,config:developer.config}])]);
   await db.query("update mission_assignments set role='development',status='running',agent_id=$2,payload='{\"approved\":true,\"development_input\":\"Take Eleven\"}' where id=$1",[claim.job.id,developer.id]);
   const delegated=(await db.query('select mission_development_task($1,$2) task',[claim.job.id,claim.job.lease])).rows[0].task;
   assert.notEqual(delegated.actor_id,actor);assert.notEqual(delegated.chat_id,chat);
@@ -183,11 +183,26 @@ test('Full native trial admission uses two real PostgreSQL connections and one m
   await db.query('rollback');
   assert.equal((await db.query('select benchmark_full_task_provenance($1,$2) valid',[claim.job.id,project])).rows[0].valid,true);
   assert.equal((await db.query('select benchmark_full_task_provenance($1,$2) valid',[randomUUID(),project])).rows[0].valid,false);
+  for(const mutation of [
+   ['update agent_tasks set input=$2 where id=$1',[claim.job.id,'changed']],
+   ['update agent_tasks set definition_version=definition_version+1 where id=$1',[claim.job.id]],
+   ["update mission_assignments set payload=jsonb_set(payload,'{development_input}','\"changed\"') where id=$1",[claim.job.id]],
+   ['update work_projects set approved_hash=$2 where id=$1',[project,'f'.repeat(64)]],
+   ['update work_projects set active_mission_id=null where id=$1',[project]]]){
+   await db.query('begin');await db.query(...mutation);
+   assert.equal((await db.query('select benchmark_full_task_provenance($1,$2) valid',[claim.job.id,project])).rows[0].valid,false);
+   await db.query('rollback');
+  }
+
   await db.query("update mission_assignments set status='running' where id=$1",[claim.job.id]);
   await db.query('select benchmark_bind_full_development_dispatch($1,$2,$3,$4)',[claim.job.id,project,scope,'e'.repeat(64)]);
   await db.query("update mission_assignments set status='waiting_external' where id=$1",[claim.job.id]);
   const granted=(await db.query('select benchmark_issue_execution_grant($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) id',[owner,actor,chat,trial,approvedRow.id,'mfackrell/katie','gpt-5.3-codex',1,approvedRow.deadline,'6'.repeat(64)])).rows[0].id;
   assert.ok(granted);
+  const nativeCall=(await db.query('select benchmark_full_native_reserve($1,$2,$3,$4,$5,$6) id',['6'.repeat(64),trial,1,randomUUID(),'gpt-5.3-codex',20])).rows[0].id;
+  assert.ok(nativeCall);
+  assert.equal((await db.query('select account_id from benchmark_budget_calls where id=$1',[nativeCall])).rows[0].account_id,linked.account_id);
+
   assert.equal((await db.query('select benchmark_dashboard_full_task($1) result',[owner])).rows[0].result.approvalState,'consumed');
   assert.equal((await db.query('select count(*)::int n from benchmark_native_spending_approvals where task_id=$1',[claim.job.id])).rows[0].n,1);
   assert.equal((await db.query('select spent_tokens from benchmark_budget_accounts where id=$1',[linked.account_id])).rows[0].spent_tokens,before);
