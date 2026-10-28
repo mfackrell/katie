@@ -23,7 +23,7 @@ if(!requestFile||!manifestFile||!childFile)denied('missing verified inputs');
 const signingKey=process.env.KATIE_NATIVE_HANDOFF_HMAC_KEY;
 const proof=readNativeHandoff(readFileSync(requestFile,'utf8'),signingKey);
 const manifest=JSON.parse(readFileSync(manifestFile,'utf8'));
-for(const key of ['taskId','trialId','approvalId','projectId','contractHash','benchmarkContractHash','baselineSha','expiresAt'])
+for(const key of ['taskId','trialId','approvalId','projectId','contractHash','benchmarkContractHash','baselineSha','expiresAt','continuationId'])
  if(manifest[key]!==proof[key])denied('handoff changed after signature verification');
 if(manifest.productionRuntime!==proof.productionRuntime)denied('runtime handoff changed after verification');
 if(process.env.GITHUB_REPOSITORY!=='mfackrell/katie')denied('repository identity mismatch');
@@ -54,12 +54,23 @@ if(approval.trial_id!==proof.trialId||approval.task_id!==proof.taskId||
 const trial=await readOne('benchmark_three_arm_trials','id',proof.trialId);
 const project=await readOne('work_projects','id',proof.projectId);
 const account=await readOne('benchmark_budget_accounts','id',approval.account_id);
+if((approval.continuation_id??undefined)!==proof.continuationId)denied('continuation identity differs from owner approval');
+let continuation=null;
+if(proof.continuationId){
+ if(!productionRuntime)denied('continuation requires production runtime');
+ const live=await db.rpc('benchmark_continuation_live',{p_id:proof.continuationId,p_account:account.id,p_project:project.id});
+ if(live.error||live.data!==true)denied('continuation authority is not live');
+ const active=await db.rpc('benchmark_active_full_continuation',{p_project:project.id});
+ continuation=active.data;
+ if(active.error||!continuation||continuation.id!==proof.continuationId||continuation.owner_id!==approval.owner_id||continuation.trial_id!==trial.id||continuation.account_id!==account.id||new Date(approval.deadline)>new Date(continuation.deadline))denied('continuation owner or deadline mismatch');
+}
+
 if(productionRuntime){
  const qualification=await readOne('benchmark_production_qualifications','experiment_id',account.experiment_id);
  if(qualification.issue!==715||qualification.revoked_at||qualification.owner_id!==approval.owner_id||
   qualification.actor_id!==approval.actor_id||trial.experiment_id!==qualification.experiment_id||
-  new Date(qualification.deadline).getTime()<=Date.now()||
-  new Date(approval.deadline).getTime()>new Date(qualification.deadline).getTime())
+  (!continuation&&(new Date(qualification.deadline).getTime()<=Date.now()||
+  new Date(approval.deadline).getTime()>new Date(qualification.deadline).getTime())))
   denied('production qualification does not authorize this task and deadline');
 }
 const task=await readOne('agent_tasks','id',proof.taskId);
@@ -85,7 +96,7 @@ if(task.actor_id!==approval.actor_id||task.chat_id!==approval.chat_id){
  const {data,error}=await db.rpc('benchmark_full_task_provenance',{p_task:task.id,p_project:project.id});
  delegatedTask=!error&&data===true;
 }
-if(trial.arm!=='full'||trial.state!=='qualified'||
+if(trial.arm!=='full'||(!continuation&&trial.state!=='qualified')||
  trial.contract_sha256!==proof.benchmarkContractHash||trial.baseline_sha!==proof.baselineSha||
  dispatch.trial_id!==proof.trialId||dispatch.contract_hash!==proof.contractHash||
  dispatch.benchmark_contract_hash!==proof.benchmarkContractHash||dispatch.baseline_sha!==proof.baselineSha||dispatch.status!=='qualified'||
@@ -247,7 +258,7 @@ try{
  } 
  if(!evidencePath||!evidencePath.startsWith(process.env.RUNNER_TEMP+'/'))
   denied('trusted evidence destination unavailable');
- writeFileSync(evidencePath,JSON.stringify({version:1,trialId:proof.trialId,taskId:proof.taskId,
+ writeFileSync(evidencePath,JSON.stringify({version:1,trialId:proof.trialId,taskId:proof.taskId,...(proof.continuationId?{continuationId:proof.continuationId}:{}),
   approvalId:proof.approvalId,projectId:proof.projectId,review:decisions[0],
   finalReview:decisions.at(-1),repairPerformed:decisions.length===2,
   metered:true,completed:true,reviewedHeadSha:candidateHead})+'\n',{mode:0o600,flag:'wx'});

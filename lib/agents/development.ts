@@ -177,7 +177,7 @@ export async function dispatchDevelopment(task: AgentTask, project?: Context, as
         .select('id,arm,contract_sha256,baseline_sha,owner_actor_id,state')
         .eq('id',bound.trial_id).maybeSingle();
       const t=trial as {arm:string;state:string;contract_sha256:string;baseline_sha:string;owner_actor_id:string}|null;
-      if(trialError||!t||t.arm!=='full'||t.state!=='qualified'||
+      if(trialError||!t||t.arm!=='full'||!['qualified','blocked'].includes(t.state)||
          t.contract_sha256!==bound.benchmark_contract_hash||
          t.baseline_sha!==project.baselineSha)
         throw Error('Benchmark dispatch rejected: trial authority mismatch');
@@ -193,24 +193,28 @@ export async function dispatchDevelopment(task: AgentTask, project?: Context, as
       // trial flag or model-authored statement. The approval is task-specific.
       const {data:approved,error:approvalError}=await getSupabaseAdminClient()
         .from('benchmark_native_spending_approvals')
-        .select('id,task_id,trial_id,account_id,actor_id,project_id,mission_assignment_id,repository,model,max_tokens,deadline')
+        .select('id,task_id,trial_id,account_id,actor_id,project_id,mission_assignment_id,repository,model,max_tokens,deadline,continuation_id')
         .eq('task_id',task.id).eq('trial_id',bound.trial_id)
         .is('consumed_at',null).is('revoked_at',null).maybeSingle();
       const approval=approved as {id:string;task_id:string;trial_id:string;account_id:string;
-        actor_id:string;project_id:string;mission_assignment_id:string;repository:string;model:string;max_tokens:number;deadline:string}|null;
+        actor_id:string;project_id:string;mission_assignment_id:string;repository:string;model:string;max_tokens:number;deadline:string;continuation_id?:string|null}|null;
       if(approvalError||!approval||approval.project_id!==project.projectId||
         approval.actor_id!==t.owner_actor_id||approval.account_id!==(account as {id?:string}).id||
         approval.mission_assignment_id!==task.id||approval.repository!=='mfackrell/katie'||
         approval.model!=='gpt-5.3-codex'||Number(approval.max_tokens)<Number(a?.cap_tokens)||
         new Date(approval.deadline).getTime()<=Date.now())
         throw Error('Benchmark native dispatch denied: no live task-specific owner spending approval');
+      if(approval.continuation_id){
+        const live=await getSupabaseAdminClient().rpc('benchmark_continuation_live',{p_id:approval.continuation_id,p_account:a.id,p_project:project.projectId});
+        if(live.error||live.data!==true)throw Error('Continuation execution authority is not live');
+      }else if(t.state!=='qualified')throw Error('Original benchmark trial is not qualified');
       const signingKey=process.env.KATIE_NATIVE_HANDOFF_HMAC_KEY;
       if(!signingKey||signingKey.length<32)
         throw Error('Benchmark handoff unavailable: trusted signing key not configured');
       if(process.env.KATIE_BENCHMARK_PAID_EXECUTION!=='enabled')
         throw Error('Full benchmark paid execution is disabled');
       const handoff={
-        taskId:task.id,trialId:bound.trial_id,approvalId:approval.id,
+        taskId:task.id,trialId:bound.trial_id,approvalId:approval.id,...(approval.continuation_id?{continuationId:approval.continuation_id}:{}),
         projectId:project.projectId,contractHash:project.contractHash,
         benchmarkContractHash:bound.benchmark_contract_hash,baselineSha:project.baselineSha,
         expiresAt:Math.min(Date.now()+30*60*1000,new Date(approval.deadline).getTime())

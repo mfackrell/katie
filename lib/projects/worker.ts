@@ -49,6 +49,10 @@ async function advance(p: Project) {
     const finish = (action: string, data: Record<string, unknown> = {}) => projectRpc<boolean>('finish_work_project', { p_id: p.id, p_lease: p.lease, p_action: action, p_data: ['block','input'].includes(action) ? {...data, impediment: data.impediment ?? projectImpediment(p,String(data.detail??'Required evidence unavailable'))} : data });
     const runs = await projectRuns(p.id);
     const game=p.profile==='game';
+    let continuation:{id:string;plan_hash:string;deadline:string}|null=null;
+    if(game&&process.env.KATIE_FULL_BENCHMARK_ENVIRONMENT==='production'&&await loadFullBenchmarkBinding(getSupabaseAdminClient(),p.id,process.env)){
+      continuation=await projectRpc('benchmark_active_full_continuation',{p_project:p.id});
+    }
     const source = `ORIGINAL USER OUTCOME (must remain authoritative):\n${p.objective}\n${p.clarifications}`;
     const gamePlanning=game?'\nGAME SPECIALIST CONTRACT: Identify explicit edition and original versus reproduction. Preserve rule provenance, approved interpretations, unresolved mechanics, turn/phase transitions, legal/illegal actions, terminal states, player modes, persistence, and reset. Do not invent missing rules. Original user-defined games may use the original brief as their primary rules source. Architecture must separate a pure deterministic transition(state,action) engine from UI/persistence/bot/network behavior.':'';
     if (p.active_mission_id) {
@@ -108,34 +112,17 @@ async function advance(p: Project) {
                 return typeof r?.summary === 'string' ? [r.summary] : j.detail ? [j.detail] : [];
             }).map(s => s.trim()).filter(Boolean);
             const notes = findings.join('\n');
-            const repairIndex = Math.min(p.milestone_index, (p.spec?.milestones.length ?? 1)-1);
-            const currentStage = p.spec?.milestones[repairIndex];
-            const attempts = runs.filter(r => r.kind === 'development' && r.milestone_index === repairIndex).length;
-            // A completed final assessment can expose an implementation defect
-            // after browser acceptance. Reuse the existing final-increment repair,
-            // but never interpret a coordinator failure or optional advice as one.
-            const finalRun = [...runs].reverse().find(r => r.kind === 'development' &&
-                r.milestone_index === repairIndex && r.outcome?.head === p.verified_sha &&
-                r.binding?.scopeHash === p.approved_hash);
-            const assessmentReview = [...reviews].reverse().find(j => j.status === 'completed');
-            const assessmentChecks = assessmentReview?.result?.checks;
-            const assessmentFindings = Array.isArray(assessmentChecks) ? assessmentChecks
-                .filter(c => c && typeof c === 'object' && (c as Record<string,unknown>).passed === false)
-                .map(c => String((c as Record<string,unknown>).id) + ': ' + String((c as Record<string,unknown>).evidence ?? 'Failed acceptance check')) : [];
-            const assessmentRepair = p.phase === 'assessment' && Boolean(p.verified_sha && finalRun &&
-                p.preview?.browserAcceptance?.passed && p.preview.headSha === p.verified_sha &&
-                assessmentReview?.result?.verdict === 'changes_requested' && assessmentFindings.length);
-            const repairFindings = assessmentRepair ? assessmentFindings : findings;
+            const currentStage = p.spec?.milestones[Math.min(p.milestone_index, (p.spec?.milestones.length ?? 1)-1)];
+            const attempts = runs.filter(r => r.kind === 'development' && r.milestone_index === p.milestone_index).length;
             // Never turn a blocked research/specification/review coordination failure
             // into another coding job. Only a failed development deliverable with
             // actionable reviewer findings is eligible for one targeted repair.
-            if (m.status === 'blocked' && p.approved_hash && p.approved_hash === p.approval_hash && currentStage && repairFindings.length &&
-                p.cycles < p.max_cycles && attempts < 2 && (assessmentRepair ||
-                    p.phase === 'development' && current.jobs.some(j => j.role === 'development' && j.status === 'completed'))) {
-                await finish('retry', { detail: 'TARGETED REPAIR ONLY. Preserve approved scope and verified prior milestones. Fix these reviewer findings: ' + repairFindings.join('\n'), findings: repairFindings, failed_mission: m.id });
+            if (p.phase === 'development' && p.approved_hash && currentStage && findings.length &&
+                p.cycles < p.max_cycles && attempts < 2 && current.jobs.some(j => j.role === 'development' && j.status === 'completed')) {
+                await finish('retry', { detail: 'TARGETED REPAIR ONLY. Preserve approved scope and verified prior milestones. Fix these reviewer findings: ' + notes, findings, failed_mission: m.id });
                 return;
             }
-            if(m.status==='blocked'&&p.phase==='research'&&await projectRpc<boolean>('recover_project_research',{p_id:p.id,p_lease:p.lease}))return;
+            if(p.phase==='research'&&await projectRpc<boolean>('recover_project_research',{p_id:p.id,p_lease:p.lease}))return;
             await finish('block', { detail: 'A project milestone is blocked: ' + (notes || m.detail || m.status) });
             return;
         }
@@ -250,11 +237,11 @@ async function advance(p: Project) {
     }
     const recovery=p.phase==='specification'&&!p.active_mission_id
       ? await loadSpecificationRecovery(p.id,runs,source) : null;
-    if(recovery?.hasPriorDraft&&!recovery.checkpoint){
+    if(recovery?.hasPriorDraft&&!recovery.checkpoint&&!continuation){
       await finish('block',{detail:'Saved specification artifacts fail current validation; full regeneration is not authorized.',
         impediment:projectImpediment(p,'No valid saved specification checkpoint',recovery.diagnostics.map(d=>d.sourceJobId+': '+d.detail),'Repair the recorded validation failures against the retained source artifacts.')});return;
     }
-    if(recovery?.fingerprint){
+    if(recovery?.fingerprint&&!continuation){
       const {data:previous,error}=await getSupabaseAdminClient().from('project_events').select('id')
         .eq('project_id',p.id).eq('event','specification_recovery_dispatched')
         .eq('data->>recoveryKey',specificationRecoveryKey(recovery.checkpoint!.fullSpecificationHash,p.objective,p.clarifications)).limit(1);
@@ -265,7 +252,7 @@ async function advance(p: Project) {
     // expensive child mission. Superseded scope revisions are not failed work.
     const attempts = runs.filter(r => r.kind === p.phase && r.milestone_index === p.milestone_index &&
         !r.outcome?.superseded);
-    if (attempts.length >= 3 && !p.active_mission_id && !recovery?.checkpoint) {
+    if (attempts.length >= 3 && !p.active_mission_id && !recovery?.checkpoint&&!continuation) {
         // A checkpoint recovery is a one-time, explicitly budget-fenced
         // exception to the historical failures watchdog. It authorizes ONE
         // new specification child, not infinite repeats of a failing phase.
@@ -300,7 +287,7 @@ async function advance(p: Project) {
         Math.max(0, Number(m.actual_tokens ?? 0), Number(m.reserved_tokens ?? 0)), 0);
     const assessmentTokens=p.phase==='specification'&&process.env.KATIE_FULL_BENCHMARK_ENVIRONMENT==='production'
       ?await projectRpc<number>('benchmark_project_assessment_cap',{p_project:p.id}):120000;
-    const specAdmission=p.phase==='specification'?specificationProjectAdmission(Boolean(recovery?.checkpoint),recovery?.checkpoint?projectPlanSchema.parse(parseJSON(recovery.checkpoint.text)).milestones.length:1,assessmentTokens):null;
+    const specAdmission=p.phase==='specification'&&continuation?{missionTokens:90000,futureTokens:180000,requiredTokens:270000,requiredMissionSlots:3}:p.phase==='specification'?specificationProjectAdmission(Boolean(recovery?.checkpoint),recovery?.checkpoint?projectPlanSchema.parse(parseJSON(recovery.checkpoint.text)).milestones.length:1,assessmentTokens):null;
     const requiredTokens=specAdmission?.requiredTokens??8000;
     if (p.token_allowance - charged < requiredTokens || (specAdmission&&runs.length+specAdmission.requiredMissionSlots>p.max_missions)) {
         await finish('block', { detail: specAdmission?`Mandatory ${p.phase} stages require ${requiredTokens} tokens; ${Math.max(0,p.token_allowance-charged)} remain of ${p.token_allowance} after ${charged} charged. Required mission slots: ${specAdmission.requiredMissionSlots}; available: ${p.max_missions-runs.length}. Prior work is retained; owner resource approval is required before a new mission.`:'Aggregate project token budget has fewer than 8,000 uncommitted tokens. Previous work is retained; a new mission is not authorized.' });
@@ -372,7 +359,7 @@ async function advance(p: Project) {
     }
     else
         throw Error('Unknown project phase');
-    await finish('child', { kind: p.phase, objective, evidence: projectEvidence });
+    await finish('child', { kind: p.phase, objective, evidence: {...(projectEvidence as Record<string,unknown>??{}),...(continuation?{benchmarkContinuationId:continuation.id,benchmarkContinuationPlanHash:continuation.plan_hash}:{} )} });
 }
 async function reconcileParkedDispatch() {
     const data=await projectRpc<Array<{id:string;external:Record<string,unknown>}>>('project_dispatch_recovery_candidates');

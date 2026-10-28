@@ -2,7 +2,7 @@ import {createCipheriv,createDecipheriv,createHash,randomBytes} from 'node:crypt
 const domain='katie:benchmark715:native-production-runtime:v1';
 const deny=()=>{throw Error('NATIVE_PRODUCTION_RUNTIME_INVALID')};
 const keyFor=key=>{if(typeof key!=='string'||key.length<32)deny();return createHash('sha256').update(domain+'\0'+key).digest()};
-const aad=p=>Buffer.from(JSON.stringify([domain,p.taskId,p.trialId,p.approvalId,p.projectId,p.contractHash,p.benchmarkContractHash,p.baselineSha,p.expiresAt]));
+const aad=p=>Buffer.from(JSON.stringify([domain,p.taskId,p.trialId,p.approvalId,p.projectId,p.contractHash,p.benchmarkContractHash,p.baselineSha,p.expiresAt,...(p.continuationId?[p.continuationId]:[])]));
 const validate=(p,now)=>{if(!Number.isSafeInteger(p.expiresAt)||p.expiresAt<=now||p.expiresAt>now+1800000)deny()};
 export function sealNativeProductionRuntime(serviceRoleKey,proof,key,now=Date.now()){
  validate(proof,now);

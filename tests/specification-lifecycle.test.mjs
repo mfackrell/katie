@@ -304,3 +304,19 @@ test('production third composition cannot consume protected review allowance eve
  await assert.rejects(budget.specificationRetryOutputLimit(claim,9138,16000),error=>error.requestedTokens===103138&&/counted input 9138/.test(error.message)&&/protected future stages 88000/.test(error.message));
  await assert.rejects(budget.specificationRetryOutputLimit(claim,0,16000),/cannot fit/);
 });
+test('separately authorized continuation uses 90K stages and bounded 3K patch output without enlarging old policy',async()=>{
+ let capacity={authorized:true,remainingTokens:90000,stageRemainingTokens:30000,callsRemaining:10,routingCallsRemaining:10};
+ const budget=modules({'@/lib/missions/store':{rpc:async()=>capacity}})('@/lib/missions/request-budget');
+ const claim={mission:{project_kind:'specification',project_evidence:{projectProfile:'game',specificationBudget:{version:2}}},job:{role:'compose',payload:{},result:null}};
+ assert.equal(budget.missionOutputLimit(claim,''),10000);
+ assert.equal(await budget.specificationRetryOutputLimit(claim,5000,10000),10000);
+ await budget.assertSpecificationStageCapacity(claim,15000);
+ claim.job.payload.specificationPatchBaseHash='a'.repeat(64);capacity={...capacity,remainingTokens:74000,stageRemainingTokens:14000};
+ assert.equal(budget.missionOutputLimit(claim,''),3000);
+ assert.equal(budget.specificationRoutingOutputFloor(claim,''),3000);
+ assert.equal(await budget.specificationRetryOutputLimit(claim,9000,3000),3000);
+ await budget.assertSpecificationStageCapacity(claim,12000);
+ await assert.rejects(budget.specificationRetryOutputLimit(claim,12000,3000),/cannot fit/);
+ claim.mission.project_evidence.specificationBudget.version=1;delete claim.job.payload.specificationPatchBaseHash;
+ assert.equal(budget.missionOutputLimit(claim,''),16000,'original mission allocation remains unchanged');
+});

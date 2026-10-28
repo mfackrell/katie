@@ -29,3 +29,13 @@ test('legacy staging handoff stays capsule-free and invalid runtime metadata is 
  assert.equal(legacy.productionRuntime,undefined);
  assert.throws(()=>readNativeHandoff(encodeNativeHandoff({...proof,productionRuntime:'https://other.invalid'},key),key,now),/INVALID/);
 });
+test('continuation identity is signed and cryptographically bound to the production capsule',()=>{
+ const continuationId='55555555-5555-4555-8555-555555555555',p={...proof,continuationId};
+ const productionRuntime=sealNativeProductionRuntime(secret,p,key,now);
+ const verified=readNativeHandoff(encodeNativeHandoff({...p,productionRuntime},key),key,now);
+ assert.equal(verified.continuationId,continuationId);
+ assert.equal(openNativeProductionRuntime(productionRuntime,verified,key,now).serviceRoleKey,secret);
+ assert.throws(()=>openNativeProductionRuntime(productionRuntime,proof,key,now),/RUNTIME_INVALID/);
+ assert.throws(()=>openNativeProductionRuntime(productionRuntime,{...p,continuationId:'66666666-6666-4666-8666-666666666666'},key,now),/RUNTIME_INVALID/);
+ assert.throws(()=>encodeNativeHandoff({...proof,continuationId:'not-an-id'},key),/INVALID/);
+});

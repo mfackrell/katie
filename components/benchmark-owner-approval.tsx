@@ -4,15 +4,21 @@ import {ownerSessionBearer} from '@/lib/tools/browser-owner-session';
 import {SelfToolsOwnerSession} from '@/components/self-tools-owner-session';
 type Status={canRetry:boolean;deploymentChanged:boolean;consent:null|{id:string;expires_at:string;dispatch_error:string|null};qualification:null|{deadline:string;revoked_at:string|null};execution:null|{status:string;conclusion:string|null}};
 type DevelopmentTask={taskId:string;projectId:string;chatId:string;scopeHash:string;request:string;model:string;deadline:string;spentTokens:number;approved:boolean;approvalState:string;taskStatus:string};
+type Continuation={id:string|null;projectId:string;trialId:string;accountId:string;approved:boolean;live:boolean;deadline:string|null;planHash:string;sourceSnapshotHash:string;spentTokens:number;plan:Record<string,unknown>};
 export function BenchmarkOwnerApproval(){
+ const [continuation,setContinuation]=useState<Continuation|null>(null);
  const [task,setTask]=useState<DevelopmentTask|null>(null);
 
  const [status,setStatus]=useState<Status|null>(null),[error,setError]=useState(''),[busy,setBusy]=useState(false),[signedIn,setSignedIn]=useState(false);
  const refresh=useCallback(async()=>{
-  const token=await ownerSessionBearer();setSignedIn(Boolean(token));if(!token){setTask(null);setStatus(null);return;}
+  const token=await ownerSessionBearer();setSignedIn(Boolean(token));if(!token){setTask(null);setStatus(null);setContinuation(null);return;}
   const r=await fetch('/api/benchmark/715/dashboard',{headers:{Authorization:`Bearer ${token}`},cache:'no-store',signal:AbortSignal.timeout(10000)});
   const data=await r.json();if(!r.ok)throw Error(data.error||'Could not check benchmark approval.');setStatus(data);setError('');
-  if(data.qualification&&!data.qualification.revoked_at&&Date.parse(data.qualification.deadline)>Date.now()){
+  const continuationResponse=await fetch('/api/benchmark/715/continuation',{headers:{Authorization:`Bearer ${token}`},cache:'no-store',signal:AbortSignal.timeout(10000)});
+  const continuationData=await continuationResponse.json();
+  if(!continuationResponse.ok){setContinuation(null);throw Error(continuationData.error||'Continuation status unavailable.');}
+  setContinuation(continuationData.continuation);
+  if((data.qualification&&!data.qualification.revoked_at&&Date.parse(data.qualification.deadline)>Date.now())||continuationData.continuation?.live){
    const taskResponse=await fetch('/api/benchmark/715/development',{headers:{Authorization:`Bearer ${token}`},cache:'no-store',signal:AbortSignal.timeout(10000)});
    const taskData=await taskResponse.json();if(!taskResponse.ok)throw Error(taskData.error||'Task approval status unavailable.');setTask(taskData.task);
   }else setTask(null);
@@ -35,6 +41,14 @@ export function BenchmarkOwnerApproval(){
    const data=await response.json();if(!response.ok)throw Error(data.error||'Task approval failed.');setTask(data.task);
   }catch(e){setError(e instanceof Error?e.message:'Task approval failed.')}finally{setBusy(false)}
  }
+ async function approveContinuation(){
+  if(busy||!continuation||continuation.approved)return;setBusy(true);setError('');
+  try{
+   const token=await ownerSessionBearer();if(!token)throw Error('Sign in to Katie as the owner first.');
+   const response=await fetch('/api/benchmark/715/continuation',{method:'POST',headers:{Authorization:`Bearer ${token}`,'Content-Type':'application/json'},body:JSON.stringify({approve:true,authorization:'full-continuation-existing-budget-270000tokens-4hours',projectId:continuation.projectId,planHash:continuation.planHash}),signal:AbortSignal.timeout(15000)});
+   const data=await response.json();if(!response.ok)throw Error(data.error||'Continuation approval failed.');await refresh();
+  }catch(e){setError(e instanceof Error?e.message:'Continuation approval failed.')}finally{setBusy(false)}
+ }
  const finished=status?.qualification;
  const failed=status?.execution?.status==='completed'&&status.execution.conclusion!=='success';
  return <section aria-label='Take Eleven benchmark approval' className='my-4 rounded-xl border border-amber-400/60 bg-zinc-900 p-5 text-zinc-100'>
@@ -43,11 +57,19 @@ export function BenchmarkOwnerApproval(){
   <p className='mt-2 text-sm font-semibold'>$30 total maximum · $10 and 350,000 tokens per arm</p>
   <p className='mt-2 text-sm text-zinc-300'>Approve moving the unused benchmark allowance to production. Execution has a fixed four-hour window starting when qualification transfers the allowance. Unused funds cannot move between arms. Project scope and development tasks still require their own approvals. The game remains a private Preview.</p>
   {!signedIn&&<div className='mt-3'><p className='mb-2 text-sm'>Sign in with your existing Katie owner account to approve.</p><SelfToolsOwnerSession /></div>}
-  {finished?<p role='status' className='mt-3 text-emerald-300'>{finished.revoked_at?'Benchmark authorization revoked.':Date.parse(finished.deadline)<=Date.now()?'Benchmark authorization expired; spending is stopped.':'Benchmark allowance qualified. Katie can continue with project scope approval.'}</p>:
+  {finished?<p role='status' className='mt-3 text-emerald-300'>{finished.revoked_at?'Benchmark authorization revoked.':Date.parse(finished.deadline)<=Date.now()?continuation?.live?'Original benchmark window expired. The separately approved continuation is active.':'Benchmark authorization expired; spending is stopped.':'Benchmark allowance qualified. Katie can continue with project scope approval.'}</p>:
    status?.consent?<p role='status' className='mt-3'>{failed||status.consent.dispatch_error?'Qualification needs attention. Your approval is saved; no replacement budget has been created.':Date.parse(status.consent.expires_at)<=Date.now()?'Qualification approval expired before completion. Existing records are preserved.':'Approval saved. Katie is running the nonbillable qualification checks.'}</p>:
    <button type='button' onClick={()=>void approve()} disabled={busy||!signedIn||!status} className='mt-4 min-h-11 rounded-lg bg-amber-400 px-5 py-2 font-semibold text-zinc-950 disabled:opacity-50'>{busy?'Saving approval…':'Approve $30 benchmark'}</button>}
   {!finished&&status?.canRetry&&<button type='button' disabled={busy} onClick={()=>void approve()} className='mt-3 min-h-11 rounded bg-amber-400 px-4 py-2 font-semibold text-zinc-950'>{status.deploymentChanged?'Approve corrected execution; preserve budget':'Resume qualification; preserve budget'}</button>}
   {!finished&&status?.execution?.status==='waiting'&&<button type='button' disabled={busy} onClick={()=>void approve('approveExecutionGate')} className='mt-3 min-h-11 rounded bg-amber-400 px-4 py-2 font-semibold text-zinc-950'>Approve protected execution</button>}
+  {continuation&&<div className='mt-4 rounded border border-amber-400 p-3'>
+   <h4 className='font-semibold'>Full Katie continuation approval</h4>
+   <p className='mt-2 text-sm'>The original benchmark failure remains recorded. Authorize one continuation in the same project and Full account: at most 270,000 additional tokens, within the original $10 and 350,000-token total. No new funds or allowance transfers. {continuation.spentTokens.toLocaleString()} tokens already charged.</p>
+   <p className='mt-2 text-sm'>Four hours from this approval. Specification 90,000 tokens; development 120,000; assessment 60,000. Reuse saved research and available draft evidence; generate a new specification only if no complete candidate survived. Formal scope and task approvals remain required. Private Preview only.</p>
+   <p className='mt-2 break-all text-xs'>Project: {continuation.projectId}<br/>Trial: {continuation.trialId}<br/>Account: {continuation.accountId}<br/>Plan: {continuation.planHash}<br/>Failed checkpoint: {continuation.sourceSnapshotHash}</p>
+   <details className='mt-2'><summary className='cursor-pointer'>Review the exact continuation plan</summary><pre className='mt-2 max-h-80 overflow-auto whitespace-pre-wrap text-sm'>{JSON.stringify(continuation.plan,null,2)}</pre></details>
+   {continuation.approved?<p role='status' className='mt-3'>{continuation.live?`Continuation approved until ${new Date(continuation.deadline!).toLocaleString()}. Existing charges and original outcome preserved.`:'Continuation expired or unavailable. Its authorization has not been renewed.'}</p>:<button type='button' onClick={()=>void approveContinuation()} disabled={busy||!signedIn} className='mt-3 min-h-11 rounded bg-amber-400 px-4 py-2 font-semibold text-zinc-950 disabled:opacity-50'>Approve this continuation using remaining Full allowance</button>}
+  </div>}
   {task&&<div className='mt-4 rounded border border-zinc-600 p-3'>
    <h4 className='font-semibold'>Full Katie development approval</h4>
    <p className='mt-2 text-sm'>Authorize this saved development task using the existing Full allowance only: $10 and 350,000 tokens total, including specification and review. {task.spentTokens.toLocaleString()} tokens already charged. Deadline: {new Date(task.deadline).toLocaleString()}. Model: {task.model}. Private Preview only; no merge or production publication.</p>

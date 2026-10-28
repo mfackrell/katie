@@ -3,6 +3,8 @@ import {measureDeliverable} from './review-length';
 import {readOnlyRepositoryObjective,type Claim} from './types';
 import {SPECIFICATION_STAGE_TOKENS} from '@/lib/projects/specification-recovery';
 
+export const CONTINUATION_SPECIFICATION_TOKENS={compose:30000,review:18000,revision:24000,review_again:18000} as const;
+function specificationStages(claim:Claim){return (claim.mission.project_evidence as {specificationBudget?:{version?:number}}|null)?.specificationBudget?.version===2?CONTINUATION_SPECIFICATION_TOKENS:SPECIFICATION_STAGE_TOKENS;}
 export type MissionCapacity={authorized:boolean;remainingTokens:number;callsRemaining:number;routingCallsRemaining:number;reason?:string};
 export function missionInputLimit(claim:Claim):number {
  const evidence=claim.mission.project_evidence as {projectProfile?:string;savedSpecificationCheckpoint?:unknown;specificationRecovery?:unknown}|null;
@@ -19,9 +21,9 @@ export function missionInputLimit(claim:Claim):number {
  * known short word cap stays small; an unbounded audit must not buy a predictably
  * truncated draft before receiving the already-supported 12K output envelope. */
 export function missionOutputLimit(claim:Claim,input:string):number {
- if(claim.job.role==='revise'&&typeof claim.job.payload?.revisionPatchBaseHash==='string')return 3000;
+ if(typeof claim.job.payload?.specificationPatchBaseHash==='string'||claim.job.role==='revise'&&typeof claim.job.payload?.revisionPatchBaseHash==='string')return 3000;
  if(['compose','revise'].includes(claim.job.role)){
-  if(claim.mission.project_kind==='specification'&&(claim.mission.project_evidence as {projectProfile?:string}|null)?.projectProfile==='game')return 16000;
+  if(claim.mission.project_kind==='specification'&&(claim.mission.project_evidence as {projectProfile?:string}|null)?.projectProfile==='game')return (claim.mission.project_evidence as {specificationBudget?:{version?:number}})?.specificationBudget?.version===2?10000:16000;
   // Recovery needs room for retained input findings, not a larger deliverable.
   const evidence=claim.mission.project_evidence as {savedSpecificationCheckpoint?:unknown;specificationRecovery?:unknown}|null;
   if(claim.mission.project_kind==='specification'&&evidence?.savedSpecificationCheckpoint&&evidence?.specificationRecovery)return 6000;
@@ -55,7 +57,7 @@ export class MissionAdmissionError extends Error {
 // A schema retry may reserve less output, never more authority. Keep a useful
 // minimum and protect every later stage exactly as on the first attempt.
 export function specificationRoutingOutputFloor(claim:Claim,input:string){
- return schemaRetry(claim)?6000:missionOutputLimit(claim,input);
+ return typeof claim.job.payload?.specificationPatchBaseHash==='string'?3000:schemaRetry(claim)?6000:missionOutputLimit(claim,input);
 }
 function schemaRetry(claim:Claim){
  return claim.mission.project_kind==='specification'&&claim.job.role==='compose'&&
@@ -64,11 +66,13 @@ function schemaRetry(claim:Claim){
   typeof claim.job.result?.rejectedSpecification==='string';
 }
 export async function specificationRetryOutputLimit(claim:Claim,inputTokens:number,desired:number){
- if(!schemaRetry(claim))return desired;
- const future=SPECIFICATION_STAGE_TOKENS.review+SPECIFICATION_STAGE_TOKENS.revision+SPECIFICATION_STAGE_TOKENS.review_again;
+ const modern=(claim.mission.project_evidence as {specificationBudget?:{version?:number}}|null)?.specificationBudget?.version===2;
+ if(!schemaRetry(claim)&&!(modern&&['compose','revise'].includes(claim.job.role)))return desired;
+ const stages=specificationStages(claim),minimum=typeof claim.job.payload?.specificationPatchBaseHash==='string'?3000:6000;
+ const future=claim.job.role==='revise'?stages.review_again:stages.review+stages.revision+stages.review_again;
  const capacity=await rpc<(MissionCapacity&{stageRemainingTokens:number})|null>('specification_call_capacity',{p_id:claim.job.id,p_lease:claim.job.lease});
  const available=capacity?.authorized?Math.min(capacity.stageRemainingTokens,capacity.remainingTokens-future)-inputTokens:0;
- if(!Number.isSafeInteger(available)||available<6000)throw new MissionAdmissionError(inputTokens+6000+future,capacity?{...capacity,reason:`Specification retry cannot fit: counted input ${inputTokens}, minimum output 6000, stage remaining ${capacity.stageRemainingTokens}, mission remaining ${capacity.remainingTokens}, protected future stages ${future}. No provider call was authorized.`}:capacity);
+ if(!Number.isSafeInteger(available)||available<minimum)throw new MissionAdmissionError(inputTokens+minimum+future,capacity?{...capacity,reason:`Specification retry cannot fit: counted input ${inputTokens}, minimum output ${minimum}, stage remaining ${capacity.stageRemainingTokens}, mission remaining ${capacity.remainingTokens}, protected future stages ${future}. No provider call was authorized.`}:capacity);
  return Math.min(desired,available);
 }
 export async function explainAdmissionDenial(claim:Claim,requestedTokens:number):Promise<never>{
@@ -81,13 +85,14 @@ export async function explainAdmissionDenial(claim:Claim,requestedTokens:number)
  * The DB still atomically reserves each native-counted request and aggregate cost. */
 export async function assertSpecificationStageCapacity(claim:Claim,requestedTokens:number,executionFloor=0){
  const budget=(claim.mission.project_evidence as {specificationBudget?:{version?:number}}|null)?.specificationBudget;
- if(claim.mission.project_kind!=='specification'||budget?.version!==1)return;
+ if(claim.mission.project_kind!=='specification'||![1,2].includes(budget?.version??0))return;
  const stage=claim.job.role==='revise'?'revision':claim.job.job_key==='review_again'?'review_again':claim.job.role;
  if(!['compose','review','revision','review_again'].includes(stage))throw Error('Specification mission has an unbudgeted inference stage');
- const cap=SPECIFICATION_STAGE_TOKENS[stage as 'compose'|'review'|'revision'|'review_again'];
- const future=stage==='compose'?SPECIFICATION_STAGE_TOKENS.review+SPECIFICATION_STAGE_TOKENS.revision+SPECIFICATION_STAGE_TOKENS.review_again
-  :stage==='review'?SPECIFICATION_STAGE_TOKENS.revision+SPECIFICATION_STAGE_TOKENS.review_again
-  :stage==='revision'?SPECIFICATION_STAGE_TOKENS.review_again:0;
+ const stages=specificationStages(claim);
+ const cap=stages[stage as 'compose'|'review'|'revision'|'review_again'];
+ const future=stage==='compose'?stages.review+stages.revision+stages.review_again
+  :stage==='review'?stages.revision+stages.review_again
+  :stage==='revision'?stages.review_again:0;
  const capacity=await rpc<(MissionCapacity&{stageRemainingTokens:number})|null>('specification_call_capacity',{p_id:claim.job.id,p_lease:claim.job.lease});
  if(requestedTokens+executionFloor>cap||!capacity?.authorized||!Number.isFinite(capacity.stageRemainingTokens)||capacity.stageRemainingTokens<requestedTokens+executionFloor||capacity.remainingTokens<requestedTokens+executionFloor+future)
   throw new MissionAdmissionError(requestedTokens+executionFloor+future,capacity?{...capacity,reason:`Specification ${stage} request needs ${requestedTokens} tokens plus ${executionFloor} execution-output headroom; stage allowance remaining ${capacity.stageRemainingTokens}, mission allowance remaining ${capacity.remainingTokens}, protected future stages ${future}. No provider call was authorized.`}:capacity);

@@ -6,7 +6,7 @@ import vm from 'node:vm';
 import ts from 'typescript';
 import {shouldFallbackIncompleteReview} from '../lib/missions/review-fallback.mjs';
 const source=readFileSync('lib/missions/model.ts','utf8');
-function loadRouterFixture({failPrimary=false,incompletePrimary=false,emptyTruncation=false,allow=true,acceptance=false,fullBound=false,outputBudget=Infinity}={}){
+function loadRouterFixture({failPrimary=false,incompletePrimary=false,emptyTruncation=false,allow=true,acceptance=false,fullBound=false,outputBudget=Infinity,specificationV2=false,checkpointFailure=false,settlementFailure=false}={}){
  let requests=[],calls=[],reserve=[],rpcEvents=[],chosen=0,routingOptions;
  const first={name:'google',generate:async p=>{calls.push(['google',p.modelId]);if(failPrimary){const err=Error('quota');err.status=429;err.code='insufficient_quota';throw err;}return{text:'valid model result',model:p.modelId,provider:'google',usage:{totalTokens:65}};}};
  const second={name:'anthropic',generate:async p=>{calls.push(['anthropic',p.modelId]);return{text:'recovered verified text',model:p.modelId,provider:'anthropic',usage:{totalTokens:72}};}};
@@ -19,7 +19,7 @@ function loadRouterFixture({failPrimary=false,incompletePrimary=false,emptyTrunc
  :name==='@/lib/orchestration/request-rejection'?{rejectedBeforeInference:()=>false}
  :name==='@/lib/providers'?{getAvailableProviders:()=>[first,second]}
  :name==='@/lib/router/master-router'?{chooseProvider:async()=>{chosen++;return{provider:first,modelId:'gemini-3.1-pro',fallbackChain:[{provider:second,modelId:'claude-sonnet-4-6',score:1}]};}}
- :name==='@/lib/missions/store'||name==='./store'?{rpc:async(n,a)=>{rpcEvents.push({name:n,...a});if(n==='reserve_mission_call'||n==='benchmark_reserve_mission_call')reserve.push({name:n,...a});if(n==='reserve_mission_call')return allow;if(n==='benchmark_reserve_mission_call')return 'ledger-receipt';return true;}}
+ :name==='@/lib/missions/store'||name==='./store'?{rpc:async(n,a)=>{rpcEvents.push({name:n,...a});if(n==='checkpoint_mission_specification_draft'&&checkpointFailure)throw Error('checkpoint storage unavailable');if(n==='benchmark_reconcile_provider_usage'&&settlementFailure)throw Error('receipt reconciliation unavailable');if(n==='reserve_mission_call'||n==='benchmark_reserve_mission_call')reserve.push({name:n,...a});if(n==='reserve_mission_call')return allow;if(n==='benchmark_reserve_mission_call')return 'ledger-receipt';return true;}}
  :name==='@/lib/data/supabase/admin'?{getSupabaseAdminClient:()=>({from:table=>({select:()=>({eq:()=>({maybeSingle:async()=>({data:fullBound?{trial_id:'trial',account_id:'account',benchmark_contract_hash:'c'.repeat(64),baseline_sha:'0015bcdb8ac9ad94b7c74d1a4cd76737903b1319',model:'gpt-5.3-codex'}:null,error:null})})})})})}
  :name==='node:crypto'?{randomUUID:()=>String(reserve.length+1)}
  :name==='openai'?{default:class{}}:name==='openai/helpers/zod'?{zodTextFormat:()=>({})}
@@ -27,7 +27,7 @@ function loadRouterFixture({failPrimary=false,incompletePrimary=false,emptyTrunc
  :name==='@/lib/projects/contract'?{projectPlanSchema:{omit:()=>({})}}
  :name==='./types'?{planSchema:{}}:{};
  vm.runInNewContext(out,{exports,require,process,Buffer,console,setTimeout,clearTimeout},{filename:'model.js'});
- const claim={mission:{id:'m',project_id:'p',objective:acceptance?'[SYNTHETIC PROVIDER FAILOVER ACCEPTANCE] Validate a bounded operations memo':'Implement an original game',project_evidence:acceptance?{syntheticFaultAcceptance:true}:undefined,team:[{id:'agent',config:{research:false}}],project_kind:'specification'},job:{id:'job',agent_id:'agent',lease:'lease',role:acceptance||emptyTruncation?'work':'review'}};
+ const claim={mission:{id:'m',project_id:'p',objective:acceptance?'[SYNTHETIC PROVIDER FAILOVER ACCEPTANCE] Validate a bounded operations memo':'Implement an original game',project_evidence:specificationV2?{projectProfile:'game',specificationBudget:{version:2}}:acceptance?{syntheticFaultAcceptance:true}:undefined,team:[{id:'agent',config:{research:false}}],project_kind:'specification'},job:{id:'job',agent_id:'agent',lease:'lease',role:specificationV2?'compose':acceptance||emptyTruncation?'work':'review'}};
  return{run:()=>exports.missionModel(claim,'Review independent specification','Saved exact candidate'),requests,calls,reserve,rpcEvents,chosen:()=>chosen,routing:()=>routingOptions};
 }
 test('mission router selects capable candidate before inference and preserves model evidence',async()=>{
@@ -106,4 +106,22 @@ test('provider output cap and reservation use the same reduced retry output',asy
  await retry.run();
  assert.equal(retry.requests[0].max_output_tokens,2000);
  assert.equal(retry.reserve[0].p_tokens,20+256+2000,'counted input plus exactly the provider output cap');
+});
+
+test('raw specification response is checkpointed before receipt settlement; storage failure still attempts settlement',async()=>{
+ const settings={NEXT_PUBLIC_SUPABASE_URL:'https://iytvavgbaainnsrecmcx.supabase.co',KATIE_NATIVE_BENCHMARK_DISPATCH:'enabled',KATIE_FULL_BENCHMARK_TRIAL_ID:'trial',KATIE_FULL_BENCHMARK_DISPATCH:'enabled',KATIE_BENCHMARK_PAID_EXECUTION:'enabled'};
+ const old=Object.fromEntries(Object.keys(settings).map(k=>[k,process.env[k]]));
+ try{
+  Object.assign(process.env,settings);
+  const receiptFailure=loadRouterFixture({fullBound:true,specificationV2:true,settlementFailure:true});
+  await assert.rejects(receiptFailure.run());
+  const saved=receiptFailure.rpcEvents.find(x=>x.name==='checkpoint_mission_specification_draft');
+  assert.equal(saved.p_response,'full trial model result');
+  assert.ok(receiptFailure.rpcEvents.indexOf(saved)<receiptFailure.rpcEvents.findIndex(x=>x.name==='benchmark_reconcile_provider_usage'));
+  assert.equal(receiptFailure.calls.length,1);
+  const checkpointFailure=loadRouterFixture({fullBound:true,specificationV2:true,checkpointFailure:true});
+  await assert.rejects(checkpointFailure.run(),/checkpointed/);
+  assert.equal(checkpointFailure.rpcEvents.filter(x=>x.name==='benchmark_reconcile_provider_usage').length,1,'actual paid response still reconciled');
+  assert.equal(checkpointFailure.calls.length,1,'checkpoint failure never authorizes a second paid response');
+ }finally{for(const [k,v] of Object.entries(old)){if(v===undefined)delete process.env[k];else process.env[k]=v;}}
 });
