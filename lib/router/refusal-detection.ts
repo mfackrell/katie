@@ -3,6 +3,9 @@ import type { ProviderResponse } from "@/lib/providers/types";
 import { isExplicitContentRefusal } from "@/lib/router/provider-error";
 
 const STRONG_REFUSAL_PATTERNS: RegExp[] = [
+  // Conversational contractions must not silently pass as completed visual answers.
+  /\bi(?:'m| am)\s+unable\s+to\s+(?:help|assist|comply|answer|provide)(?:\s+with)?\s+(?:that|this|your request)\b/i,
+  /\bi\s*(?:can(?:not|'t)|won't)\s+(?:help|assist|answer)(?:\s+with)?\s+(?:that|this|your request)\b/i,
   /\bi\s*(?:can(?:not|'t)|am\s+unable\s+to|won't)\s+(?:help|assist|comply|answer|provide)\s+(?:with\s+)?that\b/i,
   /\bi\s*(?:can(?:not|'t)|am\s+unable\s+to)\s+describe\s+explicit\s+sexual\s+content\b/i,
   /\b(?:this|that)\s+request\s+(?:violates|goes\s+against)\s+(?:our\s+)?content\s+policy\b/i,
