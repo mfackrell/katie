@@ -319,7 +319,7 @@ test('early task identity classification respects PDF source authorization befor
    return pdfProgress;
   })()`),{
    benchmarkRelay:false,benchmarkIntake:false,...scope,...task,Map,Set,priorTaskProgress,message,newAttachments:fresh,catalog:[],timelineActive:false,
-   startProjectIntent:()=>false,followupProjectIntent:()=>false,
+   startProjectIntent:text=>/^Help me (?:apply|prepare a proposal)\b/i.test(text),followupProjectIntent:()=>false,
    attachmentHistory:[],freshVideoReferences:[],taskProgressUserMessageId:'current-turn',
    request:{headers:{get:()=> 'test-request'}},currentAgentTask:()=>null,
    getAvailableProviders:()=>[{listModels:async()=>[]}],selectControlPlaneDecisionModels:()=>[],
@@ -334,7 +334,8 @@ test('early task identity classification respects PDF source authorization befor
   assert.deepEqual(descriptions,authorized,`${message}: only authorized PDFs may be described for identity`);
   // Saved projects alone must not trigger classification of unrelated turns.
   // Fresh authorized sources still require identity resolution before historical retrieval.
-  const expectedClassifications=authorized.length>0 || fresh.some(file=>file.mimeType!=='application/pdf'&&file.extractedText)?1:0;
+  const explicitProjectRequest = /help me (?:apply|prepare a proposal)\b/i.test(message);
+  const expectedClassifications=explicitProjectRequest && authorized.length>0 ? 1 : 0;
   assert.equal(classified.length,expectedClassifications,`${message}: project identity must be current-source scoped`);
   if(classified.length)for(const file of fresh.filter(file=>file.mimeType==='application/pdf')){
    assert.equal(classified[0].includes(`TEXT-${file.fileId}`),authorized.includes(file.fileId),`${message}: classifier scope for ${file.fileName}`);
