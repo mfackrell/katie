@@ -11,21 +11,21 @@ const source=readFileSync('scripts/benchmark/native-development-host.mjs','utf8'
 const prefix=source.slice(0,source.indexOf('const clientToken=')).replace(/^import .*;\n/gm,'');
 const key='synthetic-production-preflight-signing-key';
 const ids=['11111111','22222222','33333333','44444444'].map(p=>`${p}-1111-4111-8111-111111111111`);
-async function preflight({production=true,qualification={},capsule,manifestChange={},approvalChange={},envChange={}}={}){
+async function preflight({production=true,qualification={},capsule,manifestChange={},approvalChange={},envChange={},delegated=false,provenance=true}={}){
  const expiresAt=Date.now()+600000,deadline=new Date(expiresAt).toISOString();
  const p={taskId:ids[0],trialId:ids[1],approvalId:ids[2],projectId:ids[3],contractHash:'a'.repeat(64),benchmarkContractHash:'b'.repeat(64),baselineSha:'c'.repeat(40),expiresAt};
  if(production)p.productionRuntime=capsule??sealNativeProductionRuntime('synthetic-prod-key',p,key);
  const body=encodeNativeHandoff(p,key),manifest={...readNativeHandoff(body,key),...manifestChange};
  const rows={benchmark_native_spending_approvals:{trial_id:p.trialId,task_id:p.taskId,project_id:p.projectId,repository:'mfackrell/katie',revoked_at:null,consumed_at:null,deadline,account_id:'account',actor_id:'actor',chat_id:'chat',owner_id:'owner',model:'gpt-5.3-codex',max_tokens:350000,...approvalChange},
  benchmark_three_arm_trials:{id:p.trialId,arm:'full',state:'qualified',contract_sha256:p.benchmarkContractHash,baseline_sha:p.baselineSha,owner_actor_id:'actor',experiment_id:'experiment'},
- work_projects:{actor_id:'actor',chat_id:'chat',status:'running',phase:'development',approved_hash:'scope',approval_hash:'scope',deadline},
+ work_projects:{id:p.projectId,actor_id:'actor',chat_id:'chat',status:'running',phase:'development',approved_hash:'scope',approval_hash:'scope',deadline},
  benchmark_budget_accounts:{id:'account',cap_tokens:350000,trial_id:p.trialId,owner_actor_id:'actor',experiment_id:'experiment'},
  benchmark_production_qualifications:{issue:715,revoked_at:null,owner_id:'owner',actor_id:'actor',experiment_id:'experiment',deadline,...qualification},
- agent_tasks:{actor_id:'actor',chat_id:'chat'},
+ agent_tasks:{id:p.taskId,actor_id:delegated?'specialist':'actor',chat_id:delegated?'specialist-chat':'chat'},
  benchmark_development_dispatches:{trial_id:p.trialId,contract_hash:p.contractHash,benchmark_contract_hash:p.benchmarkContractHash,baseline_sha:p.baselineSha,status:'qualified'},
  model_registry:{pricing_status:'verified',pricing_input_per_1m:1.75,pricing_output_per_1m:14}};
  const calls={connections:[],grants:0,masks:[]};
- const db={from:table=>({select(){return this},eq(){return this},async maybeSingle(){return {data:rows[table],error:null}}}),rpc:async()=>{calls.grants++;return {data:'grant-id',error:null}}};
+ const db={from:table=>({select(){return this},eq(){return this},async maybeSingle(){return {data:rows[table],error:null}}}),rpc:async(name,args)=>{if(name==='benchmark_full_task_provenance'){assert.equal(args.p_task,p.taskId);assert.equal(args.p_project,p.projectId);return {data:provenance,error:null}}calls.grants++;return {data:'grant-id',error:null}}};
  const context={readNativeHandoff,openNativeProductionRuntime,assertBenchmarkDollarCeiling,tokenDigest,randomBytes,
   createRequire:()=>()=>({createClient:(url,secret)=>{calls.connections.push({url,secret});return db}}),join:(...p)=>p.join('/'),
   readFileSync:path=>path==='request'?body:JSON.stringify(manifest),
@@ -52,4 +52,9 @@ test('production uses its authenticated server authorization and frozen dollar c
  const envChange={KATIE_BENCHMARK_PAID_EXECUTION:'disabled',KATIE_BENCHMARK_APPROVED_ARM_USD_CENTS:'',KATIE_BENCHMARK_APPROVED_MAX_USD_MICROS_PER_MILLION:''};
  const p=await preflight({envChange});assert.equal(p.error,undefined);assert.equal(p.calls.grants,1);
  const s=await preflight({production:false,envChange});assert.match(s.error?.message??'',/separately enabled/);assert.equal(s.calls.grants,0);assert.equal(s.calls.connections.length,0);
+});
+
+test('delegated specialist identity must be proven by saved DO lineage before grant',async()=>{
+ const accepted=await preflight({delegated:true});assert.equal(accepted.error,undefined);assert.equal(accepted.calls.grants,1);
+ const denied=await preflight({delegated:true,provenance:false});assert.match(denied.error?.message??'',/state mismatch/);assert.equal(denied.calls.grants,0);
 });

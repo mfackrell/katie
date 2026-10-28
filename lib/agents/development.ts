@@ -148,6 +148,11 @@ export async function dispatchDevelopment(task: AgentTask, project?: Context, as
     if(fullBinding){
       if(!fullDispatchEnabled||!nativeDispatchEnabled)
         throw Error('Full benchmark project is blocked unless both Full and trusted native dispatch are enabled');
+      const {data:ownerApproval,error:ownerApprovalError}=await getSupabaseAdminClient()
+        .from('benchmark_native_spending_approvals').select('id').eq('task_id',task.id)
+        .eq('trial_id',fullBinding.trial_id).is('consumed_at',null).is('revoked_at',null).maybeSingle();
+      if(ownerApprovalError)throw Error('Full task owner approval lookup failed closed');
+      if(!ownerApproval)return persist(task,'dispatching','Waiting for task-specific owner approval in the Katie benchmark dashboard. No execution has been dispatched.');
       const {data:dispatch,error:dispatchError}=await getSupabaseAdminClient().rpc('benchmark_bind_full_development_dispatch',{
         p_task:task.id,p_project:project.projectId,p_scope_hash:project.scopeHash,
         p_project_contract_hash:project.contractHash

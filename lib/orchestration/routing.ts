@@ -8,7 +8,7 @@ import {classifyGenerationFailure} from '@/lib/router/provider-error';
 
 export type OrchestrationChoice={provider:LlmProvider;modelId:string;reasoning:string};
 /** Shared by EO management and ALL mission-backed child orchestrators. No saved model pins. */
-type Accounting={reserve:(model:string,tokens:number)=>Promise<string>;finish:(id:string,tokens:number|null)=>Promise<void>};
+type Accounting={reserve:(model:string,tokens:number)=>Promise<string>;finish:(id:string,tokens:number|null,receipt?:{id?:string;usage?:unknown})=>Promise<void>};
 export async function orchestrationChoices(input:{objective:string;instruction:string;requestId:string;research?:boolean;review?:boolean;planning?:boolean;synthesis?:boolean;accounting?:Accounting;fixedModel?:{provider:string;modelId:string}}):Promise<OrchestrationChoice[]>{
  const health=await filterProvidersBySharedHealth(getAvailableProviders());
  // Gemini grounding currently has no server-enforced per-request search-use cap.
@@ -39,7 +39,7 @@ export async function orchestrationChoices(input:{objective:string;instruction:s
    const reservation=await input.accounting?.reserve(provider.name+':'+params.modelId,inputTokens+2000);
    try{
     const result=await client.responses.create(request,{timeout:30_000});
-    if(reservation)await input.accounting!.finish(reservation,result.usage?.total_tokens??null);
+    if(reservation)await input.accounting!.finish(reservation,result.usage?.total_tokens??null,{id:result.id,usage:result.usage});
     if(result.status!=='completed'||!result.output_text?.trim())throw Error('Routing decision incomplete');
     return{text:result.output_text,model:params.modelId,provider:provider.name};
    }catch(error){if(reservation)await input.accounting!.finish(reservation,rejectedBeforeInference(error)?0:null);throw error;}
