@@ -104,7 +104,8 @@ async function summarizeInto(priorSummary: string, messages: Message[]): Promise
     console.warn("[Summarizer] Incomplete or oversized ITM; source cursor retained", {
       stopReason: response.stop_reason ?? "missing",
       characters: summary.length,
-      maxCharacters: ITM_HARD_MAX_CHARACTERS,\n      responseTokenCeiling: SUMMARY_MAX_TOKENS,
+      maxCharacters: ITM_HARD_MAX_CHARACTERS,
+      responseTokenCeiling: SUMMARY_MAX_TOKENS,
     });
     throw new Error("Intermediate memory summary incomplete or over character budget; source cursor retained");
   }
