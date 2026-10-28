@@ -7,6 +7,7 @@ import {createClient} from '@supabase/supabase-js';
 import config from '../../config/benchmark-715-production-qualification.json' with {type:'json'};
 import {frozenProtocol} from './owner-staging-bootstrap.mjs';
 import {signQualification} from './production-owner-qualification.mjs';
+import {productionQualificationFetch} from './production-qualification-transport.mjs';
 const env=process.env;
 const event=JSON.parse(readFileSync(env.GITHUB_EVENT_PATH,'utf8'));
 const deny=()=>{throw Error('OWNER_PRODUCTION_QUALIFICATION_REFUSED')};
@@ -20,8 +21,8 @@ if(env.GITHUB_EVENT_NAME!=='workflow_dispatch'||env.GITHUB_REPOSITORY!==config.r
  !env.KATIE_NONFULL_STAGING_SERVICE_ROLE_KEY||!env.KATIE_NONFULL_STAGING_OWNER_ID||
  !env.KATIE_NATIVE_HANDOFF_HMAC_KEY||env.KATIE_NATIVE_HANDOFF_HMAC_KEY.length<32||
  JSON.stringify(frozenProtocol())!==JSON.stringify(config.protocol))deny();
-const endpoint=config.productionUrl+'/api/benchmark/715/owner-qualification';
-const ready=await fetch(endpoint,{signal:AbortSignal.timeout(15000),redirect:'error'});
+const productionFetch=(options)=>productionQualificationFetch(options,env.VERCEL_AUTOMATION_BYPASS_SECRET);
+const ready=await productionFetch({signal:AbortSignal.timeout(15000),redirect:'error'});
 if(!ready.ok||(await ready.json()).commitSha!==env.GITHUB_SHA)deny();
 // Validate authoritative owner budget statement before fencing its old location.
 const auth=await fetch(`https://api.github.com/repos/${config.repository}/issues/comments/${config.authorizationCommentId}`,{
@@ -37,7 +38,7 @@ if(comment.user?.id!==config.ownerGithubId||comment.user?.login!==config.ownerLo
 const prepare=signQualification({version:1,phase:'prepare',authorization:'production-715-30usd-350000tokens-4hours',
  runId:env.GITHUB_RUN_ID,runAttempt:Number(env.GITHUB_RUN_ATTEMPT),sha:env.GITHUB_SHA,
  expiresAt:Date.now()+120000,transfer:null},env.KATIE_NATIVE_HANDOFF_HMAC_KEY);
-const preflight=await fetch(endpoint,{method:'POST',headers:{'content-type':'text/plain'},body:prepare,
+const preflight=await productionFetch({method:'POST',headers:{'content-type':'text/plain'},body:prepare,
  signal:AbortSignal.timeout(60000),redirect:'error'});
 if(!preflight.ok)throw Error(`PRODUCTION_PREFLIGHT_HTTP_${preflight.status}: staging allowance untouched`);
 const stage=createClient(config.stagingDatabaseUrl,env.KATIE_NONFULL_STAGING_SERVICE_ROLE_KEY,
@@ -53,7 +54,7 @@ writeFileSync(join(env.RUNNER_TEMP,'benchmark-715-production-transfer.json'),JSO
 const envelope=signQualification({version:1,phase:'commit',authorization:'production-715-30usd-350000tokens-4hours',
  runId:env.GITHUB_RUN_ID,runAttempt:Number(env.GITHUB_RUN_ATTEMPT),sha:env.GITHUB_SHA,
  expiresAt:Date.now()+120000,transfer},env.KATIE_NATIVE_HANDOFF_HMAC_KEY);
-const response=await fetch(endpoint,{method:'POST',headers:{'content-type':'text/plain'},body:envelope,
+const response=await productionFetch({method:'POST',headers:{'content-type':'text/plain'},body:envelope,
  signal:AbortSignal.timeout(60000),redirect:'error'});
 if(!response.ok)throw Error(`PRODUCTION_QUALIFICATION_HTTP_${response.status}: transfer checkpoint retained; retry the same workflow without resetting records`);
 const receipt=await response.json();
