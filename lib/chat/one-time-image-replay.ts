@@ -23,17 +23,17 @@ export async function runOneSavedImageReplay(): Promise<{ status: string; trialI
   const db = getSupabaseAdminClient();
   const { data: pending, error: readError } = await db.from("image_replay_trials")
     .select("id,actor_id,source_chat_id,attachment_id,replay_chat_id,status,expires_at")
-    .eq("status", "pending").gt("expires_at", new Date().toISOString())
+    .eq("status", "pending")
     .order("created_at", { ascending: true }).limit(1).maybeSingle<ReplayRow>();
   if (readError) throw new Error("Replay queue lookup failed: " + readError.message);
-  if (!pending) return { status: "idle" };
+  if (!pending || Date.parse(pending.expires_at) <= Date.now()) return { status: "idle" };
   const requestId = randomUUID();
   const replayChatId = randomUUID();
   const { data: claimed, error: claimError } = await db.from("image_replay_trials")
-    .update({status:"running",request_id:requestId,replay_chat_id:replayChatId,claimed_at:new Date().toISOString()})
-    .eq("id",pending.id).eq("status","pending").select("id").maybeSingle<{id:string}>();
+    .eq("id",pending.id).eq("status","pending").updateReturning<{id:string}>(
+      {status:"running",request_id:requestId,replay_chat_id:replayChatId,claimed_at:new Date().toISOString()}, "id");
   if (claimError) throw new Error("Replay claim failed: " + claimError.message);
-  if (!claimed) return { status:"already_claimed" };
+  if (!claimed?.length) return { status:"already_claimed" };
   console.info("[ImageReplay] claimed", {trialId:pending.id,requestId,replayChatId});
   try {
     const owner = await getChatById(pending.source_chat_id);
@@ -65,18 +65,19 @@ export async function runOneSavedImageReplay(): Promise<{ status: string; trialI
     if (!assistant?.content) throw new Error("Replay streamed but did not persist an assistant response");
     const resultText = assistant.content;
     if (assistant.model==="katie-local") throw new Error("Replay was intercepted by local response: " + resultText.slice(0,160));
-    const {error:completeError} = await db.from("image_replay_trials").update({
-      status:"completed",model:assistant.model??null,
-      result_text:resultText.slice(0,12000),completed_at:new Date().toISOString()
-    }).eq("id",pending.id).eq("status","running");
+    const {error:completeError} = await db.from("image_replay_trials")
+      .eq("id",pending.id).eq("status","running").update({
+        status:"completed",model:assistant.model??null,
+        result_text:resultText.slice(0,12000),completed_at:new Date().toISOString()
+      });
     if (completeError) throw new Error("Failed to persist replay result: " + completeError.message);
     console.info("[ImageReplay] completed", {trialId:pending.id,requestId,model:assistant.model,chars:resultText.length});
     return { status:"completed",trialId:pending.id };
   } catch (error) {
     const reason = error instanceof Error ? error.message : "Unknown replay failure";
-    await db.from("image_replay_trials").update({
+    await db.from("image_replay_trials").eq("id",pending.id).eq("status","running").update({
       status:"failed",error:reason.slice(0,900),completed_at:new Date().toISOString()
-    }).eq("id",pending.id).eq("status","running");
+    });
     console.error("[ImageReplay] failed", {trialId:pending.id,requestId,reason});
     return {status:"failed",trialId:pending.id};
   }
