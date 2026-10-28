@@ -52,6 +52,25 @@ export class MissionAdmissionError extends Error {
  }
  get canTryAlternative(){return this.capacity?.authorized===true&&this.capacity.callsRemaining>0&&this.capacity.remainingTokens>0;}
 }
+// A schema retry may reserve less output, never more authority. Keep a useful
+// minimum and protect every later stage exactly as on the first attempt.
+export function specificationRoutingOutputFloor(claim:Claim,input:string){
+ return schemaRetry(claim)?6000:missionOutputLimit(claim,input);
+}
+function schemaRetry(claim:Claim){
+ return claim.mission.project_kind==='specification'&&claim.job.role==='compose'&&
+  (claim.mission.project_evidence as {specificationBudget?:{version?:number};projectProfile?:string}|null)?.specificationBudget?.version===1&&
+  (claim.mission.project_evidence as {projectProfile?:string}|null)?.projectProfile==='game'&&
+  typeof claim.job.result?.rejectedSpecification==='string';
+}
+export async function specificationRetryOutputLimit(claim:Claim,inputTokens:number,desired:number){
+ if(!schemaRetry(claim))return desired;
+ const future=SPECIFICATION_STAGE_TOKENS.review+SPECIFICATION_STAGE_TOKENS.revision+SPECIFICATION_STAGE_TOKENS.review_again;
+ const capacity=await rpc<(MissionCapacity&{stageRemainingTokens:number})|null>('specification_call_capacity',{p_id:claim.job.id,p_lease:claim.job.lease});
+ const available=capacity?.authorized?Math.min(capacity.stageRemainingTokens,capacity.remainingTokens-future)-inputTokens:0;
+ if(!Number.isSafeInteger(available)||available<6000)throw new MissionAdmissionError(inputTokens+6000+future,capacity);
+ return Math.min(desired,available);
+}
 export async function explainAdmissionDenial(claim:Claim,requestedTokens:number):Promise<never>{
  const value=await rpc<MissionCapacity|null>('mission_call_capacity',{p_id:claim.job.id,p_lease:claim.job.lease});
  const capacity=value&&typeof value==='object'&&typeof value.authorized==='boolean'
