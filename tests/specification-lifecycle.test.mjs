@@ -59,6 +59,37 @@ function harness(checkpoint=helper.selectSpecificationRecovery(fixture.jobs,fixt
   instruction:'Preserve original requirements and address the saved independent findings.',status:'running',payload:{},result:null,dependencies:[],attempts:1});
  return {mission,jobs,job,commits,modelInputs,execute:runtime('@/lib/missions/worker').executeClaim,ids:runtime('@/lib/projects/completion').PROJECT_ACCEPTANCE_IDS};
 }
+test('fresh and rejected game specification calls receive the exact serialization contract without bypassing validation',async()=>{
+ for(const retry of [false,true]){
+  const h=harness(null),compose=h.job('compose','compose');h.jobs.push(compose);
+  if(retry)compose.result={rejectedSpecification:'{"name":"broken"}',specificationValidationFeedback:'schemaVersion/game required'};
+  await assert.rejects(h.execute({mission:h.mission,job:compose},async(_,instruction,input)=>{
+   assert.match(instruction,/rules = \{schemaVersion:1, game:\{id,title,edition,kind/);
+   assert.match(instruction,/expectedState:COMPLETE_JSON_STATE/);
+   assert.match(instruction,/Final milestone contract equals finalContract/);
+   assert.match(input,/Take Eleven/);
+   if(retry)assert.match(input,/schemaVersion\/game required/);
+   return {text:'{"name":"broken"}'};
+  }),/Invalid game specification/);
+  assert.equal(h.commits.length,0,'schema instructions never manufacture a valid candidate or approval');
+ }
+});
+test('schema retry fits counted input and reduced output inside the same stage while protecting future review',async()=>{
+ let capacity={authorized:true,remainingTokens:104000,stageRemainingTokens:14000,callsRemaining:8,routingCallsRemaining:8};
+ const runtime=modules({'@/lib/missions/store':{rpc:async(name)=>{assert.equal(name,'specification_call_capacity');return capacity;}}});
+ const budget=runtime('@/lib/missions/request-budget'),h=harness(null);
+ const claim={mission:{...h.mission,project_evidence:{projectProfile:'game',specificationBudget:{version:1}}},job:h.job('compose','compose')};
+ assert.equal(await budget.specificationRetryOutputLimit(claim,6500,16000),16000,'first composition unchanged');
+ claim.job.result={rejectedSpecification:'saved invalid draft'};
+ assert.equal(budget.specificationRoutingOutputFloor(claim,''),6000);
+ assert.equal(await budget.specificationRetryOutputLimit(claim,6500,16000),7500);
+ await budget.assertSpecificationStageCapacity(claim,14000);
+ await assert.rejects(budget.specificationRetryOutputLimit(claim,8500,16000),/reserved tokens|allowance/);
+ capacity={...capacity,remainingTokens:95000};
+ await assert.rejects(budget.specificationRetryOutputLimit(claim,6500,16000),/reserved tokens|allowance/);
+ capacity={...capacity,authorized:false};
+ await assert.rejects(budget.specificationRetryOutputLimit(claim,1,16000),/authorized|allowance/);
+});
 test('live-sized saved candidate is reused with zero inference; current review receives original research and full findings',async()=>{
  const h=harness();const compose=h.job('compose','compose');h.jobs.push(compose);
  await h.execute({mission:h.mission,job:compose},async()=>assert.fail('Saved specification must not be regenerated'));

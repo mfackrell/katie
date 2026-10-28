@@ -2,7 +2,7 @@
 
 This change extends the existing project worker, not its architecture. PRs #792
 (specification recovery), #794 (Full accounting binding), and #797 (durable
-specialist dispatch recovery) remain intact. No migration, production record,
+specialist dispatch recovery) remain intact. No production record,
 benchmark contract, approval, deadline, budget or Builder branch is changed.
 
 ## Reproduced defects and corrections
@@ -22,8 +22,24 @@ benchmark contract, approval, deadline, budget or Builder branch is changed.
    new coding repair. Automatic repair and research recovery now require a
    **blocked**, not stopped, mission. Explicit stops remain stops.
 
-Both regressions failed before the production correction and passed afterward.
-Only `lib/projects/worker.ts` changes production behavior.
+3. The later eight-assignment-capacity migration replaced `commit_mission_work`
+   without its original parent-project completion fence. The SQL fixture now
+   includes that production migration in order. A surgical migration restores
+   the parent running/current-mission/deadline check and rejects missing lease or
+   deadline fields. The eight-assignment capacity, accounting and review gates
+   are preserved. No existing project rows or permissions are rewritten.
+
+4. The existing six-package structured forecast and provisional specialist plan
+   exceed the legacy 4,000-character rationale field (4,811 characters in the
+   three-milestone fixture), preventing specification from reaching approval.
+   The fixture now installs the production resource-estimate constraints. A
+   storage-only migration permits up to 16,000 characters, preserving complete
+   JSON and a finite bound. No spending allowance or authorization changes.
+   Regression coverage verifies the retained full forecast, unchanged allowance,
+   and refusal of 16,001 characters.
+
+All four defects were reproduced before correction. Production changes are
+limited to `lib/projects/worker.ts` and the two surgical migrations.
 
 ## Reproducible integration evidence
 
@@ -73,7 +89,10 @@ four coding issues exist: three milestones plus the permitted repair.
 The existing #797 SQL/runtime tests additionally cover unsent transient dispatch,
 uncertain external acceptance, exact-marker reconciliation, no duplicate POST,
 missing/stale leases, uncertain charges, disabled/changed specialist identity,
-expired approval/deadline, resource exhaustion and permanent blockers. Existing
+expired approval/deadline, resource exhaustion and permanent blockers. New SQL
+regressions also refuse commits for blocked/expired/unbound parents and null
+assignment leases, lease deadlines or mission deadlines without changing the
+saved child row. Existing
 project SQL tests enforce concurrent reservations, pause/stop, approval binding,
 review checkpoints and completion gates. New runtime regressions reject repair
 with missing/wrong-scope final evidence, exhausted cycles/attempts, stopped

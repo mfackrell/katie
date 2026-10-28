@@ -43,7 +43,7 @@ export async function verifyProjectLifecyclePostgres(db){
   await db.query("update work_projects set status='paused' where status='running';update agent_missions set status='blocked' where status='running'");
   await db.query('reset role');
   // Metadata queried by current runtime; no authorization or lifecycle stubs.
-  await db.query("alter table work_projects add column if not exists budget_authorization_source text, add column if not exists estimated_tokens bigint, add column if not exists estimate_rationale text, add column if not exists estimate_updated_at timestamptz;create table if not exists model_registry(provider_name text,model_id text,pricing_status text,pricing_input_per_1m numeric,pricing_output_per_1m numeric,pricing_verified_at timestamptz,is_active boolean)");
+  await db.query("create table if not exists model_registry(provider_name text,model_id text,pricing_status text,pricing_input_per_1m numeric,pricing_output_per_1m numeric,pricing_verified_at timestamptz,is_active boolean)");
   await db.query('alter table benchmark_full_project_bindings add column trial_id uuid, add column benchmark_contract_hash text, add column baseline_sha text, add column model text');
   await db.query('set role service_role');
   const actor=randomUUID(),chat=randomUUID(),pid=randomUUID();
@@ -122,6 +122,21 @@ export async function verifyProjectLifecyclePostgres(db){
      await db.query('update mission_assignments set available_at=now() where id=$1',[ready.id]);
      const claim=await rpc('claim_mission_work');assert.equal(claim.job.id,ready.id);
      assert.equal(await rpc('claim_mission_work'),null,'dependent composition cannot run before implementation');
+     // A live child lease is insufficient after its parent loses eligibility.
+     // Roll back each controlled boundary change; never resume or extend it.
+     for(const boundary of ['blocked','deadline','unbound','null-lease','null-lease-until','null-mission-deadline']){
+      await db.query('savepoint parent_boundary');
+      if(boundary==='blocked')await db.query("update work_projects set status='blocked' where id=$1",[pid]);
+      if(boundary==='deadline')await db.query("update work_projects set deadline=now()-interval '1 second' where id=$1",[pid]);
+      if(boundary==='unbound')await db.query('update work_projects set active_mission_id=null where id=$1',[pid]);
+      if(boundary==='null-lease')await db.query('update mission_assignments set lease=null where id=$1',[ready.id]);
+      if(boundary==='null-lease-until')await db.query('update mission_assignments set lease_until=null where id=$1',[ready.id]);
+      if(boundary==='null-mission-deadline')await db.query('update agent_missions set deadline=null where id=$1',[p.active_mission_id]);
+      const before=(await db.query('select to_jsonb(j) saved from mission_assignments j where id=$1',[ready.id])).rows[0].saved;
+      assert.equal(await rpc('commit_mission_work',{p_id:ready.id,p_lease:boundary==='null-lease'?null:claim.job.lease,p_result:{text:'ineligible parent result'}}),false,'parent completion fence: '+boundary);
+      assert.deepEqual((await db.query('select to_jsonb(j) saved from mission_assignments j where id=$1',[ready.id])).rows[0].saved,before,'blocked commit must not alter saved work');
+      await db.query('rollback to savepoint parent_boundary');await db.query('release savepoint parent_boundary');
+     }
      await db.query("update mission_assignments set lease_until=now()-interval '1 second' where id=$1",[ready.id]);
      assert.equal(await rpc('commit_mission_work',{p_id:ready.id,p_lease:claim.job.lease,p_result:{text:'stale worker'}}),false);
      fired.add('specialist-lease');
@@ -136,6 +151,12 @@ await load('@/lib/missions/worker').runMissionBatch(model);};
    const p=await state();
    if(p.status==='awaiting_approval'){
     assert.equal(approved,null);approved=p.approval_hash;
+    assert.ok(p.estimate_rationale.length>4000&&p.estimate_rationale.length<=16000,'complete structured forecast survives its real production storage constraint');
+    assert.equal(JSON.parse(p.estimate_rationale).specialistPlan.independentlySubmitted,false);
+    assert.equal(p.token_allowance,600000,'forecast did not increase spending authority');
+    await db.query('savepoint oversized_forecast');
+    await assert.rejects(db.query('update work_projects set estimate_rationale=$2 where id=$1',[pid,'x'.repeat(16001)]),/work_projects_estimate_rationale_size/);
+    await db.query('rollback to savepoint oversized_forecast');await db.query('release savepoint oversized_forecast');
     await rpc('control_work_project',{p_id:pid,p_actor:actor,p_chat:chat,p_action:'approve',p_hash:approved});
    }else assert.equal(['blocked','failed'].includes(p.status),false,JSON.stringify({iteration:i,phase:p.phase,status:p.status,detail:p.detail}));
    if(p.status==='completed'){completed=true;break;}
