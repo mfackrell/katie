@@ -40,7 +40,10 @@ DO $$ declare p work_projects; original work_projects; l uuid; m uuid; ok boolea
  select * into strict p from work_projects where id=p.id;
  if p.status<>'running' or p.progress_since>now()-interval '45 minutes' then raise exception 'Paused time blocked resume or was mislabeled as progress';end if;
  if p.deadline<>now()+interval '3 hours' or p.token_allowance<>original.token_allowance or p.completion_contract<>contract then raise exception 'Resume changed authority';end if;
+ -- Fixture clock setup only: service_role cannot rewrite append-only events.
+ execute 'reset role';
  update project_events set created_at=now()-interval '46 minutes' where project_id=p.id and event='resume' and data->>'previous_status'='paused';
+ execute 'set local role service_role';
  update work_projects set lease=l,lease_until=now()+interval '5 minutes' where id=p.id;
  perform finish_work_project(p.id,l,'wait');
  if (select status from work_projects where id=p.id)<>'blocked' then raise exception 'Resumed inactivity did not terminate';end if;
