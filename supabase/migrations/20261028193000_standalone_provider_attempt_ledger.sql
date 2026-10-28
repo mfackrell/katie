@@ -308,9 +308,9 @@ begin
  select * into w from standalone_workflows where owner_id=p_owner and request_id=p_request for update;
  if not found or w.status<>'running' or w.lease_token is distinct from p_lease then raise exception 'STANDALONE_WORKFLOW_LEASE_LOST';end if;
  if p_status not in('paused','completed','failed') then raise exception 'STANDALONE_WORKFLOW_STATUS_INVALID';end if;
- if p_status='completed' and exists(select 1 from standalone_provider_attempts where owner_id=p_owner and request_id=p_request and state in('paused','reserved','dispatched','uncertain')) then
+ if p_status in('completed','failed') and exists(select 1 from standalone_provider_attempts where owner_id=p_owner and request_id=p_request and state in('paused','reserved','dispatched','uncertain')) then
  p_status:='paused';
- p_error:=coalesce(p_error,'Unresolved provider attempts prevent workflow completion.');end if;
+ p_error:=coalesce(p_error,'Unresolved provider attempts require workflow pause.');end if;
  update standalone_workflows set status=p_status,result=p_result,error=p_error,lease_token=null,lease_expires_at=null,updated_at=now()
  where owner_id=p_owner and request_id=p_request returning * into w;return to_jsonb(w);
 end $$;

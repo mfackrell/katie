@@ -24,7 +24,7 @@ beforeEach(()=>{
   }else if(name==='standalone_checkpoint_workflow'){
    assert.equal(args.p_lease,stored.lease_token);checkpoints++;stored.checkpoints[args.p_key]=args.p_value;data=args.p_value;
   }else if(name==='standalone_finish_workflow'){
-   assert.equal(args.p_lease,stored.lease_token);stored.status=args.p_status==='completed'&&pending?'paused':args.p_status;stored.result=args.p_result;data=stored;
+   assert.equal(args.p_lease,stored.lease_token);stored.status=args.p_status!=='paused'&&pending?'paused':args.p_status;stored.result=args.p_result;data=stored;
   }else throw Error(`Unexpected RPC ${name}`);
   return {data:JSON.parse(JSON.stringify(data)),error:null};
  }} as unknown as NonNullable<typeof globalThis.__KATIE_SUPABASE_ADMIN_CLIENT__>;
@@ -62,4 +62,20 @@ test('a hidden pending attempt remains visible even when its optional caller ret
  pending=true;
  const response=await executeStandaloneWorkflow(request(),payload,async()=>new Response('{"type":"content","text":"answer already saved"}\n',{headers:{'content-type':'application/x-ndjson'}}));
  assert.equal(stored.status,'paused');assert.match(await response.text(),/standalone_pending_attempt/);
+});
+
+test('a transient HTTP failure cannot strand already reserved supporting work',async()=>{
+ pending=true;
+ const response=await executeStandaloneWorkflow(request(),payload,async()=>Response.json({error:'Transient preparation unavailable'},{status:503}));
+ assert.equal(response.status,402);assert.equal(stored.status,'paused');assert.equal((await response.json()).code,'standalone_pending_attempt');
+});
+test('a generic preparation exception surfaces the database durable pause instead of terminal failure',async()=>{
+ pending=true;
+ await assert.rejects(executeStandaloneWorkflow(request(),payload,async()=>{throw Error('Temporary discovery failure')}),error=>Boolean(error&&typeof error==='object'&&'code' in error&&error.code==='standalone_pending_attempt'));
+ assert.equal(stored.status,'paused');
+});
+test('SDK-wrapped accounting denial preserves its pause across execution boundaries',async()=>{
+ const denial=Object.assign(Error('Connection error'),{cause:Object.assign(Error('Approval required'),{code:'standalone_approval_required'})});
+ await assert.rejects(executeStandaloneWorkflow(request(),payload,async()=>{throw denial}),error=>error===denial);
+ assert.equal(stored.status,'paused');
 });

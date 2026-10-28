@@ -4,7 +4,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { authorizeStandaloneCaller } from './auth';
 import { StandaloneAccountingError } from './ledger';
 import { getSupabaseAdminClient } from '@/lib/data/supabase/admin';
-import { runWithStandaloneAccounting } from './context';
+import { runWithStandaloneAccounting, isStandaloneAccountingError } from './context';
 import { canonicalJson, type JsonValue } from './estimate';
 
 type Workflow = {owner_id:string;actor_id:string;chat_id:string;request_id:string;request_hash:string;request_body:Record<string,unknown>;status:string;lease_token:string;created_at:string;checkpoints:Record<string,unknown>;claimed?:boolean;blocked?:string;result?:{body:string;status:number;headers:[string,string][]}};
@@ -76,8 +76,9 @@ export async function executeStandaloneWorkflow(request:NextRequest,payload:Reco
       return new Response(bytes,{status:response.status,headers:response.headers});
     }));
   } catch(error) {
-    const terminal=error instanceof StandaloneAccountingError || Boolean(error&&typeof error==='object'&&'code' in error&&String(error.code).startsWith('standalone_'));
-    await finish(terminal?'paused':'failed',undefined,error instanceof Error?error.message:String(error));
+    const terminal=isStandaloneAccountingError(error);
+    const finished=await finish(terminal?'paused':'failed',undefined,error instanceof Error?error.message:String(error));
+    if (finished.status==='paused'&&!terminal) throw Object.assign(new StandaloneAccountingError('pending_attempt','The saved request remains paused because supporting paid work requires approval or reconciliation.'),{cause:error});
     throw error;
   }
 }

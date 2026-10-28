@@ -210,6 +210,21 @@ test('standalone ledger: real PostgreSQL atomic admission, receipts, ownership a
   await one.query('commit');assert.equal((await racingFinish).status,'paused','completion waits for concurrent admission and cannot conceal the committed reservation');
 
 
+  const failedPendingWorkflow={...wf,p_request:'failed-pending',p_hash:'e'.repeat(64)};
+  const failedPendingLease=await rpc(one,'claim_workflow',failedPendingWorkflow);
+  const pendingAfterFailure=await rpc(one,'admit',input('failed-helper','101','failed-pending'));
+  const failedButPaused=await rpc(two,'finish_workflow',{p_owner:owner,p_request:'failed-pending',p_lease:failedPendingLease.lease_token,p_status:'failed',p_error:'Optional feature returned a non-2xx response'});
+  assert.equal(failedButPaused.status,'paused','a failure with a pending approval remains resumable');
+  assert.equal((await rpc(fresh,'claim_workflow',{...failedPendingWorkflow,p_resume:true})).blocked,'approval_required');
+  await approve(pendingAfterFailure);
+  const failedResume=await rpc(fresh,'claim_workflow',{...failedPendingWorkflow,p_resume:true});assert.equal(failedResume.claimed,true);
+  assert.ok(await rpc(one,'claim_dispatch',{p_owner:owner,p_attempt:pendingAfterFailure.id}));
+  await rpc(one,'settle',{...settle,p_attempt:pendingAfterFailure.id,p_receipt:'failed-resumed-receipt',p_actual:'90'});
+  assert.equal((await rpc(fresh,'finish_workflow',{p_owner:owner,p_request:'failed-pending',p_lease:failedResume.lease_token,p_status:'completed',p_result:{answer:'resumed after failure'}})).status,'completed');
+  const genuineFailure={...wf,p_request:'failed-without-pending',p_hash:'f'.repeat(64)};
+  const genuineFailureLease=await rpc(one,'claim_workflow',genuineFailure);
+  assert.equal((await rpc(two,'finish_workflow',{p_owner:owner,p_request:'failed-without-pending',p_lease:genuineFailureLease.lease_token,p_status:'failed',p_error:'Invalid input; no provider attempt was admitted'})).status,'failed');
+  assert.equal((await rpc(one,'claim_workflow',{...genuineFailure,p_resume:true})).blocked,'failed','failures without pending exposure remain terminal');
   await assert.rejects(one.query('update standalone_provider_attempts set actual_microusd=0'),/permission denied/);
   await assert.rejects(one.query("update standalone_pricing_versions set metadata='{}'"),/permission denied/);
   await one.query('set role authenticated');await assert.rejects(rpc(one,'snapshot',{p_owner:owner}),/permission denied/);
