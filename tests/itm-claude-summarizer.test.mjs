@@ -76,7 +76,7 @@ test("native Claude request keeps plain-text output and the existing summary bud
   assert.equal(h.calls.length, 1);
   const { path, body } = h.calls[0];
   assert.equal(path, "/messages"); assert.equal(body.model, "claude-sonnet-5-5");
-  assert.equal(body.max_tokens, 2500); assert.equal(body.thinking, undefined);
+  assert.equal(body.max_tokens, 4000); assert.equal(body.thinking, undefined);
   assert.equal(body.output_config, undefined);
   for (const unsupported of ["temperature", "top_p", "top_k", "response_format", "tools"]) assert.equal(body[unsupported], undefined);
   assert.equal(body.messages.length, 1); assert.equal(body.messages[0].role, "user");
@@ -203,4 +203,22 @@ test("no older conversation and deleted chat do not call the model", async () =>
   await h.run(); assert.equal(h.resets.length, 1);
   const deleted = harness({ missingChat: true }); await deleted.run();
   assert.equal(deleted.calls.length + deleted.resets.length + deleted.writes.length, 0);
+});
+
+test("rolling ITM character ceiling rejects oversized complete output without moving cursor",async()=>{
+  const h=harness({
+    prior:{ version:2,summary:"Retain previous context.",summarizedThroughMessageId:"m0",sourceMessageCount:1 },
+    respond:()=>reply("x".repeat(8501))
+  });
+  await h.run();
+  assert.equal(h.writes.length,0);
+  assert.equal(h.saved().summary,"Retain previous context.");
+  assert.ok(h.logs.some(log=>log.level==="error"));
+});
+test("rolling ITM accepts a complete response within the character budget",async()=>{
+  const content="x".repeat(7500);
+  const h=harness({respond:()=>reply(content)});
+  await h.run();
+  assert.equal(h.writes.length,1);
+  assert.equal(h.saved().summary,content);
 });
