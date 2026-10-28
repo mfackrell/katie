@@ -222,3 +222,34 @@ test("rolling ITM accepts a complete response within the character budget",async
   assert.equal(h.writes.length,1);
   assert.equal(h.saved().summary,content);
 });
+
+test("a complete but oversized ITM receives one semantic compaction before advancing the cursor", async () => {
+  const prior = { version: 2, summary: "P".repeat(8193), summarizedThroughMessageId: "m0", sourceMessageCount: 1 };
+  const h = harness({
+    prior,
+    respond: n => n === 1 ? reply("D".repeat(9686)) : reply("C".repeat(6500)),
+  });
+  await h.run();
+  assert.equal(h.calls.length, 2, "ordinary update plus one bounded repair");
+  assert.equal(h.calls[0].body.max_tokens, 4000);
+  assert.equal(h.calls[1].body.max_tokens, 2800);
+  assert.match(h.calls[1].body.system, /Compress it SEMANTICALLY/);
+  assert.equal(h.writes.length, 1);
+  assert.equal(h.saved().summary.length, 6500);
+  assert.equal(h.saved().summarizedThroughMessageId, "m1");
+  assert.equal(h.writes[0].p_expected_cursor, "m0");
+  assert.ok(h.logs.some(event => event.args[0] === "[Summarizer] Oversized summary compacted"));
+});
+
+test("compaction failures are bounded and retain the source cursor", async () => {
+  const prior = { version: 2, summary: "Existing context", summarizedThroughMessageId: "m0", sourceMessageCount: 1 };
+  const h = harness({
+    prior,
+    respond: n => n % 2 ? reply("X".repeat(9686)) : reply("Still over budget".repeat(700)),
+  });
+  await h.run();
+  assert.equal(h.calls.length, 4, "two existing batch attempts, each with at most one repair");
+  assert.equal(h.writes.length, 0);
+  assert.deepEqual(h.saved(), prior);
+  assert.ok(h.logs.some(event => event.level === "error"));
+});
