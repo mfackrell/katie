@@ -7,6 +7,8 @@ import {
 import { lookupRegistryModel, type RegistryRoutingModel } from "@/lib/models/registry";
 import { LlmProvider } from "@/lib/providers/types";
 import type { ActorRoutingIntent, ActorRoutingProfile } from "@/lib/types/chat";
+import { isTerminalAttemptError, isPremiumAutomaticModel, withProviderAttemptTimeout } from "@/lib/collaboration/attempt-policy";
+import { runWithStandaloneActivity } from "@/lib/standalone-accounting/context";
 
 export type ProviderName = "openai" | "google" | "grok" | "anthropic";
 type RegistryLookup = Map<string, RegistryRoutingModel> | undefined;
@@ -765,8 +767,7 @@ const CONTROL_PLANE_VERIFIED_MODEL_IDS: Record<ProviderName, string[]> = {
     "gpt-5.4",
     "gpt-5.3-codex",
     "gpt-5.2-unified",
-    "gpt-5.2",
-    "o3-pro"
+    "gpt-5.2"
   ],
   anthropic: [
     "claude-sonnet-5",
@@ -797,6 +798,7 @@ function isControlPlaneJsonInstructionCompatible(providerName: ProviderName, mod
 }
 
 function isEligibleControlPlaneModel(providerName: ProviderName, modelId: string, registryLookup?: RegistryLookup): boolean {
+  if (isPremiumAutomaticModel(providerName, modelId)) return false;
   const registry = lookupRegistryModel(registryLookup, providerName, modelId);
   const routingEligibility = registry?.routing_eligibility ?? "restricted";
   if (routingEligibility === "disabled" || routingEligibility === "manual_override_only") {
@@ -805,16 +807,6 @@ function isEligibleControlPlaneModel(providerName: ProviderName, modelId: string
   const supportsText = registry?.supports_text ?? modelSupportsIntent(providerName, modelId, "general-text", registryLookup);
   const supportsImageGen = registry?.supports_image_generation ?? isImageGenerationModel(providerName, modelId);
   return Boolean(supportsText) && !supportsImageGen && isControlPlaneJsonInstructionCompatible(providerName, modelId);
-}
-
-function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
-  let timer: ReturnType<typeof setTimeout> | null = null;
-  const timeout = new Promise<T>((_, reject) => {
-    timer = setTimeout(() => reject(new Error(`${label}_timeout_${timeoutMs}ms`)), timeoutMs);
-  });
-  return Promise.race([promise, timeout]).finally(() => {
-    if (timer) clearTimeout(timer);
-  });
 }
 
 async function executeControlPlaneJsonTask<T>(args: {
@@ -827,15 +819,16 @@ async function executeControlPlaneJsonTask<T>(args: {
   for (const candidate of args.decisionProviders) {
     const sourceLabel = `${candidate.provider.name}:${candidate.modelId}`;
     try {
-      const response = await withTimeout(
-        candidate.provider.generate({
+      const response = await withProviderAttemptTimeout(
+        signal => runWithStandaloneActivity(`control_plane_${args.taskName}`, () => candidate.provider.generate({
           name: "Katie Control Plane",
           persona: "You are a strict JSON-only control-plane assistant for routing decisions.",
           summary: "",
           history: [],
           user: args.userPrompt,
-          modelId: candidate.modelId
-        }),
+          modelId: candidate.modelId,
+          signal,
+        })),
         args.timeoutMs,
         `${args.taskName}:${sourceLabel}`
       );
@@ -845,6 +838,7 @@ async function executeControlPlaneJsonTask<T>(args: {
       }
       console.warn(`[ControlPlane:${args.taskName}] rejected_response provider=${sourceLabel}`);
     } catch (error) {
+      if (isTerminalAttemptError(error)) throw error;
       console.warn(`[ControlPlane:${args.taskName}] provider_failed provider=${sourceLabel}`, error);
     }
   }

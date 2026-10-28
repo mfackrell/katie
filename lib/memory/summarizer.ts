@@ -1,3 +1,5 @@
+import { isStandaloneAccountingError } from "@/lib/standalone-accounting/context";
+import { createActivityAccountingFetch } from "@/lib/standalone-accounting/activity";
 import OpenAI from "openai";
 import { getSupabaseAdminClient } from "@/lib/data/supabase/admin";
 import {
@@ -20,10 +22,10 @@ const ITM_HARD_MAX_CHARACTERS = 8500;
 const SUMMARY_MAX_TOKENS = 4000;
 
 // Reuse the installed SDK only as native Claude HTTP transport, matching LTM.
-// Its default transport retries/timeouts are unchanged; no provider fallback.
+// Every actual transmission is accounted; SDK retries are disabled.
 const apiKey = process.env.CLAUDE_API_KEY ?? process.env["claude_api_key"];
 const client = apiKey ? new OpenAI({
-  apiKey,
+  apiKey, maxRetries: 0, fetch: createActivityAccountingFetch("anthropic", "memory-summary"),
   baseURL: "https://api.anthropic.com/v1",
   defaultHeaders: { Authorization: null, "x-api-key": apiKey, "anthropic-version": "2023-06-01" },
 }) : null;
@@ -199,7 +201,8 @@ export async function maybeUpdateSummary(chatId: string): Promise<void> {
       let candidate: string;
       try {
         candidate = await summarizeInto(summary, messagesToFold.slice(offset, offset + size));
-      } catch {
+      } catch (accountingError) {
+    if (isStandaloneAccountingError(accountingError)) throw accountingError;
         // One attempt with half as many messages. If that fails, leave the
         // source cursor exactly where it was and retry on the next invocation.
         size = Math.min(10, size);
@@ -236,6 +239,7 @@ export async function maybeUpdateSummary(chatId: string): Promise<void> {
       offset += size;
     }
   } catch (error: unknown) {
+    if (isStandaloneAccountingError(error)) throw error;
     console.error("[Summarizer] Failed to update intermediate memory:", error);
   }
 }

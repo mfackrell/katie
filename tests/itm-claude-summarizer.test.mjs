@@ -20,10 +20,18 @@ const messages = count => Array.from({ length: count }, (_, i) => ({
 }));
 function harness({ history = messages(62), prior = {}, env = { CLAUDE_API_KEY: "fake-claude-key" },
   respond = () => reply(), commit = () => ({ data: true, error: null }), missingChat = false } = {}) {
-  const calls = [], constructors = [], writes = [], resets = [], logs = [];
+  const calls = [], constructors = [], writes = [], resets = [], logs = [], activities = [];
+  const guardedFetch = async () => { throw new Error("Protocol transport must not access a real provider"); };
+  const accountingError = error => {
+    let current = error;
+    for (let depth = 0; current && typeof current === "object" && depth < 8; depth++, current = current.cause) {
+      if (current.terminal === true || typeof current.code === "string" && current.code.startsWith("standalone_")) return true;
+    }
+    return false;
+  };
   let saved = copy(prior), reads = 0;
   class Transport {
-    constructor(options) { constructors.push(copy(options)); }
+    constructor(options) { constructors.push({ ...copy(options), fetch: options.fetch }); }
     async post(path, options) {
       calls.push({ path, ...copy(options) });
       return respond(calls.length, options.body);
@@ -48,6 +56,8 @@ function harness({ history = messages(62), prior = {}, env = { CLAUDE_API_KEY: "
   const module = { exports: {} };
   const dependencies = {
     openai: Transport,
+    "@/lib/standalone-accounting/activity": { createActivityAccountingFetch(provider, activity) { activities.push({ provider, activity }); return guardedFetch; } },
+    "@/lib/standalone-accounting/context": { isStandaloneAccountingError: accountingError },
     "@/lib/data/persistence-store": store,
     "@/lib/data/supabase/admin": { getSupabaseAdminClient: () => admin },
     "@/lib/memory/memory-contract": { SHORT_TERM_MESSAGE_LIMIT: 60 },
@@ -58,7 +68,7 @@ function harness({ history = messages(62), prior = {}, env = { CLAUDE_API_KEY: "
     console: Object.fromEntries(["error", "warn", "info"].map(level => [level, (...args) => logs.push({ level, args })])),
     require(name) { assert.ok(name in dependencies, `Unexpected dependency: ${name}`); return dependencies[name]; },
   });
-  return { run: () => module.exports.maybeUpdateSummary("chat"), calls, constructors, writes, resets, logs,
+  return { run: () => module.exports.maybeUpdateSummary("chat"), calls, constructors, writes, resets, logs, activities, guardedFetch,
     saved: () => saved, reads: () => reads };
 }
 
@@ -72,7 +82,9 @@ test("native Claude request keeps plain-text output and the existing summary bud
   assert.deepEqual(h.constructors[0].defaultHeaders, {
     Authorization: null, "x-api-key": "fake-claude-key", "anthropic-version": "2023-06-01",
   });
-  assert.equal(h.constructors[0].maxRetries, undefined); assert.equal(h.constructors[0].timeout, undefined);
+  assert.equal(h.constructors[0].maxRetries, 0); assert.equal(h.constructors[0].timeout, undefined);
+  assert.equal(h.constructors[0].fetch, h.guardedFetch);
+  assert.deepEqual(h.activities, [{ provider: "anthropic", activity: "memory-summary" }]);
   assert.equal(h.calls.length, 1);
   const { path, body } = h.calls[0];
   assert.equal(path, "/messages"); assert.equal(body.model, "claude-sonnet-5-5");
@@ -159,6 +171,19 @@ test("provider failures preserve the saved cursor and use only the existing smal
   const first = h.calls[0].body.messages[0].content, second = h.calls[1].body.messages[0].content;
   assert.ok(first.includes(": source 21")); assert.ok(second.includes(": source 11"));
   assert.ok(!second.includes(": source 12"));
+});
+
+test("paid admission denial propagates without the smaller-batch retry or checkpoint movement", async () => {
+  const prior = { version: 2, summary: "Keep", summarizedThroughMessageId: "m1", sourceMessageCount: 2 };
+  for (const code of ["standalone_approval_required", "standalone_budget_exceeded", "standalone_outcome_unknown"]) {
+    const denial = Object.assign(new Error("Paid transmission blocked"), { code, terminal: true });
+    const wrapped = new Error("SDK connection error", { cause: denial });
+    const h = harness({ history: messages(84), prior, respond: () => { throw wrapped; } });
+    await assert.rejects(h.run(), error => error === wrapped);
+    assert.equal(h.calls.length, 1); assert.equal(h.writes.length, 0); assert.equal(h.resets.length, 0);
+    assert.deepEqual(h.saved(), prior); assert.equal(h.constructors[0].maxRetries, 0);
+    assert.ok(!h.logs.some(log => log.level === "warn" && String(log.args[0]).includes("retrying smaller batch")));
+  }
 });
 
 test("smaller-batch recovery advances only successfully summarized messages", async () => {

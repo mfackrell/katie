@@ -12,3 +12,5 @@ tsconfig.tsbuildinfo
 /work/
 
 supabase/.temp/
+
+.provider-test-dist/

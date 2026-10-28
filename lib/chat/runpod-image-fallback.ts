@@ -1,3 +1,4 @@
+import { blockUnaccountedPaidDispatch } from "@/lib/standalone-accounting/unsupported";
 import type { ProviderResponse } from "@/lib/providers/types";
 
 /**
@@ -66,7 +67,8 @@ async function completedRunpodOutput(
       throw new Error("RunPod image generation is still processing; bounded polling expired.");
     }
     await sleepFn(POLL_INTERVAL_MS);
-    const response = await fetchFn(
+    blockUnaccountedPaidDispatch("RunPod image generation");
+  const response = await fetchFn(
       `https://api.runpod.ai/v2/${RUNPOD_IMAGE_MODEL_ID}/status/${job.id}`,
       {
         method: "GET",
@@ -154,6 +156,7 @@ export async function generateRunpodImage(prompt: string, deps: {
   if (!apiKey) throw new Error("RunPod API key is not configured.");
   if (!prompt.trim() || prompt.length > 10000) throw new Error("Invalid RunPod image prompt.");
   const fetchFn = deps.fetchFn ?? fetch;
+  blockUnaccountedPaidDispatch("RunPod image generation");
   const response = await fetchFn(
     `https://api.runpod.ai/v2/${RUNPOD_IMAGE_MODEL_ID}/runsync`,
     {

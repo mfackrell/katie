@@ -1,3 +1,6 @@
+import { scheduleMemoryPersistence } from "@/lib/standalone-accounting/memory-scheduling";
+import { executeStandaloneWorkflow, currentStandaloneWorkflow, workflowMessageId, cachedWorkflowValue, workflowTimestamp } from "@/lib/standalone-accounting/workflow";
+import { isStandaloneAccountingError, runWithOrchestratorAccounting } from "@/lib/standalone-accounting/context";
 import {projectForChat} from '@/lib/projects/store';
 import {loadFullBenchmarkBinding} from '../../../scripts/benchmark/full-project-gate.mjs';
 import { isExplicitKatieSelfInspectionRequest } from "@/lib/tools/self-inspection-intent";
@@ -443,7 +446,7 @@ function buildGenerationParams({
 }) {
   return {
     name,
-    persona: `${persona}\n\nCURRENT_REQUEST_TIMESTAMP_UTC: ${new Date().toISOString()}\nTimestamp metadata in this instruction and in conversation-history headers (including [Message timestamp: ...]) is for internal chronology only. Never reproduce or prefix a user-facing reply with these timestamp labels or raw timestamps unless the user specifically asks for them.`,
+    persona: `${persona}\n\nCURRENT_REQUEST_TIMESTAMP_UTC: ${workflowTimestamp()}\nTimestamp metadata in this instruction and in conversation-history headers (including [Message timestamp: ...]) is for internal chronology only. Never reproduce or prefix a user-facing reply with these timestamp labels or raw timestamps unless the user specifically asks for them.`,
     summary,
     history,
     user: message,
@@ -639,15 +642,23 @@ async function loadRepoGenerationContext(activeRepo: ActiveRepoContext): Promise
 
 export async function POST(request: NextRequest) {
   try {
+    if (request.headers.get("content-type")?.includes("application/json")) {
+      const body = await request.clone().json().catch(() => null);
+      if (body?.standaloneResume === true) {
+        const resume = z.object({actorId:z.string().uuid(),chatId:z.string().uuid(),standaloneResume:z.literal(true)}).strict().safeParse(body);
+        if (!resume.success) return NextResponse.json({error:"Invalid saved request resume"},{status:400});
+        return await executeStandaloneWorkflow(request, resume.data, executeChat);
+      }
+    }
     let payload: RequestPayload;
     try { payload = await parseIncomingPayload(request.clone()); }
-    catch { return executeChat(request); }
+    catch { return NextResponse.json({error:"Invalid request payload"},{status:400}); }
     // A database-owned EO identity is the only way into management mode.
     // Intercept BEFORE attachments, memory, model collaboration, and ordinary chat.
     const {data:actorRole,error:actorRoleError}=await getSupabaseAdminClient()
       .from('actors').select('actor_kind').eq('id',payload.actorId).maybeSingle<{actor_kind:string}>();
     if(actorRoleError||!actorRole)return NextResponse.json({error:'Actor identity unavailable'},{status:503});
-    if(actorRole.actor_kind==='executive')return executeExecutiveCommand(payload,request);
+    if(actorRole.actor_kind==='executive')return runWithOrchestratorAccounting(()=>executeExecutiveCommand(payload,request));
     const task = await authorizeManagedChat(request, payload);
     if (task) {
       const claimed = await agentRpc<boolean>("claim_agent_execution", { p_id: task.id, p_request: task.request_id });
@@ -656,13 +667,16 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ task: saved, status: saved.status, requestId: task.request_id }, { status: 202 });
       }
     }
-    const response = await runAgentTask(task, () => executeChat(request));
+    const response = task
+      ? await runAgentTask(task, () => runWithOrchestratorAccounting(() => executeChat(request)))
+      : await executeStandaloneWorkflow(request, payload, executeChat);
     if (task && !response.ok) {
       const { error } = await getSupabaseAdminClient().from("agent_tasks").eq("id", task.id).eq("request_id", task.request_id).update({ status: "failed", details: "Execution was rejected before streaming. Continue the saved task to retry.", updated_at: new Date().toISOString() });
       if (error) throw new Error("Task failure status could not be persisted");
     }
     return response;
-  } catch {
+  } catch (error) {
+    if (isStandaloneAccountingError(error)) return NextResponse.json({error:error instanceof Error?error.message:String(error),code: error && typeof error === "object" && "code" in error ? error.code : "standalone_accounting_unavailable"},{status:error && typeof error === "object" && "status" in error && typeof error.status === "number" ? error.status : 402});
     return NextResponse.json({ error: "Task configuration or permissions denied. Check the saved task and request ID." }, { status: 403 });
   }
 }
@@ -732,15 +746,15 @@ async function executeChat(request: NextRequest) {
     const effectiveRepoId = activeRepoId ?? selfRepoId;
     const newAttachments = await hydrateStoredAttachments(fileReferences ?? []);
     const legacyImageSources = new Map<string, File>();
-    for (const image of requestImages ?? []) {
+    for (const [imageIndex, image] of (requestImages ?? []).entries()) {
       const file = imageFileFromDataUrl(image);
-      const reference = await buildImageReference(file);
+      const reference = await cachedWorkflowValue(`image-reference:${imageIndex}`, () => buildImageReference(file));
       newAttachments.push(reference);
       legacyImageSources.set(reference.fileId, file);
     }
     if (newAttachments.length > 5) return NextResponse.json({ error: "Attach up to five files per message." }, { status: 400 });
-    const attachmentHistory = await getRecentMessages(chatId, 60);
-    const catalog = benchmarkRelay || currentAgentTask()?.snapshot.attachments === false ? [] : await loadActorAttachmentCatalog(actorId, async () => {
+    const attachmentHistory = await cachedWorkflowValue("attachment-history", () => getRecentMessages(chatId, 60));
+    const catalog = benchmarkRelay || currentAgentTask()?.snapshot.attachments === false ? [] : await cachedWorkflowValue("attachment-catalog", () => loadActorAttachmentCatalog(actorId, async () => {
       const actorChats = await listChatsByActorId(actorId);
       const ownedChatIds = new Set(actorChats.map(chat => chat.id));
       const files: ConversationAttachment[] = [];
@@ -755,7 +769,7 @@ async function executeChat(request: NextRequest) {
         files.push(...entries.map(file => ({ ...file, chatId: file.chatId ?? chat.id, actorId })).filter(file => ownedChatIds.has(file.chatId)));
       }
       return files;
-    });
+    }));
     const temporalIntent = timelineIntent(message);
     const freshVideoReferences = newAttachments.filter(file => file.mimeType.startsWith("video/"));
     const timelineSelection = temporalIntent
@@ -774,11 +788,11 @@ async function executeChat(request: NextRequest) {
     } catch { console.warn("[Media memory] video recovery unavailable"); }
     // Source restoration precedes model classification. Require the same
     // durable task/question binding as review resumption before borrowing scope.
-    const taskProgressUserMessageId = crypto.randomUUID();
-    const taskProgressAssistantMessageId = crypto.randomUUID();
+    const taskProgressUserMessageId = workflowMessageId("user") ?? crypto.randomUUID();
+    const taskProgressAssistantMessageId = workflowMessageId("assistant") ?? crypto.randomUUID();
     const priorTaskProgress = mergeTaskProjects(
-      syncTaskProgress(await loadTaskProgress(actorId, chatId), attachmentHistory),
-      currentAgentTask() ? [] : await loadActorTaskProjects(actorId),
+      syncTaskProgress(await cachedWorkflowValue("task-progress", () => loadTaskProgress(actorId, chatId)), attachmentHistory),
+      currentAgentTask() ? [] : await cachedWorkflowValue("actor-projects", () => loadActorTaskProjects(actorId)),
     );
     // Resolve task identity from firsthand text BEFORE historical files can
     // influence routing. The later model router cannot silently replace it.
@@ -1296,7 +1310,7 @@ async function executeChat(request: NextRequest) {
     }
 
     console.log("[Chat API] Assembling context and selecting provider...");
-    const { name, persona, summary, history: currentHistory, actorRoutingProfile, reviewMode } = await assembleContext(actorId, chatId);
+    const { name, persona, summary, history: currentHistory, actorRoutingProfile, reviewMode } = await cachedWorkflowValue("assembled-context", () => assembleContext(actorId, chatId));
     let history = currentHistory;
     if (pdfProgress.projectContext && pdfProgress.projectContext.userMessageId !== taskProgressUserMessageId &&
         !currentHistory.some(turn => turn.id === pdfProgress.projectContext!.userMessageId)) {
@@ -2117,7 +2131,7 @@ async function executeChat(request: NextRequest) {
             if (savedVideoFollowUp) {
               personaForGeneration += "\n\n" + savedVideoFollowUp.context;
             }
-            await saveMessage(chatId, {
+            if (!currentStandaloneWorkflow()?.resumed || !await getMessageById(chatId, taskProgressUserMessageId)) await saveMessage(chatId, {
               id: taskProgressUserMessageId,
               role: "user",
               content: message,
@@ -3372,7 +3386,7 @@ ${chunkWorkflowSummary}`;
             }
             console.log("[Chat API] Generation successful. Saving assistant response.");
             const assistantMessageId = pendingVideoAssistantMessageId ?? taskProgressAssistantMessageId;
-            await saveMessage(chatId, {
+            if (!currentStandaloneWorkflow()?.resumed || !await getMessageById(chatId, assistantMessageId)) await saveMessage(chatId, {
               id: assistantMessageId,
               role: "assistant",
               model: result.model,
@@ -3434,9 +3448,8 @@ ${chunkWorkflowSummary}`;
             }
             await refreshShortTermMemory(actorId, chatId);
 
-            // The answer is already durable in chat_requests and messages.
-            // Never block the HTTP stream / UI completion while an LLM rewrites
-            // long-term or intermediate memory. Those tasks can take minutes.
+            // Keep standalone memory charges within the durable parent workflow.
+            // Managed-agent responses retain their existing deferred memory work.
             console.log("[Chat API] reasoning stream metrics", {
               requestId,
               reasoningUpdateCount,
@@ -3444,24 +3457,24 @@ ${chunkWorkflowSummary}`;
               timeToFinalAnswerMs: Date.now() - requestStartedAtMs
             });
 
-            // Next.js keeps the function alive for after(), without holding
-            // the client connection open. A memory failure cannot invalidate
-            // the already-saved assistant response.
-            after(async () => {
+            // Each standalone job checkpoints independently; a spending pause
+            // remains resumable even when the answer is already saved.
+            const persistAccountedMemory = async () => {
               console.log("[Chat API] Memory persistence start", { actorId, chatId, requestId });
               try {
-                const retention = maybeUpdateLongTermMemory(actorId, chatId, message);
+                const retention = cachedWorkflowValue("memory-retention", () => maybeUpdateLongTermMemory(actorId, chatId, message));
                 const cleanup = retention.then(
-                  () => maybeRunThirtyMessageCleanup(actorId),
-                  () => maybeRunThirtyMessageCleanup(actorId),
+                  () => cachedWorkflowValue("memory-cleanup", () => maybeRunThirtyMessageCleanup(actorId)),
+                  () => cachedWorkflowValue("memory-cleanup", () => maybeRunThirtyMessageCleanup(actorId)),
                 );
                 const memoryResults = await Promise.allSettled([
                   retention,
-                  maybeUpdateSummary(chatId),
+                  cachedWorkflowValue("memory-summary", () => maybeUpdateSummary(chatId)),
                   cleanup,
                 ]);
                 memoryResults.forEach((memoryResult, index) => {
                   if (memoryResult.status === "rejected") {
+                    if (isStandaloneAccountingError(memoryResult.reason)) throw memoryResult.reason;
                     console.error(
                       index === 0
                         ? "[Chat API] Long-Term Memory Update Error:"
@@ -3474,12 +3487,14 @@ ${chunkWorkflowSummary}`;
                 });
                 console.log("[Chat API] Memory persistence complete", { actorId, chatId, requestId });
               } catch (error) {
+                if (isStandaloneAccountingError(error)) throw error;
                 console.error("[Chat API] Background memory persistence error", {
                   requestId,
                   reason: error instanceof Error ? error.message : String(error)
                 });
               }
-            });
+            };
+            await scheduleMemoryPersistence(Boolean(currentStandaloneWorkflow()), persistAccountedMemory, after);
 
             if (!streamCancelled) {
               controller.close();
@@ -3494,6 +3509,11 @@ ${chunkWorkflowSummary}`;
             }
 
           } catch (error: unknown) {
+            if (isStandaloneAccountingError(error)) {
+              emitChunk({type:"accounting_pause",code:"standalone_approval_or_accounting_required",requestId,message:error instanceof Error?error.message:String(error)});
+              if (!streamCancelled) controller.close();
+              return;
+            }
             console.error("[Chat API] Stream Runtime Error:", error);
             const message = error instanceof Error ? error.message : "Unknown stream error";
             await finishChatFailure({
@@ -3525,6 +3545,7 @@ ${chunkWorkflowSummary}`;
       }
     });
   } catch (error: unknown) {
+    if (isStandaloneAccountingError(error)) throw error;
     const errorMessage = error instanceof Error ? error.message : "Unexpected error";
     if (trackedRequestId) {
       await failChatRequest(trackedRequestId, error);

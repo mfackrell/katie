@@ -1,3 +1,4 @@
+import { currentStandaloneWorkflow } from "@/lib/standalone-accounting/workflow";
 import { currentAgentTask } from "@/lib/agents/policy";
 import { getSupabaseAdminClient } from "@/lib/data/supabase/admin";
 
@@ -139,6 +140,12 @@ export async function claimChatRequest(input: {
   }
 
   const existing = existingResult.record;
+  const workflow = currentStandaloneWorkflow();
+  if (workflow?.resumed && existing.actorId === input.actorId && existing.chatId === input.chatId) {
+    // The immutable original input and active workflow lease were checked before
+    // preparation. Provider checkpoints separately fence every transmission.
+    return {mode:"claimed",tracked:true,reclaimed:true};
+  }
   if (
     existing.actorId !== input.actorId ||
     existing.chatId !== input.chatId ||

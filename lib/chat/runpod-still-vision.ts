@@ -1,3 +1,4 @@
+import { blockUnaccountedPaidDispatch } from "@/lib/standalone-accounting/unsupported";
 import { RUNPOD_VIDEO_ENDPOINT_ID, RUNPOD_VIDEO_MODEL, parseRunpodOutput, requireRunpodKey } from "@/lib/runpod/durable-results";
 
 const JOB_ID = /^[A-Za-z0-9-]{8,150}$/;
@@ -28,6 +29,7 @@ export async function describeImageWithRunpodQwen(
   const sleep=deps.sleep??(ms=>new Promise<void>(resolve=>setTimeout(resolve,ms)));
   const now=deps.now??Date.now;
   const userPrompt=question.trim().slice(0,1800) || "Describe the visible contents of this uploaded photograph factually.";
+  blockUnaccountedPaidDispatch("RunPod still-image analysis");
   const submitted=await fetchFn("https://api.runpod.ai/v2/"+RUNPOD_VIDEO_ENDPOINT_ID+"/run",{
     method:"POST",
     headers:{Authorization:"Bearer "+apiKey,"Content-Type":"application/json",Accept:"application/json"},

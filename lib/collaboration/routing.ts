@@ -9,6 +9,7 @@ import type { LlmProvider } from "@/lib/providers/types";
 import { chooseProvider, type ResolvedRoutingIntent } from "@/lib/router/master-router";
 import type { RequestIntent } from "@/lib/router/model-intent";
 import type { ActorRoutingProfile } from "@/lib/types/chat";
+import { isTerminalAttemptError, isPremiumAutomaticModel } from "@/lib/collaboration/attempt-policy";
 
 export function collaborationCapabilityToIntent(
   capability: CollaborationCapability,
@@ -76,6 +77,7 @@ export function selectQualityFirstReviewer(input: {
   for (const provider of input.providers) {
     if (provider.name === input.requester.provider) continue;
     for (const model of input.snapshot.get(provider.name) ?? []) {
+      if (isPremiumAutomaticModel(provider.name, model.model_id)) continue;
       if (model.routing_eligibility !== "verified" || model.reasoning_tier !== "high" ||
           model.supports_text === false || used.has(provider.name + ":" + model.model_id.trim().toLowerCase())) continue;
       eligible.push({ provider, model });
@@ -105,6 +107,21 @@ export async function selectCollaborationHelper(input: {
   hasImages?: boolean;
   hasVideoInput?: boolean;
 }): Promise<CollaborationHelperSelection | null> {
+  // Filter both discovery and registry snapshots before routing, so an internal
+  // quality preference cannot silently spend on a premium helper.
+  input = {
+    ...input,
+    providers: input.providers.map(provider => ({
+      ...provider,
+      name: provider.name,
+      listModels: async () => (await provider.listModels()).filter(model => !isPremiumAutomaticModel(provider.name, model)),
+      generate: provider.generate.bind(provider),
+      ...(provider.generateStream ? { generateStream: provider.generateStream.bind(provider) } : {}),
+    })),
+    modelRegistrySnapshot: input.modelRegistrySnapshot && new Map(
+      [...input.modelRegistrySnapshot].map(([provider, models]) => [provider, models.filter(model => !isPremiumAutomaticModel(provider, model.model_id))]),
+    ),
+  };
   if (!input.providers.length) {
     return null;
   }
@@ -205,6 +222,7 @@ export async function selectCollaborationHelper(input: {
         reasoning: decision.reasoning,
       } satisfies CollaborationHelperSelection;
     } catch (error) {
+      if (isTerminalAttemptError(error)) throw error;
       const reason = error instanceof Error ? error.message : String(error);
       const noEligibleCandidates =
         error instanceof Error && error.name === "NoEligibleRoutingCandidatesError";

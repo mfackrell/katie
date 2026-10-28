@@ -33,7 +33,7 @@ for(const message of ['Read annual report.pdf','Read “annual report.pdf”','R
 
 async function run(message,fresh,timelineActive=false,timelineClarification,saved=[]){
  const inspected=[],inspectedTasks=[],analysisTasks=[],retained=[],sources=new Map();
- const fixture={benchmarkRelay:false,benchmarkIntake:false,...scope,Error,...load('lib/uploads/pdf-inventory.ts'),newAttachments:fresh,message,pdfSourceTask:message,pdfTaskContext:null,pdfProgress:{projectContext:null},timelineActive,timelineSelection:{clarification:timelineClarification},mediaMemory:null,savedVideoFollowUp:null,
+ const fixture={workflowTimestamp:()=>new Date().toISOString(),benchmarkRelay:false,benchmarkIntake:false,...scope,Error,...load('lib/uploads/pdf-inventory.ts'),newAttachments:fresh,message,pdfSourceTask:message,pdfTaskContext:null,pdfProgress:{projectContext:null},timelineActive,timelineSelection:{clarification:timelineClarification},mediaMemory:null,savedVideoFollowUp:null,
   catalog:catalog(saved),attachmentHistory:[],restored:{references:[],unavailable:[],sourceIds:new Set()},timelineContext:'',
   ...load('lib/chat/video-attachment-dedup.ts'),...load('lib/chat/attachment-continuity.ts'),
   fingerprintChatRequest:load('lib/chat/request-idempotency.ts').fingerprintChatRequest,
@@ -59,7 +59,7 @@ async function run(message,fresh,timelineActive=false,timelineClarification,save
  ${part('    const requestAttachments =', '    console.log("[Chat API] received attachments"')}
  ${part('    const requestFingerprint =','    const idempotencyClaim =')}
  ${part('            for (const [index, attachment] of newAttachments.entries()) {','            if (timelineActive && temporalIntent) {')}
- ${part('            personaForGeneration += `\\n\\n${selectionContext()}`;', '            await saveMessage(chatId, {')}
+ ${part('            personaForGeneration += `\\n\\n${selectionContext()}`;', '            if (!currentStandaloneWorkflow()?.resumed')}
  ${part('            for (const pdf of attachments.filter', '            if (!verifyingSavedDraft && shouldRunChunkedWorkflow(')}
  return {params:createParams('offline'),attachments,requestFingerprint,clarification:attachmentDecision.clarification,access:selectionContext()};
 })()`),fixture);

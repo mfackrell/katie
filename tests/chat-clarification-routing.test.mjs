@@ -125,6 +125,13 @@ function fixture() {
   };
   const modules = new Map();
   const globals = { benchmarkIntake:false, benchmarkRelay:false, selfToolsEnabled: false, selfInspectionRequest: false, AbortController, setTimeout, clearTimeout, performance, requestImages:[], isProjectStopIntent:text=>text === "Stop the coding project", startProjectIntent:()=>false, followupProjectIntent:()=>false, URL, Response, Date, Map, Set, console: quietConsole, fetch,
+    // These protocol fixtures exercise route decisions; durable accounting and
+    // authenticated resume are covered by the standalone workflow tests.
+    workflowTimestamp: () => '2026-10-28T00:00:00.000Z',
+    workflowMessageId: () => undefined,
+    currentStandaloneWorkflow: () => undefined,
+    cachedWorkflowValue: async (_key, load) => load(),
+    runWithOrchestratorAccounting: operation => operation(),
     process: { env: { NEXT_PUBLIC_SUPABASE_URL: 'https://supabase.example.test', SUPABASE_SERVICE_ROLE_KEY: 'test-only-no-network' } } };
   const load = path => {
     path = resolve(path.endsWith('.ts') ? path : path + '.ts');
@@ -620,4 +627,38 @@ test('actual pre-relay production classifier makes no model call for Full intake
   await select(f,{message,messageId:'benchmark-message',priorTaskProgress:f.helpers.rebuildTaskProgress([]),history:[]});
   assert.equal(calls,0,message);
  }
+});
+
+test('actual POST delegates a minimal resume to the saved server workflow before ordinary message validation', async () => {
+  const post = code(unique(findNodes(node => ts.isFunctionDeclaration(node) && node.name?.text === 'POST'), 'POST handler'));
+  const actorId = '11111111-1111-4111-8111-111111111111', chatId = '22222222-2222-4222-8222-222222222222';
+  const calls = [];
+  const executeChat = async () => { throw new Error('Only the saved workflow may enter ordinary processing'); };
+  const exports = {};
+  vm.runInNewContext(compile(post), {
+    exports, Request, Response, z: nativeRequire('zod').z,
+    NextResponse: { json: (body, init) => Response.json(body, init) },
+    parseIncomingPayload: async () => { calls.push('ordinary-schema'); throw new Error('message is required'); },
+    getSupabaseAdminClient: () => { calls.push('ordinary-actor-query'); throw new Error('Unexpected ordinary processing'); },
+    executeChat,
+    executeStandaloneWorkflow: async (request, payload, execute) => {
+      calls.push('saved-workflow');
+      assert.deepEqual(plain(payload), { actorId, chatId, standaloneResume: true });
+      assert.equal(request.headers.get('x-request-id'), 'original-stable-request');
+      assert.equal(execute, executeChat);
+      return Response.json({ resumed: true });
+    },
+    isStandaloneAccountingError: error => error?.code?.startsWith('standalone_'),
+  });
+  const makeRequest = body => new Request('https://katie.test/api/chat', { method: 'POST', headers: { 'content-type': 'application/json', 'x-request-id': 'original-stable-request' }, body: JSON.stringify(body) });
+  const response = await exports.POST(makeRequest({ actorId, chatId, standaloneResume: true }));
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), { resumed: true });
+  assert.deepEqual(calls, ['saved-workflow']);
+  const invalidResume = await exports.POST(makeRequest({ actorId: 'forged', chatId, standaloneResume: true }));
+  assert.equal(invalidResume.status, 400);
+  assert.deepEqual(calls, ['saved-workflow'], 'Malformed resume must not enter either saved or ordinary processing');
+  const ordinary = await exports.POST(makeRequest({ actorId, chatId }));
+  assert.equal(ordinary.status, 400, 'Ordinary requests still require their message schema');
+  assert.deepEqual(calls, ['saved-workflow', 'ordinary-schema']);
 });

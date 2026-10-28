@@ -1,3 +1,4 @@
+import { googleGenerateContent, googleGenerateContentStream } from "./google-transport";
 import { nativeToolTurn } from "./native-tools";
 import { assertProviderOutput, inspectGoogleStatus } from "./response-errors";
 import { GoogleGenAI, ThinkingLevel as GoogleThinkingLevel } from "@google/genai";
@@ -134,7 +135,7 @@ export class GoogleProvider implements LlmProvider {
   private defaultModel = "gemini-3.1-pro";
 
   constructor(private readonly apiKey: string) {
-    this.client = new GoogleGenAI({ apiKey });
+    this.client = new GoogleGenAI({ apiKey, httpOptions: { retryOptions: { attempts: 1 } } });
   }
 
   generateToolTurn(params: import("@/lib/tools/types").ToolTurnParams) { return nativeToolTurn("google", this.apiKey, params); }
@@ -195,10 +196,11 @@ export class GoogleProvider implements LlmProvider {
         provider: "google", model: selectedModel,
         endpoint: "generateContent", systemMessages: [systemInstruction],
       });
-      const result = await this.client.models.generateContent({
+      const result = await googleGenerateContent(this.apiKey, {
         model: selectedModel,
         contents,
         config: {
+          abortSignal: params.signal,
           systemInstruction,
           responseModalities: isImageTask ? ["TEXT", "IMAGE"] : ["TEXT"],
           ...(thinkingLevelInput
@@ -224,7 +226,7 @@ export class GoogleProvider implements LlmProvider {
       const output: ProviderResponse = {
         finishReason,
         text: text || (content.length > 0 ? "[Image Generated]" : ""),
-        model: selectedModel,
+        model: result.modelVersion || selectedModel,
         provider: this.name,
         content: content.length > 0 ? content : undefined
       };
@@ -276,10 +278,11 @@ export class GoogleProvider implements LlmProvider {
         provider: "google", model: selectedModel,
         endpoint: "generateContentStream", systemMessages: [systemInstruction],
       });
-      const result = await this.client.models.generateContentStream({
+      const result = await googleGenerateContentStream(this.apiKey, {
         model: selectedModel,
         contents,
         config: {
+          abortSignal: params.signal,
           systemInstruction,
           responseModalities: isImageTask ? ["TEXT", "IMAGE"] : ["TEXT"],
           ...(thinkingLevelInput
@@ -290,9 +293,11 @@ export class GoogleProvider implements LlmProvider {
 
       let finishReason: string | undefined;
       let streamedText = "";
+      let responseModel = selectedModel;
       const content: Array<{ type: string; url: string }> = [];
 
       for await (const chunk of result) {
+        responseModel = chunk.modelVersion || responseModel;
         finishReason = inspectGoogleStatus(chunk, selectedModel) ?? finishReason;
         const chunkText = (chunk.candidates?.[0]?.content?.parts ?? []).filter(part => !part.thought).map(part => part.text ?? "").join("");
         if (chunkText) {
@@ -314,7 +319,7 @@ export class GoogleProvider implements LlmProvider {
       const output: ProviderResponse = {
         finishReason,
         text: streamedText || (content.length > 0 ? "[Image Generated]" : ""),
-        model: selectedModel,
+        model: responseModel,
         provider: this.name,
         content: content.length > 0 ? content : undefined
       };

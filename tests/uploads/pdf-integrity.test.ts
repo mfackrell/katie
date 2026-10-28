@@ -1,4 +1,9 @@
-import test from "node:test";
+import nodeTest from "node:test";
+import { runWithOrchestratorAccounting } from "../../lib/standalone-accounting/context";
+// Offline PDF protocol/storage fixtures explicitly retain the trusted orchestration
+// scope; standalone paid-admission and unsupported native PDFs have separate tests.
+const test = (name: string, fn: () => void | Promise<void>) =>
+    nodeTest(name, () => runWithOrchestratorAccounting(fn));
 import assert from "node:assert/strict";
 import { createStoredUploadService } from "../../lib/uploads/stored-uploads";
 import { createHash } from "node:crypto";

@@ -1,5 +1,6 @@
 import { requireAgentResearch } from "@/lib/agents/policy";
-import { isTerminalProviderError } from "@/lib/providers/response-errors";
+import { isTerminalAttemptError, assertAutomaticHelperModel } from "@/lib/collaboration/attempt-policy";
+import { runWithStandaloneActivity } from "@/lib/standalone-accounting/context";
 import {
   runCapabilityAwareGeneration,
   withCapabilityEscalationInstruction,
@@ -119,13 +120,13 @@ async function runPlainGeneration(input: {
   let streamedText = "";
 
   const result = input.provider.generateStream
-    ? await input.provider.generateStream(input.params, {
+    ? await runWithStandaloneActivity("capability_finalization", () => input.provider.generateStream!(input.params, {
         async onTextDelta(delta) {
           streamedText += delta;
           await input.onTextDelta(delta);
         },
-      })
-    : await input.provider.generate(input.params);
+      }))
+    : await runWithStandaloneActivity("capability_finalization", () => input.provider.generate(input.params));
 
   if (!input.provider.generateStream && result.text) {
     await input.onTextDelta(result.text);
@@ -380,6 +381,7 @@ export async function runOnDemandCapabilityEscalation(input: {
       }
 
       const helper = participant(selected.provider, selected.modelId);
+      assertAutomaticHelperModel(helper.provider, helper.modelId);
       usedParticipants.set(participantKey(helper), helper);
 
       if (attempt > 1) {
@@ -437,7 +439,10 @@ export async function runOnDemandCapabilityEscalation(input: {
           }).catch((error) => ({ capturedAt: nowIso(), pages: [], limitations: ["Rendered inspection failed: " + String(error)] }));
         }
         if (request.capability === "research") requireAgentResearch();
-        const helperResult = await selected.provider.generate(helperParams);
+        const helperResult = await runWithStandaloneActivity(
+          request.capability === "research" ? "capability_research" : "capability_helper",
+          () => selected.provider.generate(helperParams),
+        );
         if (request.capability === "research") {
           sharedWebsite = await websiteEvidencePromise;
           helperResult.researchEvidence = mergeResearchEvidence(helperResult, helper, input.params.user, sharedWebsite);
@@ -499,7 +504,7 @@ export async function runOnDemandCapabilityEscalation(input: {
         });
         break;
       } catch (error) {
-        if (isTerminalProviderError(error)) throw error;
+        if (isTerminalAttemptError(error)) throw error;
         lastFailure =
           error instanceof Error ? error.message : String(error);
         await emit({

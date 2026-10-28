@@ -112,7 +112,7 @@ test('unverified capability is commissioned, not configured or falsely activated
 });
 test('dedicated EO is routed outside ordinary Katie chat and project workflows',()=>{
  const route=readFileSync('app/api/chat/route.ts','utf8');
- assert.ok(route.includes("if(actorRole.actor_kind==='executive')return executeExecutiveCommand"));
+ assert.match(route,/if\(actorRole\.actor_kind==='executive'\)return runWithOrchestratorAccounting\(\(\)=>executeExecutiveCommand\(payload,request\)\)/);
  assert.match(route,/const executiveReply=null, specialistReply=null, financeReply=null, developmentReply=null/);
  assert.doesNotMatch(route,/const financeReply = !executiveReply/);
 });

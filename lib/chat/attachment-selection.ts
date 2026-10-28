@@ -1,4 +1,7 @@
-import { GoogleGenAI } from "@google/genai";
+import { isStandaloneAccountingError } from "@/lib/standalone-accounting/context";
+import { runWithStandaloneActivity } from "@/lib/standalone-accounting/context";
+import { googleGenerateContent as generateAccountedContent } from "@/lib/providers/google-transport";
+const googleGenerateContent: typeof generateAccountedContent = (apiKey, request) => runWithStandaloneActivity("attachment-selection", () => generateAccountedContent(apiKey, request));
 import { z } from "zod";
 import { selectFollowUpAttachments, requestedAttachmentKind, matchesAttachmentKind, type ConversationAttachment } from "./attachment-continuity";
 import type { FileReference } from "@/lib/providers/types";
@@ -184,8 +187,7 @@ export async function selectStoredAttachments(
   try {
     const run = decide ?? (async (input: string) => {
       if (!process.env.GOOGLE_API_KEY) throw new Error("No selection provider configured");
-      const client = new GoogleGenAI({ apiKey: process.env.GOOGLE_API_KEY, httpOptions: { timeout: 12_000 } });
-      const response = await client.models.generateContent({
+      const response = await googleGenerateContent(process.env.GOOGLE_API_KEY!, {
         model: "gemini-2.5-flash",
         config: {
           temperature: 0, maxOutputTokens: 1000, thinkingConfig: { thinkingBudget: 0 }, responseMimeType: "application/json",
@@ -200,6 +202,7 @@ export async function selectStoredAttachments(
       message, catalog, history, newFileNames
     );
   } catch (error) {
+    if (isStandaloneAccountingError(error)) throw error;
     console.warn("[Attachments] Selector unavailable", { errorType: error instanceof Error ? (error.message === "SelectorOutputTruncated" ? "truncated-output" : error.name) : "unknown" });
     // A failed selector must not pretend that summaries or invented files were inspected.
     const named = catalog.filter(file => message.toLowerCase().includes(file.fileName.toLowerCase()));
@@ -235,7 +238,8 @@ export async function loadSelectedAttachmentSources(
   for (const selection of decision.selections) {
     if (selection.mode !== "source") continue;
     try { references.push(await restore(selection.attachment)); sourceIds.add(selection.attachment.id); }
-    catch { unavailable.push(selection.attachment.fileName); }
+    catch (accountingError) {
+    if (isStandaloneAccountingError(accountingError)) throw accountingError; unavailable.push(selection.attachment.fileName); }
   }
   return { references, sourceIds, unavailable };
 }

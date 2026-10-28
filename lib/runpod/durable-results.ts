@@ -1,3 +1,4 @@
+import { blockUnaccountedPaidDispatch } from "@/lib/standalone-accounting/unsupported";
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { getSupabaseAdminClient } from "@/lib/data/supabase/admin";
@@ -304,6 +305,7 @@ export async function submitSavedVideo(params: {
   if (!params.question || params.question.length > 2000) {
     throw new Error("Video question must be 1 to 2000 characters");
   }
+  blockUnaccountedPaidDispatch("RunPod video processing");
   const client = resultStore();
   const submissionKey = hashCallbackProof(JSON.stringify(params.requestId
     ? [params.actorId, params.requestId, params.videoIndex]

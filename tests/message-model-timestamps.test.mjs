@@ -16,7 +16,7 @@ test("provider history retains persisted timestamps as model-visible context", (
 });
 
 test("current timestamp is generated for the system context without rewriting user text", () => {
-  assert.ok(route.includes("CURRENT_REQUEST_TIMESTAMP_UTC: ${new Date().toISOString()}"));
+  assert.ok(route.includes("CURRENT_REQUEST_TIMESTAMP_UTC: ${workflowTimestamp()}"));
   assert.match(route, /Timestamp metadata in this instruction and in conversation-history headers/);
   assert.match(route, /Never reproduce or prefix a user-facing reply with these timestamp labels or raw timestamps unless the user specifically asks for them/);
   assert.match(route, /user: message,/);

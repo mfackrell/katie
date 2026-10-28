@@ -773,6 +773,32 @@ export function ChatPanel({
     return()=>window.clearTimeout(timer);
   },[input,draftReady,draft.state,saveDraft,draft.error]);
   const [loading, setLoading] = useState(false);
+  const accountingResumeInFlight = useRef(false);
+  useEffect(() => {
+    const resume = async (event: Event) => {
+      const detail=(event as CustomEvent<{actorId:string;chatId:string;requestId:string;attemptId:string}>).detail;
+      if(detail?.actorId!==actorId||detail.chatId!==chatId||accountingResumeInFlight.current)return;
+      accountingResumeInFlight.current=true;setLoading(true);
+      setStatusMessage("Resuming the saved approved attempt…");
+      try {
+        const bearer=await ownerSessionBearer();
+        if(!bearer)throw Error("Owner sign-in required to resume.");
+        const response=await fetch("/api/chat",{method:"POST",headers:{"Content-Type":"application/json",Authorization:`Bearer ${bearer}`,"x-request-id":detail.requestId},body:JSON.stringify({actorId,chatId,standaloneResume:true})});
+        const text=await response.text();
+        if(!response.ok){let message="Saved request could not resume.";try{message=JSON.parse(text).error??message;}catch{}throw Error(message);}
+        const pause=text.split("\n").filter(Boolean).map(line=>{try{return JSON.parse(line);}catch{return null;}}).find(chunk=>chunk?.type==="accounting_pause");
+        setStatusMessage(pause?.message??(response.status===202?"Saved request is paused or already running. Review Usage for its current state.":"Saved request resumed."));
+        const messagesResponse=await fetch(`/api/messages?chatId=${encodeURIComponent(chatId)}`,{cache:"no-store"});
+        const body=await messagesResponse.json() as {messages?:Message[]};
+        if(messagesResponse.ok&&body.messages){setMessages(body.messages);setMessagesByChatId(current=>({...current,[chatId]:body.messages!}));}
+      }catch(error){setStatusMessage(error instanceof Error?error.message:"Saved request could not resume.");}
+      finally{accountingResumeInFlight.current=false;setLoading(false);window.dispatchEvent(new Event("standalone-accounting-updated"));}
+    };
+    const listener=(event:Event)=>{void resume(event);};
+    window.addEventListener("standalone-accounting-resume",listener);
+    return()=>window.removeEventListener("standalone-accounting-resume",listener);
+  },[actorId,chatId]);
+
   const [meta, setMeta] = useState<{ provider: string; model: string } | null>(
     null,
   );
@@ -1807,6 +1833,7 @@ export function ChatPanel({
           const chunk = JSON.parse(line) as
             | ChatMetadataChunk
             | { type: "delta"; text: string }
+            | {type:"accounting_pause";code:string;requestId:string;message:string}
             | ReasoningStreamEvent
             | {
                 type: "content";
@@ -1817,6 +1844,13 @@ export function ChatPanel({
                 model?: string;
               };
 
+          if (chunk.type === "accounting_pause") {
+            setStatusMessage(chunk.message + " Review the saved attempt in Usage.");
+            clearPendingChatRequest(chatId);
+            setStreamingAnswer("");
+            window.dispatchEvent(new Event("standalone-accounting-updated"));
+            return;
+          }
           if (chunk.type === "reasoning_error") throw new TerminalChatError(chunk.message, chunk.messageId);
 
           if (chunk.type === "metadata") {
@@ -1903,6 +1937,7 @@ export function ChatPanel({
         const trailingChunk = JSON.parse(buffered) as
           | ChatMetadataChunk
           | { type: "delta"; text: string }
+            | {type:"accounting_pause";code:string;requestId:string;message:string}
           | ReasoningStreamEvent
           | {
               type: "content";

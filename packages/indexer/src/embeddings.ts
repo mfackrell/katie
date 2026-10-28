@@ -1,3 +1,4 @@
+import { blockUnaccountedPaidDispatch } from "../../../lib/standalone-accounting/unsupported";
 import OpenAI from 'openai';
 
 export interface EmbeddingProvider {
@@ -14,10 +15,11 @@ export class NoopEmbeddingProvider implements EmbeddingProvider {
 export class OpenAIEmbeddingProvider implements EmbeddingProvider {
   private client: OpenAI;
   constructor(apiKey: string, private model: string) {
-    this.client = new OpenAI({ apiKey });
+    this.client = new OpenAI({ apiKey, maxRetries: 0 });
   }
 
   async embed(texts: string[]): Promise<number[][]> {
+    blockUnaccountedPaidDispatch("Indexer embeddings");
     const response = await this.client.embeddings.create({ model: this.model, input: texts });
     return response.data.map((v) => v.embedding);
   }

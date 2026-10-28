@@ -59,6 +59,9 @@ function harness(faults = [], synthetic = false) {
     return exports;
   };
   const durable = load('lib/runpod/durable-results.ts', {'node:crypto': crypto, '@supabase/supabase-js': {createClient: () => client},
+    // Protocol-only VM with fake HTTP; real admission is exercised separately
+    // by standalone-unpriced-dispatch using the unmocked production guard.
+    '@/lib/standalone-accounting/unsupported': {blockUnaccountedPaidDispatch: () => {}},
     '@/lib/data/supabase/admin': {getSupabaseAdminClient: () => client}, '@/lib/chat/video-scene-prompts': {buildRunpodVideoScenePrompt: x => x}},
     {fetch: async (url,init) => {
       if(url.includes('/status/')) return Response.json({}, {status:404});

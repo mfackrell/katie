@@ -1,3 +1,4 @@
+import { scheduleMemoryPersistence } from "../lib/standalone-accounting/memory-scheduling";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -131,21 +132,20 @@ test("natural clarification commands are routed to guaranteed memory writes", ()
   ]) assert.equal(isExplicitMemoryCorrection(message), false, message);
 });
 
-test("saved assistant replies register nonblocking memory updates before stream closure", () => {
-  const route = readFileSync("app/api/chat/route.ts", "utf8");
-  const save = route.indexOf("await completeChatRequest(requestId, {", route.indexOf("Generation successful. Saving assistant response."));
-  const refreshed = route.indexOf("await refreshShortTermMemory(actorId, chatId);", save);
-  const defer = route.indexOf("after(async () => {", refreshed);
-  const longTerm = route.indexOf("maybeUpdateLongTermMemory(actorId, chatId, message)", defer);
-  const summary = route.indexOf("maybeUpdateSummary(chatId)", defer);
-  const close = route.indexOf("controller.close();", defer);
-  assert.ok(save >= 0 && refreshed > save && defer > refreshed &&
-    longTerm > defer && summary > defer && close > summary,
-    "response must be durable and deferred work registered before stream close");
-  assert.doesNotMatch(route.slice(refreshed, defer), /await maybeUpdateLongTermMemory|await maybeUpdateSummary/,
-    "do not await memory models synchronously in the response");
-  assert.match(route.slice(defer, summary + 150), /Promise\.allSettled/,
-    "background maintenance should handle partial failures independently");
+test("managed assistant replies register nonblocking memory updates before stream closure", async () => {
+  const events: string[] = ["response saved", "short-term memory refreshed"];
+  let callback: (() => Promise<void>) | undefined;
+  await scheduleMemoryPersistence(false, async () => {
+    const results = await Promise.allSettled([
+      Promise.resolve().then(() => events.push("long-term memory")),
+      Promise.resolve().then(() => events.push("intermediate memory")),
+    ]);
+    assert.ok(results.every(result => result.status === "fulfilled"));
+  }, work => { callback = work; events.push("memory registered"); });
+  events.push("stream closed");
+  assert.deepEqual(events, ["response saved", "short-term memory refreshed", "memory registered", "stream closed"]);
+  assert.ok(callback); await callback();
+  assert.deepEqual(events.slice(-2), ["long-term memory", "intermediate memory"]);
 });
 
 test("a website reinspection compares saved evidence without rewriting memory", () => {

@@ -1,4 +1,7 @@
-import test, { type TestContext } from "node:test";
+import nodeTest, { type TestContext } from "node:test";
+import { runWithOrchestratorAccounting } from "../lib/standalone-accounting/context";
+// Adapter compatibility tests explicitly model the existing trusted orchestration scope.
+const test = (name: string, fn: (context: TestContext) => Promise<void>) => nodeTest(name, t => runWithOrchestratorAccounting(() => fn(t)));
 import assert from "node:assert/strict";
 import { GrokProvider } from "../lib/providers/grok-provider";
 import type { ChatGenerateParams } from "../lib/providers/types";

@@ -1,5 +1,6 @@
 import { requireAgentResearch } from "@/lib/agents/policy";
-import { isTerminalProviderError } from "@/lib/providers/response-errors";
+import { isTerminalAttemptError, assertAutomaticHelperModel, withProviderAttemptTimeout } from "@/lib/collaboration/attempt-policy";
+import { runWithStandaloneActivity } from "@/lib/standalone-accounting/context";
 import {
   getFinalSynthesisInstruction,
   getHelperCollaborationInstruction,
@@ -184,31 +185,14 @@ function withPersona(params: ChatGenerateParams, modelId: string, instruction: s
 }
 
 async function withTimeout<T>(
-  promise: Promise<T>,
+  work: (signal: AbortSignal) => Promise<T>,
   timeoutMs: number,
   label: string,
   lateResultGraceMs = 0,
+  parentSignal?: AbortSignal,
 ): Promise<T> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
   const effectiveTimeoutMs = timeoutMs + lateResultGraceMs;
-  const timeoutError = new Error(
-    lateResultGraceMs > 0
-      ? `${label} timed out after ${effectiveTimeoutMs}ms (base ${timeoutMs}ms + late-result grace ${lateResultGraceMs}ms)`
-      : `${label} timed out after ${timeoutMs}ms`,
-  );
-
-  try {
-    return await Promise.race([
-      promise,
-      new Promise<T>((_resolve, reject) => {
-        timer = setTimeout(() => reject(timeoutError), effectiveTimeoutMs);
-      }),
-    ]);
-  } finally {
-    if (timer) {
-      clearTimeout(timer);
-    }
-  }
+  return withProviderAttemptTimeout(work, effectiveTimeoutMs, label, parentSignal);
 }
 
 export async function runAdaptiveCollaboration(
@@ -357,10 +341,16 @@ export async function runAdaptiveCollaboration(
 
     try {
       const result = await withTimeout(
-        provider.generate({ ...params, modelId }),
+        signal => runWithStandaloneActivity(
+          label.startsWith("Collaboration helper")
+            ? params.requestIntent === "web-search" ? "collaboration_research" : "collaboration_helper"
+            : "collaboration_lead_control",
+          () => provider.generate({ ...params, modelId, signal }),
+        ),
         effectiveTimeoutMs,
         label,
         effectiveGraceMs,
+        params.signal,
       );
       await emit({ type: "stage_completed", requester: { provider: provider.name, modelId },
         detail: `stage=${label}; elapsedMs=${Date.now() - startedAt}; completed=true` });
@@ -571,6 +561,7 @@ export async function runAdaptiveCollaboration(
       }
 
       const helper = participant(selected.provider, selected.modelId);
+      assertAutomaticHelperModel(helper.provider, helper.modelId);
       usedParticipants.set(participantKey(helper), helper);
 
       if (candidateAttempt > 1) {
@@ -777,7 +768,7 @@ export async function runAdaptiveCollaboration(
         });
         return contribution;
       } catch (error) {
-        if (isTerminalProviderError(error)) throw error;
+        if (isTerminalAttemptError(error)) throw error;
         lastFailureDetail = error instanceof Error ? error.message : String(error);
         await emit({
           type: "helper_failed",
@@ -928,7 +919,7 @@ export async function runAdaptiveCollaboration(
         leadControlTimeoutMs, minimumLeadControlMs,
       );
     } catch (error) {
-        if (isTerminalProviderError(error)) throw error;
+      if (isTerminalAttemptError(error)) throw error;
       // A failed control pass must not escape to the outer chat retry and erase helper work.
       await emit({ type: "lead_failed", requester: lead,
         detail: error instanceof Error ? error.message : String(error) });
@@ -1049,18 +1040,22 @@ export async function runAdaptiveCollaboration(
     let bufferedText = "";
     const result = provider.generateStream
       ? await withTimeout(
-          provider.generateStream(finalParams, {
+          signal => runWithStandaloneActivity("collaboration_synthesis", () => provider.generateStream!({ ...finalParams, signal }, {
             async onTextDelta(delta) {
               bufferedText += delta;
             },
-          }),
+          })),
           finalTimeoutMs,
           `Collaboration final synthesis ${participantValue.provider}:${participantValue.modelId}`,
+          0,
+          finalParams.signal,
         )
       : await withTimeout(
-          provider.generate(finalParams),
+          signal => runWithStandaloneActivity("collaboration_synthesis", () => provider.generate({ ...finalParams, signal })),
           finalTimeoutMs,
           `Collaboration final synthesis ${participantValue.provider}:${participantValue.modelId}`,
+          0,
+          finalParams.signal,
         );
 
     const text = result.text || bufferedText;
@@ -1086,7 +1081,7 @@ export async function runAdaptiveCollaboration(
       finalText = completed.text;
       break;
     } catch (error) {
-        if (isTerminalProviderError(error)) throw error;
+      if (isTerminalAttemptError(error)) throw error;
       finalSynthesisError = error;
       await emit({
         type: "lead_failed",

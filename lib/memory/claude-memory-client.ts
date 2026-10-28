@@ -1,3 +1,4 @@
+import { createActivityAccountingFetch } from "@/lib/standalone-accounting/activity";
 /** Transport adapter only: keep the LTM editor's existing JSON/client contract. */
 export const MEMORY_EDITOR_MODEL = "claude-sonnet-5-5";
 
@@ -65,12 +66,11 @@ export function createClaudeMemoryClient() {
   const apiKey = process.env.CLAUDE_API_KEY ?? process.env["claude_api_key"];
   if (!apiKey) return null;
   try {
-    // Reuse the installed SDK's HTTP transport and its existing retry/timeout
-    // defaults. No dependency, retry loop, fallback model or orchestration is added.
+    // Reuse the installed HTTP client with accounted transmissions and no SDK retries.
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const { default: OpenAI } = require("openai") as typeof import("openai");
     const transport = new OpenAI({
-      apiKey,
+      apiKey, maxRetries: 0, fetch: createActivityAccountingFetch("anthropic", "memory-edit"),
       baseURL: "https://api.anthropic.com/v1",
       defaultHeaders: { Authorization: null, "x-api-key": apiKey, "anthropic-version": "2023-06-01" },
     });
