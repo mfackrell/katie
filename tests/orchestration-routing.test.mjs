@@ -49,7 +49,7 @@ test('EO and child stages use task routing with original scope and provider-dive
  const seen=[],providers=['anthropic','google','openai','grok'].map(name=>({name,listModels:async()=>name==='google'?['best-writer']:name==='anthropic'?['deep-reasoner','smaller-reasoner']:['alternative']}));
  const load=modules({
   '@/lib/providers':{getAvailableProviders:()=>providers},
-  '@/lib/router/provider-health':{filterProvidersBySharedHealth:async p=>({providers:p})},
+  '@/lib/router/provider-health':{filterProvidersBySharedHealth:async p=>({providers:p}),recordSharedProviderFailure:async()=>{}},
   '@/lib/router/master-router':{chooseProvider:async(prompt,context,p,options)=>{seen.push({prompt,context,p,options});return{provider:providers[1],modelId:'best-writer',fallbackChain:[{provider:providers[0],modelId:'deep-reasoner'},{provider:providers[0],modelId:'smaller-reasoner'},{provider:providers[2],modelId:'alternative'}],reasoning:'Task-specific decision'};}}
  });
  const route=load('@/lib/orchestration/routing').orchestrationChoices;
@@ -126,7 +126,7 @@ test('routing-model inference is bounded and accounted before dispatch',async()=
  const providers=[{name:'anthropic',listModels:async()=>['router-model','worker-model']}],events=[];
  const load=modules({
   '@/lib/providers':{getAvailableProviders:()=>providers},
-  '@/lib/router/provider-health':{filterProvidersBySharedHealth:async p=>({providers:p})},
+  '@/lib/router/provider-health':{filterProvidersBySharedHealth:async p=>({providers:p}),recordSharedProviderFailure:async()=>{}},
   '@/lib/router/master-router':{chooseProvider:async(_,__,p)=>{
    const response=await p[0].generate({modelId:'router-model',persona:'Select',history:[],summary:'',user:'Candidates'});
    assert.equal(response.text,'Decision');
@@ -182,7 +182,7 @@ test('bounded transport excludes incompatible agent endpoints without pinning a 
 });
 test('autonomous decisions and fallbacks are restricted to current provider inventories, not stale registry entries',async()=>{
  const providers=[{name:'openai',listModels:async()=>['accessible-model']},{name:'google',listModels:async()=>['models/gemini-current','models/deep-research-pro-preview']}];let seen;
- const load=modules({'@/lib/providers':{getAvailableProviders:()=>providers},'@/lib/router/provider-health':{filterProvidersBySharedHealth:async p=>({providers:p})},'@/lib/router/master-router':{chooseProvider:async(_,__,p,options)=>{
+ const load=modules({'@/lib/providers':{getAvailableProviders:()=>providers},'@/lib/router/provider-health':{filterProvidersBySharedHealth:async p=>({providers:p}),recordSharedProviderFailure:async()=>{}},'@/lib/router/master-router':{chooseProvider:async(_,__,p,options)=>{
   seen=options;assert.equal(options.candidateAllowed('openai','stale-unavailable-model'),false);assert.equal(options.candidateAllowed('google','deep-research-pro-preview'),false);assert.equal(options.candidateAllowed('openai','accessible-model'),true);
   assert.deepEqual(Array.from(await p[1].listModels()),['gemini-current']);
   return{provider:p[0],modelId:'stale-unavailable-model',fallbackChain:[{provider:p[0],modelId:'accessible-model'},{provider:p[1],modelId:'gemini-current'}],reasoning:'Capability-ranked inventory'};
@@ -192,7 +192,7 @@ test('autonomous decisions and fallbacks are restricted to current provider inve
 });
 test('failed or empty live model discovery cannot silently reuse stale registry candidates',async()=>{
  let decisions=0;const providers=[{name:'openai',listModels:async()=>{throw Error('Discovery unavailable');}},{name:'google',listModels:async()=>[]}];
- const load=modules({'@/lib/providers':{getAvailableProviders:()=>providers},'@/lib/router/provider-health':{filterProvidersBySharedHealth:async p=>({providers:p})},'@/lib/router/master-router':{chooseProvider:async()=>{decisions++;throw Error('Must not guess');}}});
+ const load=modules({'@/lib/providers':{getAvailableProviders:()=>providers},'@/lib/router/provider-health':{filterProvidersBySharedHealth:async p=>({providers:p}),recordSharedProviderFailure:async()=>{}},'@/lib/router/master-router':{chooseProvider:async()=>{decisions++;throw Error('Must not guess');}}});
  await assert.rejects(load('@/lib/orchestration/routing').orchestrationChoices({objective:'Review',instruction:'Assess',requestId:'failed-discovery'}),/No connected provider/);assert.equal(decisions,0);
 });
 test('truncated native generation corrects capacity once without cycling through providers at the same cap',async()=>{
@@ -245,4 +245,20 @@ test('an unaffordable capacity retry preserves the original incomplete response'
   '@/lib/missions/store':{rpc:async(name)=>name==='reserve_mission_call'?++reservations===1:name==='mission_call_capacity'?{authorized:true,remainingTokens:1,callsRemaining:5}:true}
  },{fetch:async url=>new Response(JSON.stringify(url.endsWith('/count_tokens')?{input_tokens:200}:anthropic('Original partial reasoning',{stop_reason:'max_tokens'})),{status:200})});
  await assert.rejects(load('@/lib/missions/model').missionModel(claim('compose'),'Compose','Evidence'),error=>{assert.equal(error.partial.partialText,'Original partial reasoning');assert.equal(error.partial.outputTokenLimit,6000);assert.equal(error.partial.admissionDenied,true);return true;});
+});
+
+test('fixed benchmark provider preserves cooldown classification and probes discovery only after expiry',async()=>{
+ let cooling=true,discoveries=0;
+ const provider={name:'openai',listModels:async()=>{discoveries++;return ['gpt-5.3-codex'];}};
+ const load=modules({'@/lib/providers':{getAvailableProviders:()=>[provider]},'@/lib/router/provider-health':{filterProvidersBySharedHealth:async p=>({providers:cooling?[]:p,blocked:cooling?[{provider:'openai',reason:'billing or quota',blockedUntil:'2026-10-28T19:41:58Z'}]:[]})},'@/lib/router/master-router':{chooseProvider:async()=>({provider,modelId:'gpt-5.3-codex',fallbackChain:[],reasoning:'frozen'})}});
+ const route=load('@/lib/orchestration/routing').orchestrationChoices;
+ const input={objective:'Saved project',instruction:'Compose',requestId:'same-job',fixedModel:{provider:'openai',modelId:'gpt-5.3-codex'}};
+ await assert.rejects(route(input),e=>{assert.equal(e.failures[0].kind,'cooldown');return true;});assert.equal(discoveries,0);
+ cooling=false;assert.equal((await route(input))[0].modelId,'gpt-5.3-codex');assert.equal(discoveries,1);
+});
+test('discovery distinguishes missing credentials, unsupported model and persistent billing failure',async()=>{
+ for(const [providers,expected] of [[[],'credentials'],[[{name:'openai',listModels:async()=>['different-model']}],'unsupported_model'],[[{name:'openai',listModels:async()=>{throw Object.assign(Error('quota'),{code:'insufficient_quota'});}}],'billing_quota']]){
+  const load=modules({'@/lib/providers':{getAvailableProviders:()=>providers},'@/lib/router/provider-health':{filterProvidersBySharedHealth:async p=>({providers:p}),recordSharedProviderFailure:async()=>{},recordSharedProviderFailure:async()=>{} }});
+  await assert.rejects(load('@/lib/orchestration/routing').orchestrationChoices({objective:'Saved',instruction:'Compose',requestId:'job',fixedModel:{provider:'openai',modelId:'gpt-5.3-codex'}}),e=>{assert.equal(e.failures[0].kind,expected);return true;});
+ }
 });
