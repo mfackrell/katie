@@ -1009,6 +1009,7 @@ async function executeChat(request: NextRequest) {
     // Diagnostics are observational: neither the model's stated rationale nor
     // persistence availability can change source selection or generation.
     if (attachmentDecision.selections.length > 0) {
+      try {
       const auditRow = buildAttachmentSelectionAudit({
         actorId, chatId, requestId, message,
         decision: attachmentDecision, catalog, history: attachmentHistory,
@@ -1025,6 +1026,10 @@ async function executeChat(request: NextRequest) {
           console.warn("[Attachments] Selection audit could not be saved", { requestId, reason: "transport" });
         }
       });
+      } catch {
+        // Diagnostics may never prevent a user's normal chat request.
+        console.warn("[Attachments] Selection audit could not be prepared", { requestId });
+      }
     }
     if (savedVideoFollowUp) console.info("[Saved Video Follow-up] loaded prior observations", {
       requestId, actorId, chatId, sourceCount: savedVideoFollowUp.sourceCount,

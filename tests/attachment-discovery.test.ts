@@ -337,3 +337,11 @@ test("optional selector rationale is observational and does not change file sele
   }));
   assert.equal(none.selections.length, 0);
 });
+
+test("malformed optional rationale never causes a valid selector choice to fall back", async () => {
+  const selected = await selectStoredAttachments("Show the saved proposal", [doc], [],
+    async () => ({ selections: [{ id: doc.id, mode: "summary" }], rationale: { unexpected: true } }));
+  assert.equal(selected.method, "summary-selector");
+  assert.equal(selected.selections.length, 1);
+  assert.equal(selected.rationale, undefined);
+});

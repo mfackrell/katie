@@ -10,7 +10,8 @@ const decisionSchema = z.object({
   selections: z.array(z.object({ id: z.string(), mode: z.enum(["summary", "source"]) })).max(5),
   clarification: z.string().max(500).optional(),
   // Optional diagnostic only. Never used to rank, filter or select sources.
-  rationale: z.string().optional(),
+  // Diagnostic metadata must never invalidate otherwise valid selections.
+  rationale: z.unknown().optional(),
 });
 const PRECISION_REQUEST = /\b(exact|cells?|rows?|columns?|formulas?|calculate|sum|totals?|reconcil\w*|compar\w*|verify|quote|find|line|page|timestamp|read|inspect|amounts?|numbers?|values?|figures?|details?|color|colour|wearing|signature)\b/i;
 const SUMMARY_ONLY = /\b(?:from|using)\s+(?:the\s+)?saved\b[\s\S]{0,60}\b(?:summary|summaries|text|observations)\b|\b(?:summary|summaries|saved text)\s+only\b/i;
@@ -153,9 +154,9 @@ export function validateAttachmentDecision(raw: unknown, message: string, candid
   const decision = decisionSchema.parse(raw);
   const byId = new Map(candidates.map(file => [file.id, file]));
   if (decision.selections.some(item => !byId.has(item.id))) throw new Error("Selector referenced an unknown file.");
-  if (decision.clarification?.trim()) return { selections: [], clarification: decision.clarification.trim(), rationale: decision.rationale?.trim().slice(0, 400), method: "summary-selector" };
+  if (decision.clarification?.trim()) return { selections: [], clarification: decision.clarification.trim(), rationale: (typeof decision.rationale === "string" ? decision.rationale.trim().slice(0, 400) : undefined), method: "summary-selector" };
   const unique = [...new Map(decision.selections.map(item => [item.id, item])).values()];
-  return { method: "summary-selector", rationale: decision.rationale?.trim().slice(0, 400), selections: unique.map(item => {
+  return { method: "summary-selector", rationale: (typeof decision.rationale === "string" ? decision.rationale.trim().slice(0, 400) : undefined), selections: unique.map(item => {
     const attachment = byId.get(item.id)!;
     const forceSource = !attachment.observedSummary || attachment.summaryCoverage === "metadata" || (PRECISION_REQUEST.test(message) && !SUMMARY_ONLY.test(message));
     return { attachment, mode: forceSource ? "source" : item.mode };
