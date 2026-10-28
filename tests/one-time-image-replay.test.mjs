@@ -22,11 +22,14 @@ function harness({ responseModel = "gemini-2.5-flash", responseStatus = 200 } = 
       select(){return builder},eq(k,v){filter.push([k,v]);return builder},
       gt(){return builder},order(){return builder},limit(){return builder},
       update(v){action="update";payload=v;return builder},
+      async updateReturning(v){
+        assert.ok(filter.some(([k,value])=>k==="status"&&value==="pending"));
+        if(status!=="pending")return{data:[],error:null};
+        status="running";claimCount++;updates.push(v);return{data:[{id:trial.id}],error:null};
+      },
       async maybeSingle(){
         if(action==="read")return{data:status==="pending"?trial:null,error:null};
-        assert.ok(filter.some(([k,v])=>k==="status"&&v==="pending"));
-        if(status!=="pending")return{data:null,error:null};
-        status="running";claimCount++;updates.push(payload);return{data:{id:trial.id},error:null};
+        throw new Error("Claim must use updateReturning");
       },
       then(resolve,reject){
         if(action==="update"){status=payload.status;updates.push(payload);}
