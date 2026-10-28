@@ -659,7 +659,7 @@ test('specification admission denial preserves the previous rejected draft witho
 
 
 test('specification archival failure still commits exact partial response as terminal blocked work',async()=>{
- for(const mode of ['rejected','throws','prior-failure']){
+ for(const mode of ['rejected','throws','prior-failure','validation-failure']){
   const m=mission();m.project_kind='specification';m.project_evidence={projectProfile:'game',specificationBudget:{version:2}};
   const j=job(m,'compose','compose');j.attempts=1;
   let claimed=false,committed,archives=0,modelCalls=0;
@@ -672,9 +672,9 @@ test('specification archival failure still commits exact partial response as ter
   const {MissionModelFailure}=load('@/lib/missions/model');
   const partial='{"specificationFormat":"registered-game-v1","name":"paid partial';
   const result=await load('@/lib/missions/worker').runMissionBatch(async()=>{
-   modelCalls++;throw new MissionModelFailure('Model output incomplete',{partialText:partial,incompleteReason:'max_output_tokens',...(mode==='prior-failure'?{checkpointFailed:true}:{})});
+   modelCalls++;if(mode==='validation-failure')return {text:partial,sources:[],calculations:[]};throw new MissionModelFailure('Model output incomplete',{partialText:partial,incompleteReason:'max_output_tokens',...(mode==='prior-failure'?{checkpointFailed:true}:{})});
   });
-  assert.equal(archives,1);assert.equal(modelCalls,1);
+  assert.equal(archives,mode==='validation-failure'?2:1);assert.equal(modelCalls,1);
   assert.equal(committed.p_result.partialText,partial);assert.equal(committed.p_result.checkpointFailed,true);
   assert.ok(committed.p_result.specificationCheckpointError);assert.equal(committed.p_status,'failed');
   assert.equal(committed.p_mission_status,'blocked');assert.equal(committed.p_final,null);

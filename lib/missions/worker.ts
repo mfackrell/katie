@@ -328,7 +328,11 @@ export async function executeClaim(claim:Claim,model=missionModel){
    validated=specificationV2?validateGameSpecificationResponse(candidate):validateProjectPlan(parseJSON(candidate));
    if(!validated.game)throw Error('Game specification requires source-grounded rules, a pure engine and registered acceptance');
   }catch(error){validation=error&&typeof error==='object'&&'message' in error&&typeof error.message==='string'?error.message.slice(0,2000):'Invalid JSON';}
-  if(specificationV2&&!await rpc<boolean>('checkpoint_mission_specification_draft',{p_id:job.id,p_lease:job.lease,p_response:rawResponse,p_validation:validation,p_candidate:candidate}))throw Error('Specification draft checkpoint was not saved; no result can advance');
+  if(specificationV2){
+   let checkpointSaved=false;
+   try{checkpointSaved=await rpc<boolean>('checkpoint_mission_specification_draft',{p_id:job.id,p_lease:job.lease,p_response:rawResponse,p_validation:validation,p_candidate:candidate});}catch{/* The terminal failure commit below still preserves the response. */}
+   if(!checkpointSaved)throw new MissionModelFailure('Specification draft checkpoint was not saved; no result can advance',{checkpointFailed:true,partialText:rawResponse,rejectedSpecification:candidate,specificationCharacters:candidate.length,...(validation?{specificationValidationFeedback:validation}:{})});
+  }
   if(validation)throw new MissionModelFailure('Invalid game specification: '+validation.slice(0,600),{specificationValidationFeedback:patchFailed?job.result?.specificationValidationFeedback:validation,...(patchFailed?{specificationPatchFeedback:validation}:{}),rejectedSpecification:candidate,specificationCharacters:candidate.length});
   result.text=JSON.stringify(validated);
  }
