@@ -84,11 +84,11 @@ test('schema retry fits counted input and reduced output inside the same stage w
  assert.equal(budget.specificationRoutingOutputFloor(claim,''),6000);
  assert.equal(await budget.specificationRetryOutputLimit(claim,6500,16000),7500);
  await budget.assertSpecificationStageCapacity(claim,14000);
- await assert.rejects(budget.specificationRetryOutputLimit(claim,8500,16000),/reserved tokens|allowance/);
+ await assert.rejects(budget.specificationRetryOutputLimit(claim,8500,16000),/reserved tokens|allowance|cannot fit/);
  capacity={...capacity,remainingTokens:95000};
- await assert.rejects(budget.specificationRetryOutputLimit(claim,6500,16000),/reserved tokens|allowance/);
+ await assert.rejects(budget.specificationRetryOutputLimit(claim,6500,16000),/reserved tokens|allowance|cannot fit/);
  capacity={...capacity,authorized:false};
- await assert.rejects(budget.specificationRetryOutputLimit(claim,1,16000),/authorized|allowance/);
+ await assert.rejects(budget.specificationRetryOutputLimit(claim,1,16000),/authorized|allowance|cannot fit/);
 });
 test('live-sized saved candidate is reused with zero inference; current review receives original research and full findings',async()=>{
  const h=harness();const compose=h.job('compose','compose');h.jobs.push(compose);
@@ -295,4 +295,12 @@ test('production Full reserves bounded assessment without increasing project or 
  assert.ok(full.requiredTokens<=350000-31887);
  assert.equal(helper.specificationProjectAdmission(false,1).requiredTokens,360000,'ordinary and staging budgets unchanged');
  assert.equal(helper.specificationProjectAdmission(false,2,60000).requiredTokens,420000,'extra milestones cannot evade headroom');
+});
+
+test('production third composition cannot consume protected review allowance even with zero input',async()=>{
+ const capacity={authorized:true,remainingTokens:93263,stageRemainingTokens:3263,callsRemaining:10,routingCallsRemaining:10};
+ const budget=modules({'@/lib/missions/store':{rpc:async()=>capacity}})('@/lib/missions/request-budget');
+ const claim={mission:{project_kind:'specification',project_evidence:{projectProfile:'game',specificationBudget:{version:1}}},job:{role:'compose',result:{rejectedSpecification:'saved draft'}}};
+ await assert.rejects(budget.specificationRetryOutputLimit(claim,9138,16000),error=>error.requestedTokens===103138&&/counted input 9138/.test(error.message)&&/protected future stages 88000/.test(error.message));
+ await assert.rejects(budget.specificationRetryOutputLimit(claim,0,16000),/cannot fit/);
 });

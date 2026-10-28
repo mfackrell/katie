@@ -128,7 +128,7 @@ export async function missionModel(claim:Claim,instruction:string,input:string,t
    console.warn('[Missions] Model attempt failed; trying next eligible provider',{jobId:claim.job.id,provider:choice.provider.name,model:choice.modelId,error:detail.slice(0,350)});
   }
  }
- if(last instanceof MissionAdmissionError)throw new MissionModelFailure('No eligible model request fits the remaining mission allowance. Saved work and all usage are preserved.',{...incomplete,admissionDenied:true,requestedTokens:last.requestedTokens,remainingTokens:last.capacity?.remainingTokens,attemptedModels});
+ if(last instanceof MissionAdmissionError)throw new MissionModelFailure('No eligible model request fits the remaining mission allowance. Saved work and all usage are preserved.',{...incomplete,admissionDenied:true,admissionReason:last.message,requestedTokens:last.requestedTokens,remainingTokens:last.capacity?.remainingTokens,attemptedModels});
  if(last instanceof MissionModelFailure)throw new MissionModelFailure(last.message,{...last.partial,attemptedModels,providerFailure:true});
  if(last instanceof Error)throw new MissionModelFailure(last.message,{...incomplete,attemptedModels,providerFailure:true});
  throw Error('No eligible orchestration model could execute this assignment');

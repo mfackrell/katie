@@ -68,7 +68,7 @@ export async function specificationRetryOutputLimit(claim:Claim,inputTokens:numb
  const future=SPECIFICATION_STAGE_TOKENS.review+SPECIFICATION_STAGE_TOKENS.revision+SPECIFICATION_STAGE_TOKENS.review_again;
  const capacity=await rpc<(MissionCapacity&{stageRemainingTokens:number})|null>('specification_call_capacity',{p_id:claim.job.id,p_lease:claim.job.lease});
  const available=capacity?.authorized?Math.min(capacity.stageRemainingTokens,capacity.remainingTokens-future)-inputTokens:0;
- if(!Number.isSafeInteger(available)||available<6000)throw new MissionAdmissionError(inputTokens+6000+future,capacity);
+ if(!Number.isSafeInteger(available)||available<6000)throw new MissionAdmissionError(inputTokens+6000+future,capacity?{...capacity,reason:`Specification retry cannot fit: counted input ${inputTokens}, minimum output 6000, stage remaining ${capacity.stageRemainingTokens}, mission remaining ${capacity.remainingTokens}, protected future stages ${future}. No provider call was authorized.`}:capacity);
  return Math.min(desired,available);
 }
 export async function explainAdmissionDenial(claim:Claim,requestedTokens:number):Promise<never>{

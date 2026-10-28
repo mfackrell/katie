@@ -636,3 +636,23 @@ test('validated complete edit prefixes receive one durable continuation without 
  await worker.runMissionBatch(incomplete);assert.equal(committed.p_status,'queued');assert.equal(committed.p_mission_status,null);assert.equal(committed.p_result.partialText,partial);assert.equal(revision.attempts,1);
  revision.attempts=2;claimed=false;await worker.runMissionBatch(incomplete);assert.equal(committed.p_status,'failed');assert.equal(committed.p_mission_status,'blocked');assert.equal(committed.p_final,null);
 });
+
+test('specification admission denial preserves the previous rejected draft without granting another attempt',async()=>{
+ const m=mission();m.project_kind='specification';m.project_evidence={projectProfile:'game'};
+ const j=job(m,'compose','compose');j.attempts=3;
+ j.result={rejectedSpecification:'{"name":"saved invalid draft"}',specificationValidationFeedback:'browser contract mismatch',specificationCharacters:30};
+ let claimed=false,committed;
+ const load=modules({'@/lib/missions/store':{readMission:async()=>({mission:m,jobs:[j]}),rpc:async(n,a)=>{if(n==='claim_mission_work'){if(claimed)return null;claimed=true;return{mission:m,job:j};}committed=a;return true;}}});
+ const {MissionModelFailure}=load('@/lib/missions/model');
+ await load('@/lib/missions/worker').runMissionBatch(async()=>{throw new MissionModelFailure('No eligible model request fits',{admissionDenied:true,requestedTokens:103138,remainingTokens:93263});});
+ assert.equal(committed.p_result.rejectedSpecification,j.result.rejectedSpecification);
+ assert.equal(committed.p_result.specificationValidationFeedback,'browser contract mismatch');
+ assert.equal(committed.p_result.admissionDenied,true);
+ assert.equal(committed.p_status,'failed');assert.equal(committed.p_mission_status,'blocked');assert.equal(committed.p_final,null);
+ assert.equal(j.attempts,3);
+ claimed=false;
+ await load('@/lib/missions/worker').runMissionBatch(async()=>{throw new MissionModelFailure('Invalid game specification',{rejectedSpecification:'new exact draft',specificationValidationFeedback:'new feedback',specificationCharacters:15});});
+ assert.equal(committed.p_result.rejectedSpecification,'new exact draft');
+ assert.equal(committed.p_result.specificationValidationFeedback,'new feedback');
+ assert.equal(committed.p_status,'failed');
+});
