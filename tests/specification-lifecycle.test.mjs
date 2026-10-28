@@ -59,6 +59,21 @@ function harness(checkpoint=helper.selectSpecificationRecovery(fixture.jobs,fixt
   instruction:'Preserve original requirements and address the saved independent findings.',status:'running',payload:{},result:null,dependencies:[],attempts:1});
  return {mission,jobs,job,commits,modelInputs,execute:runtime('@/lib/missions/worker').executeClaim,ids:runtime('@/lib/projects/completion').PROJECT_ACCEPTANCE_IDS};
 }
+test('fresh and rejected game specification calls receive the exact serialization contract without bypassing validation',async()=>{
+ for(const retry of [false,true]){
+  const h=harness(null),compose=h.job('compose','compose');h.jobs.push(compose);
+  if(retry)compose.result={rejectedSpecification:'{"name":"broken"}',specificationValidationFeedback:'schemaVersion/game required'};
+  await assert.rejects(h.execute({mission:h.mission,job:compose},async(_,instruction,input)=>{
+   assert.match(instruction,/rules = \{schemaVersion:1, game:\{id,title,edition,kind/);
+   assert.match(instruction,/expectedState:COMPLETE_JSON_STATE/);
+   assert.match(instruction,/Final milestone contract equals finalContract/);
+   assert.match(input,/Take Eleven/);
+   if(retry)assert.match(input,/schemaVersion\/game required/);
+   return {text:'{"name":"broken"}'};
+  }),/Invalid game specification/);
+  assert.equal(h.commits.length,0,'schema instructions never manufacture a valid candidate or approval');
+ }
+});
 test('live-sized saved candidate is reused with zero inference; current review receives original research and full findings',async()=>{
  const h=harness();const compose=h.job('compose','compose');h.jobs.push(compose);
  await h.execute({mission:h.mission,job:compose},async()=>assert.fail('Saved specification must not be regenerated'));
