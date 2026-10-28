@@ -84,7 +84,9 @@ import {
   improveCreativeOriginality,
 } from "@/lib/chat/creative-continuity";
 import { isLikelyProviderRefusal, runWithRefusalFallback, shouldRetryOnProviderRefusal } from "@/lib/router/refusal-detection";
-import { generateRunpodImage, runpodImageConfigured, shouldTryRunpodImage, isModerationImageFailure, type ImageProviderFailure } from "@/lib/chat/runpod-image-fallback";
+import { isExplicitVisionPolicyRefusal, selectGrokVisionFallback } from "@/lib/chat/vision-refusal-fallback";
+import { describeImageWithRunpodQwen } from "@/lib/chat/runpod-still-vision";
+import { generateRunpodImage, runpodImageConfigured, shouldTryRunpodImage, isModerationImageFailure, isTechnicalImageFailure, type ImageProviderFailure } from "@/lib/chat/runpod-image-fallback";
 import {
   classifyGenerationFailure,
   describeGenerationFailure,
@@ -2240,6 +2242,7 @@ ${chunkWorkflowSummary}`;
               routingSource?: "initial" | "ai-reroute" | "deterministic-fallback";
               runpodVideoFallback?: boolean;
               runpodImageFallback?: boolean;
+              runpodStillVisionFallback?: boolean;
             };
             const attempts: GenerationAttempt[] = [
               { provider, modelId, explainer: selectionExplainer, routingSource: "initial" },
@@ -2266,6 +2269,7 @@ ${chunkWorkflowSummary}`;
             const rerouteHasImages = Array.isArray(images) && images.length > 0;
             const rerouteHasImageAttachments = attachments.some((attachment) => attachment.mimeType.startsWith("image/"));
             const rerouteHasVisualInput = rerouteHasImages || rerouteHasImageAttachments;
+            const stillImageVisionRequest = resolvedRequestIntent === "vision-analysis" && rerouteHasVisualInput && !hasVideoInput;
             const rerouteRoutingContext = [
               controlPlaneConversationContext,
               `Refusal reroute has visual input: ${rerouteHasVisualInput}`
@@ -2276,12 +2280,17 @@ ${chunkWorkflowSummary}`;
             const generationAttempt = await runWithRefusalFallback<GenerationAttempt>({
               attempts,
               shouldRetryRefusal: retryOnProviderRefusal,
+              retryExplicitContentRefusal: !stillImageVisionRequest,
               retryTerminalError: ({ attempt, error, remainingAttempts }) =>
                 (hasVideoInput && attempt.provider.name === "google" && remainingAttempts.length > 0) ||
                 (resolvedRequestIntent === "image-generation" &&
                  !attempt.runpodImageFallback &&
                  (attempt.provider.name === "grok" || attempt.provider.name === "google") &&
                  !isModerationImageFailure(error) &&
+                 !resolvedRoutingIntentForReroute?.secondaryIntents?.includes("safety-sensitive-vision")) ||
+                (stillImageVisionRequest && attempt.provider.name === "grok" &&
+                 !attempt.runpodStillVisionFallback && images.length === 1 &&
+                 Boolean(process.env.RUNPOD_API_KEY) && isTechnicalImageFailure(error) &&
                  !resolvedRoutingIntentForReroute?.secondaryIntents?.includes("safety-sensitive-vision")),
               runAttempt: async (candidate, attemptIndex) => {
                 if (verifyingSavedDraft && pendingReviewClarification) {
@@ -2289,6 +2298,19 @@ ${chunkWorkflowSummary}`;
                   // they must not draft a replacement answer to a short "yes".
                   return { text: pendingReviewClarification.pending.candidate,
                     provider: candidate.provider.name, model: candidate.modelId };
+                }
+                if (candidate.runpodStillVisionFallback) {
+                  if (!stillImageVisionRequest || images.length !== 1 ||
+                      !process.env.RUNPOD_API_KEY ||
+                      resolvedRoutingIntentForReroute?.secondaryIntents?.includes("safety-sensitive-vision")) {
+                    throw new Error("RunPod still-image vision fallback is not eligible.");
+                  }
+                  console.info("[Vision Routing] Grok failed; using RunPod Qwen image analysis", {
+                    requestId, model:"Qwen/Qwen3-VL-8B-Instruct"
+                  });
+                  const qwen = await describeImageWithRunpodQwen(images[0], messageForGeneration);
+                  return {provider:"runpod" as ProviderResponse["provider"],
+                    model:qwen.model,text:qwen.text};
                 }
                 if (candidate.runpodImageFallback) {
                   // Only after BOTH Grok and Gemini experienced technical errors.
@@ -2829,13 +2851,40 @@ ${chunkWorkflowSummary}`;
                 };
               },
               detectRefusal: (generationResult, candidate) =>
-                hasVideoInput && videoReplyTarget &&
-                generationResult.provider === videoReplyTarget.provider &&
-                generationResult.model === videoReplyTarget.model
-                  ? false // A conversational-model refusal is final; do not bypass it with another visual model.
-                  : isLikelyProviderRefusal(generationResult, candidate.provider.name),
-              rerouteOnRefusal: async ({ attempt }) => {
-                if (hasVideoInput) return null; // Always honor deterministic Grok video-frame fallback.
+                (stillImageVisionRequest && isExplicitVisionPolicyRefusal(generationResult.text ?? ""))
+                  ? false // Explicit safety/policy refusals must never trigger Grok fallback.
+                  : hasVideoInput && videoReplyTarget &&
+                    generationResult.provider === videoReplyTarget.provider &&
+                    generationResult.model === videoReplyTarget.model
+                    ? false // Video conversational model decisions remain final.
+                    : isLikelyProviderRefusal(generationResult, candidate.provider.name),
+              rerouteOnRefusal: async ({ attempt, attemptedAttempts }) => {
+                if (hasVideoInput) return null;
+                // Standalone photo analysis: prefer a real Grok vision model when
+                // the first model returns a generic inability instead of a description.
+                // Never send an uploaded photo to RunPod FLUX (generation-only).
+                if (stillImageVisionRequest && attempt.provider.name !== "grok" &&
+                    !attemptedAttempts.some(candidate => candidate.provider.name === "grok")) {
+                  const grokProvider = providers.find(candidate => candidate.name === "grok");
+                  if (grokProvider) {
+                    const grokModel = selectGrokVisionFallback(await grokProvider.listModels());
+                    if (grokModel) {
+                      console.info("[Vision Routing] generic inability; selecting Grok vision fallback", {
+                        requestId, fromProvider:attempt.provider.name, fromModel:attempt.modelId,
+                        fallbackModel:grokModel
+                      });
+                      return {provider:grokProvider,modelId:grokModel,
+                        routingSource:"deterministic-fallback" as const};
+                    }
+                  }
+                }
+                if (stillImageVisionRequest && attempt.provider.name === "grok" &&
+                    !attempt.runpodStillVisionFallback && images.length === 1 &&
+                    process.env.RUNPOD_API_KEY &&
+                    !resolvedRoutingIntentForReroute?.secondaryIntents?.includes("safety-sensitive-vision")) {
+                  return {provider:attempt.provider,modelId:"runpod-qwen3-vl-image",
+                    runpodStillVisionFallback:true,routingSource:"deterministic-fallback" as const};
+                }
                 if (!resolvedRoutingIntentForReroute || refusalRerouteCount >= maxRefusalReroutes) {
                   return null;
                 }
@@ -2948,6 +2997,14 @@ ${chunkWorkflowSummary}`;
                 if (selfToolsEnabled && selfInspectionRequest) return null; // Inspection-contract failures cannot be repaired by switching models.
                 if (hasVideoInput) return null; // Attempt Grok directly, not another Gemini routing loop.
                 if (attempt.runpodImageFallback) return null;
+                if (attempt.runpodStillVisionFallback) return null;
+                if (stillImageVisionRequest && attempt.provider.name === "grok" &&
+                    images.length === 1 && process.env.RUNPOD_API_KEY &&
+                    !isModerationImageFailure(error) &&
+                    !resolvedRoutingIntentForReroute?.secondaryIntents?.includes("safety-sensitive-vision")) {
+                  return {provider:attempt.provider,modelId:"runpod-qwen3-vl-image",
+                    runpodStillVisionFallback:true,routingSource:"deterministic-fallback" as const};
+                }
                 // Third provider is optional after failures from both image models,
                 // never a workaround for their content/safety decisions.
                 if (resolvedRequestIntent === "image-generation" &&
@@ -3113,7 +3170,7 @@ ${chunkWorkflowSummary}`;
             });
             result = generationAttempt.result;
             provider = generationAttempt.attempt.provider;
-            modelId = generationAttempt.attempt.runpodImageFallback
+            modelId = generationAttempt.attempt.runpodImageFallback || generationAttempt.attempt.runpodStillVisionFallback
               ? generationAttempt.result.model : generationAttempt.attempt.modelId;
 
             if (!result || (!result.text && !(result.content?.length) && !streamedText)) {
