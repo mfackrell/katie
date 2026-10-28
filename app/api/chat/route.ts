@@ -441,7 +441,7 @@ function buildGenerationParams({
 }) {
   return {
     name,
-    persona: `${persona}\n\nCURRENT_REQUEST_TIMESTAMP_UTC: ${new Date().toISOString()}`,
+    persona: `${persona}\n\nCURRENT_REQUEST_TIMESTAMP_UTC: ${new Date().toISOString()}\nTimestamp metadata in this instruction and in conversation-history headers (including [Message timestamp: ...]) is for internal chronology only. Never reproduce or prefix a user-facing reply with these timestamp labels or raw timestamps unless the user specifically asks for them.`,
     summary,
     history,
     user: message,
