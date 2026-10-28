@@ -113,6 +113,8 @@ test('Full continuation preserves failed trial and authorizes only bounded owner
   const work=(await db.query('select claim_mission_work() c')).rows[0].c;
   assert.equal(work.mission.project_id,project);assert.notEqual(work.mission.id,failedMission);assert.equal(work.mission.token_allowance,90000);
   assert.equal(work.mission.project_evidence.specificationBudget.version,2);
+  assert.equal(work.job.result.rejectedSpecification,'{"name":"synthetic invalid historical draft"}');
+  assert.equal(work.job.result.sourceContinuationId,approval.id);
   const reserve=async tokens=>(await db.query('select benchmark_reserve_mission_call($1,$2,$3,$4,$5,false) id',[work.job.id,work.job.lease,randomUUID(),'openai:gpt-5.3-codex',tokens])).rows[0].id;
   const draft='select checkpoint_mission_specification_draft($1,$2,$3,$4,$5) ok';
   assert.equal((await db.query(draft,[work.job.id,randomUUID(),'raw',null,null])).rows[0].ok,false);
@@ -138,6 +140,8 @@ test('Full continuation preserves failed trial and authorizes only bounded owner
   await db.query('set local role service_role');
   assert.equal((await db.query(rpc,[owner,project,plan.planHash,true])).rows[0].result.live,false);
   assert.equal(await reserve(100),null);await db.query('rollback');
+  assert.deepEqual((await db.query('select to_jsonb(m) m from agent_missions m where id=$1',[failedMission])).rows[0].m,snapshot);
+  assert.deepEqual((await db.query('select to_jsonb(t) t from benchmark_three_arm_trials t where id=$1',[trial])).rows[0].t,originalTrial);
   await db.query('reset role');await db.query('set role authenticated');
   await assert.rejects(db.query(rpc,[owner,project,plan.planHash,true]),/permission denied/);
   await assert.rejects(db.query('select * from benchmark_full_continuations'),/permission denied/);

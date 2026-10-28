@@ -112,17 +112,34 @@ async function advance(p: Project) {
                 return typeof r?.summary === 'string' ? [r.summary] : j.detail ? [j.detail] : [];
             }).map(s => s.trim()).filter(Boolean);
             const notes = findings.join('\n');
-            const currentStage = p.spec?.milestones[Math.min(p.milestone_index, (p.spec?.milestones.length ?? 1)-1)];
-            const attempts = runs.filter(r => r.kind === 'development' && r.milestone_index === p.milestone_index).length;
+            const repairIndex = Math.min(p.milestone_index, (p.spec?.milestones.length ?? 1)-1);
+            const currentStage = p.spec?.milestones[repairIndex];
+            const attempts = runs.filter(r => r.kind === 'development' && r.milestone_index === repairIndex).length;
+            // A completed final assessment can expose an implementation defect
+            // after browser acceptance. Reuse the existing final-increment repair,
+            // but never interpret a coordinator failure or optional advice as one.
+            const finalRun = [...runs].reverse().find(r => r.kind === 'development' &&
+                r.milestone_index === repairIndex && r.outcome?.head === p.verified_sha &&
+                r.binding?.scopeHash === p.approved_hash);
+            const assessmentReview = [...reviews].reverse().find(j => j.status === 'completed');
+            const assessmentChecks = assessmentReview?.result?.checks;
+            const assessmentFindings = Array.isArray(assessmentChecks) ? assessmentChecks
+                .filter(c => c && typeof c === 'object' && (c as Record<string,unknown>).passed === false)
+                .map(c => String((c as Record<string,unknown>).id) + ': ' + String((c as Record<string,unknown>).evidence ?? 'Failed acceptance check')) : [];
+            const assessmentRepair = p.phase === 'assessment' && Boolean(p.verified_sha && finalRun &&
+                p.preview?.browserAcceptance?.passed && p.preview.headSha === p.verified_sha &&
+                assessmentReview?.result?.verdict === 'changes_requested' && assessmentFindings.length);
+            const repairFindings = assessmentRepair ? assessmentFindings : findings;
             // Never turn a blocked research/specification/review coordination failure
             // into another coding job. Only a failed development deliverable with
             // actionable reviewer findings is eligible for one targeted repair.
-            if (p.phase === 'development' && p.approved_hash && currentStage && findings.length &&
-                p.cycles < p.max_cycles && attempts < 2 && current.jobs.some(j => j.role === 'development' && j.status === 'completed')) {
-                await finish('retry', { detail: 'TARGETED REPAIR ONLY. Preserve approved scope and verified prior milestones. Fix these reviewer findings: ' + notes, findings, failed_mission: m.id });
+            if (m.status === 'blocked' && p.approved_hash && p.approved_hash === p.approval_hash && currentStage && repairFindings.length &&
+                p.cycles < p.max_cycles && attempts < 2 && (assessmentRepair ||
+                    p.phase === 'development' && current.jobs.some(j => j.role === 'development' && j.status === 'completed'))) {
+                await finish('retry', { detail: 'TARGETED REPAIR ONLY. Preserve approved scope and verified prior milestones. Fix these reviewer findings: ' + repairFindings.join('\n'), findings: repairFindings, failed_mission: m.id });
                 return;
             }
-            if(p.phase==='research'&&await projectRpc<boolean>('recover_project_research',{p_id:p.id,p_lease:p.lease}))return;
+            if(m.status==='blocked'&&p.phase==='research'&&await projectRpc<boolean>('recover_project_research',{p_id:p.id,p_lease:p.lease}))return;
             await finish('block', { detail: 'A project milestone is blocked: ' + (notes || m.detail || m.status) });
             return;
         }
