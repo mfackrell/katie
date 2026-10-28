@@ -1,3 +1,4 @@
+import {loadFullBenchmarkBinding} from '../scripts/benchmark/full-project-gate.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
@@ -11,7 +12,7 @@ function loadRouterFixture({failPrimary=false,incompletePrimary=false,emptyTrunc
  const second={name:'anthropic',generate:async p=>{calls.push(['anthropic',p.modelId]);return{text:'recovered verified text',model:p.modelId,provider:'anthropic',usage:{totalTokens:72}};}};
  const openai={name:'openai',generate:async p=>{calls.push(['openai',p.modelId]);return{text:'full trial model result',model:p.modelId,provider:'openai',usage:{totalTokens:53}};}};
  const out=ts.transpileModule(source,{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022,esModuleInterop:true}}).outputText,exports={};
- const require=name=>name==='./review-fallback.mjs'?{shouldFallbackIncompleteReview}
+ const require=name=>name==='../../scripts/benchmark/full-project-gate.mjs'?{loadFullBenchmarkBinding}:name==='./review-fallback.mjs'?{shouldFallbackIncompleteReview}
  :name==='@/lib/orchestration/routing'?{orchestrationChoices:async options=>{chosen++;routingOptions=options;if(fullBound){const id=await options.accounting.reserve('openai:gpt-5.3-codex',100);await options.accounting.finish(id,5);return[{provider:openai,modelId:'gpt-5.3-codex',reasoning:'fixed benchmark policy'}];}return[{provider:first,modelId:'gemini-3.1-pro',reasoning:'fixture'},{provider:second,modelId:'claude-sonnet-4-6',reasoning:'fixture'}];},orchestrationFailure:async()=> 'provider'}
  :name==='@/lib/orchestration/bounded-provider'?{boundedProvider:choice=>({post:async()=>({input_tokens:20}),responses:{create:async request=>{const r=await choice.provider.generate({modelId:request.model});return{status:(incompletePrimary||emptyTruncation)&&choice.provider===first?'incomplete':'completed',incomplete_details:{reason:emptyTruncation?'max_output_tokens':'provider_interrupted'},output_text:emptyTruncation&&choice.provider===first?'':r.text,output:[],usage:{total_tokens:r.usage.totalTokens}};}}})}
  :name==='./request-budget'?{assertSpecificationStageCapacity:async()=>true,fitsMissionEnvelope:()=>true,missionInputLimit:()=>48000,missionOutputLimit:claim=>claim.job.role==='review'?5000:3000,missionExecutionDeadline:()=>Date.now()+240000,missionAttemptTimeout:()=>90000,MissionAdmissionError:class extends Error{},explainAdmissionDenial:async()=>{throw Error('Worker no longer authorized or mission allowance exhausted');}}
@@ -76,11 +77,11 @@ test('empty output at the model cap falls back without buying a larger empty ret
 });
 
 test('Full DO model route is fixed, ledger-bound, and does not call a provider when paid execution is disabled',async()=>{
- const names=['NEXT_PUBLIC_SUPABASE_URL','KATIE_FULL_BENCHMARK_DISPATCH','KATIE_BENCHMARK_PAID_EXECUTION'];
+ const names=['NEXT_PUBLIC_SUPABASE_URL','KATIE_FULL_BENCHMARK_DISPATCH','KATIE_BENCHMARK_PAID_EXECUTION','KATIE_NATIVE_BENCHMARK_DISPATCH','KATIE_FULL_BENCHMARK_TRIAL_ID'];
  const old=Object.fromEntries(names.map(k=>[k,process.env[k]]));
  try{
   process.env.NEXT_PUBLIC_SUPABASE_URL='https://iytvavgbaainnsrecmcx.supabase.co';
-  process.env.KATIE_FULL_BENCHMARK_DISPATCH='enabled';process.env.KATIE_BENCHMARK_PAID_EXECUTION='disabled';
+  process.env.KATIE_NATIVE_BENCHMARK_DISPATCH='enabled';process.env.KATIE_FULL_BENCHMARK_TRIAL_ID='trial';process.env.KATIE_FULL_BENCHMARK_DISPATCH='enabled';process.env.KATIE_BENCHMARK_PAID_EXECUTION='disabled';
   const denied=loadRouterFixture({fullBound:true});
   await assert.rejects(denied.run(),/paid execution is disabled/);
   assert.equal(denied.calls.length,0);assert.equal(denied.chosen(),0);

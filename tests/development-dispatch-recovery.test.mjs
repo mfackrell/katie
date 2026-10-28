@@ -38,7 +38,7 @@ function fixture(){
   if(name==='commit_mission_work'){assert.equal(args.p_lease,lease);commits.push(args);job.status=args.p_status;return true;}
   return false;
  };
- const db={from:()=>{const q={select(){return q;},eq(){return q;},order(){return q;},limit(){return q;},returns(){return q;},maybeSingle:async()=>({data:{repository_full_name:'owner/repo'},error:null}),then:resolve=>Promise.resolve({data:[],error:null}).then(resolve)};return q;}};
+ const db={from:table=>{const q={select(){return q;},eq(){return q;},order(){return q;},limit(){return q;},returns(){return q;},maybeSingle:async()=>({data:table==='benchmark_full_project_bindings'?null:{repository_full_name:'owner/repo'},error:null}),then:resolve=>Promise.resolve({data:[],error:null}).then(resolve)};return q;}};
  class GitHub{
   users={getAuthenticated:async()=>{if(failPreflight){const error=Error('503 temporary GitHub failure');error.status=503;throw error;}return{data:{type:'User',login:'owner'}};}};
   repos={get:async()=>({data:{owner:{type:'User',login:'owner'}}})};

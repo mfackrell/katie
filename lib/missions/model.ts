@@ -18,6 +18,7 @@ export class MissionModelFailure extends Error { constructor(message:string,read
 export type ModelResult={text:string;sources:Array<{url:string;title:string}>;calculations:unknown[];model:string;provider?:string;routingReason?:string;attemptedModels?:string[];composerNotes?:string;requestedExecutionEffort?:string};
 type FullBinding={trial_id:string;account_id:string;benchmark_contract_hash:string;baseline_sha:string;model:string};
 async function fullProjectBinding(claim:Claim):Promise<FullBinding|null>{
+ if(!claim.mission.project_id)return null;
  return loadFullBenchmarkBinding(getSupabaseAdminClient(),claim.mission.project_id,process.env);
 }
 function fullBenchmarkAccounting(claim:Claim){

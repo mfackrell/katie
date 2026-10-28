@@ -237,7 +237,7 @@ test('checkpoint persistence failures retain their actual failure classification
 });
 test('routing cannot spend the mandatory execution output or future-stage headroom',async()=>{
  let reservedRouting=0;
- const runtime=modules({'@/lib/missions/store':{rpc:async(name)=>{
+ const runtime=modules({'@/lib/data/supabase/admin':{getSupabaseAdminClient:()=>({from:table=>{assert.equal(table,'benchmark_full_project_bindings');const q={select:()=>q,eq:()=>q,maybeSingle:async()=>({data:null,error:null})};return q;}})},'@/lib/missions/store':{rpc:async(name)=>{
   if(name==='specification_call_capacity')return {authorized:true,remainingTokens:90000,stageRemainingTokens:9000,callsRemaining:8,routingCallsRemaining:8};
   if(name==='reserve_mission_routing_call')reservedRouting++;
   return true;
