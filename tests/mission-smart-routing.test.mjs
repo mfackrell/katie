@@ -6,16 +6,16 @@ import vm from 'node:vm';
 import ts from 'typescript';
 import {shouldFallbackIncompleteReview} from '../lib/missions/review-fallback.mjs';
 const source=readFileSync('lib/missions/model.ts','utf8');
-function loadRouterFixture({failPrimary=false,incompletePrimary=false,emptyTruncation=false,allow=true,acceptance=false,fullBound=false}={}){
- let calls=[],reserve=[],rpcEvents=[],chosen=0,routingOptions;
+function loadRouterFixture({failPrimary=false,incompletePrimary=false,emptyTruncation=false,allow=true,acceptance=false,fullBound=false,outputBudget=Infinity}={}){
+ let requests=[],calls=[],reserve=[],rpcEvents=[],chosen=0,routingOptions;
  const first={name:'google',generate:async p=>{calls.push(['google',p.modelId]);if(failPrimary){const err=Error('quota');err.status=429;err.code='insufficient_quota';throw err;}return{text:'valid model result',model:p.modelId,provider:'google',usage:{totalTokens:65}};}};
  const second={name:'anthropic',generate:async p=>{calls.push(['anthropic',p.modelId]);return{text:'recovered verified text',model:p.modelId,provider:'anthropic',usage:{totalTokens:72}};}};
  const openai={name:'openai',generate:async p=>{calls.push(['openai',p.modelId]);return{text:'full trial model result',model:p.modelId,provider:'openai',usage:{totalTokens:53}};}};
  const out=ts.transpileModule(source,{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022,esModuleInterop:true}}).outputText,exports={};
  const require=name=>name==='../../scripts/benchmark/full-project-gate.mjs'?{loadFullBenchmarkBinding}:name==='./review-fallback.mjs'?{shouldFallbackIncompleteReview}
  :name==='@/lib/orchestration/routing'?{orchestrationChoices:async options=>{chosen++;routingOptions=options;if(fullBound){const id=await options.accounting.reserve('openai:gpt-5.3-codex',100);await options.accounting.finish(id,5);return[{provider:openai,modelId:'gpt-5.3-codex',reasoning:'fixed benchmark policy'}];}return[{provider:first,modelId:'gemini-3.1-pro',reasoning:'fixture'},{provider:second,modelId:'claude-sonnet-4-6',reasoning:'fixture'}];},orchestrationFailure:async()=> 'provider'}
- :name==='@/lib/orchestration/bounded-provider'?{boundedProvider:choice=>({post:async()=>({input_tokens:20}),responses:{create:async request=>{const r=await choice.provider.generate({modelId:request.model});return{id:'resp_fixture',status:(incompletePrimary||emptyTruncation)&&choice.provider===first?'incomplete':'completed',incomplete_details:{reason:emptyTruncation?'max_output_tokens':'provider_interrupted'},output_text:emptyTruncation&&choice.provider===first?'':r.text,output:[],usage:{total_tokens:r.usage.totalTokens}};}}})}
- :name==='./request-budget'?{assertSpecificationStageCapacity:async()=>true,fitsMissionEnvelope:()=>true,missionInputLimit:()=>48000,missionOutputLimit:claim=>claim.job.role==='review'?5000:3000,missionExecutionDeadline:()=>Date.now()+240000,missionAttemptTimeout:()=>90000,MissionAdmissionError:class extends Error{},explainAdmissionDenial:async()=>{throw Error('Worker no longer authorized or mission allowance exhausted');}}
+ :name==='@/lib/orchestration/bounded-provider'?{boundedProvider:choice=>({post:async()=>({input_tokens:20}),responses:{create:async request=>{requests.push(request);const r=await choice.provider.generate({modelId:request.model});return{id:'resp_fixture',status:(incompletePrimary||emptyTruncation)&&choice.provider===first?'incomplete':'completed',incomplete_details:{reason:emptyTruncation?'max_output_tokens':'provider_interrupted'},output_text:emptyTruncation&&choice.provider===first?'':r.text,output:[],usage:{total_tokens:r.usage.totalTokens}};}}})}
+ :name==='./request-budget'?{specificationRoutingOutputFloor:()=>5000,specificationRetryOutputLimit:async(_,inputTokens,desired)=>Math.min(desired,outputBudget),assertSpecificationStageCapacity:async()=>true,fitsMissionEnvelope:()=>true,missionInputLimit:()=>48000,missionOutputLimit:claim=>claim.job.role==='review'?5000:3000,missionExecutionDeadline:()=>Date.now()+240000,missionAttemptTimeout:()=>90000,MissionAdmissionError:class extends Error{},explainAdmissionDenial:async()=>{throw Error('Worker no longer authorized or mission allowance exhausted');}}
  :name==='@/lib/orchestration/request-rejection'?{rejectedBeforeInference:()=>false}
  :name==='@/lib/providers'?{getAvailableProviders:()=>[first,second]}
  :name==='@/lib/router/master-router'?{chooseProvider:async()=>{chosen++;return{provider:first,modelId:'gemini-3.1-pro',fallbackChain:[{provider:second,modelId:'claude-sonnet-4-6',score:1}]};}}
@@ -28,7 +28,7 @@ function loadRouterFixture({failPrimary=false,incompletePrimary=false,emptyTrunc
  :name==='./types'?{planSchema:{}}:{};
  vm.runInNewContext(out,{exports,require,process,Buffer,console,setTimeout,clearTimeout},{filename:'model.js'});
  const claim={mission:{id:'m',project_id:'p',objective:acceptance?'[SYNTHETIC PROVIDER FAILOVER ACCEPTANCE] Validate a bounded operations memo':'Implement an original game',project_evidence:acceptance?{syntheticFaultAcceptance:true}:undefined,team:[{id:'agent',config:{research:false}}],project_kind:'specification'},job:{id:'job',agent_id:'agent',lease:'lease',role:acceptance||emptyTruncation?'work':'review'}};
- return{run:()=>exports.missionModel(claim,'Review independent specification','Saved exact candidate'),calls,reserve,rpcEvents,chosen:()=>chosen,routing:()=>routingOptions};
+ return{run:()=>exports.missionModel(claim,'Review independent specification','Saved exact candidate'),requests,calls,reserve,rpcEvents,chosen:()=>chosen,routing:()=>routingOptions};
 }
 test('mission router selects capable candidate before inference and preserves model evidence',async()=>{
  const t=loadRouterFixture();const result=await t.run();
@@ -96,4 +96,14 @@ test('Full DO model route is fixed, ledger-bound, and does not call a provider w
   assert.equal(admitted.rpcEvents.filter(x=>x.name==='benchmark_finish_mission_call').length,1);
   assert.equal(admitted.rpcEvents.filter(x=>x.name==='benchmark_reconcile_provider_usage').length,1);
  }finally{for(const k of names){if(old[k]===undefined)delete process.env[k];else process.env[k]=old[k];}}
+});
+
+test('provider output cap and reservation use the same reduced retry output',async()=>{
+ const t=loadRouterFixture({outputBudget:7000});
+ await t.run();
+ assert.equal(t.requests[0].max_output_tokens,5000,'never increases ordinary output');
+ const retry=loadRouterFixture({outputBudget:2000});
+ await retry.run();
+ assert.equal(retry.requests[0].max_output_tokens,2000);
+ assert.equal(retry.reserve[0].p_tokens,20+256+2000,'counted input plus exactly the provider output cap');
 });
