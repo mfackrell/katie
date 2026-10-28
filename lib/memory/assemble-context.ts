@@ -12,6 +12,7 @@ import { createNeutralActorRoutingProfile } from "@/lib/router/actor-routing-pro
 interface AssembledContext {
   name: string;
   persona: string;
+  cacheablePersona?: string;
   summary: string;
   history: Message[];
   shortTermMemory: Record<string, unknown>;
@@ -68,6 +69,12 @@ export async function assembleContext(actorId: string, chatId: string): Promise<
   return {
     reviewMode: currentAgentTask()?.snapshot.reviewMode ?? actor.reviewMode ?? "adaptive",
     name: process.env.ASSISTANT_NAME || "Katie",
+    cacheablePersona: [
+      currentAgentTask()?.snapshot.instructions ?? actor.purpose,
+      getDeliverableStandardInstruction(),
+      getAdaptiveResponseCompositionInstruction(),
+      MEMORY_ARCHITECTURE_GUIDE,
+    ].join("\n\n"),
     persona: [
       currentAgentTask()?.snapshot.instructions ?? actor.purpose,
       getDeliverableStandardInstruction(),

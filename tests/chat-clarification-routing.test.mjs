@@ -237,7 +237,7 @@ async function runPipeline(f, selection, { message = SHORT_REPLY, history, outpu
     ...f.globals, ...f.helpers, ...selection,
     message, messageForGeneration: generationMessage, actorId: ACTOR_ID, chatId: CHAT_ID, requestId: 'current-request',
     taskProgressAssistantMessageId: 'current-answer', provider, providers: [provider], modelId: 'fixture-haiku',
-    name: 'Katie', personaForGeneration: 'Katie persona', summary: '', historyForProvider: history,
+    cacheablePersona: 'Katie persona', name: 'Katie', personaForGeneration: 'Katie persona', summary: '', historyForProvider: history,
     attachments: [], images: [], storedWebsite: { fresh: false, context: '', previousWebsiteEvidence: undefined },
     mediaMemory: null, timelineContext: '', hasVideoInput: false, creativeNarrativeRequest: false,
     resolvedRequestIntent: 'general-text', resolvedRoutingIntentForReroute: { complexity: 'low' },

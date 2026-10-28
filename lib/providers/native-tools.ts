@@ -1,3 +1,4 @@
+import { claudeCachedSystem, claudeInputUsage } from "./claude-cache";
 import { openAiCacheSettings } from "./openai-cache";
 import type { ToolTurnParams, ToolTurn } from '@/lib/tools/types';
 import type { LlmProvider } from './types';
@@ -18,7 +19,7 @@ export async function nativeToolTurn(provider: LlmProvider['name'], apiKey: stri
   } else if (provider === 'anthropic') {
     url = 'https://api.anthropic.com/v1/messages';
     headers['x-api-key'] = apiKey; headers['anthropic-version'] = '2023-06-01';
-    body = { model: p.modelId, max_tokens: 4096, system: p.system,
+    body = { model: p.modelId, max_tokens: 4096, system: claudeCachedSystem(p.system, p.cacheablePersona),
       tools: p.tools.map(t => ({ name: t.name, description: t.description, input_schema: t.parameters })),
       messages: p.messages.map(m => m.role === 'tool'
         ? { role: 'user', content: [{ type: 'tool_result', tool_use_id: m.callId, content: m.text }] }
@@ -102,7 +103,7 @@ export async function nativeToolTurn(provider: LlmProvider['name'], apiKey: stri
   }
   if (!text && !calls.length) throw Object.assign(new Error('Tool model returned no text or calls'), { code: 'native_response_empty' });
   if (calls.length > 8 || calls.some(c => typeof c.id !== 'string' || typeof c.name !== 'string')) throw new Error('Invalid tool calls');
-  return { response: { text, model: data.model ?? data.modelVersion ?? p.modelId, provider, truncated: data.status === 'incomplete' || data.stop_reason === 'max_tokens' || data.choices?.[0]?.finish_reason === 'length' || data.candidates?.[0]?.finishReason === 'MAX_TOKENS' }, calls, ...(provider === 'google' ? { nativeParts: data.candidates?.[0]?.content?.parts } : responsesApi ? { nativeParts: data.output } : {}) };
+  return { response: { ...(provider === "anthropic" ? { usage: { ...claudeInputUsage(data.usage), outputTokens: data.usage?.output_tokens } } : {}), text, model: data.model ?? data.modelVersion ?? p.modelId, provider, truncated: data.status === 'incomplete' || data.stop_reason === 'max_tokens' || data.choices?.[0]?.finish_reason === 'length' || data.candidates?.[0]?.finishReason === 'MAX_TOKENS' }, calls, ...(provider === 'google' ? { nativeParts: data.candidates?.[0]?.content?.parts } : responsesApi ? { nativeParts: data.output } : {}) };
   } catch (error) {
     const status = error && typeof error === 'object' && 'status' in error && typeof (error as {status?:unknown}).status === 'number'
       ? (error as {status:number}).status : httpStatus;
