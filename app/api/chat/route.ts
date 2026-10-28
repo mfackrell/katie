@@ -86,7 +86,7 @@ import {
 import { isLikelyProviderRefusal, runWithRefusalFallback, shouldRetryOnProviderRefusal } from "@/lib/router/refusal-detection";
 import { isExplicitVisionPolicyRefusal, selectGrokVisionFallback } from "@/lib/chat/vision-refusal-fallback";
 import { describeImageWithRunpodQwen } from "@/lib/chat/runpod-still-vision";
-import { generateRunpodImage, runpodImageConfigured, shouldTryRunpodImage, isModerationImageFailure, type ImageProviderFailure } from "@/lib/chat/runpod-image-fallback";
+import { generateRunpodImage, runpodImageConfigured, shouldTryRunpodImage, isModerationImageFailure, isTechnicalImageFailure, type ImageProviderFailure } from "@/lib/chat/runpod-image-fallback";
 import {
   classifyGenerationFailure,
   describeGenerationFailure,
@@ -2287,6 +2287,10 @@ ${chunkWorkflowSummary}`;
                  !attempt.runpodImageFallback &&
                  (attempt.provider.name === "grok" || attempt.provider.name === "google") &&
                  !isModerationImageFailure(error) &&
+                 !resolvedRoutingIntentForReroute?.secondaryIntents?.includes("safety-sensitive-vision")) ||
+                (stillImageVisionRequest && attempt.provider.name === "grok" &&
+                 !attempt.runpodStillVisionFallback && images.length === 1 &&
+                 Boolean(process.env.RUNPOD_API_KEY) && isTechnicalImageFailure(error) &&
                  !resolvedRoutingIntentForReroute?.secondaryIntents?.includes("safety-sensitive-vision")),
               runAttempt: async (candidate, attemptIndex) => {
                 if (verifyingSavedDraft && pendingReviewClarification) {
