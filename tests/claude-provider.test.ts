@@ -250,3 +250,38 @@ test("Claude sends rendered website images on both normal and streaming requests
     }
   } finally { globalThis.fetch = originalFetch; }
 });
+
+for (const streaming of [false, true]) {
+  test(`Claude cache preserves prompt and timestamps, and counts reads/writes (${streaming ? 'stream' : 'JSON'})`, async () => {
+    const originalFetch = globalThis.fetch;
+    const requests: any[] = [];
+    const usage = { input_tokens: 10, cache_read_input_tokens: 1000, cache_creation_input_tokens: 200, output_tokens: 5 };
+    globalThis.fetch = (async (_url, init) => {
+      requests.push(JSON.parse(String(init?.body)));
+      return requests.at(-1).stream ? sseResponse([
+        { type: 'message_start', message: { usage } },
+        { type: 'content_block_delta', delta: { type: 'text_delta', text: 'Done' } },
+        { type: 'message_delta', delta: { stop_reason: 'end_turn' }, usage: { output_tokens: 5 } },
+      ]) : jsonResponse({ content: [{ type: 'text', text: 'Done' }], stop_reason: 'end_turn', usage });
+    }) as typeof fetch;
+    try {
+      const provider = new ClaudeProvider('test');
+      const params = { ...baseParams, persona: 'Stable instructions\n\nCURRENT_REQUEST_TIMESTAMP_UTC: 2026-10-28T12:00:00Z', cacheablePersona: 'Stable instructions' };
+      const plain = { ...params, cacheablePersona: undefined };
+      await provider.generate(plain);
+      const result = streaming ? await provider.generateStream(params, {}) : await provider.generate(params);
+      assert.equal(requests[1].system.map((b: any) => b.text).join(''), requests[0].system);
+      assert.deepEqual(requests[1].system[0].cache_control, { type: 'ephemeral', ttl: '5m' });
+      assert.ok(!requests[1].system[0].text.includes('CURRENT_REQUEST_TIMESTAMP'));
+      assert.ok(requests[1].system[1].text.includes('2026-10-28T12:00:00Z'));
+      assert.equal(requests[1].system[1].cache_control, undefined);
+      assert.deepEqual(requests[1].messages, requests[0].messages);
+      assert.equal(result.usage?.inputTokens, 1210);
+      assert.equal(result.usage?.cacheReadInputTokens, 1000);
+      assert.equal(result.usage?.cacheCreationInputTokens, 200);
+      assert.equal(result.usage?.totalTokens, 1215);
+      await provider.generate({ ...params, persona: 'Replaced helper instructions' });
+      assert.equal(typeof requests[2].system, 'string');
+    } finally { globalThis.fetch = originalFetch; }
+  });
+}

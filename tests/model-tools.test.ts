@@ -293,3 +293,21 @@ test('native inference supports bounded response bodies above the old 256KB limi
     assert.equal(reply.response.text.length,oversizedText.length);
   }finally{globalThis.fetch=saved;}
 });
+
+test('Claude tool requests cache only the explicit persona prefix', async () => {
+  const originalFetch = globalThis.fetch;
+  let body: any;
+  globalThis.fetch = async (_url, init) => {
+    body = JSON.parse(String(init?.body));
+    return new Response(JSON.stringify({ content: [{ type: 'text', text: 'Done' }], usage: { input_tokens: 10, cache_read_input_tokens: 1000, cache_creation_input_tokens: 200, output_tokens: 5 } }));
+  };
+  try {
+    const system = 'Stable persona\nCURRENT_REQUEST_TIMESTAMP_UTC: now\nCurrent memory';
+    const result = await nativeToolTurn('anthropic', 'test', { modelId: 'claude-sonnet-5-5', system, cacheablePersona: 'Stable persona', messages: [{ role: 'user', text: 'Hi' }], tools: [], signal: new AbortController().signal });
+    assert.equal(body.system.map((block: any) => block.text).join(''), system);
+    assert.equal(body.system[0].cache_control.ttl, '5m');
+    assert.equal(body.system[1].cache_control, undefined);
+    assert.equal(result.response.usage?.inputTokens, 1210);
+    assert.equal(result.response.usage?.cacheReadInputTokens, 1000);
+  } finally { globalThis.fetch = originalFetch; }
+});
