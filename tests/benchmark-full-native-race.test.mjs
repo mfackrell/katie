@@ -6,6 +6,7 @@ import {tmpdir} from 'node:os';
 import {spawnSync} from 'node:child_process';
 import pg from 'pg';
 import {randomUUID} from 'node:crypto';
+import {protocolDigest} from '../scripts/benchmark/owner-staging-bootstrap.mjs';
 test('Full native trial admission uses two real PostgreSQL connections and one mission cap',
  {timeout:180000},async()=>{
  const bin=process.env.KATIE_TEST_PG_BIN||'/usr/lib/postgresql/16/bin';
@@ -169,6 +170,10 @@ test('Full native trial admission uses two real PostgreSQL connections and one m
   const before=(await db.query('select spent_tokens from benchmark_budget_accounts where id=$1',[linked.account_id])).rows[0].spent_tokens;
   const approvals=await Promise.all([db.query(approve,[owner,claim.job.id,scope]),other.query(approve,[owner,claim.job.id,scope])]);
   assert.equal(approvals[0].rows[0].approval.approvalId,approvals[1].rows[0].approval.approvalId);
+  const approvedRow=(await db.query('select * from benchmark_native_spending_approvals where task_id=$1',[claim.job.id])).rows[0];
+  assert.equal(approvedRow.protocol_digest,protocolDigest((await db.query('select * from benchmark_three_arm_trials where id=$1',[trial])).rows[0],350000));
+  await db.query('update benchmark_native_spending_approvals set revoked_at=now() where id=$1',[approvedRow.id]);
+  await assert.rejects(db.query(approve,[owner,claim.job.id,scope]),/cannot be replaced/);
   assert.equal((await db.query('select count(*)::int n from benchmark_native_spending_approvals where task_id=$1',[claim.job.id])).rows[0].n,1);
   assert.equal((await db.query('select spent_tokens from benchmark_budget_accounts where id=$1',[linked.account_id])).rows[0].spent_tokens,before);
   await db.query("update benchmark_production_qualifications set deadline=now()-interval '1 minute'");

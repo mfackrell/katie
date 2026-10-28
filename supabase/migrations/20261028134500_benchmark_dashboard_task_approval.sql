@@ -19,7 +19,7 @@ begin
  if task.id is null then if p_approve then raise exception 'Developer task unavailable';end if;return null;end if;
  select * into a from benchmark_budget_accounts where id=b.account_id for update;
  select * into r from project_runs where mission_id=m.id;
- select * into approval from benchmark_native_spending_approvals where task_id=task.id and trial_id=t.id and revoked_at is null order by created_at desc limit 1;
+ select * into approval from benchmark_native_spending_approvals where task_id=task.id and trial_id=t.id order by created_at desc limit 1;
  if p_approve then
   if p_task is distinct from task.id or p_scope is null or p_scope is distinct from p.approved_hash or
    p.approved_hash is distinct from p.approval_hash or r.binding->>'scopeHash' is distinct from p_scope or
@@ -37,11 +37,11 @@ begin
     raise exception 'saved approved Full task is not eligible';
   end if;
   if approval.id is not null then
-   if approval.owner_id is distinct from p_owner or approval.consumed_at is not null or approval.deadline<=now() then raise exception 'prior task authority cannot be replaced';end if;
+   if approval.owner_id is distinct from p_owner or approval.consumed_at is not null or approval.revoked_at is not null or approval.deadline<=now() then raise exception 'prior task authority cannot be replaced';end if;
   else
-   protocol_text:=replace(replace(json_build_object('experimentId',t.experiment_id,'replicate',t.replicate,
+   protocol_text:=regexp_replace(json_build_object('experimentId',t.experiment_id,'replicate',t.replicate,
     'baselineSha',t.baseline_sha,'contractSha256',t.contract_sha256,'acceptanceSha256',t.acceptance_sha256,
-    'toolProfileSha256',t.tool_profile_sha256,'modelPolicySha256',t.model_policy_sha256,'runtimeSha256',t.runtime_sha256,'tokenCap',350000)::text,': ',':'),', ', ',');
+    'toolProfileSha256',t.tool_profile_sha256,'modelPolicySha256',t.model_policy_sha256,'runtimeSha256',t.runtime_sha256,'tokenCap',350000)::text,'[[:space:]]','','g');
    insert into benchmark_native_spending_approvals(owner_id,actor_id,chat_id,trial_id,account_id,repository,model,protocol_digest,max_tokens,deadline,project_id,mission_assignment_id,task_id)
    values(p_owner,q.actor_id,p.chat_id,t.id,a.id,'mfackrell/katie',b.model,encode(sha256(convert_to(protocol_text,'UTF8')),'hex'),350000,least(q.deadline,p.deadline,m.deadline),p.id,j.id,task.id) returning * into approval;
    insert into project_events(project_id,event,data) values(p.id,'benchmark_owner_task_approved',jsonb_build_object('task',task.id,'approval',approval.id,'scope',p_scope,'owner',p_owner,'trial',t.id,'deadline',approval.deadline));
