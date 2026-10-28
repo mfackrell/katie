@@ -171,7 +171,10 @@ async function executeMissionModel(claim:Claim,instruction:string,input:string,t
   try{
    if(injectSyntheticFailure){console.warn('[Missions] Synthetic acceptance injection: provider quota failure before inference',{missionId:claim.mission.id,jobId:claim.job.id,provider:choice.provider.name,model:selectedModel});throw Object.assign(new Error('Synthetic quota failure for isolated acceptance mission'),{status:429,code:'insufficient_quota'});}
    const response=await client.responses.create(request,{timeout:inferenceTimeout});
-   if(fullBenchmark)await fullBenchmarkAccounting(claim).finish(callId,response.usage?.total_tokens??null);
+   if(fullBenchmark){
+    if(!response.id||!response.usage)throw Error('Full benchmark authoritative provider receipt missing');
+    await rpc('benchmark_reconcile_provider_usage',{p_call:callId,p_provider_request:response.id,p_usage:response.usage,p_linked:true});
+   }
    else await rpc('finish_mission_call',{p_call:callId,p_tokens:response.usage?.total_tokens??null});
    if(response.status!=='completed')throw new MissionModelFailure('Model output incomplete: '+response.status,{responseStatus:response.status,incompleteReason:response.incomplete_details?.reason??null,outputTokenLimit:outputTokens,partialText:response.output_text??'',outputKinds:((response.output??[]) as Array<Record<string,unknown>>).flatMap(item=>Array.isArray(item.nativeAnthropic)?item.nativeAnthropic.map((block:Record<string,unknown>)=>String(block.type??'unknown')):[String(item.type??'unknown')]),provider:choice.provider.name,model:selectedModel,providerErrorCode:response.error?.code??null,providerErrorMessage:response.error?.message?.slice(0,600)??null});
    text=response.output_text?.trim()??'';

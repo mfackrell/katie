@@ -14,7 +14,7 @@ function loadRouterFixture({failPrimary=false,incompletePrimary=false,emptyTrunc
  const out=ts.transpileModule(source,{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022,esModuleInterop:true}}).outputText,exports={};
  const require=name=>name==='../../scripts/benchmark/full-project-gate.mjs'?{loadFullBenchmarkBinding}:name==='./review-fallback.mjs'?{shouldFallbackIncompleteReview}
  :name==='@/lib/orchestration/routing'?{orchestrationChoices:async options=>{chosen++;routingOptions=options;if(fullBound){const id=await options.accounting.reserve('openai:gpt-5.3-codex',100);await options.accounting.finish(id,5);return[{provider:openai,modelId:'gpt-5.3-codex',reasoning:'fixed benchmark policy'}];}return[{provider:first,modelId:'gemini-3.1-pro',reasoning:'fixture'},{provider:second,modelId:'claude-sonnet-4-6',reasoning:'fixture'}];},orchestrationFailure:async()=> 'provider'}
- :name==='@/lib/orchestration/bounded-provider'?{boundedProvider:choice=>({post:async()=>({input_tokens:20}),responses:{create:async request=>{const r=await choice.provider.generate({modelId:request.model});return{status:(incompletePrimary||emptyTruncation)&&choice.provider===first?'incomplete':'completed',incomplete_details:{reason:emptyTruncation?'max_output_tokens':'provider_interrupted'},output_text:emptyTruncation&&choice.provider===first?'':r.text,output:[],usage:{total_tokens:r.usage.totalTokens}};}}})}
+ :name==='@/lib/orchestration/bounded-provider'?{boundedProvider:choice=>({post:async()=>({input_tokens:20}),responses:{create:async request=>{const r=await choice.provider.generate({modelId:request.model});return{id:'resp_fixture',status:(incompletePrimary||emptyTruncation)&&choice.provider===first?'incomplete':'completed',incomplete_details:{reason:emptyTruncation?'max_output_tokens':'provider_interrupted'},output_text:emptyTruncation&&choice.provider===first?'':r.text,output:[],usage:{total_tokens:r.usage.totalTokens}};}}})}
  :name==='./request-budget'?{assertSpecificationStageCapacity:async()=>true,fitsMissionEnvelope:()=>true,missionInputLimit:()=>48000,missionOutputLimit:claim=>claim.job.role==='review'?5000:3000,missionExecutionDeadline:()=>Date.now()+240000,missionAttemptTimeout:()=>90000,MissionAdmissionError:class extends Error{},explainAdmissionDenial:async()=>{throw Error('Worker no longer authorized or mission allowance exhausted');}}
  :name==='@/lib/orchestration/request-rejection'?{rejectedBeforeInference:()=>false}
  :name==='@/lib/providers'?{getAvailableProviders:()=>[first,second]}
@@ -93,6 +93,7 @@ test('Full DO model route is fixed, ledger-bound, and does not call a provider w
   assert.equal(reservations.length,2);assert.ok(reservations.some(x=>x.p_routing===true));
   assert.ok(reservations.some(x=>x.p_routing===false));
   assert.ok(reservations.every(x=>x.p_model==='openai:gpt-5.3-codex'));
-  assert.equal(admitted.rpcEvents.filter(x=>x.name==='benchmark_finish_mission_call').length,2);
+  assert.equal(admitted.rpcEvents.filter(x=>x.name==='benchmark_finish_mission_call').length,1);
+  assert.equal(admitted.rpcEvents.filter(x=>x.name==='benchmark_reconcile_provider_usage').length,1);
  }finally{for(const k of names){if(old[k]===undefined)delete process.env[k];else process.env[k]=old[k];}}
 });

@@ -45,3 +45,13 @@ test('non-streaming JSON terminal preserves authoritative usage',async()=>{
  assert.equal(receipt.providerRequestId,'resp_json');
  assert.equal(receipt.actualTokens,18);
 });
+
+test('paid receipt writer sends complete provider usage to atomic evidence reconciliation',async()=>{
+ const usage={input_tokens:12,output_tokens:7,total_tokens:19,input_tokens_details:{cached_tokens:4}};
+ const provider=createResponsesProvider({apiKey:key,fetchImpl:async()=>Response.json({id:'resp_cost',status:'completed',usage})});
+ const receipt=await provider({model:'gpt-5.3-codex'});assert.deepEqual(receipt.usage,usage);
+ const events=[];const writer=createCanonicalReceiptWriter({rpc:async(name,args)=>{events.push({name,args});return{data:'settled',error:null}}});
+ await writer({operationId:'operation',namespace:'openai-responses',...receipt});
+ assert.equal(events[0].name,'benchmark_reconcile_provider_usage');assert.deepEqual(events[0].args.p_usage,usage);
+ assert.equal(events[0].args.p_linked,false);
+});

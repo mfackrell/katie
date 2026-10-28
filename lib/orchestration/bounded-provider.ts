@@ -8,7 +8,7 @@ type ClaudeBlock={type:string;text?:string;id?:string;name?:string;input?:unknow
 type WireInput={nativeAnthropic?:ClaudeBlock[];nativeGoogle?:GoogleContent;type?:string;call_id?:string;output?:string;role?:string;content?:unknown};
 type NativeResponse={content?:ClaudeBlock[];stop_reason?:string;usage?:{input_tokens?:number;output_tokens?:number;cache_read_input_tokens?:number;cache_creation_input_tokens?:number};candidates?:Array<{content?:GoogleContent;finishReason?:string}>;usageMetadata?:{totalTokenCount?:number}};
 export type BoundedRequest={model:string;instructions:string;input:unknown[];max_output_tokens:number;executionEffort?:'low'|'medium';tools?:Array<{type:string;name?:string;description?:string;parameters?:unknown}>;text?:{format?:{type?:string;name?:string;schema?:unknown}};[key:string]:unknown};
-type BoundedResponse={status?:string;output_text?:string;output:unknown[];usage?:{total_tokens?:number};incomplete_details?:{reason?:string}|null;error?:{code?:string;message?:string}|null};
+type BoundedResponse={id?:string;status?:string;output_text?:string;output:unknown[];usage?:{total_tokens?:number};incomplete_details?:{reason?:string}|null;error?:{code?:string;message?:string}|null};
 type Client={post:(path:string,options:{body:Record<string,unknown>;timeout:number})=>Promise<{input_tokens:number}>;responses:{create:(request:BoundedRequest,options:{timeout:number})=>Promise<BoundedResponse>}};
 
 /** Counting and generation MUST serialize the same system prompt, schema,

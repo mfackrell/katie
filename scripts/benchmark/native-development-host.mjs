@@ -138,12 +138,12 @@ const server=createNativeHttpBridge({
  db,grantToken,trialId:proof.trialId,executionEpoch:1,
  providerNamespace:'openai-responses',upperTokens:perRequestCap,
  upstream,clientToken,fullMission:true,
- recordReceipt:async({requestKey,operationId,namespace,providerRequestId,actualTokens})=>{
-  const {data,error}=await db.rpc('benchmark_reconcile_linked_receipt',{
-   p_mission_call:requestKey,p_namespace:namespace,
-   p_provider_request:providerRequestId,p_actual:actualTokens
+ recordReceipt:async({requestKey,operationId,namespace,providerRequestId,actualTokens,usage})=>{
+  const {data,error}=await db.rpc('benchmark_reconcile_provider_usage',{
+   p_call:requestKey,p_linked:true,
+   p_provider_request:providerRequestId,p_usage:usage
   });
-  if(error||data!==true)throw Error('NATIVE_LINKED_RECEIPT_NOT_RECONCILED');
+  if(error||!['settled','overrun'].includes(data))throw Error('NATIVE_LINKED_RECEIPT_NOT_RECONCILED');
  }
 });
 let child=null,stopTimer=null;
