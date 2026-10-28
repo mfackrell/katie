@@ -59,6 +59,7 @@ test('Deterministic route repair preserves paid source, authority, and queued in
   await db.query(readFileSync('supabase/migrations/20261028212933_uncharged_continuation_specification_replacement.sql','utf8'));
   await db.query(readFileSync('supabase/migrations/20261028222500_deterministic_specification_route_recovery.sql','utf8'));
   await db.query(readFileSync('supabase/migrations/20261028224000_verified_price_review_recovery.sql','utf8'));
+  for(const file of ['20261023194500_recover_latest_game_revision_checkpoint.sql','20261021202500_resume_game_checkpoint_watchdog.sql','20261028225300_retain_full_specification_review.sql'])await db.query(readFileSync('supabase/migrations/'+file,'utf8'));
   const actor=randomUUID(),chat=randomUUID(),repo=randomUUID(),trial=randomUUID(),exp=randomUUID(),project=randomUUID(),owner=randomUUID();
   const protocol=config.protocol;
   await db.query('insert into actors(id,name) values($1,$2)',[actor,'Synthetic continuation fixture']);
@@ -208,9 +209,27 @@ test('Deterministic route repair preserves paid source, authority, and queued in
   await db.query('begin');await db.query('reset role');await db.query('alter table benchmark_full_continuations disable trigger benchmark_continuation_immutable');
   await db.query("update benchmark_full_continuations set created_at=now()-interval '5 hours',deadline=now()-interval '1 hour'");await db.query('set local role service_role');
   assert.equal(await retryReview(),false,'expired parent');await db.query('rollback');
+  assert.equal((await db.query('select recover_game_specification_checkpoint($1) ok',[project])).rows[0].ok,false,'legacy checkpoint cannot detach Full child');
+  await db.query('begin');assert.equal(await retryReview(),true,'normal attached recovery remains supported');await db.query('rollback');
+  await db.query('update work_projects set active_mission_id=null where id=$1',[project]);
+  assert.equal(await retryReview(),false,'detached source requires immutable checkpoint event');
+  const detachedEvent=(await db.query("insert into project_events(project_id,event,data) values($1,'game_specification_checkpoint_recovered',jsonb_build_object('sourceMissionId',$2::text,'sourceJobId',$3::text,'recoveryType','saved_composition_fresh_review')) returning id",[project,work.mission.id,work.job.id])).rows[0].id;
+  for(const [name,sql,params] of [
+   ['wrong_source_job',"insert into project_events(project_id,event,data) select project_id,event,jsonb_set(data,'{sourceJobId}',to_jsonb($2::text)) from project_events where id=$1",[detachedEvent,randomUUID()]],
+   ['wrong_source_mission',"insert into project_events(project_id,event,data) select project_id,event,jsonb_set(data,'{sourceMissionId}',to_jsonb($2::text)) from project_events where id=$1",[detachedEvent,randomUUID()]],
+   ['newer_child',"update agent_missions set created_at=now() where id=$1",[failedMission]],
+   ['competing_running_child',"update agent_missions set status='running' where id=$1",[failedMission]],
+   ['stopped_source',"update agent_missions set status='stopped' where id=$1",[work.mission.id]],
+   ['watchdog',"update work_projects set detail='Progress watchdog: three consecutive failed specification attempts' where id=$1",[project]]]){
+    await db.query('begin');await db.query(sql,params);
+    if(name==='watchdog')assert.equal((await db.query('select resume_game_checkpoint_watchdog($1) ok',[project])).rows[0].ok,false,'watchdog cannot spawn Full replacement');
+    else assert.equal(await retryReview(),false,name);
+    await db.query('rollback');
+  }
   const reviewConcurrent=await Promise.all([db.query('select recover_verified_price_review($1) ok',[project]),rival.query('select recover_verified_price_review($1) ok',[project])]);
   assert.equal(reviewConcurrent.filter(r=>r.rows[0].ok).length,1);assert.equal(await retryReview(),false);
   const resumed=(await db.query('select * from mission_assignments where id=$1',[reviewId])).rows[0];
+  assert.equal((await db.query('select active_mission_id from work_projects where id=$1',[project])).rows[0].active_mission_id,work.mission.id,'reattached exact source');
   assert.equal(resumed.status,'queued');assert.equal(resumed.attempts,1);assert.deepEqual(resumed.result,reviewFailure);
   assert.deepEqual((await db.query('select to_jsonb(a) a from benchmark_budget_accounts a where id=$1',[account])).rows[0].a,beforeAccount);
   const claimedReview=(await db.query('select claim_mission_work() c')).rows[0].c;
