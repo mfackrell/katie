@@ -18,6 +18,8 @@ const ITM_TARGET_MAX_CHARACTERS = 7500;
 const ITM_HARD_MAX_CHARACTERS = 8500;
 // This is completion headroom, NOT the memory-size budget.
 const SUMMARY_MAX_TOKENS = 4000;
+const COMPACTION_MAX_TOKENS = 2800; // One bounded repair attempt only for an oversized completed draft.
+class CompactionFailure extends Error {}
 
 // Reuse the installed SDK only as native Claude HTTP transport, matching LTM.
 // Its default transport retries/timeouts are unchanged; no provider fallback.
@@ -100,16 +102,78 @@ async function summarizeInto(priorSummary: string, messages: Message[]): Promise
     .map(block => block.text).join("").trim();
   // Never advance the durable source cursor past incomplete or absent output.
   // The next request must be able to retry these exact source messages.
-  if (response.stop_reason !== "end_turn" || !summary || summary.length > ITM_HARD_MAX_CHARACTERS) {
-    console.warn("[Summarizer] Incomplete or oversized ITM; source cursor retained", {
+  if (response.stop_reason !== "end_turn" || !summary) {
+    console.warn("[Summarizer] Incomplete ITM; source cursor retained", {
       stopReason: response.stop_reason ?? "missing",
       characters: summary.length,
-      maxCharacters: ITM_HARD_MAX_CHARACTERS,
       responseTokenCeiling: SUMMARY_MAX_TOKENS,
     });
-    throw new Error("Intermediate memory summary incomplete or over character budget; source cursor retained");
+    throw new Error("Intermediate memory summary incomplete; source cursor retained");
+  }
+  if (summary.length > ITM_HARD_MAX_CHARACTERS) {
+    console.warn("[Summarizer] Completed ITM exceeds character ceiling; requesting bounded compaction", {
+      characters: summary.length,
+      maxCharacters: ITM_HARD_MAX_CHARACTERS,
+    });
+    return compactOversizedDraft(summary);
   }
   return summary;
+}
+
+
+/**
+ * The normal reconciliation sometimes finishes above the hard character ceiling
+ * when the prior rolling summary is already near that ceiling. Ask the same
+ * model to compress its finished draft, rather than cutting characters or
+ * advancing the checkpoint with an incomplete history. This is a single
+ * bounded request: ordinary successful updates incur no additional call.
+ */
+async function compactOversizedDraft(draft: string): Promise<string> {
+  if (!client) throw new CompactionFailure("Claude summarizer unavailable for compaction");
+  let response: ClaudeSummaryResponse;
+  try {
+    response = await client.post<Record<string, unknown>, ClaudeSummaryResponse>("/messages", {
+      body: {
+        model: SUMMARY_MODEL,
+        max_tokens: COMPACTION_MAX_TOKENS,
+        system: [
+        "You edit Katie's existing intermediate conversational memory, not a new transcript.",
+        "The draft is already reconciled but too long. Compress it SEMANTICALLY; never cut off the end or simply delete the most recent developments.",
+        "Return a complete, coherent rolling summary of about 6,000–7,000 CHARACTERS including punctuation and spaces, always below 7,500 characters.",
+        "Retain important new corrections, chronological distinctions, unresolved outcomes, user-versus-assistant attribution and current conversation threads.",
+        "Combine repeated topics and reduce fidelity primarily for less relevant older material. Do not pad, invent facts, append history, or reintroduce superseded interpretations.",
+        "Return only the finished revised summary, with no commentary or character count.",
+        ].join("\n"),
+        messages: [{
+          role: "user",
+          content: `This reconciled draft is ${draft.length} characters, over the ${ITM_HARD_MAX_CHARACTERS}-character absolute ceiling. Shorten it without losing its latest relevant context:\n\n${draft}`,
+        }],
+      },
+    });
+  } catch {
+    // A failed paid compaction must not trigger a near-identical smaller-batch
+    // compaction in the same invocation. Preserve cursor and retry later.
+    throw new CompactionFailure("Claude intermediate memory compaction request failed");
+  }
+  const result = (response.content ?? [])
+    .filter(block => block.type === "text" && typeof block.text === "string")
+    .map(block => block.text).join("").trim();
+  if (response.stop_reason !== "end_turn" || !result ||
+      result.length > ITM_HARD_MAX_CHARACTERS || result.length < ITM_TARGET_MIN_CHARACTERS) {
+    console.warn("[Summarizer] Compaction did not produce a valid complete summary; source cursor retained", {
+      stopReason: response.stop_reason ?? "missing",
+      originalCharacters: draft.length,
+      compactedCharacters: result.length,
+      minCharacters: ITM_TARGET_MIN_CHARACTERS,
+      maxCharacters: ITM_HARD_MAX_CHARACTERS,
+    });
+    throw new CompactionFailure("Intermediate memory compaction incomplete or outside character budget");
+  }
+  console.info("[Summarizer] Oversized summary compacted", {
+    originalCharacters: draft.length,
+    compactedCharacters: result.length,
+  });
+  return result;
 }
 
 function parseV2(memory: Record<string, unknown>): IntermediateMemoryV2 | null {
@@ -199,9 +263,12 @@ export async function maybeUpdateSummary(chatId: string): Promise<void> {
       let candidate: string;
       try {
         candidate = await summarizeInto(summary, messagesToFold.slice(offset, offset + size));
-      } catch {
-        // One attempt with half as many messages. If that fails, leave the
-        // source cursor exactly where it was and retry on the next invocation.
+      } catch (error) {
+        // A compaction failure is already the second paid call for this batch.
+        // Repeating it with a smaller batch is unlikely to help when the
+        // existing ITM is near capacity, and can double the expense.
+        if (error instanceof CompactionFailure) throw error;
+        // Non-compaction failures retain the existing smaller-batch retry.
         size = Math.min(10, size);
         console.warn("[Summarizer] Batch incomplete; retrying smaller batch", { chatId, size });
         candidate = await summarizeInto(summary, messagesToFold.slice(offset, offset + size));

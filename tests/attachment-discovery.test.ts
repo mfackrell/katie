@@ -323,3 +323,25 @@ test("contextually restored screenshots do not renew recency and selector receiv
   }, [], { currentChatId: "current-chat", activeProject: { id: "project-b", text: "Project accounting and work in progress" } });
   assert.equal(decision.selections[0].attachment.id, current.id);
 });
+
+test("optional selector rationale is observational and does not change file selection", async () => {
+  const chosen = await selectStoredAttachments("What did the earlier proposal say?", [doc], [],
+    async () => ({ selections: [{ id: doc.id, mode: "summary" }],
+      rationale: "The user referred to the earlier proposal." }));
+  assert.equal(chosen.method, "summary-selector");
+  assert.equal(chosen.rationale, "The user referred to the earlier proposal.");
+  assert.equal(chosen.selections[0].attachment.id, doc.id);
+  assert.equal(chosen.selections[0].mode, "summary");
+  const none = await selectStoredAttachments("Tell me a joke", [doc], [], async () => ({
+    selections: [], rationale: "No saved file is relevant.",
+  }));
+  assert.equal(none.selections.length, 0);
+});
+
+test("malformed optional rationale never causes a valid selector choice to fall back", async () => {
+  const selected = await selectStoredAttachments("Show the saved proposal", [doc], [],
+    async () => ({ selections: [{ id: doc.id, mode: "summary" }], rationale: { unexpected: true } }));
+  assert.equal(selected.method, "summary-selector");
+  assert.equal(selected.selections.length, 1);
+  assert.equal(selected.rationale, undefined);
+});
