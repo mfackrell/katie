@@ -78,7 +78,7 @@ const states = new Map(),
   mutations = [],
   errors = [];
 let workFailure = false;
-let benchmarkApproved=false;
+let benchmarkApproved=false,continuationAvailable=false,continuationApproved=false;
 let server;
 if (process.env.KATIE_UI_START_SERVER === "1") {
   server = spawn(
@@ -140,6 +140,17 @@ try {
         body: JSON.stringify(data),
       });
     if (req.method() !== "GET") mutations.push({ path: url.pathname, body });
+    if(url.pathname==='/api/benchmark/715/continuation'){
+      if(req.method()==='POST'){
+        assert.equal(body.approve,true);assert.equal(body.authorization,'full-continuation-existing-budget-270000tokens-4hours');
+        assert.equal(body.planHash,'c'.repeat(64));assert.ok(req.headers().authorization?.startsWith('Bearer '));
+        continuationApproved=true;return reply({approved:true});
+      }
+      return reply({continuation:continuationAvailable?{id:continuationApproved?'synthetic-continuation':null,projectId:'11111111-1111-4111-8111-111111111111',
+        trialId:'synthetic-failed-trial',accountId:'synthetic-existing-account',approved:continuationApproved,live:continuationApproved,
+        deadline:new Date(Date.now()+14400000).toISOString(),planHash:'c'.repeat(64),sourceSnapshotHash:'d'.repeat(64),spentTokens:58624,
+        plan:{additionalTokenCap:270000,existingAccountTokenCap:350000,newFunds:0}}:null});
+    }
     if(url.pathname==='/api/benchmark/715/dashboard'){
       if(req.method()==='POST'){
         assert.equal(body.approve,true);assert.equal(body.authorization,'production-715-30usd-350000tokens-4hours');
@@ -427,6 +438,12 @@ try {
   await page.reload();
   await page.getByText('Approval saved. Katie is running the nonbillable qualification checks.',{exact:true}).waitFor();
   assert.equal(mutations.filter(r=>r.path==='/api/benchmark/715/dashboard').length,1);
+  continuationAvailable=true;await page.reload();
+  await page.getByRole('button',{name:'Approve this continuation using remaining Full allowance',exact:true}).click();
+  await page.getByText(/Continuation approved until/).waitFor();
+  await page.reload();await page.getByText(/Continuation approved until/).waitFor();
+  assert.equal(mutations.filter(r=>r.path==='/api/benchmark/715/continuation').length,1);
+
   assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
   await page.screenshot({path:output+'/benchmark-dashboard-mobile.png',fullPage:true});
   assert.deepEqual(errors, []);
