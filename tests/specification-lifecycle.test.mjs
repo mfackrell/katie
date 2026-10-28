@@ -74,6 +74,22 @@ test('fresh and rejected game specification calls receive the exact serializatio
   assert.equal(h.commits.length,0,'schema instructions never manufacture a valid candidate or approval');
  }
 });
+test('schema retry fits counted input and reduced output inside the same stage while protecting future review',async()=>{
+ let capacity={authorized:true,remainingTokens:104000,stageRemainingTokens:14000,callsRemaining:8,routingCallsRemaining:8};
+ const runtime=modules({'@/lib/missions/store':{rpc:async(name)=>{assert.equal(name,'specification_call_capacity');return capacity;}}});
+ const budget=runtime('@/lib/missions/request-budget'),h=harness(null);
+ const claim={mission:{...h.mission,project_evidence:{projectProfile:'game',specificationBudget:{version:1}}},job:h.job('compose','compose')};
+ assert.equal(await budget.specificationRetryOutputLimit(claim,6500,16000),16000,'first composition unchanged');
+ claim.job.result={rejectedSpecification:'saved invalid draft'};
+ assert.equal(budget.specificationRoutingOutputFloor(claim,''),6000);
+ assert.equal(await budget.specificationRetryOutputLimit(claim,6500,16000),7500);
+ await budget.assertSpecificationStageCapacity(claim,14000);
+ await assert.rejects(budget.specificationRetryOutputLimit(claim,8500,16000),/reserved tokens|allowance/);
+ capacity={...capacity,remainingTokens:95000};
+ await assert.rejects(budget.specificationRetryOutputLimit(claim,6500,16000),/reserved tokens|allowance/);
+ capacity={...capacity,authorized:false};
+ await assert.rejects(budget.specificationRetryOutputLimit(claim,1,16000),/authorized|allowance/);
+});
 test('live-sized saved candidate is reused with zero inference; current review receives original research and full findings',async()=>{
  const h=harness();const compose=h.job('compose','compose');h.jobs.push(compose);
  await h.execute({mission:h.mission,job:compose},async()=>assert.fail('Saved specification must not be regenerated'));

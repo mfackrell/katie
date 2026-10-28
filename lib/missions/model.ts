@@ -11,7 +11,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { rpc } from './store';
 import {getSupabaseAdminClient} from '@/lib/data/supabase/admin';
 import { calculate,planSchema,missionDeliverableSchema,missionRevisionPatchSchema,parseJSON,type Claim } from './types';
-import {MissionAdmissionError,explainAdmissionDenial,missionExecutionDeadline,missionAttemptTimeout,fitsMissionEnvelope,missionInputLimit,missionOutputLimit,assertSpecificationStageCapacity} from './request-budget';
+import {MissionAdmissionError,explainAdmissionDenial,missionExecutionDeadline,missionAttemptTimeout,fitsMissionEnvelope,missionInputLimit,missionOutputLimit,assertSpecificationStageCapacity,specificationRoutingOutputFloor,specificationRetryOutputLimit} from './request-budget';
 
 const calculator={type:'function',name:'calculate',description:'Execute a deterministic arithmetic calculation. Numbers must come from supplied evidence or explicitly labeled assumptions.',strict:true,parameters:{type:'object',properties:{operation:{type:'string',enum:['add','subtract','multiply','divide','power']},values:{type:'array',items:{type:'number'},minItems:2,maxItems:12}},required:['operation','values'],additionalProperties:false}};
 export class MissionModelFailure extends Error { constructor(message:string,readonly partial:Record<string,unknown>){super(message);this.name='MissionModelFailure';} }
@@ -68,13 +68,13 @@ export async function missionModel(claim:Claim,instruction:string,input:string,t
   (['compose','revise'].includes(claim.job.role)?'Synthesize the saved worker evidence; research has already been delegated. Do not classify this as a new web search. ':'')+
   (claim.job.role==='review'?'Independently verify the saved work and original objective. ':'')+claim.job.instruction,
   requestId:claim.job.id,accounting:fullBinding?{
-   reserve:async(model,tokens)=>{if(Date.now()>=executionDeadline-5000)throw Error('Mission execution time window exhausted before routing dispatch');await assertSpecificationStageCapacity(claim,tokens,missionOutputLimit(claim,input));return fullBenchmarkAccounting(claim).reserve(model,tokens,true);},
+   reserve:async(model,tokens)=>{if(Date.now()>=executionDeadline-5000)throw Error('Mission execution time window exhausted before routing dispatch');await assertSpecificationStageCapacity(claim,tokens,specificationRoutingOutputFloor(claim,input));return fullBenchmarkAccounting(claim).reserve(model,tokens,true);},
    finish:async(id,tokens,receipt)=>{
     if(receipt){if(!receipt.id||!receipt.usage)throw Error('Full routing provider receipt missing');await rpc('benchmark_reconcile_provider_usage',{p_call:id,p_provider_request:receipt.id,p_usage:receipt.usage,p_linked:true});}
     else await fullBenchmarkAccounting(claim).finish(id,tokens);
    }
   }:{
-   reserve:async(model,tokens)=>{if(Date.now()>=executionDeadline-5000)throw Error('Mission execution time window exhausted before routing dispatch');await assertSpecificationStageCapacity(claim,tokens,missionOutputLimit(claim,input));const id=randomUUID();if(!await rpc<boolean>('reserve_mission_routing_call',{p_id:claim.job.id,p_lease:claim.job.lease,p_call:id,p_model:model,p_tokens:tokens}))throw Error('Worker no longer authorized or mission allowance exhausted');return id;},
+   reserve:async(model,tokens)=>{if(Date.now()>=executionDeadline-5000)throw Error('Mission execution time window exhausted before routing dispatch');await assertSpecificationStageCapacity(claim,tokens,specificationRoutingOutputFloor(claim,input));const id=randomUUID();if(!await rpc<boolean>('reserve_mission_routing_call',{p_id:claim.job.id,p_lease:claim.job.lease,p_call:id,p_model:model,p_tokens:tokens}))throw Error('Worker no longer authorized or mission allowance exhausted');return id;},
    finish:async(id,tokens)=>{await rpc('finish_mission_call',{p_call:id,p_tokens:tokens});}
   },fixedModel:fullBinding?{provider:'openai',modelId:'gpt-5.3-codex'}:undefined,research:effectiveTools==='research',review:claim.job.role==='review',
   // The server already knows specification writing is architecture/planning.
@@ -140,7 +140,7 @@ async function executeMissionModel(claim:Claim,instruction:string,input:string,t
  const deliverableEnvelope=!targetedPatch&&claim.mission.project_kind!=='specification'&&['compose','revise'].includes(claim.job.role);
  if(targetedPatch)instruction+='\nTARGETED REVISION CONTRACT: Return only JSON with edits:[{before,after}] and composerNotes set to an empty string. Each before must be an exact unique span of the saved compose candidate. Make only the specified factual corrections, at most eight non-overlapping edits, together changing no more than 35% of the original text or 6000 original characters. Preserve all other source references and wording. The server applies these edits and independently reviews the COMPLETE resulting artifact. Never claim review passed.';
  if(deliverableEnvelope)instruction+='\nOUTPUT CONTRACT: Return ONLY JSON with exactly two string fields: {"deliverable":"the complete user-facing final artifact","composerNotes":"internal change notes, or empty"}. Put all revision commentary exclusively in composerNotes. The deliverable must stand alone within the user word limit: no word-count claims, appended change log, reviewer impersonation, or claim that review has already passed. The server independently reviews only the complete deliverable and persists your notes separately.';
- const outputTokens=expandedOutputTokens??missionOutputLimit(claim,input);
+ let outputTokens=expandedOutputTokens??missionOutputLimit(claim,input);
  const client=boundedProvider(choice);
  const sources:ModelResult['sources']=[],calculations:unknown[]=[];
  if(!fitsMissionEnvelope(instruction,input,missionInputLimit(claim)))throw Error('Mission evidence exceeds bounded context. Narrow the objective or deliverable.');
@@ -162,6 +162,8 @@ async function executeMissionModel(claim:Claim,instruction:string,input:string,t
   if(countingTimeout<1000)throw Error('Mission execution time window exhausted before dispatch; saved work remains intact');
   const counted=await client.post('/responses/input_tokens',{body:countInput,timeout:countingTimeout}).catch(()=>null);
   const inputTokens=counted&&Number.isSafeInteger(counted.input_tokens)&&counted.input_tokens>=0?counted.input_tokens+256:Buffer.byteLength(JSON.stringify(request),'utf8');
+  outputTokens=await specificationRetryOutputLimit(claim,inputTokens,outputTokens);
+  request.max_output_tokens=outputTokens;
   const reserve=inputTokens+outputTokens+(tools==='research'?32000:0);
   const inferenceTimeout=tools==='calculate'?Math.min(90_000,calculationDeadline-Date.now()-5000):missionAttemptTimeout(executionDeadline,outputTokens);
   if(inferenceTimeout<1000)throw Error('Mission execution time window exhausted before dispatch; saved work remains intact');
