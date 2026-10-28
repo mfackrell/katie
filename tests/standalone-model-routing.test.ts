@@ -11,3 +11,10 @@ test("attachment and explicit management still retain dedicated processing",()=>
   assert.match(route,/newAttachments\.length > 0/);
   assert.match(route,/explicitProjectControl/);
 });
+
+test("standalone image uploads do not activate project identity resolution",()=>{
+  assert.match(route,/const explicitUploadProjectIntent = startProjectIntent\(message\) \|\| followupProjectIntent\(message\) \|\| explicitSavedProjectReference/);
+  assert.match(route,/freshTaskEvidence\.length && \(!newAttachments\.length \|\| explicitUploadProjectIntent\)/);
+  assert.match(route,/priorTaskProgress\.projectContext && \(!newAttachments\.length \|\| explicitUploadProjectIntent\)/);
+  assert.match(route,/freshTaskDescriptions\.size && !freshTaskEvidence\.length && \(!newAttachments\.length \|\| explicitUploadProjectIntent\)/);
+});
