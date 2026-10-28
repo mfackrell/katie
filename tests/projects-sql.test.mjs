@@ -101,6 +101,7 @@ test('projects: real PostgreSQL idempotency, scope, lifecycle fencing and aggreg
   await db.query('rollback');
   await db.query('reset role');
   await db.query(readFileSync('supabase/migrations/20261026120000_project_completion_control.sql','utf8'));
+  await db.query(readFileSync('supabase/migrations/20261028150650_project_paused_watchdog.sql','utf8'));
   await db.query('set role service_role');
   await db.query(readFileSync('tests/fixtures/project-completion-control.sql','utf8'));
   await db.query('reset role');

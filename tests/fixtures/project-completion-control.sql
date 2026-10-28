@@ -31,6 +31,23 @@ DO $$ declare p work_projects; original work_projects; l uuid; m uuid; ok boolea
  if p.status<>'blocked' or p.impediment->>'minimumAction' is null or jsonb_array_length(p.impediment->'attempted')=0 then raise exception 'Analysis/polling failed to terminate with an actionable blocker';end if;
  if not exists(select 1 from messages where chat_id=p.chat_id and content like '%Attempted:%' and content like '%Required: Restore the stalled worker%') then raise exception 'Actionable blocker was not delivered';end if;
  if p.completion_contract<>contract then raise exception 'Polling changed completion criteria';end if;
+ -- A real paused->resume control event grants execution time, not progress,
+ -- spending, approval, a new mission or an extended deadline.
+ perform control_work_project(p.id,p.actor_id,p.chat_id,'pause');
+ perform control_work_project(p.id,p.actor_id,p.chat_id,'resume');
+ update work_projects set lease=l,lease_until=now()+interval '5 minutes' where id=p.id;
+ perform finish_work_project(p.id,l,'wait');
+ select * into strict p from work_projects where id=p.id;
+ if p.status<>'running' or p.progress_since>now()-interval '45 minutes' then raise exception 'Paused time blocked resume or was mislabeled as progress';end if;
+ if p.deadline<>now()+interval '3 hours' or p.token_allowance<>original.token_allowance or p.completion_contract<>contract then raise exception 'Resume changed authority';end if;
+ update project_events set created_at=now()-interval '46 minutes' where project_id=p.id and event='resume' and data->>'previous_status'='paused';
+ update work_projects set lease=l,lease_until=now()+interval '5 minutes' where id=p.id;
+ perform finish_work_project(p.id,l,'wait');
+ if (select status from work_projects where id=p.id)<>'blocked' then raise exception 'Resumed inactivity did not terminate';end if;
+ perform control_work_project(p.id,p.actor_id,p.chat_id,'resume');
+ update work_projects set lease=l,lease_until=now()+interval '5 minutes' where id=p.id;
+ perform finish_work_project(p.id,l,'wait');
+ if (select status from work_projects where id=p.id)<>'blocked' then raise exception 'Repeated blocked resumes bypassed inactivity limit';end if;
  -- Repeating an identical coordination failure does not masquerade as progress.
  update work_projects set status='running',lease=l,lease_until=now()+interval '5 minutes',progress_since=now(),error_signature=null,repeated_errors=0 where id=p.id;
  perform finish_work_project(p.id,l,'error','{"detail":"Invalid saved verification interface"}');
