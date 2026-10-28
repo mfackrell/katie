@@ -1,0 +1,1 @@
+{"extends": "./tsconfig.tests.json", "compilerOptions": {"outDir": ".provider-test-dist"}, "include": ["tests/standalone-provider-boundary.test.ts", "tests/claude-provider.test.ts", "tests/grok-provider.test.ts", "tests/provider-response-errors.test.ts", "tests/model-tools.test.ts", "types/**/*.d.ts"]}

@@ -1,4 +1,5 @@
 import { createAccountingFetch } from "@/lib/standalone-accounting/dispatch";
+import { claudeCachedSystem, claudeInputUsage } from "./claude-cache";
 import { nativeToolTurn } from "./native-tools";
 import {
   ChatGenerateParams,
@@ -22,6 +23,8 @@ type ClaudeContentBlock = {
 type ClaudeUsage = {
   input_tokens?: number;
   output_tokens?: number;
+  cache_read_input_tokens?: number;
+  cache_creation_input_tokens?: number;
   [key: string]: unknown;
 };
 
@@ -44,6 +47,8 @@ type ClaudePassResult = {
   content: ClaudeContentBlock[];
   stopReason?: string;
   usage: {
+    cacheReadInputTokens?: number;
+    cacheCreationInputTokens?: number;
     inputTokens?: number;
     outputTokens?: number;
   };
@@ -126,10 +131,15 @@ function toProviderResponse(params: {
   provider: "anthropic";
   stopReason?: string;
   continuationCount: number;
+  cacheReadInputTokens?: number;
+  cacheCreationInputTokens?: number;
   inputTokens?: number;
   outputTokens?: number;
   truncated: boolean;
 }): ProviderResponse {
+  if (params.cacheReadInputTokens !== undefined || params.cacheCreationInputTokens !== undefined) {
+    console.info("[ClaudeProvider] cache usage", { model: params.model, inputTokens: params.inputTokens, cacheReadInputTokens: params.cacheReadInputTokens, cacheCreationInputTokens: params.cacheCreationInputTokens });
+  }
   return {
     text: params.text,
     provider: params.provider,
@@ -139,6 +149,8 @@ function toProviderResponse(params: {
     continuationCount: params.continuationCount,
     content: params.text ? [{ type: "text", text: params.text }] : undefined,
     usage: {
+      cacheReadInputTokens: params.cacheReadInputTokens,
+      cacheCreationInputTokens: params.cacheCreationInputTokens,
       inputTokens: params.inputTokens,
       outputTokens: params.outputTokens,
       totalTokens:
@@ -182,6 +194,7 @@ export class ClaudeProvider implements LlmProvider {
 
   private buildRequestContext(params: ChatGenerateParams): {
     selectedModel: string;
+    cacheablePrefix?: string;
     system: string;
     messages: ClaudeMessage[];
   } {
@@ -226,12 +239,13 @@ export class ClaudeProvider implements LlmProvider {
       }
     ];
 
-    return { selectedModel, system, messages };
+    return { selectedModel, system, messages, cacheablePrefix: params.cacheablePersona ? `${MATH_EXECUTION_PROTOCOL}\n\nCORE_PERSONA: ${params.cacheablePersona}` : undefined };
   }
 
   private async postMessage(params: {
     signal?: AbortSignal;
     model: string;
+    cacheablePrefix?: string;
     system: string;
     messages: ClaudeMessage[];
     stream: boolean;
@@ -247,7 +261,7 @@ export class ClaudeProvider implements LlmProvider {
       body: JSON.stringify({
         model: params.model,
         max_tokens: CLAUDE_MAX_OUTPUT_TOKENS,
-        system: params.system,
+        system: claudeCachedSystem(params.system, params.cacheablePrefix),
         messages: params.messages,
         ...(params.stream ? { stream: true } : {})
       })
@@ -265,6 +279,7 @@ export class ClaudeProvider implements LlmProvider {
   private async generatePass(params: {
     signal?: AbortSignal;
     model: string;
+    cacheablePrefix?: string;
     system: string;
     messages: ClaudeMessage[];
   }): Promise<ClaudePassResult> {
@@ -278,7 +293,7 @@ export class ClaudeProvider implements LlmProvider {
       content,
       stopReason: body.stop_reason ?? undefined,
       usage: {
-        inputTokens: body.usage?.input_tokens,
+        ...claudeInputUsage(body.usage),
         outputTokens: body.usage?.output_tokens
       }
     };
@@ -288,6 +303,7 @@ export class ClaudeProvider implements LlmProvider {
     params: {
       signal?: AbortSignal;
       model: string;
+      cacheablePrefix?: string;
       system: string;
       messages: ClaudeMessage[];
     },
@@ -303,6 +319,8 @@ export class ClaudeProvider implements LlmProvider {
     let buffer = "";
     let text = "";
     let stopReason: string | undefined;
+    let cacheReadInputTokens: number | undefined;
+    let cacheCreationInputTokens: number | undefined;
     let inputTokens: number | undefined;
     let outputTokens: number | undefined;
 
@@ -334,7 +352,10 @@ export class ClaudeProvider implements LlmProvider {
 
       if (event.type === "message_start") {
         responseModel = event.message?.model;
-        inputTokens = addTokenCount(inputTokens, event.message?.usage?.input_tokens);
+        const usage = claudeInputUsage(event.message?.usage);
+        inputTokens = usage.inputTokens;
+        cacheReadInputTokens = usage.cacheReadInputTokens;
+        cacheCreationInputTokens = usage.cacheCreationInputTokens;
         if (typeof event.message?.usage?.output_tokens === "number") {
           outputTokens = Math.max(outputTokens ?? 0, event.message.usage.output_tokens);
         }
@@ -406,6 +427,8 @@ export class ClaudeProvider implements LlmProvider {
       content: text ? [{ type: "text", text }] : [],
       stopReason,
       usage: {
+        cacheReadInputTokens,
+        cacheCreationInputTokens,
         inputTokens,
         outputTokens
       }
@@ -413,7 +436,7 @@ export class ClaudeProvider implements LlmProvider {
   }
 
   async generate(params: ChatGenerateParams): Promise<ProviderResponse> {
-    const { selectedModel, system, messages } = this.buildRequestContext(params);
+    const { selectedModel, system, messages, cacheablePrefix } = this.buildRequestContext(params);
     await params.onProviderSystemPrepared?.({
       provider: "anthropic", model: selectedModel,
       endpoint: "/v1/messages", systemMessages: [system],
@@ -421,6 +444,8 @@ export class ClaudeProvider implements LlmProvider {
 
     let accumulatedText = "";
     let responseModel = selectedModel;
+    let cacheReadInputTokens: number | undefined;
+    let cacheCreationInputTokens: number | undefined;
     let inputTokens: number | undefined;
     let outputTokens: number | undefined;
     let stopReason: string | undefined;
@@ -431,6 +456,7 @@ export class ClaudeProvider implements LlmProvider {
       const pass = await this.generatePass({
         signal: params.signal,
         model: selectedModel,
+        cacheablePrefix,
         system,
         messages: continuationPass
           ? buildContinuationMessages(messages, accumulatedText)
@@ -439,6 +465,8 @@ export class ClaudeProvider implements LlmProvider {
 
       responseModel = pass.model ?? responseModel;
       accumulatedText = appendContinuation(accumulatedText, pass.text);
+      cacheReadInputTokens = addTokenCount(cacheReadInputTokens, pass.usage.cacheReadInputTokens);
+      cacheCreationInputTokens = addTokenCount(cacheCreationInputTokens, pass.usage.cacheCreationInputTokens);
       inputTokens = addTokenCount(inputTokens, pass.usage.inputTokens);
       outputTokens = addTokenCount(outputTokens, pass.usage.outputTokens);
       stopReason = pass.stopReason;
@@ -450,6 +478,8 @@ export class ClaudeProvider implements LlmProvider {
           provider: this.name,
           stopReason,
           continuationCount,
+          cacheReadInputTokens,
+          cacheCreationInputTokens,
           inputTokens,
           outputTokens,
           truncated: false
@@ -479,6 +509,8 @@ export class ClaudeProvider implements LlmProvider {
       provider: this.name,
       stopReason: stopReason ?? "max_tokens",
       continuationCount,
+      cacheReadInputTokens,
+      cacheCreationInputTokens,
       inputTokens,
       outputTokens,
       truncated: true
@@ -489,7 +521,7 @@ export class ClaudeProvider implements LlmProvider {
     params: ChatGenerateParams,
     handlers: ProviderStreamHandlers
   ): Promise<ProviderResponse> {
-    const { selectedModel, system, messages } = this.buildRequestContext(params);
+    const { selectedModel, system, messages, cacheablePrefix } = this.buildRequestContext(params);
     await params.onProviderSystemPrepared?.({
       provider: "anthropic", model: selectedModel,
       endpoint: "/v1/messages", systemMessages: [system],
@@ -497,6 +529,8 @@ export class ClaudeProvider implements LlmProvider {
 
     let accumulatedText = "";
     let responseModel = selectedModel;
+    let cacheReadInputTokens: number | undefined;
+    let cacheCreationInputTokens: number | undefined;
     let inputTokens: number | undefined;
     let outputTokens: number | undefined;
     let stopReason: string | undefined;
@@ -508,6 +542,7 @@ export class ClaudeProvider implements LlmProvider {
         {
           signal: params.signal,
           model: selectedModel,
+          cacheablePrefix,
           system,
           messages: continuationPass
             ? buildContinuationMessages(messages, accumulatedText)
@@ -518,6 +553,8 @@ export class ClaudeProvider implements LlmProvider {
 
       responseModel = pass.model ?? responseModel;
       accumulatedText = appendContinuation(accumulatedText, pass.text);
+      cacheReadInputTokens = addTokenCount(cacheReadInputTokens, pass.usage.cacheReadInputTokens);
+      cacheCreationInputTokens = addTokenCount(cacheCreationInputTokens, pass.usage.cacheCreationInputTokens);
       inputTokens = addTokenCount(inputTokens, pass.usage.inputTokens);
       outputTokens = addTokenCount(outputTokens, pass.usage.outputTokens);
       stopReason = pass.stopReason;
@@ -529,6 +566,8 @@ export class ClaudeProvider implements LlmProvider {
           provider: this.name,
           stopReason,
           continuationCount,
+          cacheReadInputTokens,
+          cacheCreationInputTokens,
           inputTokens,
           outputTokens,
           truncated: false
@@ -559,6 +598,8 @@ export class ClaudeProvider implements LlmProvider {
       provider: this.name,
       stopReason: stopReason ?? "max_tokens",
       continuationCount,
+      cacheReadInputTokens,
+      cacheCreationInputTokens,
       inputTokens,
       outputTokens,
       truncated: true

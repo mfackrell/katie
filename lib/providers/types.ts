@@ -109,6 +109,8 @@ export interface ChatGenerateParams {
   signal?: AbortSignal;
   /** Server-derived actor/conversation scope, shared by helper calls. */
   promptCacheKey?: string;
+  /** Exact reusable persona prefix, before request-specific additions. */
+  cacheablePersona?: string;
   /** Internal opt-in: bounded structured frame observations, no SDK inference retries. */
   boundedFrameObservations?: true;
   /** Server-restored historical evidence; never accepted directly from the browser request. */

@@ -8,6 +8,8 @@ import { createStandaloneLedger } from '../lib/standalone-accounting/ledger';
 import type { LedgerAttempt, AdmitAttemptInput, ResponseCheckpoint, SettlementInput } from '../lib/standalone-accounting/types';
 import { OpenAiProvider } from '../lib/providers/openai-provider';
 import { nativeToolTurn } from '../lib/providers/native-tools';
+import { ClaudeProvider } from '../lib/providers/claude-provider';
+import { claudeCachedSystem } from '../lib/providers/claude-cache';
 
 const context = { userId: 'owner', actorId: 'actor', chatId: 'chat', requestId: 'request' };
 const request = { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ model: 'gpt-4o', messages: [{ role: 'user', content: 'hello' }] }) };
@@ -267,3 +269,87 @@ test('a different exactly priced resolved model settles using its own reviewed r
   assert.equal(attempt.evidence?.pricedModel, 'gpt-4o-mini');
   assert.equal(attempt.evidence?.pricingUnknown, false);
 });
+
+for (const native of [false, true]) {
+  test(`Claude five-minute cache prefix is frozen, reserved and priced through the real ${native ? 'native tool' : 'chat'} adapter`, async () => {
+    const ledgerModule = require('../lib/standalone-accounting/ledger') as { createStandaloneLedger: typeof createStandaloneLedger };
+    const savedFactory = ledgerModule.createStandaloneLedger, savedFetch = globalThis.fetch;
+    const fake = fakeLedger(); let sentBody: Record<string, unknown> | undefined; let sentSerialized = '';
+    ledgerModule.createStandaloneLedger = fake.factory;
+    globalThis.fetch = async (_url, init) => {
+      sentSerialized = String(init?.body); sentBody = JSON.parse(sentSerialized);
+      return new Response(JSON.stringify({ id: 'claude-cache-response', model: 'claude-sonnet-5-5', content: [{ type: 'text', text: 'Cached answer' }], stop_reason: 'end_turn', usage: { input_tokens: 10, cache_read_input_tokens: 100, cache_creation_input_tokens: 200, output_tokens: 20 } }), { headers: { 'content-type': 'application/json' } });
+    };
+    try {
+      const result = await runWithStandaloneAccounting(context, () => native
+        ? nativeToolTurn('anthropic', 'offline-key', { modelId: 'claude-sonnet-5-5', system: 'Stable instructions\n\nCURRENT_REQUEST_TIMESTAMP_UTC: dynamic', cacheablePersona: 'Stable instructions', messages: [{ role: 'user', text: 'Answer' }], tools: [{ name: 'read_local_file', description: 'Read local file', parameters: { type: 'object' } }], signal: new AbortController().signal }).then(turn => turn.response)
+        : new ClaudeProvider('offline-key').generate({ modelId: 'claude-sonnet-5-5', name: 'Katie', persona: 'Stable instructions\n\nCURRENT_REQUEST_TIMESTAMP_UTC: dynamic', cacheablePersona: 'Stable instructions', summary: '', history: [], user: 'Answer' }));
+      const attempt = fake.attempts[0];
+      assert.equal(attempt.state, 'settled');
+      assert.equal(attempt.actual_microusd, '730', 'Ten uncached +100 read +200 five-minute write +20 output tokens use their distinct reviewed rates');
+      assert.equal(attempt.usage?.inputTokens, 310);
+      assert.equal(attempt.usage?.cacheReadInputTokens, 100);
+      assert.equal(attempt.usage?.cacheWriteInputTokens, 200);
+      assert.equal(attempt.usage?.cacheCreationInputTokens, 200);
+      assert.equal(attempt.usage?.cacheWriteTtl, '5m');
+      assert.equal(result.usage?.inputTokens, 310);
+      assert.equal(result.usage?.cacheCreationInputTokens, 200);
+      const system = sentBody?.system as Array<{ text: string; cache_control?: unknown }>;
+      assert.deepEqual(system[0].cache_control, { type: 'ephemeral', ttl: '5m' });
+      assert.ok(!system[0].text.includes('CURRENT_REQUEST_TIMESTAMP'));
+      assert.ok(system[1].text.includes('CURRENT_REQUEST_TIMESTAMP_UTC: dynamic'));
+      assert.equal(system[1].cache_control, undefined);
+      assert.deepEqual((attempt.prepared_payload.payload as Record<string, unknown>).system, system);
+      assert.equal(attempt.prepared_payload.serializedBody, sentSerialized);
+      assert.equal(attempt.preflight_estimate.cacheWriteTtl, '5m');
+      assert.ok(Number(attempt.preflight_estimate.cacheWriteInputAllowance) > 0);
+    } finally { ledgerModule.createStandaloneLedger = savedFactory; globalThis.fetch = savedFetch; }
+  });
+}
+
+test('Claude SSE final receipt prices five-minute writes proven by a conserving lifetime split', async () => {
+  const fake = fakeLedger();
+  const events = [
+    { type: 'message_start', message: { id: 'claude-cache-stream', model: 'claude-sonnet-5-5', usage: { input_tokens: 10, cache_read_input_tokens: 100, cache_creation: { ephemeral_5m_input_tokens: 200, ephemeral_1h_input_tokens: 0 }, output_tokens: 1 } } },
+    { type: 'message_delta', usage: { output_tokens: 20 } }, { type: 'message_stop' },
+  ];
+  const send = createAccountingFetch('anthropic', async () => new Response(events.map(event => `data: ${JSON.stringify(event)}\n\n`).join('')), fake.factory);
+  await runWithStandaloneAccounting(context, () => send('https://api.anthropic.com/v1/messages', { method: 'POST', body: JSON.stringify({ model: 'claude-sonnet-5-5', max_tokens: 4096, system: 'System with no requested breakpoint', messages: [{ role: 'user', content: 'Answer' }], stream: true }) }));
+  assert.equal(fake.attempts[0].state, 'settled');
+  assert.equal(fake.attempts[0].actual_microusd, '730');
+  assert.equal(fake.attempts[0].usage?.inputTokens, 310);
+  assert.equal(fake.attempts[0].usage?.cacheWriteInputTokens, 200);
+  assert.equal(fake.attempts[0].usage?.cacheWriteTtl, '5m');
+});
+
+test('Claude default five-minute request policy proves the write lifetime when the receipt has no lifetime split', async () => {
+  const fake = fakeLedger();
+  const send = createAccountingFetch('anthropic', async () => new Response(JSON.stringify({ id: 'claude-default-cache', model: 'claude-sonnet-5-5', usage: { input_tokens: 10, cache_read_input_tokens: 100, cache_creation_input_tokens: 200, output_tokens: 20 } })), fake.factory);
+  await runWithStandaloneAccounting(context, () => send('https://api.anthropic.com/v1/messages', { method: 'POST', body: JSON.stringify({ model: 'claude-sonnet-5-5', max_tokens: 4096, system: [{ type: 'text', text: 'Stable prefix', cache_control: { type: 'ephemeral' } }], messages: [{ role: 'user', content: 'Answer' }] }) }));
+  assert.equal(fake.attempts[0].state, 'settled');
+  assert.equal(fake.attempts[0].actual_microusd, '730');
+  assert.equal(fake.attempts[0].usage?.cacheWriteTtl, '5m');
+});
+
+for (const scenario of ['one-hour', 'missing-lifetime', 'conflicting-split', 'schema-is-not-policy'] as const) {
+  test(`Claude ${scenario} cache writes retain known tokens and exposure without a fabricated cache price`, async () => {
+    const fake = fakeLedger();
+    const split = scenario === 'one-hour' ? { ephemeral_5m_input_tokens: 0, ephemeral_1h_input_tokens: 200 }
+      : scenario === 'conflicting-split' ? { ephemeral_5m_input_tokens: 199, ephemeral_1h_input_tokens: 0 } : undefined;
+    const send = createAccountingFetch('anthropic', async () => new Response(JSON.stringify({ id: `claude-${scenario}`, model: 'claude-sonnet-5-5', usage: { input_tokens: 10, cache_read_input_tokens: 100, cache_creation_input_tokens: 200, ...(split ? { cache_creation: split } : {}), output_tokens: 20 } })), fake.factory);
+    const system = scenario === 'one-hour' || scenario === 'conflicting-split' ? claudeCachedSystem('Stable\nDynamic', 'Stable') : 'No provider cache policy';
+    const tools = scenario === 'schema-is-not-policy' ? [{ name: 'read_local_file', input_schema: { type: 'object', properties: { cache_control: { const: { type: 'ephemeral', ttl: '5m' } } } } }] : undefined;
+    await assert.rejects(runWithStandaloneAccounting(context, () => send('https://api.anthropic.com/v1/messages', { method: 'POST', body: JSON.stringify({ model: 'claude-sonnet-5-5', max_tokens: 4096, system, ...(tools ? { tools } : {}), messages: [{ role: 'user', content: 'Answer' }] }) })), (error: unknown) => {
+      assert.equal((error as { code?: string }).code, 'standalone_usage_unpriced'); return true;
+    });
+    const attempt = fake.attempts[0];
+    assert.equal(attempt.state, 'uncertain');
+    assert.equal(attempt.actual_microusd, null);
+    assert.equal(attempt.usage?.inputTokens, 310);
+    assert.equal(attempt.usage?.cacheCreationInputTokens, 200);
+    assert.equal(attempt.usage?.cacheWriteInputTokens, 200);
+    assert.equal(attempt.evidence?.pricingUnknown, true);
+    assert.ok(BigInt(attempt.reserved_microusd) > 0n);
+    assert.equal(fake.events.includes('settle'), false);
+  });
+}

@@ -150,21 +150,30 @@ test('standalone ledger: real PostgreSQL atomic admission, receipts, ownership a
   await assert.rejects(rpc(one,'admit',input('cancel-next','1','cancel-request')),/REQUEST_CANCELLED/);
   const partial=await rpc(one,'admit',input('partial-main','10','partial-request'));
   await rpc(one,'claim_dispatch',{p_owner:owner,p_attempt:partial.id});
-  const partialUsage={inputTokens:7,outputTokens:null,cachedInputTokens:0};
+  const partialUsage={inputTokens:100,outputTokens:null,cachedInputTokens:10,cacheReadInputTokens:10,cacheCreationInputTokens:20,cacheWriteInputTokens:20,cacheWriteTtl:'5m'};
   const partialEvidence={requestedModel:'fixture-model',resolvedModel:'new-unpriced-model',pricingVersion:'fixture-v1',pricingUnknown:true};
   const partialResult=await durableAdapter.recordPartialUsage(owner,partial.id,partialUsage,partialEvidence);
   assert.equal(partialResult.state,'uncertain');assert.equal(partialResult.actual_microusd,null);assert.equal(partialResult.reserved_microusd,'10');
-  assert.equal(partialResult.usage.inputTokens,7);assert.equal(partialResult.resolved_model,'new-unpriced-model');
+  assert.equal(partialResult.usage.inputTokens,100);assert.equal(partialResult.resolved_model,'new-unpriced-model');
   const partialEventsBefore=(await rpc(two,'snapshot',{p_owner:owner})).events.filter(e=>e.attempt_id===partial.id).length;
   await durableAdapter.recordPartialUsage(owner,partial.id,partialUsage,partialEvidence);
   assert.equal((await rpc(two,'snapshot',{p_owner:owner})).events.filter(e=>e.attempt_id===partial.id).length,partialEventsBefore,'exact duplicate partial observations are idempotent');
   const {summarizeDailyUsage}=modules()('@/lib/standalone-accounting/daily');
   const partialDaily=summarizeDailyUsage([partialResult],'UTC',undefined,new Date(partialResult.dispatched_at));
-  assert.equal(partialDaily.totals.inputTokens,7);assert.equal(partialDaily.totals.missingInputCount,0);assert.equal(partialDaily.totals.missingOutputCount,1);
+  assert.equal(partialDaily.totals.inputTokens,100);assert.equal(partialDaily.totals.missingInputCount,0);assert.equal(partialDaily.totals.missingOutputCount,1);
   assert.equal(partialDaily.totals.unknownCostCount,1);assert.equal(partialDaily.totals.estimatedCostMicrousd,'0');assert.equal(partialDaily.totals.uncertainExposureMicrousd,'10');
   await assert.rejects(durableAdapter.recordPartialUsage(owner,partial.id,{inputTokens:8},partialEvidence),error=>error.code==='standalone_usage_conflict');
-  assert.equal((await rpc(two,'lookup_attempt',{p_owner:owner,p_request:'partial-request',p_key:'partial-main'})).usage.inputTokens,7);
-  const completedPartial={...settle,p_attempt:partial.id,p_receipt:'late-full-partial',p_actual:'9',p_usage:{inputTokens:7,outputTokens:2,cachedInputTokens:0},p_evidence:{...partialEvidence,pricingUnknown:false,source:'verified-late-provider-receipt'}};
+  assert.equal((await rpc(two,'lookup_attempt',{p_owner:owner,p_request:'partial-request',p_key:'partial-main'})).usage.inputTokens,100);
+  // Total input can stay unchanged while cache billing dimensions contradict an earlier observation.
+  await assert.rejects(durableAdapter.recordPartialUsage(owner,partial.id,{...partialUsage,cacheCreationInputTokens:21,cacheWriteInputTokens:21},partialEvidence),error=>error.code==='standalone_usage_conflict');
+  await assert.rejects(durableAdapter.recordPartialUsage(owner,partial.id,{...partialUsage,cacheReadInputTokens:11},partialEvidence),error=>error.code==='standalone_usage_conflict');
+  await assert.rejects(durableAdapter.recordPartialUsage(owner,partial.id,{...partialUsage,cacheWriteTtl:'1h'},partialEvidence),error=>error.code==='standalone_usage_conflict');
+  const originalCacheUsage=(await rpc(two,'lookup_attempt',{p_owner:owner,p_request:'partial-request',p_key:'partial-main'})).usage;
+  assert.equal(originalCacheUsage.inputTokens,100);assert.equal(originalCacheUsage.cacheReadInputTokens,10);
+  assert.equal(originalCacheUsage.cacheWriteInputTokens,20);assert.equal(originalCacheUsage.cacheCreationInputTokens,20);assert.equal(originalCacheUsage.cacheWriteTtl,'5m');
+  assert.ok((await rpc(two,'snapshot',{p_owner:owner})).events.some(e=>e.kind==='usage_conflict'&&e.attempt_id===partial.id&&e.details.usage.inputTokens===100&&e.details.usage.cacheWriteInputTokens===21),'cache-dimension conflict survives adapter rejection without changing total input or the original observation');
+
+  const completedPartial={...settle,p_attempt:partial.id,p_receipt:'late-full-partial',p_actual:'9',p_usage:{...partialUsage,outputTokens:2},p_evidence:{...partialEvidence,pricingUnknown:false,source:'verified-late-provider-receipt'}};
   const concurrentFinals=await Promise.all([rpc(one,'settle',completedPartial),rpc(two,'settle',completedPartial)]);
   assert.equal(concurrentFinals[0].id,concurrentFinals[1].id,'concurrent identical receipts converge on one settled attempt');
   const fullPartial=await rpc(two,'lookup_attempt',{p_owner:owner,p_request:'partial-request',p_key:'partial-main'});

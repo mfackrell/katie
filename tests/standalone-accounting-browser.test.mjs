@@ -21,7 +21,7 @@ test('standalone browser: explicit settings, scopes, exact approval resume, redu
   let server, browser, output = '';
   const totals = overrides => ({ inputTokens: 123, outputTokens: 45, missingInputCount: 0, missingOutputCount: 1, estimatedCostMicrousd: '250000', pendingExposureMicrousd: '900000', uncertainExposureMicrousd: '100000', unknownCostCount: 1, attemptCount: 4, ...overrides });
   const pending = (suffix, overrides = {}) => ({ id: `attempt-${suffix}`, requestId: `original-${suffix}`, provider: 'openai', model: 'gpt-4o', resolvedModel: null, category: 'hidden_router', preparedHash: 'a'.repeat(64), pricingVersion: 'fixture-pricing-v1', estimatorVersion: 'saved-estimator-v1', budgetRevision: 1, reservedMicrousd: '300000', reason: 'Choose a reply model for this saved turn.', pauseReason: 'per_call_threshold', tradeoffs: null, createdAt: '2026-10-28T10:00:00Z', preview: { textBytes: 3200, imageCount: 2, imageBytes: 4096, inputTokens: 3500, imageTokens: 256, outputAllowance: 8192, assumptions: ['Input token count is an estimate, not a guaranteed spending ceiling.', 'All allowed output tokens include hidden reasoning.'], issues: [], status: 'estimated' }, requestExposure: totals(), ...overrides });
-  let configuration = null, proposals = [], fail = false;
+  let configuration = null, proposals = [], running = [], fail = false;
   const decisions = [], resumes = [], configurations = [], scopes = [], external = [], unknownRoutes = [], errors = [];
   try {
     await mkdir(join(project, 'app/conversations/[id]'), { recursive: true });
@@ -58,7 +58,7 @@ test('standalone browser: explicit settings, scopes, exact approval resume, redu
           if (fail) return reply({ error: 'Fixture accounting unavailable' }, 503);
           const all = url.searchParams.get('scope') === 'all';
           const sum = totals(all ? { inputTokens: 999, estimatedCostMicrousd: '750000' } : {});
-          return reply({ configuration, pending: proposals, daily: configuration ? { timezone: configuration.timezone, date: '2026-10-28', start: '2026-10-28T00:00:00Z', end: '2026-10-29T00:00:00Z', totals: sum, providers: [{ ...sum, provider: 'openai' }], models: [{ ...sum, provider: 'openai', model: 'gpt-4o', category: 'hidden_router' }], unresolvedEarlier: totals({ attemptCount: 1, pendingExposureMicrousd: '0', uncertainExposureMicrousd: '40000' }), attempts: [{ id: 'helper-row', actor_id: actorId, chat_id: chatId, provider: 'openai', model: 'gpt-4o', category: 'hidden_router', state: 'uncertain', created_at: '2026-10-28T10:00:00Z', dispatched_at: '2026-10-28T10:00:00Z', actual_microusd: null }] } : null });
+          return reply({ configuration, pending: proposals, active: running, daily: configuration ? { timezone: configuration.timezone, date: '2026-10-28', start: '2026-10-28T00:00:00Z', end: '2026-10-29T00:00:00Z', totals: sum, providers: [{ ...sum, provider: 'openai' }], models: [{ ...sum, provider: 'openai', model: 'gpt-4o', category: 'hidden_router' }], unresolvedEarlier: totals({ attemptCount: 1, pendingExposureMicrousd: '0', uncertainExposureMicrousd: '40000' }), attempts: [{ id: 'helper-row', actor_id: actorId, chat_id: chatId, provider: 'openai', model: 'gpt-4o', category: 'hidden_router', state: 'uncertain', created_at: '2026-10-28T10:00:00Z', dispatched_at: '2026-10-28T10:00:00Z', actual_microusd: null }] } : null });
         }
         if (url.pathname.endsWith('/configuration')) {
           configurations.push(body); configuration = { timezone: body.timezone, per_call_limit_microusd: body.perCallLimitMicrousd, request_limit_microusd: body.requestLimitMicrousd, budget_revision: 1 };
@@ -66,14 +66,22 @@ test('standalone browser: explicit settings, scopes, exact approval resume, redu
           return reply({ configuration });
         }
         if (url.pathname.endsWith('/attempts')) {
-          decisions.push(body); const original = proposals.find(attempt => attempt.id === body.attemptId); assert.ok(original);
+          decisions.push(body); const original = [...proposals, ...running].find(attempt => attempt.id === body.attemptId); assert.ok(original);
           assert.equal(body.preparedHash, original.preparedHash); assert.equal(body.reservedMicrousd, original.reservedMicrousd);
+          if (body.action === 'cancel' && running.some(attempt => attempt.id === original.id)) {
+            running = running.filter(attempt => attempt.id !== original.id);
+            return reply({ attemptId: original.id, requestId: original.requestId, state: 'uncertain', cancellationRequested: true, heldExposureMicrousd: original.reservedMicrousd, message: 'Cancellation requested for remaining work. This attempt was already dispatched; its spending exposure remains held until provider usage is reconciled.' });
+          }
           if (body.action === 'reduce_cost') proposals = proposals.map(attempt => attempt.id === original.id ? pending('revised', { requestId: original.requestId, reservedMicrousd: '120000', preparedHash: 'b'.repeat(64), pauseReason: 'cost_reduction_review', tradeoffs: 'Older context was omitted. A smaller output allowance can shorten the answer.', preview: { ...attempt.preview, outputAllowance: 2048 } }) : attempt);
-          else proposals = proposals.filter(attempt => attempt.id !== original.id);
-          return reply({ attemptId: original.id, requestId: original.requestId, state: body.action === 'approve_once' ? 'reserved' : body.action === 'cancel' ? 'cancelled' : 'paused' });
+          else { proposals = proposals.filter(attempt => attempt.id !== original.id); if (body.action === 'approve_once') running.push({ ...original, state: 'dispatched' }); }
+          return reply({ attemptId: original.id, requestId: original.requestId, state: body.action === 'approve_once' ? 'reserved' : body.action === 'cancel' ? 'cancelled' : 'paused', ...(body.action === 'cancel' ? { cancellationRequested: true, message: 'Attempt cancelled before dispatch.' } : {}) });
         }
       }
-      if (url.pathname === '/api/chat') { resumes.push({ body, requestId: request.headers()['x-request-id'] }); return reply({ status: 'paused' }, 202); }
+      if (url.pathname === '/api/chat') {
+        const requestId = request.headers()['x-request-id']; resumes.push({ body, requestId });
+        running = running.map(attempt => attempt.requestId === requestId && attempt.state === 'reserved' ? { ...attempt, state: 'dispatched' } : attempt);
+        return reply({ status: 'paused' }, 202);
+      }
       if (url.pathname === '/api/actors') return reply({ actors: [{ id: actorId, name: 'Fixture standalone', purpose: 'Browser verification', actorKind: 'standard' }] });
       if (url.pathname === '/api/chats') return reply({ chats: [{ id: chatId, actorId, title: 'Synthetic saved conversation', createdAt: '2026-10-28T00:00:00Z', updatedAt: '2026-10-28T00:00:00Z' }] });
       if (url.pathname === '/api/admin/repos') return reply({ repos: [] });
@@ -120,6 +128,17 @@ test('standalone browser: explicit settings, scopes, exact approval resume, redu
     assert.equal(resumes.length, 1);
     assert.deepEqual(resumes[0], { body: { actorId, chatId, standaloneResume: true }, requestId: 'original-approve' });
     assert.equal(resumes[0].body.message, undefined, 'approval resumes durable original input instead of creating a generic message');
+    const active = usage.getByLabel('Active attempts in this conversation');
+    await active.getByRole('button', { name: 'Cancel remaining work' }).waitFor();
+    assert.match(await active.innerText(), /Already dispatched/);
+    assert.equal(await active.getByRole('button', { name: 'Resume saved work' }).count(), 0, 'dispatched work cannot be replayed');
+    await page.screenshot({ path: join(screenshots, 'active-cancellation-desktop.png'), fullPage: true });
+    const approvalsBeforeCancel = decisions.filter(body => body.action === 'approve_once').length;
+    await active.getByRole('button', { name: 'Cancel remaining work' }).click();
+    await usage.getByRole('status').filter({ hasText: 'spending exposure remains held' }).waitFor();
+    assert.equal(resumes.length, 1, 'cancelling running work must not resume or start another provider attempt');
+    assert.equal(decisions.filter(body => body.action === 'approve_once').length, approvalsBeforeCancel, 'active cancellation never approves');
+    await active.waitFor({ state: 'detached' });
     await card('attempt-reduce').getByRole('button', { name: 'Reduce cost' }).click();
     await usage.getByText('Reduction tradeoffs:', { exact: false }).waitFor();
     assert.equal(resumes.length, 1, 'cost reduction cannot dispatch');
@@ -127,16 +146,34 @@ test('standalone browser: explicit settings, scopes, exact approval resume, redu
     assert.equal(await card('attempt-revised').getByRole('button', { name: 'Approve once' }).count(), 1);
     await card('attempt-cancel').getByRole('button', { name: 'Cancel', exact: true }).click();
     await usage.getByText('Attempt cancelled before dispatch.', { exact: true }).waitFor();
-    assert.deepEqual(decisions.map(body => body.action), ['approve_once', 'reduce_cost', 'cancel']);
+    assert.deepEqual(decisions.map(body => body.action), ['approve_once', 'cancel', 'reduce_cost', 'cancel']);
     assert.equal(resumes.length, 1, 'cancel cannot dispatch');
     await page.setViewportSize({ width: 390, height: 844 });
     await card('attempt-revised').getByRole('button', { name: 'Approve once' }).scrollIntoViewIfNeeded();
     await page.screenshot({ path: join(screenshots, 'reduction-mobile.png'), fullPage: true });
     const actionBounds = await card('attempt-revised').getByRole('button', { name: 'Approve once' }).boundingBox();
     assert.ok(actionBounds && actionBounds.y >= 0 && actionBounds.y + actionBounds.height <= 844, 'mobile approval action is reachable in the scroll viewport');
+    // Simulate approval having committed before a disconnected tab could emit resume.
+    running = [{ ...pending('reconnect'), requestId: 'original-approved-reconnect', state: 'reserved' }];
+    const approvalCountBeforeReconnect = decisions.filter(body => body.action === 'approve_once').length;
     await page.reload({ waitUntil: 'domcontentloaded' });
     await usage.getByText('Reduction tradeoffs:', { exact: false }).waitFor();
     assert.equal(resumes.length, 1, 'reload cannot replay approval or start a model');
+    await active.getByRole('button', { name: 'Resume saved work' }).waitFor();
+    await active.getByRole('button', { name: 'Resume saved work' }).scrollIntoViewIfNeeded();
+    await page.screenshot({ path: join(screenshots, 'reserved-reconnect-mobile.png'), fullPage: true });
+    const reconnectResponse = page.waitForResponse(response => response.url().endsWith('/api/chat'));
+    await active.getByRole('button', { name: 'Resume saved work' }).click();
+    await reconnectResponse;
+    assert.equal(resumes.length, 2);
+    assert.deepEqual(resumes[1], { body: { actorId, chatId, standaloneResume: true }, requestId: 'original-approved-reconnect' });
+    assert.equal(decisions.filter(body => body.action === 'approve_once').length, approvalCountBeforeReconnect, 'resuming a reserved attempt must not issue another approval');
+    await page.waitForFunction(() => !Array.from(document.querySelectorAll('button')).some(button => button.textContent === 'Resume saved work'));
+    running = running.map(attempt => ({ ...attempt, state: 'uncertain' }));
+    await usage.getByRole('button', { name: 'Refresh', exact: true }).click();
+    await active.getByText('openai/gpt-4o · hidden_router · uncertain', { exact: false }).waitFor();
+    assert.equal(await active.getByRole('button', { name: 'Resume saved work' }).count(), 0, 'uncertain paid work cannot be replayed');
+    assert.equal(await active.getByRole('button', { name: 'Cancel remaining work' }).count(), 1);
     fail = true; await usage.getByRole('button', { name: 'Refresh', exact: true }).click();
     await usage.getByRole('alert').waitFor();
     assert.match(await usage.getByRole('alert').innerText(), /Previously loaded values may be stale/);

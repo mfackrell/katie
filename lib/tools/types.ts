@@ -5,5 +5,7 @@ export interface ToolTurn { response: ProviderResponse; calls: ToolCall[]; nativ
 export interface ToolMessage { role: 'user' | 'assistant' | 'tool'; text: string; calls?: ToolCall[]; callId?: string; nativeParts?: unknown[] }
 export interface ToolTurnParams {
   promptCacheKey?: string;
+  /** Exact reusable persona prefix, before request-specific additions. */
+  cacheablePersona?: string;
   modelId: string; system: string; messages: ToolMessage[]; tools: ToolDefinition[]; signal: AbortSignal; requestId?: string; turn?: number;
 }

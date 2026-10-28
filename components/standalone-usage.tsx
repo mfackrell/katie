@@ -6,7 +6,9 @@ import type { DailyUsage, UsageTotals } from '@/lib/standalone-accounting/daily'
 
 interface Configuration { timezone: string; per_call_limit_microusd: string | null; request_limit_microusd: string | null; budget_revision: number }
 interface Pending { id: string; requestId: string; provider: string; model: string; category: string; preparedHash: string; pricingVersion: string; budgetRevision: number; reservedMicrousd: string; reason: string; pauseReason: string | null; resolvedModel: string | null; estimatorVersion: string; tradeoffs: string | null; createdAt: string; preview: { textBytes: number; imageCount: number; imageBytes: number; inputTokens: number; imageTokens: number; outputAllowance: number; assumptions: string[]; issues: string[]; status: string }; requestExposure: UsageTotals }
-interface Snapshot { configuration: Configuration | null; daily: DailyUsage | null; pending: Pending[]; alerts?: Array<{ attemptId: string; provider: string; model: string; kind: string; message: string; actualMicrousd: string | null; reservedMicrousd: string }> }
+type DecisionAttempt = Pick<Pending, 'id' | 'requestId' | 'preparedHash' | 'pricingVersion' | 'budgetRevision' | 'reservedMicrousd'>;
+interface ActiveAttempt extends DecisionAttempt { provider: string; model: string; category: string; state: 'reserved' | 'dispatched' | 'uncertain' }
+interface Snapshot { configuration: Configuration | null; daily: DailyUsage | null; pending: Pending[]; active?: ActiveAttempt[]; alerts?: Array<{ attemptId: string; provider: string; model: string; kind: string; message: string; actualMicrousd: string | null; reservedMicrousd: string }> }
 interface Props { actorId: string; chatId: string; onResumeAttempt?: (attempt: { attemptId: string; requestId: string }) => Promise<void> | void }
 
 // Formatting uses integer arithmetic so large ledger amounts never lose precision.
@@ -66,21 +68,34 @@ export function StandaloneUsage({ actorId, chatId, onResumeAttempt }: Props) {
     } catch (failure) { setError(failure instanceof Error ? failure.message : 'Settings could not be saved.'); }
     finally { setBusy(''); }
   }
-  async function decide(attempt: Pending, action: 'approve_once' | 'reduce_cost' | 'cancel') {
+  async function requestSavedResume(detail: { attemptId: string; requestId: string }) {
+    if (onResumeAttempt) await onResumeAttempt(detail);
+    else window.dispatchEvent(new CustomEvent('standalone-accounting-resume', { detail: { ...detail, actorId, chatId } }));
+  }
+  async function resumeReserved(attempt: ActiveAttempt) {
+    if (attempt.state !== 'reserved') return;
+    setBusy(attempt.id); setError(''); setNotice('');
+    try {
+      await requestSavedResume({ attemptId: attempt.id, requestId: attempt.requestId });
+      setNotice('Resume requested for the saved authorized work.');
+      await refresh();
+    } catch (failure) { setError(failure instanceof Error ? failure.message : 'Saved work could not resume.'); }
+    finally { setBusy(''); }
+  }
+  async function decide(attempt: DecisionAttempt, action: 'approve_once' | 'reduce_cost' | 'cancel') {
     setBusy(attempt.id); setError(''); setNotice('');
     try {
       const result = await api('attempts', { method: 'POST', body: JSON.stringify({ actorId, chatId, attemptId: attempt.id, action, preparedHash: attempt.preparedHash, pricingVersion: attempt.pricingVersion, budgetRevision: attempt.budgetRevision, reservedMicrousd: attempt.reservedMicrousd }) });
       if (action === 'approve_once') {
-        const detail = { attemptId: result.attemptId as string, requestId: result.requestId as string };
-        if (onResumeAttempt) await onResumeAttempt(detail);
-        else window.dispatchEvent(new CustomEvent('standalone-accounting-resume', { detail: { ...detail, actorId, chatId } }));
+        await requestSavedResume({ attemptId: result.attemptId as string, requestId: result.requestId as string });
         setNotice('Approved once for this exact saved attempt.');
-      } else setNotice(action === 'cancel' ? 'Attempt cancelled before dispatch.' : 'A smaller proposal was prepared. Review its new estimate before approval.');
+      } else setNotice(action === 'cancel' ? result.message || 'Cancellation requested. Any dispatched spending exposure remains visible.' : 'A smaller proposal was prepared. Review its new estimate before approval.');
       await refresh();
     } catch (failure) { setError(failure instanceof Error ? failure.message : 'Decision could not be saved.'); await refresh(); }
     finally { setBusy(''); }
   }
   const daily = snapshot?.daily;
+  const activeAttempts = snapshot?.active ?? [];
   const configurationComplete = snapshot?.configuration && snapshot.configuration.per_call_limit_microusd !== null && snapshot.configuration.request_limit_microusd !== null;
   return <section aria-label="Standalone daily usage" className="shrink-0 border-b border-white/10 px-5 py-3 text-xs text-zinc-300">
     <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
@@ -104,6 +119,16 @@ export function StandaloneUsage({ actorId, chatId, onResumeAttempt }: Props) {
       </details>
     </>}
     {snapshot?.alerts?.map((alert, index) => <p role="alert" key={`${alert.attemptId}:${alert.kind}:${index}`} className="mt-2 rounded border border-amber-400/40 p-2 text-amber-100"><strong>{alert.kind === 'overrun' ? 'Preflight overrun' : alert.kind === 'receipt_conflict' ? 'Receipt conflict' : 'Uncertain provider outcome'}</strong> · {alert.provider}/{alert.model} · {alert.message}{alert.actualMicrousd !== null && ` Settled ${dollars(alert.actualMicrousd)}; reserved ${dollars(alert.reservedMicrousd)}.`} <span className="break-all">Attempt {alert.attemptId}</span></p>)}
+    {activeAttempts.length > 0 && <div aria-label="Active attempts in this conversation" className="mt-2 space-y-2">
+      <p className="font-medium text-zinc-100">Active or unresolved attempts in this conversation</p>
+      {activeAttempts.map(attempt => <div key={attempt.id} className="rounded border border-white/20 p-2">
+        <p>{attempt.provider}/{attempt.model} · {attempt.category} · {attempt.state} · exposure {dollars(attempt.reservedMicrousd)}</p>
+        <p className="mt-1 break-all text-zinc-400">Exact attempt {attempt.id} · original request {attempt.requestId}</p>
+        {attempt.state === 'reserved' && <button type="button" disabled={Boolean(busy)} onClick={() => void resumeReserved(attempt)} className="mr-4 mt-1 rounded border border-white/30 px-2 py-1 disabled:opacity-50">Resume saved work</button>}
+        {attempt.state !== 'reserved' && <p className="mt-1">Already dispatched. Cancellation stops remaining work where possible; spending exposure stays held until provider usage is reconciled.</p>}
+        <button type="button" disabled={Boolean(busy)} onClick={() => void decide(attempt, 'cancel')} className="mt-1 underline disabled:opacity-50">Cancel remaining work</button>
+      </div>)}
+    </div>}
     {snapshot?.pending.map(attempt => <div key={attempt.id} className="mt-3 rounded border border-amber-400/40 p-3">
       <p className="font-medium text-amber-100">Approval required · {attempt.provider}/{attempt.model} · {attempt.category}</p>
       <p className="mt-1">Purpose: {attempt.reason || attempt.category}. Paused: {attempt.pauseReason || 'Approval required.'}</p>

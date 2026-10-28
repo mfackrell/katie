@@ -1,10 +1,10 @@
 /** Reviewed first-party global standard rates. Never derive money from model discovery. */
-export const PRICING_VERSION = "standalone-pricing-2026-10-28-v2";
+export const PRICING_VERSION = "standalone-pricing-2026-10-28-v3";
 export type AccountingProvider = "openai" | "anthropic" | "google" | "grok";
-export type PriceTier = { aboveInputTokens: number; inclusive?: boolean; inputNanoUsd: string; outputNanoUsd: string; cachedInputNanoUsd?: string };
+export type PriceTier = { aboveInputTokens: number; inclusive?: boolean; inputNanoUsd: string; outputNanoUsd: string; cachedInputNanoUsd?: string;cacheWrite5mNanoUsd?:string };
 export type ModelPrice = {
   provider: AccountingProvider; model: string; inputNanoUsd: string; outputNanoUsd: string;
-  cachedInputNanoUsd?: string; maxContextTokens: number; maxOutputTokens: number;
+  cachedInputNanoUsd?: string;cacheWrite5mNanoUsd?:string; maxContextTokens: number; maxOutputTokens: number;
   responsesOnly?: boolean; supportsStreaming?: boolean;
   vision?: { kind: "tiles"; base: number; tile: number } | { kind: "claude"; maximum: number } | { kind: "gemini25" };
   tiers?: PriceTier[]; source: string;
@@ -27,13 +27,13 @@ const models: ModelPrice[] = [
   ...["gpt-5.4-pro","gpt-5.4-pro-2026-03-05"].map((model):ModelPrice=>({provider:"openai",model,inputNanoUsd:"30000",outputNanoUsd:"180000",maxContextTokens:1050000,maxOutputTokens:128000,responsesOnly:true,supportsStreaming:true,tiers:[{aboveInputTokens:272000,inputNanoUsd:"60000",outputNanoUsd:"270000"}],source:openai+"gpt-5.4-pro"})),
   ...["gpt-5.5-pro","gpt-5.5-pro-2026-04-23"].map((model):ModelPrice=>({provider:"openai",model,inputNanoUsd:"30000",outputNanoUsd:"180000",cachedInputNanoUsd:"30000",maxContextTokens:1050000,maxOutputTokens:128000,responsesOnly:true,supportsStreaming:false,source:openai+"gpt-5.5-pro"})),
   { provider:"openai", model:"o3-pro", inputNanoUsd:"20000",outputNanoUsd:"80000",maxContextTokens:200000,maxOutputTokens:100000,source:openai+"o3-pro" },
-  ...([ ["claude-sonnet-4-5","3000","15000","300"], ["claude-haiku-4-5","1000","5000","100"], ["claude-sonnet-4-6","3000","15000","300"], ["claude-opus-4-6","5000","25000","500"], ["claude-sonnet-5-5","2000","10000","100"], ["claude-opus-5-5","4000","20000","200"] ]).map(([model,inputNanoUsd,outputNanoUsd,cachedInputNanoUsd]):ModelPrice => ({provider:"anthropic",model,inputNanoUsd,outputNanoUsd,cachedInputNanoUsd,maxContextTokens:model.endsWith("4-5")?200000:1000000,maxOutputTokens:64000,vision:{kind:"claude",maximum:model.endsWith("5-5")?4784:1568},source:claude})),
+  ...([ ["claude-sonnet-4-5","3000","15000","300","3750"], ["claude-haiku-4-5","1000","5000","100","1250"], ["claude-sonnet-4-6","3000","15000","300","3750"], ["claude-opus-4-6","5000","25000","500","6250"], ["claude-sonnet-5-5","2000","10000","100","2500"], ["claude-opus-5-5","4000","20000","200","5000"] ]).map(([model,inputNanoUsd,outputNanoUsd,cachedInputNanoUsd,cacheWrite5mNanoUsd]):ModelPrice => ({provider:"anthropic",model,inputNanoUsd,outputNanoUsd,cachedInputNanoUsd,cacheWrite5mNanoUsd,maxContextTokens:model.endsWith("4-5")?200000:1000000,maxOutputTokens:64000,vision:{kind:"claude",maximum:model.endsWith("5-5")?4784:1568},source:claude})),
   {provider:"google",model:"gemini-2.5-pro",inputNanoUsd:"1250",outputNanoUsd:"10000",cachedInputNanoUsd:"125",maxContextTokens:1048576,maxOutputTokens:65536,vision:{kind:"gemini25"},tiers:[{aboveInputTokens:200000,inputNanoUsd:"2500",outputNanoUsd:"15000",cachedInputNanoUsd:"250"}],source:google},
   {provider:"google",model:"gemini-2.5-flash",inputNanoUsd:"300",outputNanoUsd:"2500",cachedInputNanoUsd:"30",maxContextTokens:1048576,maxOutputTokens:65536,vision:{kind:"gemini25"},source:google},
   ...["grok-4.7","grok-4.6"].map((model):ModelPrice=>({provider:"grok",model,inputNanoUsd:"2000",outputNanoUsd:"6000",cachedInputNanoUsd:"500",maxContextTokens:500000,maxOutputTokens:30000,tiers:[{aboveInputTokens:200000,inclusive:true,inputNanoUsd:"4000",outputNanoUsd:"12000",cachedInputNanoUsd:"1000"}],source:grok})),
   {provider:"grok",model:"grok-4.3",inputNanoUsd:"1250",outputNanoUsd:"2500",cachedInputNanoUsd:"200",maxContextTokens:1000000,maxOutputTokens:30000,tiers:[{aboveInputTokens:200000,inclusive:true,inputNanoUsd:"2500",outputNanoUsd:"5000",cachedInputNanoUsd:"400"}],source:grok},
 ];
-export const PRICING_SNAPSHOT = deepFreeze({version:PRICING_VERSION,verifiedAt:"2026-10-28",currency:"USD",unit:"microUSD",rateUnit:"nanoUSD/token",scope:"first-party-global-standard",sources:[...new Set(models.map(m=>m.source)),"https://developers.openai.com/api/docs/guides/images-vision","https://platform.claude.com/docs/en/build-with-claude/vision","https://ai.google.dev/gemini-api/docs/image-understanding"],models});
+export const PRICING_SNAPSHOT = deepFreeze({version:PRICING_VERSION,verifiedAt:"2026-10-28",currency:"USD",unit:"microUSD",rateUnit:"nanoUSD/token",scope:"first-party-global-standard",sources:[...new Set(models.map(m=>m.source)),"https://developers.openai.com/api/docs/guides/images-vision","https://platform.claude.com/docs/en/build-with-claude/vision","https://platform.claude.com/docs/en/build-with-claude/prompt-caching","https://ai.google.dev/gemini-api/docs/image-understanding"],models});
 /** Cache metadata eligibility, reviewed separately from immutable token rates.
  * Official prompt-caching model comparison: pre-5.6 retention has no additional
  * write charge; only the named earlier models support extended 24-hour retention.
@@ -49,14 +49,16 @@ export function getModelPrice(provider: AccountingProvider, model: string): Mode
   // Deliberately no suffix stripping, family matching, registry fallback or guessed aliases.
   return PRICING_SNAPSHOT.models.find(row => row.provider === provider && row.model === model);
 }
-export function selectPriceTier(price: ModelPrice, inputTokens: number): Pick<ModelPrice,"inputNanoUsd"|"outputNanoUsd"|"cachedInputNanoUsd"> {
+export function selectPriceTier(price: ModelPrice, inputTokens: number): Pick<ModelPrice,"inputNanoUsd"|"outputNanoUsd"|"cachedInputNanoUsd"|"cacheWrite5mNanoUsd"> {
   return [...(price.tiers ?? [])].reverse().find(tier => tier.inclusive ? inputTokens >= tier.aboveInputTokens : inputTokens > tier.aboveInputTokens) ?? price;
 }
-export function priceTokenUsage(price: ModelPrice, inputTokens: number, outputTokens: number, cachedInputTokens = 0): string {
-  for (const count of [inputTokens,outputTokens,cachedInputTokens]) if (!Number.isSafeInteger(count)||count<0) throw new Error("Invalid token usage");
-  if (cachedInputTokens > inputTokens) throw new Error("Cached tokens exceed total input");
+/** Input is the total prompt: uncached + cache reads + verified five-minute writes. */
+export function priceTokenUsage(price: ModelPrice, inputTokens: number, outputTokens: number, cachedInputTokens = 0,cacheWriteInputTokens=0): string {
+  for (const count of [inputTokens,outputTokens,cachedInputTokens,cacheWriteInputTokens]) if (!Number.isSafeInteger(count)||count<0) throw new Error("Invalid token usage");
+  if (BigInt(cachedInputTokens)+BigInt(cacheWriteInputTokens)>BigInt(inputTokens)) throw new Error("Cache reads and writes exceed total input");
   const tier=selectPriceTier(price,inputTokens);
   if (cachedInputTokens && !tier.cachedInputNanoUsd) throw new Error("Unpriced cache dimension");
-  const nano = BigInt(inputTokens-cachedInputTokens)*BigInt(tier.inputNanoUsd)+BigInt(cachedInputTokens)*BigInt(tier.cachedInputNanoUsd??0)+BigInt(outputTokens)*BigInt(tier.outputNanoUsd);
+  if(cacheWriteInputTokens&&!tier.cacheWrite5mNanoUsd)throw new Error("Unpriced five-minute cache-write dimension");
+  const nano = (BigInt(inputTokens)-BigInt(cachedInputTokens)-BigInt(cacheWriteInputTokens))*BigInt(tier.inputNanoUsd)+BigInt(cachedInputTokens)*BigInt(tier.cachedInputNanoUsd??0)+BigInt(cacheWriteInputTokens)*BigInt(tier.cacheWrite5mNanoUsd??0)+BigInt(outputTokens)*BigInt(tier.outputNanoUsd);
   return ((nano+999n)/1000n).toString();
 }

@@ -1,3 +1,4 @@
+import { PRICING_VERSION, PRICING_SNAPSHOT } from "@/lib/standalone-accounting/pricing";
 import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
 import { reducePreparedRequest } from '@/lib/standalone-accounting/reduction';
@@ -22,14 +23,16 @@ export async function POST(request: NextRequest) {
     }
     if (input.action === 'cancel') {
       const cancelled = await cancelStandaloneAttempt(ownerId, attempt.id);
-      if (cancelled.state !== 'cancelled') return NextResponse.json({ error: 'This attempt has already been dispatched. Its exposure remains visible.' }, { status: 409, headers: noStore });
-      return NextResponse.json({ attemptId: cancelled.id, state: cancelled.state }, { headers: noStore });
+      const exposureHeld = cancelled.state !== 'cancelled' && cancelled.actual_microusd === null;
+      const message = cancelled.state === 'cancelled' ? 'Attempt cancelled before dispatch.' : exposureHeld ? 'Cancellation requested for remaining work. This attempt was already dispatched; its spending exposure remains held until provider usage is reconciled.' : 'Cancellation requested for remaining work. Recorded provider cost remains visible.';
+      return NextResponse.json({ attemptId: cancelled.id, state: cancelled.state, cancellationRequested: true, heldExposureMicrousd: exposureHeld ? cancelled.reserved_microusd : '0', message }, { headers: noStore });
     }
     if (attempt.state !== 'paused') return NextResponse.json({ error: 'Only a paused proposal can be reduced.' }, { status: 409, headers: noStore });
     const reduced = reducePreparedRequest(attempt.prepared_payload as unknown as FrozenPreparedRequest);
     if (reduced.estimate.status !== 'estimated' || reduced.estimate.reservationMicrousd === null || BigInt(reduced.estimate.reservationMicrousd) >= BigInt(attempt.reserved_microusd) || reduced.changes.length === 0) {
       return NextResponse.json({ error: 'No smaller supported proposal is available. Cancel this attempt and revise the request or budget settings.' }, { status: 409, headers: noStore });
     }
+    await ledger.registerPricing(PRICING_VERSION, PRICING_SNAPSHOT);
     const revised = await ledger.revise(ownerId, attempt.id, { preparedHash: reduced.revised.hash, preparedPayload: reduced.revised as unknown as Record<string, unknown>, pricingVersion: reduced.estimate.pricingVersion, reservedMicrousd: reduced.estimate.reservationMicrousd, tradeoffs: reduced.tradeoffs.join(' ') || 'Duplicate context was removed; the remaining request is unchanged.', preflightEstimate: reduced.estimate, estimatorVersion: reduced.estimate.estimatorVersion });
     return NextResponse.json({ attemptId: revised.id, requestId: revised.request_id, state: revised.state, estimateMicrousd: revised.reserved_microusd, changes: reduced.changes, tradeoffs: reduced.tradeoffs }, { headers: noStore });
   } catch (error) { return accountingError(error); }

@@ -6,11 +6,18 @@ import {filterProvidersBySharedHealth,recordSharedProviderFailure} from '@/lib/r
 import {boundedProvider} from './bounded-provider';
 import {classifyGenerationFailure} from '@/lib/router/provider-error';
 
+export type ProviderAvailabilityFailure={kind:'cooldown'|'billing_quota'|'credentials'|'discovery_unavailable'|'unsupported_model';provider:string;reason?:string;retryAfter?:string};
+export class ProviderAvailabilityError extends Error {
+ constructor(readonly failures:ProviderAvailabilityFailure[]){super('No connected provider supports the required bounded orchestration tools');this.name='ProviderAvailabilityError';}
+}
 export type OrchestrationChoice={provider:LlmProvider;modelId:string;reasoning:string};
 /** Shared by EO management and ALL mission-backed child orchestrators. No saved model pins. */
 type Accounting={reserve:(model:string,tokens:number)=>Promise<string>;finish:(id:string,tokens:number|null,receipt?:{id?:string;usage?:unknown})=>Promise<void>};
 export async function orchestrationChoices(input:{objective:string;instruction:string;requestId:string;research?:boolean;review?:boolean;planning?:boolean;synthesis?:boolean;accounting?:Accounting;fixedModel?:{provider:string;modelId:string}}):Promise<OrchestrationChoice[]>{
- const health=await filterProvidersBySharedHealth(getAvailableProviders());
+ const configured=getAvailableProviders();
+ const health=await filterProvidersBySharedHealth(configured);
+ const failures:ProviderAvailabilityFailure[]=(health.blocked??[]).filter(b=>!input.fixedModel||b.provider===input.fixedModel.provider).map(b=>({kind:'cooldown',provider:b.provider,reason:b.reason,retryAfter:b.blockedUntil}));
+ if(input.fixedModel&&!configured.some(p=>p.name===input.fixedModel!.provider))failures.push({kind:'credentials',provider:input.fixedModel.provider});
  // Gemini grounding currently has no server-enforced per-request search-use cap.
  // Never silently remove a mission's hard tool budget to enable another model.
  const inventory=new Map<string,Set<string>>();
@@ -19,7 +26,17 @@ export async function orchestrationChoices(input:{objective:string;instruction:s
   const models=await provider.listModels();
   return{provider,models:new Set(models.map(id=>id.replace(/^models\//,'')).filter(id=>boundedModelSupported(provider.name,id)&&(!input.fixedModel||id===input.fixedModel.modelId)))};
  }));
- for(const result of discovered)if(result.status==='fulfilled')inventory.set(result.value.provider.name,result.value.models);
+ for(const [index,result] of discovered.entries()){
+  if(result.status==='fulfilled'){
+   inventory.set(result.value.provider.name,result.value.models);
+   if(!result.value.models.size)failures.push({kind:'unsupported_model',provider:result.value.provider.name});
+  }else{
+   const e=result.reason as {status?:number;code?:string};
+   const kind=e?.status===401||e?.status===403?'credentials':/insufficient_quota|billing/.test(String(e?.code??''))?'billing_quota':'discovery_unavailable';
+   failures.push({kind,provider:eligibleProviders[index].name});
+   await recordSharedProviderFailure(eligibleProviders[index].name,result.reason);
+  }
+ }
  // Registry metadata ranks quality; it cannot confer current account access or
  // make a model support this transport. Failed discovery is not permission to guess.
  const providers=health.providers.filter(p=>inventory.get(p.name)?.size&&(!input.research||p.name!=='google')).map(provider=>({
@@ -45,7 +62,7 @@ export async function orchestrationChoices(input:{objective:string;instruction:s
    }catch(error){if(reservation)await input.accounting!.finish(reservation,rejectedBeforeInference(error)?0:null);throw error;}
   }
  } satisfies LlmProvider));
- if(!providers.length)throw Error('No connected provider supports the required bounded orchestration tools');
+ if(!providers.length)throw new ProviderAvailabilityError(failures);
  const decision=await chooseProvider(input.objective+'\n'+input.instruction,
   'Autonomous assignment. Choose the strongest available model/submodel for this exact task, not the cheapest default. '+
   (input.research?'Native live web search with cited receipts required. ':'')+

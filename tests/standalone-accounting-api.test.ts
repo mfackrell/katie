@@ -27,8 +27,13 @@ beforeEach(() => {
     },
     async rpc(name: string, args: Record<string, unknown>) {
       calls.push({ name, args });
+      if (name === 'standalone_register_pricing') return { data: true, error: null };
       if (name === 'standalone_authorize_scope') return { data: allowed && args.p_owner === owner && args.p_actor === actorId && args.p_chat === chatId, error: null };
       if (name === 'standalone_snapshot') return { data: { configuration: { owner_id: owner, timezone: 'UTC', per_call_limit_microusd: '1000', request_limit_microusd: '5000', budget_revision: 7 }, attempts: [row], events }, error: null };
+      if (name === 'standalone_cancel') {
+        row = { ...row, state: ['paused', 'reserved'].includes(row.state) ? 'cancelled' : row.state === 'settled' ? 'settled' : 'uncertain', cancelled_by_owner_at: new Date().toISOString() };
+        return { data: row, error: null };
+      }
       return { data: { ...row, state: name === 'standalone_cancel' ? 'cancelled' : name === 'standalone_revise' ? 'paused' : 'reserved' }, error: null };
     },
   };
@@ -77,6 +82,7 @@ test('reduce cost freezes a genuinely smaller revision and requires review witho
   assert.equal(response.status, 200);
   const revision = calls.find(call => call.name === 'standalone_revise');
   assert.ok(revision);
+  assert.ok(calls.findIndex(call => call.name === "standalone_register_pricing") < calls.findIndex(call => call.name === "standalone_revise"), "A fresh immutable price snapshot must exist before the revised quote is stored");
   assert.ok(BigInt(revision.args.p_reserved as string) < 100000n);
   assert.notEqual(revision.args.p_hash, prepared.hash);
   assert.match(revision.args.p_tradeoffs as string, /smaller output allowance/i);
@@ -125,4 +131,34 @@ test('overrun and conflicting receipt surface distinct alerts without changing l
   assert.deepEqual(body.alerts.map((alert: { kind: string }) => alert.kind), ['overrun', 'receipt_conflict']);
   assert.equal(body.daily.totals.estimatedCostMicrousd, '120000');
   assert.ok(!JSON.stringify(body).includes('do not expose'));
+});
+
+test('active saved attempts remain cancellable after approval and include only the current conversation', async () => {
+  for (const state of ['reserved', 'dispatched', 'uncertain'] as const) {
+    row.state = state;
+    const body = await (await usage(request(`usage?actorId=${actorId}&chatId=${chatId}`))).json();
+    assert.equal(body.active[0].id, attemptId);
+    assert.equal(body.active[0].state, state);
+    assert.equal(body.active[0].preparedHash, prepared.hash);
+    assert.equal(body.active[0].reservedMicrousd, '100000');
+    assert.equal(body.pending.length, 0);
+    assert.ok(!JSON.stringify(body.active).includes('private saved prompt'));
+  }
+  row.chat_id = '55555555-5555-4555-8555-555555555555';
+  assert.equal((await (await usage(request(`usage?actorId=${actorId}&chatId=${chatId}`))).json()).active.length, 0);
+});
+
+test('post-dispatch cancellation returns successful held-exposure status without approving or resuming work', async () => {
+  row.state = 'dispatched'; row.dispatched_at = row.created_at;
+  const response = await decide(request('attempts', decision('cancel')));
+  assert.equal(response.status, 200);
+  const body = await response.json();
+  assert.equal(body.cancellationRequested, true);
+  assert.equal(body.state, 'uncertain');
+  assert.equal(body.heldExposureMicrousd, '100000');
+  assert.match(body.message, /spending exposure remains held/);
+  assert.deepEqual(calls.map(call => call.name), ['standalone_authorize_scope', 'standalone_snapshot', 'standalone_cancel']);
+  const snapshot = await (await usage(request(`usage?actorId=${actorId}&chatId=${chatId}`))).json();
+  assert.equal(snapshot.active.length, 0, 'already cancelled work is not offered another cancel action');
+  assert.equal(snapshot.daily.totals.uncertainExposureMicrousd, '100000', 'cancellation cannot erase dispatched spending exposure');
 });

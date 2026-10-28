@@ -1311,7 +1311,7 @@ async function executeChat(request: NextRequest) {
     }
 
     console.log("[Chat API] Assembling context and selecting provider...");
-    const { name, persona, summary, history: currentHistory, actorRoutingProfile, reviewMode } = await cachedWorkflowValue("assembled-context", () => assembleContext(actorId, chatId));
+    const { name, persona, cacheablePersona, summary, history: currentHistory, actorRoutingProfile, reviewMode } = await cachedWorkflowValue("assembled-context", () => assembleContext(actorId, chatId));
     let history = currentHistory;
     if (pdfProgress.projectContext && pdfProgress.projectContext.userMessageId !== taskProgressUserMessageId &&
         !currentHistory.some(turn => turn.id === pdfProgress.projectContext!.userMessageId)) {
@@ -2204,7 +2204,7 @@ async function executeChat(request: NextRequest) {
               for (const pdf of attachments.filter(file=>file.mimeType==="application/pdf")) pdf.pdfContextBlocked=true;
             }
             const createParams = (selectedModelId: string, forReview = false) =>
-              ({ promptCacheKey: conversationCacheKey(actorId, chatId), ...buildGenerationParams({
+              ({ cacheablePersona, promptCacheKey: conversationCacheKey(actorId, chatId), ...buildGenerationParams({
                 name,
                 persona: [personaForGeneration, taskProgressContext, storedWebsite.context,
                   ...(!forReview ? [resumptionContext, responsePolicy.generationInstruction] : []),

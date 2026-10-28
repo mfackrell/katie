@@ -80,7 +80,7 @@ describe("immutable standalone pricing",()=>{
     // Neither lowering detail nor proposing a cheaper model may launder a mutable URL.
     expect(reducePreparedRequest(remote).available).toBe(false);expect(reducePreparedRequest(claude).available).toBe(false);
     const inline=(width:number)=>chat({messages:[{role:"user",content:[{type:"image_url",image_url:{url:png(width,1024),detail:"low"}}]}]});
-    expect(estimatePreparedRequest(inline(1024))).toMatchObject({status:"estimated",imageTokens:85,estimatorVersion:"standalone-estimator-v4"});
+    expect(estimatePreparedRequest(inline(1024))).toMatchObject({status:"estimated",imageTokens:85,estimatorVersion:"standalone-estimator-v5"});
     expect(inline(1024).hash).not.toBe(inline(1025).hash);
     expect(estimatePreparedRequest(inline(1024)).reservationMicrousd).toBe(estimatePreparedRequest(inline(1025)).reservationMicrousd);
   });
@@ -112,7 +112,7 @@ describe("frozen no-fee OpenAI cache metadata",()=>{
     expect(cached.payload.prompt_cache_key).toBe(key);expect(cached.payload.prompt_cache_retention).toBe("24h");expect(cached.hash).not.toBe(plain.hash);
     expect(prepare({prompt_cache_key:"different-key",prompt_cache_retention:"24h"}).hash).not.toBe(cached.hash);
     expect(prepare({prompt_cache_key:key,prompt_cache_retention:"in_memory"}).hash).not.toBe(cached.hash);
-    expect(quote.status).toBe("estimated");expect(quote.estimatorVersion).toBe("standalone-estimator-v4");expect(quote.inputTokens).toBe(baseline.inputTokens);expect(quote.reservationMicrousd).toBe(baseline.reservationMicrousd);
+    expect(quote.status).toBe("estimated");expect(quote.estimatorVersion).toBe("standalone-estimator-v5");expect(quote.inputTokens).toBe(baseline.inputTokens);expect(quote.reservationMicrousd).toBe(baseline.reservationMicrousd);
     expect(quote.assumptions.join(" ")).toContain("reserves full uncached input");
     expect(actualCostFromUsage(cached,{inputTokens:1000,outputTokens:100,cachedInputTokens:500}).actualMicrousd).toBe("2875");
     const restored=JSON.parse(JSON.stringify(cached));restored.payload.prompt_cache_retention="in_memory";expect(estimatePreparedRequest(restored).status).toBe("unsupported");
@@ -165,7 +165,7 @@ describe("native client functions and bounded Claude reasoning",()=>{
     const request=prepareStandaloneRequest("anthropic","claude-sonnet-5-5","/v1/messages",{model:"claude-sonnet-5-5",max_tokens:4096,tools:[{name:definition.name,description:definition.description,input_schema:schema}],messages:[{role:"user",content:"Read report"},{role:"assistant",content:[{type:"thinking",thinking:"",signature:"opaque-preserved-signature"},{type:"tool_use",id:"toolu1",name:"read_file",input:{query:"report",data:{type:"input_audio",payload:"ordinary JSON data"}}}]},{role:"user",content:[{type:"tool_result",tool_use_id:"toolu1",content:[{type:"text",text:resultText}],is_error:false}]}]});
     expect(estimatePreparedRequest(request).status).toBe("estimated");
     expect(estimatePreparedRequest(request).assumptions.join(" ")).toContain("no provider-hosted tool fee");
-    const bad=prepareStandaloneRequest("anthropic","claude-sonnet-5-5","/v1/messages",{...request.payload,messages:[{role:"user",content:[{type:"tool_result",tool_use_id:"toolu1",content:resultText,cache_control:{type:"ephemeral"}}]}]});expect(estimatePreparedRequest(bad).status).toBe("unsupported");
+    const bad=prepareStandaloneRequest("anthropic","claude-sonnet-5-5","/v1/messages",{...request.payload,messages:[{role:"user",content:[{type:"tool_result",tool_use_id:"toolu1",content:resultText,cache_control:{type:"ephemeral",ttl:"1h"}}]}]});expect(estimatePreparedRequest(bad).status).toBe("unsupported");
   });
   it("supports Gemini functionDeclarations, continuation signatures and responseJsonSchema",()=>{
     const request=prepareStandaloneRequest("google","gemini-2.5-pro","/v1beta/models/gemini-2.5-pro:generateContent",{systemInstruction:{parts:[{text:"local tool"}]},tools:[{functionDeclarations:[{name:definition.name,description:definition.description,parametersJsonSchema:schema}]}],toolConfig:{functionCallingConfig:{mode:"AUTO"}},generationConfig:{maxOutputTokens:4096,responseMimeType:"application/json",responseJsonSchema:schema},contents:[{role:"user",parts:[{text:"Read report"}]},{role:"model",parts:[{functionCall:{name:"read_file",args:{query:"report"}},thoughtSignature:"opaque-signature"}]},{role:"user",parts:[{functionResponse:{name:"read_file",response:{result:resultText,payload:{type:"image",data:"plain JSON"}}}}]}]});
@@ -194,6 +194,48 @@ describe("native client functions and bounded Claude reasoning",()=>{
     const messages=[{role:"user",content:"first"},{role:"assistant",content:null,tool_calls:[{id:"call1",type:"function",function:{name:"read_file",arguments:JSON.stringify({query:"[EPISODIC_MEMORY_LOG]\nUSER: keep1\nUSER: keep2\n[/EPISODIC_MEMORY_LOG]"})}}]},{role:"tool",tool_call_id:"call1",content:resultText},{role:"user",content:"finish"}];
     const original=chat({messages,tools:[{type:"function",function:definition}]});const reduced=reducePreparedRequest(original,{maxContextMessages:1,maxOutputTokens:1024});
     expect(reduced.revised.payload.messages).toEqual(messages);expect(reduced.revised.payload.tools).toEqual(original.payload.tools);expect(reduced.estimate.status).toBe("estimated");expect(reduced.tradeoffs.join(" ")).toContain("continuation dependencies");expect(reduced.revised.hash).not.toBe(original.hash);
+  });
+});
+describe("verified Claude five-minute cache writes",()=>{
+  const prepare=(model="claude-sonnet-5-5",control:unknown={type:"ephemeral",ttl:"5m"})=>prepareStandaloneRequest("anthropic",model,"/v1/messages",{model,max_tokens:4096,system:[{type:"text",text:"Exact stable prefix "+"p".repeat(1200),...(control===undefined?{}:{cache_control:control})},{type:"text",text:"Uncached changing tail"}],messages:[{role:"user",content:"The current question"}]});
+  it("persists each officially verified model's separate five-minute rate",()=>{
+    for(const [model,write,expected] of [["claude-sonnet-4-5","3750","4065"],["claude-haiku-4-5","1250","1355"],["claude-sonnet-4-6","3750","4065"],["claude-opus-4-6","6250","6775"],["claude-sonnet-5-5","2500","2680"],["claude-opus-5-5","5000","5360"]]) {
+      const price=getModelPrice("anthropic",model)!;expect(price.cacheWrite5mNanoUsd).toBe(write);expect(priceTokenUsage(price,1000,100,300,500)).toBe(expected);expect(estimatePreparedRequest(prepare(model)).status).toBe("estimated");
+    }
+    expect(PRICING_SNAPSHOT.version).toBe("standalone-pricing-2026-10-28-v3");expect(Object.isFrozen(PRICING_SNAPSHOT.models.find(x=>x.model==="claude-sonnet-5-5"))).toBe(true);
+  });
+  it("reserves the full-input write allowance plus output without assuming a hit",()=>{
+    const request=prepare(),quote=estimatePreparedRequest(request);const body=JSON.parse(JSON.stringify(request.payload));delete body.system[0].cache_control;const uncached=freezePreparedRequest(request.provider,request.model,request.endpoint,body),baseline=estimatePreparedRequest(uncached);
+    expect(quote).toMatchObject({status:"estimated",estimatorVersion:"standalone-estimator-v5",cacheWriteTtl:"5m"});expect(quote.inputTokens).toBe(baseline.inputTokens);expect(quote.cacheWriteInputAllowance).toBe(quote.inputTokens);
+    expect(quote.reservationMicrousd).toBe(priceTokenUsage(getModelPrice("anthropic",request.model)!,quote.inputTokens,quote.outputAllowance,0,quote.inputTokens));
+    expect(BigInt(quote.reservationMicrousd!)).toBeGreaterThan(BigInt(baseline.reservationMicrousd!));expect(quote.assumptions.join(" ")).toContain("deliberately conservative full-input allowance");expect(request.hash).not.toBe(uncached.hash);
+    const changed=JSON.parse(JSON.stringify(request.payload));changed.system[0].text+="Changed exact cache prefix";expect(freezePreparedRequest(request.provider,request.model,request.endpoint,changed).hash).not.toBe(request.hash);
+  });
+  it("settles disjoint uncached/read/write counts once using verified TTL evidence",()=>{
+    const request=prepare();expect(actualCostFromUsage(request,{inputTokens:1000,outputTokens:100,cachedInputTokens:300,cacheWriteInputTokens:500,cacheWriteTtl:"5m"})).toMatchObject({actualMicrousd:"2680",pricingVersion:"standalone-pricing-2026-10-28-v3"});
+    expect(actualCostFromUsage(request,{inputTokens:1000,outputTokens:100,cachedInputTokens:300,cacheCreationInputTokens:500,cacheWriteTtl:"5m"}).actualMicrousd).toBe("2680");
+    expect(actualCostFromUsage(request,{inputTokens:1000,outputTokens:100,cacheReadInputTokens:300,cacheCreationInputTokens:500,cacheWriteTtl:"5m"}).actualMicrousd).toBe("2680");
+    expect(priceTokenUsage(getModelPrice("anthropic","claude-haiku-4-5")!,2,0,1,1)).toBe("2");
+    expect(()=>actualCostFromUsage(request,{inputTokens:1000,outputTokens:100,cachedInputTokens:300,cacheWriteInputTokens:500})).toThrow(/TTL/);
+    expect(()=>actualCostFromUsage(request,{inputTokens:1000,outputTokens:100,cacheWriteInputTokens:500,cacheWriteTtl:"1h" as "5m"})).toThrow(/TTL/);
+    expect(()=>actualCostFromUsage(request,{inputTokens:1000,outputTokens:100,cacheWriteInputTokens:500,cacheCreationInputTokens:501,cacheWriteTtl:"5m"})).toThrow(/Conflicting/);
+    expect(()=>actualCostFromUsage(request,{inputTokens:1000,outputTokens:100,cachedInputTokens:300,cacheReadInputTokens:301})).toThrow(/Conflicting/);
+    expect(()=>priceTokenUsage(getModelPrice("anthropic",request.model)!,1000,100,501,500)).toThrow(/exceed/);
+    expect(()=>priceTokenUsage(getModelPrice("openai","gpt-4o")!,1000,100,0,500)).toThrow(/Unpriced/);
+    expect(()=>priceTokenUsage(getModelPrice("anthropic",request.model)!,1000,100,0,1.5)).toThrow(/Invalid/);
+  });
+  it("accepts only known five-minute controls in supported native cache positions",()=>{
+    for(const control of [{type:"ephemeral",ttl:"5m"},{type:"ephemeral"}])expect(estimatePreparedRequest(prepare("claude-sonnet-5-5",control)).status).toBe("estimated");
+    const automatic=prepareStandaloneRequest("anthropic","claude-sonnet-5-5","/v1/messages",{model:"claude-sonnet-5-5",max_tokens:4096,cache_control:{type:"ephemeral",ttl:"5m"},system:"system",messages:[{role:"user",content:"question"}]});expect(estimatePreparedRequest(automatic).status).toBe("estimated");
+    const tool=prepareStandaloneRequest("anthropic","claude-sonnet-5-5","/v1/messages",{model:"claude-sonnet-5-5",max_tokens:4096,tools:[{name:"read_file",input_schema:{type:"object"},cache_control:{type:"ephemeral",ttl:"5m"}}],messages:[{role:"user",content:[{type:"text",text:"Read",cache_control:{type:"ephemeral",ttl:"5m"}}]}]});expect(estimatePreparedRequest(tool).status).toBe("estimated");
+    for(const control of [{type:"ephemeral",ttl:"1h"},{type:"ephemeral",ttl:"30m"},{type:"ephemeral",ttl:null},{type:"persistent",ttl:"5m"},{type:"ephemeral",ttl:"5m",unknown:true},null,[],"5m"])expect(estimatePreparedRequest(prepare("claude-sonnet-5-5",control)).status).toBe("unsupported");
+    expect(estimatePreparedRequest(prepare("claude-sonnet-5-5",{type:"ephemeral",ttl:"1h"})).cacheWriteTtl).toBeNull();
+    expect(estimatePreparedRequest(chat({messages:[{role:"user",content:[{type:"text",text:"Hello",cache_control:{type:"ephemeral",ttl:"5m"}}]}]})).status).toBe("unsupported");
+    const thinking=prepareStandaloneRequest("anthropic","claude-sonnet-5-5","/v1/messages",{model:"claude-sonnet-5-5",max_tokens:4096,messages:[{role:"assistant",content:[{type:"thinking",thinking:"",signature:"opaque",cache_control:{type:"ephemeral",ttl:"5m"}}]}]});expect(estimatePreparedRequest(thinking).status).toBe("unsupported");
+    const excessive=prepareStandaloneRequest("anthropic","claude-sonnet-5-5","/v1/messages",{model:"claude-sonnet-5-5",max_tokens:4096,system:Array.from({length:5},()=>({type:"text",text:"prefix",cache_control:{type:"ephemeral",ttl:"5m"}})),messages:[{role:"user",content:"Hi"}]});expect(estimatePreparedRequest(excessive).status).toBe("unsupported");
+  });
+  it("reestimates reduced model proposals with cache markers preserved at the target write rate",()=>{
+    const original=prepare("claude-opus-5-5"),candidate=reducePreparedRequest(original,{maxOutputTokens:4096});expect(candidate.available).toBe(true);expect(candidate.revised.model).toBe("claude-sonnet-5-5");expect(candidate.revised.payload.system).toEqual(original.payload.system);expect(candidate.estimate.cacheWriteInputAllowance).toBe(candidate.estimate.inputTokens);expect(candidate.estimate.reservationMicrousd).toBe(priceTokenUsage(getModelPrice("anthropic","claude-sonnet-5-5")!,candidate.estimate.inputTokens,4096,0,candidate.estimate.inputTokens));expect(original.model).toBe("claude-opus-5-5");
   });
 });
 describe("deterministic reduce cost candidate",()=>{

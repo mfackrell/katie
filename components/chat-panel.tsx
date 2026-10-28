@@ -779,11 +779,13 @@ export function ChatPanel({
       const detail=(event as CustomEvent<{actorId:string;chatId:string;requestId:string;attemptId:string}>).detail;
       if(detail?.actorId!==actorId||detail.chatId!==chatId||accountingResumeInFlight.current)return;
       accountingResumeInFlight.current=true;setLoading(true);
+      const resumeController=new AbortController();
+      abortControllerRef.current=resumeController;
       setStatusMessage("Resuming the saved approved attempt…");
       try {
         const bearer=await ownerSessionBearer();
         if(!bearer)throw Error("Owner sign-in required to resume.");
-        const response=await fetch("/api/chat",{method:"POST",headers:{"Content-Type":"application/json",Authorization:`Bearer ${bearer}`,"x-request-id":detail.requestId},body:JSON.stringify({actorId,chatId,standaloneResume:true})});
+        const response=await fetch("/api/chat",{method:"POST",signal:resumeController.signal,headers:{"Content-Type":"application/json",Authorization:`Bearer ${bearer}`,"x-request-id":detail.requestId},body:JSON.stringify({actorId,chatId,standaloneResume:true})});
         const text=await response.text();
         if(!response.ok){let message="Saved request could not resume.";try{message=JSON.parse(text).error??message;}catch{}throw Error(message);}
         const pause=text.split("\n").filter(Boolean).map(line=>{try{return JSON.parse(line);}catch{return null;}}).find(chunk=>chunk?.type==="accounting_pause");
@@ -792,7 +794,7 @@ export function ChatPanel({
         const body=await messagesResponse.json() as {messages?:Message[]};
         if(messagesResponse.ok&&body.messages){setMessages(body.messages);setMessagesByChatId(current=>({...current,[chatId]:body.messages!}));}
       }catch(error){setStatusMessage(error instanceof Error?error.message:"Saved request could not resume.");}
-      finally{accountingResumeInFlight.current=false;setLoading(false);window.dispatchEvent(new Event("standalone-accounting-updated"));}
+      finally{if(abortControllerRef.current===resumeController)abortControllerRef.current=null;accountingResumeInFlight.current=false;setLoading(false);window.dispatchEvent(new Event("standalone-accounting-updated"));}
     };
     const listener=(event:Event)=>{void resume(event);};
     window.addEventListener("standalone-accounting-resume",listener);

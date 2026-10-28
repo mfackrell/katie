@@ -370,13 +370,17 @@ begin
  select * into a from standalone_provider_attempts where id=p_attempt and owner_id=p_owner for update;
  if not found or a.state not in('dispatched','uncertain','settled') or p_usage is null or p_evidence is null
  or jsonb_typeof(p_usage)<>'object' or jsonb_typeof(p_evidence)<>'object' then raise exception 'STANDALONE_PARTIAL_USAGE_INVALID';end if;
- foreach k in array array['inputTokens','outputTokens','cachedInputTokens'] loop
+ foreach k in array array['inputTokens','outputTokens','cachedInputTokens','cacheReadInputTokens','cacheCreationInputTokens','cacheWriteInputTokens'] loop
  if p_usage ? k and p_usage->k <> 'null'::jsonb then
  if jsonb_typeof(p_usage->k)<>'number' then raise exception 'STANDALONE_PARTIAL_USAGE_INVALID';end if;
  v:=(p_usage->>k)::numeric;
  if v<0 or v<>trunc(v) or v>9007199254740991 then raise exception 'STANDALONE_PARTIAL_USAGE_INVALID';end if;
  if a.usage ? k and a.usage->k <> 'null'::jsonb and a.usage->k is distinct from p_usage->k then conflict:=true;end if;
  end if;end loop;
+ if p_usage ? 'cacheWriteTtl' and p_usage->'cacheWriteTtl' <> 'null'::jsonb then
+ if jsonb_typeof(p_usage->'cacheWriteTtl')<>'string' or length(p_usage->>'cacheWriteTtl')=0 then raise exception 'STANDALONE_PARTIAL_USAGE_INVALID';end if;
+ if a.usage ? 'cacheWriteTtl' and a.usage->'cacheWriteTtl' <> 'null'::jsonb and a.usage->'cacheWriteTtl' is distinct from p_usage->'cacheWriteTtl' then conflict:=true;end if;
+ end if;
  if a.resolved_model is not null and p_evidence->>'resolvedModel' is not null and a.resolved_model<>p_evidence->>'resolvedModel' then conflict:=true;end if;
  if conflict then
  insert into standalone_attempt_events(attempt_id,owner_id,kind,details) values(a.id,p_owner,'usage_conflict',jsonb_build_object('usage',p_usage,'evidence',p_evidence,'saved_usage',a.usage,'saved_evidence',a.evidence));
