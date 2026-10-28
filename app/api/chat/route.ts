@@ -2996,7 +2996,8 @@ ${chunkWorkflowSummary}`;
               rerouteOnError: async ({ attempt, error }) => {
                 if (selfToolsEnabled && selfInspectionRequest) return null; // Inspection-contract failures cannot be repaired by switching models.
                 if (hasVideoInput) return null; // Attempt Grok directly, not another Gemini routing loop.
-                if (attempt.runpodImageFallback || attempt.runpodStillVisionFallback) return null;
+                if (attempt.runpodImageFallback) return null;
+                if (attempt.runpodStillVisionFallback) return null;
                 if (stillImageVisionRequest && attempt.provider.name === "grok" &&
                     images.length === 1 && process.env.RUNPOD_API_KEY &&
                     !isModerationImageFailure(error) &&
