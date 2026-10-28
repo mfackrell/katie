@@ -1,3 +1,4 @@
+import {loadFullBenchmarkBinding} from '../../scripts/benchmark/full-project-gate.mjs';
 import {missionReviewFormat,type ReviewFormat} from './review-format';
 import {rejectedBeforeInference} from '@/lib/orchestration/request-rejection';
 import {shouldFallbackIncompleteReview} from './review-fallback.mjs';
@@ -17,12 +18,7 @@ export class MissionModelFailure extends Error { constructor(message:string,read
 export type ModelResult={text:string;sources:Array<{url:string;title:string}>;calculations:unknown[];model:string;provider?:string;routingReason?:string;attemptedModels?:string[];composerNotes?:string;requestedExecutionEffort?:string};
 type FullBinding={trial_id:string;account_id:string;benchmark_contract_hash:string;baseline_sha:string;model:string};
 async function fullProjectBinding(claim:Claim):Promise<FullBinding|null>{
- if(!claim.mission.project_id||!process.env.NEXT_PUBLIC_SUPABASE_URL?.includes('iytvavgbaainnsrecmcx.supabase.co'))return null;
- const {data,error}=await getSupabaseAdminClient().from('benchmark_full_project_bindings')
-  .select('trial_id,account_id,benchmark_contract_hash,baseline_sha,model')
-  .eq('project_id',claim.mission.project_id).maybeSingle<FullBinding>();
- if(error)throw Error('Full benchmark accounting binding lookup failed closed');
- return data;
+ return loadFullBenchmarkBinding(getSupabaseAdminClient(),claim.mission.project_id,process.env);
 }
 function fullBenchmarkAccounting(claim:Claim){
  return {

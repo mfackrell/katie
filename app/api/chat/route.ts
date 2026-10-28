@@ -1,9 +1,11 @@
+import {projectForChat} from '@/lib/projects/store';
+import {loadFullBenchmarkBinding} from '../../../scripts/benchmark/full-project-gate.mjs';
 import { isExplicitKatieSelfInspectionRequest } from "@/lib/tools/self-inspection-intent";
 import { PresentationStreamFilter, parsePresentationTail, PRESENTATION_GENERATION_GUIDANCE } from "@/lib/presentation/stream-protocol";
 import { quarantineUnavailableModel } from "@/lib/models/registry";
 import { runSelfInspection } from "@/lib/tools/self-inspection";
 import { authorizeSelfToolCaller } from "@/lib/tools/authorization";
-import {handleProjectChat, startProjectIntent, followupProjectIntent, isProjectStopIntent} from '@/lib/developer/project-conversation';
+import {handleProjectChat, startProjectIntent, gameProjectIntent, followupProjectIntent, isProjectStopIntent} from '@/lib/developer/project-conversation';
 import {executeExecutiveCommand} from '@/lib/executive/transport';
 import { maskPdfSourceNames, pdfPageTaskForSource } from "@/lib/uploads/pdf-inventory";
 import { pdfSourceOccurrence, selectFreshPdfSources, selectPdfEvidenceSource } from "@/lib/chat/pdf-source-selection";
@@ -682,6 +684,16 @@ async function executeChat(request: NextRequest) {
     } = payload;
     const currentChat = await getChatById(chatId);
     if (!currentChat || currentChat.actorId !== actorId) return NextResponse.json({ error: "Chat does not belong to this actor." }, { status: 404 });
+    const benchmarkIntake = !currentAgentTask() && startProjectIntent(message) && gameProjectIntent(message) &&
+      /take eleven|issue\s*#?715|#715/i.test(message) &&
+      ['https://iytvavgbaainnsrecmcx.supabase.co','https://barclcqataqyvifoeyop.supabase.co']
+        .includes((process.env.NEXT_PUBLIC_SUPABASE_URL ?? '').replace(/\/+$/, ''));
+    const savedBenchmarkProject = !currentAgentTask() ? await projectForChat(actorId,chatId) : null;
+    const benchmarkBinding = savedBenchmarkProject
+      ? await loadFullBenchmarkBinding(getSupabaseAdminClient(),savedBenchmarkProject.id,process.env) : null;
+    const benchmarkRelay = benchmarkIntake || Boolean(benchmarkBinding);
+    if (benchmarkRelay && (fileReferences?.length || requestImages?.length))
+      return NextResponse.json({error:'The frozen Take Eleven benchmark accepts its approved text requirements only. Attachments cannot enter an unmetered classification path.'},{status:400});
     const repoInjectionEnabled = currentAgentTask() ? false : repoInjectionEnabledFromPayload !== false;
     // Resolve Katie's own repository before either project control or model routing.
     // This does not grant new credentials: writes remain in the existing
@@ -726,7 +738,7 @@ async function executeChat(request: NextRequest) {
     }
     if (newAttachments.length > 5) return NextResponse.json({ error: "Attach up to five files per message." }, { status: 400 });
     const attachmentHistory = await getRecentMessages(chatId, 60);
-    const catalog = currentAgentTask()?.snapshot.attachments === false ? [] : await loadActorAttachmentCatalog(actorId, async () => {
+    const catalog = benchmarkRelay || currentAgentTask()?.snapshot.attachments === false ? [] : await loadActorAttachmentCatalog(actorId, async () => {
       const actorChats = await listChatsByActorId(actorId);
       const ownedChatIds = new Set(actorChats.map(chat => chat.id));
       const files: ConversationAttachment[] = [];
@@ -788,7 +800,7 @@ async function executeChat(request: NextRequest) {
     });
     const taskIdentityText = message + (freshTaskEvidence.length
       ? "\nFRESH USER-SUPPLIED SOURCE EVIDENCE (observations may be incomplete):\n" + JSON.stringify(freshTaskEvidence) : "");
-    let softwareBuildIntent = false;
+    let softwareBuildIntent = benchmarkIntake;
     // A scoped stop/pause controls existing durable work, not application identity.
     // Execute it below only after request tracking; do not let an unrelated task
     // clarification prevent cancellation or rewrite the application ledger.
@@ -798,7 +810,7 @@ async function executeChat(request: NextRequest) {
     // every ordinary conversation as a project continuation. An explicit current
     // project reference or a fresh task source can still activate resolution.
     const explicitSavedProjectReference = /\b(?:(?:resume|return to|back to|reopen|switch to|go back to)\b.{0,100}\b(?:project|app|application|game|website)\b|(?:saved|earlier)\s+(?:project|application)\b|(?:the|this|that)\s+project\b|continue\s+(?:(?:the|my|this|that)\s+)?(?:project|game|app|application|website)\b)/i.test(message);
-    if (!isProjectStopRequest && !standaloneFragment && (freshTaskEvidence.length || startProjectIntent(message) || followupProjectIntent(message) || (contextProjects.length > 0 && explicitSavedProjectReference) || (priorTaskProgress.projectContext && classifyUserTurn(message) === "new_task")) && !currentAgentTask() &&
+    if (!benchmarkRelay && !isProjectStopRequest && !standaloneFragment && (freshTaskEvidence.length || startProjectIntent(message) || followupProjectIntent(message) || (contextProjects.length > 0 && explicitSavedProjectReference) || (priorTaskProgress.projectContext && classifyUserTurn(message) === "new_task")) && !currentAgentTask() &&
         !(classifyUserTurn(message) === "conversation" && !newAttachments.length)) {
       const contextProviders = getAvailableProviders();
       const entries = await Promise.all(contextProviders.map(async provider => ({provider, models: await provider.listModels()})));
@@ -855,7 +867,7 @@ async function executeChat(request: NextRequest) {
     }
     // A PDF-specific decision must not discard other explicitly requested
     // saved comparison sources. Bound generic kinds to one exact catalog identity.
-    if (pdfMemoryDecision?.selections.length && !pdfMemoryDecision.clarification) {
+    if (!benchmarkRelay && pdfMemoryDecision?.selections.length && !pdfMemoryDecision.clarification) {
       const namedNonPdfs = catalog.filter(file => file.mimeType !== "application/pdf" &&
         message.toLowerCase().includes(file.fileName.toLowerCase()));
       const kindScope=maskPdfSourceNames(message,[...catalog,...newAttachments].map(file=>file.fileName));
@@ -884,7 +896,7 @@ async function executeChat(request: NextRequest) {
       }
     }
     if (pdfMemoryDecision) mediaMemory = null;
-    const attachmentDecision: AttachmentDecision = pdfProgress.projectClarification
+    const attachmentDecision: AttachmentDecision = benchmarkRelay ? {method: "none", selections: []} : pdfProgress.projectClarification
       ? {method: "none", selections: [], clarification: pdfProgress.projectClarification}
       : pdfMemoryDecision ?? (timelineActive
       ? { method: "none", selections: [], ...(timelineSelection.clarification ? { clarification: timelineSelection.clarification } : {}) }
@@ -1163,13 +1175,13 @@ async function executeChat(request: NextRequest) {
     // controller. Status, scoped approvals and amendments stay durable there.
     const savedDeveloperCommand = /^(?:(?:(?:what(?:'s| is)|show|check|give me|tell me|how(?:'s| is))\b.{0,36})?(?:project\s+(?:status|progress)|(?:the|my|this)\s+project\s+(?:status|progress)|project\s+(?:note|context|answer)\s*:)|(?:please\s+)?(?:resume|pause|stop|approve)\s+(?:(?:the|my|this)\s+)?project\b|(?:please\s+)?(?:add|change|fix|remove|update|keep|retain|preserve|support|enable)\b.{0,180}\b(?:game|app|website|project|software|multiplayer|keyboard|undo|button)\b)/i.test(message.trim());
     const explicitProjectControl = startProjectIntent(message) || followupProjectIntent(message) || isProjectStopIntent(message) || savedDeveloperCommand;
-    const projectReply = !pdfProgress.projectClarification && !executiveReply && (explicitProjectControl || softwareBuildIntent) && !standaloneFragment && !specialistReply && !financeReply && !developmentReply && !currentAgentTask() && savedDraftReply === null && !newAttachments.length && !requestImages?.length
+    const projectReply = !pdfProgress.projectClarification && !executiveReply && (benchmarkRelay || explicitProjectControl || softwareBuildIntent) && (!standaloneFragment || benchmarkRelay) && !specialistReply && !financeReply && !developmentReply && !currentAgentTask() && savedDraftReply === null && !newAttachments.length && !requestImages?.length
       ? await handleProjectChat({actorId,chatId,message,activeRepoId:effectiveRepoId ?? undefined,softwareBuildIntent},requestId,attachmentHistory,requestTracked) : null;
     const localKatieResponse = !standaloneFragment && (explicitProjectControl || newAttachments.length > 0) && pdfProgress.projectClarification ? {reason: "project" as const, text: pdfProgress.projectClarification} : savedDraftReply !== null ? { reason: "project" as const, text: savedDraftReply } : executiveReply ? {reason: "executive" as const,text:executiveReply}
       : specialistReply ? {reason: "executive" as const,text:specialistReply}
       : financeReply ? {reason: "executive" as const,text:financeReply}
       : developmentReply ? {reason: "executive" as const,text:developmentReply}
-      : projectReply ? {reason: "project" as const,text:projectReply} : await resolveLocalKatieResponse({
+      : projectReply ? {reason: "project" as const,text:projectReply} : benchmarkRelay ? {reason: "project" as const,text:"This conversation is bound to the Take Eleven benchmark. Ask for project status or use the saved project scope and task approval controls; unmetered chat inference is disabled."} : await resolveLocalKatieResponse({
       actorId,
       chatId,
       message,

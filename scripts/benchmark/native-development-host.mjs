@@ -1,3 +1,4 @@
+import {openNativeProductionRuntime} from './native-runtime-capsule.mjs';
 // Trusted GitHub Actions host. Never run this file from the candidate worktree.
 // For paid execution it requires a separate, previously owner-approved spending
 // record and an explicit privileged workflow switch; CI/synthetic jobs cannot pay.
@@ -26,13 +27,16 @@ const proof=readNativeHandoff(readFileSync(requestFile,'utf8'),signingKey);
 const manifest=JSON.parse(readFileSync(manifestFile,'utf8'));
 for(const key of ['taskId','trialId','approvalId','projectId','contractHash','benchmarkContractHash','baselineSha','expiresAt'])
  if(manifest[key]!==proof[key])denied('handoff changed after signature verification');
+if(manifest.productionRuntime!==proof.productionRuntime)denied('runtime handoff changed after verification');
 if(process.env.GITHUB_REPOSITORY!=='mfackrell/katie')denied('repository identity mismatch');
-const url=process.env.NEXT_PUBLIC_SUPABASE_URL;
-const serviceKey=process.env.KATIE_BENCHMARK_SERVICE_ROLE_KEY;
+const productionRuntime=proof.productionRuntime?openNativeProductionRuntime(proof.productionRuntime,proof,signingKey):null;
+const url=productionRuntime?.url??process.env.NEXT_PUBLIC_SUPABASE_URL;
+const serviceKey=productionRuntime?.serviceRoleKey??process.env.KATIE_BENCHMARK_SERVICE_ROLE_KEY;
+if(productionRuntime)process.stdout.write('::add-mask::'+serviceKey+'\n');
 const providerKey=process.env.OPENAI_API_KEY;
 if(!url||!serviceKey||!providerKey||!process.env.GITHUB_RUN_ID)
  denied('gateway credentials unavailable');
-if(url!=='https://iytvavgbaainnsrecmcx.supabase.co')
+if(!productionRuntime&&url!=='https://iytvavgbaainnsrecmcx.supabase.co')
  denied('benchmark execution is restricted to the authorized staging Supabase project');
 const db=createClient(url,serviceKey,{auth:{persistSession:false,autoRefreshToken:false}});
 const readOne=async(table,column,value,fields='*')=>{
@@ -48,6 +52,14 @@ if(approval.trial_id!==proof.trialId||approval.task_id!==proof.taskId||
 const trial=await readOne('benchmark_three_arm_trials','id',proof.trialId);
 const project=await readOne('work_projects','id',proof.projectId);
 const account=await readOne('benchmark_budget_accounts','id',approval.account_id);
+if(productionRuntime){
+ const qualification=await readOne('benchmark_production_qualifications','experiment_id',account.experiment_id);
+ if(qualification.issue!==715||qualification.revoked_at||qualification.owner_id!==approval.owner_id||
+  qualification.actor_id!==approval.actor_id||trial.experiment_id!==qualification.experiment_id||
+  new Date(qualification.deadline).getTime()<=Date.now()||
+  new Date(approval.deadline).getTime()>new Date(qualification.deadline).getTime())
+  denied('production qualification does not authorize this task and deadline');
+}
 const task=await readOne('agent_tasks','id',proof.taskId);
 const dispatch=await readOne('benchmark_development_dispatches','task_id',proof.taskId,
  'task_id,trial_id,contract_hash,benchmark_contract_hash,baseline_sha,status');

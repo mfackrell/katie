@@ -1,3 +1,4 @@
+import {loadFullBenchmarkBinding} from '../../scripts/benchmark/full-project-gate.mjs';
 import {verifyDeployedPreview,PreviewAccessUnavailable} from '@/lib/projects/preview';
 import { Octokit } from '@octokit/rest';
 import { getSupabaseAdminClient } from '@/lib/data/supabase/admin';
@@ -17,10 +18,8 @@ import { projectRpc, projectRuns, milestoneEvidence, acceptanceBinding, getDevel
 import { projectClosure, projectImpediment } from './completion';
 export async function baseline(p: Project) {
  let fullBaseline:string|null=null;
- if(p.profile==='game'&&process.env.KATIE_FULL_BENCHMARK_DISPATCH==='enabled'&&process.env.NEXT_PUBLIC_SUPABASE_URL==='https://iytvavgbaainnsrecmcx.supabase.co'){
-  const {data:binding,error}=await getSupabaseAdminClient().from('benchmark_full_project_bindings')
-   .select('baseline_sha,benchmark_contract_hash,model').eq('project_id',p.id).maybeSingle<{baseline_sha:string;benchmark_contract_hash:string;model:string}>();
-  if(error)throw Error('Full benchmark project baseline lookup failed closed');
+ if(p.profile==='game'){
+  const binding=await loadFullBenchmarkBinding(getSupabaseAdminClient(),p.id,process.env);
   if(binding){
    if(!/^[a-f0-9]{40}$/.test(binding.baseline_sha)||!/^[a-f0-9]{64}$/.test(binding.benchmark_contract_hash)||binding.model!=='gpt-5.3-codex')throw Error('Full benchmark frozen project binding is invalid');
    if(p.baseline_sha&&p.baseline_sha!==binding.baseline_sha)throw Error('Full benchmark baseline differs from the saved project baseline');

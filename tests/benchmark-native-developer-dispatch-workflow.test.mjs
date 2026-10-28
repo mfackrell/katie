@@ -16,7 +16,7 @@ test('existing owner-only engineering workflow selects signed native host withou
  assert.match(handoff,/encodeNativeHandoff/);
  assert.match(handoff,/claim_project_dispatch/);
  assert.match(handoff,/Full benchmark project is blocked unless both Full and trusted native dispatch are enabled/);
- assert.match(handoff,/Full benchmark dispatch is restricted to the staging Supabase project/);
+ assert.match(handoff,/loadFullBenchmarkBinding/);
 });
 test('native paid gateway never inherits provider or Supabase credentials',()=>{
  assert.match(host,/KATIE_BENCHMARK_PAID_EXECUTION!=='enabled'/);
