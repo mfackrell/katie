@@ -257,3 +257,11 @@ test('actual request admission protects required later stages, including provide
  remaining=90000;await assert.rejects(budget.assertSpecificationStageCapacity(claim,40001),/allowance/);
  claim.job={role:'review',job_key:'review_again'};remaining=24000;await budget.assertSpecificationStageCapacity(claim,24000);
 });
+
+test('production Full reserves bounded assessment without increasing project or stage authorizations',()=>{
+ const full=helper.specificationProjectAdmission(false,1,60000);
+ assert.equal(full.missionTokens,120000);assert.equal(full.futureTokens,180000);assert.equal(full.requiredTokens,300000);
+ assert.ok(full.requiredTokens<=350000-31887);
+ assert.equal(helper.specificationProjectAdmission(false,1).requiredTokens,360000,'ordinary and staging budgets unchanged');
+ assert.equal(helper.specificationProjectAdmission(false,2,60000).requiredTokens,420000,'extra milestones cannot evade headroom');
+});
