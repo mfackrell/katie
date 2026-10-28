@@ -11,7 +11,8 @@ export function encodeNativeHandoff(payload,key){
  const frozen={version:1,taskId:payload.taskId,trialId:payload.trialId,
   approvalId:payload.approvalId,projectId:payload.projectId,
   contractHash:payload.contractHash,benchmarkContractHash:payload.benchmarkContractHash,
-  baselineSha:payload.baselineSha,expiresAt:payload.expiresAt};
+  baselineSha:payload.baselineSha,expiresAt:payload.expiresAt,
+  ...(payload.productionRuntime?{productionRuntime:payload.productionRuntime}:{})};
  const content=Buffer.from(JSON.stringify(frozen)).toString('base64url');
  const signature=createHmac('sha256',key).update(content).digest('base64url');
  return '<!-- katie-native-benchmark:'+content+'.'+signature+' -->';
@@ -30,7 +31,8 @@ export function readNativeHandoff(source,key,now=Date.now()){
  if(p.version!==1||!['taskId','trialId','approvalId','projectId'].every(k=>uuid.test(p[k]??''))||
     !hash.test(p.contractHash??'')||!hash.test(p.benchmarkContractHash??'')||!sha.test(p.baselineSha??'')||
     !Number.isSafeInteger(p.expiresAt)||p.expiresAt<=now||
-    Object.keys(p).sort().join()!==['version','taskId','trialId','approvalId','projectId','contractHash','benchmarkContractHash','baselineSha','expiresAt'].sort().join())
+    (p.productionRuntime!==undefined&&(typeof p.productionRuntime!=='string'||p.productionRuntime.length>8192||! /^[A-Za-z0-9_-]+$/.test(p.productionRuntime)))||
+    Object.keys(p).sort().join()!==[...(p.productionRuntime!==undefined?['productionRuntime']:[]),'version','taskId','trialId','approvalId','projectId','contractHash','benchmarkContractHash','baselineSha','expiresAt'].sort().join())
   throw Error('NATIVE_HANDOFF_INVALID');
  return Object.freeze(p);
 }

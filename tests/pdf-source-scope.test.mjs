@@ -33,7 +33,7 @@ for(const message of ['Read annual report.pdf','Read “annual report.pdf”','R
 
 async function run(message,fresh,timelineActive=false,timelineClarification,saved=[]){
  const inspected=[],inspectedTasks=[],analysisTasks=[],retained=[],sources=new Map();
- const fixture={...scope,Error,...load('lib/uploads/pdf-inventory.ts'),newAttachments:fresh,message,pdfSourceTask:message,pdfTaskContext:null,pdfProgress:{projectContext:null},timelineActive,timelineSelection:{clarification:timelineClarification},mediaMemory:null,savedVideoFollowUp:null,
+ const fixture={benchmarkRelay:false,benchmarkIntake:false,...scope,Error,...load('lib/uploads/pdf-inventory.ts'),newAttachments:fresh,message,pdfSourceTask:message,pdfTaskContext:null,pdfProgress:{projectContext:null},timelineActive,timelineSelection:{clarification:timelineClarification},mediaMemory:null,savedVideoFollowUp:null,
   catalog:catalog(saved),attachmentHistory:[],restored:{references:[],unavailable:[],sourceIds:new Set()},timelineContext:'',
   ...load('lib/chat/video-attachment-dedup.ts'),...load('lib/chat/attachment-continuity.ts'),
   fingerprintChatRequest:load('lib/chat/request-idempotency.ts').fingerprintChatRequest,
@@ -318,7 +318,7 @@ test('early task identity classification respects PDF source authorization befor
    ${part('    let contextClassification:', '    const pdfReviewContinuation =')}
    return pdfProgress;
   })()`),{
-   ...scope,...task,Map,Set,priorTaskProgress,message,newAttachments:fresh,catalog:[],timelineActive:false,
+   benchmarkRelay:false,benchmarkIntake:false,...scope,...task,Map,Set,priorTaskProgress,message,newAttachments:fresh,catalog:[],timelineActive:false,
    startProjectIntent:()=>false,followupProjectIntent:()=>false,
    attachmentHistory:[],freshVideoReferences:[],taskProgressUserMessageId:'current-turn',
    request:{headers:{get:()=> 'test-request'}},currentAgentTask:()=>null,

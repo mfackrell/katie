@@ -20,3 +20,28 @@ export function fullBenchmarkProjectDecision({
   if(production&&environment!=='production')return 'blocked';
   return 'full';
 }
+
+// Binding discovery never depends on a feature gate: a disabled benchmark must
+// fail closed rather than become an ordinary, unmetered project.
+export function assertFullBenchmarkRuntime(env) {
+ const decision=fullBenchmarkProjectDecision({candidate:true,
+  databaseUrl:env.NEXT_PUBLIC_SUPABASE_URL,environment:env.KATIE_FULL_BENCHMARK_ENVIRONMENT,
+  dispatchEnabled:env.KATIE_FULL_BENCHMARK_DISPATCH==='enabled',
+  nativeDispatchEnabled:env.KATIE_NATIVE_BENCHMARK_DISPATCH==='enabled',
+  trialId:env.KATIE_FULL_BENCHMARK_TRIAL_ID});
+ if(decision!=='full')throw Error('Full benchmark runtime is not authorized');
+}
+
+export async function loadFullBenchmarkBinding(db,projectId,env) {
+ if(!projectId)return null;
+ const {data,error}=await db.from('benchmark_full_project_bindings')
+  .select('trial_id,account_id,benchmark_contract_hash,baseline_sha,model')
+  .eq('project_id',projectId).maybeSingle();
+ if(error)throw Error('Full benchmark accounting binding lookup failed closed');
+ if(data){
+  assertFullBenchmarkRuntime(env);
+  if(data.trial_id!==env.KATIE_FULL_BENCHMARK_TRIAL_ID)
+   throw Error('Full benchmark runtime trial differs from the saved project binding');
+ }
+ return data;
+}

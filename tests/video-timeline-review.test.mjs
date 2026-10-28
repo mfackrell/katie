@@ -50,7 +50,7 @@ test('actual chat route resolves fresh/saved/current video timeline turns before
   {message:'When did the error first appear?',newAttachments:[],catalog:[],attachmentHistory:[{role:'user',attachments:[{...file,mimeType:'text/plain'}]}],active:false},
  ];
  return Promise.all(cases.map(async fixture=>{
-  const context={...intent,...fixture,chatId:"current",exports:{},console};vm.createContext(context);
+  const context={benchmarkRelay:false,...intent,...fixture,chatId:"current",exports:{},console};vm.createContext(context);
   const resolved=vm.runInContext('(function(){'+route.slice(start,end)+';return {timelineActive,timelineSelection};})()',context);
   assert.equal(resolved.timelineActive,fixture.active,fixture.message);
   if(fixture.source)assert.equal(resolved.timelineSelection.source.id,fixture.source);

@@ -32,13 +32,15 @@ export function createResponsesProvider({apiKey,fetchImpl=fetch,baseUrl='https:/
    !Number.isSafeInteger(terminal.usage?.total_tokens)||terminal.usage.total_tokens<0)
    throw Error('GATEWAY_AUTHORITATIVE_RECEIPT_MISSING');
   return {providerRequestId:terminal.id,actualTokens:terminal.usage.total_tokens,
-   body:raw,contentType:resp.headers.get('content-type')||'text/event-stream'};
+   usage:terminal.usage,body:raw,contentType:resp.headers.get('content-type')||'text/event-stream'};
  };
 }
 export function createCanonicalReceiptWriter(db){
  if(!db||typeof db.rpc!=='function')throw Error('GATEWAY_RECEIPT_DB_REQUIRED');
- return async ({operationId,namespace,providerRequestId,actualTokens})=>{
-  const result=await db.rpc('benchmark_reconcile_receipt',{
+ return async ({operationId,namespace,providerRequestId,actualTokens,usage})=>{
+  const result=namespace==='openai-responses'
+   ?await db.rpc('benchmark_reconcile_provider_usage',{p_call:operationId,p_provider_request:providerRequestId,p_usage:usage,p_linked:false})
+   :await db.rpc('benchmark_reconcile_receipt',{
    p_call:operationId,p_namespace:namespace,
    p_provider_request:providerRequestId,p_actual:actualTokens
   });

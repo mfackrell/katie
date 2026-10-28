@@ -1,3 +1,5 @@
+import {sealNativeProductionRuntime} from '../../scripts/benchmark/native-runtime-capsule.mjs';
+import {loadFullBenchmarkBinding} from '../../scripts/benchmark/full-project-gate.mjs';
 import {getDevelopmentProjectContext,acceptanceBinding,projectRpc,type Context} from '@/lib/projects/store';
 import {digest} from '@/lib/projects/contract';
 import {getAvailableProviders} from '@/lib/providers';
@@ -141,14 +143,8 @@ export async function dispatchDevelopment(task: AgentTask, project?: Context, as
   // No alternate scheduler or issue path is authorized by this feature gate.
   const nativeDispatchEnabled=process.env.KATIE_NATIVE_BENCHMARK_DISPATCH==='enabled';
   const fullDispatchEnabled=process.env.KATIE_FULL_BENCHMARK_DISPATCH==='enabled';
-  const stagingRuntime=process.env.NEXT_PUBLIC_SUPABASE_URL?.includes('iytvavgbaainnsrecmcx.supabase.co')===true;
-  if(project&&fullDispatchEnabled&&!stagingRuntime)
-    throw Error('Full benchmark dispatch is restricted to the staging Supabase project');
-  if(project&&stagingRuntime){
-    const {data:fullBinding,error:fullBindingError}=await getSupabaseAdminClient()
-      .from('benchmark_full_project_bindings').select('project_id')
-      .eq('project_id',project.projectId).maybeSingle<{project_id:string}>();
-    if(fullBindingError)throw Error('Full benchmark project binding lookup failed closed');
+  if(project){
+    const fullBinding=await loadFullBenchmarkBinding(getSupabaseAdminClient(),project.projectId,process.env);
     if(fullBinding){
       if(!fullDispatchEnabled||!nativeDispatchEnabled)
         throw Error('Full benchmark project is blocked unless both Full and trusted native dispatch are enabled');
@@ -206,12 +202,15 @@ export async function dispatchDevelopment(task: AgentTask, project?: Context, as
       const signingKey=process.env.KATIE_NATIVE_HANDOFF_HMAC_KEY;
       if(!signingKey||signingKey.length<32)
         throw Error('Benchmark handoff unavailable: trusted signing key not configured');
-      benchmarkHeader=encodeNativeHandoff({
+      if(process.env.KATIE_BENCHMARK_PAID_EXECUTION!=='enabled')
+        throw Error('Full benchmark paid execution is disabled');
+      const handoff={
         taskId:task.id,trialId:bound.trial_id,approvalId:approval.id,
         projectId:project.projectId,contractHash:project.contractHash,
         benchmarkContractHash:bound.benchmark_contract_hash,baselineSha:project.baselineSha,
         expiresAt:Math.min(Date.now()+30*60*1000,new Date(approval.deadline).getTime())
-      },signingKey);
+      };
+      benchmarkHeader=encodeNativeHandoff({...handoff,...(process.env.KATIE_FULL_BENCHMARK_ENVIRONMENT==='production'?{productionRuntime:sealNativeProductionRuntime(process.env.SUPABASE_SERVICE_ROLE_KEY??'',handoff,signingKey)}:{})},signingKey);
       benchmarkModel=approval.model;benchmarkRepository=approval.repository;benchmarkContractHash=bound.benchmark_contract_hash;
     }
   }

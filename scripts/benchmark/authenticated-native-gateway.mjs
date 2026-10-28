@@ -89,7 +89,7 @@ export async function forwardAuthorizedModelRequest({
      !Number.isSafeInteger(response?.actualTokens)||response.actualTokens<0)
    throw Error('GATEWAY_PROVIDER_RECEIPT_UNKNOWN');
   await recordReceipt({requestKey:key,operationId:id,namespace:providerNamespace,
-   providerRequestId:response.providerRequestId,actualTokens:response.actualTokens});
+   providerRequestId:response.providerRequestId,actualTokens:response.actualTokens,usage:response.usage});
   return response;
  } catch(error){
   // A request may have reached its provider. Never release the hold as zero

@@ -124,7 +124,7 @@ function fixture() {
     return Response.json(matches.slice(0, Number(url.searchParams.get('limit') ?? matches.length)));
   };
   const modules = new Map();
-  const globals = { selfToolsEnabled: false, selfInspectionRequest: false, AbortController, setTimeout, clearTimeout, performance, requestImages:[], isProjectStopIntent:text=>text === "Stop the coding project", startProjectIntent:()=>false, followupProjectIntent:()=>false, URL, Response, Date, Map, Set, console: quietConsole, fetch,
+  const globals = { benchmarkIntake:false, benchmarkRelay:false, selfToolsEnabled: false, selfInspectionRequest: false, AbortController, setTimeout, clearTimeout, performance, requestImages:[], isProjectStopIntent:text=>text === "Stop the coding project", startProjectIntent:()=>false, followupProjectIntent:()=>false, URL, Response, Date, Map, Set, console: quietConsole, fetch,
     process: { env: { NEXT_PUBLIC_SUPABASE_URL: 'https://supabase.example.test', SUPABASE_SERVICE_ROLE_KEY: 'test-only-no-network' } } };
   const load = path => {
     path = resolve(path.endsWith('.ts') ? path : path + '.ts');
@@ -167,7 +167,7 @@ async function select(f, { message, messageId, priorTaskProgress, history, proje
     currentAgentTask: () => null,
     getAvailableProviders: () => [{ listModels: async () => [] }],
     selectControlPlaneDecisionModels: () => [],
-    resolveProjectTransition: async () => undefined,
+    resolveProjectTransition: f.globals.resolveProjectTransition ?? (async () => undefined),
     projectRelationHint: projectRelation, responsePurposeHint: responsePurpose,
     resolvedRequestIntent: 'general-text', resolvedRoutingIntentForReroute: { complexity: 'low' },
     reviewMode, attachments: [], images: [], storedWebsite: { fresh: false },
@@ -379,7 +379,7 @@ ${routeSource.slice(statement(declaration('pdfReviewContinuation')).getStart(rou
     currentAgentTask: () => null,
     getAvailableProviders: () => [{ listModels: async () => [] }],
     selectControlPlaneDecisionModels: () => [],
-    resolveProjectTransition: async () => undefined,
+    resolveProjectTransition: f.globals.resolveProjectTransition ?? (async () => undefined),
     crypto: { randomUUID: () => 'source-selection-turn' },
   });
   assert.equal((await run('yes')).pdfTaskContext, 'Analyze report.pdf page 2');
@@ -619,4 +619,15 @@ test('actual route lets a stop control pass unresolved application identity with
   assert.equal(result.pdfProgress.projectContext.userMessageId, state.projectContext.userMessageId);
   assert.deepEqual(plain(state), before, 'The stored pending selection remains untouched');
   assert.equal(result.pdfProgress.lastUserMessageId, state.lastUserMessageId, 'Stop does not become application evidence');
+});
+
+
+test('actual pre-relay production classifier makes no model call for Full intake and bound continuations',async()=>{
+ for(const message of ['Build a browser game called Take Eleven','Resume the project','Continue the project','Add undo button to the game']){
+  const f=fixture();let calls=0;
+  Object.assign(f.globals,{benchmarkRelay:true,benchmarkIntake:message.startsWith('Build'),startProjectIntent:()=>true,
+   resolveProjectTransition:async()=>{calls++;throw Error('Unmetered classifier reached')}});
+  await select(f,{message,messageId:'benchmark-message',priorTaskProgress:f.helpers.rebuildTaskProgress([]),history:[]});
+  assert.equal(calls,0,message);
+ }
 });

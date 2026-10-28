@@ -68,6 +68,7 @@ function fixture({counts=[10000,10000],failFirst=false,remaining=120000,authoriz
  const choices=[pick('anthropic','preferred'),pick('google','next-compatible')];
  const c={mission:{id:'mission',project_id:'project',project_kind:'specification',project_evidence:{projectProfile:'game'},objective:'Original game requirements',team:[{id:'agent',config:{research:true}}],deadline:new Date(Date.now()+600000).toISOString()},job:{id:'job',agent_id:'agent',role:'compose',instruction:'Write the complete specification',lease:'lease',lease_until:new Date(Date.now()+360000).toISOString(),payload:{}}};
  const load=modules({
+  '@/lib/data/supabase/admin':{getSupabaseAdminClient:()=>({from:table=>{assert.equal(table,'benchmark_full_project_bindings');const q={select:()=>q,eq:()=>q,maybeSingle:async()=>({data:null,error:null})};return q;}})},
   'openai':unusedOpenAI,'openai/helpers/zod':{zodTextFormat:()=>({})},
   '@/lib/projects/contract':{projectPlanSchema:{omit:()=>({})}},
   [resolve('scripts/project-game-rules.mjs')]:{GAME_RULE_CATEGORIES:['setup','action']},

@@ -45,7 +45,8 @@ test('Full native trial admission uses two real PostgreSQL connections and one m
    '20261025204500_benchmark_external_native_mission_bridge',
    '20261025205000_benchmark_native_owner_assignment_grants',
    '20261025211000_benchmark_task_bound_spending_approvals',
-   '20261027180744_benchmark_full_do_execution_binding'])
+   '20261027180744_benchmark_full_do_execution_binding',
+   '20261028132000_benchmark_provider_usage_evidence'])
     await db.query(readFileSync('supabase/migrations/'+name+'.sql','utf8'));
   await db.query('set role service_role');
   await db.query("insert into actors(id,name) values('a1111111-1111-4111-8111-111111111111','Native acceptance fixture')");
@@ -111,11 +112,40 @@ test('Full native trial admission uses two real PostgreSQL connections and one m
   const receipt=await db.query(`select benchmark_reserve_mission_call($1,$2,$3,$4,100,true) receipt`,
     [claim.job.id,claim.job.lease,call,'openai:gpt-5.3-codex']);
   assert.ok(receipt.rows[0].receipt,'actual DO assignment must reserve its Full ledger call atomically');
-  await db.query('select benchmark_finish_mission_call($1,90)',[call]);
+  const usage={input_tokens:70,output_tokens:20,total_tokens:90,input_tokens_details:{cached_tokens:30}};
+  const settle='select benchmark_reconcile_provider_usage($1,$2,$3::jsonb,true) state';
+  const other=await connect();await other.query('set role service_role');
+  const race=await Promise.all([db.query(settle,[call,'resp_full_usage',JSON.stringify(usage)]),other.query(settle,[call,'resp_full_usage',JSON.stringify(usage)])]);
+  assert.ok(race.every(r=>r.rows[0].state==='settled'));
   const spent=(await db.query(`select a.spent_tokens,c.state,c.actual_tokens,mc.actual_tokens mission_actual
     from benchmark_budget_accounts a join benchmark_budget_calls c on c.account_id=a.id
     join mission_calls mc on mc.id=$2::uuid where a.trial_id=$1 and c.request_key=$2::text`,[trial,call])).rows[0];
   assert.deepEqual(spent,{spent_tokens:'90',state:'settled',actual_tokens:'90',mission_actual:90});
+
+  const evidence=(await db.query('select provider_usage,provider_request_id,pricing_snapshot,provider_receipt_at from benchmark_budget_calls where request_key=$1',[call])).rows[0];
+  assert.deepEqual(evidence.provider_usage,usage);assert.equal(evidence.provider_request_id,'resp_full_usage');
+  await assert.rejects(db.query(settle,[call,'resp_conflicting_id',JSON.stringify(usage)]),/conflict|mismatch/);
+  assert.equal(evidence.pricing_snapshot.inputPerMillion,1);assert.ok(evidence.provider_receipt_at);
+  await assert.rejects(db.query(settle,[call,'resp_full_usage',JSON.stringify({...usage,input_tokens:69,output_tokens:21})]),/immutable provider usage conflict/);
+  await assert.rejects(db.query(settle,[call,'resp_full_usage',JSON.stringify({...usage,total_tokens:89})]),/totals inconsistent/);
+  await assert.rejects(db.query(settle,[call,'resp_full_usage',JSON.stringify({total_tokens:90})]),/authoritative provider usage/);
+  assert.equal((await db.query('select spent_tokens from benchmark_budget_accounts where id=$1',[linked.account_id])).rows[0].spent_tokens,'90');
+  const standalone=(await db.query("select benchmark_reserve_call($1,'native-usage','gpt-5.3-codex',100) id",[linked.account_id])).rows[0].id;
+  const nativeUsage={input_tokens:7,output_tokens:3,total_tokens:10};
+  await db.query('select benchmark_reconcile_provider_usage($1,$2,$3::jsonb,false)',[standalone,'resp_native_usage',JSON.stringify(nativeUsage)]);
+  assert.equal((await db.query('select provider_usage from benchmark_budget_calls where id=$1',[standalone])).rows[0].provider_usage.output_tokens,3);
+  const uncertain=randomUUID();
+  const admitted=(await db.query('select benchmark_reserve_mission_call($1,$2,$3,$4,100,false) receipt',[claim.job.id,claim.job.lease,uncertain,'openai:gpt-5.3-codex'])).rows[0].receipt;
+  assert.ok(admitted);
+  await db.query('select benchmark_finish_mission_call($1,null)',[uncertain]);
+  assert.equal((await db.query('select state from benchmark_budget_calls where legacy_mission_call_id=$1',[uncertain])).rows[0].state,'unresolved');
+  await db.query(settle,[uncertain,'resp_recovered_usage',JSON.stringify(nativeUsage)]);
+  const recovered=(await db.query('select c.state,c.provider_usage,m.status from benchmark_budget_calls c join mission_calls m on m.id=c.legacy_mission_call_id where m.id=$1',[uncertain])).rows[0];
+  assert.equal(recovered.state,'settled');assert.equal(recovered.status,'completed');assert.deepEqual(recovered.provider_usage,nativeUsage);
+  await db.query('reset role');await db.query('set role anon');
+  await assert.rejects(db.query(settle,[call,'resp_full_usage',JSON.stringify(usage)]),/permission denied/);
+  await db.query('reset role');await db.query('set role service_role');
+
   const denied=await db.query(`select benchmark_reserve_mission_call($1,$2,$3,'other:model',100,false) receipt`,
     [claim.job.id,claim.job.lease,'b8888888-8888-4888-8888-888888888888']);
   assert.equal(denied.rows[0].receipt,null,'Full account rejects model-policy deviation before inference');
