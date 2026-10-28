@@ -49,6 +49,7 @@ begin
  end if;
  return jsonb_build_object('taskId',task.id,'projectId',p.id,'chatId',p.chat_id,'scopeHash',p.approved_hash,'request',task.input,
   'trialId',t.id,'model',b.model,'deadline',least(q.deadline,p.deadline,m.deadline),'spentTokens',a.spent_tokens,
+  'approvalState',case when approval.id is null then 'pending' when approval.revoked_at is not null then 'revoked' when approval.deadline<=now() then 'expired' when approval.consumed_at is not null then 'consumed' else 'approved' end,
   'approved',approval.id is not null,'approvalId',approval.id,'taskStatus',task.status);
 end $$;
 revoke all on function public.benchmark_dashboard_full_task(uuid,uuid,text,boolean) from public,anon,authenticated;

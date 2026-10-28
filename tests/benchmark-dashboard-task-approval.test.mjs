@@ -24,3 +24,15 @@ test('task status is owner-only and stale or expired DB authority cannot be repl
  const other=harness('other');assert.equal((await other.get()).status,401);assert.equal(other.calls.length,0);
  const h=harness('owner',true);assert.equal((await h.post()).status,409);assert.equal(h.calls.length,1);
 });
+
+test('unapproved Full task waits without binding or external dispatch; same task resumes after approval',async()=>{
+ const source=readFileSync('lib/agents/development.ts','utf8');
+ const start=source.indexOf('export async function dispatchDevelopment('),end=source.indexOf('  if (project && nativeDispatchEnabled)',start);
+ const gate=ts.transpileModule(source.slice(start,end)+'return task;}',{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText;
+ const calls=[],out={};let approved=false;
+ const db={from(){return {select(){return this},eq(){return this},is(){return this},maybeSingle:async()=>({data:approved?{id:'approval'}:null,error:null})}},rpc:async(name,args)=>{calls.push({name,args});return {data:{},error:null}}};
+ vm.runInNewContext(gate,{exports:out,process:{env:{KATIE_NATIVE_BENCHMARK_DISPATCH:'enabled',KATIE_FULL_BENCHMARK_DISPATCH:'enabled'}},getSupabaseAdminClient:()=>db,loadFullBenchmarkBinding:async()=>({trial_id:'trial'}),save:async(task,status,details)=>({...task,status,details}),readTask:()=>{throw Error('unexpected read')}});
+ const task={id:'same-task',status:'dispatching',external:{},input:'Take Eleven',snapshot:{instructions:''}},project={projectId:'project',scopeHash:'scope',contractHash:'contract'};
+ const waiting=await out.dispatchDevelopment(task,project,'lease');assert.equal(waiting.id,task.id);assert.equal(waiting.status,'dispatching');assert.match(waiting.details,/owner approval/);assert.equal(calls.length,0);
+ approved=true;const resumed=await out.dispatchDevelopment(waiting,project,'next-lease');assert.equal(resumed.id,task.id);assert.equal(calls.length,1);assert.equal(calls[0].name,'benchmark_bind_full_development_dispatch');assert.equal(calls[0].args.p_task,task.id);
+});

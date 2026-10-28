@@ -162,7 +162,7 @@ test('Full native trial admission uses two real PostgreSQL connections and one m
   await db.query("update agent_missions set status='running' where id=$1",[claim.mission.id]);
   await db.query("update mission_assignments set role='development',status='waiting_external',payload='{\"approved\":true}' where id=$1",[claim.job.id]);
   await db.query("update project_runs set binding=jsonb_build_object('scopeHash',$2::text) where mission_id=$1",[claim.mission.id,scope]);
-  await db.query("insert into agent_tasks(id,agent_id,actor_id,chat_id,snapshot,definition_version,kind,initial_input,input,repository_id,request_id,status) select $1,a.id,$2,$3,a.config,a.version,'development','Take Eleven','Take Eleven',$4,$1::text,'dispatching' from managed_agents a join mission_assignments j on j.agent_id=a.id where j.id=$1",[claim.job.id,actor,chat,repo]);
+  await db.query("insert into agent_tasks(id,agent_id,actor_id,chat_id,snapshot,definition_version,kind,initial_input,input,repository_id,request_id,status) select $1::uuid,a.id,$2::uuid,$3::uuid,a.config,a.version,'development','Take Eleven','Take Eleven',$4,$1::text,'dispatching' from managed_agents a join mission_assignments j on j.agent_id=a.id where j.id=$1::uuid",[claim.job.id,actor,chat,repo]);
   const approve='select benchmark_dashboard_full_task($1,$2,$3,true) approval';
   await assert.rejects(db.query(approve,[randomUUID(),claim.job.id,scope]),/authenticated owner/);
   await assert.rejects(db.query(approve,[owner,randomUUID(),scope]),/not eligible/);

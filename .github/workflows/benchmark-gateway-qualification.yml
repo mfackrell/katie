@@ -21,6 +21,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+      - name: Install locked repository dependencies without hooks
+        run: npm ci --ignore-scripts
       - name: Install pinned real Codex SDK
         run: npm install --no-save --package-lock=false --ignore-scripts @openai/codex-sdk@0.164.0
       - name: Install sandbox and permit user namespace inside disposable runner
