@@ -19,6 +19,7 @@ const ITM_HARD_MAX_CHARACTERS = 8500;
 // This is completion headroom, NOT the memory-size budget.
 const SUMMARY_MAX_TOKENS = 4000;
 const COMPACTION_MAX_TOKENS = 2800; // One bounded repair attempt only for an oversized completed draft.
+class CompactionFailure extends Error {}
 
 // Reuse the installed SDK only as native Claude HTTP transport, matching LTM.
 // Its default transport retries/timeouts are unchanged; no provider fallback.
@@ -128,8 +129,10 @@ async function summarizeInto(priorSummary: string, messages: Message[]): Promise
  * bounded request: ordinary successful updates incur no additional call.
  */
 async function compactOversizedDraft(draft: string): Promise<string> {
-  if (!client) throw new Error("Claude summarizer unavailable for compaction");
-  const response = await client.post<Record<string, unknown>, ClaudeSummaryResponse>("/messages", {
+  if (!client) throw new CompactionFailure("Claude summarizer unavailable for compaction");
+  let response: ClaudeSummaryResponse;
+  try {
+    response = await client.post<Record<string, unknown>, ClaudeSummaryResponse>("/messages", {
     body: {
       model: SUMMARY_MODEL,
       max_tokens: COMPACTION_MAX_TOKENS,
@@ -146,7 +149,12 @@ async function compactOversizedDraft(draft: string): Promise<string> {
         content: `This reconciled draft is ${draft.length} characters, over the ${ITM_HARD_MAX_CHARACTERS}-character absolute ceiling. Shorten it without losing its latest relevant context:\n\n${draft}`,
       }],
     },
-  });
+    });
+  } catch {
+    // A failed paid compaction must not trigger a near-identical smaller-batch
+    // compaction in the same invocation. Preserve cursor and retry later.
+    throw new CompactionFailure("Claude intermediate memory compaction request failed");
+  }
   const result = (response.content ?? [])
     .filter(block => block.type === "text" && typeof block.text === "string")
     .map(block => block.text).join("").trim();
@@ -159,7 +167,7 @@ async function compactOversizedDraft(draft: string): Promise<string> {
       minCharacters: ITM_TARGET_MIN_CHARACTERS,
       maxCharacters: ITM_HARD_MAX_CHARACTERS,
     });
-    throw new Error("Intermediate memory compaction incomplete or outside character budget");
+    throw new CompactionFailure("Intermediate memory compaction incomplete or outside character budget");
   }
   console.info("[Summarizer] Oversized summary compacted", {
     originalCharacters: draft.length,
@@ -255,9 +263,12 @@ export async function maybeUpdateSummary(chatId: string): Promise<void> {
       let candidate: string;
       try {
         candidate = await summarizeInto(summary, messagesToFold.slice(offset, offset + size));
-      } catch {
-        // One attempt with half as many messages. If that fails, leave the
-        // source cursor exactly where it was and retry on the next invocation.
+      } catch (error) {
+        // A compaction failure is already the second paid call for this batch.
+        // Repeating it with a smaller batch is unlikely to help when the
+        // existing ITM is near capacity, and can double the expense.
+        if (error instanceof CompactionFailure) throw error;
+        // Non-compaction failures retain the existing smaller-batch retry.
         size = Math.min(10, size);
         console.warn("[Summarizer] Batch incomplete; retrying smaller batch", { chatId, size });
         candidate = await summarizeInto(summary, messagesToFold.slice(offset, offset + size));

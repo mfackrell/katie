@@ -248,7 +248,7 @@ test("compaction failures are bounded and retain the source cursor", async () =>
     respond: n => n % 2 ? reply("X".repeat(9686)) : reply("Still over budget".repeat(700)),
   });
   await h.run();
-  assert.equal(h.calls.length, 4, "two existing batch attempts, each with at most one repair");
+  assert.equal(h.calls.length, 2, "one batch plus one repair; do not repeat paid compaction");
   assert.equal(h.writes.length, 0);
   assert.deepEqual(h.saved(), prior);
   assert.ok(h.logs.some(event => event.level === "error"));
