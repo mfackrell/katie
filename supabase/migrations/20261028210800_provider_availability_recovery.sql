@@ -40,7 +40,7 @@ begin
  end if;
  if not exists(select 1 from provider_health h where (provider is null or h.provider_name=provider)
   and (jsonb_array_length(evidence)=0 or exists(select 1 from jsonb_array_elements(evidence) e where e->>'provider'=h.provider_name and e->>'kind' in ('cooldown','billing_quota','discovery_unavailable')))
-  and h.updated_at<=j.updated_at and h.blocked_until is not null and h.blocked_until<=now()
+  and h.updated_at<=j.updated_at and h.blocked_until>=j.updated_at and h.blocked_until is not null and h.blocked_until<=now()
   and h.reason in ('provider billing or quota is unavailable','the provider rate-limited the request','the provider timed out','the provider could not complete the request')) then return false;end if;
  if exists(select 1 from provider_health h where (provider is null or h.provider_name=provider) and h.status='blocked' and h.blocked_until>now()) then return false;end if;
  select coalesce(sum(greatest(actual_tokens,reserved_tokens)),0) into charged from agent_missions where project_id=p.id;
