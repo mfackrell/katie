@@ -37,6 +37,28 @@ test('owner transfer and production qualification are atomic, exclusive, idempot
   };
   await setup(stage);await setup(prod);
   const actor=randomUUID(),owner=randomUUID(),exp=randomUUID(),p=config.protocol;
+  await prod.query(sqlFile('20261028104917_benchmark_dashboard_owner_consent.sql'));
+  const record='select * from benchmark_record_dashboard_consent($1,$2,$3,$4)';
+  const consent=(await prod.query(record,[owner,'a'.repeat(40),null,false])).rows[0];
+  assert.equal((await prod.query(record,[owner,'a'.repeat(40),null,false])).rows[0].id,consent.id);
+  const bind='select benchmark_bind_dashboard_consent($1,$2,$3,$4,$5)';
+  const bindArgs=[consent.id,owner,'a'.repeat(40),'101',config.authorizationBodySha256];
+  await assert.rejects(prod.query(bind,[consent.id,null,...bindArgs.slice(2)]),/consent refused/);
+  const competitor=await connect('destination');
+  const races=await Promise.allSettled([prod.query(bind,bindArgs),competitor.query(bind,[...bindArgs.slice(0,3),'102',bindArgs[4]])]);
+  assert.equal(races.filter(x=>x.status==='fulfilled').length,1);
+  const renewed=await Promise.all([prod.query(record,[owner,'b'.repeat(40),consent.id,true]),competitor.query(record,[owner,'b'.repeat(40),consent.id,true])]);
+  assert.equal(renewed[0].rows[0].id,renewed[1].rows[0].id);
+  assert.notEqual(renewed[0].rows[0].id,consent.id);
+  assert.equal(renewed[0].rows[0].supersedes,consent.id);
+  assert.ok((await prod.query('select revoked_at from benchmark_dashboard_owner_consents where id=$1',[consent.id])).rows[0].revoked_at);
+  await assert.rejects(prod.query(bind,bindArgs),/consent refused/);
+  await assert.rejects(prod.query(record,[null,'b'.repeat(40),renewed[0].rows[0].id,true]),/Invalid owner/);
+
+  await prod.query('set role authenticated');
+  await assert.rejects(prod.query('select * from benchmark_dashboard_owner_consents'),/permission denied/);
+  await assert.rejects(prod.query(bind,bindArgs),/permission denied/);
+  await prod.query('reset role');
   for(const db of [stage,prod])await db.query('insert into actors values($1)',[actor]);
   const trialArgs=[exp,actor,p.baselineSha,p.contract_sha256,p.acceptance_sha256,p.model_policy_sha256,p.tool_profile_sha256,p.runtime_sha256];
   const addTrial=async(db,arm,replicate=1)=> (await db.query(`insert into benchmark_three_arm_trials(experiment_id,replicate,arm,owner_actor_id,baseline_sha,contract_sha256,acceptance_sha256,model_policy_sha256,tool_profile_sha256,runtime_sha256,state)

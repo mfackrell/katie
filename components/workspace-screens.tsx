@@ -1,4 +1,5 @@
 "use client";
+import { BenchmarkOwnerApproval } from "@/components/benchmark-owner-approval";
 import { SpecialistDirectory } from "@/components/specialist-directory";
 import Notepad from "@/components/Notepad";
 import Link from "next/link";
@@ -209,6 +210,7 @@ export function HomeScreen() {
           retry={work.refresh}
           checked={work.checked}
         />
+        <BenchmarkOwnerApproval />
         <PendingMissionApprovals />
         {work.loading ? (
           <p className="py-6 text-zinc-400">Checking current work…</p>

@@ -1,4 +1,5 @@
 name: Benchmark 715 production owner qualification
+run-name: "Katie benchmark approval ${{ inputs.dashboard_consent_id || 'manual' }}"
 on:
   workflow_dispatch:
     inputs:
@@ -7,6 +8,16 @@ on:
         required: true
         type: boolean
         default: false
+      dashboard_consent_id:
+        description: 'Internal Katie approval identifier.'
+        required: false
+        type: string
+        default: ''
+      dashboard_handoff:
+        description: 'Internal encrypted Katie dashboard handoff; do not enter manually.'
+        required: false
+        type: string
+        default: ''
 permissions:
   contents: read
   actions: read
@@ -17,15 +28,13 @@ concurrency:
 jobs:
   qualify_gateway:
     if: >-
-      ${{ inputs.authorize == true && github.repository == 'mfackrell/katie' &&
-          github.actor == 'mfackrell' && github.triggering_actor == 'mfackrell' &&
+      ${{ ((inputs.authorize == true && github.actor == 'mfackrell' && github.triggering_actor == 'mfackrell') || inputs.dashboard_handoff != '') && github.repository == 'mfackrell/katie' &&
           github.ref == 'refs/heads/main' }}
     uses: ./.github/workflows/benchmark-gateway-qualification.yml
   qualify:
     needs: qualify_gateway
     if: >-
-      ${{ inputs.authorize == true && github.repository == 'mfackrell/katie' &&
-          github.actor == 'mfackrell' && github.triggering_actor == 'mfackrell' &&
+      ${{ ((inputs.authorize == true && github.actor == 'mfackrell' && github.triggering_actor == 'mfackrell') || inputs.dashboard_handoff != '') && github.repository == 'mfackrell/katie' &&
           github.ref == 'refs/heads/main' }}
     environment: benchmark-paid
     runs-on: ubuntu-24.04

@@ -78,6 +78,7 @@ const states = new Map(),
   mutations = [],
   errors = [];
 let workFailure = false;
+let benchmarkApproved=false;
 let server;
 if (process.env.KATIE_UI_START_SERVER === "1") {
   server = spawn(
@@ -139,6 +140,14 @@ try {
         body: JSON.stringify(data),
       });
     if (req.method() !== "GET") mutations.push({ path: url.pathname, body });
+    if(url.pathname==='/api/benchmark/715/dashboard'){
+      if(req.method()==='POST'){
+        assert.equal(body.approve,true);assert.equal(body.authorization,'production-715-30usd-350000tokens-4hours');
+        assert.ok(req.headers().authorization?.startsWith('Bearer '));benchmarkApproved=true;
+        return reply({approved:true});
+      }
+      return reply({consent:benchmarkApproved?{id:'synthetic-consent',expires_at:new Date(Date.now()+3600000).toISOString(),dispatch_error:null}:null,qualification:null,execution:null,canRetry:false,deploymentChanged:false});
+    }
     if (url.pathname === "/api/actors") {
       if (req.method() === "POST") {
         const actor = { id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", ...body };
@@ -404,12 +413,29 @@ try {
     0,
     "navigation and result inspection must never create execution",
   );
+  // Synthetic session and API boundary only: no real owner approval or model calls.
+  await page.goto(origin);
+  await page.getByRole('heading',{name:'Take Eleven benchmark',exact:true}).waitFor();
+  assert.equal(await page.getByRole('button',{name:'Approve $30 benchmark',exact:true}).isDisabled(),true);
+  const authUrl=process.env.NEXT_PUBLIC_SUPABASE_URL||'https://example.supabase.co';
+  const storageKey='sb-'+new URL(authUrl).hostname.split('.')[0]+'-auth-token';
+  const jwt=Buffer.from(JSON.stringify({alg:'HS256',typ:'JWT'})).toString('base64url')+'.'+Buffer.from(JSON.stringify({sub:a,exp:Math.floor(Date.now()/1000)+3600,role:'authenticated'})).toString('base64url')+'.synthetic';
+  await page.evaluate(({storageKey,jwt,a})=>localStorage.setItem(storageKey,JSON.stringify({access_token:jwt,refresh_token:'synthetic-refresh',expires_at:Math.floor(Date.now()/1000)+3600,token_type:'bearer',user:{id:a,email:'synthetic@example.invalid'}})),{storageKey,jwt,a});
+  await page.reload();
+  await page.getByRole('button',{name:'Approve $30 benchmark',exact:true}).click();
+  await page.getByText('Approval saved. Katie is running the nonbillable qualification checks.',{exact:true}).waitFor();
+  await page.reload();
+  await page.getByText('Approval saved. Katie is running the nonbillable qualification checks.',{exact:true}).waitFor();
+  assert.equal(mutations.filter(r=>r.path==='/api/benchmark/715/dashboard').length,1);
+  assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
+  await page.screenshot({path:output+'/benchmark-dashboard-mobile.png',fullPage:true});
   assert.deepEqual(errors, []);
   console.log(
     JSON.stringify({
       passed: true,
       checks: [
         "home",
+        "authenticated dashboard benchmark approval and reload without redispatch (synthetic)",
         "orchestrator and single-task separation",
         "specialist active-chat selection",
         "agent create/edit/delete with confirmation",

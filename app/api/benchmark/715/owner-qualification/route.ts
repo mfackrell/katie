@@ -2,6 +2,7 @@ import {NextRequest,NextResponse} from 'next/server';
 import {getSupabaseAdminClient} from '@/lib/data/supabase/admin';
 import config from '@/config/benchmark-715-production-qualification.json';
 import {readQualification,verifyOwnerRun} from '../../../../../scripts/benchmark/production-owner-qualification.mjs';
+import {validateDashboardConsent} from '../../../../../scripts/benchmark/dashboard-owner-consent.mjs';
 export const runtime='nodejs';
 export const maxDuration=60;
 const ready=()=>process.env.VERCEL_ENV==='production'&&
@@ -36,8 +37,18 @@ export async function POST(request:NextRequest){
    github(`actions/runs?head_sha=${payload.sha}&per_page=100`)
   ]);
   const workflow=await github(`actions/workflows/${run.workflow_id}`);
+  let dashboardConsentVerified=false;
+  if(payload.consentId){
+   const {data:consent,error}=await getSupabaseAdminClient().from('benchmark_dashboard_owner_consents').select('*').eq('id',payload.consentId).maybeSingle();
+   if(error)throw Error('consent');
+   dashboardConsentVerified=validateDashboardConsent(consent,{id:payload.consentId,ownerId:process.env.KATIE_OWNER_AUTH_USER_ID,sha:payload.sha,runId:payload.runId,authorizationSha:config.authorizationBodySha256});
+  }
   verifyOwnerRun({payload,run,comment,workflow,checks:checks.workflow_runs,jobs:jobs.jobs,
-   deployedSha:process.env.VERCEL_GIT_COMMIT_SHA,config});
+   deployedSha:process.env.VERCEL_GIT_COMMIT_SHA,config,dashboardConsentVerified});
+  if(payload.consentId){
+   const {error}=await getSupabaseAdminClient().rpc('benchmark_bind_dashboard_consent',{p_id:payload.consentId,p_owner:process.env.KATIE_OWNER_AUTH_USER_ID,p_sha:payload.sha,p_run:payload.runId,p_authorization_sha:config.authorizationBodySha256});
+   if(error)throw Error('consent binding');
+  }
   if(payload.phase==='prepare'){
    const {error}=await getSupabaseAdminClient().rpc('benchmark_prepare_production_owner',{
     p_owner:process.env.KATIE_OWNER_AUTH_USER_ID,p_actor:process.env.KATIE_SELF_ACTOR_ID

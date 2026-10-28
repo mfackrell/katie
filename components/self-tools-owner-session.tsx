@@ -4,7 +4,7 @@ import { FormEvent, useEffect, useState } from "react";
 import { browserOwnerAuth, ownerSessionBearer } from "@/lib/tools/browser-owner-session";
 
 /** Authentication is not authorization: server separately requires an explicit actor/chat grant. */
-export function SelfToolsOwnerSession({ chatId }: { chatId: string }) {
+export function SelfToolsOwnerSession({ chatId }: { chatId?: string }) {
   const client = browserOwnerAuth();
   const [email, setEmail] = useState("");
   const [emailReady, setEmailReady] = useState(false);
@@ -104,7 +104,7 @@ export function SelfToolsOwnerSession({ chatId }: { chatId: string }) {
       setCodeRequested(false);
       setSignedIn(true);
       setSessionReady(true);
-      setNotice("Owner session active. Authorize this chat to use self-management tools.");
+      setNotice("Owner session active.");
     } finally {setBusy(false);}
   }
   async function authorizeChat() {
@@ -131,8 +131,8 @@ export function SelfToolsOwnerSession({ chatId }: { chatId: string }) {
         <p role="status">Restoring owner session…</p>
       ) : signedIn ? (
         <div className="flex items-center justify-between gap-3">
-          <span>Owner session active. Self-management still requires server authorization.</span>
-          <div className="flex gap-3"><button type="button" onClick={()=>void authorizeChat()} className="underline">Authorize this chat</button><button type="button" onClick={()=>void signOut()} className="underline">Sign out</button></div>
+          <span>Owner session active.</span>
+          <div className="flex gap-3">{chatId && <button type="button" onClick={()=>void authorizeChat()} className="underline">Authorize this chat</button>}<button type="button" onClick={()=>void signOut()} className="underline">Sign out</button></div>
         </div>
       ) : (
         <div className="flex flex-wrap items-center gap-3">
