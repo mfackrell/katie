@@ -27,6 +27,15 @@ begin
  evidence:=coalesce(j.result->'diagnostic'->'providerAvailability','[]'::jsonb);
  if jsonb_typeof(evidence)<>'array' then return false;end if;
  if jsonb_array_length(evidence)>0 then
+  if provider is null then
+   select h.provider_name into provider from provider_health h
+    where h.updated_at<=j.updated_at and h.blocked_until>=j.updated_at and h.blocked_until<=now()
+    and h.reason in ('provider billing or quota is unavailable','the provider rate-limited the request','the provider timed out','the provider could not complete the request')
+    and exists(select 1 from jsonb_array_elements(evidence) e where e->>'provider'=h.provider_name and e->>'kind' in ('cooldown','billing_quota','discovery_unavailable'))
+    and not exists(select 1 from jsonb_array_elements(evidence) e where e->>'provider'=h.provider_name and e->>'kind' in ('credentials','unsupported_model'))
+    order by h.provider_name limit 1;
+   if provider is null then return false;end if;
+  end if;
   -- Do not reinterpret authentication/capability failures as billing failures.
   if not exists(select 1 from jsonb_array_elements(evidence) e where e->>'kind' in ('cooldown','billing_quota','discovery_unavailable') and (provider is null or e->>'provider'=provider))
    or exists(select 1 from jsonb_array_elements(evidence) e where e->>'kind' in ('credentials','unsupported_model') and (provider is null or e->>'provider'=provider)) then return false;end if;
