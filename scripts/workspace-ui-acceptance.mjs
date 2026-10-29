@@ -78,7 +78,7 @@ const states = new Map(),
   mutations = [],
   errors = [];
 let workFailure = false;
-let benchmarkApproved=false,continuationAvailable=false,continuationApproved=false;
+let benchmarkApproved=false,continuationAvailable=false,continuationApproved=false,continuationRenewal=false;
 let server;
 if (process.env.KATIE_UI_START_SERVER === "1") {
   server = spawn(
@@ -142,14 +142,14 @@ try {
     if (req.method() !== "GET") mutations.push({ path: url.pathname, body });
     if(url.pathname==='/api/benchmark/715/continuation'){
       if(req.method()==='POST'){
-        assert.equal(body.approve,true);assert.equal(body.authorization,'full-continuation-existing-budget-270000tokens-4hours');
+        assert.equal(body.approve,true);assert.equal(body.authorization,continuationRenewal?'full-continuation-renewal-existing-budget-240000tokens-4hours':'full-continuation-existing-budget-270000tokens-4hours');
         assert.equal(body.planHash,'c'.repeat(64));assert.ok(req.headers().authorization?.startsWith('Bearer '));
         continuationApproved=true;return reply({approved:true});
       }
       return reply({continuation:continuationAvailable?{id:continuationApproved?'synthetic-continuation':null,projectId:'11111111-1111-4111-8111-111111111111',
         trialId:'synthetic-failed-trial',accountId:'synthetic-existing-account',approved:continuationApproved,live:continuationApproved,
-        deadline:new Date(Date.now()+14400000).toISOString(),planHash:'c'.repeat(64),sourceSnapshotHash:'d'.repeat(64),spentTokens:58624,
-        plan:{additionalTokenCap:270000,existingAccountTokenCap:350000,newFunds:0}}:null});
+        deadline:new Date(Date.now()+14400000).toISOString(),planHash:'c'.repeat(64),sourceSnapshotHash:'d'.repeat(64),spentTokens:continuationRenewal?105453:58624,
+        plan:{additionalTokenCap:continuationRenewal?240000:270000,existingAccountTokenCap:350000,newFunds:0,specificationTokens:continuationRenewal?60000:90000,developmentTokens:120000,assessmentTokens:60000,regenerateSpecification:!continuationRenewal}}:null});
     }
     if(url.pathname==='/api/benchmark/715/dashboard'){
       if(req.method()==='POST'){
@@ -438,11 +438,16 @@ try {
   await page.reload();
   await page.getByText('Approval saved. Katie is running the nonbillable qualification checks.',{exact:true}).waitFor();
   assert.equal(mutations.filter(r=>r.path==='/api/benchmark/715/dashboard').length,1);
-  continuationAvailable=true;await page.reload();
-  await page.getByRole('button',{name:'Approve this continuation using remaining Full allowance',exact:true}).click();
-  await page.getByText(/Continuation approved until/).waitFor();
-  await page.reload();await page.getByText(/Continuation approved until/).waitFor();
-  assert.equal(mutations.filter(r=>r.path==='/api/benchmark/715/continuation').length,1);
+  for(const renewal of [false,true]){
+    continuationAvailable=true;continuationRenewal=renewal;continuationApproved=false;await page.reload();
+    await page.getByText(new RegExp('at most '+(renewal?'240,000':'270,000')+' additional tokens')).waitFor();
+    await page.getByText(new RegExp('Specification '+(renewal?'60,000':'90,000')+' tokens; development 120,000; assessment 60,000')).waitFor();
+    if(renewal)await page.getByText(/no paid composition/).waitFor();
+    await page.getByRole('button',{name:'Approve this continuation using remaining Full allowance',exact:true}).click();
+    await page.getByText(/Continuation approved until/).waitFor();
+    await page.reload();await page.getByText(/Continuation approved until/).waitFor();
+    assert.equal(mutations.filter(r=>r.path==='/api/benchmark/715/continuation').length,renewal?2:1);
+  }
 
   assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
   await page.screenshot({path:output+'/benchmark-dashboard-mobile.png',fullPage:true});
