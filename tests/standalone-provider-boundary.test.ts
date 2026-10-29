@@ -10,6 +10,7 @@ import type { LedgerAttempt, AdmitAttemptInput, ResponseCheckpoint, SettlementIn
 import { OpenAiProvider } from '../lib/providers/openai-provider';
 import { nativeToolTurn } from '../lib/providers/native-tools';
 import * as accountingDispatch from '../lib/standalone-accounting/dispatch';
+import { describeAttachmentEvidence } from '../lib/uploads/attachment-observations';
 import { googleGenerateContent } from '../lib/providers/google-transport';
 import type { GenerateContentParameters } from '@google/genai';
 import { selectStoredAttachments } from '../lib/chat/attachment-selection';
@@ -600,4 +601,24 @@ test('accepted exposure cannot promote truncated streaming output to a safe chec
   await assert.rejects(runWithStandaloneAccounting({...context,resumed:true},()=>send(url,body)),{code:'standalone_safe_checkpoint_unavailable'});
   assert.equal(sends,1);assert.equal(f.attempts[0].state,'uncertain');
  }
+});
+
+
+test('owner acceptance replays a saved Google block to attachment fallback and continues without observing twice',async t=>{
+ const f=fakeLedger();let sends=0;const oldKey=process.env.GOOGLE_API_KEY;process.env.GOOGLE_API_KEY='offline-fixture';
+ t.after(()=>{if(oldKey===undefined)delete process.env.GOOGLE_API_KEY;else process.env.GOOGLE_API_KEY=oldKey;});
+ t.mock.method(accountingDispatch,'createAccountingFetch',(provider:Parameters<typeof createAccountingFetch>[0])=>actualAccountingFetch(provider,async()=>{
+  sends++;return Response.json({responseId:'saved-blocked-observation',modelVersion:'gemini-2.5-flash',promptFeedback:{blockReason:'OTHER'},usageMetadata:{promptTokenCount:10}});
+ },f.factory));
+ const image={fileId:'file',fileName:'photo.png',mimeType:'image/png',preview:'Stored photo metadata',imageDataUrl:'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/f9sAAAAASUVORK5CYII='};
+ await assert.rejects(runWithStandaloneAccounting(context,()=>describeAttachmentEvidence(image)),{code:'standalone_outcome_unknown'});
+ const held=f.attempts[0];const preserved=JSON.stringify(held);
+ f.service.uncertainExposureAccepted=async()=>true;
+ let remaining=false;
+ const result=await runWithStandaloneAccounting({...context,resumed:true},async()=>{
+  const summary=await describeAttachmentEvidence(image);remaining=true;return summary;
+ });
+ assert.equal(result.summaryModel,'source-excerpt');assert.equal(result.summaryCoverage,'metadata');assert.equal(remaining,true);
+ assert.equal(sends,1);assert.equal(JSON.stringify(held),preserved,'blocked response stays uncertain with identical exposure and evidence');
+ assert.equal(f.events.filter(event=>event==='settle').length,0);
 });
