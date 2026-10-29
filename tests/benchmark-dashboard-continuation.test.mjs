@@ -25,3 +25,14 @@ test('continuation status is owner-only and stale or expired DB authority cannot
  const h=harness('owner',true);assert.equal((await h.post()).status,409);assert.equal(h.calls.length,1);
 });
 
+
+test('displayed append-only renewal uses the same owner and exact plan-hash gate',async()=>{
+ const h=harness();
+ const body={...h.body,authorization:'full-continuation-displayed-plan-existing-budget-4hours'};
+ assert.equal((await h.post({...body,planHash:'invalid'})).status,400);
+ assert.equal((await h.post(body)).status,200);
+ assert.equal(h.calls.length,1);
+ assert.equal(h.calls[0].args.p_plan_hash,body.planHash);
+ assert.equal(h.calls[0].args.p_project,body.projectId);
+ assert.equal(h.calls[0].args.p_approve,true);
+});

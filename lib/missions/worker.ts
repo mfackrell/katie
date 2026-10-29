@@ -147,7 +147,7 @@ export async function executeClaim(claim:Claim,model=missionModel){
  }
  // After a platform validation fix, reuse a now-valid saved draft rather than
  // spend another inference rewriting it. Independent review still runs normally.
- if(finalWork&&mission.project_kind==='specification'&&(mission.project_evidence as {projectProfile?:string}|null)?.projectProfile==='game'&&typeof job.result?.rejectedSpecification==='string'){
+ if(job.role==='compose'&&mission.project_kind==='specification'&&(mission.project_evidence as {projectProfile?:string}|null)?.projectProfile==='game'&&typeof job.result?.rejectedSpecification==='string'){
   let recovered;try{recovered=specificationV2?validateGameSpecificationResponse(job.result.rejectedSpecification):validateProjectPlan(parseJSON(job.result.rejectedSpecification));}catch{/* Still invalid: use the bounded model repair below. */}
   if(recovered?.game){await commit({text:JSON.stringify(recovered),sources:[],calculations:[],recovery:{kind:'revalidated_saved_specification',previousFailure:job.result.specificationValidationFeedback}});return;}
  }
@@ -282,7 +282,7 @@ export async function executeClaim(claim:Claim,model=missionModel){
     fullSourceChecks:sourceGroups.length?job.result?.sourceChecks:undefined,
     priorFindings:sourceGroups.length?priorReviews.map(({checks,...rest})=>({...rest,priorCheckCount:Array.isArray(checks)?checks.length:0})):gameReview?priorReviews.map(({checks,...rest})=>({...rest,priorCheckCount:Array.isArray(checks)?checks.length:0,failedChecks:Array.isArray(checks)?checks.filter((c:Record<string,unknown>)=>c.passed!==true&&(rest.recovered||PROJECT_ACCEPTANCE_IDS.includes(String(c.id)))):[]})):priorReviews.map(({checks,...rest})=>({...rest,priorCheckCount:Array.isArray(checks)?checks.length:0,failedChecks:Array.isArray(checks)?checks.filter((c:Record<string,unknown>)=>c.passed!==true):[]}))};
   const reviewFrame=frame+'\n'+(projectReview?PROJECT_REVIEW_INSTRUCTION:REVIEW_INSTRUCTION)+(gameReview?
-    '\nGAME REVIEW REFERENCE SEMANTICS: contractRef and stepsRef are server-validated lossless views of duplicate contracts; inspect candidate.specification.finalContract for full steps. Evaluate this CURRENT candidate independently. The prior draft and charges remain saved.':'')+
+    '\nGAME REVIEW REPRESENTATION: The candidate is a server-validated lossless representation of the saved plan. In registered-game-v1, complete browser steps are in game.acceptance.scenarios; the server expands them verbatim into finalContract and the milestone contract. Other server views use contractRef and stepsRef only for canonically identical finalContract content; all unique contracts remain inline. Expanded contracts are equally valid when semantically identical. Composition serialization instructions are transport rules, not additional game requirements. Evaluate every substantive requirement and retained finding against this CURRENT candidate. Do not request edits solely to add or remove server-generated duplicate contracts or format markers. Do not dismiss missing, changed, or contradictory rules, steps, assertions, scope or contracts as formatting. The prior draft, findings and charges remain saved.':'')+
     '\nREVIEW TIMING: You are performing the current independent review. A prior blocked review or a draft-stage pending-review label is not evidence that this current review is missing; determine approval from the full candidate, actual sources and acceptance checks. Do not require your own successful verdict to exist before you can issue it. Never accept a false claim that earlier review passed.\nMEASURED LENGTH: The supplied measuredLength is computed by code from the entire candidate. Use it for length compliance; never estimate a conflicting count. Distinguish true acceptance failures from formatting preferences.';
   const reviewInput='Independent assessment:\n'+JSON.stringify(assessment)+
     '\nRequired acceptance IDs:\n'+JSON.stringify(projectReview?PROJECT_ACCEPTANCE_IDS:acceptanceIds(assessment))+
@@ -323,9 +323,9 @@ export async function executeClaim(claim:Claim,model=missionModel){
  }
  if(typeof job.payload.executiveSourceGroup==='number'&&result.text.length>2200)throw new MissionModelFailure('Source digest exceeds its 2,200 character contract',{sourceDigestContractFeedback:'Return the assigned evidence digest within 2,200 characters, retaining material source IDs, findings and contradictions.'});
  if(finalWork&&mission.project_kind==='specification'&&(mission.project_evidence as {projectProfile?:string}|null)?.projectProfile==='game'){
-  const rawResponse=result.text;let candidate=rawResponse,validation:string|null=null,validated:ReturnType<typeof validateProjectPlan>|undefined,patchFailed=false;
+  const rawResponse=result.text;let candidate=rawResponse,validation:string|null=null,validated:ReturnType<typeof validateProjectPlan>|undefined,patchFailed=false,appliedPatch:ReturnType<typeof applyMissionRevisionPatch>|undefined;
   try{
-   if(specificationPatchBase){try{candidate=applyMissionRevisionPatch(specificationPatchBase,specificationTextHash(specificationPatchBase),rawResponse).text;}catch(error){patchFailed=true;candidate=specificationPatchBase;throw error;}}
+   if(specificationPatchBase){try{appliedPatch=applyMissionRevisionPatch(specificationPatchBase,specificationTextHash(specificationPatchBase),rawResponse);candidate=appliedPatch.text;}catch(error){patchFailed=true;candidate=specificationPatchBase;throw error;}}
    validated=specificationV2?validateGameSpecificationResponse(candidate):validateProjectPlan(parseJSON(candidate));
    if(!validated.game)throw Error('Game specification requires source-grounded rules, a pure engine and registered acceptance');
   }catch(error){validation=error&&typeof error==='object'&&'message' in error&&typeof error.message==='string'?error.message.slice(0,2000):'Invalid JSON';}
@@ -336,6 +336,8 @@ export async function executeClaim(claim:Claim,model=missionModel){
   }
   if(validation)throw new MissionModelFailure('Invalid game specification: '+validation.slice(0,600),{specificationValidationFeedback:patchFailed?job.result?.specificationValidationFeedback:validation,...(patchFailed?{specificationPatchFeedback:validation}:{}),rejectedSpecification:candidate,specificationCharacters:candidate.length});
   result.text=JSON.stringify(validated);
+  result.specificationNormalization={candidateHash:specificationTextHash(candidate),expandedHash:specificationTextHash(result.text),operation:'canonical-validation-and-contract-expansion',independentReviewRequired:true};
+  if(appliedPatch)result.revisionPatch=appliedPatch.revisionPatch;
  }
  await commit(result);
 }

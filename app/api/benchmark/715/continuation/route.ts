@@ -21,7 +21,7 @@ export async function POST(request:NextRequest){
  try{
   if(!await authenticatedOwner(request)||request.headers.get('origin')!==config.productionUrl)return reply({error:'Approve from your authenticated Katie owner session.'},403);
   const body=await request.json();
-  if(body.approve!==true||body.authorization!=='full-continuation-existing-budget-270000tokens-4hours'||! /^[a-f0-9-]{36}$/.test(body.projectId??'')||! /^[a-f0-9]{64}$/.test(body.planHash??''))return reply({error:'Explicit approval of the displayed continuation plan is required.'},400);
+  if(body.approve!==true||!['full-continuation-existing-budget-270000tokens-4hours','full-continuation-displayed-plan-existing-budget-4hours'].includes(body.authorization)||! /^[a-f0-9-]{36}$/.test(body.projectId??'')||! /^[a-f0-9]{64}$/.test(body.planHash??''))return reply({error:'Explicit approval of the displayed continuation plan is required.'},400);
   const {data,error}=await getSupabaseAdminClient().rpc('benchmark_dashboard_continuation',{p_owner:process.env.KATIE_OWNER_AUTH_USER_ID,p_project:body.projectId,p_plan_hash:body.planHash,p_approve:true});
   if(error)return reply({error:'The checkpoint, plan, deadline, or remaining allowance changed. Refresh and review the saved continuation plan.'},409);
   return reply({continuation:data});

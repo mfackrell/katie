@@ -1,6 +1,7 @@
 import {getSupabaseAdminClient} from '@/lib/data/supabase/admin';
 import {canonical,digest,gameSpecificationView,validateProjectPlan} from './contract';
 import {parseJSON} from '@/lib/missions/types';
+import {COMPACT_GAME_FORMAT,compactValidatedGameSpecification} from './game-specification-transport';
 
 // Hard stage ceilings, not permission to spend or predicted actual usage.
 // Native token counting and the existing fenced reservations remain authoritative.
@@ -72,6 +73,7 @@ export async function loadSpecificationRecovery(projectId:string,runs:Array<{kin
  * lossless view; the complete expanded artifact stays stored and hashed. */
 export function specificationCandidateEvidence(result:Record<string,unknown>){
  const plan=validateProjectPlan(parseJSON(String(result.text)));
- return {specification:plan.game?gameSpecificationView(plan):plan,fullSpecificationHash:digest(plan),sources:result.sources,calculations:result.calculations,
-  referenceNote:'contractRef and stepsRef resolve losslessly to finalContract. Every original rule, model state, browser step and unique milestone contract is retained; return the full expanded specification.'};
+ const compact=plan.game?parseJSON(compactValidatedGameSpecification(JSON.stringify(plan))):null;
+ return {specification:compact&&typeof compact==='object'&&'specificationFormat' in compact&&compact.specificationFormat===COMPACT_GAME_FORMAT?compact:plan.game?gameSpecificationView(plan):plan,fullSpecificationHash:digest(plan),sources:result.sources,calculations:result.calculations,
+  referenceNote:'Server-validated lossless representation of the complete saved specification. Compact registered-game-v1 expands browser scenarios verbatim into the final and milestone contracts. Other plans retain every unique contract; contractRef/stepsRef point to canonically identical finalContract content. Serialization instructions apply to composition transport, not gameplay requirements. Independently check every original requirement and prior finding against this current candidate; neither normalization nor structural validation establishes semantic approval.'};
 }
