@@ -13,7 +13,8 @@ import bundledChromium from '@sparticuz/chromium';
 // the owner-session module are test doubles; no real session or paid call exists.
 test('standalone browser: explicit settings, scopes, exact approval resume, reduction review, cancellation and reload', { timeout: 170000 }, async () => {
   const root = resolve('.'), project = await mkdtemp(join(tmpdir(), 'standalone-next-'));
-  const screenshots = await mkdtemp(join(tmpdir(), 'standalone-browser-evidence-'));
+  const screenshots = process.env.CI ? join(root, 'test-artifacts/standalone-rail') : await mkdtemp(join(tmpdir(), 'standalone-browser-evidence-'));
+  await mkdir(screenshots, { recursive: true });
   const socket = createServer(); socket.listen(0, '127.0.0.1'); await once(socket, 'listening');
   const port = socket.address().port; await new Promise(done => socket.close(done));
   const origin = `http://127.0.0.1:${port}`;
@@ -107,7 +108,33 @@ test('standalone browser: explicit settings, scopes, exact approval resume, redu
     });
     await page.goto(`${origin}/conversations/${chatId}`, { waitUntil: 'domcontentloaded', timeout: 65000 });
     const usage = page.getByRole('region', { name: 'Standalone daily usage' });
-    await usage.getByRole('button', { name: 'Set budget settings' }).click();
+    const rail = page.getByRole('complementary', { name: 'Katie status rail' });
+    await rail.waitFor();
+    const assertDesktopLayout = async () => {
+      const railBox = await rail.boundingBox();
+      const chatBox = await page.locator('main').last().boundingBox();
+      const composerBox = await page.locator('main textarea').last().boundingBox();
+      const up = await page.getByRole('button', { name: 'Scroll to top' }).boundingBox();
+      const down = await page.getByRole('button', { name: 'Scroll to bottom' }).boundingBox();
+      assert.ok(railBox && railBox.width >= 300 && railBox.width <= 390, 'rail must be 320-380px approximately');
+      assert.ok(chatBox && chatBox.width > railBox.width && chatBox.height > 600, 'chat must retain dominant viewport');
+      assert.ok(composerBox && composerBox.y >= 0 && composerBox.y + composerBox.height <= 1100, 'composer remains onscreen');
+      assert.ok(up && down && up.y >= 0 && down.y + down.height <= 1100, 'chat navigation is visible');
+      const overflow = await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1);
+      assert.equal(overflow, false, 'no horizontal page overflow');
+    };
+    await assertDesktopLayout();
+    await page.screenshot({ path: join(screenshots, 'status-rail-open-desktop.png'), fullPage: false });
+    await rail.getByRole('button', { name: 'Hide', exact: true }).click();
+    await rail.waitFor({ state: 'detached' });
+    assert.ok((await page.locator('main').last().boundingBox()).width > 900, 'collapsed rail expands chat');
+    await page.screenshot({ path: join(screenshots, 'status-rail-collapsed-desktop.png'), fullPage: false });
+    await page.getByRole('button', { name: 'Status / Usage', exact: true }).click();
+    await rail.waitFor();
+    await assertDesktopLayout();
+
+
+    await usage.getByRole('button', { name: 'Budget & timezone' }).click();
     assert.equal(await usage.getByLabel('Timezone (IANA)').inputValue(), '');
     assert.equal(await usage.getByLabel('Per call approval threshold (USD)').inputValue(), '');
     assert.equal(await usage.getByLabel('Per request approval threshold (USD)').inputValue(), '');
@@ -116,25 +143,28 @@ test('standalone browser: explicit settings, scopes, exact approval resume, redu
     await usage.getByLabel('Per call approval threshold (USD)').fill('0.01');
     await usage.getByLabel('Per request approval threshold (USD)').fill('0.05');
     await usage.getByRole('button', { name: 'Save settings' }).click();
-    await usage.getByText('Today $0.25', { exact: false }).waitFor();
+    await usage.getByText('$0.25', { exact: true }).first().waitFor();
+    await page.screenshot({ path: join(screenshots, 'status-rail-multiple-approvals-desktop.png'), fullPage: false });
+    await assertDesktopLayout();
+    await usage.getByText('Models, activity & earlier exposure').click();
     await usage.getByText('Earlier unresolved exposure', { exact: false }).waitFor();
     assert.equal(configurations[0].perCallLimitMicrousd, '10000'); assert.equal(configurations[0].requestLimitMicrousd, '50000');
     assert.match(await usage.innerText(), /Out 45 \+ unknown \(1\)/);
     assert.match(await usage.innerText(), /Earlier unresolved exposure.*uncertain \$0.04/);
-    await usage.getByRole('button', { name: 'Review', exact: true }).click();
+    // All approvals remain visible in the rail.
     assert.match(await usage.innerText(), /Purpose: Choose a reply model/);
     assert.match(await usage.innerText(), /resolved model: not yet known/);
     assert.match(await usage.innerText(), /estimator saved-estimator-v1/);
-    await usage.getByRole('button', { name: 'Usage details' }).click();
+    // Usage details are directly accessible in the rail.
     await usage.getByLabel('Scope').selectOption('all');
-    await usage.getByText('Today $0.75', { exact: false }).waitFor();
+    await usage.getByText('$0.75', { exact: true }).first().waitFor();
     assert.ok(scopes.includes('this-agent') && scopes.includes('all'));
     await usage.getByLabel('Scope').selectOption('this-agent');
-    await usage.getByText('Today $0.25', { exact: false }).waitFor();
+    await usage.getByText('$0.25', { exact: true }).first().waitFor();
     await usage.getByText('Models & activity, including hidden helpers', { exact: false }).click();
     assert.match(await usage.getByRole('table').innerText(), /hidden_router/);
-    await usage.getByRole('button', { name: 'Close details' }).click();
-    await usage.getByRole('button', { name: 'Review', exact: true }).click();
+    // Usage remains available in the rail.
+    // All approvals remain visible in the rail.
     const card = id => usage.locator('div.rounded.border').filter({ hasText: `Exact attempt ${id} ·` });
     const resumedResponse = page.waitForResponse(response => response.url().endsWith('/api/chat'));
     await card('attempt-approve').getByRole('button', { name: 'Approve once' }).click();
@@ -144,6 +174,7 @@ test('standalone browser: explicit settings, scopes, exact approval resume, redu
     assert.deepEqual(resumes[0], { body: { actorId, chatId, standaloneResume: true }, requestId: 'original-approve' });
     assert.equal(resumes[0].body.message, undefined, 'approval resumes durable original input instead of creating a generic message');
     await usage.getByRole('alert').filter({ hasText: 'Supporting work paused: per_request_threshold' }).waitFor();
+    await page.screenshot({ path: join(screenshots, 'status-rail-resume-paused-desktop.png'), fullPage: false });
     assert.match(await usage.innerText(), /Supporting work paused: per_request_threshold/);
     assert.doesNotMatch(await usage.innerText(), /Resume requested|Approved saved work completed/);
     const active = usage.getByLabel('Active attempts in this conversation');
@@ -175,7 +206,7 @@ test('standalone browser: explicit settings, scopes, exact approval resume, redu
     running = [{ ...pending('reconnect'), requestId: 'original-approved-reconnect', state: 'reserved' }];
     const approvalCountBeforeReconnect = decisions.filter(body => body.action === 'approve_once').length;
     await page.reload({ waitUntil: 'domcontentloaded' });
-    await usage.getByRole('button', { name: 'Review', exact: true }).click();
+    // All approvals remain visible in the rail.
     await usage.getByText('Reduction tradeoffs:', { exact: false }).waitFor();
     assert.equal(resumes.length, 1, 'reload cannot replay approval or start a model');
     await active.getByRole('button', { name: 'Resume saved work' }).waitFor();
@@ -198,9 +229,9 @@ test('standalone browser: explicit settings, scopes, exact approval resume, redu
     await page.waitForFunction(() => !Array.from(document.querySelectorAll('button')).some(button => button.textContent === 'Resume saved work'));
     running = running.map(attempt => ({ ...attempt, state: 'uncertain', reservedMicrousd: '3584', exposureAccepted: false }));
     configuration = { ...configuration, budget_revision: 2 }; uncertainTotal = '3584';
-    await usage.getByRole('button', { name: 'Usage details' }).click();
+    // Usage details are directly accessible in the rail.
     await usage.getByRole('button', { name: 'Refresh', exact: true }).click();
-    await usage.getByRole('button', { name: 'Review', exact: true }).click();
+    // All approvals remain visible in the rail.
     await active.getByText('openai/gpt-4o · hidden_router · uncertain', { exact: false }).waitFor();
     assert.equal(await active.getByRole('button', { name: 'Resume saved work' }).count(), 0, 'uncertain paid work cannot be replayed');
     assert.equal(await active.getByRole('button', { name: 'Cancel remaining work' }).count(), 1);
@@ -220,7 +251,7 @@ test('standalone browser: explicit settings, scopes, exact approval resume, redu
     assert.equal(decisions.filter(body => body.action === 'accept_exposure').at(-1).budgetRevision, 2);
     assert.equal(resumes.length, 3);
     await page.reload({ waitUntil: 'domcontentloaded' });
-    await usage.getByRole('button', { name: 'Review', exact: true }).click();
+    // All approvals remain visible in the rail.
     await active.getByText('Uncertain exposure accepted · $0.003584 retained', { exact: true }).waitFor();
     assert.equal(resumes.length, 3, 'reconnect must not automatically resume uncertain work');
     resumeMode = 'completed';
@@ -228,16 +259,16 @@ test('standalone browser: explicit settings, scopes, exact approval resume, redu
     await usage.getByRole('status').filter({ hasText: 'Uncertain exposure accepted · $0.003584 retained · remaining work completed' }).waitFor();
     assert.equal(running[0].state, 'uncertain'); assert.equal(running[0].reservedMicrousd, '3584');
     assert.equal(resumes.length, 4);
-    await usage.getByRole('button', { name: 'Usage details' }).click();
+    // Usage details are directly accessible in the rail.
     assert.match(await usage.innerText(), /Uncertain \$0.003584/);
-    await usage.getByRole('button', { name: 'Close details', exact: true }).click();
+    // Usage remains available in the rail.
     running = [{ ...pending('failed'), state: 'reserved' }]; resumeMode = 'failed';
-    await usage.getByRole('button', { name: 'Usage details' }).click();
+    // Usage details are directly accessible in the rail.
     await usage.getByRole('button', { name: 'Refresh', exact: true }).click();
-    await usage.getByRole('button', { name: 'Review', exact: true }).click();
+    // All approvals remain visible in the rail.
     await active.getByRole('button', { name: 'Resume saved work' }).click();
     await usage.getByRole('alert').filter({ hasText: 'Saved attempt failed: exact fixture cause' }).waitFor();
-    await usage.getByRole('button', { name: 'Usage details' }).click();
+    // Usage details are directly accessible in the rail.
     await usage.getByRole('button', { name: 'Refresh', exact: true }).click();
     assert.match(await usage.innerText(), /Saved attempt failed: exact fixture cause/);
     assert.doesNotMatch(await usage.innerText(), /Resume requested|Saved work completed/);
