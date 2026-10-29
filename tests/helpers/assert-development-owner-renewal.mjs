@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
+import {assertDevelopmentPregrantRecovery} from './assert-development-pregrant-recovery.mjs';
 export async function assertDevelopmentOwnerRenewal(db,rival,{project,account,trial,owner,actor,continuation,protocol}){
  await db.query('reset role');
  for(const table of ['benchmark_development_renewals','benchmark_development_renewal_dispatches','benchmark_development_renewal_grants']){
@@ -98,7 +99,8 @@ export async function assertDevelopmentOwnerRenewal(db,rival,{project,account,tr
  await db.query('alter table benchmark_full_continuations enable trigger benchmark_continuation_immutable');await db.query('set local role service_role');
  assert.equal((await db.query('select benchmark_effective_mission_deadline($1)>now() ok',[mission])).rows[0].ok,false);
  await assert.rejects(db.query(issue,[r.id,'a'.repeat(64),r.approval_id,task,release]),/unavailable/);await db.query('rollback');
- const grants=await Promise.allSettled([db.query(issue,[r.id,'a'.repeat(64),r.approval_id,task,release]),rival.query(issue,[r.id,'b'.repeat(64),r.approval_id,task,release])]);
+ const recovery=await assertDevelopmentPregrantRecovery(db,rival,{renewal:r,project,mission,task,release,receipt,continuation:c.id});
+ const grants=await Promise.allSettled([db.query(recovery.issue,[recovery.id,'a'.repeat(64),r.approval_id,task,recovery.release]),rival.query(recovery.issue,[recovery.id,'b'.repeat(64),r.approval_id,task,recovery.release])]);
  assert.equal(grants.filter(x=>x.status==='fulfilled').length,1);
  const g=grants.find(x=>x.status==='fulfilled').value.rows[0].g;
  const grant=(await db.query('select * from benchmark_execution_grants where id=$1',[g.grantId])).rows[0];
@@ -114,3 +116,4 @@ export async function assertDevelopmentOwnerRenewal(db,rival,{project,account,tr
  await assert.rejects(db.query(issue,[r.id,'c'.repeat(64),r.approval_id,task,release]),/permission denied/);
  await db.query('reset role');await db.query('set role service_role');
 }
+
