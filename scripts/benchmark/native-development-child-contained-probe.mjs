@@ -19,6 +19,7 @@ if(process.env.KATIE_NATIVE_PROBE_BASELINE){
  const ref=process.env.KATIE_NATIVE_PROBE_BASELINE;
  assert.match(ref,/^[a-f0-9]{40}$/);
  execFileSync('git',['clone','--no-hardlinks','--no-checkout',resolve('.'),work],{stdio:'pipe'});
+ execFileSync('git',['-C',work,'fetch',resolve('.'),ref],{stdio:'pipe'});
  execFileSync('git',['-C',work,'checkout','--detach',ref],{stdio:'pipe'});
  mkdirSync(join(work,'node_modules'),{recursive:true});
 }else{
