@@ -23,7 +23,7 @@ export async function assertDevelopmentOwnerRenewal(db,rival,{project,account,tr
  for(const tokens of [7206,7213]){
   const call=randomUUID();
   await db.query("insert into mission_calls(id,job_id,lease,model,reserved_tokens,actual_tokens,status) values($1,$2,$3,'gpt-5.3-codex',43104,$4,'completed')",[call,task,randomUUID(),tokens]);
-  await db.query("insert into benchmark_budget_calls(account_id,request_key,model,reserved_tokens,actual_tokens,state,legacy_mission_call_id,continuation_id) values($1,$2,'gpt-5.3-codex',43104,$3,'settled',$2::uuid,$4)",[account,call,tokens,continuation]);
+  await db.query("insert into benchmark_budget_calls(account_id,request_key,model,reserved_tokens,actual_tokens,state,legacy_mission_call_id,continuation_id) values($1,$2::uuid::text,'gpt-5.3-codex',43104,$3,'settled',$2::uuid,$4)",[account,call,tokens,continuation]);
  }
  await db.query('alter table benchmark_budget_calls enable trigger user');
  await db.query('update benchmark_budget_accounts set spent_tokens=spent_tokens+14419 where id=$1',[account]);
