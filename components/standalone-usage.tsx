@@ -51,6 +51,7 @@ export function StandaloneUsage({ actorId, chatId, onResumeAttempt, rail = false
   const refreshSequence = useRef(0);
   const snapshotScope = useRef('');
   const automaticResumes = useRef(new Set<string>());
+  const automaticRetryAfter = useRef(new Map<string,number>());
   const invalidateRefresh = useCallback(() => { refreshSequence.current++; }, []);
   const [scope, setScope] = useState<'this-agent' | 'all'>('this-agent');
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null), [error, setError] = useState(''), [refreshError, setRefreshError] = useState(''), [notice, setNotice] = useState(''), [busy, setBusy] = useState('');
@@ -103,14 +104,20 @@ export function StandaloneUsage({ actorId, chatId, onResumeAttempt, rail = false
     if (busy || snapshotScope.current !== `${actorId}:${chatId}`) return;
     const candidate = snapshot?.active?.find(attempt => attempt.uncertainAutoAuthorized && attempt.parentStatus === 'paused' && !attempt.continuationBlockedReason &&
       !automaticResumes.current.has(`${actorId}:${chatId}:${attempt.requestId}`) &&
+      (automaticRetryAfter.current.get(`${actorId}:${chatId}:${attempt.requestId}`) ?? 0) <= Date.now() &&
       !snapshot.pending.some(other => other.requestId === attempt.requestId) &&
       !snapshot.active?.some(other => other.requestId === attempt.requestId && other.state === 'uncertain' && !other.exposureAccepted));
     if (!candidate) return;
     automaticResumes.current.add(`${actorId}:${chatId}:${candidate.requestId}`);
-    setBusy(candidate.id);
+    setBusy(candidate.id); setNotice(''); setError('');
     void requestSavedResume({attemptId:candidate.id,requestId:candidate.requestId})
       .then(() => { setNotice('Automatically continued within owner spending limits.'); })
-      .catch(failure => setError(failure instanceof Error ? failure.message : 'Automatic continuation encountered a technical blocker.'))
+      .catch(failure => {
+        const key = `${actorId}:${chatId}:${candidate.requestId}`;
+        automaticResumes.current.delete(key);
+        automaticRetryAfter.current.set(key,Date.now()+5000);
+        setError(failure instanceof Error ? failure.message : 'Automatic continuation encountered a technical blocker.');
+      })
       .finally(() => { setBusy(''); void refresh(); });
   }, [snapshot, busy, actorId, chatId, requestSavedResume, refresh]);
   async function resumeReserved(attempt: ActiveAttempt) {
