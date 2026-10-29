@@ -10,7 +10,7 @@ export async function assertDevelopmentOwnerRenewal(db,rival,{project,account,tr
  const task=old.task_id,mission=(await db.query('select mission_id from mission_assignments where id=$1',[task])).rows[0].mission_id;
  const receipt={version:1,repository:'mfackrell/katie',run_id:125,issue_number:829,outcome:'BLOCKED',pr_url:null,tested_head_sha:null,reviewed_head_sha:null,checks:{build:'failure',test:'',review:'',repair:'skipped',retest:'',final_review:''}};
  await db.query("update agent_missions set status='blocked' where project_id=$1",[project]);
- await db.query("update work_projects set status='blocked',deadline=now()+interval '8 hours',lease=null,lease_until=null where id=$1",[project]);
+ await db.query("update work_projects set status='blocked',repository_full_name=(select repository_full_name from repo_sync_runs where id=work_projects.repository_id),deadline=now()+interval '8 hours',lease=null,lease_until=null where id=$1",[project]);
  await db.query("update agent_missions set token_allowance=120000,calls=2,actual_tokens=14419,reserved_tokens=14419,deadline=now()-interval '1 hour' where id=$1",[mission]);
  await db.query("update mission_assignments set status='failed' where id=$1",[task]);
  await db.query("update agent_tasks set status='blocked',external=jsonb_set(external,'{receipt}',$2::jsonb) where id=$1",[task,receipt]);
