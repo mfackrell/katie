@@ -23,9 +23,19 @@ export async function executeSharedNativePhase({Codex,arm,phase,gateway,bearer,m
  for await(const event of events){
   await onEvent(event);
   if(event.type==='item.completed'&&event.item?.type==='agent_message'&&typeof event.item.text==='string')message=event.item.text;
-  if(event.type==='turn.failed')throw Error('NATIVE_TURN_FAILED');
+  if(event.type==='turn.failed')throw Error('NATIVE_TURN_FAILED: '+nativeTurnFailureDetail(event.error,bearer));
   if(event.type==='turn.completed')completed=true;
  }
  if(!completed)throw Error('NATIVE_TURN_INCOMPLETE');
  return {completed,reviewMessage:message,threadId:thread.id??null,arm,phase};
+}
+
+// Retain SDK diagnostics without printing the gateway bearer or auth fields.
+export function nativeTurnFailureDetail(error,bearer){
+ let detail=typeof error?.message==='string'?error.message:typeof error?.code==='string'?error.code:'unknown SDK failure';
+ if(typeof bearer==='string'&&bearer)detail=detail.split(bearer).join('[REDACTED]');
+ return detail.replace(/Bearer\s+[^\s"',;]+/gi,'Bearer [REDACTED]')
+  .replace(/sk-[A-Za-z0-9_-]+/g,'[REDACTED]')
+  .replace(/((?:api[_-]?key|authorization|access[_-]?token)\s*[=:]\s*)[^\s,;]+/gi,'$1[REDACTED]')
+  .replace(/[\x00-\x1f\x7f]/g,' ').slice(0,1200);
 }
