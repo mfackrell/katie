@@ -36,6 +36,9 @@ export function reusableImageObservation(reference:FileReference,saved:Conversat
   const hash=imageObservationHash(reference.imageDataUrl);
   const prior=saved.find(x=>x.mimeType.startsWith('image/')&&x.observationSourceHash===hash&&x.observationVersion===STILL_IMAGE_OBSERVATION_VERSION&&x.observedSummary?.trim()&&x.summaryCoverage!=='metadata');
   if(!prior || insufficient(prior.observedSummary!,'full'))return;
+  // An explicit request to inspect an unobserved aspect again is a fresh,
+  // bounded Qwen question; it does not by itself require premium raw vision.
+  if(prior.observationQuestion!==question&&/\b(?:reinspect|reopen|inspect.{0,50}again|look.{0,50}(?:again|closer)|(?:not|never) observed|(?:does not|doesn't|did not|didn't) cover)\b/i.test(question))return;
   if(prior.summaryCoverage==='sampled'&&prior.observationQuestion!==question)return;
   if(prior.observationSetHash&&setHash&&prior.observationSetHash!==setHash&&requiresCrossImageInspection(question,2))return;
   if(requiresAdditionalImageDetail(question)&&prior.observationQuestion!==question)return;

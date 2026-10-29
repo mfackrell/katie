@@ -129,3 +129,12 @@ test('real escalation selector excludes unpriceable image models before preparat
   assert.ok(prepared.includes('gpt-4o')&&prepared.includes('gpt-4o-mini'));
   assert.deepEqual(sent,['gpt-4o-mini']);assert.equal(result.model,'gpt-4o-mini');
 });
+
+test('owner can request additional ordinary inspection of an aspect absent from the saved observation without forcing premium',async()=>{
+ const ref=image();
+ const first=(await observeStandaloneStillImages([ref],{question:'Describe the profile',qwen:async()=>({text:'The profile mentions gardening and a beach.',model,coverage:'full'})})).get(ref.fileId)!;
+ const saved:ConversationAttachment={...first,id:'stored-id',fileName:ref.fileName,mimeType:ref.mimeType};
+ let reinspections=0;
+ const result=await observeStandaloneStillImages([ref],{saved:[saved],question:'Inspect the bottom half again; what color are the shoes? The saved observation does not cover this.',qwen:async()=>{reinspections++;return {text:'The shoes are blue.',model,coverage:'full'};},escalate:async()=>{assert.fail('Ordinary requested reinspection does not itself require premium');}});
+ assert.equal(reinspections,1);assert.equal(result.get(ref.fileId)!.observedSummary,'The shoes are blue.');
+});
