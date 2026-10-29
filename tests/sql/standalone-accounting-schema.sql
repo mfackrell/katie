@@ -12,3 +12,14 @@ grant usage on schema public to service_role,anon,authenticated;
 
 create table short_term_memory(actor_id uuid,chat_id uuid,content jsonb,primary key(actor_id,chat_id));
 create table intermediate_memory(actor_id uuid,chat_id uuid,content jsonb,primary key(actor_id,chat_id));
+
+-- Existing independently provisioned access records (20261023130000).
+create unique index chats_id_actor_id_fixture on chats(id,actor_id);
+create table public.self_tool_owner_grants(
+ owner_id uuid not null,actor_id uuid not null references actors(id) on delete cascade,
+ chat_id uuid not null references chats(id) on delete cascade,created_at timestamptz not null default now(),
+ primary key(owner_id,actor_id,chat_id),foreign key(chat_id,actor_id) references chats(id,actor_id) on delete cascade
+);
+alter table self_tool_owner_grants enable row level security;
+revoke all on self_tool_owner_grants from public,anon,authenticated;
+grant select,insert,delete on self_tool_owner_grants to service_role;

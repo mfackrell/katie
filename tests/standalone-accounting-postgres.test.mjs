@@ -305,18 +305,63 @@ test('standalone ledger: real PostgreSQL atomic admission, receipts, ownership a
   const priorHistory=await rpc(two,'snapshot',{p_owner:owner});
   await admin.query(readFileSync(new URL('../supabase/migrations/20261029170000_standalone_pricing_and_enrollment.sql',import.meta.url),'utf8'));
   assert.deepEqual(await rpc(two,'snapshot',{p_owner:owner}),priorHistory);
+  await admin.query(readFileSync(new URL('../supabase/migrations/20261029190000_standalone_actor_authority.sql',import.meta.url),'utf8'));
+  // Existing verified access is provisioned independently, never by creation.
+  await admin.query('insert into self_tool_owner_grants(owner_id,actor_id,chat_id) values($1,$2,$3)',[owner,actor,chat]);
+  const grantCount=async()=>Number((await admin.query('select count(*) from self_tool_owner_grants')).rows[0].count);
+  const grantsBefore=await grantCount();
+  const foreignFresh=randomUUID();
+  await assert.rejects(rpc(two,'create_conversation',{p_owner:other,p_actor:actor,p_chat:foreignFresh,p_title:'Unauthorized fresh conversation'}),/ACTOR_ACCESS_DENIED/);
+  assert.equal((await admin.query('select count(*) from chats where id=$1',[foreignFresh])).rows[0].count,'0');
+  assert.equal((await admin.query('select count(*) from standalone_owner_bindings where chat_id=$1',[foreignFresh])).rows[0].count,'0');
+  // A pre-existing conversation binding is not independently verified actor access.
+  const foreignBound=randomUUID();await admin.query("insert into chats(id,actor_id,title) values($1,$2,'old binding fixture')",[foreignBound,actor]);
+  await bind(other,actor,foreignBound);
+  await assert.rejects(rpc(two,'create_conversation',{p_owner:other,p_actor:actor,p_chat:foreignFresh,p_title:'Still unauthorized'}),/ACTOR_ACCESS_DENIED/);
+  // Browser role cannot manufacture grants or invoke the privileged enrollment RPC.
+  await two.query('set role authenticated');
+  await assert.rejects(two.query('insert into self_tool_owner_grants(owner_id,actor_id,chat_id) values($1,$2,$3)',[other,actor,chat]),/permission denied/);
+  await assert.rejects(rpc(two,'create_conversation',{p_owner:owner,p_actor:actor,p_chat:foreignFresh,p_title:'Forged owner UUID'}),/permission denied/);
+  await two.query('set role service_role');
   const newChat=randomUUID();
   const create={p_owner:owner,p_actor:actor,p_chat:newChat,p_title:'Owner-created conversation'};
   const created=await rpc(one,'create_conversation',create);
   assert.equal(created.id,newChat);assert.equal(await rpc(two,'authorize_scope',{p_owner:owner,p_actor:actor,p_chat:newChat}),true);
   assert.deepEqual(await rpc(two,'create_conversation',create),created,'idempotent creation preserves existing conversation');
-  await assert.rejects(rpc(two,'create_conversation',{...create,p_owner:other}),/SCOPE_DENIED/);
+  await assert.rejects(rpc(two,'create_conversation',{...create,p_owner:other}),/ACTOR_ACCESS_DENIED/);
   const orphan=randomUUID();await admin.query("insert into chats(id,actor_id,title) values($1,$2,'unbound legacy')",[orphan,actor]);
   await assert.rejects(rpc(two,'create_conversation',{...create,p_chat:orphan}),/SCOPE_DENIED/);
   await assert.rejects(rpc(two,'create_conversation',{...create,p_actor:executive,p_chat:randomUUID()}),/SCOPE_INVALID/);
   const mem=(await admin.query('select content from short_term_memory where chat_id=$1',[newChat])).rows[0];assert.deepEqual(mem.content,{});
   await admin.query("update short_term_memory set content='{"+String.fromCharCode(34)+"saved"+String.fromCharCode(34)+":true}' where chat_id=$1",[newChat]);
   await rpc(one,'create_conversation',create);assert.deepEqual((await admin.query('select content from short_term_memory where chat_id=$1',[newChat])).rows[0].content,{saved:true});
+  await admin.query('update intermediate_memory set content=$1 where chat_id=$2',[{retained:'ITM'},newChat]);
+  const bindingBefore=(await admin.query('select * from standalone_owner_bindings where chat_id=$1',[newChat])).rows;
+  await rpc(two,'create_conversation',create);
+  assert.deepEqual((await admin.query('select * from standalone_owner_bindings where chat_id=$1',[newChat])).rows,bindingBefore,'retry preserves exact verified-owner binding');
+  assert.deepEqual((await admin.query('select content from intermediate_memory where chat_id=$1',[newChat])).rows[0].content,{retained:'ITM'});
+  assert.deepEqual((await admin.query('select content from short_term_memory where chat_id=$1',[newChat])).rows[0].content,{saved:true});
+  assert.equal(await grantCount(),grantsBefore,'creation and retries never manufacture actor authority');
+  // Exercise the actual normal POST with real SQL and Auth's verified B identity.
+  // Only the Auth HTTP response is mocked; the authority decision is not mocked.
+  const previousFetch=globalThis.fetch,previousUrl=process.env.NEXT_PUBLIC_SUPABASE_URL,previousKey=process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+  try{
+   process.env.NEXT_PUBLIC_SUPABASE_URL='https://isolated-auth.example.test';process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY='fixture-public';
+   globalThis.fetch=async()=>new Response(JSON.stringify({id:other}));
+   const route=modules({
+    '@/lib/agents/store':{managedActor:async()=>false},
+    '@/lib/data/persistence-store':{getActorById:async(id)=>{const a=(await admin.query('select * from actors where id=$1',[id])).rows[0];return a?{id:a.id,name:a.name,actorKind:a.actor_kind}:null;},saveChat:async()=>assert.fail('Standalone creation cannot bypass authority RPC')},
+    '@/lib/data/supabase/admin':{getSupabaseAdminClient:()=>({rpc:async(name,args)=>{try{return {data:await rpc(two,name.replace(/^standalone_/,''),args),error:null};}catch(error){return {data:null,error:{message:error.message}};}}})},
+   })('@/app/api/chats/route');
+   const denied=await route.POST(new Request('http://localhost/api/chats',{method:'POST',headers:{authorization:'Bearer verified-user-B','content-type':'application/json'},body:JSON.stringify({id:foreignFresh,actorId:actor,title:'Browser supplies A IDs',ownerId:owner})}));
+   assert.equal(denied.status,409);assert.equal((await admin.query('select count(*) from chats where id=$1',[foreignFresh])).rows[0].count,'0');
+   assert.equal((await admin.query('select count(*) from standalone_owner_bindings where chat_id=$1',[foreignFresh])).rows[0].count,'0');
+  }finally{
+   globalThis.fetch=previousFetch;
+   if(previousUrl===undefined)delete process.env.NEXT_PUBLIC_SUPABASE_URL;else process.env.NEXT_PUBLIC_SUPABASE_URL=previousUrl;
+   if(previousKey===undefined)delete process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;else process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY=previousKey;
+  }
+  console.log('STANDALONE_PRIVATE_ACTOR_AUTHORITY_AND_BROWSER_ID_REJECTION_PASS');
   await admin.query('delete from chats where id=$1',[newChat]);
   await assert.rejects(rpc(two,'create_conversation',create),/SCOPE_REVOKED/);
   const version='standalone-catalog-v1-'+'a'.repeat(64),metadata={version,currency:'USD',rateUnit:'nanoUSD/token',models:[{fixture:true}]};

@@ -133,3 +133,23 @@ is the release gate; its exact counts/link are recorded in the PR handoff.
 The concrete production/configuration sequence and explicitly unsupported billing
 capabilities are in `standalone-cost-controls.md`. No merge, production SQL,
 deployment, owner settings, or paid provider experiments were performed.
+
+## Private actor authority correction
+
+The isolated PostgreSQL suite applies the additive actor-authority migration over
+an already-used ledger. With an independently provisioned access grant for A's
+actor, it proves B cannot create a **fresh** conversation or binding, even when B
+already has an old conversation binding under that actor. A can create normally;
+retries preserve the exact ownership row and both STM and ITM. Creation/retries
+leave the verified-grant count unchanged. The authenticated database role cannot
+manufacture a grant or directly invoke enrollment.
+
+The same isolated suite executes the actual `/api/chats` POST against real SQL:
+Auth verifies B, while the browser submits A's actor ID, a fresh chat ID and A's
+owner ID. The SQL access check rejects creation; no chat or binding is inserted.
+Only the Auth HTTP response is mocked; the authority check and transactions are
+real PostgreSQL. Pass marker:
+`STANDALONE_PRIVATE_ACTOR_AUTHORITY_AND_BROWSER_ID_REJECTION_PASS`.
+
+Accepted cost-based policy, automated pricing, Google normalization and accounting
+history behavior are unchanged. Final exact-SHA CI results are recorded in PR #822.
