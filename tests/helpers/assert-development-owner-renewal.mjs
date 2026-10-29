@@ -2,6 +2,10 @@ import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
 export async function assertDevelopmentOwnerRenewal(db,rival,{project,account,trial,owner,actor,continuation,protocol}){
  await db.query('reset role');
+ for(const table of ['benchmark_development_renewals','benchmark_development_renewal_dispatches','benchmark_development_renewal_grants']){
+  const acl=(await db.query("select has_table_privilege('service_role',$1,'SELECT') readable,has_table_privilege('service_role',$1,'INSERT') appendable,has_table_privilege('service_role',$1,'UPDATE,DELETE,TRUNCATE') mutable",[table])).rows[0];
+  assert.deepEqual(acl,{readable:true,appendable:true,mutable:false});
+ }
  const old=(await db.query('select * from benchmark_native_spending_approvals where project_id=$1 order by created_at desc limit 1',[project])).rows[0];
  const task=old.task_id,mission=(await db.query('select mission_id from mission_assignments where id=$1',[task])).rows[0].mission_id;
  const receipt={version:1,repository:'mfackrell/katie',run_id:125,issue_number:829,outcome:'BLOCKED',pr_url:null,tested_head_sha:null,reviewed_head_sha:null,checks:{build:'failure',test:'',review:'',repair:'skipped',retest:'',final_review:''}};
