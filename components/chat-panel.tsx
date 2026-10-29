@@ -1773,7 +1773,7 @@ export function ChatPanel({
         clearPendingChatRequest(chatId);
         // Video data has already been saved; preserve its compact reference
         // for the next send rather than uploading the file a second time.
-        if (uploadedReferencesForRetry) setFileReferences(uploadedReferencesForRetry);
+        if (uploadedReferencesForRetry) setFileReferences(uploadedReferencesForRetry.filter(reference => reference.attachmentKind !== "image"));
         setInput(content);
         setStatusMessage(httpCause);
         return;
