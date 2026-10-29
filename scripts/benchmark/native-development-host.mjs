@@ -24,7 +24,7 @@ if(!requestFile||!manifestFile||!childFile)denied('missing verified inputs');
 const signingKey=process.env.KATIE_NATIVE_HANDOFF_HMAC_KEY;
 const proof=readNativeHandoff(readFileSync(requestFile,'utf8'),signingKey);
 const manifest=JSON.parse(readFileSync(manifestFile,'utf8'));
-for(const key of ['taskId','trialId','approvalId','projectId','contractHash','benchmarkContractHash','baselineSha','expiresAt','continuationId','startupRecoveryId','developmentRenewalId'])
+for(const key of ['taskId','trialId','approvalId','projectId','contractHash','benchmarkContractHash','baselineSha','expiresAt','continuationId','startupRecoveryId','developmentRenewalId','pregrantRecoveryId'])
  if(manifest[key]!==proof[key])denied('handoff changed after signature verification');
 if(manifest.productionRuntime!==proof.productionRuntime)denied('runtime handoff changed after verification');
 if(process.env.GITHUB_REPOSITORY!=='mfackrell/katie')denied('repository identity mismatch');
@@ -130,9 +130,16 @@ if(proof.developmentRenewalId){
  const renewal=await readOne('benchmark_development_renewals','id',proof.developmentRenewalId);
  if(renewal.approval_id!==proof.approvalId||renewal.task_id!==proof.taskId||renewal.continuation_id!==proof.continuationId||task.external?.developmentRenewalId!==renewal.id)denied('development renewal identity mismatch');
 }
+if(proof.pregrantRecoveryId){
+ if(!productionRuntime||!proof.developmentRenewalId||proof.startupRecoveryId)denied('invalid pregrant recovery transport');
+ const recovery=await readOne('benchmark_development_pregrant_recoveries','id',proof.pregrantRecoveryId);
+ if(recovery.renewal_id!==proof.developmentRenewalId||recovery.release_sha!==process.env.GITHUB_SHA||task.external?.pregrantRecoveryId!==recovery.id)denied('pregrant recovery identity or release mismatch');
+}
 const grantToken=randomBytes(48).toString('base64url');
 if(proof.startupRecoveryId&&!productionRuntime)denied('startup recovery requires production runtime');
-const {data:grantResult,error:issueError}=proof.developmentRenewalId
+const {data:grantResult,error:issueError}=proof.pregrantRecoveryId
+ ?await db.rpc('benchmark_issue_development_pregrant_recovery_grant',{p_recovery:proof.pregrantRecoveryId,p_digest:tokenDigest(grantToken),p_approval:proof.approvalId,p_task:proof.taskId,p_release:process.env.GITHUB_SHA})
+ :proof.developmentRenewalId
  ?await db.rpc('benchmark_issue_development_renewal_grant',{p_renewal:proof.developmentRenewalId,p_digest:tokenDigest(grantToken),p_approval:proof.approvalId,p_task:proof.taskId,p_release:process.env.GITHUB_SHA})
  :proof.startupRecoveryId
  ?await db.rpc('benchmark_issue_startup_recovery_grant',{p_recovery:proof.startupRecoveryId,p_digest:tokenDigest(grantToken),p_approval:proof.approvalId,p_task:proof.taskId,p_release:process.env.GITHUB_SHA})
@@ -293,4 +300,5 @@ try{
  await new Promise(resolve=>server.close(resolve));
  rmSync(root,{recursive:true,force:true});
 }
+
 

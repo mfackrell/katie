@@ -4,7 +4,7 @@ const sha=/^[a-f0-9]{40}$/;
 const hash=/^[a-f0-9]{64}$/;
 export function encodeNativeHandoff(payload,key){
  if(!key||key.length<32)throw Error('NATIVE_HANDOFF_KEY_UNAVAILABLE');
- if(!payload||(payload.developmentRenewalId!==undefined&&!uuid.test(payload.developmentRenewalId))||(payload.startupRecoveryId!==undefined&&!uuid.test(payload.startupRecoveryId))||(payload.continuationId!==undefined&&!uuid.test(payload.continuationId))||!['taskId','trialId','approvalId','projectId'].every(k=>uuid.test(payload[k]??''))||
+ if(!payload||(payload.pregrantRecoveryId!==undefined&&(!uuid.test(payload.pregrantRecoveryId)||!payload.developmentRenewalId||payload.startupRecoveryId))||(payload.developmentRenewalId!==undefined&&!uuid.test(payload.developmentRenewalId))||(payload.startupRecoveryId!==undefined&&!uuid.test(payload.startupRecoveryId))||(payload.continuationId!==undefined&&!uuid.test(payload.continuationId))||!['taskId','trialId','approvalId','projectId'].every(k=>uuid.test(payload[k]??''))||
     !hash.test(payload.contractHash??'')||!hash.test(payload.benchmarkContractHash??'')||!sha.test(payload.baselineSha??'')||
     !Number.isSafeInteger(payload.expiresAt)||payload.expiresAt<=Date.now())
   throw Error('NATIVE_HANDOFF_INVALID');
@@ -12,6 +12,7 @@ export function encodeNativeHandoff(payload,key){
   approvalId:payload.approvalId,projectId:payload.projectId,
   contractHash:payload.contractHash,benchmarkContractHash:payload.benchmarkContractHash,
   baselineSha:payload.baselineSha,expiresAt:payload.expiresAt,
+  ...(payload.pregrantRecoveryId?{pregrantRecoveryId:payload.pregrantRecoveryId}:{}),
   ...(payload.developmentRenewalId?{developmentRenewalId:payload.developmentRenewalId}:{}),
   ...(payload.startupRecoveryId?{startupRecoveryId:payload.startupRecoveryId}:{}),
   ...(payload.continuationId?{continuationId:payload.continuationId}:{}),
@@ -31,12 +32,13 @@ export function readNativeHandoff(source,key,now=Date.now()){
   throw Error('NATIVE_HANDOFF_UNAUTHENTICATED');
  let p;try{p=JSON.parse(Buffer.from(content,'base64url').toString('utf8'))}
  catch{throw Error('NATIVE_HANDOFF_INVALID')}
- if(p.version!==1||(p.developmentRenewalId!==undefined&&!uuid.test(p.developmentRenewalId))||(p.startupRecoveryId!==undefined&&!uuid.test(p.startupRecoveryId))||(p.continuationId!==undefined&&!uuid.test(p.continuationId))||!['taskId','trialId','approvalId','projectId'].every(k=>uuid.test(p[k]??''))||
+ if(p.version!==1||(p.pregrantRecoveryId!==undefined&&(!uuid.test(p.pregrantRecoveryId)||!p.developmentRenewalId||p.startupRecoveryId))||(p.developmentRenewalId!==undefined&&!uuid.test(p.developmentRenewalId))||(p.startupRecoveryId!==undefined&&!uuid.test(p.startupRecoveryId))||(p.continuationId!==undefined&&!uuid.test(p.continuationId))||!['taskId','trialId','approvalId','projectId'].every(k=>uuid.test(p[k]??''))||
     !hash.test(p.contractHash??'')||!hash.test(p.benchmarkContractHash??'')||!sha.test(p.baselineSha??'')||
     !Number.isSafeInteger(p.expiresAt)||p.expiresAt<=now||
     (p.productionRuntime!==undefined&&(typeof p.productionRuntime!=='string'||p.productionRuntime.length>8192||! /^[A-Za-z0-9_-]+$/.test(p.productionRuntime)))||
-    Object.keys(p).sort().join()!==[...(p.developmentRenewalId!==undefined?['developmentRenewalId']:[]),...(p.startupRecoveryId!==undefined?['startupRecoveryId']:[]),...(p.continuationId!==undefined?['continuationId']:[]),...(p.productionRuntime!==undefined?['productionRuntime']:[]),'version','taskId','trialId','approvalId','projectId','contractHash','benchmarkContractHash','baselineSha','expiresAt'].sort().join())
+    Object.keys(p).sort().join()!==[...(p.pregrantRecoveryId!==undefined?['pregrantRecoveryId']:[]),...(p.developmentRenewalId!==undefined?['developmentRenewalId']:[]),...(p.startupRecoveryId!==undefined?['startupRecoveryId']:[]),...(p.continuationId!==undefined?['continuationId']:[]),...(p.productionRuntime!==undefined?['productionRuntime']:[]),'version','taskId','trialId','approvalId','projectId','contractHash','benchmarkContractHash','baselineSha','expiresAt'].sort().join())
   throw Error('NATIVE_HANDOFF_INVALID');
  return Object.freeze(p);
 }
+
 
