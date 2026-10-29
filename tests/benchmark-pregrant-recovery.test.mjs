@@ -35,3 +35,16 @@ test('host recovery checks record/release and uses only recovery grant endpoint'
   if(wrong){await assert.rejects(promise,/release mismatch/);assert.deepEqual(calls,[]);}else{assert.equal((await promise).executionEpoch,4);assert.deepEqual(calls,['benchmark_issue_development_pregrant_recovery_grant']);}
  }
 });
+test('reconciliation waits before recovery dispatch and cannot reuse predecessor failure afterwards',async()=>{
+ const start=source.indexOf('export async function reconcileDevelopment('),end=source.indexOf('  const client = github(), binding = await repository(task);',start);
+ const prefix=stripTypeScriptTypes(source.slice(start,end).replace('export async','async')+'return task;}');
+ let persisted;
+ const reconcile=vm.runInNewContext(prefix+';reconcileDevelopment',{save:async(task,status,detail,external,lease)=>{persisted={status,detail,lease};return {...task,status,details:detail,external};},Date});
+ const task={id:'same-task',status:'dispatching',external:{pregrantRecoveryId:'recovery',developmentRenewalSince:'2026-10-29T20:00:00Z'}};
+ await reconcile(task,{},'same-lease');assert.match(persisted.detail,/Waiting for verified pregrant recovery dispatch/);assert.equal(persisted.lease,'same-lease');
+ const guards=source.split('\n').filter(line=>line.includes('run.created_at')&&(line.includes('pregrantRecoverySince')||line.includes('developmentRenewalSince'))).join('\n');
+ const filter=new Function('task','runs','const accepted=[];for(const run of runs){'+guards+';accepted.push(run.id);}return accepted;');
+ task.external.pregrantRecoverySince='2026-10-29T21:00:00Z';task.external.pregrantRecoveryRelease='new';task.external.developmentRenewalRelease='old';
+ const runs=[{id:'old-failure',created_at:'2026-10-29T20:30:00Z',head_sha:'old',event:'workflow_dispatch'},{id:'new-attempt',created_at:'2026-10-29T21:01:00Z',head_sha:'new',event:'workflow_dispatch'},{id:'wrong-event',created_at:'2026-10-29T21:01:00Z',head_sha:'new',event:'issues'}];
+ assert.deepEqual(filter(task,runs),['new-attempt']);
+});
