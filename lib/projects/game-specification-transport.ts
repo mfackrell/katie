@@ -29,7 +29,11 @@ export function compactValidatedGameSpecification(text:string){
  const plan=validateGameSpecificationResponse(text);
  if(plan.milestones.length!==1)return text;
  const {contract,...milestone}=plan.milestones[0];void contract;
- return canonical({...plan,specificationFormat:COMPACT_GAME_FORMAT,finalContract:{path:plan.finalContract.path},milestones:[milestone]});
+ const compact=canonical({...plan,specificationFormat:COMPACT_GAME_FORMAT,finalContract:{path:plan.finalContract.path},milestones:[milestone]});
+ // Never discard a distinct browser contract merely because there is one
+ // milestone. Compaction is allowed only when expansion preserves the full plan.
+ if(canonical(validateGameSpecificationResponse(compact))!==canonical(plan))return text;
+ return compact;
 }
 export function specificationTextHash(text:string){return createHash('sha256').update(text).digest('hex');}
 export function repairGameSpecification(base:string,hash:string,response:string){

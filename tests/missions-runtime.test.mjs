@@ -152,9 +152,9 @@ test('a second unsuccessful review blocks instead of creating an endless repair 
  await executeClaim({mission:m,job:review},async(_,instruction)=>({text:instruction.includes('KATIE_REQUIRED_DRAFT_REVIEW')?JSON.stringify(verdict('revise')):JSON.stringify(assessment),sources:[],calculations:[],model:'fixture'}));
  assert.equal(committed.p_mission_status,'blocked');assert.equal(committed.p_children.length,0);assert.equal(committed.p_final,null);
 });
-function modelFixture(responses,reserve=true,inputCount=12){let dispatches=0;const ledger=[],counts=[],reservations=[];
+function modelFixture(responses,reserve=true,inputCount=12,capacity=null){let dispatches=0;const ledger=[],counts=[],reservations=[];
  class Client{post=async(path,options)=>{counts.push({path,...options});if(inputCount instanceof Error)throw inputCount;return{input_tokens:inputCount};};responses={create:async request=>{dispatches++;ledger.push(request);return responses.shift();}};}
- const load=modules({'@/lib/orchestration/routing':{orchestrationChoices:async input=>[{provider:{name:'openai'},modelId:input.planning||input.research||input.review||/Analyze/.test(input.instruction)?'gpt-5.4':'gpt-5-mini',reasoning:'Injected transport fixture'}],orchestrationFailure:async()=>{}},'openai':{__esModule:true,default:Client},'@/lib/missions/store':{rpc:async(name,args)=>{if(name==='reserve_mission_call'){reservations.push(args);return reserve;}return true;}}});
+ const load=modules({'@/lib/orchestration/routing':{orchestrationChoices:async input=>[{provider:{name:'openai'},modelId:input.planning||input.research||input.review||/Analyze/.test(input.instruction)?'gpt-5.4':'gpt-5-mini',reasoning:'Injected transport fixture'}],orchestrationFailure:async()=>{}},'openai':{__esModule:true,default:Client},'@/lib/missions/store':{rpc:async(name,args)=>{if(name==='specification_call_capacity'&&capacity)return capacity;if(name==='reserve_mission_call'){reservations.push(args);return reserve;}return true;}}});
  return{call:load('@/lib/missions/model').missionModel,ledger,counts,reservations,count:()=>dispatches};
 }
 const response=(text,extra={})=>({status:'completed',output_text:text,output:[],usage:{total_tokens:12},...extra});
@@ -307,7 +307,7 @@ test('oversized game specification is rejected before review and repairs once ag
 test('game review sees a lossless shared-contract view and completion retains the full original specification',async()=>{
  const {gameFixture}=await import('./fixtures/game-project.mjs');const f=gameFixture();const full={name:'Counter',summary:'Complete game',requirements:['Increment with no invalid-state mutation'],allowedPaths:f.allowedPaths,milestones:[{title:'Complete',instruction:'Implement all requirements',contract:f.contract}],finalContract:f.contract,game:f.game};const text=JSON.stringify(full);
  const m=mission();m.project_kind='specification';m.project_evidence={projectProfile:'game'};const compose={...job(m,'compose','compose'),status:'completed',result:{text}},review=job(m,'review','review');let committed;
- const {executeClaim}=modules({'@/lib/missions/store':{readMission:async()=>({mission:m,jobs:[compose,review]}),rpc:async(_,a)=>{committed=a;return true;}}})('@/lib/missions/worker');await executeClaim({mission:m,job:review},async(_,instruction,input)=>{if(instruction.includes('KATIE_REQUIRED_DRAFT_REVIEW')){const evidence=JSON.parse(input.split('Evidence and candidate:\n')[1]),candidate=evidence.candidate.result;assert.match(instruction,/GAME REVIEW REFERENCE SEMANTICS/);assert.equal(candidate.text,undefined);assert.equal(candidate.specification.milestones[0].contractRef,'finalContract');assert.equal(candidate.specification.game.acceptance.scenarios.find(s=>s.kind==='browser').stepsRef,'finalContract.scenarios[name=browser].steps');assert.deepEqual(candidate.specification.finalContract,full.finalContract);assert.deepEqual(candidate.specification.game.rules,full.game.rules);assert.deepEqual(candidate.specification.game.acceptance.scenarios.find(s=>s.kind==='model'),full.game.acceptance.scenarios.find(s=>s.kind==='model'));assert.match(candidate.fullSpecificationHash,/^[a-f0-9]{64}$/);assert.match(candidate.referenceNote,/Every original rule/);}return{text:JSON.stringify(instruction.includes('KATIE_REQUIRED_DRAFT_REVIEW')?verdict():assessment),sources:[],calculations:[],model:'fixture'};});assert.equal(committed.p_final,text);assert.equal(compose.result.text,text);assert.equal(committed.p_result.verdict,'pass');
+ const {executeClaim}=modules({'@/lib/missions/store':{readMission:async()=>({mission:m,jobs:[compose,review]}),rpc:async(_,a)=>{committed=a;return true;}}})('@/lib/missions/worker');await executeClaim({mission:m,job:review},async(_,instruction,input)=>{if(instruction.includes('KATIE_REQUIRED_DRAFT_REVIEW')){const evidence=JSON.parse(input.split('Evidence and candidate:\n')[1]),candidate=evidence.candidate.result;assert.match(instruction,/GAME REVIEW REPRESENTATION/);assert.equal(candidate.text,undefined);assert.equal(candidate.specification.specificationFormat,'registered-game-v1');assert.equal(candidate.specification.milestones[0].contract,undefined);assert.deepEqual(candidate.specification.game.acceptance.scenarios.find(s=>s.kind==='browser').steps,full.game.acceptance.scenarios.find(s=>s.kind==='browser').steps);assert.deepEqual(JSON.parse(JSON.stringify(modules()('@/lib/projects/game-specification-transport').validateGameSpecificationResponse(JSON.stringify(candidate.specification)))),full);assert.deepEqual(candidate.specification.game.rules,full.game.rules);assert.deepEqual(candidate.specification.game.acceptance.scenarios.find(s=>s.kind==='model'),full.game.acceptance.scenarios.find(s=>s.kind==='model'));assert.match(candidate.fullSpecificationHash,/^[a-f0-9]{64}$/);assert.match(candidate.referenceNote,/every original requirement/);}return{text:JSON.stringify(instruction.includes('KATIE_REQUIRED_DRAFT_REVIEW')?verdict():assessment),sources:[],calculations:[],model:'fixture'};});assert.equal(committed.p_final,text);assert.equal(compose.result.text,text);assert.equal(committed.p_result.verdict,'pass');
 });
 
 test('game second-pass review keeps findings but omits duplicated large prior-check matrices',async()=>{
@@ -327,7 +327,7 @@ test('game second-pass review keeps findings but omits duplicated large prior-ch
    assert.equal(evidence.priorFindings[0].priorCheckCount,checks.length);
    assert.equal(evidence.priorFindings[0].checks,undefined);
    assert.deepEqual(Array.from(evidence.priorFindings[0].findings),['Preserve the full browser scenarios']);
-   assert.deepEqual(evidence.candidate.result.specification.finalContract,full.finalContract);
+   assert.deepEqual(JSON.parse(JSON.stringify(modules()('@/lib/projects/game-specification-transport').validateGameSpecificationResponse(JSON.stringify(evidence.candidate.result.specification)))),full);
   }
   return{text:JSON.stringify(instruction.includes('KATIE_REQUIRED_DRAFT_REVIEW')?verdict():assessment),sources:[],calculations:[],model:'fixture'};
  });
@@ -680,4 +680,15 @@ test('specification archival failure still commits exact partial response as ter
   assert.equal(committed.p_mission_status,'blocked');assert.equal(committed.p_final,null);
   assert.equal(j.attempts,1);assert.equal(result.outcomes[0].status,'blocked');
  }
+});
+
+test('specification reviewers receive a review output contract rather than composition serialization commands',async()=>{
+ const prior=process.env.OPENAI_API_KEY;process.env.OPENAI_API_KEY='fixture-only';
+ try{
+  const m=mission();m.project_kind='specification';m.project_evidence={projectProfile:'game',specificationBudget:{version:2}};
+  const f=modelFixture([response('{}')],true,12,{authorized:true,remainingTokens:90000,stageRemainingTokens:18000,callsRemaining:8,routingCallsRemaining:8});
+  await f.call({mission:m,job:job(m,'review','review')},'Independently review saved candidate','Evidence','none','comparison');
+  assert.equal(f.ledger.length,1);assert.doesNotMatch(f.ledger[0].instructions,/COMPACT SERIALIZATION/);
+  assert.equal(f.ledger[0].text.format.type,'json_schema');assert.equal(f.ledger[0].text.format.name,'mission_review_comparison');assert.ok(f.ledger[0].text.format.schema);
+ }finally{if(prior===undefined)delete process.env.OPENAI_API_KEY;else process.env.OPENAI_API_KEY=prior;}
 });
