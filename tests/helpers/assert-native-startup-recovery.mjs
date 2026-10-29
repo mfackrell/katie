@@ -38,6 +38,9 @@ export async function assertNativeStartupRecovery(db,rival,{project,account,tria
  await assert.rejects(db.query(issue,[recovery.id,'a'.repeat(64),approval,task,'f'.repeat(40)]),/unavailable/);
  const claims=await Promise.all([db.query('select benchmark_claim_startup_recovery_dispatch($1) ok',[recovery.id]),rival.query('select benchmark_claim_startup_recovery_dispatch($1) ok',[recovery.id])]);
  assert.equal(claims.filter(x=>x.rows[0].ok).length,1);
+ for(const args of [[recovery.id,'a'.repeat(64),randomUUID(),task,'f'.repeat(40)],[recovery.id,'a'.repeat(64),approval,randomUUID(),'f'.repeat(40)],[recovery.id,'a'.repeat(64),approval,task,'0'.repeat(40)]])await assert.rejects(db.query(issue,args),/unavailable/);
+ await db.query('begin');await db.query('update work_projects set approved_hash=$2 where id=$1',[project,'0'.repeat(64)]);
+ await assert.rejects(db.query(issue,[recovery.id,'a'.repeat(64),approval,task,'f'.repeat(40)]),/unavailable/);await db.query('rollback');
  const issued=await Promise.allSettled([db.query(issue,[recovery.id,'a'.repeat(64),approval,task,'f'.repeat(40)]),rival.query(issue,[recovery.id,'b'.repeat(64),approval,task,'f'.repeat(40)])]);
  assert.equal(issued.filter(x=>x.status==='fulfilled').length,1);
  assert.equal(issued.find(x=>x.status==='fulfilled').value.rows[0].r.executionEpoch,2);
