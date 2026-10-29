@@ -469,6 +469,7 @@ export async function reconcileDevelopment(task: AgentTask, project?: ProjectAcc
   if(!project&&typeof task.external.projectId==='string'){const binding=await getDevelopmentProjectContext(task.id);if(!binding||binding.projectId!==task.external.projectId)throw Error('Saved project binding unavailable');project=acceptanceBinding(binding);}
   const deadline = Date.now() + 60_000;
   if (!["submitted", "dispatching", "ready", "blocked"].includes(task.status)) return task;
+  if(task.external.developmentRenewalId&&!task.external.developmentRenewalSince)return persist(task,task.status,'Waiting for the owner-authorized renewal dispatch; the predecessor receipt remains preserved.');
   const client = github(), binding = await repository(task);
   let issueNumber = Number(task.external.issueNumber);
   if (!Number.isSafeInteger(issueNumber) || issueNumber < 1) {

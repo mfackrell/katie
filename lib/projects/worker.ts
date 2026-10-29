@@ -312,9 +312,9 @@ async function advance(p: Project) {
       const valid=plan&&(renewal
         ? p.phase==='assessment'&&plan.specificationTokens===0&&plan.developmentTokens===120000&&plan.assessmentTokens===60000
           &&Number.isInteger(plan.developmentRemainingTokens)&&Number.isInteger(plan.developmentSpentTokens)
-          &&plan.developmentRemainingTokens!>0&&plan.developmentSpentTokens!>=0
-          &&plan.developmentRemainingTokens!+plan.developmentSpentTokens!===plan.developmentTokens
-          &&plan.developmentRemainingTokens!+plan.assessmentTokens===plan.additionalTokenCap
+          &&Number(plan.developmentRemainingTokens)>0&&Number(plan.developmentSpentTokens)>=0
+          &&Number(plan.developmentRemainingTokens)+Number(plan.developmentSpentTokens)===plan.developmentTokens
+          &&Number(plan.developmentRemainingTokens)+plan.assessmentTokens===plan.additionalTokenCap
         : [plan.specificationTokens,plan.developmentTokens,plan.assessmentTokens,plan.additionalTokenCap].every(n=>Number.isInteger(n)&&n>0)
           &&plan.specificationTokens+plan.developmentTokens+plan.assessmentTokens===plan.additionalTokenCap);
       if(!valid)throw Error('Saved continuation stage allocations unavailable');

@@ -53,6 +53,11 @@ export async function assertDevelopmentOwnerRenewal(db,rival,{project,account,tr
  'attempts',(select attempts from mission_assignments where id=$3),'spent',(select spent_tokens from benchmark_budget_accounts where id=$4)) v`,[old.id,mission,task,account])).rows[0].v;
  assert.deepEqual(after,original,'Renewal does not erase prior consent, deadline, attempts or paid calls');
  assert.equal((await db.query('select benchmark_effective_mission_deadline($1)>now() ok',[mission])).rows[0].ok,true);
+ const claim=(await db.query('select claim_mission_work() c')).rows[0].c;
+ assert.equal(claim.job.id,task);assert.equal(claim.mission.id,mission);
+ assert.ok(Date.parse(claim.mission.deadline)>Date.now());
+ assert.equal((await db.query("select commit_mission_work($1,$2,$3,'[]','waiting_external',null,null) ok",[task,claim.job.lease,{detail:'Awaiting separately authorized renewed native execution'}])).rows[0].ok,true);
+ assert.equal((await db.query('select deadline<now() old from agent_missions where id=$1',[mission])).rows[0].old,true);
  const release='8'.repeat(40),issue='select benchmark_issue_development_renewal_grant($1,$2,$3,$4,$5) g';
  await assert.rejects(db.query(issue,[r.id,'a'.repeat(64),r.approval_id,task,release]),/unavailable/);
  assert.equal((await db.query('select benchmark_claim_development_renewal_dispatch($1,$2,$3) ok',[r.id,{...receipt,run_id:126},release])).rows[0].ok,false);

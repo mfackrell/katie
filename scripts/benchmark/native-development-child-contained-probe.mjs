@@ -14,9 +14,19 @@ const sdkRoot=realpathSync(resolve('node_modules'));
 const reviewCommand='printf ACTUAL_NATIVE_TOOL_OK; '+[['/work','WORK'],['/work/.git','GIT'],['/work/node_modules','DEPS']].map(([path,label])=>'if (printf forbidden > '+path+'/'+reviewMarker+') 2>/dev/null; then printf '+label+'_WRITE_UNEXPECTEDLY_SUCCEEDED; else printf READ_ONLY_ENFORCED_'+label+'; fi').join('; ')+'; printf permitted > /tmp/'+reviewMarker+' && test "$(cat /tmp/'+reviewMarker+')" = permitted && printf TMP_WRITE_ALLOWED';
 const root=mkdtempSync(join(tmpdir(),'actual-native-child-'));
 const work=join(root,'work'),socketDir=join(root,'socket'),socket=join(socketDir,'gateway.sock');
-mkdirSync(work);mkdirSync(socketDir);mkdirSync(join(work,'node_modules'));
-execFileSync('git',['init','-q',work]);
-execFileSync('git',['-C',work,'-c','user.name=Synthetic probe','-c','user.email=probe@example.invalid','commit','--allow-empty','-qm','Synthetic baseline']);
+mkdirSync(socketDir);
+if(process.env.KATIE_NATIVE_PROBE_BASELINE){
+ const ref=process.env.KATIE_NATIVE_PROBE_BASELINE;
+ assert.match(ref,/^[a-f0-9]{40}$/);
+ execFileSync('git',['clone','--no-hardlinks','--no-checkout',resolve('.'),work],{stdio:'pipe'});
+ execFileSync('git',['-C',work,'fetch',resolve('.'),ref],{stdio:'pipe'});
+ execFileSync('git',['-C',work,'checkout','--detach',ref],{stdio:'pipe'});
+ mkdirSync(join(work,'node_modules'),{recursive:true});
+}else{
+ mkdirSync(work);mkdirSync(join(work,'node_modules'));
+ execFileSync('git',['init','-q',work]);
+ execFileSync('git',['-C',work,'-c','user.name=Synthetic probe','-c','user.email=probe@example.invalid','commit','--allow-empty','-qm','Synthetic baseline']);
+}
 const baseline=execFileSync('git',['-C',work,'rev-parse','HEAD'],{encoding:'utf8'}).trim();
 writeFileSync(join(root,'AGENT_REQUEST.md'),'Synthetic nonbillable qualification. Reply DONE. No repository changes.');
 writeFileSync(join(root,'review-findings.txt'),'Synthetic defect: require final independent review.');
@@ -50,6 +60,9 @@ const upstream=async request=>{
   const reasoning=request.input?.find(x=>x.type==='reasoning');
   assert.ok(reasoning,'Actual SDK must replay trusted opaque reasoning inline');
   assert.equal(reasoning.encrypted_content,encrypted);assert.deepEqual(reasoning.summary,[]);
+  const commentary=request.input?.find(x=>x.type==='message'&&x.role==='assistant'&&x.phase==='commentary');
+  assert.ok(commentary,'Real SDK must replay intermediate assistant text');
+  assert.deepEqual(commentary.content,[{type:'output_text',text:'I will inspect the approved request and repository.',annotations:[]}]);
  }
 
  const text=phase==='review'?'CHANGES_REQUESTED: synthetic defect':phase==='final-review'?'PASS synthetic repair verified':'DONE';
@@ -57,7 +70,8 @@ const upstream=async request=>{
   arguments:JSON.stringify({cmd:reviewing?reviewCommand:'printf ACTUAL_NATIVE_TOOL_OK',workdir:'/work'}),status:'completed'}:
   {id:'msg_'+forwarded,type:'message',role:'assistant',status:'completed',content:[{type:'output_text',text,annotations:[]}]};
  const reasoning={id:'rs_'+phase,type:'reasoning',summary:[],encrypted_content:encrypted};
- const output=count===1?[reasoning,item]:[item];
+ const commentary={id:'msg_commentary_'+forwarded,type:'message',role:'assistant',phase:'commentary',status:'completed',content:[{type:'output_text',text:'I will inspect the approved request and repository.',annotations:[]}]};
+ const output=count===1?[reasoning,commentary,item]:[item];
  const response={id:'synthetic-response-'+forwarded,object:'response',created_at:1,model:request.model,status:'completed',output,usage:{input_tokens:3,output_tokens:2,total_tokens:5}};
  const events=[['response.created',{type:'response.created',response:{...response,status:'in_progress',output:[]}}],...output.flatMap((item,output_index)=>[['response.output_item.added',{type:'response.output_item.added',output_index,item}],['response.output_item.done',{type:'response.output_item.done',output_index,item}]]),['response.completed',{type:'response.completed',response}]];
  return {providerRequestId:response.id,actualTokens:5,usage:response.usage,contentType:'text/event-stream',body:events.map(([event,data])=>'event: '+event+'\ndata: '+JSON.stringify(data)+'\n\n').join('')+'data: [DONE]\n\n'};
