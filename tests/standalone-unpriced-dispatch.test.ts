@@ -1,3 +1,4 @@
+import { PRICING_SNAPSHOT } from '../lib/standalone-accounting/pricing';
 import test, { type TestContext } from "node:test";
 import assert from "node:assert/strict";
 import { blockUnaccountedPaidDispatch } from "../lib/standalone-accounting/unsupported";
@@ -72,6 +73,7 @@ test("Google native-video observation blocks unsupported billing before generati
   const ledgerCalls: string[] = [];
   globalThis.__KATIE_SUPABASE_ADMIN_CLIENT__ = { rpc: async (name: string) => {
     ledgerCalls.push(name);
+    if (name === "standalone_load_pricing") return { data: {snapshot:PRICING_SNAPSHOT,retrievedAt:new Date().toISOString()}, error:null };
     if (name === "standalone_register_pricing") return { data: true, error: null };
     if (name === "standalone_lookup_attempt") return { data: null, error: null };
     assert.fail(`Unsupported native video must not be admitted: ${name}`);
@@ -83,7 +85,7 @@ test("Google native-video observation blocks unsupported billing before generati
     () => describeAttachmentEvidence({ fileId: "fixture", fileName: "fixture.mp4", mimeType: "video/mp4", preview: "Fixture video", providerRef: { googleFileUri: "https://generativelanguage.googleapis.com/v1beta/files/fixture" } })),
   { code: "standalone_unsupported_billing" });
   assert.equal(sends, 0);
-  assert.deepEqual(ledgerCalls, ["standalone_register_pricing", "standalone_lookup_attempt"]);
+  assert.deepEqual(ledgerCalls, ["standalone_lookup_attempt", "standalone_load_pricing", "standalone_register_pricing"]);
 });
 
 test("the real indexer embedding guard blocks before the SDK can transmit", async t => {

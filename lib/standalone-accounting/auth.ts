@@ -24,7 +24,7 @@ export async function authenticateStandaloneOwner(request:Pick<Request,'headers'
 }
 export async function authorizeStandaloneCaller(request:Pick<Request,'headers'>,actorId:string,chatId:string):Promise<string>{
   const ownerId=await authenticateStandaloneOwner(request);
-  const denied=()=>new StandaloneAuthorizationError('This conversation is not authorized for this owner.');
+  const denied=()=>new StandaloneAuthorizationError('Standalone spending authorization denied. This conversation is not authorized for this owner.');
   const binding = await getSupabaseAdminClient().rpc<boolean>('standalone_authorize_scope', {
     p_owner: ownerId, p_actor: actorId, p_chat: chatId,
   });
