@@ -60,6 +60,10 @@ test('uncertainty obeys existing owner limits atomically without changing exposu
    }
    assert.equal(await total(request),String(before+cost),'acceptance never frees or doubles reservation');
   }
+  await rpc(one,'claim_workflow',wf('direct-transition'));
+  const direct=await dispatch('direct-transition','receipt-helper',20000);
+  await admin.query("update standalone_provider_attempts set state='uncertain' where id=$1",[direct.id]);
+  assert.equal(await accepted(direct),true,'receipt/identifier uncertainty uses the same policy');
   const request='multiple-small';const lease=await rpc(one,'claim_workflow',wf(request));
   for(const [index,cost] of [6273,20000,30000].entries()){const a=await dispatch(request,'helper-'+index,cost);await mark(a);assert.equal(await accepted(a),true);}
   assert.equal(await total(request),'56273');

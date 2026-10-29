@@ -33,6 +33,20 @@ begin
 end $$;
 revoke all on function public.standalone_auto_authorize_uncertain_exposure(uuid,uuid) from public,anon,authenticated;
 grant execute on function public.standalone_auto_authorize_uncertain_exposure(uuid,uuid) to service_role;
+-- Receipt/identifier reconciliation can also create uncertainty without calling
+-- mark_uncertain. Apply the same policy to every transition, without clearing
+-- any independent evidence-conflict guard.
+create function public.standalone_authorize_uncertainty_transition() returns trigger
+language plpgsql security definer set search_path=public,pg_temp as $$
+begin
+ perform standalone_auto_authorize_uncertain_exposure(new.owner_id,new.id);
+ return new;
+end $$;
+revoke all on function public.standalone_authorize_uncertainty_transition() from public,anon,authenticated,service_role;
+create trigger standalone_uncertainty_owner_limits after update of state on public.standalone_provider_attempts
+ for each row when (new.state='uncertain' and old.state is distinct from new.state)
+ execute function public.standalone_authorize_uncertainty_transition();
+
 -- Existing paused original requests receive the same durable policy decision.
 -- Completed history is accounting-only and is not restarted.
 do $$ declare a record;begin
