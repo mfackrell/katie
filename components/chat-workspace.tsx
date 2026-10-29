@@ -17,6 +17,10 @@ export default function ChatWorkspace({
   const router = useRouter();
   const deleteInFlight = useRef(false);
   const [deleting, setDeleting] = useState(false);
+  const [railOpen, setRailOpen] = useState(true);
+  const [railReady, setRailReady] = useState(false);
+  useEffect(() => { try { const stored = window.localStorage.getItem("katie.statusRail.open"); setRailOpen(stored === null ? window.matchMedia("(min-width: 1024px)").matches : stored === "true"); } catch {} setRailReady(true); }, []);
+  function toggleRail() { const next = !railOpen; setRailOpen(next); try { window.localStorage.setItem("katie.statusRail.open", String(next)); } catch {} }
   const [deleted, setDeleted] = useState(false);
   const actors = useResource<{ actors: Actor[] }>("/api/actors"),
     chats = useResource<{ chats: ChatThread[] }>("/api/chats"),
@@ -217,9 +221,12 @@ export default function ChatWorkspace({
       </button>
       </div>
       <ConversationWork chatId={chat.id} />
-      {!actor.managedAgentId && actor.actorKind !== "executive" && <StandaloneUsage actorId={actor.id} chatId={chat.id} />}
+      <div className="flex min-h-0 min-w-0 flex-1 overflow-hidden">
+        <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
+          {!railOpen && <button type="button" onClick={toggleRail} className="absolute right-3 top-2 z-30 rounded border border-white/20 bg-zinc-950/90 px-2 py-1 text-xs text-zinc-200" aria-expanded={railOpen} aria-controls="katie-status-rail">Status / Usage</button>}
       <ChatPanel
         key={chat.id}
+        statusRailOpen={railOpen && railReady}
         actorId={actor.id}
         chatId={chat.id}
         managedAgentId={actor.managedAgentId}
@@ -228,6 +235,16 @@ export default function ChatWorkspace({
         activeRepoId={repoId}
         repoInjectionEnabled={source}
       />
+        </div>
+        {railOpen && <><div className="fixed inset-0 z-40 bg-black/60 lg:hidden" onClick={toggleRail} aria-hidden="true" />
+        <aside id="katie-status-rail" aria-label="Katie status rail" className="fixed inset-y-0 right-0 z-50 flex w-[min(370px,90vw)] min-w-0 flex-col border-l border-white/10 bg-zinc-950 lg:static lg:z-10 lg:w-[350px] lg:shrink-0">
+          <div className="flex shrink-0 items-center justify-between border-b border-white/10 px-4 py-3"><strong className="text-sm">Status & usage</strong><button type="button" className="text-xs underline" onClick={toggleRail}>Hide</button></div>
+          <div className="min-h-0 flex-1 space-y-5 overflow-y-auto overscroll-contain p-4">
+            <section className="space-y-2"><h3 className="text-sm font-semibold">Live status</h3><div id="katie-live-status" className="min-w-0 break-words text-xs text-zinc-300" /></section>
+            {!actor.managedAgentId && actor.actorKind !== "executive" && <StandaloneUsage rail actorId={actor.id} chatId={chat.id} />}
+          </div>
+        </aside></>}
+      </div>
     </div>
   );
 }
