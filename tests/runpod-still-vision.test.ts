@@ -54,7 +54,7 @@ function fixture(){
     return Response.json({id:mismatch?'another-job-456':'job-accepted-123',status:'COMPLETED',executionTime:1200,output:{choices:[{finish_reason:'stop',message:{content:'A brown dog in a room.'}}],usage:{prompt_tokens:100,completion_tokens:10},cost:0}});
   };
   const run=()=>runWithStandaloneAccounting(scope,()=>describeImageWithRunpodQwen(image,'Describe photo',{ledgerFactory:()=>ledger,fetchFn:wire,sleep:async()=>{now+=2500;},now:()=>now,attachmentId:'immutable-attachment'}));
-  return {run,calls,ledger,get row(){return row;},get sends(){return sends;},get polls(){return polls;},set failPoll(v:boolean){failPoll=v;},set queue(v:boolean){queue=v;},set allowed(v:boolean){allowed=v;},set pause(v:boolean){pause=v;},set mismatch(v:boolean){mismatch=v;},set submissionStatus(v:number){submissionStatus=v;},set lostAcceptance(v:boolean){lostAcceptance=v;},set exposureAccepted(v:boolean){exposureAccepted=v;}};
+  return {run,calls,ledger,get row(){return row;},get sends(){return sends;},get polls(){return polls;},set failPoll(v:boolean){failPoll=v;},set queue(v:boolean){queue=v;},set allowed(v:boolean){allowed=v;},set pause(v:boolean){pause=v;},set mismatch(v:boolean){mismatch=v;},set submissionStatus(v:number){submissionStatus=v;},set lostAcceptance(v:boolean){lostAcceptance=v;},set exposureAccepted(v:boolean){exposureAccepted=v;},set state(v:LedgerAttempt['state']){row={...row!,state:v};}};
 }
 test('Qwen reserves reviewed $0.02 under original owner/request before one submission and retains estimate without inventing actual',async()=>{
   const f=fixture(),result=await f.run();
@@ -108,4 +108,12 @@ test('explicit owner acceptance of lost Qwen exposure permits independent fallba
  const f=fixture();f.lostAcceptance=true;await assert.rejects(f.run(),{code:'standalone_outcome_unknown'});
  f.exposureAccepted=true;await assert.rejects(f.run(),error=>error instanceof Error&&!('terminal' in error)&&/separate image escalation/.test(error.message));
  assert.equal(f.sends,1);assert.equal(f.row?.state,'uncertain');assert.equal(f.row?.reserved_microusd,'20000');assert.equal(f.row?.actual_microusd,null);
+});
+
+test('accepted uncertain saved Qwen output replays without clearing uncertainty or pretending to settle a conflict',async()=>{
+ const f=fixture();await f.run();f.state='uncertain';f.exposureAccepted=true;
+ const completions=f.calls.filter(c=>c.name==='standalone_complete_qwen_estimate').length;
+ const result=await f.run();assert.equal(result.text,'A brown dog in a room.');
+ assert.equal(f.row?.state,'uncertain');assert.equal(f.row?.reserved_microusd,'20000');assert.equal(f.row?.actual_microusd,null);assert.equal(f.sends,1);
+ assert.equal(f.calls.filter(c=>c.name==='standalone_complete_qwen_estimate').length,completions);
 });

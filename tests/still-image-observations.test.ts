@@ -100,3 +100,32 @@ test('capability gates retain technical escalation while image generation and vi
   assert.match(route,/imageObservationAsText\(file,freshTaskDescriptions.get\(file.fileId\)!\)/);
   assert.match(route,/deferEscalation:!final/);
 });
+
+test('real escalation selector excludes unpriceable image models before preparation and compares qualified image payload costs',async t=>{
+  const providers=await import('../lib/providers');
+  const {escalateStillImageEvidence}=await import('../lib/uploads/still-image-observations');
+  const {captureControlPlanePreparation}=await import('../lib/router/control-plane-economics');
+  const {prepareStandaloneRequest}=await import('../lib/standalone-accounting/estimate');
+  const {runWithStandaloneAccounting}=await import('../lib/standalone-accounting/context');
+  const {PRICING_SNAPSHOT}=await import('../lib/standalone-accounting/pricing');
+  const old=globalThis.__KATIE_SUPABASE_ADMIN_CLIENT__;
+  t.after(()=>{globalThis.__KATIE_SUPABASE_ADMIN_CLIENT__=old;});
+  const prepared:string[]=[],sent:string[]=[];
+  globalThis.__KATIE_SUPABASE_ADMIN_CLIENT__={async rpc(name:string){
+    if(name==='standalone_load_pricing')return{data:{snapshot:PRICING_SNAPSHOT,retrievedAt:new Date().toISOString()},error:null};
+    if(name==='standalone_lookup_attempt')return{data:null,error:null};
+    assert.fail('No unsupported image attempt may be created: '+name);
+  }} as unknown as NonNullable<typeof globalThis.__KATIE_SUPABASE_ADMIN_CLIENT__>;
+  t.mock.method(providers,'getAvailableProviders',()=>[
+    {name:'grok',listModels:async()=>['grok-4.7'],generate:async()=>{assert.fail('Grok image billing is unsupported and must be excluded before preparation');}},
+    {name:'openai',listModels:async()=>['gpt-4o','gpt-4o-mini'],generate:async(params:import('../lib/providers/types').ChatGenerateParams)=>{
+      const model=params.modelId!;prepared.push(model);
+      captureControlPlanePreparation(prepareStandaloneRequest('openai',model,'/v1/chat/completions',{model,max_tokens:1400,messages:[{role:'user',content:[{type:'text',text:params.user},...params.images!.map(url=>({type:'image_url',image_url:{url}}))]}]}));
+      sent.push(model);return {provider:'openai',model,text:'Readable image evidence from the selected supported model.'};
+    }},
+  ]);
+  const pixels=Buffer.alloc(24);Buffer.from([137,80,78,71,13,10,26,10]).copy(pixels);pixels.writeUInt32BE(100,16);pixels.writeUInt32BE(100,20);
+  const result=await runWithStandaloneAccounting({userId:'owner',actorId:'actor',chatId:'chat',requestId:'priceable-image'},()=>escalateStillImageEvidence(['data:image/png;base64,'+pixels.toString('base64')],'Describe visible contents'));
+  assert.ok(prepared.includes('gpt-4o')&&prepared.includes('gpt-4o-mini'));
+  assert.deepEqual(sent,['gpt-4o-mini']);assert.equal(result.model,'gpt-4o-mini');
+});

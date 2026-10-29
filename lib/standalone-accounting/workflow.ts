@@ -63,11 +63,14 @@ export async function executeStandaloneWorkflow(request:NextRequest,payload:Reco
       while(true){const {value,done}=await reader.read();if(done)break;chunks.push(value);byteLength+=value.byteLength;}
       const bytes=new Uint8Array(byteLength);let offset=0;for(const chunk of chunks){bytes.set(chunk,offset);offset+=chunk.byteLength;}
       const body=new TextDecoder().decode(bytes);
-      const technical=standaloneTechnicalBlocker(body);
-      const paused=!technical&&/"type":"accounting_pause"|"code":"standalone_/.test(body);
       const events = response.headers.get('content-type')?.includes('ndjson') ? body.split('\n').flatMap(line => {try {return [JSON.parse(line)];} catch {return [];} }) : [];
+      let jsonError:unknown;try{jsonError=JSON.parse(body);}catch{/* Streaming body is parsed above. */}
+      const technicalEvent=[...events,...(jsonError&&typeof jsonError==='object'?[jsonError]:[])].find(event=>
+        (['accounting_pause','error','reasoning_error'].includes(event.type)||event.error)&&standaloneTechnicalBlocker(event.code));
+      const technical=Boolean(technicalEvent);
+      const paused=!technical&&/"type":"accounting_pause"|"code":"standalone_/.test(body);
       const executionFailure = events.find(event => event.type === 'error' || event.type === 'reasoning_error');
-      const failureMessage = technical ? body.split('\n').find(line=>standaloneTechnicalBlocker(line))?.slice(0,2000) : executionFailure ? String(executionFailure.message ?? executionFailure.error ?? 'Saved request execution failed.') : undefined;
+      const failureMessage = technicalEvent ? String(technicalEvent.code)+': '+String(technicalEvent.message??technicalEvent.error??'Image inspection is unsupported.').slice(0,1800) : executionFailure ? String(executionFailure.message ?? executionFailure.error ?? 'Saved request execution failed.') : undefined;
       const result={body,status:response.status,headers:Array.from(response.headers.entries())};
       const finished = await finish(paused?'paused':response.ok&&!executionFailure&&!technical?'completed':'failed',result,failureMessage);
       if (finished.status === 'paused' && !paused && !executionFailure && !technical) {

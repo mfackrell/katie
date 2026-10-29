@@ -132,6 +132,7 @@ function fixture() {
     currentStandaloneWorkflow: () => undefined,
     cachedWorkflowValue: async (_key, load) => load(),
     runWithOrchestratorAccounting: operation => operation(),
+    getAccountingScope: () => undefined,
     process: { env: { NEXT_PUBLIC_SUPABASE_URL: 'https://supabase.example.test', SUPABASE_SERVICE_ROLE_KEY: 'test-only-no-network' } } };
   const load = path => {
     path = resolve(path.endsWith('.ts') ? path : path + '.ts');
@@ -468,6 +469,47 @@ function identityFixture(f, progress, history, attachments, classify, describe) 
     describeAttachmentEvidence: describe,
   };
 }
+
+test('actual standalone route observes with Qwen, retains evidence, then gives the conversation text without raw pixels',async()=>{
+  const f=fixture();
+  const {progress,history}=await replayPosting(f);
+  const source=readFileSync('lib/uploads/still-image-observations.ts','utf8');
+  const ast=ts.createSourceFile('still-image-observations.ts',source,ts.ScriptTarget.Latest,true);
+  const definition=name=>unique(findNodes(node=>
+    ts.isFunctionDeclaration(node)&&node.name?.text===name ||
+    ts.isVariableStatement(node)&&node.declarationList.declarations.some(declaration=>ts.isIdentifier(declaration.name)&&declaration.name.text===name),ast),`image helper ${name}`).getText(ast).replace(/^export\s+/,'');
+  const definitions=['STILL_IMAGE_OBSERVATION_VERSION','BASE_QUESTION','imageObservationHash','isStillImageCreationRequest','requiresAdditionalImageDetail','requiresCrossImageInspection','insufficient','reusableImageObservation','observeStandaloneStillImages','retainNewImageObservations','imageObservationAsText'].map(definition).join('\n');
+  const events=[];
+  const image={fileId:'profile-image',fileName:'profile.png',mimeType:'image/png',preview:'Profile screenshot',imageDataUrl:'data:image/png;base64,aW1hZ2U='};
+  const context=identityFixture(f,progress,history,[image],async()=>{throw Error('Ordinary profile evidence must not become project intake');},async()=>{throw Error('Legacy Gemini/Grok observation must not run before Qwen');});
+  Object.assign(context,{
+    createHash:nativeRequire('node:crypto').createHash,
+    getAccountingScope:()=>({kind:'standalone'}),
+    message:'Write a playful opener for this profile',
+    fileReferences:[],legacyImageSources:new Map(),requestAttachments:[image],freshPdfSelection:undefined,
+    isExplicitVisionPolicyRefusal:()=>false,
+    describeImageWithRunpodQwen:async(pixels,_question,options)=>{
+      events.push('qwen');assert.equal(pixels,image.imageDataUrl);assert.equal(options.attachmentId,image.fileId);
+      return {text:'The profile says gardener and homesteader.',model:'runpod:Qwen/Qwen3-VL-8B-Instruct',coverage:'full'};
+    },
+    escalateStillImageEvidence:async()=>{throw Error('Ordinary complete Qwen evidence must not invoke premium vision');},
+    persistConversationAttachment:async(chat,reference,_token,options)=>{
+      events.push('retain');assert.equal(chat,CHAT_ID);assert.equal(reference.imageDataUrl,image.imageDataUrl);assert.match(options.description.observedSummary,/gardener/);
+      return {...options.description,id:'retained-private-image',fileName:reference.fileName,mimeType:reference.mimeType,chatId:chat,actorId:ACTOR_ID,hasOriginal:true};
+    },
+  });
+  const result=await vm.runInNewContext(compile(`(async()=>{
+    ${definitions}
+    ${contextResolutionBlock}
+    ${code(statement(declaration('attachments')))}
+    return {attachments,retained:[...retainedImageDescriptors.values()]};
+  })()`),context);
+  assert.deepEqual(events,['qwen','retain']);
+  assert.equal(result.retained.length,1);assert.equal(result.retained[0].hasOriginal,true);
+  assert.equal(result.attachments[0].mimeType,'text/plain');assert.equal(result.attachments[0].imageDataUrl,undefined);
+  assert.match(result.attachments[0].extractedText,/gardener and homesteader/);
+  assert.match(result.attachments[0].extractedText,/not raw image pixels/);
+});
 
 test('explicit project intake inspects fresh image and PDF evidence before binding the new project', async () => {
   const f = fixture();

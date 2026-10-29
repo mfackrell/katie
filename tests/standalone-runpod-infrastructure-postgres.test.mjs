@@ -26,6 +26,7 @@ test('reviewed Qwen infrastructure reservation, durable job and estimated comple
   await admin.query("insert into actors values($1,'Qwen fixture','standard')",[actor]);
   await admin.query("insert into chats(id,actor_id,title) values($1,$2,'Qwen request')",[chat,actor]);
   await rpc(one,'bind_scope',{p_owner:owner,p_actor:actor,p_chat:chat});
+  await admin.query('insert into self_tool_owner_grants(owner_id,actor_id,chat_id) values($1,$2,$3)',[owner,actor,chat]);
   const configure=(call='500000',total='2000000')=>rpc(one,'configure',{p_owner:owner,p_timezone:'America/Chicago',p_call:call,p_request:total});
   let config=await configure();
   const version='standalone-runpod-qwen-still-v1',model='Qwen/Qwen3-VL-8B-Instruct';
@@ -128,6 +129,68 @@ test('reviewed Qwen infrastructure reservation, durable job and estimated comple
   assert.equal(String(await rpc(admin,'request_committed',{p_owner:owner,p_request:request})),'17000');
   assert.equal((await rpc(two,'settle',{...monetary,p_actual:'18000'})).conflict,true,'late conflicts retain existing receipt behavior');
   assert.equal((await getAttempt(request)).actual_microusd,'17000');
+  // A known job is not authority to erase genuine accounting conflicts.
+  for(const kind of ['receipt','identifier','usage']){
+   let alreadyPaused=false;
+   const conflictRequest='unresolved-'+kind,conflictWf=workflow(conflictRequest),conflictLease=await rpc(one,'claim_workflow',conflictWf);
+   const conflictAttempt=await rpc(one,'admit',input(conflictRequest));await rpc(one,'claim_dispatch',{p_owner:owner,p_attempt:conflictAttempt.id});
+   const conflictJob='qwen-job-conflict-'+kind;
+   await rpc(one,'record_provider_identifiers',{p_owner:owner,p_attempt:conflictAttempt.id,p_request_id:conflictJob,p_response_id:null});
+   const conflictCheckpoint={status:200,statusText:'OK',headers:[],body:JSON.stringify({id:conflictJob,status:'COMPLETED',output:{analysis_text:'Saved visual evidence'}})};
+   const conflictFinish={p_owner:owner,p_attempt:conflictAttempt.id,p_job:conflictJob,p_checkpoint:conflictCheckpoint,p_evidence:{source:'RunPod status'}};
+   if(kind==='receipt'){
+    await rpc(one,'complete_qwen_estimate',conflictFinish);
+    assert.equal((await rpc(one,'settle',{...monetary,p_attempt:conflictAttempt.id})).conflict,true,'a monetary receipt cannot belong to two attempts');
+   }else if(kind==='identifier'){
+    assert.equal((await rpc(one,'record_provider_identifiers',{p_owner:owner,p_attempt:conflictAttempt.id,p_request_id:'different-job-conflict',p_response_id:null})).conflict,true);
+    await rpc(one,'checkpoint_response',{p_owner:owner,p_attempt:conflictAttempt.id,p_checkpoint:conflictCheckpoint});
+    const beforeMark=(await admin.query('select to_jsonb(a) row from standalone_provider_attempts a where id=$1',[conflictAttempt.id])).rows[0].row;
+    assert.equal(beforeMark.state,'dispatched','identifier conflict can precede the adapter uncertainty transition');
+    await assert.rejects(rpc(two,'complete_qwen_estimate',conflictFinish),/INFRASTRUCTURE_CONFLICT/,'crash before mark_uncertain cannot erase identifier conflict');
+    assert.deepEqual((await admin.query('select to_jsonb(a) row from standalone_provider_attempts a where id=$1',[conflictAttempt.id])).rows[0].row,beforeMark);
+    await rpc(one,'finish_workflow',{p_owner:owner,p_request:conflictRequest,p_lease:conflictLease.lease_token,p_status:'paused'});alreadyPaused=true;
+    assert.equal((await rpc(two,'claim_workflow',{...conflictWf,p_resume:true})).blocked,'unresolved_provider_attempt','known job cannot reopen workflow during crash window');
+    await rpc(one,'mark_uncertain',{p_owner:owner,p_attempt:conflictAttempt.id,p_reason:'Conflicting provider identity'});
+    await rpc(one,'checkpoint_response',{p_owner:owner,p_attempt:conflictAttempt.id,p_checkpoint:conflictCheckpoint});
+   }else{
+    await rpc(one,'record_partial_usage',{p_owner:owner,p_attempt:conflictAttempt.id,p_usage:{inputTokens:1},p_evidence:{source:'fixture usage'}});
+    assert.equal((await rpc(one,'record_partial_usage',{p_owner:owner,p_attempt:conflictAttempt.id,p_usage:{inputTokens:2},p_evidence:{source:'conflicting fixture usage'}})).conflict,true);
+    await rpc(one,'checkpoint_response',{p_owner:owner,p_attempt:conflictAttempt.id,p_checkpoint:conflictCheckpoint});
+   }
+   const raw=async()=> (await admin.query('select to_jsonb(a) row from standalone_provider_attempts a where id=$1',[conflictAttempt.id])).rows[0].row;
+   const beforeConflictRetry=await raw();assert.equal(beforeConflictRetry.state,'uncertain');
+   await assert.rejects(rpc(two,'complete_qwen_estimate',conflictFinish),/INFRASTRUCTURE_CONFLICT/);
+   assert.deepEqual(await raw(),beforeConflictRetry,'completion retry preserves conflict state, evidence and reservation');
+   if(!alreadyPaused)assert.equal((await rpc(one,'finish_workflow',{p_owner:owner,p_request:conflictRequest,p_lease:conflictLease.lease_token,p_status:'completed'})).status,'paused');
+   assert.equal((await rpc(two,'claim_workflow',{...conflictWf,p_resume:true})).blocked,'unresolved_provider_attempt','known job cannot bypass unacknowledged accounting conflict');
+   await rpc(one,'accept_uncertain_exposure',{p_owner:owner,p_attempt:conflictAttempt.id,p_revision:config.budget_revision,p_reserved:'20000'});
+   const acceptedLease=await rpc(two,'claim_workflow',{...conflictWf,p_resume:true});assert.equal(acceptedLease.claimed,true,'owner may continue from saved evidence without resolving the charge');
+   await assert.rejects(rpc(two,'complete_qwen_estimate',conflictFinish),/INFRASTRUCTURE_CONFLICT/,'owner acknowledgement cannot reclassify or settle conflicting evidence');
+   assert.deepEqual(await raw(),beforeConflictRetry);
+   assert.equal(String(await rpc(admin,'request_committed',{p_owner:owner,p_request:conflictRequest})),'20000');
+   assert.equal((await rpc(two,'finish_workflow',{p_owner:owner,p_request:conflictRequest,p_lease:acceptedLease.lease_token,p_status:'completed'})).status,'completed');
+  }
+  const estimatedConflictRequest='estimated-identifier-conflict',estimatedConflictWf=workflow(estimatedConflictRequest),estimatedConflictLease=await rpc(one,'claim_workflow',estimatedConflictWf);
+  const estimatedConflict=await rpc(one,'admit',input(estimatedConflictRequest));await rpc(one,'claim_dispatch',{p_owner:owner,p_attempt:estimatedConflict.id});
+  const estimatedConflictJob='qwen-estimated-conflict-job';await rpc(one,'record_provider_identifiers',{p_owner:owner,p_attempt:estimatedConflict.id,p_request_id:estimatedConflictJob,p_response_id:null});
+  const estimatedFinish={p_owner:owner,p_attempt:estimatedConflict.id,p_job:estimatedConflictJob,p_checkpoint:{status:200,statusText:'OK',headers:[],body:JSON.stringify({id:estimatedConflictJob,status:'COMPLETED',output:{analysis_text:'Persisted completed observation'}})},p_evidence:{source:'RunPod status'}};
+  await rpc(one,'complete_qwen_estimate',estimatedFinish);
+  assert.equal((await rpc(one,'record_provider_identifiers',{p_owner:owner,p_attempt:estimatedConflict.id,p_request_id:'different-estimated-job',p_response_id:null})).conflict,true);
+  const beforeEstimatedReplay=await getAttempt(estimatedConflictRequest);assert.equal(beforeEstimatedReplay.state,'estimated');
+  await assert.rejects(rpc(two,'complete_qwen_estimate',estimatedFinish),/INFRASTRUCTURE_CONFLICT/,'estimated replay must surface new conflicting evidence');
+  assert.deepEqual(await getAttempt(estimatedConflictRequest),beforeEstimatedReplay);
+  assert.equal(await rpc(two,'claim_dispatch',{p_owner:owner,p_attempt:estimatedConflict.id}),null);
+  await rpc(one,'finish_workflow',{p_owner:owner,p_request:estimatedConflictRequest,p_lease:estimatedConflictLease.lease_token,p_status:'completed'});
+  const rejectionConflictRequest='rejection-receipt-conflict',rejectionConflictWf=workflow(rejectionConflictRequest),rejectionConflictLease=await rpc(one,'claim_workflow',rejectionConflictWf);
+  const rejectionConflict=await rpc(one,'admit',input(rejectionConflictRequest));await rpc(one,'claim_dispatch',{p_owner:owner,p_attempt:rejectionConflict.id});
+  const rejectionCheckpoint={status:400,statusText:'Rejected',headers:[],body:'Submission rejected'};
+  const rejectionArgs={p_owner:owner,p_attempt:rejectionConflict.id,p_checkpoint:rejectionCheckpoint};
+  await rpc(one,'complete_qwen_rejection',rejectionArgs);
+  assert.equal((await rpc(one,'settle',{...monetary,p_attempt:rejectionConflict.id})).conflict,true);
+  const beforeRejectionRetry=await getAttempt(rejectionConflictRequest);assert.equal(beforeRejectionRetry.state,'uncertain');
+  await assert.rejects(rpc(two,'complete_qwen_rejection',rejectionArgs),/INFRASTRUCTURE_CONFLICT/);
+  assert.deepEqual(await getAttempt(rejectionConflictRequest),beforeRejectionRetry,'rejection replay cannot erase monetary conflict');
+  await rpc(one,'finish_workflow',{p_owner:owner,p_request:rejectionConflictRequest,p_lease:rejectionConflictLease.lease_token,p_status:'paused'});
   const snapshot=await rpc(two,'snapshot',{p_owner:owner});assert.ok(snapshot.attempts.some(a=>a.id===failed.id&&a.state==='estimated'&&a.actual_microusd===null));
   assert.equal((await admin.query('select spent_tokens from benchmark_budget_accounts')).rows[0].spent_tokens,'731','Developer Orchestrator accounting unchanged');
   await one.query('set role authenticated');await assert.rejects(rpc(one,'complete_qwen_estimate',finish),/permission denied/);

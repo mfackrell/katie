@@ -99,6 +99,11 @@ export async function describeImageWithRunpodQwen(imageDataUrl:string,question:s
     if(attempt.response_checkpoint.status!==200)throw new Error('RunPod rejected this saved image submission; it was not resent.');
     return observation(savedJob(attempt)!,sourceHash);
   }
+  if(attempt.state==='uncertain'&&attempt.response_checkpoint&&await ledger.uncertainExposureAccepted(context.userId,attempt.id)){
+    deps.onStatus?.('Using saved Qwen observation');
+    if(attempt.response_checkpoint.status!==200)throw new Error('The acknowledged saved Qwen rejection cannot provide output; separate image escalation is required.');
+    return observation(savedJob(attempt)!,sourceHash);
+  }
   let job=savedJob(attempt);
   let jobId=attempt.provider_request_id;
   if(jobId&&!JOB_ID.test(jobId))throw annotate(failure('runpod_job_mismatch','Saved Qwen job identifier is invalid.'));

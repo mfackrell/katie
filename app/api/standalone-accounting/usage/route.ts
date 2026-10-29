@@ -22,7 +22,7 @@ export async function GET(request: NextRequest) {
       id: attempt.id, requestId: attempt.request_id, provider: attempt.provider, model: attempt.model, category: attempt.category, state: attempt.state,
       preparedHash: attempt.prepared_hash, pricingVersion: attempt.pricing_version, budgetRevision: attempt.budget_revision, reservedMicrousd: attempt.reserved_microusd,
       continuationBlockedReason: workflowReasons.get(attempt.request_id),
-      pollableRunpod: attempt.provider==='runpod'&&attempt.model===QWEN_STILL_POLICY.model&&attempt.pricing_version===QWEN_STILL_POLICY.version&&!!attempt.provider_request_id&&/^[A-Za-z0-9-]{8,150}$/.test(attempt.provider_request_id),
+      pollableRunpod: attempt.provider==='runpod'&&attempt.model===QWEN_STILL_POLICY.model&&attempt.pricing_version===QWEN_STILL_POLICY.version&&!!attempt.provider_request_id&&/^[A-Za-z0-9-]{8,150}$/.test(attempt.provider_request_id)&&!attempt.response_checkpoint&&!snapshot.events?.some(event=>event.attempt_id===attempt.id&&['receipt_conflict','identifier_conflict','usage_conflict'].includes(event.kind)),
       exposureAccepted: attempt.state === 'uncertain' ? await ledger.uncertainExposureAccepted(ownerId,attempt.id) : false,
     })));
     // Only expose actionable attempts from this saved conversation. Daily aggregate can span standalone actors.

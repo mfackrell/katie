@@ -42,6 +42,15 @@ language sql immutable set search_path=public,pg_temp as $$
  and a.prepared_payload#>>'{payload,input,body,messages,0,content,1,text}'=a.prepared_payload->>'question',false)
 $$;
 
+-- A valid job ID permits polling, not automatic reconciliation of conflicting
+-- monetary, identity or usage evidence, including a crash before mark_uncertain.
+-- Only genuine settlement supplies actual cost and clears the conflict guard.
+create function public.standalone_qwen_unresolved_conflict(a public.standalone_provider_attempts) returns boolean
+language sql stable security definer set search_path=public,pg_temp as $$
+ select a.state in('dispatched','uncertain','estimated') and exists(select 1 from standalone_attempt_events e
+ where e.owner_id=a.owner_id and e.attempt_id=a.id and e.kind in('receipt_conflict','identifier_conflict','usage_conflict'))
+$$;
+
 create function public.standalone_complete_qwen_estimate(p_owner uuid,p_attempt uuid,p_job text,p_checkpoint jsonb,p_evidence jsonb) returns jsonb
 language plpgsql security definer set search_path=public,pg_temp as $$
 declare a standalone_provider_attempts;job jsonb;completion_evidence jsonb;
@@ -49,6 +58,7 @@ begin
  perform 1 from standalone_owner_configuration where owner_id=p_owner for update;
  select * into a from standalone_provider_attempts where id=p_attempt and owner_id=p_owner for update;
  if not found or not standalone_qwen_policy_attempt(a) then raise exception 'STANDALONE_INFRASTRUCTURE_POLICY_DENIED';end if;
+ if standalone_qwen_unresolved_conflict(a) then raise exception 'STANDALONE_INFRASTRUCTURE_CONFLICT';end if;
  if a.state not in('dispatched','uncertain','estimated','settled') or coalesce(p_job,'') !~ '^[A-Za-z0-9-]{8,150}$'
  or a.provider_request_id is distinct from p_job or jsonb_typeof(p_checkpoint) is distinct from 'object'
  or p_checkpoint->>'status' is distinct from '200' or coalesce(length(p_checkpoint->>'body'),0) not between 1 and 2000000
@@ -119,7 +129,7 @@ begin
  return to_jsonb(w)||jsonb_build_object('claimed',false,'blocked','request_overrun');end if;
  if exists(select 1 from standalone_provider_attempts a where a.owner_id=p_owner and a.request_id=p_request
  and (a.state='dispatched' or (a.state='uncertain' and not standalone_uncertain_exposure_accepted(p_owner,a.id)))
- and not (standalone_qwen_policy_attempt(a) and coalesce(a.provider_request_id ~ '^[A-Za-z0-9-]{8,150}$',false))) then
+ and not (standalone_qwen_policy_attempt(a) and not standalone_qwen_unresolved_conflict(a) and coalesce(a.provider_request_id ~ '^[A-Za-z0-9-]{8,150}$',false))) then
  return to_jsonb(w)||jsonb_build_object('claimed',false,'blocked','unresolved_provider_attempt');end if;
  if exists(select 1 from standalone_provider_attempts where owner_id=p_owner and request_id=p_request and cancelled_by_owner_at is not null) then
  return to_jsonb(w)||jsonb_build_object('claimed',false,'blocked','cancelled');end if;
@@ -198,6 +208,7 @@ begin
  perform 1 from standalone_owner_configuration where owner_id=p_owner for update;
  select * into a from standalone_provider_attempts where id=p_attempt and owner_id=p_owner for update;
  if not found or not standalone_qwen_policy_attempt(a) then raise exception 'STANDALONE_INFRASTRUCTURE_POLICY_DENIED';end if;
+ if standalone_qwen_unresolved_conflict(a) then raise exception 'STANDALONE_INFRASTRUCTURE_CONFLICT';end if;
  if a.state not in('dispatched','estimated') or a.provider_request_id is not null
  or jsonb_typeof(p_checkpoint) is distinct from 'object'
  or coalesce(p_checkpoint->>'status','') not in('400','401','403','404','422','429')
@@ -213,6 +224,7 @@ begin
 end $$;
 revoke all on function public.standalone_complete_qwen_rejection(uuid,uuid,jsonb) from public,anon,authenticated;
 grant execute on function public.standalone_complete_qwen_rejection(uuid,uuid,jsonb) to service_role;
+revoke all on function public.standalone_qwen_unresolved_conflict(public.standalone_provider_attempts) from public,anon,authenticated,service_role;
 revoke all on function public.standalone_qwen_policy_attempt(public.standalone_provider_attempts) from public,anon,authenticated,service_role;
 revoke all on function public.standalone_complete_qwen_estimate(uuid,uuid,text,jsonb,jsonb) from public,anon,authenticated;
 grant execute on function public.standalone_complete_qwen_estimate(uuid,uuid,text,jsonb,jsonb) to service_role;
