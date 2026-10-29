@@ -21,6 +21,11 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+      - name: Read only the two existing incident responses, emitting content-free structure
+        if: github.head_ref == 'fix/native-sdk-replay-metadata' && github.event.pull_request.head.repo.full_name == github.repository
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: node scripts/benchmark/native-response-shape-forensics.mjs
       - name: Install locked repository dependencies without hooks
         run: npm ci --ignore-scripts
       - name: Install pinned real Codex SDK
@@ -33,6 +38,20 @@ jobs:
         run: command -v socat >/dev/null || (sudo apt-get update && sudo apt-get install -y socat)
       - name: Actual Full child imports pinned ESM SDK before any authority
         run: node scripts/benchmark/native-child-preflight-probe.mjs
+      - name: Reproduce prior gateway denial on actual SDK empty logprobs replay at frozen baseline
+        env:
+          KATIE_BENCHMARK_GATEWAY_DIAGNOSTICS: enabled
+          KATIE_NATIVE_PROBE_BASELINE: 0015bcdb8ac9ad94b7c74d1a4cd76737903b1319
+          KATIE_NATIVE_PROBE_EXPECT_LOGPROBS_DENIAL: '1'
+        run: |
+          git fetch origin f6c98c5469dc6744279cce9148c345f9e9f4e820 0015bcdb8ac9ad94b7c74d1a4cd76737903b1319
+          restore() { for file in native-request-admission native-http-bridge authenticated-native-gateway; do cp "$RUNNER_TEMP/corrected-$file.mjs" "scripts/benchmark/$file.mjs"; done; }
+          trap restore EXIT
+          for file in native-request-admission native-http-bridge authenticated-native-gateway; do
+            cp "scripts/benchmark/$file.mjs" "$RUNNER_TEMP/corrected-$file.mjs"
+            git show "f6c98c5469dc6744279cce9148c345f9e9f4e820:scripts/benchmark/$file.mjs" > "scripts/benchmark/$file.mjs"
+          done
+          node scripts/benchmark/native-development-child-contained-probe.mjs
       - name: Actual Full child and production model exercise all paid admission checks without billing
         env:
           KATIE_BENCHMARK_GATEWAY_DIAGNOSTICS: enabled
@@ -70,3 +89,4 @@ jobs:
         run: node scripts/benchmark/native-four-phase-contained-host-probe.mjs
       - name: Qualify actual SDK plus HTTP gateway inside containment
         run: bash scripts/benchmark/real-codex-gateway-bwrap-probe.sh
+

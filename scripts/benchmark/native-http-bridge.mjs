@@ -1,4 +1,4 @@
-import {createNativeReasoningProvenance} from './native-request-admission.mjs';
+import {createNativeReasoningProvenance,nativeAdmissionDiagnostic} from './native-request-admission.mjs';
 import {createServer} from 'node:http';
 import {createHash,timingSafeEqual} from 'node:crypto';
 import {forwardAuthorizedModelRequest} from './authenticated-native-gateway.mjs';
@@ -45,9 +45,12 @@ export function createNativeHttpBridge({db,grantToken,trialId,executionEpoch,
    if(process.env.KATIE_BENCHMARK_GATEWAY_DIAGNOSTICS==='enabled'){
     const code=String(error?.message||'UNKNOWN');
     if(/^NATIVE_|^GATEWAY_/.test(code))console.error('NATIVE_GATEWAY_DENIAL_CODE',code.slice(0,120));
+    const diagnostic=nativeAdmissionDiagnostic(error);
+    if(diagnostic)console.error('NATIVE_GATEWAY_ADMISSION_DIAGNOSTIC',JSON.stringify(diagnostic));
    }
    res.writeHead(403,{'content-type':'application/json','cache-control':'no-store'});
    res.end(JSON.stringify({error:{message:'GATEWAY_REQUEST_DENIED'}}));
   }
  });
 }
+

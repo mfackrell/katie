@@ -1,4 +1,4 @@
-import {admitNativeRequest} from './native-request-admission.mjs';
+import {admitNativeRequest,nativeAdmissionError} from './native-request-admission.mjs';
 import {createHash,randomUUID} from 'node:crypto';
 
 // Trusted gateway process only. Never supply its service-role DB client,
@@ -35,7 +35,7 @@ export async function forwardAuthorizedModelRequest({
  };
  const syntheticFixture=upstream.nonbillableFixture===true;
  if(!requestBody||typeof requestBody!=='object'||Array.isArray(requestBody)||(!syntheticFixture&&containsNontext(requestBody.input)))
-  throw Error('GATEWAY_UNBOUNDED_INPUT_DENIED');
+  throw nativeAdmissionError(!requestBody||typeof requestBody!=='object'||Array.isArray(requestBody)?'request-object':'nontext-input',requestBody);
  const outputCap=requestBody.max_output_tokens==null?4096:requestBody.max_output_tokens;
  if(!syntheticFixture&&(!Number.isSafeInteger(outputCap)||outputCap<1||outputCap>upperTokens))
   throw Error('GATEWAY_OUTPUT_LIMIT_DENIED');
@@ -66,3 +66,4 @@ export async function forwardAuthorizedModelRequest({
   throw Object.assign(new Error('GATEWAY_UPSTREAM_UNCERTAIN'),{cause:error,operationId:id});
  }
 }
+
