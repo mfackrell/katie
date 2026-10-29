@@ -848,7 +848,7 @@ export function ChatPanel({
   const [fileReferences, setFileReferences] = useState<FileReference[]>([]);
   const [attachmentsReady,setAttachmentsReady]=useState(false);
   const [attachmentSaveError,setAttachmentSaveError]=useState(false);
-  useEffect(()=>{let active=true;readPendingAttachments(chatId).then(value=>{if(!active)return;if(value){setSelectedImages(value.images);setSelectedImageFiles(value.imageFiles);setSelectedVideos(value.videos);setSelectedFiles(value.files);setFileReferences(value.references);}setAttachmentsReady(true);}).catch(()=>{if(active)setAttachmentsReady(true);});return()=>{active=false;};},[chatId]);
+  useEffect(()=>{let active=true;readPendingAttachments(chatId,()=>{if(active)setAttachmentSaveError(true);}).then(value=>{if(!active)return;if(value){setSelectedImages(value.images);setSelectedImageFiles(value.imageFiles);setSelectedVideos(value.videos);setSelectedFiles(value.files);setFileReferences(value.references);}setAttachmentsReady(true);}).catch(()=>{if(active)setAttachmentsReady(true);});return()=>{active=false;};},[chatId]);
   useEffect(()=>{if(!attachmentsReady)return;void savePendingAttachments(chatId,{images:selectedImages,imageFiles:selectedImageFiles,videos:selectedVideos,files:selectedFiles,references:fileReferences}).then(()=>setAttachmentSaveError(false)).catch(()=>setAttachmentSaveError(true));},[chatId,attachmentsReady,selectedImages,selectedImageFiles,selectedVideos,selectedFiles,fileReferences]);
   const [statusMessage, setStatusMessage] = useState("");
   const [imageObservationStages, setImageObservationStages] = useState<string[]>([]);

@@ -7,7 +7,7 @@ import type { DailyUsage, UsageTotals } from '@/lib/standalone-accounting/daily'
 interface Configuration { timezone: string; per_call_limit_microusd: string | null; request_limit_microusd: string | null; budget_revision: number }
 interface Pending { id: string; requestId: string; provider: string; model: string; category: string; preparedHash: string; pricingVersion: string; budgetRevision: number; reservedMicrousd: string; reason: string; pauseReason: string | null; resolvedModel: string | null; estimatorVersion: string; tradeoffs: string | null; createdAt: string; preview: { textBytes: number; imageCount: number; imageBytes: number; inputTokens: number; imageTokens: number; outputAllowance: number; assumptions: string[]; issues: string[]; status: string }; requestExposure: UsageTotals }
 type DecisionAttempt = Pick<Pending, 'id' | 'requestId' | 'preparedHash' | 'pricingVersion' | 'budgetRevision' | 'reservedMicrousd'>;
-interface ActiveAttempt extends DecisionAttempt { provider: string; model: string; category: string; state: 'reserved' | 'dispatched' | 'uncertain'; parentStatus?: string; continuationActionable?: boolean; exposureAccepted?: boolean; continuationBlockedReason?: string | null; pollableRunpod?: boolean }
+interface ActiveAttempt extends DecisionAttempt { provider: string; model: string; category: string; state: 'reserved' | 'dispatched' | 'uncertain'; parentStatus?: string; continuationActionable?: boolean; cancellationActionable?: boolean; exposureAccepted?: boolean; continuationBlockedReason?: string | null; pollableRunpod?: boolean }
 interface Snapshot { configuration: Configuration | null; daily: DailyUsage | null; pending: Pending[]; active?: ActiveAttempt[]; alerts?: Array<{ attemptId: string; provider: string; model: string; kind: string; message: string; actualMicrousd: string | null; reservedMicrousd: string }> }
 interface Props { rail?: boolean; actorId: string; chatId: string; onResumeAttempt?: (attempt: { attemptId: string; requestId: string }) => Promise<void> | void }
 
@@ -177,7 +177,7 @@ export function StandaloneUsage({ actorId, chatId, onResumeAttempt, rail = false
         </>}
         {attempt.pollableRunpod && <p className="mt-1">Qwen image analysis was already submitted. Checking the saved analysis polls that existing job and will not submit another image analysis.</p>}
         {attempt.state === 'dispatched' && !attempt.pollableRunpod && <p className="mt-1">Already dispatched. Cancellation stops remaining work where possible; spending exposure stays held until provider usage is reconciled.</p>}
-        {attempt.continuationActionable === true && <button type="button" disabled={Boolean(busy)} onClick={() => void decide(attempt, 'cancel')} className="mt-1 underline disabled:opacity-50">Cancel remaining work</button>}
+        {attempt.cancellationActionable === true && <button type="button" disabled={Boolean(busy)} onClick={() => void decide(attempt, 'cancel')} className="mt-1 underline disabled:opacity-50">Cancel remaining work</button>}
       </div>)}
     </div>}
     {snapshot?.pending.map(attempt => <div key={attempt.id} className="mt-3 rounded border border-amber-400/40 p-3">
@@ -288,7 +288,7 @@ export function StandaloneUsage({ actorId, chatId, onResumeAttempt, rail = false
         </>}
         {attempt.pollableRunpod && <p className="mt-1">Qwen image analysis was already submitted. Checking the saved analysis polls that existing job and will not submit another image analysis.</p>}
         {attempt.state === 'dispatched' && !attempt.pollableRunpod && <p className="mt-1">Already dispatched. Cancellation stops remaining work where possible; spending exposure stays held until provider usage is reconciled.</p>}
-        {attempt.continuationActionable === true && <button type="button" disabled={Boolean(busy)} onClick={() => void decide(attempt, 'cancel')} className="mt-1 underline disabled:opacity-50">Cancel remaining work</button>}
+        {attempt.cancellationActionable === true && <button type="button" disabled={Boolean(busy)} onClick={() => void decide(attempt, 'cancel')} className="mt-1 underline disabled:opacity-50">Cancel remaining work</button>}
       </div>)}
     </div>}
     {snapshot?.pending.map(attempt => <div key={attempt.id} className="mt-3 rounded border border-amber-400/40 p-3">

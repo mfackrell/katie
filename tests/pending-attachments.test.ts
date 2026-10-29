@@ -24,3 +24,13 @@ test('legacy failed image retry state is durably cleaned on load and stays clean
  const text=(await api.readPendingAttachments('text-only'))!;
  assert.deepEqual(text.references,[]);assert.deepEqual(text.images,[]);assert.equal(records.has('text-only'),false);
 });
+
+test('storage failure preserves cleaned session attachments and reports failed persistence',async t=>{
+ const original=globalThis.indexedDB;t.after(()=>{globalThis.indexedDB=original;});
+ globalThis.indexedDB={open(){const request:any={};queueMicrotask(()=>{request.error=Error('Storage unavailable');request.onerror();});return request;}} as unknown as IDBFactory;
+ const {savePendingAttachments,readPendingAttachments}=await import('../lib/ui/pending-attachments');
+ const image=new File(['pixels'],'selected.jpg',{type:'image/jpeg'});
+ await assert.rejects(savePendingAttachments('session-fallback',{images:['current pixels'],imageFiles:[image],files:[],videos:[],references:[ref('image','image/jpeg'),ref('video','video/mp4')]}));
+ let failures=0;const restored=(await readPendingAttachments('session-fallback',()=>failures++))!;
+ assert.equal(failures,1);assert.equal(restored.imageFiles[0],image);assert.deepEqual(restored.images,['current pixels']);assert.deepEqual(restored.references,[ref('video','video/mp4')]);
+});

@@ -21,7 +21,7 @@ test('standalone browser: explicit settings, scopes, exact approval resume, redu
   const actorId = '22222222-2222-4222-8222-222222222222', chatId = '33333333-3333-4333-8333-333333333333';
   let server, browser, output = '';
   const totals = overrides => ({ inputTokens: 123, outputTokens: 45, missingInputCount: 0, missingOutputCount: 1, estimatedCostMicrousd: '250000', pendingExposureMicrousd: '900000', uncertainExposureMicrousd: '100000', unknownCostCount: 1, attemptCount: 4, ...overrides });
-  const pending = (suffix, overrides = {}) => ({ parentStatus:'paused', continuationActionable:true, id: `attempt-${suffix}`, requestId: `original-${suffix}`, provider: 'openai', model: 'gpt-4o', resolvedModel: null, category: 'hidden_router', preparedHash: 'a'.repeat(64), pricingVersion: 'fixture-pricing-v1', estimatorVersion: 'saved-estimator-v1', budgetRevision: 1, reservedMicrousd: '300000', reason: 'Choose a reply model for this saved turn.', pauseReason: 'per_call_threshold', tradeoffs: null, createdAt: '2026-10-28T10:00:00Z', preview: { textBytes: 3200, imageCount: 2, imageBytes: 4096, inputTokens: 3500, imageTokens: 256, outputAllowance: 8192, assumptions: ['Input token count is an estimate, not a guaranteed spending ceiling.', 'All allowed output tokens include hidden reasoning.'], issues: [], status: 'estimated' }, requestExposure: totals(), ...overrides });
+  const pending = (suffix, overrides = {}) => ({ parentStatus:'paused', continuationActionable:true, cancellationActionable:true, id: `attempt-${suffix}`, requestId: `original-${suffix}`, provider: 'openai', model: 'gpt-4o', resolvedModel: null, category: 'hidden_router', preparedHash: 'a'.repeat(64), pricingVersion: 'fixture-pricing-v1', estimatorVersion: 'saved-estimator-v1', budgetRevision: 1, reservedMicrousd: '300000', reason: 'Choose a reply model for this saved turn.', pauseReason: 'per_call_threshold', tradeoffs: null, createdAt: '2026-10-28T10:00:00Z', preview: { textBytes: 3200, imageCount: 2, imageBytes: 4096, inputTokens: 3500, imageTokens: 256, outputAllowance: 8192, assumptions: ['Input token count is an estimate, not a guaranteed spending ceiling.', 'All allowed output tokens include hidden reasoning.'], issues: [], status: 'estimated' }, requestExposure: totals(), ...overrides });
   let configuration = null, proposals = [], running = [], fail = false, resumeMode = 'paused', savedMessages = [], denyExposure = false, uncertainTotal = '100000', infrastructureTotal = '0';
   const decisions = [], resumes = [], configurations = [], scopes = [], external = [], unknownRoutes = [], errors = [], messageSnapshots = [];
   let page;
@@ -317,7 +317,7 @@ test('standalone browser: explicit settings, scopes, exact approval resume, redu
     assert.equal(await usage.getByRole('button',{name:'Approve once',exact:true}).count(),1,'normal exact-attempt approval remains available for infrastructure threshold pause');
     assert.equal(resumes.length,6);
     // Completed parents retain unresolved exposure without operational controls.
-    proposals=[];running=[{...pending('completed-qwen'),provider:'runpod',model:'Qwen/Qwen3-VL-8B-Instruct',state:'uncertain',reservedMicrousd:'20000',parentStatus:'completed',continuationActionable:false}];
+    proposals=[];running=[{...pending('completed-qwen'),provider:'runpod',model:'Qwen/Qwen3-VL-8B-Instruct',state:'uncertain',reservedMicrousd:'20000',parentStatus:'completed',continuationActionable:false,cancellationActionable:false}];
     await usage.getByRole('button',{name:'Refresh',exact:true}).click();
     await active.getByText('Uncertain exposure retained · parent request already completed',{exact:true}).waitFor();
     assert.equal(await active.getByRole('button').count(),0);
@@ -326,6 +326,10 @@ test('standalone browser: explicit settings, scopes, exact approval resume, redu
     await usage.getByRole('button',{name:'Refresh',exact:true}).click();
     await active.getByRole('alert').filter({hasText:'independent technical blocker'}).waitFor();
     assert.equal(await active.getByRole('button').count(),0);
+    running=[{...pending('running'),state:'dispatched',parentStatus:'running',continuationActionable:false,cancellationActionable:true}];
+    await usage.getByRole('button',{name:'Refresh',exact:true}).click();
+    await active.getByRole('button',{name:'Cancel remaining work',exact:true}).waitFor();
+    assert.equal(await active.getByRole('button').count(),1,'running non-uncertain work remains cancellable');
     // Exact incident: an old failed JPEG receipt, followed by a plain text turn.
     running=[];resumeMode='completed';
     await page.evaluate(async id=>{

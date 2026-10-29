@@ -199,9 +199,18 @@ test('uncertain financial exposure is actionable only while its parent is paused
    const response=await usage(request(`usage?actorId=${actorId}&chatId=${chatId}`));
    const body=await response.json();assert.equal(body.active[0].parentStatus,status);
    assert.equal(body.active[0].continuationActionable,status==='paused');
+   assert.equal(body.active[0].cancellationActionable,status==='paused');
    assert.equal(body.active[0].reservedMicrousd,'100000');
  }
  parentStatus='failed';parentError='standalone_no_priceable_vision: independent blocker';
  const body=await (await usage(request(`usage?actorId=${actorId}&chatId=${chatId}`))).json();
  assert.match(body.active[0].continuationBlockedReason,/independent blocker/);assert.equal(body.active[0].continuationActionable,false);
+});
+
+test('running reserved/dispatched work remains cancellable without offering resume or accept',async()=>{
+ parentStatus='running';
+ for(const state of ['reserved','dispatched'] as const){row.state=state;
+   const body=await (await usage(request(`usage?actorId=${actorId}&chatId=${chatId}`))).json();
+   assert.equal(body.active[0].continuationActionable,false);assert.equal(body.active[0].cancellationActionable,true);
+ }
 });

@@ -21,10 +21,10 @@ export function cleanPendingAttachments(value: PendingAttachments): PendingAttac
   return {...value, references: value.references.filter(reference =>
     reference.attachmentKind !== "image" && !reference.mimeType.startsWith("image/"))};
 }
-export async function readPendingAttachments(id: string) {
+export async function readPendingAttachments(id: string, onPersistenceFailure?: () => void) {
   if (memory.has(id)) {
     const value = cleanPendingAttachments(memory.get(id)!);
-    await savePendingAttachments(id, value);
+    await savePendingAttachments(id, value).catch(() => onPersistenceFailure?.());
     return value;
   }
   const db = await database();
@@ -42,7 +42,7 @@ export async function readPendingAttachments(id: string) {
     if (!stored) return;
     const cleaned = cleanPendingAttachments(stored);
     // Await the durable rewrite before exposing restored composer state.
-    await savePendingAttachments(id, cleaned);
+    await savePendingAttachments(id, cleaned).catch(() => onPersistenceFailure?.());
     return cleaned;
   } finally {
     db.close();
