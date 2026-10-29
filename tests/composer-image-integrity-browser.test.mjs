@@ -40,6 +40,18 @@ test('composer images preserve selection identity through picker, paste, restore
     browser = await chromium.launch({ executablePath: process.env.KATIE_TEST_CHROMIUM || await bundledChromium.executablePath(), args: bundledChromium.args, headless: true });
     page = await browser.newPage({ viewport: { width: 1280, height: 1100 } });
     page.on('pageerror', error => errors.push(error.message));
+    await page.addInitScript(()=>{
+      if(sessionStorage.getItem('composer-idb-released'))return;
+      const open=indexedDB.open.bind(indexedDB),pending=[];let released=false;
+      indexedDB.open=(...args)=>{
+        const req=open(...args);if(args[0]!=='katie-pending-input-v1')return req;
+        return new Proxy(req,{get(target,key){const value=Reflect.get(target,key,target);return typeof value==='function'?value.bind(target):value;},set(target,key,value){
+          if(key==='onsuccess'){target.onsuccess=event=>{if(released)value?.call(target,event);else pending.push(()=>value?.call(target,event));};return true;}
+          return Reflect.set(target,key,value,target);
+        }});
+      };
+      window.__releaseComposerDatabase=()=>{released=true;sessionStorage.setItem('composer-idb-released','1');for(const callback of pending.splice(0))callback();};
+    });
  await page.route('**/*',async route=>{
   const req=route.request(),url=new URL(req.url());if(url.origin!==origin){external.push(req.url());return route.abort();}
   if(!url.pathname.startsWith('/api/')&&!url.pathname.startsWith('/fixture-storage/'))return route.continue();
@@ -70,6 +82,14 @@ test('composer images preserve selection identity through picker, paste, restore
  const verify=(body,count)=>{assert.deepEqual(body.images,[]);assert.equal(receivedCounts.get(body),count,'real server manifest helper receives every selected source');assert.equal(JSON.stringify(body).includes(png),false,'chat contains no original base64 image bytes');assert.equal(JSON.stringify(body).includes('data:image/'),false,'chat contains only compact private image references');assert.equal(body.fileReferences.length,count);assert.equal(body.attachmentManifest.imageCount,count);assert.equal(new Set(body.fileReferences.map(r=>r.fileId)).size,count);assert.ok(body.fileReferences.every(r=>r.attachmentKind==='image'));};
  const waitChats=async count=>{await page.waitForFunction(()=>!document.querySelector('main textarea')?.disabled);await new Promise((resolve,reject)=>{const end=Date.now()+10000;const timer=setInterval(()=>{if(chats.length>=count){clearInterval(timer);resolve();}else if(Date.now()>end){clearInterval(timer);reject(Error('Expected chat transmission'));}},30);});};
  await open();
+ // A slow IndexedDB read must not disable an ordinary text-only conversation.
+ await send();await waitChats(1);verify(chats[0],0);assert.equal(events.join(','),'chat');
+ await page.waitForFunction(()=>[...document.querySelectorAll('main textarea')].at(-1)?.value==='');
+ // A fresh visible image while that read is pending must never become text-only.
+ await page.locator('input[type=file]').setInputFiles(file('pending-read.png'));await preview().waitFor();await page.locator('main textarea').last().fill('Keep this visible image attached');await page.locator('main textarea').last().press('Enter');
+ assert.equal(chats.length,1);assert.equal(events.join(','),'chat');assert.equal(await preview().count(),1);
+ await page.evaluate(()=>window.__releaseComposerDatabase());await send();await waitChats(2);verify(chats[1],1);assert.equal(chats[1].fileReferences[0].fileName,'pending-read.png');await preview().waitFor({state:'detached'});
+ chats.length=0;events.length=0;
  // File picker creates a visible selection; private storage receipt precedes chat.
  await page.locator('input[type=file]').setInputFiles(file('picker.png'));await preview().waitFor();await send();await waitChats(1);verify(chats[0],1);assert.deepEqual(events.slice(0,4),['prepare','storage','complete','chat']);await preview().waitFor({state:'detached'});
  // Real paste event follows the same upload path, including after a browser reload.

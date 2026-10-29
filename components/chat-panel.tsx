@@ -856,7 +856,7 @@ export function ChatPanel({
     let active=true;setAttachmentsReady(false);setAttachmentChatId(null);setUploadingFiles(false);setSelectedImages([]);setSelectedVideos([]);setSelectedFiles([]);setFileReferences([]);setAttachmentError("");
     readPendingAttachments(chatId,()=>{if(active)setAttachmentSaveError(true);}).then(value=>{
       if(!active)return;
-      if(value){setSelectedImages(value.images);setSelectedVideos(value.videos);setSelectedFiles(value.files);setFileReferences(value.references);}
+      if(value){setSelectedImages(current=>[...value.images,...current]);setSelectedVideos(current=>[...value.videos,...current]);setSelectedFiles(current=>[...value.files,...current]);setFileReferences(current=>[...value.references,...current]);}
       setAttachmentChatId(chatId);setAttachmentsReady(true);
     }).catch(()=>{if(active){setAttachmentChatId(chatId);setAttachmentsReady(true);setAttachmentSaveError(true);}});
     return()=>{active=false;};
@@ -903,9 +903,12 @@ export function ChatPanel({
     [actorId, chatId],
   );
 
+  const hasComposerAttachments = selectedImages.length + selectedVideos.length + selectedFiles.length + fileReferences.length > 0;
+  const composerAttachmentsReady = attachmentsReady && attachmentChatId===chatId;
   const canSend = useMemo(
     () =>
-      !managedAgentId && draftReady && attachmentsReady && attachmentChatId===chatId && hasValidChatSelection &&
+      !managedAgentId && draftReady && (attachmentsReady || input.trim().length > 0) &&
+      (!hasComposerAttachments || composerAttachmentsReady) && hasValidChatSelection &&
       (input.trim().length > 0 ||
         selectedImages.length > 0 ||
         selectedVideos.length > 0 ||
@@ -925,6 +928,8 @@ export function ChatPanel({
       managedAgentId,
       draftReady,
       attachmentsReady,
+      hasComposerAttachments,
+      composerAttachmentsReady,
       attachmentChatId,
       chatId,
     ],
@@ -1557,7 +1562,7 @@ export function ChatPanel({
       );
       return;
     }
-    if (loading || !attachmentsReady || attachmentChatId!==chatId || (!canSend && !reactionContent)) {
+    if (loading || (!reactionContent && hasComposerAttachments && !composerAttachmentsReady) || (!canSend && !reactionContent)) {
       return;
     }
 

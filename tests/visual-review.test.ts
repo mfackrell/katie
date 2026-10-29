@@ -106,11 +106,15 @@ test("a separate Katie turn restores owned tiles for comparison without presenti
   const files = new Map<string, string>();
   const store = createWebsiteEvidenceStore({ getBucket: async () => ({ data: { public: false } }), from: () => ({ upload: async (p: string, s: string) => { files.set(p, s); return {}; }, list: async () => ({ data: [...files.keys()].map(p => ({ name: p.split('/').at(-1) })) }), download: async (p: string) => ({ data: new Blob([files.get(p)!]) }) }) } as any);
   await store.save(actor, chat, request, browserResearchEvidence(website, params.user));
-  const restored = await store.restore(actor, chat, "Review the site again", []);
+  const websiteHistory=[{role:'user',content:params.user},{role:'assistant',content:'The rendered website inspection is saved.'}];
+  const unrelated=await store.restore(actor,chat,'Explain that photo in more detail',websiteHistory,{hasCurrentAttachments:true});
+  assert.equal(unrelated.context,'');assert.deepEqual(unrelated.images,[]);assert.equal(unrelated.previousWebsiteEvidence,undefined);
+  const restored = await store.restore(actor, chat, "Review the site again", websiteHistory);
+  assert.equal(restored.fresh,true);
   assert.deepEqual(restored.images, []); assert.deepEqual(restored.previousWebsiteEvidence, website);
   const after = await capture('<p id="issue">Original offer</p>', '', {}, restored.previousWebsiteEvidence);
   assert.ok(after.comparisons?.every(c => c.issues.every(i => i.status === "resolved")));
-  assert.equal((await store.restore(request, chat, "Review the site again", [])).previousWebsiteEvidence, undefined);
+  assert.equal((await store.restore(request, chat, "Review the site again", websiteHistory)).previousWebsiteEvidence, undefined);
 });
 
 
