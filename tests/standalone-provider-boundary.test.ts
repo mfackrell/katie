@@ -1,4 +1,4 @@
-import test from 'node:test';
+import test, { type TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 import OpenAI from 'openai';
 import { createAccountingFetch } from '../lib/standalone-accounting/dispatch';
@@ -8,6 +8,10 @@ import { createStandaloneLedger } from '../lib/standalone-accounting/ledger';
 import type { LedgerAttempt, AdmitAttemptInput, ResponseCheckpoint, SettlementInput } from '../lib/standalone-accounting/types';
 import { OpenAiProvider } from '../lib/providers/openai-provider';
 import { nativeToolTurn } from '../lib/providers/native-tools';
+import * as accountingDispatch from '../lib/standalone-accounting/dispatch';
+import { googleGenerateContent } from '../lib/providers/google-transport';
+import type { GenerateContentParameters } from '@google/genai';
+import { selectStoredAttachments } from '../lib/chat/attachment-selection';
 import { ClaudeProvider } from '../lib/providers/claude-provider';
 import { claudeCachedSystem } from '../lib/providers/claude-cache';
 
@@ -27,7 +31,7 @@ function fakeLedger(paused = false) {
         attempt_key: input.attemptKey, base_attempt_key: input.attemptKey, source_prepared_hash: input.preparedHash, prepared_hash: input.preparedHash,
         prepared_payload: input.preparedPayload, pricing_version: input.pricingVersion, reserved_microusd: input.reservedMicrousd,
         preflight_estimate: input.preflightEstimate, estimator_version: input.estimatorVersion, reason: input.reason,
-        provider: input.provider, model: input.model, state: paused ? 'paused' : 'reserved', response_checkpoint: null } as LedgerAttempt;
+        provider: input.provider, model: input.model, category: input.category, state: paused ? 'paused' : 'reserved', response_checkpoint: null } as LedgerAttempt;
       attempts.push(attempt); return attempt;
     },
     async claimDispatch(_owner: string, id: string) { const attempt = attempts.find(item => item.id === id)!; if (attempt.state !== 'reserved') return null; events.push('claim'); attempt.state = 'dispatched'; return attempt; },
@@ -353,3 +357,86 @@ for (const scenario of ['one-hour', 'missing-lifetime', 'conflicting-split', 'sc
     assert.equal(fake.events.includes('settle'), false);
   });
 }
+
+
+// Capture before per-test transport replacement; all accounting policy stays real.
+const actualAccountingFetch = createAccountingFetch;
+function googleFixture(t: TestContext) {
+  const fake = fakeLedger(true), sent: string[] = [];
+  t.mock.method(accountingDispatch, 'createAccountingFetch', (provider: Parameters<typeof createAccountingFetch>[0]) =>
+    actualAccountingFetch(provider, async (_url, init) => {
+      sent.push(String(init?.body));
+      return new Response(JSON.stringify({ responseId: 'google-fixture', modelVersion: 'gemini-2.5-flash',
+        candidates: [{ finishReason: 'STOP', content: { role: 'model', parts: [{ text: JSON.stringify({
+          selections: [{ id: 'saved', mode: 'source' }], rationale: 'Named saved file.'
+        }) }] } }], usageMetadata: { promptTokenCount: 100, candidatesTokenCount: 20, thoughtsTokenCount: 0 }
+      }), { headers: { 'content-type': 'application/json' } });
+    }, fake.factory));
+  return { ...fake, sent };
+}
+
+test('saved attachment selector approves normalized Google REST bytes and sends that exact quote on resume', async t => {
+  const f = googleFixture(t), previous = process.env.GOOGLE_API_KEY;
+  process.env.GOOGLE_API_KEY = 'offline-fixture';
+  t.after(() => { if (previous === undefined) delete process.env.GOOGLE_API_KEY; else process.env.GOOGLE_API_KEY = previous; });
+  const catalog = [{ id: 'saved', fileName: 'budget.pdf', mimeType: 'application/pdf', observedSummary: 'Budget report', summaryCoverage: 'full' as const }];
+  const select = () => selectStoredAttachments('Read budget.pdf', catalog, []);
+  await assert.rejects(runWithStandaloneAccounting(context, select), { code: 'standalone_approval_required' });
+  assert.equal(f.sent.length, 0); assert.equal(f.attempts.length, 1);
+  const a = f.attempts[0], quoted = a.prepared_payload as unknown as ReturnType<typeof freezePreparedRequest>;
+  assert.equal(a.category, 'attachment-selection');
+  assert.deepEqual(quoted.payload.contents, [{ role: 'user', parts: [{ text: JSON.stringify({
+    request: 'Read budget.pdf', taskContext: null, newlyAttachedFiles: [], recentConversation: [],
+    files: [{ id: 'saved', name: 'budget.pdf', mimeType: 'application/pdf', coverage: 'full', summary: 'Budget report' }]
+  }) }] }]);
+  assert.ok(quoted.payload.systemInstruction);
+  assert.equal(a.preflight_estimate.requestHash, quoted.hash);
+  assert.equal(estimatePreparedRequest(quoted).reservationMicrousd, a.reserved_microusd);
+  // The approval RPC itself is exercised against PostgreSQL in the ledger suite.
+  const approvedHash = a.prepared_hash; a.state = 'reserved';
+  const decision = await runWithStandaloneAccounting(context, select);
+  assert.equal(decision.method, 'summary-selector'); assert.equal(decision.selections[0].attachment.id, 'saved');
+  assert.equal(decision.rationale, 'Named saved file.', 'current main attachment diagnostics survive');
+  assert.equal(a.state, 'settled'); assert.equal(f.sent.length, 1);
+  assert.equal(f.sent[0], quoted.serializedBody);
+  assert.equal(freezePreparedRequest('google', quoted.model, quoted.endpoint, JSON.parse(f.sent[0])).hash, approvedHash);
+  await runWithStandaloneAccounting(context, select);
+  assert.equal(f.sent.length, 1, 'settled selector replays without another transmission');
+});
+
+test('Google SDK content unions group strings/parts and preserve explicit turns and system instructions', async t => {
+  const f = googleFixture(t);
+  const turns = [{ role: 'user', parts: [{ text: 'hello' }] }, { role: 'model', parts: [{ functionCall: { name: 'lookup', args: {} } }] },
+    { role: 'user', parts: [{ functionResponse: { name: 'lookup', response: { ok: true } } }] }];
+  const cases: Array<[GenerateContentParameters['contents'], unknown]> = [
+    ['hello', [{ role: 'user', parts: [{ text: 'hello' }] }]],
+    [{ text: 'hello' }, [{ role: 'user', parts: [{ text: 'hello' }] }]],
+    [['hello', { text: 'world' }], [{ role: 'user', parts: [{ text: 'hello' }, { text: 'world' }] }]],
+    [{ role: 'model', parts: [{ text: 'answer' }] }, [{ role: 'model', parts: [{ text: 'answer' }] }]],
+    [turns, turns],
+  ];
+  for (const [contents, expected] of cases) {
+    const before = JSON.stringify(contents);
+    await assert.rejects(runWithStandaloneAccounting({ ...context, requestId: 'shape-' + f.attempts.length }, () => googleGenerateContent('offline-fixture', {
+      model: 'gemini-2.5-flash', contents,
+      config: { systemInstruction: ['system', { text: 'rules' }], maxOutputTokens: 100, thinkingConfig: { thinkingBudget: 0 } }
+    })), isStandaloneAccountingError);
+    const body = f.attempts.at(-1)!.prepared_payload.payload as Record<string, unknown>;
+    assert.deepEqual(body.contents, expected);
+    assert.deepEqual(body.systemInstruction, { role: 'user', parts: [{ text: 'system' }, { text: 'rules' }] });
+    assert.equal(JSON.stringify(contents), before);
+    // Each independent workflow starts its activity counter at zero.
+    f.attempts.length = 0;
+  }
+  assert.equal(f.sent.length, 0);
+});
+
+test('invalid mixed/empty/unscoped function Google inputs fail before estimation or admission', async t => {
+  const f = googleFixture(t);
+  for (const contents of [[], null, [{ role: 'user', parts: [{ text: 'hello' }] }, 'mixed'], { functionCall: { name: 'lookup' } }, [{ functionResponse: { name: 'lookup' } }]]) {
+    await assert.rejects(runWithStandaloneAccounting(context, () => googleGenerateContent('offline-fixture', {
+      model: 'gemini-2.5-flash', contents: contents as GenerateContentParameters['contents']
+    })));
+    assert.equal(f.attempts.length, 0); assert.equal(f.sent.length, 0);
+  }
+});

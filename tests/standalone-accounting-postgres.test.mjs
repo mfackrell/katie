@@ -236,6 +236,71 @@ test('standalone ledger: real PostgreSQL atomic admission, receipts, ownership a
   assert.equal((await rpc(one,'claim_workflow',{...genuineFailure,p_resume:true})).blocked,'failed','failures without pending exposure remain terminal');
   await assert.rejects(one.query('update standalone_provider_attempts set actual_microusd=0'),/permission denied/);
   await assert.rejects(one.query("update standalone_pricing_versions set metadata='{}'"),/permission denied/);
+  // Upgrade an already-used ledger: prior migration/checksums stay untouched.
+  const beforeUpgrade=await rpc(two,'snapshot',{p_owner:owner});
+  await admin.query(readFileSync(new URL('../supabase/migrations/20261029153000_standalone_deleted_scope_history.sql',import.meta.url),'utf8'));
+  assert.deepEqual(await rpc(two,'snapshot',{p_owner:owner}),beforeUpgrade,'additive migration preserves every existing attempt, receipt and event');
+  // Execute the existing application deletion functions. Only the PostgREST
+  // wire and upload cleanup are translated; actual deletes/constraints/triggers
+  // run in the isolated PostgreSQL cluster.
+  const cleanup=[];
+  const persistence=modules({
+   '@/lib/presentation/default-registry':{validatePresentation(){}},
+   '@/lib/data/supabase/admin':{getSupabaseAdminClient:()=>({from(table){
+    assert.ok(['actors','chats'].includes(table));let predicate='',values=[];
+    const query={
+     select(){return query;},eq(field,value){assert.equal(field,'id');predicate='id=$1';values=[value];return query;},
+     in(field,value){assert.ok(['id','actor_id'].includes(field));predicate=field+'=any($1::uuid[])';values=[value];return query;},
+     async maybeSingle(){return {data:(await admin.query(`select * from ${table} where ${predicate}`,values)).rows[0]??null,error:null};},
+     async returns(){return {data:(await admin.query(`select * from ${table} where ${predicate}`,values)).rows,error:null};},
+     async delete(){try{await admin.query(`delete from ${table} where ${predicate}`,values);return {error:null};}catch(error){return {error:{message:error.message}};}}
+    };return query;
+   }})},
+   '@/lib/uploads/stored-uploads':{async removeConversationAttachments(id){cleanup.push(id);},async removeActorAttachmentIndex(id){cleanup.push(id);}}
+  })('@/lib/data/persistence-store');
+  for(const kind of ['chat','actor']){
+   const da=randomUUID(),dc=randomUUID(),dc2=randomUUID(),req='delete-'+kind;
+   await admin.query("insert into actors values($1,'delete fixture','standard')",[da]);
+   await admin.query("insert into chats values($1,$2,'delete fixture'),($3,$2,'sibling fixture')",[dc,da,dc2]);
+   await bind(owner,da,dc);await bind(owner,da,dc2);await configure('100','1000');
+   const scoped=(key,cost='1')=>({...input(key,cost,req),p_actor:da,p_chat:dc});
+   const settled=await rpc(one,'admit',scoped('settled'));
+   await rpc(one,'claim_dispatch',{p_owner:owner,p_attempt:settled.id});
+   await rpc(one,'settle',{...settle,p_attempt:settled.id,p_receipt:req+'-receipt',p_actual:'1'});
+   const pausedDelete=await rpc(one,'admit',scoped('paused','101'));
+   const reservedDelete=await rpc(one,'admit',scoped('reserved'));
+   const flying=await rpc(one,'admit',scoped('inflight'));
+   await rpc(one,'claim_dispatch',{p_owner:owner,p_attempt:flying.id});
+   const dw={...wf,p_actor:da,p_chat:dc,p_request:req};await rpc(one,'claim_workflow',dw);
+   const beforeDelete=await rpc(two,'snapshot',{p_owner:owner});
+   const workflowBefore=await rpc(two,'load_workflow',{p_owner:owner,p_request:req});
+   // A failed deletion transaction must not revoke a still-live scope.
+   await admin.query('begin');await admin.query('delete from chats where id=$1',[dc]);await admin.query('rollback');
+   assert.equal(await rpc(two,'authorize_scope',{p_owner:owner,p_actor:da,p_chat:dc}),true);
+   if(kind==='chat') await persistence.deleteChatById(dc);else await persistence.deleteActorsById([da]);
+   assert.equal((await admin.query('select count(*) from chats where id=$1',[dc])).rows[0].count,'0');
+   assert.equal((await admin.query('select count(*) from actors where id=$1',[da])).rows[0].count,kind==='actor'?'0':'1');
+   assert.equal(await rpc(two,'authorize_scope',{p_owner:owner,p_actor:da,p_chat:dc}),false);
+   assert.equal(await rpc(two,'authorize_scope',{p_owner:owner,p_actor:da,p_chat:dc2}),kind==='chat','chat deletion only revokes that chat; actor deletion revokes every chat');
+   assert.deepEqual(await rpc(two,'snapshot',{p_owner:owner}),beforeDelete,'deletion preserves exact attempts, receipts, money, pending exposure and append-only events');
+   assert.deepEqual(await rpc(two,'load_workflow',{p_owner:owner,p_request:req}),workflowBefore,'historical workflow and source request survive');
+   assert.ok((await admin.query('select revoked_at from standalone_owner_bindings where chat_id=$1',[dc])).rows[0].revoked_at);
+   await assert.rejects(rpc(two,'admit',scoped('new-after-delete')),/SCOPE_DENIED/);
+   await assert.rejects(approve(pausedDelete),/APPROVAL_DENIED/);
+   await assert.rejects(rpc(two,'claim_dispatch',{p_owner:owner,p_attempt:reservedDelete.id}),/SCOPE_DENIED/);
+   await assert.rejects(rpc(two,'claim_workflow',{...dw,p_resume:true}),/SCOPE_DENIED/);
+   await assert.rejects(bind(owner,da,dc),/SCOPE_INVALID/);
+   // Accounting reconciliation is still permitted for a call dispatched before deletion.
+   await rpc(two,'settle',{...settle,p_attempt:flying.id,p_receipt:req+'-late-receipt',p_actual:'1'});
+   assert.equal((await rpc(two,'lookup_attempt',{p_owner:owner,p_request:req,p_key:'inflight'})).state,'settled');
+   if(kind==='actor')await admin.query("insert into actors values($1,'recreated','standard')",[da]);
+   await admin.query("insert into chats values($1,$2,'recreated')",[dc,da]);
+   await assert.rejects(bind(owner,da,dc),/SCOPE_REVOKED/);
+   assert.equal(await rpc(two,'authorize_scope',{p_owner:owner,p_actor:da,p_chat:dc}),false,'reusing UUIDs cannot resurrect an old spending scope');
+   await assert.rejects(rpc(two,'claim_dispatch',{p_owner:owner,p_attempt:reservedDelete.id}),/SCOPE_DENIED/);
+  }
+  assert.ok(cleanup.length>=4,'existing attachment cleanup still executes');
+  console.log('STANDALONE_DELETION_HISTORY_AND_REVOCATION_PASS');
   await one.query('set role authenticated');await assert.rejects(rpc(one,'snapshot',{p_owner:owner}),/permission denied/);
   assert.equal((await admin.query('select spent_tokens from benchmark_budget_accounts')).rows[0].spent_tokens,'731');
   const events=(await rpc(fresh,'snapshot',{p_owner:owner})).events;

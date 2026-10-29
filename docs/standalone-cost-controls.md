@@ -6,7 +6,7 @@ Standalone inference is admitted by PostgreSQL immediately before each actual pr
 
 No dollar thresholds or timezone were supplied for this implementation. No values are seeded. Unconfigured accounts cannot dispatch paid requests.
 
-1. Review the additive migration `supabase/migrations/20261028193000_standalone_provider_attempt_ledger.sql`. Production's only migration writer remains `.github/workflows/migrate.yml` → `scripts/run-migrations.mjs`; see `docs/migration-authority.md`. Do not apply this migration through a second writer.
+1. Review the additive migrations `supabase/migrations/20261028193000_standalone_provider_attempt_ledger.sql` and `supabase/migrations/20261029153000_standalone_deleted_scope_history.sql`. Production's only migration writer remains `.github/workflows/migrate.yml` → `scripts/run-migrations.mjs`; see `docs/migration-authority.md`. Do not apply these migrations through a second writer.
 2. Provision verified Auth owner/standalone actor/conversation associations through the service-only `standalone_bind_scope(owner_uuid, actor_uuid, chat_uuid)` RPC. This administrative enrollment is deliberately absent from browser endpoints. Validate the owner against the Auth account before provisioning. Each conversation has one owner; saved actor/chat associations and standalone status are checked again at admission and dispatch.
 3. Sign in with that owner account. Open Usage → Settings in the standalone conversation. Explicitly enter the per-call USD threshold, cumulative original-request USD threshold, and IANA daily reset timezone. Both thresholds and timezone are required. Dollar inputs accept up to six decimal places. They are thresholds for approval, not guaranteed invoice caps.
 4. Review the call-path inventory and supported immutable price snapshot before enabling user traffic. Unsupported billing dimensions visibly stop before transmission. No automatic fallback bypass is provided. A provider-resolved model must also have an exact reviewed price; an unreviewed dated response model keeps known tokens visible and cost uncertain until supported reconciliation.
@@ -33,6 +33,10 @@ Provider responses, including SSE, are buffered until a complete response and us
 Timeout, incomplete stream, missing usage, cancellation after transmission, response capture failure, or reconciliation failure retains uncertain exposure. Only supported provider usage settles a transmission. Identical receipts settle idempotently; conflicting evidence is rejected and recorded. Known overruns are saved in full and stop further request admission. Append-only ledger events preserve reconciliation history without becoming a competing total.
 
 For late reconciliation, use the service-only `standalone_settle` RPC with the exact owner, attempt, provider receipt identity, supported usage, immutable pricing calculation, and supporting evidence. Inspect saved provider identifiers/checkpoints first. Never infer zero charges from a timeout or cancellation, fabricate usage, reuse another attempt's receipt, or backfill provider dashboard category totals as per-call costs. Retain unresolved exposure if evidence is insufficient. No production reconciliation was performed by this change.
+
+## Deleting a chat or agent
+
+The existing delete handlers still delete application rows and clean up attachments. The follow-up migration removes only the binding's foreign keys to live actors/chats; it preserves the original scope UUIDs and all attempt/workflow foreign keys to the historical binding. Transactional delete triggers set `revoked_at`. Admission, approval, dispatch claims and workflow resume reject revoked/deleted scopes; rebinding a recreated scope with the same UUIDs is also denied. Receipt reconciliation remains available for calls dispatched before deletion. Deleting a scope does not erase known charges, release uncertain exposure or remove accounting events.
 
 ## Daily display
 

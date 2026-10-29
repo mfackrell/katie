@@ -3,7 +3,7 @@ create role service_role bypassrls;
 create role anon;
 create role authenticated;
 create table public.actors(id uuid primary key,name text not null,actor_kind text default 'standard');
-create table public.chats(id uuid primary key,actor_id uuid references actors(id),title text);
+create table public.chats(id uuid primary key,actor_id uuid references actors(id) on delete cascade,title text);
 create table public.managed_agents(id uuid primary key,actor_id uuid references actors(id));
 -- A neighboring subsystem sentinel: standalone operations must leave it untouched.
 create table public.benchmark_budget_accounts(id uuid primary key,spent_tokens bigint not null);

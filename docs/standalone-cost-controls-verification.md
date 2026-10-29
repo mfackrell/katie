@@ -47,3 +47,52 @@ The supplied primary runtime is Node 24.22.1; the declared Node 22 runtime was a
 No paid live provider test was authorized or performed. No production merge, deployment, migration, owner binding or configuration change was made. Thresholds and timezone remain unset until explicitly configured. Unsupported billing dimensions/models—including an unreviewed provider-resolved model—stop visibly instead of producing guessed financial totals. Streaming is buffered for durable receipt capture. Cancellation is best effort and does not prove that billing stopped.
 
 Implementation-agent billing receipts are unavailable; no development spending figure is invented. Rollback and production approval actions are in `standalone-cost-controls.md`; the complete transmission inventory and official pricing evidence are adjacent documents.
+
+
+## October 29 bounded review correction
+
+Integrated main once at `6c80898` (merge `3352f1a`). Preserved ITM bounded compaction, attachment-selection rationale/audit diagnostics and the concurrent Developer Orchestrator recovery changes. The ITM conflict retains both the accounting-error propagation and main's compaction-failure stop; compaction admission errors also propagate rather than becoming generic retry failures.
+
+| Review finding | Correction and behavioral evidence |
+|---|---|
+| Google SDK content unions serialized directly into REST | `lib/providers/google-transport.ts` converts string/Part/Part-array inputs into one user Content, preserves explicit Content turns/roles, and normalizes system instructions before the accounting fetch sees any bytes. Mixed Content/Part arrays, empty input and unscoped function parts fail locally. The real saved-attachment selector regression in `tests/standalone-provider-boundary.test.ts` pauses without sending, then transmits the approved canonical bytes/hash on resume and replays the receipt without another send. It also verifies the integrated rationale diagnostic survives. |
+| Chat/agent deletion blocked by accounting bindings | Additive migration `20261029153000_standalone_deleted_scope_history.sql` retains historical binding IDs while transactional delete triggers revoke the scope. The isolated PostgreSQL test upgrades an already-used ledger and executes the existing `deleteChatById` / `deleteActorsById` functions against real SQL. Exact attempts, receipts, amounts, reservations, events and workflow history survive. New admission, old pending approval, pre-reserved dispatch, workflow resume and same-UUID rebind are rejected after deletion. Chat deletion preserves a sibling chat's authority; actor deletion revokes both. Rollback leaves live authority intact; a late receipt still settles an already-dispatched attempt. |
+
+Executed locally on Node 22.23.4: 29 provider-boundary tests, 46 attachment/API/workflow/unpriced-path tests, 23 ITM tests, and the real PostgreSQL transaction/concurrency suite passed with zero failures/skips/todos. Application typecheck and full test compilation passed; `git diff --check` passed. PostgreSQL 16.14 used a temporary external UID/ownership shim because this executor maps only UID 0; SQL, transactions, constraints and assertions were unchanged. No shim or runtime package is committed. Hosted CI remains the canonical complete gate on its exact final SHA; its run and result are recorded on PR #822.
+
+The original ledger migration is unchanged. Production migration authority remains `.github/workflows/migrate.yml` → `scripts/run-migrations.mjs`. No production migration, merge, configuration change, deployment or paid provider request was performed. Production release and owner configuration remain separately authorized release actions.
+
+## PR #822 bounded review corrections (October 29, 2026)
+
+Integrated `origin/main` once at merge `3352f1a`, including ITM/attachment diagnostics
+`6c80898` and Developer Orchestrator recovery changes through `854bcff`.
+
+- Google review finding: `google-transport.ts` normalizes SDK string, Part,
+  Part-array and explicit Content inputs (including system instructions) before
+  serialization reaches estimation, hashing, approval or HTTP. Invalid mixed
+  inputs fail before admission. The behavioral attachment-selection regression
+  pauses with zero HTTP sends, verifies the normalized quote and estimate, resumes
+  with byte-identical approved/transmitted bodies and hashes, preserves the
+  current attachment rationale, and replays the settled result without sending.
+- Deletion review finding: new additive migration
+  `20261029153000_standalone_deleted_scope_history.sql` removes only live-scope
+  foreign keys from historical bindings and transactionally revokes bindings on
+  chat/actor deletion. Verification requires live rows and an unrevoked binding;
+  recreating the UUIDs cannot restore authority. Attempts, receipts, workflows,
+  pending exposure and append-only events remain intact; late receipts can settle.
+  The original ledger migration is unchanged. Production application remains
+  exclusively through `migrate.yml` → `scripts/run-migrations.mjs`.
+- Node 22.23.4: 49 focused provider-boundary, approval API, workflow and provider
+  recovery tests passed; application typecheck and test compilation passed.
+- Isolated PostgreSQL 16: actual application `deleteChatById` and
+  `deleteActorsById` executed against real SQL through a thin persistence wire
+  adapter. The suite upgrades an already-used ledger, checks exact history before
+  and after deletion, transaction rollback, sibling-chat revocation boundaries,
+  admission/approval/dispatch/resume denial, UUID reuse, late settlement and the
+  unchanged Developer Orchestrator budget sentinel. Passed with no skipped tests.
+  The local root-only executor uses the existing UID-reporting compatibility shim
+  to launch the disposable PostgreSQL binary; SQL/transactions are unmodified.
+  Hosted CI runs PostgreSQL as its normal non-root user.
+
+No merge, production migration/deployment, or paid provider experiment was performed.
+The final commit's hosted checks are the release gate; see the PR for their result.
