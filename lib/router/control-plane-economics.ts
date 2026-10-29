@@ -45,7 +45,7 @@ export async function rankControlPlaneByActualCost(
     const capture: {prepared?: FrozenPreparedRequest} = {};
     try {
       await preparation.run(capture, () => candidate.provider.generate({...params, modelId: candidate.modelId}));
-    } catch (error) {
+    } catch {
       // SDKs wrap the terminal sentinel. Only the captured boundary payload is
       // evidence of successful preparation; no fallback or paid probe is used.
       if (!capture.prepared) continue;

@@ -5,6 +5,7 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {spawnSync} from 'node:child_process';
 import {randomUUID} from 'node:crypto';
+import {createRequire} from 'node:module';
 import pg from 'pg';
 import {modules} from './helpers/load-project-modules.mjs';
 
@@ -388,7 +389,10 @@ test('standalone ledger: real PostgreSQL atomic admission, receipts, ownership a
 
   // Production-shaped approval recovery: completed helpers replay, while the
   // approved rerank uses its saved wire preparation despite changed metadata.
-  const resumeModules=modules();
+  // Use the gate's compiled modules in Node's shared realm. Per-module VM
+  // contexts make JSON.parse objects fail the production plain-JSON validator.
+  const requireCompiled=createRequire(new URL('../.test-dist/standalone-resume.cjs',import.meta.url));
+  const resumeModules=name=>requireCompiled('./'+name.slice(2));
   const {createAccountingFetch}=resumeModules('@/lib/standalone-accounting/dispatch');
   const {runWithStandaloneAccounting,runWithStandaloneActivity}=resumeModules('@/lib/standalone-accounting/context');
   const {PRICING_SNAPSHOT}=resumeModules('@/lib/standalone-accounting/pricing');
