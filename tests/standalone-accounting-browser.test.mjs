@@ -138,8 +138,6 @@ test('standalone browser: explicit settings, scopes, exact approval resume, redu
     assert.deepEqual(resumes[0], { body: { actorId, chatId, standaloneResume: true }, requestId: 'original-approve' });
     assert.equal(resumes[0].body.message, undefined, 'approval resumes durable original input instead of creating a generic message');
     await usage.getByRole('alert').filter({ hasText: 'Supporting work paused: per_request_threshold' }).waitFor();
-    await usage.getByRole('button', { name: 'Usage details' }).click();
-    await usage.getByRole('button', { name: 'Refresh', exact: true }).click();
     assert.match(await usage.innerText(), /Supporting work paused: per_request_threshold/);
     assert.doesNotMatch(await usage.innerText(), /Resume requested|Approved saved work completed/);
     const active = usage.getByLabel('Active attempts in this conversation');
@@ -193,15 +191,19 @@ test('standalone browser: explicit settings, scopes, exact approval resume, redu
     assert.equal(decisions.filter(body => body.action === 'approve_once').length, approvalCountBeforeReconnect, 'resuming a reserved attempt must not issue another approval');
     await page.waitForFunction(() => !Array.from(document.querySelectorAll('button')).some(button => button.textContent === 'Resume saved work'));
     running = running.map(attempt => ({ ...attempt, state: 'uncertain' }));
+    await usage.getByRole('button', { name: 'Usage details' }).click();
     await usage.getByRole('button', { name: 'Refresh', exact: true }).click();
     await usage.getByRole('button', { name: 'Review', exact: true }).click();
     await active.getByText('openai/gpt-4o · hidden_router · uncertain', { exact: false }).waitFor();
     assert.equal(await active.getByRole('button', { name: 'Resume saved work' }).count(), 0, 'uncertain paid work cannot be replayed');
     assert.equal(await active.getByRole('button', { name: 'Cancel remaining work' }).count(), 1);
     running = [{ ...pending('failed'), state: 'reserved' }]; resumeMode = 'failed';
+    await usage.getByRole('button', { name: 'Usage details' }).click();
     await usage.getByRole('button', { name: 'Refresh', exact: true }).click();
+    await usage.getByRole('button', { name: 'Review', exact: true }).click();
     await active.getByRole('button', { name: 'Resume saved work' }).click();
     await usage.getByRole('alert').filter({ hasText: 'Saved attempt failed: exact fixture cause' }).waitFor();
+    await usage.getByRole('button', { name: 'Usage details' }).click();
     await usage.getByRole('button', { name: 'Refresh', exact: true }).click();
     assert.match(await usage.innerText(), /Saved attempt failed: exact fixture cause/);
     assert.doesNotMatch(await usage.innerText(), /Resume requested|Saved work completed/);
