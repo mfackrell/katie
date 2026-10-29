@@ -8,7 +8,8 @@ import { lookupRegistryModel, type RegistryRoutingModel } from "@/lib/models/reg
 import { LlmProvider } from "@/lib/providers/types";
 import type { ActorRoutingIntent, ActorRoutingProfile } from "@/lib/types/chat";
 import { isTerminalAttemptError, withProviderAttemptTimeout } from "@/lib/collaboration/attempt-policy";
-import { runWithStandaloneActivity } from "@/lib/standalone-accounting/context";
+import { getAccountingScope, runWithStandaloneActivity } from "@/lib/standalone-accounting/context";
+import { rankControlPlaneByActualCost } from "@/lib/router/control-plane-economics";
 
 export type ProviderName = "openai" | "google" | "grok" | "anthropic";
 type RegistryLookup = Map<string, RegistryRoutingModel> | undefined;
@@ -793,7 +794,8 @@ const CONTROL_PLANE_VERIFIED_MODEL_IDS: Record<ProviderName, string[]> = {
 
 function isControlPlaneJsonInstructionCompatible(providerName: ProviderName, modelId: string): boolean {
   const normalizedModel = modelId.trim().toLowerCase();
-  const verifiedModels = CONTROL_PLANE_VERIFIED_MODEL_IDS[providerName];
+  const standaloneAlternatives = {openai:["gpt-5.4-mini", "gpt-5-mini", "gpt-4.1-mini"],anthropic:["claude-haiku-4-5-20251001", "claude-haiku-5-5"],google:["gemini-2.5-flash", "gemini-3.5-flash", "gemini-3.8-flash"],grok:[]};
+  const verifiedModels = [...CONTROL_PLANE_VERIFIED_MODEL_IDS[providerName], ...(getAccountingScope()?.kind === 'standalone' ? standaloneAlternatives[providerName] : [])];
   return verifiedModels.some((verifiedModel) => verifiedModel.trim().toLowerCase() === normalizedModel);
 }
 
@@ -815,16 +817,24 @@ async function executeControlPlaneJsonTask<T>(args: {
   parse: (raw: string, sourceLabel: string) => T | null;
   timeoutMs: number;
 }): Promise<{ result: T; provider: ProviderName; modelId: string } | null> {
-  for (const candidate of args.decisionProviders) {
+  const params = {
+    name: "Katie Control Plane",
+    persona: "You are a strict JSON-only control-plane assistant for routing decisions.",
+    summary: "", history: [], user: args.userPrompt,
+  };
+  const remaining = [...args.decisionProviders];
+  while (remaining.length) {
+    // Each failed/invalid helper consumes an activity ordinal. Resolve that
+    // ordinal again before choosing the next fallback, including on resume.
+    const ranked = await rankControlPlaneByActualCost(remaining, params, undefined, `control_plane_${args.taskName}`);
+    const candidate = ranked[0];
+    if (!candidate) break;
+    remaining.splice(remaining.indexOf(candidate), 1);
     const sourceLabel = `${candidate.provider.name}:${candidate.modelId}`;
     try {
       const response = await withProviderAttemptTimeout(
         signal => runWithStandaloneActivity(`control_plane_${args.taskName}`, () => candidate.provider.generate({
-          name: "Katie Control Plane",
-          persona: "You are a strict JSON-only control-plane assistant for routing decisions.",
-          summary: "",
-          history: [],
-          user: args.userPrompt,
+          ...params,
           modelId: candidate.modelId,
           signal,
         })),

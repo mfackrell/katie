@@ -1,3 +1,4 @@
+import { captureControlPlanePreparation, isCapturingControlPlanePreparation } from '@/lib/router/control-plane-economics';
 import { freezeStoredImages } from './immutable-media';
 import { loadStandalonePricing } from './pricing-intake';
 import { createStandaloneLedger, StandaloneAccountingError } from './ledger';
@@ -157,9 +158,8 @@ export function createAccountingFetch(provider: AccountingProvider, transport: t
     if (method === 'GET' || method === 'HEAD' || freeCount) return transport(input, init);
     const scope = getAccountingScope();
     if (scope?.kind === 'orchestrator') return transport(input, init);
-    const attemptScope = nextStandaloneAttempt();
-    if (!attemptScope) throw failure('context_missing', 'Provider transmission requires a trusted standalone accounting context.');
-    const { context, attemptKey } = attemptScope;
+    if (scope?.kind !== 'standalone') throw failure('context_missing', 'Provider transmission requires a trusted standalone accounting context.');
+    const context = scope.context;
     if (url.search && !(provider === 'google' && url.pathname.endsWith(':streamGenerateContent') && url.search === '?alt=sse')) throw failure('unsupported_transport', 'Provider accounting rejected unsupported request parameters.');
     const requestedSignal = init?.signal ?? (input instanceof Request ? input.signal : undefined);
     const signals = [context.signal, requestedSignal].filter((value): value is AbortSignal => !!value);
@@ -174,21 +174,37 @@ export function createAccountingFetch(provider: AccountingProvider, transport: t
       if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Expected object');
       payload = value;
     } catch { throw failure('unsupported_payload', 'Provider accounting requires a supported JSON request.'); }
-    const model = typeof payload.model === 'string' ? payload.model : decodeURIComponent(url.pathname.match(/\/models\/([^/:]+):/)?.[1] ?? '');
-    payload=await freezeStoredImages(payload);
-    let prepared = prepareStandaloneRequest(provider, model, url.pathname, payload);
+    let model = typeof payload.model === 'string' ? payload.model : decodeURIComponent(url.pathname.match(/\/models\/([^/:]+):/)?.[1] ?? '');
+    // Capture candidate preparation before allocating an ordinal or touching the ledger.
+    if (isCapturingControlPlanePreparation()) captureControlPlanePreparation(prepareStandaloneRequest(provider, model, url.pathname, payload));
+    const { attemptKey } = nextStandaloneAttempt()!;
     const ledger = ledgerFactory();
     let attempt = await ledger.lookupAttempt(context.userId, context.requestId, attemptKey);
+    let prepared;
+    if (attempt && context.resumed) {
+      // Resume is bound to the server-loaded original workflow. Mutable routing
+      // metadata must never replace its already quoted provider request.
+      const saved = attempt.prepared_payload as unknown as ReturnType<typeof prepareStandaloneRequest>;
+      prepared = freezePreparedRequest(saved.provider, saved.model, saved.endpoint, saved.payload);
+      if (prepared.hash !== attempt.prepared_hash || saved.serializedBody !== prepared.serializedBody
+        || prepared.provider !== provider || prepared.model !== attempt.model || prepared.endpoint !== url.pathname) {
+        throw failure('replay_mismatch', 'Saved approved request does not match its dispatch binding.');
+      }
+      model = prepared.model;
+    } else {
+      payload=await freezeStoredImages(payload);
+      prepared = prepareStandaloneRequest(provider, model, url.pathname, payload);
+      if (attempt && (attempt.source_prepared_hash ?? attempt.prepared_hash) !== prepared.hash) throw failure('replay_mismatch', 'The prepared request changed. Resume requires the exact approved request.');
+      if (attempt) {
+        const saved = attempt.prepared_payload as unknown as typeof prepared;
+        prepared = freezePreparedRequest(saved.provider, saved.model, saved.endpoint, saved.payload);
+        if (prepared.hash !== attempt.prepared_hash || prepared.provider !== provider || prepared.model !== attempt.model || prepared.endpoint !== url.pathname
+          || prepared.model !== model && !attempt.supersedes_attempt_id) throw failure('replay_mismatch', 'Saved approved request does not match its dispatch binding.');
+      }
+    }
     let pricing=await loadStandalonePricing(ledger,attempt?.pricing_version);
     await ledger.registerPricing(pricing.version,pricing);
-    if (attempt && (attempt.source_prepared_hash ?? attempt.prepared_hash) !== prepared.hash) throw failure('replay_mismatch', 'The prepared request changed. Resume requires the exact approved request.');
-    if (attempt) {
-      if (attempt.state !== 'settled' && attempt.estimator_version !== ESTIMATOR_VERSION) throw failure('estimate_changed', 'The saved estimate uses a different formula version. A fresh quote and approval are required.');
-      const saved = attempt.prepared_payload as unknown as typeof prepared;
-      prepared = freezePreparedRequest(saved.provider, saved.model, saved.endpoint, saved.payload);
-      if (prepared.hash !== attempt.prepared_hash || prepared.provider !== provider || prepared.model !== attempt.model || prepared.endpoint !== url.pathname
-        || prepared.model !== model && !attempt.supersedes_attempt_id) throw failure('replay_mismatch', 'Saved approved request does not match its dispatch binding.');
-    }
+    if (attempt && attempt.state !== 'settled' && attempt.estimator_version !== ESTIMATOR_VERSION) throw failure('estimate_changed', 'The saved estimate uses a different formula version. A fresh quote and approval are required.');
     if(attempt&&['paused','reserved'].includes(attempt.state)){
       const current=await loadStandalonePricing(ledger);
       const oldPrice=getModelPrice(provider,prepared.model,pricing),currentPrice=getModelPrice(provider,prepared.model,current);

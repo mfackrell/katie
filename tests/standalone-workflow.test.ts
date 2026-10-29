@@ -76,6 +76,11 @@ test('a generic preparation exception surfaces the database durable pause instea
 });
 test('SDK-wrapped accounting denial preserves its pause across execution boundaries',async()=>{
  const denial=Object.assign(Error('Connection error'),{cause:Object.assign(Error('Approval required'),{code:'standalone_approval_required'})});
- await assert.rejects(executeStandaloneWorkflow(request(),payload,async()=>{throw denial}),error=>error===denial);
+ await assert.rejects(executeStandaloneWorkflow(request(),payload,async()=>{throw denial}),error=>error===denial.cause);
  assert.equal(stored.status,'paused');
+});
+
+test('stream execution failure is never persisted as successful completion',async()=>{
+ const response=await executeStandaloneWorkflow(request(),payload,async()=>new Response('{"type":"reasoning_error","message":"Saved preparation failed"}\n',{headers:{'content-type':'application/x-ndjson'}}));
+ assert.equal(stored.status,'failed');assert.match(await response.text(),/Saved preparation failed/);
 });

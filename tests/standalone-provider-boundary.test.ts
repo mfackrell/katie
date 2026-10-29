@@ -3,7 +3,7 @@ import test, { type TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 import OpenAI from 'openai';
 import { createAccountingFetch } from '../lib/standalone-accounting/dispatch';
-import { runWithStandaloneAccounting, runWithOrchestratorAccounting, runWithStandaloneActivity, isStandaloneAccountingError } from '../lib/standalone-accounting/context';
+import { runWithStandaloneAccounting, runWithOrchestratorAccounting, runWithStandaloneActivity, isStandaloneAccountingError, standaloneAccountingCause } from '../lib/standalone-accounting/context';
 import { freezePreparedRequest, estimatePreparedRequest } from '../lib/standalone-accounting/estimate';
 import { createStandaloneLedger } from '../lib/standalone-accounting/ledger';
 import type { LedgerAttempt, AdmitAttemptInput, ResponseCheckpoint, SettlementInput } from '../lib/standalone-accounting/types';
@@ -514,4 +514,37 @@ test('missing modern OpenAI write counts retain exposure rather than billing wri
  const send=createAccountingFetch('openai',async()=>new Response(JSON.stringify({id:'missing-write',usage:{input_tokens:100,output_tokens:10}})),f.factory);
  await assert.rejects(runWithStandaloneAccounting(context,()=>send('https://api.openai.com/v1/responses',{method:'POST',body:JSON.stringify({model:'fixture-sol',input:'hello',max_output_tokens:10})})),{code:'standalone_usage_unpriced'});
  assert.equal(f.attempts[0].state,'uncertain');assert.equal(f.attempts[0].actual_microusd,null);assert.equal(f.attempts[0].usage?.inputTokens,100);assert.equal(f.attempts[0].usage?.cacheWriteInputTokens,undefined,'missing write usage must remain unknown for late reconciliation');
+});
+
+test('durable resume dispatches the exact approved preparation despite mutable upstream routing metadata', async () => {
+  const fake = fakeLedger(true);
+  const bodies: string[] = [];
+  const send = createAccountingFetch('openai', async (_url, init) => { bodies.push(String(init?.body)); return receipt(); }, fake.factory);
+  await assert.rejects(runWithStandaloneAccounting(context, () => send('https://api.openai.com/v1/chat/completions', request)), isStandaloneAccountingError);
+  const attempt = fake.attempts[0];
+  const approved = attempt.prepared_payload;
+  const hash = attempt.prepared_hash, version = attempt.pricing_version;
+  attempt.state = 'reserved';
+  const changed = {...request, body: JSON.stringify({model:'gpt-4o',messages:[{role:'user',content:'Regenerated routing scores differ'}]})};
+  await runWithStandaloneAccounting({...context,resumed:true}, () => send('https://api.openai.com/v1/chat/completions', changed));
+  await runWithStandaloneAccounting({...context,resumed:true}, () => send('https://api.openai.com/v1/chat/completions', changed));
+  assert.deepEqual(bodies, [approved.serializedBody]);
+  assert.equal(attempt.prepared_hash, hash); assert.equal(attempt.pricing_version, version);
+  assert.equal(fake.attempts.length, 1); assert.equal(attempt.state, 'settled');
+});
+
+
+test('OpenAI Connection error preserves the exact pre-transmission replay mismatch cause', async () => {
+  const fake=fakeLedger(true); let sends=0;
+  const client=new OpenAI({apiKey:'offline-test',maxRetries:0,fetch:createAccountingFetch('openai',async()=>{sends++;return receipt();},fake.factory)});
+  const invoke=(content:string)=>runWithStandaloneAccounting(context,()=>client.chat.completions.create({model:'gpt-4o',messages:[{role:'user',content}]}));
+  await assert.rejects(invoke('Original routing candidate metadata'),isStandaloneAccountingError);
+  fake.attempts[0].state='reserved';
+  await assert.rejects(invoke('Changed routing candidate metadata'),error=>{
+    assert.match((error as Error).message,/Connection error/);
+    assert.equal(standaloneAccountingCause(error)?.code,'standalone_replay_mismatch');
+    assert.match(standaloneAccountingCause(error)!.message,/prepared request changed/);
+    return true;
+  });
+  assert.equal(sends,0); assert.equal(fake.attempts[0].state,'reserved');
 });

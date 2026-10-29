@@ -21,8 +21,9 @@ test('standalone browser: explicit settings, scopes, exact approval resume, redu
   let server, browser, output = '';
   const totals = overrides => ({ inputTokens: 123, outputTokens: 45, missingInputCount: 0, missingOutputCount: 1, estimatedCostMicrousd: '250000', pendingExposureMicrousd: '900000', uncertainExposureMicrousd: '100000', unknownCostCount: 1, attemptCount: 4, ...overrides });
   const pending = (suffix, overrides = {}) => ({ id: `attempt-${suffix}`, requestId: `original-${suffix}`, provider: 'openai', model: 'gpt-4o', resolvedModel: null, category: 'hidden_router', preparedHash: 'a'.repeat(64), pricingVersion: 'fixture-pricing-v1', estimatorVersion: 'saved-estimator-v1', budgetRevision: 1, reservedMicrousd: '300000', reason: 'Choose a reply model for this saved turn.', pauseReason: 'per_call_threshold', tradeoffs: null, createdAt: '2026-10-28T10:00:00Z', preview: { textBytes: 3200, imageCount: 2, imageBytes: 4096, inputTokens: 3500, imageTokens: 256, outputAllowance: 8192, assumptions: ['Input token count is an estimate, not a guaranteed spending ceiling.', 'All allowed output tokens include hidden reasoning.'], issues: [], status: 'estimated' }, requestExposure: totals(), ...overrides });
-  let configuration = null, proposals = [], running = [], fail = false;
-  const decisions = [], resumes = [], configurations = [], scopes = [], external = [], unknownRoutes = [], errors = [];
+  let configuration = null, proposals = [], running = [], fail = false, resumeMode = 'paused', savedMessages = [];
+  const decisions = [], resumes = [], configurations = [], scopes = [], external = [], unknownRoutes = [], errors = [], messageSnapshots = [];
+  let page;
   try {
     await mkdir(join(project, 'app/conversations/[id]'), { recursive: true });
     await symlink(join(root, 'node_modules'), join(project, 'node_modules'), 'dir');
@@ -31,7 +32,7 @@ test('standalone browser: explicit settings, scopes, exact approval resume, redu
     await writeFile(join(project, 'postcss.config.mjs'), 'export default {plugins:{tailwindcss:{}}};');
     await writeFile(join(project, 'tailwind.config.mjs'), `export default {darkMode:['class'],content:[${JSON.stringify(root + '/components/**/*.{ts,tsx}')},${JSON.stringify(root + '/lib/**/*.{ts,tsx}')}],theme:{extend:{}},plugins:[]};`);
     await writeFile(join(project, 'tsconfig.json'), JSON.stringify({ compilerOptions: { target: 'ES2022', lib: ['dom', 'dom.iterable', 'esnext'], strict: true, skipLibCheck: true, noEmit: true, esModuleInterop: true, module: 'esnext', moduleResolution: 'bundler', jsx: 'preserve', resolveJsonModule: true, baseUrl: '.', paths: { '@/lib/tools/browser-owner-session': ['./owner-session.ts'], '@/*': [root + '/*'] } }, include: ['**/*.ts', '**/*.tsx'] }));
-    await writeFile(join(project, 'owner-session.ts'), "'use client'; export async function ownerSessionBearer(){return 'synthetic-browser-owner';}");
+    await writeFile(join(project, 'owner-session.ts'), "'use client'; export function browserOwnerAuth(){return null;} export async function ownerSessionBearer(){return 'synthetic-browser-owner';}");
     await writeFile(join(project, 'app/layout.tsx'), `import ${JSON.stringify(root + '/app/globals.css')}; import {ApplicationShell} from '@/components/application-shell'; export default function Layout({children}:{children:React.ReactNode}){return <html lang="en" className="dark"><body><ApplicationShell>{children}</ApplicationShell></body></html>;}`);
     await writeFile(join(project, 'app/conversations/[id]/page.tsx'), `import ChatWorkspace from '@/components/chat-workspace'; export default function Page(){return <ChatWorkspace conversationId=${JSON.stringify(chatId)}/>;}`);
     server = spawn(process.execPath, [join(root, 'node_modules/next/dist/bin/next'), 'dev', '--hostname', '127.0.0.1', '--port', String(port)], { cwd: project, env: { PATH: process.env.PATH, HOME: process.env.HOME, NODE_ENV: 'development', NEXT_TELEMETRY_DISABLED: '1' }, stdio: ['ignore', 'pipe', 'pipe'] });
@@ -42,7 +43,7 @@ test('standalone browser: explicit settings, scopes, exact approval resume, redu
       await new Promise(done => setTimeout(done, 100));
     }
     browser = await chromium.launch({ executablePath: process.env.KATIE_TEST_CHROMIUM || await bundledChromium.executablePath(), args: bundledChromium.args, headless: true });
-    const page = await browser.newPage({ viewport: { width: 1280, height: 1100 } });
+    page = await browser.newPage({ viewport: { width: 1280, height: 1100 } });
     page.on('pageerror', error => errors.push(error.message));
     await page.addInitScript(() => { window.__accountingResumeEvents = []; window.addEventListener('standalone-accounting-resume', event => window.__accountingResumeEvents.push(event.detail)); });
     await page.route('**/*', async route => {
@@ -80,14 +81,17 @@ test('standalone browser: explicit settings, scopes, exact approval resume, redu
       if (url.pathname === '/api/chat') {
         const requestId = request.headers()['x-request-id']; resumes.push({ body, requestId });
         running = running.map(attempt => attempt.requestId === requestId && attempt.state === 'reserved' ? { ...attempt, state: 'dispatched' } : attempt);
-        return reply({ status: 'paused' }, 202);
+        if (resumeMode === 'failed') return reply({ error: 'Saved attempt failed: exact fixture cause' }, 500);
+        if (resumeMode === 'completed') { savedMessages = [{ id: 'saved-answer', role: 'assistant', content: 'The saved approved answer is visible.', createdAt: '2026-10-28T10:00:00Z', provider: 'openai', model: 'gpt-4o' }]; return route.fulfill({ status: 200, contentType: 'application/x-ndjson', body: JSON.stringify({ type: 'content', text: savedMessages[0].content }) + '\n' }); }
+        return route.fulfill({ status: 200, contentType: 'application/x-ndjson', body: JSON.stringify({ type: 'accounting_pause', code: 'standalone_approval_required', message: 'Supporting work paused: per_request_threshold' }) + '\n' });
       }
       if (url.pathname === '/api/actors') return reply({ actors: [{ id: actorId, name: 'Fixture standalone', purpose: 'Browser verification', actorKind: 'standard' }] });
       if (url.pathname === '/api/chats') return reply({ chats: [{ id: chatId, actorId, title: 'Synthetic saved conversation', createdAt: '2026-10-28T00:00:00Z', updatedAt: '2026-10-28T00:00:00Z' }] });
       if (url.pathname === '/api/admin/repos') return reply({ repos: [] });
       if (url.pathname === '/api/ui-state') return reply({ state: { key: body?.key ?? url.searchParams.get('key'), version: 1, value: body?.value ?? {} } });
-      if (url.pathname === '/api/messages') return reply({ messages: [] });
-      if (url.pathname === '/api/projects') return reply({ active: false, status: null, approval: null, resourceRecovery: null, messages: [] });
+      if (url.pathname === '/api/messages') { messageSnapshots.push({ api: 'messages', ids: savedMessages.map(message => message.id) }); return reply({ messages: savedMessages }); }
+      if (url.pathname === '/api/message-reactions') return reply({ reactions: {} });
+      if (url.pathname === '/api/projects') { messageSnapshots.push({ api: 'projects', ids: savedMessages.map(message => message.id) }); return reply({ active: false, status: null, approval: null, resourceRecovery: null, messages: savedMessages }); }
       if (url.pathname === '/api/work') return reply({ items: [], warnings: [] });
       if (url.pathname === '/api/long-term-memory') return reply({ content: { entries: [] }, documents: [] });
       if (url.pathname === '/api/models') return reply({ openai: ['gpt-4o'] });
@@ -128,6 +132,10 @@ test('standalone browser: explicit settings, scopes, exact approval resume, redu
     assert.equal(resumes.length, 1);
     assert.deepEqual(resumes[0], { body: { actorId, chatId, standaloneResume: true }, requestId: 'original-approve' });
     assert.equal(resumes[0].body.message, undefined, 'approval resumes durable original input instead of creating a generic message');
+    await usage.getByRole('alert').filter({ hasText: 'Supporting work paused: per_request_threshold' }).waitFor();
+    await usage.getByRole('button', { name: 'Refresh', exact: true }).click();
+    assert.match(await usage.innerText(), /Supporting work paused: per_request_threshold/);
+    assert.doesNotMatch(await usage.innerText(), /Resume requested|Approved saved work completed/);
     const active = usage.getByLabel('Active attempts in this conversation');
     await active.getByRole('button', { name: 'Cancel remaining work' }).waitFor();
     assert.match(await active.innerText(), /Already dispatched/);
@@ -162,10 +170,18 @@ test('standalone browser: explicit settings, scopes, exact approval resume, redu
     await active.getByRole('button', { name: 'Resume saved work' }).waitFor();
     await active.getByRole('button', { name: 'Resume saved work' }).scrollIntoViewIfNeeded();
     await page.screenshot({ path: join(screenshots, 'reserved-reconnect-mobile.png'), fullPage: true });
+    resumeMode = 'completed';
     const reconnectResponse = page.waitForResponse(response => response.url().endsWith('/api/chat'));
+    const savedProjectRefresh = page.waitForResponse(async response => response.url().includes('/api/projects?') && (await response.json()).messages.some(message => message.id === 'saved-answer'));
     await active.getByRole('button', { name: 'Resume saved work' }).click();
     await reconnectResponse;
     assert.equal(resumes.length, 2);
+    // Both persisted-message APIs represent the same server snapshot. Wait for
+    // the post-resume project refresh too, so this assertion cannot win a race
+    // against an inconsistent fixture overwriting the newly loaded answer.
+    await savedProjectRefresh;
+    await page.getByText('The saved approved answer is visible.', { exact: true }).waitFor();
+    await usage.getByRole('status').filter({ hasText: 'Saved work completed.' }).waitFor();
     assert.deepEqual(resumes[1], { body: { actorId, chatId, standaloneResume: true }, requestId: 'original-approved-reconnect' });
     assert.equal(decisions.filter(body => body.action === 'approve_once').length, approvalCountBeforeReconnect, 'resuming a reserved attempt must not issue another approval');
     await page.waitForFunction(() => !Array.from(document.querySelectorAll('button')).some(button => button.textContent === 'Resume saved work'));
@@ -174,13 +190,22 @@ test('standalone browser: explicit settings, scopes, exact approval resume, redu
     await active.getByText('openai/gpt-4o · hidden_router · uncertain', { exact: false }).waitFor();
     assert.equal(await active.getByRole('button', { name: 'Resume saved work' }).count(), 0, 'uncertain paid work cannot be replayed');
     assert.equal(await active.getByRole('button', { name: 'Cancel remaining work' }).count(), 1);
+    running = [{ ...pending('failed'), state: 'reserved' }]; resumeMode = 'failed';
+    await usage.getByRole('button', { name: 'Refresh', exact: true }).click();
+    await active.getByRole('button', { name: 'Resume saved work' }).click();
+    await usage.getByRole('alert').filter({ hasText: 'Saved attempt failed: exact fixture cause' }).waitFor();
+    await usage.getByRole('button', { name: 'Refresh', exact: true }).click();
+    assert.match(await usage.innerText(), /Saved attempt failed: exact fixture cause/);
+    assert.doesNotMatch(await usage.innerText(), /Resume requested|Saved work completed/);
+    assert.equal(resumes.length, 3);
     fail = true; await usage.getByRole('button', { name: 'Refresh', exact: true }).click();
-    await usage.getByRole('alert').waitFor();
-    assert.match(await usage.getByRole('alert').innerText(), /Previously loaded values may be stale/);
+    await usage.getByRole('alert').filter({ hasText: 'Previously loaded values may be stale' }).waitFor();
+    assert.match(await usage.innerText(), /Saved attempt failed: exact fixture cause/);
     assert.deepEqual(external, []); assert.deepEqual(unknownRoutes, []); assert.deepEqual(errors, []);
     console.log('Standalone browser screenshots: ' + screenshots);
   } catch (error) {
-    throw new Error(`${error.message}\nDisposable Next output:\n${output}`, { cause: error });
+    const visible = await page?.locator('body').innerText().catch(() => 'Browser unavailable');
+    throw new Error(`${error.message}\nPersisted message snapshots: ${JSON.stringify(messageSnapshots)}\nBrowser errors: ${JSON.stringify(errors)}\nVisible UI:\n${visible}\nDisposable Next output:\n${output}`, { cause: error });
   } finally {
     await browser?.close();
     if (server && server.exitCode === null) { server.kill('SIGTERM'); await Promise.race([once(server, 'exit'), new Promise(done => setTimeout(done, 4000))]); if (server.exitCode === null) server.kill('SIGKILL'); }

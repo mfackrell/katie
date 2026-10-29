@@ -5,6 +5,7 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {spawnSync} from 'node:child_process';
 import {randomUUID} from 'node:crypto';
+import {createRequire} from 'node:module';
 import pg from 'pg';
 import {modules} from './helpers/load-project-modules.mjs';
 
@@ -385,6 +386,69 @@ test('standalone ledger: real PostgreSQL atomic admission, receipts, ownership a
   await assert.rejects(one.query('delete from standalone_pricing_intake_events'),/permission denied/);
   await one.query('set role authenticated');await assert.rejects(rpc(one,'create_conversation',create),/permission denied/);await assert.rejects(rpc(one,'publish_pricing',{p_version:version,p_metadata:metadata,p_source_hash:'b'.repeat(64),p_rejected:{}}),/permission denied/);await one.query('set role service_role');
   console.log('STANDALONE_ENROLLMENT_AND_IMMUTABLE_PRICING_PASS');
+
+  // Production-shaped approval recovery: completed helpers replay, while the
+  // approved rerank uses its saved wire preparation despite changed metadata.
+  // Use the gate's compiled modules in Node's shared realm. Per-module VM
+  // contexts make JSON.parse objects fail the production plain-JSON validator.
+  const requireCompiled=createRequire(new URL('../.test-dist/standalone-resume.cjs',import.meta.url));
+  const resumeModules=name=>requireCompiled('./'+name.slice(2));
+  const {createAccountingFetch}=resumeModules('@/lib/standalone-accounting/dispatch');
+  const {runWithStandaloneAccounting,runWithStandaloneActivity}=resumeModules('@/lib/standalone-accounting/context');
+  const {PRICING_SNAPSHOT}=resumeModules('@/lib/standalone-accounting/pricing');
+  const resumePricing={...PRICING_SNAPSHOT,version:'standalone-catalog-v1-'+'e'.repeat(64)};
+  await rpc(one,'publish_pricing',{p_version:resumePricing.version,p_metadata:resumePricing,p_source_hash:'f'.repeat(64),p_rejected:{}});
+  const resumeLedger=resumeModules('@/lib/standalone-accounting/ledger').createStandaloneLedger({async rpc(name,args){
+   try{return {data:await rpc(one,name.replace(/^standalone_/,''),args),error:null};}
+   catch(error){return {data:null,error:{message:error.message}};}
+  }});
+  const resumeRequest='approved-rerank-with-completed-helper';
+  const resumeWorkflow={p_owner:owner,p_actor:actor,p_chat:chat,p_request:resumeRequest,p_hash:'1'.repeat(64),p_body:{original:'retained original request'},p_resume:false};
+  const initialResumeLease=await rpc(one,'claim_workflow',resumeWorkflow);
+  const durableContext={userId:owner,actorId:actor,chatId:chat,requestId:resumeRequest};
+  const wire=[];
+  const resumeFetch=createAccountingFetch('openai',async(_url,init)=>{
+   wire.push(String(init.body));
+   return new Response(JSON.stringify({id:'resume-receipt-'+wire.length,model:'gpt-4o',choices:[{message:{content:wire.length===1?'completed helper':'assistant answer'}}],usage:{prompt_tokens:1,completion_tokens:1}}),{headers:{'content-type':'application/json'}});
+  },()=>resumeLedger);
+  const helperBody={model:'gpt-4o',messages:[{role:'user',content:'classify routine request'}]};
+  const rerankBody={model:'gpt-4o',messages:[{role:'user',content:'select candidate from original metadata'}]};
+  const call=(activity,body,resumed=false)=>runWithStandaloneAccounting({...durableContext,resumed},()=>runWithStandaloneActivity(activity,()=>resumeFetch('https://api.openai.com/v1/chat/completions',{method:'POST',body:JSON.stringify(body)})));
+  await configure('1000000','2000000');
+  const helperResponse=await call('control_plane_intent-classification',helperBody);await helperResponse.text();
+  const helperSaved=await rpc(two,'lookup_attempt',{p_owner:owner,p_request:resumeRequest,p_key:'control_plane_intent-classification:0'});
+  assert.equal(helperSaved.state,'settled');assert.equal(wire.length,1);
+  await configure('0','2000000');
+  await assert.rejects(call('control_plane_routing-rerank',rerankBody),error=>error.code==='standalone_approval_required');
+  const rerankSaved=await rpc(two,'lookup_attempt',{p_owner:owner,p_request:resumeRequest,p_key:'control_plane_routing-rerank:0'});
+  assert.equal(rerankSaved.state,'paused');assert.equal(wire.length,1,'over-threshold quote cannot transmit');
+  await rpc(one,'checkpoint_workflow',{p_owner:owner,p_request:resumeRequest,p_lease:initialResumeLease.lease_token,p_key:'completed-helper-result',p_value:{classification:'routine'}});
+  await rpc(one,'finish_workflow',{p_owner:owner,p_request:resumeRequest,p_lease:initialResumeLease.lease_token,p_status:'paused'});
+  await approve(rerankSaved);
+  const failedLease=await rpc(fresh,'claim_workflow',{...resumeWorkflow,p_resume:true});assert.equal(failedLease.claimed,true);
+  const changedRerank={...rerankBody,messages:[{role:'user',content:'select candidate from changed registry metadata'}]};
+  await assert.rejects(call('control_plane_routing-rerank',changedRerank),error=>error.code==='standalone_replay_mismatch');
+  await rpc(fresh,'finish_workflow',{p_owner:owner,p_request:resumeRequest,p_lease:failedLease.lease_token,p_status:'failed',p_error:'standalone_replay_mismatch: regenerated registry metadata differs'});
+  const failedSaved=await rpc(two,'load_workflow',{p_owner:owner,p_request:resumeRequest});
+  assert.equal(failedSaved.status,'paused');assert.match(failedSaved.error,/standalone_replay_mismatch/);
+  const held=await rpc(two,'lookup_attempt',{p_owner:owner,p_request:resumeRequest,p_key:'control_plane_routing-rerank:0'});
+  assert.equal(held.state,'reserved');assert.equal(held.dispatched_at,null);assert.equal(held.reserved_microusd,rerankSaved.reserved_microusd);
+  const exactLease=await rpc(fresh,'claim_workflow',{...resumeWorkflow,p_resume:true});assert.equal(exactLease.claimed,true);
+  assert.deepEqual(exactLease.checkpoints['completed-helper-result'],{classification:'routine'});
+  assert.equal(await (await call('control_plane_intent-classification',helperBody,true)).text(),helperSaved.response_checkpoint.body);
+  const answer=await (await call('control_plane_routing-rerank',changedRerank,true)).text();
+  assert.match(answer,/assistant answer/);assert.equal(wire.length,2,'one original helper plus one approved rerank, never a duplicate paid transmission');
+  assert.equal(wire[1],rerankSaved.prepared_payload.serializedBody,'approved exact wire payload survives changed upstream metadata');
+  const finalRerank=await rpc(two,'lookup_attempt',{p_owner:owner,p_request:resumeRequest,p_key:'control_plane_routing-rerank:0'});
+  assert.equal(finalRerank.id,rerankSaved.id);assert.equal(finalRerank.prepared_hash,rerankSaved.prepared_hash);assert.equal(finalRerank.pricing_version,rerankSaved.pricing_version);assert.equal(finalRerank.state,'settled');
+  assert.deepEqual(await rpc(two,'lookup_attempt',{p_owner:owner,p_request:resumeRequest,p_key:'control_plane_intent-classification:0'}),helperSaved,'completed helper receipt/checkpoint/accounting remain byte-for-byte intact');
+  assert.equal(await rpc(two,'claim_dispatch',{p_owner:owner,p_attempt:finalRerank.id}),null,'fresh connection cannot claim a completed transmission again');
+  assert.equal((await rpc(fresh,'finish_workflow',{p_owner:owner,p_request:resumeRequest,p_lease:exactLease.lease_token,p_status:'completed',p_result:{body:answer,status:200,headers:[]}})).status,'completed');
+  const reconnected=await rpc(two,'claim_workflow',{...resumeWorkflow,p_resume:true});assert.equal(reconnected.claimed,false);assert.equal(reconnected.result.body,answer);
+  assert.equal(await rpc(two,'lookup_attempt',{p_owner:other,p_request:resumeRequest,p_key:'control_plane_routing-rerank:0'}),null);
+  assert.ok(!(await rpc(two,'snapshot',{p_owner:other})).attempts.some(a=>a.request_id===resumeRequest),'daily source remains owner-scoped');
+  console.log('STANDALONE_EXACT_APPROVED_RERANK_RESUME_AND_NO_DUPLICATE_TRANSMISSION_PASS');
+
   await one.query('set role authenticated');await assert.rejects(rpc(one,'snapshot',{p_owner:owner}),/permission denied/);
   assert.equal((await admin.query('select spent_tokens from benchmark_budget_accounts')).rows[0].spent_tokens,'731');
   const events=(await rpc(fresh,'snapshot',{p_owner:owner})).events;

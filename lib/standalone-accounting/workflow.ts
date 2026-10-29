@@ -4,7 +4,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { authorizeStandaloneCaller } from './auth';
 import { StandaloneAccountingError } from './ledger';
 import { getSupabaseAdminClient } from '@/lib/data/supabase/admin';
-import { runWithStandaloneAccounting, isStandaloneAccountingError } from './context';
+import { runWithStandaloneAccounting, isStandaloneAccountingError, standaloneAccountingCause, standaloneFailureDetails } from './context';
 import { canonicalJson, type JsonValue } from './estimate';
 
 type Workflow = {owner_id:string;actor_id:string;chat_id:string;request_id:string;request_hash:string;request_body:Record<string,unknown>;status:string;lease_token:string;created_at:string;checkpoints:Record<string,unknown>;claimed?:boolean;blocked?:string;result?:{body:string;status:number;headers:[string,string][]}};
@@ -53,7 +53,7 @@ export async function executeStandaloneWorkflow(request:NextRequest,payload:Reco
   const headers=new Headers(request.headers);headers.set('content-type','application/json');
   const original=new NextRequest(request.url,{method:'POST',headers,body:JSON.stringify(payload),signal:request.signal});
   try {
-    return await workflowScope.run({workflow,resumed},()=>runWithStandaloneAccounting({userId:ownerId,actorId,chatId,requestId,signal:request.signal,activity:'chat',reason:'Original standalone user request'},async()=>{
+    return await workflowScope.run({workflow,resumed},()=>runWithStandaloneAccounting({userId:ownerId,actorId,chatId,requestId,resumed,signal:request.signal,activity:'chat',reason:'Original standalone user request'},async()=>{
       const response=await execute(original);
       // Consume in the originating scope even after HTTP return. The durable
       // result also makes reconnects independent of browser memory.
@@ -64,9 +64,12 @@ export async function executeStandaloneWorkflow(request:NextRequest,payload:Reco
       const bytes=new Uint8Array(byteLength);let offset=0;for(const chunk of chunks){bytes.set(chunk,offset);offset+=chunk.byteLength;}
       const body=new TextDecoder().decode(bytes);
       const paused=/"type":"accounting_pause"|"code":"standalone_/.test(body);
+      const events = response.headers.get('content-type')?.includes('ndjson') ? body.split('\n').flatMap(line => {try {return [JSON.parse(line)];} catch {return [];} }) : [];
+      const executionFailure = events.find(event => event.type === 'error' || event.type === 'reasoning_error');
+      const failureMessage = executionFailure ? String(executionFailure.message ?? executionFailure.error ?? 'Saved request execution failed.') : undefined;
       const result={body,status:response.status,headers:Array.from(response.headers.entries())};
-      const finished = await finish(paused?'paused':response.ok?'completed':'failed',result);
-      if (finished.status === 'paused' && !paused) {
+      const finished = await finish(paused?'paused':response.ok&&!executionFailure?'completed':'failed',result,failureMessage);
+      if (finished.status === 'paused' && !paused && !executionFailure) {
         // PostgreSQL also fences optional work whose caller caught a denial.
         // Never complete a parent while a hidden paid approval remains pending.
         const notice = {type:'accounting_pause',code:'standalone_pending_attempt',requestId,message:'Supporting work is paused for approval or unresolved accounting. Review Usage.'};
@@ -77,8 +80,9 @@ export async function executeStandaloneWorkflow(request:NextRequest,payload:Reco
     }));
   } catch(error) {
     const terminal=isStandaloneAccountingError(error);
-    const finished=await finish(terminal?'paused':'failed',undefined,error instanceof Error?error.message:String(error));
-    if (finished.status==='paused'&&!terminal) throw Object.assign(new StandaloneAccountingError('pending_attempt','The saved request remains paused because supporting paid work requires approval or reconciliation.'),{cause:error});
+    error=standaloneAccountingCause(error)??error;
+    const finished=await finish(terminal?'paused':'failed',undefined,standaloneFailureDetails(error));
+    if (finished.status==='paused'&&!terminal) throw Object.assign(new StandaloneAccountingError('pending_attempt',`Saved request execution failed: ${standaloneFailureDetails(error)}. Existing spending exposure remains held.`),{cause:error});
     throw error;
   }
 }
