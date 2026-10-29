@@ -774,11 +774,13 @@ export function ChatPanel({
   },[input,draftReady,draft.state,saveDraft,draft.error]);
   const [loading, setLoading] = useState(false);
   const accountingResumeInFlight = useRef(false);
+  const [accountingResumeFailure, setAccountingResumeFailure] = useState("");
   useEffect(() => {
     const resume = async (event: Event) => {
-      const detail=(event as CustomEvent<{actorId:string;chatId:string;requestId:string;attemptId:string}>).detail;
-      if(detail?.actorId!==actorId||detail.chatId!==chatId||accountingResumeInFlight.current)return;
-      accountingResumeInFlight.current=true;setLoading(true);
+      const detail=(event as CustomEvent<{actorId:string;chatId:string;requestId:string;attemptId:string;resolve?:()=>void;reject?:(failure:Error)=>void}>).detail;
+      if(detail?.actorId!==actorId||detail.chatId!==chatId)return;
+      if(accountingResumeInFlight.current){detail.reject?.(Error("Saved work is already resuming."));return;}
+      accountingResumeInFlight.current=true;setLoading(true);setAccountingResumeFailure("");
       const resumeController=new AbortController();
       abortControllerRef.current=resumeController;
       setStatusMessage("Resuming the saved approved attempt…");
@@ -788,12 +790,22 @@ export function ChatPanel({
         const response=await fetch("/api/chat",{method:"POST",signal:resumeController.signal,headers:{"Content-Type":"application/json",Authorization:`Bearer ${bearer}`,"x-request-id":detail.requestId},body:JSON.stringify({actorId,chatId,standaloneResume:true})});
         const text=await response.text();
         if(!response.ok){let message="Saved request could not resume.";try{message=JSON.parse(text).error??message;}catch{}throw Error(message);}
-        const pause=text.split("\n").filter(Boolean).map(line=>{try{return JSON.parse(line);}catch{return null;}}).find(chunk=>chunk?.type==="accounting_pause");
-        setStatusMessage(pause?.message??(response.status===202?"Saved request is paused or already running. Review Usage for its current state.":"Saved request resumed."));
+        const chunks=text.split("\n").filter(Boolean).map(line=>{try{return JSON.parse(line);}catch{return null;}});
+        const failure=chunks.find(chunk=>chunk?.type==="accounting_pause"||chunk?.type==="reasoning_error"||chunk?.type==="error");
+        if(failure)throw Error(failure.message??failure.error??failure.code??"Saved work failed.");
+        if(response.status===202){
+          const state=chunks[0];
+          throw Error(state?.error??state?.message??`Saved request is ${state?.status??"paused or already running"}. Review Usage for its current state.`);
+        }
         const messagesResponse=await fetch(`/api/messages?chatId=${encodeURIComponent(chatId)}`,{cache:"no-store"});
         const body=await messagesResponse.json() as {messages?:Message[]};
-        if(messagesResponse.ok&&body.messages){setMessages(body.messages);setMessagesByChatId(current=>({...current,[chatId]:body.messages!}));}
-      }catch(error){setStatusMessage(error instanceof Error?error.message:"Saved request could not resume.");}
+        if(!messagesResponse.ok||!body.messages)throw Error("Saved work returned, but its messages could not be loaded. Refresh the conversation before resuming again.");
+        setMessages(body.messages);setMessagesByChatId(current=>({...current,[chatId]:body.messages!}));
+        setStatusMessage("Saved work completed.");detail.resolve?.();
+      }catch(error){
+        const failure=error instanceof Error?error:Error("Saved request could not resume.");
+        setStatusMessage(failure.message);setAccountingResumeFailure(failure.message);detail.reject?.(failure);
+      }
       finally{if(abortControllerRef.current===resumeController)abortControllerRef.current=null;accountingResumeInFlight.current=false;setLoading(false);window.dispatchEvent(new Event("standalone-accounting-updated"));}
     };
     const listener=(event:Event)=>{void resume(event);};
@@ -1510,6 +1522,7 @@ export function ChatPanel({
       return;
     }
 
+    setAccountingResumeFailure("");
     const replySnapshot = reactionContent ? null : replyTo;
     const content = reactionContent ?? (replySnapshot
       ? `[Reply to ${replySnapshot.role} message ${replySnapshot.id}]\nOriginal message:\n${replySnapshot.content}\n[End original message]\n\nMy reply:\n${input.trim()}`
@@ -2959,6 +2972,7 @@ export function ChatPanel({
         <div ref={messagesEndRef} />
       </section>
 
+      {accountingResumeFailure && <p role="alert" className="mx-3 mb-2 rounded-xl border border-amber-400/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-100 sm:mx-6">{accountingResumeFailure}</p>}
       {failoverNotice && (
         <p role="status" className="mx-3 mb-2 rounded-xl border border-amber-400/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-100 sm:mx-6">
           {failoverNotice}

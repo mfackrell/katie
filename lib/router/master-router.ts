@@ -30,6 +30,7 @@ import {
   type RegistryRoutingModel
 } from "@/lib/models/registry";
 import type { ActorRoutingProfile } from "@/lib/types/chat";
+import { getAccountingScope } from "@/lib/standalone-accounting/context";
 
 export type RoutingDecision = {
   provider: LlmProvider;
@@ -168,7 +169,8 @@ const CONTROL_PLANE_VERIFIED_COMPATIBLE_MODELS: Record<LlmProvider["name"], stri
 
 function isControlPlaneInstructionCompatibleModel(providerName: LlmProvider["name"], modelId: string): boolean {
   const normalized = normalizeModelId(modelId);
-  return CONTROL_PLANE_VERIFIED_COMPATIBLE_MODELS[providerName].some((verified) => normalizeModelId(verified) === normalized);
+  const standaloneAlternatives = {openai:["gpt-5.4-mini", "gpt-5-mini", "gpt-4.1-mini"],anthropic:["claude-haiku-4-5-20251001", "claude-haiku-5-5"],google:["gemini-2.5-flash", "gemini-3.5-flash", "gemini-3.8-flash"],grok:[]};
+  return [...CONTROL_PLANE_VERIFIED_COMPATIBLE_MODELS[providerName], ...(getAccountingScope()?.kind === 'standalone' ? standaloneAlternatives[providerName] : [])].some((verified) => normalizeModelId(verified) === normalized);
 }
 
 function isEligibleControlPlaneModel(
@@ -248,6 +250,17 @@ export function selectControlPlaneDecisionModels(
   for (const providerName of CONTROL_PLANE_PROVIDER_PRIORITY) {
     const providerEntry = entriesByProvider.get(providerName);
     if (!providerEntry) {
+      continue;
+    }
+
+    if (getAccountingScope()?.kind === 'standalone') {
+      // Retain every qualified alternative until the actual helper prompt has
+      // been serialized and priced. Picking one here would discard cheaper fits.
+      for (const modelId of providerEntry.models) {
+        if (!isBlockedControlPlaneModel(providerName, modelId) && isEligibleControlPlaneModel(providerName, modelId, registryLookup)) {
+          selectedProviders.push({provider: providerEntry.provider, modelId});
+        }
+      }
       continue;
     }
 

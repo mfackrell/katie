@@ -7,6 +7,8 @@ export interface StandaloneAccountingContext {
   chatId: string;
   requestId: string;
   signal?: AbortSignal;
+  /** Set only by the authenticated durable workflow loader. */
+  resumed?: boolean;
   activity?: string;
   reason?: string;
 }
@@ -47,12 +49,26 @@ export function nextStandaloneAttempt(): { context: StandaloneAccountingContext;
 }
 
 /** SDKs can wrap a fetch error; callers must still recognize terminal accounting decisions. */
-export function isStandaloneAccountingError(error: unknown): boolean {
+export function standaloneAccountingCause(error: unknown): (Error & {code?:string; status?:number}) | undefined {
   let current = error;
   for (let depth = 0; current && typeof current === 'object' && depth < 8; depth++) {
-    if ('terminal' in current && current.terminal === true) return true;
-    if ('code' in current && typeof current.code === 'string' && current.code.startsWith('standalone_')) return true;
+    if ('terminal' in current && current.terminal === true) return current as unknown as Error;
+    if ('code' in current && typeof current.code === 'string' && current.code.startsWith('standalone_')) return current as Error & {code:string};
     current = 'cause' in current ? current.cause : undefined;
   }
-  return false;
+  return undefined;
+}
+export function isStandaloneAccountingError(error: unknown): boolean { return !!standaloneAccountingCause(error); }
+
+/** Bounded diagnostics for SDK wrappers; never include request bodies or headers. */
+export function standaloneFailureDetails(error: unknown): string {
+  const chain: string[] = [];
+  let current = error;
+  for (let depth=0; current && typeof current === 'object' && depth<8; depth++) {
+    const item = current as {name?:unknown;code?:unknown;message?:unknown;cause?:unknown};
+    const clean = (value:unknown) => String(value ?? '').replace(/https?:\/\/[^\s]+/gi,'[URL]').replace(/(?:Bearer\s+|sk-)[A-Za-z0-9._-]+/gi,'[credential]').slice(0,300);
+    chain.push([clean(item.name),clean(item.code),clean(item.message)].filter(Boolean).join(': '));
+    current=item.cause;
+  }
+  return chain.join(' ← ') || 'Saved request execution failed.';
 }

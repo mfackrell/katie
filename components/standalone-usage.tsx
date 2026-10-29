@@ -30,7 +30,7 @@ export function StandaloneUsage({ actorId, chatId, onResumeAttempt }: Props) {
   const refreshSequence = useRef(0);
   const invalidateRefresh = useCallback(() => { refreshSequence.current++; }, []);
   const [scope, setScope] = useState<'this-agent' | 'all'>('this-agent');
-  const [snapshot, setSnapshot] = useState<Snapshot | null>(null), [error, setError] = useState(''), [notice, setNotice] = useState(''), [busy, setBusy] = useState('');
+  const [snapshot, setSnapshot] = useState<Snapshot | null>(null), [error, setError] = useState(''), [refreshError, setRefreshError] = useState(''), [notice, setNotice] = useState(''), [busy, setBusy] = useState('');
   const [settingsOpen, setSettingsOpen] = useState(false), [timezone, setTimezone] = useState(''), [callLimit, setCallLimit] = useState(''), [requestLimit, setRequestLimit] = useState('');
   const api = useCallback(async (path: string, init?: RequestInit) => {
     const bearer = await ownerSessionBearer();
@@ -45,8 +45,8 @@ export function StandaloneUsage({ actorId, chatId, onResumeAttempt }: Props) {
     try {
       const result = await api(`usage?${new URLSearchParams({ actorId, chatId, scope })}`) as Snapshot;
       if (sequence !== refreshSequence.current) return;
-      setSnapshot(result); setError('');
-    } catch (failure) { if (sequence === refreshSequence.current) setError(failure instanceof Error ? failure.message : 'Accounting is unavailable.'); }
+      setSnapshot(result); setRefreshError('');
+    } catch (failure) { if (sequence === refreshSequence.current) setRefreshError(failure instanceof Error ? failure.message : 'Accounting is unavailable.'); }
   }, [api, actorId, chatId, scope]);
   useEffect(() => {
     setSnapshot(null); void refresh();
@@ -70,14 +70,16 @@ export function StandaloneUsage({ actorId, chatId, onResumeAttempt }: Props) {
   }
   async function requestSavedResume(detail: { attemptId: string; requestId: string }) {
     if (onResumeAttempt) await onResumeAttempt(detail);
-    else window.dispatchEvent(new CustomEvent('standalone-accounting-resume', { detail: { ...detail, actorId, chatId } }));
+    else await new Promise<void>((resolve, reject) => {
+      window.dispatchEvent(new CustomEvent('standalone-accounting-resume', { detail: { ...detail, actorId, chatId, resolve, reject } }));
+    });
   }
   async function resumeReserved(attempt: ActiveAttempt) {
     if (attempt.state !== 'reserved') return;
     setBusy(attempt.id); setError(''); setNotice('');
     try {
       await requestSavedResume({ attemptId: attempt.id, requestId: attempt.requestId });
-      setNotice('Resume requested for the saved authorized work.');
+      setNotice('Saved work completed.');
       await refresh();
     } catch (failure) { setError(failure instanceof Error ? failure.message : 'Saved work could not resume.'); }
     finally { setBusy(''); }
@@ -88,7 +90,7 @@ export function StandaloneUsage({ actorId, chatId, onResumeAttempt }: Props) {
       const result = await api('attempts', { method: 'POST', body: JSON.stringify({ actorId, chatId, attemptId: attempt.id, action, preparedHash: attempt.preparedHash, pricingVersion: attempt.pricingVersion, budgetRevision: attempt.budgetRevision, reservedMicrousd: attempt.reservedMicrousd }) });
       if (action === 'approve_once') {
         await requestSavedResume({ attemptId: result.attemptId as string, requestId: result.requestId as string });
-        setNotice('Approved once for this exact saved attempt.');
+        setNotice('Approved saved work completed.');
       } else setNotice(action === 'cancel' ? result.message || 'Cancellation requested. Any dispatched spending exposure remains visible.' : 'A smaller proposal was prepared. Review its new estimate before approval.');
       await refresh();
     } catch (failure) { setError(failure instanceof Error ? failure.message : 'Decision could not be saved.'); await refresh(); }
@@ -104,9 +106,10 @@ export function StandaloneUsage({ actorId, chatId, onResumeAttempt }: Props) {
       <button type="button" onClick={openSettings} className="underline">Budget & timezone</button>
       <button type="button" onClick={() => void refresh()} className="underline">Refresh</button>
     </div>
-    {error && <p role="alert" className="mt-2 text-amber-200">{error}{snapshot && ' Previously loaded values may be stale.'}</p>}
+    {error && <p role="alert" className="mt-2 text-amber-200">{error}</p>}
+    {refreshError && <p role="alert" className="mt-2 text-amber-200">{refreshError}{snapshot && ' Previously loaded values may be stale.'}</p>}
     {notice && <p role="status" className="mt-2">{notice}</p>}
-    {!snapshot && !error && <p role="status" className="mt-2">Loading usage…</p>}
+    {!snapshot && !error && !refreshError && <p role="status" className="mt-2">Loading usage…</p>}
     {snapshot && !configurationComplete && <p className="mt-2 text-amber-200">Configuration required: choose a timezone and explicitly set both approval thresholds before paid standalone calls. <button type="button" onClick={openSettings} className="underline">Set budget settings</button></p>}
     {daily && <>
       <p className="mt-2">{daily.date} · {daily.timezone} · Estimated cost {dollars(daily.totals.estimatedCostMicrousd)} · Pending {dollars(daily.totals.pendingExposureMicrousd)} · Uncertain {dollars(daily.totals.uncertainExposureMicrousd)}</p>

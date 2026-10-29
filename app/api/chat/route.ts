@@ -1,6 +1,6 @@
 import { scheduleMemoryPersistence } from "@/lib/standalone-accounting/memory-scheduling";
 import { executeStandaloneWorkflow, currentStandaloneWorkflow, workflowMessageId, cachedWorkflowValue, workflowTimestamp } from "@/lib/standalone-accounting/workflow";
-import { isStandaloneAccountingError, runWithOrchestratorAccounting } from "@/lib/standalone-accounting/context";
+import { isStandaloneAccountingError, standaloneAccountingCause, runWithOrchestratorAccounting } from "@/lib/standalone-accounting/context";
 import { conversationCacheKey } from "@/lib/providers/openai-cache";
 import {projectForChat} from '@/lib/projects/store';
 import {loadFullBenchmarkBinding} from '../../../scripts/benchmark/full-project-gate.mjs';
@@ -678,6 +678,7 @@ export async function POST(request: NextRequest) {
     }
     return response;
   } catch (error) {
+    error=standaloneAccountingCause(error)??error;
     if (isStandaloneAccountingError(error)) return NextResponse.json({error:error instanceof Error?error.message:String(error),code: error && typeof error === "object" && "code" in error ? error.code : "standalone_accounting_unavailable"},{status:error && typeof error === "object" && "status" in error && typeof error.status === "number" ? error.status : 402});
     return NextResponse.json({ error: "Task configuration or permissions denied. Check the saved task and request ID." }, { status: 403 });
   }
@@ -3537,7 +3538,8 @@ ${chunkWorkflowSummary}`;
 
           } catch (error: unknown) {
             if (isStandaloneAccountingError(error)) {
-              emitChunk({type:"accounting_pause",code:"standalone_approval_or_accounting_required",requestId,message:error instanceof Error?error.message:String(error)});
+              error=standaloneAccountingCause(error)??error;
+              emitChunk({type:"accounting_pause",code:standaloneAccountingCause(error)?.code??"standalone_approval_or_accounting_required",requestId,message:error instanceof Error?error.message:String(error)});
               if (!streamCancelled) controller.close();
               return;
             }

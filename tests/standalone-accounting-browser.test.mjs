@@ -21,7 +21,7 @@ test('standalone browser: explicit settings, scopes, exact approval resume, redu
   let server, browser, output = '';
   const totals = overrides => ({ inputTokens: 123, outputTokens: 45, missingInputCount: 0, missingOutputCount: 1, estimatedCostMicrousd: '250000', pendingExposureMicrousd: '900000', uncertainExposureMicrousd: '100000', unknownCostCount: 1, attemptCount: 4, ...overrides });
   const pending = (suffix, overrides = {}) => ({ id: `attempt-${suffix}`, requestId: `original-${suffix}`, provider: 'openai', model: 'gpt-4o', resolvedModel: null, category: 'hidden_router', preparedHash: 'a'.repeat(64), pricingVersion: 'fixture-pricing-v1', estimatorVersion: 'saved-estimator-v1', budgetRevision: 1, reservedMicrousd: '300000', reason: 'Choose a reply model for this saved turn.', pauseReason: 'per_call_threshold', tradeoffs: null, createdAt: '2026-10-28T10:00:00Z', preview: { textBytes: 3200, imageCount: 2, imageBytes: 4096, inputTokens: 3500, imageTokens: 256, outputAllowance: 8192, assumptions: ['Input token count is an estimate, not a guaranteed spending ceiling.', 'All allowed output tokens include hidden reasoning.'], issues: [], status: 'estimated' }, requestExposure: totals(), ...overrides });
-  let configuration = null, proposals = [], running = [], fail = false;
+  let configuration = null, proposals = [], running = [], fail = false, resumeMode = 'paused', savedMessages = [];
   const decisions = [], resumes = [], configurations = [], scopes = [], external = [], unknownRoutes = [], errors = [];
   try {
     await mkdir(join(project, 'app/conversations/[id]'), { recursive: true });
@@ -80,13 +80,16 @@ test('standalone browser: explicit settings, scopes, exact approval resume, redu
       if (url.pathname === '/api/chat') {
         const requestId = request.headers()['x-request-id']; resumes.push({ body, requestId });
         running = running.map(attempt => attempt.requestId === requestId && attempt.state === 'reserved' ? { ...attempt, state: 'dispatched' } : attempt);
-        return reply({ status: 'paused' }, 202);
+        if (resumeMode === 'failed') return reply({ error: 'Saved attempt failed: exact fixture cause' }, 500);
+        if (resumeMode === 'completed') { savedMessages = [{ id: 'saved-answer', role: 'assistant', content: 'The saved approved answer is visible.', createdAt: '2026-10-28T10:00:00Z', provider: 'openai', model: 'gpt-4o' }]; return route.fulfill({ status: 200, contentType: 'application/x-ndjson', body: JSON.stringify({ type: 'content', text: savedMessages[0].content }) + '\n' }); }
+        return route.fulfill({ status: 200, contentType: 'application/x-ndjson', body: JSON.stringify({ type: 'accounting_pause', code: 'standalone_approval_required', message: 'Supporting work paused: per_request_threshold' }) + '\n' });
       }
       if (url.pathname === '/api/actors') return reply({ actors: [{ id: actorId, name: 'Fixture standalone', purpose: 'Browser verification', actorKind: 'standard' }] });
       if (url.pathname === '/api/chats') return reply({ chats: [{ id: chatId, actorId, title: 'Synthetic saved conversation', createdAt: '2026-10-28T00:00:00Z', updatedAt: '2026-10-28T00:00:00Z' }] });
       if (url.pathname === '/api/admin/repos') return reply({ repos: [] });
       if (url.pathname === '/api/ui-state') return reply({ state: { key: body?.key ?? url.searchParams.get('key'), version: 1, value: body?.value ?? {} } });
-      if (url.pathname === '/api/messages') return reply({ messages: [] });
+      if (url.pathname === '/api/messages') return reply({ messages: savedMessages });
+      if (url.pathname === '/api/message-reactions') return reply({ reactions: {} });
       if (url.pathname === '/api/projects') return reply({ active: false, status: null, approval: null, resourceRecovery: null, messages: [] });
       if (url.pathname === '/api/work') return reply({ items: [], warnings: [] });
       if (url.pathname === '/api/long-term-memory') return reply({ content: { entries: [] }, documents: [] });
@@ -128,6 +131,10 @@ test('standalone browser: explicit settings, scopes, exact approval resume, redu
     assert.equal(resumes.length, 1);
     assert.deepEqual(resumes[0], { body: { actorId, chatId, standaloneResume: true }, requestId: 'original-approve' });
     assert.equal(resumes[0].body.message, undefined, 'approval resumes durable original input instead of creating a generic message');
+    await usage.getByRole('alert').filter({ hasText: 'Supporting work paused: per_request_threshold' }).waitFor();
+    await usage.getByRole('button', { name: 'Refresh', exact: true }).click();
+    assert.match(await usage.innerText(), /Supporting work paused: per_request_threshold/);
+    assert.doesNotMatch(await usage.innerText(), /Resume requested|Approved saved work completed/);
     const active = usage.getByLabel('Active attempts in this conversation');
     await active.getByRole('button', { name: 'Cancel remaining work' }).waitFor();
     assert.match(await active.innerText(), /Already dispatched/);
@@ -162,10 +169,13 @@ test('standalone browser: explicit settings, scopes, exact approval resume, redu
     await active.getByRole('button', { name: 'Resume saved work' }).waitFor();
     await active.getByRole('button', { name: 'Resume saved work' }).scrollIntoViewIfNeeded();
     await page.screenshot({ path: join(screenshots, 'reserved-reconnect-mobile.png'), fullPage: true });
+    resumeMode = 'completed';
     const reconnectResponse = page.waitForResponse(response => response.url().endsWith('/api/chat'));
     await active.getByRole('button', { name: 'Resume saved work' }).click();
     await reconnectResponse;
     assert.equal(resumes.length, 2);
+    await page.getByText('The saved approved answer is visible.', { exact: true }).waitFor();
+    await usage.getByRole('status').filter({ hasText: 'Saved work completed.' }).waitFor();
     assert.deepEqual(resumes[1], { body: { actorId, chatId, standaloneResume: true }, requestId: 'original-approved-reconnect' });
     assert.equal(decisions.filter(body => body.action === 'approve_once').length, approvalCountBeforeReconnect, 'resuming a reserved attempt must not issue another approval');
     await page.waitForFunction(() => !Array.from(document.querySelectorAll('button')).some(button => button.textContent === 'Resume saved work'));
@@ -174,9 +184,17 @@ test('standalone browser: explicit settings, scopes, exact approval resume, redu
     await active.getByText('openai/gpt-4o · hidden_router · uncertain', { exact: false }).waitFor();
     assert.equal(await active.getByRole('button', { name: 'Resume saved work' }).count(), 0, 'uncertain paid work cannot be replayed');
     assert.equal(await active.getByRole('button', { name: 'Cancel remaining work' }).count(), 1);
+    running = [{ ...pending('failed'), state: 'reserved' }]; resumeMode = 'failed';
+    await usage.getByRole('button', { name: 'Refresh', exact: true }).click();
+    await active.getByRole('button', { name: 'Resume saved work' }).click();
+    await usage.getByRole('alert').filter({ hasText: 'Saved attempt failed: exact fixture cause' }).waitFor();
+    await usage.getByRole('button', { name: 'Refresh', exact: true }).click();
+    assert.match(await usage.innerText(), /Saved attempt failed: exact fixture cause/);
+    assert.doesNotMatch(await usage.innerText(), /Resume requested|Saved work completed/);
+    assert.equal(resumes.length, 3);
     fail = true; await usage.getByRole('button', { name: 'Refresh', exact: true }).click();
-    await usage.getByRole('alert').waitFor();
-    assert.match(await usage.getByRole('alert').innerText(), /Previously loaded values may be stale/);
+    await usage.getByRole('alert').filter({ hasText: 'Previously loaded values may be stale' }).waitFor();
+    assert.match(await usage.innerText(), /Saved attempt failed: exact fixture cause/);
     assert.deepEqual(external, []); assert.deepEqual(unknownRoutes, []); assert.deepEqual(errors, []);
     console.log('Standalone browser screenshots: ' + screenshots);
   } catch (error) {
