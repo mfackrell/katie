@@ -31,6 +31,7 @@ export function StandaloneUsage({ actorId, chatId, onResumeAttempt }: Props) {
   const invalidateRefresh = useCallback(() => { refreshSequence.current++; }, []);
   const [scope, setScope] = useState<'this-agent' | 'all'>('this-agent');
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null), [error, setError] = useState(''), [refreshError, setRefreshError] = useState(''), [notice, setNotice] = useState(''), [busy, setBusy] = useState('');
+  const [usageOpen, setUsageOpen] = useState(false), [reviewOpen, setReviewOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false), [timezone, setTimezone] = useState(''), [callLimit, setCallLimit] = useState(''), [requestLimit, setRequestLimit] = useState('');
   const api = useCallback(async (path: string, init?: RequestInit) => {
     const bearer = await ownerSessionBearer();
@@ -58,7 +59,7 @@ export function StandaloneUsage({ actorId, chatId, onResumeAttempt }: Props) {
   function openSettings() {
     const config = snapshot?.configuration;
     setTimezone(config?.timezone ?? ''); setCallLimit(decimal(config?.per_call_limit_microusd ?? null)); setRequestLimit(decimal(config?.request_limit_microusd ?? null));
-    setSettingsOpen(true);
+    setReviewOpen(false); setUsageOpen(true); setSettingsOpen(true);
   }
   async function saveSettings(event: React.FormEvent) {
     event.preventDefault(); setBusy('settings'); setError('');
@@ -99,18 +100,36 @@ export function StandaloneUsage({ actorId, chatId, onResumeAttempt }: Props) {
   const daily = snapshot?.daily;
   const activeAttempts = snapshot?.active ?? [];
   const configurationComplete = snapshot?.configuration && snapshot.configuration.per_call_limit_microusd !== null && snapshot.configuration.request_limit_microusd !== null;
-  return <section aria-label="Standalone daily usage" className="shrink-0 border-b border-white/10 px-5 py-3 text-xs text-zinc-300">
-    <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
-      <strong className="text-zinc-100">Daily standalone usage</strong>
-      <label>Scope <select className="ml-1 rounded border border-white/20 bg-zinc-900 p-1" value={scope} onChange={event => setScope(event.target.value as typeof scope)}><option value="this-agent">This agent</option><option value="all">All standalone</option></select></label>
-      <button type="button" onClick={openSettings} className="underline">Budget & timezone</button>
-      <button type="button" onClick={() => void refresh()} className="underline">Refresh</button>
+  const approvals = snapshot?.pending.length ?? 0;
+  const unresolved = activeAttempts.length;
+  const alerts = snapshot?.alerts?.length ?? 0;
+  return <section aria-label="Standalone daily usage" className="relative z-20 shrink-0 min-w-0 border-b border-white/10 bg-zinc-950 px-3 py-1.5 text-xs text-zinc-300 sm:px-5">
+    <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
+      <span className="min-w-0 truncate" aria-live="polite">
+        {daily ? <>Today {dollars(daily.totals.estimatedCostMicrousd)} · Pending {dollars(daily.totals.pendingExposureMicrousd)} · <Tokens totals={daily.totals} /></> : (error || refreshError) ? 'Usage unavailable' : 'Loading usage…'}
+      </span>
+      <button type="button" aria-expanded={usageOpen} aria-controls="standalone-usage-details" className="shrink-0 underline underline-offset-2" onClick={() => { setUsageOpen(v => !v); setReviewOpen(false); }}>Usage details</button>
+      {(approvals > 0 || unresolved > 0 || alerts > 0) && <span className="flex min-w-0 flex-wrap items-center gap-2 text-amber-200" role="status">
+        {approvals > 0 ? `${approvals} approval${approvals === 1 ? '' : 's'} required` : `${unresolved} active/reserved`}
+        {alerts > 0 && ` · ${alerts} alerts`}
+        <button type="button" aria-expanded={reviewOpen} aria-controls="standalone-attempt-review" className="underline underline-offset-2" onClick={() => { setReviewOpen(v => !v); setUsageOpen(false); }}>Review</button>
+      </span>}
+      {snapshot && !configurationComplete && <button type="button" className="text-amber-200 underline" onClick={openSettings}>Set budget settings</button>}
     </div>
-    {error && <p role="alert" className="mt-2 text-amber-200">{error}</p>}
-    {refreshError && <p role="alert" className="mt-2 text-amber-200">{refreshError}{snapshot && ' Previously loaded values may be stale.'}</p>}
-    {notice && <p role="status" className="mt-2">{notice}</p>}
-    {!snapshot && !error && !refreshError && <p role="status" className="mt-2">Loading usage…</p>}
-    {snapshot && !configurationComplete && <p className="mt-2 text-amber-200">Configuration required: choose a timezone and explicitly set both approval thresholds before paid standalone calls. <button type="button" onClick={openSettings} className="underline">Set budget settings</button></p>}
+    {error && <p role="alert" className="text-amber-200">{error}</p>}
+    {refreshError && <p role="alert" className="text-amber-200">{refreshError}{snapshot && ' Previously loaded values may be stale.'}</p>}
+    {notice && <p role="status" className="truncate">{notice}</p>}
+    {usageOpen && <div id="standalone-usage-details" className="absolute left-0 right-0 top-full z-30 max-h-[65vh] overflow-y-auto overscroll-contain border border-white/20 bg-zinc-950 p-3 shadow-xl sm:p-4">
+      <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+        <strong className="text-zinc-100">Daily standalone usage</strong>
+        <button type="button" className="underline" onClick={() => setUsageOpen(false)}>Close details</button>
+      </div>
+      <div className="flex flex-wrap items-center gap-3">
+        <label>Scope <select className="ml-1 rounded border border-white/20 bg-zinc-900 p-1" value={scope} onChange={event => setScope(event.target.value as typeof scope)}><option value="this-agent">This agent</option><option value="all">All standalone</option></select></label>
+        <button type="button" onClick={openSettings} className="underline">Budget & timezone</button>
+        <button type="button" onClick={() => void refresh()} className="underline">Refresh</button>
+      </div>
+      {snapshot && !configurationComplete && <p className="mt-2 text-amber-200">Configuration required: choose a timezone and explicitly set both approval thresholds before paid standalone calls.</p>}
     {daily && <>
       <p className="mt-2">{daily.date} · {daily.timezone} · Estimated cost {dollars(daily.totals.estimatedCostMicrousd)} · Pending {dollars(daily.totals.pendingExposureMicrousd)} · Uncertain {dollars(daily.totals.uncertainExposureMicrousd)}</p>
       <p className="mt-1"><Tokens totals={daily.totals} />{daily.totals.unknownCostCount > 0 && ` · ${daily.totals.unknownCostCount} call(s) with unknown cost; displayed cost is incomplete.`}</p>
@@ -121,7 +140,24 @@ export function StandaloneUsage({ actorId, chatId, onResumeAttempt }: Props) {
         <ul className="mt-2 space-y-1">{daily.attempts.map(attempt => <li key={attempt.id}>{new Intl.DateTimeFormat(undefined, { timeZone: daily.timezone, hour: '2-digit', minute: '2-digit', second: '2-digit' }).format(new Date(attempt.dispatched_at || attempt.created_at))} · {attempt.provider}/{attempt.model} · {attempt.category} · {attempt.state} · {attempt.actual_microusd === null ? 'cost unknown / not settled' : dollars(attempt.actual_microusd)}</li>)}</ul>
       </details>
     </>}
+
+    {settingsOpen && <form onSubmit={event => void saveSettings(event)} className="mt-3 space-y-3 rounded border border-white/20 p-3">
+      <p>Owner settings apply to all standalone agents. Per request includes main calls, retries, routing, summarization, memory and other hidden helpers. USD estimates are not provider invoices.</p>
+      <label className="block">Timezone (IANA)<input required value={timezone} placeholder="e.g. America/New_York" onChange={event => setTimezone(event.target.value)} className="ml-2 rounded border border-white/20 bg-zinc-900 p-1" /></label>
+      <label className="block">Per call approval threshold (USD)<input inputMode="decimal" required value={callLimit} onChange={event => setCallLimit(event.target.value)} className="ml-2 w-28 rounded border border-white/20 bg-zinc-900 p-1" /></label>
+      <label className="block">Per request approval threshold (USD)<input inputMode="decimal" required value={requestLimit} onChange={event => setRequestLimit(event.target.value)} className="ml-2 w-28 rounded border border-white/20 bg-zinc-900 p-1" /></label>
+      <p>Zero requires approval for every positive estimate. No timezone or monetary thresholds are preselected.</p>
+      <div className="flex gap-4"><button disabled={Boolean(busy)} className="rounded border border-white/30 px-3 py-1">Save settings</button><button type="button" onClick={() => setSettingsOpen(false)} className="underline">Close</button></div>
+    </form>}
+
+    </div>}
+    {reviewOpen && <div id="standalone-attempt-review" className="absolute left-0 right-0 top-full z-30 max-h-[65vh] overflow-y-auto overscroll-contain border border-amber-400/30 bg-zinc-950 p-3 shadow-xl sm:p-4">
+      <div className="flex items-center justify-between gap-2">
+        <strong className="text-amber-100">Requests and approvals</strong>
+        <button type="button" onClick={() => setReviewOpen(false)} className="underline">Close review</button>
+      </div>
     {snapshot?.alerts?.map((alert, index) => <p role="alert" key={`${alert.attemptId}:${alert.kind}:${index}`} className="mt-2 rounded border border-amber-400/40 p-2 text-amber-100"><strong>{alert.kind === 'overrun' ? 'Preflight overrun' : alert.kind === 'receipt_conflict' ? 'Receipt conflict' : 'Uncertain provider outcome'}</strong> · {alert.provider}/{alert.model} · {alert.message}{alert.actualMicrousd !== null && ` Settled ${dollars(alert.actualMicrousd)}; reserved ${dollars(alert.reservedMicrousd)}.`} <span className="break-all">Attempt {alert.attemptId}</span></p>)}
+
     {activeAttempts.length > 0 && <div aria-label="Active attempts in this conversation" className="mt-2 space-y-2">
       <p className="font-medium text-zinc-100">Active or unresolved attempts in this conversation</p>
       {activeAttempts.map(attempt => <div key={attempt.id} className="rounded border border-white/20 p-2">
@@ -145,13 +181,7 @@ export function StandaloneUsage({ actorId, chatId, onResumeAttempt }: Props) {
       <p className="mt-1 break-all text-zinc-400">Exact attempt {attempt.id} · pricing {attempt.pricingVersion} · estimator {attempt.estimatorVersion} · budget revision {attempt.budgetRevision}</p>
       <div className="mt-2 flex gap-4"><button type="button" disabled={Boolean(busy) || !configurationComplete} onClick={() => void decide(attempt, 'approve_once')} className="rounded bg-amber-100 px-3 py-1 text-zinc-950 disabled:opacity-50">Approve once</button><button type="button" disabled={Boolean(busy)} onClick={() => void decide(attempt, 'reduce_cost')} className="underline disabled:opacity-50">Reduce cost</button><button type="button" disabled={Boolean(busy)} onClick={() => void decide(attempt, 'cancel')} className="underline disabled:opacity-50">Cancel</button></div>
     </div>)}
-    {settingsOpen && <form onSubmit={event => void saveSettings(event)} className="mt-3 space-y-3 rounded border border-white/20 p-3">
-      <p>Owner settings apply to all standalone agents. Per request includes main calls, retries, routing, summarization, memory and other hidden helpers. USD estimates are not provider invoices.</p>
-      <label className="block">Timezone (IANA)<input required value={timezone} placeholder="e.g. America/New_York" onChange={event => setTimezone(event.target.value)} className="ml-2 rounded border border-white/20 bg-zinc-900 p-1" /></label>
-      <label className="block">Per call approval threshold (USD)<input inputMode="decimal" required value={callLimit} onChange={event => setCallLimit(event.target.value)} className="ml-2 w-28 rounded border border-white/20 bg-zinc-900 p-1" /></label>
-      <label className="block">Per request approval threshold (USD)<input inputMode="decimal" required value={requestLimit} onChange={event => setRequestLimit(event.target.value)} className="ml-2 w-28 rounded border border-white/20 bg-zinc-900 p-1" /></label>
-      <p>Zero requires approval for every positive estimate. No timezone or monetary thresholds are preselected.</p>
-      <div className="flex gap-4"><button disabled={Boolean(busy)} className="rounded border border-white/30 px-3 py-1">Save settings</button><button type="button" onClick={() => setSettingsOpen(false)} className="underline">Close</button></div>
-    </form>}
+
+    </div>}
   </section>;
 }
