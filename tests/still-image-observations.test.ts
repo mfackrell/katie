@@ -112,6 +112,7 @@ test('real escalation selector excludes unpriceable image models before preparat
   t.after(()=>{globalThis.__KATIE_SUPABASE_ADMIN_CLIENT__=old;});
   const prepared:string[]=[],sent:string[]=[];
   globalThis.__KATIE_SUPABASE_ADMIN_CLIENT__={async rpc(name:string){
+    if(name==='standalone_snapshot')return{data:{attempts:[]},error:null};
     if(name==='standalone_load_pricing')return{data:{snapshot:PRICING_SNAPSHOT,retrievedAt:new Date().toISOString()},error:null};
     if(name==='standalone_lookup_attempt')return{data:null,error:null};
     assert.fail('No unsupported image attempt may be created: '+name);
@@ -137,4 +138,22 @@ test('owner can request additional ordinary inspection of an aspect absent from 
  let reinspections=0;
  const result=await observeStandaloneStillImages([ref],{saved:[saved],question:'Inspect the bottom half again; what color are the shoes? The saved observation does not cover this.',qwen:async()=>{reinspections++;return {text:'The shoes are blue.',model,coverage:'full'};},escalate:async()=>{assert.fail('Ordinary requested reinspection does not itself require premium');}});
  assert.equal(reinspections,1);assert.equal(result.get(ref.fileId)!.observedSummary,'The shoes are blue.');
+});
+
+test('paid escalation admission fence checks durable Qwen uncertainty before pricing, ranking or dispatch',async t=>{
+ const {escalateStillImageEvidence}=await import('../lib/uploads/still-image-observations');
+ const {runWithStandaloneAccounting}=await import('../lib/standalone-accounting/context');
+ const previous=globalThis.__KATIE_SUPABASE_ADMIN_CLIENT__;t.after(()=>{globalThis.__KATIE_SUPABASE_ADMIN_CLIENT__=previous;});
+ const calls:string[]=[];let accepted=false;
+ globalThis.__KATIE_SUPABASE_ADMIN_CLIENT__={async rpc(name:string){calls.push(name);
+   if(name==='standalone_snapshot')return{data:{attempts:[{id:'qwen',request_id:'incident',provider:'runpod',model:'Qwen/Qwen3-VL-8B-Instruct',state:'uncertain'}]},error:null};
+   if(name==='standalone_uncertain_exposure_accepted')return{data:accepted,error:null};
+   if(name==='standalone_load_pricing'&&accepted)throw Error('Authorized next safe checkpoint reached');
+   assert.fail('No pricing, provider selection or paid dispatch before owner authorization: '+name);
+ }} as unknown as NonNullable<typeof globalThis.__KATIE_SUPABASE_ADMIN_CLIENT__>;
+ await assert.rejects(runWithStandaloneAccounting({userId:'owner',actorId:'actor',chatId:'chat',requestId:'incident'},()=>escalateStillImageEvidence([image().imageDataUrl!],'describe')),{code:'standalone_outcome_unknown'});
+ assert.deepEqual(calls,['standalone_snapshot','standalone_uncertain_exposure_accepted']);
+ accepted=true;
+ await assert.rejects(runWithStandaloneAccounting({userId:'owner',actorId:'actor',chatId:'chat',requestId:'incident'},()=>escalateStillImageEvidence([image().imageDataUrl!],'describe')),error=>error instanceof Error && error.cause instanceof Error && /Authorized next safe checkpoint reached/.test(error.cause.message));
+ assert.equal(calls.at(-1),'standalone_load_pricing');
 });

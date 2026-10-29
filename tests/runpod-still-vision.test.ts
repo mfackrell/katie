@@ -1,5 +1,6 @@
 import test, { afterEach } from 'node:test';
 import assert from 'node:assert/strict';
+import { observeStandaloneStillImages } from '../lib/uploads/still-image-observations';
 import { describeImageWithRunpodQwen } from '../lib/chat/runpod-still-vision';
 import { runWithStandaloneAccounting } from '../lib/standalone-accounting/context';
 import { createStandaloneLedger } from '../lib/standalone-accounting/ledger';
@@ -116,4 +117,26 @@ test('accepted uncertain saved Qwen output replays without clearing uncertainty 
  const result=await f.run();assert.equal(result.text,'A brown dog in a room.');
  assert.equal(f.row?.state,'uncertain');assert.equal(f.row?.reserved_microusd,'20000');assert.equal(f.row?.actual_microusd,null);assert.equal(f.sends,1);
  assert.equal(f.calls.filter(c=>c.name==='standalone_complete_qwen_estimate').length,completions);
+});
+
+test('genuine attached image stops before every paid escalation until owner accepts; resumes without retransmitting Qwen',async()=>{
+ const f=fixture();f.lostAcceptance=true;let premium=0;
+ const reference={fileId:'image',fileName:'current.jpg',mimeType:'image/jpeg',attachmentKind:'image' as const,preview:'',imageDataUrl:image};
+ const run=()=>observeStandaloneStillImages([reference],{qwen:()=>f.run(),escalate:async()=>{premium++;return{text:'Visible grounded evidence',model:'premium'};}});
+ await assert.rejects(run(),{code:'standalone_outcome_unknown'});
+ assert.equal(premium,0);assert.equal(f.row?.state,'uncertain');assert.equal(f.row?.provider_request_id,null);
+ await assert.rejects(run(),{code:'standalone_outcome_unknown'});assert.equal(premium,0);assert.equal(f.sends,1);
+ f.exposureAccepted=true;await run();assert.equal(premium,1);assert.equal(f.sends,1);assert.equal(f.row?.reserved_microusd,'20000');assert.equal(f.row?.state,'uncertain');
+});
+
+test('incident 14774c56: failed image then plain text never reuses hidden JPEG or invokes vision',async()=>{
+ const {cleanPendingAttachments}=await import('../lib/ui/pending-attachments');
+ const {inferRequestIntentFromMultimodalInput}=await import('../lib/router/model-intent');
+ const f=fixture();f.lostAcceptance=true;await assert.rejects(f.run(),{code:'standalone_outcome_unknown'});
+ const composer=cleanPendingAttachments({images:[],imageFiles:[],videos:[],files:[],references:[{fileId:'old-failed-image',fileName:'old.jpg',mimeType:'image/jpeg',attachmentKind:'image',preview:'',imageDataUrl:image}]});
+ const message='Katie, that is an awesome start but i know you can do way better';
+ let qwen=0,premium=0;
+ await observeStandaloneStillImages(composer.references,{question:message,qwen:async()=>{qwen++;throw Error('Unexpected Qwen');},escalate:async()=>{premium++;throw Error('Unexpected paid escalation');}});
+ assert.equal(await inferRequestIntentFromMultimodalInput(message,composer.images),null);
+ assert.deepEqual(composer.references,[]);assert.equal(qwen,0);assert.equal(premium,0);assert.equal(f.sends,1);
 });

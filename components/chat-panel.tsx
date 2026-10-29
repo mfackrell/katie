@@ -16,7 +16,7 @@ import {
   useRef,
   useState,
 } from "react";
-import { readPendingAttachments,savePendingAttachments } from "@/lib/ui/pending-attachments";
+import { cleanPendingAttachments,readPendingAttachments,savePendingAttachments } from "@/lib/ui/pending-attachments";
 import { useSavedState } from "@/components/saved-workspace-state";
 import type { FileReference } from "@/lib/providers/types";
 import { acknowledgeVideoUploads, uploadFilesDirect } from "@/lib/uploads/direct-upload-client";
@@ -848,7 +848,7 @@ export function ChatPanel({
   const [fileReferences, setFileReferences] = useState<FileReference[]>([]);
   const [attachmentsReady,setAttachmentsReady]=useState(false);
   const [attachmentSaveError,setAttachmentSaveError]=useState(false);
-  useEffect(()=>{let active=true;readPendingAttachments(chatId).then(value=>{if(!active)return;if(value){setSelectedImages(value.images);setSelectedImageFiles(value.imageFiles);setSelectedVideos(value.videos);setSelectedFiles(value.files);setFileReferences(value.references);}setAttachmentsReady(true);}).catch(()=>{if(active)setAttachmentsReady(true);});return()=>{active=false;};},[chatId]);
+  useEffect(()=>{let active=true;readPendingAttachments(chatId,()=>{if(active)setAttachmentSaveError(true);}).then(value=>{if(!active)return;if(value){setSelectedImages(value.images);setSelectedImageFiles(value.imageFiles);setSelectedVideos(value.videos);setSelectedFiles(value.files);setFileReferences(value.references);}setAttachmentsReady(true);}).catch(()=>{if(active)setAttachmentsReady(true);});return()=>{active=false;};},[chatId]);
   useEffect(()=>{if(!attachmentsReady)return;void savePendingAttachments(chatId,{images:selectedImages,imageFiles:selectedImageFiles,videos:selectedVideos,files:selectedFiles,references:fileReferences}).then(()=>setAttachmentSaveError(false)).catch(()=>setAttachmentSaveError(true));},[chatId,attachmentsReady,selectedImages,selectedImageFiles,selectedVideos,selectedFiles,fileReferences]);
   const [statusMessage, setStatusMessage] = useState("");
   const [imageObservationStages, setImageObservationStages] = useState<string[]>([]);
@@ -1788,7 +1788,7 @@ export function ChatPanel({
         clearPendingChatRequest(chatId);
         // Video data has already been saved; preserve its compact reference
         // for the next send rather than uploading the file a second time.
-        if (uploadedReferencesForRetry) setFileReferences(uploadedReferencesForRetry.filter(reference => reference.attachmentKind !== "image"));
+        if (uploadedReferencesForRetry) setFileReferences(cleanPendingAttachments({images:[],imageFiles:[],videos:[],files:[],references:uploadedReferencesForRetry}).references);
         setInput(content);
         setStatusMessage(httpCause);
         return;
@@ -2129,7 +2129,7 @@ export function ChatPanel({
       } else if (requestStage === "sending chat request" && uploadedReferencesForRetry) {
         // Server acceptance may be uncertain, but no bytes need transferring
         // if the user chooses to retry after the existing-request recovery.
-        if (!reactionContent) setFileReferences(uploadedReferencesForRetry);
+        if (!reactionContent) setFileReferences(cleanPendingAttachments({images:[],imageFiles:[],videos:[],files:[],references:uploadedReferencesForRetry}).references);
       }
 
       if (error instanceof DOMException && error.name === "AbortError") {
