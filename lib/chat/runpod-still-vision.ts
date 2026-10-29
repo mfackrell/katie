@@ -135,6 +135,7 @@ export async function describeImageWithRunpodQwen(imageDataUrl:string,question:s
     }catch(error){
       if(error&&typeof error==='object'&&'qwenRejected' in error)throw error;
       await ledger.markUncertain(context.userId,attempt.id,'Qwen submission outcome or job registration is unknown; fixed infrastructure exposure remains held.').catch(()=>{});
+      if(await ledger.uncertainExposureAccepted(context.userId,attempt.id))throw new Error('Qwen outcome is unknown; the full reserved exposure is authorized and retained. This attempt will not be resent; separate image escalation is required.');
       throw annotate(failure('outcome_unknown','Qwen submission outcome is unknown. The full reservation is retained and this attempt will not be resubmitted.'));
     }
   }

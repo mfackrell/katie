@@ -7,7 +7,7 @@ import type { DailyUsage, UsageTotals } from '@/lib/standalone-accounting/daily'
 interface Configuration { timezone: string; per_call_limit_microusd: string | null; request_limit_microusd: string | null; budget_revision: number }
 interface Pending { id: string; requestId: string; provider: string; model: string; category: string; preparedHash: string; pricingVersion: string; budgetRevision: number; reservedMicrousd: string; reason: string; pauseReason: string | null; resolvedModel: string | null; estimatorVersion: string; tradeoffs: string | null; createdAt: string; preview: { textBytes: number; imageCount: number; imageBytes: number; inputTokens: number; imageTokens: number; outputAllowance: number; assumptions: string[]; issues: string[]; status: string }; requestExposure: UsageTotals }
 type DecisionAttempt = Pick<Pending, 'id' | 'requestId' | 'preparedHash' | 'pricingVersion' | 'budgetRevision' | 'reservedMicrousd'>;
-interface ActiveAttempt extends DecisionAttempt { provider: string; model: string; category: string; state: 'reserved' | 'dispatched' | 'uncertain'; parentStatus?: string; continuationActionable?: boolean; cancellationActionable?: boolean; exposureAccepted?: boolean; continuationBlockedReason?: string | null; pollableRunpod?: boolean }
+interface ActiveAttempt extends DecisionAttempt { provider: string; model: string; category: string; state: 'reserved' | 'dispatched' | 'uncertain'; uncertainAutoAuthorized?: boolean; parentStatus?: string; continuationActionable?: boolean; cancellationActionable?: boolean; exposureAccepted?: boolean; continuationBlockedReason?: string | null; pollableRunpod?: boolean }
 interface Snapshot { configuration: Configuration | null; daily: DailyUsage | null; pending: Pending[]; active?: ActiveAttempt[]; alerts?: Array<{ attemptId: string; provider: string; model: string; kind: string; message: string; actualMicrousd: string | null; reservedMicrousd: string }> }
 interface Props { rail?: boolean; actorId: string; chatId: string; onResumeAttempt?: (attempt: { attemptId: string; requestId: string }) => Promise<void> | void }
 
@@ -49,6 +49,9 @@ function ModelCost({model}: {model: UsageTotals & {provider: string}}) {
 
 export function StandaloneUsage({ actorId, chatId, onResumeAttempt, rail = false }: Props) {
   const refreshSequence = useRef(0);
+  const snapshotScope = useRef('');
+  const automaticResumes = useRef(new Set<string>());
+  const automaticRetryAfter = useRef(new Map<string,number>());
   const invalidateRefresh = useCallback(() => { refreshSequence.current++; }, []);
   const [scope, setScope] = useState<'this-agent' | 'all'>('this-agent');
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null), [error, setError] = useState(''), [refreshError, setRefreshError] = useState(''), [notice, setNotice] = useState(''), [busy, setBusy] = useState('');
@@ -67,6 +70,7 @@ export function StandaloneUsage({ actorId, chatId, onResumeAttempt, rail = false
     try {
       const result = await api(`usage?${new URLSearchParams({ actorId, chatId, scope })}`) as Snapshot;
       if (sequence !== refreshSequence.current) return;
+      snapshotScope.current = `${actorId}:${chatId}`;
       setSnapshot(result); setRefreshError('');
     } catch (failure) { if (sequence === refreshSequence.current) setRefreshError(failure instanceof Error ? failure.message : 'Accounting is unavailable.'); }
   }, [api, actorId, chatId, scope]);
@@ -90,12 +94,32 @@ export function StandaloneUsage({ actorId, chatId, onResumeAttempt, rail = false
     } catch (failure) { setError(failure instanceof Error ? failure.message : 'Settings could not be saved.'); }
     finally { setBusy(''); }
   }
-  async function requestSavedResume(detail: { attemptId: string; requestId: string }) {
+  const requestSavedResume = useCallback(async (detail: { attemptId: string; requestId: string }) => {
     if (onResumeAttempt) await onResumeAttempt(detail);
     else await new Promise<void>((resolve, reject) => {
       window.dispatchEvent(new CustomEvent('standalone-accounting-resume', { detail: { ...detail, actorId, chatId, resolve, reject } }));
     });
-  }
+  }, [onResumeAttempt, actorId, chatId]);
+  useEffect(() => {
+    if (busy || snapshotScope.current !== `${actorId}:${chatId}`) return;
+    const candidate = snapshot?.active?.find(attempt => attempt.uncertainAutoAuthorized && attempt.parentStatus === 'paused' && !attempt.continuationBlockedReason &&
+      !automaticResumes.current.has(`${actorId}:${chatId}:${attempt.requestId}`) &&
+      (automaticRetryAfter.current.get(`${actorId}:${chatId}:${attempt.requestId}`) ?? 0) <= Date.now() &&
+      !snapshot.pending.some(other => other.requestId === attempt.requestId) &&
+      !snapshot.active?.some(other => other.requestId === attempt.requestId && other.state === 'uncertain' && !other.exposureAccepted));
+    if (!candidate) return;
+    automaticResumes.current.add(`${actorId}:${chatId}:${candidate.requestId}`);
+    setBusy(candidate.id); setNotice(''); setError('');
+    void requestSavedResume({attemptId:candidate.id,requestId:candidate.requestId})
+      .then(() => { setNotice('Automatically continued within owner spending limits.'); })
+      .catch(failure => {
+        const key = `${actorId}:${chatId}:${candidate.requestId}`;
+        automaticResumes.current.delete(key);
+        automaticRetryAfter.current.set(key,Date.now()+5000);
+        setError(failure instanceof Error ? failure.message : 'Automatic continuation encountered a technical blocker.');
+      })
+      .finally(() => { setBusy(''); void refresh(); });
+  }, [snapshot, busy, actorId, chatId, requestSavedResume, refresh]);
   async function resumeReserved(attempt: ActiveAttempt) {
     if (attempt.continuationActionable !== true || attempt.continuationBlockedReason || (attempt.state !== 'reserved' && !attempt.pollableRunpod)) return;
     setBusy(attempt.id); setError(''); setNotice('');
@@ -167,7 +191,7 @@ export function StandaloneUsage({ actorId, chatId, onResumeAttempt, rail = false
       {activeAttempts.map(attempt => <div key={attempt.id} className="rounded border border-white/20 p-2">
         <p>{attempt.provider}/{attempt.model} · {attempt.category} · {attempt.state} · exposure {dollars(attempt.reservedMicrousd)}</p>
         <p className="mt-1 break-all text-zinc-400">Exact attempt {attempt.id} · original request {attempt.requestId}</p>
-        {attempt.continuationActionable !== true && <p role="status" className="mt-1 text-amber-100">{attempt.state === 'uncertain' ? 'Uncertain exposure retained' : 'Exposure retained'} · parent request {attempt.parentStatus === 'completed' ? 'already completed' : attempt.parentStatus === 'running' ? 'already running' : attempt.parentStatus ?? 'not resumable'}</p>}
+        {attempt.continuationActionable !== true && <p role="status" className="mt-1 text-amber-100">{attempt.state === 'uncertain' ? 'Uncertain exposure retained' : 'Exposure retained'} · parent request {attempt.uncertainAutoAuthorized ? 'auto-authorized within owner limits' : attempt.parentStatus === 'completed' ? 'already completed' : attempt.parentStatus === 'running' ? 'already running' : attempt.parentStatus ?? 'not resumable'}</p>}
         {attempt.continuationBlockedReason && <p role="alert" className="mt-1 text-amber-200">{attempt.continuationBlockedReason} This technical limitation cannot be changed by continuing the same request.</p>}
         {(attempt.state === 'reserved' || attempt.pollableRunpod) && attempt.continuationActionable === true && !attempt.continuationBlockedReason && <button type="button" disabled={Boolean(busy)} onClick={() => void resumeReserved(attempt)} className="mr-4 mt-1 rounded border border-white/30 px-2 py-1 disabled:opacity-50">{attempt.pollableRunpod ? 'Check saved Qwen analysis' : 'Resume saved work'}</button>}
         {attempt.state === 'uncertain' && attempt.continuationActionable === true && <>
@@ -278,7 +302,7 @@ export function StandaloneUsage({ actorId, chatId, onResumeAttempt, rail = false
       {activeAttempts.map(attempt => <div key={attempt.id} className="rounded border border-white/20 p-2">
         <p>{attempt.provider}/{attempt.model} · {attempt.category} · {attempt.state} · exposure {dollars(attempt.reservedMicrousd)}</p>
         <p className="mt-1 break-all text-zinc-400">Exact attempt {attempt.id} · original request {attempt.requestId}</p>
-        {attempt.continuationActionable !== true && <p role="status" className="mt-1 text-amber-100">{attempt.state === 'uncertain' ? 'Uncertain exposure retained' : 'Exposure retained'} · parent request {attempt.parentStatus === 'completed' ? 'already completed' : attempt.parentStatus === 'running' ? 'already running' : attempt.parentStatus ?? 'not resumable'}</p>}
+        {attempt.continuationActionable !== true && <p role="status" className="mt-1 text-amber-100">{attempt.state === 'uncertain' ? 'Uncertain exposure retained' : 'Exposure retained'} · parent request {attempt.uncertainAutoAuthorized ? 'auto-authorized within owner limits' : attempt.parentStatus === 'completed' ? 'already completed' : attempt.parentStatus === 'running' ? 'already running' : attempt.parentStatus ?? 'not resumable'}</p>}
         {attempt.continuationBlockedReason && <p role="alert" className="mt-1 text-amber-200">{attempt.continuationBlockedReason} This technical limitation cannot be changed by continuing the same request.</p>}
         {(attempt.state === 'reserved' || attempt.pollableRunpod) && attempt.continuationActionable === true && !attempt.continuationBlockedReason && <button type="button" disabled={Boolean(busy)} onClick={() => void resumeReserved(attempt)} className="mr-4 mt-1 rounded border border-white/30 px-2 py-1 disabled:opacity-50">{attempt.pollableRunpod ? 'Check saved Qwen analysis' : 'Resume saved work'}</button>}
         {attempt.state === 'uncertain' && attempt.continuationActionable === true && <>

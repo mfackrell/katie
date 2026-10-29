@@ -16,6 +16,12 @@ export async function cancelStandaloneAttempt(ownerId: string, attemptId: string
   return attempt;
 }
 function failure(code: string, message: string): StandaloneAccountingError { return new StandaloneAccountingError(`standalone_${code}`, message); }
+/** Local admission outcome, not a provider receipt or fabricated model output.
+ * A non-retryable HTTP error lets the caller choose its existing safe fallback.
+ * Replaying it never transmits the uncertain operation again. */
+function unavailableUncertainResponse(): Response {
+  return Response.json({error:{type:'uncertain_exposure_retained',message:'The previous provider outcome is unavailable. Its full exposure is authorized and retained. This operation was not retransmitted; use the next safe fallback.'}},{status:400,headers:{'x-katie-uncertain-exposure':'retained'}});
+}
 function restore(checkpoint: ResponseCheckpoint): Response {
   const headers = new Headers(checkpoint.headers);
   // fetch has already decompressed the captured body.
@@ -265,6 +271,7 @@ export function createAccountingFetch(provider: AccountingProvider, transport: t
       const receipt = receiptFromResponse(checkpoint.body, new Headers(checkpoint.headers), provider, prepared.endpoint, prepared.payload.stream === true || prepared.endpoint.endsWith(':streamGenerateContent'), prepared.payload);
       if (!receipt) {
         await ledger.markUncertain(context.userId, attemptId, 'Response received without supported complete provider usage and receipt; reservation remains held.');
+        if(await ledger.uncertainExposureAccepted(context.userId,attemptId))return;
         throw failure('outcome_unknown', 'Provider usage is incomplete. Spending exposure remains reserved; automatic continuation stopped.');
       }
       const receiptHeaders = new Headers(checkpoint.headers);
@@ -305,7 +312,7 @@ export function createAccountingFetch(provider: AccountingProvider, transport: t
       // Only durable server authority can acknowledge exposure. Never claim
       // dispatch, release money or reconcile incomplete evidence in this branch.
       if (!await ledger.uncertainExposureAccepted(context.userId,attempt.id)) throw Object.assign(failure('outcome_unknown','The provider call was already sent. Accept its uncertain exposure before continuing remaining work.'),{attemptId:attempt.id});
-      if (!attempt.response_checkpoint || !safeUncertainCheckpoint(attempt.response_checkpoint,provider,prepared.endpoint)) throw Object.assign(failure('safe_checkpoint_unavailable','Uncertain exposure is accepted and retained, but this call has no complete saved response to replay safely. It will not be resent. Remaining dependent work cannot continue from this checkpoint.'),{attemptId:attempt.id});
+      if (!attempt.response_checkpoint || !safeUncertainCheckpoint(attempt.response_checkpoint,provider,prepared.endpoint)) return unavailableUncertainResponse();
       return restore(attempt.response_checkpoint);
     }
     if (attempt?.response_checkpoint) {
@@ -344,9 +351,12 @@ export function createAccountingFetch(provider: AccountingProvider, transport: t
       const checkpoint: ResponseCheckpoint = { status: response.status, statusText: response.statusText, headers: [...response.headers.entries()], body };
       await ledger.checkpointResponse(context.userId, attempt.id, checkpoint);
       await reconcile(checkpoint, attempt.id);
+      const reconciled=await ledger.lookupAttempt(context.userId,context.requestId,attemptKey);
+      if(reconciled?.state==='uncertain'&&!safeUncertainCheckpoint(checkpoint,provider,prepared.endpoint))return unavailableUncertainResponse();
       return restore(checkpoint);
     } catch (error) {
       await ledger.markUncertain(context.userId, attempt.id, error instanceof StandaloneAccountingError ? error.message : 'Transmission or response reconciliation did not complete; reservation remains held.').catch(() => undefined);
+      if(await ledger.uncertainExposureAccepted(context.userId,attempt.id))return unavailableUncertainResponse();
       if (error instanceof StandaloneAccountingError) throw Object.assign(error, { attemptId: attempt.id });
       throw Object.assign(failure('outcome_unknown', 'The provider outcome is uncertain. Spending exposure remains reserved; automatic retry stopped.'), { cause: error, attemptId: attempt.id });
     } finally { clearInterval(cancellationPoll); activeTransmissions.delete(activeKey); }

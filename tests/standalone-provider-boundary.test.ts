@@ -582,7 +582,7 @@ test('accepting exposure never fabricates a missing or incomplete provider resul
  f.service.uncertainExposureAccepted=async()=>true;
  for(const checkpoint of [null,{status:200,statusText:'OK',headers:[],body:JSON.stringify({choices:[{message:{content:'partial'},finish_reason:null}]})}] as Array<ResponseCheckpoint|null>){
   f.attempts[0].response_checkpoint=checkpoint;
-  await assert.rejects(runWithStandaloneAccounting({...context,resumed:true},()=>send('https://api.openai.com/v1/chat/completions',request)),{code:'standalone_safe_checkpoint_unavailable'});
+  const unavailable=await runWithStandaloneAccounting({...context,resumed:true},()=>send('https://api.openai.com/v1/chat/completions',request));assert.equal(unavailable.status,400);assert.match(await unavailable.text(),/not retransmitted/);
  }
  assert.equal(sends,1);assert.equal(f.attempts[0].state,'uncertain');
 });
@@ -598,7 +598,7 @@ test('accepted exposure cannot promote truncated streaming output to a safe chec
   const body={method:'POST',body:JSON.stringify({model:provider==='openai'?'gpt-4o':'claude-sonnet-5-5',messages:[{role:'user',content:'hello'}],stream:true})};
   await assert.rejects(runWithStandaloneAccounting(context,()=>send(url,body)),isStandaloneAccountingError);
   f.service.uncertainExposureAccepted=async()=>true;
-  await assert.rejects(runWithStandaloneAccounting({...context,resumed:true},()=>send(url,body)),{code:'standalone_safe_checkpoint_unavailable'});
+  const unavailable=await runWithStandaloneAccounting({...context,resumed:true},()=>send(url,body));assert.equal(unavailable.status,400);assert.doesNotMatch(await unavailable.text(),/partial/);
   assert.equal(sends,1);assert.equal(f.attempts[0].state,'uncertain');
  }
 });
@@ -621,4 +621,20 @@ test('legacy explicit Google observation replays accepted block without observin
  assert.equal(result.summaryModel,'source-excerpt');assert.equal(result.summaryCoverage,'metadata');assert.equal(remaining,true);
  assert.equal(sends,1);assert.equal(JSON.stringify(held),preserved,'blocked response stays uncertain with identical exposure and evidence');
  assert.equal(f.events.filter(event=>event==='settle').length,0);
+});
+
+test('auto-authorized incomplete usage replays genuine Gemini selector output without approval or retransmission',async()=>{
+ const f=fakeLedger();f.service.uncertainExposureAccepted=async()=>true;let sends=0;
+ const send=createAccountingFetch('google',async()=>{sends++;return Response.json({candidates:[{finishReason:'STOP',content:{parts:[{text:'{"selections":[]}'}]}}]});},f.factory);
+ const url='https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent';
+ const init={method:'POST',body:JSON.stringify({contents:[{role:'user',parts:[{text:'Select relevant saved attachments'}]}],generationConfig:{maxOutputTokens:1000}})};
+ for(let i=0;i<3;i++){const response=await runWithStandaloneAccounting({...context,resumed:i>0},()=>send(url,init));assert.equal(response.status,200);assert.match(await response.text(),/selections/);}
+ assert.equal(sends,1);assert.equal(f.attempts[0].state,'uncertain');assert.ok(BigInt(f.attempts[0].reserved_microusd)>0n);
+});
+test('auto-authorized lost transmission returns a non-retryable local failure and never resends',async()=>{
+ const f=fakeLedger();f.service.uncertainExposureAccepted=async()=>true;let sends=0;
+ const send=createAccountingFetch('openai',async()=>{sends++;throw Error('unknown transport outcome');},f.factory);
+ const client=new OpenAI({apiKey:'fixture',fetch:send,maxRetries:2});
+ for(let i=0;i<2;i++)await assert.rejects(runWithStandaloneAccounting({...context,resumed:i>0},()=>client.chat.completions.create({model:'gpt-4o',messages:[{role:'user',content:'hello'}]})),error=>error instanceof Error&&/400/.test(error.message));
+ assert.equal(sends,1);assert.equal(f.attempts[0].state,'uncertain');assert.equal(f.attempts.length,1);
 });

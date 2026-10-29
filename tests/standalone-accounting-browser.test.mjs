@@ -330,6 +330,31 @@ test('standalone browser: explicit settings, scopes, exact approval resume, redu
     await usage.getByRole('button',{name:'Refresh',exact:true}).click();
     await active.getByRole('button',{name:'Cancel remaining work',exact:true}).waitFor();
     assert.equal(await active.getByRole('button').count(),1,'running non-uncertain work remains cancellable');
+    // Durable policy authority resumes a paused original request without a button or decision.
+    running=[{...pending('auto-qwen'),state:'uncertain',provider:'runpod',reservedMicrousd:'20000',uncertainAutoAuthorized:true,exposureAccepted:true,parentStatus:'paused',continuationActionable:false,cancellationActionable:false}];
+    resumeMode='completed';
+    const beforeAuto=resumes.length,beforeDecisions=decisions.length;
+    await usage.getByRole('button',{name:'Refresh',exact:true}).click();
+    await usage.getByRole('status').filter({hasText:'Automatically continued within owner spending limits.'}).waitFor();
+    assert.equal(resumes.length,beforeAuto+1);assert.equal(decisions.length,beforeDecisions);
+    assert.equal(await active.getByRole('button').count(),0);
+    await usage.getByRole('button',{name:'Refresh',exact:true}).click();
+    assert.equal(resumes.length,beforeAuto+1,'polling does not resume the same original request twice');
+    running=[{...running[0],parentStatus:'completed'}];
+    await page.reload({waitUntil:'domcontentloaded'});
+    await active.getByText(/auto-authorized within owner limits/).waitFor();
+    assert.equal(resumes.length,beforeAuto+1,'completed parent never resumes after refresh');
+    running=[{...running[0],id:'auto-transient',requestId:'auto-transient',parentStatus:'paused'}];resumeMode='failed';
+    await usage.getByRole('button',{name:'Refresh',exact:true}).click();
+    await usage.getByRole('alert').filter({hasText:'Saved attempt failed: exact fixture cause'}).waitFor();
+    assert.equal(resumes.length,beforeAuto+2);
+    resumeMode='completed';await page.waitForTimeout(5100);
+    const retryCompleted=page.waitForResponse(response=>response.url().endsWith('/api/chat'));
+    await usage.getByRole('button',{name:'Refresh',exact:true}).click();
+    await usage.getByRole('status').filter({hasText:'Automatically continued within owner spending limits.'}).waitFor();
+    await retryCompleted;
+    assert.equal(resumes.length,beforeAuto+3,'transient failure remains retryable through Refresh');
+    assert.equal(decisions.length,beforeDecisions,'retry never asks for exposure acceptance');
     // Exact incident: an old failed JPEG receipt, followed by a plain text turn.
     running=[];resumeMode='completed';
     await page.evaluate(async id=>{
