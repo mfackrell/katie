@@ -23,7 +23,7 @@ if(!requestFile||!manifestFile||!childFile)denied('missing verified inputs');
 const signingKey=process.env.KATIE_NATIVE_HANDOFF_HMAC_KEY;
 const proof=readNativeHandoff(readFileSync(requestFile,'utf8'),signingKey);
 const manifest=JSON.parse(readFileSync(manifestFile,'utf8'));
-for(const key of ['taskId','trialId','approvalId','projectId','contractHash','benchmarkContractHash','baselineSha','expiresAt','continuationId'])
+for(const key of ['taskId','trialId','approvalId','projectId','contractHash','benchmarkContractHash','baselineSha','expiresAt','continuationId','startupRecoveryId'])
  if(manifest[key]!==proof[key])denied('handoff changed after signature verification');
 if(manifest.productionRuntime!==proof.productionRuntime)denied('runtime handoff changed after verification');
 if(process.env.GITHUB_REPOSITORY!=='mfackrell/katie')denied('repository identity mismatch');
@@ -49,7 +49,7 @@ const readOne=async(table,column,value,fields='*')=>{
 const approval=await readOne('benchmark_native_spending_approvals','id',proof.approvalId);
 if(approval.trial_id!==proof.trialId||approval.task_id!==proof.taskId||
  approval.project_id!==proof.projectId||approval.repository!==process.env.GITHUB_REPOSITORY||
- approval.revoked_at||approval.consumed_at||new Date(approval.deadline).getTime()<=Date.now())
+ approval.revoked_at||(proof.startupRecoveryId?!approval.consumed_at:Boolean(approval.consumed_at))||new Date(approval.deadline).getTime()<=Date.now())
  denied('owner spending approval is missing or consumed');
 const trial=await readOne('benchmark_three_arm_trials','id',proof.trialId);
 const project=await readOne('work_projects','id',proof.projectId);
@@ -74,6 +74,15 @@ if(productionRuntime){
   denied('production qualification does not authorize this task and deadline');
 }
 const task=await readOne('agent_tasks','id',proof.taskId);
+if(proof.startupRecoveryId){
+ if(!productionRuntime)denied('startup recovery requires production runtime');
+ const recovery=await readOne('benchmark_startup_recoveries','id',proof.startupRecoveryId);
+ if(recovery.approval_id!==proof.approvalId||recovery.task_id!==proof.taskId||
+    !/^[a-f0-9]{40}$/.test(process.env.GITHUB_SHA??'')||recovery.release_sha!==process.env.GITHUB_SHA||
+    task.external?.startupRecoveryId!==proof.startupRecoveryId)
+  denied('startup recovery task, approval or release mismatch');
+}
+
 const dispatch=await readOne('benchmark_development_dispatches','task_id',proof.taskId,
  'task_id,trial_id,contract_hash,benchmark_contract_hash,baseline_sha,status');
 // A token-only cap cannot discharge the owner's $10 per-arm approval.
@@ -109,23 +118,30 @@ if(trial.arm!=='full'||(!continuation&&trial.state!=='qualified')||
  project.deadline<=new Date().toISOString()||
  ((task.actor_id!==approval.actor_id||task.chat_id!==approval.chat_id)&&!delegatedTask))
  denied('trial, project, owner or task state mismatch');
+// Complete local checkpoint setup before consuming owner execution authority.
+const boundary=assertTrustedBoundary(process.cwd());
+const checkpointBranch=process.env.KATIE_NATIVE_CHECKPOINT_BRANCH;
+if(!/^agent\/issue-[0-9]+-[0-9]+-[0-9]+$/.test(checkpointBranch||'')||!process.env.GH_TOKEN)
+ denied('durable Git checkpoint authority unavailable');
+if(!process.env.HOME)denied('trusted host HOME unavailable');
+execFileSync('gh',['auth','setup-git'],{env:{PATH:process.env.PATH||'',HOME:process.env.HOME,GH_TOKEN:process.env.GH_TOKEN},timeout:20000});
 const grantToken=randomBytes(48).toString('base64url');
-const {data:grantId,error:issueError}=await db.rpc('benchmark_issue_execution_grant',{
+if(proof.startupRecoveryId&&!productionRuntime)denied('startup recovery requires production runtime');
+const {data:grantResult,error:issueError}=proof.startupRecoveryId
+ ?await db.rpc('benchmark_issue_startup_recovery_grant',{p_recovery:proof.startupRecoveryId,p_digest:tokenDigest(grantToken),p_approval:proof.approvalId,p_task:proof.taskId,p_release:process.env.GITHUB_SHA})
+ :await db.rpc('benchmark_issue_execution_grant',{
  p_owner:approval.owner_id,p_actor:approval.actor_id,p_chat:approval.chat_id,
  p_trial:proof.trialId,p_approval:proof.approvalId,
  p_repository:approval.repository,p_model:approval.model,
  p_epoch:1,p_deadline:approval.deadline,p_digest:tokenDigest(grantToken)
 });
-if(issueError||typeof grantId!=='string')denied('atomic owner grant issuance rejected');
+const grantId=proof.startupRecoveryId?grantResult?.grantId:grantResult;
+const executionEpoch=proof.startupRecoveryId?grantResult?.executionEpoch:1;
+if(issueError||typeof grantId!=='string'||!Number.isSafeInteger(executionEpoch)||executionEpoch<1)denied('atomic owner grant issuance rejected');
 const clientToken=randomBytes(32).toString('base64url');
 const root=mkdtempSync(join(tmpdir(),'katie-trusted-gateway-'));
 const evidencePath=process.env.KATIE_NATIVE_EVIDENCE_FILE;
 const decisions=[];
-const boundary=assertTrustedBoundary(process.cwd());
-const checkpointBranch=process.env.KATIE_NATIVE_CHECKPOINT_BRANCH;
-if(!/^agent\/issue-[0-9]+-[0-9]+-[0-9]+$/.test(checkpointBranch||'')||!process.env.GH_TOKEN)
- denied('durable Git checkpoint authority unavailable');
-execFileSync('gh',['auth','setup-git'],{env:{PATH:process.env.PATH||'',GH_TOKEN:process.env.GH_TOKEN},timeout:20000});
 const git=(...args)=>execFileSync('git',[...protectedGitConfig,...args],{cwd:boundary.root,encoding:'utf8',timeout:20000}).trim();
 let trustedCheckpointSha=git('rev-parse','HEAD');
 const commitCandidate=(label)=>{
@@ -151,7 +167,7 @@ const perRequestCap=Math.min(20000,Number(approval.max_tokens),Number(account.ca
 if(!Number.isSafeInteger(perRequestCap)||perRequestCap<=0)denied('invalid frozen request reservation');
 const upstream=createResponsesProvider({apiKey:providerKey});
 const server=createNativeHttpBridge({
- db,grantToken,trialId:proof.trialId,executionEpoch:1,
+ db,grantToken,trialId:proof.trialId,executionEpoch,
  providerNamespace:'openai-responses',upperTokens:perRequestCap,
  upstream,clientToken,fullMission:true,
  recordReceipt:async({requestKey,operationId,namespace,providerRequestId,actualTokens,usage})=>{
@@ -223,7 +239,7 @@ try{
     if(ledgerError||!Array.isArray(pending)||pending.length)
      denied('native recovery requires authoritative reconciliation of pending provider charges');
     const {data:stillLive,error:liveError}=await db.rpc('benchmark_gateway_execution_live',{
-     p_digest:tokenDigest(grantToken),p_trial:proof.trialId,p_epoch:1
+     p_digest:tokenDigest(grantToken),p_trial:proof.trialId,p_epoch:executionEpoch
     });
     if(liveError||stillLive!==true)denied('native recovery grant stopped or expired');
     // Only commit-stable source is eligible for retry; partial interrupted

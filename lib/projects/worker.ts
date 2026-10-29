@@ -4,7 +4,7 @@ import { Octokit } from '@octokit/rest';
 import { getSupabaseAdminClient } from '@/lib/data/supabase/admin';
 import { readMission } from '@/lib/missions/store';
 import { readTask } from '@/lib/agents/store';
-import { developmentPreview, projectAcceptanceSchema, reconcileDevelopment, retryImmutableProjectVerification } from '@/lib/agents/development';
+import { developmentPreview, recoverUnusedNativeStartup, projectAcceptanceSchema, reconcileDevelopment, retryImmutableProjectVerification } from '@/lib/agents/development';
 import { parseJSON } from '@/lib/missions/types';
 import { validateProjectPlan, digest, projectPlanSchema } from './contract';
 import {gameAssessmentEvidence} from './game-evidence';
@@ -382,6 +382,7 @@ async function advance(p: Project) {
     await finish('child', { kind: p.phase, objective, evidence: {...(projectEvidence as Record<string,unknown>??{}),...(continuation?{benchmarkContinuationId:continuation.id,benchmarkContinuationPlanHash:continuation.plan_hash}:{} )} });
 }
 async function reconcileParkedDispatch() {
+    if(await recoverUnusedNativeStartup())return true;
     const data=await projectRpc<Array<{id:string;external:Record<string,unknown>}>>('project_dispatch_recovery_candidates');
     for(const row of (data??[]) as Array<{id:string;external:Record<string,unknown>}>){
         if(typeof row.external?.projectId!=='string')continue;

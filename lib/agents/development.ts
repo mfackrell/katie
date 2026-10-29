@@ -6,8 +6,8 @@ import {getAvailableProviders} from '@/lib/providers';
 import {chooseProvider} from '@/lib/router/master-router';
 import { Octokit } from "@octokit/rest";
 import { inflateRawSync } from "node:zlib";
-import { packDevelopmentRequest } from '../../scripts/request-envelope.mjs';
-import { encodeNativeHandoff } from '../../scripts/benchmark/native-dispatch-contract.mjs';
+import { packDevelopmentRequest, unpackDevelopmentRequest } from '../../scripts/request-envelope.mjs';
+import { encodeNativeHandoff, readNativeHandoff } from '../../scripts/benchmark/native-dispatch-contract.mjs';
 import { z } from "zod";
 import { getSupabaseAdminClient } from "@/lib/data/supabase/admin";
 import { agentRpc, readTask } from "./store";
@@ -350,6 +350,59 @@ export async function retryImmutableProjectVerification(task: AgentTask, project
  return saved?.status==='running';
 }
 
+// One append-only capability restoration after a terminal, uncharged startup.
+// GitHub verifies the receipt; SQL independently fences consent, scope and calls.
+export async function recoverUnusedNativeStartup() {
+ const release=process.env.VERCEL_GIT_COMMIT_SHA;
+ if(process.env.KATIE_FULL_BENCHMARK_ENVIRONMENT!=='production'||process.env.KATIE_FULL_BENCHMARK_DISPATCH!=='enabled'||
+    process.env.KATIE_NATIVE_BENCHMARK_DISPATCH!=='enabled'||process.env.KATIE_BENCHMARK_PAID_EXECUTION!=='enabled'||!release||!/^[a-f0-9]{40}$/.test(release))return false;
+ const db=getSupabaseAdminClient(),key=process.env.KATIE_NATIVE_HANDOFF_HMAC_KEY;
+ if(!key||key.length<32)return false;
+ const {data:rows,error}=await db.from('benchmark_native_spending_approvals').select('*').or('and(consumed_at.not.is.null,deadline.gt.'+new Date().toISOString()+')').is('revoked_at',null).limit(8).returns<{id:string;task_id:string;project_id:string;trial_id:string;continuation_id:string;deadline:string}>();
+ if(error)throw Error('Native startup approval inspection failed');
+ for(const a of rows??[]){
+  const task=await readTask(a.task_id);
+  const {data:pending}=await db.from('benchmark_startup_recoveries').select('id').eq('task_id',task.id).maybeSingle<{id:string}>();
+  if(pending){const {data:sent}=await db.from('benchmark_startup_recovery_dispatches').select('recovery_id').eq('recovery_id',pending.id).maybeSingle();if(sent)continue;}
+  if(task.status!=='blocked'&&!pending)continue;
+  const c=await getDevelopmentProjectContext(task.id);if(!c||c.projectId!==a.project_id)continue;
+  const saved=receiptSchema.safeParse(task.external.receipt);
+  if(!saved.success||saved.data.outcome!=='BLOCKED'||saved.data.pr_url||saved.data.tested_head_sha||saved.data.reviewed_head_sha||saved.data.checks.build!=='failure')continue;
+  const client=github(),binding=await repository(task),issue=Number(task.external.issueNumber);
+  const {data:run}=await client.actions.getWorkflowRun({owner:binding.owner,repo:binding.repo,run_id:saved.data.run_id});
+  if(run.status!=='completed'||run.conclusion!=='failure'||run.repository.full_name!==binding.fullName||run.head_repository?.full_name!==binding.fullName||run.head_branch!=='main'||
+     !['issues','workflow_dispatch'].includes(run.event)||run.path!=='.github/workflows/autonomous-development.yml'||run.head_sha===release)continue;
+  const {data:main}=await client.repos.getCommit({owner:binding.owner,repo:binding.repo,ref:'main'});if(main.sha!==release)continue;
+  const artifacts=await client.actions.listWorkflowRunArtifacts({owner:binding.owner,repo:binding.repo,run_id:run.id,per_page:20});
+  const artifact=artifacts.data.artifacts.find(x=>x.name==='agent-completion'&&!x.expired&&x.size_in_bytes<=1_000_000);if(!artifact)continue;
+  const downloaded=await client.actions.downloadArtifact({owner:binding.owner,repo:binding.repo,artifact_id:artifact.id,archive_format:'zip'});
+  const receipt=parseCompletionReceipt(completionJson(Buffer.from(downloaded.data as ArrayBuffer)),binding.fullName,issue,run.id,run.conclusion,acceptanceBinding(c));
+  if(digest(receipt)!==digest(saved.data))continue;
+  const {data:existing}=await client.issues.get({owner:binding.owner,repo:binding.repo,issue_number:issue});
+  const body=unpackDevelopmentRequest(existing.body??'');
+  if(existing.user?.login.toLowerCase()!==binding.owner.toLowerCase()||!body.startsWith(marker(task)+'\n\n')||
+    [...body.matchAll(/<!-- katie-native-benchmark:[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+ -->/g)].length!==1)continue;
+  const {data:bound}=await db.from('benchmark_development_dispatches').select('*').eq('task_id',task.id).maybeSingle<{contract_hash:string;trial_id:string;benchmark_contract_hash:string}>();
+  if(!bound||bound.contract_hash!==c.contractHash||bound.trial_id!==a.trial_id)continue;
+  // Check the original authenticated authority even though its transport window expired.
+  const prior=readNativeHandoff(body,key,0);
+  if(prior.taskId!==task.id||prior.approvalId!==a.id||prior.trialId!==a.trial_id||prior.projectId!==c.projectId||prior.contractHash!==c.contractHash||prior.benchmarkContractHash!==bound.benchmark_contract_hash||prior.baselineSha!==c.baselineSha||prior.continuationId!==a.continuation_id)continue;
+  const recovered=pending?{data:pending,error:null}:await db.rpc('benchmark_prepare_startup_recovery',{p_task:task.id,p_run:run.id,p_receipt:receipt,p_release:release});
+  if(recovered.error)continue; // Races, charges and expired consent fail closed.
+  const recovery=recovered.data as {id:string};if(!recovery?.id)continue;
+  const handoff={taskId:task.id,trialId:a.trial_id,approvalId:a.id,projectId:a.project_id,continuationId:a.continuation_id,
+    startupRecoveryId:recovery.id,contractHash:c.contractHash,benchmarkContractHash:bound.benchmark_contract_hash,baselineSha:c.baselineSha,
+    expiresAt:Math.min(Date.now()+30*60*1000,Date.parse(a.deadline))};
+  const header=encodeNativeHandoff({...handoff,productionRuntime:sealNativeProductionRuntime(process.env.SUPABASE_SERVICE_ROLE_KEY??'',handoff,key)},key);
+  const claimed=await db.rpc('benchmark_claim_startup_recovery_dispatch',{p_recovery:recovery.id});
+  if(claimed.error||claimed.data!==true)return false;
+  await client.issues.update({owner:binding.owner,repo:binding.repo,issue_number:issue,body:packDevelopmentRequest(body.replace(/<!-- katie-native-benchmark:[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+ -->/,header),marker(task))});
+  await client.actions.createWorkflowDispatch({owner:binding.owner,repo:binding.repo,workflow_id:'autonomous-development.yml',ref:'main',inputs:{issue_number:String(issue)}});
+  return true;
+ }
+ return false;
+}
+
 export async function reconcileDevelopment(task: AgentTask, project?: ProjectAcceptanceBinding, assignmentLease?:string) {
   const persist=(current:AgentTask,status:string,detail:string|null,external=current.external)=>save(current,status,detail,external,assignmentLease);
   if(!project&&typeof task.external.projectId==='string'){const binding=await getDevelopmentProjectContext(task.id);if(!binding||binding.projectId!==task.external.projectId)throw Error('Saved project binding unavailable');project=acceptanceBinding(binding);}
@@ -380,6 +433,7 @@ export async function reconcileDevelopment(task: AgentTask, project?: ProjectAcc
   const runs = await client.actions.listWorkflowRuns({ owner: binding.owner, repo: binding.repo, workflow_id: workflowId, per_page: 20 });
   for (const run of runs.data.workflow_runs) {
     if (Date.now() > deadline - 15_000) return persist(task, task.status, "Refresh reached its bounded time window before finding a verified receipt. The existing mission worker will check again.");
+    if (typeof task.external.startupRecoverySince==='string' && (new Date(run.created_at).getTime()<Date.parse(task.external.startupRecoverySince)||run.head_sha!==task.external.startupRecoveryRelease||run.event!=='workflow_dispatch'))continue;
     if (run.status !== "completed" || !["issues", "workflow_dispatch"].includes(run.event) || run.repository.full_name !== binding.fullName || run.head_branch !== "main" || run.head_repository?.full_name !== binding.fullName || run.path !== workflowPath || (verificationOnly && (run.event!=='workflow_dispatch'||new Date(run.created_at).getTime()<verificationSince))) continue;
     const artifacts = await client.actions.listWorkflowRunArtifacts({ owner: binding.owner, repo: binding.repo, run_id: run.id, per_page: 20 });
     const artifact = artifacts.data.artifacts.find(a => a.name === "agent-completion" && !a.expired && a.size_in_bytes <= 1_000_000);
