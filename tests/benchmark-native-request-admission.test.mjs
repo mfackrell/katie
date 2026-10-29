@@ -11,6 +11,18 @@ const response=(output=[item],usage={input_tokens:3,output_tokens:2,total_tokens
 const bootstrap={model,client_metadata:{session_id:'synthetic'},prompt_cache_key:'synthetic-cache',store:false,
  tools:[{type:'function',name:'local_tool',parameters:{type:'object',properties:{file_id:{type:'string'}}}}],
  include:['reasoning.encrypted_content'],input:[{type:'message',id:null,role:'user',content:[{type:'input_text',text:'Build only the approved game.'}]}]};
+test('real SDK intermediate commentary replay admits only empty output-text annotations and counts all bytes',()=>{
+ const part={type:'output_text',text:'I will inspect the approved request.',annotations:[]};
+ const message={type:'message',id:'msg_commentary',role:'assistant',phase:'commentary',status:'completed',content:[part]};
+ const body={model,input:[message],max_output_tokens:4096};
+ const admitted=admitNativeRequest(body);
+ assert.deepEqual(admitted.body.input[0],{type:'message',role:'assistant',phase:'commentary',status:'completed',content:[part]});
+ assert.equal(admitted.plaintextBytes,Buffer.byteLength(JSON.stringify(admitted.body)));
+ assert.equal(admitted.opaqueTokens,0);
+ for(const bad of [{...part,annotations:[{type:'file_citation',file_id:'hidden'}]},{...part,annotations:null},{...part,annotations:'hidden'},{...part,type:'input_text'},{...part,file_id:'hidden'},{...part,unrecognized:'hidden'}])
+  assert.throws(()=>admitNativeRequest({...body,input:[{...message,content:[bad]}]}),/UNBOUNDED/);
+ assert.deepEqual(message.content,[part]);
+});
 test('captured SDK bootstrap normalizes only transport fields while preserving inline input and reasoning request',()=>{
  const admitted=admitNativeRequest(bootstrap);
  assert.deepEqual(admitted.body.input,[{type:'message',role:'user',content:bootstrap.input[0].content}]);
@@ -57,3 +69,4 @@ test('actual paid admission reserves normalized bytes and opaque bounds, settles
  await assert.rejects(forwardAuthorizedModelRequest({...options,requestBody:{model,input:[{...item,encrypted_content:'foreign'}]}}),/UNBOUNDED/);
  assert.equal(reserved.length,count);assert.equal(forwarded,2);
 });
+

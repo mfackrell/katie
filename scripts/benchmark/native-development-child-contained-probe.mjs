@@ -60,6 +60,9 @@ const upstream=async request=>{
   const reasoning=request.input?.find(x=>x.type==='reasoning');
   assert.ok(reasoning,'Actual SDK must replay trusted opaque reasoning inline');
   assert.equal(reasoning.encrypted_content,encrypted);assert.deepEqual(reasoning.summary,[]);
+  const commentary=request.input?.find(x=>x.type==='message'&&x.role==='assistant'&&x.phase==='commentary');
+  assert.ok(commentary,'Real SDK must replay intermediate assistant text');
+  assert.deepEqual(commentary.content,[{type:'output_text',text:'I will inspect the approved request and repository.',annotations:[]}]);
  }
 
  const text=phase==='review'?'CHANGES_REQUESTED: synthetic defect':phase==='final-review'?'PASS synthetic repair verified':'DONE';
