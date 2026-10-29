@@ -23,7 +23,7 @@ export async function assertNativeStartupRecovery(db,rival,{project,account,tria
  await db.query('begin');await db.query("update benchmark_native_spending_approvals set deadline=now()-interval '1 second' where id=$1",[approval]);
  await assert.rejects(db.query(prepare,args),/not eligible/);await db.query('rollback');
  await assert.rejects(db.query(prepare,[task,{...receipt,run_id:124},'f'.repeat(40)]),/not eligible/);
- await db.query('begin');await db.query("insert into mission_calls(job_id,lease,model,reserved_tokens) values($1,$2,'openai:gpt-5.3-codex',1)",[task,randomUUID()]);
+ await db.query('begin');await db.query("insert into mission_calls(id,job_id,lease,model,reserved_tokens) values(gen_random_uuid(),$1,$2,'openai:gpt-5.3-codex',1)",[task,randomUUID()]);
  await assert.rejects(db.query(prepare,args),/not eligible/);await db.query('rollback');
  await db.query('begin');await db.query('update agent_missions set reserved_tokens=1 where id=$1',[mission]);
  await assert.rejects(db.query(prepare,args),/not eligible/);await db.query('rollback');
