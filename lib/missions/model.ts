@@ -27,7 +27,7 @@ function fullBenchmarkAccounting(claim:Claim){
   reserve:async(model:string,tokens:number,routing:boolean,callId=randomUUID())=>{
    if(process.env.KATIE_BENCHMARK_PAID_EXECUTION!=='enabled')throw Error('Full benchmark paid execution is disabled');
    const receipt=await rpc<string|null>('benchmark_reserve_mission_call',{p_job:claim.job.id,p_lease:claim.job.lease,p_call:callId,p_model:model,p_tokens:tokens,p_routing:routing});
-   if(!receipt)throw Error('Full benchmark account denied atomic model-call admission');
+   if(!receipt)throw new MissionModelFailure('Full benchmark account denied atomic model-call admission',{admissionDenied:true,admissionReason:'atomic_benchmark_gate',requestedTokens:tokens});
    return callId;
   },
   finish:async(id:string,tokens:number|null)=>{await rpc('benchmark_finish_mission_call',{p_call:id,p_tokens:tokens});}

@@ -6,7 +6,7 @@ import vm from 'node:vm';
 import ts from 'typescript';
 import {shouldFallbackIncompleteReview} from '../lib/missions/review-fallback.mjs';
 const source=readFileSync('lib/missions/model.ts','utf8');
-function loadRouterFixture({failPrimary=false,incompletePrimary=false,emptyTruncation=false,allow=true,acceptance=false,fullBound=false,outputBudget=Infinity,specificationV2=false,checkpointFailure=false,settlementFailure=false}={}){
+function loadRouterFixture({failPrimary=false,incompletePrimary=false,emptyTruncation=false,allow=true,acceptance=false,fullBound=false,outputBudget=Infinity,specificationV2=false,checkpointFailure=false,settlementFailure=false,denyFullReservation=false}={}){
  let requests=[],calls=[],reserve=[],rpcEvents=[],chosen=0,routingOptions;
  const first={name:'google',generate:async p=>{calls.push(['google',p.modelId]);if(failPrimary){const err=Error('quota');err.status=429;err.code='insufficient_quota';throw err;}return{text:'valid model result',model:p.modelId,provider:'google',usage:{totalTokens:65}};}};
  const second={name:'anthropic',generate:async p=>{calls.push(['anthropic',p.modelId]);return{text:'recovered verified text',model:p.modelId,provider:'anthropic',usage:{totalTokens:72}};}};
@@ -19,7 +19,7 @@ function loadRouterFixture({failPrimary=false,incompletePrimary=false,emptyTrunc
  :name==='@/lib/orchestration/request-rejection'?{rejectedBeforeInference:()=>false}
  :name==='@/lib/providers'?{getAvailableProviders:()=>[first,second]}
  :name==='@/lib/router/master-router'?{chooseProvider:async()=>{chosen++;return{provider:first,modelId:'gemini-3.1-pro',fallbackChain:[{provider:second,modelId:'claude-sonnet-4-6',score:1}]};}}
- :name==='@/lib/missions/store'||name==='./store'?{rpc:async(n,a)=>{rpcEvents.push({name:n,...a});if(n==='checkpoint_mission_specification_draft'&&checkpointFailure)throw Error('checkpoint storage unavailable');if(n==='benchmark_reconcile_provider_usage'&&settlementFailure)throw Error('receipt reconciliation unavailable');if(n==='reserve_mission_call'||n==='benchmark_reserve_mission_call')reserve.push({name:n,...a});if(n==='reserve_mission_call')return allow;if(n==='benchmark_reserve_mission_call')return 'ledger-receipt';return true;}}
+ :name==='@/lib/missions/store'||name==='./store'?{rpc:async(n,a)=>{rpcEvents.push({name:n,...a});if(n==='checkpoint_mission_specification_draft'&&checkpointFailure)throw Error('checkpoint storage unavailable');if(n==='benchmark_reconcile_provider_usage'&&settlementFailure)throw Error('receipt reconciliation unavailable');if(n==='reserve_mission_call'||n==='benchmark_reserve_mission_call')reserve.push({name:n,...a});if(n==='reserve_mission_call')return allow;if(n==='benchmark_reserve_mission_call')return denyFullReservation?null:'ledger-receipt';return true;}}
  :name==='@/lib/data/supabase/admin'?{getSupabaseAdminClient:()=>({from:table=>({select:()=>({eq:()=>({maybeSingle:async()=>({data:fullBound?{trial_id:'trial',account_id:'account',benchmark_contract_hash:'c'.repeat(64),baseline_sha:'0015bcdb8ac9ad94b7c74d1a4cd76737903b1319',model:'gpt-5.3-codex'}:null,error:null})})})})})}
  :name==='node:crypto'?{randomUUID:()=>String(reserve.length+1)}
  :name==='openai'?{default:class{}}:name==='openai/helpers/zod'?{zodTextFormat:()=>({})}
@@ -86,6 +86,9 @@ test('Full DO model route is fixed, ledger-bound, and does not call a provider w
   await assert.rejects(denied.run(),/paid execution is disabled/);
   assert.equal(denied.calls.length,0);assert.equal(denied.chosen(),0);
   process.env.KATIE_BENCHMARK_PAID_EXECUTION='enabled';
+  const atomicDenied=loadRouterFixture({fullBound:true,denyFullReservation:true});
+  await assert.rejects(atomicDenied.run(),e=>e.partial?.admissionDenied===true&&e.partial.admissionReason==='atomic_benchmark_gate'&&!e.partial.providerFailure);
+  assert.equal(atomicDenied.calls.length,0);
   const admitted=loadRouterFixture({fullBound:true});const result=await admitted.run();
   assert.equal(result.model,'gpt-5.3-codex');assert.equal(result.provider,'openai');
   assert.equal(admitted.routing().fixedModel.provider,'openai');assert.equal(admitted.routing().fixedModel.modelId,'gpt-5.3-codex');

@@ -36,6 +36,7 @@ import { pendingVideoMessage } from "@/lib/runpod/video-orchestration";
 import { RUNPOD_VIDEO_MODEL } from "@/lib/runpod/durable-results";
 import { buildImageReference, imageFileFromDataUrl } from "@/lib/uploads/image-reference";
 import { selectStoredAttachments, loadSelectedAttachmentSources, explicitlyRequestsVideo, type AttachmentDecision } from "@/lib/chat/attachment-selection";
+import { buildAttachmentSelectionAudit } from "@/lib/chat/attachment-selection-audit";
 import { loadSavedVideoFollowUp, retrieveSavedEvidence } from "@/lib/agents/media";
 import { pruneRepeatedVideoSelections, uniqueAttachmentReferences } from "@/lib/chat/video-attachment-dedup";
 import { after, NextRequest, NextResponse } from "next/server";
@@ -1019,6 +1020,31 @@ async function executeChat(request: NextRequest) {
         ? suppliedRequestId
         : crypto.randomUUID();
     console.info("[Attachments] Background selection", { requestId, newCount: newAttachments.length, catalogSize: catalog.length, method: attachmentDecision.method, selected: attachmentDecision.selections.map(item => ({ id: item.attachment.id, fileName: item.attachment.fileName, mode: item.mode })), unavailable: unavailableAttachments, clarification: Boolean(attachmentDecision.clarification) });
+    // Diagnostics are observational: neither the model's stated rationale nor
+    // persistence availability can change source selection or generation.
+    if (attachmentDecision.selections.length > 0) {
+      try {
+        const auditRow = buildAttachmentSelectionAudit({
+          actorId, chatId, requestId, message,
+          decision: attachmentDecision, catalog, history: attachmentHistory,
+          sourceIds: restored.sourceIds,
+          newUploadCount: newAttachments.length,
+          activeProjectText: pdfProgress.projectContext?.text ?? null,
+        });
+        after(async () => {
+          try {
+            const { error } = await getSupabaseAdminClient()
+              .from("attachment_selection_diagnostics").insert(auditRow);
+            if (error) console.warn("[Attachments] Selection audit could not be saved", { requestId, reason: "database" });
+          } catch {
+            console.warn("[Attachments] Selection audit could not be saved", { requestId, reason: "transport" });
+          }
+        });
+      } catch {
+        // Diagnostics may never prevent a user's normal chat request.
+        console.warn("[Attachments] Selection audit could not be prepared", { requestId });
+      }
+    }
     if (savedVideoFollowUp) console.info("[Saved Video Follow-up] loaded prior observations", {
       requestId, actorId, chatId, sourceCount: savedVideoFollowUp.sourceCount,
       hasObservations: savedVideoFollowUp.hasObservations, freshVideoInspection: false,
