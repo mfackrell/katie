@@ -110,7 +110,6 @@ test('standalone browser: explicit settings, scopes, exact approval resume, redu
     await usage.getByLabel('Per request approval threshold (USD)').fill('0.05');
     await usage.getByRole('button', { name: 'Save settings' }).click();
     await usage.getByText('Today $0.25', { exact: false }).waitFor();
-    await usage.getByRole('button', { name: 'Usage details' }).click();
     await usage.getByText('Earlier unresolved exposure', { exact: false }).waitFor();
     assert.equal(configurations[0].perCallLimitMicrousd, '10000'); assert.equal(configurations[0].requestLimitMicrousd, '50000');
     assert.match(await usage.innerText(), /Out 45 \+ unknown \(1\)/);
