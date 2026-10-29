@@ -55,6 +55,14 @@ jobs:
       - name: Run strict CI gate (typecheck + all offline tests + build + smoke)
         run: npm run ci:gate
 
+      - name: Upload standalone status rail Chromium screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: standalone-status-rail-screenshots
+          path: test-artifacts/standalone-rail/*.png
+          if-no-files-found: ignore
+
       - name: Workspace navigation and continuity in Chromium
         env:
           KATIE_UI_START_SERVER: "1"

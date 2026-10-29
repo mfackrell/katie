@@ -1,6 +1,7 @@
 "use client";
 
 import Image from "next/image";
+import { createPortal } from "react-dom";
 import { StructuredResponseView } from "@/components/structured-response-view";
 import { chatFailureContent } from "@/lib/chat/request-failure";
 import EmojiPicker, { Theme } from "emoji-picker-react";
@@ -60,6 +61,7 @@ interface ChatPanelProps {
   activeChatTitle: string;
   activeRepoId: string;
   repoInjectionEnabled: boolean;
+  statusRailOpen?: boolean;
 }
 
 type CollaborationParticipantUi = {
@@ -738,7 +740,10 @@ export function ChatPanel({
   activeChatTitle,
   activeRepoId,
   repoInjectionEnabled,
+  statusRailOpen = false,
 }: ChatPanelProps) {
+  const [statusMount, setStatusMount] = useState<HTMLElement | null>(null);
+  useEffect(() => { setStatusMount(statusRailOpen ? document.getElementById("katie-live-status") : null); }, [statusRailOpen, chatId]);
   const [messages, setMessages] = useState<Message[]>([]);
   const [projectApproval, setProjectApproval] = useState<{chatId:string;approval:ProjectApproval}|null>(null);
   const [projectApprovalPending, setProjectApprovalPending] = useState(false);
@@ -2766,7 +2771,13 @@ export function ChatPanel({
         />
       ) : null}
 
-      {showLiveReasoningExplainer && reasoningPopupVisible ? (
+      {statusRailOpen && statusMount ? createPortal(
+        <div className="space-y-2 text-xs" aria-live="polite">
+          <p className="font-medium text-zinc-200">{loading ? (statusMessage || "Thinking / streaming updates") : (statusMessage || "Idle")}</p>
+          {(loading || collaborationActivity.length > 0 || reasoningPopupVisible) && <ReasoningExplainerPanel loading={loading} state={reasoningState} statusMessage={statusMessage} collaborationActive={collaborationActive} collaborationActivity={collaborationActivity} collaborationSummary={collaborationSummary} onClose={() => { setReasoningPopupVisible(false); setReasoningPopupDismissed(true); }} />}
+        </div>, statusMount
+      ) : null}
+      {!statusRailOpen && showLiveReasoningExplainer && reasoningPopupVisible ? (
         <div className="pointer-events-none absolute inset-x-[5%] bottom-24 z-40 sm:bottom-28">
           <div className="pointer-events-auto mx-auto w-full">
             <ReasoningExplainerPanel
