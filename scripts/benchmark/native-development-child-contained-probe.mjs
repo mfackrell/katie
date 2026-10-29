@@ -38,7 +38,9 @@ const upstream=async request=>{
  if(count===2){
   const output=request.input?.find(x=>x.type==='function_call_output'&&x.call_id===callId);
   assert.ok(output,'Actual SDK tool output must return through paid admission');
-  assert.match(JSON.stringify(output.output),/ACTUAL_NATIVE_TOOL_OK/,'Actual local exec must succeed');
+  const safeOutput=JSON.stringify(output.output).split(token).join('[REDACTED]').slice(0,2000);
+  if(!safeOutput.includes('ACTUAL_NATIVE_TOOL_OK'))console.error('ACTUAL_NATIVE_TOOL_OUTPUT_FAILURE='+JSON.stringify({phase,output:safeOutput}));
+  assert.match(safeOutput,/ACTUAL_NATIVE_TOOL_OK/,'Actual local exec must succeed');
   const reasoning=request.input?.find(x=>x.type==='reasoning');
   assert.ok(reasoning,'Actual SDK must replay trusted opaque reasoning inline');
   assert.equal(reasoning.encrypted_content,encrypted);assert.deepEqual(reasoning.summary,[]);
