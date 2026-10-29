@@ -66,6 +66,18 @@ function receiptFromResponse(body: string, headers: Headers, provider: Accountin
       responseTerminal = typeof finalUsage?.input_tokens === 'number' && typeof finalUsage?.output_tokens === 'number';
     }
     if (Array.isArray(item.choices) && item.choices.some(choice => choice && typeof choice === 'object' && typeof choice.finish_reason === 'string')) chatFinish = true;
+    // Gemini acknowledges a blocked request without candidate tokens. Only OTHER with
+    // explicit zero output (total equals prompt, no thoughts) is reconcilable.
+    const feedback = item.promptFeedback as Record<string, unknown> | undefined;
+    const blockUsage = item.usageMetadata as Record<string, unknown> | undefined;
+    if (provider === 'google' && feedback?.blockReason === 'OTHER' && !Array.isArray(item.candidates)
+      && typeof blockUsage?.promptTokenCount === 'number'
+      && blockUsage?.totalTokenCount === blockUsage.promptTokenCount
+      && (blockUsage.thoughtsTokenCount === undefined || blockUsage.thoughtsTokenCount === 0)) {
+      googleTerminal = true;
+      googleFinalUsage = true;
+      output = 0;
+    }
     if (Array.isArray(item.candidates) && item.candidates.some(candidate => candidate && typeof candidate === 'object' && typeof candidate.finishReason === 'string' && candidate.finishReason !== 'FINISH_REASON_UNSPECIFIED')) {
       googleTerminal = true;
       const finalUsage = item.usageMetadata as Record<string, unknown> | undefined;
