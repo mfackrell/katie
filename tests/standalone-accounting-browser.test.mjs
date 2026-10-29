@@ -24,6 +24,7 @@ test('standalone browser: explicit settings, scopes, exact approval resume, redu
   const pending = (suffix, overrides = {}) => ({ parentStatus:'paused', continuationActionable:true, cancellationActionable:true, id: `attempt-${suffix}`, requestId: `original-${suffix}`, provider: 'openai', model: 'gpt-4o', resolvedModel: null, category: 'hidden_router', preparedHash: 'a'.repeat(64), pricingVersion: 'fixture-pricing-v1', estimatorVersion: 'saved-estimator-v1', budgetRevision: 1, reservedMicrousd: '300000', reason: 'Choose a reply model for this saved turn.', pauseReason: 'per_call_threshold', tradeoffs: null, createdAt: '2026-10-28T10:00:00Z', preview: { textBytes: 3200, imageCount: 2, imageBytes: 4096, inputTokens: 3500, imageTokens: 256, outputAllowance: 8192, assumptions: ['Input token count is an estimate, not a guaranteed spending ceiling.', 'All allowed output tokens include hidden reasoning.'], issues: [], status: 'estimated' }, requestExposure: totals(), ...overrides });
   let configuration = null, proposals = [], running = [], fail = false, resumeMode = 'paused', savedMessages = [], denyExposure = false, uncertainTotal = '100000', infrastructureTotal = '0';
   const decisions = [], resumes = [], configurations = [], scopes = [], external = [], unknownRoutes = [], errors = [], messageSnapshots = [];
+  let workPage={next:null},pagedApprovals=false;
   let page;let holdUsage=false;const heldUsage=[];let usageRequests=0,usageInFlight=0,maxUsageInFlight=0;
   const usageRequestIds=new Set();
   try {
@@ -61,13 +62,14 @@ test('standalone browser: explicit settings, scopes, exact approval resume, redu
         assert.equal(request.headers().authorization, 'Bearer synthetic-browser-owner');
         if (url.pathname.endsWith('/usage')) {
           if(holdUsage){await new Promise(resolve=>heldUsage.push(resolve));if(request.failure())return route.abort().catch(()=>{});}
+          if(pagedApprovals&&url.searchParams.get('before')){proposals=[pending('older-paused')];workPage={next:null};}
           scopes.push(url.searchParams.get('scope'));
           if (fail) return reply({ error: 'Fixture accounting unavailable' }, 503);
           const all = url.searchParams.get('scope') === 'all';
           const sum = totals({ uncertainExposureMicrousd: uncertainTotal, estimatedInfrastructureMicrousd: infrastructureTotal, ...(all ? { inputTokens: 999, estimatedCostMicrousd: '750000' } : {}) });
           const infra = totals({ inputTokens:0, outputTokens:0, missingInputCount:0, missingOutputCount:0, estimatedCostMicrousd:'0', estimatedInfrastructureMicrousd:infrastructureTotal, pendingExposureMicrousd:'0', uncertainExposureMicrousd:'0', unknownCostCount:1, attemptCount:1 });
           const infrastructureModels = infrastructureTotal === '0' ? [] : [{ ...infra, provider:'runpod', model:'Qwen/Qwen3-VL-8B-Instruct', category:'attachment-observation' }];
-          return reply({ configuration, pending: proposals, active: running, daily: configuration ? { timezone: configuration.timezone, date: '2026-10-28', start: '2026-10-28T00:00:00Z', end: '2026-10-29T00:00:00Z', totals: sum, providers: [{ ...sum, estimatedInfrastructureMicrousd:'0', provider: 'openai' }, ...infrastructureModels], models: [{ ...sum, estimatedInfrastructureMicrousd:'0', provider: 'openai', model: 'gpt-4o', category: 'hidden_router' }, ...infrastructureModels], unresolvedEarlier: totals({ attemptCount: 1, pendingExposureMicrousd: '0', uncertainExposureMicrousd: '40000' }), attempts: [{ id: 'helper-row', actor_id: actorId, chat_id: chatId, provider: 'openai', model: 'gpt-4o', category: 'hidden_router', state: 'uncertain', created_at: '2026-10-28T10:00:00Z', dispatched_at: '2026-10-28T10:00:00Z', actual_microusd: null }] } : null });
+          return reply({ workPage, configuration, pending: proposals, active: running, daily: configuration ? { timezone: configuration.timezone, date: '2026-10-28', start: '2026-10-28T00:00:00Z', end: '2026-10-29T00:00:00Z', totals: sum, providers: [{ ...sum, estimatedInfrastructureMicrousd:'0', provider: 'openai' }, ...infrastructureModels], models: [{ ...sum, estimatedInfrastructureMicrousd:'0', provider: 'openai', model: 'gpt-4o', category: 'hidden_router' }, ...infrastructureModels], unresolvedEarlier: totals({ attemptCount: 1, pendingExposureMicrousd: '0', uncertainExposureMicrousd: '40000' }), attempts: [{ id: 'helper-row', actor_id: actorId, chat_id: chatId, provider: 'openai', model: 'gpt-4o', category: 'hidden_router', state: 'uncertain', created_at: '2026-10-28T10:00:00Z', dispatched_at: '2026-10-28T10:00:00Z', actual_microusd: null }] } : null });
         }
         if (url.pathname.endsWith('/configuration')) {
           configurations.push(body); configuration = { timezone: body.timezone, per_call_limit_microusd: body.perCallLimitMicrousd, request_limit_microusd: body.requestLimitMicrousd, budget_revision: 1 };
@@ -411,6 +413,12 @@ test('standalone browser: explicit settings, scopes, exact approval resume, redu
     holdUsage=false;heldUsage.splice(0).forEach(resolve=>resolve());
     await usage.getByText(/In 999/).first().waitFor();
     assert.equal(await usage.getByLabel('Scope').inputValue(),'all');
+    pagedApprovals=true;proposals=Array.from({length:100},(_,i)=>pending('page-'+i));running=[];
+    workPage={next:{before:'2026-10-28T10:00:00Z',beforeId:'44444444-4444-4444-8444-444444444444'}};
+    await usage.getByRole('button',{name:'Refresh',exact:true}).click();
+    await usage.getByRole('button',{name:'Older active work',exact:true}).click();
+    await usage.getByText(/attempt-older-paused/).first().waitFor();
+    assert.equal(await usage.getByRole('button',{name:'Newest work',exact:true}).count(),1,'all-paused pages retain navigation');
     assert.deepEqual(external, []); assert.deepEqual(unknownRoutes, []); assert.deepEqual(errors, []);
     console.log('Standalone browser screenshots: ' + screenshots);
   } catch (error) {

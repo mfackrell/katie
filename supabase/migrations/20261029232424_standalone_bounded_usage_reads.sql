@@ -4,6 +4,7 @@ create index standalone_attempts_owner_day on public.standalone_provider_attempt
 create index standalone_attempts_active_scope on public.standalone_provider_attempts(owner_id,actor_id,chat_id,created_at desc,id desc) where state in('paused','reserved','dispatched','uncertain');
 create index standalone_events_attempt_kind on public.standalone_attempt_events(attempt_id,kind,created_at desc);
 create index standalone_attempts_overruns on public.standalone_provider_attempts(owner_id,created_at desc) where actual_microusd>reserved_microusd;
+create index standalone_events_receipt_conflict_recent on public.standalone_attempt_events(owner_id,created_at desc,id desc) where kind='receipt_conflict';
 create index standalone_attempts_recent_cursor on public.standalone_provider_attempts(owner_id,created_at desc,id desc);
 
 create function public.standalone_read_configuration(p_owner uuid) returns jsonb
@@ -90,6 +91,12 @@ language sql stable security definer set search_path=public,pg_temp as $$
  select coalesce(jsonb_agg(jsonb_build_object('id',id,'request_id',request_id,'provider',provider,'model',model,'state',state)),'[]'::jsonb)
  from standalone_provider_attempts where owner_id=p_owner and request_id=p_request and provider='runpod' and state='uncertain'
 $$;
+create function public.standalone_conflict_alerts(p_owner uuid,p_actor uuid default null) returns jsonb
+language sql stable security definer set search_path=public,pg_temp as $$
+ select coalesce(jsonb_agg(jsonb_build_object('attemptId',id,'provider',provider,'model',model,'kind','receipt_conflict','message','Conflicting provider receipt evidence requires reconciliation. Saved costs were not silently overwritten.','actualMicrousd',actual_microusd::text,'reservedMicrousd',reserved_microusd::text)),'[]'::jsonb)
+ from (select a.id,a.provider,a.model,a.actual_microusd,a.reserved_microusd from standalone_attempt_events e join standalone_provider_attempts a on a.id=e.attempt_id and a.owner_id=e.owner_id
+ where e.owner_id=p_owner and e.kind='receipt_conflict' and (p_actor is null or a.actor_id=p_actor) order by e.created_at desc,e.id desc limit 25) alerts
+$$;
 create function public.standalone_usage_snapshot(p_owner uuid,p_actor uuid,p_chat uuid,p_all boolean default false,p_before timestamptz default null,p_before_id uuid default null) returns jsonb
 language plpgsql stable security definer set search_path=public,pg_temp as $$
 declare answer jsonb;
@@ -102,7 +109,7 @@ begin
  exists(select 1 from standalone_attempt_events e where e.attempt_id=a.id and e.kind in('receipt_conflict','identifier_conflict','usage_conflict')) as conflict from active a left join standalone_workflows w on w.owner_id=p_owner and w.request_id=a.request_id)
  select jsonb_build_object('configuration',standalone_read_configuration(p_owner),'daily',standalone_daily_usage(p_owner,case when p_all then null else p_actor end),
  'attempts',coalesce((select jsonb_agg(standalone_attempt_status(a)) from active a),'[]'::jsonb),
- 'alerts',coalesce((select jsonb_agg(jsonb_build_object('attemptId',a.id,'provider',a.provider,'model',a.model,'kind','overrun','message','Settled cost exceeds the preflight reservation. Further automatic attempts on this request are blocked.','actualMicrousd',a.actual_microusd::text,'reservedMicrousd',a.reserved_microusd::text)) from (select * from standalone_provider_attempts where owner_id=p_owner and actual_microusd>reserved_microusd and (p_all or actor_id=p_actor) order by created_at desc limit 25) a),'[]'::jsonb),
+ 'alerts',coalesce((select jsonb_agg(jsonb_build_object('attemptId',a.id,'provider',a.provider,'model',a.model,'kind','overrun','message','Settled cost exceeds the preflight reservation. Further automatic attempts on this request are blocked.','actualMicrousd',a.actual_microusd::text,'reservedMicrousd',a.reserved_microusd::text)) from (select * from standalone_provider_attempts where owner_id=p_owner and actual_microusd>reserved_microusd and (p_all or actor_id=p_actor) order by created_at desc limit 25) a),'[]'::jsonb)||standalone_conflict_alerts(p_owner,case when p_all then null else p_actor end),
  'flags',coalesce((select jsonb_object_agg(id,jsonb_build_object('status',status,'error',error,'accepted',accepted,'automatic',automatic,'conflict',conflict)) from flags),'{}'::jsonb),
  'requestTotals',coalesce((select jsonb_object_agg(r.request_id,(select standalone_usage_totals(jsonb_agg(standalone_usage_record(a))) from standalone_provider_attempts a where a.owner_id=p_owner and a.request_id=r.request_id)) from requests r),'{}'::jsonb)) into answer;
  return answer;
@@ -115,7 +122,7 @@ $$;
 -- Retained only for owner-admin maintenance, never service-role application reads.
 revoke execute on function public.standalone_snapshot(uuid) from service_role;
 do $$ declare f record;begin
- for f in select p.oid::regprocedure as signature from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='public' and p.proname in('standalone_read_configuration','standalone_usage_totals','standalone_usage_record','standalone_attempt_status','standalone_daily_usage','standalone_recent_activity','standalone_attempt_details','standalone_request_uncertainties','standalone_usage_snapshot','standalone_payload_preview','standalone_history_status') loop
+ for f in select p.oid::regprocedure as signature from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='public' and p.proname in('standalone_read_configuration','standalone_usage_totals','standalone_usage_record','standalone_attempt_status','standalone_daily_usage','standalone_recent_activity','standalone_attempt_details','standalone_request_uncertainties','standalone_usage_snapshot','standalone_payload_preview','standalone_history_status','standalone_conflict_alerts') loop
  execute format('revoke all on function %s from public,anon,authenticated',f.signature);
  execute format('grant execute on function %s to service_role',f.signature);
  end loop;

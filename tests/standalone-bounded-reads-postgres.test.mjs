@@ -35,7 +35,7 @@ test('bounded usage scales with the day and active work, preserves accounting an
    return (await admin.query(base+` values($1,$2,$3,'test-request',$4,repeat('a',64),repeat('a',64),$4,'{"payload":{}}','bounded-fixture',$5,'fixture','helper','{}','fixture','fixture',$6,$7,$8,$9,1,$10,case when $6 in('settled','dispatched','uncertain','estimated') then $10::timestamptz else null end,$11) returning id`,[owner,actor,chat,key,provider,state,reserved,actual,actual===null?null:'receipt-'+key,at,usage])).rows[0].id;
   };
   const today=new Date(+new Date(clock.lo)+3600000).toISOString();
-  await seed('settled','settled',500,100,today,'openai',{inputTokens:12,outputTokens:3,cachedInputTokens:4});
+  const settledId=await seed('settled','settled',500,100,today,'openai',{inputTokens:12,outputTokens:3,cachedInputTokens:4});
   await seed('reserved','reserved',200,null,today);
   await seed('uncertain','uncertain',300,null,today);
   await seed('infra','estimated',20000,null,today,'runpod');
@@ -52,7 +52,8 @@ test('bounded usage scales with the day and active work, preserves accounting an
   assert.equal(usage.totals.inputTokens,12);assert.equal(usage.totals.outputTokens,3);assert.equal(usage.totals.attemptCount,7);assert.equal(usage.unresolvedEarlier.uncertainExposureMicrousd,'700');
   assert.equal(usage.attempts.length,7);assert.equal(usage.providers.length,2);assert.equal(usage.models.length,2);assert.equal(usage.totals.cachedInputTokens,4);assert.equal(usage.providers.find(p=>p.provider==='openai').estimatedCostMicrousd,'100');assert.equal(usage.providers.find(p=>p.provider==='runpod').estimatedInfrastructureMicrousd,'20000');
   const snapshot=()=>rpc(one,'usage_snapshot',{p_owner:owner,p_actor:actor,p_chat:chat,p_all:false});
-  const first=await snapshot();assert.equal(first.attempts.length,5);assert.ok(first.attempts.every(a=>['paused','reserved','dispatched','uncertain'].includes(a.state)));assert.equal(first.events,undefined);
+  await admin.query("insert into standalone_attempt_events(attempt_id,owner_id,kind,details) values($1,$2,'receipt_conflict','{}')",[settledId,owner]);
+  const first=await snapshot();assert.ok(first.alerts.some(alert=>alert.attemptId===settledId&&alert.kind==='receipt_conflict'),'settled receipt conflicts remain visible');assert.equal(first.attempts.length,5);assert.ok(first.attempts.every(a=>['paused','reserved','dispatched','uncertain'].includes(a.state)));assert.equal(first.events,undefined);
   const size=JSON.stringify(first).length;assert.ok(size<30000,'response excludes 20,000 payloads and 100,000 events');
   const recent=await rpc(one,'recent_activity',{p_owner:owner,p_actor:actor});assert.equal(recent.length,25);
   const cursor=recent.at(-1);const next=await rpc(one,'recent_activity',{p_owner:owner,p_actor:actor,p_before:cursor.created_at,p_before_id:cursor.id});assert.equal(next.length,25);assert.ok(next.every(a=>!recent.some(b=>b.id===a.id)));
@@ -65,9 +66,10 @@ test('bounded usage scales with the day and active work, preserves accounting an
   for(const [sql,args] of [
    ["select id from standalone_provider_attempts where owner_id=$1 and coalesce(dispatched_at,created_at)>=$2::timestamptz and coalesce(dispatched_at,created_at)<$2::timestamptz+interval '1 day'",[owner,clock.lo]],
    ["select id from standalone_provider_attempts where owner_id=$1 and actor_id=$2 and chat_id=$3 and state in('paused','reserved','dispatched','uncertain') order by created_at desc,id desc limit 100",[owner,actor,chat]],
-   ["select 1 from standalone_attempt_events where attempt_id=$1 and kind='receipt_conflict'",[recent[0].id]]
+   ["select 1 from standalone_attempt_events where attempt_id=$1 and kind='uncertain_exposure_auto_authorized'",[recent[0].id]],
+   ["select a.id from standalone_attempt_events e join standalone_provider_attempts a on a.id=e.attempt_id and a.owner_id=e.owner_id where e.owner_id=$1 and e.kind='receipt_conflict' and a.actor_id=$2 order by e.created_at desc,e.id desc limit 25",[owner,actor]]
   ]){const result=await admin.query('explain (analyze,buffers,format json) '+sql,args);plans.push(JSON.stringify(result.rows[0]['QUERY PLAN']));}
-  assert.match(plans[0],/standalone_attempts_owner_day/);assert.match(plans[1],/standalone_attempts_active_scope/);assert.match(plans[2],/standalone_events_attempt_kind/);
+  assert.match(plans[0],/standalone_attempts_owner_day/);assert.match(plans[1],/standalone_attempts_active_scope/);assert.match(plans[2],/standalone_events_attempt_kind/);assert.match(plans[3],/standalone_events_receipt_conflict_recent/);
   console.log('BOUNDED QUERY PLANS '+JSON.stringify(plans.map(p=>JSON.parse(p))));
   const health=await connect();
   const healthStarted=Date.now();

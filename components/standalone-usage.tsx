@@ -9,7 +9,7 @@ interface Configuration { timezone: string; per_call_limit_microusd: string | nu
 interface Pending { id: string; requestId: string; provider: string; model: string; category: string; preparedHash: string; pricingVersion: string; budgetRevision: number; reservedMicrousd: string; reason: string; pauseReason: string | null; resolvedModel: string | null; estimatorVersion: string; tradeoffs: string | null; createdAt: string; preview: { textBytes: number; imageCount: number; imageBytes: number; inputTokens: number; imageTokens: number; outputAllowance: number; assumptions: string[]; issues: string[]; status: string }; requestExposure: UsageTotals }
 type DecisionAttempt = Pick<Pending, 'id' | 'requestId' | 'preparedHash' | 'pricingVersion' | 'budgetRevision' | 'reservedMicrousd'>;
 interface ActiveAttempt extends DecisionAttempt { createdAt?: string; provider: string; model: string; category: string; state: 'reserved' | 'dispatched' | 'uncertain'; uncertainAutoAuthorized?: boolean; parentStatus?: string; continuationActionable?: boolean; cancellationActionable?: boolean; exposureAccepted?: boolean; continuationBlockedReason?: string | null; pollableRunpod?: boolean }
-interface Snapshot { configuration: Configuration | null; daily: DailyUsage | null; pending: Pending[]; active?: ActiveAttempt[]; alerts?: Array<{ attemptId: string; provider: string; model: string; kind: string; message: string; actualMicrousd: string | null; reservedMicrousd: string }> }
+interface Snapshot { workPage?: {next:{before:string;beforeId:string}|null}; configuration: Configuration | null; daily: DailyUsage | null; pending: Pending[]; active?: ActiveAttempt[]; alerts?: Array<{ attemptId: string; provider: string; model: string; kind: string; message: string; actualMicrousd: string | null; reservedMicrousd: string }> }
 interface Props { rail?: boolean; actorId: string; chatId: string; onResumeAttempt?: (attempt: { attemptId: string; requestId: string }) => Promise<void> | void }
 
 // Formatting uses integer arithmetic so large ledger amounts never lose precision.
@@ -187,6 +187,7 @@ export function StandaloneUsage({ actorId, chatId, onResumeAttempt, rail = false
   const approvals = snapshot?.pending.length ?? 0;
   const unresolved = activeAttempts.length;
   const alerts = snapshot?.alerts?.length ?? 0;
+  const workNavigation = <div>{workCursor?.key===`${actorId}:${chatId}` && <button type="button" className="underline" onClick={()=>setWorkCursor(null)}>Newest work</button>}{snapshot?.workPage?.next && <button type="button" className="ml-3 underline" onClick={()=>{const next=snapshot.workPage?.next;if(next)setWorkCursor({key:`${actorId}:${chatId}`,...next});}}>Older active work</button>}</div>;
   if (rail) return <section aria-label="Standalone daily usage" className="space-y-4 text-xs text-zinc-300">
     <section className="space-y-2">
       <h3 className="text-sm font-semibold text-white">Daily usage</h3>
@@ -208,10 +209,10 @@ export function StandaloneUsage({ actorId, chatId, onResumeAttempt, rail = false
 
       </details>
     </section>
-    {workCursor?.key===`${actorId}:${chatId}` && activeAttempts.length===0 && <button type="button" className="underline" onClick={()=>setWorkCursor(null)}>Newest work</button>}
+    {workNavigation}
     {(snapshot?.pending.length || activeAttempts.length) ? <section className="space-y-2"><h3 className="text-sm font-semibold text-amber-100">Active / unresolved work</h3>
     {activeAttempts.length > 0 && <div aria-label="Active attempts in this conversation" className="mt-2 space-y-2">
-      <p className="font-medium text-zinc-100">Active or unresolved attempts in this conversation</p>{workCursor?.key===`${actorId}:${chatId}` && <button type="button" className="underline" onClick={()=>setWorkCursor(null)}>Newest work</button>}{activeAttempts.length===100 && <button type="button" className="ml-3 underline" onClick={()=>{const last=activeAttempts[activeAttempts.length-1];if(last.createdAt)setWorkCursor({key:`${actorId}:${chatId}`,before:last.createdAt,beforeId:last.id});}}>Older active work</button>}
+      <p className="font-medium text-zinc-100">Active or unresolved attempts in this conversation</p>
       {activeAttempts.map(attempt => <div key={attempt.id} className="rounded border border-white/20 p-2">
         <p>{attempt.provider}/{attempt.model} · {attempt.category} · {attempt.state} · exposure {dollars(attempt.reservedMicrousd)}</p>
         <p className="mt-1 break-all text-zinc-400">Exact attempt {attempt.id} · original request {attempt.requestId}</p>
@@ -321,8 +322,9 @@ export function StandaloneUsage({ actorId, chatId, onResumeAttempt, rail = false
       </div>
     {snapshot?.alerts?.map((alert, index) => <p role="alert" key={`${alert.attemptId}:${alert.kind}:${index}`} className="mt-2 rounded border border-amber-400/40 p-2 text-amber-100"><strong>{alert.kind === 'overrun' ? 'Preflight overrun' : alert.kind === 'receipt_conflict' ? 'Receipt conflict' : 'Uncertain provider outcome'}</strong> · {alert.provider}/{alert.model} · {alert.message}{alert.actualMicrousd !== null && ` Settled ${dollars(alert.actualMicrousd)}; reserved ${dollars(alert.reservedMicrousd)}.`} <span className="break-all">Attempt {alert.attemptId}</span></p>)}
 
+    {workNavigation}
     {activeAttempts.length > 0 && <div aria-label="Active attempts in this conversation" className="mt-2 space-y-2">
-      <p className="font-medium text-zinc-100">Active or unresolved attempts in this conversation</p>{workCursor?.key===`${actorId}:${chatId}` && <button type="button" className="underline" onClick={()=>setWorkCursor(null)}>Newest work</button>}{activeAttempts.length===100 && <button type="button" className="ml-3 underline" onClick={()=>{const last=activeAttempts[activeAttempts.length-1];if(last.createdAt)setWorkCursor({key:`${actorId}:${chatId}`,before:last.createdAt,beforeId:last.id});}}>Older active work</button>}
+      <p className="font-medium text-zinc-100">Active or unresolved attempts in this conversation</p>
       {activeAttempts.map(attempt => <div key={attempt.id} className="rounded border border-white/20 p-2">
         <p>{attempt.provider}/{attempt.model} · {attempt.category} · {attempt.state} · exposure {dollars(attempt.reservedMicrousd)}</p>
         <p className="mt-1 break-all text-zinc-400">Exact attempt {attempt.id} · original request {attempt.requestId}</p>

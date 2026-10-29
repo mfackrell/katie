@@ -68,8 +68,10 @@ export async function GET(request: NextRequest) {
     alerts.push(...(snapshot.alerts??[]).filter(alert=>!alerts.some(existing=>existing.attemptId===alert.attemptId&&existing.kind===alert.kind)));
     for (const event of snapshot.attempts.filter(a=>snapshot.flags[a.id]?.conflict).map(a=>({attempt_id:a.id,kind:'receipt_conflict'}))) {
       const attempt = scopedAttempts.find(row => row.id === event.attempt_id);
-      if (event.kind === 'receipt_conflict' && attempt) alerts.push({ attemptId: attempt.id, provider: attempt.provider, model: attempt.model, kind: 'receipt_conflict', message: 'Conflicting provider receipt evidence requires reconciliation. Saved costs were not silently overwritten.', actualMicrousd: attempt.actual_microusd, reservedMicrousd: attempt.reserved_microusd });
+      if (event.kind === 'receipt_conflict' && attempt && !alerts.some(a=>a.kind==='receipt_conflict'&&a.attemptId===attempt.id)) alerts.push({ attemptId: attempt.id, provider: attempt.provider, model: attempt.model, kind: 'receipt_conflict', message: 'Conflicting provider receipt evidence requires reconciliation. Saved costs were not silently overwritten.', actualMicrousd: attempt.actual_microusd, reservedMicrousd: attempt.reserved_microusd });
     }
-    return NextResponse.json({ configuration: snapshot.configuration, scope: scope.scope, daily, pending, active, alerts }, { headers: noStore });
+    const last=snapshot.attempts.length===100?snapshot.attempts[snapshot.attempts.length-1]:null;
+    const workPage={next:last?{before:last.created_at,beforeId:last.id}:null};
+    return NextResponse.json({ workPage, configuration: snapshot.configuration, scope: scope.scope, daily, pending, active, alerts }, { headers: noStore });
   } catch (error) { return accountingError(error); }
 }
