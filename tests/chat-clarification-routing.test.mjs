@@ -681,7 +681,11 @@ test('actual POST delegates a minimal resume to the saved server workflow before
   const calls = [];
   const executeChat = async () => { throw new Error('Only the saved workflow may enter ordinary processing'); };
   const exports = {};
+  const manifest = {}, accounting = {};
+  vm.runInNewContext(compile(readFileSync('lib/uploads/attachment-manifest.ts','utf8')), {exports:manifest,require:nativeRequire});
+  vm.runInNewContext(compile(readFileSync('lib/standalone-accounting/context.ts','utf8')), {exports:accounting,require:nativeRequire});
   vm.runInNewContext(compile(post), {
+    ...manifest, ...accounting,
     exports, Request, Response, z: nativeRequire('zod').z,
     NextResponse: { json: (body, init) => Response.json(body, init) },
     parseIncomingPayload: async () => { calls.push('ordinary-schema'); throw new Error('message is required'); },
@@ -694,7 +698,6 @@ test('actual POST delegates a minimal resume to the saved server workflow before
       assert.equal(execute, executeChat);
       return Response.json({ resumed: true });
     },
-    isStandaloneAccountingError: error => error?.code?.startsWith('standalone_'),
   });
   const makeRequest = body => new Request('https://katie.test/api/chat', { method: 'POST', headers: { 'content-type': 'application/json', 'x-request-id': 'original-stable-request' }, body: JSON.stringify(body) });
   const response = await exports.POST(makeRequest({ actorId, chatId, standaloneResume: true }));

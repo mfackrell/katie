@@ -1,11 +1,12 @@
+import { migrateComposerImages, isImageReference, type ComposerImage } from "./composer-images";
 import type { FileReference } from "@/lib/providers/types";
 export type PendingAttachments = {
-  images: string[];
-  imageFiles: File[];
+  images: ComposerImage[];
   videos: File[];
   files: File[];
   references: FileReference[];
 };
+export type LegacyPendingAttachments = Omit<PendingAttachments, "images"> & {images: string[]; imageFiles: File[]};
 const memory = new Map<string, PendingAttachments>();
 function database(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
@@ -16,10 +17,9 @@ function database(): Promise<IDBDatabase> {
   });
 }
 /** Image references in retry state are uploaded receipts, not a fresh selection.
- * Explicit composer images live in images/imageFiles and are preserved. */
-export function cleanPendingAttachments(value: PendingAttachments): PendingAttachments {
-  return {...value, references: value.references.filter(reference =>
-    reference.attachmentKind !== "image" && !reference.mimeType.startsWith("image/"))};
+ * Explicit composer images retain their preview and source together. */
+export function cleanPendingAttachments(value: PendingAttachments | LegacyPendingAttachments): PendingAttachments {
+  return {images: migrateComposerImages(value.images), videos: value.videos, files: value.files, references: value.references.filter(reference => !isImageReference(reference))};
 }
 export async function readPendingAttachments(id: string, onPersistenceFailure?: () => void) {
   if (memory.has(id)) {
@@ -29,7 +29,7 @@ export async function readPendingAttachments(id: string, onPersistenceFailure?: 
   }
   const db = await database();
   try {
-    const stored = await new Promise<PendingAttachments | undefined>(
+    const stored = await new Promise<PendingAttachments | LegacyPendingAttachments | undefined>(
       (resolve, reject) => {
         const req = db
           .transaction("conversations")
@@ -60,7 +60,6 @@ export async function savePendingAttachments(
       const store = tx.objectStore("conversations");
       if (
         value.images.length ||
-        value.imageFiles.length ||
         value.videos.length ||
         value.files.length ||
         value.references.length
