@@ -8,6 +8,7 @@ import pg from 'pg';
 import {randomUUID} from 'node:crypto';
 import {modules} from './helpers/load-project-modules.mjs';
 import {gameFixture} from './fixtures/game-project.mjs';
+import {assertNativeStartupRecovery} from './helpers/assert-native-startup-recovery.mjs';
 import config from '../config/benchmark-715-production-qualification.json' with {type:'json'};
 test('Append-only renewal retains expired authority, hydrates without spending, and fences exact stages',
  {timeout:180000},async()=>{
@@ -63,7 +64,7 @@ test('Append-only renewal retains expired authority, hydrates without spending, 
    '20261023194500_recover_latest_game_revision_checkpoint.sql',
    '20261021202500_resume_game_checkpoint_watchdog.sql',
    '20261028225300_retain_full_specification_review.sql',
-   '20261029145712_benchmark_append_only_continuation.sql'])
+   '20261029145712_benchmark_append_only_continuation.sql','20261029173500_benchmark_zero_call_startup_recovery.sql'])
    await db.query(readFileSync('supabase/migrations/'+file,'utf8'));
   const actor=randomUUID(),chat=randomUUID(),repo=randomUUID(),trial=randomUUID(),exp=randomUUID(),project=randomUUID(),owner=randomUUID();
   const protocol=config.protocol;
@@ -201,6 +202,7 @@ test('Append-only renewal retains expired authority, hydrates without spending, 
   const bad=structuredClone(resumed);bad.mission.project_evidence.savedSpecificationCheckpoint.text='{}';
   const badRuntime=modules({'@/lib/missions/inspection':{workflowInspection:async()=>null},'@/lib/missions/store':{readMission:read,rpc:async()=>{throw Error('Invalid candidate must not commit')}}});
   await assert.rejects(badRuntime('@/lib/missions/worker').executeClaim(bad,async()=>{throw Error('Paid regeneration forbidden')}),/no longer validates/);
+  await assertNativeStartupRecovery(db,rival,{project,account,trial,actor,chat,owner,repo,team:created.team,continuation:renewedApproval.id});
   await db.query('reset role');await db.query('set role authenticated');
   await assert.rejects(db.query(rpc,[owner,project,renewal.planHash,true]),/permission denied/);
   await assert.rejects(db.query('select * from benchmark_full_continuations'),/permission denied/);

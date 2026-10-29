@@ -39,3 +39,15 @@ test('continuation identity is signed and cryptographically bound to the product
  assert.throws(()=>openNativeProductionRuntime(productionRuntime,{...p,continuationId:'66666666-6666-4666-8666-666666666666'},key,now),/RUNTIME_INVALID/);
  assert.throws(()=>encodeNativeHandoff({...proof,continuationId:'not-an-id'},key),/INVALID/);
 });
+
+test('startup recovery identity survives signed transport and cannot be substituted in its capsule',()=>{
+ const startupRecoveryId='77777777-7777-4777-8777-777777777777';
+ const p={...proof,continuationId:'55555555-5555-4555-8555-555555555555',startupRecoveryId};
+ const productionRuntime=sealNativeProductionRuntime(secret,p,key,now);
+ const verified=readNativeHandoff(encodeNativeHandoff({...p,productionRuntime},key),key,now);
+ assert.equal(verified.startupRecoveryId,startupRecoveryId);
+ assert.equal(openNativeProductionRuntime(productionRuntime,verified,key,now).serviceRoleKey,secret);
+ for(const replacement of [undefined,'88888888-8888-4888-8888-888888888888'])
+  assert.throws(()=>openNativeProductionRuntime(productionRuntime,{...p,startupRecoveryId:replacement},key,now),/RUNTIME_INVALID/);
+ assert.throws(()=>encodeNativeHandoff({...p,startupRecoveryId:'not-an-id'},key),/INVALID/);
+});
