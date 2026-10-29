@@ -10,13 +10,14 @@ import type { LedgerAttempt } from '../lib/standalone-accounting/types';
 
 const owner = '11111111-1111-4111-8111-111111111111', actorId = '22222222-2222-4222-8222-222222222222', chatId = '33333333-3333-4333-8333-333333333333', attemptId = '44444444-4444-4444-8444-444444444444';
 const prepared = freezePreparedRequest('openai', 'gpt-4o', '/v1/responses', { model: 'gpt-4o', input: 'private saved prompt', max_output_tokens: 8192 });
+let exposureAccepted=false;
 let parentStatus='paused', parentError:string|null=null;
 let calls: Array<{ name: string; args: Record<string, unknown> }> = [], allowed = true, verifiedOwner = owner, row: LedgerAttempt, events: Array<Record<string, unknown>> = [];
 function request(path: string, body?: unknown, token = true) { return new NextRequest(`http://localhost/api/standalone-accounting/${path}`, { ...(body ? { method: 'POST', body: JSON.stringify(body) } : {}), headers: { ...(token ? { authorization: 'Bearer verified-token' } : {}), 'content-type': 'application/json' } }); }
 function decision(action: 'approve_once' | 'reduce_cost' | 'cancel') { return { actorId, chatId, attemptId, action, preparedHash: prepared.hash, pricingVersion: PRICING_VERSION, budgetRevision: 7, reservedMicrousd: '100000' }; }
 
 beforeEach(() => {
-  parentStatus='paused';parentError=null;calls = []; allowed = true; verifiedOwner = owner; events = [];
+  exposureAccepted=false;parentStatus='paused';parentError=null;calls = []; allowed = true; verifiedOwner = owner; events = [];
   process.env.NEXT_PUBLIC_SUPABASE_URL = 'https://auth.example.test'; process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY = 'public-key';
   globalThis.fetch = async () => new Response(JSON.stringify({ id: verifiedOwner }), { headers: { 'content-type': 'application/json' } });
   row = { id: attemptId, owner_id: owner, actor_id: actorId, chat_id: chatId, request_id: 'saved-request', attempt_key: '0', base_attempt_key: '0', source_prepared_hash: prepared.hash, supersedes_attempt_id: null, tradeoffs: null, prepared_hash: prepared.hash, prepared_payload: prepared as unknown as Record<string, unknown>, pricing_version: PRICING_VERSION, provider: 'openai', model: 'gpt-4o', category: 'hidden_router', preflight_estimate: estimatePreparedRequest(prepared) as unknown as Record<string, unknown>, estimator_version: 'standalone-estimator-v1', reason: 'Hidden router request', resolved_model: 'gpt-4o', state: 'paused', reserved_microusd: '100000', actual_microusd: null, budget_revision: 7, usage: null, evidence: null, provider_receipt_id: null, provider_request_id: null, provider_response_id: null, response_checkpoint: null, pause_reason: 'per_call_threshold', cancelled_by_owner_at: null, created_at: new Date().toISOString(), dispatched_at: null, settled_at: null };
@@ -29,7 +30,7 @@ beforeEach(() => {
     async rpc(name: string, args: Record<string, unknown>) {
       calls.push({ name, args });
       if(name==='standalone_load_workflow')return{data:{status:parentStatus,error:parentError},error:null};
-      if (name === 'standalone_uncertain_exposure_accepted') return {data:false,error:null};
+      if (name === 'standalone_uncertain_exposure_accepted') return {data:exposureAccepted,error:null};
       if (name === 'standalone_accept_uncertain_exposure') return {data:{accepted_at:'2026-10-29T20:00:00Z'},error:null};
       if (name === 'standalone_register_pricing') return { data: true, error: null };
       if (name === 'standalone_authorize_scope') return { data: allowed && args.p_owner === owner && args.p_actor === actorId && args.p_chat === chatId, error: null };
@@ -213,4 +214,12 @@ test('running reserved/dispatched work remains cancellable without offering resu
    const body=await (await usage(request(`usage?actorId=${actorId}&chatId=${chatId}`))).json();
    assert.equal(body.active[0].continuationActionable,false);assert.equal(body.active[0].cancellationActionable,true);
  }
+});
+
+test('durable automatic uncertainty is informational for paused and completed parents, with full retained accounting',async()=>{
+ row.state='uncertain';row.provider='runpod';row.reserved_microusd='20000';exposureAccepted=true;
+ events=[{attempt_id:row.id,kind:'uncertain_exposure_auto_authorized'}];
+ for(const status of ['paused','completed']){parentStatus=status;
+ const body=await (await usage(request(`usage?actorId=${actorId}&chatId=${chatId}`))).json();
+ assert.equal(body.active[0].uncertainAutoAuthorized,true);assert.equal(body.active[0].continuationActionable,false);assert.equal(body.active[0].cancellationActionable,false);assert.equal(body.active[0].reservedMicrousd,'20000');}
 });
