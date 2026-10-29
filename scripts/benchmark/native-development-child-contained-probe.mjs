@@ -52,7 +52,7 @@ const upstream=async request=>{
   assert.equal(reasoning.encrypted_content,encrypted);assert.deepEqual(reasoning.summary,[]);
  }
 
- const text=phase==='review'?'CHANGES_REQUESTED: synthetic defect':phase==='final-review'?'PASS: synthetic repair verified':'DONE';
+ const text=phase==='review'?'CHANGES_REQUESTED: synthetic defect':phase==='final-review'?'PASS synthetic repair verified':'DONE';
  const item=count===1?{id:'call_'+forwarded,type:'function_call',name:'exec_command',call_id:callId,
   arguments:JSON.stringify({cmd:reviewing?reviewCommand:'printf ACTUAL_NATIVE_TOOL_OK',workdir:'/work'}),status:'completed'}:
   {id:'msg_'+forwarded,type:'message',role:'assistant',status:'completed',content:[{type:'output_text',text,annotations:[]}]};
