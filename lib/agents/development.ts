@@ -420,11 +420,11 @@ export async function dispatchOwnerRenewedNativeDevelopment() {
     process.env.KATIE_NATIVE_BENCHMARK_DISPATCH!=='enabled'||process.env.KATIE_BENCHMARK_PAID_EXECUTION!=='enabled'||!release||!/^[a-f0-9]{40}$/.test(release))return false;
  const db=getSupabaseAdminClient(),key=process.env.KATIE_NATIVE_HANDOFF_HMAC_KEY;
  if(!key||key.length<32)return false;
- const {data:rows,error}=await db.from('benchmark_development_renewals').select('*').order('created_at',{ascending:false}).limit(8);
+ const {data:rows,error}=await db.from('benchmark_development_renewals').select('*').order('created_at',{ascending:false}).limit(8).returns<{id:string;approval_id:string;previous_approval_id:string;prior_run:number;receipt:unknown}>();
  if(error)throw Error('Development renewal inspection failed');
  for(const renewal of rows??[]){
   const {data:sent}=await db.from('benchmark_development_renewal_dispatches').select('renewal_id').eq('renewal_id',renewal.id).maybeSingle();if(sent)continue;
-  const {data:a}=await db.from('benchmark_native_spending_approvals').select('*').eq('id',renewal.approval_id).maybeSingle();
+  const {data:a}=await db.from('benchmark_native_spending_approvals').select('*').eq('id',renewal.approval_id).maybeSingle<{id:string;task_id:string;project_id:string;trial_id:string;continuation_id:string;deadline:string;consumed_at:string|null;revoked_at:string|null}>();
   if(!a||a.consumed_at||a.revoked_at||Date.parse(a.deadline)<=Date.now())continue;
   const task=await readTask(a.task_id);
   if(task.status!=='dispatching'||task.external.developmentRenewalId!==renewal.id)continue;

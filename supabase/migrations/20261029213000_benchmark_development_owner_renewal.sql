@@ -196,6 +196,8 @@ begin
    body:=replace(body,$a$if a.continuation_id::text is distinct from m.project_evidence->>'benchmarkContinuationId' then$a$,
     $a$if a.continuation_id::text is distinct from m.project_evidence->>'benchmarkContinuationId' and not benchmark_development_renewal_matches(m.id,a.continuation_id) then$a$);
   elsif signature='public.benchmark_production_call_guard()' then
+   body:=replace(body,'  phase_cap:=case m.project_kind', $a$  if c.plan->>'kind'='development-renewal' and m.project_kind='development' and not benchmark_development_renewal_matches(m.id,c.id) then raise exception 'Renewal permits only the preserved development mission';end if;
+  phase_cap:=case m.project_kind$a$);
    body:=replace(body,$a$m.id=c.source_mission_id$a$,$a$(m.id=c.source_mission_id and not benchmark_development_renewal_matches(m.id,c.id))$a$);
    body:=replace(body,$a$m.project_evidence->>'benchmarkContinuationId' is distinct from c.id::text$a$,
     $a$(m.project_evidence->>'benchmarkContinuationId' is distinct from c.id::text and not benchmark_development_renewal_matches(m.id,c.id))$a$);
