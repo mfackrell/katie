@@ -4,16 +4,20 @@ import { GoogleProvider } from "../lib/providers/google-provider";
 import { ProviderResponseError } from "../lib/providers/response-errors";
 import { runWithRefusalFallback } from "../lib/router/refusal-detection";
 import type { ChatGenerateParams, ProviderResponse } from "../lib/providers/types";
+import { runWithOrchestratorAccounting } from "../lib/standalone-accounting/context";
 const params: ChatGenerateParams = { name: "Katie", persona: "Be helpful", summary: "", history: [], user: "Describe this landscape", modelId: "gemini-2.5-flash" };
 const answer: ProviderResponse = { provider: "google", model: params.modelId!, text: "A mountain." };
 function provider(responses: unknown[], streaming = false) {
   const p = new GoogleProvider("test");
   let calls = 0;
-  (p as unknown as { client: unknown }).client = { models: {
-    generateContent: async () => { calls++; return responses.shift(); },
-    generateContentStream: async function* () { calls++; yield* responses; },
-  }};
-  return { run: () => streaming ? p.generateStream(params, {}) : p.generate(params), calls: () => calls };
+  return { run: async () => {
+    const original = globalThis.fetch;
+    globalThis.fetch = async () => { calls++; return new Response(streaming
+      ? responses.map(item => `data: ${JSON.stringify(item)}\n\n`).join('')
+      : JSON.stringify(responses.shift()), { headers: { 'content-type': streaming ? 'text/event-stream' : 'application/json' } }); };
+    try { return await runWithOrchestratorAccounting(() => streaming ? p.generateStream(params, {}) : p.generate(params)); }
+    finally { globalThis.fetch = original; }
+  }, calls: () => calls };
 }
 const ok = { candidates: [{ finishReason: "STOP", content: { parts: [{ text: "A mountain." }] } }] };
 test("empty provider output retries once inside handler and succeeds", async () => {

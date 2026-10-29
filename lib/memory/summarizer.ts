@@ -1,3 +1,5 @@
+import { isStandaloneAccountingError } from "@/lib/standalone-accounting/context";
+import { createActivityAccountingFetch } from "@/lib/standalone-accounting/activity";
 import OpenAI from "openai";
 import { getSupabaseAdminClient } from "@/lib/data/supabase/admin";
 import {
@@ -13,19 +15,19 @@ import type { Message } from "@/lib/types/chat";
 const SUMMARY_MODEL = "claude-sonnet-5-5";
 const SUMMARY_BATCH_MESSAGES = 20; // Ten completed user-assistant exchanges.
 // Character count, including spaces/punctuation, is the ITM size contract.
-const ITM_TARGET_MIN_CHARACTERS = 5000;
-const ITM_TARGET_MAX_CHARACTERS = 7500;
-const ITM_HARD_MAX_CHARACTERS = 8500;
-// This is completion headroom, NOT the memory-size budget.
-const SUMMARY_MAX_TOKENS = 4000;
-const COMPACTION_MAX_TOKENS = 2800; // One bounded repair attempt only for an oversized completed draft.
+const ITM_TARGET_CHARACTERS = 6500;
+const ITM_HARD_MAX_CHARACTERS = 15000;
+// Anthropic requires max_tokens. This generous completion allowance is not the
+// ITM character budget: a complete response may exceed the target.
+const SUMMARY_MAX_TOKENS = 12000;
+const COMPACTION_MAX_TOKENS = 12000;
 class CompactionFailure extends Error {}
 
 // Reuse the installed SDK only as native Claude HTTP transport, matching LTM.
-// Its default transport retries/timeouts are unchanged; no provider fallback.
+// Every actual transmission is accounted; SDK retries are disabled.
 const apiKey = process.env.CLAUDE_API_KEY ?? process.env["claude_api_key"];
 const client = apiKey ? new OpenAI({
-  apiKey,
+  apiKey, maxRetries: 0, fetch: createActivityAccountingFetch("anthropic", "memory-summary"),
   baseURL: "https://api.anthropic.com/v1",
   defaultHeaders: { Authorization: null, "x-api-key": apiKey, "anthropic-version": "2023-06-01" },
 }) : null;
@@ -69,7 +71,7 @@ async function summarizeInto(priorSummary: string, messages: Message[]): Promise
         "Katie is the assistant. The human speaker is the user. Never call the user Katie, and never attribute Katie's assistant statements, judgments, or recommendations to the user.",
         "Refer to the human as 'the user' unless the user's name is explicitly present in the source transcript.",
         "This is Katie's ROLLING CONVERSATIONAL CONTINUITY, not a chronological archive or a second long-term memory. Reconcile information leaving the last 30 STM exchanges with the entire existing ITM.",
-        `CHARACTER BUDGET: The FULL revised ITM must normally contain ${ITM_TARGET_MIN_CHARACTERS.toLocaleString("en-US")}–${ITM_TARGET_MAX_CHARACTERS.toLocaleString("en-US")} characters INCLUDING spaces and punctuation, and MUST NEVER exceed ${ITM_HARD_MAX_CHARACTERS.toLocaleString("en-US")} characters. This is a CHARACTER limit, not a word or token limit. If there is insufficient useful context, write less than the lower target; never pad.`,
+        `CHARACTER TARGET: Aim for approximately ${ITM_TARGET_CHARACTERS.toLocaleString("en-US")} characters for the FULL revised ITM, INCLUDING spaces and punctuation. This is a target, NOT a ceiling; a few hundred characters over is acceptable. The absolute storage hard limit is ${ITM_HARD_MAX_CHARACTERS.toLocaleString("en-US")} characters. Preserve useful context instead of forcing an exact length; if there is insufficient useful context, write less, never pad.`,
         "Every update reassesses ALL existing ITM and displaced STM: weigh recency, importance, current and recurring conversational relevance, and character cost. No old sentence automatically earns a place.",
         "RECONCILE, NEVER APPEND: blend new developments into existing thematic threads; replace superseded interpretations, merge repeated details, correct attribution, and delete redundant or irrelevant content.",
         "Keep relatively high fidelity for meaningful recently displaced information; progressively reduce fidelity for older threads as their relevance declines. Retain compact anchors for important dormant or unresolved themes likely to return.",
@@ -139,7 +141,7 @@ async function compactOversizedDraft(draft: string): Promise<string> {
         system: [
         "You edit Katie's existing intermediate conversational memory, not a new transcript.",
         "The draft is already reconciled but too long. Compress it SEMANTICALLY; never cut off the end or simply delete the most recent developments.",
-        "Return a complete, coherent rolling summary of about 6,000–7,000 CHARACTERS including punctuation and spaces, always below 7,500 characters.",
+        "Aim for approximately 6,500 CHARACTERS including punctuation and spaces, but do not truncate or sacrifice useful continuity to meet the target. The absolute hard ceiling is 15,000 characters.",
         "Retain important new corrections, chronological distinctions, unresolved outcomes, user-versus-assistant attribution and current conversation threads.",
         "Combine repeated topics and reduce fidelity primarily for less relevant older material. Do not pad, invent facts, append history, or reintroduce superseded interpretations.",
         "Return only the finished revised summary, with no commentary or character count.",
@@ -150,7 +152,8 @@ async function compactOversizedDraft(draft: string): Promise<string> {
         }],
       },
     });
-  } catch {
+  } catch (error) {
+    if (isStandaloneAccountingError(error)) throw error;
     // A failed paid compaction must not trigger a near-identical smaller-batch
     // compaction in the same invocation. Preserve cursor and retry later.
     throw new CompactionFailure("Claude intermediate memory compaction request failed");
@@ -159,12 +162,12 @@ async function compactOversizedDraft(draft: string): Promise<string> {
     .filter(block => block.type === "text" && typeof block.text === "string")
     .map(block => block.text).join("").trim();
   if (response.stop_reason !== "end_turn" || !result ||
-      result.length > ITM_HARD_MAX_CHARACTERS || result.length < ITM_TARGET_MIN_CHARACTERS) {
+      result.length > ITM_HARD_MAX_CHARACTERS) {
     console.warn("[Summarizer] Compaction did not produce a valid complete summary; source cursor retained", {
       stopReason: response.stop_reason ?? "missing",
       originalCharacters: draft.length,
       compactedCharacters: result.length,
-      minCharacters: ITM_TARGET_MIN_CHARACTERS,
+      targetCharacters: ITM_TARGET_CHARACTERS,
       maxCharacters: ITM_HARD_MAX_CHARACTERS,
     });
     throw new CompactionFailure("Intermediate memory compaction incomplete or outside character budget");
@@ -264,6 +267,7 @@ export async function maybeUpdateSummary(chatId: string): Promise<void> {
       try {
         candidate = await summarizeInto(summary, messagesToFold.slice(offset, offset + size));
       } catch (error) {
+        if (isStandaloneAccountingError(error)) throw error;
         // A compaction failure is already the second paid call for this batch.
         // Repeating it with a smaller batch is unlikely to help when the
         // existing ITM is near capacity, and can double the expense.
@@ -303,6 +307,7 @@ export async function maybeUpdateSummary(chatId: string): Promise<void> {
       offset += size;
     }
   } catch (error: unknown) {
+    if (isStandaloneAccountingError(error)) throw error;
     console.error("[Summarizer] Failed to update intermediate memory:", error);
   }
 }

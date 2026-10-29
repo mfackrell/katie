@@ -41,6 +41,7 @@ function harness({ confirmed = true, reply = async () => ({ ok: true, status: 20
     "@/components/memory-context": { MemoryContext: () => null },
     "@/components/conversation-work": { ConversationWork: () => null },
     "@/components/chat-panel": { ChatPanel },
+    "@/components/standalone-usage": { StandaloneUsage: () => null },
     "@/components/workspace-data": { useResource: path => ({
       data: path === "/api/actors" ? { actors: [{ id: chat.actorId, name: "BTG" }] }
         : path === "/api/chats" ? { chats: missing ? [] : [chat] } : { repos: [] },

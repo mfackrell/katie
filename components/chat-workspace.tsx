@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { MemoryContext } from "@/components/memory-context";
 import { ConversationWork } from "@/components/conversation-work";
+import { StandaloneUsage } from "@/components/standalone-usage";
 import { ChatPanel } from "@/components/chat-panel";
 import { useResource } from "@/components/workspace-data";
 import { useSavedState } from "@/components/saved-workspace-state";
@@ -216,6 +217,7 @@ export default function ChatWorkspace({
       </button>
       </div>
       <ConversationWork chatId={chat.id} />
+      {!actor.managedAgentId && actor.actorKind !== "executive" && <StandaloneUsage actorId={actor.id} chatId={chat.id} />}
       <ChatPanel
         key={chat.id}
         actorId={actor.id}

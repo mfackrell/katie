@@ -14,7 +14,7 @@ test('EO identity is database-owned and separate from ordinary Katie',()=>{
 });
 test('Executive commands use dedicated transport before all ordinary chat processing',()=>{
  const route=read('app/api/chat/route.ts');
- const idx=route.indexOf("if(actorRole.actor_kind==='executive')return executeExecutiveCommand(payload,request)");
+ const idx=route.indexOf("if(actorRole.actor_kind==='executive')return runWithOrchestratorAccounting(()=>executeExecutiveCommand(payload,request))");
  assert.ok(idx>0);
  assert.ok(idx<route.indexOf("const task = await authorizeManagedChat"));
  assert.match(route,/const projectReply = !pdfProgress\.projectClarification && !executiveReply/);

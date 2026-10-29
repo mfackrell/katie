@@ -21,7 +21,15 @@ const entry = (key, value, message, category = "fact") => ({
 // Run the real editor and provider adapter with in-memory persistence and a mock
 // native API transport. No database, network or production credential is used.
 function harness({ env = { CLAUDE_API_KEY: "test-only-key" }, entries = [], messages = [], respond = () => jsonResponse({ action: "no_change" }) } = {}) {
-  const calls = [], writes = [], constructors = [], logs = [], cache = new Map();
+  const calls = [], writes = [], constructors = [], logs = [], activities = [], cache = new Map();
+  const guardedFetch = async () => { throw new Error("Protocol transport must not access a real provider"); };
+  const accountingError = error => {
+    let current = error;
+    for (let depth = 0; current && typeof current === "object" && depth < 8; depth++, current = current.cause) {
+      if (current.terminal === true || typeof current.code === "string" && current.code.startsWith("standalone_")) return true;
+    }
+    return false;
+  };
   let memory = { version: 3, purpose: "Durable memory", entries: structuredClone(entries) };
   const globals = {};
   const store = {
@@ -47,6 +55,8 @@ function harness({ env = { CLAUDE_API_KEY: "test-only-key" }, entries = [], mess
   }
   const mocks = {
     openai: { default: OpenAITransport },
+    "@/lib/standalone-accounting/activity": { createActivityAccountingFetch(provider, activity) { activities.push({ provider, activity }); return guardedFetch; } },
+    "@/lib/standalone-accounting/context": { isStandaloneAccountingError: accountingError },
     "@/lib/data/persistence-store": store,
     "@/lib/memory/short-term": {
       filterConversationalMessages: source => source.filter(item => item.role === "user" || item.role === "assistant"),
@@ -68,7 +78,7 @@ function harness({ env = { CLAUDE_API_KEY: "test-only-key" }, entries = [], mess
     new Function("require", "module", "exports", "process", "globalThis", "console", result.outputText)(load, module, module.exports, { env }, globals, quietConsole);
     return module.exports;
   }
-  return { load, calls, writes, constructors, logs, memory: () => memory };
+  return { load, calls, writes, constructors, logs, activities, guardedFetch, memory: () => memory };
 }
 
 function review(body, allowed = () => true) {
@@ -100,7 +110,7 @@ function assertNativeCalls(calls) {
   }
 }
 
-test("native Claude transport preserves the existing JSON result envelope and SDK defaults", async () => {
+test("native Claude transport preserves the JSON envelope and timeout with guarded fetch and no SDK retry", async () => {
   const h = harness();
   const { createClaudeMemoryClient, MEMORY_EDITOR_MODEL } = h.load("@/lib/memory/claude-memory-client");
   assert.equal(MEMORY_EDITOR_MODEL, MODEL);
@@ -110,7 +120,9 @@ test("native Claude transport preserves the existing JSON result envelope and SD
   assert.equal(h.constructors[0].baseURL, "https://api.anthropic.com/v1");
   assert.equal(h.constructors[0].defaultHeaders["anthropic-version"], "2023-06-01");
   assert.equal(h.constructors[0].defaultHeaders["x-api-key"], "test-only-key");
-  assert.equal(h.constructors[0].maxRetries, undefined);
+  assert.equal(h.constructors[0].maxRetries, 0);
+  assert.equal(h.constructors[0].fetch, h.guardedFetch);
+  assert.deepEqual(h.activities, [{ provider: "anthropic", activity: "memory-edit" }]);
   assert.equal(h.constructors[0].timeout, undefined);
   const schema = h.calls[0].body.output_config.format.schema;
   for (const key of ["action", "updatedContent", "version", "purpose", "entries", "keys", "verdicts"]) assert.ok(schema.properties[key]);
@@ -155,6 +167,15 @@ test("empty native response and transport errors propagate without a new retry o
   const failed = harness({ respond: () => { throw failure; } });
   await assert.rejects(failed.load("@/lib/memory/claude-memory-client").createClaudeMemoryClient().chat.completions.create(request()), error => error === failure);
   assert.equal(failed.calls.length, 1);
+});
+
+test("a terminal paid admission denial propagates without source review, repair or memory writes", async () => {
+  const denial = Object.assign(new Error("Spending approval required"), { code: "standalone_approval_required", terminal: true });
+  const wrapped = new Error("SDK connection error", { cause: denial });
+  const h = harness({ messages: [user("source", preferenceText)], respond: () => { throw wrapped; } });
+  await assert.rejects(h.load("@/lib/memory/long-term-editor").maybeUpdateLongTermMemory("actor", "chat", preferenceText), error => error === wrapped);
+  assert.equal(h.calls.length, 1); assert.equal(h.writes.length, 0);
+  assert.equal(h.constructors[0].maxRetries, 0); assert.equal(h.constructors[0].fetch, h.guardedFetch);
 });
 
 test("exact complete-edit preference traverses selection, source review, contextual review and existing merge", async () => {

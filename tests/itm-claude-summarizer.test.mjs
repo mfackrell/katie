@@ -20,10 +20,18 @@ const messages = count => Array.from({ length: count }, (_, i) => ({
 }));
 function harness({ history = messages(62), prior = {}, env = { CLAUDE_API_KEY: "fake-claude-key" },
   respond = () => reply(), commit = () => ({ data: true, error: null }), missingChat = false } = {}) {
-  const calls = [], constructors = [], writes = [], resets = [], logs = [];
+  const calls = [], constructors = [], writes = [], resets = [], logs = [], activities = [];
+  const guardedFetch = async () => { throw new Error("Protocol transport must not access a real provider"); };
+  const accountingError = error => {
+    let current = error;
+    for (let depth = 0; current && typeof current === "object" && depth < 8; depth++, current = current.cause) {
+      if (current.terminal === true || typeof current.code === "string" && current.code.startsWith("standalone_")) return true;
+    }
+    return false;
+  };
   let saved = copy(prior), reads = 0;
   class Transport {
-    constructor(options) { constructors.push(copy(options)); }
+    constructor(options) { constructors.push({ ...copy(options), fetch: options.fetch }); }
     async post(path, options) {
       calls.push({ path, ...copy(options) });
       return respond(calls.length, options.body);
@@ -48,6 +56,8 @@ function harness({ history = messages(62), prior = {}, env = { CLAUDE_API_KEY: "
   const module = { exports: {} };
   const dependencies = {
     openai: Transport,
+    "@/lib/standalone-accounting/activity": { createActivityAccountingFetch(provider, activity) { activities.push({ provider, activity }); return guardedFetch; } },
+    "@/lib/standalone-accounting/context": { isStandaloneAccountingError: accountingError },
     "@/lib/data/persistence-store": store,
     "@/lib/data/supabase/admin": { getSupabaseAdminClient: () => admin },
     "@/lib/memory/memory-contract": { SHORT_TERM_MESSAGE_LIMIT: 60 },
@@ -58,7 +68,7 @@ function harness({ history = messages(62), prior = {}, env = { CLAUDE_API_KEY: "
     console: Object.fromEntries(["error", "warn", "info"].map(level => [level, (...args) => logs.push({ level, args })])),
     require(name) { assert.ok(name in dependencies, `Unexpected dependency: ${name}`); return dependencies[name]; },
   });
-  return { run: () => module.exports.maybeUpdateSummary("chat"), calls, constructors, writes, resets, logs,
+  return { run: () => module.exports.maybeUpdateSummary("chat"), calls, constructors, writes, resets, logs, activities, guardedFetch,
     saved: () => saved, reads: () => reads };
 }
 
@@ -72,11 +82,13 @@ test("native Claude request keeps plain-text output and the existing summary bud
   assert.deepEqual(h.constructors[0].defaultHeaders, {
     Authorization: null, "x-api-key": "fake-claude-key", "anthropic-version": "2023-06-01",
   });
-  assert.equal(h.constructors[0].maxRetries, undefined); assert.equal(h.constructors[0].timeout, undefined);
+  assert.equal(h.constructors[0].maxRetries, 0); assert.equal(h.constructors[0].timeout, undefined);
+  assert.equal(h.constructors[0].fetch, h.guardedFetch);
+  assert.deepEqual(h.activities, [{ provider: "anthropic", activity: "memory-summary" }]);
   assert.equal(h.calls.length, 1);
   const { path, body } = h.calls[0];
   assert.equal(path, "/messages"); assert.equal(body.model, "claude-sonnet-5-5");
-  assert.equal(body.max_tokens, 4000); assert.equal(body.thinking, undefined);
+  assert.equal(body.max_tokens, 12000); assert.equal(body.thinking, undefined);
   assert.equal(body.output_config, undefined);
   for (const unsupported of ["temperature", "top_p", "top_k", "response_format", "tools"]) assert.equal(body[unsupported], undefined);
   assert.equal(body.messages.length, 1); assert.equal(body.messages[0].role, "user");
@@ -161,6 +173,19 @@ test("provider failures preserve the saved cursor and use only the existing smal
   assert.ok(!second.includes(": source 12"));
 });
 
+test("paid admission denial propagates without the smaller-batch retry or checkpoint movement", async () => {
+  const prior = { version: 2, summary: "Keep", summarizedThroughMessageId: "m1", sourceMessageCount: 2 };
+  for (const code of ["standalone_approval_required", "standalone_budget_exceeded", "standalone_outcome_unknown"]) {
+    const denial = Object.assign(new Error("Paid transmission blocked"), { code, terminal: true });
+    const wrapped = new Error("SDK connection error", { cause: denial });
+    const h = harness({ history: messages(84), prior, respond: () => { throw wrapped; } });
+    await assert.rejects(h.run(), error => error === wrapped);
+    assert.equal(h.calls.length, 1); assert.equal(h.writes.length, 0); assert.equal(h.resets.length, 0);
+    assert.deepEqual(h.saved(), prior); assert.equal(h.constructors[0].maxRetries, 0);
+    assert.ok(!h.logs.some(log => log.level === "warn" && String(log.args[0]).includes("retrying smaller batch")));
+  }
+});
+
 test("smaller-batch recovery advances only successfully summarized messages", async () => {
   const h = harness({ history: messages(80), respond: n => n === 1 ? reply("partial", "max_tokens") : reply(`complete ${n}`) });
   await h.run(); assert.equal(h.calls.length, 3);
@@ -208,7 +233,7 @@ test("no older conversation and deleted chat do not call the model", async () =>
 test("rolling ITM character ceiling rejects oversized complete output without moving cursor",async()=>{
   const h=harness({
     prior:{ version:2,summary:"Retain previous context.",summarizedThroughMessageId:"m0",sourceMessageCount:1 },
-    respond:()=>reply("x".repeat(8501))
+    respond:()=>reply("x".repeat(15001))
   });
   await h.run();
   assert.equal(h.writes.length,0);
@@ -216,7 +241,7 @@ test("rolling ITM character ceiling rejects oversized complete output without mo
   assert.ok(h.logs.some(log=>log.level==="error"));
 });
 test("rolling ITM accepts a complete response within the character budget",async()=>{
-  const content="x".repeat(7500);
+  const content="x".repeat(14500);
   const h=harness({respond:()=>reply(content)});
   await h.run();
   assert.equal(h.writes.length,1);
@@ -227,12 +252,12 @@ test("a complete but oversized ITM receives one semantic compaction before advan
   const prior = { version: 2, summary: "P".repeat(8193), summarizedThroughMessageId: "m0", sourceMessageCount: 1 };
   const h = harness({
     prior,
-    respond: n => n === 1 ? reply("D".repeat(9686)) : reply("C".repeat(6500)),
+    respond: n => n === 1 ? reply("D".repeat(15001)) : reply("C".repeat(6500)),
   });
   await h.run();
   assert.equal(h.calls.length, 2, "ordinary update plus one bounded repair");
-  assert.equal(h.calls[0].body.max_tokens, 4000);
-  assert.equal(h.calls[1].body.max_tokens, 2800);
+  assert.equal(h.calls[0].body.max_tokens, 12000);
+  assert.equal(h.calls[1].body.max_tokens, 12000);
   assert.match(h.calls[1].body.system, /Compress it SEMANTICALLY/);
   assert.equal(h.writes.length, 1);
   assert.equal(h.saved().summary.length, 6500);
@@ -245,11 +270,28 @@ test("compaction failures are bounded and retain the source cursor", async () =>
   const prior = { version: 2, summary: "Existing context", summarizedThroughMessageId: "m0", sourceMessageCount: 1 };
   const h = harness({
     prior,
-    respond: n => n % 2 ? reply("X".repeat(9686)) : reply("Still over budget".repeat(700)),
+    respond: n => n % 2 ? reply("X".repeat(15001)) : reply("Still over budget".repeat(1000)),
   });
   await h.run();
   assert.equal(h.calls.length, 2, "one batch plus one repair; do not repeat paid compaction");
   assert.equal(h.writes.length, 0);
   assert.deepEqual(h.saved(), prior);
   assert.ok(h.logs.some(event => event.level === "error"));
+});
+
+test("complete summaries moderately above 6500 characters do not trigger compaction", async () => {
+  const content = "x".repeat(9100);
+  const h = harness({ respond: () => reply(content) });
+  await h.run();
+  assert.equal(h.calls.length, 1);
+  assert.equal(h.writes.length, 1);
+  assert.equal(h.saved().summary, content);
+});
+
+test("complete compaction below target remains valid and moves cursor", async () => {
+  const h = harness({ respond: n => n === 1 ? reply("X".repeat(15001)) : reply("Short but complete context.") });
+  await h.run();
+  assert.equal(h.calls.length, 2);
+  assert.equal(h.writes.length, 1);
+  assert.equal(h.saved().summary, "Short but complete context.");
 });

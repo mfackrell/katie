@@ -1,3 +1,5 @@
+import { isStandaloneAccountingError } from "@/lib/standalone-accounting/context";
+import { createActivityAccountingFetch } from "@/lib/standalone-accounting/activity";
 import OpenAI from "openai";
 import { getSupabaseAdminClient } from "@/lib/data/supabase/admin";
 
@@ -108,6 +110,7 @@ export async function maybeMaintainActorMemory(actorId: string, client: ModelCli
     if (writeError) throw writeError;
     console.info("[LTM Maintenance] Consolidation", {actorId,archived:approved.archive.length,committed:saved===true});
   } catch (error) {
+    if (isStandaloneAccountingError(error)) throw error;
     console.error("[LTM Maintenance] Failed without modifying existing memory", {
       actorId,error:error instanceof Error?error.message:String(error),
     });
@@ -131,9 +134,10 @@ export async function maybeRunThirtyMessageCleanup(actorId: string): Promise<voi
       return;
     }
     console.info("[LTM Maintenance] Scheduled review started", { actorId, count });
-    const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+    const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY, maxRetries: 0, fetch: createActivityAccountingFetch("openai", "memory-maintenance") });
     await maybeMaintainActorMemory(actorId, client);
   } catch (error) {
+    if (isStandaloneAccountingError(error)) throw error;
     console.error("[LTM Maintenance] Scheduled review failed without blocking LTM writes", {
       actorId, error: error instanceof Error ? error.message : String(error),
     });

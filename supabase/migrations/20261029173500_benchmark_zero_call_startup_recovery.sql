@@ -35,6 +35,7 @@ begin
  if t.id is null or j.id is null or m.id is null or p.id is null or a.id is null or g.id is null or
    t.status<>'blocked' or j.status<>'failed' or m.status<>'blocked' or p.status<>'blocked' or
    t.kind<>'development' or j.role<>'development' or p.phase<>'development' or p.active_mission_id<>m.id or
+   a.actor_id is distinct from p.actor_id or a.chat_id is distinct from p.chat_id or
    a.project_id is distinct from p.id or a.mission_assignment_id is distinct from j.id or
    not benchmark_full_task_provenance(t.id,p.id) or
    p.approved_hash is null or p.approved_hash is distinct from p.approval_hash or
@@ -75,7 +76,7 @@ declare r benchmark_startup_recoveries; a benchmark_native_spending_approvals; g
  p work_projects; j mission_assignments; m agent_missions; acc benchmark_budget_accounts; n uuid; epoch bigint;
 begin
  perform pg_advisory_xact_lock(hashtextextended('katie.mission.state',0));
- select * into r from benchmark_startup_recoveries where id=p_recovery for update;
+ select * into r from benchmark_startup_recoveries where id=p_recovery;
  select * into a from benchmark_native_spending_approvals where id=r.approval_id for update;
  select * into g from benchmark_execution_grants where id=r.old_grant_id for update;
  select * into p from work_projects where id=a.project_id for update;
@@ -85,6 +86,7 @@ begin
  if r.id is null or r.approval_id is distinct from p_approval or r.task_id is distinct from p_task or r.release_sha is distinct from p_release or a.id is null or g.id is null or p.id is null or j.id is null or m.id is null or acc.id is null or
    (p_digest is null or p_digest !~ '^[a-f0-9]{64}$') or a.revoked_at is not null or a.consumed_at is null or a.deadline<=now() or
    p.status<>'running' or p.phase<>'development' or p.deadline<=now() or p.approved_hash is distinct from r.scope_hash or p.approval_hash is distinct from r.scope_hash or
+   not benchmark_full_task_provenance(r.task_id,p.id) or a.actor_id is distinct from p.actor_id or a.chat_id is distinct from p.chat_id or
    p.active_mission_id<>m.id or m.project_id<>p.id or m.status<>'running' or m.deadline<=now() or j.status<>'waiting_external' or
    not exists(select 1 from agent_tasks where id=r.task_id and status in ('submitted','dispatching') and external->>'startupRecoveryId'=r.id::text) or
    not benchmark_continuation_live(a.continuation_id,a.account_id,p.id) or g.stopped_at is null or g.revoked_at is not null or

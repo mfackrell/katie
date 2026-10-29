@@ -1,9 +1,16 @@
-import test from "node:test";
+import test, { afterEach, beforeEach, describe, mock } from "node:test";
+import * as unsupported from "../lib/standalone-accounting/unsupported";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import {
   isTechnicalImageFailure, shouldTryRunpodImage, generateRunpodImage, RUNPOD_IMAGE_MODEL_ID,
 } from "../lib/chat/runpod-image-fallback";
+
+describe("RunPod image fallback protocol", () => {
+  // Protocol fixtures use fake HTTP only. Production admission is exercised
+  // separately with the real, unmocked guard in standalone-unpriced-dispatch.
+  beforeEach(() => { mock.method(unsupported, "blockUnaccountedPaidDispatch", () => {}); });
+  afterEach(() => { mock.restoreAll(); });
 
 const grok = { provider: "grok" as const, error: "xAI request timed out" };
 const google = { provider: "google" as const, error: "Gemini response HTTP 503 Service Unavailable" };
@@ -204,4 +211,6 @@ test("Accepted RunPod jobs remain eligible past twelve quick status polls",async
   assert.equal(posts,1);
   assert.equal(checks,14);
   assert.equal(output.content?.[0]?.type,"image");
+});
+
 });

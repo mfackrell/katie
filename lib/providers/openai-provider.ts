@@ -1,3 +1,4 @@
+import { createAccountingFetch } from "@/lib/standalone-accounting/dispatch";
 import { openAiCacheSettings } from "./openai-cache";
 import { nativeToolTurn } from "./native-tools";
 import OpenAI from "openai";
@@ -221,7 +222,7 @@ function classifyModel(modelId: string): ModelClassification {
   if (isResponsesApi) {
     return {
       endpoint: "responses",
-      stream: !imageGenerationModel,
+      stream: !imageGenerationModel && !/^gpt-5\.5-pro(?:-2026-04-23)?$/.test(modelLower),
       isImageGenerationModel: imageGenerationModel
     };
   }
@@ -262,7 +263,7 @@ export class OpenAiProvider implements LlmProvider {
   private defaultModel = "gpt-4o";
 
   constructor(private readonly apiKey: string) {
-    this.client = new OpenAI({ apiKey, fetch: globalThis.fetch.bind(globalThis) });
+    this.client = new OpenAI({ apiKey, maxRetries: 0, fetch: createAccountingFetch("openai") });
   }
 
   generateToolTurn(params: import("@/lib/tools/types").ToolTurnParams) { return nativeToolTurn("openai", this.apiKey, params); }
@@ -295,9 +296,9 @@ export class OpenAiProvider implements LlmProvider {
     const completion = await this.client.completions.create({
       model: selectedModel,
       prompt: `IDENTITY:\nYour name is ${params.name}. ${BEHAVIORAL_DIRECTIVE}\n\nCORE_PERSONA: ${params.persona}\n\n${MATH_EXECUTION_PROTOCOL}\n\nUser request:\n${params.user}`
-    });
+    }, { signal: params.signal, maxRetries: 0 });
 
-    return toProviderResponse({ text: completion.choices[0]?.text ?? "" }, selectedModel, this.name);
+    return toProviderResponse({ text: completion.choices[0]?.text ?? "" }, completion.model || selectedModel, this.name);
   }
 
   private async generateViaChatCompletions(
@@ -308,9 +309,9 @@ export class OpenAiProvider implements LlmProvider {
       model: selectedModel,
       ...openAiCacheSettings(selectedModel, params.promptCacheKey, "chat-completions"),
       messages: toChatMessages(params)
-    });
+    }, { signal: params.signal, maxRetries: 0 });
 
-    return toProviderResponse({ text: completion.choices[0]?.message?.content ?? "" }, selectedModel, this.name);
+    return toProviderResponse({ text: completion.choices[0]?.message?.content ?? "" }, completion.model || selectedModel, this.name);
   }
 
   private async generateViaResponses(
@@ -328,7 +329,7 @@ export class OpenAiProvider implements LlmProvider {
             image: { size: "1024x1024" }
           }
         : {})
-    });
+    }, { signal: params.signal, maxRetries: 0 });
 
     const contentItems = extractOutputItems(response);
     const text = extractText(contentItems, response.output_text);
@@ -345,7 +346,7 @@ export class OpenAiProvider implements LlmProvider {
             }
           : undefined
       },
-      selectedModel,
+      response.model || selectedModel,
       this.name
     );
   }
@@ -359,12 +360,15 @@ export class OpenAiProvider implements LlmProvider {
       model: selectedModel,
       ...openAiCacheSettings(selectedModel, params.promptCacheKey, "chat-completions"),
       messages: toChatMessages(params),
-      stream: true
-    });
+      stream: true,
+      stream_options: { include_usage: true }
+    }, { signal: params.signal, maxRetries: 0 });
 
     let fullText = "";
+    let responseModel = selectedModel;
 
     for await (const chunk of stream) {
+      responseModel = chunk.model || responseModel;
       const delta = chunk.choices[0]?.delta?.content ?? "";
       if (!delta) {
         continue;
@@ -374,7 +378,7 @@ export class OpenAiProvider implements LlmProvider {
       await handlers.onTextDelta?.(delta);
     }
 
-    return toProviderResponse({ text: fullText }, selectedModel, this.name);
+    return toProviderResponse({ text: fullText }, responseModel, this.name);
   }
 
   private async generateStreamViaResponses(
@@ -394,7 +398,7 @@ export class OpenAiProvider implements LlmProvider {
             image: { size: "1024x1024" }
           }
         : {})
-    });
+    }, { signal: params.signal, maxRetries: 0 });
 
     let streamedText = "";
     let completedResponse: OpenAI.Responses.Response | undefined;
@@ -411,7 +415,7 @@ export class OpenAiProvider implements LlmProvider {
         continue;
       }
 
-      if (event.type === "response.completed") {
+      if (event.type === "response.completed" || event.type === "response.incomplete") {
         completedResponse = getCompletedResponseFromEvent(event);
       }
     }
@@ -438,7 +442,7 @@ export class OpenAiProvider implements LlmProvider {
             }
           : undefined
       },
-      selectedModel,
+      completedResponse.model || selectedModel,
       this.name
     );
   }

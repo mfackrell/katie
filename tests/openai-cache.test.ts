@@ -1,3 +1,4 @@
+import { runWithOrchestratorAccounting } from "../lib/standalone-accounting/context";
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { conversationCacheKey, openAiCacheSettings } from '../lib/providers/openai-cache';
@@ -6,6 +7,8 @@ import { nativeToolTurn } from '../lib/providers/native-tools';
 
 test('cache scope is stable, opaque and isolated by actor and conversation', () => {
   const key = conversationCacheKey('actor', 'chat');
+  assert.equal(key.length, 64);
+  assert.match(key, /^katie:v1:[a-f0-9]{55}$/);
   assert.equal(key, conversationCacheKey('actor', 'chat'));
   assert.notEqual(key, conversationCacheKey('other', 'chat'));
   assert.notEqual(key, conversationCacheKey('actor', 'other'));
@@ -25,7 +28,7 @@ test('retention uses documented model settings without opting into premium long 
   assert.deepEqual(openAiCacheSettings('gpt-5.5'),{});
 });
 
-test('generation and native-tool requests transmit scope and retention without changing content', async () => {
+test('generation and native-tool requests transmit scope and retention without changing content', async () => runWithOrchestratorAccounting(async () => {
   const original = globalThis.fetch;
   const bodies: any[] = [];
   globalThis.fetch = async (_url, init) => {
@@ -46,4 +49,4 @@ test('generation and native-tool requests transmit scope and retention without c
     assert.match(JSON.stringify(bodies[0].input),/unchanged question/);
     assert.equal(bodies[1].instructions,'unchanged system');
   } finally { globalThis.fetch = original; }
-});
+}));

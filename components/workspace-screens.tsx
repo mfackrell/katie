@@ -1,4 +1,6 @@
 "use client";
+import { SelfToolsOwnerSession } from '@/components/self-tools-owner-session';
+import { ownerConversationHeaders } from '@/lib/tools/browser-owner-session';
 import { BenchmarkOwnerApproval } from "@/components/benchmark-owner-approval";
 import { SpecialistDirectory } from "@/components/specialist-directory";
 import Notepad from "@/components/Notepad";
@@ -429,7 +431,7 @@ export function NewConversationScreen() {
     try {
       const response = await fetch("/api/chats", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: await ownerConversationHeaders(),
         body: JSON.stringify({
           id: creationId.current,
           actorId: actor.id,
@@ -465,6 +467,7 @@ export function NewConversationScreen() {
             : "Loading available conversation specialist…"
         }
       />
+      {actor?.actorKind !== "executive" && <SelfToolsOwnerSession />}
       <ErrorState error={actors.error || error} retry={actors.refresh} />
       <textarea
         autoFocus

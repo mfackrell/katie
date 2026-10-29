@@ -105,6 +105,8 @@ export interface ProviderSystemAudit {
 }
 
 export interface ChatGenerateParams {
+  /** Cancels the actual upstream transmission, including response consumption. */
+  signal?: AbortSignal;
   /** Server-derived actor/conversation scope, shared by helper calls. */
   promptCacheKey?: string;
   /** Exact reusable persona prefix, before request-specific additions. */

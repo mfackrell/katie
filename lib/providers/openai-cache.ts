@@ -2,7 +2,8 @@ import { createHash } from "node:crypto";
 
 /** Stable, opaque server-owned scope. Never include prompt text or a request ID. */
 export function conversationCacheKey(actorId: string, chatId: string): string {
-  return "katie:v1:" + createHash("sha256").update(JSON.stringify([actorId, chatId])).digest("hex");
+  // Shared prompt-cache keys have a documented 64-character maximum.
+  return "katie:v1:" + createHash("sha256").update(JSON.stringify([actorId, chatId])).digest("hex").slice(0, 55);
 }
 
 /** Explicit allowlist: unknown models keep provider defaults rather than risk rejection.
