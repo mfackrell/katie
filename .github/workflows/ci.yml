@@ -52,6 +52,9 @@ jobs:
           test -x "$PG_INITDB"
           echo "KATIE_TEST_PG_BIN=$(dirname "$PG_INITDB")" >> "$GITHUB_ENV"
 
+      - name: Verify same-task owner renewal in isolated PostgreSQL and Chromium
+        run: node --test tests/benchmark-renewal-postgres.test.mjs tests/benchmark-development-renewal-browser.test.mjs
+
       - name: Run strict CI gate (typecheck + all offline tests + build + smoke)
         run: npm run ci:gate
 

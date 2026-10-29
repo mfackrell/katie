@@ -8,6 +8,7 @@ import pg from 'pg';
 import {randomUUID} from 'node:crypto';
 import {modules} from './helpers/load-project-modules.mjs';
 import {gameFixture} from './fixtures/game-project.mjs';
+import {assertDevelopmentOwnerRenewal} from './helpers/assert-development-owner-renewal.mjs';
 import {assertNativeStartupRecovery} from './helpers/assert-native-startup-recovery.mjs';
 import config from '../config/benchmark-715-production-qualification.json' with {type:'json'};
 test('Append-only renewal retains expired authority, hydrates without spending, and fences exact stages',
@@ -57,6 +58,7 @@ test('Append-only renewal retains expired authority, hydrates without spending, 
    '20261028180638_specification_draft_history.sql','20261028180911_benchmark_owner_continuation.sql','20261028181030_continuation_specification_scheduler.sql'])
    await db.query(readFileSync('supabase/migrations/'+file,'utf8'));
   await db.query(`create table provider_health(provider_name text primary key,status text,reason text,failure_count int,blocked_until timestamptz,updated_at timestamptz);grant all on provider_health to service_role`);
+  await db.query('alter default privileges in schema public grant all on tables to service_role');
   for(const file of ['20261028210800_provider_availability_recovery.sql',
    '20261028212933_uncharged_continuation_specification_replacement.sql',
    '20261028222500_deterministic_specification_route_recovery.sql',
@@ -64,7 +66,8 @@ test('Append-only renewal retains expired authority, hydrates without spending, 
    '20261023194500_recover_latest_game_revision_checkpoint.sql',
    '20261021202500_resume_game_checkpoint_watchdog.sql',
    '20261028225300_retain_full_specification_review.sql',
-   '20261029145712_benchmark_append_only_continuation.sql','20261029173500_benchmark_zero_call_startup_recovery.sql','20261029185000_benchmark_zero_call_recovery_chain.sql'])
+   '20261024161000_resume_repository_review_context.sql','20261027201000_development_dispatch_recovery.sql',
+   '20261029145712_benchmark_append_only_continuation.sql','20261029173500_benchmark_zero_call_startup_recovery.sql','20261029185000_benchmark_zero_call_recovery_chain.sql','20261029213000_benchmark_development_owner_renewal.sql'])
    await db.query(readFileSync('supabase/migrations/'+file,'utf8'));
   const actor=randomUUID(),chat=randomUUID(),repo=randomUUID(),trial=randomUUID(),exp=randomUUID(),project=randomUUID(),owner=randomUUID();
   const protocol=config.protocol;
@@ -203,6 +206,7 @@ test('Append-only renewal retains expired authority, hydrates without spending, 
   const badRuntime=modules({'@/lib/missions/inspection':{workflowInspection:async()=>null},'@/lib/missions/store':{readMission:read,rpc:async()=>{throw Error('Invalid candidate must not commit')}}});
   await assert.rejects(badRuntime('@/lib/missions/worker').executeClaim(bad,async()=>{throw Error('Paid regeneration forbidden')}),/no longer validates/);
   await assertNativeStartupRecovery(db,rival,{project,account,trial,actor,chat,owner,repo,team:created.team,continuation:renewedApproval.id});
+  await assertDevelopmentOwnerRenewal(db,rival,{project,account,trial,owner,actor,continuation:renewedApproval.id,protocol});
   await db.query('reset role');await db.query('set role authenticated');
   await assert.rejects(db.query(rpc,[owner,project,renewal.planHash,true]),/permission denied/);
   await assert.rejects(db.query('select * from benchmark_full_continuations'),/permission denied/);
@@ -212,3 +216,4 @@ test('Append-only renewal retains expired authority, hydrates without spending, 
   rmSync(root,{recursive:true,force:true});
  }
 });
+

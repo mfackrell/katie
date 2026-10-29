@@ -51,3 +51,14 @@ test('startup recovery identity survives signed transport and cannot be substitu
   assert.throws(()=>openNativeProductionRuntime(productionRuntime,{...p,startupRecoveryId:replacement},key,now),/RUNTIME_INVALID/);
  assert.throws(()=>encodeNativeHandoff({...p,startupRecoveryId:'not-an-id'},key),/INVALID/);
 });
+
+
+test('owner development renewal is signed and bound to the production capsule',()=>{
+ const developmentRenewalId='88888888-8888-4888-8888-888888888888';
+ const p={...proof,continuationId:'55555555-5555-4555-8555-555555555555',developmentRenewalId};
+ const productionRuntime=sealNativeProductionRuntime(secret,p,key,now);
+ const verified=readNativeHandoff(encodeNativeHandoff({...p,productionRuntime},key),key,now);
+ assert.equal(verified.developmentRenewalId,developmentRenewalId);
+ assert.equal(openNativeProductionRuntime(verified.productionRuntime,verified,key,now).serviceRoleKey,secret);
+ assert.throws(()=>openNativeProductionRuntime(productionRuntime,{...verified,developmentRenewalId:'99999999-9999-4999-8999-999999999999'},key,now),/INVALID/);
+});

@@ -38,9 +38,9 @@ test('chat controls bind the same saved actor/chat and exact scope approval, and
  await handleProjectChat({actorId:actor,chatId:chat,message:'pause the project'},'z',[],true);assert.equal(calls[1].p_action,'pause');
 });
 test('project plans retain a full final contract and reject trivial, external or escaped scopes',()=>{const {validateProjectPlan,digest}=modules()('@/lib/projects/contract');assert.equal(validateProjectPlan(plan).milestones.length,2);const root={...contract,path:'/'};assert.equal(validateProjectPlan({...plan,milestones:plan.milestones.map(m=>({...m,contract:root})),finalContract:root}).finalContract.path,'/');for(const change of [{allowedPaths:['../secrets/']},{allowedPaths:['.github/workflows/']},{finalContract:{...contract,path:'//external.test/'}},{finalContract:{...contract,path:'/other'}},{finalContract:{...contract,scenarios:[{name:'trivial',steps:[{action:'expectVisible',selector:'body'}]}]}}])assert.throws(()=>validateProjectPlan({...plan,...change}));assert.equal(digest({b:2,a:1}),digest({a:1,b:2}));});
-function coordinator({deployedPassed=true}={}){let p=structuredClone(owner),runs=[],missions=new Map(),counter=0,preview=null;const calls=[];const {digest}=modules()('@/lib/projects/contract');
- const db={from:()=>({select(){return this;},eq(){return this;},not(){return this;},in(){return this;},order(){return this;},limit:async()=>({data:[],error:null}),maybeSingle:async()=>({data:p,error:null})})};
- const rpc=async(name,args)=>{if(name==='project_dispatch_recovery_candidates')return [];if(name==='claim_work_project')return p.status==='running'?structuredClone(p):null;assert.equal(name,'finish_work_project');calls.push(structuredClone(args));if(args.p_action==='child'){
+function coordinator({deployedPassed=true}={}){let continuation=null;let p=structuredClone(owner),runs=[],missions=new Map(),counter=0,preview=null;const calls=[];const {digest}=modules()('@/lib/projects/contract');
+ const db={from:table=>({select(){return this;},eq(){return this;},not(){return this;},in(){return this;},order(){return this;},limit:async()=>({data:[],error:null}),maybeSingle:async()=>({data:table==='benchmark_full_project_bindings'&&continuation?{trial_id:'renewed-full-trial'}:p,error:null})})};
+ const rpc=async(name,args)=>{if(name==='benchmark_active_full_continuation')return continuation;if(name==='project_dispatch_recovery_candidates')return [];if(name==='claim_work_project')return p.status==='running'?structuredClone(p):null;assert.equal(name,'finish_work_project');calls.push(structuredClone(args));if(args.p_action==='child'){
    const mid=randomUUID(),ctx=args.p_data.kind==='development'?{version:1,projectId:id,scopeHash:p.approved_hash,baseSha:p.verified_sha??p.baseline_sha,contractHash:digest(p.spec.milestones[p.milestone_index].contract),contract:p.spec.milestones[p.milestone_index].contract}:null;
    p.active_mission_id=mid;runs.push({mission_id:mid,kind:args.p_data.kind,ordinal:++counter,milestone_index:p.milestone_index,binding:ctx,outcome:null});missions.set(mid,{mission:{id:mid,status:'running'},jobs:[]});
   }else if(args.p_action==='advance'){const r=runs.find(r=>r.mission_id===p.active_mission_id);r.outcome=args.p_data;p.verified_sha=args.p_data.head;p.milestone_index++;p.active_mission_id=null;if(p.milestone_index===p.spec.milestones.length)p.phase='delivery';}
@@ -50,9 +50,9 @@ function coordinator({deployedPassed=true}={}){let p=structuredClone(owner),runs
   else if(['block','error'].includes(args.p_action)){p.status='blocked';}
   return true;
  };
- const {runProjectBatch}=modules({'@/lib/projects/preview':{verifyDeployedPreview:async(v,c,pid)=>({passed:deployedPassed,headSha:v.headSha,deploymentId:v.deploymentId,statusId:v.statusId,url:v.url,projectId:pid,contractHash:digest(c),checks:c.scenarios.map(s=>({name:s.name,passed:deployedPassed,detail:'Actual deployed browser fixture'}))}),PreviewAccessUnavailable:class extends Error{}},'@/lib/projects/store':{projectRpc:rpc,projectRuns:async()=>runs,milestoneEvidence:async()=>runs.filter(r=>r.outcome).map(r=>({phase:r.kind,index:r.milestone_index,result:missions.get(r.mission_id)?.mission.result,missionStatus:missions.get(r.mission_id)?.mission.status,evidence:r.outcome})),acceptanceBinding:c=>({projectId:c.projectId,contractHash:c.contractHash,scenarioNames:c.contract.scenarios.map(s=>s.name)})},'@/lib/data/supabase/admin':{getSupabaseAdminClient:()=>db},'@/lib/missions/store':{readMission:async mid=>missions.get(mid)},'@/lib/agents/store':{readTask:async taskId=>({id:taskId})},'@/lib/agents/development':{recoverUnusedNativeStartup:async()=>false,projectAcceptanceSchema:modules()('@/lib/agents/development').projectAcceptanceSchema,developmentPreview:async()=>preview}})('@/lib/projects/worker');
+ const {runProjectBatch}=modules({'@/lib/projects/preview':{verifyDeployedPreview:async(v,c,pid)=>({passed:deployedPassed,headSha:v.headSha,deploymentId:v.deploymentId,statusId:v.statusId,url:v.url,projectId:pid,contractHash:digest(c),checks:c.scenarios.map(s=>({name:s.name,passed:deployedPassed,detail:'Actual deployed browser fixture'}))}),PreviewAccessUnavailable:class extends Error{}},'@/lib/projects/store':{projectRpc:rpc,projectRuns:async()=>runs,milestoneEvidence:async()=>runs.filter(r=>r.outcome).map(r=>({phase:r.kind,index:r.milestone_index,result:missions.get(r.mission_id)?.mission.result,missionStatus:missions.get(r.mission_id)?.mission.status,evidence:r.outcome})),acceptanceBinding:c=>({projectId:c.projectId,contractHash:c.contractHash,scenarioNames:c.contract.scenarios.map(s=>s.name)})},'@/lib/data/supabase/admin':{getSupabaseAdminClient:()=>db},'@/lib/missions/store':{readMission:async mid=>missions.get(mid)},'@/lib/agents/store':{readTask:async taskId=>({id:taskId})},'@/lib/agents/development':{dispatchOwnerRenewedNativeDevelopment:async()=>false,recoverUnusedNativeStartup:async()=>false,projectAcceptanceSchema:modules()('@/lib/agents/development').projectAcceptanceSchema,developmentPreview:async()=>preview}})('@/lib/projects/worker');
  function complete(head,bad=false){const r=runs.at(-1),c=r.binding;missions.set(r.mission_id,{mission:{id:r.mission_id,status:'completed',result:'Actual reviewed increment fixture'},jobs:[{id:randomUUID(),role:'development',result:{verification:{observedHeadSha:head,testedHeadSha:head,reviewedHeadSha:head,changedFiles:[{path:p.spec.allowedPaths[0]+'page.tsx',patch:'Actual immutable source patch fixture'}],projectAcceptance:{version:1,projectId:id,contractHash:c.contractHash,headSha:head,passed:!bad,checks:c.contract.scenarios.map(s=>({name:s.name,passed:!bad,detail:'Actual DOM assertion fixture'}))}}}}]});}
- return{tick:runProjectBatch,get p(){return p;},runs,calls,missions,complete,setPreview:v=>{preview=v;}};
+ return{tick:runProjectBatch,setContinuation:v=>{continuation=v;},get p(){return p;},runs,calls,missions,complete,setPreview:v=>{preview=v;}};
 }
 test('actual coordinator accumulates reviewed increments, waits for a real preview and requires final whole-project assessment',async()=>{
  const f=coordinator();await f.tick();assert.match(f.calls.at(-1).p_data.objective,/persistent position/);f.complete('c'.repeat(40));await f.tick();assert.equal(f.p.verified_sha,'c'.repeat(40));await f.tick();assert.match(f.calls.at(-1).p_data.objective,new RegExp('PREVIOUS VERIFIED HEAD: '+'c'.repeat(40)));f.complete('d'.repeat(40));await f.tick();assert.equal(f.p.phase,'delivery');await f.tick();assert.equal(f.p.status,'running');assert.equal(f.calls.at(-1).p_action,'wait');
@@ -582,4 +582,24 @@ test('explicitly stopped development mission cannot dispatch a repair from retai
  const m=f.missions.get(f.p.active_mission_id);m.mission.status='stopped';m.jobs[0].status='completed';
  m.jobs.push({role:'review',status:'completed',result:{findings:['Saved position is not restored.']}});
  await f.tick();assert.equal(f.calls.at(-1).p_action,'block');
+});
+
+
+
+test('same-task Full renewal reaches final assessment without restarting specification or development',async()=>{
+ const {gameFixture}=await import('./fixtures/game-project.mjs');const g=gameFixture(),f=coordinator();
+ f.p.profile='game';f.p.spec={...plan,allowedPaths:g.allowedPaths,milestones:[{title:'Final',instruction:'Implement exact original game',contract:g.contract}],finalContract:g.contract,game:g.game};
+ await f.tick();f.complete('c'.repeat(40));await f.tick();
+ f.setPreview({url:'https://pilot.vercel.app/counter',headSha:'c'.repeat(40),deploymentId:1,statusId:2,immutable:true});
+ await f.tick();await f.tick();assert.equal(f.p.phase,'assessment');
+ const values={NEXT_PUBLIC_SUPABASE_URL:'https://barclcqataqyvifoeyop.supabase.co',KATIE_FULL_BENCHMARK_ENVIRONMENT:'production',KATIE_FULL_BENCHMARK_DISPATCH:'enabled',KATIE_NATIVE_BENCHMARK_DISPATCH:'enabled',KATIE_FULL_BENCHMARK_TRIAL_ID:'renewed-full-trial'};
+ const prior=Object.fromEntries(Object.keys(values).map(k=>[k,process.env[k]]));Object.assign(process.env,values);
+ try{
+  f.setContinuation({id:randomUUID(),plan_hash:'a'.repeat(64),deadline:new Date(Date.now()+14400000).toISOString(),plan:{kind:'development-renewal',specificationTokens:0,developmentTokens:120000,developmentSpentTokens:14419,developmentRemainingTokens:105581,assessmentTokens:60000,additionalTokenCap:165581}});
+  await f.tick();assert.equal(f.calls.at(-1).p_action,'child');assert.equal(f.calls.at(-1).p_data.kind,'assessment');
+  assert.equal(f.calls.at(-1).p_data.evidence.gameRules.game.id,g.game.rules.game.id);
+  assert.ok(f.calls.at(-1).p_data.evidence.benchmarkContinuationId);
+  const saved=f.missions.get(f.p.active_mission_id);saved.mission.status='completed';saved.mission.result='Independent whole-project acceptance';
+  await f.tick();assert.equal(f.p.status,'completed');
+ }finally{for(const[k,v]of Object.entries(prior)){if(v===undefined)delete process.env[k];else process.env[k]=v;}}
 });
