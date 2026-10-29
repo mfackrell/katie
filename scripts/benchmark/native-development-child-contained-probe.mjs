@@ -18,7 +18,7 @@ writeFileSync(join(root,'AGENT_REQUEST.md'),'Synthetic nonbillable qualification
 writeFileSync(join(root,'review-findings.txt'),'Synthetic defect: require final independent review.');
 const phases=['implementation','review','repair','final-review'];
 const token='synthetic-bridge-token-not-a-provider-credential';
-const calls=[],receipts=[],summaries=[];let phase='',forwarded=0;
+const calls=[],receipts=[],summaries=[],phaseRequests=new Map();let phase='',forwarded=0;
 const db={rpc:async(name,args)=>{
  calls.push({name,args});
  if(name==='benchmark_gateway_execution_live')return {data:true,error:null};
@@ -29,18 +29,37 @@ const db={rpc:async(name,args)=>{
 // request-shape and byte-bound admission checks that this probe must exercise.
 const upstream=async request=>{
  assert.equal(request.model,'gpt-5.3-codex');forwarded++;
+ const count=(phaseRequests.get(phase)??0)+1;phaseRequests.set(phase,count);
+ assert.ok(count<=2,'Unexpected SDK continuation or retry');
+ const callId='actual_native_tool_'+phase;
+ const encrypted=Buffer.from('synthetic-reasoning-'+phase).toString('base64');
+ const tools=request.tools?.flatMap(t=>t.type==='namespace'?t.tools:[t])??[];
+ assert.ok(tools.some(t=>t.type==='custom'&&t.name==='exec'),'Actual SDK must declare the tested local exec tool');
+ if(count===2){
+  const output=request.input?.find(x=>x.type==='custom_tool_call_output'&&x.call_id===callId);
+  assert.ok(output,'Actual SDK tool output must return through paid admission');
+  assert.match(JSON.stringify(output.output),/ACTUAL_NATIVE_TOOL_OK/,'Actual local exec must succeed');
+  const reasoning=request.input?.find(x=>x.type==='reasoning');
+  assert.ok(reasoning,'Actual SDK must replay trusted opaque reasoning inline');
+  assert.equal(reasoning.encrypted_content,encrypted);assert.deepEqual(reasoning.summary,[]);
+ }
+
  const text=phase==='review'?'CHANGES_REQUESTED: synthetic defect':phase==='final-review'?'PASS: synthetic repair verified':'DONE';
- const item={id:'msg_'+forwarded,type:'message',role:'assistant',status:'completed',content:[{type:'output_text',text,annotations:[]}]};
- const response={id:'synthetic-response-'+forwarded,object:'response',created_at:1,model:request.model,status:'completed',output:[item],usage:{input_tokens:3,output_tokens:2,total_tokens:5}};
- const events=[['response.created',{type:'response.created',response:{...response,status:'in_progress',output:[]}}],['response.output_item.added',{type:'response.output_item.added',output_index:0,item}],['response.output_item.done',{type:'response.output_item.done',output_index:0,item}],['response.completed',{type:'response.completed',response}]];
+ const item=count===1?{id:'call_'+forwarded,type:'custom_tool_call',name:'exec',call_id:callId,
+  input:'const r=await tools.exec_command({cmd:"printf ACTUAL_NATIVE_TOOL_OK",workdir:"/work"});text(r);',status:'completed'}:
+  {id:'msg_'+forwarded,type:'message',role:'assistant',status:'completed',content:[{type:'output_text',text,annotations:[]}]};
+ const reasoning={id:'rs_'+phase,type:'reasoning',summary:[],encrypted_content:encrypted};
+ const output=count===1?[reasoning,item]:[item];
+ const response={id:'synthetic-response-'+forwarded,object:'response',created_at:1,model:request.model,status:'completed',output,usage:{input_tokens:3,output_tokens:2,total_tokens:5}};
+ const events=[['response.created',{type:'response.created',response:{...response,status:'in_progress',output:[]}}],...output.flatMap((item,output_index)=>[['response.output_item.added',{type:'response.output_item.added',output_index,item}],['response.output_item.done',{type:'response.output_item.done',output_index,item}]]),['response.completed',{type:'response.completed',response}]];
  return {providerRequestId:response.id,actualTokens:5,usage:response.usage,contentType:'text/event-stream',body:events.map(([event,data])=>'event: '+event+'\ndata: '+JSON.stringify(data)+'\n\n').join('')+'data: [DONE]\n\n'};
 };
-const server=createNativeHttpBridge({db,grantToken:'synthetic-'+('z'.repeat(60)),trialId:'synthetic-trial',executionEpoch:1,providerNamespace:'openai',upperTokens:20000,upstream,recordReceipt:async r=>receipts.push(r),clientToken:token,fullMission:true});
+const server=createNativeHttpBridge({db,grantToken:'synthetic-'+('z'.repeat(60)),trialId:'synthetic-trial',executionEpoch:1,providerNamespace:'openai',upperTokens:120000,upstream,recordReceipt:async r=>receipts.push(r),clientToken:token,fullMission:true});
 // Observe structural metadata only. Never log prompts, auth headers or secrets.
 server.on('request',req=>{let raw='';req.on('data',chunk=>{if(raw.length<2000000)raw+=chunk;});req.on('end',()=>{
  try{const b=JSON.parse(raw);const summary={phase,model:b.model,keys:Object.keys(b).sort(),inputBytes:Buffer.byteLength(JSON.stringify({...b,max_output_tokens:b.max_output_tokens??4096})),outputCap:b.max_output_tokens??4096,
- inputTypes:Array.isArray(b.input)?b.input.map(x=>({type:x.type,role:x.role,keys:Object.keys(x).sort(),contentTypes:Array.isArray(x.content)?x.content.map(c=>c.type):typeof x.content})):typeof b.input,
- toolTypes:b.tools?.map(t=>t.type),include:b.include,store:b.store,truncation:b.truncation};summaries.push(summary);console.log('ACTUAL_NATIVE_REQUEST_SHAPE='+JSON.stringify(summary));}catch{console.log('ACTUAL_NATIVE_REQUEST_SHAPE_INVALID');}
+ inputTypes:Array.isArray(b.input)?b.input.map(x=>({type:x.type,role:x.role,keys:Object.keys(x).sort(),idType:x.id===null?'null':typeof x.id,outputType:Array.isArray(x.output)?'array':typeof x.output,contentTypes:Array.isArray(x.content)?x.content.map(c=>c.type):typeof x.content})):typeof b.input,
+ toolTypes:b.tools?.map(t=>({type:t.type,name:t.name,nested:t.tools?.map(n=>({type:n.type,name:n.name}))})),clientMetadata:b.client_metadata&&Object.fromEntries(Object.entries(b.client_metadata).map(([k,v])=>[k,v===null?'null':typeof v])),promptCacheKeyType:b.prompt_cache_key===null?'null':typeof b.prompt_cache_key,reasoningKeys:b.reasoning&&Object.keys(b.reasoning).sort(),include:b.include,store:b.store,truncation:b.truncation};summaries.push(summary);console.log('ACTUAL_NATIVE_REQUEST_SHAPE='+JSON.stringify(summary));}catch{console.log('ACTUAL_NATIVE_REQUEST_SHAPE_INVALID');}
  });});
 try{
  await new Promise((resolve,reject)=>{server.once('error',reject);server.listen(socket,resolve);});
@@ -62,8 +81,9 @@ try{
   else assert.match(output,/NATIVE_DEVELOPMENT_RETURNED_FOR_INDEPENDENT_VERIFICATION/);
   console.log('ACTUAL_NATIVE_CHILD_PHASE_PASS='+phase);
  }
- assert.equal(forwarded,4);assert.equal(receipts.length,4);assert.equal(summaries.length,4);
- assert.equal(calls.filter(x=>x.name==='benchmark_full_native_reserve').length,4);
- assert.equal(receipts.reduce((n,x)=>n+x.actualTokens,0),20);
+ assert.equal(forwarded,8);assert.equal(receipts.length,8);assert.equal(summaries.length,8);
+ assert.deepEqual([...phaseRequests.values()],[2,2,2,2]);
+ assert.equal(calls.filter(x=>x.name==='benchmark_full_native_reserve').length,8);
+ assert.equal(receipts.reduce((n,x)=>n+x.actualTokens,0),40);
  console.log('ACTUAL_NATIVE_CHILD_FULL_PAID_ADMISSION_NONBILLABLE_PASS');
 }finally{await new Promise(resolve=>server.close(resolve));rmSync(root,{recursive:true,force:true});}

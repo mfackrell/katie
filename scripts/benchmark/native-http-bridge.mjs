@@ -1,3 +1,4 @@
+import {createNativeReasoningProvenance} from './native-request-admission.mjs';
 import {createServer} from 'node:http';
 import {createHash,timingSafeEqual} from 'node:crypto';
 import {forwardAuthorizedModelRequest} from './authenticated-native-gateway.mjs';
@@ -11,6 +12,7 @@ export function createNativeHttpBridge({db,grantToken,trialId,executionEpoch,
  if(!db||!grantToken||!trialId||!upstream||!recordReceipt||
     typeof clientToken!=='string'||clientToken.length<12)
   throw Error('NATIVE_GATEWAY_NOT_CONFIGURED');
+ const reasoningProvenance=createNativeReasoningProvenance();
  return createServer(async(req,res)=>{
   if(req.method!=='POST'||req.url!=='/v1/responses'){
    res.writeHead(404);res.end();return;
@@ -32,7 +34,7 @@ export function createNativeHttpBridge({db,grantToken,trialId,executionEpoch,
    assertNativeRequestTools(body);
    const result=await forwardAuthorizedModelRequest({
     db,grantToken,trialId,executionEpoch,model:body.model,
-    requestBody:body,upperTokens,upstream,providerNamespace,recordReceipt,
+    requestBody:body,upperTokens,upstream,providerNamespace,recordReceipt,reasoningProvenance,
     fullMission:typeof fullMission==='function'?fullMission():fullMission
    });
    if(!result||typeof result.body!=='string')throw Error('UPSTREAM_RESPONSE_INVALID');

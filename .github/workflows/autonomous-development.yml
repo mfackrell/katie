@@ -86,7 +86,7 @@ jobs:
           # Ordinary owner-authored projects must not depend on benchmark files.
           if grep -Eq '<!--[[:space:]]*katie-native-benchmark:' "$RUNNER_TEMP/original-agent-request.md"; then
             mkdir -p "$RUNNER_TEMP/native-host"
-            cp scripts/benchmark/{native-runtime-capsule,native-dispatch-contract,native-dispatch-cli,native-development-host,native-development-child,native-http-bridge,native-provider-receipts,native-child-preflight,authenticated-native-gateway,paid-dollar-ceiling,native-trust-boundary,shared-native-phase,shared-native-policy,shared-native-container}.mjs "$RUNNER_TEMP/native-host/"
+            cp scripts/benchmark/{native-runtime-capsule,native-dispatch-contract,native-dispatch-cli,native-development-host,native-development-child,native-http-bridge,native-provider-receipts,native-child-preflight,native-request-admission,authenticated-native-gateway,paid-dollar-ceiling,native-trust-boundary,shared-native-phase,shared-native-policy,shared-native-container}.mjs "$RUNNER_TEMP/native-host/"
             node "$RUNNER_TEMP/native-host/native-dispatch-cli.mjs" verify "$RUNNER_TEMP/original-agent-request.md" "$RUNNER_TEMP/native-benchmark.json"
           else
             echo '{"native":false}' > "$RUNNER_TEMP/native-benchmark.json"
@@ -153,6 +153,7 @@ jobs:
           KATIE_BENCHMARK_PAID_EXECUTION: ${{ vars.KATIE_BENCHMARK_PAID_EXECUTION }}
           KATIE_BENCHMARK_APPROVED_ARM_USD_CENTS: ${{ vars.KATIE_BENCHMARK_APPROVED_ARM_USD_CENTS }}
           KATIE_BENCHMARK_APPROVED_MAX_USD_MICROS_PER_MILLION: ${{ vars.KATIE_BENCHMARK_APPROVED_MAX_USD_MICROS_PER_MILLION }}
+          KATIE_BENCHMARK_GATEWAY_DIAGNOSTICS: enabled
           KATIE_NATIVE_EVIDENCE_FILE: ${{ runner.temp }}/native-metered-review.json
           KATIE_NATIVE_CHECKPOINT_BRANCH: ${{ steps.task.outputs.branch }}
           GH_TOKEN: ${{ github.token }}
