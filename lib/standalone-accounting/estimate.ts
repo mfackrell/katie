@@ -1,14 +1,14 @@
 import { createHash } from "node:crypto";
-import { deepFreeze, getModelPrice, priceTokenUsage, PRICING_VERSION, OPENAI_NO_FEE_CACHE_RETENTIONS, type AccountingProvider, type ModelPrice } from "./pricing";
+import { deepFreeze, getModelPrice, priceTokenUsage, PRICING_SNAPSHOT, type PricingSnapshot, OPENAI_NO_FEE_CACHE_RETENTIONS, type AccountingProvider, type ModelPrice } from "./pricing";
 /** Changing counting/admissibility rules requires a new estimator identity. */
-export const ESTIMATOR_VERSION = "standalone-estimator-v5";
+export const ESTIMATOR_VERSION = "standalone-estimator-v6";
 
 export type JsonValue = null | boolean | number | string | JsonValue[] | { [key:string]: JsonValue };
 export type JsonObject = { [key:string]: JsonValue };
 export type FrozenPreparedRequest = Readonly<{schemaVersion:"standalone-request-v1";provider:AccountingProvider;model:string;endpoint:string;payload:JsonObject;hash:string;serializedBody:string}>;
 export type StandaloneEstimate = {
   status:"estimated"|"unsupported";pricingVersion:string;estimatorVersion:string;requestHash:string;currency:"USD";isCeiling:false;
-  estimatedCostMicrousd:string|null;reservationMicrousd:string|null;inputTokens:number;outputAllowance:number;imageTokens:number;cacheWriteInputAllowance:number;cacheWriteTtl:"5m"|null;
+  estimatedCostMicrousd:string|null;reservationMicrousd:string|null;inputTokens:number;outputAllowance:number;imageTokens:number;cacheWriteInputAllowance:number;cacheWriteTtl:"5m"|"30m"|"12h"|null;
   issues:string[];assumptions:string[];breakdown:Array<{dimension:string;tokens:number;costMicrousd:string}>;
 };
 export function canonicalJson(value: unknown): string {
@@ -78,10 +78,10 @@ function validEndpoint(r:FrozenPreparedRequest):boolean {
   if(r.provider==="anthropic")return path==="/v1/messages";
   return ["/v1/responses","/v1/chat/completions","responses","chat-completions"].includes(path);
 }
-export function estimatePreparedRequest(request:FrozenPreparedRequest):StandaloneEstimate {
+export function estimatePreparedRequest(request:FrozenPreparedRequest,snapshot:PricingSnapshot=PRICING_SNAPSHOT):StandaloneEstimate {
   const issues:string[]=[];const assumptions=["Input text allowance is one token per UTF-8 byte plus framing allowance; it is an estimate, not a provider token count or guaranteed spending ceiling.","All allowed output tokens are reserved, including hidden reasoning/thinking. No future cache-hit discount is assumed."];
   let textTokens=256,imageTokens=0,outputAllowance=0,cacheBreakpoints=0,cachePolicyValid=true;
-  const price=getModelPrice(request.provider,request.model),body=request.payload;
+  const price=getModelPrice(request.provider,request.model,snapshot),body=request.payload;
   if(request.schemaVersion!=="standalone-request-v1")issues.push("Unsupported prepared request schema version");
   try {if(freezePreparedRequest(request.provider,request.model,request.endpoint,body).hash!==request.hash||canonicalJson(body)!==request.serializedBody)issues.push("Prepared request hash or serialized body mismatch");}catch{issues.push("Invalid prepared request");}
   if(!price)issues.push("No reviewed immutable price for this exact provider/model");
@@ -90,16 +90,21 @@ export function estimatePreparedRequest(request:FrozenPreparedRequest):Standalon
   if(price?.supportsStreaming===false&&body.stream===true)issues.push("Streaming is unsupported for this exact model");
   if(body.model!==undefined&&body.model!==request.model)issues.push("Body model differs from prepared model");
   if(request.provider==="google") {const pathModel=request.endpoint.match(/\/models\/([^/]+):/);if(pathModel&&decodeURIComponent(pathModel[1])!==request.model)issues.push("Google endpoint model differs from prepared model");}
-  const topAllowed=request.provider==="google"?"model contents generationConfig config systemInstruction safetySettings tools toolConfig cachedContent":"model messages input instructions system max_tokens max_output_tokens max_completion_tokens stream stream_options temperature top_p stop stop_sequences seed presence_penalty frequency_penalty logprobs top_logprobs response_format text reasoning reasoning_effort store metadata user n tools tool_choice parallel_tool_calls service_tier"+(request.provider==="anthropic"?" thinking output_config cache_control":request.provider==="openai"?" prompt_cache_key prompt_cache_retention":"");
+  const topAllowed=request.provider==="google"?"model contents generationConfig config systemInstruction safetySettings tools toolConfig cachedContent":"model messages input instructions system max_tokens max_output_tokens max_completion_tokens stream stream_options temperature top_p stop stop_sequences seed presence_penalty frequency_penalty logprobs top_logprobs response_format text reasoning reasoning_effort store metadata user n tools tool_choice parallel_tool_calls service_tier"+(request.provider==="anthropic"?" thinking output_config cache_control":request.provider==="openai"?" prompt_cache_key prompt_cache_retention prompt_cache_options":"");
   for(const key of Object.keys(body))if(!topAllowed.split(" ").includes(key))issues.push("Unpriced request field: "+key);
   if(request.provider==="openai"&&(body.prompt_cache_key!==undefined||body.prompt_cache_retention!==undefined)) {
     const retentions=Object.hasOwn(OPENAI_NO_FEE_CACHE_RETENTIONS,request.model)?OPENAI_NO_FEE_CACHE_RETENTIONS[request.model]:undefined;
-    if(!retentions)issues.push("No reviewed no-fee cache metadata policy for this exact model");
+    if(!retentions&&!price?.cacheWriteNanoUsd)issues.push("No reviewed no-fee cache metadata policy for this exact model");
     const key=body.prompt_cache_key;
     if(key!==undefined&&(typeof key!=="string"||!key.trim()||Array.from(key).length>64||/[\u0000-\u001f\u007f\ud800-\udfff]/u.test(key)))issues.push("Invalid OpenAI prompt_cache_key; expected a nonempty well-formed string of at most 64 characters without controls");
     const retention=body.prompt_cache_retention;
     if(retention!==undefined&&(typeof retention!=="string"||!retentions?.includes(retention)))issues.push("Unsupported OpenAI prompt_cache_retention for this exact model");
     assumptions.push("OpenAI cache key/legacy retention metadata is frozen with the request. Reviewed retention adds no cache-write fee; the quote reserves full uncached input and assumes no cache hit.");
+  }
+  const openAiCacheTtl=String(obj(body.prompt_cache_options).ttl??'30m');
+  if(body.prompt_cache_options!==undefined){
+    const options=obj(body.prompt_cache_options);
+    if(request.provider!=='openai'||!price?.cacheWriteNanoUsd||Object.keys(options).some(k=>k!=='ttl')||!['30m','12h'].includes(openAiCacheTtl)||openAiCacheTtl==='12h'&&!price.cacheWrite12hNanoUsd)issues.push('Unsupported OpenAI cache lifetime or options');
   }
   if(body.cachedContent!==undefined)issues.push("Unsupported billing dimension: cachedContent");
   if(body.service_tier!==undefined&&body.service_tier!=="default")issues.push("Unsupported service tier");
@@ -249,22 +254,24 @@ export function estimatePreparedRequest(request:FrozenPreparedRequest):Standalon
   if(!positiveInt(outputAllowance))issues.push("Missing finite positive output allowance");
   const inputTokens=textTokens+imageTokens;
   if(cacheBreakpoints>4){issues.push("Claude cache breakpoint limit exceeded");cachePolicyValid=false;}
-  const cacheWriteInputAllowance=cacheBreakpoints?inputTokens:0;
-  if(cacheWriteInputAllowance)assumptions.push("Claude five-minute caching reserves the entire estimated input allowance at the reviewed five-minute write rate (1.25x), including uncached suffix/framing, and assumes no cache hit. This is a deliberately conservative full-input allowance rather than an exact cached-prefix token count.");
+  const cacheWriteInputAllowance=cacheBreakpoints||request.provider==="openai"&&price?.cacheWriteNanoUsd?inputTokens:0;
+  const cacheWriteTtl=cacheBreakpoints?"5m":request.provider==="openai"&&price?.cacheWriteNanoUsd?openAiCacheTtl as "30m"|"12h":null;
+  if(request.provider==="openai"&&price?.cacheWriteNanoUsd)assumptions.push("OpenAI caching reserves full input at the selected write rate, with no assumed cache-read discount.");
+  if(cacheBreakpoints)assumptions.push("Claude five-minute caching reserves the entire estimated input allowance at the reviewed five-minute write rate (1.25x), including uncached suffix/framing, and assumes no cache hit. This is a deliberately conservative full-input allowance rather than an exact cached-prefix token count.");
   if(price&&inputTokens+outputAllowance>price.maxContextTokens)issues.push("Estimated input plus output exceeds supported context window");
   if(price&&outputAllowance>price.maxOutputTokens)issues.push("Output allowance exceeds supported model limit");
-  const cost=price&&!issues.length?priceTokenUsage(price,inputTokens,outputAllowance,0,cacheWriteInputAllowance):null;
-  const inputCost=cost&&price?priceTokenUsage(price,inputTokens,0,0,cacheWriteInputAllowance):"0";
-  return deepFreeze({status:issues.length?"unsupported":"estimated",pricingVersion:PRICING_VERSION,estimatorVersion:ESTIMATOR_VERSION,requestHash:request.hash,currency:"USD",isCeiling:false,estimatedCostMicrousd:cost,reservationMicrousd:cost,inputTokens,outputAllowance:Number.isFinite(outputAllowance)?outputAllowance:0,imageTokens,cacheWriteInputAllowance,cacheWriteTtl:cacheBreakpoints&&cachePolicyValid?"5m":null,issues:[...new Set(issues)],assumptions:[...new Set(assumptions)],breakdown:cost&&price?[{dimension:cacheWriteInputAllowance?"full input allowance at five-minute cache-write rate":"input allowance (including images)",tokens:inputTokens,costMicrousd:inputCost},{dimension:"output allowance (including reasoning)",tokens:outputAllowance,costMicrousd:(BigInt(cost)-BigInt(inputCost)).toString()}]:[]});
+  const cost=price&&!issues.length?priceTokenUsage(price,inputTokens,outputAllowance,0,cacheWriteInputAllowance,cacheWriteTtl??"5m"):null;
+  const inputCost=cost&&price?priceTokenUsage(price,inputTokens,0,0,cacheWriteInputAllowance,cacheWriteTtl??"5m"):"0";
+  return deepFreeze({status:issues.length?"unsupported":"estimated",pricingVersion:snapshot.version,estimatorVersion:ESTIMATOR_VERSION,requestHash:request.hash,currency:"USD",isCeiling:false,estimatedCostMicrousd:cost,reservationMicrousd:cost,inputTokens,outputAllowance:Number.isFinite(outputAllowance)?outputAllowance:0,imageTokens,cacheWriteInputAllowance,cacheWriteTtl:cachePolicyValid?cacheWriteTtl:null,issues:[...new Set(issues)],assumptions:[...new Set(assumptions)],breakdown:cost&&price?[{dimension:cacheWriteInputAllowance?"full input allowance at selected cache-write rate":"input allowance (including images)",tokens:inputTokens,costMicrousd:inputCost},{dimension:"output allowance (including reasoning)",tokens:outputAllowance,costMicrousd:(BigInt(cost)-BigInt(inputCost)).toString()}]:[]});
 }
-export type BillableUsage = { inputTokens:number;outputTokens:number;cachedInputTokens?:number;cacheReadInputTokens?:number;cacheWriteInputTokens?:number;cacheCreationInputTokens?:number;cacheWriteTtl?:"5m";[key:string]:unknown };
-export function actualCostFromUsage(request:FrozenPreparedRequest,usage:BillableUsage):{actualMicrousd:string;pricingVersion:string} {
-  const estimate=estimatePreparedRequest(request);if(estimate.status!=="estimated")throw new Error("Cannot price unsupported request: "+estimate.issues.join("; "));
-  const price=getModelPrice(request.provider,request.model)!;
+export type BillableUsage = { inputTokens:number;outputTokens:number;cachedInputTokens?:number;cacheReadInputTokens?:number;cacheWriteInputTokens?:number;cacheCreationInputTokens?:number;cacheWriteTtl?:"5m"|"30m"|"12h";[key:string]:unknown };
+export function actualCostFromUsage(request:FrozenPreparedRequest,usage:BillableUsage,snapshot:PricingSnapshot=PRICING_SNAPSHOT):{actualMicrousd:string;pricingVersion:string} {
+  const estimate=estimatePreparedRequest(request,snapshot);if(estimate.status!=="estimated")throw new Error("Cannot price unsupported request: "+estimate.issues.join("; "));
+  const price=getModelPrice(request.provider,request.model,snapshot)!;
   for(const key of ["toolCalls","audioTokens","imageOutputTokens"])if(usage[key]!==undefined&&usage[key]!==0)throw new Error("Unsupported usage dimension: "+key);
   if(usage.cachedInputTokens!==undefined&&usage.cacheReadInputTokens!==undefined&&usage.cachedInputTokens!==usage.cacheReadInputTokens)throw new Error("Conflicting cache-read usage counts");
   if(usage.cacheWriteInputTokens!==undefined&&usage.cacheCreationInputTokens!==undefined&&usage.cacheWriteInputTokens!==usage.cacheCreationInputTokens)throw new Error("Conflicting cache-write usage counts");
   const writes=usage.cacheWriteInputTokens??usage.cacheCreationInputTokens??0;
-  if(writes&&(request.provider!=="anthropic"||usage.cacheWriteTtl!=="5m"))throw new Error("Cache-write TTL must be verified as five minutes before settlement");
-  return {actualMicrousd:priceTokenUsage(price,usage.inputTokens,usage.outputTokens,usage.cachedInputTokens??usage.cacheReadInputTokens??0,writes),pricingVersion:PRICING_VERSION};
+  if(writes&&!(request.provider==="anthropic"&&usage.cacheWriteTtl==="5m"||request.provider==="openai"&&["30m","12h"].includes(String(usage.cacheWriteTtl))))throw new Error("Cache-write TTL must be verified before settlement");
+  return {actualMicrousd:priceTokenUsage(price,usage.inputTokens,usage.outputTokens,usage.cachedInputTokens??usage.cacheReadInputTokens??0,writes,String(usage.cacheWriteTtl??"5m")),pricingVersion:snapshot.version};
 }

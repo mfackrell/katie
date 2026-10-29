@@ -6,8 +6,8 @@ Standalone inference is admitted by PostgreSQL immediately before each actual pr
 
 No dollar thresholds or timezone were supplied for this implementation. No values are seeded. Unconfigured accounts cannot dispatch paid requests.
 
-1. Review the additive migrations `supabase/migrations/20261028193000_standalone_provider_attempt_ledger.sql` and `supabase/migrations/20261029153000_standalone_deleted_scope_history.sql`. Production's only migration writer remains `.github/workflows/migrate.yml` → `scripts/run-migrations.mjs`; see `docs/migration-authority.md`. Do not apply these migrations through a second writer.
-2. Provision verified Auth owner/standalone actor/conversation associations through the service-only `standalone_bind_scope(owner_uuid, actor_uuid, chat_uuid)` RPC. This administrative enrollment is deliberately absent from browser endpoints. Validate the owner against the Auth account before provisioning. Each conversation has one owner; saved actor/chat associations and standalone status are checked again at admission and dispatch.
+1. Review the additive migrations `supabase/migrations/20261028193000_standalone_provider_attempt_ledger.sql` and `supabase/migrations/20261029153000_standalone_deleted_scope_history.sql`, and `supabase/migrations/20261029170000_standalone_pricing_and_enrollment.sql`. Production's only migration writer remains `.github/workflows/migrate.yml` → `scripts/run-migrations.mjs`; see `docs/migration-authority.md`. Do not apply these migrations through a second writer.
+2. Standard conversation creation now authenticates the owner's Supabase Auth session and atomically creates the chat, memory rows and spending binding. All normal creation screens send that session; the new-conversation screen includes sign-in. Browser owner IDs cannot enroll, overwrite or claim an existing unbound/foreign/deleted conversation. Existing legacy chats require an administrator to verify the Auth owner and enroll via service-only `standalone_bind_scope`; ordinary chat never claims them automatically.
 3. Sign in with that owner account. Open Usage → Settings in the standalone conversation. Explicitly enter the per-call USD threshold, cumulative original-request USD threshold, and IANA daily reset timezone. Both thresholds and timezone are required. Dollar inputs accept up to six decimal places. They are thresholds for approval, not guaranteed invoice caps.
 4. Review the call-path inventory and supported immutable price snapshot before enabling user traffic. Unsupported billing dimensions visibly stop before transmission. No automatic fallback bypass is provided. A provider-resolved model must also have an exact reviewed price; an unreviewed dated response model keeps known tokens visible and cost uncertain until supported reconciliation.
 5. Run the offline CI gate and isolated database/browser tests described in the verification report. Paid live verification requires separate owner approval and an explicit spending cap.
@@ -60,3 +60,50 @@ Preserve all ledger, pricing, workflow, ownership, receipt, and event records. D
 - Run any paid provider verification, with an explicit cap.
 
 None of these production actions is part of implementation authorization.
+
+## Final release/configuration sequence
+
+1. Review PR #822's exact final SHA and its complete hosted gate. Merge/release
+   only after Mark authorizes production. This work does not perform those actions.
+2. Apply all additive migrations exclusively through the existing
+   `migrate.yml` → `scripts/run-migrations.mjs` writer. Never edit applied migration
+   files or use a second SQL writer. Retain all accounting history on rollback.
+3. Verify the deployment has its existing Supabase Auth public URL/key, server-only
+   service-role access and `CRON_SECRET`. The configured Vercel cron calls
+   `/api/internal/standalone-pricing/refresh` every 30 minutes. First dispatch also
+   refreshes if no current snapshot exists or its observation is older than 24h.
+   A fresh cached snapshot survives source outages; stale/missing prices block.
+4. Sign in normally and create a standard conversation. Its ownership is enrolled
+   atomically. For an existing conversation, verify the owner and use the existing
+   service-only binding RPC once; never bulk-claim conversations by browser IDs.
+5. Collect Mark's per-call USD threshold, original-request USD threshold, IANA
+   timezone and production release decision together. Save the settings through
+   the authenticated usage controls. Until configured, paid dispatch stays blocked.
+6. Verify normal creation, usage visibility, threshold pause, approval/cancellation
+   and refresh/resume. Any live paid acceptance run requires separate authorization.
+
+No named-model spending ban remains. Qualified helper models reach the same
+payload estimate, thresholds and exact-attempt approval as ordinary chat. A
+changed applicable price before transmission creates a new paused quote and
+preserves the old one. Dispatch checks active price identity under a SQL lock;
+settlement and replay retain the price version applicable at dispatch.
+
+### Explicit compatibility limits
+
+Supported: exact catalog-listed first-party standard text/reasoning models across
+OpenAI, Anthropic, Google and xAI; both supported OpenAI endpoints; function tools,
+structured text, reviewed image tokenization, ordinary Katie-storage image URLs
+(frozen to bytes before approval), saved-attachment selection, conversation
+creation, approval/reduction/cancellation/resume, and daily provider usage.
+
+Explicitly unsupported financial dimensions: native audio/video/PDF billing,
+image generation, embeddings, actor calibration without a conversation-bound owner, paid built-in search/computer-use tools, Google file
+upload/storage, RunPod/GPU work, nonstandard service tiers, explicit Google cached
+storage, Claude one-hour cache writes, and image tokenization without a reviewed
+formula for that exact model. Arbitrary external image URLs are not fetched.
+These cases return specific pre-dispatch accounting errors; they are never
+silently routed around the ledger or reported as free. Existing extracted-text
+PDF processing and reviewed inline images continue through their guarded paths.
+Unknown/quarantined model IDs show why pricing is unavailable instead of using
+another provider's rate or a guessed alias. Developer Orchestrator controls are
+unchanged.

@@ -1,10 +1,10 @@
 /** Reviewed first-party global standard rates. Never derive money from model discovery. */
 export const PRICING_VERSION = "standalone-pricing-2026-10-28-v3";
 export type AccountingProvider = "openai" | "anthropic" | "google" | "grok";
-export type PriceTier = { aboveInputTokens: number; inclusive?: boolean; inputNanoUsd: string; outputNanoUsd: string; cachedInputNanoUsd?: string;cacheWrite5mNanoUsd?:string };
+export type PriceTier = { aboveInputTokens: number; inclusive?: boolean; inputNanoUsd: string; outputNanoUsd: string; cachedInputNanoUsd?: string;cacheWrite5mNanoUsd?:string;cacheWriteNanoUsd?:string;cacheWrite12hNanoUsd?:string };
 export type ModelPrice = {
   provider: AccountingProvider; model: string; inputNanoUsd: string; outputNanoUsd: string;
-  cachedInputNanoUsd?: string;cacheWrite5mNanoUsd?:string; maxContextTokens: number; maxOutputTokens: number;
+  cachedInputNanoUsd?: string;cacheWrite5mNanoUsd?:string;cacheWriteNanoUsd?:string;cacheWrite12hNanoUsd?:string; maxContextTokens: number; maxOutputTokens: number;
   responsesOnly?: boolean; supportsStreaming?: boolean;
   vision?: { kind: "tiles"; base: number; tile: number } | { kind: "claude"; maximum: number } | { kind: "gemini25" };
   tiers?: PriceTier[]; source: string;
@@ -45,20 +45,22 @@ export const OPENAI_NO_FEE_CACHE_RETENTIONS: Readonly<Record<string, readonly st
   "gpt-5.4-pro":["in_memory"],"gpt-5.4-pro-2026-03-05":["in_memory"],
   "gpt-5.5-pro":["24h"],"gpt-5.5-pro-2026-04-23":["24h"],"o3-pro":["in_memory"],
 });
-export function getModelPrice(provider: AccountingProvider, model: string): ModelPrice | undefined {
+export type PricingSnapshot = {version:string;verifiedAt?:string;currency:string;unit:string;rateUnit:string;scope:string;sources:string[];models:ModelPrice[]};
+export function getModelPrice(provider: AccountingProvider, model: string, snapshot:PricingSnapshot=PRICING_SNAPSHOT): ModelPrice | undefined {
   // Deliberately no suffix stripping, family matching, registry fallback or guessed aliases.
-  return PRICING_SNAPSHOT.models.find(row => row.provider === provider && row.model === model);
+  return snapshot.models.find(row => row.provider === provider && row.model === model);
 }
-export function selectPriceTier(price: ModelPrice, inputTokens: number): Pick<ModelPrice,"inputNanoUsd"|"outputNanoUsd"|"cachedInputNanoUsd"|"cacheWrite5mNanoUsd"> {
+export function selectPriceTier(price: ModelPrice, inputTokens: number): Pick<ModelPrice,"inputNanoUsd"|"outputNanoUsd"|"cachedInputNanoUsd"|"cacheWrite5mNanoUsd"|"cacheWriteNanoUsd"|"cacheWrite12hNanoUsd"> {
   return [...(price.tiers ?? [])].reverse().find(tier => tier.inclusive ? inputTokens >= tier.aboveInputTokens : inputTokens > tier.aboveInputTokens) ?? price;
 }
 /** Input is the total prompt: uncached + cache reads + verified five-minute writes. */
-export function priceTokenUsage(price: ModelPrice, inputTokens: number, outputTokens: number, cachedInputTokens = 0,cacheWriteInputTokens=0): string {
+export function priceTokenUsage(price: ModelPrice, inputTokens: number, outputTokens: number, cachedInputTokens = 0,cacheWriteInputTokens=0,cacheWriteTtl:string="5m"): string {
   for (const count of [inputTokens,outputTokens,cachedInputTokens,cacheWriteInputTokens]) if (!Number.isSafeInteger(count)||count<0) throw new Error("Invalid token usage");
   if (BigInt(cachedInputTokens)+BigInt(cacheWriteInputTokens)>BigInt(inputTokens)) throw new Error("Cache reads and writes exceed total input");
   const tier=selectPriceTier(price,inputTokens);
   if (cachedInputTokens && !tier.cachedInputNanoUsd) throw new Error("Unpriced cache dimension");
-  if(cacheWriteInputTokens&&!tier.cacheWrite5mNanoUsd)throw new Error("Unpriced five-minute cache-write dimension");
-  const nano = (BigInt(inputTokens)-BigInt(cachedInputTokens)-BigInt(cacheWriteInputTokens))*BigInt(tier.inputNanoUsd)+BigInt(cachedInputTokens)*BigInt(tier.cachedInputNanoUsd??0)+BigInt(cacheWriteInputTokens)*BigInt(tier.cacheWrite5mNanoUsd??0)+BigInt(outputTokens)*BigInt(tier.outputNanoUsd);
+  const writeRate=cacheWriteTtl==="5m"?tier.cacheWrite5mNanoUsd:cacheWriteTtl==="30m"?tier.cacheWriteNanoUsd:cacheWriteTtl==="12h"?tier.cacheWrite12hNanoUsd:undefined;
+  if(cacheWriteInputTokens&&writeRate===undefined)throw new Error("Unpriced cache-write dimension");
+  const nano = (BigInt(inputTokens)-BigInt(cachedInputTokens)-BigInt(cacheWriteInputTokens))*BigInt(tier.inputNanoUsd)+BigInt(cachedInputTokens)*BigInt(tier.cachedInputNanoUsd??0)+BigInt(cacheWriteInputTokens)*BigInt(writeRate??0)+BigInt(outputTokens)*BigInt(tier.outputNanoUsd);
   return ((nano+999n)/1000n).toString();
 }

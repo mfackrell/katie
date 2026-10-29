@@ -1,3 +1,4 @@
+import type { PricingSnapshot } from './pricing';
 import { getSupabaseAdminClient } from '@/lib/data/supabase/admin';
 import type { AdmitAttemptInput, ApprovalInput, LedgerAttempt, LedgerConfiguration, LedgerSnapshot, ResponseCheckpoint, SettlementInput } from './types';
 export class StandaloneAccountingError extends Error {
@@ -21,6 +22,9 @@ export function createStandaloneLedger(db:LedgerDatabase=getSupabaseAdminClient(
   return {
     authorizeScope:(ownerId:string,actorId:string,chatId:string)=>rpc<boolean>('authorize_scope',{p_owner:ownerId,p_actor:actorId,p_chat:chatId}),
     bindScope:(ownerId:string,actorId:string,chatId:string)=>rpc<boolean>('bind_scope',{p_owner:ownerId,p_actor:actorId,p_chat:chatId}),
+    loadPricing:(version:string|null)=>rpc<{snapshot:PricingSnapshot;retrievedAt:string}|null>('load_pricing',{p_version:version}),
+    publishPricing:(version:string,snapshot:PricingSnapshot,sourceHash:string,rejected:Record<string,string>)=>rpc<boolean>('publish_pricing',{p_version:version,p_metadata:snapshot,p_source_hash:sourceHash,p_rejected:rejected}),
+    createConversation:(ownerId:string,actorId:string,chatId:string,title:string)=>rpc<{id:string;actor_id:string;title:string;created_at:string;updated_at:string}>('create_conversation',{p_owner:ownerId,p_actor:actorId,p_chat:chatId,p_title:title}),
     registerPricing:(version:string,metadata:Record<string,unknown>)=>rpc<boolean>('register_pricing',{p_version:version,p_metadata:metadata}),
     configure:(ownerId:string,config:{timezone:string;perCallLimitMicrousd:string|null;requestLimitMicrousd:string|null})=>rpc<LedgerConfiguration>('configure',{p_owner:ownerId,p_timezone:config.timezone,p_call:config.perCallLimitMicrousd,p_request:config.requestLimitMicrousd}),
     snapshot:(ownerId:string)=>rpc<LedgerSnapshot>('snapshot',{p_owner:ownerId}),
@@ -28,6 +32,7 @@ export function createStandaloneLedger(db:LedgerDatabase=getSupabaseAdminClient(
     admit:(i:AdmitAttemptInput)=>rpc<LedgerAttempt>('admit',{p_owner:i.ownerId,p_actor:i.actorId,p_chat:i.chatId,p_request:i.requestId,p_key:i.attemptKey,p_hash:i.preparedHash,p_payload:i.preparedPayload,p_pricing:i.pricingVersion,p_provider:i.provider,p_model:i.model,p_reserved:i.reservedMicrousd,p_category:i.category,p_estimate:i.preflightEstimate,p_estimator:i.estimatorVersion,p_reason:i.reason}),
     approve:(i:ApprovalInput)=>rpc<LedgerAttempt>('approve',{p_owner:i.ownerId,p_attempt:i.attemptId,p_hash:i.preparedHash,p_pricing:i.pricingVersion,p_revision:i.budgetRevision,p_reserved:i.reservedMicrousd}),
     revise:(ownerId:string,attemptId:string,input:{preparedHash:string;preparedPayload:Record<string,unknown>;pricingVersion:string;reservedMicrousd:string;tradeoffs:string;preflightEstimate:unknown;estimatorVersion:string})=>rpc<LedgerAttempt>('revise',{p_owner:ownerId,p_attempt:attemptId,p_hash:input.preparedHash,p_payload:input.preparedPayload,p_pricing:input.pricingVersion,p_reserved:input.reservedMicrousd,p_tradeoffs:input.tradeoffs,p_estimate:input.preflightEstimate,p_estimator:input.estimatorVersion}),
+    reprice:(ownerId:string,attemptId:string,pricingVersion:string,estimate:Record<string,unknown>)=>rpc<LedgerAttempt>('reprice_attempt',{p_owner:ownerId,p_attempt:attemptId,p_pricing:pricingVersion,p_estimate:estimate}),
     claimDispatch:(ownerId:string,attemptId:string)=>rpc<LedgerAttempt|null>('claim_dispatch',{p_owner:ownerId,p_attempt:attemptId}),
     settle:(i:SettlementInput)=>rpc<LedgerAttempt>('settle',{p_owner:i.ownerId,p_attempt:i.attemptId,p_provider:i.provider,p_receipt:i.providerReceiptId,p_actual:i.actualMicrousd,p_usage:i.usage,p_evidence:i.evidence}),
     markUncertain:(ownerId:string,attemptId:string,reason='Provider outcome unknown')=>rpc<LedgerAttempt>('mark_uncertain',{p_owner:ownerId,p_attempt:attemptId,p_reason:reason}),

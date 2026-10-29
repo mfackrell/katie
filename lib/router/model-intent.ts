@@ -7,7 +7,7 @@ import {
 import { lookupRegistryModel, type RegistryRoutingModel } from "@/lib/models/registry";
 import { LlmProvider } from "@/lib/providers/types";
 import type { ActorRoutingIntent, ActorRoutingProfile } from "@/lib/types/chat";
-import { isTerminalAttemptError, isPremiumAutomaticModel, withProviderAttemptTimeout } from "@/lib/collaboration/attempt-policy";
+import { isTerminalAttemptError, withProviderAttemptTimeout } from "@/lib/collaboration/attempt-policy";
 import { runWithStandaloneActivity } from "@/lib/standalone-accounting/context";
 
 export type ProviderName = "openai" | "google" | "grok" | "anthropic";
@@ -798,7 +798,6 @@ function isControlPlaneJsonInstructionCompatible(providerName: ProviderName, mod
 }
 
 function isEligibleControlPlaneModel(providerName: ProviderName, modelId: string, registryLookup?: RegistryLookup): boolean {
-  if (isPremiumAutomaticModel(providerName, modelId)) return false;
   const registry = lookupRegistryModel(registryLookup, providerName, modelId);
   const routingEligibility = registry?.routing_eligibility ?? "restricted";
   if (routingEligibility === "disabled" || routingEligibility === "manual_override_only") {

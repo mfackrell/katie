@@ -34,3 +34,9 @@ export async function ownerSessionBearer(): Promise<string | null> {
     if (timeout !== undefined) clearTimeout(timeout);
   }
 }
+
+/** Conversation creation uses the same verified owner session as paid chat. */
+export async function ownerConversationHeaders():Promise<Record<string,string>>{
+  const bearer=await ownerSessionBearer();
+  return {'Content-Type':'application/json',...(bearer?{Authorization:`Bearer ${bearer}`}:{})};
+}

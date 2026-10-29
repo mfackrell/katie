@@ -1,3 +1,4 @@
+import { PRICING_SNAPSHOT, type PricingSnapshot } from '../lib/standalone-accounting/pricing';
 import test, { type TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 import OpenAI from 'openai';
@@ -23,6 +24,7 @@ function fakeLedger(paused = false) {
   const events: string[] = [];
   const identifiers: Array<{ requestId: string | null; responseId: string | null }> = [];
   const service = {
+    async loadPricing() { return {snapshot:PRICING_SNAPSHOT,retrievedAt:new Date().toISOString()}; },
     async registerPricing() { events.push('pricing'); return true; },
     async lookupAttempt(_owner: string, _request: string, key: string) { return attempts.find(item => item.attempt_key === key) ?? null; },
     async admit(input: AdmitAttemptInput) {
@@ -439,4 +441,77 @@ test('invalid mixed/empty/unscoped function Google inputs fail before estimation
     })));
     assert.equal(f.attempts.length, 0); assert.equal(f.sent.length, 0);
   }
+});
+
+test('cost admission allows a cheap Pro name and pauses an expensive ordinary name; approval uses its historical price after refresh',async()=>{
+ for(const [model,inputNanoUsd,shouldPause] of [['fixture-pro','100',false],['fixture-ordinary','1000000',true]] as const){
+  const f=fakeLedger();let sends=0;
+  const snapshot={...PRICING_SNAPSHOT,version:'fixture-price-v1',models:[{provider:'openai' as const,model,inputNanoUsd,outputNanoUsd:'100',maxContextTokens:100000,maxOutputTokens:1000,source:'fixture'}]};
+  let current:PricingSnapshot={...snapshot};
+  f.service.loadPricing=async version=>({snapshot:version===snapshot.version?snapshot:current,retrievedAt:new Date().toISOString()});
+  const admit=f.service.admit;f.service.admit=async input=>{const a=await admit(input);a.state=BigInt(input.reservedMicrousd)>5000n?'paused':'reserved';return a;};
+  const send=createAccountingFetch('openai',async()=>{sends++;return receipt();},f.factory);
+  const payload={method:'POST',body:JSON.stringify({model,input:'hello',max_output_tokens:10})};
+  const execute=()=>runWithStandaloneAccounting(context,()=>send('https://api.openai.com/v1/responses',payload));
+  if(shouldPause){
+   await assert.rejects(execute(),{code:'standalone_approval_required'});assert.equal(sends,0);
+   const approved=f.attempts[0];assert.equal(approved.pricing_version,snapshot.version);
+   approved.state='reserved';await execute();assert.equal(sends,1);
+   assert.equal(approved.actual_microusd,'100002','receipt uses the v1 rate applicable at dispatch');
+   current={...snapshot,version:'fixture-price-v2',models:[{...snapshot.models[0],inputNanoUsd:'2000000'}]};
+   await execute();assert.equal(sends,1,'settled approval replay does not dispatch');
+  }else{await execute();assert.equal(sends,1);assert.equal(f.attempts[0].state,'settled');}
+ }
+});
+
+test('current OpenAI cache-write receipts reconcile against the selected TTL instead of losing write charges',async()=>{
+ const f=fakeLedger();const snapshot={...PRICING_SNAPSHOT,version:'fixture-cache-v1',models:[{provider:'openai' as const,model:'fixture-sol',inputNanoUsd:'1000',outputNanoUsd:'2000',cachedInputNanoUsd:'100',cacheWriteNanoUsd:'1250',cacheWrite12hNanoUsd:'2500',maxContextTokens:100000,maxOutputTokens:10000,source:'fixture'}]};
+ f.service.loadPricing=async()=>({snapshot,retrievedAt:new Date().toISOString()});
+ const send=createAccountingFetch('openai',async()=>new Response(JSON.stringify({id:'cache-receipt',model:'fixture-sol',usage:{input_tokens:100,output_tokens:10,input_tokens_details:{cached_tokens:20,cache_write_tokens:30}}})),f.factory);
+ await runWithStandaloneAccounting(context,()=>send('https://api.openai.com/v1/responses',{method:'POST',body:JSON.stringify({model:'fixture-sol',input:'hello',max_output_tokens:10,prompt_cache_key:'scope',prompt_cache_options:{ttl:'12h'}})}));
+ assert.equal(f.attempts[0].actual_microusd,'147');assert.equal(f.attempts[0].usage?.cacheWriteInputTokens,30);assert.equal(f.attempts[0].usage?.cacheWriteTtl,'12h');
+});
+
+test('application storage image URLs are frozen before approval without fetching arbitrary external URLs',async t=>{
+ const before=process.env.NEXT_PUBLIC_SUPABASE_URL;process.env.NEXT_PUBLIC_SUPABASE_URL='https://storage.example.test';
+ t.after(()=>{if(before===undefined)delete process.env.NEXT_PUBLIC_SUPABASE_URL;else process.env.NEXT_PUBLIC_SUPABASE_URL=before;});
+ const bytes=Buffer.alloc(24);Buffer.from([137,80,78,71,13,10,26,10]).copy(bytes);bytes.writeUInt32BE(128,16);bytes.writeUInt32BE(128,20);
+ let reads=0,sends=0;const f=fakeLedger(true);
+ t.mock.method(globalThis,'fetch',async(url:RequestInfo|URL,init?:RequestInit)=>{reads++;assert.equal(String(url),'https://storage.example.test/storage/v1/object/sign/uploads/photo.png?token=fixture');assert.equal(init?.redirect,'error');assert.equal(init?.headers,undefined);return new Response(bytes,{headers:{'content-type':'image/png'}});});
+ const send=createAccountingFetch('openai',async()=>{sends++;return receipt();},f.factory);
+ const body={model:'gpt-4o',messages:[{role:'user',content:[{type:'image_url',image_url:{url:'https://storage.example.test/storage/v1/object/sign/uploads/photo.png?token=fixture'}}]}],max_tokens:10};
+ await assert.rejects(runWithStandaloneAccounting(context,()=>send('https://api.openai.com/v1/chat/completions',{method:'POST',body:JSON.stringify(body)})),{code:'standalone_approval_required'});
+ assert.equal(reads,1);assert.equal(sends,0);assert.ok(String(f.attempts[0].prepared_payload.serializedBody).includes('data:image/png;base64,'));assert.ok(!String(f.attempts[0].prepared_payload.serializedBody).includes('token=fixture'));
+ body.messages[0].content[0].image_url.url='https://untrusted.example.test/photo.png';
+ await assert.rejects(runWithStandaloneAccounting({...context,requestId:'external'},()=>send('https://api.openai.com/v1/chat/completions',{method:'POST',body:JSON.stringify(body)})),isStandaloneAccountingError);
+ assert.equal(reads,1,'untrusted URL was never fetched');assert.equal(sends,0);
+});
+
+test('a changed pending model price creates an unapproved replacement instead of spending on a stale approval',async()=>{
+ const f=fakeLedger(true);let sends=0;
+ const original:PricingSnapshot={...PRICING_SNAPSHOT,version:'fixture-old',models:[{...PRICING_SNAPSHOT.models[0]}]};
+ let current=original;
+ f.service.loadPricing=async version=>({snapshot:version===original.version?original:current,retrievedAt:new Date().toISOString()});
+ f.service.lookupAttempt=async()=>f.attempts.at(-1)??null;
+ f.service.reprice=async(_owner,id,version,estimate)=>{
+  const parent=f.attempts.find(a=>a.id===id)!;
+  const next={...parent,id:'repriced',state:'paused' as const,pricing_version:version,preflight_estimate:estimate,reserved_microusd:String(estimate.reservationMicrousd),supersedes_attempt_id:parent.id,pause_reason:'pricing_updated'};
+  parent.state='cancelled';f.attempts.push(next);return next;
+ };
+ const send=createAccountingFetch('openai',async()=>{sends++;return receipt();},f.factory);
+ const execute=()=>runWithStandaloneAccounting(context,()=>send('https://api.openai.com/v1/chat/completions',request));
+ await assert.rejects(execute(),{code:'standalone_approval_required'});
+ const old=f.attempts[0],oldEstimate=structuredClone(old.preflight_estimate);old.state='reserved';
+ current={...original,version:'fixture-new',models:[{...original.models[0],inputNanoUsd:'5000'}]};
+ await assert.rejects(execute(),{code:'standalone_approval_required'});assert.equal(sends,0);assert.equal(f.attempts.length,2);
+ assert.equal(old.state,'cancelled');assert.deepEqual(old.preflight_estimate,oldEstimate);assert.equal(f.attempts[1].pricing_version,current.version);
+ f.attempts[1].state='reserved';await execute();assert.equal(sends,1);assert.equal(f.attempts[1].actual_microusd,'700');
+});
+
+test('missing modern OpenAI write counts retain exposure rather than billing writes as zero',async()=>{
+ const f=fakeLedger();const snapshot={...PRICING_SNAPSHOT,version:'fixture-missing-write',models:[{provider:'openai' as const,model:'fixture-sol',inputNanoUsd:'1000',outputNanoUsd:'2000',cacheWriteNanoUsd:'1250',maxContextTokens:100000,maxOutputTokens:10000,source:'fixture'}]};
+ f.service.loadPricing=async()=>({snapshot,retrievedAt:new Date().toISOString()});
+ const send=createAccountingFetch('openai',async()=>new Response(JSON.stringify({id:'missing-write',usage:{input_tokens:100,output_tokens:10}})),f.factory);
+ await assert.rejects(runWithStandaloneAccounting(context,()=>send('https://api.openai.com/v1/responses',{method:'POST',body:JSON.stringify({model:'fixture-sol',input:'hello',max_output_tokens:10})})),{code:'standalone_usage_unpriced'});
+ assert.equal(f.attempts[0].state,'uncertain');assert.equal(f.attempts[0].actual_microusd,null);assert.equal(f.attempts[0].usage?.inputTokens,100);
 });

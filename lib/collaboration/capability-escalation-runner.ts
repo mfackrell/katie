@@ -1,5 +1,5 @@
 import { requireAgentResearch } from "@/lib/agents/policy";
-import { isTerminalAttemptError, assertAutomaticHelperModel } from "@/lib/collaboration/attempt-policy";
+import { isTerminalAttemptError } from "@/lib/collaboration/attempt-policy";
 import { runWithStandaloneActivity } from "@/lib/standalone-accounting/context";
 import {
   runCapabilityAwareGeneration,
@@ -381,7 +381,6 @@ export async function runOnDemandCapabilityEscalation(input: {
       }
 
       const helper = participant(selected.provider, selected.modelId);
-      assertAutomaticHelperModel(helper.provider, helper.modelId);
       usedParticipants.set(participantKey(helper), helper);
 
       if (attempt > 1) {

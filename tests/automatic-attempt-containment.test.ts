@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { assertAutomaticHelperModel, isPremiumAutomaticModel, isTerminalAttemptError, withProviderAttemptTimeout } from "@/lib/collaboration/attempt-policy";
+import { isTerminalAttemptError, withProviderAttemptTimeout } from "@/lib/collaboration/attempt-policy";
 import { inferRequestClassification } from "@/lib/router/model-intent";
 import { selectQualityFirstReviewer } from "@/lib/collaboration/routing";
 import { runAdaptiveCollaboration } from "@/lib/collaboration/orchestrator";
@@ -9,21 +9,10 @@ import { getAccountingScope, nextStandaloneAttempt, runWithStandaloneAccounting,
 import type { RegistryRoutingModel } from "@/lib/models/registry";
 import type { LlmProvider } from "@/lib/providers/types";
 
-test("automatic premium containment recognizes dated and namespaced aliases", () => {
-  for (const model of ["o3-pro", "o3-pro-2025-06-10", "gpt-5.5-pro", "gpt-5.5-pro-2026-04-23", " OpenAI/GPT-6-Astra-2026-10-01 "]) {
-    assert.equal(isPremiumAutomaticModel("openai", model), true, model);
-    assert.throws(() => assertAutomaticHelperModel("openai", model), { code: "standalone_automatic_premium_helper_blocked" });
-  }
-  for (const model of ["gpt-5.5", "gpt-5.6-sol", "gpt-5.5-codex"]) {
-    assert.equal(isPremiumAutomaticModel("openai", model), false, model);
-  }
-  assert.equal(isPremiumAutomaticModel("google", "gemini-2.5-pro"), false);
-});
-
-test("automatic classifier does not invoke a premium decision provider", async () => {
+test("classifier retains its JSON capability eligibility independently of spending policy", async () => {
   const provider: LlmProvider = {
     name: "openai", listModels: async () => ["o3-pro"],
-    generate: async () => { assert.fail("Premium control-plane calls must be filtered before dispatch"); },
+    generate: async () => { assert.fail("JSON-incompatible control-plane calls must be filtered before dispatch"); },
   };
   const result = await inferRequestClassification("rewrite this sentence", { hasImages: false }, {
     decisionProviders: [{ provider, modelId: "o3-pro" }],
@@ -31,14 +20,14 @@ test("automatic classifier does not invoke a premium decision provider", async (
   assert.ok(result.intent);
 });
 
-test("required reviewer quality selection excludes premium models despite highest confidence", () => {
+test("required reviewer quality selection includes any qualified model regardless of its name", () => {
   const provider: LlmProvider = { name: "openai", listModels: async () => [], generate: async () => { throw new Error("unused"); } };
   const models = [
     { model_id: "gpt-5.5-pro-2026-04-23", confidence_score: 1 },
     { model_id: "gpt-5.6-sol", confidence_score: 0.9 },
   ].map(model => ({ ...model, routing_eligibility: "verified", reasoning_tier: "high", supports_text: true } as RegistryRoutingModel));
   const selected = selectQualityFirstReviewer({ requester: { provider: "anthropic", modelId: "lead" }, providers: [provider], usedParticipants: [], snapshot: new Map([["openai", models]]) });
-  assert.equal(selected?.modelId, "gpt-5.6-sol");
+  assert.equal(selected?.modelId, "gpt-5.5-pro-2026-04-23");
 });
 
 test("control-plane approval failure propagates without fallback", async () => {
@@ -93,20 +82,17 @@ test("an expired attempt budget blocks dispatch before invoking the provider", a
   }
 });
 
-test("an injected premium helper cannot bypass the automatic selection policy", async () => {
-  let helperCalls = 0;
-  let leadCalls = 0;
-  const lead: LlmProvider = { name: "anthropic", listModels: async () => ["lead"], generate: async () => {
-    leadCalls++;
-    return { text: JSON.stringify({ action: "delegate", request: { task: "Check the draft", capability: "critique" } }), provider: "anthropic", model: "lead" };
-  } };
-  const helper: LlmProvider = { name: "openai", listModels: async () => ["gpt-5.5-pro"], generate: async () => { helperCalls++; throw new Error("Premium helper must not dispatch"); } };
-  await assert.rejects(runAdaptiveCollaboration({ requestId: "premium-injected-helper", leadProvider: lead, leadModelId: "lead", providers: [lead, helper],
-    params: { name: "test", persona: "", summary: "", history: [], user: "Explain this", requestIntent: "general-text" },
-    selectHelper: async () => ({ provider: helper, modelId: "gpt-5.5-pro-2026-04-23" }),
-  }), { code: "standalone_automatic_premium_helper_blocked" });
-  assert.equal(leadCalls, 1);
-  assert.equal(helperCalls, 0);
+test("a selected helper reaches cost admission regardless of its model name", async () => {
+  let helperCalls=0,leadCalls=0;
+  const denial=Object.assign(new Error('Exact spending approval required'),{code:'standalone_approval_required'});
+  const lead:LlmProvider={name:'anthropic',listModels:async()=>['lead'],generate:async()=>{
+    leadCalls++;return {text:JSON.stringify({action:'delegate',request:{task:'Check the draft',capability:'critique'}}),provider:'anthropic',model:'lead'};
+  }};
+  const helper:LlmProvider={name:'openai',listModels:async()=>['gpt-5.5-pro'],generate:async()=>{helperCalls++;throw denial;}};
+  await assert.rejects(runAdaptiveCollaboration({requestId:'cost-admission',leadProvider:lead,leadModelId:'lead',providers:[lead,helper],
+    params:{name:'test',persona:'',summary:'',history:[],user:'Explain this',requestIntent:'general-text'},
+    selectHelper:async()=>({provider:helper,modelId:'gpt-5.5-pro-2026-04-23'})}),{code:'standalone_approval_required'});
+  assert.equal(leadCalls,1);assert.equal(helperCalls,1);
 });
 
 test("required review cannot hide an accounting denial or select another reviewer", async () => {

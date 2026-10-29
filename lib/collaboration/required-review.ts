@@ -1,4 +1,4 @@
-import { isTerminalAttemptError, assertAutomaticHelperModel, withProviderAttemptTimeout } from "@/lib/collaboration/attempt-policy";
+import { isTerminalAttemptError, withProviderAttemptTimeout } from "@/lib/collaboration/attempt-policy";
 import { runWithStandaloneActivity } from "@/lib/standalone-accounting/context";
 import { createHash } from "node:crypto";
 import { readDurableReviewContract, saveDurableReviewContract, type DurableReviewScope } from "@/lib/collaboration/durable-review-contract";
@@ -244,7 +244,6 @@ export async function runRequiredDraftReview(input: {
       }), Math.min(30_000, reviewDeadlineMs - Date.now() - 10_000));
       if (!selected) break;
       reviewer = { provider: selected.provider.name, modelId: selected.modelId };
-      assertAutomaticHelperModel(reviewer.provider, reviewer.modelId);
       if (used.some(p => key(p) === key(reviewer!))) throw new Error("Reviewer must be a different, unused model");
       used.push(reviewer);
       // A different model validates the task definition while both calls remain draft-blind.

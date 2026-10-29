@@ -80,7 +80,7 @@ describe("immutable standalone pricing",()=>{
     // Neither lowering detail nor proposing a cheaper model may launder a mutable URL.
     expect(reducePreparedRequest(remote).available).toBe(false);expect(reducePreparedRequest(claude).available).toBe(false);
     const inline=(width:number)=>chat({messages:[{role:"user",content:[{type:"image_url",image_url:{url:png(width,1024),detail:"low"}}]}]});
-    expect(estimatePreparedRequest(inline(1024))).toMatchObject({status:"estimated",imageTokens:85,estimatorVersion:"standalone-estimator-v5"});
+    expect(estimatePreparedRequest(inline(1024))).toMatchObject({status:"estimated",imageTokens:85,estimatorVersion:"standalone-estimator-v6"});
     expect(inline(1024).hash).not.toBe(inline(1025).hash);
     expect(estimatePreparedRequest(inline(1024)).reservationMicrousd).toBe(estimatePreparedRequest(inline(1025)).reservationMicrousd);
   });
@@ -112,7 +112,7 @@ describe("frozen no-fee OpenAI cache metadata",()=>{
     expect(cached.payload.prompt_cache_key).toBe(key);expect(cached.payload.prompt_cache_retention).toBe("24h");expect(cached.hash).not.toBe(plain.hash);
     expect(prepare({prompt_cache_key:"different-key",prompt_cache_retention:"24h"}).hash).not.toBe(cached.hash);
     expect(prepare({prompt_cache_key:key,prompt_cache_retention:"in_memory"}).hash).not.toBe(cached.hash);
-    expect(quote.status).toBe("estimated");expect(quote.estimatorVersion).toBe("standalone-estimator-v5");expect(quote.inputTokens).toBe(baseline.inputTokens);expect(quote.reservationMicrousd).toBe(baseline.reservationMicrousd);
+    expect(quote.status).toBe("estimated");expect(quote.estimatorVersion).toBe("standalone-estimator-v6");expect(quote.inputTokens).toBe(baseline.inputTokens);expect(quote.reservationMicrousd).toBe(baseline.reservationMicrousd);
     expect(quote.assumptions.join(" ")).toContain("reserves full uncached input");
     expect(actualCostFromUsage(cached,{inputTokens:1000,outputTokens:100,cachedInputTokens:500}).actualMicrousd).toBe("2875");
     const restored=JSON.parse(JSON.stringify(cached));restored.payload.prompt_cache_retention="in_memory";expect(estimatePreparedRequest(restored).status).toBe("unsupported");
@@ -206,7 +206,7 @@ describe("verified Claude five-minute cache writes",()=>{
   });
   it("reserves the full-input write allowance plus output without assuming a hit",()=>{
     const request=prepare(),quote=estimatePreparedRequest(request);const body=JSON.parse(JSON.stringify(request.payload));delete body.system[0].cache_control;const uncached=freezePreparedRequest(request.provider,request.model,request.endpoint,body),baseline=estimatePreparedRequest(uncached);
-    expect(quote).toMatchObject({status:"estimated",estimatorVersion:"standalone-estimator-v5",cacheWriteTtl:"5m"});expect(quote.inputTokens).toBe(baseline.inputTokens);expect(quote.cacheWriteInputAllowance).toBe(quote.inputTokens);
+    expect(quote).toMatchObject({status:"estimated",estimatorVersion:"standalone-estimator-v6",cacheWriteTtl:"5m"});expect(quote.inputTokens).toBe(baseline.inputTokens);expect(quote.cacheWriteInputAllowance).toBe(quote.inputTokens);
     expect(quote.reservationMicrousd).toBe(priceTokenUsage(getModelPrice("anthropic",request.model)!,quote.inputTokens,quote.outputAllowance,0,quote.inputTokens));
     expect(BigInt(quote.reservationMicrousd!)).toBeGreaterThan(BigInt(baseline.reservationMicrousd!));expect(quote.assumptions.join(" ")).toContain("deliberately conservative full-input allowance");expect(request.hash).not.toBe(uncached.hash);
     const changed=JSON.parse(JSON.stringify(request.payload));changed.system[0].text+="Changed exact cache prefix";expect(freezePreparedRequest(request.provider,request.model,request.endpoint,changed).hash).not.toBe(request.hash);

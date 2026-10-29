@@ -10,7 +10,7 @@ Estimator identity: `standalone-estimator-v5`, exported as `ESTIMATOR_VERSION`. 
 
 OpenAI model-specific pages establish standard input, cached input and output rates: [GPT-4o](https://developers.openai.com/api/docs/models/gpt-4o), [GPT-4o mini](https://developers.openai.com/api/docs/models/gpt-4o-mini), [GPT-4.1](https://developers.openai.com/api/docs/models/gpt-4.1), [GPT-5](https://developers.openai.com/api/docs/models/gpt-5), [GPT-5 mini](https://developers.openai.com/api/docs/models/gpt-5-mini), [GPT-5.4](https://developers.openai.com/api/docs/models/gpt-5.4), and [o3-pro](https://developers.openai.com/api/docs/models/o3-pro). GPT-5.4 applies 2x input and 1.5x output above 272,000 input tokens, to the whole request. o3-pro has no reviewed cached rate in this snapshot. Model aliases are accepted only when listed exactly; arbitrary dated suffixes are refused.
 
-[GPT-5.4 Pro](https://developers.openai.com/api/docs/models/gpt-5.4-pro) and [GPT-5.5 Pro](https://developers.openai.com/api/docs/models/gpt-5.5-pro) each list $30 input/$180 output per million tokens, a 1,050,000 context window and 128,000 maximum output. Exact aliases plus documented `gpt-5.4-pro-2026-03-05` and `gpt-5.5-pro-2026-04-23` snapshots are listed individually. Both require Responses. GPT-5.4 Pro applies the same 272,000-token long-context uplift as GPT-5.4; no cached rate is assumed. GPT-5.5 Pro's model page lists no long-context uplift, explicitly excludes a cache discount, and marks streaming unsupported. Its reported cached input, if any, therefore receives the full input rate. Images remain refused until their separate tokenization rules are implemented. Financial support does not authorize automatic premium helper selection.
+[GPT-5.4 Pro](https://developers.openai.com/api/docs/models/gpt-5.4-pro) and [GPT-5.5 Pro](https://developers.openai.com/api/docs/models/gpt-5.5-pro) each list $30 input/$180 output per million tokens, a 1,050,000 context window and 128,000 maximum output. Exact aliases plus documented `gpt-5.4-pro-2026-03-05` and `gpt-5.5-pro-2026-04-23` snapshots are listed individually. Both require Responses. GPT-5.4 Pro applies the same 272,000-token long-context uplift as GPT-5.4; no cached rate is assumed. GPT-5.5 Pro's model page lists no long-context uplift, explicitly excludes a cache discount, and marks streaming unsupported. Its reported cached input, if any, therefore receives the full input rate. Images remain refused until their separate tokenization rules are implemented. Financial admission and approval apply identically to automatic and deliberately selected models.
 
 [OpenAI images and vision](https://developers.openai.com/api/docs/guides/images-vision) supplies tile/base pricing: GPT-4o/GPT-4.1 use 85/170, GPT-4o mini 2,833/5,667, GPT-5 70/140. Low detail uses only base tokens. Auto/high uses aspect-preserving 2,048 fitting, shortest-side reduction when above 768, and 512 tiles. Other image tokenizers are refused until separately implemented. Every image requires content and dimensions obtainable from frozen inline bytes, including OpenAI low-detail and Claude fixed-maximum allowances. External image URLs are refused before those billing shortcuts because their content can change after approval; no network dereference or guessed dimensions is used.
 
@@ -59,3 +59,24 @@ At least one context/image/detail/model lever must lower the quote; shortening o
 When native continuation content is present, reduction preserves the complete call/result/reasoning message chain and records that context pruning was skipped. It never rewrites schema JSON, arbitrary tool arguments/results, or opaque signed blocks. Output reduction remains available, maintaining the legacy thinking-budget constraint.
 
 Validation: `node node_modules/vitest/vitest.mjs run tests/standalone-pricing.test.ts --maxWorkers=1 --minWorkers=1` exercises deterministic immutability and tampering, exact rounding/cache/tier boundaries, unknown-dimension refusal, provider request shapes, image accounting, revised payloads and visible tradeoffs without network calls.
+
+## Automated intake (completion revision)
+
+Runtime rates now come from the existing LiteLLM source, not model discovery or
+name heuristics: `lib/standalone-accounting/pricing-intake.ts`. Every exact
+first-party row must provide finite nonnegative rates representable in integer
+nanoUSD and positive input/output limits. Complete standard context tiers and
+cache reads/writes are preserved. Incomplete, conflicting, unknown-tier, fixed-fee
+and foreign-hosted rows are quarantined with reasons. Missing rates are never zero.
+
+The normalization result has a SHA-256 content identity. SQL refuses conflicting
+metadata under an existing version. Refresh observations retain the raw source
+hash, retrieval time and quarantines; activation never updates historical rates.
+The static reviewed snapshot above remains only for historical replay and tests.
+
+Current OpenAI 30-minute and 12-hour cache writes use catalog rates and provider
+`cache_write_tokens` receipts. Full input is reserved at the selected write rate;
+no cache-read discount is assumed. Missing write counts preserve known tokens
+and unknown exposure. Official protocol reference:
+https://developers.openai.com/api/docs/guides/prompt-caching . No model-name
+pattern supplies a monetary rate.

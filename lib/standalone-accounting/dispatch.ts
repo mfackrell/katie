@@ -1,7 +1,9 @@
+import { freezeStoredImages } from './immutable-media';
+import { loadStandalonePricing } from './pricing-intake';
 import { createStandaloneLedger, StandaloneAccountingError } from './ledger';
 import { getAccountingScope, nextStandaloneAttempt } from './context';
-import { prepareStandaloneRequest, estimatePreparedRequest, freezePreparedRequest, ESTIMATOR_VERSION } from './estimate';
-import { getModelPrice, priceTokenUsage, PRICING_VERSION, PRICING_SNAPSHOT, type AccountingProvider } from './pricing';
+import { canonicalJson, prepareStandaloneRequest, estimatePreparedRequest, freezePreparedRequest, ESTIMATOR_VERSION } from './estimate';
+import { getModelPrice, priceTokenUsage, type AccountingProvider } from './pricing';
 import type { ResponseCheckpoint } from './types';
 
 const hosts: Record<AccountingProvider, string> = { openai: 'api.openai.com', anthropic: 'api.anthropic.com', google: 'generativelanguage.googleapis.com', grok: 'api.x.ai' };
@@ -19,7 +21,7 @@ function restore(checkpoint: ResponseCheckpoint): Response {
   headers.delete('content-encoding'); headers.delete('content-length');
   return new Response(checkpoint.body, { status: checkpoint.status, statusText: checkpoint.statusText, headers });
 }
-type Receipt = { id: string; responseId: string | null; input: number; output: number; cached: number; written: number; cacheWriteTtl: '5m' | null; cacheWriteUnpriced: boolean; resolvedModel: string | null; raw: Record<string, unknown> };
+type Receipt = { id: string; responseId: string | null; input: number; output: number; cached: number; written: number; cacheWriteTtl: '5m' | '30m' | '12h' | null; cacheWriteUnpriced: boolean; resolvedModel: string | null; raw: Record<string, unknown> };
 /** Only actual Anthropic breakpoint locations establish TTL. Arbitrary JSON in
  * tool arguments, schemas or results cannot prove a provider cache policy. */
 function hasOnlyFiveMinuteClaudeCache(payload: Record<string, unknown>): boolean {
@@ -46,7 +48,7 @@ function hasOnlyFiveMinuteClaudeCache(payload: Record<string, unknown>): boolean
 function receiptFromResponse(body: string, headers: Headers, provider: AccountingProvider, endpoint: string, streaming: boolean, payload: Record<string, unknown>): Receipt | undefined {
   let id = headers.get('x-request-id') ?? headers.get('request-id') ?? headers.get('x-goog-request-id') ?? '';
   let input: number | undefined, output: number | undefined, cached = 0, written = 0;
-  let cacheWriteTtl: '5m' | null = null, cacheWriteUnpriced = false;
+  let cacheWriteTtl: '5m' | '30m' | '12h' | null = null, cacheWriteUnpriced = false;
   let resolvedModel: string | null = null;
   let responseId: string | null = null;
   let unsupportedUsage = false;
@@ -95,6 +97,12 @@ function receiptFromResponse(body: string, headers: Headers, provider: Accountin
     const details = (usage.input_tokens_details ?? usage.prompt_tokens_details) as Record<string, unknown> | undefined;
     const cachedValue = details?.cached_tokens ?? usage.cache_read_input_tokens ?? usage.cachedContentTokenCount;
     if (typeof cachedValue === 'number') cached = cachedValue;
+    if(provider==='openai' && details?.cache_write_tokens!==undefined){
+      if(typeof details.cache_write_tokens==='number'&&Number.isSafeInteger(details.cache_write_tokens)&&details.cache_write_tokens>=0)written=details.cache_write_tokens;
+      else unsupportedUsage=true;
+      const options=payload.prompt_cache_options as Record<string,unknown>|undefined;
+      cacheWriteTtl=options?.ttl==='12h'?'12h':'30m';
+    }
   }
   if (!streaming) {
     try { inspect(JSON.parse(body)); } catch { malformed = true; }
@@ -167,21 +175,33 @@ export function createAccountingFetch(provider: AccountingProvider, transport: t
       payload = value;
     } catch { throw failure('unsupported_payload', 'Provider accounting requires a supported JSON request.'); }
     const model = typeof payload.model === 'string' ? payload.model : decodeURIComponent(url.pathname.match(/\/models\/([^/:]+):/)?.[1] ?? '');
+    payload=await freezeStoredImages(payload);
     let prepared = prepareStandaloneRequest(provider, model, url.pathname, payload);
     const ledger = ledgerFactory();
-    await ledger.registerPricing(PRICING_VERSION, PRICING_SNAPSHOT);
     let attempt = await ledger.lookupAttempt(context.userId, context.requestId, attemptKey);
+    let pricing=await loadStandalonePricing(ledger,attempt?.pricing_version);
+    await ledger.registerPricing(pricing.version,pricing);
     if (attempt && (attempt.source_prepared_hash ?? attempt.prepared_hash) !== prepared.hash) throw failure('replay_mismatch', 'The prepared request changed. Resume requires the exact approved request.');
     if (attempt) {
-      if (attempt.state !== 'settled' && attempt.pricing_version !== PRICING_VERSION) throw failure('pricing_changed', 'The saved approval uses a different pricing version. A fresh quote and approval are required.');
       if (attempt.state !== 'settled' && attempt.estimator_version !== ESTIMATOR_VERSION) throw failure('estimate_changed', 'The saved estimate uses a different formula version. A fresh quote and approval are required.');
       const saved = attempt.prepared_payload as unknown as typeof prepared;
       prepared = freezePreparedRequest(saved.provider, saved.model, saved.endpoint, saved.payload);
       if (prepared.hash !== attempt.prepared_hash || prepared.provider !== provider || prepared.model !== attempt.model || prepared.endpoint !== url.pathname
         || prepared.model !== model && !attempt.supersedes_attempt_id) throw failure('replay_mismatch', 'Saved approved request does not match its dispatch binding.');
     }
-    const estimate = estimatePreparedRequest(prepared);
-    if (estimate.status !== 'estimated' || estimate.reservationMicrousd === null) throw Object.assign(failure('unsupported_billing', 'This provider request has no supported accounting estimate.'), { issues: estimate.issues });
+    if(attempt&&['paused','reserved'].includes(attempt.state)){
+      const current=await loadStandalonePricing(ledger);
+      const oldPrice=getModelPrice(provider,prepared.model,pricing),currentPrice=getModelPrice(provider,prepared.model,current);
+      if(!currentPrice)throw failure('unsupported_billing','The current validated catalog has no applicable price for this exact model. The saved attempt remains held.');
+      if(!oldPrice||canonicalJson(oldPrice)!==canonicalJson(currentPrice)){
+        const quote=estimatePreparedRequest(prepared,current);
+        if(quote.status!=='estimated'||quote.reservationMicrousd===null)throw failure('unsupported_billing','Updated pricing cannot estimate this request: '+quote.issues.join('; '));
+        attempt=await ledger.reprice(context.userId,attempt.id,current.version,quote as unknown as Record<string,unknown>);
+        pricing=current;
+      }
+    }
+    const estimate = estimatePreparedRequest(prepared,pricing);
+    if (estimate.status !== 'estimated' || estimate.reservationMicrousd === null) throw Object.assign(failure('unsupported_billing', 'This provider request cannot be priced: '+estimate.issues.join('; ')), { issues: estimate.issues });
     if (attempt && attempt.state !== 'settled' && BigInt(attempt.reserved_microusd) !== BigInt(estimate.reservationMicrousd)) throw failure('estimate_changed', 'The saved reservation differs from the verified prepared request estimate. A fresh quote is required.');
     const reconcile = async (checkpoint: ResponseCheckpoint, attemptId: string) => {
       const receipt = receiptFromResponse(checkpoint.body, new Headers(checkpoint.headers), provider, prepared.endpoint, prepared.payload.stream === true || prepared.endpoint.endsWith(':streamGenerateContent'), prepared.payload);
@@ -192,14 +212,19 @@ export function createAccountingFetch(provider: AccountingProvider, transport: t
       const receiptHeaders = new Headers(checkpoint.headers);
       await ledger.recordProviderIdentifiers(context.userId, attemptId, receiptHeaders.get('request-id') ?? receiptHeaders.get('x-request-id') ?? receiptHeaders.get('x-goog-request-id'), receipt.responseId);
       const usage = { ...receipt.raw, inputTokens: receipt.input, outputTokens: receipt.output, cachedInputTokens: receipt.cached,
-        ...(provider === 'anthropic' ? { cacheReadInputTokens: receipt.cached, cacheCreationInputTokens: receipt.written, cacheWriteInputTokens: receipt.written, cacheWriteTtl: receipt.cacheWriteTtl } : {}) };
+        ...(['anthropic','openai'].includes(provider) ? { cacheReadInputTokens: receipt.cached, cacheCreationInputTokens: receipt.written, cacheWriteInputTokens: receipt.written, cacheWriteTtl: receipt.cacheWriteTtl } : {}) };
       // A returned dated alias is a distinct billing identity. Missing exact
       // reviewed applicability leaves actual cost unknown, even with full tokens.
       const billedModel = receipt.resolvedModel ?? prepared.model;
-      const price = getModelPrice(provider, billedModel);
-      const evidence = { kind: 'provider_receipt', requestHash: prepared.hash, httpStatus: checkpoint.status, pricingVersion: PRICING_VERSION,
+      const price = getModelPrice(provider, billedModel,pricing);
+      const evidence = { kind: 'provider_receipt', requestHash: prepared.hash, httpStatus: checkpoint.status, pricingVersion: pricing.version,
         requestedModel: prepared.model, resolvedModel: receipt.resolvedModel, pricedModel: price ? billedModel : null, pricingUnknown: !price,
         ...(provider === 'anthropic' ? { cacheWriteTtl: receipt.cacheWriteTtl } : {}) };
+      const inputDetails=(receipt.raw.input_tokens_details??receipt.raw.prompt_tokens_details) as Record<string,unknown>|undefined;
+      if(provider==='openai'&&price?.cacheWriteNanoUsd&&typeof inputDetails?.cache_write_tokens!=='number'){
+        await ledger.recordPartialUsage(context.userId,attemptId,usage,{...evidence,pricingUnknown:true,missingDimension:'cache_write_tokens'});
+        throw failure('usage_unpriced','OpenAI cache-write usage is missing. Known tokens and spending exposure remain held.');
+      }
       if (receipt.cacheWriteUnpriced) {
         await ledger.recordPartialUsage(context.userId, attemptId, usage, { ...evidence, pricedModel: null, pricingUnknown: true });
         throw failure('usage_unpriced', 'The provider cache-write lifetime is unsupported or unproven. Known usage is saved; spending exposure remains reserved.');
@@ -209,7 +234,7 @@ export function createAccountingFetch(provider: AccountingProvider, transport: t
         throw failure('resolved_model_unpriced', 'The provider returned a model without an exact reviewed price. Known usage is saved; spending exposure remains reserved.');
       }
       let actualMicrousd: string;
-      try { actualMicrousd = priceTokenUsage(price, receipt.input, receipt.output, receipt.cached, receipt.written); }
+      try { actualMicrousd = priceTokenUsage(price, receipt.input, receipt.output, receipt.cached, receipt.written,receipt.cacheWriteTtl??'5m'); }
       catch {
         await ledger.recordPartialUsage(context.userId, attemptId, usage, { ...evidence, pricedModel: null, pricingUnknown: true });
         throw failure('usage_unpriced', 'The provider returned an unsupported billing dimension. Known usage is saved; spending exposure remains reserved.');
@@ -223,7 +248,7 @@ export function createAccountingFetch(provider: AccountingProvider, transport: t
     }
     if (attempt && ['dispatched', 'uncertain', 'settled'].includes(attempt.state)) throw failure('outcome_unknown', 'A previous provider attempt has no replayable response. Its saved cost or exposure is retained; automatic resend is blocked.');
     if (!attempt) attempt = await ledger.admit({ ownerId: context.userId, actorId: context.actorId, chatId: context.chatId, requestId: context.requestId, attemptKey,
-      preparedHash: prepared.hash, preparedPayload: prepared as unknown as Record<string, unknown>, pricingVersion: PRICING_VERSION, provider, model,
+      preparedHash: prepared.hash, preparedPayload: prepared as unknown as Record<string, unknown>, pricingVersion: pricing.version, provider, model,
       reservedMicrousd: estimate.reservationMicrousd, category: context.activity ?? 'standalone',
       preflightEstimate: estimate, estimatorVersion: estimate.estimatorVersion, reason: context.reason ?? context.activity ?? 'Standalone provider request' });
     if (attempt.state === 'paused') throw Object.assign(failure('approval_required', 'This prepared provider request is paused for spending approval.'), { attemptId: attempt.id });

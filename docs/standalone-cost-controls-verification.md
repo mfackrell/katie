@@ -96,3 +96,40 @@ Integrated `origin/main` once at merge `3352f1a`, including ITM/attachment diagn
 
 No merge, production migration/deployment, or paid provider experiment was performed.
 The final commit's hosted checks are the release gate; see the PR for their result.
+
+## Four completion corrections
+
+- Removed the name-based premium filters/assertions from collaboration and control
+  selection. Qualified models encounter the same payload estimate, integer-cost
+  admission and exact owner approval. A cheap Pro-named fixture dispatches while
+  an expensive ordinary-named fixture pauses; accounting denials remain terminal.
+- Added exact first-party LiteLLM ingestion with schema/rate/limit/context/cache
+  validation, per-row quarantine, content-addressed snapshots, source hashes and
+  append-only observations. Cron refresh is every 30 minutes. Current prices expire
+  after 24 hours; source failure never activates a partial/invalid catalog or
+  converts missing rates to zero. An available fresh snapshot remains usable.
+- Quotes and settlements use their immutable pricing versions. Changed applicable
+  rates create a new paused proposal preserving the old estimate. PostgreSQL's
+  dispatch claim locks price activation and checks current exact model rates;
+  stale pricing cannot silently consume a previous approval. Completed receipt
+  replay remains historical and sends nothing.
+- Normal standard conversation POST verifies Auth and atomically enrolls the owner,
+  chat and memory rows. Tests cover forged owner IDs, unauthenticated requests,
+  idempotent retry, foreign/unbound scope rejection, deleted UUIDs, grants/ACLs and
+  unchanged memory on retry. Creation screens use the same owner session as chat.
+- Current OpenAI cache-write receipts use explicit 30-minute/12-hour rates and
+  write counts. Missing write counts preserve uncertain exposure. Normal stored
+  image URLs are fetched only from configured application storage and frozen before
+  approval; external URLs are never fetched and redirects/oversize images fail shut.
+
+Focused verification: 59 Node provider/pricing/approval/containment tests, all 37
+existing pricing/reduction Vitest tests, the authenticated creation route test and
+isolated PostgreSQL 16 suite passed. Application typecheck/test compilation pass.
+Existing Google-normalization and deletion-history regressions remain intact.
+All provider HTTP in tests is mocked. Free source-catalog inspection exercised the
+normalizer without any provider inference. Complete hosted CI on the final PR SHA
+is the release gate; its exact counts/link are recorded in the PR handoff.
+
+The concrete production/configuration sequence and explicitly unsupported billing
+capabilities are in `standalone-cost-controls.md`. No merge, production SQL,
+deployment, owner settings, or paid provider experiments were performed.

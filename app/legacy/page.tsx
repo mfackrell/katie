@@ -1,4 +1,5 @@
 "use client";
+import { ownerConversationHeaders } from '@/lib/tools/browser-owner-session';
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ActorFormModal } from "@/components/actor-form-modal";
@@ -359,9 +360,7 @@ export default function HomePage() {
     try {
       const chatResponse = await fetch("/api/chats", {
         method: "POST",
-        headers: {
-          "content-type": "application/json",
-        },
+        headers: await ownerConversationHeaders(),
         body: JSON.stringify({
           actorId: normalizedActorId,
           title: options?.title ?? `Chat ${new Date().toLocaleString()}`,
@@ -403,9 +402,7 @@ export default function HomePage() {
     try {
       const actorResponse = await fetch("/api/actors", {
         method: "POST",
-        headers: {
-          "content-type": "application/json",
-        },
+        headers: { "content-type": "application/json" },
         body: JSON.stringify(input),
       });
 

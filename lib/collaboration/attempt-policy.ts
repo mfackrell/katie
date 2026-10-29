@@ -1,27 +1,5 @@
 import { isTerminalProviderError, ProviderResponseError } from "@/lib/providers/response-errors";
 import { isStandaloneAccountingError } from "@/lib/standalone-accounting/context";
-import type { LlmProvider } from "@/lib/providers/types";
-
-/** Match provider aliases and dated snapshots before applying automatic-use policy. */
-export function isPremiumAutomaticModel(provider: LlmProvider["name"], modelId: string): boolean {
-  const normalized = modelId.trim().toLowerCase().replace(/^openai\//, "");
-  return provider === "openai" && (
-    /^o3-pro(?:$|-)/.test(normalized) ||
-    /^gpt-\d+(?:\.\d+)*-pro(?:$|-)/.test(normalized) ||
-    /^gpt-6(?:\.\d+)*-astra(?:$|-)/.test(normalized)
-  );
-}
-
-export function assertAutomaticHelperModel(provider: LlmProvider["name"], modelId: string): void {
-  if (isPremiumAutomaticModel(provider, modelId)) {
-    throw new ProviderResponseError(
-      `Automatic helper use of ${provider}:${modelId} is blocked. Select this model deliberately with an exact-attempt approval.`,
-      false,
-      "standalone_automatic_premium_helper_blocked",
-    );
-  }
-}
-
 /** A local timeout cannot establish that the remote provider stopped billing. */
 export async function withProviderAttemptTimeout<T>(
   work: (signal: AbortSignal) => Promise<T>,

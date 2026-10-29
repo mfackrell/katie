@@ -29,6 +29,10 @@
     {
       "path": "/api/internal/model-registry/refresh",
       "schedule": "*/5 * * * *"
+    },
+    {
+      "path": "/api/internal/standalone-pricing/refresh",
+      "schedule": "*/30 * * * *"
     }
   ],
   "git": {
