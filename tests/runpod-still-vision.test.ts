@@ -140,3 +140,10 @@ test('incident 14774c56: failed image then plain text never reuses hidden JPEG o
  assert.equal(await inferRequestIntentFromMultimodalInput(message,composer.images),null);
  assert.deepEqual(composer.references,[]);assert.equal(qwen,0);assert.equal(premium,0);assert.equal(f.sends,1);
 });
+
+test('Qwen uncertainty auto-authorized by durable owner policy escalates without a prompt or duplicate submission',async()=>{
+ const f=fixture();f.lostAcceptance=true;f.exposureAccepted=true;let escalations=0;
+ const ref={fileId:'genuine',fileName:'current.jpg',mimeType:'image/jpeg',attachmentKind:'image' as const,preview:'',imageDataUrl:image};
+ for(let i=0;i<2;i++)await observeStandaloneStillImages([ref],{qwen:()=>f.run(),escalate:async()=>{escalations++;return{text:'Safe independent observation',model:'premium'};}});
+ assert.equal(f.sends,1);assert.equal(escalations,2);assert.equal(f.row?.state,'uncertain');assert.equal(f.row?.reserved_microusd,'20000');
+});
