@@ -11,7 +11,7 @@ import {spawn,execFileSync} from 'node:child_process';
 import {createRequire} from 'node:module';
 import {createNativeHttpBridge} from './native-http-bridge.mjs';
 import {createResponsesProvider} from './native-provider-receipts.mjs';
-import {assertBenchmarkDollarCeiling} from './paid-dollar-ceiling.mjs';
+import {assertBenchmarkDollarCeiling,readVerifiedBenchmarkPricing} from './paid-dollar-ceiling.mjs';
 import {tokenDigest} from './authenticated-native-gateway.mjs';
 import {readNativeHandoff} from './native-dispatch-contract.mjs';
 import {assertTrustedBoundary,protectedNativeMounts,protectedGitConfig} from './native-trust-boundary.mjs';
@@ -89,11 +89,9 @@ const dispatch=await readOne('benchmark_development_dispatches','task_id',proof.
 // A token-only cap cannot discharge the owner's $10 per-arm approval.
 // Verify model pricing AND the independent owner-controlled upper price ceiling
 // before issuing any execution grant or allowing any paid provider traffic.
-const {data:pricing,error:pricingError}=await db.from('model_registry')
+const pricing=await readVerifiedBenchmarkPricing(signal=>db.from('model_registry')
  .select('pricing_input_per_1m,pricing_output_per_1m,pricing_status')
- .eq('provider_name','openai').eq('model_id',approval.model).maybeSingle();
-if(pricingError||!pricing||pricing.pricing_status!=='verified')
- denied('model price evidence unavailable');
+ .eq('provider_name','openai').eq('model_id',approval.model).abortSignal(signal).maybeSingle());
 assertBenchmarkDollarCeiling({
  armUsdCents:productionRuntime?1000:Number(process.env.KATIE_BENCHMARK_APPROVED_ARM_USD_CENTS),
  priceCeilingMicrosPerMillion:productionRuntime?28000000:Number(process.env.KATIE_BENCHMARK_APPROVED_MAX_USD_MICROS_PER_MILLION),
