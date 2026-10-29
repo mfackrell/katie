@@ -63,6 +63,18 @@ export async function assertDevelopmentOwnerRenewal(db,rival,{project,account,tr
  assert.equal((await db.query('select benchmark_claim_development_renewal_dispatch($1,$2,$3) ok',[r.id,{...receipt,run_id:126},release])).rows[0].ok,false);
  const claims=await Promise.all([db.query('select benchmark_claim_development_renewal_dispatch($1,$2,$3) ok',[r.id,receipt,release]),rival.query('select benchmark_claim_development_renewal_dispatch($1,$2,$3) ok',[r.id,receipt,release])]);
  assert.equal(claims.filter(x=>x.rows[0].ok).length,1);
+ await assert.rejects(db.query(issue,[r.id,'a'.repeat(64),r.approval_id,randomUUID(),release]),/unavailable/);
+ await assert.rejects(db.query(issue,[r.id,'a'.repeat(64),r.approval_id,task,'7'.repeat(40)]),/unavailable/);
+ await db.query('begin');await db.query('update benchmark_native_spending_approvals set revoked_at=now() where id=$1',[r.approval_id]);
+ assert.equal((await db.query('select benchmark_effective_mission_deadline($1)>now() ok',[mission])).rows[0].ok,false);
+ await assert.rejects(db.query(issue,[r.id,'a'.repeat(64),r.approval_id,task,release]),/unavailable/);await db.query('rollback');
+ await db.query('begin');await db.query("update work_projects set approved_hash=repeat('f',64) where id=$1",[project]);
+ await assert.rejects(db.query(issue,[r.id,'a'.repeat(64),r.approval_id,task,release]),/unavailable/);await db.query('rollback');
+ await db.query('begin');await db.query('reset role');await db.query('alter table benchmark_full_continuations disable trigger benchmark_continuation_immutable');
+ await db.query("update benchmark_full_continuations set created_at=now()-interval '5 hours',deadline=now()-interval '1 hour' where id=$1",[c.id]);
+ await db.query('alter table benchmark_full_continuations enable trigger benchmark_continuation_immutable');await db.query('set local role service_role');
+ assert.equal((await db.query('select benchmark_effective_mission_deadline($1)>now() ok',[mission])).rows[0].ok,false);
+ await assert.rejects(db.query(issue,[r.id,'a'.repeat(64),r.approval_id,task,release]),/unavailable/);await db.query('rollback');
  const grants=await Promise.allSettled([db.query(issue,[r.id,'a'.repeat(64),r.approval_id,task,release]),rival.query(issue,[r.id,'b'.repeat(64),r.approval_id,task,release])]);
  assert.equal(grants.filter(x=>x.status==='fulfilled').length,1);
  const g=grants.find(x=>x.status==='fulfilled').value.rows[0].g;
