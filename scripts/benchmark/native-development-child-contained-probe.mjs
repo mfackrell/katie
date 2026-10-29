@@ -1,13 +1,17 @@
 // Run the actual production child and model configuration through the real paid
 // admission path. The isolated gateway has ONLY in-memory DB/synthetic responses.
 import assert from 'node:assert/strict';
-import {mkdtempSync,mkdirSync,writeFileSync,rmSync,realpathSync} from 'node:fs';
+import {randomUUID} from 'node:crypto';
+import {mkdtempSync,mkdirSync,writeFileSync,rmSync,realpathSync,existsSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join,resolve} from 'node:path';
 import {spawn,execFileSync} from 'node:child_process';
 import {createNativeHttpBridge} from './native-http-bridge.mjs';
 import {sharedNativeContainerArgs} from './shared-native-container.mjs';
 import {assertTrustedBoundary,protectedNativeMounts} from './native-trust-boundary.mjs';
+const reviewMarker='KATIE_REVIEW_PROBE_'+randomUUID().replaceAll('-','');
+const sdkRoot=realpathSync(resolve('node_modules'));
+const reviewCommand='printf ACTUAL_NATIVE_TOOL_OK; '+[['/work','WORK'],['/work/.git','GIT'],['/work/node_modules','DEPS']].map(([path,label])=>'if (printf forbidden > '+path+'/'+reviewMarker+') 2>/dev/null; then printf '+label+'_WRITE_UNEXPECTEDLY_SUCCEEDED; else printf READ_ONLY_ENFORCED_'+label+'; fi').join('; ')+'; printf permitted > /tmp/'+reviewMarker+' && test "$(cat /tmp/'+reviewMarker+')" = permitted && printf TMP_WRITE_ALLOWED';
 const root=mkdtempSync(join(tmpdir(),'actual-native-child-'));
 const work=join(root,'work'),socketDir=join(root,'socket'),socket=join(socketDir,'gateway.sock');
 mkdirSync(work);mkdirSync(socketDir);mkdirSync(join(work,'node_modules'));
@@ -32,6 +36,7 @@ const upstream=async request=>{
  const count=(phaseRequests.get(phase)??0)+1;phaseRequests.set(phase,count);
  assert.ok(count<=2,'Unexpected SDK continuation or retry');
  const callId='actual_native_tool_'+phase;
+ const reviewing=phase==='review'||phase==='final-review';
  const encrypted=Buffer.from('synthetic-reasoning-'+phase).toString('base64');
  const tools=request.tools?.flatMap(t=>t.type==='namespace'?t.tools:[t])??[];
  assert.ok(tools.some(t=>t.type==='function'&&t.name==='exec_command'),'Actual SDK must declare the tested local exec_command tool');
@@ -41,6 +46,7 @@ const upstream=async request=>{
   const safeOutput=JSON.stringify(output.output).split(token).join('[REDACTED]').slice(0,2000);
   if(!safeOutput.includes('ACTUAL_NATIVE_TOOL_OK'))console.error('ACTUAL_NATIVE_TOOL_OUTPUT_FAILURE='+JSON.stringify({phase,output:safeOutput}));
   assert.match(safeOutput,/ACTUAL_NATIVE_TOOL_OK/,'Actual local exec must succeed');
+  if(reviewing){for(const label of ['WORK','GIT','DEPS'])assert.ok(safeOutput.includes('READ_ONLY_ENFORCED_'+label),'Reviewer must reject writes to '+label);assert.match(safeOutput,/TMP_WRITE_ALLOWED/,'Reviewer retains isolated writable scratch');}
   const reasoning=request.input?.find(x=>x.type==='reasoning');
   assert.ok(reasoning,'Actual SDK must replay trusted opaque reasoning inline');
   assert.equal(reasoning.encrypted_content,encrypted);assert.deepEqual(reasoning.summary,[]);
@@ -48,7 +54,7 @@ const upstream=async request=>{
 
  const text=phase==='review'?'CHANGES_REQUESTED: synthetic defect':phase==='final-review'?'PASS: synthetic repair verified':'DONE';
  const item=count===1?{id:'call_'+forwarded,type:'function_call',name:'exec_command',call_id:callId,
-  arguments:JSON.stringify({cmd:'printf ACTUAL_NATIVE_TOOL_OK',workdir:'/work'}),status:'completed'}:
+  arguments:JSON.stringify({cmd:reviewing?reviewCommand:'printf ACTUAL_NATIVE_TOOL_OK',workdir:'/work'}),status:'completed'}:
   {id:'msg_'+forwarded,type:'message',role:'assistant',status:'completed',content:[{type:'output_text',text,annotations:[]}]};
  const reasoning={id:'rs_'+phase,type:'reasoning',summary:[],encrypted_content:encrypted};
  const output=count===1?[reasoning,item]:[item];
@@ -79,7 +85,7 @@ try{
   const command='socat TCP-LISTEN:43181,bind=127.0.0.1,reuseaddr,fork UNIX-CONNECT:/gateway/gateway.sock & p=$!; trap "kill $p 2>/dev/null || :" EXIT; node /trusted/native-development-child.mjs';
   const args=sharedNativeContainerArgs({workspace:work,socketDir,arm:'full',phase,command,readOnly:reviewing,
    extraMounts:[...protectedNativeMounts(assertTrustedBoundary(work)),
-    '--ro-bind',realpathSync(resolve('node_modules')),'/work/node_modules','--dir','/trusted',
+    '--ro-bind',sdkRoot,'/work/node_modules','--dir','/trusted',
     ...['native-development-child.mjs','shared-native-phase.mjs','shared-native-policy.mjs'].flatMap(f=>['--ro-bind',resolve('scripts/benchmark',f),'/trusted/'+f]),
     '--ro-bind',join(root,'AGENT_REQUEST.md'),'/trusted/AGENT_REQUEST.md','--ro-bind',join(root,'review-findings.txt'),'/trusted/review-findings.txt'],
    extraEnv:['--setenv','KATIE_NATIVE_MODEL','gpt-5.3-codex','--setenv','KATIE_NATIVE_BRIDGE_TOKEN',token,'--setenv','KATIE_NATIVE_BASELINE_SHA',baseline]});
@@ -88,6 +94,7 @@ try{
   const timer=setTimeout(()=>child.kill('SIGKILL'),60000);
   let code;try{code=await new Promise((resolve,reject)=>{child.once('error',reject);child.once('close',resolve);});}finally{clearTimeout(timer);}
   assert.equal(code,0,phase+': '+errors+'\n'+output);
+  for(const path of [work,join(work,'.git'),sdkRoot])assert.equal(existsSync(join(path,reviewMarker)),false,'Reviewer cannot mutate protected mount '+path);
   if(reviewing){const marker=output.split('\n').find(x=>x.startsWith('NATIVE_REVIEW_RESULT='));assert.ok(marker);assert.equal(JSON.parse(marker.slice('NATIVE_REVIEW_RESULT='.length)).verdict,phase==='review'?'changes_requested':'pass');}
   else assert.match(output,/NATIVE_DEVELOPMENT_RETURNED_FOR_INDEPENDENT_VERIFICATION/);
   console.log('ACTUAL_NATIVE_CHILD_PHASE_PASS='+phase);
@@ -97,4 +104,4 @@ try{
  assert.equal(calls.filter(x=>x.name==='benchmark_full_native_reserve').length,8);
  assert.equal(receipts.reduce((n,x)=>n+x.actualTokens,0),40);
  console.log('ACTUAL_NATIVE_CHILD_FULL_PAID_ADMISSION_NONBILLABLE_PASS');
-}finally{await new Promise(resolve=>server.close(resolve));rmSync(root,{recursive:true,force:true});}
+}finally{await new Promise(resolve=>server.close(resolve));rmSync(root,{recursive:true,force:true});rmSync(join(sdkRoot,reviewMarker),{force:true});}
