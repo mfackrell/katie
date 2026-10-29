@@ -19,6 +19,9 @@ async function run(message,timelineActive=false){
  const fresh=[pdf('named','report.pdf'),pdf('other','other.pdf'),{fileId:'video',fileName:'clip.mp4',mimeType:'video/mp4'}];
  const decision=selectFreshPdfSources(message,fresh,timelineActive),calls=[];
  const actual=await vm.runInNewContext(compile(`(async()=>{${filter}\n${inspect}\nreturn attachments;})()`),{
+  // This fixture isolates PDF source scope; image processing is exercised by
+  // the standalone route/Qwen regressions rather than a paid provider here.
+  standaloneImageObservation:false,observeImages:async()=>{},retainedImageDescriptors:new Map(),
   requestId:'same-request',attachmentDecision:{},freshPdfSelection:decision,newAttachments:fresh,restored:{references:[]},timelineActive,message,
   uniqueAttachmentReferences:files=>files,pdfSources:new Map(fresh.map(file=>[file.fileId,file])),
   actorId:'actor',chatId:'chat',pdfSourceTask:message,resolvePdfNames,pdfSourceOccurrence,...load('lib/uploads/pdf-inventory.ts'),getChatById:async()=>({actorId:'actor'}),

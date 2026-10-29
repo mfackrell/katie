@@ -25,7 +25,9 @@ async function run(message,fresh,saved,genericIds=[]){
  });
  vm.runInNewContext(code(quota),{newAttachments:fresh,timelineActive:false,...decision});
  const restored={references:decision.attachmentDecision.selections.map(s=>s.attachment)};
- const attachments=vm.runInNewContext(code(`(()=>{${filtering}return attachments;})()`),{
+ const attachments=await vm.runInNewContext(code(`(async()=>{${filtering}return attachments;})()`),{
+  // These comparisons assert PDF source authorization, not image inference.
+  standaloneImageObservation:false,observeImages:async()=>{},retainedImageDescriptors:new Map(),
   message,newAttachments:fresh,restored,freshPdfSelection:decision.freshPdfSelection,timelineActive:false,uniqueAttachmentReferences:files=>files,
  });
  return {...decision,attachments,selectorCalls};
