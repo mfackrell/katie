@@ -38,7 +38,8 @@ export async function assertDevelopmentOwnerRenewal(db,rival,{project,account,tr
  await db.query('set role service_role');
  const countBefore=(await db.query('select count(*)::int n from benchmark_full_continuations')).rows[0].n;
  const plan=(await db.query(rpc,[owner,null,null,false])).rows[0].r;
- assert.equal(plan.approved,false);assert.equal(plan.plan.kind,'development-renewal');
+ const diagnostic=(await db.query(`select jsonb_build_object('mission',to_jsonb(m),'project',to_jsonb(p),'account',to_jsonb(a),'task',to_jsonb(t),'assignment',to_jsonb(j),'approval',to_jsonb(ap),'provenance',benchmark_full_task_provenance(t.id,p.id),'missionSpent',(select sum(greatest(actual_tokens,reserved_tokens)) from agent_missions where project_id=p.id),'accountSpent',(select sum(actual_tokens) from benchmark_budget_calls where account_id=a.id),'runCount',(select count(*) from project_runs where project_id=p.id)) d from agent_missions m join work_projects p on p.id=m.project_id join mission_assignments j on j.id=$2 join agent_tasks t on t.id=j.id join benchmark_native_spending_approvals ap on ap.id=$3 join benchmark_budget_accounts a on a.id=$4 where m.id=$1`,[mission,task,old.id,account])).rows[0].d;
+ assert.equal(plan.approved,false,JSON.stringify(diagnostic));assert.equal(plan.plan.kind,'development-renewal');
  assert.equal(plan.plan.developmentSpentTokens,14419);assert.equal(plan.plan.developmentRemainingTokens,105581);
  assert.equal(plan.plan.additionalTokenCap,165581);assert.equal(plan.plan.assessmentTokens,60000);assert.equal(plan.plan.specificationTokens,0);
  assert.equal(plan.plan.taskId,task);assert.equal(plan.plan.missionId,mission);assert.equal(plan.plan.newFunds,0);
