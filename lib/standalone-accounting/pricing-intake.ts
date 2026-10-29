@@ -40,6 +40,7 @@ export function normalizePricingCatalog(raw: unknown): { snapshot: PricingSnapsh
         ...(Array.isArray(row.supported_endpoints)&&row.supported_endpoints.includes('/v1/responses')&&!row.supported_endpoints.includes('/v1/chat/completions')?{responsesOnly:true}:{}),
       };
       if(row.cache_read_input_token_cost!==undefined)price.cachedInputNanoUsd=rate(row.cache_read_input_token_cost);
+      if(provider==='openai'&&row.supports_prompt_cache_breakpoint===true&&row.cache_creation_input_token_cost===undefined)throw Error('Missing price for advertised cache writes');
       if(row.cache_creation_input_token_cost!==undefined){
         if(provider==='anthropic')price.cacheWrite5mNanoUsd=rate(row.cache_creation_input_token_cost);
         else if(provider==='openai')price.cacheWriteNanoUsd=rate(row.cache_creation_input_token_cost);

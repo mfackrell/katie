@@ -14,6 +14,7 @@ test('validated catalog is exact, content-addressed, frozen and independent of k
  assert.notEqual(normalizePricingCatalog(catalog({input_cost_per_token:0.000003})).snapshot.version,a.snapshot.version);
  const foreign=normalizePricingCatalog({...catalog(),'azure/fixture-pro':{...row,litellm_provider:'azure'},'openai/fixture-pro':{...row},'fixture-missing':{...row,output_cost_per_token:undefined}});
  assert.equal(foreign.snapshot.models.length,1);assert.ok(foreign.rejected['openai:fixture-missing']);
+ assert.throws(()=>normalizePricingCatalog({'fixture':{...row,supports_prompt_cache_breakpoint:true}}),/no validated/);
  assert.throws(()=>normalizePricingCatalog({'fixture':{...row,input_cost_per_token:-1}}));
  assert.throws(()=>normalizePricingCatalog({'fixture':{...row,input_cost_per_token:Infinity}}));
  assert.throws(()=>normalizePricingCatalog({'fixture':{...row,input_cost_per_token:1e-15}}));
