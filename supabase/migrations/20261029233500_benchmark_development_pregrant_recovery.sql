@@ -72,7 +72,7 @@ begin
  update agent_tasks set status='dispatching',external=external||jsonb_build_object('pregrantRecoveryId',rec.id),updated_at=now() where id=t.id;
  update mission_assignments set status='waiting_external',lease=null,lease_until=null,available_at=now(),updated_at=now() where id=j.id;
  update agent_missions set status='running',updated_at=now() where id=m.id;
- update work_projects set status='running',lease=null,lease_until=null,updated_at=now() where id=p.id;
+ update work_projects set status='running',impediment=null,detail='Verified pre-grant recovery pending under the original owner approval.',lease=null,lease_until=null,updated_at=now() where id=p.id;
  return to_jsonb(rec);
 end $$;
 create function benchmark_claim_development_pregrant_dispatch(p_recovery uuid,p_release text)
