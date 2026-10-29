@@ -1,4 +1,5 @@
 import {createHash} from 'node:crypto';
+export const NATIVE_ADMISSION_DIAGNOSTICS_VERSION='bounded-schema-v1';
 const diagnosticRecords=new WeakMap();
 const reasonCodes=new Set(['request-object','nontext-input','client-metadata','prompt-cache-key','request-fields','instructions-type','input-type','stored-context','automatic-truncation','include-fields','input-item-object','reasoning-fields','reasoning-summary','reasoning-content','reasoning-provenance','tool-call-fields','tool-output-fields','text-array','text-part-object','text-part-type','text-part-text','text-part-fields','text-part-annotations','text-part-logprobs','message-role','message-fields','message-type','message-id','message-phase']);
 const schemaFields=['model','input','instructions','max_output_tokens','stream','tools','tool_choice','parallel_tool_calls','reasoning','text','temperature','top_p','store','include','metadata','truncation','client_metadata','prompt_cache_key','type','role','content','status','id','phase','summary','encrypted_content','encrypted_function_args','namespace','name','call_id','arguments','output','annotations','logprobs','refusal','response','object','usage','input_tokens','output_tokens','total_tokens','input_tokens_details','output_tokens_details','reasoning_tokens','cached_tokens','incomplete_details','created_at','service_tier','finish_reason','reason'];
@@ -23,7 +24,7 @@ export function nativeSchemaShape(value){
 export function nativeAdmissionError(reason,node){
  if(!reasonCodes.has(reason))throw Error('NATIVE_ADMISSION_DIAGNOSTIC_CONFIGURATION');
  const error=Error('GATEWAY_UNBOUNDED_INPUT_DENIED');
- diagnosticRecords.set(error,Object.freeze({version:1,reason,node:nativeSchemaShape(node)}));
+ diagnosticRecords.set(error,Object.freeze({version:NATIVE_ADMISSION_DIAGNOSTICS_VERSION,reason,node:nativeSchemaShape(node)}));
  return error;
 }
 export const nativeAdmissionDiagnostic=error=>diagnosticRecords.get(error);
