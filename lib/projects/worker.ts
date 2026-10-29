@@ -4,7 +4,7 @@ import { Octokit } from '@octokit/rest';
 import { getSupabaseAdminClient } from '@/lib/data/supabase/admin';
 import { readMission } from '@/lib/missions/store';
 import { readTask } from '@/lib/agents/store';
-import { developmentPreview, recoverUnusedNativeStartup, projectAcceptanceSchema, reconcileDevelopment, retryImmutableProjectVerification } from '@/lib/agents/development';
+import { developmentPreview, dispatchOwnerRenewedNativeDevelopment, recoverUnusedNativeStartup, projectAcceptanceSchema, reconcileDevelopment, retryImmutableProjectVerification } from '@/lib/agents/development';
 import { parseJSON } from '@/lib/missions/types';
 import { validateProjectPlan, digest, projectPlanSchema } from './contract';
 import {gameAssessmentEvidence} from './game-evidence';
@@ -50,7 +50,7 @@ async function advance(p: Project) {
     const finish = (action: string, data: Record<string, unknown> = {}) => projectRpc<boolean>('finish_work_project', { p_id: p.id, p_lease: p.lease, p_action: action, p_data: ['block','input'].includes(action) ? {...data, impediment: data.impediment ?? projectImpediment(p,String(data.detail??'Required evidence unavailable'))} : data });
     const runs = await projectRuns(p.id);
     const game=p.profile==='game';
-    let continuation:{id:string;plan_hash:string;deadline:string;plan:{specificationTokens:number;developmentTokens:number;assessmentTokens:number;additionalTokenCap:number}}|null=null;
+    let continuation:{id:string;plan_hash:string;deadline:string;plan:{kind?:string;developmentRemainingTokens?:number;developmentSpentTokens?:number;specificationTokens:number;developmentTokens:number;assessmentTokens:number;additionalTokenCap:number}}|null=null;
     if(game&&process.env.KATIE_FULL_BENCHMARK_ENVIRONMENT==='production'&&await loadFullBenchmarkBinding(getSupabaseAdminClient(),p.id,process.env)){
       continuation=await projectRpc('benchmark_active_full_continuation',{p_project:p.id});
     }
@@ -306,7 +306,19 @@ async function advance(p: Project) {
     const assessmentTokens=p.phase==='specification'&&process.env.KATIE_FULL_BENCHMARK_ENVIRONMENT==='production'
       ?await projectRpc<number>('benchmark_project_assessment_cap',{p_project:p.id}):120000;
     const continuationPlan=continuation?.plan;
-    if(continuation&&(!continuationPlan||![continuationPlan.specificationTokens,continuationPlan.developmentTokens,continuationPlan.assessmentTokens,continuationPlan.additionalTokenCap].every(n=>Number.isInteger(n)&&n>0)||continuationPlan.specificationTokens+continuationPlan.developmentTokens+continuationPlan.assessmentTokens!==continuationPlan.additionalTokenCap))throw Error('Saved continuation stage allocations unavailable');
+    if(continuation){
+      const plan=continuationPlan;
+      const renewal=plan?.kind==='development-renewal';
+      const valid=plan&&(renewal
+        ? p.phase==='assessment'&&plan.specificationTokens===0&&plan.developmentTokens===120000&&plan.assessmentTokens===60000
+          &&Number.isInteger(plan.developmentRemainingTokens)&&Number.isInteger(plan.developmentSpentTokens)
+          &&plan.developmentRemainingTokens!>0&&plan.developmentSpentTokens!>=0
+          &&plan.developmentRemainingTokens!+plan.developmentSpentTokens!===plan.developmentTokens
+          &&plan.developmentRemainingTokens!+plan.assessmentTokens===plan.additionalTokenCap
+        : [plan.specificationTokens,plan.developmentTokens,plan.assessmentTokens,plan.additionalTokenCap].every(n=>Number.isInteger(n)&&n>0)
+          &&plan.specificationTokens+plan.developmentTokens+plan.assessmentTokens===plan.additionalTokenCap);
+      if(!valid)throw Error('Saved continuation stage allocations unavailable');
+    }
     const specAdmission=p.phase==='specification'&&continuationPlan?{missionTokens:continuationPlan.specificationTokens,futureTokens:continuationPlan.developmentTokens+continuationPlan.assessmentTokens,requiredTokens:continuationPlan.additionalTokenCap,requiredMissionSlots:3}:p.phase==='specification'?specificationProjectAdmission(Boolean(recovery?.checkpoint),recovery?.checkpoint?projectPlanSchema.parse(parseJSON(recovery.checkpoint.text)).milestones.length:1,assessmentTokens):null;
     const requiredTokens=specAdmission?.requiredTokens??8000;
     if (p.token_allowance - charged < requiredTokens || (specAdmission&&runs.length+specAdmission.requiredMissionSlots>p.max_missions)) {
@@ -382,6 +394,7 @@ async function advance(p: Project) {
     await finish('child', { kind: p.phase, objective, evidence: {...(projectEvidence as Record<string,unknown>??{}),...(continuation?{benchmarkContinuationId:continuation.id,benchmarkContinuationPlanHash:continuation.plan_hash}:{} )} });
 }
 async function reconcileParkedDispatch() {
+    if(await dispatchOwnerRenewedNativeDevelopment())return true;
     if(await recoverUnusedNativeStartup())return true;
     const data=await projectRpc<Array<{id:string;external:Record<string,unknown>}>>('project_dispatch_recovery_candidates');
     for(const row of (data??[]) as Array<{id:string;external:Record<string,unknown>}>){
@@ -487,3 +500,4 @@ catch (error) {
     await projectRpc('finish_work_project', { p_id: p.id, p_lease: p.lease, p_action: 'error', p_data: { detail, impediment:projectImpediment(p,detail) } });
     return { claimed: 1, status: 'error_recorded' };
 } } finally {await maintenance;} }
+

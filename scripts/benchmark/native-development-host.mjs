@@ -24,7 +24,7 @@ if(!requestFile||!manifestFile||!childFile)denied('missing verified inputs');
 const signingKey=process.env.KATIE_NATIVE_HANDOFF_HMAC_KEY;
 const proof=readNativeHandoff(readFileSync(requestFile,'utf8'),signingKey);
 const manifest=JSON.parse(readFileSync(manifestFile,'utf8'));
-for(const key of ['taskId','trialId','approvalId','projectId','contractHash','benchmarkContractHash','baselineSha','expiresAt','continuationId','startupRecoveryId'])
+for(const key of ['taskId','trialId','approvalId','projectId','contractHash','benchmarkContractHash','baselineSha','expiresAt','continuationId','startupRecoveryId','developmentRenewalId'])
  if(manifest[key]!==proof[key])denied('handoff changed after signature verification');
 if(manifest.productionRuntime!==proof.productionRuntime)denied('runtime handoff changed after verification');
 if(process.env.GITHUB_REPOSITORY!=='mfackrell/katie')denied('repository identity mismatch');
@@ -127,9 +127,16 @@ if(!/^agent\/issue-[0-9]+-[0-9]+-[0-9]+$/.test(checkpointBranch||'')||!process.e
 if(!process.env.HOME)denied('trusted host HOME unavailable');
 execFileSync('gh',['auth','setup-git'],{env:{PATH:process.env.PATH||'',HOME:process.env.HOME,GH_TOKEN:process.env.GH_TOKEN},timeout:20000});
 preflightNativeChild(boundary,childFile);
+if(proof.developmentRenewalId){
+ if(!productionRuntime||proof.startupRecoveryId)denied('invalid development renewal transport');
+ const renewal=await readOne('benchmark_development_renewals','id',proof.developmentRenewalId);
+ if(renewal.approval_id!==proof.approvalId||renewal.task_id!==proof.taskId||renewal.continuation_id!==proof.continuationId||task.external?.developmentRenewalId!==renewal.id)denied('development renewal identity mismatch');
+}
 const grantToken=randomBytes(48).toString('base64url');
 if(proof.startupRecoveryId&&!productionRuntime)denied('startup recovery requires production runtime');
-const {data:grantResult,error:issueError}=proof.startupRecoveryId
+const {data:grantResult,error:issueError}=proof.developmentRenewalId
+ ?await db.rpc('benchmark_issue_development_renewal_grant',{p_renewal:proof.developmentRenewalId,p_digest:tokenDigest(grantToken),p_approval:proof.approvalId,p_task:proof.taskId,p_release:process.env.GITHUB_SHA})
+ :proof.startupRecoveryId
  ?await db.rpc('benchmark_issue_startup_recovery_grant',{p_recovery:proof.startupRecoveryId,p_digest:tokenDigest(grantToken),p_approval:proof.approvalId,p_task:proof.taskId,p_release:process.env.GITHUB_SHA})
  :await db.rpc('benchmark_issue_execution_grant',{
  p_owner:approval.owner_id,p_actor:approval.actor_id,p_chat:approval.chat_id,
@@ -137,8 +144,8 @@ const {data:grantResult,error:issueError}=proof.startupRecoveryId
  p_repository:approval.repository,p_model:approval.model,
  p_epoch:1,p_deadline:approval.deadline,p_digest:tokenDigest(grantToken)
 });
-const grantId=proof.startupRecoveryId?grantResult?.grantId:grantResult;
-const executionEpoch=proof.startupRecoveryId?grantResult?.executionEpoch:1;
+const grantId=(proof.startupRecoveryId||proof.developmentRenewalId)?grantResult?.grantId:grantResult;
+const executionEpoch=(proof.startupRecoveryId||proof.developmentRenewalId)?grantResult?.executionEpoch:1;
 if(issueError||typeof grantId!=='string'||!Number.isSafeInteger(executionEpoch)||executionEpoch<1)denied('atomic owner grant issuance rejected');
 const clientToken=randomBytes(32).toString('base64url');
 const root=mkdtempSync(join(tmpdir(),'katie-trusted-gateway-'));
@@ -288,3 +295,4 @@ try{
  await new Promise(resolve=>server.close(resolve));
  rmSync(root,{recursive:true,force:true});
 }
+
