@@ -2,7 +2,12 @@ import {createHash} from 'node:crypto';
 const denied=()=>{throw Error('GATEWAY_UNBOUNDED_INPUT_DENIED');};
 const object=x=>x&&typeof x==='object'&&!Array.isArray(x);
 const allowed=(x,keys)=>Object.keys(x).every(k=>keys.includes(k));
-const textParts=x=>Array.isArray(x)&&x.every(p=>object(p)&&['input_text','output_text','text'].includes(p.type)&&typeof p.text==='string'&&allowed(p,['type','text']));
+// The pinned SDK replays intermediate assistant output_text with annotations:[].
+// Empty annotations carry no referenced context. Nonempty annotations and all
+// other extra content fields remain denied until independently bounded.
+const textParts=x=>Array.isArray(x)&&x.every(p=>object(p)&&['input_text','output_text','text'].includes(p.type)&&typeof p.text==='string'&&
+ allowed(p,p.type==='output_text'?['type','text','annotations']:['type','text'])&&
+ (p.annotations===undefined||(p.type==='output_text'&&Array.isArray(p.annotations)&&p.annotations.length===0)));
 const reasoningKey=(item,model)=>createHash('sha256').update(JSON.stringify([model,item.id,item.encrypted_content,item.summary??[],item.content??[]])).digest('hex');
 
 // Scope is one trusted bridge/grant, never caller-supplied evidence. OpenAI's
@@ -76,3 +81,4 @@ export function admitNativeRequest(request,provenance){
  const counted={...body,...(Array.isArray(body.input)?{input:body.input.map(item=>item.type==='reasoning'?{...item,encrypted_content:''}:item)}:{})};
  return {body,opaqueTokens,plaintextBytes:Buffer.byteLength(JSON.stringify(counted),'utf8')};
 }
+
