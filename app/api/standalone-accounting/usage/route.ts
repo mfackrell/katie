@@ -11,10 +11,11 @@ export async function GET(request: NextRequest) {
     const snapshot = await ledger.snapshot(ownerId);
     const attempts: DailyAttempt[] = snapshot.attempts.map(attempt => ({ id: attempt.id, actor_id: attempt.actor_id, chat_id: attempt.chat_id, provider: attempt.provider, model: attempt.model, resolved_model: attempt.resolved_model, uncertainty_reason: 'uncertainty_reason' in attempt && typeof attempt.uncertainty_reason === 'string' ? attempt.uncertainty_reason : null, category: attempt.category, state: attempt.state, created_at: attempt.created_at, dispatched_at: attempt.dispatched_at, settled_at: attempt.settled_at, reserved_microusd: attempt.reserved_microusd, actual_microusd: attempt.actual_microusd, usage: attempt.usage as DailyAttempt['usage'] }));
     const daily = snapshot.configuration ? summarizeDailyUsage(attempts, snapshot.configuration.timezone, scope.scope === 'this-agent' ? scope.actorId : undefined) : null;
-    const active = snapshot.attempts.filter(attempt => attempt.actor_id === scope.actorId && attempt.chat_id === scope.chatId && ['reserved', 'dispatched', 'uncertain'].includes(attempt.state) && !attempt.cancelled_by_owner_at).map(attempt => ({
+    const active = await Promise.all(snapshot.attempts.filter(attempt => attempt.actor_id === scope.actorId && attempt.chat_id === scope.chatId && ['reserved', 'dispatched', 'uncertain'].includes(attempt.state) && !attempt.cancelled_by_owner_at).map(async attempt => ({
       id: attempt.id, requestId: attempt.request_id, provider: attempt.provider, model: attempt.model, category: attempt.category, state: attempt.state,
       preparedHash: attempt.prepared_hash, pricingVersion: attempt.pricing_version, budgetRevision: attempt.budget_revision, reservedMicrousd: attempt.reserved_microusd,
-    }));
+      exposureAccepted: attempt.state === 'uncertain' ? await ledger.uncertainExposureAccepted(ownerId,attempt.id) : false,
+    })));
     // Only expose actionable attempts from this saved conversation. Daily aggregate can span standalone actors.
     const pending = snapshot.attempts.filter(attempt => attempt.actor_id === scope.actorId && attempt.chat_id === scope.chatId && attempt.state === 'paused').map(attempt => {
       const prepared = attempt.prepared_payload as unknown as FrozenPreparedRequest;

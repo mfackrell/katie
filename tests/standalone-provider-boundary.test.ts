@@ -24,6 +24,7 @@ function fakeLedger(paused = false) {
   const events: string[] = [];
   const identifiers: Array<{ requestId: string | null; responseId: string | null }> = [];
   const service = {
+    async uncertainExposureAccepted() { return false; },
     async loadPricing() { return {snapshot:PRICING_SNAPSHOT,retrievedAt:new Date().toISOString()}; },
     async registerPricing() { events.push('pricing'); return true; },
     async lookupAttempt(_owner: string, _request: string, key: string) { return attempts.find(item => item.attempt_key === key) ?? null; },
@@ -547,4 +548,40 @@ test('OpenAI Connection error preserves the exact pre-transmission replay mismat
     return true;
   });
   assert.equal(sends,0); assert.equal(fake.attempts[0].state,'reserved');
+});
+
+
+test('accepted uncertain exposure replays complete saved output without settlement or retransmission', async () => {
+ const f=fakeLedger();let sends=0;const accepted=new Set<string>();
+ f.service.uncertainExposureAccepted=async(_owner,id)=>accepted.has(id);
+ const send=createAccountingFetch('openai',async()=>{sends++;return Response.json({id:'unconfirmed-'+sends,choices:[{finish_reason:'stop',message:{content:'real saved output'}}]});},f.factory);
+ await assert.rejects(runWithStandaloneAccounting(context,()=>send('https://api.openai.com/v1/chat/completions',request)),{code:'standalone_outcome_unknown'});
+ const uncertain=f.attempts[0];const retained=JSON.stringify(uncertain);
+ await assert.rejects(runWithStandaloneAccounting({...context,resumed:true},()=>send('https://api.openai.com/v1/chat/completions',request)),{code:'standalone_outcome_unknown'});
+ accepted.add(uncertain.id);
+ for(let restart=0;restart<2;restart++){
+   const response=await runWithStandaloneAccounting({...context,resumed:true},()=>send('https://api.openai.com/v1/chat/completions',request));
+   assert.match(await response.text(),/real saved output/);
+ }
+ assert.equal(sends,1);assert.equal(JSON.stringify(uncertain),retained,'state, identity, evidence and full reservation remain untouched');
+ assert.equal(f.events.filter(event=>event==='settle').length,0);
+ // The remaining logical call is a distinct ordinal and still enters admission.
+ await assert.rejects(runWithStandaloneAccounting({...context,resumed:true},async()=>{
+   await send('https://api.openai.com/v1/chat/completions',request);
+   await send('https://api.openai.com/v1/chat/completions',request);
+ }),{code:'standalone_outcome_unknown'});
+ assert.equal(sends,2);assert.equal(f.attempts.length,2);assert.equal(f.attempts[1].state,'uncertain');
+ assert.equal(await f.service.uncertainExposureAccepted(context.userId,f.attempts[1].id),false,'a second uncertain attempt needs a new decision');
+});
+
+test('accepting exposure never fabricates a missing or incomplete provider result',async()=>{
+ const f=fakeLedger();let sends=0;
+ const send=createAccountingFetch('openai',async()=>{sends++;throw Error('socket lost');},f.factory);
+ await assert.rejects(runWithStandaloneAccounting(context,()=>send('https://api.openai.com/v1/chat/completions',request)),isStandaloneAccountingError);
+ f.service.uncertainExposureAccepted=async()=>true;
+ for(const checkpoint of [null,{status:200,statusText:'OK',headers:[],body:JSON.stringify({choices:[{message:{content:'partial'},finish_reason:null}]})}] as Array<ResponseCheckpoint|null>){
+  f.attempts[0].response_checkpoint=checkpoint;
+  await assert.rejects(runWithStandaloneAccounting({...context,resumed:true},()=>send('https://api.openai.com/v1/chat/completions',request)),{code:'standalone_safe_checkpoint_unavailable'});
+ }
+ assert.equal(sends,1);assert.equal(f.attempts[0].state,'uncertain');
 });

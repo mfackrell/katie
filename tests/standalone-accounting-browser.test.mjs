@@ -21,7 +21,7 @@ test('standalone browser: explicit settings, scopes, exact approval resume, redu
   let server, browser, output = '';
   const totals = overrides => ({ inputTokens: 123, outputTokens: 45, missingInputCount: 0, missingOutputCount: 1, estimatedCostMicrousd: '250000', pendingExposureMicrousd: '900000', uncertainExposureMicrousd: '100000', unknownCostCount: 1, attemptCount: 4, ...overrides });
   const pending = (suffix, overrides = {}) => ({ id: `attempt-${suffix}`, requestId: `original-${suffix}`, provider: 'openai', model: 'gpt-4o', resolvedModel: null, category: 'hidden_router', preparedHash: 'a'.repeat(64), pricingVersion: 'fixture-pricing-v1', estimatorVersion: 'saved-estimator-v1', budgetRevision: 1, reservedMicrousd: '300000', reason: 'Choose a reply model for this saved turn.', pauseReason: 'per_call_threshold', tradeoffs: null, createdAt: '2026-10-28T10:00:00Z', preview: { textBytes: 3200, imageCount: 2, imageBytes: 4096, inputTokens: 3500, imageTokens: 256, outputAllowance: 8192, assumptions: ['Input token count is an estimate, not a guaranteed spending ceiling.', 'All allowed output tokens include hidden reasoning.'], issues: [], status: 'estimated' }, requestExposure: totals(), ...overrides });
-  let configuration = null, proposals = [], running = [], fail = false, resumeMode = 'paused', savedMessages = [];
+  let configuration = null, proposals = [], running = [], fail = false, resumeMode = 'paused', savedMessages = [], denyExposure = false, uncertainTotal = '100000';
   const decisions = [], resumes = [], configurations = [], scopes = [], external = [], unknownRoutes = [], errors = [], messageSnapshots = [];
   let page;
   try {
@@ -58,7 +58,7 @@ test('standalone browser: explicit settings, scopes, exact approval resume, redu
           scopes.push(url.searchParams.get('scope'));
           if (fail) return reply({ error: 'Fixture accounting unavailable' }, 503);
           const all = url.searchParams.get('scope') === 'all';
-          const sum = totals(all ? { inputTokens: 999, estimatedCostMicrousd: '750000' } : {});
+          const sum = totals({ uncertainExposureMicrousd: uncertainTotal, ...(all ? { inputTokens: 999, estimatedCostMicrousd: '750000' } : {}) });
           return reply({ configuration, pending: proposals, active: running, daily: configuration ? { timezone: configuration.timezone, date: '2026-10-28', start: '2026-10-28T00:00:00Z', end: '2026-10-29T00:00:00Z', totals: sum, providers: [{ ...sum, provider: 'openai' }], models: [{ ...sum, provider: 'openai', model: 'gpt-4o', category: 'hidden_router' }], unresolvedEarlier: totals({ attemptCount: 1, pendingExposureMicrousd: '0', uncertainExposureMicrousd: '40000' }), attempts: [{ id: 'helper-row', actor_id: actorId, chat_id: chatId, provider: 'openai', model: 'gpt-4o', category: 'hidden_router', state: 'uncertain', created_at: '2026-10-28T10:00:00Z', dispatched_at: '2026-10-28T10:00:00Z', actual_microusd: null }] } : null });
         }
         if (url.pathname.endsWith('/configuration')) {
@@ -69,6 +69,13 @@ test('standalone browser: explicit settings, scopes, exact approval resume, redu
         if (url.pathname.endsWith('/attempts')) {
           decisions.push(body); const original = [...proposals, ...running].find(attempt => attempt.id === body.attemptId); assert.ok(original);
           assert.equal(body.preparedHash, original.preparedHash); assert.equal(body.reservedMicrousd, original.reservedMicrousd);
+          if (body.action === 'accept_exposure') {
+            assert.equal(original.state, 'uncertain');
+            assert.equal(body.budgetRevision, configuration.budget_revision, 'acceptance uses current owner budget revision');
+            if (denyExposure) return reply({ error: 'This owner cannot accept the uncertain exposure.' }, 403);
+            running = running.map(attempt => attempt.id === original.id ? { ...attempt, exposureAccepted: true } : attempt);
+            return reply({ attemptId: original.id, requestId: original.requestId, state: 'uncertain', retainedExposureMicrousd: original.reservedMicrousd });
+          }
           if (body.action === 'cancel' && running.some(attempt => attempt.id === original.id)) {
             running = running.filter(attempt => attempt.id !== original.id);
             return reply({ attemptId: original.id, requestId: original.requestId, state: 'uncertain', cancellationRequested: true, heldExposureMicrousd: original.reservedMicrousd, message: 'Cancellation requested for remaining work. This attempt was already dispatched; its spending exposure remains held until provider usage is reconciled.' });
@@ -189,13 +196,41 @@ test('standalone browser: explicit settings, scopes, exact approval resume, redu
     assert.deepEqual(resumes[1], { body: { actorId, chatId, standaloneResume: true }, requestId: 'original-approved-reconnect' });
     assert.equal(decisions.filter(body => body.action === 'approve_once').length, approvalCountBeforeReconnect, 'resuming a reserved attempt must not issue another approval');
     await page.waitForFunction(() => !Array.from(document.querySelectorAll('button')).some(button => button.textContent === 'Resume saved work'));
-    running = running.map(attempt => ({ ...attempt, state: 'uncertain' }));
+    running = running.map(attempt => ({ ...attempt, state: 'uncertain', reservedMicrousd: '3584', exposureAccepted: false }));
+    configuration = { ...configuration, budget_revision: 2 }; uncertainTotal = '3584';
     await usage.getByRole('button', { name: 'Usage details' }).click();
     await usage.getByRole('button', { name: 'Refresh', exact: true }).click();
     await usage.getByRole('button', { name: 'Review', exact: true }).click();
     await active.getByText('openai/gpt-4o · hidden_router · uncertain', { exact: false }).waitFor();
     assert.equal(await active.getByRole('button', { name: 'Resume saved work' }).count(), 0, 'uncertain paid work cannot be replayed');
     assert.equal(await active.getByRole('button', { name: 'Cancel remaining work' }).count(), 1);
+    assert.equal(await active.getByRole('button', { name: 'Approve once' }).count(), 0);
+    assert.match(await active.innerText(), /provider call was already sent.*will not resend this attempt/);
+    denyExposure = true;
+    await active.getByRole('button', { name: 'Accept exposure & continue', exact: true }).click();
+    await usage.getByRole('alert').filter({ hasText: 'This owner cannot accept the uncertain exposure.' }).waitFor();
+    assert.equal(resumes.length, 2, 'denied authorization cannot resume');
+    assert.doesNotMatch(await active.innerText(), /Uncertain exposure accepted/);
+    denyExposure = false; resumeMode = 'failed';
+    await active.getByRole('button', { name: 'Accept exposure & continue', exact: true }).click();
+    await usage.getByRole('alert').filter({ hasText: 'Saved attempt failed: exact fixture cause' }).waitFor();
+    await active.getByText('Uncertain exposure accepted · $0.003584 retained', { exact: true }).waitFor();
+    assert.match(await usage.innerText(), /Uncertain exposure accepted.*retained.*continuation stopped/);
+    assert.equal(running[0].state, 'uncertain'); assert.equal(running[0].reservedMicrousd, '3584');
+    assert.equal(decisions.filter(body => body.action === 'accept_exposure').at(-1).budgetRevision, 2);
+    assert.equal(resumes.length, 3);
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await usage.getByRole('button', { name: 'Review', exact: true }).click();
+    await active.getByText('Uncertain exposure accepted · $0.003584 retained', { exact: true }).waitFor();
+    assert.equal(resumes.length, 3, 'reconnect must not automatically resume uncertain work');
+    resumeMode = 'completed';
+    await active.getByRole('button', { name: 'Continue remaining work', exact: true }).click();
+    await usage.getByRole('status').filter({ hasText: 'Uncertain exposure accepted · $0.003584 retained · remaining work completed' }).waitFor();
+    assert.equal(running[0].state, 'uncertain'); assert.equal(running[0].reservedMicrousd, '3584');
+    assert.equal(resumes.length, 4);
+    await usage.getByRole('button', { name: 'Usage details' }).click();
+    assert.match(await usage.innerText(), /Uncertain \$0.003584/);
+    await usage.getByRole('button', { name: 'Close details', exact: true }).click();
     running = [{ ...pending('failed'), state: 'reserved' }]; resumeMode = 'failed';
     await usage.getByRole('button', { name: 'Usage details' }).click();
     await usage.getByRole('button', { name: 'Refresh', exact: true }).click();
@@ -206,7 +241,7 @@ test('standalone browser: explicit settings, scopes, exact approval resume, redu
     await usage.getByRole('button', { name: 'Refresh', exact: true }).click();
     assert.match(await usage.innerText(), /Saved attempt failed: exact fixture cause/);
     assert.doesNotMatch(await usage.innerText(), /Resume requested|Saved work completed/);
-    assert.equal(resumes.length, 3);
+    assert.equal(resumes.length, 5);
     fail = true; await usage.getByRole('button', { name: 'Refresh', exact: true }).click();
     await usage.getByRole('alert').filter({ hasText: 'Previously loaded values may be stale' }).waitFor();
     assert.match(await usage.innerText(), /Saved attempt failed: exact fixture cause/);
