@@ -1,9 +1,10 @@
 import { createHash } from 'node:crypto';
 import type { FileReference, LlmProvider } from '@/lib/providers/types';
 import type { ConversationAttachment } from '@/lib/chat/attachment-continuity';
+import { QWEN_STILL_POLICY } from '@/lib/standalone-accounting/runpod-policy';
 import { describeImageWithRunpodQwen } from '@/lib/chat/runpod-still-vision';
 import { StandaloneAccountingError, createStandaloneLedger } from '@/lib/standalone-accounting/ledger';
-import { isStandaloneAccountingError, runWithStandaloneActivity } from '@/lib/standalone-accounting/context';
+import { getAccountingScope, isStandaloneAccountingError, runWithStandaloneActivity } from '@/lib/standalone-accounting/context';
 import { loadStandalonePricing } from '@/lib/standalone-accounting/pricing-intake';
 import { getAvailableProviders } from '@/lib/providers';
 import { rankControlPlaneByActualCost } from '@/lib/router/control-plane-economics';
@@ -48,7 +49,19 @@ export function reusableImageObservation(reference:FileReference,saved:Conversat
 /** One escalation across the bounded image set, after Qwen, using only actual
  * adapter payloads with reviewed image billing. No unpriceable Grok loop. */
 export async function escalateStillImageEvidence(images:string[],question:string):Promise<{text:string;model:string}> {
-  const pricing=await loadStandalonePricing(createStandaloneLedger());
+  const ledger=createStandaloneLedger();
+  const scope=getAccountingScope();
+  if(scope?.kind==='standalone'){
+    // Admission fence at the paid escalation boundary, including workflow replay.
+    // A caught observation failure is never authorization to spend past Qwen.
+    const snapshot=await ledger.snapshot(scope.context.userId);
+    for(const attempt of snapshot.attempts){
+      if(attempt.request_id===scope.context.requestId && attempt.provider==='runpod' && attempt.model===QWEN_STILL_POLICY.model &&
+          attempt.state==='uncertain' && !await ledger.uncertainExposureAccepted(scope.context.userId,attempt.id))
+        throw Object.assign(new StandaloneAccountingError('outcome_unknown','Qwen submission exposure is unresolved. Accept its exposure before continuing remaining image work.'),{attemptId:attempt.id});
+    }
+  }
+  const pricing=await loadStandalonePricing(ledger);
   const providers=getAvailableProviders();
   const candidates:Array<{provider:LlmProvider;modelId:string}>=[];
   for(const provider of providers){
