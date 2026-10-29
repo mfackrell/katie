@@ -84,3 +84,13 @@ test('stream execution failure is never persisted as successful completion',asyn
  const response=await executeStandaloneWorkflow(request(),payload,async()=>new Response('{"type":"reasoning_error","message":"Saved preparation failed"}\n',{headers:{'content-type':'application/x-ndjson'}}));
  assert.equal(stored.status,'failed');assert.match(await response.text(),/Saved preparation failed/);
 });
+
+test('deterministic image limitations are saved as terminal failures rather than approval loops',async()=>{
+ const response=await executeStandaloneWorkflow(request(),payload,async()=>new Response('{"type":"accounting_pause","code":"standalone_no_priceable_vision","message":"No supported image escalation"}\n',{headers:{'content-type':'application/x-ndjson'}}));
+ assert.equal(stored.status,'failed');assert.match(await response.text(),/standalone_no_priceable_vision/);
+});
+
+test('assistant text mentioning an image limitation code is not execution authority',async()=>{
+ const response=await executeStandaloneWorkflow(request(),payload,async()=>new Response(JSON.stringify({type:'content',text:'The error standalone_no_priceable_vision means there is no supported escalation.'})+'\n',{headers:{'content-type':'application/x-ndjson'}}));
+ assert.equal(stored.status,'completed');assert.match(await response.text(),/standalone_no_priceable_vision/);
+});

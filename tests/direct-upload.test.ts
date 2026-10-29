@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { createStoredUploadService } from "../lib/uploads/stored-uploads";
 import { acknowledgeVideoUploads, uploadFilesDirect } from "../lib/uploads/direct-upload-client";
 import type { FileReference } from "../lib/providers/types";
+import { imageObservationHash, STILL_IMAGE_OBSERVATION_VERSION } from '../lib/uploads/still-image-observations';
 
 function fakeStorage() {
   const files = new Map<string, Blob>();
@@ -44,6 +45,25 @@ const reference: FileReference = {
   extractedText: "Important source text", extractedChunks: [{ index: 0, total: 1, text: "Important source text" }],
   providerRef: { openaiFileId: "file-provider", googleFileUri: "https://provider.example/document" },
 };
+
+test('saved Qwen observations retain provenance and can be refined only for the same actor and immutable source',async()=>{
+  const fake=fakeStorage(),service=createStoredUploadService(fake.storage,'test-only-secret');
+  const chatId='11111111-1111-4111-8111-111111111111',actorId='22222222-2222-4222-8222-222222222222';
+  const image:FileReference={fileId:'source-image',fileName:'profile.png',mimeType:'image/png',preview:'Profile screenshot',imageDataUrl:'data:image/png;base64,aW1hZ2U='};
+  const description={observedSummary:'A profile says gardener.',summaryModel:'runpod:Qwen/Qwen3-VL-8B-Instruct',summaryCoverage:'full' as const,observationSourceHash:imageObservationHash(image.imageDataUrl!),observationQuestion:'Describe the profile',observationVersion:STILL_IMAGE_OBSERVATION_VERSION,observationAt:'2026-10-29T18:00:00Z',observationLimitations:[]};
+  const saved=await service.persist(chatId,image,undefined,{source:new Blob(['image']),description,actorId});
+  const refined={...description,observedSummary:'The small print says gardener and homesteader.',observationQuestion:'Read the small print',observationAt:'2026-10-29T18:01:00Z'};
+  await assert.rejects(service.updateImageObservation(chatId,saved,'33333333-3333-4333-8333-333333333333',refined),/identity/);
+  await assert.rejects(service.updateImageObservation(chatId,saved,actorId,{...refined,observationSourceHash:'changed'}),/identity/);
+  const updated=await service.updateImageObservation(chatId,saved,actorId,refined);
+  assert.equal(updated.id,saved.id);assert.equal(updated.observedSummary,refined.observedSummary);
+  assert.deepEqual((await service.catalog(actorId,'actor')).attachments,[updated]);
+  assert.equal((await service.restore(chatId,updated,actorId)).imageDataUrl,image.imageDataUrl);
+  assert.equal(await fake.files.get(`chats/${chatId}/${saved.id}.source`)!.text(),'image');
+  const canonical=JSON.parse(await fake.files.get(`chats/${chatId}/${saved.id}.json`)!.text());
+  assert.equal(canonical.observationHistory[0].observedSummary,description.observedSummary);
+  assert.equal(canonical.evidenceDescriptor.observationSourceHash,description.observationSourceHash);
+});
 
 test("large binary uploads use private signed storage and full extraction hydrates from a compact reference", async () => {
   const fake = fakeStorage();

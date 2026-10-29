@@ -54,3 +54,24 @@ test('money remains exact beyond the floating point safe integer limit', () => {
   const daily = summarizeDailyUsage([attempt({ actual_microusd: '9007199254740993' }), attempt({ id: 'two', actual_microusd: '7' })], 'UTC', undefined, new Date('2026-03-08T12:00:00Z'));
   assert.equal(daily.totals.estimatedCostMicrousd, '9007199254741000');
 });
+
+
+test('RunPod policy reservations remain estimated infrastructure, distinct from actuals and tokens', () => {
+  const estimated = attempt({id:'qwen',provider:'runpod',model:'Qwen/Qwen3-VL-8B-Instruct',category:'attachment-observation',state:'estimated',reserved_microusd:'20000',actual_microusd:null,usage:null});
+  const daily=summarizeDailyUsage([estimated,attempt()], 'America/New_York','alice',new Date('2026-03-08T12:00:00Z'));
+  assert.equal(daily.totals.estimatedInfrastructureMicrousd,'20000');
+  assert.equal(daily.totals.estimatedCostMicrousd,'3000','unconfirmed infrastructure is never fabricated as actual cost');
+  assert.equal(daily.totals.pendingExposureMicrousd,'0');assert.equal(daily.totals.uncertainExposureMicrousd,'0');
+  assert.equal(daily.totals.inputTokens,120);assert.equal(daily.totals.outputTokens,20);
+  assert.equal(daily.totals.missingInputCount,0);assert.equal(daily.totals.missingOutputCount,0);
+  assert.equal(daily.totals.unknownCostCount,1);
+  const provider=daily.providers.find(row=>row.provider==='runpod')!;
+  assert.equal(provider.estimatedInfrastructureMicrousd,'20000');assert.equal(provider.estimatedCostMicrousd,'0');
+  const settled=summarizeDailyUsage([{...estimated,state:'settled',actual_microusd:'12345'}],'America/New_York','alice',new Date('2026-03-08T12:00:00Z'));
+  assert.equal(settled.totals.estimatedInfrastructureMicrousd,'0');assert.equal(settled.totals.estimatedCostMicrousd,'12345');
+  assert.equal(settled.totals.unknownCostCount,0);assert.equal(settled.totals.missingInputCount,0);
+  const later=summarizeDailyUsage([estimated],'America/New_York','alice',new Date('2026-03-09T12:00:00Z'));
+  assert.equal(later.totals.estimatedInfrastructureMicrousd,'0','completed estimates belong to dispatch day');
+  const other=summarizeDailyUsage([{...estimated,actor_id:'bob'}],'America/New_York','alice',new Date('2026-03-08T12:00:00Z'));
+  assert.equal(other.totals.estimatedInfrastructureMicrousd,'0','estimates retain owner/agent scope');
+});

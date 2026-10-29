@@ -20,6 +20,7 @@ export function createStandaloneLedger(db:LedgerDatabase=getSupabaseAdminClient(
     return result.data;
   }
   return {
+    workflowStatus:(ownerId:string,requestId:string)=>rpc<{status:string;error?:string|null;error_message?:string|null}|null>('load_workflow',{p_owner:ownerId,p_request:requestId}),
     authorizeScope:(ownerId:string,actorId:string,chatId:string)=>rpc<boolean>('authorize_scope',{p_owner:ownerId,p_actor:actorId,p_chat:chatId}),
     bindScope:(ownerId:string,actorId:string,chatId:string)=>rpc<boolean>('bind_scope',{p_owner:ownerId,p_actor:actorId,p_chat:chatId}),
     loadPricing:(version:string|null)=>rpc<{snapshot:PricingSnapshot;retrievedAt:string}|null>('load_pricing',{p_version:version}),
@@ -37,6 +38,8 @@ export function createStandaloneLedger(db:LedgerDatabase=getSupabaseAdminClient(
     settle:(i:SettlementInput)=>rpc<LedgerAttempt>('settle',{p_owner:i.ownerId,p_attempt:i.attemptId,p_provider:i.provider,p_receipt:i.providerReceiptId,p_actual:i.actualMicrousd,p_usage:i.usage,p_evidence:i.evidence}),
     acceptUncertainExposure:(ownerId:string,attemptId:string,budgetRevision:number,reservedMicrousd:string)=>rpc<{accepted_at:string}>('accept_uncertain_exposure',{p_owner:ownerId,p_attempt:attemptId,p_revision:budgetRevision,p_reserved:reservedMicrousd}),
     uncertainExposureAccepted:(ownerId:string,attemptId:string)=>rpc<boolean>('uncertain_exposure_accepted',{p_owner:ownerId,p_attempt:attemptId}),
+    completeQwenRejection:(ownerId:string,attemptId:string,checkpoint:ResponseCheckpoint)=>rpc<LedgerAttempt>('complete_qwen_rejection',{p_owner:ownerId,p_attempt:attemptId,p_checkpoint:checkpoint}),
+    completeQwenEstimate:(ownerId:string,attemptId:string,jobId:string,checkpoint:ResponseCheckpoint,evidence:Record<string,unknown>)=>rpc<LedgerAttempt>('complete_qwen_estimate',{p_owner:ownerId,p_attempt:attemptId,p_job:jobId,p_checkpoint:checkpoint,p_evidence:evidence}),
     markUncertain:(ownerId:string,attemptId:string,reason='Provider outcome unknown')=>rpc<LedgerAttempt>('mark_uncertain',{p_owner:ownerId,p_attempt:attemptId,p_reason:reason}),
     cancel:(ownerId:string,attemptId:string)=>rpc<LedgerAttempt>('cancel',{p_owner:ownerId,p_attempt:attemptId}),
     recordPartialUsage:(ownerId:string,attemptId:string,usage:Record<string,unknown>,evidence:Record<string,unknown>)=>rpc<LedgerAttempt>('record_partial_usage',{p_owner:ownerId,p_attempt:attemptId,p_usage:usage,p_evidence:evidence}),

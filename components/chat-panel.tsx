@@ -116,6 +116,7 @@ type CollaborationUiMetadata = {
 
 type ChatMetadataChunk = {
   type: "metadata";
+  imageObservation?: string;
   modelId: string;
   provider: string;
   explainer?: SelectionExplainer;
@@ -136,6 +137,15 @@ type ChatMetadataChunk = {
   replayed?: boolean;
   requestId?: string;
 };
+
+const IMAGE_OBSERVATION_STAGES = new Set([
+  'Analyzing image with Qwen…', 'Qwen image analysis queued…', 'Qwen image analysis complete',
+  'Using saved Qwen observation', 'Escalating image analysis for additional detail…',
+]);
+function appendImageObservationStage(current: string[], stage: string): string[] {
+  if (!IMAGE_OBSERVATION_STAGES.has(stage) || current.at(-1) === stage) return current;
+  return [...current, stage].slice(-6);
+}
 
 function describeProviderFailover(failover: NonNullable<ChatMetadataChunk["providerFailover"]>): string {
   if (failover.kind === "refusal") {
@@ -796,6 +806,10 @@ export function ChatPanel({
         const text=await response.text();
         if(!response.ok){let message="Saved request could not resume.";try{message=JSON.parse(text).error??message;}catch{}throw Error(message);}
         const chunks=text.split("\n").filter(Boolean).map(line=>{try{return JSON.parse(line);}catch{return null;}});
+        for (const chunk of chunks) if (chunk?.type === 'metadata' && typeof chunk.imageObservation === 'string' && IMAGE_OBSERVATION_STAGES.has(chunk.imageObservation)) {
+          setStatusMessage(chunk.imageObservation);
+          setImageObservationStages(current => appendImageObservationStage(current, chunk.imageObservation));
+        }
         const failure=chunks.find(chunk=>chunk?.type==="accounting_pause"||chunk?.type==="reasoning_error"||chunk?.type==="error");
         if(failure)throw Error(failure.message??failure.error??failure.code??"Saved work failed.");
         if(response.status===202){
@@ -837,6 +851,7 @@ export function ChatPanel({
   useEffect(()=>{let active=true;readPendingAttachments(chatId).then(value=>{if(!active)return;if(value){setSelectedImages(value.images);setSelectedImageFiles(value.imageFiles);setSelectedVideos(value.videos);setSelectedFiles(value.files);setFileReferences(value.references);}setAttachmentsReady(true);}).catch(()=>{if(active)setAttachmentsReady(true);});return()=>{active=false;};},[chatId]);
   useEffect(()=>{if(!attachmentsReady)return;void savePendingAttachments(chatId,{images:selectedImages,imageFiles:selectedImageFiles,videos:selectedVideos,files:selectedFiles,references:fileReferences}).then(()=>setAttachmentSaveError(false)).catch(()=>setAttachmentSaveError(true));},[chatId,attachmentsReady,selectedImages,selectedImageFiles,selectedVideos,selectedFiles,fileReferences]);
   const [statusMessage, setStatusMessage] = useState("");
+  const [imageObservationStages, setImageObservationStages] = useState<string[]>([]);
   const [failoverNotice, setFailoverNotice] = useState("");
   const [collaborationActivity, setCollaborationActivity] = useState<CollaborationActivityItem[]>([]);
   const [collaborationActive, setCollaborationActive] = useState(false);
@@ -1062,7 +1077,7 @@ export function ChatPanel({
       setFailoverNotice("");
       setStreamingModel(null);
     setStreamingAnswer("");
-      setCollaborationActivity([]);
+      setCollaborationActivity([]);setImageObservationStages([]);
       setCollaborationActive(false);
       setCollaborationSummary(null);
       setReasoningState(createReasoningUiState());
@@ -1555,7 +1570,7 @@ export function ChatPanel({
     setSelectionExplainer(null);
     setIsRoutingSelectionInFlight(true);
     setExplainerOpen(true);
-    setCollaborationActivity([]);
+    setCollaborationActivity([]);setImageObservationStages([]);
     setCollaborationActive(false);
     setCollaborationSummary(null);
     setStatusMessage("Routing request and selecting the lead model…");
@@ -1873,6 +1888,13 @@ export function ChatPanel({
           }
           if (chunk.type === "reasoning_error") throw new TerminalChatError(chunk.message, chunk.messageId);
 
+          if (chunk.type === 'metadata' && typeof chunk.imageObservation === 'string') {
+            if (IMAGE_OBSERVATION_STAGES.has(chunk.imageObservation)) {
+              setStatusMessage(chunk.imageObservation);
+              setImageObservationStages(current => appendImageObservationStage(current, chunk.imageObservation!));
+            }
+            continue;
+          }
           if (chunk.type === "metadata") {
             if (chunk.resetText) {
               textContent = "";
@@ -1970,7 +1992,12 @@ export function ChatPanel({
 
         if (trailingChunk.type === "reasoning_error") throw new TerminalChatError(trailingChunk.message, trailingChunk.messageId);
 
-        if (trailingChunk.type === "metadata") {
+        if (trailingChunk.type === 'metadata' && typeof trailingChunk.imageObservation === 'string') {
+          if (IMAGE_OBSERVATION_STAGES.has(trailingChunk.imageObservation)) {
+            setStatusMessage(trailingChunk.imageObservation);
+            setImageObservationStages(current => appendImageObservationStage(current, trailingChunk.imageObservation!));
+          }
+        } else if (trailingChunk.type === "metadata") {
           if (trailingChunk.resetText) {
             textContent = "";
             setStreamingAnswer("");
@@ -2774,6 +2801,7 @@ export function ChatPanel({
       {statusRailOpen && statusMount ? createPortal(
         <div className="space-y-2 text-xs" aria-live="polite">
           <p className="font-medium text-zinc-200">{loading ? (statusMessage || "Thinking / streaming updates") : (statusMessage || "Idle")}</p>
+          {imageObservationStages.length > 0 && <ul aria-label="Image analysis stages" className="space-y-1 text-zinc-400">{imageObservationStages.map((stage,index)=><li key={`${index}:${stage}`}>{stage}</li>)}</ul>}
           {(loading || collaborationActivity.length > 0 || reasoningPopupVisible) && <ReasoningExplainerPanel loading={loading} state={reasoningState} statusMessage={statusMessage} collaborationActive={collaborationActive} collaborationActivity={collaborationActivity} collaborationSummary={collaborationSummary} onClose={() => { setReasoningPopupVisible(false); setReasoningPopupDismissed(true); }} />}
         </div>, statusMount
       ) : null}

@@ -22,7 +22,7 @@ test('standalone browser: explicit settings, scopes, exact approval resume, redu
   let server, browser, output = '';
   const totals = overrides => ({ inputTokens: 123, outputTokens: 45, missingInputCount: 0, missingOutputCount: 1, estimatedCostMicrousd: '250000', pendingExposureMicrousd: '900000', uncertainExposureMicrousd: '100000', unknownCostCount: 1, attemptCount: 4, ...overrides });
   const pending = (suffix, overrides = {}) => ({ id: `attempt-${suffix}`, requestId: `original-${suffix}`, provider: 'openai', model: 'gpt-4o', resolvedModel: null, category: 'hidden_router', preparedHash: 'a'.repeat(64), pricingVersion: 'fixture-pricing-v1', estimatorVersion: 'saved-estimator-v1', budgetRevision: 1, reservedMicrousd: '300000', reason: 'Choose a reply model for this saved turn.', pauseReason: 'per_call_threshold', tradeoffs: null, createdAt: '2026-10-28T10:00:00Z', preview: { textBytes: 3200, imageCount: 2, imageBytes: 4096, inputTokens: 3500, imageTokens: 256, outputAllowance: 8192, assumptions: ['Input token count is an estimate, not a guaranteed spending ceiling.', 'All allowed output tokens include hidden reasoning.'], issues: [], status: 'estimated' }, requestExposure: totals(), ...overrides });
-  let configuration = null, proposals = [], running = [], fail = false, resumeMode = 'paused', savedMessages = [], denyExposure = false, uncertainTotal = '100000';
+  let configuration = null, proposals = [], running = [], fail = false, resumeMode = 'paused', savedMessages = [], denyExposure = false, uncertainTotal = '100000', infrastructureTotal = '0';
   const decisions = [], resumes = [], configurations = [], scopes = [], external = [], unknownRoutes = [], errors = [], messageSnapshots = [];
   let page;
   try {
@@ -59,8 +59,10 @@ test('standalone browser: explicit settings, scopes, exact approval resume, redu
           scopes.push(url.searchParams.get('scope'));
           if (fail) return reply({ error: 'Fixture accounting unavailable' }, 503);
           const all = url.searchParams.get('scope') === 'all';
-          const sum = totals({ uncertainExposureMicrousd: uncertainTotal, ...(all ? { inputTokens: 999, estimatedCostMicrousd: '750000' } : {}) });
-          return reply({ configuration, pending: proposals, active: running, daily: configuration ? { timezone: configuration.timezone, date: '2026-10-28', start: '2026-10-28T00:00:00Z', end: '2026-10-29T00:00:00Z', totals: sum, providers: [{ ...sum, provider: 'openai' }], models: [{ ...sum, provider: 'openai', model: 'gpt-4o', category: 'hidden_router' }], unresolvedEarlier: totals({ attemptCount: 1, pendingExposureMicrousd: '0', uncertainExposureMicrousd: '40000' }), attempts: [{ id: 'helper-row', actor_id: actorId, chat_id: chatId, provider: 'openai', model: 'gpt-4o', category: 'hidden_router', state: 'uncertain', created_at: '2026-10-28T10:00:00Z', dispatched_at: '2026-10-28T10:00:00Z', actual_microusd: null }] } : null });
+          const sum = totals({ uncertainExposureMicrousd: uncertainTotal, estimatedInfrastructureMicrousd: infrastructureTotal, ...(all ? { inputTokens: 999, estimatedCostMicrousd: '750000' } : {}) });
+          const infra = totals({ inputTokens:0, outputTokens:0, missingInputCount:0, missingOutputCount:0, estimatedCostMicrousd:'0', estimatedInfrastructureMicrousd:infrastructureTotal, pendingExposureMicrousd:'0', uncertainExposureMicrousd:'0', unknownCostCount:1, attemptCount:1 });
+          const infrastructureModels = infrastructureTotal === '0' ? [] : [{ ...infra, provider:'runpod', model:'Qwen/Qwen3-VL-8B-Instruct', category:'attachment-observation' }];
+          return reply({ configuration, pending: proposals, active: running, daily: configuration ? { timezone: configuration.timezone, date: '2026-10-28', start: '2026-10-28T00:00:00Z', end: '2026-10-29T00:00:00Z', totals: sum, providers: [{ ...sum, estimatedInfrastructureMicrousd:'0', provider: 'openai' }, ...infrastructureModels], models: [{ ...sum, estimatedInfrastructureMicrousd:'0', provider: 'openai', model: 'gpt-4o', category: 'hidden_router' }, ...infrastructureModels], unresolvedEarlier: totals({ attemptCount: 1, pendingExposureMicrousd: '0', uncertainExposureMicrousd: '40000' }), attempts: [{ id: 'helper-row', actor_id: actorId, chat_id: chatId, provider: 'openai', model: 'gpt-4o', category: 'hidden_router', state: 'uncertain', created_at: '2026-10-28T10:00:00Z', dispatched_at: '2026-10-28T10:00:00Z', actual_microusd: null }] } : null });
         }
         if (url.pathname.endsWith('/configuration')) {
           configurations.push(body); configuration = { timezone: body.timezone, per_call_limit_microusd: body.perCallLimitMicrousd, request_limit_microusd: body.requestLimitMicrousd, budget_revision: 1 };
@@ -90,7 +92,7 @@ test('standalone browser: explicit settings, scopes, exact approval resume, redu
         const requestId = request.headers()['x-request-id']; resumes.push({ body, requestId });
         running = running.map(attempt => attempt.requestId === requestId && attempt.state === 'reserved' ? { ...attempt, state: 'dispatched' } : attempt);
         if (resumeMode === 'failed') return reply({ error: 'Saved attempt failed: exact fixture cause' }, 500);
-        if (resumeMode === 'completed') { savedMessages = [{ id: 'saved-answer', role: 'assistant', content: 'The saved approved answer is visible.', createdAt: '2026-10-28T10:00:00Z', provider: 'openai', model: 'gpt-4o' }]; return route.fulfill({ status: 200, contentType: 'application/x-ndjson', body: JSON.stringify({ type: 'content', text: savedMessages[0].content }) + '\n' }); }
+        if (resumeMode === 'completed') { const qwenPoll=running.some(attempt=>attempt.requestId===requestId && attempt.pollableRunpod); if (qwenPoll) {running=[]; infrastructureTotal='20000';} savedMessages = [{ id: 'saved-answer', role: 'assistant', content: 'The saved approved answer is visible.', createdAt: '2026-10-28T10:00:00Z', provider: 'openai', model: 'gpt-4o' }]; const stages=qwenPoll?['Analyzing image with Qwen…','Qwen image analysis queued…','Qwen image analysis complete','Using saved Qwen observation']:[]; return route.fulfill({ status: 200, contentType: 'application/x-ndjson', body: [...stages.map(imageObservation=>({type:'metadata',imageObservation})),{ type: 'content', text: savedMessages[0].content }].map(chunk=>JSON.stringify(chunk)).join('\n') + '\n' }); }
         return route.fulfill({ status: 200, contentType: 'application/x-ndjson', body: JSON.stringify({ type: 'accounting_pause', code: 'standalone_approval_required', message: 'Supporting work paused: per_request_threshold' }) + '\n' });
       }
       if (url.pathname === '/api/actors') return reply({ actors: [{ id: actorId, name: 'Fixture standalone', purpose: 'Browser verification', actorKind: 'standard' }] });
@@ -276,6 +278,44 @@ test('standalone browser: explicit settings, scopes, exact approval resume, redu
     fail = true; await usage.getByRole('button', { name: 'Refresh', exact: true }).click();
     await usage.getByRole('alert').filter({ hasText: 'Previously loaded values may be stale' }).waitFor();
     assert.match(await usage.innerText(), /Saved attempt failed: exact fixture cause/);
+    // Completed Qwen work retains an estimate, rather than fabricated actuals.
+    fail = false; proposals=[]; running=[{...pending('qwen'),provider:'runpod',model:'Qwen/Qwen3-VL-8B-Instruct',category:'attachment-observation',state:'dispatched',reservedMicrousd:'20000',pollableRunpod:true}];
+    await usage.getByRole('button', {name:'Refresh',exact:true}).click();
+    await active.getByRole('button',{name:'Check saved Qwen analysis',exact:true}).waitFor();
+    assert.equal(await active.getByRole('button',{name:'Accept exposure & continue',exact:true}).count(),0);
+    assert.match(await active.innerText(),/polls that existing job and will not submit another/);
+    resumeMode='completed';
+    await active.getByRole('button',{name:'Check saved Qwen analysis',exact:true}).click();
+    await usage.getByRole('status').filter({hasText:'Saved work completed.'}).waitFor();
+    await usage.getByText('RunPod estimated infrastructure cost $0.02 · actual cost unconfirmed',{exact:true}).first().waitFor();
+    assert.equal(resumes.length,6,'checking saved Qwen work resumes once; no new approval decision');
+    const imageStages=rail.getByRole('list',{name:'Image analysis stages',exact:true});
+    await imageStages.getByText('Qwen image analysis complete',{exact:true}).waitFor();
+    assert.match(await imageStages.innerText(),/Using saved Qwen observation/);
+    assert.equal(await active.count(),0,'estimated completion is not pending or uncertain active work');
+    const infraText=await usage.innerText();
+    assert.match(infraText,/Today \$0.27 including infrastructure estimate/);assert.match(infraText,/RunPod estimated infrastructure cost \$0.02/);
+    assert.doesNotMatch(infraText,/RunPod actual cost \$0.02/);
+    await page.reload({waitUntil:'domcontentloaded'});
+    await usage.getByText('RunPod estimated infrastructure cost $0.02 · actual cost unconfirmed',{exact:true}).first().waitFor();
+    assert.equal(resumes.length,6,'estimated infrastructure reload cannot dispatch');
+    // A deterministic unsupported blocker cannot offer another unchanged retry.
+    running=[{...pending('technical'),state:'uncertain',exposureAccepted:true,continuationBlockedReason:'standalone_no_priceable_vision: No priceable vision model supports this image.'}];
+    await usage.getByRole('button',{name:'Refresh',exact:true}).click();
+    await active.getByRole('alert').filter({hasText:'No priceable vision model'}).waitFor();
+    assert.equal(await active.getByRole('button',{name:/Continue remaining work|Accept exposure & continue|Resume saved work/}).count(),0);
+    assert.equal(await active.getByRole('button',{name:'Cancel remaining work',exact:true}).count(),1);
+    running=[{...pending('format'),state:'reserved',continuationBlockedReason:'standalone_unsupported_image: This image format is unsupported.'}];
+    await usage.getByRole('button',{name:'Refresh',exact:true}).click();
+    await active.getByRole('alert').filter({hasText:'image format is unsupported'}).waitFor();
+    assert.equal(await active.getByRole('button',{name:'Resume saved work',exact:true}).count(),0);
+    assert.equal(resumes.length,6,'technical blockers cannot trigger another resume');
+    running=[]; proposals=[pending('qwen-approval',{provider:'runpod',model:'Qwen/Qwen3-VL-8B-Instruct',category:'attachment-observation',reservedMicrousd:'20000',pauseReason:'request_threshold',budgetRevision:configuration.budget_revision})];
+    await usage.getByRole('button',{name:'Refresh',exact:true}).click();
+    await usage.getByText('Fixed reservation: use fewer images in a new request to reduce cost.',{exact:true}).waitFor();
+    assert.equal(await usage.getByRole('button',{name:'Reduce cost',exact:true}).count(),0,'fixed infrastructure policy cannot use token reduction');
+    assert.equal(await usage.getByRole('button',{name:'Approve once',exact:true}).count(),1,'normal exact-attempt approval remains available for infrastructure threshold pause');
+    assert.equal(resumes.length,6);
     assert.deepEqual(external, []); assert.deepEqual(unknownRoutes, []); assert.deepEqual(errors, []);
     console.log('Standalone browser screenshots: ' + screenshots);
   } catch (error) {

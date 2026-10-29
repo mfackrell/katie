@@ -1,5 +1,6 @@
 import { isStandaloneAccountingError } from "@/lib/standalone-accounting/context";
-import { runWithStandaloneActivity } from "@/lib/standalone-accounting/context";
+import { getAccountingScope, runWithStandaloneActivity } from "@/lib/standalone-accounting/context";
+import { observeStandaloneStillImages } from './still-image-observations';
 import { googleGenerateContent as generateAccountedContent } from "@/lib/providers/google-transport";
 const googleGenerateContent: typeof generateAccountedContent = (apiKey, request) => runWithStandaloneActivity("attachment-observation", () => generateAccountedContent(apiKey, request));
 import type { FileReference } from "@/lib/providers/types";
@@ -7,7 +8,7 @@ import { GrokProvider } from "@/lib/providers/grok-provider";
 import { selectGrokVisionFallback } from "@/lib/chat/vision-refusal-fallback";
 import type { ConversationAttachment } from "@/lib/chat/attachment-continuity";
 
-type Description = Pick<ConversationAttachment, "observedSummary" | "summaryModel" | "summaryCoverage">;
+type Description = Pick<ConversationAttachment, "observedSummary" | "summaryModel" | "summaryCoverage" | "observationSourceHash" | "observationSetHash" | "observationQuestion" | "observationVersion" | "observationAt" | "observationLimitations">;
 
 export function sampleAttachmentText(reference: FileReference): { text: string; coverage: "full" | "sampled" | "metadata" } {
   const text = reference.extractedText ?? reference.extractedChunks?.map(chunk => chunk.text).join("\n") ?? "";
@@ -21,7 +22,10 @@ export function sampleAttachmentText(reference: FileReference): { text: string; 
   return { text: `Sheet inventory:\n${sheets}\nSAMPLED EXCERPTS (not complete):\n${spans.join("\n\n")}`, coverage: "sampled" };
 }
 
-export async function describeAttachmentEvidence(reference: FileReference): Promise<Description> {
+export async function describeAttachmentEvidence(reference: FileReference, options: {standaloneImages?:boolean;question?:string;saved?:ConversationAttachment[];onStatus?:(stage:string)=>void} = {}): Promise<Description> {
+  if(reference.mimeType.startsWith('image/') && getAccountingScope()?.kind==='standalone' && options.standaloneImages!==false) {
+    return (await observeStandaloneStillImages([reference],options)).get(reference.fileId)!;
+  }
   const model = "gemini-2.5-flash";
   const sample = sampleAttachmentText(reference);
   const parts: Array<{ text: string } | { inlineData: { mimeType: string; data: string } } | { fileData: { fileUri: string; mimeType: string } }> = [];

@@ -33,6 +33,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ attemptId: cancelled.id, state: cancelled.state, cancellationRequested: true, heldExposureMicrousd: exposureHeld ? cancelled.reserved_microusd : '0', message }, { headers: noStore });
     }
     if (attempt.state !== 'paused') return NextResponse.json({ error: 'Only a paused proposal can be reduced.' }, { status: 409, headers: noStore });
+    if(attempt.provider==='runpod')return NextResponse.json({error:'Qwen uses a fixed reviewed infrastructure reservation. Cancel and request fewer images to reduce exposure.'},{status:409,headers:noStore});
     const pricing=await loadStandalonePricing(ledger,attempt.pricing_version);
     const reduced = reducePreparedRequest(attempt.prepared_payload as unknown as FrozenPreparedRequest,{},pricing);
     if (reduced.estimate.status !== 'estimated' || reduced.estimate.reservationMicrousd === null || BigInt(reduced.estimate.reservationMicrousd) >= BigInt(attempt.reserved_microusd) || reduced.changes.length === 0) {

@@ -72,3 +72,6 @@ export function standaloneFailureDetails(error: unknown): string {
   }
   return chain.join(' ← ') || 'Saved request execution failed.';
 }
+
+/** Deterministic technical limitations cannot be changed by another approval. */
+export const standaloneTechnicalBlocker = (value:unknown):boolean => /standalone_(?:no_priceable_vision|unsupported_image|unsupported_vision_capability|runpod_result_unavailable|runpod_job_mismatch)/.test(String(value??''));
