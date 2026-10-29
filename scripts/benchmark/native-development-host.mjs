@@ -165,7 +165,7 @@ const commitCandidate=(label)=>{
 };
 const sockdir=join(root,'sock'),socket=join(sockdir,'gateway.sock');
 mkdirSync(sockdir,{mode:0o700});
-const perRequestCap=Math.min(20000,Number(approval.max_tokens),Number(account.cap_tokens));
+const perRequestCap=Math.min(120000,Number(approval.max_tokens),Number(account.cap_tokens));
 if(!Number.isSafeInteger(perRequestCap)||perRequestCap<=0)denied('invalid frozen request reservation');
 const upstream=createResponsesProvider({apiKey:providerKey});
 const server=createNativeHttpBridge({

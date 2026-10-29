@@ -115,7 +115,7 @@ export async function executePaidNonfull({db,ownerId,arm,trial,account,approval,
   const upstream=createResponsesProvider({apiKey:providerKey});
   const bridgeToken=randomBytes(32).toString('base64url');
   const gateway=await createNonFullTrustedGateway({db,arm,trial,account,approval,
-   ownerId,repository:REPO,upstream,clientToken:bridgeToken,upperTokens:20000,
+   ownerId,repository:REPO,upstream,clientToken:bridgeToken,upperTokens:120000,
    providerNamespace:'openai-responses'});
   server=gateway.server;
   await new Promise(resolve=>server.listen(join(sockdir,'gateway.sock'),resolve));

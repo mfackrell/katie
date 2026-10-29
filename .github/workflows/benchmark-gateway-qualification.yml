@@ -33,6 +33,10 @@ jobs:
         run: command -v socat >/dev/null || (sudo apt-get update && sudo apt-get install -y socat)
       - name: Actual Full child imports pinned ESM SDK before any authority
         run: node scripts/benchmark/native-child-preflight-probe.mjs
+      - name: Actual Full child and production model exercise all paid admission checks without billing
+        env:
+          KATIE_BENCHMARK_GATEWAY_DIAGNOSTICS: enabled
+        run: node scripts/benchmark/native-development-child-contained-probe.mjs
       - name: Adversarial shared trust boundary (Git, hooks, dependencies, symlinks)
         run: node --test tests/benchmark-native-trust-boundary.test.mjs
       - name: Qualify Native Thin owner grant and canonical HTTP receipt boundaries

@@ -1,3 +1,4 @@
+import {admitNativeRequest} from './native-request-admission.mjs';
 import {createHash,randomUUID} from 'node:crypto';
 
 // Trusted gateway process only. Never supply its service-role DB client,
@@ -8,7 +9,7 @@ export const tokenDigest=token=>{
 };
 export async function forwardAuthorizedModelRequest({
  db,grantToken,trialId,executionEpoch,model,requestBody,
- upperTokens,upstream,providerNamespace,recordReceipt,fullMission=false
+ upperTokens,upstream,providerNamespace,recordReceipt,fullMission=false,reasoningProvenance
 }){
  if(!db||typeof db.rpc!=='function'||typeof upstream!=='function'||
     typeof recordReceipt!=='function'||!trialId||!providerNamespace||
@@ -32,49 +33,16 @@ export async function forwardAuthorizedModelRequest({
   return Object.entries(value).some(([key,child])=>
    ['image_url','input_audio','input_image','audio','file_id'].includes(key)||containsNontext(child));
  };
- // Provider-side references can expand to unbounded billable context. Allow only
- // explicitly bounded, inline text request shapes on the paid boundary.
- const assertPaidRequestShape=body=>{
-  const keys=new Set(['model','input','instructions','max_output_tokens','stream','tools','tool_choice','parallel_tool_calls','reasoning','text','temperature','top_p','store','include','metadata','truncation']);
-  for(const key of Object.keys(body))if(!keys.has(key))throw Error('GATEWAY_UNBOUNDED_INPUT_DENIED');
-  if(body.input!==undefined&&typeof body.input!=='string'&&!Array.isArray(body.input))throw Error('GATEWAY_UNBOUNDED_INPUT_DENIED');
-  const parts=Array.isArray(body.input)?body.input:[];
-  for(const item of parts){
-   if(!item||typeof item!=='object'||Array.isArray(item))throw Error('GATEWAY_UNBOUNDED_INPUT_DENIED');
-   if(item.type==='custom_tool_call'){
-    if(!Object.keys(item).every(k=>['type','call_id','name','input','status','id'].includes(k))||
-      typeof item.call_id!=='string'||typeof item.name!=='string'||typeof item.input!=='string')
-     throw Error('GATEWAY_UNBOUNDED_INPUT_DENIED');
-    continue;
-   }
-   if(item.type==='custom_tool_call_output'){
-    if(!Object.keys(item).every(k=>['type','call_id','output'].includes(k))||
-      typeof item.call_id!=='string'||typeof item.output!=='string')
-     throw Error('GATEWAY_UNBOUNDED_INPUT_DENIED');
-    continue;
-   }
-   if(!['user','assistant','developer','system','tool'].includes(item.role)||!Array.isArray(item.content)||
-     !Object.keys(item).every(k=>['role','content','type','status'].includes(k)))
-    throw Error('GATEWAY_UNBOUNDED_INPUT_DENIED');
-   for(const part of item.content){
-    if(!part||!['input_text','output_text','text'].includes(part.type)||typeof part.text!=='string'||
-       !Object.keys(part).every(k=>['type','text'].includes(k)))
-     throw Error('GATEWAY_UNBOUNDED_INPUT_DENIED');
-   }
-  }
-  if(body.store===true||body.truncation==='auto'||body.include?.length)
-   throw Error('GATEWAY_UNBOUNDED_INPUT_DENIED');
- };
  const syntheticFixture=upstream.nonbillableFixture===true;
- if(!requestBody||typeof requestBody!=='object'||Array.isArray(requestBody)||(!syntheticFixture&&containsNontext(requestBody)))
+ if(!requestBody||typeof requestBody!=='object'||Array.isArray(requestBody)||(!syntheticFixture&&containsNontext(requestBody.input)))
   throw Error('GATEWAY_UNBOUNDED_INPUT_DENIED');
- if(!syntheticFixture)assertPaidRequestShape(requestBody);
  const outputCap=requestBody.max_output_tokens==null?4096:requestBody.max_output_tokens;
  if(!syntheticFixture&&(!Number.isSafeInteger(outputCap)||outputCap<1||outputCap>upperTokens))
   throw Error('GATEWAY_OUTPUT_LIMIT_DENIED');
- const boundedBody={...requestBody,max_output_tokens:outputCap};
- const inputBytes=Buffer.byteLength(JSON.stringify(boundedBody),'utf8');
- const admissionTokens=syntheticFixture?upperTokens:inputBytes+outputCap+1024;
+ const candidate={...requestBody,max_output_tokens:outputCap};
+ const admission=syntheticFixture?{body:candidate}:admitNativeRequest(candidate,reasoningProvenance);
+ const boundedBody=admission.body;
+ const admissionTokens=syntheticFixture?upperTokens:admission.plaintextBytes+admission.opaqueTokens+outputCap+1024;
  if(!Number.isSafeInteger(admissionTokens)||admissionTokens>upperTokens)
   throw Error('GATEWAY_REQUEST_EXCEEDS_GRANT');
  const key=randomUUID();
@@ -90,6 +58,7 @@ export async function forwardAuthorizedModelRequest({
    throw Error('GATEWAY_PROVIDER_RECEIPT_UNKNOWN');
   await recordReceipt({requestKey:key,operationId:id,namespace:providerNamespace,
    providerRequestId:response.providerRequestId,actualTokens:response.actualTokens,usage:response.usage});
+  if(!syntheticFixture)reasoningProvenance?.remember(response,model,outputCap);
   return response;
  } catch(error){
   // A request may have reached its provider. Never release the hold as zero
