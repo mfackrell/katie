@@ -64,6 +64,10 @@ test('uncertainty obeys existing owner limits atomically without changing exposu
   const direct=await dispatch('direct-transition','receipt-helper',20000);
   await admin.query("update standalone_provider_attempts set state='uncertain' where id=$1",[direct.id]);
   assert.equal(await accepted(direct),true,'receipt/identifier uncertainty uses the same policy');
+  await admin.query("delete from standalone_attempt_events where attempt_id=$1 and kind='uncertain_exposure_auto_authorized'",[direct.id]);
+  assert.equal(await accepted(direct),true,'legacy manual acceptance remains valid');
+  assert.equal(await rpc(one,'auto_authorize_uncertain_exposure',{p_owner:owner,p_attempt:direct.id}),true);
+  assert.equal((await admin.query("select count(*) from standalone_attempt_events where attempt_id=$1 and kind='uncertain_exposure_auto_authorized'",[direct.id])).rows[0].count,'1','small previously accepted exposure becomes informational too');
   const request='multiple-small';const lease=await rpc(one,'claim_workflow',wf(request));
   for(const [index,cost] of [6273,20000,30000].entries()){const a=await dispatch(request,'helper-'+index,cost);await mark(a);assert.equal(await accepted(a),true);}
   assert.equal(await total(request),'56273');
