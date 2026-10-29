@@ -9,6 +9,7 @@ const response=(output=[item],usage={input_tokens:3,output_tokens:2,total_tokens
  body:'event: response.completed\ndata: '+JSON.stringify({type:'response.completed',response:{id:'resp_fixture',status:'completed',model,output,usage}})+'\n\n'
 });
 const bootstrap={model,client_metadata:{session_id:'synthetic'},prompt_cache_key:'synthetic-cache',store:false,
+ tools:[{type:'function',name:'local_tool',parameters:{type:'object',properties:{file_id:{type:'string'}}}}],
  include:['reasoning.encrypted_content'],input:[{type:'message',id:null,role:'user',content:[{type:'input_text',text:'Build only the approved game.'}]}]};
 test('captured SDK bootstrap normalizes only transport fields while preserving inline input and reasoning request',()=>{
  const admitted=admitNativeRequest(bootstrap);

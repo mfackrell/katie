@@ -34,9 +34,9 @@ const upstream=async request=>{
  const callId='actual_native_tool_'+phase;
  const encrypted=Buffer.from('synthetic-reasoning-'+phase).toString('base64');
  const tools=request.tools?.flatMap(t=>t.type==='namespace'?t.tools:[t])??[];
- assert.ok(tools.some(t=>t.type==='custom'&&t.name==='exec'),'Actual SDK must declare the tested local exec tool');
+ assert.ok(tools.some(t=>t.type==='function'&&t.name==='exec_command'),'Actual SDK must declare the tested local exec_command tool');
  if(count===2){
-  const output=request.input?.find(x=>x.type==='custom_tool_call_output'&&x.call_id===callId);
+  const output=request.input?.find(x=>x.type==='function_call_output'&&x.call_id===callId);
   assert.ok(output,'Actual SDK tool output must return through paid admission');
   assert.match(JSON.stringify(output.output),/ACTUAL_NATIVE_TOOL_OK/,'Actual local exec must succeed');
   const reasoning=request.input?.find(x=>x.type==='reasoning');
@@ -45,8 +45,8 @@ const upstream=async request=>{
  }
 
  const text=phase==='review'?'CHANGES_REQUESTED: synthetic defect':phase==='final-review'?'PASS: synthetic repair verified':'DONE';
- const item=count===1?{id:'call_'+forwarded,type:'custom_tool_call',name:'exec',call_id:callId,
-  input:'const r=await tools.exec_command({cmd:"printf ACTUAL_NATIVE_TOOL_OK",workdir:"/work"});text(r);',status:'completed'}:
+ const item=count===1?{id:'call_'+forwarded,type:'function_call',name:'exec_command',call_id:callId,
+  arguments:JSON.stringify({cmd:'printf ACTUAL_NATIVE_TOOL_OK',workdir:'/work'}),status:'completed'}:
   {id:'msg_'+forwarded,type:'message',role:'assistant',status:'completed',content:[{type:'output_text',text,annotations:[]}]};
  const reasoning={id:'rs_'+phase,type:'reasoning',summary:[],encrypted_content:encrypted};
  const output=count===1?[reasoning,item]:[item];
@@ -57,8 +57,17 @@ const upstream=async request=>{
 const server=createNativeHttpBridge({db,grantToken:'synthetic-'+('z'.repeat(60)),trialId:'synthetic-trial',executionEpoch:1,providerNamespace:'openai',upperTokens:120000,upstream,recordReceipt:async r=>receipts.push(r),clientToken:token,fullMission:true});
 // Observe structural metadata only. Never log prompts, auth headers or secrets.
 server.on('request',req=>{let raw='';req.on('data',chunk=>{if(raw.length<2000000)raw+=chunk;});req.on('end',()=>{
- try{const b=JSON.parse(raw);const summary={phase,model:b.model,keys:Object.keys(b).sort(),inputBytes:Buffer.byteLength(JSON.stringify({...b,max_output_tokens:b.max_output_tokens??4096})),outputCap:b.max_output_tokens??4096,
- inputTypes:Array.isArray(b.input)?b.input.map(x=>({type:x.type,role:x.role,keys:Object.keys(x).sort(),idType:x.id===null?'null':typeof x.id,outputType:Array.isArray(x.output)?'array':typeof x.output,contentTypes:Array.isArray(x.content)?x.content.map(c=>c.type):typeof x.content})):typeof b.input,
+ try{const b=JSON.parse(raw);const nontextPaths=[];
+ const inspectNontext=(v,path='$')=>{
+  if(!v||typeof v!=='object')return;
+  if(['input_image','input_audio','input_video','image_url','file_id'].includes(v.type))nontextPaths.push(path+'.type='+v.type);
+  for(const [k,x]of Object.entries(v)){
+   if(['image_url','input_audio','input_image','audio','file_id'].includes(k))nontextPaths.push(path+'.'+k);
+   inspectNontext(x,path+'.'+k);
+  }
+ };inspectNontext(b);
+ const summary={phase,model:b.model,keys:Object.keys(b).sort(),inputBytes:Buffer.byteLength(JSON.stringify({...b,max_output_tokens:b.max_output_tokens??4096})),outputCap:b.max_output_tokens??4096,nontextPaths:nontextPaths.slice(0,50),
+ inputTypes:Array.isArray(b.input)?b.input.map(x=>({type:x.type,role:x.role,keys:Object.keys(x).sort(),idType:x.id===null?'null':typeof x.id,outputType:Array.isArray(x.output)?'array':typeof x.output,contentTypes:Array.isArray(x.content)?x.content.map(c=>({type:c.type,keys:Object.keys(c).sort()})):typeof x.content})):typeof b.input,
  toolTypes:b.tools?.map(t=>({type:t.type,name:t.name,nested:t.tools?.map(n=>({type:n.type,name:n.name}))})),clientMetadata:b.client_metadata&&Object.fromEntries(Object.entries(b.client_metadata).map(([k,v])=>[k,v===null?'null':typeof v])),promptCacheKeyType:b.prompt_cache_key===null?'null':typeof b.prompt_cache_key,reasoningKeys:b.reasoning&&Object.keys(b.reasoning).sort(),include:b.include,store:b.store,truncation:b.truncation};summaries.push(summary);console.log('ACTUAL_NATIVE_REQUEST_SHAPE='+JSON.stringify(summary));}catch{console.log('ACTUAL_NATIVE_REQUEST_SHAPE_INVALID');}
  });});
 try{
