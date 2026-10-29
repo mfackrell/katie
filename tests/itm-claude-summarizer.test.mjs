@@ -88,7 +88,7 @@ test("native Claude request keeps plain-text output and the existing summary bud
   assert.equal(h.calls.length, 1);
   const { path, body } = h.calls[0];
   assert.equal(path, "/messages"); assert.equal(body.model, "claude-sonnet-5-5");
-  assert.equal(body.max_tokens, 4000); assert.equal(body.thinking, undefined);
+  assert.equal(body.max_tokens, 12000); assert.equal(body.thinking, undefined);
   assert.equal(body.output_config, undefined);
   for (const unsupported of ["temperature", "top_p", "top_k", "response_format", "tools"]) assert.equal(body[unsupported], undefined);
   assert.equal(body.messages.length, 1); assert.equal(body.messages[0].role, "user");
@@ -233,7 +233,7 @@ test("no older conversation and deleted chat do not call the model", async () =>
 test("rolling ITM character ceiling rejects oversized complete output without moving cursor",async()=>{
   const h=harness({
     prior:{ version:2,summary:"Retain previous context.",summarizedThroughMessageId:"m0",sourceMessageCount:1 },
-    respond:()=>reply("x".repeat(8501))
+    respond:()=>reply("x".repeat(15001))
   });
   await h.run();
   assert.equal(h.writes.length,0);
@@ -241,7 +241,7 @@ test("rolling ITM character ceiling rejects oversized complete output without mo
   assert.ok(h.logs.some(log=>log.level==="error"));
 });
 test("rolling ITM accepts a complete response within the character budget",async()=>{
-  const content="x".repeat(7500);
+  const content="x".repeat(14500);
   const h=harness({respond:()=>reply(content)});
   await h.run();
   assert.equal(h.writes.length,1);
@@ -252,12 +252,12 @@ test("a complete but oversized ITM receives one semantic compaction before advan
   const prior = { version: 2, summary: "P".repeat(8193), summarizedThroughMessageId: "m0", sourceMessageCount: 1 };
   const h = harness({
     prior,
-    respond: n => n === 1 ? reply("D".repeat(9686)) : reply("C".repeat(6500)),
+    respond: n => n === 1 ? reply("D".repeat(15001)) : reply("C".repeat(6500)),
   });
   await h.run();
   assert.equal(h.calls.length, 2, "ordinary update plus one bounded repair");
-  assert.equal(h.calls[0].body.max_tokens, 4000);
-  assert.equal(h.calls[1].body.max_tokens, 2800);
+  assert.equal(h.calls[0].body.max_tokens, 12000);
+  assert.equal(h.calls[1].body.max_tokens, 12000);
   assert.match(h.calls[1].body.system, /Compress it SEMANTICALLY/);
   assert.equal(h.writes.length, 1);
   assert.equal(h.saved().summary.length, 6500);
@@ -270,11 +270,28 @@ test("compaction failures are bounded and retain the source cursor", async () =>
   const prior = { version: 2, summary: "Existing context", summarizedThroughMessageId: "m0", sourceMessageCount: 1 };
   const h = harness({
     prior,
-    respond: n => n % 2 ? reply("X".repeat(9686)) : reply("Still over budget".repeat(700)),
+    respond: n => n % 2 ? reply("X".repeat(15001)) : reply("Still over budget".repeat(1000)),
   });
   await h.run();
   assert.equal(h.calls.length, 2, "one batch plus one repair; do not repeat paid compaction");
   assert.equal(h.writes.length, 0);
   assert.deepEqual(h.saved(), prior);
   assert.ok(h.logs.some(event => event.level === "error"));
+});
+
+test("complete summaries moderately above 6500 characters do not trigger compaction", async () => {
+  const content = "x".repeat(9100);
+  const h = harness({ respond: () => reply(content) });
+  await h.run();
+  assert.equal(h.calls.length, 1);
+  assert.equal(h.writes.length, 1);
+  assert.equal(h.saved().summary, content);
+});
+
+test("complete compaction below target remains valid and moves cursor", async () => {
+  const h = harness({ respond: n => n === 1 ? reply("X".repeat(15001)) : reply("Short but complete context.") });
+  await h.run();
+  assert.equal(h.calls.length, 2);
+  assert.equal(h.writes.length, 1);
+  assert.equal(h.saved().summary, "Short but complete context.");
 });
