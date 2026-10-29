@@ -23,7 +23,9 @@ export function normalizePricingCatalog(raw: unknown): { snapshot: PricingSnapsh
   const accepted = new Map<string,ModelPrice>(), rejected: Record<string,string> = {};
   for (const [key,value] of Object.entries(raw)) {
     if (!value || typeof value!=='object' || Array.isArray(value)) continue;
-    const row=value as Row, provider=providers[String(row.litellm_provider)];
+    const row=value as Row;
+    if(!Object.hasOwn(providers,String(row.litellm_provider)))continue;
+    const provider=providers[String(row.litellm_provider)];
     if (!provider || !['chat','responses'].includes(String(row.mode))) continue;
     const prefix=String(row.litellm_provider)+'/';
     const model=key.startsWith(prefix)?key.slice(prefix.length):key;

@@ -513,5 +513,5 @@ test('missing modern OpenAI write counts retain exposure rather than billing wri
  f.service.loadPricing=async()=>({snapshot,retrievedAt:new Date().toISOString()});
  const send=createAccountingFetch('openai',async()=>new Response(JSON.stringify({id:'missing-write',usage:{input_tokens:100,output_tokens:10}})),f.factory);
  await assert.rejects(runWithStandaloneAccounting(context,()=>send('https://api.openai.com/v1/responses',{method:'POST',body:JSON.stringify({model:'fixture-sol',input:'hello',max_output_tokens:10})})),{code:'standalone_usage_unpriced'});
- assert.equal(f.attempts[0].state,'uncertain');assert.equal(f.attempts[0].actual_microusd,null);assert.equal(f.attempts[0].usage?.inputTokens,100);
+ assert.equal(f.attempts[0].state,'uncertain');assert.equal(f.attempts[0].actual_microusd,null);assert.equal(f.attempts[0].usage?.inputTokens,100);assert.equal(f.attempts[0].usage?.cacheWriteInputTokens,undefined,'missing write usage must remain unknown for late reconciliation');
 });

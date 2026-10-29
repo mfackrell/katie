@@ -211,7 +211,7 @@ export function createAccountingFetch(provider: AccountingProvider, transport: t
       }
       const receiptHeaders = new Headers(checkpoint.headers);
       await ledger.recordProviderIdentifiers(context.userId, attemptId, receiptHeaders.get('request-id') ?? receiptHeaders.get('x-request-id') ?? receiptHeaders.get('x-goog-request-id'), receipt.responseId);
-      const usage = { ...receipt.raw, inputTokens: receipt.input, outputTokens: receipt.output, cachedInputTokens: receipt.cached,
+      const usage:Record<string,unknown> = { ...receipt.raw, inputTokens: receipt.input, outputTokens: receipt.output, cachedInputTokens: receipt.cached,
         ...(['anthropic','openai'].includes(provider) ? { cacheReadInputTokens: receipt.cached, cacheCreationInputTokens: receipt.written, cacheWriteInputTokens: receipt.written, cacheWriteTtl: receipt.cacheWriteTtl } : {}) };
       // A returned dated alias is a distinct billing identity. Missing exact
       // reviewed applicability leaves actual cost unknown, even with full tokens.
@@ -222,6 +222,7 @@ export function createAccountingFetch(provider: AccountingProvider, transport: t
         ...(provider === 'anthropic' ? { cacheWriteTtl: receipt.cacheWriteTtl } : {}) };
       const inputDetails=(receipt.raw.input_tokens_details??receipt.raw.prompt_tokens_details) as Record<string,unknown>|undefined;
       if(provider==='openai'&&price?.cacheWriteNanoUsd&&typeof inputDetails?.cache_write_tokens!=='number'){
+        delete usage.cacheWriteInputTokens;delete usage.cacheCreationInputTokens;delete usage.cacheWriteTtl;
         await ledger.recordPartialUsage(context.userId,attemptId,usage,{...evidence,pricingUnknown:true,missingDimension:'cache_write_tokens'});
         throw failure('usage_unpriced','OpenAI cache-write usage is missing. Known tokens and spending exposure remain held.');
       }
