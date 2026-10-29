@@ -1,3 +1,4 @@
+import { createAccountingFetch } from "@/lib/standalone-accounting/dispatch";
 import { claudeCachedSystem, claudeInputUsage } from "./claude-cache";
 import { openAiCacheSettings } from "./openai-cache";
 import type { ToolTurnParams, ToolTurn } from '@/lib/tools/types';
@@ -58,7 +59,7 @@ export async function nativeToolTurn(provider: LlmProvider['name'], apiKey: stri
   let phase = 'request';
   let httpStatus: number | null = null;
   try {
-  const res = await fetch(url, { method: 'POST', headers, body: JSON.stringify(body), signal: p.signal, cache: 'no-store' });
+  const res = await createAccountingFetch(provider)(url, { method: 'POST', headers, body: JSON.stringify(body), signal: p.signal, cache: 'no-store' });
   httpStatus = res.status;
   // Never propagate a credential-bearing upstream error body into model context or audit.
   if (!res.ok) {

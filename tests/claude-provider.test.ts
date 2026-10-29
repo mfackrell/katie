@@ -1,4 +1,7 @@
-import test from "node:test";
+import nodeTest from "node:test";
+import { runWithOrchestratorAccounting } from "../lib/standalone-accounting/context";
+// Adapter compatibility tests explicitly model the existing trusted orchestration scope.
+const test = (name: string, fn: () => Promise<void>) => nodeTest(name, () => runWithOrchestratorAccounting(fn));
 import assert from "node:assert/strict";
 import { ClaudeProvider } from "../lib/providers/claude-provider";
 

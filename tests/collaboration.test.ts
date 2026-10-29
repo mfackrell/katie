@@ -1044,53 +1044,45 @@ test("170-second research plus 110-second critique retains evidence and still le
   assert.equal(result.result.text, "Review completed.");
 });
 
-test("lead-control timeout replaces the lead and preserves research screenshots and critique", async (t) => {
+test("lead-control timeout aborts and preserves evidence without selecting a replacement", async (t) => {
   t.mock.timers.enable({ apis: ["Date", "setTimeout"], now: 0 });
   const lead = fakeProvider({ name: "anthropic", modelId: "failed-lead", controlResponses: [] });
-  lead.generate = async () => {
+  let signal: AbortSignal | undefined;
+  lead.generate = async params => {
+    signal = params.signal;
     queueMicrotask(() => t.mock.timers.tick(120_000));
     return new Promise<ProviderResponse>(() => {});
   };
-  lead.generateStream = async () => { assert.fail("failed control lead should be replaced"); };
+  lead.generateStream = async () => { assert.fail("Timed-out control must not start synthesis"); };
   const { research, reviewer } = reviewHelpers();
-  const replacement = fakeProvider({ name: "google", modelId: "replacement", controlResponses: [], finalText: "Recovered." });
-  let selections = 0;
-  const result = await runAdaptiveCollaboration({ requestId: "control-timeout", leadProvider: lead, leadModelId: "failed-lead",
-    providers: [lead, research, reviewer, replacement], params: marketingParams,
+  let saved: CollaborationResumeState | undefined;
+  await assert.rejects(runAdaptiveCollaboration({ requestId: "control-timeout", leadProvider: lead, leadModelId: "failed-lead",
+    providers: [lead, research, reviewer], params: marketingParams,
     collectWebsiteEvidence: async () => capturedWebsite,
+    onCheckpoint: state => { saved = state; },
     selectHelper: async ({ request }) => request.capability === "research" ? { provider: research, modelId: "research" } : { provider: reviewer, modelId: "reviewer" },
-    selectReplacementLead: async (context) => {
-      selections++;
-      assert.equal(context.contributions.length, 2);
-      assert.equal(context.hasImages, true);
-      return { provider: replacement, modelId: "replacement" };
-    },
-  });
-  assert.equal(selections, 1);
-  assert.match(result.trace.find((event) => event.type === "lead_failed")?.detail ?? "", /timed out after 120000ms/);
+    selectReplacementLead: async () => { assert.fail("Unknown billing cannot trigger a replacement"); },
+  }), /timed out after 120000ms/);
+  assert.equal(signal?.aborted, true);
   assert.equal(research.calls.length, 1);
   assert.equal(reviewer.calls.length, 1);
-  assert.equal(result.result.provider, "google");
-  assert.match(replacement.calls[0].user, /Verified website evidence/);
-  assert.match(replacement.calls[0].user, /Independent critique/);
-  assert.deepEqual(replacement.calls[0].images, [capturedWebsite.pages[0].views[0].screenshot!.dataUrl]);
+  assert.equal(saved?.contributions.length, 2);
 });
 
-test("final-synthesis timeout leaves time for replacement instead of consuming all remaining budget", async (t) => {
+test("final-synthesis timeout aborts and stops automatic replacement", async (t) => {
   t.mock.timers.enable({ apis: ["Date", "setTimeout"], now: 0 });
   const lead = fakeProvider({ name: "anthropic", modelId: "lead", controlResponses: [JSON.stringify({ action: "ready", synthesisBrief: "Use evidence", conflicts: [] })] });
-  lead.generateStream = async () => {
+  let signal: AbortSignal | undefined;
+  lead.generateStream = async params => {
+    signal = params.signal;
     queueMicrotask(() => t.mock.timers.tick(180_000));
     return new Promise<ProviderResponse>(() => {});
   };
-  const replacement = fakeProvider({ name: "google", modelId: "replacement", controlResponses: [], finalText: "Recovered after synthesis timeout." });
-  const result = await runAdaptiveCollaboration({ requestId: "synthesis-timeout", leadProvider: lead, leadModelId: "lead",
-    providers: [lead, replacement], params: baseParams, selectHelper: async () => null,
-    selectReplacementLead: async () => ({ provider: replacement, modelId: "replacement" }),
-  });
-  assert.match(result.trace.find((event) => event.type === "lead_failed")?.detail ?? "", /timed out after 180000ms/);
-  assert.equal(result.result.provider, "google");
-  assert.equal(result.metadata.durationMs, 180_000);
+  await assert.rejects(runAdaptiveCollaboration({ requestId: "synthesis-timeout", leadProvider: lead, leadModelId: "lead",
+    providers: [lead], params: baseParams, selectHelper: async () => null,
+    selectReplacementLead: async () => { assert.fail("Unknown billing cannot trigger a replacement"); },
+  }), /timed out after 180000ms/);
+  assert.equal(signal?.aborted, true);
 });
 
 test("outer reroute resumes synthesis from checkpoint without repeating any completed work", async () => {
@@ -1153,33 +1145,28 @@ test("resume checkpoints cannot leak website evidence into a different user turn
   assert.doesNotMatch(lead.calls.at(-1)!.user, /Foreign strategy|Foreign notes|Book a call/);
 });
 
-test("slow website review retains full critique and final backup windows", async (t) => {
+test("slow website review stops after uncertain synthesis and retains critique", async (t) => {
   t.mock.timers.enable({ apis: ["Date", "setTimeout"], now: 0 });
   const { research, reviewer } = reviewHelpers();
   const getResearch = research.generate.bind(research);
-  research.generate = async (params) => { t.mock.timers.tick(163_000); return getResearch(params); };
+  research.generate = async params => { t.mock.timers.tick(163_000); return getResearch(params); };
   const getReview = reviewer.generate.bind(reviewer);
-  reviewer.generate = async (params) => { t.mock.timers.tick(60_000); return getReview(params); };
+  reviewer.generate = async params => { t.mock.timers.tick(60_000); return getReview(params); };
   const lead = fakeProvider({ name: "anthropic", modelId: "lead", controlResponses: [JSON.stringify({ action: "ready", synthesisBrief: "Use evidence", conflicts: [] })] });
   lead.generateStream = async () => {
     queueMicrotask(() => t.mock.timers.tick(180_000));
     return new Promise<ProviderResponse>(() => {});
   };
-  const backup = fakeProvider({ name: "google", modelId: "backup", controlResponses: [], finalText: "Recovered with evidence." });
-  const finish = backup.generateStream!.bind(backup);
-  backup.generateStream = async (params, handlers) => { t.mock.timers.tick(155_000); return finish(params, handlers); };
-  const result = await runAdaptiveCollaboration({ requestId: "slow-full-backup", leadProvider: lead, leadModelId: "lead",
-    providers: [lead, research, reviewer, backup], params: marketingParams,
+  let saved: CollaborationResumeState | undefined;
+  await assert.rejects(runAdaptiveCollaboration({ requestId: "slow-full-backup", leadProvider: lead, leadModelId: "lead",
+    providers: [lead, research, reviewer], params: marketingParams,
     collectWebsiteEvidence: async () => capturedWebsite,
+    onCheckpoint: state => { saved = state; },
     selectHelper: async ({ request }) => request.capability === "research" ? { provider: research, modelId: "research" } : { provider: reviewer, modelId: "reviewer" },
-    selectReplacementLead: async () => ({ provider: backup, modelId: "backup" }),
-  });
-  assert.equal(result.result.text, "Recovered with evidence.");
+    selectReplacementLead: async () => { assert.fail("Unknown billing cannot trigger a replacement"); },
+  }), /billing outcome is unknown/);
   assert.equal(reviewer.calls.length, 1);
-  assert.match(backup.calls[0].user, /Independent critique/);
-  assert.deepEqual(backup.calls[0].images, [capturedWebsite.pages[0].views[0].screenshot!.dataUrl]);
-  assert.equal(result.trace.filter(event => event.type === "lead_failed").length, 1);
-  assert.equal(result.metadata.durationMs, 558_000);
+  assert.equal(saved?.contributions.length, 2);
 });
 
 test("exhausted request deadline never selects a doomed replacement or resets on resume", async (t) => {
@@ -1200,27 +1187,25 @@ test("exhausted request deadline never selects a doomed replacement or resets on
   await assert.rejects(runAdaptiveCollaboration({ ...options, resumeState: saved }), /insufficient execution time/);
 });
 
-test("research timeout gets a different helper with a full research window", async (t) => {
+test("research timeout aborts and never launches a backup helper", async (t) => {
   t.mock.timers.enable({ apis: ["Date", "setTimeout"], now: 0 });
-  const lead = fakeProvider({ name: "anthropic", modelId: "lead", controlResponses: [], finalText: "Used backup research." });
+  const lead = fakeProvider({ name: "anthropic", modelId: "lead", controlResponses: [], finalText: "unused" });
   const failed = fakeProvider({ name: "grok", modelId: "failed-research", controlResponses: [] });
-  failed.generate = async () => {
+  let signal: AbortSignal | undefined;
+  failed.generate = async params => {
+    signal = params.signal;
     queueMicrotask(() => t.mock.timers.tick(240_000));
     return new Promise<ProviderResponse>(() => {});
   };
-  const backup = fakeProvider({ name: "openai", modelId: "backup-research", controlResponses: ["Recovered live evidence."] });
-  const getResearch = backup.generate.bind(backup);
-  backup.generate = async (params) => { t.mock.timers.tick(163_000); return getResearch(params); };
   let selections = 0;
-  const result = await runAdaptiveCollaboration({ requestId: "research-backup", leadProvider: lead, leadModelId: "lead",
-    providers: [lead, failed, backup], params: { ...marketingParams, requestIntent: "general-text" },
+  await assert.rejects(runAdaptiveCollaboration({ requestId: "research-backup", leadProvider: lead, leadModelId: "lead",
+    providers: [lead, failed], params: { ...marketingParams, requestIntent: "general-text" },
     collectWebsiteEvidence: async () => capturedWebsite,
-    selectHelper: async () => ++selections === 1 ? { provider: failed, modelId: "failed-research" } : { provider: backup, modelId: "backup-research" },
-  });
-  assert.equal(selections, 2);
-  assert.equal(backup.calls.length, 1);
-  assert.match(lead.calls.at(-1)!.user, /Recovered live evidence/);
-  assert.equal(result.trace.filter(event => event.type === "helper_retrying").length, 1);
+    selectHelper: async () => { selections++; return { provider: failed, modelId: "failed-research" }; },
+  }), /billing outcome is unknown/);
+  assert.equal(signal?.aborted, true);
+  assert.equal(selections, 1);
+  assert.equal(lead.calls.length, 0);
 });
 
 test("research keeps trying viable models after two fast provider failures", async () => {

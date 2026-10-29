@@ -1,6 +1,13 @@
-import test from "node:test";
+import test, { afterEach, beforeEach, describe, mock } from "node:test";
+import * as unsupported from "../lib/standalone-accounting/unsupported";
 import assert from "node:assert/strict";
 import { describeImageWithRunpodQwen } from "../lib/chat/runpod-still-vision";
+
+describe("RunPod still-image protocol", () => {
+  // Protocol fixtures use fake HTTP only. Production admission is exercised
+  // separately with the real, unmocked guard in standalone-unpriced-dispatch.
+  beforeEach(() => { mock.method(unsupported, "blockUnaccountedPaidDispatch", () => {}); });
+  afterEach(() => { mock.restoreAll(); });
 
 test("RunPod Qwen still-image fallback submits pixels once and polls the same job",async()=>{
  const prior=process.env.RUNPOD_API_KEY;
@@ -43,4 +50,6 @@ test("RunPod refuses invalid pixels before any paid call",async()=>{
    fetchFn:async()=>{calls++;throw Error("Unexpected inference");}
  }),/requires one bounded/);
  assert.equal(calls,0);
+});
+
 });

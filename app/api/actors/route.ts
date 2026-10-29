@@ -1,3 +1,4 @@
+import { createActivityAccountingFetch } from "@/lib/standalone-accounting/activity";
 import OpenAI from "openai";
 import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import { managedActor } from "@/lib/agents/store";
@@ -28,7 +29,7 @@ async function calibrationPreview(actorId:string) {
   const entries=data?.content?.entries??[];
   if(!entries.length) return NextResponse.json({hash:calibrationHash(data?.content??{}),groups:[],conflicts:[],entries:[]});
   if(!process.env.OPENAI_API_KEY) return NextResponse.json({error:"Calibration model unavailable"},{status:503});
-  const model=new OpenAI({apiKey:process.env.OPENAI_API_KEY});
+  const model=new OpenAI({apiKey:process.env.OPENAI_API_KEY,maxRetries:0,fetch:createActivityAccountingFetch("openai","actor-calibration")});
   const answer=await model.chat.completions.create({
     model:process.env.KATIE_MEMORY_CALIBRATION_MODEL||"gpt-5.5-2026-04-23",
     response_format:{type:"json_object"},

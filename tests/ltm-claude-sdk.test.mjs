@@ -7,9 +7,15 @@ import ts from "typescript";
 // Exercise the actual installed SDK, not an imitation of its post() method.
 // A constructor-injected fetch stub makes all requests local to this test.
 function clientWithFetch(fetch) {
-  let transport;
+  let transport, optionsSeen;
+  const activities = [], guardedCalls = [];
+  const guardedFetch = async (input, init) => { guardedCalls.push({ input, init }); return fetch(input, init); };
   class TestTransport extends OpenAI {
-    constructor(options) { super({ ...options, fetch }); transport = this; }
+    constructor(options) {
+      assert.equal(options.fetch, guardedFetch, "the production constructor must inject its accounting transport");
+      assert.equal(options.maxRetries, 0, "the SDK must never retry an admitted paid transmission");
+      super(options); transport = this; optionsSeen = options;
+    }
   }
   const filename = new URL("../lib/memory/claude-memory-client.ts", import.meta.url);
   const { outputText } = ts.transpileModule(readFileSync(filename, "utf8"), {
@@ -17,12 +23,15 @@ function clientWithFetch(fetch) {
   });
   const module = { exports: {} };
   new Function("require", "module", "exports", "process", outputText)(
-    id => { assert.equal(id, "openai"); return { default: TestTransport }; },
+    id => {
+      if (id === "@/lib/standalone-accounting/activity") return { createActivityAccountingFetch(provider, activity) { activities.push({ provider, activity }); return guardedFetch; } };
+      assert.equal(id, "openai", "protocol tests must not import a real ledger"); return { default: TestTransport };
+    },
     module, module.exports, { env: { CLAUDE_API_KEY: "test-only-not-a-real-key" } },
   );
   const client = module.exports.createClaudeMemoryClient();
   assert.ok(client);
-  return { client, transport };
+  return { client, transport, optionsSeen, activities, guardedCalls, guardedFetch };
 }
 const request = {
   model: "claude-sonnet-5-5", temperature: 0, response_format: { type: "json_object" },
@@ -31,7 +40,7 @@ const request = {
 
 test("installed SDK sends native Claude JSON requests with correct URL, headers and body", async () => {
   const calls = [];
-  const { client, transport } = clientWithFetch(async (url, init) => {
+  const { client, transport, optionsSeen, activities, guardedCalls, guardedFetch } = clientWithFetch(async (url, init) => {
     calls.push({ url: String(url), init });
     return new Response(JSON.stringify({
       stop_reason: "end_turn", content: [{ type: "text", text: '{"action":"no_change"}' }],
@@ -55,7 +64,10 @@ test("installed SDK sends native Claude JSON requests with correct URL, headers 
   assert.equal(body.output_config.format.type, "json_schema");
   assert.equal(body.thinking.type, "between_tools");
   const defaults = new OpenAI({ apiKey: "unused-test-key" });
-  assert.equal(transport.maxRetries, defaults.maxRetries);
+  assert.equal(transport.maxRetries, 0);
+  assert.equal(optionsSeen.fetch, guardedFetch);
+  assert.equal(guardedCalls.length, 1);
+  assert.deepEqual(activities, [{ provider: "anthropic", activity: "memory-edit" }]);
   assert.equal(transport.timeout, defaults.timeout);
 });
 
@@ -69,4 +81,27 @@ test("installed SDK preserves native HTTP errors and does not retry a 400", asyn
   });
   await assert.rejects(client.chat.completions.create(request), error => error.status === 400 && /Mock invalid native request/.test(error.message));
   assert.equal(requests, 1);
+});
+
+test("installed SDK does not retry provider 429 or 500 responses", async () => {
+  for (const status of [429, 500]) {
+    let requests = 0;
+    const { client, guardedCalls } = clientWithFetch(async () => {
+      requests++;
+      return new Response(JSON.stringify({ error: { message: "Mock unavailable" } }), { status, headers: { "content-type": "application/json", "retry-after": "0" } });
+    });
+    await assert.rejects(client.chat.completions.create(request), error => error.status === status);
+    assert.equal(requests, 1); assert.equal(guardedCalls.length, 1);
+  }
+});
+
+test("installed SDK preserves terminal accounting denial in its cause chain without retry", async () => {
+  const denial = Object.assign(new Error("Paid request needs approval"), { code: "standalone_approval_required", terminal: true });
+  let requests = 0;
+  const { client, guardedCalls } = clientWithFetch(async () => { requests++; throw denial; });
+  await assert.rejects(client.chat.completions.create(request), error => {
+    for (let current = error, depth = 0; current && typeof current === "object" && depth < 8; current = current.cause, depth++) if (current === denial) return true;
+    return false;
+  });
+  assert.equal(requests, 1); assert.equal(guardedCalls.length, 1);
 });

@@ -9,6 +9,7 @@ import type { LlmProvider } from "@/lib/providers/types";
 import { chooseProvider, type ResolvedRoutingIntent } from "@/lib/router/master-router";
 import type { RequestIntent } from "@/lib/router/model-intent";
 import type { ActorRoutingProfile } from "@/lib/types/chat";
+import { isTerminalAttemptError } from "@/lib/collaboration/attempt-policy";
 
 export function collaborationCapabilityToIntent(
   capability: CollaborationCapability,
@@ -205,6 +206,7 @@ export async function selectCollaborationHelper(input: {
         reasoning: decision.reasoning,
       } satisfies CollaborationHelperSelection;
     } catch (error) {
+      if (isTerminalAttemptError(error)) throw error;
       const reason = error instanceof Error ? error.message : String(error);
       const noEligibleCandidates =
         error instanceof Error && error.name === "NoEligibleRoutingCandidatesError";

@@ -1,3 +1,5 @@
+import { createAccountingFetch } from "@/lib/standalone-accounting/dispatch";
+import { isStandaloneAccountingError } from "@/lib/standalone-accounting/context";
 import { nativeToolTurn } from "./native-tools";
 import { requireAgentResearch } from "@/lib/agents/policy";
 import { buildVideoTimingEvidence, buildGrokVideoFrames } from "@/lib/chat/video-evidence";
@@ -295,7 +297,8 @@ export class GrokProvider implements LlmProvider {
     this.client = new OpenAI({
       apiKey,
       baseURL: "https://api.x.ai/v1",
-      fetch: globalThis.fetch.bind(globalThis)
+      maxRetries: 0,
+      fetch: createAccountingFetch("grok")
     });
   }
 
@@ -308,10 +311,10 @@ export class GrokProvider implements LlmProvider {
     // The Imagine API accepts a single bounded prompt, not system messages.
     // First give Grok's TEXT model the same persona, STM, ITM and LTM that Gemini gets.
     // It extracts relevant scene facts rather than discarding older conversation context.
-    const response = await fetch("https://api.x.ai/v1/responses", {
+    const response = await createAccountingFetch("grok")("https://api.x.ai/v1/responses", {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${this.apiKey}` },
-      signal: AbortSignal.timeout(35_000),
+      signal: params.signal ? AbortSignal.any([params.signal, AbortSignal.timeout(35_000)]) : AbortSignal.timeout(35_000),
       body: JSON.stringify({
         model: GROK_IMAGE_CONTEXT_MODEL,
         input: [
@@ -358,10 +361,10 @@ export class GrokProvider implements LlmProvider {
     });
 
     // xAI image edits require JSON; OpenAI images.edit() sends incompatible multipart data.
-    const response = await fetch(`https://api.x.ai/v1/images/${endpoint}`, {
+    const response = await createAccountingFetch("grok")(`https://api.x.ai/v1/images/${endpoint}`, {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${this.apiKey}` },
-      signal: AbortSignal.timeout(180_000),
+      signal: params.signal ? AbortSignal.any([params.signal, AbortSignal.timeout(180_000)]) : AbortSignal.timeout(180_000),
       body: JSON.stringify({
         model,
         prompt: outgoing.prompt,
@@ -411,10 +414,11 @@ ${getKatieReasoningExplainerStatement()}` }]
     ];
   }
 
-  private async createWebSearchResponse(model: string, input: GrokResponseInputMessage[]): Promise<GrokWebSearchResponse> {
+  private async createWebSearchResponse(model: string, input: GrokResponseInputMessage[], signal?: AbortSignal): Promise<GrokWebSearchResponse> {
     requireAgentResearch();
-    const response = await fetch("https://api.x.ai/v1/responses", {
+    const response = await createAccountingFetch("grok")("https://api.x.ai/v1/responses", {
       method: "POST",
+      signal,
       headers: {
         "Content-Type": "application/json",
         Authorization: `Bearer ${this.apiKey}`
@@ -488,6 +492,7 @@ ${getKatieReasoningExplainerStatement()}` }]
       try {
         return await this.generateImage(params, aliasedModel);
       } catch (error) {
+        if (isStandaloneAccountingError(error)) throw error;
         const detail = error instanceof Error ? error.message : String(error);
         console.error(`[GrokProvider] Image API failure for ${aliasedModel}: ${detail}`);
         throw new Error(`Grok image request failed for model ${aliasedModel}: ${detail}`);
@@ -541,7 +546,7 @@ ${getKatieReasoningExplainerStatement()}` }
           systemMessages: input.filter(entry => entry.role === "system")
             .map(entry => entry.content.map(part => part.type === "input_text" ? part.text : "").join("")),
         });
-        const response = await this.createWebSearchResponse(selectedModel, input);
+        const response = await this.createWebSearchResponse(selectedModel, input, params.signal);
 
         const text = extractResponseText(response);
         const sources = extractResearchSources(response, text);
@@ -588,7 +593,7 @@ ${getKatieReasoningExplainerStatement()}` }
         model: selectedModel,
         messages,
         ...(params.boundedFrameObservations ? { max_tokens: 6000 } : {}),
-      }, params.boundedFrameObservations ? { maxRetries: 0, timeout: 180_000 } : undefined);
+      }, { maxRetries: 0, timeout: 180_000, signal: params.signal });
       if (submittedImageCount) {
         console.info("[GrokProvider] xAI acknowledged multimodal request", {
           model: selectedModel, imageCount: submittedImageCount,
@@ -599,10 +604,11 @@ ${getKatieReasoningExplainerStatement()}` }
       return {
         text: completion.choices[0]?.message?.content ?? "",
         ...(params.boundedFrameObservations ? { truncated: completion.choices[0]?.finish_reason === "length" } : {}),
-        model: selectedModel,
+        model: completion.model || selectedModel,
         provider: this.name
       };
     } catch (error: unknown) {
+      if (isStandaloneAccountingError(error)) throw error;
       if (params.boundedFrameObservations) {
         console.warn("[GrokProvider] bounded frame observation failed", { model: selectedModel });
         throw new Error("Structured frame observation outcome unavailable; no automatic retry.");

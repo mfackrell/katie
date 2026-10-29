@@ -1,3 +1,4 @@
+import { createAccountingFetch } from "@/lib/standalone-accounting/dispatch";
 import { claudeCachedSystem, claudeInputUsage } from "./claude-cache";
 import { nativeToolTurn } from "./native-tools";
 import {
@@ -28,6 +29,7 @@ type ClaudeUsage = {
 };
 
 type ClaudeMessageResponse = {
+  model?: string;
   content?: ClaudeContentBlock[];
   stop_reason?: string | null;
   stop_sequence?: string | null;
@@ -40,6 +42,7 @@ type ClaudeMessage = {
 };
 
 type ClaudePassResult = {
+  model?: string;
   text: string;
   content: ClaudeContentBlock[];
   stopReason?: string;
@@ -240,14 +243,16 @@ export class ClaudeProvider implements LlmProvider {
   }
 
   private async postMessage(params: {
+    signal?: AbortSignal;
     model: string;
     cacheablePrefix?: string;
     system: string;
     messages: ClaudeMessage[];
     stream: boolean;
   }): Promise<Response> {
-    const response = await fetch("https://api.anthropic.com/v1/messages", {
+    const response = await createAccountingFetch("anthropic")("https://api.anthropic.com/v1/messages", {
       method: "POST",
+      signal: params.signal,
       headers: {
         "content-type": "application/json",
         "x-api-key": this.apiKey,
@@ -272,6 +277,7 @@ export class ClaudeProvider implements LlmProvider {
   }
 
   private async generatePass(params: {
+    signal?: AbortSignal;
     model: string;
     cacheablePrefix?: string;
     system: string;
@@ -282,6 +288,7 @@ export class ClaudeProvider implements LlmProvider {
     const content = body.content ?? [];
 
     return {
+      model: body.model,
       text: extractClaudeText(content),
       content,
       stopReason: body.stop_reason ?? undefined,
@@ -294,6 +301,7 @@ export class ClaudeProvider implements LlmProvider {
 
   private async generateStreamPass(
     params: {
+      signal?: AbortSignal;
       model: string;
       cacheablePrefix?: string;
       system: string;
@@ -316,6 +324,7 @@ export class ClaudeProvider implements LlmProvider {
     let inputTokens: number | undefined;
     let outputTokens: number | undefined;
 
+    let responseModel: string | undefined;
     const processEvent = async (rawEvent: string): Promise<void> => {
       const data = rawEvent
         .split("\n")
@@ -342,6 +351,7 @@ export class ClaudeProvider implements LlmProvider {
       }
 
       if (event.type === "message_start") {
+        responseModel = event.message?.model;
         const usage = claudeInputUsage(event.message?.usage);
         inputTokens = usage.inputTokens;
         cacheReadInputTokens = usage.cacheReadInputTokens;
@@ -412,6 +422,7 @@ export class ClaudeProvider implements LlmProvider {
     }
 
     return {
+      model: responseModel,
       text,
       content: text ? [{ type: "text", text }] : [],
       stopReason,
@@ -432,6 +443,7 @@ export class ClaudeProvider implements LlmProvider {
     });
 
     let accumulatedText = "";
+    let responseModel = selectedModel;
     let cacheReadInputTokens: number | undefined;
     let cacheCreationInputTokens: number | undefined;
     let inputTokens: number | undefined;
@@ -442,6 +454,7 @@ export class ClaudeProvider implements LlmProvider {
     for (let passIndex = 0; passIndex <= CLAUDE_MAX_CONTINUATIONS; passIndex += 1) {
       const continuationPass = passIndex > 0;
       const pass = await this.generatePass({
+        signal: params.signal,
         model: selectedModel,
         cacheablePrefix,
         system,
@@ -450,6 +463,7 @@ export class ClaudeProvider implements LlmProvider {
           : messages
       });
 
+      responseModel = pass.model ?? responseModel;
       accumulatedText = appendContinuation(accumulatedText, pass.text);
       cacheReadInputTokens = addTokenCount(cacheReadInputTokens, pass.usage.cacheReadInputTokens);
       cacheCreationInputTokens = addTokenCount(cacheCreationInputTokens, pass.usage.cacheCreationInputTokens);
@@ -460,7 +474,7 @@ export class ClaudeProvider implements LlmProvider {
       if (stopReason !== "max_tokens") {
         return toProviderResponse({
           text: accumulatedText,
-          model: selectedModel,
+          model: responseModel,
           provider: this.name,
           stopReason,
           continuationCount,
@@ -491,7 +505,7 @@ export class ClaudeProvider implements LlmProvider {
 
     return toProviderResponse({
       text: accumulatedText,
-      model: selectedModel,
+      model: responseModel,
       provider: this.name,
       stopReason: stopReason ?? "max_tokens",
       continuationCount,
@@ -514,6 +528,7 @@ export class ClaudeProvider implements LlmProvider {
     });
 
     let accumulatedText = "";
+    let responseModel = selectedModel;
     let cacheReadInputTokens: number | undefined;
     let cacheCreationInputTokens: number | undefined;
     let inputTokens: number | undefined;
@@ -525,6 +540,7 @@ export class ClaudeProvider implements LlmProvider {
       const continuationPass = passIndex > 0;
       const pass = await this.generateStreamPass(
         {
+          signal: params.signal,
           model: selectedModel,
           cacheablePrefix,
           system,
@@ -535,6 +551,7 @@ export class ClaudeProvider implements LlmProvider {
         handlers
       );
 
+      responseModel = pass.model ?? responseModel;
       accumulatedText = appendContinuation(accumulatedText, pass.text);
       cacheReadInputTokens = addTokenCount(cacheReadInputTokens, pass.usage.cacheReadInputTokens);
       cacheCreationInputTokens = addTokenCount(cacheCreationInputTokens, pass.usage.cacheCreationInputTokens);
@@ -545,7 +562,7 @@ export class ClaudeProvider implements LlmProvider {
       if (stopReason !== "max_tokens") {
         return toProviderResponse({
           text: accumulatedText,
-          model: selectedModel,
+          model: responseModel,
           provider: this.name,
           stopReason,
           continuationCount,
@@ -577,7 +594,7 @@ export class ClaudeProvider implements LlmProvider {
 
     return toProviderResponse({
       text: accumulatedText,
-      model: selectedModel,
+      model: responseModel,
       provider: this.name,
       stopReason: stopReason ?? "max_tokens",
       continuationCount,

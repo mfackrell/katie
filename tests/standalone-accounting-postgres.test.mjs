@@ -1,0 +1,403 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {mkdtempSync,readFileSync,rmSync,existsSync} from 'node:fs';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
+import {spawnSync} from 'node:child_process';
+import {randomUUID} from 'node:crypto';
+import pg from 'pg';
+import {modules} from './helpers/load-project-modules.mjs';
+
+// This test never accepts DATABASE_URL: it starts a disposable, loopback-only cluster.
+// Missing PostgreSQL is a failure, not a skipped mock-backed qualification.
+test('standalone ledger: real PostgreSQL atomic admission, receipts, ownership and durable resume', {timeout:120000}, async()=>{
+ const bin=process.env.KATIE_TEST_PG_BIN||['/usr/lib/postgresql/16/bin','/usr/lib/postgresql/17/bin','/tmp/katie-pg-bin'].find(p=>existsSync(join(p,'initdb')));
+ assert.ok(bin,'PostgreSQL initdb/pg_ctl required (set KATIE_TEST_PG_BIN)');
+ const dir=mkdtempSync(join(tmpdir(),'standalone-ledger-pg-')),data=join(dir,'data');
+ const run=(name,args)=>{const r=spawnSync(join(bin,name),args,{encoding:'utf8',timeout:30000});assert.equal(r.status,0,(r.stderr||r.error?.message||'')+(existsSync(join(dir,'log'))?readFileSync(join(dir,'log'),'utf8'):''));};
+ const cfg={host:'127.0.0.1',port:55469,user:'postgres',database:'postgres'};
+ let started=false;const connections=[];
+ const connect=async()=>{const c=new pg.Client(cfg);await c.connect();connections.push(c);return c;};
+ try {
+  run('initdb',['-D',data,'-U','postgres','-A','trust','--no-locale','-E','UTF8']);
+  run('pg_ctl',['-D',data,'-l',join(dir,'log'),'-o',`-h 127.0.0.1 -k '' -p 55469`,'-w','start']);started=true;
+  const admin=await connect();
+  await admin.query('begin');
+  await admin.query(readFileSync(new URL('./sql/standalone-accounting-schema.sql',import.meta.url),'utf8'));
+  await admin.query(readFileSync(new URL('../supabase/migrations/20261028193000_standalone_provider_attempt_ledger.sql',import.meta.url),'utf8'));
+  await admin.query('commit');
+  const one=await connect(),two=await connect();await one.query('set role service_role');await two.query('set role service_role');
+  const rpc=async(c,name,args)=>{
+   const keys=Object.keys(args),vals=Object.values(args).map(v=>v&&typeof v==='object'?JSON.stringify(v):v);
+   const sql=`select standalone_${name}(${keys.map((k,i)=>`${k} => $${i+1}`).join(',')}) value`;
+   return (await c.query(sql,vals)).rows[0].value;
+  };
+  const owner=randomUUID(),other=randomUUID(),actor=randomUUID(),chat=randomUUID(),executive=randomUUID(),execChat=randomUUID(),managed=randomUUID(),managedChat=randomUUID();
+  await admin.query("insert into actors values($1,'standalone','standard'),($2,'executive','executive'),($3,'managed','standard')",[actor,executive,managed]);
+  await admin.query("insert into chats(id,actor_id,title) values($1,$2,'owner chat'),($3,$4,'executive chat'),($5,$6,'managed chat')",[chat,actor,execChat,executive,managedChat,managed]);
+  await admin.query('insert into managed_agents values($1,$2)',[randomUUID(),managed]);
+  const bind=(o=owner,a=actor,c=chat)=>rpc(one,'bind_scope',{p_owner:o,p_actor:a,p_chat:c});
+  await bind();assert.equal(await rpc(one,'authorize_scope',{p_owner:owner,p_actor:actor,p_chat:chat}),true);
+  assert.equal(await rpc(one,'authorize_scope',{p_owner:other,p_actor:actor,p_chat:chat}),false);
+  await assert.rejects(bind(other),/duplicate key/);await assert.rejects(bind(owner,executive,execChat),/SCOPE_INVALID/);await assert.rejects(bind(owner,managed,managedChat),/SCOPE_INVALID/);
+  const configure=(call,request)=>rpc(one,'configure',{p_owner:owner,p_timezone:'America/New_York',p_call:call,p_request:request});
+  const pricing=()=>rpc(one,'register_pricing',{p_version:'fixture-v1',p_metadata:{unit:'microUSD',fixture:true}});
+  await pricing();await pricing();await assert.rejects(rpc(one,'register_pricing',{p_version:'fixture-v1',p_metadata:{changed:true}}),/PRICING_VERSION_CONFLICT/);
+  const input=(key,cost='60',request='original-request')=>({p_owner:owner,p_actor:actor,p_chat:chat,p_request:request,p_key:key,p_hash:'a'.repeat(64),p_payload:{schemaVersion:'standalone-request-v1',provider:'fixture',model:'fixture-model',endpoint:'/v1',payload:{model:'fixture-model',max_tokens:100},hash:'a'.repeat(64)},p_pricing:'fixture-v1',p_provider:'fixture',p_model:'fixture-model',p_reserved:cost,p_category:'chat',p_estimate:{status:'estimated',reservationMicrousd:cost,model:'fixture-model',pricingVersion:'fixture-v1',estimatorVersion:'standalone-estimator-v1',requestHash:'a'.repeat(64)},p_estimator:'standalone-estimator-v1',p_reason:'Original fixture user request'});
+  await assert.rejects(rpc(one,'admit',input('unconfigured')),/CONFIGURATION_REQUIRED/);
+  await configure(null,null);
+  let paused=await rpc(one,'admit',input('unset'));assert.equal(paused.state,'paused');assert.equal(paused.pause_reason,'thresholds_unset');
+  await assert.rejects(rpc(one,'claim_dispatch',{p_owner:owner,p_attempt:paused.id}).then(v=>{assert.equal(v,null);throw Error('done')}),/done/);
+  await configure('100','100');
+  // Two independent transactions contend for the SAME original request budget.
+  await one.query('begin');const first=await rpc(one,'admit',input('parallel-1'));
+  let secondFinished=false;
+  const waiting=rpc(two,'admit',input('parallel-2')).then(v=>{secondFinished=true;return v;});
+  await new Promise(resolve=>setTimeout(resolve,40));assert.equal(secondFinished,false,'second admission must wait for row lock');
+  assert.equal((await admin.query('select wait_event_type from pg_stat_activity where pid=$1',[two.processID])).rows[0].wait_event_type,'Lock','PostgreSQL confirms independent admission blocked on an actual lock');
+  await one.query('commit');const second=await waiting;
+  assert.equal(first.state,'reserved');assert.equal(second.state,'paused');assert.equal(second.pause_reason,'request_threshold');
+  assert.equal(first.reserved_microusd,'60');
+  const replay=await rpc(one,'admit',input('parallel-1'));assert.equal(replay.id,first.id);
+  await assert.rejects(rpc(one,'admit',{...input('parallel-1'),p_payload:{changed:true}}),/ATTEMPT_CONFLICT/);
+  await assert.rejects(rpc(one,'admit',{...input('ownership-conflict'),p_owner:other}),/CONFIGURATION_REQUIRED/);
+  await assert.rejects(rpc(one,'admit',{...input('fraction'),p_reserved:'0.5'}),/INVALID_STANDALONE_ATTEMPT/);
+  await assert.rejects(rpc(one,'admit',{...input('not-a-number'),p_reserved:'NaN'}),/INVALID_STANDALONE_ATTEMPT/);
+  await assert.rejects(rpc(one,'admit',{...input('bad-estimate'),p_estimate:{...input('x').p_estimate,reservationMicrousd:'1'}}),/ESTIMATE_BINDING_INVALID/);
+  await assert.rejects(configure('NaN','100'),/INVALID_STANDALONE_CONFIGURATION/);
+  const approve=(a,changes={})=>rpc(one,'approve',{p_owner:owner,p_attempt:a.id,p_hash:a.prepared_hash,p_pricing:a.pricing_version,p_revision:a.budget_revision,p_reserved:a.reserved_microusd,...changes});
+  await assert.rejects(approve(second,{p_hash:'b'.repeat(64)}),/APPROVAL_STALE/);
+  await rpc(one,'claim_dispatch',{p_owner:owner,p_attempt:first.id});
+  const earlyIdentifiers=await rpc(one,'record_provider_identifiers',{p_owner:owner,p_attempt:first.id,p_request_id:'upstream-header-1',p_response_id:null});
+  assert.equal(earlyIdentifiers.provider_request_id,'upstream-header-1');assert.equal(earlyIdentifiers.provider_response_id,null);
+  await approve(second);await approve(second);
+  const claims=await Promise.all([rpc(one,'claim_dispatch',{p_owner:owner,p_attempt:second.id}),rpc(two,'claim_dispatch',{p_owner:owner,p_attempt:second.id})]);
+  assert.equal(claims.filter(Boolean).length,1,'approved dispatch consumes exactly once');
+  assert.deepEqual(claims.find(Boolean).prepared_payload,input('x').p_payload);
+  const settle={p_owner:owner,p_attempt:first.id,p_provider:'fixture',p_receipt:'provider-request-1',p_actual:'125',p_usage:{inputTokens:10,outputTokens:3},p_evidence:{source:'provider'}};
+  const receipt=await rpc(one,'settle',settle);assert.equal(receipt.actual_microusd,'125','overrun is fully recorded');
+  await rpc(one,'record_provider_identifiers',{p_owner:owner,p_attempt:first.id,p_request_id:'upstream-header-1',p_response_id:'provider-request-1'});
+  assert.equal((await rpc(one,'record_provider_identifiers',{p_owner:owner,p_attempt:first.id,p_request_id:'conflicting-header',p_response_id:null})).conflict,true);
+  assert.equal((await rpc(one,'settle',settle)).id,first.id);
+  assert.equal((await rpc(one,'settle',{...settle,p_actual:'124'})).conflict,true);
+  assert.equal((await rpc(one,'settle',{...settle,p_attempt:second.id})).conflict,true);
+  // Execute the production TypeScript adapter over real committed SQL RPCs.
+  // Only the HTTP wire is translated; ledger policy and transactions are real.
+  const {createStandaloneLedger}=modules()('@/lib/standalone-accounting/ledger');
+  const durableAdapter=createStandaloneLedger({async rpc(name,args){
+   try{return {data:await rpc(one,name.replace(/^standalone_/,''),args),error:null};}
+   catch(error){return {data:null,error:{message:error.message}};}
+  }});
+  await assert.rejects(durableAdapter.settle({ownerId:owner,attemptId:first.id,provider:'fixture',providerReceiptId:'provider-request-1',actualMicrousd:'126',usage:settle.p_usage,evidence:settle.p_evidence}),error=>error.code==='standalone_receipt_conflict');
+  assert.ok((await rpc(two,'snapshot',{p_owner:owner})).events.some(e=>e.kind==='receipt_conflict'&&e.details.actual_microusd==='126'),'conflict survives adapter throwing and is visible to another connection');
+
+  await rpc(one,'mark_uncertain',{p_owner:owner,p_attempt:second.id,p_reason:'Connection lost after dispatch'});
+  assert.equal((await rpc(one,'cancel',{p_owner:owner,p_attempt:second.id})).state,'uncertain','post-dispatch cancellation retains reservation');
+  await assert.rejects(rpc(one,'admit',input('after-uncertainty','1')),/REQUEST_CANCELLED/);
+  // An overrun on a different fully known request pauses its next ordinary call.
+  const overrun=await rpc(one,'admit',input('overrun','1','known-overrun'));
+  await rpc(one,'claim_dispatch',{p_owner:owner,p_attempt:overrun.id});
+  await rpc(one,'settle',{...settle,p_attempt:overrun.id,p_receipt:'known-overrun-receipt',p_actual:'125'});
+  await assert.rejects(rpc(one,'admit',input('after-overrun','1','known-overrun')),/REQUEST_OVERRUN/);
+  const smallOverrun=await rpc(one,'admit',input('small-overrun','1','small-overrun-request'));
+  const smallSibling=await rpc(one,'admit',input('small-sibling','1','small-overrun-request'));
+  await rpc(one,'claim_dispatch',{p_owner:owner,p_attempt:smallOverrun.id});
+  await rpc(one,'settle',{...settle,p_attempt:smallOverrun.id,p_receipt:'small-overrun',p_actual:'2'});
+  await assert.rejects(rpc(one,'admit',input('small-next','1','small-overrun-request')),/REQUEST_OVERRUN/);
+  assert.equal(await rpc(one,'claim_dispatch',{p_owner:owner,p_attempt:smallSibling.id}),null,'any overrun blocks a pre-reserved sibling even below request threshold');
+  assert.equal((await rpc(one,'lookup_attempt',{p_owner:owner,p_request:'small-overrun-request',p_key:'small-sibling'})).pause_reason,'request_overrun');
+
+  const checkpoint={status:200,statusText:'OK',headers:[['content-type','application/json']],body:'{"ok":true}'};
+  await rpc(one,'checkpoint_response',{p_owner:owner,p_attempt:first.id,p_checkpoint:checkpoint});
+  await rpc(one,'checkpoint_response',{p_owner:owner,p_attempt:first.id,p_checkpoint:checkpoint});
+  await assert.rejects(rpc(one,'checkpoint_response',{p_owner:owner,p_attempt:first.id,p_checkpoint:{...checkpoint,body:'different'}}),/CHECKPOINT_CONFLICT/);
+  const fresh=await connect();await fresh.query('set role service_role');
+  assert.deepEqual((await rpc(fresh,'lookup_attempt',{p_owner:owner,p_request:'original-request',p_key:'parallel-1'})).response_checkpoint,checkpoint,'fresh connection recovers exact response');
+  assert.equal(await rpc(fresh,'lookup_attempt',{p_owner:other,p_request:'original-request',p_key:'parallel-1'}),null);
+  const stale=await rpc(one,'admit',input('stale','101','stale-request'));await configure('99','100');
+  await assert.rejects(approve(stale),/APPROVAL_STALE/);
+  const revised=await rpc(one,'revise',{p_owner:owner,p_attempt:stale.id,p_hash:'b'.repeat(64),p_payload:{schemaVersion:'standalone-request-v1',provider:'fixture',model:'fixture-model-cheap',endpoint:'/v1',payload:{model:'fixture-model-cheap',max_tokens:5},hash:'b'.repeat(64)},p_pricing:'fixture-v1',p_reserved:'5',p_tradeoffs:'Shorter output',p_estimate:{status:'estimated',reservationMicrousd:'5',pricingVersion:'fixture-v1',estimatorVersion:'standalone-estimator-v1',requestHash:'b'.repeat(64)},p_estimator:'standalone-estimator-v1'});
+  assert.equal(revised.state,'paused');assert.equal(revised.model,'fixture-model-cheap');assert.equal(revised.supersedes_attempt_id,stale.id);assert.equal(revised.source_prepared_hash,'a'.repeat(64));
+  assert.equal((await rpc(one,'lookup_attempt',{p_owner:owner,p_request:'stale-request',p_key:'stale'})).id,revised.id);
+  assert.equal((await rpc(one,'admit',input('stale','101','stale-request'))).id,revised.id);
+  assert.equal((await rpc(one,'cancel',{p_owner:owner,p_attempt:revised.id})).state,'cancelled');
+  const unknown=await rpc(one,'admit',input('unknown-main','10','unknown-request'));
+  const waitingSibling=await rpc(one,'admit',input('unknown-sibling','5','unknown-request'));
+  await rpc(one,'claim_dispatch',{p_owner:owner,p_attempt:unknown.id});
+  await rpc(one,'record_provider_identifiers',{p_owner:owner,p_attempt:unknown.id,p_request_id:'received-before-body-timeout',p_response_id:null});
+  await rpc(one,'mark_uncertain',{p_owner:owner,p_attempt:unknown.id,p_reason:'No reliable outcome'});
+  const interrupted=await rpc(two,'lookup_attempt',{p_owner:owner,p_request:'unknown-request',p_key:'unknown-main'});
+  assert.equal(interrupted.provider_request_id,'received-before-body-timeout');assert.equal(interrupted.provider_response_id,null);assert.equal(interrupted.actual_microusd,null);
+  await assert.rejects(rpc(one,'admit',input('unknown-next','1','unknown-request')),/REQUEST_UNCERTAIN/);
+  assert.equal(await rpc(one,'claim_dispatch',{p_owner:owner,p_attempt:waitingSibling.id}),null);
+  await rpc(one,'settle',{...settle,p_attempt:unknown.id,p_receipt:'resolved-unknown',p_actual:'6'});
+  assert.ok(await rpc(one,'claim_dispatch',{p_owner:owner,p_attempt:waitingSibling.id}));
+  const cancelled=await rpc(one,'admit',input('cancel-main','10','cancel-request'));
+  const cancelledSibling=await rpc(one,'admit',input('cancel-sibling','5','cancel-request'));
+  const inFlightSibling=await rpc(one,'admit',input('cancel-inflight','2','cancel-request'));
+  const settledSibling=await rpc(one,'admit',input('cancel-settled','1','cancel-request'));
+  await rpc(one,'claim_dispatch',{p_owner:owner,p_attempt:inFlightSibling.id});
+  await rpc(one,'claim_dispatch',{p_owner:owner,p_attempt:settledSibling.id});
+  await rpc(one,'settle',{...settle,p_attempt:settledSibling.id,p_receipt:'cancel-settled-receipt',p_actual:'1'});
+  await rpc(one,'cancel',{p_owner:owner,p_attempt:cancelled.id});
+  const observedInFlight=await rpc(two,'lookup_attempt',{p_owner:owner,p_request:'cancel-request',p_key:'cancel-inflight'});
+  assert.equal(observedInFlight.state,'uncertain');assert.ok(observedInFlight.cancelled_by_owner_at,'other-worker per-attempt cancellation polls can observe the owner cancellation');
+  const observedSettled=await rpc(two,'lookup_attempt',{p_owner:owner,p_request:'cancel-request',p_key:'cancel-settled'});
+  assert.equal(observedSettled.state,'settled');assert.equal(observedSettled.actual_microusd,'1');assert.ok(observedSettled.cancelled_by_owner_at,'settled history is flagged without erasing known actual cost');
+
+  assert.equal((await rpc(one,'lookup_attempt',{p_owner:owner,p_request:'cancel-request',p_key:'cancel-sibling'})).state,'cancelled');
+  assert.equal(await rpc(one,'claim_dispatch',{p_owner:owner,p_attempt:cancelledSibling.id}),null);
+  await assert.rejects(rpc(one,'admit',input('cancel-next','1','cancel-request')),/REQUEST_CANCELLED/);
+  const partial=await rpc(one,'admit',input('partial-main','10','partial-request'));
+  await rpc(one,'claim_dispatch',{p_owner:owner,p_attempt:partial.id});
+  const partialUsage={inputTokens:100,outputTokens:null,cachedInputTokens:10,cacheReadInputTokens:10,cacheCreationInputTokens:20,cacheWriteInputTokens:20,cacheWriteTtl:'5m'};
+  const partialEvidence={requestedModel:'fixture-model',resolvedModel:'new-unpriced-model',pricingVersion:'fixture-v1',pricingUnknown:true};
+  const partialResult=await durableAdapter.recordPartialUsage(owner,partial.id,partialUsage,partialEvidence);
+  assert.equal(partialResult.state,'uncertain');assert.equal(partialResult.actual_microusd,null);assert.equal(partialResult.reserved_microusd,'10');
+  assert.equal(partialResult.usage.inputTokens,100);assert.equal(partialResult.resolved_model,'new-unpriced-model');
+  const partialEventsBefore=(await rpc(two,'snapshot',{p_owner:owner})).events.filter(e=>e.attempt_id===partial.id).length;
+  await durableAdapter.recordPartialUsage(owner,partial.id,partialUsage,partialEvidence);
+  assert.equal((await rpc(two,'snapshot',{p_owner:owner})).events.filter(e=>e.attempt_id===partial.id).length,partialEventsBefore,'exact duplicate partial observations are idempotent');
+  const {summarizeDailyUsage}=modules()('@/lib/standalone-accounting/daily');
+  const partialDaily=summarizeDailyUsage([partialResult],'UTC',undefined,new Date(partialResult.dispatched_at));
+  assert.equal(partialDaily.totals.inputTokens,100);assert.equal(partialDaily.totals.missingInputCount,0);assert.equal(partialDaily.totals.missingOutputCount,1);
+  assert.equal(partialDaily.totals.unknownCostCount,1);assert.equal(partialDaily.totals.estimatedCostMicrousd,'0');assert.equal(partialDaily.totals.uncertainExposureMicrousd,'10');
+  await assert.rejects(durableAdapter.recordPartialUsage(owner,partial.id,{inputTokens:8},partialEvidence),error=>error.code==='standalone_usage_conflict');
+  assert.equal((await rpc(two,'lookup_attempt',{p_owner:owner,p_request:'partial-request',p_key:'partial-main'})).usage.inputTokens,100);
+  // Total input can stay unchanged while cache billing dimensions contradict an earlier observation.
+  await assert.rejects(durableAdapter.recordPartialUsage(owner,partial.id,{...partialUsage,cacheCreationInputTokens:21,cacheWriteInputTokens:21},partialEvidence),error=>error.code==='standalone_usage_conflict');
+  await assert.rejects(durableAdapter.recordPartialUsage(owner,partial.id,{...partialUsage,cacheReadInputTokens:11},partialEvidence),error=>error.code==='standalone_usage_conflict');
+  await assert.rejects(durableAdapter.recordPartialUsage(owner,partial.id,{...partialUsage,cacheWriteTtl:'1h'},partialEvidence),error=>error.code==='standalone_usage_conflict');
+  const originalCacheUsage=(await rpc(two,'lookup_attempt',{p_owner:owner,p_request:'partial-request',p_key:'partial-main'})).usage;
+  assert.equal(originalCacheUsage.inputTokens,100);assert.equal(originalCacheUsage.cacheReadInputTokens,10);
+  assert.equal(originalCacheUsage.cacheWriteInputTokens,20);assert.equal(originalCacheUsage.cacheCreationInputTokens,20);assert.equal(originalCacheUsage.cacheWriteTtl,'5m');
+  assert.ok((await rpc(two,'snapshot',{p_owner:owner})).events.some(e=>e.kind==='usage_conflict'&&e.attempt_id===partial.id&&e.details.usage.inputTokens===100&&e.details.usage.cacheWriteInputTokens===21),'cache-dimension conflict survives adapter rejection without changing total input or the original observation');
+
+  const completedPartial={...settle,p_attempt:partial.id,p_receipt:'late-full-partial',p_actual:'9',p_usage:{...partialUsage,outputTokens:2},p_evidence:{...partialEvidence,pricingUnknown:false,source:'verified-late-provider-receipt'}};
+  const concurrentFinals=await Promise.all([rpc(one,'settle',completedPartial),rpc(two,'settle',completedPartial)]);
+  assert.equal(concurrentFinals[0].id,concurrentFinals[1].id,'concurrent identical receipts converge on one settled attempt');
+  const fullPartial=await rpc(two,'lookup_attempt',{p_owner:owner,p_request:'partial-request',p_key:'partial-main'});
+  assert.equal(fullPartial.actual_microusd,'9');assert.equal(fullPartial.state,'settled');
+  assert.equal((await rpc(admin,'request_committed',{p_owner:owner,p_request:'partial-request'})).toString(),'9','late full receipt replaces the held reservation instead of double counting');
+  await durableAdapter.recordPartialUsage(owner,partial.id,partialUsage,partialEvidence);
+  assert.equal((await rpc(two,'lookup_attempt',{p_owner:owner,p_request:'partial-request',p_key:'partial-main'})).actual_microusd,'9','late partial usage does not erase settled money');
+  // Durable request workflow survives a fresh connection and fences a concurrent resume.
+  const wf={p_owner:owner,p_actor:actor,p_chat:chat,p_request:'workflow',p_hash:'c'.repeat(64),p_body:{messages:['hello']},p_resume:false};
+  const leased=await rpc(one,'claim_workflow',wf);assert.equal(leased.claimed,true);
+  assert.equal((await rpc(two,'claim_workflow',wf)).claimed,false);
+  const contextValue={history:[{role:'user',content:'frozen context'}],timestamp:'2026-10-28T00:00:00Z'};
+  const contextArgs={p_owner:owner,p_request:'workflow',p_lease:leased.lease_token,p_key:'context',p_value:contextValue};
+  assert.deepEqual(await rpc(one,'checkpoint_workflow',contextArgs),contextValue);
+  assert.deepEqual(await rpc(one,'checkpoint_workflow',contextArgs),contextValue);
+  assert.equal(await rpc(one,'checkpoint_workflow',{...contextArgs,p_key:'absent-progress',p_value:null}),null);
+  await assert.rejects(rpc(one,'checkpoint_workflow',{...contextArgs,p_value:{changed:true}}),/CHECKPOINT_CONFLICT/);
+  const wfPause=await rpc(one,'admit',input('workflow-call','101','workflow'));
+  await rpc(one,'finish_workflow',{p_owner:owner,p_request:'workflow',p_lease:leased.lease_token,p_status:'paused'});
+  const recovered=await rpc(fresh,'load_workflow',{p_owner:owner,p_request:'workflow'});
+  assert.equal(recovered.request_hash,wf.p_hash);assert.deepEqual(recovered.checkpoints.context,contextValue);
+  assert.equal((await rpc(two,'claim_workflow',{...wf,p_resume:true})).claimed,false);
+  await approve(wfPause);const resume=await rpc(fresh,'claim_workflow',{...wf,p_resume:true});assert.equal(resume.claimed,true);
+  await assert.rejects(rpc(one,'finish_workflow',{p_owner:owner,p_request:'workflow',p_lease:leased.lease_token,p_status:'completed'}),/LEASE_LOST/);
+  // A swallowed optional-feature denial must never hide a durable pending attempt.
+  const premature=await rpc(fresh,'finish_workflow',{p_owner:owner,p_request:'workflow',p_lease:resume.lease_token,p_status:'completed',p_result:{answer:'apparent success'}});
+  assert.equal(premature.status,'paused');assert.equal(premature.lease_token,null);
+  assert.equal((await rpc(two,'load_workflow',{p_owner:owner,p_request:'workflow'})).status,'paused');
+  const finalLease=await rpc(fresh,'claim_workflow',{...wf,p_resume:true});assert.equal(finalLease.claimed,true);
+  assert.ok(await rpc(one,'claim_dispatch',{p_owner:owner,p_attempt:wfPause.id}));
+  await rpc(one,'settle',{...settle,p_attempt:wfPause.id,p_receipt:'workflow-final-receipt',p_actual:'90'});
+  const finished=await rpc(fresh,'finish_workflow',{p_owner:owner,p_request:'workflow',p_lease:finalLease.lease_token,p_status:'completed',p_result:{answer:'saved'}});
+  assert.equal(finished.status,'completed','all-settled workflow completes normally');
+  const complete=await rpc(one,'claim_workflow',{...wf,p_resume:true});assert.equal(complete.claimed,false);assert.deepEqual(complete.result,{answer:'saved'});
+  await assert.rejects(rpc(two,'admit',input('late-helper','1','workflow')),/WORKFLOW_FINISHED/);
+  const raceWorkflow={...wf,p_request:'finish-race',p_hash:'d'.repeat(64)};
+  const raceLease=await rpc(one,'claim_workflow',raceWorkflow);
+  await one.query('begin');await rpc(one,'admit',input('concurrent-helper','1','finish-race'));
+  let finishResolved=false;
+  const racingFinish=rpc(two,'finish_workflow',{p_owner:owner,p_request:'finish-race',p_lease:raceLease.lease_token,p_status:'completed',p_result:{answer:'optional helper appeared complete'}}).then(value=>{finishResolved=true;return value;});
+  await new Promise(resolve=>setTimeout(resolve,40));assert.equal(finishResolved,false);
+  assert.equal((await admin.query('select wait_event_type from pg_stat_activity where pid=$1',[two.processID])).rows[0].wait_event_type,'Lock');
+  await one.query('commit');assert.equal((await racingFinish).status,'paused','completion waits for concurrent admission and cannot conceal the committed reservation');
+
+
+  const failedPendingWorkflow={...wf,p_request:'failed-pending',p_hash:'e'.repeat(64)};
+  const failedPendingLease=await rpc(one,'claim_workflow',failedPendingWorkflow);
+  const pendingAfterFailure=await rpc(one,'admit',input('failed-helper','101','failed-pending'));
+  const failedButPaused=await rpc(two,'finish_workflow',{p_owner:owner,p_request:'failed-pending',p_lease:failedPendingLease.lease_token,p_status:'failed',p_error:'Optional feature returned a non-2xx response'});
+  assert.equal(failedButPaused.status,'paused','a failure with a pending approval remains resumable');
+  assert.equal((await rpc(fresh,'claim_workflow',{...failedPendingWorkflow,p_resume:true})).blocked,'approval_required');
+  await approve(pendingAfterFailure);
+  const failedResume=await rpc(fresh,'claim_workflow',{...failedPendingWorkflow,p_resume:true});assert.equal(failedResume.claimed,true);
+  assert.ok(await rpc(one,'claim_dispatch',{p_owner:owner,p_attempt:pendingAfterFailure.id}));
+  await rpc(one,'settle',{...settle,p_attempt:pendingAfterFailure.id,p_receipt:'failed-resumed-receipt',p_actual:'90'});
+  assert.equal((await rpc(fresh,'finish_workflow',{p_owner:owner,p_request:'failed-pending',p_lease:failedResume.lease_token,p_status:'completed',p_result:{answer:'resumed after failure'}})).status,'completed');
+  const genuineFailure={...wf,p_request:'failed-without-pending',p_hash:'f'.repeat(64)};
+  const genuineFailureLease=await rpc(one,'claim_workflow',genuineFailure);
+  assert.equal((await rpc(two,'finish_workflow',{p_owner:owner,p_request:'failed-without-pending',p_lease:genuineFailureLease.lease_token,p_status:'failed',p_error:'Invalid input; no provider attempt was admitted'})).status,'failed');
+  assert.equal((await rpc(one,'claim_workflow',{...genuineFailure,p_resume:true})).blocked,'failed','failures without pending exposure remain terminal');
+  await assert.rejects(one.query('update standalone_provider_attempts set actual_microusd=0'),/permission denied/);
+  await assert.rejects(one.query("update standalone_pricing_versions set metadata='{}'"),/permission denied/);
+  // Upgrade an already-used ledger: prior migration/checksums stay untouched.
+  const beforeUpgrade=await rpc(two,'snapshot',{p_owner:owner});
+  await admin.query(readFileSync(new URL('../supabase/migrations/20261029153000_standalone_deleted_scope_history.sql',import.meta.url),'utf8'));
+  assert.deepEqual(await rpc(two,'snapshot',{p_owner:owner}),beforeUpgrade,'additive migration preserves every existing attempt, receipt and event');
+  // Execute the existing application deletion functions. Only the PostgREST
+  // wire and upload cleanup are translated; actual deletes/constraints/triggers
+  // run in the isolated PostgreSQL cluster.
+  const cleanup=[];
+  const persistence=modules({
+   '@/lib/presentation/default-registry':{validatePresentation(){}},
+   '@/lib/data/supabase/admin':{getSupabaseAdminClient:()=>({from(table){
+    assert.ok(['actors','chats'].includes(table));let predicate='',values=[];
+    const query={
+     select(){return query;},eq(field,value){assert.equal(field,'id');predicate='id=$1';values=[value];return query;},
+     in(field,value){assert.ok(['id','actor_id'].includes(field));predicate=field+'=any($1::uuid[])';values=[value];return query;},
+     async maybeSingle(){return {data:(await admin.query(`select * from ${table} where ${predicate}`,values)).rows[0]??null,error:null};},
+     async returns(){return {data:(await admin.query(`select * from ${table} where ${predicate}`,values)).rows,error:null};},
+     async delete(){try{await admin.query(`delete from ${table} where ${predicate}`,values);return {error:null};}catch(error){return {error:{message:error.message}};}}
+    };return query;
+   }})},
+   '@/lib/uploads/stored-uploads':{async removeConversationAttachments(id){cleanup.push(id);},async removeActorAttachmentIndex(id){cleanup.push(id);}}
+  })('@/lib/data/persistence-store');
+  for(const kind of ['chat','actor']){
+   const da=randomUUID(),dc=randomUUID(),dc2=randomUUID(),req='delete-'+kind;
+   await admin.query("insert into actors values($1,'delete fixture','standard')",[da]);
+   await admin.query("insert into chats(id,actor_id,title) values($1,$2,'delete fixture'),($3,$2,'sibling fixture')",[dc,da,dc2]);
+   await bind(owner,da,dc);await bind(owner,da,dc2);await configure('100','1000');
+   const scoped=(key,cost='1')=>({...input(key,cost,req),p_actor:da,p_chat:dc});
+   const settled=await rpc(one,'admit',scoped('settled'));
+   await rpc(one,'claim_dispatch',{p_owner:owner,p_attempt:settled.id});
+   await rpc(one,'settle',{...settle,p_attempt:settled.id,p_receipt:req+'-receipt',p_actual:'1'});
+   const pausedDelete=await rpc(one,'admit',scoped('paused','101'));
+   const reservedDelete=await rpc(one,'admit',scoped('reserved'));
+   const flying=await rpc(one,'admit',scoped('inflight'));
+   await rpc(one,'claim_dispatch',{p_owner:owner,p_attempt:flying.id});
+   const dw={...wf,p_actor:da,p_chat:dc,p_request:req};await rpc(one,'claim_workflow',dw);
+   const beforeDelete=await rpc(two,'snapshot',{p_owner:owner});
+   const workflowBefore=await rpc(two,'load_workflow',{p_owner:owner,p_request:req});
+   // A failed deletion transaction must not revoke a still-live scope.
+   await admin.query('begin');await admin.query('delete from chats where id=$1',[dc]);await admin.query('rollback');
+   assert.equal(await rpc(two,'authorize_scope',{p_owner:owner,p_actor:da,p_chat:dc}),true);
+   if(kind==='chat') await persistence.deleteChatById(dc);else await persistence.deleteActorsById([da]);
+   assert.equal((await admin.query('select count(*) from chats where id=$1',[dc])).rows[0].count,'0');
+   assert.equal((await admin.query('select count(*) from actors where id=$1',[da])).rows[0].count,kind==='actor'?'0':'1');
+   assert.equal(await rpc(two,'authorize_scope',{p_owner:owner,p_actor:da,p_chat:dc}),false);
+   assert.equal(await rpc(two,'authorize_scope',{p_owner:owner,p_actor:da,p_chat:dc2}),kind==='chat','chat deletion only revokes that chat; actor deletion revokes every chat');
+   assert.deepEqual(await rpc(two,'snapshot',{p_owner:owner}),beforeDelete,'deletion preserves exact attempts, receipts, money, pending exposure and append-only events');
+   assert.deepEqual(await rpc(two,'load_workflow',{p_owner:owner,p_request:req}),workflowBefore,'historical workflow and source request survive');
+   assert.ok((await admin.query('select revoked_at from standalone_owner_bindings where chat_id=$1',[dc])).rows[0].revoked_at);
+   await assert.rejects(rpc(two,'admit',scoped('new-after-delete')),/SCOPE_DENIED/);
+   await assert.rejects(approve(pausedDelete),/APPROVAL_DENIED/);
+   await assert.rejects(rpc(two,'claim_dispatch',{p_owner:owner,p_attempt:reservedDelete.id}),/SCOPE_DENIED/);
+   await assert.rejects(rpc(two,'claim_workflow',{...dw,p_resume:true}),/SCOPE_DENIED/);
+   await assert.rejects(bind(owner,da,dc),/SCOPE_INVALID/);
+   // Accounting reconciliation is still permitted for a call dispatched before deletion.
+   await rpc(two,'settle',{...settle,p_attempt:flying.id,p_receipt:req+'-late-receipt',p_actual:'1'});
+   assert.equal((await rpc(two,'lookup_attempt',{p_owner:owner,p_request:req,p_key:'inflight'})).state,'settled');
+   if(kind==='actor')await admin.query("insert into actors values($1,'recreated','standard')",[da]);
+   await admin.query("insert into chats(id,actor_id,title) values($1,$2,'recreated')",[dc,da]);
+   await assert.rejects(bind(owner,da,dc),/SCOPE_REVOKED/);
+   assert.equal(await rpc(two,'authorize_scope',{p_owner:owner,p_actor:da,p_chat:dc}),false,'reusing UUIDs cannot resurrect an old spending scope');
+   await assert.rejects(rpc(two,'claim_dispatch',{p_owner:owner,p_attempt:reservedDelete.id}),/SCOPE_DENIED/);
+  }
+  assert.ok(cleanup.length>=4,'existing attachment cleanup still executes');
+  console.log('STANDALONE_DELETION_HISTORY_AND_REVOCATION_PASS');
+  // Upgrade through the additive pricing/enrollment schema; old history stays intact.
+  const priorHistory=await rpc(two,'snapshot',{p_owner:owner});
+  await admin.query(readFileSync(new URL('../supabase/migrations/20261029170000_standalone_pricing_and_enrollment.sql',import.meta.url),'utf8'));
+  assert.deepEqual(await rpc(two,'snapshot',{p_owner:owner}),priorHistory);
+  await admin.query(readFileSync(new URL('../supabase/migrations/20261029190000_standalone_actor_authority.sql',import.meta.url),'utf8'));
+  // Existing verified access is provisioned independently, never by creation.
+  await admin.query('insert into self_tool_owner_grants(owner_id,actor_id,chat_id) values($1,$2,$3)',[owner,actor,chat]);
+  const grantCount=async()=>Number((await admin.query('select count(*) from self_tool_owner_grants')).rows[0].count);
+  const grantsBefore=await grantCount();
+  const foreignFresh=randomUUID();
+  await assert.rejects(rpc(two,'create_conversation',{p_owner:other,p_actor:actor,p_chat:foreignFresh,p_title:'Unauthorized fresh conversation'}),/ACTOR_ACCESS_DENIED/);
+  assert.equal((await admin.query('select count(*) from chats where id=$1',[foreignFresh])).rows[0].count,'0');
+  assert.equal((await admin.query('select count(*) from standalone_owner_bindings where chat_id=$1',[foreignFresh])).rows[0].count,'0');
+  // A pre-existing conversation binding is not independently verified actor access.
+  const foreignBound=randomUUID();await admin.query("insert into chats(id,actor_id,title) values($1,$2,'old binding fixture')",[foreignBound,actor]);
+  await bind(other,actor,foreignBound);
+  await assert.rejects(rpc(two,'create_conversation',{p_owner:other,p_actor:actor,p_chat:foreignFresh,p_title:'Still unauthorized'}),/ACTOR_ACCESS_DENIED/);
+  // Browser role cannot manufacture grants or invoke the privileged enrollment RPC.
+  await two.query('set role authenticated');
+  await assert.rejects(two.query('insert into self_tool_owner_grants(owner_id,actor_id,chat_id) values($1,$2,$3)',[other,actor,chat]),/permission denied/);
+  await assert.rejects(rpc(two,'create_conversation',{p_owner:owner,p_actor:actor,p_chat:foreignFresh,p_title:'Forged owner UUID'}),/permission denied/);
+  await two.query('set role service_role');
+  const newChat=randomUUID();
+  const create={p_owner:owner,p_actor:actor,p_chat:newChat,p_title:'Owner-created conversation'};
+  const created=await rpc(one,'create_conversation',create);
+  assert.equal(created.id,newChat);assert.equal(await rpc(two,'authorize_scope',{p_owner:owner,p_actor:actor,p_chat:newChat}),true);
+  assert.deepEqual(await rpc(two,'create_conversation',create),created,'idempotent creation preserves existing conversation');
+  await assert.rejects(rpc(two,'create_conversation',{...create,p_owner:other}),/ACTOR_ACCESS_DENIED/);
+  const orphan=randomUUID();await admin.query("insert into chats(id,actor_id,title) values($1,$2,'unbound legacy')",[orphan,actor]);
+  await assert.rejects(rpc(two,'create_conversation',{...create,p_chat:orphan}),/SCOPE_DENIED/);
+  await assert.rejects(rpc(two,'create_conversation',{...create,p_actor:executive,p_chat:randomUUID()}),/SCOPE_INVALID/);
+  const mem=(await admin.query('select content from short_term_memory where chat_id=$1',[newChat])).rows[0];assert.deepEqual(mem.content,{});
+  await admin.query("update short_term_memory set content='{"+String.fromCharCode(34)+"saved"+String.fromCharCode(34)+":true}' where chat_id=$1",[newChat]);
+  await rpc(one,'create_conversation',create);assert.deepEqual((await admin.query('select content from short_term_memory where chat_id=$1',[newChat])).rows[0].content,{saved:true});
+  await admin.query('update intermediate_memory set content=$1 where chat_id=$2',[{retained:'ITM'},newChat]);
+  const bindingBefore=(await admin.query('select * from standalone_owner_bindings where chat_id=$1',[newChat])).rows;
+  await rpc(two,'create_conversation',create);
+  assert.deepEqual((await admin.query('select * from standalone_owner_bindings where chat_id=$1',[newChat])).rows,bindingBefore,'retry preserves exact verified-owner binding');
+  assert.deepEqual((await admin.query('select content from intermediate_memory where chat_id=$1',[newChat])).rows[0].content,{retained:'ITM'});
+  assert.deepEqual((await admin.query('select content from short_term_memory where chat_id=$1',[newChat])).rows[0].content,{saved:true});
+  assert.equal(await grantCount(),grantsBefore,'creation and retries never manufacture actor authority');
+  // Exercise the actual normal POST with real SQL and Auth's verified B identity.
+  // Only the Auth HTTP response is mocked; the authority decision is not mocked.
+  const previousFetch=globalThis.fetch,previousUrl=process.env.NEXT_PUBLIC_SUPABASE_URL,previousKey=process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+  try{
+   process.env.NEXT_PUBLIC_SUPABASE_URL='https://isolated-auth.example.test';process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY='fixture-public';
+   globalThis.fetch=async()=>new Response(JSON.stringify({id:other}));
+   const route=modules({
+    '@/lib/agents/store':{managedActor:async()=>false},
+    '@/lib/data/persistence-store':{getActorById:async(id)=>{const a=(await admin.query('select * from actors where id=$1',[id])).rows[0];return a?{id:a.id,name:a.name,actorKind:a.actor_kind}:null;},saveChat:async()=>assert.fail('Standalone creation cannot bypass authority RPC')},
+    '@/lib/data/supabase/admin':{getSupabaseAdminClient:()=>({rpc:async(name,args)=>{try{return {data:await rpc(two,name.replace(/^standalone_/,''),args),error:null};}catch(error){return {data:null,error:{message:error.message}};}}})},
+   })('@/app/api/chats/route');
+   const denied=await route.POST(new Request('http://localhost/api/chats',{method:'POST',headers:{authorization:'Bearer verified-user-B','content-type':'application/json'},body:JSON.stringify({id:foreignFresh,actorId:actor,title:'Browser supplies A IDs',ownerId:owner})}));
+   assert.equal(denied.status,409);assert.equal((await admin.query('select count(*) from chats where id=$1',[foreignFresh])).rows[0].count,'0');
+   assert.equal((await admin.query('select count(*) from standalone_owner_bindings where chat_id=$1',[foreignFresh])).rows[0].count,'0');
+  }finally{
+   globalThis.fetch=previousFetch;
+   if(previousUrl===undefined)delete process.env.NEXT_PUBLIC_SUPABASE_URL;else process.env.NEXT_PUBLIC_SUPABASE_URL=previousUrl;
+   if(previousKey===undefined)delete process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;else process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY=previousKey;
+  }
+  console.log('STANDALONE_PRIVATE_ACTOR_AUTHORITY_AND_BROWSER_ID_REJECTION_PASS');
+  await admin.query('delete from chats where id=$1',[newChat]);
+  await assert.rejects(rpc(two,'create_conversation',create),/SCOPE_REVOKED/);
+  const version='standalone-catalog-v1-'+'a'.repeat(64),metadata={version,currency:'USD',rateUnit:'nanoUSD/token',models:[{fixture:true}]};
+  await rpc(one,'publish_pricing',{p_version:version,p_metadata:metadata,p_source_hash:'b'.repeat(64),p_rejected:{}});
+  const historical=await rpc(two,'load_pricing',{p_version:version});assert.deepEqual(historical.snapshot,metadata);
+  const nextVersion='standalone-catalog-v1-'+'c'.repeat(64),nextMetadata={...metadata,version:nextVersion};
+  await rpc(one,'publish_pricing',{p_version:nextVersion,p_metadata:nextMetadata,p_source_hash:'d'.repeat(64),p_rejected:{}});
+  assert.deepEqual((await rpc(two,'load_pricing',{p_version:null})).snapshot,nextMetadata);
+  assert.deepEqual((await rpc(two,'load_pricing',{p_version:version})).snapshot,metadata,'activation never rewrites historical prices');
+  await assert.rejects(rpc(one,'publish_pricing',{p_version:version,p_metadata:{...metadata,changed:true},p_source_hash:'b'.repeat(64),p_rejected:{}}),/PRICING_VERSION_CONFLICT/);
+  const oldQuote=await rpc(one,'admit',input('reprice-fixture','101','repricing-request'));await approve(oldQuote);
+  const updatedEstimate={...input('reprice-fixture').p_estimate,pricingVersion:nextVersion,reservationMicrousd:'200'};
+  const newQuote=await rpc(two,'reprice_attempt',{p_owner:owner,p_attempt:oldQuote.id,p_pricing:nextVersion,p_estimate:updatedEstimate});
+  assert.equal(newQuote.state,'paused');assert.equal(newQuote.pause_reason,'pricing_updated');assert.equal(newQuote.approved_at,null);
+  assert.equal(newQuote.prepared_hash,oldQuote.prepared_hash);assert.equal(newQuote.supersedes_attempt_id,oldQuote.id);
+  const oldSaved=(await admin.query('select * from standalone_provider_attempts where id=$1',[oldQuote.id])).rows[0];
+  assert.equal(oldSaved.state,'cancelled');assert.equal(oldSaved.pricing_version,oldQuote.pricing_version);assert.deepEqual(oldSaved.preflight_estimate,oldQuote.preflight_estimate);
+  assert.equal((await rpc(one,'lookup_attempt',{p_owner:owner,p_request:'repricing-request',p_key:'reprice-fixture'})).id,newQuote.id);
+  assert.equal(await rpc(two,'claim_dispatch',{p_owner:owner,p_attempt:newQuote.id}),null,'price change requires a new exact approval');
+  await approve(newQuote);assert.ok(await rpc(two,'claim_dispatch',{p_owner:owner,p_attempt:newQuote.id}));
+  await assert.rejects(one.query('delete from standalone_pricing_intake_events'),/permission denied/);
+  await one.query('set role authenticated');await assert.rejects(rpc(one,'create_conversation',create),/permission denied/);await assert.rejects(rpc(one,'publish_pricing',{p_version:version,p_metadata:metadata,p_source_hash:'b'.repeat(64),p_rejected:{}}),/permission denied/);await one.query('set role service_role');
+  console.log('STANDALONE_ENROLLMENT_AND_IMMUTABLE_PRICING_PASS');
+  await one.query('set role authenticated');await assert.rejects(rpc(one,'snapshot',{p_owner:owner}),/permission denied/);
+  assert.equal((await admin.query('select spent_tokens from benchmark_budget_accounts')).rows[0].spent_tokens,'731');
+  const events=(await rpc(fresh,'snapshot',{p_owner:owner})).events;
+  assert.ok(events.some(e=>e.kind==='receipt_conflict'&&e.details.actual_microusd==='124'));
+  assert.ok(events.some(e=>e.kind==='identifier_conflict'&&e.details.saved_request_id==='upstream-header-1'));
+  assert.ok(events.some(e=>e.kind==='overrun'&&e.details.actual_microusd==='125'&&e.details.excess_microusd==='65'));
+  assert.ok(events.some(e=>e.kind==='state_changed'&&e.details.previous_state==='dispatched'&&e.details.state==='uncertain'));
+  assert.ok(events.some(e=>e.kind==='state_changed'&&e.details.state==='settled'&&e.details.actual_microusd==='125'));
+  await assert.rejects(fresh.query('delete from standalone_attempt_events'),/permission denied/);
+  console.log('STANDALONE_REAL_POSTGRES_TRANSACTION_CONCURRENCY_PASS');
+ } finally {
+  await Promise.allSettled(connections.map(c=>c.end()));
+  if(started)run('pg_ctl',['-D',data,'-m','immediate','-w','stop']);
+  rmSync(dir,{recursive:true,force:true});
+ }
+});

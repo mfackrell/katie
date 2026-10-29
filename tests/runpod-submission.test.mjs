@@ -6,6 +6,8 @@ import ts from 'typescript';
 import * as crypto from 'node:crypto';
 const chatId = '12345678-1234-1234-1234-123456789abc';
 const params = {chatId, attachmentPath: `chats/${chatId}/${chatId}.source`, question: 'Describe it'};
+// Isolated protocol VM: all HTTP is fake and the admission guard is explicitly
+// stubbed only here. Real production admission has separate no-send tests.
 function harness(fault = '', syntheticValidation = false) {
   let row, posts = 0, writes = 0, policy;
   const client = {
@@ -38,7 +40,7 @@ function harness(fault = '', syntheticValidation = false) {
   const exports = {}, logs = [];
   vm.runInNewContext(ts.transpileModule(readFileSync('lib/runpod/durable-results.ts','utf8'), {compilerOptions: {module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022}}).outputText, {
     exports, Buffer, process: {env: {SUPABASE_URL: 'https://db.invalid', SUPABASE_SERVICE_ROLE_KEY: 'mock', RUNPOD_API_KEY: 'mock'}}, AbortSignal, Date,
-    console: {warn: (...args) => logs.push(args), info: (...args) => logs.push(args)}, require: name => name === 'node:crypto' ? crypto : name === '@supabase/supabase-js' ? {createClient: () => client} : name.includes('video-scene-prompts') ? {buildRunpodVideoScenePrompt: x => x} : {},
+    console: {warn: (...args) => logs.push(args), info: (...args) => logs.push(args)}, require: name => name === 'node:crypto' ? crypto : name === '@supabase/supabase-js' ? {createClient: () => client} : name.includes('video-scene-prompts') ? {buildRunpodVideoScenePrompt: x => x} : name.includes('standalone-accounting/unsupported') ? {blockUnaccountedPaidDispatch: () => {}} : {},
     fetch: async (url, init) => {
       if (url.includes("/status/")) {
         if (fault === "pollrace") Object.assign(row, {status: "completed", analysis_text: "webhook evidence"});

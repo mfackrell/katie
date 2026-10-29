@@ -1,3 +1,5 @@
+import { authenticateStandaloneOwner, StandaloneAuthorizationError } from '@/lib/standalone-accounting/auth';
+import { createStandaloneLedger } from '@/lib/standalone-accounting/ledger';
 import { managedActor } from "@/lib/agents/store";
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
@@ -38,9 +40,13 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: `Actor not found: ${payload.actorId}` }, { status: 404 });
     }
 
+    const standalone = actor.actorKind !== 'executive';
+    const ownerId = standalone ? await authenticateStandaloneOwner(request) : null;
+    const ledger = standalone ? createStandaloneLedger() : null;
     if (payload.createStarterChat) {
       const existingChats = await listChatsByActorId(payload.actorId);
-      const existingStarterChat = resolveStarterChat(existingChats, payload);
+      const ownedChats = ledger && ownerId ? (await Promise.all(existingChats.map(async chat => await ledger.authorizeScope(ownerId, payload.actorId, chat.id) ? chat : null))).filter((chat): chat is ChatThread => chat !== null) : existingChats;
+      const existingStarterChat = resolveStarterChat(ownedChats, payload);
       if (existingStarterChat) {
         return NextResponse.json({ chat: existingStarterChat });
       }
@@ -58,10 +64,13 @@ export async function POST(request: NextRequest) {
       updatedAt: now
     };
 
-    const savedChat = await saveChat(chat);
+    const row = ledger && ownerId ? await ledger.createConversation(ownerId, chat.actorId, chat.id, chat.title) : null;
+    const savedChat = row ? { id:row.id, actorId:row.actor_id, title:row.title, createdAt:row.created_at, updatedAt:row.updated_at } : await saveChat(chat);
 
     return NextResponse.json({ chat: savedChat }, { status: 201 });
   } catch (error) {
+    if (error instanceof StandaloneAuthorizationError) return NextResponse.json({error:error.message},{status:403});
+    if (error && typeof error==='object' && 'code' in error && typeof error.code==='string' && error.code.startsWith('standalone_')) return NextResponse.json({error:'Conversation enrollment denied or unavailable.'},{status:409});
     if (error instanceof z.ZodError) {
       return NextResponse.json({ error: "Invalid request payload" }, { status: 400 });
     }

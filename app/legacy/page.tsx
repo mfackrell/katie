@@ -1,7 +1,9 @@
 "use client";
+import { ownerConversationHeaders } from '@/lib/tools/browser-owner-session';
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ActorFormModal } from "@/components/actor-form-modal";
+import { StandaloneUsage } from "@/components/standalone-usage";
 import { ChatPanel } from "@/components/chat-panel";
 import { PendingMissionApprovals } from "@/components/pending-mission-approvals";
 import { Sidebar } from "@/components/sidebar";
@@ -358,9 +360,7 @@ export default function HomePage() {
     try {
       const chatResponse = await fetch("/api/chats", {
         method: "POST",
-        headers: {
-          "content-type": "application/json",
-        },
+        headers: await ownerConversationHeaders(),
         body: JSON.stringify({
           actorId: normalizedActorId,
           title: options?.title ?? `Chat ${new Date().toLocaleString()}`,
@@ -402,9 +402,7 @@ export default function HomePage() {
     try {
       const actorResponse = await fetch("/api/actors", {
         method: "POST",
-        headers: {
-          "content-type": "application/json",
-        },
+        headers: { "content-type": "application/json" },
         body: JSON.stringify(input),
       });
 
@@ -626,6 +624,7 @@ export default function HomePage() {
               Could not load project approvals. Check your connection or reload Katie.
             </p>
           )}
+          {activeActor && activeChatId && !activeActor.managedAgentId && activeActor.actorKind !== "executive" && <StandaloneUsage actorId={activeActorId} chatId={activeChatId} />}
           <ChatPanel key={activeChatId}
             actorId={activeActorId}
             chatId={activeChatId}

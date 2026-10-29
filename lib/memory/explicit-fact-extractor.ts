@@ -1,3 +1,5 @@
+import { isStandaloneAccountingError } from "@/lib/standalone-accounting/context";
+import { createActivityAccountingFetch } from "@/lib/standalone-accounting/activity";
 import { getLongTermMemory, mergeActorLongTermMemoryEntries } from "@/lib/data/persistence-store";
 
 // Explicit saves are not routed through the ordinary memory editor. That editor
@@ -52,10 +54,11 @@ function defaultClient(): Client | null {
   try {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const { default: OpenAI } = require("openai") as {
-      default: new (params: { apiKey: string }) => Client;
+      default: new (params: { apiKey: string; maxRetries: number; fetch: typeof fetch }) => Client;
     };
-    return new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-  } catch {
+    return new OpenAI({ apiKey: process.env.OPENAI_API_KEY, maxRetries: 0, fetch: createActivityAccountingFetch("openai", "memory-extraction") });
+  } catch (accountingError) {
+    if (isStandaloneAccountingError(accountingError)) throw accountingError;
     return null;
   }
 }
@@ -154,6 +157,7 @@ async function extractChunk(client: Client, text: string, part: number, total: n
       if (extracted.length === 0) throw new Error("No quote-grounded facts");
       return extracted;
     } catch (error) {
+    if (isStandaloneAccountingError(error)) throw error;
       if (attempt === 1) {
         console.error("[ExplicitFactExtractor] Chunk failed", {
           part, total, error: error instanceof Error ? error.message : String(error),

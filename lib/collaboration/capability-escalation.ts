@@ -1,3 +1,4 @@
+import { runWithStandaloneActivity } from "@/lib/standalone-accounting/context";
 import type {
   CollaborationCapability,
   CollaborationProviderName,
@@ -148,7 +149,7 @@ export async function runCapabilityAwareGeneration(input: {
   };
 
   const result = input.provider.generateStream
-    ? await input.provider.generateStream(input.params, {
+    ? await runWithStandaloneActivity("capability_lead", () => input.provider.generateStream!(input.params, {
         async onTextDelta(delta) {
           rawStreamedText += delta;
 
@@ -169,8 +170,8 @@ export async function runCapabilityAwareGeneration(input: {
 
           await flushBufferedAsNormal();
         },
-      })
-    : await input.provider.generate(input.params);
+      }))
+    : await runWithStandaloneActivity("capability_lead", () => input.provider.generate(input.params));
 
   const rawText = result.text || rawStreamedText || bufferedPrefix;
   const escalationRequest = parseCapabilityEscalationRequest(rawText);

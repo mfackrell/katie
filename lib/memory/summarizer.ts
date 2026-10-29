@@ -1,3 +1,5 @@
+import { isStandaloneAccountingError } from "@/lib/standalone-accounting/context";
+import { createActivityAccountingFetch } from "@/lib/standalone-accounting/activity";
 import OpenAI from "openai";
 import { getSupabaseAdminClient } from "@/lib/data/supabase/admin";
 import {
@@ -22,10 +24,10 @@ const COMPACTION_MAX_TOKENS = 2800; // One bounded repair attempt only for an ov
 class CompactionFailure extends Error {}
 
 // Reuse the installed SDK only as native Claude HTTP transport, matching LTM.
-// Its default transport retries/timeouts are unchanged; no provider fallback.
+// Every actual transmission is accounted; SDK retries are disabled.
 const apiKey = process.env.CLAUDE_API_KEY ?? process.env["claude_api_key"];
 const client = apiKey ? new OpenAI({
-  apiKey,
+  apiKey, maxRetries: 0, fetch: createActivityAccountingFetch("anthropic", "memory-summary"),
   baseURL: "https://api.anthropic.com/v1",
   defaultHeaders: { Authorization: null, "x-api-key": apiKey, "anthropic-version": "2023-06-01" },
 }) : null;
@@ -150,7 +152,8 @@ async function compactOversizedDraft(draft: string): Promise<string> {
         }],
       },
     });
-  } catch {
+  } catch (error) {
+    if (isStandaloneAccountingError(error)) throw error;
     // A failed paid compaction must not trigger a near-identical smaller-batch
     // compaction in the same invocation. Preserve cursor and retry later.
     throw new CompactionFailure("Claude intermediate memory compaction request failed");
@@ -264,6 +267,7 @@ export async function maybeUpdateSummary(chatId: string): Promise<void> {
       try {
         candidate = await summarizeInto(summary, messagesToFold.slice(offset, offset + size));
       } catch (error) {
+        if (isStandaloneAccountingError(error)) throw error;
         // A compaction failure is already the second paid call for this batch.
         // Repeating it with a smaller batch is unlikely to help when the
         // existing ITM is near capacity, and can double the expense.
@@ -303,6 +307,7 @@ export async function maybeUpdateSummary(chatId: string): Promise<void> {
       offset += size;
     }
   } catch (error: unknown) {
+    if (isStandaloneAccountingError(error)) throw error;
     console.error("[Summarizer] Failed to update intermediate memory:", error);
   }
 }

@@ -13,7 +13,7 @@ async function run(finishReason, content) {
   const admin={rpc:async(name,args)=>{assert.equal(name,'commit_intermediate_memory_checkpoint');writes.push(args);return {data:true,error:null};}};
   const store={getChatById:async()=>({actorId:'a'}),getIntermediateMemory:async()=>({version:2,summary:'saved',summarizedThroughMessageId:'m0',sourceMessageCount:1}),getRecentMessages:async()=>messages,setIntermediateMemory:async(...args)=>writes.push(args)};
   vm.runInNewContext(ts.transpileModule(source,{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022,esModuleInterop:true}}).outputText,
-    {module,exports:module.exports,process:{env:{CLAUDE_API_KEY:'test-only'}},console:{error:()=>{},warn:()=>{}},require:name=>name==='openai'?client:name.includes('persistence-store')?store:name.includes('memory-contract')?{SHORT_TERM_MESSAGE_LIMIT:60}:name.includes('supabase/admin')?{getSupabaseAdminClient:()=>admin}:{filterConversationalMessages:x=>x}});
+    {module,exports:module.exports,process:{env:{CLAUDE_API_KEY:'test-only'}},console:{error:()=>{},warn:()=>{}},require:name=>name.includes('standalone-accounting/activity')?{createActivityAccountingFetch:()=>()=>{throw Error('Unexpected HTTP in memory protocol fixture')}}:name.includes('standalone-accounting/context')?{isStandaloneAccountingError:()=>false}:name==='openai'?client:name.includes('persistence-store')?store:name.includes('memory-contract')?{SHORT_TERM_MESSAGE_LIMIT:60}:name.includes('supabase/admin')?{getSupabaseAdminClient:()=>admin}:{filterConversationalMessages:x=>x}});
   await module.exports.maybeUpdateSummary('c');
   return writes;
 }

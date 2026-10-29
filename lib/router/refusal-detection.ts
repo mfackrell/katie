@@ -1,3 +1,4 @@
+import { isStandaloneAccountingError } from "@/lib/standalone-accounting/context";
 import { assertProviderOutput, isTerminalProviderError, ProviderResponseError } from "@/lib/providers/response-errors";
 import type { ProviderResponse } from "@/lib/providers/types";
 import { isExplicitContentRefusal } from "@/lib/router/provider-error";
@@ -188,6 +189,7 @@ export async function runWithRefusalFallback<TAttempt>({
         onRefusalFallback?.({ attempt, attemptIndex: currentAttemptIndex, nextAttempt });
         continue;
       }
+      if (isStandaloneAccountingError(error)) throw error;
       if (isTerminalProviderError(error)) {
         // Only explicitly authorized terminal errors may be retried. Safety and
         // content blocks remain terminal; caller's retryTerminalError must deny.

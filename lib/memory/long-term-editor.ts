@@ -1,3 +1,4 @@
+import { isStandaloneAccountingError } from "@/lib/standalone-accounting/context";
 import {
   getLongTermMemory,
   getActorById,
@@ -190,7 +191,8 @@ function parseMemoryEditorResult(
       action: "replace",
       updatedContent,
     };
-  } catch {
+  } catch (accountingError) {
+    if (isStandaloneAccountingError(accountingError)) throw accountingError;
     return null;
   }
 }
@@ -299,7 +301,8 @@ async function reviewMemoryCandidates(
       ],
     });
     verdicts = JSON.parse(response.choices?.[0]?.message?.content ?? "{}").verdicts;
-  } catch {
+  } catch (accountingError) {
+    if (isStandaloneAccountingError(accountingError)) throw accountingError;
     verdicts = undefined;
   }
   const accepted: LongTermEntry[] = [];
@@ -590,6 +593,7 @@ export async function maybeUpdateLongTermMemory(
             if (repairedReview.rejected.length) console.warn("[LongTermMemoryEditor] Repair support rejected", { actorId, chatId, findings: repairedReview.rejected });
           }
         } catch (error) {
+    if (isStandaloneAccountingError(error)) throw error;
           console.warn("[LongTermMemoryEditor] Source repair failed; preserving accepted siblings", { actorId, chatId, error: error instanceof Error ? error.message : String(error) });
         }
         console.info("[LongTermMemoryEditor] Source repair", { actorId, chatId, recovered: changes.length > reviewed.accepted.length });
@@ -602,6 +606,7 @@ export async function maybeUpdateLongTermMemory(
     }
     console.log("[LongTermMemoryEditor] Save Success", { actorId, chatId });
   } catch (error: unknown) {
+    if (isStandaloneAccountingError(error)) throw error;
     if (options.required) throw error;
     console.error("[LongTermMemoryEditor] Failed", {
       actorId,

@@ -1,3 +1,5 @@
+import { blockUnaccountedPaidDispatch } from "@/lib/standalone-accounting/unsupported";
+import { createActivityAccountingFetch } from "@/lib/standalone-accounting/activity";
 import { buildImageReference, IMAGE_MIME_TYPES, MAX_IMAGE_BYTES } from "./image-reference";
 import { FileReference } from "@/lib/providers/types";
 import {
@@ -90,7 +92,7 @@ async function uploadToOpenAi(file: File): Promise<string | undefined> {
   }
 
   const { default: OpenAI } = await import("openai");
-  const client = new OpenAI({ apiKey, fetch: globalThis.fetch.bind(globalThis) });
+  const client = new OpenAI({ apiKey, maxRetries: 0, fetch: createActivityAccountingFetch("openai", "attachment-preprocessing") });
   const uploaded = await client.files.create({
     file,
     purpose: "user_data"
@@ -105,6 +107,7 @@ async function uploadToGoogle(file: File): Promise<string | undefined> {
   }
 
   const { GoogleGenAI } = await import("@google/genai");
+  blockUnaccountedPaidDispatch("Google file upload and storage");
   const client = new GoogleGenAI({ apiKey });
   const upload = await client.files.upload({
     file,
