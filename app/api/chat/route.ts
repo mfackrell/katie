@@ -1,3 +1,4 @@
+import { attachmentManifestSchema, validateAttachmentManifest, validateHydratedAttachmentManifest, AttachmentIntegrityError } from '@/lib/uploads/attachment-manifest';
 import { scheduleMemoryPersistence } from "@/lib/standalone-accounting/memory-scheduling";
 import { executeStandaloneWorkflow, currentStandaloneWorkflow, workflowMessageId, cachedWorkflowValue, workflowTimestamp } from "@/lib/standalone-accounting/workflow";
 import { getAccountingScope, isStandaloneAccountingError, standaloneAccountingCause, runWithOrchestratorAccounting } from "@/lib/standalone-accounting/context";
@@ -173,6 +174,7 @@ const requestSchema = z.object({
   message: z.string().min(1),
   images: z.array(z.string()).optional(),
   fileReferences: z.array(fileReferenceSchema).optional(),
+  attachmentManifest: attachmentManifestSchema.optional(),
   overrideProvider: z.string().min(1).optional(),
   overrideModel: z.string().min(1).optional(),
   routingTraceEnabled: z.boolean().optional(),
@@ -470,6 +472,9 @@ async function parseIncomingPayload(request: Request): Promise<RequestPayload> {
   }
 
   const body = await request.json();
+  if(body&&typeof body==="object"&&body.attachmentManifest!==undefined){
+    if(!attachmentManifestSchema.safeParse(body.attachmentManifest).success)throw new AttachmentIntegrityError("Invalid current-turn attachment manifest. Select your attachments again before sending.");
+  }
   const parsed = requestSchema.safeParse(body);
 
   if (!parsed.success) {
@@ -477,6 +482,7 @@ async function parseIncomingPayload(request: Request): Promise<RequestPayload> {
     throw new Error("Invalid request payload");
   }
 
+  validateAttachmentManifest(parsed.data.attachmentManifest,parsed.data.fileReferences??[],parsed.data.images??[]);
   return parsed.data;
 }
 
@@ -655,7 +661,10 @@ export async function POST(request: NextRequest) {
     }
     let payload: RequestPayload;
     try { payload = await parseIncomingPayload(request.clone()); }
-    catch { return NextResponse.json({error:"Invalid request payload"},{status:400}); }
+    catch (error) {
+      if(error instanceof AttachmentIntegrityError)return NextResponse.json({error:error.message,code:error.code},{status:400});
+      return NextResponse.json({error:"Invalid request payload"},{status:400});
+    }
     // A database-owned EO identity is the only way into management mode.
     // Intercept BEFORE attachments, memory, model collaboration, and ordinary chat.
     const {data:actorRole,error:actorRoleError}=await getSupabaseAdminClient()
@@ -680,6 +689,7 @@ export async function POST(request: NextRequest) {
     return response;
   } catch (error) {
     error=standaloneAccountingCause(error)??error;
+    if(error instanceof AttachmentIntegrityError)return NextResponse.json({error:error.message,code:error.code},{status:400});
     if (isStandaloneAccountingError(error)) return NextResponse.json({error:error instanceof Error?error.message:String(error),code: error && typeof error === "object" && "code" in error ? error.code : "standalone_accounting_unavailable"},{status:error && typeof error === "object" && "status" in error && typeof error.status === "number" ? error.status : 402});
     return NextResponse.json({ error: "Task configuration or permissions denied. Check the saved task and request ID." }, { status: 403 });
   }
@@ -758,6 +768,8 @@ async function executeChat(request: NextRequest) {
       legacyImageSources.set(reference.fileId, file);
     }
     if (newAttachments.length > 5) return NextResponse.json({ error: "Attach up to five files per message." }, { status: 400 });
+    const currentAttachmentCounts=validateHydratedAttachmentManifest(payload.attachmentManifest,newAttachments);
+    console.info("[Chat API] current-turn attachment integrity",{newCount:newAttachments.length,...currentAttachmentCounts,manifestPresent:payload.attachmentManifest!==undefined});
     const attachmentHistory = await cachedWorkflowValue("attachment-history", () => getRecentMessages(chatId, 60));
     const catalog = benchmarkRelay || currentAgentTask()?.snapshot.attachments === false ? [] : await cachedWorkflowValue("attachment-catalog", () => loadActorAttachmentCatalog(actorId, async () => {
       const actorChats = await listChatsByActorId(actorId);
@@ -1406,12 +1418,14 @@ async function executeChat(request: NextRequest) {
     let taskProgress = pdfProgress;
 
     let storedWebsite: Awaited<ReturnType<ReturnType<typeof websiteEvidenceStore>["restore"]>> = { context: "", images: [] as string[], fresh: false, targetUrls: [] as string[] };
-    try { storedWebsite = await websiteEvidenceStore().restore(actorId, chatId, message, history); }
+    try { storedWebsite = await websiteEvidenceStore().restore(actorId, chatId, message, history, {hasCurrentAttachments:newAttachments.length>0}); }
     catch (error) {
       console.warn("[Website evidence] Restore failed", { requestId, error: String(error) });
       storedWebsite.context = "Website inspection storage could not be read on this turn. Do not infer that earlier inspections never occurred. Do not invent missing website facts.";
     }
-    images.push(...storedWebsite.images);
+    // Current uploads are authoritative. Historical website pixels must never
+    // replace them or inflate an ordinary photo request into a screenshot batch.
+    if(!newAttachments.length)images.push(...storedWebsite.images.slice(0,Math.max(0,5-images.length)));
     if (storedWebsite.fresh) messageForGeneration += `\nRetrieve a fresh inspection of: ${storedWebsite.targetUrls.join(", ")}`;
     const activeRepoContext = effectiveRepoId ? await loadActiveRepoContext(effectiveRepoId) : null;
     const sessionContext: ChatSessionContext = {
@@ -3618,6 +3632,7 @@ ${chunkWorkflowSummary}`;
       }
     });
   } catch (error: unknown) {
+    if(error instanceof AttachmentIntegrityError)return NextResponse.json({error:error.message,code:error.code},{status:400});
     if (isStandaloneAccountingError(error)) throw error;
     const errorMessage = error instanceof Error ? error.message : "Unexpected error";
     if (trackedRequestId) {

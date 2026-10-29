@@ -137,7 +137,7 @@ test('incident 14774c56: failed image then plain text never reuses hidden JPEG o
  const message='Katie, that is an awesome start but i know you can do way better';
  let qwen=0,premium=0;
  await observeStandaloneStillImages(composer.references,{question:message,qwen:async()=>{qwen++;throw Error('Unexpected Qwen');},escalate:async()=>{premium++;throw Error('Unexpected paid escalation');}});
- assert.equal(await inferRequestIntentFromMultimodalInput(message,composer.images),null);
+ assert.equal(await inferRequestIntentFromMultimodalInput(message,composer.images.map(image=>image.preview)),null);
  assert.deepEqual(composer.references,[]);assert.equal(qwen,0);assert.equal(premium,0);assert.equal(f.sends,1);
 });
 

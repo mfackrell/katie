@@ -17,6 +17,8 @@ import {
   useState,
 } from "react";
 import { cleanPendingAttachments,readPendingAttachments,savePendingAttachments } from "@/lib/ui/pending-attachments";
+import { composerImage, prepareComposerImages, assertImageUploadReferences, type ComposerImage } from "@/lib/ui/composer-images";
+import { countCurrentAttachments } from "@/lib/uploads/attachment-manifest";
 import { useSavedState } from "@/components/saved-workspace-state";
 import type { FileReference } from "@/lib/providers/types";
 import { acknowledgeVideoUploads, uploadFilesDirect } from "@/lib/uploads/direct-upload-client";
@@ -840,16 +842,31 @@ export function ChatPanel({
     useState<SelectedOverride>(null);
   const [streamingModel, setStreamingModel] = useState<string | null>(null);
   const [streamingAnswer, setStreamingAnswer] = useState("");
-  const [selectedImages, setSelectedImages] = useState<string[]>([]);
-  const [selectedImageFiles, setSelectedImageFiles] = useState<File[]>([]);
+  const [selectedImages, setSelectedImages] = useState<ComposerImage[]>([]);
+  const composerChatRef = useRef(chatId); composerChatRef.current = chatId;
+  const [attachmentChatId, setAttachmentChatId] = useState<string | null>(null);
+  const [attachmentError, setAttachmentError] = useState("");
   const [selectedVideos, setSelectedVideos] = useState<File[]>([]);
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
   const [uploadingFiles, setUploadingFiles] = useState(false);
   const [fileReferences, setFileReferences] = useState<FileReference[]>([]);
   const [attachmentsReady,setAttachmentsReady]=useState(false);
   const [attachmentSaveError,setAttachmentSaveError]=useState(false);
-  useEffect(()=>{let active=true;readPendingAttachments(chatId,()=>{if(active)setAttachmentSaveError(true);}).then(value=>{if(!active)return;if(value){setSelectedImages(value.images);setSelectedImageFiles(value.imageFiles);setSelectedVideos(value.videos);setSelectedFiles(value.files);setFileReferences(value.references);}setAttachmentsReady(true);}).catch(()=>{if(active)setAttachmentsReady(true);});return()=>{active=false;};},[chatId]);
-  useEffect(()=>{if(!attachmentsReady)return;void savePendingAttachments(chatId,{images:selectedImages,imageFiles:selectedImageFiles,videos:selectedVideos,files:selectedFiles,references:fileReferences}).then(()=>setAttachmentSaveError(false)).catch(()=>setAttachmentSaveError(true));},[chatId,attachmentsReady,selectedImages,selectedImageFiles,selectedVideos,selectedFiles,fileReferences]);
+  useEffect(()=>{
+    let active=true;setAttachmentsReady(false);setAttachmentChatId(null);setUploadingFiles(false);setSelectedImages([]);setSelectedVideos([]);setSelectedFiles([]);setFileReferences([]);setAttachmentError("");
+    readPendingAttachments(chatId,()=>{if(active)setAttachmentSaveError(true);}).then(value=>{
+      if(!active)return;
+      if(value){setSelectedImages(current=>[...value.images,...current]);setSelectedVideos(current=>[...value.videos,...current]);setSelectedFiles(current=>[...value.files,...current]);setFileReferences(current=>[...value.references,...current]);}
+      setAttachmentChatId(chatId);setAttachmentsReady(true);
+    }).catch(()=>{if(active){setAttachmentChatId(chatId);setAttachmentsReady(true);setAttachmentSaveError(true);}});
+    return()=>{active=false;};
+  },[chatId]);
+  useEffect(()=>{
+    if(!attachmentsReady||attachmentChatId!==chatId)return;
+    let active=true;
+    void savePendingAttachments(chatId,{images:selectedImages,videos:selectedVideos,files:selectedFiles,references:fileReferences}).then(()=>{if(active)setAttachmentSaveError(false);}).catch(()=>{if(active)setAttachmentSaveError(true);});
+    return()=>{active=false;};
+  },[chatId,attachmentChatId,attachmentsReady,selectedImages,selectedVideos,selectedFiles,fileReferences]);
   const [statusMessage, setStatusMessage] = useState("");
   const [imageObservationStages, setImageObservationStages] = useState<string[]>([]);
   const [failoverNotice, setFailoverNotice] = useState("");
@@ -886,9 +903,12 @@ export function ChatPanel({
     [actorId, chatId],
   );
 
+  const hasComposerAttachments = selectedImages.length + selectedVideos.length + selectedFiles.length + fileReferences.length > 0;
+  const composerAttachmentsReady = attachmentsReady && attachmentChatId===chatId;
   const canSend = useMemo(
     () =>
-      !managedAgentId && draftReady && (attachmentsReady || input.trim().length > 0) && hasValidChatSelection &&
+      !managedAgentId && draftReady && (attachmentsReady || input.trim().length > 0) &&
+      (!hasComposerAttachments || composerAttachmentsReady) && hasValidChatSelection &&
       (input.trim().length > 0 ||
         selectedImages.length > 0 ||
         selectedVideos.length > 0 ||
@@ -908,6 +928,10 @@ export function ChatPanel({
       managedAgentId,
       draftReady,
       attachmentsReady,
+      hasComposerAttachments,
+      composerAttachmentsReady,
+      attachmentChatId,
+      chatId,
     ],
   );
 
@@ -1494,10 +1518,10 @@ export function ChatPanel({
     );
 
     try {
-      return await uploadFilesDirect(files, setStatusMessage, undefined, undefined,
+      return await uploadFilesDirect(files, message=>{if(composerChatRef.current===chatId)setStatusMessage(message);}, undefined, undefined,
         handoffRequestId ? { handoffRequestId } : {});
     } finally {
-      setUploadingFiles(false);
+      if(composerChatRef.current===chatId)setUploadingFiles(false);
     }
   }
 
@@ -1538,7 +1562,7 @@ export function ChatPanel({
       );
       return;
     }
-    if (loading || (!canSend && !reactionContent)) {
+    if (loading || (!reactionContent && hasComposerAttachments && !composerAttachmentsReady) || (!canSend && !reactionContent)) {
       return;
     }
 
@@ -1547,8 +1571,12 @@ export function ChatPanel({
     const content = reactionContent ?? (replySnapshot
       ? `[Reply to ${replySnapshot.role} message ${replySnapshot.id}]\nOriginal message:\n${replySnapshot.content}\n[End original message]\n\nMy reply:\n${input.trim()}`
       : input.trim());
-    let imagesToSend = reactionContent ? [] : [...selectedImages];
-    const imageFilesToUpload = reactionContent ? [] : [...selectedImageFiles];
+    const composerImages = reactionContent ? [] : [...selectedImages];
+    let preparedImages: ReturnType<typeof prepareComposerImages>;
+    try { preparedImages=prepareComposerImages(composerImages);setAttachmentError(""); }
+    catch(error){setAttachmentError(error instanceof Error?error.message:"The selected images cannot be sent. Attach them again.");return;}
+    let imagesToSend = composerImages.map(image=>image.preview);
+    const imageFilesToUpload = preparedImages.files;
     const videosToUpload = reactionContent ? [] : [...selectedVideos];
     const filesToUpload = reactionContent ? [] : [...selectedFiles];
     const priorReferences = reactionContent ? [] : [...fileReferences];
@@ -1558,7 +1586,6 @@ export function ChatPanel({
       setReplyTo(null);
       setInput("");
       setSelectedImages([]);
-      setSelectedImageFiles([]);
       setSelectedVideos([]);
       setSelectedFiles([]);
       setFileReferences([]);
@@ -1634,7 +1661,10 @@ export function ChatPanel({
           ? await uploadFiles([...filesToUpload, ...videosToUpload, ...imageFilesToUpload],
               durableVideo ? clientRequestId : undefined)
           : [];
-      const refsToSend = [...priorReferences, ...uploadedReferences];
+      assertImageUploadReferences(imageFilesToUpload, uploadedReferences.slice(filesToUpload.length + videosToUpload.length));
+      const refsToSend = [...priorReferences, ...preparedImages.references, ...uploadedReferences];
+      const imageReferences=refsToSend.filter(reference=>reference.attachmentKind==="image"||reference.mimeType.startsWith("image/"));
+      if(imageReferences.length!==composerImages.length||new Set(imageReferences.map(reference=>reference.fileId)).size!==composerImages.length)throw Error("Every selected image must have one matching uploaded source. Your images remain selected; attach them again.");
       uploadedReferencesForRetry = refsToSend;
       // Images now travel through private direct storage, just like other files.
       imagesToSend = [];
@@ -1658,6 +1688,7 @@ export function ChatPanel({
           message: requestContent,
           images: requestImages,
           fileReferences: refsToSend,
+          attachmentManifest: countCurrentAttachments([...priorReferences,...filesToUpload.map(file=>({mimeType:file.type})),...videosToUpload.map(file=>({mimeType:file.type}))],composerImages.map(image=>image.preview)),
           overrideProvider: selectedOverride?.providerName,
           overrideModel: selectedOverride?.modelId,
           activeRepoId: activeRepoId || undefined,
@@ -1788,7 +1819,7 @@ export function ChatPanel({
         clearPendingChatRequest(chatId);
         // Video data has already been saved; preserve its compact reference
         // for the next send rather than uploading the file a second time.
-        if (uploadedReferencesForRetry) setFileReferences(cleanPendingAttachments({images:[],imageFiles:[],videos:[],files:[],references:uploadedReferencesForRetry}).references);
+        if (uploadedReferencesForRetry && composerChatRef.current===chatId) setFileReferences(cleanPendingAttachments({images:[],videos:[],files:[],references:uploadedReferencesForRetry}).references);
         setInput(content);
         setStatusMessage(httpCause);
         return;
@@ -2112,14 +2143,16 @@ export function ChatPanel({
         // The optimistic message never reached /api/chat. Restore its draft
         // and the original browser File objects so a retry can consult the
         // durable /api/upload/result instead of uploading video bytes again.
-        if (!reactionContent) {
+        if (!reactionContent && composerChatRef.current===chatId) {
+          setAttachmentError(error instanceof Error?error.message:"The selected attachments could not be prepared.");
           setInput(replySnapshot ? input : content);
           setReplyTo(replySnapshot);
           setSelectedFiles(filesToUpload);
           setSelectedVideos(videosToUpload);
-          setSelectedImageFiles(imageFilesToUpload);
-          setSelectedImages(selectedImages);
+          setSelectedImages(composerImages);
           setFileReferences(priorReferences);
+        } else if (!reactionContent) {
+          void savePendingAttachments(chatId,{images:composerImages,videos:videosToUpload,files:filesToUpload,references:priorReferences}).catch(()=>undefined);
         }
         setMessages((current) => {
           const withoutOptimistic = current.filter((message) => message.id !== optimisticUserMessage.id);
@@ -2129,7 +2162,7 @@ export function ChatPanel({
       } else if (requestStage === "sending chat request" && uploadedReferencesForRetry) {
         // Server acceptance may be uncertain, but no bytes need transferring
         // if the user chooses to retry after the existing-request recovery.
-        if (!reactionContent) setFileReferences(cleanPendingAttachments({images:[],imageFiles:[],videos:[],files:[],references:uploadedReferencesForRetry}).references);
+        if (!reactionContent && composerChatRef.current===chatId) setFileReferences(cleanPendingAttachments({images:[],videos:[],files:[],references:uploadedReferencesForRetry}).references);
       }
 
       if (error instanceof DOMException && error.name === "AbortError") {
@@ -2335,6 +2368,7 @@ export function ChatPanel({
   }
 
   function handlePaste(event: ClipboardEvent<HTMLTextAreaElement>) {
+    const originChatId=chatId;
     const imageFiles = Array.from(event.clipboardData.items)
       .filter((item) => item.type.startsWith("image/"))
       .map((item) => item.getAsFile())
@@ -2347,23 +2381,22 @@ export function ChatPanel({
     setUploadingFiles(true);
     void Promise.all(imageFiles.map((file) => normalizeImageForChat(file)))
       .then((images) => {
-        setSelectedImages((current) => [...current, ...images]);
-        setSelectedImageFiles((current) => [...current, ...imageFiles.map((file, index) => {
-          if (["image/jpeg", "image/png", "image/webp", "image/gif"].includes(file.type)) return file;
-          const match = images[index].match(/^data:([^;]+);base64,(.*)$/);
-          if (!match) throw new Error("Could not prepare image for storage.");
-          const bytes = Uint8Array.from(atob(match[2]), char => char.charCodeAt(0));
-          return new File([bytes], `${file.name}.jpg`, { type: match[1] });
-        })]);
+        const selections=images.map((preview,index)=>composerImage(preview,imageFiles[index]));
+        if(composerChatRef.current!==originChatId){
+          void readPendingAttachments(originChatId).then(saved=>savePendingAttachments(originChatId,{images:[...(saved?.images??[]),...selections],files:saved?.files??[],videos:saved?.videos??[],references:saved?.references??[]})).catch(()=>undefined);
+          return;
+        }
+        setSelectedImages(current=>[...current,...selections]);setAttachmentError("");
         setStatusMessage(`${images.length} image${images.length === 1 ? "" : "s"} ready.`);
       })
       .catch((error: unknown) => {
-        setStatusMessage(error instanceof Error ? error.message : "Failed to prepare pasted image.");
+        if(composerChatRef.current===originChatId)setAttachmentError(error instanceof Error ? error.message : "Failed to prepare pasted image.");
       })
-      .finally(() => setUploadingFiles(false));
+      .finally(() => {if(composerChatRef.current===originChatId)setUploadingFiles(false);});
   }
 
   function handleFileChange(event: FormEvent<HTMLInputElement>) {
+    const originChatId=chatId;
     const files = Array.from(event.currentTarget.files ?? []);
 
     if (files.length === 0) {
@@ -2412,14 +2445,12 @@ export function ChatPanel({
       }),
     )
       .then((images) => {
-        setSelectedImages((current) => [...current, ...images]);
-        setSelectedImageFiles((current) => [...current, ...imageFiles.map((file, index) => {
-          if (["image/jpeg", "image/png", "image/webp", "image/gif"].includes(file.type)) return file;
-          const match = images[index].match(/^data:([^;]+);base64,(.*)$/);
-          if (!match) throw new Error("Could not prepare image for storage.");
-          const bytes = Uint8Array.from(atob(match[2]), char => char.charCodeAt(0));
-          return new File([bytes], `${file.name}.jpg`, { type: match[1] });
-        })]);
+        const selections=images.map((preview,index)=>composerImage(preview,imageFiles[index]));
+        if(composerChatRef.current!==originChatId){
+          void readPendingAttachments(originChatId).then(saved=>savePendingAttachments(originChatId,{images:[...(saved?.images??[]),...selections],files:saved?.files??[],videos:saved?.videos??[],references:saved?.references??[]})).catch(()=>undefined);
+          return;
+        }
+        setSelectedImages(current=>[...current,...selections]);setAttachmentError("");
 
         const statusSegments = [
           images.length > 0
@@ -2436,10 +2467,10 @@ export function ChatPanel({
         setStatusMessage(`${statusSegments.join(", ")} ready.`);
       })
       .catch((error: unknown) => {
-        setStatusMessage(error instanceof Error ? error.message : "Failed to prepare image.");
+        if(composerChatRef.current===originChatId)setAttachmentError(error instanceof Error ? error.message : "Failed to prepare image.");
       })
       .finally(() => {
-        setUploadingFiles(false);
+        if(composerChatRef.current===originChatId)setUploadingFiles(false);
       });
   }
 
@@ -3033,15 +3064,16 @@ export function ChatPanel({
           </p>
         ) : null}
 
+        {attachmentError && <p role="alert" className="mb-3 text-sm text-amber-200">{attachmentError}</p>}
         {selectedImages.length > 0 ? (
           <div className="mb-4 flex flex-wrap gap-3">
             {selectedImages.map((image, index) => (
               <div
-                key={`${image.slice(0, 32)}-${index}`}
+                key={`${image.preview.slice(0, 32)}-${index}`}
                 className="relative h-24 w-24 overflow-hidden rounded-2xl border border-white/10 bg-white/[0.04]"
               >
                 <Image
-                  src={image}
+                  src={image.preview}
                   alt={`Selected image ${index + 1}`}
                   fill
                   sizes="96px"
@@ -3051,7 +3083,6 @@ export function ChatPanel({
                 <button
                   type="button"
                   onClick={() => {
-                    setSelectedImageFiles((current) => current.filter((_, itemIndex) => itemIndex !== index));
                     setSelectedImages((current) =>
                       current.filter(
                         (_, currentIndex) => currentIndex !== index,
