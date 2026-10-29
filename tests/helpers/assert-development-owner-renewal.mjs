@@ -58,6 +58,21 @@ export async function assertDevelopmentOwnerRenewal(db,rival,{project,account,tr
  assert.ok(Date.parse(claim.mission.deadline)>Date.now());
  assert.equal((await db.query("select commit_mission_work($1,$2,$3,'[]','waiting_external',null,null) ok",[task,claim.job.lease,{detail:'Awaiting separately authorized renewed native execution'}])).rows[0].ok,true);
  assert.equal((await db.query('select deadline<now() old from agent_missions where id=$1',[mission])).rows[0].old,true);
+ // Exercise saved review/evidence checkpoints on this renewed mission without
+ // changing its expired physical deadline; roll back the disposable role setup.
+ await db.query('begin');
+ const checkpointLease=randomUUID();
+ await db.query("update mission_assignments set role='review',status='running',lease=$2,lease_until=now()+interval '5 minutes',payload='{}' where id=$1",[task,checkpointLease]);
+ const evidence={kind:'scoped_workflow_trace',observedAt:new Date().toISOString()};
+ const review={text:'Independent review complete',sources:[],calculations:[],model:'gpt-5.3-codex'};
+ assert.equal((await db.query('select checkpoint_mission_operational_evidence($1,$2,$3) ok',[task,checkpointLease,evidence])).rows[0].ok,true);
+ assert.equal((await db.query('select checkpoint_mission_review_model($1,$2,$3,$4) ok',[task,checkpointLease,'c'.repeat(64),review])).rows[0].ok,true);
+ await db.query('reset role');await db.query('alter table benchmark_full_continuations disable trigger benchmark_continuation_immutable');
+ await db.query("update benchmark_full_continuations set created_at=now()-interval '5 hours',deadline=now()-interval '1 hour' where id=$1",[c.id]);
+ await db.query('alter table benchmark_full_continuations enable trigger benchmark_continuation_immutable');await db.query('set local role service_role');
+ assert.equal((await db.query('select checkpoint_mission_operational_evidence($1,$2,$3) ok',[task,checkpointLease,evidence])).rows[0].ok,false);
+ assert.equal((await db.query('select checkpoint_mission_review_model($1,$2,$3,$4) ok',[task,checkpointLease,'c'.repeat(64),review])).rows[0].ok,false);
+ await db.query('rollback');
  const release='8'.repeat(40),issue='select benchmark_issue_development_renewal_grant($1,$2,$3,$4,$5) g';
  await assert.rejects(db.query(issue,[r.id,'a'.repeat(64),r.approval_id,task,release]),/unavailable/);
  assert.equal((await db.query('select benchmark_claim_development_renewal_dispatch($1,$2,$3) ok',[r.id,{...receipt,run_id:126},release])).rows[0].ok,false);
