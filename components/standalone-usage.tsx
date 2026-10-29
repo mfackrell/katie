@@ -9,7 +9,7 @@ interface Pending { id: string; requestId: string; provider: string; model: stri
 type DecisionAttempt = Pick<Pending, 'id' | 'requestId' | 'preparedHash' | 'pricingVersion' | 'budgetRevision' | 'reservedMicrousd'>;
 interface ActiveAttempt extends DecisionAttempt { provider: string; model: string; category: string; state: 'reserved' | 'dispatched' | 'uncertain'; exposureAccepted?: boolean }
 interface Snapshot { configuration: Configuration | null; daily: DailyUsage | null; pending: Pending[]; active?: ActiveAttempt[]; alerts?: Array<{ attemptId: string; provider: string; model: string; kind: string; message: string; actualMicrousd: string | null; reservedMicrousd: string }> }
-interface Props { actorId: string; chatId: string; onResumeAttempt?: (attempt: { attemptId: string; requestId: string }) => Promise<void> | void }
+interface Props { rail?: boolean; actorId: string; chatId: string; onResumeAttempt?: (attempt: { attemptId: string; requestId: string }) => Promise<void> | void }
 
 // Formatting uses integer arithmetic so large ledger amounts never lose precision.
 function dollars(value: string) {
@@ -26,7 +26,7 @@ function Tokens({ totals }: { totals: UsageTotals }) {
   return <span>In {totals.inputTokens.toLocaleString()}{totals.missingInputCount > 0 && ` + unknown (${totals.missingInputCount})`} · Out {totals.outputTokens.toLocaleString()}{totals.missingOutputCount > 0 && ` + unknown (${totals.missingOutputCount})`}</span>;
 }
 
-export function StandaloneUsage({ actorId, chatId, onResumeAttempt }: Props) {
+export function StandaloneUsage({ actorId, chatId, onResumeAttempt, rail = false }: Props) {
   const refreshSequence = useRef(0);
   const invalidateRefresh = useCallback(() => { refreshSequence.current++; }, []);
   const [scope, setScope] = useState<'this-agent' | 'all'>('this-agent');
@@ -119,6 +119,103 @@ export function StandaloneUsage({ actorId, chatId, onResumeAttempt }: Props) {
   const approvals = snapshot?.pending.length ?? 0;
   const unresolved = activeAttempts.length;
   const alerts = snapshot?.alerts?.length ?? 0;
+  if (rail) return <section aria-label="Standalone daily usage" className="space-y-4 text-xs text-zinc-300">
+    <section className="space-y-2">
+      <h3 className="text-sm font-semibold text-white">Daily usage</h3>
+      <div className="flex flex-wrap gap-2"><label>Scope <select aria-label="Scope" className="rounded bg-zinc-900 p-1" value={scope} onChange={e=>setScope(e.target.value as typeof scope)}><option value="this-agent">This agent</option><option value="all">All standalone</option></select></label><button type="button" className="underline" onClick={openSettings}>Budget & timezone</button><button type="button" className="underline" onClick={()=>void refresh()}>Refresh</button></div>
+      {daily ? <div className="space-y-1"><p>Today <strong>{dollars(daily.totals.estimatedCostMicrousd)}</strong></p><p>Pending {dollars(daily.totals.pendingExposureMicrousd)}</p><p>Uncertain {dollars(daily.totals.uncertainExposureMicrousd)}</p><p><Tokens totals={daily.totals}/></p>{daily.providers.map(provider=><p key={provider.provider}>{provider.provider} · {dollars(provider.estimatedCostMicrousd)} · <Tokens totals={provider}/></p>)}</div> : <p>{error || refreshError || "Loading usage…"}</p>}
+      <details className="rounded border border-white/10 p-2"><summary className="cursor-pointer">Models, activity & earlier exposure</summary>
+    {daily && <>
+      <p className="mt-2">{daily.date} · {daily.timezone} · Estimated cost {dollars(daily.totals.estimatedCostMicrousd)} · Pending {dollars(daily.totals.pendingExposureMicrousd)} · Uncertain {dollars(daily.totals.uncertainExposureMicrousd)}</p>
+      <p className="mt-1"><Tokens totals={daily.totals} />{daily.totals.unknownCostCount > 0 && ` · ${daily.totals.unknownCostCount} call(s) with unknown cost; displayed cost is incomplete.`}</p>
+      <div className="mt-2 flex flex-wrap gap-x-5 gap-y-1">{daily.providers.map(provider => <p key={provider.provider}><strong>{provider.provider}</strong> <Tokens totals={provider} /> · {dollars(provider.estimatedCostMicrousd)}</p>)}</div>
+      {daily.unresolvedEarlier.attemptCount > 0 && <p className="mt-2 rounded border border-amber-400/30 p-2 text-amber-200">Earlier unresolved exposure ({daily.unresolvedEarlier.attemptCount} attempts): pending {dollars(daily.unresolvedEarlier.pendingExposureMicrousd)} · uncertain {dollars(daily.unresolvedEarlier.uncertainExposureMicrousd)}. Kept separate from today; still reserved on the original requests.</p>}
+      <details className="mt-2"><summary className="cursor-pointer">Models & activity, including hidden helpers ({daily.totals.attemptCount} attempts)</summary>
+        <div className="mt-2 overflow-x-auto"><table className="w-full text-left"><thead><tr><th className="pr-4">Provider / model</th><th className="pr-4">Activity</th><th className="pr-4">Tokens</th><th>Estimated cost</th></tr></thead><tbody>{daily.models.map(model => <tr key={JSON.stringify([model.provider, model.model, model.category])}><td className="py-1 pr-4">{model.provider} / {model.model}</td><td className="pr-4">{model.category}</td><td className="pr-4"><Tokens totals={model} /></td><td>{dollars(model.estimatedCostMicrousd)}{model.unknownCostCount > 0 && ' + unknown'}</td></tr>)}</tbody></table></div>
+        <ul className="mt-2 space-y-1">{daily.attempts.map(attempt => <li key={attempt.id}>{new Intl.DateTimeFormat(undefined, { timeZone: daily.timezone, hour: '2-digit', minute: '2-digit', second: '2-digit' }).format(new Date(attempt.dispatched_at || attempt.created_at))} · {attempt.provider}/{attempt.model} · {attempt.category} · {attempt.state} · {attempt.actual_microusd === null ? 'cost unknown / not settled' : dollars(attempt.actual_microusd)}</li>)}</ul>
+      </details>
+    </>}
+
+    {settingsOpen && <form onSubmit={event => void saveSettings(event)} className="mt-3 space-y-3 rounded border border-white/20 p-3">
+      <p>Owner settings apply to all standalone agents. Per request includes main calls, retries, routing, summarization, memory and other hidden helpers. USD estimates are not provider invoices.</p>
+      <label className="block">Timezone (IANA)<input required value={timezone} placeholder="e.g. America/New_York" onChange={event => setTimezone(event.target.value)} className="ml-2 rounded border border-white/20 bg-zinc-900 p-1" /></label>
+      <label className="block">Per call approval threshold (USD)<input inputMode="decimal" required value={callLimit} onChange={event => setCallLimit(event.target.value)} className="ml-2 w-28 rounded border border-white/20 bg-zinc-900 p-1" /></label>
+      <label className="block">Per request approval threshold (USD)<input inputMode="decimal" required value={requestLimit} onChange={event => setRequestLimit(event.target.value)} className="ml-2 w-28 rounded border border-white/20 bg-zinc-900 p-1" /></label>
+      <p>Zero requires approval for every positive estimate. No timezone or monetary thresholds are preselected.</p>
+      <div className="flex gap-4"><button disabled={Boolean(busy)} className="rounded border border-white/30 px-3 py-1">Save settings</button><button type="button" onClick={() => setSettingsOpen(false)} className="underline">Close</button></div>
+    </form>}
+
+    </div>}
+    {reviewOpen && <div id="standalone-attempt-review" className="absolute left-0 right-0 top-full z-30 max-h-[65vh] overflow-y-auto overscroll-contain border border-amber-400/30 bg-zinc-950 p-3 shadow-xl sm:p-4">
+      <div className="flex items-center justify-between gap-2">
+        <strong className="text-amber-100">Requests and approvals</strong>
+        <button type="button" onClick={() => setReviewOpen(false)} className="underline">Close review</button>
+      </div>
+
+      </details>
+    </section>
+    {(snapshot?.pending.length || activeAttempts.length) ? <section className="space-y-2"><h3 className="text-sm font-semibold text-amber-100">Active / unresolved work</h3>
+
+    </section> : <p className="text-zinc-500">No active requests.</p>}
+    <section className="space-y-2"><h3 className="text-sm font-semibold text-white">Alerts</h3>
+    {snapshot?.alerts?.map((alert, index) => <p role="alert" key={`${alert.attemptId}:${alert.kind}:${index}`} className="mt-2 rounded border border-amber-400/40 p-2 text-amber-100"><strong>{alert.kind === 'overrun' ? 'Preflight overrun' : alert.kind === 'receipt_conflict' ? 'Receipt conflict' : 'Uncertain provider outcome'}</strong> · {alert.provider}/{alert.model} · {alert.message}{alert.actualMicrousd !== null && ` Settled ${dollars(alert.actualMicrousd)}; reserved ${dollars(alert.reservedMicrousd)}.`} <span className="break-all">Attempt {alert.attemptId}</span></p>)}
+
+
+      {snapshot?.pending.length ? <p className="text-amber-200">{snapshot.pending.length} approval(s) required</p> : null}
+      {!snapshot?.alerts?.length && !snapshot?.pending.length && <p className="text-zinc-500">No current alerts.</p>}
+      {error && <p role="alert" className="text-amber-200">{error}</p>}
+      {refreshError && <p role="alert" className="text-amber-200">{refreshError}{snapshot && " Previously loaded values may be stale."}</p>}
+      {notice && <p role="status">{notice}</p>}
+    </section>
+    {settingsOpen && <form onSubmit={event => void saveSettings(event)} className="mt-3 space-y-3 rounded border border-white/20 p-3">
+      <p>Owner settings apply to all standalone agents. Per request includes main calls, retries, routing, summarization, memory and other hidden helpers. USD estimates are not provider invoices.</p>
+      <label className="block">Timezone (IANA)<input required value={timezone} placeholder="e.g. America/New_York" onChange={event => setTimezone(event.target.value)} className="ml-2 rounded border border-white/20 bg-zinc-900 p-1" /></label>
+      <label className="block">Per call approval threshold (USD)<input inputMode="decimal" required value={callLimit} onChange={event => setCallLimit(event.target.value)} className="ml-2 w-28 rounded border border-white/20 bg-zinc-900 p-1" /></label>
+      <label className="block">Per request approval threshold (USD)<input inputMode="decimal" required value={requestLimit} onChange={event => setRequestLimit(event.target.value)} className="ml-2 w-28 rounded border border-white/20 bg-zinc-900 p-1" /></label>
+      <p>Zero requires approval for every positive estimate. No timezone or monetary thresholds are preselected.</p>
+      <div className="flex gap-4"><button disabled={Boolean(busy)} className="rounded border border-white/30 px-3 py-1">Save settings</button><button type="button" onClick={() => setSettingsOpen(false)} className="underline">Close</button></div>
+    </form>}
+
+    </div>}
+    {reviewOpen && <div id="standalone-attempt-review" className="absolute left-0 right-0 top-full z-30 max-h-[65vh] overflow-y-auto overscroll-contain border border-amber-400/30 bg-zinc-950 p-3 shadow-xl sm:p-4">
+      <div className="flex items-center justify-between gap-2">
+        <strong className="text-amber-100">Requests and approvals</strong>
+        <button type="button" onClick={() => setReviewOpen(false)} className="underline">Close review</button>
+      </div>
+    {snapshot?.alerts?.map((alert, index) => <p role="alert" key={`${alert.attemptId}:${alert.kind}:${index}`} className="mt-2 rounded border border-amber-400/40 p-2 text-amber-100"><strong>{alert.kind === 'overrun' ? 'Preflight overrun' : alert.kind === 'receipt_conflict' ? 'Receipt conflict' : 'Uncertain provider outcome'}</strong> · {alert.provider}/{alert.model} · {alert.message}{alert.actualMicrousd !== null && ` Settled ${dollars(alert.actualMicrousd)}; reserved ${dollars(alert.reservedMicrousd)}.`} <span className="break-all">Attempt {alert.attemptId}</span></p>)}
+
+    {activeAttempts.length > 0 && <div aria-label="Active attempts in this conversation" className="mt-2 space-y-2">
+      <p className="font-medium text-zinc-100">Active or unresolved attempts in this conversation</p>
+      {activeAttempts.map(attempt => <div key={attempt.id} className="rounded border border-white/20 p-2">
+        <p>{attempt.provider}/{attempt.model} · {attempt.category} · {attempt.state} · exposure {dollars(attempt.reservedMicrousd)}</p>
+        <p className="mt-1 break-all text-zinc-400">Exact attempt {attempt.id} · original request {attempt.requestId}</p>
+        {attempt.state === 'reserved' && <button type="button" disabled={Boolean(busy)} onClick={() => void resumeReserved(attempt)} className="mr-4 mt-1 rounded border border-white/30 px-2 py-1 disabled:opacity-50">Resume saved work</button>}
+        {attempt.state === 'uncertain' && <>
+          <p className="mt-1">The provider call was already sent, but exact usage/cost could not be confirmed. Continuing will retain the full reserved exposure and will not resend this attempt.</p>
+          {attempt.exposureAccepted && <p className="mt-1 text-amber-100">Uncertain exposure accepted · {dollars(attempt.reservedMicrousd)} retained</p>}
+          <button type="button" disabled={Boolean(busy) || !configurationComplete} onClick={() => void acceptExposure(attempt)} className="mr-4 mt-1 rounded border border-amber-300/50 px-2 py-1 disabled:opacity-50">{attempt.exposureAccepted ? 'Continue remaining work' : 'Accept exposure & continue'}</button>
+        </>}
+        {attempt.state === 'dispatched' && <p className="mt-1">Already dispatched. Cancellation stops remaining work where possible; spending exposure stays held until provider usage is reconciled.</p>}
+        <button type="button" disabled={Boolean(busy)} onClick={() => void decide(attempt, 'cancel')} className="mt-1 underline disabled:opacity-50">Cancel remaining work</button>
+      </div>)}
+    </div>}
+    {snapshot?.pending.map(attempt => <div key={attempt.id} className="mt-3 rounded border border-amber-400/40 p-3">
+      <p className="font-medium text-amber-100">Approval required · {attempt.provider}/{attempt.model} · {attempt.category}</p>
+      <p className="mt-1">Purpose: {attempt.reason || attempt.category}. Paused: {attempt.pauseReason || 'Approval required.'}</p>
+      <p className="mt-1">Requested model: {attempt.model} · resolved model: {attempt.resolvedModel || 'not yet known'}.</p>
+      <p className="mt-1">Preflight estimate {dollars(attempt.reservedMicrousd)}. This estimate is not a guaranteed spending ceiling.</p>
+      <p className="mt-1">Payload: {attempt.preview.textBytes.toLocaleString()} text bytes · {attempt.preview.imageCount} images ({attempt.preview.imageBytes.toLocaleString()} inline bytes) · estimated input {attempt.preview.inputTokens.toLocaleString()} tokens, including image allowance {attempt.preview.imageTokens.toLocaleString()} · configured output allowance {attempt.preview.outputAllowance.toLocaleString()} tokens.</p>
+      <p className="mt-1">This original request already has estimated settled cost {dollars(attempt.requestExposure.estimatedCostMicrousd)}, pending {dollars(attempt.requestExposure.pendingExposureMicrousd)} (includes this proposal), uncertain {dollars(attempt.requestExposure.uncertainExposureMicrousd)}.{attempt.requestExposure.unknownCostCount > 0 && ' Some dispatched costs remain unknown.'}</p>
+      <p className="mt-1">Thresholds: per call {snapshot.configuration?.per_call_limit_microusd == null ? 'unset' : dollars(snapshot.configuration.per_call_limit_microusd)} · original request {snapshot.configuration?.request_limit_microusd == null ? 'unset' : dollars(snapshot.configuration.request_limit_microusd)}.</p>
+      <details className="mt-1"><summary className="cursor-pointer">Estimate assumptions & uncertainty</summary><ul className="mt-1 list-disc pl-4">{[...attempt.preview.assumptions, ...attempt.preview.issues].map((assumption, index) => <li key={index}>{assumption}</li>)}</ul></details>
+      {attempt.tradeoffs && <p className="mt-1 text-amber-100">Reduction tradeoffs: {attempt.tradeoffs}</p>}
+      <p className="mt-1 break-all text-zinc-400">Exact attempt {attempt.id} · pricing {attempt.pricingVersion} · estimator {attempt.estimatorVersion} · budget revision {attempt.budgetRevision}</p>
+      <div className="mt-2 flex gap-4"><button type="button" disabled={Boolean(busy) || !configurationComplete} onClick={() => void decide(attempt, 'approve_once')} className="rounded bg-amber-100 px-3 py-1 text-zinc-950 disabled:opacity-50">Approve once</button><button type="button" disabled={Boolean(busy)} onClick={() => void decide(attempt, 'reduce_cost')} className="underline disabled:opacity-50">Reduce cost</button><button type="button" disabled={Boolean(busy)} onClick={() => void decide(attempt, 'cancel')} className="underline disabled:opacity-50">Cancel</button></div>
+    </div>)}
+
+    </div>}
+
+  </section>;
   return <section aria-label="Standalone daily usage" className="relative z-20 shrink-0 min-w-0 border-b border-white/10 bg-zinc-950 px-3 py-1.5 text-xs text-zinc-300 sm:px-5">
     <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
       <span className="min-w-0 truncate" aria-live="polite">
