@@ -10,16 +10,16 @@ const zip=value=>{
  const end=Buffer.alloc(22);end.writeUInt32LE(0x06054b50);end.writeUInt16LE(1,10);end.writeUInt32LE(local.length+name.length+bytes.length,16);
  return Buffer.concat([local,name,bytes,central,name,end]);
 };
-function setup({badReceipt=false,claim=true}={}){
+function setup({badReceipt=false,claim=true,chained=false}={}){
  const taskId=randomUUID(),projectId=randomUUID(),trialId=randomUUID(),approvalId=randomUUID(),continuationId=randomUUID(),recoveryId=randomUUID();
  const key='synthetic-handoff-key-that-is-long-enough',release='f'.repeat(40),hash='b'.repeat(64);
  const a={id:approvalId,task_id:taskId,project_id:projectId,trial_id:trialId,continuation_id:continuationId,deadline:new Date(Date.now()+3600000).toISOString()};
  const receipt={version:1,repository:'mfackrell/katie',run_id:123,issue_number:829,outcome:'BLOCKED',pr_url:null,tested_head_sha:null,reviewed_head_sha:null,checks:{build:'failure',test:'',review:'',repair:'skipped',retest:'',final_review:''}};
  const task={id:taskId,request_id:'request',repository_id:randomUUID(),repository_full_name:'mfackrell/katie',status:'blocked',external:{receipt,issueNumber:829}};
  const c={projectId,contractHash:hash,baselineSha:'a'.repeat(40),contract:{scenarios:[]}};
- let pending=null,sent=false,body='<!-- katie-managed-task:'+taskId+' -->\n\n'+encodeNativeHandoff({taskId,projectId,trialId,approvalId,continuationId,contractHash:hash,benchmarkContractHash:hash,baselineSha:c.baselineSha,expiresAt:Date.now()+60000},key)+'\nOriginal immutable game requirements';
+ let pending=chained?{id:randomUUID(),prior_run:122,release_sha:'a'.repeat(40)}:null,sent=chained,body='<!-- katie-managed-task:'+taskId+' -->\n\n'+encodeNativeHandoff({taskId,projectId,trialId,approvalId,continuationId,...(chained?{startupRecoveryId:pending.id}:{}),contractHash:hash,benchmarkContractHash:hash,baselineSha:c.baselineSha,expiresAt:Date.now()+60000},key)+'\nOriginal immutable game requirements';
  const calls=[],writes=[];
- const db={from:table=>({select(){return this},or(){return this},is(){return this},limit(){return this},eq(){return this},returns:async()=>({data:[a]}),maybeSingle:async()=>({data:table==='benchmark_startup_recoveries'?pending:table==='benchmark_startup_recovery_dispatches'?(sent?{recovery_id:recoveryId}:null):table==='repo_sync_runs'?{repository_full_name:'mfackrell/katie'}:{contract_hash:hash,trial_id:trialId,benchmark_contract_hash:hash}})}),rpc:async(name,args)=>{calls.push({name,args});if(name==='benchmark_prepare_startup_recovery'){pending={id:recoveryId};task.status='dispatching';return {data:pending}}if(name==='benchmark_claim_startup_recovery_dispatch'){sent=claim;return {data:claim}}throw Error('Unexpected RPC '+name)}};
+ const db={from:table=>({select(){return this},or(){return this},is(){return this},limit(){return this},order(){return this},eq(){return this},returns:async()=>({data:[a]}),maybeSingle:async()=>({data:table==='benchmark_startup_recoveries'?pending:table==='benchmark_startup_recovery_dispatches'?(sent?{recovery_id:recoveryId}:null):table==='repo_sync_runs'?{repository_full_name:'mfackrell/katie'}:{contract_hash:hash,trial_id:trialId,benchmark_contract_hash:hash}})}),rpc:async(name,args)=>{calls.push({name,args});if(name==='benchmark_prepare_startup_recovery'){pending={id:recoveryId,prior_run:123,release_sha:release};sent=false;task.status='dispatching';return {data:pending}}if(name==='benchmark_claim_startup_recovery_dispatch'){sent=claim;return {data:claim}}throw Error('Unexpected RPC '+name)}};
  const run={id:123,status:'completed',conclusion:'failure',repository:{full_name:'mfackrell/katie'},head_repository:{full_name:'mfackrell/katie'},head_branch:'main',event:'issues',path:'.github/workflows/autonomous-development.yml',head_sha:'a'.repeat(40)};
  class Octokit{
   repos={getCommit:async()=>({data:{sha:release}})};
@@ -46,4 +46,10 @@ test('real server refuses mismatched GitHub completion evidence before preparing
 }));
 test('atomic dispatch claim failure prevents issue changes and duplicate workflow dispatch',()=>env(async()=>{
  const f=setup({claim:false});assert.equal(await f.run(),false);assert.equal(f.writes.length,0);assert.equal(f.calls.length,2);
+}));
+
+test('a distinct terminal zero-call failure can append a new correction while prior dispatch is retained',()=>env(async()=>{
+ const f=setup({chained:true});assert.equal(await f.run(),true);assert.equal(f.calls[0].name,'benchmark_prepare_startup_recovery');
+ assert.equal(f.writes[0].issue_number,829);assert.equal(readNativeHandoff(f.body(),f.key).startupRecoveryId,f.recoveryId);
+ assert.equal(await f.run(),false);assert.equal(f.writes.length,2);
 }));

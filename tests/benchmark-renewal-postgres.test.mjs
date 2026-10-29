@@ -64,7 +64,7 @@ test('Append-only renewal retains expired authority, hydrates without spending, 
    '20261023194500_recover_latest_game_revision_checkpoint.sql',
    '20261021202500_resume_game_checkpoint_watchdog.sql',
    '20261028225300_retain_full_specification_review.sql',
-   '20261029145712_benchmark_append_only_continuation.sql','20261029173500_benchmark_zero_call_startup_recovery.sql'])
+   '20261029145712_benchmark_append_only_continuation.sql','20261029173500_benchmark_zero_call_startup_recovery.sql','20261029185000_benchmark_zero_call_recovery_chain.sql'])
    await db.query(readFileSync('supabase/migrations/'+file,'utf8'));
   const actor=randomUUID(),chat=randomUUID(),repo=randomUUID(),trial=randomUUID(),exp=randomUUID(),project=randomUUID(),owner=randomUUID();
   const protocol=config.protocol;

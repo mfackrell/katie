@@ -1,13 +1,16 @@
 // Trusted SDK bootstrap: invoked inside the isolated repository worktree.
 // No Supabase service role or upstream provider secret enters this process.
-import {createRequire} from 'node:module';
-import {pathToFileURL} from 'node:url';
 import {mkdirSync,writeFileSync} from 'node:fs';
 import {join} from 'node:path';
 import {executeSharedNativePhase,assertNativeArmPhase} from '/trusted/shared-native-phase.mjs';
 import {NATIVE_GATEWAY_URL,nativeCodexConfig,assertNativeEffectivePolicy} from '/trusted/shared-native-policy.mjs';
-const require=createRequire('/work/package.json');
-const {Codex}=await import(pathToFileURL(require.resolve('@openai/codex-sdk')).href);
+// Public ESM entry of the pinned SDK; CommonJS resolution rejects its import-only exports.
+import {Codex} from '/work/node_modules/@openai/codex-sdk/dist/index.js';
+if(process.argv[2]==='--preflight'){
+ if(typeof Codex!=='function')throw Error('NATIVE_SDK_EXPORT_MISSING');
+ process.stdout.write('NATIVE_CHILD_PREFLIGHT_OK\n');
+ process.exit(0);
+}
 const arm=process.env.KATIE_BENCHMARK_ARM;
 const phase=process.env.KATIE_NATIVE_PHASE||'implementation';
 assertNativeArmPhase(arm,phase);

@@ -1,3 +1,4 @@
+import {preflightNativeChild} from './native-child-preflight.mjs';
 import {openNativeProductionRuntime} from './native-runtime-capsule.mjs';
 // Trusted GitHub Actions host. Never run this file from the candidate worktree.
 // For paid execution it requires a separate, previously owner-approved spending
@@ -125,6 +126,7 @@ if(!/^agent\/issue-[0-9]+-[0-9]+-[0-9]+$/.test(checkpointBranch||'')||!process.e
  denied('durable Git checkpoint authority unavailable');
 if(!process.env.HOME)denied('trusted host HOME unavailable');
 execFileSync('gh',['auth','setup-git'],{env:{PATH:process.env.PATH||'',HOME:process.env.HOME,GH_TOKEN:process.env.GH_TOKEN},timeout:20000});
+preflightNativeChild(boundary,childFile);
 const grantToken=randomBytes(48).toString('base64url');
 if(proof.startupRecoveryId&&!productionRuntime)denied('startup recovery requires production runtime');
 const {data:grantResult,error:issueError}=proof.startupRecoveryId
