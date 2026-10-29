@@ -362,8 +362,18 @@ export async function recoverUnusedNativeStartup() {
  if(error)throw Error('Native startup approval inspection failed');
  for(const a of rows??[]){
   const task=await readTask(a.task_id);
-  const {data:pending}=await db.from('benchmark_startup_recoveries').select('id').eq('task_id',task.id).maybeSingle<{id:string}>();
-  if(pending){const {data:sent}=await db.from('benchmark_startup_recovery_dispatches').select('recovery_id').eq('recovery_id',pending.id).maybeSingle();if(sent)continue;}
+  const {data:latest,error:latestError}=await db.from('benchmark_startup_recoveries').select('id,prior_run,release_sha').eq('task_id',task.id).order('created_at',{ascending:false}).order('id',{ascending:false}).limit(1).maybeSingle<{id:string;prior_run:number;release_sha:string}>();
+  if(latestError)throw Error('Native startup recovery history unavailable');
+  let pending=latest;
+  if(pending){
+   const {data:sent,error:sentError}=await db.from('benchmark_startup_recovery_dispatches').select('recovery_id').eq('recovery_id',pending.id).maybeSingle();
+   if(sentError)throw Error('Native startup dispatch history unavailable');
+   if(sent){
+    const failed=receiptSchema.safeParse(task.external.receipt);
+    if(task.status!=='blocked'||!failed.success||failed.data.run_id<=pending.prior_run||release===pending.release_sha)continue;
+    pending=null; // A new verified failure needs a new immutable recovery link.
+   }else if(pending.release_sha!==release)continue; // Never replay a prepared correction on different code.
+  }
   if(task.status!=='blocked'&&!pending)continue;
   const c=await getDevelopmentProjectContext(task.id);if(!c||c.projectId!==a.project_id)continue;
   const saved=receiptSchema.safeParse(task.external.receipt);
