@@ -585,3 +585,19 @@ test('accepting exposure never fabricates a missing or incomplete provider resul
  }
  assert.equal(sends,1);assert.equal(f.attempts[0].state,'uncertain');
 });
+
+
+test('accepted exposure cannot promote truncated streaming output to a safe checkpoint',async()=>{
+ for(const provider of ['openai','anthropic'] as const){
+  const f=fakeLedger();let sends=0;
+  const stream=provider==='openai'?'data: '+JSON.stringify({choices:[{delta:{content:'partial'},finish_reason:'length'}]})+'\n\ndata: [DONE]\n\n'
+   :'data: '+JSON.stringify({type:'message_delta',delta:{stop_reason:'max_tokens'}})+'\n\ndata: '+JSON.stringify({type:'message_stop'})+'\n\n';
+  const send=createAccountingFetch(provider,async()=>{sends++;return new Response(stream,{headers:{'content-type':'text/event-stream'}});},f.factory);
+  const url=provider==='openai'?'https://api.openai.com/v1/chat/completions':'https://api.anthropic.com/v1/messages';
+  const body={method:'POST',body:JSON.stringify({model:provider==='openai'?'gpt-4o':'claude-sonnet-5-5',messages:[{role:'user',content:'hello'}],stream:true})};
+  await assert.rejects(runWithStandaloneAccounting(context,()=>send(url,body)),isStandaloneAccountingError);
+  f.service.uncertainExposureAccepted=async()=>true;
+  await assert.rejects(runWithStandaloneAccounting({...context,resumed:true},()=>send(url,body)),{code:'standalone_safe_checkpoint_unavailable'});
+  assert.equal(sends,1);assert.equal(f.attempts[0].state,'uncertain');
+ }
+});

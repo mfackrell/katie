@@ -33,9 +33,9 @@ function safeUncertainCheckpoint(checkpoint: ResponseCheckpoint, provider: Accou
       if(!data||data==='[DONE]')return [];try{return [JSON.parse(data)];}catch{return [{error:true}];}
     });
     if(events.some(event=>event.error||event.type==='error'))return false;
-    if(provider==='anthropic')return events.some(event=>event.type==='message_stop');
+    if(provider==='anthropic')return events.some(event=>event.type==='message_stop')&&events.some(event=>event.type==='message_delta'&&event.delta?.stop_reason&&event.delta.stop_reason!=='max_tokens');
     if(endpoint.endsWith('/responses'))return events.some(event=>event.type==='response.completed');
-    if(provider!=='google')return checkpoint.body.includes('[DONE]')&&events.some(event=>event.choices?.some((choice:{finish_reason?:string})=>choice.finish_reason));
+    if(provider!=='google')return checkpoint.body.includes('[DONE]')&&events.some(event=>event.choices?.some((choice:{finish_reason?:string})=>['stop','tool_calls','function_call'].includes(choice.finish_reason??'')))&&!events.some(event=>event.choices?.some((choice:{finish_reason?:string})=>choice.finish_reason&&!['stop','tool_calls','function_call'].includes(choice.finish_reason)));
     return events.some(event=>event.candidates?.some((candidate:{finishReason?:string})=>candidate.finishReason==='STOP'));
   }
   try {
