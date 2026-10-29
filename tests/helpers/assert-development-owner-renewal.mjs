@@ -16,7 +16,8 @@ export async function assertDevelopmentOwnerRenewal(db,rival,{project,account,tr
  await db.query("update benchmark_full_continuations set created_at=now()-interval '5 hours',deadline=now()-interval '1 hour' where id=$1",[continuation]);
  await db.query('alter table benchmark_full_continuations enable trigger benchmark_continuation_immutable');
  await db.query("insert into benchmark_development_dispatches(task_id,trial_id,contract_hash,benchmark_contract_hash,baseline_sha,status) values($1,$2,repeat('c',64),$3,$4,'qualified')",[task,trial,protocol.contract_sha256,protocol.baselineSha]);
- await db.query('insert into benchmark_mission_bindings(mission_id,account_id,experiment_id,baseline_sha) select $1,id,experiment_id,$3 from benchmark_budget_accounts where id=$2',[mission,account,protocol.baselineSha]);
+ const binding=(await db.query('select account_id,baseline_sha from benchmark_mission_bindings where mission_id=$1',[mission])).rows[0];
+ assert.equal(binding.account_id,account);assert.equal(binding.baseline_sha,protocol.baselineSha);
  // Advance only this disposable fixture to the observed paid-before-replay failure.
  await db.query('alter table benchmark_budget_calls disable trigger user');
  for(const tokens of [7206,7213]){
