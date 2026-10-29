@@ -142,7 +142,7 @@ try {
     if (req.method() !== "GET") mutations.push({ path: url.pathname, body });
     if(url.pathname==='/api/benchmark/715/continuation'){
       if(req.method()==='POST'){
-        assert.equal(body.approve,true);assert.equal(body.authorization,continuationRenewal?'full-continuation-renewal-existing-budget-240000tokens-4hours':'full-continuation-existing-budget-270000tokens-4hours');
+        assert.equal(body.approve,true);assert.equal(body.authorization,'full-continuation-displayed-plan-existing-budget-4hours');
         assert.equal(body.planHash,'c'.repeat(64));assert.ok(req.headers().authorization?.startsWith('Bearer '));
         continuationApproved=true;return reply({approved:true});
       }
