@@ -37,6 +37,13 @@ jobs:
         env:
           KATIE_BENCHMARK_GATEWAY_DIAGNOSTICS: enabled
         run: node scripts/benchmark/native-development-child-contained-probe.mjs
+      - name: Qualify actual child against immutable production benchmark baseline without billing
+        env:
+          KATIE_BENCHMARK_GATEWAY_DIAGNOSTICS: enabled
+          KATIE_NATIVE_PROBE_BASELINE: 0015bcdb8ac9ad94b7c74d1a4cd76737903b1319
+        run: |
+          git fetch origin 0015bcdb8ac9ad94b7c74d1a4cd76737903b1319
+          node scripts/benchmark/native-development-child-contained-probe.mjs
       - name: Adversarial shared trust boundary (Git, hooks, dependencies, symlinks)
         run: node --test tests/benchmark-native-trust-boundary.test.mjs
       - name: Qualify Native Thin owner grant and canonical HTTP receipt boundaries
