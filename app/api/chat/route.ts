@@ -1,6 +1,6 @@
 import { scheduleMemoryPersistence } from "@/lib/standalone-accounting/memory-scheduling";
 import { executeStandaloneWorkflow, currentStandaloneWorkflow, workflowMessageId, cachedWorkflowValue, workflowTimestamp } from "@/lib/standalone-accounting/workflow";
-import { isStandaloneAccountingError, standaloneAccountingCause, runWithOrchestratorAccounting } from "@/lib/standalone-accounting/context";
+import { getAccountingScope, isStandaloneAccountingError, standaloneAccountingCause, runWithOrchestratorAccounting } from "@/lib/standalone-accounting/context";
 import { conversationCacheKey } from "@/lib/providers/openai-cache";
 import {projectForChat} from '@/lib/projects/store';
 import {loadFullBenchmarkBinding} from '../../../scripts/benchmark/full-project-gate.mjs';
@@ -29,8 +29,9 @@ import { shouldEnableActorCollaboration } from "@/lib/collaboration/review-mode"
 import { finishChatFailure } from "@/lib/chat/request-failure";
 import { websiteEvidenceStore } from "@/lib/research/stored-evidence";
 import { explicitlyReferencesAttachment, attachmentAccessContext, type ConversationAttachment } from "@/lib/chat/attachment-continuity";
-import { persistConversationAttachment, restoreConversationAttachment, loadConversationAttachmentCatalog, loadActorAttachmentCatalog, recoverSavedVideoFrames, recoverUploadVideoFrames } from "@/lib/uploads/stored-uploads";
+import { persistConversationAttachment, restoreConversationAttachment, updateSavedImageObservation, loadConversationAttachmentCatalog, loadActorAttachmentCatalog, recoverSavedVideoFrames, recoverUploadVideoFrames } from "@/lib/uploads/stored-uploads";
 import { describeAttachmentEvidence } from "@/lib/uploads/attachment-observations";
+import { observeStandaloneStillImages, retainNewImageObservations, imageObservationAsText, imageObservationHash, isStillImageCreationRequest } from "@/lib/uploads/still-image-observations";
 import { submitSavedVideo, resultStore } from "@/lib/runpod/durable-results";
 import { pendingVideoMessage } from "@/lib/runpod/video-orchestration";
 import { RUNPOD_VIDEO_MODEL } from "@/lib/runpod/durable-results";
@@ -752,6 +753,7 @@ async function executeChat(request: NextRequest) {
     for (const [imageIndex, image] of (requestImages ?? []).entries()) {
       const file = imageFileFromDataUrl(image);
       const reference = await cachedWorkflowValue(`image-reference:${imageIndex}`, () => buildImageReference(file));
+      if(getAccountingScope()?.kind==='standalone')reference.fileId=workflowMessageId(`image:${imageIndex}:${imageObservationHash(image)}`)??reference.fileId;
       newAttachments.push(reference);
       legacyImageSources.set(reference.fileId, file);
     }
@@ -807,9 +809,22 @@ async function executeChat(request: NextRequest) {
     const identitySourceAllowed = (file: (typeof newAttachments)[number]) => file.mimeType !== "application/pdf" ||
       Boolean(taskIdentityPdfSelection?.fileIds.has(file.fileId));
     const freshTaskDescriptions = new Map<string, Awaited<ReturnType<typeof describeAttachmentEvidence>>>();
+    const standaloneImageObservation = getAccountingScope()?.kind === 'standalone' && !currentAgentTask() && !isStillImageCreationRequest(message);
+    const imageObservationStages:string[]=[];
+    const observeImages = async (files:typeof newAttachments,final=false) => {
+      const images=files.filter(file=>file.mimeType.startsWith('image/'));
+      if(!standaloneImageObservation || !images.length)return;
+      const descriptions=await observeStandaloneStillImages(images,{question:message,saved:catalog,initial:freshTaskDescriptions,deferEscalation:!final,onStatus:stage=>imageObservationStages.push(stage)});
+      for(const [id,description] of descriptions)freshTaskDescriptions.set(id,description);
+    };
+    await observeImages(newAttachments);
+    const retainedImageDescriptors=standaloneImageObservation
+      ? await retainNewImageObservations(newAttachments,freshTaskDescriptions,(attachment,description,index)=>
+        persistConversationAttachment(chatId,attachment,fileReferences?.[index]?.storageToken,{description,source:legacyImageSources.get(attachment.fileId),actorId}))
+      : new Map<string,ConversationAttachment>();
     for (const file of newAttachments.filter(file => identitySourceAllowed(file) &&
       (file.mimeType.startsWith("image/") || file.mimeType === "application/pdf"))) {
-      freshTaskDescriptions.set(file.fileId, await describeAttachmentEvidence(file));
+      if(!freshTaskDescriptions.has(file.fileId))freshTaskDescriptions.set(file.fileId, await describeAttachmentEvidence(file,{standaloneImages:standaloneImageObservation,question:message}));
     }
     const freshTaskEvidence = newAttachments.filter(identitySourceAllowed).flatMap(file => {
       const observation = freshTaskDescriptions.get(file.fileId);
@@ -981,14 +996,41 @@ async function executeChat(request: NextRequest) {
     // Preserve all inputs for idempotency and storage, but only selected PDFs
     // may supply evidence to classifiers, drafting, native inspection or review.
     const requestAttachments = uniqueAttachmentReferences([...newAttachments, ...restored.references]).filter(file => !timelineActive || !file.mimeType.startsWith("video/"));
+    const updatedSavedImageDescriptors=new Map<string,ConversationAttachment>();
+    const retainImageRefinements=async()=>{
+      for(const [fileId,descriptor] of retainedImageDescriptors){
+        const description=freshTaskDescriptions.get(fileId);
+        if(description&&(description.observedSummary!==descriptor.observedSummary||description.summaryModel!==descriptor.summaryModel||description.summaryCoverage!==descriptor.summaryCoverage)){
+          retainedImageDescriptors.set(fileId,await updateSavedImageObservation(chatId,descriptor,actorId,description));
+        }
+      }
+      if(standaloneImageObservation)for(const file of restored.references.filter(file=>file.mimeType.startsWith('image/'))){
+        const original=savedVideoSourceByFileId.get(file.fileId);
+        const descriptor=original?(updatedSavedImageDescriptors.get(original.id)??original):undefined;
+        const description=freshTaskDescriptions.get(file.fileId);
+        if(descriptor&&description&&(description.observationAt!==descriptor.observationAt||description.observedSummary!==descriptor.observedSummary||description.summaryModel!==descriptor.summaryModel||description.summaryCoverage!==descriptor.summaryCoverage)){
+          const owner=await getChatById(descriptor.chatId??chatId);
+          if(owner?.actorId!==actorId)throw new Error('Saved image source is not available to this actor.');
+          updatedSavedImageDescriptors.set(descriptor.id,await updateSavedImageObservation(owner.id,descriptor,actorId,description));
+        }
+      }
+    };
+    // Retain observations of restored sources as well as new uploads before a
+    // premium escalation can fail. Final interpretation refines these same IDs.
+    await observeImages(requestAttachments);
+    await retainImageRefinements();
+    await observeImages(requestAttachments,true);
+    await retainImageRefinements();
     const attachments = requestAttachments.filter(file => !freshPdfSelection || file.mimeType !== "application/pdf" || !newAttachments.some(fresh=>fresh.fileId===file.fileId) || freshPdfSelection.fileIds.has(file.fileId)).map(file =>
+      standaloneImageObservation && file.mimeType.startsWith('image/')
+        ? imageObservationAsText(file,freshTaskDescriptions.get(file.fileId)!) :
       file.mimeType === "application/pdf" && /\b(signature|signed|handwrit\w*|layout|colou?r|font|stamp|scan|visual|diagram|chart|figure|formatting|photo|picture|annotation)\b/i.test(message)
         ? { ...file, nativeInspectionRequired: true } : file
     );
     const images = attachments.flatMap(file => file.imageDataUrl ? [file.imageDataUrl] : []);
     const savedAttachments: ConversationAttachment[] = attachmentDecision.selections.map(item =>
       ({
-        ...item.attachment,
+        ...(updatedSavedImageDescriptors.get(item.attachment.id)??item.attachment),
         conversationUsage: (item.attachment.mimeType.startsWith("video/")
           ? explicitlyRequestsVideo(message, item.attachment)
           : explicitlyReferencesAttachment(message, item.attachment))
@@ -999,6 +1041,7 @@ async function executeChat(request: NextRequest) {
     const attachmentSourceIds = restored.sourceIds;
     const excludedPdfSourceIds = new Set<string>();
     const selectionContext = () => timelineContext + "\n" + (mediaMemory?.context ?? "") + "\n" + attachmentAccessContext([], savedAttachments.filter(file=>!excludedPdfSourceIds.has(file.id)), unavailableAttachments, attachmentSourceIds)
+      + (standaloneImageObservation&&requestAttachments.some(file=>file.mimeType.startsWith('image/'))?'\nImage source retained privately; the current response model receives labelled textual visual observations. It has not directly inspected raw pixels.':'')
       + (attachmentDecision.clarification ? `\nAsk the user this clarification before attempting an answer about a file: ${JSON.stringify(attachmentDecision.clarification)}` : "");
     console.log("[Chat API] received attachments", { count: attachments.length });
     attachments.forEach((attachment) => {
@@ -1247,8 +1290,8 @@ async function executeChat(request: NextRequest) {
       const clarificationAttachments: ConversationAttachment[] = [];
       if (pdfProgress.projectClarification) {
         for (const [index, attachment] of newAttachments.entries()) {
-          const saved = await persistConversationAttachment(chatId, attachment, fileReferences?.[index]?.storageToken,
-            {description: freshTaskDescriptions.get(attachment.fileId) ?? await describeAttachmentEvidence(attachment),
+          const saved = retainedImageDescriptors.get(attachment.fileId) ?? await persistConversationAttachment(chatId, attachment, fileReferences?.[index]?.storageToken,
+            {description: freshTaskDescriptions.get(attachment.fileId) ?? await describeAttachmentEvidence(attachment,{standaloneImages:standaloneImageObservation,question:message}),
              source: legacyImageSources.get(attachment.fileId), actorId});
           clarificationAttachments.push({...saved, conversationUsage: "uploaded"});
         }
@@ -2119,14 +2162,15 @@ async function executeChat(request: NextRequest) {
 
             const startEvent = reasoningState.start();
             emitChunk(startEvent);
+            for(const stage of [...new Set(imageObservationStages)])emitChunk({type:'metadata',imageObservation:stage,detail:stage});
             console.log("[Chat API] reasoning_start emitted", { requestId, categories: startEvent.categories });
 
             console.log("[Chat API] Saving user message...");
             for (const [index, attachment] of newAttachments.entries()) {
               const description = timelineActive && isVideoAttachment(attachment)
                 ? { observedSummary: "Explicit sampled timeline requested; see measured event evidence.", summaryModel: "timeline-pending", summaryCoverage: "metadata" as const }
-                : freshTaskDescriptions.get(attachment.fileId) ?? await describeAttachmentEvidence(attachment);
-              const saved = await persistConversationAttachment(chatId, attachment, fileReferences?.[index]?.storageToken, { description, source: legacyImageSources.get(attachment.fileId), actorId });
+                : freshTaskDescriptions.get(attachment.fileId) ?? await describeAttachmentEvidence(attachment,{standaloneImages:standaloneImageObservation,question:message});
+              const saved = retainedImageDescriptors.get(attachment.fileId) ?? await persistConversationAttachment(chatId, attachment, fileReferences?.[index]?.storageToken, { description, source: legacyImageSources.get(attachment.fileId), actorId });
               pdfSources.set(attachment.fileId, saved);
               savedAttachments.push({
                 ...saved, conversationUsage: "uploaded" as const

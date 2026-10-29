@@ -604,19 +604,19 @@ test('accepted exposure cannot promote truncated streaming output to a safe chec
 });
 
 
-test('owner acceptance replays a saved Google block to attachment fallback and continues without observing twice',async t=>{
+test('legacy explicit Google observation replays accepted block without observing twice',async t=>{
  const f=fakeLedger();let sends=0;const oldKey=process.env.GOOGLE_API_KEY;process.env.GOOGLE_API_KEY='offline-fixture';
  t.after(()=>{if(oldKey===undefined)delete process.env.GOOGLE_API_KEY;else process.env.GOOGLE_API_KEY=oldKey;});
  t.mock.method(accountingDispatch,'createAccountingFetch',(provider:Parameters<typeof createAccountingFetch>[0])=>actualAccountingFetch(provider,async()=>{
   sends++;return Response.json({responseId:'saved-blocked-observation',modelVersion:'gemini-2.5-flash',promptFeedback:{blockReason:'OTHER'},usageMetadata:{promptTokenCount:10}});
  },f.factory));
  const image={fileId:'file',fileName:'photo.png',mimeType:'image/png',preview:'Stored photo metadata',imageDataUrl:'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/f9sAAAAASUVORK5CYII='};
- await assert.rejects(runWithStandaloneAccounting(context,()=>describeAttachmentEvidence(image)),{code:'standalone_outcome_unknown'});
+ await assert.rejects(runWithStandaloneAccounting(context,()=>describeAttachmentEvidence(image,{standaloneImages:false})),{code:'standalone_outcome_unknown'});
  const held=f.attempts[0];const preserved=JSON.stringify(held);
  f.service.uncertainExposureAccepted=async()=>true;
  let remaining=false;
  const result=await runWithStandaloneAccounting({...context,resumed:true},async()=>{
-  const summary=await describeAttachmentEvidence(image);remaining=true;return summary;
+  const summary=await describeAttachmentEvidence(image,{standaloneImages:false});remaining=true;return summary;
  });
  assert.equal(result.summaryModel,'source-excerpt');assert.equal(result.summaryCoverage,'metadata');assert.equal(remaining,true);
  assert.equal(sends,1);assert.equal(JSON.stringify(held),preserved,'blocked response stays uncertain with identical exposure and evidence');

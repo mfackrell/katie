@@ -662,6 +662,23 @@ export function createStoredUploadService(storage: Storage, secret: string, opti
       registerVideoTiming(record.reference, record.decoderTiming);
       return getVideoTiming(record.reference);
     },
+    async updateImageObservation(chatId:string,attachment:ConversationAttachment,actorId:string,description:Partial<ConversationAttachment>):Promise<ConversationAttachment>{
+      const path=conversationPath(chatId,attachment.id);
+      const stored=await objects.download(`${path}.json`);
+      if(!stored.data)throw new UploadInputError('Saved image evidence metadata is unavailable.');
+      const record=JSON.parse(await stored.data.text());
+      const image=record.reference?.imageDataUrl;
+      if(record.actorId!==actorId || !record.reference?.mimeType?.startsWith('image/') || typeof image!=='string' ||
+        createHash('sha256').update(image).digest('hex')!==description.observationSourceHash)
+        throw new UploadInputError('Saved image evidence identity does not match its trusted source.');
+      const previous=record.evidenceDescriptor??attachment;
+      const descriptor:ConversationAttachment={...previous,...description,id:attachment.id,chatId,actorId,fileName:previous.fileName,mimeType:previous.mimeType};
+      const history=[...(Array.isArray(record.observationHistory)?record.observationHistory:[]),previous];
+      const saved=await objects.upload(`${path}.json`,JSON.stringify({...record,evidenceDescriptor:descriptor,observationHistory:history}),{contentType:'application/json',upsert:true});
+      if(saved.error)throw new Error('Unable to retain the new image observation.');
+      await writeCatalogEntry(chatId,descriptor);
+      return descriptor;
+    },
     async restore(chatId: string, attachment: ConversationAttachment, expectedActorId?: string): Promise<FileReference> {
       const path = conversationPath(chatId, attachment.id);
       const stored = await objects.download(`${path}.json`);
@@ -1052,6 +1069,7 @@ export const hydrateStoredAttachments = (references: FileReference[]) =>
 
 export const persistConversationAttachment = (chatId: string, reference: FileReference, token?: string, options?: { source?: Blob; description?: Partial<ConversationAttachment>; actorId?: string }) => getUploadService().persist(chatId, reference, token, options);
 export const restoreConversationAttachment = (chatId: string, attachment: ConversationAttachment, actorId?: string) => getUploadService().restore(chatId, attachment, actorId);
+export const updateSavedImageObservation = (chatId:string,attachment:ConversationAttachment,actorId:string,description:Partial<ConversationAttachment>) => getUploadService().updateImageObservation(chatId,attachment,actorId,description);
 export const recoverSavedVideoFrames = (chatId: string, attachment: ConversationAttachment, actorId: string) => getUploadService().recoverSavedVideoFrames(chatId, attachment, actorId);
 export const recoverUploadVideoFrames = (referenceToken: string) => getUploadService().recoverUploadVideoFrames(referenceToken);
 export const removeConversationAttachments = (chatId: string, actorId?: string) => getUploadService().removeConversation(chatId, actorId);

@@ -7,7 +7,7 @@ import type { DailyUsage, UsageTotals } from '@/lib/standalone-accounting/daily'
 interface Configuration { timezone: string; per_call_limit_microusd: string | null; request_limit_microusd: string | null; budget_revision: number }
 interface Pending { id: string; requestId: string; provider: string; model: string; category: string; preparedHash: string; pricingVersion: string; budgetRevision: number; reservedMicrousd: string; reason: string; pauseReason: string | null; resolvedModel: string | null; estimatorVersion: string; tradeoffs: string | null; createdAt: string; preview: { textBytes: number; imageCount: number; imageBytes: number; inputTokens: number; imageTokens: number; outputAllowance: number; assumptions: string[]; issues: string[]; status: string }; requestExposure: UsageTotals }
 type DecisionAttempt = Pick<Pending, 'id' | 'requestId' | 'preparedHash' | 'pricingVersion' | 'budgetRevision' | 'reservedMicrousd'>;
-interface ActiveAttempt extends DecisionAttempt { provider: string; model: string; category: string; state: 'reserved' | 'dispatched' | 'uncertain'; exposureAccepted?: boolean }
+interface ActiveAttempt extends DecisionAttempt { provider: string; model: string; category: string; state: 'reserved' | 'dispatched' | 'uncertain'; exposureAccepted?: boolean; continuationBlockedReason?: string | null; pollableRunpod?: boolean }
 interface Snapshot { configuration: Configuration | null; daily: DailyUsage | null; pending: Pending[]; active?: ActiveAttempt[]; alerts?: Array<{ attemptId: string; provider: string; model: string; kind: string; message: string; actualMicrousd: string | null; reservedMicrousd: string }> }
 interface Props { rail?: boolean; actorId: string; chatId: string; onResumeAttempt?: (attempt: { attemptId: string; requestId: string }) => Promise<void> | void }
 
@@ -24,6 +24,27 @@ function parseDollars(value: string) {
 }
 function Tokens({ totals }: { totals: UsageTotals }) {
   return <span>In {totals.inputTokens.toLocaleString()}{totals.missingInputCount > 0 && ` + unknown (${totals.missingInputCount})`} · Out {totals.outputTokens.toLocaleString()}{totals.missingOutputCount > 0 && ` + unknown (${totals.missingOutputCount})`}</span>;
+}
+
+function displayedCost(totals: UsageTotals) {
+  return dollars((BigInt(totals.estimatedCostMicrousd) + BigInt(totals.estimatedInfrastructureMicrousd ?? '0')).toString());
+}
+
+function InfrastructureEstimate({totals}: {totals: UsageTotals}) {
+  return BigInt(totals.estimatedInfrastructureMicrousd ?? '0') > 0n
+    ? <span>RunPod estimated infrastructure cost {dollars(totals.estimatedInfrastructureMicrousd!)} · actual cost unconfirmed</span> : null;
+}
+function ProviderUsage({provider}: {provider: UsageTotals & {provider: string}}) {
+  if (provider.provider === 'runpod') return <>
+    <InfrastructureEstimate totals={provider}/>
+    {(BigInt(provider.estimatedCostMicrousd) > 0n || provider.unknownCostCount === 0) && <span>{BigInt(provider.estimatedInfrastructureMicrousd ?? '0') > 0n ? ' · ' : ''}RunPod actual cost {dollars(provider.estimatedCostMicrousd)}</span>}
+    {provider.unknownCostCount > 0 && BigInt(provider.estimatedInfrastructureMicrousd ?? '0') === 0n && <span>RunPod · actual cost unconfirmed</span>}
+  </>;
+  return <><strong>{provider.provider}</strong> <Tokens totals={provider}/> · {dollars(provider.estimatedCostMicrousd)}</>;
+}
+function ModelCost({model}: {model: UsageTotals & {provider: string}}) {
+  if (model.provider === 'runpod') return <ProviderUsage provider={model}/>;
+  return <>{dollars(model.estimatedCostMicrousd)}{model.unknownCostCount > 0 && ' + unknown'}</>;
 }
 
 export function StandaloneUsage({ actorId, chatId, onResumeAttempt, rail = false }: Props) {
@@ -76,7 +97,7 @@ export function StandaloneUsage({ actorId, chatId, onResumeAttempt, rail = false
     });
   }
   async function resumeReserved(attempt: ActiveAttempt) {
-    if (attempt.state !== 'reserved') return;
+    if (attempt.continuationBlockedReason || (attempt.state !== 'reserved' && !attempt.pollableRunpod)) return;
     setBusy(attempt.id); setError(''); setNotice('');
     try {
       await requestSavedResume({ attemptId: attempt.id, requestId: attempt.requestId });
@@ -86,7 +107,7 @@ export function StandaloneUsage({ actorId, chatId, onResumeAttempt, rail = false
     finally { setBusy(''); }
   }
   async function acceptExposure(attempt: ActiveAttempt) {
-    if (attempt.state !== 'uncertain' || !snapshot?.configuration) return;
+    if (attempt.continuationBlockedReason || attempt.state !== 'uncertain' || !snapshot?.configuration) return;
     setBusy(attempt.id); setError(''); setNotice('');
     const retained = `Uncertain exposure accepted · ${dollars(attempt.reservedMicrousd)} retained`;
     let accepted = false;
@@ -123,16 +144,17 @@ export function StandaloneUsage({ actorId, chatId, onResumeAttempt, rail = false
     <section className="space-y-2">
       <h3 className="text-sm font-semibold text-white">Daily usage</h3>
       <div className="flex flex-wrap gap-2"><label>Scope <select aria-label="Scope" className="rounded bg-zinc-900 p-1" value={scope} onChange={e=>setScope(e.target.value as typeof scope)}><option value="this-agent">This agent</option><option value="all">All standalone</option></select></label><button type="button" className="underline" onClick={openSettings}>Budget & timezone</button><button type="button" className="underline" onClick={()=>void refresh()}>Refresh</button></div>
-      {daily ? <div className="space-y-1"><p>Today <strong>{dollars(daily.totals.estimatedCostMicrousd)}</strong></p><p>Pending {dollars(daily.totals.pendingExposureMicrousd)}</p><p>Uncertain {dollars(daily.totals.uncertainExposureMicrousd)}</p><p><Tokens totals={daily.totals}/></p>{daily.providers.map(provider=><p key={provider.provider}>{provider.provider} · {dollars(provider.estimatedCostMicrousd)} · <Tokens totals={provider}/></p>)}</div> : <p>{error || refreshError || "Loading usage…"}</p>}
+      {daily ? <div className="space-y-1"><p>Today <strong>{displayedCost(daily.totals)}</strong>{BigInt(daily.totals.estimatedInfrastructureMicrousd ?? '0') > 0n && ' including infrastructure estimate'}</p><p>Pending {dollars(daily.totals.pendingExposureMicrousd)}</p><p>Uncertain {dollars(daily.totals.uncertainExposureMicrousd)}</p><p><Tokens totals={daily.totals}/></p>{daily.totals.estimatedInfrastructureMicrousd !== '0' && <p><InfrastructureEstimate totals={daily.totals}/></p>}{daily.providers.map(provider=><p key={provider.provider}><ProviderUsage provider={provider}/></p>)}</div> : <p>{error || refreshError || "Loading usage…"}</p>}
       <details className="rounded border border-white/10 p-2"><summary className="cursor-pointer">Models, activity & earlier exposure</summary>
     {daily && <>
-      <p className="mt-2">{daily.date} · {daily.timezone} · Estimated cost {dollars(daily.totals.estimatedCostMicrousd)} · Pending {dollars(daily.totals.pendingExposureMicrousd)} · Uncertain {dollars(daily.totals.uncertainExposureMicrousd)}</p>
+      <p className="mt-2">{daily.date} · {daily.timezone} · Estimated cost {displayedCost(daily.totals)} · Pending {dollars(daily.totals.pendingExposureMicrousd)} · Uncertain {dollars(daily.totals.uncertainExposureMicrousd)}</p>
+      <p className="mt-1"><InfrastructureEstimate totals={daily.totals}/></p>
       <p className="mt-1"><Tokens totals={daily.totals} />{daily.totals.unknownCostCount > 0 && ` · ${daily.totals.unknownCostCount} call(s) with unknown cost; displayed cost is incomplete.`}</p>
-      <div className="mt-2 flex flex-wrap gap-x-5 gap-y-1">{daily.providers.map(provider => <p key={provider.provider}><strong>{provider.provider}</strong> <Tokens totals={provider} /> · {dollars(provider.estimatedCostMicrousd)}</p>)}</div>
+      <div className="mt-2 flex flex-wrap gap-x-5 gap-y-1">{daily.providers.map(provider => <p key={provider.provider}><ProviderUsage provider={provider}/></p>)}</div>
       {daily.unresolvedEarlier.attemptCount > 0 && <p className="mt-2 rounded border border-amber-400/30 p-2 text-amber-200">Earlier unresolved exposure ({daily.unresolvedEarlier.attemptCount} attempts): pending {dollars(daily.unresolvedEarlier.pendingExposureMicrousd)} · uncertain {dollars(daily.unresolvedEarlier.uncertainExposureMicrousd)}. Kept separate from today; still reserved on the original requests.</p>}
       <details className="mt-2"><summary className="cursor-pointer">Models & activity, including hidden helpers ({daily.totals.attemptCount} attempts)</summary>
-        <div className="mt-2 overflow-x-auto"><table className="w-full text-left"><thead><tr><th className="pr-4">Provider / model</th><th className="pr-4">Activity</th><th className="pr-4">Tokens</th><th>Estimated cost</th></tr></thead><tbody>{daily.models.map(model => <tr key={JSON.stringify([model.provider, model.model, model.category])}><td className="py-1 pr-4">{model.provider} / {model.model}</td><td className="pr-4">{model.category}</td><td className="pr-4"><Tokens totals={model} /></td><td>{dollars(model.estimatedCostMicrousd)}{model.unknownCostCount > 0 && ' + unknown'}</td></tr>)}</tbody></table></div>
-        <ul className="mt-2 space-y-1">{daily.attempts.map(attempt => <li key={attempt.id}>{new Intl.DateTimeFormat(undefined, { timeZone: daily.timezone, hour: '2-digit', minute: '2-digit', second: '2-digit' }).format(new Date(attempt.dispatched_at || attempt.created_at))} · {attempt.provider}/{attempt.model} · {attempt.category} · {attempt.state} · {attempt.actual_microusd === null ? 'cost unknown / not settled' : dollars(attempt.actual_microusd)}</li>)}</ul>
+        <div className="mt-2 overflow-x-auto"><table className="w-full text-left"><thead><tr><th className="pr-4">Provider / model</th><th className="pr-4">Activity</th><th className="pr-4">Tokens</th><th>Estimated cost</th></tr></thead><tbody>{daily.models.map(model => <tr key={JSON.stringify([model.provider, model.model, model.category])}><td className="py-1 pr-4">{model.provider} / {model.model}</td><td className="pr-4">{model.category}</td><td className="pr-4"><>{model.provider === 'runpod' ? 'Infrastructure billing' : <Tokens totals={model}/>}</></td><td><ModelCost model={model}/></td></tr>)}</tbody></table></div>
+        <ul className="mt-2 space-y-1">{daily.attempts.map(attempt => <li key={attempt.id}>{new Intl.DateTimeFormat(undefined, { timeZone: daily.timezone, hour: '2-digit', minute: '2-digit', second: '2-digit' }).format(new Date(attempt.dispatched_at || attempt.created_at))} · {attempt.provider}/{attempt.model} · {attempt.category} · {attempt.state} · {attempt.actual_microusd === null ? (attempt.provider === 'runpod' && attempt.state === 'estimated' ? `estimated infrastructure cost ${dollars(attempt.reserved_microusd)} · actual cost unconfirmed` : 'cost unknown / not settled') : dollars(attempt.actual_microusd)}</li>)}</ul>
       </details>
     </>}
 
@@ -145,13 +167,15 @@ export function StandaloneUsage({ actorId, chatId, onResumeAttempt, rail = false
       {activeAttempts.map(attempt => <div key={attempt.id} className="rounded border border-white/20 p-2">
         <p>{attempt.provider}/{attempt.model} · {attempt.category} · {attempt.state} · exposure {dollars(attempt.reservedMicrousd)}</p>
         <p className="mt-1 break-all text-zinc-400">Exact attempt {attempt.id} · original request {attempt.requestId}</p>
-        {attempt.state === 'reserved' && <button type="button" disabled={Boolean(busy)} onClick={() => void resumeReserved(attempt)} className="mr-4 mt-1 rounded border border-white/30 px-2 py-1 disabled:opacity-50">Resume saved work</button>}
+        {attempt.continuationBlockedReason && <p role="alert" className="mt-1 text-amber-200">{attempt.continuationBlockedReason} This technical limitation cannot be changed by continuing the same request.</p>}
+        {(attempt.state === 'reserved' || attempt.pollableRunpod) && !attempt.continuationBlockedReason && <button type="button" disabled={Boolean(busy)} onClick={() => void resumeReserved(attempt)} className="mr-4 mt-1 rounded border border-white/30 px-2 py-1 disabled:opacity-50">{attempt.pollableRunpod ? 'Check saved Qwen analysis' : 'Resume saved work'}</button>}
         {attempt.state === 'uncertain' && <>
           <p className="mt-1">The provider call was already sent, but exact usage/cost could not be confirmed. Continuing will retain the full reserved exposure and will not resend this attempt.</p>
           {attempt.exposureAccepted && <p className="mt-1 text-amber-100">Uncertain exposure accepted · {dollars(attempt.reservedMicrousd)} retained</p>}
-          <button type="button" disabled={Boolean(busy) || !configurationComplete} onClick={() => void acceptExposure(attempt)} className="mr-4 mt-1 rounded border border-amber-300/50 px-2 py-1 disabled:opacity-50">{attempt.exposureAccepted ? 'Continue remaining work' : 'Accept exposure & continue'}</button>
+          {!attempt.continuationBlockedReason && !attempt.pollableRunpod && <button type="button" disabled={Boolean(busy) || !configurationComplete} onClick={() => void acceptExposure(attempt)} className="mr-4 mt-1 rounded border border-amber-300/50 px-2 py-1 disabled:opacity-50">{attempt.exposureAccepted ? 'Continue remaining work' : 'Accept exposure & continue'}</button>}
         </>}
-        {attempt.state === 'dispatched' && <p className="mt-1">Already dispatched. Cancellation stops remaining work where possible; spending exposure stays held until provider usage is reconciled.</p>}
+        {attempt.pollableRunpod && <p className="mt-1">Qwen image analysis was already submitted. Checking the saved analysis polls that existing job and will not submit another image analysis.</p>}
+        {attempt.state === 'dispatched' && !attempt.pollableRunpod && <p className="mt-1">Already dispatched. Cancellation stops remaining work where possible; spending exposure stays held until provider usage is reconciled.</p>}
         <button type="button" disabled={Boolean(busy)} onClick={() => void decide(attempt, 'cancel')} className="mt-1 underline disabled:opacity-50">Cancel remaining work</button>
       </div>)}
     </div>}
@@ -160,13 +184,13 @@ export function StandaloneUsage({ actorId, chatId, onResumeAttempt, rail = false
       <p className="mt-1">Purpose: {attempt.reason || attempt.category}. Paused: {attempt.pauseReason || 'Approval required.'}</p>
       <p className="mt-1">Requested model: {attempt.model} · resolved model: {attempt.resolvedModel || 'not yet known'}.</p>
       <p className="mt-1">Preflight estimate {dollars(attempt.reservedMicrousd)}. This estimate is not a guaranteed spending ceiling.</p>
-      <p className="mt-1">Payload: {attempt.preview.textBytes.toLocaleString()} text bytes · {attempt.preview.imageCount} images ({attempt.preview.imageBytes.toLocaleString()} inline bytes) · estimated input {attempt.preview.inputTokens.toLocaleString()} tokens, including image allowance {attempt.preview.imageTokens.toLocaleString()} · configured output allowance {attempt.preview.outputAllowance.toLocaleString()} tokens.</p>
-      <p className="mt-1">This original request already has estimated settled cost {dollars(attempt.requestExposure.estimatedCostMicrousd)}, pending {dollars(attempt.requestExposure.pendingExposureMicrousd)} (includes this proposal), uncertain {dollars(attempt.requestExposure.uncertainExposureMicrousd)}.{attempt.requestExposure.unknownCostCount > 0 && ' Some dispatched costs remain unknown.'}</p>
+      <p className="mt-1">{attempt.provider === 'runpod' ? <>Fixed reviewed infrastructure reservation {dollars(attempt.reservedMicrousd)}. Exact actual cost requires an authoritative execution receipt.</> : <>Payload: {attempt.preview.textBytes.toLocaleString()} text bytes · {attempt.preview.imageCount} images ({attempt.preview.imageBytes.toLocaleString()} inline bytes) · estimated input {attempt.preview.inputTokens.toLocaleString()} tokens, including image allowance {attempt.preview.imageTokens.toLocaleString()} · configured output allowance {attempt.preview.outputAllowance.toLocaleString()} tokens.</>}</p>
+      <p className="mt-1">This original request already has estimated settled cost {dollars(attempt.requestExposure.estimatedCostMicrousd)}, pending {dollars(attempt.requestExposure.pendingExposureMicrousd)} (includes this proposal), uncertain {dollars(attempt.requestExposure.uncertainExposureMicrousd)}.{BigInt(attempt.requestExposure.estimatedInfrastructureMicrousd ?? '0') > 0n && <> <InfrastructureEstimate totals={attempt.requestExposure}/>.</>}{attempt.requestExposure.unknownCostCount > 0 && ' Some dispatched costs remain unknown.'}</p>
       <p className="mt-1">Thresholds: per call {snapshot.configuration?.per_call_limit_microusd == null ? 'unset' : dollars(snapshot.configuration.per_call_limit_microusd)} · original request {snapshot.configuration?.request_limit_microusd == null ? 'unset' : dollars(snapshot.configuration.request_limit_microusd)}.</p>
       <details className="mt-1"><summary className="cursor-pointer">Estimate assumptions & uncertainty</summary><ul className="mt-1 list-disc pl-4">{[...attempt.preview.assumptions, ...attempt.preview.issues].map((assumption, index) => <li key={index}>{assumption}</li>)}</ul></details>
       {attempt.tradeoffs && <p className="mt-1 text-amber-100">Reduction tradeoffs: {attempt.tradeoffs}</p>}
       <p className="mt-1 break-all text-zinc-400">Exact attempt {attempt.id} · pricing {attempt.pricingVersion} · estimator {attempt.estimatorVersion} · budget revision {attempt.budgetRevision}</p>
-      <div className="mt-2 flex gap-4"><button type="button" disabled={Boolean(busy) || !configurationComplete} onClick={() => void decide(attempt, 'approve_once')} className="rounded bg-amber-100 px-3 py-1 text-zinc-950 disabled:opacity-50">Approve once</button><button type="button" disabled={Boolean(busy)} onClick={() => void decide(attempt, 'reduce_cost')} className="underline disabled:opacity-50">Reduce cost</button><button type="button" disabled={Boolean(busy)} onClick={() => void decide(attempt, 'cancel')} className="underline disabled:opacity-50">Cancel</button></div>
+      <div className="mt-2 flex gap-4"><button type="button" disabled={Boolean(busy) || !configurationComplete} onClick={() => void decide(attempt, 'approve_once')} className="rounded bg-amber-100 px-3 py-1 text-zinc-950 disabled:opacity-50">Approve once</button>{attempt.provider === 'runpod' ? <span>Fixed reservation: use fewer images in a new request to reduce cost.</span> : <button type="button" disabled={Boolean(busy)} onClick={() => void decide(attempt, 'reduce_cost')} className="underline disabled:opacity-50">Reduce cost</button>}<button type="button" disabled={Boolean(busy)} onClick={() => void decide(attempt, 'cancel')} className="underline disabled:opacity-50">Cancel</button></div>
     </div>)}
 
 
@@ -195,7 +219,7 @@ export function StandaloneUsage({ actorId, chatId, onResumeAttempt, rail = false
   return <section aria-label="Standalone daily usage" className="relative z-20 shrink-0 min-w-0 border-b border-white/10 bg-zinc-950 px-3 py-1.5 text-xs text-zinc-300 sm:px-5">
     <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
       <span className="min-w-0 truncate" aria-live="polite">
-        {daily ? <>Today {dollars(daily.totals.estimatedCostMicrousd)} · Pending {dollars(daily.totals.pendingExposureMicrousd)} · <Tokens totals={daily.totals} /></> : (error || refreshError) ? 'Usage unavailable' : 'Loading usage…'}
+        {daily ? <>Today {displayedCost(daily.totals)}{BigInt(daily.totals.estimatedInfrastructureMicrousd ?? '0') > 0n && ' including infrastructure estimate'} · Pending {dollars(daily.totals.pendingExposureMicrousd)} · <Tokens totals={daily.totals} /></> : (error || refreshError) ? 'Usage unavailable' : 'Loading usage…'}
       </span>
       <button type="button" aria-expanded={usageOpen} aria-controls="standalone-usage-details" className="shrink-0 underline underline-offset-2" onClick={() => { setUsageOpen(v => !v); setReviewOpen(false); }}>Usage details</button>
       {(approvals > 0 || unresolved > 0 || alerts > 0) && <span className="flex min-w-0 flex-wrap items-center gap-2 text-amber-200" role="status">
@@ -220,13 +244,14 @@ export function StandaloneUsage({ actorId, chatId, onResumeAttempt, rail = false
       </div>
       {snapshot && !configurationComplete && <p className="mt-2 text-amber-200">Configuration required: choose a timezone and explicitly set both approval thresholds before paid standalone calls.</p>}
     {daily && <>
-      <p className="mt-2">{daily.date} · {daily.timezone} · Estimated cost {dollars(daily.totals.estimatedCostMicrousd)} · Pending {dollars(daily.totals.pendingExposureMicrousd)} · Uncertain {dollars(daily.totals.uncertainExposureMicrousd)}</p>
+      <p className="mt-2">{daily.date} · {daily.timezone} · Estimated cost {displayedCost(daily.totals)} · Pending {dollars(daily.totals.pendingExposureMicrousd)} · Uncertain {dollars(daily.totals.uncertainExposureMicrousd)}</p>
+      <p className="mt-1"><InfrastructureEstimate totals={daily.totals}/></p>
       <p className="mt-1"><Tokens totals={daily.totals} />{daily.totals.unknownCostCount > 0 && ` · ${daily.totals.unknownCostCount} call(s) with unknown cost; displayed cost is incomplete.`}</p>
-      <div className="mt-2 flex flex-wrap gap-x-5 gap-y-1">{daily.providers.map(provider => <p key={provider.provider}><strong>{provider.provider}</strong> <Tokens totals={provider} /> · {dollars(provider.estimatedCostMicrousd)}</p>)}</div>
+      <div className="mt-2 flex flex-wrap gap-x-5 gap-y-1">{daily.providers.map(provider => <p key={provider.provider}><ProviderUsage provider={provider}/></p>)}</div>
       {daily.unresolvedEarlier.attemptCount > 0 && <p className="mt-2 rounded border border-amber-400/30 p-2 text-amber-200">Earlier unresolved exposure ({daily.unresolvedEarlier.attemptCount} attempts): pending {dollars(daily.unresolvedEarlier.pendingExposureMicrousd)} · uncertain {dollars(daily.unresolvedEarlier.uncertainExposureMicrousd)}. Kept separate from today; still reserved on the original requests.</p>}
       <details className="mt-2"><summary className="cursor-pointer">Models & activity, including hidden helpers ({daily.totals.attemptCount} attempts)</summary>
-        <div className="mt-2 overflow-x-auto"><table className="w-full text-left"><thead><tr><th className="pr-4">Provider / model</th><th className="pr-4">Activity</th><th className="pr-4">Tokens</th><th>Estimated cost</th></tr></thead><tbody>{daily.models.map(model => <tr key={JSON.stringify([model.provider, model.model, model.category])}><td className="py-1 pr-4">{model.provider} / {model.model}</td><td className="pr-4">{model.category}</td><td className="pr-4"><Tokens totals={model} /></td><td>{dollars(model.estimatedCostMicrousd)}{model.unknownCostCount > 0 && ' + unknown'}</td></tr>)}</tbody></table></div>
-        <ul className="mt-2 space-y-1">{daily.attempts.map(attempt => <li key={attempt.id}>{new Intl.DateTimeFormat(undefined, { timeZone: daily.timezone, hour: '2-digit', minute: '2-digit', second: '2-digit' }).format(new Date(attempt.dispatched_at || attempt.created_at))} · {attempt.provider}/{attempt.model} · {attempt.category} · {attempt.state} · {attempt.actual_microusd === null ? 'cost unknown / not settled' : dollars(attempt.actual_microusd)}</li>)}</ul>
+        <div className="mt-2 overflow-x-auto"><table className="w-full text-left"><thead><tr><th className="pr-4">Provider / model</th><th className="pr-4">Activity</th><th className="pr-4">Tokens</th><th>Estimated cost</th></tr></thead><tbody>{daily.models.map(model => <tr key={JSON.stringify([model.provider, model.model, model.category])}><td className="py-1 pr-4">{model.provider} / {model.model}</td><td className="pr-4">{model.category}</td><td className="pr-4"><>{model.provider === 'runpod' ? 'Infrastructure billing' : <Tokens totals={model}/>}</></td><td><ModelCost model={model}/></td></tr>)}</tbody></table></div>
+        <ul className="mt-2 space-y-1">{daily.attempts.map(attempt => <li key={attempt.id}>{new Intl.DateTimeFormat(undefined, { timeZone: daily.timezone, hour: '2-digit', minute: '2-digit', second: '2-digit' }).format(new Date(attempt.dispatched_at || attempt.created_at))} · {attempt.provider}/{attempt.model} · {attempt.category} · {attempt.state} · {attempt.actual_microusd === null ? (attempt.provider === 'runpod' && attempt.state === 'estimated' ? `estimated infrastructure cost ${dollars(attempt.reserved_microusd)} · actual cost unconfirmed` : 'cost unknown / not settled') : dollars(attempt.actual_microusd)}</li>)}</ul>
       </details>
     </>}
 
@@ -252,13 +277,15 @@ export function StandaloneUsage({ actorId, chatId, onResumeAttempt, rail = false
       {activeAttempts.map(attempt => <div key={attempt.id} className="rounded border border-white/20 p-2">
         <p>{attempt.provider}/{attempt.model} · {attempt.category} · {attempt.state} · exposure {dollars(attempt.reservedMicrousd)}</p>
         <p className="mt-1 break-all text-zinc-400">Exact attempt {attempt.id} · original request {attempt.requestId}</p>
-        {attempt.state === 'reserved' && <button type="button" disabled={Boolean(busy)} onClick={() => void resumeReserved(attempt)} className="mr-4 mt-1 rounded border border-white/30 px-2 py-1 disabled:opacity-50">Resume saved work</button>}
+        {attempt.continuationBlockedReason && <p role="alert" className="mt-1 text-amber-200">{attempt.continuationBlockedReason} This technical limitation cannot be changed by continuing the same request.</p>}
+        {(attempt.state === 'reserved' || attempt.pollableRunpod) && !attempt.continuationBlockedReason && <button type="button" disabled={Boolean(busy)} onClick={() => void resumeReserved(attempt)} className="mr-4 mt-1 rounded border border-white/30 px-2 py-1 disabled:opacity-50">{attempt.pollableRunpod ? 'Check saved Qwen analysis' : 'Resume saved work'}</button>}
         {attempt.state === 'uncertain' && <>
           <p className="mt-1">The provider call was already sent, but exact usage/cost could not be confirmed. Continuing will retain the full reserved exposure and will not resend this attempt.</p>
           {attempt.exposureAccepted && <p className="mt-1 text-amber-100">Uncertain exposure accepted · {dollars(attempt.reservedMicrousd)} retained</p>}
-          <button type="button" disabled={Boolean(busy) || !configurationComplete} onClick={() => void acceptExposure(attempt)} className="mr-4 mt-1 rounded border border-amber-300/50 px-2 py-1 disabled:opacity-50">{attempt.exposureAccepted ? 'Continue remaining work' : 'Accept exposure & continue'}</button>
+          {!attempt.continuationBlockedReason && !attempt.pollableRunpod && <button type="button" disabled={Boolean(busy) || !configurationComplete} onClick={() => void acceptExposure(attempt)} className="mr-4 mt-1 rounded border border-amber-300/50 px-2 py-1 disabled:opacity-50">{attempt.exposureAccepted ? 'Continue remaining work' : 'Accept exposure & continue'}</button>}
         </>}
-        {attempt.state === 'dispatched' && <p className="mt-1">Already dispatched. Cancellation stops remaining work where possible; spending exposure stays held until provider usage is reconciled.</p>}
+        {attempt.pollableRunpod && <p className="mt-1">Qwen image analysis was already submitted. Checking the saved analysis polls that existing job and will not submit another image analysis.</p>}
+        {attempt.state === 'dispatched' && !attempt.pollableRunpod && <p className="mt-1">Already dispatched. Cancellation stops remaining work where possible; spending exposure stays held until provider usage is reconciled.</p>}
         <button type="button" disabled={Boolean(busy)} onClick={() => void decide(attempt, 'cancel')} className="mt-1 underline disabled:opacity-50">Cancel remaining work</button>
       </div>)}
     </div>}
@@ -267,13 +294,13 @@ export function StandaloneUsage({ actorId, chatId, onResumeAttempt, rail = false
       <p className="mt-1">Purpose: {attempt.reason || attempt.category}. Paused: {attempt.pauseReason || 'Approval required.'}</p>
       <p className="mt-1">Requested model: {attempt.model} · resolved model: {attempt.resolvedModel || 'not yet known'}.</p>
       <p className="mt-1">Preflight estimate {dollars(attempt.reservedMicrousd)}. This estimate is not a guaranteed spending ceiling.</p>
-      <p className="mt-1">Payload: {attempt.preview.textBytes.toLocaleString()} text bytes · {attempt.preview.imageCount} images ({attempt.preview.imageBytes.toLocaleString()} inline bytes) · estimated input {attempt.preview.inputTokens.toLocaleString()} tokens, including image allowance {attempt.preview.imageTokens.toLocaleString()} · configured output allowance {attempt.preview.outputAllowance.toLocaleString()} tokens.</p>
-      <p className="mt-1">This original request already has estimated settled cost {dollars(attempt.requestExposure.estimatedCostMicrousd)}, pending {dollars(attempt.requestExposure.pendingExposureMicrousd)} (includes this proposal), uncertain {dollars(attempt.requestExposure.uncertainExposureMicrousd)}.{attempt.requestExposure.unknownCostCount > 0 && ' Some dispatched costs remain unknown.'}</p>
+      <p className="mt-1">{attempt.provider === 'runpod' ? <>Fixed reviewed infrastructure reservation {dollars(attempt.reservedMicrousd)}. Exact actual cost requires an authoritative execution receipt.</> : <>Payload: {attempt.preview.textBytes.toLocaleString()} text bytes · {attempt.preview.imageCount} images ({attempt.preview.imageBytes.toLocaleString()} inline bytes) · estimated input {attempt.preview.inputTokens.toLocaleString()} tokens, including image allowance {attempt.preview.imageTokens.toLocaleString()} · configured output allowance {attempt.preview.outputAllowance.toLocaleString()} tokens.</>}</p>
+      <p className="mt-1">This original request already has estimated settled cost {dollars(attempt.requestExposure.estimatedCostMicrousd)}, pending {dollars(attempt.requestExposure.pendingExposureMicrousd)} (includes this proposal), uncertain {dollars(attempt.requestExposure.uncertainExposureMicrousd)}.{BigInt(attempt.requestExposure.estimatedInfrastructureMicrousd ?? '0') > 0n && <> <InfrastructureEstimate totals={attempt.requestExposure}/>.</>}{attempt.requestExposure.unknownCostCount > 0 && ' Some dispatched costs remain unknown.'}</p>
       <p className="mt-1">Thresholds: per call {snapshot.configuration?.per_call_limit_microusd == null ? 'unset' : dollars(snapshot.configuration.per_call_limit_microusd)} · original request {snapshot.configuration?.request_limit_microusd == null ? 'unset' : dollars(snapshot.configuration.request_limit_microusd)}.</p>
       <details className="mt-1"><summary className="cursor-pointer">Estimate assumptions & uncertainty</summary><ul className="mt-1 list-disc pl-4">{[...attempt.preview.assumptions, ...attempt.preview.issues].map((assumption, index) => <li key={index}>{assumption}</li>)}</ul></details>
       {attempt.tradeoffs && <p className="mt-1 text-amber-100">Reduction tradeoffs: {attempt.tradeoffs}</p>}
       <p className="mt-1 break-all text-zinc-400">Exact attempt {attempt.id} · pricing {attempt.pricingVersion} · estimator {attempt.estimatorVersion} · budget revision {attempt.budgetRevision}</p>
-      <div className="mt-2 flex gap-4"><button type="button" disabled={Boolean(busy) || !configurationComplete} onClick={() => void decide(attempt, 'approve_once')} className="rounded bg-amber-100 px-3 py-1 text-zinc-950 disabled:opacity-50">Approve once</button><button type="button" disabled={Boolean(busy)} onClick={() => void decide(attempt, 'reduce_cost')} className="underline disabled:opacity-50">Reduce cost</button><button type="button" disabled={Boolean(busy)} onClick={() => void decide(attempt, 'cancel')} className="underline disabled:opacity-50">Cancel</button></div>
+      <div className="mt-2 flex gap-4"><button type="button" disabled={Boolean(busy) || !configurationComplete} onClick={() => void decide(attempt, 'approve_once')} className="rounded bg-amber-100 px-3 py-1 text-zinc-950 disabled:opacity-50">Approve once</button>{attempt.provider === 'runpod' ? <span>Fixed reservation: use fewer images in a new request to reduce cost.</span> : <button type="button" disabled={Boolean(busy)} onClick={() => void decide(attempt, 'reduce_cost')} className="underline disabled:opacity-50">Reduce cost</button>}<button type="button" disabled={Boolean(busy)} onClick={() => void decide(attempt, 'cancel')} className="underline disabled:opacity-50">Cancel</button></div>
     </div>)}
 
     </div>}

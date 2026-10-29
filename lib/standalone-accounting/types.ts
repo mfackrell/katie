@@ -1,6 +1,6 @@
 /** Integer millionths of one USD. Never a floating point dollar amount. */
 export type Microusd = string;
-export type LedgerAttemptState = 'paused' | 'reserved' | 'dispatched' | 'settled' | 'uncertain' | 'cancelled';
+export type LedgerAttemptState = 'paused' | 'reserved' | 'dispatched' | 'settled' | 'uncertain' | 'cancelled' | 'estimated';
 export interface ResponseCheckpoint { status: number; statusText: string; headers: [string,string][]; body: string }
 export interface LedgerAttempt {
   id:string; owner_id:string; actor_id:string; chat_id:string; request_id:string; attempt_key:string;

@@ -23,6 +23,8 @@ export interface UsageTotals {
   missingInputCount: number;
   missingOutputCount: number;
   estimatedCostMicrousd: string;
+  /** Retained infrastructure reservations without an authoritative monetary receipt. */
+  estimatedInfrastructureMicrousd?: string;
   pendingExposureMicrousd: string;
   uncertainExposureMicrousd: string;
   unknownCostCount: number;
@@ -73,21 +75,28 @@ export function localDayWindow(timezone: string, now = new Date()) {
   return { timezone, date, start: boundary(date), end: boundary(following) };
 }
 
-const empty = (): UsageTotals => ({ inputTokens: 0, outputTokens: 0, missingInputCount: 0, missingOutputCount: 0, estimatedCostMicrousd: '0', pendingExposureMicrousd: '0', uncertainExposureMicrousd: '0', unknownCostCount: 0, attemptCount: 0 });
+const empty = (): UsageTotals => ({ inputTokens: 0, outputTokens: 0, missingInputCount: 0, missingOutputCount: 0, estimatedCostMicrousd: '0', estimatedInfrastructureMicrousd: '0', pendingExposureMicrousd: '0', uncertainExposureMicrousd: '0', unknownCostCount: 0, attemptCount: 0 });
 const amount = (value: string | null | undefined) => value && /^\d+$/.test(value) ? BigInt(value) : null;
 const unresolved = (attempt: DailyAttempt) => ['paused', 'reserved', 'dispatched', 'uncertain', 'pending_approval', 'awaiting_approval'].includes(attempt.state);
 function add(totals: UsageTotals, attempt: DailyAttempt) {
   totals.attemptCount++;
-  const dispatched = Boolean(attempt.dispatched_at) || ['dispatched', 'settled', 'uncertain'].includes(attempt.state);
+  const dispatched = Boolean(attempt.dispatched_at) || ['dispatched', 'settled', 'uncertain', 'estimated'].includes(attempt.state);
   const token = (value: number | null | undefined) => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : null;
-  if (dispatched) {
+  // Infrastructure execution is not token-priced; absent token counters are
+  // inapplicable, rather than missing provider token usage.
+  if (dispatched && attempt.provider !== 'runpod') {
     const input = token(attempt.usage?.inputTokens), output = token(attempt.usage?.outputTokens);
     if (input === null) totals.missingInputCount++; else totals.inputTokens += input;
     if (output === null) totals.missingOutputCount++; else totals.outputTokens += output;
   }
   const actual = amount(attempt.actual_microusd), reserved = amount(attempt.reserved_microusd);
   if (actual !== null) totals.estimatedCostMicrousd = (BigInt(totals.estimatedCostMicrousd) + actual).toString();
-  else if (dispatched) totals.unknownCostCount++;
+  else if (dispatched) {
+    totals.unknownCostCount++;
+    if (attempt.provider === 'runpod' && attempt.state === 'estimated') {
+      totals.estimatedInfrastructureMicrousd = (BigInt(totals.estimatedInfrastructureMicrousd ?? '0') + (reserved ?? 0n)).toString();
+    }
+  }
   if (attempt.state === 'uncertain' || (attempt.state === 'dispatched' && actual === null)) {
     totals.uncertainExposureMicrousd = (BigInt(totals.uncertainExposureMicrousd) + (reserved ?? 0n)).toString();
   } else if (unresolved(attempt)) {
