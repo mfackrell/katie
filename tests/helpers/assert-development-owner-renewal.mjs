@@ -11,7 +11,7 @@ export async function assertDevelopmentOwnerRenewal(db,rival,{project,account,tr
  const receipt={version:1,repository:'mfackrell/katie',run_id:125,issue_number:829,outcome:'BLOCKED',pr_url:null,tested_head_sha:null,reviewed_head_sha:null,checks:{build:'failure',test:'',review:'',repair:'skipped',retest:'',final_review:''}};
  await db.query("update agent_missions set status='blocked' where project_id=$1",[project]);
  await db.query("update work_projects set status='blocked',deadline=now()+interval '8 hours',lease=null,lease_until=null where id=$1",[project]);
- await db.query("update agent_missions set calls=2,actual_tokens=14419,reserved_tokens=14419,deadline=now()-interval '1 hour' where id=$1",[mission]);
+ await db.query("update agent_missions set token_allowance=120000,calls=2,actual_tokens=14419,reserved_tokens=14419,deadline=now()-interval '1 hour' where id=$1",[mission]);
  await db.query("update mission_assignments set status='failed' where id=$1",[task]);
  await db.query("update agent_tasks set status='blocked',external=jsonb_set(external,'{receipt}',$2::jsonb) where id=$1",[task,receipt]);
  await db.query("update benchmark_native_spending_approvals set deadline=now()-interval '1 hour' where id=$1",[old.id]);
