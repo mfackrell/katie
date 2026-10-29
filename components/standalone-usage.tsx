@@ -7,7 +7,7 @@ import type { DailyUsage, UsageTotals } from '@/lib/standalone-accounting/daily'
 interface Configuration { timezone: string; per_call_limit_microusd: string | null; request_limit_microusd: string | null; budget_revision: number }
 interface Pending { id: string; requestId: string; provider: string; model: string; category: string; preparedHash: string; pricingVersion: string; budgetRevision: number; reservedMicrousd: string; reason: string; pauseReason: string | null; resolvedModel: string | null; estimatorVersion: string; tradeoffs: string | null; createdAt: string; preview: { textBytes: number; imageCount: number; imageBytes: number; inputTokens: number; imageTokens: number; outputAllowance: number; assumptions: string[]; issues: string[]; status: string }; requestExposure: UsageTotals }
 type DecisionAttempt = Pick<Pending, 'id' | 'requestId' | 'preparedHash' | 'pricingVersion' | 'budgetRevision' | 'reservedMicrousd'>;
-interface ActiveAttempt extends DecisionAttempt { provider: string; model: string; category: string; state: 'reserved' | 'dispatched' | 'uncertain' }
+interface ActiveAttempt extends DecisionAttempt { provider: string; model: string; category: string; state: 'reserved' | 'dispatched' | 'uncertain'; exposureAccepted?: boolean }
 interface Snapshot { configuration: Configuration | null; daily: DailyUsage | null; pending: Pending[]; active?: ActiveAttempt[]; alerts?: Array<{ attemptId: string; provider: string; model: string; kind: string; message: string; actualMicrousd: string | null; reservedMicrousd: string }> }
 interface Props { actorId: string; chatId: string; onResumeAttempt?: (attempt: { attemptId: string; requestId: string }) => Promise<void> | void }
 
@@ -84,6 +84,22 @@ export function StandaloneUsage({ actorId, chatId, onResumeAttempt }: Props) {
       await refresh();
     } catch (failure) { setError(failure instanceof Error ? failure.message : 'Saved work could not resume.'); }
     finally { setBusy(''); }
+  }
+  async function acceptExposure(attempt: ActiveAttempt) {
+    if (attempt.state !== 'uncertain' || !snapshot?.configuration) return;
+    setBusy(attempt.id); setError(''); setNotice('');
+    const retained = `Uncertain exposure accepted · ${dollars(attempt.reservedMicrousd)} retained`;
+    let accepted = false;
+    try {
+      const result = await api('attempts', { method: 'POST', body: JSON.stringify({ actorId, chatId, attemptId: attempt.id, action: 'accept_exposure', preparedHash: attempt.preparedHash, pricingVersion: attempt.pricingVersion, budgetRevision: snapshot.configuration.budget_revision, reservedMicrousd: attempt.reservedMicrousd }) });
+      accepted = true; setNotice(`${retained} · continuing remaining work`);
+      await requestSavedResume({ attemptId: result.attemptId as string, requestId: result.requestId as string });
+      setNotice(`${retained} · remaining work completed`);
+    } catch (failure) {
+      if (accepted) setNotice(`${retained} · continuation stopped`);
+      setError(failure instanceof Error ? failure.message : 'Remaining work could not continue.');
+    }
+    finally { await refresh(); setBusy(''); }
   }
   async function decide(attempt: DecisionAttempt, action: 'approve_once' | 'reduce_cost' | 'cancel') {
     setBusy(attempt.id); setError(''); setNotice('');
@@ -164,7 +180,12 @@ export function StandaloneUsage({ actorId, chatId, onResumeAttempt }: Props) {
         <p>{attempt.provider}/{attempt.model} · {attempt.category} · {attempt.state} · exposure {dollars(attempt.reservedMicrousd)}</p>
         <p className="mt-1 break-all text-zinc-400">Exact attempt {attempt.id} · original request {attempt.requestId}</p>
         {attempt.state === 'reserved' && <button type="button" disabled={Boolean(busy)} onClick={() => void resumeReserved(attempt)} className="mr-4 mt-1 rounded border border-white/30 px-2 py-1 disabled:opacity-50">Resume saved work</button>}
-        {attempt.state !== 'reserved' && <p className="mt-1">Already dispatched. Cancellation stops remaining work where possible; spending exposure stays held until provider usage is reconciled.</p>}
+        {attempt.state === 'uncertain' && <>
+          <p className="mt-1">The provider call was already sent, but exact usage/cost could not be confirmed. Continuing will retain the full reserved exposure and will not resend this attempt.</p>
+          {attempt.exposureAccepted && <p className="mt-1 text-amber-100">Uncertain exposure accepted · {dollars(attempt.reservedMicrousd)} retained</p>}
+          <button type="button" disabled={Boolean(busy) || !configurationComplete} onClick={() => void acceptExposure(attempt)} className="mr-4 mt-1 rounded border border-amber-300/50 px-2 py-1 disabled:opacity-50">{attempt.exposureAccepted ? 'Continue remaining work' : 'Accept exposure & continue'}</button>
+        </>}
+        {attempt.state === 'dispatched' && <p className="mt-1">Already dispatched. Cancellation stops remaining work where possible; spending exposure stays held until provider usage is reconciled.</p>}
         <button type="button" disabled={Boolean(busy)} onClick={() => void decide(attempt, 'cancel')} className="mt-1 underline disabled:opacity-50">Cancel remaining work</button>
       </div>)}
     </div>}

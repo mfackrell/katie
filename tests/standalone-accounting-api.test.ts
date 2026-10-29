@@ -27,6 +27,8 @@ beforeEach(() => {
     },
     async rpc(name: string, args: Record<string, unknown>) {
       calls.push({ name, args });
+      if (name === 'standalone_uncertain_exposure_accepted') return {data:false,error:null};
+      if (name === 'standalone_accept_uncertain_exposure') return {data:{accepted_at:'2026-10-29T20:00:00Z'},error:null};
       if (name === 'standalone_register_pricing') return { data: true, error: null };
       if (name === 'standalone_authorize_scope') return { data: allowed && args.p_owner === owner && args.p_actor === actorId && args.p_chat === chatId, error: null };
       if (name === 'standalone_snapshot') return { data: { configuration: { owner_id: owner, timezone: 'UTC', per_call_limit_microusd: '1000', request_limit_microusd: '5000', budget_revision: 7 }, attempts: [row], events }, error: null };
@@ -161,4 +163,20 @@ test('post-dispatch cancellation returns successful held-exposure status without
   const snapshot = await (await usage(request(`usage?actorId=${actorId}&chatId=${chatId}`))).json();
   assert.equal(snapshot.active.length, 0, 'already cancelled work is not offered another cancel action');
   assert.equal(snapshot.daily.totals.uncertainExposureMicrousd, '100000', 'cancellation cannot erase dispatched spending exposure');
+});
+
+
+test('accept exposure authenticates the exact uncertain attempt and uses current owner revision',async()=>{
+ row={...row,state:'uncertain',budget_revision:1};
+ const body={actorId,chatId,attemptId,action:'accept_exposure',preparedHash:row.prepared_hash,pricingVersion:row.pricing_version,budgetRevision:7,reservedMicrousd:row.reserved_microusd};
+ const result=await decide(request('attempts',body));assert.equal(result.status,200);
+ assert.equal((await result.json()).heldExposureMicrousd,row.reserved_microusd);assert.equal(row.state,'uncertain');
+ const call=calls.find(call=>call.name==='standalone_accept_uncertain_exposure')!;
+ assert.equal(call.args.p_owner,owner);assert.equal(call.args.p_revision,7);assert.equal(call.args.p_reserved,row.reserved_microusd);
+ allowed=false;const before=calls.length;
+ assert.equal((await decide(request('attempts',body))).status,403);assert.equal(calls.length,before+1,'only scope authorization runs for a revoked owner');
+ allowed=true;
+ assert.equal((await decide(request('attempts',{...body,reservedMicrousd:'1'}))).status,409);
+ assert.equal((await decide(request('attempts',{...body,budgetRevision:1}))).status,409);
+ assert.equal((await decide(request('attempts',{...body,exposureAccepted:true}))).status,400,'browser flags cannot supply continuation authority');
 });

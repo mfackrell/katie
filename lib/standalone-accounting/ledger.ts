@@ -35,6 +35,8 @@ export function createStandaloneLedger(db:LedgerDatabase=getSupabaseAdminClient(
     reprice:(ownerId:string,attemptId:string,pricingVersion:string,estimate:Record<string,unknown>)=>rpc<LedgerAttempt>('reprice_attempt',{p_owner:ownerId,p_attempt:attemptId,p_pricing:pricingVersion,p_estimate:estimate}),
     claimDispatch:(ownerId:string,attemptId:string)=>rpc<LedgerAttempt|null>('claim_dispatch',{p_owner:ownerId,p_attempt:attemptId}),
     settle:(i:SettlementInput)=>rpc<LedgerAttempt>('settle',{p_owner:i.ownerId,p_attempt:i.attemptId,p_provider:i.provider,p_receipt:i.providerReceiptId,p_actual:i.actualMicrousd,p_usage:i.usage,p_evidence:i.evidence}),
+    acceptUncertainExposure:(ownerId:string,attemptId:string,budgetRevision:number,reservedMicrousd:string)=>rpc<{accepted_at:string}>('accept_uncertain_exposure',{p_owner:ownerId,p_attempt:attemptId,p_revision:budgetRevision,p_reserved:reservedMicrousd}),
+    uncertainExposureAccepted:(ownerId:string,attemptId:string)=>rpc<boolean>('uncertain_exposure_accepted',{p_owner:ownerId,p_attempt:attemptId}),
     markUncertain:(ownerId:string,attemptId:string,reason='Provider outcome unknown')=>rpc<LedgerAttempt>('mark_uncertain',{p_owner:ownerId,p_attempt:attemptId,p_reason:reason}),
     cancel:(ownerId:string,attemptId:string)=>rpc<LedgerAttempt>('cancel',{p_owner:ownerId,p_attempt:attemptId}),
     recordPartialUsage:(ownerId:string,attemptId:string,usage:Record<string,unknown>,evidence:Record<string,unknown>)=>rpc<LedgerAttempt>('record_partial_usage',{p_owner:ownerId,p_attempt:attemptId,p_usage:usage,p_evidence:evidence}),

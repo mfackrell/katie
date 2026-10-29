@@ -22,6 +22,31 @@ function restore(checkpoint: ResponseCheckpoint): Response {
   headers.delete('content-encoding'); headers.delete('content-length');
   return new Response(checkpoint.body, { status: checkpoint.status, statusText: checkpoint.statusText, headers });
 }
+/** Acknowledgement permits using real saved output, never inventing a lost result.
+ * Completion is checked separately from receipt/usage evidence. */
+function safeUncertainCheckpoint(checkpoint: ResponseCheckpoint, provider: AccountingProvider, endpoint: string): boolean {
+  if (checkpoint.status < 200 || checkpoint.status >= 300) return false;
+  const streaming = new Headers(checkpoint.headers).get('content-type')?.includes('text/event-stream');
+  if (streaming) {
+    const events = checkpoint.body.replace(/\r\n/g,'\n').split('\n\n').flatMap(event => {
+      const data=event.split('\n').filter(line=>line.startsWith('data:')).map(line=>line.slice(5).trimStart()).join('\n');
+      if(!data||data==='[DONE]')return [];try{return [JSON.parse(data)];}catch{return [{error:true}];}
+    });
+    if(events.some(event=>event.error||event.type==='error'))return false;
+    if(provider==='anthropic')return events.some(event=>event.type==='message_stop')&&events.some(event=>event.type==='message_delta'&&event.delta?.stop_reason&&event.delta.stop_reason!=='max_tokens');
+    if(endpoint.endsWith('/responses'))return events.some(event=>event.type==='response.completed');
+    if(provider!=='google')return checkpoint.body.includes('[DONE]')&&events.some(event=>event.choices?.some((choice:{finish_reason?:string})=>['stop','tool_calls','function_call'].includes(choice.finish_reason??'')))&&!events.some(event=>event.choices?.some((choice:{finish_reason?:string})=>choice.finish_reason&&!['stop','tool_calls','function_call'].includes(choice.finish_reason)));
+    return events.some(event=>event.candidates?.some((candidate:{finishReason?:string})=>candidate.finishReason==='STOP'));
+  }
+  try {
+    const body=JSON.parse(checkpoint.body);
+    if(body.error)return false;
+    if(provider==='anthropic')return Array.isArray(body.content)&&Boolean(body.stop_reason)&&body.stop_reason!=='max_tokens';
+    if(provider==='google')return body.candidates?.some((candidate:{finishReason?:string})=>candidate.finishReason==='STOP')===true;
+    if(endpoint.endsWith('/responses'))return body.status==='completed'&&Array.isArray(body.output);
+    return Array.isArray(body.choices)&&body.choices.length>0&&body.choices.every((choice:{finish_reason?:string;message?:unknown})=>Boolean(choice.message)&&['stop','tool_calls','function_call'].includes(choice.finish_reason??''));
+  }catch{return false;}
+}
 type Receipt = { id: string; responseId: string | null; input: number; output: number; cached: number; written: number; cacheWriteTtl: '5m' | '30m' | '12h' | null; cacheWriteUnpriced: boolean; resolvedModel: string | null; raw: Record<string, unknown> };
 /** Only actual Anthropic breakpoint locations establish TTL. Arbitrary JSON in
  * tool arguments, schemas or results cannot prove a provider cache policy. */
@@ -259,6 +284,13 @@ export function createAccountingFetch(provider: AccountingProvider, transport: t
       await ledger.settle({ ownerId: context.userId, attemptId, provider, providerReceiptId: receipt.id,
         actualMicrousd, usage, evidence });
     };
+    if (attempt?.state === 'uncertain') {
+      // Only durable server authority can acknowledge exposure. Never claim
+      // dispatch, release money or reconcile incomplete evidence in this branch.
+      if (!await ledger.uncertainExposureAccepted(context.userId,attempt.id)) throw Object.assign(failure('outcome_unknown','The provider call was already sent. Accept its uncertain exposure before continuing remaining work.'),{attemptId:attempt.id});
+      if (!attempt.response_checkpoint || !safeUncertainCheckpoint(attempt.response_checkpoint,provider,prepared.endpoint)) throw Object.assign(failure('safe_checkpoint_unavailable','Uncertain exposure is accepted and retained, but this call has no complete saved response to replay safely. It will not be resent. Remaining dependent work cannot continue from this checkpoint.'),{attemptId:attempt.id});
+      return restore(attempt.response_checkpoint);
+    }
     if (attempt?.response_checkpoint) {
       if (attempt.state !== 'settled') await reconcile(attempt.response_checkpoint, attempt.id);
       return restore(attempt.response_checkpoint);

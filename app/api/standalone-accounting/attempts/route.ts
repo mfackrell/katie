@@ -6,7 +6,7 @@ import type { FrozenPreparedRequest } from '@/lib/standalone-accounting/estimate
 import { cancelStandaloneAttempt } from '@/lib/standalone-accounting/dispatch';
 import { accountingError, accountingScope, noStore, scopeSchema } from '../_shared';
 
-const decision = scopeSchema.extend({ attemptId: z.string().uuid(), action: z.enum(['approve_once', 'reduce_cost', 'cancel']), preparedHash: z.string().regex(/^[a-f0-9]{64}$/), pricingVersion: z.string().min(1).max(200), budgetRevision: z.number().int().nonnegative(), reservedMicrousd: z.string().regex(/^\d+$/) }).strict();
+const decision = scopeSchema.extend({ attemptId: z.string().uuid(), action: z.enum(['approve_once', 'reduce_cost', 'cancel', 'accept_exposure']), preparedHash: z.string().regex(/^[a-f0-9]{64}$/), pricingVersion: z.string().min(1).max(200), budgetRevision: z.number().int().nonnegative(), reservedMicrousd: z.string().regex(/^\d+$/) }).strict();
 export async function POST(request: NextRequest) {
   try {
     const input = decision.parse(await request.json());
@@ -14,8 +14,13 @@ export async function POST(request: NextRequest) {
     const snapshot = await ledger.snapshot(ownerId);
     const attempt = snapshot.attempts.find(row => row.id === input.attemptId && row.actor_id === input.actorId && row.chat_id === input.chatId);
     if (!attempt) return NextResponse.json({ error: 'Attempt unavailable.' }, { status: 404, headers: noStore });
-    if (attempt.prepared_hash !== input.preparedHash || attempt.pricing_version !== input.pricingVersion || attempt.budget_revision !== input.budgetRevision || attempt.reserved_microusd !== input.reservedMicrousd) {
+    if (attempt.prepared_hash !== input.preparedHash || attempt.pricing_version !== input.pricingVersion || (input.action === 'accept_exposure' ? snapshot.configuration?.budget_revision !== input.budgetRevision : attempt.budget_revision !== input.budgetRevision) || attempt.reserved_microusd !== input.reservedMicrousd) {
       return NextResponse.json({ error: 'This proposal changed. Refresh and review its current estimate.' }, { status: 409, headers: noStore });
+    }
+    if (input.action === 'accept_exposure') {
+      if (attempt.state !== 'uncertain') return NextResponse.json({error:'Only an uncertain attempt can accept exposure.'},{status:409,headers:noStore});
+      const accepted=await ledger.acceptUncertainExposure(ownerId,attempt.id,input.budgetRevision,input.reservedMicrousd);
+      return NextResponse.json({attemptId:attempt.id,requestId:attempt.request_id,state:'uncertain',acceptedAt:accepted.accepted_at,heldExposureMicrousd:attempt.reserved_microusd,message:'Uncertain exposure accepted. Full reserved exposure is retained; continuing remaining work without resending this attempt.'},{headers:noStore});
     }
     if (input.action === 'approve_once') {
       const approved = await ledger.approve({ ownerId, attemptId: attempt.id, preparedHash: attempt.prepared_hash, pricingVersion: attempt.pricing_version, budgetRevision: attempt.budget_revision, reservedMicrousd: attempt.reserved_microusd });
