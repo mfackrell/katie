@@ -173,6 +173,7 @@ declare body text; original text; signature text;
 begin
  foreach signature in array array[
  'public.mission_call_capacity(uuid,uuid)','public.mission_development_task(uuid,uuid)',
+ 'public.save_project_development_dispatch(uuid,uuid,text,text,jsonb)',
  'public.checkpoint_mission_operational_evidence(uuid,uuid,jsonb)',
  'public.checkpoint_mission_review_model(uuid,uuid,text,jsonb)',
  'public.try_reserve_mission_capacity(uuid,uuid,uuid,text,integer,boolean)',

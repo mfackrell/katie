@@ -56,6 +56,8 @@ export async function assertDevelopmentOwnerRenewal(db,rival,{project,account,tr
  const claim=(await db.query('select claim_mission_work() c')).rows[0].c;
  assert.equal(claim.job.id,task);assert.equal(claim.mission.id,mission);
  assert.ok(Date.parse(claim.mission.deadline)>Date.now());
+ const saved=(await db.query("select save_project_development_dispatch($1,$2,'dispatching','Waiting for owner-renewed dispatch',(select external from agent_tasks where id=$1)) saved",[task,claim.job.lease])).rows[0].saved;
+ assert.equal(saved.id,task,'Leased reconciliation can persist on the renewed same task');
  assert.equal((await db.query("select commit_mission_work($1,$2,$3,'[]','waiting_external',null,null) ok",[task,claim.job.lease,{detail:'Awaiting separately authorized renewed native execution'}])).rows[0].ok,true);
  assert.equal((await db.query('select deadline<now() old from agent_missions where id=$1',[mission])).rows[0].old,true);
  // Exercise saved review/evidence checkpoints on this renewed mission without
