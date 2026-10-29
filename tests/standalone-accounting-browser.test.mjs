@@ -24,7 +24,8 @@ test('standalone browser: explicit settings, scopes, exact approval resume, redu
   const pending = (suffix, overrides = {}) => ({ parentStatus:'paused', continuationActionable:true, cancellationActionable:true, id: `attempt-${suffix}`, requestId: `original-${suffix}`, provider: 'openai', model: 'gpt-4o', resolvedModel: null, category: 'hidden_router', preparedHash: 'a'.repeat(64), pricingVersion: 'fixture-pricing-v1', estimatorVersion: 'saved-estimator-v1', budgetRevision: 1, reservedMicrousd: '300000', reason: 'Choose a reply model for this saved turn.', pauseReason: 'per_call_threshold', tradeoffs: null, createdAt: '2026-10-28T10:00:00Z', preview: { textBytes: 3200, imageCount: 2, imageBytes: 4096, inputTokens: 3500, imageTokens: 256, outputAllowance: 8192, assumptions: ['Input token count is an estimate, not a guaranteed spending ceiling.', 'All allowed output tokens include hidden reasoning.'], issues: [], status: 'estimated' }, requestExposure: totals(), ...overrides });
   let configuration = null, proposals = [], running = [], fail = false, resumeMode = 'paused', savedMessages = [], denyExposure = false, uncertainTotal = '100000', infrastructureTotal = '0';
   const decisions = [], resumes = [], configurations = [], scopes = [], external = [], unknownRoutes = [], errors = [], messageSnapshots = [];
-  let page;
+  let page;let holdUsage=false;const heldUsage=[];let usageRequests=0,usageInFlight=0,maxUsageInFlight=0;
+  const usageRequestIds=new Set();
   try {
     await mkdir(join(project, 'app/conversations/[id]'), { recursive: true });
     await symlink(join(root, 'node_modules'), join(project, 'node_modules'), 'dir');
@@ -45,6 +46,9 @@ test('standalone browser: explicit settings, scopes, exact approval resume, redu
     }
     browser = await chromium.launch({ executablePath: process.env.KATIE_TEST_CHROMIUM || await bundledChromium.executablePath(), args: bundledChromium.args, headless: true });
     page = await browser.newPage({ viewport: { width: 1280, height: 1100 } });
+    page.on('request',request=>{if(new URL(request.url()).pathname==='/api/standalone-accounting/usage'){usageRequestIds.add(request);usageRequests++;usageInFlight++;maxUsageInFlight=Math.max(maxUsageInFlight,usageInFlight);}});
+    const usageFinished=request=>{if(usageRequestIds.delete(request))usageInFlight--;};
+    page.on('requestfinished',usageFinished);page.on('requestfailed',usageFinished);
     page.on('pageerror', error => errors.push(error.message));
     await page.addInitScript(() => { window.__accountingResumeEvents = []; window.addEventListener('standalone-accounting-resume', event => window.__accountingResumeEvents.push(event.detail)); });
     await page.route('**/*', async route => {
@@ -56,6 +60,7 @@ test('standalone browser: explicit settings, scopes, exact approval resume, redu
       if (url.pathname.startsWith('/api/standalone-accounting/')) {
         assert.equal(request.headers().authorization, 'Bearer synthetic-browser-owner');
         if (url.pathname.endsWith('/usage')) {
+          if(holdUsage){await new Promise(resolve=>heldUsage.push(resolve));if(request.failure())return route.abort().catch(()=>{});}
           scopes.push(url.searchParams.get('scope'));
           if (fail) return reply({ error: 'Fixture accounting unavailable' }, 503);
           const all = url.searchParams.get('scope') === 'all';
@@ -380,6 +385,32 @@ test('standalone browser: explicit settings, scopes, exact approval resume, redu
     await composer.press('Enter');
     const followup=(await sent).postDataJSON();
     assert.equal(followup.images?.length??0,0);assert.equal(followup.fileReferences?.length??0,0);
+    await page.waitForTimeout(500);
+    // A slow refresh spans an interval plus focus/update storms. Transport stays single-flight.
+    const beforeSlow=usageRequests;maxUsageInFlight=0;holdUsage=true;
+    const slowStarted=page.waitForRequest(request=>new URL(request.url()).pathname==='/api/standalone-accounting/usage');
+    await usage.getByRole('button',{name:'Refresh',exact:true}).click();await slowStarted;
+    await page.evaluate(()=>{for(let i=0;i<10;i++){window.dispatchEvent(new Event('focus'));window.dispatchEvent(new Event('standalone-accounting-updated'));}});
+    await page.waitForTimeout(15500);
+    assert.equal(usageRequests,beforeSlow+1,'focus/update/timer must not overlap the slow HTTP request');
+    const queued=page.waitForRequest(request=>new URL(request.url()).pathname==='/api/standalone-accounting/usage');
+    holdUsage=false;heldUsage.splice(0).forEach(resolve=>resolve());await queued;await page.waitForTimeout(250);
+    assert.equal(usageRequests,beforeSlow+2,'one coalesced refresh follows the slow request');
+    assert.equal(maxUsageInFlight,1,'real browser never has concurrent usage transports');
+    const beforeHidden=usageRequests;
+    await page.evaluate(()=>{Object.defineProperty(document,'visibilityState',{configurable:true,get:()=> 'hidden'});window.dispatchEvent(new Event('focus'));document.dispatchEvent(new Event('visibilitychange'));});
+    await page.waitForTimeout(15500);assert.equal(usageRequests,beforeHidden,'hidden document does not poll');
+    const visibleRefresh=page.waitForRequest(request=>new URL(request.url()).pathname==='/api/standalone-accounting/usage');
+    await page.evaluate(()=>{delete document.visibilityState;document.dispatchEvent(new Event('visibilitychange'));});await visibleRefresh;await page.waitForTimeout(250);
+    // Scope replacement aborts the prior transport; old data cannot overwrite the new scope.
+    holdUsage=true;
+    const oldScope=page.waitForRequest(request=>new URL(request.url()).pathname==='/api/standalone-accounting/usage');
+    await usage.getByRole('button',{name:'Refresh',exact:true}).click();await oldScope;
+    const newScope=page.waitForRequest(request=>new URL(request.url()).pathname==='/api/standalone-accounting/usage'&&new URL(request.url()).searchParams.get('scope')==='all');
+    await usage.getByLabel('Scope').selectOption('all');await newScope;
+    holdUsage=false;heldUsage.splice(0).forEach(resolve=>resolve());
+    await usage.getByText(/In 999/).first().waitFor();
+    assert.equal(await usage.getByLabel('Scope').inputValue(),'all');
     assert.deepEqual(external, []); assert.deepEqual(unknownRoutes, []); assert.deepEqual(errors, []);
     console.log('Standalone browser screenshots: ' + screenshots);
   } catch (error) {

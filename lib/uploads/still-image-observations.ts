@@ -54,8 +54,8 @@ export async function escalateStillImageEvidence(images:string[],question:string
   if(scope?.kind==='standalone'){
     // Admission fence at the paid escalation boundary, including workflow replay.
     // A caught observation failure is never authorization to spend past Qwen.
-    const snapshot=await ledger.snapshot(scope.context.userId);
-    for(const attempt of snapshot.attempts){
+    const uncertain=await ledger.requestUncertainties(scope.context.userId,scope.context.requestId);
+    for(const attempt of uncertain){
       if(attempt.request_id===scope.context.requestId && attempt.provider==='runpod' && attempt.model===QWEN_STILL_POLICY.model &&
           attempt.state==='uncertain' && !await ledger.uncertainExposureAccepted(scope.context.userId,attempt.id))
         throw Object.assign(new StandaloneAccountingError('outcome_unknown','Qwen submission exposure is unresolved. Accept its exposure before continuing remaining image work.'),{attemptId:attempt.id});

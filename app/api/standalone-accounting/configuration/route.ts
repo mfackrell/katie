@@ -9,7 +9,7 @@ export async function GET(request: NextRequest) {
   try {
     const scope = scopeSchema.parse(Object.fromEntries(request.nextUrl.searchParams));
     const { ownerId, ledger } = await accountingScope(request, scope);
-    return NextResponse.json({ configuration: (await ledger.snapshot(ownerId)).configuration }, { headers: noStore });
+    return NextResponse.json({ configuration: await ledger.readConfiguration(ownerId) }, { headers: noStore });
   } catch (error) { return accountingError(error); }
 }
 export async function PATCH(request: NextRequest) {

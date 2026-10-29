@@ -1,3 +1,4 @@
+import type { DailyUsage, UsageTotals } from './daily';
 import type { PricingSnapshot } from './pricing';
 import { getSupabaseAdminClient } from '@/lib/data/supabase/admin';
 import type { AdmitAttemptInput, ApprovalInput, LedgerAttempt, LedgerConfiguration, LedgerSnapshot, ResponseCheckpoint, SettlementInput } from './types';
@@ -28,6 +29,11 @@ export function createStandaloneLedger(db:LedgerDatabase=getSupabaseAdminClient(
     createConversation:(ownerId:string,actorId:string,chatId:string,title:string)=>rpc<{id:string;actor_id:string;title:string;created_at:string;updated_at:string}>('create_conversation',{p_owner:ownerId,p_actor:actorId,p_chat:chatId,p_title:title}),
     registerPricing:(version:string,metadata:Record<string,unknown>)=>rpc<boolean>('register_pricing',{p_version:version,p_metadata:metadata}),
     configure:(ownerId:string,config:{timezone:string;perCallLimitMicrousd:string|null;requestLimitMicrousd:string|null})=>rpc<LedgerConfiguration>('configure',{p_owner:ownerId,p_timezone:config.timezone,p_call:config.perCallLimitMicrousd,p_request:config.requestLimitMicrousd}),
+    readConfiguration:(ownerId:string)=>rpc<LedgerConfiguration|null>('read_configuration',{p_owner:ownerId}),
+    usageSnapshot:(ownerId:string,actorId:string,chatId:string,all=false,before:string|null=null,beforeId:string|null=null)=>rpc<LedgerSnapshot & {daily:DailyUsage|null;flags:Record<string,{status?:string;error?:string;accepted:boolean;automatic:boolean;conflict:boolean}>;requestTotals:Record<string,UsageTotals>;alerts?:Array<{attemptId:string;provider:string;model:string;kind:string;message:string;actualMicrousd:string|null;reservedMicrousd:string}>}>('usage_snapshot',{p_owner:ownerId,p_actor:actorId,p_chat:chatId,p_all:all,p_before:before,p_before_id:beforeId}),
+    attemptDetails:(ownerId:string,attemptId:string)=>rpc<LedgerSnapshot>('attempt_details',{p_owner:ownerId,p_attempt:attemptId}),
+    requestUncertainties:(ownerId:string,requestId:string)=>rpc<Array<Pick<LedgerAttempt,'id'|'request_id'|'provider'|'model'|'state'>>>('request_uncertainties',{p_owner:ownerId,p_request:requestId}),
+    recentActivity:(ownerId:string,actorId:string|null,before:string|null,beforeId:string|null)=>rpc<LedgerAttempt[]>('recent_activity',{p_owner:ownerId,p_actor:actorId,p_before:before,p_before_id:beforeId}),
     snapshot:(ownerId:string)=>rpc<LedgerSnapshot>('snapshot',{p_owner:ownerId}),
     lookupAttempt:(ownerId:string,requestId:string,attemptKey:string)=>rpc<LedgerAttempt|null>('lookup_attempt',{p_owner:ownerId,p_request:requestId,p_key:attemptKey}),
     admit:(i:AdmitAttemptInput)=>rpc<LedgerAttempt>('admit',{p_owner:i.ownerId,p_actor:i.actorId,p_chat:i.chatId,p_request:i.requestId,p_key:i.attemptKey,p_hash:i.preparedHash,p_payload:i.preparedPayload,p_pricing:i.pricingVersion,p_provider:i.provider,p_model:i.model,p_reserved:i.reservedMicrousd,p_category:i.category,p_estimate:i.preflightEstimate,p_estimator:i.estimatorVersion,p_reason:i.reason}),

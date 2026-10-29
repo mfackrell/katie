@@ -1,8 +1,10 @@
+import {summarizeDailyUsage,summarizeUsageTotals} from '../lib/standalone-accounting/daily';
 import test, { beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { NextRequest } from 'next/server';
 import { GET as usage } from '../app/api/standalone-accounting/usage/route';
-import { PATCH as configure } from '../app/api/standalone-accounting/configuration/route';
+import { GET as history } from '../app/api/standalone-accounting/history/route';
+import { GET as readConfiguration, PATCH as configure } from '../app/api/standalone-accounting/configuration/route';
 import { POST as decide } from '../app/api/standalone-accounting/attempts/route';
 import { freezePreparedRequest, estimatePreparedRequest } from '../lib/standalone-accounting/estimate';
 import { PRICING_VERSION } from '../lib/standalone-accounting/pricing';
@@ -34,7 +36,9 @@ beforeEach(() => {
       if (name === 'standalone_accept_uncertain_exposure') return {data:{accepted_at:'2026-10-29T20:00:00Z'},error:null};
       if (name === 'standalone_register_pricing') return { data: true, error: null };
       if (name === 'standalone_authorize_scope') return { data: allowed && args.p_owner === owner && args.p_actor === actorId && args.p_chat === chatId, error: null };
-      if (name === 'standalone_snapshot') return { data: { configuration: { owner_id: owner, timezone: 'UTC', per_call_limit_microusd: '1000', request_limit_microusd: '5000', budget_revision: 7 }, attempts: [row], events }, error: null };
+      if(name==='standalone_read_configuration')return{data:{owner_id:owner,timezone:'UTC',per_call_limit_microusd:'1000',request_limit_microusd:'5000',budget_revision:7},error:null};
+      if(name==='standalone_recent_activity')return{data:args.p_before?[]:Array.from({length:25},(_,i)=>({...row,id:('00000000-0000-4000-8000-'+String(i).padStart(12,'0'))})),error:null};
+      if (name === 'standalone_usage_snapshot' || name === 'standalone_attempt_details') return { data: { configuration: { owner_id: owner, timezone: 'UTC', per_call_limit_microusd: '1000', request_limit_microusd: '5000', budget_revision: 7 }, attempts: [row], events, daily:summarizeDailyUsage([row],'UTC'),requestTotals:{[row.request_id]:summarizeUsageTotals([row])},flags:{[row.id]:{status:parentStatus,error:parentError,accepted:exposureAccepted,automatic:events.some(e=>e.kind==='uncertain_exposure_auto_authorized'),conflict:events.some(e=>['receipt_conflict','identifier_conflict','usage_conflict'].includes(String(e.kind)))}} }, error: null };
       if (name === 'standalone_cancel') {
         row = { ...row, state: ['paused', 'reserved'].includes(row.state) ? 'cancelled' : row.state === 'settled' ? 'settled' : 'uncertain', cancelled_by_owner_at: new Date().toISOString() };
         return { data: row, error: null };
@@ -69,7 +73,7 @@ test('daily response includes canonical ledger values but never prepared prompt'
 test('exact approval records only that attempt and never dispatches or starts a provider', async () => {
   const response = await decide(request('attempts', decision('approve_once')));
   assert.equal(response.status, 200);
-  assert.deepEqual(calls.map(call => call.name), ['standalone_authorize_scope', 'standalone_snapshot', 'standalone_approve']);
+  assert.deepEqual(calls.map(call => call.name), ['standalone_authorize_scope', 'standalone_attempt_details', 'standalone_approve']);
   assert.equal(calls[2].args.p_owner, owner);
   assert.equal(calls[2].args.p_attempt, attemptId);
   assert.equal(calls[2].args.p_hash, prepared.hash);
@@ -116,7 +120,7 @@ test('pending preview describes sizing, output allowance, original-request expos
 test('cancel uses durable cancellation without admitting or dispatching a new attempt', async () => {
   const response = await decide(request('attempts', decision('cancel')));
   assert.equal(response.status, 200);
-  assert.deepEqual(calls.map(call => call.name), ['standalone_authorize_scope', 'standalone_snapshot', 'standalone_cancel']);
+  assert.deepEqual(calls.map(call => call.name), ['standalone_authorize_scope', 'standalone_attempt_details', 'standalone_cancel']);
 });
 
 test('proposal uses immutable saved preflight evidence rather than recomputing current estimator', async () => {
@@ -162,7 +166,7 @@ test('post-dispatch cancellation returns successful held-exposure status without
   assert.equal(body.state, 'uncertain');
   assert.equal(body.heldExposureMicrousd, '100000');
   assert.match(body.message, /spending exposure remains held/);
-  assert.deepEqual(calls.map(call => call.name), ['standalone_authorize_scope', 'standalone_snapshot', 'standalone_cancel']);
+  assert.deepEqual(calls.map(call => call.name), ['standalone_authorize_scope', 'standalone_attempt_details', 'standalone_cancel']);
   const snapshot = await (await usage(request(`usage?actorId=${actorId}&chatId=${chatId}`))).json();
   assert.equal(snapshot.active.length, 0, 'already cancelled work is not offered another cancel action');
   assert.equal(snapshot.daily.totals.uncertainExposureMicrousd, '100000', 'cancellation cannot erase dispatched spending exposure');
@@ -222,4 +226,19 @@ test('durable automatic uncertainty is informational for paused and completed pa
  for(const status of ['paused','completed']){parentStatus=status;
  const body=await (await usage(request(`usage?actorId=${actorId}&chatId=${chatId}`))).json();
  assert.equal(body.active[0].uncertainAutoAuthorized,true);assert.equal(body.active[0].continuationActionable,false);assert.equal(body.active[0].cancellationActionable,false);assert.equal(body.active[0].reservedMicrousd,'20000');}
+});
+
+test('configuration reads one row and history requires an explicit keyset cursor for older pages',async()=>{
+ const config=await readConfiguration(request(`configuration?actorId=${actorId}&chatId=${chatId}`));assert.equal(config.status,200);
+ assert.deepEqual(calls.map(c=>c.name),['standalone_authorize_scope','standalone_read_configuration']);
+ calls=[];
+ const first=await (await history(request(`history?actorId=${actorId}&chatId=${chatId}`))).json();assert.equal(first.attempts.length,25);assert.ok(first.next.beforeId);
+ const next=await history(request(`history?actorId=${actorId}&chatId=${chatId}&before=${encodeURIComponent('2026-10-29T05:00:00+00:00')}&beforeId=${first.next.beforeId}`));assert.equal(next.status,200);assert.deepEqual((await next.json()).attempts,[]);
+ assert.ok(!calls.some(call=>call.name==='standalone_snapshot'));
+});
+test('usage uses a bounded server summary and does not enumerate workflows or authorizations with extra RPCs',async()=>{
+ row.state='uncertain';
+ const response=await usage(request(`usage?actorId=${actorId}&chatId=${chatId}`));assert.equal(response.status,200);
+ assert.deepEqual(calls.map(call=>call.name),['standalone_authorize_scope','standalone_usage_snapshot']);
+ assert.ok(!JSON.stringify(await response.json()).includes('prepared_payload'));
 });
