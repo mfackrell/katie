@@ -822,8 +822,14 @@ async function executeControlPlaneJsonTask<T>(args: {
     persona: "You are a strict JSON-only control-plane assistant for routing decisions.",
     summary: "", history: [], user: args.userPrompt,
   };
-  const decisionProviders = await rankControlPlaneByActualCost(args.decisionProviders, params, undefined, `control_plane_${args.taskName}`);
-  for (const candidate of decisionProviders) {
+  const remaining = [...args.decisionProviders];
+  while (remaining.length) {
+    // Each failed/invalid helper consumes an activity ordinal. Resolve that
+    // ordinal again before choosing the next fallback, including on resume.
+    const ranked = await rankControlPlaneByActualCost(remaining, params, undefined, `control_plane_${args.taskName}`);
+    const candidate = ranked[0];
+    if (!candidate) break;
+    remaining.splice(remaining.indexOf(candidate), 1);
     const sourceLabel = `${candidate.provider.name}:${candidate.modelId}`;
     try {
       const response = await withProviderAttemptTimeout(
