@@ -36,7 +36,9 @@ test('approval feedback survives polling, blocks duplicate clicks, and preserves
   await button.click();
   const saving=page.getByRole('button',{name:'Saving approval…',exact:true});await saving.waitFor();assert.equal(await saving.isDisabled(),true);
   // Dispatch another click while the first POST is pending: no second request.
-  await saving.dispatchEvent('click');assert.equal(posts,1);
+  await saving.dispatchEvent('click');
+  for(let i=0;i<100&&posts<1;i++)await new Promise(resolve=>setTimeout(resolve,10));
+  assert.equal(posts,1);
   releasePost();const alert=page.getByRole('alert');await alert.waitFor();assert.match(await alert.innerText(),/HTTP 409; plan_changed/);
   const before=reads;await page.waitForTimeout(16000);assert.ok(reads>before,'15-second poll ran');assert.match(await alert.innerText(),/displayed plan changed/);
   await page.getByRole('button',{name:'Refresh status',exact:true}).click();assert.match(await alert.innerText(),/displayed plan changed/);
@@ -44,7 +46,9 @@ test('approval feedback survives polling, blocks duplicate clicks, and preserves
   await page.waitForFunction(()=>true);
   for(let i=0;i<50&&!releaseOldPoll;i++)await new Promise(resolve=>setTimeout(resolve,10));
   assert.equal(typeof releaseOldPoll,'function');
-  reject=false;await button.click();await saving.waitFor();assert.equal(await alert.count(),0,'explicit retry clears prior submission error');releasePost();
+  reject=false;await button.click();await saving.waitFor();assert.equal(await alert.count(),0,'explicit retry clears prior submission error');
+  for(let i=0;i<100&&posts<2;i++)await new Promise(resolve=>setTimeout(resolve,10));
+  assert.equal(posts,2);releasePost();
   await page.getByText('Approval saved. The existing project can continue within the approved limits.',{exact:true}).waitFor();
   await page.getByText('Status refresh: Synthetic status outage.',{exact:true}).waitFor();
   releaseOldPoll();await page.waitForTimeout(100);
