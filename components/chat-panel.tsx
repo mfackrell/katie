@@ -35,6 +35,7 @@ import { ReasoningExplainerPanel } from "@/components/reasoning-explainer-panel"
 import { RememberFaceControl } from "@/components/remember-face-control";
 import { MessageReactions } from "@/components/message-reactions";
 import { ProjectApprovalCard, type ProjectApproval } from "@/components/project-approval-card";
+import { StandaloneUsage } from "@/components/standalone-usage";
 import {DeveloperResourceCard,type RecoveryProposal} from "@/components/developer-resource-card";
 import { SelfToolsOwnerSession } from "@/components/self-tools-owner-session";
 import { ownerSessionBearer } from "@/lib/tools/browser-owner-session";
@@ -3102,6 +3103,7 @@ export function ChatPanel({
         <div ref={messagesEndRef} />
       </section>
 
+      {!managedAgentId && <StandaloneUsage inlinePendingOnly actorId={actorId} chatId={chatId} />}
       {accountingResumeFailure && <p role="alert" className="mx-3 mb-2 rounded-xl border border-amber-400/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-100 sm:mx-6">{accountingResumeFailure}</p>}
       {failoverNotice && (
         <p role="status" className="mx-3 mb-2 rounded-xl border border-amber-400/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-100 sm:mx-6">
