@@ -65,6 +65,7 @@ interface ChatPanelProps {
   activeRepoId: string;
   repoInjectionEnabled: boolean;
   statusRailOpen?: boolean;
+  spendingApprovalHostedExternally?: boolean;
 }
 
 type CollaborationParticipantUi = {
@@ -763,6 +764,7 @@ export function ChatPanel({
   activeRepoId,
   repoInjectionEnabled,
   statusRailOpen = false,
+  spendingApprovalHostedExternally = false,
 }: ChatPanelProps) {
   const [statusMount, setStatusMount] = useState<HTMLElement | null>(null);
   useEffect(() => { setStatusMount(statusRailOpen ? document.getElementById("katie-live-status") : null); }, [statusRailOpen, chatId]);
@@ -3103,7 +3105,8 @@ export function ChatPanel({
         <div ref={messagesEndRef} />
       </section>
 
-      {!managedAgentId && <StandaloneUsage inlinePendingOnly actorId={actorId} chatId={chatId} />}
+      {!managedAgentId && <div id="katie-inline-spending-approval" className="shrink-0" />}
+      {!managedAgentId && !spendingApprovalHostedExternally && <StandaloneUsage inlinePendingOnly actorId={actorId} chatId={chatId} />}
       {accountingResumeFailure && <p role="alert" className="mx-3 mb-2 rounded-xl border border-amber-400/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-100 sm:mx-6">{accountingResumeFailure}</p>}
       {failoverNotice && (
         <p role="status" className="mx-3 mb-2 rounded-xl border border-amber-400/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-100 sm:mx-6">
