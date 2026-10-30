@@ -16,8 +16,9 @@ try{
  // Reproduce the retained runner failure against the real pinned package.
  writeFileSync(join(broken,'native-development-child.mjs'),source.replace(esm,
   "import {createRequire} from 'node:module';\nimport {pathToFileURL} from 'node:url';\nconst require=createRequire('/work/package.json');\nconst {Codex}=await import(pathToFileURL(require.resolve('@openai/codex-sdk')).href);"));
- for(const file of ['shared-native-phase.mjs','shared-native-policy.mjs'])
+ for(const file of ['native-execution-evidence.mjs','shared-native-phase.mjs','shared-native-policy.mjs'])
   copyFileSync(resolve('scripts/benchmark',file),join(broken,file));
  assert.throws(()=>preflightNativeChild(boundary,join(broken,'native-development-child.mjs')),/ERR_PACKAGE_PATH_NOT_EXPORTED/);
 }finally{rmSync(broken,{recursive:true,force:true});}
 process.stdout.write('Actual Full child ESM bootstrap passed; retained CommonJS failure reproduced without credentials or model calls.\n');
+

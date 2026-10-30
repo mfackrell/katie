@@ -552,7 +552,7 @@ export async function verifiedAmendmentSuccessorRun(projectId:string){
 }
 async function dispatchOwnerAmendmentSuccessor(db:ReturnType<typeof getSupabaseAdminClient>,key:string,release:string){
  if(await qualifiedAmendmentSuccessorRelease()!==release)return false;
- const {data:consents,error}=await db.from('benchmark_amendment_successor_consents').select('id,amendment_id,renewal_id,release_sha,deadline').eq('release_sha',release).limit(4).returns<{id:string;amendment_id:string;renewal_id:string;release_sha:string;deadline:string}[]>();
+ const {data:consents,error}=await db.from('benchmark_amendment_successor_consents').select('id,amendment_id,renewal_id,release_sha,deadline').eq('release_sha',release).limit(4).returns<{id:string;amendment_id:string;renewal_id:string;release_sha:string;deadline:string}>();
  if(error)throw Error('Successor consent status unavailable');
  for(const sc of consents??[]){
   if(Date.parse(sc.deadline)<=Date.now())continue;

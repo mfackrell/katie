@@ -180,7 +180,7 @@ const root=mkdtempSync(join(tmpdir(),'katie-trusted-gateway-'));
 const evidencePath=process.env.KATIE_NATIVE_EVIDENCE_FILE;
 const decisions=[];
 const diagnostics={version:NATIVE_EXECUTION_EVIDENCE_VERSION,runId:process.env.GITHUB_RUN_ID,taskId:proof.taskId,phases:[],snapshots:[],scope:[],completed:false};
-const diagnosticSecrets=[providerKey,serviceKey,signingKey,grantToken,clientToken];
+const diagnosticSecrets=[providerKey,serviceKey,signingKey,grantToken,clientToken,process.env.GH_TOKEN];
 const snapshot=label=>diagnostics.snapshots.push({label,...worktreeEvidence(boundary.root,diagnosticSecrets)});
 const saveDiagnostics=()=>{if(evidencePath&&evidencePath.startsWith(process.env.RUNNER_TEMP+'/'))writeFileSync(evidencePath+'.diagnostics.json',JSON.stringify(diagnostics)+'\n',{mode:0o600});};
 snapshot('initial');saveDiagnostics();
