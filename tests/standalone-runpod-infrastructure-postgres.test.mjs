@@ -95,7 +95,7 @@ test('reviewed Qwen infrastructure reservation, durable job and estimated comple
   const extendedReceipt=await rpc(one,'complete_qwen_estimate',{...finish,p_attempt:extendedAttempt.id,p_job:extendedJob,p_checkpoint:extendedCheckpoint});
   assert.equal(extendedReceipt.evidence.policyVersion,v2);
   assert.equal(extendedReceipt.reserved_microusd,'20000');
-  const invalidV1=input('reject-invalid-v1','invalid-v1',{p_hash:extendedPrepared.hash,p_payload:extendedPrepared});
+  const invalidV1=input('reject-invalid-v1','invalid-v1',{p_hash:extendedPrepared.hash,p_payload:extendedPrepared,p_estimate:{status:'estimated',reservationMicrousd:'20000',requestHash:extendedPrepared.hash,pricingVersion:version,estimatorVersion:version}});
   const invalidV1Attempt=await rpc(one,'admit',invalidV1);
   assert.equal(invalidV1Attempt.state,'reserved','admission saves the immutable attempt before enforcement at dispatch');
   await assert.rejects(rpc(one,'claim_dispatch',{p_owner:owner,p_attempt:invalidV1Attempt.id}),/STANDALONE_INFRASTRUCTURE_POLICY_DENIED/,'historical v1 policy must reject widened v2 limits before paid dispatch');
