@@ -35,6 +35,8 @@ const expectedLogprobsDenial=process.env.KATIE_NATIVE_PROBE_EXPECT_LOGPROBS_DENI
 const phases=expectedLogprobsDenial?['implementation']:['implementation','review','repair','final-review'];
 const sourceWrite=process.env.KATIE_NATIVE_PROBE_SOURCE_WRITE==='1';
 const probePath='app/project-pilots/take-eleven/qualification-probe.mjs';
+const testProbePath='tests/game-development/take-eleven.test.mjs';
+const outsideProbePath='app/project-pilots/outside-qualification-probe.mjs';
 if(sourceWrite){assert.equal(baseline,'0015bcdb8ac9ad94b7c74d1a4cd76737903b1319');writeFileSync(join(root,'AGENT_REQUEST.md'),readFileSync('tests/fixtures/take-eleven-frozen-development-request.md','utf8'));}
 const realistic=process.env.KATIE_NATIVE_PROBE_COMPLETION_BUDGET==='1';
 const phaseLimits={implementation:3,review:2,repair:3,'final-review':2};
@@ -61,6 +63,11 @@ const upstream=async request=>{
  assert.ok(count<=(realistic?phaseLimits[phase]:2),'Unexpected SDK continuation or retry');
  const callId='actual_native_tool_'+phase+'_'+count;
  const reviewing=phase==='review'||phase==='final-review';
+ if(sourceWrite&&!reviewing){
+  const input=JSON.stringify(request.input);
+  assert.match(input,/Approved implementation scope defines where changes are permitted, not which files must already exist/);
+  assert.match(input,/genuine repository, permission, or authorization mismatches must still block execution/);
+ }
  const encrypted=Buffer.from('synthetic-reasoning-'+phase).toString('base64');
  const tools=request.tools?.flatMap(t=>t.type==='namespace'?t.tools:[t])??[];
  assert.ok(tools.some(t=>t.type==='function'&&t.name==='exec_command'),'Actual SDK must declare the tested local exec_command tool');
@@ -81,7 +88,7 @@ const upstream=async request=>{
 
  const text=phase==='review'?'CHANGES_REQUESTED: synthetic defect':phase==='final-review'?'PASS synthetic repair verified':'DONE';
  const item=count<(realistic?phaseLimits[phase]:2)?{id:'fc_'+forwarded,type:'function_call',name:'exec_command',...(expectedLogprobsDenial?{}:{namespace:'functions'}),call_id:callId,
-  arguments:JSON.stringify({cmd:(reviewing?reviewCommand:sourceWrite?"mkdir -p app/project-pilots/take-eleven && printf 'export const qualification = 1;\\n' > "+probePath+" && printf ACTUAL_NATIVE_TOOL_OK":'printf ACTUAL_NATIVE_TOOL_OK')+(sourceWrite&&phase==='repair'?'; false':'')+(realistic&&count===1?' ; cat /trusted/AGENT_REQUEST.md':''),workdir:'/work',...(realistic?{max_output_tokens:20000}:{})}),status:'completed'}:
+  arguments:JSON.stringify({cmd:(reviewing?reviewCommand:sourceWrite?"mkdir -p app/project-pilots/take-eleven tests/game-development && printf 'export const qualification = 1;\\n' > "+probePath+" && printf '// synthetic qualification only\\n' > "+testProbePath+(phase==='repair'?" && printf forbidden > "+outsideProbePath:'')+" && printf ACTUAL_NATIVE_TOOL_OK":'printf ACTUAL_NATIVE_TOOL_OK')+(sourceWrite&&phase==='repair'?'; false':'')+(realistic&&count===1?' ; cat /trusted/AGENT_REQUEST.md':''),workdir:'/work',...(realistic?{max_output_tokens:20000}:{})}),status:'completed'}:
   {id:'msg_'+forwarded,type:'message',role:'assistant',status:'completed',content:[{type:'output_text',text,annotations:[],logprobs:[]}]};
  const reasoning={id:'rs_'+phase,type:'reasoning',summary:[],encrypted_content:encrypted};
  const commentary={id:'msg_commentary_'+forwarded,type:'message',role:'assistant',phase:'commentary',status:'completed',content:[{type:'output_text',text:'I will inspect the approved request and repository.',annotations:[],logprobs:[]}]};
@@ -113,6 +120,10 @@ try{
  await new Promise((resolve,reject)=>{server.once('error',reject);server.listen(socket,resolve);});
  for(const next of phases){
   phase=next;const reviewing=phase==='review'||phase==='final-review';
+  if(sourceWrite&&phase==='implementation'){
+   assert.equal(existsSync(join(work,'app/project-pilots/take-eleven')),false);
+   assert.equal(existsSync(join(work,testProbePath)),false);
+  }
   const command='socat TCP-LISTEN:43181,bind=127.0.0.1,reuseaddr,fork UNIX-CONNECT:/gateway/gateway.sock & p=$!; trap "kill $p 2>/dev/null || :" EXIT; node /trusted/native-development-child.mjs';
   const args=sharedNativeContainerArgs({workspace:work,socketDir,arm:'full',phase,command,readOnly:reviewing,
    extraMounts:[...protectedNativeMounts(assertTrustedBoundary(work)),
@@ -146,8 +157,15 @@ try{
   }
   if(sourceWrite&&!reviewing){
    assert.equal(readFileSync(join(work,probePath),'utf8'),'export const qualification = 1;\n');
+   assert.equal(readFileSync(join(work,testProbePath),'utf8'),'// synthetic qualification only\n');
    execFileSync('git',['-C',work,'add','-A']);
-   assert.deepEqual(assertProjectScope(join(root,'AGENT_REQUEST.md'),work),[probePath]);
+   if(phase==='repair'){
+    assert.equal(readFileSync(join(work,outsideProbePath),'utf8'),'forbidden');
+    assert.throws(()=>assertProjectScope(join(root,'AGENT_REQUEST.md'),work),/Project publishing denied: unapproved path app\/project-pilots\/outside-qualification-probe\.mjs/);
+    console.log('ACTUAL_NATIVE_OUTSIDE_SCOPE_REJECTED');
+    rmSync(join(work,outsideProbePath));execFileSync('git',['-C',work,'add','-A']);
+   }
+   assert.deepEqual(assertProjectScope(join(root,'AGENT_REQUEST.md'),work),[probePath,testProbePath]);
    console.log('ACTUAL_NATIVE_SOURCE_WRITE_SCOPE_PASS='+phase);
   }
   console.log('ACTUAL_NATIVE_CHILD_PHASE_PASS='+phase);
