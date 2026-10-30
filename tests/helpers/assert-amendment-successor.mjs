@@ -40,10 +40,19 @@ export async function assertAmendmentSuccessor(db,rival,{am,g,project,mission,ta
  const ng=(await db.query('select * from benchmark_execution_grants where id=$1',[grants.find(x=>x.status==='fulfilled').value.rows[0].r.grantId])).rows[0];
  assert.deepEqual(ng.deadline,g.deadline);assert.deepEqual(await snapshot(),before);
  await assert.rejects(db.query(reserve,[g.token_digest,trial,g.execution_epoch,randomUUID(),'gpt-5.3-codex',1]),/unauthorized/);
- await assert.rejects(db.query(reserve,[ng.token_digest,trial,ng.execution_epoch,randomUUID(),'gpt-5.3-codex',247328]),/capacity|ceiling/);
+ await assert.rejects(db.query(reserve,[ng.token_digest,trial,ng.execution_epoch,randomUUID(),'gpt-5.3-codex',247328]),/invalid native operation/);
+ await db.query('begin');await db.query(reserve,[ng.token_digest,trial,ng.execution_epoch,randomUUID(),'gpt-5.3-codex',120000]);
+ await assert.rejects(db.query(reserve,[ng.token_digest,trial,ng.execution_epoch,randomUUID(),'gpt-5.3-codex',120000]),/capacity|ceiling/);await db.query('rollback');
+ await db.query('reset role');await db.query('begin');
+ await db.query('update benchmark_dollar_exposures set exposure_microusd=exposure_microusd+(9999999-(select sum(exposure_microusd) from benchmark_dollar_exposures where account_id=$1)) where call_id=(select call_id from benchmark_dollar_exposures where account_id=$1 limit 1)',[account]);
+ await db.query('set role service_role');await assert.rejects(db.query(reserve,[ng.token_digest,trial,ng.execution_epoch,randomUUID(),'gpt-5.3-codex',1000]),/dollar ceiling/);await db.query('rollback');await db.query('set role service_role');
+ assert.deepEqual(await snapshot(),before);
  // The new grant still uses the same atomic dollar meter and uncertain holds.
  const id=(await db.query(reserve,[ng.token_digest,trial,ng.execution_epoch,randomUUID(),'gpt-5.3-codex',1000])).rows[0].id;
  assert.equal((await db.query('select count(*)::int n from benchmark_dollar_exposures where call_id=$1',[id])).rows[0].n,1);
+ const linked=(await db.query('select legacy_mission_call_id from benchmark_budget_calls where id=$1',[id])).rows[0].legacy_mission_call_id;
+ const exposure=(await db.query('select exposure_microusd from benchmark_dollar_exposures where call_id=$1',[id])).rows[0].exposure_microusd;
+ await db.query('select benchmark_finish_mission_call($1,null)',[linked]);assert.equal((await db.query('select exposure_microusd from benchmark_dollar_exposures where call_id=$1',[id])).rows[0].exposure_microusd,exposure);
  await assert.rejects(db.query(issue,args),/unavailable/);
  await db.query('reset role');await db.query('set role authenticated');await assert.rejects(db.query(rpc,approve),/permission denied/);await assert.rejects(db.query('select * from benchmark_amendment_successor_consents'),/permission denied/);await db.query('reset role');await db.query('set role service_role');
  console.log('AMENDMENT_SUCCESSOR_POSTGRES_PASS: one owner consent, fixed deadline, historical preservation, duplicate and concurrent grants, original atomic admission');

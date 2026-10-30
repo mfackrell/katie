@@ -271,6 +271,7 @@ try{
   if(decision.phase!==phase||!['pass','changes_requested'].includes(decision.verdict)||
      typeof decision.findings!=='string'||!decision.findings.trim())
     denied('invalid independent review verdict');
+  decision.findings=sanitizeEvidence(decision.findings,diagnosticSecrets,12000);
   decisions.push(decision);
   return decision;
  };

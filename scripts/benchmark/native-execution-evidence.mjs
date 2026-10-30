@@ -2,7 +2,7 @@ import {createHash} from 'node:crypto';
 import {execFileSync} from 'node:child_process';
 export const NATIVE_EXECUTION_EVIDENCE_VERSION='bounded-execution-v1';
 const hash=value=>createHash('sha256').update(String(value??'')).digest('hex');
-export function sanitizeEvidence(value,secrets=[]){
+export function sanitizeEvidence(value,secrets=[],limit=1600){
  let text=String(value??'');
  for(const secret of secrets.filter(Boolean))text=text.split(secret).join('[REDACTED]');
  return text.replace(/<!--\s*katie-[\s\S]*?-->/g,'[REDACTED HANDOFF]')
@@ -10,7 +10,7 @@ export function sanitizeEvidence(value,secrets=[]){
   .replace(/(?:sk-|ghp_|github_pat_)[A-Za-z0-9_-]+/g,'[REDACTED]')
   .replace(/((?:api[_-]?key|authorization|access[_-]?token|password|secret)[\"']?\s*[=:]\s*[\"']?)[^\s,;]+/gi,'$1[REDACTED]')
   .replace(/[A-Za-z0-9_+/=-]{64,}(?:\.[A-Za-z0-9_+/=-]+)*/g,'[REDACTED ENCODED DATA]')
-  .replace(/[\x00-\x1f\x7f]/g,' ').slice(0,1600);
+  .replace(/[\x00-\x1f\x7f]/g,' ').slice(0,Math.min(12000,limit));
 }
 export function summarizeNativeEvent(event,secrets=[]){
  if(!['item.started','item.completed','turn.completed','turn.failed','error'].includes(event?.type))return null;
