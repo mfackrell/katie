@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from "next";
 import "./globals.css";
 import "katex/dist/katex.min.css";
 import { ApplicationShell } from "@/components/application-shell";
+import { ChatSessionGate } from "@/components/chat-session-gate";
 
 export const metadata: Metadata = {
   title: "Katie",
@@ -23,7 +24,7 @@ export default function RootLayout({
     <html lang="en" className="dark">
       <body>
         <ApplicationShell legacy={process.env.KATIE_WORKSPACE_UI === "legacy"}>
-          {children}
+          <ChatSessionGate>{children}</ChatSessionGate>
         </ApplicationShell>
       </body>
     </html>
