@@ -257,7 +257,7 @@ export function estimatePreparedRequest(request:FrozenPreparedRequest,snapshot:P
   const verifiedCount = providerInputCount && providerInputCount.requestHash === request.hash &&
     Number.isSafeInteger(providerInputCount.inputTokens) && providerInputCount.inputTokens >= 0;
   if (providerInputCount && !verifiedCount) issues.push("Provider count does not match the prepared request or is invalid");
-  if (verifiedCount) assumptions.push("Provider-native token counting measured this exact frozen request input. All allowed output tokens remain reserved; no cache-hit discount is assumed.");
+  if (verifiedCount) assumptions[0] = "Provider-native token counting measured this exact frozen request input. Output is reserved at its full configured allowance; no cache-hit discount is assumed.";
   const inputTokens=verifiedCount ? providerInputCount!.inputTokens : textTokens+imageTokens;
   if(cacheBreakpoints>4){issues.push("Claude cache breakpoint limit exceeded");cachePolicyValid=false;}
   const cacheWriteInputAllowance=cacheBreakpoints||request.provider==="openai"&&price?.cacheWriteNanoUsd?inputTokens:0;
