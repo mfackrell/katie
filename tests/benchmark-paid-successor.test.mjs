@@ -4,7 +4,7 @@ import vm from 'node:vm';
 import {stripTypeScriptTypes} from 'node:module';
 import {readFileSync} from 'node:fs';
 const source=readFileSync('lib/agents/development.ts','utf8');
-const start=source.indexOf('async function recoverOwnerRenewalPaidSuccessor('),end=source.indexOf('// Dispatch only a separately',start);
+const start=source.indexOf('async function recoverOwnerRenewalPaidSuccessor('),end=source.indexOf('// Capability proof',start);
 const code=stripTypeScriptTypes(source.slice(start,end));
 function harness({unused=true,log='2026-10-29T22:00:30.0000000Z NATIVE_GATEWAY_DENIAL_CODE GATEWAY_UNBOUNDED_INPUT_DENIED\n',diagnostics=true,binary=false,releaseWrong=false,dispatchError=false}={}){
  const receipt={run_id:126,outcome:'BLOCKED',pr_url:null,tested_head_sha:null,reviewed_head_sha:null},calls=[];
