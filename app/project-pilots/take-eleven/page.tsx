@@ -8,7 +8,7 @@ const STORAGE_KEY = 'take-eleven-state-v1';
 function validState(value: unknown): value is GameState {
   if (!value || typeof value !== 'object') return false;
   const s = value as Record<string, unknown>;
-  if (!Number.isInteger(s.stones) || (s.stones as number) < 0 || (s.stones as number) > 11) return false;
+  if (typeof s.stones !== 'number' || !Number.isInteger(s.stones) || s.stones < 0 || s.stones > 11) return false;
   if (s.activePlayer !== 'A' && s.activePlayer !== 'B') return false;
   if (s.phase !== 'IN_PROGRESS' && s.phase !== 'FINISHED') return false;
   if (s.phase === 'IN_PROGRESS') return (s.stones as number) > 0 && s.winner === null;
