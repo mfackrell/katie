@@ -113,7 +113,7 @@ test('authenticated cron can resume only a paused accepted Qwen job, never creat
    chain.maybeSingle=async()=>({data:table==='standalone_workflows'?{
      owner_id:owner,actor_id:actorId,chat_id:chatId,status:stored.status,error:stored.error
    }:null,error:null});
-   chain.limit=async()=>({data:table==='standalone_provider_attempts'&&hasJob?[{id:'qwen-job'}]:[],error:null});
+   chain.limit=async()=>({data:table==='standalone_provider_attempts'&&hasJob?[{id:'qwen-job',provider_request_id:'job-accepted-123'}]:[],error:null});
    return chain;
   };
   const cronRequest=()=>new NextRequest('http://localhost/api/chat',{method:'POST',headers:{
