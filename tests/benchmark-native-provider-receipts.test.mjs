@@ -6,7 +6,7 @@ const key='synthetic-test-'+('k'.repeat(45));
 const sse=(id,used)=>[
  'event: response.created\ndata: {}',
  'event: response.completed\ndata: '+JSON.stringify({type:'response.completed',
-  response:{id,usage:{total_tokens:used}}}),
+  response:{id,service_tier:'default',usage:{total_tokens:used}}}),
  'data: [DONE]',''
 ].join('\n\n');
 test('provider receipt is derived from terminal Responses SSE, never request claims',async()=>{
@@ -32,7 +32,7 @@ test('canonical receipt writer persists only settled or overrun states',async()=
 });
 
 test('incomplete terminal carries authoritative usage for reconciliation',async()=>{
- const payload='event: response.incomplete\ndata: '+JSON.stringify({type:'response.incomplete',response:{id:'resp_incomplete',status:'incomplete',usage:{total_tokens:4096}}})+'\n\n';
+ const payload='event: response.incomplete\ndata: '+JSON.stringify({type:'response.incomplete',response:{id:'resp_incomplete',status:'incomplete',service_tier:'default',usage:{total_tokens:4096}}})+'\n\n';
  const provider=createResponsesProvider({apiKey:key,fetchImpl:async()=>new Response(payload,{status:200})});
  const receipt=await provider({model:'test'});
  assert.equal(receipt.providerRequestId,'resp_incomplete');
@@ -40,7 +40,7 @@ test('incomplete terminal carries authoritative usage for reconciliation',async(
 });
 
 test('non-streaming JSON terminal preserves authoritative usage',async()=>{
- const provider=createResponsesProvider({apiKey:key,fetchImpl:async()=>new Response(JSON.stringify({id:'resp_json',status:'incomplete',usage:{total_tokens:18}}),{status:200,headers:{'content-type':'application/json'}})});
+ const provider=createResponsesProvider({apiKey:key,fetchImpl:async()=>new Response(JSON.stringify({id:'resp_json',status:'incomplete',service_tier:'default',usage:{total_tokens:18}}),{status:200,headers:{'content-type':'application/json'}})});
  const receipt=await provider({model:'test',stream:false});
  assert.equal(receipt.providerRequestId,'resp_json');
  assert.equal(receipt.actualTokens,18);
@@ -48,10 +48,17 @@ test('non-streaming JSON terminal preserves authoritative usage',async()=>{
 
 test('paid receipt writer sends complete provider usage to atomic evidence reconciliation',async()=>{
  const usage={input_tokens:12,output_tokens:7,total_tokens:19,input_tokens_details:{cached_tokens:4}};
- const provider=createResponsesProvider({apiKey:key,fetchImpl:async()=>Response.json({id:'resp_cost',status:'completed',usage})});
+ const provider=createResponsesProvider({apiKey:key,fetchImpl:async()=>Response.json({id:'resp_cost',status:'completed',service_tier:'default',usage})});
  const receipt=await provider({model:'gpt-5.3-codex'});assert.deepEqual(receipt.usage,usage);
  const events=[];const writer=createCanonicalReceiptWriter({rpc:async(name,args)=>{events.push({name,args});return{data:'settled',error:null}}});
  await writer({operationId:'operation',namespace:'openai-responses',...receipt});
  assert.equal(events[0].name,'benchmark_reconcile_provider_usage');assert.deepEqual(events[0].args.p_usage,usage);
  assert.equal(events[0].args.p_linked,false);
+});
+
+
+test('premium tiers are rejected before inference; unexpected returned tier keeps uncertainty',async()=>{
+ let calls=0;const provider=createResponsesProvider({apiKey:key,fetchImpl:async(_url,options)=>{calls++;assert.equal(JSON.parse(options.body).service_tier,'default');return Response.json({id:'tier',status:'completed',service_tier:'priority',usage:{total_tokens:10}});}});
+ await assert.rejects(provider({model:'gpt-5.3-codex',service_tier:'priority'}),/SERVICE_TIER_DENIED/);assert.equal(calls,0);
+ await assert.rejects(provider({model:'gpt-5.3-codex'}),/PROVIDER_TIER_UNCERTAIN/);assert.equal(calls,1);
 });

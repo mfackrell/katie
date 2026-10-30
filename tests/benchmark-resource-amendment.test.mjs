@@ -24,7 +24,7 @@ test('exact deployed main source must contain counted provider, gateway and host
  const start=source.indexOf('export async function qualifiedDevelopmentAmendmentRelease('),end=source.indexOf('async function dispatchOwnerResourceAmendment(',start);
  const code=stripTypeScriptTypes(source.slice(start,end).replace('export async','async'));
  for(const wrong of ['none','main','provider','gateway','host']){
-  const release='a'.repeat(40),texts=["export const NATIVE_INPUT_COUNT_VERSION='provider-input-count-v1'",'countInputTokens','NATIVE_INPUT_COUNT_VERSION resourceAmendmentId'];
+  const release='a'.repeat(40),texts=["export const NATIVE_INPUT_COUNT_VERSION='provider-input-count-v1'; export const NATIVE_MONETARY_CONTROL_VERSION='atomic-exposure-v1'",'countInputTokens','NATIVE_INPUT_COUNT_VERSION resourceAmendmentId'];
   const context={Buffer,process:{env:{VERCEL_GIT_COMMIT_SHA:release,KATIE_FULL_BENCHMARK_ENVIRONMENT:'production'}},github:()=>({repos:{getCommit:async()=>({data:{sha:wrong==='main'?'b'.repeat(40):release}}),getContent:async({path,ref})=>{assert.equal(ref,release);const i=path.includes('provider-receipts')?0:path.includes('authenticated')?1:2;return {data:{type:'file',content:Buffer.from(wrong===['provider','gateway','host'][i]?'':texts[i]).toString('base64')}};}}})};
   const run=vm.runInNewContext(code+';qualifiedDevelopmentAmendmentRelease',context);assert.equal(await run(),wrong==='none'?release:null);
  }
@@ -46,8 +46,9 @@ test('owner API GET is read-only and amendment POST requires its explicit author
  const context={process:{env},AbortSignal,NextResponse:{json:(body,opts)=>({body,status:opts.status})},config:{productionDatabaseUrl:env.NEXT_PUBLIC_SUPABASE_URL,productionUrl:'https://katie.test'},fetch:async()=>({ok:true,json:async()=>({id:'owner'})}),qualifiedDevelopmentAmendmentRelease:async()=> 'a'.repeat(40),getSupabaseAdminClient:()=>({rpc:async(name,args)=>{calls.push({name,args});return args.p_approve&&args.p_plan_hash!=='c'.repeat(64)?{error:{message:'stale'}}:{data:{approved:Boolean(args.p_approve)}};}})};
  const api=vm.runInNewContext(code+';({GET,POST})',context),request=body=>({headers:{get:k=>k==='authorization'?'Bearer synthetic-owner':k==='origin'?'https://katie.test':null},json:async()=>body});
  assert.equal((await api.GET(request())).status,200);assert.equal(calls[0].name,'benchmark_dashboard_development_amendment');assert.equal(calls[0].args.p_approve,undefined);
- const body={approve:true,authorization:'full-development-resource-amendment-fixed-deadline',projectId:'11111111-1111-4111-8111-111111111111',planHash:'c'.repeat(64)};
+ const body={approve:true,authorization:'full-development-resource-amendment-550000tokens-10usd-4hours',projectId:'11111111-1111-4111-8111-111111111111',planHash:'c'.repeat(64)};
  assert.equal((await api.POST(request({...body,approve:false}))).status,400);assert.equal(calls.length,1);
  assert.equal((await api.POST(request({...body,planHash:'d'.repeat(64)}))).status,409);
  assert.equal((await api.POST(request(body))).status,200);assert.equal(calls.at(-1).args.p_approve,true);assert.equal(calls.at(-1).args.p_runtime,'provider-input-count-v1');
 });
+

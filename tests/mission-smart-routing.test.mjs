@@ -128,3 +128,4 @@ test('raw specification response is checkpointed before receipt settlement; stor
   assert.equal(checkpointFailure.calls.length,1,'checkpoint failure never authorizes a second paid response');
  }finally{for(const [k,v] of Object.entries(old)){if(v===undefined)delete process.env[k];else process.env[k]=v;}}
 });
+

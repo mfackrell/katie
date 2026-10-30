@@ -145,3 +145,10 @@ jobs:
 
 
 
+
+
+      - name: Actual pinned SDK realistic cumulative completion envelope (no inference)
+        env:
+          KATIE_NATIVE_PROBE_COMPLETION_BUDGET: '1'
+          KATIE_NATIVE_PROBE_BASELINE: 0015bcdb8ac9ad94b7c74d1a4cd76737903b1319
+        run: node scripts/benchmark/native-development-child-contained-probe.mjs
