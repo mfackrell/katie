@@ -1,3 +1,4 @@
+import {NATIVE_ADMISSION_DIAGNOSTICS_VERSION} from './native-request-admission.mjs';
 import {preflightNativeChild} from './native-child-preflight.mjs';
 import {openNativeProductionRuntime} from './native-runtime-capsule.mjs';
 // Trusted GitHub Actions host. Never run this file from the candidate worktree.
@@ -24,7 +25,7 @@ if(!requestFile||!manifestFile||!childFile)denied('missing verified inputs');
 const signingKey=process.env.KATIE_NATIVE_HANDOFF_HMAC_KEY;
 const proof=readNativeHandoff(readFileSync(requestFile,'utf8'),signingKey);
 const manifest=JSON.parse(readFileSync(manifestFile,'utf8'));
-for(const key of ['taskId','trialId','approvalId','projectId','contractHash','benchmarkContractHash','baselineSha','expiresAt','continuationId','startupRecoveryId','developmentRenewalId','pregrantRecoveryId'])
+for(const key of ['taskId','trialId','approvalId','projectId','contractHash','benchmarkContractHash','baselineSha','expiresAt','continuationId','startupRecoveryId','developmentRenewalId','pregrantRecoveryId','paidSuccessorId'])
  if(manifest[key]!==proof[key])denied('handoff changed after signature verification');
 if(manifest.productionRuntime!==proof.productionRuntime)denied('runtime handoff changed after verification');
 if(process.env.GITHUB_REPOSITORY!=='mfackrell/katie')denied('repository identity mismatch');
@@ -50,7 +51,7 @@ const readOne=async(table,column,value,fields='*')=>{
 const approval=await readOne('benchmark_native_spending_approvals','id',proof.approvalId);
 if(approval.trial_id!==proof.trialId||approval.task_id!==proof.taskId||
  approval.project_id!==proof.projectId||approval.repository!==process.env.GITHUB_REPOSITORY||
- approval.revoked_at||(proof.startupRecoveryId?!approval.consumed_at:Boolean(approval.consumed_at))||new Date(approval.deadline).getTime()<=Date.now())
+ approval.revoked_at||((proof.startupRecoveryId||proof.paidSuccessorId)?!approval.consumed_at:Boolean(approval.consumed_at))||new Date(approval.deadline).getTime()<=Date.now())
  denied('owner spending approval is missing or consumed');
 const trial=await readOne('benchmark_three_arm_trials','id',proof.trialId);
 const project=await readOne('work_projects','id',proof.projectId);
@@ -135,9 +136,16 @@ if(proof.pregrantRecoveryId){
  const recovery=await readOne('benchmark_development_pregrant_recoveries','id',proof.pregrantRecoveryId);
  if(recovery.renewal_id!==proof.developmentRenewalId||recovery.release_sha!==process.env.GITHUB_SHA||task.external?.pregrantRecoveryId!==recovery.id)denied('pregrant recovery identity or release mismatch');
 }
+if(proof.paidSuccessorId){
+ if(!productionRuntime||!proof.developmentRenewalId||proof.startupRecoveryId||proof.pregrantRecoveryId||process.env.KATIE_BENCHMARK_GATEWAY_DIAGNOSTICS!=='enabled'||NATIVE_ADMISSION_DIAGNOSTICS_VERSION!=='bounded-schema-v1')denied('instrumented paid successor transport required');
+ const successor=await readOne('benchmark_development_paid_successors','id',proof.paidSuccessorId);
+ if(successor.renewal_id!==proof.developmentRenewalId||successor.release_sha!==process.env.GITHUB_SHA||successor.diagnostic_version!==NATIVE_ADMISSION_DIAGNOSTICS_VERSION||task.external?.paidSuccessorId!==successor.id)denied('paid successor identity or release mismatch');
+}
 const grantToken=randomBytes(48).toString('base64url');
 if(proof.startupRecoveryId&&!productionRuntime)denied('startup recovery requires production runtime');
-const {data:grantResult,error:issueError}=proof.pregrantRecoveryId
+const {data:grantResult,error:issueError}=proof.paidSuccessorId
+ ?await db.rpc('benchmark_issue_development_paid_successor_grant',{p_successor:proof.paidSuccessorId,p_digest:tokenDigest(grantToken),p_approval:proof.approvalId,p_task:proof.taskId,p_release:process.env.GITHUB_SHA})
+ :proof.pregrantRecoveryId
  ?await db.rpc('benchmark_issue_development_pregrant_recovery_grant',{p_recovery:proof.pregrantRecoveryId,p_digest:tokenDigest(grantToken),p_approval:proof.approvalId,p_task:proof.taskId,p_release:process.env.GITHUB_SHA})
  :proof.developmentRenewalId
  ?await db.rpc('benchmark_issue_development_renewal_grant',{p_renewal:proof.developmentRenewalId,p_digest:tokenDigest(grantToken),p_approval:proof.approvalId,p_task:proof.taskId,p_release:process.env.GITHUB_SHA})
