@@ -5,7 +5,7 @@ import { requireRunpodKey } from '@/lib/runpod/durable-results';
 
 const JOB_ID=/^[A-Za-z0-9-]{8,150}$/;
 const TERMINAL=new Set(['COMPLETED','FAILED','CANCELLED','TIMED_OUT']);
-const MAX_RESUMES_PER_TICK=2;
+const MAX_RESUMES_PER_TICK=1;
 
 export type SavedQwenJob={
   owner_id:string;actor_id:string;chat_id:string;request_id:string;
