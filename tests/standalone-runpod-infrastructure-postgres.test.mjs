@@ -20,7 +20,7 @@ test('reviewed Qwen infrastructure reservation, durable job and estimated comple
   run('pg_ctl',['-D',data,'-l',join(dir,'log'),'-o',"-h 127.0.0.1 -k '' -p 55503",'-w','start']);started=true;
   const admin=await connect();
   await admin.query(readFileSync(new URL('./sql/standalone-accounting-schema.sql',import.meta.url),'utf8'));
-  for(const file of ['20261028193000_standalone_provider_attempt_ledger.sql','20261029153000_standalone_deleted_scope_history.sql','20261029170000_standalone_pricing_and_enrollment.sql','20261029190000_standalone_actor_authority.sql','20261029200000_standalone_uncertain_exposure_continuation.sql','20261029210000_standalone_qwen_infrastructure.sql'])await admin.query(readFileSync(new URL('../supabase/migrations/'+file,import.meta.url),'utf8'));
+  for(const file of ['20261028193000_standalone_provider_attempt_ledger.sql','20261029153000_standalone_deleted_scope_history.sql','20261029170000_standalone_pricing_and_enrollment.sql','20261029190000_standalone_actor_authority.sql','20261029200000_standalone_uncertain_exposure_continuation.sql','20261029210000_standalone_qwen_infrastructure.sql','20261030193000_qwen_long_prompt_policy_v2.sql'])await admin.query(readFileSync(new URL('../supabase/migrations/'+file,import.meta.url),'utf8'));
   const one=await connect('service_role'),two=await connect('service_role');
   const owner=randomUUID(),other=randomUUID(),actor=randomUUID(),chat=randomUUID();
   await admin.query("insert into actors values($1,'Qwen fixture','standard')",[actor]);
@@ -75,6 +75,32 @@ test('reviewed Qwen infrastructure reservation, durable job and estimated comple
   await assert.rejects(rpc(fresh,'complete_qwen_estimate',{...finish,p_checkpoint:{...checkpoint,body:JSON.stringify({...jobResult,output:{analysis_text:'conflicting output'}})}}),/CHECKPOINT_CONFLICT/);
   assert.equal((await rpc(two,'finish_workflow',{p_owner:owner,p_request:request,p_lease:lease.lease_token,p_status:'completed',p_result:{observation:'Observed screenshot text.'}})).status,'completed','estimated infrastructure is completed work, not a permanent uncertainty pause');
   assert.equal((await rpc(fresh,'claim_workflow',{...wf,p_resume:true})).claimed,false);
+  // The updated policy admits complete long prompts and a 4096-token ceiling;
+  // historical v1 attempts and their immutable receipts remain valid above.
+  const v2='standalone-runpod-qwen-still-v2';
+  await rpc(one,'register_pricing',{p_version:v2,p_metadata:{kind:'reviewed-infrastructure-reservation',model,reservationMicrousd:'20000',maxQuestionCharacters:8192,maxOutputTokens:4096}});
+  const extendedQuestion=('Focal-point visual inspection instructions. ').repeat(115);
+  assert.ok(extendedQuestion.length>3700&&extendedQuestion.length<8192);
+  const extendedPayload={...payload,input:{...payload.input,body:{...payload.input.body,max_tokens:4096,messages:[{role:'user',content:[
+   payload.input.body.messages[0].content[0],{type:'text',text:extendedQuestion}
+  ]}]}}};
+  const extendedPrepared={...prepared,payload:extendedPayload,question:extendedQuestion,hash:'f'.repeat(64),serializedBody:JSON.stringify(extendedPayload)};
+  const extendedArgs=input('extended-qwen-v2','v2-extended',{p_hash:extendedPrepared.hash,p_payload:extendedPrepared,p_pricing:v2,p_estimator:v2,p_estimate:{status:'estimated',reservationMicrousd:'20000',requestHash:extendedPrepared.hash,pricingVersion:v2,estimatorVersion:v2}});
+  const extendedAttempt=await rpc(one,'admit',extendedArgs);
+  assert.equal(extendedAttempt.state,'reserved');
+  assert.equal((await rpc(one,'claim_dispatch',{p_owner:owner,p_attempt:extendedAttempt.id})).state,'dispatched');
+  const extendedJob='qwen-long-prompt-001';
+  await rpc(one,'record_provider_identifiers',{p_owner:owner,p_attempt:extendedAttempt.id,p_request_id:extendedJob,p_response_id:null});
+  const extendedCheckpoint={...checkpoint,body:JSON.stringify({...jobResult,id:extendedJob})};
+  const extendedReceipt=await rpc(one,'complete_qwen_estimate',{...finish,p_attempt:extendedAttempt.id,p_job:extendedJob,p_checkpoint:extendedCheckpoint});
+  assert.equal(extendedReceipt.evidence.policyVersion,v2);
+  assert.equal(extendedReceipt.reserved_microusd,'20000');
+  const invalidV1=input('reject-invalid-v1','invalid-v1',{p_hash:extendedPrepared.hash,p_payload:extendedPrepared,p_estimate:{status:'estimated',reservationMicrousd:'20000',requestHash:extendedPrepared.hash,pricingVersion:version,estimatorVersion:version}});
+  const invalidV1Attempt=await rpc(one,'admit',invalidV1);
+  assert.equal(invalidV1Attempt.state,'reserved','admission saves the immutable attempt before enforcement at dispatch');
+  await assert.rejects(rpc(one,'claim_dispatch',{p_owner:owner,p_attempt:invalidV1Attempt.id}),/STANDALONE_INFRASTRUCTURE_POLICY_DENIED/,'historical v1 policy must reject widened v2 limits before paid dispatch');
+  assert.equal((await getAttempt('reject-invalid-v1','invalid-v1')).state,'reserved','rejected dispatch must not mark the attempt as submitted');
+
   // Normal per-call and original-request controls remain the final guards.
   config=await configure('10000','30000');
   const threshold=await rpc(one,'admit',input('threshold-proof'));assert.equal(threshold.state,'paused');assert.equal(threshold.pause_reason,'per_call_threshold');

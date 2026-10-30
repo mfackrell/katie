@@ -193,6 +193,9 @@ test('Qwen known jobs expose polling but no browser job identity and fixed reser
  row.provider='runpod';row.model='Qwen/Qwen3-VL-8B-Instruct';row.pricing_version='standalone-runpod-qwen-still-v1';row.provider_request_id='saved-runpod-job-123';row.state='dispatched';
  const response=await usage(request(`usage?actorId=${actorId}&chatId=${chatId}`));const body=await response.json();
  assert.equal(body.active[0].pollableRunpod,true);assert.ok(!JSON.stringify(body).includes('saved-runpod-job-123'));
+ row.pricing_version='standalone-runpod-qwen-still-v2';
+ const v2response=await usage(request(`usage?actorId=${actorId}&chatId=${chatId}`));const v2body=await v2response.json();
+ assert.equal(v2body.active[0].pollableRunpod,true,'new v2 Qwen jobs remain pollable');assert.ok(!JSON.stringify(v2body).includes('saved-runpod-job-123'));
  row.state='paused';const reduce=await decide(request('attempts',{...decision('reduce_cost'),pricingVersion:row.pricing_version}));
  assert.equal(reduce.status,409);assert.match((await reduce.json()).error,/fixed reviewed infrastructure reservation/);
  assert.ok(!calls.some(c=>c.name==='standalone_load_pricing'||c.name==='standalone_revise'));
