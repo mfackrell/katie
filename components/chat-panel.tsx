@@ -1804,7 +1804,16 @@ export function ChatPanel({
         let serverMessage = responseText || `Request failed with status ${response.status}.`;
 
         try {
-          const parsed = JSON.parse(responseText) as { error?: string };
+          const parsed = JSON.parse(responseText) as { error?: string; code?: string };
+          if (parsed.code === "standalone_runpod_in_progress") {
+            // The server persisted the accepted RunPod job. This is a wait,
+            // never an upload failure or permission to resend GPU inference.
+            const pending = readPendingChatRequest(chatId);
+            if (pending) writePendingChatRequest({ ...pending, waitingForRunpod: true });
+            setStatusMessage("Qwen is processing your image. Katie will automatically continue after the saved job finishes.");
+            window.dispatchEvent(new Event("katie:runpod-awaiting"));
+            return;
+          }
           serverMessage = parsed.error ?? serverMessage;
         } catch {
           // Vercel can reject oversized requests before Next.js executes, returning a non-JSON 413 response.
