@@ -2,6 +2,7 @@
 // Buffer one bounded Responses event stream until a terminal receipt exists;
 // unknown/partial responses keep their reservation for later reconciliation.
 import {createHash} from 'node:crypto';
+export const NATIVE_MONETARY_CONTROL_VERSION='atomic-exposure-v1';
 export const NATIVE_INPUT_COUNT_VERSION='provider-input-count-v1';
 export function createResponsesProvider({apiKey,fetchImpl=fetch,baseUrl='https://api.openai.com'}){
  if(typeof apiKey!=='string'||apiKey.length<20)throw Error('GATEWAY_PROVIDER_KEY_REQUIRED');
@@ -9,6 +10,8 @@ export function createResponsesProvider({apiKey,fetchImpl=fetch,baseUrl='https:/
  if(target.origin!=='https://api.openai.com'||target.username||target.password)
    throw Error('GATEWAY_UNAPPROVED_PROVIDER_ORIGIN');
  const provider=async body=>{
+  if(body.service_tier!==undefined&&body.service_tier!=='default')throw Error('GATEWAY_SERVICE_TIER_DENIED');
+  body={...body,service_tier:'default'};
   const resp=await fetchImpl(target,{
    method:'POST',redirect:'error',
    headers:{authorization:'Bearer '+apiKey,'content-type':'application/json'},
@@ -33,6 +36,7 @@ export function createResponsesProvider({apiKey,fetchImpl=fetch,baseUrl='https:/
   if(!terminal||typeof terminal.id!=='string'||
    !Number.isSafeInteger(terminal.usage?.total_tokens)||terminal.usage.total_tokens<0)
    throw Error('GATEWAY_AUTHORITATIVE_RECEIPT_MISSING');
+  if(terminal.service_tier!=='default')throw Error('GATEWAY_PROVIDER_TIER_UNCERTAIN');
   return {providerRequestId:terminal.id,actualTokens:terminal.usage.total_tokens,
    usage:terminal.usage,body:raw,contentType:resp.headers.get('content-type')||'text/event-stream'};
  };
@@ -75,4 +79,5 @@ export function createCanonicalReceiptWriter(db){
   return result.data;
  };
 }
+
 

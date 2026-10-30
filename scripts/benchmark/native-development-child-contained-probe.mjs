@@ -2,7 +2,7 @@
 // admission path. The isolated gateway has ONLY in-memory DB/synthetic responses.
 import assert from 'node:assert/strict';
 import {randomUUID,createHash} from 'node:crypto';
-import {mkdtempSync,mkdirSync,writeFileSync,rmSync,realpathSync,existsSync} from 'node:fs';
+import {mkdtempSync,mkdirSync,writeFileSync,readFileSync,rmSync,realpathSync,existsSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join,resolve} from 'node:path';
 import {spawn,execFileSync} from 'node:child_process';
@@ -28,17 +28,23 @@ if(process.env.KATIE_NATIVE_PROBE_BASELINE){
  execFileSync('git',['-C',work,'-c','user.name=Synthetic probe','-c','user.email=probe@example.invalid','commit','--allow-empty','-qm','Synthetic baseline']);
 }
 const baseline=execFileSync('git',['-C',work,'rev-parse','HEAD'],{encoding:'utf8'}).trim();
-writeFileSync(join(root,'AGENT_REQUEST.md'),'Synthetic nonbillable qualification. Reply DONE. No repository changes.');
+writeFileSync(join(root,'AGENT_REQUEST.md'),process.env.KATIE_NATIVE_PROBE_COMPLETION_BUDGET==='1'?readFileSync('tests/fixtures/take-eleven-frozen-development-request.md','utf8'):'Synthetic nonbillable qualification. Reply DONE. No repository changes.');
 writeFileSync(join(root,'review-findings.txt'),'Synthetic defect: require final independent review.');
 const expectedLogprobsDenial=process.env.KATIE_NATIVE_PROBE_EXPECT_LOGPROBS_DENIAL==='1';
 const phases=expectedLogprobsDenial?['implementation']:['implementation','review','repair','final-review'];
+const realistic=process.env.KATIE_NATIVE_PROBE_COMPLETION_BUDGET==='1';
+const phaseLimits={implementation:3,review:2,repair:3,'final-review':2};
+const firstCounts={implementation:7139,review:7221,repair:7150,'final-review':7208};
+let currentInput=0,used=0,held=0,nativeCalls=0,dollars=5486348;
 const token='synthetic-bridge-token-not-a-provider-credential';
+const completionCountRequests=[];
 const calls=[],receipts=[],summaries=[],phaseRequests=new Map(),firstRequests=new Map();let phase='',forwarded=0,countedRequests=0;
 const db={rpc:async(name,args)=>{
  calls.push({name,args});
  if(name==='benchmark_gateway_execution_live')return {data:true,error:null};
  if(name==='benchmark_full_native_reserve'){
   if(!expectedLogprobsDenial)assert.ok(args.p_tokens<=40780,'Authoritative fixture count must fit the remaining production capacity');
+  if(realistic){assert.ok(nativeCalls<11);assert.ok(used+held+args.p_tokens<=234059);assert.ok(dollars+args.p_tokens*14<=10000000);held=args.p_tokens;nativeCalls++;}
   return {data:'synthetic-operation-'+calls.length,error:null};
  }
  throw Error('UNEXPECTED_PROBE_RPC:'+name);
@@ -48,14 +54,14 @@ const db={rpc:async(name,args)=>{
 const upstream=async request=>{
  assert.equal(request.model,'gpt-5.3-codex');forwarded++;
  const count=(phaseRequests.get(phase)??0)+1;phaseRequests.set(phase,count);
- assert.ok(count<=2,'Unexpected SDK continuation or retry');
- const callId='actual_native_tool_'+phase;
+ assert.ok(count<=(realistic?phaseLimits[phase]:2),'Unexpected SDK continuation or retry');
+ const callId='actual_native_tool_'+phase+'_'+count;
  const reviewing=phase==='review'||phase==='final-review';
  const encrypted=Buffer.from('synthetic-reasoning-'+phase).toString('base64');
  const tools=request.tools?.flatMap(t=>t.type==='namespace'?t.tools:[t])??[];
  assert.ok(tools.some(t=>t.type==='function'&&t.name==='exec_command'),'Actual SDK must declare the tested local exec_command tool');
- if(count===2){
-  const output=request.input?.find(x=>x.type==='function_call_output'&&x.call_id===callId);
+ if(count>1){
+  const output=request.input?.find(x=>x.type==='function_call_output'&&x.call_id==='actual_native_tool_'+phase+'_'+(count-1));
   assert.ok(output,'Actual SDK tool output must return through paid admission');
   const safeOutput=JSON.stringify(output.output).split(token).join('[REDACTED]').slice(0,2000);
   if(!safeOutput.includes('ACTUAL_NATIVE_TOOL_OK'))console.error('ACTUAL_NATIVE_TOOL_OUTPUT_FAILURE='+JSON.stringify({phase,output:safeOutput}));
@@ -70,20 +76,20 @@ const upstream=async request=>{
  }
 
  const text=phase==='review'?'CHANGES_REQUESTED: synthetic defect':phase==='final-review'?'PASS synthetic repair verified':'DONE';
- const item=count===1?{id:'call_'+forwarded,type:'function_call',name:'exec_command',...(expectedLogprobsDenial?{}:{namespace:'functions'}),call_id:callId,
-  arguments:JSON.stringify({cmd:reviewing?reviewCommand:'printf ACTUAL_NATIVE_TOOL_OK',workdir:'/work'}),status:'completed'}:
+ const item=count<(realistic?phaseLimits[phase]:2)?{id:'fc_'+forwarded,type:'function_call',name:'exec_command',...(expectedLogprobsDenial?{}:{namespace:'functions'}),call_id:callId,
+  arguments:JSON.stringify({cmd:(reviewing?reviewCommand:'printf ACTUAL_NATIVE_TOOL_OK')+(realistic&&count===1?' ; cat /trusted/AGENT_REQUEST.md':''),workdir:'/work',...(realistic?{max_output_tokens:20000}:{})}),status:'completed'}:
   {id:'msg_'+forwarded,type:'message',role:'assistant',status:'completed',content:[{type:'output_text',text,annotations:[],logprobs:[]}]};
  const reasoning={id:'rs_'+phase,type:'reasoning',summary:[],encrypted_content:encrypted};
  const commentary={id:'msg_commentary_'+forwarded,type:'message',role:'assistant',phase:'commentary',status:'completed',content:[{type:'output_text',text:'I will inspect the approved request and repository.',annotations:[],logprobs:[]}]};
  const output=count===1?[reasoning,commentary,item]:[item];
- const response={id:'synthetic-response-'+forwarded,object:'response',created_at:1,model:request.model,status:'completed',output,usage:{input_tokens:3,output_tokens:2,total_tokens:5}};
+ const response={id:'synthetic-response-'+forwarded,object:'response',created_at:1,model:request.model,status:'completed',output,usage:realistic?{input_tokens:currentInput,output_tokens:4096,total_tokens:currentInput+4096}:{input_tokens:3,output_tokens:2,total_tokens:5}};
  const events=[['response.created',{type:'response.created',response:{...response,status:'in_progress',output:[]}}],...output.flatMap((item,output_index)=>[['response.output_item.added',{type:'response.output_item.added',output_index,item}],['response.output_item.done',{type:'response.output_item.done',output_index,item}]]),['response.completed',{type:'response.completed',response}]];
- return {providerRequestId:response.id,actualTokens:5,usage:response.usage,contentType:'text/event-stream',body:events.map(([event,data])=>'event: '+event+'\ndata: '+JSON.stringify(data)+'\n\n').join('')+'data: [DONE]\n\n'};
+ return {providerRequestId:response.id,actualTokens:response.usage.total_tokens,usage:response.usage,contentType:'text/event-stream',body:events.map(([event,data])=>'event: '+event+'\ndata: '+JSON.stringify(data)+'\n\n').join('')+'data: [DONE]\n\n'};
 };
 // Synthetic count result exercises the actual SDK count-before-reserve path;
 // the separate fixed-provider count job qualifies real model counting support.
-upstream.countInputTokens=async body=>{countedRequests++;assert.ok(Object.isFrozen(body));if(!firstRequests.has(phase))firstRequests.set(phase,body);return {inputTokens:7000,requestHash:createHash('sha256').update(JSON.stringify(body)).digest('hex')};};
-const server=createNativeHttpBridge({db,grantToken:'synthetic-'+('z'.repeat(60)),trialId:'synthetic-trial',executionEpoch:1,providerNamespace:'openai',upperTokens:120000,upstream,recordReceipt:async r=>receipts.push(r),clientToken:token,fullMission:true,requireInputCount:true});
+upstream.countInputTokens=async body=>{countedRequests++;if(realistic)completionCountRequests.push({phase,body});assert.ok(Object.isFrozen(body));if(!firstRequests.has(phase))firstRequests.set(phase,body);currentInput=realistic?Math.ceil(((phaseRequests.get(phase)??0)===0?firstCounts[phase]:12795)*1.25):7000;return {inputTokens:currentInput,requestHash:createHash('sha256').update(JSON.stringify(body)).digest('hex')};};
+const server=createNativeHttpBridge({db,grantToken:'synthetic-'+('z'.repeat(60)),trialId:'synthetic-trial',executionEpoch:1,providerNamespace:'openai',upperTokens:120000,upstream,recordReceipt:async r=>{receipts.push(r);if(realistic){used+=r.actualTokens;held=0;dollars+=r.actualTokens*14;}},clientToken:token,fullMission:true,requireInputCount:true});
 // Observe structural metadata only. Never log prompts, auth headers or secrets.
 server.on('request',req=>{let raw='';req.on('data',chunk=>{if(raw.length<2000000)raw+=chunk;});req.on('end',()=>{
  try{const b=JSON.parse(raw);const nontextPaths=[];
@@ -130,11 +136,12 @@ try{
   console.log('ACTUAL_NATIVE_CHILD_PHASE_PASS='+phase);
  }
  if(!expectedLogprobsDenial){
- assert.equal(forwarded,8);assert.equal(receipts.length,8);assert.equal(summaries.length,8);
- assert.equal(countedRequests,8);
- assert.deepEqual([...phaseRequests.values()],[2,2,2,2]);
- assert.equal(calls.filter(x=>x.name==='benchmark_full_native_reserve').length,8);
- assert.equal(receipts.reduce((n,x)=>n+x.actualTokens,0),40);
+ assert.equal(forwarded,realistic?10:8);assert.equal(receipts.length,realistic?10:8);assert.equal(summaries.length,realistic?10:8);
+ assert.equal(countedRequests,realistic?10:8);
+ assert.deepEqual([...phaseRequests.values()],realistic?[3,2,3,2]:[2,2,2,2]);
+ assert.equal(calls.filter(x=>x.name==='benchmark_full_native_reserve').length,realistic?10:8);
+ assert.equal(receipts.reduce((n,x)=>n+x.actualTokens,0),realistic?172823:40);
+ if(realistic){assert.ok(process.env.RUNNER_TEMP);writeFileSync(join(process.env.RUNNER_TEMP,'native-sdk-completion-count-requests.json'),JSON.stringify(completionCountRequests),{mode:0o600});assert.equal(used,172823);assert.ok(used+60000<=294059);assert.ok(195941+used+60000+60000<=550000);assert.ok(dollars+(60000+60000)*14<=10000000);console.log('COMPLETION_SDK_ENVELOPE_PASS='+JSON.stringify({nativeCalls,developmentClosureCalls:4,developmentClosureTokens:60000,assessmentTokens:60000,used,dollars}));}
  console.log('ACTUAL_NATIVE_CHILD_FULL_PAID_ADMISSION_NONBILLABLE_PASS');
  if(process.env.KATIE_NATIVE_PROBE_CAPTURE_FIRST_REQUESTS==='1'){
   assert.ok(process.env.RUNNER_TEMP);assert.equal(firstRequests.size,4);
@@ -146,6 +153,7 @@ try{
  }
  }
 }finally{await new Promise(resolve=>server.close(resolve));rmSync(root,{recursive:true,force:true});rmSync(join(sdkRoot,reviewMarker),{force:true});}
+
 
 
 

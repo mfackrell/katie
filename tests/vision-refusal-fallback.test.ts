@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { isExplicitVisionPolicyRefusal, selectGrokVisionFallback } from "../lib/chat/vision-refusal-fallback";
+import { isExplicitVisionPolicyRefusal, isGenericVisionRefusal, selectGrokVisionFallback } from "../lib/chat/vision-refusal-fallback";
 import { isLikelyProviderRefusal, runWithRefusalFallback } from "../lib/router/refusal-detection";
 import type { ProviderResponse } from "../lib/providers/types";
 import { ProviderResponseError } from "../lib/providers/response-errors";
@@ -56,4 +56,29 @@ test("chat route wires the Grok fallback only to still-image vision",()=>{
   assert.match(code,/stillImageVisionRequest = resolvedRequestIntent === "vision-analysis" && rerouteHasVisualInput && !hasVideoInput/);
   assert.match(code,/selectGrokVisionFallback\(await grokProvider\.listModels\(\)\)/);
   assert.match(code,/retryExplicitContentRefusal: !stillImageVisionRequest/);
+});
+
+
+test("refusal-only vision replies are never accepted as visual descriptions", () => {
+  for (const reply of [
+    "I'm sorry, but I can't assist with that.",
+    "I cannot help with this image.",
+    "Sorry, I can't analyze this image.",
+    "I am unable to provide the requested description.",
+    "I must decline this request.",
+    "I can't help with that. Please try again.",
+    "I cannot provide exact measurements from this image."
+  ]) assert.equal(isGenericVisionRefusal(reply), true, reply);
+});
+
+test("factual observations survive limitation-prefaced and mixed responses", () => {
+  for (const reply of [
+    "I cannot provide exact measurements from this image. The diagram shows a blue rectangle labeled 10 cm by 5 cm.",
+    "I can't read every label, but the photo shows a brown dog near a sofa.",
+    "I cannot describe the person's identity, but a red car is parked beside them.",
+    "I cannot make out the tiny text. The heading reads Welcome.",
+    "The uploaded screenshot shows an error message.",
+    "There is a blue rectangle beneath a diagram.",
+    "I'm sorry, the image is slightly blurry, but I can see the word OPEN."
+  ]) assert.equal(isGenericVisionRefusal(reply), false, reply);
 });

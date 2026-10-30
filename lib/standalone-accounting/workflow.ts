@@ -4,6 +4,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { authorizeStandaloneCaller } from './auth';
 import { StandaloneAccountingError } from './ledger';
 import { getSupabaseAdminClient } from '@/lib/data/supabase/admin';
+import { assertCronAuth } from '@/lib/runpod/durable-results';
+import { QWEN_STILL_POLICY } from './runpod-policy';
 import { runWithStandaloneAccounting, isStandaloneAccountingError, standaloneAccountingCause, standaloneFailureDetails, standaloneTechnicalBlocker } from './context';
 import { canonicalJson, type JsonValue } from './estimate';
 
@@ -30,14 +32,38 @@ async function rpc<T>(name:string,args:Record<string,unknown>):Promise<T> {
   return data;
 }
 
+/** Cron may resume ONLY a persisted, owner-bound Qwen job which was paused
+ * because RunPod was still processing. It cannot create work, approve spending,
+ * change the request, or bypass the original actor/chat authorization. */
+async function verifiedCronQwenOwner(actorId:string,chatId:string,requestId:string):Promise<string> {
+  const db=getSupabaseAdminClient();
+  const {data:workflow,error:workflowError}=await db.from('standalone_workflows')
+    .select('owner_id,actor_id,chat_id,status,error')
+    .eq('request_id',requestId).eq('actor_id',actorId).eq('chat_id',chatId)
+    .maybeSingle<{owner_id:string;actor_id:string;chat_id:string;status:string;error:string|null}>();
+  if(workflowError||!workflow||workflow.status!=='paused'||!workflow.error?.includes('standalone_runpod_in_progress'))
+    throw new StandaloneAccountingError('resume_denied','No paused Qwen workflow is eligible for automatic continuation.');
+  const {data:attempts,error:attemptError}=await db.from('standalone_provider_attempts')
+    .select('id,provider_request_id').eq('owner_id',workflow.owner_id).eq('request_id',requestId)
+    .eq('actor_id',actorId).eq('chat_id',chatId).eq('provider','runpod')
+    .eq('model',QWEN_STILL_POLICY.model).eq('pricing_version',QWEN_STILL_POLICY.version)
+    .eq('state','dispatched').is('response_checkpoint',null).limit(10);
+  if(attemptError||!attempts?.some(attempt=>
+      /^[A-Za-z0-9-]{8,150}$/.test((attempt as {provider_request_id?:string|null}).provider_request_id??'')))
+    throw new StandaloneAccountingError('resume_denied','No accepted, uncompleted Qwen job is eligible for automatic continuation.');
+  return workflow.owner_id;
+}
+
 /** Persist original user input before any paid preparation. Each resume runs under
  * a fenced lease; completed provider responses replay from the attempt ledger. */
 export async function executeStandaloneWorkflow(request:NextRequest,payload:Record<string,unknown>,execute:(request:NextRequest)=>Promise<Response>):Promise<Response> {
   const actorId=String(payload.actorId??''),chatId=String(payload.chatId??'');
-  const ownerId=await authorizeStandaloneCaller(request,actorId,chatId);
   const requestId=request.headers.get('x-request-id')?.trim();
   if(!requestId||!/^[A-Za-z0-9._:-]{1,128}$/.test(requestId))throw new StandaloneAccountingError('request_id_required','A stable original request ID is required before paid processing.');
   const resumed=payload.standaloneResume===true;
+  const ownerId=resumed&&assertCronAuth(request)
+    ? await verifiedCronQwenOwner(actorId,chatId,requestId)
+    : await authorizeStandaloneCaller(request,actorId,chatId);
   if(resumed) {
     const saved=await rpc<Workflow|null>('load_workflow',{p_owner:ownerId,p_request:requestId});
     if(!saved||saved.actor_id!==actorId||saved.chat_id!==chatId)throw new StandaloneAccountingError('resume_denied','Saved request not found for this owner and conversation.');

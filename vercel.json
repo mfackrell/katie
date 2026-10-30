@@ -33,6 +33,10 @@
     {
       "path": "/api/internal/standalone-pricing/refresh",
       "schedule": "*/30 * * * *"
+    },
+    {
+      "path": "/api/internal/runpod-still/reconcile",
+      "schedule": "* * * * *"
     }
   ],
   "git": {

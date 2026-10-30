@@ -93,7 +93,10 @@ const dispatch=await readOne('benchmark_development_dispatches','task_id',proof.
 const pricing=await readVerifiedBenchmarkPricing(signal=>db.from('model_registry')
  .select('pricing_input_per_1m,pricing_output_per_1m,pricing_status')
  .eq('provider_name','openai').eq('model_id',approval.model).abortSignal(signal).maybeSingle());
-assertBenchmarkDollarCeiling({
+if(continuation?.plan?.version===5){
+ const control=await db.rpc('benchmark_full_monetary_control',{p_account:account.id,p_continuation:continuation.id});
+ if(control.error||control.data?.version!=='atomic-exposure-v1'||control.data.cumulativeTokenCap!==550000||control.data.dollarCeilingMicrousd!==10000000||Number(approval.max_tokens)!==550000)denied('atomic cumulative monetary control unavailable');
+}else assertBenchmarkDollarCeiling({
  armUsdCents:productionRuntime?1000:Number(process.env.KATIE_BENCHMARK_APPROVED_ARM_USD_CENTS),
  priceCeilingMicrosPerMillion:productionRuntime?28000000:Number(process.env.KATIE_BENCHMARK_APPROVED_MAX_USD_MICROS_PER_MILLION),
  publishedInputUsdPerMillion:pricing.pricing_input_per_1m,
@@ -318,6 +321,7 @@ try{
  await new Promise(resolve=>server.close(resolve));
  rmSync(root,{recursive:true,force:true});
 }
+
 
 
 

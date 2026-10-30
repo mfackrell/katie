@@ -80,7 +80,17 @@ export function admitNativeRequest(request,provenance){
   delete body.client_metadata;
  }
  if(body.prompt_cache_key!==undefined){if(body.prompt_cache_key!==null&&typeof body.prompt_cache_key!=='string')denied('prompt-cache-key',body.prompt_cache_key);delete body.prompt_cache_key;}
- if(!allowed(body,['model','input','instructions','max_output_tokens','stream','tools','tool_choice','parallel_tool_calls','reasoning','text','temperature','top_p','store','include','metadata','truncation']))denied('request-fields',body);
+ if(!allowed(body,['model','input','instructions','max_output_tokens','stream','tools','tool_choice','parallel_tool_calls','reasoning','text','temperature','top_p','store','include','metadata','truncation','service_tier']))denied('request-fields',body);
+ // Local SDK tools have no provider-side usage fees. Hosted tools and premium
+ // service tiers have no bounded cost in this approval and are rejected.
+ if(body.service_tier!==undefined&&body.service_tier!=='default')throw Error('GATEWAY_SERVICE_TIER_DENIED');
+ const localTool=(tool,depth=0)=>{
+  if(!object(tool)||depth>1)return false;
+  if(tool.type==='namespace')return depth===0&&Array.isArray(tool.tools)&&tool.tools.every(t=>localTool(t,depth+1));
+  return ['function','custom'].includes(tool.type)&&typeof tool.name==='string';
+ };
+ if(body.tools!==undefined&&body.tools!==null&&(!Array.isArray(body.tools)||!body.tools.every(t=>localTool(t))))throw Error('GATEWAY_PROVIDER_TOOL_COST_UNBOUNDED');
+ body.service_tier='default';
  if(body.instructions!==undefined&&body.instructions!==null&&typeof body.instructions!=='string')denied('instructions-type',body.instructions);
  if(body.input!==undefined&&typeof body.input!=='string'&&!Array.isArray(body.input))denied('input-type',body.input);
  if(body.store===true)denied('stored-context',body);
@@ -117,5 +127,6 @@ export function admitNativeRequest(request,provenance){
  const counted={...body,...(Array.isArray(body.input)?{input:body.input.map(item=>item.type==='reasoning'?{...item,encrypted_content:''}:item)}:{})};
  return {body,opaqueTokens,plaintextBytes:Buffer.byteLength(JSON.stringify(counted),'utf8')};
 }
+
 
 

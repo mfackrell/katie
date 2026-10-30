@@ -395,6 +395,16 @@ export async function getMessageById(chatId: string, messageId: string): Promise
   };
 }
 
+export async function deleteSingleMessage(chatId: string, messageId: string): Promise<boolean> {
+  const client = getSupabaseAdminClient();
+  const existing = await getMessageById(chatId, messageId);
+  if (!existing) return false;
+  const { error } = await client.from("messages")
+    .eq("chat_id", chatId).eq("id", messageId).delete();
+  if (error) throw new Error("Failed to delete message: " + error.message);
+  return true;
+}
+
 export async function getMessages(chatId: string): Promise<Message[]> {
   const client = getSupabaseAdminClient();
   const { data, error } = await client

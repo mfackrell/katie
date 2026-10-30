@@ -157,3 +157,24 @@ test('paid escalation admission fence checks durable Qwen uncertainty before pri
  await assert.rejects(runWithStandaloneAccounting({userId:'owner',actorId:'actor',chatId:'chat',requestId:'incident'},()=>escalateStillImageEvidence([image().imageDataUrl!],'describe')),error=>error instanceof Error && error.cause instanceof Error && /Authorized next safe checkpoint reached/.test(error.cause.message));
  assert.equal(calls.at(-1),'standalone_load_pricing');
 });
+
+
+test('refusal-only premium fallback is rejected instead of stored as sampled visual evidence',async()=>{
+  const ref=image('refused');let calls=0;
+  await assert.rejects(observeStandaloneStillImages([ref],{
+    qwen:async()=>({text:'Small text is illegible.',model,coverage:'sampled'}),
+    escalate:async()=>{calls++;return{text:"I'm sorry, but I can't assist with that.",model:'gpt-4o-mini'};}
+  }),{code:'standalone_no_priceable_vision'});
+  assert.equal(calls,1,'refusal cannot trigger an unbounded provider loop');
+});
+
+test('limited but factual premium observations are retained rather than discarded as refusals',async()=>{
+  const ref=image('partial');
+  const description='I cannot provide exact measurements from this image. The diagram shows a blue rectangle labeled 10 cm by 5 cm.';
+  const observations=await observeStandaloneStillImages([ref],{
+    qwen:async()=>({text:'Fine dimensions are illegible.',model,coverage:'sampled'}),
+    escalate:async()=>({text:description,model:'gpt-4o-mini'})
+  });
+  assert.match(observations.get('partial')?.observedSummary??'',/blue rectangle labeled 10 cm by 5 cm/);
+  assert.equal(observations.get('partial')?.summaryCoverage,'sampled');
+});

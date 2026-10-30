@@ -1,7 +1,13 @@
 import { NextRequest, NextResponse, after } from "next/server";
 import { z } from "zod";
-import { getMessages, getChatById } from "@/lib/data/persistence-store";
-import { authenticateStandalonePrincipal,authorizeStandaloneCaller } from "@/lib/standalone-accounting/auth";
+import { deleteSingleMessage, getChatById, getMessages } from "@/lib/data/persistence-store";
+import {
+  authenticateStandaloneOwner,
+  authenticateStandalonePrincipal,
+  authorizeStandaloneCaller,
+  StandaloneAuthorizationError,
+} from "@/lib/standalone-accounting/auth";
+import { createStandaloneLedger } from "@/lib/standalone-accounting/ledger";
 import { resultStore } from "@/lib/runpod/durable-results";
 import { publishVideoChat, processNextGrokVideo } from "@/lib/runpod/video-orchestration";
 
@@ -100,5 +106,27 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ messages, videoProgress }, { headers: { "Cache-Control": "no-store" } });
   } catch {
     return NextResponse.json({ error: "Invalid chat id" }, { status: 400 });
+  }
+}
+
+export async function DELETE(request: NextRequest) {
+  const chatId = request.nextUrl.searchParams.get("chatId");
+  const messageId = request.nextUrl.searchParams.get("messageId");
+  if (!chatId || !messageId || !/^[0-9a-f-]{36}$/i.test(messageId)) {
+    return NextResponse.json({error:"Invalid message identifier."},{status:400});
+  }
+  try {
+    const chat = await getChatById(chatId);
+    if (!chat) return NextResponse.json({error:"Conversation not found."},{status:404});
+    const ownerId = await authenticateStandaloneOwner(request);
+    if (!await createStandaloneLedger().authorizeScope(ownerId,chat.actorId,chat.id)) {
+      return NextResponse.json({error:"You are not authorized to delete this message."},{status:403});
+    }
+    const deleted = await deleteSingleMessage(chatId,messageId);
+    if (!deleted) return NextResponse.json({error:"Message not found in this conversation."},{status:404});
+    return NextResponse.json({success:true,deletedMessageId:messageId},{headers:{"Cache-Control":"no-store"}});
+  } catch(error) {
+    if (error instanceof StandaloneAuthorizationError) return NextResponse.json({error:"Owner authorization required."},{status:403});
+    return NextResponse.json({error:"Message deletion failed."},{status:500});
   }
 }

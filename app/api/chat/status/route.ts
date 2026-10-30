@@ -27,6 +27,28 @@ export async function GET(request: NextRequest) {
   const record = await getChatRequest(requestId);
   const chat = await getChatById(chatId);
   if (!record || record.chatId !== chatId || chat?.actorId !== record.actorId) {
+    // Image observation happens BEFORE chat_requests is claimed. A saved
+    // RunPod job can legitimately be running for several minutes here.
+    // Report the durable workflow rather than falsely saying no POST arrived.
+    if (chat && !record) {
+      const {data:workflow,error:workflowError}=await getSupabaseAdminClient()
+        .from('standalone_workflows').select('status,error,updated_at,actor_id')
+        .eq('request_id',requestId).eq('chat_id',chatId).eq('actor_id',chat.actorId)
+        .maybeSingle<{status:string;error:string|null;updated_at:string;actor_id:string}>();
+      if(workflowError)return NextResponse.json({error:'Saved request status unavailable.'},{status:503});
+      if(workflow){
+        const waitingForRunpod=workflow.status==='paused'&&
+          Boolean(workflow.error?.includes('standalone_runpod_in_progress'));
+        if(['pending','running'].includes(workflow.status)||waitingForRunpod)
+          return NextResponse.json({requestId,chatId,status:'processing',
+            waitingForRunpod,assistantMessageId:null,updatedAt:workflow.updated_at},
+            {headers:{'Cache-Control':'no-store'}});
+        if(workflow.status==='failed')
+          return NextResponse.json({requestId,chatId,status:'failed',
+            error:'The saved image-processing request failed. Review the original request in Usage.'},
+            {headers:{'Cache-Control':'no-store'}});
+      }
+    }
     return NextResponse.json(
       { error: "Chat request not found." },
       { status: 404 },
