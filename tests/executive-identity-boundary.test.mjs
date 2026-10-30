@@ -14,10 +14,15 @@ test('EO identity is database-owned and separate from ordinary Katie',()=>{
 });
 test('Executive commands use dedicated transport before all ordinary chat processing',()=>{
  const route=read('app/api/chat/route.ts');
- const idx=route.indexOf("if(actorRole.actor_kind==='executive')return runWithOrchestratorAccounting(()=>executeExecutiveCommand(payload,request))");
- assert.ok(idx>0);
- assert.ok(idx<route.indexOf("const task = await authorizeManagedChat"));
- assert.match(route,/const projectReply = !pdfProgress\.projectClarification && !executiveReply/);
+ const branch=route.indexOf("if(actorRole.actor_kind==='executive'){");
+ const principal=route.indexOf("const principal=await authenticateStandalonePrincipal(request);",branch);
+ const guard=route.indexOf("if(principal.isAnonymous || principal.id!==process.env.KATIE_OWNER_AUTH_USER_ID)",principal);
+ const denial=route.indexOf("return NextResponse.json({error:'Owner authorization required for executive management.'},{status:403});",guard);
+ const dispatch=route.indexOf("return runWithOrchestratorAccounting(()=>executeExecutiveCommand(payload,request));",denial);
+ const ordinary=route.indexOf("const task = await authorizeManagedChat",dispatch);
+ assert.ok(branch>0 && principal>branch && guard>principal && denial>guard && dispatch>denial && ordinary>dispatch,
+   'Executive work must require a verified, non-guest owner and dispatch before ordinary chat');
+ assert.match(route,/const projectReply = !isGuestSession && !pdfProgress\.projectClarification && !executiveReply/);
  const transport=read('lib/executive/transport.ts');
  assert.match(transport,/handleExecutiveManagement\(/);
  assert.doesNotMatch(transport,/getAvailableProviders|assembleContext|runAdaptiveCollaboration/);
