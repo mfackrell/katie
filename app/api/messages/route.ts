@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse, after } from "next/server";
 import { z } from "zod";
-import { getMessages } from "@/lib/data/persistence-store";
+import { getMessages, getChatById } from "@/lib/data/persistence-store";
+import { authenticateStandalonePrincipal,authorizeStandaloneCaller } from "@/lib/standalone-accounting/auth";
 import { resultStore } from "@/lib/runpod/durable-results";
 import { publishVideoChat, processNextGrokVideo } from "@/lib/runpod/video-orchestration";
 
@@ -16,6 +17,11 @@ export async function GET(request: NextRequest) {
     const { chatId } = chatIdParamSchema.parse({
       chatId: request.nextUrl.searchParams.get("chatId")
     });
+    const principal=await authenticateStandalonePrincipal(request);
+    const chat=await getChatById(chatId);
+    if(!chat)return NextResponse.json({error:"Conversation not found."},{status:404});
+    if(principal.isAnonymous || principal.id!==process.env.KATIE_OWNER_AUTH_USER_ID)
+      await authorizeStandaloneCaller(request,chat.actorId,chatId);
     const messages = await getMessages(chatId);
 
     const pendingRequests = [...new Set(messages
