@@ -1,4 +1,5 @@
-import { authenticateStandaloneOwner, StandaloneAuthorizationError } from '@/lib/standalone-accounting/auth';
+import { authenticateStandalonePrincipal, StandaloneAuthorizationError } from '@/lib/standalone-accounting/auth';
+import { getSupabaseAdminClient } from '@/lib/data/supabase/admin';
 import { createStandaloneLedger } from '@/lib/standalone-accounting/ledger';
 import { managedActor } from "@/lib/agents/store";
 import { NextRequest, NextResponse } from "next/server";
@@ -25,9 +26,16 @@ const updateChatSchema = z.object({
 
 export async function GET(request: NextRequest) {
   const actorId = request.nextUrl.searchParams.get("actorId");
-  const chats = actorId ? await listChatsByActorId(actorId) : await listChats();
-
-  return NextResponse.json({ chats }, { headers: { "Cache-Control": "no-cache" } });
+  try {
+    const principal=await authenticateStandalonePrincipal(request);
+    const chats=actorId?await listChatsByActorId(actorId):await listChats();
+    if (!principal.isAnonymous && principal.id===process.env.KATIE_OWNER_AUTH_USER_ID)
+      return NextResponse.json({chats},{headers:{"Cache-Control":"no-store"}});
+    const {data,error}=await getSupabaseAdminClient().rpc<string[]>('standalone_owned_chat_ids',{p_owner:principal.id});
+    if(error)throw Error('Scope lookup failed');
+    const owned=new Set(data??[]);
+    return NextResponse.json({chats:chats.filter(chat=>owned.has(chat.id))},{headers:{"Cache-Control":"no-store"}});
+  }catch{return NextResponse.json({error:"Session required."},{status:403});}
 }
 
 export async function POST(request: NextRequest) {
@@ -41,7 +49,8 @@ export async function POST(request: NextRequest) {
     }
 
     const standalone = actor.actorKind !== 'executive';
-    const ownerId = standalone ? await authenticateStandaloneOwner(request) : null;
+    const principal = standalone ? await authenticateStandalonePrincipal(request) : null;
+    const ownerId = principal?.id ?? null;
     const ledger = standalone ? createStandaloneLedger() : null;
     if (payload.createStarterChat) {
       const existingChats = await listChatsByActorId(payload.actorId);
@@ -64,7 +73,7 @@ export async function POST(request: NextRequest) {
       updatedAt: now
     };
 
-    const row = ledger && ownerId ? await ledger.createConversation(ownerId, chat.actorId, chat.id, chat.title) : null;
+    let row: {id:string;actor_id:string;title:string;created_at:string;updated_at:string}|null=n...[truncated]
     const savedChat = row ? { id:row.id, actorId:row.actor_id, title:row.title, createdAt:row.created_at, updatedAt:row.updated_at } : await saveChat(chat);
 
     return NextResponse.json({ chat: savedChat }, { status: 201 });
