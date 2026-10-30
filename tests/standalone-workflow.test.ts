@@ -90,6 +90,15 @@ test('deterministic image limitations are saved as terminal failures rather than
  assert.equal(stored.status,'failed');assert.match(await response.text(),/standalone_no_priceable_vision/);
 });
 
+test('a non-approvable model context blocker is terminal and does not strand a workflow paused',async()=>{
+  const response=await executeStandaloneWorkflow(request(),payload,async()=>new Response(
+    JSON.stringify({type:'reasoning_error',code:'standalone_context_capacity_unverified',message:'No newer context-capable model is available.'})+'\\n',
+    {headers:{'content-type':'application/x-ndjson'}}));
+  assert.equal(stored.status,'failed');
+  assert.match(await response.text(),/standalone_context_capacity_unverified/);
+  assert.equal(executions,0,'no paid provider generation is required for technical failure');
+});
+
 test('assistant text mentioning an image limitation code is not execution authority',async()=>{
  const response=await executeStandaloneWorkflow(request(),payload,async()=>new Response(JSON.stringify({type:'content',text:'The error standalone_no_priceable_vision means there is no supported escalation.'})+'\n',{headers:{'content-type':'application/x-ndjson'}}));
  assert.equal(stored.status,'completed');assert.match(await response.text(),/standalone_no_priceable_vision/);
