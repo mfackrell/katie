@@ -69,5 +69,5 @@ test('each cron tick bounds completed chat resumes independently of queued jobs'
     status:async()=> 'terminal' as QwenJobStatus,
     resume:async()=>{resumed++;return true;},
   });
-  assert.equal(resumed,2);assert.equal(result.resumed,2);assert.equal(result.deferred,2);
+  assert.equal(resumed,1);assert.equal(result.resumed,1);assert.equal(result.deferred,3);
 });
