@@ -94,3 +94,44 @@ test('assistant text mentioning an image limitation code is not execution author
  const response=await executeStandaloneWorkflow(request(),payload,async()=>new Response(JSON.stringify({type:'content',text:'The error standalone_no_priceable_vision means there is no supported escalation.'})+'\n',{headers:{'content-type':'application/x-ndjson'}}));
  assert.equal(stored.status,'completed');assert.match(await response.text(),/standalone_no_priceable_vision/);
 });
+
+test('authenticated cron can resume only a paused accepted Qwen job, never create or change spending authority',async()=>{
+ const savedSecret=process.env.CRON_SECRET;
+ process.env.CRON_SECRET='test-cron-secret-with-at-least-thirty-two-bytes';
+ try{
+  const execute=async()=>{executions++;return new Response(executions===1
+   ? '{"type":"accounting_pause","code":"standalone_runpod_in_progress"}\\n'
+   : '{"type":"content","text":"image observed"}\\n',
+   {headers:{'content-type':'application/x-ndjson'}});};
+  await executeStandaloneWorkflow(request(),payload,execute);
+  assert.equal(stored.status,'paused');stored.error='StandaloneAccountingError: standalone_runpod_in_progress: Qwen still processing';
+  let hasJob=true;
+  const admin=globalThis.__KATIE_SUPABASE_ADMIN_CLIENT__ as unknown as Record<string,unknown>;
+  admin.from=(table:string)=>{
+   const chain:Record<string,unknown>={};
+   for(const name of ['select','eq','not','is'])chain[name]=()=>chain;
+   chain.maybeSingle=async()=>({data:table==='standalone_workflows'?{
+     owner_id:owner,actor_id:actorId,chat_id:chatId,status:stored.status,error:stored.error
+   }:null,error:null});
+   chain.limit=async()=>({data:table==='standalone_provider_attempts'&&hasJob?[{id:'qwen-job'}]:[],error:null});
+   return chain;
+  };
+  const cronRequest=()=>new NextRequest('http://localhost/api/chat',{method:'POST',headers:{
+   authorization:'Bearer '+process.env.CRON_SECRET,'content-type':'application/json','x-request-id':'original-request'
+  },body:JSON.stringify({actorId,chatId,standaloneResume:true})});
+  hasJob=false;
+  await assert.rejects(executeStandaloneWorkflow(cronRequest(),{actorId,chatId,standaloneResume:true},execute),
+    {code:'standalone_resume_denied'});
+  assert.equal(executions,1,'no Qwen job means no cron execution');
+  hasJob=true;
+  const response=await executeStandaloneWorkflow(cronRequest(),{actorId,chatId,standaloneResume:true},execute);
+  assert.match(await response.text(),/image observed/);
+  assert.equal(stored.status,'completed');assert.equal(executions,2);
+  await assert.rejects(executeStandaloneWorkflow(cronRequest(),{actorId,chatId,standaloneResume:true},execute),
+    {code:'standalone_resume_denied'});
+  assert.equal(executions,2,'completed work cannot be dispatched again by cron');
+ }finally{
+  if(savedSecret===undefined)delete process.env.CRON_SECRET;
+  else process.env.CRON_SECRET=savedSecret;
+ }
+});
