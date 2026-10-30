@@ -18,7 +18,7 @@ language sql immutable set search_path=public,pg_temp as $$
  and length(a.prepared_payload->>'attachmentId') between 1 and 1000
  and length(a.prepared_payload->>'question') between 1 and 8192
  and jsonb_typeof(a.prepared_payload->'payload')='object'
- and (a.prepared_payload->'payload'-'messages')=jsonb_build_object(
+ and ((a.prepared_payload->'payload')-'messages')=jsonb_build_object(
    'model','venice-uncensored-1-2','temperature',0,'max_tokens',4096,
    'stream',false,'store',false,'venice_parameters',
    jsonb_build_object('enable_web_search','off','enable_web_scraping',false,
