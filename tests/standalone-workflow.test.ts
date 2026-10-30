@@ -100,8 +100,8 @@ test('authenticated cron can resume only a paused accepted Qwen job, never creat
  process.env.CRON_SECRET='test-cron-secret-with-at-least-thirty-two-bytes';
  try{
   const execute=async()=>{executions++;return new Response(executions===1
-   ? '{"type":"accounting_pause","code":"standalone_runpod_in_progress"}\\n'
-   : '{"type":"content","text":"image observed"}\\n',
+   ? '{"type":"accounting_pause","code":"standalone_runpod_in_progress"}\n'
+   : '{"type":"content","text":"image observed"}\n',
    {headers:{'content-type':'application/x-ndjson'}});};
   await executeStandaloneWorkflow(request(),payload,execute);
   assert.equal(stored.status,'paused');stored.error='StandaloneAccountingError: standalone_runpod_in_progress: Qwen still processing';
