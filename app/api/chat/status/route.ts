@@ -5,6 +5,7 @@ import { getSupabaseAdminClient } from "@/lib/data/supabase/admin";
 import { agentConfigSchema } from "@/lib/agents/policy";
 import { NextRequest, NextResponse } from "next/server";
 import { getChatRequest } from "@/lib/chat/request-idempotency";
+import { classifyPausedChatWorkflow } from "@/lib/chat/paused-workflow-recovery";
 
 export async function GET(request: NextRequest) {
   const requestId = request.nextUrl.searchParams.get("requestId")?.trim() ?? "";
@@ -63,6 +64,29 @@ export async function GET(request: NextRequest) {
       agentConfigSchema.parse(data.snapshot);
     }
   } catch { return NextResponse.json({ error: "Task status unavailable" }, { status: 503 }); }
+  // A chat_requests receipt can remain 'processing' after the durable
+  // standalone workflow has paused on an uncertain provider outcome.
+  // The workflow is authoritative for recovery; never poll it as live work.
+  // This is status-only: no provider retry, spending approval or state update.
+  if (record.status === "processing") {
+    const { data: saved, error: savedError } = await getSupabaseAdminClient()
+      .from("standalone_workflows")
+      .select("status,error,updated_at")
+      .eq("request_id", requestId)
+      .eq("chat_id", chatId)
+      .eq("actor_id", record.actorId)
+      .maybeSingle<{ status: string; error: string | null; updated_at: string }>();
+    if (!savedError && saved) {
+      const recovery = classifyPausedChatWorkflow(record.status, saved);
+      if (recovery) {
+        return NextResponse.json({
+          requestId, chatId, ...recovery,
+          assistantMessageId: null,
+          updatedAt: saved.updated_at,
+        }, { headers: { "Cache-Control": "no-store, no-cache, must-revalidate" } });
+      }
+    }
+  }
   return NextResponse.json(
     {
       requestId: record.requestId,
