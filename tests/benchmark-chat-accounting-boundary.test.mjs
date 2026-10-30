@@ -15,7 +15,7 @@ async function run(message,{bound=false,attachments=false,disabled=false,error=f
  vm.runInNewContext(code,{exports,message,currentAgentTask:()=>null,
   startProjectIntent:m=>/^Build /.test(m),gameProjectIntent:m=>/game/.test(m),
   projectForChat:async()=>bound?{id:'project'}:null,loadFullBenchmarkBinding,
-  getSupabaseAdminClient:()=>db,actorId:'actor',chatId:'chat',fileReferences:attachments?[{}]:[],requestImages:[],
+  getSupabaseAdminClient:()=>db,isGuestSession:false,actorId:'actor',chatId:'chat',fileReferences:attachments?[{}]:[],requestImages:[],
   NextResponse:{json:(body,{status})=>({body,status})},process:{env:{NEXT_PUBLIC_SUPABASE_URL:'https://barclcqataqyvifoeyop.supabase.co',KATIE_FULL_BENCHMARK_ENVIRONMENT:'production',KATIE_FULL_BENCHMARK_DISPATCH:disabled?'':'enabled',KATIE_NATIVE_BENCHMARK_DISPATCH:'enabled',KATIE_FULL_BENCHMARK_TRIAL_ID:'full-trial'}}});
  return {result:await exports.gate(),reads};
 }
