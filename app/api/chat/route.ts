@@ -671,7 +671,12 @@ export async function POST(request: NextRequest) {
     const {data:actorRole,error:actorRoleError}=await getSupabaseAdminClient()
       .from('actors').select('actor_kind').eq('id',payload.actorId).maybeSingle<{actor_kind:string}>();
     if(actorRoleError||!actorRole)return NextResponse.json({error:'Actor identity unavailable'},{status:503});
-    if(actorRole.actor_kind==='executive')return runWithOrchestratorAccounting(()=>executeExecutiveCommand(payload,request));
+    if(actorRole.actor_kind==='executive'){
+      const principal=await authenticateStandalonePrincipal(request);
+      if(principal.isAnonymous || principal.id!==process.env.KATIE_OWNER_AUTH_USER_ID)
+        return NextResponse.json({error:'Owner authorization required for executive management.'},{status:403});
+      return runWithOrchestratorAccounting(()=>executeExecutiveCommand(payload,request));
+    }
     const task = await authorizeManagedChat(request, payload);
     if (task) {
       const claimed = await agentRpc<boolean>("claim_agent_execution", { p_id: task.id, p_request: task.request_id });
@@ -721,7 +726,7 @@ async function executeChat(request: NextRequest) {
       /take eleven|issue\s*#?715|#715/i.test(message) &&
       ['https://iytvavgbaainnsrecmcx.supabase.co','https://barclcqataqyvifoeyop.supabase.co']
         .includes((process.env.NEXT_PUBLIC_SUPABASE_URL ?? '').replace(/\/+$/, ''));
-    const savedBenchmarkProject = !currentAgentTask() ? await projectForChat(actorId,chatId) : null;
+    const savedBenchmarkProject = !isGuestSession && !currentAgentTask() ? await projectForChat(actorId,chatId) : null;
     const benchmarkBinding = savedBenchmarkProject
       ? await loadFullBenchmarkBinding(getSupabaseAdminClient(),savedBenchmarkProject.id,process.env) : null;
     const benchmarkRelay = benchmarkIntake || Boolean(benchmarkBinding);
