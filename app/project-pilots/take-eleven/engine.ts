@@ -23,8 +23,8 @@ export const initialState: GameState = Object.freeze({
 export function transition(state: GameState, action: GameAction): GameState {
   if (action?.type === 'RESET') return { ...initialState };
   if (action?.type !== 'TAKE' || state.phase !== 'IN_PROGRESS' || state.winner !== null) return state;
-  const count = action.count;
-  if (!Number.isInteger(count) || count < 1 || count > 3 || count > state.stones) return state;
+  const count: unknown = 'count' in action ? action.count : undefined;
+  if (typeof count !== 'number' || !Number.isInteger(count) || count < 1 || count > 3 || count > state.stones) return state;
 
   const stones = state.stones - count;
   return stones === 0
