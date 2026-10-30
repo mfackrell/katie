@@ -30,7 +30,8 @@ if(process.env.KATIE_NATIVE_PROBE_BASELINE){
 const baseline=execFileSync('git',['-C',work,'rev-parse','HEAD'],{encoding:'utf8'}).trim();
 writeFileSync(join(root,'AGENT_REQUEST.md'),'Synthetic nonbillable qualification. Reply DONE. No repository changes.');
 writeFileSync(join(root,'review-findings.txt'),'Synthetic defect: require final independent review.');
-const phases=['implementation','review','repair','final-review'];
+const expectedLogprobsDenial=process.env.KATIE_NATIVE_PROBE_EXPECT_LOGPROBS_DENIAL==='1';
+const phases=expectedLogprobsDenial?['implementation']:['implementation','review','repair','final-review'];
 const token='synthetic-bridge-token-not-a-provider-credential';
 const calls=[],receipts=[],summaries=[],phaseRequests=new Map();let phase='',forwarded=0;
 const db={rpc:async(name,args)=>{
@@ -62,15 +63,15 @@ const upstream=async request=>{
   assert.equal(reasoning.encrypted_content,encrypted);assert.deepEqual(reasoning.summary,[]);
   const commentary=request.input?.find(x=>x.type==='message'&&x.role==='assistant'&&x.phase==='commentary');
   assert.ok(commentary,'Real SDK must replay intermediate assistant text');
-  assert.deepEqual(commentary.content,[{type:'output_text',text:'I will inspect the approved request and repository.',annotations:[]}]);
+  assert.deepEqual(commentary.content,[{type:'output_text',text:'I will inspect the approved request and repository.',annotations:[],logprobs:[]}]);
  }
 
  const text=phase==='review'?'CHANGES_REQUESTED: synthetic defect':phase==='final-review'?'PASS synthetic repair verified':'DONE';
- const item=count===1?{id:'call_'+forwarded,type:'function_call',name:'exec_command',call_id:callId,
+ const item=count===1?{id:'call_'+forwarded,type:'function_call',name:'exec_command',...(expectedLogprobsDenial?{}:{namespace:'functions'}),call_id:callId,
   arguments:JSON.stringify({cmd:reviewing?reviewCommand:'printf ACTUAL_NATIVE_TOOL_OK',workdir:'/work'}),status:'completed'}:
-  {id:'msg_'+forwarded,type:'message',role:'assistant',status:'completed',content:[{type:'output_text',text,annotations:[]}]};
+  {id:'msg_'+forwarded,type:'message',role:'assistant',status:'completed',content:[{type:'output_text',text,annotations:[],logprobs:[]}]};
  const reasoning={id:'rs_'+phase,type:'reasoning',summary:[],encrypted_content:encrypted};
- const commentary={id:'msg_commentary_'+forwarded,type:'message',role:'assistant',phase:'commentary',status:'completed',content:[{type:'output_text',text:'I will inspect the approved request and repository.',annotations:[]}]};
+ const commentary={id:'msg_commentary_'+forwarded,type:'message',role:'assistant',phase:'commentary',status:'completed',content:[{type:'output_text',text:'I will inspect the approved request and repository.',annotations:[],logprobs:[]}]};
  const output=count===1?[reasoning,commentary,item]:[item];
  const response={id:'synthetic-response-'+forwarded,object:'response',created_at:1,model:request.model,status:'completed',output,usage:{input_tokens:3,output_tokens:2,total_tokens:5}};
  const events=[['response.created',{type:'response.created',response:{...response,status:'in_progress',output:[]}}],...output.flatMap((item,output_index)=>[['response.output_item.added',{type:'response.output_item.added',output_index,item}],['response.output_item.done',{type:'response.output_item.done',output_index,item}]]),['response.completed',{type:'response.completed',response}]];
@@ -107,15 +108,27 @@ try{
   let output='',errors='';child.stdout.on('data',x=>output+=x);child.stderr.on('data',x=>errors+=x);
   const timer=setTimeout(()=>child.kill('SIGKILL'),60000);
   let code;try{code=await new Promise((resolve,reject)=>{child.once('error',reject);child.once('close',resolve);});}finally{clearTimeout(timer);}
+  if(expectedLogprobsDenial){
+   assert.notEqual(code,0,'Pre-fix gateway must reject the replay');
+   assert.match(errors,/GATEWAY_REQUEST_DENIED/);
+   assert.equal(forwarded,1);assert.equal(receipts.length,1);
+   assert.equal(calls.filter(x=>x.name==='benchmark_full_native_reserve').length,1);
+   assert.ok(summaries.some(s=>s.inputTypes?.some?.(i=>i.contentTypes?.some?.(c=>c.type==='output_text'&&c.keys.includes('logprobs')))),'Actual SDK must serialize replayed logprobs');
+   console.log('ACTUAL_NATIVE_LOGPROBS_PRE_FIX_DENIAL_REPRODUCED');
+   continue;
+  }
   assert.equal(code,0,phase+': '+errors+'\n'+output);
   for(const path of [work,join(work,'.git'),sdkRoot])assert.equal(existsSync(join(path,reviewMarker)),false,'Reviewer cannot mutate protected mount '+path);
   if(reviewing){const marker=output.split('\n').find(x=>x.startsWith('NATIVE_REVIEW_RESULT='));assert.ok(marker);assert.equal(JSON.parse(marker.slice('NATIVE_REVIEW_RESULT='.length)).verdict,phase==='review'?'changes_requested':'pass');}
   else assert.match(output,/NATIVE_DEVELOPMENT_RETURNED_FOR_INDEPENDENT_VERIFICATION/);
   console.log('ACTUAL_NATIVE_CHILD_PHASE_PASS='+phase);
  }
+ if(!expectedLogprobsDenial){
  assert.equal(forwarded,8);assert.equal(receipts.length,8);assert.equal(summaries.length,8);
  assert.deepEqual([...phaseRequests.values()],[2,2,2,2]);
  assert.equal(calls.filter(x=>x.name==='benchmark_full_native_reserve').length,8);
  assert.equal(receipts.reduce((n,x)=>n+x.actualTokens,0),40);
  console.log('ACTUAL_NATIVE_CHILD_FULL_PAID_ADMISSION_NONBILLABLE_PASS');
+ }
 }finally{await new Promise(resolve=>server.close(resolve));rmSync(root,{recursive:true,force:true});rmSync(join(sdkRoot,reviewMarker),{force:true});}
+
