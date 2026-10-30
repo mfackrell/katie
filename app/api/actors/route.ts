@@ -1,4 +1,5 @@
 import { createActivityAccountingFetch } from "@/lib/standalone-accounting/activity";
+import { authenticateStandalonePrincipal } from "@/lib/standalone-accounting/auth";
 import OpenAI from "openai";
 import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import { managedActor } from "@/lib/agents/store";
@@ -161,8 +162,17 @@ function buildActorId(): string {
   return `actor-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
-export async function GET() {
-  const actors = await listActors();
+export async function GET(request:NextRequest) {
+  let principal;
+  try{principal=await authenticateStandalonePrincipal(request);}
+  catch{return NextResponse.json({error:"Session required."},{status:403});}
+  const allActors=await listActors();
+  let actors=allActors;
+  if(principal.isAnonymous || principal.id!==process.env.KATIE_OWNER_AUTH_USER_ID){
+    const {data,error}=await getSupabaseAdminClient().rpc<string>('standalone_guest_workspace',{p_owner:principal.id});
+    if(error||!data)return NextResponse.json({error:"Actor access denied."},{status:403});
+    actors=allActors.filter(a=>a.id===data);
+  }
 
   const { data: managed, error } = await getSupabaseAdminClient().from("managed_agents").select("id,actor_id").returns<{ id: string; actor_id: string }>();
   if (error) return NextResponse.json({ error: "Agent identities unavailable" }, { status: 503 });
@@ -172,6 +182,9 @@ export async function GET() {
 
 export async function POST(request: NextRequest) {
   try {
+    const principal=await authenticateStandalonePrincipal(request);
+    if(principal.isAnonymous || principal.id!==process.env.KATIE_OWNER_AUTH_USER_ID)
+      return NextResponse.json({error:"Owner authorization required for actor changes."},{status:403});
     const raw = await request.json();
     if(raw?.calibration === "preview") return calibrationPreview(z.string().uuid().parse(raw.actorId));
     const payload = createActorSchema.parse(raw);
@@ -222,6 +235,9 @@ export async function PATCH(request: NextRequest) {
   const url = new URL(request.url);
 
   try {
+    const principal=await authenticateStandalonePrincipal(request);
+    if(principal.isAnonymous || principal.id!==process.env.KATIE_OWNER_AUTH_USER_ID)
+      return NextResponse.json({error:"Owner authorization required for actor changes."},{status:403});
     const { id: actorId } = actorIdParamSchema.parse({ id: url.searchParams.get("id") });
     const raw = await request.json();
     if(raw?.calibration === "apply") return calibrationApply(actorId,String(raw.hash||""),raw.approved,raw.groups,raw.proof);
@@ -272,6 +288,9 @@ export async function DELETE(request: NextRequest) {
   const url = new URL(request.url);
 
   try {
+    const principal=await authenticateStandalonePrincipal(request);
+    if(principal.isAnonymous || principal.id!==process.env.KATIE_OWNER_AUTH_USER_ID)
+      return NextResponse....[truncated]
     const { id: actorId } = actorIdParamSchema.parse({ id: url.searchParams.get("id") });
     if (await managedActor(actorId)) return NextResponse.json({ error: "Archive managed agents in Agents management to preserve history." }, { status: 409 });
     const actors = await listActors();
