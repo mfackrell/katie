@@ -79,7 +79,7 @@ export async function assertCompletionBudgetControls(db,rival,{project,mission,t
  const delayed=native(rival,100).then(()=>({accepted:true}),error=>({error}));
  await new Promise(resolve=>setTimeout(resolve,650));await db.query('commit');
  const expired=await delayed;assert.ok(expired.error);assert.match(expired.error.message,/expired|unauthorized/);await rival.query('rollback');
- await db.query('reset role');await db.query('update benchmark_execution_grants set deadline=$2 where id=$1',[g.id,g.deadline]);await db.query('set role service_role');
+ await db.query('reset role');await db.query('update benchmark_execution_grants set deadline=(select deadline from benchmark_full_continuations where id=$2) where id=$1',[g.id,c.id]);await db.query('set role service_role');
  // Dollar race: fixture raises historical provision to leave exactly one100token
  // hold. Two separate connections compete; exactly one may reserve.
  await db.query('reset role');
@@ -87,7 +87,7 @@ export async function assertCompletionBudgetControls(db,rival,{project,mission,t
  const sum=Number((await db.query('select sum(exposure_microusd) n from benchmark_dollar_exposures where account_id=$1',[account])).rows[0].n);
  await db.query('update benchmark_dollar_exposures set exposure_microusd=exposure_microusd+$2 where call_id=$1',[original.call_id,10000000-1400-sum]);
  await db.query('set role service_role');
- const race=await Promise.allSettled([native(db,100),native(rival,100)]);assert.equal(race.filter(x=>x.status==='fulfilled').length,1);
+ const race=await Promise.allSettled([native(db,100),native(rival,100)]);assert.equal(race.filter(x=>x.status==='fulfilled').length,1,JSON.stringify(race.map(x=>x.status==='rejected'?{message:x.reason.message,where:x.reason.where}:x.value.rows)));
  const id=race.find(x=>x.status==='fulfilled').value.rows[0].id;
  const linked=(await db.query('select legacy_mission_call_id from benchmark_budget_calls where id=$1',[id])).rows[0].legacy_mission_call_id;
  const held=(await db.query('select exposure_microusd from benchmark_dollar_exposures where call_id=$1',[id])).rows[0].exposure_microusd;

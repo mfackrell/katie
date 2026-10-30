@@ -251,7 +251,7 @@ do $$ declare body text;begin
  body:=replace(body,'if m.calls>=',
  $patch$if exists(select 1 from benchmark_development_resource_amendments am join benchmark_full_continuations c on c.id=am.continuation_id
  where am.continuation_id=g.continuation_id and c.plan->>'version'='5') and
- (m.calls>=20 or greatest(m.reserved_tokens,m.actual_tokens)+p_tokens>313279)
+ ((select count(*) from benchmark_budget_calls bc join mission_calls mc on mc.id::text=coalesce(bc.legacy_mission_call_id::text,bc.request_key) join mission_assignments mj on mj.id=mc.job_id where mj.mission_id=m.id)>=20 or greatest(m.reserved_tokens,m.actual_tokens)+p_tokens>313279)
  then raise exception 'Reserved development closure capacity';end if;
  if m.calls>=$patch$);execute body;
 end $$;
