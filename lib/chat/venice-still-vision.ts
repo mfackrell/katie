@@ -3,7 +3,7 @@ import { getAccountingScope } from '@/lib/standalone-accounting/context';
 import { createStandaloneLedger, StandaloneAccountingError } from '@/lib/standalone-accounting/ledger';
 import { canonicalJson } from '@/lib/standalone-accounting/estimate';
 import { VENICE_STILL_POLICY as policy } from '@/lib/standalone-accounting/venice-policy';
-import type { LedgerAttempt, ResponseCheckpoint } from '@/lib/standalone-accounting/types';
+import type { ResponseCheckpoint } from '@/lib/standalone-accounting/types';
 
 const VENICE_HOST='https://api.venice.ai';
 const IMAGE=/^data:image\/(?:jpeg|png|webp);base64,[A-Za-z0-9+/=]+$/i;
