@@ -24,7 +24,7 @@ export async function GET(request: NextRequest) {
       uncertainAutoAuthorized: autoAuthorized(attempt.id),
       cancellationActionable: !autoAuthorized(attempt.id) && (workflows.get(attempt.request_id)?.status === 'paused' || (workflows.get(attempt.request_id)?.status === 'running' && attempt.state !== 'uncertain')),
       continuationActionable: !autoAuthorized(attempt.id) && workflows.get(attempt.request_id)?.status === 'paused' && !workflows.get(attempt.request_id)?.reason,
-      pollableRunpod: attempt.provider==='runpod'&&attempt.model===QWEN_STILL_POLICY.model&&attempt.pricing_version===QWEN_STILL_POLICY.version&&!!attempt.provider_request_id&&/^[A-Za-z0-9-]{8,150}$/.test(attempt.provider_request_id)&&!attempt.response_checkpoint&&!snapshot.flags[attempt.id]?.conflict,
+      pollableRunpod: attempt.provider==='runpod'&&attempt.model===QWEN_STILL_POLICY.model&&(attempt.pricing_version===QWEN_STILL_POLICY.version||attempt.pricing_version==='standalone-runpod-qwen-still-v1')&&!!attempt.provider_request_id&&/^[A-Za-z0-9-]{8,150}$/.test(attempt.provider_request_id)&&!attempt.response_checkpoint&&!snapshot.flags[attempt.id]?.conflict,
       exposureAccepted: accepted.get(attempt.id) ?? false,
     })));
     // Only expose actionable attempts from this saved conversation. Daily aggregate can span standalone actors.
