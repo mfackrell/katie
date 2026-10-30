@@ -3,6 +3,7 @@ import type { FileReference, LlmProvider } from '@/lib/providers/types';
 import type { ConversationAttachment } from '@/lib/chat/attachment-continuity';
 import { QWEN_STILL_POLICY } from '@/lib/standalone-accounting/runpod-policy';
 import { describeImageWithRunpodQwen } from '@/lib/chat/runpod-still-vision';
+import { describeImageWithVenice, VeniceUnavailable } from '@/lib/chat/venice-still-vision';
 import { StandaloneAccountingError, createStandaloneLedger } from '@/lib/standalone-accounting/ledger';
 import { getAccountingScope, isStandaloneAccountingError, runWithStandaloneActivity } from '@/lib/standalone-accounting/context';
 import { loadStandalonePricing } from '@/lib/standalone-accounting/pricing-intake';
@@ -31,6 +32,19 @@ export function requiresCrossImageInspection(question:string,count:number):boole
 }
 function insufficient(text:string,coverage:string|undefined):boolean {
   return !text.trim() || coverage==='metadata' || coverage==='sampled' || /\b(?:cannot\s+(?:read|determine|discern|identify)|unable\s+to\s+(?:read|determine|discern)|too\s+(?:blurry|small)|illegible|insufficient\s+(?:detail|resolution)|incomplete\s+coverage)\b/i.test(text);
+}
+/** A conservative structural signal, not an image-content classifier. Do not
+ * claim to identify hallucinations without inspecting the pixels independently.
+ * Limit optional Venice dispatch to descriptions plainly missing visual detail.
+ */
+export function weakFocalPointDescription(text:string):boolean {
+  const s=text.trim();
+  if(s.length<220)return true;
+  const sections=[/primary focal point/i,/detailed focal.point observations/i,/spatial relationships and interactions/i];
+  if(s.length>=350&&sections.filter(pattern=>pattern.test(s)).length>=2)return false;
+  const focal=/\b(?:primary focal point|main subject|central subject|focal point|focus of (?:the )?image)\b/i.test(s);
+  const detail=/\b(?:texture|contour|color|surface|orientation|position|shape|marking|fold|crease|edge|shadow|reflection|proportion)\w*\b/i.test(s);
+  return (s.length<900&&!focal)||(s.length<1100&&!detail);
 }
 export function reusableImageObservation(reference:FileReference,saved:ConversationAttachment[],question:string,setHash?:string):ImageObservation|undefined {
   if(!reference.imageDataUrl)return;
@@ -88,7 +102,9 @@ export async function escalateStillImageEvidence(images:string[],question:string
 
 type Options={question?:string;saved?:ConversationAttachment[];onStatus?:(stage:string)=>void;
   qwen?:(image:string,question:string,deps?:Parameters<typeof describeImageWithRunpodQwen>[2])=>Promise<{text:string;model:string;coverage?:'full'|'sampled'|'metadata'}>;
-  escalate?:typeof escalateStillImageEvidence;now?:()=>string;
+  escalate?:typeof escalateStillImageEvidence;
+  venice?:typeof describeImageWithVenice;
+  now?:()=>string;
   deferEscalation?:boolean;initial?:Map<string,ImageObservation>};
 export async function observeStandaloneStillImages(references:FileReference[],options:Options={}):Promise<Map<string,ImageObservation>>{
   if(references.length>5)throw new StandaloneAccountingError('unsupported_image','Choose up to five images for bounded observation.');
@@ -128,7 +144,45 @@ export async function observeStandaloneStillImages(references:FileReference[],op
       observations.set(reference.fileId,{...metadata,observedSummary:'Qwen image observation unavailable.',summaryModel:'qwen-unavailable',summaryCoverage:'metadata',observationLimitations:['No usable Qwen observation was returned.']});
     }
   }
-  escalation ||= requiresCrossImageInspection(question,references.length)&&reusedForQuestion!==references.length;
+  // The primary Qwen result is retained first. Dolphin is a distinct,
+  // independently priced single-image fallback, never a replacement for Qwen.
+  // Only run it when Qwen evidence is incomplete or demonstrably thin.
+  const hasVenice=Boolean(options.venice||process.env.VENICE_API_KEY);
+  if(!options.deferEscalation&&hasVenice){
+    for(const reference of references){
+      const previous=observations.get(reference.fileId);
+      if(!previous||!(previous.summaryModel?.includes('Qwen')||previous.summaryModel==='qwen-unavailable'))continue;
+      if(!insufficient(previous.observedSummary??'',previous.summaryCoverage)&&
+         !weakFocalPointDescription(previous.observedSummary??''))continue;
+      const image=reference.imageDataUrl;
+      if(!image)continue;
+      options.onStatus?.('Analyzing image with Dolphin Venice…');
+      try {
+        const result=await (options.venice??describeImageWithVenice)(
+          image,BASE_QUESTION+(question?'\nCURRENT VISUAL QUESTION: '+question:''),
+          {attachmentId:reference.fileId,onStatus:options.onStatus});
+        if(result&&result.text.trim()&&result.coverage==='full'&&
+           !isGenericVisionRefusal(result.text)&&!isExplicitVisionPolicyRefusal(result.text)&&
+           !insufficient(result.text,result.coverage)&&!weakFocalPointDescription(result.text)){
+          observations.set(reference.fileId,{...previous,observedSummary:result.text.trim().slice(0,20000),
+            summaryModel:result.model,summaryCoverage:'full',observationLimitations:[]});
+          options.onStatus?.('Dolphin Venice image analysis complete');
+        }
+      }catch(error){
+        if(!(error instanceof VeniceUnavailable))throw error;
+        // No key, missing price/model, or definitive no-credit response is not
+        // authority for another Venice submission. Preserve existing fallback.
+        options.onStatus?.('Dolphin Venice unavailable; preserving existing image escalation');
+      }
+    }
+    // A successful stronger observation clears only ordinary Qwen deficiency;
+    // high-precision and cross-image requests keep their existing premium gate.
+    escalation=references.some(ref=>{
+      const observation=observations.get(ref.fileId);
+      return !observation||insufficient(observation.observedSummary??'',observation.summaryCoverage);
+    })||requiresAdditionalImageDetail(question);
+  }
+    escalation ||= requiresCrossImageInspection(question,references.length)&&reusedForQuestion!==references.length;
   if(escalation&&references.length&&!options.deferEscalation){
     options.onStatus?.('Escalating image analysis for additional detail…');
     const labelled=references.map((ref,index)=>`Image ${index+1}: ${ref.fileName} (attachment ${ref.fileId})`).join('\n');

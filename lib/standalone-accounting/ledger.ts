@@ -46,6 +46,7 @@ export function createStandaloneLedger(db:LedgerDatabase=getSupabaseAdminClient(
     uncertainExposureAccepted:(ownerId:string,attemptId:string)=>rpc<boolean>('uncertain_exposure_accepted',{p_owner:ownerId,p_attempt:attemptId}),
     completeQwenRejection:(ownerId:string,attemptId:string,checkpoint:ResponseCheckpoint)=>rpc<LedgerAttempt>('complete_qwen_rejection',{p_owner:ownerId,p_attempt:attemptId,p_checkpoint:checkpoint}),
     completeQwenEstimate:(ownerId:string,attemptId:string,jobId:string,checkpoint:ResponseCheckpoint,evidence:Record<string,unknown>)=>rpc<LedgerAttempt>('complete_qwen_estimate',{p_owner:ownerId,p_attempt:attemptId,p_job:jobId,p_checkpoint:checkpoint,p_evidence:evidence}),
+    completeVeniceEstimate:(ownerId:string,attemptId:string,checkpoint:ResponseCheckpoint,evidence:Record<string,unknown>)=>rpc<LedgerAttempt>('complete_venice_estimate',{p_owner:ownerId,p_attempt:attemptId,p_checkpoint:checkpoint,p_evidence:evidence}),
     markUncertain:(ownerId:string,attemptId:string,reason='Provider outcome unknown')=>rpc<LedgerAttempt>('mark_uncertain',{p_owner:ownerId,p_attempt:attemptId,p_reason:reason}),
     cancel:(ownerId:string,attemptId:string)=>rpc<LedgerAttempt>('cancel',{p_owner:ownerId,p_attempt:attemptId}),
     recordPartialUsage:(ownerId:string,attemptId:string,usage:Record<string,unknown>,evidence:Record<string,unknown>)=>rpc<LedgerAttempt>('record_partial_usage',{p_owner:ownerId,p_attempt:attemptId,p_usage:usage,p_evidence:evidence}),

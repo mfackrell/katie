@@ -142,7 +142,9 @@ type ChatMetadataChunk = {
 
 const IMAGE_OBSERVATION_STAGES = new Set([
   'Analyzing image with Qwen…', 'Qwen image analysis queued…', 'Qwen image analysis complete',
-  'Using saved Qwen observation', 'Escalating image analysis for additional detail…',
+  'Using saved Qwen observation', 'Analyzing image with Dolphin Venice…',
+  'Dolphin Venice image analysis complete', 'Dolphin Venice unavailable; preserving existing image escalation',
+  'Using saved Dolphin Venice observation', 'Escalating image analysis for additional detail…',
 ]);
 function appendImageObservationStage(current: string[], stage: string): string[] {
   if (!IMAGE_OBSERVATION_STAGES.has(stage) || current.at(-1) === stage) return current;
