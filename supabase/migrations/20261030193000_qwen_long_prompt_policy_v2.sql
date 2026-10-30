@@ -36,40 +36,6 @@ language sql immutable set search_path=public,pg_temp as $$
  and a.prepared_payload#>>'{payload,input,body,messages,0,content,1,text}'=a.prepared_payload->>'question',false)
 $$;
 
--- A valid job ID permits polling, not automatic reconciliation of conflicting
--- monetary, identity or usage evidence, including a crash before mark_uncertain.
--- Only genuine settlement supplies actual cost and clears the conflict guard.
-create function public.standalone_qwen_unresolved_conflict(a public.standalone_provider_attempts) returns boolean
-language sql stable security definer set search_path=public,pg_temp as $$
- select a.state in('dispatched','uncertain','estimated') and exists(select 1 from standalone_attempt_events e
- where e.owner_id=a.owner_id and e.attempt_id=a.id and e.kind in('receipt_conflict','identifier_conflict','usage_conflict'))
-$$;
-
-create function public.standalone_complete_qwen_estimate(p_owner uuid,p_attempt uuid,p_job text,p_checkpoint jsonb,p_evidence jsonb) returns jsonb
-language plpgsql security definer set search_path=public,pg_temp as $$
-declare a standalone_provider_attempts;job jsonb;completion_evidence jsonb;
-begin
- perform 1 from standalone_owner_configuration where owner_id=p_owner for update;
- select * into a from standalone_provider_attempts where id=p_attempt and owner_id=p_owner for update;
- if not found or not standalone_qwen_policy_attempt(a) then raise exception 'STANDALONE_INFRASTRUCTURE_POLICY_DENIED';end if;
- if standalone_qwen_unresolved_conflict(a) then raise exception 'STANDALONE_INFRASTRUCTURE_CONFLICT';end if;
- if a.state not in('dispatched','uncertain','estimated','settled') or coalesce(p_job,'') !~ '^[A-Za-z0-9-]{8,150}$'
- or a.provider_request_id is distinct from p_job or jsonb_typeof(p_checkpoint) is distinct from 'object'
- or p_checkpoint->>'status' is distinct from '200' or coalesce(length(p_checkpoint->>'body'),0) not between 1 and 2000000
- or jsonb_typeof(p_evidence) is distinct from 'object' then raise exception 'STANDALONE_INFRASTRUCTURE_COMPLETION_INVALID';end if;
- begin job:=(p_checkpoint->>'body')::jsonb;exception when others then raise exception 'STANDALONE_INFRASTRUCTURE_COMPLETION_INVALID';end;
- if job->>'id' is distinct from p_job or coalesce(job->>'status','') not in('COMPLETED','FAILED','CANCELLED','TIMED_OUT') then raise exception 'STANDALONE_INFRASTRUCTURE_COMPLETION_INVALID';end if;
- if a.response_checkpoint is not null and a.response_checkpoint is distinct from p_checkpoint then raise exception 'STANDALONE_CHECKPOINT_CONFLICT';end if;
- completion_evidence:=(p_evidence-'actualMicrousd'-'actualCost'-'cost')||jsonb_build_object('kind','estimated_infrastructure','policyVersion','standalone-runpod-qwen-still-v1','jobId',p_job,'reservedMicrousd','20000','currency','USD','monetaryReceipt',false,'jobStatus',job->>'status');
- if a.state='settled' then return standalone_attempt_json(a);end if;
- if a.state='estimated' then
-  if a.evidence is distinct from completion_evidence then raise exception 'STANDALONE_INFRASTRUCTURE_COMPLETION_CONFLICT';end if;
-  return standalone_attempt_json(a);
- end if;
- update standalone_provider_attempts set state='estimated',response_checkpoint=p_checkpoint,evidence=completion_evidence,
- uncertainty_reason=null,settled_at=null where id=a.id returning * into a;
- return standalone_attempt_json(a);
-end $$;
 
 create or replace function public.standalone_complete_qwen_estimate(p_owner uuid,p_attempt uuid,p_job text,p_checkpoint jsonb,p_evidence jsonb) returns jsonb
 language plpgsql security definer set search_path=public,pg_temp as $$
