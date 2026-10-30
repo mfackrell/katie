@@ -1,9 +1,18 @@
 'use client';
 import { useEffect, useState } from 'react';
 import { ownerSessionBearer } from '@/lib/tools/browser-owner-session';
+import { usePathname } from 'next/navigation';
+import { requiresKatieWorkspaceSession } from '@/lib/standalone-accounting/session-routes';
 
-/** Loads a verified server session before conversation/actor data is requested. */
+/** Only Katie's workspace is gated; independent routes render without Auth. */
 export function ChatSessionGate({children}:{children:React.ReactNode}){
+  const pathname=usePathname();
+  if(!requiresKatieWorkspaceSession(pathname))return <>{children}</>;
+  return <VerifiedWorkspaceSession>{children}</VerifiedWorkspaceSession>;
+}
+
+/** A new mount verifies the session before loading any workspace data. */
+function VerifiedWorkspaceSession({children}:{children:React.ReactNode}){
   const [state,setState]=useState<'loading'|'ready'|'error'>('loading');
   const [message,setMessage]=useState('');
   useEffect(()=>{
