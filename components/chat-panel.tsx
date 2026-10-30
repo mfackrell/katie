@@ -305,12 +305,15 @@ const PENDING_CHAT_REQUEST_STORAGE_PREFIX = "chat:pending-request:";
 const MOBILE_RECOVERY_POLL_INTERVAL_MS = 1_500;
 const MOBILE_RECOVERY_WINDOW_MS = 4 * 60 * 1_000;
 const MOBILE_PENDING_MAX_AGE_MS = 30 * 60 * 1_000;
+const QWEN_RECOVERY_WINDOW_MS = 40 * 60 * 1_000;
+const QWEN_RECOVERY_POLL_INTERVAL_MS = 10_000;
 
 type PendingChatRequest = {
   chatId: string;
   content: string;
   startedAt: string;
   requestId?: string;
+  waitingForRunpod?: boolean;
 };
 
 function pendingChatRequestStorageKey(chatId: string): string {
@@ -342,6 +345,7 @@ function readPendingChatRequest(chatId: string): PendingChatRequest | null {
       content: parsed.content,
       startedAt: parsed.startedAt,
       ...(typeof parsed.requestId === "string" ? { requestId: parsed.requestId } : {}),
+      ...(parsed.waitingForRunpod === true ? { waitingForRunpod: true } : {}),
     };
   } catch {
     return null;
@@ -367,9 +371,9 @@ function clearPendingChatRequest(chatId: string): void {
   window.localStorage.removeItem(pendingChatRequestStorageKey(chatId));
 }
 
-function waitForRecoveryPoll(): Promise<void> {
+function waitForRecoveryPoll(ms = MOBILE_RECOVERY_POLL_INTERVAL_MS): Promise<void> {
   return new Promise((resolve) => {
-    window.setTimeout(resolve, MOBILE_RECOVERY_POLL_INTERVAL_MS);
+    window.setTimeout(resolve, ms);
   });
 }
 
@@ -383,7 +387,8 @@ async function pollForPersistedAssistant(
   maxWaitMs = MOBILE_RECOVERY_WINDOW_MS,
 ): Promise<Message[] | null> {
   const startedAtMs = Date.parse(pending.startedAt);
-  const deadline = Date.now() + maxWaitMs;
+  let deadline = Date.now() + (pending.waitingForRunpod ? QWEN_RECOVERY_WINDOW_MS : maxWaitMs);
+  const qwenDeadline = Date.now() + QWEN_RECOVERY_WINDOW_MS;
 
   while (Date.now() <= deadline) {
     if (typeof document !== "undefined" && document.visibilityState === "hidden") {
@@ -407,6 +412,7 @@ async function pollForPersistedAssistant(
         if (statusResponse.ok) {
           const statusPayload = (await statusResponse.json()) as {
             status?: "processing" | "completed" | "failed";
+            waitingForRunpod?: boolean;
             assistantMessageId?: string | null;
             error?: string | null;
           };
@@ -419,10 +425,11 @@ async function pollForPersistedAssistant(
           }
 
           if (statusPayload.status === "processing") {
+            if (statusPayload.waitingForRunpod) deadline = Math.max(deadline, qwenDeadline);
             if (Date.now() >= deadline) {
               break;
             }
-            await waitForRecoveryPoll();
+            await waitForRecoveryPoll(statusPayload.waitingForRunpod ? QWEN_RECOVERY_POLL_INTERVAL_MS : MOBILE_RECOVERY_POLL_INTERVAL_MS);
             continue;
           }
 
@@ -1309,7 +1316,7 @@ export function ChatPanel({
       }
 
       const pendingAgeMs = Date.now() - Date.parse(pending.startedAt);
-      if (Number.isFinite(pendingAgeMs) && pendingAgeMs > MOBILE_PENDING_MAX_AGE_MS) {
+      if (Number.isFinite(pendingAgeMs) && pendingAgeMs > (pending.waitingForRunpod ? QWEN_RECOVERY_WINDOW_MS : MOBILE_PENDING_MAX_AGE_MS)) {
         clearPendingChatRequest(chatId);
         return;
       }
@@ -1384,14 +1391,22 @@ export function ChatPanel({
       void recoverAfterResume();
     }
 
+    // After the original HTTP stream has closed, automatically watch the same
+    // saved Qwen request. No approval or second RunPod submission is involved.
+    function handleQwenAwaiting() {
+      window.setTimeout(() => { if(!cancelled) void recoverAfterResume(); }, 0);
+    }
+
     void recoverAfterResume();
     document.addEventListener("visibilitychange", handleVisibilityChange);
     window.addEventListener("pageshow", handlePageShow);
+    window.addEventListener("katie:runpod-awaiting", handleQwenAwaiting);
 
     return () => {
       cancelled = true;
       document.removeEventListener("visibilitychange", handleVisibilityChange);
       window.removeEventListener("pageshow", handlePageShow);
+      window.removeEventListener("katie:runpod-awaiting", handleQwenAwaiting);
     };
   }, [chatId]);
 
@@ -1789,7 +1804,16 @@ export function ChatPanel({
         let serverMessage = responseText || `Request failed with status ${response.status}.`;
 
         try {
-          const parsed = JSON.parse(responseText) as { error?: string };
+          const parsed = JSON.parse(responseText) as { error?: string; code?: string };
+          if (parsed.code === "standalone_runpod_in_progress") {
+            // The server persisted the accepted RunPod job. This is a wait,
+            // never an upload failure or permission to resend GPU inference.
+            const pending = readPendingChatRequest(chatId);
+            if (pending) writePendingChatRequest({ ...pending, waitingForRunpod: true });
+            setStatusMessage("Qwen is processing your image. Katie will automatically continue after the saved job finishes.");
+            window.dispatchEvent(new Event("katie:runpod-awaiting"));
+            return;
+          }
           serverMessage = parsed.error ?? serverMessage;
         } catch {
           // Vercel can reject oversized requests before Next.js executes, returning a non-JSON 413 response.
@@ -1911,6 +1935,14 @@ export function ChatPanel({
               };
 
           if (chunk.type === "accounting_pause") {
+            if (chunk.code === "standalone_runpod_in_progress") {
+              const pending = readPendingChatRequest(chatId);
+              if (pending) writePendingChatRequest({ ...pending, waitingForRunpod: true });
+              setStatusMessage("Qwen is still processing your image. Katie will continue automatically when it finishes.");
+              setStreamingAnswer("");
+              window.dispatchEvent(new Event("katie:runpod-awaiting"));
+              return;
+            }
             setStatusMessage(chunk.message + " Review the saved attempt in Usage.");
             clearPendingChatRequest(chatId);
             setStreamingAnswer("");
