@@ -1,4 +1,4 @@
-name: Native gateway nonbillable qualification
+name: Native gateway qualification
 on:
   pull_request:
     paths:
@@ -8,6 +8,21 @@ on:
   workflow_dispatch:
   workflow_call:
 jobs:
+  provider-input-count:
+    if: github.head_ref == 'fix/native-authoritative-count' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Qualify fixed gpt-5.3-codex input counts only (no inference)
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: node scripts/benchmark/native-input-count-probe.mjs
   existing-response-forensics:
     if: github.head_ref == 'fix/native-sdk-replay-metadata' && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
@@ -99,4 +114,5 @@ jobs:
         run: node scripts/benchmark/native-four-phase-contained-host-probe.mjs
       - name: Qualify actual SDK plus HTTP gateway inside containment
         run: bash scripts/benchmark/real-codex-gateway-bwrap-probe.sh
+
 

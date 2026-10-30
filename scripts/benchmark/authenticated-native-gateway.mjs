@@ -9,7 +9,7 @@ export const tokenDigest=token=>{
 };
 export async function forwardAuthorizedModelRequest({
  db,grantToken,trialId,executionEpoch,model,requestBody,
- upperTokens,upstream,providerNamespace,recordReceipt,fullMission=false,reasoningProvenance
+ upperTokens,upstream,providerNamespace,recordReceipt,fullMission=false,reasoningProvenance,requireInputCount=false
 }){
  if(!db||typeof db.rpc!=='function'||typeof upstream!=='function'||
     typeof recordReceipt!=='function'||!trialId||!providerNamespace||
@@ -41,8 +41,24 @@ export async function forwardAuthorizedModelRequest({
   throw Error('GATEWAY_OUTPUT_LIMIT_DENIED');
  const candidate={...requestBody,max_output_tokens:outputCap};
  const admission=syntheticFixture?{body:candidate}:admitNativeRequest(candidate,reasoningProvenance);
- const boundedBody=admission.body;
- const admissionTokens=syntheticFixture?upperTokens:admission.plaintextBytes+admission.opaqueTokens+outputCap+1024;
+ // Freeze a detached payload: count and inference use exactly this context,
+ // even if the caller mutates its input while the count is pending.
+ const freeze=value=>{if(value&&typeof value==='object'){Object.values(value).forEach(freeze);Object.freeze(value);}return value;};
+ const boundedBody=freeze(JSON.parse(JSON.stringify(admission.body)));
+ if(Buffer.byteLength(JSON.stringify(boundedBody),'utf8')>2_000_000)throw Error('GATEWAY_REQUEST_EXCEEDS_GRANT');
+ let admissionTokens=syntheticFixture?upperTokens:admission.plaintextBytes+admission.opaqueTokens+outputCap+1024;
+ if(requireInputCount&&typeof upstream.countInputTokens!=='function')throw Error('GATEWAY_INPUT_COUNT_UNAVAILABLE');
+ if(!syntheticFixture&&typeof upstream.countInputTokens==='function'){
+  const counted=await upstream.countInputTokens(boundedBody);
+  const requestHash=createHash('sha256').update(JSON.stringify(boundedBody)).digest('hex');
+  if(counted?.requestHash!==requestHash)throw Error('GATEWAY_INPUT_COUNT_INVALID');
+  const inputTokens=counted.inputTokens;
+  if(!Number.isSafeInteger(inputTokens)||inputTokens<0||inputTokens>120000)throw Error('GATEWAY_INPUT_COUNT_INVALID');
+  // Retain opaque provenance as conservative extra headroom even though the
+  // provider count includes request formatting and reasoning context.
+  admissionTokens=inputTokens+admission.opaqueTokens+outputCap+1024;
+  if(process.env.KATIE_BENCHMARK_GATEWAY_DIAGNOSTICS==='enabled')console.log('NATIVE_GATEWAY_INPUT_COUNT',JSON.stringify({inputTokens,opaqueHeadroom:admission.opaqueTokens,outputCap,protocolHeadroom:1024,reservationTokens:admissionTokens,requestHash}));
+ }
  if(!Number.isSafeInteger(admissionTokens)||admissionTokens>upperTokens)
   throw Error('GATEWAY_REQUEST_EXCEEDS_GRANT');
  const key=randomUUID();
@@ -66,4 +82,5 @@ export async function forwardAuthorizedModelRequest({
   throw Object.assign(new Error('GATEWAY_UPSTREAM_UNCERTAIN'),{cause:error,operationId:id});
  }
 }
+
 
