@@ -48,8 +48,8 @@ async function verifiedCronQwenOwner(actorId:string,chatId:string,requestId:stri
     .eq('actor_id',actorId).eq('chat_id',chatId).eq('provider','runpod')
     .eq('model',QWEN_STILL_POLICY.model).eq('pricing_version',QWEN_STILL_POLICY.version)
     .eq('state','dispatched').is('response_checkpoint',null).limit(10);
-  if(attemptError||!attempts?.some((attempt: {provider_request_id?:string|null})=>
-      /^[A-Za-z0-9-]{8,150}$/.test(attempt.provider_request_id??'')))
+  if(attemptError||!attempts?.some(attempt=>
+      /^[A-Za-z0-9-]{8,150}$/.test((attempt as {provider_request_id?:string|null}).provider_request_id??'')))
     throw new StandaloneAccountingError('resume_denied','No accepted, uncompleted Qwen job is eligible for automatic continuation.');
   return workflow.owner_id;
 }
