@@ -25,7 +25,7 @@ test('Venice independent vision fallback is admitted atomically with a reviewed 
   for(const file of ['20261028193000_standalone_provider_attempt_ledger.sql','20261029153000_standalone_deleted_scope_history.sql',
       '20261029170000_standalone_pricing_and_enrollment.sql','20261029190000_standalone_actor_authority.sql',
       '20261029200000_standalone_uncertain_exposure_continuation.sql','20261029210000_standalone_qwen_infrastructure.sql',
-      '20261030193000_qwen_long_prompt_policy_v2.sql','20261030183000_venice_dolphin_vision_fallback.sql'])
+      '20261030193000_qwen_long_prompt_policy_v2.sql','20261030230000_venice_dolphin_vision_fallback.sql'])
     await admin.query(readFileSync(new URL('../supabase/migrations/'+file,import.meta.url),'utf8'));
   const service=await connect('service_role'),owner=randomUUID(),actor=randomUUID(),chat=randomUUID();
   await admin.query("insert into actors values($1,'Venice fixture','standard')",[actor]);
