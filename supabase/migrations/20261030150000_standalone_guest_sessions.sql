@@ -139,4 +139,13 @@ revoke all on function standalone_claim_verified_legacy_scope(uuid,uuid,uuid) fr
 grant execute on function standalone_claim_verified_legacy_scope(uuid,uuid,uuid) to service_role;
 
 
+
+-- Exclude anonymous workspaces from the signed-in owner's actor/chat lists.
+-- This RPC is service-only, not a browser-visible directory.
+create function public.standalone_guest_actor_ids() returns uuid[]
+language sql stable security definer set search_path=public,pg_temp as $$
+  select coalesce(array_agg(actor_id),'{}'::uuid[]) from standalone_guest_workspaces
+$$;
+revoke all on function standalone_guest_actor_ids() from public,anon,authenticated;
+grant execute on function standalone_guest_actor_ids() to service_role;
 commit;
