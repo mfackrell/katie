@@ -105,6 +105,7 @@ export function SelfToolsOwnerSession({ chatId }: { chatId?: string }) {
       setSignedIn(true);
       setSessionReady(true);
       setNotice("Owner session active.");
+      window.dispatchEvent(new Event("katie-owner-session-changed"));
     } finally {setBusy(false);}
   }
   async function authorizeChat() {
@@ -124,9 +125,12 @@ export function SelfToolsOwnerSession({ chatId }: { chatId?: string }) {
     if (!client) return;
     const {error} = await client.auth.signOut();
     setNotice(error ? "Sign-out failed." : "Signed out of self-management tools.");
+    if(!error)window.dispatchEvent(new Event("katie-owner-session-changed"));
   }
   return (
-    <section aria-label="Katie self-tools owner authentication" className="shrink-0 border-t border-emerald-500/30 bg-zinc-900 px-4 py-3 text-sm text-zinc-100">
+    <details aria-label="Katie optional account tools" className="shrink-0 border-t border-white/10 bg-zinc-900 px-4 py-2 text-sm text-zinc-100">
+      <summary className="cursor-pointer text-zinc-400">Owner account (optional)</summary>
+      <section className="py-3">
       {!sessionReady ? (
         <p role="status">Restoring owner session…</p>
       ) : signedIn ? (
@@ -156,6 +160,7 @@ export function SelfToolsOwnerSession({ chatId }: { chatId?: string }) {
         </div>
       )}
       {notice && <p role="status">{notice}</p>}
-    </section>
+      </section>
+    </details>
   );
 }
