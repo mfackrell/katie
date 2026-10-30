@@ -3,7 +3,7 @@ import { assertCronAuth } from '@/lib/runpod/durable-results';
 import { reconcileWaitingQwenJobs } from '@/lib/chat/runpod-still-recovery';
 
 export const dynamic='force-dynamic';
-export const maxDuration=240;
+export const maxDuration=800;
 
 export async function GET(request:NextRequest){
   if(!assertCronAuth(request))return NextResponse.json({error:'unauthorized'},{status:401});
