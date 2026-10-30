@@ -81,7 +81,7 @@ const upstream=async request=>{
 
  const text=phase==='review'?'CHANGES_REQUESTED: synthetic defect':phase==='final-review'?'PASS synthetic repair verified':'DONE';
  const item=count<(realistic?phaseLimits[phase]:2)?{id:'fc_'+forwarded,type:'function_call',name:'exec_command',...(expectedLogprobsDenial?{}:{namespace:'functions'}),call_id:callId,
-  arguments:JSON.stringify({cmd:(reviewing?reviewCommand:sourceWrite?"mkdir -p app/project-pilots/take-eleven && printf 'export const qualification = 1;\\n' > "+probePath+" && printf ACTUAL_NATIVE_TOOL_OK":'printf ACTUAL_NATIVE_TOOL_OK')+(realistic&&count===1?' ; cat /trusted/AGENT_REQUEST.md':''),workdir:'/work',...(realistic?{max_output_tokens:20000}:{})}),status:'completed'}:
+  arguments:JSON.stringify({cmd:(reviewing?reviewCommand:sourceWrite?"mkdir -p app/project-pilots/take-eleven && printf 'export const qualification = 1;\\n' > "+probePath+" && printf ACTUAL_NATIVE_TOOL_OK":'printf ACTUAL_NATIVE_TOOL_OK')+(sourceWrite&&phase==='repair'?'; false':'')+(realistic&&count===1?' ; cat /trusted/AGENT_REQUEST.md':''),workdir:'/work',...(realistic?{max_output_tokens:20000}:{})}),status:'completed'}:
   {id:'msg_'+forwarded,type:'message',role:'assistant',status:'completed',content:[{type:'output_text',text,annotations:[],logprobs:[]}]};
  const reasoning={id:'rs_'+phase,type:'reasoning',summary:[],encrypted_content:encrypted};
  const commentary={id:'msg_commentary_'+forwarded,type:'message',role:'assistant',phase:'commentary',status:'completed',content:[{type:'output_text',text:'I will inspect the approved request and repository.',annotations:[],logprobs:[]}]};
@@ -137,6 +137,13 @@ try{
   for(const path of [work,join(work,'.git'),sdkRoot])assert.equal(existsSync(join(path,reviewMarker)),false,'Reviewer cannot mutate protected mount '+path);
   if(reviewing){const marker=output.split('\n').find(x=>x.startsWith('NATIVE_REVIEW_RESULT='));assert.ok(marker);assert.equal(JSON.parse(marker.slice('NATIVE_REVIEW_RESULT='.length)).verdict,phase==='review'?'changes_requested':'pass');}
   else assert.match(output,/NATIVE_DEVELOPMENT_RETURNED_FOR_INDEPENDENT_VERIFICATION/);
+  if(sourceWrite){
+   const events=output.split('\n').filter(x=>x.startsWith('NATIVE_EXECUTION_EVENT=')).map(x=>JSON.parse(x.slice('NATIVE_EXECUTION_EVENT='.length)));
+   assert.ok(events.some(x=>x.event==='turn.completed'));assert.ok(events.some(x=>x.itemType==='agent_message'&&x.event==='item.completed'&&x.message));
+   const tool=events.find(x=>x.itemType==='command_execution'&&x.event==='item.completed');assert.ok(tool);
+   assert.equal(tool.exitCode,phase==='repair'?1:0);assert.ok(tool.worktree);assert.ok(!JSON.stringify(events).includes(token));
+   console.log('ACTUAL_NATIVE_BOUNDED_EVIDENCE_PASS='+phase);
+  }
   if(sourceWrite&&!reviewing){
    assert.equal(readFileSync(join(work,probePath),'utf8'),'export const qualification = 1;\n');
    execFileSync('git',['-C',work,'add','-A']);
