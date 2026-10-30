@@ -5,11 +5,12 @@ import ts from 'typescript';
 import {chromium} from 'playwright-core';
 import bundledChromium from '@sparticuz/chromium';
 
-test('approval feedback survives polling, blocks duplicate clicks, and preserves success when refresh fails',{timeout:90000},async()=>{
+for(const successor of [false,true])test('approval feedback survives polling, blocks duplicate clicks, and preserves success when refresh fails; successor='+successor,{timeout:90000},async()=>{
  const browser=await chromium.launch({executablePath:process.env.KATIE_TEST_CHROMIUM||await bundledChromium.executablePath(),args:bundledChromium.args,headless:true});
  try{
   const page=await browser.newPage();let posts=0,reads=0,releasePost,releaseOldPoll,holdPoll=false,reject=true,refreshFails=false;
   const continuation={id:null,projectId:'8199f2d6-bdc3-4ab0-ae5e-53fa417cc3c1',trialId:'trial',accountId:'account',approved:false,live:false,deadline:null,planHash:'c'.repeat(64),sourceSnapshotHash:'d'.repeat(64),spentTokens:195941,plan:{resourceAmendment:true,additionalTokenCap:354059,developmentTokens:373279,assessmentTokens:60000,callsUsed:9,maxCalls:24,callsRemaining:15,developmentRemainingTokens:294059}};
+  if(successor){continuation.deadline=new Date(Date.now()+3600000).toISOString();Object.assign(continuation.plan,{ownerSuccessor:true,priorRun:129,developmentRemainingTokens:247327,callsRemaining:11,nativeCallsRemaining:7,remainingDollarMicrousd:4425732});}
   const code=ts.transpileModule(readFileSync('components/benchmark-owner-approval.tsx','utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022,jsx:ts.JsxEmit.ReactJSX}}).outputText;
   const scripts=['react/umd/react.production.min.js','react-dom/umd/react-dom.production.min.js'].map(p=>readFileSync('node_modules/'+p,'utf8'));
   const html=`<!doctype html><html><head><meta charset="utf-8"></head><body><div id="root"></div><script>${scripts.join('\n')}</script><script>const exports={};const require=name=>name==='react'?React:name==='react/jsx-runtime'?{jsx:(t,p,k)=>React.createElement(t,{...p,key:k}),jsxs:(t,p,k)=>React.createElement(t,{...p,key:k})}:name.includes('browser-owner-session')?{ownerSessionBearer:async()=> 'synthetic-owner-session'}:{SelfToolsOwnerSession:()=>null};${code};ReactDOM.createRoot(document.getElementById('root')).render(React.createElement(exports.BenchmarkOwnerApproval));</script></body></html>`;
@@ -19,7 +20,7 @@ test('approval feedback survives polling, blocks duplicate clicks, and preserves
    if(!path.startsWith('/api/'))return route.fulfill({contentType:'text/html',body:html});
    if(request.method()==='POST'){
     posts++;assert.equal(path,'/api/benchmark/715/continuation');
-    assert.equal(request.postDataJSON().authorization,'full-development-resource-amendment-550000tokens-10usd-4hours');
+    assert.equal(request.postDataJSON().authorization,successor?'full-amendment-one-successor-fixed-deadline':'full-development-resource-amendment-550000tokens-10usd-4hours');
     await new Promise(resolve=>{releasePost=resolve;});
     if(reject)return reply({error:'The displayed plan changed.',code:'plan_changed'},409);
     refreshFails=true;
@@ -32,7 +33,7 @@ test('approval feedback survives polling, blocks duplicate clicks, and preserves
    return reply({continuation});
   });
   await page.goto('http://localhost/approval');
-  const button=page.getByRole('button',{name:'Approve 550,000 cumulative Full tokens, $10 total, and four hours',exact:true});
+  const button=page.getByRole('button',{name:successor?'Approve one Take Eleven successor within remaining limits and the existing deadline':'Approve 550,000 cumulative Full tokens, $10 total, and four hours',exact:true});
   await button.click();
   const saving=page.getByRole('button',{name:'Saving approval…',exact:true});await saving.waitFor();assert.equal(await saving.isDisabled(),true);
   // Dispatch another click while the first POST is pending: no second request.

@@ -61,7 +61,7 @@ do $$ declare body text;begin
  execute body;
  select pg_get_functiondef('benchmark_prepare_development_paid_successor(uuid,uuid,bigint,jsonb,text,text,timestamptz,timestamptz,text)'::regprocedure) into body;
  if position('coalesce(t.external' in body)=0 then raise exception 'Successor prepare integration changed';end if;
- body:=replace(body,"coalesce(t.external->>'pregrantRecoveryRelease',t.external->>'developmentRenewalRelease') is distinct from p_failed_release",
+ body:=replace(body,$search$coalesce(t.external->>'pregrantRecoveryRelease',t.external->>'developmentRenewalRelease') is distinct from p_failed_release$search$,
  $b$(case when exists(select 1 from benchmark_amendment_successor_consents sc where sc.renewal_id=r.id and sc.old_grant_id=g.id and sc.release_sha=p_release and sc.deadline=g.deadline)
  then t.external->>'resourceAmendmentRelease' else coalesce(t.external->>'pregrantRecoveryRelease',t.external->>'developmentRenewalRelease') end) is distinct from p_failed_release$b$);
  execute body;
