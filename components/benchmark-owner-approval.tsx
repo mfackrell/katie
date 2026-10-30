@@ -54,7 +54,7 @@ export function BenchmarkOwnerApproval(){
  return <section aria-label='Take Eleven benchmark approval' className='my-4 rounded-xl border border-amber-400/60 bg-zinc-900 p-5 text-zinc-100'>
   <h3 className='text-lg font-semibold'>Take Eleven benchmark</h3>
   <p className='mt-2 text-sm'>Compare Native Codex, Thin Katie, and Full Katie against the original Take Eleven requirements.</p>
-  <p className='mt-2 text-sm font-semibold'>$30 total maximum · $10 and 350,000 tokens per arm</p>
+  <p className='mt-2 text-sm font-semibold'>Original benchmark authorization: $30 total maximum · $10 and 350,000 tokens per arm. Any Full amendment is shown separately below; Native and Thin keep their separate limits.</p>
   <p className='mt-2 text-sm text-zinc-300'>Approve moving the unused benchmark allowance to production. Execution has a fixed four-hour window starting when qualification transfers the allowance. Unused funds cannot move between arms. Project scope and development tasks still require their own approvals. The game remains a private Preview.</p>
   {!signedIn&&<div className='mt-3'><p className='mb-2 text-sm'>Sign in with your existing Katie owner account to approve.</p><SelfToolsOwnerSession /></div>}
   {finished?<p role='status' className='mt-3 text-emerald-300'>{finished.revoked_at?'Benchmark authorization revoked.':Date.parse(finished.deadline)<=Date.now()?continuation?.live?'Original benchmark window expired. The separately approved continuation is active.':'Benchmark authorization expired; spending is stopped.':'Benchmark allowance qualified. Katie can continue with project scope approval.'}</p>:
@@ -72,7 +72,7 @@ export function BenchmarkOwnerApproval(){
   </div>}
   {task&&<div className='mt-4 rounded border border-zinc-600 p-3'>
    <h4 className='font-semibold'>Full Katie development approval</h4>
-   <p className='mt-2 text-sm'>Authorize this saved development task using the existing Full allowance only: $10 and 350,000 tokens total, including specification and review. {task.spentTokens.toLocaleString()} tokens already charged. Deadline: {new Date(task.deadline).toLocaleString()}. Model: {task.model}. Private Preview only; no merge or production publication.</p>
+   {continuation?.plan.resourceAmendment?<p className='mt-2 text-sm'>The saved task and scope approval remain recorded. The Full resource amendment above specifies the execution budget, window, and whether owner approval is still required. Model: {task.model}. Private Preview only; no merge or production publication.</p>:<p className='mt-2 text-sm'>Authorize this saved development task using the existing Full allowance only: $10 and 350,000 tokens total, including specification and review. {task.spentTokens.toLocaleString()} tokens already charged. Deadline: {new Date(task.deadline).toLocaleString()}. Model: {task.model}. Private Preview only; no merge or production publication.</p>}
    <p className='mt-2 break-all text-xs'>Task: {task.taskId}<br/>Approved scope: {task.scopeHash}</p>
    <details className='mt-2'><summary className='cursor-pointer'>Review the exact development request</summary><pre className='mt-2 max-h-80 overflow-auto whitespace-pre-wrap text-sm'>{task.request}</pre></details>
    <a href={`/conversations/${task.chatId}`} className='mt-2 block underline'>Open project and approved scope</a>
