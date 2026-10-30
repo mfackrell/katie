@@ -5,9 +5,10 @@ import { classifyPausedChatWorkflow } from '../lib/chat/paused-workflow-recovery
 test('paused durable workflow overrides stale processing receipt', () => {
  const result=classifyPausedChatWorkflow('processing',{status:'paused',error:null});
  assert.equal(result?.status,'paused');
- assert.equal(result?.waitingForRunpod,false);
- assert.match(result?.error??'',/Status \/ Usage/);
- assert.match(result?.error??'',/Do not resend/i);
+ if (result?.status !== 'paused') throw Error('Expected a saved accounting pause');
+ assert.equal(result.waitingForRunpod,false);
+ assert.match(result.error,/Status \/ Usage/);
+ assert.match(result.error,/Do not resend/i);
 });
 
 test('accepted RunPod jobs remain processing until recoverable output exists', () => {
