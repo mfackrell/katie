@@ -17,6 +17,7 @@ function harness({
   managed = false,
   ownerGuestActorIds = [guestActorId],
 } = {}) {
+  process.env.KATIE_OWNER_AUTH_USER_ID = owner;
   const calls = [];
   let savedMode = "always";
   const db = {
