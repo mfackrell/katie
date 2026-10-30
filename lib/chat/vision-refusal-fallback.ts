@@ -14,3 +14,9 @@ export function selectGrokVisionFallback(models: readonly string[]): string | nu
   return preferred ?? eligible.find(model => /^grok-4(?:[.-]|$)/i.test(model)) ??
     eligible[0] ?? null;
 }
+
+/** Generic refusals are not descriptions of image pixels, even when HTTP succeeds. */
+export function isGenericVisionRefusal(text: string): boolean {
+  const normalized = text.trim().replace(/\s+/g, ' ');
+  return /^(?:(?:i(?:'m| am)\s+sorry[,;:]?\s*)?(?:but\s+)?(?:i\s+(?:can't|cannot|can not|won't|will not)\s+(?:assist|help|comply|provide|describe|analyze|analyse|process|fulfill|fulfil)\b|(?:sorry[,;:]?\s*)?(?:i\s+)?(?:can't|cannot|can not)\s+help\b)|(?:i\s+must\s+decline\b)|(?:i\s+cannot\s+assist\b))[\s\S]{0,240}$/i.test(normalized);
+}
