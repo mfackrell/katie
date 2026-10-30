@@ -4,6 +4,9 @@ import { readFileSync } from "node:fs";
 import { modules } from "./helpers/load-project-modules.mjs";
 
 const owner = "11111111-1111-4111-8111-111111111111";
+// Each node:test file runs in its own process. Establish the verified tenant
+// owner so these API fixtures exercise the authorized path.
+process.env.KATIE_OWNER_AUTH_USER_ID = owner;
 const guest = "99999999-9999-4999-8999-999999999999";
 const actorId = "22222222-2222-4222-8222-222222222222";
 const guestActorId = "44444444-4444-4444-8444-444444444444";
