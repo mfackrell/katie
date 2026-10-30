@@ -153,6 +153,11 @@ test('standalone browser: explicit settings, scopes, exact approval resume, redu
     await usage.getByLabel('Per request approval threshold (USD)').fill('0.05');
     await usage.getByRole('button', { name: 'Save settings' }).click();
     await usage.getByText('$0.25', { exact: true }).first().waitFor();
+    // The same rail usage snapshot must make approval actionable in the chat,
+    // without mounting a second usage reader or a second polling flight.
+    const inlineApproval = page.getByRole('region', { name: 'Spending authorization required' });
+    await inlineApproval.getByRole('button', { name: 'Approve selected model once' }).first().waitFor();
+    assert.match(await inlineApproval.innerText(), /Estimated reservation:.*\$0\.3/);
     await page.screenshot({ path: join(screenshots, 'status-rail-multiple-approvals-desktop.png'), fullPage: false });
     await assertDesktopLayout();
     await usage.getByText('Models, activity & earlier exposure').click();
