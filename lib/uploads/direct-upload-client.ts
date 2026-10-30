@@ -596,6 +596,7 @@ export async function uploadFilesDirect(
         // Each chunk's HMAC ticket, index, byte count and total file size
         // are validated on the server before assembly of the original.
         const total = Math.ceil(file.size / JSON_VIDEO_SMALL_CHUNK_BYTES);
+        const imageChunkTimeoutMs = options.chunkTimeoutMs ?? 30_000;
         for (let index = 0; index < total; index++) {
           chunkIndex = index;
           const offset = index * JSON_VIDEO_SMALL_CHUNK_BYTES;
@@ -604,7 +605,7 @@ export async function uploadFilesDirect(
           let lastError: unknown;
           for (let attempt = 1; attempt <= 3 && !saved; attempt++) {
             try {
-              await withUploadDeadline("Uploading image part", 30_000, async signal =>
+              await withUploadDeadline("Uploading image part", imageChunkTimeoutMs, async signal =>
                 readUploadResponse(await fetcher("/api/upload/chunk", {
                   method: "POST", signal,
                   headers: {
