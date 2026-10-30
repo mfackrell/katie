@@ -29,8 +29,12 @@ export async function GET(request: NextRequest) {
   try {
     const principal=await authenticateStandalonePrincipal(request);
     const chats=actorId?await listChatsByActorId(actorId):await listChats();
-    if (!principal.isAnonymous && principal.id===process.env.KATIE_OWNER_AUTH_USER_ID)
-      return NextResponse.json({chats},{headers:{"Cache-Control":"no-store"}});
+    if (!principal.isAnonymous && principal.id===process.env.KATIE_OWNER_AUTH_USER_ID){
+      const {data:guestActorIds,error:guestError}=await getSupabaseAdminClient().rpc<string[]>('standalone_guest_actor_ids');
+      if(guestError)throw Error('Guest isolation unavailable');
+      const hidden=new Set(guestActorIds??[]);
+      return NextResponse.json({chats:chats.filter(chat=>!hidden.has(chat.actorId))},{headers:{"Cache-Control":"no-store"}});
+    }
     const {data,error}=await getSupabaseAdminClient().rpc<string[]>('standalone_owned_chat_ids',{p_owner:principal.id});
     if(error)throw Error('Scope lookup failed');
     const owned=new Set(data??[]);
