@@ -2,6 +2,9 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { NextRequest } from "next/server";
 
+const TEST_OWNER = "11111111-1111-4111-8111-111111111111";
+const originalFetch = globalThis.fetch;
+
 type Row = Record<string, unknown>;
 
 type DbState = {
@@ -91,6 +94,10 @@ class Query {
 
 function createFakeClient(state: DbState) {
   return {
+    async rpc(name: string) {
+      if (name === "standalone_guest_actor_ids") return { data: [], error: null };
+      throw new Error("Unexpected RPC: " + name);
+    },
     from(table: keyof DbState) {
       return new Query(state, table);
     },
@@ -99,7 +106,14 @@ function createFakeClient(state: DbState) {
 
 function loadPatchHandler() {
   process.env.NEXT_PUBLIC_SUPABASE_URL = "http://localhost:54321";
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY = "test-publishable";
+  process.env.KATIE_OWNER_AUTH_USER_ID = TEST_OWNER;
   process.env.SUPABASE_SERVICE_ROLE_KEY = "service-role";
+  // The actor PATCH route now verifies identity, even in local tests.
+  globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) =>
+    String(input) === "http://localhost:54321/auth/v1/user"
+      ? Promise.resolve(Response.json({ id: TEST_OWNER, is_anonymous: false }))
+      : originalFetch(input, init)) as typeof fetch;
 
   const routePath = require.resolve("../app/api/actors/route");
   const storePath = require.resolve("../lib/data/persistence-store");
@@ -138,7 +152,7 @@ test("PATCH /api/actors updates the actor purpose", async () => {
   const request = new NextRequest("http://localhost/api/actors?id=actor-1", {
     method: "PATCH",
     body: JSON.stringify({ purpose: "Updated system prompt" }),
-    headers: { "content-type": "application/json" },
+    headers: { "content-type": "application/json", "authorization": "Bearer fixture-owner-token" },
   });
 
   const response = await PATCH(request);
@@ -155,7 +169,7 @@ test("review-only PATCH persists mode without changing prompt or routing; invali
   const state: DbState = { managed_agents: [], actors: [{ id: "actor-mode", name: "Writer", system_prompt: "Keep prompt", routing_profile: { preserved: true }, review_mode: "adaptive", parent_actor_id: null }], chats: [], messages: [], short_term_memory: [], intermediate_memory: [], long_term_memory: [] };
   (globalThis as any).__KATIE_SUPABASE_ADMIN_CLIENT__ = createFakeClient(state);
   const { PATCH } = loadPatchHandler();
-  const patch = (reviewMode: string) => PATCH(new NextRequest("http://localhost/api/actors?id=actor-mode", { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ reviewMode }) }));
+  const patch = (reviewMode: string) => PATCH(new NextRequest("http://localhost/api/actors?id=actor-mode", { method: "PATCH", headers: { "content-type": "application/json", "authorization": "Bearer fixture-owner-token" }, body: JSON.stringify({ reviewMode }) }));
   const response = await patch("always");
   assert.equal(response.status, 200);
   assert.equal((await response.json()).actor.reviewMode, "always");
@@ -185,7 +199,7 @@ test("memory calibration merges only signed approved duplicates, preserving all 
  const groups=[group];
  const proof=createHmac("sha256",process.env.OPENAI_API_KEY).update(JSON.stringify({actorId,hash,groups})).digest("hex");
  const body={calibration:"apply",hash,proof,groups,approved:groups};
- const response=await PATCH(new NextRequest("http://localhost/api/actors?id="+actorId,{method:"PATCH",headers:{"content-type":"application/json"},body:JSON.stringify(body)}));
+ const response=await PATCH(new NextRequest("http://localhost/api/actors?id="+actorId,{method:"PATCH",headers:{"content-type":"application/json","authorization":"Bearer fixture-owner-token"},body:JSON.stringify(body)}));
  assert.equal(response.status,200,JSON.stringify(await response.json()));
  const saved=(state.actor_long_term_memory![0].content as typeof original).entries;
  assert.equal(saved.length,2);
@@ -206,11 +220,11 @@ test("calibration cannot apply unsigned or stale proposals",async()=>{
  const {createHash,createHmac}=require("node:crypto") as typeof import("node:crypto");
  const hash=createHash("sha256").update(JSON.stringify(original)).digest("hex");
  const approved=[{type:"irrelevant",keys:["a"],reason:"test"}];
- const invalid=await PATCH(new NextRequest("http://localhost/api/actors?id="+actorId,{method:"PATCH",headers:{"content-type":"application/json"},body:JSON.stringify({calibration:"apply",hash,proof:"0".repeat(64),groups:approved,approved})}));
+ const invalid=await PATCH(new NextRequest("http://localhost/api/actors?id="+actorId,{method:"PATCH",headers:{"content-type":"application/json","authorization":"Bearer fixture-owner-token"},body:JSON.stringify({calibration:"apply",hash,proof:"0".repeat(64),groups:approved,approved})}));
  assert.equal(invalid.status,409);
  const proof=createHmac("sha256",process.env.OPENAI_API_KEY).update(JSON.stringify({actorId,hash,groups:approved})).digest("hex");
  const invalidHash="f".repeat(64);
- const stale=await PATCH(new NextRequest("http://localhost/api/actors?id="+actorId,{method:"PATCH",headers:{"content-type":"application/json"},body:JSON.stringify({calibration:"apply",hash:invalidHash,proof,groups:approved,approved})}));
+ const stale=await PATCH(new NextRequest("http://localhost/api/actors?id="+actorId,{method:"PATCH",headers:{"content-type":"application/json","authorization":"Bearer fixture-owner-token"},body:JSON.stringify({calibration:"apply",hash:invalidHash,proof,groups:approved,approved})}));
  assert.equal(stale.status,409);
  assert.equal((state.actor_long_term_memory![0].content as typeof original).entries.length,2);
  assert.equal(state.actor_memory_calibration_backups?.length,0);
