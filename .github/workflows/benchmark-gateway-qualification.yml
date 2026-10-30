@@ -203,3 +203,8 @@ jobs:
           KATIE_NATIVE_PROBE_CAPACITY_RENEWAL: ${{ github.head_ref == 'fix/take-eleven-capacity-renewal' && '1' || '0' }}
         run: node scripts/benchmark/completion-input-count-probe.mjs
 
+      - name: Count actual closure and assessment router, compose and review bodies (no inference)
+        if: github.head_ref == 'fix/take-eleven-capacity-renewal'
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: node scripts/benchmark/closure-input-count-probe.mjs

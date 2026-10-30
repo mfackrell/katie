@@ -50,9 +50,9 @@ test('native engineering cannot invoke unmetered review, repair, or final-review
 
 test('native independent reviewers are isolated and every phase shares the metered host gateway',()=>{
  assert.match(host,/await safelyRunPhase\('implementation'\)/);
- assert.match(host,/await safelyRunPhase\('review'\)/);
- assert.match(host,/await safelyRunPhase\('repair',first\.findings\)/);
- assert.match(host,/await safelyRunPhase\('final-review'\)/);
+ assert.match(host,/await safelyRunPhase\('review',qualifiedLifecycle/);
+ assert.match(host,/await safelyRunPhase\('repair',first\.findings\+/);
+ assert.match(host,/await safelyRunPhase\('final-review',qualifiedLifecycle/);
  assert.match(host,/if\(final\.verdict!=='pass'\)denied/);
  assert.match(readFileSync('scripts/benchmark/shared-native-container.mjs','utf8'),/reviewing\?'--ro-bind':'--bind'/);
  assert.match(host,/NATIVE_METERED_REVIEW_AND_BOUNDED_REPAIR_COMPLETED/);
@@ -121,3 +121,4 @@ test('Full and the three contained comparison arms share the exact SDK phase eng
  assert.match(probe,/join\(workRoot,arm\)/);
  assert.match(probe,/reservations\.length,selectedArms\.length\*4/);
 });
+

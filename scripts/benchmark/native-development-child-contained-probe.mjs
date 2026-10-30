@@ -103,7 +103,7 @@ const upstream=async request=>{
 // Synthetic count result exercises the actual SDK count-before-reserve path;
 // the separate fixed-provider count job qualifies real model counting support.
 upstream.countInputTokens=async body=>{countedRequests++;if(realistic)completionCountRequests.push({phase,body});assert.ok(Object.isFrozen(body));if(!firstRequests.has(phase))firstRequests.set(phase,body);currentInput=realistic?Math.ceil(((phaseRequests.get(phase)??0)===0?firstCounts[phase]:12795)*1.25):7000;return {inputTokens:currentInput,requestHash:createHash('sha256').update(JSON.stringify(body)).digest('hex')};};
-const server=createNativeHttpBridge({db,grantToken:'synthetic-'+('z'.repeat(60)),trialId:'synthetic-trial',executionEpoch:1,providerNamespace:'openai',upperTokens:120000,upstream,recordReceipt:async r=>{receipts.push(r);if(realistic){used+=r.actualTokens;held=0;dollars+=r.actualTokens*14;}},clientToken:token,fullMission:true,requireInputCount:true});
+const server=createNativeHttpBridge({db,grantToken:'synthetic-'+('z'.repeat(60)),trialId:'synthetic-trial',executionEpoch:1,providerNamespace:'openai',upperTokens:120000,upstream,recordReceipt:async r=>{receipts.push(r);if(realistic){used+=r.actualTokens;held=0;dollars+=capacityRenewal?Math.ceil(r.usage.input_tokens*1.75+r.usage.output_tokens*14):r.actualTokens*14;}},clientToken:token,fullMission:true,requireInputCount:true});
 // Observe structural metadata only. Never log prompts, auth headers or secrets.
 server.on('request',req=>{let raw='';req.on('data',chunk=>{if(raw.length<2000000)raw+=chunk;});req.on('end',()=>{
  try{const b=JSON.parse(raw);const nontextPaths=[];
