@@ -8,7 +8,7 @@ import { getAccountingScope, isStandaloneAccountingError, runWithStandaloneActiv
 import { loadStandalonePricing } from '@/lib/standalone-accounting/pricing-intake';
 import { getAvailableProviders } from '@/lib/providers';
 import { rankControlPlaneByActualCost } from '@/lib/router/control-plane-economics';
-import { isExplicitVisionPolicyRefusal } from '@/lib/chat/vision-refusal-fallback';
+import { isExplicitVisionPolicyRefusal, isGenericVisionRefusal } from '@/lib/chat/vision-refusal-fallback';
 import { buildCandidateMetadata } from '@/lib/router/model-intent';
 import { cachedWorkflowValue } from '@/lib/standalone-accounting/workflow';
 
@@ -133,7 +133,7 @@ export async function observeStandaloneStillImages(references:FileReference[],op
     options.onStatus?.('Escalating image analysis for additional detail…');
     const labelled=references.map((ref,index)=>`Image ${index+1}: ${ref.fileName} (attachment ${ref.fileId})`).join('\n');
     const result=await (options.escalate??escalateStillImageEvidence)(references.map(r=>r.imageDataUrl!),labelled+'\n'+question);
-    if(!result.text.trim())throw new StandaloneAccountingError('no_priceable_vision','The supported image escalation returned no usable evidence.');
+    if(!result.text.trim()||isGenericVisionRefusal(result.text)||isExplicitVisionPolicyRefusal(result.text))throw new StandaloneAccountingError('no_priceable_vision','The supported image escalation returned no usable visual description.');
     for(const reference of references){const previous=observations.get(reference.fileId)!;observations.set(reference.fileId,{...previous,observationSetHash:setHash,observedSummary:`IMAGE SET EVIDENCE (labels identify each source):\n${result.text}`,summaryModel:result.model,summaryCoverage:'sampled',observationLimitations:['Escalated visual interpretation; only explicitly reported image details are evidence.']});}
   }
   return observations;
