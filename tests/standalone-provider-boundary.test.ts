@@ -655,7 +655,7 @@ test('large Claude input uses provider count for its saved exact approval and re
       return Response.json({input_tokens:90000});
     }
     paid++;
-    assert.deepEqual(JSON.parse(String(init?.body)),JSON.parse(fake.attempts[0].prepared_payload.serializedBody));
+    assert.deepEqual(JSON.parse(String(init?.body)),JSON.parse(String(fake.attempts[0].prepared_payload.serializedBody)));
     return Response.json({id:'approved-claude-receipt',model:'claude-sonnet-4-5',content:[{type:'text',text:'Saved answer'}],stop_reason:'end_turn',usage:{input_tokens:90000,output_tokens:64,cache_read_input_tokens:0,cache_creation_input_tokens:0}});
   },fake.factory);
   await assert.rejects(runWithStandaloneAccounting(context,()=>send('https://api.anthropic.com/v1/messages',original)),error=>standaloneAccountingCause(error)?.code==='standalone_approval_required');
