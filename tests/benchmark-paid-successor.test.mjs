@@ -27,13 +27,13 @@ test('uncertain accepted dispatch is not automatically submitted twice',async()=
 });
 test('host recovery checks record/release and uses only recovery grant endpoint',async()=>{
  const host=readFileSync('scripts/benchmark/native-development-host.mjs','utf8');
- const start=host.indexOf('if(proof.paidSuccessorId){'),end=host.indexOf('const clientToken=',start);
- const run=new (Object.getPrototypeOf(async function(){}).constructor)('proof','productionRuntime','readOne','task','process','db','randomBytes','tokenDigest','denied','NATIVE_ADMISSION_DIAGNOSTICS_VERSION',host.slice(start,end)+'return {grantId,executionEpoch};');
+ const start=host.indexOf('let ownerApprovedSuccessor=false;'),end=host.indexOf('const clientToken=',start);
+ const run=new (Object.getPrototypeOf(async function(){}).constructor)('proof','productionRuntime','readOne','task','process','db','randomBytes','tokenDigest','denied','NATIVE_ADMISSION_DIAGNOSTICS_VERSION',host.slice(start,end)+'return {grantId,executionEpoch,ownerApprovedSuccessor};');
  const proof={paidSuccessorId:'recovery',developmentRenewalId:'renewal',approvalId:'approval',taskId:'task'};
- for(const scenario of ['valid','release','disabled','marker']){
+ for(const scenario of ['valid','consented','consent-error','release','disabled','marker']){
   const wrong=scenario==='release';
-  const calls=[];const promise=run(proof,{},async()=>({id:'recovery',renewal_id:'renewal',release_sha:wrong?'old':'new',diagnostic_version:'bounded-schema-v1'}),{external:{paidSuccessorId:'recovery'}},{env:{GITHUB_SHA:'new',KATIE_BENCHMARK_GATEWAY_DIAGNOSTICS:scenario==='disabled'?'disabled':'enabled'}},{rpc:async(name,args)=>{calls.push(name);assert.equal(args.p_approval,'approval');return {data:{grantId:'grant',executionEpoch:4}};}},()=>({toString:()=> 'token'}),()=> 'digest',message=>{throw Error(message);},scenario==='marker'?'unknown':'bounded-schema-v1');
-  if(scenario!=='valid'){await assert.rejects(promise,/release mismatch|instrumented paid successor transport required/);assert.deepEqual(calls,[]);}else{assert.equal((await promise).executionEpoch,4);assert.deepEqual(calls,['benchmark_issue_development_paid_successor_grant']);}
+  const calls=[];const promise=run(proof,{},async()=>({id:'recovery',renewal_id:'renewal',release_sha:wrong?'old':'new',diagnostic_version:'bounded-schema-v1'}),{external:{paidSuccessorId:'recovery'}},{env:{GITHUB_SHA:'new',KATIE_BENCHMARK_GATEWAY_DIAGNOSTICS:scenario==='disabled'?'disabled':'enabled'}},{from(table){assert.equal(table,'benchmark_amendment_successor_consents');return {select(columns){assert.equal(columns,'id');return this;},eq(column,value){assert.equal(column,'renewal_id');assert.equal(value,'renewal');return this;},async maybeSingle(){return scenario==='consent-error'?{error:{message:'unavailable'}}:{data:scenario==='consented'?{id:'consent'}:null};}};},rpc:async(name,args)=>{calls.push(name);assert.equal(args.p_approval,'approval');return {data:{grantId:'grant',executionEpoch:4}};}},()=>({toString:()=> 'token'}),()=> 'digest',message=>{throw Error(message);},scenario==='marker'?'unknown':'bounded-schema-v1');
+  if(!['valid','consented'].includes(scenario)){await assert.rejects(promise,/release mismatch|instrumented paid successor transport required|successor consent inspection unavailable/);assert.deepEqual(calls,[]);}else{const result=await promise;assert.equal(result.executionEpoch,4);assert.equal(result.ownerApprovedSuccessor,scenario==='consented');assert.deepEqual(calls,['benchmark_issue_development_paid_successor_grant']);}
  }
 });
 test('reconciliation waits before recovery dispatch and cannot reuse predecessor failure afterwards',async()=>{
@@ -49,3 +49,4 @@ test('reconciliation waits before recovery dispatch and cannot reuse predecessor
  const runs=[{id:'old-failure',created_at:'2026-10-29T20:30:00Z',head_sha:'old',event:'workflow_dispatch'},{id:'new-attempt',created_at:'2026-10-29T21:01:00Z',head_sha:'new',event:'workflow_dispatch'},{id:'wrong-event',created_at:'2026-10-29T21:01:00Z',head_sha:'new',event:'issues'}];
  assert.deepEqual(filter(task,runs),['new-attempt']);
 });
+

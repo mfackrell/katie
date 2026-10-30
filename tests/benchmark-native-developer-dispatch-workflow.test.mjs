@@ -96,7 +96,8 @@ test('interrupted native execution retains scope-checked Git checkpoints outside
 });
 
 test('interrupted child recovery is bounded, ledger-reconciled and fenced to trusted checkpoint',()=>{
- assert.match(host,/for\(let attempt=0;attempt<2;attempt\+\+\)/);
+ assert.match(host,/for\(let attempt=0;attempt<\(ownerApprovedSuccessor\?1:2\);attempt\+\+\)/);
+ assert.match(host,/if\(ownerApprovedSuccessor\|\|attempt!==0\|\|!nativeChildInterruptionRetryable/);
  assert.match(host,/\.in\('state',\['reserved','unresolved'\]\)/);
  assert.match(host,/native recovery requires authoritative reconciliation/);
  assert.match(host,/benchmark_gateway_execution_live/);

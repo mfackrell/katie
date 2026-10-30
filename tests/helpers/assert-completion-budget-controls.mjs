@@ -1,3 +1,4 @@
+import {assertAmendmentSuccessor} from './assert-amendment-successor.mjs';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {randomUUID} from 'node:crypto';
@@ -62,6 +63,7 @@ export async function assertCompletionBudgetControls(db,rival,{project,mission,t
  assert.equal(granted.filter(x=>x.status==='fulfilled').length,1);
  const gid=granted.find(x=>x.status==='fulfilled').value.rows[0].r.grantId;
  const g=(await db.query('select * from benchmark_execution_grants where id=$1',[gid])).rows[0];
+ if(process.env.KATIE_TEST_AMENDMENT_SUCCESSOR==='1'){await assertAmendmentSuccessor(db,rival,{am,g,project,mission,task,trial,owner,account});return;}
  const reserve='select benchmark_full_native_reserve($1,$2,$3,$4,$5,$6) id';
  const native=(client,tokens)=>client.query(reserve,[g.token_digest,trial,g.execution_epoch,randomUUID(),'gpt-5.3-codex',tokens]);
  await assert.rejects(db.query(reserve,[grant.token_digest,trial,grant.execution_epoch,randomUUID(),'gpt-5.3-codex',1]),/unauthorized/);
@@ -165,3 +167,4 @@ export async function assertCompletionBudgetControls(db,rival,{project,mission,t
  await db.query('reset role');await db.query('set role authenticated');await assert.rejects(db.query(rpc,approve),/permission denied/);await assert.rejects(db.query('select * from benchmark_dollar_exposures'),/permission denied/);await db.query('reset role');await db.query('set role service_role');
  console.log('COMPLETION_CONTROL_POSTGRES_PASS: owner concurrency, grants, pricing, dollar race, retained uncertainty, settlement, native closure reserve');
 }
+

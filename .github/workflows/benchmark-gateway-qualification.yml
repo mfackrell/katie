@@ -58,6 +58,21 @@ jobs:
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: node scripts/benchmark/native-response-shape-forensics.mjs
+  implementation-forensics:
+    if: github.head_ref == 'investigate/native-empty-implementation' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Retrieve only existing failed-run responses; no inference
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: node scripts/benchmark/native-implementation-forensics.mjs
   native-gateway:
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -116,6 +131,11 @@ jobs:
           path: ${{ runner.temp }}/native-sdk-first-count-requests.json
           if-no-files-found: error
           retention-days: 1
+      - name: Actual pinned child writes authorized source and passes unchanged scope gate
+        env:
+          KATIE_NATIVE_PROBE_SOURCE_WRITE: '1'
+          KATIE_NATIVE_PROBE_BASELINE: 0015bcdb8ac9ad94b7c74d1a4cd76737903b1319
+        run: node scripts/benchmark/native-development-child-contained-probe.mjs
       - name: Adversarial shared trust boundary (Git, hooks, dependencies, symlinks)
         run: node --test tests/benchmark-native-trust-boundary.test.mjs
       - name: Qualify Native Thin owner grant and canonical HTTP receipt boundaries
@@ -180,3 +200,4 @@ jobs:
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: node scripts/benchmark/completion-input-count-probe.mjs
+

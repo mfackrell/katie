@@ -1,3 +1,4 @@
+import {sanitizeEvidence,worktreeEvidence,NATIVE_EXECUTION_EVIDENCE_VERSION} from './native-execution-evidence.mjs';
 import {NATIVE_ADMISSION_DIAGNOSTICS_VERSION} from './native-request-admission.mjs';
 import {preflightNativeChild} from './native-child-preflight.mjs';
 import {openNativeProductionRuntime} from './native-runtime-capsule.mjs';
@@ -139,9 +140,13 @@ if(proof.pregrantRecoveryId){
  const recovery=await readOne('benchmark_development_pregrant_recoveries','id',proof.pregrantRecoveryId);
  if(recovery.renewal_id!==proof.developmentRenewalId||recovery.release_sha!==process.env.GITHUB_SHA||task.external?.pregrantRecoveryId!==recovery.id)denied('pregrant recovery identity or release mismatch');
 }
+let ownerApprovedSuccessor=false;
 if(proof.paidSuccessorId){
  if(!productionRuntime||!proof.developmentRenewalId||proof.startupRecoveryId||proof.pregrantRecoveryId||process.env.KATIE_BENCHMARK_GATEWAY_DIAGNOSTICS!=='enabled'||NATIVE_ADMISSION_DIAGNOSTICS_VERSION!=='bounded-schema-v1')denied('instrumented paid successor transport required');
  const successor=await readOne('benchmark_development_paid_successors','id',proof.paidSuccessorId);
+ const consent=await db.from('benchmark_amendment_successor_consents').select('id').eq('renewal_id',proof.developmentRenewalId).maybeSingle();
+ if(consent.error)denied('successor consent inspection unavailable');
+ ownerApprovedSuccessor=Boolean(consent.data);
  if(successor.renewal_id!==proof.developmentRenewalId||successor.release_sha!==process.env.GITHUB_SHA||successor.diagnostic_version!==NATIVE_ADMISSION_DIAGNOSTICS_VERSION||task.external?.paidSuccessorId!==successor.id)denied('paid successor identity or release mismatch');
 }
 if(proof.resourceAmendmentId){
@@ -174,6 +179,11 @@ const clientToken=randomBytes(32).toString('base64url');
 const root=mkdtempSync(join(tmpdir(),'katie-trusted-gateway-'));
 const evidencePath=process.env.KATIE_NATIVE_EVIDENCE_FILE;
 const decisions=[];
+const diagnostics={version:NATIVE_EXECUTION_EVIDENCE_VERSION,runId:process.env.GITHUB_RUN_ID,taskId:proof.taskId,phases:[],snapshots:[],scope:[],completed:false};
+const diagnosticSecrets=[providerKey,serviceKey,signingKey,grantToken,clientToken,process.env.GH_TOKEN];
+const snapshot=label=>diagnostics.snapshots.push({label,...worktreeEvidence(boundary.root,diagnosticSecrets)});
+const saveDiagnostics=()=>{if(evidencePath&&evidencePath.startsWith(process.env.RUNNER_TEMP+'/'))writeFileSync(evidencePath+'.diagnostics.json',JSON.stringify(diagnostics)+'\n',{mode:0o600});};
+snapshot('initial');saveDiagnostics();
 const git=(...args)=>execFileSync('git',[...protectedGitConfig,...args],{cwd:boundary.root,encoding:'utf8',timeout:20000}).trim();
 let trustedCheckpointSha=git('rev-parse','HEAD');
 const commitCandidate=(label)=>{
@@ -183,7 +193,9 @@ const commitCandidate=(label)=>{
   git('add','-A');
   const toolsRoot=process.env.RUNNER_TEMP;
   if(!toolsRoot)denied('trusted scope tools unavailable');
-  execFileSync('node',[join(toolsRoot,'project-tools','project-scope.mjs'),requestFile],{cwd:boundary.root,timeout:20000,stdio:'inherit'});
+  snapshot('before-scope');
+  try{execFileSync('node',[join(toolsRoot,'project-tools','project-scope.mjs'),requestFile],{cwd:boundary.root,timeout:20000,stdio:'pipe'});diagnostics.scope.push({passed:true});}
+  catch(error){diagnostics.scope.push({passed:false,detail:sanitizeEvidence(error.stderr?.toString()||error.message,diagnosticSecrets)});saveDiagnostics();throw Error('NATIVE_PROJECT_SCOPE_FAILED: see retained diagnostics');}
   execFileSync('node',[join(toolsRoot,'project-tools','recovery-scope.mjs'),requestFile],{cwd:boundary.root,timeout:20000,stdio:'inherit'});
   git('-c','user.name=katie-native-checkpoint','-c','user.email=katie-native-checkpoint@users.noreply.github.com','commit','-m',label);
   const sha=git('rev-parse','HEAD');
@@ -229,6 +241,7 @@ try{
     ...protectedNativeMounts(boundary),
     '--dir','/trusted',
     '--ro-bind',childFile,'/trusted/native-development-child.mjs',
+    '--ro-bind',join(process.env.RUNNER_TEMP,'native-host','native-execution-evidence.mjs'),'/trusted/native-execution-evidence.mjs',
     '--ro-bind',join(process.env.RUNNER_TEMP,'native-host','shared-native-phase.mjs'),'/trusted/shared-native-phase.mjs',
     '--ro-bind',join(process.env.RUNNER_TEMP,'native-host','shared-native-policy.mjs'),'/trusted/shared-native-policy.mjs',
     ...(findings?['--ro-bind',join(root,'review-findings.txt'),'/trusted/review-findings.txt']:[]),
@@ -241,13 +254,14 @@ try{
    ]
   });
   child=spawn('bwrap',args,{env:{PATH:process.env.PATH||''},stdio:['ignore','pipe','pipe']});
-  let output='';
-  child.stdout.on('data',x=>{process.stdout.write(x);output=(output+x).slice(-20000)});
-  child.stderr.on('data',x=>process.stderr.write(x));
+  let output='',pending='';
+  const phaseEvidence={phase,events:[],dropped:0};diagnostics.phases.push(phaseEvidence);
+  child.stdout.on('data',x=>{output=(output+x).slice(-20000);pending=(pending+x).slice(-32768);let newline;while((newline=pending.indexOf('\n'))>=0){const line=pending.slice(0,newline);pending=pending.slice(newline+1);if(line.startsWith('NATIVE_EXECUTION_EVENT=')){try{const event=JSON.parse(line.slice('NATIVE_EXECUTION_EVENT='.length));if(event.itemType==='agent_message'&&event.event==='item.completed')phaseEvidence.finalMessage=sanitizeEvidence(event.message,diagnosticSecrets);if(['turn.failed','turn.completed','error'].includes(event.event))phaseEvidence.terminalEvent=event.event;if(phaseEvidence.events.length<120)phaseEvidence.events.push(JSON.parse(JSON.stringify(event,(_key,value)=>typeof value==='string'?sanitizeEvidence(value,diagnosticSecrets):value)));else phaseEvidence.dropped++;}catch{}saveDiagnostics();}}});
+  child.stderr.on('data',x=>{phaseEvidence.stderr=sanitizeEvidence(x.toString(),diagnosticSecrets);saveDiagnostics();});
   const outcome=await new Promise((resolve,reject)=>{
    child.once('error',reject);child.once('close',(code,signal)=>resolve({code,signal}));
   });
-  child=null;
+  child=null;phaseEvidence.outcome=outcome;snapshot('after-'+phase);saveDiagnostics();
   if(outcome.code!==0)throw Object.assign(new Error('NATIVE_HOST_DENIED: native '+phase+' failed; spending holds retained'),{nativeChildOutcome:outcome});
   if(!reviewing)return null;
   const marker=output.split('\n').filter(x=>x.startsWith('NATIVE_REVIEW_RESULT=')).at(-1);
@@ -257,16 +271,17 @@ try{
   if(decision.phase!==phase||!['pass','changes_requested'].includes(decision.verdict)||
      typeof decision.findings!=='string'||!decision.findings.trim())
     denied('invalid independent review verdict');
+  decision.findings=sanitizeEvidence(decision.findings,diagnosticSecrets,12000);
   decisions.push(decision);
   return decision;
  };
  const safelyRunPhase=async(phase,findings='')=>{
   // Retry only a positively identified process interruption. Any gateway denial,
   // uncertain upstream result, ordinary nonzero exit or intentional stop is final.
-  for(let attempt=0;attempt<2;attempt++){
+  for(let attempt=0;attempt<(ownerApprovedSuccessor?1:2);attempt++){
    try{return await runPhase(phase,findings)}
    catch(error){
-    if(attempt!==0||!nativeChildInterruptionRetryable(error?.nativeChildOutcome,gatewayFailure))
+    if(ownerApprovedSuccessor||attempt!==0||!nativeChildInterruptionRetryable(error?.nativeChildOutcome,gatewayFailure))
      throw error;
     const {data:pending,error:ledgerError}=await db.from('benchmark_budget_calls')
       .select('id').eq('account_id',account.id)
@@ -279,8 +294,9 @@ try{
     if(liveError||stillLive!==true)denied('native recovery grant stopped or expired');
     // Only commit-stable source is eligible for retry; partial interrupted
     // edits are discarded. All new provider attempts require fresh admission.
+    snapshot('before-interruption-reset');saveDiagnostics();
     git('reset','--hard',trustedCheckpointSha);
-    git('clean','-fd');
+    git('clean','-fd');snapshot('after-interruption-reset');saveDiagnostics();
     console.log('NATIVE_BOUNDED_CHILD_RECOVERY_FROM_COMMITTED_CHECKPOINT');
    }
   }
@@ -313,14 +329,17 @@ try{
   approvalId:proof.approvalId,projectId:proof.projectId,review:decisions[0],
   finalReview:decisions.at(-1),repairPerformed:decisions.length===2,
   metered:true,completed:true,reviewedHeadSha:candidateHead})+'\n',{mode:0o600,flag:'wx'});
+ diagnostics.completed=true;
  console.log('NATIVE_METERED_REVIEW_AND_BOUNDED_REPAIR_COMPLETED');
  console.log('NATIVE_DEVELOPER_RETURNED_TO_EXISTING_TEST_REVIEW_PIPELINE');
-}finally{
+}catch(error){diagnostics.failure=sanitizeEvidence(error.message,diagnosticSecrets);throw error;}finally{
+ snapshot('final');saveDiagnostics();
  if(stopTimer)clearInterval(stopTimer);
  if(child&&!child.killed)child.kill('SIGKILL');
  await new Promise(resolve=>server.close(resolve));
  rmSync(root,{recursive:true,force:true});
 }
+
 
 
 

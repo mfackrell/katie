@@ -7,6 +7,7 @@ import {tmpdir} from 'node:os';
 import {join,resolve} from 'node:path';
 import {spawn,execFileSync} from 'node:child_process';
 import {createNativeHttpBridge} from './native-http-bridge.mjs';
+import {assertProjectScope} from '../project-scope.mjs';
 import {sharedNativeContainerArgs} from './shared-native-container.mjs';
 import {assertTrustedBoundary,protectedNativeMounts} from './native-trust-boundary.mjs';
 const reviewMarker='KATIE_REVIEW_PROBE_'+randomUUID().replaceAll('-','');
@@ -32,6 +33,9 @@ writeFileSync(join(root,'AGENT_REQUEST.md'),process.env.KATIE_NATIVE_PROBE_COMPL
 writeFileSync(join(root,'review-findings.txt'),'Synthetic defect: require final independent review.');
 const expectedLogprobsDenial=process.env.KATIE_NATIVE_PROBE_EXPECT_LOGPROBS_DENIAL==='1';
 const phases=expectedLogprobsDenial?['implementation']:['implementation','review','repair','final-review'];
+const sourceWrite=process.env.KATIE_NATIVE_PROBE_SOURCE_WRITE==='1';
+const probePath='app/project-pilots/take-eleven/qualification-probe.mjs';
+if(sourceWrite){assert.equal(baseline,'0015bcdb8ac9ad94b7c74d1a4cd76737903b1319');writeFileSync(join(root,'AGENT_REQUEST.md'),readFileSync('tests/fixtures/take-eleven-frozen-development-request.md','utf8'));}
 const realistic=process.env.KATIE_NATIVE_PROBE_COMPLETION_BUDGET==='1';
 const phaseLimits={implementation:3,review:2,repair:3,'final-review':2};
 const firstCounts={implementation:7139,review:7221,repair:7150,'final-review':7208};
@@ -77,7 +81,7 @@ const upstream=async request=>{
 
  const text=phase==='review'?'CHANGES_REQUESTED: synthetic defect':phase==='final-review'?'PASS synthetic repair verified':'DONE';
  const item=count<(realistic?phaseLimits[phase]:2)?{id:'fc_'+forwarded,type:'function_call',name:'exec_command',...(expectedLogprobsDenial?{}:{namespace:'functions'}),call_id:callId,
-  arguments:JSON.stringify({cmd:(reviewing?reviewCommand:'printf ACTUAL_NATIVE_TOOL_OK')+(realistic&&count===1?' ; cat /trusted/AGENT_REQUEST.md':''),workdir:'/work',...(realistic?{max_output_tokens:20000}:{})}),status:'completed'}:
+  arguments:JSON.stringify({cmd:(reviewing?reviewCommand:sourceWrite?"mkdir -p app/project-pilots/take-eleven && printf 'export const qualification = 1;\\n' > "+probePath+" && printf ACTUAL_NATIVE_TOOL_OK":'printf ACTUAL_NATIVE_TOOL_OK')+(sourceWrite&&phase==='repair'?'; false':'')+(realistic&&count===1?' ; cat /trusted/AGENT_REQUEST.md':''),workdir:'/work',...(realistic?{max_output_tokens:20000}:{})}),status:'completed'}:
   {id:'msg_'+forwarded,type:'message',role:'assistant',status:'completed',content:[{type:'output_text',text,annotations:[],logprobs:[]}]};
  const reasoning={id:'rs_'+phase,type:'reasoning',summary:[],encrypted_content:encrypted};
  const commentary={id:'msg_commentary_'+forwarded,type:'message',role:'assistant',phase:'commentary',status:'completed',content:[{type:'output_text',text:'I will inspect the approved request and repository.',annotations:[],logprobs:[]}]};
@@ -113,7 +117,7 @@ try{
   const args=sharedNativeContainerArgs({workspace:work,socketDir,arm:'full',phase,command,readOnly:reviewing,
    extraMounts:[...protectedNativeMounts(assertTrustedBoundary(work)),
     '--ro-bind',sdkRoot,'/work/node_modules','--dir','/trusted',
-    ...['native-development-child.mjs','shared-native-phase.mjs','shared-native-policy.mjs'].flatMap(f=>['--ro-bind',resolve('scripts/benchmark',f),'/trusted/'+f]),
+    ...['native-development-child.mjs','native-execution-evidence.mjs','shared-native-phase.mjs','shared-native-policy.mjs'].flatMap(f=>['--ro-bind',resolve('scripts/benchmark',f),'/trusted/'+f]),
     '--ro-bind',join(root,'AGENT_REQUEST.md'),'/trusted/AGENT_REQUEST.md','--ro-bind',join(root,'review-findings.txt'),'/trusted/review-findings.txt'],
    extraEnv:['--setenv','KATIE_NATIVE_MODEL','gpt-5.3-codex','--setenv','KATIE_NATIVE_BRIDGE_TOKEN',token,'--setenv','KATIE_NATIVE_BASELINE_SHA',baseline]});
   const child=spawn('bwrap',args,{env:{PATH:process.env.PATH||''},stdio:['ignore','pipe','pipe']});
@@ -133,6 +137,19 @@ try{
   for(const path of [work,join(work,'.git'),sdkRoot])assert.equal(existsSync(join(path,reviewMarker)),false,'Reviewer cannot mutate protected mount '+path);
   if(reviewing){const marker=output.split('\n').find(x=>x.startsWith('NATIVE_REVIEW_RESULT='));assert.ok(marker);assert.equal(JSON.parse(marker.slice('NATIVE_REVIEW_RESULT='.length)).verdict,phase==='review'?'changes_requested':'pass');}
   else assert.match(output,/NATIVE_DEVELOPMENT_RETURNED_FOR_INDEPENDENT_VERIFICATION/);
+  if(sourceWrite){
+   const events=output.split('\n').filter(x=>x.startsWith('NATIVE_EXECUTION_EVENT=')).map(x=>JSON.parse(x.slice('NATIVE_EXECUTION_EVENT='.length)));
+   assert.ok(events.some(x=>x.event==='turn.completed'));assert.ok(events.some(x=>x.itemType==='agent_message'&&x.event==='item.completed'&&x.message));
+   const tool=events.find(x=>x.itemType==='command_execution'&&x.event==='item.completed');assert.ok(tool);
+   assert.equal(tool.exitCode,phase==='repair'?1:0);assert.ok(tool.worktree);assert.ok(!JSON.stringify(events).includes(token));
+   console.log('ACTUAL_NATIVE_BOUNDED_EVIDENCE_PASS='+phase);
+  }
+  if(sourceWrite&&!reviewing){
+   assert.equal(readFileSync(join(work,probePath),'utf8'),'export const qualification = 1;\n');
+   execFileSync('git',['-C',work,'add','-A']);
+   assert.deepEqual(assertProjectScope(join(root,'AGENT_REQUEST.md'),work),[probePath]);
+   console.log('ACTUAL_NATIVE_SOURCE_WRITE_SCOPE_PASS='+phase);
+  }
   console.log('ACTUAL_NATIVE_CHILD_PHASE_PASS='+phase);
  }
  if(!expectedLogprobsDenial){
@@ -153,6 +170,7 @@ try{
  }
  }
 }finally{await new Promise(resolve=>server.close(resolve));rmSync(root,{recursive:true,force:true});rmSync(join(sdkRoot,reviewMarker),{force:true});}
+
 
 
 

@@ -15,9 +15,11 @@ export function preflightNativeChild(boundary,childFile){
   const args=sharedNativeContainerArgs({workspace:boundary.root,socketDir,arm:'full',phase:'implementation',command,
    extraMounts:[...protectedNativeMounts(boundary),'--dir','/trusted',
     '--ro-bind',childFile,'/trusted/native-development-child.mjs',
+    '--ro-bind',join(trusted,'native-execution-evidence.mjs'),'/trusted/native-execution-evidence.mjs',
     '--ro-bind',join(trusted,'shared-native-phase.mjs'),'/trusted/shared-native-phase.mjs',
     '--ro-bind',join(trusted,'shared-native-policy.mjs'),'/trusted/shared-native-policy.mjs']});
   const output=execFileSync('bwrap',args,{env:{PATH:process.env.PATH||''},encoding:'utf8',timeout:20000});
   if(!output.split('\n').includes('NATIVE_CHILD_PREFLIGHT_OK'))throw Error('NATIVE_CHILD_PREFLIGHT_FAILED');
  }finally{rmSync(socketDir,{recursive:true,force:true});}
 }
+
