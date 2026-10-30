@@ -14,7 +14,7 @@ for(const [index,{phase,body}] of rows.entries()){
  const fields=['model','input','instructions','tools','tool_choice','parallel_tool_calls','reasoning','text','truncation'];
  const payload=Object.fromEntries(fields.filter(k=>plain[k]!==undefined).map(k=>[k,plain[k]]));
  const response=await fetch('https://api.openai.com/v1/responses/input_tokens',{method:'POST',redirect:'error',headers:{authorization:'Bearer '+process.env.OPENAI_API_KEY,'content-type':'application/json'},body:JSON.stringify(payload),signal:AbortSignal.timeout(15000)});
- assert.equal(response.status,200,'Count endpoint must accept the actual normalized SDK context');
+ if(response.status!==200){const failure=await response.json();throw new Error(JSON.stringify({phase,call:index+1,status:response.status,error:failure.error}));}
  const count=await response.json();assert.equal(count.object,'response.input_tokens');assert.ok(Number.isSafeInteger(count.input_tokens));
  const input=count.input_tokens+opaque,actual=input+4096,hold=actual+1024;
  peak=Math.max(peak,spent+hold);spent+=actual;dollarPeak=Math.max(dollarPeak,dollars+hold*14);dollars+=Math.ceil(input*1.75+4096*14);
