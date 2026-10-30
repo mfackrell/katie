@@ -1,4 +1,5 @@
 import { getChatById } from "@/lib/data/persistence-store";
+import { authenticateStandalonePrincipal, authorizeStandaloneCaller } from "@/lib/standalone-accounting/auth";
 import { managedActor } from "@/lib/agents/store";
 import { getSupabaseAdminClient } from "@/lib/data/supabase/admin";
 import { agentConfigSchema } from "@/lib/agents/policy";
@@ -16,6 +17,13 @@ export async function GET(request: NextRequest) {
     );
   }
 
+  try{
+    const principal=await authenticateStandalonePrincipal(request);
+    const chat=await getChatById(chatId);
+    if(!chat)return NextResponse.json({error:"Conversation not found."},{status:404});
+    if(principal.isAnonymous || principal.id!==process.env.KATIE_OWNER_AUTH_USER_ID)
+      await authorizeStandaloneCaller(request,chat.actorId,chatId);
+  }catch{return NextResponse.json({error:"Conversation access denied."},{status:403});}
   const record = await getChatRequest(requestId);
   const chat = await getChatById(chatId);
   if (!record || record.chatId !== chatId || chat?.actorId !== record.actorId) {
